@@ -135,11 +135,15 @@ export function createOpenWbAdapter(getSettings, deps = {}) {
     release: async () => (isReadOnlyMode() ? READ_ONLY : { ok: true }),
     // Not-Halt: openWB ohne übergeordneten Regler folgt nur DVhub — steht der
     // angebotene Strom noch auf DVhubs Wert?
+    // Nur „Pro“ (HTTP) liest frisch; „Nur Ladepunkt“ liest gepufferte MQTT-Werte
+    // — dort, und bei Abweichung (veraltet oder geändert?), gilt: unbekannt.
     async dvhubState(ref = {}) {
+      if (mode() !== 'pro') return { known: false };
       const st = await this.status();
-      if (!st?.ok || st.currentA == null) return { known: false };
-      if (ref.currentA == null) return { known: false };
-      return { known: true, active: Math.abs(Number(st.currentA) - wholeAmps(ref.currentA)) < 1 };
+      const currents = (ref.currentAs || []).filter((c) => Number.isFinite(Number(c)));
+      if (!st?.ok || st.currentA == null || !currents.length) return { known: false };
+      const match = currents.some((c) => Math.abs(Number(st.currentA) - wholeAmps(c)) < 1);
+      return match ? { known: true, active: true } : { known: false };
     },
     async status() {
       if (!host()) return { ok: false, error: 'openWB: keine Adresse eingetragen' };

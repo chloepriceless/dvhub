@@ -177,11 +177,13 @@ export function createGoeAdapter(getSettings) {
     async release() {
       return expectOk(await set('frc=0'));
     },
-    // Not-Halt: DVhub lädt mit frc=2 und seinem Strom — beides muss noch stehen.
+    // Not-Halt: DVhub lädt mit frc=2 und seinem Strom — beides muss noch stehen
+    // (zuletzt bestätigter oder zuletzt versuchter Strom).
     async dvhubState(ref = {}) {
       const res = await request(`${base()}/api/status?filter=amp,frc`, opts());
       if (!res.ok || typeof res.data !== 'object') return { known: false };
-      const ampOk = ref.currentA == null || Number(res.data.amp) === wholeAmps(ref.currentA);
+      const currents = (ref.currentAs || []).filter((c) => Number.isFinite(Number(c)));
+      const ampOk = !currents.length || currents.some((c) => Number(res.data.amp) === wholeAmps(c));
       return { known: true, active: Number(res.data.frc) === 2 && ampOk };
     },
     async status() {
@@ -232,10 +234,15 @@ export function createWattpilotAdapter(getSettings, deps) {
     async release() {
       return conn().setValue('frc', 0);
     },
-    async dvhubState() {
+    // Wie go-e, der Strom nach der Begrenzung durch die Box (ama).
+    async dvhubState(ref = {}) {
       const res = await conn().readStatus();
       if (!res.ok) return { known: false };
-      return { known: true, active: Number(res.status?.frc) === 2 };
+      const max = Number(res.status?.ama);
+      const want = (c) => (Number.isFinite(max) && max >= 6 ? Math.min(wholeAmps(c), max) : wholeAmps(c));
+      const currents = (ref.currentAs || []).filter((c) => Number.isFinite(Number(c)));
+      const ampOk = !currents.length || currents.some((c) => Number(res.status?.amp) === want(c));
+      return { known: true, active: Number(res.status?.frc) === 2 && ampOk };
     },
     async status() {
       const res = await conn().readStatus();
@@ -323,15 +330,24 @@ export function createVictronEvcsAdapter(getSettings, deps = {}) {
       await write(t, EVCS.mode, EVCS_AUTO);
       return { ok: true };
     }),
-    // Not-Halt: Manuell + Start und DVhubs Strom stehen noch?
+    // Not-Halt: Manuell + Start und GENAU DVhubs Strom (nach der Begrenzung
+    // durch den Maximalstrom der Box) stehen noch?
     dvhubState: async (ref = {}) => {
       const t = target();
       if (!t) return { known: false };
       try {
         const d = await readBlock(t);
-        const ampOk = ref.currentA == null || Number(d.setCurrentA) <= wholeAmps(ref.currentA);
+        const max = Number(d.maxCurrentA);
+        const want = (c) => (Number.isFinite(max) && max >= 6 && max !== 0xffff ? Math.min(wholeAmps(c), max) : wholeAmps(c));
+        const currents = (ref.currentAs || []).filter((c) => Number.isFinite(Number(c)));
+        const ampOk = !currents.length || currents.some((c) => Number(d.setCurrentA) === want(c));
         return { known: true, active: d.mode === EVCS_MANUAL && d.startStop === 1 && ampOk };
       } catch { return { known: false }; }
+    },
+    // Geräte-Identität: das wirklich angesprochene Ziel (GX, Port, aufgelöste Unit).
+    identity: () => {
+      const t = target();
+      return t ? `victron|${t.base.host}|${t.base.port}|${t.base.unitId}` : null;
     },
     status: () => guarded(async (t) => {
       const d = await readBlock(t);

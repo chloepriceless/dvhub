@@ -19,6 +19,12 @@ export function createOcppAdapter(getSettings, deps = {}) {
     if (want) return want;
     return server()?.list?.().find((c) => c.connected)?.id || '';
   }
+  // Geräte-Identität: die aufgelöste Ladestation (auch bei leerer Einstellung
+  // die gerade gewählte) und der Connector.
+  function identity() {
+    const id = cpId();
+    return id ? `ocpp|${id}|${connectorId()}` : null;
+  }
   function profile(limitA) {
     return {
       connectorId: connectorId(),
@@ -43,6 +49,7 @@ export function createOcppAdapter(getSettings, deps = {}) {
 
   return {
     type: 'ocpp',
+    identity,
     isConfigured: () => Boolean(server() && cpId()),
     async charge(currentA) {
       if (isReadOnlyMode()) return READ_ONLY;

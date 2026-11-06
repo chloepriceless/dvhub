@@ -379,22 +379,37 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   // --- 3. Freigabe mit Rückschalt-Abstand ----------------------------------------
   const capped = devices.filter((d) => st.caps[d.id] != null);
   if (!capped.length) { st.underSince = null; return finish(); }
+  // Gesamt-Luft: Lädt der Akku gerade aus dem Netz, ist seine Ladung freie
+  // Leistung für die Geräte — er gibt zuerst nach, der Multi hält den Bezug
+  // auf dem Sollwert. Die Phasen prüft phaseFits() je Gerät.
   let headroom = r.targetW - total;
-  // Luft der knappsten Phase; je Gerät unten nach seinen Phasen umgerechnet.
-  const phaseRoom = phases ? r.phaseTargetW - maxPhase : null;
-  if (phases) headroom = Math.min(headroom, 3 * phaseRoom);
-  // Lädt der Akku gerade aus dem Netz, ist seine Ladung freie Leistung für die
-  // Geräte — er gibt zuerst nach, der Multi hält den Bezug auf dem Sollwert.
-  if (sp != null && !batteryStuck) headroom += chargeW;
-  // Je Phase: gemessene Luft plus die Akku-Netzladung, die der Multi auf
-  // DIESER Phase freigibt — dreiphasig ein Drittel je Phase, einphasig alles
-  // auf seiner Phase. Unbekannt: keine Gutschrift (Codex bcbfaff1, P1).
-  let phaseRoomEff = phaseRoom;
-  if (phases && r.batteryPhases && sp != null && !batteryStuck && chargeW > 0) {
-    const credit = r.batteryPhases === 'three' ? [chargeW / 3, chargeW / 3, chargeW / 3]
-      : ['L1', 'L2', 'L3'].map((l) => (l === r.batteryPhases ? chargeW : 0));
-    phaseRoomEff = Math.min(...phases.map((p, i) => r.phaseTargetW - p + credit[i]));
-  }
+  const batteryYields = sp != null && !batteryStuck ? chargeW : 0;
+  headroom += batteryYields;
+  // Passt zusätzliche Leistung x eines Geräts mit devPhases Phasen auf jede
+  // Phase? Das Gerät belastet dreiphasig x/3 je Phase, einphasig x auf einer
+  // UNBEKANNTEN Phase (jede wird geprüft). Der Akku gibt dabei höchstens x ab,
+  // und zwar nur auf den Phasen, auf denen er lädt (Einstellung
+  // batteryPhases; unbekannt = keine Entlastung) — Codex bb0e14cd.
+  const phaseLimitEach = phases ? r.phaseTargetW - Math.round(r.releaseHysteresisW / 3) : null;
+  const phaseFits = (x, devPhases) => {
+    if (!phases) return true;
+    const relief = r.batteryPhases ? Math.min(batteryYields, x) : 0;
+    const rel = r.batteryPhases === 'three' ? [relief / 3, relief / 3, relief / 3]
+      : ['L1', 'L2', 'L3'].map((l) => (l === r.batteryPhases ? relief : 0));
+    const placements = devPhases === 3 ? [[x / 3, x / 3, x / 3]] : [[x, 0, 0], [0, x, 0], [0, 0, x]];
+    return placements.every((add) => phases.every((p, i) => p + add[i] - rel[i] <= phaseLimitEach));
+  };
+  const maxFit = (limit, devPhases) => {
+    if (!phases) return limit;
+    let lo = 0;
+    let hi = Math.max(0, Math.floor(limit / STEP_W));
+    if (phaseFits(hi * STEP_W, devPhases)) return hi * STEP_W;
+    while (hi - lo > 1) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (phaseFits(mid * STEP_W, devPhases)) lo = mid; else hi = mid;
+    }
+    return lo * STEP_W;
+  };
   if (headroom >= r.releaseHysteresisW) st.underSince ??= now;
   else st.underSince = null;
   if (st.underSince == null || now - st.underSince < RELEASE_MS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
@@ -417,8 +432,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // Phasen: ein einphasiges (oder unbekanntes) Gerät darf höchstens die Luft
       // EINER Phase nehmen, ein dreiphasiges das Dreifache (Gesamtprüfung 6, P1).
       const devPhases = Number(d.phases) === 3 ? 3 : 1;
-      const giveDev = phaseRoomEff == null ? give
-        : Math.min(give, devPhases * phaseRoomEff - (devPhases === 3 ? r.releaseHysteresisW : Math.round(r.releaseHysteresisW / 3)));
+      const giveDev = maxFit(give, devPhases);
       if (!(giveDev > 0)) continue;
       // Pausiert und zu wenig Luft für den Mindeststrom: nicht anlaufen lassen.
       if (drawNow === 0 && giveDev < (Number(d.minW) || 0)) continue;

@@ -263,7 +263,12 @@ export function createEosEvccBridge(deps) {
     const c = rawGetCharger(cfg, bc);
     if (!c || typeof c !== 'object') return c;
     const tgt = { charger: bc?.charger ?? c.type, loadpoint: bc?.loadpoint ?? null };
-    tgt.identity = wallboxIdentity(cfg, tgt.charger);
+    // Identität des wirklich angesprochenen Geräts (Adapter löst sie auf, z. B.
+    // Victron-Unit, OCPP-Station); sonst aus der Einstellung.
+    let ident;
+    try { ident = typeof c.identity === 'function' ? c.identity() : wallboxIdentity(cfg, tgt.charger); } catch { ident = null; }
+    tgt.identity = ident;
+    tgt.maxCurrentA = Number.isFinite(Number(bc?.maxCurrentA)) ? Number(bc.maxCurrentA) : null;
     const key = targetKey(tgt);
     const wrapped = Object.create(c);
     if (typeof c.charge === 'function') {
@@ -271,8 +276,13 @@ export function createEosEvccBridge(deps) {
         const r = await c.charge(...a);
         // Eine Grenz-Herkunft bleibt, bis ein quittierter normaler Befehl sie
         // ablöst (auch eine unquittierte Grenz-Aktualisierung kann wirken).
-        const prevCap = owned.get(key)?.gridCap === true;
-        setOwned(key, { ...tgt, cmd: 'charge', currentA: Number.isFinite(Number(a[0])) ? Number(a[0]) : null, confirmed: r?.ok === true, gridCap: prevCap, at: new Date(now()).toISOString() });
+        const prev = owned.get(key);
+        const prevCap = prev?.gridCap === true;
+        const amps = Number.isFinite(Number(a[0])) ? Number(a[0]) : null;
+        // Zuletzt BESTÄTIGTER Strom bleibt neben dem versuchten erhalten — beide
+        // können an der Box stehen (Codex 7b3273db, P1).
+        const confirmedCurrentA = r?.ok === true ? amps : (prev?.cmd === 'charge' ? prev.confirmedCurrentA ?? null : null);
+        setOwned(key, { ...tgt, cmd: 'charge', currentA: amps, confirmedCurrentA, confirmed: r?.ok === true, gridCap: prevCap, at: new Date(now()).toISOString() });
         return r;
       };
     }
@@ -394,15 +404,20 @@ export function createEosEvccBridge(deps) {
     for (const e of [...owned.values()]) {
       const key = targetKey(e);
       if (e.charger === 'evcc' || key === curKey) continue;
-      if (e.identity && e.identity !== wallboxIdentity(cfg, e.charger)) {
+      if (getGridCapW() != null) continue;
+      const ch = getCharger(cfg, { ...bc, charger: e.charger, loadpoint: e.loadpoint });
+      // Vorübergehend nicht erreichbar: Datensatz behalten (Codex a2686af7, P1).
+      if (!ch?.isConfigured?.()) continue;
+      let curIdent;
+      try { curIdent = typeof ch.identity === 'function' ? ch.identity() : wallboxIdentity(cfg, e.charger); } catch { curIdent = null; }
+      if (e.identity && curIdent == null) continue; // gerade nicht auflösbar
+      if (e.identity && e.identity !== curIdent) {
         pushLog('ev_owned_identity_changed', { charger: e.charger }, 'warn');
         setOwned(key, null);
         continue;
       }
-      if (getGridCapW() != null) continue;
-      const ch = getCharger(cfg, { ...bc, charger: e.charger, loadpoint: e.loadpoint });
-      if (!ch?.isConfigured?.()) { setOwned(key, null); continue; }
-      const res = e.charger === 'openwb' ? await ch.charge(bc.maxCurrentA) : await ch.release();
+      // openWB: voller Strom der damaligen Einstellung (Codex a2686af7, P2).
+      const res = e.charger === 'openwb' ? await ch.charge(e.maxCurrentA ?? bc.maxCurrentA) : await ch.release();
       if (res?.ok) {
         setOwned(key, null);
         if (lastSent && targetKey({ charger: lastSent.charger, loadpoint: lastSent.loadpoint }) === key) lastSent = null;
@@ -830,22 +845,27 @@ export function createEosEvccBridge(deps) {
         const errors = [];
         for (const ref of targets) {
           const bc = { ...bc0, charger: ref.charger || bc0.charger, loadpoint: Number(ref.loadpoint) >= 1 ? Number(ref.loadpoint) : bc0.loadpoint };
+          const charger = getCharger(cfg, bc);
+          if (!charger?.isConfigured?.()) { skipped.push('not_configured'); continue; }
           // Eingestelltes Gerät ist nicht mehr das, dem DVhub den Befehl gab:
           // das neue nicht anfassen, das alte ist nicht mehr adressierbar (Punkt 1).
-          if (ref.identity && ref.identity !== wallboxIdentity(cfg, bc.charger)) {
+          // Identität gerade nicht auflösbar: unbekannt — nichts senden, behalten.
+          let curIdent;
+          try { curIdent = typeof charger.identity === 'function' ? charger.identity() : wallboxIdentity(cfg, bc.charger); } catch { curIdent = null; }
+          if (ref.identity && curIdent == null) { skipped.push('state_unknown'); continue; }
+          if (ref.identity && ref.identity !== curIdent) {
             pushLog('ev_emergency_stop_identity_changed', { charger: bc.charger, loadpoint: bc.loadpoint }, 'warn');
             setOwned(targetKey(bc), null);
             skipped.push('identity_changed');
             continue;
           }
-          const charger = getCharger(cfg, bc);
-          if (!charger?.isConfigured?.()) { skipped.push('not_configured'); continue; }
+          const refState = { ...ref, currentAs: [ref.currentA, ref.confirmedCurrentA].filter((c) => Number.isFinite(Number(c))) };
           if (charger.type !== 'evcc') {
             // Direkte Box: frisch lesen, ob DVhubs Befehl noch steht (Punkt 2).
             // Kann der Adapter das nicht: nicht senden („im Zweifel nicht“).
             let ds = null;
             if (typeof charger.dvhubState === 'function') {
-              try { ds = await charger.dvhubState(ref); } catch { ds = null; }
+              try { ds = await charger.dvhubState(refState); } catch { ds = null; }
             }
             if (!ds?.known) {
               pushLog('ev_emergency_stop_state_unknown', { charger: bc.charger }, 'warn');
