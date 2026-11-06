@@ -495,7 +495,7 @@ function directBridge({ type = 'openevse', enabled = false, store = { value: nul
     getCharger: (_c, bc) => ({
       type: bc.charger, isConfigured: () => true,
       charge: async (a) => { calls.push(['charge', bc.charger, a]); return h.chargeFails ? { ok: false, error: 'timeout' } : { ok: true }; },
-      stop: async () => { calls.push(['stop', bc.charger, bc.stopMode]); return { ok: true }; },
+      stop: async () => { calls.push(['stop', bc.charger, bc.stopMode]); return h.stopFails ? { ok: false, error: 'timeout' } : { ok: true }; },
       release: async () => { calls.push(['release', bc.charger]); return { ok: true }; },
       status: async () => ({ ok: true, connected: true, raw: { mode: 'now' } }),
     }),
@@ -869,4 +869,17 @@ test('Codex 9d293571 P1: openWB — „Sofort laden“ endet bei aktiver Teil-Gr
   await h.bridge.clearOverride();
   assert.equal(h.calls.some((c) => c[0] === 'charge' && c[2] === 16), false, 'kein voller Strom unter der Grenze');
   assert.deepEqual(h.calls.at(-1), ['charge', 'openwb', 8.6]);
+});
+
+test('Codex f42f6217 P2: openWB — gehaltene Freigabe macht den alten Befehl ungültig, die Grenz-Vorgabe kommt wieder an', async () => {
+  const capRef = { capW: 6000 };
+  const h = directBridge({ type: 'openwb', capRef });
+  await h.bridge.apply();                                   // Grenz-Vorgabe 8,6 A
+  assert.deepEqual(h.calls.at(-1), ['charge', 'openwb', 8.6]);
+  h.stopFails = true;
+  await h.bridge.setOverride({ kind: 'stop' });             // kommt an, Quittung fehlt
+  h.stopFails = false;
+  await h.bridge.clearOverride();
+  await h.bridge.tick();
+  assert.deepEqual(h.calls.at(-1), ['charge', 'openwb', 8.6], 'Grenz-Vorgabe neu geschickt');
 });
