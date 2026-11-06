@@ -433,3 +433,45 @@ test('Codex P2: im Not-Halt beendetes „Sofort laden“ — vorgemerkter Modus 
   await fresh.tick();
   assert.deepEqual(calls.at(-1), ['stop', 'pv'], 'nach dem Aufheben zurück auf „pv“');
 });
+
+// --- Codex 148df991 ---------------------------------------------------------------
+
+test('Codex P1: my-PV — positiver Befehl ohne Quittung (Zeitüberschreitung) zählt als angekommen → Not-Halt schickt 0 W', async () => {
+  const NOW = 1_700_000_000_000;
+  const writes = [];
+  const state = { meter: { ok: true, updatedAt: NOW }, victron: { gridExportW: 9000, gridImportW: 0, batteryDischargeW: 0, soc: 60 }, ctrl: {}, optimizer: {} };
+  const cfg = { devices: [{ id: 'heizstab', name: 'Heizstab', kind: 'modulating', schedulable: true, plan: { maxPowerW: 9000, intervalS: 5 }, endpoint: { type: 'mypv', host: '192.0.2.20' } }] };
+  const reg = createMypvRegulator({
+    getCfg: () => cfg, state, now: () => NOW,
+    createClient: () => ({
+      read: async () => ({ powerW: 0, deviceOn: true }),
+      writePower: async (w) => { writes.push(w); if (w > 0) throw new Error('timeout'); return w; },
+      close() {}
+    })
+  });
+  await reg.tick();
+  assert.ok(writes.at(-1) > 0, 'Befehl ging raus, Quittung fehlt');
+  state.ctrl.discretionaryWritesPaused = true;
+  await reg.emergencyStop();
+  assert.equal(writes.at(-1), 0);
+});
+
+test('Codex P2: vorgemerkte Rückkehr mit unbestätigtem Stopp übersteht den Neustart als unbestätigt — Stopp wird wiederholt', async () => {
+  const store = { value: { kind: 'restore', mode: 'pv', stopped: false } };
+  const calls = [];
+  const mk = (bc) => ({
+    type: 'evcc', isConfigured: () => true,
+    charge: async () => ({ ok: true }),
+    stop: async () => { calls.push(['stop', bc.stopMode]); return { ok: true }; },
+    release: async () => ({ ok: true }),
+    status: async () => ({ ok: true, connected: true, raw: { mode: 'now' } }),
+  });
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type: 'evcc' } };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null, getCharger: (_c, bc) => mk(bc), getGridCapW: () => 0,
+    loadOverride: () => store.value, saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
+  });
+  await bridge.tick();
+  assert.deepEqual(calls.at(-1), ['stop', 'off'], 'Stopp nach Neustart wiederholt');
+  assert.equal(store.value.stopped, true, 'Bestätigung gespeichert');
+});

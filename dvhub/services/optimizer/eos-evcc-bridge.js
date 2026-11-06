@@ -227,12 +227,13 @@ export function createEosEvccBridge(deps) {
   try {
     const saved = loadOverride();
     if (saved && (saved.kind === 'stop' || Number(saved.powerW) > 0)) override = saved;
-    else if (saved?.kind === 'restore' && typeof saved.mode === 'string') pendingRestore = { mode: saved.mode, stopped: true };
+    // Unbestätigter Stopp bleibt unbestätigt (Codex 148df991, P2).
+    else if (saved?.kind === 'restore' && typeof saved.mode === 'string') pendingRestore = { mode: saved.mode, stopped: saved.stopped === true };
   } catch { /* kaputte Datei: ohne Override weiter */ }
   const isStopOverride = () => override?.kind === 'stop';
 
   function persistOverride() {
-    const value = override ?? (pendingRestore ? { kind: 'restore', mode: pendingRestore.mode } : null);
+    const value = override ?? (pendingRestore ? { kind: 'restore', mode: pendingRestore.mode, stopped: pendingRestore.stopped === true } : null);
     try { saveOverride(value); } catch (e) { pushLog('ev_override_persist_error', { error: e?.message || String(e) }); }
   }
   function setPendingRestore(value) {
@@ -517,6 +518,7 @@ export function createEosEvccBridge(deps) {
           if (!pr.stopped) {
             const res = await hardStopper(cfg, { ...bc, charger: 'evcc' }, { type: 'evcc' }).stop();
             pr.stopped = res?.ok === true;
+            if (pendingRestore === pr) persistOverride();
             if (!res?.ok) return { ok: false, error: res?.error || 'evcc stop failed' };
           }
           return { ok: true, deferred: true };

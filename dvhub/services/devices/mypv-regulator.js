@@ -204,8 +204,12 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     if (state?.ctrl?.discretionaryWritesPaused === true) return;
     try {
       // In jedem Takt schreiben: der „Power Timeout“ des Geräts schaltet sonst ab.
+      // Ein positiver Befehl kann ankommen, auch wenn die Quittung ausbleibt —
+      // für den Not-Halt zählt er deshalb schon vor dem Schreiben als
+      // angekommen (Codex 148df991, P1); bestätigt gilt dann der echte Wert.
+      if (decision.powerW > 0) rt.applied = Math.max(Number(rt.applied) || 0, decision.powerW);
       await client.writePower(decision.powerW);
-      rt.applied = decision.powerW; // zuletzt ERFOLGREICH geschriebene Vorgabe
+      rt.applied = decision.powerW; // zuletzt bestätigte Vorgabe
       if (rt.error?.startsWith('Schreiben')) rt.error = null;
     } catch (e) {
       const msg = `Schreiben: ${String(e?.message || e).slice(0, 120)}`;
