@@ -555,3 +555,28 @@ test('Codex bad876b1 P2: Stopp am „Sofort laden“-Ladepunkt scheitert — sei
   assert.equal(h.store.value?.kind, 'restore');
   assert.equal(h.store.value.loadpoint, 2);
 });
+
+// --- Gesamtprüfung des Zweigs, Runde 4 ------------------------------------------------
+
+test('Gesamtprüfung 4 P1: zwei bestätigt ladende Ladepunkte — der Not-Halt stoppt beide', async () => {
+  const h = evccMulti();
+  await h.bridge.tick();                 // LP1 bestätigt
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  await h.bridge.tick();                 // LP2 bestätigt, LP1 bleibt in „now“
+  assert.deepEqual([h.modes[1], h.modes[2]], ['now', 'now']);
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  assert.deepEqual([h.modes[1], h.modes[2]], ['off', 'off']);
+});
+
+test('Gesamtprüfung 4 P2: Freigabe nach 30 s ZEIT, nicht nach Takten (1-s-Abfrage)', () => {
+  const st = createGuardState();
+  st.caps = { wallbox: 0 };
+  st.capAt = { wallbox: 0 };
+  const args = { meas: fresh(10000), devices: [wallbox(0)], battery: {} };
+  const t0 = HOLD_AFTER_CUT_MS + 1000;
+  for (let i = 0; i < 16; i += 1) guardStep(st, { resolved: RG, now: t0 + i * 1000, ...args });
+  assert.equal(st.caps.wallbox, 0, 'nach 15 s noch nicht');
+  for (let i = 16; i < 32; i += 1) guardStep(st, { resolved: RG, now: t0 + i * 1000, ...args });
+  assert.equal(st.caps.wallbox, undefined, 'nach 31 s frei');
+});

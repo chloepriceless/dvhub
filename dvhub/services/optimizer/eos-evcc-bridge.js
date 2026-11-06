@@ -215,11 +215,13 @@ export function createEosEvccBridge(deps) {
   let lastSent = null;       // { key, action, currentA, loadpoint, mode, at }
   let override = null;       // { kind, powerW, requestedW, startedAt, until, seenConnected, prevMode? }
 
-  // Ladebefehle, die ohne Quittung blieben (Timeout) — sie können trotzdem
-  // gewirkt haben. Je Ziel (Wallbox + Ladepunkt); jeder später bestätigte
-  // Befehl an dasselbe Ziel löscht den Eintrag. Der Not-Halt prüft solche
-  // Ziele frisch (Codex 4bf1eb18 und 8bf189b7, P1/P2).
-  const unconfirmedCharges = new Map(); // targetKey → { charger, loadpoint, action, mode, override, at }
+  // Ziele (Wallbox + Ladepunkt), an denen ein Ladebefehl von DVhub steht —
+  // bestätigt oder ohne Quittung (kann trotzdem gewirkt haben). Ein gelungener
+  // stop() bzw. ein wirksames release() löscht den Eintrag. Der Not-Halt prüft
+  // jedes dieser Ziele frisch (Codex 4bf1eb18/8bf189b7, Gesamtprüfung 4, P1):
+  // auch ein früher bestätigter Ladepunkt, von dem die Einstellung inzwischen
+  // weggewechselt ist, lädt sonst unbemerkt weiter.
+  const unconfirmedCharges = new Map(); // targetKey → { charger, loadpoint, action, mode, override, confirmed, at }
   const targetKey = (bc) => `${bc.charger}:${bc.loadpoint}`;
   // Jeder Weg zur Wallbox geht hierdurch: Ergebnis von charge/stop/release je
   // Ziel festhalten. release() an evcc tut nichts — es bestätigt keinen Stopp.
@@ -231,13 +233,10 @@ export function createEosEvccBridge(deps) {
     if (typeof c.charge === 'function') {
       wrapped.charge = async (...a) => {
         const r = await c.charge(...a);
-        if (r?.ok) unconfirmedCharges.delete(key);
-        else {
-          unconfirmedCharges.set(key, {
-            charger: bc?.charger ?? c.type, loadpoint: bc?.loadpoint, action: 'charge', mode: 'now',
-            override: override != null && override.kind !== 'stop', at: new Date(now()).toISOString()
-          });
-        }
+        unconfirmedCharges.set(key, {
+          charger: bc?.charger ?? c.type, loadpoint: bc?.loadpoint, action: 'charge', mode: 'now',
+          override: override != null && override.kind !== 'stop', confirmed: r?.ok === true, at: new Date(now()).toISOString()
+        });
         return r;
       };
     }

@@ -21,7 +21,7 @@
 //      (Leistungsgrenze LPC). Kleinste Grenze gilt — §14a und Netzanschluss
 //      werden je Gerät zusammengeführt (services/import-limit/core.js).
 //   3. Freigabe mit Rückschalt-Abstand: erst wenn mindestens so viel Luft da
-//      ist, 30 s lang (15 Takte), frühestens 60 s nach dem letzten Eingriff, und
+//      ist, 30 s lang (gemessene Zeit), frühestens 60 s nach dem letzten Eingriff, und
 //      immer nur ein Gerät je Schritt — zuletzt gekürzt, zuerst wieder frei.
 //   4. Fail-safe: Liefert der Zähler Fehler oder ist sein Wert älter als 90 s
 //      (wie beim Netzstrom-Zähler), gibt DVhub keine NEUE Last frei: Geräte
@@ -71,7 +71,9 @@ export const AUTO_MARGIN_PCT = 3;
 export const AUTO_MARGIN_MIN_W = 1000;
 
 export const ENTER_TICKS = 2;            // Takte über dem Ziel, bis Geräte gekürzt werden
-export const RELEASE_TICKS = 15;         // Takte mit Luft, bis ein Gerät wieder mehr darf (≈ 30 s)
+export const RELEASE_MS = 30_000;        // so lange Luft, bis ein Gerät wieder mehr darf — ZEIT, nicht Takte
+// (Gesamtprüfung 4, P2: bei 1-s-Abfrage wären 15 Takte nur 14 s gewesen).
+export const RELEASE_TICKS = 16;         // = 30 s bei 2-s-Abfrage (für Tests und Doku)
 export const HOLD_AFTER_CUT_MS = 60_000; // nach einem Eingriff frühestens so spät freigeben
 export const OBEY_MS = 20_000;           // so lange zählt ein Befehl als „unterwegs“
 export const BATTERY_OBEY_MS = 10_000;   // so lange darf der Multi zum Senken seiner Ladung brauchen
@@ -177,8 +179,8 @@ export function eosGridImportLimitW(cfg) {
 
 export function createGuardState() {
   return {
-    caps: {}, capAt: {}, ceilingW: null, ceilingUnder: 0,
-    over: 0, under: 0, stale: 0, lastCutAt: 0, batteryPendingSince: null, batteryStuckAt: null,
+    caps: {}, capAt: {}, ceilingW: null, ceilingUnderSince: null,
+    over: 0, underSince: null, stale: 0, lastCutAt: 0, batteryPendingSince: null, batteryStuckAt: null,
     failsafe: false, exhausted: false, phasesMissing: false
   };
 }
@@ -230,8 +232,8 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   if (!meas?.fresh) {
     st.stale += 1;
     st.over = 0;
-    st.under = 0;
-    st.ceilingUnder = 0;
+    st.underSince = null;
+    st.ceilingUnderSince = null;
     if (st.stale < FAILSAFE_TICKS && !st.failsafe) return finish();
     if (!st.failsafe) {
       st.failsafe = true;
@@ -276,19 +278,20 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const desired = phaseExcess == null ? r.targetW : Math.min(r.targetW, total - phaseExcess);
   if (desired < st.ceilingW) {
     st.ceilingW = down(Math.max(0, desired));
-    st.ceilingUnder = 0;
+    st.ceilingUnderSince = null;
   } else if (st.ceilingW < r.targetW) {
     // Luft: entweder Rückschalt-Abstand über der Decke, oder die volle Decke
     // (Ziel) ist erreichbar — sonst erholte sich eine kleine Absenkung nie
     // (Gesamtprüfung, P2).
     const roomy = desired >= st.ceilingW + r.releaseHysteresisW || desired >= r.targetW;
-    st.ceilingUnder = roomy ? st.ceilingUnder + 1 : 0;
-    if (st.ceilingUnder >= RELEASE_TICKS) {
+    if (!roomy) st.ceilingUnderSince = null;
+    else st.ceilingUnderSince ??= now;
+    if (st.ceilingUnderSince != null && now - st.ceilingUnderSince >= RELEASE_MS) {
       // Begrenzt nur das Gesamtziel (keine Phase drückt), zurück aufs Ziel;
       // sonst mit Rückschalt-Abstand unter dem, was die Phase zulässt.
       const raised = desired >= r.targetW ? r.targetW : down(desired - r.releaseHysteresisW);
       st.ceilingW = Math.min(r.targetW, Math.max(st.ceilingW, raised));
-      st.ceilingUnder = 0;
+      st.ceilingUnderSince = null;
     }
   }
 
@@ -350,7 +353,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       }
     }
     st.over = 0;
-    st.under = 0;
+    st.underSince = null;
     st.lastCutAt = now;
     if (rest > 0 && !st.exhausted) {
       st.exhausted = true;
@@ -362,15 +365,16 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
 
   // --- 3. Freigabe mit Rückschalt-Abstand ----------------------------------------
   const capped = devices.filter((d) => st.caps[d.id] != null);
-  if (!capped.length) { st.under = 0; return finish(); }
+  if (!capped.length) { st.underSince = null; return finish(); }
   let headroom = r.targetW - total;
   if (phases) headroom = Math.min(headroom, 3 * (r.phaseTargetW - maxPhase));
   // Lädt der Akku gerade aus dem Netz, ist seine Ladung freie Leistung für die
   // Geräte — er gibt zuerst nach, der Multi hält den Bezug auf dem Sollwert.
   if (sp != null && !batteryStuck) headroom += chargeW;
-  st.under = headroom >= r.releaseHysteresisW ? st.under + 1 : 0;
-  if (st.under < RELEASE_TICKS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
-  st.under = 0;
+  if (headroom >= r.releaseHysteresisW) st.underSince ??= now;
+  else st.underSince = null;
+  if (st.underSince == null || now - st.underSince < RELEASE_MS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
+  st.underSince = null;
   const give = headroom - r.releaseHysteresisW;
   for (const kind of [...r.order].reverse()) {
     for (const d of capped.filter((x) => x.kind === kind)) {
