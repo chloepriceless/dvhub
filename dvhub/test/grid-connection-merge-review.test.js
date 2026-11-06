@@ -104,7 +104,8 @@ function evccMulti({ enabled = true, override = null } = {}) {
   const t = Date.now();
   const ref = { paused: false, now: t };
   const store = { value: override };
-  const bridge = createEosEvccBridge({
+  const ownedStore = { value: null };
+  const make = () => createEosEvccBridge({
     getCfg: () => cfg,
     getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
     getCharger: (_c, bc) => createEvccAdapter(evcc, () => bc.loadpoint, () => bc.stopMode),
@@ -112,8 +113,11 @@ function evccMulti({ enabled = true, override = null } = {}) {
     getGridCapW: () => h.capW ?? null,
     loadOverride: () => store.value,
     saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
+    loadOwned: () => ownedStore.value,
+    saveOwned: (list) => { ownedStore.value = list ? JSON.parse(JSON.stringify(list)) : null; },
   });
-  Object.assign(h, { bridge, modes, fail, noEffect, calls, cfg, ref, store, failStop: null, capW: null });
+  const bridge = make();
+  Object.assign(h, { make, ownedStore, bridge, modes, fail, noEffect, calls, cfg, ref, store, failStop: null, capW: null });
   const origSetMode = evcc.setMode;
   evcc.setMode = async (id, m) => (m === 'off' && h.failStop === id ? { ok: false, error: 'timeout' } : origSetMode(id, m));
   return h;
@@ -680,7 +684,7 @@ test('bf1c2c23 P1: Gerät ohne Leistungsmeldung — Grenze wächst nicht über d
 // --- Vereinfachte Zustandsführung (Koordinator, 06.11.2026): keine
 // aufgeschobene evcc-Rückkehr mehr, stattdessen Hinweis ---------------------------
 
-test('Vereinfacht: „Sofort laden“ endet im Not-Halt → kein Write, Hinweis mit altem Modus, KEINE automatische Rückkehr', async () => {
+test('Punkt 4: „Sofort laden“ endet im Not-Halt → kein Write; nach dem Aufheben stellt DVhub „pv“ zurück (evcc steht noch auf „aus“)', async () => {
   const h = evccMulti({ enabled: false });
   await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
   h.ref.paused = true;
@@ -688,25 +692,68 @@ test('Vereinfacht: „Sofort laden“ endet im Not-Halt → kein Write, Hinweis 
   const n = h.calls.length;
   await h.bridge.clearOverride();
   assert.equal(h.calls.length, n, 'im Not-Halt kein Write');
-  const st = h.bridge.getStatus();
-  assert.equal(st.restoreHint.mode, 'pv');
-  assert.equal(st.restoreHint.reason, 'paused');
-  assert.match(st.lastError, /„pv“/);
+  assert.equal(h.bridge.getStatus().restoreHint.mode, 'pv');
+  assert.equal(h.bridge.hasPendingRestore(), true);
+  await h.bridge.tick();
+  assert.equal(h.modes[1], 'off', 'im Not-Halt bleibt es aus');
   h.ref.paused = false;
   await h.bridge.tick();
-  assert.equal(h.modes[1], 'off', 'keine automatische Rückkehr');
+  assert.equal(h.modes[1], 'pv', 'automatisch zurück');
+  assert.equal(h.bridge.hasPendingRestore(), false);
+  assert.equal(h.bridge.getStatus().restoreHint, null);
 });
 
-test('Vereinfacht: „Sofort laden“ endet bei aktiver Grenze → evcc hart aus, Hinweis; keine Rückkehr, wenn die Grenze fällt', async () => {
+test('Punkt 4: „Sofort laden“ endet bei aktiver Grenze → evcc hart aus; zurück erst, wenn die Grenze ganz weg ist', async () => {
   const h = evccMulti({ enabled: false });
   await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
   h.capW = 5000;
   await h.bridge.clearOverride();
   assert.equal(h.modes[1], 'off');
   assert.equal(h.bridge.getStatus().restoreHint.reason, 'grid_cap');
+  await h.bridge.tick();
+  assert.equal(h.modes[1], 'off', 'Teil-Grenze: bleibt aus');
   h.capW = null;
   await h.bridge.tick();
-  assert.equal(h.modes[1], 'off');
+  assert.equal(h.modes[1], 'pv');
+});
+
+test('Punkt 4: in evcc inzwischen selbst umgestellt → DVhub stellt nichts zurück', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 0;
+  await h.bridge.clearOverride();
+  h.modes[1] = 'minpv';
+  h.capW = null;
+  const n = h.calls.length;
+  await h.bridge.tick();
+  assert.equal(h.calls.length, n, 'kein Befehl');
+  assert.equal(h.modes[1], 'minpv');
+  assert.equal(h.bridge.hasPendingRestore(), false);
+});
+
+test('Punkt 4: Rückkehr übersteht einen Neustart (ev_owned.json)', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 0;
+  await h.bridge.clearOverride();
+  const fresh = h.make();
+  assert.equal(fresh.hasPendingRestore(), true);
+  h.capW = null;
+  await fresh.tick();
+  assert.equal(h.modes[1], 'pv');
+});
+
+test('Punkt 4: Wächter schreibt die Wallbox ein, solange eine Rückkehr aussteht', () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
+  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -33000 }, victron: {}, schedule: {}, ctrl: {} };
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: () => {},
+    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: 11000 }] }) },
+    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null, hasPendingRestore: () => true },
+  };
+  const guard = createGridConnectionGuard(ctx);
+  guard.tick();
+  assert.ok(guard.capW('wallbox') != null);
 });
 
 test('Vereinfacht: neues „Sofort laden“ am selben Ladepunkt übernimmt den Hinweis-Modus und stellt ihn beim Ende her', async () => {
@@ -722,18 +769,6 @@ test('Vereinfacht: neues „Sofort laden“ am selben Ladepunkt übernimmt den H
   assert.equal(h.modes[1], 'pv');
 });
 
-test('Vereinfacht: Wächter schreibt eine Wallbox nur wegen eines Hinweises nicht ein', () => {
-  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
-  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -33000 }, victron: {}, schedule: {}, ctrl: {} };
-  const ctx = {
-    getCfg: () => cfg, state, pushLog: () => {},
-    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: 0 }] }) },
-    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null },
-  };
-  const guard = createGridConnectionGuard(ctx);
-  guard.tick();
-  assert.equal(guard.capW('wallbox'), null);
-});
 
 test('Vereinfacht (Prod-Fall): EOS-Weitergabe an, „Sofort laden“ endet im Not-Halt → kein Hinweis, nach dem Aufheben übernimmt der Plan', async () => {
   const h = evccMulti({ enabled: true });

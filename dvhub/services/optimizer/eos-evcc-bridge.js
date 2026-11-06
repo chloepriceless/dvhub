@@ -234,21 +234,24 @@ export function createEosEvccBridge(deps) {
   // DVhub dort zuletzt geschickt hat (charge/stop), ob er quittiert wurde und
   // ob er von einer Grenze kam. Jeder Weg zur Wallbox läuft durch den Wrapper
   // um getCharger, alle Übergänge also an EINER Stelle; gespeichert wird er
-  // zusammen mit dem Override (übersteht einen Neustart).
+  // in ev_owned.json (übersteht einen Neustart).
   //   charge (auch ohne Quittung — kann gewirkt haben) → cmd 'charge'
   //   stop ok                                          → cmd 'stop'
   //   release ok an einer Box, deren release() wirkt   → Datensatz weg
+  // Dazu die Geräte-Identität (Adresse, Connector …) und für evcc das Feld
+  // restore (ausstehende Rückkehr des Modus nach „Sofort laden“).
   // Der Not-Halt prüft jedes Ziel mit cmd 'charge' frisch und stoppt es nur,
   // wenn es nachweislich noch in DVhubs Zustand steht.
-  // Bewusst KEINE aufgeschobene evcc-Rückkehr mehr: kann das Ende eines
-  // „Sofort laden“ den evcc-Modus von vorher nicht sofort herstellen (Not-Halt
-  // oder Grenze aktiv), bleibt evcc aus bzw. unverändert, und Log und Status
-  // (restoreHint) sagen, welcher Modus vorher galt.
-  const owned = new Map(); // targetKey → { charger, loadpoint, cmd, confirmed, gridCap, at }
+  const owned = new Map(); // targetKey → { charger, loadpoint, identity, cmd, currentA, confirmed, gridCap, restore, at }
   // Direkte Boxen sind EIN Ziel, egal welcher evcc-Ladepunkt eingestellt ist;
   // nur evcc unterscheidet Ladepunkte.
   const targetKey = (bc) => (bc.charger === 'evcc' ? `evcc:${bc.loadpoint}` : String(bc.charger));
-  let restoreHint = null;    // { mode, loadpoint, reason, at } — evcc-Modus, den DVhub nicht zurückstellen konnte
+  // Rückkehr des evcc-Modus (Punkt 4): Feld restore im Datensatz des
+  // Ladepunkts — { mode, reason, at }: „zurückstellen auf mode, sobald keine
+  // Grenze mehr steht und kein Not-Halt“. Ausgeführt in GENAU einem Übergang
+  // (applyPendingRestore, im Lock), nur wenn evcc frisch abgefragt noch auf
+  // DVhubs „aus“ steht — sonst hat der Kunde selbst umgestellt.
+  const pendingRestores = () => [...owned.values()].filter((e) => e.charger === 'evcc' && e.restore);
 
   function setOwned(key, entry) {
     if (entry) owned.set(key, entry); else owned.delete(key);
@@ -408,6 +411,32 @@ export function createEosEvccBridge(deps) {
     }
   }
 
+  // Der eine Übergang der evcc-Rückkehr (Punkt 4). Läuft in runTick, also im
+  // Lock und nie im Not-Halt.
+  async function applyPendingRestore(cfg, bc) {
+    for (const e of pendingRestores()) {
+      const key = targetKey(e);
+      const drop = (why) => { setOwned(key, { ...e, restore: null }); pushLog('ev_override_restore_dropped', { loadpoint: e.loadpoint, mode: e.restore.mode, reason: why }); };
+      if (e.identity && e.identity !== wallboxIdentity(cfg, 'evcc')) { drop('identity_changed'); continue; }
+      // Steuert der Plan diesen Ladepunkt (Weitergabe mit Pro), gehört er dem Plan.
+      if (bc.enabled && isProActive() !== false && bc.charger === 'evcc' && bc.loadpoint === e.loadpoint) { drop('plan'); continue; }
+      if (getGridCapW() != null) continue; // Grenze steht noch: warten
+      const tgt = { ...bc, charger: 'evcc', loadpoint: e.loadpoint };
+      const charger = getCharger(cfg, tgt);
+      let st;
+      try { st = await charger.status({ fresh: true }); } catch { st = null; }
+      if (!st?.ok) continue; // unbekannt: nächster Takt
+      if ((st.raw?.mode ?? null) !== 'off') { drop('changed_by_user'); continue; }
+      const res = await getCharger(cfg, { ...tgt, stopMode: e.restore.mode }).stop();
+      if (res?.ok) {
+        const cur = owned.get(key);
+        if (cur) setOwned(key, { ...cur, restore: null });
+        pushLog('ev_override_restored', { loadpoint: e.loadpoint, mode: e.restore.mode });
+        if (lastSent && targetKey({ charger: lastSent.charger, loadpoint: lastSent.loadpoint }) === key) lastSent = null;
+      }
+    }
+  }
+
   // Aktueller evcc-Modus weicht von unserem letzten Befehl ab? Unbekannte
   // Modi (evcc „smart“ u.a.) kommen als null an und zaehlen als Abweichung.
   async function modeDrift(charger, expectedMode) {
@@ -437,9 +466,10 @@ export function createEosEvccBridge(deps) {
     if (!tgt || !(owned.has(targetKey(tgt)) || lastSent?.override)) return null;
     const mode = ended?.prevMode || bc.stopMode;
     const hint = (why) => {
-      restoreHint = { mode, loadpoint: tgt.loadpoint ?? null, reason: why, at: new Date(now()).toISOString() };
-      lastError = `evcc stand vor „Sofort laden“ auf „${mode}“ — DVhub hat es ${why === 'paused' ? 'wegen Not-Halt' : 'wegen einer Leistungsgrenze'} nicht zurückgestellt. Bitte den Modus in evcc wählen.`;
-      pushLog('ev_override_restore_skipped', { mode, loadpoint: tgt.loadpoint ?? null, reason: why });
+      const key = targetKey({ charger: 'evcc', loadpoint: tgt.loadpoint ?? bc.loadpoint });
+      const e = owned.get(key) || { charger: 'evcc', loadpoint: tgt.loadpoint ?? bc.loadpoint, identity: wallboxIdentity(cfg, 'evcc'), cmd: 'stop', confirmed: false, gridCap: false };
+      setOwned(key, { ...e, restore: { mode, reason: why, at: new Date(now()).toISOString() } });
+      pushLog('ev_override_restore_deferred', { mode, loadpoint: tgt.loadpoint ?? null, reason: why });
     };
     // Im Not-Halt nichts schreiben. evcc: Modus von vorher NICHT nachholen
     // (Hinweis statt Automatik); eine direkte Box gibt runTick nach dem
@@ -480,7 +510,7 @@ export function createEosEvccBridge(deps) {
       // bekannten Vorher-Modus bliebe es in „now“ und luede weiter. Dann gilt
       // der Stopp-Modus der Bruecke.
       const res = await getCharger(cfg, { ...evccTgt, stopMode: mode }).stop();
-      if (res?.ok) { lastSent = null; restoreHint = null; }
+      if (res?.ok) lastSent = null;
       else pushLog('ev_override_error', { charger: 'evcc', error: res?.error || 'stop failed', reason });
       return res;
     }
@@ -663,6 +693,7 @@ export function createEosEvccBridge(deps) {
         force = true;
       }
       await releaseOrphans(cfg, bc);
+      await applyPendingRestore(cfg, bc);
       if (!bc.enabled) {
         // §14a EnWG gilt für die Wallbox auch dann, wenn EOS sie nicht steuert:
         // begrenzt der Netzbetreiber, deckelt DVhub eine direkt angebundene
@@ -761,8 +792,7 @@ export function createEosEvccBridge(deps) {
       // Der Plan ersetzt eine gespeicherte Grenz-Vorgabe — Vermerk löschen
       // (Codex c45418be, P2).
       if (hadGridCap) markGridCap(bc, false);
-      // Der Plan steuert diesen Ladepunkt jetzt — ein alter Hinweis ist erledigt.
-      if (restoreHint && bc.charger === 'evcc' && (restoreHint.loadpoint ?? bc.loadpoint) === bc.loadpoint) restoreHint = null;
+
       if (capStop) markGridCap(bc, true);
       pushLog('eos_evcc_command', lastSent);
       return { ok: true, sent: lastSent };
@@ -880,9 +910,12 @@ export function createEosEvccBridge(deps) {
       return locked(async () => {
         // Offener Hinweis zu diesem Ladepunkt: DAS war der Modus von vorher —
         // nicht das von DVhub gesetzte „aus“.
-        if (!override && restoreHint && bc.charger === 'evcc' && (restoreHint.loadpoint ?? bc.loadpoint) === bc.loadpoint) {
-          next.prevMode = restoreHint.mode;
-          restoreHint = null;
+        const pending = bc.charger === 'evcc' ? owned.get(targetKey(bc)) : null;
+        if (!override && pending?.restore) {
+          // Ausstehende Rückkehr an diesem Ladepunkt: DAS ist der Modus von
+          // vorher; das Ende dieses Overrides stellt ihn her.
+          next.prevMode = pending.restore.mode;
+          setOwned(targetKey(bc), { ...pending, restore: null });
         } else if (!override && bc.charger === 'evcc') {
           try {
             const st = await getCharger(cfg, bc).status();
@@ -925,6 +958,8 @@ export function createEosEvccBridge(deps) {
       });
     },
     getOverride: () => (override ? { ...override } : null),
+    /** Steht eine evcc-Rückkehr aus? (Netzanschluss-Wächter: Wallbox bleibt eingeschrieben.) */
+    hasPendingRestore: () => pendingRestores().length > 0,
     getStatus() {
       const cfg = getCfg() || {};
       const bc = resolveEvccBridgeConfig(cfg);
@@ -945,10 +980,10 @@ export function createEosEvccBridge(deps) {
         overrideLimits: overrideLimits(bc),
         current: current ? { ...current, ts: new Date(current.ts).toISOString(), endTs: new Date(current.endTs).toISOString() } : null,
         lastSent,
-        lastError: lastError || (restoreHint
-          ? `evcc stand vor „Sofort laden“ auf „${restoreHint.mode}“ — DVhub hat es nicht zurückgestellt (${restoreHint.reason === 'paused' ? 'Not-Halt' : 'Leistungsgrenze'}). Bitte den Modus in evcc wählen.`
+        lastError: lastError || (pendingRestores()[0]
+          ? `evcc stand vor „Sofort laden“ auf „${pendingRestores()[0].restore.mode}“ — DVhub stellt es zurück, sobald ${pendingRestores()[0].restore.reason === 'paused' ? 'der Not-Halt aufgehoben ist' : 'keine Leistungsgrenze mehr gilt'}.`
           : null),
-        restoreHint: restoreHint ? { ...restoreHint } : null,
+        restoreHint: pendingRestores()[0] ? { ...pendingRestores()[0].restore, loadpoint: pendingRestores()[0].loadpoint } : null,
         lastTickAt: lastTickAt ? new Date(lastTickAt).toISOString() : null,
         // Die naechsten 24 h fuer die Anzeige.
         plan: lastPlan

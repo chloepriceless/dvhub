@@ -502,8 +502,12 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const override = ctx.eosEvccBridge?.getOverride?.();
     const overrideCharging = override != null && override.kind !== 'stop';
     const viaBridge = (bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false;
+    // Steht eine evcc-Rückkehr aus, bleibt die Wallbox eingeschrieben: zurück
+    // erst, wenn der Wächter sie über Abstand und Rückschalt-Prüfung ganz
+    // freigibt (danach regelt evcc selbst — bis zu 32 A je Phase angenommen).
+    const restorePending = ctx.eosEvccBridge?.hasPendingRestore?.() === true;
     const direct = bc.charger !== 'evcc' && directWallboxConfigured(c);
-    if ((viaBridge || direct) && ctx.eosEvccBridge) {
+    if ((viaBridge || direct || restorePending) && ctx.eosEvccBridge) {
       // Höchstleistung nach der Freigabe: über die EOS-Brücke höchstens das, was
       // der Plan schickt (evMaxChargeW); eine direkte Box ohne Weitergabe regelt
       // danach selbst — bis zu ihrem Nennstrom (vorsichtig 32 A je Phase).
