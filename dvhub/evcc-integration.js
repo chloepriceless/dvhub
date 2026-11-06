@@ -220,6 +220,11 @@ export function createEvccIntegration(ctx) {
         ? `[evcc] integration started, polling ${c.url} every ${intervalMs}ms`
         : '[evcc] no url configured yet — polling starts once one is set');
     },
+    /** Sofort neu abfragen; true, wenn evcc geantwortet hat (Not-Halt-Prüfung). */
+    async refresh() {
+      await tick();
+      return lastError == null && lastPolledAt != null;
+    },
     stop() {
       if (timer) { clearInterval(timer); timer = null; }
     },

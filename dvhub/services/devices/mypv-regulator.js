@@ -120,10 +120,11 @@ export function carStateFromCharger(st) {
  * @param {object} deps.state
  * @param {(e:string,d?:object,l?:string)=>void} [deps.pushLog]
  * @param {()=>object|null} [deps.getCharger]   letzter Wallbox-Zustand ({connected, charging, carState})
+ * @param {(id:string)=>number|null} [deps.getCapW]  Netzanschluss-Grenze je Gerät (W), null = frei
  * @param {(endpoint:object)=>object} [deps.createClient]
  * @param {()=>number} [deps.now]
  */
-export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getCharger = () => null, createClient = createMypvClient, now = () => Date.now() }) {
+export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getCharger = () => null, getCapW = () => null, createClient = createMypvClient, now = () => Date.now() }) {
   const clients = new Map();     // deviceId → { key, client }
   const devices = new Map();     // deviceId → Laufzeit { setpoint, measured, reason, car, lastTickMs, error }
   let timer = null;
@@ -189,11 +190,26 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
       deviceOff: measured ? measured.deviceOn === false : false,
       car: rt.car ? { state: rt.car, sinceMs: rt.carSince } : null
     }, rt.setpoint, t);
+    // Netzanschluss (services/grid-connection): Grenze des Wächters, W oder null.
+    let cap;
+    try { cap = getCapW(dev.id); } catch { cap = null; }
+    if (cap != null && Number.isFinite(Number(cap)) && decision.powerW > Number(cap)) {
+      const capW = Math.max(0, Math.round(Number(cap)));
+      decision.powerW = capW;
+      decision.reason = capW === 0 ? 'Netzanschluss an der Grenze — Heizstab aus' : `Netzanschluss an der Grenze — höchstens ${capW} W`;
+    }
     if (decision.reason !== rt.reason) pushLog('mypv_regulator', { id: dev.id, powerW: decision.powerW, reason: decision.reason });
     trackEnergy(dev.id, measured ? measured.powerW : rt.setpoint, t, rt.lastTickMs ? t - rt.lastTickMs : 0);
+    // Not-Halt kann mitten im Takt kommen: dann nichts mehr schreiben.
+    if (state?.ctrl?.discretionaryWritesPaused === true) return;
     try {
       // In jedem Takt schreiben: der „Power Timeout“ des Geräts schaltet sonst ab.
+      // Ein positiver Befehl kann ankommen, auch wenn die Quittung ausbleibt —
+      // für den Not-Halt zählt er deshalb schon vor dem Schreiben als
+      // angekommen (Codex 148df991, P1); bestätigt gilt dann der echte Wert.
+      if (decision.powerW > 0) rt.applied = Math.max(Number(rt.applied) || 0, decision.powerW);
       await client.writePower(decision.powerW);
+      rt.applied = decision.powerW; // zuletzt bestätigte Vorgabe
       if (rt.error?.startsWith('Schreiben')) rt.error = null;
     } catch (e) {
       const msg = `Schreiben: ${String(e?.message || e).slice(0, 120)}`;
@@ -207,8 +223,14 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     rt.lastTickMs = t;
   }
 
-  async function tick() {
-    if (running) return;
+  let inflight = null;
+  function tick() {
+    if (running) return inflight || Promise.resolve();
+    inflight = tickInner().finally(() => { inflight = null; });
+    return inflight;
+  }
+
+  async function tickInner() {
     running = true;
     try {
       const { devices: all } = loadSchedulableDevices(getCfg());
@@ -253,6 +275,34 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
         c.client.close?.();
       }
       clients.clear();
+    },
+    /**
+     * Not-Halt: EINMAL 0 W an jeden Heizstab, dem DVhub gerade Leistung > 0
+     * vorgibt. 0 W ist hier neutral: dasselbe, was das Gerät nach seinem
+     * „Power Timeout“ ohnehin tut, wenn DVhub nicht mehr schreibt. Steht DVhubs
+     * Vorgabe schon auf 0, läuft der Stab höchstens aus eigenem Antrieb —
+     * dann kein Befehl. Danach schreibt der Regler nichts (Takt prüft die Pause).
+     */
+    async emergencyStop() {
+      // Einen laufenden Takt abwarten — sein Befehl kann noch unterwegs sein
+      // (Codex 45b7c40b, P1); danach schreibt er wegen der Pause nichts mehr.
+      if (inflight) { try { await inflight; } catch { /* egal */ } }
+      const errors = [];
+      for (const [id, c] of clients) {
+        const rt = devices.get(id);
+        // Maßgeblich ist, was zuletzt wirklich am Gerät ankam (Codex 45b7c40b, P2).
+        if (!rt || !(Number(rt.applied) > 0)) continue;
+        try {
+          await c.client.writePower(0);
+          rt.setpoint = 0;
+          rt.applied = 0;
+          rt.reason = 'Not-Halt — DVhub steuert nicht';
+          pushLog('mypv_emergency_stop', { id });
+        } catch (e) {
+          errors.push(`${id}: ${String(e?.message || e).slice(0, 120)}`);
+        }
+      }
+      return errors.length ? { ok: false, error: errors.join('; ') } : { ok: true };
     },
     /** Für Oberfläche/API: je Gerät Sollwert, Messwerte, Grund, Fehler. */
     getStatus() {

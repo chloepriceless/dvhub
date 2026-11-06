@@ -29,6 +29,8 @@ import {
 // Netzstrom im Akku (Christin 01./02.11.2026): solange der Zähler sperrt, darf
 // der Akku nicht ins Netz entladen — nur der PV-Überschuss geht hinaus.
 import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/optimizer/grid-share.js';
+// Netzanschluss und Peak Shaving: gemeinsamer Kern der Bezugsgrenzen.
+import { capPositiveSetpoint } from './services/import-limit/core.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -1143,6 +1145,9 @@ export function createScheduleEvaluator(ctx) {
     // Der Deckel senkt nur, nie unter das Ziel (>= Grenze/2 > 0) und nie in
     // Richtung Einspeisung; Pflicht-Quellen bleiben unangetastet. Braucht er den
     // Akku, muss der Ladestand frisch und über dem Boden sein (clampGridSetpoint).
+    // Angefragter Wert VOR allen Bezugsgrenzen — der Netzanschluss-Wächter
+    // schickt ihn neu durch, wenn seine Decke sinkt (services/grid-connection).
+    const requestedBeforeImportLimits = value;
     if (target === 'gridSetpointW' && isMandatoryControlSource(source) && state.ctrl._peakShaving?.clamp) {
       // Eine Pflicht-Quelle schreibt den Sollwert — ein älterer Deckel-Eintrag
       // gilt nicht mehr (sonst zeigte der Leitstand bis zu 30 s „greift“).
@@ -1175,6 +1180,50 @@ export function createScheduleEvaluator(ctx) {
       }
     }
     // === end Peak Shaving ====================================================
+
+    // === Netzanschluss (services/grid-connection, Christin 06.11.2026) ========
+    // Die physikalische Grenze des Hausanschlusses: jeder positive Sollwert —
+    // EOS, Kleine Börsenautomatik, Zeitplan, Handeingabe, Netzladen, §14a,
+    // „Akku halten“ — höchstens auf die Decke des Wächters (Grenze − Abstand,
+    // mit Phasengrenze bzw. Fail-safe tiefer). Gleicher Ort und gleicher Kern
+    // (capPositiveSetpoint) wie Peak Shaving; beide senken nur, also gilt der
+    // kleinere Wert. Stabil, nicht hinter Beta. Pflicht-Quellen schreiben nie
+    // positive Werte (0 bzw. Einspeisung) und bleiben unberührt.
+    if (target === 'gridSetpointW' && !isMandatoryControlSource(source)) {
+      const ceilingW = typeof ctx.gridConnection?.batteryCeilingW === 'function'
+        ? ctx.gridConnection.batteryCeilingW() : null;
+      const gcState = (state.ctrl._gridConnection ??= {});
+      if (ceilingW == null) {
+        gcState.clamp = null;
+        gcState._clampKey = null;
+      } else {
+        const requested = Number(requestedBeforeImportLimits);
+        if (Number.isFinite(requested) && requested > 0) {
+          gcState.request = { requestedW: Math.round(requested), source, at: Date.now() };
+        }
+        const res = capPositiveSetpoint(value, ceilingW);
+        if (res.clamped) {
+          gcState.clamp = { requestedW: Math.round(requested), valueW: res.value, ceilingW, source, at: Date.now() };
+          const key = `${source}|${res.value}`;
+          if (gcState._clampKey !== key) {
+            gcState._clampKey = key;
+            pushLog('grid_connection_clamp', {
+              requestedW: Math.round(requested), valueW: res.value, ceilingW, source,
+              text: `Netzanschluss: begrenzt Akku-Ladung (Netz-Sollwert) auf ${(res.value / 1000).toFixed(1).replace('.', ',')} kW`
+            });
+            telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+              eventType: 'grid_connection_clamp', target, valueNum: res.value, reason: source, source: 'runtime',
+              meta: { requestedW: Math.round(requested), ceilingW }
+            }));
+          }
+          value = res.value;
+        } else {
+          gcState.clamp = null;
+          gcState._clampKey = null;
+        }
+      }
+    }
+    // === end Netzanschluss ===================================================
 
     // === T-0075 universal discharge floor (telemetry-freshness + hard SoC floor) ===
     // Chokepoint floor: EVERY discharge-enabling hardware write (optimizer,

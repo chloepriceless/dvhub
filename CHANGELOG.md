@@ -58,6 +58,30 @@ verweist hierher.
   Preise kommen, rechnet EOS neu. Der Leitstand kennzeichnet das am EOS-Fahrplan („Preise geschätzt“, mit Abfahrt)
   und unter „Laut EOS-Plan“. Aus Slots mit geschätzten Preisen setzt DVhub keine Akku-Regeln um; für den Hausakku
   allein bleibt es dabei, dass im Steuerzeitraum nur echte Preise liegen. Eine feste Grenze (6/12/24 h) bleibt fest.
+- **Netzanschluss: DVhub hält die Bezugsgrenze des Hausanschlusses ein.** Neue Einstellung „Netzanschluss maximal
+  (kW)“ unter Netz & Recht, stabil (kein Beta), ab Werk leer = aus. Anlass: EOS plante 34,4 kW Netzbezug (Akku 27 kW +
+  E-Auto 11 kW + Haus) an einem 29-kW-Anschluss. Der Wächter läuft bei jeder Zählerabfrage (Prod alle 2 s):
+  - Jeder positive Netz-Sollwert (EOS, Kleine Börsenautomatik, Zeitplan, Handeingabe, Netzladen, §14a, „Akku halten“)
+    wird auf Grenze − Sicherheitsabstand gedeckelt (Victron). Die Akku-Ladung aus dem Netz gibt damit immer zuerst nach.
+  - Reicht das nicht, nimmt DVhub die steuerbaren Lasten zurück, Reihenfolge einstellbar (Standard Wallbox → Heizstab
+    → EEBUS-Geräte). Die Wallbox regelt erst den Ladestrom bis zum Mindeststrom herunter und pausiert dann.
+  - Die Pause ist hart: evcc geht auf „aus“, eine direkte Wallbox bekommt stop(), egal welcher Stopp-Modus
+    eingestellt ist. Das gilt auch für „Sofort laden“ und für die §14a-Pause. Bisher lud evcc bei „minpv“ weiter.
+    Senkt der Wechselrichter seine Akku-Ladung nicht binnen 10 s, kürzt DVhub die Geräte trotzdem.
+  - Wieder frei gibt DVhub erst mit Rückschalt-Abstand: 30 s Luft, frühestens 60 s nach dem Eingriff, ein Gerät je
+    Schritt. Optional gilt eine Grenze je Phase (A), weil Sicherungen je Phase auslösen.
+  - Fail-safe: Ist der Zähler gestört oder sein Wert älter als 90 s, gibt DVhub keine neue Last frei. Der Akku-Sollwert
+    sinkt dann auf Grenze − Abstand − geschätzte Grundlast − laufende Geräte.
+  - Leitstand-Kachel „Netzanschluss“ und Protokoll-Ereignisse, z. B. „Netzanschluss: begrenzt Akku-Ladung auf 28,0 kW“.
+  - Peak Shaving, §14a und Netzanschluss nutzen denselben Kern (`services/import-limit/core.js`): Sollwert-Deckel und
+    „kleinste gilt“ je Gerät.
+  - Grenze der Physik: Nicht steuerbare Verbraucher wie Herd oder Durchlauferhitzer kann DVhub nicht abschalten. Es
+    nimmt alle steuerbaren schnell zurück und meldet, wenn nichts mehr übrig ist.
+- **EOS plant mit der Bezugsgrenze.** Kennt das EOS den Schlüssel `max_grid_import_power_w` am Wechselrichter (unser
+  EOS), bekommt es Grenze − Abstand und kürzt selbst. Ist die Grenze in DVhub entfernt, schickt DVhub 1 GW statt null,
+  weil ein null per PUT den Wert in EOS nicht zurücksetzt. Vanilla v0.4.0rc3 kennt den Schlüssel nicht. Dort plant EOS
+  als Behelf höchstens Grenze − Abstand − Grundlast − E-Auto (falls EOS es plant) als Ladeleistung aus dem Netz, über
+  `max_ac_charge_power_w`. Die Entladegrenze und das PV-Laden bleiben dabei unberührt.
 
 ### Geändert
 
@@ -107,6 +131,14 @@ verweist hierher.
     Netzstrom im Akku ab (nur ein Protokolleintrag, kein Alarm, kein Eingriff in die Regelung). In 1.0.9 war das so
     gedacht, lief mit der Standardeinstellung aber nie. Ist der Wächter an, meldet nur er — kein zweiter Hinweis.
 - **E-Auto-Wochenplan ohne Beta-Kennzeichen.** Die Übersicht zu 1.0.9 führte ihn als Beta, gesperrt war er nie.
+- **Not-Halt hört mit allen DVhub-Steuerungen auf (Christin 06.11.2026).** Beim Aktivieren bekommen Wallbox und
+  Heizstab EINMAL „aus“ bzw. 0 W — aber nur, wo DVhub den aktuellen Zustand selbst gesetzt hat (eigener Ladebefehl
+  und evcc noch im DVhub-Modus, eigene Heizstab-Vorgabe über 0). Eine von Hand gestartete Ladung oder ein von selbst
+  laufender Heizstab bleibt unberührt. Danach schreibt DVhub nichts mehr an Wallbox, Heizstab oder Geräte, auch
+  „Laden stoppen“ hält nicht mehr gegen eine Handladung. Der Netzanschluss-Wächter greift im Not-Halt nicht ein.
+  Fehlschläge werden geloggt und nicht wiederholt. Nach dem Aufheben übernimmt die normale Steuerung; ein im Not-Halt
+  beendetes „Sofort laden“ stellt den evcc-Modus von vorher danach her. Verschiebbare Geräte (Geschirrspüler) bleiben
+  unberührt.
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.

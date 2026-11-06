@@ -23,9 +23,16 @@
 //
 // Alles andere bleibt unberührt: ohne `enabled`, ohne Beta-Kanal, ohne Grenze
 // oder bei anderem Hersteller ist jeder Steuerwert bitgenau wie vorher.
+//
+// Die physikalische Grenze des Hausanschlusses regelt services/grid-connection
+// (stabil, für alle). Beide nutzen denselben Kern (services/import-limit/core.js:
+// Sollwert-Deckel, „kleinste gilt“) und sitzen an derselben Stelle im
+// Steuerpfad; die Viertelstunden-Spitzen und die Entlade-Freigabe bleiben
+// Gewerbe-Logik hier.
 
 import { betaGateOpen } from '../../beta-features.js';
 import { localParts, zoneOffsetMs } from '../../tz-fast.js';
+import { capPositiveSetpoint } from '../import-limit/core.js';
 
 export const PEAK_SHAVING_DEFAULTS = Object.freeze({
   enabled: false,
@@ -183,10 +190,12 @@ export function clampGridSetpoint(value, resolved, tel) {
   if (!resolved?.active || !Number.isFinite(v) || !(v > resolved.targetW)) {
     return { value, clamped: false, mode: null, reason: null };
   }
-  if (tel?.socOk) return { value: resolved.targetW, clamped: true, mode: 'target', reason: null };
+  // Der Deckel selbst ist derselbe Kern wie beim Netzanschluss
+  // (services/import-limit/core.js): nur senken, nie unter 0.
+  if (tel?.socOk) return { value: capPositiveSetpoint(v, resolved.targetW).value, clamped: true, mode: 'target', reason: null };
   if (tel?.loadKnown) {
-    const floor = Math.max(resolved.targetW, Math.ceil(tel.netLoadW));
-    if (floor < v) return { value: floor, clamped: true, mode: 'net_load', reason: tel.socReason };
+    const cap = capPositiveSetpoint(v, Math.max(resolved.targetW, Math.ceil(tel.netLoadW)));
+    if (cap.clamped) return { value: cap.value, clamped: true, mode: 'net_load', reason: tel.socReason };
     return { value, clamped: false, mode: 'held', reason: tel.socReason };
   }
   return { value, clamped: false, mode: 'held', reason: tel?.socReason || 'telemetry_unknown' };

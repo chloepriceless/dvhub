@@ -2447,6 +2447,11 @@ function renderDashboardStatus(status) {
     window.DVhubPeakShaving?.render(status.peakShaving);
   });
 
+  // Netzanschluss: Bezug gegen die Grenze des Hausanschlusses (grid-connection-view.js).
+  safeRender('dashboard.grid-connection', () => {
+    window.DVhubGridConnection?.render(status.gridConnection);
+  });
+
   safeRender('dashboard.costs', () => {
     const c = status.costs || {};
     setText('costImport', c.importKwh == null ? '-' : `${c.importKwh} kWh`);

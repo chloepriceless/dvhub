@@ -88,6 +88,7 @@ import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
 import { createFeedInCap } from './services/feed-in-cap/index.js';
 import { pricingPeriodEndWarning } from './services/pricing-period-warning.js';
 import { createPeakShaving } from './services/peak-shaving/index.js';
+import { createGridConnectionGuard, wallboxGridCapW } from './services/grid-connection/index.js';
 import { createEebusService } from './services/eebus/index.js';
 import { createParagraph14aService } from './services/paragraph14a/index.js';
 import { createClockCheck } from './services/clock-check.js';
@@ -903,6 +904,8 @@ function buildCurrentStatusPayload({ now = Date.now(), runtimeSnapshot = buildCu
     p14a: ctx.p14a?.summary?.() ?? null,
     // Peak Shaving (GitHub #28): null, solange ausgeschaltet.
     peakShaving: ctx.peakShaving?.summary?.() ?? null,
+    // Netzanschluss (services/grid-connection): null ohne eingetragene Grenze.
+    gridConnection: ctx.gridConnection?.summary?.() ?? null,
     // Kachel „Überschuss / Defizit“: Akku wie EOS ihn sieht (Kapazität,
     // Ladestand, Untergrenze) — vorher Ersatzwerte 43 kWh / 5 %.
     energyBalance: { battery: energyBalanceBattery(ctx) },
@@ -1454,6 +1457,11 @@ ctx.notifyDirect = createDirectNotifier({
   getService: () => ctx.notificationService,
   sendCommand: (type, payload) => runtimeCommandClient.send(type, payload),
 });
+// Netzanschluss (services/grid-connection): Wächter über die Bezugsgrenze des
+// Hausanschlusses. polling.js ruft ihn bei jeder Zählerabfrage auf; die Hebel
+// (Sollwert-Decke, Wallbox, Heizstab, EEBUS) fragen ihn ab. Vor dem Poller,
+// damit schon die erste Abfrage zählt.
+ctx.gridConnection = createGridConnectionGuard(ctx);
 const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;
@@ -1513,6 +1521,8 @@ if (IS_RUNTIME_PROCESS) ctx.feedInCap.start();
 // fragt der Dienst nichts ab und liefert keinen Status.
 ctx.peakShaving = createPeakShaving(ctx);
 if (IS_RUNTIME_PROCESS) ctx.peakShaving.start();
+// Netzanschluss: Rückfalltakt (5 s), falls die Zählerabfrage selbst hängt.
+if (IS_RUNTIME_PROCESS) ctx.gridConnection.start();
 // Zweite Victron-GX am selben Netzanschluss (services/multi-gx): eigener
 // Modbus-Pool, damit eine haengende zweite GX die Hauptanlage nie ausbremst.
 // Ohne multiGx.enabled keine einzige Anfrage.
@@ -1805,8 +1815,12 @@ const eosEvccBridge = createEosEvccBridge({
     || createEvccAdapter(evccIntegration, () => bc.loadpoint, () => bc.stopMode),
   isProActive: () => ctx.licenseService?.isProActive?.() !== false,
   isPaused: () => state.ctrl?.discretionaryWritesPaused === true,
-  // §14a: Anteil am Budget für die Wallbox (services/paragraph14a).
-  getGridCapW: () => (Number.isFinite(state.ctrl?.p14aWallboxCapW) ? state.ctrl.p14aWallboxCapW : null),
+  // §14a-Anteil (services/paragraph14a) und Netzanschluss (services/grid-connection):
+  // die kleinste Grenze gilt.
+  getGridCapW: () => wallboxGridCapW(
+    Number.isFinite(state.ctrl?.p14aWallboxCapW) ? state.ctrl.p14aWallboxCapW : null,
+    ctx.gridConnection?.capW?.('wallbox') ?? null
+  ),
   pushLog: (event, data) => ctx.pushLog?.(event, data),
   // „Sofort laden“ ueberlebt einen Neustart (Update mitten im Laden) — eigene
   // kleine Datei, Laufzeitzustand gehoert nicht in config.json.
@@ -1882,6 +1896,8 @@ const mypvRegulator = createMypvRegulator({
     const w = ctx.mainWallbox?.state?.();
     return w?.available ? { connected: w.connected === true, charging: w.charging === true, carState: w.carState } : null;
   },
+  // Netzanschluss: Grenze des Wächters je Heizstab (services/grid-connection).
+  getCapW: (id) => ctx.gridConnection?.capW?.(`heater:${id}`) ?? null,
 });
 ctx.mypvRegulator = mypvRegulator;
 
@@ -3074,6 +3090,7 @@ async function gracefulShutdown(signal) {
   safeSync('victronGx.stop', () => ctx.victronGx?.stop?.());
   safeSync('feedInCap.stop', () => ctx.feedInCap?.stop?.());
   safeSync('peakShaving.stop', () => ctx.peakShaving?.stop?.());
+  safeSync('gridConnection.stop', () => ctx.gridConnection?.stop?.());
   safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
   safeSync('vehiclePull.stop', () => ctx.vehiclePull?.stop?.());

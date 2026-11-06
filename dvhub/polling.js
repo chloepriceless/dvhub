@@ -976,6 +976,12 @@ export function createPoller(ctx) {
     try {
       gridVoltage.onPoll(cfg, spineEm ? { spine: spineEm, spineAt: state.meter.updatedAt } : {});
     } catch (e) { pushLog('grid_voltage_error', { error: e?.message || String(e) }, 'warn'); }
+    // Netzanschluss (services/grid-connection): je Zählerabfrage ein Regeltakt —
+    // die Grenze des Hausanschlusses wird im Poll-Takt gesichert, nicht erst im
+    // 5–15-s-Auswertungstakt. Läuft auch bei gestörtem Zähler (Fail-safe).
+    try {
+      ctx.gridConnection?.pollTick?.();
+    } catch (e) { pushLog('grid_connection_error', { error: e?.message || String(e) }, 'warn'); }
 
     ctx.onPollComplete?.({
       ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),

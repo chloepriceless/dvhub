@@ -158,6 +158,19 @@
         <div class="rail-row" data-leit="adv" title="Netz-Sollwert, den DVhub der zweiten GX schreibt (wirkt auf ihren AC-IN, Register 2716)."><span class="l">Sollwert AC-IN</span><strong class="v" id="secondGxSetpoint">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Minimum-SOC</span><strong class="v" id="secondGxMinSoc">&mdash;</strong></div>
       </div>
+      <!-- Netzanschluss: Bezugsgrenze des Hausanschlusses (services/grid-connection,
+           grid-connection-view.js). Nur sichtbar, wenn eine Grenze eingetragen ist. -->
+      <div class="card rail-card" data-accent="ctrl" id="gridConnectionCard" hidden>
+        <div class="rail-card-head">
+          <span class="ttl"><span class="dot dot-ctrl"></span>Netzanschluss &middot; Bezugsgrenze</span>
+          <span class="chip sm" id="gridConnectionChip"><span class="dot"></span><span id="gridConnectionState">&mdash;</span></span>
+        </div>
+        <div class="rail-big card-value" id="gridConnectionImport" title="Aktueller Netzbezug am Zähler der Anlage.">&mdash;</div>
+        <div class="rail-row" title="Grenze des Hausanschlusses; DVhub regelt auf Grenze minus Sicherheitsabstand."><span class="l">Grenze</span><strong class="v" id="gridConnectionLimit">&mdash;</strong></div>
+        <div class="rail-row"><span class="l">Auslastung</span><strong class="v" id="gridConnectionLoad">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv" title="Bezug je Phase L1 / L2 / L3 am Netzzähler."><span class="l">Phasen</span><strong class="v" id="gridConnectionPhases">&mdash;</strong></div>
+        <div class="rail-row"><span class="l">Eingriff</span><strong class="v" id="gridConnectionDetail">&mdash;</strong></div>
+      </div>
       <!-- Peak Shaving: Bezugsgrenze für RLM-Anschlüsse (GitHub #28,
            services/peak-shaving, peak-shaving-view.js). Nur sichtbar, wenn eingeschaltet. -->
       <div class="card rail-card" data-accent="ctrl" id="peakShavingCard" hidden>
@@ -633,7 +646,8 @@
 <script src="/eos-plan-summary.js?v=20261105-eos-frist"></script>
 <script src="/peak-shaving-view.js?v=20261026"></script>
 <script src="/license-banner.js?v=20261105-lizenz-umzug"></script>
-<script src="/app.js?v=20261105-release110"></script>
+<script src="/grid-connection-view.js?v=20261106"></script>
+<script src="/app.js?v=20261106-release110-netzanschluss"></script>
 <script src="/leitstand-charts.js?v=20261105-eos-frist"></script>
 <script src="/ev-weekly-editor.js?v=20261027"></script>
 <script src="/ev-tile.js?v=20261027-wochenplan"></script>
