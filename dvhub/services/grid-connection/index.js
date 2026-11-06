@@ -354,6 +354,8 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
         if (cap != null && next >= cap) continue;
         setCap(d, next);
         if (!finite(d.currentW)) (st.assumed ??= {})[d.id] = draw;
+        // Leistung vor dem ersten Eingriff (für die volle Freigabe).
+        (st.cutFrom ??= {})[d.id] = Math.max(Number(st.cutFrom[d.id]) || 0, draw);
         rest -= draw - next;
         events.push({ type: 'cut', id: d.id, kind: d.kind, name: d.name || null, fromW: Math.round(draw), capW: next, importW: Math.round(total), maxPhaseW: maxPhase == null ? null : Math.round(maxPhase), excessW: Math.round(excess) });
       }
@@ -379,6 +381,10 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   // Lädt der Akku gerade aus dem Netz, ist seine Ladung freie Leistung für die
   // Geräte — er gibt zuerst nach, der Multi hält den Bezug auf dem Sollwert.
   if (sp != null && !batteryStuck) headroom += chargeW;
+  // Je Phase gibt der Akku ein Drittel seiner Netzladung frei (dreiphasiger
+  // Multi) — sonst bliebe eine Wallbox gesperrt, obwohl der Akku nachgäbe
+  // (Gesamtprüfung 7 / Codex bf1c2c23, P2).
+  const phaseRoomEff = phaseRoom == null ? null : phaseRoom + (sp != null && !batteryStuck ? chargeW / 3 : 0);
   if (headroom >= r.releaseHysteresisW) st.underSince ??= now;
   else st.underSince = null;
   if (st.underSince == null || now - st.underSince < RELEASE_MS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
@@ -390,22 +396,31 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // Grundlage ist, was das Gerät gerade WIRKLICH zieht — eine ungenutzte
       // Grenze darf nicht Schritt für Schritt über die Luft hinaus wachsen
       // (Gesamtprüfung 2, P1).
-      const drawNow = Math.min(cap, finite(d.currentW) ? Math.max(0, Number(d.currentW)) : cap);
+      // Ohne Leistungsmeldung vorsichtig 0 annehmen: die Grenze wächst dann
+      // höchstens auf die Luft, nicht Schritt für Schritt darüber hinaus
+      // (Codex bf1c2c23, P1).
+      const drawNow = Math.min(cap, finite(d.currentW) ? Math.max(0, Number(d.currentW)) : 0);
+      // Volle Freigabe erst, wenn die Leistung VOR dem ersten Eingriff Platz hat
+      // — eine direkte Box zieht nach release() ihre eigene Höchstleistung,
+      // nicht evMaxChargeW (Gesamtprüfung 7, P1).
+      const fullW = Math.max(Number(d.maxW) || 0, Number(st.cutFrom?.[d.id]) || 0);
       // Phasen: ein einphasiges (oder unbekanntes) Gerät darf höchstens die Luft
       // EINER Phase nehmen, ein dreiphasiges das Dreifache (Gesamtprüfung 6, P1).
       const devPhases = Number(d.phases) === 3 ? 3 : 1;
-      const giveDev = phaseRoom == null ? give
-        : Math.min(give, devPhases * phaseRoom - (devPhases === 3 ? r.releaseHysteresisW : Math.round(r.releaseHysteresisW / 3)));
+      const giveDev = phaseRoomEff == null ? give
+        : Math.min(give, devPhases * phaseRoomEff - (devPhases === 3 ? r.releaseHysteresisW : Math.round(r.releaseHysteresisW / 3)));
       if (!(giveDev > 0)) continue;
       // Pausiert und zu wenig Luft für den Mindeststrom: nicht anlaufen lassen.
       if (drawNow === 0 && giveDev < (Number(d.minW) || 0)) continue;
       const next = Math.max(cap, drawNow + giveDev);
       // Gerundet ohne Zuwachs: Schritt nicht verbrauchen, nächstes Gerät
       // (Codex 7055aa8c, P2).
-      if (drawNow + giveDev < Number(d.maxW) && down(next) <= cap) continue;
-      if (!finite(d.maxW) || (drawNow + giveDev) >= Number(d.maxW)) {
+      if (drawNow + giveDev < fullW && down(next) <= cap) continue;
+      if (st.assumed) delete st.assumed[d.id];
+      if (!(fullW > 0) || (drawNow + giveDev) >= fullW) {
         delete st.caps[d.id];
         delete st.capAt[d.id];
+        if (st.cutFrom) delete st.cutFrom[d.id];
         events.push({ type: 'release', id: d.id, kind: d.kind, name: d.name || null, capW: null, importW: Math.round(total) });
       } else {
         setCap(d, down(next));
@@ -476,11 +491,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     // deren Grenze ein (Codex b2f1ccd, P1).
     const override = ctx.eosEvccBridge?.getOverride?.();
     const overrideCharging = override != null && override.kind !== 'stop';
-    // Steht eine vorgemerkte evcc-Rückkehr aus, bleibt die Wallbox
-    // eingeschrieben: ihre Freigabe läuft über die normalen Abstand- und
-    // Rückschalt-Prüfungen, nicht über das Wegfallen aus der Liste (Codex 4bf1eb18, P1).
-    const restorePending = ctx.eosEvccBridge?.hasPendingRestore?.() === true;
-    const viaBridge = ((bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false) || restorePending;
+    const viaBridge = (bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false;
     const direct = bc.charger !== 'evcc' && directWallboxConfigured(c);
     if ((viaBridge || direct) && ctx.eosEvccBridge) {
       list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: bc.maxChargeW, minW: minChargeW(bc), phases: bc.phases });

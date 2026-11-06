@@ -1160,6 +1160,7 @@ const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
 const PEAK_SHAVING_LIFT_PATH = path.join(DATA_DIR || __dirname, 'peak_shaving_lift.json');
 // E-Auto „Sofort laden“ (eos-evcc-bridge setOverride).
 const EV_OVERRIDE_PATH = path.join(DATA_DIR || __dirname, 'ev_override.json');
+const EV_OWNED_PATH = path.join(DATA_DIR || __dirname, 'ev_owned.json');
 
 function persistControlState() {
   try {
@@ -1815,6 +1816,13 @@ const eosEvccBridge = createEosEvccBridge({
   saveOverride: (ov) => {
     if (ov) atomicWriteControlState(EV_OVERRIDE_PATH, ov);
     else if (fs.existsSync(EV_OVERRIDE_PATH)) fs.unlinkSync(EV_OVERRIDE_PATH);
+  },
+  // Welche Befehle DVhub an welcher Wallbox stehen hat (Not-Halt, Freigabe
+  // einer Grenz-Vorgabe nach einem Neustart).
+  loadOwned: () => (fs.existsSync(EV_OWNED_PATH) ? JSON.parse(fs.readFileSync(EV_OWNED_PATH, 'utf8')) : null),
+  saveOwned: (list) => {
+    if (list) atomicWriteControlState(EV_OWNED_PATH, list);
+    else if (fs.existsSync(EV_OWNED_PATH)) fs.unlinkSync(EV_OWNED_PATH);
   }
 });
 ctx.eosEvccBridge = eosEvccBridge;

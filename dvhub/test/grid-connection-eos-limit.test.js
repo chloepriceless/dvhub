@@ -166,3 +166,13 @@ describe('Abgleich gegen eine EOS-Attrappe', () => {
     assert.equal(lastInverterPut(mock).max_ac_charge_power_w, 27000, 'Behelf nach der Erkennung wieder aus');
   });
 });
+
+describe('Gesamtprüfung 7', () => {
+  it('ohne maxChargeW und ohne Grenze: AC-Ladeleistung als Zahl, nicht null (null setzt in EOS nicht zurück)', () => {
+    const inv = buildEosInverters({ optimizer: { ...LICENSED } }, { gridImportLimitSupported: true })[0];
+    assert.equal(typeof inv.max_ac_charge_power_w, 'number');
+    assert.ok(inv.max_ac_charge_power_w > 0);
+    const inv2 = buildEosInverters({ optimizer: { ...LICENSED } })[0];
+    assert.equal(typeof inv2.max_ac_charge_power_w, 'number');
+  });
+});
