@@ -301,6 +301,16 @@ export function createEosEvccBridge(deps) {
     persistOverride();
     pushLog('ev_override_end', { reason, powerW: ended?.powerW ?? null, startedAt: ended?.startedAt ?? null });
     if (!lastSent?.override) return null;
+    // Im Not-Halt nichts schreiben: der evcc-Modus von vorher wird vorgemerkt
+    // und nach dem Aufheben hergestellt (runTick); eine direkte Box gibt
+    // runTick dann über releaseIfNeeded frei.
+    if (isPaused()) {
+      if (lastSent.charger === 'evcc') {
+        pendingRestore = { mode: ended?.prevMode || bc.stopMode, stopped: lastSent.mode === 'off' };
+      }
+      lastSent = { ...lastSent, override: false };
+      return { ok: true, deferred: true, paused: true };
+    }
     // Ohne Pro regelt die Bruecke nichts mehr — also auch die Weitergabe nicht.
     if (bc.enabled && isProActive() !== false) { lastSent = { ...lastSent, key: null }; return null; }
     if (lastSent.charger === 'evcc') {
@@ -482,16 +492,11 @@ export function createEosEvccBridge(deps) {
       const cfg = getCfg() || {};
       const bc = resolveEvccBridgeConfig(cfg);
       // Not-Halt friert ein wie ueberall: kein Befehl an die Wallbox, auch kein
-      // Override. Ein gesetzter Override bleibt stehen und greift nach dem Aufheben.
-      // Ausnahme „Laden stoppen“: Stoppen ist die sichere Richtung und wird auch
-      // im Not-Halt durchgesetzt (2026-10-15).
-      if (isPaused()) {
-        if (isStopOverride()) {
-          const res = await overrideTick(cfg, bc, force, { paused: true });
-          if (res) return { ...res, paused: true };
-        }
-        return { ok: false, skipped: 'paused' };
-      }
+      // Override. Ein gesetzter Override bleibt stehen und greift nach dem
+      // Aufheben. Seit 06.11.2026 (Christin) gilt das auch für „Laden stoppen“
+      // — DVhub hält nicht gegen eine von Hand gestartete Ladung. Die einmalige
+      // Neutralisierung beim Aktivieren macht emergencyStop().
+      if (isPaused()) return { ok: false, skipped: 'paused' };
       if (override) {
         const res = await overrideTick(cfg, bc, force);
         if (res) return res;
@@ -614,6 +619,39 @@ export function createEosEvccBridge(deps) {
       if (timer) { clearInterval(timer); timer = null; }
     },
     tick,
+    /**
+     * Not-Halt: EINMAL „aus“ — nur, wenn DVhub die Wallbox gerade laden lässt
+     * (letzter eigener Befehl „laden“) und bei evcc der Modus noch DVhubs „now“
+     * ist. Von Hand umgestellt, unbekannt oder schon gestoppt: nichts senden.
+     */
+    emergencyStop() {
+      return locked(async () => {
+        const cfg = getCfg() || {};
+        const bc0 = resolveEvccBridgeConfig(cfg);
+        if (!lastSent) return { ok: true, skipped: 'not_controlled' };
+        if (lastSent.action !== 'charge') return { ok: true, skipped: 'not_charging' };
+        const bc = { ...bc0, charger: lastSent.charger || bc0.charger };
+        const charger = getCharger(cfg, bc);
+        if (!charger?.isConfigured?.()) return { ok: true, skipped: 'not_configured' };
+        if (charger.type === 'evcc') {
+          let st;
+          try { st = await charger.status(); } catch { st = null; }
+          // Im Zweifel nicht senden: nur wenn evcc nachweislich noch in DVhubs Modus steht.
+          if (!st?.ok || (st.raw?.mode ?? null) !== (lastSent.mode || 'now')) return { ok: true, skipped: 'not_dvhub_state' };
+        }
+        const res = await hardStopper(cfg, bc, charger).stop();
+        if (!res?.ok) {
+          lastError = res?.error || 'wallbox write failed';
+          return { ok: false, error: lastError };
+        }
+        lastSent = {
+          ...lastSent, key: `${bc.charger}:${bc.loadpoint}:emergency-stop`, action: 'stop', currentA: null,
+          mode: charger.type === 'evcc' ? 'off' : null, released: false, at: new Date(now()).toISOString()
+        };
+        pushLog('ev_emergency_stop', { charger: charger.type, override: lastSent.override === true });
+        return { ok: true, stopped: true };
+      });
+    },
     /** Befehl sofort erneut senden, auch wenn er sich nicht geaendert hat. */
     apply: () => tick({ force: true }),
     /**

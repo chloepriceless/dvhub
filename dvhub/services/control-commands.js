@@ -157,7 +157,26 @@ export async function setEmergencyStop(ctx, opts) {
     if (!neutralize?.ok && !neutralize?.skipped) {
       ctx.pushLog('emergency_stop_neutralize_failed', { error: neutralize?.error || 'unknown' }, { ...(actor || {}), severity: 'error' });
     }
-    return { ok: true, status: 200, paused: true, pausedAt: state.ctrl.pausedAt, neutralize };
+    // Christin 06.11.2026: Not-Halt heißt „hör mit allen Steuerungen auf“.
+    // Wallbox und Heizstab bekommen EINMAL 0 W bzw. „aus“ — aber nur, wo DVhub
+    // den aktuellen Zustand selbst gesetzt hat; eine von Hand gestartete Ladung
+    // oder ein von selbst laufender Heizstab bleibt unberührt. Danach schreibt
+    // DVhub dort nichts mehr (die Dienste prüfen discretionaryWritesPaused).
+    // Ein Fehlschlag wird geloggt, nicht wiederholt; der Not-Halt bleibt aktiv.
+    const devices = {};
+    for (const [target, run] of [
+      ['wallbox', () => ctx.eosEvccBridge?.emergencyStop?.()],
+      ['heater', () => ctx.mypvRegulator?.emergencyStop?.()],
+      ['devices', () => ctx.eosDeviceBridge?.emergencyStop?.()],
+    ]) {
+      let r;
+      try { r = await run(); } catch (e) { r = { ok: false, error: e?.message || String(e) }; }
+      devices[target] = r ?? null;
+      if (r && r.ok === false) {
+        ctx.pushLog('emergency_stop_neutralize_failed', { target, error: r.error || 'unknown' }, { ...(actor || {}), severity: 'error' });
+      }
+    }
+    return { ok: true, status: 200, paused: true, pausedAt: state.ctrl.pausedAt, neutralize, devices };
   }
 
   // Resume

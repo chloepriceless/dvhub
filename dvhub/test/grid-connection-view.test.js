@@ -62,3 +62,9 @@ test('index.html: Kachel und Skript eingebunden, app.js rendert sie', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(app, /DVhubGridConnection\?\.render\(status\.gridConnection\)/);
 });
+
+test('Not-Halt: Kachel sagt, dass DVhub nicht eingreift', () => {
+  const v = load().view({ ...base, paused: true, text: 'Netzanschluss: Not-Halt aktiv — DVhub greift nicht ein.' });
+  assert.equal(v.state, 'Not-Halt');
+  assert.match(v.detail, /Not-Halt/);
+});

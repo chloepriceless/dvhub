@@ -14,6 +14,7 @@
     : DASH);
 
   function state(s) {
+    if (s.paused) return ['Not-Halt', 'warn'];
     if (s.active !== true) return ['Grenze ungültig', 'warn'];
     if (s.failsafe) return ['Zähler gestört', 'danger'];
     if (s.exhausted) return ['Nichts mehr steuerbar', 'danger'];

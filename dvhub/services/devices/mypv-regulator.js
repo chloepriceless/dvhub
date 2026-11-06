@@ -200,6 +200,8 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     }
     if (decision.reason !== rt.reason) pushLog('mypv_regulator', { id: dev.id, powerW: decision.powerW, reason: decision.reason });
     trackEnergy(dev.id, measured ? measured.powerW : rt.setpoint, t, rt.lastTickMs ? t - rt.lastTickMs : 0);
+    // Not-Halt kann mitten im Takt kommen: dann nichts mehr schreiben.
+    if (state?.ctrl?.discretionaryWritesPaused === true) return;
     try {
       // In jedem Takt schreiben: der „Power Timeout“ des Geräts schaltet sonst ab.
       await client.writePower(decision.powerW);
@@ -262,6 +264,29 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
         c.client.close?.();
       }
       clients.clear();
+    },
+    /**
+     * Not-Halt: EINMAL 0 W an jeden Heizstab, dem DVhub gerade Leistung > 0
+     * vorgibt. 0 W ist hier neutral: dasselbe, was das Gerät nach seinem
+     * „Power Timeout“ ohnehin tut, wenn DVhub nicht mehr schreibt. Steht DVhubs
+     * Vorgabe schon auf 0, läuft der Stab höchstens aus eigenem Antrieb —
+     * dann kein Befehl. Danach schreibt der Regler nichts (Takt prüft die Pause).
+     */
+    async emergencyStop() {
+      const errors = [];
+      for (const [id, c] of clients) {
+        const rt = devices.get(id);
+        if (!rt || !(Number(rt.setpoint) > 0)) continue;
+        try {
+          await c.client.writePower(0);
+          rt.setpoint = 0;
+          rt.reason = 'Not-Halt — DVhub steuert nicht';
+          pushLog('mypv_emergency_stop', { id });
+        } catch (e) {
+          errors.push(`${id}: ${String(e?.message || e).slice(0, 120)}`);
+        }
+      }
+      return errors.length ? { ok: false, error: errors.join('; ') } : { ok: true };
     },
     /** Für Oberfläche/API: je Gerät Sollwert, Messwerte, Grund, Fehler. */
     getStatus() {

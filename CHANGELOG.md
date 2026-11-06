@@ -39,6 +39,15 @@ verweist hierher.
 
 ### Geändert
 
+- **Not-Halt hört mit allen DVhub-Steuerungen auf (Christin 06.11.2026).** Beim Aktivieren bekommen Wallbox und
+  Heizstab EINMAL „aus“ bzw. 0 W — aber nur, wo DVhub den aktuellen Zustand selbst gesetzt hat (eigener Ladebefehl
+  und evcc noch im DVhub-Modus, eigene Heizstab-Vorgabe über 0). Eine von Hand gestartete Ladung oder ein von selbst
+  laufender Heizstab bleibt unberührt. Danach schreibt DVhub nichts mehr an Wallbox, Heizstab oder Geräte, auch
+  „Laden stoppen“ hält nicht mehr gegen eine Handladung. Der Netzanschluss-Wächter greift im Not-Halt nicht ein.
+  Fehlschläge werden geloggt und nicht wiederholt. Nach dem Aufheben übernimmt die normale Steuerung; ein im Not-Halt
+  beendetes „Sofort laden“ stellt den evcc-Modus von vorher danach her. Verschiebbare Geräte (Geschirrspüler) bleiben
+  unberührt.
+
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.

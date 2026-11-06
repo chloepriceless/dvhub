@@ -6,9 +6,9 @@
 // Brücke einen evcc-Modus „off“ beim nächsten Takt auf „now“ zurück.
 // Jetzt: Override-Art 'stop' in der Brücke — gilt vor dem EOS-Plan, für evcc
 // (Modus off, egal welcher Stopp-Modus eingestellt ist) und direkt angebundene
-// Boxen (stop(), nicht release()), übersteht einen Neustart, wirkt auch im
-// Not-Halt (Stoppen ist die sichere Richtung), endet per Knopf, Uhrzeit oder
-// Abstecken.
+// Boxen (stop(), nicht release()), übersteht einen Neustart, endet per Knopf,
+// Uhrzeit oder Abstecken. Im Not-Halt schreibt DVhub nichts (Christin
+// 06.11.2026): der Stopp wirkt erst nach dem Aufheben.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -158,9 +158,14 @@ describe('Laden stoppen: direkt angebundene Wallbox (OpenEVSE/go-e/Wattpilot)', 
 });
 
 describe('Laden stoppen: Not-Halt, Neustart, Wechsel', () => {
-  test('wirkt auch im Not-Halt (Stoppen ist die sichere Richtung)', async () => {
+  // Christin 06.11.2026: im Not-Halt schreibt DVhub nichts an die Wallbox —
+  // eine von Hand gestartete Ladung bleibt. Der Stopp wirkt nach dem Aufheben.
+  test('im Not-Halt nur vorgemerkt, wirkt nach dem Aufheben', async () => {
     const h = harness({ plan: 'charge', paused: true });
     await h.bridge.setOverride({ kind: 'stop' });
+    assert.equal(h.mode(), 'pv', 'im Not-Halt kein Write');
+    h.setPaused(false);
+    await h.bridge.tick();
     assert.equal(h.mode(), 'off');
   });
 
@@ -200,12 +205,13 @@ describe('Laden stoppen im Not-Halt: Ende erst nach dem Aufheben', () => {
     assert.equal(out.ok, false);
     assert.equal(out.error, 'emergency_stop_active');
     assert.equal(h.bridge.getOverride()?.kind, 'stop');
-    assert.equal(h.mode(), 'off');
+    assert.equal(h.mode(), 'pv', 'im Not-Halt kein Write');
   });
 
   test('Abstecken im Not-Halt beendet nicht; nach dem Aufheben schon', async () => {
-    const h = harness({ plan: 'charge', paused: true, connected: true });
+    const h = harness({ plan: 'charge', connected: true });
     await h.bridge.setOverride({ kind: 'stop' });
+    h.setPaused(true);
     h.setLp({ connected: false });
     h.advance(30_000);
     await h.bridge.tick();

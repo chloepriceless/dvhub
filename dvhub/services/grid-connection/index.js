@@ -532,8 +532,22 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     if (ceilingTightened) reassertSetpoint();
   }
 
+  // Not-Halt: der Wächter bricht ihn nicht durch — keine Grenzen, keine
+  // Befehle. Beim Aufheben beginnt er von vorn (Christin 06.11.2026).
+  const paused = () => state()?.ctrl?.discretionaryWritesPaused === true;
+  let pausedSeen = false;
+
   function tick() {
     lastTickAt = now();
+    if (paused()) {
+      if (!pausedSeen) {
+        pausedSeen = true;
+        Object.assign(st, createGuardState());
+        log('grid_connection_paused', { text: 'Not-Halt aktiv — der Netzanschluss-Wächter greift nicht ein.' }, 'warn');
+      }
+      return null;
+    }
+    pausedSeen = false;
     try {
       const c = cfg();
       const r = resolveGridConnection(c);
@@ -550,7 +564,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     }
   }
 
-  function active() { return resolveGridConnection(cfg()).active; }
+  function active() { return !paused() && resolveGridConnection(cfg()).active; }
 
   return {
     /** Je Zählerabfrage (polling.js). */
@@ -566,6 +580,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     stop() { if (timer) { clearInterval(timer); timer = null; } },
     /** Decke für positive Netz-Sollwerte (W) oder null (keine Grenze / kein Victron). */
     batteryCeilingW() {
+      if (paused()) return null;
       const r = resolveGridConnection(cfg());
       if (!r.active || !r.batterySupported) return null;
       return st.ceilingW ?? r.targetW;
@@ -597,7 +612,8 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       const parts = [];
       if (clamp) parts.push(`begrenzt Akku-Ladung auf ${kwText(clamp.valueW)}`);
       for (const cp of caps) parts.push(cp.capW === 0 ? `${cp.name || KIND_LABEL[cp.kind]} pausiert` : `begrenzt ${cp.name || KIND_LABEL[cp.kind]} auf ${kwText(cp.capW)}`);
-      const text = !r.active ? 'Netzanschluss: Grenze ungültig (2 kW bis 2 000 kW) — DVhub regelt nicht.'
+      const text = paused() ? 'Netzanschluss: Not-Halt aktiv — DVhub greift nicht ein.'
+        : !r.active ? 'Netzanschluss: Grenze ungültig (2 kW bis 2 000 kW) — DVhub regelt nicht.'
         : st.failsafe ? 'Netzanschluss: Zähler gestört oder veraltet — DVhub gibt keine neue Last frei.'
           : parts.length ? `Netzanschluss: ${parts.join(' · ')}` : null;
       return {
@@ -612,6 +628,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         importW: meas?.fresh ? Math.max(0, Math.round(meas.importW)) : null,
         phasesW: meas?.fresh && meas.phasesW ? meas.phasesW.map((w) => Math.round(w)) : null,
         failsafe: st.failsafe,
+        paused: paused(),
         exhausted: st.exhausted,
         batterySupported: r.batterySupported,
         ceilingW: r.active && r.batterySupported ? st.ceilingW ?? r.targetW : null,

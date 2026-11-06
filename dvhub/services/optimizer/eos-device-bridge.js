@@ -250,6 +250,28 @@ export function createEosDeviceBridge(deps) {
     stop() { if (timer) { clearInterval(timer); timer = null; } },
     tick,
     apply: () => tick({ force: true }),
+    /**
+     * Not-Halt: EINMAL 0 W an modulierende Geräte (Heizstab), denen DVhub
+     * gerade Leistung > 0 vorgibt. Verschiebbare Geräte (Geschirrspüler)
+     * bleiben unberührt — Ausschalten mitten im Programm wäre kein neutraler
+     * Zustand. Danach schaltet die Brücke im Not-Halt nichts; nach dem
+     * Aufheben schickt sie ihre Befehle neu (lastCmd geleert).
+     */
+    async emergencyStop() {
+      const errors = [];
+      for (const [id, dev] of lastDevice) {
+        if (dev.kind !== 'modulating' || !(Number(lastPower.get(id)) > 0)) continue;
+        const r = await actuator.apply(dev, { powerW: 0 });
+        if (r?.ok) {
+          lastPower.set(id, 0);
+          pushLog('device_emergency_stop', { id, endpoint: dev.endpoint?.type });
+        } else {
+          errors.push(`${id}: ${r?.error || 'unknown'}`);
+        }
+      }
+      lastCmd.clear();
+      return errors.length ? { ok: false, error: errors.join('; ') } : { ok: true };
+    },
     getStatus() {
       return {
         lastTickAt: lastTickAt ? new Date(lastTickAt).toISOString() : null,
