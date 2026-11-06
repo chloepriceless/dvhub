@@ -315,3 +315,30 @@ test('Codex P1: Akku senkt seine Ladung nicht (Multi hängt) → nach 10 s zähl
   run(st, 10, args, 6000);
   assert.ok(st.caps.wallbox != null && st.caps.wallbox <= 8000, `Wallbox gekürzt (${st.caps.wallbox})`);
 });
+
+test('Codex P1 (Runde 2): hängender Akku zählt auch bei der Freigabe nicht als Luft — kein Pendeln', () => {
+  // Haus 10 kW, Akku hängt bei 10 kW Ladung, Wallbox 11 kW → 31 kW.
+  // Nach dem Kürzen 28 kW = Sollwert — das ist KEIN Beleg, dass der Akku folgt.
+  const st = createGuardState();
+  const wb = 11000;
+  const tick = (now) => {
+    const total = 10000 + 10000 + Math.min(wb, st.caps.wallbox ?? Infinity);
+    guardStep(st, { resolved: R, now, meas: fresh(total), devices: [wallbox(Math.min(wb, st.caps.wallbox ?? Infinity))], battery: { setpointW: 28000, chargeW: 10000 } });
+    return total;
+  };
+  let maxAfterCut = 0;
+  for (let t = 0; t <= 600_000; t += 2000) {
+    const total = tick(t);
+    if (st.caps.wallbox != null && t > 30_000) maxAfterCut = Math.max(maxAfterCut, total);
+  }
+  assert.ok(st.caps.wallbox != null && st.caps.wallbox <= 8000, `Wallbox bleibt gekürzt (${st.caps.wallbox})`);
+  assert.ok(maxAfterCut <= 28000, `kein Rückfall über das Ziel (${maxAfterCut})`);
+});
+
+test('Codex P2 (Runde 2): Multi regelt 50 W über dem Sollwert ein — kein schleichendes Kürzen der Wallbox', () => {
+  const st = createGuardState();
+  for (let t = 0; t <= 300_000; t += 2000) {
+    guardStep(st, { resolved: R, now: t, meas: fresh(28050), devices: [wallbox(11000)], battery: { setpointW: 28000, chargeW: 8000 } });
+  }
+  assert.equal(st.caps.wallbox, undefined);
+});

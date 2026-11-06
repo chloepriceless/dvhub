@@ -75,6 +75,8 @@ export const RELEASE_TICKS = 15;         // Takte mit Luft, bis ein Gerät wiede
 export const HOLD_AFTER_CUT_MS = 60_000; // nach einem Eingriff frühestens so spät freigeben
 export const OBEY_MS = 20_000;           // so lange zählt ein Befehl als „unterwegs“
 export const BATTERY_OBEY_MS = 10_000;   // so lange darf der Multi zum Senken seiner Ladung brauchen
+export const BATTERY_TRACK_TOLERANCE_W = 300;   // übliches Einregeln des Multi um den Sollwert
+export const BATTERY_STUCK_HOLD_MS = 15 * 60_000; // so lange gilt ein hängender Akku als hängend
 export const FAILSAFE_TICKS = 2;         // Takte ohne frische Messung bis zum Fail-safe
 export const METER_MAX_AGE_MS = GRID_SHARE_FIELD_MAX_AGE_MS; // 90 s wie beim Netzstrom-Zähler
 const STEP_W = 100;
@@ -176,7 +178,7 @@ export function eosGridImportLimitW(cfg) {
 export function createGuardState() {
   return {
     caps: {}, capAt: {}, ceilingW: null, ceilingUnder: 0,
-    over: 0, under: 0, stale: 0, lastCutAt: 0, batteryPendingSince: null,
+    over: 0, under: 0, stale: 0, lastCutAt: 0, batteryPendingSince: null, batteryStuckAt: null,
     failsafe: false, exhausted: false, phasesMissing: false
   };
 }
@@ -297,15 +299,29 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const chargeW = r.batterySupported ? Math.max(0, Number(battery.chargeW) || 0) : 0;
   const sp = r.batterySupported && finite(battery.setpointW) && Number(battery.setpointW) > 0
     ? Math.min(Number(battery.setpointW), st.ceilingW) : null;
-  // Der Multi senkt seine Ladung binnen Sekunden. Bleibt die Senkung aus
-  // (Sollwert nicht angekommen, GX hängt), zählt sie nach BATTERY_OBEY_MS
-  // nicht mehr — dann kommen die Geräte dran (Codex b2f1ccd, P1).
-  const batteryPending = sp != null ? Math.min(chargeW, Math.max(0, total - sp)) : 0;
-  if (batteryPending > 0 && excess > 0) st.batteryPendingSince ??= now;
-  else st.batteryPendingSince = null;
-  if (batteryPending > 0 && (st.batteryPendingSince == null || now - st.batteryPendingSince <= BATTERY_OBEY_MS)) {
-    pending += batteryPending;
+  // Der Multi senkt seine Ladung binnen Sekunden auf den Sollwert.
+  //  - Kleine Abweichung (≤ BATTERY_TRACK_TOLERANCE_W): normales Einregeln,
+  //    zählt als „gleich weg“ — kein schleichendes Kürzen (Codex 74f9a362, P2).
+  //  - Größere Abweichung länger als BATTERY_OBEY_MS: der Akku folgt nicht
+  //    (Sollwert nicht angekommen, GX hängt). Dann gilt er als „hängt“: seine
+  //    Ladung zählt weder als „gleich weg“ noch bei der Freigabe als Luft, bis
+  //    er nicht mehr lädt, kein positiver Sollwert mehr steht oder
+  //    BATTERY_STUCK_HOLD_MS vorbei sind — ein Bezug genau auf dem Sollwert
+  //    nach dem Kürzen beweist nicht, dass er wieder folgt (Codex b2f1ccd und
+  //    74f9a362, P1).
+  const gap = sp != null ? Math.max(0, total - sp) : 0;
+  const batteryPending = sp != null ? Math.min(chargeW, gap) : 0;
+  if (sp == null || chargeW <= 0 || (st.batteryStuckAt != null && now - st.batteryStuckAt > BATTERY_STUCK_HOLD_MS)) {
+    st.batteryStuckAt = null;
   }
+  if (gap > BATTERY_TRACK_TOLERANCE_W && batteryPending > 0 && excess > 0) {
+    st.batteryPendingSince ??= now;
+    if (st.batteryStuckAt == null && now - st.batteryPendingSince > BATTERY_OBEY_MS) st.batteryStuckAt = now;
+  } else {
+    st.batteryPendingSince = null;
+  }
+  const batteryStuck = st.batteryStuckAt != null;
+  if (!batteryStuck) pending += batteryPending;
   const predicted = excess - pending;
 
   // --- 2. Lasten zurücknehmen --------------------------------------------------
@@ -345,7 +361,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   if (phases) headroom = Math.min(headroom, 3 * (r.phaseTargetW - maxPhase));
   // Lädt der Akku gerade aus dem Netz, ist seine Ladung freie Leistung für die
   // Geräte — er gibt zuerst nach, der Multi hält den Bezug auf dem Sollwert.
-  if (sp != null) headroom += chargeW;
+  if (sp != null && !batteryStuck) headroom += chargeW;
   st.under = headroom >= r.releaseHysteresisW ? st.under + 1 : 0;
   if (st.under < RELEASE_TICKS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
   st.under = 0;

@@ -366,7 +366,13 @@ export function createEosEvccBridge(deps) {
       if (force || lastSent?.key !== key) {
         const res = await hardStopper(cfg, bc, charger).stop();
         if (!res?.ok) return { ok: false, error: res?.error || 'wallbox write failed', override: true };
-        lastSent = { key, charger: bc.charger, action: 'stop', currentA: null, loadpoint: bc.loadpoint, at: new Date(now()).toISOString() };
+        // override: true — sonst stellte endOverride() den evcc-Modus von
+        // vorher nicht wieder her (Codex 74f9a362, P2).
+        lastSent = {
+          key, charger: bc.charger, action: 'stop', currentA: null, loadpoint: bc.loadpoint,
+          mode: charger.type === 'evcc' ? 'off' : null, released: false, override: true,
+          gridCapW: capped.gridCapW, at: new Date(now()).toISOString()
+        };
         pushLog('ev_override_grid_cap', { capW: capped.gridCapW });
       }
       return { ok: true, override: true, gridCapW: capped.gridCapW };

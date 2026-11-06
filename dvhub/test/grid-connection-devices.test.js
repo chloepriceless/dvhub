@@ -143,3 +143,23 @@ test('Codex P1: „Sofort laden“ ohne EOS-Weitergabe zählt als steuerbare Wal
   guard.tick();
   assert.equal(guard.capW('wallbox'), 7000, '32 − 28 = 4 kW von der Wallbox');
 });
+
+test('Codex P2 (Runde 2): Pause während „Sofort laden“ behält den Override — beim Ende kehrt evcc in den alten Modus zurück', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
+  const calls = [];
+  const mk = (bc) => ({
+    type: 'evcc', isConfigured: () => true,
+    charge: async (a) => { calls.push(['charge', a]); return { ok: true }; },
+    stop: async () => { calls.push(['stop', bc.stopMode]); return { ok: true }; },
+    release: async () => { calls.push(['release']); return { ok: true }; },
+    status: async () => ({ ok: true, connected: true, raw: { mode: 'off' } }),
+  });
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type: 'evcc' } };
+  let capW = 0;
+  const bridge = createEosEvccBridge({ getCfg: () => cfg, getSolution: async () => null, getCharger: (_c, bc) => mk(bc), getGridCapW: () => capW, loadOverride: () => override });
+  await bridge.apply();
+  assert.deepEqual(calls.at(-1), ['stop', 'off'], 'Pause');
+  capW = null;
+  await bridge.clearOverride();
+  assert.deepEqual(calls.at(-1), ['stop', 'pv'], 'evcc zurück auf „pv“');
+});

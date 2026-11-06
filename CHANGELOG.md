@@ -19,6 +19,9 @@ verweist hierher.
     wird auf Grenze − Sicherheitsabstand gedeckelt (Victron). Die Akku-Ladung aus dem Netz gibt damit immer zuerst nach.
   - Reicht das nicht, nimmt DVhub die steuerbaren Lasten zurück, Reihenfolge einstellbar (Standard Wallbox → Heizstab
     → EEBUS-Geräte). Die Wallbox regelt erst den Ladestrom bis zum Mindeststrom herunter und pausiert dann.
+  - Die Pause ist hart: evcc geht auf „aus“, eine direkte Wallbox bekommt stop(), egal welcher Stopp-Modus
+    eingestellt ist. Das gilt auch für „Sofort laden“ und für die §14a-Pause. Bisher lud evcc bei „minpv“ weiter.
+    Senkt der Wechselrichter seine Akku-Ladung nicht binnen 10 s, kürzt DVhub die Geräte trotzdem.
   - Wieder frei gibt DVhub erst mit Rückschalt-Abstand: 30 s Luft, frühestens 60 s nach dem Eingriff, ein Gerät je
     Schritt. Optional gilt eine Grenze je Phase (A), weil Sicherungen je Phase auslösen.
   - Fail-safe: Ist der Zähler gestört oder sein Wert älter als 90 s, gibt DVhub keine neue Last frei. Der Akku-Sollwert
