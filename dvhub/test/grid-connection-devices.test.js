@@ -246,17 +246,19 @@ test('Codex P2 (Runde 4): neues „Sofort laden“ während der vorgemerkten Rü
 
 function evccBridgeCtl({ override }) {
   const calls = [];
-  const ctl = { capW: 0, stopFails: false, stopGate: null };
+  const ctl = { capW: 0, stopFails: false, stopGate: null, mode: 'off' };
   const mk = (bc) => ({
     type: 'evcc', isConfigured: () => true,
-    charge: async (a) => { calls.push(['charge', a]); return { ok: true }; },
+    charge: async (a) => { calls.push(['charge', a]); ctl.mode = 'now'; return { ok: true }; },
     stop: async () => {
       calls.push(['stop', bc.stopMode]);
       if (ctl.stopGate) await ctl.stopGate;
-      return ctl.stopFails ? { ok: false, error: 'evcc nicht erreichbar' } : { ok: true };
+      if (ctl.stopFails) return { ok: false, error: 'evcc nicht erreichbar' };
+      ctl.mode = bc.stopMode;
+      return { ok: true };
     },
     release: async () => ({ ok: true }),
-    status: async () => ({ ok: true, connected: true, raw: { mode: 'off' } }),
+    status: async () => ({ ok: true, connected: true, raw: { mode: ctl.mode } }),
   });
   const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type: 'evcc' } };
   const bridge = createEosEvccBridge({ getCfg: () => cfg, getSolution: async () => null, getCharger: (_c, bc) => mk(bc), getGridCapW: () => ctl.capW, loadOverride: () => override });
@@ -295,4 +297,9 @@ test('Codex P2 (Runde 5): „Sofort laden“ während der verzögerten Rückkehr
   await ovP;
   assert.notEqual(res?.ok, false, JSON.stringify(res));
   assert.ok(calls.some((c) => c[0] === 'stop' && c[1] === 'pv'), 'Rückkehr auf „pv“ abgeschlossen');
+  // Codex ea036ff7 (P2): das neue „Sofort laden“ kennt „pv“ als Modus von
+  // vorher und stellt ihn bei seinem Ende her.
+  assert.equal(bridge.getOverride().prevMode, 'pv');
+  await bridge.clearOverride();
+  assert.deepEqual(calls.at(-1), ['stop', 'pv']);
 });

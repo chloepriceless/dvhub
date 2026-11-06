@@ -630,21 +630,21 @@ export function createEosEvccBridge(deps) {
       // Weitergabe). Laeuft schon ein Override, bleibt dessen Herkunft.
       // Steht noch ein vorgemerkter Modus aus einer Pause an, ist DAS der Modus
       // von vorher — nicht das erzwungene „aus“ (Codex bf805c50, P2).
-      // Übernommen wird die Vormerkung erst im Lock (unten), abgegeben erst,
-      // wenn der Override wirklich einen Befehl durchgebracht hat (Codex 9ac450c4).
-      if (!override && !pendingRestore && bc.charger === 'evcc') {
-        try {
-          const st = await getCharger(cfg, bc).status();
-          const own = next.kind === 'stop' ? 'off' : 'now';
-          if (st?.ok && typeof st.raw?.mode === 'string' && st.raw.mode !== own) next.prevMode = st.raw.mode;
-        } catch { /* ohne Vorher-Modus: Ende = Stopp-Modus */ }
-      }
+      // Der Modus von vorher wird im Lock bestimmt: ein laufender Takt kann
+      // gerade eine vorgemerkte Rückkehr abschließen (Codex 9ac450c4, ea036ff7).
       return locked(async () => {
-        // Vorgemerkter Modus aus einer Pause: DAS ist der Modus von vorher. Die
-        // Pflicht bleibt bei der Vormerkung, bis ein Befehl des Overrides
-        // ankommt (handOff) — scheitert er oder endet der Override vorher,
-        // stellt runTick den Modus weiter her (Codex 9ac450c4, P2).
-        if (!override && pendingRestore) next.prevMode = pendingRestore.mode;
+        if (!override && pendingRestore) {
+          // Abgegeben wird die Vormerkung erst, wenn ein Befehl des Overrides
+          // ankommt (handOff) — scheitert er oder endet der Override vorher,
+          // stellt runTick den Modus weiter her.
+          next.prevMode = pendingRestore.mode;
+        } else if (!override && bc.charger === 'evcc') {
+          try {
+            const st = await getCharger(cfg, bc).status();
+            const own = next.kind === 'stop' ? 'off' : 'now';
+            if (st?.ok && typeof st.raw?.mode === 'string' && st.raw.mode !== own) next.prevMode = st.raw.mode;
+          } catch { /* ohne Vorher-Modus: Ende = Stopp-Modus */ }
+        }
         // Beim Wechsel der Leistung bleibt die Herkunft (Startzeit, Modus) erhalten.
         if (override) {
           next.startedAt = override.startedAt;
