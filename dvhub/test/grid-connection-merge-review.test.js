@@ -381,7 +381,7 @@ test('Codex 7055aa8c P2: gerundete Freigabe ohne Zuwachs verbraucht den Schritt 
 test('Codex 7055aa8c P2: erfolgreiche Freigabe (Weitergabe aus) wird nicht als Fehler gemeldet', async () => {
   const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'openevse', openevse: { url: 'http://192.0.2.5' } } };
   let t = 1_000_000;
-  const state = { meter: { ok: true, updatedAt: t, grid_total_w: -10000 }, victron: {}, schedule: {}, ctrl: {} };
+  const state = { meter: { ok: true, updatedAt: t, grid_total_w: -4000 }, victron: {}, schedule: {}, ctrl: {} };
   const logs = [];
   const ctx = {
     getCfg: () => cfg, state, pushLog: (e, d) => logs.push([e, d]),
@@ -767,15 +767,20 @@ test('Abschluss A P2: Entlade-Wächter — eine Netzanschluss-Decke auf „Akku 
   assert.equal(activeDischargeHold(state, t, {}), null);
 });
 
-test('bcbfaff1 P1: Sicherheits-Stopp beim Override-Ende scheitert → Override bleibt, der Stopp wird wiederholt', async () => {
+test('bcbfaff1/fa219ab7 P1: Sicherheits-Stopp beim Override-Ende scheitert → „Laden stoppen“ hält evcc aus, das Laden lebt nicht wieder auf', async () => {
   const h = evccMulti({ enabled: false });
   await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
-  h.capW = 0;
+  h.capW = 6000;                         // Teil-Grenze
   h.failStop = 1;
   await h.bridge.clearOverride();
-  assert.ok(h.bridge.getOverride(), 'Override bleibt, solange der Stopp nicht ankam');
+  assert.equal(h.bridge.getOverride()?.kind, 'stop', 'aus dem Laden wird ein Stopp');
+  const charges = h.calls.filter((c) => c[0] === 'mode' && c[2] === 'now').length;
   h.failStop = null;
   await h.bridge.tick();
+  assert.equal(h.modes[1], 'off');
+  h.capW = null;
+  await h.bridge.tick();
+  assert.equal(h.calls.filter((c) => c[0] === 'mode' && c[2] === 'now').length, charges, 'kein erneutes Laden');
   assert.equal(h.modes[1], 'off');
 });
 
@@ -816,4 +821,43 @@ test('bcbfaff1 P2: direkte Box — unquittierte Ladung, Not-Halt, Ende im Not-Ha
   h.chargeFails = false;
   await h.bridge.tick();
   assert.deepEqual(h.calls.at(-1), ['release', 'openevse']);
+});
+
+// --- Abschlussrunde B + Codex fa219ab7 ---------------------------------------------
+
+test('fa219ab7 P2: quittiertes „Sofort laden“ ohne Grenze löscht den Grenz-Vermerk', async () => {
+  const ownedStore = { value: null };
+  const capRef = { capW: 0 };
+  const h = directBridge({ type: 'openwb', ownedStore, capRef });
+  await h.bridge.apply();
+  assert.equal(ownedStore.value?.[0]?.gridCap, true);
+  capRef.capW = null;
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  assert.equal(ownedStore.value?.[0]?.gridCap, false);
+});
+
+test('Abschluss B P2: Plan-Sicherheitsstopp an openWB — beim Freigeben kommt der volle Strom zurück', async () => {
+  const capRef = { capW: 0 };
+  const h = directBridge({ type: 'openwb', capRef, enabled: true });
+  await h.bridge.apply();                    // Plan-Stopp unter Grenze
+  assert.equal(h.calls.at(-1)[0], 'stop');
+  capRef.capW = null;
+  h.cfg.optimizer.eosOptimizeEv = false; h.cfg.optimizer.evEvccControl = false;
+  await h.bridge.apply();                    // Weitergabe aus → freigeben
+  assert.deepEqual(h.calls.at(-1), ['charge', 'openwb', 16]);
+});
+
+test('Abschluss B P1: direkte Box ohne EOS-Weitergabe — volle Freigabe erst bei Luft für ihre Nennleistung (32 A)', () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'openevse', openevse: { url: 'http://192.0.2.5' } } };
+  let t = 1_000_000;
+  let powerW = 11000;
+  const state = { meter: { ok: true, updatedAt: t, grid_total_w: -33000 }, victron: {}, schedule: {}, ctrl: {} };
+  const ctx = { getCfg: () => cfg, state, pushLog: () => {}, chargerStatus: { fresh: () => ({ powerW }) }, eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null } };
+  const guard = createGridConnectionGuard(ctx, { now: () => t });
+  guard.tick();                              // 33 kW → Wallbox gekürzt
+  assert.ok(guard.capW('wallbox') != null);
+  powerW = 0;
+  state.meter.grid_total_w = -15000;         // 13 kW Luft — reicht für 11 kW, nicht für 22 kW
+  for (let i = 0; i < 60; i += 1) { t += 2000; state.meter.updatedAt = t; guard.tick(); }
+  assert.ok(guard.capW('wallbox') != null, 'bleibt begrenzt');
 });

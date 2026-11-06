@@ -348,12 +348,12 @@ export function createEosEvccBridge(deps) {
     // openWB ohne übergeordneten Regler: release() tut nichts, die letzte
     // Vorgabe bliebe stehen. Nach einer Grenz-Vorgabe bekommt die Box ihren
     // vollen Strom zurück (Gesamtprüfung 5, P2).
-    const res = charger.type === 'openwb' && lastSent.gridCap === true
+    const wasGridCap = lastSent.gridCap === true || owned.get(targetKey(target))?.gridCap === true;
+    const res = charger.type === 'openwb' && wasGridCap
       ? await charger.charge(bc.maxCurrentA)
       : await charger.release();
     if (res?.ok) {
       pushLog('eos_wallbox_released', { charger: charger.type });
-      const wasGridCap = lastSent.gridCap === true;
       lastSent = null;
       // openWB: Strom zurückgegeben — DVhub gibt dort nichts mehr vor.
       if (charger.type === 'openwb' && wasGridCap) setOwned(targetKey(target), null);
@@ -413,11 +413,16 @@ export function createEosEvccBridge(deps) {
       if (getGridCapW() != null) {
         const res = await hardStopper(cfg, evccTgt, { type: 'evcc' }).stop();
         if (!res?.ok) {
-          // Sicherheits-Stopp nicht angekommen: Override bleibt, der nächste
-          // Takt stoppt erneut (Codex bcbfaff1, P1).
-          override = ended;
+          // Sicherheits-Stopp nicht angekommen: aus dem „Sofort laden“ wird ein
+          // „Laden stoppen“ — das wiederholt den harten Stopp in jedem Takt und
+          // lässt das Laden nicht wieder aufleben (Codex bcbfaff1/fa219ab7, P1).
+          // Es endet wie jedes „Laden stoppen“ (Knopf, Abstecken).
+          override = {
+            kind: 'stop', powerW: null, requestedW: null, startedAt: ended?.startedAt ?? new Date(now()).toISOString(), until: null,
+            seenConnected: ended?.seenConnected === true, prevMode: ended?.prevMode, target: ended?.target, auto: 'grid_cap_stop_failed'
+          };
           persistOverride();
-          pushLog('ev_override_error', { charger: 'evcc', error: res?.error || 'stop failed', reason });
+          pushLog('ev_override_error', { charger: 'evcc', error: res?.error || 'stop failed', reason, keptAs: 'stop' }, 'warn');
           return res;
         }
         if (lastSent) lastSent = { ...lastSent, override: false, key: null };
@@ -540,6 +545,9 @@ export function createEosEvccBridge(deps) {
       lastError = `Ein anderer Regler hält an der Wallbox einen eigenen Auftrag (${foreign.state === 'disabled' ? 'gesperrt' : foreign.chargeCurrentA + ' A'}) — der Ladestrom lässt sich nicht erhöhen.`;
       pushLog('wallbox_foreign_claim', { charger: charger.type, wantedA: currentA, foreign });
     }
+    // Herkunft: gedeckelt (Grenze) oder normal — ein quittierter normaler
+    // Befehl löst eine alte Grenz-Herkunft ab (Codex fa219ab7, P2).
+    markGridCap(bc, capped.gridCapW != null);
     lastSent = {
       key,
       charger: bc.charger,

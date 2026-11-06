@@ -52,7 +52,8 @@ verweist hierher.
   (`ev_override_restore_skipped`) und E-Auto-Status nennen den Modus von vorher, damit man ihn in evcc wählen kann.
   Ein neues „Sofort laden“ am selben Ladepunkt übernimmt ihn. Bewusst weniger Komfort zugunsten einer überschaubaren
   Zustandsführung: Die Wallbox-Brücke führt je Ziel genau einen Datensatz (letzter Befehl, quittiert ja/nein,
-  Grenz-Vorgabe), gespeichert in `ev_owned.json`. Ist eine Grenze aktiv, heißt ein Stopp immer „aus“.
+  Grenz-Vorgabe), gespeichert in `ev_owned.json`. Ist eine Grenze aktiv, heißt ein Stopp immer „aus“. Scheitert der
+  harte Stopp beim Ende, bleibt die Wallbox als „Laden stoppen“ aus, bis man ihn beendet oder absteckt.
 
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und

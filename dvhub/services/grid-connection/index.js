@@ -495,7 +495,11 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const viaBridge = (bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false;
     const direct = bc.charger !== 'evcc' && directWallboxConfigured(c);
     if ((viaBridge || direct) && ctx.eosEvccBridge) {
-      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: bc.maxChargeW, minW: minChargeW(bc), phases: bc.phases });
+      // Höchstleistung nach der Freigabe: über die EOS-Brücke höchstens das, was
+      // der Plan schickt (evMaxChargeW); eine direkte Box ohne Weitergabe regelt
+      // danach selbst — bis zu ihrem Nennstrom (vorsichtig 32 A je Phase).
+      const releaseW = viaBridge ? bc.maxChargeW : Math.max(bc.maxChargeW, Math.round(32 * 230 * bc.phases));
+      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: releaseW, minW: minChargeW(bc), phases: bc.phases });
     }
     if (ctx.mypvRegulator) {
       let heaters;
