@@ -546,8 +546,10 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         .then((r) => {
           // Grenze nicht angekommen: laut melden, statt eine Grenze anzuzeigen,
           // die an der Wallbox nicht gilt (Gesamtprüfung 2, P1).
-          // „skipped“ (Weitergabe aus, Freigabe erfolgt) ist kein Fehler (Codex 7055aa8c, P2).
-          if (r && r.ok === false && r.error) {
+          // Fehler, oder übersprungen, obwohl eine Grenze steht. „skipped“ nach
+          // einer Freigabe (Weitergabe aus) ist kein Fehler (Codex 7055aa8c,
+          // 6e42ee3e, P2).
+          if (r && r.ok === false && (r.error || st.caps.wallbox != null)) {
             log('grid_connection_wallbox_failed', { capW: st.caps.wallbox ?? null, error: r.error || r.skipped || 'unknown' }, 'warn');
           }
         })

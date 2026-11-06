@@ -474,16 +474,34 @@ test('Codex 7055aa8c P2: gerundete Freigabe ohne Zuwachs verbraucht den Schritt 
 
 test('Codex 7055aa8c P2: erfolgreiche Freigabe (Weitergabe aus) wird nicht als Fehler gemeldet', async () => {
   const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'openevse', openevse: { url: 'http://192.0.2.5' } } };
+  let t = 1_000_000;
+  const state = { meter: { ok: true, updatedAt: t, grid_total_w: -10000 }, victron: {}, schedule: {}, ctrl: {} };
+  const logs = [];
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: (e, d) => logs.push([e, d]),
+    chargerStatus: { fresh: () => ({ powerW: 0 }) },
+    eosEvccBridge: { apply: async () => ({ ok: false, skipped: 'disabled' }), getOverride: () => null },
+  };
+  const guard = createGridConnectionGuard(ctx, { now: () => t });
+  Object.assign(guard._state, { caps: { wallbox: 0 }, capAt: { wallbox: 0 }, lastCutAt: 0 });
+  for (let i = 0; i < RELEASE_TICKS + 2; i += 1) { t += 2000 + (i === 0 ? 70_000 : 0); state.meter.updatedAt = t; guard.tick(); }
+  await new Promise((r) => setImmediate(r));
+  assert.equal(guard.capW('wallbox'), null, 'freigegeben');
+  assert.equal(logs.some(([e]) => e === 'grid_connection_wallbox_failed'), false);
+});
+
+test('Codex 6e42ee3e P2: Grenze steht, die Brücke überspringt sie (z. B. EEBUS ohne LPC) → Warnung', async () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'openevse', openevse: { url: 'http://192.0.2.5' } } };
   const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -33000 }, victron: {}, schedule: {}, ctrl: {} };
   const logs = [];
   const ctx = {
     getCfg: () => cfg, state, pushLog: (e, d) => logs.push([e, d]),
     chargerStatus: { fresh: () => ({ powerW: 11000 }) },
-    eosEvccBridge: { apply: async () => ({ ok: false, skipped: 'disabled' }), getOverride: () => null },
+    eosEvccBridge: { apply: async () => ({ ok: false, skipped: 'openevse not configured' }), getOverride: () => null },
   };
   createGridConnectionGuard(ctx).tick();
   await new Promise((r) => setImmediate(r));
-  assert.equal(logs.some(([e]) => e === 'grid_connection_wallbox_failed'), false);
+  assert.ok(logs.some(([e]) => e === 'grid_connection_wallbox_failed'));
 });
 
 test('Gesamtprüfung 3 P2: vorgemerkte Rückkehr an LP1 hält den Plan für LP2 nicht auf (Teil-Deckel)', async () => {
