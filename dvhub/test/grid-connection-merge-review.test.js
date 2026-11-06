@@ -126,14 +126,14 @@ function evccMulti({ enabled = true, override = null } = {}) {
     },
   };
   const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: enabled, evEvccControl: enabled, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' } };
-  const ref = { paused: false };
   const t = Date.now();
+  const ref = { paused: false, now: t };
   const store = { value: override };
   const bridge = createEosEvccBridge({
     getCfg: () => cfg,
     getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
     getCharger: (_c, bc) => createEvccAdapter(evcc, () => bc.loadpoint, () => bc.stopMode),
-    isPaused: () => ref.paused, now: () => t,
+    isPaused: () => ref.paused, now: () => ref.now,
     loadOverride: () => store.value,
     saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
   });
@@ -315,4 +315,86 @@ test('Gesamtprüfung 2 P1: scheitert die Wallbox-Grenze, meldet der Wächter das
   createGridConnectionGuard(ctx).tick();
   await new Promise((r) => setImmediate(r));
   assert.ok(logs.some(([e]) => e === 'grid_connection_wallbox_failed'));
+});
+
+// --- Codex 009826e9 -----------------------------------------------------------------
+
+function directBox({ type = 'openevse', stopMode = 'pv' } = {}) {
+  const calls = [];
+  const box = { claim: null };
+  const ref = { fail: false, paused: false, factor: 0, enabled: true };
+  const cfg = { optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, evStopMode: stopMode }, wallbox: { type } };
+  const t = Date.now();
+  const bridge = createEosEvccBridge({
+    getCfg: () => { cfg.optimizer.eosOptimizeEv = ref.enabled; cfg.optimizer.evEvccControl = ref.enabled; return cfg; },
+    getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: ref.factor }] }),
+    getCharger: () => ({
+      type, isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', a]); box.claim = 'charge'; return ref.fail ? { ok: false, error: 'timeout' } : { ok: true }; },
+      stop: async () => { calls.push(['stop']); box.claim = 'disabled'; return { ok: true }; },
+      release: async () => { calls.push(['release']); box.claim = null; return { ok: true }; },
+      status: async () => ({ ok: true, connected: true }),
+    }),
+    isPaused: () => ref.paused, now: () => t,
+  });
+  return { bridge, calls, box, ref };
+}
+
+test('Codex 009826e9 P2: nach dem Not-Halt gilt ein früherer Stopp-Befehl nicht als „unverändert“ — die Box wird wieder freigegeben', async () => {
+  const h = directBox();
+  await h.bridge.tick();                 // Plan: nicht laden → release (pv)
+  assert.equal(h.calls.at(-1)[0], 'release');
+  h.ref.factor = 1; h.ref.fail = true;
+  await h.bridge.tick();                 // Ladung ohne Quittung
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  assert.equal(h.box.claim, 'disabled');
+  h.ref.paused = false; h.ref.fail = false; h.ref.factor = 0;
+  await h.bridge.tick();
+  assert.equal(h.calls.at(-1)[0], 'release', 'Not-Halt-Sperre wird wieder freigegeben');
+});
+
+test('Codex 009826e9 P2: release() einer direkten Box nimmt DVhubs Vorgabe weg — danach schickt der Not-Halt nichts', async () => {
+  const h = directBox();
+  h.ref.factor = 1;
+  await h.bridge.tick();                 // bestätigt
+  h.ref.factor = 0.5; h.ref.fail = true;
+  await h.bridge.tick();                 // Aktualisierung ohne Quittung
+  h.ref.enabled = false; h.ref.fail = false;
+  await h.bridge.tick();                 // Weitergabe aus → release()
+  assert.equal(h.calls.at(-1)[0], 'release');
+  h.ref.paused = true;
+  const n = h.calls.length;
+  await h.bridge.emergencyStop();
+  assert.equal(h.calls.length, n);
+});
+
+test('Codex 009826e9 P2: unquittiertes „Sofort laden“ läuft im Not-Halt ab — nach dem Aufheben kommt der alte evcc-Modus zurück', async () => {
+  const h = evccMulti({ enabled: false });
+  h.fail[1] = true;
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000, untilMs: h.ref.now + 60_000 });
+  h.fail[1] = false;
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  assert.equal(h.modes[1], 'off');
+  h.ref.now += 120_000;                  // läuft im Not-Halt ab …
+  await h.bridge.tick();                 // … verarbeitet wird es erst nach dem Aufheben
+  assert.ok(h.bridge.getOverride());
+  h.ref.paused = false;
+  await h.bridge.tick();
+  assert.equal(h.bridge.getOverride(), null);
+  assert.equal(h.modes[1], 'pv', 'evcc zurück auf „pv“');
+});
+
+test('Codex 009826e9 P2: gestopptes „Sofort laden“ an LP2 hat Vorrang vor einem alten Stopp-Override an LP1', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'stop' });         // LP1: bestätigt „aus“ (bleibt stehen)
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  h.fail[2] = true;
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 }); // LP2 unquittiert
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  assert.equal(h.modes[2], 'off');
+  await h.bridge.clearOverride();
+  assert.equal(h.store.value?.loadpoint, 2);
 });
