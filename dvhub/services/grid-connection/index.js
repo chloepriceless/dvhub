@@ -447,7 +447,11 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     // deren Grenze ein (Codex b2f1ccd, P1).
     const override = ctx.eosEvccBridge?.getOverride?.();
     const overrideCharging = override != null && override.kind !== 'stop';
-    const viaBridge = (bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false;
+    // Steht eine vorgemerkte evcc-Rückkehr aus, bleibt die Wallbox
+    // eingeschrieben: ihre Freigabe läuft über die normalen Abstand- und
+    // Rückschalt-Prüfungen, nicht über das Wegfallen aus der Liste (Codex 4bf1eb18, P1).
+    const restorePending = ctx.eosEvccBridge?.hasPendingRestore?.() === true;
+    const viaBridge = ((bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false) || restorePending;
     const direct = bc.charger !== 'evcc' && directWallboxConfigured(c);
     if ((viaBridge || direct) && ctx.eosEvccBridge) {
       list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: bc.maxChargeW, minW: minChargeW(bc) });

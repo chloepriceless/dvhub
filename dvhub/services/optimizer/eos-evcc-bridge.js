@@ -228,13 +228,27 @@ export function createEosEvccBridge(deps) {
     const saved = loadOverride();
     if (saved && (saved.kind === 'stop' || Number(saved.powerW) > 0)) override = saved;
     // Unbestätigter Stopp bleibt unbestätigt (Codex 148df991, P2).
-    else if (saved?.kind === 'restore' && typeof saved.mode === 'string') pendingRestore = { mode: saved.mode, stopped: saved.stopped === true };
+    else if (saved?.kind === 'restore' && typeof saved.mode === 'string') {
+      pendingRestore = {
+        mode: saved.mode, stopped: saved.stopped === true,
+        loadpoint: Number.isInteger(Number(saved.loadpoint)) && Number(saved.loadpoint) >= 1 ? Number(saved.loadpoint) : null,
+      };
+    }
   } catch { /* kaputte Datei: ohne Override weiter */ }
   const isStopOverride = () => override?.kind === 'stop';
 
   function persistOverride() {
-    const value = override ?? (pendingRestore ? { kind: 'restore', mode: pendingRestore.mode, stopped: pendingRestore.stopped === true } : null);
+    const value = override ?? (pendingRestore
+      ? { kind: 'restore', mode: pendingRestore.mode, stopped: pendingRestore.stopped === true, loadpoint: pendingRestore.loadpoint ?? null }
+      : null);
     try { saveOverride(value); } catch (e) { pushLog('ev_override_persist_error', { error: e?.message || String(e) }); }
+  }
+  // Ladebefehl, der ohne Quittung blieb (Timeout) — er kann trotzdem gewirkt
+  // haben. Der Not-Halt prüft dann frisch, ob die Box in DVhubs Zustand steht
+  // (Codex 4bf1eb18, P1). Jeder später bestätigte Befehl löscht ihn.
+  let unconfirmedCharge = null;
+  function noteChargeResult(bc, ok) {
+    unconfirmedCharge = ok ? null : { charger: bc.charger, loadpoint: bc.loadpoint, action: 'charge', mode: 'now', at: new Date(now()).toISOString() };
   }
   function setPendingRestore(value) {
     pendingRestore = value;
@@ -257,7 +271,7 @@ export function createEosEvccBridge(deps) {
   // Ein Override hat einen Befehl durchgebracht: er trägt den vorgemerkten
   // Modus jetzt als prevMode und stellt ihn bei seinem Ende her.
   function handOff() {
-    if (pendingRestore && override?.prevMode === pendingRestore.mode) setPendingRestore(null);
+    if (pendingRestore && override?.inheritsRestore === true) setPendingRestore(null);
   }
   function gridCapBlocks(bc) {
     const capW = getGridCapW();
@@ -314,7 +328,7 @@ export function createEosEvccBridge(deps) {
     // runTick dann über releaseIfNeeded frei.
     if (isPaused()) {
       if (lastSent.charger === 'evcc') {
-        setPendingRestore({ mode: ended?.prevMode || bc.stopMode, stopped: lastSent.mode === 'off' });
+        setPendingRestore({ mode: ended?.prevMode || bc.stopMode, stopped: lastSent.mode === 'off', loadpoint: lastSent.loadpoint ?? bc.loadpoint });
       }
       lastSent = { ...lastSent, override: false };
       return { ok: true, deferred: true, paused: true };
@@ -332,8 +346,9 @@ export function createEosEvccBridge(deps) {
       if (gridCapBlocks(bc)) {
         // Erst sicher aus (die Grenze kann im selben Takt gekommen sein, in dem
         // der Override endet), dann den Modus vormerken (Codex bf805c50, P1).
-        const res = await hardStopper(cfg, { ...bc, charger: 'evcc' }, { type: 'evcc' }).stop();
-        setPendingRestore({ mode, stopped: res?.ok === true });
+        const lp = lastSent.loadpoint ?? bc.loadpoint;
+        const res = await hardStopper(cfg, { ...bc, charger: 'evcc', loadpoint: lp }, { type: 'evcc' }).stop();
+        setPendingRestore({ mode, stopped: res?.ok === true, loadpoint: lp });
         lastSent = { ...lastSent, override: false };
         pushLog('ev_override_restore_deferred', { mode, reason, stopped: res?.ok === true });
         return res?.ok ? { ok: true, deferred: true } : res;
@@ -431,6 +446,7 @@ export function createEosEvccBridge(deps) {
       pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: st.raw?.mode ?? null, expected: 'now', override: true });
     }
     const result = await charger.charge(currentA);
+    noteChargeResult(bc, result?.ok === true);
     if (!result?.ok) {
       lastError = result?.error || 'wallbox write failed';
       pushLog('ev_override_error', { charger: charger.type, error: lastError });
@@ -479,6 +495,8 @@ export function createEosEvccBridge(deps) {
     const key = `${bc.charger}:${bc.loadpoint}:p14a:${slot.action}:${slot.currentA ?? ''}`;
     if (lastSent?.key === key) return { ok: true, unchanged: true, gridCapW: Number(capW) };
     const res = slot.action === 'stop' ? await charger.stop() : await charger.charge(slot.currentA);
+    if (slot.action === 'charge') noteChargeResult(bc, res?.ok === true);
+    else if (res?.ok) unconfirmedCharge = null;
     if (!res?.ok) {
       lastError = res?.error || 'wallbox write failed';
       pushLog('paragraph14a_wallbox_error', { charger: charger.type, error: lastError });
@@ -514,16 +532,19 @@ export function createEosEvccBridge(deps) {
       if (pendingRestore && bc.enabled && isProActive() !== false) setPendingRestore(null);
       if (pendingRestore) {
         const pr = pendingRestore; // fest für diesen Takt, auch über awaits hinweg
+        // Der Ladepunkt, an dem der Modus vorgemerkt wurde — nicht der jetzt
+        // eingestellte (Codex 4bf1eb18, P2).
+        const prBc = { ...bc, charger: 'evcc', loadpoint: pr.loadpoint ?? bc.loadpoint };
         if (gridCapBlocks(bc)) {
           if (!pr.stopped) {
-            const res = await hardStopper(cfg, { ...bc, charger: 'evcc' }, { type: 'evcc' }).stop();
+            const res = await hardStopper(cfg, prBc, { type: 'evcc' }).stop();
             pr.stopped = res?.ok === true;
             if (pendingRestore === pr) persistOverride();
             if (!res?.ok) return { ok: false, error: res?.error || 'evcc stop failed' };
           }
           return { ok: true, deferred: true };
         }
-        const res = await getCharger(cfg, { ...bc, charger: 'evcc', stopMode: pr.mode }).stop();
+        const res = await getCharger(cfg, { ...prBc, stopMode: pr.mode }).stop();
         if (!res?.ok) return { ok: false, error: res?.error || 'evcc mode restore failed' };
         pushLog('ev_override_restored', { mode: pr.mode });
         if (pendingRestore === pr) setPendingRestore(null);
@@ -577,7 +598,10 @@ export function createEosEvccBridge(deps) {
       }
 
       slot = applyGridCap(slot, bc, getGridCapW());
-      const capStop = slot.action === 'stop' && slot.gridCapW != null;
+      // Sicherheits-Stopp aus dem wirksamen Deckel, egal ob der Plan laden
+      // wollte: auch ein geplanter Stopp-Slot geht bei Deckel unter dem
+      // Mindeststrom hart auf „aus“ (Codex 4bf1eb18, P1).
+      const capStop = slot.action === 'stop' && (slot.gridCapW != null || gridCapBlocks(bc));
       const key = capStop ? `${bc.charger}:${bc.loadpoint}:grid-cap-stop` : commandKey(bc, slot);
       if (!force && lastSent?.key === key) {
         // Unveraendert — aber wurde evcc inzwischen von aussen umgestellt
@@ -591,6 +615,8 @@ export function createEosEvccBridge(deps) {
       }
 
       const result = capStop ? await hardStopper(cfg, bc, charger).stop() : await send(charger, bc, slot);
+      if (slot.action === 'charge' && !capStop) noteChargeResult(bc, result?.ok === true);
+      else if (result?.ok) unconfirmedCharge = null;
       if (!result?.ok) {
         lastError = result?.error || 'evcc write failed';
         pushLog('eos_evcc_error', { loadpoint: bc.loadpoint, action: slot.action, error: lastError });
@@ -606,7 +632,7 @@ export function createEosEvccBridge(deps) {
         loadpoint: bc.loadpoint,
         mode: slot.action === 'charge' ? 'now' : (capStop ? 'off' : bc.stopMode),
         released: slot.action !== 'charge' && !capStop && bc.charger !== 'evcc' && bc.stopMode !== 'off',
-        ...(capStop ? { gridCapW: slot.gridCapW } : {}),
+        ...(capStop ? { gridCapW: slot.gridCapW ?? getGridCapW() } : {}),
         slotTs: new Date(slot.ts).toISOString(),
         at: new Date(now()).toISOString()
       };
@@ -637,14 +663,17 @@ export function createEosEvccBridge(deps) {
       return locked(async () => {
         const cfg = getCfg() || {};
         const bc0 = resolveEvccBridgeConfig(cfg);
-        if (!lastSent) return { ok: true, skipped: 'not_controlled' };
-        if (lastSent.action !== 'charge') return { ok: true, skipped: 'not_charging' };
+        // Bezug: ein Ladebefehl ohne Quittung (kann gewirkt haben) oder der
+        // letzte bestätigte eigene Befehl.
+        const ref = unconfirmedCharge || lastSent;
+        if (!ref) return { ok: true, skipped: 'not_controlled' };
+        if (ref.action !== 'charge') return { ok: true, skipped: 'not_charging' };
         // Ladepunkt und Wallbox des letzten eigenen Befehls — nicht ein
         // inzwischen anders eingestellter (Codex 45b7c40b, P2).
         const bc = {
           ...bc0,
-          charger: lastSent.charger || bc0.charger,
-          loadpoint: Number.isInteger(Number(lastSent.loadpoint)) && Number(lastSent.loadpoint) >= 1 ? Number(lastSent.loadpoint) : bc0.loadpoint
+          charger: ref.charger || bc0.charger,
+          loadpoint: Number.isInteger(Number(ref.loadpoint)) && Number(ref.loadpoint) >= 1 ? Number(ref.loadpoint) : bc0.loadpoint
         };
         const charger = getCharger(cfg, bc);
         if (!charger?.isConfigured?.()) return { ok: true, skipped: 'not_configured' };
@@ -653,15 +682,17 @@ export function createEosEvccBridge(deps) {
           // Frisch gelesen, nicht aus dem Abfrage-Puffer (Codex 45b7c40b, P2).
           try { st = await charger.status({ fresh: true }); } catch { st = null; }
           // Im Zweifel nicht senden: nur wenn evcc nachweislich noch in DVhubs Modus steht.
-          if (!st?.ok || (st.raw?.mode ?? null) !== (lastSent.mode || 'now')) return { ok: true, skipped: 'not_dvhub_state' };
+          if (!st?.ok || (st.raw?.mode ?? null) !== (ref.mode || 'now')) return { ok: true, skipped: 'not_dvhub_state' };
         }
         const res = await hardStopper(cfg, bc, charger).stop();
         if (!res?.ok) {
           lastError = res?.error || 'wallbox write failed';
           return { ok: false, error: lastError };
         }
+        unconfirmedCharge = null;
         lastSent = {
-          ...lastSent, key: `${bc.charger}:${bc.loadpoint}:emergency-stop`, action: 'stop', currentA: null,
+          ...(lastSent || {}), key: `${bc.charger}:${bc.loadpoint}:emergency-stop`, charger: bc.charger, loadpoint: bc.loadpoint,
+          action: 'stop', currentA: null, override: lastSent?.override === true,
           mode: charger.type === 'evcc' ? 'off' : null, released: false, at: new Date(now()).toISOString()
         };
         pushLog('ev_emergency_stop', { charger: charger.type, override: lastSent.override === true });
@@ -687,11 +718,12 @@ export function createEosEvccBridge(deps) {
       // Der Modus von vorher wird im Lock bestimmt: ein laufender Takt kann
       // gerade eine vorgemerkte Rückkehr abschließen (Codex 9ac450c4, ea036ff7).
       return locked(async () => {
-        if (!override && pendingRestore) {
+        if (!override && pendingRestore && (pendingRestore.loadpoint ?? bc.loadpoint) === bc.loadpoint) {
           // Abgegeben wird die Vormerkung erst, wenn ein Befehl des Overrides
           // ankommt (handOff) — scheitert er oder endet der Override vorher,
           // stellt runTick den Modus weiter her.
           next.prevMode = pendingRestore.mode;
+          next.inheritsRestore = true;
         } else if (!override && bc.charger === 'evcc') {
           try {
             const st = await getCharger(cfg, bc).status();
@@ -734,6 +766,8 @@ export function createEosEvccBridge(deps) {
       });
     },
     getOverride: () => (override ? { ...override } : null),
+    /** Steht eine vorgemerkte evcc-Rückkehr aus (Netzanschluss-Wächter: Wallbox bleibt eingeschrieben)? */
+    hasPendingRestore: () => pendingRestore != null,
     getStatus() {
       const cfg = getCfg() || {};
       const bc = resolveEvccBridgeConfig(cfg);
