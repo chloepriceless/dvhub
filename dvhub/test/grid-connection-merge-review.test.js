@@ -694,3 +694,80 @@ test('Runde 5 P2: vorgemerkte evcc-Rückkehr geht nicht an ein „Sofort laden�
   assert.equal(h.bridge.getOverride().inheritsRestore, undefined);
   assert.equal(h.bridge.hasPendingRestore(), true, 'evcc-Rückkehr bleibt');
 });
+
+// --- Codex c45418be / Gesamtprüfung des Zweigs, Runde 6 ----------------------------------
+
+test('Codex c45418be P1: evcc-Rückkehr wartet — die Grenze an der jetzt eingestellten direkten Box gilt trotzdem', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  await h.bridge.clearOverride();        // evcc LP1: Rückkehr vorgemerkt
+  h.ref.paused = false;
+  h.capW = 0;
+  h.cfg.wallbox.type = 'openevse';
+  h.cfg.wallbox.openevse = { url: 'http://192.0.2.5' };
+  const directCalls = [];
+  h.directCalls = directCalls;
+  const r = await h.bridge.tick();
+  assert.notEqual(r?.deferred, true, 'nicht vor der direkten Box stehen bleiben');
+});
+
+test('Runde 6 P1: einphasige Wallbox — Freigabe rechnet mit der Luft EINER Phase', () => {
+  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40 } }); // Phasenziel 8 867 W
+  const st = createGuardState();
+  st.caps = { wallbox: 0 };
+  st.capAt = { wallbox: 0 };
+  const wb1 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 0, maxW: 3680, minW: 1380, phases: 1 };
+  for (let i = 0; i < 40; i += 1) {
+    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 19000, phasesW: [7000, 6000, 6000] }, devices: [wb1], battery: {} });
+  }
+  // L1: 8 867 − 7 000 = 1 867 W Luft (− 333 W Rückschalt-Anteil bleibt außen vor) → höchstens ~1,8 kW, nicht 3,68 kW.
+  assert.ok(st.caps.wallbox != null && st.caps.wallbox <= 1900, `Grenze ${st.caps.wallbox}`);
+});
+
+test('Runde 6 P1: Gerät ohne Leistungsmeldung wird bei Überlast trotzdem begrenzt', () => {
+  const st = createGuardState();
+  const dev = { id: 'eebus:x', kind: 'eebus', name: 'WP', currentW: null, maxW: 6000, minW: 0 };
+  // 32 kW > 29 kW: sofort; angenommen 6 kW → Grenze 2 kW. Solange der Befehl
+  // unterwegs ist, wird nicht weiter gekürzt.
+  for (let i = 0; i < 3; i += 1) guardStep(st, { resolved: RG, now: i * 2000, meas: fresh(32000), devices: [dev], battery: {} });
+  assert.equal(st.caps['eebus:x'], 2000);
+  assert.equal(st.exhausted, false);
+});
+
+test('Runde 6 P2: dauerhafter Sollwert ohne Keepalive zählt weiter (aktiver Eintrag), Wallbox bleibt', () => {
+  const t0 = 1_000_000;
+  let t = t0;
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
+  const state = {
+    meter: { ok: true, updatedAt: t, grid_total_w: -28050 },
+    victron: { batteryChargeW: 8000, fieldUpdatedAt: { batteryPowerW: t } },
+    schedule: { lastWrite: { gridSetpointW: { value: 28000, at: t0 - 200_000, source: 'rule:x' } }, active: { gridSetpointW: { value: 28000, at: t, skipped: true } } },
+    ctrl: {}
+  };
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: () => {},
+    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: 11000 }] }) },
+    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null },
+  };
+  const guard = createGridConnectionGuard(ctx, { now: () => t });
+  for (let i = 0; i < 80; i += 1) {
+    t += 2000;
+    state.meter.updatedAt = t; state.victron.fieldUpdatedAt.batteryPowerW = t; state.schedule.active.gridSetpointW.at = t;
+    guard.tick();
+  }
+  assert.equal(guard.capW('wallbox'), null);
+});
+
+test('Codex c45418be P2: Plan-Befehl ersetzt eine gespeicherte Grenz-Vorgabe — nach Neustart kein veralteter Freigabe-Befehl', async () => {
+  const store = { value: null };
+  const capRef = { capW: 0 };
+  const h = directBridge({ type: 'openwb', store, capRef });
+  await h.bridge.apply();                    // Grenz-Vorgabe gespeichert
+  assert.equal(store.value?.kind, 'gridcap');
+  capRef.capW = null;
+  h.cfg.optimizer.eosOptimizeEv = true; h.cfg.optimizer.evEvccControl = true;
+  await h.bridge.apply();                    // Plan übernimmt (kein Slot → Stopp)
+  assert.equal(store.value, null, 'Grenz-Vermerk gelöscht');
+});

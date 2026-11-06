@@ -300,8 +300,10 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   let pending = 0;
   for (const d of devices) {
     const cap = st.caps[d.id];
-    if (cap == null || !finite(d.currentW) || now - (st.capAt[d.id] || 0) > OBEY_MS) continue;
-    pending += Math.max(0, Number(d.currentW) - cap);
+    if (cap == null || now - (st.capAt[d.id] || 0) > OBEY_MS) continue;
+    // Ohne Leistungsmeldung: die beim Kürzen angenommene Leistung zählt.
+    const cur = finite(d.currentW) ? Number(d.currentW) : Number(st.assumed?.[d.id] ?? cap);
+    pending += Math.max(0, cur - cap);
   }
   const chargeW = r.batterySupported ? Math.max(0, Number(battery.chargeW) || 0) : 0;
   const sp = r.batterySupported && finite(battery.setpointW) && Number(battery.setpointW) > 0
@@ -341,13 +343,17 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       for (const d of devices.filter((x) => x.kind === kind)) {
         if (rest <= 0) break;
         const cap = st.caps[d.id] ?? null;
-        const cur = finite(d.currentW) ? Math.max(0, Number(d.currentW)) : 0;
+        // Ohne Leistungsmeldung: vorsichtig annehmen, dass es seine Grenze bzw.
+        // Höchstleistung zieht — sonst bliebe ein steuerbares Gerät bei
+        // Überlast unbegrenzt (Gesamtprüfung 6, P1).
+        const cur = finite(d.currentW) ? Math.max(0, Number(d.currentW)) : (cap ?? (Number(d.maxW) || 0));
         const draw = cap == null ? cur : Math.min(cur, cap);
         if (draw <= 0) continue;
         let next = Math.max(0, down(draw - rest));
         if (next < (Number(d.minW) || 0)) next = 0;
         if (cap != null && next >= cap) continue;
         setCap(d, next);
+        if (!finite(d.currentW)) (st.assumed ??= {})[d.id] = draw;
         rest -= draw - next;
         events.push({ type: 'cut', id: d.id, kind: d.kind, name: d.name || null, fromW: Math.round(draw), capW: next, importW: Math.round(total), maxPhaseW: maxPhase == null ? null : Math.round(maxPhase), excessW: Math.round(excess) });
       }
@@ -367,7 +373,9 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const capped = devices.filter((d) => st.caps[d.id] != null);
   if (!capped.length) { st.underSince = null; return finish(); }
   let headroom = r.targetW - total;
-  if (phases) headroom = Math.min(headroom, 3 * (r.phaseTargetW - maxPhase));
+  // Luft der knappsten Phase; je Gerät unten nach seinen Phasen umgerechnet.
+  const phaseRoom = phases ? r.phaseTargetW - maxPhase : null;
+  if (phases) headroom = Math.min(headroom, 3 * phaseRoom);
   // Lädt der Akku gerade aus dem Netz, ist seine Ladung freie Leistung für die
   // Geräte — er gibt zuerst nach, der Multi hält den Bezug auf dem Sollwert.
   if (sp != null && !batteryStuck) headroom += chargeW;
@@ -382,14 +390,20 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // Grundlage ist, was das Gerät gerade WIRKLICH zieht — eine ungenutzte
       // Grenze darf nicht Schritt für Schritt über die Luft hinaus wachsen
       // (Gesamtprüfung 2, P1).
-      const drawNow = Math.min(cap, finite(d.currentW) ? Math.max(0, Number(d.currentW)) : 0);
+      const drawNow = Math.min(cap, finite(d.currentW) ? Math.max(0, Number(d.currentW)) : cap);
+      // Phasen: ein einphasiges (oder unbekanntes) Gerät darf höchstens die Luft
+      // EINER Phase nehmen, ein dreiphasiges das Dreifache (Gesamtprüfung 6, P1).
+      const devPhases = Number(d.phases) === 3 ? 3 : 1;
+      const giveDev = phaseRoom == null ? give
+        : Math.min(give, devPhases * phaseRoom - (devPhases === 3 ? r.releaseHysteresisW : Math.round(r.releaseHysteresisW / 3)));
+      if (!(giveDev > 0)) continue;
       // Pausiert und zu wenig Luft für den Mindeststrom: nicht anlaufen lassen.
-      if (drawNow === 0 && give < (Number(d.minW) || 0)) continue;
-      const next = Math.max(cap, drawNow + give);
+      if (drawNow === 0 && giveDev < (Number(d.minW) || 0)) continue;
+      const next = Math.max(cap, drawNow + giveDev);
       // Gerundet ohne Zuwachs: Schritt nicht verbrauchen, nächstes Gerät
       // (Codex 7055aa8c, P2).
-      if (drawNow + give < Number(d.maxW) && down(next) <= cap) continue;
-      if (!finite(d.maxW) || next >= Number(d.maxW)) {
+      if (drawNow + giveDev < Number(d.maxW) && down(next) <= cap) continue;
+      if (!finite(d.maxW) || (drawNow + giveDev) >= Number(d.maxW)) {
         delete st.caps[d.id];
         delete st.capAt[d.id];
         events.push({ type: 'release', id: d.id, kind: d.kind, name: d.name || null, capW: null, importW: Math.round(total) });
@@ -469,7 +483,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const viaBridge = ((bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false) || restorePending;
     const direct = bc.charger !== 'evcc' && directWallboxConfigured(c);
     if ((viaBridge || direct) && ctx.eosEvccBridge) {
-      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: bc.maxChargeW, minW: minChargeW(bc) });
+      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: bc.maxChargeW, minW: minChargeW(bc), phases: bc.phases });
     }
     if (ctx.mypvRegulator) {
       let heaters;
@@ -497,7 +511,12 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const s = state();
     const lw = s.schedule?.lastWrite?.gridSetpointW;
     const t = now();
-    const setpointW = lw && finite(lw.value) && t - (Number(lw.at) || 0) <= SETPOINT_MAX_AGE_MS ? Number(lw.value) : null;
+    // Ein dauerhafter Sollwert ohne Keepalive wird nicht neu geschrieben — der
+    // aktive Eintrag der Auswertung (gleicher Wert) zeigt, dass er noch gilt
+    // (Gesamtprüfung 6, P2).
+    const act = s.schedule?.active?.gridSetpointW;
+    const seenAt = Math.max(Number(lw?.at) || 0, act && lw && Number(act.value) === Number(lw.value) ? Number(act.at) || 0 : 0);
+    const setpointW = lw && finite(lw.value) && t - seenAt <= SETPOINT_MAX_AGE_MS ? Number(lw.value) : null;
     const v = s.victron || {};
     const at = Number(v.fieldUpdatedAt?.batteryPowerW) || 0;
     const maxAge = Number(c?.victron?.telemetryMaxAgeMs ?? 90000);

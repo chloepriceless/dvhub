@@ -594,7 +594,10 @@ export function createEosEvccBridge(deps) {
         const prBc = { ...bc, charger: 'evcc', loadpoint: pr.loadpoint ?? bc.loadpoint };
         // Steuert der Plan ein ANDERES Ziel, läuft er danach normal weiter —
         // die Vormerkung hält ihn nicht auf (Gesamtprüfung 3, P2).
-        const planElsewhere = bc.enabled && isProActive() !== false;
+        // Ebenso, wenn jetzt eine andere Wallbox oder ein anderer Ladepunkt
+        // eingestellt ist: deren Grenze muss weiter gelten (Codex c45418be, P1).
+        const sameTarget = bc.charger === 'evcc' && (pr.loadpoint ?? bc.loadpoint) === bc.loadpoint;
+        const planElsewhere = (bc.enabled && isProActive() !== false) || !sameTarget;
         // Erst ohne jeden Deckel zurück in den eigenen evcc-Modus — der hielte
         // auch eine Teil-Grenze (z. B. 0 → 5 kW) nicht ein; bis dahin bleibt die
         // Wallbox im Netzanschluss-Wächter eingeschrieben (Gesamtprüfung, P1).
@@ -611,6 +614,8 @@ export function createEosEvccBridge(deps) {
           if (res?.ok) {
             pushLog('ev_override_restored', { mode: pr.mode, loadpoint: prBc.loadpoint });
             if (pendingRestore === pr) setPendingRestore(null);
+            // Der Merker zu diesem Ziel ist damit erledigt.
+            if (lastSent && targetKey({ charger: lastSent.charger || 'evcc', loadpoint: lastSent.loadpoint ?? prBc.loadpoint }) === targetKey(prBc)) lastSent = null;
             if (!planElsewhere) { lastSent = null; return { ok: true, restored: true }; }
           } else if (!planElsewhere) {
             return { ok: false, error: res?.error || 'evcc mode restore failed' };
@@ -698,6 +703,7 @@ export function createEosEvccBridge(deps) {
         return { ok: false, error: lastError };
       }
       lastError = planNote;
+      const hadGridCap = lastSent?.gridCap === true;
       lastSent = {
         key,
         charger: bc.charger,
@@ -711,6 +717,9 @@ export function createEosEvccBridge(deps) {
         slotTs: new Date(slot.ts).toISOString(),
         at: new Date(now()).toISOString()
       };
+      // Der Plan ersetzt eine gespeicherte Grenz-Vorgabe — Vermerk löschen
+      // (Codex c45418be, P2).
+      if (hadGridCap && !override && !pendingRestore) persistOverride();
       pushLog('eos_evcc_command', lastSent);
       return { ok: true, sent: lastSent };
     } catch (err) {
