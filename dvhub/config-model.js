@@ -1196,6 +1196,87 @@ function buildFieldDefinitions() {
       help: 'Höchste Einspeisung in Watt. 0 = Nulleinspeisung.'
     },
 
+    // Netzanschluss (services/grid-connection, Christin 06.11.2026): physikalische
+    // Grenze des Hausanschlusses. Stabil, für alle Anlagen, nicht hinter Beta.
+    {
+      section: 'system',
+      group: 'gridConnection',
+      groupLabel: 'Netzanschluss – Bezugsgrenze',
+      groupDescription: 'Die Leistung, die der Hausanschluss hergibt (Sicherungen). DVhub hält den gemessenen Netzbezug darunter: Akku-Ladung aus dem Netz gibt zuerst nach, dann die steuerbaren Verbraucher in der gewählten Reihenfolge. Gilt für alle Quellen (EOS, Börsenautomatik, Zeitplan, Handeingabe, §14a). Nicht steuerbare Verbraucher wie Herd oder Durchlauferhitzer kann DVhub nicht abschalten — es nimmt alle steuerbaren schnell zurück.',
+      path: 'gridConnection.limitKw',
+      empty: 'null',
+      label: 'Netzanschluss maximal (kW)',
+      type: 'number',
+      min: 2,
+      max: 2000,
+      step: 0.1,
+      help: 'Höchste Bezugsleistung des Hausanschlusses in kW, z. B. 29. Leer = DVhub begrenzt nicht (ab Werk). Steht im Netzanschlussvertrag oder ergibt sich aus der Hauptsicherung (3 × 50 A ≈ 34 kW). Wirkt sofort, auch für EOS: die Ladeleistung aus dem Netz, mit der EOS plant, wird daran angepasst.'
+    },
+    {
+      section: 'system',
+      group: 'gridConnection',
+      groupLabel: 'Netzanschluss – Bezugsgrenze',
+      path: 'gridConnection.marginW',
+      empty: 'null',
+      label: 'Sicherheitsabstand (W)',
+      type: 'number',
+      min: 0,
+      max: 100000,
+      step: 100,
+      help: 'DVhub regelt auf Grenze minus diesen Abstand. Leer = 3 % der Grenze, mindestens 1000 W: In den 2–15 s, bis Wechselrichter und Wallbox nachgeregelt haben, springt ein Herd um mehrere kW. Höchstens die halbe Grenze.'
+    },
+    {
+      section: 'system',
+      group: 'gridConnection',
+      groupLabel: 'Netzanschluss – Bezugsgrenze',
+      path: 'gridConnection.phaseLimitA',
+      empty: 'null',
+      label: 'Grenze je Phase (A)',
+      type: 'number',
+      min: 6,
+      max: 4000,
+      step: 1,
+      help: 'Nennstrom der Sicherung je Phase, z. B. 50. Sicherungen lösen je Phase aus — eine einseitig belastete Phase kann überlastet sein, obwohl die Summe passt. DVhub rechnet mit 230 V und den Phasenleistungen des Netzzählers. Leer = nur die Gesamtgrenze.'
+    },
+    {
+      section: 'system',
+      group: 'gridConnection',
+      groupLabel: 'Netzanschluss – Bezugsgrenze',
+      path: 'gridConnection.order',
+      label: 'Reihenfolge beim Zurücknehmen',
+      type: 'select',
+      options: [
+        { value: 'wallbox_first', label: 'Akku-Netzladung → Wallbox → Heizstab → EEBUS-Geräte' },
+        { value: 'heater_first', label: 'Akku-Netzladung → Heizstab → Wallbox → EEBUS-Geräte' },
+        { value: 'eebus_first', label: 'Akku-Netzladung → EEBUS-Geräte → Wallbox → Heizstab' }
+      ],
+      help: 'Wer zuerst weniger bekommt, wenn der Bezug die Grenze erreicht. Die Akku-Ladung aus dem Netz gibt immer zuerst nach: der Wechselrichter hält den Bezug am Zähler selbst auf dem Sollwert. Wallbox: erst Ladestrom bis zum Mindeststrom, dann Pause. Freigabe in umgekehrter Reihenfolge.'
+    },
+    {
+      section: 'system',
+      group: 'gridConnection',
+      groupLabel: 'Netzanschluss – Bezugsgrenze',
+      path: 'gridConnection.releaseHysteresisW',
+      label: 'Rückschalt-Abstand (W)',
+      type: 'number',
+      min: 0,
+      max: 100000,
+      step: 100,
+      help: 'Ein zurückgenommenes Gerät bekommt erst wieder mehr, wenn mindestens so viel Luft bis zum Regelziel ist — 30 s lang und frühestens 60 s nach dem letzten Eingriff, ein Gerät je Schritt. Verhindert Hin- und Herschalten. Standard: 1000 W.'
+    },
+    {
+      section: 'system',
+      group: 'gridConnection',
+      groupLabel: 'Netzanschluss – Bezugsgrenze',
+      path: 'gridConnection.baseLoadW',
+      label: 'Geschätzte Grundlast (W)',
+      type: 'number',
+      min: 0,
+      max: 100000,
+      step: 100,
+      help: 'Was das Haus ohne steuerbare Verbraucher mindestens zieht. DVhub zieht sie ab, wenn es ohne Messwert rechnen muss: bei gestörtem Zähler (keine neue Last, Akku-Sollwert höchstens Grenze − Abstand − Grundlast) und für die Ladeleistung aus dem Netz, mit der EOS plant. Standard: 1000 W.'
+    },
+
     // Peak Shaving (GitHub #28, services/peak-shaving): Bezugsgrenze für
     // Gewerbeanschlüsse mit Leistungsmessung. Beta, bis die Regelung an einer
     // echten Victron-Anlage gelaufen ist.
@@ -4668,6 +4749,8 @@ export function createDefaultConfig() {
     // Feste Einspeisegrenze (services/feed-in-cap): ab Werk NICHT angegeben —
     // der Betreiber wählt, welche Grenze für die Anlage gilt, oder „keine“.
     feedInCap: { mode: '', percent: null, watts: null },
+    // Netzanschluss (services/grid-connection): ab Werk leer = DVhub begrenzt nicht.
+    gridConnection: { limitKw: null, marginW: null, phaseLimitA: null, releaseHysteresisW: 1000, baseLoadW: 1000, order: 'wallbox_first' },
     // Peak Shaving (GitHub #28, services/peak-shaving): ab Werk aus, ohne Grenze.
     peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null },
     multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300 },
@@ -6553,8 +6636,8 @@ const SETTINGS_AREAS = [
     id: 'grid',
     label: 'Netz & Recht',
     icon: '§',
-    description: 'Was am Netzanschluss erlaubt und vorgeschrieben ist: Netzladen und Netzentladung, §14a, Abregelung.',
-    groups: ['legalSwitches', 'feedInCap', 'paragraph14a', 'module3', 'eebus'],
+    description: 'Was am Netzanschluss erlaubt und vorgeschrieben ist: Netzladen und Netzentladung, Bezugsgrenze des Anschlusses, §14a, Abregelung.',
+    groups: ['legalSwitches', 'gridConnection', 'feedInCap', 'paragraph14a', 'module3', 'eebus'],
     advanced: ['zeroFeedIn', 'peakShaving'],
     editors: ['mispelChanges']
   },

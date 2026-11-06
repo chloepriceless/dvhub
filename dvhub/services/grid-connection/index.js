@@ -1,0 +1,605 @@
+// services/grid-connection/index.js — Netzanschluss: der gemessene Netzbezug
+// darf die Leistung des Hausanschlusses nie überschreiten (Christin 06.11.2026).
+//
+// Anlass: EOS plante 34,4 kW Netzbezug (Akku 27 kW + E-Auto 11 kW + Haus − PV),
+// der Anschluss gibt 29 kW her. EOS kennt keine Bezugsgrenze (geprüft in
+// Akkudoktor-EOS v0.4.0rc3 und upstream/main). Deshalb sichert DVhub die Grenze
+// im eigenen Steuer-Loop — stabil, für jede Anlage, nicht hinter Beta.
+//
+// Regelung (je Zählerabfrage, Prod alle 2 s, plus 5-s-Rückfalltakt):
+//
+//   1. Akku-Netzladung (Victron): jeder positive Netz-Sollwert — EOS, Kleine
+//      Börsenautomatik, Zeitplan, Handeingabe, Netzladen, §14a — wird auf die
+//      Decke gesenkt (schedule-eval.js, applyControlTarget). Der Sollwert ist bei
+//      Victron der Netzbezug am Zähler; der Multi nimmt seine Ladung selbst
+//      zurück, wenn Haus oder Wallbox mehr ziehen. Darum gibt der Akku immer
+//      zuerst nach. Decke = Grenze − Sicherheitsabstand, mit Phasengrenze
+//      zusätzlich so tief, dass die stärkste Phase unter ihrer Grenze bleibt.
+//   2. Reicht das nicht (Akku lädt nicht mehr, Haus zieht viel), nimmt DVhub
+//      die steuerbaren Lasten in der eingestellten Reihenfolge zurück: Wallbox
+//      (Strom bis zum Mindeststrom, dann Pause), Heizstab (my-PV), EEBUS-Geräte
+//      (Leistungsgrenze LPC). Kleinste Grenze gilt — §14a und Netzanschluss
+//      werden je Gerät zusammengeführt (services/import-limit/core.js).
+//   3. Freigabe mit Rückschalt-Abstand: erst wenn mindestens so viel Luft da
+//      ist, 30 s lang (15 Takte), frühestens 60 s nach dem letzten Eingriff, und
+//      immer nur ein Gerät je Schritt — zuletzt gekürzt, zuerst wieder frei.
+//   4. Fail-safe: Liefert der Zähler Fehler oder ist sein Wert älter als 90 s
+//      (wie beim Netzstrom-Zähler), gibt DVhub keine NEUE Last frei: Geräte
+//      bleiben höchstens bei ihrer letzten Leistung, der Akku-Sollwert höchstens
+//      bei Grenze − Abstand − geschätzter Grundlast − diesen Geräten.
+//
+// Grenze der Physik: Nicht steuerbare Verbraucher (Herd, Durchlauferhitzer,
+// Sauna) kann DVhub nicht abschalten. Es nimmt alle steuerbaren schnell zurück
+// und meldet, wenn nichts mehr übrig ist („grid_connection_exhausted“).
+
+import { meterImport, capPositiveSetpoint, smallestLimit, NOMINAL_PHASE_VOLTAGE_V } from '../import-limit/core.js';
+import { GRID_SHARE_FIELD_MAX_AGE_MS } from '../optimizer/grid-share.js';
+import { resolveEvccBridgeConfig, minChargeW } from '../optimizer/eos-evcc-bridge.js';
+import { directWallboxConfigured } from '../wallbox/types.js';
+import { loadSchedulableDevices } from '../devices/schedulable.js';
+import { safeInterval } from '../safe-async.js';
+
+export const GRID_CONNECTION_DEFAULTS = Object.freeze({
+  limitKw: null,
+  marginW: null,
+  phaseLimitA: null,
+  releaseHysteresisW: 1000,
+  baseLoadW: 1000,
+  order: 'wallbox_first'
+});
+
+/** Reihenfolge, in der die steuerbaren Lasten nachgeben (der Akku immer zuerst). */
+export const ORDER_PRESETS = Object.freeze({
+  wallbox_first: Object.freeze(['wallbox', 'heater', 'eebus']),
+  heater_first: Object.freeze(['heater', 'wallbox', 'eebus']),
+  eebus_first: Object.freeze(['eebus', 'wallbox', 'heater'])
+});
+
+// Plausibel für einen Hausanschluss bis Mittelspannung; darunter/darüber ist
+// es ein Tippfehler (W statt kW) — dann regelt DVhub nicht und sagt es.
+export const MIN_LIMIT_W = 2000;
+export const MAX_LIMIT_W = 2_000_000;
+// Sicherheitsabstand ab Werk: 3 % der Grenze, mindestens 1 kW. Begründung:
+// Der Zähler wird alle 2 s gelesen, der Multi folgt einem neuen Sollwert in
+// wenigen Sekunden, eine Wallbox braucht 5–15 s zum Herunterregeln. In dieser
+// Zeit springt ein Herd oder Durchlauferhitzer um mehrere kW — 1 kW Abstand
+// fängt die üblichen Sprünge ab; bei großen Anschlüssen wächst er mit, weil
+// dort auch die Sprünge größer sind. Schmelzsicherungen lösen bei leichter
+// Überlast erst nach Minuten aus (träge Kennlinie), Sekunden darüber sind
+// unkritisch — Dauerüberlast ist das Risiko.
+export const AUTO_MARGIN_PCT = 3;
+export const AUTO_MARGIN_MIN_W = 1000;
+
+export const ENTER_TICKS = 2;            // Takte über dem Ziel, bis Geräte gekürzt werden
+export const RELEASE_TICKS = 15;         // Takte mit Luft, bis ein Gerät wieder mehr darf (≈ 30 s)
+export const HOLD_AFTER_CUT_MS = 60_000; // nach einem Eingriff frühestens so spät freigeben
+export const OBEY_MS = 20_000;           // so lange zählt ein Befehl als „unterwegs“
+export const FAILSAFE_TICKS = 2;         // Takte ohne frische Messung bis zum Fail-safe
+export const METER_MAX_AGE_MS = GRID_SHARE_FIELD_MAX_AGE_MS; // 90 s wie beim Netzstrom-Zähler
+const STEP_W = 100;
+const FALLBACK_TICK_MS = 5000;
+const CLAMP_FRESH_MS = 30_000;
+const SETPOINT_MAX_AGE_MS = 120_000;
+
+const finite = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+const down = (w) => Math.floor(Number(w) / STEP_W) * STEP_W;
+
+/**
+ * Wirksame Einstellungen. Kein Beta-Gate: die Grenze schützt die Sicherungen.
+ * active = Grenze gültig eingetragen.
+ * @param {object} cfg effektive DVhub-Config
+ */
+export function resolveGridConnection(cfg = {}) {
+  const c = cfg?.gridConnection || {};
+  const set = finite(c.limitKw) && Number(c.limitKw) > 0;
+  const rawW = set ? Number(c.limitKw) * 1000 : null;
+  const valid = set && rawW >= MIN_LIMIT_W && rawW <= MAX_LIMIT_W;
+  const limitW = valid ? Math.round(rawW) : null;
+  const autoMargin = limitW == null ? AUTO_MARGIN_MIN_W
+    : Math.max(AUTO_MARGIN_MIN_W, Math.round(limitW * AUTO_MARGIN_PCT / 100));
+  const marginRaw = finite(c.marginW) && Number(c.marginW) >= 0 ? Math.round(Number(c.marginW)) : autoMargin;
+  const marginW = limitW == null ? marginRaw : Math.min(Math.round(limitW / 2), marginRaw);
+  const targetW = limitW == null ? null : limitW - marginW;
+
+  const phaseA = finite(c.phaseLimitA) && Number(c.phaseLimitA) >= 6 && Number(c.phaseLimitA) <= 4000
+    ? Number(c.phaseLimitA) : null;
+  const phaseLimitW = limitW != null && phaseA != null ? Math.round(phaseA * NOMINAL_PHASE_VOLTAGE_V) : null;
+  const phaseMarginW = phaseLimitW == null ? null : Math.min(Math.round(phaseLimitW / 2), Math.round(marginW / 3));
+  const phaseTargetW = phaseLimitW == null ? null : phaseLimitW - phaseMarginW;
+
+  const releaseHysteresisW = finite(c.releaseHysteresisW) && Number(c.releaseHysteresisW) >= 0
+    ? Math.round(Number(c.releaseHysteresisW)) : GRID_CONNECTION_DEFAULTS.releaseHysteresisW;
+  const baseRaw = finite(c.baseLoadW) && Number(c.baseLoadW) >= 0
+    ? Math.round(Number(c.baseLoadW)) : GRID_CONNECTION_DEFAULTS.baseLoadW;
+  const baseLoadW = targetW == null ? baseRaw : Math.min(baseRaw, targetW);
+  const orderKey = ORDER_PRESETS[c.order] ? c.order : GRID_CONNECTION_DEFAULTS.order;
+  const manufacturer = String(cfg?.manufacturer || 'victron');
+  const reason = !set ? 'not_set' : !valid ? 'limit_invalid' : null;
+  return {
+    active: reason === null,
+    reason,
+    limitW,
+    marginW,
+    targetW,
+    phaseLimitA: limitW != null ? phaseA : null,
+    phaseLimitW,
+    phaseMarginW,
+    phaseTargetW,
+    releaseHysteresisW,
+    baseLoadW,
+    orderKey,
+    order: ORDER_PRESETS[orderKey],
+    manufacturer,
+    // Akku-Hebel = positiver Netz-Sollwert als Bezug am Zähler (Victron ESS).
+    batterySupported: manufacturer === 'victron'
+  };
+}
+
+/**
+ * Behelf für ein EOS ohne eigene Bezugsgrenze (Vanilla v0.4.0rc3 bei Kunden);
+ * kennt EOS max_grid_import_power_w, entfällt er (eos-config-sync.js):
+ * Höchste Akku-Ladeleistung AUS DEM NETZ, mit der EOS planen darf. Bewusst
+ * konservativ — Grenze − Abstand − geschätzte Grundlast und, wenn EOS das
+ * E-Auto mitplant, dessen volle Ladeleistung (EOS darf beides in denselben
+ * Slot legen). null = keine Grenze eingetragen. Wird durch eine EOS-eigene
+ * Netzbezugs-Grenze ersetzt, sobald es die gibt.
+ */
+export function eosGridChargeCapW(cfg) {
+  const r = resolveGridConnection(cfg);
+  if (!r.active) return null;
+  const opt = cfg?.optimizer || {};
+  const evW = opt.eosOptimizeEv === true ? Math.max(0, Number(opt.evMaxChargeW) || 5000) : 0;
+  return Math.max(0, r.targetW - r.baseLoadW - evW);
+}
+
+/**
+ * „Aus“ für EOS' eigene Bezugsgrenze (devices.inverters.<id>.
+ * max_grid_import_power_w, nur in unserem EOS, nicht in Vanilla v0.4.0rc3).
+ * Ein null per PUT setzt den Wert dort NICHT zurück: ConfigEOS.set_nested_value
+ * merkt die Laufzeit-Einstellung mit exclude_none, deep_merge behält den alten
+ * Wert. Deshalb schickt DVhub zum Aufheben einen Wert weit über jedem
+ * Anschluss (1 GW) — er begrenzt nie und kostet EOS keine Rechenzeit (die
+ * Ladebudget-Rechnung entfällt, wenn die AC-Ladung unter die Grenze passt).
+ */
+export const EOS_GRID_IMPORT_OFF_W = 1_000_000_000;
+
+/**
+ * Bezugsgrenze für EOS (W): Grenze − Sicherheitsabstand, ohne Grenze der
+ * Aus-Wert. Nur senden, wenn EOS den Schlüssel kennt (eos-capabilities.js).
+ */
+export function eosGridImportLimitW(cfg) {
+  const r = resolveGridConnection(cfg);
+  return r.active ? r.targetW : EOS_GRID_IMPORT_OFF_W;
+}
+
+export function createGuardState() {
+  return {
+    caps: {}, capAt: {}, ceilingW: null, ceilingUnder: 0,
+    over: 0, under: 0, stale: 0, lastCutAt: 0,
+    failsafe: false, exhausted: false, phasesMissing: false
+  };
+}
+
+/**
+ * Ein Regeltakt (rein; ändert nur st).
+ *
+ * @param {object} st  createGuardState()
+ * @param {object} p
+ * @param {object} p.resolved  resolveGridConnection()
+ * @param {object} p.meas      meterImport()
+ * @param {Array<{id:string,kind:'wallbox'|'heater'|'eebus',name?:string,currentW:number|null,maxW:number|null,minW?:number}>} p.devices
+ *   steuerbare Lasten mit aktueller Leistung
+ * @param {{setpointW?:number|null, chargeW?:number|null}} [p.battery]
+ *   zuletzt geschriebener Netz-Sollwert und aktuelle Akku-Ladeleistung
+ * @param {number} p.now
+ * @returns {{ events: object[], changed: Set<string>, ceilingTightened: boolean }}
+ *   changed enthält die Gerätearten, deren Grenze sich geändert hat, und 'ceiling'.
+ */
+export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, now }) {
+  const events = [];
+  const capsBefore = { ...st.caps };
+  const ceilingBefore = st.ceilingW;
+  const finish = () => {
+    const changed = new Set();
+    const ids = new Set([...Object.keys(capsBefore), ...Object.keys(st.caps)]);
+    for (const id of ids) {
+      if ((capsBefore[id] ?? null) !== (st.caps[id] ?? null)) changed.add(kindOf(id, devices));
+    }
+    if (ceilingBefore !== st.ceilingW) changed.add('ceiling');
+    const ceilingTightened = st.ceilingW != null && (ceilingBefore == null || st.ceilingW < ceilingBefore);
+    return { events, changed, ceilingTightened };
+  };
+  const setCap = (d, w) => { st.caps[d.id] = w; st.capAt[d.id] = now; };
+
+  if (!r?.active) {
+    if (Object.keys(st.caps).length || st.ceilingW != null || st.failsafe) events.push({ type: 'off', reason: r?.reason ?? 'not_set' });
+    Object.assign(st, createGuardState());
+    return finish();
+  }
+  // Geräte, die es nicht mehr gibt (abgemeldet, ausgeschaltet): Grenze vergessen.
+  const ids = new Set(devices.map((d) => d.id));
+  for (const id of Object.keys(st.caps)) {
+    if (!ids.has(id)) { delete st.caps[id]; delete st.capAt[id]; }
+  }
+  if (st.ceilingW == null || st.ceilingW > r.targetW) st.ceilingW = r.targetW;
+
+  // --- Fail-safe: Zähler gestört oder veraltet --------------------------------
+  if (!meas?.fresh) {
+    st.stale += 1;
+    st.over = 0;
+    st.under = 0;
+    st.ceilingUnder = 0;
+    if (st.stale < FAILSAFE_TICKS && !st.failsafe) return finish();
+    if (!st.failsafe) {
+      st.failsafe = true;
+      events.push({ type: 'failsafe_on', reason: meas?.reason || 'meter_unknown' });
+    }
+    let frozenW = 0;
+    for (const d of devices) {
+      const cur = finite(d.currentW) ? Math.max(0, Number(d.currentW)) : 0;
+      const cap = st.caps[d.id] ?? null;
+      // Auf 100 W aufrunden: ein laufendes Gerät soll durch das Einfrieren
+      // nicht umgestellt werden (z. B. 16 A → 15,9 A), nur nicht mehr steigen.
+      const curUp = Math.ceil(cur / STEP_W) * STEP_W;
+      const next = cap == null ? curUp : Math.min(cap, curUp);
+      if (cap == null || next < cap) setCap(d, next);
+      frozenW += st.caps[d.id];
+    }
+    const fsCeiling = down(Math.max(0, r.targetW - r.baseLoadW - frozenW));
+    if (fsCeiling < st.ceilingW) st.ceilingW = fsCeiling;
+    return finish();
+  }
+  st.stale = 0;
+  if (st.failsafe) {
+    st.failsafe = false;
+    events.push({ type: 'failsafe_off' });
+  }
+
+  // --- Messung -----------------------------------------------------------------
+  const total = Number(meas.importW);
+  const phaseOn = r.phaseTargetW != null;
+  const phases = phaseOn ? meas.phasesW : null;
+  if (phaseOn && !phases && !st.phasesMissing) {
+    st.phasesMissing = true;
+    events.push({ type: 'phases_missing' });
+  } else if (phases) st.phasesMissing = false;
+  const maxPhase = phases ? Math.max(...phases) : null;
+  // In Gesamt-Watt: eine dreiphasige Last um x senken senkt jede Phase um x/3.
+  const phaseExcess = phases ? 3 * (maxPhase - r.phaseTargetW) : null;
+  const excess = Math.max(total - r.targetW, phaseExcess ?? -Infinity);
+  const hard = total > r.limitW || (phases != null && maxPhase > r.phaseLimitW);
+
+  // --- 1. Akku: Decke für positive Netz-Sollwerte ------------------------------
+  const desired = phaseExcess == null ? r.targetW : Math.min(r.targetW, total - phaseExcess);
+  if (desired < st.ceilingW) {
+    st.ceilingW = down(Math.max(0, desired));
+    st.ceilingUnder = 0;
+  } else if (st.ceilingW < r.targetW) {
+    st.ceilingUnder = desired >= st.ceilingW + r.releaseHysteresisW ? st.ceilingUnder + 1 : 0;
+    if (st.ceilingUnder >= RELEASE_TICKS) {
+      st.ceilingW = Math.min(r.targetW, down(desired - r.releaseHysteresisW));
+      st.ceilingUnder = 0;
+    }
+  }
+
+  // Was gleich ohnehin wegfällt: Geräte mit frischem Befehl, die noch über ihrer
+  // Grenze liegen, und die Akku-Ladung, die der Multi auf den Sollwert senkt.
+  let pending = 0;
+  for (const d of devices) {
+    const cap = st.caps[d.id];
+    if (cap == null || !finite(d.currentW) || now - (st.capAt[d.id] || 0) > OBEY_MS) continue;
+    pending += Math.max(0, Number(d.currentW) - cap);
+  }
+  const chargeW = r.batterySupported ? Math.max(0, Number(battery.chargeW) || 0) : 0;
+  const sp = r.batterySupported && finite(battery.setpointW) && Number(battery.setpointW) > 0
+    ? Math.min(Number(battery.setpointW), st.ceilingW) : null;
+  if (sp != null) pending += Math.min(chargeW, Math.max(0, total - sp));
+  const predicted = excess - pending;
+
+  // --- 2. Lasten zurücknehmen --------------------------------------------------
+  st.over = predicted > 0 ? st.over + 1 : 0;
+  if (predicted > 0 && (st.over >= ENTER_TICKS || hard)) {
+    let rest = predicted;
+    for (const kind of r.order) {
+      for (const d of devices.filter((x) => x.kind === kind)) {
+        if (rest <= 0) break;
+        const cap = st.caps[d.id] ?? null;
+        const cur = finite(d.currentW) ? Math.max(0, Number(d.currentW)) : 0;
+        const draw = cap == null ? cur : Math.min(cur, cap);
+        if (draw <= 0) continue;
+        let next = Math.max(0, down(draw - rest));
+        if (next < (Number(d.minW) || 0)) next = 0;
+        if (cap != null && next >= cap) continue;
+        setCap(d, next);
+        rest -= draw - next;
+        events.push({ type: 'cut', id: d.id, kind: d.kind, name: d.name || null, fromW: Math.round(draw), capW: next, importW: Math.round(total), maxPhaseW: maxPhase == null ? null : Math.round(maxPhase), excessW: Math.round(excess) });
+      }
+    }
+    st.over = 0;
+    st.under = 0;
+    st.lastCutAt = now;
+    if (rest > 0 && !st.exhausted) {
+      st.exhausted = true;
+      events.push({ type: 'exhausted', restW: Math.round(rest), importW: Math.round(total) });
+    }
+    return finish();
+  }
+  if (predicted <= 0) st.exhausted = false;
+
+  // --- 3. Freigabe mit Rückschalt-Abstand ----------------------------------------
+  const capped = devices.filter((d) => st.caps[d.id] != null);
+  if (!capped.length) { st.under = 0; return finish(); }
+  let headroom = r.targetW - total;
+  if (phases) headroom = Math.min(headroom, 3 * (r.phaseTargetW - maxPhase));
+  // Lädt der Akku gerade aus dem Netz, ist seine Ladung freie Leistung für die
+  // Geräte — er gibt zuerst nach, der Multi hält den Bezug auf dem Sollwert.
+  if (sp != null) headroom += chargeW;
+  st.under = headroom >= r.releaseHysteresisW ? st.under + 1 : 0;
+  if (st.under < RELEASE_TICKS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
+  st.under = 0;
+  const give = headroom - r.releaseHysteresisW;
+  for (const kind of [...r.order].reverse()) {
+    for (const d of capped.filter((x) => x.kind === kind)) {
+      const cap = st.caps[d.id];
+      // Pausiert und zu wenig Luft für den Mindeststrom: nicht anlaufen lassen.
+      if (cap === 0 && give < (Number(d.minW) || 0)) continue;
+      const next = cap + give;
+      if (!finite(d.maxW) || next >= Number(d.maxW)) {
+        delete st.caps[d.id];
+        delete st.capAt[d.id];
+        events.push({ type: 'release', id: d.id, kind: d.kind, name: d.name || null, capW: null, importW: Math.round(total) });
+      } else {
+        setCap(d, down(next));
+        events.push({ type: 'raise', id: d.id, kind: d.kind, name: d.name || null, capW: st.caps[d.id], importW: Math.round(total) });
+      }
+      return finish();
+    }
+  }
+  return finish();
+}
+
+function kindOf(id, devices) {
+  const d = devices.find((x) => x.id === id);
+  if (d) return d.kind;
+  if (id === 'wallbox') return 'wallbox';
+  if (id.startsWith('heater:')) return 'heater';
+  if (id.startsWith('eebus:')) return 'eebus';
+  return 'other';
+}
+
+const kwText = (w) => `${(Number(w) / 1000).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kW`;
+const KIND_LABEL = { wallbox: 'Wallbox', heater: 'Heizstab', eebus: 'EEBUS-Gerät' };
+
+/**
+ * Laufzeitdienst: misst, regelt, setzt die Grenzen an die Geräte durch und
+ * liefert den Status für Leitstand und /api/status.
+ *
+ * Hebel, die andere Dienste abfragen:
+ *   batteryCeilingW()   schedule-eval.js (applyControlTarget) — Sollwert-Decke
+ *   capW('wallbox')     eos-evcc-bridge (getGridCapW, mit §14a: kleinste gilt)
+ *   capW('heater:<id>') mypv-regulator
+ *   eebusCaps()         paragraph14a → eebus.applyConsumptionShares
+ */
+export function createGridConnectionGuard(ctx, deps = {}) {
+  const now = deps.now || (() => Date.now());
+  const st = createGuardState();
+  let lastTickAt = 0;
+  let timer = null;
+  let last = { meas: null, devices: [] };
+
+  const cfg = () => ctx.getCfg?.() || {};
+  const state = () => ctx.state || {};
+  const log = (event, data, level) => { try { ctx.pushLog?.(event, data, level); } catch { /* Log darf nie stören */ } };
+  const protocol = (eventType, meta, valueNum = null) => {
+    try {
+      ctx.telemetrySafeWrite?.(() => ctx.telemetryStore?.writeControlEvent?.({
+        eventType, target: 'grid_connection', valueNum, reason: eventType, source: 'runtime', meta
+      }));
+    } catch { /* Protokoll darf nie stören */ }
+  };
+
+  function wallboxPowerW(c, bc) {
+    if (bc.charger === 'evcc') {
+      const lp = ctx.evccIntegration?.getStatus?.()?.loadpoints?.[bc.loadpoint - 1];
+      return finite(lp?.chargePowerW) ? Number(lp.chargePowerW) : null;
+    }
+    const st2 = ctx.chargerStatus?.fresh?.();
+    return finite(st2?.powerW) ? Number(st2.powerW) : null;
+  }
+
+  /** Steuerbare Lasten, die DVhub wirklich zurücknehmen kann. */
+  function devices(c) {
+    const list = [];
+    const bc = resolveEvccBridgeConfig(c);
+    // Wallbox: über die EOS-Brücke (evcc oder direkt, mit Pro) oder eine direkt
+    // angebundene Box. evcc ohne EOS-Steuerung steuert DVhub nicht.
+    const viaBridge = bc.enabled && ctx.licenseService?.isProActive?.() !== false;
+    const direct = bc.charger !== 'evcc' && directWallboxConfigured(c);
+    if ((viaBridge || direct) && ctx.eosEvccBridge) {
+      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: bc.maxChargeW, minW: minChargeW(bc) });
+    }
+    if (ctx.mypvRegulator) {
+      let heaters;
+      try { heaters = loadSchedulableDevices(c).devices; } catch { heaters = []; }
+      const status = ctx.mypvRegulator.getStatus?.() || {};
+      for (const h of heaters) {
+        if (h.enabled === false || h.kind !== 'modulating' || h.endpoint?.type !== 'mypv') continue;
+        const s = status[h.id] || {};
+        const cur = finite(s.powerW) ? Number(s.powerW) : (finite(s.setpointW) ? Number(s.setpointW) : null);
+        list.push({ id: `heater:${h.id}`, kind: 'heater', name: h.name || 'Heizstab', currentW: cur, maxW: Number(h.plan?.maxPowerW) || null, minW: Number(h.plan?.minPowerW) || 0 });
+      }
+    }
+    for (const d of ctx.eebus?.consumptionDevices?.() || []) {
+      list.push({ id: d.id, kind: 'eebus', name: d.name || 'EEBUS-Gerät', currentW: finite(d.powerW) ? Number(d.powerW) : null, maxW: Number(d.maxW) || null, minW: 0 });
+    }
+    return list;
+  }
+
+  function batteryInput(c) {
+    const s = state();
+    const lw = s.schedule?.lastWrite?.gridSetpointW;
+    const t = now();
+    const setpointW = lw && finite(lw.value) && t - (Number(lw.at) || 0) <= SETPOINT_MAX_AGE_MS ? Number(lw.value) : null;
+    const v = s.victron || {};
+    const at = Number(v.fieldUpdatedAt?.batteryPowerW) || 0;
+    const maxAge = Number(c?.victron?.telemetryMaxAgeMs ?? 90000);
+    const chargeW = at > 0 && t - at <= maxAge ? Math.max(0, Number(v.batteryChargeW) || 0) : 0;
+    return { setpointW, chargeW };
+  }
+
+  function report(r, events) {
+    for (const e of events) {
+      if (e.type === 'cut') {
+        const text = e.capW === 0 ? `${KIND_LABEL[e.kind] || e.kind} pausiert` : `begrenzt ${KIND_LABEL[e.kind] || e.kind} auf ${kwText(e.capW)}`;
+        log('grid_connection_limit', { ...e, limitW: r.limitW, targetW: r.targetW, text: `Netzanschluss: ${text}` }, 'warn');
+        protocol('grid_connection_limit', { ...e, limitW: r.limitW }, e.capW);
+      } else if (e.type === 'raise' || e.type === 'release') {
+        log('grid_connection_release', { ...e, limitW: r.limitW });
+        protocol('grid_connection_release', { ...e, limitW: r.limitW }, e.capW);
+      } else if (e.type === 'failsafe_on') {
+        log('grid_connection_failsafe', { reason: e.reason, limitW: r.limitW, ceilingW: st.ceilingW, caps: { ...st.caps } }, 'warn');
+        protocol('grid_connection_failsafe', { reason: e.reason, ceilingW: st.ceilingW, caps: { ...st.caps } });
+      } else if (e.type === 'failsafe_off') {
+        log('grid_connection_failsafe_end', { limitW: r.limitW });
+        protocol('grid_connection_failsafe_end', {});
+      } else if (e.type === 'exhausted') {
+        log('grid_connection_exhausted', { ...e, limitW: r.limitW, text: 'Netzanschluss: keine steuerbare Last mehr übrig — der Rest kommt von Verbrauchern, die DVhub nicht schalten kann.' }, 'warn');
+        protocol('grid_connection_exhausted', e, e.restW);
+      } else if (e.type === 'phases_missing') {
+        log('grid_connection_phases_missing', { text: 'Phasengrenze eingetragen, aber der Zähler liefert keine Phasenwerte — DVhub regelt nur auf die Gesamtgrenze.' }, 'warn');
+      } else if (e.type === 'off') {
+        log('grid_connection_off', { reason: e.reason });
+      }
+    }
+  }
+
+  // Sollwert-Decke gesenkt: den laufenden Netz-Sollwert sofort neu durch den
+  // Steuerpfad schicken (dort greift die neue Decke), nicht erst im nächsten
+  // Auswertungstakt (5–15 s).
+  function reassertSetpoint() {
+    const s = state();
+    const lw = s.schedule?.lastWrite?.gridSetpointW;
+    const req = s.ctrl?._gridConnection?.request;
+    if (!lw || !req || !(Number(lw.value) > st.ceilingW) || req.source !== lw.source) return;
+    if (now() - (Number(lw.at) || 0) > SETPOINT_MAX_AGE_MS) return;
+    Promise.resolve(ctx.applyControlTarget?.('gridSetpointW', req.requestedW, req.source))
+      .catch((e) => log('grid_connection_error', { phase: 'reassert_setpoint', error: e?.message || String(e) }, 'warn'));
+  }
+
+  function enforce(changed, ceilingTightened) {
+    if (changed.has('wallbox')) {
+      Promise.resolve(ctx.eosEvccBridge?.apply?.())
+        .catch((e) => log('grid_connection_error', { phase: 'wallbox', error: e?.message || String(e) }, 'warn'));
+    }
+    if (changed.has('eebus')) {
+      try { ctx.p14a?.update?.(); } catch (e) { log('grid_connection_error', { phase: 'eebus', error: e?.message || String(e) }, 'warn'); }
+    }
+    // Heizstab: der my-PV-Regler liest capW() in jedem Takt selbst.
+    if (ceilingTightened) reassertSetpoint();
+  }
+
+  function tick() {
+    lastTickAt = now();
+    try {
+      const c = cfg();
+      const r = resolveGridConnection(c);
+      const meas = r.active ? meterImport(state(), c, { now: lastTickAt, maxAgeMs: METER_MAX_AGE_MS }) : null;
+      const list = r.active ? devices(c) : [];
+      const res = guardStep(st, { resolved: r, meas, devices: list, battery: batteryInput(c), now: lastTickAt });
+      last = { meas, devices: list };
+      report(r, res.events);
+      if (res.changed.size || res.ceilingTightened) enforce(res.changed, res.ceilingTightened);
+      return res;
+    } catch (e) {
+      log('grid_connection_error', { error: e?.message || String(e) }, 'warn');
+      return null;
+    }
+  }
+
+  function active() { return resolveGridConnection(cfg()).active; }
+
+  return {
+    /** Je Zählerabfrage (polling.js). */
+    pollTick: tick,
+    tick,
+    start() {
+      if (timer) return;
+      // Rückfalltakt: hängt die Zählerabfrage selbst, greift der Fail-safe trotzdem.
+      timer = safeInterval('grid-connection.fallback', () => {
+        if (now() - lastTickAt >= FALLBACK_TICK_MS - 500) tick();
+      }, FALLBACK_TICK_MS);
+    },
+    stop() { if (timer) { clearInterval(timer); timer = null; } },
+    /** Decke für positive Netz-Sollwerte (W) oder null (keine Grenze / kein Victron). */
+    batteryCeilingW() {
+      const r = resolveGridConnection(cfg());
+      if (!r.active || !r.batterySupported) return null;
+      return st.ceilingW ?? r.targetW;
+    },
+    /** Grenze eines Geräts (W), null = frei. */
+    capW(id) {
+      if (!active()) return null;
+      const w = st.caps[id];
+      return w == null ? null : w;
+    },
+    /** Grenzen aller EEBUS-Geräte (id → W). */
+    eebusCaps() {
+      if (!active()) return {};
+      return Object.fromEntries(Object.entries(st.caps).filter(([id]) => id.startsWith('eebus:')));
+    },
+    summary() {
+      const c = cfg();
+      const r = resolveGridConnection(c);
+      if (r.reason === 'not_set') return null;
+      const s = state();
+      const t = now();
+      const meas = last.meas;
+      const clampRaw = s.ctrl?._gridConnection?.clamp;
+      const clamp = clampRaw && t - Number(clampRaw.at || 0) <= CLAMP_FRESH_MS
+        ? { requestedW: clampRaw.requestedW, valueW: clampRaw.valueW, source: clampRaw.source } : null;
+      const caps = last.devices
+        .filter((d) => st.caps[d.id] != null)
+        .map((d) => ({ id: d.id, kind: d.kind, name: d.name || null, capW: st.caps[d.id], currentW: finite(d.currentW) ? Math.round(d.currentW) : null }));
+      const parts = [];
+      if (clamp) parts.push(`begrenzt Akku-Ladung auf ${kwText(clamp.valueW)}`);
+      for (const cp of caps) parts.push(cp.capW === 0 ? `${cp.name || KIND_LABEL[cp.kind]} pausiert` : `begrenzt ${cp.name || KIND_LABEL[cp.kind]} auf ${kwText(cp.capW)}`);
+      const text = !r.active ? 'Netzanschluss: Grenze ungültig (2 kW bis 2 000 kW) — DVhub regelt nicht.'
+        : st.failsafe ? 'Netzanschluss: Zähler gestört oder veraltet — DVhub gibt keine neue Last frei.'
+          : parts.length ? `Netzanschluss: ${parts.join(' · ')}` : null;
+      return {
+        enabled: true,
+        active: r.active,
+        reason: r.reason,
+        limitW: r.limitW,
+        marginW: r.marginW,
+        targetW: r.targetW,
+        phaseLimitA: r.phaseLimitA,
+        phaseLimitW: r.phaseLimitW,
+        importW: meas?.fresh ? Math.max(0, Math.round(meas.importW)) : null,
+        phasesW: meas?.fresh && meas.phasesW ? meas.phasesW.map((w) => Math.round(w)) : null,
+        failsafe: st.failsafe,
+        exhausted: st.exhausted,
+        batterySupported: r.batterySupported,
+        ceilingW: r.active && r.batterySupported ? st.ceilingW ?? r.targetW : null,
+        clamp,
+        caps,
+        acting: Boolean(clamp || caps.length || st.failsafe),
+        text
+      };
+    },
+    _state: st
+  };
+}
+
+/**
+ * Grenze für die Wallbox (EOS-Brücke getGridCapW): §14a-Anteil und
+ * Netzanschluss — die kleinste gilt, null = frei.
+ */
+export function wallboxGridCapW(p14aCapW, gridConnectionCapW) {
+  return smallestLimit([p14aCapW, gridConnectionCapW]);
+}
+
+/** Deckel für applyControlTarget (schedule-eval.js): senkt nur positive Sollwerte. */
+export function capSetpointToGridConnection(value, ceilingW) {
+  return capPositiveSetpoint(value, ceilingW);
+}

@@ -947,6 +947,13 @@ export function createPoller(ctx) {
       ctx.gridSharePollTick?.(state.victron);
     } catch (e) { pushLog('grid_share_error', { error: e?.message || String(e) }, 'warn'); }
 
+    // Netzanschluss (services/grid-connection): je Zählerabfrage ein Regeltakt —
+    // die Grenze des Hausanschlusses wird im Poll-Takt gesichert, nicht erst im
+    // 5–15-s-Auswertungstakt. Läuft auch bei gestörtem Zähler (Fail-safe).
+    try {
+      ctx.gridConnection?.pollTick?.();
+    } catch (e) { pushLog('grid_connection_error', { error: e?.message || String(e) }, 'warn'); }
+
     ctx.onPollComplete?.({
       ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),
       resolutionSeconds: Math.max(1, Math.round(effectivePollIntervalMs() / 1000)),

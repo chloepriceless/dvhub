@@ -16,12 +16,14 @@ import { effectiveInverterCurve } from '../inverter-efficiency/calibrator.js';
 import { computeEvRegistration } from './ev-registration.js';
 import { buildEosHomeAppliances } from './eos-devices.js';
 import { getPowerLimits } from '../power-limits.js';
+// Netzanschluss: Ladeleistung aus dem Netz, mit der EOS planen darf (Behelf).
+import { eosGridChargeCapW, eosGridImportLimitW } from '../grid-connection/index.js';
 // Zweite GX am selben Anschluss: Planung sieht beide Akkus als einen.
 import { planningCfg, planningMinSocPct } from '../multi-gx/planning.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
 import http from 'node:http';
 
-import { createEosCapabilityProbe, EOS_EV_CHARGE_START_FIELD } from './eos-capabilities.js';
+import { createEosCapabilityProbe, EOS_EV_CHARGE_START_FIELD, EOS_GRID_IMPORT_LIMIT_FIELD } from './eos-capabilities.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
 import { requestHostname } from '../host-address.js';
 import { resolveEosProxy } from './eos-adapter.js';
@@ -316,8 +318,7 @@ export function resolveEosMinSocPct(liveMinSocPct, hardFloorSocPct) {
  * @param {object} cfg
  * @returns {Array<object>}
  */
-export function buildEosInverters(cfg, { curve = null, curveSupported = false } = {}) {
-  const opt = cfg?.optimizer || {};
+export function buildEosInverters(cfg, { curve = null, curveSupported = false, gridImportLimitSupported = false } = {}) {
   // max_power_w is the inverter's TOTAL AC throughput cap (PV + battery feed-in
   // together); it keeps the battery→grid CO-EXPORT (inverter.py Case 1) from
   // planning an unrealistically high combined feed-in. Support-Fall 2026-10-15:
@@ -352,8 +353,40 @@ export function buildEosInverters(cfg, { curve = null, curveSupported = false } 
     // ersetzt dort dc_to_ac_efficiency. Ohne Kurve explizit null, damit eine
     // früher gesendete Kurve nicht stehen bleibt.
     ...(curveSupported ? eosEfficiencyCurveFields(curve, maxPowerW) : {}),
-    max_ac_charge_power_w: gridChargeAllowed ? (Number(opt.maxChargeW) || null) : 0,
+    // Kennt EOS die eigene Netzbezugs-Grenze, kürzt es selbst: dann volle
+    // Ladeleistung und die Grenze; sonst der Behelf (eosAcChargeCapW).
+    max_ac_charge_power_w: gridChargeAllowed
+      ? (gridImportLimitSupported ? maxAcChargeW(cfg) : eosAcChargeCapW(cfg)) : 0,
+    ...(gridImportLimitSupported ? { [EOS_GRID_IMPORT_LIMIT_FIELD]: eosGridImportLimitW(cfg) } : {}),
   }];
+}
+
+function maxAcChargeW(cfg) {
+  const w = Number(cfg?.optimizer?.maxChargeW);
+  return w > 0 ? w : null;
+}
+
+/**
+ * AC-Ladeleistung aus dem Netz für EOS: maxChargeW, mit eingetragenem
+ * Netzanschluss höchstens Grenze − Abstand − Grundlast − E-Auto (falls EOS es
+ * plant; services/grid-connection eosGridChargeCapW).
+ *
+ * BEHELF, konservativ, nur für ein EOS OHNE eigene Netzbezugs-Grenze
+ * (Akkudoktor-EOS v0.4.0rc3 und upstream/main kennen keine). Kennt EOS
+ * max_grid_import_power_w (unser EOS), bekommt es stattdessen die Grenze und
+ * volle Ladeleistung (buildEosInverters). Sonst kann EOS Akku und E-Auto
+ * gleichzeitig mit voller Leistung aus dem Netz laden lassen (06.11.2026:
+ * 34,4 kW an einem 29-kW-Anschluss). Wird ersetzt, sobald EOS selbst eine
+ * Bezugsgrenze kennt. Bewusst über den Wechselrichter und nicht über
+ * battery max_charge_power_w: den nimmt EOS auch als Entladegrenze
+ * (battery.py discharge_energy), und PV-Laden zieht nichts aus dem Netz.
+ * DVhubs Wächter hält die Grenze an der Ausführung ohnehin ein.
+ */
+export function eosAcChargeCapW(cfg) {
+  const maxChargeW = maxAcChargeW(cfg);
+  const gridCapW = eosGridChargeCapW(cfg);
+  if (gridCapW == null) return maxChargeW;
+  return maxChargeW == null ? gridCapW : Math.min(maxChargeW, gridCapW);
 }
 
 /**
@@ -463,6 +496,7 @@ export function createEosConfigSync(ctx) {
         flavor: caps.flavor, version: caps.version, reachable: caps.reachable,
         supported: caps.supported, reason: caps.reason, detectedAt: caps.detectedAt,
         inverterEfficiencyCurve: caps.inverterEfficiencyCurve === true,
+        gridImportLimit: caps.gridImportLimit === true,
         fitnessCacheLimit: caps.fitnessCacheLimit === true,
         timezoneOverride: caps.timezoneOverride === true,
         selfConsumptionInterpolator: caps.selfConsumptionInterpolator === true,
@@ -567,6 +601,7 @@ export function createEosConfigSync(ctx) {
     const inverters = buildEosInverters(planCfg, {
       curve: effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.()),
       curveSupported: caps.inverterEfficiencyCurve === true,
+      gridImportLimitSupported: caps.gridImportLimit === true,
     });
     const optimization = buildEosOptimization(cfg);
     const geneticSizing = pickGeneticSizing(optimization.interval, cfg?.optimizer?.eosGeneticGenerations);
@@ -814,15 +849,30 @@ export function createEosConfigSync(ctx) {
     // Frisches EOS: vor diesem Sync gab es noch keinen Wechselrichter, an dem das
     // Kurvenfeld erkennbar war. Jetzt gibt es ihn — einmal neu erkennen und die
     // Kurve gleich nachschicken, statt bis zum nächsten Sync (15 min) zu warten.
+    // Dasselbe für die Netzbezugs-Grenze (unser EOS): erst am Wechselrichter
+    // erkennbar — ohne Nachschicken liefe der Behelf statt der Grenze bis zum
+    // nächsten Sync.
     const curveNow = effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.());
-    if (curveNow && !caps.inverterEfficiencyCurve && applied.includes('devices/inverters')) {
+    const curveMissing = curveNow && !caps.inverterEfficiencyCurve;
+    // Grenze nur neu erkennen, wenn EOS beim Erkennen noch gar keinen
+    // Wechselrichter hatte — sonst stünde der Schlüssel schon da (Vanilla rc3:
+    // kein zusätzlicher GET je Sync).
+    const limitUnknown = !caps.gridImportLimit && caps.inverterConfigured !== true;
+    if ((curveMissing || limitUnknown) && applied.includes('devices/inverters')) {
       capabilityProbe.reset?.();
       const again = await capabilityProbe.get(baseUrl);
-      if (again.reachable && again.inverterEfficiencyCurve) {
+      const gainedCurve = curveMissing && again.inverterEfficiencyCurve === true;
+      const gainedLimit = limitUnknown && again.gridImportLimit === true;
+      if (again.reachable && (gainedCurve || gainedLimit)) {
         publishCaps(again);
-        const body = asDevices(buildEosInverters(cfg, { curve: curveNow, curveSupported: true }));
+        const body = asDevices(buildEosInverters(planCfg, {
+          curve: curveNow,
+          curveSupported: again.inverterEfficiencyCurve === true,
+          gridImportLimitSupported: again.gridImportLimit === true,
+        }));
         const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/inverters', body);
         if (!res.ok) errors['devices/inverters'] = res.error;
+        else sentConfig.values.set('devices/inverters', JSON.stringify(body));
       }
     }
 

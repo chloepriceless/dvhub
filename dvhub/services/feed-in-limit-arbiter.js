@@ -7,6 +7,8 @@
 // zurückgeschrieben, der vor der ersten Begrenzung galt (Sichern/Zurückschreiben
 // macht applyLimit über die Steuersequenz).
 
+import { smallestLimit } from './import-limit/core.js';
+
 /**
  * @param {object} deps
  * @param {(limitW: number|null) => Promise<void>} deps.applyLimit  null = alten Wert zurückschreiben
@@ -17,12 +19,10 @@ export function createFeedInLimitArbiter({ applyLimit, pushLog = () => {} }) {
   let applied;                   // undefined = noch nie geschrieben, null = zurückgeschrieben
   let chain = Promise.resolve();
 
+  // Kleinste gilt — derselbe Kern wie bei den Bezugsgrenzen (Netzanschluss,
+  // Peak Shaving, §14a-Aufteilung; services/import-limit/core.js).
   function effective() {
-    let min = null;
-    for (const w of sources.values()) {
-      if (Number.isFinite(w) && (min === null || w < min)) min = w;
-    }
-    return min;
+    return smallestLimit(sources.values());
   }
 
   /**

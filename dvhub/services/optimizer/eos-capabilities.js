@@ -33,6 +33,10 @@ export const EOS_UNSUPPORTED_REASON = 'EOS-Version wird nicht mehr unterstützt 
 // das Feld in EOS unter anderem Namen, genügt diese eine Zeile.
 export const EOS_EV_CHARGE_START_FIELD = 'charge_start_datetime';
 
+// Netzbezugs-Grenze am Wechselrichter (W, null = aus), Netzanschluss-Grenze
+// aus DVhub (services/grid-connection). Gibt es nur in unserem EOS.
+export const EOS_GRID_IMPORT_LIMIT_FIELD = 'max_grid_import_power_w';
+
 // Die Abschnitte, in denen EOS Geräte führt. #1330 hat sie von Listen auf
 // Abbildungen nach device_id umgestellt — an genau einer davon lässt sich die
 // Fassung ablesen, ohne dass ein Gerät konfiguriert sein muss.
@@ -75,6 +79,10 @@ export function detectEosCapabilities(config, health = {}) {
   // Config (allererster Sync) bleibt es false; der nächste Sync holt es nach.
   const inverters = devices && isObj(devices.inverters) ? Object.values(devices.inverters) : [];
   const inverterEfficiencyCurve = inverters.some((inv) => hasKey(inv, 'dc_to_ac_efficiency_curve'));
+  // Eigene Netzbezugs-Grenze (unser EOS, nicht Vanilla v0.4.0rc3): erkennbar am
+  // Feld im konfigurierten Wechselrichter, wie die Kurve. Ohne Wechselrichter
+  // (allererster Sync) false — eos-config-sync erkennt nach dem PUT neu.
+  const gridImportLimit = inverters.some((inv) => hasKey(inv, EOS_GRID_IMPORT_LIMIT_FIELD));
   // Fitness-Cache-Grenze (PR #1376) und feste Zeitzone (PR #1377), DV-EOS rc1.5.
   const fitnessCacheLimit = hasKey(genetic, 'fitness_cache_max_entries');
   const general = cfg && isObj(cfg.general) ? cfg.general : null;
@@ -103,6 +111,8 @@ export function detectEosCapabilities(config, health = {}) {
     supported,
     reason: supported === false ? EOS_UNSUPPORTED_REASON : null,
     inverterEfficiencyCurve,
+    inverterConfigured: inverters.length > 0,
+    gridImportLimit,
     fitnessCacheLimit,
     timezoneOverride,
     selfConsumptionInterpolator,

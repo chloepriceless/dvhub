@@ -10,6 +10,30 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Neu
+
+- **Netzanschluss: DVhub hält die Bezugsgrenze des Hausanschlusses ein.** Neue Einstellung „Netzanschluss maximal
+  (kW)“ unter Netz & Recht, stabil (kein Beta), ab Werk leer = aus. Anlass: EOS plante 34,4 kW Netzbezug (Akku 27 kW +
+  E-Auto 11 kW + Haus) an einem 29-kW-Anschluss. Der Wächter läuft bei jeder Zählerabfrage (Prod alle 2 s):
+  - Jeder positive Netz-Sollwert (EOS, Kleine Börsenautomatik, Zeitplan, Handeingabe, Netzladen, §14a, „Akku halten“)
+    wird auf Grenze − Sicherheitsabstand gedeckelt (Victron). Die Akku-Ladung aus dem Netz gibt damit immer zuerst nach.
+  - Reicht das nicht, nimmt DVhub die steuerbaren Lasten zurück, Reihenfolge einstellbar (Standard Wallbox → Heizstab
+    → EEBUS-Geräte). Die Wallbox regelt erst den Ladestrom bis zum Mindeststrom herunter und pausiert dann.
+  - Wieder frei gibt DVhub erst mit Rückschalt-Abstand: 30 s Luft, frühestens 60 s nach dem Eingriff, ein Gerät je
+    Schritt. Optional gilt eine Grenze je Phase (A), weil Sicherungen je Phase auslösen.
+  - Fail-safe: Ist der Zähler gestört oder sein Wert älter als 90 s, gibt DVhub keine neue Last frei. Der Akku-Sollwert
+    sinkt dann auf Grenze − Abstand − geschätzte Grundlast − laufende Geräte.
+  - Leitstand-Kachel „Netzanschluss“ und Protokoll-Ereignisse, z. B. „Netzanschluss: begrenzt Akku-Ladung auf 28,0 kW“.
+  - Peak Shaving, §14a und Netzanschluss nutzen denselben Kern (`services/import-limit/core.js`): Sollwert-Deckel und
+    „kleinste gilt“ je Gerät.
+  - Grenze der Physik: Nicht steuerbare Verbraucher wie Herd oder Durchlauferhitzer kann DVhub nicht abschalten. Es
+    nimmt alle steuerbaren schnell zurück und meldet, wenn nichts mehr übrig ist.
+- **EOS plant mit der Bezugsgrenze.** Kennt das EOS den Schlüssel `max_grid_import_power_w` am Wechselrichter (unser
+  EOS), bekommt es Grenze − Abstand und kürzt selbst. Ist die Grenze in DVhub entfernt, schickt DVhub 1 GW statt null,
+  weil ein null per PUT den Wert in EOS nicht zurücksetzt. Vanilla v0.4.0rc3 kennt den Schlüssel nicht. Dort plant EOS
+  als Behelf höchstens Grenze − Abstand − Grundlast − E-Auto (falls EOS es plant) als Ladeleistung aus dem Netz, über
+  `max_ac_charge_power_w`. Die Entladegrenze und das PV-Laden bleiben dabei unberührt.
+
 ### Geändert
 
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf

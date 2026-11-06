@@ -18,6 +18,7 @@ import { parseMqttPayload } from '../../transport-mqtt.js';
 import { gridImportPositiveW } from '../eebus/index.js';
 import { resolveEvccBridgeConfig } from '../optimizer/eos-evcc-bridge.js';
 import { directWallboxConfigured } from '../wallbox/types.js';
+import { mergeDeviceCaps } from '../import-limit/core.js';
 import {
   P14A_MIN_W, STEUVE_KINDS, DEFAULT_PRIORITY, computePmin14a, budgetW, allocateBudget,
 } from './rules.js';
@@ -262,7 +263,10 @@ export function createParagraph14aService(ctx, deps = {}) {
 
     const eebusShares = {};
     for (const d of list) if (d.source === 'eebus') eebusShares[d.id] = active ? (shares[d.id] ?? 0) : null;
-    ctx.eebus?.applyConsumptionShares?.(eebusShares, state.ctrl?.eebusConsumptionLimitUntil ?? null);
+    // Netzanschluss (services/grid-connection): dessen Grenzen je EEBUS-Gerät
+    // kommen dazu — je Gerät gilt die kleinste (auch ohne §14a-Vorgabe).
+    const merged = mergeDeviceCaps(eebusShares, ctx.gridConnection?.eebusCaps?.() || null);
+    ctx.eebus?.applyConsumptionShares?.(merged, state.ctrl?.eebusConsumptionLimitUntil ?? null);
   }
 
   function start() {

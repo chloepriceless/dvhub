@@ -120,10 +120,11 @@ export function carStateFromCharger(st) {
  * @param {object} deps.state
  * @param {(e:string,d?:object,l?:string)=>void} [deps.pushLog]
  * @param {()=>object|null} [deps.getCharger]   letzter Wallbox-Zustand ({connected, charging, carState})
+ * @param {(id:string)=>number|null} [deps.getCapW]  Netzanschluss-Grenze je Gerät (W), null = frei
  * @param {(endpoint:object)=>object} [deps.createClient]
  * @param {()=>number} [deps.now]
  */
-export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getCharger = () => null, createClient = createMypvClient, now = () => Date.now() }) {
+export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getCharger = () => null, getCapW = () => null, createClient = createMypvClient, now = () => Date.now() }) {
   const clients = new Map();     // deviceId → { key, client }
   const devices = new Map();     // deviceId → Laufzeit { setpoint, measured, reason, car, lastTickMs, error }
   let timer = null;
@@ -189,6 +190,14 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
       deviceOff: measured ? measured.deviceOn === false : false,
       car: rt.car ? { state: rt.car, sinceMs: rt.carSince } : null
     }, rt.setpoint, t);
+    // Netzanschluss (services/grid-connection): Grenze des Wächters, W oder null.
+    let cap;
+    try { cap = getCapW(dev.id); } catch { cap = null; }
+    if (cap != null && Number.isFinite(Number(cap)) && decision.powerW > Number(cap)) {
+      const capW = Math.max(0, Math.round(Number(cap)));
+      decision.powerW = capW;
+      decision.reason = capW === 0 ? 'Netzanschluss an der Grenze — Heizstab aus' : `Netzanschluss an der Grenze — höchstens ${capW} W`;
+    }
     if (decision.reason !== rt.reason) pushLog('mypv_regulator', { id: dev.id, powerW: decision.powerW, reason: decision.reason });
     trackEnergy(dev.id, measured ? measured.powerW : rt.setpoint, t, rt.lastTickMs ? t - rt.lastTickMs : 0);
     try {
