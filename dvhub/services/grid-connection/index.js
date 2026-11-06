@@ -375,9 +375,14 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   for (const kind of [...r.order].reverse()) {
     for (const d of capped.filter((x) => x.kind === kind)) {
       const cap = st.caps[d.id];
+      // Grundlage ist, was das Gerät gerade WIRKLICH zieht — eine ungenutzte
+      // Grenze darf nicht Schritt für Schritt über die Luft hinaus wachsen
+      // (Gesamtprüfung 2, P1).
+      const drawNow = Math.min(cap, finite(d.currentW) ? Math.max(0, Number(d.currentW)) : 0);
       // Pausiert und zu wenig Luft für den Mindeststrom: nicht anlaufen lassen.
-      if (cap === 0 && give < (Number(d.minW) || 0)) continue;
-      const next = cap + give;
+      if (drawNow === 0 && give < (Number(d.minW) || 0)) continue;
+      const next = Math.max(cap, drawNow + give);
+      if (next === cap && drawNow + give < Number(d.maxW)) continue;
       if (!finite(d.maxW) || next >= Number(d.maxW)) {
         delete st.caps[d.id];
         delete st.capAt[d.id];
@@ -531,6 +536,13 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   function enforce(changed, ceilingTightened) {
     if (changed.has('wallbox')) {
       Promise.resolve(ctx.eosEvccBridge?.apply?.())
+        .then((r) => {
+          // Grenze nicht angekommen: laut melden, statt eine Grenze anzuzeigen,
+          // die an der Wallbox nicht gilt (Gesamtprüfung 2, P1).
+          if (r && r.ok === false) {
+            log('grid_connection_wallbox_failed', { capW: st.caps.wallbox ?? null, error: r.error || r.skipped || 'unknown' }, 'warn');
+          }
+        })
         .catch((e) => log('grid_connection_error', { phase: 'wallbox', error: e?.message || String(e) }, 'warn'));
     }
     if (changed.has('eebus')) {

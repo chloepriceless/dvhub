@@ -305,11 +305,6 @@ export function createEosEvccBridge(deps) {
   function handOff() {
     if (pendingRestore && override?.inheritsRestore === true) setPendingRestore(null);
   }
-  function gridCapBlocks(bc) {
-    const capW = getGridCapW();
-    if (capW == null || !Number.isFinite(Number(capW))) return false;
-    return applyGridCap({ action: 'charge', currentA: bc.maxCurrentA }, bc, capW).action === 'stop';
-  }
 
   // Sicherheits-Pause (§14a oder Netzanschluss: Grenze unter dem Mindeststrom):
   // wirklich nicht laden — evcc im Modus „aus“, eine direkte Box mit stop(),
@@ -605,7 +600,13 @@ export function createEosEvccBridge(deps) {
       if (lastSent && lastSent.charger && lastSent.charger !== bc.charger) await releaseIfNeeded(cfg, bc);
       const charger = getCharger(cfg, bc);
       if (!charger.isConfigured()) return { ok: false, skipped: `${bc.charger} not configured` };
-      if (isProActive() === false) return { ok: false, skipped: 'pro required' };
+      if (isProActive() === false) {
+        // Ohne Pro kein Plan — eine Grenze (§14a/Netzanschluss) setzt DVhub an
+        // einer direkt angebundenen Box trotzdem durch (Gesamtprüfung 2, P1).
+        const capped = await gridCapOnlyTick(cfg, bc);
+        if (capped) return capped;
+        return { ok: false, skipped: 'pro required' };
+      }
 
       let solution = null;
       try { solution = await getSolution(8 * 24 * 4); } catch { solution = null; }
@@ -642,7 +643,10 @@ export function createEosEvccBridge(deps) {
       // Sicherheits-Stopp aus dem wirksamen Deckel, egal ob der Plan laden
       // wollte: auch ein geplanter Stopp-Slot geht bei Deckel unter dem
       // Mindeststrom hart auf „aus“ (Codex 4bf1eb18, P1).
-      const capStop = slot.action === 'stop' && (slot.gridCapW != null || gridCapBlocks(bc));
+      // Steht irgendein Deckel, heißt ein Stopp-Slot „aus“: ein eigener Modus
+      // (pv/minpv, release()) hielte auch eine Teil-Grenze nicht ein
+      // (Gesamtprüfung 2, P1).
+      const capStop = slot.action === 'stop' && (slot.gridCapW != null || getGridCapW() != null);
       const key = capStop ? `${bc.charger}:${bc.loadpoint}:grid-cap-stop` : commandKey(bc, slot);
       if (!force && lastSent?.key === key) {
         // Unveraendert — aber wurde evcc inzwischen von aussen umgestellt

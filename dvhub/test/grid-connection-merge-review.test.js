@@ -275,3 +275,44 @@ test('Codex 180dbd00 P2: vorgemerkte Rückkehr gehört zum Ladepunkt des „Sofo
   assert.equal(h.store.value.loadpoint, 2);
   assert.equal(h.store.value.mode, 'pv');
 });
+
+// --- Gesamtprüfung des Zweigs, Runde 2 ------------------------------------------------
+
+test('Gesamtprüfung 2 P1: Stopp-Slot mit Teil-Deckel → hart „aus“, nicht „minpv“ (evcc hielte die Grenze nicht ein)', async () => {
+  const h = bridgeHarness({ plan: 0, capW: 5000, stopMode: 'minpv' });
+  await h.bridge.tick();
+  assert.deepEqual(h.calls.at(-1).slice(0, 2), ['stop', 'off']);
+});
+
+test('Gesamtprüfung 2 P1: direkte Wallbox, EOS-Steuerung an, Pro aus → Deckel wird trotzdem durchgesetzt', async () => {
+  const calls = [];
+  const cfg = { optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type: 'openevse' } };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null,
+    getCharger: () => ({
+      type: 'openevse', isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop']); return { ok: true }; },
+      release: async () => { calls.push(['release']); return { ok: true }; },
+      status: async () => ({ ok: true, connected: true }),
+    }),
+    getGridCapW: () => 6000,
+    isProActive: () => false,
+  });
+  const r = await bridge.apply();
+  assert.deepEqual(calls.at(-1), ['charge', 8.6], JSON.stringify(r));
+});
+
+test('Gesamtprüfung 2 P1: scheitert die Wallbox-Grenze, meldet der Wächter das', async () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
+  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -33000 }, victron: {}, schedule: {}, ctrl: {} };
+  const logs = [];
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: (e, d) => logs.push([e, d]),
+    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: 11000 }] }) },
+    eosEvccBridge: { apply: async () => ({ ok: false, error: 'evcc nicht erreichbar' }), getOverride: () => null },
+  };
+  createGridConnectionGuard(ctx).tick();
+  await new Promise((r) => setImmediate(r));
+  assert.ok(logs.some(([e]) => e === 'grid_connection_wallbox_failed'));
+});
