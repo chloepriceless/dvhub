@@ -990,3 +990,32 @@ test('Punkt 2: go-e und OpenEVSE lesen DVhubs Zustand (frc=2 bzw. eigener aktive
   assert.equal(typeof createGoeAdapter(() => ({ url: 'http://x' })).dvhubState, 'function');
   assert.equal(typeof createOpenEvseAdapter(() => ({ url: 'http://x' })).dvhubState, 'function');
 });
+
+// --- Punkt 3: Wallbox-Wechsel unter aktiver Grenze ---------------------------------------
+
+test('Punkt 3: openWB unter Grenze, Wechsel auf OpenEVSE → openWB bleibt gedeckelt, nach der Grenze voller Strom zurück', async () => {
+  const calls = [];
+  const capRef = { capW: 6000 };
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'pv' },
+    wallbox: { type: 'openwb', openwb: { host: '192.0.2.20' }, openevse: { url: 'http://192.0.2.21' } } };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null,
+    getCharger: (_c, bc) => ({
+      type: bc.charger, isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', bc.charger, a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop', bc.charger]); return { ok: true }; },
+      release: async () => { calls.push(['release', bc.charger]); return { ok: true }; },
+      status: async () => ({ ok: true, connected: true }),
+    }),
+    getGridCapW: () => capRef.capW,
+  });
+  await bridge.apply();                              // openWB 8,6 A
+  assert.deepEqual(calls.at(-1), ['charge', 'openwb', 8.6]);
+  cfg.wallbox.type = 'openevse';
+  await bridge.apply();
+  assert.equal(calls.filter((c) => c[1] === 'openwb').length, 1, 'openWB unter Grenze nicht angefasst');
+  assert.deepEqual(calls.at(-1), ['charge', 'openevse', 8.6], 'Grenze gilt an der neuen Box');
+  capRef.capW = null;
+  await bridge.apply();
+  assert.ok(calls.some((c) => c[0] === 'charge' && c[1] === 'openwb' && c[2] === 16), 'openWB bekommt den vollen Strom zurück');
+});

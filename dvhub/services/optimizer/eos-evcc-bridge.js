@@ -381,6 +381,33 @@ export function createEosEvccBridge(deps) {
     return res;
   }
 
+  // Wallbox gewechselt (Punkt 3): direkte Boxen, die nicht mehr eingestellt
+  // sind, an denen DVhub aber noch etwas vorgibt. Solange eine Grenze steht,
+  // bleibt die alte Box, wie sie ist (also auch gedeckelt); die Grenze gilt an
+  // der neuen. Ohne Grenze gibt DVhub sie frei (openWB: voller Strom zurück).
+  // Ist dort inzwischen ein anderes Gerät eingetragen: nicht anfassen.
+  async function releaseOrphans(cfg, bc) {
+    const curKey = targetKey(bc);
+    for (const e of [...owned.values()]) {
+      const key = targetKey(e);
+      if (e.charger === 'evcc' || key === curKey) continue;
+      if (e.identity && e.identity !== wallboxIdentity(cfg, e.charger)) {
+        pushLog('ev_owned_identity_changed', { charger: e.charger }, 'warn');
+        setOwned(key, null);
+        continue;
+      }
+      if (getGridCapW() != null) continue;
+      const ch = getCharger(cfg, { ...bc, charger: e.charger, loadpoint: e.loadpoint });
+      if (!ch?.isConfigured?.()) { setOwned(key, null); continue; }
+      const res = e.charger === 'openwb' ? await ch.charge(bc.maxCurrentA) : await ch.release();
+      if (res?.ok) {
+        setOwned(key, null);
+        if (lastSent && targetKey({ charger: lastSent.charger, loadpoint: lastSent.loadpoint }) === key) lastSent = null;
+        pushLog('ev_previous_wallbox_released', { charger: e.charger });
+      }
+    }
+  }
+
   // Aktueller evcc-Modus weicht von unserem letzten Befehl ab? Unbekannte
   // Modi (evcc „smart“ u.a.) kommen als null an und zaehlen als Abweichung.
   async function modeDrift(charger, expectedMode) {
@@ -635,6 +662,7 @@ export function createEosEvccBridge(deps) {
         if (res) return res;
         force = true;
       }
+      await releaseOrphans(cfg, bc);
       if (!bc.enabled) {
         // §14a EnWG gilt für die Wallbox auch dann, wenn EOS sie nicht steuert:
         // begrenzt der Netzbetreiber, deckelt DVhub eine direkt angebundene
