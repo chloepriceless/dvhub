@@ -371,7 +371,9 @@ export function createEosEvccBridge(deps) {
       // Pausiert eine Grenze (§14a/Netzanschluss) gerade das Laden, bleibt evcc
       // aus, bis sie es erlaubt — sonst liefe z. B. „minpv“ trotz Pause wieder
       // an (Codex 184bcdcf, P1). runTick holt den Modus danach nach.
-      if (gridCapBlocks(bc)) {
+      // Steht irgendein Deckel, bleibt evcc aus: ein eigener evcc-Modus hielte
+      // auch eine Teil-Grenze nicht ein (Gesamtprüfung, P1).
+      if (getGridCapW() != null) {
         // Erst sicher aus (die Grenze kann im selben Takt gekommen sein, in dem
         // der Override endet), dann den Modus vormerken (Codex bf805c50, P1).
         const lp = lastSent.loadpoint ?? bc.loadpoint;
@@ -560,7 +562,10 @@ export function createEosEvccBridge(deps) {
         // Der Ladepunkt, an dem der Modus vorgemerkt wurde — nicht der jetzt
         // eingestellte (Codex 4bf1eb18, P2).
         const prBc = { ...bc, charger: 'evcc', loadpoint: pr.loadpoint ?? bc.loadpoint };
-        if (gridCapBlocks(bc)) {
+        // Erst ohne jeden Deckel zurück in den eigenen evcc-Modus — der hielte
+        // auch eine Teil-Grenze (z. B. 0 → 5 kW) nicht ein; bis dahin bleibt die
+        // Wallbox im Netzanschluss-Wächter eingeschrieben (Gesamtprüfung, P1).
+        if (getGridCapW() != null) {
           if (!pr.stopped) {
             const res = await hardStopper(cfg, prBc, { type: 'evcc' }).stop();
             pr.stopped = res?.ok === true;

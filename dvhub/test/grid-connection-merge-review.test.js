@@ -185,3 +185,18 @@ test('Codex 8bf189b7 P2: erstes „Sofort laden“ ohne Quittung, Not-Halt stopp
   await h.bridge.tick();
   assert.equal(h.modes[1], 'pv', 'evcc zurück auf „pv“');
 });
+
+test('Gesamtprüfung P1: Teil-Freigabe (0 → 5 kW) stellt den evcc-Modus noch nicht her — erst ohne Deckel', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
+  const h = bridgeHarness({ enabled: false, override, capW: 0 });
+  await h.bridge.apply();
+  await h.bridge.clearOverride();
+  assert.equal(h.bridge.hasPendingRestore(), true);
+  h.ref.capW = 5000; // Teil-Freigabe durch den Wächter
+  await h.bridge.tick();
+  assert.equal(h.calls.some((c) => c[0] === 'stop' && c[1] === 'pv'), false, 'noch nicht zurück auf „pv“');
+  assert.equal(h.bridge.hasPendingRestore(), true, 'Wallbox bleibt eingeschrieben');
+  h.ref.capW = null;
+  await h.bridge.tick();
+  assert.deepEqual(h.calls.at(-1).slice(0, 2), ['stop', 'pv']);
+});

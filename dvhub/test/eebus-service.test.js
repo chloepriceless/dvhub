@@ -554,3 +554,21 @@ test('EEBUS-Wallbox: OPEV gilt nur mit lesbaren Grenzen; Stopp per OPEV nur, wen
   await settle();
   assert.equal(s.svc.deviceInfo(SKI_WB).ev.opev, false, 'keine änderbare Grenze');
 });
+
+test('Netzanschluss: gleiche Gerätegrenze mit anderer Dauer (z. B. §14a-Ende) wird neu geschickt', async () => {
+  const s = setup();
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_nominal_max', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 3000 });
+  await settle();
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 1000 }, 1_000_000 + 60_000);
+  await settle();
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 1000 }, null);
+  await settle();
+  const sent = c.commands.filter((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:HP/1');
+  assert.equal(sent.length, 2, 'zweites Mal geschickt');
+  assert.equal(sent.at(-1).duration_s, 0, 'ohne Ablauf');
+});

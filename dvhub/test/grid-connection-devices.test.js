@@ -13,10 +13,11 @@ import { createMypvRegulator } from '../services/devices/mypv-regulator.js';
 import { wallboxGridCapW, createGridConnectionGuard } from '../services/grid-connection/index.js';
 import { createEosEvccBridge } from '../services/optimizer/eos-evcc-bridge.js';
 
-function p14aSetup({ gcEebus = {}, p14aLimitW = null } = {}) {
+function p14aSetup({ gcEebus = {}, p14aLimitW = null, until = null } = {}) {
   const cfg = { gridPositiveMeans: 'grid_import', optimizer: { maxChargeW: 10000 }, paragraph14a: {} };
   const state = { ctrl: {}, victron: {}, meter: { grid_total_w: 1000 } };
   if (p14aLimitW != null) state.ctrl.eebusConsumptionLimitW = p14aLimitW;
+  if (until != null) state.ctrl.eebusConsumptionLimitUntil = until;
   const applied = [];
   const ctx = {
     state, getCfg: () => cfg, pushLog: () => {},
@@ -302,4 +303,12 @@ test('Codex P2 (Runde 5): „Sofort laden“ während der verzögerten Rückkehr
   assert.equal(bridge.getOverride().prevMode, 'pv');
   await bridge.clearOverride();
   assert.deepEqual(calls.at(-1), ['stop', 'pv']);
+});
+
+test('Gesamtprüfung P1: Netzanschluss-Grenze an EEBUS läuft nicht mit der §14a-Dauer ab', () => {
+  const s = p14aSetup({ gcEebus: { 'eebus:hp': 1000 }, p14aLimitW: 7560, until: Date.now() + 60_000 });
+  s.svc.update();
+  // §14a-Ende in 60 s — die engere Netzanschluss-Grenze hängt nicht daran.
+  assert.equal(s.applied.at(-1).shares['eebus:hp'], 1000);
+  assert.equal(s.applied.at(-1).until, null);
 });

@@ -278,7 +278,11 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
     st.ceilingW = down(Math.max(0, desired));
     st.ceilingUnder = 0;
   } else if (st.ceilingW < r.targetW) {
-    st.ceilingUnder = desired >= st.ceilingW + r.releaseHysteresisW ? st.ceilingUnder + 1 : 0;
+    // Luft: entweder Rückschalt-Abstand über der Decke, oder die volle Decke
+    // (Ziel) ist erreichbar — sonst erholte sich eine kleine Absenkung nie
+    // (Gesamtprüfung, P2).
+    const roomy = desired >= st.ceilingW + r.releaseHysteresisW || desired >= r.targetW;
+    st.ceilingUnder = roomy ? st.ceilingUnder + 1 : 0;
     if (st.ceilingUnder >= RELEASE_TICKS) {
       // Begrenzt nur das Gesamtziel (keine Phase drückt), zurück aufs Ziel;
       // sonst mit Rückschalt-Abstand unter dem, was die Phase zulässt.

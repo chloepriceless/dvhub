@@ -351,3 +351,10 @@ test('Codex P2 (Runde 3): kleiner Abstand — über der harten Grenze gilt die A
   }
   assert.ok(st.caps.wallbox != null, 'Wallbox gekürzt');
 });
+
+test('Gesamtprüfung P2: kleine Absenkung der Akku-Decke (unter dem Rückschalt-Abstand) erholt sich wieder', () => {
+  const st = createGuardState();
+  st.ceilingW = 27500; // kurz durch eine Phase gesenkt
+  run(st, RELEASE_TICKS + 2, { meas: fresh(15000), devices: [], battery: {} }, 0);
+  assert.equal(st.ceilingW, 28000);
+});

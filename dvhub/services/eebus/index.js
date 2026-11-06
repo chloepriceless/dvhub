@@ -817,8 +817,11 @@ export function createEebusService(ctx, deps = {}) {
       active.add(cns.entity);
       const w = shares[cns.id];
       const cached = deviceLimitCache.get(cns.entity);
-      if (cached && cached.w === w && t - cached.at < DEVICE_LIMIT_REFRESH_MS) continue;
-      deviceLimitCache.set(cns.entity, { w, at: t });
+      const until = lpc.until ?? null;
+      // Gleiche Leistung, aber andere Dauer (z. B. §14a endet, die Netzanschluss-
+      // Grenze bleibt) → neu schicken, sonst liefe sie am Gerät ab.
+      if (cached && cached.w === w && cached.until === until && t - cached.at < DEVICE_LIMIT_REFRESH_MS) continue;
+      deviceLimitCache.set(cns.entity, { w, until, at: t });
       const durationS = lpc.until ? Math.max(60, Math.round((lpc.until - t) / 1000)) : 0;
       send({ cmd: 'device_limit', uc: 'lpc', entity: cns.entity, w, duration_s: durationS, active: true })
         .then((r) => { if (!r?.ok) deviceLimitCache.delete(cns.entity); });
