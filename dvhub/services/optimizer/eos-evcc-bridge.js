@@ -246,6 +246,11 @@ export function createEosEvccBridge(deps) {
   // evcc-Modus, der nach dem Ende eines pausierten „Sofort laden“ noch
   // zurückgestellt werden muss, sobald die Grenze das Laden wieder erlaubt.
   let pendingRestore = null;
+  // Ein Override hat einen Befehl durchgebracht: er trägt den vorgemerkten
+  // Modus jetzt als prevMode und stellt ihn bei seinem Ende her.
+  function handOff() {
+    if (pendingRestore && override?.prevMode === pendingRestore.mode) pendingRestore = null;
+  }
   function gridCapBlocks(bc) {
     const capW = getGridCapW();
     if (capW == null || !Number.isFinite(Number(capW))) return false;
@@ -375,6 +380,7 @@ export function createEosEvccBridge(deps) {
         key, charger: bc.charger, action: 'stop', currentA: null, chargePowerW: 0, loadpoint: bc.loadpoint,
         mode: 'off', released: false, override: true, slotTs: null, at: new Date(now()).toISOString()
       };
+      handOff();
       pushLog('ev_override_command', lastSent);
       return { ok: true, sent: lastSent, override: true };
     }
@@ -394,6 +400,7 @@ export function createEosEvccBridge(deps) {
           mode: charger.type === 'evcc' ? 'off' : null, released: false, override: true,
           gridCapW: capped.gridCapW, at: new Date(now()).toISOString()
         };
+        handOff();
         pushLog('ev_override_grid_cap', { capW: capped.gridCapW });
       }
       return { ok: true, override: true, gridCapW: capped.gridCapW };
@@ -431,6 +438,7 @@ export function createEosEvccBridge(deps) {
       slotTs: null,
       at: new Date(now()).toISOString()
     };
+    handOff();
     pushLog('ev_override_command', lastSent);
     return { ok: true, sent: lastSent, override: true };
   }
@@ -492,18 +500,19 @@ export function createEosEvccBridge(deps) {
       // Der Plan übernimmt nur, wenn er auch steuern darf (Pro) — Codex bf805c50, P2.
       if (pendingRestore && bc.enabled && isProActive() !== false) pendingRestore = null;
       if (pendingRestore) {
+        const pr = pendingRestore; // fest für diesen Takt, auch über awaits hinweg
         if (gridCapBlocks(bc)) {
-          if (!pendingRestore.stopped) {
+          if (!pr.stopped) {
             const res = await hardStopper(cfg, { ...bc, charger: 'evcc' }, { type: 'evcc' }).stop();
-            pendingRestore.stopped = res?.ok === true;
+            pr.stopped = res?.ok === true;
             if (!res?.ok) return { ok: false, error: res?.error || 'evcc stop failed' };
           }
           return { ok: true, deferred: true };
         }
-        const res = await getCharger(cfg, { ...bc, charger: 'evcc', stopMode: pendingRestore.mode }).stop();
+        const res = await getCharger(cfg, { ...bc, charger: 'evcc', stopMode: pr.mode }).stop();
         if (!res?.ok) return { ok: false, error: res?.error || 'evcc mode restore failed' };
-        pushLog('ev_override_restored', { mode: pendingRestore.mode });
-        pendingRestore = null;
+        pushLog('ev_override_restored', { mode: pr.mode });
+        if (pendingRestore === pr) pendingRestore = null;
         lastSent = null;
         return { ok: true, restored: true };
       }
@@ -621,10 +630,9 @@ export function createEosEvccBridge(deps) {
       // Weitergabe). Laeuft schon ein Override, bleibt dessen Herkunft.
       // Steht noch ein vorgemerkter Modus aus einer Pause an, ist DAS der Modus
       // von vorher — nicht das erzwungene „aus“ (Codex bf805c50, P2).
-      if (!override && pendingRestore) {
-        next.prevMode = pendingRestore.mode;
-        pendingRestore = null;
-      } else if (!override && bc.charger === 'evcc') {
+      // Übernommen wird die Vormerkung erst im Lock (unten), abgegeben erst,
+      // wenn der Override wirklich einen Befehl durchgebracht hat (Codex 9ac450c4).
+      if (!override && !pendingRestore && bc.charger === 'evcc') {
         try {
           const st = await getCharger(cfg, bc).status();
           const own = next.kind === 'stop' ? 'off' : 'now';
@@ -632,6 +640,11 @@ export function createEosEvccBridge(deps) {
         } catch { /* ohne Vorher-Modus: Ende = Stopp-Modus */ }
       }
       return locked(async () => {
+        // Vorgemerkter Modus aus einer Pause: DAS ist der Modus von vorher. Die
+        // Pflicht bleibt bei der Vormerkung, bis ein Befehl des Overrides
+        // ankommt (handOff) — scheitert er oder endet der Override vorher,
+        // stellt runTick den Modus weiter her (Codex 9ac450c4, P2).
+        if (!override && pendingRestore) next.prevMode = pendingRestore.mode;
         // Beim Wechsel der Leistung bleibt die Herkunft (Startzeit, Modus) erhalten.
         if (override) {
           next.startedAt = override.startedAt;

@@ -243,3 +243,56 @@ test('Codex P2 (Runde 4): neues „Sofort laden“ während der vorgemerkten Rü
   await bridge.clearOverride();
   assert.deepEqual(calls.at(-1), ['stop', 'pv']);
 });
+
+function evccBridgeCtl({ override }) {
+  const calls = [];
+  const ctl = { capW: 0, stopFails: false, stopGate: null };
+  const mk = (bc) => ({
+    type: 'evcc', isConfigured: () => true,
+    charge: async (a) => { calls.push(['charge', a]); return { ok: true }; },
+    stop: async () => {
+      calls.push(['stop', bc.stopMode]);
+      if (ctl.stopGate) await ctl.stopGate;
+      return ctl.stopFails ? { ok: false, error: 'evcc nicht erreichbar' } : { ok: true };
+    },
+    release: async () => ({ ok: true }),
+    status: async () => ({ ok: true, connected: true, raw: { mode: 'off' } }),
+  });
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type: 'evcc' } };
+  const bridge = createEosEvccBridge({ getCfg: () => cfg, getSolution: async () => null, getCharger: (_c, bc) => mk(bc), getGridCapW: () => ctl.capW, loadOverride: () => override });
+  return { bridge, calls, ctl };
+}
+
+test('Codex P2 (Runde 5): neues „Sofort laden“, dessen erster Befehl scheitert — der vorgemerkte Modus geht nicht verloren', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
+  const { bridge, calls, ctl } = evccBridgeCtl({ override });
+  await bridge.apply();
+  await bridge.clearOverride(); // Pause bleibt, „pv“ vorgemerkt
+  ctl.stopFails = true;
+  await bridge.setOverride({ kind: 'charge', powerW: 11000 }); // erster Befehl (Pause) scheitert
+  await bridge.clearOverride(); // nie angewendet
+  ctl.stopFails = false;
+  ctl.capW = null;
+  await bridge.tick();
+  assert.deepEqual(calls.at(-1), ['stop', 'pv'], 'evcc zurück auf „pv“');
+});
+
+test('Codex P2 (Runde 5): „Sofort laden“ während der verzögerten Rückkehr — kein Absturz, Rückkehr läuft durch', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
+  const { bridge, calls, ctl } = evccBridgeCtl({ override });
+  await bridge.apply();
+  await bridge.clearOverride();
+  ctl.capW = null;
+  let release;
+  ctl.stopGate = new Promise((r) => { release = r; });
+  const tickP = bridge.tick();
+  await new Promise((r) => setImmediate(r));
+  const ovP = bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  await new Promise((r) => setImmediate(r));
+  ctl.stopGate = null;
+  release();
+  const res = await tickP;
+  await ovP;
+  assert.notEqual(res?.ok, false, JSON.stringify(res));
+  assert.ok(calls.some((c) => c[0] === 'stop' && c[1] === 'pv'), 'Rückkehr auf „pv“ abgeschlossen');
+});
