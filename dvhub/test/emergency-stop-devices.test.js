@@ -19,6 +19,7 @@ import { createEosEvccBridge } from '../services/optimizer/eos-evcc-bridge.js';
 import { createMypvRegulator } from '../services/devices/mypv-regulator.js';
 import { createEosDeviceBridge } from '../services/optimizer/eos-device-bridge.js';
 import { createGridConnectionGuard } from '../services/grid-connection/index.js';
+import { createEvccAdapter } from '../services/wallbox/adapters.js';
 
 // --- Not-Halt-Kommando ---------------------------------------------------------
 
@@ -272,4 +273,163 @@ test('Netzanschluss-Wächter bricht den Not-Halt nicht durch: keine Grenzen, kei
   state.ctrl.discretionaryWritesPaused = false;
   guard.tick();
   assert.equal(guard.capW('wallbox'), 7000, 'nach dem Aufheben regelt er wieder (32 − 28 = 4 kW weniger)');
+});
+
+// --- Codex 45b7c40b ---------------------------------------------------------------
+
+test('Codex P1: Geräte-Brücke — ein laufender Takt schreibt nach der Neutralisierung nicht wieder Leistung', async () => {
+  const act = fakeActuator();
+  const state = { ctrl: {}, optimizer: {}, victron: { solarToGridW: 3000, gridImportW: 0, batteryDischargeW: 0 } };
+  let gate = null;
+  const heaterEv = { ...elwa, plan: { ...elwa.plan, pauseWhileEvCharging: true } };
+  const b = createEosDeviceBridge({
+    getCfg: () => ({ devices: [heaterEv] }), getSolution: async () => ({ rows: [] }), actuator: act, state,
+    isEvCharging: async () => { if (gate) await gate; return false; },
+  });
+  await b.tick();
+  assert.ok(act.calls.at(-1).powerW > 0);
+  let release;
+  gate = new Promise((r) => { release = r; });
+  const inflight = b.tick({ force: true });
+  await new Promise((r) => setImmediate(r));
+  state.ctrl.discretionaryWritesPaused = true;
+  const stopP = b.emergencyStop();
+  release();
+  await inflight;
+  await stopP;
+  assert.equal(act.calls.at(-1).powerW, 0, 'zuletzt 0 W');
+});
+
+test('Codex P1: my-PV — erster Leistungs-Befehl noch unterwegs, dann Not-Halt → danach 0 W', async () => {
+  const NOW = 1_700_000_000_000;
+  const writes = [];
+  let gate = null;
+  const state = { meter: { ok: true, updatedAt: NOW }, victron: { gridExportW: 9000, gridImportW: 0, batteryDischargeW: 0, soc: 60 }, ctrl: {}, optimizer: {} };
+  const cfg = { devices: [{ id: 'heizstab', name: 'Heizstab', kind: 'modulating', schedulable: true, plan: { maxPowerW: 9000, intervalS: 5 }, endpoint: { type: 'mypv', host: '192.0.2.20' } }] };
+  const reg = createMypvRegulator({
+    getCfg: () => cfg, state, now: () => NOW,
+    createClient: () => ({ read: async () => ({ powerW: 0, deviceOn: true }), writePower: async (w) => { if (gate && w > 0) await gate; writes.push(w); return w; }, close() {} })
+  });
+  let release;
+  gate = new Promise((r) => { release = r; });
+  const tickP = reg.tick();
+  await new Promise((r) => setImmediate(r));
+  state.ctrl.discretionaryWritesPaused = true;
+  const stopP = reg.emergencyStop();
+  release();
+  await tickP;
+  await stopP;
+  assert.ok(writes.some((w) => w > 0), 'positiver Befehl kam an');
+  assert.equal(writes.at(-1), 0, 'danach 0 W');
+});
+
+test('Codex P2: my-PV — Neutralisierung richtet sich nach dem zuletzt ERFOLGREICH geschriebenen Wert', async () => {
+  const NOW = 1_700_000_000_000;
+  let t = NOW;
+  const writes = [];
+  let fail = false;
+  const state = { meter: { ok: true, updatedAt: NOW }, victron: { gridExportW: 9000, gridImportW: 0, batteryDischargeW: 0, soc: 60 }, ctrl: {}, optimizer: {} };
+  const cfg = { devices: [{ id: 'heizstab', name: 'Heizstab', kind: 'modulating', schedulable: true, plan: { maxPowerW: 9000, intervalS: 5 }, endpoint: { type: 'mypv', host: '192.0.2.20' } }] };
+  const reg = createMypvRegulator({
+    getCfg: () => cfg, state, now: () => t,
+    createClient: () => ({ read: async () => ({ powerW: 0, deviceOn: true }), writePower: async (w) => { if (fail) throw new Error('timeout'); writes.push(w); return w; }, close() {} })
+  });
+  for (let i = 0; i < 4; i += 1) { await reg.tick(); t += 5000; state.meter.updatedAt = t; }
+  assert.ok(writes.at(-1) > 0);
+  state.victron.gridExportW = 0; state.victron.gridImportW = 500; // Regler will sofort 0 …
+  fail = true;                    // … aber der Write scheitert
+  await reg.tick(); t += 5000; state.meter.updatedAt = t;
+  fail = false;
+  state.ctrl.discretionaryWritesPaused = true;
+  await reg.emergencyStop();
+  assert.equal(writes.at(-1), 0, 'der positive Befehl wird zurückgenommen');
+});
+
+test('Codex P2: evcc — Besitz wird mit FRISCHEM Zustand geprüft (Cache sagt „now“, evcc steht auf „minpv“)', async () => {
+  const lp = { id: 1, mode: 'now', connected: true, charging: true };
+  let real = 'now';
+  const calls = [];
+  const evcc = {
+    getStatus: () => ({ url: 'http://evcc.local:7070' }),
+    getLoadpoints: () => [{ ...lp }],
+    refresh: async () => { lp.mode = real; return true; },
+    setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', id, a]); return { ok: true }; },
+    setMode: async (id, m) => { calls.push(['mode', id, m]); lp.mode = m; real = m; return { ok: true }; },
+  };
+  const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, evStopMode: 'pv' } };
+  let paused = false;
+  const t = Date.now();
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg,
+    getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
+    getCharger: (_c, bc) => createEvccAdapter(evcc, () => bc.loadpoint, () => bc.stopMode),
+    isPaused: () => paused, now: () => t,
+  });
+  await bridge.tick();
+  real = 'minpv'; // in der evcc-App umgestellt, DVhubs Cache weiß es noch nicht
+  paused = true;
+  const n = calls.length;
+  const r = await bridge.emergencyStop();
+  assert.equal(r.skipped, 'not_dvhub_state');
+  assert.equal(calls.length, n);
+});
+
+test('Codex P2: evcc — neutralisiert wird der Ladepunkt des letzten Befehls, nicht ein inzwischen anders eingestellter', async () => {
+  const lps = { 1: 'pv', 2: 'now' };
+  const calls = [];
+  const evcc = {
+    getStatus: () => ({ url: 'http://evcc.local:7070' }),
+    getLoadpoints: () => [{ id: 1, mode: lps[1], connected: true }, { id: 2, mode: lps[2], connected: true }],
+    refresh: async () => true,
+    setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', id, a]); return { ok: true }; },
+    setMode: async (id, m) => { calls.push(['mode', id, m]); lps[id] = m; return { ok: true }; },
+  };
+  const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' } };
+  let paused = false;
+  const t = Date.now();
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg,
+    getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
+    getCharger: (_c, bc) => createEvccAdapter(evcc, () => bc.loadpoint, () => bc.stopMode),
+    isPaused: () => paused, now: () => t,
+  });
+  await bridge.tick();
+  assert.equal(lps[1], 'now');
+  cfg.optimizer.evEvccLoadpoint = 2; // umgestellt, Ladepunkt 2 lädt von Hand
+  paused = true;
+  await bridge.emergencyStop();
+  assert.equal(lps[1], 'off', 'DVhubs Ladepunkt 1 aus');
+  assert.equal(lps[2], 'now', 'Handladung an Ladepunkt 2 unberührt');
+});
+
+test('Codex P2: im Not-Halt beendetes „Sofort laden“ — vorgemerkter Modus übersteht einen Neustart', async () => {
+  const store = { value: { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' } };
+  const calls = [];
+  let paused = false;
+  let mode = 'pv';
+  const mk = (bc) => ({
+    type: 'evcc', isConfigured: () => true,
+    charge: async (a) => { calls.push(['charge', a]); mode = 'now'; return { ok: true }; },
+    stop: async () => { calls.push(['stop', bc.stopMode]); mode = bc.stopMode; return { ok: true }; },
+    release: async () => ({ ok: true }),
+    status: async () => ({ ok: true, connected: true, raw: { mode } }),
+  });
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type: 'evcc' } };
+  const make = () => createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null, getCharger: (_c, bc) => mk(bc), getGridCapW: () => null,
+    isPaused: () => paused,
+    loadOverride: () => store.value,
+    saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
+  });
+  const bridge = make();
+  await bridge.apply();
+  paused = true;
+  await bridge.emergencyStop();
+  await bridge.clearOverride();
+  const fresh = make(); // Neustart im Not-Halt
+  await fresh.tick();
+  assert.deepEqual(calls.at(-1), ['stop', 'off'], 'im Not-Halt nichts');
+  paused = false;
+  await fresh.tick();
+  assert.deepEqual(calls.at(-1), ['stop', 'pv'], 'nach dem Aufheben zurück auf „pv“');
 });

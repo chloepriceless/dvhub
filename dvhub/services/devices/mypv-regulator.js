@@ -205,6 +205,7 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     try {
       // In jedem Takt schreiben: der „Power Timeout“ des Geräts schaltet sonst ab.
       await client.writePower(decision.powerW);
+      rt.applied = decision.powerW; // zuletzt ERFOLGREICH geschriebene Vorgabe
       if (rt.error?.startsWith('Schreiben')) rt.error = null;
     } catch (e) {
       const msg = `Schreiben: ${String(e?.message || e).slice(0, 120)}`;
@@ -218,8 +219,14 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     rt.lastTickMs = t;
   }
 
-  async function tick() {
-    if (running) return;
+  let inflight = null;
+  function tick() {
+    if (running) return inflight || Promise.resolve();
+    inflight = tickInner().finally(() => { inflight = null; });
+    return inflight;
+  }
+
+  async function tickInner() {
     running = true;
     try {
       const { devices: all } = loadSchedulableDevices(getCfg());
@@ -273,13 +280,18 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
      * dann kein Befehl. Danach schreibt der Regler nichts (Takt prüft die Pause).
      */
     async emergencyStop() {
+      // Einen laufenden Takt abwarten — sein Befehl kann noch unterwegs sein
+      // (Codex 45b7c40b, P1); danach schreibt er wegen der Pause nichts mehr.
+      if (inflight) { try { await inflight; } catch { /* egal */ } }
       const errors = [];
       for (const [id, c] of clients) {
         const rt = devices.get(id);
-        if (!rt || !(Number(rt.setpoint) > 0)) continue;
+        // Maßgeblich ist, was zuletzt wirklich am Gerät ankam (Codex 45b7c40b, P2).
+        if (!rt || !(Number(rt.applied) > 0)) continue;
         try {
           await c.client.writePower(0);
           rt.setpoint = 0;
+          rt.applied = 0;
           rt.reason = 'Not-Halt — DVhub steuert nicht';
           pushLog('mypv_emergency_stop', { id });
         } catch (e) {

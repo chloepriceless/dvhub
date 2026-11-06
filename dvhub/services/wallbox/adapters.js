@@ -345,7 +345,14 @@ export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
       // im zuletzt gesetzten Modus und schaltet dort selbst um.
       return { ok: true };
     },
-    async status() {
+    // fresh: erst evcc neu abfragen (Not-Halt prüft so, ob der Modus noch
+    // DVhubs ist); ohne frische Antwort kein Ergebnis.
+    async status({ fresh = false } = {}) {
+      if (fresh) {
+        if (typeof evccIntegration?.refresh !== 'function') return { ok: false, error: 'keine frische Abfrage möglich' };
+        const ok = await evccIntegration.refresh();
+        if (!ok) return { ok: false, error: 'evcc nicht erreichbar' };
+      }
       const lp = (evccIntegration?.getLoadpoints?.() || []).find((l) => l.id === getLoadpoint());
       if (!lp) return { ok: false, error: 'Ladepunkt nicht gefunden' };
       return { ok: true, connected: lp.connected, charging: lp.charging, powerW: lp.chargePowerW, currentA: null, vehicleSocPct: lp.vehicleSocPct, raw: { mode: lp.mode } };

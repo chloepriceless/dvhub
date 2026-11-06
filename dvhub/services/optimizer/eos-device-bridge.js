@@ -122,6 +122,9 @@ export function createEosDeviceBridge(deps) {
   let lastStatus = [];
 
   async function actuate(device, command) {
+    // Not-Halt kann mitten im Takt kommen (z. B. während isEvCharging()):
+    // dann nichts mehr schalten (Codex 45b7c40b, P1).
+    if (state?.ctrl?.discretionaryWritesPaused === true) return { ok: false, skipped: 'paused' };
     lastDevice.set(device.id, device);
     const key = actuator.commandKey(device, command);
     if (lastCmd.get(device.id) === key) return { unchanged: true, command };
@@ -149,8 +152,14 @@ export function createEosDeviceBridge(deps) {
     }
   }
 
-  async function tick({ force = false } = {}) {
-    if (ticking) return { ok: false, error: 'busy' };
+  let inflight = null;
+  function tick(opts = {}) {
+    if (ticking) return Promise.resolve({ ok: false, error: 'busy' });
+    inflight = tickInner(opts).finally(() => { inflight = null; });
+    return inflight;
+  }
+
+  async function tickInner({ force = false } = {}) {
     ticking = true;
     lastTickAt = now();
     if (force) lastCmd.clear();
@@ -258,6 +267,8 @@ export function createEosDeviceBridge(deps) {
      * Aufheben schickt sie ihre Befehle neu (lastCmd geleert).
      */
     async emergencyStop() {
+      // Einen laufenden Takt abwarten — sein Befehl kann noch unterwegs sein.
+      if (inflight) { try { await inflight; } catch { /* egal */ } }
       const errors = [];
       for (const [id, dev] of lastDevice) {
         if (dev.kind !== 'modulating' || !(Number(lastPower.get(id)) > 0)) continue;
