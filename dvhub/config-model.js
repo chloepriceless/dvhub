@@ -1242,6 +1242,22 @@ function buildFieldDefinitions() {
       section: 'system',
       group: 'gridConnection',
       groupLabel: 'Netzanschluss – Bezugsgrenze',
+      path: 'gridConnection.batteryPhases',
+      label: 'Akku-Wechselrichter am Anschluss',
+      type: 'select',
+      options: [
+        { value: '', label: 'Unbekannt' },
+        { value: 'three', label: 'Dreiphasig' },
+        { value: 'L1', label: 'Einphasig auf L1' },
+        { value: 'L2', label: 'Einphasig auf L2' },
+        { value: 'L3', label: 'Einphasig auf L3' }
+      ],
+      help: 'Nur mit Grenze je Phase wichtig: Lädt der Akku aus dem Netz, gibt der Wechselrichter diese Leistung zuerst frei — dreiphasig gleich verteilt, einphasig auf seiner Phase. DVhub zählt sie dann als Luft je Phase und gibt eine gesperrte Wallbox früher frei. Unbekannt = keine Gutschrift (sicher, aber die Wallbox bleibt eventuell länger gesperrt).'
+    },
+    {
+      section: 'system',
+      group: 'gridConnection',
+      groupLabel: 'Netzanschluss – Bezugsgrenze',
       path: 'gridConnection.order',
       label: 'Reihenfolge beim Zurücknehmen',
       type: 'select',
@@ -4750,7 +4766,7 @@ export function createDefaultConfig() {
     // der Betreiber wählt, welche Grenze für die Anlage gilt, oder „keine“.
     feedInCap: { mode: '', percent: null, watts: null },
     // Netzanschluss (services/grid-connection): ab Werk leer = DVhub begrenzt nicht.
-    gridConnection: { limitKw: null, marginW: null, phaseLimitA: null, releaseHysteresisW: 1000, baseLoadW: 1000, order: 'wallbox_first' },
+    gridConnection: { limitKw: null, marginW: null, phaseLimitA: null, releaseHysteresisW: 1000, baseLoadW: 1000, order: 'wallbox_first', batteryPhases: '' },
     // Peak Shaving (GitHub #28, services/peak-shaving): ab Werk aus, ohne Grenze.
     peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null },
     multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300 },

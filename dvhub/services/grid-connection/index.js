@@ -45,7 +45,10 @@ export const GRID_CONNECTION_DEFAULTS = Object.freeze({
   phaseLimitA: null,
   releaseHysteresisW: 1000,
   baseLoadW: 1000,
-  order: 'wallbox_first'
+  order: 'wallbox_first',
+  // Wie der Akku-Wechselrichter am Anschluss hängt: '' unbekannt (keine
+  // Gutschrift je Phase), 'three' dreiphasig, 'L1'/'L2'/'L3' einphasig.
+  batteryPhases: ''
 });
 
 /** Reihenfolge, in der die steuerbaren Lasten nachgeben (der Akku immer zuerst). */
@@ -118,6 +121,7 @@ export function resolveGridConnection(cfg = {}) {
     ? Math.round(Number(c.baseLoadW)) : GRID_CONNECTION_DEFAULTS.baseLoadW;
   const baseLoadW = targetW == null ? baseRaw : Math.min(baseRaw, targetW);
   const orderKey = ORDER_PRESETS[c.order] ? c.order : GRID_CONNECTION_DEFAULTS.order;
+  const batteryPhases = ['three', 'L1', 'L2', 'L3'].includes(c.batteryPhases) ? c.batteryPhases : null;
   const manufacturer = String(cfg?.manufacturer || 'victron');
   const reason = !set ? 'not_set' : !valid ? 'limit_invalid' : null;
   return {
@@ -134,6 +138,7 @@ export function resolveGridConnection(cfg = {}) {
     baseLoadW,
     orderKey,
     order: ORDER_PRESETS[orderKey],
+    batteryPhases,
     manufacturer,
     // Akku-Hebel = positiver Netz-Sollwert als Bezug am Zähler (Victron ESS).
     batterySupported: manufacturer === 'victron'
@@ -381,11 +386,15 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   // Lädt der Akku gerade aus dem Netz, ist seine Ladung freie Leistung für die
   // Geräte — er gibt zuerst nach, der Multi hält den Bezug auf dem Sollwert.
   if (sp != null && !batteryStuck) headroom += chargeW;
-  // Je Phase zählt nur die GEMESSENE Luft: ob der Akku auf derselben Phase
-  // lädt, weiß DVhub nicht (einphasiger Multi an dreiphasigem Anschluss).
-  // Sicherheit vor Komfort — der Akku gibt über die Decke nach, nicht über die
-  // Freigabe (Codex bcbfaff1, P1).
-  const phaseRoomEff = phaseRoom;
+  // Je Phase: gemessene Luft plus die Akku-Netzladung, die der Multi auf
+  // DIESER Phase freigibt — dreiphasig ein Drittel je Phase, einphasig alles
+  // auf seiner Phase. Unbekannt: keine Gutschrift (Codex bcbfaff1, P1).
+  let phaseRoomEff = phaseRoom;
+  if (phases && r.batteryPhases && sp != null && !batteryStuck && chargeW > 0) {
+    const credit = r.batteryPhases === 'three' ? [chargeW / 3, chargeW / 3, chargeW / 3]
+      : ['L1', 'L2', 'L3'].map((l) => (l === r.batteryPhases ? chargeW : 0));
+    phaseRoomEff = Math.min(...phases.map((p, i) => r.phaseTargetW - p + credit[i]));
+  }
   if (headroom >= r.releaseHysteresisW) st.underSince ??= now;
   else st.underSince = null;
   if (st.underSince == null || now - st.underSince < RELEASE_MS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();

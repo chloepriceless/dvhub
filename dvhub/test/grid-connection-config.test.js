@@ -24,7 +24,7 @@ test('Einstellungsfelder: eigene Gruppe in „Netz & Recht“, NICHT beta, nicht
   const fields = def.fields.filter((f) => String(f.path || '').startsWith('gridConnection.'));
   const byPath = Object.fromEntries(fields.map((f) => [f.path, f]));
   assert.deepEqual(Object.keys(byPath).sort(), [
-    'gridConnection.baseLoadW', 'gridConnection.limitKw', 'gridConnection.marginW',
+    'gridConnection.baseLoadW', 'gridConnection.batteryPhases', 'gridConnection.limitKw', 'gridConnection.marginW',
     'gridConnection.order', 'gridConnection.phaseLimitA', 'gridConnection.releaseHysteresisW'
   ]);
   for (const f of fields) {

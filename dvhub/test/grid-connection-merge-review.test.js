@@ -883,3 +883,38 @@ test('Codex f42f6217 P2: openWB — gehaltene Freigabe macht den alten Befehl un
   await h.bridge.tick();
   assert.deepEqual(h.calls.at(-1), ['charge', 'openwb', 8.6], 'Grenz-Vorgabe neu geschickt');
 });
+
+// --- Punkt 5: Akku-Netzladung je Phase als Luft (Einstellung batteryPhases) ---------------
+
+test('Punkt 5: dreiphasiger Multi — Akku-Ladung zählt gleichverteilt je Phase, die Wallbox kommt zurück', () => {
+  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40, batteryPhases: 'three' } });
+  assert.equal(RP.batteryPhases, 'three');
+  const st = createGuardState();
+  st.caps = { wallbox: 0 };
+  st.capAt = { wallbox: 0 };
+  const wb3 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 0, maxW: 11000, minW: 4140, phases: 3 };
+  for (let i = 0; i < 40; i += 1) {
+    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 26400, phasesW: [8800, 8800, 8800] }, devices: [wb3], battery: { setpointW: 26400, chargeW: 24000 } });
+  }
+  assert.equal(st.caps.wallbox, undefined, 'freigegeben');
+});
+
+test('Punkt 5: einphasiger Multi auf L2 — Luft nur auf L2, eine einphasige Wallbox (Phase unbekannt) bleibt aus', () => {
+  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40, batteryPhases: 'L2' } });
+  const st = createGuardState();
+  st.caps = { wallbox: 0 };
+  st.capAt = { wallbox: 0 };
+  const wb1 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 0, maxW: 3680, minW: 1380, phases: 1 };
+  for (let i = 0; i < 40; i += 1) {
+    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 16800, phasesW: [8800, 6000, 2000] }, devices: [wb1], battery: { setpointW: 16800, chargeW: 6000 } });
+  }
+  assert.equal(st.caps.wallbox, 0);
+});
+
+test('Punkt 5: Einstellung „Akku-Phasen“ unter Netz & Recht, Standard unbekannt (keine Gutschrift)', async () => {
+  const { getConfigDefinition, createDefaultConfig } = await import('../config-model.js');
+  const f = getConfigDefinition().fields.find((x) => x.path === 'gridConnection.batteryPhases');
+  assert.ok(f && f.type === 'select');
+  assert.equal(createDefaultConfig().gridConnection.batteryPhases, '');
+  assert.equal(resolveGridConnection({ gridConnection: { limitKw: 29 } }).batteryPhases, null);
+});
