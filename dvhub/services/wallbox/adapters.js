@@ -120,6 +120,14 @@ export function createOpenEvseAdapter(getSettings) {
       // 404 = es gab keinen Claim — Ziel erreicht.
       return res.ok || res.status === 404 ? { ok: true } : res;
     },
+    // Not-Halt: steht DVhubs eigener Auftrag noch auf „aktiv“? Ohne lesbare
+    // Auftragsliste: unbekannt.
+    async dvhubState() {
+      const claims = await request(`${base()}/claims`, opts());
+      if (!claims.ok || !Array.isArray(claims.data)) return { known: false };
+      const own = claims.data.find((c) => c && Number(c.client) === OPENEVSE_DVHUB_CLIENT);
+      return { known: true, active: own?.state === 'active' };
+    },
     async status() {
       const res = await request(`${base()}/status`, opts());
       if (!res.ok || typeof res.data !== 'object') return { ok: false, error: res.error || 'no status' };
@@ -169,6 +177,13 @@ export function createGoeAdapter(getSettings) {
     async release() {
       return expectOk(await set('frc=0'));
     },
+    // Not-Halt: DVhub lädt mit frc=2 und seinem Strom — beides muss noch stehen.
+    async dvhubState(ref = {}) {
+      const res = await request(`${base()}/api/status?filter=amp,frc`, opts());
+      if (!res.ok || typeof res.data !== 'object') return { known: false };
+      const ampOk = ref.currentA == null || Number(res.data.amp) === wholeAmps(ref.currentA);
+      return { known: true, active: Number(res.data.frc) === 2 && ampOk };
+    },
     async status() {
       const res = await request(`${base()}/api/status?filter=car,amp,frc,alw,nrg,fwv`, opts());
       if (!res.ok || typeof res.data !== 'object') return { ok: false, error: res.error || 'no status' };
@@ -216,6 +231,11 @@ export function createWattpilotAdapter(getSettings, deps) {
     },
     async release() {
       return conn().setValue('frc', 0);
+    },
+    async dvhubState() {
+      const res = await conn().readStatus();
+      if (!res.ok) return { known: false };
+      return { known: true, active: Number(res.status?.frc) === 2 };
     },
     async status() {
       const res = await conn().readStatus();
@@ -303,6 +323,16 @@ export function createVictronEvcsAdapter(getSettings, deps = {}) {
       await write(t, EVCS.mode, EVCS_AUTO);
       return { ok: true };
     }),
+    // Not-Halt: Manuell + Start und DVhubs Strom stehen noch?
+    dvhubState: async (ref = {}) => {
+      const t = target();
+      if (!t) return { known: false };
+      try {
+        const d = await readBlock(t);
+        const ampOk = ref.currentA == null || Number(d.setCurrentA) <= wholeAmps(ref.currentA);
+        return { known: true, active: d.mode === EVCS_MANUAL && d.startStop === 1 && ampOk };
+      } catch { return { known: false }; }
+    },
     status: () => guarded(async (t) => {
       const d = await readBlock(t);
       const s = d.status;

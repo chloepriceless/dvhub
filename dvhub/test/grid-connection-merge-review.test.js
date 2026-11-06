@@ -171,6 +171,7 @@ test('Codex 180dbd00 P1: release() ohne Wirkung (openWB) bestätigt keinen Stopp
       stop: async () => { calls.push(['stop']); box.charging = false; return { ok: true }; },
       release: async () => { calls.push(['release']); return { ok: true }; }, // lässt den Strom stehen
       status: async () => ({ ok: true, connected: true }),
+      dvhubState: async () => ({ known: true, active: box.charging }),
     }),
     isPaused: () => paused, now: () => t,
   });
@@ -267,6 +268,7 @@ function directBox({ type = 'openevse', stopMode = 'pv' } = {}) {
       stop: async () => { calls.push(['stop']); box.claim = 'disabled'; return { ok: true }; },
       release: async () => { calls.push(['release']); box.claim = null; return { ok: true }; },
       status: async () => ({ ok: true, connected: true }),
+      dvhubState: async () => ({ known: true, active: box.claim === 'charge' }),
     }),
     isPaused: () => ref.paused, now: () => t,
   });
@@ -498,6 +500,7 @@ function directBridge({ type = 'openevse', enabled = false, store = { value: nul
       stop: async () => { calls.push(['stop', bc.charger, bc.stopMode]); return h.stopFails ? { ok: false, error: 'timeout' } : { ok: true }; },
       release: async () => { calls.push(['release', bc.charger]); return { ok: true }; },
       status: async () => ({ ok: true, connected: true, raw: { mode: 'now' } }),
+      dvhubState: async () => ({ known: true, active: true }),
     }),
     getGridCapW: () => capRef.capW,
     isPaused: () => paused.v,
@@ -917,4 +920,73 @@ test('Punkt 5: Einstellung „Akku-Phasen“ unter Netz & Recht, Standard unbeka
   assert.ok(f && f.type === 'select');
   assert.equal(createDefaultConfig().gridConnection.batteryPhases, '');
   assert.equal(resolveGridConnection({ gridConnection: { limitKw: 29 } }).batteryPhases, null);
+});
+
+// --- Punkte 1 und 2: Geräte-Identität, frischer Zustand direkter Boxen -----------------
+
+import { createOpenEvseAdapter, createGoeAdapter } from '../services/wallbox/adapters.js';
+
+function identityBridge({ type = 'goe', settings = { url: 'http://192.0.2.10' }, dvhubState = async () => ({ known: true, active: true }) } = {}) {
+  const calls = [];
+  const cfg = { optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type, [type]: { ...settings } } };
+  let paused = false;
+  const t = Date.now();
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg,
+    getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
+    getCharger: () => ({
+      type, isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', cfg.wallbox[type].url, a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop', cfg.wallbox[type].url]); return { ok: true }; },
+      release: async () => { calls.push(['release', cfg.wallbox[type].url]); return { ok: true }; },
+      status: async () => ({ ok: true, connected: true }),
+      dvhubState,
+    }),
+    isPaused: () => paused, now: () => t,
+  });
+  return { bridge, calls, cfg, setPaused: (v) => { paused = v; } };
+}
+
+test('Punkt 1: neue Adresse der Wallbox → Not-Halt fasst das neue Gerät nicht an (Eigentum verfällt)', async () => {
+  const h = identityBridge();
+  await h.bridge.tick();                    // lädt Box A
+  h.cfg.wallbox.goe.url = 'http://192.0.2.11'; // jetzt Box B eingetragen
+  h.setPaused(true);
+  const n = h.calls.length;
+  const r = await h.bridge.emergencyStop();
+  assert.equal(h.calls.length, n, 'kein Befehl an Box B');
+  assert.equal(r.skipped, 'identity_changed');
+});
+
+test('Punkt 2: direkte Box noch in DVhubs Zustand → einmal stoppen', async () => {
+  const h = identityBridge();
+  await h.bridge.tick();
+  h.setPaused(true);
+  await h.bridge.emergencyStop();
+  assert.equal(h.calls.at(-1)[0], 'stop');
+});
+
+test('Punkt 2: direkte Box in der App umgestellt → nichts senden', async () => {
+  const h = identityBridge({ dvhubState: async () => ({ known: true, active: false }) });
+  await h.bridge.tick();
+  h.setPaused(true);
+  const n = h.calls.length;
+  const r = await h.bridge.emergencyStop();
+  assert.equal(h.calls.length, n);
+  assert.equal(r.skipped, 'not_dvhub_state');
+});
+
+test('Punkt 2: Adapter kann den Zustand nicht lesen → nichts senden (im Zweifel nicht)', async () => {
+  const h = identityBridge({ dvhubState: null });
+  await h.bridge.tick();
+  h.setPaused(true);
+  const n = h.calls.length;
+  const r = await h.bridge.emergencyStop();
+  assert.equal(h.calls.length, n);
+  assert.equal(r.skipped, 'state_unknown');
+});
+
+test('Punkt 2: go-e und OpenEVSE lesen DVhubs Zustand (frc=2 bzw. eigener aktiver Claim)', async () => {
+  assert.equal(typeof createGoeAdapter(() => ({ url: 'http://x' })).dvhubState, 'function');
+  assert.equal(typeof createOpenEvseAdapter(() => ({ url: 'http://x' })).dvhubState, 'function');
 });

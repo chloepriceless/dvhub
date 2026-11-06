@@ -133,6 +133,14 @@ export function createOpenWbAdapter(getSettings, deps = {}) {
     // Ohne übergeordneten Regler gibt es keinen eigenen Automatikbetrieb der
     // Box — die letzte Vorgabe bleibt (Modus „secondary“: solange DVhub lebt).
     release: async () => (isReadOnlyMode() ? READ_ONLY : { ok: true }),
+    // Not-Halt: openWB ohne übergeordneten Regler folgt nur DVhub — steht der
+    // angebotene Strom noch auf DVhubs Wert?
+    async dvhubState(ref = {}) {
+      const st = await this.status();
+      if (!st?.ok || st.currentA == null) return { known: false };
+      if (ref.currentA == null) return { known: false };
+      return { known: true, active: Math.abs(Number(st.currentA) - wholeAmps(ref.currentA)) < 1 };
+    },
     async status() {
       if (!host()) return { ok: false, error: 'openWB: keine Adresse eingetragen' };
       if (mode() === 'pro') {
