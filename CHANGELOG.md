@@ -46,14 +46,19 @@ verweist hierher.
   „Laden stoppen“ hält nicht mehr gegen eine Handladung. Der Netzanschluss-Wächter greift im Not-Halt nicht ein.
   Fehlschläge werden geloggt und nicht wiederholt. Nach dem Aufheben übernimmt die normale Steuerung. Verschiebbare
   Geräte (Geschirrspüler) bleiben unberührt.
-- **„Sofort laden“-Ende bei Not-Halt oder Leistungsgrenze: Hinweis statt automatischer Rückkehr.** Endet „Sofort laden“
-  (evcc, EOS-Weitergabe aus), während der Not-Halt oder eine Leistungsgrenze (Netzanschluss/§14a) aktiv ist, stellt
-  DVhub den evcc-Modus von vorher nicht mehr zeitversetzt her. evcc bleibt aus bzw. unverändert. Log
-  (`ev_override_restore_skipped`) und E-Auto-Status nennen den Modus von vorher, damit man ihn in evcc wählen kann.
-  Ein neues „Sofort laden“ am selben Ladepunkt übernimmt ihn. Bewusst weniger Komfort zugunsten einer überschaubaren
-  Zustandsführung: Die Wallbox-Brücke führt je Ziel genau einen Datensatz (letzter Befehl, quittiert ja/nein,
-  Grenz-Vorgabe), gespeichert in `ev_owned.json`. Ist eine Grenze aktiv, heißt ein Stopp immer „aus“. Scheitert der
-  harte Stopp beim Ende, bleibt die Wallbox als „Laden stoppen“ aus, bis man ihn beendet oder absteckt.
+- **„Sofort laden“-Ende bei Not-Halt oder Leistungsgrenze.** Endet „Sofort laden“ (evcc, EOS-Weitergabe aus), während
+  der Not-Halt oder eine Leistungsgrenze (Netzanschluss/§14a) aktiv ist, bleibt evcc aus bzw. unverändert. Den Modus von
+  vorher stellt DVhub zurück, sobald keine Grenze mehr gilt und der Not-Halt aufgehoben ist — aber nur, wenn evcc frisch
+  abgefragt noch auf DVhubs „aus“ steht (sonst hat man selbst umgestellt). Der E-Auto-Status zeigt, was aussteht.
+  Ist eine Grenze aktiv, heißt ein Stopp immer „aus“. Scheitert der harte Stopp beim Ende, bleibt die Wallbox als
+  „Laden stoppen“ aus, bis man ihn beendet oder absteckt. Die Wallbox-Brücke führt je Gerät genau einen Datensatz
+  (Geräte-Identität, letzter Befehl, quittiert ja/nein, Grenz-Vorgabe, ausstehende Rückkehr) in `ev_owned.json`.
+- **Not-Halt und direkt angebundene Wallboxen:** DVhub stoppt eine direkte Box nur, wenn sie frisch gelesen noch in
+  DVhubs Zustand steht (go-e/Wattpilot, OpenEVSE, Victron-EVCS, openWB). Boxen, deren Zustand sich nicht lesen lässt,
+  bekommen im Not-Halt keinen Befehl („im Zweifel nicht senden“). Ist inzwischen ein anderes Gerät eingetragen
+  (Adresse, Connector), fasst DVhub es nicht an.
+- **§14a im Not-Halt:** Die Vorgabe des Netzbetreibers (EEBUS-LPC, Steuerbox) gilt auch im Not-Halt weiter — sie ist
+  keine DVhub-Steuerung, sondern eine gesetzliche Vorgabe.
 
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
