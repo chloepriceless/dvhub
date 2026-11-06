@@ -565,7 +565,10 @@ export function createGridConnectionGuard(ctx, deps = {}) {
 
   function wallboxPowerW(c, bc) {
     if (bc.charger === 'evcc') {
-      const lp = ctx.evccIntegration?.getStatus?.()?.loadpoints?.[bc.loadpoint - 1];
+      const st = ctx.evccIntegration?.getStatus?.();
+      // Veraltete Abfrage (evcc nicht erreichbar): unbekannt, nicht 0 (Gesamtrunde 1, P1).
+      if (st?.lastError || (st?.lastPolledAt != null && now() - Number(st.lastPolledAt) > 90_000)) return null;
+      const lp = st?.loadpoints?.[bc.loadpoint - 1];
       return finite(lp?.chargePowerW) ? Number(lp.chargePowerW) : null;
     }
     const st2 = ctx.chargerStatus?.fresh?.();

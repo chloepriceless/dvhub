@@ -1217,3 +1217,45 @@ test('b7e52e33 P2: Victron-Grenze nicht lesbar und keine DVhub-Grenze → Kachel
   const s = guard.summary();
   assert.ok(s && s.victronReadError === true);
 });
+
+// --- Abschluss-Gesamtrunde 1 (nach den Punkten) -----------------------------------------
+
+test('Gesamtrunde 1 P1: gespeicherte Grenz-Vorgabe einer alten Box geht nach Neustart nicht an die neu eingetragene', async () => {
+  const calls = [];
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type: 'openwb', openwb: { host: '192.0.2.99' } } };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null,
+    getCharger: (_c, bc) => ({
+      type: bc.charger, isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop']); return { ok: true }; },
+      release: async () => { calls.push(['release']); return { ok: true }; },
+      status: async () => ({ ok: true }),
+    }),
+    getGridCapW: () => null,
+    loadOwned: () => [{ charger: 'openwb', loadpoint: 1, identity: 'openwb|host=192.0.2.20', cmd: 'stop', confirmed: true, gridCap: true }],
+    saveOwned: () => {},
+  });
+  await bridge.tick();
+  assert.equal(calls.length, 0, 'kein Befehl an die neue Box');
+});
+
+test('Gesamtrunde 1 P1: veraltete evcc-Leistung gilt als unbekannt — der Wächter begrenzt trotzdem', () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
+  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -35000 }, victron: {}, schedule: {}, ctrl: {} };
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: () => {},
+    evccIntegration: { getStatus: () => ({ lastError: 'timeout', lastPolledAt: Date.now() - 600_000, loadpoints: [{ chargePowerW: 0 }] }) },
+    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null },
+  };
+  const guard = createGridConnectionGuard(ctx);
+  guard.tick();
+  assert.ok(guard.capW('wallbox') != null);
+});
+
+test('Gesamtrunde 1 P1: MQTT — alter Messwert (sourceAt) ist nicht frisch, auch wenn updatedAt neu ist', async () => {
+  const { meterImport } = await import('../services/import-limit/core.js');
+  const now = 1_000_000;
+  const m = meterImport({ meter: { ok: true, updatedAt: now, sourceAt: now - 200_000, grid_total_w: 1000 } }, {}, { now, maxAgeMs: 90_000 });
+  assert.equal(m.fresh, false);
+});

@@ -338,7 +338,7 @@ export function createEosEvccBridge(deps) {
     // nach dem Neustart wieder freigegeben werden kann.
     if (!override) {
       const cap = [...owned.values()].find((e) => e.gridCap && e.charger !== 'evcc');
-      if (cap) lastSent = { key: null, charger: cap.charger, loadpoint: cap.loadpoint, action: cap.cmd, currentA: null, gridCap: true, at: null };
+      if (cap) lastSent = { key: null, charger: cap.charger, loadpoint: cap.loadpoint, identity: cap.identity ?? null, action: cap.cmd, currentA: null, gridCap: true, at: null };
     }
   } catch { /* kaputte Datei: ohne Override weiter */ }
   loading = false;
@@ -375,6 +375,19 @@ export function createEosEvccBridge(deps) {
     if (!lastSent) return null;
     const target = { ...bc, charger: lastSent.charger || bc.charger, loadpoint: lastSent.loadpoint ?? bc.loadpoint };
     const charger = getCharger(cfg, target);
+    // Gespeicherter Befehl an ein Gerät, das nicht mehr eingetragen ist: das neue
+    // nicht anfassen (Gesamtrunde 1, P1).
+    if (lastSent.identity) {
+      let curIdent;
+      try { curIdent = typeof charger.identity === 'function' ? charger.identity() : wallboxIdentity(cfg, target.charger); } catch { curIdent = null; }
+      if (curIdent == null) return { ok: false, skipped: 'identity_unknown' };
+      if (curIdent !== lastSent.identity) {
+        pushLog('ev_owned_identity_changed', { charger: target.charger }, 'warn');
+        setOwned(targetKey(target), null);
+        lastSent = null;
+        return { ok: true, skipped: 'identity_changed' };
+      }
+    }
     // openWB ohne übergeordneten Regler: release() tut nichts, die letzte
     // Vorgabe bliebe stehen. Nach einer Grenz-Vorgabe bekommt die Box ihren
     // vollen Strom zurück (Gesamtprüfung 5, P2).

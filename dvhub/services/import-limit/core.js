@@ -70,7 +70,11 @@ export function mergeDeviceCaps(...sources) {
  */
 export function meterImport(state, cfg, { now = Date.now(), maxAgeMs }) {
   const m = state?.meter || {};
-  const at = Number(m.updatedAt) || 0;
+  // MQTT: updatedAt ist die Abfrage, sourceAt der Empfang des Werts — maßgeblich
+  // ist der ältere (ein gepufferter alter Wert wird nicht durch Abfragen frisch).
+  const polledAt = Number(m.updatedAt) || 0;
+  const srcAt = Number(m.sourceAt) || 0;
+  const at = srcAt > 0 ? Math.min(polledAt, srcAt) : polledAt;
   const ageMs = at > 0 ? now - at : null;
   const sign = cfg?.gridPositiveMeans === 'grid_import' ? 1 : -1;
   const total = m.grid_total_w;
