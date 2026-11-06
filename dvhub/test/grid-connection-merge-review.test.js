@@ -137,7 +137,10 @@ function evccMulti({ enabled = true, override = null } = {}) {
     loadOverride: () => store.value,
     saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
   });
-  return { bridge, modes, fail, noEffect, calls, cfg, ref };
+  const h = { bridge, modes, fail, noEffect, calls, cfg, ref, store, failStop: null };
+  const origSetMode = evcc.setMode;
+  evcc.setMode = async (id, m) => (m === 'off' && h.failStop === id ? { ok: false, error: 'timeout' } : origSetMode(id, m));
+  return h;
 }
 
 test('Codex 8bf189b7 P1: bestätigt ladender Ladepunkt 1 wird gestoppt, auch wenn danach ein Versuch an Ladepunkt 2 ohne Wirkung scheiterte', async () => {
@@ -199,4 +202,76 @@ test('Gesamtprüfung P1: Teil-Freigabe (0 → 5 kW) stellt den evcc-Modus noch n
   h.ref.capW = null;
   await h.bridge.tick();
   assert.deepEqual(h.calls.at(-1).slice(0, 2), ['stop', 'pv']);
+});
+
+// --- Codex 180dbd00 ------------------------------------------------------------------
+
+test('Codex 180dbd00 P1: release() ohne Wirkung (openWB) bestätigt keinen Stopp — Not-Halt stoppt die unquittierte Ladung', async () => {
+  const calls = [];
+  const box = { charging: false };
+  let fail = false;
+  let paused = false;
+  const cfg = { optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type: 'openwb' } };
+  const t = Date.now();
+  let factor = 1;
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg,
+    getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: factor }] }),
+    getCharger: () => ({
+      type: 'openwb', isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', a]); box.charging = true; return fail ? { ok: false, error: 'timeout' } : { ok: true }; },
+      stop: async () => { calls.push(['stop']); box.charging = false; return { ok: true }; },
+      release: async () => { calls.push(['release']); return { ok: true }; }, // lässt den Strom stehen
+      status: async () => ({ ok: true, connected: true }),
+    }),
+    isPaused: () => paused, now: () => t,
+  });
+  await bridge.tick();
+  fail = true; factor = 0.5;
+  await bridge.tick(); // unquittiert
+  cfg.optimizer.eosOptimizeEv = false; // Weitergabe aus → release()
+  fail = false;
+  await bridge.tick();
+  assert.equal(calls.at(-1)[0], 'release');
+  paused = true;
+  const r = await bridge.emergencyStop();
+  assert.equal(r.stopped, true, JSON.stringify(r));
+  assert.equal(calls.at(-1)[0], 'stop');
+});
+
+test('Codex 180dbd00 P1: scheitert der Stopp am bestätigten Ladepunkt, bleibt er für den nächsten Not-Halt erhalten', async () => {
+  const h = evccMulti();
+  h.fail[1] = true;
+  await h.bridge.tick();                // LP1: unquittiert, wirkt
+  h.fail[1] = false;
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  await h.bridge.tick();                // LP2: bestätigt
+  assert.deepEqual([h.modes[1], h.modes[2]], ['now', 'now']);
+  h.ref.paused = true;
+  h.noEffect[2] = true; h.failStop = 2;
+  await h.bridge.emergencyStop();
+  assert.equal(h.modes[1], 'off');
+  assert.equal(h.modes[2], 'now', 'Stopp an LP2 gescheitert');
+  h.noEffect[2] = false; h.failStop = null;
+  h.ref.paused = false;
+  h.ref.paused = true;                  // erneuter Not-Halt vor dem nächsten Takt
+  const r = await h.bridge.emergencyStop();
+  assert.equal(r.stopped, true, JSON.stringify(r));
+  assert.equal(h.modes[2], 'off');
+});
+
+test('Codex 180dbd00 P2: vorgemerkte Rückkehr gehört zum Ladepunkt des „Sofort laden“, nicht zum ersten gestoppten', async () => {
+  const h = evccMulti({ enabled: true });
+  await h.bridge.tick();                // EOS lädt LP1, bestätigt
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  h.cfg.optimizer.eosOptimizeEv = false; h.cfg.optimizer.evEvccControl = false;
+  h.fail[2] = true;
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 }); // LP2 unquittiert
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  assert.deepEqual([h.modes[1], h.modes[2]], ['off', 'off']);
+  await h.bridge.clearOverride();
+  assert.equal(h.store.value?.kind, 'restore');
+  assert.equal(h.store.value.loadpoint, 2);
+  assert.equal(h.store.value.mode, 'pv');
 });

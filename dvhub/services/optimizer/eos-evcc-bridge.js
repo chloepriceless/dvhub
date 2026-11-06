@@ -218,6 +218,10 @@ export function createEosEvccBridge(deps) {
   // Ziele frisch (Codex 4bf1eb18 und 8bf189b7, P1/P2).
   const unconfirmedCharges = new Map(); // targetKey → { charger, loadpoint, action, mode, override, at }
   const targetKey = (bc) => `${bc.charger}:${bc.loadpoint}`;
+  // Ein „Sofort laden“, dessen erster Befehl ohne Quittung blieb und das der
+  // Not-Halt gestoppt hat: sein Ziel, damit sein Ende im Not-Halt den Modus
+  // von vorher an DIESEM Ladepunkt vormerkt (Codex 180dbd00, P2).
+  let emergencyOverrideTarget = null;
   // Jeder Weg zur Wallbox geht hierdurch: Ergebnis von charge/stop/release je
   // Ziel festhalten. release() an evcc tut nichts — es bestätigt keinen Stopp.
   function getCharger(cfg, bc) {
@@ -241,9 +245,9 @@ export function createEosEvccBridge(deps) {
     if (typeof c.stop === 'function') {
       wrapped.stop = async (...a) => { const r = await c.stop(...a); if (r?.ok) unconfirmedCharges.delete(key); return r; };
     }
-    if (typeof c.release === 'function') {
-      wrapped.release = async (...a) => { const r = await c.release(...a); if (r?.ok && c.type !== 'evcc') unconfirmedCharges.delete(key); return r; };
-    }
+    // release() gibt die Box an ihre eigene Regelung zurück (evcc, openWB: ohne
+    // Wirkung auf den Strom) — es bestätigt keinen Stopp und löscht deshalb
+    // keine unquittierte Ladung (Codex 180dbd00, P1).
     return wrapped;
   }
   let lastError = null;
@@ -350,10 +354,17 @@ export function createEosEvccBridge(deps) {
     override = null;
     persistOverride();
     pushLog('ev_override_end', { reason, powerW: ended?.powerW ?? null, startedAt: ended?.startedAt ?? null });
-    if (!lastSent?.override) return null;
     // Im Not-Halt nichts schreiben: der evcc-Modus von vorher wird vorgemerkt
     // und nach dem Aufheben hergestellt (runTick); eine direkte Box gibt
     // runTick dann über releaseIfNeeded frei.
+    if (isPaused() && !lastSent?.override && emergencyOverrideTarget) {
+      const tgt = emergencyOverrideTarget;
+      emergencyOverrideTarget = null;
+      if (tgt.charger === 'evcc') setPendingRestore({ mode: ended?.prevMode || bc.stopMode, stopped: true, loadpoint: tgt.loadpoint ?? bc.loadpoint });
+      return { ok: true, deferred: true, paused: true };
+    }
+    emergencyOverrideTarget = null;
+    if (!lastSent?.override) return null;
     if (isPaused()) {
       if (lastSent.charger === 'evcc') {
         setPendingRestore({ mode: ended?.prevMode || bc.stopMode, stopped: lastSent.mode === 'off', loadpoint: lastSent.loadpoint ?? bc.loadpoint });
@@ -726,16 +737,30 @@ export function createEosEvccBridge(deps) {
           stopped.push({ bc, type: charger.type, override: ref.override === true });
         }
         if (stopped.length) {
-          const first = stopped[0];
-          lastSent = {
-            ...(lastSent || {}), key: `${first.bc.charger}:${first.bc.loadpoint}:emergency-stop`,
-            charger: first.bc.charger, loadpoint: first.bc.loadpoint, action: 'stop', currentA: null,
-            // Gehörte die Ladung einem „Sofort laden“, bleibt das erhalten — sonst
-            // stellte dessen Ende den Modus von vorher nicht her (Codex 8bf189b7, P2).
-            override: lastSent?.override === true || stopped.some((x) => x.override),
-            mode: first.type === 'evcc' ? 'off' : null, released: false, at: new Date(now()).toISOString()
-          };
-          pushLog('ev_emergency_stop', { targets: stopped.map((x) => `${x.bc.charger}:${x.bc.loadpoint}`), override: lastSent.override === true });
+          // Nur das Ziel des letzten bestätigten Befehls wird hier umgeschrieben —
+          // und nur, wenn dessen Stopp gelang; ein gescheitertes bleibt für den
+          // nächsten Not-Halt stehen (Codex 180dbd00, P1). Unquittierte Ziele
+          // löscht der Wrapper beim gelungenen Stopp selbst.
+          const lastKey = lastSent?.action === 'charge'
+            ? targetKey({ charger: lastSent.charger || bc0.charger, loadpoint: lastSent.loadpoint ?? bc0.loadpoint }) : null;
+          const own = lastKey ? stopped.find((x) => targetKey(x.bc) === lastKey) : null;
+          if (own) {
+            lastSent = {
+              ...lastSent, key: `${own.bc.charger}:${own.bc.loadpoint}:emergency-stop`, action: 'stop', currentA: null,
+              mode: own.type === 'evcc' ? 'off' : null, released: false, at: new Date(now()).toISOString()
+            };
+          }
+          // Ein gestopptes unquittiertes „Sofort laden“ an einem anderen Ziel:
+          // dessen Ende merkt den Modus an seinem Ladepunkt vor (Codex 8bf189b7/180dbd00, P2).
+          const ovr = stopped.find((x) => x.override && targetKey(x.bc) !== lastKey);
+          if (ovr && !(lastSent?.override === true && own)) emergencyOverrideTarget = { charger: ovr.bc.charger, loadpoint: ovr.bc.loadpoint };
+          if (!lastSent) {
+            // Bisher nichts bestätigt: einen Merker setzen, damit der nächste
+            // Befehl nach dem Aufheben nicht als „unverändert“ gilt.
+            const x = stopped[0];
+            lastSent = { key: `${x.bc.charger}:${x.bc.loadpoint}:emergency-stop`, charger: x.bc.charger, loadpoint: x.bc.loadpoint, action: 'stop', currentA: null, override: false, mode: x.type === 'evcc' ? 'off' : null, released: false, at: new Date(now()).toISOString() };
+          }
+          pushLog('ev_emergency_stop', { targets: stopped.map((x) => `${x.bc.charger}:${x.bc.loadpoint}`) });
         }
         if (errors.length) {
           lastError = errors.join('; ');
