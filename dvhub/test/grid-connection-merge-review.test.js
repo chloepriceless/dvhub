@@ -92,7 +92,7 @@ function evccMulti({ enabled = true, override = null } = {}) {
   const evcc = {
     getStatus: () => ({ url: 'http://evcc.local:7070' }),
     getLoadpoints: () => [1, 2].map((id) => ({ id, mode: modes[id], connected: true })),
-    refresh: async () => { if (h.refreshFailOnce) { h.refreshFailOnce = false; return false; } return true; },
+    refresh: async () => { h.refreshHook?.(); if (h.refreshFailOnce) { h.refreshFailOnce = false; return false; } return true; },
     setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', id, a]); return { ok: true }; },
     setMode: async (id, m) => {
       calls.push(['mode', id, m]);
@@ -1153,4 +1153,67 @@ test('a2686af7 P1: alte Box vorübergehend nicht erreichbar → Datensatz bleibt
   reachable = true;
   await bridge.apply();
   assert.deepEqual(calls.find((c) => c[1] === 'victron'), ['release', 'victron']);
+});
+
+// --- Prüfungen b6ebd4b4, 529a0121, b7e52e33 -------------------------------------------
+
+test('b6ebd4b4 P1: Rückkehr ausstehend → Wächter hält die Wallbox (Grenze 0), bis Luft für ihre volle Leistung ist', () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
+  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -27000 }, victron: {}, schedule: {}, ctrl: {} };
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: () => {},
+    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: 0 }] }) },
+    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null, hasPendingRestore: () => true },
+  };
+  const guard = createGridConnectionGuard(ctx);
+  guard.tick();
+  assert.equal(guard.capW('wallbox'), 0, 'gehalten, obwohl sie gerade nichts zieht');
+});
+
+test('b6ebd4b4 P1: Not-Halt kommt während der frischen evcc-Abfrage → keine Rückkehr', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 0;
+  await h.bridge.clearOverride();
+  h.capW = null;
+  h.refreshHook = () => { h.ref.paused = true; };
+  await h.bridge.apply();
+  assert.equal(h.modes[1], 'off');
+  assert.equal(h.bridge.hasPendingRestore(), true);
+});
+
+test('b6ebd4b4 P2: Not-Halt-Stopp behält eine ausstehende Rückkehr', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.ref.paused = true;
+  await h.bridge.clearOverride();        // Rückkehr vorgemerkt (Eintrag noch „charge“)
+  await h.bridge.emergencyStop();        // stoppt — Rückkehr bleibt
+  assert.equal(h.bridge.hasPendingRestore(), true);
+});
+
+test('529a0121 P2: fehlender bestätigter Strom (null) zählt nicht als 6 A', async () => {
+  const seen = [];
+  const h = identityBridge({ dvhubState: async (ref) => { seen.push(ref.currentAs); return { known: true, active: true }; } });
+  await h.bridge.tick();
+  h.setPaused(true);
+  await h.bridge.emergencyStop();
+  assert.ok(seen[0].every((c) => c != null && c > 0), JSON.stringify(seen));
+});
+
+test('b7e52e33 P2: Victron-Grenze nicht lesbar → der alte Wert gilt NICHT weiter; anderes Profil → keine Victron-Grenze', async () => {
+  const { gridConnectionFromState } = await import('../services/grid-connection/index.js');
+  const t = Date.now();
+  const state = { victron: { acInputLimitA: 40, fieldUpdatedAt: { acInputLimitA: t }, errors: { acInputLimitA: 'timeout' } } };
+  assert.equal(gridConnectionFromState({ gridConnection: { limitKw: 29 } }, state, t).limitW, 29000);
+  const ok = { victron: { acInputLimitA: 40, fieldUpdatedAt: { acInputLimitA: t }, errors: {} } };
+  assert.equal(gridConnectionFromState({ manufacturer: 'fronius', gridConnection: { limitKw: 29 } }, ok, t).limitW, 29000);
+});
+
+test('b7e52e33 P2: Victron-Grenze nicht lesbar und keine DVhub-Grenze → Kachel zeigt den Hinweis', () => {
+  const t = Date.now();
+  const state = { meter: { ok: true, updatedAt: t, grid_total_w: -5000 }, victron: { errors: { acInputLimitA: 'timeout' }, fieldUpdatedAt: {} }, schedule: {}, ctrl: {} };
+  const guard = createGridConnectionGuard({ getCfg: () => ({}), state, pushLog: () => {} });
+  guard.tick();
+  const s = guard.summary();
+  assert.ok(s && s.victronReadError === true);
 });

@@ -281,7 +281,8 @@ export function createEosEvccBridge(deps) {
         const amps = Number.isFinite(Number(a[0])) ? Number(a[0]) : null;
         // Zuletzt BESTÄTIGTER Strom bleibt neben dem versuchten erhalten — beide
         // können an der Box stehen (Codex 7b3273db, P1).
-        const confirmedCurrentA = r?.ok === true ? amps : (prev?.cmd === 'charge' ? prev.confirmedCurrentA ?? null : null);
+        const confirmedCurrentA = r?.ok === true ? amps
+          : (prev?.cmd === 'charge' && prev.identity === tgt.identity ? prev.confirmedCurrentA ?? null : null);
         setOwned(key, { ...tgt, cmd: 'charge', currentA: amps, confirmedCurrentA, confirmed: r?.ok === true, gridCap: prevCap, at: new Date(now()).toISOString() });
         return r;
       };
@@ -289,7 +290,11 @@ export function createEosEvccBridge(deps) {
     if (typeof c.stop === 'function') {
       wrapped.stop = async (...a) => {
         const r = await c.stop(...a);
-        if (r?.ok) setOwned(key, { ...tgt, cmd: 'stop', confirmed: true, gridCap: owned.get(key)?.gridCap === true, at: new Date(now()).toISOString() });
+        if (r?.ok) {
+          const prev = owned.get(key);
+          // Eine ausstehende evcc-Rückkehr überlebt einen Stopp (z. B. Not-Halt).
+          setOwned(key, { ...tgt, cmd: 'stop', confirmed: true, gridCap: prev?.gridCap === true, restore: prev?.restore ?? null, at: new Date(now()).toISOString() });
+        }
         return r;
       };
     }
@@ -442,6 +447,8 @@ export function createEosEvccBridge(deps) {
       try { st = await charger.status({ fresh: true }); } catch { st = null; }
       if (!st?.ok) continue; // unbekannt: nächster Takt
       if ((st.raw?.mode ?? null) !== 'off') { drop('changed_by_user'); continue; }
+      // Während der Abfrage kann der Not-Halt oder eine Grenze gekommen sein.
+      if (isPaused() || getGridCapW() != null) continue;
       const res = await getCharger(cfg, { ...tgt, stopMode: e.restore.mode }).stop();
       if (res?.ok) {
         const cur = owned.get(key);
@@ -702,13 +709,14 @@ export function createEosEvccBridge(deps) {
       // — DVhub hält nicht gegen eine von Hand gestartete Ladung. Die einmalige
       // Neutralisierung beim Aktivieren macht emergencyStop().
       if (isPaused()) return { ok: false, skipped: 'paused' };
+      // Rückkehr anderer Ladepunkte auch während eines laufenden Overrides.
+      await applyPendingRestore(cfg, bc);
       if (override) {
         const res = await overrideTick(cfg, bc, force);
         if (res) return res;
         force = true;
       }
       await releaseOrphans(cfg, bc);
-      await applyPendingRestore(cfg, bc);
       if (!bc.enabled) {
         // §14a EnWG gilt für die Wallbox auch dann, wenn EOS sie nicht steuert:
         // begrenzt der Netzbetreiber, deckelt DVhub eine direkt angebundene
@@ -859,7 +867,7 @@ export function createEosEvccBridge(deps) {
             skipped.push('identity_changed');
             continue;
           }
-          const refState = { ...ref, currentAs: [ref.currentA, ref.confirmedCurrentA].filter((c) => Number.isFinite(Number(c))) };
+          const refState = { ...ref, currentAs: [ref.currentA, ref.confirmedCurrentA].filter((c) => c != null && Number.isFinite(Number(c))) };
           if (charger.type !== 'evcc') {
             // Direkte Box: frisch lesen, ob DVhubs Befehl noch steht (Punkt 2).
             // Kann der Adapter das nicht: nicht senden („im Zweifel nicht“).

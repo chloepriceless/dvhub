@@ -208,20 +208,25 @@ export const VICTRON_ASSUMED_PHASES = 3;
 export const VICTRON_LIMIT_MAX_AGE_MS = 5 * 60_000;
 
 /** Victron-Grenze aus dem Zustand: A je Phase oder null (aus, -1, veraltet). */
-export function victronLimitExtra(state, now = Date.now()) {
+export function victronLimitExtra(state, now = Date.now(), cfg = null) {
+  // Nur mit dem Victron-Profil (Standard) — ein gemerkter GX-Wert gilt nach
+  // einem Profilwechsel nicht weiter.
+  if (cfg && String(cfg.manufacturer || 'victron') !== 'victron') return { victronPhaseLimitA: null, victronReadError: false };
   const v = state?.victron || {};
   const at = Number(v.fieldUpdatedAt?.acInputLimitA) || 0;
   const a = Number(v.acInputLimitA);
   const fresh = at > 0 && now - at <= VICTRON_LIMIT_MAX_AGE_MS;
+  const error = Boolean(v.errors?.acInputLimitA);
   return {
-    victronPhaseLimitA: fresh && a > 0 ? a : null,
-    victronReadError: Boolean(v.errors?.acInputLimitA),
+    // Letzte Lesung gescheitert: der gemerkte Wert gilt nicht weiter.
+    victronPhaseLimitA: fresh && !error && a > 0 ? a : null,
+    victronReadError: error,
   };
 }
 
 /** resolveGridConnection mit dem Victron-Wert aus dem Laufzeit-Zustand. */
 export function gridConnectionFromState(cfg, state, now = Date.now()) {
-  return resolveGridConnection(cfg, victronLimitExtra(state, now));
+  return resolveGridConnection(cfg, victronLimitExtra(state, now, cfg || {}));
 }
 
 export function createGuardState() {
@@ -305,6 +310,18 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   if (st.failsafe) {
     st.failsafe = false;
     events.push({ type: 'failsafe_off' });
+  }
+
+  // Geräte, die gehalten werden müssen, bis Luft für ihre volle Leistung ist
+  // (ausstehende evcc-Rückkehr: evcc regelt danach selbst) — Grenze 0, einmal
+  // je Halten; freigegeben wird über die normale Freigabe (Codex b6ebd4b4, P1).
+  st.holdReleased ??= {};
+  for (const d of devices) {
+    if (!d.hold) { delete st.holdReleased[d.id]; continue; }
+    if (st.caps[d.id] == null && !st.holdReleased[d.id]) {
+      setCap(d, 0);
+      events.push({ type: 'hold', id: d.id, kind: d.kind, name: d.name || null });
+    }
   }
 
   // --- Messung -----------------------------------------------------------------
@@ -441,18 +458,21 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
     const placements = devPhases === 3 ? [[x / 3, x / 3, x / 3]] : [[x, 0, 0], [0, x, 0], [0, 0, x]];
     return placements.every((add) => phases.every((p, i) => p + add[i] - rel[i] <= phaseLimitEach));
   };
+  // Größtes x ≤ limit, das auf alle Phasen passt. Nicht monoton (mit dem Akku
+  // auf einer Phase passt ein größeres x eher), daher in Schritten absuchen.
   const maxFit = (limit, devPhases) => {
     if (!phases) return limit;
-    let lo = 0;
-    let hi = Math.max(0, Math.floor(limit / STEP_W));
-    if (phaseFits(hi * STEP_W, devPhases)) return hi * STEP_W;
-    while (hi - lo > 1) {
-      const mid = Math.floor((lo + hi) / 2);
-      if (phaseFits(mid * STEP_W, devPhases)) lo = mid; else hi = mid;
+    for (let k = Math.max(0, Math.floor(limit / STEP_W)); k > 0; k -= 1) {
+      if (phaseFits(k * STEP_W, devPhases)) return k * STEP_W;
     }
-    return lo * STEP_W;
+    return 0;
   };
-  if (headroom >= r.releaseHysteresisW) st.underSince ??= now;
+  // Luft zählt nur, wenn auch jede Phase ihren Rückschalt-Abstand hat (oder
+  // der Akku dort genug abgibt) — sonst würde ein kurzer Einbruch die 30 s
+  // Wartezeit umgehen (Codex 529a0121, P2).
+  const giveNow = headroom - r.releaseHysteresisW;
+  const phasesRoomy = !phases || capped.some((d) => maxFit(giveNow, Number(d.phases) === 3 ? 3 : 1) >= Math.max(STEP_W, Number(d.minW) || 0));
+  if (headroom >= r.releaseHysteresisW && phasesRoomy) st.underSince ??= now;
   else st.underSince = null;
   if (st.underSince == null || now - st.underSince < RELEASE_MS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
   st.underSince = null;
@@ -487,6 +507,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
         delete st.caps[d.id];
         delete st.capAt[d.id];
         if (st.cutFrom) delete st.cutFrom[d.id];
+        if (d.hold) (st.holdReleased ??= {})[d.id] = true;
         events.push({ type: 'release', id: d.id, kind: d.kind, name: d.name || null, capW: null, importW: Math.round(total) });
       } else {
         setCap(d, down(next));
@@ -526,6 +547,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   let lastTickAt = 0;
   let timer = null;
   let lastLimitKey = null;
+  let lastSyncedKey = null;
   let lastEosSyncAt = 0;
   let lastVictronError = false;
   let last = { meas: null, devices: [] };
@@ -571,7 +593,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       // der Plan schickt (evMaxChargeW); eine direkte Box ohne Weitergabe regelt
       // danach selbst — bis zu ihrem Nennstrom (vorsichtig 32 A je Phase).
       const releaseW = viaBridge ? bc.maxChargeW : Math.max(bc.maxChargeW, Math.round(32 * 230 * bc.phases));
-      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: releaseW, minW: minChargeW(bc), phases: bc.phases });
+      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: releaseW, minW: minChargeW(bc), phases: bc.phases, hold: restorePending && !viaBridge });
     }
     if (ctx.mypvRegulator) {
       let heaters;
@@ -696,12 +718,15 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       // abgleichen, höchstens jede Minute. Victron-Wert nicht lesbar: melden.
       const limitKey = `${r.limitW}|${r.phaseLimitA}`;
       if (limitKey !== lastLimitKey) {
-        if (lastLimitKey !== null && now() - lastEosSyncAt >= 60_000) {
-          lastEosSyncAt = now();
-          Promise.resolve(ctx.eosConfigSync?.sync?.()).catch(() => {});
-        }
         if (lastLimitKey !== null) log('grid_connection_limit_changed', { limitW: r.limitW, phaseLimitA: r.phaseLimitA, source: r.limitSource, text: r.limitText });
+        if (lastSyncedKey === null) lastSyncedKey = limitKey; // Start: der normale Abgleich läuft ohnehin
         lastLimitKey = limitKey;
+      }
+      // Geänderte Grenze an EOS — gedrosselt, aber nicht vergessen.
+      if (limitKey !== lastSyncedKey && now() - lastEosSyncAt >= 60_000) {
+        lastEosSyncAt = now();
+        lastSyncedKey = limitKey;
+        Promise.resolve(ctx.eosConfigSync?.sync?.()).catch(() => {});
       }
       if (r.victronReadError !== lastVictronError) {
         lastVictronError = r.victronReadError;
@@ -755,7 +780,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     summary() {
       const c = cfg();
       const r = gridConnectionFromState(c, state(), now());
-      if (r.reason === 'not_set') return null;
+      if (r.reason === 'not_set' && !r.victronReadError) return null;
       const s = state();
       const t = now();
       const meas = last.meas;
