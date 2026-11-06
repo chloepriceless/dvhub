@@ -254,7 +254,10 @@ export function createEosEvccBridge(deps) {
     if (typeof c.charge === 'function') {
       wrapped.charge = async (...a) => {
         const r = await c.charge(...a);
-        setOwned(key, { ...tgt, cmd: 'charge', confirmed: r?.ok === true, gridCap: false, at: new Date(now()).toISOString() });
+        // Eine Grenz-Herkunft bleibt, bis ein quittierter normaler Befehl sie
+        // ablöst (auch eine unquittierte Grenz-Aktualisierung kann wirken).
+        const prevCap = owned.get(key)?.gridCap === true;
+        setOwned(key, { ...tgt, cmd: 'charge', confirmed: r?.ok === true, gridCap: prevCap, at: new Date(now()).toISOString() });
         return r;
       };
     }
@@ -394,13 +397,14 @@ export function createEosEvccBridge(deps) {
     // Im Not-Halt nichts schreiben. evcc: Modus von vorher NICHT nachholen
     // (Hinweis statt Automatik); eine direkte Box gibt runTick nach dem
     // Aufheben über releaseIfNeeded frei.
+    // Läuft die EOS-Weitergabe (mit Pro), übernimmt der Plan — nach einem
+    // Not-Halt eben erst nach dem Aufheben; kein Hinweis nötig.
+    if (bc.enabled && isProActive() !== false) { if (lastSent) lastSent = { ...lastSent, key: null, override: false }; return null; }
     if (isPaused()) {
       if (tgt.charger === 'evcc') hint('paused');
       if (lastSent) lastSent = { ...lastSent, override: false };
       return { ok: true, paused: true };
     }
-    // Ohne Pro regelt die Bruecke nichts mehr — also auch die Weitergabe nicht.
-    if (bc.enabled && isProActive() !== false) { if (lastSent) lastSent = { ...lastSent, key: null }; return null; }
     if (tgt.charger === 'evcc') {
       const evccTgt = { ...bc, charger: 'evcc', loadpoint: tgt.loadpoint ?? bc.loadpoint };
       // Steht eine Leistungsgrenze, bleibt evcc aus: ein eigener evcc-Modus
@@ -408,6 +412,14 @@ export function createEosEvccBridge(deps) {
       // nicht automatisch her — Hinweis statt aufgeschobener Rückkehr.
       if (getGridCapW() != null) {
         const res = await hardStopper(cfg, evccTgt, { type: 'evcc' }).stop();
+        if (!res?.ok) {
+          // Sicherheits-Stopp nicht angekommen: Override bleibt, der nächste
+          // Takt stoppt erneut (Codex bcbfaff1, P1).
+          override = ended;
+          persistOverride();
+          pushLog('ev_override_error', { charger: 'evcc', error: res?.error || 'stop failed', reason });
+          return res;
+        }
         if (lastSent) lastSent = { ...lastSent, override: false, key: null };
         hint('grid_cap');
         return res;
@@ -676,7 +688,7 @@ export function createEosEvccBridge(deps) {
         return { ok: false, error: lastError };
       }
       lastError = planNote;
-      const hadGridCap = lastSent?.gridCap === true;
+      const hadGridCap = owned.get(targetKey(bc))?.gridCap === true;
       lastSent = {
         key,
         charger: bc.charger,
@@ -751,8 +763,14 @@ export function createEosEvccBridge(deps) {
           stopped.push(`${bc.charger}:${bc.loadpoint}`);
         }
         if (stopped.length) {
-          // Nach dem Aufheben gilt kein früherer Befehl als „unverändert“.
+          // Nach dem Aufheben gilt kein früherer Befehl als „unverändert“. Gab
+          // es noch keinen quittierten Befehl, merkt der neue Merker das Ziel —
+          // sonst gäbe die Brücke eine direkte Box nie wieder frei (bcbfaff1, P2).
           if (lastSent) lastSent = { ...lastSent, key: null };
+          else {
+            const [charger, lp] = stopped[0].split(':');
+            lastSent = { key: null, charger, loadpoint: Number(lp) || null, action: 'stop', currentA: null, override: override != null, at: new Date(now()).toISOString() };
+          }
           pushLog('ev_emergency_stop', { targets: stopped });
         }
         if (errors.length) {

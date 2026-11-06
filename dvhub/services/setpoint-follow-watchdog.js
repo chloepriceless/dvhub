@@ -171,9 +171,12 @@ export function activeDischargeHold(state, nowMs = Date.now(), cfg = {}) {
   const hold = state?.ctrl?.eosGridHold;
   const maxAgeMs = holdSignalMaxAgeMs(cfg);
   if (!hold || hold.known !== true || !isFresh(hold.at, nowMs, maxAgeMs)) return null;
-  const clamp = state?.ctrl?._peakShaving?.clamp;
-  if (clamp && clamp.source === 'eos_grid_hold' && isFresh(clamp.at, nowMs, maxAgeMs)
-      && Number(clamp.valueW) < Number(clamp.requestedW)) return null;
+  // Peak Shaving oder Netzanschluss haben den Halte-Wert gedeckelt: der Akku
+  // soll den Rest liefern — kein Halten.
+  for (const clamp of [state?.ctrl?._peakShaving?.clamp, state?.ctrl?._gridConnection?.clamp]) {
+    if (clamp && clamp.source === 'eos_grid_hold' && isFresh(clamp.at, nowMs, maxAgeMs)
+        && Number(clamp.valueW) < Number(clamp.requestedW)) return null;
+  }
   return 'eos_grid_hold';
 }
 

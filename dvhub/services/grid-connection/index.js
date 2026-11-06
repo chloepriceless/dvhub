@@ -381,10 +381,11 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   // Lädt der Akku gerade aus dem Netz, ist seine Ladung freie Leistung für die
   // Geräte — er gibt zuerst nach, der Multi hält den Bezug auf dem Sollwert.
   if (sp != null && !batteryStuck) headroom += chargeW;
-  // Je Phase gibt der Akku ein Drittel seiner Netzladung frei (dreiphasiger
-  // Multi) — sonst bliebe eine Wallbox gesperrt, obwohl der Akku nachgäbe
-  // (Gesamtprüfung 7 / Codex bf1c2c23, P2).
-  const phaseRoomEff = phaseRoom == null ? null : phaseRoom + (sp != null && !batteryStuck ? chargeW / 3 : 0);
+  // Je Phase zählt nur die GEMESSENE Luft: ob der Akku auf derselben Phase
+  // lädt, weiß DVhub nicht (einphasiger Multi an dreiphasigem Anschluss).
+  // Sicherheit vor Komfort — der Akku gibt über die Decke nach, nicht über die
+  // Freigabe (Codex bcbfaff1, P1).
+  const phaseRoomEff = phaseRoom;
   if (headroom >= r.releaseHysteresisW) st.underSince ??= now;
   else st.underSince = null;
   if (st.underSince == null || now - st.underSince < RELEASE_MS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();

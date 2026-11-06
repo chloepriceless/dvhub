@@ -487,13 +487,14 @@ test('Codex 82e96f40 P2: behaltener „Sofort laden“-Merker gilt nach dem Not-
 // --- Codex 6bb9f304 / Gesamtprüfung des Zweigs, Runde 5 ----------------------------------
 
 function directBridge({ type = 'openevse', enabled = false, store = { value: null }, ownedStore = { value: null }, capRef = { capW: null }, paused = { v: false } } = {}) {
+  const h = { chargeFails: false };
   const calls = [];
   const cfg = { optimizer: { eosOptimizeEv: enabled, evEvccControl: enabled, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type } };
   const make = () => createEosEvccBridge({
     getCfg: () => cfg, getSolution: async () => null,
     getCharger: (_c, bc) => ({
       type: bc.charger, isConfigured: () => true,
-      charge: async (a) => { calls.push(['charge', bc.charger, a]); return { ok: true }; },
+      charge: async (a) => { calls.push(['charge', bc.charger, a]); return h.chargeFails ? { ok: false, error: 'timeout' } : { ok: true }; },
       stop: async () => { calls.push(['stop', bc.charger, bc.stopMode]); return { ok: true }; },
       release: async () => { calls.push(['release', bc.charger]); return { ok: true }; },
       status: async () => ({ ok: true, connected: true, raw: { mode: 'now' } }),
@@ -505,7 +506,9 @@ function directBridge({ type = 'openevse', enabled = false, store = { value: nul
     loadOwned: () => ownedStore.value,
     saveOwned: (list) => { ownedStore.value = list ? JSON.parse(JSON.stringify(list)) : null; },
   });
-  return { make, bridge: make(), calls, cfg, store, ownedStore, capRef, paused };
+  Object.assign(h, { make, calls, cfg, store, ownedStore, capRef, paused });
+  h.bridge = make();
+  return h;
 }
 
 test('Codex 6bb9f304 P2: direkte Box gilt unabhängig vom Ladepunkt als EIN Ziel — nach release() kein Not-Halt-Befehl', async () => {
@@ -650,16 +653,16 @@ test('Runde 7 P1: volle Freigabe erst, wenn die Leistung VOR dem Eingriff Platz 
   assert.ok(st.caps.wallbox != null && st.caps.wallbox <= 6000, `Grenze ${st.caps.wallbox}`);
 });
 
-test('Runde 7 / bf1c2c23 P2: Phasengrenze — Akku-Netzladung zählt je Phase als Luft, die Wallbox kommt zurück', () => {
-  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40 } });
+test('bcbfaff1 P1: Phasengrenze — Akku-Ladung zählt NICHT als Luft je Phase (einphasiger Multi möglich)', () => {
+  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40 } }); // Phasenziel 8 867 W
   const st = createGuardState();
   st.caps = { wallbox: 0 };
   st.capAt = { wallbox: 0 };
-  const wb3 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 0, maxW: 11000, minW: 4140, phases: 3 };
+  const wb1 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 0, maxW: 3680, minW: 1380, phases: 1 };
   for (let i = 0; i < 40; i += 1) {
-    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 26400, phasesW: [8800, 8800, 8800] }, devices: [wb3], battery: { setpointW: 26400, chargeW: 24000 } });
+    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 16800, phasesW: [8800, 6000, 2000] }, devices: [wb1], battery: { setpointW: 16800, chargeW: 6000 } });
   }
-  assert.equal(st.caps.wallbox, undefined, 'freigegeben');
+  assert.equal(st.caps.wallbox, 0, 'L1 hat nur 67 W Luft — die Wallbox bleibt aus');
 });
 
 test('bf1c2c23 P1: Gerät ohne Leistungsmeldung — Grenze wächst nicht über die Luft hinaus', () => {
@@ -727,4 +730,90 @@ test('Vereinfacht: Wächter schreibt eine Wallbox nur wegen eines Hinweises nich
   const guard = createGridConnectionGuard(ctx);
   guard.tick();
   assert.equal(guard.capW('wallbox'), null);
+});
+
+test('Vereinfacht (Prod-Fall): EOS-Weitergabe an, „Sofort laden“ endet im Not-Halt → kein Hinweis, nach dem Aufheben übernimmt der Plan', async () => {
+  const h = evccMulti({ enabled: true });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  assert.equal(h.modes[1], 'off');
+  await h.bridge.clearOverride();
+  assert.equal(h.bridge.getStatus().restoreHint, null);
+  h.ref.paused = false;
+  await h.bridge.tick();
+  assert.equal(h.modes[1], 'now', 'Plan lädt wieder');
+});
+
+// --- Abschlussrunde A (Gesamtprüfung) + Codex bcbfaff1 -------------------------------
+
+test('Abschluss A P1: Wallbox-Abfrage ohne Leistungswert bleibt „unbekannt“ (nicht 0) — der Wächter begrenzt sie', async () => {
+  const { createChargerStatusPoller } = await import('../services/wallbox/charger-status.js');
+  const poller = createChargerStatusPoller({
+    getCfg: () => ({ wallbox: { type: 'ocpp' } }),
+    getAdapter: () => ({ isConfigured: () => true, status: async () => ({ ok: true, connected: true, charging: true, powerW: null }) }),
+  });
+  await poller.poll();
+  assert.equal(poller.fresh().powerW, null);
+});
+
+test('Abschluss A P2: Entlade-Wächter — eine Netzanschluss-Decke auf „Akku halten“ ist kein Halten mehr', async () => {
+  const { activeDischargeHold } = await import('../services/setpoint-follow-watchdog.js');
+  const t = Date.now();
+  const state = { ctrl: {
+    eosGridHold: { at: t, known: true, valueW: 34000 },
+    _gridConnection: { clamp: { source: 'eos_grid_hold', requestedW: 34000, valueW: 28000, at: t } },
+  } };
+  assert.equal(activeDischargeHold(state, t, {}), null);
+});
+
+test('bcbfaff1 P1: Sicherheits-Stopp beim Override-Ende scheitert → Override bleibt, der Stopp wird wiederholt', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 0;
+  h.failStop = 1;
+  await h.bridge.clearOverride();
+  assert.ok(h.bridge.getOverride(), 'Override bleibt, solange der Stopp nicht ankam');
+  h.failStop = null;
+  await h.bridge.tick();
+  assert.equal(h.modes[1], 'off');
+});
+
+test('bcbfaff1 P2: normaler Stopp nach einem Grenz-Stopp löscht den Grenz-Vermerk', async () => {
+  const ownedStore = { value: null };
+  const capRef = { capW: 0 };
+  const h = directBridge({ type: 'openwb', ownedStore, capRef, enabled: true });
+  await h.bridge.apply();                    // Plan-Stopp unter Grenze → hart
+  assert.equal(ownedStore.value?.[0]?.gridCap, true);
+  capRef.capW = null;
+  await h.bridge.apply();                    // normaler Stopp (Plan)
+  assert.equal(ownedStore.value?.some((e) => e.gridCap), false);
+});
+
+test('bcbfaff1 P2: unquittierte Grenz-Aktualisierung behält den Grenz-Vermerk', async () => {
+  const ownedStore = { value: null };
+  const capRef = { capW: 6000 };
+  const h = directBridge({ ownedStore, capRef });
+  await h.bridge.apply();                    // Grenz-Vorgabe (laden 8,6 A) quittiert
+  assert.equal(ownedStore.value?.[0]?.gridCap, true);
+  h.chargeFails = true;
+  capRef.capW = 5000;
+  await h.bridge.apply();                    // Aktualisierung ohne Quittung
+  assert.equal(ownedStore.value?.[0]?.gridCap, true);
+});
+
+test('bcbfaff1 P2: direkte Box — unquittierte Ladung, Not-Halt, Ende im Not-Halt → nach dem Aufheben freigegeben', async () => {
+  const ownedStore = { value: null };
+  const paused = { v: false };
+  const h = directBridge({ ownedStore, paused });
+  h.chargeFails = true;
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  paused.v = true;
+  await h.bridge.emergencyStop();
+  assert.equal(h.calls.at(-1)[0], 'stop');
+  await h.bridge.clearOverride();
+  paused.v = false;
+  h.chargeFails = false;
+  await h.bridge.tick();
+  assert.deepEqual(h.calls.at(-1), ['release', 'openevse']);
 });
