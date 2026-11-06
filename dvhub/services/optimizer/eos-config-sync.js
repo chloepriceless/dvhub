@@ -373,7 +373,13 @@ export function buildEosInverters(cfg, { curve = null, curveSupported = false, g
 
 function maxAcChargeW(cfg) {
   const w = Number(cfg?.optimizer?.maxChargeW);
-  return w > 0 ? w : null;
+  if (w > 0) return w;
+  // Ohne maxChargeW nicht null schicken — EOS übernimmt null nicht (merkt die
+  // Laufzeit-Einstellung mit exclude_none), ein früherer Behelf-Wert bliebe
+  // sonst stehen. Die Akku-Ladeleistung, mit der EOS ohnehin rechnet, begrenzt
+  // nichts (Gesamtprüfung 7, P2).
+  const opt = cfg?.optimizer || {};
+  return Number(opt.maxDischargeW) || 5000;
 }
 
 /**
@@ -393,9 +399,10 @@ function maxAcChargeW(cfg) {
  * DVhubs Wächter hält die Grenze an der Ausführung ohnehin ein.
  */
 export function eosAcChargeCapW(cfg) {
-  const maxChargeW = maxAcChargeW(cfg);
+  const raw = Number(cfg?.optimizer?.maxChargeW);
+  const maxChargeW = raw > 0 ? raw : null;
   const gridCapW = eosGridChargeCapW(cfg);
-  if (gridCapW == null) return maxChargeW;
+  if (gridCapW == null) return maxAcChargeW(cfg);
   return maxChargeW == null ? gridCapW : Math.min(maxChargeW, gridCapW);
 }
 

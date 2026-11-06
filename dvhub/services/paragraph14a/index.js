@@ -265,8 +265,16 @@ export function createParagraph14aService(ctx, deps = {}) {
     for (const d of list) if (d.source === 'eebus') eebusShares[d.id] = active ? (shares[d.id] ?? 0) : null;
     // Netzanschluss (services/grid-connection): dessen Grenzen je EEBUS-Gerät
     // kommen dazu — je Gerät gilt die kleinste (auch ohne §14a-Vorgabe).
-    const merged = mergeDeviceCaps(eebusShares, ctx.gridConnection?.eebusCaps?.() || null);
-    ctx.eebus?.applyConsumptionShares?.(merged, state.ctrl?.eebusConsumptionLimitUntil ?? null);
+    const gcCaps = ctx.gridConnection?.eebusCaps?.() || null;
+    const merged = mergeDeviceCaps(eebusShares, gcCaps);
+    // Eine Netzanschluss-Grenze hat keine Ablaufzeit — DVhub nimmt sie selbst
+    // zurück. Bestimmt sie ein Gerät, geht die Grenze ohne §14a-Dauer raus.
+    // Je Gerät: nur wo sie bindet, sonst gilt die §14a-Dauer (Codex fb52348a, P2).
+    const untilById = {};
+    for (const [id, w] of Object.entries(gcCaps || {})) {
+      if (w != null && merged[id] === w) untilById[id] = null;
+    }
+    ctx.eebus?.applyConsumptionShares?.(merged, state.ctrl?.eebusConsumptionLimitUntil ?? null, untilById);
   }
 
   function start() {

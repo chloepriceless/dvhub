@@ -42,7 +42,9 @@ export function createChargerStatusPoller({ getCfg, getAdapter, now = () => Date
           carState: typeof st.carState === 'string' ? st.carState : null,
           // Rohwerte der Box (z. B. frc beim go-e/Wattpilot → Lademodus, main-wallbox.js).
           raw: st.raw && typeof st.raw === 'object' ? st.raw : null,
-          powerW: Number.isFinite(Number(st.powerW)) ? Math.round(Number(st.powerW)) : null,
+          // null bleibt null (z. B. OCPP vor den ersten MeterValues) — Number(null)
+          // wäre 0, und der Netzanschluss-Wächter hielte die Box für aus.
+          powerW: st.powerW != null && st.powerW !== '' && Number.isFinite(Number(st.powerW)) ? Math.round(Number(st.powerW)) : null,
           currentA: Number.isFinite(Number(st.currentA)) ? Number(st.currentA) : null,
           vehicleSocPct: Number.isFinite(Number(st.vehicleSocPct)) ? Number(st.vehicleSocPct) : null,
         }

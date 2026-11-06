@@ -13,16 +13,17 @@ import { createMypvRegulator } from '../services/devices/mypv-regulator.js';
 import { wallboxGridCapW, createGridConnectionGuard } from '../services/grid-connection/index.js';
 import { createEosEvccBridge } from '../services/optimizer/eos-evcc-bridge.js';
 
-function p14aSetup({ gcEebus = {}, p14aLimitW = null } = {}) {
+function p14aSetup({ gcEebus = {}, p14aLimitW = null, until = null } = {}) {
   const cfg = { gridPositiveMeans: 'grid_import', optimizer: { maxChargeW: 10000 }, paragraph14a: {} };
   const state = { ctrl: {}, victron: {}, meter: { grid_total_w: 1000 } };
   if (p14aLimitW != null) state.ctrl.eebusConsumptionLimitW = p14aLimitW;
+  if (until != null) state.ctrl.eebusConsumptionLimitUntil = until;
   const applied = [];
   const ctx = {
     state, getCfg: () => cfg, pushLog: () => {},
     eebus: {
       consumptionDevices: () => [{ id: 'eebus:hp', kind: 'waermepumpe', maxW: 3000, powerW: 2500 }],
-      applyConsumptionShares: (shares, until) => applied.push({ shares, until }),
+      applyConsumptionShares: (shares, until, untilById) => applied.push({ shares, until, untilById }),
     },
     gridConnection: { eebusCaps: () => gcEebus },
   };
@@ -164,29 +165,6 @@ test('Codex P2 (Runde 2): Pause während „Sofort laden“ behält den Override
   assert.deepEqual(calls.at(-1), ['stop', 'pv'], 'evcc zurück auf „pv“');
 });
 
-test('Codex P1 (Runde 3): „Sofort laden“ endet während der Pause — evcc bleibt aus, bis die Grenze es erlaubt', async () => {
-  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'minpv' };
-  const calls = [];
-  const mk = (bc) => ({
-    type: 'evcc', isConfigured: () => true,
-    charge: async (a) => { calls.push(['charge', a]); return { ok: true }; },
-    stop: async () => { calls.push(['stop', bc.stopMode]); return { ok: true }; },
-    release: async () => { calls.push(['release']); return { ok: true }; },
-    status: async () => ({ ok: true, connected: true, raw: { mode: 'off' } }),
-  });
-  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type: 'evcc' } };
-  let capW = 0;
-  const bridge = createEosEvccBridge({ getCfg: () => cfg, getSolution: async () => null, getCharger: (_c, bc) => mk(bc), getGridCapW: () => capW, loadOverride: () => override });
-  await bridge.apply();
-  assert.deepEqual(calls.at(-1), ['stop', 'off']);
-  await bridge.clearOverride();
-  assert.equal(calls.some((c) => c[0] === 'stop' && c[1] === 'minpv'), false, 'nicht zurück auf minpv, solange die Grenze pausiert');
-  await bridge.tick();
-  assert.equal(calls.some((c) => c[1] === 'minpv'), false);
-  capW = null;
-  await bridge.tick();
-  assert.deepEqual(calls.at(-1), ['stop', 'minpv'], 'Grenze weg: evcc zurück in den alten Modus');
-});
 
 function evccBridge({ override, enabled = false }) {
   const calls = [];
@@ -203,34 +181,7 @@ function evccBridge({ override, enabled = false }) {
   return { bridge, calls, ref };
 }
 
-test('Codex P1 (Runde 4): Override läuft im selben Takt ab, in dem die Grenze kommt — evcc wird trotzdem hart gestoppt', async () => {
-  const override = { kind: 'charge', powerW: 11000, startedAt: new Date(Date.now() - 3600_000).toISOString(), until: null, seenConnected: true, prevMode: 'minpv' };
-  const { bridge, calls, ref } = evccBridge({ override });
-  ref.capW = null;
-  await bridge.apply();
-  assert.deepEqual(calls.at(-1), ['charge', 16], 'Sofort laden läuft');
-  // Override läuft ab, im selben Takt kommt die Grenze.
-  override.until = new Date(Date.now() - 1000).toISOString();
-  ref.capW = 0;
-  await bridge.apply();
-  assert.deepEqual(calls.at(-1), ['stop', 'off']);
-  ref.capW = null;
-  await bridge.tick();
-  assert.deepEqual(calls.at(-1), ['stop', 'minpv']);
-});
 
-test('Codex P2 (Runde 4): ohne Pro übernimmt der Plan nicht — der vorgemerkte Modus bleibt und kommt zurück', async () => {
-  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
-  const { bridge, calls, ref } = evccBridge({ override, enabled: true });
-  await bridge.apply();
-  assert.deepEqual(calls.at(-1), ['stop', 'off'], 'Pause während Sofort laden');
-  ref.pro = false;
-  await bridge.tick();
-  assert.equal(calls.some((c) => c[1] === 'pv'), false);
-  ref.capW = null;
-  await bridge.tick();
-  assert.deepEqual(calls.at(-1), ['stop', 'pv']);
-});
 
 test('Codex P2 (Runde 4): neues „Sofort laden“ während der vorgemerkten Rückkehr übernimmt den alten Modus, nicht „aus“', async () => {
   const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
@@ -244,62 +195,37 @@ test('Codex P2 (Runde 4): neues „Sofort laden“ während der vorgemerkten Rü
   assert.deepEqual(calls.at(-1), ['stop', 'pv']);
 });
 
-function evccBridgeCtl({ override }) {
-  const calls = [];
-  const ctl = { capW: 0, stopFails: false, stopGate: null, mode: 'off' };
-  const mk = (bc) => ({
-    type: 'evcc', isConfigured: () => true,
-    charge: async (a) => { calls.push(['charge', a]); ctl.mode = 'now'; return { ok: true }; },
-    stop: async () => {
-      calls.push(['stop', bc.stopMode]);
-      if (ctl.stopGate) await ctl.stopGate;
-      if (ctl.stopFails) return { ok: false, error: 'evcc nicht erreichbar' };
-      ctl.mode = bc.stopMode;
-      return { ok: true };
-    },
-    release: async () => ({ ok: true }),
-    status: async () => ({ ok: true, connected: true, raw: { mode: ctl.mode } }),
-  });
-  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type: 'evcc' } };
-  const bridge = createEosEvccBridge({ getCfg: () => cfg, getSolution: async () => null, getCharger: (_c, bc) => mk(bc), getGridCapW: () => ctl.capW, loadOverride: () => override });
-  return { bridge, calls, ctl };
-}
 
-test('Codex P2 (Runde 5): neues „Sofort laden“, dessen erster Befehl scheitert — der vorgemerkte Modus geht nicht verloren', async () => {
-  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
-  const { bridge, calls, ctl } = evccBridgeCtl({ override });
-  await bridge.apply();
-  await bridge.clearOverride(); // Pause bleibt, „pv“ vorgemerkt
-  ctl.stopFails = true;
-  await bridge.setOverride({ kind: 'charge', powerW: 11000 }); // erster Befehl (Pause) scheitert
-  await bridge.clearOverride(); // nie angewendet
-  ctl.stopFails = false;
-  ctl.capW = null;
-  await bridge.tick();
-  assert.deepEqual(calls.at(-1), ['stop', 'pv'], 'evcc zurück auf „pv“');
+
+
+test('Gesamtprüfung P1: Netzanschluss-Grenze an EEBUS läuft nicht mit der §14a-Dauer ab', () => {
+  const s = p14aSetup({ gcEebus: { 'eebus:hp': 1000 }, p14aLimitW: 7560, until: Date.now() + 60_000 });
+  s.svc.update();
+  // §14a-Ende in 60 s — die engere Netzanschluss-Grenze hängt nicht daran.
+  assert.equal(s.applied.at(-1).shares['eebus:hp'], 1000);
+  assert.equal(s.applied.at(-1).untilById['eebus:hp'], null);
 });
 
-test('Codex P2 (Runde 5): „Sofort laden“ während der verzögerten Rückkehr — kein Absturz, Rückkehr läuft durch', async () => {
-  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
-  const { bridge, calls, ctl } = evccBridgeCtl({ override });
-  await bridge.apply();
-  await bridge.clearOverride();
-  ctl.capW = null;
-  let release;
-  ctl.stopGate = new Promise((r) => { release = r; });
-  const tickP = bridge.tick();
-  await new Promise((r) => setImmediate(r));
-  const ovP = bridge.setOverride({ kind: 'charge', powerW: 11000 });
-  await new Promise((r) => setImmediate(r));
-  ctl.stopGate = null;
-  release();
-  const res = await tickP;
-  await ovP;
-  assert.notEqual(res?.ok, false, JSON.stringify(res));
-  assert.ok(calls.some((c) => c[0] === 'stop' && c[1] === 'pv'), 'Rückkehr auf „pv“ abgeschlossen');
-  // Codex ea036ff7 (P2): das neue „Sofort laden“ kennt „pv“ als Modus von
-  // vorher und stellt ihn bei seinem Ende her.
-  assert.equal(bridge.getOverride().prevMode, 'pv');
-  await bridge.clearOverride();
-  assert.deepEqual(calls.at(-1), ['stop', 'pv']);
+test('Codex fb52348a P2: Ablaufzeit je Gerät — nur das Gerät mit bindender Netzanschluss-Grenze verliert die §14a-Dauer', () => {
+  const cfg = { gridPositiveMeans: 'grid_import', optimizer: { maxChargeW: 10000 }, paragraph14a: {} };
+  const until = Date.now() + 60_000;
+  const state = { ctrl: { eebusConsumptionLimitW: 7560, eebusConsumptionLimitUntil: until }, victron: {}, meter: { grid_total_w: 1000 } };
+  const applied = [];
+  const ctx = {
+    state, getCfg: () => cfg, pushLog: () => {},
+    eebus: {
+      consumptionDevices: () => [
+        { id: 'eebus:a', kind: 'waermepumpe', maxW: 3000, powerW: 2500 },
+        { id: 'eebus:b', kind: 'klima', maxW: 3000, powerW: 2500 },
+      ],
+      applyConsumptionShares: (shares, untilMs, untilById) => applied.push({ shares, untilMs, untilById }),
+    },
+    gridConnection: { eebusCaps: () => ({ 'eebus:a': 500 }) },
+  };
+  createParagraph14aService(ctx, { setInterval: () => 0, clearInterval: () => {} }).update();
+  const last = applied.at(-1);
+  assert.equal(last.shares['eebus:a'], 500);
+  assert.equal(last.untilMs, until, 'Standard bleibt die §14a-Dauer');
+  assert.equal(last.untilById['eebus:a'], null, 'Gerät A: Netzanschluss-Grenze ohne Ablauf');
+  assert.equal(Object.prototype.hasOwnProperty.call(last.untilById, 'eebus:b'), false, 'Gerät B behält die §14a-Dauer');
 });

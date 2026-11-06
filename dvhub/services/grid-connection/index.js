@@ -21,7 +21,7 @@
 //      (Leistungsgrenze LPC). Kleinste Grenze gilt — §14a und Netzanschluss
 //      werden je Gerät zusammengeführt (services/import-limit/core.js).
 //   3. Freigabe mit Rückschalt-Abstand: erst wenn mindestens so viel Luft da
-//      ist, 30 s lang (15 Takte), frühestens 60 s nach dem letzten Eingriff, und
+//      ist, 30 s lang (gemessene Zeit), frühestens 60 s nach dem letzten Eingriff, und
 //      immer nur ein Gerät je Schritt — zuletzt gekürzt, zuerst wieder frei.
 //   4. Fail-safe: Liefert der Zähler Fehler oder ist sein Wert älter als 90 s
 //      (wie beim Netzstrom-Zähler), gibt DVhub keine NEUE Last frei: Geräte
@@ -71,7 +71,9 @@ export const AUTO_MARGIN_PCT = 3;
 export const AUTO_MARGIN_MIN_W = 1000;
 
 export const ENTER_TICKS = 2;            // Takte über dem Ziel, bis Geräte gekürzt werden
-export const RELEASE_TICKS = 15;         // Takte mit Luft, bis ein Gerät wieder mehr darf (≈ 30 s)
+export const RELEASE_MS = 30_000;        // so lange Luft, bis ein Gerät wieder mehr darf — ZEIT, nicht Takte
+// (Gesamtprüfung 4, P2: bei 1-s-Abfrage wären 15 Takte nur 14 s gewesen).
+export const RELEASE_TICKS = 16;         // = 30 s bei 2-s-Abfrage (für Tests und Doku)
 export const HOLD_AFTER_CUT_MS = 60_000; // nach einem Eingriff frühestens so spät freigeben
 export const OBEY_MS = 20_000;           // so lange zählt ein Befehl als „unterwegs“
 export const BATTERY_OBEY_MS = 10_000;   // so lange darf der Multi zum Senken seiner Ladung brauchen
@@ -177,8 +179,8 @@ export function eosGridImportLimitW(cfg) {
 
 export function createGuardState() {
   return {
-    caps: {}, capAt: {}, ceilingW: null, ceilingUnder: 0,
-    over: 0, under: 0, stale: 0, lastCutAt: 0, batteryPendingSince: null, batteryStuckAt: null,
+    caps: {}, capAt: {}, ceilingW: null, ceilingUnderSince: null,
+    over: 0, underSince: null, stale: 0, lastCutAt: 0, batteryPendingSince: null, batteryStuckAt: null,
     failsafe: false, exhausted: false, phasesMissing: false
   };
 }
@@ -230,8 +232,8 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   if (!meas?.fresh) {
     st.stale += 1;
     st.over = 0;
-    st.under = 0;
-    st.ceilingUnder = 0;
+    st.underSince = null;
+    st.ceilingUnderSince = null;
     if (st.stale < FAILSAFE_TICKS && !st.failsafe) return finish();
     if (!st.failsafe) {
       st.failsafe = true;
@@ -276,15 +278,20 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const desired = phaseExcess == null ? r.targetW : Math.min(r.targetW, total - phaseExcess);
   if (desired < st.ceilingW) {
     st.ceilingW = down(Math.max(0, desired));
-    st.ceilingUnder = 0;
+    st.ceilingUnderSince = null;
   } else if (st.ceilingW < r.targetW) {
-    st.ceilingUnder = desired >= st.ceilingW + r.releaseHysteresisW ? st.ceilingUnder + 1 : 0;
-    if (st.ceilingUnder >= RELEASE_TICKS) {
+    // Luft: entweder Rückschalt-Abstand über der Decke, oder die volle Decke
+    // (Ziel) ist erreichbar — sonst erholte sich eine kleine Absenkung nie
+    // (Gesamtprüfung, P2).
+    const roomy = desired >= st.ceilingW + r.releaseHysteresisW || desired >= r.targetW;
+    if (!roomy) st.ceilingUnderSince = null;
+    else st.ceilingUnderSince ??= now;
+    if (st.ceilingUnderSince != null && now - st.ceilingUnderSince >= RELEASE_MS) {
       // Begrenzt nur das Gesamtziel (keine Phase drückt), zurück aufs Ziel;
       // sonst mit Rückschalt-Abstand unter dem, was die Phase zulässt.
       const raised = desired >= r.targetW ? r.targetW : down(desired - r.releaseHysteresisW);
       st.ceilingW = Math.min(r.targetW, Math.max(st.ceilingW, raised));
-      st.ceilingUnder = 0;
+      st.ceilingUnderSince = null;
     }
   }
 
@@ -293,8 +300,10 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   let pending = 0;
   for (const d of devices) {
     const cap = st.caps[d.id];
-    if (cap == null || !finite(d.currentW) || now - (st.capAt[d.id] || 0) > OBEY_MS) continue;
-    pending += Math.max(0, Number(d.currentW) - cap);
+    if (cap == null || now - (st.capAt[d.id] || 0) > OBEY_MS) continue;
+    // Ohne Leistungsmeldung: die beim Kürzen angenommene Leistung zählt.
+    const cur = finite(d.currentW) ? Number(d.currentW) : Number(st.assumed?.[d.id] ?? cap);
+    pending += Math.max(0, cur - cap);
   }
   const chargeW = r.batterySupported ? Math.max(0, Number(battery.chargeW) || 0) : 0;
   const sp = r.batterySupported && finite(battery.setpointW) && Number(battery.setpointW) > 0
@@ -334,19 +343,25 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       for (const d of devices.filter((x) => x.kind === kind)) {
         if (rest <= 0) break;
         const cap = st.caps[d.id] ?? null;
-        const cur = finite(d.currentW) ? Math.max(0, Number(d.currentW)) : 0;
+        // Ohne Leistungsmeldung: vorsichtig annehmen, dass es seine Grenze bzw.
+        // Höchstleistung zieht — sonst bliebe ein steuerbares Gerät bei
+        // Überlast unbegrenzt (Gesamtprüfung 6, P1).
+        const cur = finite(d.currentW) ? Math.max(0, Number(d.currentW)) : (cap ?? (Number(d.maxW) || 0));
         const draw = cap == null ? cur : Math.min(cur, cap);
         if (draw <= 0) continue;
         let next = Math.max(0, down(draw - rest));
         if (next < (Number(d.minW) || 0)) next = 0;
         if (cap != null && next >= cap) continue;
         setCap(d, next);
+        if (!finite(d.currentW)) (st.assumed ??= {})[d.id] = draw;
+        // Leistung vor dem ersten Eingriff (für die volle Freigabe).
+        (st.cutFrom ??= {})[d.id] = Math.max(Number(st.cutFrom[d.id]) || 0, draw);
         rest -= draw - next;
         events.push({ type: 'cut', id: d.id, kind: d.kind, name: d.name || null, fromW: Math.round(draw), capW: next, importW: Math.round(total), maxPhaseW: maxPhase == null ? null : Math.round(maxPhase), excessW: Math.round(excess) });
       }
     }
     st.over = 0;
-    st.under = 0;
+    st.underSince = null;
     st.lastCutAt = now;
     if (rest > 0 && !st.exhausted) {
       st.exhausted = true;
@@ -358,25 +373,55 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
 
   // --- 3. Freigabe mit Rückschalt-Abstand ----------------------------------------
   const capped = devices.filter((d) => st.caps[d.id] != null);
-  if (!capped.length) { st.under = 0; return finish(); }
+  if (!capped.length) { st.underSince = null; return finish(); }
   let headroom = r.targetW - total;
-  if (phases) headroom = Math.min(headroom, 3 * (r.phaseTargetW - maxPhase));
+  // Luft der knappsten Phase; je Gerät unten nach seinen Phasen umgerechnet.
+  const phaseRoom = phases ? r.phaseTargetW - maxPhase : null;
+  if (phases) headroom = Math.min(headroom, 3 * phaseRoom);
   // Lädt der Akku gerade aus dem Netz, ist seine Ladung freie Leistung für die
   // Geräte — er gibt zuerst nach, der Multi hält den Bezug auf dem Sollwert.
   if (sp != null && !batteryStuck) headroom += chargeW;
-  st.under = headroom >= r.releaseHysteresisW ? st.under + 1 : 0;
-  if (st.under < RELEASE_TICKS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
-  st.under = 0;
+  // Je Phase zählt nur die GEMESSENE Luft: ob der Akku auf derselben Phase
+  // lädt, weiß DVhub nicht (einphasiger Multi an dreiphasigem Anschluss).
+  // Sicherheit vor Komfort — der Akku gibt über die Decke nach, nicht über die
+  // Freigabe (Codex bcbfaff1, P1).
+  const phaseRoomEff = phaseRoom;
+  if (headroom >= r.releaseHysteresisW) st.underSince ??= now;
+  else st.underSince = null;
+  if (st.underSince == null || now - st.underSince < RELEASE_MS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
+  st.underSince = null;
   const give = headroom - r.releaseHysteresisW;
   for (const kind of [...r.order].reverse()) {
     for (const d of capped.filter((x) => x.kind === kind)) {
       const cap = st.caps[d.id];
+      // Grundlage ist, was das Gerät gerade WIRKLICH zieht — eine ungenutzte
+      // Grenze darf nicht Schritt für Schritt über die Luft hinaus wachsen
+      // (Gesamtprüfung 2, P1).
+      // Ohne Leistungsmeldung vorsichtig 0 annehmen: die Grenze wächst dann
+      // höchstens auf die Luft, nicht Schritt für Schritt darüber hinaus
+      // (Codex bf1c2c23, P1).
+      const drawNow = Math.min(cap, finite(d.currentW) ? Math.max(0, Number(d.currentW)) : 0);
+      // Volle Freigabe erst, wenn die Leistung VOR dem ersten Eingriff Platz hat
+      // — eine direkte Box zieht nach release() ihre eigene Höchstleistung,
+      // nicht evMaxChargeW (Gesamtprüfung 7, P1).
+      const fullW = Math.max(Number(d.maxW) || 0, Number(st.cutFrom?.[d.id]) || 0);
+      // Phasen: ein einphasiges (oder unbekanntes) Gerät darf höchstens die Luft
+      // EINER Phase nehmen, ein dreiphasiges das Dreifache (Gesamtprüfung 6, P1).
+      const devPhases = Number(d.phases) === 3 ? 3 : 1;
+      const giveDev = phaseRoomEff == null ? give
+        : Math.min(give, devPhases * phaseRoomEff - (devPhases === 3 ? r.releaseHysteresisW : Math.round(r.releaseHysteresisW / 3)));
+      if (!(giveDev > 0)) continue;
       // Pausiert und zu wenig Luft für den Mindeststrom: nicht anlaufen lassen.
-      if (cap === 0 && give < (Number(d.minW) || 0)) continue;
-      const next = cap + give;
-      if (!finite(d.maxW) || next >= Number(d.maxW)) {
+      if (drawNow === 0 && giveDev < (Number(d.minW) || 0)) continue;
+      const next = Math.max(cap, drawNow + giveDev);
+      // Gerundet ohne Zuwachs: Schritt nicht verbrauchen, nächstes Gerät
+      // (Codex 7055aa8c, P2).
+      if (drawNow + giveDev < fullW && down(next) <= cap) continue;
+      if (st.assumed) delete st.assumed[d.id];
+      if (!(fullW > 0) || (drawNow + giveDev) >= fullW) {
         delete st.caps[d.id];
         delete st.capAt[d.id];
+        if (st.cutFrom) delete st.cutFrom[d.id];
         events.push({ type: 'release', id: d.id, kind: d.kind, name: d.name || null, capW: null, importW: Math.round(total) });
       } else {
         setCap(d, down(next));
@@ -450,7 +495,11 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const viaBridge = (bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false;
     const direct = bc.charger !== 'evcc' && directWallboxConfigured(c);
     if ((viaBridge || direct) && ctx.eosEvccBridge) {
-      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: bc.maxChargeW, minW: minChargeW(bc) });
+      // Höchstleistung nach der Freigabe: über die EOS-Brücke höchstens das, was
+      // der Plan schickt (evMaxChargeW); eine direkte Box ohne Weitergabe regelt
+      // danach selbst — bis zu ihrem Nennstrom (vorsichtig 32 A je Phase).
+      const releaseW = viaBridge ? bc.maxChargeW : Math.max(bc.maxChargeW, Math.round(32 * 230 * bc.phases));
+      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: releaseW, minW: minChargeW(bc), phases: bc.phases });
     }
     if (ctx.mypvRegulator) {
       let heaters;
@@ -463,7 +512,12 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         list.push({ id: `heater:${h.id}`, kind: 'heater', name: h.name || 'Heizstab', currentW: cur, maxW: Number(h.plan?.maxPowerW) || null, minW: Number(h.plan?.minPowerW) || 0 });
       }
     }
+    // Die Hauptwallbox über EEBUS steht schon als „wallbox“ in der Liste —
+    // nicht noch einmal als EEBUS-Gerät zählen (Gesamtprüfung 3, P1).
+    const wallboxSki = list.some((d) => d.id === 'wallbox') && c?.wallbox?.type === 'eebus'
+      ? String(c.wallbox.eebus?.ski || '').trim().toLowerCase() : null;
     for (const d of ctx.eebus?.consumptionDevices?.() || []) {
+      if (wallboxSki && String(d.ski || d.id?.replace(/^eebus:/, '') || '').toLowerCase() === wallboxSki) continue;
       list.push({ id: d.id, kind: 'eebus', name: d.name || 'EEBUS-Gerät', currentW: finite(d.powerW) ? Number(d.powerW) : null, maxW: Number(d.maxW) || null, minW: 0 });
     }
     return list;
@@ -473,7 +527,12 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const s = state();
     const lw = s.schedule?.lastWrite?.gridSetpointW;
     const t = now();
-    const setpointW = lw && finite(lw.value) && t - (Number(lw.at) || 0) <= SETPOINT_MAX_AGE_MS ? Number(lw.value) : null;
+    // Ein dauerhafter Sollwert ohne Keepalive wird nicht neu geschrieben — der
+    // aktive Eintrag der Auswertung (gleicher Wert) zeigt, dass er noch gilt
+    // (Gesamtprüfung 6, P2).
+    const act = s.schedule?.active?.gridSetpointW;
+    const seenAt = Math.max(Number(lw?.at) || 0, act && lw && Number(act.value) === Number(lw.value) ? Number(act.at) || 0 : 0);
+    const setpointW = lw && finite(lw.value) && t - seenAt <= SETPOINT_MAX_AGE_MS ? Number(lw.value) : null;
     const v = s.victron || {};
     const at = Number(v.fieldUpdatedAt?.batteryPowerW) || 0;
     const maxAge = Number(c?.victron?.telemetryMaxAgeMs ?? 90000);
@@ -523,6 +582,16 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   function enforce(changed, ceilingTightened) {
     if (changed.has('wallbox')) {
       Promise.resolve(ctx.eosEvccBridge?.apply?.())
+        .then((r) => {
+          // Grenze nicht angekommen: laut melden, statt eine Grenze anzuzeigen,
+          // die an der Wallbox nicht gilt (Gesamtprüfung 2, P1).
+          // Fehler, oder übersprungen, obwohl eine Grenze steht. „skipped“ nach
+          // einer Freigabe (Weitergabe aus) ist kein Fehler (Codex 7055aa8c,
+          // 6e42ee3e, P2).
+          if (r && r.ok === false && (r.error || st.caps.wallbox != null)) {
+            log('grid_connection_wallbox_failed', { capW: st.caps.wallbox ?? null, error: r.error || r.skipped || 'unknown' }, 'warn');
+          }
+        })
         .catch((e) => log('grid_connection_error', { phase: 'wallbox', error: e?.message || String(e) }, 'warn'));
     }
     if (changed.has('eebus')) {

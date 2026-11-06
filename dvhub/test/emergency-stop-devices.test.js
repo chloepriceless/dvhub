@@ -143,21 +143,6 @@ test('„Laden stoppen“ hält im Not-Halt nicht mehr gegen eine Handladung', a
   assert.equal(w.calls.length, n);
 });
 
-test('Nach dem Aufheben: Plan übernimmt wieder; „Sofort laden“-Ende im Not-Halt stellt den alten Modus danach her', async () => {
-  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
-  const w = wallbox({ enabled: false, override });
-  await w.bridge.apply();
-  assert.deepEqual(w.calls.at(-1), ['charge', 16]);
-  w.setPaused(true);
-  await w.bridge.emergencyStop();
-  assert.deepEqual(w.calls.at(-1), ['stop', 'off']);
-  const n = w.calls.length;
-  await w.bridge.clearOverride(); // im Not-Halt beendet: kein Write
-  assert.equal(w.calls.length, n);
-  w.setPaused(false);
-  await w.bridge.tick();
-  assert.deepEqual(w.calls.at(-1), ['stop', 'pv'], 'evcc zurück auf „pv“');
-});
 
 test('Nach dem Aufheben mit EOS-Plan: Wallbox lädt wieder nach Plan', async () => {
   const w = wallbox();
@@ -402,37 +387,6 @@ test('Codex P2: evcc — neutralisiert wird der Ladepunkt des letzten Befehls, n
   assert.equal(lps[2], 'now', 'Handladung an Ladepunkt 2 unberührt');
 });
 
-test('Codex P2: im Not-Halt beendetes „Sofort laden“ — vorgemerkter Modus übersteht einen Neustart', async () => {
-  const store = { value: { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' } };
-  const calls = [];
-  let paused = false;
-  let mode = 'pv';
-  const mk = (bc) => ({
-    type: 'evcc', isConfigured: () => true,
-    charge: async (a) => { calls.push(['charge', a]); mode = 'now'; return { ok: true }; },
-    stop: async () => { calls.push(['stop', bc.stopMode]); mode = bc.stopMode; return { ok: true }; },
-    release: async () => ({ ok: true }),
-    status: async () => ({ ok: true, connected: true, raw: { mode } }),
-  });
-  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type: 'evcc' } };
-  const make = () => createEosEvccBridge({
-    getCfg: () => cfg, getSolution: async () => null, getCharger: (_c, bc) => mk(bc), getGridCapW: () => null,
-    isPaused: () => paused,
-    loadOverride: () => store.value,
-    saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
-  });
-  const bridge = make();
-  await bridge.apply();
-  paused = true;
-  await bridge.emergencyStop();
-  await bridge.clearOverride();
-  const fresh = make(); // Neustart im Not-Halt
-  await fresh.tick();
-  assert.deepEqual(calls.at(-1), ['stop', 'off'], 'im Not-Halt nichts');
-  paused = false;
-  await fresh.tick();
-  assert.deepEqual(calls.at(-1), ['stop', 'pv'], 'nach dem Aufheben zurück auf „pv“');
-});
 
 // --- Codex 148df991 ---------------------------------------------------------------
 
@@ -456,22 +410,3 @@ test('Codex P1: my-PV — positiver Befehl ohne Quittung (Zeitüberschreitung) z
   assert.equal(writes.at(-1), 0);
 });
 
-test('Codex P2: vorgemerkte Rückkehr mit unbestätigtem Stopp übersteht den Neustart als unbestätigt — Stopp wird wiederholt', async () => {
-  const store = { value: { kind: 'restore', mode: 'pv', stopped: false } };
-  const calls = [];
-  const mk = (bc) => ({
-    type: 'evcc', isConfigured: () => true,
-    charge: async () => ({ ok: true }),
-    stop: async () => { calls.push(['stop', bc.stopMode]); return { ok: true }; },
-    release: async () => ({ ok: true }),
-    status: async () => ({ ok: true, connected: true, raw: { mode: 'now' } }),
-  });
-  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type: 'evcc' } };
-  const bridge = createEosEvccBridge({
-    getCfg: () => cfg, getSolution: async () => null, getCharger: (_c, bc) => mk(bc), getGridCapW: () => 0,
-    loadOverride: () => store.value, saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
-  });
-  await bridge.tick();
-  assert.deepEqual(calls.at(-1), ['stop', 'off'], 'Stopp nach Neustart wiederholt');
-  assert.equal(store.value.stopped, true, 'Bestätigung gespeichert');
-});

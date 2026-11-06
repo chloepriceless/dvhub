@@ -136,9 +136,16 @@ verweist hierher.
   und evcc noch im DVhub-Modus, eigene Heizstab-Vorgabe über 0). Eine von Hand gestartete Ladung oder ein von selbst
   laufender Heizstab bleibt unberührt. Danach schreibt DVhub nichts mehr an Wallbox, Heizstab oder Geräte, auch
   „Laden stoppen“ hält nicht mehr gegen eine Handladung. Der Netzanschluss-Wächter greift im Not-Halt nicht ein.
-  Fehlschläge werden geloggt und nicht wiederholt. Nach dem Aufheben übernimmt die normale Steuerung; ein im Not-Halt
-  beendetes „Sofort laden“ stellt den evcc-Modus von vorher danach her. Verschiebbare Geräte (Geschirrspüler) bleiben
-  unberührt.
+  Fehlschläge werden geloggt und nicht wiederholt. Nach dem Aufheben übernimmt die normale Steuerung. Verschiebbare
+  Geräte (Geschirrspüler) bleiben unberührt.
+- **„Sofort laden“-Ende bei Not-Halt oder Leistungsgrenze: Hinweis statt automatischer Rückkehr.** Endet „Sofort laden“
+  (evcc, EOS-Weitergabe aus), während der Not-Halt oder eine Leistungsgrenze (Netzanschluss/§14a) aktiv ist, stellt
+  DVhub den evcc-Modus von vorher nicht mehr zeitversetzt her. evcc bleibt aus bzw. unverändert. Log
+  (`ev_override_restore_skipped`) und E-Auto-Status nennen den Modus von vorher, damit man ihn in evcc wählen kann.
+  Ein neues „Sofort laden“ am selben Ladepunkt übernimmt ihn. Bewusst weniger Komfort zugunsten einer überschaubaren
+  Zustandsführung: Die Wallbox-Brücke führt je Ziel genau einen Datensatz (letzter Befehl, quittiert ja/nein,
+  Grenz-Vorgabe), gespeichert in `ev_owned.json`. Ist eine Grenze aktiv, heißt ein Stopp immer „aus“. Scheitert der
+  harte Stopp beim Ende, bleibt die Wallbox als „Laden stoppen“ aus, bis man ihn beendet oder absteckt.
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.

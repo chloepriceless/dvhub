@@ -351,3 +351,22 @@ test('Codex P2 (Runde 3): kleiner Abstand — über der harten Grenze gilt die A
   }
   assert.ok(st.caps.wallbox != null, 'Wallbox gekürzt');
 });
+
+test('Gesamtprüfung P2: kleine Absenkung der Akku-Decke (unter dem Rückschalt-Abstand) erholt sich wieder', () => {
+  const st = createGuardState();
+  st.ceilingW = 27500; // kurz durch eine Phase gesenkt
+  run(st, RELEASE_TICKS + 2, { meas: fresh(15000), devices: [], battery: {} }, 0);
+  assert.equal(st.ceilingW, 28000);
+});
+
+test('Gesamtprüfung 2 P1: Freigabe rechnet mit der gemessenen Leistung — ungenutzte Grenze wächst nicht über die Luft hinaus', () => {
+  // Haus konstant 22 kW, Wallbox bleibt aus (z. B. vorgemerkte evcc-Rückkehr):
+  // Luft 6 kW − 1 kW Abstand = 5 kW. Die Grenze darf nicht 0 → 5 → 10 → frei wachsen.
+  const st = createGuardState();
+  st.caps = { wallbox: 0 };
+  st.capAt = { wallbox: 0 };
+  for (let i = 0; i < 6; i += 1) {
+    run(st, RELEASE_TICKS, { meas: fresh(22000), devices: [wallbox(0)], battery: {} }, HOLD_AFTER_CUT_MS + i * 60_000);
+  }
+  assert.ok(st.caps.wallbox != null && st.caps.wallbox <= 5000, `Grenze ${st.caps.wallbox}`);
+});
