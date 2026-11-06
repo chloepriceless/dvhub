@@ -779,7 +779,11 @@ export function createEosEvccBridge(deps) {
           // noch vormerken (Codex bad876b1, P2).
           const keepOverride = lastSent?.override === true && lastKey != null && lastKey === ovKey
             && !stopped.some((x) => targetKey(x.bc) === lastKey);
-          if (!keepOverride) lastSent = {
+          // Behalten heißt: Ziel und „Sofort laden“ bleiben, der Befehlsschlüssel
+          // aber nicht — nach dem Aufheben schickt der Override seinen Befehl
+          // neu (direkte Boxen kennen keine Modus-Abweichung; Codex 82e96f40, P2).
+          if (keepOverride) lastSent = { ...lastSent, key: null };
+          else lastSent = {
             ...(sameAsLast ? lastSent : {}),
             key: `${pick.bc.charger}:${pick.bc.loadpoint}:emergency-stop`, charger: pick.bc.charger, loadpoint: pick.bc.loadpoint,
             action: 'stop', currentA: null,

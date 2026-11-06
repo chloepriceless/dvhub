@@ -580,3 +580,29 @@ test('Gesamtprüfung 4 P2: Freigabe nach 30 s ZEIT, nicht nach Takten (1-s-Abfra
   for (let i = 16; i < 32; i += 1) guardStep(st, { resolved: RG, now: t0 + i * 1000, ...args });
   assert.equal(st.caps.wallbox, undefined, 'nach 31 s frei');
 });
+
+test('Codex 82e96f40 P2: behaltener „Sofort laden“-Merker gilt nach dem Not-Halt nicht als „unverändert“ — die direkte Box lädt wieder', async () => {
+  const calls = [];
+  let stopAckFails = false;
+  let paused = false;
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type: 'openevse' } };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null,
+    getCharger: (_c, bc) => ({
+      type: 'openevse', isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', a, bc.loadpoint]); return { ok: true }; },
+      stop: async () => { calls.push(['stop', bc.loadpoint]); return stopAckFails && bc.loadpoint === 2 ? { ok: false, error: 'timeout' } : { ok: true }; },
+      release: async () => { calls.push(['release']); return { ok: true }; },
+      status: async () => ({ ok: true, connected: true }),
+    }),
+    isPaused: () => paused,
+  });
+  await bridge.setOverride({ kind: 'charge', powerW: 11000 });   // Ziel :1
+  cfg.optimizer.evEvccLoadpoint = 2;
+  await bridge.apply();                                         // Ziel :2
+  paused = true; stopAckFails = true;
+  await bridge.emergencyStop();
+  paused = false; stopAckFails = false;
+  await bridge.tick();
+  assert.deepEqual(calls.at(-1).slice(0, 1), ['charge'], 'lädt nach dem Aufheben wieder');
+});
