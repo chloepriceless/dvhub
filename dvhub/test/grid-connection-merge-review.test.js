@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 
 import { createEosEvccBridge } from '../services/optimizer/eos-evcc-bridge.js';
 import { createGridConnectionGuard } from '../services/grid-connection/index.js';
+import { createEvccAdapter } from '../services/wallbox/adapters.js';
 
 function bridgeHarness({ type = 'evcc', stopMode = 'minpv', plan = 1, enabled = true, capW = null, override = null, chargeFails = false } = {}) {
   const calls = [];
@@ -104,4 +105,83 @@ test('P2: vorgemerkte Rückkehr gilt dem ursprünglichen Ladepunkt, auch nach Um
   h.ref.paused = false;
   await h.bridge.tick();
   assert.deepEqual(h.calls.at(-1), ['stop', 'pv', 1], '„pv“ zurück an Ladepunkt 1, nicht 2');
+});
+
+// --- Codex 8bf189b7: unquittierte Ladung und bestätigte Ziele -------------------
+
+function evccMulti({ enabled = true, override = null } = {}) {
+  const modes = { 1: 'pv', 2: 'pv' };
+  const fail = { 1: false, 2: false };   // Quittung bleibt aus
+  const noEffect = { 1: false, 2: false }; // Befehl wirkt gar nicht
+  const calls = [];
+  const evcc = {
+    getStatus: () => ({ url: 'http://evcc.local:7070' }),
+    getLoadpoints: () => [1, 2].map((id) => ({ id, mode: modes[id], connected: true })),
+    refresh: async () => true,
+    setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', id, a]); return { ok: true }; },
+    setMode: async (id, m) => {
+      calls.push(['mode', id, m]);
+      if (!noEffect[id]) modes[id] = m;
+      return fail[id] && m === 'now' ? { ok: false, error: 'timeout' } : { ok: true };
+    },
+  };
+  const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: enabled, evEvccControl: enabled, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' } };
+  const ref = { paused: false };
+  const t = Date.now();
+  const store = { value: override };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg,
+    getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
+    getCharger: (_c, bc) => createEvccAdapter(evcc, () => bc.loadpoint, () => bc.stopMode),
+    isPaused: () => ref.paused, now: () => t,
+    loadOverride: () => store.value,
+    saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
+  });
+  return { bridge, modes, fail, noEffect, calls, cfg, ref };
+}
+
+test('Codex 8bf189b7 P1: bestätigt ladender Ladepunkt 1 wird gestoppt, auch wenn danach ein Versuch an Ladepunkt 2 ohne Wirkung scheiterte', async () => {
+  const h = evccMulti();
+  await h.bridge.tick();
+  assert.equal(h.modes[1], 'now');
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  h.fail[2] = true; h.noEffect[2] = true;
+  await h.bridge.tick();
+  assert.equal(h.modes[2], 'pv', 'Versuch an 2 ohne Wirkung');
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  assert.equal(h.modes[1], 'off', 'Ladepunkt 1 aus');
+  assert.equal(h.modes[2], 'pv', 'Ladepunkt 2 unberührt');
+});
+
+test('Codex 8bf189b7 P2: unquittierte Ladung, danach bestätigter Stopp, dann Handladung → Not-Halt schickt nichts', async () => {
+  const h = evccMulti({ enabled: false });
+  h.fail[1] = true;
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  assert.equal(h.modes[1], 'now', 'Befehl wirkte ohne Quittung');
+  h.fail[1] = false;
+  await h.bridge.setOverride({ kind: 'stop' });
+  assert.equal(h.modes[1], 'off', 'bestätigter Stopp');
+  await h.bridge.clearOverride();
+  h.modes[1] = 'now'; // Handladung in der evcc-App
+  h.ref.paused = true;
+  const n = h.calls.length;
+  await h.bridge.emergencyStop();
+  assert.equal(h.calls.length, n, 'kein Befehl');
+  assert.equal(h.modes[1], 'now');
+});
+
+test('Codex 8bf189b7 P2: erstes „Sofort laden“ ohne Quittung, Not-Halt stoppt — Ende im Not-Halt stellt danach den alten Modus her', async () => {
+  const h = evccMulti({ enabled: false });
+  h.fail[1] = true;
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  assert.equal(h.modes[1], 'now');
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  assert.equal(h.modes[1], 'off');
+  await h.bridge.clearOverride();
+  h.ref.paused = false;
+  h.fail[1] = false;
+  await h.bridge.tick();
+  assert.equal(h.modes[1], 'pv', 'evcc zurück auf „pv“');
 });
