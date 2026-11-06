@@ -307,10 +307,13 @@ export function createEosEvccBridge(deps) {
       // aus, bis sie es erlaubt — sonst liefe z. B. „minpv“ trotz Pause wieder
       // an (Codex 184bcdcf, P1). runTick holt den Modus danach nach.
       if (gridCapBlocks(bc)) {
-        pendingRestore = { mode };
+        // Erst sicher aus (die Grenze kann im selben Takt gekommen sein, in dem
+        // der Override endet), dann den Modus vormerken (Codex bf805c50, P1).
+        const res = await hardStopper(cfg, { ...bc, charger: 'evcc' }, { type: 'evcc' }).stop();
+        pendingRestore = { mode, stopped: res?.ok === true };
         lastSent = { ...lastSent, override: false };
-        pushLog('ev_override_restore_deferred', { mode, reason });
-        return { ok: true, deferred: true };
+        pushLog('ev_override_restore_deferred', { mode, reason, stopped: res?.ok === true });
+        return res?.ok ? { ok: true, deferred: true } : res;
       }
       const res = await getCharger(cfg, { ...bc, charger: 'evcc', stopMode: mode }).stop();
       if (res?.ok) lastSent = null;
@@ -486,9 +489,17 @@ export function createEosEvccBridge(deps) {
         if (res) return res;
         force = true;
       }
-      if (pendingRestore && bc.enabled) pendingRestore = null; // der Plan übernimmt
-      if (!bc.enabled && pendingRestore) {
-        if (gridCapBlocks(bc)) return { ok: true, deferred: true };
+      // Der Plan übernimmt nur, wenn er auch steuern darf (Pro) — Codex bf805c50, P2.
+      if (pendingRestore && bc.enabled && isProActive() !== false) pendingRestore = null;
+      if (pendingRestore) {
+        if (gridCapBlocks(bc)) {
+          if (!pendingRestore.stopped) {
+            const res = await hardStopper(cfg, { ...bc, charger: 'evcc' }, { type: 'evcc' }).stop();
+            pendingRestore.stopped = res?.ok === true;
+            if (!res?.ok) return { ok: false, error: res?.error || 'evcc stop failed' };
+          }
+          return { ok: true, deferred: true };
+        }
         const res = await getCharger(cfg, { ...bc, charger: 'evcc', stopMode: pendingRestore.mode }).stop();
         if (!res?.ok) return { ok: false, error: res?.error || 'evcc mode restore failed' };
         pushLog('ev_override_restored', { mode: pendingRestore.mode });
@@ -608,7 +619,12 @@ export function createEosEvccBridge(deps) {
       const next = norm.override;
       // evcc-Modus von vorher merken (fuer das Ende bei ausgeschalteter
       // Weitergabe). Laeuft schon ein Override, bleibt dessen Herkunft.
-      if (!override && bc.charger === 'evcc') {
+      // Steht noch ein vorgemerkter Modus aus einer Pause an, ist DAS der Modus
+      // von vorher — nicht das erzwungene „aus“ (Codex bf805c50, P2).
+      if (!override && pendingRestore) {
+        next.prevMode = pendingRestore.mode;
+        pendingRestore = null;
+      } else if (!override && bc.charger === 'evcc') {
         try {
           const st = await getCharger(cfg, bc).status();
           const own = next.kind === 'stop' ? 'off' : 'now';
