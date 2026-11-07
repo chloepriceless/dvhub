@@ -26,6 +26,14 @@ verweist hierher.
     Schritt. Optional gilt eine Grenze je Phase (A), weil Sicherungen je Phase auslösen.
   - Fail-safe: Ist der Zähler gestört oder sein Wert älter als 90 s, gibt DVhub keine neue Last frei. Der Akku-Sollwert
     sinkt dann auf Grenze − Abstand − geschätzte Grundlast − laufende Geräte.
+  - Die Wallbox überwacht der Wächter IMMER, solange eine Grenze gilt (Christin 07.11.2026): mit oder ohne
+    EOS-Weitergabe, bei „Sofort laden“, wenn evcc im eigenen Modus (pv/minpv/now) lädt und bei Handstart — und jeden
+    ladenden evcc-Ladepunkt, nicht nur den eingestellten. Ein evcc-Ladepunkt, den DVhub nicht selbst steuert, wird nur
+    über maxcurrent begrenzt (Modus bleibt); unter dem Mindeststrom geht er auf „aus“ und kehrt in seinen Modus zurück,
+    sobald der Deckel den Mindeststrom wieder erlaubt; ohne Deckel bekommt er seinen Ursprungsstrom zurück. Zieht ein
+    Gerät trotz Deckel deutlich mehr (z. B. von Hand wieder gestartet), sendet DVhub den Deckel erzwungen neu, höchstens
+    alle 30 s. Eine Box, die beim Deckeln nichts zog (z. B. Fail-safe), gibt DVhub ganz frei statt sie per Ladebefehl
+    zu starten.
   - Leitstand-Kachel „Netzanschluss“ und Protokoll-Ereignisse, z. B. „Netzanschluss: begrenzt Akku-Ladung auf 28,0 kW“.
   - Peak Shaving, §14a und Netzanschluss nutzen denselben Kern (`services/import-limit/core.js`): Sollwert-Deckel und
     „kleinste gilt“ je Gerät.
@@ -46,11 +54,12 @@ verweist hierher.
   „Laden stoppen“ hält nicht mehr gegen eine Handladung. Der Netzanschluss-Wächter greift im Not-Halt nicht ein.
   Fehlschläge werden geloggt und nicht wiederholt. Nach dem Aufheben übernimmt die normale Steuerung. Verschiebbare
   Geräte (Geschirrspüler) bleiben unberührt.
-- **„Sofort laden“-Ende bei Not-Halt oder Leistungsgrenze.** Endet „Sofort laden“ (evcc, EOS-Weitergabe aus), während
-  der Not-Halt oder eine Leistungsgrenze (Netzanschluss/§14a) aktiv ist, bleibt evcc aus bzw. unverändert. Den Modus von
-  vorher stellt DVhub zurück, sobald keine Grenze mehr gilt und der Not-Halt aufgehoben ist — aber nur, wenn evcc frisch
-  abgefragt noch auf DVhubs „aus“ steht (sonst hat man selbst umgestellt). Der E-Auto-Status zeigt, was aussteht.
-  Ist eine Grenze aktiv, heißt ein Stopp immer „aus“. Scheitert der harte Stopp beim Ende, bleibt die Wallbox als
+- **„Sofort laden“-Ende bei Not-Halt oder Leistungsgrenze.** Endet „Sofort laden“ (evcc, EOS-Weitergabe aus), kehrt
+  evcc sofort in den Modus von vorher zurück; den Strom begrenzt danach der Wächter über maxcurrent (kein Warten auf
+  Luft für die volle Leistung). Nur im Not-Halt oder unter einem Deckel unter dem Mindeststrom bleibt evcc aus bzw.
+  unverändert; zurückgestellt wird nach dem Aufheben bzw. sobald der Deckel den Mindeststrom erlaubt — aber nur, wenn
+  evcc frisch abgefragt noch auf DVhubs „aus“ steht (sonst hat man selbst umgestellt). Der E-Auto-Status zeigt, was
+  aussteht. Ist eine Grenze aktiv, heißt ein Stopp immer „aus“. Scheitert der harte Stopp beim Ende, bleibt die Wallbox als
   „Laden stoppen“ aus, bis man ihn beendet oder absteckt. Die Wallbox-Brücke führt je Gerät genau einen Datensatz
   (Geräte-Identität, letzter Befehl, quittiert ja/nein, Grenz-Vorgabe, ausstehende Rückkehr) in `ev_owned.json`.
 - **Not-Halt und direkt angebundene Wallboxen:** DVhub stoppt eine direkte Box nur, wenn sie frisch gelesen noch in

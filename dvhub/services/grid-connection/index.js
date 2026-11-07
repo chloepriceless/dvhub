@@ -78,6 +78,9 @@ export const RELEASE_MS = 30_000;        // so lange Luft, bis ein Gerät wieder
 // (Gesamtprüfung 4, P2: bei 1-s-Abfrage wären 15 Takte nur 14 s gewesen).
 export const RELEASE_TICKS = 16;         // = 30 s bei 2-s-Abfrage (für Tests und Doku)
 export const HOLD_AFTER_CUT_MS = 60_000; // nach einem Eingriff frühestens so spät freigeben
+export const REASSERT_MS = 30_000;       // Ungehorsam: Befehl höchstens so oft erzwungen neu
+export const DISOBEY_TICKS = 3;          // so viele Takte über dem Deckel, bis er erneut gesendet wird
+const DISOBEY_TOL_W = 500;               // Toleranz über dem Deckel (Messung, Anlauf), mindestens 10 %
 export const OBEY_MS = 20_000;           // so lange zählt ein Befehl als „unterwegs“
 export const BATTERY_OBEY_MS = 10_000;   // so lange darf der Multi zum Senken seiner Ladung brauchen
 export const BATTERY_TRACK_TOLERANCE_W = 300;   // übliches Einregeln des Multi um den Sollwert
@@ -292,8 +295,10 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const events = [];
   const capsBefore = { ...st.caps };
   const ceilingBefore = st.ceilingW;
+  // Geräte, deren Deckel erzwungen neu gesendet werden soll (Ungehorsam).
+  const forced = new Set();
   const finish = () => {
-    const changed = new Set();
+    const changed = new Set(forced);
     const ids = new Set([...Object.keys(capsBefore), ...Object.keys(st.caps)]);
     for (const id of ids) {
       if ((capsBefore[id] ?? null) !== (st.caps[id] ?? null)) changed.add(kindOf(id, devices));
@@ -335,6 +340,9 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // nicht umgestellt werden (z. B. 16 A → 15,9 A), nur nicht mehr steigen.
       const curUp = Math.ceil(cur / STEP_W) * STEP_W;
       const next = cap == null ? curUp : Math.min(cap, curUp);
+      // Leistung beim Einfrieren merken: ein Gerät, das dabei nichts zog, wird
+      // später ganz freigegeben statt per Teil-Deckel gestartet.
+      if (cap == null) (st.cutFrom ??= {})[d.id] = cur;
       if (cap == null || next < cap) setCap(d, next);
       frozenW += st.caps[d.id];
     }
@@ -346,18 +354,6 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   if (st.failsafe) {
     st.failsafe = false;
     events.push({ type: 'failsafe_off' });
-  }
-
-  // Geräte, die gehalten werden müssen, bis Luft für ihre volle Leistung ist
-  // (ausstehende evcc-Rückkehr: evcc regelt danach selbst) — Grenze 0, einmal
-  // je Halten; freigegeben wird über die normale Freigabe (Codex b6ebd4b4, P1).
-  st.holdReleased ??= {};
-  for (const d of devices) {
-    if (!d.hold) { delete st.holdReleased[d.id]; continue; }
-    if (st.caps[d.id] == null && !st.holdReleased[d.id]) {
-      setCap(d, 0);
-      events.push({ type: 'hold', id: d.id, kind: d.kind, name: d.name || null });
-    }
   }
 
   // --- Messung -----------------------------------------------------------------
@@ -376,6 +372,25 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const phaseExcess = phases ? 3 * Math.max(...phases.map((p, i) => p - phaseTargets[i])) : null;
   const excess = Math.max(total - r.targetW, phaseExcess ?? -Infinity);
   const hard = total > r.limitW || (phases != null && phases.some((p, i) => p > phaseLimits[i]));
+
+  // --- Ungehorsam: Gerät zieht trotz Deckel deutlich mehr -------------------
+  // (z. B. von Hand in evcc oder an der Box wieder gestartet). Nach der
+  // Befolgungszeit und DISOBEY_TICKS Takten den Deckel erzwungen neu senden —
+  // höchstens alle REASSERT_MS (Christin 07.11.2026: Grenze nie überschreiten).
+  st.disobey ??= {};
+  st.reassertAt ??= {};
+  for (const d of devices) {
+    const cap = st.caps[d.id];
+    const cur = finite(d.currentW) ? Number(d.currentW) : null;
+    if (cap == null || cur == null || now - (st.capAt[d.id] || 0) <= OBEY_MS
+      || cur <= cap + Math.max(DISOBEY_TOL_W, cap * 0.1)) { delete st.disobey[d.id]; continue; }
+    st.disobey[d.id] = (st.disobey[d.id] || 0) + 1;
+    if (st.disobey[d.id] < DISOBEY_TICKS || now - (st.reassertAt[d.id] || 0) < REASSERT_MS) continue;
+    st.reassertAt[d.id] = now;
+    st.disobey[d.id] = 0;
+    forced.add(d.kind);
+    events.push({ type: 'reassert', id: d.id, kind: d.kind, name: d.name || null, capW: cap, currentW: Math.round(cur) });
+  }
 
   // --- 1. Akku: Decke für positive Netz-Sollwerte ------------------------------
   const desired = phaseExcess == null ? r.targetW : Math.min(r.targetW, total - phaseExcess);
@@ -538,6 +553,16 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       const devPhases = Number(d.phases) === 3 ? 3 : 1;
       const giveDev = maxFit(give, devPhases);
       if (!(giveDev > 0)) continue;
+      // Zog beim Deckeln nichts (z. B. Fail-safe an einer Leerlauf-Box): ganz
+      // freigeben statt per Teil-Deckel einen Ladebefehl auszulösen — DVhub
+      // startet keine Box, die es nicht selbst zum Laden geschickt hat.
+      if (drawNow === 0 && st.cutFrom?.[d.id] === 0) {
+        delete st.caps[d.id];
+        delete st.capAt[d.id];
+        delete st.cutFrom[d.id];
+        events.push({ type: 'release', id: d.id, kind: d.kind, name: d.name || null, capW: null, importW: Math.round(total) });
+        return finish();
+      }
       // Pausiert und zu wenig Luft für den Mindeststrom: nicht anlaufen lassen.
       if (drawNow === 0 && giveDev < (Number(d.minW) || 0)) continue;
       const next = Math.max(cap, drawNow + giveDev);
@@ -549,7 +574,6 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
         delete st.caps[d.id];
         delete st.capAt[d.id];
         if (st.cutFrom) delete st.cutFrom[d.id];
-        if (d.hold) (st.holdReleased ??= {})[d.id] = true;
         events.push({ type: 'release', id: d.id, kind: d.kind, name: d.name || null, capW: null, importW: Math.round(total) });
       } else {
         setCap(d, down(next));
@@ -564,7 +588,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
 function kindOf(id, devices) {
   const d = devices.find((x) => x.id === id);
   if (d) return d.kind;
-  if (id === 'wallbox') return 'wallbox';
+  if (id === 'wallbox' || id.startsWith('wallbox:')) return 'wallbox';
   if (id.startsWith('heater:')) return 'heater';
   if (id.startsWith('eebus:')) return 'eebus';
   return 'other';
@@ -621,24 +645,39 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   function devices(c) {
     const list = [];
     const bc = resolveEvccBridgeConfig(c);
-    // Wallbox: über die EOS-Brücke (evcc oder direkt, mit Pro) oder eine direkt
-    // angebundene Box. evcc ohne EOS-Steuerung steuert DVhub nicht.
-    // „Sofort laden“ läuft auch ohne EOS-Weitergabe über die Brücke und hält
-    // deren Grenze ein (Codex b2f1ccd, P1).
+    // Wallbox: EINE Regel (Christin 07.11.2026) — solange eine Grenze gilt,
+    // überwacht der Wächter die Wallbox immer: mit oder ohne EOS-Weitergabe,
+    // „Sofort laden“, evcc im eigenen Modus oder Handstart. Die Brücke setzt den
+    // Deckel durch (evcc maxcurrent bzw. Box-Strom, unter dem Mindeststrom Pause).
     const override = ctx.eosEvccBridge?.getOverride?.();
     const overrideCharging = override != null && override.kind !== 'stop';
     const viaBridge = (bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false;
-    // Steht eine evcc-Rückkehr aus, bleibt die Wallbox eingeschrieben: zurück
-    // erst, wenn der Wächter sie über Abstand und Rückschalt-Prüfung ganz
-    // freigibt (danach regelt evcc selbst — bis zu 32 A je Phase angenommen).
-    const restorePending = ctx.eosEvccBridge?.hasPendingRestore?.() === true;
+    const evccSt = ctx.evccIntegration?.getStatus?.() || null;
+    const evccOn = Boolean(evccSt?.url);
     const direct = bc.charger !== 'evcc' && directWallboxConfigured(c);
-    if ((viaBridge || direct || restorePending) && ctx.eosEvccBridge) {
+    if (((bc.charger === 'evcc' && (evccOn || viaBridge)) || direct) && ctx.eosEvccBridge) {
       // Höchstleistung nach der Freigabe: über die EOS-Brücke höchstens das, was
-      // der Plan schickt (evMaxChargeW); eine direkte Box ohne Weitergabe regelt
-      // danach selbst — bis zu ihrem Nennstrom (vorsichtig 32 A je Phase).
+      // der Plan schickt (evMaxChargeW); sonst regelt die Wallbox selbst — bis
+      // zu ihrem Nennstrom (vorsichtig 32 A je Phase).
       const releaseW = viaBridge ? bc.maxChargeW : Math.max(bc.maxChargeW, Math.round(32 * 230 * bc.phases));
-      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: releaseW, minW: minChargeW(bc), phases: bc.phases, hold: restorePending && !viaBridge });
+      list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: releaseW, minW: minChargeW(bc), phases: bc.phases });
+    }
+    // Weitere evcc-Ladepunkte: jeder, der gerade lädt (oder noch gedeckelt ist).
+    if (evccOn && ctx.eosEvccBridge) {
+      const fresh = !(evccSt.lastError || (evccSt.lastPolledAt != null && now() - Number(evccSt.lastPolledAt) > 90_000));
+      for (const lp of Array.isArray(evccSt.loadpoints) ? evccSt.loadpoints : []) {
+        const lpId = Number(lp?.id);
+        if (!(lpId >= 1) || (bc.charger === 'evcc' && lpId === bc.loadpoint)) continue;
+        const id = `wallbox:evcc:${lpId}`;
+        const powerW = fresh && finite(lp.chargePowerW) ? Number(lp.chargePowerW) : null;
+        if (!(powerW > 0) && st.caps[id] == null) continue;
+        const ph = [3, 1, 2].includes(Number(lp.phasesActive)) ? Number(lp.phasesActive)
+          : ([1, 2, 3].includes(Number(lp.phasesConfigured)) ? Number(lp.phasesConfigured) : 3);
+        list.push({
+          id, kind: 'wallbox', name: lp.title || `Ladepunkt ${lpId}`, currentW: powerW,
+          maxW: Math.round(32 * 230 * ph), minW: Math.round((Number(lp.minCurrentA) || 6) * 230 * ph), phases: ph === 3 ? 3 : 1
+        });
+      }
     }
     if (ctx.mypvRegulator) {
       let heaters;

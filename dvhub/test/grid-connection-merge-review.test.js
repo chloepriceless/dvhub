@@ -703,18 +703,30 @@ test('Punkt 4: „Sofort laden“ endet im Not-Halt → kein Write; nach dem Auf
   assert.equal(h.bridge.getStatus().restoreHint, null);
 });
 
-test('Punkt 4: „Sofort laden“ endet bei aktiver Grenze → evcc hart aus; zurück erst, wenn die Grenze ganz weg ist', async () => {
+// Seit 07.11.2026 (Christin, eine Regel): zurück sofort, sobald der Deckel
+// den Mindeststrom erlaubt — kein Warten auf Luft für die volle Leistung; den
+// Strom begrenzt danach der Wächter über maxcurrent.
+test('Punkt 4 (neu): „Sofort laden“ endet unter Deckel über dem Mindeststrom → Modus sofort zurück', async () => {
   const h = evccMulti({ enabled: false });
   await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
   h.capW = 5000;
   await h.bridge.clearOverride();
+  assert.equal(h.modes[1], 'pv');
+  assert.equal(h.bridge.getStatus().restoreHint, null);
+});
+
+test('Punkt 4 (neu): Deckel unter dem Mindeststrom → aus; zurück, sobald er den Mindeststrom erlaubt', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 2000;
+  await h.bridge.clearOverride();
   assert.equal(h.modes[1], 'off');
   assert.equal(h.bridge.getStatus().restoreHint.reason, 'grid_cap');
   await h.bridge.tick();
-  assert.equal(h.modes[1], 'off', 'Teil-Grenze: bleibt aus');
-  h.capW = null;
+  assert.equal(h.modes[1], 'off', 'unter dem Mindeststrom: bleibt aus');
+  h.capW = 5000;
   await h.bridge.tick();
-  assert.equal(h.modes[1], 'pv');
+  assert.equal(h.modes[1], 'pv', 'Teil-Deckel reicht');
 });
 
 test('Punkt 4: in evcc inzwischen selbst umgestellt → DVhub stellt nichts zurück', async () => {
@@ -743,13 +755,13 @@ test('Punkt 4: Rückkehr übersteht einen Neustart (ev_owned.json)', async () =>
   assert.equal(h.modes[1], 'pv');
 });
 
-test('Punkt 4: Wächter schreibt die Wallbox ein, solange eine Rückkehr aussteht', () => {
+test('Punkt 4: Wächter überwacht die evcc-Wallbox immer (auch ohne Weitergabe), nicht erst bei ausstehender Rückkehr', () => {
   const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
   const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -33000 }, victron: {}, schedule: {}, ctrl: {} };
   const ctx = {
     getCfg: () => cfg, state, pushLog: () => {},
-    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: 11000 }] }) },
-    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null, hasPendingRestore: () => true },
+    evccIntegration: { getStatus: () => ({ url: 'http://evcc.local:7070', loadpoints: [{ id: 1, chargePowerW: 11000 }] }) },
+    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null, hasPendingRestore: () => false },
   };
   const guard = createGridConnectionGuard(ctx);
   guard.tick();
@@ -808,7 +820,7 @@ test('Abschluss A P2: Entlade-Wächter — eine Netzanschluss-Decke auf „Akku 
 test('bcbfaff1/fa219ab7 P1: Sicherheits-Stopp beim Override-Ende scheitert → „Laden stoppen“ hält evcc aus, das Laden lebt nicht wieder auf', async () => {
   const h = evccMulti({ enabled: false });
   await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
-  h.capW = 6000;                         // Teil-Grenze
+  h.capW = 2000;                         // unter dem Mindeststrom
   h.failStop = 1;
   await h.bridge.clearOverride();
   assert.equal(h.bridge.getOverride()?.kind, 'stop', 'aus dem Laden wird ein Stopp');
@@ -1157,7 +1169,7 @@ test('a2686af7 P1: alte Box vorübergehend nicht erreichbar → Datensatz bleibt
 
 // --- Prüfungen b6ebd4b4, 529a0121, b7e52e33 -------------------------------------------
 
-test('b6ebd4b4 P1: Rückkehr ausstehend → Wächter hält die Wallbox (Grenze 0), bis Luft für ihre volle Leistung ist', () => {
+test('b6ebd4b4 (seit 07.11. aufgehoben): eine ausstehende Rückkehr hält die Wallbox NICHT mehr auf 0', () => {
   const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
   const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -27000 }, victron: {}, schedule: {}, ctrl: {} };
   const ctx = {
@@ -1167,7 +1179,7 @@ test('b6ebd4b4 P1: Rückkehr ausstehend → Wächter hält die Wallbox (Grenze 0
   };
   const guard = createGridConnectionGuard(ctx);
   guard.tick();
-  assert.equal(guard.capW('wallbox'), 0, 'gehalten, obwohl sie gerade nichts zieht');
+  assert.equal(guard.capW('wallbox'), null, 'kein Halten auf volle Leistung mehr');
 });
 
 test('b6ebd4b4 P1: Not-Halt kommt während der frischen evcc-Abfrage → keine Rückkehr', async () => {
@@ -1272,10 +1284,11 @@ test('Gesamtrunde 2 P1: Not-Halt während der Rückkehr-Abfrage → auch kein Ov
   h.refreshFailOnce = true;                // Rückkehr bleibt vorgemerkt
   await h.bridge.setOverride({ kind: 'charge', powerW: 11000 }); // LP2 lädt
   assert.equal(h.modes[1], 'off', 'Rückkehr noch offen');
-  h.refreshHook = () => { h.ref.paused = true; };
-  const n = h.calls.length;
+  let n = null;
+  h.refreshHook = () => { h.ref.paused = true; n = h.calls.length; };
   await h.bridge.apply();
-  assert.equal(h.calls.slice(n).some((c) => c[0] === 'mode' && c[2] === 'now'), false);
+  assert.ok(n != null, 'Rückkehr-Abfrage lief');
+  assert.equal(h.calls.slice(n).some((c) => c[0] === 'mode'), false, 'nach dem Not-Halt kein Befehl');
 });
 
 test('Gesamtrunde 2 P2: laufendes Gerät — Freigabe braucht keine Mindestleistung, nur Zuwachs', () => {

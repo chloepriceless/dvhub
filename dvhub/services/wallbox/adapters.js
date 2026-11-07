@@ -32,7 +32,7 @@ import { getWattpilotConnection } from './wattpilot.js';
 // Wallbox nicht steuern. Lesen (status) bleibt erlaubt.
 const READ_ONLY = Object.freeze({ ok: false, error: 'read_only' });
 function guardWrites(adapter) {
-  for (const k of ['charge', 'stop', 'release']) {
+  for (const k of ['charge', 'stop', 'release', 'limit']) {
     const fn = adapter[k];
     if (typeof fn === 'function') adapter[k] = (...a) => (isReadOnlyMode() ? Promise.resolve(READ_ONLY) : fn(...a));
   }
@@ -384,6 +384,11 @@ export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
     },
     async stop() {
       return evccIntegration.setMode(getLoadpoint(), getStopMode());
+    },
+    // Nur den Ladestrom begrenzen (maxcurrent), Modus unverändert — für den
+    // Netzanschluss-Deckel, wenn evcc im eigenen Modus lädt.
+    async limit(currentA) {
+      return evccIntegration.setMaxCurrent(getLoadpoint(), currentA);
     },
     async release() {
       // evcc kennt kein "Vorgabe zuruecknehmen". Bewusst nichts tun: so blieb
