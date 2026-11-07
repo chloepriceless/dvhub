@@ -455,14 +455,22 @@ export function createEosEvccBridge(deps) {
     }
   }
 
-  // Hält ein Deckel UNTER dem Mindeststrom diesen evcc-Ladepunkt aus? (Pause
-  // durch evccCapTick oder Deckel am eingestellten Ladepunkt.)
-  function heldOff(key, lpId, bc) {
-    if (owned.get(key)?.limitOff === true) return true;
+  // Wirksamer Deckel eines evcc-Ladepunkts: am eingestellten der gemeinsame
+  // (§14a und Netzanschluss, kleinster gilt), an weiteren der des Wächters.
+  function loadpointCapW(lpId, bc) {
     const sel = bc.charger === 'evcc' && Number(lpId) === bc.loadpoint;
     const cap = sel ? getGridCapW() : getDeviceCapW(`wallbox:evcc:${lpId}`);
-    if (cap == null || !Number.isFinite(Number(cap))) return false;
-    return applyGridCap({ action: 'charge', currentA: bc.maxCurrentA }, bc, cap).action === 'stop';
+    return cap != null && Number.isFinite(Number(cap)) ? Number(cap) : null;
+  }
+
+  // Rückkehr des Modus erst, wenn ein stehender Deckel als maxcurrent quittiert
+  // ist (evccCapTick) — nie mit dem alten Strom (Codex a7aacda4, P1). Unter dem
+  // Mindeststrom bleibt der Ladepunkt aus.
+  function restoreBlocked(key, lpId, bc) {
+    const e = owned.get(key);
+    if (e?.limitOff === true) return true;
+    if (loadpointCapW(lpId, bc) == null) return false;
+    return !(e?.gridCap === true && e.limitA != null);
   }
 
   // Der eine Übergang der evcc-Rückkehr (Punkt 4). Läuft in runTick, also im
@@ -477,15 +485,15 @@ export function createEosEvccBridge(deps) {
       // Der Wächter hält den Ladepunkt unter dem Mindeststrom: aus lassen. Sonst
       // sofort zurück — den Strom begrenzt danach evccCapTick über maxcurrent
       // (Christin 07.11.2026: kein Warten auf Luft für die volle Leistung).
-      if (heldOff(key, e.loadpoint, bc)) continue;
+      if (restoreBlocked(key, e.loadpoint, bc)) continue;
       const tgt = { ...bc, charger: 'evcc', loadpoint: e.loadpoint };
       const charger = getCharger(cfg, tgt);
       let st;
       try { st = await charger.status({ fresh: true }); } catch { st = null; }
       if (!st?.ok) continue; // unbekannt: nächster Takt
-      if ((st.raw?.mode ?? null) !== 'off') { drop('changed_by_user'); continue; }
+      if ((st.raw?.mode ?? null) !== (e.restore.expect || 'off')) { drop('changed_by_user'); continue; }
       // Während der Abfrage kann der Not-Halt oder eine Pause gekommen sein.
-      if (isPaused() || heldOff(key, e.loadpoint, bc)) continue;
+      if (isPaused() || restoreBlocked(key, e.loadpoint, bc)) continue;
       const res = await getCharger(cfg, { ...tgt, stopMode: e.restore.mode }).stop();
       if (res?.ok) {
         const cur = owned.get(key);
@@ -524,10 +532,12 @@ export function createEosEvccBridge(deps) {
       || (lastSent?.override ? { charger: lastSent.charger || bc.charger, loadpoint: lastSent.loadpoint ?? bc.loadpoint } : null);
     if (!tgt || !(owned.has(targetKey(tgt)) || lastSent?.override)) return null;
     const mode = ended?.prevMode || bc.stopMode;
-    const hint = (why) => {
+    // expect: der Modus, in dem DVhub evcc zurücklässt — nur wenn evcc noch
+    // darin steht, wird zurückgestellt (sonst hat man selbst umgestellt).
+    const hint = (why, expect = 'off') => {
       const key = targetKey({ charger: 'evcc', loadpoint: tgt.loadpoint ?? bc.loadpoint });
       const e = owned.get(key) || { charger: 'evcc', loadpoint: tgt.loadpoint ?? bc.loadpoint, identity: wallboxIdentity(cfg, 'evcc'), cmd: 'stop', confirmed: false, gridCap: false };
-      setOwned(key, { ...e, restore: { mode, reason: why, at: new Date(now()).toISOString() } });
+      setOwned(key, { ...e, restore: { mode, reason: why, expect, at: new Date(now()).toISOString() } });
       pushLog('ev_override_restore_deferred', { mode, loadpoint: tgt.loadpoint ?? null, reason: why });
     };
     // Im Not-Halt nichts schreiben. evcc: Modus von vorher NICHT nachholen
@@ -549,7 +559,9 @@ export function createEosEvccBridge(deps) {
       // Nur ein Deckel UNTER dem Mindeststrom hält evcc aus (Rückkehr, sobald
       // der Wächter wieder Luft gibt); darüber kehrt der Modus sofort zurück und
       // evccCapTick begrenzt den Strom über maxcurrent.
-      if (applyGridCap({ action: 'charge', currentA: evccTgt.maxCurrentA }, evccTgt, getGridCapW()).action === 'stop') {
+      const capNow = getGridCapW();
+      if (capNow != null && Number.isFinite(Number(capNow))
+        && applyGridCap({ action: 'charge', currentA: evccTgt.maxCurrentA }, evccTgt, capNow).action === 'stop') {
         const res = await hardStopper(cfg, evccTgt, { type: 'evcc' }).stop();
         if (!res?.ok) {
           // Sicherheits-Stopp nicht angekommen: aus dem „Sofort laden“ wird ein
@@ -567,6 +579,13 @@ export function createEosEvccBridge(deps) {
         if (lastSent) lastSent = { ...lastSent, override: false, key: null };
         hint('grid_cap');
         return res;
+      }
+      if (capNow != null && Number.isFinite(Number(capNow))) {
+        // Deckel über dem Mindeststrom: Rückkehr im folgenden Takt, sobald
+        // evccCapTick den Strom als maxcurrent gesetzt hat (Codex a7aacda4, P1).
+        if (lastSent) lastSent = { ...lastSent, override: false, key: null };
+        hint('grid_cap', ended?.kind === 'stop' ? 'off' : 'now');
+        return { ok: true, deferred: true };
       }
       // evcc kennt kein „Vorgabe zuruecknehmen“ (release() tut nichts): ohne
       // bekannten Vorher-Modus bliebe es in „now“ und luede weiter. Dann gilt
@@ -749,9 +768,7 @@ export function createEosEvccBridge(deps) {
       const id = Number(lp?.id);
       if (!(id >= 1) || id === commanded) continue;
       if (isPaused()) return;
-      const devId = bc.charger === 'evcc' && id === bc.loadpoint ? 'wallbox' : `wallbox:evcc:${id}`;
-      const capRaw = getDeviceCapW(devId);
-      const capW = capRaw != null && Number.isFinite(Number(capRaw)) ? Number(capRaw) : null;
+      const capW = loadpointCapW(id, bc);
       const key = `evcc:${id}`;
       const e = owned.get(key);
       const tgt = { ...bc, charger: 'evcc', loadpoint: id };
@@ -773,6 +790,9 @@ export function createEosEvccBridge(deps) {
       const minA = Number(lp.minCurrentA) >= 6 ? Number(lp.minCurrentA) : bc.minCurrentA;
       const orig = e?.origMaxCurrentA ?? (Number(lp.maxCurrentA) >= 6 ? Number(lp.maxCurrentA) : bc.maxCurrentA);
       const capA = Math.min(orig, Math.floor(capW / (bc.voltageV * ph)));
+      // Ursprungsstrom VOR dem ersten Befehl merken — eine verlorene Quittung
+      // darf ihn nicht durch den schon gesenkten ersetzen (Codex Gesamtrunde, P2).
+      if (e?.origMaxCurrentA == null) setOwned(key, { ...(owned.get(key) || base), origMaxCurrentA: orig });
       if (capA < minA) {
         if (!force && e?.limitOff === true) continue;
         const mode = e?.restore?.mode ?? (lp.mode && lp.mode !== 'off' ? lp.mode : null);

@@ -379,7 +379,8 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   // höchstens alle REASSERT_MS (Christin 07.11.2026: Grenze nie überschreiten).
   st.disobey ??= {};
   st.reassertAt ??= {};
-  for (const d of devices) {
+  // Nur Wallboxen: ihre Brücke sendet erzwungen ohne Dubletten-Filter.
+  for (const d of devices.filter((x) => x.kind === 'wallbox')) {
     const cap = st.caps[d.id];
     const cur = finite(d.currentW) ? Number(d.currentW) : null;
     if (cap == null || cur == null || now - (st.capAt[d.id] || 0) <= OBEY_MS
@@ -556,7 +557,9 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // Zog beim Deckeln nichts (z. B. Fail-safe an einer Leerlauf-Box): ganz
       // freigeben statt per Teil-Deckel einen Ladebefehl auszulösen — DVhub
       // startet keine Box, die es nicht selbst zum Laden geschickt hat.
-      if (drawNow === 0 && st.cutFrom?.[d.id] === 0) {
+      // Erst mit Luft für den Mindeststrom: die Box darf danach anlaufen, und
+      // openWB bekommt beim Freigeben ihren Strom zurück (Codex a7aacda4, P1).
+      if (drawNow === 0 && st.cutFrom?.[d.id] === 0 && giveDev >= (Number(d.minW) || 0)) {
         delete st.caps[d.id];
         delete st.capAt[d.id];
         delete st.cutFrom[d.id];

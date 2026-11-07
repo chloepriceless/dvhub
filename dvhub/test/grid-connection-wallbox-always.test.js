@@ -116,7 +116,12 @@ function evccHarness({ enabled = false, loadpoints = [lp(1, 11000)], override = 
     getStatus: () => ({ url: 'http://evcc.local:7070', lastPolledAt: Date.now(), lastError: null, loadpoints: lps }),
     getLoadpoints: () => lps.map((l) => ({ ...l })),
     refresh: async () => true,
-    setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', id, a]); const l = lps.find((x) => x.id === id); if (l) l.maxCurrentA = a; return { ok: true }; },
+    setMaxCurrent: async (id, a) => {
+      calls.push(['maxcurrent', id, a]);
+      if (ref.maxFail === 'drop') return { ok: false, error: 'timeout' };
+      const l = lps.find((x) => x.id === id); if (l) l.maxCurrentA = a;
+      return ref.maxFail === 'lost_ack' ? { ok: false, error: 'timeout' } : { ok: true };
+    },
     setMode: async (id, m) => { calls.push(['mode', id, m]); const l = lps.find((x) => x.id === id); if (l) l.mode = m; return { ok: true }; },
   };
   const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: enabled, evEvccControl: enabled, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' } };
@@ -130,7 +135,7 @@ function evccHarness({ enabled = false, loadpoints = [lp(1, 11000)], override = 
     getEvccLoadpoints: () => evcc.getLoadpoints(),
     isPaused: () => ref.paused,
     getGridCapW: () => ref.capW,
-    getDeviceCapW: (id) => (id === 'wallbox' ? ref.capW : ref.lpCaps[Number(id.split(':')[2])] ?? null),
+    getDeviceCapW: (id) => (id === 'wallbox' ? (ref.devCap !== undefined ? ref.devCap : ref.capW) : ref.lpCaps[Number(id.split(':')[2])] ?? null),
     loadOverride: () => store.value,
     saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
     loadOwned: () => ownedStore.value,
@@ -224,3 +229,80 @@ test('Neustart: der gemerkte Ursprungsstrom kommt nach dem Deckel zurück', asyn
   await b2.apply();
   assert.equal(h.lps[0].maxCurrentA, 16);
 });
+
+// ── Codex a7aacda4 + Gesamtrunde ────────────────────────────────────────────────
+
+test('Codex a7aacda4 P1: eingestellter Ladepunkt bekommt den gemeinsamen Deckel (§14a kleiner)', async () => {
+  const h = evccHarness();
+  h.ref.capW = 4200;   // §14a + Netzanschluss, kleinster
+  h.ref.devCap = 7000; // nur Netzanschluss
+  await h.bridge.apply();
+  assert.deepEqual(h.calls, [['maxcurrent', 1, 6]]);
+});
+
+test('Codex a7aacda4 P1: Leerlauf-Box ohne Luft für den Mindeststrom bleibt gedeckelt', () => {
+  const st = createGuardState();
+  st.caps = { wallbox: 0 };
+  st.capAt = { wallbox: 0 };
+  st.cutFrom = { wallbox: 0 };
+  let t = 200_000;
+  for (let i = 0; i < 30; i += 1) {
+    guardStep(st, { resolved: R, now: t, meas: { fresh: true, importW: 26900, phasesW: null }, devices: [wallbox(0)], battery: {} });
+    t += 2000;
+  }
+  assert.equal(st.caps.wallbox, 0);
+});
+
+test('Codex a7aacda4 P1: Ende „Sofort laden“ unter Deckel — maxcurrent scheitert → kein Modus-Wechsel, Rückkehr bleibt offen', async () => {
+  const override = { kind: 'stop', powerW: null, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'now' };
+  const h = evccHarness({ override });
+  h.lps[0].mode = 'now';
+  await h.bridge.apply();            // „Laden stoppen“ wirkt: evcc aus
+  assert.equal(h.lps[0].mode, 'off');
+  h.ref.capW = 5000;
+  h.ref.maxFail = 'drop';
+  await h.bridge.clearOverride();
+  assert.equal(h.lps[0].mode, 'off', 'nicht mit altem Strom auf „now“');
+  assert.ok(h.bridge.hasPendingRestore());
+  h.ref.maxFail = null;
+  await h.bridge.apply();
+  assert.equal(h.lps[0].maxCurrentA, 7);
+  assert.equal(h.lps[0].mode, 'now');
+});
+
+test('Codex P2: einphasiger weiterer Ladepunkt — Rückkehr mit seinen eigenen Werten', async () => {
+  const h = evccHarness({ loadpoints: [lp(1, 0), lp(2, 3000, { phasesActive: 1 })] });
+  h.ref.lpCaps[2] = 0;
+  await h.bridge.apply();
+  assert.equal(h.lps[1].mode, 'off');
+  h.ref.lpCaps[2] = 2000; // 8 A einphasig
+  await h.bridge.apply();
+  assert.equal(h.lps[1].maxCurrentA, 8);
+  assert.equal(h.lps[1].mode, 'pv');
+});
+
+test('Codex P2: verlorene Quittung — der Ursprungsstrom bleibt der von vorher', async () => {
+  const h = evccHarness();
+  h.ref.capW = 7000;
+  h.ref.maxFail = 'lost_ack';
+  await h.bridge.apply();           // evcc hat 10 A, Quittung fehlt
+  h.ref.maxFail = null;
+  await h.bridge.apply();           // erneut, jetzt quittiert
+  h.ref.capW = null;
+  await h.bridge.apply();
+  assert.equal(h.lps[0].maxCurrentA, 16);
+});
+
+test('Codex P1: erzwungenes Neusenden nur für Wallboxen (Brücke ohne Dubletten-Filter)', () => {
+  const st = createGuardState();
+  st.caps = { 'eebus:x': 0 };
+  st.capAt = { 'eebus:x': 0 };
+  let t = OBEY_MS + 1000;
+  const dev = { id: 'eebus:x', kind: 'eebus', name: 'WP', currentW: 5000, maxW: 5000, minW: 0 };
+  for (let i = 0; i < 10; i += 1) {
+    const r = guardStep(st, { resolved: R, now: t, meas: { fresh: true, importW: 20000, phasesW: null }, devices: [dev], battery: {} });
+    assert.equal(r.events.some((e) => e.type === 'reassert'), false);
+    t += 2000;
+  }
+});
+

@@ -111,6 +111,8 @@ function evccMulti({ enabled = true, override = null } = {}) {
     getCharger: (_c, bc) => createEvccAdapter(evcc, () => bc.loadpoint, () => bc.stopMode),
     isPaused: () => ref.paused, now: () => ref.now,
     getGridCapW: () => h.capW ?? null,
+    getDeviceCapW: (id) => (id === 'wallbox' ? h.capW ?? null : null),
+    getEvccLoadpoints: () => evcc.getLoadpoints(),
     loadOverride: () => store.value,
     saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
     loadOwned: () => ownedStore.value,
