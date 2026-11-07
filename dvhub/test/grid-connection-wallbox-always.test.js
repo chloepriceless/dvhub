@@ -125,6 +125,7 @@ function evccHarness({ enabled = false, loadpoints = [lp(1, 11000)], override = 
     },
     setMode: async (id, m) => {
       calls.push(['mode', id, m]);
+      ref.onMode?.();
       if (ref.modeFail === 'drop') return { ok: false, error: 'timeout' };
       const l = lps.find((x) => x.id === id); if (l) l.mode = m;
       return ref.modeFail === 'lost_ack' ? { ok: false, error: 'timeout' } : { ok: true };
@@ -379,4 +380,52 @@ test('Gesamtrunde 2 P1: veraltete evcc-Abfrage — zuletzt ladender weiterer Lad
   const guard = createGridConnectionGuard(ctx, { now: () => t });
   for (let i = 0; i < 90; i += 1) { state.meter.updatedAt = t; guard.tick(); t += 2000; }
   assert.ok(guard.capW('wallbox:evcc:2') != null, 'der ladende Ladepunkt wird erreicht');
+});
+
+// ── Zuletzt VERSUCHTER Modus je Ziel (Codex 10eb567f, P2 1+2) ───────────────────
+// Rückkehr bzw. „Kunde hat umgestellt“ wird gegen den Modus geprüft, den DVhub
+// zuletzt an diesem Ladepunkt zu setzen VERSUCHT hat — vor dem Senden in
+// ev_owned.json gespeichert, auch ohne Quittung.
+
+test('versuchter Modus steht vor dem Senden in ev_owned.json', async () => {
+  const h = evccHarness();
+  h.ref.capW = 2000;
+  let seen = null;
+  h.ref.onMode = () => { seen = (h.ownedStore.value || []).find((e) => e.loadpoint === 1)?.attemptedMode ?? null; };
+  await h.bridge.apply();
+  assert.equal(seen, 'off');
+});
+
+test('P2-1: Rückkehr offen (nach „now“), dann Pause unter Mindeststrom → nach dem Deckel zurück auf den alten Modus', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
+  const h = evccHarness({ override });
+  await h.bridge.apply();                     // „Sofort laden“: now
+  h.ref.capW = 5000;
+  h.ref.maxFail = 'drop';
+  await h.bridge.clearOverride();             // Rückkehr offen, evcc noch „now“
+  assert.equal(h.lps[0].mode, 'now');
+  h.ref.maxFail = null;
+  h.ref.capW = 2000;
+  await h.bridge.apply();                     // Pause: aus
+  assert.equal(h.lps[0].mode, 'off');
+  h.ref.capW = null;
+  await h.bridge.apply();
+  assert.equal(h.lps[0].mode, 'pv', 'DVhubs eigenes „aus“ ist keine Kunden-Umstellung');
+});
+
+test('P2-2: „now“ ohne Quittung, dann Ende unter Deckel → Rückkehr, kein Weiterladen in „now“', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
+  const h = evccHarness({ override });
+  h.ref.capW = 2000;
+  await h.bridge.apply();                     // pausiert: aus
+  assert.equal(h.lps[0].mode, 'off');
+  h.ref.capW = 7000;
+  h.ref.modeFail = 'lost_ack';
+  await h.bridge.apply();                     // evcc nimmt „now“, Quittung fehlt
+  assert.equal(h.lps[0].mode, 'now');
+  h.ref.modeFail = null;
+  await h.bridge.clearOverride();
+  await h.bridge.apply();
+  assert.equal(h.lps[0].mode, 'pv');
+  assert.equal(h.lps[0].maxCurrentA, 10);
 });
