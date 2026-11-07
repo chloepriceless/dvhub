@@ -1259,3 +1259,33 @@ test('Gesamtrunde 1 P1: MQTT — alter Messwert (sourceAt) ist nicht frisch, auc
   const m = meterImport({ meter: { ok: true, updatedAt: now, sourceAt: now - 200_000, grid_total_w: 1000 } }, {}, { now, maxAgeMs: 90_000 });
   assert.equal(m.fresh, false);
 });
+
+// --- Abschluss-Gesamtrunde 2 (nur kleine, lokale Korrekturen) ---------------------------
+
+test('Gesamtrunde 2 P1: Not-Halt während der Rückkehr-Abfrage → auch kein Override-Befehl mehr', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 0;
+  await h.bridge.clearOverride();          // LP1: Rückkehr vorgemerkt
+  h.capW = null;
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  h.refreshFailOnce = true;                // Rückkehr bleibt vorgemerkt
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 }); // LP2 lädt
+  assert.equal(h.modes[1], 'off', 'Rückkehr noch offen');
+  h.refreshHook = () => { h.ref.paused = true; };
+  const n = h.calls.length;
+  await h.bridge.apply();
+  assert.equal(h.calls.slice(n).some((c) => c[0] === 'mode' && c[2] === 'now'), false);
+});
+
+test('Gesamtrunde 2 P2: laufendes Gerät — Freigabe braucht keine Mindestleistung, nur Zuwachs', () => {
+  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40 } });
+  const st = createGuardState();
+  st.caps = { wallbox: 10000 };
+  st.capAt = { wallbox: 0 };
+  const wb3 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 10000, maxW: 11000, minW: 4140, phases: 3 };
+  for (let i = 0; i < 40; i += 1) {
+    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 24000, phasesW: [8000, 8000, 8000] }, devices: [wb3], battery: {} });
+  }
+  assert.ok(st.caps.wallbox == null || st.caps.wallbox > 10000, `Grenze ${st.caps.wallbox}`);
+});

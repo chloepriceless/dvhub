@@ -724,6 +724,8 @@ export function createEosEvccBridge(deps) {
       if (isPaused()) return { ok: false, skipped: 'paused' };
       // Rückkehr anderer Ladepunkte auch während eines laufenden Overrides.
       await applyPendingRestore(cfg, bc);
+      // Während der Rückkehr-Abfrage (async) kann der Not-Halt gekommen sein.
+      if (isPaused()) return { ok: false, skipped: 'paused' };
       if (override) {
         const res = await overrideTick(cfg, bc, force);
         if (res) return res;

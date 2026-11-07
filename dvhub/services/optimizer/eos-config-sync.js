@@ -610,7 +610,7 @@ export function createEosConfigSync(ctx) {
       curveSupported: caps.inverterEfficiencyCurve === true,
       gridImportLimitSupported: caps.gridImportLimit === true,
       // Victron-Grenze (Reg. 2714) — EOS bekommt den wirksamen Wert.
-      gridConnectionExtra: victronLimitExtra(state),
+      gridConnectionExtra: victronLimitExtra(state, Date.now(), cfg),
     });
     const optimization = buildEosOptimization(cfg);
     const geneticSizing = pickGeneticSizing(optimization.interval, cfg?.optimizer?.eosGeneticGenerations);
@@ -878,7 +878,7 @@ export function createEosConfigSync(ctx) {
           curve: curveNow,
           curveSupported: again.inverterEfficiencyCurve === true,
           gridImportLimitSupported: again.gridImportLimit === true,
-          gridConnectionExtra: victronLimitExtra(state),
+          gridConnectionExtra: victronLimitExtra(state, Date.now(), cfg),
         }));
         const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/inverters', body);
         if (!res.ok) errors['devices/inverters'] = res.error;

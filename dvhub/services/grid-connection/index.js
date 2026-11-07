@@ -471,7 +471,10 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   // der Akku dort genug abgibt) — sonst würde ein kurzer Einbruch die 30 s
   // Wartezeit umgehen (Codex 529a0121, P2).
   const giveNow = headroom - r.releaseHysteresisW;
-  const phasesRoomy = !phases || capped.some((d) => maxFit(giveNow, Number(d.phases) === 3 ? 3 : 1) >= Math.max(STEP_W, Number(d.minW) || 0));
+  // Den Mindeststrom braucht nur ein pausiertes Gerät; ein laufendes darf in
+  // kleinen Schritten wachsen (Abschluss-Gesamtrunde 2, P2).
+  const needW = (d) => (finite(d.currentW) && Number(d.currentW) > 0 ? STEP_W : Math.max(STEP_W, Number(d.minW) || 0));
+  const phasesRoomy = !phases || capped.some((d) => maxFit(giveNow, Number(d.phases) === 3 ? 3 : 1) >= needW(d));
   if (headroom >= r.releaseHysteresisW && phasesRoomy) st.underSince ??= now;
   else st.underSince = null;
   if (st.underSince == null || now - st.underSince < RELEASE_MS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
