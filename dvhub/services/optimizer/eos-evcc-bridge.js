@@ -267,7 +267,7 @@ export function createEosEvccBridge(deps) {
   // Felder des Netzanschluss-Deckels an evcc (evccCapTick) überleben jeden
   // Befehl am selben Gerät: Ursprungsstrom, gesetzter Deckel, Pause.
   const capFields = (prev, ident) => (prev && prev.identity === ident
-    ? { limitA: prev.limitA ?? null, limitOff: prev.limitOff === true, origMaxCurrentA: prev.origMaxCurrentA ?? null }
+    ? { limitA: prev.limitA ?? null, limitTried: prev.limitTried === true, limitOff: prev.limitOff === true, origMaxCurrentA: prev.origMaxCurrentA ?? null }
     : {});
 
   function getCharger(cfg, bc) {
@@ -463,14 +463,31 @@ export function createEosEvccBridge(deps) {
     return cap != null && Number.isFinite(Number(cap)) ? Number(cap) : null;
   }
 
+  // Phasen und Mindeststrom eines evcc-Ladepunkts (seine eigenen Werte).
+  function loadpointParams(lp, bc) {
+    const ph = [1, 2, 3].includes(Number(lp?.phasesActive)) ? Number(lp.phasesActive)
+      : ([1, 2, 3].includes(Number(lp?.phasesConfigured)) ? Number(lp.phasesConfigured) : bc.phases);
+    const minA = Number(lp?.minCurrentA) >= 6 ? Number(lp.minCurrentA) : bc.minCurrentA;
+    return { ph, minA };
+  }
+  function findLoadpoint(lpId) {
+    try { return (getEvccLoadpoints() || []).find((l) => Number(l?.id) === Number(lpId)) || null; } catch { return null; }
+  }
+
   // Rückkehr des Modus erst, wenn ein stehender Deckel als maxcurrent quittiert
   // ist (evccCapTick) — nie mit dem alten Strom (Codex a7aacda4, P1). Unter dem
   // Mindeststrom bleibt der Ladepunkt aus.
   function restoreBlocked(key, lpId, bc) {
     const e = owned.get(key);
     if (e?.limitOff === true) return true;
-    if (loadpointCapW(lpId, bc) == null) return false;
-    return !(e?.gridCap === true && e.limitA != null);
+    const cap = loadpointCapW(lpId, bc);
+    if (cap == null) return false;
+    if (!(e?.gridCap === true && e.limitA != null)) return true;
+    // Gegen den Deckel von JETZT prüfen — er kann sich während der Abfrage
+    // verschärft haben (Codex b18d6c54, P1).
+    const { ph, minA } = loadpointParams(findLoadpoint(lpId), bc);
+    const capA = Math.floor(cap / (bc.voltageV * ph));
+    return capA < minA || e.limitA > capA;
   }
 
   // Der eine Übergang der evcc-Rückkehr (Punkt 4). Läuft in runTick, also im
@@ -532,6 +549,10 @@ export function createEosEvccBridge(deps) {
       || (lastSent?.override ? { charger: lastSent.charger || bc.charger, loadpoint: lastSent.loadpoint ?? bc.loadpoint } : null);
     if (!tgt || !(owned.has(targetKey(tgt)) || lastSent?.override)) return null;
     const mode = ended?.prevMode || bc.stopMode;
+    // Modus, den DVhubs letzter Override-Befehl an diesem Ladepunkt gesetzt hat
+    // (unter Deckel pausiert = „off“) — Codex b18d6c54, P2.
+    const sentMode = lastSent?.override && lastSent.charger === 'evcc' && lastSent.loadpoint === (tgt?.loadpoint ?? bc.loadpoint)
+      ? lastSent.mode || null : null;
     // expect: der Modus, in dem DVhub evcc zurücklässt — nur wenn evcc noch
     // darin steht, wird zurückgestellt (sonst hat man selbst umgestellt).
     const hint = (why, expect = 'off') => {
@@ -584,7 +605,7 @@ export function createEosEvccBridge(deps) {
         // Deckel über dem Mindeststrom: Rückkehr im folgenden Takt, sobald
         // evccCapTick den Strom als maxcurrent gesetzt hat (Codex a7aacda4, P1).
         if (lastSent) lastSent = { ...lastSent, override: false, key: null };
-        hint('grid_cap', ended?.kind === 'stop' ? 'off' : 'now');
+        hint('grid_cap', sentMode || (ended?.kind === 'stop' ? 'off' : 'now'));
         return { ok: true, deferred: true };
       }
       // evcc kennt kein „Vorgabe zuruecknehmen“ (release() tut nichts): ohne
@@ -775,19 +796,20 @@ export function createEosEvccBridge(deps) {
       if (e && e.identity && e.identity !== ident) { setOwned(key, null); continue; }
       const base = e || { charger: 'evcc', loadpoint: id, identity: ident, cmd: 'limit', confirmed: true, gridCap: false };
       if (capW == null) {
-        if (!e?.gridCap) continue;
-        if (e.limitA != null && e.origMaxCurrentA != null) {
+        // Auch ein unquittierter Versuch (Ursprungsstrom gemerkt) wird
+        // abgeglichen: Strom zurück, Merker weg (Codex b18d6c54, P2).
+        if (!e?.gridCap && e?.origMaxCurrentA == null) continue;
+        // Strom nur zurück, wenn DVhub ihn (vielleicht) gesenkt hat.
+        if (e.origMaxCurrentA != null && (e.limitA != null || e.limitTried === true)) {
           const r = await getCharger(cfg, tgt).limit(e.origMaxCurrentA);
           if (!r?.ok) { pushLog('grid_connection_evcc_error', { loadpoint: id, error: r?.error || 'maxcurrent failed' }); continue; }
         }
-        const next = { ...owned.get(key), gridCap: false, limitA: null, limitOff: false, origMaxCurrentA: null };
+        const next = { ...owned.get(key), gridCap: false, limitA: null, limitTried: false, limitOff: false, origMaxCurrentA: null };
         setOwned(key, next.cmd === 'limit' && !next.restore ? null : next);
         pushLog('grid_connection_evcc_released', { loadpoint: id, currentA: e.origMaxCurrentA ?? null });
         continue;
       }
-      const ph = [1, 2, 3].includes(Number(lp.phasesActive)) ? Number(lp.phasesActive)
-        : ([1, 2, 3].includes(Number(lp.phasesConfigured)) ? Number(lp.phasesConfigured) : bc.phases);
-      const minA = Number(lp.minCurrentA) >= 6 ? Number(lp.minCurrentA) : bc.minCurrentA;
+      const { ph, minA } = loadpointParams(lp, bc);
       const orig = e?.origMaxCurrentA ?? (Number(lp.maxCurrentA) >= 6 ? Number(lp.maxCurrentA) : bc.maxCurrentA);
       const capA = Math.min(orig, Math.floor(capW / (bc.voltageV * ph)));
       // Ursprungsstrom VOR dem ersten Befehl merken — eine verlorene Quittung
@@ -796,17 +818,20 @@ export function createEosEvccBridge(deps) {
       if (capA < minA) {
         if (!force && e?.limitOff === true) continue;
         const mode = e?.restore?.mode ?? (lp.mode && lp.mode !== 'off' ? lp.mode : null);
+        // Rückkehr-Modus VOR dem Befehl merken — eine verlorene Quittung darf
+        // ihn nicht verlieren (Gesamtrunde 2, P2).
+        if (mode && !e?.restore) {
+          setOwned(key, { ...(owned.get(key) || base), restore: { mode, reason: 'grid_cap', at: new Date(now()).toISOString() } });
+        }
         const r = await hardStopper(cfg, tgt, { type: 'evcc' }).stop();
         if (!r?.ok) { pushLog('grid_connection_evcc_error', { loadpoint: id, error: r?.error || 'mode off failed' }); continue; }
         const cur = owned.get(key) || base;
-        setOwned(key, {
-          ...cur, gridCap: true, limitOff: true, origMaxCurrentA: orig,
-          restore: mode ? { mode, reason: 'grid_cap', at: new Date(now()).toISOString() } : cur.restore ?? null
-        });
+        setOwned(key, { ...cur, gridCap: true, limitOff: true, origMaxCurrentA: orig });
         pushLog('grid_connection_evcc_paused', { loadpoint: id, capW, restoreMode: mode });
         continue;
       }
       if (!force && e?.limitA === capA && e?.limitOff !== true) continue;
+      if (owned.get(key)?.limitTried !== true) setOwned(key, { ...(owned.get(key) || base), limitTried: true });
       const r = await getCharger(cfg, tgt).limit(capA);
       if (!r?.ok) { pushLog('grid_connection_evcc_error', { loadpoint: id, error: r?.error || 'maxcurrent failed' }); continue; }
       setOwned(key, { ...(owned.get(key) || base), gridCap: true, limitA: capA, limitOff: false, origMaxCurrentA: orig });

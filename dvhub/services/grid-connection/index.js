@@ -673,7 +673,10 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         if (!(lpId >= 1) || (bc.charger === 'evcc' && lpId === bc.loadpoint)) continue;
         const id = `wallbox:evcc:${lpId}`;
         const powerW = fresh && finite(lp.chargePowerW) ? Number(lp.chargePowerW) : null;
-        if (!(powerW > 0) && st.caps[id] == null) continue;
+        // Veraltete Abfrage: zuletzt ladend bleibt überwacht, Leistung unbekannt
+        // (vorsichtige Annahme im Wächter) — Gesamtrunde 2, P1.
+        const charging = fresh ? powerW > 0 : (lp.charging === true || Number(lp.chargePowerW) > 0);
+        if (!charging && st.caps[id] == null) continue;
         const ph = [3, 1, 2].includes(Number(lp.phasesActive)) ? Number(lp.phasesActive)
           : ([1, 2, 3].includes(Number(lp.phasesConfigured)) ? Number(lp.phasesConfigured) : 3);
         list.push({

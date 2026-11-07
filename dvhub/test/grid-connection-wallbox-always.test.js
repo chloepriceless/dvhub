@@ -115,14 +115,20 @@ function evccHarness({ enabled = false, loadpoints = [lp(1, 11000)], override = 
   const evcc = {
     getStatus: () => ({ url: 'http://evcc.local:7070', lastPolledAt: Date.now(), lastError: null, loadpoints: lps }),
     getLoadpoints: () => lps.map((l) => ({ ...l })),
-    refresh: async () => true,
+    refresh: async () => { ref.onRefresh?.(); return true; },
     setMaxCurrent: async (id, a) => {
       calls.push(['maxcurrent', id, a]);
       if (ref.maxFail === 'drop') return { ok: false, error: 'timeout' };
+      ref.onMax?.();
       const l = lps.find((x) => x.id === id); if (l) l.maxCurrentA = a;
       return ref.maxFail === 'lost_ack' ? { ok: false, error: 'timeout' } : { ok: true };
     },
-    setMode: async (id, m) => { calls.push(['mode', id, m]); const l = lps.find((x) => x.id === id); if (l) l.mode = m; return { ok: true }; },
+    setMode: async (id, m) => {
+      calls.push(['mode', id, m]);
+      if (ref.modeFail === 'drop') return { ok: false, error: 'timeout' };
+      const l = lps.find((x) => x.id === id); if (l) l.mode = m;
+      return ref.modeFail === 'lost_ack' ? { ok: false, error: 'timeout' } : { ok: true };
+    },
   };
   const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: enabled, evEvccControl: enabled, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' } };
   const ref = { paused: false, capW: null, lpCaps: {} };
@@ -306,3 +312,71 @@ test('Codex P1: erzwungenes Neusenden nur für Wallboxen (Brücke ohne Dubletten
   }
 });
 
+// ── Codex b18d6c54 + Gesamtrunde 2 ──────────────────────────────────────────────
+
+test('Codex b18d6c54 P1: Deckel fällt während der Rückkehr-Abfrage unter den Mindeststrom → keine Rückkehr', async () => {
+  const h = evccHarness();
+  h.ref.capW = 2000;
+  await h.bridge.apply();                     // aus, Rückkehr „pv“ gemerkt
+  h.ref.capW = 7000;
+  h.ref.onRefresh = () => { h.ref.capW = 0; }; // während der frischen Abfrage
+  await h.bridge.apply();
+  assert.equal(h.lps[0].mode, 'off');
+});
+
+test('Codex b18d6c54 P2: erwarteter Modus = DVhubs letzter Befehl (Override unter Deckel pausiert)', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
+  const h = evccHarness({ override });
+  h.ref.capW = 2000;
+  await h.bridge.apply();                     // „Sofort laden“ pausiert: aus
+  assert.equal(h.lps[0].mode, 'off');
+  h.ref.capW = 7000;
+  await h.bridge.clearOverride();
+  await h.bridge.apply();
+  assert.equal(h.lps[0].mode, 'pv', 'nicht als Kunden-Umstellung verworfen');
+  assert.equal(h.lps[0].maxCurrentA, 10);
+});
+
+test('Codex b18d6c54 P2: gescheiterter Deckel — beim Ende wird der Ursprungsstrom abgeglichen und vergessen', async () => {
+  const h = evccHarness();
+  h.ref.capW = 7000;
+  h.ref.maxFail = 'drop';
+  await h.bridge.apply();
+  h.ref.maxFail = null;
+  h.ref.capW = null;
+  await h.bridge.apply();
+  h.lps[0].maxCurrentA = 6;                   // Kunde stellt in evcc 6 A ein
+  h.ref.capW = 7000;
+  await h.bridge.apply();
+  assert.equal(h.lps[0].maxCurrentA, 6, 'nicht über den Kunden-Wert');
+  h.ref.capW = null;
+  await h.bridge.apply();
+  assert.equal(h.lps[0].maxCurrentA, 6);
+});
+
+test('Gesamtrunde 2 P2: „aus“ ohne Quittung — der Rückkehr-Modus bleibt erhalten', async () => {
+  const h = evccHarness();
+  h.ref.capW = 2000;
+  h.ref.modeFail = 'lost_ack';
+  await h.bridge.apply();                     // evcc ist aus, Quittung fehlt
+  h.ref.modeFail = null;
+  await h.bridge.apply();                     // erneut, quittiert
+  h.ref.capW = null;
+  await h.bridge.apply();
+  assert.equal(h.lps[0].mode, 'pv');
+});
+
+test('Gesamtrunde 2 P1: veraltete evcc-Abfrage — zuletzt ladender weiterer Ladepunkt bleibt überwacht', () => {
+  let t = Date.now();
+  const t0 = t;
+  const cfg = { gridConnection: { limitKw: 29 }, evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evEvccLoadpoint: 1, evMaxChargeW: 11000 } };
+  const state = { meter: { ok: true, updatedAt: t, grid_total_w: -32000 }, victron: {}, schedule: {}, ctrl: {} };
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: () => {},
+    evccIntegration: { getStatus: () => ({ url: cfg.evcc.url, lastPolledAt: t0 - 200_000, lastError: 'timeout', loadpoints: [lp(1, 0), lp(2, 11000)] }) },
+    eosEvccBridge: { apply: async () => ({}), getOverride: () => null },
+  };
+  const guard = createGridConnectionGuard(ctx, { now: () => t });
+  for (let i = 0; i < 90; i += 1) { state.meter.updatedAt = t; guard.tick(); t += 2000; }
+  assert.ok(guard.capW('wallbox:evcc:2') != null, 'der ladende Ladepunkt wird erreicht');
+});
