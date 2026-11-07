@@ -472,3 +472,62 @@ test('Menge P2-3: Altbestand mit restore.expect „now“ (ohne Menge) → Rück
   await b.apply();
   assert.equal(h.lps[0].mode, 'pv');
 });
+
+// ── Codex 1abbd9d7 (gleicher Bereich, letzte Runde) ────────────────────────────
+
+test('1abbd9d7 P2: direkte Rückkehr nach „Sofort laden“ beendet die Modus-Phase (Menge leer)', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
+  const h = evccHarness({ override });
+  await h.bridge.apply();                     // now
+  await h.bridge.clearOverride();             // ohne Deckel: direkt zurück auf pv
+  assert.equal(h.lps[0].mode, 'pv');
+  h.lps[0].mode = 'minpv';                    // Kunde
+  h.ref.capW = 2000;
+  await h.bridge.apply();                     // Pause, Rückkehr „minpv“
+  h.lps[0].mode = 'now';                      // Kunde wählt „now“
+  h.ref.capW = null;
+  await h.bridge.apply();
+  assert.equal(h.lps[0].mode, 'now', 'Kunden-Wahl bleibt');
+});
+
+test('1abbd9d7 P2: Rückkehr per Rücklesen bestätigt → Lade-Eigentum endet (Not-Halt stoppt Handladung nicht)', async () => {
+  const override = { kind: 'charge', powerW: 11000, startedAt: new Date().toISOString(), until: null, seenConnected: true, prevMode: 'pv' };
+  const h = evccHarness({ override });
+  await h.bridge.apply();                     // now, cmd charge
+  h.ref.capW = 7000;
+  h.ref.modeFail = 'lost_ack';
+  await h.bridge.clearOverride();             // Rückkehr pv wirkt, Quittung fehlt
+  h.ref.modeFail = null;
+  await h.bridge.apply();                     // Rücklesen: pv → fertig
+  assert.equal(h.lps[0].mode, 'pv');
+  h.lps[0].mode = 'now';                      // Kunde startet von Hand
+  h.ref.paused = true;
+  await h.bridge.emergencyStop();
+  assert.equal(h.lps[0].mode, 'now');
+});
+
+test('1abbd9d7 P2: Altbestand „stop“ ohne Menge behält den Rückfall „off“', async () => {
+  const h = evccHarness();
+  h.lps[0].mode = 'off';
+  h.ref.capW = 5000;
+  h.ownedStore.value = [{ charger: 'evcc', loadpoint: 1, identity: 'evcc|http://evcc.local:7070', cmd: 'stop', confirmed: true, gridCap: false }];
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const b = createEosEvccBridge({
+    getCfg: () => h.cfg, getSolution: async () => null,
+    getCharger: (_c, bc) => createEvccAdapter({
+      getStatus: () => ({ url: 'http://evcc.local:7070' }),
+      getLoadpoints: () => h.lps.map((l) => ({ ...l })),
+      refresh: async () => true,
+      setMaxCurrent: async (id, a) => { h.lps[0].maxCurrentA = a; return { ok: true }; },
+      setMode: async (id, m) => { h.lps[0].mode = m; return { ok: true }; },
+    }, () => bc.loadpoint, () => bc.stopMode),
+    getEvccLoadpoints: () => h.lps.map((l) => ({ ...l })),
+    getGridCapW: () => h.ref.capW, getDeviceCapW: () => h.ref.capW,
+    loadOverride: () => ({ kind: 'stop', powerW: null, startedAt: past, until: past, seenConnected: true, prevMode: 'pv', target: { charger: 'evcc', loadpoint: 1 } }),
+    saveOverride: () => {},
+    loadOwned: () => h.ownedStore.value, saveOwned: (l) => { h.ownedStore.value = l; },
+  });
+  await b.apply();
+  await b.apply();
+  assert.equal(h.lps[0].mode, 'pv');
+});

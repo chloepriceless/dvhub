@@ -368,7 +368,8 @@ export function createEosEvccBridge(deps) {
         // sonst wie früher „aus“ (Codex 0e351b52, P2 3).
         if (rec.charger === 'evcc' && !Array.isArray(rec.dvhubModes)) {
           const seed = [rec.restore?.expect, rec.attemptedMode].filter((m) => typeof m === 'string' && m);
-          rec.dvhubModes = seed.length ? [...new Set(seed)] : (rec.restore ? ['off'] : []);
+          // Ohne Hinweis wie früher „off“ (Codex 1abbd9d7, P2).
+          rec.dvhubModes = seed.length ? [...new Set(seed)] : ['off'];
         }
         owned.set(targetKey(rec), rec);
       }
@@ -529,7 +530,9 @@ export function createEosEvccBridge(deps) {
       // Rückkehr erfolgreich (frisch gelesen bestätigt): Menge leeren.
       const done = () => {
         const cur = owned.get(key);
-        if (cur) setOwned(key, { ...cur, restore: null, dvhubModes: [] });
+        // Auch das Lade-Eigentum endet: DVhub hat die Kontrolle zurückgegeben
+        // (Codex 1abbd9d7, P2) — Deckel-Felder bleiben.
+        if (cur) setOwned(key, { ...cur, restore: null, dvhubModes: [], ...(cur.cmd === 'charge' ? { cmd: 'stop', confirmed: true } : {}) });
         pushLog('ev_override_restored', { loadpoint: e.loadpoint, mode: e.restore.mode });
         if (lastSent && targetKey({ charger: lastSent.charger, loadpoint: lastSent.loadpoint }) === key) lastSent = null;
       };
@@ -649,7 +652,13 @@ export function createEosEvccBridge(deps) {
       // bekannten Vorher-Modus bliebe es in „now“ und luede weiter. Dann gilt
       // der Stopp-Modus der Bruecke.
       const res = await getCharger(cfg, { ...evccTgt, stopMode: mode }).stop();
-      if (res?.ok) lastSent = null;
+      if (res?.ok) {
+        lastSent = null;
+        // Direkt zurückgegeben: die Modus-Phase von DVhub ist vorbei (Codex 1abbd9d7, P2).
+        const k = targetKey(evccTgt);
+        const cur = owned.get(k);
+        if (cur) setOwned(k, { ...cur, dvhubModes: [] });
+      }
       else pushLog('ev_override_error', { charger: 'evcc', error: res?.error || 'stop failed', reason });
       return res;
     }
