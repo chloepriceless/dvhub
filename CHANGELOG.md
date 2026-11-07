@@ -60,9 +60,12 @@ verweist hierher.
 - **Netzanschluss-Grenze aus dem Victron-GX.** Mit dem Victron-Profil liest DVhub zusätzlich die Begrenzung des
   AC-Bezugs aus dem GX (Unit 100, Reg. 2714 /Settings/CGwacs/AcInputLimit, A je Phase; MQTT
   settings/0/Settings/CGwacs/AcInputLimit), nur lesend und alle 60 s. Ein Wert über 0 gilt als Grenze je Phase und
-  als Gesamtgrenze (3 × 230 V × A). Steht in DVhub zusätzlich ein Wert, gilt der strengere. -1/0 oder nicht lesbar →
-  nur die DVhub-Werte (nicht lesbar: Log und Hinweis, kein Fail-safe). Die Leitstand-Kachel zeigt, woher die geltende
-  Grenze kommt; EOS bekommt den wirksamen Wert. Andere Hersteller-Profile unverändert.
+  als Gesamtgrenze (A × Summe der gemessenen Phasenspannungen, frisch; sonst 230 V je Phase). Steht in DVhub
+  zusätzlich ein Wert, gilt der strengere. Stammt die Grenze aus Victron, regelt DVhub ohne Sicherheitsabstand genau
+  auf sie (der GX hat schon einen Puffer); gewinnt die DVhub-Einstellung, bleibt deren Abstand. Je Phase gilt der
+  Strom: Grenze = A × Spannung dieser Phase. -1/0 oder nicht lesbar → nur die DVhub-Werte (nicht lesbar: Log und
+  Hinweis, kein Fail-safe). Die Leitstand-Kachel zeigt, woher die geltende Grenze kommt, und „kein Abstand
+  (Victron-Grenze)“; EOS bekommt den wirksamen Wert. Andere Hersteller-Profile unverändert.
 - **§14a im Not-Halt:** Die Vorgabe des Netzbetreibers (EEBUS-LPC, Steuerbox) gilt auch im Not-Halt weiter — sie ist
   keine DVhub-Steuerung, sondern eine gesetzliche Vorgabe.
 

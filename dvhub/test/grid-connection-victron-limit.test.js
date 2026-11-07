@@ -132,8 +132,8 @@ test('Wächter nimmt den Victron-Wert, auch wenn er sich zur Laufzeit ändert; E
   state.victron.acInputLimitA = 30;
   guard.tick();
   assert.equal(guard.summary().limitW, 20700);
-  assert.equal(eosGridImportLimitW(cfg, { victronPhaseLimitA: 40 }), 26600);
-  assert.equal(eosGridChargeCapW(cfg, { victronPhaseLimitA: 40 }), 25600);
+  assert.equal(eosGridImportLimitW(cfg, { victronPhaseLimitA: 40 }), 27600, 'Victron-Grenze ohne Abstand');
+  assert.equal(eosGridChargeCapW(cfg, { victronPhaseLimitA: 40 }), 26600);
   const inv = buildEosInverters({ ...cfg, optimizer: { allowGridCharge: true, mispel: { mode: 'pauschal' }, maxChargeW: 27000 } }, { gridImportLimitSupported: true, gridConnectionExtra: { victronPhaseLimitA: 40 } })[0];
-  assert.equal(inv.max_grid_import_power_w, 26600);
+  assert.equal(inv.max_grid_import_power_w, 27600);
 });

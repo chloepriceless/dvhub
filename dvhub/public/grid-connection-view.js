@@ -31,7 +31,9 @@
   function view(s) {
     if (!s || s.enabled !== true) return { hidden: true };
     const [label, tone] = state(s);
-    const limit = num(s.limitW) ? `${kw(s.limitW)} (Ziel ${kw(s.targetW)})` : DASH;
+    // Victron-Grenze ohne Abstand: das sagen statt „Ziel = Grenze“ unerklärt.
+    const limit = num(s.limitW)
+      ? `${kw(s.limitW)} (${s.marginText ? s.marginText : `Ziel ${kw(s.targetW)}`})` : DASH;
     const load = num(s.importW) && num(s.limitW) && Number(s.limitW) > 0
       ? `${Math.round((Number(s.importW) / Number(s.limitW)) * 100)} %` : DASH;
     return {

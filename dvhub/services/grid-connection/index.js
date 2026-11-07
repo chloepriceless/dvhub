@@ -97,17 +97,23 @@ const down = (w) => Math.floor(Number(w) / STEP_W) * STEP_W;
  * active = Grenze gültig eingetragen.
  * @param {object} cfg effektive DVhub-Config
  */
-export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, victronReadError = false } = {}) {
+export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, victronReadError = false, phaseVoltagesV = null } = {}) {
   const c = cfg?.gridConnection || {};
   const dvSet = finite(c.limitKw) && Number(c.limitKw) > 0;
   const rawW = dvSet ? Number(c.limitKw) * 1000 : null;
   const dvValid = dvSet && rawW >= MIN_LIMIT_W && rawW <= MAX_LIMIT_W;
   const dvLimitW = dvValid ? Math.round(rawW) : null;
+  // Spannung je Phase: gemessen (frisch, 150–300 V), sonst 230 V. Eine Grenze in
+  // A gilt für den Strom — bei 220 V sind 40 A nur 8,8 kW (Christin 07.11.2026).
+  const volts = [0, 1, 2].map((i) => {
+    const v = Array.isArray(phaseVoltagesV) ? Number(phaseVoltagesV[i]) : NaN;
+    return Number.isFinite(v) && v >= VOLTAGE_MIN_V && v <= VOLTAGE_MAX_V ? v : NOMINAL_PHASE_VOLTAGE_V;
+  });
   // Victron (Punkt 7): Reg. 2714 AcInputLimit, A je Phase. kW-Grenze daraus =
-  // Phasen × 230 V × A (dreiphasig angenommen). Es gilt die strengere.
+  // A × Summe der Phasenspannungen (dreiphasig angenommen). Es gilt die strengere.
   const vA = finite(victronPhaseLimitA) && Number(victronPhaseLimitA) >= 6 && Number(victronPhaseLimitA) <= 4000
     ? Number(victronPhaseLimitA) : null;
-  const vLimitW = vA != null ? Math.round(VICTRON_ASSUMED_PHASES * NOMINAL_PHASE_VOLTAGE_V * vA) : null;
+  const vLimitW = vA != null ? Math.round(vA * volts.slice(0, VICTRON_ASSUMED_PHASES).reduce((a, b) => a + b, 0)) : null;
   const set = dvSet || vA != null;
   const valid = dvValid || vA != null;
   const limitW = smallestLimit([dvLimitW, vLimitW]);
@@ -115,15 +121,24 @@ export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, vic
   const autoMargin = limitW == null ? AUTO_MARGIN_MIN_W
     : Math.max(AUTO_MARGIN_MIN_W, Math.round(limitW * AUTO_MARGIN_PCT / 100));
   const marginRaw = finite(c.marginW) && Number(c.marginW) >= 0 ? Math.round(Number(c.marginW)) : autoMargin;
-  const marginW = limitW == null ? marginRaw : Math.min(Math.round(limitW / 2), marginRaw);
+  const dvMarginW = limitW == null ? marginRaw : Math.min(Math.round(limitW / 2), marginRaw);
+  // Grenze aus Victron: kein Abstand — der GX hat schon einen Puffer und kann
+  // bewusst unter dem Anschluss liegen (Christin 07.11.2026). Gewinnt die
+  // DVhub-Einstellung, bleibt deren Abstand.
+  const marginW = limitSource === 'victron' ? 0 : dvMarginW;
   const targetW = limitW == null ? null : limitW - marginW;
 
   const dvPhaseA = finite(c.phaseLimitA) && Number(c.phaseLimitA) >= 6 && Number(c.phaseLimitA) <= 4000
     ? Number(c.phaseLimitA) : null;
   const phaseA = smallestLimit([dvPhaseA, vA]);
-  const phaseLimitW = limitW != null && phaseA != null ? Math.round(phaseA * NOMINAL_PHASE_VOLTAGE_V) : null;
-  const phaseMarginW = phaseLimitW == null ? null : Math.min(Math.round(phaseLimitW / 2), Math.round(marginW / 3));
-  const phaseTargetW = phaseLimitW == null ? null : phaseLimitW - phaseMarginW;
+  const phaseSource = phaseA == null ? null : (vA != null && phaseA === vA && (dvPhaseA == null || vA < dvPhaseA) ? 'victron' : 'dvhub');
+  // Je Phase: A × Spannung dieser Phase; die strengste als Kennzahl.
+  const phaseLimitsW = limitW != null && phaseA != null ? volts.map((v) => Math.round(phaseA * v)) : null;
+  const phaseLimitW = phaseLimitsW ? Math.min(...phaseLimitsW) : null;
+  const phaseMarginW = phaseLimitW == null ? null
+    : phaseSource === 'victron' ? 0 : Math.min(Math.round(phaseLimitW / 2), Math.round(dvMarginW / 3));
+  const phaseTargetsW = phaseLimitsW ? phaseLimitsW.map((w) => w - phaseMarginW) : null;
+  const phaseTargetW = phaseTargetsW ? Math.min(...phaseTargetsW) : null;
 
   const releaseHysteresisW = finite(c.releaseHysteresisW) && Number(c.releaseHysteresisW) >= 0
     ? Math.round(Number(c.releaseHysteresisW)) : GRID_CONNECTION_DEFAULTS.releaseHysteresisW;
@@ -148,11 +163,15 @@ export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, vic
     victronPhaseLimitA: vA,
     victronReadError: victronReadError === true,
     marginW,
+    marginText: limitW == null ? null : limitSource === 'victron' ? 'kein Abstand (Victron-Grenze)' : null,
     targetW,
     phaseLimitA: limitW != null ? phaseA : null,
+    phaseSource: limitW != null ? phaseSource : null,
     phaseLimitW,
+    phaseLimitsW,
     phaseMarginW,
     phaseTargetW,
+    phaseTargetsW,
     releaseHysteresisW,
     baseLoadW,
     orderKey,
@@ -206,12 +225,28 @@ export function eosGridImportLimitW(cfg, extra = {}) {
 export const VICTRON_ASSUMED_PHASES = 3;
 // So lange gilt ein gelesener Wert von Reg. 2714 (gelesen wird alle 60 s).
 export const VICTRON_LIMIT_MAX_AGE_MS = 5 * 60_000;
+// Netzspannung je Phase (state.victron.gridVoltage, zentral vom Poller): nur
+// frisch und plausibel, sonst gilt 230 V (wie services/grid-voltage.js).
+export const PHASE_VOLTAGE_MAX_AGE_MS = 2 * 60_000;
+const VOLTAGE_MIN_V = 150;
+const VOLTAGE_MAX_V = 300;
+
+/** Gemessene Phasenspannungen [l1, l2, l3] (unplausibel = null) oder null. */
+export function phaseVoltagesFromState(state, now = Date.now()) {
+  const gv = state?.victron?.gridVoltage;
+  if (!gv || typeof gv !== 'object') return null;
+  const at = Number(gv.updatedAt);
+  if (!Number.isFinite(at) || at <= 0 || now - at > PHASE_VOLTAGE_MAX_AGE_MS) return null;
+  const out = [gv.l1, gv.l2, gv.l3].map((v) => (typeof v === 'number' && v >= VOLTAGE_MIN_V && v <= VOLTAGE_MAX_V ? v : null));
+  return out.some((v) => v != null) ? out : null;
+}
 
 /** Victron-Grenze aus dem Zustand: A je Phase oder null (aus, -1, veraltet). */
 export function victronLimitExtra(state, now = Date.now(), cfg = null) {
   // Nur mit dem Victron-Profil (Standard) — ein gemerkter GX-Wert gilt nach
   // einem Profilwechsel nicht weiter.
-  if (cfg && String(cfg.manufacturer || 'victron') !== 'victron') return { victronPhaseLimitA: null, victronReadError: false };
+  const phaseVoltagesV = phaseVoltagesFromState(state, now);
+  if (cfg && String(cfg.manufacturer || 'victron') !== 'victron') return { victronPhaseLimitA: null, victronReadError: false, phaseVoltagesV };
   const v = state?.victron || {};
   const at = Number(v.fieldUpdatedAt?.acInputLimitA) || 0;
   const a = Number(v.acInputLimitA);
@@ -221,6 +256,7 @@ export function victronLimitExtra(state, now = Date.now(), cfg = null) {
     // Letzte Lesung gescheitert: der gemerkte Wert gilt nicht weiter.
     victronPhaseLimitA: fresh && !error && a > 0 ? a : null,
     victronReadError: error,
+    phaseVoltagesV,
   };
 }
 
@@ -334,9 +370,12 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   } else if (phases) st.phasesMissing = false;
   const maxPhase = phases ? Math.max(...phases) : null;
   // In Gesamt-Watt: eine dreiphasige Last um x senken senkt jede Phase um x/3.
-  const phaseExcess = phases ? 3 * (maxPhase - r.phaseTargetW) : null;
+  // Je Phase gegen ihre eigene Grenze (A × Spannung dieser Phase).
+  const phaseTargets = r.phaseTargetsW || [r.phaseTargetW, r.phaseTargetW, r.phaseTargetW];
+  const phaseLimits = r.phaseLimitsW || [r.phaseLimitW, r.phaseLimitW, r.phaseLimitW];
+  const phaseExcess = phases ? 3 * Math.max(...phases.map((p, i) => p - phaseTargets[i])) : null;
   const excess = Math.max(total - r.targetW, phaseExcess ?? -Infinity);
-  const hard = total > r.limitW || (phases != null && maxPhase > r.phaseLimitW);
+  const hard = total > r.limitW || (phases != null && phases.some((p, i) => p > phaseLimits[i]));
 
   // --- 1. Akku: Decke für positive Netz-Sollwerte ------------------------------
   const desired = phaseExcess == null ? r.targetW : Math.min(r.targetW, total - phaseExcess);
@@ -449,14 +488,14 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   // UNBEKANNTEN Phase (jede wird geprüft). Der Akku gibt dabei höchstens x ab,
   // und zwar nur auf den Phasen, auf denen er lädt (Einstellung
   // batteryPhases; unbekannt = keine Entlastung) — Codex bb0e14cd.
-  const phaseLimitEach = phases ? r.phaseTargetW - Math.round(r.releaseHysteresisW / 3) : null;
+  const phaseLimitEach = phases ? phaseTargets.map((t) => t - Math.round(r.releaseHysteresisW / 3)) : null;
   const phaseFits = (x, devPhases) => {
     if (!phases) return true;
     const relief = r.batteryPhases ? Math.min(batteryYields, x) : 0;
     const rel = r.batteryPhases === 'three' ? [relief / 3, relief / 3, relief / 3]
       : ['L1', 'L2', 'L3'].map((l) => (l === r.batteryPhases ? relief : 0));
     const placements = devPhases === 3 ? [[x / 3, x / 3, x / 3]] : [[x, 0, 0], [0, x, 0], [0, 0, x]];
-    return placements.every((add) => phases.every((p, i) => p + add[i] - rel[i] <= phaseLimitEach));
+    return placements.every((add) => phases.every((p, i) => p + add[i] - rel[i] <= phaseLimitEach[i]));
   };
   // Größtes x ≤ limit, das auf alle Phasen passt. Nicht monoton (mit dem Akku
   // auf einer Phase passt ein größeres x eher), daher in Schritten absuchen.
@@ -722,7 +761,9 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       const r = gridConnectionFromState(c, state(), now());
       // Wirksame Grenze geändert (z. B. Victron-Wert 2714 umgestellt): EOS neu
       // abgleichen, höchstens jede Minute. Victron-Wert nicht lesbar: melden.
-      const limitKey = `${r.limitW}|${r.phaseLimitA}`;
+      // Aus den Einstellungen, nicht aus Watt: Spannungsschwankung ist keine
+      // Grenzänderung (EOS bekommt beim normalen Abgleich den aktuellen Wert).
+      const limitKey = `${r.limitSource}|${r.dvhubLimitW}|${r.victronPhaseLimitA}|${r.phaseLimitA}|${r.marginW === 0}`;
       if (limitKey !== lastLimitKey) {
         if (lastLimitKey !== null) log('grid_connection_limit_changed', { limitW: r.limitW, phaseLimitA: r.phaseLimitA, source: r.limitSource, text: r.limitText });
         if (lastSyncedKey === null) lastSyncedKey = limitKey; // Start: der normale Abgleich läuft ohnehin
@@ -812,6 +853,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         limitText: r.limitText,
         victronReadError: r.victronReadError,
         marginW: r.marginW,
+        marginText: r.marginText,
         targetW: r.targetW,
         phaseLimitA: r.phaseLimitA,
         phaseLimitW: r.phaseLimitW,

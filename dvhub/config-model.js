@@ -1223,7 +1223,7 @@ function buildFieldDefinitions() {
       min: 0,
       max: 100000,
       step: 100,
-      help: 'DVhub regelt auf Grenze minus diesen Abstand. Leer = 3 % der Grenze, mindestens 1000 W: In den 2–15 s, bis Wechselrichter und Wallbox nachgeregelt haben, springt ein Herd um mehrere kW. Höchstens die halbe Grenze.'
+      help: 'DVhub regelt auf Grenze minus diesen Abstand. Leer = 3 % der Grenze, mindestens 1000 W: In den 2–15 s, bis Wechselrichter und Wallbox nachgeregelt haben, springt ein Herd um mehrere kW. Höchstens die halbe Grenze. Stammt die wirksame Grenze aus Victron (Reg. 2714), gilt kein Abstand (Victron-Grenze): der GX hat schon einen Puffer.'
     },
     {
       section: 'system',
