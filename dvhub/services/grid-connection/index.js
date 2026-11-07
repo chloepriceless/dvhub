@@ -45,7 +45,10 @@ export const GRID_CONNECTION_DEFAULTS = Object.freeze({
   phaseLimitA: null,
   releaseHysteresisW: 1000,
   baseLoadW: 1000,
-  order: 'wallbox_first'
+  order: 'wallbox_first',
+  // Wie der Akku-Wechselrichter am Anschluss hängt: '' unbekannt (keine
+  // Gutschrift je Phase), 'three' dreiphasig, 'L1'/'L2'/'L3' einphasig.
+  batteryPhases: ''
 });
 
 /** Reihenfolge, in der die steuerbaren Lasten nachgeben (der Akku immer zuerst). */
@@ -75,6 +78,9 @@ export const RELEASE_MS = 30_000;        // so lange Luft, bis ein Gerät wieder
 // (Gesamtprüfung 4, P2: bei 1-s-Abfrage wären 15 Takte nur 14 s gewesen).
 export const RELEASE_TICKS = 16;         // = 30 s bei 2-s-Abfrage (für Tests und Doku)
 export const HOLD_AFTER_CUT_MS = 60_000; // nach einem Eingriff frühestens so spät freigeben
+export const REASSERT_MS = 30_000;       // Ungehorsam: Befehl höchstens so oft erzwungen neu
+export const DISOBEY_TICKS = 3;          // so viele Takte über dem Deckel, bis er erneut gesendet wird
+const DISOBEY_TOL_W = 500;               // Toleranz über dem Deckel (Messung, Anlauf), mindestens 10 %
 export const OBEY_MS = 20_000;           // so lange zählt ein Befehl als „unterwegs“
 export const BATTERY_OBEY_MS = 10_000;   // so lange darf der Multi zum Senken seiner Ladung brauchen
 export const BATTERY_TRACK_TOLERANCE_W = 300;   // übliches Einregeln des Multi um den Sollwert
@@ -94,23 +100,48 @@ const down = (w) => Math.floor(Number(w) / STEP_W) * STEP_W;
  * active = Grenze gültig eingetragen.
  * @param {object} cfg effektive DVhub-Config
  */
-export function resolveGridConnection(cfg = {}) {
+export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, victronReadError = false, phaseVoltagesV = null } = {}) {
   const c = cfg?.gridConnection || {};
-  const set = finite(c.limitKw) && Number(c.limitKw) > 0;
-  const rawW = set ? Number(c.limitKw) * 1000 : null;
-  const valid = set && rawW >= MIN_LIMIT_W && rawW <= MAX_LIMIT_W;
-  const limitW = valid ? Math.round(rawW) : null;
+  const dvSet = finite(c.limitKw) && Number(c.limitKw) > 0;
+  const rawW = dvSet ? Number(c.limitKw) * 1000 : null;
+  const dvValid = dvSet && rawW >= MIN_LIMIT_W && rawW <= MAX_LIMIT_W;
+  const dvLimitW = dvValid ? Math.round(rawW) : null;
+  // Spannung je Phase: gemessen (frisch, 150–300 V), sonst 230 V. Eine Grenze in
+  // A gilt für den Strom — bei 220 V sind 40 A nur 8,8 kW (Christin 07.11.2026).
+  const volts = [0, 1, 2].map((i) => {
+    const v = Array.isArray(phaseVoltagesV) ? Number(phaseVoltagesV[i]) : NaN;
+    return Number.isFinite(v) && v >= VOLTAGE_MIN_V && v <= VOLTAGE_MAX_V ? v : NOMINAL_PHASE_VOLTAGE_V;
+  });
+  // Victron (Punkt 7): Reg. 2714 AcInputLimit, A je Phase. kW-Grenze daraus =
+  // A × Summe der Phasenspannungen (dreiphasig angenommen). Es gilt die strengere.
+  const vA = finite(victronPhaseLimitA) && Number(victronPhaseLimitA) >= 6 && Number(victronPhaseLimitA) <= 4000
+    ? Number(victronPhaseLimitA) : null;
+  const vLimitW = vA != null ? Math.round(vA * volts.slice(0, VICTRON_ASSUMED_PHASES).reduce((a, b) => a + b, 0)) : null;
+  const set = dvSet || vA != null;
+  const valid = dvValid || vA != null;
+  const limitW = smallestLimit([dvLimitW, vLimitW]);
+  const limitSource = limitW == null ? null : (vLimitW != null && limitW === vLimitW && (dvLimitW == null || vLimitW < dvLimitW) ? 'victron' : 'dvhub');
   const autoMargin = limitW == null ? AUTO_MARGIN_MIN_W
     : Math.max(AUTO_MARGIN_MIN_W, Math.round(limitW * AUTO_MARGIN_PCT / 100));
   const marginRaw = finite(c.marginW) && Number(c.marginW) >= 0 ? Math.round(Number(c.marginW)) : autoMargin;
-  const marginW = limitW == null ? marginRaw : Math.min(Math.round(limitW / 2), marginRaw);
+  const dvMarginW = limitW == null ? marginRaw : Math.min(Math.round(limitW / 2), marginRaw);
+  // Grenze aus Victron: kein Abstand — der GX hat schon einen Puffer und kann
+  // bewusst unter dem Anschluss liegen (Christin 07.11.2026). Gewinnt die
+  // DVhub-Einstellung, bleibt deren Abstand.
+  const marginW = limitSource === 'victron' ? 0 : dvMarginW;
   const targetW = limitW == null ? null : limitW - marginW;
 
-  const phaseA = finite(c.phaseLimitA) && Number(c.phaseLimitA) >= 6 && Number(c.phaseLimitA) <= 4000
+  const dvPhaseA = finite(c.phaseLimitA) && Number(c.phaseLimitA) >= 6 && Number(c.phaseLimitA) <= 4000
     ? Number(c.phaseLimitA) : null;
-  const phaseLimitW = limitW != null && phaseA != null ? Math.round(phaseA * NOMINAL_PHASE_VOLTAGE_V) : null;
-  const phaseMarginW = phaseLimitW == null ? null : Math.min(Math.round(phaseLimitW / 2), Math.round(marginW / 3));
-  const phaseTargetW = phaseLimitW == null ? null : phaseLimitW - phaseMarginW;
+  const phaseA = smallestLimit([dvPhaseA, vA]);
+  const phaseSource = phaseA == null ? null : (vA != null && phaseA === vA && (dvPhaseA == null || vA < dvPhaseA) ? 'victron' : 'dvhub');
+  // Je Phase: A × Spannung dieser Phase; die strengste als Kennzahl.
+  const phaseLimitsW = limitW != null && phaseA != null ? volts.map((v) => Math.round(phaseA * v)) : null;
+  const phaseLimitW = phaseLimitsW ? Math.min(...phaseLimitsW) : null;
+  const phaseMarginW = phaseLimitW == null ? null
+    : phaseSource === 'victron' ? 0 : Math.min(Math.round(phaseLimitW / 2), Math.round(dvMarginW / 3));
+  const phaseTargetsW = phaseLimitsW ? phaseLimitsW.map((w) => w - phaseMarginW) : null;
+  const phaseTargetW = phaseTargetsW ? Math.min(...phaseTargetsW) : null;
 
   const releaseHysteresisW = finite(c.releaseHysteresisW) && Number(c.releaseHysteresisW) >= 0
     ? Math.round(Number(c.releaseHysteresisW)) : GRID_CONNECTION_DEFAULTS.releaseHysteresisW;
@@ -118,22 +149,37 @@ export function resolveGridConnection(cfg = {}) {
     ? Math.round(Number(c.baseLoadW)) : GRID_CONNECTION_DEFAULTS.baseLoadW;
   const baseLoadW = targetW == null ? baseRaw : Math.min(baseRaw, targetW);
   const orderKey = ORDER_PRESETS[c.order] ? c.order : GRID_CONNECTION_DEFAULTS.order;
+  const batteryPhases = ['three', 'L1', 'L2', 'L3'].includes(c.batteryPhases) ? c.batteryPhases : null;
   const manufacturer = String(cfg?.manufacturer || 'victron');
   const reason = !set ? 'not_set' : !valid ? 'limit_invalid' : null;
+  const kw = (w) => (w / 1000).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const limitText = limitW == null ? null
+    : limitSource === 'victron' ? `von Victron: ${vA} A je Phase ≈ ${kw(vLimitW)} kW${dvLimitW != null ? ` (DVhub-Einstellung ${kw(dvLimitW)} kW)` : ''}`
+      : `DVhub-Einstellung: ${kw(dvLimitW)} kW${vA != null ? ` (Victron: ${vA} A je Phase ≈ ${kw(vLimitW)} kW)` : ''}`;
   return {
     active: reason === null,
     reason,
     limitW,
+    limitSource,
+    limitText,
+    dvhubLimitW: dvLimitW,
+    victronPhaseLimitA: vA,
+    victronReadError: victronReadError === true,
     marginW,
+    marginText: limitW == null ? null : limitSource === 'victron' ? 'kein Abstand (Victron-Grenze)' : null,
     targetW,
     phaseLimitA: limitW != null ? phaseA : null,
+    phaseSource: limitW != null ? phaseSource : null,
     phaseLimitW,
+    phaseLimitsW,
     phaseMarginW,
     phaseTargetW,
+    phaseTargetsW,
     releaseHysteresisW,
     baseLoadW,
     orderKey,
     order: ORDER_PRESETS[orderKey],
+    batteryPhases,
     manufacturer,
     // Akku-Hebel = positiver Netz-Sollwert als Bezug am Zähler (Victron ESS).
     batterySupported: manufacturer === 'victron'
@@ -149,8 +195,8 @@ export function resolveGridConnection(cfg = {}) {
  * Slot legen). null = keine Grenze eingetragen. Wird durch eine EOS-eigene
  * Netzbezugs-Grenze ersetzt, sobald es die gibt.
  */
-export function eosGridChargeCapW(cfg) {
-  const r = resolveGridConnection(cfg);
+export function eosGridChargeCapW(cfg, extra = {}) {
+  const r = resolveGridConnection(cfg, extra);
   if (!r.active) return null;
   const opt = cfg?.optimizer || {};
   const evW = opt.eosOptimizeEv === true ? Math.max(0, Number(opt.evMaxChargeW) || 5000) : 0;
@@ -172,9 +218,54 @@ export const EOS_GRID_IMPORT_OFF_W = 1_000_000_000;
  * Bezugsgrenze für EOS (W): Grenze − Sicherheitsabstand, ohne Grenze der
  * Aus-Wert. Nur senden, wenn EOS den Schlüssel kennt (eos-capabilities.js).
  */
-export function eosGridImportLimitW(cfg) {
-  const r = resolveGridConnection(cfg);
+export function eosGridImportLimitW(cfg, extra = {}) {
+  const r = resolveGridConnection(cfg, extra);
   return r.active ? r.targetW : EOS_GRID_IMPORT_OFF_W;
+}
+
+// Victron-Anlagen am Netzanschluss: dreiphasig angenommen (die Anlage meldet
+// die Phasenzahl des Anschlusses nicht verlässlich).
+export const VICTRON_ASSUMED_PHASES = 3;
+// So lange gilt ein gelesener Wert von Reg. 2714 (gelesen wird alle 60 s).
+export const VICTRON_LIMIT_MAX_AGE_MS = 5 * 60_000;
+// Netzspannung je Phase (state.victron.gridVoltage, zentral vom Poller): nur
+// frisch und plausibel, sonst gilt 230 V (wie services/grid-voltage.js).
+export const PHASE_VOLTAGE_MAX_AGE_MS = 2 * 60_000;
+const VOLTAGE_MIN_V = 150;
+const VOLTAGE_MAX_V = 300;
+
+/** Gemessene Phasenspannungen [l1, l2, l3] (unplausibel = null) oder null. */
+export function phaseVoltagesFromState(state, now = Date.now()) {
+  const gv = state?.victron?.gridVoltage;
+  if (!gv || typeof gv !== 'object') return null;
+  const at = Number(gv.updatedAt);
+  if (!Number.isFinite(at) || at <= 0 || now - at > PHASE_VOLTAGE_MAX_AGE_MS) return null;
+  const out = [gv.l1, gv.l2, gv.l3].map((v) => (typeof v === 'number' && v >= VOLTAGE_MIN_V && v <= VOLTAGE_MAX_V ? v : null));
+  return out.some((v) => v != null) ? out : null;
+}
+
+/** Victron-Grenze aus dem Zustand: A je Phase oder null (aus, -1, veraltet). */
+export function victronLimitExtra(state, now = Date.now(), cfg = null) {
+  // Nur mit dem Victron-Profil (Standard) — ein gemerkter GX-Wert gilt nach
+  // einem Profilwechsel nicht weiter.
+  const phaseVoltagesV = phaseVoltagesFromState(state, now);
+  if (cfg && String(cfg.manufacturer || 'victron') !== 'victron') return { victronPhaseLimitA: null, victronReadError: false, phaseVoltagesV };
+  const v = state?.victron || {};
+  const at = Number(v.fieldUpdatedAt?.acInputLimitA) || 0;
+  const a = Number(v.acInputLimitA);
+  const fresh = at > 0 && now - at <= VICTRON_LIMIT_MAX_AGE_MS;
+  const error = Boolean(v.errors?.acInputLimitA);
+  return {
+    // Letzte Lesung gescheitert: der gemerkte Wert gilt nicht weiter.
+    victronPhaseLimitA: fresh && !error && a > 0 ? a : null,
+    victronReadError: error,
+    phaseVoltagesV,
+  };
+}
+
+/** resolveGridConnection mit dem Victron-Wert aus dem Laufzeit-Zustand. */
+export function gridConnectionFromState(cfg, state, now = Date.now()) {
+  return resolveGridConnection(cfg, victronLimitExtra(state, now, cfg || {}));
 }
 
 export function createGuardState() {
@@ -204,8 +295,10 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const events = [];
   const capsBefore = { ...st.caps };
   const ceilingBefore = st.ceilingW;
+  // Geräte, deren Deckel erzwungen neu gesendet werden soll (Ungehorsam).
+  const forced = new Set();
   const finish = () => {
-    const changed = new Set();
+    const changed = new Set(forced);
     const ids = new Set([...Object.keys(capsBefore), ...Object.keys(st.caps)]);
     for (const id of ids) {
       if ((capsBefore[id] ?? null) !== (st.caps[id] ?? null)) changed.add(kindOf(id, devices));
@@ -247,6 +340,9 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // nicht umgestellt werden (z. B. 16 A → 15,9 A), nur nicht mehr steigen.
       const curUp = Math.ceil(cur / STEP_W) * STEP_W;
       const next = cap == null ? curUp : Math.min(cap, curUp);
+      // Leistung beim Einfrieren merken: ein Gerät, das dabei nichts zog, wird
+      // später ganz freigegeben statt per Teil-Deckel gestartet.
+      if (cap == null) (st.cutFrom ??= {})[d.id] = cur;
       if (cap == null || next < cap) setCap(d, next);
       frozenW += st.caps[d.id];
     }
@@ -270,9 +366,32 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   } else if (phases) st.phasesMissing = false;
   const maxPhase = phases ? Math.max(...phases) : null;
   // In Gesamt-Watt: eine dreiphasige Last um x senken senkt jede Phase um x/3.
-  const phaseExcess = phases ? 3 * (maxPhase - r.phaseTargetW) : null;
+  // Je Phase gegen ihre eigene Grenze (A × Spannung dieser Phase).
+  const phaseTargets = r.phaseTargetsW || [r.phaseTargetW, r.phaseTargetW, r.phaseTargetW];
+  const phaseLimits = r.phaseLimitsW || [r.phaseLimitW, r.phaseLimitW, r.phaseLimitW];
+  const phaseExcess = phases ? 3 * Math.max(...phases.map((p, i) => p - phaseTargets[i])) : null;
   const excess = Math.max(total - r.targetW, phaseExcess ?? -Infinity);
-  const hard = total > r.limitW || (phases != null && maxPhase > r.phaseLimitW);
+  const hard = total > r.limitW || (phases != null && phases.some((p, i) => p > phaseLimits[i]));
+
+  // --- Ungehorsam: Gerät zieht trotz Deckel deutlich mehr -------------------
+  // (z. B. von Hand in evcc oder an der Box wieder gestartet). Nach der
+  // Befolgungszeit und DISOBEY_TICKS Takten den Deckel erzwungen neu senden —
+  // höchstens alle REASSERT_MS (Christin 07.11.2026: Grenze nie überschreiten).
+  st.disobey ??= {};
+  st.reassertAt ??= {};
+  // Nur Wallboxen: ihre Brücke sendet erzwungen ohne Dubletten-Filter.
+  for (const d of devices.filter((x) => x.kind === 'wallbox')) {
+    const cap = st.caps[d.id];
+    const cur = finite(d.currentW) ? Number(d.currentW) : null;
+    if (cap == null || cur == null || now - (st.capAt[d.id] || 0) <= OBEY_MS
+      || cur <= cap + Math.max(DISOBEY_TOL_W, cap * 0.1)) { delete st.disobey[d.id]; continue; }
+    st.disobey[d.id] = (st.disobey[d.id] || 0) + 1;
+    if (st.disobey[d.id] < DISOBEY_TICKS || now - (st.reassertAt[d.id] || 0) < REASSERT_MS) continue;
+    st.reassertAt[d.id] = now;
+    st.disobey[d.id] = 0;
+    forced.add(d.kind);
+    events.push({ type: 'reassert', id: d.id, kind: d.kind, name: d.name || null, capW: cap, currentW: Math.round(cur) });
+  }
 
   // --- 1. Akku: Decke für positive Netz-Sollwerte ------------------------------
   const desired = phaseExcess == null ? r.targetW : Math.min(r.targetW, total - phaseExcess);
@@ -374,19 +493,44 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   // --- 3. Freigabe mit Rückschalt-Abstand ----------------------------------------
   const capped = devices.filter((d) => st.caps[d.id] != null);
   if (!capped.length) { st.underSince = null; return finish(); }
+  // Gesamt-Luft: Lädt der Akku gerade aus dem Netz, ist seine Ladung freie
+  // Leistung für die Geräte — er gibt zuerst nach, der Multi hält den Bezug
+  // auf dem Sollwert. Die Phasen prüft phaseFits() je Gerät.
   let headroom = r.targetW - total;
-  // Luft der knappsten Phase; je Gerät unten nach seinen Phasen umgerechnet.
-  const phaseRoom = phases ? r.phaseTargetW - maxPhase : null;
-  if (phases) headroom = Math.min(headroom, 3 * phaseRoom);
-  // Lädt der Akku gerade aus dem Netz, ist seine Ladung freie Leistung für die
-  // Geräte — er gibt zuerst nach, der Multi hält den Bezug auf dem Sollwert.
-  if (sp != null && !batteryStuck) headroom += chargeW;
-  // Je Phase zählt nur die GEMESSENE Luft: ob der Akku auf derselben Phase
-  // lädt, weiß DVhub nicht (einphasiger Multi an dreiphasigem Anschluss).
-  // Sicherheit vor Komfort — der Akku gibt über die Decke nach, nicht über die
-  // Freigabe (Codex bcbfaff1, P1).
-  const phaseRoomEff = phaseRoom;
-  if (headroom >= r.releaseHysteresisW) st.underSince ??= now;
+  const batteryYields = sp != null && !batteryStuck ? chargeW : 0;
+  headroom += batteryYields;
+  // Passt zusätzliche Leistung x eines Geräts mit devPhases Phasen auf jede
+  // Phase? Das Gerät belastet dreiphasig x/3 je Phase, einphasig x auf einer
+  // UNBEKANNTEN Phase (jede wird geprüft). Der Akku gibt dabei höchstens x ab,
+  // und zwar nur auf den Phasen, auf denen er lädt (Einstellung
+  // batteryPhases; unbekannt = keine Entlastung) — Codex bb0e14cd.
+  const phaseLimitEach = phases ? phaseTargets.map((t) => t - Math.round(r.releaseHysteresisW / 3)) : null;
+  const phaseFits = (x, devPhases) => {
+    if (!phases) return true;
+    const relief = r.batteryPhases ? Math.min(batteryYields, x) : 0;
+    const rel = r.batteryPhases === 'three' ? [relief / 3, relief / 3, relief / 3]
+      : ['L1', 'L2', 'L3'].map((l) => (l === r.batteryPhases ? relief : 0));
+    const placements = devPhases === 3 ? [[x / 3, x / 3, x / 3]] : [[x, 0, 0], [0, x, 0], [0, 0, x]];
+    return placements.every((add) => phases.every((p, i) => p + add[i] - rel[i] <= phaseLimitEach[i]));
+  };
+  // Größtes x ≤ limit, das auf alle Phasen passt. Nicht monoton (mit dem Akku
+  // auf einer Phase passt ein größeres x eher), daher in Schritten absuchen.
+  const maxFit = (limit, devPhases) => {
+    if (!phases) return limit;
+    for (let k = Math.max(0, Math.floor(limit / STEP_W)); k > 0; k -= 1) {
+      if (phaseFits(k * STEP_W, devPhases)) return k * STEP_W;
+    }
+    return 0;
+  };
+  // Luft zählt nur, wenn auch jede Phase ihren Rückschalt-Abstand hat (oder
+  // der Akku dort genug abgibt) — sonst würde ein kurzer Einbruch die 30 s
+  // Wartezeit umgehen (Codex 529a0121, P2).
+  const giveNow = headroom - r.releaseHysteresisW;
+  // Den Mindeststrom braucht nur ein pausiertes Gerät; ein laufendes darf in
+  // kleinen Schritten wachsen (Abschluss-Gesamtrunde 2, P2).
+  const needW = (d) => (finite(d.currentW) && Number(d.currentW) > 0 ? STEP_W : Math.max(STEP_W, Number(d.minW) || 0));
+  const phasesRoomy = !phases || capped.some((d) => maxFit(giveNow, Number(d.phases) === 3 ? 3 : 1) >= needW(d));
+  if (headroom >= r.releaseHysteresisW && phasesRoomy) st.underSince ??= now;
   else st.underSince = null;
   if (st.underSince == null || now - st.underSince < RELEASE_MS || now - st.lastCutAt < HOLD_AFTER_CUT_MS) return finish();
   st.underSince = null;
@@ -408,9 +552,20 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // Phasen: ein einphasiges (oder unbekanntes) Gerät darf höchstens die Luft
       // EINER Phase nehmen, ein dreiphasiges das Dreifache (Gesamtprüfung 6, P1).
       const devPhases = Number(d.phases) === 3 ? 3 : 1;
-      const giveDev = phaseRoomEff == null ? give
-        : Math.min(give, devPhases * phaseRoomEff - (devPhases === 3 ? r.releaseHysteresisW : Math.round(r.releaseHysteresisW / 3)));
+      const giveDev = maxFit(give, devPhases);
       if (!(giveDev > 0)) continue;
+      // Zog beim Deckeln nichts (z. B. Fail-safe an einer Leerlauf-Box): ganz
+      // freigeben statt per Teil-Deckel einen Ladebefehl auszulösen — DVhub
+      // startet keine Box, die es nicht selbst zum Laden geschickt hat.
+      // Erst mit Luft für den Mindeststrom: die Box darf danach anlaufen, und
+      // openWB bekommt beim Freigeben ihren Strom zurück (Codex a7aacda4, P1).
+      if (drawNow === 0 && st.cutFrom?.[d.id] === 0 && giveDev >= (Number(d.minW) || 0)) {
+        delete st.caps[d.id];
+        delete st.capAt[d.id];
+        delete st.cutFrom[d.id];
+        events.push({ type: 'release', id: d.id, kind: d.kind, name: d.name || null, capW: null, importW: Math.round(total) });
+        return finish();
+      }
       // Pausiert und zu wenig Luft für den Mindeststrom: nicht anlaufen lassen.
       if (drawNow === 0 && giveDev < (Number(d.minW) || 0)) continue;
       const next = Math.max(cap, drawNow + giveDev);
@@ -436,7 +591,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
 function kindOf(id, devices) {
   const d = devices.find((x) => x.id === id);
   if (d) return d.kind;
-  if (id === 'wallbox') return 'wallbox';
+  if (id === 'wallbox' || id.startsWith('wallbox:')) return 'wallbox';
   if (id.startsWith('heater:')) return 'heater';
   if (id.startsWith('eebus:')) return 'eebus';
   return 'other';
@@ -460,6 +615,10 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   const st = createGuardState();
   let lastTickAt = 0;
   let timer = null;
+  let lastLimitKey = null;
+  let lastSyncedKey = null;
+  let lastEosSyncAt = 0;
+  let lastVictronError = false;
   let last = { meas: null, devices: [] };
 
   const cfg = () => ctx.getCfg?.() || {};
@@ -475,7 +634,10 @@ export function createGridConnectionGuard(ctx, deps = {}) {
 
   function wallboxPowerW(c, bc) {
     if (bc.charger === 'evcc') {
-      const lp = ctx.evccIntegration?.getStatus?.()?.loadpoints?.[bc.loadpoint - 1];
+      const st = ctx.evccIntegration?.getStatus?.();
+      // Veraltete Abfrage (evcc nicht erreichbar): unbekannt, nicht 0 (Gesamtrunde 1, P1).
+      if (st?.lastError || (st?.lastPolledAt != null && now() - Number(st.lastPolledAt) > 90_000)) return null;
+      const lp = st?.loadpoints?.[bc.loadpoint - 1];
       return finite(lp?.chargePowerW) ? Number(lp.chargePowerW) : null;
     }
     const st2 = ctx.chargerStatus?.fresh?.();
@@ -486,20 +648,42 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   function devices(c) {
     const list = [];
     const bc = resolveEvccBridgeConfig(c);
-    // Wallbox: über die EOS-Brücke (evcc oder direkt, mit Pro) oder eine direkt
-    // angebundene Box. evcc ohne EOS-Steuerung steuert DVhub nicht.
-    // „Sofort laden“ läuft auch ohne EOS-Weitergabe über die Brücke und hält
-    // deren Grenze ein (Codex b2f1ccd, P1).
+    // Wallbox: EINE Regel (Christin 07.11.2026) — solange eine Grenze gilt,
+    // überwacht der Wächter die Wallbox immer: mit oder ohne EOS-Weitergabe,
+    // „Sofort laden“, evcc im eigenen Modus oder Handstart. Die Brücke setzt den
+    // Deckel durch (evcc maxcurrent bzw. Box-Strom, unter dem Mindeststrom Pause).
     const override = ctx.eosEvccBridge?.getOverride?.();
     const overrideCharging = override != null && override.kind !== 'stop';
     const viaBridge = (bc.enabled || overrideCharging) && ctx.licenseService?.isProActive?.() !== false;
+    const evccSt = ctx.evccIntegration?.getStatus?.() || null;
+    const evccOn = Boolean(evccSt?.url);
     const direct = bc.charger !== 'evcc' && directWallboxConfigured(c);
-    if ((viaBridge || direct) && ctx.eosEvccBridge) {
+    if (((bc.charger === 'evcc' && (evccOn || viaBridge)) || direct) && ctx.eosEvccBridge) {
       // Höchstleistung nach der Freigabe: über die EOS-Brücke höchstens das, was
-      // der Plan schickt (evMaxChargeW); eine direkte Box ohne Weitergabe regelt
-      // danach selbst — bis zu ihrem Nennstrom (vorsichtig 32 A je Phase).
+      // der Plan schickt (evMaxChargeW); sonst regelt die Wallbox selbst — bis
+      // zu ihrem Nennstrom (vorsichtig 32 A je Phase).
       const releaseW = viaBridge ? bc.maxChargeW : Math.max(bc.maxChargeW, Math.round(32 * 230 * bc.phases));
       list.push({ id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: wallboxPowerW(c, bc), maxW: releaseW, minW: minChargeW(bc), phases: bc.phases });
+    }
+    // Weitere evcc-Ladepunkte: jeder, der gerade lädt (oder noch gedeckelt ist).
+    if (evccOn && ctx.eosEvccBridge) {
+      const fresh = !(evccSt.lastError || (evccSt.lastPolledAt != null && now() - Number(evccSt.lastPolledAt) > 90_000));
+      for (const lp of Array.isArray(evccSt.loadpoints) ? evccSt.loadpoints : []) {
+        const lpId = Number(lp?.id);
+        if (!(lpId >= 1) || (bc.charger === 'evcc' && lpId === bc.loadpoint)) continue;
+        const id = `wallbox:evcc:${lpId}`;
+        const powerW = fresh && finite(lp.chargePowerW) ? Number(lp.chargePowerW) : null;
+        // Veraltete Abfrage: zuletzt ladend bleibt überwacht, Leistung unbekannt
+        // (vorsichtige Annahme im Wächter) — Gesamtrunde 2, P1.
+        const charging = fresh ? powerW > 0 : (lp.charging === true || Number(lp.chargePowerW) > 0);
+        if (!charging && st.caps[id] == null) continue;
+        const ph = [3, 1, 2].includes(Number(lp.phasesActive)) ? Number(lp.phasesActive)
+          : ([1, 2, 3].includes(Number(lp.phasesConfigured)) ? Number(lp.phasesConfigured) : 3);
+        list.push({
+          id, kind: 'wallbox', name: lp.title || `Ladepunkt ${lpId}`, currentW: powerW,
+          maxW: Math.round(32 * 230 * ph), minW: Math.round((Number(lp.minCurrentA) || 6) * 230 * ph), phases: ph === 3 ? 3 : 1
+        });
+      }
     }
     if (ctx.mypvRegulator) {
       let heaters;
@@ -619,7 +803,27 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     pausedSeen = false;
     try {
       const c = cfg();
-      const r = resolveGridConnection(c);
+      const r = gridConnectionFromState(c, state(), now());
+      // Wirksame Grenze geändert (z. B. Victron-Wert 2714 umgestellt): EOS neu
+      // abgleichen, höchstens jede Minute. Victron-Wert nicht lesbar: melden.
+      // Aus den Einstellungen, nicht aus Watt: Spannungsschwankung ist keine
+      // Grenzänderung (EOS bekommt beim normalen Abgleich den aktuellen Wert).
+      const limitKey = `${r.limitSource}|${r.dvhubLimitW}|${r.victronPhaseLimitA}|${r.phaseLimitA}|${r.marginW === 0}`;
+      if (limitKey !== lastLimitKey) {
+        if (lastLimitKey !== null) log('grid_connection_limit_changed', { limitW: r.limitW, phaseLimitA: r.phaseLimitA, source: r.limitSource, text: r.limitText });
+        if (lastSyncedKey === null) lastSyncedKey = limitKey; // Start: der normale Abgleich läuft ohnehin
+        lastLimitKey = limitKey;
+      }
+      // Geänderte Grenze an EOS — gedrosselt, aber nicht vergessen.
+      if (limitKey !== lastSyncedKey && now() - lastEosSyncAt >= 60_000) {
+        lastEosSyncAt = now();
+        lastSyncedKey = limitKey;
+        Promise.resolve(ctx.eosConfigSync?.sync?.()).catch(() => {});
+      }
+      if (r.victronReadError !== lastVictronError) {
+        lastVictronError = r.victronReadError;
+        if (r.victronReadError) log('grid_connection_victron_unreadable', { text: 'Victron-Bezugsgrenze (Reg. 2714) nicht lesbar — es gelten nur die DVhub-Werte.' }, 'warn');
+      }
       const meas = r.active ? meterImport(state(), c, { now: lastTickAt, maxAgeMs: METER_MAX_AGE_MS }) : null;
       const list = r.active ? devices(c) : [];
       const res = guardStep(st, { resolved: r, meas, devices: list, battery: batteryInput(c), now: lastTickAt });
@@ -633,7 +837,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     }
   }
 
-  function active() { return !paused() && resolveGridConnection(cfg()).active; }
+  function active() { return !paused() && gridConnectionFromState(cfg(), state(), now()).active; }
 
   return {
     /** Je Zählerabfrage (polling.js). */
@@ -650,7 +854,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     /** Decke für positive Netz-Sollwerte (W) oder null (keine Grenze / kein Victron). */
     batteryCeilingW() {
       if (paused()) return null;
-      const r = resolveGridConnection(cfg());
+      const r = gridConnectionFromState(cfg(), state(), now());
       if (!r.active || !r.batterySupported) return null;
       return st.ceilingW ?? r.targetW;
     },
@@ -667,8 +871,8 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     },
     summary() {
       const c = cfg();
-      const r = resolveGridConnection(c);
-      if (r.reason === 'not_set') return null;
+      const r = gridConnectionFromState(c, state(), now());
+      if (r.reason === 'not_set' && !r.victronReadError) return null;
       const s = state();
       const t = now();
       const meas = last.meas;
@@ -690,7 +894,11 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         active: r.active,
         reason: r.reason,
         limitW: r.limitW,
+        limitSource: r.limitSource,
+        limitText: r.limitText,
+        victronReadError: r.victronReadError,
         marginW: r.marginW,
+        marginText: r.marginText,
         targetW: r.targetW,
         phaseLimitA: r.phaseLimitA,
         phaseLimitW: r.phaseLimitW,

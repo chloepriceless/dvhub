@@ -15,7 +15,9 @@ describe('buildDvhubTopicMaps', () => {
     const dv = buildDvhubTopicMaps('dvhub');
     // activeSocLimitPct (31.10.2026): aktive SoC-Grenze aus Victron BatteryLife,
     // nur für den Entlade-Wächter — fehlt sie, gilt die Mindestgrenze minSocPct.
-    const venusRead = Object.keys(venus.READ_TOPICS).filter(k => !/feedExcessDcPv|dontFeedExcessAcPv|activeSocLimitPct/.test(k)).sort();
+    // acInputLimitA (07.11.2026): Victron-Bezugsgrenze (Reg. 2714) für den
+    // Netzanschluss-Wächter — nur Victron, im DVhub-Schema gilt die DVhub-Einstellung.
+    const venusRead = Object.keys(venus.READ_TOPICS).filter(k => !/feedExcessDcPv|dontFeedExcessAcPv|activeSocLimitPct|acInputLimitA/.test(k)).sort();
     // Zusätzlich NUR im DVhub-Schema: Gesamtwerte für HA/Loxone (Netz, PV, Verbrauch).
     const DVHUB_ONLY = ['meter_total', 'pvTotalInput', 'selfConsumptionW_total'];
     assert.deepEqual(Object.keys(dv.READ_TOPICS).filter((k) => !DVHUB_ONLY.includes(k)).sort(), venusRead);

@@ -1215,7 +1215,7 @@ function buildFieldDefinitions() {
       min: 2,
       max: 2000,
       step: 0.1,
-      help: 'Höchste Bezugsleistung des Hausanschlusses in kW, z. B. 29. Leer = DVhub begrenzt nicht (ab Werk). Steht im Netzanschlussvertrag oder ergibt sich aus der Hauptsicherung (3 × 50 A ≈ 34 kW). Wirkt sofort, auch für EOS: die Ladeleistung aus dem Netz, mit der EOS plant, wird daran angepasst.'
+      help: 'Höchste Bezugsleistung des Hausanschlusses in kW, z. B. 29. Leer = DVhub begrenzt nicht (ab Werk). Steht im Netzanschlussvertrag oder ergibt sich aus der Hauptsicherung (3 × 50 A ≈ 34 kW). Wirkt sofort, auch für EOS: die Ladeleistung aus dem Netz, mit der EOS plant, wird daran angepasst. Bei Victron liest DVhub zusätzlich die Begrenzung des AC-Bezugs aus dem GX (A je Phase, Reg. 2714) — es gilt die strengere; welche gerade gilt, zeigt die Leitstand-Kachel „Netzanschluss“.'
     },
     {
       section: 'system',
@@ -1228,7 +1228,7 @@ function buildFieldDefinitions() {
       min: 0,
       max: 100000,
       step: 100,
-      help: 'DVhub regelt auf Grenze minus diesen Abstand. Leer = 3 % der Grenze, mindestens 1000 W: In den 2–15 s, bis Wechselrichter und Wallbox nachgeregelt haben, springt ein Herd um mehrere kW. Höchstens die halbe Grenze.'
+      help: 'DVhub regelt auf Grenze minus diesen Abstand. Leer = 3 % der Grenze, mindestens 1000 W: In den 2–15 s, bis Wechselrichter und Wallbox nachgeregelt haben, springt ein Herd um mehrere kW. Höchstens die halbe Grenze. Stammt die wirksame Grenze aus Victron (Reg. 2714), gilt kein Abstand (Victron-Grenze): der GX hat schon einen Puffer.'
     },
     {
       section: 'system',
@@ -1242,6 +1242,22 @@ function buildFieldDefinitions() {
       max: 4000,
       step: 1,
       help: 'Nennstrom der Sicherung je Phase, z. B. 50. Sicherungen lösen je Phase aus — eine einseitig belastete Phase kann überlastet sein, obwohl die Summe passt. DVhub rechnet mit 230 V und den Phasenleistungen des Netzzählers. Leer = nur die Gesamtgrenze.'
+    },
+    {
+      section: 'system',
+      group: 'gridConnection',
+      groupLabel: 'Netzanschluss – Bezugsgrenze',
+      path: 'gridConnection.batteryPhases',
+      label: 'Akku-Wechselrichter am Anschluss',
+      type: 'select',
+      options: [
+        { value: '', label: 'Unbekannt' },
+        { value: 'three', label: 'Dreiphasig' },
+        { value: 'L1', label: 'Einphasig auf L1' },
+        { value: 'L2', label: 'Einphasig auf L2' },
+        { value: 'L3', label: 'Einphasig auf L3' }
+      ],
+      help: 'Nur mit Grenze je Phase wichtig: Lädt der Akku aus dem Netz, gibt der Wechselrichter diese Leistung zuerst frei — dreiphasig gleich verteilt, einphasig auf seiner Phase. DVhub zählt sie dann als Luft je Phase und gibt eine gesperrte Wallbox früher frei. Unbekannt = keine Gutschrift (sicher, aber die Wallbox bleibt eventuell länger gesperrt).'
     },
     {
       section: 'system',
@@ -4753,7 +4769,7 @@ export function createDefaultConfig() {
     // der Betreiber wählt, welche Grenze für die Anlage gilt, oder „keine“.
     feedInCap: { mode: '', percent: null, watts: null },
     // Netzanschluss (services/grid-connection): ab Werk leer = DVhub begrenzt nicht.
-    gridConnection: { limitKw: null, marginW: null, phaseLimitA: null, releaseHysteresisW: 1000, baseLoadW: 1000, order: 'wallbox_first' },
+    gridConnection: { limitKw: null, marginW: null, phaseLimitA: null, releaseHysteresisW: 1000, baseLoadW: 1000, order: 'wallbox_first', batteryPhases: '' },
     // Peak Shaving (GitHub #28, services/peak-shaving): ab Werk aus, ohne Grenze.
     peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null },
     multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300 },

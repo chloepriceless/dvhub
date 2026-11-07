@@ -176,3 +176,14 @@ describe('Gesamtprüfung 7', () => {
     assert.equal(typeof inv2.max_ac_charge_power_w, 'number');
   });
 });
+
+describe('Abschluss-Gesamtrunde 2', () => {
+  it('anderes Hersteller-Profil: eine gemerkte Victron-Grenze erreicht EOS nicht (Codex, P2)', async () => {
+    mock = await createMockEos({ knowsKey: true });
+    const cfgRef = { extra: { manufacturer: 'fronius', gridConnection: { limitKw: 29 } } };
+    const ctx = ctxFor(mock.port, cfgRef);
+    ctx.state.victron = { minSocPct: 5, acInputLimitA: 30, fieldUpdatedAt: { acInputLimitA: Date.now() }, errors: {} };
+    await createEosConfigSync(ctx).sync();
+    assert.equal(lastInverterPut(mock)[KEY], 28000, 'nur die DVhub-Grenze, nicht 30 A');
+  });
+});

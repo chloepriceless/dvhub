@@ -1822,6 +1822,9 @@ const eosEvccBridge = createEosEvccBridge({
     Number.isFinite(state.ctrl?.p14aWallboxCapW) ? state.ctrl.p14aWallboxCapW : null,
     ctx.gridConnection?.capW?.('wallbox') ?? null
   ),
+  // Netzanschluss-Wächter: Deckel je Wallbox-Gerät (auch weitere evcc-Ladepunkte).
+  getDeviceCapW: (id) => ctx.gridConnection?.capW?.(id) ?? null,
+  getEvccLoadpoints: () => evccIntegration.getLoadpoints(),
   pushLog: (event, data) => ctx.pushLog?.(event, data),
   // „Sofort laden“ ueberlebt einen Neustart (Update mitten im Laden) — eigene
   // kleine Datei, Laufzeitzustand gehoert nicht in config.json.

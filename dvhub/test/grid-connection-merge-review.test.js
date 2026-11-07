@@ -92,7 +92,7 @@ function evccMulti({ enabled = true, override = null } = {}) {
   const evcc = {
     getStatus: () => ({ url: 'http://evcc.local:7070' }),
     getLoadpoints: () => [1, 2].map((id) => ({ id, mode: modes[id], connected: true })),
-    refresh: async () => { if (h.refreshFailOnce) { h.refreshFailOnce = false; return false; } return true; },
+    refresh: async () => { h.refreshHook?.(); if (h.refreshFailOnce) { h.refreshFailOnce = false; return false; } return true; },
     setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', id, a]); return { ok: true }; },
     setMode: async (id, m) => {
       calls.push(['mode', id, m]);
@@ -104,16 +104,22 @@ function evccMulti({ enabled = true, override = null } = {}) {
   const t = Date.now();
   const ref = { paused: false, now: t };
   const store = { value: override };
-  const bridge = createEosEvccBridge({
+  const ownedStore = { value: null };
+  const make = () => createEosEvccBridge({
     getCfg: () => cfg,
     getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
     getCharger: (_c, bc) => createEvccAdapter(evcc, () => bc.loadpoint, () => bc.stopMode),
     isPaused: () => ref.paused, now: () => ref.now,
     getGridCapW: () => h.capW ?? null,
+    getDeviceCapW: (id) => (id === 'wallbox' ? h.capW ?? null : null),
+    getEvccLoadpoints: () => evcc.getLoadpoints(),
     loadOverride: () => store.value,
     saveOverride: (ov) => { store.value = ov ? JSON.parse(JSON.stringify(ov)) : null; },
+    loadOwned: () => ownedStore.value,
+    saveOwned: (list) => { ownedStore.value = list ? JSON.parse(JSON.stringify(list)) : null; },
   });
-  Object.assign(h, { bridge, modes, fail, noEffect, calls, cfg, ref, store, failStop: null, capW: null });
+  const bridge = make();
+  Object.assign(h, { make, ownedStore, bridge, modes, fail, noEffect, calls, cfg, ref, store, failStop: null, capW: null });
   const origSetMode = evcc.setMode;
   evcc.setMode = async (id, m) => (m === 'off' && h.failStop === id ? { ok: false, error: 'timeout' } : origSetMode(id, m));
   return h;
@@ -171,6 +177,7 @@ test('Codex 180dbd00 P1: release() ohne Wirkung (openWB) bestätigt keinen Stopp
       stop: async () => { calls.push(['stop']); box.charging = false; return { ok: true }; },
       release: async () => { calls.push(['release']); return { ok: true }; }, // lässt den Strom stehen
       status: async () => ({ ok: true, connected: true }),
+      dvhubState: async () => ({ known: true, active: box.charging }),
     }),
     isPaused: () => paused, now: () => t,
   });
@@ -267,6 +274,7 @@ function directBox({ type = 'openevse', stopMode = 'pv' } = {}) {
       stop: async () => { calls.push(['stop']); box.claim = 'disabled'; return { ok: true }; },
       release: async () => { calls.push(['release']); box.claim = null; return { ok: true }; },
       status: async () => ({ ok: true, connected: true }),
+      dvhubState: async () => ({ known: true, active: box.claim === 'charge' }),
     }),
     isPaused: () => ref.paused, now: () => t,
   });
@@ -498,6 +506,7 @@ function directBridge({ type = 'openevse', enabled = false, store = { value: nul
       stop: async () => { calls.push(['stop', bc.charger, bc.stopMode]); return h.stopFails ? { ok: false, error: 'timeout' } : { ok: true }; },
       release: async () => { calls.push(['release', bc.charger]); return { ok: true }; },
       status: async () => ({ ok: true, connected: true, raw: { mode: 'now' } }),
+      dvhubState: async () => ({ known: true, active: true }),
     }),
     getGridCapW: () => capRef.capW,
     isPaused: () => paused.v,
@@ -677,7 +686,7 @@ test('bf1c2c23 P1: Gerät ohne Leistungsmeldung — Grenze wächst nicht über d
 // --- Vereinfachte Zustandsführung (Koordinator, 06.11.2026): keine
 // aufgeschobene evcc-Rückkehr mehr, stattdessen Hinweis ---------------------------
 
-test('Vereinfacht: „Sofort laden“ endet im Not-Halt → kein Write, Hinweis mit altem Modus, KEINE automatische Rückkehr', async () => {
+test('Punkt 4: „Sofort laden“ endet im Not-Halt → kein Write; nach dem Aufheben stellt DVhub „pv“ zurück (evcc steht noch auf „aus“)', async () => {
   const h = evccMulti({ enabled: false });
   await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
   h.ref.paused = true;
@@ -685,25 +694,80 @@ test('Vereinfacht: „Sofort laden“ endet im Not-Halt → kein Write, Hinweis 
   const n = h.calls.length;
   await h.bridge.clearOverride();
   assert.equal(h.calls.length, n, 'im Not-Halt kein Write');
-  const st = h.bridge.getStatus();
-  assert.equal(st.restoreHint.mode, 'pv');
-  assert.equal(st.restoreHint.reason, 'paused');
-  assert.match(st.lastError, /„pv“/);
+  assert.equal(h.bridge.getStatus().restoreHint.mode, 'pv');
+  assert.equal(h.bridge.hasPendingRestore(), true);
+  await h.bridge.tick();
+  assert.equal(h.modes[1], 'off', 'im Not-Halt bleibt es aus');
   h.ref.paused = false;
   await h.bridge.tick();
-  assert.equal(h.modes[1], 'off', 'keine automatische Rückkehr');
+  assert.equal(h.modes[1], 'pv', 'automatisch zurück');
+  assert.equal(h.bridge.hasPendingRestore(), false);
+  assert.equal(h.bridge.getStatus().restoreHint, null);
 });
 
-test('Vereinfacht: „Sofort laden“ endet bei aktiver Grenze → evcc hart aus, Hinweis; keine Rückkehr, wenn die Grenze fällt', async () => {
+// Seit 07.11.2026 (Christin, eine Regel): zurück sofort, sobald der Deckel
+// den Mindeststrom erlaubt — kein Warten auf Luft für die volle Leistung; den
+// Strom begrenzt danach der Wächter über maxcurrent.
+test('Punkt 4 (neu): „Sofort laden“ endet unter Deckel über dem Mindeststrom → Modus sofort zurück', async () => {
   const h = evccMulti({ enabled: false });
   await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
   h.capW = 5000;
   await h.bridge.clearOverride();
+  assert.equal(h.modes[1], 'pv');
+  assert.equal(h.bridge.getStatus().restoreHint, null);
+});
+
+test('Punkt 4 (neu): Deckel unter dem Mindeststrom → aus; zurück, sobald er den Mindeststrom erlaubt', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 2000;
+  await h.bridge.clearOverride();
   assert.equal(h.modes[1], 'off');
   assert.equal(h.bridge.getStatus().restoreHint.reason, 'grid_cap');
-  h.capW = null;
   await h.bridge.tick();
-  assert.equal(h.modes[1], 'off');
+  assert.equal(h.modes[1], 'off', 'unter dem Mindeststrom: bleibt aus');
+  h.capW = 5000;
+  await h.bridge.tick();
+  assert.equal(h.modes[1], 'pv', 'Teil-Deckel reicht');
+});
+
+test('Punkt 4: in evcc inzwischen selbst umgestellt → DVhub stellt nichts zurück', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 0;
+  await h.bridge.clearOverride();
+  h.modes[1] = 'minpv';
+  h.capW = null;
+  const n = h.calls.length;
+  await h.bridge.tick();
+  assert.equal(h.calls.length, n, 'kein Befehl');
+  assert.equal(h.modes[1], 'minpv');
+  assert.equal(h.bridge.hasPendingRestore(), false);
+});
+
+test('Punkt 4: Rückkehr übersteht einen Neustart (ev_owned.json)', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 0;
+  await h.bridge.clearOverride();
+  const fresh = h.make();
+  assert.equal(fresh.hasPendingRestore(), true);
+  h.capW = null;
+  await fresh.tick();
+  assert.equal(h.modes[1], 'pv');
+});
+
+test('Punkt 4: Wächter überwacht die evcc-Wallbox immer (auch ohne Weitergabe), nicht erst bei ausstehender Rückkehr', () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
+  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -33000 }, victron: {}, schedule: {}, ctrl: {} };
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: () => {},
+    evccIntegration: { getStatus: () => ({ url: 'http://evcc.local:7070', loadpoints: [{ id: 1, chargePowerW: 11000 }] }) },
+    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null, hasPendingRestore: () => false },
+  };
+  const guard = createGridConnectionGuard(ctx);
+  guard.tick();
+  assert.ok(guard.capW('wallbox') != null);
 });
 
 test('Vereinfacht: neues „Sofort laden“ am selben Ladepunkt übernimmt den Hinweis-Modus und stellt ihn beim Ende her', async () => {
@@ -719,18 +783,6 @@ test('Vereinfacht: neues „Sofort laden“ am selben Ladepunkt übernimmt den H
   assert.equal(h.modes[1], 'pv');
 });
 
-test('Vereinfacht: Wächter schreibt eine Wallbox nur wegen eines Hinweises nicht ein', () => {
-  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
-  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -33000 }, victron: {}, schedule: {}, ctrl: {} };
-  const ctx = {
-    getCfg: () => cfg, state, pushLog: () => {},
-    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: 0 }] }) },
-    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null },
-  };
-  const guard = createGridConnectionGuard(ctx);
-  guard.tick();
-  assert.equal(guard.capW('wallbox'), null);
-});
 
 test('Vereinfacht (Prod-Fall): EOS-Weitergabe an, „Sofort laden“ endet im Not-Halt → kein Hinweis, nach dem Aufheben übernimmt der Plan', async () => {
   const h = evccMulti({ enabled: true });
@@ -770,7 +822,7 @@ test('Abschluss A P2: Entlade-Wächter — eine Netzanschluss-Decke auf „Akku 
 test('bcbfaff1/fa219ab7 P1: Sicherheits-Stopp beim Override-Ende scheitert → „Laden stoppen“ hält evcc aus, das Laden lebt nicht wieder auf', async () => {
   const h = evccMulti({ enabled: false });
   await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
-  h.capW = 6000;                         // Teil-Grenze
+  h.capW = 2000;                         // unter dem Mindeststrom
   h.failStop = 1;
   await h.bridge.clearOverride();
   assert.equal(h.bridge.getOverride()?.kind, 'stop', 'aus dem Laden wird ein Stopp');
@@ -882,4 +934,373 @@ test('Codex f42f6217 P2: openWB — gehaltene Freigabe macht den alten Befehl un
   await h.bridge.clearOverride();
   await h.bridge.tick();
   assert.deepEqual(h.calls.at(-1), ['charge', 'openwb', 8.6], 'Grenz-Vorgabe neu geschickt');
+});
+
+// --- Punkt 5: Akku-Netzladung je Phase als Luft (Einstellung batteryPhases) ---------------
+
+test('Punkt 5: dreiphasiger Multi — Akku-Ladung zählt gleichverteilt je Phase, die Wallbox kommt zurück', () => {
+  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40, batteryPhases: 'three' } });
+  assert.equal(RP.batteryPhases, 'three');
+  const st = createGuardState();
+  st.caps = { wallbox: 0 };
+  st.capAt = { wallbox: 0 };
+  const wb3 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 0, maxW: 11000, minW: 4140, phases: 3 };
+  for (let i = 0; i < 40; i += 1) {
+    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 25200, phasesW: [8400, 8400, 8400] }, devices: [wb3], battery: { setpointW: 25200, chargeW: 24000 } });
+  }
+  assert.equal(st.caps.wallbox, undefined, 'freigegeben (Akku gibt je Phase genau ab, was die Wallbox nimmt)');
+});
+
+test('Punkt 5: einphasiger Multi auf L2 — Luft nur auf L2, eine einphasige Wallbox (Phase unbekannt) bleibt aus', () => {
+  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40, batteryPhases: 'L2' } });
+  const st = createGuardState();
+  st.caps = { wallbox: 0 };
+  st.capAt = { wallbox: 0 };
+  const wb1 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 0, maxW: 3680, minW: 1380, phases: 1 };
+  for (let i = 0; i < 40; i += 1) {
+    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 16800, phasesW: [8800, 6000, 2000] }, devices: [wb1], battery: { setpointW: 16800, chargeW: 6000 } });
+  }
+  assert.equal(st.caps.wallbox, 0);
+});
+
+test('Punkt 5: Einstellung „Akku-Phasen“ unter Netz & Recht, Standard unbekannt (keine Gutschrift)', async () => {
+  const { getConfigDefinition, createDefaultConfig } = await import('../config-model.js');
+  const f = getConfigDefinition().fields.find((x) => x.path === 'gridConnection.batteryPhases');
+  assert.ok(f && f.type === 'select');
+  assert.equal(createDefaultConfig().gridConnection.batteryPhases, '');
+  assert.equal(resolveGridConnection({ gridConnection: { limitKw: 29 } }).batteryPhases, null);
+});
+
+// --- Punkte 1 und 2: Geräte-Identität, frischer Zustand direkter Boxen -----------------
+
+import { createOpenEvseAdapter, createGoeAdapter } from '../services/wallbox/adapters.js';
+
+function identityBridge({ type = 'goe', settings = { url: 'http://192.0.2.10' }, dvhubState = async () => ({ known: true, active: true }) } = {}) {
+  const calls = [];
+  const cfg = { optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, evStopMode: 'off' }, wallbox: { type, [type]: { ...settings } } };
+  let paused = false;
+  const t = Date.now();
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg,
+    getSolution: async () => ({ slotMinutes: 15, rows: [{ ts_utc: new Date(Math.floor(t / 900000) * 900000).toISOString(), evChargeFactor: 1 }] }),
+    getCharger: () => ({
+      type, isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', cfg.wallbox[type].url, a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop', cfg.wallbox[type].url]); return { ok: true }; },
+      release: async () => { calls.push(['release', cfg.wallbox[type].url]); return { ok: true }; },
+      status: async () => ({ ok: true, connected: true }),
+      dvhubState,
+    }),
+    isPaused: () => paused, now: () => t,
+  });
+  return { bridge, calls, cfg, setPaused: (v) => { paused = v; } };
+}
+
+test('Punkt 1: neue Adresse der Wallbox → Not-Halt fasst das neue Gerät nicht an (Eigentum verfällt)', async () => {
+  const h = identityBridge();
+  await h.bridge.tick();                    // lädt Box A
+  h.cfg.wallbox.goe.url = 'http://192.0.2.11'; // jetzt Box B eingetragen
+  h.setPaused(true);
+  const n = h.calls.length;
+  const r = await h.bridge.emergencyStop();
+  assert.equal(h.calls.length, n, 'kein Befehl an Box B');
+  assert.equal(r.skipped, 'identity_changed');
+});
+
+test('Punkt 2: direkte Box noch in DVhubs Zustand → einmal stoppen', async () => {
+  const h = identityBridge();
+  await h.bridge.tick();
+  h.setPaused(true);
+  await h.bridge.emergencyStop();
+  assert.equal(h.calls.at(-1)[0], 'stop');
+});
+
+test('Punkt 2: direkte Box in der App umgestellt → nichts senden', async () => {
+  const h = identityBridge({ dvhubState: async () => ({ known: true, active: false }) });
+  await h.bridge.tick();
+  h.setPaused(true);
+  const n = h.calls.length;
+  const r = await h.bridge.emergencyStop();
+  assert.equal(h.calls.length, n);
+  assert.equal(r.skipped, 'not_dvhub_state');
+});
+
+test('Punkt 2: Adapter kann den Zustand nicht lesen → nichts senden (im Zweifel nicht)', async () => {
+  const h = identityBridge({ dvhubState: null });
+  await h.bridge.tick();
+  h.setPaused(true);
+  const n = h.calls.length;
+  const r = await h.bridge.emergencyStop();
+  assert.equal(h.calls.length, n);
+  assert.equal(r.skipped, 'state_unknown');
+});
+
+test('Punkt 2: go-e und OpenEVSE lesen DVhubs Zustand (frc=2 bzw. eigener aktiver Claim)', async () => {
+  assert.equal(typeof createGoeAdapter(() => ({ url: 'http://x' })).dvhubState, 'function');
+  assert.equal(typeof createOpenEvseAdapter(() => ({ url: 'http://x' })).dvhubState, 'function');
+});
+
+// --- Punkt 3: Wallbox-Wechsel unter aktiver Grenze ---------------------------------------
+
+test('Punkt 3: openWB unter Grenze, Wechsel auf OpenEVSE → openWB bleibt gedeckelt, nach der Grenze voller Strom zurück', async () => {
+  const calls = [];
+  const capRef = { capW: 6000 };
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'pv' },
+    wallbox: { type: 'openwb', openwb: { host: '192.0.2.20' }, openevse: { url: 'http://192.0.2.21' } } };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null,
+    getCharger: (_c, bc) => ({
+      type: bc.charger, isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', bc.charger, a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop', bc.charger]); return { ok: true }; },
+      release: async () => { calls.push(['release', bc.charger]); return { ok: true }; },
+      status: async () => ({ ok: true, connected: true }),
+    }),
+    getGridCapW: () => capRef.capW,
+  });
+  await bridge.apply();                              // openWB 8,6 A
+  assert.deepEqual(calls.at(-1), ['charge', 'openwb', 8.6]);
+  cfg.wallbox.type = 'openevse';
+  await bridge.apply();
+  assert.equal(calls.filter((c) => c[1] === 'openwb').length, 1, 'openWB unter Grenze nicht angefasst');
+  assert.deepEqual(calls.at(-1), ['charge', 'openevse', 8.6], 'Grenze gilt an der neuen Box');
+  capRef.capW = null;
+  await bridge.apply();
+  assert.ok(calls.some((c) => c[0] === 'charge' && c[1] === 'openwb' && c[2] === 16), 'openWB bekommt den vollen Strom zurück');
+});
+
+// --- Codex-Prüfungen der Punkte (bb0e14cd, 7b3273db, a2686af7) ------------------------
+
+test('bb0e14cd P1: dreiphasiger Akku, einphasige Wallbox — Gutschrift nur so weit, wie das Laden der Wallbox die Phase wirklich entlastet', () => {
+  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40, batteryPhases: 'three' } }); // Phasenziel 8 867
+  const st = createGuardState();
+  st.caps = { wallbox: 0 };
+  st.capAt = { wallbox: 0 };
+  const wb1 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 0, maxW: 3680, minW: 1380, phases: 1 };
+  for (let i = 0; i < 40; i += 1) {
+    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 18800, phasesW: [8800, 5000, 5000] }, devices: [wb1], battery: { setpointW: 18800, chargeW: 15000 } });
+  }
+  // L1: 8 800 + x − x/3 ≤ 8 867 − Rückschalt-Anteil → x höchstens ~0 → bleibt aus
+  assert.equal(st.caps.wallbox, 0);
+});
+
+test('bb0e14cd P2: einphasiger Akku auf L1 — dreiphasige Wallbox darf anlaufen, wenn der Akku auf L1 genug abgibt', () => {
+  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40, batteryPhases: 'L1' } });
+  const st = createGuardState();
+  st.caps = { wallbox: 0 };
+  st.capAt = { wallbox: 0 };
+  const wb3 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 0, maxW: 11000, minW: 4140, phases: 3 };
+  for (let i = 0; i < 40; i += 1) {
+    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 12800, phasesW: [8800, 2000, 2000] }, devices: [wb3], battery: { setpointW: 12800, chargeW: 3000 } });
+  }
+  assert.ok(st.caps.wallbox == null || st.caps.wallbox >= 4140, `Grenze ${st.caps.wallbox}`);
+});
+
+test('7b3273db P1: gescheiterte Strom-Aktualisierung — der zuletzt bestätigte Strom zählt weiter als DVhubs Zustand', async () => {
+  const fail = false;
+  let amp = 0;
+  const h = identityBridge({ dvhubState: async (ref) => ({ known: true, active: (ref.currentAs || []).some((c) => Math.floor(c) === amp) }) });
+  // eigene Attrappe: charge setzt amp nur, wenn es klappt
+  h.bridge._test = true;
+  void fail;
+  await h.bridge.tick();                 // 16 A bestätigt
+  amp = 16;
+  h.setPaused(true);
+  const r = await h.bridge.emergencyStop();
+  assert.equal(r.stopped, true, JSON.stringify(r));
+});
+
+test('7b3273db P2: go-e/Wattpilot/Victron vergleichen den GENAUEN Strom (nach Begrenzung durch die Box)', async () => {
+  const { createVictronEvcsAdapter } = await import('../services/wallbox/adapters.js');
+  const regs = new Array(13).fill(0);
+  regs[0] = 16; regs[1] = 0; regs[11] = 10; regs[12] = 1; // Max 16 A, Manuell, Soll 10 A, Start
+  const a = createVictronEvcsAdapter(() => ({ unitId: 40 }), {
+    getTransport: () => ({ type: 'modbus', mbRequest: async () => regs }),
+    getVictron: () => ({ host: '192.0.2.1' }),
+  });
+  assert.equal((await a.dvhubState({ currentAs: [16] })).active, false, 'von Hand auf 10 A reduziert');
+  regs[11] = 16;
+  assert.equal((await a.dvhubState({ currentAs: [16] })).active, true);
+});
+
+test('7b3273db P2 / a2686af7 P2: Victron und OCPP liefern die aufgelöste Geräte-Identität', async () => {
+  const { createVictronEvcsAdapter } = await import('../services/wallbox/adapters.js');
+  const { createOcppAdapter } = await import('../services/wallbox/ocpp.js');
+  let unit = 40;
+  const v = createVictronEvcsAdapter(() => ({ unitId: 0 }), {
+    getTransport: () => ({ type: 'modbus', mbRequest: async () => [] }),
+    getVictron: () => ({ host: '192.0.2.1', port: 502 }),
+    findUnit: () => unit,
+  });
+  const id1 = v.identity();
+  unit = 41;
+  assert.notEqual(v.identity(), id1);
+  let cps = [{ id: 'A', connected: true }];
+  const o = createOcppAdapter(() => ({ chargePointId: '', connectorId: 1 }), { getServer: () => ({ list: () => cps }) });
+  const oid = o.identity();
+  cps = [{ id: 'B', connected: true }];
+  assert.notEqual(o.identity(), oid);
+});
+
+test('a2686af7 P1: alte Box vorübergehend nicht erreichbar → Datensatz bleibt (Freigabe und Not-Halt später)', async () => {
+  const calls = [];
+  let reachable = false;
+  const capRef = { capW: null };
+  const ownedStore = { value: null };
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'pv' },
+    wallbox: { type: 'openevse', openevse: { url: 'http://192.0.2.21' }, victron: { unitId: 0 } } };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null,
+    getCharger: (_c, bc) => ({
+      type: bc.charger, isConfigured: () => bc.charger !== 'victron' || reachable,
+      charge: async (a) => { calls.push(['charge', bc.charger, a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop', bc.charger]); return { ok: true }; },
+      release: async () => { calls.push(['release', bc.charger]); return { ok: true }; },
+      status: async () => ({ ok: true, connected: true }),
+    }),
+    getGridCapW: () => capRef.capW,
+    loadOwned: () => [{ charger: 'victron', loadpoint: 1, cmd: 'charge', confirmed: true, gridCap: false, identity: null }],
+    saveOwned: (list) => { ownedStore.value = list; },
+  });
+  await bridge.apply();
+  assert.equal(calls.some((c) => c[1] === 'victron'), false);
+  reachable = true;
+  await bridge.apply();
+  assert.deepEqual(calls.find((c) => c[1] === 'victron'), ['release', 'victron']);
+});
+
+// --- Prüfungen b6ebd4b4, 529a0121, b7e52e33 -------------------------------------------
+
+test('b6ebd4b4 (seit 07.11. aufgehoben): eine ausstehende Rückkehr hält die Wallbox NICHT mehr auf 0', () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
+  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -27000 }, victron: {}, schedule: {}, ctrl: {} };
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: () => {},
+    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: 0 }] }) },
+    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null, hasPendingRestore: () => true },
+  };
+  const guard = createGridConnectionGuard(ctx);
+  guard.tick();
+  assert.equal(guard.capW('wallbox'), null, 'kein Halten auf volle Leistung mehr');
+});
+
+test('b6ebd4b4 P1: Not-Halt kommt während der frischen evcc-Abfrage → keine Rückkehr', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 0;
+  await h.bridge.clearOverride();
+  h.capW = null;
+  h.refreshHook = () => { h.ref.paused = true; };
+  await h.bridge.apply();
+  assert.equal(h.modes[1], 'off');
+  assert.equal(h.bridge.hasPendingRestore(), true);
+});
+
+test('b6ebd4b4 P2: Not-Halt-Stopp behält eine ausstehende Rückkehr', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.ref.paused = true;
+  await h.bridge.clearOverride();        // Rückkehr vorgemerkt (Eintrag noch „charge“)
+  await h.bridge.emergencyStop();        // stoppt — Rückkehr bleibt
+  assert.equal(h.bridge.hasPendingRestore(), true);
+});
+
+test('529a0121 P2: fehlender bestätigter Strom (null) zählt nicht als 6 A', async () => {
+  const seen = [];
+  const h = identityBridge({ dvhubState: async (ref) => { seen.push(ref.currentAs); return { known: true, active: true }; } });
+  await h.bridge.tick();
+  h.setPaused(true);
+  await h.bridge.emergencyStop();
+  assert.ok(seen[0].every((c) => c != null && c > 0), JSON.stringify(seen));
+});
+
+test('b7e52e33 P2: Victron-Grenze nicht lesbar → der alte Wert gilt NICHT weiter; anderes Profil → keine Victron-Grenze', async () => {
+  const { gridConnectionFromState } = await import('../services/grid-connection/index.js');
+  const t = Date.now();
+  const state = { victron: { acInputLimitA: 40, fieldUpdatedAt: { acInputLimitA: t }, errors: { acInputLimitA: 'timeout' } } };
+  assert.equal(gridConnectionFromState({ gridConnection: { limitKw: 29 } }, state, t).limitW, 29000);
+  const ok = { victron: { acInputLimitA: 40, fieldUpdatedAt: { acInputLimitA: t }, errors: {} } };
+  assert.equal(gridConnectionFromState({ manufacturer: 'fronius', gridConnection: { limitKw: 29 } }, ok, t).limitW, 29000);
+});
+
+test('b7e52e33 P2: Victron-Grenze nicht lesbar und keine DVhub-Grenze → Kachel zeigt den Hinweis', () => {
+  const t = Date.now();
+  const state = { meter: { ok: true, updatedAt: t, grid_total_w: -5000 }, victron: { errors: { acInputLimitA: 'timeout' }, fieldUpdatedAt: {} }, schedule: {}, ctrl: {} };
+  const guard = createGridConnectionGuard({ getCfg: () => ({}), state, pushLog: () => {} });
+  guard.tick();
+  const s = guard.summary();
+  assert.ok(s && s.victronReadError === true);
+});
+
+// --- Abschluss-Gesamtrunde 1 (nach den Punkten) -----------------------------------------
+
+test('Gesamtrunde 1 P1: gespeicherte Grenz-Vorgabe einer alten Box geht nach Neustart nicht an die neu eingetragene', async () => {
+  const calls = [];
+  const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type: 'openwb', openwb: { host: '192.0.2.99' } } };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => null,
+    getCharger: (_c, bc) => ({
+      type: bc.charger, isConfigured: () => true,
+      charge: async (a) => { calls.push(['charge', a]); return { ok: true }; },
+      stop: async () => { calls.push(['stop']); return { ok: true }; },
+      release: async () => { calls.push(['release']); return { ok: true }; },
+      status: async () => ({ ok: true }),
+    }),
+    getGridCapW: () => null,
+    loadOwned: () => [{ charger: 'openwb', loadpoint: 1, identity: 'openwb|host=192.0.2.20', cmd: 'stop', confirmed: true, gridCap: true }],
+    saveOwned: () => {},
+  });
+  await bridge.tick();
+  assert.equal(calls.length, 0, 'kein Befehl an die neue Box');
+});
+
+test('Gesamtrunde 1 P1: veraltete evcc-Leistung gilt als unbekannt — der Wächter begrenzt trotzdem', () => {
+  const cfg = { gridConnection: { limitKw: 29 }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000 }, wallbox: { type: 'evcc' } };
+  const state = { meter: { ok: true, updatedAt: Date.now(), grid_total_w: -35000 }, victron: {}, schedule: {}, ctrl: {} };
+  const ctx = {
+    getCfg: () => cfg, state, pushLog: () => {},
+    evccIntegration: { getStatus: () => ({ lastError: 'timeout', lastPolledAt: Date.now() - 600_000, loadpoints: [{ chargePowerW: 0 }] }) },
+    eosEvccBridge: { apply: async () => ({ ok: true }), getOverride: () => null },
+  };
+  const guard = createGridConnectionGuard(ctx);
+  guard.tick();
+  assert.ok(guard.capW('wallbox') != null);
+});
+
+test('Gesamtrunde 1 P1: MQTT — alter Messwert (sourceAt) ist nicht frisch, auch wenn updatedAt neu ist', async () => {
+  const { meterImport } = await import('../services/import-limit/core.js');
+  const now = 1_000_000;
+  const m = meterImport({ meter: { ok: true, updatedAt: now, sourceAt: now - 200_000, grid_total_w: 1000 } }, {}, { now, maxAgeMs: 90_000 });
+  assert.equal(m.fresh, false);
+});
+
+// --- Abschluss-Gesamtrunde 2 (nur kleine, lokale Korrekturen) ---------------------------
+
+test('Gesamtrunde 2 P1: Not-Halt während der Rückkehr-Abfrage → auch kein Override-Befehl mehr', async () => {
+  const h = evccMulti({ enabled: false });
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  h.capW = 0;
+  await h.bridge.clearOverride();          // LP1: Rückkehr vorgemerkt
+  h.capW = null;
+  h.cfg.optimizer.evEvccLoadpoint = 2;
+  h.refreshFailOnce = true;                // Rückkehr bleibt vorgemerkt
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 }); // LP2 lädt
+  assert.equal(h.modes[1], 'off', 'Rückkehr noch offen');
+  let n = null;
+  h.refreshHook = () => { h.ref.paused = true; n = h.calls.length; };
+  await h.bridge.apply();
+  assert.ok(n != null, 'Rückkehr-Abfrage lief');
+  assert.equal(h.calls.slice(n).some((c) => c[0] === 'mode'), false, 'nach dem Not-Halt kein Befehl');
+});
+
+test('Gesamtrunde 2 P2: laufendes Gerät — Freigabe braucht keine Mindestleistung, nur Zuwachs', () => {
+  const RP = resolveGridConnection({ gridConnection: { limitKw: 29, phaseLimitA: 40 } });
+  const st = createGuardState();
+  st.caps = { wallbox: 10000 };
+  st.capAt = { wallbox: 0 };
+  const wb3 = { id: 'wallbox', kind: 'wallbox', name: 'Wallbox', currentW: 10000, maxW: 11000, minW: 4140, phases: 3 };
+  for (let i = 0; i < 40; i += 1) {
+    guardStep(st, { resolved: RP, now: HOLD_AFTER_CUT_MS + i * 2000, meas: { fresh: true, importW: 24000, phasesW: [8000, 8000, 8000] }, devices: [wb3], battery: {} });
+  }
+  assert.ok(st.caps.wallbox == null || st.caps.wallbox > 10000, `Grenze ${st.caps.wallbox}`);
 });

@@ -72,6 +72,14 @@ verweist hierher.
     Schritt. Optional gilt eine Grenze je Phase (A), weil Sicherungen je Phase auslösen.
   - Fail-safe: Ist der Zähler gestört oder sein Wert älter als 90 s, gibt DVhub keine neue Last frei. Der Akku-Sollwert
     sinkt dann auf Grenze − Abstand − geschätzte Grundlast − laufende Geräte.
+  - Die Wallbox überwacht der Wächter IMMER, solange eine Grenze gilt (Christin 07.11.2026): mit oder ohne
+    EOS-Weitergabe, bei „Sofort laden“, wenn evcc im eigenen Modus (pv/minpv/now) lädt und bei Handstart — und jeden
+    ladenden evcc-Ladepunkt, nicht nur den eingestellten. Ein evcc-Ladepunkt, den DVhub nicht selbst steuert, wird nur
+    über maxcurrent begrenzt (Modus bleibt); unter dem Mindeststrom geht er auf „aus“ und kehrt in seinen Modus zurück,
+    sobald der Deckel den Mindeststrom wieder erlaubt; ohne Deckel bekommt er seinen Ursprungsstrom zurück. Zieht ein
+    Gerät trotz Deckel deutlich mehr (z. B. von Hand wieder gestartet), sendet DVhub den Deckel erzwungen neu, höchstens
+    alle 30 s. Eine Box, die beim Deckeln nichts zog (z. B. Fail-safe), gibt DVhub ganz frei statt sie per Ladebefehl
+    zu starten.
   - Leitstand-Kachel „Netzanschluss“ und Protokoll-Ereignisse, z. B. „Netzanschluss: begrenzt Akku-Ladung auf 28,0 kW“.
   - Peak Shaving, §14a und Netzanschluss nutzen denselben Kern (`services/import-limit/core.js`): Sollwert-Deckel und
     „kleinste gilt“ je Gerät.
@@ -138,14 +146,29 @@ verweist hierher.
   „Laden stoppen“ hält nicht mehr gegen eine Handladung. Der Netzanschluss-Wächter greift im Not-Halt nicht ein.
   Fehlschläge werden geloggt und nicht wiederholt. Nach dem Aufheben übernimmt die normale Steuerung. Verschiebbare
   Geräte (Geschirrspüler) bleiben unberührt.
-- **„Sofort laden“-Ende bei Not-Halt oder Leistungsgrenze: Hinweis statt automatischer Rückkehr.** Endet „Sofort laden“
-  (evcc, EOS-Weitergabe aus), während der Not-Halt oder eine Leistungsgrenze (Netzanschluss/§14a) aktiv ist, stellt
-  DVhub den evcc-Modus von vorher nicht mehr zeitversetzt her. evcc bleibt aus bzw. unverändert. Log
-  (`ev_override_restore_skipped`) und E-Auto-Status nennen den Modus von vorher, damit man ihn in evcc wählen kann.
-  Ein neues „Sofort laden“ am selben Ladepunkt übernimmt ihn. Bewusst weniger Komfort zugunsten einer überschaubaren
-  Zustandsführung: Die Wallbox-Brücke führt je Ziel genau einen Datensatz (letzter Befehl, quittiert ja/nein,
-  Grenz-Vorgabe), gespeichert in `ev_owned.json`. Ist eine Grenze aktiv, heißt ein Stopp immer „aus“. Scheitert der
-  harte Stopp beim Ende, bleibt die Wallbox als „Laden stoppen“ aus, bis man ihn beendet oder absteckt.
+- **„Sofort laden“-Ende bei Not-Halt oder Leistungsgrenze.** Endet „Sofort laden“ (evcc, EOS-Weitergabe aus), kehrt
+  evcc sofort in den Modus von vorher zurück; den Strom begrenzt danach der Wächter über maxcurrent (kein Warten auf
+  Luft für die volle Leistung). Nur im Not-Halt oder unter einem Deckel unter dem Mindeststrom bleibt evcc aus bzw.
+  unverändert; zurückgestellt wird nach dem Aufheben bzw. sobald der Deckel den Mindeststrom erlaubt — aber nur, wenn
+  evcc frisch abgefragt noch auf DVhubs „aus“ steht (sonst hat man selbst umgestellt). Der E-Auto-Status zeigt, was
+  aussteht. Ist eine Grenze aktiv, heißt ein Stopp immer „aus“. Scheitert der harte Stopp beim Ende, bleibt die Wallbox als
+  „Laden stoppen“ aus, bis man ihn beendet oder absteckt. Die Wallbox-Brücke führt je Gerät genau einen Datensatz
+  (Geräte-Identität, letzter Befehl, quittiert ja/nein, Grenz-Vorgabe, ausstehende Rückkehr) in `ev_owned.json`.
+- **Not-Halt und direkt angebundene Wallboxen:** DVhub stoppt eine direkte Box nur, wenn sie frisch gelesen noch in
+  DVhubs Zustand steht (go-e/Wattpilot, OpenEVSE, Victron-EVCS, openWB). Boxen, deren Zustand sich nicht lesen lässt,
+  bekommen im Not-Halt keinen Befehl („im Zweifel nicht senden“). Ist inzwischen ein anderes Gerät eingetragen
+  (Adresse, Connector), fasst DVhub es nicht an.
+- **Netzanschluss-Grenze aus dem Victron-GX.** Mit dem Victron-Profil liest DVhub zusätzlich die Begrenzung des
+  AC-Bezugs aus dem GX (Unit 100, Reg. 2714 /Settings/CGwacs/AcInputLimit, A je Phase; MQTT
+  settings/0/Settings/CGwacs/AcInputLimit), nur lesend und alle 60 s. Ein Wert über 0 gilt als Grenze je Phase und
+  als Gesamtgrenze (A × Summe der gemessenen Phasenspannungen, frisch; sonst 230 V je Phase). Steht in DVhub
+  zusätzlich ein Wert, gilt der strengere. Stammt die Grenze aus Victron, regelt DVhub ohne Sicherheitsabstand genau
+  auf sie (der GX hat schon einen Puffer); gewinnt die DVhub-Einstellung, bleibt deren Abstand. Je Phase gilt der
+  Strom: Grenze = A × Spannung dieser Phase. -1/0 oder nicht lesbar → nur die DVhub-Werte (nicht lesbar: Log und
+  Hinweis, kein Fail-safe). Die Leitstand-Kachel zeigt, woher die geltende Grenze kommt, und „kein Abstand
+  (Victron-Grenze)“; EOS bekommt den wirksamen Wert. Andere Hersteller-Profile unverändert.
+- **§14a im Not-Halt:** Die Vorgabe des Netzbetreibers (EEBUS-LPC, Steuerbox) gilt auch im Not-Halt weiter — sie ist
+  keine DVhub-Steuerung, sondern eine gesetzliche Vorgabe.
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.

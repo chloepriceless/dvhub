@@ -68,3 +68,10 @@ test('Not-Halt: Kachel sagt, dass DVhub nicht eingreift', () => {
   assert.equal(v.state, 'Not-Halt');
   assert.match(v.detail, /Not-Halt/);
 });
+
+test('Punkt 7: Kachel zeigt die Quelle der Grenze', () => {
+  const v = load().view({ ...base, limitText: 'von Victron: 40 A je Phase ≈ 27,6 kW (DVhub-Einstellung 29,0 kW)' });
+  assert.match(v.source, /Victron: 40 A/);
+  const v2 = load().view({ ...base, limitText: 'DVhub-Einstellung: 29,0 kW', victronReadError: true });
+  assert.match(v2.source, /nicht lesbar/);
+});

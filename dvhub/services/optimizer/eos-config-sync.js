@@ -17,7 +17,7 @@ import { computeEvRegistration } from './ev-registration.js';
 import { buildEosHomeAppliances } from './eos-devices.js';
 import { getPowerLimits } from '../power-limits.js';
 // Netzanschluss: Ladeleistung aus dem Netz, mit der EOS planen darf (Behelf).
-import { eosGridChargeCapW, eosGridImportLimitW } from '../grid-connection/index.js';
+import { eosGridChargeCapW, eosGridImportLimitW, victronLimitExtra } from '../grid-connection/index.js';
 // Zweite GX am selben Anschluss: Planung sieht beide Akkus als einen.
 import { planningCfg, planningMinSocPct } from '../multi-gx/planning.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
@@ -328,7 +328,7 @@ export function resolveEosMinSocPct(liveMinSocPct, hardFloorSocPct) {
  * @param {object} cfg
  * @returns {Array<object>}
  */
-export function buildEosInverters(cfg, { curve = null, curveSupported = false, gridImportLimitSupported = false } = {}) {
+export function buildEosInverters(cfg, { curve = null, curveSupported = false, gridImportLimitSupported = false, gridConnectionExtra = {} } = {}) {
   // max_power_w is the inverter's TOTAL AC throughput cap (PV + battery feed-in
   // together); it keeps the battery→grid CO-EXPORT (inverter.py Case 1) from
   // planning an unrealistically high combined feed-in. Support-Fall 2026-10-15:
@@ -366,8 +366,8 @@ export function buildEosInverters(cfg, { curve = null, curveSupported = false, g
     // Kennt EOS die eigene Netzbezugs-Grenze, kürzt es selbst: dann volle
     // Ladeleistung und die Grenze; sonst der Behelf (eosAcChargeCapW).
     max_ac_charge_power_w: gridChargeAllowed
-      ? (gridImportLimitSupported ? maxAcChargeW(cfg) : eosAcChargeCapW(cfg)) : 0,
-    ...(gridImportLimitSupported ? { [EOS_GRID_IMPORT_LIMIT_FIELD]: eosGridImportLimitW(cfg) } : {}),
+      ? (gridImportLimitSupported ? maxAcChargeW(cfg) : eosAcChargeCapW(cfg, gridConnectionExtra)) : 0,
+    ...(gridImportLimitSupported ? { [EOS_GRID_IMPORT_LIMIT_FIELD]: eosGridImportLimitW(cfg, gridConnectionExtra) } : {}),
   }];
 }
 
@@ -398,10 +398,10 @@ function maxAcChargeW(cfg) {
  * (battery.py discharge_energy), und PV-Laden zieht nichts aus dem Netz.
  * DVhubs Wächter hält die Grenze an der Ausführung ohnehin ein.
  */
-export function eosAcChargeCapW(cfg) {
+export function eosAcChargeCapW(cfg, extra = {}) {
   const raw = Number(cfg?.optimizer?.maxChargeW);
   const maxChargeW = raw > 0 ? raw : null;
-  const gridCapW = eosGridChargeCapW(cfg);
+  const gridCapW = eosGridChargeCapW(cfg, extra);
   if (gridCapW == null) return maxAcChargeW(cfg);
   return maxChargeW == null ? gridCapW : Math.min(maxChargeW, gridCapW);
 }
@@ -619,6 +619,8 @@ export function createEosConfigSync(ctx) {
       curve: effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.()),
       curveSupported: caps.inverterEfficiencyCurve === true,
       gridImportLimitSupported: caps.gridImportLimit === true,
+      // Victron-Grenze (Reg. 2714) — EOS bekommt den wirksamen Wert.
+      gridConnectionExtra: victronLimitExtra(state, Date.now(), cfg),
     });
     const optimization = buildEosOptimization(cfg);
     const geneticSizing = pickGeneticSizing(optimization.interval, cfg?.optimizer?.eosGeneticGenerations);
@@ -886,6 +888,7 @@ export function createEosConfigSync(ctx) {
           curve: curveNow,
           curveSupported: again.inverterEfficiencyCurve === true,
           gridImportLimitSupported: again.gridImportLimit === true,
+          gridConnectionExtra: victronLimitExtra(state, Date.now(), cfg),
         }));
         const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/inverters', body);
         if (!res.ok) errors['devices/inverters'] = res.error;

@@ -15,6 +15,7 @@
 
   function state(s) {
     if (s.paused) return ['Not-Halt', 'warn'];
+    if (s.active !== true && s.reason === 'not_set' && s.victronReadError) return ['Victron-Grenze nicht lesbar', 'warn'];
     if (s.active !== true) return ['Grenze ungültig', 'warn'];
     if (s.failsafe) return ['Zähler gestört', 'danger'];
     if (s.exhausted) return ['Nichts mehr steuerbar', 'danger'];
@@ -30,7 +31,9 @@
   function view(s) {
     if (!s || s.enabled !== true) return { hidden: true };
     const [label, tone] = state(s);
-    const limit = num(s.limitW) ? `${kw(s.limitW)} (Ziel ${kw(s.targetW)})` : DASH;
+    // Victron-Grenze ohne Abstand: das sagen statt „Ziel = Grenze“ unerklärt.
+    const limit = num(s.limitW)
+      ? `${kw(s.limitW)} (${s.marginText ? s.marginText : `Ziel ${kw(s.targetW)}`})` : DASH;
     const load = num(s.importW) && num(s.limitW) && Number(s.limitW) > 0
       ? `${Math.round((Number(s.importW) / Number(s.limitW)) * 100)} %` : DASH;
     return {
@@ -40,6 +43,8 @@
       load,
       phases: phases(s),
       phaseLimit: num(s.phaseLimitA) ? `${s.phaseLimitA} A je Phase` : 'keine',
+      // Woher die wirksame Grenze kommt (DVhub-Einstellung oder Victron Reg. 2714).
+      source: (s.limitText || '') + (s.victronReadError ? ' · Victron-Grenze nicht lesbar' : ''),
       state: label,
       tone,
       detail: s.text || (s.active ? 'Keine Begrenzung nötig.' : 'Netzanschluss-Grenze ungültig (2 bis 2 000 kW) — DVhub regelt nicht.')
@@ -61,6 +66,7 @@
     set('gridConnectionLimit', v.limit);
     set('gridConnectionLoad', v.load);
     set('gridConnectionPhases', v.phases);
+    set('gridConnectionSource', v.source || '–');
     set('gridConnectionState', v.state);
     set('gridConnectionDetail', v.detail);
     const chip = d.getElementById('gridConnectionChip');

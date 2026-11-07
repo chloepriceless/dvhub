@@ -139,7 +139,7 @@ test('Codex P1: „Sofort laden“ ohne EOS-Weitergabe zählt als steuerbare Wal
   };
   const guard = createGridConnectionGuard(ctx);
   guard.tick();
-  assert.equal(guard.capW('wallbox'), null, 'ohne Override steuert DVhub evcc nicht');
+  assert.equal(guard.capW('wallbox'), null, 'evcc ohne Adresse: nichts zu steuern (mit Adresse gilt der Deckel immer, test/grid-connection-wallbox-always)');
   override = { kind: 'charge', powerW: 11000 };
   guard.tick();
   assert.equal(guard.capW('wallbox'), 7000, '32 − 28 = 4 kW von der Wallbox');

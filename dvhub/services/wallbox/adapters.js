@@ -32,7 +32,7 @@ import { getWattpilotConnection } from './wattpilot.js';
 // Wallbox nicht steuern. Lesen (status) bleibt erlaubt.
 const READ_ONLY = Object.freeze({ ok: false, error: 'read_only' });
 function guardWrites(adapter) {
-  for (const k of ['charge', 'stop', 'release']) {
+  for (const k of ['charge', 'stop', 'release', 'limit']) {
     const fn = adapter[k];
     if (typeof fn === 'function') adapter[k] = (...a) => (isReadOnlyMode() ? Promise.resolve(READ_ONLY) : fn(...a));
   }
@@ -120,6 +120,14 @@ export function createOpenEvseAdapter(getSettings) {
       // 404 = es gab keinen Claim — Ziel erreicht.
       return res.ok || res.status === 404 ? { ok: true } : res;
     },
+    // Not-Halt: steht DVhubs eigener Auftrag noch auf „aktiv“? Ohne lesbare
+    // Auftragsliste: unbekannt.
+    async dvhubState() {
+      const claims = await request(`${base()}/claims`, opts());
+      if (!claims.ok || !Array.isArray(claims.data)) return { known: false };
+      const own = claims.data.find((c) => c && Number(c.client) === OPENEVSE_DVHUB_CLIENT);
+      return { known: true, active: own?.state === 'active' };
+    },
     async status() {
       const res = await request(`${base()}/status`, opts());
       if (!res.ok || typeof res.data !== 'object') return { ok: false, error: res.error || 'no status' };
@@ -169,6 +177,15 @@ export function createGoeAdapter(getSettings) {
     async release() {
       return expectOk(await set('frc=0'));
     },
+    // Not-Halt: DVhub lädt mit frc=2 und seinem Strom — beides muss noch stehen
+    // (zuletzt bestätigter oder zuletzt versuchter Strom).
+    async dvhubState(ref = {}) {
+      const res = await request(`${base()}/api/status?filter=amp,frc`, opts());
+      if (!res.ok || typeof res.data !== 'object') return { known: false };
+      const currents = (ref.currentAs || []).filter((c) => Number.isFinite(Number(c)));
+      const ampOk = !currents.length || currents.some((c) => Number(res.data.amp) === wholeAmps(c));
+      return { known: true, active: Number(res.data.frc) === 2 && ampOk };
+    },
     async status() {
       const res = await request(`${base()}/api/status?filter=car,amp,frc,alw,nrg,fwv`, opts());
       if (!res.ok || typeof res.data !== 'object') return { ok: false, error: res.error || 'no status' };
@@ -216,6 +233,16 @@ export function createWattpilotAdapter(getSettings, deps) {
     },
     async release() {
       return conn().setValue('frc', 0);
+    },
+    // Wie go-e, der Strom nach der Begrenzung durch die Box (ama).
+    async dvhubState(ref = {}) {
+      const res = await conn().readStatus();
+      if (!res.ok) return { known: false };
+      const max = Number(res.status?.ama);
+      const want = (c) => (Number.isFinite(max) && max >= 6 ? Math.min(wholeAmps(c), max) : wholeAmps(c));
+      const currents = (ref.currentAs || []).filter((c) => Number.isFinite(Number(c)));
+      const ampOk = !currents.length || currents.some((c) => Number(res.status?.amp) === want(c));
+      return { known: true, active: Number(res.status?.frc) === 2 && ampOk };
     },
     async status() {
       const res = await conn().readStatus();
@@ -303,6 +330,25 @@ export function createVictronEvcsAdapter(getSettings, deps = {}) {
       await write(t, EVCS.mode, EVCS_AUTO);
       return { ok: true };
     }),
+    // Not-Halt: Manuell + Start und GENAU DVhubs Strom (nach der Begrenzung
+    // durch den Maximalstrom der Box) stehen noch?
+    dvhubState: async (ref = {}) => {
+      const t = target();
+      if (!t) return { known: false };
+      try {
+        const d = await readBlock(t);
+        const max = Number(d.maxCurrentA);
+        const want = (c) => (Number.isFinite(max) && max >= 6 && max !== 0xffff ? Math.min(wholeAmps(c), max) : wholeAmps(c));
+        const currents = (ref.currentAs || []).filter((c) => Number.isFinite(Number(c)));
+        const ampOk = !currents.length || currents.some((c) => Number(d.setCurrentA) === want(c));
+        return { known: true, active: d.mode === EVCS_MANUAL && d.startStop === 1 && ampOk };
+      } catch { return { known: false }; }
+    },
+    // Geräte-Identität: das wirklich angesprochene Ziel (GX, Port, aufgelöste Unit).
+    identity: () => {
+      const t = target();
+      return t ? `victron|${t.base.host}|${t.base.port}|${t.base.unitId}` : null;
+    },
     status: () => guarded(async (t) => {
       const d = await readBlock(t);
       const s = d.status;
@@ -328,16 +374,29 @@ export function createVictronEvcsAdapter(getSettings, deps = {}) {
  * Stopp-Modus bleibt evcc-spezifisch (off / pv / minpv).
  */
 export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
-  return guardWrites({
+  // beforeSetMode(mode): Haken der EOS-Brücke, unmittelbar VOR dem echten
+  // setMode-Aufruf (nicht vor maxcurrent) — sie merkt sich so jeden Modus, den
+  // DVhub gesetzt oder versucht hat (eos-evcc-bridge, Menge dvhubModes).
+  const adapter = {
     type: 'evcc',
+    modeHook: true,
+    beforeSetMode: null,
     isConfigured: () => Boolean(evccIntegration?.getStatus?.().url),
     async charge(currentA) {
       const cur = await evccIntegration.setMaxCurrent(getLoadpoint(), currentA);
       if (!cur?.ok) return cur || { ok: false, error: 'maxcurrent failed' };
+      adapter.beforeSetMode?.('now');
       return evccIntegration.setMode(getLoadpoint(), 'now');
     },
     async stop() {
-      return evccIntegration.setMode(getLoadpoint(), getStopMode());
+      const mode = getStopMode();
+      adapter.beforeSetMode?.(mode);
+      return evccIntegration.setMode(getLoadpoint(), mode);
+    },
+    // Nur den Ladestrom begrenzen (maxcurrent), Modus unverändert — für den
+    // Netzanschluss-Deckel, wenn evcc im eigenen Modus lädt.
+    async limit(currentA) {
+      return evccIntegration.setMaxCurrent(getLoadpoint(), currentA);
     },
     async release() {
       // evcc kennt kein "Vorgabe zuruecknehmen". Bewusst nichts tun: so blieb
@@ -357,5 +416,6 @@ export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
       if (!lp) return { ok: false, error: 'Ladepunkt nicht gefunden' };
       return { ok: true, connected: lp.connected, charging: lp.charging, powerW: lp.chargePowerW, currentA: null, vehicleSocPct: lp.vehicleSocPct, raw: { mode: lp.mode } };
     }
-  });
+  };
+  return guardWrites(adapter);
 }

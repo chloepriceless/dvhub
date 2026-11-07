@@ -70,6 +70,7 @@ function wallbox({ enabled = true, type = 'evcc', plan = 1, override = null } = 
     stop: async () => { calls.push(['stop', type === 'evcc' ? bc.stopMode : null]); box.mode = type === 'evcc' ? bc.stopMode : 'stopped'; return { ok: true }; },
     release: async () => { calls.push(['release']); return { ok: true }; },
     status: async () => ({ ok: true, connected: true, raw: { mode: box.mode } }),
+    dvhubState: async () => ({ known: true, active: box.mode === 'now' }),
   });
   const cfg = { optimizer: { eosOptimizeEv: enabled, evEvccControl: enabled, evMaxChargeW: 11000, evStopMode: 'pv' }, wallbox: { type } };
   const t = Date.now();

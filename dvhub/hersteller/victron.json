@@ -129,6 +129,17 @@
       "scale": 0.1,
       "offset": 0
     },
+    "acInputLimitA": {
+      "enabled": true,
+      "fc": 3,
+      "address": 2714,
+      "quantity": 1,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "pollEveryMs": 60000,
+      "_comment": "Netzanschluss: /Settings/CGwacs/AcInputLimit (AC import limit when peakshaving), A je Phase, -1 = aus. Nur lesen."
+    },
     "selfConsumptionW": {
       "enabled": true,
       "fc": 4,

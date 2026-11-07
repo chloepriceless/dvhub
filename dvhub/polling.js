@@ -201,6 +201,8 @@ export function createPoller(ctx) {
     if (v.fieldSourceAt) delete v.fieldSourceAt[name];
     if (v.errors) delete v.errors[name];
   }
+  // Punkte mit pollEveryMs (z. B. Netzanschluss-Grenze 2714) nur so oft lesen.
+  const lastPointPollAt = {};
   async function pollPoint(name, conf) {
     if (!conf?.enabled) {
       // Abgeschaltet ohne gehaltenen Wert: ein alter Lesefehler gilt nicht mehr —
@@ -211,6 +213,12 @@ export function createPoller(ctx) {
       if (state.victron.errors && state.victron[name] == null) delete state.victron.errors[name];
       dropDisabledPvPoint(name, conf);
       return;
+    }
+    const every = Number(conf.pollEveryMs);
+    if (every > 0) {
+      const t = Date.now();
+      if (lastPointPollAt[name] && t - lastPointPollAt[name] < every) return;
+      lastPointPollAt[name] = t;
     }
     // SunSpec-deklarierte Punkte warten auf den Geräte-Scan (ensureSunspecResolved)
     // — vor der Auflösung wäre die Adresse null (Lesen von Register-Müll).
@@ -732,6 +740,7 @@ export function createPoller(ctx) {
       pollPoint('minSocPct', cfg.points.minSocPct),
       pollPoint('activeSocLimitPct', cfg.points.activeSocLimitPct),
       pollPoint('maxDischargeW', cfg.points.maxDischargeW),
+      pollPoint('acInputLimitA', cfg.points.acInputLimitA),
       pollPoint('selfConsumptionW', cfg.points.selfConsumptionW),
       ...buildDvControlReadbackPolls(cfg).map(([name, conf]) => pollDvControlReadback(name, conf))
     ]);
