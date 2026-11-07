@@ -713,7 +713,13 @@ test('pullGridSetpoints caps rules to ruleHorizonHours (no churning far-future r
     res.end(JSON.stringify(solution));
   });
   try {
-    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    // Echte Preise reichen hier weit über den Horizont: Sonst gilt ein Plan ohne
+    // generated_at kurz nach Mitternacht (Rückblick in den Vortag) bis zur
+    // vergangenen Mitternacht als geschätzt, und der Test hing von der Uhrzeit ab.
+    const priceEnd = new Date(now + 48 * 3600_000).toISOString();
+    const ctx = { ...makeCtx(`http://127.0.0.1:${mock.port}`),
+      state: { optimizer: { eosRealPriceEnd: priceEnd, eosRealPriceEnds: [{ at: now - 24 * 3600_000, end: priceEnd }] } } };
+    const adapter = createEosAdapter(ctx);
     const slots = await adapter.pullGridSetpoints();
     assert.equal(slots.length, 2, 'only the two in-horizon exports are actuated; the +20 h one is dropped');
     const cutoff = now + 12 * 3600_000;
