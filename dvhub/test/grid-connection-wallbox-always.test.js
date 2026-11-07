@@ -387,13 +387,13 @@ test('Gesamtrunde 2 P1: veraltete evcc-Abfrage — zuletzt ladender weiterer Lad
 // zuletzt an diesem Ladepunkt zu setzen VERSUCHT hat — vor dem Senden in
 // ev_owned.json gespeichert, auch ohne Quittung.
 
-test('versuchter Modus steht vor dem Senden in ev_owned.json', async () => {
+test('DVhub-Modus steht vor dem Senden in ev_owned.json (Menge dvhubModes)', async () => {
   const h = evccHarness();
   h.ref.capW = 2000;
   let seen = null;
-  h.ref.onMode = () => { seen = (h.ownedStore.value || []).find((e) => e.loadpoint === 1)?.attemptedMode ?? null; };
+  h.ref.onMode = () => { seen = (h.ownedStore.value || []).find((e) => e.loadpoint === 1)?.dvhubModes ?? null; };
   await h.bridge.apply();
-  assert.equal(seen, 'off');
+  assert.deepEqual(seen, ['off'], 'vor dem echten setMode in der Menge');
 });
 
 test('P2-1: Rückkehr offen (nach „now“), dann Pause unter Mindeststrom → nach dem Deckel zurück auf den alten Modus', async () => {
@@ -428,4 +428,47 @@ test('P2-2: „now“ ohne Quittung, dann Ende unter Deckel → Rückkehr, kein 
   await h.bridge.apply();
   assert.equal(h.lps[0].mode, 'pv');
   assert.equal(h.lps[0].maxCurrentA, 10);
+});
+
+// ── Menge der DVhub-Modi je Ziel (Codex 0e351b52, P2 1–3) ───────────────────────
+// „Vom Kunden geändert“ heißt nur: frisch gelesener evcc-Modus ∉ Menge der
+// Modi, die DVhub in der laufenden Eigentums-Phase gesetzt oder versucht hat.
+
+test('Menge P2-1: gescheiterte Rückkehr off→pv wird im nächsten Takt wiederholt, nicht verworfen', async () => {
+  const h = evccHarness();
+  h.ref.capW = 2000;
+  await h.bridge.apply();                     // aus, Rückkehr „pv“
+  h.ref.capW = null;
+  h.ref.modeFail = 'drop';
+  await h.bridge.apply();                     // Rückkehr-Befehl kommt nicht an
+  assert.equal(h.lps[0].mode, 'off');
+  h.ref.modeFail = null;
+  await h.bridge.apply();
+  assert.equal(h.lps[0].mode, 'pv');
+});
+
+test('Menge P2-2: charge() bricht vor setMode ab (maxcurrent scheitert) → „now“ zählt nicht als DVhub-Modus', async () => {
+  const h = evccHarness();
+  h.ref.capW = 2000;
+  await h.bridge.apply();                     // Wächter: aus, Rückkehr „pv“
+  await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  assert.equal(h.lps[0].mode, 'off', 'unter dem Mindeststrom pausiert');
+  h.ref.capW = 7000;
+  h.ref.maxFail = 'drop';
+  await h.bridge.apply();                     // charge(): maxcurrent scheitert, kein setMode
+  assert.equal(h.lps[0].mode, 'off');
+  h.ref.maxFail = null;
+  await h.bridge.clearOverride();
+  await h.bridge.apply();
+  assert.equal(h.lps[0].mode, 'pv');
+  assert.equal(h.lps[0].maxCurrentA, 10);
+});
+
+test('Menge P2-3: Altbestand mit restore.expect „now“ (ohne Menge) → Rückkehr, nicht verworfen', async () => {
+  const h = evccHarness();
+  h.lps[0].mode = 'now';
+  h.ownedStore.value = [{ charger: 'evcc', loadpoint: 1, identity: 'evcc|http://evcc.local:7070', cmd: 'charge', confirmed: true, gridCap: false, restore: { mode: 'pv', reason: 'grid_cap', expect: 'now', at: new Date().toISOString() } }];
+  const b = h.make();
+  await b.apply();
+  assert.equal(h.lps[0].mode, 'pv');
 });

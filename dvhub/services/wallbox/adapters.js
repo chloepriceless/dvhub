@@ -374,16 +374,24 @@ export function createVictronEvcsAdapter(getSettings, deps = {}) {
  * Stopp-Modus bleibt evcc-spezifisch (off / pv / minpv).
  */
 export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
-  return guardWrites({
+  // beforeSetMode(mode): Haken der EOS-Brücke, unmittelbar VOR dem echten
+  // setMode-Aufruf (nicht vor maxcurrent) — sie merkt sich so jeden Modus, den
+  // DVhub gesetzt oder versucht hat (eos-evcc-bridge, Menge dvhubModes).
+  const adapter = {
     type: 'evcc',
+    modeHook: true,
+    beforeSetMode: null,
     isConfigured: () => Boolean(evccIntegration?.getStatus?.().url),
     async charge(currentA) {
       const cur = await evccIntegration.setMaxCurrent(getLoadpoint(), currentA);
       if (!cur?.ok) return cur || { ok: false, error: 'maxcurrent failed' };
+      adapter.beforeSetMode?.('now');
       return evccIntegration.setMode(getLoadpoint(), 'now');
     },
     async stop() {
-      return evccIntegration.setMode(getLoadpoint(), getStopMode());
+      const mode = getStopMode();
+      adapter.beforeSetMode?.(mode);
+      return evccIntegration.setMode(getLoadpoint(), mode);
     },
     // Nur den Ladestrom begrenzen (maxcurrent), Modus unverändert — für den
     // Netzanschluss-Deckel, wenn evcc im eigenen Modus lädt.
@@ -408,5 +416,6 @@ export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
       if (!lp) return { ok: false, error: 'Ladepunkt nicht gefunden' };
       return { ok: true, connected: lp.connected, charging: lp.charging, powerW: lp.chargePowerW, currentA: null, vehicleSocPct: lp.vehicleSocPct, raw: { mode: lp.mode } };
     }
-  });
+  };
+  return guardWrites(adapter);
 }
