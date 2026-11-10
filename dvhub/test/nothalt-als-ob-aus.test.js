@@ -380,3 +380,24 @@ test('Codex P2: Teil-Sperre (ein Register gesperrt, das andere gescheitert) wird
   for (let i = 0; i < 3; i++) await ev.evaluateSchedule();
   assert.equal(w.writes.length, 3, 'danach nichts mehr');
 });
+
+test('Codex b416bf7a: Begrenzer — eine während des Wartens geänderte feste Grenze schreibt die Neutralisierung nicht mit', async () => {
+  const applied = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let paused = false;
+  const arb = createFeedInLimitArbiter({
+    applyLimit: async (w) => { if (w === 3000) await gate; applied.push(w); },
+    isPaused: () => paused,
+  });
+  await arb.set('fixed', 6000);
+  const pending = arb.set('dv', 3000);
+  paused = true;
+  const stop = arb.emergencyStop();
+  const changed = arb.set('fixed', 0); // Konfiguration im Not-Halt geändert → blockiert (wartet auf die Kette)
+  release();
+  await pending;
+  assert.deepEqual(await stop, { ok: true, limitW: 6000 }, 'Stand beim Eintritt, nicht die neue Grenze');
+  await changed;
+  assert.deepEqual(applied, [6000, 3000, 6000]);
+});

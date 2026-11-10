@@ -94,10 +94,13 @@ export function createFeedInLimitArbiter({ applyLimit, pushLog = () => {}, isPau
     // Vergleich erst, wenn laufende Writes durch sind — sonst stünde `applied`
     // noch auf dem alten Wert und eine gerade laufende DV-Grenze bliebe den
     // ganzen Not-Halt stehen (Codex 2f215968, P2).
+    // Die verbleibende Grenze beim Eintritt festhalten: eine während des
+    // Wartens geänderte Quelle (im Not-Halt blockiert) darf hier nicht über die
+    // Hintertür geschrieben werden (Codex b416bf7a).
+    const kept = smallestLimit([...sources.entries()]
+      .filter(([name]) => name === 'fixed' || notHaltAllowsFeedInSource(name))
+      .map(([, w]) => w));
     const run = chain.catch(() => {}).then(async () => {
-      const kept = smallestLimit([...sources.entries()]
-        .filter(([name]) => name === 'fixed' || notHaltAllowsFeedInSource(name))
-        .map(([, w]) => w));
       if (kept === applied || (kept === null && applied === undefined)) return { ok: true, skipped: 'unchanged' };
       await applyLimit(kept);
       pushLog('feed_in_limit', { limitW: kept, sources: Object.fromEntries(sources), reason: 'emergency_stop' });
