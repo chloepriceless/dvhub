@@ -2482,6 +2482,10 @@ export function createApiRoutes(ctx) {
       valid: loadedConfig.valid,
       parseError: loadedConfig.parseError,
       needsSetup: loadedConfig.needsSetup,
+      // Kaputte config.json: Oberfläche warnt, Speichern braucht die Bestätigung
+      // (confirmOverwriteBrokenConfig). Nur der Dateiname der Sicherung.
+      broken: loadedConfig.broken === true,
+      brokenCopy: loadedConfig.brokenCopyPath ? path.basename(loadedConfig.brokenCopyPath) : null,
       warnings: loadedConfig.warnings || []
     };
   }
@@ -2527,6 +2531,19 @@ export function createApiRoutes(ctx) {
   // needs to render — current manufacturer, the Victron host (if pre-seeded by
   // an integrator) and forecast coordinates. NEVER the apiToken or any
   // credential; the token is handed out exactly once by completeSetup().
+  // Antwort auf einen verweigerten Speichervorgang über eine kaputte config.json.
+  function configBrokenBody(e) {
+    const brokenCopy = e?.brokenCopyPath ? path.basename(e.brokenCopyPath) : null;
+    return {
+      ok: false,
+      error: 'config_broken',
+      brokenCopy,
+      detail: brokenCopy
+        ? `Die config.json auf der Box ist kaputt und wurde nicht überschrieben. Ihr Stand ist als ${brokenCopy} gesichert. Speichern ersetzt sie durch die Vorgaben plus deine Eingabe — nur nach ausdrücklicher Bestätigung.`
+        : 'Die config.json auf der Box ist kaputt und konnte nicht gesichert werden — sie wird nicht überschrieben.',
+    };
+  }
+
   function setupStatePayload() {
     const cfg = getCfg();
     const loc = (cfg.forecast && typeof cfg.forecast.location === 'object') ? cfg.forecast.location : {};
@@ -2537,6 +2554,10 @@ export function createApiRoutes(ctx) {
     return {
       ok: true,
       needsSetup: !!ctx.needsSetup(),
+      // Kaputte config.json: der Assistent warnt und verlangt eine Bestätigung,
+      // bevor er sie überschreibt. Ohne Parser-Text (könnte Inhalt zeigen).
+      configBroken: ctx.getLoadedConfig?.()?.broken === true,
+      brokenCopy: ctx.getLoadedConfig?.()?.brokenCopyPath ? path.basename(ctx.getLoadedConfig().brokenCopyPath) : null,
       manufacturer: cfg.manufacturer || 'victron',
       victronHost: realHost,
       location: {
@@ -2592,8 +2613,12 @@ export function createApiRoutes(ctx) {
     next.setupCompleted = true;
     let result;
     try {
-      result = ctx.saveAndApplyConfig(next);
+      result = ctx.saveAndApplyConfig(next, { overwriteBroken: input.confirmOverwriteBrokenConfig === true });
     } catch (e) {
+      if (e?.code === 'CONFIG_BROKEN') {
+        pushLog('setup_complete_config_broken', { brokenCopy: e.brokenCopyPath ? path.basename(e.brokenCopyPath) : null }, actorContext(req));
+        return json(res, 409, configBrokenBody(e));
+      }
       pushLog('setup_complete_failed', { error: e?.message || 'save_failed' }, actorContext(req));
       return json(res, 500, { ok: false, error: 'setup_save_failed' });
     }
@@ -3214,7 +3239,7 @@ export function createApiRoutes(ctx) {
   const configRoutes = createConfigRoutes({
     ctx, getCfg, pushLog, licenseService,
     json, downloadJson, readJsonBody,
-    configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
+    configApiPayload, configMetaPayload, configBrokenBody, withScheduleRules, migrationDirs,
     requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback,
     actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, requestEosReplanAfterSave, ALLOWED_CONFIG_ROOTS,
     hasValidBearer, denySupportConsent,

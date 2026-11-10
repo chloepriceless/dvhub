@@ -289,6 +289,21 @@ verweist hierher.
 
 ### Behoben
 
+- **Kaputte config.json wird nicht mehr still überschrieben.** War die config.json kein gültiges JSON (oder kein
+  Objekt), lief DVhub mit Vorgaben, und das nächste Speichern – Einstellungen, Setup-Assistent oder eine Automatik –
+  ersetzte die Datei; die echte Konfiguration war weg, sobald die Sicherung aus der Aufbewahrung fiel. Jetzt sichert
+  DVhub den kaputten Stand als `config.json.broken-<Zeit>` (je Inhalt einmal, Modus 0600, wird nie gelöscht).
+  Gespeichert wird darüber nur nach ausdrücklicher Bestätigung: Einstellungen, Setup-Seite und Einrichtungsassistent
+  zeigen eine deutliche Warnung mit dem Namen der Sicherung und fragen vor dem Ersetzen nach (HTTP 409
+  `config_broken`, Bestätigung `confirmOverwriteBrokenConfig`). Automatische Speichervorgänge schreiben in dieser Lage
+  nicht. Paritätsvergleich mit dem Rust-Neubau.
+- **Falscher Typ für `schedule` bringt DVhub nicht mehr zum Absturz.** `"schedule": 5` (oder ein Text, `true`, eine
+  Liste) ließ das Laden der Config mit „Cannot create property 'rules'“ werfen – DVhub startete nicht. Jetzt gibt es
+  eine Warnung (`schedule: must be an object …`), und es gelten die Vorgaben für diesen Abschnitt. Die
+  Config-Migrationen werfen auch bei einer Wurzel `null` nicht mehr. Paritätsvergleich mit dem Rust-Neubau.
+- **Alte Preis-Adresse `api.dvhub.de` wird ohne Fehlwarnung umgestellt.** Die Umstellung auf `https://dvhub.online`
+  griff nie, weil die Feldprüfung den alten Wert vorher als „invalid option“ verwarf (Ergebnis gleich, aber mit
+  Warnung bei jedem Laden). Paritätsvergleich mit dem Rust-Neubau.
 - **Modbus: eine Zeitüberschreitung lässt nicht mehr den Rest des Poll-Takts scheitern.** Nach einer
   Zeitüberschreitung baute DVhub die Verbindung neu auf, aber das Schließen des alten Sockets brach danach die neue
   Verbindung ab: alle weiteren Anfragen des Takts scheiterten mit „connection closed“. Jetzt gilt jedes

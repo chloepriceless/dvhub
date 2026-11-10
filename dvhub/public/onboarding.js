@@ -74,7 +74,22 @@
     b.className = 'ob-banner' + (kind === 'info' ? ' is-info' : '');
     b.hidden = false;
   }
-  function hideBanner() { const b = byId('obBanner'); if (b) b.hidden = true; }
+  // Kaputte config.json (Paritätsfund): Warnung bleibt über alle Schritte stehen,
+  // Abschließen ersetzt die Datei erst nach ausdrücklicher Rückfrage.
+  let brokenConfigNotice = '';
+  let brokenConfigConfirmed = false;
+  function hideBanner() {
+    const b = byId('obBanner');
+    if (!b) return;
+    if (brokenConfigNotice) { showBanner(brokenConfigNotice); return; }
+    b.hidden = true;
+  }
+  function noteBrokenConfig(brokenCopy) {
+    brokenConfigNotice = brokenCopy
+      ? 'Achtung: Die vorhandene config.json ist kaputt (kein gültiges JSON) und wurde als „' + brokenCopy + '“ gesichert. Reparieren und neu starten stellt die Einstellungen wieder her; die Einrichtung hier ersetzt sie durch die Vorgaben.'
+      : 'Achtung: Die vorhandene config.json ist kaputt (kein gültiges JSON). Die Einrichtung hier ersetzt sie durch die Vorgaben.';
+    showBanner(brokenConfigNotice);
+  }
 
   function fieldErr(id, msg) {
     const el = byId(id);
@@ -94,6 +109,7 @@
         window.location.replace('/');
         return;
       }
+      if (data && data.configBroken === true) noteBrokenConfig(data.brokenCopy || null);
       if (data && typeof data.victronHost === 'string' && data.victronHost) {
         byId('obHost').value = data.victronHost;
       }
@@ -171,6 +187,11 @@
     const latRaw = (byId('obLat').value || '').trim();
     const lonRaw = (byId('obLon').value || '').trim();
     const payload = { victronHost: host };
+    if (brokenConfigNotice && !brokenConfigConfirmed) {
+      if (!window.confirm(brokenConfigNotice + '\n\nTrotzdem einrichten und die kaputte config.json ersetzen?')) return;
+      brokenConfigConfirmed = true;
+    }
+    if (brokenConfigConfirmed) payload.confirmOverwriteBrokenConfig = true;
     if (latRaw !== '' || lonRaw !== '') {
       const lat = Number(latRaw);
       const lon = Number(lonRaw);
@@ -195,6 +216,14 @@
         body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data && data.error === 'config_broken' && !brokenConfigConfirmed) {
+        // Erst jetzt bekannt (Zustand beim Laden war älter): Hinweis zeigen, neu fragen.
+        noteBrokenConfig(data.brokenCopy || null);
+        btn.disabled = false;
+        if (skip) skip.disabled = false;
+        btn.textContent = 'Einrichtung abschließen';
+        return finish();
+      }
       if (!res.ok || !data || data.ok === false) {
         throw new Error((data && data.error) || ('HTTP ' + res.status));
       }

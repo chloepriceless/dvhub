@@ -57,6 +57,12 @@ export async function runMigrations(configPath, options = {}) {
     console.error(`Migration runner: cannot parse ${configPath}: ${e.message}`);
     return { applied: [], fromVersion: 0, toVersion: 0, error: e.message };
   }
+  // Wurzel `null`/Zahl/Array: nichts migrieren (loadConfigFile sichert die
+  // Datei als kaputt) — `null.configSchemaVersion` warf sonst beim Start.
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    console.error(`Migration runner: ${configPath}: config root must be an object`);
+    return { applied: [], fromVersion: 0, toVersion: 0, error: 'config root must be an object' };
+  }
 
   const currentVersion = config.configSchemaVersion || 0;
   const migrations = await loadMigrations();

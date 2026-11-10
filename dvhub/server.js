@@ -616,9 +616,11 @@ function refreshDerivedBatteryCapacity() {
   pushLog('battery_stage_capacity_changed', { previousWh: previous, capacityWh: derived });
 }
 
-function saveAndApplyConfig(nextRawConfig) {
+// opts.overwriteBroken: nur nach ausdrücklicher Bestätigung über eine kaputte
+// config.json schreiben (config-model.js saveConfigFile, wirft sonst CONFIG_BROKEN).
+function saveAndApplyConfig(nextRawConfig, opts = {}) {
   const previousRaw = rawCfg;
-  const saved = saveConfigFile(CONFIG_PATH, nextRawConfig);
+  const saved = saveConfigFile(CONFIG_PATH, nextRawConfig, { overwriteBroken: opts?.overwriteBroken === true });
   applyLoadedConfig(saved);
   // Eingetragene kWp & Co. können Pro an- oder abschalten (capacityOk) — DV/EOS
   // sofort folgen lassen, nicht erst beim nächsten Lizenz-Revalidate. Beim
@@ -2110,8 +2112,8 @@ ctx.buildFallbackStatusPayload = (now) => buildCurrentStatusPayload({ now });
 ctx.buildSystemDiscoveryPayload = buildSystemDiscoveryPayload;
 
 // -- ctx extensions for admin/mutation routes (Plan 2) ---
-ctx.saveAndApplyConfig = (incomingConfig) => {
-  const result = saveAndApplyConfig(restoreRedacted(incomingConfig, rawCfg));
+ctx.saveAndApplyConfig = (incomingConfig, opts = {}) => {
+  const result = saveAndApplyConfig(restoreRedacted(incomingConfig, rawCfg), opts);
   // Fernbetrieb an/aus: Fassade starten oder beenden, bevor der EOS-Abgleich unten läuft.
   const eosRemoteReady = reconcileEosRemote();
   // WS3: recompute the PVGIS expected-production cache when the user changes
@@ -3244,6 +3246,11 @@ console.log('Config loaded:', {
 
 if (loadedConfig.parseError) {
   console.error(`Config parse error in ${CONFIG_PATH}: ${loadedConfig.parseError}`);
+  if (loadedConfig.broken) {
+    console.error(loadedConfig.brokenCopyPath
+      ? `[config] config.json ist kaputt — es gelten Vorgaben. Gesichert als ${loadedConfig.brokenCopyPath}; Speichern überschreibt sie nur nach Bestätigung.`
+      : '[config] config.json ist kaputt und konnte nicht gesichert werden — es gelten Vorgaben, Speichern ist gesperrt.');
+  }
 }
 if (loadedConfig.needsSetup) {
   console.log(`No valid config available at ${CONFIG_PATH}. Root URL will open the setup wizard.`);
