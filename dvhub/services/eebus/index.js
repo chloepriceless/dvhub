@@ -175,6 +175,7 @@ export function createEebusService(ctx, deps = {}) {
     grid: { lpc: null, lpp: null, lastWriteSki: null },
     devices: {},            // ski → { entities:{lpc,lpp,mpc,ohpcf}, powerW, nominalW, limit, ohpcf }
     applied: { consumptionLimitW: null, productionLimitW: null, productionBlock: false },
+    notHalt: { active: false, since: null, released: 0, heartbeat: null },
     stderr: [],
     startedAt: null,
     restarts: 0,
@@ -210,6 +211,20 @@ export function createEebusService(ctx, deps = {}) {
   let lastEnergySave = 0;
 
   const cfgNow = () => resolveEebusConfig(getCfg());
+  // Not-Halt („als ob die Kiste aus ist“, Christin 10.11.2026): keine Vorgaben
+  // an Geräte, kein Herzschlag, kein Wiederanlauf-„frei“, keine Verdichter-
+  // Planung. Nur während der einen Neutralisierung beim Eintritt
+  // (control-commands.js setEmergencyStop: Wallbox-Stopp, Freigabe der eigenen
+  // Grenzen) öffnet sich das Fenster _notHaltNeutralizing. Lesen, Status, Netzseite
+  // (Steuerbox) und Messwerte an die Steuerbox (MGCP) laufen weiter.
+  const notHalt = () => state.ctrl?.discretionaryWritesPaused === true;
+  const notHaltBlocks = () => notHalt() && state.ctrl?._notHaltNeutralizing !== true;
+  const notHaltLogged = new Set();
+  function noteNotHaltBlock(what, data = {}) {
+    if (notHaltLogged.has(what)) return;
+    notHaltLogged.add(what);
+    pushLog('eebus_write_blocked_nothalt', { what, ...data }, 'warn');
+  }
   const roleOf = (ski) => cfgNow().trusted.find((t) => t.ski === ski)?.role || null;
   const hasGridPeer = () => cfgNow().trusted.some((t) => t.role === 'grid');
 
@@ -290,7 +305,14 @@ export function createEebusService(ctx, deps = {}) {
     });
   }
 
+  // Befehle, die ein Gerät steuern (Not-Halt-Tor als letzte Sperre).
+  const DEVICE_CONTROL_CMDS = new Set(['device_limit', 'device_failsafe', 'ohpcf', 'ev_current_limits']);
+
   function send(cmd, onId = null) {
+    if (DEVICE_CONTROL_CMDS.has(cmd?.cmd) && notHaltBlocks()) {
+      noteNotHaltBlock(cmd.cmd);
+      return Promise.resolve({ ok: false, blocked: true, error: 'emergency_stop_active' });
+    }
     if (!child || !child.stdin?.writable) return Promise.resolve({ ok: false, error: 'eebus not running' });
     const id = ++reqId;
     if (onId) onId(id);
@@ -714,6 +736,9 @@ export function createEebusService(ctx, deps = {}) {
     const mode = cfgNow().ohpcf.mode;
     d.ohpcf = { state: 'announced', announce: ev, at: now() };
     if (mode === 'off') return;
+    // Not-Halt: DVhub plant keinen Lauf — die Wärmepumpe startet nach ihrer
+    // eigenen Vorgabe, wie ohne DVhub.
+    if (notHalt()) { noteNotHaltBlock('ohpcf', { ski: ev.ski }); d.ohpcf.notHalt = true; return; }
     const startInS = mode === 'immediate' ? Number(ev.earliest_start_s) || 0 : planOhpcfStart(ev, state.epex?.data, now());
     const res = await send({ cmd: 'ohpcf', action: 'schedule', entity: ev.entity, start_in_s: startInS });
     d.ohpcf = { ...d.ohpcf, plannedStartInS: startInS, plannedAt: now(), scheduleOk: res?.ok === true };
@@ -804,6 +829,11 @@ export function createEebusService(ctx, deps = {}) {
       noteBlockedWrite(`eebus device_limit ${entity}`);
       return Promise.resolve({ ok: false, error: 'read_only' });
     }
+    // Not-Halt: vor dem Merken — eine blockierte Vorgabe ist keine Vorgabe.
+    if (notHaltBlocks()) {
+      noteNotHaltBlock('device_limit', { entity });
+      return Promise.resolve({ ok: false, blocked: true, error: 'emergency_stop_active' });
+    }
     const rec = { w: active ? w : null, active, durationS, at: now(), sentAt: now(), rejected: false, resentAt: null, id: null, replyOk: null, owner, expiresAt, confirmed: false };
     deviceWrites.set(entity, rec);
     return send({ cmd: 'device_limit', uc: 'lpc', entity, w: active ? w : 0, duration_s: durationS, active }, (id) => {
@@ -840,6 +870,9 @@ export function createEebusService(ctx, deps = {}) {
     if (!entity || !cfgNow().devices.forwardGridLimit) return;
     deviceLimitCache.delete(entity);
     if (!p14aControlled() && !emsLimits.has(ski)) return;
+    // Not-Halt: kein „frei“ (es startete den Herzschlag) — nach dem Aufheben
+    // holt resumeAfterEmergencyStop() das für alle verbundenen Geräte nach.
+    if (notHalt()) { noteNotHaltBlock('resume', { ski }); return; }
     // Aufteilung mit dem wieder angemeldeten Gerät neu rechnen (es war
     // inzwischen evtl. aus den Anteilen gefallen) — sonst die letzten Anteile.
     if (typeof ctx.p14a?.update === 'function') ctx.p14a.update();
@@ -881,6 +914,8 @@ export function createEebusService(ctx, deps = {}) {
    */
   function checkDevices() {
     if (isReadOnlyMode()) return; // keine Schreibvorgänge, also nichts zu prüfen
+    // Not-Halt: DVhub gibt nichts vor, also nichts zu prüfen oder neu zu schreiben.
+    if (notHalt()) return;
     const t = now();
     const controlled = p14aControlled() && cfgNow().devices.forwardGridLimit;
     const seen = new Set();
@@ -949,6 +984,7 @@ export function createEebusService(ctx, deps = {}) {
     lastShares = shares || {};
     lastSharesUntil = untilMs ?? null;
     lastSharesUntilById = untilById && typeof untilById === 'object' ? untilById : null;
+    if (notHaltBlocks()) return;
     const list = consumptionDevices();
     const active = {};
     for (const d of list) {
@@ -1001,6 +1037,7 @@ export function createEebusService(ctx, deps = {}) {
    * gilt); sonst geht die Grenze direkt ans Gerät.
    */
   async function setEmsLimit(ski, w) {
+    if (notHaltBlocks()) { noteNotHaltBlock('ems_limit', { ski }); return { ok: false, blocked: true, error: 'emergency_stop_active' }; }
     const d = ui.devices[ski];
     if (!d?.entities?.lpc) return { ok: false, error: 'EEBUS-Gerät ohne Verbrauchsgrenze (LPC) oder nicht verbunden' };
     if (w == null) emsLimits.delete(ski);
@@ -1014,6 +1051,94 @@ export function createEebusService(ctx, deps = {}) {
     }
     if (w == null) return writeDeviceLimit(d.entities.lpc, { w: 0, durationS: 0, active: false, owner: 'ems' });
     return writeDeviceLimit(d.entities.lpc, { w: emsLimits.get(ski), durationS: 0, active: true, owner: 'ems' });
+  }
+
+  // --- Not-Halt ---------------------------------------------------------------
+
+  /**
+   * Not-Halt-Eintritt (control-commands.js setEmergencyStop, im Fenster
+   * _notHaltNeutralizing): jede Grenze, die DVhub gerade selbst an einem
+   * verbundenen Gerät aktiv vorgibt (§14a-Anteil, Netzanschluss, von Hand),
+   * EINMAL freigeben. Die Vorgabe der Wallbox-Steuerung (owner/emsLimits) gehört
+   * der Wallbox — deren Not-Halt-Stopp lief davor (eos-evcc-bridge) und bleibt.
+   * Danach den Herzschlag zu den Geräten anhalten: wie bei ausgeschaltetem
+   * DVhub gehen die Geräte nach ihrer Frist (Go 4 s, C 60 s; LPC: spätestens
+   * 120 s) in ihren eigenen Failsafe (Failsafe-Grenze für mindestens die
+   * Failsafe-Dauer, danach ohne Grenze). Kein Wiederholen bei Fehlschlag.
+   */
+  async function emergencyStop() {
+    notHaltLogged.clear();
+    ui.notHalt = { active: true, since: now(), released: 0, heartbeat: null };
+    if (!child || ui.status !== 'running') {
+      ui.notHalt.heartbeat = 'not_running';
+      return { ok: true, skipped: 'not_running' };
+    }
+    const released = [];
+    const errors = [];
+    const writes = [];
+    for (const [entity, rec] of deviceWrites) {
+      if (!rec?.active) continue;
+      const ski = skiOfEntity(entity);
+      if (!ski || !ui.peers[ski]?.connected || lpcKnown.get(ski)?.lostAt != null) continue;
+      if (rec.owner === 'ems') continue;
+      const ems = emsLimits.has(ski) ? emsLimits.get(ski) : null;
+      // Geführt von der Wallbox-Steuerung: ihr Wert bleibt (der kleinere aus
+      // §14a-Anteil und Wallbox-Grenze wird zur reinen Wallbox-Grenze).
+      if (ems != null && rec.w === ems) continue;
+      const req = ems != null
+        ? writeDeviceLimit(entity, { w: ems, durationS: 0, active: true, owner: 'ems' })
+        : writeDeviceLimit(entity, { w: 0, durationS: 0, active: false });
+      writes.push(req.then((r) => (r?.ok ? released.push(ski) : errors.push(`${ski}: ${r?.error || 'write failed'}`))));
+    }
+    await Promise.all(writes);
+    // Beim Aufheben schreibt die Aufteilung alles neu.
+    deviceLimitCache.clear();
+    ui.notHalt.released = released.length;
+    if (released.length) pushLog('eebus_emergency_stop_released', { devices: released });
+    ui.notHalt.heartbeat = await stopDeviceHeartbeat();
+    if (errors.length) return { ok: false, error: errors.join('; '), released: released.length };
+    return { ok: true, released: released.length, heartbeat: ui.notHalt.heartbeat };
+  }
+
+  // Herzschlag der Geräteseite anhalten (dvhub-eebus device_heartbeat). Ein
+  // Hilfsprozess ohne den Befehl (C-Bridge, ältere Go-Fassung) wird neu
+  // gestartet: ein frischer Prozess schlägt erst mit der ersten Vorgabe.
+  async function stopDeviceHeartbeat() {
+    const r = await send({ cmd: 'device_heartbeat', on: false });
+    if (r?.ok) { pushLog('eebus_device_heartbeat_stopped', {}, 'warn'); return 'stopped'; }
+    if (r?.error === 'unknown command' && child) {
+      pushLog('eebus_device_heartbeat_restart', { reason: 'device_heartbeat unsupported' }, 'warn');
+      saveGridState();
+      try { child.kill('SIGTERM'); } catch { /* weg */ }
+      return 'restarted';
+    }
+    pushLog('eebus_device_heartbeat_stop_failed', { error: r?.error || 'unknown' }, 'error');
+    return 'failed';
+  }
+
+  /**
+   * Not-Halt aufgehoben: sauber wieder anlaufen — Aufteilung neu rechnen und
+   * schreiben, jedes verbundene Gerät wie beim Anmelden aufnehmen (aktive
+   * Grenze oder „frei“; das startet den Herzschlag wieder und beendet einen
+   * Failsafe, in den das Gerät während des Not-Halts gefallen ist).
+   */
+  function resumeAfterEmergencyStop() {
+    notHaltLogged.clear();
+    ui.notHalt = { active: false, since: null, released: 0, heartbeat: null };
+    deviceLimitCache.clear();
+    if (ui.status !== 'running') return { ok: true, skipped: 'not_running' };
+    let n = 0;
+    for (const [ski, k] of lpcKnown) {
+      if (k.lostAt != null || !ui.peers[ski]?.connected) continue;
+      resumeDevice(ski);
+      n += 1;
+    }
+    if (n === 0) {
+      if (typeof ctx.p14a?.update === 'function') ctx.p14a.update();
+      else applyConsumptionShares(lastShares, lastSharesUntil, lastSharesUntilById);
+    }
+    pushLog('eebus_emergency_stop_resumed', { devices: n });
+    return { ok: true, devices: n };
   }
 
   function apply() {
@@ -1254,6 +1379,7 @@ export function createEebusService(ctx, deps = {}) {
       trusted,
       grid: { lpc: ui.grid.lpc, lpp: ui.grid.lpp, hasGridPeer: hasGridPeer() },
       applied: ui.applied,
+      notHalt: notHalt() ? { ...ui.notHalt, active: true } : null,
       energy: { importWh: Math.round(energy.importWh), exportWh: Math.round(energy.exportWh) },
       restarts: ui.restarts,
       stderr: ui.stderr.slice(-10),
@@ -1279,12 +1405,15 @@ export function createEebusService(ctx, deps = {}) {
       applied: { ...ui.applied },
       devices: { total: devices.length, connected: devices.filter((t) => ui.peers[t.ski]?.connected === true).length },
       issues: controlIssues(),
+      // Not-Halt: §14a an den Geräten ausgesetzt (Leitstand-Hinweis).
+      notHalt: notHalt() ? { suspended: true, since: ui.notHalt?.since ?? null, heartbeat: ui.notHalt?.heartbeat ?? null } : null,
     };
   }
 
   async function setDeviceLimit(ski, w, durationS = 0) {
     const d = ui.devices[ski];
     if (!d?.entities?.lpc) return { ok: false, error: 'device has no LPC entity' };
+    if (notHalt()) return { ok: false, blocked: true, error: 'emergency_stop_active' };
     const active = Number.isFinite(Number(w)) && Number(w) >= 0;
     // Über writeDeviceLimit: die Prüfung der Umsetzung kennt dann diese Vorgabe.
     const dur = Number(durationS) || 0;
@@ -1303,6 +1432,7 @@ export function createEebusService(ctx, deps = {}) {
    */
   async function setEvCurrentLimits(ski, ampsPerPhase, { uc = 'opev' } = {}) {
     if (uc !== 'opev' && uc !== 'oscev') return { ok: false, error: 'uc must be opev or oscev' };
+    if (notHaltBlocks()) { noteNotHaltBlock('ev_current_limits', { ski }); return { ok: false, blocked: true, error: 'emergency_stop_active' }; }
     const ev = ui.devices[ski]?.ev;
     if (!ev?.connected) return { ok: false, error: 'no ev connected' };
     let amps = null;
@@ -1331,6 +1461,8 @@ export function createEebusService(ctx, deps = {}) {
     setEmsLimit,
     deviceInfo,
     setEvCurrentLimits,
+    emergencyStop,
+    resumeAfterEmergencyStop,
     certPaths,
     // für Tests
     _handleEvent: handleEvent,

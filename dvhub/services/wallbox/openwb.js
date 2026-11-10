@@ -22,6 +22,7 @@
 import http from 'node:http';
 import mqtt from 'mqtt';
 import { isReadOnlyMode } from '../../read-only-guard.js';
+import { notHaltActive } from '../emergency-stop/policy.js';
 
 const READ_ONLY = Object.freeze({ ok: false, error: 'read_only' });
 const VALUES_MAX_AGE_MS = 120_000;
@@ -165,7 +166,9 @@ export function createOpenWbAdapter(getSettings, deps = {}) {
       }
       const c = conn();
       // Lebenszeichen auch ohne Befehl: sonst stoppt die Box nach 80 s.
-      if (c.client.connected && !isReadOnlyMode()) await heartbeat(c);
+      // Not-Halt „als ob aus“: kein Lebenszeichen — die Box stoppt nach 80 s selbst
+      // (openWB-Failsafe), genau wie bei ausgeschaltetem DVhub.
+      if (c.client.connected && !isReadOnlyMode() && !notHaltActive()) await heartbeat(c);
       const v = c.values;
       if (!c.lastMessageAt || now() - c.lastMessageAt > VALUES_MAX_AGE_MS || !('plug_state' in v)) {
         return { ok: false, error: c.client.connected

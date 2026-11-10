@@ -14,6 +14,7 @@
 // 64-Bit-Werte kommen mit dem niederwertigen Wort zuerst; je nach Firmware Holding-Register
 // mit FC6 oder Input-Register mit FC16; Vorgabe 0 = aus. Ungeprüft an einer echten Box.
 import { isReadOnlyMode } from '../../read-only-guard.js';
+import { notHaltActive } from '../emergency-stop/policy.js';
 
 const READ_ONLY = Object.freeze({ ok: false, error: 'read_only' });
 const MAX_A = 32;
@@ -80,7 +81,8 @@ export function createSchneiderAdapter(getSettings, deps = {}) {
       const x = target();
       if (!x) return missing();
       try {
-        if (controlling && !isReadOnlyMode()) {
+        // Not-Halt „als ob aus“: kein Lifebit — nach der Frist gilt der Ersatzstrom der Box.
+        if (controlling && !isReadOnlyMode() && !notHaltActive()) {
           const [life] = await read(x, 4000);
           if (life === 0) await write(x, 4000, 1);
         }

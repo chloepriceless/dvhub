@@ -588,7 +588,12 @@ async function makeActive(w) {
   assert.equal(request(w), -3000);
 }
 
-test('Not-Halt: Sperre einmal zuruecknehmen, sobald der Boden es zulaesst, danach keine Writes', async () => {
+// Christin 10.11.2026 („als ob die Kiste aus ist“, Koordination 10.11.): die
+// eine Rücknahme fällt beim EINTRITT. Lässt der T-0075-Boden sie dann nicht zu
+// (Ladestand am harten Boden), schreibt DVhub im Not-Halt gar nicht — Akku 1
+// bleibt gesperrt (entlädt nicht unter den Boden, sicher), und das normale
+// Zurückschreiben nach dem Not-Halt nimmt die Sperre zurück.
+test('Not-Halt am Boden: kein Write im ganzen Not-Halt (auch nicht, wenn der Ladestand steigt), danach normal zurueck', async () => {
   const w = activeWorld({ deviceEcho: false });
   await makeActive(w);
   w.state.ctrl.discretionaryWritesPaused = true;
@@ -596,7 +601,20 @@ test('Not-Halt: Sperre einmal zuruecknehmen, sobald der Boden es zulaesst, danac
   assert.equal(w.state.multiGxHandoff.phase, 'restoring');
   assert.equal(w.state.multiGxHandoff.reason, 'emergency_stop');
   assert.equal(w.applied.length, 1, 'am Boden (4 %): nichts — der Boden hielte 2704 ohnehin auf 0');
+  assert.ok(w.logs.some(([e]) => e === 'multi_gx_handoff_stop_deferred'), 'aufgeschoben wird protokolliert');
+  for (let i = 0; i < 40; i++) { w.state.victron.soc = 20; w.advance(30000); await w.handoff.maintain(w.apply); }
+  assert.equal(w.applied.length, 1, 'auch über dem Boden: kein spaeterer Write mitten im Not-Halt');
+  assert.equal(w.state.multiGxHandoff.phase, 'restoring', 'Sicherung bleibt bis nach dem Not-Halt');
+  w.state.ctrl.discretionaryWritesPaused = false; w.advance(5000);
+  await w.handoff.maintain(w.apply);
+  assert.deepEqual(w.applied.at(-1), { target: 'maxDischargeW', value: -1, source: 'multi_gx_handoff_restore' }, 'nach dem Not-Halt normal zurueck');
+});
+
+test('Not-Halt ueber dem Boden: Sperre beim Eintritt einmal zuruecknehmen, danach keine Writes; Rueckmeldung beendet', async () => {
+  const w = activeWorld({ deviceEcho: false });
+  await makeActive(w);
   w.state.victron.soc = 6; w.advance(5000);
+  w.state.ctrl.discretionaryWritesPaused = true;
   await w.handoff.maintain(w.apply);
   assert.deepEqual(w.applied.at(-1), { target: 'maxDischargeW', value: -1, source: 'multi_gx_handoff_stop' }, 'einmal zurueck, nicht erst 3 Punkte ueber dem Boden');
   for (let i = 0; i < 40; i++) { w.state.victron.soc = 20; w.advance(30000); await w.handoff.maintain(w.apply); }

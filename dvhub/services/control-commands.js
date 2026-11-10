@@ -140,6 +140,7 @@ export async function setEmergencyStop(ctx, opts) {
     state.ctrl.discretionaryWritesPaused = true;
     state.ctrl.pausedAt = Date.now();
     state.ctrl.pausedBy = actor?.actor_ip || 'unknown';
+    state.ctrl.pausedReason = 'operator';
     state.ctrl._stopBlockLogged = {};
     ctx.persistControlState?.();
     ctx.pushLog('emergency_stop_activated', { by: state.ctrl.pausedBy }, { ...(actor || {}), severity: 'warn' });
@@ -163,19 +164,35 @@ export async function setEmergencyStop(ctx, opts) {
     // oder ein von selbst laufender Heizstab bleibt unberührt. Danach schreibt
     // DVhub dort nichts mehr (die Dienste prüfen discretionaryWritesPaused).
     // Ein Fehlschlag wird geloggt, nicht wiederholt; der Not-Halt bleibt aktiv.
+    // Christin 10.11.2026: „als ob die Kiste aus ist“ — auch § 14a: die von
+    // DVhub gesetzten EEBUS-Grenzen einmal frei, dann kein Herzschlag mehr
+    // (services/eebus emergencyStop). Die Wallbox zuerst: ihr Stopp kann über
+    // EEBUS gehen (EEBUS-Wallbox) und bleibt beim Freigeben stehen.
+    // Nur während dieser Schleife dürfen die Dienste ihre eine Rücknahme
+    // schreiben (_notHaltNeutralizing, z. B. EEBUS-Tor).
     const devices = {};
-    for (const [target, run] of [
-      ['wallbox', () => ctx.eosEvccBridge?.emergencyStop?.()],
-      ['heater', () => ctx.mypvRegulator?.emergencyStop?.()],
-      ['devices', () => ctx.eosDeviceBridge?.emergencyStop?.()],
-    ]) {
-      let r;
-      try { r = await run(); } catch (e) { r = { ok: false, error: e?.message || String(e) }; }
-      devices[target] = r ?? null;
-      if (r && r.ok === false) {
-        ctx.pushLog('emergency_stop_neutralize_failed', { target, error: r.error || 'unknown' }, { ...(actor || {}), severity: 'error' });
+    state.ctrl._notHaltNeutralizing = true;
+    try {
+      for (const [target, run] of [
+        ['wallbox', () => ctx.eosEvccBridge?.emergencyStop?.()],
+        ['heater', () => ctx.mypvRegulator?.emergencyStop?.()],
+        ['devices', () => ctx.eosDeviceBridge?.emergencyStop?.()],
+        ['eebus', () => ctx.eebus?.emergencyStop?.()],
+        // Einspeisegrenze 2706: DV-Teilvorgabe/Steuerbox-Grenze einmal zurück.
+        ['feedInLimit', () => ctx.feedInLimit?.emergencyStop?.()],
+      ]) {
+        let r;
+        try { r = await run(); } catch (e) { r = { ok: false, error: e?.message || String(e) }; }
+        devices[target] = r ?? null;
+        if (r && r.ok === false) {
+          ctx.pushLog('emergency_stop_neutralize_failed', { target, error: r.error || 'unknown' }, { ...(actor || {}), severity: 'error' });
+        }
       }
+    } finally {
+      state.ctrl._notHaltNeutralizing = false;
     }
+    // § 14a gleich als ausgesetzt anzeigen (sonst erst mit dem nächsten 5-s-Takt).
+    try { ctx.p14a?.update?.(); } catch { /* Anzeige */ }
     return { ok: true, status: 200, paused: true, pausedAt: state.ctrl.pausedAt, neutralize, devices };
   }
 
@@ -183,13 +200,21 @@ export async function setEmergencyStop(ctx, opts) {
   if (!state.ctrl.discretionaryWritesPaused) {
     return { ok: true, status: 200, alreadyRunning: true };
   }
+  const wasFailsafe = state.ctrl.pausedReason === 'control_state_unreadable';
   state.ctrl.discretionaryWritesPaused = false;
   state.ctrl.pausedAt = 0;
   state.ctrl.pausedBy = null;
+  state.ctrl.pausedReason = null;
   state.ctrl._stopBlockLogged = {};
   ctx.persistControlState?.();
-  ctx.pushLog('emergency_stop_resumed', {}, { ...(actor || {}), severity: 'warn' });
-  return { ok: true, status: 200, resumed: true };
+  if (wasFailsafe) ctx.setSystemWarning?.('control_state_unreadable', null);
+  ctx.pushLog('emergency_stop_resumed', wasFailsafe ? { after: 'control_state_unreadable' } : {}, { ...(actor || {}), severity: 'warn' });
+  // EEBUS sauber wieder anlaufen lassen (Aufteilung, „frei“, Herzschlag).
+  let eebus = null;
+  try { eebus = ctx.eebus?.resumeAfterEmergencyStop?.() ?? null; } catch (e) {
+    ctx.pushLog('emergency_stop_resume_failed', { target: 'eebus', error: e?.message || String(e) }, { ...(actor || {}), severity: 'error' });
+  }
+  return { ok: true, status: 200, resumed: true, ...(eebus ? { eebus } : {}) };
 }
 
 /**

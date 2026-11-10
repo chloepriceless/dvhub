@@ -81,10 +81,11 @@ import {
 // Item 25-03: atomarer Schreibpfad für die NOT-HALT-Persistenz (tmp+rename).
 // Eigenes server-freies Modul, damit der Helper unit-testbar bleibt, ohne den
 // HTTP-Server zu booten (server-utils.js ist bewusst importfrei).
-import { atomicWriteControlState } from './control-state-io.js';
+import { atomicWriteControlState, readControlState } from './control-state-io.js';
 import { createModbusServer } from './modbus-server.js';
 import { createDvLimitController } from './dv-interface-luox.js';
 import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
+import { setNotHaltProbe } from './services/emergency-stop/policy.js';
 import { createFeedInCap } from './services/feed-in-cap/index.js';
 import { pricingPeriodEndWarning } from './services/pricing-period-warning.js';
 import { createPeakShaving } from './services/peak-shaving/index.js';
@@ -343,7 +344,7 @@ const state = {
     // auto-expire) — this flag NEVER expires, only an explicit operator resume
     // clears it. Persisted to control_state.json so a service restart cannot
     // silently lift an emergency stop.
-    discretionaryWritesPaused: false, pausedAt: 0, pausedBy: null, _stopBlockLogged: {}
+    discretionaryWritesPaused: false, pausedAt: 0, pausedBy: null, pausedReason: null, _stopBlockLogged: {}
   },
   keepalive: {
     modbusLastQuery: null,
@@ -1190,27 +1191,44 @@ function persistControlState() {
     atomicWriteControlState(CONTROL_STATE_PATH, {
       discretionaryWritesPaused: !!state.ctrl.discretionaryWritesPaused,
       pausedAt: state.ctrl.pausedAt || 0,
-      pausedBy: state.ctrl.pausedBy || null
+      pausedBy: state.ctrl.pausedBy || null,
+      pausedReason: state.ctrl.pausedReason || null
     });
   } catch (e) {
     pushLog('control_state_persist_error', { error: e.message }, 'error');
   }
 }
 
+// Not-Halt beim Start (T-0099): fehlt control_state.json, normal starten; ist
+// sie da, aber kaputt, fail-safe im Not-Halt starten — Begründung bei
+// readControlState (control-state-io.js). Vorher startete DVhub bei einer
+// kaputten Datei normal und hob einen aktiven Not-Halt stillschweigend auf.
+const CONTROL_STATE_UNREADABLE_WARNING = 'Not-Halt aktiv: Der gespeicherte Not-Halt-Zustand (control_state.json) war beim Start unlesbar. '
+  + 'DVhub steuert deshalb nichts, bis der Not-Halt bewusst aufgehoben wird (Leitstand → Steuerung → „Fortsetzen“).';
+
 function loadControlState() {
-  try {
-    if (!fs.existsSync(CONTROL_STATE_PATH)) return;
-    const saved = JSON.parse(fs.readFileSync(CONTROL_STATE_PATH, 'utf8'));
-    if (saved?.discretionaryWritesPaused === true) {
-      state.ctrl.discretionaryWritesPaused = true;
-      state.ctrl.pausedAt = Number(saved.pausedAt) || Date.now();
-      state.ctrl.pausedBy = saved.pausedBy || null;
-      pushLog('emergency_stop_restored', { pausedAt: state.ctrl.pausedAt, pausedBy: state.ctrl.pausedBy }, 'warn');
-    }
-  } catch (e) {
-    // Unreadable state file → fail toward normal operation (the operator can
-    // re-press the button); log loudly so the broken file is visible.
-    pushLog('control_state_load_error', { error: e.message }, 'error');
+  const r = readControlState(CONTROL_STATE_PATH);
+  if (r.status === 'missing') return;
+  if (r.status === 'unreadable') {
+    state.ctrl.discretionaryWritesPaused = true;
+    state.ctrl.pausedAt = Date.now();
+    state.ctrl.pausedBy = 'system';
+    state.ctrl.pausedReason = 'control_state_unreadable';
+    // Die kaputte Datei zur Diagnose behalten, dann gültig überschreiben.
+    try { fs.copyFileSync(CONTROL_STATE_PATH, `${CONTROL_STATE_PATH}.broken-${new Date(state.ctrl.pausedAt).toISOString().replace(/[:.]/g, '-')}`); } catch { /* nur Diagnose */ }
+    persistControlState();
+    pushLog('emergency_stop_restored_failsafe', { error: r.error, file: CONTROL_STATE_PATH }, 'error');
+    setSystemWarning('control_state_unreadable', CONTROL_STATE_UNREADABLE_WARNING);
+    return;
+  }
+  const saved = r.saved;
+  if (saved.discretionaryWritesPaused === true) {
+    state.ctrl.discretionaryWritesPaused = true;
+    state.ctrl.pausedAt = Number(saved.pausedAt) || Date.now();
+    state.ctrl.pausedBy = saved.pausedBy || null;
+    state.ctrl.pausedReason = typeof saved.pausedReason === 'string' ? saved.pausedReason : 'operator';
+    pushLog('emergency_stop_restored', { pausedAt: state.ctrl.pausedAt, pausedBy: state.ctrl.pausedBy, reason: state.ctrl.pausedReason }, 'warn');
+    if (state.ctrl.pausedReason === 'control_state_unreadable') setSystemWarning('control_state_unreadable', CONTROL_STATE_UNREADABLE_WARNING);
   }
 }
 
@@ -1317,7 +1335,7 @@ function setForcedOff(reason, { until } = {}) {
     source: 'direktvermarkter',
     meta: { offUntil: new Date(state.ctrl.offUntil).toISOString(), leaseMs: cfg.offLeaseMs }
   }));
-  ctx.applyDvVictronControl(false);
+  ctx.applyDvVictronControl(false, { reason: 'dv_forced_off' });
 }
 
 function clearForcedOff(reason) {
@@ -1358,6 +1376,9 @@ function controlValue() {
 // Every create* factory receives this ctx object. Modules use what they need.
 // getCfg() is a GETTER -- never pass cfg directly (prevents stale closure on hot-reload).
 // After each createXxx(ctx), extend ctx with the new module's public methods.
+// Not-Halt für Module ohne eigenen Zustand (Wallbox-Lebenszeichen u. a.).
+setNotHaltProbe(() => state.ctrl.discretionaryWritesPaused === true);
+
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
   peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
@@ -1379,6 +1400,7 @@ const ctx = {
   setDvLimitPct,
   luoxWatchdogRefresh,
   persistControlState,
+  setSystemWarning: (id, message) => setSystemWarning(id, message),
   get db() { return dbPool; }, // lazy getter — dbPool set during createTelemetryStoreIfEnabled()
 };
 
@@ -1511,6 +1533,7 @@ ctx.applyDvFeedInLimit = scheduler.applyDvFeedInLimit;
 ctx.feedInLimit = createFeedInLimitArbiter({
   applyLimit: (limitW) => scheduler.applyDvFeedInLimit(limitW),
   pushLog,
+  isPaused: () => state.ctrl.discretionaryWritesPaused === true,
 });
 // Feste Einspeisegrenze (60/70 %/eigener Wert/keine — ab Werk nicht angegeben):
 // Quelle 'fixed' im Begrenzer, Regelschleife für SunSpec-Geräte, Überwachung.

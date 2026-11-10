@@ -76,6 +76,9 @@
 
     // Aktueller Zustand
     html += '<section class="eebus-sec"><h3>Jetzt</h3>';
+    if (st.suspended === 'not_halt') {
+      html += '<div class="eebus-error"><strong>§14a im Not-Halt ausgesetzt:</strong> DVhub gibt Wallbox, Wärmepumpe und Speicher keine Grenzen vor und hält keinen Herzschlag zu den EEBUS-Geräten — sie gehen nach ihrer Frist in ihren eigenen Failsafe, wie bei ausgeschaltetem DVhub. Vorgaben des Netzbetreibers werden weiter angezeigt und protokolliert.</div>';
+    }
     if (st.active) {
       html += '<div><strong>Bezug begrenzt:</strong> ≤ ' + esc(kw(st.limitW)) + ' (' + (st.source === 'relay' ? 'Relais' : 'EEBUS-Steuerbox') + ')</div>';
       html += '<div class="eebus-small">Budget mit PV-Überschuss: ' + esc(kw(st.budgetW)) + '</div>';

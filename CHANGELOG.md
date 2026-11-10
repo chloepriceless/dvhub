@@ -147,6 +147,32 @@ verweist hierher.
 
 ### Geändert
 
+- **Not-Halt „als ob DVhub aus ist“** (Christin 06./07./10.11.2026). Der Not-Halt nimmt jede eigene Vorgabe von
+  DVhub genau einmal zurück — nur, wo DVhub gerade selbst vorgibt; im Zweifel sendet er nichts — und schreibt danach
+  nichts mehr an die Anlage, ohne Wiederholung. Messwerte, Protokoll und Status laufen weiter. Neu ausgesetzt sind
+  auch die **§51-Abregelung bei negativen Preisen, die Abregelung durch den Direktvermarkter (inkl. Teilvorgabe auf
+  2706), die Einspeisegrenze der Steuerbox, die feste Einspeisegrenze als Regelschleife und die Sicherheits-Nullung
+  am SoC-Boden**: Eine von DVhub gesetzte PV-Sperre wird einmal aufgehoben, danach ist der Betreiber selbst
+  verantwortlich. Der Leitstand nennt im Not-Halt-Banner, was ausgesetzt ist. Jede dieser Klassen lässt sich in
+  `services/emergency-stop/policy.js` einzeln wieder einschalten.
+  - **§14a im Not-Halt ausgesetzt:** Die von DVhub gesetzten EEBUS-Grenzen gehen einmal auf „frei“, danach kein
+    Herzschlag, kein Auffrischen, kein Wiederanlauf-„frei“ und keine Verdichter-Planung mehr. Die Geräte gehen nach
+    ihrer Frist in ihren eigenen Failsafe, genau wie bei ausgeschaltetem DVhub. Die Vorgabe des Netzbetreibers wird
+    weiter angezeigt und protokolliert; Leitstand und §14a-Ansicht zeigen „§14a im Not-Halt ausgesetzt“. Beim
+    Aufheben nimmt DVhub jedes verbundene Gerät wie beim Anmelden wieder auf. Neuer Befehl `device_heartbeat` für
+    dvhub-eebus (Go und C); ein Hilfsprozess ohne den Befehl wird neu gestartet.
+  - **Zweite GX:** einmal 0 W, danach nur Lesen (vorher alle 5 s 0 W). Ohne Nachführen fällt die GX wie bei
+    ausgeschaltetem DVhub nach etwa 10 s in Passthru. Die Einspeisung aus Akku 2 schreibt die gesicherte
+    Entladegrenze nur beim Eintritt zurück, wenn der SoC-Boden es dann zulässt; sonst erst nach dem Not-Halt.
+  - **Still im Not-Halt:** die Lebenszeichen von Salia, Nexblue, Schneider und openWB (die Box geht in ihren eigenen
+    Failsafe), das Nachprüfen der Einspeisegrenze 2706, Wallbox-Modus und Relais über Familie oder MQTT (Antwort
+    409 `emergency_stop_active`) sowie die 0 W an einen Heizstab, der im Not-Halt aus der Konfiguration entfernt wird.
+    Peak Shaving, Netzanschluss und die Einspeisung aus Akku 2 haben je höchstens eine Rücknahme pro Not-Halt.
+  - **Kaputte `control_state.json` → Start im Not-Halt.** Ist die Datei da, aber unlesbar, startet DVhub im Not-Halt.
+    Der Leitstand und das Protokoll warnen deutlich, bis der Betreiber den Not-Halt bewusst aufhebt; die kaputte Datei
+    bleibt als `.broken-<Zeit>` liegen. Vorher startete DVhub dann normal. Fehlt die Datei (Erstinstallation), startet
+    DVhub wie bisher normal.
+
 - **§14a: Aufteilung nach Bedarf statt nach Nennleistung.** Während einer Dimmung bekam jedes Gerät bisher Leistung
   bis zu seiner Nennleistung (Vorrang) bzw. nach Nennleistung (anteilig). Eine Wärmepumpe mit 5,5 kW Nennleistung, die
   1,5 kW zog, hielt so 5,5 kW fest, während der Wallbox Leistung fehlte. Jetzt bekommt jedes Gerät zuerst seinen

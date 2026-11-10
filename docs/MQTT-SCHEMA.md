@@ -28,7 +28,7 @@ DVhub schreibt seine Sollwerte über Modbus oder die MQTT-Bridge an die Anlage. 
 | `dvhub/control/source` | Text | Herkunft des Sollwerts: `eos` (EOS-Plan), `optimizer` (interner Prognose-Optimizer), `market_automation` (Kleinmarkt-Automation), `rule` (manuelle Zeitplan-Regel), `override` (manueller Eingriff über die API), `default` (Grundzustand), `runtime` (Laufzeit-Schutz wie Abregelung/SoC-Boden), `none` |
 | `dvhub/control/rule` | Text | Regel-ID, wenn eine Regel den Sollwert bestimmt (z. B. `opt-1789…-3`), sonst `null` |
 | `dvhub/control/updated_at` | ISO-8601 | Zeitpunkt der letzten Sollwert-Änderung (Europe/Berlin-Anlage, UTC-Zeitstempel) |
-| `dvhub/control/paused` | bool | `true`, wenn der Not-Halt die freiwilligen Schreibvorgänge pausiert |
+| `dvhub/control/paused` | bool | `true`, wenn der Not-Halt aktiv ist — DVhub schreibt dann nichts an die Anlage (seit 1.0.10 auch keine §51-/DV-Abregelung, kein §14a) |
 | `dvhub/control/state` | JSON | Alle vier Ziele mit `{ value, source, at, origin }` in einem Objekt (`origin`: `active` = aktiver Sollwert, `readback` = Rücklesung der Anlage) |
 
 ### Grenzen des Netzbetreibers (§14a / EEBUS-Steuerbox)

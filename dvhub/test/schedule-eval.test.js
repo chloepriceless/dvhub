@@ -998,6 +998,9 @@ test('Issue #8: Not-Halt gibt die PV frei (emergency_stop_release), ohne Not-Hal
     mutate: ({ state, cfg }) => {
       state.schedule.rules = [];                          // nur der DV-Pfad ist relevant
       state.ctrl.discretionaryWritesPaused = paused;
+      // Seit 1.0.10 gibt der Not-Halt nur eine Sperre frei, die DVhub selbst
+      // gesetzt hat (im Zweifel nichts senden) — hier: DVhub hatte gesperrt.
+      if (paused) { state.ctrl._lastDvFeedIn = false; state.ctrl.pausedAt = 1; }
       state.schedule.config.defaultFeedExcessDcPv = 0;    // normal: NICHT einspeisen -> abregeln
       cfg.dvControl = {
         enabled: true,

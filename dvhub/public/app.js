@@ -1908,7 +1908,8 @@ function renderEmergencyStop(es) {
   if (resumeBtn) resumeBtn.hidden = !active;
   if (meta) {
     meta.hidden = !active;
-    if (active) meta.textContent = 'Not-Halt aktiv' + (es.pausedAt ? ` seit ${fmtTs(es.pausedAt)}` : '') + ' — Markt-/Optimizer-Steuerung pausiert.';
+    if (active) meta.textContent = 'Not-Halt aktiv' + (es.pausedAt ? ` seit ${fmtTs(es.pausedAt)}` : '') + ' — DVhub steuert nichts (als wäre es aus). Ausgesetzt: '
+      + (Array.isArray(es.suspended) && es.suspended.length ? es.suspended.join(' · ') : 'alle Steuerungen') + '.';
   }
   let banner = document.getElementById('emergencyStopBanner');
   if (!active) { if (banner) banner.remove(); return; }
@@ -1928,8 +1929,17 @@ function renderEmergencyStop(es) {
   }
   const textEl = document.getElementById('emergencyStopBannerText');
   if (textEl) {
-    textEl.textContent = '\u{1F6D1} NOT-HALT aktiv' + (es.pausedAt ? ` seit ${fmtTs(es.pausedAt)}` : '')
-      + ' — diskretionäre Steuerbefehle pausiert (Pflicht-Abregelung läuft weiter).';
+    // Christin 10.11.2026: „als ob die Kiste aus ist“ — auch § 51, DV-Abregelung,
+    // § 14a und der SoC-Boden-Schutz sind ausgesetzt; der Betreiber ist selbst
+    // verantwortlich. Startet DVhub wegen einer unlesbaren control_state.json im
+    // Not-Halt, steht das hier ausdrücklich.
+    const why = es.reason === 'control_state_unreadable'
+      ? ' — beim Start gesetzt, weil der gespeicherte Not-Halt-Zustand unlesbar war. Bitte prüfen und bewusst fortsetzen.'
+      : '';
+    textEl.textContent = '\u{1F6D1} NOT-HALT aktiv' + (es.pausedAt ? ` seit ${fmtTs(es.pausedAt)}` : '') + why
+      + ' DVhub steuert nichts, nur Messwerte und Protokoll laufen. Ausgesetzt: '
+      + (Array.isArray(es.suspended) && es.suspended.length ? es.suspended.join(' · ') : 'alle Steuerungen')
+      + ' — du bist für die Anlage selbst verantwortlich.';
   }
 }
 
@@ -2064,7 +2074,7 @@ function renderSourceMismatch(sm) {
 
 async function handleEmergencyStop() {
   const go = typeof window !== 'undefined' && typeof window.confirm === 'function'
-    ? window.confirm('NOT-HALT aktivieren?\n\nGrid-Setpoint wird einmalig auf 0 gesetzt (Eigenverbrauchsregelung), danach werden alle Markt-/Optimizer-/Hand-Steuerbefehle gestoppt, bis du fortsetzt.\n\nPflicht-Abregelung (§51/§9) und Live-Anzeige laufen weiter.')
+    ? window.confirm('NOT-HALT aktivieren?\n\nGrid-Setpoint wird einmalig auf 0 gesetzt (Eigenverbrauchsregelung), danach werden alle Markt-/Optimizer-/Hand-Steuerbefehle gestoppt, bis du fortsetzt.\n\nDVhub steuert dann nichts mehr — als wäre es aus: auch §51-Abregelung, Direktvermarkter-Abregelung, §14a und der SoC-Boden-Schutz sind ausgesetzt. Von DVhub gesetzte Abregelungen werden einmal aufgehoben. Messwerte und Protokoll laufen weiter.')
     : true;
   if (!go) return;
   try {
@@ -2315,7 +2325,10 @@ function renderDashboardStatus(status) {
     };
     const failsafe = eb && (eb.lpc?.state === 'failsafe' || eb.lpp?.state === 'failsafe');
     let chip = ['info', 'ohne Steuerbox'];
-    if (eb?.status === 'error') chip = ['danger', 'Fehler'];
+    // Not-Halt (Christin 10.11.2026): § 14a ausgesetzt — DVhub gibt den Geräten nichts vor.
+    const p14aSuspended = p?.suspended === 'not_halt' || eb?.notHalt?.suspended === true;
+    if (p14aSuspended) chip = ['danger', '§14a im Not-Halt ausgesetzt'];
+    else if (eb?.status === 'error') chip = ['danger', 'Fehler'];
     else if (eb?.status === 'not_installed') chip = ['warn', 'nicht installiert'];
     else if (eb && eb.status !== 'running') chip = ['warn', 'startet'];
     else if (failsafe) chip = ['danger', 'Failsafe'];
@@ -2328,7 +2341,8 @@ function renderDashboardStatus(status) {
     setText('eebusChipText', chip[1]);
 
     let headline = ['frei', 'ok'];
-    if (p?.active) headline = [`Bezug ≤ ${kw(p.limitW)}`, failsafe ? 'danger' : 'warn'];
+    if (p14aSuspended) headline = [p?.active ? `Vorgabe ≤ ${kw(p.limitW)} — nicht umgesetzt (Not-Halt)` : '§14a im Not-Halt ausgesetzt', 'danger'];
+    else if (p?.active) headline = [`Bezug ≤ ${kw(p.limitW)}`, failsafe ? 'danger' : 'warn'];
     else if (eb?.lpp?.limitW != null) headline = [`Einspeisung ≤ ${kw(eb.lpp.limitW)}`, failsafe ? 'danger' : 'warn'];
     else if (!eb?.grid && !relayOn) headline = ['keine Steuerbox', 'dim'];
     setText('eebusHeadline', headline[0], headline[1]);

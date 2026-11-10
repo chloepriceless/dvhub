@@ -26,3 +26,38 @@ export function atomicWriteControlState(filePath, stateObj) {
   fs.writeFileSync(tmpPath, JSON.stringify(stateObj) + '\n');
   fs.renameSync(tmpPath, filePath);
 }
+
+/**
+ * Not-Halt-Zustand beim Start lesen (server.js loadControlState).
+ *
+ * Unterschied mit Absicht (Christin 10.11.2026, „als ob die Kiste aus ist“):
+ *   'missing'    — Datei fehlt (ENOENT): Erstinstallation bzw. nie ein Not-Halt.
+ *                  Es gibt nichts zu erinnern → normal starten.
+ *   'unreadable' — Datei ist da, aber nicht lesbar, kein JSON oder ohne gültiges
+ *                  Feld: sie existiert nur, weil schon einmal ein Not-Halt gesetzt
+ *                  oder aufgehoben wurde — ob er gerade gilt, ist unbekannt. Dann
+ *                  fail-safe im Not-Halt starten (keine Writes), bis der Betreiber
+ *                  ihn bewusst aufhebt. Halbe Dateien entstehen dank tmp+rename
+ *                  nicht; kaputt heißt also: von außen beschädigt.
+ *   'ok'         — gültig; saved.discretionaryWritesPaused ist ein Boolean.
+ * @param {string} filePath
+ * @param {object} [fsImpl]
+ * @returns {{ status: 'missing'|'unreadable'|'ok', saved?: object, error?: string }}
+ */
+export function readControlState(filePath, fsImpl = fs) {
+  let text;
+  try {
+    text = fsImpl.readFileSync(filePath, 'utf8');
+  } catch (e) {
+    if (e?.code === 'ENOENT') return { status: 'missing' };
+    return { status: 'unreadable', error: e?.message || String(e) };
+  }
+  let saved;
+  try { saved = JSON.parse(text); } catch (e) {
+    return { status: 'unreadable', error: e?.message || String(e) };
+  }
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved) || typeof saved.discretionaryWritesPaused !== 'boolean') {
+    return { status: 'unreadable', error: 'control_state.json ohne gültiges Feld discretionaryWritesPaused' };
+  }
+  return { status: 'ok', saved };
+}

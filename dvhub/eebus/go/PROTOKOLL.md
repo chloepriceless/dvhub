@@ -73,6 +73,7 @@ dieselben wie in `bridge.c`.
 | `device_limit` | `uc` lpc\|lpp, `entity`, `w`, `duration_s`, `active` | `EgLpSetActivePowerLimit` + `write_result` | `WriteConsumption/ProductionLimit` + `write_result` | ja (`unknown device entity`, `write failed`); `active` ohne Angabe = `w` vorhanden; `duration_s <= 0` löscht die Dauer |
 | `device_failsafe` | `uc`, `entity`, `w`, `duration_s` | `EgLpSetFailsafe…` | `WriteFailsafe…` | ja; `write_result` über die Antwort auf den Nachrichtenzähler |
 | `ohpcf` | `entity`, `action` schedule\|stop\|pause\|resume, `start_in_s` | `CemOhpcf…` | `SchedulePowerConsumptionProcess`, `Abort…`, `Pause…`, `Resume…` | ja (`unknown compressor entity`, `ohpcf command failed`) |
+| `device_heartbeat` | `on` (bool) | `EgLpStart/StopHeartbeat` (lpc und lpp) | `HeartbeatManager().Start/StopHeartbeat` der CEM-Entität | neu 10.11.2026 (DVhub-Not-Halt „als ob aus“): `on:false` hält den Herzschlag zu den Geräten an, die nächste Vorgabe (`device_limit`, `ev_current_limits`) oder `on:true` startet ihn wieder; ältere Fassungen antworten `unknown command` (DVhub startet den Hilfsprozess dann neu) |
 | `status` | – | `{"ev":"status","ski",lpc:{w,active,heartbeat_ok},lpp:{…},id}` | gleich | ja |
 | unbekannt / ohne `cmd` | | `unknown command` / `no command` | gleich | ja |
 | **`ev_current_limits`** | siehe 6.2 | – | neu | – |
