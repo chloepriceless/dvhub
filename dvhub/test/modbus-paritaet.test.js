@@ -335,3 +335,22 @@ test('A7: setEmergencyStop setzt die Schreib-Sperre, bevor es neutralisiert', as
   await setEmergencyStop(ctx, { on: true });
   assert.equal(modbusWriteFenceGeneration(), before + 1);
 });
+
+test('A7 (Codex 56e41b93, P2): verwirft die Sperre alles, wird die Verbindung nach Leerlauf trotzdem abgebaut', async () => {
+  const { fenceModbusWrites } = await import('../transport-modbus.js');
+  let closed = 0;
+  const server = net.createServer((socket) => { socket.on('error', () => {}); socket.on('close', () => { closed += 1; }); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const transport = createModbusTransport({ idleMs: 150 });
+  try {
+    const p = transport.mbWriteSingle({ host: '127.0.0.1', port: server.address().port, unitId: 100, address: 2716, value: 1, timeoutMs: 1000 })
+      .then(() => 'gesendet', (e) => e.message);
+    fenceModbusWrites();                       // noch vor dem Verbindungsaufbau
+    assert.match(await p, /Not-Halt/);
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(closed, 1, 'Verbindung nach Leerlauf geschlossen');
+  } finally {
+    await transport.destroy();
+    await new Promise((r) => server.close(r));
+  }
+});

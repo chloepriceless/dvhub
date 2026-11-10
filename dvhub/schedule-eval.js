@@ -648,6 +648,12 @@ export function createScheduleEvaluator(ctx) {
       for (const point of freshlySaved) delete saved[point];
       throw new Error('dv_seq_saved konnte nicht gespeichert werden — Sperre nicht geschrieben');
     }
+    // Codex 56e41b93 (P1): wie viele Schritte schon am Gerät stehen. Bricht die
+    // Sequenz danach ab (Zeitüberschreitung, im Not-Halt verworfener Write),
+    // trägt der Fehler diese Zahl — applyDvVictronControl wertet eine so
+    // angefangene Sperre als eigene Teil-Sperre (sonst nie zurückgestellt).
+    let stepsWritten = 0;
+    try {
     for (const step of steps) {
       const pconf = writeConfFor(step.point, cfg.controlWrite?.[step.point]);
       if (!pconf?.enabled) throw new Error(`sequence point not enabled: ${step.point}`);
@@ -681,10 +687,15 @@ export function createScheduleEvaluator(ctx) {
       } else {
         await transport.mbWriteSingle({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, value: words[0], timeoutMs: pconf.timeoutMs });
       }
+      stepsWritten += 1;
       if (step.restore === true && saved[step.point] !== undefined) {
         delete saved[step.point];
         persistDvSeqSaved();
       }
+    }
+    } catch (e) {
+      if (stepsWritten > 0 && e && typeof e === 'object') e.dvStepsWritten = stepsWritten;
+      throw e;
     }
   }
 
@@ -841,7 +852,7 @@ export function createScheduleEvaluator(ctx) {
           pushLog('dv_victron_write', { register: 'feedExcessDcPv', address: dc.feedExcessDcPv.address, value: val, feedIn });
         }
       } catch (e) {
-        results.feedExcessDcPv = { ok: false, error: e.message };
+        results.feedExcessDcPv = { ok: false, error: e.message, ...(e?.dvStepsWritten > 0 ? { stepsWritten: e.dvStepsWritten } : {}) };
         allOk = false;
         pushLog('dv_victron_write_error', { register: 'feedExcessDcPv', error: e.message });
       }
@@ -870,7 +881,7 @@ export function createScheduleEvaluator(ctx) {
           pushLog('dv_victron_write', { register: 'dontFeedExcessAcPv', address: dc.dontFeedExcessAcPv.address, value: val, feedIn });
         }
       } catch (e) {
-        results.dontFeedExcessAcPv = { ok: false, error: e.message };
+        results.dontFeedExcessAcPv = { ok: false, error: e.message, ...(e?.dvStepsWritten > 0 ? { stepsWritten: e.dvStepsWritten } : {}) };
         allOk = false;
         pushLog('dv_victron_write_error', { register: 'dontFeedExcessAcPv', error: e.message });
       }
@@ -889,9 +900,10 @@ export function createScheduleEvaluator(ctx) {
       if (state.ctrl.discretionaryWritesPaused) {
         notHaltDvState().mandatoryBlock = feedIn === false && notHaltAllowsDvReason(reason);
       }
-    } else if (feedIn === false && Object.values(results).some((r) => r?.ok === true && !r.skipped)) {
-      // Teilweise gesperrt (ein Register ja, das andere nicht): die Sperre ist
-      // DVhubs eigene und bekommt im Not-Halt ihre Freigabe (Codex 2f215968, P2).
+    } else if (feedIn === false && Object.values(results).some((r) => (r?.ok === true && !r.skipped) || r?.stepsWritten > 0)) {
+      // Teilweise gesperrt (ein Register ja, das andere nicht, oder eine
+      // Sequenz nur bis zur Hälfte): die Sperre ist DVhubs eigene und bekommt
+      // im Not-Halt ihre Freigabe (Codex 2f215968, P2; Codex 56e41b93, P1).
       state.ctrl._dvPartialBlock = true;
     }
   }

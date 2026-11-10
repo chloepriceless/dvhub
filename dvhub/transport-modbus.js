@@ -231,7 +231,11 @@ export function createModbusTransport(opts = {}) {
           entry.reject(new Error('modbus write verworfen (Not-Halt seit dem Einreihen)'));
           entry = this.queue.shift();
         }
-        if (!entry) return;
+        if (!entry) {
+          // Alles verworfen: Verbindung trotzdem nach Leerlauf abbauen (Codex 56e41b93, P2).
+          this._resetIdle();
+          return;
+        }
         this.pending = entry;
         // Eine Anfrage läuft: kein Leerlauf. Der Timer startet nach der Antwort
         // neu (_drain → _resetIdle). Sonst konnte der Timer einer früheren
