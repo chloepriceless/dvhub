@@ -37,7 +37,8 @@ test('Quelle Victron: kein Abstand, Ziel = Victron-Grenze (gesamt und je Phase)'
 
 test('Quelle Victron: gemessene Phasenspannungen statt 230 V', () => {
   const r = resolveGridConnection({}, { victronPhaseLimitA: 40, phaseVoltagesV: [235, 240, 228] });
-  assert.equal(r.limitW, 40 * (235 + 240 + 228)); // 28 120 W
+  // 40 × 703 V = 28 120 W, auf 100 W abgerundet (Fable R1 P2-4).
+  assert.equal(r.limitW, 28100);
   assert.equal(r.targetW, r.limitW);
   assert.deepEqual(r.phaseLimitsW, [9400, 9600, 9120]);
   assert.deepEqual(r.phaseTargetsW, [9400, 9600, 9120]);

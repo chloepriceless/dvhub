@@ -614,13 +614,16 @@ export function createEosConfigSync(ctx) {
 
     // Zweite GX-Anlage erreichbar → Akku und Wechselrichter beider Anlagen.
     const planCfg = planningCfg(ctx, cfg);
+    // Anmeldung des E-Autos zuerst: der Behelf der Netzbezugs-Grenze zieht die
+    // Auto-Ladeleistung nur ab, wenn EOS das Auto gerade plant (Fable R3 P3-3).
+    const evDecision = decideEvRegistration(cfg, caps);
     const batteries = buildEosBatteries(planCfg, { minSocPct: eosMinSocPct });
     const inverters = buildEosInverters(planCfg, {
       curve: effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.()),
       curveSupported: caps.inverterEfficiencyCurve === true,
       gridImportLimitSupported: caps.gridImportLimit === true,
       // Victron-Grenze (Reg. 2714) — EOS bekommt den wirksamen Wert.
-      gridConnectionExtra: victronLimitExtra(state, Date.now(), cfg),
+      gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evDecision.register === true },
     });
     const optimization = buildEosOptimization(cfg);
     const geneticSizing = pickGeneticSizing(optimization.interval, cfg?.optimizer?.eosGeneticGenerations);
@@ -650,7 +653,6 @@ export function createEosConfigSync(ctx) {
     // charging from the grid overnight — the operator charges the EV from PV
     // during the day, and that load is already captured by the LoadImport
     // forecast. When ON, EOS models the EV as a separately-optimised device.
-    const evDecision = decideEvRegistration(cfg, caps);
     const optimizeEv = evDecision.register;
     const evTasks = optimizeEv
       ? [
@@ -888,7 +890,7 @@ export function createEosConfigSync(ctx) {
           curve: curveNow,
           curveSupported: again.inverterEfficiencyCurve === true,
           gridImportLimitSupported: again.gridImportLimit === true,
-          gridConnectionExtra: victronLimitExtra(state, Date.now(), cfg),
+          gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evDecision.register === true },
         }));
         const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/inverters', body);
         if (!res.ok) errors['devices/inverters'] = res.error;

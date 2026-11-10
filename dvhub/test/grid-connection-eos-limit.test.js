@@ -136,13 +136,25 @@ describe('Abgleich gegen eine EOS-Attrappe', () => {
     assert.equal(mock.config.devices.inverters.inverter1[KEY], 28000);
   });
 
-  it('Vanilla rc3 ohne Schlüssel: nie geschickt, Behelf 16 kW', async () => {
+  it('Vanilla rc3 ohne Schlüssel: nie geschickt, Behelf 16 kW (Auto bei EOS angemeldet)', async () => {
     mock = await createMockEos({ knowsKey: false });
     const cfgRef = { extra: { gridConnection: { limitKw: 29 } } };
-    const res = await createEosConfigSync(ctxFor(mock.port, cfgRef)).sync();
+    const ctx = ctxFor(mock.port, cfgRef);
+    ctx.teslamateService = { getState: () => ({ batteryLevel: 50 }) }; // Ladestand bekannt → angemeldet
+    const res = await createEosConfigSync(ctx).sync();
     assert.ok(res.applied.includes('devices/inverters'), JSON.stringify(res.errors));
+    assert.equal(ctx.state.optimizer.eosEv.register, true);
     assert.equal(Object.prototype.hasOwnProperty.call(lastInverterPut(mock), KEY), false);
     assert.equal(lastInverterPut(mock).max_ac_charge_power_w, 16000);
+  });
+
+  it('Fable R3 P3-3: Vanilla rc3, Auto NICHT angemeldet → Behelf ohne Abzug der Auto-Ladeleistung (27 kW)', async () => {
+    mock = await createMockEos({ knowsKey: false });
+    const cfgRef = { extra: { gridConnection: { limitKw: 29 } } };
+    const ctx = ctxFor(mock.port, cfgRef);
+    await createEosConfigSync(ctx).sync();
+    assert.equal(ctx.state.optimizer.eosEv.register, false, 'kein Ladestand → nicht angemeldet');
+    assert.equal(lastInverterPut(mock).max_ac_charge_power_w, 27000);
   });
 
   it('Grenze in DVhub entfernt: EOS bekommt den Aus-Wert, nicht null (null setzt nicht zurück)', async () => {

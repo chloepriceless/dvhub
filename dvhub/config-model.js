@@ -1272,7 +1272,7 @@ function buildFieldDefinitions() {
       min: 6,
       max: 4000,
       step: 1,
-      help: 'Nennstrom der Sicherung je Phase, z. B. 50. Sicherungen lösen je Phase aus — eine einseitig belastete Phase kann überlastet sein, obwohl die Summe passt. DVhub rechnet mit 230 V und den Phasenleistungen des Netzzählers. Leer = nur die Gesamtgrenze.'
+      help: 'Nennstrom der Sicherung je Phase, z. B. 50. Sicherungen lösen je Phase aus — eine einseitig belastete Phase kann überlastet sein, obwohl die Summe passt. DVhub rechnet mit der gemessenen Spannung je Phase (ohne frische Messung 230 V) und den Phasenleistungen des Netzzählers. Leer = nur die Gesamtgrenze.'
     },
     {
       section: 'system',

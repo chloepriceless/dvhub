@@ -278,6 +278,19 @@ verweist hierher.
 
 ### Behoben
 
+- **Netzanschluss: Victron-Grenze fail-safe und stabil (Fable-Prüfung R1).** Ein einzelner Lesefehler von Reg. 2714
+  hebt die Victron-Grenze nicht mehr auf: Der zuletzt gelesene Wert gilt bis 5 min nach der letzten erfolgreichen
+  Lesung weiter, danach die DVhub-Einstellung — Deckel und Sollwert-Decke bleiben stehen (bisher: alle Deckel sofort
+  weg, Ziel sprang z. B. von 27,6 auf 33,5 kW). Liegt die Victron-Grenze knapp unter der DVhub-Grenze, gilt das
+  strengere Ziel aus „Victron ohne Abzug“ und „DVhub minus Abstand“ (29 kW mit 1 kW Abstand und 42 A: 28 000 W statt
+  28 980 W), je Phase genauso. Die aus Ampere und gemessener Spannung gerechnete Grenze ist auf 100 W abgerundet und
+  folgt der Spannung nach unten sofort, nach oben erst ab 200 W — keine neuen Sollwert-Writes und keine
+  EOS-Wechselrichter-PUTs mehr bei jeder Spannungsschwankung (auch Fable R3 P2-2). Victron-Werte unter 6 A meldet
+  DVhub statt sie still zu verwerfen; die Kachel sagt bei nicht lesbarer Victron-Grenze ohne DVhub-Wert „nicht lesbar“
+  statt „Grenze ungültig“; der Hilfetext zur Phasengrenze nennt die gemessene Spannung.
+- **EOS-Behelf (Vanilla rc3) zieht die Auto-Ladeleistung nur ab, wenn das Auto bei EOS angemeldet ist (Fable R3
+  P3-3).** Bisher immer mit „E-Auto mitoptimieren“ — bei 3 × 16 A und 11-kW-Wallbox blieb dem Akku dauerhaft 0 W
+  Netzladen im Plan.
 - **Lese-Modus gilt auch für EEBUS-Geräte.** Mit `DVHUB_READ_ONLY=1` schrieb DVhub §14a-Anteile weiter als
   Verbrauchsgrenze an gekoppelte EEBUS-Geräte (Wärmepumpe, Wallbox). Jetzt blockiert der Lese-Modus auch diese
   Vorgaben (Eintrag `[READ-ONLY]` im Konsolen-Log).

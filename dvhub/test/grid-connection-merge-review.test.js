@@ -1214,11 +1214,15 @@ test('529a0121 P2: fehlender bestätigter Strom (null) zählt nicht als 6 A', as
   assert.ok(seen[0].every((c) => c != null && c > 0), JSON.stringify(seen));
 });
 
-test('b7e52e33 P2: Victron-Grenze nicht lesbar → der alte Wert gilt NICHT weiter; anderes Profil → keine Victron-Grenze', async () => {
-  const { gridConnectionFromState } = await import('../services/grid-connection/index.js');
+// Geändert mit Fable R1 P1-3 (10.11.2026): Ein Lesefehler hebt die Grenze nicht
+// mehr auf — der letzte gültige Wert gilt bis VICTRON_LIMIT_MAX_AGE_MS weiter,
+// Meldung und Verhalten sagen jetzt dasselbe (b7e52e33 wollte beides gleich).
+test('b7e52e33 P2 / Fable R1 P1-3: Victron-Grenze nicht lesbar → der letzte Wert gilt bis zu seinem Höchstalter; anderes Profil → keine Victron-Grenze', async () => {
+  const { gridConnectionFromState, VICTRON_LIMIT_MAX_AGE_MS } = await import('../services/grid-connection/index.js');
   const t = Date.now();
   const state = { victron: { acInputLimitA: 40, fieldUpdatedAt: { acInputLimitA: t }, errors: { acInputLimitA: 'timeout' } } };
-  assert.equal(gridConnectionFromState({ gridConnection: { limitKw: 29 } }, state, t).limitW, 29000);
+  assert.equal(gridConnectionFromState({ gridConnection: { limitKw: 29 } }, state, t).limitW, 27600, 'letzter Wert gilt weiter');
+  assert.equal(gridConnectionFromState({ gridConnection: { limitKw: 29 } }, state, t + VICTRON_LIMIT_MAX_AGE_MS + 1).limitW, 29000, 'danach die DVhub-Grenze');
   const ok = { victron: { acInputLimitA: 40, fieldUpdatedAt: { acInputLimitA: t }, errors: {} } };
   assert.equal(gridConnectionFromState({ manufacturer: 'fronius', gridConnection: { limitKw: 29 } }, ok, t).limitW, 29000);
 });
