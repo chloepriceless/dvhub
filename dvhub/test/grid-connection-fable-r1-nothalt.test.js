@@ -148,7 +148,7 @@ function twoBoxes() {
   const ref = { capW: null, paused: false };
   const mk = (type) => ({
     type, isConfigured: () => true,
-    charge: async (a) => { calls[type].push(['charge', a]); return { ok: true }; },
+    charge: async (a) => { calls[type].push(['charge', a]); return ref.failCharge ? { ok: false, error: 'timeout' } : { ok: true }; },
     stop: async () => { calls[type].push(['stop']); return { ok: true }; },
     release: async () => { calls[type].push(['release']); return { ok: true }; },
     status: async () => ({ ok: true, connected: true, charging: true, raw: {} }),
@@ -210,4 +210,45 @@ test('Codex 91a6ef65 P2: evcc „aus“ ohne Quittung (aber angekommen) → Not-
   h.ref.paused = true;
   await h.bridge.emergencyStop();
   assert.equal(lpRef.mode, 'pv', JSON.stringify(bridgeCalls));
+});
+
+// --- Codex 526a2f95 ------------------------------------------------------------------
+
+test('Codex 526a2f95 P2: Strom-Rückgabe an openWB ohne Quittung macht eine begrenzte Handladung nicht zu DVhubs Ladung', async () => {
+  const h = twoBoxes();
+  h.ref.capW = 8300;
+  await h.bridge.tick();
+  assert.deepEqual(h.calls.openwb.at(-1), ['charge', 12], 'nur begrenzt');
+  h.ref.capW = null;
+  h.ref.failCharge = true; // Rückgabe des vollen Stroms: Quittung bleibt aus
+  await h.bridge.tick({ force: true });
+  h.ref.failCharge = false;
+  h.ref.paused = true;
+  const n = h.calls.openwb.length;
+  await h.bridge.emergencyStop();
+  const after = h.calls.openwb.slice(n);
+  assert.ok(!after.some((c) => c[0] === 'stop'), `kein Stopp (${JSON.stringify(after)})`);
+});
+
+test('Codex 526a2f95 P2: „aus“ vom Not-Halt (nicht vom Deckel) wird beim nächsten Not-Halt nicht als Deckel-„aus“ zurückgenommen', async () => {
+  const lp = { id: 1, mode: 'off', maxCurrentA: 16, minCurrentA: 6, phasesActive: 3, connected: true };
+  const calls = [];
+  const evcc = {
+    getStatus: () => ({ url: 'http://evcc.local:7070' }),
+    getLoadpoints: () => [{ ...lp }],
+    refresh: async () => true,
+    setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', id, a]); return { ok: true }; },
+    setMode: async (id, m) => { calls.push(['mode', id, m]); lp.mode = m; return { ok: true }; },
+  };
+  const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: false, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' } };
+  // Rückkehr nach „Sofort laden“ unter Teil-Deckel vorgemerkt, das „aus“ kam vom Not-Halt.
+  const saved = [{ charger: 'evcc', loadpoint: 1, cmd: 'stop', confirmed: true, gridCap: false, restore: { mode: 'pv', reason: 'grid_cap', at: new Date().toISOString() }, dvhubModes: ['now', 'off'], limitOff: false }];
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg, getSolution: async () => ({ slotMinutes: 15, rows: [] }),
+    getCharger: (_c, bc) => createEvccAdapter(evcc, () => bc.loadpoint, () => bc.stopMode),
+    getGridCapW: () => null, getDeviceCapW: () => null, getEvccLoadpoints: () => evcc.getLoadpoints(),
+    isPaused: () => true, loadOwned: () => saved, saveOwned: () => {},
+  });
+  await bridge.emergencyStop();
+  assert.equal(lp.mode, 'off', JSON.stringify(calls));
 });
