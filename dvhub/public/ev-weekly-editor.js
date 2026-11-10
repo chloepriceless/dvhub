@@ -16,9 +16,20 @@
 // was an EOS geht. Beim Bearbeiten rechnet der Server die Vorschau mit seiner
 // eigenen Aufloesung (POST /api/ev/preview) — keine zweite Logik im Browser.
 //
+// Einzelnen Tag leeren (2026-11-10, Christin am iPhone): Ein Tipp ins
+// Zeitfeld oeffnet in iOS Safari sofort den Zeit-Picker, und WebKit schreibt
+// dabei schon die aktuelle Uhrzeit ins leere Feld. „Zurücksetzen“ im Picker
+// leert nur dieses eine Feld, der Rad-Picker bleibt offen und zeigt weiter
+// eine Zeit; Ankunft, Mind. % und Fahrt % bleiben stehen, und eine Ankunft
+// ohne Abfahrt laesst sich nicht speichern. Darum hat jede Zeile einen
+// „Leeren“-Knopf (✕, >= 44 px auf Touch), der die ganze Zeile auf „nicht
+// gesetzt“ stellt, ohne ein Feld anzutippen — danach steht dort „kein
+// Termin“. Knoepfe mit data-evw-clear="id1 id2 …" (Einmal-Ziel auf Kachel und
+// Integrationsseite) leeren die genannten Felder genauso.
+//
 // window.DVhubEvWeekly = { render(host, plan, opts), read(host), validate(plan),
 //   rowInfo(entry), summaryLines(info), setSummary(host, info), updateSaved(host, info),
-//   refreshPreview(host) }
+//   refreshPreview(host), clearDay(host, day), clearFields(ids) }
 (function () {
   'use strict';
 
@@ -175,19 +186,32 @@
       + '<span class="evw-next" hidden>+1 Tag</span></span>'
       + '<input type="number" class="input mono evw-min" min="0" max="100" step="5" value="' + val(e.minSocPct) + '" placeholder="' + val(opts.defaultMin) + '" aria-label="Mindestens bei Abfahrt ' + name + ' (%)" title="Mindest-Ladestand bei dieser Abfahrt — wird immer erreicht. Leer: allgemeiner Wert.">'
       + '<input type="number" class="input mono evw-trip" min="0" max="100" step="1" value="' + val(e.tripSocPct) + '" placeholder="0" aria-label="Fahrt ab ' + name + ' (% Ladestand)" title="So viel Ladestand verbraucht die Fahrt ab dieser Abfahrt bis zur nächsten Ankunft (geschätzt).">'
+      // Ohne ins Zeitfeld zu tippen (iOS oeffnete sofort den Picker und setzte eine Zeit).
+      + '<button type="button" class="btn sm ghost evw-row-clear" aria-label="' + name + ' leeren" title="' + name + ' leeren: Ankunft, Abfahrt, Mindest-Ladestand und Fahrt entfernen — kein Termin">'
+      + '<span class="evw-x" aria-hidden="true">✕</span><span class="evw-row-clear-t" aria-hidden="true">Leeren</span></button>'
       + '<span class="evw-res"></span>'
       + '<span class="evw-warn" role="note" hidden></span>'
       + '</div>';
   }
 
+  const ROW_FIELDS = ['.evw-arr', '.evw-dep', '.evw-min', '.evw-trip'];
+
   function markNextDay(row) {
     const info = rowInfo({ day: Number(row.getAttribute('data-day')), arrival: row.querySelector('.evw-arr').value, departure: row.querySelector('.evw-dep').value });
     row.querySelector('.evw-next').hidden = !info.nextDay;
     row.classList.toggle('is-empty', minutes(row.querySelector('.evw-dep').value) === null);
+    // Leeres Zeitfeld: WebKit/Safari malt sonst eine Schein-Uhrzeit hinein
+    // (value ist ''), dann sah ein geleerter Tag aus wie vorher (CSS is-unset).
+    ['.evw-arr', '.evw-dep'].forEach(function (sel) { const f = row.querySelector(sel); if (f) f.classList.toggle('is-unset', String(f.value).trim() === ''); });
+    // Nichts eingetragen: Knopf „Leeren“ tritt zurueck.
+    row.classList.toggle('is-blank', ROW_FIELDS.every(function (sel) { const f = row.querySelector(sel); return !f || String(f.value).trim() === ''; }));
     const res = row.querySelector('.evw-res');
-    res.textContent = info.text;
-    res.hidden = !info.text;
+    // Ohne Ankunft und Abfahrt: klar „kein Termin“ (auch nach dem Leeren).
+    const none = !info.text && minutes(row.querySelector('.evw-arr').value) === null && minutes(row.querySelector('.evw-dep').value) === null;
+    res.textContent = info.text || (none ? 'kein Termin' : '');
+    res.hidden = !res.textContent;
     res.classList.toggle('is-warn', info.missingDeparture);
+    res.classList.toggle('is-none', none);
     const warn = row.querySelector('.evw-warn');
     warn.textContent = info.hint;
     warn.hidden = !info.hint;
@@ -314,6 +338,49 @@
     }, 350);
   }
 
+  // Nach jeder Aenderung im Editor: Seite benachrichtigen, Vorschau holen.
+  function changed(host) {
+    const cb = host._evwOpts && host._evwOpts.onChange;
+    if (typeof cb === 'function') cb();
+    refreshPreview(host);
+  }
+
+  /**
+   * Einen Tag (1 = Mo … 7 = So) leeren: Ankunft, Abfahrt, Mindest-Ladestand
+   * und Fahrt auf „nicht gesetzt“ (read() liefert '' bzw. null — kein 00:00,
+   * keine 0 %). Fasst kein Feld an, das den iOS-Zeit-Picker oeffnete.
+   */
+  function clearDay(host, day) {
+    const row = host && host.querySelector('.evw-row[data-day="' + Number(day) + '"]');
+    if (!row) return false;
+    ROW_FIELDS.forEach(function (sel) { const f = row.querySelector(sel); if (f) f.value = ''; });
+    markNextDay(row);
+    changed(host);
+    return true;
+  }
+
+  /**
+   * Felder ausserhalb des Editors leeren (Einmal-Ziel): Wert '' und input +
+   * change wie bei einer Eingabe, damit die Seite die Aenderung merkt
+   * (Verwerfen/Übernehmen, Vorschau).
+   */
+  function clearFields(ids) {
+    (Array.isArray(ids) ? ids : []).forEach(function (id) {
+      const f = document.getElementById(id);
+      if (!f || f.value === '') return;
+      f.value = '';
+      f.dispatchEvent(new Event('input', { bubbles: true }));
+      f.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('click', function (e) {
+      const btn = e.target && e.target.closest && e.target.closest('[data-evw-clear]');
+      if (!btn) return;
+      clearFields(String(btn.getAttribute('data-evw-clear') || '').split(/\s+/).filter(Boolean));
+    });
+  }
+
   function render(host, plan, opts) {
     if (!host) return;
     opts = opts || {};
@@ -324,28 +391,30 @@
     host._evwOpts = opts;
     host.innerHTML = '<div class="evw-summary" aria-live="polite" hidden></div>'
       + '<div class="evw-head"><span>Tag</span><span>Ankunft</span><span>Abfahrt</span><span title="Mindest-Ladestand bei der Abfahrt">Mind. %</span>'
-      + '<span title="Verbrauch der Fahrt ab der Abfahrt bis zur nächsten Ankunft">Fahrt %</span></div>'
+      + '<span title="Verbrauch der Fahrt ab der Abfahrt bis zur nächsten Ankunft">Fahrt %</span><span class="evw-head-x" aria-hidden="true"></span></div>'
       + DAYS.map(function (_, i) { return rowHtml(entryFor(plan, i + 1), i, o); }).join('')
       + '<div class="evw-tools">'
       + '<button type="button" class="btn sm ghost evw-copy" title="Ankunft, Abfahrt, Mindest-Ladestand und Fahrt vom Montag auf Dienstag bis Freitag übertragen">Montag gleich für Mo–Fr</button>'
-      + '<button type="button" class="btn sm ghost evw-clear" title="Alle Tage leeren">Leeren</button>'
+      + '<button type="button" class="btn sm ghost evw-clear" title="Alle Tage leeren">Alle Tage leeren</button>'
       + '</div>'
-      + '<p class="evw-hint">Jede Zeile gehört zum Tag der Ankunft. Liegt die Abfahrt nicht nach der Ankunft, gilt sie am Folgetag (20:00 → 05:00). Ohne Ankunft gilt die Abfahrt am Tag der Zeile. „Mind. %“: so voll ist das Auto bei der Abfahrt immer — leer heißt allgemeiner Wert. „Fahrt %“: so viel Ladestand braucht die Fahrt bis zur nächsten Ankunft; DVhub rechnet damit voraus, damit auch eine spätere Fahrt kurz danach noch reicht.</p>';
+      + '<p class="evw-hint">Jede Zeile gehört zum Tag der Ankunft. Liegt die Abfahrt nicht nach der Ankunft, gilt sie am Folgetag (20:00 → 05:00). Ohne Ankunft gilt die Abfahrt am Tag der Zeile. „Mind. %“: so voll ist das Auto bei der Abfahrt immer — leer heißt allgemeiner Wert. „Fahrt %“: so viel Ladestand braucht die Fahrt bis zur nächsten Ankunft; DVhub rechnet damit voraus, damit auch eine spätere Fahrt kurz danach noch reicht. „✕ Leeren“ nimmt einen Tag ganz heraus (kein Termin).</p>';
     host.querySelectorAll('.evw-row').forEach(markNextDay);
     paintSummary(host);
     if (host.dataset.evwWired === '1') return;
     host.dataset.evwWired = '1';
-    const changed = function () {
-      const cb = host._evwOpts && host._evwOpts.onChange;
-      if (typeof cb === 'function') cb();
-      refreshPreview(host);
-    };
     host.addEventListener('input', function (e) {
       const row = e.target.closest && e.target.closest('.evw-row');
       if (row) markNextDay(row);
-      changed();
+      changed(host);
     });
     host.addEventListener('click', function (e) {
+      // Tipp auf ✕ oder „Leeren“ im Knopf: closest statt target.
+      const rowClear = e.target.closest && e.target.closest('.evw-row-clear');
+      if (rowClear) {
+        const row = rowClear.closest('.evw-row');
+        if (row) clearDay(host, row.getAttribute('data-day'));
+        return;
+      }
       if (e.target.classList.contains('evw-copy')) {
         const src = host.querySelector('.evw-row[data-day="1"]');
         for (let d = 2; d <= 5; d += 1) {
@@ -356,11 +425,11 @@
           });
           markNextDay(row);
         }
-        changed();
+        changed(host);
       } else if (e.target.classList.contains('evw-clear')) {
         host.querySelectorAll('.evw-row input').forEach(function (inp) { inp.value = ''; });
         host.querySelectorAll('.evw-row').forEach(markNextDay);
-        changed();
+        changed(host);
       }
     });
   }
@@ -415,6 +484,7 @@
 
   window.DVhubEvWeekly = {
     render: render, read: read, validate: validate, keepHidden: keepHidden, isEditing: isEditing, DAYS: DAYS,
-    rowInfo: rowInfo, summaryLines: summaryLines, setSummary: setSummary, updateSaved: updateSaved, refreshPreview: refreshPreview
+    rowInfo: rowInfo, summaryLines: summaryLines, setSummary: setSummary, updateSaved: updateSaved, refreshPreview: refreshPreview,
+    clearDay: clearDay, clearFields: clearFields
   };
 })();

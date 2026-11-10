@@ -26,7 +26,7 @@
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
   <link rel="stylesheet" href="/integrations.css?v=20261029-integration" />
-  <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261110-minmax" />
+  <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261110-leeren" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -1015,14 +1015,22 @@
               </label>
             </div>
             <div class="evcc-eos-grid">
-              <label class="dv-field">
-                <span class="field-label">Nur n&auml;chste Ankunft (optional)</span>
-                <input type="datetime-local" class="input mono" id="evcc-dep-arr-once">
-              </label>
-              <label class="dv-field">
-                <span class="field-label">Einmalig: Abfahrt (optional)</span>
-                <input type="datetime-local" class="input mono" id="evcc-dep-once">
-              </label>
+              <!-- „Leeren“ neben dem Datumsfeld, nicht im <label>: ein Tipp darauf
+                   soll das Feld nicht oeffnen (iOS setzt sonst gleich ein Datum). -->
+              <div class="dv-field">
+                <label class="field-label" for="evcc-dep-arr-once">Nur n&auml;chste Ankunft (optional)</label>
+                <span class="evw-clear-wrap">
+                  <input type="datetime-local" class="input mono" id="evcc-dep-arr-once">
+                  <button type="button" class="btn sm ghost evw-clear-fields" data-evw-clear="evcc-dep-arr-once" aria-label="Nur n&auml;chste Ankunft leeren" title="Nur n&auml;chste Ankunft leeren &mdash; ohne ins Datumsfeld zu tippen"><span aria-hidden="true">&#x2715;</span> Leeren</button>
+                </span>
+              </div>
+              <div class="dv-field">
+                <label class="field-label" for="evcc-dep-once">Einmalig: Abfahrt (optional)</label>
+                <span class="evw-clear-wrap">
+                  <input type="datetime-local" class="input mono" id="evcc-dep-once">
+                  <button type="button" class="btn sm ghost evw-clear-fields" data-evw-clear="evcc-dep-once evcc-dep-once-min evcc-dep-once-trip" aria-label="Einmal-Ziel leeren" title="Einmal-Ziel leeren (Abfahrt, mindestens, Fahrt) &mdash; ohne ins Datumsfeld zu tippen"><span aria-hidden="true">&#x2715;</span> Leeren</button>
+                </span>
+              </div>
               <label class="dv-field">
                 <span class="field-label">Einmalig: mindestens (%)</span>
                 <input type="number" class="input mono" id="evcc-dep-once-min" min="0" max="100" step="5">
@@ -1844,7 +1852,7 @@
   <script src="/pv-strings-drawer.js?v=20261102-vrm-site"></script>
   <script src="/eebus-drawer.js?v=20261110-fable-r2"></script>
   <script src="/p14a-drawer.js?v=20261110-fable-r2"></script>
-  <script src="/ev-weekly-editor.js?v=20261110-minmax"></script>
+  <script src="/ev-weekly-editor.js?v=20261110-leeren"></script>
   <script src="/integrations.js?v=20261110-ev-minmax"></script>
 </body>
 </html>
