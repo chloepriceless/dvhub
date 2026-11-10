@@ -21,7 +21,7 @@ function memoryStore(initial = null) {
   return { load: () => value, save: (v) => { value = { ...v }; }, clear: () => { value = null; }, get: () => value };
 }
 
-function makeWorld({ option = true, mainSoc = 4, mainMaxDischargeW = -1, follower = {}, ctrl = {}, store = memoryStore(), deviceEcho = true, deps = {} } = {}) {
+function makeWorld({ option = true, mainSoc = 4, mainMaxDischargeW = -1, follower = {}, ctrl = {}, store = memoryStore(), deviceEcho = true, deps = {}, transport = 'mqtt' } = {}) {
   let t = 1_000_000;
   const cfg = {
     updateChannel: 'dev',
@@ -39,7 +39,7 @@ function makeWorld({ option = true, mainSoc = 4, mainMaxDischargeW = -1, followe
   };
   const logs = [];
   const applied = [];
-  const handoff = createFloorHandoff({ getCfg: () => cfg, state, pushLog: (e, d) => logs.push([e, d]), now: () => t, store, ...deps });
+  const handoff = createFloorHandoff({ getCfg: () => cfg, state, pushLog: (e, d) => logs.push([e, d]), now: () => t, store, transportType: () => transport, ...deps });
   // Attrappe des Schreibpfads: haelt wie der echte Boden jeden Nicht-0-Wert bei soc <= Boden.
   async function apply(target, value, source) {
     let v = value;
@@ -164,14 +164,37 @@ test('Neustart waehrend der Sperre: gesicherter Wert wird zurueckgeschrieben', a
   assert.equal(store.get(), null);
 });
 
-test('Modbus: 2704 liest 0 → mehrdeutig, keine Uebergabe (Sperre des Betreibers bleibt)', async () => {
-  const w = makeWorld({ mainMaxDischargeW: 0 });
+// Modbus: 2704 zeigt „unbegrenzt“ (−1 W) als 0 — 2720 (int32, W) entscheidet
+// (wie Peak Shaving und Entlade-Waechter; Codex db0b6c2d P1). reg2720 in der
+// Attrappe: Zahl, 'unsupported' (alter GX) oder 'error'.
+function modbusWorld({ reg2720 = -1, ...opts } = {}) {
+  const box = { reg2720, reads: 0 };
+  const w = makeWorld({
+    transport: 'modbus', ...opts,
+    deps: {
+      readExactMaxDischargeW: async () => {
+        box.reads += 1;
+        if (box.reg2720 === 'unsupported') return { unsupported: true };
+        if (box.reg2720 === 'error') throw new Error('timeout');
+        return { value: box.reg2720 };
+      },
+      ...(opts.deps || {})
+    }
+  });
+  w.reg = box;
+  return w;
+}
+
+test('Modbus: 2704 und 2720 lesen 0 → Sperre des Betreibers, keine Uebergabe', async () => {
+  const w = modbusWorld({ mainMaxDischargeW: 0, reg2720: 0 });
+  assert.equal(request(w), null, 'erst 2720 lesen');
+  w.advance(5000); await w.handoff.maintain(w.apply);
   assert.equal(request(w), null);
   await w.handoff.maintain(w.apply);
   assert.equal(w.state.multiGxHandoff.phase, 'off');
   assert.equal(w.applied.length, 0);
   assert.equal(w.store.get(), null);
-  assert.ok(w.logs.some(([e, d]) => e === 'multi_gx_handoff_skipped' && d.reason === 'max_discharge_zero_ambiguous'));
+  assert.ok(w.logs.some(([e, d]) => e === 'multi_gx_handoff_skipped' && d.reason === 'max_discharge_locked'));
 });
 
 test('Schreiben der Sperre scheitert: kein Durchlassen, neuer Versuch nach 10 s', async () => {
@@ -701,4 +724,107 @@ test('nur Victron: bei anderen Herstellern keine Sperre ueber die Entladegrenze'
   v.cfg.manufacturer = 'victron';
   request(v);
   assert.equal(v.state.multiGxHandoff.phase, 'arming');
+});
+
+// --- Codex db0b6c2d (Merge 1.0.10) ---
+
+test('Codex db0b6c2d P1: Modbus-Werkseinstellung (2704 liest 0, 2720 −1) → Uebergabe, gesichert wird −1', async () => {
+  const w = modbusWorld({ mainMaxDischargeW: 0, reg2720: -1 });
+  assert.equal(request(w), null);
+  w.advance(5000); await w.handoff.maintain(w.apply);
+  assert.equal(request(w), null, 'jetzt arming');
+  assert.equal(w.state.multiGxHandoff.phase, 'arming');
+  assert.equal(w.store.get().savedMaxDischargeW, -1);
+  w.advance(5000); await w.handoff.maintain(w.apply);        // schreibt 0
+  assert.deepEqual(w.applied.at(-1), { target: 'maxDischargeW', value: 0, source: 'multi_gx_handoff' });
+  assert.equal(request(w), null, '2720 noch von vor dem Schreiben');
+  w.reg.reg2720 = 0;
+  w.advance(5000); await w.handoff.maintain(w.apply);
+  assert.equal(request(w), -3000);
+});
+
+test('Codex db0b6c2d P1: waehrend der Uebergabe an der GX auf unbegrenzt gestellt (2704 bleibt 0) → Boden haelt', async () => {
+  const w = modbusWorld({ mainMaxDischargeW: 5000, reg2720: 5000 });
+  request(w);
+  w.advance(5000); await w.handoff.maintain(w.apply);        // schreibt 0
+  w.reg.reg2720 = 0; w.state.victron.maxDischargeW = 0;
+  w.advance(5000); await w.handoff.maintain(w.apply);
+  assert.equal(request(w), -3000);
+  w.reg.reg2720 = -1;                                         // 2704 zeigt weiter 0
+  w.advance(5000); await w.handoff.maintain(w.apply);
+  assert.equal(request(w), null, 'nicht mehr gesperrt: keine Einspeisung unter dem Boden');
+  w.advance(10000); await w.handoff.maintain(w.apply);
+  assert.equal(w.applied.filter((a) => a.value === 0 && a.source === 'multi_gx_handoff').length, 2, 'DVhub sperrt neu');
+});
+
+test('Codex db0b6c2d P1: 2720 nicht lesbar (Fehler) → Sperre gilt nicht; alter GX ohne 2720 → keine Uebergabe', async () => {
+  const w = modbusWorld({ mainMaxDischargeW: 5000, reg2720: 5000 });
+  request(w);
+  w.advance(5000); await w.handoff.maintain(w.apply);
+  w.reg.reg2720 = 'error'; w.state.victron.maxDischargeW = 0;
+  w.advance(100000); await w.handoff.maintain(w.apply);
+  assert.equal(request(w), null, 'veraltete 2720-Lesung bestaetigt nichts');
+  const old = modbusWorld({ mainMaxDischargeW: 5000, reg2720: 'unsupported' });
+  request(old);
+  await old.handoff.maintain(old.apply);
+  assert.equal(old.state.multiGxHandoff.phase, 'restoring');
+  assert.equal(old.state.multiGxHandoff.reason, 'max_discharge_not_verifiable');
+  assert.ok(!old.applied.some((a) => a.value === 0), 'nie gesperrt');
+  assert.equal(request(old), null);
+  assert.equal(old.state.multiGxHandoff.phase, 'restoring');
+});
+
+test('Codex db0b6c2d P1: Messwert von vor dem letzten Schreiben (Peak Shaving setzt gerade 0) wird nicht gesichert', () => {
+  const w = makeWorld({ mainMaxDischargeW: 2000 });
+  // Peak Shaving hat eben 0 zurueckgeschrieben, der Poll zeigt noch seine Freigabe
+  w.state.schedule.lastWrite.maxDischargeW = { value: 0, at: w.now(), source: 'peak_shaving_restore' };
+  assert.equal(request(w), null);
+  assert.equal(w.state.multiGxHandoff.phase, 'off');
+  assert.equal(w.store.get(), null);
+  w.state.victron.maxDischargeW = 0; w.advance(5000);
+  request(w);
+  assert.equal(w.store.get()?.savedMaxDischargeW ?? null, 0, 'neuer Messwert (MQTT, eindeutig 0) — nicht 2000');
+});
+
+test('Codex db0b6c2d P2: dauerhafte Handvorgabe unter manualOverrideMinSocPct sperrt Akku 1 nicht', () => {
+  for (const source of ['api_manual_write', 'manual_override_persistent']) {
+    const w = makeWorld();
+    w.state.schedule.manualOverride = { gridSetpointW: { value: -3000, persistent: true } };
+    assert.equal(request(w, -3000, source), null, source);
+    assert.equal(w.state.multiGxHandoff.phase, 'off', source);
+  }
+  // Gegenprobe: befristete Handvorgabe bleibt erlaubt
+  const w = makeWorld();
+  w.state.schedule.manualOverride = { gridSetpointW: { value: -3000 } };
+  request(w, -3000, 'api_manual_write');
+  assert.equal(w.state.multiGxHandoff.phase, 'arming');
+});
+
+test('Codex db0b6c2d P1, echter Steuerpfad über Modbus: 2720 entscheidet, ausgeliefertes Victron-Profil', async () => {
+  const { loadVictronConfig, makeTelemetryState, makeEvaluator, makeModbusTransport, maxDischargeWrites } = await import('./helpers/peak-shaving-harness.js');
+  const cfg = loadVictronConfig({
+    updateChannel: 'dev',
+    optimizer: { allowGridDischarge: true, hardFloorSocPct: 5 },
+    multiGx: { enabled: true, host: '192.0.2.20', minSocPct: 10, exportHandoffAtFloor: true }
+  });
+  const state = makeTelemetryState({ soc: 4, maxDischargeW: 0, maxDischargeAgeMs: 1000 });
+  state.multiGx = { online: true, socPct: 80, minSocPct: 10, updatedAt: Date.now() };
+  const transport = makeModbusTransport({ 2704: 0, 2720: 0xffff, 2721: 0xffff, 2700: 0 });
+  const { evaluator } = makeEvaluator({ cfg, state, transport, extraCtx: { floorHandoffStore: memoryStore() } });
+  const h = evaluator.floorHandoff;
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'rule:eos');
+  await h.maintain(evaluator.applyControlTarget);
+  assert.ok(transport.reads.some((r) => r.address === 2720 && r.quantity === 2 && r.fc === 3), '2720 gelesen');
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'rule:eos');
+  assert.equal(state.multiGxHandoff.phase, 'arming');
+  assert.equal(state.multiGxHandoff.savedMaxDischargeW, -1, 'Werkseinstellung unbegrenzt erkannt');
+  await h.maintain(evaluator.applyControlTarget);
+  assert.deepEqual(maxDischargeWrites(transport), [0], 'Akku 1 gesperrt');
+  // GX uebernimmt: 2720 = 0, Poll von 2704 danach
+  transport.registers[2720] = 0; transport.registers[2721] = 0;
+  await new Promise((r) => setTimeout(r, 5));
+  state.victron.maxDischargeW = 0; state.victron.fieldUpdatedAt.maxDischargeW = Date.now();
+  await h.maintain(evaluator.applyControlTarget);
+  await evaluator.applyControlTarget('gridSetpointW', -3000, 'rule:eos');
+  assert.equal(state.multiGxHandoff.phase, 'active');
 });

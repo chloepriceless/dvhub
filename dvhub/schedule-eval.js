@@ -160,10 +160,29 @@ export function createScheduleEvaluator(ctx) {
     return (Array.isArray(sum.caps) && sum.caps.length > 0) || sum.exhausted === true
       || (Array.isArray(sum.assistSources) && sum.assistSources.length > 0);
   };
+  // Eindeutige Ruecklesung der Entladegrenze fuer die Uebergabe (Modbus):
+  // Victron 2720 (int32, W) — 2704 zeigt „unbegrenzt“ (−1) als 0, wie bei Peak
+  // Shaving und dem Entlade-Waechter. Exception 1/2 (Venus < 3.50) = kennt 2720 nicht.
+  async function readExactMaxDischargeW() {
+    const conf = getCfg()?.controlWrite?.maxDischargeW;
+    if (typeof transport?.mbRequest !== 'function' || Number(conf?.address) !== MAX_DISCHARGE_INT16_ADDR) return { unsupported: true };
+    let regs;
+    try {
+      regs = await transport.mbRequest({ fc: 3, host: conf.host, port: conf.port, unitId: conf.unitId, timeoutMs: conf.timeoutMs, address: MAX_DISCHARGE_INT32_ADDR, quantity: 2 });
+    } catch (e) {
+      if (/^modbus exception (1|2)\b/.test(String(e?.message))) return { unsupported: true };
+      throw e;
+    }
+    if (!Array.isArray(regs) || regs.length < 2 || !regs.slice(0, 2).every((w) => Number.isFinite(Number(w)))) {
+      throw new Error('2720: unvollständige Antwort');
+    }
+    const raw = (((Number(regs[0]) & 0xffff) << 16) | (Number(regs[1]) & 0xffff)) | 0;
+    return { value: raw < 0 ? -1 : raw };
+  }
   const floorHandoff = ctx.floorHandoff
     || createFloorHandoff({
       getCfg, state, pushLog, store: ctx.floorHandoffStore || null, transportType: () => transport?.type,
-      batteryNeeded: gridNeedsBattery
+      batteryNeeded: gridNeedsBattery, readExactMaxDischargeW
     });
 
   let stopping = false;

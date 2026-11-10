@@ -1183,7 +1183,7 @@ function buildFieldDefinitions() {
       label: 'Einspeisen aus Akku 2, wenn Akku 1 leer ist',
       type: 'boolean',
       visibleWhenPath: { path: 'multiGx.enabled', equals: true },
-      help: 'Aus (Standard) = steht dieser Akku am harten Boden (Optimierer → harter SoC-Boden), speist DVhub nichts ein, auch nicht aus Akku 2. An = DVhub sperrt dann das Entladen dieses Akkus (ESS „max. Entladeleistung“ 0, alter Wert wird gesichert) und lässt die geplante Einspeisung aus Akku 2 laufen — für Zeitplan-/EOS-Regeln und Handvorgaben ab 1 kW, nicht für den DC-PV-Export. Steht die max. Entladeleistung an der GX schon auf 0, bleibt alles wie bisher — über Modbus auch bei „unbegrenzt“ (die GX meldet dann 0), dort an der GX eine Entladegrenze einstellen. Der alte Wert kommt zurück, sobald dieser Akku 3 Punkte über dem Boden liegt. Fällt Akku 2 aus, bleibt dieser Akku gesperrt und das Haus bezieht aus dem Netz.'
+      help: 'Aus (Standard) = steht dieser Akku am harten Boden (Optimierer → harter SoC-Boden), speist DVhub nichts ein, auch nicht aus Akku 2. An = DVhub sperrt dann das Entladen dieses Akkus (ESS „max. Entladeleistung“ 0, alter Wert wird gesichert) und lässt die geplante Einspeisung aus Akku 2 laufen — für Zeitplan-/EOS-Regeln und Handvorgaben ab 1 kW, nicht für den DC-PV-Export. Steht die max. Entladeleistung an der GX schon auf 0, bleibt alles wie bisher. Über Modbus braucht es Register 2720 (Venus ab 3.50), um „gesperrt“ und „unbegrenzt“ zu unterscheiden. Der alte Wert kommt zurück, sobald dieser Akku 3 Punkte über dem Boden liegt. Fällt Akku 2 aus, bleibt dieser Akku gesperrt und das Haus bezieht aus dem Netz.'
     },
 
     // Feste Einspeisegrenze (Christin 2026-10-20): keine Vorgabe ab Werk.

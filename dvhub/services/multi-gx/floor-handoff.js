@@ -80,7 +80,7 @@ export function isHandoffRequest(source, requestedW) {
  * @param {() => number} [deps.now]
  * @param {{load: () => any, save: (v: object) => void, clear: () => void}} [deps.store]
  */
-export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Date.now, store = null, transportType = () => 'modbus', batteryNeeded = () => false } = {}) {
+export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Date.now, store = null, transportType = () => 'modbus', batteryNeeded = () => false, readExactMaxDischargeW = null } = {}) {
   let phase = 'off';
   let saved = null;
   let since = 0;
@@ -101,6 +101,13 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   let stopRestoreUsed = false;
   // Waehrend genau dieses Writes laesst das Not-Halt-Tor den Wert durch.
   let stopRestoreValue = null;
+  // Modbus: eindeutige Ruecklesung der Entladegrenze (Victron 2720, int32 in W;
+  // Codex db0b6c2d P1). 2704 zeigt „unbegrenzt“ (−1) als 0 — eine Sperre gilt
+  // ueber Modbus erst, wenn 2720 nach DVhubs Schreiben 0 meldet.
+  // exact = { value, at } | null; exactUnsupported = GX kennt 2720 nicht.
+  let exact = null;
+  let exactUnsupported = false;
+  let exactWantedAt = 0;
 
   try {
     const persisted = store?.load?.();
@@ -150,9 +157,16 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   // Gesperrt = DVhub hat 0 geschrieben UND die GX meldet danach 0 — ein
   // Ruecklesen von vor dem Schreiben zaehlt nicht (MQTT: „ok“ heisst nur
   // veroeffentlicht; Codex 22.10., P1).
+  const isMqtt = () => transportType() === 'mqtt';
+  const exactFresh = (cfg, after = 0) => exact != null && exact.at > after && now() - exact.at <= maxAgeMs(cfg);
   const lockConfirmed = (cfg) => zeroWritten
     && mainMaxDischargeW(cfg) === 0
-    && sentAt() > zeroWrittenAt;
+    && sentAt() > zeroWrittenAt
+    && (isMqtt() || (exactFresh(cfg, zeroWrittenAt) && exact.value === 0));
+  // Zuletzt geschriebene Entladegrenze (gleich welche Quelle): ein Messwert von
+  // davor zeigt womoeglich noch einen alten Wert (z. B. die Freigabe von Peak
+  // Shaving, Codex db0b6c2d P1).
+  const lastWriteAt = () => Number(state.schedule?.lastWrite?.maxDischargeW?.at) || 0;
   publish();
 
   // Braucht der Netzanschluss den Akku? Ein Fehler der Abfrage zaehlt als ja —
@@ -169,6 +183,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     if (ctrl.discretionaryWritesPaused === true) return 'emergency_stop';
     if (ctrl.forcedOff === true || ctrl.negativePriceActive === true) return 'export_blocked';
     if (needsBattery()) return 'grid_needs_battery';
+    if (!isMqtt() && exactUnsupported) return 'max_discharge_not_verifiable';
     const mg = state.multiGx || {};
     if (mg.online !== true) return 'follower_offline';
     if (!finite(mg.updatedAt) || now() - Number(mg.updatedAt) > FOLLOWER_MAX_AGE_MS) return 'follower_stale';
@@ -188,6 +203,15 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     const cfg = getCfg() || {};
     const why = blocker(cfg);
     if (why) return null;
+    // Dauerhafte Handvorgabe: unter schedule.manualOverrideMinSocPct haelt der
+    // Auswertungstakt sie selbst auf 0 (T-0002, manual_override_soc_floor) —
+    // die Anfrage kaeme nie wieder, Akku 1 bliebe gesperrt (Codex db0b6c2d P2).
+    if ((source === 'manual_override_persistent' || source === 'api_manual_write')
+        && state.schedule?.manualOverride?.gridSetpointW?.persistent === true) {
+      const persistFloor = Number(cfg.schedule?.manualOverrideMinSocPct ?? 10);
+      const soc = Number(state.victron?.soc);
+      if (!Number.isFinite(soc) || soc <= persistFloor) return null;
+    }
     lastRequestAt = now();
     const current = mainMaxDischargeW(cfg);
     if (phase === 'off') {
@@ -201,22 +225,38 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
         if (!unknownLogged) { unknownLogged = true; pushLog('multi_gx_handoff_skipped', { reason: 'max_discharge_unknown' }, 'warn'); }
         return null;
       }
+      // Messwert muss nach dem letzten Schreiben der Entladegrenze liegen.
+      if (!(sentAt() > lastWriteAt())) return null;
+      let base = current;
+      if (!isMqtt()) {
+        // Ohne eindeutige Ruecklesung (alter GX ohne 2720) kann DVhub die
+        // Sperre nie bestaetigen — dann gar nicht erst sichern.
+        if (exactUnsupported) {
+          if (!unknownLogged) { unknownLogged = true; pushLog('multi_gx_handoff_skipped', { reason: 'max_discharge_not_verifiable' }, 'warn'); }
+          return null;
+        }
+        // 2704 = 0: erst 2720 sagt, ob gesperrt (0) oder unbegrenzt (−1); der
+        // naechste Takt liest es (maintain), bis dahin haelt der Boden.
+        if (current === 0) {
+          exactWantedAt = now();
+          if (!exactFresh(cfg, lastWriteAt())) return null;
+          base = exact.value < 0 ? -1 : exact.value;
+        }
+      }
       unknownLogged = false;
       // Negative Werte heissen unbegrenzt: spaeter kommt -1 (raw 32767) zurueck.
       // Gesperrt gilt erst nach DVhubs eigenem Schreiben von 0 (zeroWritten).
       // Ueber MQTT kommt der Wert in Watt, 0 heisst dort eindeutig gesperrt und
-      // bleibt 0 (Codex Runde 2). Ueber Modbus ist eine gelesene 0 mehrdeutig:
-      // bewusste Sperre oder die Werkseinstellung „unbegrenzt“ — Victron rundet
-      // −1 W × 0,1 auf 0 (mappings.cpp convertFromDbus; so auch Peak Shaving und
-      // Entlade-Waechter, die dafuer 2720 nachlesen). Dann keine Uebergabe —
-      // DVhub wuerde sonst womoeglich eine Sperre des Betreibers aufheben (Codex
-      // Runde 4). Folge: ueber Modbus braucht die Uebergabe eine an der GX
-      // eingestellte Entladegrenze (> 0).
-      if (current === 0 && transportType() !== 'mqtt') {
-        if (!unknownLogged) { unknownLogged = true; pushLog('multi_gx_handoff_skipped', { reason: 'max_discharge_zero_ambiguous' }, 'warn'); }
+      // bleibt 0 (Codex Runde 2). Ueber Modbus ist eine aus 2704 gelesene 0
+      // mehrdeutig: bewusste Sperre oder die Werkseinstellung „unbegrenzt“ —
+      // Victron rundet −1 W × 0,1 auf 0 (mappings.cpp convertFromDbus). Oben
+      // entscheidet 2720; meldet auch 2720 eine 0, ist es eine Sperre des
+      // Betreibers — keine Uebergabe, DVhub wuerde sie sonst aufheben (Codex Runde 4).
+      if (base === 0 && !isMqtt()) {
+        if (!unknownLogged) { unknownLogged = true; pushLog('multi_gx_handoff_skipped', { reason: 'max_discharge_locked' }, 'warn'); }
         return null;
       }
-      const snapshot = current >= 0 ? current : -1;
+      const snapshot = base >= 0 ? base : -1;
       // Nur sperren, was DVhub auch zurueckschreiben kann (Grenzpruefung des
       // Schreibpfads, z. B. > 30 kW an der GX eingestellt; Codex 22.10.).
       const bounds = controlWriteBoundsError('maxDischargeW', snapshot);
@@ -263,8 +303,29 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
    * Wert zurueckschreiben, sobald Akku 1 frisch ueber dem Boden liegt.
    * @param {(target: string, value: number, source: string) => Promise<object>} applyControlTarget
    */
+  async function readExact() {
+    if (isMqtt() || typeof readExactMaxDischargeW !== 'function') {
+      if (!isMqtt()) exactUnsupported = true;
+      return;
+    }
+    try {
+      const r = await readExactMaxDischargeW();
+      if (r?.unsupported) { exactUnsupported = true; exact = null; return; }
+      if (r && finite(r.value)) exact = { value: Number(r.value), at: now() };
+    } catch (e) {
+      // Lesefehler: alter Wert veraltet von selbst, die Sperre gilt dann nicht.
+      if (!exact?.error) pushLog('multi_gx_handoff_read_error', { error: e?.message || String(e) }, 'warn');
+      exact = exact ? { ...exact, error: true } : null;
+    }
+  }
+
   async function maintain(applyControlTarget) {
     const cfg = getCfg() || {};
+    // 2720 nur lesen, solange die Uebergabe laeuft oder gerade angefragt ist.
+    if (!exactUnsupported && (phase === 'arming' || phase === 'active'
+        || (phase === 'off' && exactWantedAt > 0 && now() - exactWantedAt <= requestGraceMs(cfg)))) {
+      await readExact();
+    }
     if (phase === 'arming' || phase === 'active') {
       const why = blocker(cfg);
       if (why) setPhase('restoring', why);
@@ -274,6 +335,9 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       const current = mainMaxDischargeW(cfg);
       // Meldet die GX nach dem Schreiben etwas anderes als 0, gilt die Sperre nicht.
       if (zeroWritten && current != null && current !== 0 && sentAt() > zeroWrittenAt) zeroWritten = false;
+      // Modbus: 2720 nach dem Schreiben ungleich 0 (z. B. an der GX auf
+      // „unbegrenzt“ gestellt, 2704 zeigt weiter 0) — die Sperre gilt nicht.
+      if (zeroWritten && !isMqtt() && exactFresh(cfg, zeroWrittenAt) && exact.value !== 0) zeroWritten = false;
       if (!zeroWritten && now() - lastZeroAt >= retryDelayMs(cfg, zeroAttempts)) {
         lastZeroAt = now();
         zeroAttempts += 1;
