@@ -381,9 +381,18 @@ export function createEosEvccBridge(deps) {
     }
     if (typeof c.charge === 'function') {
       wrapped.charge = async (...a) => {
-        // a[1]?.phases: Phasen dieses Befehls (Plan einphasig). Sonst gilt dreiphasig.
-        const want = Number(a[1]?.phases) === 1 ? 1 : 3;
+        // a[1]?.phases: Phasen dieses Befehls (Plan einphasig). Sonst die
+        // eingestellte Phasenzahl der Wallbox (evPhases) — Codex 42a5d784.
+        const cfgPhases = Number(bc?.phases) === 1 ? 1 : 3;
+        const want = Number(a[1]?.phases) === 1 ? 1 : (Number(a[1]?.phases) === 3 ? 3 : cfgPhases);
         if (typeof c.setPhases === 'function' && dvhubPhases() === 1 && want === 3) {
+          // Erst den (kleineren) Strom bestätigen, dann mehr Phasen: scheitert
+          // der Strom, bleibt es einphasig — nie 12 A dreiphasig unter einer
+          // Grenze (Codex 42a5d784, P1).
+          if (typeof c.limit === 'function') {
+            const lim = await c.limit(a[0]);
+            if (!lim?.ok) return lim || { ok: false, error: 'maxcurrent failed' };
+          }
           const ph = await c.setPhases(3);
           if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
           notePhases(3);
@@ -493,13 +502,15 @@ export function createEosEvccBridge(deps) {
       // überhaupt — nach einem Ladepunkt-Wechsel gälte sonst der alte).
       if (slot.phases) {
         const lp = (getEvccLoadpoints() || []).find((l) => Number(l?.id) === bc.loadpoint);
-        const cur = charger.dvhubPhases?.() ?? (Number(lp?.phasesActive) || null);
+        // Was evcc meldet, gilt zuerst (von Hand umgestellt, Codex 42a5d784);
+        // DVhubs Vermerk nur, wenn evcc nichts meldet.
+        const cur = (Number(lp?.phasesActive) || null) ?? charger.dvhubPhases?.() ?? null;
         if (cur !== slot.phases) {
           const ph = await charger.setPhases(slot.phases);
           if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
         }
       }
-      return charger.charge(slot.currentA, { phases: slot.phases || 3 });
+      return charger.charge(slot.currentA, { phases: slot.phases || bc.phases });
     }
     if (charger.type !== 'evcc' && bc.stopMode !== 'off') return charger.release();
     return charger.stop();

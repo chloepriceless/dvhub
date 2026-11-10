@@ -33,11 +33,12 @@ const T0 = Date.parse('2026-11-16T22:00:00Z');
 const Q = 15 * 60_000;
 function harness({ factors, phases1p3p = true, capW = null, extra = {} }) {
   const calls = [];
+  const ctl = { capW, failCurrent: false };
   const lp = { id: 1, mode: 'off', connected: true, charging: false, phases1p3p, phasesActive: 3 };
   const fakeEvcc = {
     getStatus: () => ({ url: 'http://evcc.local:7070' }),
     getLoadpoints: () => [lp],
-    setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', a]); return { ok: true }; },
+    setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', a]); return ctl.failCurrent ? { ok: false, error: 'HTTP 500' } : { ok: true }; },
     setMode: async (id, m) => { calls.push(['mode', m]); lp.mode = m; return { ok: true }; },
     setPhases: async (id, n) => { calls.push(['phases', n]); lp.phasesActive = n; return { ok: true }; },
   };
@@ -49,10 +50,10 @@ function harness({ factors, phases1p3p = true, capW = null, extra = {} }) {
     getSolution: async () => ({ generatedAt: '2026-11-16T21:58:00Z', slotMinutes: 15, rows: sol.map((f, i) => ({ ts_utc: new Date(T0 + i * Q).toISOString(), evChargeFactor: f, evSocPct: 50 })) }),
     getCharger: (c, bc) => createEvccAdapter(fakeEvcc, () => bc.loadpoint, () => bc.stopMode),
     getEvccLoadpoints: () => [lp],
-    getGridCapW: () => capW,
+    getGridCapW: () => ctl.capW,
     now: () => clock,
   });
-  return { bridge, calls, cfg, lp, advance: (ms) => { clock += ms; }, setFactors: (f) => { sol = f; } };
+  return { bridge, calls, cfg, lp, ctl, advance: (ms) => { clock += ms; }, setFactors: (f) => { sol = f; } };
 }
 
 describe('Brücke: einphasig bei kleiner Leistung', () => {
@@ -98,8 +99,9 @@ describe('Codex 52c5ee20: Phasen zurück und je Ladepunkt', () => {
     const r = await h.bridge.setOverride({ powerW: 11000 });
     assert.equal(r.ok, true, JSON.stringify(r));
     const after = h.calls.slice(3);
-    assert.deepEqual(after.slice(0, 1), [['phases', 3]], JSON.stringify(after));
-    assert.ok(after.some((c) => c[0] === 'maxcurrent' && c[1] === 16));
+    // erst der Strom (einphasig bestätigt), dann drei Phasen, dann laden
+    assert.deepEqual(after.slice(0, 2), [['maxcurrent', 16], ['phases', 3]], JSON.stringify(after));
+    assert.ok(after.slice(2).some((c) => c[0] === 'maxcurrent' && c[1] === 16));
   });
 
   test('Umschaltung abgeschaltet: der nächste Ladebefehl stellt drei Phasen wieder her', async () => {
@@ -108,7 +110,7 @@ describe('Codex 52c5ee20: Phasen zurück und je Ladepunkt', () => {
     h.cfg.optimizer.evPhaseSwitch = false;
     h.advance(Q);
     await h.bridge.tick();
-    assert.deepEqual(h.calls.slice(3, 4), [['phases', 3]], JSON.stringify(h.calls));
+    assert.deepEqual(h.calls.slice(3, 5), [['maxcurrent', 6], ['phases', 3]], JSON.stringify(h.calls));
   });
 });
 
@@ -137,4 +139,36 @@ test('Codex 52c5ee20: Ladepunkt gewechselt — gemerkte Phasen gelten nur für d
   clock += Q;
   await bridge.tick();
   assert.ok(calls.some((c) => c[0] === 'phases' && c[1] === 2 && c[2] === 1), JSON.stringify(calls));
+});
+
+describe('Codex 42a5d784: Reihenfolge und Phasenzahl', () => {
+  test('Grenze kommt bei einphasigem Laden: erst kleinerer Strom, schlägt er fehl, bleibt es einphasig', async () => {
+    const h = harness({ factors: [0.25, 0.25] });
+    await h.bridge.tick();
+    h.ctl.capW = 4140;
+    h.ctl.failCurrent = true;
+    h.advance(Q);
+    await h.bridge.tick();
+    const after = h.calls.slice(3);
+    assert.ok(!after.some((c) => c[0] === 'phases' && c[1] === 3), JSON.stringify(after));
+  });
+
+  test('Wallbox einphasig eingestellt (evPhases 1): keine Umschaltung auf drei Phasen', async () => {
+    const h = harness({ factors: [0.25, 1] });
+    await h.bridge.tick();
+    h.cfg.optimizer.evPhases = 1;
+    h.cfg.optimizer.evMaxChargeW = 3680;
+    h.advance(Q);
+    await h.bridge.tick();
+    assert.ok(!h.calls.slice(3).some((c) => c[0] === 'phases' && c[1] === 3), JSON.stringify(h.calls));
+  });
+
+  test('evcc meldet wieder drei Phasen (von Hand umgestellt): nächster einphasiger Slot schaltet erneut', async () => {
+    const h = harness({ factors: [0.25, 0.3] });
+    await h.bridge.tick();
+    h.lp.phasesActive = 3;
+    h.advance(Q);
+    await h.bridge.tick();
+    assert.ok(h.calls.slice(3).some((c) => c[0] === 'phases' && c[1] === 1), JSON.stringify(h.calls));
+  });
 });
