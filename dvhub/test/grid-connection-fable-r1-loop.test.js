@@ -234,3 +234,37 @@ test('P3-1: Merker (Leistung vor dem Eingriff, Ungehorsam) gehören zum Zustand 
   guardStep(st, { resolved: resolveGridConnection({}), now: 4000, meas: { fresh: true, importW: 20000, phasesW: null }, devices: [], battery: {} });
   assert.deepEqual(st.cutFrom, {});
 });
+
+// --- Codex 9cbcf92f ----------------------------------------------------------------
+
+test('Codex 9cbcf92f P2: harte Phasen-Überschreitung bei ladendem Akku wird nicht unbegrenzt als „gleich weg“ gezählt', () => {
+  const r = resolveGridConnection({}, { victronPhaseLimitA: 40 }); // 9 200 W je Phase, ohne Abstand
+  const st = createGuardState();
+  for (let t = 0; t <= 30_000; t += 2000) {
+    guardStep(st, {
+      resolved: r, now: t,
+      meas: { fresh: true, importW: 23250, phasesW: [9250, 7000, 7000] },
+      devices: [{ id: 'wallbox', kind: 'wallbox', currentW: 11000, maxW: 11000, minW: 4140, phases: 3 }],
+      battery: { setpointW: 23100, chargeW: 8000 }
+    });
+  }
+  assert.ok(st.caps.wallbox != null, 'Wallbox gekürzt');
+  assert.ok(st.ceilingW <= 23250 - 3 * (9250 - 9100), `Phasen-Decke mit Reserve (${st.ceilingW})`);
+});
+
+test('Codex 9cbcf92f P2: Heizstab — gemessene Leistung hinkt dem neuen Sollwert nach, die Kürzung bleibt „unterwegs“', () => {
+  const r = resolveGridConnection({ manufacturer: 'fronius', gridConnection: { limitKw: 14.5 } }); // Ziel 13 500 W
+  const st = createGuardState();
+  const devs = (own, meas) => [
+    { id: 'heater:h1', kind: 'heater', currentW: Math.min(own, meas), measuredW: meas, maxW: 6000, minW: 0 },
+    { id: 'eebus:wp', kind: 'eebus', currentW: 4000, maxW: 6000, minW: 0 }
+  ];
+  const order = { ...r, order: ['heater', 'eebus', 'wallbox'] };
+  guardStep(st, { resolved: order, now: 0, meas: { fresh: true, importW: 16500, phasesW: null }, devices: devs(6000, 6000), battery: {} });
+  assert.equal(st.caps['heater:h1'], 3000);
+  // Regler hat 3 000 W gesetzt, die Messung zeigt noch 6 000 W.
+  guardStep(st, { resolved: order, now: 2000, meas: { fresh: true, importW: 16500, phasesW: null }, devices: devs(3000, 6000), battery: {} });
+  guardStep(st, { resolved: order, now: 4000, meas: { fresh: true, importW: 16500, phasesW: null }, devices: devs(3000, 6000), battery: {} });
+  assert.equal(st.caps['heater:h1'], 3000, 'nicht weiter gekürzt');
+  assert.equal(st.caps['eebus:wp'] ?? null, null, 'nächste Last nicht gekürzt');
+});

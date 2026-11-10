@@ -1036,14 +1036,16 @@ export function createScheduleEvaluator(ctx) {
   // === end T-VERIFY =========================================================
 
   // Nach einem Neustart ohne eigenen Write: steht die Entladegrenze nachweislich
-  // über value? Frische Rücklesung (≥ 0, über value) oder der Merker der
-  // Akku-Hilfe (services/grid-connection persistedRestoreW) mit genau diesem Wert.
+  // über value? Frische Rücklesung (≥ 0, über value); nur ohne sie der Merker
+  // der Akku-Hilfe (services/grid-connection persistedRestoreW) mit genau diesem Wert.
   function dischargeKnownAbove(value) {
     const v = state.victron || {};
     const at = Number(v.fieldUpdatedAt?.maxDischargeW) || 0;
     const maxAge = Number(getCfg()?.victron?.telemetryMaxAgeMs ?? 90000);
     const rb = Number(v.maxDischargeW);
-    if (at > 0 && Date.now() - at <= maxAge && !v.errors?.maxDischargeW && Number.isFinite(rb) && rb >= 0 && rb > value) return true;
+    // Eine frische Rücklesung entscheidet — auch gegen den Merker: steht die
+    // Grenze schon tiefer, wäre der Rückkehrwert ein Anheben (Codex 9cbcf92f, P1).
+    if (at > 0 && Date.now() - at <= maxAge && !v.errors?.maxDischargeW && Number.isFinite(rb)) return rb >= 0 && rb > value;
     let merker;
     try { merker = ctx.gridConnection?.persistedRestoreW?.() ?? null; } catch { merker = null; }
     return merker != null && Number(merker) === value;

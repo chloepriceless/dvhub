@@ -652,9 +652,22 @@ test('Fable R1 P2-7: Neustart im Not-Halt mit Merker, ohne Rücklesung — der M
   const h = rig('bridge-mqtt', { assistPath: p });
   h.state.ctrl.discretionaryWritesPaused = true;
   h.measure({ importW: 5000 });
+  delete h.state.victron.fieldUpdatedAt.maxDischargeW; // keine Rücklesung
+  delete h.state.victron.maxDischargeW;
   for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
   assert.deepEqual(h.writes(), [0]);
   // Nichts anderes kommt durch: kein höherer Wert, keine zweite Rücknahme.
   const r = await h.evaluator.applyControlTarget('maxDischargeW', 0, 'grid_connection_restore');
   assert.equal(r.blocked, true);
+});
+
+test('Codex 9cbcf92f P1: Neustart im Not-Halt, frische Rücklesung steht schon tiefer → der Merker hebt nicht an', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-assist-'));
+  const p = path.join(dir, 'grid_connection_assist.json');
+  fs.writeFileSync(p, JSON.stringify({ valueW: 5000, baseW: 3000, since: Date.now() - 60_000 }));
+  const h = rig('bridge-mqtt', { assistPath: p });
+  h.state.ctrl.discretionaryWritesPaused = true;
+  h.measure({ importW: 5000, maxDischargeW: 0 }); // jemand hat inzwischen gesperrt
+  for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
+  assert.deepEqual(h.writes(), [], 'kein Anheben auf 3 000 W im Not-Halt');
 });

@@ -601,7 +601,8 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const phaseLimits = r.phaseLimitsW || [r.phaseLimitW, r.phaseLimitW, r.phaseLimitW];
   const phaseExcess = phases ? 3 * Math.max(...phases.map((p, i) => p - phaseTargets[i])) : null;
   const excess = Math.max(total - r.targetW, phaseExcess ?? -Infinity);
-  const hard = total > r.limitW || (phases != null && phases.some((p, i) => p > phaseLimits[i]));
+  const hardPhase = phases != null && phases.some((p, i) => p > phaseLimits[i]);
+  const hard = total > r.limitW || hardPhase;
 
   // --- Ungehorsam: Gerät zieht trotz Deckel deutlich mehr -------------------
   // (z. B. von Hand in evcc oder an der Box wieder gestartet). Nach der
@@ -624,7 +625,12 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   }
 
   // --- 1. Akku: Decke für positive Netz-Sollwerte ------------------------------
-  const desired = phaseExcess == null ? cT : Math.min(cT, total - phaseExcess);
+  // Je Phase dieselbe Einregel-Reserve wie gesamt (ein Drittel der Toleranz
+  // unter der harten Phasengrenze), sonst pendelte die stärkste Phase bei
+  // Victron-Grenze ohne Abstand um ihre Grenze (Codex 9cbcf92f, P2).
+  const phaseCeilTargets = phases ? phaseTargets.map((t, i) => Math.min(t, phaseLimits[i] - Math.round(BATTERY_TRACK_TOLERANCE_W / 3))) : null;
+  const phaseExcessCeil = phases ? 3 * Math.max(...phases.map((p, i) => p - phaseCeilTargets[i])) : null;
+  const desired = phaseExcessCeil == null ? cT : Math.min(cT, total - phaseExcessCeil);
   if (desired < st.ceilingW) {
     st.ceilingW = down(Math.max(0, desired));
     st.ceilingUnderSince = null;
@@ -653,7 +659,12 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
     // Nur Gemessenes zählt als „unterwegs“ — eine angenommene Leistung ist
     // kein Puffer (Fable R1 P1-2).
     if (!finite(d.currentW)) continue;
-    pending += Math.max(0, Number(d.currentW) - cap);
+    // Gemessene Leistung, wenn das Gerät sie getrennt von der steuerbaren
+    // meldet (Heizstab: Messung hinkt dem neuen Sollwert hinterher) — höchstens
+    // bis zur Leistung beim Eingriff, ein Eigenbetrieb darüber fällt nicht weg
+    // (Codex 9cbcf92f, P2).
+    const seen = finite(d.measuredW) ? Math.min(Number(d.measuredW), Number(st.cutFrom[d.id]) || Number(d.measuredW)) : Number(d.currentW);
+    pending += Math.max(0, Math.max(Number(d.currentW), seen) - cap);
   }
   const chargeW = r.batterySupported ? Math.max(0, Number(battery.chargeW) || 0) : 0;
   const sp = r.batterySupported && finite(battery.setpointW) && Number(battery.setpointW) > 0
@@ -691,7 +702,9 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   // Sollwert-Decke hält die Toleranz unter der harten Grenze). Größere
   // Abweichung: über der harten Grenze nach BATTERY_OBEY_MS, darunter (nur im
   // Sicherheitsabstand) nach BATTERY_OBEY_SOFT_MS.
-  if (gap > BATTERY_TRACK_TOLERANCE_W && batteryPending > 0 && excess > 0) {
+  // Eine harte PHASEN-Überschreitung zählt immer (die Gesamt-Toleranz sagt
+  // über eine einzelne Phase nichts; Codex 9cbcf92f, P2).
+  if ((gap > BATTERY_TRACK_TOLERANCE_W || hardPhase) && batteryPending > 0 && excess > 0) {
     st.batteryPendingSince ??= now;
     const obeyMs = hard ? BATTERY_OBEY_MS : BATTERY_OBEY_SOFT_MS;
     if (st.batteryStuckAt == null && now - st.batteryPendingSince > obeyMs) {
@@ -1132,7 +1145,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         const meas = finite(s.powerW) ? Math.max(0, Number(s.powerW)) : null;
         const own = finite(s.setpointW) ? Math.max(0, Number(s.setpointW)) : null;
         const cur = own != null ? (meas != null ? Math.min(meas, own) : own) : meas;
-        list.push({ id: `heater:${h.id}`, kind: 'heater', name: h.name || 'Heizstab', currentW: cur, maxW: Number(h.plan?.maxPowerW) || null, minW: Number(h.plan?.minPowerW) || 0 });
+        list.push({ id: `heater:${h.id}`, kind: 'heater', name: h.name || 'Heizstab', currentW: cur, measuredW: meas, maxW: Number(h.plan?.maxPowerW) || null, minW: Number(h.plan?.minPowerW) || 0 });
       }
     }
     // Die Hauptwallbox über EEBUS steht schon als „wallbox“ in der Liste —
