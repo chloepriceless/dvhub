@@ -1879,6 +1879,8 @@ const eosEvccBridge = createEosEvccBridge({
   // Netzanschluss-Wächter: Deckel je Wallbox-Gerät (auch weitere evcc-Ladepunkte).
   getDeviceCapW: (id) => ctx.gridConnection?.capW?.(id) ?? null,
   getEvccLoadpoints: () => evccIntegration.getLoadpoints(),
+  // Phasen von außen umgestellt? Nur Meldungen nach dem eigenen Befehl zählen.
+  getEvccPolledAt: () => evccIntegration.getStatus?.()?.lastPolledAt ?? null,
   // Max-Ladestand „wenn günstig“: nur wenn er gilt (EOS kennt die Wertstufen,
   // Max an); Ladestand aus derselben Quelle wie für EOS (ev-soc.js).
   getEvMaxStop: () => {

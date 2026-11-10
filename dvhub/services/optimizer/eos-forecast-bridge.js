@@ -1303,11 +1303,35 @@ export function createEosForecastBridge(ctx) {
   async function prepareRun() {
     const res = await push();
     if (res?.skipped) return { ok: true, pushed: false };
-    if (res?.runReady === true) return { ok: true, pushed: true };
+    if (res?.runReady === true) {
+      await syncEvBeforeRun();
+      return { ok: true, pushed: true };
+    }
     const why = res?.runBlockedBy
       || (res?.errors && typeof res.errors === 'object' ? Object.entries(res.errors).map(([k, v]) => `${k}: ${v}`).join('; ') : '')
       || 'Push gescheitert';
     return { ok: false, pushed: true, error: `Lauf ohne sichere Preisgrundlage: ${why}` };
+  }
+
+  // Wertstufen des Autos (soc_value_steps, ev-targets.js) frisch zum Lauf
+  // (Restbefund Codex P2, 1.0.10): Sie hängen an der Wertgrundlage
+  // (state.optimizer.evValueInputs), die erst der Push eben gebaut hat. Ohne
+  // diesen Schritt rechnete der Lauf mit den Stufen des letzten
+  // Fahrzeug-Abgleichs — nach dem Start ohne Grundlage, also leer; die
+  // Minuten-Wache (ev-watch.js) schickte die neuen erst nach dem Laufstart.
+  // Reihenfolge: Push → Fahrzeug an EOS → Lauf. Scheitert der Abgleich, läuft
+  // der Lauf trotzdem (der Akku-Plan soll nicht am Auto hängen). Zeit: ein
+  // PUT (≤ 15 s) plus Ladestand (≤ 15 s) liegt in RUN_START_MARGIN_MS.
+  async function syncEvBeforeRun() {
+    if (getCfg()?.optimizer?.eosOptimizeEv !== true) return;
+    const syncEv = ctx.eosConfigSync?.syncEv;
+    if (typeof syncEv !== 'function') return;
+    try {
+      const r = await syncEv.call(ctx.eosConfigSync);
+      if (r?.ok === false && !r.skipped && pushLog) pushLog('eos_ev_sync_before_run_error', { error: r.error || null });
+    } catch (e) {
+      if (pushLog) pushLog('eos_ev_sync_before_run_error', { error: e?.message || String(e) });
+    }
   }
 
   async function pushOnce(job = null) {

@@ -164,7 +164,11 @@ describe('Codex 42a5d784: Reihenfolge und Phasenzahl', () => {
     assert.ok(!h.calls.slice(3).some((c) => c[0] === 'phases' && c[1] === 3), JSON.stringify(h.calls));
   });
 
-  test('evcc meldet wieder drei Phasen (von Hand umgestellt): nächster einphasiger Slot schaltet erneut', async () => {
+  // Nur die aktiven Phasen (Messwert) melden wieder drei, die Einstellung
+  // (phasesConfigured) fehlt in der Meldung: im Zweifel erneut setzen. Ist die
+  // Einstellung von außen geändert, stellt DVhub die Phasen dagegen für diesen
+  // Ladevorgang nicht mehr ein (test/ev-wochenplan-rest.test.js).
+  test('evcc meldet wieder drei aktive Phasen (Einstellung unbekannt): nächster einphasiger Slot schaltet erneut', async () => {
     const h = harness({ factors: [0.25, 0.3] });
     await h.bridge.tick();
     h.lp.phasesActive = 3;

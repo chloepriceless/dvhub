@@ -124,7 +124,14 @@ export function targetSocPct({ mode, value, capacityWh, consumptionKwhPer100km }
 
 const HHMM_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
 const pad5 = (t) => String(t).padStart(5, '0');
-const numOrNull = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+// Nur echte Zahlen bzw. Zahlen als Text: Number([]) = 0, Number(' ') = 0 und
+// Number(true) = 1 hießen sonst „Mindest-Ladestand 0 %“ (Restbefund Codex P2).
+const numOrNull = (v) => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v !== 'string' || v.trim() === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
 
 /** Zahl in [0, 100] oder null (leer / ungültig). */
 const pctOrNull = (v) => {
@@ -146,8 +153,9 @@ const WEEK_MIN = 7 * 1440;
  *   - Heimweg → tripSocPct der Abfahrt, von der das Auto zu dieser Ankunft
  *     heimkommt (die letzte Abfahrt davor im Wochenlauf), als Hin- und Rückweg
  *     (2 × Heimweg) — genau das, was die alte Ankunftsschätzung abzog. Ohne
- *     eigenen Heimweg gilt der allgemeine (evCommuteKm); nur Zeilen MIT Ankunft
- *     hatten je einen Heimweg.
+ *     eigenen Heimweg gilt der allgemeine (evCommuteKm). Zeilen ohne Ankunft
+ *     zogen bis 1.0.9 ebenso ab (Heimweg des Fensters ihrer Abfahrt): ihr
+ *     Heimweg gehört zur Fahrt ab der Abfahrt davor.
  * Zeilen mit den neuen Feldern bleiben, wie sie sind.
  */
 export function migrateWeeklyPlanRows(list, opt = {}) {
@@ -182,11 +190,14 @@ export function migrateWeeklyPlanRows(list, opt = {}) {
   const deps = plan.map((r) => ({ r, m: depMin(r) })).filter((x) => x.m !== null);
   const globalKm = Math.max(0, Number(opt.evCommuteKm) || 0);
   for (const r of plan) {
+    if (!r.departure || !r._legacyTrip) continue;
     const a = parseTime(r.arrival);
-    if (!a || !r.departure || !r._legacyTrip) continue;
-    const km = numOrNull(r._src.commuteKm) !== null ? Math.max(0, Number(r._src.commuteKm)) : globalKm;
+    const own = numOrNull(r._src.commuteKm);
+    const km = own !== null ? Math.max(0, own) : globalKm;
     if (!(km > 0) || !deps.length) continue;
-    const arrMin = (r.day - 1) * 1440 + a.h * 60 + a.min;
+    // Ohne Ankunft: das Auto kommt irgendwann vor der eigenen Abfahrt heim.
+    const arrMin = a ? (r.day - 1) * 1440 + a.h * 60 + a.min : depMin(r);
+    if (arrMin === null) continue;
     let best = null;
     for (const x of deps) {
       const diff = ((arrMin - x.m) % WEEK_MIN + WEEK_MIN) % WEEK_MIN || WEEK_MIN;
@@ -208,7 +219,10 @@ export function effectiveWeeklyPlan(opt = {}) {
   if (Array.isArray(opt.evWeeklyPlan)) return migrateWeeklyPlanRows(opt.evWeeklyPlan, opt);
   const time = parseTime(opt.evDepartureTime ?? '07:00') ? pad5(String(opt.evDepartureTime ?? '07:00').trim()) : '';
   const days = normalizeDays(opt.evDepartureDays ?? [1, 2, 3, 4, 5]);
-  return WEEK_DAYS.map((d) => ({ ...emptyRow(d), departure: time && days.includes(d) ? time : '' }));
+  // Wie alte Zeilen übernommen (ohne eigene Ziele/Fahrten): der allgemeine
+  // Heimweg (evCommuteKm) wird so die Fahrt jeder Abfahrt — bis 1.0.9 zog
+  // die Ankunftsschätzung ihn auch ohne Wochenplan ab (Restbefund Codex P2).
+  return migrateWeeklyPlanRows(WEEK_DAYS.map((d) => ({ day: d, arrival: '', departure: time && days.includes(d) ? time : '' })), opt);
 }
 
 /**

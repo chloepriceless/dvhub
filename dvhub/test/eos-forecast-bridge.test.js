@@ -2494,3 +2494,57 @@ test('Neustart: erst Prognosehorizont 72 h, dann Steuerzeitraum, dann der Zielwe
     assert.equal(ctx.state.optimizer.eosPredictionHours, 48);
   } finally { await mock.close(); }
 });
+
+// ── Restbefund 3 (Codex P2, 1.0.10): Wertstufen frisch zum Lauf ─────────────
+// Die Wertstufen des Autos (soc_value_steps) hängen an der Wertgrundlage, die
+// erst der Push baut. Ein von DVhub angestoßener Lauf rechnete sonst mit den
+// Stufen des letzten Fahrzeug-Abgleichs (nach dem Start: ohne Grundlage, also
+// leer). Reihenfolge jetzt: Push (Grundlage) → Fahrzeug an EOS → Lauf.
+test('Laufstart: nach dem Push das Fahrzeug mit frischen Wertstufen an EOS, erst dann gilt der Lauf als vorbereitet', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock, { optimizer: { eosOptimizeEv: true, evMaxSocPct: 80 } });
+    env.state.optimizer.eos.evSocValue = true;
+    const seen = [];
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    env.ctx.eosConfigSync = {
+      syncEv: async () => {
+        seen.push({ inputs: env.state.optimizer.evValueInputs, pv: pvImports(mock) });
+        await gate;
+        return { ok: true };
+      },
+    };
+    const bridge = createEosForecastBridge(env.ctx);
+    let done = false;
+    const prep = bridge.prepareRun().then((r) => { done = true; return r; });
+    for (let i = 0; i < 200 && !seen.length; i += 1) await new Promise((r) => setTimeout(r, 5));
+    assert.equal(seen.length, 1, 'Fahrzeug-Abgleich vor dem Lauf');
+    assert.ok(seen[0].inputs && seen[0].inputs.builtAt > 0, 'mit der Wertgrundlage dieses Pushs');
+    assert.equal(seen[0].pv, 1, 'nach dem Prognose-Push');
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(done, false, 'Lauf wartet auf den Abgleich');
+    release();
+    assert.deepEqual(await prep, { ok: true, pushed: true });
+  } finally { await mock.close(); }
+});
+
+test('Laufstart: Fahrzeug-Abgleich scheitert → Lauf trotzdem (Akku-Plan), Fehler im Log; ohne E-Auto kein Abgleich', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const logs = [];
+    const env = estimateCtx(mock, { logs, optimizer: { eosOptimizeEv: true, evMaxSocPct: 80 } });
+    env.state.optimizer.eos.evSocValue = true;
+    env.ctx.eosConfigSync = { syncEv: async () => { throw new Error('boom'); } };
+    assert.deepEqual(await createEosForecastBridge(env.ctx).prepareRun(), { ok: true, pushed: true });
+    assert.ok(logs.some((l) => l.event === 'eos_ev_sync_before_run_error'), JSON.stringify(logs.map((l) => l.event)));
+  } finally { await mock.close(); }
+  const mock2 = await createMockEos(okHandler);
+  try {
+    const env = estimateCtx(mock2);
+    let n = 0;
+    env.ctx.eosConfigSync = { syncEv: async () => { n += 1; return { ok: true }; } };
+    assert.deepEqual(await createEosForecastBridge(env.ctx).prepareRun(), { ok: true, pushed: true });
+    assert.equal(n, 0);
+  } finally { await mock2.close(); }
+});

@@ -41,10 +41,21 @@ verweist hierher.
     statt erst ab 4,1 kW dreiphasig. EOS bekommt nur noch Ladestufen, die die Wallbox wirklich fahren kann.
     Im Not-Halt und im Lese-Modus schaltet DVhub keine Phasen und stoppt nicht am Max-Ladestand — auch nicht, wenn
     der Not-Halt mitten in einem Befehl („erst Strom, dann Phasen“) oder während des Plan-Abrufs kommt.
+    **Von Hand umgestellt bleibt umgestellt:** Stellt jemand die Phasen in evcc um (App, auch auf „automatisch“),
+    erkennt DVhub das an der eingestellten Phasenzahl und schaltet die Phasen für diesen Ladevorgang nicht mehr — bis
+    zum Abstecken; der Ladestrom passt sich der gewählten Phasenzahl an, der Netzanschluss-Wächter begrenzt weiter.
+    Vorher galt der Befehl bei gleichem Strom als unverändert, und das Auto lud dreiphasig mit z. B. 8,3 kW statt
+    2,75 kW. Damit kurz veraltete evcc-Meldungen nicht als Änderung gelten, zählen sie erst eine Minute nach DVhubs
+    eigenem Befehl, nur aus Abfragen danach und erst in der zweiten Abfrage; evccs eigene Umschaltung (aktive Phasen)
+    zählt nie. Status: `GET /api/integration/evcc/eos` → `phasesByCustomer`.
+  - **Wertstufen frisch zum Lauf:** Vor jedem von DVhub angestoßenen EOS-Lauf gehen nach dem Prognose-Push auch die
+    Wertstufen des Autos an EOS — vorher rechnete ein Lauf mit den Stufen des letzten Abgleichs (nach dem Start leer).
   - **Start-Ladestand des Autos an EOS abgerundet** statt gerundet — EOS plant nie mit mehr, als drin ist.
   - **Übernahme:** Bestehende Wochenpläne werden beim Start einmal umgerechnet — Ziel in kWh/km in %, der Heimweg in km
     als Fahrt der Abfahrt davor (Hin- und Rückweg). Status unter `GET /api/ev` (`targets`: Mindestziel, Max,
-    Wertstufen; `maxStop`).
+    Wertstufen; `maxStop`). Der allgemeine Heimweg gilt auch für alte Einstellungen ohne Wochenplan (nur Uhrzeit und
+    Tage) und für Zeilen ohne Ankunft — wie bis 1.0.9. Kaputte alte Werte (z. B. ein leeres Ziel `[]`) gelten als
+    „nicht gesetzt“ statt als Mindest-Ladestand 0 %.
 - **§14a: Hausspeicher deckt zuerst (Schnittstelle).** Verlangt der Netzbetreiber eine Reduzierung, berechnet DVhub
   die benötigte Akku-Hilfe (Bedarf der steuerbaren Verbraucher über der Grenze plus Haushalt ohne Speicher) und fordert
   sie über eine schmale Schnittstelle bei der Akku-Steuerung an (`ctx.batteryAssist.request({ source: 'p14a', coverW,
