@@ -186,6 +186,18 @@ verweist hierher.
 
 ### Behoben
 
+- **§14a: Wiederanlauf der EEBUS-Geräte und deutliche Warnung bei Störung.** Nach einem Neustart von DVhub oder des
+  EEBUS-Hilfsprozesses (Update, Stromausfall) schrieb DVhub einem Gerät ohne laufende Begrenzung nichts — der
+  Herzschlag zum Gerät startete nicht, das Gerät fiel nach 120 s in seinen Failsafe und blieb dort bis zur nächsten
+  Vorgabe (mindestens 2 h). Jetzt nimmt DVhub die Kopplung beim Anmelden jedes Geräts selbst wieder auf (laufende
+  Grenze sofort neu, sonst „frei“; das beendet den Failsafe), sofern es nach § 14a steuert (Steuerbox oder Relais).
+  Ist ein gesteuertes Gerät länger als 60 s nicht erreichbar, meldet das Gerät eine andere Grenze als die Vorgabe
+  (DVhub schreibt sie dann erneut), zieht es 60 s deutlich mehr als erlaubt oder lehnt es die Vorgabe ab, zeigt der
+  Leitstand „§14a gestört“ mit Gerät und Uhrzeit, Integrationen → §14a ebenso, dazu ein Protokolleintrag
+  (`paragraph14a_device_issue`, Warnung) und eine Benachrichtigung über die eingerichteten Kanäle. Bewertet wird nur,
+  was das Gerät meldet — ohne Rückmeldung keine „hat nicht reagiert“-Meldung. Ein nicht erreichbares Gerät zählt
+  weiter für die Mindestleistung; sein eigener Failsafe-Wert (ohne Angabe die Nennleistung) gilt während einer
+  Begrenzung als belegt, damit die übrigen Geräte die Grenze nicht allein ausschöpfen.
 - **§14a: EEBUS-Wallbox zählt richtig.** Eine EEBUS-Wallbox lief in der §14a-Geräteliste als Wärmepumpe (falsche
   Fallgruppe für Vorrang und Mindestleistung); war sie als Hauptwallbox eingetragen, zählte sie zusätzlich als
   „Wallbox“ — zwei SteuVE statt einer, also eine zu hohe Mindestleistung Pmin,14a (Relais-Grenze, automatischer

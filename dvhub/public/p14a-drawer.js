@@ -89,6 +89,16 @@
     } else {
       html += '<div><strong>Bezug:</strong> frei — keine Vorgabe des Netzbetreibers</div>';
     }
+    (st.issues || []).forEach(function (i) {
+      html += '<div class="eebus-error"><strong>§14a-Steuerung gestört:</strong> ' + esc(i.text)
+        + (i.since ? ' (seit ' + esc(new Date(i.since).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })) + ')' : '') + '</div>';
+    });
+    const reserved = st.reserved || {};
+    Object.keys(reserved).forEach(function (id) {
+      const d = (st.devices || []).find(function (x) { return x.id === id; });
+      html += '<div class="eebus-small">' + esc((d && d.name) || 'Gerät') + ' nicht erreichbar: ' + esc(kw(reserved[id]))
+        + ' als belegt gerechnet (eigener Failsafe-Wert des Geräts, sonst Nennleistung)</div>';
+    });
     if (st.relay && st.relay.enabled) {
       const lvl = st.relay.level;
       const dimmed = lvl != null && lvl === st.relay.activeWhen;
@@ -118,7 +128,7 @@
         + '<div class="eebus-small">'
         + (d.source === 'manual' ? 'von Hand' : d.source === 'eebus' ? 'EEBUS' : 'automatisch')
         + (d.control === 'direct' ? ' · Direktsteuerung (eigene Mindestleistung, nicht in der EMS-Formel)' : '')
-        + (d.controllable ? ' · von DVhub gesteuert' : ' · nicht von DVhub gesteuert')
+        + (d.unreachable ? ' · <span class="eebus-error">nicht erreichbar</span>' : d.controllable ? ' · von DVhub gesteuert' : ' · nicht von DVhub gesteuert')
         + (ignored ? ' · ' + esc(IGNORED[ignored.reason] || ignored.reason) : '')
         + '</div>'
         + (d.source === 'manual' ? '<button type="button" class="btn sm ghost" data-p14a-remove="' + esc(d.id) + '">Entfernen</button>' : '')

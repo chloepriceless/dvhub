@@ -146,7 +146,8 @@ test('§14a: Grenze der Steuerbox geht an den §14a-Dienst, Anteile an die Wärm
   assert.deepEqual(devices.map((d) => [d.id, d.kind, d.maxW]), [[`eebus:${SKI_HP}`, 'waermepumpe', 3000]]);
   s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 1500 }, s.state.ctrl.eebusConsumptionLimitUntil);
   await settle();
-  const dl = c.commands.find((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:HP/1');
+  // (vorher schon „frei“ beim Anmelden des Geräts: Wiederanlauf der Kopplung)
+  const dl = c.commands.find((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:HP/1' && x.active === true);
   assert.ok(dl, 'Grenze an die Wärmepumpe');
   assert.equal(dl.w, 1500);
   assert.equal(dl.active, true);
@@ -568,7 +569,7 @@ test('Netzanschluss: gleiche Gerätegrenze mit anderer Dauer (z. B. §14a-Ende) 
   await settle();
   s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 1000 }, null);
   await settle();
-  const sent = c.commands.filter((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:HP/1');
+  const sent = c.commands.filter((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:HP/1' && x.active === true);
   assert.equal(sent.length, 2, 'zweites Mal geschickt');
   assert.equal(sent.at(-1).duration_s, 0, 'ohne Ablauf');
 });
@@ -621,4 +622,155 @@ test('§14a-Geräteliste: als Hauptwallbox eingetragene EEBUS-Box ist ein Ladepu
   await settle();
   const d = s.svc.consumptionDevices()[0];
   assert.deepEqual([d.kind, d.startW], ['ladepunkt', 4140], 'ohne Angabe des Autos: 6 A auf drei Phasen');
+});
+
+// ── Wiederanlauf und Warnungen der §14a-Gerätesteuerung (pv magazine 09.11.2026) ──
+// Nach Neustart/Stromausfall muss DVhub die Kopplung zu den Geräten selbst
+// wieder aufnehmen; fällt die Steuerung eines Geräts aus, warnt DVhub deutlich.
+async function withHeatPump(opts = {}) {
+  const s = setup(opts);
+  s.ctx.p14a = { update: () => {} };
+  const notes = [];
+  s.ctx.notifyDirect = async (m) => { notes.push(m); return { ok: true }; };
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'connected', ski: SKI_BOX });
+  c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_nominal_max', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 5500 });
+  await settle();
+  const limits = () => s.child().commands.filter((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:HP/1');
+  return { s, c, notes, limits };
+}
+
+test('Wiederanlauf: meldet sich ein Gerät an, schreibt DVhub ohne Grenze „frei“ (Herzschlag startet, Failsafe des Geräts endet)', async () => {
+  const { limits } = await withHeatPump();
+  assert.equal(limits().length, 1, 'eine Vorgabe ans Gerät');
+  assert.equal(limits()[0].active, false);
+});
+
+test('Wiederanlauf: ohne Steuerbox und ohne §14a-Relais bleibt das Gerät unberührt', async () => {
+  const { limits } = await withHeatPump({ eebus: { trusted: [{ ski: SKI_HP, name: 'Wärmepumpe', role: 'device' }] } });
+  assert.equal(limits().length, 0);
+});
+
+test('Wiederanlauf: nach Neustart des Hilfsprozesses gehen aktive Anteile sofort wieder ans Gerät', async () => {
+  const { s, limits } = await withHeatPump();
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 1500 }, null);
+  await settle();
+  assert.deepEqual([limits().at(-1).w, limits().at(-1).active], [1500, true]);
+  s.child().emit('exit', 1, null);
+  await settle();
+  await s.timers.find((x) => x.ms === 5_000).fn();
+  const c2 = s.child();
+  c2.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c2.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c2.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  const sent = c2.commands.filter((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:HP/1');
+  assert.deepEqual(sent.map((x) => [x.w, x.active]), [[1500, true]], 'Anteil sofort neu geschrieben');
+});
+
+test('Warnung: gesteuertes Gerät nicht erreichbar → nach 60 s Warnung (Log, Leitstand, Benachrichtigung), wieder da → aufgehoben', async () => {
+  const { s, c, notes } = await withHeatPump();
+  c.emitEvent({ ev: 'disconnected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_removed', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  s.advance(30_000);
+  s.svc._tick();
+  assert.equal(s.svc.controlIssues().length, 0, 'kurzer Aussetzer: noch keine Warnung');
+  s.advance(31_000);
+  s.svc._tick();
+  const issues = s.svc.controlIssues();
+  assert.deepEqual(issues.map((i) => [i.ski, i.code]), [[SKI_HP, 'unreachable']]);
+  assert.match(issues[0].text, /nicht erreichbar/);
+  assert.deepEqual(s.svc.summary().issues.map((i) => i.code), ['unreachable'], 'im Leitstand');
+  assert.ok(s.logs.some(([e, d]) => e === 'paragraph14a_device_issue' && d.code === 'unreachable'));
+  assert.equal(notes.length, 1, 'eine Benachrichtigung');
+  assert.equal(notes[0].level, 'warning');
+  s.svc._tick();
+  assert.equal(notes.length, 1, 'nicht bei jedem Takt');
+  // wieder da
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  s.svc._tick();
+  assert.equal(s.svc.controlIssues().length, 0);
+  assert.ok(s.logs.some(([e, d]) => e === 'paragraph14a_device_issue_resolved' && d.code === 'unreachable'));
+});
+
+test('Umsetzung nach Meldung des Geräts: ohne Rückmeldung keine Fehlmeldung, abweichende Meldung → Warnung und neu schreiben', async () => {
+  const { s, c, limits } = await withHeatPump();
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 2000 }, null);
+  await settle();
+  s.advance(40_000);
+  s.svc._tick();
+  assert.equal(s.svc.controlIssues().length, 0, 'Gerät meldet nichts: kein „nicht reagiert“');
+  // Gerät meldet seine Grenze: passt
+  c.emitEvent({ ev: 'device_limit', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 2000, active: true });
+  await settle();
+  s.advance(40_000);
+  s.svc._tick();
+  assert.equal(s.svc.controlIssues().length, 0);
+  // Gerät meldet etwas anderes (z. B. seinen Failsafe-Wert)
+  c.emitEvent({ ev: 'device_limit', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 4200, active: true });
+  await settle();
+  const before = limits().length;
+  s.advance(61_000);
+  s.svc._tick();
+  await settle();
+  assert.deepEqual(s.svc.controlIssues().map((i) => i.code), ['not_applied']);
+  assert.equal(limits().length, before + 1, 'Vorgabe erneut geschrieben');
+  assert.deepEqual([limits().at(-1).w, limits().at(-1).active], [2000, true]);
+  // jetzt umgesetzt
+  c.emitEvent({ ev: 'device_limit', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 2000, active: true });
+  await settle();
+  s.svc._tick();
+  assert.equal(s.svc.controlIssues().length, 0);
+});
+
+test('Umsetzung nach Messung: zieht das Gerät 60 s deutlich mehr als die Vorgabe → Warnung', async () => {
+  const { s, c } = await withHeatPump();
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 2000 }, null);
+  c.emitEvent({ ev: 'device_measurement', uc: 'mpc', ski: SKI_HP, entity: 'd:_n:HP/1', name: 'power_w', value: 3500 });
+  await settle();
+  s.svc._tick();
+  s.advance(61_000);
+  s.svc._tick();
+  assert.deepEqual(s.svc.controlIssues().map((i) => i.code), ['over_limit']);
+  c.emitEvent({ ev: 'device_measurement', uc: 'mpc', ski: SKI_HP, entity: 'd:_n:HP/1', name: 'power_w', value: 1900 });
+  await settle();
+  s.svc._tick();
+  assert.equal(s.svc.controlIssues().length, 0);
+});
+
+test('Gerät lehnt die Vorgabe ab (write_result) → Warnung mit Gerät, nächster Erfolg hebt sie auf', async () => {
+  const { s, c, limits } = await withHeatPump();
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 2000 }, null);
+  await settle();
+  c.emitEvent({ ev: 'write_result', id: limits().at(-1).id, ok: false });
+  await settle();
+  assert.ok(s.logs.some(([e, d]) => e === 'eebus_device_write_rejected' && d.ski === SKI_HP));
+  s.svc._tick();
+  assert.deepEqual(s.svc.controlIssues().map((i) => i.code), ['rejected'], 'sofort, ohne Wartezeit');
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 2500 }, null);
+  await settle();
+  c.emitEvent({ ev: 'write_result', id: limits().at(-1).id, ok: true });
+  await settle();
+  s.svc._tick();
+  assert.equal(s.svc.controlIssues().length, 0);
+});
+
+test('getrenntes Gerät bleibt in der §14a-Liste: Failsafe-Wert des Geräts (sonst Nennleistung) als belegt', async () => {
+  const { s, c } = await withHeatPump();
+  c.emitEvent({ ev: 'device_failsafe_limit', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 4200 });
+  await settle();
+  assert.deepEqual(s.svc.lostConsumptionDevices(), []);
+  c.emitEvent({ ev: 'disconnected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_removed', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  const lost = s.svc.lostConsumptionDevices();
+  assert.deepEqual(lost.map((d) => [d.id, d.kind, d.maxW, d.failsafeW]), [[`eebus:${SKI_HP}`, 'waermepumpe', 5500, 4200]]);
 });

@@ -15,6 +15,8 @@ function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, 
   const state = { ctrl: {}, victron: { batteryPowerW }, meter: { grid_total_w: gridTotalW } };
   const logs = [];
   const plug = { connected: evccConnected };
+  const lost = [];
+  const issues = [];
   const subs = new Map();
   const applied = [];
   const ctx = {
@@ -25,11 +27,13 @@ function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, 
     evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: evcc ?? 0, connected: plug.connected }] }) },
     eebus: {
       consumptionDevices: () => eebusDevices,
+      lostConsumptionDevices: () => lost,
+      controlIssues: () => issues,
       applyConsumptionShares: (shares, until) => applied.push({ shares, until }),
     },
   };
   const svc = createParagraph14aService(ctx, { setInterval: () => 0, clearInterval: () => {}, ...(clock ? { now: () => clock.t } : {}) });
-  return { svc, state, cfg, logs, subs, applied, eebusDevices, setConnected: (v) => { plug.connected = v; } };
+  return { svc, state, cfg, logs, subs, applied, eebusDevices, lost, issues, setConnected: (v) => { plug.connected = v; } };
 }
 
 test('Konfiguration: Vorgaben und ungültige Geräte', () => {
@@ -245,4 +249,24 @@ test('EEBUS-Hauptwallbox zählt einmal als Ladepunkt, nicht zusätzlich als EEBU
   assert.deepEqual(lp.map((d) => d.id), ['wallbox'], 'eine Wallbox, eine SteuVE');
   // Wallbox + Speicher: 4,2 + 0,8 · 4,2 (nicht 10,5 kW mit einer dritten SteuVE)
   assert.equal(s.state.p14a.pminW, 7560);
+});
+
+test('nicht erreichbares EEBUS-Gerät: sein Failsafe-Wert ist belegt, der Rest geht an die anderen; zählt weiter für Pmin', () => {
+  const s = articleSetup({ eebusDevices: [] });
+  s.state.meter.grid_total_w = 1000 + 4200;
+  s.lost.push({ id: 'eebus:hp', ski: 'b'.repeat(40), name: 'WP', kind: 'waermepumpe', maxW: 5500, failsafeW: 4200 });
+  s.svc.update();
+  assert.equal(s.state.p14a.pminW, 10500, 'Wallbox + Speicher + WP');
+  assert.deepEqual(s.state.p14a.reserved, { 'eebus:hp': 4200 });
+  const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
+  assert.ok(sum + 4200 <= 7560, `Anteile ${sum} W + 4200 W belegt > 7560 W`);
+  assert.equal(s.state.p14a.shares['eebus:hp'], undefined, 'kein Anteil an ein Gerät, das nicht erreichbar ist');
+  assert.equal(s.svc.summary().devices.find((d) => d.id === 'eebus:hp').unreachable, true);
+});
+
+test('Störungen der Gerätesteuerung stehen in der §14a-Zusammenfassung', () => {
+  const s = setup();
+  s.issues.push({ ski: 'b'.repeat(40), code: 'unreachable', name: 'WP', since: 1, text: 'WP: nicht erreichbar' });
+  s.svc.update();
+  assert.deepEqual(s.svc.summary().issues.map((i) => i.code), ['unreachable']);
 });

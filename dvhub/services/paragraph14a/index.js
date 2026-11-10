@@ -118,6 +118,7 @@ export function createParagraph14aService(ctx, deps = {}) {
     ignored: [],
     budgetW: null,
     shares: {},
+    reserved: {},
     batteryGridW: null,
     wallboxCapW: null,
     relay: { enabled: false, topic: '', level: null, at: null },
@@ -181,6 +182,17 @@ export function createParagraph14aService(ctx, deps = {}) {
           controllable: true, currentW: measuredW ?? 0, measuredW,
           startW: Number.isFinite(Number(d.startW)) && d.startW != null ? Number(d.startW) : null,
           available: d.available !== false, source: 'eebus' });
+      }
+      // Gesteuerte EEBUS-Geräte, die DVhub gerade nicht erreicht: sie ziehen bis
+      // zu ihrem eigenen Failsafe-Wert (ohne Angabe: Nennleistung). Sie zählen
+      // weiter für Pmin,14a, bekommen keinen Anteil, und ihr Wert ist im Budget
+      // belegt — sonst könnten die übrigen Geräte die ganze Grenze ausschöpfen.
+      for (const d of ctx.eebus?.lostConsumptionDevices?.() || []) {
+        if (mainEebusSki && d.ski === mainEebusSki) continue;
+        if (list.some((x) => x.id === d.id)) continue;
+        list.push({ id: d.id, name: d.name || 'EEBUS-Gerät', kind: d.kind, powerW: d.maxW, control: 'ems',
+          controllable: false, unreachable: true, reserveW: Math.min(d.maxW, d.failsafeW ?? d.maxW),
+          currentW: 0, measuredW: null, source: 'eebus' });
       }
     }
     for (const d of c.devices) {
@@ -281,13 +293,19 @@ export function createParagraph14aService(ctx, deps = {}) {
     let budget = null;
     let shares = {};
     let consumers = [];
+    const reserved = {};
     if (active) {
       const controllable = list.filter((d) => d.controllable);
       const steuveW = controllable.reduce((s, d) => s + d.currentW, 0);
       budget = budgetW({ limitW, gridImportW: gridImportPositiveW(state, getCfg()), steuveW, usePvSurplus: c.usePvSurplus });
+      let free = budget;
+      for (const d of list.filter((x) => x.unreachable)) {
+        reserved[d.id] = Math.min(free, d.reserveW);
+        free -= reserved[d.id];
+      }
       consumers = consumersFor(controllable, c);
-      shares = stable(allocateBudget(budget, consumers,
-        { mode: c.allocation, priority: c.priority, demand: c.demandFirst }), budget);
+      shares = stable(allocateBudget(free, consumers,
+        { mode: c.allocation, priority: c.priority, demand: c.demandFirst }), free);
     } else {
       heldNeed.clear();
     }
@@ -316,14 +334,15 @@ export function createParagraph14aService(ctx, deps = {}) {
       n: pmin.n,
       gzf: pmin.gzf,
       formula: pmin.formula,
-      devices: list.map(({ id, name, kind, powerW, control, controllable, measuredW, source: src }) => ({
-        id, name, kind, powerW, control, controllable, source: src,
+      devices: list.map(({ id, name, kind, powerW, control, controllable, measuredW, unreachable, source: src }) => ({
+        id, name, kind, powerW, control, controllable, source: src, unreachable: unreachable === true,
         currentW: controllable ? measuredW ?? null : null,
         needW: needById[id] ?? null,
       })),
       ignored: pmin.ignored,
       budgetW: budget,
       shares,
+      reserved,
       batteryGridW: active ? (shares.speicher ?? 0) : null,
       wallboxCapW: active && shares.wallbox != null ? shares.wallbox : null,
       relay: { enabled: c.relay.enabled, topic: c.relay.topic, level: relay.level, at: relay.at, activeWhen: c.relay.activeWhen },
@@ -332,7 +351,7 @@ export function createParagraph14aService(ctx, deps = {}) {
     state.ctrl.p14aWallboxCapW = ui.wallboxCapW;
 
     const eebusShares = {};
-    for (const d of list) if (d.source === 'eebus') eebusShares[d.id] = active ? (shares[d.id] ?? 0) : null;
+    for (const d of list) if (d.source === 'eebus' && !d.unreachable) eebusShares[d.id] = active ? (shares[d.id] ?? 0) : null;
     // Netzanschluss (services/grid-connection): dessen Grenzen je EEBUS-Gerät
     // kommen dazu — je Gerät gilt die kleinste (auch ohne §14a-Vorgabe).
     const gcCaps = ctx.gridConnection?.eebusCaps?.() || null;
@@ -378,6 +397,9 @@ export function createParagraph14aService(ctx, deps = {}) {
       demandFirst: cfgNow().demandFirst,
       budgetW: ui.budgetW,
       shares: { ...ui.shares },
+      reserved: { ...ui.reserved },
+      // Störungen der Gerätesteuerung (nicht erreichbar, nicht umgesetzt …)
+      issues: ctx.eebus?.controlIssues?.() || [],
       devices: ui.devices.map((d) => ({ ...d })),
       relay: { ...ui.relay },
     };
