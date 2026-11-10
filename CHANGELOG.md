@@ -231,6 +231,10 @@ verweist hierher.
     (bzw. anderthalb Probenabstände) ab. Proben aus einer fehlgeschlagenen oder veralteten Abfrage (alte Werte,
     eingefrorene Live-Werte) zählen nicht, und eine Pause von über 90 s zwischen zwei Proben macht die Viertelstunde
     unvollständig. DVhub merkt sich die Abdeckung dafür ab 1.0.10 je Viertelstunde und Reihe.
+  - Der Probenabstand wird in ganzen Sekunden gespeichert; den Rundungsrest nimmt DVhub in die nächste Probe mit,
+    sodass die Summe der echten Zeit folgt. Ohne das galt bei Abfragezyklen ab etwa 5 s (z. B. 5,3 s → 5 s) keine
+    Viertelstunde je als vollständig, und die Energie lag dort einige Prozent zu niedrig (bzw. bei 5,6 s → 6 s zu
+    hoch, was Lücken verdecken konnte). Fable-Prüfung R3, P2-1.
   - **Bereits gespeicherte Viertelstunden ändern sich nicht:** Für Viertelstunden von vor dem Update ist die
     Abdeckung unbekannt, dort bleibt es bei VRM vor eigenen Werten. Die neue Regel gilt für alle Viertelstunden ab
     dem Update. Die Jahres-/Gesamtansicht rechnet einmal neu (gleiches Ergebnis für die alten Daten).
