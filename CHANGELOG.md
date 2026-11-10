@@ -313,6 +313,11 @@ verweist hierher.
   Verbindung ab: alle weiteren Anfragen des Takts scheiterten mit „connection closed“. Jetzt gilt jedes
   Socket-Ereignis nur für seinen eigenen Socket; nur die betroffene Anfrage scheitert. Paritätsvergleich mit dem
   Rust-Neubau (A4).
+- **Not-Halt: schon eingereihte Modbus-Writes gehen nicht mehr raus.** Ein Sollwert, der vor dem Not-Halt in der
+  Warteschlange einer Modbus-Verbindung stand, wurde danach noch gesendet. Jetzt setzt der Not-Halt beim Eintritt eine
+  Schreib-Sperre: alles, was vorher eingereiht war, wird unmittelbar vor dem Senden verworfen; die eine Rücknahme
+  danach geht raus. Gilt für alle Modbus-Verbindungen (Haupt-GX, zweite GX, Register-Scan, Heizstab).
+  Paritätsvergleich mit dem Rust-Neubau (A7).
 - **Modbus: Lese-Anfragen können nicht mehr schreiben, übergroße Rahmen und volle Warteschlangen sind Fehler.** Eine
   Lese-Anfrage mit Schreib-Funktionscode (z. B. FC 6 aus einem Messpunkt oder dem Register-Scan) wäre ein gültiger
   Write gewesen – die Menge als Wert. Jetzt nimmt die Lese-Anfrage nur FC 1–4. Ein Rahmen mit Längenfeld über 254

@@ -18,6 +18,21 @@ import { info as logInfo, warn as logWarn, error as logError, debug as logDebug 
 // eslint-disable-next-line no-unused-vars
 import { safeInterval } from './services/safe-async.js';
 
+// A7 (Paritätsfund dvhub-rs ABWEICHUNGEN): Schreib-Sperre für den Not-Halt.
+// Jeder Write merkt sich beim Einreihen die aktuelle Generation; direkt vor dem
+// Draht wird ein Write aus einer älteren Generation verworfen. setEmergencyStop
+// erhöht die Generation einmal beim Eintritt — davor eingereihte Sollwerte
+// gehen nicht mehr raus, die eine Rücknahme danach schon. Prozessweit, damit
+// alle Modbus-Verbindungen (Haupt-GX, zweite GX, Scan, Heizstab) gelten.
+let writeFenceGeneration = 0;
+export function fenceModbusWrites() {
+  writeFenceGeneration += 1;
+  return writeFenceGeneration;
+}
+export function modbusWriteFenceGeneration() {
+  return writeFenceGeneration;
+}
+
 /**
  * Modbus TCP Transport für Victron-Kommunikation.
  * Extrahiert aus server.js — reiner Modbus-Client (kein Server).
@@ -192,7 +207,8 @@ export function createModbusTransport(opts = {}) {
             reject(new Error('modbus queue full'));
             return;
           }
-          const entry = { reqBuf, resolve, reject, timer: null, timeoutMs };
+          const isWrite = modbusWriteFunctionCode(reqBuf) !== null;
+          const entry = { reqBuf, resolve, reject, timer: null, timeoutMs, fence: isWrite ? writeFenceGeneration : null };
           this.queue.push(entry);
           this._next();
         });
@@ -209,7 +225,13 @@ export function createModbusTransport(opts = {}) {
           this.sock.once('connect', () => this._next());
           return;
         }
-        const entry = this.queue.shift();
+        let entry = this.queue.shift();
+        // A7: vor der Schreib-Sperre eingereihte Writes verwerfen (nie auf den Draht).
+        while (entry && entry.fence !== null && entry.fence !== writeFenceGeneration) {
+          entry.reject(new Error('modbus write verworfen (Not-Halt seit dem Einreihen)'));
+          entry = this.queue.shift();
+        }
+        if (!entry) return;
         this.pending = entry;
         // Eine Anfrage läuft: kein Leerlauf. Der Timer startet nach der Antwort
         // neu (_drain → _resetIdle). Sonst konnte der Timer einer früheren

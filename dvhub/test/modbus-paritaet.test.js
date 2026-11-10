@@ -259,3 +259,79 @@ test('A8: Warteschlange je Verbindung begrenzt (256)', async () => {
     await new Promise((r) => server.close(r));
   }
 });
+
+// A7: Beim Not-Halt eingereihte, noch nicht gesendete Writes gingen danach
+// noch auf den Draht. Jetzt verwirft die Schreib-Sperre (fenceModbusWrites)
+// alles, was vorher eingereiht wurde; die eine Rücknahme danach geht raus.
+
+function startEchoGx(delayMs) {
+  return new Promise((resolve) => {
+    const seen = [];
+    const server = net.createServer((socket) => {
+      socket.on('error', () => {});
+      let buf = Buffer.alloc(0);
+      socket.on('data', (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        while (buf.length >= 12) {
+          const req = Buffer.from(buf.subarray(0, 12));
+          buf = buf.subarray(12);
+          const fc = req.readUInt8(7);
+          seen.push({ fc, address: req.readUInt16BE(8), value: req.readUInt16BE(10) });
+          let res;
+          if (fc === 6) res = Buffer.from(req);                  // FC6: Echo
+          else {
+            res = Buffer.alloc(11);
+            req.copy(res, 0, 0, 4);
+            res.writeUInt16BE(5, 4); res.writeUInt8(req.readUInt8(6), 6); res.writeUInt8(fc, 7);
+            res.writeUInt8(2, 8); res.writeUInt16BE(42, 9);
+          }
+          setTimeout(() => { if (!socket.destroyed) socket.write(res); }, delayMs);
+        }
+      });
+    });
+    server.listen(0, '127.0.0.1', () => resolve({
+      port: server.address().port, seen,
+      close: () => new Promise((r) => { server.close(r); }),
+    }));
+  });
+}
+
+test('A7: vor dem Not-Halt eingereihte Writes gehen nicht mehr raus, die Rücknahme danach schon', async () => {
+  const { fenceModbusWrites } = await import('../transport-modbus.js');
+  const gx = await startEchoGx(150);
+  const transport = createModbusTransport();
+  const base = { host: '127.0.0.1', port: gx.port, unitId: 100, timeoutMs: 1000 };
+  try {
+    const readP = transport.mbRequest({ ...base, fc: 3, address: 10, quantity: 1 });       // läuft
+    const stale = transport.mbWriteSingle({ ...base, address: 2716, value: 5000 })          // wartet
+      .then(() => 'gesendet', (e) => e.message);
+    await new Promise((r) => setTimeout(r, 30));
+    fenceModbusWrites();
+    const neutral = transport.mbWriteSingle({ ...base, address: 2716, value: 0 });
+    assert.deepEqual(await readP, [42], 'eine Lesung läuft weiter');
+    assert.match(await stale, /Not-Halt/);
+    assert.equal((await neutral).value, 0);
+    assert.deepEqual(gx.seen.filter((f) => f.fc === 6).map((f) => f.value), [0], 'nur die Rücknahme am Gerät');
+  } finally {
+    await transport.destroy();
+    await gx.close();
+  }
+});
+
+test('A7: setEmergencyStop setzt die Schreib-Sperre, bevor es neutralisiert', async () => {
+  const { modbusWriteFenceGeneration } = await import('../transport-modbus.js');
+  const { setEmergencyStop } = await import('../services/control-commands.js');
+  const before = modbusWriteFenceGeneration();
+  let genAtNeutralize = null;
+  const ctx = {
+    state: { ctrl: {} },
+    pushLog: () => {},
+    applyControlTarget: async () => { genAtNeutralize = modbusWriteFenceGeneration(); return { ok: true }; },
+  };
+  const r = await setEmergencyStop(ctx, { on: true });
+  assert.equal(r.ok, true);
+  assert.equal(genAtNeutralize, before + 1);
+  // Schon im Not-Halt: keine zweite Sperre nötig.
+  await setEmergencyStop(ctx, { on: true });
+  assert.equal(modbusWriteFenceGeneration(), before + 1);
+});
