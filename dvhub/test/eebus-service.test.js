@@ -587,3 +587,38 @@ test('Ablaufzeit je Gerät: untilById überschreibt die gemeinsame Dauer nur fü
   const sent = c.commands.filter((x) => x.cmd === 'device_limit' && x.entity === 'd:_n:HP/1').at(-1);
   assert.equal(sent.duration_s, 0);
 });
+
+test('§14a-Geräteliste: EEBUS-Wallbox ist ein Ladepunkt (nicht Wärmepumpe), ohne Auto ohne Bedarf', async () => {
+  const s = setup();
+  s.ctx.p14a = { update: () => {} };
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  assert.equal(s.svc.consumptionDevices()[0].kind, 'waermepumpe', 'ohne weitere Angabe wie bisher Wärmepumpe');
+  // Die Box meldet ein Auto (EVCC): Ladepunkt, Anlaufstufe aus der Mindestleistung des Autos
+  c.emitEvent({ ev: 'ev_connected', ski: SKI_HP, entity: 'd:_n:EV/1' });
+  c.emitEvent({ ev: 'ev_data', ski: SKI_HP, entity: 'd:_n:EV/1', power_min_w: 1380 });
+  await settle();
+  let d = s.svc.consumptionDevices()[0];
+  assert.deepEqual([d.kind, d.startW, d.available], ['ladepunkt', 1380, true]);
+  c.emitEvent({ ev: 'ev_disconnected', ski: SKI_HP, entity: 'd:_n:EV/1' });
+  await settle();
+  d = s.svc.consumptionDevices()[0];
+  assert.deepEqual([d.kind, d.available], ['ladepunkt', false], 'abgesteckt: bleibt Ladepunkt, kein Bedarf');
+});
+
+test('§14a-Geräteliste: als Hauptwallbox eingetragene EEBUS-Box ist ein Ladepunkt', async () => {
+  const s = setup({ extraCfg: { wallbox: { type: 'eebus', eebus: { ski: SKI_HP } } } });
+  s.ctx.p14a = { update: () => {} };
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  const d = s.svc.consumptionDevices()[0];
+  assert.deepEqual([d.kind, d.startW], ['ladepunkt', 4140], 'ohne Angabe des Autos: 6 A auf drei Phasen');
+});

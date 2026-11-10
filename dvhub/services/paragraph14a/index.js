@@ -169,7 +169,13 @@ export function createParagraph14aService(ctx, deps = {}) {
         list.push({ id: 'speicher', name: 'Stromspeicher', kind: 'speicher', powerW: batW, control: 'ems',
           controllable: true, currentW: measuredW ?? 0, measuredW, startW: 0, available: true, source: 'auto' });
       }
+      // Die EEBUS-Hauptwallbox steht oben schon als „wallbox“ (ihr Anteil geht
+      // über die Wallbox-Steuerung an dieselbe Box): nicht doppelt zählen —
+      // sonst zählte sie zweimal für Pmin,14a und bekäme zweimal Budget.
+      const mainEebusSki = bc.charger === 'eebus' && list.some((d) => d.id === 'wallbox')
+        ? String(cfg.wallbox?.eebus?.ski || '').trim().toLowerCase() : '';
       for (const d of ctx.eebus?.consumptionDevices?.() || []) {
+        if (mainEebusSki && d.ski === mainEebusSki) continue;
         const measuredW = d.powerW != null && Number.isFinite(Number(d.powerW)) ? Math.max(0, Number(d.powerW)) : null;
         list.push({ id: d.id, name: d.name || 'EEBUS-Gerät', kind: d.kind, powerW: d.maxW, control: 'ems',
           controllable: true, currentW: measuredW ?? 0, measuredW,

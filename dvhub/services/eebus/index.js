@@ -33,6 +33,8 @@ const PAIRING_WINDOW_MS = 10 * 60_000;
 const GCP_INTERVAL_MS = 5_000;
 const DEVICE_LIMIT_REFRESH_MS = 5 * 60_000;
 const STDERR_KEEP = 40;
+// Anlaufstufe einer EEBUS-Wallbox ohne Angabe des Autos: 6 A auf drei Phasen.
+const EV_START_W = 6 * 3 * 230;
 // Gerätetypen von Steuerboxen/Gateways (u. a. EEBUS-Handwerkertool: „GCPH“).
 const GRID_ROLE_HINT = /(control|guard|gateway|grid|smgw|steuer|gcph|connectionhub)/i;
 
@@ -659,23 +661,34 @@ export function createEebusService(ctx, deps = {}) {
   /**
    * Verbundene EEBUS-Geräte mit LPC — für die §14a-Aufteilung
    * (services/paragraph14a). Art: mit Verdichter-Ankündigung (OHPCF) eine
-   * Wärmepumpe, sonst die Rolle aus der Kopplung, Vorgabe Wärmepumpe.
+   * Wärmepumpe; meldet die Box ein Auto (EVCC/EVCEM …) oder ist sie als
+   * Hauptwallbox eingetragen, ein Ladepunkt; sonst wie bisher Wärmepumpe.
+   * Ladepunkt: Anlaufstufe (startW) aus der Mindestleistung des Autos, sonst
+   * 6 A auf drei Phasen; ohne gestecktes Auto kein Bedarf (available: false).
    */
   function consumptionDevices() {
     const c = cfgNow();
     if (!c.devices.forwardGridLimit) return [];
+    const wb = getCfg()?.wallbox;
+    const mainWallboxSki = wb?.type === 'eebus' ? String(wb.eebus?.ski || '').trim().toLowerCase() : '';
     const list = [];
     for (const [ski, d] of Object.entries(ui.devices)) {
       if (!d.entities.lpc || !ui.peers[ski]?.connected) continue;
       const trusted = c.trusted.find((t) => t.ski === ski);
+      const kind = d.entities.ohpcf ? 'waermepumpe' : (d.ev || ski === mainWallboxSki) ? 'ladepunkt' : 'waermepumpe';
+      const minW = Number(d.ev?.vehicle?.powerMinW);
       list.push({
         id: `eebus:${ski}`,
         ski,
         entity: d.entities.lpc,
         name: trusted?.name || null,
-        kind: d.entities.ohpcf ? 'waermepumpe' : (trusted?.kind || 'waermepumpe'),
+        kind,
         maxW: d.nominalW || c.devices.defaultNominalW,
         powerW: d.powerW ?? null,
+        ...(kind === 'ladepunkt' ? {
+          startW: minW > 0 ? minW : EV_START_W,
+          available: d.ev ? d.ev.connected === true : true,
+        } : {}),
       });
     }
     return list;

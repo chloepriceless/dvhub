@@ -186,6 +186,11 @@ verweist hierher.
 
 ### Behoben
 
+- **§14a: EEBUS-Wallbox zählt richtig.** Eine EEBUS-Wallbox lief in der §14a-Geräteliste als Wärmepumpe (falsche
+  Fallgruppe für Vorrang und Mindestleistung); war sie als Hauptwallbox eingetragen, zählte sie zusätzlich als
+  „Wallbox“ — zwei SteuVE statt einer, also eine zu hohe Mindestleistung Pmin,14a (Relais-Grenze, automatischer
+  Failsafe-Wert) und doppelt verteiltes Budget. Jetzt ist eine EEBUS-Box mit Auto-Meldung oder als Hauptwallbox ein
+  Ladepunkt und zählt einmal; ohne gestecktes Auto hat sie keinen Bedarf.
 - **§14a: Summe der Anteile nie über der Vorgabe.** Die Glättung (Änderungen unter 300 W werden nicht
   weitergegeben) konnte die Summe der Geräte-Anteile über die Grenze des Netzbetreibers heben, wenn mehrere Anteile
   gleichzeitig leicht sanken (z. B. 7500 W bei 7200 W Vorgabe). Jetzt gilt in dem Fall der neue Anteil.

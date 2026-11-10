@@ -232,3 +232,17 @@ test('nach Bedarf: Gerät ohne Messwert bekommt seine volle Leistung zugeteilt (
   s.svc.update();
   assert.equal(s.state.p14a.shares['eebus:hp'], 5500);
 });
+
+test('EEBUS-Hauptwallbox zählt einmal als Ladepunkt, nicht zusätzlich als EEBUS-Gerät', () => {
+  const SKI = 'e'.repeat(40);
+  const s = setup({
+    optimizer: { eosOptimizeEv: false },
+    eebusDevices: [{ id: `eebus:${SKI}`, ski: SKI, kind: 'ladepunkt', maxW: 11000, powerW: 0 }],
+  });
+  s.cfg.wallbox = { type: 'eebus', eebus: { ski: SKI } };
+  s.svc.update();
+  const lp = s.svc.summary().devices.filter((d) => d.kind === 'ladepunkt');
+  assert.deepEqual(lp.map((d) => d.id), ['wallbox'], 'eine Wallbox, eine SteuVE');
+  // Wallbox + Speicher: 4,2 + 0,8 · 4,2 (nicht 10,5 kW mit einer dritten SteuVE)
+  assert.equal(s.state.p14a.pminW, 7560);
+});
