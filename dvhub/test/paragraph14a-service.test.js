@@ -5,7 +5,7 @@ import {
   createParagraph14aService, resolveParagraph14aConfig, parseRelayPayload,
 } from '../services/paragraph14a/index.js';
 
-function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, eebusDevices = [], evcc = null, evccConnected, clock } = {}) {
+function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, eebusDevices = [], evcc = null, evccConnected, clock, batteryAssist = null } = {}) {
   const cfg = {
     gridPositiveMeans: 'grid_import',
     optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, maxChargeW: 10000, ...optimizer },
@@ -32,6 +32,7 @@ function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, 
       applyConsumptionShares: (shares, until) => applied.push({ shares, until }),
     },
   };
+  if (batteryAssist) ctx.batteryAssist = batteryAssist;
   const svc = createParagraph14aService(ctx, { setInterval: () => 0, clearInterval: () => {}, ...(clock ? { now: () => clock.t } : {}) });
   return { svc, state, cfg, logs, subs, applied, eebusDevices, lost, issues, setConnected: (v) => { plug.connected = v; } };
 }
@@ -318,4 +319,82 @@ test('EEBUS-Hauptwallbox: ihr Anteil geht zusätzlich direkt als LPC-Grenze ans 
   s.state.ctrl.eebusConsumptionLimitW = null;
   s.svc.update();
   assert.equal(s.applied.at(-1).shares[`eebus:${SKI}`], null, 'ohne Begrenzung frei');
+});
+
+// ── Akku-Hilfe (Christin 10.11.2026): erst deckt der Hausspeicher, gekürzt wird nur der Rest ──
+// Schnittstelle: ctx.batteryAssist.request({ source: 'p14a', coverW, untilMs }) → { ok, acceptedW }.
+// Die Akku-Steuerung selbst baut der Netzanschluss-Akku-Zweig; hier ein Fake.
+function fakeAssist(acceptedW = null) {
+  const calls = [];
+  return { calls, request: (r) => { calls.push(r); return { ok: true, acceptedW: acceptedW ?? r.coverW }; } };
+}
+
+test('Akku-Hilfe: Bedarf der SteuVE über der Grenze wird beim Speicher angefordert, Speicher lädt nicht aus dem Netz', () => {
+  const assist = fakeAssist();
+  const s = articleSetup({ batteryAssist: assist });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  // Bedarf WP 2100 + Wallbox 5300 = 7400; Grenze 4200; Haus 1000 ohne PV → der Akku müsste 4200 W abgeben
+  assert.deepEqual(assist.calls.at(-1), { source: 'p14a', coverW: 4200, untilMs: null });
+  assert.equal(s.state.p14a.batteryAssist.neededW, 4200);
+  assert.equal(s.state.p14a.shares.speicher, 0, 'während der Akku-Hilfe kein Netzladen');
+  const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
+  assert.ok(sum <= 4200, 'solange der Akku noch nicht liefert: gekürzt nach gemessenem Netzbezug');
+});
+
+test('Akku-Hilfe: liefert der Akku (gemessen), bekommen die Geräte ihren Bedarf; Anforderung bleibt stabil', () => {
+  const assist = fakeAssist();
+  const s = articleSetup({ batteryAssist: assist });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  // Akku entlädt 4,2 kW: Netzbezug sinkt von 6,7 auf 2,5 kW
+  s.state.victron.batteryPowerW = -4200;
+  s.state.meter.grid_total_w = 1000 + 1500 + 4200 - 4200;
+  s.clock.t += 5_000;
+  s.svc.update();
+  assert.equal(assist.calls.at(-1).coverW, 4200, 'unabhängig von der laufenden Entladung');
+  assert.equal(s.state.p14a.shares['eebus:hp'], 2100);
+  assert.equal(s.state.p14a.shares.wallbox, 5300);
+});
+
+test('Akku-Hilfe: im Not-Halt keine Akku-Hilfe, nur die Pflicht-Reduzierung', () => {
+  const assist = fakeAssist();
+  const s = articleSetup({ batteryAssist: assist });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.state.ctrl.discretionaryWritesPaused = true;
+  s.svc.update();
+  assert.ok(assist.calls.every((c) => c.coverW === 0), 'nur Freigabe');
+  assert.equal(s.state.p14a.batteryAssist.reason, 'not_halt');
+  const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
+  assert.ok(sum <= 4200);
+});
+
+test('Akku-Hilfe: Ende der Begrenzung gibt die Anforderung frei; ausgeschaltet keine Anforderung', () => {
+  const assist = fakeAssist();
+  const s = articleSetup({ batteryAssist: assist });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  s.state.ctrl.eebusConsumptionLimitW = null;
+  s.svc.update();
+  assert.equal(assist.calls.at(-1).coverW, 0);
+  const n = assist.calls.length;
+  s.svc.update();
+  assert.equal(assist.calls.length, n, 'Freigabe nur einmal');
+
+  const off = fakeAssist();
+  const s2 = articleSetup({ batteryAssist: off, p14a: { batteryAssist: false } });
+  s2.state.ctrl.eebusConsumptionLimitW = 4200;
+  s2.svc.update();
+  assert.equal(off.calls.length, 0);
+});
+
+test('Akku-Hilfe: reicht der Bedarf unter die Grenze (PV, kleiner Bedarf), wird nichts angefordert', () => {
+  const assist = fakeAssist();
+  const s = articleSetup({ batteryAssist: assist });
+  s.svc.update(); // Grenze 7560 ≥ Bedarf 7400 + Haus 1000? nein: 8400 → 840 W
+  assert.equal(assist.calls.at(-1).coverW, 900, 'Haus 1000 + Bedarf 7400 − 7560, auf 100 W aufgerundet');
+  s.state.meter.grid_total_w = 1500 + 4200 - 3000; // 4 kW PV über dem Haus
+  s.clock.t += 5_000;
+  s.svc.update();
+  assert.equal(assist.calls.at(-1).coverW, 0);
 });

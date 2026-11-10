@@ -12,6 +12,13 @@ verweist hierher.
 
 ### Neu
 
+- **§14a: Hausspeicher deckt zuerst (Schnittstelle).** Verlangt der Netzbetreiber eine Reduzierung, berechnet DVhub
+  die benötigte Akku-Hilfe (Bedarf der steuerbaren Verbraucher über der Grenze plus Haushalt ohne Speicher) und fordert
+  sie über eine schmale Schnittstelle bei der Akku-Steuerung an (`ctx.batteryAssist.request({ source: 'p14a', coverW,
+  untilMs })`). Gekürzt wird weiter nach dem gemessenen Netzbezug am Anschlusspunkt — liefert der Speicher, steigen
+  die Anteile, sonst bleibt es bei der Kürzung. Solange er hilft, lädt der Speicher nicht aus dem Netz; im Not-Halt
+  keine Akku-Hilfe. Einstellung „Hausspeicher deckt zuerst (Akku-Hilfe)“ (System → §14a, ab Werk an). Wirksam erst
+  mit der Akku-Steuerung, die die Anforderung umsetzt (eigener Zweig); bis dahin ändert sich nichts.
 - **Bleeding Edge auch für Paket-Installationen.** Native Boxen mit signierten Paketen können wieder auf Bleeding Edge
   wechseln, sobald ein Bleeding-Edge-Paket veröffentlicht ist (signierter Index `channels/index-dev.json`). Gibt es
   keins, bleibt die Box auf Stabil und die Oberfläche sagt: „Für Paket-Installationen ist derzeit kein

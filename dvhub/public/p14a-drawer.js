@@ -89,6 +89,14 @@
     } else {
       html += '<div><strong>Bezug:</strong> frei — keine Vorgabe des Netzbetreibers</div>';
     }
+    const ba = st.batteryAssist || {};
+    if (st.active && ba.requestedW > 0) {
+      html += '<div class="eebus-small">Akku-Hilfe angefordert: ' + esc(kw(ba.requestedW))
+        + (ba.acceptedW != null ? ' (Speicher sagt ' + esc(kw(ba.acceptedW)) + ' zu)' : '')
+        + ' — gekürzt wird nur, was der Speicher laut Netzbezug nicht deckt</div>';
+    } else if (st.active && ba.neededW > 0 && ba.reason === 'not_halt') {
+      html += '<div class="eebus-small">Not-Halt: keine Akku-Hilfe, nur die Pflicht-Reduzierung</div>';
+    }
     (st.issues || []).forEach(function (i) {
       html += '<div class="eebus-error"><strong>§14a-Steuerung gestört:</strong> ' + esc(i.text)
         + (i.since ? ' (seit ' + esc(new Date(i.since).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })) + ')' : '') + '</div>';

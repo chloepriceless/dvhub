@@ -65,6 +65,8 @@ export function resolveParagraph14aConfig(cfg) {
     priority: PRIORITY_PRESETS[p.priorityPreset] || DEFAULT_PRIORITY,
     priorityPreset: PRIORITY_PRESETS[p.priorityPreset] ? p.priorityPreset : 'heat_first',
     usePvSurplus: p.usePvSurplus !== false,
+    // Hausspeicher deckt zuerst (Akku-Hilfe über ctx.batteryAssist), gekürzt wird nur der Rest.
+    batteryAssist: p.batteryAssist !== false,
     relay: {
       enabled: relay.enabled === true && typeof relay.topic === 'string' && relay.topic.trim() !== '',
       topic: typeof relay.topic === 'string' ? relay.topic.trim() : '',
@@ -105,6 +107,9 @@ export function createParagraph14aService(ctx, deps = {}) {
   let lastActiveKey = null;
   // Gehaltener Bedarf je Gerät: id → { w, at }
   const heldNeed = new Map();
+  // Zuletzt beim Speicher angeforderte Akku-Hilfe (W) und seine Antwort.
+  let assistRequestedW = 0;
+  let assistReply = null;
 
   const ui = (state.p14a = {
     active: false,
@@ -121,6 +126,7 @@ export function createParagraph14aService(ctx, deps = {}) {
     budgetW: null,
     shares: {},
     reserved: {},
+    batteryAssist: { neededW: 0, requestedW: 0, acceptedW: null, reason: null },
     batteryGridW: null,
     wallboxCapW: null,
     relay: { enabled: false, topic: '', level: null, at: null },
@@ -303,6 +309,50 @@ export function createParagraph14aService(ctx, deps = {}) {
     });
   }
 
+  // --- Akku-Hilfe ---------------------------------------------------------------
+  //
+  // Rechtsgrundlage: BK6-22-300 Anlage 1 — begrenzt ist der netzwirksame
+  // Leistungsbezug der SteuVE (Ziffer 2.3); bei Steuerung mittels EMS gilt die
+  // Vorgabe für ihren gemeinsamen Bezug, gemessen am Netzanschlusspunkt, und der
+  // Betreiber teilt sie nach eigener Maßgabe auf (Ziffer 4.5.2). Deckt der
+  // Hausspeicher die Last der SteuVE, sinkt deren netzwirksamer Bezug — DVhub
+  // lässt den Speicher deshalb zuerst entladen und kürzt nur den Rest.
+  // Gekürzt wird weiter nach dem GEMESSENEN Netzbezug (budgetW rechnet laufende
+  // Entladung und PV als Überschuss mit), nicht nach der Zusage des Speichers.
+  //
+  // Benötigte Akku-Hilfe = Bedarf der SteuVE − (Grenze − belegt) + Haushalt
+  // ohne Speicher (Bezug − SteuVE + laufende Entladung; negativ = PV-Überschuss).
+  // Die laufende Entladung wird herausgerechnet: sonst sänke die Anforderung,
+  // sobald der Speicher liefert, und die Hilfe schwänge.
+  //
+  // Schnittstelle (die Akku-Steuerung baut der Netzanschluss-Akku-Zweig bzw.
+  // bei Victron der positive Netz-Sollwert):
+  //   ctx.batteryAssist.request({ source: 'p14a', coverW, untilMs })
+  //     → { ok: boolean, acceptedW?: number, reason?: string } (auch als Promise)
+  //   coverW = 0 gibt die Anforderung frei.
+  function assistNeededW({ consumers, limitW, reservedW, gridImportW, steuveW }) {
+    const bp = Number(state.victron?.batteryPowerW);
+    const dischargeW = Number.isFinite(bp) ? Math.max(0, -bp) : 0;
+    const houseW = gridImportW - steuveW + dischargeW;
+    const needSum = consumers.filter((x) => x.kind !== 'speicher')
+      .reduce((a, x) => a + (x.needW ?? x.maxW), 0);
+    const w = needSum - (limitW - reservedW) + houseW;
+    return w > 0 ? Math.ceil(w / SHARE_STEP_W) * SHARE_STEP_W : 0;
+  }
+
+  function requestAssist(coverW, untilMs) {
+    if (typeof ctx.batteryAssist?.request !== 'function') return;
+    if (coverW === 0 && assistRequestedW === 0) return; // Freigabe nur einmal
+    assistRequestedW = coverW;
+    try {
+      Promise.resolve(ctx.batteryAssist.request({ source: 'p14a', coverW, untilMs }))
+        .then((r) => { assistReply = r || null; })
+        .catch((e) => { assistReply = { ok: false, reason: e?.message || String(e) }; });
+    } catch (e) {
+      assistReply = { ok: false, reason: e?.message || String(e) };
+    }
+  }
+
   function update() {
     const c = cfgNow();
     syncRelaySubscription(c);
@@ -321,6 +371,7 @@ export function createParagraph14aService(ctx, deps = {}) {
     let shares = {};
     let consumers = [];
     const reserved = {};
+    const assist = { neededW: 0, requestedW: 0, acceptedW: null, reason: null };
     if (active) {
       const controllable = list.filter((d) => d.controllable);
       const steuveW = controllable.reduce((s, d) => s + d.currentW, 0);
@@ -331,11 +382,33 @@ export function createParagraph14aService(ctx, deps = {}) {
         free -= reserved[d.id];
       }
       consumers = consumersFor(controllable, c);
-      shares = stable(allocateBudget(free, consumers,
+      // Akku-Hilfe: nur mit Messwert am Anschlusspunkt (Rückkopplung) und mit
+      // PV-Überschuss-Rechnung, nie im Not-Halt (dort nur die Pflicht-Reduzierung).
+      const gridImportW = gridImportPositiveW(state, getCfg());
+      const provider = typeof ctx.batteryAssist?.request === 'function';
+      const reservedW = Object.values(reserved).reduce((a, w) => a + w, 0);
+      assist.neededW = Number.isFinite(gridImportW)
+        ? assistNeededW({ consumers, limitW, reservedW, gridImportW, steuveW }) : 0;
+      if (!c.batteryAssist) assist.reason = 'off';
+      else if (!provider) assist.reason = 'no_provider';
+      else if (state.ctrl?.discretionaryWritesPaused === true) assist.reason = 'not_halt';
+      else if (!c.usePvSurplus || !Number.isFinite(gridImportW)) assist.reason = 'no_measurement';
+      else assist.reason = null;
+      const assisting = assist.reason == null && assist.neededW > 0;
+      requestAssist(assist.reason == null ? assist.neededW : 0, state.ctrl?.eebusConsumptionLimitUntil ?? null);
+      // Solange der Speicher hilft, lädt er nicht aus dem Netz (Anteil 0).
+      const allocConsumers = assisting ? consumers.filter((x) => x.kind !== 'speicher') : consumers;
+      shares = stable(allocateBudget(free, allocConsumers,
         { mode: c.allocation, priority: c.priority, demand: c.demandFirst }), free);
+      if (assisting) for (const x of consumers) if (x.kind === 'speicher') shares[x.id] = 0;
     } else {
       heldNeed.clear();
+      requestAssist(0, null);
+      assist.reason = null;
     }
+    assist.requestedW = assistRequestedW;
+    assist.acceptedW = assistRequestedW > 0 && assistReply?.ok === true && Number.isFinite(Number(assistReply.acceptedW))
+      ? Number(assistReply.acceptedW) : null;
     lastShares = shares;
     const needById = Object.fromEntries(consumers.filter((x) => x.needW != null).map((x) => [x.id, x.needW]));
 
@@ -370,6 +443,7 @@ export function createParagraph14aService(ctx, deps = {}) {
       budgetW: budget,
       shares,
       reserved,
+      batteryAssist: assist,
       batteryGridW: active ? (shares.speicher ?? 0) : null,
       wallboxCapW: active && shares.wallbox != null ? shares.wallbox : null,
       relay: { enabled: c.relay.enabled, topic: c.relay.topic, level: relay.level, at: relay.at, activeWhen: c.relay.activeWhen },
@@ -430,6 +504,7 @@ export function createParagraph14aService(ctx, deps = {}) {
       budgetW: ui.budgetW,
       shares: { ...ui.shares },
       reserved: { ...ui.reserved },
+      batteryAssist: { ...ui.batteryAssist },
       // Störungen der Gerätesteuerung (nicht erreichbar, nicht umgesetzt …)
       issues: ctx.eebus?.controlIssues?.() || [],
       devices: ui.devices.map((d) => ({ ...d })),
