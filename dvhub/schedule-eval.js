@@ -114,15 +114,18 @@ function dischargeFloorHold(target, value) {
 // Deckel u. a. lassen sie unangetastet):
 //   negative_price_protection  — §51 EEG-Abregelung bei negativem Preis
 //   manual_override_soc_floor  — T-0002 Sicherheits-Nullung am SoC-Boden
-//   emergency_stop             — die eine gridSetpointW=0-Neutralisierung des Not-Halts
+//   emergency_stop             — bis bd18f099 die gridSetpointW=0-Neutralisierung des
+//                                Not-Halts; seit Christins Entscheidung 10.11.2026
+//                                („Netz-Sollwert … nichts ändern“) ohne Aufrufer und
+//                                im Not-Halt geblockt (policy.js)
 // Diskretionär: dc_export_mode (Christin 12.06.2026), sell_price_floor,
 // rule:*, eos_optimization, emhass_optimization, api_manual_write, manual_override*, default.
 //
 // NOT-HALT (Tor in applyControlTarget): bis 1.0.9 schrieben die Pflicht-Quellen
 // im Not-Halt weiter. Seit 1.0.10 gilt Christins Entscheidung vom 10.11.2026
 // „Ja, Not-Halt heißt auch die Punkte von §51 usw.“ — „als ob die Kiste aus
-// ist“: im Not-Halt schreibt nur noch emergency_stop (einmal) und je eine
-// Rücknahme DVhub-eigener Vorgaben (NOT_HALT_ONE_SHOT_SOURCES); welche
+// ist“: im Not-Halt schreibt nur noch je eine Rücknahme DVhub-eigener Vorgaben
+// (NOT_HALT_ONE_SHOT_SOURCES), den Netz-Sollwert gar nicht (10.11.2026); welche
 // Pflicht-Klasse doch weiterläuft, steht in services/emergency-stop/policy.js
 // (Whitelist, fail-safe: Unbekanntes ist im Not-Halt blockiert). Der PV-Sperr-
 // Pfad applyDvVictronControl (2707/2708, Sequenzen) folgt derselben Tabelle:

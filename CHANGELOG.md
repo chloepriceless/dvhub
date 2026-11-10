@@ -173,14 +173,22 @@ verweist hierher.
   am SoC-Boden**: Eine von DVhub gesetzte PV-Sperre wird einmal aufgehoben, danach ist der Betreiber selbst
   verantwortlich. Der Leitstand nennt im Not-Halt-Banner, was ausgesetzt ist. Jede dieser Klassen lässt sich in
   `services/emergency-stop/policy.js` einzeln wieder einschalten.
+  - **Netz-Sollwert bleibt unverändert** (Christin 10.11.2026: „Netz-Sollwert – das was in Victron drinsteht – nichts
+    ändern.“). Der Eintritt schreibt den Netz-Sollwert nicht mehr — bisher einmal 0 W auf Victron 2716 (bzw. 2700),
+    die MQTT-Brücke und jedes andere Profil mit schreibbarem Netz-Sollwert. Es bleibt, was im Gerät steht, wie bei
+    ausgeschaltetem DVhub: der flüchtige Victron-2716 wird nicht nachgeführt und läuft nach der Venus-Frist ab, ein
+    persistenter 2700 behält den zuletzt geschriebenen Wert. Auch die frühere Quelle `emergency_stop` kommt im
+    Not-Halt nicht mehr durch das Tor. Leitstand-Knopf, Rückfrage und Meldung versprechen keinen „Sollwert 0“ mehr;
+    `POST /api/control/stop` meldet `neutralize: { skipped: true, reason: "setpoint_unchanged" }`.
   - **§14a im Not-Halt ausgesetzt:** Die von DVhub gesetzten EEBUS-Grenzen gehen einmal auf „frei“, danach kein
     Herzschlag, kein Auffrischen, kein Wiederanlauf-„frei“ und keine Verdichter-Planung mehr. Die Geräte gehen nach
     ihrer Frist in ihren eigenen Failsafe, genau wie bei ausgeschaltetem DVhub. Die Vorgabe des Netzbetreibers wird
     weiter angezeigt und protokolliert; Leitstand und §14a-Ansicht zeigen „§14a im Not-Halt ausgesetzt“. Beim
     Aufheben nimmt DVhub jedes verbundene Gerät wie beim Anmelden wieder auf. Neuer Befehl `device_heartbeat` für
     dvhub-eebus (Go und C); ein Hilfsprozess ohne den Befehl wird neu gestartet.
-  - **Zweite GX:** einmal 0 W, danach nur Lesen (vorher alle 5 s 0 W). Ohne Nachführen fällt die GX wie bei
-    ausgeschaltetem DVhub nach etwa 10 s in Passthru. Die Einspeisung aus Akku 2 schreibt die gesicherte
+  - **Zweite GX:** kein Sollwert-Write, auch keine 0 W, nur Lesen (vorher alle 5 s 0 W); auch das Abschalten der
+    zweiten Anlage im Not-Halt schreibt nichts. Ohne Nachführen läuft ihr 2716 wie bei ausgeschaltetem DVhub ab
+    (laut Code-Kommentar nach etwa 10 s Passthru). Die Einspeisung aus Akku 2 schreibt die gesicherte
     Entladegrenze nur beim Eintritt zurück, wenn der SoC-Boden es dann zulässt; sonst erst nach dem Not-Halt.
   - **Still im Not-Halt:** die Lebenszeichen von Salia, Nexblue, Schneider und openWB (die Box geht in ihren eigenen
     Failsafe), das Nachprüfen der Einspeisegrenze 2706, Wallbox-Modus und Relais über Familie oder MQTT (Antwort

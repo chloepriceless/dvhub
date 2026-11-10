@@ -12,7 +12,9 @@
  * unberuehrt: Sie regelt den Anschluss weiter auf DVhubs Netz-Sollwert und
  * gleicht ueber ihren Zaehler aus, was die zweite Anlage tut.
  *
- * Schutz: Not-Halt → sofort 0. Direktvermarkter-Abregelung oder negativer Preis
+ * Schutz: Not-Halt → kein Write mehr, auch keine 0 (Christin 10.11.2026:
+ * „Netz-Sollwert – das was in Victron drinsteht – nichts ändern.“; der
+ * flüchtige 2716 läuft dann ab wie bei DVhub aus). Direktvermarkter-Abregelung oder negativer Preis
  * → die zweite Anlage schiebt nichts ins Hausnetz (Sollwert >= 0). Drei
  * Fehlversuche → offline, Sollwert 0, EOS rechnet ohne ihren Akku.
  * Eigener Modbus-Pool (server.js), damit eine haengende zweite GX die
@@ -88,11 +90,6 @@ export function createMultiGx(ctx, deps = {}) {
   let online = null;
   let active = false;
   let timer = null;
-  // Not-Halt „als ob aus“: DVhub hat 2716 seit dem Start beschrieben (nur dann
-  // gibt es eine eigene Vorgabe zurückzunehmen) und die eine 0 im laufenden
-  // Not-Halt ist schon raus (pausedAt) — danach nur noch lesen.
-  let everWritten = false;
-  let stopNeutralizedAt = null;
   const side = { socPct: null, batteryPowerW: null, minSocPct: null, acInW: null, at: 0 };
 
   function conf() {
@@ -111,8 +108,6 @@ export function createMultiGx(ctx, deps = {}) {
       deadbandW: finite(c.deadbandW) ? Number(c.deadbandW) : undefined,
     };
   }
-
-  const pausedAt = () => Number(ctx.state.ctrl?.pausedAt) || 0;
 
   function publish(extra) {
     ctx.state.multiGx = {
@@ -218,8 +213,9 @@ export function createMultiGx(ctx, deps = {}) {
   async function runTick() {
     const c = conf();
     if (!c.enabled || !c.host) {
-      const stopDone = ctx.state.ctrl?.discretionaryWritesPaused === true && stopNeutralizedAt === pausedAt();
-      if (active && c.host && !stopDone) {
+      // Im Not-Halt auch hier nichts schreiben (Christin 10.11.2026).
+      const stopNow = ctx.state.ctrl?.discretionaryWritesPaused === true;
+      if (active && c.host && !stopNow) {
         // Einmal neutral hinterlassen; das Register faellt ohnehin von selbst zurueck.
         try { await write(c, 0); } catch { /* best effort */ }
       }
@@ -278,21 +274,17 @@ export function createMultiGx(ctx, deps = {}) {
 
     // Geschrieben wird nach jedem erfolgreichen Lesen — auch, wenn die Anlage
     // gerade als nicht verfuegbar gilt, damit eine Erholung erkannt wird.
-    // Not-Halt (Christin 10.11.2026: „als ob die Kiste aus ist“): EINE 0, auch
-    // wenn das Lesen gerade scheitert (Codex Runde 3) — aber nur, wenn DVhub 2716
-    // ueberhaupt beschrieben hat; danach nur noch lesen, auch nach einem
-    // Fehlschlag (kein Wiederholen). Das Register faellt ohne Nachfuehren von
-    // selbst auf den Wert der zweiten GX zurueck (T-0107), wie bei DVhub aus.
+    // Not-Halt: KEIN Write, auch keine 0 — Entscheidung Christin 10.11.2026:
+    // „Netz-Sollwert – das was in Victron drinsteht – nichts ändern.“ (bis
+    // bd18f099 ging hier einmal 0 raus). Nur noch lesen; der fluechtige 2716
+    // wird nicht nachgefuehrt und laeuft an der zweiten GX ab (T-0107), wie bei
+    // DVhub aus.
     const stopNow = ctrl.discretionaryWritesPaused === true;
-    if (!stopNow) stopNeutralizedAt = null;
-    const stopWrite = stopNow && stopNeutralizedAt !== pausedAt();
-    if (stopWrite) stopNeutralizedAt = pausedAt();
-    if (stopNow && (!stopWrite || !everWritten)) {
+    if (stopNow) {
       if (readOk) setAvailable(true, c.host);
-    } else if (readOk || stopNow) {
+    } else if (readOk) {
       try {
         await write(c, out.setpointW);
-        everWritten = true;
         writeErrors = 0;
         if (readOk) setAvailable(true, c.host);
       } catch (e) {
@@ -308,7 +300,8 @@ export function createMultiGx(ctx, deps = {}) {
       batteryPowerW: ok ? side.batteryPowerW : null,
       acInW: ok ? side.acInW : null,
       minSocPct: side.minSocPct ?? c.minSocPct,
-      setpointW: ok ? out.setpointW : 0, desiredBatteryW: out.desiredFollowerBatteryW, sharePct: out.followerWeightPct,
+      // Im Not-Halt schreibt DVhub keinen Sollwert → keinen anzeigen.
+      setpointW: stopNow ? null : (ok ? out.setpointW : 0), desiredBatteryW: out.desiredFollowerBatteryW, sharePct: out.followerWeightPct,
       totalBatteryW: out.totalBatteryW, reason: ok || online === null ? out.reason : 'follower_offline',
       handoff: ctx.state.multiGxHandoff?.phase || 'off', mainDischargeBlocked: mainBlocked,
     });

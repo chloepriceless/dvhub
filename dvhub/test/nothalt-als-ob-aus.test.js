@@ -27,7 +27,9 @@ import { createNexblueAdapter } from '../services/wallbox/nexblue.js';
 
 test('Richtlinie 10.11.2026: keine Pflicht-Klasse schreibt im Not-Halt weiter; Leitstand nennt alles Ausgesetzte', () => {
   assert.deepEqual(Object.values(NOT_HALT_CONTINUES), [false, false, false, false, false]);
-  assert.equal(notHaltAllowsControlSource('emergency_stop'), true, 'die eine Neutralisierung');
+  // Christin 10.11.2026: Netz-Sollwert beim Eintritt unverändert — auch die
+  // frühere Neutralisierungs-Quelle kommt nicht mehr durch das Tor.
+  assert.equal(notHaltAllowsControlSource('emergency_stop'), false, 'kein Netz-Sollwert-Write im Not-Halt');
   for (const src of ['negative_price_protection', 'manual_override_soc_floor', 'eos_optimization', 'rule:x', 'kaputt']) {
     assert.equal(notHaltAllowsControlSource(src), false, src);
   }
@@ -91,7 +93,6 @@ test('Not-Halt bei negativem Preis: von DVhub gesetzte §51-Sperre einmal frei, 
   assert.ok(w.writes.some((x) => x.target === 'feedExcessDcPv' && x.value === 0), '§51 hat gesperrt');
   assert.equal(w.state.ctrl._lastDvFeedIn, false);
   w.enter();
-  await w.ev.applyControlTarget('gridSetpointW', 0, 'emergency_stop');
   const n = w.writes.length;
   await w.ev.evaluateSchedule();
   assert.deepEqual(w.writes.slice(n), [{ target: 'feedExcessDcPv', value: 1 }, { target: 'dontFeedExcessAcPv', value: 0 }], 'eine Freigabe');
@@ -217,24 +218,36 @@ function mgxWorld() {
   };
   let t = 0;
   const mgx = createMultiGx({ getCfg: () => cfg, state, pushLog: () => {} }, { transport, now: () => t });
-  return { mgx, state, calls, tick: async () => { t += 5000; await mgx.tick(); }, writes: () => calls.filter((c) => c.op === 'write') };
+  return { mgx, state, cfg, calls, tick: async () => { t += 5000; await mgx.tick(); }, writes: () => calls.filter((c) => c.op === 'write') };
 }
 
-test('Zweite GX im Not-Halt: genau eine 0, danach nur noch lesen; nach dem Aufheben wieder Sollwerte', async () => {
+// Christin 10.11.2026: „Netz-Sollwert – das was in Victron drinsteht – nichts
+// ändern.“ Gilt auch für die zweite GX: kein 2716-Write im Not-Halt, auch keine 0.
+test('Zweite GX im Not-Halt: kein Sollwert-Write (auch keine 0), nur noch lesen; nach dem Aufheben wieder Sollwerte', async () => {
   const w = mgxWorld();
   for (let i = 0; i < 4; i++) await w.tick();
   const before = w.writes().length;
   assert.ok(before > 0);
   w.state.ctrl.discretionaryWritesPaused = true; w.state.ctrl.pausedAt = 77;
   for (let i = 0; i < 6; i++) await w.tick();
-  const during = w.writes().slice(before);
-  assert.equal(during.length, 1, 'eine Neutralisierung');
-  assert.deepEqual(during[0].values, [0, 0]);
+  assert.deepEqual(w.writes().slice(before), [], 'kein 2716-Write an der zweiten GX');
   assert.ok(w.calls.slice(-3).every((c) => c.op === 'read'), 'Werte laufen weiter');
   assert.equal(w.state.multiGx.online, true, 'lesbar = verfügbar');
+  assert.equal(w.state.multiGx.setpointW, null, 'Leitstand zeigt keinen DVhub-Sollwert, den es nicht schreibt');
   w.state.ctrl.discretionaryWritesPaused = false;
   await w.tick();
-  assert.equal(w.writes().length, before + 2, 'Steuerung läuft wieder');
+  assert.equal(w.writes().length, before + 1, 'Steuerung läuft wieder');
+});
+
+test('Zweite GX im Not-Halt ausgeschaltet: auch das „neutral hinterlassen“ schreibt keine 0', async () => {
+  const w = mgxWorld();
+  for (let i = 0; i < 3; i++) await w.tick();
+  const before = w.writes().length;
+  assert.ok(before > 0);
+  w.state.ctrl.discretionaryWritesPaused = true; w.state.ctrl.pausedAt = 78;
+  w.cfg.multiGx.enabled = false;
+  for (let i = 0; i < 3; i++) await w.tick();
+  assert.deepEqual(w.writes().slice(before), [], 'kein Write beim Abschalten im Not-Halt');
 });
 
 test('Zweite GX: Start im Not-Halt (nie beschrieben) → keine einzige Schreibanfrage', async () => {
@@ -414,4 +427,88 @@ test('server.js: loadControlState() läuft vor dem ersten Dienststart (feedInCap
     assert.ok(i > 0, `${start} gefunden`);
     assert.ok(calls[0] < i, `loadControlState() vor ${start}`);
   }
+});
+
+// --- Mock-Write-Protokoll: Eintritt an Hauptanlage UND zweiter GX ---------------
+// Christin 10.11.2026: „Netz-Sollwert – das was in Victron drinsteht – nichts
+// ändern.“ Echte Bausteine (schedule-eval, multi-gx, setEmergencyStop) an einem
+// Modbus-Mitschnitt: beim Eintritt KEIN Write auf 2716/2717 (oder 2700), weder an
+// der Hauptanlage noch an der zweiten GX; die Freigabe der eigenen §51-PV-Sperre
+// (2707/2708) kommt wie bisher genau einmal.
+test('Not-Halt-Eintritt (Mitschnitt): kein 2716-Write an beiden GX, die eigene PV-Sperre wird einmal freigegeben', async () => {
+  const log = [];
+  const MAIN = 'gx-main';
+  const SECOND = '192.168.1.20';
+  const secondRegs = { 843: 60, 842: 0, 2901: 150 };
+  const transport = {
+    type: 'modbus',
+    async mbRequest(req) {
+      const regs = req.host === SECOND ? secondRegs : {};
+      return Array.from({ length: req.quantity || 1 }, (_, i) => regs[req.address + i] ?? 0);
+    },
+    async mbWriteSingle(req) { log.push({ host: req.host, address: req.address, values: [req.value] }); return {}; },
+    async mbWriteMultiple(req) { log.push({ host: req.host, address: req.address, values: req.values }); return {}; },
+  };
+  const gx = { host: MAIN, port: 502, unitId: 100 };
+  const cfg = {
+    updateChannel: 'dev', gridPositiveMeans: 'grid_import',
+    controlWrite: {
+      gridSetpointW: { ...gx, enabled: true, fc: 16, address: 2716, writeType: 'int32', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
+      chargeCurrentA: { enabled: false },
+      maxDischargeW: { ...gx, enabled: true, fc: 6, address: 2704, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
+    },
+    dvControl: {
+      enabled: true,
+      feedExcessDcPv: { ...gx, enabled: true, fc: 6, address: 2707, writeType: 'uint16' },
+      dontFeedExcessAcPv: { ...gx, enabled: true, fc: 6, address: 2708, writeType: 'uint16' },
+      negativePriceProtection: { enabled: true },
+    },
+    optimizer: { enabled: false, allowGridCharge: false, allowGridDischarge: true, hardFloorSocPct: 5, batteryCapacityWh: 64000, maxSocPct: 100, maxDischargeW: 10000 },
+    negativePriceProtection: { enabled: true, gridSetpointW: -40 },
+    schedule: { timezone: 'Europe/Berlin', controlKeepaliveMs: 5000, smallMarketAutomation: { enabled: false } },
+    multiGx: { enabled: true, host: SECOND, port: 502, unitId: 100, batteryCapacityWh: 64000, maxChargeW: 10000, maxDischargeW: 10000, minSocPct: 10 },
+  };
+  const state = {
+    victron: { soc: 60, batteryDischargeW: 0, batteryChargeW: 0, batteryPowerW: -4000, minSocPct: 10, errors: {}, gridSetpointW: 0, pvTotalW: 3000, pvPowerW: 3000, fieldUpdatedAt: { soc: Date.now() } },
+    meter: { ok: true, grid_total_w: 0 },
+    schedule: {
+      rules: [], active: {}, lastWrite: {}, manualOverride: {},
+      config: { defaultGridSetpointW: -100, defaultChargeCurrentA: null, defaultFeedExcessDcPv: 0 }, lastEvalAt: 0,
+    },
+    ctrl: { negativePriceActive: false, forcedOff: false, discretionaryWritesPaused: false, pausedAt: 0, _stopBlockLogged: {} },
+    epex: { data: [] },
+  };
+  const logs = [];
+  const ctx = {
+    state, getCfg: () => cfg, transport,
+    pushLog: (event, payload) => logs.push({ event, payload: payload || {} }),
+    telemetrySafeWrite: (fn) => { try { fn?.(); } catch { /* */ } },
+    persistConfig: async () => {}, telemetryStore: null,
+    epexNowNext: () => ({ current: { ct_kwh: -3, eur_mwh: -30 }, next: null }),
+    regenerateSmallMarketAutomationRules: async () => {},
+    onEvalComplete: () => {},
+    persistControlState: () => true,
+  };
+  const ev = createScheduleEvaluator(ctx);
+  ctx.applyControlTarget = (...a) => ev.applyControlTarget(...a);
+  let t = 0;
+  const mgx = createMultiGx({ getCfg: () => cfg, state, pushLog: () => {} }, { transport, now: () => t });
+  const cycle = async () => { await ev.evaluateSchedule(); t += 5000; await mgx.tick(); };
+
+  for (let i = 0; i < 3; i++) await cycle();
+  const setpointWrites = (rows, host) => rows.filter((r) => r.host === host && (r.address === 2716 || r.address === 2700));
+  assert.ok(setpointWrites(log, MAIN).length > 0, 'Hauptanlage: DVhub hat den Netz-Sollwert vorher beschrieben');
+  assert.ok(setpointWrites(log, SECOND).length > 0, 'zweite GX: DVhub hat den Netz-Sollwert vorher beschrieben');
+  assert.ok(log.some((r) => r.address === 2707 && r.values[0] === 0), '§51 hat die PV gesperrt');
+
+  const n = log.length;
+  const r = await setEmergencyStop(ctx, { on: true });
+  assert.equal(r.paused, true);
+  for (let i = 0; i < 4; i++) await cycle();
+  const after = log.slice(n);
+  assert.deepEqual(setpointWrites(after, MAIN), [], 'Hauptanlage: kein 2716/2700-Write im Not-Halt');
+  assert.deepEqual(setpointWrites(after, SECOND), [], 'zweite GX: kein 2716-Write im Not-Halt');
+  assert.deepEqual(after.filter((x) => x.address === 2707 || x.address === 2708).map((x) => [x.address, x.values[0]]),
+    [[2707, 1], [2708, 0]], 'eigene §51-PV-Sperre genau einmal frei (unverändert)');
+  assert.ok(!logs.some((l) => l.event === 'emergency_stop_neutralize_failed'));
 });

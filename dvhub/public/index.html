@@ -288,11 +288,12 @@
         <div class="rail-card-head">
           <span class="ttl"><span class="dot dot-ctrl"></span>Steuerung</span>
         </div>
-        <!-- T-0099 NOT-HALT: stoppt alle diskretionaeren Setpoint-Writes (Spot-Markt/
-             Akku). Pflicht-Pfade (&sect;51 Negativpreis-Abregelung, SOC-Boden-Schutz,
-             &sect;9 Einspeisegrenze) laufen weiter; Live-Werte (Reads) sowieso. -->
+        <!-- T-0099 NOT-HALT „als ob DVhub aus ist“ (Christin 10.11.2026): keine
+             Steuer-Writes mehr, auch nicht &sect;51/DV/&sect;14a/SoC-Boden; DVhubs eigene
+             Sperren einmal zurueck. Den Netz-Sollwert laesst der Not-Halt unveraendert
+             („das was in Victron drinsteht – nichts aendern“, 10.11.2026). Reads laufen. -->
         <div class="nothalt-block">
-          <button id="emergencyStopBtn" class="btn nothalt-btn" type="button" title="Not-Halt: schreibt einmalig Grid-Setpoint 0 (Eigenverbrauchsregelung) und stoppt danach alle Markt-/Optimizer-/Hand-Steuerbefehle, bis du fortsetzt. Pflicht-Abregelung (&sect;51/&sect;9) und Live-Anzeige laufen weiter. &Uuml;berlebt einen Neustart.">&#128721; NOT-HALT &mdash; Steuerung stoppen</button>
+          <button id="emergencyStopBtn" class="btn nothalt-btn" type="button" title="Not-Halt: DVhub steuert nichts mehr, als w&auml;re es aus, bis du fortsetzt &ndash; auch &sect;51-, Direktvermarkter- und &sect;14a-Abregelung sowie der SoC-Boden-Schutz sind ausgesetzt. Von DVhub gesetzte Sperren und Ger&auml;tevorgaben werden einmal zur&uuml;ckgenommen. Den Netz-Sollwert schreibt DVhub nicht: es bleibt, was in der Anlage steht. Messwerte laufen weiter. &Uuml;berlebt einen Neustart.">&#128721; NOT-HALT &mdash; Steuerung stoppen</button>
           <button id="emergencyResumeBtn" class="btn nothalt-resume-btn" type="button" hidden title="Hebt den Not-Halt auf. Der Zeitplan &uuml;bernimmt beim n&auml;chsten Takt (~15 s) wieder.">&#9654; Steuerung fortsetzen</button>
           <div class="meta nothalt-meta" id="emergencyStopMeta" hidden>&mdash;</div>
         </div>

@@ -119,8 +119,9 @@ export async function applyManualControlWrite(ctx, opts) {
 
 /**
  * Not-Halt setzen/aufheben. Spiegelt POST /api/control/stop bzw. /resume.
- * on=true pausiert alle diskretionären Hardware-Schreibvorgänge und neutralisiert
- * einmalig gridSetpointW=0; on=false nimmt die Pause zurück (nächster Eval-Takt
+ * on=true pausiert alle Hardware-Schreibvorgänge und nimmt DVhubs eigene
+ * Vorgaben einmal zurück; den Netz-Sollwert lässt es unverändert (Christin
+ * 10.11.2026, siehe unten); on=false nimmt die Pause zurück (nächster Eval-Takt
  * ~15 s re-appliziert Regeln/Default).
  *
  * @param {object} ctx
@@ -165,8 +166,8 @@ async function setEmergencyStopNow(ctx, opts) {
     if (state.ctrl.discretionaryWritesPaused) {
       return { ok: true, status: 200, alreadyStopped: true, pausedAt: state.ctrl.pausedAt };
     }
-    // Reihenfolge: erst Flag setzen (kein diskretionärer Write kann dazwischen),
-    // dann EINE aktive Neutralisierung.
+    // Reihenfolge: erst Flag setzen (kein Write kann dazwischen), dann die
+    // einmaligen Rücknahmen der eigenen Vorgaben.
     state.ctrl.discretionaryWritesPaused = true;
     state.ctrl.pausedAt = Date.now();
     state.ctrl.pausedBy = actor?.actor_ip || 'unknown';
@@ -174,20 +175,19 @@ async function setEmergencyStopNow(ctx, opts) {
     state.ctrl._stopBlockLogged = {};
     const persisted = persistNotHalt(ctx, actor);
     ctx.pushLog('emergency_stop_activated', { by: state.ctrl.pausedBy }, { ...(actor || {}), severity: 'warn' });
-    let neutralize;
-    try {
-      neutralize = await ctx.applyControlTarget('gridSetpointW', 0, 'emergency_stop');
-    } catch (e) {
-      neutralize = { ok: false, error: e.message };
-    }
-    // Kein Setpoint-Stellpfad aktiviert (z. B. Fronius M124) -> nichts zu
-    // neutralisieren, kein Fehler.
-    if (!neutralize?.ok && neutralize?.error === 'write target not enabled in config') {
-      neutralize = { ok: true, skipped: true, reason: 'target_not_enabled' };
-    }
-    if (!neutralize?.ok && !neutralize?.skipped) {
-      ctx.pushLog('emergency_stop_neutralize_failed', { error: neutralize?.error || 'unknown' }, { ...(actor || {}), severity: 'error' });
-    }
+    // Netz-Sollwert: Entscheidung Christin 10.11.2026 — „Netz-Sollwert – das
+    // was in Victron drinsteht – nichts ändern.“ Beim Eintritt schreibt DVhub
+    // den Netz-Sollwert NICHT (Victron 2716/2717 bzw. 2700, MQTT-Brücke und
+    // jedes andere Profil mit gridSetpointW; die zweite GX ebenso, siehe
+    // services/multi-gx/index.js) — es bleibt, was im Gerät steht, wie bei
+    // ausgeschalteter Kiste. Bis zum 1.0.10-Kandidaten bd18f099 kam hier einmal
+    // gridSetpointW = 0 (Quelle 'emergency_stop'); das Not-Halt-Tor lässt diese
+    // Quelle seither auch nicht mehr durch (services/emergency-stop/policy.js).
+    // Folge am Victron-GX: der flüchtige 2716 wird nicht mehr nachgeführt und
+    // läuft nach der Venus-Frist ab (T-0107, config-model.js controlKeepaliveMs);
+    // ein persistenter 2700 behält den letzten Wert.
+    // `neutralize` bleibt im Ergebnis (API/MQTT/Handy-App lesen es).
+    const neutralize = { ok: true, skipped: true, reason: 'setpoint_unchanged' };
     // Christin 06.11.2026: Not-Halt heißt „hör mit allen Steuerungen auf“.
     // Wallbox und Heizstab bekommen EINMAL 0 W bzw. „aus“ — aber nur, wo DVhub
     // den aktuellen Zustand selbst gesetzt hat; eine von Hand gestartete Ladung

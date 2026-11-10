@@ -8711,11 +8711,11 @@ export function createApiRoutes(ctx) {
     // „Ja, Not-Halt heißt auch die Punkte von §51 usw.“) — KEINE Hardware-Writes
     // mehr, auch nicht §51, DV-Abregelung, §14a oder SoC-Boden; jede DVhub-eigene
     // Vorgabe wird einmal zurückgenommen (services/emergency-stop/policy.js). Order matters:
-    //   1. set the flag FIRST (no discretionary write can race in between),
-    //   2. then ONE active gridSetpointW=0 neutralization (source
-    //      'emergency_stop' is whitelisted through the gate) so the plant is
-    //      immediately on internal self-consumption — we do NOT rely on a
-    //      Venus-side reg-2700 revert timeout (T-0099 scope §1).
+    //   1. set the flag FIRST (no write can race in between),
+    //   2. then the one-shot releases of DVhub's own settings. The grid setpoint
+    //      is NOT written (Christin 10.11.2026: „Netz-Sollwert – das was in
+    //      Victron drinsteht – nichts ändern.“) — until bd18f099 this step wrote
+    //      gridSetpointW=0 via source 'emergency_stop'; the gate now blocks it.
     // No auto-resume: the flag never expires; only POST /api/control/resume
     // (or deleting control_state.json) lifts it.
     // Kernlogik in services/control-commands.js (setEmergencyStop) — geteilt mit
