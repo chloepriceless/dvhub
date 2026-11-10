@@ -178,6 +178,11 @@ describe('Abgleich gegen eine EOS-Attrappe', () => {
     const sent = mock.puts.slice(n).map((p) => `${p.section}=${JSON.stringify(p.body)}`);
     assert.ok(!sent.includes('devices/max_electric_vehicles=1'), sent.join(' | '));
     assert.equal(res.errors['devices/max_electric_vehicles'], 'inverter_cap_not_applied');
+    // Auch der Fahrzeug-Abgleich allein (ev-watch) schreibt nichts (Codex a06a107e, P2).
+    const m = mock.puts.length;
+    const ev = await sync.syncEv();
+    assert.equal(ev.skipped, 'ev_not_registered');
+    assert.equal(mock.puts.length, m, 'kein PUT');
     // Grenze kommt an → Auto wird angemeldet.
     mock.fail.delete('devices/inverters');
     await sync.sync();

@@ -510,6 +510,11 @@ export function createEosConfigSync(ctx) {
   // könnte EOS mit gelockerter Akku-Ladegrenze UND angemeldetem Auto planen
   // (Codex 0190570d, P2). Beim Start unbekannt: vorsichtig wie mit Auto.
   let evConfirmedOff = false;
+  // Hat EOS das Auto nachweislich angemeldet (max_electric_vehicles = 1
+  // quittiert)? Nur dann darf syncEv das Fahrzeug allein nachschreiben — sonst
+  // stünde in EOS ein Fahrzeug bei „höchstens 0“ (Codex a06a107e, P2).
+  // null = in diesem Lauf noch kein voller Abgleich (wie bisher erlaubt).
+  let evRegistered = null;
 
   function publishCaps(caps) {
     if (state) {
@@ -863,16 +868,20 @@ export function createEosConfigSync(ctx) {
       // Auto erst anmelden, wenn die engere Akku-Ladegrenze des Behelfs in EOS
       // steht (Codex 0190570d, P2): scheitert der Wechselrichter-PUT, bleibt
       // das Auto in diesem Abgleich draußen.
+      const evMax = t.section === 'devices/max_electric_vehicles';
       if (t.evRegister && errors['devices/inverters']) {
         errors[t.section] = 'inverter_cap_not_applied';
+        if (evMax) evRegistered = false;
         continue;
       }
       if (t.evRegister) evConfirmedOff = false;
-      const evOff = t.section === 'devices/max_electric_vehicles' && t.body === 0;
+      if (evMax) evRegistered = false; // erst die Quittung meldet an
+      const evOff = evMax && t.body === 0;
       if (sentConfig.values.get(t.section) === body) {
         applied.push(t.section);
         unchanged += 1;
         if (evOff) evConfirmedOff = true;
+        if (evMax && t.body === 1) evRegistered = true;
         continue;
       }
       const res = await eosHttpRequest(baseUrl, 'PUT', `/v1/config/${t.section}`, t.body);
@@ -880,6 +889,7 @@ export function createEosConfigSync(ctx) {
         applied.push(t.section);
         sentConfig.values.set(t.section, body);
         if (evOff) evConfirmedOff = true;
+        if (evMax && t.body === 1) evRegistered = true;
       } else {
         errors[t.section] = res.error;
         sentConfig.values.delete(t.section);
@@ -998,6 +1008,9 @@ export function createEosConfigSync(ctx) {
     publishCaps(caps);
     const decision = decideEvRegistration(cfg, caps);
     if (!decision.register) return { ok: true, skipped: 'no ev soc' };
+    // Anmeldung im vollen Abgleich noch nicht durch (z. B. Wechselrichter-PUT
+    // gescheitert): nichts allein nachschreiben (Codex a06a107e, P2).
+    if (evRegistered === false) return { ok: false, skipped: 'ev_not_registered' };
     const list = evDevices(cfg, caps, decision);
     const body = devicesAsMap(list);
     const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/electric_vehicles', body);
