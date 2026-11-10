@@ -12,6 +12,17 @@ verweist hierher.
 
 ### Neu
 
+- **EOS-Schwellen-Peak-Shaving: Akku deckt in gehaltenen Slots den Bezug über der Netzanschlussgrenze.** Liefert der
+  EOS-Plan an seinen Akku-Instruktionen `peak_shaving_threshold_w` (unser EOS mit der Netzbezugs-Grenze, PR D; Vanilla
+  v0.4.0rc3 kennt das Feld nicht), deckelt DVhub in Slots, in denen der Plan den Akku hält („Akku halten“) oder aus dem
+  Netz lädt, den positiven Netz-Sollwert auf diese Schwelle (`ctx.batteryAssist`, Quelle `eos-threshold`): Victron und
+  jedes Profil mit schreibbarem Netz-Sollwert holen den Bezug über der Schwelle aus dem Akku, der Rest bleibt gehalten.
+  Freigegebene Slots, Slots ohne Schwelle und Anlagen ohne steuerbaren Akku bleiben unverändert; ohne das Feld verhält
+  sich DVhub wie bisher. Deckt der Netzanschluss-Wächter dieselbe (oder eine strengere) Grenze schon, stellt die
+  EOS-Schwelle keine zweite Anforderung. Strengstes Ziel gewinnt (§14a, Netzanschluss, Peak Shaving), im Not-Halt keine
+  Akku-Hilfe, Victron-Register 2714/2715 bleiben unberührt. Solange eine Schwelle wirkt, sperrt die Einspeisung aus
+  Akku 2 den Akku 1 nicht. Leitstand (Kachel „Netzanschluss“): „EOS: Akku deckt über X kW“. Wirkt nur mit
+  eingeschaltetem „Akku halten“ (`optimizer.eosGridHoldEnabled`) und einem EOS, das PR D enthält.
 - **§14a: Hausspeicher deckt zuerst (Schnittstelle).** Verlangt der Netzbetreiber eine Reduzierung, berechnet DVhub
   die benötigte Akku-Hilfe (Bedarf der steuerbaren Verbraucher über der Grenze plus Haushalt ohne Speicher) und fordert
   sie über eine schmale Schnittstelle bei der Akku-Steuerung an (`ctx.batteryAssist.request({ source: 'p14a', coverW,

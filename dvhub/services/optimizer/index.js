@@ -756,7 +756,8 @@ export function createOptimizerService(ctx) {
           }
           const solStamp = eosSolution?.generatedAt || null;
           eosSchedule = await eosAdapter.pullSchedule({ solution: eosSolution });
-          eosGridSetpoints = await eosAdapter.pullGridSetpoints(undefined, { solution: eosSolution });
+          // planSlots: Schwelle fürs Peak-Shaving steht am Plan (EOS-PR D).
+          eosGridSetpoints = await eosAdapter.pullGridSetpoints(undefined, { solution: eosSolution, planSlots: eosSchedule });
           if (solStamp) lastAppliedEosStamp = solStamp;
 
           // Direkt nach einem Neustart hat EOS noch keine Loesung: der eigene

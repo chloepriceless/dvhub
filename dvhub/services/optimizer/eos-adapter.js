@@ -11,6 +11,7 @@ import { requestHostname } from '../host-address.js';
 import { planControlFor, PLAN_MATCH_SLACK_MS, EOS_RUN_TIMEOUT_MS } from './eos-run-trigger.js';
 import { createHash } from 'node:crypto';
 import { zoneOffsetMs } from '../../tz-fast.js';
+import { peakShavingThresholdW, detectPlanCapabilities } from './eos-capabilities.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EOS_DEFAULT_CONFIDENCE = 0.7;
@@ -175,6 +176,23 @@ export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now()) {
   }
   const finite = cutoffs.filter(Number.isFinite);
   return finite.length ? Math.min(...finite) : NaN;
+}
+
+/**
+ * Schwelle (W) je Zeitpunkt aus den Plan-Slots (pullSchedule): der Slot, der
+ * den Zeitpunkt enthält (ts ≤ t < endTs). Ohne Plan oder Schwelle → null.
+ */
+export function planThresholdLookup(planSlots) {
+  const list = Array.isArray(planSlots)
+    ? planSlots.filter((s) => s && Number.isFinite(s.peakShavingThresholdW) && Number.isFinite(s.ts))
+    : [];
+  if (!list.length) return () => null;
+  const exact = new Map(list.map((s) => [s.ts, s.peakShavingThresholdW]));
+  return (t) => {
+    if (exact.has(t)) return exact.get(t);
+    const hit = list.find((s) => s.ts <= t && t < (Number.isFinite(s.endTs) ? s.endTs : s.ts + QUARTER_HOUR_MS));
+    return hit ? hit.peakShavingThresholdW : null;
+  };
 }
 
 export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
@@ -344,6 +362,8 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         baseTs,
         powerW: planActionToPowerW(entry.operation_mode_id, entry.operation_mode_factor, maxChargeW, maxDischargeW),
         action: entry.operation_mode_id || 'IDLE',
+        // Schwellen-Peak-Shaving (EOS-PR D): null ohne Feld (Vanilla) oder aus.
+        thresholdW: peakShavingThresholdW(entry),
       });
     }
     entries.sort((a, b) => a.baseTs - b.baseTs);
@@ -377,10 +397,26 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
           powerW: cur.powerW,
           planAction: cur.action,
           confidence: EOS_DEFAULT_CONFIDENCE,
+          ...(cur.thresholdW != null ? { peakShavingThresholdW: cur.thresholdW } : {}),
         });
       }
     }
     return slots;
+  }
+
+  let lastPlanThresholdCap = null;
+  function publishPlanCaps(caps) {
+    const st = ctx.state;
+    if (st) {
+      st.optimizer = st.optimizer || {};
+      st.optimizer.eosPlan = { peakShavingThreshold: caps.peakShavingThreshold === true, detectedAt: Date.now() };
+    }
+    if (lastPlanThresholdCap !== caps.peakShavingThreshold) {
+      if (lastPlanThresholdCap !== null || caps.peakShavingThreshold) {
+        ctx.pushLog?.('eos_peak_shaving_threshold_capability', { supported: caps.peakShavingThreshold === true });
+      }
+      lastPlanThresholdCap = caps.peakShavingThreshold;
+    }
   }
 
   async function pullSchedule({ solution } = {}) {
@@ -397,6 +433,10 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
                   : Array.isArray(plan?.result)       ? plan.result
                   : null;
     if (!entries) return null;
+
+    // Kennt EOS das Schwellen-Peak-Shaving? Steht nur am Plan, nicht in
+    // /v1/config — für Status und Log (eos-capabilities.js).
+    publishPlanCaps(detectPlanCapabilities(entries));
 
     // Pass the plan's validity end so the trailing instruction fills to the
     // real horizon end (15-min cadence) rather than a heuristic gap.
@@ -676,10 +716,12 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
    *     defense in depth at the actuation edge.
    *
    * @param {number} [bandW=300] |net grid| ≤ this ⇒ self-consumption ⇒ no rule
-   * @param {{solution?: object|null}} [opts] bereits geholte Lösung (spart einen Abruf)
+   * @param {{solution?: object|null, planSlots?: Array|null}} [opts] bereits geholte
+   *   Lösung (spart einen Abruf); planSlots = pullSchedule() desselben Laufs —
+   *   daraus kommt die Schwelle (peakShavingThresholdW) für Halte-/Ladeslots.
    * @returns {Promise<Array<{ts:number,endTs:number,powerW:number,planAction:string,confidence:number}>|null>}
    */
-  async function pullGridSetpoints(bandW = 300, { solution } = {}) {
+  async function pullGridSetpoints(bandW = 300, { solution, planSlots = null } = {}) {
     // Cover the full EOS horizon (≤8 days of 15-min slots) — no tail truncation.
     // Bereits geholte Lösung (optimizer/index.js) statt eines zweiten Abrufs.
     const sol = solution !== undefined ? solution : await getOptimizationSolution(8 * 24 * 4);
@@ -701,6 +743,16 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // Grenze gehört zum Plan (generated_at), nicht zum Prozess (Codex 8ecb4fa9,
     // Gesamtprüfung 1.0.10): estimatedPriceCutoffMs.
     const estimatedFromMs = estimatedPriceCutoffMs(sol, ctx.state?.optimizer || {}, Date.now());
+    // Schwellen-Peak-Shaving (EOS-PR D): die Schwelle steht an den Akku-
+    // Instruktionen des Plans, nicht in der Lösung. Gilt für Slots, in denen
+    // der Plan den Akku hält (Halten, Netzladen) — dort deckt der Akku den
+    // Bezug über der Schwelle (schedule-eval → ctx.batteryAssist). Ohne Feld
+    // (Vanilla v0.4.0rc3) bleibt alles wie bisher.
+    const thresholdAt = planThresholdLookup(planSlots);
+    const withThreshold = (slot) => {
+      const w = thresholdAt(slot.ts);
+      return w == null ? slot : { ...slot, peakShavingThresholdW: w };
+    };
     const out = [];
     for (let ri = 0; ri < sol.rows.length; ri++) {
       const r = sol.rows[ri];
@@ -725,18 +777,18 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         // Netzbezug des Slots. §14a begrenzt den Bezug an der Ausfuehrung
         // (schedule-eval), schedule-eval prueft „Netzladen erlaubt“ noch einmal.
         if (r.gridCharge === true && isGridChargeLicensed(acfg)) {
-          out.push({
+          out.push(withThreshold({
             ts,
             endTs: ts + slotMs,
             lever: 'gridSetpointW',
             powerW: Math.round(gridW),
             planAction: 'eos_grid_charge',
             confidence: EOS_DEFAULT_CONFIDENCE,
-          });
+          }));
           continue;
         }
         if (acfg.optimizer?.eosGridHoldEnabled === true && r.batteryHold === true) {
-          out.push({
+          out.push(withThreshold({
             ts,
             endTs: ts + slotMs,
             lever: 'gridSetpointW',
@@ -745,7 +797,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
             evPlanned: Number(r.evChargeFactor) > 0,
             planAction: 'eos_grid_hold',
             confidence: EOS_DEFAULT_CONFIDENCE,
-          });
+          }));
         }
         continue;
       }

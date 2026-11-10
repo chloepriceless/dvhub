@@ -32,6 +32,7 @@ import {
 import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/optimizer/grid-share.js';
 // Netzanschluss und Peak Shaving: gemeinsamer Kern der Bezugsgrenzen.
 import { capPositiveSetpoint } from './services/import-limit/core.js';
+import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -157,8 +158,12 @@ export function createScheduleEvaluator(ctx) {
   const gridNeedsBattery = () => {
     const sum = ctx.gridConnection?.summary?.();
     if (!sum || sum.paused === true) return false;
+    // EOS-Schwelle (gehaltener Slot): wirksam, auch wenn der Wächter dieselbe
+    // Grenze schon deckt und keine eigene Anforderung steht.
+    const eos = sum.eosThreshold;
     return (Array.isArray(sum.caps) && sum.caps.length > 0) || sum.exhausted === true
-      || (Array.isArray(sum.assistSources) && sum.assistSources.length > 0);
+      || (Array.isArray(sum.assistSources) && sum.assistSources.length > 0)
+      || (eos != null && (eos.requested === true || eos.coveredBy != null));
   };
   // Eindeutige Ruecklesung der Entladegrenze fuer die Uebergabe (Modbus):
   // Victron 2720 (int32, W) — 2704 zeigt „unbegrenzt“ (−1) als 0, wie bei Peak
@@ -184,6 +189,14 @@ export function createScheduleEvaluator(ctx) {
       getCfg, state, pushLog, store: ctx.floorHandoffStore || null, transportType: () => transport?.type,
       batteryNeeded: gridNeedsBattery, readExactMaxDischargeW
     });
+
+  // Schwellen-Peak-Shaving aus dem EOS-Plan (EOS-PR D): in gehaltenen Slots
+  // deckt der Akku den Bezug über der Schwelle (ctx.batteryAssist, Quelle
+  // 'eos-threshold'). Spät gebunden: ctx.batteryAssist entsteht mit dem Wächter.
+  const eosThreshold = createEosThresholdAssist({
+    state, getCfg, pushLog,
+    getAssist: () => ctx.batteryAssist || ctx.gridConnection?.batteryAssist || null
+  });
 
   let stopping = false;
   let evalTimeout = null;
@@ -1961,6 +1974,14 @@ export function createScheduleEvaluator(ctx) {
     let eosGridHoldConfirmed = null;
     for (const target of ['gridSetpointW', 'chargeCurrentA']) {
       const eff = effectiveTargetValue(target);
+      // EOS-Schwelle VOR dem Schreiben anmelden bzw. freigeben, damit die Decke
+      // des positiven Sollwerts schon für diesen Takt gilt. Fehler hier dürfen
+      // den Takt nie abbrechen.
+      if (target === 'gridSetpointW') {
+        try { eosThreshold.tick(eff.value == null ? null : eff.rule); } catch (e) {
+          pushLog('eos_threshold_error', { error: e?.message || String(e) }, 'warn');
+        }
+      }
       // §14a nach Bedarf: ohne Ziel schreibt DVhub nichts — der GX kann einen
       // älteren Sollwert halten, der Bedarf ist also unbekannt (nicht 0).
       if (target === 'gridSetpointW' && eff.value == null) state.ctrl.p14aBatteryWantW = null;
