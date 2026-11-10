@@ -1167,6 +1167,9 @@ const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
 // 2704) steht gespeichert im GX — der Merker sorgt dafür, dass ein neuer
 // Prozess sie zurückschreibt statt sie zu vergessen.
 const PEAK_SHAVING_LIFT_PATH = path.join(DATA_DIR || __dirname, 'peak_shaving_lift.json');
+// Netzanschluss „Akku zuerst“ (Nicht-Victron): angehobene Entladegrenze, damit
+// ein Neustart den Wert davor zurückschreibt (services/grid-connection).
+const GRID_CONNECTION_ASSIST_PATH = path.join(DATA_DIR || __dirname, 'grid_connection_assist.json');
 // E-Auto „Sofort laden“ (eos-evcc-bridge setOverride).
 const EV_OVERRIDE_PATH = path.join(DATA_DIR || __dirname, 'ev_override.json');
 const EV_OWNED_PATH = path.join(DATA_DIR || __dirname, 'ev_owned.json');
@@ -1349,6 +1352,8 @@ function controlValue() {
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
   peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
+  // Nur der Laufzeit-Prozess regelt — nur er liest und schreibt den Merker.
+  gridConnectionAssistPath: IS_RUNTIME_PROCESS ? GRID_CONNECTION_ASSIST_PATH : null,
   state,
   getCfg: () => cfg,
   transport,
@@ -1463,6 +1468,9 @@ ctx.notifyDirect = createDirectNotifier({
 // (Sollwert-Decke, Wallbox, Heizstab, EEBUS) fragen ihn ab. Vor dem Poller,
 // damit schon die erste Abfrage zählt.
 ctx.gridConnection = createGridConnectionGuard(ctx);
+// Akku zuerst für mehrere Quellen (§14a, später EOS-Schwelle): request/release/
+// status — das strengste Ziel gewinnt (services/grid-connection).
+ctx.batteryAssist = ctx.gridConnection.batteryAssist;
 const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;

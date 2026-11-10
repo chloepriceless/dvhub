@@ -39,6 +39,7 @@ dvhub/license_state.json
 dvhub/energy_state.json
 dvhub/control_state.json
 dvhub/peak_shaving_lift.json
+dvhub/grid_connection_assist.json
 dvhub/battery_grid_share.json
 dvhub/battery_grid_share.json.tmp*
 dvhub/battery_grid_share_log.jsonl

@@ -170,6 +170,8 @@
         <div class="rail-row"><span class="l">Auslastung</span><strong class="v" id="gridConnectionLoad">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv" title="Woher die geltende Grenze kommt: DVhub-Einstellung oder Victron (Begrenzung des AC-Bezugs, Reg. 2714). Es gilt die strengere."><span class="l">Quelle</span><strong class="v" id="gridConnectionSource">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv" title="Bezug je Phase L1 / L2 / L3 am Netzzähler."><span class="l">Phasen</span><strong class="v" id="gridConnectionPhases">&mdash;</strong></div>
+        <div class="rail-row" title="Liegt der Bezug über der Grenze, deckt zuerst der Akku den Überschuss; erst wenn er nicht mehr kann, drosselt DVhub Lasten. Bei Anlagen ohne steuerbaren Akku drosselt DVhub direkt."><span class="l">Akku</span><strong class="v" id="gridConnectionBattery">&mdash;</strong></div>
+        <div class="rail-row" title="Was der Akku gerade über seine vorherige Entladegrenze hinaus abgibt, damit der Bezug unter der Grenze bleibt. Danach stellt DVhub die vorherige Entladegrenze wieder her."><span class="l">Akku-Hilfe</span><strong class="v" id="gridConnectionAssist">&mdash;</strong></div>
         <div class="rail-row"><span class="l">Eingriff</span><strong class="v" id="gridConnectionDetail">&mdash;</strong></div>
       </div>
       <!-- Peak Shaving: Bezugsgrenze für RLM-Anschlüsse (GitHub #28,
@@ -648,7 +650,7 @@
 <script src="/eos-plan-summary.js?v=20261105-eos-frist"></script>
 <script src="/peak-shaving-view.js?v=20261026"></script>
 <script src="/license-banner.js?v=20261105-lizenz-umzug"></script>
-<script src="/grid-connection-view.js?v=20261106"></script>
+<script src="/grid-connection-view.js?v=20261110-akku-zuerst-14a"></script>
 <script src="/app.js?v=20261110-p14a-bedarf"></script>
 <script src="/leitstand-charts.js?v=20261105-eos-frist"></script>
 <script src="/ev-weekly-editor.js?v=20261027"></script>
