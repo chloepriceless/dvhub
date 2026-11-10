@@ -811,14 +811,20 @@ function nativeBatteryStep(st, { r, battery, total, excess, targetW, phases, pha
     const current = st.assist ? st.assist.valueW : (known === -1 ? Infinity : (knownCap ?? base));
     if (base != null) {
       const room = Math.max(0, maxW - dis);
+      // Kleinste Entladung, die das Ziel hält; reicht der Akku nicht (zu schwach
+      // oder auf einer anderen Phase als die Überlast), die kleinste, die die
+      // größte Entlastung bringt — Teilhilfe auf der eigenen Phase zählt, ein
+      // Akku ohne Wirkung wird nicht angehoben (Codex 7ea58e63, P2).
+      const mode = r.batteryPhases || 'three';
       let need = null;
+      let best = excessAfter(0, mode);
+      let bestX = 0;
       for (let x = 0; x <= room; x += STEP_W) {
-        if (excessAfter(x, r.batteryPhases || 'three') <= 0) { need = x; break; }
+        const e = excessAfter(x, mode);
+        if (e <= 0) { need = x; break; }
+        if (e < best - 1e-9) { best = e; bestX = x; }
       }
-      // Nicht ganz lösbar (Akku zu schwach oder auf einer anderen Phase als
-      // die Überlast): nur den Teil der Summe, den er wirklich senkt — nie
-      // „sicherheitshalber“ aufs Maximum.
-      if (need == null) need = Math.min(room, up(Math.max(0, total - T)));
+      if (need == null) need = bestX;
       const want = need > 0 ? assistValueW({ excessW: need, dischargeW: dis, maxW }) : current;
       if (!st.assist && pendingBase != null && Number.isFinite(current)) {
         // Hilfe aus dem letzten Lauf weiterführen statt erst zurückzuschreiben.
@@ -1111,6 +1117,20 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     return { valueW: st.assist.baseW };
   }
 
+  // Hat seit dem Ende der Hilfe eine andere Quelle die Entladegrenze
+  // geschrieben, gilt deren Wert — nicht nachträglich überschreiben (Codex
+  // 4deab6d6, P2). true = verworfen.
+  function dropSupersededRestore() {
+    if (!st.assistRestore || st.assist) return false;
+    st.assistRestore.at ??= Date.now();
+    const lw = state().schedule?.lastWrite?.maxDischargeW;
+    if (!lw || String(lw.source || '').startsWith('grid_connection') || !(Number(lw.at) >= st.assistRestore.at)) return false;
+    log('grid_connection_assist_superseded', { valueW: st.assistRestore.valueW, by: lw.source, text: 'Netzanschluss: Zurückschreiben der Entladegrenze entfällt — eine neuere Vorgabe gilt.' });
+    st.assistRestore = null;
+    persistAssist();
+    return true;
+  }
+
   let assistWriting = false;
   let assistDirty = false;
   let assistRestoreTriedAt = 0;
@@ -1126,17 +1146,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     if (st.assist) {
       value = st.assist.valueW; source = ASSIST_SOURCE;
     } else if (st.assistRestore) {
-      // Hat seit dem Ende der Hilfe eine andere Quelle die Entladegrenze
-      // geschrieben, gilt deren Wert — nicht nachträglich überschreiben
-      // (Codex 4deab6d6, P2).
-      st.assistRestore.at ??= Date.now();
-      const lw = state().schedule?.lastWrite?.maxDischargeW;
-      if (lw && !String(lw.source || '').startsWith('grid_connection') && Number(lw.at) >= st.assistRestore.at) {
-        log('grid_connection_assist_superseded', { valueW: st.assistRestore.valueW, by: lw.source, text: 'Netzanschluss: Zurückschreiben der Entladegrenze entfällt — eine neuere Vorgabe gilt.' });
-        st.assistRestore = null;
-        persistAssist();
-        return;
-      }
+      if (dropSupersededRestore()) return;
       if (!force && now() - assistRestoreTriedAt < ASSIST_RETRY_MS) return;
       assistRestoreTriedAt = now();
       value = st.assistRestore.valueW; source = ASSIST_RESTORE_SOURCE;
@@ -1262,6 +1272,10 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         if (restore) {
           st.assistRestore = restore;
           enforceAssist({ force: true });
+        } else {
+          // Nichts zurückzuschreiben (neuere Vorgabe steht): auch kein Merker
+          // für den nächsten Start (Codex 7ea58e63, P2).
+          persistAssist();
         }
       }
       return null;
@@ -1293,6 +1307,10 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       const wantsAssist = r.batteryNative && liveRequests().length > 0;
       const meas = r.active || wantsAssist ? meterImport(state(), c, { now: lastTickAt, maxAgeMs: METER_MAX_AGE_MS }) : null;
       const list = r.active ? devices(c) : [];
+      // Steht ein Zurückschreiben an, das eine neuere Vorgabe überholt hat, gilt
+      // es nicht mehr — auch nicht als Rückkehrwert einer neuen Hilfe (Codex
+      // 7ea58e63, P2).
+      dropSupersededRestore();
       const battery = batteryInput(c, r);
       const assistTargetW = r.batteryNative ? externalTargetW(meas, battery) : null;
       const res = guardStep(st, { resolved: r, meas, devices: list, battery, now: lastTickAt, assistTargetW });

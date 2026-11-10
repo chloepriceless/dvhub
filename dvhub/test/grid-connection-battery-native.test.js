@@ -559,3 +559,57 @@ test('Codex 4deab6d6 P2: gescheitertes Zurückschreiben überschreibt keine neue
   }
   assert.deepEqual(h.writes(), [3200, 6000], 'kein Rückschreiben über die neuere Vorgabe');
 });
+
+// --- Codex-Gegenprüfung 7ea58e63 ------------------------------------------------
+
+test('Codex 7ea58e63 P2: Teil-Entlastung der eigenen Phase zählt, auch wenn sie nicht ganz reicht', () => {
+  const r = resolveGridConnection({
+    manufacturer: 'bridge-mqtt', gridConnection: { limitKw: 40, marginW: 1000, phaseLimitA: 32, batteryPhases: 'L1' },
+    victron: { transport: 'mqtt' }, controlWrite: { gridSetpointW: { enabled: true }, maxDischargeW: { enabled: true } }
+  });
+  const st = createGuardState();
+  const m = { fresh: true, reason: null, importW: 15000, phasesW: [9000, 3000, 3000], ageMs: 1000 };
+  const b = bat({ maxW: 1000 });
+  guardStep(st, { resolved: r, meas: m, devices: [WALLBOX()], battery: b, now: 1_000_000 });
+  assert.ok(st.assist && st.assist.valueW === 1000, `Akku hilft auf L1 mit allem, was er hat: ${JSON.stringify(st.assist)}`);
+  guardStep(st, { resolved: r, meas: m, devices: [WALLBOX()], battery: { ...b, limit: { value: 1000, from: 'own_write' } }, now: 1_002_000 });
+  // L1 9 000 − 1 000 Akku − Ziel ≈ 7 027 → ≈ 973 W auf L1 = ≈ 2,9 kW dreiphasig von der Wallbox.
+  assert.ok(st.caps.wallbox >= 7500, `nur der Rest von der Wallbox: ${st.caps.wallbox}`);
+});
+
+test('Codex 7ea58e63 P2: neue Spitze nach gescheitertem Zurückschreiben übernimmt keinen überholten Rückkehrwert', async () => {
+  const h = rig();
+  h.measure({ importW: 22000, maxDischargeW: 0 });
+  h.guard.tick();
+  await settle();
+  const orig = h.transport.mqttWrite;
+  h.transport.mqttWrite = async () => { throw new Error('broker weg'); };
+  for (let k = 0; k < 40 && h.guard.summary().assist; k += 1) {
+    h.measure({ importW: 9000, dischargeW: 3200, maxDischargeW: 3200 });
+    h.guard.tick();
+    await settle();
+  }
+  h.transport.mqttWrite = orig;
+  await h.evaluator.applyControlTarget('maxDischargeW', 6000, 'api_manual_write');
+  // Sofort die nächste Spitze, noch vor dem nächsten Rückschreib-Versuch.
+  h.measure({ importW: 30000, dischargeW: 6000, maxDischargeW: 6000 });
+  h.guard.tick();
+  await settle();
+  assert.equal(h.guard.summary().assist?.baseW, 6000, 'Rückkehrwert ist die neuere Vorgabe');
+});
+
+test('Codex 7ea58e63 P2: Not-Halt ohne Rückschreiben löscht den Merker', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-assist-'));
+  const p = path.join(dir, 'grid_connection_assist.json');
+  const h = rig('bridge-mqtt', { assistPath: p });
+  h.measure({ importW: 22000, maxDischargeW: 0 });
+  h.guard.tick();
+  await settle();
+  assert.equal(fs.existsSync(p), true);
+  await h.evaluator.applyControlTarget('maxDischargeW', 6000, 'api_manual_write');
+  h.state.ctrl.discretionaryWritesPaused = true;
+  h.guard.tick();
+  await settle();
+  assert.deepEqual(h.writes(), [3200, 6000]);
+  assert.equal(fs.existsSync(p), false, 'kein überholter Rückkehrwert für den nächsten Start');
+});
