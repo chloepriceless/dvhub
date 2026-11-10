@@ -91,17 +91,21 @@ export function createFeedInLimitArbiter({ applyLimit, pushLog = () => {}, isPau
    * DVhub (null → zurückschreiben). Kein Wiederholen, wenn es scheitert.
    */
   function emergencyStop() {
-    const kept = smallestLimit([...sources.entries()]
-      .filter(([name]) => name === 'fixed' || notHaltAllowsFeedInSource(name))
-      .map(([, w]) => w));
-    if (kept === applied || (kept === null && applied === undefined)) return Promise.resolve({ ok: true, skipped: 'unchanged' });
+    // Vergleich erst, wenn laufende Writes durch sind — sonst stünde `applied`
+    // noch auf dem alten Wert und eine gerade laufende DV-Grenze bliebe den
+    // ganzen Not-Halt stehen (Codex 2f215968, P2).
     const run = chain.catch(() => {}).then(async () => {
+      const kept = smallestLimit([...sources.entries()]
+        .filter(([name]) => name === 'fixed' || notHaltAllowsFeedInSource(name))
+        .map(([, w]) => w));
+      if (kept === applied || (kept === null && applied === undefined)) return { ok: true, skipped: 'unchanged' };
       await applyLimit(kept);
       pushLog('feed_in_limit', { limitW: kept, sources: Object.fromEntries(sources), reason: 'emergency_stop' });
       applied = kept;
+      return { ok: true, limitW: kept };
     });
     chain = run;
-    return run.then(() => ({ ok: true, limitW: kept }), (e) => ({ ok: false, error: e?.message || String(e) }));
+    return run.catch((e) => ({ ok: false, error: e?.message || String(e) }));
   }
 
   return {

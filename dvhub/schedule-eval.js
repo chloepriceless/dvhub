@@ -730,7 +730,7 @@ export function createScheduleEvaluator(ctx) {
   // Neustart (Cache leer) beweist das nur die Sicherung einer Sperr-Sequenz;
   // Direkt-Register (Victron 2707/2708) ohne Beweis: im Zweifel nichts senden.
   function dvOwnBlockStanding() {
-    if (state.ctrl._lastDvFeedIn === false) return true;
+    if (state.ctrl._lastDvFeedIn === false || state.ctrl._dvPartialBlock === true) return true;
     if (state.ctrl._lastDvFeedIn !== undefined) return false;
     return Object.keys(state.ctrl._dvSeqSaved || {}).some((k) => k !== 'dvFeedInLimitW');
   }
@@ -786,7 +786,8 @@ export function createScheduleEvaluator(ctx) {
     if (!dc.enabled && feedIn !== true) return;
 
     // Only write when feedIn state actually changes (first call: _lastDvFeedIn is undefined → always writes once)
-    if (state.ctrl._lastDvFeedIn === feedIn) return;
+    // Eine Teil-Sperre (state.ctrl._dvPartialBlock) wird trotz gleichem Cache freigegeben.
+    if (state.ctrl._lastDvFeedIn === feedIn && !(feedIn === true && state.ctrl._dvPartialBlock === true)) return;
 
     const results = {};
     // Erster Aufruf nach dem Start (Change-Cache leer) mit Freigabe: eine
@@ -866,9 +867,19 @@ export function createScheduleEvaluator(ctx) {
     // Cache the applied state only on a fully successful write (see above).
     if (allOk) {
       state.ctrl._lastDvFeedIn = feedIn;
+      state.ctrl._dvPartialBlock = false;
       // Wer sperrt (Klasse für den Not-Halt und den Nulleinspeise-Deckel).
       state.ctrl._dvBlockReason = feedIn ? null : (reason || null);
-      if (state.ctrl.discretionaryWritesPaused) notHaltDvState().mandatoryBlock = feedIn === false;
+      // Nur eine Sperre einer im Not-Halt weiterlaufenden Klasse darf ihre
+      // Freigabe wiederholen — eine vor dem Eintritt begonnene, erst danach
+      // fertige Sperre bekommt die eine Freigabe wie jede andere (Codex 2f215968, P1).
+      if (state.ctrl.discretionaryWritesPaused) {
+        notHaltDvState().mandatoryBlock = feedIn === false && notHaltAllowsDvReason(reason);
+      }
+    } else if (feedIn === false && Object.values(results).some((r) => r?.ok === true && !r.skipped)) {
+      // Teilweise gesperrt (ein Register ja, das andere nicht): die Sperre ist
+      // DVhubs eigene und bekommt im Not-Halt ihre Freigabe (Codex 2f215968, P2).
+      state.ctrl._dvPartialBlock = true;
     }
   }
 

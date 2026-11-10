@@ -319,3 +319,64 @@ test('Wallbox-Lebenszeichen (Salia, Nexblue) schweigen im Not-Halt — die Box g
     setNotHaltProbe(null);
   }
 });
+
+// --- Codex 2f215968 -------------------------------------------------------------
+
+function evWithTransport(w, mqttWrite) {
+  return createScheduleEvaluator({
+    state: w.state, getCfg: () => w.cfg, pushLog: () => {}, telemetrySafeWrite: () => {}, persistConfig: async () => {}, telemetryStore: null,
+    epexNowNext: () => ({ current: { ct_kwh: -3, eur_mwh: -30 }, next: null }), regenerateSmallMarketAutomationRules: async () => {}, onEvalComplete: () => {},
+    transport: { type: 'mqtt', mqttWrite },
+  });
+}
+
+test('Codex P1: eine vor dem Eintritt begonnene, danach fertige Sperre bekommt nur EINE Freigabe, auch wenn sie scheitert', async () => {
+  const w = world({ priceCt: -3 });
+  let fail = false;
+  let releaseAttempts = 0;
+  const ev = evWithTransport(w, async (target, value) => {
+    if (fail && target === 'feedExcessDcPv' && value === 1) { releaseAttempts += 1; throw new Error('timeout'); }
+    w.writes.push({ target, value });
+  });
+  // Sperre aus dem Takt vor dem Not-Halt, fertig erst danach
+  const p = ev.applyDvVictronControl(false, { reason: 'negative_price_protection' });
+  w.enter();
+  await p;
+  assert.equal(w.state.ctrl._notHaltDv?.mandatoryBlock ?? false, false, 'ausgesetzte Klasse: keine Wiederhol-Freigabe');
+  fail = true;
+  for (let i = 0; i < 5; i++) await ev.evaluateSchedule();
+  assert.equal(releaseAttempts, 1, 'genau ein Freigabe-Versuch, kein Retry');
+});
+
+test('Codex P2: Begrenzer — Neutralisierung wartet auf einen laufenden DV-Write', async () => {
+  const applied = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let paused = false;
+  const arb = createFeedInLimitArbiter({
+    applyLimit: async (w) => { if (w === 3000) await gate; applied.push(w); },
+    isPaused: () => paused,
+  });
+  await arb.set('fixed', 6000);
+  const pending = arb.set('dv', 3000); // läuft noch
+  paused = true;
+  const stop = arb.emergencyStop();
+  release();
+  await pending;
+  assert.deepEqual(await stop, { ok: true, limitW: 6000 });
+  assert.deepEqual(applied, [6000, 3000, 6000], 'DV-Grenze nach dem laufenden Write zurückgenommen');
+});
+
+test('Codex P2: Teil-Sperre (ein Register gesperrt, das andere gescheitert) wird im Not-Halt einmal freigegeben', async () => {
+  const w = world({ lastDvFeedIn: true, priceCt: 12 });
+  let n = 0;
+  const ev = evWithTransport(w, async (target, value) => { n += 1; if (n === 2) throw new Error('timeout'); w.writes.push({ target, value }); });
+  await ev.applyDvVictronControl(false, { reason: 'default' });
+  assert.deepEqual(w.writes, [{ target: 'feedExcessDcPv', value: 0 }]);
+  assert.equal(w.state.ctrl._lastDvFeedIn, true, 'Cache unverändert (Teilerfolg)');
+  w.enter();
+  await ev.evaluateSchedule();
+  assert.deepEqual(w.writes.slice(1), [{ target: 'feedExcessDcPv', value: 1 }, { target: 'dontFeedExcessAcPv', value: 0 }], 'Teil-Sperre einmal freigegeben');
+  for (let i = 0; i < 3; i++) await ev.evaluateSchedule();
+  assert.equal(w.writes.length, 3, 'danach nichts mehr');
+});
