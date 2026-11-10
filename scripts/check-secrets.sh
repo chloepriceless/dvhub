@@ -34,9 +34,14 @@ EXCL=( ":(exclude)$SELF" ":(exclude)**/node_modules/**" )
 for g in "${INTERNAL_GLOBS[@]}"; do EXCL+=( ":(exclude)$g" ); done
 
 scan() { # scan <label> <regex> [exclude-line-regex]
-  local label="$1" rx="$2" filt="${3:-}" hits
-  hits=$(git grep -nIE "$rx" -- . "${EXCL[@]}" 2>/dev/null || true)
-  [ -n "$filt" ] && hits=$(printf '%s\n' "$hits" | grep -vE "$filt" || true)
+  local label="$1" rx="$2" filt="${3:-}" hits rc=0
+  # -e: ein Muster wie „-----BEGIN …“ las git grep sonst als Option (rc 129),
+  # der Fehler wurde verschluckt und die Private-Key-Prüfung meldete nie etwas
+  # (Paritätsfund dvhub-rs). rc 1 = kein Treffer, > 1 = Fehler → Sperre.
+  hits=$(git grep -nIE -e "$rx" -- . "${EXCL[@]}" 2>&1) || rc=$?
+  if [ "$rc" -gt 1 ]; then echo "✗ ${label}: git grep scheiterte (rc $rc): $hits"; FAILED=1; return; fi
+  [ "$rc" -eq 1 ] && hits=""
+  [ -n "$filt" ] && hits=$(printf '%s\n' "$hits" | grep -vE -e "$filt" || true)
   if [ -n "$hits" ]; then
     echo "✗ ${label}:"; printf '%s\n' "$hits" | sed 's/^/    /'; FAILED=1
   fi

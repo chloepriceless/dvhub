@@ -289,6 +289,10 @@ verweist hierher.
 
 ### Behoben
 
+- **Geheimnis-Prüfung vor dem Push findet wieder private Schlüssel.** In `scripts/check-secrets.sh` ging das Muster
+  `-----BEGIN … PRIVATE KEY-----` ohne `-e` an `git grep` und wurde als Option gelesen; der Fehler wurde verschluckt,
+  die Prüfung meldete nie etwas. Jetzt mit `-e`, und ein scheiterndes `git grep` sperrt, statt als „sauber“ zu gelten.
+  Probe im Wegwerf-Repo (`test/check-secrets.test.js`). Paritätsvergleich mit dem Rust-Neubau.
 - **Kaputte config.json wird nicht mehr still überschrieben.** War die config.json kein gültiges JSON (oder kein
   Objekt), lief DVhub mit Vorgaben, und das nächste Speichern – Einstellungen, Setup-Assistent oder eine Automatik –
   ersetzte die Datei; die echte Konfiguration war weg, sobald die Sicherung aus der Aufbewahrung fiel. Jetzt sichert
