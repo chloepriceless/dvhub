@@ -505,6 +505,11 @@ export function createEosConfigSync(ctx) {
     sentConfig.values.clear();
     sentConfig.at = 0;
   }
+  // Hat EOS nachweislich KEIN E-Auto (max_electric_vehicles = 0 quittiert)?
+  // Erst dann darf der Behelf die Auto-Ladeleistung wieder freigeben — sonst
+  // könnte EOS mit gelockerter Akku-Ladegrenze UND angemeldetem Auto planen
+  // (Codex 0190570d, P2). Beim Start unbekannt: vorsichtig wie mit Auto.
+  let evConfirmedOff = false;
 
   function publishCaps(caps) {
     if (state) {
@@ -617,13 +622,16 @@ export function createEosConfigSync(ctx) {
     // Anmeldung des E-Autos zuerst: der Behelf der Netzbezugs-Grenze zieht die
     // Auto-Ladeleistung nur ab, wenn EOS das Auto gerade plant (Fable R3 P3-3).
     const evDecision = decideEvRegistration(cfg, caps);
+    // Für den Behelf zählt das Auto, solange EOS es haben könnte: angemeldet
+    // werden soll, oder die Abmeldung ist noch nicht quittiert.
+    const evForCap = evDecision.register === true || !evConfirmedOff;
     const batteries = buildEosBatteries(planCfg, { minSocPct: eosMinSocPct });
     const inverters = buildEosInverters(planCfg, {
       curve: effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.()),
       curveSupported: caps.inverterEfficiencyCurve === true,
       gridImportLimitSupported: caps.gridImportLimit === true,
       // Victron-Grenze (Reg. 2714) — EOS bekommt den wirksamen Wert.
-      gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evDecision.register === true },
+      gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evForCap },
     });
     const optimization = buildEosOptimization(cfg);
     const geneticSizing = pickGeneticSizing(optimization.interval, cfg?.optimizer?.eosGeneticGenerations);
@@ -656,8 +664,8 @@ export function createEosConfigSync(ctx) {
     const optimizeEv = evDecision.register;
     const evTasks = optimizeEv
       ? [
-          { section: 'devices/max_electric_vehicles', body: 1 },
-          { section: 'devices/electric_vehicles', body: asDevices(evDevices(cfg, caps, evDecision)) },
+          { section: 'devices/max_electric_vehicles', body: 1, evRegister: true },
+          { section: 'devices/electric_vehicles', body: asDevices(evDevices(cfg, caps, evDecision)), evRegister: true },
         ]
       : [
           { section: 'devices/max_electric_vehicles', body: 0 },
@@ -852,15 +860,26 @@ export function createEosConfigSync(ctx) {
     let unchanged = 0;
     for (const t of tasks) {
       const body = JSON.stringify(t.body);
+      // Auto erst anmelden, wenn die engere Akku-Ladegrenze des Behelfs in EOS
+      // steht (Codex 0190570d, P2): scheitert der Wechselrichter-PUT, bleibt
+      // das Auto in diesem Abgleich draußen.
+      if (t.evRegister && errors['devices/inverters']) {
+        errors[t.section] = 'inverter_cap_not_applied';
+        continue;
+      }
+      if (t.evRegister) evConfirmedOff = false;
+      const evOff = t.section === 'devices/max_electric_vehicles' && t.body === 0;
       if (sentConfig.values.get(t.section) === body) {
         applied.push(t.section);
         unchanged += 1;
+        if (evOff) evConfirmedOff = true;
         continue;
       }
       const res = await eosHttpRequest(baseUrl, 'PUT', `/v1/config/${t.section}`, t.body);
       if (res.ok) {
         applied.push(t.section);
         sentConfig.values.set(t.section, body);
+        if (evOff) evConfirmedOff = true;
       } else {
         errors[t.section] = res.error;
         sentConfig.values.delete(t.section);
@@ -890,7 +909,7 @@ export function createEosConfigSync(ctx) {
           curve: curveNow,
           curveSupported: again.inverterEfficiencyCurve === true,
           gridImportLimitSupported: again.gridImportLimit === true,
-          gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evDecision.register === true },
+          gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evForCap },
         }));
         const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/inverters', body);
         if (!res.ok) errors['devices/inverters'] = res.error;
