@@ -110,6 +110,7 @@ Passwörtern), lädt die Images von Docker Hub und startet alles; danach
 `http://<host>:8080`. Voraussetzung: Docker mit Compose ≥ 2.23. Optionen:
 `bash -s -- --no-eos` (ohne EOS, kleine Boxen), `--tag dev` (Vorab-Stand),
 `--dir <ordner>`, `--port <port>`. Details unter [Docker](#docker).
+Neu bei Docker? Schritt für Schritt mit Ports und erstem Aufruf: [docs/DOCKER-EINSTIEG.md](docs/DOCKER-EINSTIEG.md).
 
 Der Installer:
 

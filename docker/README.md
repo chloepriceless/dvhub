@@ -15,6 +15,9 @@ Inhalt dieses Verzeichnisses:
 
 ## Schnellstart
 
+> Zum ersten Mal mit Docker? Die Einsteiger-Anleitung mit Ports, erstem Aufruf und Hinweisen zu EOS:
+> [`docs/DOCKER-EINSTIEG.md`](../docs/DOCKER-EINSTIEG.md).
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/install.sh | bash
 # Optionen: bash -s -- --no-eos | --tag dev | --dir /opt/dvhub | --port 8090
