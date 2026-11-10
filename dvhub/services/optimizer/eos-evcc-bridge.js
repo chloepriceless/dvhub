@@ -1143,8 +1143,7 @@ export function createEosEvccBridge(deps) {
   }
 
   // Phasen von außen umgestellt? (EV_PHASE_SETTLE_MS) Nur Buchführung im
-  // eigenen Datensatz, kein Befehl an evcc — darf also auch vor jeder Prüfung
-  // auf Not-Halt laufen; runTick ruft es trotzdem erst danach auf.
+  // eigenen Datensatz, kein Befehl an evcc — läuft deshalb auch im Not-Halt.
   function observePhases(cfg, bc) {
     if (bc.charger !== 'evcc') return;
     const key = targetKey(bc);
@@ -1208,8 +1207,11 @@ export function createEosEvccBridge(deps) {
       // Aufheben. Seit 06.11.2026 (Christin) gilt das auch für „Laden stoppen“
       // — DVhub hält nicht gegen eine von Hand gestartete Ladung. Die einmalige
       // Neutralisierung beim Aktivieren macht emergencyStop().
-      if (isPaused()) return { ok: false, skipped: 'paused' };
+      // Phasen-Buchführung auch im Not-Halt (kein Befehl an evcc): ein dort
+      // abgestecktes Auto beendet den Ladevorgang — sonst gälte die Übergabe
+      // an den Kunden auch für den nächsten (Codex 9e0a7d5c, P2).
       observePhases(cfg, bc);
+      if (isPaused()) return { ok: false, skipped: 'paused' };
       let overrideRes = null;
       if (override) {
         overrideRes = await overrideTick(cfg, bc, force);
@@ -1301,11 +1303,14 @@ export function createEosEvccBridge(deps) {
       // Leistungsgrenze (der Netzanschluss-Wächter rechnet die Wallbox dreiphasig).
       if (slot.action === 'charge' && charger.type === 'evcc' && phasesHandsOff(targetKey(bc))) {
         // Phasen vom Kunden umgestellt: keine Umschaltung; der Strom passt zur
-        // Planleistung mit SEINER Phasenzahl (einphasig mehr Ampere). Unter
-        // einer Grenze bleibt der dreiphasig gerechnete, kleinere Strom.
+        // Planleistung mit SEINER Phasenzahl (einphasig mehr Ampere). Steht
+        // eine Grenze — auch eine, die den Planstrom nicht kürzt —, gilt sie
+        // dreiphasig gerechnet: meldet evcc beim Umschalten noch drei aktive
+        // Phasen, bliebe es sonst nicht darunter (Codex 9e0a7d5c, P1).
         if (customerPhases(bc) === 1) {
           const one = powerToCurrentA(slot.chargePowerW, { ...bc, phases: 1 });
-          slot = { ...slot, currentA: slot.gridCapW != null ? Math.min(one, slot.currentA) : one };
+          const capped = applyGridCap({ ...slot, currentA: one }, bc, getGridCapW());
+          slot = capped.action === 'charge' ? { ...slot, currentA: capped.currentA, ...(capped.gridCapW != null ? { gridCapW: capped.gridCapW } : {}) } : slot;
         }
       } else if (slot.action === 'charge' && typeof charger.setPhases === 'function' && getGridCapW() == null
         && onePhaseChargingAvailable(cfg, getEvccLoadpoints())) {

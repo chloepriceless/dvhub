@@ -153,6 +153,48 @@ describe('Befund 1: Phasen von außen umgestellt — DVhub kämpft nicht dagegen
   });
 });
 
+describe('Codex 9e0a7d5c: Grenze beim Umrechnen und Abstecken im Not-Halt', () => {
+  test('P1: Kunde stellt auf eine Phase, Grenze steht, schneidet aber den Planstrom nicht: Strom bleibt unter der Grenze (dreiphasig gerechnet)', async () => {
+    // 4,4 kW Plan = 6,4 A dreiphasig; Grenze 5 kW = 7,2 A dreiphasig — sie
+    // kürzt nicht, gilt aber. Einphasig wären 4,4 kW 19 A → 16 A; meldet evcc
+    // noch drei aktive Phasen, lüden 16 A × 3 = 11 kW über der Grenze.
+    const h = harness({ factors: [0.25, 0.4, 0.4, 0.4] });
+    await h.bridge.tick();      // einphasig
+    h.advance(Q);
+    await h.bridge.tick();      // 4,4 kW: DVhub schaltet auf drei Phasen
+    assert.deepEqual(phaseCalls(h.calls), [['phases', 1], ['phases', 3]]);
+    h.ctl.capW = 5000;
+    h.advance(EV_PHASE_SETTLE_MS);
+    h.lp.phasesConfigured = 1;  // Kunde: eine Phase; evcc meldet noch drei aktive
+    const n = h.calls.length;
+    await h.run(120_000);
+    const amps = h.calls.slice(n).filter((c) => c[0] === 'maxcurrent').map((c) => c[1]);
+    assert.ok(amps.length && Math.max(...amps) <= 5000 / (230 * 3), `Strom ${JSON.stringify(amps)} unter 7,2 A`);
+  });
+
+  test('P2: im Not-Halt abgesteckt und wieder angesteckt: neuer Ladevorgang, DVhub stellt die Phasen wieder ein', async () => {
+    const h = harness({ factors: [0.25, 0.25, 0.25, 0.25] });
+    await h.bridge.tick();
+    h.advance(EV_PHASE_SETTLE_MS);
+    h.lp.phasesConfigured = 3;
+    h.lp.phasesActive = 3;
+    await h.run(120_000);
+    assert.ok(h.bridge.getStatus().phasesByCustomer);
+    h.ctl.paused = true;
+    const n = h.calls.length;
+    h.lp.connected = false;
+    await h.run(60_000);
+    h.lp.connected = true;
+    await h.run(60_000);
+    assert.equal(h.calls.length, n, 'im Not-Halt kein Befehl');
+    h.ctl.paused = false;
+    h.advance(Q);
+    await h.bridge.tick();
+    assert.equal(h.bridge.getStatus().phasesByCustomer, null);
+    assert.deepEqual(phaseCalls(h.calls.slice(n)), [['phases', 1]]);
+  });
+});
+
 describe('Befund 1: Toleranz gegen veraltete evcc-Meldungen', () => {
   test('Meldung hängt kurz nach dem eigenen Befehl noch auf drei Phasen: keine Fremdänderung, kein erneutes Schalten', async () => {
     const h = harness();
