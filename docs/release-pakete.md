@@ -133,8 +133,10 @@ publish-release.sh (gh)
   (`<tag>/<asset>`, `channels/index-*.json`) lokal ab und zeigt die `gh`-Befehle, die es sonst ausführen würde.
   Den bisherigen Index holt es über `gh api …/releases/tags/channels`; nur „gibt es nicht“ (HTTP 404 bzw. kein Index
   des Kanals) heißt erster Index, jeder andere Fehler bricht ab, bevor etwas hochgeht. Den neuen Index lädt es mit
-  Signatur unter Zwischennamen (`….new`) hoch und benennt dann um, erst die Signatur, dann den Index — scheitert das
-  Hochladen, bleibt der alte Stand gültig.
+  Signatur unter Zwischennamen (`….new`) hoch, sichert den lebenden Stand als `….old` und benennt dann um, erst die
+  Signatur, dann den Index. Scheitert das Hochladen, bleibt der alte Stand gültig; scheitert ein Umbenennen, stellt es
+  den alten Stand wieder her. Fehlt der lebende Index nach einem Abbruch doch, nimmt der nächste Lauf den Vorgänger aus
+  `….new` bzw. `….old` (nie still „erster Index“). Die Sicherungen löscht es erst, wenn beide Dateien umgestellt sind.
 
 ## 4. Box-Seite
 

@@ -565,6 +565,9 @@ if (a[0] === 'api') {
     if (method === 'DELETE') { fs.rmSync(path.join(relDir(as.tag), as.name)); delete ids.assets[m[1]]; save(); process.exit(0); }
     if (method === 'PATCH') {
       const name = (a[a.indexOf('-f') + 1] || '').replace(/^name=/, '');
+      // Einmaliger Fehler (vorübergehend, z. B. 502): der nächste Aufruf gelingt.
+      const failMark = path.join(store, 'patch-failed');
+      if (process.env.FAKE_GH_PATCH_FAIL === name && !fs.existsSync(failMark)) { fs.writeFileSync(failMark, '1'); fail('gh: Server Error (HTTP 502)'); }
       if (assetsOf(as.tag).some((x) => x.name === name)) fail('gh: Validation Failed (HTTP 422) already_exists');
       fs.renameSync(path.join(relDir(as.tag), as.name), path.join(relDir(as.tag), name)); as.name = name; save();
       process.stdout.write(JSON.stringify({ id: Number(m[1]), name })); process.exit(0);
@@ -655,9 +658,34 @@ test('publish-release.sh (P3-6): bisheriger Index bleibt drin, Zwischennamen + U
     assert.deepEqual(fs.readdirSync(path.join(gh.store, 'rel', 'channels')).sort(), ['index-stable.json', 'index-stable.json.sig']);
     const calls = fs.readFileSync(gh.log, 'utf8');
     assert.match(calls, /release upload channels .*index-stable\.json\.sig\.new .*index-stable\.json\.new/, 'Zwischennamen');
-    const renSig = calls.indexOf('name=index-stable.json.sig');
-    const renIdx = calls.indexOf('name=index-stable.json\n');
-    assert.ok(renSig > 0 && renIdx > renSig, 'erst Signatur, dann Index umbenannt');
+    const lastRun = calls.slice(calls.lastIndexOf('releases/tags/channels', calls.lastIndexOf('index-stable.json.new')));
+    const renames = [...lastRun.matchAll(/-X PATCH \S+ -f name=(\S+)/g)].map((m) => m[1]);
+    assert.deepEqual(renames, ['index-stable.json.sig.old', 'index-stable.json.old', 'index-stable.json.sig', 'index-stable.json'],
+      'erst sichern, dann Signatur, dann Index');
+
+    // (4) Codex 9f40b69c: Umbenennen scheitert mittendrin → alter Stand zurück, Zwischenstand bleibt.
+    const live = fs.readFileSync(idxFile, 'utf8');
+    const liveSig = fs.readFileSync(`${idxFile}.sig`, 'utf8');
+    const pf = run({ FAKE_GH_PATCH_FAIL: 'index-stable.json' });
+    assert.notEqual(pf.status, 0);
+    assert.match(pf.stderr, /wiederhergestellt/);
+    assert.equal(fs.readFileSync(idxFile, 'utf8'), live, 'lebender Index zurück');
+    assert.equal(fs.readFileSync(`${idxFile}.sig`, 'utf8'), liveSig, 'lebende Signatur zurück');
+    assert.deepEqual(fs.readdirSync(path.join(gh.store, 'rel', 'channels')).sort(),
+      ['index-stable.json', 'index-stable.json.new', 'index-stable.json.sig', 'index-stable.json.sig.new']);
+
+    // (5) Lebender Index fehlt (Abbruch zwischen Sichern und Umstellen): Vorgänger aus ….new, nicht „erster Index“.
+    const ch = path.join(gh.store, 'rel', 'channels');
+    const ids = JSON.parse(fs.readFileSync(path.join(gh.store, 'ids.json'), 'utf8'));
+    for (const [id, v] of Object.entries(ids.assets)) {
+      if (v.tag === 'channels' && v.name === 'index-stable.json') { fs.rmSync(path.join(ch, v.name)); delete ids.assets[id]; }
+    }
+    fs.writeFileSync(path.join(gh.store, 'ids.json'), JSON.stringify(ids));
+    const rec = run();
+    assert.equal(rec.status, 0, rec.stdout + rec.stderr);
+    assert.match(rec.stderr, /Vorgänger aus index-stable\.json\.new/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(idxFile, 'utf8')).releases.map((x) => x.version), ['1.2.3', '1.2.2'], 'Rückweg bleibt');
+    assert.deepEqual(fs.readdirSync(ch).sort(), ['index-stable.json', 'index-stable.json.sig']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(work, { recursive: true, force: true });
