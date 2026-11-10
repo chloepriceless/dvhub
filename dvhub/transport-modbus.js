@@ -24,7 +24,8 @@ import { safeInterval } from './services/safe-async.js';
  */
 export function createModbusTransport(opts = {}) {
   const mbPool = new Map();
-  const MB_IDLE_MS = 30000;
+  // Leerlauf bis zum Abbau einer Verbindung (opts.idleMs nur für Tests).
+  const MB_IDLE_MS = Number(opts.idleMs) > 0 ? Number(opts.idleMs) : 30000;
   // Plan 25-04 (Befund 4): Connect-Timeout-Guard. Default 5000 ms (config-getrieben
   // über victron.modbusConnectTimeoutMs). Bricht einen hängenden TCP-Connect zu einem
   // toten/firewalled Host ab, bevor der OS-Default (~75-130 s) den Poll-Zyklus blockiert.
@@ -197,6 +198,14 @@ export function createModbusTransport(opts = {}) {
         }
         const entry = this.queue.shift();
         this.pending = entry;
+        // Eine Anfrage läuft: kein Leerlauf. Der Timer startet nach der Antwort
+        // neu (_drain → _resetIdle). Sonst konnte der Timer einer früheren
+        // Antwort — auch einer schon verworfenen Verbindung — die laufende
+        // Anfrage mit „pool cleanup“ abbrechen (Codex a24eeff6, P2).
+        if (this.idleTimer) {
+          clearTimeout(this.idleTimer);
+          this.idleTimer = null;
+        }
         entry.timer = setTimeout(() => {
           if (this.pending === entry) {
             this.pending = null;
@@ -208,6 +217,10 @@ export function createModbusTransport(opts = {}) {
             const old = this.sock;
             this.sock = null;
             this.buf = Buffer.alloc(0);
+            if (this.idleTimer) {
+              clearTimeout(this.idleTimer);
+              this.idleTimer = null;
+            }
             if (old && !old.destroyed) old.destroy();
             this._next();
           }

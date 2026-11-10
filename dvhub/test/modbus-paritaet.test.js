@@ -17,7 +17,7 @@ import { createModbusTransport } from '../transport-modbus.js';
 
 // Fake-GX: FC3/FC4 liefert [addr, addr+1, …]; Adresse 1 bleibt unbeantwortet;
 // `shortFor` antwortet für diese Adresse mit nur einem Register.
-function startFakeGx({ silentAddress = 1, shortFor = null, byteCountLie = null } = {}) {
+function startFakeGx({ silentAddress = 1, shortFor = null, byteCountLie = null, slowAddress = null, slowMs = 0 } = {}) {
   return new Promise((resolve, reject) => {
     const sockets = new Set();
     const server = net.createServer((socket) => {
@@ -42,7 +42,8 @@ function startFakeGx({ silentAddress = 1, shortFor = null, byteCountLie = null }
           res.writeUInt8(req.readUInt8(7), 7);
           res.writeUInt8(byteCount, 8);
           for (let i = 0; i < words; i += 1) res.writeUInt16BE((address + i) & 0xffff, 9 + i * 2);
-          socket.write(res);
+          if (address === slowAddress) setTimeout(() => { if (!socket.destroyed) socket.write(res); }, slowMs);
+          else socket.write(res);
         }
       });
     });
@@ -94,6 +95,22 @@ test('A4: nach einer Zeitüberschreitung, nacheinander abgefragt, scheitert kein
     for (const addr of [10, 20, 30, 40]) {
       assert.deepEqual(await transport.mbRequest(read(gx.port, addr)), [addr, addr + 1]);
     }
+  } finally {
+    await transport.destroy();
+    await gx.close();
+  }
+});
+
+test('A4 (Codex a24eeff6): der Leerlauf-Timer der verworfenen Verbindung bricht die neue nicht ab', async () => {
+  // Erfolg arms den Leerlauf-Timer (hier 300 ms), dann Zeitüberschreitung,
+  // dann eine langsame, gesunde Anfrage über die neue Verbindung, die über
+  // das Ende des alten Timers hinausläuft.
+  const gx = await startFakeGx({ slowAddress: 70, slowMs: 200 });
+  const transport = createModbusTransport({ idleMs: 300 });
+  try {
+    assert.deepEqual(await transport.mbRequest(read(gx.port, 10)), [10, 11]);
+    await assert.rejects(() => transport.mbRequest(read(gx.port, 1, 150)), /modbus timeout/);
+    assert.deepEqual(await transport.mbRequest(read(gx.port, 70)), [70, 71]);
   } finally {
     await transport.destroy();
     await gx.close();
