@@ -191,3 +191,71 @@ test('A5: vollständige Antwort bleibt unverändert gültig', async () => {
   assert.equal(state.meter.ok, true);
   assert.equal(state.meter.grid_total_w, 600);
 });
+
+// A6: Ein Lese-Aufruf mit Schreib-Funktionscode wäre ein gültiger Write
+// gewesen (FC 6: „quantity“ = Wert). A8: übergroße Rahmen/unbegrenzte Schlange.
+
+test('A6: mbRequest mit Schreib-Funktionscode wird abgelehnt, kein Rahmen erreicht das Gerät', async () => {
+  let frames = 0;
+  const server = net.createServer((socket) => { socket.on('data', () => { frames += 1; }); socket.on('error', () => {}); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const transport = createModbusTransport();
+  try {
+    for (const fc of [5, 6, 15, 16, 22, 23, 43, 0, undefined]) {
+      await assert.rejects(
+        () => transport.mbRequest({ host: '127.0.0.1', port: server.address().port, unitId: 100, fc, address: 2716, quantity: 1000, timeoutMs: 200 }),
+        /keine Lese-Funktion/, `fc ${fc}`);
+    }
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(frames, 0, 'kein Rahmen am Gerät');
+  } finally {
+    await transport.destroy();
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('A8: Rahmen mit Längenfeld > 254 (über 260 Byte) ist ungültig statt bis 64 KiB zu warten', async () => {
+  const server = net.createServer((socket) => {
+    socket.on('error', () => {});
+    socket.on('data', (req) => {
+      const res = Buffer.alloc(9);
+      req.copy(res, 0, 0, 4);
+      res.writeUInt16BE(0xfff0, 4);           // behauptet ~64 KiB
+      res.writeUInt8(req.readUInt8(6), 6);
+      res.writeUInt8(3, 7);
+      res.writeUInt8(4, 8);
+      socket.write(res);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const transport = createModbusTransport();
+  try {
+    const t0 = Date.now();
+    await assert.rejects(
+      () => transport.mbRequest({ host: '127.0.0.1', port: server.address().port, unitId: 100, fc: 3, address: 10, quantity: 2, timeoutMs: 2000 }),
+      /invalid modbus frame length/);
+    assert.ok(Date.now() - t0 < 1500, 'sofort, nicht erst nach der Zeitüberschreitung');
+  } finally {
+    await transport.destroy();
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('A8: Warteschlange je Verbindung begrenzt (256)', async () => {
+  const server = net.createServer((socket) => { socket.on('error', () => {}); });   // antwortet nie
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const transport = createModbusTransport();
+  try {
+    const req = { host: '127.0.0.1', port: server.address().port, unitId: 100, fc: 3, address: 10, quantity: 1, timeoutMs: 100 };
+    const all = Array.from({ length: 300 }, () => transport.mbRequest(req).then(() => 'ok', (e) => e.message));
+    const results = await Promise.race([
+      Promise.all(all.slice(257)),
+      new Promise((r) => setTimeout(() => r(null), 1000)),
+    ]);
+    assert.ok(Array.isArray(results), 'überzählige Anfragen scheitern sofort');
+    assert.ok(results.every((m) => /modbus queue full/.test(m)), results.slice(0, 3).join(' | '));
+  } finally {
+    await transport.destroy();
+    await new Promise((r) => server.close(r));
+  }
+});

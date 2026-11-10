@@ -26,6 +26,7 @@ export function createModbusTransport(opts = {}) {
   const mbPool = new Map();
   // Leerlauf bis zum Abbau einer Verbindung (opts.idleMs nur für Tests).
   const MB_IDLE_MS = Number(opts.idleMs) > 0 ? Number(opts.idleMs) : 30000;
+  const MB_QUEUE_MAX = 256;
   // Plan 25-04 (Befund 4): Connect-Timeout-Guard. Default 5000 ms (config-getrieben
   // über victron.modbusConnectTimeoutMs). Bricht einen hängenden TCP-Connect zu einem
   // toten/firewalled Host ab, bevor der OS-Default (~75-130 s) den Poll-Zyklus blockiert.
@@ -93,6 +94,13 @@ export function createModbusTransport(opts = {}) {
       _drain() {
         while (this.pending && this.buf.length >= 7) {
           const len = this.buf.readUInt16BE(4);
+          // A8 (Paritätsfund dvhub-rs): Modbus-TCP-Rahmen sind höchstens 260 Byte
+          // (Längenfeld ≤ 254). Ein größeres Längenfeld ist Unsinn — sofort als
+          // Fehler werten, statt auf bis zu 64 KiB zu warten.
+          if (len > 254) {
+            this._fail(new Error(`invalid modbus frame length ${len}`));
+            return;
+          }
           const total = 6 + len;
           if (this.buf.length < total) break;
           const frame = this.buf.subarray(0, total);
@@ -179,6 +187,11 @@ export function createModbusTransport(opts = {}) {
               return;
             }
           }
+          // A8: Warteschlange begrenzen — hängt das Gerät, wächst sie sonst ohne Ende.
+          if (this.queue.length >= MB_QUEUE_MAX) {
+            reject(new Error('modbus queue full'));
+            return;
+          }
           const entry = { reqBuf, resolve, reject, timer: null, timeoutMs };
           this.queue.push(entry);
           this._next();
@@ -233,6 +246,11 @@ export function createModbusTransport(opts = {}) {
   }
 
   function mbRequest({ host, port, unitId, fc, address, quantity, timeoutMs }) {
+    // A6 (Paritätsfund dvhub-rs, Codex adc3a82): nur Lese-Funktionen 1–4. Mit
+    // FC 6 wäre die „Lese“-Anfrage ein gültiger Write gewesen (quantity = Wert).
+    if (![1, 2, 3, 4].includes(Number(fc))) {
+      return Promise.reject(new Error(`modbus read: fc ${fc} ist keine Lese-Funktion`));
+    }
     const tid = (tidCounter++ & 0xffff) || 1;
     const req = Buffer.alloc(12);
     req.writeUInt16BE(tid, 0);

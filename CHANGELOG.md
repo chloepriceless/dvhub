@@ -313,6 +313,11 @@ verweist hierher.
   Verbindung ab: alle weiteren Anfragen des Takts scheiterten mit „connection closed“. Jetzt gilt jedes
   Socket-Ereignis nur für seinen eigenen Socket; nur die betroffene Anfrage scheitert. Paritätsvergleich mit dem
   Rust-Neubau (A4).
+- **Modbus: Lese-Anfragen können nicht mehr schreiben, übergroße Rahmen und volle Warteschlangen sind Fehler.** Eine
+  Lese-Anfrage mit Schreib-Funktionscode (z. B. FC 6 aus einem Messpunkt oder dem Register-Scan) wäre ein gültiger
+  Write gewesen – die Menge als Wert. Jetzt nimmt die Lese-Anfrage nur FC 1–4. Ein Rahmen mit Längenfeld über 254
+  (mehr als 260 Byte) gilt sofort als ungültig, statt auf bis zu 64 KiB zu warten; die Warteschlange je Verbindung
+  ist auf 256 Anfragen begrenzt. Paritätsvergleich mit dem Rust-Neubau (A6, A8).
 - **Modbus: zu kurze Antworten sind ein Lesefehler statt 0 W.** Lieferte ein Gerät weniger Register als angefragt,
   wurden die fehlenden Wörter zu 0 und der Netzzähler galt als „ok“ mit 0 W – Netzanschluss-Wächter und
   §14a-Budget rechneten damit. Jetzt meldet DVhub `modbus short response (x von y Registern)`, der Wert gilt als
