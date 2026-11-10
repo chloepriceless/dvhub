@@ -510,7 +510,15 @@ function buildSetupSaveBody(config, source, state) {
   // Der Assistent überschreibt bewusst, was eingetragen wurde (Konflikte ohne
   // Rückfrage); Unangetastetes behält den Stand der Box.
   if (source !== 'import' && state?.baseConfig) Object.assign(body, { base: state.baseConfig, overwriteConflicts: true });
+  // Kaputte config.json auf der Box: nur nach ausdrücklicher Rückfrage ersetzen.
+  if (state?.overwriteBrokenConfig === true) body.confirmOverwriteBrokenConfig = true;
   return body;
+}
+
+function brokenConfigSetupNotice(brokenCopy) {
+  return brokenCopy
+    ? `Die vorhandene config.json ist kaputt (kein gültiges JSON) und wurde als „${brokenCopy}“ gesichert. Reparieren und neu starten stellt die Einstellungen wieder her; der Assistent ersetzt sie sonst durch die Vorgaben plus deine Eingabe.`
+    : 'Die vorhandene config.json ist kaputt (kein gültiges JSON). Der Assistent ersetzt sie durch die Vorgaben plus deine Eingabe.';
 }
 
 if (typeof globalThis !== 'undefined') globalThis.DVhubSetupWizard.buildSetupSaveBody = buildSetupSaveBody;
@@ -834,7 +842,7 @@ function hydrateSetupWizardState(payload) {
   return setupWizardState;
 }
 
-async function saveSetup(config, source = 'setup') {
+async function saveSetup(config, source = 'setup', { overwriteBrokenConfig = false } = {}) {
   // The server gates only the ENABLE transition of the EEG/§14a toggles
   // (allowGridCharge/allowGridDischarge → true) behind x-confirm-legal-gate
   // (since 2026-06-28; previously any undefined → false also tripped it). We
@@ -847,9 +855,18 @@ async function saveSetup(config, source = 'setup') {
   const response = await apiFetch(source === 'import' ? '/api/config/import' : '/api/config', {
     method: 'POST',
     headers,
-    body: JSON.stringify(buildSetupSaveBody(config, source, setupWizardState))
+    body: JSON.stringify(buildSetupSaveBody(config, source, { ...setupWizardState, overwriteBrokenConfig }))
   });
   const payload = await response.json();
+  if (response.status === 409 && payload?.error === 'config_broken') {
+    const text = `${brokenConfigSetupNotice(payload.brokenCopy)} Jetzt ersetzen?`;
+    const confirmed = !overwriteBrokenConfig && (typeof window.dvConfirm === 'function'
+      ? await window.dvConfirm(text, { title: 'config.json ist kaputt', okLabel: 'Ersetzen', cancelLabel: 'Abbrechen', variant: 'danger' })
+      : window.confirm(text));
+    if (confirmed) return saveSetup(config, source, { overwriteBrokenConfig: true });
+    setBanner(`Nicht gespeichert — ${brokenConfigSetupNotice(payload.brokenCopy)}`, 'error');
+    return false;
+  }
   if (!response.ok || !payload.ok) {
     setBanner(`Setup konnte nicht gespeichert werden: ${payload.error || response.status}`, 'error');
     return false;
@@ -882,7 +899,8 @@ async function loadSetup() {
     return;
   }
   hydrateSetupWizardState(payload);
-  if (payload.meta.needsSetup) setBanner('Noch keine gültige Config gefunden. Bitte die Basisdaten eintragen oder eine vorhandene Config importieren.', 'warn');
+  if (payload.meta.broken) setBanner(`Achtung: ${brokenConfigSetupNotice(payload.meta.brokenCopy)}`, 'error');
+  else if (payload.meta.needsSetup) setBanner('Noch keine gültige Config gefunden. Bitte die Basisdaten eintragen oder eine vorhandene Config importieren.', 'warn');
   else setBanner('Es existiert bereits eine gültige Config. Der Assistent kann trotzdem zum schnellen Ueberschreiben genutzt werden.', 'success');
   // Plan 08-11 Task 2: paint EEG/§14a section with the *current* (loaded)
   // toggle values so the operator sees the actual state. Does NOT auto-tick

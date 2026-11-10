@@ -19,6 +19,7 @@
 import { controlWriteBoundsError, MAX_MINSOC_PCT } from '../server-utils.js';
 import { parseEvDeparturePatch } from './optimizer/ev-departure.js';
 import { requestEosReplanAfterSave } from './optimizer/eos-replan-after-save.js';
+import { fenceModbusWrites } from '../transport-modbus.js';
 
 // Identisch zu routes-api.js: die generischen Steuerziele, die manuell
 // geschrieben werden dürfen. feedExcessDcPv bleibt Victron-spezifisch.
@@ -168,6 +169,9 @@ async function setEmergencyStopNow(ctx, opts) {
     // Reihenfolge: erst Flag setzen (kein diskretionärer Write kann dazwischen),
     // dann EINE aktive Neutralisierung.
     state.ctrl.discretionaryWritesPaused = true;
+    // A7 (Paritätsfund dvhub-rs): schon eingereihte Modbus-Writes verwerfen,
+    // bevor die eine Rücknahme unten eingereiht wird.
+    fenceModbusWrites();
     state.ctrl.pausedAt = Date.now();
     state.ctrl.pausedBy = actor?.actor_ip || 'unknown';
     state.ctrl.pausedReason = 'operator';

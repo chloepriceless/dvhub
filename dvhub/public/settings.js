@@ -997,7 +997,32 @@ function buildConfigSaveBody(config, source, opts = {}, base = null) {
   if (opts.migrate === true) body.migrate = true;
   // Nach Rückfrage: Konflikte (Feld auch auf der Box geändert) überschreiben.
   if (opts.overwriteConflicts === true) body.overwriteConflicts = true;
+  // Nach Rückfrage: eine kaputte config.json auf der Box ersetzen (HTTP 409 config_broken).
+  if (opts.overwriteBroken === true) body.confirmOverwriteBrokenConfig = true;
   return body;
+}
+
+// Rückfrage bei HTTP 409 config_broken: die config.json auf der Box ist kaputt,
+// DVhub läuft mit Vorgaben. Speichern ersetzt sie — nur ausdrücklich.
+function brokenConfigNotice(brokenCopy) {
+  return brokenCopy
+    ? `Die config.json auf der Box ist kaputt (kein gültiges JSON). DVhub läuft mit Vorgaben. Der kaputte Stand ist als „${brokenCopy}“ neben der config.json gesichert — reparieren und neu starten stellt die Einstellungen wieder her.`
+    : 'Die config.json auf der Box ist kaputt (kein gültiges JSON). DVhub läuft mit Vorgaben.';
+}
+
+async function confirmOverwriteBrokenConfig(brokenCopy) {
+  const intro = brokenConfigNotice(brokenCopy);
+  const outro = 'Mit „Ersetzen“ wird sie durch die Vorgaben plus deine Eingabe ersetzt; alle anderen bisherigen Einstellungen fehlen dann.';
+  if (typeof window.dvConfirm === 'function') {
+    const wrap = document.createElement('div');
+    for (const text of [intro, outro]) {
+      const p = document.createElement('p');
+      p.textContent = text;
+      wrap.appendChild(p);
+    }
+    return window.dvConfirm(wrap, { title: 'config.json ist kaputt', okLabel: 'Ersetzen', cancelLabel: 'Abbrechen', variant: 'danger' });
+  }
+  return window.confirm(`${intro}\n\n${outro}`);
 }
 
 // Zeilen für die Rückfrage bei HTTP 409 config_conflict.
@@ -3523,7 +3548,8 @@ async function loadConfig() {
     return;
   }
   applyConfigPayload(payload);
-  if (currentMeta.needsSetup) setBanner('Es wurde noch keine gültige Config gefunden. Du kannst sie hier direkt anlegen oder den Setup-Assistenten nutzen.', 'warn');
+  if (currentMeta.broken) setBanner(`Achtung: ${brokenConfigNotice(currentMeta.brokenCopy)} Speichern ersetzt sie erst nach Rückfrage.`, 'error');
+  else if (currentMeta.needsSetup) setBanner('Es wurde noch keine gültige Config gefunden. Du kannst sie hier direkt anlegen oder den Setup-Assistenten nutzen.', 'warn');
   else setBanner('Konfiguration geladen. Änderungen können jetzt im Menü bearbeitet werden.', 'success');
 }
 
@@ -3576,6 +3602,14 @@ async function saveConfig(config, source = 'settings', opts = {}) {
     body: JSON.stringify(reqBody)
   });
   const payload = await res.json();
+  if (res.status === 409 && payload?.error === 'config_broken') {
+    if (opts.overwriteBroken !== true && await confirmOverwriteBrokenConfig(payload.brokenCopy)) {
+      return saveConfig(config, source, { ...opts, overwriteBroken: true });
+    }
+    lastSaveError = 'config_broken';
+    setBanner(`Nicht gespeichert — ${brokenConfigNotice(payload.brokenCopy)}`, 'error');
+    return false;
+  }
   if (res.status === 409 && payload?.error === 'config_conflict' && source !== 'import' && opts.overwriteConflicts !== true) {
     if (await confirmConfigConflicts(payload.conflicts)) return saveConfig(config, source, { ...opts, overwriteConflicts: true });
     setBanner('Nicht gespeichert — einige Einstellungen wurden inzwischen auf der Box geändert.', 'warn');

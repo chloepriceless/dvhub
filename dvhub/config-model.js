@@ -6108,11 +6108,22 @@ function migrateDatenspendeClientType(raw) {
   if (isPlainObject(raw?.datenspende) && raw.datenspende.clientType === 'dvhub') raw.datenspende.clientType = 'victron';
 }
 
+// api.dvhub.de ist abgeschaltet (2026-06-17). Vor dem Feld-Pass umschreiben:
+// der verwarf den alten Wert sonst als „invalid option“ mit Warnung, und die
+// Umstellung in normalizeConfigInput griff nie (Paritätsfund dvhub-rs).
+const LEGACY_PRICE_API_URL = /^https?:\/\/api\.dvhub\.de\/?$/i;
+function migrateLegacyPriceApiUrl(raw) {
+  if (isPlainObject(raw?.epex) && LEGACY_PRICE_API_URL.test(String(raw.epex.priceApiUrl || ''))) {
+    raw.epex.priceApiUrl = 'https://dvhub.online';
+  }
+}
+
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
   migrateSetpointWatchdog(raw);
   migrateDatenspendeClientType(raw);
+  migrateLegacyPriceApiUrl(raw);
   // Sweep package 6: shape-level schema checks run FIRST, on the raw parsed
   // config — before the FIELD_DEFINITIONS coercion pass below, which would
   // otherwise silently string-coerce a wrong-typed scalar (e.g. a numeric
@@ -6193,6 +6204,16 @@ function sanitizeRawConfig(rawInput) {
     setPath(raw, field.path, currentValue == null ? '' : String(currentValue));
   }
 
+  // Paritätsfund (dvhub-rs HANDOVER): `schedule: 5` ließ hier das Laden werfen
+  // („Cannot create property 'rules' on number“) → Absturz beim Start. Ein
+  // falscher Typ wird gewarnt und durch die Vorgabe ersetzt; ein Array verlor
+  // seine Regeln bisher still beim Speichern (rules am Array ist für JSON
+  // unsichtbar).
+  if (raw.schedule != null && raw.schedule !== false && raw.schedule !== 0 && raw.schedule !== ''
+      && !isPlainObject(raw.schedule)) {
+    warnings.push(`schedule: must be an object (got ${Array.isArray(raw.schedule) ? 'array' : typeof raw.schedule}) — reset to defaults`);
+    raw.schedule = {};
+  }
   raw.schedule = raw.schedule || {};
   raw.schedule.rules = sanitizeScheduleRules(raw.schedule.rules, warnings);
   // Nur anfassen, wenn der Schlüssel wirklich da ist — sonst würde jede Config
@@ -6381,7 +6402,7 @@ export function normalizeConfigInput(rawInput) {
   if (persistedConfig.epex && !persistedConfig.epex.priceSource) persistedConfig.epex.priceSource = 'dvhub';
   // Endpoint migration (2026-06-17): api.dvhub.de retired — all public endpoints
   // moved to dvhub.online. Rewrite the exact legacy base only; leave custom URLs alone.
-  if (persistedConfig.epex && /^https?:\/\/api\.dvhub\.de\/?$/i.test(String(persistedConfig.epex.priceApiUrl || ''))) {
+  if (persistedConfig.epex && LEGACY_PRICE_API_URL.test(String(persistedConfig.epex.priceApiUrl || ''))) {
     persistedConfig.epex.priceApiUrl = 'https://dvhub.online';
   }
   // Ensure priceApiUrl is always set (legacy configs may omit it)
@@ -6535,27 +6556,84 @@ export function resolveUserImportPriceCtKwhForSlot(row, pricing = {}, options = 
   return computeDynamicGrossImportCtKwh(Number(row.ct_kwh || 0), effectivePricing.dynamicComponents || {});
 }
 
+// Paritätsfund (dvhub-rs HANDOVER, fail-open kaputte config.json): DVhub lief
+// mit Vorgaben weiter, und das nächste Speichern überschrieb die Datei — die
+// echte Konfiguration war weg (die Sicherung vor dem Schreiben fällt nach zehn
+// Speichervorgängen aus der Aufbewahrung). Jetzt bleibt der kaputte Stand als
+// `config.json.broken-<Zeit>` liegen (je Inhalt einmal, nie gelöscht), und
+// saveConfigFile schreibt über eine kaputte Datei nur mit `overwriteBroken`.
+
+/** Liest config.json; `broken` = vorhanden, aber nicht als Objekt lesbar. */
+function readConfigText(configPath) {
+  let text;
+  try {
+    text = fs.readFileSync(configPath, 'utf8');
+  } catch (error) {
+    return { parsed: {}, broken: true, parseError: error.message };
+  }
+  try {
+    const parsed = text.trim() ? JSON.parse(text) : {};
+    if (!isPlainObject(parsed)) return { parsed: {}, broken: true, parseError: 'config root must be an object' };
+    return { parsed, broken: false, parseError: null };
+  } catch (error) {
+    return { parsed: {}, broken: true, parseError: error.message };
+  }
+}
+
+/** true, wenn config.json existiert, aber kaputt ist (Speichern braucht dann eine Bestätigung). */
+export function isConfigFileBroken(configPath) {
+  return fs.existsSync(configPath) && readConfigText(configPath).broken;
+}
+
+/**
+ * Sichert eine kaputte config.json als `config.json.broken-<Zeit>` (0600).
+ * Liegt derselbe Inhalt schon gesichert da, wird keine zweite Kopie angelegt.
+ * Gibt den Pfad der Kopie zurück, oder null, wenn nichts gesichert werden konnte.
+ */
+export function preserveBrokenConfig(configPath) {
+  let content;
+  try { content = fs.readFileSync(configPath); } catch { return null; }
+  const dir = path.dirname(configPath);
+  const prefix = `${path.basename(configPath)}.broken-`;
+  try {
+    for (const name of fs.readdirSync(dir).filter((f) => f.startsWith(prefix)).sort()) {
+      try {
+        if (fs.readFileSync(path.join(dir, name)).equals(content)) return path.join(dir, name);
+      } catch { /* unlesbare Kopie: weiter suchen */ }
+    }
+  } catch { /* Verzeichnis nicht lesbar: unten neu anlegen */ }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  for (let i = 0; i < 100; i += 1) {
+    const target = path.join(dir, `${prefix}${stamp}${i ? `-${i}` : ''}`);
+    try {
+      fs.writeFileSync(target, content, { flag: 'wx', mode: 0o600 });
+      try { fs.chmodSync(target, 0o600); } catch { /* best-effort */ }
+      return target;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') return null;
+    }
+  }
+  return null;
+}
+
 export function loadConfigFile(configPath) {
   const exists = fs.existsSync(configPath);
   let parsed = {};
   let valid = true;
   let parseError = null;
+  let broken = false;
+  let brokenCopyPath = null;
   let manufacturerProfile = null;
   let manufacturerProfileError = null;
 
   if (exists) {
-    try {
-      const text = fs.readFileSync(configPath, 'utf8');
-      parsed = text.trim() ? JSON.parse(text) : {};
-      if (!isPlainObject(parsed)) {
-        parsed = {};
-        valid = false;
-        parseError = 'config root must be an object';
-      }
-    } catch (error) {
-      parsed = {};
+    const read = readConfigText(configPath);
+    parsed = read.parsed;
+    if (read.broken) {
       valid = false;
-      parseError = error.message;
+      broken = true;
+      parseError = read.parseError;
+      brokenCopyPath = preserveBrokenConfig(configPath);
     }
   }
 
@@ -6585,6 +6663,10 @@ export function loadConfigFile(configPath) {
     // needsSetup driven purely by exists/valid — no forced re-setup. Flipped to
     // true by POST /api/setup/complete; saveConfigFile re-derives this on save.
     needsSetup: !exists || !valid || normalized.persistedConfig.setupCompleted === false,
+    // Kaputte config.json (nicht lesbar/kein JSON-Objekt): es gelten Vorgaben,
+    // Speichern braucht eine Bestätigung; brokenCopyPath = gesicherter Stand.
+    broken,
+    brokenCopyPath,
     rawConfig: normalized.rawConfig,
     persistedConfig: normalized.persistedConfig,
     effectiveConfig,
@@ -6602,7 +6684,20 @@ export function loadConfigFile(configPath) {
 // established in plan 08-01 for SQL migrations (consistency for ops).
 const CONFIG_BACKUP_RETENTION = 10;
 
-export function saveConfigFile(configPath, rawInput) {
+export function saveConfigFile(configPath, rawInput, { overwriteBroken = false } = {}) {
+  // Über eine kaputte config.json nur nach bewusster Bestätigung schreiben —
+  // und erst, wenn ihr Stand gesichert ist (siehe preserveBrokenConfig).
+  if (isConfigFileBroken(configPath)) {
+    const brokenCopyPath = preserveBrokenConfig(configPath);
+    if (!overwriteBroken || !brokenCopyPath) {
+      const error = new Error(brokenCopyPath
+        ? `config.json ist kaputt — nicht überschrieben (gesichert als ${path.basename(brokenCopyPath)}). Erst reparieren oder das Überschreiben ausdrücklich bestätigen.`
+        : 'config.json ist kaputt und konnte nicht gesichert werden — nicht überschrieben.');
+      error.code = 'CONFIG_BROKEN';
+      error.brokenCopyPath = brokenCopyPath;
+      throw error;
+    }
+  }
   const normalized = normalizeConfigInput(scrubStoredPlaceholders(JSON.parse(JSON.stringify(rawInput ?? {}))));
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   // Plan 08-09 Task 1: backup-on-write — copy the existing config.json to a

@@ -59,6 +59,10 @@ dvhub/python/
 
 # Laufzeit-/Zustandsdateien, die beim Entwickeln entstehen.
 dvhub/config.json
+# Sicherungen und gesicherte kaputte Stände — enthalten Geheimnisse (Codex fa8dfc39, P2).
+dvhub/config.backup-*.json
+dvhub/config.json.broken-*
+dvhub/control_state.json.broken-*
 dvhub/energy_state.json
 dvhub/*.log
 dvhub/.env

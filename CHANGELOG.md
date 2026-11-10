@@ -289,6 +289,44 @@ verweist hierher.
 
 ### Behoben
 
+- **Geheimnis-Prüfung vor dem Push findet wieder private Schlüssel.** In `scripts/check-secrets.sh` ging das Muster
+  `-----BEGIN … PRIVATE KEY-----` ohne `-e` an `git grep` und wurde als Option gelesen; der Fehler wurde verschluckt,
+  die Prüfung meldete nie etwas. Jetzt mit `-e`, und ein scheiterndes `git grep` sperrt, statt als „sauber“ zu gelten.
+  Probe im Wegwerf-Repo (`test/check-secrets.test.js`). Paritätsvergleich mit dem Rust-Neubau.
+- **Kaputte config.json wird nicht mehr still überschrieben.** War die config.json kein gültiges JSON (oder kein
+  Objekt), lief DVhub mit Vorgaben, und das nächste Speichern – Einstellungen, Setup-Assistent oder eine Automatik –
+  ersetzte die Datei; die echte Konfiguration war weg, sobald die Sicherung aus der Aufbewahrung fiel. Jetzt sichert
+  DVhub den kaputten Stand als `config.json.broken-<Zeit>` (je Inhalt einmal, Modus 0600, wird nie gelöscht).
+  Gespeichert wird darüber nur nach ausdrücklicher Bestätigung: Einstellungen, Setup-Seite und Einrichtungsassistent
+  zeigen eine deutliche Warnung mit dem Namen der Sicherung und fragen vor dem Ersetzen nach (HTTP 409
+  `config_broken`, Bestätigung `confirmOverwriteBrokenConfig`). Automatische Speichervorgänge schreiben in dieser Lage
+  nicht. Paritätsvergleich mit dem Rust-Neubau.
+- **Falscher Typ für `schedule` bringt DVhub nicht mehr zum Absturz.** `"schedule": 5` (oder ein Text, `true`, eine
+  Liste) ließ das Laden der Config mit „Cannot create property 'rules'“ werfen – DVhub startete nicht. Jetzt gibt es
+  eine Warnung (`schedule: must be an object …`), und es gelten die Vorgaben für diesen Abschnitt. Die
+  Config-Migrationen werfen auch bei einer Wurzel `null` nicht mehr. Paritätsvergleich mit dem Rust-Neubau.
+- **Alte Preis-Adresse `api.dvhub.de` wird ohne Fehlwarnung umgestellt.** Die Umstellung auf `https://dvhub.online`
+  griff nie, weil die Feldprüfung den alten Wert vorher als „invalid option“ verwarf (Ergebnis gleich, aber mit
+  Warnung bei jedem Laden). Paritätsvergleich mit dem Rust-Neubau.
+- **Modbus: eine Zeitüberschreitung lässt nicht mehr den Rest des Poll-Takts scheitern.** Nach einer
+  Zeitüberschreitung baute DVhub die Verbindung neu auf, aber das Schließen des alten Sockets brach danach die neue
+  Verbindung ab: alle weiteren Anfragen des Takts scheiterten mit „connection closed“. Jetzt gilt jedes
+  Socket-Ereignis nur für seinen eigenen Socket; nur die betroffene Anfrage scheitert. Paritätsvergleich mit dem
+  Rust-Neubau (A4).
+- **Not-Halt: schon eingereihte Modbus-Writes gehen nicht mehr raus.** Ein Sollwert, der vor dem Not-Halt in der
+  Warteschlange einer Modbus-Verbindung stand, wurde danach noch gesendet. Jetzt setzt der Not-Halt beim Eintritt eine
+  Schreib-Sperre: alles, was vorher eingereiht war, wird unmittelbar vor dem Senden verworfen; die eine Rücknahme
+  danach geht raus. Gilt für alle Modbus-Verbindungen (Haupt-GX, zweite GX, Register-Scan, Heizstab).
+  Paritätsvergleich mit dem Rust-Neubau (A7).
+- **Modbus: Lese-Anfragen können nicht mehr schreiben, übergroße Rahmen und volle Warteschlangen sind Fehler.** Eine
+  Lese-Anfrage mit Schreib-Funktionscode (z. B. FC 6 aus einem Messpunkt oder dem Register-Scan) wäre ein gültiger
+  Write gewesen – die Menge als Wert. Jetzt nimmt die Lese-Anfrage nur FC 1–4. Ein Rahmen mit Längenfeld über 254
+  (mehr als 260 Byte) gilt sofort als ungültig, statt auf bis zu 64 KiB zu warten; die Warteschlange je Verbindung
+  ist auf 256 Anfragen begrenzt. Paritätsvergleich mit dem Rust-Neubau (A6, A8).
+- **Modbus: zu kurze Antworten sind ein Lesefehler statt 0 W.** Lieferte ein Gerät weniger Register als angefragt,
+  wurden die fehlenden Wörter zu 0 und der Netzzähler galt als „ok“ mit 0 W – Netzanschluss-Wächter und
+  §14a-Budget rechneten damit. Jetzt meldet DVhub `modbus short response (x von y Registern)`, der Wert gilt als
+  ungültig und der Zähler als gestört (`meter.ok=false`). Paritätsvergleich mit dem Rust-Neubau (A5).
 - **Preis-Abruf und Kuma-Push prüfen Adressen in Ziffern auch beim Verbinden.** Für `epex.priceApiUrl` und den
   Uptime-Kuma-Push löst DVhub Namen beim Verbinden auf und prüft jede Adresse. Adressen in Ziffern
   (`127.0.0.1`, `[::ffff:127.0.0.1]`, `2130706433`, `127.1`) prüfte nur das Speichern; eine von Hand geänderte Config

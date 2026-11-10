@@ -33,7 +33,7 @@ export function createConfigRoutes(deps) {
   const {
     ctx, getCfg, pushLog, licenseService,
     json, downloadJson, readJsonBody,
-    configApiPayload, configMetaPayload, withScheduleRules, migrationDirs,
+    configApiPayload, configMetaPayload, configBrokenBody, withScheduleRules, migrationDirs,
     requireBootstrapToken, consumeBootstrapToken, isRfc1918OrLoopback, hasValidBearer,
     actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, requestEosReplanAfterSave, ALLOWED_CONFIG_ROOTS,
   } = deps;
@@ -397,7 +397,16 @@ export function createConfigRoutes(deps) {
           paths: flippedLegalGates,
         }, cfgActor);
       }
-      const result = ctx.saveAndApplyConfig(body.config);
+      // Kaputte config.json auf der Box: nur nach ausdrücklicher Bestätigung
+      // überschreiben (config-model.js saveConfigFile, Paritätsfund).
+      let result;
+      try {
+        result = ctx.saveAndApplyConfig(body.config, { overwriteBroken: body.confirmOverwriteBrokenConfig === true });
+      } catch (e) {
+        if (e?.code !== 'CONFIG_BROKEN') throw e;
+        pushLog('config_save_refused_broken', { brokenCopy: configBrokenBody(e).brokenCopy }, cfgActor);
+        return json(res, 409, configBrokenBody(e));
+      }
       if (importedScheduleRules && typeof ctx.replaceManualScheduleRules === 'function') {
         const count = ctx.replaceManualScheduleRules(importedScheduleRules);
         pushLog('config_import_schedule_rules', { count }, cfgActor);
