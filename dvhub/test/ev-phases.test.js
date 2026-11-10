@@ -63,7 +63,8 @@ describe('Brücke: einphasig bei kleiner Leistung', () => {
     assert.deepEqual(h.calls, [['phases', 1], ['maxcurrent', 12], ['mode', 'now']]);
     h.advance(Q);
     await h.bridge.tick();
-    assert.deepEqual(h.calls.slice(3), [['phases', 3], ['maxcurrent', 16], ['mode', 'now']]);
+    // mehr Phasen: erst der Strom (bestätigt), dann umschalten, dann laden
+    assert.deepEqual(h.calls.slice(3), [['maxcurrent', 16], ['phases', 3], ['maxcurrent', 16], ['mode', 'now']]);
   });
 
   test('Wallbox ohne Umschaltung: wie bisher dreiphasig mit Mindeststrom', async () => {
@@ -199,4 +200,16 @@ describe('Codex 1c280569: veraltete Meldung und halber Übergang', () => {
     await h.bridge.tick();
     assert.ok(h.calls.slice(n).some((c) => c[0] === 'maxcurrent' && c[1] === 12), JSON.stringify(h.calls.slice(n)));
   });
+});
+
+test('Codex d31e5119: auf drei Phasen auch bei veralteter Meldung erst den Strom — scheitert er, bleibt es einphasig', async () => {
+  const h = harness({ factors: [0.25, 0.4] });
+  h.ctl.staleTelemetry = true;
+  await h.bridge.tick();
+  assert.deepEqual(h.calls[0], ['phases', 1]);
+  h.ctl.failCurrent = true;
+  const n = h.calls.length;
+  h.advance(Q);
+  await h.bridge.tick();
+  assert.ok(!h.calls.slice(n).some((c) => c[0] === 'phases' && c[1] === 3), JSON.stringify(h.calls.slice(n)));
 });

@@ -512,6 +512,13 @@ export function createEosEvccBridge(deps) {
         const reported = Number(lp?.phasesActive) || null;
         const ours = charger.dvhubPhases?.() ?? null;
         if (reported !== slot.phases || (ours !== null && ours !== slot.phases)) {
+          // Mehr Phasen: erst den Strom bestätigen (wie im Wrapper), sonst
+          // liefe der alte einphasige Strom dreiphasig weiter (Codex d31e5119).
+          if (slot.phases === 3 && typeof charger.limit === 'function') {
+            const lim = await charger.limit(slot.currentA);
+            if (!lim?.ok) return lim || { ok: false, error: 'maxcurrent failed' };
+            if (lastSent) lastSent = { ...lastSent, key: null };
+          }
           const ph = await charger.setPhases(slot.phases);
           if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
         }
