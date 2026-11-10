@@ -235,8 +235,13 @@ restore() {
   if [[ ! -f "$RESTORE/$IDX" || ! -f "$RESTORE/$SIG" ]]; then
     die "Umstellen gescheitert ($1); es gab kein altes Paar zum Wiederherstellen — Zwischenstand prüfen und erneut ausführen"
   fi
+  # Dauerhafte Kopie außerhalb von $WORK (der EXIT-Trap löscht $WORK): scheitert
+  # auch das Hochladen, bleibt das alte Paar für die Hand-Reparatur (Codex 11f469a2).
+  local keep="$BUILD/channels-restore"
+  mkdir -p "$keep" && cp "$RESTORE/$IDX" "$RESTORE/$SIG" "$keep/" \
+    || echo "publish-release: Warnung: Kopie des alten Paars nach $keep gescheitert" >&2
   gh release upload channels -R "$GH_REPO" --clobber "$RESTORE/$SIG" "$RESTORE/$IDX" \
-    || die "Umstellen gescheitert ($1) und Wiederherstellen gescheitert — am Release channels von Hand prüfen ($IDX, $SIG); ein erneuter Lauf nimmt den Vorgänger aus dem lebenden Index bzw. $IDX.new"
+    || die "Umstellen gescheitert ($1) und Wiederherstellen gescheitert — altes Paar liegt in $keep; von Hand hochladen: gh release upload channels -R $GH_REPO --clobber $keep/$SIG $keep/$IDX (erst danach erneut veröffentlichen, sonst fehlt der Vorgänger)"
   if fetch_channels \
       && [[ "$(asset_size "$IDX" || true)" == "$(wc -c < "$RESTORE/$IDX" | tr -d ' ')" ]] \
       && [[ "$(asset_size "$SIG" || true)" == "$(wc -c < "$RESTORE/$SIG" | tr -d ' ')" ]]; then
