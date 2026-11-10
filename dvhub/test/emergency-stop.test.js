@@ -107,15 +107,19 @@ test('paused: block log is throttled once per (target,source)', async () => {
   assert.equal(blocked.length, 2, 'one log per (target,source), not per attempt');
 });
 
-test('paused: mandatory §51 curtailment still writes hardware', async () => {
+// Christin 10.11.2026: „Ja, Not-Halt heißt auch die Punkte von §51 usw.“ —
+// bis 1.0.9 schrieben §51 und der SoC-Boden im Not-Halt weiter, seit 1.0.10
+// nicht mehr („als ob die Kiste aus ist“, services/emergency-stop/policy.js).
+test('paused: §51-Abregelung und SoC-Boden-Nullung schreiben im Not-Halt NICHT mehr', async () => {
   const { evaluator, state, writes } = makeEvalCtx();
   state.ctrl.discretionaryWritesPaused = true;
 
   const r = await evaluator.applyControlTarget('gridSetpointW', -40, 'negative_price_protection');
-
-  assert.equal(r.ok, true);
-  assert.equal(writes.length, 1, '§51 curtailment must not be gated');
-  assert.equal(writes[0].value, -40);
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'emergency_stop_active');
+  const f = await evaluator.applyControlTarget('gridSetpointW', 0, 'manual_override_soc_floor');
+  assert.equal(f.error, 'emergency_stop_active');
+  assert.equal(writes.length, 0, 'im Not-Halt keine Pflicht-Writes mehr');
 });
 
 test('paused: the emergency_stop neutralization itself passes the gate', async () => {

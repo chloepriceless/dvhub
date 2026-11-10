@@ -28,9 +28,12 @@
  *  - Not-Halt (Christin 06.11.2026: DVhubs eigene Steuersignale EINMAL
  *    zuruecknehmen, danach keine Writes): die Sperre gilt als DVhubs Signal.
  *    Im Not-Halt schreibt DVhub den gesicherten Wert genau einmal zurueck,
- *    sobald der Entlade-Boden es zulaesst (Ladestand frisch ueber dem harten
- *    Boden — darunter hielte er 2704 ohnehin auf 0), ohne Wiederholung. Eine
- *    Rueckmeldung danach beendet die Uebergabe (nur lesen). Bleibt sie aus,
+ *    und zwar nur im ersten Takt des Not-Halts, wenn der Entlade-Boden es dann
+ *    zulaesst (Ladestand frisch ueber dem harten Boden — darunter hielte er
+ *    2704 ohnehin auf 0), ohne Wiederholung. Laesst der Boden es beim Eintritt
+ *    nicht zu, schreibt DVhub im Not-Halt gar nicht (als ob aus, Christin
+ *    10.11.2026) und nimmt die Sperre erst nach dem Not-Halt zurueck. Eine
+ *    Rueckmeldung beendet die Uebergabe (nur lesen). Bleibt sie aus,
  *    schreibt DVhub erst nach dem Not-Halt wieder.
  *  - Netzanschluss-Waechter / Akku-Hilfe: braucht der Anschluss den Akku
  *    (Lasten gekuerzt, Akku-Hilfe angefordert), sperrt DVhub Akku 1 nicht und
@@ -374,8 +377,20 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       if (paused) {
         // Not-Halt: nur lesen — ausser dem einen Rueckschreibversuch.
         if (confirmed) { finish(); return; }
-        if (!stopRestoreUsed && aboveHardFloor) {
+        // Die eine Entscheidung faellt im ersten Takt des Not-Halts („als ob die
+        // Kiste aus ist“, Christin 10.11.2026): darf T-0075 den Wert jetzt
+        // durchlassen (frischer Ladestand ueber dem harten Boden), genau einmal
+        // zurueckschreiben. Sonst gar nicht im Not-Halt — Akku 1 bleibt gesperrt,
+        // wie bei ausgeschaltetem DVhub (sicher: er entlaedt nicht unter den
+        // Boden), und das normale Zurueckschreiben nach dem Not-Halt nimmt die
+        // Sperre zurueck. Kein spaeterer Write mitten im Not-Halt.
+        if (!stopRestoreUsed) {
           stopRestoreUsed = true;
+          if (!aboveHardFloor) {
+            pushLog('multi_gx_handoff_stop_deferred', { savedMaxDischargeW: saved, soc: finite(soc) ? Number(soc) : null, floorPct, reason: socOk ? 'below_hard_floor' : 'soc_unknown' }, 'warn');
+            publish(cfg);
+            return;
+          }
           if (state.schedule?.lastWrite) delete state.schedule.lastWrite.maxDischargeW;
           stopRestoreValue = saved;
           let res;

@@ -472,6 +472,32 @@ func (b *Bridge) startDeviceHeartbeat() {
 	}
 }
 
+// stopDeviceHeartbeat hält den Herzschlag der Geräteseite an (DVhub-Not-Halt:
+// „als ob die Kiste aus ist“). Die nächste Vorgabe (device_limit,
+// ev_current_limits) startet ihn wieder.
+func (b *Bridge) stopDeviceHeartbeat() {
+	b.mu.Lock()
+	b.devHeartbeatOn = false
+	b.mu.Unlock()
+	if b.devEntity == nil {
+		return
+	}
+	if hm := b.devEntity.HeartbeatManager(); hm != nil {
+		hm.StopHeartbeat()
+	}
+}
+
+// cmdDeviceHeartbeat: {"cmd":"device_heartbeat","on":false} hält den Herzschlag
+// zu den Geräten an, "on":true startet ihn (sonst startet ihn die nächste Vorgabe).
+func (b *Bridge) cmdDeviceHeartbeat(c *Command) {
+	if c.Bool("on", false) {
+		b.startDeviceHeartbeat()
+	} else {
+		b.stopDeviceHeartbeat()
+	}
+	b.reply(c, true, "")
+}
+
 // --- Verbindungen (eebus-go ServiceReaderInterface) ------------------------------
 
 var _ eebusapi.ServiceReaderInterface = (*Bridge)(nil)
@@ -607,6 +633,8 @@ func (b *Bridge) HandleCommand(c *Command) {
 		b.cmdDeviceFailsafe(c)
 	case "ohpcf":
 		b.cmdOhpcf(c)
+	case "device_heartbeat":
+		b.cmdDeviceHeartbeat(c)
 	case "status":
 		b.cmdStatus(c)
 	default:

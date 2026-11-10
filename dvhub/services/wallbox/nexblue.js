@@ -12,6 +12,7 @@
 // Nach einem Stromausfall gelten wieder die Standardwerte — DVhub schreibt alles neu.
 // Den Rückfall kann man nicht abschalten: „Freigeben“ setzt ihn auf 16 A.
 import { isReadOnlyMode } from '../../read-only-guard.js';
+import { notHaltActive } from '../emergency-stop/policy.js';
 
 const READ_ONLY = Object.freeze({ ok: false, error: 'read_only' });
 const TIMEOUT_S = 300;
@@ -80,7 +81,9 @@ export function createNexblueAdapter(getSettings, deps = {}) {
       if (!x) return missing();
       try {
         // Lebenszeichen: die letzte Vorgabe erneut schreiben (setzt den Rückfall-Timer zurück).
-        if (lastA != null && !isReadOnlyMode() && typeof x.t.mbWriteMultiple === 'function') await write(x, 1000, encodeDcba32('float', lastA));
+        // Not-Halt „als ob aus“: die alte Vorgabe nicht am Leben halten — die
+        // Box fällt nach ihrem Rückfall-Timeout auf den Rückfallstrom.
+        if (lastA != null && !isReadOnlyMode() && !notHaltActive() && typeof x.t.mbWriteMultiple === 'function') await write(x, 1000, encodeDcba32('float', lastA));
         const [st] = await input(x, 100, 1);
         const p = await input(x, 126, 2);
         let energyWh = null;

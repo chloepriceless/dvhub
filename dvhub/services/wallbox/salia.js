@@ -9,6 +9,7 @@
 //       207 Lebenszeichen (beliebiger Wert, spätestens alle Timeout/2)
 // Ob „bereit“ (1) ein angestecktes Auto meint, ist nicht dokumentiert — dann „unbekannt“.
 import { isReadOnlyMode } from '../../read-only-guard.js';
+import { notHaltActive } from '../emergency-stop/policy.js';
 
 const READ_ONLY = Object.freeze({ ok: false, error: 'read_only' });
 const REWRITE_MS = 5 * 60_000;
@@ -70,7 +71,9 @@ export function createSaliaAdapter(getSettings, deps = {}) {
       if (!x) return missing();
       try {
         // Lebenszeichen, solange DVhub steuert (Failsafe-Timeout 300 s, Abfrage alle 15 s).
-        if (controlling && !isReadOnlyMode()) await x.t.mbWriteSingle({ ...x.conn, address: 207, value: 1 });
+        // Not-Halt „als ob aus“: kein Lebenszeichen — die Box geht nach ihrem
+        // Failsafe-Timeout auf den Failsafe-Strom, wie ohne DVhub.
+        if (controlling && !isReadOnlyMode() && !notHaltActive()) await x.t.mbWriteSingle({ ...x.conn, address: 207, value: 1 });
         const [state] = await input(x, 0);
         const p = await input(x, 1014, 2);
         let energyKwh = null;

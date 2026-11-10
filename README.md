@@ -229,7 +229,7 @@ separat unter [DVhub Pro](#dvhub-pro).
 - **Universeller Entlade-Boden** — kein entlade-aktivierender Write, wenn der SOC unbekannt, veraltet oder ≤ Hartboden (`hardFloorSocPct`) ist
 - **Sell-Price-Floor** — verhindert das Verschleudern von Akku-Energie unterhalb eines konfigurierbaren Mindest-Verkaufspreises
 - **reg-2700/2716-Keepalive** — verlorene ESS-Setpoints (GX-Reboot/Watchdog) werden automatisch erneut gesetzt
-- **Selektiver Not-Halt** — pausiert alle diskretionären Writes; nur Sicherheits-Pflichtquellen (Negativpreis-Schutz, SOC-Floor, Not-Halt selbst) schreiben weiter. Der Zustand wird atomar persistiert und überlebt einen Service-Neustart
+- **Not-Halt „als ob DVhub aus ist“** — nimmt DVhubs eigene Vorgaben einmal zurück und schreibt danach nichts mehr (auch nicht §51, Direktvermarkter-Abregelung, §14a oder SoC-Boden-Schutz; seit 1.0.10). Messwerte und Protokoll laufen weiter. Der Zustand wird atomar persistiert und überlebt einen Neustart; ist er unlesbar, startet DVhub im Not-Halt
 - **Day-Ahead-Preis-Engine** mit Heute-/Morgen-Daten, Hover-Details und Chart-Auswahl
 - **Schedule-System** mit Defaults, manuellen und persistenten Overrides sowie Chart-zu-Schedule-Auswahl
 - **Kleine Börsenautomatik** für automatische Entladung in Hochpreisphasen — energiebasierte Slot-Allokation, dynamischer sonnenstandsabhängiger SOC-Floor und wahlweise Greedy- oder MILP-Engine

@@ -239,7 +239,10 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
       const ids = new Set(mine.map((d) => d.id));
       for (const [id, c] of [...clients.entries()]) {
         if (ids.has(id)) continue;
-        try { await c.client.writePower(0); } catch { /* best effort */ }
+        // Im Not-Halt nichts schreiben (die eine 0 kam schon mit emergencyStop).
+        if (state?.ctrl?.discretionaryWritesPaused !== true) {
+          try { await c.client.writePower(0); } catch { /* best effort */ }
+        }
         c.client.close?.();
         clients.delete(id);
         devices.delete(id);

@@ -88,6 +88,11 @@ export function createMultiGx(ctx, deps = {}) {
   let online = null;
   let active = false;
   let timer = null;
+  // Not-Halt „als ob aus“: DVhub hat 2716 seit dem Start beschrieben (nur dann
+  // gibt es eine eigene Vorgabe zurückzunehmen) und die eine 0 im laufenden
+  // Not-Halt ist schon raus (pausedAt) — danach nur noch lesen.
+  let everWritten = false;
+  let stopNeutralizedAt = null;
   const side = { socPct: null, batteryPowerW: null, minSocPct: null, acInW: null, at: 0 };
 
   function conf() {
@@ -106,6 +111,8 @@ export function createMultiGx(ctx, deps = {}) {
       deadbandW: finite(c.deadbandW) ? Number(c.deadbandW) : undefined,
     };
   }
+
+  const pausedAt = () => Number(ctx.state.ctrl?.pausedAt) || 0;
 
   function publish(extra) {
     ctx.state.multiGx = {
@@ -211,7 +218,8 @@ export function createMultiGx(ctx, deps = {}) {
   async function runTick() {
     const c = conf();
     if (!c.enabled || !c.host) {
-      if (active && c.host) {
+      const stopDone = ctx.state.ctrl?.discretionaryWritesPaused === true && stopNeutralizedAt === pausedAt();
+      if (active && c.host && !stopDone) {
         // Einmal neutral hinterlassen; das Register faellt ohnehin von selbst zurueck.
         try { await write(c, 0); } catch { /* best effort */ }
       }
@@ -269,12 +277,22 @@ export function createMultiGx(ctx, deps = {}) {
     });
 
     // Geschrieben wird nach jedem erfolgreichen Lesen — auch, wenn die Anlage
-    // gerade als nicht verfuegbar gilt, damit eine Erholung erkannt wird. Not-Halt
-    // schreibt seine 0 IMMER, auch wenn das Lesen gerade scheitert (Codex Runde 3).
+    // gerade als nicht verfuegbar gilt, damit eine Erholung erkannt wird.
+    // Not-Halt (Christin 10.11.2026: „als ob die Kiste aus ist“): EINE 0, auch
+    // wenn das Lesen gerade scheitert (Codex Runde 3) — aber nur, wenn DVhub 2716
+    // ueberhaupt beschrieben hat; danach nur noch lesen, auch nach einem
+    // Fehlschlag (kein Wiederholen). Das Register faellt ohne Nachfuehren von
+    // selbst auf den Wert der zweiten GX zurueck (T-0107), wie bei DVhub aus.
     const stopNow = ctrl.discretionaryWritesPaused === true;
-    if (readOk || stopNow) {
+    if (!stopNow) stopNeutralizedAt = null;
+    const stopWrite = stopNow && stopNeutralizedAt !== pausedAt();
+    if (stopWrite) stopNeutralizedAt = pausedAt();
+    if (stopNow && (!stopWrite || !everWritten)) {
+      if (readOk) setAvailable(true, c.host);
+    } else if (readOk || stopNow) {
       try {
         await write(c, out.setpointW);
+        everWritten = true;
         writeErrors = 0;
         if (readOk) setAvailable(true, c.host);
       } catch (e) {

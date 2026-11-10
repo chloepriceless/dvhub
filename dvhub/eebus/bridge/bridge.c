@@ -1057,6 +1057,28 @@ static void CmdDeviceLimit(const cJSON* cmd) {
   Reply(cmd, err == kEebusErrorOk, err == kEebusErrorOk ? NULL : "write failed");
 }
 
+// DVhub-Not-Halt („als ob die Kiste aus ist“): Herzschlag der Geräteseite
+// anhalten ("on": false) bzw. starten ("on": true); die nächste Vorgabe
+// (device_limit) startet ihn ohnehin wieder.
+static void CmdDeviceHeartbeat(const cJSON* cmd) {
+  if (bridge.eg_lpc == NULL || bridge.eg_lpp == NULL) {
+    Reply(cmd, false, "no device side");
+    return;
+  }
+  if (Bool(cmd, "on", false)) {
+    if (!bridge.eg_heartbeat_started) {
+      EgLpStartHeartbeat(bridge.eg_lpc);
+      EgLpStartHeartbeat(bridge.eg_lpp);
+      bridge.eg_heartbeat_started = true;
+    }
+  } else if (bridge.eg_heartbeat_started) {
+    EgLpStopHeartbeat(bridge.eg_lpc);
+    EgLpStopHeartbeat(bridge.eg_lpp);
+    bridge.eg_heartbeat_started = false;
+  }
+  Reply(cmd, true, NULL);
+}
+
 static void CmdDeviceFailsafe(const cJSON* cmd) {
   const char* uc_name     = Str(cmd, "uc");
   const UseCaseTag uc     = uc_name != NULL && strcmp(uc_name, "lpp") == 0 ? kUcEgLpp : kUcEgLpc;
@@ -1158,6 +1180,8 @@ void BridgeHandleCommand(const cJSON* cmd) {
     CmdDeviceFailsafe(cmd);
   } else if (strcmp(name, "ohpcf") == 0) {
     CmdOhpcf(cmd);
+  } else if (strcmp(name, "device_heartbeat") == 0) {
+    CmdDeviceHeartbeat(cmd);
   } else if (strcmp(name, "status") == 0) {
     CmdStatus(cmd);
   } else {

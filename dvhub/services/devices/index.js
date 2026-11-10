@@ -11,6 +11,7 @@
 
 import { createMqttGenericAdapter } from './adapters/mqtt-generic.js';
 import { isReadOnlyMode } from '../../read-only-guard.js';
+import { notHaltActive } from '../emergency-stop/policy.js';
 import { createShellyHttpAdapter } from './adapters/shelly-http.js';
 
 // --- Inline DB Schema (matches forecast-store.js pattern) ---
@@ -146,6 +147,8 @@ export function createDeviceService(ctx, hub) {
   async function setDeviceOutput(deviceId, on) {
     // Lese-Modus (DVHUB_READ_ONLY=1): keine echten Relais schalten.
     if (isReadOnlyMode()) return { ok: false, error: 'read_only' };
+    // Not-Halt „als ob aus“: kein Schalten über DVhub, auch nicht von Hand.
+    if (notHaltActive()) return { ok: false, error: 'emergency_stop_active' };
     for (const adapter of adapters) {
       if (typeof adapter.setOutput !== 'function') continue;
       const r = await adapter.setOutput(deviceId, on);

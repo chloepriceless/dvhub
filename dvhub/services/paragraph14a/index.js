@@ -406,13 +406,18 @@ export function createParagraph14aService(ctx, deps = {}) {
       ? candidates.reduce((a, b) => (b[1] < a[1] ? b : a))
       : [null, null];
     const active = limitW != null;
+    // Not-Halt („als ob die Kiste aus ist“, Christin 10.11.2026): § 14a ist
+    // ausgesetzt — keine Aufteilung, keine Grenzen an Wallbox, Speicher und
+    // EEBUS-Geräte, keine Akku-Hilfe. Die Vorgabe des Netzbetreibers wird weiter
+    // gelesen, angezeigt und protokolliert.
+    const suspended = state.ctrl?.discretionaryWritesPaused === true;
 
     let budget = null;
     let shares = {};
     let consumers = [];
     const reserved = {};
     const assist = { neededW: 0, requestedW: 0, acceptedW: null, reason: null };
-    if (active) {
+    if (active && !suspended) {
       const controllable = list.filter((d) => d.controllable);
       const steuveW = controllable.reduce((s, d) => s + d.currentW, 0);
       budget = budgetW({ limitW, gridImportW: gridImportPositiveW(state, getCfg()), steuveW, usePvSurplus: c.usePvSurplus });
@@ -447,7 +452,7 @@ export function createParagraph14aService(ctx, deps = {}) {
     } else {
       heldNeed.clear();
       requestAssist(0, null);
-      assist.reason = null;
+      assist.reason = suspended && active ? 'not_halt' : null;
     }
     assist.requestedW = assistRequestedW;
     assist.acceptedW = assistRequestedW > 0 && assistAckedW === assistRequestedW && assistReply?.ok === true
@@ -459,10 +464,11 @@ export function createParagraph14aService(ctx, deps = {}) {
     // Der Netzbetreiber muss mindestens Pmin,14a gewähren (Ziffer 4.5). Eine
     // kleinere Vorgabe setzt DVhub trotzdem um (Ziffer 4.6), meldet sie aber.
     const belowPmin = active && pmin.pminW > 0 && limitW < pmin.pminW;
-    const key = active ? `${source}:${limitW}` : 'off';
+    const key = `${active ? `${source}:${limitW}` : 'off'}${suspended ? ':not_halt' : ''}`;
     if (key !== lastActiveKey) {
       lastActiveKey = key;
-      pushLog(active ? 'paragraph14a_limited' : 'paragraph14a_released', active
+      if (suspended) pushLog('paragraph14a_suspended_nothalt', { source, limitW }, 'warn');
+      else pushLog(active ? 'paragraph14a_limited' : 'paragraph14a_released', active
         ? { source, limitW, pminW: pmin.pminW, budgetW: budget, shares }
         : {});
       if (belowPmin) pushLog('paragraph14a_below_minimum', { source, limitW, pminW: pmin.pminW }, 'warn');
@@ -470,6 +476,7 @@ export function createParagraph14aService(ctx, deps = {}) {
 
     Object.assign(ui, {
       active,
+      suspended: suspended ? 'not_halt' : null,
       limitW,
       source,
       belowPmin,
@@ -488,12 +495,15 @@ export function createParagraph14aService(ctx, deps = {}) {
       shares,
       reserved,
       batteryAssist: assist,
-      batteryGridW: active ? (shares.speicher ?? 0) : null,
-      wallboxCapW: active && shares.wallbox != null ? shares.wallbox : null,
+      batteryGridW: active && !suspended ? (shares.speicher ?? 0) : null,
+      wallboxCapW: active && !suspended && shares.wallbox != null ? shares.wallbox : null,
       relay: { enabled: c.relay.enabled, topic: c.relay.topic, level: relay.level, at: relay.at, activeWhen: c.relay.activeWhen },
     });
     state.ctrl.p14aBatteryGridW = ui.batteryGridW;
     state.ctrl.p14aWallboxCapW = ui.wallboxCapW;
+    // Im Not-Halt bekommen die Geräte nichts — das Aufheben schreibt neu
+    // (services/eebus resumeAfterEmergencyStop).
+    if (suspended) return;
 
     const eebusShares = {};
     for (const d of list) if (d.source === 'eebus' && !d.unreachable) eebusShares[d.id] = active ? (shares[d.id] ?? 0) : null;
@@ -536,6 +546,7 @@ export function createParagraph14aService(ctx, deps = {}) {
   function summary() {
     return {
       active: ui.active,
+      suspended: ui.suspended ?? null,
       limitW: ui.limitW,
       source: ui.source,
       belowPmin: ui.belowPmin,

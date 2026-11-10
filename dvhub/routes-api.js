@@ -106,6 +106,7 @@ import Cursor from 'pg-cursor';
 // alternatives are either (a) hand-rolling the Parquet binary format, or
 // (b) buffering full result sets and shipping CSV/JSON instead — both worse.
 import parquet from '@dsnp/parquetjs';
+import { notHaltSuspendedLabels } from './services/emergency-stop/policy.js';
 
 // Plan 09.2-08 (D-13/D-24 revised): single module-scope schema instance for the
 // streaming Parquet export. Schema is locked to four columns: ts_utc UTF8,
@@ -2629,7 +2630,11 @@ export function createApiRoutes(ctx) {
     // Leitstand emergency-stop button + sticky banner.
     payload.emergencyStop = {
       active: !!state.ctrl.discretionaryWritesPaused,
-      pausedAt: state.ctrl.pausedAt || null
+      pausedAt: state.ctrl.pausedAt || null,
+      // 'operator' | 'control_state_unreadable' (Start im Not-Halt, fail-safe)
+      reason: state.ctrl.discretionaryWritesPaused ? (state.ctrl.pausedReason || 'operator') : null,
+      // Was im Not-Halt ausgesetzt ist (Christin 10.11.2026, policy.js).
+      suspended: state.ctrl.discretionaryWritesPaused ? notHaltSuspendedLabels() : []
     };
     // Zweite GX-Anlage am selben Anschluss (services/multi-gx), nur In-Memory.
     // Im Runtime-Worker-Betrieb steht der Zustand im Worker → hier null.
@@ -3695,7 +3700,7 @@ export function createApiRoutes(ctx) {
       else if (ctx.evccIntegration && typeof ctx.evccIntegration.setMode === 'function') result = await ctx.evccIntegration.setMode(loadpoint, mode);
       else return json(res, 503, { ok: false, error: 'wallbox not available' });
       if (!result || result.ok !== true) {
-        return json(res, 400, result || { ok: false, error: 'mode set failed' });
+        return json(res, result?.error === 'emergency_stop_active' ? 409 : 400, result || { ok: false, error: 'mode set failed' });
       }
       pushLog('family_evcc_mode', { loadpoint, mode }, actorContext(req));
       return json(res, 200, result);
@@ -3718,7 +3723,7 @@ export function createApiRoutes(ctx) {
       if (!id) return json(res, 400, { ok: false, error: 'device_id_required' });
       const result = await ctx.deviceService.setDeviceOutput(id, on);
       if (!result || result.ok !== true) {
-        return json(res, 400, result || { ok: false, error: 'toggle_failed' });
+        return json(res, result?.error === 'emergency_stop_active' ? 409 : 400, result || { ok: false, error: 'toggle_failed' });
       }
       pushLog('family_device_output', { id, on: !!on, output: result.output }, actorContext(req));
       return json(res, 200, result);
@@ -8702,10 +8707,10 @@ export function createApiRoutes(ctx) {
     }
 
     // --- T-0099 NOT-HALT (emergency stop) -------------------------------
-    // POST /api/control/stop: pause all DISCRETIONARY hardware writes (spot-
-    // market / battery setpoints). Mandatory paths (§51 negative-price
-    // curtailment, SoC-floor safety, §9 applyDvVictronControl) keep running —
-    // see isMandatoryControlSource in schedule-eval.js. Order matters:
+    // POST /api/control/stop: „als ob die Kiste aus ist“ (Christin 10.11.2026,
+    // „Ja, Not-Halt heißt auch die Punkte von §51 usw.“) — KEINE Hardware-Writes
+    // mehr, auch nicht §51, DV-Abregelung, §14a oder SoC-Boden; jede DVhub-eigene
+    // Vorgabe wird einmal zurückgenommen (services/emergency-stop/policy.js). Order matters:
     //   1. set the flag FIRST (no discretionary write can race in between),
     //   2. then ONE active gridSetpointW=0 neutralization (source
     //      'emergency_stop' is whitelisted through the gate) so the plant is

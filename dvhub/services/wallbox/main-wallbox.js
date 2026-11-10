@@ -14,6 +14,7 @@
 import { resolveEvccBridgeConfig } from '../optimizer/eos-evcc-bridge.js';
 
 import { WALLBOX_TYPES } from './types.js';
+import { notHaltActive } from '../emergency-stop/policy.js';
 
 export { WALLBOX_TYPES };
 export const WALLBOX_LABELS = Object.freeze({
@@ -163,6 +164,9 @@ export function createMainWallbox({ getCfg, evccIntegration, chargerStatus, getA
 
   /** Lademodus setzen. evcc: wie bisher; direkte Box: Aus / Automatisch / Schnell. */
   async function setMode(mode, loadpoint) {
+    // Not-Halt „als ob aus“: auch von Hand steuert DVhub die Wallbox nicht —
+    // wer laden will, stellt es an der Box (bzw. in evcc) selbst ein.
+    if (notHaltActive()) return { ok: false, error: 'emergency_stop_active' };
     const m = String(mode || '').trim().toLowerCase();
     if (!isDirect()) {
       if (!evccIntegration || typeof evccIntegration.setMode !== 'function') return { ok: false, error: 'evcc not available' };

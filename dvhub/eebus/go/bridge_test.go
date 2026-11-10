@@ -268,3 +268,35 @@ func TestHerzschlagZustandNurBeiAenderung(t *testing.T) {
 		t.Fatalf("grid_heartbeat_state einmal beim ersten Takt, dann nur bei Änderung: %d", n)
 	}
 }
+
+// DVhub-Not-Halt („als ob die Kiste aus ist“, 10.11.2026): device_heartbeat
+// hält den Herzschlag zu den Geräten an; die nächste Vorgabe startet ihn wieder.
+func TestBefehlGeraeteHerzschlag(t *testing.T) {
+	tb := newTestBridge(t, "SER9")
+	hm := tb.b.devEntity.HeartbeatManager()
+	if hm == nil {
+		t.Fatal("CEM-Entität ohne Herzschlag-Verwaltung")
+	}
+	if hm.IsHeartbeatRunning() {
+		t.Fatal("Herzschlag läuft vor der ersten Vorgabe")
+	}
+	expectReply(t, tb.cmd(t, `{"cmd":"device_heartbeat","id":1,"on":true}`), true, "")
+	if !hm.IsHeartbeatRunning() {
+		t.Fatal("on:true startet den Herzschlag nicht")
+	}
+	expectReply(t, tb.cmd(t, `{"cmd":"device_heartbeat","id":2,"on":false}`), true, "")
+	if hm.IsHeartbeatRunning() {
+		t.Fatal("on:false hält den Herzschlag nicht an")
+	}
+	tb.b.mu.Lock()
+	on := tb.b.devHeartbeatOn
+	tb.b.mu.Unlock()
+	if on {
+		t.Fatal("nach dem Anhalten muss die nächste Vorgabe den Herzschlag wieder starten können")
+	}
+	// Erneut starten geht (wie die nächste Vorgabe über startDeviceHeartbeat).
+	tb.b.startDeviceHeartbeat()
+	if !hm.IsHeartbeatRunning() {
+		t.Fatal("startDeviceHeartbeat nach dem Anhalten ohne Wirkung")
+	}
+}

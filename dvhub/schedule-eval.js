@@ -23,6 +23,7 @@ import { getPowerLimits } from './services/power-limits.js';
 import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
 import { createFloorHandoff } from './services/multi-gx/floor-handoff.js';
 import { capLoopStep } from './services/feed-in-cap/index.js';
+import { notHaltAllowsControlSource, notHaltAllowsDvReason, notHaltContinues } from './services/emergency-stop/policy.js';
 import {
   resolvePeakShaving, peakShavingTelemetry, clampGridSetpoint, knownMaxDischargeW, dischargeStep,
   decodeMaxDischargeRaw, DISCHARGE_RELEASE_TICKS, MAX_DISCHARGE_INT32_ADDR, MAX_DISCHARGE_INT16_ADDR
@@ -107,31 +108,37 @@ function dischargeFloorHold(target, value) {
   return null;
 }
 
-// T-0099 NOT-HALT — source classification for the selective emergency-stop
-// gate. MANDATORY sources keep writing while state.ctrl.discretionaryWritesPaused
-// is set; everything else is blocked. This is a WHITELIST on purpose (fail-safe):
-// a source string added tomorrow that nobody classified is blocked during an
-// emergency stop, not silently allowed.
-//   negative_price_protection  — §51 EEG curtailment duty (legal, must keep running)
-//   manual_override_soc_floor  — T-0002 safety neutralization (writes 0 at SoC floor)
-//   emergency_stop             — the stop action's own one-time gridSetpointW=0
-//                                neutralization (must pass its own gate)
-// Deliberately DISCRETIONARY (= blocked): dc_export_mode (DV revenue
-// maximization, not a curtailment duty — Christin 2026-06-12), sell_price_floor,
-// forecast_optimizer rule:* sources, eos_optimization,
-// emhass_optimization, api_manual_write, manual_override*, default.
-// NOTE: applyDvVictronControl (§9 feed-in limit / PV curtailment, reg 2707/2709)
-// is a separate path that never goes through applyControlTarget. Issue #8: its
-// CALLERS now honor the emergency stop — while discretionaryWritesPaused is set,
-// the discretionary schedule path RELEASES the PV (feedIn=true, source
-// 'emergency_stop_release') instead of continuing to curtail; only the mandatory
-// §51 negative-price path (and DV forcedOff) keep curtailing. Reads (polling.js)
-// are untouched.
+// T-0099 Pflicht-Quellen (Klassifizierung). Diese Menge sagt nur noch, welche
+// Quellen Schutz-/Rechtswerte sind (Einspeise-Puffer, EEG-Tor, Netzstrom-
+// Deckel u. a. lassen sie unangetastet):
+//   negative_price_protection  — §51 EEG-Abregelung bei negativem Preis
+//   manual_override_soc_floor  — T-0002 Sicherheits-Nullung am SoC-Boden
+//   emergency_stop             — die eine gridSetpointW=0-Neutralisierung des Not-Halts
+// Diskretionär: dc_export_mode (Christin 12.06.2026), sell_price_floor,
+// rule:*, eos_optimization, emhass_optimization, api_manual_write, manual_override*, default.
+//
+// NOT-HALT (Tor in applyControlTarget): bis 1.0.9 schrieben die Pflicht-Quellen
+// im Not-Halt weiter. Seit 1.0.10 gilt Christins Entscheidung vom 10.11.2026
+// „Ja, Not-Halt heißt auch die Punkte von §51 usw.“ — „als ob die Kiste aus
+// ist“: im Not-Halt schreibt nur noch emergency_stop (einmal) und je eine
+// Rücknahme DVhub-eigener Vorgaben (NOT_HALT_ONE_SHOT_SOURCES); welche
+// Pflicht-Klasse doch weiterläuft, steht in services/emergency-stop/policy.js
+// (Whitelist, fail-safe: Unbekanntes ist im Not-Halt blockiert). Der PV-Sperr-
+// Pfad applyDvVictronControl (2707/2708, Sequenzen) folgt derselben Tabelle:
+// eine von DVhub gesetzte Sperre wird einmal freigegeben (notHaltDvDecision).
+// Lesen (polling.js) bleibt unberührt.
 const MANDATORY_CONTROL_SOURCES = new Set([
   'negative_price_protection',
   'manual_override_soc_floor',
   'emergency_stop'
 ]);
+
+// Je Not-Halt (erkannt an pausedAt) höchstens eine Rücknahme je Quelle.
+function notHaltOneShotState(ctrl) {
+  const at = Number(ctrl.pausedAt) || 0;
+  if (!ctrl._notHaltOneShot || ctrl._notHaltOneShot.at !== at) ctrl._notHaltOneShot = { at, used: {} };
+  return ctrl._notHaltOneShot;
+}
 
 export function isMandatoryControlSource(source) {
   return MANDATORY_CONTROL_SOURCES.has(String(source));
@@ -184,6 +191,8 @@ export function createScheduleEvaluator(ctx) {
       getCfg, state, pushLog, store: ctx.floorHandoffStore || null, transportType: () => transport?.type,
       batteryNeeded: gridNeedsBattery, readExactMaxDischargeW
     });
+  const notHaltOneShotUsed = (source) => notHaltOneShotState(state.ctrl).used[source] === true;
+  const markNotHaltOneShot = (source) => { notHaltOneShotState(state.ctrl).used[source] = true; };
 
   let stopping = false;
   let evalTimeout = null;
@@ -705,10 +714,70 @@ export function createScheduleEvaluator(ctx) {
     return false;
   }
 
-  async function applyDvVictronControl(feedIn, { explicit = false } = {}) {
+  // --- Not-Halt am PV-Sperr-Pfad („als ob aus“, policy.js) -------------------
+  // Je Not-Halt (pausedAt): releaseTried = die eine Freigabe einer eigenen
+  // Sperre ist verbraucht; mandatoryBlock = im Not-Halt hat eine weiterlaufende
+  // Pflicht-Abregelung gesperrt — deren Ende gibt die PV wieder frei (wie bisher).
+  function notHaltDvState() {
+    const at = Number(state.ctrl.pausedAt) || 0;
+    if (!state.ctrl._notHaltDv || state.ctrl._notHaltDv.at !== at) {
+      state.ctrl._notHaltDv = { at, releaseTried: false, mandatoryBlock: false, blockedLogged: false };
+    }
+    return state.ctrl._notHaltDv;
+  }
+
+  // Steht gerade eine Sperre, die DVhub selbst geschrieben hat? Nach einem
+  // Neustart (Cache leer) beweist das nur die Sicherung einer Sperr-Sequenz;
+  // Direkt-Register (Victron 2707/2708) ohne Beweis: im Zweifel nichts senden.
+  function dvOwnBlockStanding() {
+    if (state.ctrl._lastDvFeedIn === false || state.ctrl._dvPartialBlock === true) return true;
+    if (state.ctrl._lastDvFeedIn !== undefined) return false;
+    return Object.keys(state.ctrl._dvSeqSaved || {}).some((k) => k !== 'dvFeedInLimitW');
+  }
+
+  /**
+   * Not-Halt: was der PV-Sperr-Pfad in diesem Takt schreibt.
+   * Eine Pflicht-Abregelung, deren Klasse im Not-Halt weiterläuft (policy.js;
+   * seit 10.11.2026 keine), sperrt wie bisher; sonst wird eine eigene Sperre
+   * genau EINMAL freigegeben — scheitert das, kein zweiter Versuch.
+   * @returns {{write: boolean, feedIn?: boolean, source: string}}
+   */
+  function notHaltDvDecision(priceNegative) {
+    const nh = notHaltDvState();
+    const reasons = [
+      state.ctrl.forcedOff && 'dv_forced_off',
+      state.ctrl.eebusProductionBlock === true && 'paragraph14a_production_block',
+      priceNegative && 'negative_price_protection',
+    ].filter(Boolean);
+    const continuing = reasons.find((r) => notHaltAllowsDvReason(r));
+    if (continuing) return { write: true, feedIn: false, source: continuing };
+    // Christin 10.11.2026 („Not-Halt heißt auch die Punkte von §51 usw.“): eine
+    // von DVhub gesetzte Abregelung — auch § 51/DV/Steuerbox — einmal aufheben.
+    if (!dvOwnBlockStanding()) return { write: false, source: 'emergency_stop_idle' };
+    if (nh.mandatoryBlock) return { write: true, feedIn: true, source: 'emergency_stop_release' };
+    if (nh.releaseTried) return { write: false, source: 'emergency_stop_release_used' };
+    nh.releaseTried = true;
+    return { write: true, feedIn: true, source: 'emergency_stop_release' };
+  }
+
+  async function applyDvVictronControl(feedIn, { explicit = false, reason = null } = {}) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
     if (!dc) return;
+    // Not-Halt: nur die eine Freigabe (notHaltDvDecision) und Sperren einer
+    // weiterlaufenden Pflicht-Klasse; alles andere schreibt nichts.
+    if (state.ctrl.discretionaryWritesPaused) {
+      const allowed = (feedIn === true && reason === 'emergency_stop_release')
+        || (feedIn === false && notHaltAllowsDvReason(reason));
+      if (!allowed) {
+        const nh = notHaltDvState();
+        if (!nh.blockedLogged) {
+          nh.blockedLogged = true;
+          pushLog('dv_write_blocked_nothalt', { feedIn, reason: reason || null }, 'warn');
+        }
+        return;
+      }
+    }
     // #10 (FrodoVDR): Ist die aktive Steuerung deaktiviert, darf DVhub NIE sperren —
     // muss aber eine früher gesetzte EIGENE Sperre aufheben können. Steuer-Register
     // sind persistent (Victron CGwacs reg 2707/2708 überleben DVhub-Aus), sonst
@@ -717,7 +786,8 @@ export function createScheduleEvaluator(ctx) {
     if (!dc.enabled && feedIn !== true) return;
 
     // Only write when feedIn state actually changes (first call: _lastDvFeedIn is undefined → always writes once)
-    if (state.ctrl._lastDvFeedIn === feedIn) return;
+    // Eine Teil-Sperre (state.ctrl._dvPartialBlock) wird trotz gleichem Cache freigegeben.
+    if (state.ctrl._lastDvFeedIn === feedIn && !(feedIn === true && state.ctrl._dvPartialBlock === true)) return;
 
     const results = {};
     // Erster Aufruf nach dem Start (Change-Cache leer) mit Freigabe: eine
@@ -795,7 +865,22 @@ export function createScheduleEvaluator(ctx) {
 
     state.ctrl.dvControl = { feedIn, ...results, at: Date.now() };
     // Cache the applied state only on a fully successful write (see above).
-    if (allOk) state.ctrl._lastDvFeedIn = feedIn;
+    if (allOk) {
+      state.ctrl._lastDvFeedIn = feedIn;
+      state.ctrl._dvPartialBlock = false;
+      // Wer sperrt (Klasse für den Not-Halt und den Nulleinspeise-Deckel).
+      state.ctrl._dvBlockReason = feedIn ? null : (reason || null);
+      // Nur eine Sperre einer im Not-Halt weiterlaufenden Klasse darf ihre
+      // Freigabe wiederholen — eine vor dem Eintritt begonnene, erst danach
+      // fertige Sperre bekommt die eine Freigabe wie jede andere (Codex 2f215968, P1).
+      if (state.ctrl.discretionaryWritesPaused) {
+        notHaltDvState().mandatoryBlock = feedIn === false && notHaltAllowsDvReason(reason);
+      }
+    } else if (feedIn === false && Object.values(results).some((r) => r?.ok === true && !r.skipped)) {
+      // Teilweise gesperrt (ein Register ja, das andere nicht): die Sperre ist
+      // DVhubs eigene und bekommt im Not-Halt ihre Freigabe (Codex 2f215968, P2).
+      state.ctrl._dvPartialBlock = true;
+    }
   }
 
   // === T-VERIFY write-verification (Read-after-Write-Regelkreis) ============
@@ -973,7 +1058,13 @@ export function createScheduleEvaluator(ctx) {
     // nur genau diesen, gerade angemeldeten Wert, nie eine neue Sperre.
     const handoffStopRestore = source === 'multi_gx_handoff_stop' && target === 'maxDischargeW'
       && floorHandoff.isStopRestore(value);
-    if (state.ctrl.discretionaryWritesPaused && !isMandatoryControlSource(source) && !peakShavingRestore && !gridConnectionRestore && !handoffStopRestore) {
+    // „Als ob aus“ (Christin 10.11.2026, services/emergency-stop/policy.js):
+    // Pflicht-Quellen schreiben nur, solange ihre Klasse im Not-Halt weiterläuft;
+    // die Rücknahmen oben gehen je Not-Halt höchstens EINMAL durch — scheitert
+    // eine, wird sie nicht wiederholt (kein Retry-Loop am Tor vorbei).
+    const oneShot = peakShavingRestore || gridConnectionRestore || handoffStopRestore;
+    const oneShotUsed = oneShot && state.ctrl.discretionaryWritesPaused && notHaltOneShotUsed(source);
+    if (state.ctrl.discretionaryWritesPaused && (oneShotUsed || (!notHaltAllowsControlSource(source) && !oneShot))) {
       const blockKey = `${target}|${source}`;
       if (!state.ctrl._stopBlockLogged) state.ctrl._stopBlockLogged = {};
       if (!state.ctrl._stopBlockLogged[blockKey]) {
@@ -982,6 +1073,7 @@ export function createScheduleEvaluator(ctx) {
       }
       return { ok: false, blocked: true, error: 'emergency_stop_active' };
     }
+    if (oneShot && state.ctrl.discretionaryWritesPaused) markNotHaltOneShot(source);
     // === end T-0099 NOT-HALT gate =============================================
 
     // === T-0080 write-layer bounds (defense-in-depth at the chokepoint) =======
@@ -1033,7 +1125,7 @@ export function createScheduleEvaluator(ctx) {
           state.schedule.active[target] = { value, source, at: Date.now(), skipped: true, reason: 'unchanged' };
           return { ok: true, skipped: true, reason: 'unchanged' };
         }
-        await applyDvVictronControl(feedIn, { explicit: true });
+        await applyDvVictronControl(feedIn, { explicit: true, reason: source });
         const seqResult = state.ctrl.dvControl?.feedExcessDcPv;
         if (!seqResult?.ok) {
           pushLog('control_write_error', { target, value, source, error: seqResult?.error || 'dv_sequence_failed' });
@@ -2138,7 +2230,7 @@ export function createScheduleEvaluator(ctx) {
           // Review 2026-06-10 (A2): await was missing — a failed "block feed-in"
           // write went undetected in this path (T-0076 retry semantics rely on
           // the awaited result; line ~870 already awaits the same call).
-          await applyDvVictronControl(false);
+          await applyDvVictronControl(false, { reason: 'negative_price_protection' });
         }
         // 2026-07-29 (Christin): der Sollwert wird während der Abregelung auf
         // genau `limit` GEPINNT, nicht nur nach unten gedeckelt. Vorher galt
@@ -2222,8 +2314,14 @@ export function createScheduleEvaluator(ctx) {
     if (cfg.dvControl?.enabled) {
       let dcFeedIn = false;
       let dcSource;
+      // Not-Halt „als ob aus“ (services/emergency-stop/policy.js): eine eigene
+      // Sperre EINMAL freigeben, Pflicht-Abregelungen nach ihrer Klasse.
+      const nh = state.ctrl.discretionaryWritesPaused ? notHaltDvDecision(priceNegative) : null;
+      if (nh) {
+        if (nh.write) await applyDvVictronControl(nh.feedIn, { reason: nh.source });
+        state.schedule.active.feedExcessDcPv = { value: (nh.write ? nh.feedIn : state.ctrl._lastDvFeedIn !== false) ? 1 : 0, source: nh.source, at: Date.now() };
       // DV forcedOff und negative Preise blockieren DC-Einspeisung immer
-      if (state.ctrl.forcedOff) {
+      } else if (state.ctrl.forcedOff) {
         dcSource = 'dv_forced_off';
       } else if (state.ctrl.eebusProductionBlock === true) {
         // EEBUS LPP ohne Einspeisebegrenzer (controlWrite.dvFeedInLimitW):
@@ -2231,21 +2329,15 @@ export function createScheduleEvaluator(ctx) {
         dcSource = 'paragraph14a_production_block';
       } else if (priceNegative) {
         dcSource = 'negative_price_protection';
-      } else if (state.ctrl.discretionaryWritesPaused) {
-        // Issue #8 / T-0099: der Not-Halt stoppte bisher NUR applyControlTarget
-        // (gridSetpoint etc.), nicht die diskretionäre PV-Abregelung — die lief
-        // weiter und regelte die PV ab (gemeldet von FrodoVDR, GH #8). Im Not-Halt
-        // die PV FREIGEBEN (feedIn=true), damit die Anlage wieder normal einspeist.
-        // forcedOff und §51-Negativpreis (oben) behalten Vorrang — die sind mandatory.
-        dcFeedIn = true;
-        dcSource = 'emergency_stop_release';
       } else {
         const eff = effectiveTargetValue('feedExcessDcPv');
         dcFeedIn = eff.value != null && Number(eff.value) === 1;
         dcSource = eff.source;
       }
-      await applyDvVictronControl(dcFeedIn);
-      state.schedule.active.feedExcessDcPv = { value: dcFeedIn ? 1 : 0, source: dcSource, at: Date.now() };
+      if (!nh) {
+        await applyDvVictronControl(dcFeedIn, { reason: dcSource });
+        state.schedule.active.feedExcessDcPv = { value: dcFeedIn ? 1 : 0, source: dcSource, at: Date.now() };
+      }
     } else if (cfg.dvControl) {
       // #10 (FrodoVDR): Steuerung deaktiviert (Volleinspeiser / „nur beobachten") →
       // DVhub darf keine eigene Abregelung am Gerät stehen lassen. Einmalig
@@ -2254,8 +2346,11 @@ export function createScheduleEvaluator(ctx) {
       // ersten Eval nach Neustart, damit eine persistente Sperre weggeräumt wird.
       // Prinzip [[feedback_neutralize_on_disable]]: was DVhub setzt, setzt es beim
       // Deaktivieren wieder zurück.
-      await applyDvVictronControl(true);
-      state.schedule.active.feedExcessDcPv = { value: 1, source: 'control_disabled_release', at: Date.now() };
+      // Im Not-Halt zählt das als die eine Freigabe einer eigenen Sperre.
+      const nh = state.ctrl.discretionaryWritesPaused ? notHaltDvDecision(false) : null;
+      if (!nh) await applyDvVictronControl(true, { reason: 'control_disabled_release' });
+      else if (nh.write && nh.feedIn === true) await applyDvVictronControl(true, { reason: nh.source });
+      state.schedule.active.feedExcessDcPv = { value: 1, source: nh ? nh.source : 'control_disabled_release', at: Date.now() };
     }
 
     // Auto-Deaktivierung: Regeln die aktiv waren aber deren Zeitfenster abgelaufen ist
@@ -2362,6 +2457,24 @@ export function createScheduleEvaluator(ctx) {
       if (!enaConf?.enabled || enaConf.address == null) return;
 
       const blocked = state.ctrl._lastDvFeedIn === false;
+      // Not-Halt „als ob aus“: der Deckel läuft nur für eine weiterlaufende
+      // Pflicht-Sperre (§ 51, DV, Steuerbox) weiter. Sonst EINMAL abräumen
+      // (Ena = 0), danach nichts mehr — auch nicht nach einem Fehlschlag; das
+      // Gerät fällt dann über WMaxLimPct_RvrtTms selbst zurück.
+      if (state.ctrl.discretionaryWritesPaused
+          && !(blocked && notHaltAllowsDvReason(state.ctrl._dvBlockReason))) {
+        if (zfi.capActive) {
+          zfi.capActive = false;
+          zfi.limitPct = null;
+          zfi.exportStreak = 0;
+          zfi.blockedStreak = 0;
+          try { await zfiWrite(enaConf, 0); } catch (e) {
+            pushLog('zero_feedin_error', { error: e?.message || String(e), phase: 'nothalt_release' }, 'warn');
+          }
+          pushLog('zero_feedin_cap_exit', { reason: 'emergency_stop' });
+        }
+        return;
+      }
       if (!blocked) {
         zfi.exportStreak = 0;
         zfi.blockedStreak = 0;
@@ -2580,6 +2693,20 @@ export function createScheduleEvaluator(ctx) {
       const enaConf = cfg.controlWrite?.wMaxLimEna;
       const rvrtConf = cfg.controlWrite?.wMaxLimPctRvrtTms;
       const blocked = state.ctrl._lastDvFeedIn === false || state.ctrl._zfi?.capActive === true;
+      // Not-Halt: die Regelschleife der festen Grenze nur, wenn ihre Klasse
+      // weiterläuft (policy.js feedInCapLoop) — sonst EINMAL abräumen, dann still.
+      if (state.ctrl.discretionaryWritesPaused && !notHaltContinues('feedInCapLoop')) {
+        if (fic.capActive) {
+          fic.capActive = false; fic.limitPct = null; fic.below = 0;
+          if (!blocked && enaConf?.address != null) {
+            try { await zfiWrite(enaConf, 0); } catch (e) {
+              pushLog('feed_in_cap_loop_error', { error: e?.message || String(e), phase: 'nothalt_release' }, 'warn');
+            }
+          }
+          pushLog('feed_in_cap_loop_off', { reason: 'emergency_stop' });
+        }
+        return;
+      }
       if (limitW == null || blocked || transport.type !== 'modbus') {
         // Keine Grenze mehr: eigene Drosselung abräumen. Bei Sperre übernimmt
         // zeroFeedInTick die Register — hier nur den eigenen Zustand vergessen.

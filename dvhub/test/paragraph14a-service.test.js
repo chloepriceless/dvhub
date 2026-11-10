@@ -360,16 +360,27 @@ test('Akku-Hilfe: liefert der Akku (gemessen), bekommen die Geräte ihren Bedarf
   assert.equal(s.state.p14a.shares.wallbox, 5300);
 });
 
-test('Akku-Hilfe: im Not-Halt keine Akku-Hilfe, nur die Pflicht-Reduzierung', () => {
+// Christin 10.11.2026: „§14a in einem Not-Halt will man ja genau auch nicht mit
+// reinbringen — Not-Halt ist als ob die Kiste aus ist, und dann läuft auch kein
+// §14a weiter.“ Die Vorgabe wird gelesen und angezeigt, aber nicht umgesetzt.
+test('Not-Halt: §14a ausgesetzt — keine Aufteilung, keine Gerätegrenzen, keine Akku-Hilfe', () => {
   const assist = fakeAssist();
   const s = articleSetup({ batteryAssist: assist });
   s.state.ctrl.eebusConsumptionLimitW = 4200;
   s.state.ctrl.discretionaryWritesPaused = true;
+  const applied = s.applied;
+  applied.length = 0;
   s.svc.update();
   assert.ok(assist.calls.every((c) => c.coverW === 0), 'nur Freigabe');
   assert.equal(s.state.p14a.batteryAssist.reason, 'not_halt');
-  const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
-  assert.ok(sum <= 4200);
+  assert.equal(s.state.p14a.suspended, 'not_halt');
+  assert.equal(s.state.p14a.limitW, 4200, 'Vorgabe bleibt sichtbar');
+  assert.deepEqual(s.state.p14a.shares, {}, 'keine Aufteilung');
+  assert.equal(s.state.ctrl.p14aWallboxCapW, null);
+  assert.equal(s.state.ctrl.p14aBatteryGridW, null);
+  assert.equal(applied.length, 0, 'nichts an die EEBUS-Geräte');
+  assert.equal(s.svc.summary().suspended, 'not_halt');
+  assert.ok(s.logs.some(([e]) => e === 'paragraph14a_suspended_nothalt'));
 });
 
 test('Akku-Hilfe: Ende der Begrenzung gibt die Anforderung frei; ausgeschaltet keine Anforderung', () => {

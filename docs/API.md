@@ -208,7 +208,7 @@ Spalte **Zugang** in den Tabellen:
 | POST | `/api/schedule/automation/config` | Token | Kleine Börsenautomatik setzen |
 | POST | `/api/schedule/automation/replan` | Token | Sofort neu planen |
 | POST | `/api/control/write` | Token | Manueller Sollwert: `{ target, value, persist?, clear? }`, `target` ∈ `gridSetpointW`, `chargeCurrentA`, `minSocPct`, `maxDischargeW`, `feedExcessDcPv`; `clear: true` hebt den Override auf |
-| POST | `/api/control/stop` | Token | **Not-Halt**: alle freiwilligen Schreibvorgänge pausieren (Pflicht-Schutz läuft weiter) |
+| POST | `/api/control/stop` | Token | **Not-Halt** „als ob DVhub aus ist“: DVhubs eigene Vorgaben einmal zurücknehmen, danach keine Schreibvorgänge mehr — auch nicht §51, Direktvermarkter-Abregelung, §14a, SoC-Boden-Schutz (seit 1.0.10); `/api/status.emergencyStop.suspended` nennt alles Ausgesetzte |
 | POST | `/api/control/resume` | Token | Not-Halt aufheben |
 
 Abgelehnte Steuerbefehle (`/api/control/write`, `/api/integration/eos/apply`, `/api/integration/emhass/apply`)

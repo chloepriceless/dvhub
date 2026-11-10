@@ -934,3 +934,99 @@ test('Prüfung: befristete Grenze von Hand wird nach Ablauf nicht erneut geschri
   assert.equal(limits().length, n, 'nicht wieder aktiviert');
   assert.equal(s.svc.controlIssues().length, 0, 'keine Fehlmeldung');
 });
+
+// ── Not-Halt „als ob die Kiste aus ist“ (Christin 10.11.2026) ─────────────────
+// § 14a läuft im Not-Halt nicht weiter: beim Eintritt die von DVhub gesetzten
+// Grenzen EINMAL frei, Herzschlag zu den Geräten aus, danach keine Gerätebefehle
+// mehr (kein Auffrischen, kein Neuschreiben, kein „frei“ beim Anmelden, keine
+// Verdichterplanung). Beim Aufheben sauber wieder anlaufen.
+const DEVICE_CMDS = new Set(['device_limit', 'device_failsafe', 'ohpcf', 'ev_current_limits', 'device_heartbeat']);
+const deviceCmds = (c) => c.commands.filter((x) => DEVICE_CMDS.has(x.cmd));
+
+async function enterNotHalt(s) {
+  s.state.ctrl.discretionaryWritesPaused = true;
+  s.state.ctrl.pausedAt = 4242;
+  s.state.ctrl._notHaltNeutralizing = true;
+  const r = await s.svc.emergencyStop();
+  s.state.ctrl._notHaltNeutralizing = false;
+  await settle();
+  return r;
+}
+
+test('Not-Halt: aktive §14a-Grenze einmal frei, dann Herzschlag aus — danach keine Gerätebefehle', async () => {
+  const { s, c, limits } = await withHeatPump();
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 1500 }, null);
+  await settle();
+  assert.deepEqual([limits().at(-1).w, limits().at(-1).active], [1500, true]);
+  const before = c.commands.length;
+  const r = await enterNotHalt(s);
+  assert.equal(r.ok, true);
+  assert.deepEqual(c.commands.slice(before).map((x) => [x.cmd, x.active ?? x.on]), [['device_limit', false], ['device_heartbeat', false]],
+    'genau eine Freigabe, dann Herzschlag aus');
+  assert.equal(s.svc.summary().notHalt.suspended, true);
+  assert.equal(s.svc.status().notHalt.heartbeat, 'stopped');
+
+  const n = deviceCmds(c).length;
+  // §14a-Anteile, Neuschreiben nach Abweichung, Wiederanmeldung, Verdichter, von Hand
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 900 }, null);
+  c.emitEvent({ ev: 'device_limit', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 3000, active: true });
+  for (let i = 0; i < 5; i++) { s.advance(70_000); s.svc._tick(); }
+  c.emitEvent({ ev: 'disconnected', ski: SKI_HP });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  c.emitEvent({ ev: 'ohpcf_announce', uc: 'ohpcf', entity: 'd:_n:HP/1/1', ski: SKI_HP, max_power_w: 2000, earliest_start_s: 0, latest_end_s: 7200, min_duration_s: 1800 });
+  await settle();
+  assert.equal((await s.svc.setDeviceLimit(SKI_HP, 1000, 0)).error, 'emergency_stop_active');
+  assert.equal((await s.svc.setEmsLimit(SKI_HP, 1000)).error, 'emergency_stop_active');
+  await settle();
+  assert.equal(deviceCmds(c).length, n, 'im Not-Halt kein einziger Gerätebefehl');
+  assert.ok(s.logs.some(([e]) => e === 'eebus_write_blocked_nothalt'));
+});
+
+test('Not-Halt: ohne eigene aktive Grenze nichts freizugeben — nur Herzschlag aus; Wallbox-Grenze bleibt', async () => {
+  const { s, c } = await withHeatPump();
+  const before = c.commands.length;
+  await enterNotHalt(s);
+  assert.deepEqual(c.commands.slice(before).map((x) => x.cmd), ['device_heartbeat'], 'Gerät war frei: im Zweifel nichts senden');
+
+  const w = await withWallbox();
+  await w.s.svc.setEmsLimit(SKI_WB, 0); // Not-Halt-Stopp der Wallbox (eos-evcc-bridge) vorher
+  await settle();
+  const b2 = w.c.commands.length;
+  await enterNotHalt(w.s);
+  assert.deepEqual(w.c.commands.slice(b2).map((x) => x.cmd), ['device_heartbeat'], 'Stopp der Wallbox bleibt stehen');
+});
+
+test('Not-Halt: Hilfsprozess ohne device_heartbeat (C-Bridge, alt) wird neu gestartet — frisch ohne Herzschlag', async () => {
+  const { s, c } = await withHeatPump();
+  // „unknown command“ wie ein Hilfsprozess ohne den Befehl
+  c.stdin.removeAllListeners('data');
+  c.stdin.on('data', (chunk) => {
+    for (const line of String(chunk).split('\n').filter(Boolean)) {
+      const cmd = JSON.parse(line);
+      c.commands.push(cmd);
+      if (cmd.id != null) c.emitEvent({ ev: 'reply', id: cmd.id, cmd: cmd.cmd, ok: cmd.cmd !== 'device_heartbeat', ...(cmd.cmd === 'device_heartbeat' ? { error: 'unknown command' } : {}) });
+    }
+  });
+  let killed = false;
+  c.kill = () => { killed = true; setImmediate(() => c.emit('exit', 0, null)); };
+  const r = await enterNotHalt(s);
+  assert.equal(r.heartbeat, 'restarted');
+  assert.equal(killed, true);
+  assert.ok(s.logs.some(([e]) => e === 'eebus_device_heartbeat_restart'));
+});
+
+test('Not-Halt aufheben: Aufteilung neu, Gerät wie beim Anmelden aufgenommen (Herzschlag startet wieder)', async () => {
+  const { s, limits } = await withHeatPump();
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 1500 }, null);
+  await settle();
+  await enterNotHalt(s);
+  s.ctx.p14a = { update: () => s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 1500 }, null) };
+  s.state.ctrl.discretionaryWritesPaused = false;
+  const n = limits().length;
+  const r = s.svc.resumeAfterEmergencyStop();
+  await settle();
+  assert.equal(r.ok, true);
+  assert.deepEqual(limits().slice(n).map((x) => [x.w, x.active]), [[1500, true]], 'Grenze sofort wieder am Gerät');
+  assert.equal(s.svc.summary().notHalt, null);
+});
