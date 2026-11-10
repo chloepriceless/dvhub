@@ -257,6 +257,25 @@ const PAUSED = Object.freeze({ ok: false, skipped: 'paused' });
  */
 export const EV_PHASE_SETTLE_MS = 60_000;
 export const EV_PHASE_CONFIRM_MS = 30_000;
+/**
+ * Phasen zurück nach DVhubs eigenem Laden (Christin 10.11.2026, „2c“): Vor dem
+ * ERSTEN eigenen Phasenbefehl merkt DVhub die eingestellte Phasenzahl
+ * (phasesConfigured: 0 = automatisch, 1, 3) im Datensatz (phasesPrev,
+ * ev_owned.json — übersteht einen Neustart). Ist DVhubs Ladung vorbei (Plan
+ * ohne Ladung, Max-Ladestand, Grenz-Stopp, Abstecken), stellt DVhub NACH dem
+ * Stopp genau diesen Wert wieder her (restorePhases) — nur, wenn evcc noch auf
+ * DVhubs Phasen steht. Von außen umgestellt (phasesForeign): nichts
+ * zurückstellen. Not-Halt: einmal beim Aktivieren (emergencyStop), sonst kein
+ * Befehl. Lese-Modus: evcc steht nie auf DVhubs Phasen — nichts zu schreiben
+ * (die Sperre im Adapter hält ohnehin jeden Befehl auf).
+ */
+const PHASE_VALUES = Object.freeze([0, 1, 3]);
+/** Eingestellte Phasen einer evcc-Meldung (0/1/3) oder null (unbekannt). */
+function configuredPhasesOf(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return PHASE_VALUES.includes(n) ? n : null;
+}
 /** Nach dem Stopp am Max-Ladestand erst wieder laden, wenn er so weit darunter liegt (Prozentpunkte). */
 export const MAX_STOP_HOLD_PCT = 1;
 
@@ -366,9 +385,26 @@ export function createEosEvccBridge(deps) {
   // Phasen-Felder überleben ebenso jeden Befehl am selben Gerät: zuletzt
   // bestätigte (phases) und versuchte (phasesTried, phasesAt) DVhub-Phasen und
   // die Übergabe an den Kunden (phasesForeign, EV_PHASE_SETTLE_MS).
+  // Dazu der Wert von vorher (phasesPrev) und die laufende bzw. letzte
+  // Rückkehr dorthin (phasesRestoring, phasesRestored).
   const phaseFields = (prev, ident) => (prev && prev.identity === ident
-    ? { phases: prev.phases ?? null, phasesTried: prev.phasesTried ?? null, phasesAt: prev.phasesAt ?? null, phasesForeign: prev.phasesForeign ?? null }
+    ? {
+      phases: prev.phases ?? null, phasesTried: prev.phasesTried ?? null, phasesAt: prev.phasesAt ?? null, phasesForeign: prev.phasesForeign ?? null,
+      phasesPrev: prev.phasesPrev ?? null, phasesRestoring: prev.phasesRestoring === true, phasesRestored: prev.phasesRestored ?? null
+    }
     : { phases: null });
+  // Phasen-Buchführung nach dem Ende (Rückkehr erledigt oder nichts mehr
+  // zurückzustellen): DVhub besitzt keine Phasen mehr.
+  const phasesCleared = { phases: null, phasesTried: null, phasesPrev: null, phasesRestoring: false };
+  // Wert von vorher für einen neuen eigenen Phasenbefehl: die eingestellte
+  // Phasenzahl — direkt nach einer eigenen Rückkehr (Meldung evtl. noch
+  // veraltet) der zurückgestellte Wert.
+  function phasesBeforeCommand(lpId, rec) {
+    const r = rec?.phasesRestored;
+    const at = Date.parse(r?.at || '');
+    if (r && configuredPhasesOf(r.to) !== null && Number.isFinite(at) && now() - at < EV_PHASE_SETTLE_MS) return configuredPhasesOf(r.to);
+    return configuredPhasesOf(findLoadpoint(lpId)?.phasesConfigured);
+  }
 
   // Abweichende Phasen-Meldung, noch nicht bestätigt (je Ziel, nur im
   // Speicher): { found, polledAt, at }. Solange sie steht, schaltet DVhub die
@@ -420,8 +456,16 @@ export function createEosEvccBridge(deps) {
     // Jeder Phasenbefehl von DVhub: VOR dem Senden als versucht merken (eine
     // verlorene Quittung darf nicht als Änderung von außen gelten), danach
     // bestätigt. Eine noch unbestätigte Abweichung ist damit erledigt.
+    // Der erste eigene Befehl merkt außerdem den Wert von vorher (phasesPrev).
     const setPhasesOwned = async (n) => {
-      notePhases(n, { phasesTried: n, phasesAt: new Date(now()).toISOString() });
+      const prev = owned.get(key);
+      const same = prev && prev.identity === tgt.identity;
+      const fields = { phasesTried: n, phasesAt: new Date(now()).toISOString(), phasesRestoring: false };
+      if (c.type === 'evcc' && !(same && prev.phasesPrev != null)) {
+        const before = phasesBeforeCommand(tgt.loadpoint, same ? prev : null);
+        if (before !== null) fields.phasesPrev = before;
+      }
+      notePhases(n, fields);
       pendingPhase.delete(key);
       const r = await c.setPhases(n);
       if (r?.ok) notePhases(n);
@@ -438,7 +482,10 @@ export function createEosEvccBridge(deps) {
         const cfgPhases = Number(bc?.phases) === 1 ? 1 : 3;
         const want = Number(a[1]?.phases) === 1 ? 1 : (Number(a[1]?.phases) === 3 ? 3 : cfgPhases);
         // Phasen vom Kunden umgestellt (phasesHandsOff): nicht zurückholen.
-        if (typeof c.setPhases === 'function' && dvhubPhases() === 1 && want === 3 && !phasesHandsOff(key)) {
+        // Abgesteckt: kein Ladevorgang — die Brücke stellt die eigenen Phasen
+        // gleich auf den Wert von vorher zurück (restorePhases).
+        const unpluggedNow = c.type === 'evcc' && findLoadpoint(tgt.loadpoint)?.connected === false;
+        if (typeof c.setPhases === 'function' && dvhubPhases() === 1 && want === 3 && !phasesHandsOff(key) && !unpluggedNow) {
           // Erst den (kleineren) Strom bestätigen, dann mehr Phasen: scheitert
           // der Strom, bleibt es einphasig — nie 12 A dreiphasig unter einer
           // Grenze (Codex 42a5d784, P1).
@@ -909,7 +956,12 @@ export function createEosEvccBridge(deps) {
       const key = `${bc.charger}:${bc.loadpoint}:override:stop`;
       if (!force && lastSent?.key === key) {
         const drift = charger.type === 'evcc' && st?.ok && (st.raw?.mode ?? null) !== 'off';
-        if (!drift) { lastError = null; return { ok: true, unchanged: true, override: true }; }
+        if (!drift) {
+          lastError = null;
+          // „Laden stoppen“ beendet DVhubs Ladung: eigene Phasen zurück.
+          await restorePhases(cfg, bc, 'override_stop');
+          return { ok: true, unchanged: true, override: true };
+        }
         pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: st.raw?.mode ?? null, expected: 'off', override: true });
       }
       const stopper = charger.type === 'evcc' ? getCharger(cfg, { ...bc, stopMode: 'off' }) : charger;
@@ -925,6 +977,7 @@ export function createEosEvccBridge(deps) {
         mode: 'off', released: false, override: true, slotTs: null, at: new Date(now()).toISOString()
       };
       pushLog('ev_override_command', lastSent);
+      await restorePhases(cfg, bc, 'override_stop');
       return { ok: true, sent: lastSent, override: true };
     }
 
@@ -1050,7 +1103,8 @@ export function createEosEvccBridge(deps) {
           if (!r?.ok) { pushLog('grid_connection_evcc_error', { loadpoint: id, error: r?.error || 'maxcurrent failed' }); continue; }
         }
         const next = { ...owned.get(key), gridCap: false, limitA: null, limitTried: false, limitOff: false, origMaxCurrentA: null };
-        setOwned(key, next.cmd === 'limit' && !next.restore ? null : next);
+        // Offene Phasen-Rückkehr (phasesPrev) hält den Datensatz.
+        setOwned(key, next.cmd === 'limit' && !next.restore && next.phasesPrev == null ? null : next);
         pushLog('grid_connection_evcc_released', { loadpoint: id, currentA: e.origMaxCurrentA ?? null });
         continue;
       }
@@ -1136,7 +1190,7 @@ export function createEosEvccBridge(deps) {
       if (!ok || !modeDone) continue;
       const cur = owned.get(key) || e;
       const next = { ...cur, gridCap: false, limitA: null, limitTried: false, limitOff: false, origMaxCurrentA: null, ...(off ? { restore: null, dvhubModes: [], capOffTried: false } : {}) };
-      setOwned(key, next.cmd === 'limit' && !next.restore ? null : next);
+      setOwned(key, next.cmd === 'limit' && !next.restore && next.phasesPrev == null ? null : next);
       released.push(`evcc:${tgt.loadpoint}`);
       pushLog('grid_connection_evcc_released', { loadpoint: tgt.loadpoint, currentA: lowered ? e.origMaxCurrentA : null, mode: off ? e.restore.mode : null, reason: 'emergency_stop' });
     }
@@ -1168,7 +1222,8 @@ export function createEosEvccBridge(deps) {
     // zu vergleichen. Die aktiven Phasen sind ein Messwert (evcc-Automatik,
     // einphasiges Auto) und zählen nicht.
     if (ours === null || lp.phasesConfigured === null || lp.phasesConfigured === undefined || ![0, 1, 3].includes(found)) { pendingPhase.delete(key); return; }
-    if (found === ours || found === e.phasesTried) { pendingPhase.delete(key); return; }
+    // Eigene Rückkehr unterwegs (Quittung evtl. verloren): kein Fremdwert.
+    if (found === ours || found === e.phasesTried || (e.phasesRestoring === true && found === e.phasesPrev)) { pendingPhase.delete(key); return; }
     const sentAt = Date.parse(e.phasesAt || '');
     const t = now();
     if (Number.isFinite(sentAt) && t - sentAt < EV_PHASE_SETTLE_MS) return;
@@ -1181,7 +1236,8 @@ export function createEosEvccBridge(deps) {
     const second = polledAt !== null && p.polledAt !== null ? polledAt > p.polledAt : t - p.at >= EV_PHASE_CONFIRM_MS;
     if (!second) return;
     pendingPhase.delete(key);
-    setOwned(key, { ...e, phases: null, phasesTried: null, phasesForeign: { found, expected: ours, since: new Date(t).toISOString() } });
+    // Von außen umgestellt: auch nichts mehr zurückstellen (phasesPrev weg).
+    setOwned(key, { ...e, ...phasesCleared, phasesForeign: { found, expected: ours, since: new Date(t).toISOString() } });
     pushLog('ev_phases_changed_externally', { loadpoint: bc.loadpoint, found, expected: ours });
   }
 
@@ -1190,6 +1246,105 @@ export function createEosEvccBridge(deps) {
   function customerPhases(bc) {
     const ph = Number(findLoadpoint(bc.loadpoint)?.phasesConfigured);
     return ph === 1 ? 1 : (ph === 3 ? 3 : bc.phases);
+  }
+
+  // Steht evcc noch auf DVhubs Phasen? Antwort für die Rückkehr:
+  // 'done' (schon auf dem Wert von vorher), 'restore' (zurückstellen),
+  // 'foreign' (weder noch — nicht anfassen), 'wait' (unklar, später).
+  function phaseRestoreState(e, found) {
+    if (found === null) return 'wait';
+    if (found === e.phasesPrev) return 'done';
+    if (found === e.phases || found === e.phasesTried) return 'restore';
+    return 'foreign';
+  }
+
+  // Der eine Schreibweg der Rückkehr: Phasen auf den Wert von vorher. Vor dem
+  // Senden als laufende Rückkehr vermerkt (eine verlorene Quittung gilt nicht
+  // als Änderung von außen), danach ist die Buchführung leer.
+  async function writePhasesBack(cfg, bc, key, e, reason) {
+    const raw = rawGetCharger(cfg, bc);
+    if (!raw || typeof raw.setPhases !== 'function') return null;
+    setOwned(key, { ...e, phasesRestoring: true, phasesAt: new Date(now()).toISOString() });
+    let r;
+    try { r = await raw.setPhases(e.phasesPrev); } catch (err) { r = { ok: false, error: err?.message || String(err) }; }
+    const cur = owned.get(key);
+    if (r?.ok) {
+      const at = new Date(now()).toISOString();
+      if (cur) setOwned(key, { ...cur, ...phasesCleared, phasesAt: at, phasesRestored: { to: e.phasesPrev, at } });
+      pushLog('ev_phases_restored', { loadpoint: bc.loadpoint, phases: e.phasesPrev, reason });
+    } else {
+      pushLog('ev_phases_restore_error', { loadpoint: bc.loadpoint, phases: e.phasesPrev, reason, error: r?.error || 'phases failed' }, 'warn');
+    }
+    return r;
+  }
+
+  // DVhubs Ladung ist vorbei (runTick, nach dem Stopp): Phasen zurück auf den
+  // Wert von vorher. Nie im Not-Halt (die eine Rücknahme macht emergencyStop),
+  // nicht nach einer Änderung von außen und nicht, solange eine abweichende
+  // Meldung oder der eigene Befehl noch unbestätigt ist.
+  async function restorePhases(cfg, bc, reason) {
+    if (bc.charger !== 'evcc') return null;
+    const key = targetKey(bc);
+    const e = owned.get(key);
+    if (!e || e.phasesPrev == null || e.phasesForeign || pendingPhase.has(key)) return null;
+    if (e.identity && e.identity !== wallboxIdentity(cfg, 'evcc')) return null;
+    const sentAt = Date.parse(e.phasesAt || '');
+    if (Number.isFinite(sentAt) && now() - sentAt < EV_PHASE_SETTLE_MS) return null;
+    let polledAt;
+    try { const v = Number(getEvccPolledAt()); polledAt = Number.isFinite(v) && v > 0 ? v : null; } catch { polledAt = null; }
+    // Meldung von vor dem eigenen Befehl (evcc gerade nicht erreichbar): unklar.
+    if (polledAt !== null && Number.isFinite(sentAt) && polledAt <= sentAt) return null;
+    const state = phaseRestoreState(e, configuredPhasesOf(findLoadpoint(bc.loadpoint)?.phasesConfigured));
+    if (state === 'done') {
+      setOwned(key, { ...e, ...phasesCleared });
+      return { ok: true, already: true };
+    }
+    if (state !== 'restore' || isPaused()) return null;
+    return writePhasesBack(cfg, bc, key, e, reason);
+  }
+
+  // Nur die Phasen-Buchführung eines Datensatzes (cmd 'limit' wie bei
+  // notePhases): nichts zurückzunehmen außer den eigenen Phasen. Ohne offene
+  // Rückkehr: kein Datensatz.
+  function phaseOnlyRecord(e) {
+    if (!e || e.charger !== 'evcc' || e.phasesPrev == null || e.phasesForeign) return null;
+    return { charger: e.charger, loadpoint: e.loadpoint, identity: e.identity ?? null, cmd: 'limit', confirmed: true, gridCap: false, ...phaseFields(e, e.identity) };
+  }
+
+  // Not-Halt (einmal beim Aktivieren): die eigene Phasen-Vorgabe zurücknehmen
+  // — frisch gelesen, nur wo DVhubs eigener Stopp steht (gerade gestoppt oder
+  // schon vorher) und evcc noch auf DVhubs Phasen. Lädt dort jemand von Hand
+  // („now“ nach DVhubs Stopp, Modus übernommen), nichts senden („im Zweifel
+  // nicht“, Not-Halt-Regel 06.11.2026).
+  async function neutralizePhases(cfg, bc0, snapshot, { restoredPhases, skipped, errors }) {
+    for (const e of snapshot) {
+      const key = targetKey(e);
+      const cur = owned.get(key);
+      if (!cur || cur.phasesForeign || cur.phasesPrev == null) continue;
+      // DVhubs Ladung steht noch (Stopp gescheitert oder Zustand unbekannt),
+      // oder nur Phasen-Buchführung ohne eigenen Stopp: nicht anfassen —
+      // mehr Phasen hießen mehr Leistung.
+      if (cur.cmd !== 'stop') { skipped.push(cur.cmd === 'charge' ? 'phases_still_charging' : 'phases_not_dvhub_stop'); continue; }
+      const bc = { ...bc0, charger: 'evcc', loadpoint: Number(e.loadpoint) >= 1 ? Number(e.loadpoint) : bc0.loadpoint };
+      const raw = rawGetCharger(cfg, bc);
+      if (!raw?.isConfigured?.() || typeof raw.status !== 'function') { skipped.push('phases_not_configured'); continue; }
+      if (e.identity && e.identity !== wallboxIdentity(cfg, 'evcc')) continue;
+      let st;
+      try { st = await raw.status({ fresh: true }); } catch { st = null; }
+      if (!st?.ok) { skipped.push('phases_state_unknown'); continue; }
+      // Nach DVhubs Stopp „Sofort laden“: das hat jemand von Hand gestartet.
+      if ((st.raw?.mode ?? null) === 'now') { skipped.push('phases_manual_charge'); continue; }
+      const state = phaseRestoreState(cur, configuredPhasesOf(st.raw?.phasesConfigured));
+      if (state === 'wait') { skipped.push('phases_state_unknown'); continue; }
+      if (state !== 'restore') {
+        // Schon zurück oder von außen umgestellt: nichts zu schreiben.
+        setOwned(key, { ...cur, ...phasesCleared });
+        continue;
+      }
+      const r = await writePhasesBack(cfg, bc, key, cur, 'emergency_stop');
+      if (r?.ok) restoredPhases.push(`evcc:${bc.loadpoint}`);
+      else errors.push(r?.error || 'phases restore failed');
+    }
   }
 
   function tick({ force = false } = {}) {
@@ -1281,6 +1436,9 @@ export function createEosEvccBridge(deps) {
       }
 
       slot = applyGridCap(slot, bc, getGridCapW());
+      // Abgesteckt (evcc meldet es): kein Ladevorgang — DVhub stellt dann
+      // keine Phasen ein und gibt eigene zurück (Christin 10.11.2026).
+      const unplugged = charger.type === 'evcc' && findLoadpoint(bc.loadpoint)?.connected === false;
       // Max-Ladestand erreicht: Laden endet — hart (wie „aus“), auch wenn der
       // Plan noch laden will oder der Stopp-Modus PV-Laden erlaubte. Nur DVhubs
       // eigener Plan; „Sofort laden“ von Hand ist oben schon durch.
@@ -1313,7 +1471,7 @@ export function createEosEvccBridge(deps) {
           slot = capped.action === 'charge' ? { ...slot, currentA: capped.currentA, ...(capped.gridCapW != null ? { gridCapW: capped.gridCapW } : {}) } : slot;
         }
       } else if (slot.action === 'charge' && typeof charger.setPhases === 'function' && getGridCapW() == null
-        && onePhaseChargingAvailable(cfg, getEvccLoadpoints())) {
+        && !unplugged && onePhaseChargingAvailable(cfg, getEvccLoadpoints())) {
         if (Number(slot.chargePowerW) < minChargeW(bc)) {
           const one = { ...bc, phases: 1 };
           slot = { ...slot, phases: 1, currentA: powerToCurrentA(slot.chargePowerW, one) };
@@ -1321,6 +1479,9 @@ export function createEosEvccBridge(deps) {
       }
       const capStop = slot.action === 'stop' && (slot.gridCapW != null || getGridCapW() != null);
       const hardStop = capStop || maxStop;
+      // DVhubs Ladung vorbei (oder kein Auto da): Phasen danach zurück.
+      const phasesDone = slot.action !== 'charge' || unplugged;
+      const phaseReason = unplugged ? 'unplugged' : (maxStop ? 'max_soc' : (capStop ? 'grid_cap' : 'plan_stop'));
       const key = capStop ? `${bc.charger}:${bc.loadpoint}:grid-cap-stop`
         : (maxStop ? `${bc.charger}:${bc.loadpoint}:max-soc-stop` : commandKey(bc, slot));
       if (!force && lastSent?.key === key) {
@@ -1329,6 +1490,7 @@ export function createEosEvccBridge(deps) {
         const drift = charger.type === 'evcc' ? await modeDrift(charger, lastSent.mode) : null;
         if (!drift) {
           lastError = planNote;
+          if (phasesDone) await restorePhases(cfg, bc, phaseReason);
           return { ok: true, unchanged: true };
         }
         pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: drift.found, expected: lastSent.mode });
@@ -1368,6 +1530,9 @@ export function createEosEvccBridge(deps) {
 
       if (capStop) markGridCap(bc, true);
       pushLog('eos_evcc_command', lastSent);
+      // Erst nach dem quittierten Stopp: sonst lüde evcc „Sofort laden“ kurz
+      // mit allen Phasen (z. B. 12 A dreiphasig statt einphasig).
+      if (phasesDone) await restorePhases(cfg, bc, phaseReason);
       return { ok: true, sent: lastSent };
     } catch (err) {
       lastError = err?.message || String(err);
@@ -1403,12 +1568,16 @@ export function createEosEvccBridge(deps) {
         const released = [];
         const skipped = [];
         const errors = [];
+        const restoredPhases = [];
+        // Eigene Phasen-Vorgaben vor dem Stopp merken (der Stopp kann den
+        // Datensatz löschen, wenn der Kunde den Modus übernommen hat).
+        const phaseSnapshot = [...owned.values()].filter((e) => e.charger === 'evcc' && e.phasesPrev != null && !e.phasesForeign).map((e) => ({ ...e }));
         // evcc-Deckel (evccCapTick) einmal zurücknehmen.
         await neutralizeEvccCaps(cfg, bc0, { released, skipped, errors });
         // Jedes Ziel, an dem DVhubs letzter Befehl „laden“ war (quittiert oder
         // nicht), für sich: frisch prüfen, dann einmal hart aus.
         const targets = [...owned.values()].filter((e) => e.cmd === 'charge');
-        if (!targets.length && !released.length && !errors.length) {
+        if (!targets.length && !released.length && !errors.length && !phaseSnapshot.length) {
           return { ok: true, skipped: skipped[0] || (lastSent || owned.size ? 'not_charging' : 'not_controlled') };
         }
         for (const ref of targets) {
@@ -1452,8 +1621,12 @@ export function createEosEvccBridge(deps) {
             try { st = await charger.status({ fresh: true }); } catch { st = null; }
             if (!st?.ok) { skipped.push('state_unknown'); continue; } // Datensatz bleibt für den nächsten Not-Halt
             if ((st.raw?.mode ?? null) !== 'now') {
-              // Nachweislich von Hand umgestellt: DVhubs Anspruch erlischt.
-              setOwned(targetKey(bc), null);
+              // Nachweislich von Hand umgestellt: DVhubs Anspruch erlischt —
+              // im Not-Halt auch keine Phasen (Ladung des Kunden nicht
+              // anfassen). Den Wert von vorher behält ein reiner
+              // Phasen-Datensatz: ist DVhub wieder aktiv, stellt es nach
+              // seiner Ladung bzw. beim Abstecken zurück.
+              setOwned(targetKey(bc), phaseOnlyRecord(ref));
               skipped.push('not_dvhub_state');
               continue;
             }
@@ -1477,7 +1650,11 @@ export function createEosEvccBridge(deps) {
           if (!res?.ok) { errors.push(res?.error || 'wallbox write failed'); continue; } // Datensatz bleibt „charge“
           stopped.push(`${bc.charger}:${bc.loadpoint}`);
         }
+        // Erst nach dem Stopp: die eigene Phasen-Vorgabe einmal zurück (Christin
+        // 10.11.2026) — sonst lüde „Sofort laden“ kurz mit allen Phasen.
+        if (phaseSnapshot.length) await neutralizePhases(cfg, bc0, phaseSnapshot, { restoredPhases, skipped, errors });
         if (released.length) pushLog('ev_emergency_stop_released', { targets: released });
+        if (restoredPhases.length) pushLog('ev_emergency_stop_phases_restored', { targets: restoredPhases });
         if (stopped.length) {
           // Nach dem Aufheben gilt kein früherer Befehl als „unverändert“. Gab
           // es noch keinen quittierten Befehl, merkt der neue Merker das Ziel —
@@ -1489,12 +1666,14 @@ export function createEosEvccBridge(deps) {
           }
           pushLog('ev_emergency_stop', { targets: stopped });
         }
+        const phasesOut = restoredPhases.length ? { phasesRestored: restoredPhases } : {};
         if (errors.length) {
           lastError = errors.join('; ');
-          return { ok: false, error: lastError, stopped: stopped.length, released: released.length };
+          return { ok: false, error: lastError, stopped: stopped.length, released: released.length, ...phasesOut };
         }
-        if (stopped.length) return { ok: true, stopped: true, ...(released.length ? { released } : {}) };
-        return released.length ? { ok: true, released } : { ok: true, skipped: skipped[0] || 'not_dvhub_state' };
+        if (stopped.length) return { ok: true, stopped: true, ...(released.length ? { released } : {}), ...phasesOut };
+        if (released.length) return { ok: true, released, ...phasesOut };
+        return restoredPhases.length ? { ok: true, ...phasesOut } : { ok: true, skipped: skipped[0] || 'not_dvhub_state' };
       });
     },
     /** Befehl sofort erneut senden, auch wenn er sich nicht geaendert hat. */
@@ -1583,6 +1762,9 @@ export function createEosEvccBridge(deps) {
         onePhaseCharging: (() => { try { return onePhaseChargingAvailable(cfg, getEvccLoadpoints()); } catch { return false; } })(),
         // Phasen vom Kunden umgestellt: { found, expected, since } oder null.
         phasesByCustomer: owned.get(targetKey(bc))?.phasesForeign ?? null,
+        // Phasen vor DVhubs eigenem Befehl (0 = automatisch): darauf stellt
+        // DVhub nach seiner Ladung zurück. null = nichts zurückzustellen.
+        phasesRestoreTo: owned.get(targetKey(bc))?.phasesPrev ?? null,
         // Max-Ladestand: Grenze, Ladestand und ob DVhub gerade deshalb nicht lädt.
         maxStop: (() => {
           let l;

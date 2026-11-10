@@ -48,6 +48,13 @@ verweist hierher.
     2,75 kW. Damit kurz veraltete evcc-Meldungen nicht als Änderung gelten, zählen sie erst eine Minute nach DVhubs
     eigenem Befehl, nur aus Abfragen danach und erst in der zweiten Abfrage; evccs eigene Umschaltung (aktive Phasen)
     zählt nie. Status: `GET /api/integration/evcc/eos` → `phasesByCustomer`.
+    **Danach wieder wie vorher:** Hat DVhub für sein eigenes Laden die Phasen umgestellt (z. B. evcc auf „automatisch“
+    → einphasig), stellt es nach seiner Ladung den Wert von vorher wieder her — „automatisch“ bzw. fest 1 oder 3. Danach
+    heißt: Plan ohne Ladung, Max-Ladestand erreicht, „Laden stoppen“, Abstecken; immer erst nach dem Stopp, damit
+    „Sofort laden“ nicht kurz mit allen Phasen lädt. Abgesteckt stellt DVhub keine Phasen ein. Der Not-Halt nimmt die
+    eigene Phasen-Vorgabe beim Aktivieren genau einmal zurück (nur wenn evcc noch auf DVhubs Phasen steht und DVhubs
+    Ladung gestoppt ist), danach kein Befehl. Von außen umgestellt: nichts zurückstellen; Lese-Modus: nichts schreiben.
+    Der Wert von vorher übersteht einen Neustart (`ev_owned.json`); Status `phasesRestoreTo`.
   - **Wertstufen frisch zum Lauf:** Vor jedem von DVhub angestoßenen EOS-Lauf gehen nach dem Prognose-Push auch die
     Wertstufen des Autos an EOS — vorher rechnete ein Lauf mit den Stufen des letzten Abgleichs (nach dem Start leer).
   - **Start-Ladestand des Autos an EOS abgerundet** statt gerundet — EOS plant nie mit mehr, als drin ist.

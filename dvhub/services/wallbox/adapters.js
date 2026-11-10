@@ -398,8 +398,9 @@ export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
     async limit(currentA) {
       return evccIntegration.setMaxCurrent(getLoadpoint(), currentA);
     },
-    // Phasen umschalten (1 oder 3), nur wenn evcc den Ladepunkt als
-    // umschaltbar meldet (chargerPhases1p3p) — die Brücke prüft das vorher.
+    // Phasen umschalten (1 oder 3, zurück auch 0 = automatisch), nur wenn evcc
+    // den Ladepunkt als umschaltbar meldet (chargerPhases1p3p) — die Brücke
+    // prüft das vorher.
     async setPhases(phases) {
       if (typeof evccIntegration?.setPhases !== 'function') return { ok: false, error: 'phases not supported' };
       return evccIntegration.setPhases(getLoadpoint(), phases);
@@ -420,7 +421,9 @@ export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
       }
       const lp = (evccIntegration?.getLoadpoints?.() || []).find((l) => l.id === getLoadpoint());
       if (!lp) return { ok: false, error: 'Ladepunkt nicht gefunden' };
-      return { ok: true, connected: lp.connected, charging: lp.charging, powerW: lp.chargePowerW, currentA: null, vehicleSocPct: lp.vehicleSocPct, raw: { mode: lp.mode } };
+      // phasesConfigured: eingestellte Phasen (0 = automatisch) — der Not-Halt
+      // prüft so frisch, ob DVhubs Phasen-Vorgabe noch steht.
+      return { ok: true, connected: lp.connected, charging: lp.charging, powerW: lp.chargePowerW, currentA: null, vehicleSocPct: lp.vehicleSocPct, raw: { mode: lp.mode, phasesConfigured: lp.phasesConfigured ?? null } };
     }
   };
   return guardWrites(adapter);
