@@ -407,7 +407,13 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   // ohne (eine neuere Vorgabe steht schon im Gerät) bleibt sie stehen.
   const endAssist = (reason, restore = true) => {
     if (!st.assist) return;
-    if (restore) st.assistRestore = { valueW: st.assist.baseW };
+    if (restore) {
+      st.assistRestore = { valueW: st.assist.baseW };
+      // Die Hilfe des Akkus fällt weg, die Messung zeigt sie aber noch: Lasten
+      // erst mit frischen Werten wieder freigeben (Codex 4deab6d6, P1).
+      st.lastCutAt = now;
+      st.underSince = null;
+    }
     events.push({ type: 'assist_end', reason, valueW: st.assist.valueW, restoreW: restore ? st.assist.baseW : null });
     st.assist = null;
   };
@@ -726,16 +732,21 @@ function nativeBatteryStep(st, { r, battery, total, excess, phases, phaseTargets
   const maxW = Math.max(0, Math.min(MAX_BATTERY_DISCHARGE_W, Number(battery.maxW) || 0));
   const known = battery.limit && finite(battery.limit.value) ? Number(battery.limit.value) : null;
 
-  // 1. Wunsch einer anderen Quelle (schedule-eval.js zählt mit).
+  // 1. Wunsch einer anderen Quelle (schedule-eval.js zählt mit): er ist der
+  // neue Rückkehrwert. Eine Vorgabe auf oder über der Hilfe (bzw. -1) beendet
+  // sie ohne Rückschreiben — aber erst, wenn sie im Gerät steht; ein gleicher
+  // Wert, den der Evaluator als „unverändert“ überspringt, zählt auch
+  // (Codex 4deab6d6, P2).
   const req = battery.request;
   if (st.assist && req && Number(req.seq) > Number(st.assist.seq || 0)) {
-    st.assist.seq = Number(req.seq);
-    if (req.clamped) {
-      st.assist.baseW = Number(req.requestedW);
-    } else {
+    st.assist.baseW = Number(req.requestedW);
+    if (req.clamped) st.assist.seq = Number(req.seq);
+    else {
       const lw = battery.lastWrite;
-      const written = lw && lw.source === req.source && Number(lw.value) === Number(req.requestedW);
-      if (written) endAssist('superseded', false);
+      if (lw && Number(lw.value) === Number(req.requestedW)) {
+        st.assist.seq = Number(req.seq);
+        endAssist('superseded', false);
+      }
     }
   }
   if (st.assist && !socOk) endAssist('soc');
@@ -751,21 +762,41 @@ function nativeBatteryStep(st, { r, battery, total, excess, phases, phaseTargets
     return Math.max(tot, 3 * Math.max(...phases.map((p, i) => p - rel[i] - phaseTargets[i])));
   };
   const relief = (x) => Math.max(0, excess - excessAfter(x, r.batteryPhases));
+  // Überschuss, wenn der Akku x W WENIGER abgibt — bei unbekannten Akku-Phasen
+  // der ungünstigste Fall (die Last fällt auf die stärkste Phase).
+  const excessIfLess = (x) => (r.batteryPhases
+    ? excessAfter(-x, r.batteryPhases)
+    : Math.max(...['three', 'L1', 'L2', 'L3'].map((m) => excessAfter(-x, m))));
 
   // 2. Anheben.
   if (excess > 0) st.disSince ??= now;
   else st.disSince = null;
   if (excess > 0 && socOk && lever.discharge) {
-    const base = st.assist ? st.assist.baseW : (known != null && known >= 0 ? known : null);
-    const current = st.assist ? st.assist.valueW : base;
+    // Nach einem Neustart steht noch der Rückkehrwert aus dem Merker an: er
+    // bleibt der Wert davor, nicht die angehobene Grenze im Gerät (Codex
+    // 4deab6d6, P2).
+    const pendingBase = !st.assist && st.assistRestore && finite(st.assistRestore.valueW) ? Number(st.assistRestore.valueW) : null;
+    const knownCap = known != null && known >= 0 ? known : null;
+    const base = st.assist ? st.assist.baseW : (pendingBase ?? knownCap);
+    const current = st.assist ? st.assist.valueW : (known === -1 ? Infinity : (knownCap ?? base));
     if (base != null) {
       const room = Math.max(0, maxW - dis);
-      let need = room;
+      let need = null;
       for (let x = 0; x <= room; x += STEP_W) {
         if (excessAfter(x, r.batteryPhases || 'three') <= 0) { need = x; break; }
       }
-      const want = assistValueW({ excessW: need, dischargeW: dis, maxW });
-      if (want > current) {
+      // Nicht ganz lösbar (Akku zu schwach oder auf einer anderen Phase als
+      // die Überlast): nur den Teil der Summe, den er wirklich senkt — nie
+      // „sicherheitshalber“ aufs Maximum.
+      if (need == null) need = Math.min(room, up(Math.max(0, total - r.targetW)));
+      const want = need > 0 ? assistValueW({ excessW: need, dischargeW: dis, maxW }) : current;
+      if (!st.assist && pendingBase != null && Number.isFinite(current)) {
+        // Hilfe aus dem letzten Lauf weiterführen statt erst zurückzuschreiben.
+        st.assist = { valueW: Math.max(want, current), baseW: pendingBase, since: now, raisedAt: now, seq: Number(battery.request?.seq) || 0, roomSince: null, lowerSince: null };
+        st.assistRestore = null;
+        st.disSince = now;
+        if (want > current) events.push({ type: 'assist', valueW: want, baseW: pendingBase, dischargeW: Math.round(dis), excessW: Math.round(excess), importW: Math.round(total) });
+      } else if (want > current) {
         if (!st.assist) {
           st.assist = { valueW: want, baseW: base, since: now, raisedAt: now, seq: Number(battery.request?.seq) || 0, roomSince: null, lowerSince: null };
         } else {
@@ -784,20 +815,30 @@ function nativeBatteryStep(st, { r, battery, total, excess, phases, phaseTargets
     pendingW = relief(Math.max(0, Math.min(cap, maxW) - dis));
   }
 
-  // 4. Zurücknehmen (in Stufen).
+  // 4. Zurücknehmen (in Stufen). Solange eine Last gedrosselt ist, hilft der
+  // Akku weiter — erst kommen die Lasten zurück, dann geht der Akku auf seine
+  // Grenze davor (umgekehrte Reihenfolge des Eingriffs; Codex 4deab6d6, P1).
+  // Je Phase gerechnet (Codex 4deab6d6, P1): ein einphasiger Akku entlastet
+  // nur seine Phase.
   const a = st.assist;
-  if (a && excess <= 0) {
+  const capped = Object.keys(st.caps).some((id) => st.caps[id] != null);
+  if (a && excess <= 0 && !capped) {
     const hyst = r.releaseHysteresisW;
-    // Bezug, wenn der Akku nur bis zur Grenze davor entlüde (relativ zum Ziel).
-    const without = excess + Math.max(0, dis - Math.max(0, a.baseW));
-    if (without <= -hyst) {
+    const portion = Math.max(0, dis - Math.max(0, a.baseW));
+    if (excessIfLess(portion) <= -hyst) {
       a.lowerSince = null;
       a.roomSince ??= now;
       if (now - a.roomSince >= RELEASE_MS && now - a.raisedAt >= HOLD_AFTER_CUT_MS) endAssist('below_limit');
     } else {
       a.roomSince = null;
-      const lowerTo = up(dis + excess + hyst);
-      if (lowerTo <= a.valueW - hyst) {
+      // Größte Rücknahme, nach der Gesamt- und Phasenziel noch den
+      // Rückschalt-Abstand haben.
+      let less = 0;
+      for (let x = STEP_W; x <= portion; x += STEP_W) {
+        if (excessIfLess(x) <= -hyst) less = x; else break;
+      }
+      const lowerTo = up(dis - less);
+      if (less > 0 && lowerTo <= a.valueW - hyst) {
         a.lowerSince ??= now;
         if (now - a.lowerSince >= RELEASE_MS) {
           const next = Math.max(Math.max(0, a.baseW), lowerTo);
@@ -1027,6 +1068,19 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     } catch { /* kein Merker → nichts angehoben */ }
   }
 
+  // Rückkehrwert beim Not-Halt: ein Wunsch, den der Wächter noch nicht
+  // verarbeitet hat, gilt schon (Codex 4deab6d6, P2); steht eine neuere
+  // Vorgabe bereits im Gerät, bleibt sie.
+  function stopRestore() {
+    const req = state().ctrl?._gridConnection?.dischargeRequest;
+    const lw = state().schedule?.lastWrite?.maxDischargeW;
+    if (req && Number(req.seq) > Number(st.assist.seq || 0)) {
+      if (!req.clamped && lw && Number(lw.value) === Number(req.requestedW)) return null;
+      return { valueW: Number(req.requestedW) };
+    }
+    return { valueW: st.assist.baseW };
+  }
+
   let assistWriting = false;
   let assistDirty = false;
   let assistRestoreTriedAt = 0;
@@ -1042,6 +1096,17 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     if (st.assist) {
       value = st.assist.valueW; source = ASSIST_SOURCE;
     } else if (st.assistRestore) {
+      // Hat seit dem Ende der Hilfe eine andere Quelle die Entladegrenze
+      // geschrieben, gilt deren Wert — nicht nachträglich überschreiben
+      // (Codex 4deab6d6, P2).
+      st.assistRestore.at ??= Date.now();
+      const lw = state().schedule?.lastWrite?.maxDischargeW;
+      if (lw && !String(lw.source || '').startsWith('grid_connection') && Number(lw.at) >= st.assistRestore.at) {
+        log('grid_connection_assist_superseded', { valueW: st.assistRestore.valueW, by: lw.source, text: 'Netzanschluss: Zurückschreiben der Entladegrenze entfällt — eine neuere Vorgabe gilt.' });
+        st.assistRestore = null;
+        persistAssist();
+        return;
+      }
       if (!force && now() - assistRestoreTriedAt < ASSIST_RETRY_MS) return;
       assistRestoreTriedAt = now();
       value = st.assistRestore.valueW; source = ASSIST_RESTORE_SOURCE;
@@ -1160,7 +1225,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         // Eigene Vorgabe EINMAL zurücknehmen: eine angehobene Entladegrenze
         // geht auf den Wert davor (das Not-Halt-Tor lässt genau dieses Senken
         // durch). Sonst nichts — Wallbox & Co. neutralisiert der Not-Halt selbst.
-        const restore = st.assist ? { valueW: st.assist.baseW } : st.assistRestore;
+        const restore = st.assist ? stopRestore() : st.assistRestore;
         Object.assign(st, createGuardState());
         log('grid_connection_paused', { text: 'Not-Halt aktiv — der Netzanschluss-Wächter greift nicht ein.' }, 'warn');
         if (restore) {

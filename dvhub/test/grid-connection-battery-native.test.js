@@ -426,3 +426,136 @@ test('Victron: der Wächter schreibt keine Entladegrenze (Verhalten unverändert
   assert.deepEqual(h.writes(), []);
   assert.equal(h.guard.summary().battery.kind, 'victron');
 });
+
+test('Akku auf L1, Überlast auf L2: keine sinnlose Anhebung, die Last wird gedrosselt', () => {
+  const r = resolveGridConnection({
+    manufacturer: 'bridge-mqtt', gridConnection: { limitKw: 40, marginW: 1000, phaseLimitA: 32, batteryPhases: 'L1' },
+    victron: { transport: 'mqtt' }, controlWrite: { gridSetpointW: { enabled: true }, maxDischargeW: { enabled: true } }
+  });
+  const st = createGuardState();
+  const m = { fresh: true, reason: null, importW: 15000, phasesW: [3000, 9000, 3000], ageMs: 1000 };
+  const ev = [
+    ...guardStep(st, { resolved: r, meas: m, devices: [WALLBOX()], battery: bat(), now: 1_000_000 }).events,
+    ...guardStep(st, { resolved: r, meas: m, devices: [WALLBOX()], battery: bat(), now: 1_002_000 }).events
+  ];
+  assert.equal(st.assist, null, 'der Akku entlastet L2 nicht');
+  assert.ok(ev.some((e) => e.type === 'cut'));
+});
+
+// --- Codex-Gegenprüfung 4deab6d6 ------------------------------------------------
+
+test('Codex 4deab6d6 P1: Akku-Hilfe endet nicht im selben Zug, in dem Lasten frei werden', () => {
+  const r = NATIVE();
+  const st = createGuardState();
+  const t0 = 1_000_000;
+  st.assist = { valueW: 5000, baseW: 0, since: t0 - 600_000, raisedAt: t0 - 600_000, seq: 0, roomSince: null, lowerSince: null };
+  st.caps.wallbox = 0; st.capAt.wallbox = t0 - 600_000; st.cutFrom = { wallbox: 11000 }; st.lastCutAt = t0 - 600_000;
+  st.ceilingW = r.targetW;
+  const log = [];
+  for (let t = t0; t <= t0 + 240_000; t += 2000) {
+    const res = guardStep(st, { resolved: r, meas: meas(12000), devices: [WALLBOX(0)], battery: bat({ dischargeW: 5000, limit: { value: 5000, from: 'readback' } }), now: t });
+    log.push({ t, types: res.events.map((e) => e.type), capped: st.caps.wallbox != null });
+  }
+  const endIdx = log.findIndex((l) => l.types.includes('assist_end'));
+  for (const l of log) {
+    assert.ok(!(l.types.includes('assist_end') && l.types.some((x) => x === 'release' || x === 'raise')), `t+${l.t - t0}: beides in einem Zug`);
+  }
+  if (endIdx >= 0) {
+    // Solange eine Last gedrosselt ist, hilft der Akku weiter …
+    assert.equal(log[endIdx - 1]?.capped ?? false, false, 'Akku-Hilfe endete, obwohl noch eine Last gedrosselt war');
+    // … und nach dem Ende gibt der Wächter erst mit frischen Werten wieder frei.
+    const after = log.slice(endIdx + 1).filter((l) => l.t - log[endIdx].t < HOLD_AFTER_CUT_MS);
+    assert.ok(after.every((l) => !l.types.some((x) => x === 'release' || x === 'raise')));
+  }
+});
+
+test('Codex 4deab6d6 P1: einphasiger Akku — Zurücknehmen rechnet je Phase', () => {
+  const r = resolveGridConnection({
+    manufacturer: 'bridge-mqtt', gridConnection: { limitKw: 40, marginW: 1000, phaseLimitA: 32, batteryPhases: 'L1' },
+    victron: { transport: 'mqtt' }, controlWrite: { gridSetpointW: { enabled: true }, maxDischargeW: { enabled: true } }
+  });
+  const st = createGuardState();
+  const t0 = 1_000_000;
+  st.assist = { valueW: 2400, baseW: 0, since: t0 - 600_000, raisedAt: t0 - 600_000, seq: 0, roomSince: null, lowerSince: null };
+  st.ceilingW = r.targetW;
+  const m = { fresh: true, reason: null, importW: 9800, phasesW: [5800, 2000, 2000], ageMs: 1000 };
+  for (let t = t0; t <= t0 + 240_000; t += 2000) {
+    guardStep(st, { resolved: r, meas: m, devices: [], battery: bat({ dischargeW: 2200, limit: { value: 2400, from: 'readback' } }), now: t });
+  }
+  // Ohne die 2,2 kW stünde L1 bei 8,0 kW über seiner Grenze (7,36 kW): die Hilfe
+  // bleibt, höchstens in Stufen gesenkt, so dass L1 unter seinem Ziel bleibt.
+  assert.ok(st.assist, `Hilfe bleibt: ${JSON.stringify(st.assist)}`);
+  const l1 = 5800 + (2200 - Math.min(st.assist.valueW, 2200));
+  assert.ok(l1 <= r.phaseTargetsW[0], `L1 danach ${l1} W`);
+});
+
+test('Codex 4deab6d6 P2: nach dem Neustart bleibt die gemerkte Grenze davor der Rückkehrwert', () => {
+  const r = NATIVE();
+  const st = createGuardState();
+  st.assistRestore = { valueW: 0 };
+  guardStep(st, { resolved: r, meas: meas(21000), devices: [], battery: bat({ dischargeW: 3200, limit: { value: 3200, from: 'readback' } }), now: 1_000_000 });
+  assert.ok(st.assist, 'Hilfe läuft weiter');
+  assert.equal(st.assist.baseW, 0, 'nicht die angehobene 3,2 kW als „Wert davor“');
+  assert.equal(st.assistRestore, null);
+});
+
+test('Codex 4deab6d6 P2: eine Vorgabe über der Hilfe zählt erst, wenn sie geschrieben ist', () => {
+  const r = NATIVE();
+  const st = createGuardState();
+  const t0 = 1_000_000;
+  guardStep(st, { resolved: r, meas: meas(22000), devices: [], battery: bat(), now: t0 });
+  const ours = { value: 3200, source: 'grid_connection_assist' };
+  const req = { requestedW: 6000, source: 'api_manual_write', seq: 1, clamped: false };
+  // Write noch unterwegs: lastWrite zeigt noch DVhubs Wert.
+  guardStep(st, { resolved: r, meas: meas(18800), devices: [], battery: bat({ dischargeW: 3200, limit: { value: 3200, from: 'own_write' }, request: req, lastWrite: ours }), now: t0 + 2000 });
+  assert.ok(st.assist, 'noch nicht übernommen');
+  guardStep(st, { resolved: r, meas: meas(18800), devices: [], battery: bat({ dischargeW: 3200, limit: { value: 6000, from: 'own_write' }, request: req, lastWrite: { value: 6000, source: 'api_manual_write' } }), now: t0 + 4000 });
+  assert.equal(st.assist, null);
+  assert.equal(st.assistRestore, null, 'die neuere Vorgabe bleibt stehen');
+  // Gleicher Wert wie die Hilfe: der Evaluator überspringt den Write — trotzdem gilt der Wunsch.
+  const st2 = createGuardState();
+  guardStep(st2, { resolved: r, meas: meas(22000), devices: [], battery: bat(), now: t0 });
+  guardStep(st2, { resolved: r, meas: meas(18800), devices: [], battery: bat({ dischargeW: 3200, request: { requestedW: 3200, source: 'api_manual_write', seq: 1, clamped: false }, lastWrite: ours }), now: t0 + 2000 });
+  assert.equal(st2.assist, null);
+  assert.equal(st2.assistRestore, null);
+});
+
+test('Codex 4deab6d6 P2: Not-Halt direkt nach einer Hand-Sperre schreibt die Sperre zurück', async () => {
+  const h = rig();
+  h.measure({ importW: 21000, dischargeW: 1000, maxDischargeW: 1000 });
+  h.guard.tick();
+  await settle();
+  assert.deepEqual(h.writes(), [3200], '1 000 W + 2 000 W Überschuss + 200 W');
+  await h.evaluator.applyControlTarget('maxDischargeW', 0, 'api_manual_write');
+  h.state.ctrl.discretionaryWritesPaused = true;
+  h.measure({ importW: 22000, dischargeW: 3200, maxDischargeW: 3200 });
+  h.guard.tick();
+  await settle();
+  assert.deepEqual(h.writes(), [3200, 0], 'der jüngste Wunsch (0), nicht die 1 kW davor');
+});
+
+test('Codex 4deab6d6 P2: gescheitertes Zurückschreiben überschreibt keine neuere Vorgabe', async () => {
+  const h = rig();
+  h.measure({ importW: 22000, maxDischargeW: 0 });
+  h.guard.tick();
+  await settle();
+  assert.deepEqual(h.writes(), [3200]);
+  // Zurückschreiben scheitert (Broker weg) …
+  const orig = h.transport.mqttWrite;
+  h.transport.mqttWrite = async () => { throw new Error('broker weg'); };
+  for (let k = 0; k < 40; k += 1) {
+    h.measure({ importW: 9000, dischargeW: 3200, maxDischargeW: 3200 });
+    h.guard.tick();
+    await settle();
+  }
+  assert.equal(h.guard.summary().assist, null);
+  h.transport.mqttWrite = orig;
+  // … dann setzt jemand 6 kW von Hand.
+  await h.evaluator.applyControlTarget('maxDischargeW', 6000, 'api_manual_write');
+  for (let k = 0; k < 20; k += 1) {
+    h.measure({ importW: 9000, dischargeW: 0, maxDischargeW: 6000 });
+    h.guard.tick();
+    await settle();
+  }
+  assert.deepEqual(h.writes(), [3200, 6000], 'kein Rückschreiben über die neuere Vorgabe');
+});
