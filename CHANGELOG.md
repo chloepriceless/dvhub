@@ -57,7 +57,8 @@ verweist hierher.
     Der Wert von vorher übersteht einen Neustart (`ev_owned.json`); Status `phasesRestoreTo`. Ob DVhub umschalten muss,
     entscheidet die in evcc eingestellte Phasenzahl (nicht die gerade aktiven Phasen, die nach einer Umschaltung bis zur
     nächsten Abfrage nachhängen) — sonst lud ein einphasiger Slot auf „automatisch“ kurz dreiphasig. Nach einem
-    Phasenbefehl setzt eine ältere, später ankommende evcc-Antwort die Phasenzahl nicht zurück. Stellt jemand die
+    Phasenbefehl setzt eine ältere, später ankommende evcc-Antwort die Phasenzahl nicht zurück; überholte Antworten
+    einer evcc-Abfrage gelten generell nicht mehr. Stellt jemand die
     Phasen kurz vor dem Not-Halt um, gilt das als Änderung von außen.
   - **Wertstufen frisch zum Lauf:** Vor jedem von DVhub angestoßenen EOS-Lauf gehen nach dem Prognose-Push auch die
     Wertstufen des Autos an EOS — vorher rechnete ein Lauf mit den Stufen des letzten Abgleichs (nach dem Start leer).

@@ -128,10 +128,16 @@ export function createEvccIntegration(ctx) {
   // Phasenzahl im Puffer nicht zurücksetzen (Codex 07c9be5a, P1).
   let phaseWriteSeq = 0;
   const phaseWrites = new Map(); // Ladepunkt-id → { phases, seq }
+  // Abfragen mit laufender Nummer: kommt die Antwort einer älteren Abfrage
+  // nach der einer neueren, gilt sie nicht mehr (Codex 77f2f88c, P1).
+  let pollSeq = 0;
+  let appliedPoll = 0;
 
   async function tick() {
     const c = getCfg();
     const seqAtStart = phaseWriteSeq;
+    pollSeq += 1;
+    const myPoll = pollSeq;
     const url = c.url;
     if (!url) {
       lastError = 'no url configured';
@@ -143,6 +149,9 @@ export function createEvccIntegration(ctx) {
     let state;
     try {
       state = await fetchJson(new URL('/api/state', url).toString(), { timeoutMs: Number(c.requestTimeoutMs) || 5000 });
+      // Eine neuere Abfrage ist schon übernommen: diese Antwort ist veraltet.
+      if (myPoll < appliedPoll) return;
+      appliedPoll = myPoll;
       lastPolledAt = Date.now();
       lastError = null;
     } catch (e) {
@@ -158,7 +167,7 @@ export function createEvccIntegration(ctx) {
       const w = phaseWrites.get(lp.id);
       if (!w) continue;
       if (w.seq > seqAtStart) lp.phasesConfigured = w.phases; // Antwort älter als der Befehl
-      else phaseWrites.delete(lp.id);                          // Abfrage nach dem Befehl: sie gilt
+      else phaseWrites.delete(lp.id);                          // Abfrage nach dem Befehl: sie gilt (ältere verworfen)
     }
     lastLoadpoints = fresh;
     lastFatal = (Array.isArray(state?.fatal) ? state.fatal : [])

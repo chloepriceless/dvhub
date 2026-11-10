@@ -155,7 +155,11 @@ test('setPhases: eine ältere, später ankommende Abfrage überschreibt die Phas
     const r = await integ.setPhases(1, 0);   // DVhub: zurück auf automatisch
     assert.equal(r.ok, true);
     assert.equal(integ.getLoadpoints()[0].phasesConfigured, 0);
-    release();                               // die alte Antwort kommt jetzt
+    // Die Abfrage nach dem Befehl ist zuerst fertig (Codex 77f2f88c) …
+    await waitFor(() => requests.filter((x) => x === 'GET /api/state').length >= 3);
+    await integ.refresh();
+    assert.equal(integ.getLoadpoints()[0].phasesConfigured, 0);
+    release();                               // … erst dann kommt die alte Antwort
     await slow;
     assert.equal(integ.getLoadpoints()[0].phasesConfigured, 0, 'alte Antwort setzt die Phasen nicht zurück');
     // Eine Abfrage NACH dem Befehl gilt wieder ganz.
