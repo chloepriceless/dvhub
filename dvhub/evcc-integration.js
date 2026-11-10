@@ -123,9 +123,15 @@ export function createEvccIntegration(ctx) {
   // Fehler, die evcc selbst meldet (z.B. Wallbox nicht anlegbar) — ohne sie
   // sieht "0 Ladepunkte" aus wie "nicht erreichbar".
   let lastFatal = [];
+  // Phasenbefehle (setPhases) mit laufender Nummer: eine Abfrage, die vor dem
+  // Befehl losging, darf mit ihrer älteren Antwort die eingestellte
+  // Phasenzahl im Puffer nicht zurücksetzen (Codex 07c9be5a, P1).
+  let phaseWriteSeq = 0;
+  const phaseWrites = new Map(); // Ladepunkt-id → { phases, seq }
 
   async function tick() {
     const c = getCfg();
+    const seqAtStart = phaseWriteSeq;
     const url = c.url;
     if (!url) {
       lastError = 'no url configured';
@@ -147,7 +153,14 @@ export function createEvccIntegration(ctx) {
 
     // Dashboard read — kept regardless of the battery-protect `enabled` flag so
     // the Family EV panel can show/control the loadpoints whenever a URL is set.
-    lastLoadpoints = deriveLoadpoints(state);
+    const fresh = deriveLoadpoints(state);
+    for (const lp of fresh) {
+      const w = phaseWrites.get(lp.id);
+      if (!w) continue;
+      if (w.seq > seqAtStart) lp.phasesConfigured = w.phases; // Antwort älter als der Befehl
+      else phaseWrites.delete(lp.id);                          // Abfrage nach dem Befehl: sie gilt
+    }
+    lastLoadpoints = fresh;
     lastFatal = (Array.isArray(state?.fatal) ? state.fatal : [])
       .map((f) => ({ class: f?.class || null, device: f?.device || null, error: String(f?.error || '').slice(0, 300) }))
       .slice(0, 10);
@@ -232,6 +245,8 @@ export function createEvccIntegration(ctx) {
       // Eingestellte Phasen sofort im Puffer (wie setMode den Modus): die
       // EOS-Brücke vergleicht damit, bevor die nächste Abfrage kommt (Codex
       // 3d2078cb, P1). Die aktiven Phasen bleiben ein Messwert.
+      phaseWriteSeq += 1;
+      phaseWrites.set(id, { phases: p, seq: phaseWriteSeq });
       const lp = lastLoadpoints.find((x) => x.id === id);
       if (lp) lp.phasesConfigured = p;
       tick().catch(() => {});

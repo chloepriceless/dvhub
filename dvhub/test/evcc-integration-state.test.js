@@ -121,3 +121,50 @@ test('Lese-Modus: setPhases schickt nichts an evcc', async () => {
     assert.deepEqual(evcc2.requests.filter((x) => x.startsWith('POST')), ['POST /api/loadpoints/1/phases/1']);
   } finally { await evcc2.close(); }
 });
+
+// Codex 07c9be5a (P1): Eine Abfrage, die VOR einem Phasenbefehl losging, darf
+// mit ihrer älteren Antwort die eingestellte Phasenzahl im Puffer nicht
+// zurücksetzen — die EOS-Brücke vergleicht damit (sonst 12 A dreiphasig auf
+// „automatisch“ statt einphasig).
+test('setPhases: eine ältere, später ankommende Abfrage überschreibt die Phasen im Puffer nicht', async () => {
+  let release = null;
+  let delayNext = false;
+  let configured = 1;
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push(`${req.method} ${req.url}`);
+    if (req.method === 'POST' && req.url.startsWith('/api/loadpoints/1/phases/')) {
+      configured = Number(req.url.split('/').pop());
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end('{}');
+    }
+    // Antwort mit dem Stand beim EINGANG der Anfrage (vor dem Befehl).
+    const body = JSON.stringify({ loadpoints: [{ title: 'Garage', mode: 'off', chargerPhases1p3p: true, phasesConfigured: configured, phasesActive: 3 }] });
+    const send = () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(body); };
+    if (delayNext) { delayNext = false; release = send; } else send();
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const integ = createEvccIntegration({ getCfg: () => ({ evcc: { url } }), pushLog: () => {} });
+  try {
+    await integ.refresh();
+    assert.equal(integ.getLoadpoints()[0].phasesConfigured, 1);
+    delayNext = true;
+    const slow = integ.refresh();            // Abfrage unterwegs, Antwort: 1
+    await waitFor(() => release !== null);
+    const r = await integ.setPhases(1, 0);   // DVhub: zurück auf automatisch
+    assert.equal(r.ok, true);
+    assert.equal(integ.getLoadpoints()[0].phasesConfigured, 0);
+    release();                               // die alte Antwort kommt jetzt
+    await slow;
+    assert.equal(integ.getLoadpoints()[0].phasesConfigured, 0, 'alte Antwort setzt die Phasen nicht zurück');
+    // Eine Abfrage NACH dem Befehl gilt wieder ganz.
+    await integ.refresh();
+    assert.equal(integ.getLoadpoints()[0].phasesConfigured, 0);
+    configured = 3; // evcc-App
+    await integ.refresh();
+    assert.equal(integ.getLoadpoints()[0].phasesConfigured, 3);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
