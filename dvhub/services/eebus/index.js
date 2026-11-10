@@ -970,7 +970,9 @@ export function createEebusService(ctx, deps = {}) {
     if (ems != null) {
       writeDeviceLimit(entity, { w: ems, durationS: 0, active: true, owner: 'ems' });
     } else if (manual) {
-      const durationS = manual.expiresAt != null ? Math.max(60, Math.round((manual.expiresAt - t) / 1000)) : 0;
+      // Restdauer genau (aufgerundet), nicht wieder mindestens 60 s — sonst
+      // liefe die Grenze am Gerät über ihr Ende hinaus (Codex 4a31cadc).
+      const durationS = manual.expiresAt != null ? Math.max(1, Math.ceil((manual.expiresAt - t) / 1000)) : 0;
       writeDeviceLimit(entity, { w: manual.w, durationS, active: true, owner: 'manual', expiresAt: manual.expiresAt });
     } else {
       writeDeviceLimit(entity, { w: 0, durationS: 0, active: false });

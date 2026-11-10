@@ -255,3 +255,22 @@ func TestHeartbeatStateMitAlter(t *testing.T) {
 		t.Fatalf("Alter: %d", got)
 	}
 }
+
+// Codex 4a31cadc: Herzschlag nur über die Leseantwort (keine Benachrichtigung).
+func TestHeartbeatOKOhneBenachrichtigung(t *testing.T) {
+	now := time.Now()
+	if got := noteHeartbeatOK(time.Time{}, true, now); !got.Equal(now) {
+		t.Fatalf("erstes ok ohne Benachrichtigung: %v", got)
+	}
+	old := now.Add(-3 * time.Minute)
+	if got := noteHeartbeatOK(old, true, now); !got.Equal(now) {
+		t.Fatalf("ok, aber letzte Benachrichtigung älter als die Frist: %v", got)
+	}
+	recent := now.Add(-10 * time.Second)
+	if got := noteHeartbeatOK(recent, true, now); !got.Equal(recent) {
+		t.Fatalf("frische Benachrichtigung bleibt maßgeblich: %v", got)
+	}
+	if got := noteHeartbeatOK(time.Time{}, false, now); !got.IsZero() {
+		t.Fatalf("nicht ok: kein Zeitpunkt erfinden")
+	}
+}

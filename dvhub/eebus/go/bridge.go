@@ -671,15 +671,32 @@ func (b *Bridge) Tick() {
 	if b.csLPP.IsHeartbeatWithinDuration() {
 		lpp = 1
 	}
+	now := time.Now()
 	b.mu.Lock()
 	changed := lpc != b.lastHB[0] || lpp != b.lastHB[1]
 	b.lastHB = [2]int{lpc, lpp}
-	lpcAge, lppAge := heartbeatAgeS(b.hbLastAt["lpc"], time.Now()), heartbeatAgeS(b.hbLastAt["lpp"], time.Now())
+	b.hbLastAt["lpc"] = noteHeartbeatOK(b.hbLastAt["lpc"], lpc == 1, now)
+	b.hbLastAt["lpp"] = noteHeartbeatOK(b.hbLastAt["lpp"], lpp == 1, now)
+	lpcAge, lppAge := heartbeatAgeS(b.hbLastAt["lpc"], now), heartbeatAgeS(b.hbLastAt["lpp"], now)
 	b.mu.Unlock()
 	if changed {
 		b.out.Emit(heartbeatStateEvent(lpc == 1, lpp == 1, lpcAge, lppAge))
 	}
 }
+
+// noteHeartbeatOK: „ok“ ohne passende Benachrichtigung heißt, der Herzschlag
+// kam über die Leseantwort (RequestHeartbeat) — eebus-go meldet dafür kein
+// DataUpdateHeartbeat (Codex 4a31cadc). Dann gilt „jetzt“ als obere Schranke:
+// lieber etwas später in den Failsafe als zu früh.
+func noteHeartbeatOK(last time.Time, ok bool, now time.Time) time.Time {
+	if ok && (last.IsZero() || now.Sub(last) >= lpHeartbeatFrist) {
+		return now
+	}
+	return last
+}
+
+// lpHeartbeatFrist: Frist der Anwendungsfälle LPC/LPP ohne Herzschlag (IsHeartbeatWithinDuration).
+const lpHeartbeatFrist = 2 * time.Minute
 
 // heartbeatAgeS: Sekunden seit dem letzten empfangenen Herzschlag, -1 = noch keiner.
 func heartbeatAgeS(last, now time.Time) int64 {

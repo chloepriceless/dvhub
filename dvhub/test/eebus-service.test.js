@@ -1033,6 +1033,21 @@ test('Wiederanlauf: Wallbox-Stopp (EMS) und Grenze von Hand bleiben nach dem Wie
   assert.deepEqual(sent2, [[1500, true], [1500, true]], 'Grenze von Hand neu geschrieben');
 });
 
+// Codex 4a31cadc: befristete Grenze von Hand — nach dem Wiederanmelden nur die Restdauer.
+test('Wiederanlauf: befristete Grenze von Hand geht mit der Restdauer neu raus, nicht verlängert', async () => {
+  const s = setup({ eebus: { trusted: [{ ski: SKI_HP, name: 'Wärmepumpe', role: 'device' }] } });
+  const c = await heatPumpWithoutBox(s);
+  await s.svc.setDeviceLimit(SKI_HP, 1500, 120);
+  await settle();
+  s.advance(110_000);
+  c.emitEvent({ ev: 'disconnected', ski: SKI_HP });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  const sent = c.commands.filter((x) => x.cmd === 'device_limit').map((x) => [x.w, x.active, x.duration_s]);
+  assert.deepEqual(sent, [[1500, true, 120], [1500, true, 10]]);
+});
+
 // ── Fable R2 P2-5: Leistung eines EEBUS-Geräts nur aus der laufenden Verbindung und nicht zu alt ──
 test('Messwert des Geräts: nach Trennung unbekannt, nach 5 min ohne Meldung unbekannt', async () => {
   const { s, c } = await withHeatPump();
