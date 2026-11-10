@@ -31,7 +31,7 @@ describe('estimateArrivalSoc', () => {
       reading: { pct: 90, source: 'teslamate', atMs: NOW - 60_000 }, tripStartMs: TRIP_START, nowMs: NOW });
     assert.equal(r.pct, 55);
     assert.equal(r.source, 'plugged');
-    assert.equal(r.deductKm, 0);
+    assert.equal(r.deductPct, 0);
   });
 
   test('live vom Auto (unterwegs gemessen): minus einmal Heimweg → 70 − 6 = 64 %', () => {
@@ -40,7 +40,7 @@ describe('estimateArrivalSoc', () => {
     assert.equal(r.pct, 64);
     assert.equal(r.source, 'live');
     assert.equal(r.legs, 1);
-    assert.equal(r.deductKm, 20);
+    assert.equal(r.deductPct, 6, 'halbe Fahrt (2 × 6 %)');
     assert.equal(r.basePct, 70);
     assert.equal(r.baseSource, 'teslamate');
     assert.equal(r.baseAt, '2026-09-22T15:00:00.000Z');
@@ -52,7 +52,7 @@ describe('estimateArrivalSoc', () => {
     assert.equal(r.pct, 66);
     assert.equal(r.source, 'estimate');
     assert.equal(r.legs, 2);
-    assert.equal(r.deductKm, 40);
+    assert.equal(r.deductPct, 12, 'ganze Fahrt');
   });
 
   test('unterwegs gemessen, aber aelter als 12 h: geschaetzt, einmal Heimweg → 64 %', () => {
@@ -167,7 +167,8 @@ describe('resolveEvArrival (Config + Fahrzeug)', () => {
     const ctx = ctxWith({ tesla: 90, teslaAt: at('2026-09-25T02:30:00Z') });
     ctx.getCfg = () => cfg;
     const r = resolveEvArrival(ctx, cfg, { plugged: false, nowMs: at('2026-09-25T08:00:00Z') });
-    assert.equal(r.commuteKm, 50);
+    // Seit 1.0.10: Heimweg 50 km der Fr-Zeile = Fahrt 30 % der Abfahrt Fr 05:00 (Do-Zeile).
+    assert.equal(r.tripPct, 30);
     assert.equal(r.legs, 2);
     assert.equal(r.pct, 60);
   });

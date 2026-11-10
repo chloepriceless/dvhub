@@ -8,11 +8,10 @@
 (function () {
   'use strict';
 
-  const UNITS = { percent: '%', kwh: 'kWh', km: 'km' };
   const POLL_MS = 60000;
 
   let data = null;      // letzte Antwort von GET /api/ev
-  let draft = null;     // Bearbeitungsstand { enabled, weeklyPlan[], targetValue, commuteKm, arrivalOnce, once }
+  let draft = null;     // Bearbeitungsstand { enabled, weeklyPlan[], targetValue, maxSocPct, arrivalOnce, once, onceMinSocPct, onceTripSocPct }
   let weekOpen = false; // Wochenplan-Editor aufgeklappt
   let dirty = false;
   let timer = null;
@@ -66,13 +65,17 @@
     "  <div class=\"ev-weekly\" id=\"evWeekly\" hidden>",
     "    <div id=\"evWeeklyGrid\"></div>",
     "    <div class=\"ev-weekly-extra\">",
-    "      <label class=\"ev-field\"><span>Heimweg (km)</span><input type=\"number\" class=\"input mono\" id=\"evCommuteKm\" min=\"0\" max=\"1000\" step=\"1\" title=\"So weit f&auml;hrt das Auto noch, bevor es ansteckt &mdash; davon h&auml;ngt der erwartete Ladestand bei Ankunft ab.\"></label>",
+    "      <label class=\"ev-field\"><span>Max, wenn g&uuml;nstig (%)</span><input type=\"number\" class=\"input mono\" id=\"evMaxSoc\" min=\"10\" max=\"100\" step=\"5\" placeholder=\"aus\" title=\"Ist Laden g&uuml;nstig (billige Nacht, PV-&Uuml;berschuss), l&auml;dt EOS &uuml;ber das Mindestziel bis hierher &mdash; mit Blick auf die n&auml;chsten Fahrten. Erreicht: DVhub beendet das Laden. Leer = aus.\"></label>",
     "      <label class=\"ev-field\"><span>Nur n&auml;chste Ankunft</span><input type=\"datetime-local\" class=\"input mono\" id=\"evArrOnce\"></label>",
-    "      <label class=\"ev-field\"><span>Nur n&auml;chste Abfahrt</span><input type=\"datetime-local\" class=\"input mono\" id=\"evDepOnce\"></label>",
+    "    </div>",
+    "    <div class=\"ev-weekly-extra ev-once\" title=\"Einmal-Ziel, z. B. morgen l&auml;ngere Strecke: einmal 75 % bis 08:00. Der Wochenplan bleibt, wie er ist; nach der Abfahrt ist das Ziel vorbei.\">",
+    "      <label class=\"ev-field\"><span>Einmalig: Abfahrt</span><input type=\"datetime-local\" class=\"input mono\" id=\"evDepOnce\"></label>",
+    "      <label class=\"ev-field\"><span>mindestens (%)</span><input type=\"number\" class=\"input mono\" id=\"evOnceMin\" min=\"0\" max=\"100\" step=\"5\" placeholder=\"wie Plan\"></label>",
+    "      <label class=\"ev-field\"><span>Fahrt etwa (%)</span><input type=\"number\" class=\"input mono\" id=\"evOnceTrip\" min=\"0\" max=\"100\" step=\"1\" placeholder=\"wie Plan\"></label>",
     "    </div>",
     "  </div>",
-    "  <div class=\"rail-row ev-edit-row\">",
-    "    <span class=\"l\">Ziel bei Abfahrt</span>",
+    "  <div class=\"rail-row ev-edit-row\" title=\"Mindest-Ladestand bei jeder Abfahrt ohne eigenen Wert im Wochenplan.\">",
+    "    <span class=\"l\">Mindestens bei Abfahrt</span>",
     "    <span class=\"ev-inline\">",
     "      <input type=\"number\" class=\"input mono ev-target\" id=\"evTarget\" min=\"0\" max=\"100\" step=\"5\" aria-label=\"Ziel bei Abfahrt\">",
     "      <span class=\"ev-unit\" id=\"evTargetUnit\">%</span>",
@@ -140,10 +143,12 @@
     return {
       enabled: d.enabled === true,
       weeklyPlan: Array.isArray(d.weeklyPlan) ? d.weeklyPlan : [],
-      targetValue: d.targetValue,
-      commuteKm: d.commuteKm != null ? d.commuteKm : 0,
+      targetValue: d.defaultMinSocPct != null ? d.defaultMinSocPct : d.targetValue,
+      maxSocPct: d.maxSocPct != null ? d.maxSocPct : '',
       arrivalOnce: d.arrivalOnce || '',
-      once: d.once || ''
+      once: d.once || '',
+      onceMinSocPct: d.onceMinSocPct != null ? d.onceMinSocPct : '',
+      onceTripSocPct: d.onceTripSocPct != null ? d.onceTripSocPct : ''
     };
   }
 
@@ -390,14 +395,14 @@
     const parts = [];
     if (res.arrivalAt) parts.push('Ankunft ' + fmtRelDay(res.arrivalAt) + (res.arrivalSource === 'once' ? ' (einmalig)' : ''));
     parts.push('Abfahrt ' + fmtRelDay(res.departureAt) + (res.source === 'once' ? ' (einmalig)' : ''));
-    if (res.targetSocPct != null) parts.push('Ziel ' + res.targetSocPct + ' %');
+    if (res.targetSocPct != null) parts.push('mindestens ' + res.targetSocPct + ' %');
     let title = '';
     if (a.expectedSocPct != null) {
       const how = a.source === 'plugged' ? 'angesteckt' : (a.source === 'live' ? 'live vom Fahrzeug' : 'geschätzt');
       parts.push((a.source === 'plugged' ? 'jetzt ' : 'erwartet bei Ankunft ') + a.expectedSocPct + ' % (' + how + ')');
       if (a.source !== 'plugged' && a.basePct != null) {
         title = 'Basis: ' + fmtNum(a.basePct) + ' % von ' + sourceName(a.baseSource) + (a.baseAt ? ', ' + fmtDayTime(a.baseAt) : '')
-          + (a.deductKm > 0 ? ' − ' + (a.legs === 2 ? 'Hin- und Rückweg 2 × ' + fmtNum(a.commuteKm) : 'Heimweg ' + fmtNum(a.commuteKm)) + ' km' : '');
+          + (a.deductPct > 0 ? ' − ' + (a.legs === 2 ? 'Fahrt ' : 'Rückfahrt ') + fmtNum(a.deductPct, 1) + ' %' : '');
       }
     } else if (res.arrivalAt && data.vehicle && data.vehicle.plugged !== true) {
       parts.push('Ladestand bei Ankunft unbekannt');
@@ -417,21 +422,23 @@
   }
 
   function renderForm() {
-    const mode = (data.departure && data.departure.targetMode) || 'percent';
     el('evDepEnabled').checked = !!draft.enabled;
+    // Ziele seit 1.0.10 immer in % Ladestand (alte kWh/km-Ziele umgerechnet).
     el('evTarget').value = draft.targetValue != null ? draft.targetValue : '';
-    el('evTarget').max = mode === 'percent' ? 100 : 2000;
-    el('evTarget').step = mode === 'percent' ? 5 : 1;
-    el('evTargetUnit').textContent = UNITS[mode] || '%';
-    el('evCommuteKm').value = draft.commuteKm != null ? draft.commuteKm : '';
+    el('evTarget').max = 100;
+    el('evTarget').step = 5;
+    el('evTargetUnit').textContent = '%';
+    el('evMaxSoc').value = draft.maxSocPct;
     el('evArrOnce').value = toLocalInput(draft.arrivalOnce);
     el('evDepOnce').value = toLocalInput(draft.once);
+    el('evOnceMin').value = draft.onceMinSocPct;
+    el('evOnceTrip').value = draft.onceTripSocPct;
     el('evWeekly').hidden = !weekOpen;
     el('evWeekToggle').setAttribute('aria-expanded', String(weekOpen));
     el('evWeekToggle').textContent = weekOpen ? 'Zuklappen' : 'Bearbeiten';
     if (window.DVhubEvWeekly) {
       window.DVhubEvWeekly.render(el('evWeeklyGrid'), draft.weeklyPlan, {
-        unit: UNITS[mode] || '%', defaultTarget: draft.targetValue, showKm: false,
+        defaultMin: draft.targetValue,
         onChange: function () { setDirty(true); },
         // Vorschau beim Bearbeiten (POST /api/ev/preview): derselbe Body wie beim Speichern.
         previewBody: function () { return { departure: formDeparture() }; }
@@ -451,7 +458,9 @@
       eos: {
         optimizeEv: !!data.optimizeEv, registered: v.registered, reason: v.registrationReason,
         preplanBlocked: v.preplanBlocked, mode: v.registrationMode, chargeStartAt: v.chargeStartAt,
-        deadlineSupported: d.deadlineSupported === true, chargeStartSupported: d.chargeStartSupported === true
+        deadlineSupported: d.deadlineSupported === true, chargeStartSupported: d.chargeStartSupported === true,
+        // Was an EOS ging: Mindestziel (vorausschauend), Max, Wertstufen.
+        targets: data.targets || d.targets || null, valueSupported: d.valueSupported === true, maxSocPct: d.maxSocPct
       }
     };
   }
@@ -460,10 +469,16 @@
   function formDeparture() {
     const plan = window.DVhubEvWeekly ? window.DVhubEvWeekly.read(el('evWeeklyGrid')) : draft.weeklyPlan;
     return {
-      enabled: draft.enabled, weeklyPlan: plan, targetValue: Number(el('evTarget').value),
-      commuteKm: el('evCommuteKm').value === '' ? 0 : Number(el('evCommuteKm').value),
-      arrivalOnce: fromLocalInput(el('evArrOnce').value), once: fromLocalInput(el('evDepOnce').value)
+      enabled: draft.enabled, weeklyPlan: plan, targetMode: 'percent', targetValue: Number(el('evTarget').value),
+      maxSocPct: pctField('evMaxSoc'),
+      arrivalOnce: fromLocalInput(el('evArrOnce').value), once: fromLocalInput(el('evDepOnce').value),
+      onceMinSocPct: pctField('evOnceMin'), onceTripSocPct: pctField('evOnceTrip')
     };
+  }
+  // Prozentfeld: leer = '' (aus bzw. „wie Plan“), sonst Zahl.
+  function pctField(id) {
+    const raw = String(el(id).value || '').trim();
+    return raw === '' ? '' : Number(raw.replace(',', '.'));
   }
   function previewSoon() {
     if (window.DVhubEvWeekly) window.DVhubEvWeekly.refreshPreview(el('evWeeklyGrid'));
@@ -581,10 +596,12 @@
     tile.classList.toggle('is-off', !data.optimizeEv);
     el('evSocNow').textContent = v.socPct != null ? v.socPct + ' %' : '—';
     const res = data.departure && data.departure.resolved;
-    const mode = (data.departure && data.departure.targetMode) || 'percent';
-    let tgt = res && res.targetSocPct != null ? res.targetSocPct + ' %' : '—';
-    if (mode !== 'percent' && data.departure.targetValue != null) tgt += ' (' + fmtNum(data.departure.targetValue) + ' ' + UNITS[mode] + ')';
+    const t = data.targets;
+    // Was an EOS geht: mindestens (vorausschauend) und — wenn es wirkt — bis Max, wenn günstig.
+    let tgt = t && t.source === 'plan' && t.minSocPct != null ? t.minSocPct + ' %' : (res && res.targetSocPct != null ? res.targetSocPct + ' %' : '—');
+    if (t && t.maxActive && t.maxSocPct != null) tgt += ' · bis ' + t.maxSocPct + ' %';
     el('evSocTarget').textContent = tgt;
+    el('evSocTarget').title = t && t.maxActive ? 'mindestens ' + t.minSocPct + ' % bei Abfahrt, bis ' + t.maxSocPct + ' %, wenn Laden günstig ist' : '';
     el('evSocNow').title = v.socSource ? 'Quelle: ' + v.socSource + (v.rangeKm > 0 ? ' · ' + v.rangeKm + ' km' : '') : '';
     renderState();
     renderWindow();
@@ -648,14 +665,16 @@
   }
 
   async function save() {
-    const mode = (data.departure && data.departure.targetMode) || 'percent';
     const tv = Number(el('evTarget').value);
-    if (!isFinite(tv) || tv < 0 || (mode === 'percent' && tv > 100)) { msg('Ziel: ' + (mode === 'percent' ? '0–100 %' : 'Zahl ≥ 0'), true); return; }
+    if (!isFinite(tv) || tv < 0 || tv > 100) { msg('Mindestens bei Abfahrt: 0–100 %', true); return; }
     const dep = formDeparture();
     const err = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(dep.weeklyPlan, { enabled: draft.enabled, hasOnce: !!el('evDepOnce').value }) : null;
     if (err) { msg(err, true); return; }
-    const km = dep.commuteKm;
-    if (!isFinite(km) || km < 0 || km > 1000) { msg('Heimweg: 0–1000 km', true); return; }
+    if (dep.maxSocPct !== '' && !(dep.maxSocPct >= 10 && dep.maxSocPct <= 100)) { msg('Max, wenn günstig: 10–100 % oder leer', true); return; }
+    for (const k of ['onceMinSocPct', 'onceTripSocPct']) {
+      if (dep[k] !== '' && !(dep[k] >= 0 && dep[k] <= 100)) { msg('Einmal-Ziel: 0–100 % oder leer', true); return; }
+    }
+    if (dep.onceMinSocPct !== '' && !dep.once) { msg('Einmal-Ziel: bitte die Abfahrt dazu eintragen', true); return; }
     dep.targetValue = tv;
     const ok = await post({ departure: dep }, 'Übernommen — EOS rechnet mit dem neuen Wochenplan.');
     if (ok) { setDirty(false); load(); }
@@ -669,11 +688,11 @@
     if (e.target.id === 'evOnlyPlugged') { toggleOnlyPlugged(e.target.checked); return; }
     if (e.target.id === 'evDepEnabled') { draft.enabled = e.target.checked; setDirty(true); previewSoon(); return; }
     if (e.target.id === 'evTarget') { draft.targetValue = e.target.value; setDirty(true); previewSoon(); return; }
-    if (e.target.id === 'evCommuteKm' || e.target.id === 'evArrOnce' || e.target.id === 'evDepOnce') { setDirty(true); previewSoon(); }
+    if (['evMaxSoc', 'evArrOnce', 'evDepOnce', 'evOnceMin', 'evOnceTrip'].indexOf(e.target.id) >= 0) { setDirty(true); previewSoon(); }
   });
   document.addEventListener('input', function (e) {
     if (!data) return;
-    if (e.target.id === 'evTarget' || e.target.id === 'evCommuteKm') { setDirty(true); previewSoon(); }
+    if (['evTarget', 'evMaxSoc', 'evOnceMin', 'evOnceTrip'].indexOf(e.target.id) >= 0) { setDirty(true); previewSoon(); }
     if (e.target.id === 'evBoostKw') boostTouched = true;
   });
   document.addEventListener('click', function (e) {

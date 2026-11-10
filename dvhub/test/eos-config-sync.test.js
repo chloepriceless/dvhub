@@ -245,7 +245,9 @@ test('buildEosElectricVehicles returns one ev11 with config overrides', () => {
   assert.equal(def[0].device_id, 'ev11');
   assert.equal(def[0].capacity_wh, 50000);
   assert.equal(def[0].min_soc_percentage, 70);
-  assert.equal(def[0].charge_rates.length, 11);
+  // Seit 1.0.10 nur Stufen, die die Wallbox fahren kann: 5 kW dreiphasig, 6 A
+  // Mindeststrom = 4,14 kW → erst ab 0,9 (eos-evcc-bridge.js evChargeRates).
+  assert.deepEqual(def[0].charge_rates, [0, 0.9, 1]);
 
   const over = buildEosElectricVehicles({ optimizer: { evCapacityWh: 75000, evMaxChargeW: 11000, evMinSocPct: 50 } });
   assert.equal(over[0].capacity_wh, 75000);

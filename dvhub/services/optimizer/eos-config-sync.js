@@ -23,7 +23,9 @@ import { planningCfg, planningMinSocPct } from '../multi-gx/planning.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
 import http from 'node:http';
 
-import { createEosCapabilityProbe, EOS_EV_CHARGE_START_FIELD, EOS_GRID_IMPORT_LIMIT_FIELD } from './eos-capabilities.js';
+import { createEosCapabilityProbe, EOS_EV_CHARGE_START_FIELD, EOS_EV_SOC_VALUE_FIELD, EOS_GRID_IMPORT_LIMIT_FIELD } from './eos-capabilities.js';
+import { resolveEvTargets } from './ev-targets.js';
+import { evChargeRates, onePhaseChargingAvailable, resolveEvccBridgeConfig } from './eos-evcc-bridge.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
 import { requestHostname } from '../host-address.js';
 import { resolveEosProxy } from './eos-adapter.js';
@@ -164,11 +166,13 @@ export function buildEosBatteries(cfg, opts = {}) {
  * @param {object} cfg
  * @returns {Array<object>}
  */
-export function buildEosElectricVehicles(cfg, { supportsDeadline = false, supportsChargeStart = false, chargeStartAt = null, nowMs = Date.now() } = {}) {
+export function buildEosElectricVehicles(cfg, { supportsDeadline = false, supportsChargeStart = false, supportsSocValue = false, chargeStartAt = null, targets = null, onePhaseCharging = false, nowMs = Date.now() } = {}) {
   const opt = cfg?.optimizer || {};
   // Abfahrt + Ziel (ev-departure.js). Ist sie an, ersetzt ihr Ziel den
   // allgemeinen Ziel-SoC. Die Uhrzeit (min_soc_deadline_datetime, EOS 0.4)
   // geht nur mit supportsDeadline mit — der Abgleich setzt es immer.
+  // targets (ev-targets.js, seit 1.0.10): vorausschauendes Mindestziel,
+  // Max-Ladestand und Wertstufen; ohne targets wie bis 1.0.9.
   const departure = resolveEvDeparture(cfg, nowMs);
   const fallbackMinSoc = Number.isFinite(Number(opt.evMinSocPct)) ? Number(opt.evMinSocPct) : 70;
   const ev = {
@@ -178,9 +182,15 @@ export function buildEosElectricVehicles(cfg, { supportsDeadline = false, suppor
     discharging_efficiency: 0.88,
     max_charge_power_w: Number(opt.evMaxChargeW) || 5000,
     min_charge_power_w: 50,
-    charge_rates: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-    min_soc_percentage: departure.enabled && departure.targetSocPct !== null ? departure.targetSocPct : fallbackMinSoc,
-    max_soc_percentage: 100,
+    // Nur Stufen, die die Wallbox fahren kann (dreiphasig ab Mindeststrom,
+    // mit Phasenumschaltung auch einphasig) — eos-evcc-bridge.js evChargeRates.
+    charge_rates: (() => {
+      const bc = resolveEvccBridgeConfig(cfg);
+      return evChargeRates({ maxChargeW: bc.maxChargeW, minCurrentA: bc.minCurrentA, maxCurrentA: bc.maxCurrentA, phases: bc.phases, onePhase: onePhaseCharging === true });
+    })(),
+    min_soc_percentage: targets ? targets.minSocPct
+      : (departure.enabled && departure.targetSocPct !== null ? departure.targetSocPct : fallbackMinSoc),
+    max_soc_percentage: targets && Number.isFinite(Number(targets.maxSocPct)) ? Number(targets.maxSocPct) : 100,
   };
   // Immer mitsenden, wo EOS das Feld kennt — auch null: sonst bliebe eine
   // abgeschaltete oder vergangene Abfahrt in EOS stehen.
@@ -188,6 +198,9 @@ export function buildEosElectricVehicles(cfg, { supportsDeadline = false, suppor
   // Fruehester Ladestart (Vorplanung, ev-registration.js): nur wo EOS das Feld
   // kennt — dort immer, auch null, damit kein alter Ladestart stehen bleibt.
   if (supportsChargeStart) ev[EOS_EV_CHARGE_START_FIELD] = chargeStartAt || null;
+  // Wert der Energie über dem Mindestziel: nur wo EOS das Feld kennt — dort
+  // immer, ohne Stufen als null (keine alte Wertung bleibt stehen).
+  if (supportsSocValue) ev[EOS_EV_SOC_VALUE_FIELD] = Array.isArray(targets?.steps) && targets.steps.length ? targets.steps : null;
   return [ev];
 }
 
@@ -520,6 +533,7 @@ export function createEosConfigSync(ctx) {
         solutionNotify: caps.solutionNotify === true,
         startOnBoundary: caps.startOnBoundary === true,
         evChargeStart: caps.evChargeStart === true,
+        evSocValue: caps.evSocValue === true,
       };
     }
     if (!caps.reachable) return;
@@ -559,10 +573,29 @@ export function createEosConfigSync(ctx) {
     }
     return decision;
   }
+  // Ziele fürs Auto (ev-targets.js) — auch im Status (/api/ev, /api/optimizer/status).
+  function evTargets(cfg, caps, decision) {
+    let targets;
+    try {
+      targets = resolveEvTargets(ctx, cfg, { decision, valueSupported: caps?.evSocValue === true });
+    } catch (e) {
+      // Rechenfehler: lieber das bisherige Verhalten als gar kein Auto.
+      if (pushLog) pushLog('eos_ev_targets_error', { error: e?.message || String(e) });
+      targets = null;
+    }
+    if (state) {
+      state.optimizer = state.optimizer || {};
+      state.optimizer.evTargets = targets ? { ...targets, at: new Date().toISOString() } : null;
+    }
+    return targets;
+  }
   const evDevices = (cfg, caps, decision) => buildEosElectricVehicles(cfg, {
     supportsDeadline: true,
     supportsChargeStart: caps?.evChargeStart === true,
+    supportsSocValue: caps?.evSocValue === true,
     chargeStartAt: decision.chargeStartAt,
+    targets: evTargets(cfg, caps, decision),
+    onePhaseCharging: (() => { try { return onePhaseChargingAvailable(cfg, ctx.evccIntegration?.getLoadpoints?.() || []); } catch { return false; } })(),
   });
 
   async function sync() {
@@ -984,6 +1017,8 @@ export function createEosConfigSync(ctx) {
       pushLog('eos_ev_sync', {
         ok: res.ok, error: res.error,
         minSocPct: list[0].min_soc_percentage,
+        maxSocPct: list[0].max_soc_percentage,
+        valueSteps: list[0][EOS_EV_SOC_VALUE_FIELD] ?? null,
         deadline: list[0].min_soc_deadline_datetime ?? null,
         deadlineSupported: true,
         chargeStart: list[0][EOS_EV_CHARGE_START_FIELD] ?? null,

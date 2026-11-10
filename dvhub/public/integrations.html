@@ -26,7 +26,7 @@
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
   <link rel="stylesheet" href="/integrations.css?v=20261029-integration" />
-  <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261027" />
+  <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261110-minmax" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -995,7 +995,7 @@
               <span>Wochenplan ber&uuml;cksichtigen</span>
             </label>
             <div class="dv-field">
-              <span class="field-label">Ankunft, Abfahrt und Ziel je Wochentag</span>
+              <span class="field-label">Ankunft, Abfahrt, Mindest-Ladestand und Fahrt je Wochentag</span>
               <div id="evcc-dep-weekly"></div>
             </div>
             <div class="evcc-eos-grid">
@@ -1004,35 +1004,33 @@
                 <input type="number" class="input mono" id="evcc-dep-capacity" min="1" max="250" step="0.5">
               </label>
               <label class="dv-field">
-                <span class="field-label">Heimweg (km)</span>
-                <input type="number" class="input mono" id="evcc-dep-commute" min="0" max="1000" step="1">
-                <span class="field-hint">So weit f&auml;hrt das Auto noch, bevor es ansteckt. Daraus und aus dem Verbrauch sch&auml;tzt DVhub den Ladestand bei Ankunft; je Tag oben &uuml;berschreibbar.</span>
+                <span class="field-label">Mindestens bei Abfahrt (%)</span>
+                <input type="number" class="input mono" id="evcc-dep-value" min="0" max="100" step="5">
+                <span class="field-hint">Gilt f&uuml;r jeden Tag ohne eigenen Wert in &bdquo;Mind. %&ldquo;. So voll ist das Auto bei der Abfahrt immer.</span>
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Max-Ladestand, wenn g&uuml;nstig (%)</span>
+                <input type="number" class="input mono" id="evcc-dep-max" min="10" max="100" step="5" placeholder="aus">
+                <span class="field-hint">Ist Laden g&uuml;nstig (billige Nacht, PV-&Uuml;berschuss), l&auml;dt EOS &uuml;ber das Mindestziel bis hierher &mdash; mit Blick auf die Fahrten der n&auml;chsten Tage. Ist er erreicht, beendet DVhub das Laden an der Wallbox. Leer = aus. Wirkt mit einem EOS, das Wertstufen kennt.</span>
               </label>
             </div>
             <div class="evcc-eos-grid">
-              <label class="dv-field">
-                <span class="field-label">Ziel bei Abfahrt</span>
-                <select class="input" id="evcc-dep-mode">
-                  <option value="percent">Ladestand (%)</option>
-                  <option value="kwh">Energie (kWh)</option>
-                  <option value="km">Reichweite (km)</option>
-                </select>
-              </label>
-              <label class="dv-field">
-                <span class="field-label" id="evcc-dep-value-label">Wert</span>
-                <input type="number" class="input mono" id="evcc-dep-value" min="0" step="1">
-              </label>
-              <label class="dv-field">
-                <span class="field-label">Verbrauch (kWh/100 km)</span>
-                <input type="number" class="input mono" id="evcc-dep-consumption" min="5" max="60" step="0.5">
-              </label>
               <label class="dv-field">
                 <span class="field-label">Nur n&auml;chste Ankunft (optional)</span>
                 <input type="datetime-local" class="input mono" id="evcc-dep-arr-once">
               </label>
               <label class="dv-field">
-                <span class="field-label">Nur n&auml;chste Abfahrt (optional)</span>
+                <span class="field-label">Einmalig: Abfahrt (optional)</span>
                 <input type="datetime-local" class="input mono" id="evcc-dep-once">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Einmalig: mindestens (%)</span>
+                <input type="number" class="input mono" id="evcc-dep-once-min" min="0" max="100" step="5">
+              </label>
+              <label class="dv-field">
+                <span class="field-label">Einmalig: Fahrt etwa (%)</span>
+                <input type="number" class="input mono" id="evcc-dep-once-trip" min="0" max="100" step="1">
+                <span class="field-hint">&bdquo;Morgen l&auml;ngere Strecke&ldquo;: einmal z.&nbsp;B. 75&nbsp;% bis 08:00 &mdash; der Wochenplan bleibt, wie er ist. Leer: Ziel und Fahrt des ersetzten Tages.</span>
               </label>
             </div>
             <div class="evcc-eos-state" id="evcc-dep-state">&mdash;</div>
@@ -1846,7 +1844,7 @@
   <script src="/pv-strings-drawer.js?v=20261102-vrm-site"></script>
   <script src="/eebus-drawer.js?v=20261020-victron"></script>
   <script src="/p14a-drawer.js?v=20261110-p14a-akkuhilfe"></script>
-  <script src="/ev-weekly-editor.js?v=20261027"></script>
-  <script src="/integrations.js?v=20261102-vrm-site"></script>
+  <script src="/ev-weekly-editor.js?v=20261110-minmax"></script>
+  <script src="/integrations.js?v=20261110-ev-minmax"></script>
 </body>
 </html>

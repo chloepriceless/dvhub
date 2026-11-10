@@ -201,21 +201,21 @@ describe('Editor im Browser: Zusammenfassung', () => {
 
   it('naechste Abfahrt mit Quelle, Ankunft davor und was an EOS geht', () => {
     const lines = W.summaryLines({ resolved, eos, capacityWh: 75000 });
-    assert.equal(lines[0].text, 'Nächste Abfahrt: Do 29.10. 23:59 · Ziel 80 % ≈ 60 kWh · aus Wochenplan Donnerstag');
+    assert.equal(lines[0].text, 'Nächste Abfahrt: Do 29.10. 23:59 · mindestens 80 % ≈ 60 kWh · aus Wochenplan Donnerstag');
     assert.equal(lines[1].text, 'Ankunft davor: Do 29.10. 13:49 (Wochenplan)');
-    assert.equal(lines[2].text, 'An EOS: Ziel 80 % bis Do 29.10. 23:59 · Ladestart Do 29.10. 13:49');
+    assert.equal(lines[2].text, 'An EOS: mindestens 80 % bis Do 29.10. 23:59 · Ladestart Do 29.10. 13:49');
   });
 
   it('Abfahrt am Folgetag nennt die Zeile, aus der sie kommt', () => {
     const lines = W.summaryLines({ resolved: { ...resolved, departureAt: '2026-10-29T01:00:00.000Z', day: 3, arrivalAt: '2026-10-28T19:00:00.000Z', targetSocPct: 30 }, eos: null });
-    assert.equal(lines[0].text, 'Nächste Abfahrt: Do 29.10. 02:00 · Ziel 30 % · aus Wochenplan Mittwoch (Abfahrt am Folgetag)');
+    assert.equal(lines[0].text, 'Nächste Abfahrt: Do 29.10. 02:00 · mindestens 30 % · aus Wochenplan Mittwoch (Abfahrt am Folgetag)');
   });
 
   it('einmalige Abfahrt', () => {
     const lines = W.summaryLines({ resolved: { ...resolved, source: 'once', day: 4 }, eos: null });
-    assert.equal(lines[0].text, 'Nächste Abfahrt: Do 29.10. 23:59 · Ziel 80 % · einmalig (statt Wochenplan Donnerstag)');
+    assert.equal(lines[0].text, 'Nächste Abfahrt: Do 29.10. 23:59 · mindestens 80 % · einmalig (statt Wochenplan Donnerstag)');
     const alone = W.summaryLines({ resolved: { ...resolved, source: 'once', day: null, arrivalAt: null }, eos: null });
-    assert.equal(alone[0].text, 'Nächste Abfahrt: Do 29.10. 23:59 · Ziel 80 % · einmalig');
+    assert.equal(alone[0].text, 'Nächste Abfahrt: Do 29.10. 23:59 · mindestens 80 % · einmalig');
   });
 
   it('Vorschau: markiert und sagt, dass an EOS noch der gespeicherte Plan geht', () => {
@@ -226,10 +226,10 @@ describe('Editor im Browser: Zusammenfassung', () => {
 
   it('EOS-Zeile: nicht angemeldet, ohne Uhrzeit, aus', () => {
     assert.equal(W.summaryLines({ resolved, eos: { ...eos, registered: false, reason: 'nicht angesteckt', preplanBlocked: null } }).at(-1).text, 'An EOS: Auto gerade nicht angemeldet (nicht angesteckt)');
-    assert.equal(W.summaryLines({ resolved, eos: { ...eos, mode: 'plugged', chargeStartAt: null, deadlineSupported: false } }).at(-1).text, 'An EOS: Ziel 80 % ohne Uhrzeit (kein EOS 0.4 erkannt)');
+    assert.equal(W.summaryLines({ resolved, eos: { ...eos, mode: 'plugged', chargeStartAt: null, deadlineSupported: false } }).at(-1).text, 'An EOS: mindestens 80 % ohne Uhrzeit (kein EOS 0.4 erkannt)');
     assert.equal(W.summaryLines({ resolved, eos: { ...eos, optimizeEv: false } }).at(-1).text, 'An EOS: nichts — EOS plant das Auto nicht mit');
     assert.equal(W.summaryLines({ resolved, eos: { ...eos, registered: null } }).at(-1).text, 'An EOS: noch nichts — DVhub hat das Auto noch nicht mit EOS abgeglichen');
-    assert.equal(W.summaryLines({ resolved, eos: { ...eos, mode: 'plugged', chargeStartAt: null } }).at(-1).text, 'An EOS: Ziel 80 % bis Do 29.10. 23:59 · Ladestart sofort (angesteckt)');
+    assert.equal(W.summaryLines({ resolved, eos: { ...eos, mode: 'plugged', chargeStartAt: null } }).at(-1).text, 'An EOS: mindestens 80 % bis Do 29.10. 23:59 · Ladestart sofort (angesteckt)');
   });
 
   it('Wochenplan aus / keine Abfahrt', () => {
@@ -257,7 +257,7 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     await new Promise((r) => setTimeout(r, 500));
     assert.equal(host._evwShown.preview, true);
     assert.equal(host._evwShown.capacityWh, 60000);
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50 % ≈ 30 kWh/);
   });
 
   it('gespeicherter EOS-Stand laesst sich waehrend der Vorschau auffrischen, Entwurf bleibt', async () => {
@@ -270,7 +270,7 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     await new Promise((r) => setTimeout(r, 500));
     Wx.updateSaved(host, { ...saved, eos: { ...saved.eos, optimizeEv: false } });
     const lines = Wx.summaryLines(host._evwShown);
-    assert.match(lines[0].text, /^Vorschau .*Ziel 30 %/);
+    assert.match(lines[0].text, /^Vorschau .*mindestens 30 %/);
     assert.equal(lines.at(-1).text, 'An EOS (gespeicherter Plan): nichts — EOS plant das Auto nicht mit');
     // Baseline bleibt: zurueck auf den gespeicherten Formularstand → keine Vorschau
     body.current = { departure: { targetValue: 80 } };
@@ -296,13 +296,13 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     body.current = { departure: { targetValue: 30 } };
     Wx.refreshPreview(host);
     await new Promise((r) => setTimeout(r, 500));
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 40 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 40 % ≈ 30 kWh/);
     Wx.updateSaved(host, { ...saved, capacityWh: 60000 });
     // bis die neue Vorschau da ist: altes % mit alter Kapazitaet, nie gemischt
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 40 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 40 % ≈ 30 kWh/);
     await new Promise((r) => setTimeout(r, 500));
     assert.equal(calls, 2);
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50 % ≈ 30 kWh/);
   });
 
   it('Runde 3: Kapazitaet aendert sich, waehrend die Vorschau unterwegs ist → kWh passt zum %', async () => {
@@ -324,7 +324,7 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     Wx.updateSaved(host, { ...saved, capacityWh: 60000 });
     release();
     await new Promise((r) => setTimeout(r, 50));
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50 % ≈ 30 kWh/);
     assert.equal(calls, 1, 'Antwort passt zur gespeicherten Kapazitaet — kein erneuter Abruf');
   });
 
@@ -344,7 +344,7 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     Wx.refreshPreview(host);
     await new Promise((r) => setTimeout(r, 1300));
     assert.equal(calls, 1);
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50 % ≈ 30 kWh/);
   });
 
   it('Runde 5: Antwort mit alter Kapazitaet, waehrend der Takt die neue brachte → einmal neu holen', async () => {
@@ -366,6 +366,6 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     release();
     await new Promise((r) => setTimeout(r, 600));
     assert.equal(calls, 2);
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /Ziel 50 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50 % ≈ 30 kWh/);
   });
 });

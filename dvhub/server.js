@@ -197,7 +197,8 @@ import { createWallboxAdapterCache } from './services/wallbox/adapter-cache.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { createEvWatch } from './services/optimizer/ev-watch.js';
 import { createVehiclePull } from './services/vehicle-pull/index.js';
-import { resolveEvPlugged, createEvSocMemory } from './services/optimizer/ev-soc.js';
+import { resolveEvPlugged, createEvSocMemory, resolveEvSocPct } from './services/optimizer/ev-soc.js';
+import { evMaxStopSocPct } from './services/optimizer/ev-targets.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { setpointFollowHeartbeat } from './services/setpoint-follow-watchdog.js';
 import { energyBalanceBattery } from './services/energy-balance-battery.js';
@@ -1825,6 +1826,13 @@ const eosEvccBridge = createEosEvccBridge({
   // Netzanschluss-Wächter: Deckel je Wallbox-Gerät (auch weitere evcc-Ladepunkte).
   getDeviceCapW: (id) => ctx.gridConnection?.capW?.(id) ?? null,
   getEvccLoadpoints: () => evccIntegration.getLoadpoints(),
+  // Max-Ladestand „wenn günstig“: nur wenn er gilt (EOS kennt die Wertstufen,
+  // Max an); Ladestand aus derselben Quelle wie für EOS (ev-soc.js).
+  getEvMaxStop: () => {
+    const maxSocPct = evMaxStopSocPct(state);
+    if (maxSocPct === null) return null;
+    return { maxSocPct, socPct: resolveEvSocPct(ctx)?.pct ?? null };
+  },
   pushLog: (event, data) => ctx.pushLog?.(event, data),
   // „Sofort laden“ ueberlebt einen Neustart (Update mitten im Laden) — eigene
   // kleine Datei, Laufzeitzustand gehoert nicht in config.json.

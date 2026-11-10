@@ -207,7 +207,8 @@ export function applyEvConfigPatch(ctx, opts) {
   if ('optimizeEv' in body) patch.eosOptimizeEv = body.optimizeEv === true;
   if ('onlyWhenPlugged' in body) patch.evPlanOnlyWhenPlugged = body.onlyWhenPlugged === true;
   if (body.departure != null) {
-    const dep = parseEvDeparturePatch(body.departure);
+    // Alte Zeilen (Ziel/Heimweg) mit den gespeicherten Werten in SoC-% umrechnen.
+    const dep = parseEvDeparturePatch(body.departure, 'departure', { opt: ctx.getRawCfg?.()?.optimizer || {} });
     if (!dep.ok) return { ok: false, status: 400, error: dep.error };
     Object.assign(patch, dep.patch);
   }

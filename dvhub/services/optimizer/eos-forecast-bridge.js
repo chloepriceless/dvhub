@@ -53,6 +53,7 @@ import { eosRemoteActive, REMOTE_EOS_PREDICTION_HOURS } from './eos-remote.js';
 // Fristen für den Steuerzeitraum „automatisch“ (05.11.2026): Abfahrt des
 // Autos, Fensterende planbarer Geräte — wie eos-config-sync sie EOS schickt.
 import { resolveEvDeparture } from './ev-departure.js';
+import { buildEvValueInputs, configuredMaxSocPct, EV_VALUE_INPUTS_DAYS } from './ev-targets.js';
 import { buildEosHomeAppliances } from './eos-devices.js';
 
 /**
@@ -969,7 +970,8 @@ export function createEosForecastBridge(ctx) {
     const evSoc = evSocForEos(ctx);
     const evLegacyPct = Number(state?.victron?.evSocPct);
     const evPct = evSoc ? evSoc.pct : evLegacyPct;
-    const evFactor = Number.isFinite(evPct) ? Math.max(0, Math.min(1, evPct / 100)) : null;
+    // Abgerundet auf ganze Prozent wie im Lauf-Aufruf (socForRun).
+    const evFactor = Number.isFinite(evPct) ? Math.max(0, Math.min(1, Math.floor(evPct + 1e-9) / 100)) : null;
 
     const keysRes = await eosHttpRequest(baseUrl, 'GET', '/v1/measurement/keys');
     if (!keysRes.ok || !Array.isArray(keysRes.data)) {
@@ -1072,11 +1074,15 @@ export function createEosForecastBridge(ctx) {
       return { error: `could not read measurement keys: ${keysRes.error || 'unexpected shape'}` };
     }
     const whole = (pct) => Math.max(0, Math.min(100, Math.round(pct)));
+    // Auto: abrunden, nie aufrunden — sonst plant EOS mit einem halben Prozent
+    // mehr, als drin ist, und verfehlt ein Mindestziel knapp (Simulation
+    // ev-minmax: 21 von 269 Abfahrten 0,1–0,5 Punkte darunter).
+    const wholeDown = (pct) => Math.max(0, Math.min(100, Math.floor(pct + 1e-9)));
     const soc = {};
     for (const key of keysRes.data.map(String).filter((k) => SOC_KEY_RE.test(k))) {
       const deviceId = key.slice(0, -'-soc-factor'.length);
       if (EV_SOC_KEY_RE.test(key)) {
-        if (Number.isFinite(evPct)) soc[deviceId] = whole(evPct);
+        if (Number.isFinite(evPct)) soc[deviceId] = wholeDown(evPct);
       } else {
         soc[deviceId] = whole(socPct);
       }
@@ -1426,16 +1432,21 @@ export function createEosForecastBridge(ctx) {
     // is preserved, and the overnight-reserve threshold (Bezug × 1.2) follows it
     // automatically. Falls back to raw spot if no price resolves (never starve
     // EOS of an elecprice series). 2026-06-29, operator request.
+    // Bezugspreis je Slot in ct/kWh (auch für die E-Auto-Wertbestimmung unten).
+    const importCtOf = (s) => {
+      let ct = resolveUserImportPriceCtKwhForSlot(
+        { ts: s.start, ct_kwh: s.ctKwh },
+        pricing,
+        { timeZone: tz },
+      );
+      if (!Number.isFinite(ct)) ct = Number(s.ctKwh); // fallback: raw spot
+      return Number.isFinite(ct) ? ct : null;
+    };
     const elecpriceSlots = priceSlotsCt
       .filter((s) => s && s.start)
       .map((s) => {
-        let ct = resolveUserImportPriceCtKwhForSlot(
-          { ts: s.start, ct_kwh: s.ctKwh },
-          pricing,
-          { timeZone: tz },
-        );
-        if (!Number.isFinite(ct)) ct = Number(s.ctKwh); // fallback: raw spot
-        if (!Number.isFinite(ct)) return null;
+        const ct = importCtOf(s);
+        if (ct === null) return null;
         return s.estimated ? { start: s.start, powerW: ct / 100 / 1000, estimated: true } : { start: s.start, powerW: ct / 100 / 1000 };
       })
       .filter(Boolean);
@@ -1467,6 +1478,13 @@ export function createEosForecastBridge(ctx) {
             return s.estimated ? { start: s.start, powerW, estimated: true } : { start: s.start, powerW };
           })
       : fixedFeedInSlots(priceSlotsCt, tariff);
+    // Einspeisewert je Slot in ct/kWh — dieselbe Regel wie oben (E-Auto-Wertbestimmung).
+    const feedInCtOf = (s) => {
+      const spotCt = Number(s?.ctKwh);
+      if (!feedInSpot) return fixedFeedInSlots([s], tariff)[0]?.powerW * 100 * 1000;
+      if (!Number.isFinite(spotCt)) return null;
+      return premiumCt > 0 && spotCt >= 0 ? spotCt * feedInFactor + premiumCt : spotCt * feedInFactor;
+    };
     // Womit der Einspeisewert tatsächlich gebildet ist — für die Anzeige im
     // Leitstand (/api/eos/plan priceBasis, eosPlanFeedInBasis): Marktprämie nur,
     // wenn sie > 0 war; bei fester Vergütung der Satz. Abgelegt erst, wenn EOS
@@ -1507,6 +1525,35 @@ export function createEosForecastBridge(ctx) {
       }
     }
     if (state) { state.optimizer = state.optimizer || {}; state.optimizer.heaterReservation = heaterReservation; }
+
+    // E-Auto Max-Ladestand „wenn günstig“ (ev-targets.js): die Wertbestimmung
+    // braucht Preise und PV-Überschuss bis 7 Tage über die Abfahrt hinaus, also
+    // weiter als EOS (bis jetzt + 9,5 Tage, dahinter geschätzt). Nur wenn sie
+    // wirkt: Auto mitoptimiert, Max-Ladestand an, EOS kennt die Wertstufen.
+    if (state) {
+      let evValueInputs = null;
+      const evOpt = cfg?.optimizer || {};
+      if (evOpt.eosOptimizeEv === true && configuredMaxSocPct(evOpt) !== null && state?.optimizer?.eos?.evSocValue === true && !gridStorage) {
+        try {
+          const nowMs = Date.now();
+          const wantedMs = nowMs + EV_VALUE_INPUTS_DAYS * 86_400_000;
+          let longSlots = priceSlotsCt;
+          if (realPriceCoverage(longSlots).end < wantedMs) {
+            const history = await loadPriceHistory(nowMs);
+            if (gone()) return abandoned();
+            longSlots = fillPriceSlots(realPriceSlots, {
+              history, untilMs: wantedMs, nowMs,
+              timeZone: cfg?.optimizer?.timezone || cfg?.epex?.timezone || 'Europe/Berlin',
+            }).slots;
+          }
+          evValueInputs = buildEvValueInputs({ priceSlots: longSlots, importCtOf, feedInCtOf, pvSlots, loadSlots: loadSlotsForEos, nowMs, timeZone: tz });
+        } catch (e) {
+          if (pushLog) pushLog('ev_value_inputs_error', { error: e?.message || String(e) });
+        }
+      }
+      state.optimizer = state.optimizer || {};
+      state.optimizer.evValueInputs = evValueInputs;
+    }
 
     const tasks = [
       {

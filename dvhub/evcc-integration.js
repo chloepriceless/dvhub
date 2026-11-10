@@ -103,7 +103,9 @@ function deriveLoadpoints(state) {
     phasesConfigured: n(lp?.phasesConfigured),
     vehicleRangeKm: n(lp?.vehicleRange),
     limitSocPct: n(lp?.effectiveLimitSoc ?? lp?.limitSoc),
-    phasesActive: n(lp?.phasesActive)
+    phasesActive: n(lp?.phasesActive),
+    // Wallbox kann zwischen 1 und 3 Phasen umschalten (evcc chargerPhases1p3p).
+    phases1p3p: lp?.chargerPhases1p3p === true
   }));
 }
 
@@ -205,6 +207,29 @@ export function createEvccIntegration(ctx) {
     }
   }
 
+  /**
+   * Phasen eines Ladepunkts setzen (evcc REST `/api/loadpoints/{id}/phases/{0|1|3}`,
+   * 0 = automatisch). Nur sinnvoll, wenn der Ladepunkt umschalten kann.
+   */
+  async function setPhases(lpId, phases) {
+    const c = getCfg();
+    const url = c.url;
+    if (!url) return { ok: false, error: 'no url configured' };
+    const id = Number(lpId);
+    if (!Number.isInteger(id) || id < 1) return { ok: false, error: 'invalid loadpoint' };
+    const p = Number(phases);
+    if (![0, 1, 3].includes(p)) return { ok: false, error: 'invalid phases' };
+    try {
+      const target = new URL(`/api/loadpoints/${id}/phases/${p}`, url).toString();
+      await postEmpty(target, { timeoutMs: Number(c.requestTimeoutMs) || 5000 });
+      ctx.pushLog?.('evcc_phases_set', { loadpoint: id, phases: p });
+      return { ok: true, phases: p };
+    } catch (e) {
+      ctx.pushLog?.('evcc_phases_set_error', { loadpoint: id, phases: p, error: e.message });
+      return { ok: false, error: e.message };
+    }
+  }
+
   return {
     start() {
       const c = getCfg();
@@ -233,6 +258,7 @@ export function createEvccIntegration(ctx) {
     },
     setMode,
     setMaxCurrent,
+    setPhases,
     getStatus() {
       const c = getCfg();
       return {

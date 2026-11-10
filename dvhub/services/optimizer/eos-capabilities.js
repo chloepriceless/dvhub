@@ -33,6 +33,14 @@ export const EOS_UNSUPPORTED_REASON = 'EOS-Version wird nicht mehr unterstützt 
 // das Feld in EOS unter anderem Namen, genügt diese eine Zeile.
 export const EOS_EV_CHARGE_START_FIELD = 'charge_start_datetime';
 
+// Wert der Energie über dem Mindestziel am Fahrzeug, Stufen
+// [[soc_percentage, amount_per_kwh], …] (EOS-Erweiterung „Max-Ladestand wenn
+// günstig“, Prototyp feat/ev-min-max-value; Upstream-PR offen). Vanilla
+// v0.4.0rc3 kennt das Feld nicht — dann bleibt es beim Mindestziel
+// (ev-targets.js). Der Name steht NUR hier: ändert er sich im Upstream-PR,
+// genügt diese eine Zeile.
+export const EOS_EV_SOC_VALUE_FIELD = 'soc_value_steps';
+
 // Netzbezugs-Grenze am Wechselrichter (W, null = aus), Netzanschluss-Grenze
 // aus DVhub (services/grid-connection). Gibt es nur in unserem EOS.
 export const EOS_GRID_IMPORT_LIMIT_FIELD = 'max_grid_import_power_w';
@@ -100,6 +108,8 @@ export function detectEosCapabilities(config, health = {}) {
   const evDevices = ['batteries', 'electric_vehicles']
     .flatMap((k) => (devices && isObj(devices[k]) ? Object.values(devices[k]) : []));
   const evChargeStart = evDevices.some((d) => hasKey(d, EOS_EV_CHARGE_START_FIELD));
+  // Wertstufen am Auto: wie der Ladestart im gemeinsamen Modell, also auch an battery1.
+  const evSocValue = evDevices.some((d) => hasKey(d, EOS_EV_SOC_VALUE_FIELD));
 
   const reachable = !!cfg;
   const supported = reachable ? (flavor === EOS_FLAVOR.UPSTREAM_GENETIC && deviceMap) : null;
@@ -119,6 +129,7 @@ export function detectEosCapabilities(config, health = {}) {
     solutionNotify,
     startOnBoundary,
     evChargeStart,
+    evSocValue,
     detectedAt: Date.now(),
   };
 }

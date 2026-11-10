@@ -41,7 +41,7 @@ describe('Wochenplan: Uebernahme der alten Einstellung', () => {
   test('alte Uhrzeit + Tage → gleiche Abfahrt an diesen Tagen, keine Ankunft', () => {
     const plan = effectiveWeeklyPlan({ evDepartureTime: '07:00', evDepartureDays: [1, 2, 3, 4, 5] });
     assert.equal(plan.length, 7);
-    assert.deepEqual(plan.map((e) => [e.day, e.arrival, e.departure, e.targetValue, e.commuteKm]), [
+    assert.deepEqual(plan.map((e) => [e.day, e.arrival, e.departure, e.minSocPct, e.tripSocPct]), [
       [1, '', '07:00', null, null], [2, '', '07:00', null, null], [3, '', '07:00', null, null],
       [4, '', '07:00', null, null], [5, '', '07:00', null, null], [6, '', '', null, null], [7, '', '', null, null],
     ]);
@@ -203,9 +203,11 @@ describe('Wochenplan: Eingaben pruefen', () => {
     ] });
     assert.equal(r.ok, true, r.error);
     assert.equal(r.patch.evWeeklyPlan.length, 7);
-    assert.deepEqual(r.patch.evWeeklyPlan[0], { day: 1, arrival: '', departure: '05:00', targetValue: null, commuteKm: 25 });
-    assert.deepEqual(r.patch.evWeeklyPlan[4], { day: 5, arrival: '15:00', departure: '09:00', targetValue: 100, commuteKm: null });
-    assert.deepEqual(r.patch.evWeeklyPlan[6], { day: 7, arrival: '', departure: '', targetValue: null, commuteKm: null });
+    // Alte Felder werden in SoC-% umgerechnet (seit 1.0.10); ein Heimweg ohne
+    // Ankunft in derselben Zeile hatte nie eine Wirkung.
+    assert.deepEqual(r.patch.evWeeklyPlan[0], { day: 1, arrival: '', departure: '05:00', minSocPct: null, tripSocPct: null });
+    assert.deepEqual(r.patch.evWeeklyPlan[4], { day: 5, arrival: '15:00', departure: '09:00', minSocPct: 100, tripSocPct: null });
+    assert.deepEqual(r.patch.evWeeklyPlan[6], { day: 7, arrival: '', departure: '', minSocPct: null, tripSocPct: null });
   });
 
   for (const [name, body, error] of [
