@@ -21,18 +21,23 @@ const PLAN = [1, 2, 3, 4, 5, 6, 7].map((day) => (day === 3 ? WED_FULL
   : { day, arrival: '', departure: day <= 5 ? '07:00' : '', minSocPct: null, tripSocPct: null }));
 const ONCE = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 16) + ':00.000Z';
 
+// POST /api/integrations/evcc setzt einen fehlenden dashboardLoadpoint auf
+// null — darum immer den vorhandenen mitschicken (Codex dc0028cc, P2).
+const keepLp = (lp) => (lp == null || lp === '' ? {} : { dashboardLoadpoint: lp });
+
 export async function seed(request) {
   const before = await (await request.get('/api/integrations/evcc')).json();
-  const r = await request.post('/api/integrations/evcc', { data: { eos: { departure: {
+  const r = await request.post('/api/integrations/evcc', { data: { ...keepLp(before?.dashboardLoadpoint), eos: { departure: {
     enabled: true, weeklyPlan: PLAN, once: ONCE, onceMinSocPct: 75, onceTripSocPct: 40, targetMode: 'percent', targetValue: 80,
   } } } });
   expect(r.ok(), await r.text()).toBeTruthy();
-  return before?.eos?.departure || null;
+  return before?.eos?.departure ? { dep: before.eos.departure, lp: before.dashboardLoadpoint } : null;
 }
 
-export async function restore(request, dep) {
-  if (!dep) return;
-  await request.post('/api/integrations/evcc', { data: { eos: { departure: {
+export async function restore(request, saved) {
+  if (!saved) return;
+  const { dep, lp } = saved;
+  await request.post('/api/integrations/evcc', { data: { ...keepLp(lp), eos: { departure: {
     enabled: dep.enabled === true, weeklyPlan: dep.weeklyPlan || [], once: dep.once || '', arrivalOnce: dep.arrivalOnce || '',
     onceMinSocPct: dep.onceMinSocPct ?? '', onceTripSocPct: dep.onceTripSocPct ?? '', maxSocPct: dep.maxSocPct ?? '',
     targetMode: 'percent', targetValue: dep.defaultMinSocPct ?? dep.targetValue ?? 80,

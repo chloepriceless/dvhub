@@ -249,7 +249,8 @@ jobs:
           cache: npm
           cache-dependency-path: dvhub/package-lock.json
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      # WebKit fuer die iPhone-Specs (ev-wochenplan-leeren-iphone.spec.mjs, devices['iPhone 15']).
+      - run: npx playwright install --with-deps chromium webkit
       # Boot the server DB-free on :8080 with a throwaway data dir so the e2e
       # never touches real license_state.json/config; brief readiness wait
       # before the spec.
