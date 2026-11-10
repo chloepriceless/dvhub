@@ -289,6 +289,15 @@ verweist hierher.
 
 ### Behoben
 
+- **Modbus: eine Zeitüberschreitung lässt nicht mehr den Rest des Poll-Takts scheitern.** Nach einer
+  Zeitüberschreitung baute DVhub die Verbindung neu auf, aber das Schließen des alten Sockets brach danach die neue
+  Verbindung ab: alle weiteren Anfragen des Takts scheiterten mit „connection closed“. Jetzt gilt jedes
+  Socket-Ereignis nur für seinen eigenen Socket; nur die betroffene Anfrage scheitert. Paritätsvergleich mit dem
+  Rust-Neubau (A4).
+- **Modbus: zu kurze Antworten sind ein Lesefehler statt 0 W.** Lieferte ein Gerät weniger Register als angefragt,
+  wurden die fehlenden Wörter zu 0 und der Netzzähler galt als „ok“ mit 0 W – Netzanschluss-Wächter und
+  §14a-Budget rechneten damit. Jetzt meldet DVhub `modbus short response (x von y Registern)`, der Wert gilt als
+  ungültig und der Zähler als gestört (`meter.ok=false`). Paritätsvergleich mit dem Rust-Neubau (A5).
 - **Preis-Abruf und Kuma-Push prüfen Adressen in Ziffern auch beim Verbinden.** Für `epex.priceApiUrl` und den
   Uptime-Kuma-Push löst DVhub Namen beim Verbinden auf und prüft jede Adresse. Adressen in Ziffern
   (`127.0.0.1`, `[::ffff:127.0.0.1]`, `2130706433`, `127.1`) prüfte nur das Speichern; eine von Hand geänderte Config

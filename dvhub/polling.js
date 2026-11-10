@@ -637,6 +637,9 @@ export function createPoller(ctx) {
         // implemented"/Ausfall) ist ein Lesefehler — werfen, damit der normale
         // Fehler-/Backoff-Pfad greift statt einer stillen 0 im Steuerpfad.
         const regs = await transport.mbRequest({ ...cfg.meter, quantity: 8 });
+        if (!Array.isArray(regs) || regs.length < 8) {
+          throw new Error(`modbus short response (${Array.isArray(regs) ? regs.length : 0} von 8 Registern)`);
+        }
         const fTotal = decodeSunspecFloat32([regs[0], regs[1]], cfg.meter.wordOrder);
         if (fTotal === null) throw new Error('sunspec float meter: total power not implemented/NaN');
         const fL1 = decodeSunspecFloat32([regs[2], regs[3]], cfg.meter.wordOrder) ?? 0;
@@ -661,6 +664,12 @@ export function createPoller(ctx) {
       } else {
         // Modbus: Register lesen und signed interpretieren
         const regs = await transport.mbRequest(cfg.meter);
+        // Paritätsfund A5: fehlende Wörter sind ein Lesefehler (Fehlerzweig
+        // unten, meter.ok=false) — nie 0 W bei „Zähler ok“ erfinden.
+        const need = Number(cfg.meter?.quantity) > 0 ? Math.floor(Number(cfg.meter.quantity)) : 1;
+        if (!Array.isArray(regs) || regs.length < need) {
+          throw new Error(`modbus short response (${Array.isArray(regs) ? regs.length : 0} von ${need} Registern)`);
+        }
         const rawL1 = regs.length > 0 ? s16(regs[0]) : 0;
         const rawL2 = regs.length > 1 ? s16(regs[1]) : 0;
         const rawL3 = regs.length > 2 ? s16(regs[2]) : 0;

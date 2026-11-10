@@ -47,9 +47,16 @@ export function createModbusTransport(opts = {}) {
       connectTimer: null,
       connect() {
         if (this.sock && !this.sock.destroyed) return;
-        this.sock = new net.Socket();
-        this.sock.setKeepAlive(true, 10000);
-        this.sock.connect(port, host);
+        // Paritätsfund A4 (dvhub-rs ABWEICHUNGEN): jedes Ereignis gilt nur für
+        // SEINEN Socket. Früher rief das close-Ereignis eines nach einer
+        // Zeitüberschreitung verworfenen Sockets _fail auf der schon neu
+        // aufgebauten Verbindung — der Rest des Poll-Takts scheiterte mit
+        // „connection closed“.
+        const sock = new net.Socket();
+        this.sock = sock;
+        const current = () => this.sock === sock;
+        sock.setKeepAlive(true, 10000);
+        sock.connect(port, host);
         // Plan 25-04 (Befund 4 / Pitfall 3): Connect-Timeout-Guard. Greift NUR in
         // der Connect-Phase. Bei ausbleibendem 'connect' (stiller SYN-Drop eines
         // toten/firewalled Hosts) wird der Socket über denselben _fail-Pfad
@@ -60,19 +67,23 @@ export function createModbusTransport(opts = {}) {
         if (this.connectTimer) clearTimeout(this.connectTimer);
         this.connectTimer = setTimeout(() => {
           this.connectTimer = null;
-          this._fail(new Error('modbus connect timeout'));
+          if (current()) this._fail(new Error('modbus connect timeout'));
         }, connectTimeoutMs);
         this.connectTimer.unref();
-        this.sock.once('connect', () => {
+        sock.once('connect', () => {
+          if (!current()) return;
           clearTimeout(this.connectTimer);
           this.connectTimer = null;
         });
-        this.sock.on('data', (chunk) => {
+        sock.on('data', (chunk) => {
+          if (!current()) return;
           this.buf = Buffer.concat([this.buf, chunk]);
           this._drain();
         });
-        this.sock.on('error', (e) => this._fail(e));
-        this.sock.on('close', () => this._fail(new Error('connection closed')));
+        // Ein verworfener Socket darf keinen unbehandelten 'error' werfen,
+        // aber auch nichts mehr an der neuen Verbindung abbrechen.
+        sock.on('error', (e) => { if (current()) this._fail(e); });
+        sock.on('close', () => { if (current()) this._fail(new Error('connection closed')); });
       },
       _resetIdle() {
         if (this.idleTimer) clearTimeout(this.idleTimer);
@@ -190,8 +201,14 @@ export function createModbusTransport(opts = {}) {
           if (this.pending === entry) {
             this.pending = null;
             entry.reject(new Error('modbus timeout'));
-            if (this.sock && !this.sock.destroyed) this.sock.destroy();
+            // Socket verwerfen (eine späte Antwort darf keiner Folgeanfrage
+            // zugeordnet werden) und angefangene Bytes vergessen. Erst
+            // this.sock lösen, dann zerstören: dessen close-/error-Ereignis
+            // gilt damit nicht mehr als „aktueller Socket“ (A4).
+            const old = this.sock;
             this.sock = null;
+            this.buf = Buffer.alloc(0);
+            if (old && !old.destroyed) old.destroy();
             this._next();
           }
         }, entry.timeoutMs || 1000);
@@ -212,6 +229,8 @@ export function createModbusTransport(opts = {}) {
     req.writeUInt8(fc, 7);
     req.writeUInt16BE(address, 8);
     req.writeUInt16BE(quantity, 10);
+    // Angefragte Menge, wie sie auf den Draht ging (Grundlage der Längenprüfung).
+    const wireQuantity = req.readUInt16BE(10);
 
     const conn = getMbConn(host, port);
     return conn.send(req, timeoutMs).then((frame) => {
@@ -219,10 +238,21 @@ export function createModbusTransport(opts = {}) {
       const pid = frame.readUInt16BE(2);
       const unit = frame.readUInt8(6);
       const rFc = frame.readUInt8(7);
+      const quantity = wireQuantity;
       if (pid !== 0 || unit !== unitId || rTid !== tid) throw new Error('invalid modbus response');
       if ((rFc & 0x80) === 0x80) throw new Error(`modbus exception ${frame.readUInt8(8)}`);
       if (rFc !== fc) throw new Error(`unexpected fc ${rFc}`);
-      const byteCount = frame.readUInt8(8);
+      // Paritätsfund A5 (dvhub-rs ABWEICHUNGEN): eine Antwort mit weniger
+      // Daten als angefragt ist ein Lesefehler. Früher wurden fehlende Wörter
+      // beim Aufrufer zu 0 — der Netzzähler galt dann als „ok“ mit 0 W, und
+      // Netzanschluss-Wächter und §14a-Budget rechneten mit erfundenen Werten.
+      const byteCount = frame.length > 8 ? frame.readUInt8(8) : 0;
+      const wantBytes = fc <= 2 ? Math.ceil(quantity / 8) : quantity * 2;
+      const available = Math.max(0, frame.length - 9);
+      if (byteCount !== wantBytes || available < wantBytes) {
+        const got = Math.floor(Math.min(byteCount, available) / 2);
+        throw new Error(`modbus short response (${got} von ${quantity} Registern)`);
+      }
       const data = frame.subarray(9, 9 + byteCount);
       const regs = [];
       for (let i = 0; i + 1 < data.length; i += 2) regs.push(data.readUInt16BE(i));
