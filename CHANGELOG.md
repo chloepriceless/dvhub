@@ -310,9 +310,7 @@ verweist hierher.
 - **Not-Halt: Hinweis zu EEBUS-Geräten (P2-6, so gewollt).** Der Leitstand sagt, dass EEBUS-Geräte nach kurzer Zeit
   in ihren eigenen Rückfallbetrieb gehen — wie bei ausgeschaltetem DVhub. Heizstab-Messwerte laufen im Not-Halt
   weiter (P3-8); scheitert „Herzschlag aus“, startet der EEBUS-Hilfsprozess neu (P3-11).
-- **EEBUS: Failsafe nach 2 statt 4 min mit dem Go-Hilfsprozess (P3-1;** der Hilfsprozess meldet das Alter des letzten
-  Herzschlags, die Frist läuft ab dort — kein Failsafe in der kurzen Lücke nach einem Wiederverbinden), Failsafe-Vorgabe folgt der Geräteliste
-  (P3-5), keine Fehlalarme aus Rückmeldungen der vorigen Verbindung (P3-4), nicht erreichbare EEBUS-Hauptwallbox
+- **EEBUS: Failsafe-Vorgabe folgt der Geräteliste (P3-5),** keine Fehlalarme aus Rückmeldungen der vorigen Verbindung (P3-4), nicht erreichbare EEBUS-Hauptwallbox
   ist belegt statt „ohne Grenze“ (P3-3).
 - **Lese-Modus gilt auch für EEBUS-Geräte.** Mit `DVHUB_READ_ONLY=1` schrieb DVhub §14a-Anteile weiter als
   Verbrauchsgrenze an gekoppelte EEBUS-Geräte (Wärmepumpe, Wallbox). Jetzt blockiert der Lese-Modus auch diese

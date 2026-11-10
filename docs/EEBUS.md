@@ -123,8 +123,6 @@ Nach der EEBUS-Spezifikation:
   Einstellungen.
 - Ohne eigenen Wert folgt der Failsafe-Vorgabewert der Bezugsgrenze der Geräteliste (Pmin,14a),
   solange die Steuerbox keinen eigenen geschrieben hat.
-- Der Go-Hilfsprozess meldet „kein Herzschlag“ erst nach 2 min (eebus-go prüft die Frist selbst) —
-  dann gilt der Failsafe sofort; beim C-Hilfsprozess wartet DVhub die 120 s selbst ab.
 
 ## Wiederanlauf, Not-Halt, Lese-Modus
 

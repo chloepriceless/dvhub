@@ -1101,23 +1101,6 @@ test('Netzanschlusspunkt (MGCP): ungültiger oder alter Zählerwert geht nicht a
   assert.deepEqual(gcp().map((x) => x.power_w), [2500]);
 });
 
-// ── Fable R2 P3-1: Go-Hilfsprozess prüft die 2-min-Frist selbst ──
-test('grid_heartbeat_state mit Herzschlag-Alter (Go): Failsafe ab dem letzten Herzschlag; ohne Alter (C) bzw. kurz nach Wiederverbinden: erst nach 120 s', async () => {
-  for (const [age, want] of [[121, 'failsafe'], [undefined, 'unlimited_controlled'], [6, 'unlimited_controlled'], [-1, 'unlimited_controlled']]) {
-    const s = setup();
-    await s.svc.start();
-    const c = s.child();
-    c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
-    c.emitEvent({ ev: 'connected', ski: SKI_BOX });
-    c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true });
-    await settle();
-    s.advance(5_000);
-    c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: false, lpp_ok: false, lpc_heartbeat_age_s: age, lpp_heartbeat_age_s: age });
-    await settle();
-    assert.equal(s.svc.status().grid.lpc.state, want, `Alter ${age}`);
-  }
-});
-
 // ── Fable R2 P2-4: gespeicherte, noch gültige Grenze gilt gleich beim Start ──
 test('Neustart während einer Begrenzung: Grenze gilt sofort beim Start, nicht erst mit Takt oder Herzschlag', async () => {
   const s = setup();
