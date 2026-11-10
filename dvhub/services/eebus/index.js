@@ -25,6 +25,7 @@ import { spawn as nodeSpawn, execFile as nodeExecFile } from 'node:child_process
 
 import { createLimitStateMachine } from './limit-state.js';
 import { readApplianceId } from '../support-tunnel.js';
+import { isReadOnlyMode, noteBlockedWrite } from '../../read-only-guard.js';
 
 export const EEBUS_DEFAULT_PORT = 4712;
 const RESTART_DELAYS_MS = [5_000, 10_000, 30_000, 60_000];
@@ -40,6 +41,10 @@ const EV_START_W = 6 * 3 * 230;
 const ISSUE_GRACE_MS = 60_000;
 // … und eine abweichende Rückmeldung des Geräts frühestens so oft neu schreiben.
 const RESEND_MS = 60_000;
+// Vom Hilfsprozess abgelehnte Vorgabe (z. B. „write failed“ direkt nach der
+// Anmeldung, solange die Grenzbeschreibung des Geräts noch nicht gelesen ist):
+// nach dieser Zeit erneut schreiben.
+const RETRY_MS = 10_000;
 const OVER_LIMIT_TOL_MIN_W = 300;
 const OVER_LIMIT_TOL_SHARE = 0.1;
 const ISSUE_TEXT = {
@@ -655,7 +660,12 @@ export function createEebusService(ctx, deps = {}) {
         if (ev.ski && roleOf(ev.ski) === 'device' && ev.uc === 'lpc') device(ev.ski).nominalW = Number(ev.w) || null;
         break;
       case 'device_limit':
-        if (ev.ski && roleOf(ev.ski) === 'device') device(ev.ski).limit = { uc: ev.uc, w: ev.w, active: ev.active, at: now() };
+        if (ev.ski && roleOf(ev.ski) === 'device') {
+          const d = device(ev.ski);
+          d.limit = { uc: ev.uc, w: ev.w, active: ev.active, at: now() };
+          // Für die Prüfung der §14a-Vorgabe nur die Rückmeldung zur Verbrauchsgrenze.
+          if (ev.uc === 'lpc') d.lpcLimit = d.limit;
+        }
         break;
       case 'device_failsafe_limit':
       case 'device_failsafe_duration':
@@ -786,13 +796,32 @@ export function createEebusService(ctx, deps = {}) {
 
   /** Vorgabe an ein Gerät schreiben und merken (für die Prüfung der Umsetzung). */
   function writeDeviceLimit(entity, { w, durationS = 0, active }) {
-    const rec = { w: active ? w : null, active, durationS, at: now(), rejected: false, resentAt: null, id: null };
+    // Lese-Modus: eine beobachtende Instanz steuert kein Gerät (Codex 01dec596).
+    if (isReadOnlyMode()) {
+      noteBlockedWrite(`eebus device_limit ${entity}`);
+      return Promise.resolve({ ok: false, error: 'read_only' });
+    }
+    const rec = { w: active ? w : null, active, durationS, at: now(), sentAt: now(), rejected: false, resentAt: null, id: null, replyOk: null };
     deviceWrites.set(entity, rec);
     return send({ cmd: 'device_limit', uc: 'lpc', entity, w: active ? w : 0, duration_s: durationS, active }, (id) => {
       rec.id = id;
       writeIds.set(id, entity);
       if (writeIds.size > 500) writeIds.delete(writeIds.keys().next().value);
-    });
+    }).then((r) => { rec.replyOk = r?.ok === true; return r; });
+  }
+
+  // Letzte Vorgabe erneut schreiben; die Frist der Prüfung läuft weiter.
+  function rewrite(entity, want, t) {
+    deviceLimitCache.delete(entity);
+    const durationS = want.until ? Math.max(60, Math.round((want.until - t) / 1000)) : want.durationS;
+    writeDeviceLimit(entity, { w: want.w, durationS, active: want.active });
+    const rec = deviceWrites.get(entity);
+    if (!rec) return null;
+    rec.at = want.at;
+    rec.resentAt = want.resentAt;
+    rec.until = want.until;
+    if (want.active) deviceLimitCache.set(entity, { w: want.w, until: want.until ?? null, at: t });
+    return rec;
   }
 
   /**
@@ -808,7 +837,10 @@ export function createEebusService(ctx, deps = {}) {
     if (!entity || !cfgNow().devices.forwardGridLimit) return;
     deviceLimitCache.delete(entity);
     if (!p14aControlled() && !emsLimits.has(ski)) return;
-    applyConsumptionShares(lastShares, lastSharesUntil, lastSharesUntilById);
+    // Aufteilung mit dem wieder angemeldeten Gerät neu rechnen (es war
+    // inzwischen evtl. aus den Anteilen gefallen) — sonst die letzten Anteile.
+    if (typeof ctx.p14a?.update === 'function') ctx.p14a.update();
+    else applyConsumptionShares(lastShares, lastSharesUntil, lastSharesUntilById);
     if (deviceLimitCache.has(entity)) return;
     writeDeviceLimit(entity, { w: 0, durationS: 0, active: false });
     pushLog('paragraph14a_device_resumed', { ski, entity });
@@ -845,6 +877,7 @@ export function createEebusService(ctx, deps = {}) {
    * Rückmeldung keine Fehlermeldung. Abweichende Grenze → neu schreiben.
    */
   function checkDevices() {
+    if (isReadOnlyMode()) return; // keine Schreibvorgänge, also nichts zu prüfen
     const t = now();
     const controlled = p14aControlled() && cfgNow().devices.forwardGridLimit;
     const seen = new Set();
@@ -854,29 +887,30 @@ export function createEebusService(ctx, deps = {}) {
       seen.add(ski);
       setIssue(ski, 'unreachable', controlled && k.lostAt != null, k.lostAt ?? t);
       const d = ui.devices[ski];
-      const want = k.lostAt == null && k.entity ? deviceWrites.get(k.entity) : null;
+      // Überwacht wird nur, was DVhub selbst führt: §14a-Weitergabe an oder
+      // eine Vorgabe der Wallbox-Steuerung.
+      const supervised = cfgNow().devices.forwardGridLimit || emsLimits.has(ski);
+      const want = supervised && k.lostAt == null && k.entity ? deviceWrites.get(k.entity) : null;
       if (!want) {
         for (const code of ['not_applied', 'over_limit', 'rejected']) setIssue(ski, code, false);
         overSince.delete(k.entity);
         continue;
       }
       setIssue(ski, 'rejected', want.rejected === true, want.at);
-      // Rückmeldung des Geräts: weicht sie nach der Frist ab?
-      const rep = d?.limit;
+      // Vom Hilfsprozess nicht angenommen: nach RETRY_MS erneut.
+      if (want.replyOk === false && t - want.sentAt >= RETRY_MS) {
+        rewrite(k.entity, want, t);
+        pushLog('paragraph14a_device_limit_retry', { ski, w: want.w, active: want.active });
+        continue;
+      }
+      // Rückmeldung des Geräts zur Verbrauchsgrenze: weicht sie nach der Frist ab?
+      const rep = d?.lpcLimit;
       const repActive = rep?.active === true;
       const mismatch = rep != null && t - want.at >= ISSUE_GRACE_MS && (repActive !== want.active
         || (want.active && Math.abs(Number(rep.w) - want.w) > Math.max(50, 0.02 * want.w)));
-      setIssue(ski, 'not_applied', mismatch, want.at + ISSUE_GRACE_MS, mismatch ? { reportedW: repActive ? Number(rep.w) : null, wantW: want.w } : {});
+      setIssue(ski, 'not_applied', mismatch, want.at, mismatch ? { reportedW: repActive ? Number(rep.w) : null, wantW: want.w } : {});
       if (mismatch && (want.resentAt == null || t - want.resentAt >= RESEND_MS)) {
-        const resentAt = t;
-        deviceLimitCache.delete(k.entity);
-        const durationS = want.until ? Math.max(60, Math.round((want.until - t) / 1000)) : want.durationS;
-        writeDeviceLimit(k.entity, { w: want.w, durationS, active: want.active });
-        const rec = deviceWrites.get(k.entity);
-        rec.at = want.at; // Frist läuft weiter, kein neues „frisch geschrieben“
-        rec.resentAt = resentAt;
-        rec.until = want.until;
-        if (want.active) deviceLimitCache.set(k.entity, { w: want.w, until: want.until ?? null, at: t });
+        rewrite(k.entity, { ...want, resentAt: t }, t);
         pushLog('paragraph14a_device_limit_resent', { ski, w: want.w, active: want.active, reportedW: repActive ? Number(rep.w) : null });
       }
       // Messwert über der Vorgabe?
@@ -1049,8 +1083,10 @@ export function createEebusService(ctx, deps = {}) {
       writeDeviceLimit(cns.entity, { w, durationS, active: true })
         .then((r) => { if (!r?.ok) deviceLimitCache.delete(cns.entity); });
       const rec = deviceWrites.get(cns.entity);
-      rec.until = until;
-      if (same) { rec.at = prev.at; rec.resentAt = prev.resentAt; }
+      if (rec && rec !== prev) {
+        rec.until = until;
+        if (same) { rec.at = prev.at; rec.resentAt = prev.resentAt; }
+      }
     }
     // Geräte, die keine Grenze mehr bekommen: aufheben.
     for (const [entity] of deviceLimitCache) {
@@ -1241,7 +1277,8 @@ export function createEebusService(ctx, deps = {}) {
     const d = ui.devices[ski];
     if (!d?.entities?.lpc) return { ok: false, error: 'device has no LPC entity' };
     const active = Number.isFinite(Number(w)) && Number(w) >= 0;
-    return send({ cmd: 'device_limit', uc: 'lpc', entity: d.entities.lpc, w: active ? Number(w) : 0, duration_s: Number(durationS) || 0, active });
+    // Über writeDeviceLimit: die Prüfung der Umsetzung kennt dann diese Vorgabe.
+    return writeDeviceLimit(d.entities.lpc, { w: active ? Number(w) : 0, durationS: Number(durationS) || 0, active });
   }
 
   /**

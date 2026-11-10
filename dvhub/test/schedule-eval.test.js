@@ -1262,3 +1262,21 @@ test('T-VERIFY: Zustand bleibt in JSON umwandelbar, während ein Verify ansteht'
   assert.equal(state.schedule._verify.gridSetpointW.pending, false);
   assert.equal(ctx._readCalls.length, 1, 'trotzdem genau ein Verify-Read');
 });
+
+// §14a nach Bedarf (Codex 01dec596): der Speicher-Bedarf ist der Sollwert nach
+// der Live-Neuberechnung („Akku halten“), und ohne Ziel bleibt er unbekannt.
+test('§14a-Speicherbedarf: nach der Live-Neuberechnung (PV deckt die Last → 0), nicht der Prognosewert', async () => {
+  const { ctx, state } = holdCtx({ load: 1500, pv: 6000 });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.ctrl.p14aBatteryWantW?.w, 0, 'Regel sagt 1400 W, geschrieben wird 0');
+  const h = holdCtx({ load: 2500, pv: 0 });
+  await createScheduleEvaluator(h.ctx).evaluateSchedule();
+  assert.equal(h.state.ctrl.p14aBatteryWantW?.w, 2200, '2500 − 300 Puffer');
+});
+
+test('§14a-Speicherbedarf: ohne Sollwert-Ziel unbekannt (nicht 0)', async () => {
+  const { ctx, state } = makeCtx({ mutate: ({ state: st, cfg }) => { st.schedule.rules = []; cfg.schedule = { ...(cfg.schedule || {}), defaultGridSetpointW: null }; } });
+  state.ctrl.p14aBatteryWantW = { w: 0, at: 1 };
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.ctrl.p14aBatteryWantW, null);
+});

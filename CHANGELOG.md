@@ -187,6 +187,9 @@ verweist hierher.
 
 ### Behoben
 
+- **Lese-Modus gilt auch für EEBUS-Geräte.** Mit `DVHUB_READ_ONLY=1` schrieb DVhub §14a-Anteile weiter als
+  Verbrauchsgrenze an gekoppelte EEBUS-Geräte (Wärmepumpe, Wallbox). Jetzt blockiert der Lese-Modus auch diese
+  Vorgaben (Eintrag `[READ-ONLY]` im Konsolen-Log).
 - **§14a: Wiederanlauf der EEBUS-Geräte und deutliche Warnung bei Störung.** Nach einem Neustart von DVhub oder des
   EEBUS-Hilfsprozesses (Update, Stromausfall) schrieb DVhub einem Gerät ohne laufende Begrenzung nichts — der
   Herzschlag zum Gerät startete nicht, das Gerät fiel nach 120 s in seinen Failsafe und blieb dort bis zur nächsten

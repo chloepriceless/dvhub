@@ -1866,11 +1866,9 @@ export function createScheduleEvaluator(ctx) {
     let eosGridHoldConfirmed = null;
     for (const target of ['gridSetpointW', 'chargeCurrentA']) {
       const eff = effectiveTargetValue(target);
-      // §14a nach Bedarf (services/paragraph14a): wie viel der Plan gerade aus
-      // dem Netz will — derselbe Sollwert, den der Speicher-Anteil unten deckelt.
-      if (target === 'gridSetpointW') {
-        state.ctrl.p14aBatteryWantW = { w: eff.value == null ? 0 : Math.max(0, Number(eff.value) || 0), at: Date.now() };
-      }
+      // §14a nach Bedarf: ohne Ziel schreibt DVhub nichts — der GX kann einen
+      // älteren Sollwert halten, der Bedarf ist also unbekannt (nicht 0).
+      if (target === 'gridSetpointW' && eff.value == null) state.ctrl.p14aBatteryWantW = null;
       if (eff.value == null) continue;
 
       // === T-0121/T-0122 EOS closed-loop export: live-PV recompute ============
@@ -1956,6 +1954,13 @@ export function createScheduleEvaluator(ctx) {
         }
       }
       // === end EOS Akku halten =================================================
+
+      // §14a nach Bedarf (services/paragraph14a): wie viel der Plan gerade aus
+      // dem Netz will — nach der Live-Neuberechnung, vor dem §14a-Deckel unten;
+      // derselbe Sollwert, den der Speicher-Anteil deckelt (Codex 01dec596).
+      if (target === 'gridSetpointW') {
+        state.ctrl.p14aBatteryWantW = { w: Math.max(0, Number(eff.value) || 0), at: Date.now() };
+      }
 
       // === T-0002 safety: SoC floor for a PERSISTENT discharge override ========
       // A persistent override has no TTL and is invisible to the per-rule
