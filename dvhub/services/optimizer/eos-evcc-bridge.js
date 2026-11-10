@@ -257,6 +257,10 @@ export function createEosEvccBridge(deps) {
   // (applyPendingRestore, im Lock), nur wenn evcc frisch abgefragt noch auf
   // DVhubs „aus“ steht — sonst hat der Kunde selbst umgestellt.
   const pendingRestores = () => [...owned.values()].filter((e) => e.charger === 'evcc' && e.restore);
+  // Läuft gerade ein reiner Grenz-Befehl (gridCapOnlyTick)? Dann hat DVhub die
+  // Ladung nicht gestartet, nur begrenzt — wichtig für den Not-Halt (Codex
+  // 91a6ef65, P1: ein gedeckeltes „Sofort laden“ ist trotzdem DVhubs Ladung).
+  let capOnlyCommand = false;
 
   function setOwned(key, entry) {
     if (entry) owned.set(key, entry); else owned.delete(key);
@@ -313,7 +317,10 @@ export function createEosEvccBridge(deps) {
         // können an der Box stehen (Codex 7b3273db, P1).
         const confirmedCurrentA = r?.ok === true ? amps
           : (prev?.cmd === 'charge' && prev.identity === tgt.identity ? prev.confirmedCurrentA ?? null : null);
-        setOwned(key, { ...tgt, ...capFields(prev, tgt.identity), cmd: 'charge', currentA: amps, confirmedCurrentA, confirmed: r?.ok === true, gridCap: prevCap, at: new Date(now()).toISOString() });
+        // Von DVhub gestartet (Plan, „Sofort laden“) bleibt gestartet, auch wenn
+        // danach nur noch die Grenze nachgeführt wird.
+        const dvhubStarted = !capOnlyCommand || (prev?.cmd === 'charge' && prev.identity === tgt.identity && prev.dvhubStarted === true);
+        setOwned(key, { ...tgt, ...capFields(prev, tgt.identity), cmd: 'charge', currentA: amps, confirmedCurrentA, confirmed: r?.ok === true, gridCap: prevCap, dvhubStarted, at: new Date(now()).toISOString() });
         return r;
       };
     }
@@ -808,7 +815,13 @@ export function createEosEvccBridge(deps) {
     const key = `${bc.charger}:${bc.loadpoint}:p14a:${slot.action}:${slot.currentA ?? ''}`;
     // Erzwungen (Wächter: Deckel geändert oder nicht befolgt): ohne Dubletten-Filter.
     if (!force && lastSent?.key === key) return { ok: true, unchanged: true, gridCapW: Number(capW) };
-    const res = slot.action === 'stop' ? await charger.stop() : await charger.charge(slot.currentA);
+    let res;
+    capOnlyCommand = true;
+    try {
+      res = slot.action === 'stop' ? await charger.stop() : await charger.charge(slot.currentA);
+    } finally {
+      capOnlyCommand = false;
+    }
     if (!res?.ok) {
       lastError = res?.error || 'wallbox write failed';
       pushLog('paragraph14a_wallbox_error', { charger: charger.type, error: lastError });
@@ -898,7 +911,10 @@ export function createEosEvccBridge(deps) {
     for (const e of [...owned.values()]) {
       if (e.charger !== 'evcc' || e.cmd === 'charge') continue;
       const lowered = e.origMaxCurrentA != null && (e.limitA != null || e.limitTried === true);
-      const off = e.limitOff === true && e.restore?.reason === 'grid_cap' && typeof e.restore.mode === 'string';
+      // Auch ein unquittiertes „aus“ (limitOff fehlt, Rückkehr und DVhub-Modi
+      // stehen) — ob evcc noch darauf steht, entscheidet die frische Lesung
+      // (Codex 91a6ef65, P2).
+      const off = e.restore?.reason === 'grid_cap' && typeof e.restore.mode === 'string';
       if (!lowered && !off) continue;
       const key = targetKey(e);
       if (e.identity && e.identity !== ident) { skipped.push('identity_changed'); continue; }
@@ -919,6 +935,8 @@ export function createEosEvccBridge(deps) {
         const modes = owned.get(key)?.dvhubModes || [];
         if (found === undefined) {
           skipped.push('state_unknown'); // im Zweifel nicht senden
+        } else if (found === e.restore.mode) {
+          modeDone = true; // steht schon dort
         } else if (!modes.includes(found)) {
           modeDone = true; // vom Kunden umgestellt: Rückkehr entfällt
         } else {
@@ -1160,8 +1178,11 @@ export function createEosEvccBridge(deps) {
           // „Sofort laden“ dort): die eigene Begrenzung aufheben, nicht stoppen —
           // eine von Hand gestartete Ladung läuft weiter (Fable R1 P2-1).
           const overrideHere = override != null && (!override.target || targetKey(override.target) === targetKey(ref));
-          if (charger.type !== 'evcc' && ref.gridCap === true && !overrideHere) {
-            const res = charger.type === 'openwb' ? await charger.charge(bc.maxCurrentA) : await charger.release();
+          if (charger.type !== 'evcc' && ref.gridCap === true && ref.dvhubStarted !== true && !overrideHere) {
+            // openWB: der volle Strom DIESES Ziels, nicht der eines inzwischen
+            // gewählten anderen Geräts (Codex 91a6ef65, P2).
+            const fullA = Number.isFinite(Number(ref.maxCurrentA)) && Number(ref.maxCurrentA) > 0 ? Number(ref.maxCurrentA) : bc.maxCurrentA;
+            const res = charger.type === 'openwb' ? await charger.charge(fullA) : await charger.release();
             if (!res?.ok) { errors.push(res?.error || 'wallbox release failed'); continue; }
             setOwned(targetKey(bc), null);
             if (lastSent && targetKey({ charger: lastSent.charger || bc.charger, loadpoint: lastSent.loadpoint ?? bc.loadpoint }) === targetKey(bc)) lastSent = null;
