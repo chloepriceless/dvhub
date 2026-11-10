@@ -613,3 +613,16 @@ test('Codex 7ea58e63 P2: Not-Halt ohne Rückschreiben löscht den Merker', async
   assert.deepEqual(h.writes(), [3200, 6000]);
   assert.equal(fs.existsSync(p), false, 'kein überholter Rückkehrwert für den nächsten Start');
 });
+
+test('Codex b7f23382 P2: Restleistung unter 100 W wird noch genutzt, bevor eine Last pausiert', () => {
+  const r = NATIVE();
+  const st = createGuardState();
+  const b = bat({ dischargeW: 9950, limit: { value: 9950, from: 'readback' }, maxW: 10000 });
+  const m = meas(19050); // 50 W über dem Ziel
+  const ev = [
+    ...guardStep(st, { resolved: r, meas: m, devices: [WALLBOX(4140)], battery: b, now: 1_000_000 }).events,
+    ...guardStep(st, { resolved: r, meas: m, devices: [WALLBOX(4140)], battery: b, now: 1_002_000 }).events
+  ];
+  assert.equal(st.assist?.valueW, 10000);
+  assert.equal(ev.some((e) => e.type === 'cut'), false, 'Wallbox läuft weiter');
+});

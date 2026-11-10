@@ -173,3 +173,61 @@ test('Anforderung verfällt ohne Erneuerung; ungültige Anfragen werden abgelehn
   h.advance(ASSIST_REQUEST_MAX_AGE_MS + 1000);
   assert.equal(h.assist.status().targetW, null, 'abgelaufen');
 });
+
+// --- Codex-Gegenprüfung 7a44bb81 ------------------------------------------------
+
+const sp2716 = (h) => h.transport.writes.filter((w) => w.address === 2716).map((w) => { const b = Buffer.alloc(4); b.writeUInt16BE(w.values[0], 0); b.writeUInt16BE(w.values[1], 2); return b.readInt32BE(0); });
+
+test('Codex 7a44bb81 P2: helpW meldet gemessene Hilfe, nicht den gescheiterten Befehl', async () => {
+  const h = rig('victron');
+  h.assist.request({ source: 'p14a', maxImportW: 4200 });
+  h.measure({ importW: 10000 });
+  h.guard.tick();
+  h.transport.mbWriteMultiple = async () => { throw new Error('GX weg'); };
+  const r = await h.evaluator.applyControlTarget('gridSetpointW', 10000, 'eos_grid_hold');
+  assert.equal(r.ok, false);
+  h.measure({ importW: 10000 });
+  h.guard.tick();
+  assert.equal(h.assist.status('p14a').helpW, 0);
+});
+
+test('Codex 7a44bb81 P2/P2: Victron coverW — Zähler wird gelesen, Ziel bleibt stabil', async () => {
+  const h = rig('victron');
+  h.assist.request({ source: 'p14a', coverW: 2000 });
+  h.measure({ importW: 10000 });
+  h.guard.tick();
+  assert.equal(h.guard.batteryCeilingW(), 8000, 'Decke aus coverW');
+  await h.evaluator.applyControlTarget('gridSetpointW', 10000, 'eos_grid_hold');
+  assert.deepEqual(sp2716(h), [8000]);
+  for (let k = 0; k < 5; k += 1) {
+    h.measure({ importW: 8000, dischargeW: 2000 }); // der Multi deckt 2 kW
+    h.guard.tick();
+  }
+  assert.equal(h.guard.batteryCeilingW(), 8000, 'nicht schrittweise tiefer');
+  assert.equal(h.assist.status('p14a').helpW, 2000);
+});
+
+test('Codex 7a44bb81 P2: erste Decke schickt den laufenden Sollwert sofort neu', async () => {
+  const h = rig('victron');
+  await h.evaluator.applyControlTarget('gridSetpointW', 10000, 'eos_grid_hold');
+  assert.deepEqual(sp2716(h), [10000]);
+  h.assist.request({ source: 'p14a', maxImportW: 4200 });
+  await settle();
+  assert.deepEqual(sp2716(h), [10000, 4200]);
+});
+
+test('Codex 7a44bb81 P2: coverW-Hilfe bleibt bei Zählerfehler stehen', async () => {
+  const h = rig();
+  h.assist.request({ source: 'p14a', coverW: 2000 });
+  h.measure({ importW: 10000, maxDischargeW: 0 });
+  h.guard.tick();
+  await settle();
+  assert.deepEqual(h.writes(), [2200]);
+  for (let k = 0; k < 5; k += 1) {
+    h.measure({ importW: 8000, dischargeW: 2000, maxDischargeW: 2200 });
+    h.state.meter.ok = false;
+    h.guard.tick();
+    await settle();
+  }
+  assert.deepEqual(h.writes(), [2200], 'kein Rückschreiben ohne Messung');
+});

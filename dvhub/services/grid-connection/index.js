@@ -819,7 +819,12 @@ function nativeBatteryStep(st, { r, battery, total, excess, targetW, phases, pha
       let need = null;
       let best = excessAfter(0, mode);
       let bestX = 0;
-      for (let x = 0; x <= room; x += STEP_W) {
+      // In 100-W-Schritten, die Restleistung (auch unter 100 W) als letzter
+      // Punkt (Codex b7f23382, P2).
+      const steps = [];
+      for (let x = 0; x < room; x += STEP_W) steps.push(x);
+      steps.push(room);
+      for (const x of steps) {
         const e = excessAfter(x, mode);
         if (e <= 0) { need = x; break; }
         if (e < best - 1e-9) { best = e; bestX = x; }
@@ -1221,9 +1226,14 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const lw = s.schedule?.lastWrite?.gridSetpointW;
     const req = s.ctrl?._gridConnection?.request;
     const ceiling = ceilingNow();
-    if (!lw || !req || ceiling == null || !(Number(lw.value) > ceiling) || req.source !== lw.source) return;
+    if (!lw || ceiling == null || !(Number(lw.value) > ceiling)) return;
+    if (req && req.source !== lw.source) return;
     if (now() - (Number(lw.at) || 0) > SETPOINT_MAX_AGE_MS) return;
-    Promise.resolve(ctx.applyControlTarget?.('gridSetpointW', req.requestedW, req.source))
+    // Erste Decke (vorher keine): der Steuerpfad hat noch keinen angefragten
+    // Wert gemerkt — dann ist der zuletzt geschriebene ungedeckelt (Codex
+    // 7a44bb81, P2).
+    const use = req || { requestedW: Number(lw.value), source: lw.source };
+    Promise.resolve(ctx.applyControlTarget?.('gridSetpointW', use.requestedW, use.source))
       .catch((e) => log('grid_connection_error', { phase: 'reassert_setpoint', error: e?.message || String(e) }, 'warn'));
   }
 
@@ -1304,7 +1314,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         lastVictronError = r.victronReadError;
         if (r.victronReadError) log('grid_connection_victron_unreadable', { text: 'Victron-Bezugsgrenze (Reg. 2714) nicht lesbar — es gelten nur die DVhub-Werte.' }, 'warn');
       }
-      const wantsAssist = r.batteryNative && liveRequests().length > 0;
+      const wantsAssist = (r.batteryNative || r.batterySupported) && liveRequests().length > 0;
       const meas = r.active || wantsAssist ? meterImport(state(), c, { now: lastTickAt, maxAgeMs: METER_MAX_AGE_MS }) : null;
       const list = r.active ? devices(c) : [];
       // Steht ein Zurückschreiben an, das eine neuere Vorgabe überholt hat, gilt
@@ -1313,6 +1323,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       dropSupersededRestore();
       const battery = batteryInput(c, r);
       const assistTargetW = r.batteryNative ? externalTargetW(meas, battery) : null;
+      if (!r.batteryNative && wantsAssist) last = { ...last, meas, battery };
       const res = guardStep(st, { resolved: r, meas, devices: list, battery, now: lastTickAt, assistTargetW });
       last = { meas, devices: list, battery };
       report(r, res.events);
@@ -1350,12 +1361,33 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const list = liveRequests();
     if (!list.length) return null;
     const fresh = meas?.fresh === true && finite(meas.importW);
-    const dis = Math.max(0, Number(battery?.dischargeW) || 0);
-    const base = st.assist ? Math.max(0, Number(st.assist.baseW) || 0) : dis;
-    const demand = fresh ? Number(meas.importW) + Math.max(0, dis - base) : null;
-    const targets = list.map((q) => (q.maxImportW != null ? q.maxImportW
-      : demand != null ? Math.max(0, demand - q.coverW) : null));
+    // Bezug ohne die eigene Hilfe: Entladegrenze → Anteil über der Grenze davor;
+    // Sollwert-Decke (Victron & Co.) → gemessene Entlastung (Codex 7a44bb81, P2).
+    const help = st.assist
+      ? Math.max(0, (Number(battery?.dischargeW) || 0) - Math.max(0, Number(st.assist.baseW) || 0))
+      : setpointHelpW(meas);
+    const demand = fresh ? Number(meas.importW) + help : null;
+    const targets = list.map((q) => {
+      if (q.maxImportW != null) return q.maxImportW;
+      // Ohne frische Messung das letzte Ziel halten — die Hilfe bleibt stehen
+      // statt zurückzufallen (Codex 7a44bb81, P2).
+      if (demand != null) q.lastTargetW = Math.max(0, demand - q.coverW);
+      return q.lastTargetW ?? null;
+    });
     return smallestLimit(targets);
+  }
+  // Gemessene Entlastung durch die Sollwert-Decke: nur, wenn der gedeckelte
+  // Wert wirklich geschrieben ist, und höchstens das, was der Bezug unter dem
+  // angefragten Sollwert liegt (Codex 7a44bb81, P2).
+  function setpointHelpW(meas = last.meas) {
+    const s = state();
+    const clamp = s.ctrl?._gridConnection?.clamp;
+    const lw = s.schedule?.lastWrite?.gridSetpointW;
+    if (!clamp || now() - Number(clamp.at || 0) > CLAMP_FRESH_MS) return 0;
+    if (!lw || Number(lw.value) !== Number(clamp.valueW)) return 0;
+    if (!(meas?.fresh === true && finite(meas.importW))) return 0;
+    const delta = Math.max(0, Number(clamp.requestedW) - Number(clamp.valueW));
+    return Math.max(0, Math.min(delta, Number(clamp.requestedW) - Number(meas.importW)));
   }
   // Wirksame Decke für positive Netz-Sollwerte: Netzanschluss und Anforderungen.
   function ceilingNow() {
@@ -1407,12 +1439,9 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       const ext = externalTargetW();
       const targetW = smallestLimit([r.active ? r.targetW : null, ext]);
       const bat = last.battery || {};
-      const clampRaw = state().ctrl?._gridConnection?.clamp;
-      const clampW = clampRaw && now() - Number(clampRaw.at || 0) <= CLAMP_FRESH_MS
-        ? Math.max(0, Number(clampRaw.requestedW) - Number(clampRaw.valueW)) : 0;
       const helpW = paused() ? 0 : st.assist
         ? Math.max(0, Math.round((Number(bat.dischargeW) || 0) - Math.max(0, Number(st.assist.baseW) || 0)))
-        : Math.round(clampW);
+        : Math.round(setpointHelpW());
       return {
         kind: r.battery.kind,
         paused: paused(),
