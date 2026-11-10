@@ -553,6 +553,28 @@ test('P2-3: Netzspannung nur mit ausdrücklicher Zustimmung — fehlt der Schalt
   assert.equal(createDefaultConfig().datenspende.sources.gridVoltage, false, 'ab Werk aus');
 });
 
+// Codex 0bf101d2 (P2): Spannungswerte, die schon in der Warteschlange liegen
+// (Box lief mit dem Release-Kandidaten oder Zustimmung gerade zurückgenommen),
+// dürfen ohne Zustimmung weder Zähler anlegen noch hinausgehen.
+test('P2-3: wartende Spannungswerte ohne Zustimmung — kein Zähler, kein Senden, aus der Warteschlange entfernt', async () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, SIDECAR_NAME), JSON.stringify({ apiKey: 'KEY', clientId: 'C1', meters: { grid: { id: 'G0', name: 'Netzanschluss' } }, donated: 0 }));
+  fs.writeFileSync(path.join(dir, QUEUE_NAME), JSON.stringify({ clientId: 'C1', readings: [
+    { key: 'grid', timestamp: '2026-09-28T11:59:50Z', power: -1200 },
+    { key: 'gridL1', timestamp: '2026-09-28T11:59:50Z', voltage: 238.2 },
+  ] }));
+  const cfg = { manufacturer: 'victron', datenspende: { enabled: true } };
+  const client = fakeClient();
+  const svc = createDatenspende(baseCtx({ dir, cfg }), { client, now: () => T0, random: () => 0.5 });
+  await svc.flush();
+  const registered = client.calls.filter((c) => c[0] === 'register').map((c) => c[1]);
+  assert.ok(!registered.some((n) => /Netzspannung/.test(n)), `kein Spannungs-Zähler (${registered})`);
+  assert.ok(client.batches.flat().every((r) => !('voltage' in r)), 'keine Spannung gesendet');
+  assert.ok(client.batches.flat().some((r) => r.meter_id === 'G0'), 'Leistung geht weiter hinaus');
+  const queued = JSON.parse(fs.readFileSync(path.join(dir, QUEUE_NAME), 'utf8')).readings;
+  assert.ok(!queued.some((r) => r.key === 'gridL1'), 'Spannung aus der Warteschlange entfernt');
+});
+
 test('columnarPayload: voltage-Spalte für Spannungs-Zähler', async () => {
   const { columnarPayload } = await import('../services/datenspende/client.js');
   const p = columnarPayload([

@@ -57,6 +57,15 @@ export function sourceEnabled(sources, g) {
   const v = (sources && typeof sources === 'object') ? sources[g] : undefined;
   return CONSENT_SOURCE_GROUPS.includes(g) ? v === true : v !== false;
 }
+// Zähler-Schlüssel je Zustimmungs-Quelle (collectSources legt sie an).
+const CONSENT_METER_KEYS = Object.freeze({ gridVoltage: Object.freeze(['gridL1', 'gridL2', 'gridL3']) });
+/** Darf ein Wert dieses Zähler-Schlüssels hinaus (Zustimmung erteilt)? */
+export function readingConsented(sources, key) {
+  for (const g of CONSENT_SOURCE_GROUPS) {
+    if ((CONSENT_METER_KEYS[g] || []).includes(key)) return sourceEnabled(sources, g);
+  }
+  return true;
+}
 /** Alle Quellengruppen als { gruppe: boolean } nach derselben Regel. */
 export function enabledSources(sources) {
   return Object.fromEntries(SOURCE_GROUPS.map((g) => [g, sourceEnabled(sources, g)]));
@@ -383,6 +392,19 @@ export function createDatenspende(ctx = {}, deps = {}) {
     if (!qq.readings.length) return { ok: true, sent: 0 };
     const t = now();
     if (qq.lastFailAt && t - Date.parse(qq.lastFailAt) < HEAD_RETRY_BACKOFF_MS) return { skipped: 'backoff' };
+    // Werte ohne Zustimmung (Netzspannung, Fable R3 P2-3 / Codex 0bf101d2):
+    // auch schon gesammelte nie registrieren oder senden — vor dem Anlegen der
+    // Zähler und noch einmal davor, falls die Zustimmung inzwischen weg ist.
+    const dropUnconsented = () => {
+      const src = getCfg()?.datenspende?.sources;
+      const kept = qq.readings.filter((r) => readingConsented(src, r.key));
+      if (kept.length === qq.readings.length) return false;
+      qq.readings = kept;
+      persistQueue();
+      return true;
+    };
+    dropUnconsented();
+    if (!qq.readings.length) return { ok: true, sent: 0 };
     try {
       await ensureMeters(sc, [...new Set(qq.readings.map((r) => r.key))]);
       if (!sameLink(loadSidecar(), sc)) throw new LinkChangedError();
@@ -392,6 +414,7 @@ export function createDatenspende(ctx = {}, deps = {}) {
         persistQueue();
         return { skipped: 'disabled' };
       }
+      dropUnconsented();
       const batch = qq.readings.filter((r) => sc.meters?.[r.key]?.id).slice(0, MAX_BATCH_READINGS);
       if (!batch.length) return { ok: true, sent: 0 };
       const wire = batch.map((r) => {
