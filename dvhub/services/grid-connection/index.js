@@ -1346,7 +1346,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
 
   // --- Akku zuerst für mehrere Quellen (Christin 10.11.2026) -----------------
   // Nicht nur die Netzanschluss-Grenze (intern, Quelle 'grid-connection'), auch
-  // §14a ('p14a') und später das EOS-Schwellen-Peak-Shaving ('eos-threshold')
+  // §14a ('p14a') und das EOS-Schwellen-Peak-Shaving ('eos-threshold', services/optimizer/eos-threshold-assist.js)
   // können Akku-Hilfe anfordern: request({ source, maxImportW }) = höchster
   // erlaubter Netzbezug, oder request({ source, coverW }) = so viel Last soll der
   // Akku zusätzlich übernehmen. Das strengste Ziel gewinnt. Nicht-Victron: der
@@ -1394,6 +1394,14 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     return ceiling == null ? null : Math.max(0, ceiling);
   }
   const SOURCE_LABEL = { p14a: '§14a', 'eos-threshold': 'EOS-Schwelle' };
+  // Schwellen-Peak-Shaving aus dem EOS-Plan (schedule-eval →
+  // services/optimizer/eos-threshold-assist.js, state.ctrl.eosThreshold) für die
+  // Kachel: „EOS: Akku deckt über X kW“. Im Not-Halt nichts.
+  function eosThresholdInfo() {
+    const e = state()?.ctrl?.eosThreshold;
+    if (paused() || !e || !finite(e.thresholdW)) return null;
+    return { thresholdW: e.thresholdW, requested: e.requested === true, coveredBy: e.coveredBy ?? null, reason: e.reason ?? null };
+  }
   // Kachel ohne Netzanschluss-Grenze, solange eine andere Quelle (§14a)
   // Akku-Hilfe anfordert; sonst keine Kachel.
   function assistOnlySummary(r) {
@@ -1417,6 +1425,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       importW: meas?.fresh ? Math.max(0, Math.round(meas.importW)) : null, phasesW: null,
       failsafe: false, paused: paused(), exhausted: false,
       batterySupported: r.batterySupported, battery: r.battery, assist, assistSources: list.map((q) => q.source),
+      eosThreshold: eosThresholdInfo(),
       ceilingW: null, clamp: null, caps: [], acting: Boolean(assist), text
     };
   }
@@ -1484,6 +1493,9 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         // oder die Entladegrenze ist gerade angehoben.
         active: !paused() && r.battery.kind !== 'none' && (source ? own != null : (st.assist != null || list.length > 0)),
         targetW,
+        // Ziel des Netzanschluss-Wächters allein (null = keine Grenze): Quellen
+        // mit derselben Grenze (EOS-Schwelle) sparen sich dann die Anforderung.
+        gridTargetW: r.active && !paused() ? r.targetW : null,
         sourceTargetW: own ? (own.maxImportW ?? null) : null,
         helpW,
         valueW: st.assist?.valueW ?? null,
@@ -1580,6 +1592,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         battery: r.battery,
         assist,
         assistSources: liveRequests().map((q) => q.source),
+        eosThreshold: eosThresholdInfo(),
         ceilingW: r.active && r.batterySupported ? st.ceilingW ?? r.targetW : null,
         clamp,
         caps,

@@ -709,7 +709,10 @@ test('ohne Bedarf am Netzanschluss bleibt die 3-Punkte-Schwelle', async () => {
 test('Steuerpfad: Lasten vom Netzanschluss gekuerzt oder §14a-Akku-Hilfe angefordert → keine Sperre', async () => {
   for (const summary of [
     { enabled: true, active: true, paused: false, caps: [{ id: 'wallbox', capW: 0 }], assistSources: [] },
-    { enabled: true, active: false, paused: false, assistOnly: true, caps: [], assistSources: ['p14a'] }
+    { enabled: true, active: false, paused: false, assistOnly: true, caps: [], assistSources: ['p14a'] },
+    // EOS-Schwelle in einem gehaltenen Slot, vom Wächter mit gleicher Grenze
+    // gedeckt (keine eigene Anforderung): der Akku soll trotzdem decken dürfen.
+    { enabled: true, active: true, paused: false, caps: [], assistSources: [], eosThreshold: { thresholdW: 8000, requested: false, coveredBy: 'grid-connection' } }
   ]) {
     const w = evaluatorWorld({ ctxExtra: { gridConnection: { summary: () => summary, batteryCeilingW: () => null, dischargeFloorW: () => null } } });
     await w.ev.applyControlTarget('gridSetpointW', -3000, 'rule:eos');
@@ -717,8 +720,9 @@ test('Steuerpfad: Lasten vom Netzanschluss gekuerzt oder §14a-Akku-Hilfe angefo
     assert.equal(w.state.multiGxHandoff.phase, 'off', JSON.stringify(summary));
     assert.ok(!w.writes.some((x) => x.target === 'maxDischargeW'));
   }
-  // Gegenprobe: Waechter aktiv, aber nichts gekuerzt → Uebergabe wie gehabt
-  const w = evaluatorWorld({ ctxExtra: { gridConnection: { summary: () => ({ enabled: true, active: true, paused: false, caps: [], assistSources: [] }), batteryCeilingW: () => null, dischargeFloorW: () => null } } });
+  // Gegenprobe: Waechter aktiv, aber nichts gekuerzt (EOS-Schwelle nicht
+  // wirksam) → Uebergabe wie gehabt
+  const w = evaluatorWorld({ ctxExtra: { gridConnection: { summary: () => ({ enabled: true, active: true, paused: false, caps: [], assistSources: [], eosThreshold: { thresholdW: 8000, requested: false, coveredBy: null, reason: 'battery_not_steerable' } }), batteryCeilingW: () => null, dischargeFloorW: () => null } } });
   await w.ev.applyControlTarget('gridSetpointW', -3000, 'rule:eos');
   assert.equal(w.state.multiGxHandoff.phase, 'arming');
 });

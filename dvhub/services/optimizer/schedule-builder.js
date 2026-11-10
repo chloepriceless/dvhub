@@ -74,7 +74,10 @@ export function buildScheduleRules({ slots, source = 'forecast_optimizer', optim
       // and writes the reg-2704 cap. Present only on EOS battery-export slots.
       ...(slot.closedLoopExport ? { closedLoopExport: true, batteryShareW: slot.batteryShareW } : {}),
       // Akku halten: schedule-eval ersetzt value jeden Takt durch den Live-Netzbezug.
-      ...(slot.closedLoopHold ? { closedLoopHold: true, evPlanned: slot.evPlanned === true } : {})
+      ...(slot.closedLoopHold ? { closedLoopHold: true, evPlanned: slot.evPlanned === true } : {}),
+      // Schwellen-Peak-Shaving (EOS-PR D): Akku deckt den Bezug über dieser
+      // Schwelle, auch wenn der Plan ihn hält (schedule-eval → ctx.batteryAssist).
+      ...(Number.isFinite(slot.peakShavingThresholdW) ? { peakShavingThresholdW: slot.peakShavingThresholdW } : {})
     };
   });
 }

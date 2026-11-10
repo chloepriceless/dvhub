@@ -4,7 +4,9 @@
 // begrenzt — im Klartext des Wächters, z. B. „Netzanschluss: begrenzt
 // Akku-Ladung auf 28,0 kW · Wallbox pausiert“. Quelle ist /api/status.gridConnection;
 // ohne eingetragene Grenze bleibt die Kachel weg. Dazu der Akku-Hebel („Akku
-// zuerst“ bzw. „Akku nicht steuerbar“) und die aktuelle Akku-Hilfe in kW. view() ist reine Anzeige-Logik
+// zuerst“ bzw. „Akku nicht steuerbar“) und die aktuelle Akku-Hilfe in kW, dazu
+// „EOS: Akku deckt über X kW“, solange ein gehaltener EOS-Slot eine Schwelle hat
+// (Schwellen-Peak-Shaving, status.gridConnection.eosThreshold). view() ist reine Anzeige-Logik
 // (test/grid-connection-view.test.js), render() setzt sie in die Kachel aus index.html.
 (function () {
   'use strict';
@@ -47,8 +49,21 @@
     return `${kw(a.helpW)} (Entladegrenze ${kw(a.valueW)} statt ${base})${who}`;
   }
 
+  // Schwellen-Peak-Shaving aus dem EOS-Plan (s.eosThreshold = status.ctrl.
+  // eosThreshold): nur, wenn es wirkt — eigene Anforderung oder derselbe
+  // Wächter-Deckel. Im Not-Halt nie.
+  function eosLine(s) {
+    const e = s.eosThreshold;
+    if (s.paused || !e || !num(e.thresholdW)) return null;
+    if (e.requested !== true && !e.coveredBy) return null;
+    return `EOS: Akku deckt über ${kw(e.thresholdW)}`;
+  }
+
+  const sameList = (a, b) => Array.isArray(a) && a.length === b.length && a.every((x, i) => x === b[i]);
+
   function view(s) {
     if (!s || s.enabled !== true) return { hidden: true };
+    const eos = eosLine(s);
     const [label, tone] = state(s);
     // Victron-Grenze ohne Abstand: das sagen statt „Ziel = Grenze“ unerklärt.
     const limit = s.assistOnly ? 'keine eingetragen' : num(s.limitW)
@@ -69,7 +84,12 @@
       assist: assist(s.assist, s.assistSources),
       state: label,
       tone,
-      detail: s.text || (s.assistOnly ? 'Akku-Hilfe angefordert.' : s.active ? 'Keine Begrenzung nötig.' : 'Netzanschluss-Grenze ungültig (2 bis 2 000 kW) — DVhub regelt nicht.')
+      eosThreshold: eos,
+      // Nur die EOS-Schwelle fordert an und der Akku gibt noch nichts ab:
+      // „EOS-Schwelle: Akku-Hilfe angefordert“ sagt dasselbe wie die EOS-Zeile.
+      detail: eos && s.assistOnly && !s.assist && sameList(s.assistSources, ['eos-threshold']) ? eos
+        : s.text ? (eos ? `${s.text} · ${eos}` : s.text)
+        : eos || (s.assistOnly ? 'Akku-Hilfe angefordert.' : s.active ? 'Keine Begrenzung nötig.' : 'Netzanschluss-Grenze ungültig (2 bis 2 000 kW) — DVhub regelt nicht.')
     };
   }
 

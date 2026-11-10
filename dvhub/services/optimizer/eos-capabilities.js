@@ -37,6 +37,17 @@ export const EOS_EV_CHARGE_START_FIELD = 'charge_start_datetime';
 // aus DVhub (services/grid-connection). Gibt es nur in unserem EOS.
 export const EOS_GRID_IMPORT_LIMIT_FIELD = 'max_grid_import_power_w';
 
+// Schwellen-Peak-Shaving (unser EOS, PR D auf der Netzbezugs-Grenze; nicht in
+// Vanilla v0.4.0rc3): optionales Feld an JEDER Akku-Instruktion des Plans
+// (GET /v1/energy-management/plan, FRBCInstruction). W, null = aus. In Slots,
+// in denen der Plan den Akku hält, deckt der Akku den Netzbezug über der
+// Schwelle trotzdem. EOS schreibt dort `max_grid_import_power_w` hinein.
+export const EOS_PEAK_SHAVING_THRESHOLD_FIELD = 'peak_shaving_threshold_w';
+// Darüber ist es „aus“: DVhub hebt EOS' Grenze mit 1 GW auf
+// (grid-connection EOS_GRID_IMPORT_OFF_W); ein Hausanschluss hat höchstens
+// 2 MW (grid-connection MAX_LIMIT_W).
+export const PEAK_SHAVING_THRESHOLD_MAX_W = 2_000_000;
+
 // Die Abschnitte, in denen EOS Geräte führt. #1330 hat sie von Listen auf
 // Abbildungen nach device_id umgestellt — an genau einer davon lässt sich die
 // Fassung ablesen, ohne dass ein Gerät konfiguriert sein muss.
@@ -152,4 +163,32 @@ export function createEosCapabilityProbe({ request, ttlMs = 5 * 60 * 1000 } = {}
   }
 
   return { get, reset: () => { cached = null; } };
+}
+
+const isBatteryInstruction = (e) => isObj(e) && e.type === 'FRBCInstruction'
+  && (!e.actuator_id || String(e.actuator_id).startsWith('battery'));
+
+/**
+ * Schwelle einer Akku-Instruktion (W, ganzzahlig) oder null: fehlt, null,
+ * ungültig, negativ oder „aus“ (über PEAK_SHAVING_THRESHOLD_MAX_W).
+ */
+export function peakShavingThresholdW(instruction) {
+  if (!isObj(instruction)) return null;
+  const raw = instruction[EOS_PEAK_SHAVING_THRESHOLD_FIELD];
+  if (raw === null || raw === undefined || raw === '' || typeof raw === 'boolean') return null;
+  const w = Number(raw);
+  if (!Number.isFinite(w) || w < 0 || w > PEAK_SHAVING_THRESHOLD_MAX_W) return null;
+  return Math.round(w);
+}
+
+/**
+ * Fähigkeiten, die nur am Plan zu sehen sind (nicht an GET /v1/config):
+ * `peakShavingThreshold` = mindestens eine Akku-Instruktion kennt den
+ * Schlüssel (auch mit null — dann ist nur gerade keine Grenze gesetzt).
+ */
+export function detectPlanCapabilities(instructions) {
+  const list = Array.isArray(instructions) ? instructions : [];
+  return {
+    peakShavingThreshold: list.some((e) => isBatteryInstruction(e) && hasKey(e, EOS_PEAK_SHAVING_THRESHOLD_FIELD)),
+  };
 }

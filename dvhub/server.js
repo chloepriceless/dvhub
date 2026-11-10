@@ -1500,7 +1500,7 @@ ctx.notifyDirect = createDirectNotifier({
 // (Sollwert-Decke, Wallbox, Heizstab, EEBUS) fragen ihn ab. Vor dem Poller,
 // damit schon die erste Abfrage zählt.
 ctx.gridConnection = createGridConnectionGuard(ctx);
-// Akku zuerst für mehrere Quellen (§14a, später EOS-Schwelle): request/release/
+// Akku zuerst für mehrere Quellen (§14a, EOS-Schwelle): request/release/
 // status — das strengste Ziel gewinnt (services/grid-connection).
 ctx.batteryAssist = ctx.gridConnection.batteryAssist;
 const poller = createPoller(ctx);
