@@ -100,21 +100,33 @@ asset_id() {  # $1 = Asset-Name → ID auf stdout, Exit 1 wenn es ihn nicht gibt
 # neue Index nur diese Version, und der Rückweg auf die vorige fehlte (Fable R3,
 # P3-6).
 PREV="$WORK/prev.json"
+# Kopie des lebenden Paars (Index + Signatur) für die Wiederherstellung.
+RESTORE="$WORK/restore"
 valid_index() { "$NODE" -e 'const i=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(!Array.isArray(i.releases))process.exit(1)' "$1" 2>/dev/null; }
 if [[ "$DRY" -eq 1 ]]; then
   [[ -f "$DEST/channels/index-$CHANNEL.json" ]] && cp "$DEST/channels/index-$CHANNEL.json" "$PREV"
 else
   if fetch_channels; then
-    # Lebender Index; fehlt er nach einer unterbrochenen Umbenennung, der
-    # Zwischenstand (.new, enthält den Vorgänger) oder die Sicherung (.old) —
-    # nie still ohne Vorgänger (Codex 9f40b69c).
-    for cand in "index-$CHANNEL.json" "index-$CHANNEL.json.new" "index-$CHANNEL.json.old"; do
+    # Lebender Index; fehlt er nach einer unterbrochenen Umstellung, der
+    # Zwischenstand (.new, enthält den Vorgänger) — nie still ohne Vorgänger
+    # (Codex 9f40b69c). Vom lebenden Stand bleibt eine Kopie samt Signatur für
+    # die Wiederherstellung unten (RESTORE).
+    for cand in "index-$CHANNEL.json" "index-$CHANNEL.json.new"; do
       asset_id "$cand" >/dev/null || continue
       rm -f "$PREV"
       gh release download channels -R "$GH_REPO" -p "$cand" -O "$PREV" \
         || die "bisheriger Kanal-Index $cand nicht ladbar — Abbruch (sonst fehlte der Vorgänger im neuen Index)"
       if valid_index "$PREV"; then
-        [[ "$cand" == "index-$CHANNEL.json" ]] || echo "publish-release: Hinweis: lebender Index fehlt, Vorgänger aus $cand (unterbrochene Veröffentlichung)" >&2
+        if [[ "$cand" == "index-$CHANNEL.json" ]]; then
+          if asset_id "index-$CHANNEL.json.sig" >/dev/null; then
+            mkdir -p "$RESTORE"
+            cp "$PREV" "$RESTORE/index-$CHANNEL.json"
+            gh release download channels -R "$GH_REPO" -p "index-$CHANNEL.json.sig" -O "$RESTORE/index-$CHANNEL.json.sig" \
+              || die "Signatur des bisherigen Kanal-Index nicht ladbar — Abbruch"
+          fi
+        else
+          echo "publish-release: Hinweis: lebender Index fehlt, Vorgänger aus $cand (unterbrochene Veröffentlichung)" >&2
+        fi
         break
       fi
       [[ "$cand" == "index-$CHANNEL.json" ]] && die "bisheriger Kanal-Index $cand ist kein gültiger Index — Abbruch"
@@ -190,7 +202,7 @@ fi
 # Index zuletzt: erst wenn alle Pakete oben liegen, zeigt er auf sie.
 # Möglichst atomar (Fable R3, P3-6): beide Dateien erst unter Zwischennamen
 # hochladen — scheitert das, bleiben alter Index und alte Signatur gültig —,
-# dann umbenennen, erst die Signatur, dann den Index. Während der Umbenennungen
+# dann umbenennen, erst die Signatur, dann den Index. Während des Umstellens
 # (kurze API-Aufrufe) sieht eine prüfende Box für einen Augenblick keinen Index
 # oder Index und Signatur aus verschiedenen Ständen; ihre Prüfung schlägt dann
 # einmal fehl und gelingt beim nächsten Prüfen (nichts wird installiert).
@@ -199,45 +211,39 @@ mkdir -p "$UP"
 cp "$WORK/index-$CHANNEL.json" "$UP/index-$CHANNEL.json.new"
 cp "$WORK/index-$CHANNEL.json.sig" "$UP/index-$CHANNEL.json.sig.new"
 gh release upload channels -R "$GH_REPO" --clobber "$UP/index-$CHANNEL.json.sig.new" "$UP/index-$CHANNEL.json.new"
-# Umbenennen mit Sicherung (Codex 9f40b69c): der lebende Stand wird erst zu
-# ….old, dann der Zwischenstand zum lebenden Namen; scheitert ein Schritt,
-# kommt der alte Stand zurück. Gelöscht wird die Sicherung erst, wenn beide
-# Dateien umgestellt sind.
+# Umstellen (Codex 9f40b69c, 8f94225c): je Datei den lebenden Stand löschen
+# und den Zwischenstand umbenennen, erst die Signatur, dann den Index.
+# Scheitert ein Schritt — auch einer, dessen Antwort nur verloren ging —,
+# lädt das Skript das vorher geholte lebende Paar wieder unter den lebenden
+# Namen hoch (--clobber, gleich welcher Zwischenzustand am Release liegt) und
+# prüft danach am Release, dass Index und Signatur in alter Größe da sind.
 IDX="index-$CHANNEL.json"
 SIG="index-$CHANNEL.json.sig"
 gh_rename() { gh api -X PATCH "repos/$GH_REPO/releases/assets/$1" -f "name=$2" >/dev/null; }
 gh_delete() { gh api -X DELETE "repos/$GH_REPO/releases/assets/$1" >/dev/null; }
-fetch_channels || die "Kanal-Release nicht abrufbar vor dem Umbenennen ($(tr '\n' ' ' < "$WORK/gh-channels.err" | cut -c1-300))"
-NEW_SIG_ID="$(asset_id "$SIG.new")" || die "Zwischenstand $SIG.new fehlt am Release channels"
-NEW_IDX_ID="$(asset_id "$IDX.new")" || die "Zwischenstand $IDX.new fehlt am Release channels"
-OLD_SIG_ID="$(asset_id "$SIG" || true)"
-OLD_IDX_ID="$(asset_id "$IDX" || true)"
-# Alte Sicherungen eines früheren Laufs: weg, wenn der lebende Stand da ist;
-# sonst ist die Sicherung der einzige alte Stand und bleibt.
-for n in "$SIG" "$IDX"; do
-  if stale="$(asset_id "$n.old")"; then
-    if asset_id "$n" >/dev/null; then gh_delete "$stale"; fi
-  fi
-done
-BACKED=""
-PROMOTED=""
-restore() {
-  local ok=1
-  # Erst den neuen Stand zurück auf ….new (Name frei machen), dann die Sicherung zurück.
-  case " $PROMOTED " in *" idx "*) gh_rename "$NEW_IDX_ID" "$IDX.new" || ok=0 ;; esac
-  case " $PROMOTED " in *" sig "*) gh_rename "$NEW_SIG_ID" "$SIG.new" || ok=0 ;; esac
-  case " $BACKED " in *" idx "*) gh_rename "$OLD_IDX_ID" "$IDX" || ok=0 ;; esac
-  case " $BACKED " in *" sig "*) gh_rename "$OLD_SIG_ID" "$SIG" || ok=0 ;; esac
-  if [[ "$ok" -eq 1 ]]; then
-    die "Umbenennen gescheitert ($1) — alter Index samt Signatur wiederhergestellt, Zwischenstand liegt als ….new bereit; erneut ausführen"
-  fi
-  die "Umbenennen gescheitert ($1) und Wiederherstellen unvollständig — am Release channels von Hand prüfen ($IDX, $SIG, ….old, ….new); ein erneuter Lauf nimmt den Vorgänger aus ….new bzw. ….old"
+asset_size() {  # $1 = Asset-Name → Größe auf stdout, Exit 1 wenn es ihn nicht gibt
+  "$NODE" -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const a=(r.assets||[]).find((x)=>x.name===process.argv[2]);if(!a)process.exit(1);process.stdout.write(String(a.size))' "$CHANNELS_JSON" "$1"
 }
-if [[ -n "$OLD_SIG_ID" ]]; then gh_rename "$OLD_SIG_ID" "$SIG.old" || restore "Sicherung $SIG"; BACKED="$BACKED sig"; fi
-if [[ -n "$OLD_IDX_ID" ]]; then gh_rename "$OLD_IDX_ID" "$IDX.old" || restore "Sicherung $IDX"; BACKED="$BACKED idx"; fi
-gh_rename "$NEW_SIG_ID" "$SIG" || restore "$SIG"; PROMOTED="$PROMOTED sig"
-gh_rename "$NEW_IDX_ID" "$IDX" || restore "$IDX"; PROMOTED="$PROMOTED idx"
-# Beide umgestellt: Sicherungen weg (Fehler hier nur melden — der neue Stand gilt).
-if [[ -n "$OLD_SIG_ID" ]]; then gh_delete "$OLD_SIG_ID" || echo "publish-release: Hinweis: Sicherung $SIG.old nicht gelöscht" >&2; fi
-if [[ -n "$OLD_IDX_ID" ]]; then gh_delete "$OLD_IDX_ID" || echo "publish-release: Hinweis: Sicherung $IDX.old nicht gelöscht" >&2; fi
+promote() {  # $1 = lebender Name; $1.new liegt oben
+  local new_id live_id
+  fetch_channels || return 1
+  new_id="$(asset_id "$1.new")" || return 1
+  if live_id="$(asset_id "$1")"; then gh_delete "$live_id" || return 1; fi
+  gh_rename "$new_id" "$1"
+}
+restore() {
+  if [[ ! -f "$RESTORE/$IDX" || ! -f "$RESTORE/$SIG" ]]; then
+    die "Umstellen gescheitert ($1); es gab kein altes Paar zum Wiederherstellen — Zwischenstand prüfen und erneut ausführen"
+  fi
+  gh release upload channels -R "$GH_REPO" --clobber "$RESTORE/$SIG" "$RESTORE/$IDX" \
+    || die "Umstellen gescheitert ($1) und Wiederherstellen gescheitert — am Release channels von Hand prüfen ($IDX, $SIG); ein erneuter Lauf nimmt den Vorgänger aus dem lebenden Index bzw. $IDX.new"
+  if fetch_channels \
+      && [[ "$(asset_size "$IDX" || true)" == "$(wc -c < "$RESTORE/$IDX" | tr -d ' ')" ]] \
+      && [[ "$(asset_size "$SIG" || true)" == "$(wc -c < "$RESTORE/$SIG" | tr -d ' ')" ]]; then
+    die "Umstellen gescheitert ($1) — alter Index samt Signatur wiederhergestellt; erneut ausführen"
+  fi
+  die "Umstellen gescheitert ($1); Wiederherstellen nicht bestätigt — am Release channels von Hand prüfen ($IDX, $SIG)"
+}
+promote "$SIG" || restore "$SIG"
+promote "$IDX" || restore "$IDX"
 echo "Veröffentlicht: $VERSION ($CHANNEL)"

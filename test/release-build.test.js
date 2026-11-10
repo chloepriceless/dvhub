@@ -551,7 +551,7 @@ const fail = (msg) => { process.stderr.write(msg + '\\n'); process.exit(1); };
 const opt = (n) => { const i = a.indexOf(n); return i >= 0 ? a[i + 1] : undefined; };
 if (process.env.FAKE_GH_OFFLINE === '1' && a.join(' ').includes('channels')) fail('error connecting to api.github.com');
 const relDir = (tag) => path.join(store, 'rel', tag);
-const assetsOf = (tag) => Object.entries(ids.assets).filter(([, v]) => v.tag === tag).map(([id, v]) => ({ id: Number(id), name: v.name }));
+const assetsOf = (tag) => Object.entries(ids.assets).filter(([, v]) => v.tag === tag).map(([id, v]) => ({ id: Number(id), name: v.name, size: fs.existsSync(path.join(relDir(tag), v.name)) ? fs.statSync(path.join(relDir(tag), v.name)).size : 0 }));
 if (a[0] === 'api') {
   const method = opt('-X') || 'GET';
   const route = a.find((x, i) => i > 0 && x.startsWith('repos/'));
@@ -568,8 +568,12 @@ if (a[0] === 'api') {
       // Einmaliger Fehler (vorübergehend, z. B. 502): der nächste Aufruf gelingt.
       const failMark = path.join(store, 'patch-failed');
       if (process.env.FAKE_GH_PATCH_FAIL === name && !fs.existsSync(failMark)) { fs.writeFileSync(failMark, '1'); fail('gh: Server Error (HTTP 502)'); }
+      // Verlorene Antwort: GitHub hat umbenannt, der Aufruf meldet trotzdem Fehler.
+      const lostMark = path.join(store, 'patch-lost');
+      const lost = process.env.FAKE_GH_PATCH_LOST === name && !fs.existsSync(lostMark);
       if (assetsOf(as.tag).some((x) => x.name === name)) fail('gh: Validation Failed (HTTP 422) already_exists');
       fs.renameSync(path.join(relDir(as.tag), as.name), path.join(relDir(as.tag), name)); as.name = name; save();
+      if (lost) { fs.writeFileSync(lostMark, '1'); fail('error connecting to api.github.com (connection reset)'); }
       process.stdout.write(JSON.stringify({ id: Number(m[1]), name })); process.exit(0);
     }
   }
@@ -660,8 +664,7 @@ test('publish-release.sh (P3-6): bisheriger Index bleibt drin, Zwischennamen + U
     assert.match(calls, /release upload channels .*index-stable\.json\.sig\.new .*index-stable\.json\.new/, 'Zwischennamen');
     const lastRun = calls.slice(calls.lastIndexOf('releases/tags/channels', calls.lastIndexOf('index-stable.json.new')));
     const renames = [...lastRun.matchAll(/-X PATCH \S+ -f name=(\S+)/g)].map((m) => m[1]);
-    assert.deepEqual(renames, ['index-stable.json.sig.old', 'index-stable.json.old', 'index-stable.json.sig', 'index-stable.json'],
-      'erst sichern, dann Signatur, dann Index');
+    assert.deepEqual(renames, ['index-stable.json.sig', 'index-stable.json'], 'erst Signatur, dann Index');
 
     // (4) Codex 9f40b69c: Umbenennen scheitert mittendrin → alter Stand zurück, Zwischenstand bleibt.
     const live = fs.readFileSync(idxFile, 'utf8');
@@ -672,7 +675,13 @@ test('publish-release.sh (P3-6): bisheriger Index bleibt drin, Zwischennamen + U
     assert.equal(fs.readFileSync(idxFile, 'utf8'), live, 'lebender Index zurück');
     assert.equal(fs.readFileSync(`${idxFile}.sig`, 'utf8'), liveSig, 'lebende Signatur zurück');
     assert.deepEqual(fs.readdirSync(path.join(gh.store, 'rel', 'channels')).sort(),
-      ['index-stable.json', 'index-stable.json.new', 'index-stable.json.sig', 'index-stable.json.sig.new']);
+      ['index-stable.json', 'index-stable.json.new', 'index-stable.json.sig'], 'Zwischenstand des Index bleibt für den nächsten Lauf');
+    // (4b) Codex 8f94225c: Umbenennen wirkt, aber die Antwort geht verloren → trotzdem altes Paar zurück.
+    const lostRun = run({ FAKE_GH_PATCH_LOST: 'index-stable.json.sig' });
+    assert.notEqual(lostRun.status, 0);
+    assert.match(lostRun.stderr, /wiederhergestellt/);
+    assert.equal(fs.readFileSync(idxFile, 'utf8'), live, 'lebender Index = alter');
+    assert.equal(fs.readFileSync(`${idxFile}.sig`, 'utf8'), liveSig, 'lebende Signatur = alte, passend zum Index');
 
     // (5) Lebender Index fehlt (Abbruch zwischen Sichern und Umstellen): Vorgänger aus ….new, nicht „erster Index“.
     const ch = path.join(gh.store, 'rel', 'channels');
