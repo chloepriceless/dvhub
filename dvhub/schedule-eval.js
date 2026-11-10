@@ -1035,6 +1035,20 @@ export function createScheduleEvaluator(ctx) {
   }
   // === end T-VERIFY =========================================================
 
+  // Nach einem Neustart ohne eigenen Write: steht die Entladegrenze nachweislich
+  // über value? Frische Rücklesung (≥ 0, über value) oder der Merker der
+  // Akku-Hilfe (services/grid-connection persistedRestoreW) mit genau diesem Wert.
+  function dischargeKnownAbove(value) {
+    const v = state.victron || {};
+    const at = Number(v.fieldUpdatedAt?.maxDischargeW) || 0;
+    const maxAge = Number(getCfg()?.victron?.telemetryMaxAgeMs ?? 90000);
+    const rb = Number(v.maxDischargeW);
+    if (at > 0 && Date.now() - at <= maxAge && !v.errors?.maxDischargeW && Number.isFinite(rb) && rb >= 0 && rb > value) return true;
+    let merker;
+    try { merker = ctx.gridConnection?.persistedRestoreW?.() ?? null; } catch { merker = null; }
+    return merker != null && Number(merker) === value;
+  }
+
   async function applyControlTarget(target, value, source) {
     const cfg = getCfg();
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
@@ -1062,10 +1076,14 @@ export function createScheduleEvaluator(ctx) {
     // Ebenso der Netzanschluss (Akku zuerst, Nicht-Victron): seine angehobene
     // Entladegrenze darf er auf den Wert davor SENKEN — nur abwärts, nie auf
     // „unbegrenzt“, nur unter dem, was gerade steht.
+    // Beleg für „steht höher“: DVhubs letzter eigener Write; nach einem Neustart
+    // (kein Write bekannt) auch eine frische Rücklesung oder der Merker der
+    // Akku-Hilfe mit genau diesem Rückkehrwert (Fable R1 P2-7).
     const lwDischarge = state.schedule?.lastWrite?.maxDischargeW;
     const gridConnectionRestore = source === 'grid_connection_restore' && target === 'maxDischargeW'
-      && Number(value) >= 0 && lwDischarge != null && Number(lwDischarge.value) > 0
-      && Number(value) < Number(lwDischarge.value);
+      && Number(value) >= 0 && (lwDischarge != null
+        ? Number(lwDischarge.value) > 0 && Number(value) < Number(lwDischarge.value)
+        : dischargeKnownAbove(Number(value)));
     // Ebenso die Einspeisung aus Akku 2 (multi-gx/floor-handoff.js): sie schreibt
     // im Not-Halt EINMAL die vor ihrer Sperre gesicherte Entladegrenze zurück —
     // nur genau diesen, gerade angemeldeten Wert, nie eine neue Sperre.

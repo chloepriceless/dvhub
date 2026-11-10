@@ -278,6 +278,26 @@ verweist hierher.
 
 ### Behoben
 
+- **Netzanschluss: Wallbox wird nicht mehr unnötig gekürzt, wenn der Akku aus dem Netz lädt (Fable-Prüfung R1).**
+  Das Einregeln des Multi um den Sollwert (bis 300 W) gilt nicht mehr als „Akku hängt“, auch über der harten Grenze
+  nicht; größere Abweichungen zählen erst nach 10 s über der harten Grenze bzw. 30 s im Sicherheitsabstand. „Hängt“
+  endet, sobald eine gekürzte Last nachweislich in den Akku floss (bisher: 15 min eingerastet, die Wallbox wurde
+  Schritt für Schritt bis zur Pause gekürzt, während der Akku weiter aus dem Netz lud). Die Sollwert-Decke für die
+  Akku-Ladung hält dafür die Einregel-Toleranz (300 W) unter der harten Grenze, wenn der Abstand kleiner ist (Victron-
+  Grenze ohne Abstand) — die Lasten dürfen weiter bis zur Victron-Grenze. Ein Gerät ohne Leistungsmeldung (Wallbox aus
+  oder ohne Zähler, evcc nicht erreichbar) zählt nicht mehr mit angenommenen 22 kW als Puffer: Die nächste Last wird im
+  selben Takt gekürzt (bisher bis zu Minuten über der Grenze). Im Fail-safe (Zähler gestört) stoppt DVhub eine Wallbox
+  ohne Leistungsmeldung nicht mehr, sondern lässt ihre Grenze stehen. Ein Heizstab, der von selbst läuft (DVhub gibt
+  ihm 0 W vor), zählt nicht als steuerbar. Merker des Wächters gehen beim Zurücksetzen mit.
+- **Not-Halt „als ob aus“ auch für DVhubs Wallbox-Begrenzungen (Fable-Prüfung R1).** Hat DVhub eine von Hand
+  gestartete Ladung nur begrenzt (Netzanschluss, §14a), hebt der Not-Halt die eigene Begrenzung einmal auf statt die
+  Ladung zu stoppen: direkte Box `release()` (openWB: voller Strom), evcc den ursprünglichen Ladestrom (maxcurrent) und
+  — falls DVhub „aus“ gesetzt hat und evcc noch darauf steht — den Modus davor. Danach schreibt DVhub nichts mehr.
+  Von DVhub gestartete Ladungen („Sofort laden“, EOS-Plan) stoppt der Not-Halt wie bisher.
+- **Not-Halt nach Neustart: angehobene Entladegrenze geht zurück (Fable-Prüfung R1).** Startet DVhub mit
+  angehobener Entladegrenze (Akku-Hilfe, Nicht-Victron) direkt im Not-Halt, ließ das Tor die eine Rücknahme nicht
+  durch, weil der eigene letzte Write fehlte. Beleg ist jetzt auch der Merker der Akku-Hilfe oder eine frische
+  Rücklesung.
 - **Netzanschluss: Victron-Grenze fail-safe und stabil (Fable-Prüfung R1).** Ein einzelner Lesefehler von Reg. 2714
   hebt die Victron-Grenze nicht mehr auf: Der zuletzt gelesene Wert gilt bis 5 min nach der letzten erfolgreichen
   Lesung weiter, danach die DVhub-Einstellung — Deckel und Sollwert-Decke bleiben stehen (bisher: alle Deckel sofort

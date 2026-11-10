@@ -603,11 +603,16 @@ test('Runde 6 P1: einphasige Wallbox — Freigabe rechnet mit der Luft EINER Pha
 test('Runde 6 P1: Gerät ohne Leistungsmeldung wird bei Überlast trotzdem begrenzt', () => {
   const st = createGuardState();
   const dev = { id: 'eebus:x', kind: 'eebus', name: 'WP', currentW: null, maxW: 6000, minW: 0 };
-  // 32 kW > 29 kW: sofort; angenommen 6 kW → Grenze 2 kW. Solange der Befehl
-  // unterwegs ist, wird nicht weiter gekürzt.
-  for (let i = 0; i < 3; i += 1) guardStep(st, { resolved: RG, now: i * 2000, meas: fresh(32000), devices: [dev], battery: {} });
+  // 32 kW > 29 kW: sofort; angenommen 6 kW → Grenze 2 kW.
+  guardStep(st, { resolved: RG, now: 0, meas: fresh(32000), devices: [dev], battery: {} });
   assert.equal(st.caps['eebus:x'], 2000);
-  assert.equal(st.exhausted, false);
+  assert.equal(st.exhausted, false, 'Wirkung unbekannt: nicht „erschöpft“');
+  // Geändert mit Fable R1 P1-2 (10.11.2026): Eine angenommene Leistung zählt
+  // nicht als „unterwegs“ — bleibt der Bezug über der Grenze, kürzt DVhub
+  // weiter (statt 20 s je Schritt zu warten); erst danach „erschöpft“.
+  for (let i = 1; i < 3; i += 1) guardStep(st, { resolved: RG, now: i * 2000, meas: fresh(32000), devices: [dev], battery: {} });
+  assert.equal(st.caps['eebus:x'], 0);
+  assert.equal(st.exhausted, true);
 });
 
 test('Runde 6 P2: dauerhafter Sollwert ohne Keepalive zählt weiter (aktiver Eintrag), Wallbox bleibt', () => {
