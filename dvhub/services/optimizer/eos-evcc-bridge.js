@@ -240,6 +240,9 @@ export function slotAt(plan, nowMs) {
  */
 // Wallboxen, deren release() nichts am Ladestrom ändert.
 const RELEASE_NOOP_TYPES = Object.freeze(['evcc', 'openwb']);
+// Not-Halt kam mitten in einer Befehlsfolge (Strom → Phasen → Laden): ab da
+// nichts weiter geschrieben (send, Lade-Hülle; emergency-stop/policy.js).
+const PAUSED = Object.freeze({ ok: false, skipped: 'paused' });
 /** Nach dem Stopp am Max-Ladestand erst wieder laden, wenn er so weit darunter liegt (Prozentpunkte). */
 export const MAX_STOP_HOLD_PCT = 1;
 
@@ -408,9 +411,11 @@ export function createEosEvccBridge(deps) {
             // stimmt nicht mehr — der nächste Takt sendet neu (Codex 1c280569).
             if (lastSent) lastSent = { ...lastSent, key: null };
           }
+          if (isPaused()) return PAUSED;
           const ph = await c.setPhases(3);
           if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
           notePhases(3);
+          if (isPaused()) return PAUSED;
         }
         noteAttempt('now');
         const r = await c.charge(a[0]);
@@ -535,8 +540,12 @@ export function createEosEvccBridge(deps) {
             if (!lim?.ok) return lim || { ok: false, error: 'maxcurrent failed' };
             if (lastSent) lastSent = { ...lastSent, key: null };
           }
+          // Not-Halt mitten in der Folge (Strom → Phasen → Laden): ab hier
+          // nichts mehr schreiben („als ob aus“, emergency-stop/policy.js).
+          if (isPaused()) return PAUSED;
           const ph = await charger.setPhases(slot.phases);
           if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
+          if (isPaused()) return PAUSED;
         }
       }
       return charger.charge(slot.currentA, { phases: slot.phases || bc.phases });
@@ -909,6 +918,8 @@ export function createEosEvccBridge(deps) {
       pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: st.raw?.mode ?? null, expected: 'now', override: true });
     }
     const result = await charger.charge(currentA);
+    // Not-Halt mitten in „erst drei Phasen, dann laden“: kein Fehler, nur still.
+    if (result === PAUSED) return { ok: false, skipped: 'paused', override: true };
     if (!result?.ok) {
       lastError = result?.error || 'wallbox write failed';
       pushLog('ev_override_error', { charger: charger.type, error: lastError });
@@ -1221,7 +1232,12 @@ export function createEosEvccBridge(deps) {
         pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: drift.found, expected: lastSent.mode });
       }
 
+      // Not-Halt kam, während die Brücke den Plan holte (getSolution) oder evcc
+      // frisch las: nichts mehr schreiben — auch keine Phasenumschaltung und
+      // kein Stopp am Max-Ladestand. Die eine Neutralisierung macht emergencyStop().
+      if (isPaused()) return { ok: false, skipped: 'paused' };
       const result = hardStop ? await hardStopper(cfg, bc, charger).stop() : await send(charger, bc, slot);
+      if (result === PAUSED) return { ok: false, skipped: 'paused' };
       if (!result?.ok) {
         lastError = result?.error || 'evcc write failed';
         pushLog('eos_evcc_error', { loadpoint: bc.loadpoint, action: slot.action, error: lastError });

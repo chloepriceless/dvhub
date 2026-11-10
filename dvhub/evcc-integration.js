@@ -216,6 +216,8 @@ export function createEvccIntegration(ctx) {
    * 0 = automatisch). Nur sinnvoll, wenn der Ladepunkt umschalten kann.
    */
   async function setPhases(lpId, phases) {
+    // Lese-Modus wie setMode/setMaxCurrent (Fable R2 P2-9): Umschalten wirkt auf die echte Ladung.
+    if (isReadOnlyMode()) { noteBlockedWrite(`evcc phases ${lpId} ${phases}`); return { ok: false, error: 'read_only' }; }
     const c = getCfg();
     const url = c.url;
     if (!url) return { ok: false, error: 'no url configured' };

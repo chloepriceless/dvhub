@@ -39,6 +39,8 @@ verweist hierher.
     Mindestziel, Max-Ladestand und Wallbox-Grenze ruhen; das Mindestziel bleibt vorausschauend. Die Oberfläche sagt es.
   - **Einphasig laden,** wenn die Wallbox umschalten kann (evcc meldet es je Ladepunkt): kleine Leistungen 1,4–3,7 kW
     statt erst ab 4,1 kW dreiphasig. EOS bekommt nur noch Ladestufen, die die Wallbox wirklich fahren kann.
+    Im Not-Halt und im Lese-Modus schaltet DVhub keine Phasen und stoppt nicht am Max-Ladestand — auch nicht, wenn
+    der Not-Halt mitten in einem Befehl („erst Strom, dann Phasen“) oder während des Plan-Abrufs kommt.
   - **Start-Ladestand des Autos an EOS abgerundet** statt gerundet — EOS plant nie mit mehr, als drin ist.
   - **Übernahme:** Bestehende Wochenpläne werden beim Start einmal umgerechnet — Ziel in kWh/km in %, der Heimweg in km
     als Fahrt der Abfahrt davor (Hin- und Rückweg). Status unter `GET /api/ev` (`targets`: Mindestziel, Max,

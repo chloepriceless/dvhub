@@ -96,3 +96,28 @@ test('Lese-Modus: setMode/setMaxCurrent schicken nichts an evcc', async () => {
     await evcc.close();
   }
 });
+
+// Merge 1.0.10 + E-Auto-Wochenplan: die Phasenumschaltung (setPhases) ist der
+// dritte schreibende evcc-Weg — im Lese-Modus wie setMode/setMaxCurrent
+// gesperrt, auch ohne den Wallbox-Adapter davor.
+test('Lese-Modus: setPhases schickt nichts an evcc', async () => {
+  const evcc = await mockEvcc({ loadpoints: [{ title: 'Garage', mode: 'pv', chargerPhases1p3p: true }] });
+  const integ = createEvccIntegration({ getCfg: () => ({ evcc: { url: evcc.url } }), pushLog: () => {} });
+  process.env.DVHUB_READ_ONLY = '1';
+  try {
+    const r = await integ.setPhases(1, 1);
+    assert.deepEqual([r.ok, r.error], [false, 'read_only']);
+    assert.deepEqual(evcc.requests.filter((x) => x.startsWith('POST')), []);
+  } finally {
+    delete process.env.DVHUB_READ_ONLY;
+    await evcc.close();
+  }
+  // Ohne Lese-Modus geht der Befehl raus (Gegenprobe).
+  const evcc2 = await mockEvcc({ loadpoints: [] });
+  try {
+    const integ2 = createEvccIntegration({ getCfg: () => ({ evcc: { url: evcc2.url } }), pushLog: () => {} });
+    const r = await integ2.setPhases(1, 1);
+    assert.equal(r.ok, true);
+    assert.deepEqual(evcc2.requests.filter((x) => x.startsWith('POST')), ['POST /api/loadpoints/1/phases/1']);
+  } finally { await evcc2.close(); }
+});
