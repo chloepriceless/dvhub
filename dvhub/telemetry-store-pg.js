@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
+import { resolutionFilterLimit } from './runtime-performance.js';
 import { expandHourlyPriceRows, hourlyPriceExpansionCteSql, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
 // Historie: eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, „B“).
 import { chooseRawEntries, localCoverageCompleteSql, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
@@ -1577,10 +1578,10 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         FROM timeseries_samples
         WHERE series_key = ANY($1)
           AND ts_utc >= $3 AND ts_utc < $4
-          AND resolution_seconds <= $2
+          AND resolution_seconds <= $5
         GROUP BY 1, 2
         ORDER BY 2, 1
-      `, [keys, bucketSec, new Date(from).toISOString(), new Date(to).toISOString()]);
+      `, [keys, bucketSec, new Date(from).toISOString(), new Date(to).toISOString(), resolutionFilterLimit(bucketSec)]);
       yield rows.map((row) => ({
         key: row.series_key,
         ts: row.bucket_ts instanceof Date ? row.bucket_ts.toISOString() : row.bucket_ts,
@@ -1634,7 +1635,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           ORDER BY series_key, bucket_ts, ts_utc ASC, resolution_seconds ASC
         ) b
         ORDER BY ts_utc ASC, series_key ASC
-      `, [...keys, isoTimestamp(start), isoTimestamp(end), maxResolution, bucketSec]);
+      `, [...keys, isoTimestamp(start), isoTimestamp(end), resolutionFilterLimit(maxResolution), bucketSec]);
       const out = result.rows.map((row) => ({
         key: row.series_key, ts: row.ts_utc, value: Number(row.value_num), unit: row.unit, resolution: row.resolution_seconds,
       }));
@@ -1648,7 +1649,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         AND ts_utc >= $${keys.length + 1} AND ts_utc < $${keys.length + 2}
         AND resolution_seconds <= $${keys.length + 3}
       ORDER BY ts_utc ASC, resolution_seconds ASC
-    `, [...keys, isoTimestamp(start), isoTimestamp(end), maxResolution]);
+    `, [...keys, isoTimestamp(start), isoTimestamp(end), resolutionFilterLimit(maxResolution)]);
     // Deduplicate by (series_key, per-row-resolution bucket) — fine-grain rows
     // get fine-grain buckets so granular queries (5s/10s/15s/30s/1min/5min)
     // return all samples, not just 1-per-15min. Cap at 900s so coarse rollups

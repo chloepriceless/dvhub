@@ -11,7 +11,9 @@
 // „Vollständig“ — gemessen an der Abdeckungszeit der eigenen Rohwerte:
 //
 //   Jede Live-Probe trägt als resolutionSeconds die Zeit seit der vorigen
-//   gespeicherten Probe (runtime-performance.js createTelemetryWriteBuffer).
+//   gespeicherten Probe (runtime-performance.js createTelemetryWriteBuffer), in
+//   ganzen Sekunden mit Übertrag des Rundungsrests — die Summe folgt der echten
+//   Zeit (Fable R3, P2-1: einzeln gerundet kam ein 5,3-s-Zyklus nie auf 885 s).
 //   Nach einem Neustart beginnt diese Zählung neu: die erste Probe trägt nur
 //   ein Abfrageintervall, die Ausfallzeit fehlt also in der Summe. Die
 //   Abdeckung einer Reihe im Slot ist die Summe dieser Zeiten, je Probe

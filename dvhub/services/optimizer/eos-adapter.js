@@ -55,6 +55,18 @@ export function resolveEosProxy(cfg = {}) {
   };
 }
 
+/**
+ * Kennung des EOS-Ziels (Betriebsart, lokale Adresse, Fern-Endpunkt). Merker
+ * über den Inhalt eines EOS (eosEstimatesClearedAt) gelten nur für dieses Ziel
+ * (Codex d81a0ddc).
+ */
+export function eosTargetKey(cfg = {}) {
+  const p = cfg?.optimizer?.eosProxy || {};
+  const proxy = resolveEosProxy(cfg);
+  const endpoint = String(p.remote?.endpoint || '').trim().replace(/\/+$/, '');
+  return JSON.stringify([proxy.mode, proxy.localUrl, proxy.mode === 'remote' ? endpoint : '']);
+}
+
 // Port 9 (discard): verbindet nie — EOS gilt dann als nicht erreichbar.
 export const EOS_REMOTE_FACADE_UNAVAILABLE = 'http://127.0.0.1:9';
 let remoteFacadeUrl = null;
@@ -86,6 +98,10 @@ export function setEosRemoteFacadeUrl(url) {
 //      (eosRealPriceEnds, vom Preis-Push gesammelt). Ist dafür nichts bekannt
 //      (Neustart), Mitternacht am Ende des Plantags: der Day-Ahead für den Tag
 //      lag immer vor.
+//      Lagen schon zum frühesten Laufbeginn keine Schätzwerte mehr in EOS
+//      (state.optimizer.eosEstimatesClearedAt, EOS nach eigenem Takt), entfällt
+//      dieser Rückfall (Fable R3, P3-2). Nach einem Neustart bleibt es ~3 h
+//      beim vorsichtigen Rückfall (Zustand nur im Speicher).
 //   4. Ohne generated_at: Grenze aus 3. zum Zeitpunkt des ersten Sehens, je
 //      Plan-Inhalt festgehalten (state.optimizer.eosUnknownPlanCutoffs).
 // Das Ende der JETZT echten Preise (eosRealPriceEnd) begrenzt zusätzlich, schaltet
@@ -139,7 +155,7 @@ function planIdentity(sol) {
  * @param {object} opt  state.optimizer
  * @param {number} nowMs
  */
-export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now()) {
+export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now(), { target = null } = {}) {
   const priceEndMs = Date.parse(opt?.eosRealPriceEnd || '');
   const cutoffs = [priceEndMs];
   const run = opt?.eosRun || {};
@@ -151,7 +167,17 @@ export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now()) {
   } else if (Number.isFinite(generatedMs)) {
     // Rückfall am Tag des Plans, nicht des Rückblicks: ein Plan von 00:30 hat
     // echte Preise bis zur nächsten Mitternacht (Codex 66ae1b46).
-    cutoffs.push(unknownRunCutoffMs(opt, generatedMs, berlinDayEndMs(generatedMs)));
+    // Entfällt, wenn schon zum frühesten möglichen Laufbeginn keine
+    // Schätzwerte mehr in EOS lagen (eosEstimatesClearedAt, Bridge; EOS nach
+    // eigenem Takt bekommt keine) — dann gilt nur die aktuelle Preisgrenze
+    // (Fable R3, P3-2: sonst Schnitt an der alten Mitternacht bis ~16 Uhr).
+    const clearedAt = Number(opt?.eosEstimatesClearedAt);
+    // Nur für dasselbe EOS-Ziel (Codex d81a0ddc: Adresse geändert → Merker
+    // des alten EOS sagt nichts über das neue).
+    const noEstimatesInRun = target != null && opt?.eosEstimatesClearedTarget === target
+      && opt?.eosEstimatesClearedAt != null && Number.isFinite(clearedAt)
+      && clearedAt <= generatedMs - EOS_UNKNOWN_RUN_LOOKBACK_MS;
+    if (!noEstimatesInRun) cutoffs.push(unknownRunCutoffMs(opt, generatedMs, berlinDayEndMs(generatedMs)));
     // Fertig während eines laufenden Laufs: kann aus ihm stammen (Lösung vor der
     // Antwort, Codex 3a14d90c) — oder aus einem älteren Lauf (z. B. vor einem
     // Neustart). Dann gilt zusätzlich seine Grenze, nie nur sie (Runde 2).
@@ -742,7 +768,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // (eos-evcc-bridge) folgt weiter dem Plan.
     // Grenze gehört zum Plan (generated_at), nicht zum Prozess (Codex 8ecb4fa9,
     // Gesamtprüfung 1.0.10): estimatedPriceCutoffMs.
-    const estimatedFromMs = estimatedPriceCutoffMs(sol, ctx.state?.optimizer || {}, Date.now());
+    const estimatedFromMs = estimatedPriceCutoffMs(sol, ctx.state?.optimizer || {}, Date.now(), { target: eosTargetKey(acfg) });
     // Schwellen-Peak-Shaving (EOS-PR D): die Schwelle steht an den Akku-
     // Instruktionen des Plans, nicht in der Lösung. Gilt für Slots, in denen
     // der Plan den Akku hält (Halten, Netzladen) — dort deckt der Akku den

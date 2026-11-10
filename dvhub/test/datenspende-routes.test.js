@@ -244,9 +244,24 @@ test('settings: Quelle gridVoltage (Netzspannung) abwählbar; Oberfläche nennt 
   assert.match(js, /gridVoltage: 'Netzspannung \(L1–L3\)'/);
   assert.match(js, /p\.voltage != null/, 'Vorschau zeigt Spannungen in V');
   const html = fs.readFileSync(new URL('../public/settings.html', import.meta.url), 'utf8');
-  assert.match(html, /Leistungswerte \(W\) und die Netzspannung je Phase \(V\)/);
+  // Fable R3, P2-3: Spannung ist eine eigene Zustimmung, ab Werk aus.
+  assert.match(html, /Gespendet werden die Leistungswerte \(W\) der unten ausgewählten Quellen/);
+  assert.match(html, /Netzspannung je Phase \(V\) nur, wenn du sie unten eigens einschaltest/);
+  assert.match(js, /DS_CONSENT_SOURCES/, 'Spannung braucht ein eigenes Ja in der Oberfläche');
+  assert.match(js, /st\.sources\?\.\[key\] === true/, 'Kästchen nur angehakt, wenn ausdrücklich an');
   const { createDefaultConfig } = await import('../config-model.js');
-  assert.equal(createDefaultConfig().datenspende.sources.gridVoltage, true);
+  assert.equal(createDefaultConfig().datenspende.sources.gridVoltage, false);
+});
+
+test('P2-3: Netzspannung einschalten ist eine Einwilligung — nur mit Nonce aus der eigenen Oberfläche', async () => {
+  const s = setup({ linked: true });
+  const bad = await s.call(makeReq('/api/datenspende/settings', { method: 'POST', body: { sources: { gridVoltage: true } } }));
+  assert.equal(bad.status, 403);
+  assert.equal(s.raw().datenspende.sources, undefined, 'ohne Nonce nichts gespeichert');
+  const { j } = await s.call(makeReq('/api/datenspende/status'));
+  const r = await s.call(makeReq('/api/datenspende/settings', { method: 'POST', body: { sources: { gridVoltage: true }, uiToken: j.uiToken } }));
+  assert.equal(r.status, 200);
+  assert.equal(s.raw().datenspende.sources.gridVoltage, true);
 });
 
 test('#31 settings: clientType nur bekannte Portal-Typen (dvhub kennt der Server nicht)', async () => {

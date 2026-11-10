@@ -57,8 +57,11 @@ verweist hierher.
 - **Datenspende: Netzspannung je Phase.** Liefert die Anlage Spannungen, spendet DVhub sie als `voltage`-Messwert
   (V) — je Phase ein eigener Zähler „Netzspannung L1/L2/L3“, wie ein Spannungs-Sensor in der Home-Assistant-
   Integration. Jede Messung (alle 30 s, über MQTT/SPiNE häufiger) geht einmal hinaus, nur frische Werte. Neue Quelle
-  „Netzspannung (L1–L3)“ in der Datenspende-Kachel, ab Werk an, abwählbar. Bestehende Zähler und Spenden bleiben
-  unverändert; die drei Zähler werden beim ersten Wert registriert.
+  „Netzspannung (L1–L3)“ in der Datenspende-Kachel, **ab Werk aus und nur mit eigener Zustimmung**: Wer bisher
+  spendet, hat nur Leistungswerten zugestimmt — die Spannung geht erst hinaus, wenn man das Kästchen anhakt und die
+  Nachfrage bestätigt (auch bei neuen Verknüpfungen; über den Support-Tunnel nicht einschaltbar). Bestehende Zähler
+  und Spenden bleiben unverändert; die drei Zähler werden erst nach der Zustimmung beim ersten Wert registriert
+  (Fable-Prüfung R3, P2-3).
 - **EOS-Steuerzeitraum „automatisch“.** Neue Auswahl unter Einstellungen → EOS-Optimierung → „EOS Steuerzeitraum
   höchstens“: mindestens 6 h und bis zur Abfahrt des E-Autos (solange es bei EOS angemeldet ist) bzw. bis zum
   Fensterende eines planbaren Geräts, das heute noch nicht gelaufen ist (ohne Fensterende: frühester Start plus
@@ -77,6 +80,10 @@ verweist hierher.
   Preise kommen, rechnet EOS neu. Der Leitstand kennzeichnet das am EOS-Fahrplan („Preise geschätzt“, mit Abfahrt)
   und unter „Laut EOS-Plan“. Aus Slots mit geschätzten Preisen setzt DVhub keine Akku-Regeln um; für den Hausakku
   allein bleibt es dabei, dass im Steuerzeitraum nur echte Preise liegen. Eine feste Grenze (6/12/24 h) bleibt fest.
+  Mit „EOS rechnet nach eigenem Takt“ (dort schickt DVhub keine Schätzwerte) schneidet DVhub die Akku-Regeln nicht
+  mehr an der alten Mitternacht ab, sobald seit über drei Stunden keine Schätzwerte mehr in EOS liegen — vorher
+  fielen zwischen etwa 13 und 16 Uhr die Regeln für die Nacht weg, obwohl die Preise für morgen da waren. Nach einem
+  Neustart von DVhub bleibt es bis zu drei Stunden beim vorsichtigen Schnitt (Fable-Prüfung R3, P3-2).
 - **Netzanschluss: DVhub hält die Bezugsgrenze des Hausanschlusses ein.** Neue Einstellung „Netzanschluss maximal
   (kW)“ unter Netz & Recht, stabil (kein Beta), ab Werk leer = aus. Anlass: EOS plante 34,4 kW Netzbezug (Akku 27 kW +
   E-Auto 11 kW + Haus) an einem 29-kW-Anschluss. Der Wächter läuft bei jeder Zählerabfrage (Prod alle 2 s):
@@ -231,6 +238,10 @@ verweist hierher.
     (bzw. anderthalb Probenabstände) ab. Proben aus einer fehlgeschlagenen oder veralteten Abfrage (alte Werte,
     eingefrorene Live-Werte) zählen nicht, und eine Pause von über 90 s zwischen zwei Proben macht die Viertelstunde
     unvollständig. DVhub merkt sich die Abdeckung dafür ab 1.0.10 je Viertelstunde und Reihe.
+  - Der Probenabstand wird in ganzen Sekunden gespeichert; den Rundungsrest nimmt DVhub in die nächste Probe mit,
+    sodass die Summe der echten Zeit folgt. Ohne das galt bei Abfragezyklen ab etwa 5 s (z. B. 5,3 s → 5 s) keine
+    Viertelstunde je als vollständig, und die Energie lag dort einige Prozent zu niedrig (bzw. bei 5,6 s → 6 s zu
+    hoch, was Lücken verdecken konnte). Fable-Prüfung R3, P2-1.
   - **Bereits gespeicherte Viertelstunden ändern sich nicht:** Für Viertelstunden von vor dem Update ist die
     Abdeckung unbekannt, dort bleibt es bei VRM vor eigenen Werten. Die neue Regel gilt für alle Viertelstunden ab
     dem Update. Die Jahres-/Gesamtansicht rechnet einmal neu (gleiches Ergebnis für die alten Daten).
@@ -277,6 +288,19 @@ verweist hierher.
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.
 
 ### Behoben
+
+- **Preis-Abruf und Kuma-Push prüfen Adressen in Ziffern auch beim Verbinden.** Für `epex.priceApiUrl` und den
+  Uptime-Kuma-Push löst DVhub Namen beim Verbinden auf und prüft jede Adresse. Adressen in Ziffern
+  (`127.0.0.1`, `[::ffff:127.0.0.1]`, `2130706433`, `127.1`) prüfte nur das Speichern; eine von Hand geänderte Config
+  verband trotzdem dorthin. Jetzt gilt beim Verbinden dieselbe Regel wie beim Speichern: nur Adressen im Internet.
+  Fable-Prüfung R3, P3-1.
+
+- **Paket-Veröffentlichung: Vorgänger bleibt im Kanal-Index, Index und Signatur gehen gemeinsam hoch.** Scheiterte in
+  `scripts/release/publish-release.sh` der Abruf des bisherigen Index aus einem anderen Grund als „gibt es nicht“
+  (Netz, Anmeldung), baute das Skript ohne Vorgänger — im stabilen Index hätte nur die neue Version gestanden, der
+  Rückweg auf die vorige gefehlt. Jetzt bricht es ab, bevor etwas hochgeladen wird. Index und Signatur gehen unter
+  Zwischennamen hoch und werden dann umbenannt (erst Signatur, dann Index); scheitert das Hochladen, bleibt der alte,
+  gültige Stand stehen. Fable-Prüfung R3, P3-6.
 
 - **Lese-Modus gilt auch für EEBUS-Geräte.** Mit `DVHUB_READ_ONLY=1` schrieb DVhub §14a-Anteile weiter als
   Verbrauchsgrenze an gekoppelte EEBUS-Geräte (Wärmepumpe, Wallbox). Jetzt blockiert der Lese-Modus auch diese

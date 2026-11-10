@@ -901,3 +901,28 @@ test('telemetry store kappt Live-Proben mit Lueckenaufloesung auf einen Slot', (
     store.close();
   }
 });
+
+// Codex aabaca15 (P2) zu Fable R3, P2-1: Der Schreibpuffer stempelt mit
+// Rundungsübertrag — ein 5,3-s-Zyklus ergibt Stempel 5 und 6. Die feine
+// Ansicht (Explorer 5 s) filtert resolution_seconds ≤ Fenster und hätte die
+// 6-s-Proben verloren. Ein Übertrag-Stempel darf eine Probe nicht ausschließen.
+test('querySeries: Live-Proben mit Übertrag-Stempel (Fenster + 1 s) bleiben in der feinen Ansicht', () => {
+  const store = createTelemetryStore({ dbPath: createTempDbPath(), rawRetentionDays: 30, rollupIntervals: [300, 900, 3600] });
+  try {
+    const base = Date.parse('2026-11-10T10:00:00.000Z');
+    const stamps = [5, 5, 6, 5, 5, 6, 5, 6];
+    let t = base;
+    store.writeSamples(stamps.map((res) => {
+      t += res * 1000;
+      return { seriesKey: 'grid_total_w', ts: new Date(t).toISOString(), value: 100, scope: 'live', source: 'local_poll', quality: 'raw', resolutionSeconds: res, unit: 'W' };
+    }));
+    const rows = store.querySeries({ seriesKeys: ['grid_total_w'], start: new Date(base).toISOString(), end: new Date(t + 1000).toISOString(), maxResolution: 5 });
+    assert.equal(rows.length, stamps.length, 'alle Proben, auch die mit 6-s-Stempel');
+    // Grobe Reihen (VRM 900 s) bleiben aus der feinen Ansicht draußen.
+    store.writeSamples([{ seriesKey: 'grid_total_w', ts: new Date(base + 3_600_000).toISOString(), value: 1, scope: 'history', source: 'vrm_import', quality: 'backfilled', resolutionSeconds: 900, unit: 'W' }]);
+    const fine = store.querySeries({ seriesKeys: ['grid_total_w'], start: new Date(base).toISOString(), end: new Date(base + 7_200_000).toISOString(), maxResolution: 5 });
+    assert.equal(fine.length, stamps.length);
+  } finally {
+    store.close();
+  }
+});

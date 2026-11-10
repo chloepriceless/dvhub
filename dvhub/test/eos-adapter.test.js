@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 
-import { createEosAdapter } from '../services/optimizer/eos-adapter.js';
+import { createEosAdapter, eosTargetKey } from '../services/optimizer/eos-adapter.js';
 import { buildScheduleRules } from '../services/optimizer/schedule-builder.js';
 
 /**
@@ -1004,7 +1004,9 @@ function estimateSolution(generatedAt, feedinWh = 3000) {
 async function slotsWith(state, generatedAt, feedinWh = 3000) {
   const mock = await createMockEos((req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(estimateSolution(generatedAt, feedinWh))); });
   try {
-    const ctx = { ...makeCtx(`http://127.0.0.1:${mock.port}`), state };
+    const base = makeCtx(`http://127.0.0.1:${mock.port}`);
+    // state als Funktion: bekommt die Kennung des EOS-Ziels (eosTargetKey).
+    const ctx = { ...base, state: typeof state === 'function' ? state(eosTargetKey(base.getCfg())) : state };
     const slots = await createEosAdapter(ctx).pullGridSetpoints();
     return slots.map((x) => new Date(x.ts).toISOString());
   } finally {
@@ -1097,6 +1099,32 @@ test('pullGridSetpoints: Rückblick deckt die längste Laufzeit ab', async () =>
     eosRealPriceEnds: [{ at: ms('2026-06-06T09:00:00Z'), end: '2026-06-06T22:00:00.000Z' }, { at: ms('2026-06-06T13:15:00Z'), end: '2026-06-07T22:00:00.000Z' }],
   } };
   assert.deepEqual(await slotsWith(state, '2026-06-06T15:15:00Z'), FIRST1);
+});
+
+// Fable-Prüfung R3, P3-2 (10.11.2026): „EOS nach eigenem Takt“ — Pläne passen
+// nie zu einem Lauf, galt immer der Stand von vor 3 h 02 min: zwischen ~13 und
+// ~16 Uhr schnitt DVhub an der heutigen Mitternacht, obwohl die Preise für
+// morgen da sind. In diesem Modus schickt DVhub aber gar keine Schätzwerte und
+// löscht alte (eos-forecast-bridge clearStaleEstimates). Lagen schon zum
+// frühesten möglichen Laufbeginn keine Schätzwerte mehr in EOS
+// (eosEstimatesClearedAt), kann der Plan keine enthalten — dann gilt nur die
+// aktuelle Preisgrenze.
+test('P3-2: eigener Takt ohne Schätzwerte in EOS — kein Schnitt an der alten Mitternacht', async () => {
+  const base = () => ({
+    eosRealPriceEnd: '2026-06-07T22:00:00.000Z',
+    eosRealPriceEnds: [{ at: ms('2026-06-06T09:00:00Z'), end: '2026-06-06T22:00:00.000Z' }, { at: ms('2026-06-06T11:30:00Z'), end: '2026-06-07T22:00:00.000Z' }],
+  });
+  const clean = (at, extra = {}) => (target) => ({ optimizer: { ...base(), eosEstimatesClearedAt: at, eosEstimatesClearedTarget: target, ...extra } });
+  // Plan 14:00 Berlin, Schätzwerte seit 05:00 UTC aus EOS gelöscht → alle Regeln.
+  assert.deepEqual(await slotsWith(clean(ms('2026-06-06T05:00:00Z')), '2026-06-06T12:00:00Z'), ALL3);
+  // Gelöscht erst 10:00 UTC: der Lauf kann vorher begonnen haben → vorsichtig wie bisher.
+  assert.deepEqual(await slotsWith(clean(ms('2026-06-06T10:00:00Z')), '2026-06-06T12:00:00Z'), FIRST1);
+  // Unbekannt (z. B. gleich nach dem Neustart, noch kein Push) → wie bisher.
+  assert.deepEqual(await slotsWith({ optimizer: base() }, '2026-06-06T12:00:00Z'), FIRST1);
+  // Die aktuelle Preisgrenze schneidet weiter.
+  assert.deepEqual(await slotsWith(clean(ms('2026-06-06T05:00:00Z'), { eosRealPriceEnd: '2026-06-06T22:00:00.000Z' }), '2026-06-06T12:00:00Z'), FIRST1);
+  // Codex d81a0ddc: Merker eines anderen EOS (Adresse geändert) gilt nicht.
+  assert.deepEqual(await slotsWith({ optimizer: { ...base(), eosEstimatesClearedAt: ms('2026-06-06T05:00:00Z'), eosEstimatesClearedTarget: 'anderes-eos' } }, '2026-06-06T12:00:00Z'), FIRST1);
 });
 
 // Codex ea233cd1 (3× P2): Plan ohne generated_at —

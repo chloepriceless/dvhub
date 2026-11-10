@@ -86,3 +86,21 @@ test('querySeries mit bucketSec: eigene Verbindung mit statement_timeout (SET LO
   assert.equal(seen.at(-2), 'COMMIT');
   assert.equal(seen.at(-1), 'release');
 });
+
+// Codex aabaca15 (P2) zu Fable R3, P2-1: Übertrag-Stempel (5,3-s-Zyklus → 5 und
+// 6 s) dürfen eine Live-Probe nicht aus der feinen Ansicht werfen.
+test('iterateSeriesBuckets/querySeries: Auflösungsgrenze lässt Übertrag-Stempel (+1 s) zu, grobe Reihen nicht', async () => {
+  const calls = [];
+  const pool = { async query(sql, params) { calls.push({ sql, params }); return { rows: [] }; } };
+  const store = createTelemetryStorePg(pool);
+  for await (const _ of store.iterateSeriesBuckets({ seriesKeys: ['a'], start: '2026-10-01T00:00:00Z', end: '2026-10-01T01:00:00Z', bucketSec: 5 })) { /* */ }
+  assert.match(calls[0].sql, /resolution_seconds <= \$5/);
+  assert.equal(calls[0].params[1], 5, 'Fenster bleibt 5 s');
+  assert.equal(calls[0].params[4], 6, 'Grenze 5 s + 1 s Übertrag');
+  calls.length = 0;
+  await store.querySeries({ seriesKeys: ['a'], start: '2026-10-01T00:00:00Z', end: '2026-10-02T00:00:00Z', maxResolution: 10 });
+  assert.ok(calls[0].params.includes(11), 'flach: 10 s + 1 s');
+  calls.length = 0;
+  await store.querySeries({ seriesKeys: ['a'], start: '2026-10-01T00:00:00Z', end: '2026-10-02T00:00:00Z', maxResolution: 900 });
+  assert.ok(calls[0].params.includes(900) && !calls[0].params.includes(901), 'Viertelstunden-Grenze unverändert');
+});

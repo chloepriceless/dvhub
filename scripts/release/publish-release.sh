@@ -87,12 +87,56 @@ for f in "$BUILD"/*.tar.gz; do
     || die "Signatur von $f passt nicht zu $KEY"
 done
 
-# Bisheriger Index des Kanals.
+# Assets des Vorab-Releases channels (gh api …/releases/tags/channels, JSON).
+CHANNELS_JSON="$WORK/channels-release.json"
+fetch_channels() { gh api "repos/$GH_REPO/releases/tags/channels" > "$CHANNELS_JSON" 2> "$WORK/gh-channels.err"; }
+asset_id() {  # $1 = Asset-Name → ID auf stdout, Exit 1 wenn es ihn nicht gibt
+  "$NODE" -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const a=(r.assets||[]).find((x)=>x.name===process.argv[2]);if(!a)process.exit(1);process.stdout.write(String(a.id))' "$CHANNELS_JSON" "$1"
+}
+
+# Bisheriger Index des Kanals. Nur „gibt es nicht“ (kein Release channels, kein
+# Index dieses Kanals) heißt: ohne Vorgänger bauen. Jeder andere Fehler (Netz,
+# Anmeldung, Rate-Limit) bricht ab, bevor etwas hochgeht — sonst enthielte der
+# neue Index nur diese Version, und der Rückweg auf die vorige fehlte (Fable R3,
+# P3-6).
 PREV="$WORK/prev.json"
+# Kopie des lebenden Paars (Index + Signatur) für die Wiederherstellung.
+RESTORE="$WORK/restore"
+valid_index() { "$NODE" -e 'const i=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(!Array.isArray(i.releases))process.exit(1)' "$1" 2>/dev/null; }
 if [[ "$DRY" -eq 1 ]]; then
   [[ -f "$DEST/channels/index-$CHANNEL.json" ]] && cp "$DEST/channels/index-$CHANNEL.json" "$PREV"
 else
-  gh release download channels -R "$GH_REPO" -p "index-$CHANNEL.json" -O "$PREV" 2>/dev/null || rm -f "$PREV"
+  if fetch_channels; then
+    # Lebender Index; fehlt er nach einer unterbrochenen Umstellung, der
+    # Zwischenstand (.new, enthält den Vorgänger) — nie still ohne Vorgänger
+    # (Codex 9f40b69c). Vom lebenden Stand bleibt eine Kopie samt Signatur für
+    # die Wiederherstellung unten (RESTORE).
+    for cand in "index-$CHANNEL.json" "index-$CHANNEL.json.new"; do
+      asset_id "$cand" >/dev/null || continue
+      rm -f "$PREV"
+      gh release download channels -R "$GH_REPO" -p "$cand" -O "$PREV" \
+        || die "bisheriger Kanal-Index $cand nicht ladbar — Abbruch (sonst fehlte der Vorgänger im neuen Index)"
+      if valid_index "$PREV"; then
+        if [[ "$cand" == "index-$CHANNEL.json" ]]; then
+          if asset_id "index-$CHANNEL.json.sig" >/dev/null; then
+            mkdir -p "$RESTORE"
+            cp "$PREV" "$RESTORE/index-$CHANNEL.json"
+            gh release download channels -R "$GH_REPO" -p "index-$CHANNEL.json.sig" -O "$RESTORE/index-$CHANNEL.json.sig" \
+              || die "Signatur des bisherigen Kanal-Index nicht ladbar — Abbruch"
+          fi
+        else
+          echo "publish-release: Hinweis: lebender Index fehlt, Vorgänger aus $cand (unterbrochene Veröffentlichung)" >&2
+        fi
+        break
+      fi
+      [[ "$cand" == "index-$CHANNEL.json" ]] && die "bisheriger Kanal-Index $cand ist kein gültiger Index — Abbruch"
+      rm -f "$PREV"
+    done
+  elif grep -q 'HTTP 404' "$WORK/gh-channels.err"; then
+    :  # noch kein Release channels: erster Index
+  else
+    die "Kanal-Index nicht abrufbar ($(tr '\n' ' ' < "$WORK/gh-channels.err" | cut -c1-300)) — Abbruch, nichts hochgeladen"
+  fi
 fi
 
 # Änderungen: stable aus CHANGELOG.md, dev aus den Commit-Betreffs seit dem
@@ -133,7 +177,8 @@ if [[ "$DRY" -eq 1 ]]; then
   echo "[dry-run] gh release upload $RTAG -R $GH_REPO --clobber ${ASSETS[*]##*/}"
   for v in "${STALE[@]+"${STALE[@]}"}"; do echo "[dry-run] gh release delete-asset $RTAG dvhub-$v-<arch>.* -R $GH_REPO -y"; done
   echo "[dry-run] gh release view channels -R $GH_REPO || gh release create channels -R $GH_REPO --prerelease --title 'Kanal-Index'"
-  echo "[dry-run] gh release upload channels -R $GH_REPO --clobber index-$CHANNEL.json index-$CHANNEL.json.sig"
+  echo "[dry-run] gh release upload channels -R $GH_REPO --clobber index-$CHANNEL.json.sig.new index-$CHANNEL.json.new"
+  echo "[dry-run] umbenennen (gh api PATCH …/releases/assets/<id>): index-$CHANNEL.json.sig.new → .sig, dann index-$CHANNEL.json.new → index-$CHANNEL.json"
   echo "Dry-Run fertig: $DEST"
   exit 0
 fi
@@ -155,5 +200,55 @@ if ! gh release view channels -R "$GH_REPO" >/dev/null 2>&1; then
   gh release create channels -R "$GH_REPO" --prerelease --title "Kanal-Index" --notes "Signierte Kanal-Indizes der Release-Pakete (docs/release-pakete.md)."
 fi
 # Index zuletzt: erst wenn alle Pakete oben liegen, zeigt er auf sie.
-gh release upload channels -R "$GH_REPO" --clobber "$WORK/index-$CHANNEL.json" "$WORK/index-$CHANNEL.json.sig"
+# Möglichst atomar (Fable R3, P3-6): beide Dateien erst unter Zwischennamen
+# hochladen — scheitert das, bleiben alter Index und alte Signatur gültig —,
+# dann umbenennen, erst die Signatur, dann den Index. Während des Umstellens
+# (kurze API-Aufrufe) sieht eine prüfende Box für einen Augenblick keinen Index
+# oder Index und Signatur aus verschiedenen Ständen; ihre Prüfung schlägt dann
+# einmal fehl und gelingt beim nächsten Prüfen (nichts wird installiert).
+UP="$WORK/up"
+mkdir -p "$UP"
+cp "$WORK/index-$CHANNEL.json" "$UP/index-$CHANNEL.json.new"
+cp "$WORK/index-$CHANNEL.json.sig" "$UP/index-$CHANNEL.json.sig.new"
+gh release upload channels -R "$GH_REPO" --clobber "$UP/index-$CHANNEL.json.sig.new" "$UP/index-$CHANNEL.json.new"
+# Umstellen (Codex 9f40b69c, 8f94225c): je Datei den lebenden Stand löschen
+# und den Zwischenstand umbenennen, erst die Signatur, dann den Index.
+# Scheitert ein Schritt — auch einer, dessen Antwort nur verloren ging —,
+# lädt das Skript das vorher geholte lebende Paar wieder unter den lebenden
+# Namen hoch (--clobber, gleich welcher Zwischenzustand am Release liegt) und
+# prüft danach am Release, dass Index und Signatur in alter Größe da sind.
+IDX="index-$CHANNEL.json"
+SIG="index-$CHANNEL.json.sig"
+gh_rename() { gh api -X PATCH "repos/$GH_REPO/releases/assets/$1" -f "name=$2" >/dev/null; }
+gh_delete() { gh api -X DELETE "repos/$GH_REPO/releases/assets/$1" >/dev/null; }
+asset_size() {  # $1 = Asset-Name → Größe auf stdout, Exit 1 wenn es ihn nicht gibt
+  "$NODE" -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const a=(r.assets||[]).find((x)=>x.name===process.argv[2]);if(!a)process.exit(1);process.stdout.write(String(a.size))' "$CHANNELS_JSON" "$1"
+}
+promote() {  # $1 = lebender Name; $1.new liegt oben
+  local new_id live_id
+  fetch_channels || return 1
+  new_id="$(asset_id "$1.new")" || return 1
+  if live_id="$(asset_id "$1")"; then gh_delete "$live_id" || return 1; fi
+  gh_rename "$new_id" "$1"
+}
+restore() {
+  if [[ ! -f "$RESTORE/$IDX" || ! -f "$RESTORE/$SIG" ]]; then
+    die "Umstellen gescheitert ($1); es gab kein altes Paar zum Wiederherstellen — Zwischenstand prüfen und erneut ausführen"
+  fi
+  # Dauerhafte Kopie außerhalb von $WORK (der EXIT-Trap löscht $WORK): scheitert
+  # auch das Hochladen, bleibt das alte Paar für die Hand-Reparatur (Codex 11f469a2).
+  local keep="$BUILD/channels-restore"
+  mkdir -p "$keep" && cp "$RESTORE/$IDX" "$RESTORE/$SIG" "$keep/" \
+    || echo "publish-release: Warnung: Kopie des alten Paars nach $keep gescheitert" >&2
+  gh release upload channels -R "$GH_REPO" --clobber "$RESTORE/$SIG" "$RESTORE/$IDX" \
+    || die "Umstellen gescheitert ($1) und Wiederherstellen gescheitert — altes Paar liegt in $keep; von Hand hochladen: gh release upload channels -R $GH_REPO --clobber $keep/$SIG $keep/$IDX (erst danach erneut veröffentlichen, sonst fehlt der Vorgänger)"
+  if fetch_channels \
+      && [[ "$(asset_size "$IDX" || true)" == "$(wc -c < "$RESTORE/$IDX" | tr -d ' ')" ]] \
+      && [[ "$(asset_size "$SIG" || true)" == "$(wc -c < "$RESTORE/$SIG" | tr -d ' ')" ]]; then
+    die "Umstellen gescheitert ($1) — alter Index samt Signatur wiederhergestellt; erneut ausführen"
+  fi
+  die "Umstellen gescheitert ($1); Wiederherstellen nicht bestätigt — am Release channels von Hand prüfen ($IDX, $SIG)"
+}
+promote "$SIG" || restore "$SIG"
+promote "$IDX" || restore "$IDX"
 echo "Veröffentlicht: $VERSION ($CHANNEL)"

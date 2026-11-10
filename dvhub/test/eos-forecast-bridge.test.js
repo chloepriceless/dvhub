@@ -795,6 +795,7 @@ test('pushFreshSoc: abgeschlossene Geräteläufe als Messwert (0 ohne Zähler, h
 });
 
 import { padSlotsBackToNow } from '../services/optimizer/eos-forecast-bridge.js';
+import { eosTargetKey } from '../services/optimizer/eos-adapter.js';
 
 test('Lastprognose bis vor die laufende Stunde aufgefüllt (sonst bricht EOS nach Neustart ab)', () => {
   const now = Date.parse('2026-10-02T00:33:00+02:00');
@@ -1132,6 +1133,54 @@ test('Preise auffüllen: ohne gespeicherte Historie bleibt alles wie bisher', as
     assert.equal(state.optimizer.lastEosPush.priceEstimate, null);
     assert.equal(state.optimizer.eosPriceEstimate, null);
   } finally { await mock.close(); }
+});
+
+// Fable R3, P3-2: Merker, seit wann sicher keine Schätzwerte mehr in EOS liegen
+// (eos-adapter estimatedPriceCutoffMs). Gesetzt beim ersten Push ohne Schätzung,
+// dessen Löschen gelang; nicht bei jedem Push nachgezogen; ein Push mit
+// Schätzung löscht ihn.
+test('P3-2: eosEstimatesClearedAt — einmal gesetzt ohne Schätzung, gelöscht mit Schätzung', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const { ctx, state } = estimateCtx(mock, { optimizer: { eosStartAfterPreviousRun: true } });
+    const bridge = createEosForecastBridge(ctx);
+    const before = Date.now();
+    await bridge.push();
+    assert.equal(state.optimizer.eosPriceEstimate, null, 'eigener Takt: keine Schätzung');
+    const first = state.optimizer.eosEstimatesClearedAt;
+    assert.ok(Number.isFinite(first) && first >= before, `gesetzt (${first})`);
+    await new Promise((r) => setTimeout(r, 5));
+    await bridge.push();
+    assert.equal(state.optimizer.eosEstimatesClearedAt, first, 'nicht bei jedem Push nachgezogen');
+  } finally { await mock.close(); }
+  // Codex d81a0ddc (1): Merker weg, BEVOR Schätzwerte EOS erreichen — ein
+  // abgebrochener Push darf ihn nicht stehen lassen.
+  let markerAtImport;
+  let st2;
+  const mock2 = await createMockEos((req, res) => {
+    if (req.method === 'PUT' && req.url.startsWith('/v1/prediction/import/ElecPriceImport')) markerAtImport = st2?.optimizer?.eosEstimatesClearedAt;
+    return okHandler(req, res);
+  });
+  try {
+    const { ctx, state } = estimateCtx(mock2);
+    st2 = state;
+    state.optimizer.eosEstimatesClearedAt = 123;
+    await createEosForecastBridge(ctx).push();
+    assert.ok(state.optimizer.eosPriceEstimate, 'DVhub stößt an: mit Schätzung');
+    assert.equal(markerAtImport, null, 'schon beim Preis-Import zurückgenommen');
+    assert.equal(state.optimizer.eosEstimatesClearedAt, null, 'Schätzwerte in EOS → Merker weg');
+  } finally { await mock2.close(); }
+  // Codex d81a0ddc (2): Merker gehört zum EOS-Ziel — anderes Ziel → neu ab jetzt.
+  const mock3 = await createMockEos(okHandler);
+  try {
+    const { ctx, state } = estimateCtx(mock3, { optimizer: { eosStartAfterPreviousRun: true } });
+    state.optimizer.eosEstimatesClearedAt = 123;
+    state.optimizer.eosEstimatesClearedTarget = 'altes-eos';
+    const before = Date.now();
+    await createEosForecastBridge(ctx).push();
+    assert.ok(state.optimizer.eosEstimatesClearedAt >= before, 'nicht der alte Zeitpunkt');
+    assert.equal(state.optimizer.eosEstimatesClearedTarget, eosTargetKey(ctx.getCfg()));
+  } finally { await mock3.close(); }
 });
 
 // Leitstand „Laut EOS-Plan“ (Christin 02.11.2026): die Anzeige nennt, womit EOS

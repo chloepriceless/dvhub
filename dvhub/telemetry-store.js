@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 // Sweep package 6: shared 2-decimal rounding helper (was a byte-identical local roundKwh).
 import { round2 } from './server-utils.js';
+import { resolutionFilterLimit } from './runtime-performance.js';
 import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
 // Historie: eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, „B“).
 import { chooseRawEntries, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
@@ -1016,7 +1017,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
         AND ts_utc >= ? AND ts_utc < ?
         AND resolution_seconds <= ?
       ORDER BY ts_utc ASC, resolution_seconds DESC
-    `).all(...keys, isoTimestamp(start), isoTimestamp(end), maxResolution);
+    `).all(...keys, isoTimestamp(start), isoTimestamp(end), resolutionFilterLimit(maxResolution));
     // Deduplicate: prefer higher resolution for each (series_key, ts bucket)
     const seen = new Map();
     const result = [];

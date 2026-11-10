@@ -523,3 +523,203 @@ test('publish-release.sh dev: nur Commits, die auf origin/main liegen (nichts Un
     fs.rmSync(work, { recursive: true, force: true });
   }
 });
+
+// ── Fable R3, P3-6: publish-release.sh gegen ein nachgebautes GitHub ─────────
+// (1) Scheitert der Abruf des bisherigen Index aus einem anderen Grund als
+//     „gibt es nicht“ (Netz, Anmeldung), baute das Skript ohne Vorgänger — der
+//     stabile Index enthielte nur die neue Version, der Rückweg fehlte. Jetzt:
+//     Abbruch, bevor irgendetwas hochgeladen wird.
+// (2) Index und Signatur gingen nacheinander mit --clobber hoch; scheiterte das
+//     zweite Hochladen, blieb ein Index mit falscher Signatur liegen. Jetzt:
+//     beide unter Zwischennamen hochladen, dann umbenennen (erst Signatur,
+//     dann Index).
+function statefulGh(work) {
+  const bin = path.join(work, 'gh-store-bin');
+  const store = path.join(work, 'gh-store');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(store, { recursive: true });
+  const log = path.join(work, 'gh-store.log');
+  const script = `#!/usr/bin/env node
+const fs = require('fs'); const path = require('path');
+const store = ${JSON.stringify(store)}; const log = ${JSON.stringify(log)};
+const a = process.argv.slice(2);
+fs.appendFileSync(log, a.join(' ') + '\\n');
+const idsFile = path.join(store, 'ids.json');
+const ids = fs.existsSync(idsFile) ? JSON.parse(fs.readFileSync(idsFile, 'utf8')) : { next: 1, assets: {} };
+const save = () => fs.writeFileSync(idsFile, JSON.stringify(ids));
+const fail = (msg) => { process.stderr.write(msg + '\\n'); process.exit(1); };
+const opt = (n) => { const i = a.indexOf(n); return i >= 0 ? a[i + 1] : undefined; };
+if (process.env.FAKE_GH_OFFLINE === '1' && a.join(' ').includes('channels')) fail('error connecting to api.github.com');
+const relDir = (tag) => path.join(store, 'rel', tag);
+const assetsOf = (tag) => Object.entries(ids.assets).filter(([, v]) => v.tag === tag).map(([id, v]) => ({ id: Number(id), name: v.name, size: fs.existsSync(path.join(relDir(tag), v.name)) ? fs.statSync(path.join(relDir(tag), v.name)).size : 0 }));
+if (a[0] === 'api') {
+  const method = opt('-X') || 'GET';
+  const route = a.find((x, i) => i > 0 && x.startsWith('repos/'));
+  let m;
+  if (method === 'GET' && (m = /releases\\/tags\\/([^/]+)$/.exec(route))) {
+    if (!fs.existsSync(relDir(m[1]))) fail('gh: Not Found (HTTP 404)');
+    process.stdout.write(JSON.stringify({ tag_name: m[1], assets: assetsOf(m[1]) })); process.exit(0);
+  }
+  if ((m = /releases\\/assets\\/(\\d+)$/.exec(route))) {
+    const as = ids.assets[m[1]]; if (!as) fail('gh: Not Found (HTTP 404)');
+    if (method === 'DELETE') { fs.rmSync(path.join(relDir(as.tag), as.name)); delete ids.assets[m[1]]; save(); process.exit(0); }
+    if (method === 'PATCH') {
+      const name = (a[a.indexOf('-f') + 1] || '').replace(/^name=/, '');
+      // Einmaliger Fehler (vorübergehend, z. B. 502): der nächste Aufruf gelingt.
+      const failMark = path.join(store, 'patch-failed');
+      if (process.env.FAKE_GH_PATCH_FAIL === name && !fs.existsSync(failMark)) { fs.writeFileSync(failMark, '1'); fail('gh: Server Error (HTTP 502)'); }
+      // Verlorene Antwort: GitHub hat umbenannt, der Aufruf meldet trotzdem Fehler.
+      const lostMark = path.join(store, 'patch-lost');
+      const lost = process.env.FAKE_GH_PATCH_LOST === name && !fs.existsSync(lostMark);
+      if (assetsOf(as.tag).some((x) => x.name === name)) fail('gh: Validation Failed (HTTP 422) already_exists');
+      fs.renameSync(path.join(relDir(as.tag), as.name), path.join(relDir(as.tag), name)); as.name = name; save();
+      if (lost) { fs.writeFileSync(lostMark, '1'); fail('error connecting to api.github.com (connection reset)'); }
+      process.stdout.write(JSON.stringify({ id: Number(m[1]), name })); process.exit(0);
+    }
+  }
+  fail('fake gh: unbekannter api-Aufruf ' + a.join(' '));
+}
+if (a[0] === 'release') {
+  const tag = a[2];
+  if (a[1] === 'view') { if (!fs.existsSync(relDir(tag))) fail('release not found'); process.exit(0); }
+  if (a[1] === 'create') { fs.mkdirSync(relDir(tag), { recursive: true }); process.exit(0); }
+  if (a[1] === 'upload') {
+    if (!fs.existsSync(relDir(tag))) fail('release not found');
+    for (const f of a.slice(3).filter((x) => !x.startsWith('-') && x !== opt('-R'))) {
+      const name = path.basename(f);
+      const old = assetsOf(tag).find((x) => x.name === name);
+      if (old) { if (!a.includes('--clobber')) fail('asset exists'); delete ids.assets[old.id]; }
+      if (process.env.FAKE_GH_UPLOAD_FAIL && name.endsWith(process.env.FAKE_GH_UPLOAD_FAIL)) { save(); fail('upload failed: ' + name); }
+      fs.copyFileSync(f, path.join(relDir(tag), name)); ids.assets[ids.next++] = { tag, name }; save();
+    }
+    process.exit(0);
+  }
+  if (a[1] === 'download') {
+    const name = opt('-p'); const out = opt('-O');
+    if (!fs.existsSync(path.join(relDir(tag), name))) fail('no assets match the file pattern');
+    fs.copyFileSync(path.join(relDir(tag), name), out); process.exit(0);
+  }
+  if (a[1] === 'delete-asset') { const as = assetsOf(tag).find((x) => x.name === a[3]); if (as) { fs.rmSync(path.join(relDir(tag), as.name)); delete ids.assets[as.id]; save(); } process.exit(0); }
+}
+fail('fake gh: unbekannt ' + a.join(' '));
+`;
+  fs.writeFileSync(path.join(bin, 'gh'), script, { mode: 0o755 });
+  const seed = (tag, name, file) => {
+    const ids = fs.existsSync(path.join(store, 'ids.json')) ? JSON.parse(fs.readFileSync(path.join(store, 'ids.json'), 'utf8')) : { next: 1, assets: {} };
+    fs.mkdirSync(path.join(store, 'rel', tag), { recursive: true });
+    if (file) { fs.copyFileSync(file, path.join(store, 'rel', tag, name)); ids.assets[ids.next++] = { tag, name }; }
+    fs.writeFileSync(path.join(store, 'ids.json'), JSON.stringify(ids));
+  };
+  return { bin, store, log, seed, file: (tag, name) => path.join(store, 'rel', tag, name) };
+}
+
+test('publish-release.sh (P3-6): bisheriger Index bleibt drin, Zwischennamen + Umbenennen, Abbruch bei Netzfehler', { timeout: 180000 }, () => {
+  const { dir } = fixtureRepo();
+  const work = tmp('dvhub-pub-atomic-');
+  try {
+    const { key, pub } = keypair(work, 'k');
+    const r = build(dir, path.join(work, 'o'), ['v1.2.3', '--key', key]);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const out = path.join(work, 'o', '1.2.3');
+    // Vorgänger-Index (1.2.2) aus einem Dry-Run gebaut.
+    const dry = path.join(work, 'dry');
+    const d = spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), out, '--key', key, '--repo', dir, '--dry-run', '--dest', dry], { encoding: 'utf8' });
+    assert.equal(d.status, 0, d.stderr);
+    const prevIdx = JSON.parse(fs.readFileSync(path.join(dry, 'channels', 'index-stable.json'), 'utf8'));
+    prevIdx.releases[0].version = '1.2.2'; prevIdx.latest = '1.2.2';
+    const prevFile = path.join(work, 'prev-index.json');
+    fs.writeFileSync(prevFile, JSON.stringify(prevIdx));
+
+    const gh = statefulGh(work);
+    gh.seed('channels', 'index-stable.json', prevFile);
+    gh.seed('channels', 'index-stable.json.sig', prevFile);
+    const run = (env = {}) => spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), out, '--key', key, '--repo', dir, '--gh-repo', 'o/r'], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${gh.bin}:${process.env.PATH}`, ...env },
+    });
+
+    // (1) Netzfehler beim Abruf des Kanal-Index (übrige Aufrufe gehen): Abbruch, nichts hochgeladen.
+    const off = run({ FAKE_GH_OFFLINE: '1' });
+    assert.notEqual(off.status, 0, 'Abbruch statt Bau ohne Vorgänger');
+    assert.match(off.stderr, /Index|Kanal/);
+    assert.equal(fs.readFileSync(gh.file('channels', 'index-stable.json'), 'utf8'), JSON.stringify(prevIdx), 'alter Index unverändert');
+    assert.ok(!fs.existsSync(path.join(gh.store, 'rel', 'v1.2.3')), 'kein Release angelegt');
+
+    // (2) Hochladen des Zwischenstands scheitert: alter Index samt Signatur bleibt.
+    const upFail = run({ FAKE_GH_UPLOAD_FAIL: 'index-stable.json.new' });
+    assert.notEqual(upFail.status, 0);
+    assert.equal(fs.readFileSync(gh.file('channels', 'index-stable.json'), 'utf8'), JSON.stringify(prevIdx), 'alter Index bleibt gültig');
+    assert.equal(fs.readFileSync(gh.file('channels', 'index-stable.json.sig'), 'utf8'), JSON.stringify(prevIdx), 'alte Signatur bleibt');
+
+    // (3) Normaler Lauf: Index mit Vorgänger, gültige Signatur, keine Zwischennamen übrig.
+    const ok = run();
+    assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+    const idxFile = gh.file('channels', 'index-stable.json');
+    const idx = JSON.parse(fs.readFileSync(idxFile, 'utf8'));
+    assert.deepEqual(idx.releases.map((x) => x.version), ['1.2.3', '1.2.2'], 'Vorgänger bleibt als Rückweg');
+    fs.writeFileSync(path.join(work, 'allowed'), `dvhub-release namespaces="dvhub-release,dvhub-release-index" ${pub}\n`);
+    const v = spawnSync('ssh-keygen', ['-Y', 'verify', '-f', path.join(work, 'allowed'), '-I', 'dvhub-release', '-n', 'dvhub-release-index', '-s', `${idxFile}.sig`], { input: fs.readFileSync(idxFile) });
+    assert.equal(v.status, 0, `Signatur passt zum Index: ${v.stderr}`);
+    assert.deepEqual(fs.readdirSync(path.join(gh.store, 'rel', 'channels')).sort(), ['index-stable.json', 'index-stable.json.sig']);
+    const calls = fs.readFileSync(gh.log, 'utf8');
+    assert.match(calls, /release upload channels .*index-stable\.json\.sig\.new .*index-stable\.json\.new/, 'Zwischennamen');
+    const lastRun = calls.slice(calls.lastIndexOf('releases/tags/channels', calls.lastIndexOf('index-stable.json.new')));
+    const renames = [...lastRun.matchAll(/-X PATCH \S+ -f name=(\S+)/g)].map((m) => m[1]);
+    assert.deepEqual(renames, ['index-stable.json.sig', 'index-stable.json'], 'erst Signatur, dann Index');
+
+    // (4) Codex 9f40b69c: Umbenennen scheitert mittendrin → alter Stand zurück, Zwischenstand bleibt.
+    const live = fs.readFileSync(idxFile, 'utf8');
+    const liveSig = fs.readFileSync(`${idxFile}.sig`, 'utf8');
+    const pf = run({ FAKE_GH_PATCH_FAIL: 'index-stable.json' });
+    assert.notEqual(pf.status, 0);
+    assert.match(pf.stderr, /wiederhergestellt/);
+    assert.equal(fs.readFileSync(idxFile, 'utf8'), live, 'lebender Index zurück');
+    assert.equal(fs.readFileSync(`${idxFile}.sig`, 'utf8'), liveSig, 'lebende Signatur zurück');
+    assert.deepEqual(fs.readdirSync(path.join(gh.store, 'rel', 'channels')).sort(),
+      ['index-stable.json', 'index-stable.json.new', 'index-stable.json.sig'], 'Zwischenstand des Index bleibt für den nächsten Lauf');
+    // (4b) Codex 8f94225c: Umbenennen wirkt, aber die Antwort geht verloren → trotzdem altes Paar zurück.
+    const lostRun = run({ FAKE_GH_PATCH_LOST: 'index-stable.json.sig' });
+    assert.notEqual(lostRun.status, 0);
+    assert.match(lostRun.stderr, /wiederhergestellt/);
+    assert.equal(fs.readFileSync(idxFile, 'utf8'), live, 'lebender Index = alter');
+    assert.equal(fs.readFileSync(`${idxFile}.sig`, 'utf8'), liveSig, 'lebende Signatur = alte, passend zum Index');
+    // Codex 11f469a2: das alte Paar bleibt dauerhaft neben dem Build liegen (Hand-Reparatur, falls auch das Hochladen scheitert).
+    assert.equal(fs.readFileSync(path.join(out, 'channels-restore', 'index-stable.json'), 'utf8'), live);
+
+    // (5) Lebender Index fehlt (Abbruch zwischen Sichern und Umstellen): Vorgänger aus ….new, nicht „erster Index“.
+    const ch = path.join(gh.store, 'rel', 'channels');
+    const ids = JSON.parse(fs.readFileSync(path.join(gh.store, 'ids.json'), 'utf8'));
+    for (const [id, v] of Object.entries(ids.assets)) {
+      if (v.tag === 'channels' && v.name === 'index-stable.json') { fs.rmSync(path.join(ch, v.name)); delete ids.assets[id]; }
+    }
+    fs.writeFileSync(path.join(gh.store, 'ids.json'), JSON.stringify(ids));
+    const rec = run();
+    assert.equal(rec.status, 0, rec.stdout + rec.stderr);
+    assert.match(rec.stderr, /Vorgänger aus index-stable\.json\.new/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(idxFile, 'utf8')).releases.map((x) => x.version), ['1.2.3', '1.2.2'], 'Rückweg bleibt');
+    assert.deepEqual(fs.readdirSync(ch).sort(), ['index-stable.json', 'index-stable.json.sig']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('publish-release.sh (P3-6): ohne Kanal-Release (404) erster Index ohne Vorgänger', { timeout: 180000 }, () => {
+  const { dir } = fixtureRepo();
+  const work = tmp('dvhub-pub-first-');
+  try {
+    const { key } = keypair(work, 'k');
+    const r = build(dir, path.join(work, 'o'), ['v1.2.3', '--key', key]);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const gh = statefulGh(work);
+    const p = spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), path.join(work, 'o', '1.2.3'), '--key', key, '--repo', dir, '--gh-repo', 'o/r'], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${gh.bin}:${process.env.PATH}` },
+    });
+    assert.equal(p.status, 0, p.stdout + p.stderr);
+    const idx = JSON.parse(fs.readFileSync(gh.file('channels', 'index-stable.json'), 'utf8'));
+    assert.deepEqual(idx.releases.map((x) => x.version), ['1.2.3']);
+    assert.ok(fs.existsSync(gh.file('v1.2.3', 'dvhub-1.2.3-arm64.tar.gz')));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});

@@ -473,7 +473,8 @@ const GV = { l1: 238.24, l2: 237.1, l3: 236.96, frequencyHz: 49.98, updatedAt: T
 
 test('collectSources: Netzspannung je Phase als voltage-Zähler (nur frisch, ohne power), abwählbar', () => {
   const ctx = baseCtx({ cfg: {}, pl: payload({ gridVoltage: GV }) });
-  const by = Object.fromEntries(collectSources(ctx, { manufacturer: 'victron', datenspende: {} }, T0).map((x) => [x.key, x]));
+  const ON = { sources: { gridVoltage: true } };
+  const by = Object.fromEntries(collectSources(ctx, { manufacturer: 'victron', datenspende: ON }, T0).map((x) => [x.key, x]));
   assert.deepEqual([by.gridL1.voltage, by.gridL2.voltage, by.gridL3.voltage], [238.2, 237.1, 237]);
   assert.equal(by.gridL1.power, undefined, 'kein erfundener Leistungswert');
   assert.equal(by.gridL1.name, 'Netzspannung L1');
@@ -481,12 +482,12 @@ test('collectSources: Netzspannung je Phase als voltage-Zähler (nur frisch, ohn
   assert.equal(by.gridL1.measuredAt, GV.updatedAt);
   assert.equal(by.grid.power, -1200, 'Netzanschluss unverändert');
   // einphasig: nur L1
-  const one = collectSources(baseCtx({ cfg: {}, pl: payload({ gridVoltage: { ...GV, l2: null, l3: null } }) }), { datenspende: {} }, T0).map((x) => x.key);
+  const one = collectSources(baseCtx({ cfg: {}, pl: payload({ gridVoltage: { ...GV, l2: null, l3: null } }) }), { datenspende: ON }, T0).map((x) => x.key);
   assert.ok(one.includes('gridL1') && !one.includes('gridL2') && !one.includes('gridL3'));
   // veraltet (> 2 min) oder keine Quelle → keine Spannung
-  const stale = collectSources(baseCtx({ cfg: {}, pl: payload({ gridVoltage: { ...GV, updatedAt: T0 - 3 * 60_000 } }) }), { datenspende: {} }, T0);
+  const stale = collectSources(baseCtx({ cfg: {}, pl: payload({ gridVoltage: { ...GV, updatedAt: T0 - 3 * 60_000 } }) }), { datenspende: ON }, T0);
   assert.ok(!stale.some((x) => x.key.startsWith('gridL')));
-  assert.ok(!collectSources(baseCtx({ cfg: {} }), { datenspende: {} }, T0).some((x) => x.key.startsWith('gridL')));
+  assert.ok(!collectSources(baseCtx({ cfg: {} }), { datenspende: ON }, T0).some((x) => x.key.startsWith('gridL')));
   // abgewählt
   const off = collectSources(ctx, { datenspende: { sources: { gridVoltage: false } } }, T0);
   assert.ok(!off.some((x) => x.key.startsWith('gridL')));
@@ -499,7 +500,7 @@ test('Sammeln + Senden: Spannung je Messung genau einmal, als voltage im Batch; 
   fs.writeFileSync(path.join(dir, SIDECAR_NAME), JSON.stringify({ apiKey: 'KEY', clientId: 'C1', meters: existing, donated: 10 }));
   let t = T0;
   const pl = payload({ gridVoltage: GV });
-  const cfg = { manufacturer: 'victron', datenspende: { enabled: true } };
+  const cfg = { manufacturer: 'victron', datenspende: { enabled: true, sources: { gridVoltage: true } } };
   const client = fakeClient();
   const svc = createDatenspende(baseCtx({ dir, cfg, pl }), { client, now: () => t, random: () => 0.5 });
   svc.sample();
@@ -520,6 +521,58 @@ test('Sammeln + Senden: Spannung je Messung genau einmal, als voltage im Batch; 
   const g = batch.filter((r) => r.meter_id === 'G0');
   assert.equal(g.length, 3);
   assert.ok(g.every((r) => r.power === -1200 && !('voltage' in r)));
+});
+
+// Fable-Prüfung R3, P2-3 (10.11.2026): Wer vor 1.0.10 zugestimmt hat, las
+// „Gespendet werden nur Leistungswerte (W)“. Die Netzspannung ist eine neue
+// Datenart und geht nur nach eigener, ausdrücklicher Zustimmung hinaus — ein
+// fehlender Schlüssel (bestehende Spender, neue Verknüpfung) heißt „aus“.
+test('P2-3: Netzspannung nur mit ausdrücklicher Zustimmung — fehlt der Schalter, keine Spannung, keine neuen Zähler', async () => {
+  const dir = tmp();
+  const existing = { grid: { id: 'G0', name: 'Netzanschluss' }, pv: { id: 'P0', name: 'PV-Erzeugung' } };
+  fs.writeFileSync(path.join(dir, SIDECAR_NAME), JSON.stringify({ apiKey: 'KEY', clientId: 'C1', meters: existing, donated: 10 }));
+  const pl = payload({ gridVoltage: GV });
+  // Config eines Spenders aus 1.0.9: Quellen ohne gridVoltage.
+  const cfg = { manufacturer: 'victron', datenspende: { enabled: true, sources: { grid: true, pv: true, load: true, battery: true } } };
+  const client = fakeClient();
+  const svc = createDatenspende(baseCtx({ dir, cfg, pl }), { client, now: () => T0, random: () => 0.5 });
+  assert.ok(!collectSources(baseCtx({ cfg, pl }), cfg, T0).some((x) => x.key.startsWith('gridL')), 'ohne Schalter keine Spannung');
+  assert.ok(!collectSources(baseCtx({ cfg: {}, pl }), { datenspende: {} }, T0).some((x) => x.key.startsWith('gridL')), 'leere Quellen: keine Spannung');
+  assert.equal(svc.status().sources.gridVoltage, false, 'Status meldet: nicht zugestimmt');
+  assert.equal(svc.status().sources.grid, true, 'Leistungsquellen bleiben ab Werk an');
+  assert.ok(!svc.status().preview.some((p) => p.voltage != null), 'Vorschau ohne Spannung');
+  svc.sample();
+  await svc.flush();
+  const registered = client.calls.filter((c) => c[0] === 'register').map((c) => c[1]);
+  assert.ok(!registered.some((n) => /Netzspannung/.test(n)), `keine Spannungs-Zähler registriert (${registered})`);
+  assert.ok(client.batches.flat().every((r) => !('voltage' in r)), 'kein voltage im Batch');
+  // Erst mit ausdrücklichem true geht die Spannung hinaus.
+  const on = { ...cfg, datenspende: { ...cfg.datenspende, sources: { ...cfg.datenspende.sources, gridVoltage: true } } };
+  assert.ok(collectSources(baseCtx({ cfg: on, pl }), on, T0).some((x) => x.key === 'gridL1'));
+  const { createDefaultConfig } = await import('../config-model.js');
+  assert.equal(createDefaultConfig().datenspende.sources.gridVoltage, false, 'ab Werk aus');
+});
+
+// Codex 0bf101d2 (P2): Spannungswerte, die schon in der Warteschlange liegen
+// (Box lief mit dem Release-Kandidaten oder Zustimmung gerade zurückgenommen),
+// dürfen ohne Zustimmung weder Zähler anlegen noch hinausgehen.
+test('P2-3: wartende Spannungswerte ohne Zustimmung — kein Zähler, kein Senden, aus der Warteschlange entfernt', async () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, SIDECAR_NAME), JSON.stringify({ apiKey: 'KEY', clientId: 'C1', meters: { grid: { id: 'G0', name: 'Netzanschluss' } }, donated: 0 }));
+  fs.writeFileSync(path.join(dir, QUEUE_NAME), JSON.stringify({ clientId: 'C1', readings: [
+    { key: 'grid', timestamp: '2026-09-28T11:59:50Z', power: -1200 },
+    { key: 'gridL1', timestamp: '2026-09-28T11:59:50Z', voltage: 238.2 },
+  ] }));
+  const cfg = { manufacturer: 'victron', datenspende: { enabled: true } };
+  const client = fakeClient();
+  const svc = createDatenspende(baseCtx({ dir, cfg }), { client, now: () => T0, random: () => 0.5 });
+  await svc.flush();
+  const registered = client.calls.filter((c) => c[0] === 'register').map((c) => c[1]);
+  assert.ok(!registered.some((n) => /Netzspannung/.test(n)), `kein Spannungs-Zähler (${registered})`);
+  assert.ok(client.batches.flat().every((r) => !('voltage' in r)), 'keine Spannung gesendet');
+  assert.ok(client.batches.flat().some((r) => r.meter_id === 'G0'), 'Leistung geht weiter hinaus');
+  const queued = JSON.parse(fs.readFileSync(path.join(dir, QUEUE_NAME), 'utf8')).readings;
+  assert.ok(!queued.some((r) => r.key === 'gridL1'), 'Spannung aus der Warteschlange entfernt');
 });
 
 test('columnarPayload: voltage-Spalte für Spannungs-Zähler', async () => {
@@ -579,7 +632,7 @@ test('Spannung: Zeitstempel = Messzeit (nicht Takt), je Phase eigene Messzeit (M
   const gv = { ...GV, updatedAt: T0 - 90_000, phaseAt: { l1: T0 - 90_000, l2: T0 - 90_000, l3: T0 - 90_000 }, source: 'victron_mqtt' };
   const pl = payload({ gridVoltage: gv });
   const client = fakeClient();
-  const svc = createDatenspende(baseCtx({ dir, cfg: { manufacturer: 'victron', datenspende: { enabled: true } }, pl }), { client, now: () => t, random: () => 0.5 });
+  const svc = createDatenspende(baseCtx({ dir, cfg: { manufacturer: 'victron', datenspende: { enabled: true, sources: { gridVoltage: true } } }, pl }), { client, now: () => t, random: () => 0.5 });
   svc.sample();
   // Nur L1 ändert sich; L2/L3 bleiben (älteste Phase unverändert).
   t += 10_000;

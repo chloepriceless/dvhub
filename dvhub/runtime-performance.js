@@ -2,6 +2,19 @@ function toIso(value) {
   return new Date(value).toISOString();
 }
 
+// Der Schreibpuffer stempelt den Probenabstand in ganzen Sekunden mit
+// Rundungsübertrag (createTelemetryWriteBuffer): ein exakter Abstand ≤ X s
+// ergibt einen Stempel ≤ X + 1 s (5,3-s-Zyklus → 5 und 6). Feine Ansichten
+// (Fenster unter einer Viertelstunde) lassen darum 1 s mehr zu, sonst fielen
+// Proben nur wegen des Übertrags heraus (Codex aabaca15). Grobe Grenzen
+// (≥ 900 s, VRM-/Rollup-Zeilen) bleiben genau.
+export const RESOLUTION_CARRY_SLACK_SECONDS = 1;
+export function resolutionFilterLimit(maxSeconds) {
+  const n = Number(maxSeconds);
+  if (!Number.isFinite(n)) return maxSeconds;
+  return n < 900 ? n + RESOLUTION_CARRY_SLACK_SECONDS : n;
+}
+
 export function normalizePollIntervalMs(value, minimumMs = 1000) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return minimumMs;
@@ -53,6 +66,7 @@ export function createTelemetryWriteBuffer({
   let lastFlushedAt = null;
   let queue = [];
   let lastWriteAt = null;
+  let roundingCarryS = 0;
 
   function writeQueued(force) {
     if (!queue.length) return;
@@ -80,12 +94,23 @@ export function createTelemetryWriteBuffer({
       return false;
     }
 
-    const resolutionSeconds = Math.max(
-      1,
-      Math.round(
-        ((lastFlushedAt == null ? pendingSnapshot.capturedAt : currentNow) - (lastFlushedAt ?? pendingSnapshot.capturedAt)) / 1000
-      ) || Number(pendingSnapshot.resolutionSeconds || 1)
-    );
+    // Abstand zur vorigen gespeicherten Probe in ganzen Sekunden (Spalte
+    // resolution_seconds ist INTEGER). Der Rundungsrest wird in die nächste
+    // Probe mitgenommen (Fable R3, P2-1): einzeln gerundet zählten 5,3-s-Zyklen
+    // als 5 s, ein Slot kam nur auf ~845 s Abdeckung (nie „vollständig“) und
+    // ~6 % zu wenig Energie, 5,6-s-Zyklen als 6 s (Überzählung verdeckte
+    // Lücken). Mit Übertrag folgt die Summe der echten Zeit auf ±0,5 s.
+    let resolutionSeconds;
+    if (lastFlushedAt == null) {
+      resolutionSeconds = Math.max(1, Math.round(Number(pendingSnapshot.resolutionSeconds || 1)) || 1);
+      roundingCarryS = 0;
+    } else {
+      const exactS = (currentNow - lastFlushedAt) / 1000 + roundingCarryS;
+      resolutionSeconds = Math.max(1, Math.round(exactS));
+      // Begrenzt: sehr kurze Zwangs-Schreibvorgänge (force, < 0,5 s) stempeln
+      // 1 s und dürfen keinen wachsenden Rückstand aufbauen.
+      roundingCarryS = Math.min(0.5, Math.max(-0.5, exactS - resolutionSeconds));
+    }
 
     const rows = buildSamples({
       ...pendingSnapshot,
