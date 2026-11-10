@@ -452,3 +452,21 @@ test('Akku-Hilfe: bei asynchronem Anbieter überholt keine ältere Anforderung d
   assert.deepEqual(calls.map((c) => c.coverW), [4200, 0], 'Freigabe bestätigt: nichts mehr');
   assert.equal(s.state.p14a.batteryAssist.requestedW, 0);
 });
+
+test('Akku-Hilfe: langsamer Anbieter — bestätigte Freigabe wird nicht endlos wiederholt (Codex 85412691)', async () => {
+  const calls = [];
+  const resolvers = [];
+  const assist = { request: (r) => { calls.push(r); return new Promise((res) => resolvers.push(() => res({ ok: true, acceptedW: r.coverW }))); } };
+  const s = articleSetup({ batteryAssist: assist });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  resolvers.shift()();
+  await new Promise((r) => setImmediate(r));
+  s.state.ctrl.eebusConsumptionLimitW = null;
+  s.svc.update(); // Freigabe läuft …
+  s.svc.update(); // … und dauert länger als ein Takt
+  s.svc.update();
+  resolvers.shift()();
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(calls.map((c) => c.coverW), [4200, 0], 'eine Freigabe, keine weiteren');
+});

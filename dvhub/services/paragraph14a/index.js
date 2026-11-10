@@ -115,6 +115,7 @@ export function createParagraph14aService(ctx, deps = {}) {
   let assistAckedW = 0;
   let assistReply = null;
   let assistInflight = false;
+  let assistInflightW = null;
   let assistQueued = null;
 
   const ui = (state.p14a = {
@@ -354,7 +355,11 @@ export function createParagraph14aService(ctx, deps = {}) {
     if (typeof ctx.batteryAssist?.request !== 'function') return;
     assistRequestedW = coverW;
     if (coverW === 0 && assistAckedW === 0 && !assistInflight && assistQueued == null) return;
-    if (assistInflight) { assistQueued = { coverW, untilMs }; return; }
+    if (assistInflight) {
+      // Gleicher Wunsch wie die laufende Anfrage: nichts nachschieben.
+      assistQueued = coverW === assistInflightW ? null : { coverW, untilMs };
+      return;
+    }
     sendAssist(coverW, untilMs);
   }
 
@@ -363,9 +368,11 @@ export function createParagraph14aService(ctx, deps = {}) {
       assistReply = r || null;
       assistAckedW = r?.ok === true ? coverW : null;
       assistInflight = false;
+      assistInflightW = null;
       const next = assistQueued;
       assistQueued = null;
-      if (next) sendAssist(next.coverW, next.untilMs);
+      // Über requestAssist: eine bestätigte Freigabe wird nicht wiederholt (Codex 85412691).
+      if (next) requestAssist(next.coverW, next.untilMs);
     };
     let res;
     try {
@@ -376,6 +383,7 @@ export function createParagraph14aService(ctx, deps = {}) {
     }
     if (res && typeof res.then === 'function') {
       assistInflight = true;
+      assistInflightW = coverW;
       res.then(done, (e) => done({ ok: false, reason: e?.message || String(e) }));
     } else {
       done(res);
