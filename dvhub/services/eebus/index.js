@@ -26,6 +26,7 @@ import { spawn as nodeSpawn, execFile as nodeExecFile } from 'node:child_process
 import { createLimitStateMachine } from './limit-state.js';
 import { readApplianceId } from '../support-tunnel.js';
 import { isReadOnlyMode, noteBlockedWrite } from '../../read-only-guard.js';
+import { meterImport } from '../import-limit/core.js';
 
 export const EEBUS_DEFAULT_PORT = 4712;
 const RESTART_DELAYS_MS = [5_000, 10_000, 30_000, 60_000];
@@ -47,6 +48,15 @@ const RESEND_MS = 60_000;
 const RETRY_MS = 10_000;
 const OVER_LIMIT_TOL_MIN_W = 300;
 const OVER_LIMIT_TOL_SHARE = 0.1;
+// Leistung eines EEBUS-Geräts (MPC) gilt höchstens so lange und nur in der
+// laufenden Verbindung (Fable R2 P2-5). Geräte melden bei jeder Änderung; ein
+// älterer Wert ist unbekannt — dann rechnet § 14a strenger (kein Überschuss
+// aus dieser Leistung, Bedarf = Nennleistung).
+const DEVICE_POWER_MAX_AGE_MS = 5 * 60_000;
+// Netzanschlusspunkt (MGCP) an die Steuerbox nur mit gültigem, frischem Zählerwert.
+const GCP_METER_MAX_AGE_MS = 30_000;
+// Automatische Failsafe-Vorgabe höchstens so oft neu an den Hilfsprozess.
+const FAILSAFE_SYNC_MS = 30_000;
 const ISSUE_TEXT = {
   unreachable: 'nicht erreichbar — die §14a-Steuerung wirkt nicht, das Gerät fällt auf seinen eigenen Failsafe-Wert zurück',
   not_applied: 'setzt die Vorgabe nicht um (meldet eine andere Grenze)',
@@ -143,11 +153,15 @@ export function planOhpcfStart(announce, priceSlots, nowMs) {
   return best;
 }
 
-/** Leistung am Netzanschlusspunkt für MGCP: Bezug positiv, Einspeisung negativ. */
-export function gridImportPositiveW(state, cfg) {
-  const total = Number(state?.meter?.grid_total_w);
-  if (!Number.isFinite(total)) return null;
-  return cfg?.gridPositiveMeans === 'grid_import' ? total : -total;
+/**
+ * Leistung am Netzanschlusspunkt für MGCP: Bezug positiv, Einspeisung negativ.
+ * Nur ein gültiger, frischer Zählerwert (meter.ok, höchstens maxAgeMs alt) —
+ * sonst null: beim Start steht grid_total_w auf 0, nach einem Lesefehler auf
+ * dem alten Wert (Fable R2 P1-1).
+ */
+export function gridImportPositiveW(state, cfg, { now = Date.now(), maxAgeMs = GCP_METER_MAX_AGE_MS } = {}) {
+  const m = meterImport(state, { gridPositiveMeans: cfg?.gridPositiveMeans === 'grid_import' ? 'grid_import' : 'feed_in' }, { now, maxAgeMs });
+  return m.fresh ? m.importW : null;
 }
 
 export function createEebusService(ctx, deps = {}) {
@@ -207,6 +221,11 @@ export function createEebusService(ctx, deps = {}) {
   const writeIds = new Map();     // id → entity
   const issues = new Map();       // `${ski}:${code}` → { ski, code, since, logged }
   const overSince = new Map();    // entity → Zeitpunkt, seit dem das Gerät über der Vorgabe liegt
+  // Geräte, denen DVhub je eine Vorgabe geschrieben hat (auch ohne Steuerbox,
+  // z. B. Netzanschluss-Deckel oder von Hand): ab dann läuft DVhubs Herzschlag
+  // zum Gerät. Gespeichert, damit ein Neustart von DVhub oder dem Hilfsprozess
+  // und das Ende eines Not-Halts das Gerät wieder aufnehmen (Fable R2 P2-3).
+  const ledDevices = new Set(Array.isArray(loadJson('controlled.json')?.skis) ? loadJson('controlled.json').skis : []);
   const energy = loadJson('energy.json') || { importWh: 0, exportWh: 0, lastDailyImportWh: null, lastDailyExportWh: null };
   let lastEnergySave = 0;
 
@@ -309,6 +328,12 @@ export function createEebusService(ctx, deps = {}) {
   const DEVICE_CONTROL_CMDS = new Set(['device_limit', 'device_failsafe', 'ohpcf', 'ev_current_limits']);
 
   function send(cmd, onId = null) {
+    // Lese-Modus: eine beobachtende Instanz steuert kein Gerät — letzte Sperre
+    // für alle Gerätebefehle (der Knoten startet im Lese-Modus ohnehin nicht).
+    if (DEVICE_CONTROL_CMDS.has(cmd?.cmd) && isReadOnlyMode()) {
+      noteBlockedWrite(`eebus ${cmd.cmd}`);
+      return Promise.resolve({ ok: false, error: 'read_only' });
+    }
     if (DEVICE_CONTROL_CMDS.has(cmd?.cmd) && notHaltBlocks()) {
       noteNotHaltBlock(cmd.cmd);
       return Promise.resolve({ ok: false, blocked: true, error: 'emergency_stop_active' });
@@ -336,6 +361,19 @@ export function createEebusService(ctx, deps = {}) {
     lastConfigKey = configKey(c);
     if (!c.enabled) {
       ui.status = 'disabled';
+      return;
+    }
+    // Lese-Modus (DVHUB_READ_ONLY=1): der EEBUS-Knoten startet nicht (Fable R2
+    // P2-2). Gegenüber Steuerbox und Geräten ist schon die Teilnahme ein
+    // Schreiben: DVhub gäbe Vorgaben der Steuerbox frei und quittierte sie,
+    // schickte Herzschlag und Messwerte (MGCP) und plante Verdichterläufe —
+    // die Steuerbox hielte eine Vorgabe für umgesetzt, die die Lese-Instanz nie
+    // umsetzt. Mit kopiertem Datenverzeichnis (der Anlass des Lese-Modus) hätte
+    // sie zudem dieselbe SKI wie die echte Instanz.
+    if (isReadOnlyMode()) {
+      ui.status = 'read_only';
+      ui.error = 'Lese-Modus (DVHUB_READ_ONLY=1): EEBUS ist aus — keine Verbindung zu Steuerbox und Geräten';
+      pushLog('eebus_read_only', {}, 'warn');
       return;
     }
     const bin = findBinary(c);
@@ -368,6 +406,9 @@ export function createEebusService(ctx, deps = {}) {
       machines.lpc.restore(savedGrid.lpc);
       machines.lpp.restore(savedGrid.lpp);
     }
+    // Eine noch gültige, gespeicherte Grenze gilt sofort (limit-state init),
+    // nicht erst mit dem ersten Takt (Fable R2 P2-4).
+    apply();
     spawnChild(bin, c);
     if (!tickTimer) tickTimer = setIntervalFn(tick, 1_000);
     if (!gcpTimer) gcpTimer = setIntervalFn(pushGcp, GCP_INTERVAL_MS);
@@ -419,6 +460,7 @@ export function createEebusService(ctx, deps = {}) {
       // neu schreiben, sobald die Geräte sich wieder anmelden.
       deviceLimitCache.clear();
       for (const k of lpcKnown.values()) if (k.lostAt == null) k.lostAt = now();
+      for (const d of Object.values(ui.devices)) forgetConnectionValues(d);
       if (stopping) { ui.status = cfgNow().enabled ? 'stopped' : 'disabled'; return; }
       ui.status = 'restarting';
       ui.restarts += 1;
@@ -466,8 +508,29 @@ export function createEebusService(ctx, deps = {}) {
   }
 
   function device(ski) {
-    ui.devices[ski] ||= { entities: {}, powerW: null, nominalW: null, limit: null, failsafe: null, ohpcf: null, measurements: {}, ev: null };
+    ui.devices[ski] ||= { entities: {}, powerW: null, powerAt: null, nominalW: null, limit: null, failsafe: null, ohpcf: null, measurements: {}, ev: null };
     return ui.devices[ski];
+  }
+
+  // Verbindung weg: Messwert und Grenz-Rückmeldung gehören zur alten Verbindung
+  // (Fable R2 P2-5, P3-4) — nach dem Wiederanmelden meldet das Gerät neu.
+  function forgetConnectionValues(d) {
+    d.powerW = null;
+    d.powerAt = null;
+    d.lpcLimit = null;
+  }
+
+  // Leistung nur, wenn in dieser Verbindung gemeldet und nicht zu alt.
+  function freshPowerW(d) {
+    if (d?.powerW == null || !Number.isFinite(Number(d.powerW))) return null;
+    if (d.powerAt == null || now() - d.powerAt > DEVICE_POWER_MAX_AGE_MS) return null;
+    return Number(d.powerW);
+  }
+
+  function markLed(ski) {
+    if (!ski || ledDevices.has(ski)) return;
+    ledDevices.add(ski);
+    saveJson('controlled.json', { skis: [...ledDevices] });
   }
 
   // E-Auto an einer EEBUS-Wallbox (EVCC/EVCEM/EVSOC/OPEV/OSCEV/CEVC, nur
@@ -608,6 +671,7 @@ export function createEebusService(ctx, deps = {}) {
         p.lastSeen = now();
         const known = lpcKnown.get(ev.ski);
         if (known && known.lostAt == null) known.lostAt = now();
+        if (ui.devices[ev.ski]) forgetConnectionValues(ui.devices[ev.ski]);
         pushLog('eebus_disconnected', { ski: ev.ski, role: roleOf(ev.ski) });
         break;
       }
@@ -701,7 +765,7 @@ export function createEebusService(ctx, deps = {}) {
         if (ev.ski && roleOf(ev.ski) === 'device') {
           const d = device(ev.ski);
           d.measurements[ev.name] = ev.value;
-          if (ev.name === 'power_w') d.powerW = ev.value;
+          if (ev.name === 'power_w') { d.powerW = ev.value; d.powerAt = now(); }
         }
         break;
       case 'ohpcf_announce': onOhpcfAnnounce(ev); break;
@@ -739,6 +803,7 @@ export function createEebusService(ctx, deps = {}) {
     // Not-Halt: DVhub plant keinen Lauf — die Wärmepumpe startet nach ihrer
     // eigenen Vorgabe, wie ohne DVhub.
     if (notHalt()) { noteNotHaltBlock('ohpcf', { ski: ev.ski }); d.ohpcf.notHalt = true; return; }
+    if (isReadOnlyMode()) { noteBlockedWrite(`eebus ohpcf ${ev.ski}`); d.ohpcf.readOnly = true; return; }
     const startInS = mode === 'immediate' ? Number(ev.earliest_start_s) || 0 : planOhpcfStart(ev, state.epex?.data, now());
     const res = await send({ cmd: 'ohpcf', action: 'schedule', entity: ev.entity, start_in_s: startInS });
     d.ohpcf = { ...d.ohpcf, plannedStartInS: startInS, plannedAt: now(), scheduleOk: res?.ok === true };
@@ -775,12 +840,12 @@ export function createEebusService(ctx, deps = {}) {
         name: trusted?.name || null,
         kind,
         maxW: d.nominalW || c.devices.defaultNominalW,
-        powerW: d.powerW ?? null,
+        powerW: freshPowerW(d),
         ...(kind === 'ladepunkt' ? {
           startW: minW > 0 ? minW : EV_START_W,
           // Nur ein gemeldetes Abstecken heißt „kein Bedarf“ — ein unbekannter
           // Zustand (z. B. nur ev_limits) nicht, und Leistung fließt sichtbar.
-          available: !(d.ev?.unplugged === true && !(Number(d.powerW) > 100)),
+          available: !(d.ev?.unplugged === true && !(Number(freshPowerW(d)) > 100)),
         } : {}),
       });
     }
@@ -794,6 +859,11 @@ export function createEebusService(ctx, deps = {}) {
 
   function skiOfEntity(entity) {
     for (const [ski, k] of lpcKnown) if (k.entity === entity) return ski;
+    return null;
+  }
+
+  function skiOfLpcEntity(entity) {
+    for (const [ski, d] of Object.entries(ui.devices)) if (d?.entities?.lpc === entity) return ski;
     return null;
   }
 
@@ -836,6 +906,8 @@ export function createEebusService(ctx, deps = {}) {
     }
     const rec = { w: active ? w : null, active, durationS, at: now(), sentAt: now(), rejected: false, resentAt: null, id: null, replyOk: null, owner, expiresAt, confirmed: false };
     deviceWrites.set(entity, rec);
+    // Jede Vorgabe (auch „frei“) startet DVhubs Herzschlag zum Gerät.
+    markLed(skiOfEntity(entity) || skiOfLpcEntity(entity));
     return send({ cmd: 'device_limit', uc: 'lpc', entity, w: active ? w : 0, duration_s: durationS, active }, (id) => {
       rec.id = id;
       writeIds.set(id, entity);
@@ -867,9 +939,14 @@ export function createEebusService(ctx, deps = {}) {
    */
   function resumeDevice(ski) {
     const entity = ui.devices[ski]?.entities?.lpc;
-    if (!entity || !cfgNow().devices.forwardGridLimit) return;
+    if (!entity) return;
+    // Geführt: § 14a (Steuerbox/Relais, mit Weitergabe an die Geräte), die
+    // Wallbox-Steuerung oder DVhub hat dem Gerät je eine Vorgabe geschrieben
+    // (Netzanschluss-Deckel, von Hand — dessen Herzschlag endete mit dem
+    // Neustart, das Gerät hängt sonst bis zum Ende seines Failsafes, Fable R2 P2-3).
+    const led = (p14aControlled() && cfgNow().devices.forwardGridLimit) || emsLimits.has(ski) || ledDevices.has(ski);
     deviceLimitCache.delete(entity);
-    if (!p14aControlled() && !emsLimits.has(ski)) return;
+    if (!led) return;
     // Not-Halt: kein „frei“ (es startete den Herzschlag) — nach dem Aufheben
     // holt resumeAfterEmergencyStop() das für alle verbundenen Geräte nach.
     if (notHalt()) { noteNotHaltBlock('resume', { ski }); return; }
@@ -878,8 +955,25 @@ export function createEebusService(ctx, deps = {}) {
     if (typeof ctx.p14a?.update === 'function') ctx.p14a.update();
     else applyConsumptionShares(lastShares, lastSharesUntil, lastSharesUntilById);
     if (deviceLimitCache.has(entity)) return;
-    writeDeviceLimit(entity, { w: 0, durationS: 0, active: false });
-    pushLog('paragraph14a_device_resumed', { ski, entity });
+    // Eigene, noch gültige Vorgabe außerhalb der Aufteilung zuerst neu
+    // schreiben — „frei“ höbe sonst einen Wallbox-Stopp (EMS) oder eine Grenze
+    // von Hand auf (Codex 8877e4cb, P1).
+    const t = now();
+    const ems = emsLimits.has(ski) ? emsLimits.get(ski) : null;
+    const rec = deviceWrites.get(entity);
+    const manual = rec?.owner === 'manual' && rec.active === true && Number.isFinite(rec.w)
+      && (rec.expiresAt == null || rec.expiresAt > t) ? rec : null;
+    if (ems != null) {
+      writeDeviceLimit(entity, { w: ems, durationS: 0, active: true, owner: 'ems' });
+    } else if (manual) {
+      // Restdauer genau (aufgerundet), nicht wieder mindestens 60 s — sonst
+      // liefe die Grenze am Gerät über ihr Ende hinaus (Codex 4a31cadc).
+      const durationS = manual.expiresAt != null ? Math.max(1, Math.ceil((manual.expiresAt - t) / 1000)) : 0;
+      writeDeviceLimit(entity, { w: manual.w, durationS, active: true, owner: 'manual', expiresAt: manual.expiresAt });
+    } else {
+      writeDeviceLimit(entity, { w: 0, durationS: 0, active: false });
+    }
+    pushLog('paragraph14a_device_resumed', { ski, entity, ...(ems != null ? { emsW: ems } : manual ? { manualW: manual.w } : {}) });
   }
 
   function setIssue(ski, code, on, since = now(), detail = {}) {
@@ -921,7 +1015,11 @@ export function createEebusService(ctx, deps = {}) {
     const seen = new Set();
     for (const [ski, k] of lpcKnown) {
       const trusted = cfgNow().trusted.some((x) => x.ski === ski && x.role === 'device');
-      if (!trusted) { lpcKnown.delete(ski); continue; }
+      if (!trusted) {
+        lpcKnown.delete(ski);
+        if (ledDevices.delete(ski)) saveJson('controlled.json', { skis: [...ledDevices] });
+        continue;
+      }
       seen.add(ski);
       setIssue(ski, 'unreachable', controlled && k.lostAt != null, k.lostAt ?? t);
       const d = ui.devices[ski];
@@ -1113,6 +1211,14 @@ export function createEebusService(ctx, deps = {}) {
       return 'restarted';
     }
     pushLog('eebus_device_heartbeat_stop_failed', { error: r?.error || 'unknown' }, 'error');
+    // Sonst liefe der Herzschlag den ganzen Not-Halt weiter (Fable R2 P3-11):
+    // Hilfsprozess neu starten — ein frischer Prozess schlägt erst mit der
+    // ersten Vorgabe, und ein Prozess-Neustart ist kein Geräte-Write.
+    if (child) {
+      saveGridState();
+      try { child.kill('SIGTERM'); } catch { /* weg */ }
+      return 'restarted';
+    }
     return 'failed';
   }
 
@@ -1230,10 +1336,26 @@ export function createEebusService(ctx, deps = {}) {
     }
   }
 
+  // Automatische Failsafe-Vorgabe (Pmin,14a) der Geräteliste nachführen: beim
+  // Start sind noch keine EEBUS-Geräte angemeldet (Fable R2 P3-5). Nur ohne
+  // eigenen Wert in der Konfiguration und solange die Steuerbox keinen
+  // geschrieben hat (setDefaultFailsafeW).
+  let lastFailsafeSyncAt = 0;
+  function syncAutoFailsafe() {
+    if (ui.status !== 'running' || cfgNow().grid.failsafeConsumptionW) return;
+    if (now() - lastFailsafeSyncAt < FAILSAFE_SYNC_MS) return;
+    lastFailsafeSyncAt = now();
+    if (!machines.lpc.setDefaultFailsafeW(autoFailsafeConsumptionW())) return;
+    const lpc = machines.lpc.snapshot();
+    send({ cmd: 'grid_config', uc: 'lpc', failsafe_w: lpc.failsafeW, failsafe_duration_s: lpc.failsafeDurationS });
+    pushLog('eebus_failsafe_default_updated', { failsafeW: lpc.failsafeW });
+  }
+
   function tick() {
     const before = `${machines.lpc.effective().state}/${machines.lpp.effective().state}`;
     apply();
     checkDevices();
+    syncAutoFailsafe();
     const after = `${machines.lpc.effective().state}/${machines.lpp.effective().state}`;
     if (before !== after) saveGridState();
     if (ui.pairing.on && ui.pairing.until && now() > ui.pairing.until) setPairing(false);
@@ -1267,7 +1389,7 @@ export function createEebusService(ctx, deps = {}) {
   function pushGcp() {
     if (ui.status !== 'running') return;
     integrateEnergy();
-    const powerW = gridImportPositiveW(state, getCfg());
+    const powerW = gridImportPositiveW(state, getCfg(), { now: now(), maxAgeMs: GCP_METER_MAX_AGE_MS });
     if (powerW == null) return;
     const cmd = {
       cmd: 'gcp',

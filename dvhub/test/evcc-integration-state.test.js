@@ -78,3 +78,21 @@ test('setMaxCurrent: POST /api/loadpoints/{id}/maxcurrent/{A}, Grenzen geprueft'
     await evcc.close();
   }
 });
+
+// Fable R2 P2-9: Lese-Modus (DVHUB_READ_ONLY=1) — Familien-Knopf und EOS-Brücke
+// schalten evcc nicht um; unterste Stelle wie bei Modbus und MQTT.
+test('Lese-Modus: setMode/setMaxCurrent schicken nichts an evcc', async () => {
+  const evcc = await mockEvcc({ loadpoints: [{ title: 'Garage', mode: 'pv' }] });
+  const integ = createEvccIntegration({ getCfg: () => ({ evcc: { url: evcc.url } }), pushLog: () => {} });
+  process.env.DVHUB_READ_ONLY = '1';
+  try {
+    const a = await integ.setMode(1, 'now');
+    const b = await integ.setMaxCurrent(1, 10);
+    assert.deepEqual([a.ok, a.error], [false, 'read_only']);
+    assert.deepEqual([b.ok, b.error], [false, 'read_only']);
+    assert.deepEqual(evcc.requests.filter((r) => r.startsWith('POST')), []);
+  } finally {
+    delete process.env.DVHUB_READ_ONLY;
+    await evcc.close();
+  }
+});

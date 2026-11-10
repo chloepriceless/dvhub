@@ -302,6 +302,40 @@ verweist hierher.
   Zwischennamen hoch und werden dann umbenannt (erst Signatur, dann Index); scheitert das Hochladen, bleibt der alte,
   gültige Stand stehen. Fable-Prüfung R3, P3-6.
 
+- **§14a: Budget nur mit gültigem, frischem Zählerwert (Fable R2 P1-1).** Beim Start (Zähler noch nicht gelesen,
+  `grid_total_w` = 0) oder mit eingefrorenem Zählerwert rechnete DVhub die laufende Leistung der Geräte als
+  „PV-Überschuss“ — nachgestellt: 4,2 kW Vorgabe, 21,2 kW verteilt. Jetzt zählt der Überschuss nur mit gültigem Wert
+  (höchstens 30 s alt), sonst gilt die Vorgabe ohne Zuschlag. Ebenso an die Steuerbox (MGCP): nur frische Werte.
+- **§14a: Gerät von Hand „über DVhub (EMS)“ ist belegt (P2-1).** Es zählte für Pmin,14a und hob die Relais-Grenze,
+  bekam aber keinen Anteil und war nicht belegt — die ganze Vorgabe ging an die steuerbaren Geräte, das Gerät zog
+  dazu (10,5 kW Vorgabe → 16,5 kW). Jetzt ist seine Nennleistung belegt (BK6-22-300 Ziffer 4.5.2: die Vorgabe gilt
+  für alle SteuVE hinter dem EMS); Hinweis in Integrationen → §14a.
+- **§14a: veraltete Gerätemesswerte blähen das Budget nicht mehr auf (P2-5).** evcc-Stand nur ohne Abfragefehler
+  und höchstens 60 s (bzw. drei Abfragen) alt, EEBUS-Leistung nur aus der laufenden Verbindung und höchstens 5 min
+  alt; sonst unbekannt (strenger).
+- **§14a: Neustart während einer Dimmung (P2-4).** Eine gespeicherte, noch gültige EEBUS-Grenze gilt gleich beim
+  Start (vorher bis zu 120 s keine Grenze). Der Relais-Zustand wird gespeichert und gilt nach dem Neustart weiter,
+  bis das Relais neu meldet (vorher: keine Dimmung bis zum nächsten Schalten).
+- **EEBUS: Wiederanlauf auch ohne Steuerbox (P2-3).** Hat DVhub einem Gerät je eine Vorgabe geschrieben
+  (Netzanschluss-Deckel, von Hand), nimmt es das Gerät nach einem Neustart oder dem Ende des Not-Halts wieder auf
+  („frei“ beendet dessen Failsafe); gespeichert in `eebus/controlled.json`. Eine noch gültige eigene Vorgabe
+  (Wallbox-Stopp, Grenze von Hand) wird dabei neu geschrieben statt freigegeben.
+- **Lese-Modus: EEBUS startet nicht, evcc und OCPP schalten nichts (P2-2, P2-9, P3-17).** Vorher plante die
+  Lese-Instanz Verdichterläufe, quittierte Steuerbox-Vorgaben und schickte Herzschlag/Messwerte; der Familien-Knopf
+  schaltete den evcc-Modus um; OCPP-Boxen bekamen beim Anmelden ihre Mess-Konfiguration. Jetzt: EEBUS-Status
+  „Lese-Modus“, evcc `setMode`/`setMaxCurrent` und OCPP-Befehle (außer Abfragen) gesperrt.
+- **Not-Halt: Neustart und Beenden schreiben nichts (P2-7, P2-8, P3-17).** Der Not-Halt wird geladen, bevor der
+  erste Dienst startet (vorher schrieb der Einspeisebegrenzer 2706 einmal). Beim Beenden bekommt ein Heizstab 0 W
+  nur, wenn DVhub ihm gerade Leistung vorgibt — nie im Not-Halt oder Lese-Modus. OCPP-Boxen bekommen im Not-Halt
+  keine Mess-Konfiguration.
+- **Not-Halt: Stopp und Aufheben nacheinander (P3-2), Speicherfehler sichtbar (P3-7).** Ein Aufheben während der
+  laufenden Neutralisierung wartet, bis sie fertig ist (vorher gab die Stopp-Schleife danach noch Grenzen frei).
+  Lässt sich `control_state.json` nicht speichern, meldet DVhub das als Systemwarnung.
+- **Not-Halt: Hinweis zu EEBUS-Geräten (P2-6, so gewollt).** Der Leitstand sagt, dass EEBUS-Geräte nach kurzer Zeit
+  in ihren eigenen Rückfallbetrieb gehen — wie bei ausgeschaltetem DVhub. Heizstab-Messwerte laufen im Not-Halt
+  weiter (P3-8); scheitert „Herzschlag aus“, startet der EEBUS-Hilfsprozess neu (P3-11).
+- **EEBUS: Failsafe-Vorgabe folgt der Geräteliste (P3-5),** keine Fehlalarme aus Rückmeldungen der vorigen Verbindung (P3-4), nicht erreichbare EEBUS-Hauptwallbox
+  ist belegt statt „ohne Grenze“ (P3-3).
 - **Lese-Modus gilt auch für EEBUS-Geräte.** Mit `DVHUB_READ_ONLY=1` schrieb DVhub §14a-Anteile weiter als
   Verbrauchsgrenze an gekoppelte EEBUS-Geräte (Wärmepumpe, Wallbox). Jetzt blockiert der Lese-Modus auch diese
   Vorgaben (Eintrag `[READ-ONLY]` im Konsolen-Log).

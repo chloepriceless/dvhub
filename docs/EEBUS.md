@@ -62,8 +62,16 @@ Ziffer 4.4.b „Steuerung mittels EMS“). Einstellungen: **System → §14a**, 
   - Direkt angesteuerte Anlagen (Ziffer 4.4.a) haben eine eigene Mindestleistung und zählen nicht mit.
 - **Geräte:** automatisch die Wallbox (EOS-Steuerung), der Stromspeicher (Max. Ladeleistung) und
   gekoppelte EEBUS-Geräte; Anlagen, die DVhub nicht steuert, von Hand. Sie zählen für Pmin,14a.
+  Ein Gerät von Hand „über DVhub (EMS)“ kann DVhub nicht begrenzen: während einer Begrenzung ist
+  seine Nennleistung belegt, der Rest geht an die steuerbaren Geräte — die Summe bleibt so unter der
+  Vorgabe. Direktsteuerung (eigene Vorgabe des Netzbetreibers) belegt nichts.
 - **Budget:** begrenzt ist nur der netzwirksame Bezug (Ziffer 2.3): Grenze + PV-Überschuss
-  (abschaltbar).
+  (abschaltbar). Der Überschuss zählt nur mit einem gültigen, frischen Zählerwert (höchstens 30 s alt)
+  und frischen Gerätemesswerten (evcc höchstens 60 s bzw. drei Abfragen, EEBUS-Gerät aus der laufenden
+  Verbindung und höchstens 5 min) — sonst gilt die Vorgabe ohne Zuschlag.
+- **Relais:** der zuletzt gemeldete Zustand wird gespeichert (`<Datenordner>/p14a_relay.json`) und gilt
+  nach einem Neustart sofort weiter, bis das Relais neu meldet (Anzeige „Stand von vor dem Neustart“).
+  Am besten sendet die Brücke die Nachricht „retained“.
 - **Aufteilung** (Ziffer 4.5.2 Satz 6, nach eigener Maßgabe): nach Vorrang (Standard: Wärmepumpe →
   Klima → Wallbox → Speicher) oder anteilig nach Leistung. Der Speicher lädt höchstens mit seinem
   Anteil aus dem Netz (Grid-Setpoint, der Haushalt zählt mit), die Wallbox bekommt ihren Anteil als
@@ -78,7 +86,7 @@ Ziffer 4.4.b „Steuerung mittels EMS“). Einstellungen: **System → §14a**, 
 |---|---|
 | Bezugsgrenze (LPC) | Aufteilung auf Wärmepumpe, Wallbox und Speicher wie oben (§14a); unter dem Mindeststrom lädt die Wallbox nicht. |
 | Einspeisegrenze (LPP) | Einspeisebegrenzer des Wechselrichters (Victron `MaxFeedInPower`, Reg. 2706; der vorherige Wert wird gesichert und zurückgeschrieben). Gilt gleichzeitig eine Teilvorgabe des Direktvermarkters (LUOX), gilt die kleinere. Ohne Begrenzer wird die Einspeisung gesperrt. |
-| Netzanschlusspunkt (MGCP) | Leistung (Bezug positiv) und Zählerstände Bezug/Einspeisung, die DVhub seit dem Einschalten selbst zählt. |
+| Netzanschlusspunkt (MGCP) | Leistung (Bezug positiv) und Zählerstände Bezug/Einspeisung, die DVhub seit dem Einschalten selbst zählt. Die Leistung nur mit gültigem, frischem Zählerwert (höchstens 30 s alt). |
 
 Die Wallbox wird nur begrenzt, wenn DVhub sie steuert (Integrationen → Wallbox, EOS-Steuerung).
 
@@ -109,9 +117,29 @@ Nach der EEBUS-Spezifikation:
 
 - Failsafe-Werte setzt die Steuerbox. Bis dahin gelten die Einstellungen: Bezug 4200 W,
   Einspeisung = maximale Einspeiseleistung (keine Einschränkung), jeweils 2 h.
-- Von der Steuerbox geschriebene Failsafe-Werte und ein laufender Failsafe überdauern einen
-  Neustart (`<Datenordner>/eebus/grid-state.json`). Wird eine andere Steuerbox gekoppelt,
-  gelten wieder die Einstellungen.
+- Von der Steuerbox geschriebene Failsafe-Werte, ein laufender Failsafe und eine noch gültige Grenze
+  überdauern einen Neustart (`<Datenordner>/eebus/grid-state.json`); die Grenze gilt gleich beim
+  Start, nicht erst mit dem ersten Herzschlag. Wird eine andere Steuerbox gekoppelt, gelten wieder die
+  Einstellungen.
+- Ohne eigenen Wert folgt der Failsafe-Vorgabewert der Bezugsgrenze der Geräteliste (Pmin,14a),
+  solange die Steuerbox keinen eigenen geschrieben hat.
+
+## Wiederanlauf, Not-Halt, Lese-Modus
+
+- **Wiederanlauf:** meldet sich ein Gerät an (Neustart von DVhub oder des Hilfsprozesses, Ende eines
+  Not-Halts), schreibt DVhub die laufende Grenze sofort neu oder „frei“ — das startet DVhubs Herzschlag
+  und beendet einen Failsafe des Geräts. Das gilt für Geräte, die DVhub nach § 14a steuert, die die
+  Wallbox-Steuerung führt oder denen DVhub je eine Vorgabe geschrieben hat (auch ohne Steuerbox, z. B.
+  Netzanschluss-Deckel; `<Datenordner>/eebus/controlled.json`).
+- **Not-Halt** („als ob die Kiste aus ist“): DVhub gibt seine eigenen Grenzen einmal frei und hält den
+  Herzschlag zu den Geräten an. Die Geräte gehen dann nach kurzer Zeit in ihren eigenen
+  Rückfallbetrieb (Failsafe-Wert des Geräts) — genau wie bei ausgeschaltetem DVhub. Die Netzseite
+  (Steuerbox) läuft weiter. Scheitert „Herzschlag aus“, startet DVhub den Hilfsprozess neu.
+- **Lese-Modus** (`DVHUB_READ_ONLY=1`): EEBUS startet nicht (Status „Lese-Modus“). Auch Messwerte,
+  Herzschlag und die Quittung von Steuerbox-Vorgaben sind gegenüber Steuerbox und Geräten ein
+  Schreiben: die Steuerbox hielte eine Vorgabe für umgesetzt, die die Lese-Instanz nie umsetzt, und mit
+  kopiertem Datenordner hätte sie dieselbe SKI wie die echte Instanz. Lesen über EEBUS geht ohne diese
+  Teilnahme nicht.
 - **Ohne gekoppelte Steuerbox gibt es keinen Failsafe** — Anlagen ohne §14a bleiben unbegrenzt.
 
 ## Verdichterläufe (OHPCF)

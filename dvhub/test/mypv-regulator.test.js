@@ -107,10 +107,10 @@ test('Gerät mit Endpunkt my-PV: Adresse Pflicht, Port/Unit mit Vorgaben', () =>
   assert.equal(validateSchedulableDevice({ id: 'h', name: 'H', kind: 'deferrable', plan: { energyWh: 1000, durationH: 1 }, endpoint: { type: 'mypv', host: '192.0.2.20' } }).ok, false, 'nur modulierend');
 });
 
-function setup({ paused = false, devices } = {}) {
+function setup({ paused = false, devices, exportW = 5000 } = {}) {
   let t = NOW;
   const writes = [];
-  const state = { meter: { ok: true, updatedAt: NOW }, victron: { gridExportW: 5000, gridImportW: 0, batteryDischargeW: 0, soc: 60 }, ctrl: { discretionaryWritesPaused: paused }, optimizer: {} };
+  const state = { meter: { ok: true, updatedAt: NOW }, victron: { gridExportW: exportW, gridImportW: 0, batteryDischargeW: 0, soc: 60 }, ctrl: { discretionaryWritesPaused: paused }, optimizer: {} };
   const cfg = { devices: devices || [{ id: 'heizstab', name: 'Heizstab', kind: 'modulating', schedulable: true, plan: { maxPowerW: 9000, intervalS: 5 }, endpoint: { type: 'mypv', host: '192.0.2.20' } }] };
   const reg = createMypvRegulator({
     getCfg: () => cfg, state, now: () => t,
@@ -145,4 +145,56 @@ test('Not-Halt: kein Schreiben; Gerät entfernt: einmal 0 W', async () => {
   s.cfg.devices = [];
   s.advance(5000); await s.reg.tick();
   assert.equal(s.writes.at(-1), 0);
+});
+
+// ── Fable R2 P2-8: Beenden von DVhub (Update, systemctl restart) ──
+test('Beenden: 0 W nur an Heizstäbe mit eigener Vorgabe > 0 — nicht im Not-Halt, nicht ohne Vorgabe', async () => {
+  // eigene Vorgabe > 0: beim Beenden aus (zusätzlich greift der Power Timeout)
+  const own = setup();
+  await own.reg.tick();
+  assert.ok(own.writes.at(-1) > 0);
+  const n = own.writes.length;
+  await own.reg.stop();
+  assert.deepEqual(own.writes.slice(n), [0]);
+
+  // DVhub gibt 0 W vor (kein Überschuss): der Stab läuft höchstens von selbst — nichts senden
+  const idle = setup({ exportW: 0 });
+  await idle.reg.tick();
+  const m = idle.writes.length;
+  await idle.reg.stop();
+  assert.deepEqual(idle.writes.slice(m), [], 'ohne eigene Vorgabe kein Befehl');
+
+  // Not-Halt: nach dem Eintritt keine Writes mehr — auch nicht beim Beenden
+  const halted = setup();
+  await halted.reg.tick();
+  halted.state.ctrl.discretionaryWritesPaused = true;
+  const k = halted.writes.length;
+  await halted.reg.stop();
+  assert.deepEqual(halted.writes.slice(k), [], 'im Not-Halt kein Write beim Beenden');
+});
+
+test('Beenden im Lese-Modus: kein Write', async () => {
+  const s = setup();
+  await s.reg.tick();
+  const n = s.writes.length;
+  process.env.DVHUB_READ_ONLY = '1';
+  try { await s.reg.stop(); } finally { delete process.env.DVHUB_READ_ONLY; }
+  assert.deepEqual(s.writes.slice(n), []);
+});
+
+test('Gerät entfernt ohne eigene Vorgabe: kein 0-W-Befehl (manuell Gestartetes nie anfassen)', async () => {
+  const s = setup({ exportW: 0 });
+  await s.reg.tick();
+  const n = s.writes.length;
+  s.cfg.devices = [];
+  s.advance(5000); await s.reg.tick();
+  assert.deepEqual(s.writes.slice(n), []);
+});
+
+// Fable R2 P3-8: im Not-Halt läuft das Lesen weiter (Leistung/Temperatur frieren nicht ein)
+test('Not-Halt: Messwerte des Heizstabs werden weiter gelesen, nichts geschrieben', async () => {
+  const p = setup({ paused: true });
+  await p.reg.tick();
+  assert.equal(p.writes.length, 0);
+  assert.equal(p.reg.getStatus().heizstab?.tempC, 45);
 });

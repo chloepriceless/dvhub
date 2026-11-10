@@ -411,3 +411,45 @@ test('Codex P1: my-PV — positiver Befehl ohne Quittung (Zeitüberschreitung) z
   assert.equal(writes.at(-1), 0);
 });
 
+
+// --- Fable R2 P3-2: Aufheben während der Neutralisierung ------------------------
+test('Aufheben während die Neutralisierung noch läuft: erst Stopp fertig, dann Aufheben (nacheinander)', async () => {
+  const { ctx } = stopCtx();
+  const order = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  ctx.eebus = {
+    emergencyStop: async () => { order.push('eebus_stop_start'); await gate; order.push('eebus_stop_end'); return { ok: true }; },
+    resumeAfterEmergencyStop: () => { order.push('eebus_resume'); return { ok: true }; },
+  };
+  const stop = setEmergencyStop(ctx, { on: true });
+  await new Promise((r) => setImmediate(r));
+  const resume = setEmergencyStop(ctx, { on: false }); // Doppelklick / HA-Schalter
+  await new Promise((r) => setImmediate(r));
+  assert.equal(ctx.state.ctrl.discretionaryWritesPaused, true, 'Aufheben wartet auf den laufenden Stopp');
+  release();
+  const [a, b] = await Promise.all([stop, resume]);
+  assert.equal(a.paused, true);
+  assert.equal(b.resumed, true);
+  assert.deepEqual(order, ['eebus_stop_start', 'eebus_stop_end', 'eebus_resume'], 'keine Freigabe nach dem Aufheben');
+  assert.equal(ctx.state.ctrl.discretionaryWritesPaused, false);
+  assert.equal(ctx.state.ctrl._notHaltNeutralizing, false);
+});
+
+// --- Fable R2 P3-7: Speichern scheitert -----------------------------------------
+test('Not-Halt lässt sich nicht speichern: Ergebnis und Systemwarnung sagen es (Neustart höbe ihn auf)', async () => {
+  const { ctx, logs } = stopCtx();
+  const warnings = new Map();
+  ctx.setSystemWarning = (id, msg) => { if (msg == null) warnings.delete(id); else warnings.set(id, msg); };
+  ctx.persistControlState = () => false;
+  const r = await setEmergencyStop(ctx, { on: true });
+  assert.equal(r.paused, true, 'Not-Halt gilt trotzdem');
+  assert.equal(r.persisted, false);
+  assert.match(warnings.get('control_state_not_persisted') || '', /nicht gespeichert/);
+  assert.ok(logs.some((l) => l.event === 'emergency_stop_not_persisted'));
+  // später klappt das Speichern wieder (Fortsetzen): Warnung weg
+  ctx.persistControlState = () => true;
+  const back = await setEmergencyStop(ctx, { on: false });
+  assert.equal(back.persisted, true);
+  assert.equal(warnings.has('control_state_not_persisted'), false);
+});

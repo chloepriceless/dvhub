@@ -1899,8 +1899,14 @@ function renderSupportTunnelBanner(st) {
 // /api/status.emergencyStop, 3s-Poll) + Button-Zustand in der Steuerung-Karte.
 // Der Banner bekommt seinen Resume-Button einmalig beim Erstellen — der Poll
 // aktualisiert nur den Text-Span (kein Listener-Verlust durch re-render).
-function renderEmergencyStop(es) {
+function renderEmergencyStop(es, eebus) {
   const active = !!(es && es.active);
+  // Fable R2 P2-6 (Christin 10.11.2026: so gewollt, „als ob aus“): DVhubs
+  // Herzschlag zu den EEBUS-Geräten endet im Not-Halt — sie gehen nach kurzer
+  // Zeit in ihren eigenen Rückfallbetrieb, genau wie bei ausgeschaltetem DVhub.
+  const eebusNote = eebus && eebus.enabled
+    ? ' EEBUS-Geräte (z. B. Wärmepumpe, Wallbox) gehen nach kurzer Zeit in ihren eigenen Rückfallbetrieb (Failsafe-Wert des Geräts) — wie bei ausgeschaltetem DVhub.'
+    : '';
   const stopBtn = document.getElementById('emergencyStopBtn');
   const resumeBtn = document.getElementById('emergencyResumeBtn');
   const meta = document.getElementById('emergencyStopMeta');
@@ -1909,7 +1915,7 @@ function renderEmergencyStop(es) {
   if (meta) {
     meta.hidden = !active;
     if (active) meta.textContent = 'Not-Halt aktiv' + (es.pausedAt ? ` seit ${fmtTs(es.pausedAt)}` : '') + ' — DVhub steuert nichts (als wäre es aus). Ausgesetzt: '
-      + (Array.isArray(es.suspended) && es.suspended.length ? es.suspended.join(' · ') : 'alle Steuerungen') + '.';
+      + (Array.isArray(es.suspended) && es.suspended.length ? es.suspended.join(' · ') : 'alle Steuerungen') + '.' + eebusNote;
   }
   let banner = document.getElementById('emergencyStopBanner');
   if (!active) { if (banner) banner.remove(); return; }
@@ -1939,7 +1945,7 @@ function renderEmergencyStop(es) {
     textEl.textContent = '\u{1F6D1} NOT-HALT aktiv' + (es.pausedAt ? ` seit ${fmtTs(es.pausedAt)}` : '') + why
       + ' DVhub steuert nichts, nur Messwerte und Protokoll laufen. Ausgesetzt: '
       + (Array.isArray(es.suspended) && es.suspended.length ? es.suspended.join(' · ') : 'alle Steuerungen')
-      + ' — du bist für die Anlage selbst verantwortlich.';
+      + ' — du bist für die Anlage selbst verantwortlich.' + eebusNote;
   }
 }
 
@@ -2126,7 +2132,7 @@ function renderDashboardStatus(status) {
   });
 
   safeRender('dashboard.emergency-stop', () => {
-    renderEmergencyStop(status.emergencyStop);
+    renderEmergencyStop(status.emergencyStop, status.eebus);
   });
 
   safeRender('dashboard.victron-alarms', () => {
@@ -2330,6 +2336,7 @@ function renderDashboardStatus(status) {
     if (p14aSuspended) chip = ['danger', '§14a im Not-Halt ausgesetzt'];
     else if (eb?.status === 'error') chip = ['danger', 'Fehler'];
     else if (eb?.status === 'not_installed') chip = ['warn', 'nicht installiert'];
+    else if (eb?.status === 'read_only') chip = ['warn', 'Lese-Modus: aus'];
     else if (eb && eb.status !== 'running') chip = ['warn', 'startet'];
     else if (failsafe) chip = ['danger', 'Failsafe'];
     else if (eb?.issues?.length) chip = ['danger', '§14a gestört'];

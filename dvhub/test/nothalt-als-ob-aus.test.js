@@ -401,3 +401,17 @@ test('Codex b416bf7a: Begrenzer — eine während des Wartens geänderte feste G
   await changed;
   assert.deepEqual(applied, [6000, 3000, 6000]);
 });
+
+// --- Start-Reihenfolge (Fable R2 P2-7) -------------------------------------------
+// Neustart im Not-Halt: der Not-Halt muss geladen sein, bevor irgendein Dienst
+// startet — feedInCap.start() ruft seinen Takt sofort und schrieb sonst 2706.
+test('server.js: loadControlState() läuft vor dem ersten Dienststart (feedInCap, peakShaving, gridConnection, multiGx)', () => {
+  const src = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const calls = [...src.matchAll(/^\s*(?:if \(IS_RUNTIME_PROCESS\) )?loadControlState\(\);/gm)].map((m) => m.index);
+  assert.equal(calls.length, 1, 'genau ein Aufruf');
+  for (const start of ['ctx.feedInCap.start()', 'ctx.peakShaving.start()', 'ctx.gridConnection.start()', 'ctx.multiGx.start()', 'mypvRegulator.start()']) {
+    const i = src.indexOf(start);
+    assert.ok(i > 0, `${start} gefunden`);
+    assert.ok(calls[0] < i, `loadControlState() vor ${start}`);
+  }
+});

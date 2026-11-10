@@ -127,7 +127,37 @@ export async function applyManualControlWrite(ctx, opts) {
  * @param {{on:boolean, actor?:object}} opts
  * @returns {Promise<object>} { ok, status, ... }
  */
-export async function setEmergencyStop(ctx, opts) {
+// Stopp und Aufheben nacheinander (je Anlage, Schlüssel: state). Sonst lief
+// ein Aufheben während der noch laufenden Neutralisierung durch, und die
+// Stopp-Schleife gab danach Grenzen frei und hielt den Herzschlag an, obwohl
+// kein Not-Halt mehr galt (Fable R2 P3-2).
+const emergencyQueues = new WeakMap();
+
+export function setEmergencyStop(ctx, opts) {
+  const key = ctx?.state && typeof ctx.state === 'object' ? ctx.state : ctx;
+  const prev = emergencyQueues.get(key) || Promise.resolve();
+  const run = prev.catch(() => {}).then(() => setEmergencyStopNow(ctx, opts));
+  emergencyQueues.set(key, run.catch(() => {}));
+  return run;
+}
+
+const NOT_PERSISTED_WARNING = 'Not-Halt-Zustand nicht gespeichert (control_state.json): nach einem Neustart '
+  + 'gälte der vorige Stand. Speicherplatz und Schreibrechte des Datenverzeichnisses prüfen.';
+
+// Ergebnis des Speicherns: false = gescheitert (Warnung), sonst gespeichert.
+function persistNotHalt(ctx, actor) {
+  const r = ctx.persistControlState?.();
+  const persisted = r !== false;
+  if (!persisted) {
+    ctx.pushLog('emergency_stop_not_persisted', { paused: ctx.state.ctrl.discretionaryWritesPaused === true }, { ...(actor || {}), severity: 'error' });
+    ctx.setSystemWarning?.('control_state_not_persisted', NOT_PERSISTED_WARNING);
+  } else {
+    ctx.setSystemWarning?.('control_state_not_persisted', null);
+  }
+  return persisted;
+}
+
+async function setEmergencyStopNow(ctx, opts) {
   const { on, actor = null } = opts || {};
   const state = ctx.state;
 
@@ -142,7 +172,7 @@ export async function setEmergencyStop(ctx, opts) {
     state.ctrl.pausedBy = actor?.actor_ip || 'unknown';
     state.ctrl.pausedReason = 'operator';
     state.ctrl._stopBlockLogged = {};
-    ctx.persistControlState?.();
+    const persisted = persistNotHalt(ctx, actor);
     ctx.pushLog('emergency_stop_activated', { by: state.ctrl.pausedBy }, { ...(actor || {}), severity: 'warn' });
     let neutralize;
     try {
@@ -193,7 +223,7 @@ export async function setEmergencyStop(ctx, opts) {
     }
     // § 14a gleich als ausgesetzt anzeigen (sonst erst mit dem nächsten 5-s-Takt).
     try { ctx.p14a?.update?.(); } catch { /* Anzeige */ }
-    return { ok: true, status: 200, paused: true, pausedAt: state.ctrl.pausedAt, neutralize, devices };
+    return { ok: true, status: 200, paused: true, pausedAt: state.ctrl.pausedAt, neutralize, devices, persisted };
   }
 
   // Resume
@@ -206,7 +236,7 @@ export async function setEmergencyStop(ctx, opts) {
   state.ctrl.pausedBy = null;
   state.ctrl.pausedReason = null;
   state.ctrl._stopBlockLogged = {};
-  ctx.persistControlState?.();
+  const persisted = persistNotHalt(ctx, actor);
   if (wasFailsafe) ctx.setSystemWarning?.('control_state_unreadable', null);
   ctx.pushLog('emergency_stop_resumed', wasFailsafe ? { after: 'control_state_unreadable' } : {}, { ...(actor || {}), severity: 'warn' });
   // EEBUS sauber wieder anlaufen lassen (Aufteilung, „frei“, Herzschlag).
@@ -214,7 +244,7 @@ export async function setEmergencyStop(ctx, opts) {
   try { eebus = ctx.eebus?.resumeAfterEmergencyStop?.() ?? null; } catch (e) {
     ctx.pushLog('emergency_stop_resume_failed', { target: 'eebus', error: e?.message || String(e) }, { ...(actor || {}), severity: 'error' });
   }
-  return { ok: true, status: 200, resumed: true, ...(eebus ? { eebus } : {}) };
+  return { ok: true, status: 200, resumed: true, persisted, ...(eebus ? { eebus } : {}) };
 }
 
 /**
