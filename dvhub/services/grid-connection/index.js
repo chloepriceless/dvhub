@@ -663,7 +663,9 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
     // meldet (Heizstab: Messung hinkt dem neuen Sollwert hinterher) — höchstens
     // bis zur Leistung beim Eingriff, ein Eigenbetrieb darüber fällt nicht weg
     // (Codex 9cbcf92f, P2).
-    const seen = finite(d.measuredW) ? Math.min(Number(d.measuredW), Number(st.cutFrom[d.id]) || Number(d.measuredW)) : Number(d.currentW);
+    // 0 ist ein gültiger Eingriffswert (Fail-safe bei 0 W Vorgabe; Codex d15440d1, P2).
+    const bound = st.cutFrom[d.id] != null ? Number(st.cutFrom[d.id]) : Number(d.measuredW);
+    const seen = finite(d.measuredW) ? Math.min(Number(d.measuredW), bound) : Number(d.currentW);
     pending += Math.max(0, Math.max(Number(d.currentW), seen) - cap);
   }
   const chargeW = r.batterySupported ? Math.max(0, Number(battery.chargeW) || 0) : 0;

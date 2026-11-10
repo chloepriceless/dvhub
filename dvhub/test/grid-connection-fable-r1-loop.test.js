@@ -268,3 +268,18 @@ test('Codex 9cbcf92f P2: Heizstab — gemessene Leistung hinkt dem neuen Sollwer
   assert.equal(st.caps['heater:h1'], 3000, 'nicht weiter gekürzt');
   assert.equal(st.caps['eebus:wp'] ?? null, null, 'nächste Last nicht gekürzt');
 });
+
+test('Codex d15440d1 P2: Heizstab mit 0 W Vorgabe (läuft von selbst), im Fail-safe eingefroren → keine Schein-Entlastung danach', () => {
+  const r = { ...resolveGridConnection({ manufacturer: 'fronius', gridConnection: { limitKw: 14.5 } }), order: ['heater', 'eebus', 'wallbox'] };
+  const st = createGuardState();
+  const devs = [
+    { id: 'heater:h1', kind: 'heater', currentW: 0, measuredW: 3000, maxW: 6000, minW: 0 },
+    { id: 'eebus:wp', kind: 'eebus', currentW: 4000, maxW: 6000, minW: 0 }
+  ];
+  const stale = { fresh: false, reason: 'meter_error', importW: null, phasesW: null };
+  for (let i = 0; i < FAILSAFE_TICKS + 1; i += 1) guardStep(st, { resolved: r, now: i * 2000, meas: stale, devices: devs, battery: {} });
+  assert.equal(st.caps['heater:h1'], 0);
+  // Zähler wieder da, Bezug 16 kW > 14,5 kW: die Wärmepumpe muss sofort nachgeben.
+  guardStep(st, { resolved: r, now: 10_000, meas: { fresh: true, importW: 16000, phasesW: null }, devices: devs, battery: {} });
+  assert.ok(st.caps['eebus:wp'] < 4000, `nächste Last gekürzt (${st.caps['eebus:wp']})`);
+});

@@ -671,3 +671,16 @@ test('Codex 9cbcf92f P1: Neustart im Not-Halt, frische Rücklesung steht schon t
   for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
   assert.deepEqual(h.writes(), [], 'kein Anheben auf 3 000 W im Not-Halt');
 });
+
+test('Codex d15440d1 P2: Neustart im Not-Halt, Rückkehrwert steht schon im Gerät → erledigt ohne Write, Merker weg', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-assist-'));
+  const p = path.join(dir, 'grid_connection_assist.json');
+  fs.writeFileSync(p, JSON.stringify({ valueW: 5000, baseW: 0, since: Date.now() - 60_000 }));
+  const h = rig('bridge-mqtt', { assistPath: p });
+  h.state.ctrl.discretionaryWritesPaused = true;
+  h.measure({ importW: 5000, maxDischargeW: 0 });
+  for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
+  assert.deepEqual(h.writes(), [], 'kein Write');
+  assert.equal(fs.existsSync(p), false, 'Merker gelöscht');
+  assert.equal(h.guard.persistedRestoreW(), null);
+});

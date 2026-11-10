@@ -1039,16 +1039,22 @@ export function createScheduleEvaluator(ctx) {
   // über value? Frische Rücklesung (≥ 0, über value); nur ohne sie der Merker
   // der Akku-Hilfe (services/grid-connection persistedRestoreW) mit genau diesem Wert.
   function dischargeKnownAbove(value) {
+    const rb = freshDischargeReadback();
+    // Eine frische Rücklesung entscheidet — auch gegen den Merker: steht die
+    // Grenze schon tiefer, wäre der Rückkehrwert ein Anheben (Codex 9cbcf92f, P1).
+    if (rb != null) return rb >= 0 && rb > value;
+    let merker;
+    try { merker = ctx.gridConnection?.persistedRestoreW?.() ?? null; } catch { merker = null; }
+    return merker != null && Number(merker) === value;
+  }
+
+  // Frische Rücklesung der Entladegrenze (W) oder null.
+  function freshDischargeReadback() {
     const v = state.victron || {};
     const at = Number(v.fieldUpdatedAt?.maxDischargeW) || 0;
     const maxAge = Number(getCfg()?.victron?.telemetryMaxAgeMs ?? 90000);
     const rb = Number(v.maxDischargeW);
-    // Eine frische Rücklesung entscheidet — auch gegen den Merker: steht die
-    // Grenze schon tiefer, wäre der Rückkehrwert ein Anheben (Codex 9cbcf92f, P1).
-    if (at > 0 && Date.now() - at <= maxAge && !v.errors?.maxDischargeW && Number.isFinite(rb)) return rb >= 0 && rb > value;
-    let merker;
-    try { merker = ctx.gridConnection?.persistedRestoreW?.() ?? null; } catch { merker = null; }
-    return merker != null && Number(merker) === value;
+    return at > 0 && Date.now() - at <= maxAge && !v.errors?.maxDischargeW && Number.isFinite(rb) ? rb : null;
   }
 
   async function applyControlTarget(target, value, source) {
@@ -1089,6 +1095,13 @@ export function createScheduleEvaluator(ctx) {
     // Ebenso die Einspeisung aus Akku 2 (multi-gx/floor-handoff.js): sie schreibt
     // im Not-Halt EINMAL die vor ihrer Sperre gesicherte Entladegrenze zurück —
     // nur genau diesen, gerade angemeldeten Wert, nie eine neue Sperre.
+    // Steht der Rückkehrwert nach einem Neustart im Not-Halt schon im Gerät
+    // (frische Rücklesung gleich), ist die Rücknahme erledigt — ohne Write, und
+    // der Merker darf gehen (Codex d15440d1, P2).
+    if (state.ctrl.discretionaryWritesPaused && source === 'grid_connection_restore' && target === 'maxDischargeW'
+      && lwDischarge == null && Number(value) >= 0 && freshDischargeReadback() === Number(value)) {
+      return { ok: true, skipped: true, reason: 'already_set' };
+    }
     const handoffStopRestore = source === 'multi_gx_handoff_stop' && target === 'maxDischargeW'
       && floorHandoff.isStopRestore(value);
     // „Als ob aus“ (Christin 10.11.2026, services/emergency-stop/policy.js):
