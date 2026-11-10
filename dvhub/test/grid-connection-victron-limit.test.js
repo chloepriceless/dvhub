@@ -77,7 +77,7 @@ test('Reg. 2714 = -1 (aus) wird als -1 gelesen und gilt nicht als Grenze', async
   assert.equal(gridConnectionFromState({}, state).active, false);
 });
 
-test('Reg. 2714 nicht lesbar: Fehler gemerkt, kein Fail-safe, nur DVhub-Werte', async () => {
+test('Reg. 2714 nie lesbar: Fehler gemerkt, nur DVhub-Werte', async () => {
   const cfg = loadProfile('victron');
   const { poller, state } = pollerFor(cfg, {}, { throwOn: 2714 });
   await poller.requestPoll();
@@ -85,6 +85,23 @@ test('Reg. 2714 nicht lesbar: Fehler gemerkt, kein Fail-safe, nur DVhub-Werte', 
   const r = gridConnectionFromState({ gridConnection: { limitKw: 29 } }, state);
   assert.equal(r.limitW, 29000);
   assert.equal(r.victronReadError, true);
+});
+
+// Fable R1 P1-3 (10.11.2026): früher hob ein einzelner Lesefehler die
+// Victron-Grenze sofort auf („kein Fail-safe“) — alle Deckel weg, Ziel sprang
+// auf die DVhub-Grenze. Jetzt fail-safe: der letzte gültige Wert gilt bis
+// VICTRON_LIMIT_MAX_AGE_MS nach der letzten erfolgreichen Lesung weiter.
+test('Reg. 2714 einmal nicht lesbar: der letzte gelesene Wert gilt weiter (fail-safe)', async () => {
+  const cfg = loadProfile('victron');
+  const regs = { 2714: 40 };
+  const p = pollerFor(cfg, regs);
+  await p.poller.requestPoll();
+  assert.equal(p.state.victron.acInputLimitA, 40);
+  p.state.victron.errors.acInputLimitA = 'modbus exception 2'; // nächste Lesung scheitert
+  const r = gridConnectionFromState({ gridConnection: { limitKw: 34.5 } }, p.state);
+  assert.equal(r.limitW, 27600, 'Victron-Grenze bleibt');
+  assert.equal(r.victronReadError, true, 'Lesefehler wird trotzdem gemeldet');
+  assert.equal(gridConnectionFromState({}, p.state).active, true, 'nur Victron-Grenze: bleibt aktiv');
 });
 
 test('Reg. 2714 nur alle 60 s', async () => {

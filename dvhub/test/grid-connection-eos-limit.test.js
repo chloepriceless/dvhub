@@ -38,7 +38,7 @@ function eosConfig({ knowsKey, inverters = true }) {
 
 // EOS-Attrappe: GET /v1/config spiegelt die PUTs. Wie EOS: ein null für den
 // Schlüssel setzt ihn nicht zurück; ein EOS ohne den Schlüssel lehnt ihn ab.
-function createMockEos({ knowsKey, inverters = true }) {
+function createMockEos({ knowsKey, inverters = true, fail = new Set() }) {
   const config = eosConfig({ knowsKey, inverters });
   const puts = [];
   return new Promise((resolve) => {
@@ -53,6 +53,7 @@ function createMockEos({ knowsKey, inverters = true }) {
         if (req.method === 'PUT') {
           const section = req.url.replace('/v1/config/', '');
           puts.push({ section, body });
+          if (fail.has(section)) return send(500, { detail: 'boom' });
           if (section === 'devices/inverters' && body && typeof body === 'object') {
             for (const [id, inv] of Object.entries(body)) {
               if (!knowsKey && Object.prototype.hasOwnProperty.call(inv, KEY)) return send(422, { detail: `extra field ${KEY}` });
@@ -70,7 +71,7 @@ function createMockEos({ knowsKey, inverters = true }) {
       });
     });
     server.listen(0, '127.0.0.1', () => resolve({
-      port: server.address().port, puts, config,
+      port: server.address().port, puts, config, fail,
       close: () => new Promise((r) => server.close(r)),
     }));
   });
@@ -136,13 +137,73 @@ describe('Abgleich gegen eine EOS-Attrappe', () => {
     assert.equal(mock.config.devices.inverters.inverter1[KEY], 28000);
   });
 
-  it('Vanilla rc3 ohne Schlüssel: nie geschickt, Behelf 16 kW', async () => {
+  it('Vanilla rc3 ohne Schlüssel: nie geschickt, Behelf 16 kW (Auto bei EOS angemeldet)', async () => {
     mock = await createMockEos({ knowsKey: false });
     const cfgRef = { extra: { gridConnection: { limitKw: 29 } } };
-    const res = await createEosConfigSync(ctxFor(mock.port, cfgRef)).sync();
+    const ctx = ctxFor(mock.port, cfgRef);
+    ctx.teslamateService = { getState: () => ({ batteryLevel: 50 }) }; // Ladestand bekannt → angemeldet
+    const res = await createEosConfigSync(ctx).sync();
     assert.ok(res.applied.includes('devices/inverters'), JSON.stringify(res.errors));
+    assert.equal(ctx.state.optimizer.eosEv.register, true);
     assert.equal(Object.prototype.hasOwnProperty.call(lastInverterPut(mock), KEY), false);
     assert.equal(lastInverterPut(mock).max_ac_charge_power_w, 16000);
+  });
+
+  it('Fable R3 P3-3: Vanilla rc3, Auto NICHT angemeldet → Behelf ohne Abzug der Auto-Ladeleistung (27 kW)', async () => {
+    mock = await createMockEos({ knowsKey: false });
+    const cfgRef = { extra: { gridConnection: { limitKw: 29 } } };
+    const ctx = ctxFor(mock.port, cfgRef);
+    const sync = createEosConfigSync(ctx);
+    await sync.sync();
+    assert.equal(ctx.state.optimizer.eosEv.register, false, 'kein Ladestand → nicht angemeldet');
+    // Erst wenn EOS „kein Auto“ quittiert hat, wird die Grenze gelockert (Codex 0190570d, P2).
+    assert.equal(lastInverterPut(mock).max_ac_charge_power_w, 16000, 'erster Abgleich vorsichtig');
+    await sync.sync();
+    assert.equal(lastInverterPut(mock).max_ac_charge_power_w, 27000);
+  });
+
+  it('Codex 0190570d P2: Wechselrichter-PUT scheitert → das Auto wird in diesem Abgleich nicht angemeldet', async () => {
+    mock = await createMockEos({ knowsKey: false });
+    const cfgRef = { extra: { gridConnection: { limitKw: 29 } } };
+    const ctx = ctxFor(mock.port, cfgRef);
+    const sync = createEosConfigSync(ctx);
+    await sync.sync();
+    await sync.sync();
+    assert.equal(lastInverterPut(mock).max_ac_charge_power_w, 27000, 'ohne Auto gelockert');
+    // Auto kommt, aber die engere Grenze kommt nicht an.
+    ctx.teslamateService = { getState: () => ({ batteryLevel: 50 }) };
+    mock.fail.add('devices/inverters');
+    const n = mock.puts.length;
+    const res = await sync.sync();
+    const sent = mock.puts.slice(n).map((p) => `${p.section}=${JSON.stringify(p.body)}`);
+    assert.ok(!sent.includes('devices/max_electric_vehicles=1'), sent.join(' | '));
+    assert.equal(res.errors['devices/max_electric_vehicles'], 'inverter_cap_not_applied');
+    // Auch der Fahrzeug-Abgleich allein (ev-watch) schreibt nichts (Codex a06a107e, P2).
+    const m = mock.puts.length;
+    const ev = await sync.syncEv();
+    assert.equal(ev.skipped, 'ev_not_registered');
+    assert.equal(mock.puts.length, m, 'kein PUT');
+    // Grenze kommt an → Auto wird angemeldet.
+    mock.fail.delete('devices/inverters');
+    await sync.sync();
+    assert.equal(lastInverterPut(mock).max_ac_charge_power_w, 16000);
+    assert.ok(mock.puts.some((p) => p.section === 'devices/max_electric_vehicles' && p.body === 1));
+  });
+
+  it('Codex 0190570d P2: Abmeldung des Autos nicht quittiert → die engere Grenze bleibt', async () => {
+    mock = await createMockEos({ knowsKey: false });
+    const cfgRef = { extra: { gridConnection: { limitKw: 29 } } };
+    const ctx = ctxFor(mock.port, cfgRef);
+    ctx.teslamateService = { getState: () => ({ batteryLevel: 50 }) };
+    const sync = createEosConfigSync(ctx);
+    await sync.sync();
+    assert.equal(lastInverterPut(mock).max_ac_charge_power_w, 16000);
+    ctx.teslamateService = { getState: () => ({ batteryLevel: null }) }; // Auto weg
+    mock.fail.add('devices/max_electric_vehicles');
+    await sync.sync();
+    await sync.sync();
+    const caps = mock.puts.filter((p) => p.section === 'devices/inverters').map((p) => p.body.inverter1.max_ac_charge_power_w);
+    assert.ok(caps.every((w) => w === 16000), `nie gelockert (${caps.join(', ')})`);
   });
 
   it('Grenze in DVhub entfernt: EOS bekommt den Aus-Wert, nicht null (null setzt nicht zurück)', async () => {

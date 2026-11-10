@@ -13,8 +13,14 @@
 //      Decke gesenkt (schedule-eval.js, applyControlTarget). Der Sollwert ist bei
 //      Victron der Netzbezug am Zähler; der Multi nimmt seine Ladung selbst
 //      zurück, wenn Haus oder Wallbox mehr ziehen. Darum gibt der Akku immer
-//      zuerst nach. Decke = Grenze − Sicherheitsabstand, mit Phasengrenze
-//      zusätzlich so tief, dass die stärkste Phase unter ihrer Grenze bleibt.
+//      zuerst nach. Decke = Grenze − Sicherheitsabstand, mindestens aber die
+//      Einregel-Toleranz des Multi (300 W) unter der harten Grenze (Victron-
+//      Grenze ohne Abstand: der Bezug pendelt sonst um die Grenze), mit
+//      Phasengrenze zusätzlich so tief, dass die stärkste Phase unter ihrer
+//      Grenze bleibt. Einregeln um den Sollwert ist kein Akku-Versagen; „hängt“
+//      erst bei größerer Abweichung über eine Frist (10 s über der harten
+//      Grenze, 30 s darunter) und endet, sobald eine gekürzte Last nachweislich
+//      in den Akku floss (Fable R1 P1-1).
 //   2. Reicht das nicht (Akku lädt nicht mehr, Haus zieht viel), nimmt DVhub
 //      die steuerbaren Lasten in der eingestellten Reihenfolge zurück: Wallbox
 //      (Strom bis zum Mindeststrom, dann Pause), Heizstab (my-PV), EEBUS-Geräte
@@ -26,7 +32,11 @@
 //   4. Fail-safe: Liefert der Zähler Fehler oder ist sein Wert älter als 90 s
 //      (wie beim Netzstrom-Zähler), gibt DVhub keine NEUE Last frei: Geräte
 //      bleiben höchstens bei ihrer letzten Leistung, der Akku-Sollwert höchstens
-//      bei Grenze − Abstand − geschätzter Grundlast − diesen Geräten.
+//      bei Grenze − Abstand − geschätzter Grundlast − diesen Geräten. Ein Gerät
+//      ohne Leistungsmeldung behält seine Grenze bzw. bleibt frei und zählt mit
+//      seiner Höchstleistung (kein Stopp, Fable R1 P2-6).
+//   Ohne Leistungsmeldung zählt eine Kürzung nie als Entlastung — die nächste
+//   Last wird im selben Takt mitgekürzt (Fable R1 P1-2).
 //
 // Akku zuerst bei Nicht-Victron-Anlagen (Christin 10.11.2026): Der Victron
 // deckt über seiner AC-Eingangsgrenze selbst aus dem Akku. Andere Anlagen tun das
@@ -102,9 +112,16 @@ export const REASSERT_MS = 30_000;       // Ungehorsam: Befehl höchstens so oft
 export const DISOBEY_TICKS = 3;          // so viele Takte über dem Deckel, bis er erneut gesendet wird
 const DISOBEY_TOL_W = 500;               // Toleranz über dem Deckel (Messung, Anlauf), mindestens 10 %
 export const OBEY_MS = 20_000;           // so lange zählt ein Befehl als „unterwegs“
-export const BATTERY_OBEY_MS = 10_000;   // so lange darf der Multi zum Senken seiner Ladung brauchen
+export const BATTERY_OBEY_MS = 10_000;   // so lange darf der Multi zum Senken seiner Ladung brauchen (über der harten Grenze)
+// Unter der harten Grenze (nur im Sicherheitsabstand) bekommt der Multi mehr
+// Zeit — z. B. beim Anlaufen einer Wallbox regelt er in 10–20 s nach (Fable R1 P1-1).
+export const BATTERY_OBEY_SOFT_MS = 30_000;
 export const BATTERY_TRACK_TOLERANCE_W = 300;   // übliches Einregeln des Multi um den Sollwert
 export const BATTERY_STUCK_HOLD_MS = 15 * 60_000; // so lange gilt ein hängender Akku als hängend
+// „Hängt“ endet vorzeitig, sobald der Akku nachweislich folgt: Seine Ladung
+// stieg seit dem Hängen um mindestens so viel, während der Bezug auf dem
+// Sollwert liegt — eine gekürzte Last floss also in den Akku (Fable R1 P1-1).
+export const BATTERY_FOLLOW_EVIDENCE_W = 500;
 export const FAILSAFE_TICKS = 2;         // Takte ohne frische Messung bis zum Fail-safe
 export const METER_MAX_AGE_MS = GRID_SHARE_FIELD_MAX_AGE_MS; // 90 s wie beim Netzstrom-Zähler
 const STEP_W = 100;
@@ -175,7 +192,7 @@ export function assistValueW({ excessW, dischargeW = 0, maxW }) {
  * active = Grenze gültig eingetragen.
  * @param {object} cfg effektive DVhub-Config
  */
-export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, victronReadError = false, phaseVoltagesV = null } = {}) {
+export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, victronReadError = false, phaseVoltagesV = null, victronLimitW = null, victronIgnoredA = null } = {}) {
   const c = cfg?.gridConnection || {};
   const dvSet = finite(c.limitKw) && Number(c.limitKw) > 0;
   const rawW = dvSet ? Number(c.limitKw) * 1000 : null;
@@ -188,41 +205,60 @@ export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, vic
     return Number.isFinite(v) && v >= VOLTAGE_MIN_V && v <= VOLTAGE_MAX_V ? v : NOMINAL_PHASE_VOLTAGE_V;
   });
   // Victron (Punkt 7): Reg. 2714 AcInputLimit, A je Phase. kW-Grenze daraus =
-  // A × Summe der Phasenspannungen (dreiphasig angenommen). Es gilt die strengere.
+  // A × Summe der Phasenspannungen (dreiphasig angenommen), auf 100 W
+  // abgerundet (Fable R1 P2-4: sonst wandert sie mit jeder Spannungsschwankung).
+  // Den stabilisierten Wert (Hysterese) liefert victronLimitExtra mit.
   const vA = finite(victronPhaseLimitA) && Number(victronPhaseLimitA) >= 6 && Number(victronPhaseLimitA) <= 4000
     ? Number(victronPhaseLimitA) : null;
-  const vLimitW = vA != null ? Math.round(vA * volts.slice(0, VICTRON_ASSUMED_PHASES).reduce((a, b) => a + b, 0)) : null;
+  const vExact = vA != null ? vA * volts.slice(0, VICTRON_ASSUMED_PHASES).reduce((a, b) => a + b, 0) : null;
+  const vLimitW = vA == null ? null
+    : finite(victronLimitW) && Number(victronLimitW) > 0 && Number(victronLimitW) <= vExact ? Number(victronLimitW) : down(vExact);
   const set = dvSet || vA != null;
   const valid = dvValid || vA != null;
   const limitW = smallestLimit([dvLimitW, vLimitW]);
   const limitSource = limitW == null ? null : (vLimitW != null && limitW === vLimitW && (dvLimitW == null || vLimitW < dvLimitW) ? 'victron' : 'dvhub');
-  const autoMargin = limitW == null ? AUTO_MARGIN_MIN_W
-    : Math.max(AUTO_MARGIN_MIN_W, Math.round(limitW * AUTO_MARGIN_PCT / 100));
+  // Abstand gehört zur DVhub-Einstellung und wird an ihr bemessen.
+  const marginBase = dvLimitW ?? limitW;
+  const autoMargin = marginBase == null ? AUTO_MARGIN_MIN_W
+    : Math.max(AUTO_MARGIN_MIN_W, Math.round(marginBase * AUTO_MARGIN_PCT / 100));
   const marginRaw = finite(c.marginW) && Number(c.marginW) >= 0 ? Math.round(Number(c.marginW)) : autoMargin;
-  const dvMarginW = limitW == null ? marginRaw : Math.min(Math.round(limitW / 2), marginRaw);
-  // Grenze aus Victron: kein Abstand — der GX hat schon einen Puffer und kann
-  // bewusst unter dem Anschluss liegen (Christin 07.11.2026). Gewinnt die
-  // DVhub-Einstellung, bleibt deren Abstand.
-  const marginW = limitSource === 'victron' ? 0 : dvMarginW;
-  const targetW = limitW == null ? null : limitW - marginW;
+  const dvMarginW = marginBase == null ? marginRaw : Math.min(Math.round(marginBase / 2), marginRaw);
+  // Ziel = das strengere aus Victron-Grenze OHNE Abstand (der GX hat schon
+  // einen Puffer und kann bewusst unter dem Anschluss liegen, Christin
+  // 07.11.2026) und DVhub-Grenze MIT ihrem Abstand. Liegt Victron knapp unter
+  // der DVhub-Grenze, bleibt DVhubs Ziel (Fable R1 P2-3: 29 kW mit 1 kW Abstand
+  // und 42 A Victron → 28 000 W, nicht 28 980 W).
+  const targetW = limitW == null ? null : smallestLimit([dvLimitW != null ? dvLimitW - dvMarginW : null, vLimitW]);
+  const marginW = limitW == null ? dvMarginW : limitW - targetW;
 
   const dvPhaseA = finite(c.phaseLimitA) && Number(c.phaseLimitA) >= 6 && Number(c.phaseLimitA) <= 4000
     ? Number(c.phaseLimitA) : null;
   const phaseA = smallestLimit([dvPhaseA, vA]);
   const phaseSource = phaseA == null ? null : (vA != null && phaseA === vA && (dvPhaseA == null || vA < dvPhaseA) ? 'victron' : 'dvhub');
-  // Je Phase: A × Spannung dieser Phase; die strengste als Kennzahl.
-  const phaseLimitsW = limitW != null && phaseA != null ? volts.map((v) => Math.round(phaseA * v)) : null;
+  // Je Phase: A × Spannung dieser Phase; die strengste als Kennzahl. Ziel je
+  // Phase wie gesamt: Victron ohne, DVhub mit Abstand (ein Drittel).
+  const on = limitW != null && phaseA != null;
+  const dvPhaseW = on && dvPhaseA != null ? volts.map((v) => Math.round(dvPhaseA * v)) : null;
+  const vPhaseW = on && vA != null ? volts.map((v) => Math.round(vA * v)) : null;
+  const phaseLimitsW = on ? volts.map((_, i) => smallestLimit([dvPhaseW?.[i], vPhaseW?.[i]])) : null;
   const phaseLimitW = phaseLimitsW ? Math.min(...phaseLimitsW) : null;
-  const phaseMarginW = phaseLimitW == null ? null
-    : phaseSource === 'victron' ? 0 : Math.min(Math.round(phaseLimitW / 2), Math.round(dvMarginW / 3));
-  const phaseTargetsW = phaseLimitsW ? phaseLimitsW.map((w) => w - phaseMarginW) : null;
+  const dvPhaseMarginW = dvPhaseW ? Math.min(Math.round(Math.min(...dvPhaseW) / 2), Math.round(dvMarginW / 3)) : 0;
+  const phaseTargetsW = on ? volts.map((_, i) => smallestLimit([dvPhaseW ? dvPhaseW[i] - dvPhaseMarginW : null, vPhaseW?.[i]])) : null;
   const phaseTargetW = phaseTargetsW ? Math.min(...phaseTargetsW) : null;
+  const phaseMarginW = phaseLimitW == null ? null : Math.max(0, ...phaseLimitsW.map((w, i) => w - phaseTargetsW[i]));
 
   const releaseHysteresisW = finite(c.releaseHysteresisW) && Number(c.releaseHysteresisW) >= 0
     ? Math.round(Number(c.releaseHysteresisW)) : GRID_CONNECTION_DEFAULTS.releaseHysteresisW;
   const baseRaw = finite(c.baseLoadW) && Number(c.baseLoadW) >= 0
     ? Math.round(Number(c.baseLoadW)) : GRID_CONNECTION_DEFAULTS.baseLoadW;
   const baseLoadW = targetW == null ? baseRaw : Math.min(baseRaw, targetW);
+  // Decke für den Akku-Sollwert: Der Multi regelt den Bezug nur ungefähr auf
+  // den Sollwert (± einige 100 W). Liegt das Ziel ohne Abstand an der harten
+  // Grenze (Victron-Grenze, kleiner eigener Abstand), läge der Bezug sonst die
+  // halbe Zeit darüber. Deshalb hält die Sollwert-Decke die Einregel-Toleranz
+  // unter der harten Grenze — nur für die Akku-Ladung aus dem Netz; die Lasten
+  // dürfen bis zum Ziel (Victron ohne Abzug, Fable R1 P1-1).
+  const ceilingTargetW = targetW == null ? null : Math.max(0, Math.min(targetW, limitW - BATTERY_TRACK_TOLERANCE_W));
   const orderKey = ORDER_PRESETS[c.order] ? c.order : GRID_CONNECTION_DEFAULTS.order;
   const batteryPhases = ['three', 'L1', 'L2', 'L3'].includes(c.batteryPhases) ? c.batteryPhases : null;
   const manufacturer = String(cfg?.manufacturer || 'victron');
@@ -241,9 +277,11 @@ export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, vic
     dvhubLimitW: dvLimitW,
     victronPhaseLimitA: vA,
     victronReadError: victronReadError === true,
+    victronIgnoredA: finite(victronIgnoredA) ? Number(victronIgnoredA) : null,
     marginW,
-    marginText: limitW == null ? null : limitSource === 'victron' ? 'kein Abstand (Victron-Grenze)' : null,
+    marginText: limitW == null ? null : limitSource === 'victron' && marginW === 0 ? 'kein Abstand (Victron-Grenze)' : null,
     targetW,
+    ceilingTargetW,
     phaseLimitA: limitW != null ? phaseA : null,
     phaseSource: limitW != null ? phaseSource : null,
     phaseLimitW,
@@ -271,15 +309,21 @@ export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, vic
  * kennt EOS max_grid_import_power_w, entfällt er (eos-config-sync.js):
  * Höchste Akku-Ladeleistung AUS DEM NETZ, mit der EOS planen darf. Bewusst
  * konservativ — Grenze − Abstand − geschätzte Grundlast und, wenn EOS das
- * E-Auto mitplant, dessen volle Ladeleistung (EOS darf beides in denselben
- * Slot legen). null = keine Grenze eingetragen. Wird durch eine EOS-eigene
+ * E-Auto gerade mitplant (angemeldet), dessen volle Ladeleistung (EOS darf
+ * beides in denselben Slot legen). null = keine Grenze eingetragen. Wird durch eine EOS-eigene
  * Netzbezugs-Grenze ersetzt, sobald es die gibt.
  */
 export function eosGridChargeCapW(cfg, extra = {}) {
   const r = resolveGridConnection(cfg, extra);
   if (!r.active) return null;
   const opt = cfg?.optimizer || {};
-  const evW = opt.eosOptimizeEv === true ? Math.max(0, Number(opt.evMaxChargeW) || 5000) : 0;
+  // Das E-Auto nur abziehen, wenn EOS es gerade wirklich plant (angemeldet,
+  // extra.evPlanned aus der Anmelde-Entscheidung des Abgleichs) — ohne
+  // angemeldetes Auto legt EOS keine Auto-Ladung in den Slot (Fable R3 P3-3:
+  // 3 × 16 A und 11-kW-Wallbox gaben sonst dauerhaft 0 W Netzladen).
+  // Ohne Angabe wie bisher nach eosOptimizeEv.
+  const evPlanned = extra?.evPlanned === undefined ? opt.eosOptimizeEv === true : extra.evPlanned === true;
+  const evW = opt.eosOptimizeEv === true && evPlanned ? Math.max(0, Number(opt.evMaxChargeW) || 5000) : 0;
   return Math.max(0, r.targetW - r.baseLoadW - evW);
 }
 
@@ -324,22 +368,53 @@ export function phaseVoltagesFromState(state, now = Date.now()) {
   return out.some((v) => v != null) ? out : null;
 }
 
-/** Victron-Grenze aus dem Zustand: A je Phase oder null (aus, -1, veraltet). */
+// Hysterese der Victron-Grenze in W je Laufzeit-Zustand (Fable R1 P2-4, R3
+// P2-2): Die Grenze aus Reg. 2714 hängt an der gemessenen Spannung. Ungerundet
+// wanderte sie mit jeder Schwankung — Sollwert-Writes alle 30 s und ein PUT an
+// EOS bei fast jedem Abgleich. Sie folgt deshalb sofort nach UNTEN, sobald der
+// echte Wert unter den gehaltenen fällt (nie über der Grenze), und nach oben
+// erst ab VICTRON_LIMIT_RAISE_W Zuwachs, jeweils auf 100 W abgerundet.
+export const VICTRON_LIMIT_RAISE_W = 200;
+const victronHeld = new WeakMap();
+
+/**
+ * Victron-Grenze aus dem Zustand: A je Phase oder null (aus, -1, veraltet).
+ * Fail-safe (Fable R1 P1-3): Ein Lesefehler von Reg. 2714 hebt die Grenze
+ * nicht auf — der zuletzt gelesene Wert gilt bis VICTRON_LIMIT_MAX_AGE_MS nach
+ * der letzten erfolgreichen Lesung weiter (der Poller lässt ihn bei einem
+ * Fehler stehen), danach gilt nur noch die DVhub-Einstellung.
+ */
 export function victronLimitExtra(state, now = Date.now(), cfg = null) {
   // Nur mit dem Victron-Profil (Standard) — ein gemerkter GX-Wert gilt nach
   // einem Profilwechsel nicht weiter.
   const phaseVoltagesV = phaseVoltagesFromState(state, now);
-  if (cfg && String(cfg.manufacturer || 'victron') !== 'victron') return { victronPhaseLimitA: null, victronReadError: false, phaseVoltagesV };
+  if (cfg && String(cfg.manufacturer || 'victron') !== 'victron') return { victronPhaseLimitA: null, victronReadError: false, phaseVoltagesV, victronLimitW: null };
   const v = state?.victron || {};
   const at = Number(v.fieldUpdatedAt?.acInputLimitA) || 0;
   const a = Number(v.acInputLimitA);
   const fresh = at > 0 && now - at <= VICTRON_LIMIT_MAX_AGE_MS;
   const error = Boolean(v.errors?.acInputLimitA);
+  const victronPhaseLimitA = fresh && a >= 6 && a <= 4000 ? a : null;
+  let victronLimitW = null;
+  if (victronPhaseLimitA != null) {
+    const volts = [0, 1, 2].map((i) => (Array.isArray(phaseVoltagesV) && phaseVoltagesV[i] != null ? phaseVoltagesV[i] : NOMINAL_PHASE_VOLTAGE_V));
+    const exact = victronPhaseLimitA * volts.slice(0, VICTRON_ASSUMED_PHASES).reduce((x, y) => x + y, 0);
+    const floor = down(exact);
+    const held = state && typeof state === 'object' ? victronHeld.get(state) : null;
+    victronLimitW = held && held.a === victronPhaseLimitA && exact >= held.w && floor < held.w + VICTRON_LIMIT_RAISE_W
+      ? held.w : floor;
+    if (state && typeof state === 'object') victronHeld.set(state, { a: victronPhaseLimitA, w: victronLimitW });
+  }
   return {
-    // Letzte Lesung gescheitert: der gemerkte Wert gilt nicht weiter.
-    victronPhaseLimitA: fresh && !error && a > 0 ? a : null,
+    victronPhaseLimitA,
     victronReadError: error,
+    // Wie alt der gültige Wert ist (für die Meldung im Leitstand).
+    victronLimitAgeMs: victronPhaseLimitA != null ? now - at : null,
+    // Gelesener Wert unter 6 A (kein plausibler Anschluss): gilt nicht, wird
+    // aber gemeldet statt still verworfen (Fable R1 P3-5).
+    victronIgnoredA: fresh && !error && a > 0 && a < 6 ? a : null,
     phaseVoltagesV,
+    victronLimitW,
   };
 }
 
@@ -352,7 +427,12 @@ export function createGuardState() {
   return {
     caps: {}, capAt: {}, ceilingW: null, ceilingUnderSince: null,
     over: 0, underSince: null, stale: 0, lastCutAt: 0, batteryPendingSince: null, batteryStuckAt: null,
+    batteryStuckChargeW: null,
     failsafe: false, exhausted: false, phasesMissing: false,
+    // Leistung vor dem ersten Eingriff je Gerät, Ungehorsam-Zähler und Zeit des
+    // letzten erzwungenen Befehls — gehören zum Zustand und gehen mit ihm
+    // (aus, Not-Halt; Fable R1 P3-1).
+    cutFrom: {}, disobey: {}, reassertAt: {},
     // Akku-Hilfe (Nicht-Victron): { valueW, baseW, since, raisedAt, seq,
     // roomSince, lowerSince } oder null; assistRestore = { valueW } steht zum
     // Zurückschreiben an; disSince = Beginn der Chance für den Akku.
@@ -451,7 +531,12 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   for (const id of Object.keys(st.caps)) {
     if (!ids.has(id)) { delete st.caps[id]; delete st.capAt[id]; }
   }
-  if (st.ceilingW == null || st.ceilingW > r.targetW) st.ceilingW = r.targetW;
+  // Gerät weg: auch seine Merker (Fable R1 P3-1).
+  for (const m of [st.cutFrom, st.disobey, st.reassertAt]) {
+    for (const id of Object.keys(m || {})) if (!ids.has(id)) delete m[id];
+  }
+  const cT = r.ceilingTargetW ?? r.targetW;
+  if (st.ceilingW == null || st.ceilingW > cT) st.ceilingW = cT;
 
   // --- Fail-safe: Zähler gestört oder veraltet --------------------------------
   if (!meas?.fresh) {
@@ -466,15 +551,23 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
     }
     let frozenW = 0;
     for (const d of devices) {
-      const cur = finite(d.currentW) ? Math.max(0, Number(d.currentW)) : 0;
       const cap = st.caps[d.id] ?? null;
+      // Ohne Leistungsmeldung (Fable R1 P2-6): nicht stoppen — eine Grenze
+      // bleibt, wie sie ist; ohne Grenze bleibt das Gerät frei (ein neuer
+      // Deckel wäre an einer direkten Box ein Ladebefehl). Für die Akku-Decke
+      // zählt vorsichtig seine Grenze bzw. Höchstleistung.
+      if (!finite(d.currentW)) {
+        frozenW += cap ?? Math.max(0, Number(d.maxW) || 0);
+        continue;
+      }
+      const cur = Math.max(0, Number(d.currentW));
       // Auf 100 W aufrunden: ein laufendes Gerät soll durch das Einfrieren
       // nicht umgestellt werden (z. B. 16 A → 15,9 A), nur nicht mehr steigen.
       const curUp = Math.ceil(cur / STEP_W) * STEP_W;
       const next = cap == null ? curUp : Math.min(cap, curUp);
       // Leistung beim Einfrieren merken: ein Gerät, das dabei nichts zog, wird
       // später ganz freigegeben statt per Teil-Deckel gestartet.
-      if (cap == null) (st.cutFrom ??= {})[d.id] = cur;
+      if (cap == null) st.cutFrom[d.id] = cur;
       if (cap == null || next < cap) setCap(d, next);
       frozenW += st.caps[d.id];
     }
@@ -508,7 +601,8 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const phaseLimits = r.phaseLimitsW || [r.phaseLimitW, r.phaseLimitW, r.phaseLimitW];
   const phaseExcess = phases ? 3 * Math.max(...phases.map((p, i) => p - phaseTargets[i])) : null;
   const excess = Math.max(total - r.targetW, phaseExcess ?? -Infinity);
-  const hard = total > r.limitW || (phases != null && phases.some((p, i) => p > phaseLimits[i]));
+  const hardPhase = phases != null && phases.some((p, i) => p > phaseLimits[i]);
+  const hard = total > r.limitW || hardPhase;
 
   // --- Ungehorsam: Gerät zieht trotz Deckel deutlich mehr -------------------
   // (z. B. von Hand in evcc oder an der Box wieder gestartet). Nach der
@@ -531,22 +625,27 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   }
 
   // --- 1. Akku: Decke für positive Netz-Sollwerte ------------------------------
-  const desired = phaseExcess == null ? r.targetW : Math.min(r.targetW, total - phaseExcess);
+  // Je Phase dieselbe Einregel-Reserve wie gesamt (ein Drittel der Toleranz
+  // unter der harten Phasengrenze), sonst pendelte die stärkste Phase bei
+  // Victron-Grenze ohne Abstand um ihre Grenze (Codex 9cbcf92f, P2).
+  const phaseCeilTargets = phases ? phaseTargets.map((t, i) => Math.min(t, phaseLimits[i] - Math.round(BATTERY_TRACK_TOLERANCE_W / 3))) : null;
+  const phaseExcessCeil = phases ? 3 * Math.max(...phases.map((p, i) => p - phaseCeilTargets[i])) : null;
+  const desired = phaseExcessCeil == null ? cT : Math.min(cT, total - phaseExcessCeil);
   if (desired < st.ceilingW) {
     st.ceilingW = down(Math.max(0, desired));
     st.ceilingUnderSince = null;
-  } else if (st.ceilingW < r.targetW) {
+  } else if (st.ceilingW < cT) {
     // Luft: entweder Rückschalt-Abstand über der Decke, oder die volle Decke
     // (Ziel) ist erreichbar — sonst erholte sich eine kleine Absenkung nie
     // (Gesamtprüfung, P2).
-    const roomy = desired >= st.ceilingW + r.releaseHysteresisW || desired >= r.targetW;
+    const roomy = desired >= st.ceilingW + r.releaseHysteresisW || desired >= cT;
     if (!roomy) st.ceilingUnderSince = null;
     else st.ceilingUnderSince ??= now;
     if (st.ceilingUnderSince != null && now - st.ceilingUnderSince >= RELEASE_MS) {
       // Begrenzt nur das Gesamtziel (keine Phase drückt), zurück aufs Ziel;
       // sonst mit Rückschalt-Abstand unter dem, was die Phase zulässt.
-      const raised = desired >= r.targetW ? r.targetW : down(desired - r.releaseHysteresisW);
-      st.ceilingW = Math.min(r.targetW, Math.max(st.ceilingW, raised));
+      const raised = desired >= cT ? cT : down(desired - r.releaseHysteresisW);
+      st.ceilingW = Math.min(cT, Math.max(st.ceilingW, raised));
       st.ceilingUnderSince = null;
     }
   }
@@ -557,9 +656,17 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   for (const d of devices) {
     const cap = st.caps[d.id];
     if (cap == null || now - (st.capAt[d.id] || 0) > OBEY_MS) continue;
-    // Ohne Leistungsmeldung: die beim Kürzen angenommene Leistung zählt.
-    const cur = finite(d.currentW) ? Number(d.currentW) : Number(st.assumed?.[d.id] ?? cap);
-    pending += Math.max(0, cur - cap);
+    // Nur Gemessenes zählt als „unterwegs“ — eine angenommene Leistung ist
+    // kein Puffer (Fable R1 P1-2).
+    if (!finite(d.currentW)) continue;
+    // Gemessene Leistung, wenn das Gerät sie getrennt von der steuerbaren
+    // meldet (Heizstab: Messung hinkt dem neuen Sollwert hinterher) — höchstens
+    // bis zur Leistung beim Eingriff, ein Eigenbetrieb darüber fällt nicht weg
+    // (Codex 9cbcf92f, P2).
+    // 0 ist ein gültiger Eingriffswert (Fail-safe bei 0 W Vorgabe; Codex d15440d1, P2).
+    const bound = st.cutFrom[d.id] != null ? Number(st.cutFrom[d.id]) : Number(d.measuredW);
+    const seen = finite(d.measuredW) ? Math.min(Number(d.measuredW), bound) : Number(d.currentW);
+    pending += Math.max(0, Math.max(Number(d.currentW), seen) - cap);
   }
   const chargeW = r.batterySupported ? Math.max(0, Number(battery.chargeW) || 0) : 0;
   const sp = r.batterySupported && finite(battery.setpointW) && Number(battery.setpointW) > 0
@@ -578,12 +685,34 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   const batteryPending = sp != null ? Math.min(chargeW, gap) : 0;
   if (sp == null || chargeW <= 0 || (st.batteryStuckAt != null && now - st.batteryStuckAt > BATTERY_STUCK_HOLD_MS)) {
     st.batteryStuckAt = null;
+    st.batteryStuckChargeW = null;
   }
-  // Über der harten Grenze zählt die Frist immer — auch innerhalb der
-  // Einregel-Toleranz (kleiner Sicherheitsabstand; Codex 184bcdcf, P2).
-  if ((gap > BATTERY_TRACK_TOLERANCE_W || hard) && batteryPending > 0 && excess > 0) {
+  // Folgt der Akku doch? Seine Ladung stieg seit dem Hängen deutlich, während
+  // der Bezug auf dem Sollwert liegt: eine gekürzte Last floss in den Akku,
+  // der Multi regelt also (Fable R1 P1-1). Ein Bezug auf dem Sollwert allein
+  // beweist das nicht (die Kürzung selbst kann ihn gesenkt haben — Codex
+  // b2f1ccd und 74f9a362, P1).
+  if (st.batteryStuckAt != null && gap <= BATTERY_TRACK_TOLERANCE_W
+    && chargeW >= (Number(st.batteryStuckChargeW) || 0) + BATTERY_FOLLOW_EVIDENCE_W) {
+    events.push({ type: 'battery_follows', chargeW: Math.round(chargeW), stuckChargeW: Math.round(Number(st.batteryStuckChargeW) || 0) });
+    st.batteryStuckAt = null;
+    st.batteryStuckChargeW = null;
+    st.batteryPendingSince = null;
+  }
+  // Einregeln des Multi um den Sollwert (≤ BATTERY_TRACK_TOLERANCE_W) ist kein
+  // Akku-Versagen — auch über der harten Grenze nicht (Fable R1 P1-1; die
+  // Sollwert-Decke hält die Toleranz unter der harten Grenze). Größere
+  // Abweichung: über der harten Grenze nach BATTERY_OBEY_MS, darunter (nur im
+  // Sicherheitsabstand) nach BATTERY_OBEY_SOFT_MS.
+  // Eine harte PHASEN-Überschreitung zählt immer (die Gesamt-Toleranz sagt
+  // über eine einzelne Phase nichts; Codex 9cbcf92f, P2).
+  if ((gap > BATTERY_TRACK_TOLERANCE_W || hardPhase) && batteryPending > 0 && excess > 0) {
     st.batteryPendingSince ??= now;
-    if (st.batteryStuckAt == null && now - st.batteryPendingSince > BATTERY_OBEY_MS) st.batteryStuckAt = now;
+    const obeyMs = hard ? BATTERY_OBEY_MS : BATTERY_OBEY_SOFT_MS;
+    if (st.batteryStuckAt == null && now - st.batteryPendingSince > obeyMs) {
+      st.batteryStuckAt = now;
+      st.batteryStuckChargeW = chargeW;
+    }
   } else {
     st.batteryPendingSince = null;
   }
@@ -599,6 +728,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   st.over = predicted > 0 ? st.over + 1 : 0;
   if (predicted > 0 && (st.over >= ENTER_TICKS || hard)) {
     let rest = predicted;
+    let cutUnknown = false;
     for (const kind of r.order) {
       for (const d of devices.filter((x) => x.kind === kind)) {
         if (rest <= 0) break;
@@ -606,24 +736,31 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
         // Ohne Leistungsmeldung: vorsichtig annehmen, dass es seine Grenze bzw.
         // Höchstleistung zieht — sonst bliebe ein steuerbares Gerät bei
         // Überlast unbegrenzt (Gesamtprüfung 6, P1).
-        const cur = finite(d.currentW) ? Math.max(0, Number(d.currentW)) : (cap ?? (Number(d.maxW) || 0));
+        const measured = finite(d.currentW);
+        const cur = measured ? Math.max(0, Number(d.currentW)) : (cap ?? (Number(d.maxW) || 0));
         const draw = cap == null ? cur : Math.min(cur, cap);
         if (draw <= 0) continue;
         let next = Math.max(0, down(draw - rest));
         if (next < (Number(d.minW) || 0)) next = 0;
         if (cap != null && next >= cap) continue;
         setCap(d, next);
-        if (!finite(d.currentW)) (st.assumed ??= {})[d.id] = draw;
         // Leistung vor dem ersten Eingriff (für die volle Freigabe).
-        (st.cutFrom ??= {})[d.id] = Math.max(Number(st.cutFrom[d.id]) || 0, draw);
-        rest -= draw - next;
-        events.push({ type: 'cut', id: d.id, kind: d.kind, name: d.name || null, fromW: Math.round(draw), capW: next, importW: Math.round(total), maxPhaseW: maxPhase == null ? null : Math.round(maxPhase), excessW: Math.round(excess) });
+        st.cutFrom[d.id] = Math.max(Number(st.cutFrom[d.id]) || 0, draw);
+        // Ohne Leistungsmeldung weiß DVhub nicht, ob die Kürzung wirkt: sie
+        // zählt nicht gegen den Überschuss, die nächste Last wird im selben
+        // Takt mitgekürzt (Fable R1 P1-2 — ein Gerät „ohne Messwert“ mit
+        // angenommenen 22 kW schluckte sonst die Kürzung, Minuten über der Grenze).
+        if (measured) rest -= draw - next;
+        else cutUnknown = true;
+        events.push({ type: 'cut', id: d.id, kind: d.kind, name: d.name || null, fromW: Math.round(draw), capW: next, importW: Math.round(total), maxPhaseW: maxPhase == null ? null : Math.round(maxPhase), excessW: Math.round(excess), ...(measured ? {} : { powerUnknown: true }) });
       }
     }
     st.over = 0;
     st.underSince = null;
     st.lastCutAt = now;
-    if (rest > 0 && !st.exhausted) {
+    // Erschöpft heißt: nichts Steuerbares mehr übrig. Wurde gerade ein Gerät
+    // ohne Messwert gekürzt, ist das (noch) nicht sicher.
+    if (rest > 0 && !cutUnknown && !st.exhausted) {
       st.exhausted = true;
       events.push({ type: 'exhausted', restW: Math.round(rest), importW: Math.round(total) });
     }
@@ -689,7 +826,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // Volle Freigabe erst, wenn die Leistung VOR dem ersten Eingriff Platz hat
       // — eine direkte Box zieht nach release() ihre eigene Höchstleistung,
       // nicht evMaxChargeW (Gesamtprüfung 7, P1).
-      const fullW = Math.max(Number(d.maxW) || 0, Number(st.cutFrom?.[d.id]) || 0);
+      const fullW = Math.max(Number(d.maxW) || 0, Number(st.cutFrom[d.id]) || 0);
       // Phasen: ein einphasiges (oder unbekanntes) Gerät darf höchstens die Luft
       // EINER Phase nehmen, ein dreiphasiges das Dreifache (Gesamtprüfung 6, P1).
       const devPhases = Number(d.phases) === 3 ? 3 : 1;
@@ -700,7 +837,7 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // startet keine Box, die es nicht selbst zum Laden geschickt hat.
       // Erst mit Luft für den Mindeststrom: die Box darf danach anlaufen, und
       // openWB bekommt beim Freigeben ihren Strom zurück (Codex a7aacda4, P1).
-      if (drawNow === 0 && st.cutFrom?.[d.id] === 0 && giveDev >= (Number(d.minW) || 0)) {
+      if (drawNow === 0 && st.cutFrom[d.id] === 0 && giveDev >= (Number(d.minW) || 0)) {
         delete st.caps[d.id];
         delete st.capAt[d.id];
         delete st.cutFrom[d.id];
@@ -713,11 +850,10 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
       // Gerundet ohne Zuwachs: Schritt nicht verbrauchen, nächstes Gerät
       // (Codex 7055aa8c, P2).
       if (drawNow + giveDev < fullW && down(next) <= cap) continue;
-      if (st.assumed) delete st.assumed[d.id];
       if (!(fullW > 0) || (drawNow + giveDev) >= fullW) {
         delete st.caps[d.id];
         delete st.capAt[d.id];
-        if (st.cutFrom) delete st.cutFrom[d.id];
+        delete st.cutFrom[d.id];
         events.push({ type: 'release', id: d.id, kind: d.kind, name: d.name || null, capW: null, importW: Math.round(total) });
       } else {
         setCap(d, down(next));
@@ -930,6 +1066,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   let lastSyncedKey = null;
   let lastEosSyncAt = 0;
   let lastVictronError = false;
+  let lastVictronIgnored = null;
   let last = { meas: null, devices: [] };
 
   const cfg = () => ctx.getCfg?.() || {};
@@ -1003,8 +1140,14 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       for (const h of heaters) {
         if (h.enabled === false || h.kind !== 'modulating' || h.endpoint?.type !== 'mypv') continue;
         const s = status[h.id] || {};
-        const cur = finite(s.powerW) ? Number(s.powerW) : (finite(s.setpointW) ? Number(s.setpointW) : null);
-        list.push({ id: `heater:${h.id}`, kind: 'heater', name: h.name || 'Heizstab', currentW: cur, maxW: Number(h.plan?.maxPowerW) || null, minW: Number(h.plan?.minPowerW) || 0 });
+        // Steuerbar ist nur, was DVhub gerade vorgibt: Der Deckel wirkt auf
+        // DVhubs Vorgabe (mypv-regulator). Läuft der Stab von selbst über ihr
+        // (eigener Thermostat, Boost), bringt ein Kürzen nichts und darf nicht
+        // als Entlastung zählen (Fable R1 P2-8).
+        const meas = finite(s.powerW) ? Math.max(0, Number(s.powerW)) : null;
+        const own = finite(s.setpointW) ? Math.max(0, Number(s.setpointW)) : null;
+        const cur = own != null ? (meas != null ? Math.min(meas, own) : own) : meas;
+        list.push({ id: `heater:${h.id}`, kind: 'heater', name: h.name || 'Heizstab', currentW: cur, measuredW: meas, maxW: Number(h.plan?.maxPowerW) || null, minW: Number(h.plan?.minPowerW) || 0 });
       }
     }
     // Die Hauptwallbox über EEBUS steht schon als „wallbox“ in der Liste —
@@ -1107,7 +1250,9 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     try {
       const saved = JSON.parse(fs.readFileSync(ctx.gridConnectionAssistPath, 'utf8'));
       if (saved && finite(saved.baseW) && Number(saved.baseW) >= 0) {
-        st.assistRestore = { valueW: Number(saved.baseW) };
+        // fromDisk: Beleg für das Not-Halt-Tor, dass DVhub die Grenze angehoben
+        // hatte — nach dem Neustart fehlt der eigene letzte Write (Fable R1 P2-7).
+        st.assistRestore = { valueW: Number(saved.baseW), fromDisk: true };
         log('grid_connection_assist_restored', { valueW: saved.valueW ?? null, baseW: Number(saved.baseW), text: 'Netzanschluss: Akku-Hilfe aus dem letzten Lauf — die Entladegrenze davor wird zurückgeschrieben.' }, 'warn');
       }
     } catch { /* kein Merker → nichts angehoben */ }
@@ -1314,9 +1459,13 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         lastSyncedKey = limitKey;
         Promise.resolve(ctx.eosConfigSync?.sync?.()).catch(() => {});
       }
+      if (r.victronIgnoredA !== lastVictronIgnored) {
+        lastVictronIgnored = r.victronIgnoredA;
+        if (r.victronIgnoredA != null) log('grid_connection_victron_ignored', { valueA: r.victronIgnoredA, text: `Victron-Bezugsgrenze (Reg. 2714) steht auf ${r.victronIgnoredA} A — unter 6 A ist das kein plausibler Anschluss, DVhub nimmt den Wert nicht als Grenze.` }, 'warn');
+      }
       if (r.victronReadError !== lastVictronError) {
         lastVictronError = r.victronReadError;
-        if (r.victronReadError) log('grid_connection_victron_unreadable', { text: 'Victron-Bezugsgrenze (Reg. 2714) nicht lesbar — es gelten nur die DVhub-Werte.' }, 'warn');
+        if (r.victronReadError) log('grid_connection_victron_unreadable', { text: `Victron-Bezugsgrenze (Reg. 2714) nicht lesbar — der zuletzt gelesene Wert gilt noch bis ${Math.round(VICTRON_LIMIT_MAX_AGE_MS / 60_000)} min nach der letzten Lesung, danach nur die DVhub-Werte.` }, 'warn');
       }
       const wantsAssist = (r.batteryNative || r.batterySupported) && liveRequests().length > 0;
       const meas = r.active || wantsAssist ? meterImport(state(), c, { now: lastTickAt, maxAgeMs: METER_MAX_AGE_MS }) : null;
@@ -1388,7 +1537,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     if (paused()) return null;
     const r = gridConnectionFromState(cfg(), state(), now());
     if (!r.batterySupported) return null;
-    const grid = r.active ? st.ceilingW ?? r.targetW : null;
+    const grid = r.active ? st.ceilingW ?? r.ceilingTargetW ?? r.targetW : null;
     const ext = externalTargetW();
     const ceiling = smallestLimit([grid, ext == null ? null : down(ext)]);
     return ceiling == null ? null : Math.max(0, ceiling);
@@ -1530,6 +1679,14 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       if (paused() || !st.assist) return null;
       return st.assist.valueW;
     },
+    /**
+     * Rückkehrwert der Entladegrenze aus dem Merker des letzten Laufs (W), so
+     * lange er aussteht — sonst null. Beleg für das Not-Halt-Tor nach einem
+     * Neustart (schedule-eval.js, Fable R1 P2-7).
+     */
+    persistedRestoreW() {
+      return st.assistRestore?.fromDisk === true && !st.assist ? st.assistRestore.valueW : null;
+    },
     /** Grenze eines Geräts (W), null = frei. */
     capW(id) {
       if (!active()) return null;
@@ -1567,6 +1724,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       if (clamp) parts.push(`begrenzt Akku-Ladung auf ${kwText(clamp.valueW)}`);
       for (const cp of caps) parts.push(cp.capW === 0 ? `${cp.name || KIND_LABEL[cp.kind]} pausiert` : `begrenzt ${cp.name || KIND_LABEL[cp.kind]} auf ${kwText(cp.capW)}`);
       const text = paused() ? 'Netzanschluss: Not-Halt aktiv — DVhub greift nicht ein.'
+        : !r.active && r.reason === 'not_set' && r.victronReadError ? 'Netzanschluss: Victron-Grenze (Reg. 2714) nicht lesbar — DVhub regelt nicht.'
         : !r.active ? 'Netzanschluss: Grenze ungültig (2 kW bis 2 000 kW) — DVhub regelt nicht.'
         : st.failsafe ? 'Netzanschluss: Zähler gestört oder veraltet — DVhub gibt keine neue Last frei.'
           : parts.length ? `Netzanschluss: ${parts.join(' · ')}` : null;
@@ -1593,7 +1751,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         assist,
         assistSources: liveRequests().map((q) => q.source),
         eosThreshold: eosThresholdInfo(),
-        ceilingW: r.active && r.batterySupported ? st.ceilingW ?? r.targetW : null,
+        ceilingW: r.active && r.batterySupported ? st.ceilingW ?? r.ceilingTargetW ?? r.targetW : null,
         clamp,
         caps,
         acting: Boolean(clamp || caps.length || st.failsafe || assist),

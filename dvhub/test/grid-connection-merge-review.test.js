@@ -603,11 +603,16 @@ test('Runde 6 P1: einphasige Wallbox — Freigabe rechnet mit der Luft EINER Pha
 test('Runde 6 P1: Gerät ohne Leistungsmeldung wird bei Überlast trotzdem begrenzt', () => {
   const st = createGuardState();
   const dev = { id: 'eebus:x', kind: 'eebus', name: 'WP', currentW: null, maxW: 6000, minW: 0 };
-  // 32 kW > 29 kW: sofort; angenommen 6 kW → Grenze 2 kW. Solange der Befehl
-  // unterwegs ist, wird nicht weiter gekürzt.
-  for (let i = 0; i < 3; i += 1) guardStep(st, { resolved: RG, now: i * 2000, meas: fresh(32000), devices: [dev], battery: {} });
+  // 32 kW > 29 kW: sofort; angenommen 6 kW → Grenze 2 kW.
+  guardStep(st, { resolved: RG, now: 0, meas: fresh(32000), devices: [dev], battery: {} });
   assert.equal(st.caps['eebus:x'], 2000);
-  assert.equal(st.exhausted, false);
+  assert.equal(st.exhausted, false, 'Wirkung unbekannt: nicht „erschöpft“');
+  // Geändert mit Fable R1 P1-2 (10.11.2026): Eine angenommene Leistung zählt
+  // nicht als „unterwegs“ — bleibt der Bezug über der Grenze, kürzt DVhub
+  // weiter (statt 20 s je Schritt zu warten); erst danach „erschöpft“.
+  for (let i = 1; i < 3; i += 1) guardStep(st, { resolved: RG, now: i * 2000, meas: fresh(32000), devices: [dev], battery: {} });
+  assert.equal(st.caps['eebus:x'], 0);
+  assert.equal(st.exhausted, true);
 });
 
 test('Runde 6 P2: dauerhafter Sollwert ohne Keepalive zählt weiter (aktiver Eintrag), Wallbox bleibt', () => {
@@ -1214,11 +1219,15 @@ test('529a0121 P2: fehlender bestätigter Strom (null) zählt nicht als 6 A', as
   assert.ok(seen[0].every((c) => c != null && c > 0), JSON.stringify(seen));
 });
 
-test('b7e52e33 P2: Victron-Grenze nicht lesbar → der alte Wert gilt NICHT weiter; anderes Profil → keine Victron-Grenze', async () => {
-  const { gridConnectionFromState } = await import('../services/grid-connection/index.js');
+// Geändert mit Fable R1 P1-3 (10.11.2026): Ein Lesefehler hebt die Grenze nicht
+// mehr auf — der letzte gültige Wert gilt bis VICTRON_LIMIT_MAX_AGE_MS weiter,
+// Meldung und Verhalten sagen jetzt dasselbe (b7e52e33 wollte beides gleich).
+test('b7e52e33 P2 / Fable R1 P1-3: Victron-Grenze nicht lesbar → der letzte Wert gilt bis zu seinem Höchstalter; anderes Profil → keine Victron-Grenze', async () => {
+  const { gridConnectionFromState, VICTRON_LIMIT_MAX_AGE_MS } = await import('../services/grid-connection/index.js');
   const t = Date.now();
   const state = { victron: { acInputLimitA: 40, fieldUpdatedAt: { acInputLimitA: t }, errors: { acInputLimitA: 'timeout' } } };
-  assert.equal(gridConnectionFromState({ gridConnection: { limitKw: 29 } }, state, t).limitW, 29000);
+  assert.equal(gridConnectionFromState({ gridConnection: { limitKw: 29 } }, state, t).limitW, 27600, 'letzter Wert gilt weiter');
+  assert.equal(gridConnectionFromState({ gridConnection: { limitKw: 29 } }, state, t + VICTRON_LIMIT_MAX_AGE_MS + 1).limitW, 29000, 'danach die DVhub-Grenze');
   const ok = { victron: { acInputLimitA: 40, fieldUpdatedAt: { acInputLimitA: t }, errors: {} } };
   assert.equal(gridConnectionFromState({ manufacturer: 'fronius', gridConnection: { limitKw: 29 } }, ok, t).limitW, 29000);
 });

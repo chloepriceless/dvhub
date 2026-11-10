@@ -1035,6 +1035,30 @@ export function createScheduleEvaluator(ctx) {
   }
   // === end T-VERIFY =========================================================
 
+  // Nach einem Neustart ohne eigenen Write: steht die Entladegrenze nachweislich
+  // über value? Frische Rücklesung (≥ 0, über value); nur ohne sie der Merker
+  // der Akku-Hilfe (services/grid-connection persistedRestoreW) mit genau diesem Wert.
+  function dischargeKnownAbove(value) {
+    const rb = freshDischargeReadback();
+    // Eine frische Rücklesung entscheidet — auch gegen den Merker: steht die
+    // Grenze schon tiefer, wäre der Rückkehrwert ein Anheben (Codex 9cbcf92f, P1).
+    if (rb != null) return rb >= 0 && rb > value;
+    let merker;
+    try { merker = ctx.gridConnection?.persistedRestoreW?.() ?? null; } catch { merker = null; }
+    return merker != null && Number(merker) === value;
+  }
+
+  // Frische Rücklesung der Entladegrenze (W) oder null.
+  function freshDischargeReadback() {
+    const v = state.victron || {};
+    const at = Number(v.fieldUpdatedAt?.maxDischargeW) || 0;
+    const maxAge = Number(getCfg()?.victron?.telemetryMaxAgeMs ?? 90000);
+    // Nicht verfügbar (Poller legt null ab, z. B. NaN-Wert) ist keine 0 (Codex a83e8bc9, P2).
+    if (v.maxDischargeW == null || v.maxDischargeW === '') return null;
+    const rb = Number(v.maxDischargeW);
+    return at > 0 && Date.now() - at <= maxAge && !v.errors?.maxDischargeW && Number.isFinite(rb) ? rb : null;
+  }
+
   async function applyControlTarget(target, value, source) {
     const cfg = getCfg();
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
@@ -1062,13 +1086,24 @@ export function createScheduleEvaluator(ctx) {
     // Ebenso der Netzanschluss (Akku zuerst, Nicht-Victron): seine angehobene
     // Entladegrenze darf er auf den Wert davor SENKEN — nur abwärts, nie auf
     // „unbegrenzt“, nur unter dem, was gerade steht.
+    // Beleg für „steht höher“: DVhubs letzter eigener Write; nach einem Neustart
+    // (kein Write bekannt) auch eine frische Rücklesung oder der Merker der
+    // Akku-Hilfe mit genau diesem Rückkehrwert (Fable R1 P2-7).
     const lwDischarge = state.schedule?.lastWrite?.maxDischargeW;
     const gridConnectionRestore = source === 'grid_connection_restore' && target === 'maxDischargeW'
-      && Number(value) >= 0 && lwDischarge != null && Number(lwDischarge.value) > 0
-      && Number(value) < Number(lwDischarge.value);
+      && Number(value) >= 0 && (lwDischarge != null
+        ? Number(lwDischarge.value) > 0 && Number(value) < Number(lwDischarge.value)
+        : dischargeKnownAbove(Number(value)));
     // Ebenso die Einspeisung aus Akku 2 (multi-gx/floor-handoff.js): sie schreibt
     // im Not-Halt EINMAL die vor ihrer Sperre gesicherte Entladegrenze zurück —
     // nur genau diesen, gerade angemeldeten Wert, nie eine neue Sperre.
+    // Steht der Rückkehrwert nach einem Neustart im Not-Halt schon im Gerät
+    // (frische Rücklesung gleich), ist die Rücknahme erledigt — ohne Write, und
+    // der Merker darf gehen (Codex d15440d1, P2).
+    if (state.ctrl.discretionaryWritesPaused && source === 'grid_connection_restore' && target === 'maxDischargeW'
+      && lwDischarge == null && Number(value) >= 0 && freshDischargeReadback() === Number(value)) {
+      return { ok: true, skipped: true, reason: 'already_set' };
+    }
     const handoffStopRestore = source === 'multi_gx_handoff_stop' && target === 'maxDischargeW'
       && floorHandoff.isStopRestore(value);
     // „Als ob aus“ (Christin 10.11.2026, services/emergency-stop/policy.js):

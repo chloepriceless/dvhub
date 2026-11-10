@@ -626,3 +626,74 @@ test('Codex b7f23382 P2: Restleistung unter 100 W wird noch genutzt, bevor eine 
   assert.equal(st.assist?.valueW, 10000);
   assert.equal(ev.some((e) => e.type === 'cut'), false, 'Wallbox läuft weiter');
 });
+
+// Fable R1 P2-7 (10.11.2026): Neustart mit angehobener Entladegrenze direkt in
+// den Not-Halt (gespeichert oder control_state.json unlesbar). Nach dem
+// Neustart fehlt DVhubs letzter eigener Write — das Tor verlangte ihn als Beleg
+// für „steht höher“ und blockte die eine Rücknahme. Beleg ist jetzt auch der
+// Merker der Akku-Hilfe oder eine frische Rücklesung.
+test('Fable R1 P2-7: Neustart im Not-Halt mit Merker — die Entladegrenze geht einmal zurück (Rücklesung frisch)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-assist-'));
+  const p = path.join(dir, 'grid_connection_assist.json');
+  fs.writeFileSync(p, JSON.stringify({ valueW: 5000, baseW: 0, since: Date.now() - 60_000 }));
+  const h = rig('bridge-mqtt', { assistPath: p });
+  h.state.ctrl.discretionaryWritesPaused = true;
+  h.measure({ importW: 5000, maxDischargeW: 5000 });
+  assert.equal(h.state.schedule.lastWrite?.maxDischargeW ?? null, null, 'nach dem Neustart kein eigener Write');
+  for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
+  assert.deepEqual(h.writes(), [0], 'genau eine Rücknahme');
+  assert.equal(fs.existsSync(p), false, 'Merker gelöscht');
+});
+
+test('Fable R1 P2-7: Neustart im Not-Halt mit Merker, ohne Rücklesung — der Merker reicht als Beleg', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-assist-'));
+  const p = path.join(dir, 'grid_connection_assist.json');
+  fs.writeFileSync(p, JSON.stringify({ valueW: 5000, baseW: 0, since: Date.now() - 60_000 }));
+  const h = rig('bridge-mqtt', { assistPath: p });
+  h.state.ctrl.discretionaryWritesPaused = true;
+  h.measure({ importW: 5000 });
+  delete h.state.victron.fieldUpdatedAt.maxDischargeW; // keine Rücklesung
+  delete h.state.victron.maxDischargeW;
+  for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
+  assert.deepEqual(h.writes(), [0]);
+  // Nichts anderes kommt durch: kein höherer Wert, keine zweite Rücknahme.
+  const r = await h.evaluator.applyControlTarget('maxDischargeW', 0, 'grid_connection_restore');
+  assert.equal(r.blocked, true);
+});
+
+test('Codex 9cbcf92f P1: Neustart im Not-Halt, frische Rücklesung steht schon tiefer → der Merker hebt nicht an', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-assist-'));
+  const p = path.join(dir, 'grid_connection_assist.json');
+  fs.writeFileSync(p, JSON.stringify({ valueW: 5000, baseW: 3000, since: Date.now() - 60_000 }));
+  const h = rig('bridge-mqtt', { assistPath: p });
+  h.state.ctrl.discretionaryWritesPaused = true;
+  h.measure({ importW: 5000, maxDischargeW: 0 }); // jemand hat inzwischen gesperrt
+  for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
+  assert.deepEqual(h.writes(), [], 'kein Anheben auf 3 000 W im Not-Halt');
+});
+
+test('Codex d15440d1 P2: Neustart im Not-Halt, Rückkehrwert steht schon im Gerät → erledigt ohne Write, Merker weg', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-assist-'));
+  const p = path.join(dir, 'grid_connection_assist.json');
+  fs.writeFileSync(p, JSON.stringify({ valueW: 5000, baseW: 0, since: Date.now() - 60_000 }));
+  const h = rig('bridge-mqtt', { assistPath: p });
+  h.state.ctrl.discretionaryWritesPaused = true;
+  h.measure({ importW: 5000, maxDischargeW: 0 });
+  for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
+  assert.deepEqual(h.writes(), [], 'kein Write');
+  assert.equal(fs.existsSync(p), false, 'Merker gelöscht');
+  assert.equal(h.guard.persistedRestoreW(), null);
+});
+
+test('Codex a83e8bc9 P2: Rücklesung „nicht verfügbar“ (null) gilt nicht als 0 W — die Rücknahme wird geschrieben', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-assist-'));
+  const p = path.join(dir, 'grid_connection_assist.json');
+  fs.writeFileSync(p, JSON.stringify({ valueW: 5000, baseW: 0, since: Date.now() - 60_000 }));
+  const h = rig('bridge-mqtt', { assistPath: p });
+  h.state.ctrl.discretionaryWritesPaused = true;
+  h.measure({ importW: 5000 });
+  h.state.victron.maxDischargeW = null; // frisch abgefragt, Wert nicht verfügbar
+  h.state.victron.fieldUpdatedAt.maxDischargeW = Date.now();
+  for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
+  assert.deepEqual(h.writes(), [0]);
+});

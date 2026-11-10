@@ -505,6 +505,16 @@ export function createEosConfigSync(ctx) {
     sentConfig.values.clear();
     sentConfig.at = 0;
   }
+  // Hat EOS nachweislich KEIN E-Auto (max_electric_vehicles = 0 quittiert)?
+  // Erst dann darf der Behelf die Auto-Ladeleistung wieder freigeben — sonst
+  // könnte EOS mit gelockerter Akku-Ladegrenze UND angemeldetem Auto planen
+  // (Codex 0190570d, P2). Beim Start unbekannt: vorsichtig wie mit Auto.
+  let evConfirmedOff = false;
+  // Hat EOS das Auto nachweislich angemeldet (max_electric_vehicles = 1
+  // quittiert)? Nur dann darf syncEv das Fahrzeug allein nachschreiben — sonst
+  // stünde in EOS ein Fahrzeug bei „höchstens 0“ (Codex a06a107e, P2).
+  // null = in diesem Lauf noch kein voller Abgleich (wie bisher erlaubt).
+  let evRegistered = null;
 
   function publishCaps(caps) {
     if (state) {
@@ -614,13 +624,19 @@ export function createEosConfigSync(ctx) {
 
     // Zweite GX-Anlage erreichbar → Akku und Wechselrichter beider Anlagen.
     const planCfg = planningCfg(ctx, cfg);
+    // Anmeldung des E-Autos zuerst: der Behelf der Netzbezugs-Grenze zieht die
+    // Auto-Ladeleistung nur ab, wenn EOS das Auto gerade plant (Fable R3 P3-3).
+    const evDecision = decideEvRegistration(cfg, caps);
+    // Für den Behelf zählt das Auto, solange EOS es haben könnte: angemeldet
+    // werden soll, oder die Abmeldung ist noch nicht quittiert.
+    const evForCap = evDecision.register === true || !evConfirmedOff;
     const batteries = buildEosBatteries(planCfg, { minSocPct: eosMinSocPct });
     const inverters = buildEosInverters(planCfg, {
       curve: effectiveInverterCurve(cfg, ctx.inverterCurve?.get?.()),
       curveSupported: caps.inverterEfficiencyCurve === true,
       gridImportLimitSupported: caps.gridImportLimit === true,
       // Victron-Grenze (Reg. 2714) — EOS bekommt den wirksamen Wert.
-      gridConnectionExtra: victronLimitExtra(state, Date.now(), cfg),
+      gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evForCap },
     });
     const optimization = buildEosOptimization(cfg);
     const geneticSizing = pickGeneticSizing(optimization.interval, cfg?.optimizer?.eosGeneticGenerations);
@@ -650,12 +666,11 @@ export function createEosConfigSync(ctx) {
     // charging from the grid overnight — the operator charges the EV from PV
     // during the day, and that load is already captured by the LoadImport
     // forecast. When ON, EOS models the EV as a separately-optimised device.
-    const evDecision = decideEvRegistration(cfg, caps);
     const optimizeEv = evDecision.register;
     const evTasks = optimizeEv
       ? [
-          { section: 'devices/max_electric_vehicles', body: 1 },
-          { section: 'devices/electric_vehicles', body: asDevices(evDevices(cfg, caps, evDecision)) },
+          { section: 'devices/max_electric_vehicles', body: 1, evRegister: true },
+          { section: 'devices/electric_vehicles', body: asDevices(evDevices(cfg, caps, evDecision)), evRegister: true },
         ]
       : [
           { section: 'devices/max_electric_vehicles', body: 0 },
@@ -850,15 +865,31 @@ export function createEosConfigSync(ctx) {
     let unchanged = 0;
     for (const t of tasks) {
       const body = JSON.stringify(t.body);
+      // Auto erst anmelden, wenn die engere Akku-Ladegrenze des Behelfs in EOS
+      // steht (Codex 0190570d, P2): scheitert der Wechselrichter-PUT, bleibt
+      // das Auto in diesem Abgleich draußen.
+      const evMax = t.section === 'devices/max_electric_vehicles';
+      if (t.evRegister && errors['devices/inverters']) {
+        errors[t.section] = 'inverter_cap_not_applied';
+        if (evMax) evRegistered = false;
+        continue;
+      }
+      if (t.evRegister) evConfirmedOff = false;
+      if (evMax) evRegistered = false; // erst die Quittung meldet an
+      const evOff = evMax && t.body === 0;
       if (sentConfig.values.get(t.section) === body) {
         applied.push(t.section);
         unchanged += 1;
+        if (evOff) evConfirmedOff = true;
+        if (evMax && t.body === 1) evRegistered = true;
         continue;
       }
       const res = await eosHttpRequest(baseUrl, 'PUT', `/v1/config/${t.section}`, t.body);
       if (res.ok) {
         applied.push(t.section);
         sentConfig.values.set(t.section, body);
+        if (evOff) evConfirmedOff = true;
+        if (evMax && t.body === 1) evRegistered = true;
       } else {
         errors[t.section] = res.error;
         sentConfig.values.delete(t.section);
@@ -888,7 +919,7 @@ export function createEosConfigSync(ctx) {
           curve: curveNow,
           curveSupported: again.inverterEfficiencyCurve === true,
           gridImportLimitSupported: again.gridImportLimit === true,
-          gridConnectionExtra: victronLimitExtra(state, Date.now(), cfg),
+          gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evForCap },
         }));
         const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/inverters', body);
         if (!res.ok) errors['devices/inverters'] = res.error;
@@ -977,6 +1008,9 @@ export function createEosConfigSync(ctx) {
     publishCaps(caps);
     const decision = decideEvRegistration(cfg, caps);
     if (!decision.register) return { ok: true, skipped: 'no ev soc' };
+    // Anmeldung im vollen Abgleich noch nicht durch (z. B. Wechselrichter-PUT
+    // gescheitert): nichts allein nachschreiben (Codex a06a107e, P2).
+    if (evRegistered === false) return { ok: false, skipped: 'ev_not_registered' };
     const list = evDevices(cfg, caps, decision);
     const body = devicesAsMap(list);
     const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/electric_vehicles', body);
