@@ -80,6 +80,10 @@ verweist hierher.
   Preise kommen, rechnet EOS neu. Der Leitstand kennzeichnet das am EOS-Fahrplan („Preise geschätzt“, mit Abfahrt)
   und unter „Laut EOS-Plan“. Aus Slots mit geschätzten Preisen setzt DVhub keine Akku-Regeln um; für den Hausakku
   allein bleibt es dabei, dass im Steuerzeitraum nur echte Preise liegen. Eine feste Grenze (6/12/24 h) bleibt fest.
+  Mit „EOS rechnet nach eigenem Takt“ (dort schickt DVhub keine Schätzwerte) schneidet DVhub die Akku-Regeln nicht
+  mehr an der alten Mitternacht ab, sobald seit über drei Stunden keine Schätzwerte mehr in EOS liegen — vorher
+  fielen zwischen etwa 13 und 16 Uhr die Regeln für die Nacht weg, obwohl die Preise für morgen da waren. Nach einem
+  Neustart von DVhub bleibt es bis zu drei Stunden beim vorsichtigen Schnitt (Fable-Prüfung R3, P3-2).
 - **Netzanschluss: DVhub hält die Bezugsgrenze des Hausanschlusses ein.** Neue Einstellung „Netzanschluss maximal
   (kW)“ unter Netz & Recht, stabil (kein Beta), ab Werk leer = aus. Anlass: EOS plante 34,4 kW Netzbezug (Akku 27 kW +
   E-Auto 11 kW + Haus) an einem 29-kW-Anschluss. Der Wächter läuft bei jeder Zählerabfrage (Prod alle 2 s):

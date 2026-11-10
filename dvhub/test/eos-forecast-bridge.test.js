@@ -1134,6 +1134,34 @@ test('Preise auffüllen: ohne gespeicherte Historie bleibt alles wie bisher', as
   } finally { await mock.close(); }
 });
 
+// Fable R3, P3-2: Merker, seit wann sicher keine Schätzwerte mehr in EOS liegen
+// (eos-adapter estimatedPriceCutoffMs). Gesetzt beim ersten Push ohne Schätzung,
+// dessen Löschen gelang; nicht bei jedem Push nachgezogen; ein Push mit
+// Schätzung löscht ihn.
+test('P3-2: eosEstimatesClearedAt — einmal gesetzt ohne Schätzung, gelöscht mit Schätzung', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const { ctx, state } = estimateCtx(mock, { optimizer: { eosStartAfterPreviousRun: true } });
+    const bridge = createEosForecastBridge(ctx);
+    const before = Date.now();
+    await bridge.push();
+    assert.equal(state.optimizer.eosPriceEstimate, null, 'eigener Takt: keine Schätzung');
+    const first = state.optimizer.eosEstimatesClearedAt;
+    assert.ok(Number.isFinite(first) && first >= before, `gesetzt (${first})`);
+    await new Promise((r) => setTimeout(r, 5));
+    await bridge.push();
+    assert.equal(state.optimizer.eosEstimatesClearedAt, first, 'nicht bei jedem Push nachgezogen');
+  } finally { await mock.close(); }
+  const mock2 = await createMockEos(okHandler);
+  try {
+    const { ctx, state } = estimateCtx(mock2);
+    state.optimizer.eosEstimatesClearedAt = 123;
+    await createEosForecastBridge(ctx).push();
+    assert.ok(state.optimizer.eosPriceEstimate, 'DVhub stößt an: mit Schätzung');
+    assert.equal(state.optimizer.eosEstimatesClearedAt, null, 'Schätzwerte in EOS → Merker weg');
+  } finally { await mock2.close(); }
+});
+
 // Leitstand „Laut EOS-Plan“ (Christin 02.11.2026): die Anzeige nennt, womit EOS
 // die eingespeiste kWh bewertet — dieselbe Regel wie push().
 test('eosFeedInBasis: fest, Börse, Börse + Marktprämie', async () => {

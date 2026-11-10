@@ -1598,6 +1598,19 @@ export function createEosForecastBridge(ctx) {
       const clear = await clearStaleEstimates(baseUrl, { sentEndMs, nowMs: Date.now(), gone });
       if (gone()) return abandoned();
       if (clear.errors.length) errors.priceEstimateClear = clear.errors.join('; ');
+      // Seit wann liegen sicher keine Schätzwerte mehr in EOS (Fable R3, P3-2)?
+      // Für Pläne ohne Lauf-Angaben (EOS nach eigenem Takt): lag schon zum
+      // frühesten Laufbeginn keine Schätzung vor, entfällt der Schnitt an der
+      // alten Preisgrenze (eos-adapter estimatedPriceCutoffMs). Gesetzt beim
+      // ersten gelungenen Löschen ohne Schätzung, nicht bei jedem Push
+      // nachgezogen; ein Push mit Schätzung nimmt ihn zurück.
+      if (state) {
+        state.optimizer = state.optimizer || {};
+        if (priceEstimate) state.optimizer.eosEstimatesClearedAt = null;
+        else if (clear.cleared === true && !clear.errors.length && !Number.isFinite(state.optimizer.eosEstimatesClearedAt)) {
+          state.optimizer.eosEstimatesClearedAt = Date.now();
+        }
+      }
     }
 
     // PV wie die Last auf jetzt zurückgefüllt — nur für die Berechnung: PV

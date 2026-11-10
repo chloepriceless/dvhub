@@ -1099,6 +1099,29 @@ test('pullGridSetpoints: Rückblick deckt die längste Laufzeit ab', async () =>
   assert.deepEqual(await slotsWith(state, '2026-06-06T15:15:00Z'), FIRST1);
 });
 
+// Fable-Prüfung R3, P3-2 (10.11.2026): „EOS nach eigenem Takt“ — Pläne passen
+// nie zu einem Lauf, galt immer der Stand von vor 3 h 02 min: zwischen ~13 und
+// ~16 Uhr schnitt DVhub an der heutigen Mitternacht, obwohl die Preise für
+// morgen da sind. In diesem Modus schickt DVhub aber gar keine Schätzwerte und
+// löscht alte (eos-forecast-bridge clearStaleEstimates). Lagen schon zum
+// frühesten möglichen Laufbeginn keine Schätzwerte mehr in EOS
+// (eosEstimatesClearedAt), kann der Plan keine enthalten — dann gilt nur die
+// aktuelle Preisgrenze.
+test('P3-2: eigener Takt ohne Schätzwerte in EOS — kein Schnitt an der alten Mitternacht', async () => {
+  const base = () => ({
+    eosRealPriceEnd: '2026-06-07T22:00:00.000Z',
+    eosRealPriceEnds: [{ at: ms('2026-06-06T09:00:00Z'), end: '2026-06-06T22:00:00.000Z' }, { at: ms('2026-06-06T11:30:00Z'), end: '2026-06-07T22:00:00.000Z' }],
+  });
+  // Plan 14:00 Berlin, Schätzwerte seit 05:00 UTC aus EOS gelöscht → alle Regeln.
+  assert.deepEqual(await slotsWith({ optimizer: { ...base(), eosEstimatesClearedAt: ms('2026-06-06T05:00:00Z') } }, '2026-06-06T12:00:00Z'), ALL3);
+  // Gelöscht erst 10:00 UTC: der Lauf kann vorher begonnen haben → vorsichtig wie bisher.
+  assert.deepEqual(await slotsWith({ optimizer: { ...base(), eosEstimatesClearedAt: ms('2026-06-06T10:00:00Z') } }, '2026-06-06T12:00:00Z'), FIRST1);
+  // Unbekannt (z. B. gleich nach dem Neustart, noch kein Push) → wie bisher.
+  assert.deepEqual(await slotsWith({ optimizer: base() }, '2026-06-06T12:00:00Z'), FIRST1);
+  // Die aktuelle Preisgrenze schneidet weiter.
+  assert.deepEqual(await slotsWith({ optimizer: { ...base(), eosRealPriceEnd: '2026-06-06T22:00:00.000Z', eosEstimatesClearedAt: ms('2026-06-06T05:00:00Z') } }, '2026-06-06T12:00:00Z'), FIRST1);
+});
+
 // Codex ea233cd1 (3× P2): Plan ohne generated_at —
 // (a) festgehaltene Grenze wird mit der aktuellen Preisgrenze geschnitten,
 // (b) die Grenze eines fremden, alten Laufs gilt nicht,

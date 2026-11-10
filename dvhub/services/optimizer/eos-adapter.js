@@ -86,6 +86,10 @@ export function setEosRemoteFacadeUrl(url) {
 //      (eosRealPriceEnds, vom Preis-Push gesammelt). Ist dafür nichts bekannt
 //      (Neustart), Mitternacht am Ende des Plantags: der Day-Ahead für den Tag
 //      lag immer vor.
+//      Lagen schon zum frühesten Laufbeginn keine Schätzwerte mehr in EOS
+//      (state.optimizer.eosEstimatesClearedAt, EOS nach eigenem Takt), entfällt
+//      dieser Rückfall (Fable R3, P3-2). Nach einem Neustart bleibt es ~3 h
+//      beim vorsichtigen Rückfall (Zustand nur im Speicher).
 //   4. Ohne generated_at: Grenze aus 3. zum Zeitpunkt des ersten Sehens, je
 //      Plan-Inhalt festgehalten (state.optimizer.eosUnknownPlanCutoffs).
 // Das Ende der JETZT echten Preise (eosRealPriceEnd) begrenzt zusätzlich, schaltet
@@ -151,7 +155,14 @@ export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now()) {
   } else if (Number.isFinite(generatedMs)) {
     // Rückfall am Tag des Plans, nicht des Rückblicks: ein Plan von 00:30 hat
     // echte Preise bis zur nächsten Mitternacht (Codex 66ae1b46).
-    cutoffs.push(unknownRunCutoffMs(opt, generatedMs, berlinDayEndMs(generatedMs)));
+    // Entfällt, wenn schon zum frühesten möglichen Laufbeginn keine
+    // Schätzwerte mehr in EOS lagen (eosEstimatesClearedAt, Bridge; EOS nach
+    // eigenem Takt bekommt keine) — dann gilt nur die aktuelle Preisgrenze
+    // (Fable R3, P3-2: sonst Schnitt an der alten Mitternacht bis ~16 Uhr).
+    const clearedAt = Number(opt?.eosEstimatesClearedAt);
+    const noEstimatesInRun = opt?.eosEstimatesClearedAt != null && Number.isFinite(clearedAt)
+      && clearedAt <= generatedMs - EOS_UNKNOWN_RUN_LOOKBACK_MS;
+    if (!noEstimatesInRun) cutoffs.push(unknownRunCutoffMs(opt, generatedMs, berlinDayEndMs(generatedMs)));
     // Fertig während eines laufenden Laufs: kann aus ihm stammen (Lösung vor der
     // Antwort, Codex 3a14d90c) — oder aus einem älteren Lauf (z. B. vor einem
     // Neustart). Dann gilt zusätzlich seine Grenze, nie nur sie (Runde 2).
