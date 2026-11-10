@@ -135,10 +135,26 @@ test('Poll-Punkt 2704 = 0 (von Hand erweitertes Profil) ohne eigenen 0-Write, 27
   assert.deepEqual(maxDischargeWrites(transport), []);
 });
 
-test('ausgeliefertes Victron-Profil pollt 2704 nicht — die eigene Rücklesung ist nötig', () => {
+// Seit 1.0.10 pollt das ausgelieferte Profil 2704 (Einspeisung aus Akku 2,
+// multi-gx/floor-handoff.js). Die eigene Rücklesung bleibt nötig: der Poll-Punkt
+// liest die Werkseinstellung „unbegrenzt“ über Modbus als 0.
+test('ausgeliefertes Victron-Profil pollt 2704 — gleiche Skala wie der Write', () => {
   const cfg = loadVictronConfig(PEAK_ON);
-  assert.equal(cfg.points.maxDischargeW, undefined);
+  assert.equal(cfg.points.maxDischargeW.address, 2704);
+  assert.equal(cfg.points.maxDischargeW.scale, cfg.controlWrite.maxDischargeW.scale);
   assert.equal(cfg.controlWrite.maxDischargeW.address, 2704);
+});
+
+test('Poll-Punkt 2704 liest 0, 2720 liest −1 (Werkseinstellung): keine Freigabe, nie eine 0', async () => {
+  const cfg = loadVictronConfig(PEAK_ON);
+  const state = makeTelemetryState({ soc: 60, loadW: 14000, importW: 14000, maxDischargeW: 0, maxDischargeAgeMs: 0 });
+  const transport = makeModbusTransport({ 2704: 0, 2720: 0xffff, 2721: 0xffff });
+  const { evaluator } = makeEvaluator({ cfg, state, transport });
+  await ticks(evaluator, ENTER_TICKS + 2);
+  setFlow(state, { importW: 3000 });
+  await ticks(evaluator, RELEASE_TICKS + 2);
+  assert.deepEqual(maxDischargeWrites(transport), []);
+  assert.notEqual(state.ctrl._peakShaving?.discharge?.phase, 'lifted');
 });
 
 test('Sperre unbekannt (kein Write, Register antwortet nicht): nichts', async () => {

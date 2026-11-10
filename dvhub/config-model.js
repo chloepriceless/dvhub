@@ -1174,6 +1174,17 @@ function buildFieldDefinitions() {
       visibleWhenPath: { path: 'multiGx.enabled', equals: true },
       help: 'Kleinere Abweichungen vom Anteil bleiben stehen. Standard 300 W.'
     },
+    {
+      section: 'victron',
+      group: 'secondGx',
+      groupLabel: 'Zweite Victron-Anlage am selben Anschluss (Beta)',
+      beta: true,
+      path: 'multiGx.exportHandoffAtFloor',
+      label: 'Einspeisen aus Akku 2, wenn Akku 1 leer ist',
+      type: 'boolean',
+      visibleWhenPath: { path: 'multiGx.enabled', equals: true },
+      help: 'Aus (Standard) = steht dieser Akku am harten Boden (Optimierer → harter SoC-Boden), speist DVhub nichts ein, auch nicht aus Akku 2. An = DVhub sperrt dann das Entladen dieses Akkus (ESS „max. Entladeleistung“ 0, alter Wert wird gesichert) und lässt die geplante Einspeisung aus Akku 2 laufen — für Zeitplan-/EOS-Regeln und Handvorgaben ab 1 kW, nicht für den DC-PV-Export. Steht die max. Entladeleistung an der GX schon auf 0, bleibt alles wie bisher — über Modbus auch bei „unbegrenzt“ (die GX meldet dann 0), dort an der GX eine Entladegrenze einstellen. Der alte Wert kommt zurück, sobald dieser Akku 3 Punkte über dem Boden liegt. Fällt Akku 2 aus, bleibt dieser Akku gesperrt und das Haus bezieht aus dem Netz.'
+    },
 
     // Feste Einspeisegrenze (Christin 2026-10-20): keine Vorgabe ab Werk.
     {
@@ -4794,7 +4805,7 @@ export function createDefaultConfig() {
     gridConnection: { limitKw: null, marginW: null, phaseLimitA: null, releaseHysteresisW: 1000, baseLoadW: 1000, order: 'wallbox_first', batteryPhases: '' },
     // Peak Shaving (GitHub #28, services/peak-shaving): ab Werk aus, ohne Grenze.
     peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null },
-    multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300 },
+    multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300, exportHandoffAtFloor: false },
     // Ladestand des E-Autos über evccs Fahrzeug-Treiber (services/vehicle-evcc):
     // aus, bis jemand eine Marke einrichtet; evcc wird erst dann geladen.
     vehicleEvcc: { enabled: false, template: '', params: {}, intervalMin: 15 },

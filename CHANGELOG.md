@@ -131,6 +131,18 @@ verweist hierher.
   weil ein null per PUT den Wert in EOS nicht zurücksetzt. Vanilla v0.4.0rc3 kennt den Schlüssel nicht. Dort plant EOS
   als Behelf höchstens Grenze − Abstand − Grundlast − E-Auto (falls EOS es plant) als Ladeleistung aus dem Netz, über
   `max_ac_charge_power_w`. Die Entladegrenze und das PV-Laden bleiben dabei unberührt.
+- **Zweite Victron-Anlage: Einspeisen aus Akku 2, wenn Akku 1 leer ist (Beta).** Neuer Schalter unter der zweiten
+  Victron-Anlage (ab Werk aus). Steht der Akku der Hauptanlage am harten Boden, sperrt DVhub sein Entladen (ESS „max.
+  Entladeleistung“ 0, alter Wert wird gesichert und übersteht einen Neustart) und lässt die geplante Einspeisung aus
+  Akku 2 laufen, statt sie ganz zu streichen. Der alte Wert kommt zurück, sobald Akku 1 drei Punkte über dem Boden
+  liegt; fällt Akku 2 aus, bleibt Akku 1 gesperrt und das Haus bezieht aus dem Netz. Gilt für geplante Einspeisung ab
+  1 kW (Zeitplan, EOS, Handvorgabe), nicht für den DC-PV-Export. Steht die max. Entladeleistung an der GX schon auf 0,
+  bleibt alles wie bisher; über Modbus gilt das auch für die Werkseinstellung „unbegrenzt“ (Register 2704 zeigt sie als
+  0) — dort braucht der Schalter eine an der GX eingestellte Entladegrenze. Dafür liest das Victron-Profil Register 2704
+  jetzt mit (Hashes neu). Zusammenspiel: im Not-Halt nimmt DVhub die Sperre einmal zurück, sobald der Ladestand über dem
+  harten Boden liegt, und schreibt danach nichts mehr; braucht der Netzanschluss den Akku (Lasten gekürzt, §14a fordert
+  Akku-Hilfe an), sperrt DVhub nicht bzw. gibt Akku 1 schon über dem harten Boden wieder frei; nicht, solange Peak
+  Shaving eine Sperre aufgehoben hat; nur bei Victron.
 
 ### Geändert
 

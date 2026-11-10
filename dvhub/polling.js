@@ -245,6 +245,8 @@ export function createPoller(ctx) {
       // Wert kann bis staleMaxAgeMs alt sein (0 = ohne Grenze). Die Empfangszeit
       // des Werts steht daneben — der Netzstrom-Zähler bucht mit altem Wert nicht
       // ab (grid-share.js, Gegenprüfung Release 1.0.9). Modbus: Wert = Abfrage.
+      // Auch die Bestätigung „nach dem Schreiben“ der Einspeisung aus Akku 2
+      // (multi-gx/floor-handoff.js) nimmt die Empfangszeit, sonst den Poll.
       if (sourceAt > 0) (state.victron.fieldSourceAt ??= {})[name] = sourceAt;
       else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt[name];
     } catch (e) {

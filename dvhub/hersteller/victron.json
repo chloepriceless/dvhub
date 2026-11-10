@@ -140,6 +140,18 @@
       "pollEveryMs": 60000,
       "_comment": "Netzanschluss: /Settings/CGwacs/AcInputLimit (AC import limit when peakshaving), A je Phase, -1 = aus. Nur lesen."
     },
+    "maxDischargeW": {
+      "_comment": "Rücklesen Venus /Settings/CGwacs/MaxDischargePower (2704), gleiche Skala wie controlWrite.maxDischargeW: 10-W-Schritte (scale 10), 0 = Entladung gesperrt, raw 0xFFFF und raw 32767 = unbegrenzt (-1), beide unskaliert. Über Modbus kann eine gelesene 0 auch die Werkseinstellung „unbegrenzt“ (−1 W) sein (Victron rundet −1 × 0,1 auf 0) — Peak Shaving und Entlade-Wächter prüfen sie mit 2720 gegen, die Einspeisung aus Akku 2 sperrt dann nicht. Gebraucht von der Einspeisung aus Akku 2 am harten Boden (multi-gx/floor-handoff.js), Peak Shaving und dem Wächter „Speicher entlädt nicht“.",
+      "enabled": true,
+      "fc": 4,
+      "address": 2704,
+      "quantity": 1,
+      "signed": true,
+      "scale": 10,
+      "offset": 0,
+      "rawSentinels": [-1, 0],
+      "rawSentinelMap": { "-1": 32767 }
+    },
     "selfConsumptionW": {
       "enabled": true,
       "fc": 4,

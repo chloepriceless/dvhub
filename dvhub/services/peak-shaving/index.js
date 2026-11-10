@@ -219,9 +219,10 @@ export const MAX_DISCHARGE_INT16_ADDR = 2704;
 
 /**
  * Was DVhub über die Entladegrenze sicher weiß, in dieser Reihenfolge:
- *   1. Poll-Punkt points.maxDischargeW (nur in von Hand erweiterten Profilen),
+ *   1. Poll-Punkt points.maxDischargeW (seit 1.0.10 im ausgelieferten
+ *      Victron-Profil auf 2704 — Einspeisung aus Akku 2, multi-gx/floor-handoff.js),
  *   2. die eigene Rücklesung von Peak Shaving (state.ctrl._peakShaving.readback;
- *      das ausgelieferte Victron-Profil pollt 2704 nicht — Gegenprüfung eb2f1a26),
+ *      ohne Poll-Punkt bzw. bei mehrdeutiger 0 — Gegenprüfung eb2f1a26),
  *   3. der eigene letzte Write.
  * Sonst null = unbekannt — dann hebt Peak Shaving keine Sperre auf.
  * ambiguousZero: die 0 stammt aus 2704 und kann auch −1 (unbegrenzt) heißen.

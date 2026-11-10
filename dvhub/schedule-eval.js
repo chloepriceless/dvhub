@@ -21,6 +21,7 @@ import { encodeSunspecFloat32, decodeSunspecFloat32 } from './services/inverter/
 import { getPowerLimits } from './services/power-limits.js';
 // Zweite GX am selben Anschluss: EOS-Ziele gelten fuer beide Akkus zusammen.
 import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
+import { createFloorHandoff } from './services/multi-gx/floor-handoff.js';
 import { capLoopStep } from './services/feed-in-cap/index.js';
 import {
   resolvePeakShaving, peakShavingTelemetry, clampGridSetpoint, knownMaxDischargeW, dischargeStep,
@@ -148,6 +149,22 @@ export function isEosGridHoldRule(rule) {
 
 export function createScheduleEvaluator(ctx) {
   const { state, getCfg, transport, pushLog, telemetrySafeWrite, persistConfig } = ctx;
+  // Einspeisung aus Akku 2, wenn Akku 1 am harten Boden steht (Schalter
+  // multiGx.exportHandoffAtFloor, ab Werk aus) — siehe services/multi-gx/floor-handoff.js.
+  // Braucht der Netzanschluss den Akku (Waechter kuerzt Lasten, eine Quelle wie
+  // §14a fordert Akku-Hilfe an), sperrt die Uebergabe Akku 1 nicht bzw. nimmt
+  // die Sperre zurueck (services/grid-connection, Merge 1.0.10).
+  const gridNeedsBattery = () => {
+    const sum = ctx.gridConnection?.summary?.();
+    if (!sum || sum.paused === true) return false;
+    return (Array.isArray(sum.caps) && sum.caps.length > 0) || sum.exhausted === true
+      || (Array.isArray(sum.assistSources) && sum.assistSources.length > 0);
+  };
+  const floorHandoff = ctx.floorHandoff
+    || createFloorHandoff({
+      getCfg, state, pushLog, store: ctx.floorHandoffStore || null, transportType: () => transport?.type,
+      batteryNeeded: gridNeedsBattery
+    });
 
   let stopping = false;
   let evalTimeout = null;
@@ -932,7 +949,12 @@ export function createScheduleEvaluator(ctx) {
     const gridConnectionRestore = source === 'grid_connection_restore' && target === 'maxDischargeW'
       && Number(value) >= 0 && lwDischarge != null && Number(lwDischarge.value) > 0
       && Number(value) < Number(lwDischarge.value);
-    if (state.ctrl.discretionaryWritesPaused && !isMandatoryControlSource(source) && !peakShavingRestore && !gridConnectionRestore) {
+    // Ebenso die Einspeisung aus Akku 2 (multi-gx/floor-handoff.js): sie schreibt
+    // im Not-Halt EINMAL die vor ihrer Sperre gesicherte Entladegrenze zurück —
+    // nur genau diesen, gerade angemeldeten Wert, nie eine neue Sperre.
+    const handoffStopRestore = source === 'multi_gx_handoff_stop' && target === 'maxDischargeW'
+      && floorHandoff.isStopRestore(value);
+    if (state.ctrl.discretionaryWritesPaused && !isMandatoryControlSource(source) && !peakShavingRestore && !gridConnectionRestore && !handoffStopRestore) {
       const blockKey = `${target}|${source}`;
       if (!state.ctrl._stopBlockLogged) state.ctrl._stopBlockLogged = {};
       if (!state.ctrl._stopBlockLogged[blockKey]) {
@@ -1039,6 +1061,10 @@ export function createScheduleEvaluator(ctx) {
     // Der T-0075-Entlade-Boden weiter unten bleibt wirksam: bei unbekanntem,
     // veraltetem oder eingefrorenem SoC bzw. SoC <= hardFloor wird der negative
     // Wert auf 0 gehalten — der Boden kann den Akku also nicht leerfahren.
+    // Angefragter Wert VOR dem Einspeise-Puffer: Ob Akku 2 am harten Boden
+    // uebernehmen darf, entscheidet die geplante Einspeisung, nicht der Puffer
+    // (Codex 22.10., Runde 5).
+    const requestedBeforeBuffer = Number(value);
     if (target === 'gridSetpointW') {
       const floorW = exportBufferFloorW(cfg);
       const eligible = floorW !== null
@@ -1296,11 +1322,21 @@ export function createScheduleEvaluator(ctx) {
           : frozen ? 'telemetry_frozen'
             : mismatched ? 'source_mismatch'
               : stale ? 'soc_stale' : 'below_hard_floor';
-        pushLog('control_discharge_floor', {
-          target, requested: Number(value), soc: unknown ? null : soc,
-          ageMs: victronFieldAgeMs(state, 'soc'), floorPct, reason
-        });
-        value = safeHold;
+        // Nur bei frischem, glaubwuerdigem Ladestand am Boden darf die zweite
+        // Anlage die Einspeisung uebernehmen — Akku 1 ist dann per 2704 = 0
+        // gesperrt (floor-handoff.js); sonst haelt der Boden wie immer.
+        const handoffW = reason === 'below_hard_floor'
+          ? floorHandoff.onFloorHold({ target, requested: Number(value), original: requestedBeforeBuffer, source })
+          : null;
+        if (handoffW != null) {
+          value = handoffW;
+        } else {
+          pushLog('control_discharge_floor', {
+            target, requested: Number(value), soc: unknown ? null : soc,
+            ageMs: victronFieldAgeMs(state, 'soc'), floorPct, reason
+          });
+          value = safeHold;
+        }
       }
     }
     // === end T-0075 discharge floor ===
@@ -1510,8 +1546,9 @@ export function createScheduleEvaluator(ctx) {
     } catch { /* kein Merker → nichts aufgehoben */ }
   }
 
-  // 2704 selbst zurücklesen: das ausgelieferte Victron-Profil pollt den Wert
-  // nicht, ohne Rücklesung bliebe eine Sperre nach einem Neustart unbemerkt
+  // 2704 selbst zurücklesen: der Poll-Punkt (seit 1.0.10 im Victron-Profil)
+  // fehlt in eigenen Profilen und liest „unbegrenzt“ über Modbus als 0; ohne
+  // eindeutige Rücklesung bliebe eine Sperre nach einem Neustart unbemerkt
   // und eine Änderung am GX würde überschrieben (Gegenprüfung eb2f1a26).
   // Nur, solange Peak Shaving aktiv ist oder eine Freigabe steht.
   function maxDischargeReadable(conf) {
@@ -1885,6 +1922,13 @@ export function createScheduleEvaluator(ctx) {
     } else if (state.ctrl._dcExportLogged) {
       pushLog('dc_export_mode_off', {});
       state.ctrl._dcExportLogged = false;
+    }
+
+    // Akku-1-Sperre fuer die Einspeisung aus Akku 2 schreiben, beenden oder
+    // zuruecknehmen — vor den Sollwerten, damit ein Ende sofort wieder den
+    // normalen Boden bekommt. Ein Fehler hier darf den Takt nie abbrechen.
+    try { await floorHandoff.maintain(applyControlTarget); } catch (e) {
+      pushLog('multi_gx_handoff_error', { error: e?.message || String(e) }, 'error');
     }
 
     // Halte-Signal für den Entlade-Wächter (services/setpoint-follow-watchdog.js):
@@ -2604,5 +2648,5 @@ export function createScheduleEvaluator(ctx) {
     // aktiver Deckel am Gerät verfällt über WMaxLimPct_RvrtTms von selbst.
   }
 
-  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, applyDvFeedInLimit, zeroFeedInTick, feedInCapTick, start, stop };
+  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, applyDvFeedInLimit, zeroFeedInTick, feedInCapTick, start, stop, floorHandoff };
 }

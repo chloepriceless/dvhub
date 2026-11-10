@@ -20,16 +20,13 @@ import { createScheduleEvaluator } from '../schedule-eval.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SHIPPED_PROFILE = path.join(__dirname, '..', 'hersteller', 'victron.json');
 
-// prod-Konstellation: shipped Profil + Operator-Zusatz points.maxDischargeW
-// (Anzeige-Read auf reg 2704) mit der korrigierten Skala.
+// prod-Konstellation: ausgeliefertes Profil (liest reg 2704 mit der korrigierten Skala).
 function loadVictronEffectiveConfig() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-2704-'));
   fs.mkdirSync(path.join(rootDir, 'hersteller'), { recursive: true });
+  // Seit 22.10.2026 liest das ausgelieferte Profil 2704 selbst (Einspeisung aus
+  // Akku 2 am harten Boden) — kein Operator-Zusatz mehr noetig.
   const profile = JSON.parse(fs.readFileSync(SHIPPED_PROFILE, 'utf8'));
-  profile.points.maxDischargeW = {
-    enabled: true, fc: 4, address: 2704, quantity: 1,
-    signed: true, scale: 10, offset: 0, rawSentinels: [-1, 0], rawSentinelMap: { '-1': 32767 }
-  };
   fs.writeFileSync(path.join(rootDir, 'hersteller', 'victron.json'), JSON.stringify(profile));
   const configPath = path.join(rootDir, 'config.json');
   fs.writeFileSync(configPath, JSON.stringify({

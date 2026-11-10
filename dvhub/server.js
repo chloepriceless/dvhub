@@ -1170,6 +1170,15 @@ const PEAK_SHAVING_LIFT_PATH = path.join(DATA_DIR || __dirname, 'peak_shaving_li
 // Netzanschluss „Akku zuerst“ (Nicht-Victron): angehobene Entladegrenze, damit
 // ein Neustart den Wert davor zurückschreibt (services/grid-connection).
 const GRID_CONNECTION_ASSIST_PATH = path.join(DATA_DIR || __dirname, 'grid_connection_assist.json');
+// Zweite GX: gesicherte max. Entladeleistung (2704) der Hauptanlage, solange
+// DVhub Akku 1 am harten Boden sperrt (services/multi-gx/floor-handoff.js) —
+// muss einen Neustart ueberleben, sonst bliebe Akku 1 dauerhaft gesperrt.
+const MGX_HANDOFF_SAVED_PATH = path.join(DATA_DIR || __dirname, 'mgx_handoff_saved.json');
+const floorHandoffStore = {
+  load: () => (fs.existsSync(MGX_HANDOFF_SAVED_PATH) ? JSON.parse(fs.readFileSync(MGX_HANDOFF_SAVED_PATH, 'utf8')) : null),
+  save: (value) => atomicWriteControlState(MGX_HANDOFF_SAVED_PATH, value),
+  clear: () => { try { fs.unlinkSync(MGX_HANDOFF_SAVED_PATH); } catch (e) { if (e?.code !== 'ENOENT') throw e; } }
+};
 // E-Auto „Sofort laden“ (eos-evcc-bridge setOverride).
 const EV_OVERRIDE_PATH = path.join(DATA_DIR || __dirname, 'ev_override.json');
 const EV_OWNED_PATH = path.join(DATA_DIR || __dirname, 'ev_owned.json');
@@ -1354,6 +1363,7 @@ const ctx = {
   peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
   // Nur der Laufzeit-Prozess regelt — nur er liest und schreibt den Merker.
   gridConnectionAssistPath: IS_RUNTIME_PROCESS ? GRID_CONNECTION_ASSIST_PATH : null,
+  floorHandoffStore,
   state,
   getCfg: () => cfg,
   transport,
