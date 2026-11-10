@@ -39,6 +39,8 @@ const DEMAND_HOLD_MS = 60_000;
 // „Läuft an der Grenze“: Messwert höchstens so weit unter dem letzten Anteil.
 const AT_CAP_TOL_MIN_W = 200;
 const AT_CAP_TOL_SHARE = 0.1;
+// Geplanter Netzbezug des Speichers (schedule-eval) gilt so lange als aktuell.
+const BATTERY_WANT_MAX_AGE_MS = 120_000;
 
 /** Konfiguration mit Vorgaben; ungültige Geräte fallen raus. */
 export function resolveParagraph14aConfig(cfg) {
@@ -139,6 +141,12 @@ export function createParagraph14aService(ctx, deps = {}) {
     return { measuredW: fin(st?.powerW), available: st?.connected !== false };
   }
 
+  /** SKI der EEBUS-Hauptwallbox, wenn sie oben schon als „wallbox“ steht. */
+  function mainEebusWallboxSki(cfg, bc, list) {
+    return bc.charger === 'eebus' && list.some((d) => d.id === 'wallbox')
+      ? String(cfg.wallbox?.eebus?.ski || '').trim().toLowerCase() : '';
+  }
+
   /**
    * Alle SteuVE: was DVhub kennt (steuerbar) plus Einträge von Hand.
    * currentW: Leistung fürs Budget (unbekannt = 0); measuredW: Messwert für den
@@ -167,16 +175,29 @@ export function createParagraph14aService(ctx, deps = {}) {
       if (batW > 0) {
         const bp = state.victron?.batteryPowerW;
         const measuredW = bp != null && Number.isFinite(Number(bp)) ? Math.max(0, Number(bp)) : null;
+        // Bedarf des Speichers = was der Plan gerade aus dem Netz laden will, als
+        // Sollwert am Anschlusspunkt — dieselbe Größe, die sein Anteil in
+        // schedule-eval deckelt (nicht die Akkuleistung: sonst bliebe ein
+        // gedeckelter Akku bei 0 W stehen und sein Bedarf stiege nie).
+        // Ohne aktuellen Planwert: unbekannt → volle Leistung.
+        const want = state.ctrl?.p14aBatteryWantW;
+        const wantFresh = want && Number.isFinite(Number(want.w)) && now() - Number(want.at) <= BATTERY_WANT_MAX_AGE_MS;
         list.push({ id: 'speicher', name: 'Stromspeicher', kind: 'speicher', powerW: batW, control: 'ems',
-          controllable: true, currentW: measuredW ?? 0, measuredW, startW: 0, available: true, source: 'auto' });
+          controllable: true, currentW: measuredW ?? 0, measuredW,
+          fixedNeedW: wantFresh ? Math.max(0, Number(want.w)) : null, fixedNeedKnown: true, source: 'auto' });
       }
       // Die EEBUS-Hauptwallbox steht oben schon als „wallbox“ (ihr Anteil geht
       // über die Wallbox-Steuerung an dieselbe Box): nicht doppelt zählen —
       // sonst zählte sie zweimal für Pmin,14a und bekäme zweimal Budget.
-      const mainEebusSki = bc.charger === 'eebus' && list.some((d) => d.id === 'wallbox')
-        ? String(cfg.wallbox?.eebus?.ski || '').trim().toLowerCase() : '';
+      const mainEebusSki = mainEebusWallboxSki(cfg, bc, list);
       for (const d of ctx.eebus?.consumptionDevices?.() || []) {
-        if (mainEebusSki && d.ski === mainEebusSki) continue;
+        if (mainEebusSki && d.ski === mainEebusSki) {
+          // Nennleistung laut Gerät zählt (Pmin, Höchstleistung), auch wenn EOS weniger plant.
+          const wb = list.find((x) => x.id === 'wallbox');
+          wb.powerW = Math.max(Number(wb.powerW) || 0, Number(d.maxW) || 0);
+          wb.lpcId = d.id;
+          continue;
+        }
         const measuredW = d.powerW != null && Number.isFinite(Number(d.powerW)) ? Math.max(0, Number(d.powerW)) : null;
         list.push({ id: d.id, name: d.name || 'EEBUS-Gerät', kind: d.kind, powerW: d.maxW, control: 'ems',
           controllable: true, currentW: measuredW ?? 0, measuredW,
@@ -268,7 +289,13 @@ export function createParagraph14aService(ctx, deps = {}) {
     return controllable.map((d) => {
       const base = { id: d.id, kind: d.kind, maxW: d.powerW };
       if (!c.demandFirst) return base;
-      const need = heldDemand(d.id, demandW({ kind: d.kind, maxW: d.powerW, currentW: d.measuredW, startW: d.startW, available: d.available }));
+      const raw = d.fixedNeedKnown
+        ? Math.min(d.powerW, d.fixedNeedW ?? d.powerW)
+        : demandW({ kind: d.kind, maxW: d.powerW, currentW: d.measuredW, startW: d.startW, available: d.available });
+      // Auf den 100-W-Schritt aufrunden: stable() rundet die Anteile ab — ein
+      // Bedarf von genau 4140 W (6 A × 3) würde sonst 4100 W und reichte nicht
+      // zum Anlaufen (Codex e2877dc9).
+      const need = heldDemand(d.id, Math.min(d.powerW, Math.ceil(raw / SHARE_STEP_W) * SHARE_STEP_W));
       const prev = lastShares[d.id];
       const atCap = d.measuredW != null && prev != null && prev > 0
         && d.measuredW >= prev - Math.max(AT_CAP_TOL_MIN_W, AT_CAP_TOL_SHARE * prev);
@@ -352,6 +379,11 @@ export function createParagraph14aService(ctx, deps = {}) {
 
     const eebusShares = {};
     for (const d of list) if (d.source === 'eebus' && !d.unreachable) eebusShares[d.id] = active ? (shares[d.id] ?? 0) : null;
+    // EEBUS-Hauptwallbox: ihr Anteil geht über die Wallbox-Steuerung (Ampere)
+    // und zusätzlich direkt als LPC-Grenze in Watt ans Gerät — die Umrechnung
+    // über Phasen und Spannung kann sonst mehr erlauben (Codex e579fc30).
+    const wbEntry = list.find((d) => d.id === 'wallbox' && d.lpcId);
+    if (wbEntry) eebusShares[wbEntry.lpcId] = active ? (shares.wallbox ?? 0) : null;
     // Netzanschluss (services/grid-connection): dessen Grenzen je EEBUS-Gerät
     // kommen dazu — je Gerät gilt die kleinste (auch ohne §14a-Vorgabe).
     const gcCaps = ctx.gridConnection?.eebusCaps?.() || null;

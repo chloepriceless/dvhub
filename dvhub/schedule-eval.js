@@ -1866,6 +1866,11 @@ export function createScheduleEvaluator(ctx) {
     let eosGridHoldConfirmed = null;
     for (const target of ['gridSetpointW', 'chargeCurrentA']) {
       const eff = effectiveTargetValue(target);
+      // §14a nach Bedarf (services/paragraph14a): wie viel der Plan gerade aus
+      // dem Netz will — derselbe Sollwert, den der Speicher-Anteil unten deckelt.
+      if (target === 'gridSetpointW') {
+        state.ctrl.p14aBatteryWantW = { w: eff.value == null ? 0 : Math.max(0, Number(eff.value) || 0), at: Date.now() };
+      }
       if (eff.value == null) continue;
 
       // === T-0121/T-0122 EOS closed-loop export: live-PV recompute ============

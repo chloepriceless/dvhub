@@ -470,15 +470,16 @@ export function createEebusService(ctx, deps = {}) {
     if (!e) return;
     switch (ev.ev) {
       case 'ev_connected':
-        Object.assign(e, emptyEv(ev.entity), { connected: true });
+        Object.assign(e, emptyEv(ev.entity), { connected: true, unplugged: false });
         pushLog('eebus_ev_connected', { ski: ev.ski, entity: ev.entity || null });
         break;
       case 'ev_disconnected':
-        Object.assign(e, emptyEv(ev.entity || e.entity));
+        Object.assign(e, emptyEv(ev.entity || e.entity), { unplugged: true });
         pushLog('eebus_ev_disconnected', { ski: ev.ski, entity: ev.entity || null });
         break;
       case 'ev_data':
         e.connected = true;
+        e.unplugged = false;
         if (ev.charge_state != null) e.chargeState = ev.charge_state;
         e.vehicle = {
           ...(e.vehicle || {}),
@@ -494,6 +495,7 @@ export function createEebusService(ctx, deps = {}) {
         break;
       case 'ev_measurement':
         e.connected = true;
+        e.unplugged = false;
         if (ev.phases != null) e.phases = numOrNull(ev.phases);
         if (ev.current_a) e.phasesA = numList(ev.current_a);
         if (ev.power_w) e.powerPerPhaseW = numList(ev.power_w);
@@ -741,7 +743,9 @@ export function createEebusService(ctx, deps = {}) {
         powerW: d.powerW ?? null,
         ...(kind === 'ladepunkt' ? {
           startW: minW > 0 ? minW : EV_START_W,
-          available: d.ev ? d.ev.connected === true : true,
+          // Nur ein gemeldetes Abstecken heißt „kein Bedarf“ — ein unbekannter
+          // Zustand (z. B. nur ev_limits) nicht, und Leistung fließt sichtbar.
+          available: !(d.ev?.unplugged === true && !(Number(d.powerW) > 100)),
         } : {}),
       });
     }

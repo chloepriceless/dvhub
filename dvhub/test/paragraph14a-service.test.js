@@ -184,10 +184,10 @@ function articleSetup(extra = {}) {
 test('nach Bedarf: Wärmepumpe mit 1,5 kW bekommt ihren Bedarf, nicht 5,5 kW — die Wallbox den Rest', () => {
   const s = articleSetup();
   s.svc.update();
-  // WP 1500 + 550 Reserve; Wallbox 4200 + 1100; Speicher steht (Reserve 1000) bekommt den Rest
-  assert.deepEqual(s.state.p14a.shares, { 'eebus:hp': 2000, wallbox: 5300, speicher: 200 });
+  // WP 1500 + 550 Reserve (auf 100 W aufgerundet); Wallbox 4200 + 1100; Speicher ohne Planwert den Rest
+  assert.deepEqual(s.state.p14a.shares, { 'eebus:hp': 2100, wallbox: 5300, speicher: 100 });
   assert.equal(s.state.ctrl.p14aWallboxCapW, 5300);
-  assert.equal(s.svc.summary().devices.find((d) => d.id === 'eebus:hp').needW, 2050);
+  assert.equal(s.svc.summary().devices.find((d) => d.id === 'eebus:hp').needW, 2100);
   const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
   assert.ok(sum <= 7560);
 });
@@ -195,13 +195,13 @@ test('nach Bedarf: Wärmepumpe mit 1,5 kW bekommt ihren Bedarf, nicht 5,5 kW —
 test('nach Bedarf: steigt der Bedarf der Wärmepumpe, bekommt sie ihren Anteil im nächsten Takt zurück', () => {
   const s = articleSetup();
   s.svc.update();
-  // WP läuft an ihrer Grenze (2 kW) → Bedarf 2,55 kW, Vorrang Wärme
-  s.eebusDevices[0].powerW = 2000;
-  s.state.meter.grid_total_w = 1000 + 2000 + 4200;
+  // WP läuft an ihrer Grenze (2,1 kW) → Bedarf 2,65 kW, Vorrang Wärme
+  s.eebusDevices[0].powerW = 2100;
+  s.state.meter.grid_total_w = 1000 + 2100 + 4200;
   s.clock.t += 5_000;
   s.svc.update();
-  assert.equal(s.state.p14a.shares['eebus:hp'], 2500);
-  assert.equal(s.state.p14a.shares.wallbox, 5000);
+  assert.equal(s.state.p14a.shares['eebus:hp'], 2700);
+  assert.equal(s.state.p14a.shares.wallbox, 4800);
 });
 
 test('nach Bedarf: sinkender Bedarf wird erst nach 60 s weitergegeben (kein Flattern)', () => {
@@ -211,19 +211,20 @@ test('nach Bedarf: sinkender Bedarf wird erst nach 60 s weitergegeben (kein Flat
   s.state.meter.grid_total_w = 1000 + 300 + 4200;
   s.clock.t += 5_000;
   s.svc.update();
-  assert.equal(s.state.p14a.shares['eebus:hp'], 2000, 'Anteil bleibt');
+  assert.equal(s.state.p14a.shares['eebus:hp'], 2100, 'Anteil bleibt');
   s.clock.t += 61_000;
   s.svc.update();
-  // dann Anlaufreserve 30 % von 5,5 kW = 1650 W
-  assert.equal(s.state.p14a.shares['eebus:hp'], 1600);
+  // dann Anlaufreserve 30 % von 5,5 kW = 1650 W → 1700 W
+  assert.equal(s.state.p14a.shares['eebus:hp'], 1700);
 });
 
 test('nach Bedarf: ohne Auto bekommt die Wallbox nichts vorab; steckt eins an, die Anlaufstufe 6 A', () => {
   const s = articleSetup({ evcc: 0, evccConnected: false, batteryPowerW: 3000 });
   s.state.meter.grid_total_w = 1000 + 1500 + 3000;
+  s.state.ctrl.p14aBatteryWantW = { w: 4000, at: s.clock.t };
   s.svc.update();
   assert.equal(s.state.p14a.shares.wallbox, 0);
-  assert.equal(s.state.p14a.shares.speicher, 4000, 'Speicher lädt 3 kW: Bedarf 4 kW');
+  assert.equal(s.state.p14a.shares.speicher, 4000, 'Plan will 4 kW aus dem Netz');
   // Auto steckt an
   s.clock.t += 5_000;
   s.setConnected(true);
@@ -269,4 +270,52 @@ test('Störungen der Gerätesteuerung stehen in der §14a-Zusammenfassung', () =
   s.issues.push({ ski: 'b'.repeat(40), code: 'unreachable', name: 'WP', since: 1, text: 'WP: nicht erreichbar' });
   s.svc.update();
   assert.deepEqual(s.svc.summary().issues.map((i) => i.code), ['unreachable']);
+});
+
+// ── Codex e2877dc9 / e579fc30 ──
+test('nach Bedarf: die Anlaufstufe übersteht die 100-W-Rundung (6 A × 3 = 4140 W, nicht 4100 W)', () => {
+  const s = articleSetup({ evcc: 0, optimizer: { maxChargeW: 0 } });
+  s.state.meter.grid_total_w = 1000 + 1500;
+  s.state.ctrl.eebusConsumptionLimitW = 6300;
+  s.svc.update();
+  assert.ok(s.state.p14a.shares.wallbox >= 4140, `Wallbox ${s.state.p14a.shares.wallbox} W unter 6 A`);
+  const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
+  assert.ok(sum <= 6300);
+});
+
+test('nach Bedarf: Speicher-Bedarf ist der geplante Netzbezug (gleiche Einheit wie der Sollwert), nicht die Akkuleistung', () => {
+  const s = articleSetup({ evcc: 0, evccConnected: false, p14a: { priorityPreset: 'storage_first' } });
+  s.eebusDevices[0].powerW = 3500;
+  s.state.meter.grid_total_w = 1000 + 3500;
+  // Plan will 6 kW aus dem Netz laden, der Akku steht noch (Sollwert gedeckelt)
+  s.state.ctrl.p14aBatteryWantW = { w: 6000, at: s.clock.t };
+  s.svc.update();
+  assert.equal(s.state.p14a.shares.speicher, 6000);
+  // Plan will nicht aus dem Netz laden: kein Bedarf, die WP bekommt alles
+  s.state.ctrl.p14aBatteryWantW = { w: 0, at: s.clock.t };
+  s.clock.t += 61_000;
+  s.svc.update();
+  assert.equal(s.svc.summary().devices.find((d) => d.id === 'speicher').needW, 0);
+  // veralteter Planwert: unbekannt → volle Leistung
+  s.clock.t += 180_000;
+  s.svc.update();
+  assert.equal(s.svc.summary().devices.find((d) => d.id === 'speicher').needW, 10000);
+});
+
+test('EEBUS-Hauptwallbox: ihr Anteil geht zusätzlich direkt als LPC-Grenze ans Gerät; Nennleistung zählt für Pmin', () => {
+  const SKI = 'e'.repeat(40);
+  const s = setup({
+    optimizer: { eosOptimizeEv: false, evMaxChargeW: 3700 },
+    eebusDevices: [{ id: `eebus:${SKI}`, ski: SKI, kind: 'ladepunkt', maxW: 11000, powerW: 0 }],
+  });
+  s.cfg.wallbox = { type: 'eebus', eebus: { ski: SKI } };
+  s.svc.update();
+  assert.equal(s.state.p14a.pminW, 7560, 'EEBUS-Nennleistung 11 kW: SteuVE, auch wenn EOS nur 3,7 kW plant');
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  const wb = s.state.p14a.shares.wallbox;
+  assert.equal(s.applied.at(-1).shares[`eebus:${SKI}`], wb, 'LPC-Grenze = Anteil der Wallbox');
+  s.state.ctrl.eebusConsumptionLimitW = null;
+  s.svc.update();
+  assert.equal(s.applied.at(-1).shares[`eebus:${SKI}`], null, 'ohne Begrenzung frei');
 });

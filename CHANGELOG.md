@@ -96,8 +96,9 @@ verweist hierher.
 - **§14a: Aufteilung nach Bedarf statt nach Nennleistung.** Während einer Dimmung bekam jedes Gerät bisher Leistung
   bis zu seiner Nennleistung (Vorrang) bzw. nach Nennleistung (anteilig). Eine Wärmepumpe mit 5,5 kW Nennleistung, die
   1,5 kW zog, hielt so 5,5 kW fest, während der Wallbox Leistung fehlte. Jetzt bekommt jedes Gerät zuerst seinen
-  aktuellen Bedarf (Messwert plus Reserve zum Hochfahren: max(500 W, 10 %); Wallbox mindestens die Ladestufe 6 A, ohne
-  Auto nichts; stehende Wärmepumpe/Klima eine Anlaufreserve von max(1 kW, 30 %)), der Rest geht zuerst an Geräte, die
+  aktuellen Bedarf (Messwert plus Reserve zum Hochfahren: max(500 W, 10 %), auf 100 W aufgerundet; Wallbox mindestens
+  die Ladestufe 6 A, ohne Auto nichts; stehende Wärmepumpe/Klima eine Anlaufreserve von max(1 kW, 30 %); Speicher der
+  Netzbezug, den der Plan gerade will), der Rest geht zuerst an Geräte, die
   an ihrer Grenze laufen, dann nach der eingestellten Reihenfolge bis zur Nennleistung — es verfällt nichts. Steigt
   der Bedarf, gibt es den Anteil im nächsten Takt (5 s) zurück; sinkender Bedarf zählt erst nach 60 s. Geräte ohne
   Messwert bekommen wie bisher ihre volle Leistung. Neue Einstellung „Zuerst nach aktuellem Bedarf verteilen“
@@ -202,7 +203,8 @@ verweist hierher.
   Fallgruppe für Vorrang und Mindestleistung); war sie als Hauptwallbox eingetragen, zählte sie zusätzlich als
   „Wallbox“ — zwei SteuVE statt einer, also eine zu hohe Mindestleistung Pmin,14a (Relais-Grenze, automatischer
   Failsafe-Wert) und doppelt verteiltes Budget. Jetzt ist eine EEBUS-Box mit Auto-Meldung oder als Hauptwallbox ein
-  Ladepunkt und zählt einmal; ohne gestecktes Auto hat sie keinen Bedarf.
+  Ladepunkt und zählt einmal (mit ihrer Nennleistung laut Gerät); ihr Anteil geht zusätzlich direkt als Watt-Grenze
+  (LPC) an die Box. Ohne gestecktes Auto hat sie keinen Bedarf.
 - **§14a: Summe der Anteile nie über der Vorgabe.** Die Glättung (Änderungen unter 300 W werden nicht
   weitergegeben) konnte die Summe der Geräte-Anteile über die Grenze des Netzbetreibers heben, wenn mehrere Anteile
   gleichzeitig leicht sanken (z. B. 7500 W bei 7200 W Vorgabe). Jetzt gilt in dem Fall der neue Anteil.

@@ -774,3 +774,17 @@ test('getrenntes Gerät bleibt in der §14a-Liste: Failsafe-Wert des Geräts (so
   const lost = s.svc.lostConsumptionDevices();
   assert.deepEqual(lost.map((d) => [d.id, d.kind, d.maxW, d.failsafeW]), [[`eebus:${SKI_HP}`, 'waermepumpe', 5500, 4200]]);
 });
+
+test('§14a-Geräteliste: Auto-Zustand unbekannt (nur ev_limits) zählt nicht als abgesteckt (Codex e579fc30)', async () => {
+  const s = setup();
+  s.ctx.p14a = { update: () => {} };
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  c.emitEvent({ ev: 'ev_limits', ski: SKI_HP, entity: 'd:_n:EV/1', uc: 'opev', min_a: [6], max_a: [16], default_a: [0], limits: [] });
+  await settle();
+  const d = s.svc.consumptionDevices()[0];
+  assert.deepEqual([d.kind, d.available], ['ladepunkt', true]);
+});
