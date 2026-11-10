@@ -131,6 +131,10 @@ publish-release.sh (gh)
   nur root-seitig über `/etc/dvhub-release/release.conf` (`base_url=`), nicht aus der Oberfläche.
 - `publish-release.sh <build-dir> [--dry-run --dest DIR] [--key …]` legt im Dry-Run genau die GitHub-Struktur
   (`<tag>/<asset>`, `channels/index-*.json`) lokal ab und zeigt die `gh`-Befehle, die es sonst ausführen würde.
+  Den bisherigen Index holt es über `gh api …/releases/tags/channels`; nur „gibt es nicht“ (HTTP 404 bzw. kein Index
+  des Kanals) heißt erster Index, jeder andere Fehler bricht ab, bevor etwas hochgeht. Den neuen Index lädt es mit
+  Signatur unter Zwischennamen (`….new`) hoch und benennt dann um, erst die Signatur, dann den Index — scheitert das
+  Hochladen, bleibt der alte Stand gültig.
 
 ## 4. Box-Seite
 

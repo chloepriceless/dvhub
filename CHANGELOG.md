@@ -289,6 +289,13 @@ verweist hierher.
 
 ### Behoben
 
+- **Paket-Veröffentlichung: Vorgänger bleibt im Kanal-Index, Index und Signatur gehen gemeinsam hoch.** Scheiterte in
+  `scripts/release/publish-release.sh` der Abruf des bisherigen Index aus einem anderen Grund als „gibt es nicht“
+  (Netz, Anmeldung), baute das Skript ohne Vorgänger — im stabilen Index hätte nur die neue Version gestanden, der
+  Rückweg auf die vorige gefehlt. Jetzt bricht es ab, bevor etwas hochgeladen wird. Index und Signatur gehen unter
+  Zwischennamen hoch und werden dann umbenannt (erst Signatur, dann Index); scheitert das Hochladen, bleibt der alte,
+  gültige Stand stehen. Fable-Prüfung R3, P3-6.
+
 - **Lese-Modus gilt auch für EEBUS-Geräte.** Mit `DVHUB_READ_ONLY=1` schrieb DVhub §14a-Anteile weiter als
   Verbrauchsgrenze an gekoppelte EEBUS-Geräte (Wärmepumpe, Wallbox). Jetzt blockiert der Lese-Modus auch diese
   Vorgaben (Eintrag `[READ-ONLY]` im Konsolen-Log).

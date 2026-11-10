@@ -87,12 +87,34 @@ for f in "$BUILD"/*.tar.gz; do
     || die "Signatur von $f passt nicht zu $KEY"
 done
 
-# Bisheriger Index des Kanals.
+# Assets des Vorab-Releases channels (gh api …/releases/tags/channels, JSON).
+CHANNELS_JSON="$WORK/channels-release.json"
+fetch_channels() { gh api "repos/$GH_REPO/releases/tags/channels" > "$CHANNELS_JSON" 2> "$WORK/gh-channels.err"; }
+asset_id() {  # $1 = Asset-Name → ID auf stdout, Exit 1 wenn es ihn nicht gibt
+  "$NODE" -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const a=(r.assets||[]).find((x)=>x.name===process.argv[2]);if(!a)process.exit(1);process.stdout.write(String(a.id))' "$CHANNELS_JSON" "$1"
+}
+
+# Bisheriger Index des Kanals. Nur „gibt es nicht“ (kein Release channels, kein
+# Index dieses Kanals) heißt: ohne Vorgänger bauen. Jeder andere Fehler (Netz,
+# Anmeldung, Rate-Limit) bricht ab, bevor etwas hochgeht — sonst enthielte der
+# neue Index nur diese Version, und der Rückweg auf die vorige fehlte (Fable R3,
+# P3-6).
 PREV="$WORK/prev.json"
 if [[ "$DRY" -eq 1 ]]; then
   [[ -f "$DEST/channels/index-$CHANNEL.json" ]] && cp "$DEST/channels/index-$CHANNEL.json" "$PREV"
 else
-  gh release download channels -R "$GH_REPO" -p "index-$CHANNEL.json" -O "$PREV" 2>/dev/null || rm -f "$PREV"
+  if fetch_channels; then
+    if asset_id "index-$CHANNEL.json" >/dev/null; then
+      gh release download channels -R "$GH_REPO" -p "index-$CHANNEL.json" -O "$PREV" \
+        || die "bisheriger Kanal-Index index-$CHANNEL.json nicht ladbar — Abbruch (sonst fehlte der Vorgänger im neuen Index)"
+      "$NODE" -e 'const i=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(!Array.isArray(i.releases))process.exit(1)' "$PREV" \
+        || die "bisheriger Kanal-Index index-$CHANNEL.json ist kein gültiger Index — Abbruch"
+    fi
+  elif grep -q 'HTTP 404' "$WORK/gh-channels.err"; then
+    :  # noch kein Release channels: erster Index
+  else
+    die "Kanal-Index nicht abrufbar ($(tr '\n' ' ' < "$WORK/gh-channels.err" | cut -c1-300)) — Abbruch, nichts hochgeladen"
+  fi
 fi
 
 # Änderungen: stable aus CHANGELOG.md, dev aus den Commit-Betreffs seit dem
@@ -133,7 +155,8 @@ if [[ "$DRY" -eq 1 ]]; then
   echo "[dry-run] gh release upload $RTAG -R $GH_REPO --clobber ${ASSETS[*]##*/}"
   for v in "${STALE[@]+"${STALE[@]}"}"; do echo "[dry-run] gh release delete-asset $RTAG dvhub-$v-<arch>.* -R $GH_REPO -y"; done
   echo "[dry-run] gh release view channels -R $GH_REPO || gh release create channels -R $GH_REPO --prerelease --title 'Kanal-Index'"
-  echo "[dry-run] gh release upload channels -R $GH_REPO --clobber index-$CHANNEL.json index-$CHANNEL.json.sig"
+  echo "[dry-run] gh release upload channels -R $GH_REPO --clobber index-$CHANNEL.json.sig.new index-$CHANNEL.json.new"
+  echo "[dry-run] umbenennen (gh api PATCH …/releases/assets/<id>): index-$CHANNEL.json.sig.new → .sig, dann index-$CHANNEL.json.new → index-$CHANNEL.json"
   echo "Dry-Run fertig: $DEST"
   exit 0
 fi
@@ -155,5 +178,26 @@ if ! gh release view channels -R "$GH_REPO" >/dev/null 2>&1; then
   gh release create channels -R "$GH_REPO" --prerelease --title "Kanal-Index" --notes "Signierte Kanal-Indizes der Release-Pakete (docs/release-pakete.md)."
 fi
 # Index zuletzt: erst wenn alle Pakete oben liegen, zeigt er auf sie.
-gh release upload channels -R "$GH_REPO" --clobber "$WORK/index-$CHANNEL.json" "$WORK/index-$CHANNEL.json.sig"
+# Möglichst atomar (Fable R3, P3-6): beide Dateien erst unter Zwischennamen
+# hochladen — scheitert das, bleiben alter Index und alte Signatur gültig —,
+# dann umbenennen, erst die Signatur, dann den Index. Zwischen den beiden
+# Umbenennungen (zwei kurze API-Aufrufe) sieht eine prüfende Box für einen
+# Augenblick Index und Signatur aus verschiedenen Ständen; ihre Prüfung schlägt
+# dann einmal fehl und gelingt beim nächsten Prüfen (nichts wird installiert).
+UP="$WORK/up"
+mkdir -p "$UP"
+cp "$WORK/index-$CHANNEL.json" "$UP/index-$CHANNEL.json.new"
+cp "$WORK/index-$CHANNEL.json.sig" "$UP/index-$CHANNEL.json.sig.new"
+gh release upload channels -R "$GH_REPO" --clobber "$UP/index-$CHANNEL.json.sig.new" "$UP/index-$CHANNEL.json.new"
+swap_asset() {  # $1 = endgültiger Name; $1.new liegt schon oben
+  local new_id old_id
+  fetch_channels || die "Kanal-Release nicht abrufbar beim Umbenennen von $1.new ($(tr '\n' ' ' < "$WORK/gh-channels.err" | cut -c1-300))"
+  new_id="$(asset_id "$1.new")" || die "Zwischenstand $1.new fehlt am Release channels"
+  if old_id="$(asset_id "$1")"; then
+    gh api -X DELETE "repos/$GH_REPO/releases/assets/$old_id" >/dev/null
+  fi
+  gh api -X PATCH "repos/$GH_REPO/releases/assets/$new_id" -f "name=$1" >/dev/null
+}
+swap_asset "index-$CHANNEL.json.sig"
+swap_asset "index-$CHANNEL.json"
 echo "Veröffentlicht: $VERSION ($CHANNEL)"
