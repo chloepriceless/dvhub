@@ -267,3 +267,15 @@ test('Einstellungen und Setup-Seite: confirmOverwriteBrokenConfig nur nach Rück
   assert.equal('confirmOverwriteBrokenConfig' in buildSetupSaveBody({ a: 1 }, 'setup', {}), false);
   assert.equal(buildSetupSaveBody({ a: 1 }, 'setup', { overwriteBrokenConfig: true }).confirmOverwriteBrokenConfig, true);
 });
+
+test('gesicherte kaputte Stände kommen weder ins Git noch ins Image (Codex fa8dfc39, P2)', () => {
+  const repo = path.dirname(APP_DIR);
+  const gitignore = fs.readFileSync(path.join(repo, '.gitignore'), 'utf8');
+  const dockerignore = fs.readFileSync(path.join(repo, '.dockerignore'), 'utf8');
+  for (const line of ['config.json.broken-*', 'dvhub/config.json.broken-*', 'dvhub/control_state.json.broken-*']) {
+    assert.match(gitignore, new RegExp(`^${line.replace(/[.*]/g, (c) => `\\${c}`)}$`, 'm'), `.gitignore: ${line}`);
+  }
+  for (const line of ['dvhub/config.json.broken-*', 'dvhub/control_state.json.broken-*', 'dvhub/config.backup-*.json']) {
+    assert.match(dockerignore, new RegExp(`^${line.replace(/[.*]/g, (c) => `\\${c}`)}$`, 'm'), `.dockerignore: ${line}`);
+  }
+});
