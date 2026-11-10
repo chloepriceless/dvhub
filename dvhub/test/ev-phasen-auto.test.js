@@ -19,7 +19,7 @@ const Q = 15 * 60_000;
 function harness({ factors = [0.25, 0, 0, 0], configured = 0, active = null } = {}) {
   const calls = [];
   const logs = [];
-  const ctl = { capW: null, paused: false, saved: null, maxStop: null, failPhases: false };
+  const ctl = { capW: null, paused: false, saved: null, maxStop: null, failPhases: false, staleActive: false };
   const lp = { id: 1, mode: 'pv', connected: true, charging: false, phases1p3p: true, phasesConfigured: configured, phasesActive: active ?? (configured === 0 ? 3 : configured) };
   const fakeEvcc = {
     getStatus: () => ({ url: 'http://evcc.local:7070' }),
@@ -27,7 +27,7 @@ function harness({ factors = [0.25, 0, 0, 0], configured = 0, active = null } = 
     refresh: async () => true,
     setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', a]); return { ok: true }; },
     setMode: async (id, m) => { calls.push(['mode', m]); lp.mode = m; return { ok: true }; },
-    setPhases: async (id, n) => { calls.push(['phases', n]); if (ctl.failPhases) return { ok: false, error: 'HTTP 500' }; lp.phasesConfigured = n; lp.phasesActive = n === 0 ? 3 : n; return { ok: true }; },
+    setPhases: async (id, n) => { calls.push(['phases', n]); if (ctl.failPhases) return { ok: false, error: 'HTTP 500' }; lp.phasesConfigured = n; if (!ctl.staleActive) lp.phasesActive = n === 0 ? 3 : n; return { ok: true }; },
   };
   const cfg = { evcc: { url: 'http://evcc.local:7070' }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evEvccLoadpoint: 1, evMaxChargeW: 11000, evPhases: 3, evStopMode: 'pv' } };
   let clock = T0 + 60_000;
@@ -137,6 +137,40 @@ describe('Phasen nach DVhubs Ladung zurück auf den Wert von vorher', () => {
     assert.deepEqual(h.calls.slice(n), [['mode', 'off'], ['phases', 0]]);
   });
 
+  test('Codex 3d2078cb P1: nach der Rückkehr meldet evcc noch eine aktive Phase — der nächste einphasige Slot stellt trotzdem wieder ein (nicht 12 A dreiphasig)', async () => {
+    const h = harness({ factors: [0.25, 0.25, 0.25, 0.25] });
+    h.ctl.staleActive = true; // aktive Phasen kommen erst mit der nächsten Abfrage
+    await h.bridge.tick();
+    h.lp.phasesActive = 1;
+    h.advance(2 * 60_000);
+    await h.bridge.setOverride({ kind: 'stop' });
+    assert.deepEqual(phaseCalls(h.calls), [['phases', 1], ['phases', 0]]);
+    const n = h.calls.length;
+    await h.bridge.clearOverride();
+    const after = h.calls.slice(n);
+    const iPh = after.findIndex((c) => c[0] === 'phases' && c[1] === 1);
+    const iNow = after.findIndex((c) => c[0] === 'mode' && c[1] === 'now');
+    assert.ok(iPh >= 0 && iNow > iPh, `erst eine Phase, dann laden: ${JSON.stringify(after)}`);
+  });
+
+  test('Codex 3d2078cb P2: Kunde stellt direkt nach der Rückkehr um — sein Wert gilt als „vorher“', async () => {
+    const h = harness({ factors: [0.25, 0.25, 0.25, 0.25] });
+    await h.bridge.tick();
+    h.advance(2 * 60_000);
+    h.lp.connected = false;
+    await h.bridge.tick();
+    assert.deepEqual(phaseCalls(h.calls), [['phases', 1], ['phases', 0]]);
+    h.lp.phasesConfigured = 3; // evcc-App, frisch gemeldet
+    h.lp.connected = true;
+    h.advance(30_000);
+    await h.bridge.tick();
+    assert.equal(h.bridge.getStatus().phasesRestoreTo, 3);
+    h.advance(2 * 60_000);
+    h.lp.connected = false;
+    await h.bridge.tick();
+    assert.deepEqual(phaseCalls(h.calls), [['phases', 1], ['phases', 0], ['phases', 1], ['phases', 3]]);
+  });
+
   test('übersteht einen Neustart (ev_owned.json): der Wert von vorher kommt aus der Datei', async () => {
     const h = harness();
     await h.bridge.tick();
@@ -240,6 +274,36 @@ describe('Not-Halt: genau eine Rücknahme der eigenen Phasen-Vorgabe', () => {
     await h.bridge.tick(); // Stopp ok, Rückkehr gescheitert
     h.ctl.failPhases = false;
     h.lp.mode = 'now'; // evcc-App: Sofort laden
+    h.ctl.paused = true;
+    const n = h.calls.length;
+    await h.bridge.emergencyStop();
+    assert.deepEqual(h.calls.slice(n), []);
+  });
+
+  test('Kunde stellt die Phasen kurz vor dem Not-Halt um (noch nicht erkannt): kein Phasenbefehl, und nach dem Aufheben bleibt seine Wahl', async () => {
+    const h = harness({ factors: [0.25, 0.25, 0.25, 0.25] });
+    await h.bridge.tick();
+    h.advance(2 * 60_000);
+    h.lp.phasesConfigured = 3; // evcc-App, eine Abfrage vor dem Not-Halt
+    h.lp.phasesActive = 3;
+    h.ctl.paused = true;
+    const n = h.calls.length;
+    await h.bridge.emergencyStop();
+    assert.deepEqual(h.calls.slice(n), [['mode', 'off']]);
+    assert.equal(h.bridge.getStatus().phasesByCustomer?.found, 3, 'frisch gelesen: von außen umgestellt');
+    h.ctl.paused = false;
+    await h.run(60_000);
+    assert.deepEqual(phaseCalls(h.calls.slice(n)), [], 'DVhub holt die eine Phase nicht zurück');
+  });
+
+  test('Codex 3d2078cb P2: nach DVhubs Stopp lädt der Kunde in einem eigenen Modus (minpv): Not-Halt stellt keine Phasen', async () => {
+    const h = harness();
+    await h.bridge.tick();
+    h.advance(Q);
+    h.ctl.failPhases = true;
+    await h.bridge.tick(); // Stopp (pv) ok, Rückkehr gescheitert
+    h.ctl.failPhases = false;
+    h.lp.mode = 'minpv'; // evcc-App
     h.ctl.paused = true;
     const n = h.calls.length;
     await h.bridge.emergencyStop();

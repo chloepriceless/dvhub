@@ -386,7 +386,7 @@ export function createEosEvccBridge(deps) {
   // bestätigte (phases) und versuchte (phasesTried, phasesAt) DVhub-Phasen und
   // die Übergabe an den Kunden (phasesForeign, EV_PHASE_SETTLE_MS).
   // Dazu der Wert von vorher (phasesPrev) und die laufende bzw. letzte
-  // Rückkehr dorthin (phasesRestoring, phasesRestored).
+  // Rückkehr dorthin (phasesRestoring; phasesRestored nur zur Auskunft).
   const phaseFields = (prev, ident) => (prev && prev.identity === ident
     ? {
       phases: prev.phases ?? null, phasesTried: prev.phasesTried ?? null, phasesAt: prev.phasesAt ?? null, phasesForeign: prev.phasesForeign ?? null,
@@ -397,12 +397,10 @@ export function createEosEvccBridge(deps) {
   // zurückzustellen): DVhub besitzt keine Phasen mehr.
   const phasesCleared = { phases: null, phasesTried: null, phasesPrev: null, phasesRestoring: false };
   // Wert von vorher für einen neuen eigenen Phasenbefehl: die eingestellte
-  // Phasenzahl — direkt nach einer eigenen Rückkehr (Meldung evtl. noch
-  // veraltet) der zurückgestellte Wert.
-  function phasesBeforeCommand(lpId, rec) {
-    const r = rec?.phasesRestored;
-    const at = Date.parse(r?.at || '');
-    if (r && configuredPhasesOf(r.to) !== null && Number.isFinite(at) && now() - at < EV_PHASE_SETTLE_MS) return configuredPhasesOf(r.to);
+  // Phasenzahl, wie evcc sie meldet. Nach DVhubs eigenem Befehl steht der neue
+  // Wert sofort im Abfrage-Puffer (evcc-integration setPhases); eine frische
+  // Änderung des Kunden gilt damit als „vorher“ (Codex 3d2078cb, P2).
+  function phasesBeforeCommand(lpId) {
     return configuredPhasesOf(findLoadpoint(lpId)?.phasesConfigured);
   }
 
@@ -462,7 +460,7 @@ export function createEosEvccBridge(deps) {
       const same = prev && prev.identity === tgt.identity;
       const fields = { phasesTried: n, phasesAt: new Date(now()).toISOString(), phasesRestoring: false };
       if (c.type === 'evcc' && !(same && prev.phasesPrev != null)) {
-        const before = phasesBeforeCommand(tgt.loadpoint, same ? prev : null);
+        const before = phasesBeforeCommand(tgt.loadpoint);
         if (before !== null) fields.phasesPrev = before;
       }
       notePhases(n, fields);
@@ -614,9 +612,17 @@ export function createEosEvccBridge(deps) {
         // dieselbe Phasenzahl nennen: evcc kann von Hand umgestellt sein
         // (Codex 42a5d784), seine Meldung aber auch noch veraltet (Codex
         // 1c280569). Im Zweifel erneut setzen — evcc tut dann nichts.
+        // Maßgeblich ist die EINGESTELLTE Phasenzahl, wenn evcc sie meldet: die
+        // aktiven Phasen hängen nach einer Umschaltung (auch DVhubs Rückkehr
+        // auf „automatisch“) bis zur nächsten Abfrage nach — sonst liefe ein
+        // einphasiger Slot mit 12 A auf „automatisch“ dreiphasig (Codex
+        // 3d2078cb, P1). „Automatisch“ lädt bei „Sofort laden“ mit allen Phasen
+        // und genügt für drei.
+        const configured = configuredPhasesOf(lp?.phasesConfigured);
         const reported = Number(lp?.phasesActive) || null;
+        const settled = configured !== null ? (configured === slot.phases || (configured === 0 && slot.phases === 3)) : reported === slot.phases;
         const ours = charger.dvhubPhases?.() ?? null;
-        if (reported !== slot.phases || (ours !== null && ours !== slot.phases)) {
+        if (!settled || (ours !== null && ours !== slot.phases)) {
           // Mehr Phasen: erst den Strom bestätigen (wie im Wrapper), sonst
           // liefe der alte einphasige Strom dreiphasig weiter (Codex d31e5119).
           if (slot.phases === 3 && typeof charger.limit === 'function') {
@@ -1332,13 +1338,24 @@ export function createEosEvccBridge(deps) {
       let st;
       try { st = await raw.status({ fresh: true }); } catch { st = null; }
       if (!st?.ok) { skipped.push('phases_state_unknown'); continue; }
-      // Nach DVhubs Stopp „Sofort laden“: das hat jemand von Hand gestartet.
-      if ((st.raw?.mode ?? null) === 'now') { skipped.push('phases_manual_charge'); continue; }
-      const state = phaseRestoreState(cur, configuredPhasesOf(st.raw?.phasesConfigured));
+      // Steht evcc noch in DVhubs Stopp-Modus? „Sofort laden“ oder ein Modus,
+      // den DVhub nie gesetzt hat (z. B. minpv aus der App): das ist die
+      // Ladung des Kunden — nicht anfassen (Codex 3d2078cb, P2).
+      const mode = st.raw?.mode ?? null;
+      const dvhubModes = Array.isArray(cur.dvhubModes) ? cur.dvhubModes : [];
+      if (mode === 'now' || !dvhubModes.includes(mode)) { skipped.push('phases_manual_charge'); continue; }
+      const found = configuredPhasesOf(st.raw?.phasesConfigured);
+      const state = phaseRestoreState(cur, found);
       if (state === 'wait') { skipped.push('phases_state_unknown'); continue; }
-      if (state !== 'restore') {
-        // Schon zurück oder von außen umgestellt: nichts zu schreiben.
-        setOwned(key, { ...cur, ...phasesCleared });
+      if (state === 'done') { setOwned(key, { ...cur, ...phasesCleared }); continue; }
+      if (state === 'foreign') {
+        // Frisch gelesen von außen umgestellt (noch vor der Erkennung im
+        // Takt): wie observePhases — Übergabe an den Kunden bis zum Abstecken,
+        // sonst holte DVhub nach dem Aufheben seine Phasen zurück (Codex 3d2078cb).
+        const t = now();
+        setOwned(key, { ...cur, ...phasesCleared, phasesForeign: { found, expected: cur.phases ?? cur.phasesTried ?? null, since: new Date(t).toISOString() } });
+        pendingPhase.delete(key);
+        pushLog('ev_phases_changed_externally', { loadpoint: bc.loadpoint, found, expected: cur.phases ?? cur.phasesTried ?? null, reason: 'emergency_stop' });
         continue;
       }
       const r = await writePhasesBack(cfg, bc, key, cur, 'emergency_stop');

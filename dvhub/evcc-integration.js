@@ -229,6 +229,12 @@ export function createEvccIntegration(ctx) {
       const target = new URL(`/api/loadpoints/${id}/phases/${p}`, url).toString();
       await postEmpty(target, { timeoutMs: Number(c.requestTimeoutMs) || 5000 });
       ctx.pushLog?.('evcc_phases_set', { loadpoint: id, phases: p });
+      // Eingestellte Phasen sofort im Puffer (wie setMode den Modus): die
+      // EOS-Brücke vergleicht damit, bevor die nächste Abfrage kommt (Codex
+      // 3d2078cb, P1). Die aktiven Phasen bleiben ein Messwert.
+      const lp = lastLoadpoints.find((x) => x.id === id);
+      if (lp) lp.phasesConfigured = p;
+      tick().catch(() => {});
       return { ok: true, phases: p };
     } catch (e) {
       ctx.pushLog?.('evcc_phases_set_error', { loadpoint: id, phases: p, error: e.message });

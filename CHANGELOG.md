@@ -54,7 +54,10 @@ verweist hierher.
     „Sofort laden“ nicht kurz mit allen Phasen lädt. Abgesteckt stellt DVhub keine Phasen ein. Der Not-Halt nimmt die
     eigene Phasen-Vorgabe beim Aktivieren genau einmal zurück (nur wenn evcc noch auf DVhubs Phasen steht und DVhubs
     Ladung gestoppt ist), danach kein Befehl. Von außen umgestellt: nichts zurückstellen; Lese-Modus: nichts schreiben.
-    Der Wert von vorher übersteht einen Neustart (`ev_owned.json`); Status `phasesRestoreTo`.
+    Der Wert von vorher übersteht einen Neustart (`ev_owned.json`); Status `phasesRestoreTo`. Ob DVhub umschalten muss,
+    entscheidet die in evcc eingestellte Phasenzahl (nicht die gerade aktiven Phasen, die nach einer Umschaltung bis zur
+    nächsten Abfrage nachhängen) — sonst lud ein einphasiger Slot auf „automatisch“ kurz dreiphasig. Stellt jemand die
+    Phasen kurz vor dem Not-Halt um, gilt das als Änderung von außen.
   - **Wertstufen frisch zum Lauf:** Vor jedem von DVhub angestoßenen EOS-Lauf gehen nach dem Prognose-Push auch die
     Wertstufen des Autos an EOS — vorher rechnete ein Lauf mit den Stufen des letzten Abgleichs (nach dem Start leer).
   - **Start-Ladestand des Autos an EOS abgerundet** statt gerundet — EOS plant nie mit mehr, als drin ist.
