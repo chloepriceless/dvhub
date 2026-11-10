@@ -23,7 +23,7 @@ import { planningCfg, planningMinSocPct } from '../multi-gx/planning.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
 import http from 'node:http';
 
-import { createEosCapabilityProbe, EOS_EV_CHARGE_START_FIELD, EOS_EV_SOC_VALUE_FIELD, EOS_GRID_IMPORT_LIMIT_FIELD } from './eos-capabilities.js';
+import { createEosCapabilityProbe, EOS_EV_CHARGE_START_FIELD, EOS_EV_SOC_VALUE_FIELD, EOS_GRID_IMPORT_LIMIT_FIELD, validSocValueSteps } from './eos-capabilities.js';
 import { resolveEvTargets } from './ev-targets.js';
 import { evChargeRates, onePhaseChargingAvailable, resolveEvccBridgeConfig } from './eos-evcc-bridge.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
@@ -200,7 +200,8 @@ export function buildEosElectricVehicles(cfg, { supportsDeadline = false, suppor
   if (supportsChargeStart) ev[EOS_EV_CHARGE_START_FIELD] = chargeStartAt || null;
   // Wert der Energie über dem Mindestziel: nur wo EOS das Feld kennt — dort
   // immer, ohne Stufen als null (keine alte Wertung bleibt stehen).
-  if (supportsSocValue) ev[EOS_EV_SOC_VALUE_FIELD] = Array.isArray(targets?.steps) && targets.steps.length ? targets.steps : null;
+  // Dieselben Regeln wie EOS (validSocValueSteps) — Ungültiges geht als null.
+  if (supportsSocValue) ev[EOS_EV_SOC_VALUE_FIELD] = validSocValueSteps(targets?.steps, { capacityWh: ev.capacity_wh });
   return [ev];
 }
 

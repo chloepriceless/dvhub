@@ -41,6 +41,32 @@ export const EOS_EV_CHARGE_START_FIELD = 'charge_start_datetime';
 // genügt diese eine Zeile.
 export const EOS_EV_SOC_VALUE_FIELD = 'soc_value_steps';
 
+/**
+ * Wertstufen so prüfen wie EOS (PR pr/ev-soc-value 04ba0dc:
+ * devicesabc.validate_soc_value_steps und der Überlauf-Check am Fahrzeug):
+ * SoC endlich in ]0, 100], streng steigend; Beträge endlich, ≥ 0, nicht
+ * steigend; Kapazität × erster Betrag endlich. Einheit: € je GESPEICHERTER kWh
+ * (AC-Preis ÷ Ladewirkungsgrad). Ungültig oder leer → null: dann geht keine
+ * Wertung an EOS, statt dass EOS das ganze Fahrzeug ablehnt.
+ * @returns {Array<[number, number]>|null}
+ */
+export function validSocValueSteps(steps, { capacityWh = 50000 } = {}) {
+  if (!Array.isArray(steps) || !steps.length) return null;
+  const out = [];
+  for (const st of steps) {
+    if (!Array.isArray(st) || st.length !== 2) return null;
+    const soc = Number(st[0]);
+    const amount = Number(st[1]);
+    if (!Number.isFinite(soc) || !(soc > 0 && soc <= 100)) return null;
+    if (!Number.isFinite(amount) || amount < 0) return null;
+    const prev = out[out.length - 1];
+    if (prev && (soc <= prev[0] || amount > prev[1])) return null;
+    out.push([soc, amount]);
+  }
+  if (!Number.isFinite(Number(capacityWh) / 1000 * out[0][1])) return null;
+  return out;
+}
+
 // Netzbezugs-Grenze am Wechselrichter (W, null = aus), Netzanschluss-Grenze
 // aus DVhub (services/grid-connection). Gibt es nur in unserem EOS.
 export const EOS_GRID_IMPORT_LIMIT_FIELD = 'max_grid_import_power_w';
