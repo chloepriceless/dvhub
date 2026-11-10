@@ -231,3 +231,106 @@ test('Codex 7a44bb81 P2: coverW-Hilfe bleibt bei Zählerfehler stehen', async ()
   }
   assert.deepEqual(h.writes(), [2200], 'kein Rückschreiben ohne Messung');
 });
+
+// --- Codex deefd37f: keine Phantom-Hilfe ------------------------------------------
+
+test('Codex deefd37f P2: Bezug schon unter dem angefragten Sollwert (Akku voll) — keine gutgeschriebene Hilfe', async () => {
+  const h = rig('victron');
+  h.assist.request({ source: 'p14a', coverW: 2000 });
+  h.measure({ importW: 10000 });
+  h.guard.tick();
+  assert.equal(h.guard.batteryCeilingW(), 8000);
+  await h.evaluator.applyControlTarget('gridSetpointW', 20000, 'rule:eos-grid-charge');
+  assert.deepEqual(sp2716(h), [8000]);
+  for (let k = 0; k < 4; k += 1) {
+    h.measure({ importW: 10000 }); // Akku voll: nichts geändert
+    h.guard.tick();
+  }
+  assert.equal(h.assist.status('p14a').helpW, 0, 'der Akku gibt nichts ab');
+  assert.equal(h.guard.batteryCeilingW(), 8000, 'Decke steigt nicht');
+});
+
+// --- Vertrag mit services/paragraph14a (feat/p14a-bedarf, 0fc9c779 ff.) ---------
+// Genau deren Aufrufform: request({ source: 'p14a', coverW, untilMs }) je Takt,
+// Antwort { ok, acceptedW }, coverW 0 = Freigabe (auch im Not-Halt; bei ok:false
+// wiederholt §14a). coverW ist die GESAMTE Abgabe des Akkus (laufende Entladung
+// eingerechnet), untilMs der Ablauf der Vorgabe (null = keiner bekannt).
+
+test('Vertrag §14a: Anforderung, Rückmeldung, Freigabe mit coverW 0', async () => {
+  const h = rig();
+  const res = h.assist.request({ source: 'p14a', coverW: 4200, untilMs: null });
+  assert.equal(res.ok, true);
+  assert.equal(res.acceptedW, 4200);
+  h.measure({ importW: 10000, maxDischargeW: 0 });
+  h.guard.tick();
+  await settle();
+  assert.deepEqual(h.writes(), [4400], 'Akku gibt insgesamt 4,2 kW ab (+ Regelabstand)');
+  // Akku liefert; §14a fragt im nächsten Takt dieselbe Gesamt-Abgabe an — stabil.
+  for (let k = 0; k < 5; k += 1) {
+    h.measure({ importW: 5800, dischargeW: 4200, maxDischargeW: 4400 });
+    h.assist.request({ source: 'p14a', coverW: 4200, untilMs: null });
+    h.guard.tick();
+    await settle();
+  }
+  assert.deepEqual(h.writes(), [4400]);
+  assert.equal(h.assist.status('p14a').helpW, 4200);
+  const rel = h.assist.request({ source: 'p14a', coverW: 0, untilMs: null });
+  assert.deepEqual(rel, { ok: true, acceptedW: 0 });
+  assert.equal(h.assist.status('p14a').active, false);
+  assert.deepEqual(h.assist.status().sources, []);
+});
+
+test('Vertrag §14a: Leistung über der Akku-Grenze wird nur teilweise zugesagt', () => {
+  const h = rig('bridge-mqtt', { optimizer: { allowGridCharge: true, inverterMaxPowerW: 5000 } });
+  const res = h.assist.request({ source: 'p14a', coverW: 8000, untilMs: null });
+  assert.equal(res.ok, true);
+  assert.equal(res.acceptedW, 5000);
+});
+
+test('Vertrag §14a: untilMs ersetzt die feste Frist', () => {
+  const h = rig();
+  h.assist.request({ source: 'p14a', coverW: 4200, untilMs: Date.now() + 10 * 60_000 });
+  h.advance(ASSIST_REQUEST_MAX_AGE_MS + 60_000);
+  assert.equal(h.assist.status('p14a').active, true, 'gilt bis untilMs, nicht nur 2 min');
+  h.advance(10 * 60_000);
+  assert.equal(h.assist.status('p14a').active, false, 'nach untilMs verfallen');
+  // Abgelaufen schon beim Aufruf: abgelehnt.
+  const old = h.assist.request({ source: 'p14a', coverW: 4200, untilMs: 1 });
+  assert.equal(old.ok, false);
+  assert.equal(old.reason, 'expired');
+});
+
+test('Vertrag §14a: Not-Halt und nicht steuerbarer Akku — Anforderung nein, Freigabe ja', () => {
+  const h = rig();
+  h.state.ctrl.discretionaryWritesPaused = true;
+  assert.equal(h.assist.request({ source: 'p14a', coverW: 4200, untilMs: null }).ok, false);
+  assert.deepEqual(h.assist.request({ source: 'p14a', coverW: 0, untilMs: null }), { ok: true, acceptedW: 0 });
+  const d = rig('deye-lv');
+  const r = d.assist.request({ source: 'p14a', coverW: 4200, untilMs: null });
+  assert.equal(r.ok, false);
+  assert.equal(r.acceptedW, 0);
+  assert.deepEqual(d.assist.request({ source: 'p14a', coverW: 0, untilMs: null }), { ok: true, acceptedW: 0 });
+});
+
+test('Vertrag §14a: die bisherige Form (maxImportW, release) gilt weiter', () => {
+  const h = rig();
+  assert.equal(h.assist.request({ source: 'eos-threshold', maxImportW: 8000 }).ok, true);
+  assert.equal(h.assist.status().targetW, 8000);
+  assert.equal(h.assist.release('eos-threshold').ok, true);
+  assert.equal(h.assist.status().targetW, null);
+});
+
+test('Leitstand: Kachel erscheint auch ohne Netzanschluss-Grenze, wenn §14a Akku-Hilfe anfordert', async () => {
+  const h = rig();
+  assert.equal(h.guard.summary(), null, 'ohne Grenze und Anforderung keine Kachel');
+  h.assist.request({ source: 'p14a', coverW: 4200, untilMs: null });
+  h.measure({ importW: 10000, maxDischargeW: 0 });
+  h.guard.tick();
+  await settle();
+  const s = h.guard.summary();
+  assert.ok(s, 'Kachel da');
+  assert.equal(s.assistOnly, true);
+  assert.deepEqual(s.assistSources, ['p14a']);
+  assert.equal(s.assist.valueW, 4400);
+  assert.match(s.text, /§14a/);
+});

@@ -109,3 +109,21 @@ test('index.html: Zeilen für Akku-Hebel und Akku-Hilfe, Skript-Version erneuert
   const m = html.match(/<script src="\/grid-connection-view\.js\?v=(\d+)/);
   assert.ok(m && Number(m[1]) >= 20261110, `Cache-Busting erneuert: ${m && m[1]}`);
 });
+
+test('nur §14a fordert Akku-Hilfe an (keine Netzanschluss-Grenze): Kachel ohne „Grenze ungültig“', () => {
+  const s = { enabled: true, active: false, reason: 'not_set', assistOnly: true, limitW: null, targetW: null,
+    importW: 5800, phasesW: null, failsafe: false, exhausted: false, caps: [], clamp: null, acting: true,
+    battery: { kind: 'native', text: 'Akku zuerst über Netz-Sollwert und Entladegrenze' },
+    assist: { valueW: 4400, baseW: 0, helpW: 4200 }, assistSources: ['p14a'],
+    text: '§14a: Akku hilft mit 4,2 kW (Entladegrenze 4,4 kW statt 0,0 kW)' };
+  const v = load().view(s);
+  assert.equal(v.hidden, false);
+  assert.equal(v.state, 'Akku hilft');
+  assert.equal(v.limit, 'keine eingetragen');
+  assert.equal(v.assist, '4,2 kW (Entladegrenze 4,4 kW statt 0,0 kW) · für §14a');
+  assert.match(v.detail, /§14a/);
+  // Victron: Hilfe über den Netz-Sollwert (keine Entladegrenze).
+  const v2 = load().view({ ...s, battery: { kind: 'victron', text: 'Akku zuerst — der Victron regelt selbst' }, assist: { valueW: null, baseW: null, helpW: 3000 } });
+  assert.equal(v2.assist, '3,0 kW (über den Netz-Sollwert) · für §14a');
+  assert.equal(load().view({ ...s, assist: null, acting: false }).state, 'Bereit');
+});

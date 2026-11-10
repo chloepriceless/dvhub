@@ -1032,7 +1032,11 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const at = Number(v.fieldUpdatedAt?.batteryPowerW) || 0;
     const maxAge = Number(c?.victron?.telemetryMaxAgeMs ?? 90000);
     const chargeW = at > 0 && t - at <= maxAge ? Math.max(0, Number(v.batteryChargeW) || 0) : 0;
-    if (!r?.batteryNative) return { setpointW, chargeW };
+    if (!r?.batteryNative) {
+      // Victron & Co.: gemessene Entladung nur für die Rückmeldung der Akku-Hilfe.
+      const fresh = at > 0 && t - at <= maxAge && !v.errors?.batteryPowerW;
+      return { setpointW, chargeW, dischargeW: fresh ? Math.max(0, Number(v.batteryDischargeW) || 0) : 0 };
+    }
     // Akku zuerst (Nicht-Victron): Entladung, Ladestand, Entladegrenze.
     const batFresh = at > 0 && t - at <= maxAge && !v.errors?.batteryPowerW;
     const dischargeW = batFresh ? Math.max(0, Number(v.batteryDischargeW) || 0) : 0;
@@ -1352,7 +1356,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
   const requests = new Map();
   const liveRequests = () => {
     const t = now();
-    for (const [k, q] of requests) if (t - q.at > ASSIST_REQUEST_MAX_AGE_MS) requests.delete(k);
+    for (const [k, q] of requests) if (t > q.expiresAt) requests.delete(k);
     return paused() ? [] : [...requests.values()];
   };
   // Strengstes Ziel (W) der Anforderungen, null = keins. coverW wird gegen den
@@ -1361,12 +1365,12 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const list = liveRequests();
     if (!list.length) return null;
     const fresh = meas?.fresh === true && finite(meas.importW);
-    // Bezug ohne die eigene Hilfe: Entladegrenze → Anteil über der Grenze davor;
-    // Sollwert-Decke (Victron & Co.) → gemessene Entlastung (Codex 7a44bb81, P2).
-    const help = st.assist
-      ? Math.max(0, (Number(battery?.dischargeW) || 0) - Math.max(0, Number(st.assist.baseW) || 0))
-      : setpointHelpW(meas);
-    const demand = fresh ? Number(meas.importW) + help : null;
+    // coverW = GESAMTE Abgabe des Akkus (wie §14a sie rechnet). Bezug ohne
+    // Akku = Bezug + gemessene Entladung − gemessene Ladung — aus Messwerten,
+    // nicht aus dem angefragten Sollwert (keine Phantom-Hilfe, Codex deefd37f, P2).
+    const dis = Math.max(0, Number(battery?.dischargeW) || 0);
+    const chg = Math.max(0, Number(battery?.chargeW) || 0);
+    const demand = fresh ? Number(meas.importW) + dis - chg : null;
     const targets = list.map((q) => {
       if (q.maxImportW != null) return q.maxImportW;
       // Ohne frische Messung das letzte Ziel halten — die Hilfe bleibt stehen
@@ -1375,19 +1379,6 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       return q.lastTargetW ?? null;
     });
     return smallestLimit(targets);
-  }
-  // Gemessene Entlastung durch die Sollwert-Decke: nur, wenn der gedeckelte
-  // Wert wirklich geschrieben ist, und höchstens das, was der Bezug unter dem
-  // angefragten Sollwert liegt (Codex 7a44bb81, P2).
-  function setpointHelpW(meas = last.meas) {
-    const s = state();
-    const clamp = s.ctrl?._gridConnection?.clamp;
-    const lw = s.schedule?.lastWrite?.gridSetpointW;
-    if (!clamp || now() - Number(clamp.at || 0) > CLAMP_FRESH_MS) return 0;
-    if (!lw || Number(lw.value) !== Number(clamp.valueW)) return 0;
-    if (!(meas?.fresh === true && finite(meas.importW))) return 0;
-    const delta = Math.max(0, Number(clamp.requestedW) - Number(clamp.valueW));
-    return Math.max(0, Math.min(delta, Number(clamp.requestedW) - Number(meas.importW)));
   }
   // Wirksame Decke für positive Netz-Sollwerte: Netzanschluss und Anforderungen.
   function ceilingNow() {
@@ -1399,6 +1390,34 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const ceiling = smallestLimit([grid, ext == null ? null : down(ext)]);
     return ceiling == null ? null : Math.max(0, ceiling);
   }
+  const SOURCE_LABEL = { p14a: '§14a', 'eos-threshold': 'EOS-Schwelle' };
+  // Kachel ohne Netzanschluss-Grenze, solange eine andere Quelle (§14a)
+  // Akku-Hilfe anfordert; sonst keine Kachel.
+  function assistOnlySummary(r) {
+    const list = liveRequests();
+    if (!list.length && !st.assist) return null;
+    const meas = last.meas;
+    const bat = last.battery || {};
+    const disW = Math.max(0, Math.round(Number(bat.dischargeW) || 0));
+    const assist = paused() ? null
+      : st.assist ? { valueW: st.assist.valueW, baseW: st.assist.baseW, since: st.assist.since, helpW: Math.max(0, disW - Math.max(0, st.assist.baseW)) }
+        : (r.battery.kind !== 'none' && disW > 0 ? { valueW: null, baseW: null, since: null, helpW: disW } : null);
+    const names = list.map((q) => SOURCE_LABEL[q.source] || q.source);
+    const who = names.join(', ') || 'Akku-Hilfe';
+    const text = paused() ? 'Not-Halt aktiv — DVhub greift nicht ein.'
+      : assist ? `${who}: Akku hilft mit ${kwText(assist.helpW)}${assist.valueW != null ? ` (Entladegrenze ${kwText(assist.valueW)} statt ${assist.baseW === -1 ? 'unbegrenzt' : kwText(assist.baseW)})` : ' (über den Netz-Sollwert)'}`
+        : `${who}: Akku-Hilfe angefordert`;
+    return {
+      enabled: true, active: false, reason: r.reason, assistOnly: true,
+      limitW: null, limitSource: null, limitText: null, victronReadError: false,
+      marginW: null, marginText: null, targetW: externalTargetW(), phaseLimitA: null, phaseLimitW: null,
+      importW: meas?.fresh ? Math.max(0, Math.round(meas.importW)) : null, phasesW: null,
+      failsafe: false, paused: paused(), exhausted: false,
+      batterySupported: r.batterySupported, battery: r.battery, assist, assistSources: list.map((q) => q.source),
+      ceilingW: null, clamp: null, caps: [], acting: Boolean(assist), text
+    };
+  }
+
   const batteryAssist = {
     /**
      * Akku-Hilfe anfordern bzw. erneuern.
@@ -1407,22 +1426,37 @@ export function createGridConnectionGuard(ctx, deps = {}) {
      */
     request(q = {}) {
       const source = typeof q.source === 'string' ? q.source.trim() : '';
-      if (!source || source === 'grid-connection') return { ok: false, reason: 'invalid_source' };
+      if (!source || source === 'grid-connection') return { ok: false, reason: 'invalid_source', acceptedW: 0 };
+      // coverW 0 = Freigabe (Vertrag §14a) — gilt immer, auch im Not-Halt.
+      if (q.coverW !== undefined && q.coverW !== null && Number(q.coverW) === 0 && q.maxImportW == null) {
+        requests.delete(source);
+        return { ok: true, acceptedW: 0 };
+      }
       const hasMax = finite(q.maxImportW) && Number(q.maxImportW) >= 0;
       const hasCover = finite(q.coverW) && Number(q.coverW) > 0;
-      if (hasMax === hasCover) return { ok: false, reason: 'invalid_request' };
-      if (paused()) return { ok: false, reason: 'emergency_stop' };
-      const r = gridConnectionFromState(cfg(), state(), now());
-      if (r.battery.kind === 'none') return { ok: false, kind: 'none', reason: 'battery_not_steerable' };
+      if (hasMax === hasCover) return { ok: false, reason: 'invalid_request', acceptedW: 0 };
+      // untilMs (Ablauf der Vorgabe, ms seit 1970) ersetzt die feste Frist.
+      const until = finite(q.untilMs) && Number(q.untilMs) > 0 ? Number(q.untilMs) : null;
+      if (until != null && until <= now()) return { ok: false, reason: 'expired', acceptedW: 0 };
+      if (paused()) return { ok: false, reason: 'emergency_stop', acceptedW: 0 };
+      const c = cfg();
+      const r = gridConnectionFromState(c, state(), now());
+      if (r.battery.kind === 'none') return { ok: false, kind: 'none', reason: 'battery_not_steerable', acceptedW: 0 };
       const before = ceilingNow();
+      const t = now();
       requests.set(source, {
         source, maxImportW: hasMax ? Math.round(Number(q.maxImportW)) : null,
-        coverW: hasCover ? Math.round(Number(q.coverW)) : null, at: now()
+        coverW: hasCover ? Math.round(Number(q.coverW)) : null, at: t,
+        expiresAt: until ?? t + ASSIST_REQUEST_MAX_AGE_MS,
+        lastTargetW: requests.get(source)?.lastTargetW ?? null
       });
       // Decke gesunken: laufenden Sollwert sofort neu durch den Steuerpfad.
       const after = ceilingNow();
       if (after != null && (before == null || after < before)) reassertSetpoint();
-      return { ok: true, kind: r.battery.kind };
+      // Zusage: höchstens die Entladeleistung (Akku bzw. Wechselrichter).
+      const limits = getPowerLimits(c).limits;
+      const maxW = Math.min(Number(limits.batteryMaxDischargeDcW) || 0, Number(limits.inverterMaxPowerW) || 0, MAX_BATTERY_DISCHARGE_W);
+      return { ok: true, kind: r.battery.kind, acceptedW: hasCover ? Math.min(Math.round(Number(q.coverW)), maxW) : null };
     },
     /** Anforderung zurücknehmen; der Regelkreis senkt die Hilfe in Stufen. */
     release(source) {
@@ -1430,7 +1464,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     },
     /**
      * Rückmeldung für die Kürzungslogik der Quellen: targetW = strengstes Ziel
-     * (inkl. Netzanschluss), helpW = was der Akku gerade dafür leistet (W).
+     * (inkl. Netzanschluss), helpW = gemessene Entladung des Akkus (W).
      */
     status(source = null) {
       const r = gridConnectionFromState(cfg(), state(), now());
@@ -1439,19 +1473,18 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       const ext = externalTargetW();
       const targetW = smallestLimit([r.active ? r.targetW : null, ext]);
       const bat = last.battery || {};
-      const helpW = paused() ? 0 : st.assist
-        ? Math.max(0, Math.round((Number(bat.dischargeW) || 0) - Math.max(0, Number(st.assist.baseW) || 0)))
-        : Math.round(setpointHelpW());
+      const helpW = paused() ? 0 : Math.max(0, Math.round(Number(bat.dischargeW) || 0));
       return {
         kind: r.battery.kind,
         paused: paused(),
-        // Mit Quelle: ihre Anforderung gilt. Ohne: der Akku hilft gerade.
-        active: !paused() && r.battery.kind !== 'none' && (source ? own != null : (st.assist != null || helpW > 0)),
+        // Mit Quelle: ihre Anforderung gilt. Ohne: irgendeine Anforderung gilt
+        // oder die Entladegrenze ist gerade angehoben.
+        active: !paused() && r.battery.kind !== 'none' && (source ? own != null : (st.assist != null || list.length > 0)),
         targetW,
         sourceTargetW: own ? (own.maxImportW ?? null) : null,
         helpW,
         valueW: st.assist?.valueW ?? null,
-        sources: list.map((q) => ({ source: q.source, maxImportW: q.maxImportW, coverW: q.coverW, at: q.at }))
+        sources: list.map((q) => ({ source: q.source, maxImportW: q.maxImportW, coverW: q.coverW, at: q.at, expiresAt: q.expiresAt }))
       };
     }
   };
@@ -1496,7 +1529,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     summary() {
       const c = cfg();
       const r = gridConnectionFromState(c, state(), now());
-      if (r.reason === 'not_set' && !r.victronReadError) return null;
+      if (r.reason === 'not_set' && !r.victronReadError) return assistOnlySummary(r);
       const s = state();
       const t = now();
       const meas = last.meas;
@@ -1543,6 +1576,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         batterySupported: r.batterySupported,
         battery: r.battery,
         assist,
+        assistSources: liveRequests().map((q) => q.source),
         ceilingW: r.active && r.batterySupported ? st.ceilingW ?? r.targetW : null,
         clamp,
         caps,

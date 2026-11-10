@@ -108,12 +108,16 @@ verweist hierher.
     drosselt direkt die Lasten“; dort regelt der Wechselrichter seinen Eigenverbrauch selbst.
   - Leitstand-Kachel „Netzanschluss“: neue Zeilen „Akku“ (Hebel) und „Akku-Hilfe“ (was der Akku gerade zusätzlich
     abgibt, mit Entladegrenze vorher/jetzt); Zustand „Akku hilft“, solange nur der Akku eingreift.
-  - **Mehrere Quellen:** Derselbe Regelkreis nimmt Anforderungen anderer Dienste an (`ctx.batteryAssist`:
-    `request({ source, maxImportW })` bzw. `{ source, coverW }`, `release(source)`, `status(source)` mit der
-    geleisteten Hilfe in W) — gedacht für §14a (`p14a`) und das EOS-Schwellen-Peak-Shaving (`eos-threshold`), auch
-    ohne eingetragene Netzanschluss-Grenze. Das strengste Ziel gewinnt; bei Victron wirkt es als Decke des positiven
-    Netz-Sollwerts. Im Not-Halt und bei Profilen ohne steuerbaren Akku wird abgelehnt; eine Anforderung verfällt nach
-    2 min ohne Erneuerung.
+  - **Mehrere Quellen, auch §14a:** Derselbe Regelkreis nimmt Anforderungen anderer Dienste an (`ctx.batteryAssist`).
+    §14a fragt je Takt `request({ source: 'p14a', coverW, untilMs })` an: `coverW` ist die gesamte Abgabe des Akkus,
+    `untilMs` der Ablauf der Vorgabe, `coverW: 0` gibt frei (auch im Not-Halt); Antwort `{ ok, acceptedW }`, zugesagt
+    höchstens die Entladeleistung. Daneben `request({ source, maxImportW })`, `release(source)` und `status(source)`
+    (gemessene Entladung in W) — gedacht auch für das EOS-Schwellen-Peak-Shaving (`eos-threshold`). Das strengste Ziel
+    gewinnt, mit oder ohne eingetragene Netzanschluss-Grenze; bei Victron wirkt es als Decke des positiven
+    Netz-Sollwerts. Die Hilfe wird aus Messwerten gerechnet (Bezug + Entladung − Ladung), nie aus dem angefragten
+    Sollwert. Im Not-Halt und bei Profilen ohne steuerbaren Akku wird eine Anforderung abgelehnt; ohne `untilMs`
+    verfällt sie nach 2 min ohne Erneuerung. Die Leitstand-Kachel „Netzanschluss“ erscheint auch ohne Grenze, solange
+    §14a Akku-Hilfe anfordert („keine eingetragen“, „Akku hilft … · für §14a“).
 - **EOS plant mit der Bezugsgrenze.** Kennt das EOS den Schlüssel `max_grid_import_power_w` am Wechselrichter (unser
   EOS), bekommt es Grenze − Abstand und kürzt selbst. Ist die Grenze in DVhub entfernt, schickt DVhub 1 GW statt null,
   weil ein null per PUT den Wert in EOS nicht zurücksetzt. Vanilla v0.4.0rc3 kennt den Schlüssel nicht. Dort plant EOS
