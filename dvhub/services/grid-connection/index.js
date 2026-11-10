@@ -122,6 +122,9 @@ const ASSIST_READBACK_GRACE_MS = 10_000;
 export const ASSIST_SOURCE = 'grid_connection_assist';
 export const ASSIST_RESTORE_SOURCE = 'grid_connection_restore';
 const ASSIST_RETRY_MS = 30_000;
+// Anforderungen anderer Quellen (§14a, EOS-Schwelle) gelten so lange ohne
+// Erneuerung — fällt eine Quelle aus, hält sie den Akku nicht ewig fest.
+export const ASSIST_REQUEST_MAX_AGE_MS = 120_000;
 
 const finite = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 const down = (w) => Math.floor(Number(w) / STEP_W) * STEP_W;
@@ -375,11 +378,14 @@ export function createGuardState() {
  *   Entladegrenze (-1 = unbegrenzt), höchste Entladeleistung und der jüngste
  *   Entladegrenzen-Wunsch einer anderen Quelle (schedule-eval.js).
  * @param {number} p.now
+ * @param {number|null} [p.assistTargetW] strengstes Ziel der Akku-Hilfe aus
+ *   anderen Quellen (höchster erlaubter Netzbezug in W, z. B. §14a), null = keins.
+ *   Gilt zusätzlich zur Netzanschluss-Grenze und auch ohne sie.
  * @returns {{ events: object[], changed: Set<string>, ceilingTightened: boolean }}
  *   changed enthält die Gerätearten, deren Grenze sich geändert hat, 'ceiling'
  *   und 'battery_assist' (Akku-Hilfe angehoben, gesenkt oder beendet).
  */
-export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, now }) {
+export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, now, assistTargetW = null }) {
   const events = [];
   const capsBefore = { ...st.caps };
   const ceilingBefore = st.ceilingW;
@@ -418,12 +424,26 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
     st.assist = null;
   };
 
+  const extTarget = finite(assistTargetW) ? Math.max(0, Number(assistTargetW)) : null;
   if (!r?.active) {
-    if (Object.keys(st.caps).length || st.ceilingW != null || st.failsafe) events.push({ type: 'off', reason: r?.reason ?? 'not_set' });
+    if (Object.keys(st.caps).length || st.ceilingW != null || st.failsafe) {
+      events.push({ type: 'off', reason: r?.reason ?? 'not_set' });
+      const keep = { assist: st.assist, assistRestore: st.assistRestore, disSince: st.disSince };
+      Object.assign(st, createGuardState(), keep);
+    }
+    // Ohne Netzanschluss-Grenze kann eine andere Quelle (§14a) Akku-Hilfe
+    // anfordern — derselbe Regelkreis, nur auf ihr Ziel.
+    if (extTarget != null && r?.batteryNative) {
+      if (meas?.fresh) {
+        const total = Number(meas.importW);
+        nativeBatteryStep(st, { r, battery, total, excess: total - extTarget, targetW: extTarget, phases: null, phaseTargets: null, events, endAssist, now });
+      } else {
+        st.disSince = null;
+        if (st.assist && battery.socOk !== true) endAssist('soc');
+      }
+      return finish();
+    }
     endAssist(r?.reason ?? 'not_set');
-    const restore = st.assistRestore;
-    Object.assign(st, createGuardState());
-    st.assistRestore = restore;
     return finish();
   }
   // Geräte, die es nicht mehr gibt (abgemeldet, ausgeschaltet): Grenze vergessen.
@@ -569,7 +589,10 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
   }
   const batteryStuck = st.batteryStuckAt != null;
   if (!batteryStuck) pending += batteryPending;
-  if (r.batteryNative) pending += nativeBatteryStep(st, { r, battery, total, excess, phases, phaseTargets, events, endAssist, now });
+  if (r.batteryNative) {
+    const targetW = extTarget == null ? r.targetW : Math.min(r.targetW, extTarget);
+    pending += nativeBatteryStep(st, { r, battery, total, excess, targetW, phases, phaseTargets, events, endAssist, now });
+  }
   const predicted = excess - pending;
 
   // --- 2. Lasten zurücknehmen --------------------------------------------------
@@ -725,7 +748,10 @@ export function guardStep(st, { resolved: r, meas, devices = [], battery = {}, n
  *     Ziel, kommt nach RELEASE_MS (frühestens HOLD_AFTER_CUT_MS nach dem
  *     letzten Anheben) der Wert davor zurück.
  */
-function nativeBatteryStep(st, { r, battery, total, excess, phases, phaseTargets, events, endAssist, now }) {
+function nativeBatteryStep(st, { r, battery, total, excess, targetW, phases, phaseTargets, events, endAssist, now }) {
+  // targetW: Ziel der Akku-Hilfe (Netzanschluss oder strengere Anforderung);
+  // excess: Überschuss über der Netzanschluss-Grenze (für „gleich weg“ bei den Lasten).
+  const T = finite(targetW) ? Number(targetW) : r.targetW;
   const lever = r.battery || {};
   const socOk = battery.socOk === true;
   const dis = Math.max(0, Number(battery.dischargeW) || 0);
@@ -754,14 +780,18 @@ function nativeBatteryStep(st, { r, battery, total, excess, phases, phaseTargets
   // Bedarf je Phase: wie weit muss der Akku entladen, damit Gesamt- und
   // Phasenziel halten? Unbekannte Akku-Phasen: dreiphasig angenommen (für den
   // Bedarf); als „gleich weg“ zählt dann nur die Entlastung der Summe.
-  const excessAfter = (x, mode) => {
-    const tot = total - x - r.targetW;
-    if (!phases) return tot;
+  const excessAfterT = (x, mode, target) => {
+    const tot = total - x - target;
+    if (!phases || !phaseTargets) return tot;
     const rel = mode === 'three' ? [x / 3, x / 3, x / 3]
       : ['L1', 'L2', 'L3'].map((l) => (l === mode ? x : 0));
     return Math.max(tot, 3 * Math.max(...phases.map((p, i) => p - rel[i] - phaseTargets[i])));
   };
-  const relief = (x) => Math.max(0, excess - excessAfter(x, r.batteryPhases));
+  // Gegen das Ziel der Akku-Hilfe (Bedarf, Zurücknehmen) …
+  const excessAfter = (x, mode) => excessAfterT(x, mode, T);
+  // … und gegen die Netzanschluss-Grenze (was den Lasten erspart bleibt).
+  const relief = (x) => Math.max(0, excess - excessAfterT(x, r.batteryPhases, r.targetW));
+  const aExcess = excessAfter(0, 'three');
   // Überschuss, wenn der Akku x W WENIGER abgibt — bei unbekannten Akku-Phasen
   // der ungünstigste Fall (die Last fällt auf die stärkste Phase).
   const excessIfLess = (x) => (r.batteryPhases
@@ -769,9 +799,9 @@ function nativeBatteryStep(st, { r, battery, total, excess, phases, phaseTargets
     : Math.max(...['three', 'L1', 'L2', 'L3'].map((m) => excessAfter(-x, m))));
 
   // 2. Anheben.
-  if (excess > 0) st.disSince ??= now;
+  if (aExcess > 0) st.disSince ??= now;
   else st.disSince = null;
-  if (excess > 0 && socOk && lever.discharge) {
+  if (aExcess > 0 && socOk && lever.discharge) {
     // Nach einem Neustart steht noch der Rückkehrwert aus dem Merker an: er
     // bleibt der Wert davor, nicht die angehobene Grenze im Gerät (Codex
     // 4deab6d6, P2).
@@ -788,14 +818,14 @@ function nativeBatteryStep(st, { r, battery, total, excess, phases, phaseTargets
       // Nicht ganz lösbar (Akku zu schwach oder auf einer anderen Phase als
       // die Überlast): nur den Teil der Summe, den er wirklich senkt — nie
       // „sicherheitshalber“ aufs Maximum.
-      if (need == null) need = Math.min(room, up(Math.max(0, total - r.targetW)));
+      if (need == null) need = Math.min(room, up(Math.max(0, total - T)));
       const want = need > 0 ? assistValueW({ excessW: need, dischargeW: dis, maxW }) : current;
       if (!st.assist && pendingBase != null && Number.isFinite(current)) {
         // Hilfe aus dem letzten Lauf weiterführen statt erst zurückzuschreiben.
         st.assist = { valueW: Math.max(want, current), baseW: pendingBase, since: now, raisedAt: now, seq: Number(battery.request?.seq) || 0, roomSince: null, lowerSince: null };
         st.assistRestore = null;
         st.disSince = now;
-        if (want > current) events.push({ type: 'assist', valueW: want, baseW: pendingBase, dischargeW: Math.round(dis), excessW: Math.round(excess), importW: Math.round(total) });
+        if (want > current) events.push({ type: 'assist', valueW: want, baseW: pendingBase, dischargeW: Math.round(dis), excessW: Math.round(aExcess), importW: Math.round(total), targetW: Math.round(T) });
       } else if (want > current) {
         if (!st.assist) {
           st.assist = { valueW: want, baseW: base, since: now, raisedAt: now, seq: Number(battery.request?.seq) || 0, roomSince: null, lowerSince: null };
@@ -803,7 +833,7 @@ function nativeBatteryStep(st, { r, battery, total, excess, phases, phaseTargets
           Object.assign(st.assist, { valueW: want, raisedAt: now, roomSince: null, lowerSince: null });
         }
         st.disSince = now; // neue Chance für den Akku
-        events.push({ type: 'assist', valueW: want, baseW: base, dischargeW: Math.round(dis), excessW: Math.round(excess), importW: Math.round(total) });
+        events.push({ type: 'assist', valueW: want, baseW: base, dischargeW: Math.round(dis), excessW: Math.round(aExcess), importW: Math.round(total), targetW: Math.round(T) });
       }
     }
   }
@@ -822,7 +852,7 @@ function nativeBatteryStep(st, { r, battery, total, excess, phases, phaseTargets
   // nur seine Phase.
   const a = st.assist;
   const capped = Object.keys(st.caps).some((id) => st.caps[id] != null);
-  if (a && excess <= 0 && !capped) {
+  if (a && aExcess <= 0 && !capped) {
     const hyst = r.releaseHysteresisW;
     const portion = Math.max(0, dis - Math.max(0, a.baseW));
     if (excessIfLess(portion) <= -hyst) {
@@ -1180,7 +1210,8 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const s = state();
     const lw = s.schedule?.lastWrite?.gridSetpointW;
     const req = s.ctrl?._gridConnection?.request;
-    if (!lw || !req || !(Number(lw.value) > st.ceilingW) || req.source !== lw.source) return;
+    const ceiling = ceilingNow();
+    if (!lw || !req || ceiling == null || !(Number(lw.value) > ceiling) || req.source !== lw.source) return;
     if (now() - (Number(lw.at) || 0) > SETPOINT_MAX_AGE_MS) return;
     Promise.resolve(ctx.applyControlTarget?.('gridSetpointW', req.requestedW, req.source))
       .catch((e) => log('grid_connection_error', { phase: 'reassert_setpoint', error: e?.message || String(e) }, 'warn'));
@@ -1259,10 +1290,12 @@ export function createGridConnectionGuard(ctx, deps = {}) {
         lastVictronError = r.victronReadError;
         if (r.victronReadError) log('grid_connection_victron_unreadable', { text: 'Victron-Bezugsgrenze (Reg. 2714) nicht lesbar — es gelten nur die DVhub-Werte.' }, 'warn');
       }
-      const meas = r.active ? meterImport(state(), c, { now: lastTickAt, maxAgeMs: METER_MAX_AGE_MS }) : null;
+      const wantsAssist = r.batteryNative && liveRequests().length > 0;
+      const meas = r.active || wantsAssist ? meterImport(state(), c, { now: lastTickAt, maxAgeMs: METER_MAX_AGE_MS }) : null;
       const list = r.active ? devices(c) : [];
       const battery = batteryInput(c, r);
-      const res = guardStep(st, { resolved: r, meas, devices: list, battery, now: lastTickAt });
+      const assistTargetW = r.batteryNative ? externalTargetW(meas, battery) : null;
+      const res = guardStep(st, { resolved: r, meas, devices: list, battery, now: lastTickAt, assistTargetW });
       last = { meas, devices: list, battery };
       report(r, res.events);
       if (res.changed.size || res.ceilingTightened) enforce(res.changed, res.ceilingTightened);
@@ -1278,6 +1311,104 @@ export function createGridConnectionGuard(ctx, deps = {}) {
 
   function active() { return !paused() && gridConnectionFromState(cfg(), state(), now()).active; }
 
+  // --- Akku zuerst für mehrere Quellen (Christin 10.11.2026) -----------------
+  // Nicht nur die Netzanschluss-Grenze (intern, Quelle 'grid-connection'), auch
+  // §14a ('p14a') und später das EOS-Schwellen-Peak-Shaving ('eos-threshold')
+  // können Akku-Hilfe anfordern: request({ source, maxImportW }) = höchster
+  // erlaubter Netzbezug, oder request({ source, coverW }) = so viel Last soll der
+  // Akku zusätzlich übernehmen. Das strengste Ziel gewinnt. Nicht-Victron: der
+  // Regelkreis oben (Entladegrenze, Sollwert-Decke); Victron: Decke des positiven
+  // Netz-Sollwerts. Not-Halt: keine Hilfe. Anforderungen verfallen nach
+  // ASSIST_REQUEST_MAX_AGE_MS ohne Erneuerung.
+  const requests = new Map();
+  const liveRequests = () => {
+    const t = now();
+    for (const [k, q] of requests) if (t - q.at > ASSIST_REQUEST_MAX_AGE_MS) requests.delete(k);
+    return paused() ? [] : [...requests.values()];
+  };
+  // Strengstes Ziel (W) der Anforderungen, null = keins. coverW wird gegen den
+  // Bezug OHNE die eigene Akku-Hilfe gerechnet, damit das Ziel nicht wandert.
+  function externalTargetW(meas = last.meas, battery = last.battery) {
+    const list = liveRequests();
+    if (!list.length) return null;
+    const fresh = meas?.fresh === true && finite(meas.importW);
+    const dis = Math.max(0, Number(battery?.dischargeW) || 0);
+    const base = st.assist ? Math.max(0, Number(st.assist.baseW) || 0) : dis;
+    const demand = fresh ? Number(meas.importW) + Math.max(0, dis - base) : null;
+    const targets = list.map((q) => (q.maxImportW != null ? q.maxImportW
+      : demand != null ? Math.max(0, demand - q.coverW) : null));
+    return smallestLimit(targets);
+  }
+  // Wirksame Decke für positive Netz-Sollwerte: Netzanschluss und Anforderungen.
+  function ceilingNow() {
+    if (paused()) return null;
+    const r = gridConnectionFromState(cfg(), state(), now());
+    if (!r.batterySupported) return null;
+    const grid = r.active ? st.ceilingW ?? r.targetW : null;
+    const ext = externalTargetW();
+    const ceiling = smallestLimit([grid, ext == null ? null : down(ext)]);
+    return ceiling == null ? null : Math.max(0, ceiling);
+  }
+  const batteryAssist = {
+    /**
+     * Akku-Hilfe anfordern bzw. erneuern.
+     * @param {{source:string, maxImportW?:number, coverW?:number}} q
+     * @returns {{ok:boolean, kind?:string, reason?:string}}
+     */
+    request(q = {}) {
+      const source = typeof q.source === 'string' ? q.source.trim() : '';
+      if (!source || source === 'grid-connection') return { ok: false, reason: 'invalid_source' };
+      const hasMax = finite(q.maxImportW) && Number(q.maxImportW) >= 0;
+      const hasCover = finite(q.coverW) && Number(q.coverW) > 0;
+      if (hasMax === hasCover) return { ok: false, reason: 'invalid_request' };
+      if (paused()) return { ok: false, reason: 'emergency_stop' };
+      const r = gridConnectionFromState(cfg(), state(), now());
+      if (r.battery.kind === 'none') return { ok: false, kind: 'none', reason: 'battery_not_steerable' };
+      const before = ceilingNow();
+      requests.set(source, {
+        source, maxImportW: hasMax ? Math.round(Number(q.maxImportW)) : null,
+        coverW: hasCover ? Math.round(Number(q.coverW)) : null, at: now()
+      });
+      // Decke gesunken: laufenden Sollwert sofort neu durch den Steuerpfad.
+      const after = ceilingNow();
+      if (after != null && (before == null || after < before)) reassertSetpoint();
+      return { ok: true, kind: r.battery.kind };
+    },
+    /** Anforderung zurücknehmen; der Regelkreis senkt die Hilfe in Stufen. */
+    release(source) {
+      return { ok: requests.delete(String(source || '').trim()) };
+    },
+    /**
+     * Rückmeldung für die Kürzungslogik der Quellen: targetW = strengstes Ziel
+     * (inkl. Netzanschluss), helpW = was der Akku gerade dafür leistet (W).
+     */
+    status(source = null) {
+      const r = gridConnectionFromState(cfg(), state(), now());
+      const list = liveRequests();
+      const own = source ? list.find((q) => q.source === source) || null : null;
+      const ext = externalTargetW();
+      const targetW = smallestLimit([r.active ? r.targetW : null, ext]);
+      const bat = last.battery || {};
+      const clampRaw = state().ctrl?._gridConnection?.clamp;
+      const clampW = clampRaw && now() - Number(clampRaw.at || 0) <= CLAMP_FRESH_MS
+        ? Math.max(0, Number(clampRaw.requestedW) - Number(clampRaw.valueW)) : 0;
+      const helpW = paused() ? 0 : st.assist
+        ? Math.max(0, Math.round((Number(bat.dischargeW) || 0) - Math.max(0, Number(st.assist.baseW) || 0)))
+        : Math.round(clampW);
+      return {
+        kind: r.battery.kind,
+        paused: paused(),
+        // Mit Quelle: ihre Anforderung gilt. Ohne: der Akku hilft gerade.
+        active: !paused() && r.battery.kind !== 'none' && (source ? own != null : (st.assist != null || helpW > 0)),
+        targetW,
+        sourceTargetW: own ? (own.maxImportW ?? null) : null,
+        helpW,
+        valueW: st.assist?.valueW ?? null,
+        sources: list.map((q) => ({ source: q.source, maxImportW: q.maxImportW, coverW: q.coverW, at: q.at }))
+      };
+    }
+  };
+
   return {
     /** Je Zählerabfrage (polling.js). */
     pollTick: tick,
@@ -1292,11 +1423,10 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     stop() { if (timer) { clearInterval(timer); timer = null; } },
     /** Decke für positive Netz-Sollwerte (W) oder null (keine Grenze / kein Victron). */
     batteryCeilingW() {
-      if (paused()) return null;
-      const r = gridConnectionFromState(cfg(), state(), now());
-      if (!r.active || !r.batterySupported) return null;
-      return st.ceilingW ?? r.targetW;
+      return ceilingNow();
     },
+    /** Akku zuerst für mehrere Quellen (ctx.batteryAssist, server.js). */
+    batteryAssist,
     /**
      * Untergrenze für die Entladegrenze (W) während der Akku-Hilfe, sonst null.
      * schedule-eval.js hebt Vorgaben anderer Quellen darunter auf diesen Wert.
