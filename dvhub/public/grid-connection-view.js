@@ -3,7 +3,8 @@
 // Zeigt den Netzbezug gegen die Grenze des Hausanschlusses und, ob DVhub gerade
 // begrenzt — im Klartext des Wächters, z. B. „Netzanschluss: begrenzt
 // Akku-Ladung auf 28,0 kW · Wallbox pausiert“. Quelle ist /api/status.gridConnection;
-// ohne eingetragene Grenze bleibt die Kachel weg. view() ist reine Anzeige-Logik
+// ohne eingetragene Grenze bleibt die Kachel weg. Dazu der Akku-Hebel („Akku
+// zuerst“ bzw. „Akku nicht steuerbar“) und die aktuelle Akku-Hilfe in kW. view() ist reine Anzeige-Logik
 // (test/grid-connection-view.test.js), render() setzt sie in die Kachel aus index.html.
 (function () {
   'use strict';
@@ -19,6 +20,10 @@
     if (s.active !== true) return ['Grenze ungültig', 'warn'];
     if (s.failsafe) return ['Zähler gestört', 'danger'];
     if (s.exhausted) return ['Nichts mehr steuerbar', 'danger'];
+    // Nur der Akku hilft (keine Last gedrosselt, keine Ladung gedeckelt):
+    // das ist „Akku zuerst“ in Aktion, keine Begrenzung.
+    const caps = Array.isArray(s.caps) ? s.caps.length : 0;
+    if (s.acting && s.assist && !caps && !s.clamp) return ['Akku hilft', 'info'];
     if (s.acting) return ['Begrenzt', 'warn'];
     return ['Bereit', 'ok'];
   }
@@ -26,6 +31,12 @@
   function phases(s) {
     if (!Array.isArray(s.phasesW) || s.phasesW.length !== 3) return DASH;
     return s.phasesW.map((w) => kw(w).replace(' kW', '')).join(' / ') + ' kW';
+  }
+
+  function assist(a) {
+    if (!a || !num(a.valueW)) return DASH;
+    const base = Number(a.baseW) === -1 ? 'unbegrenzt' : kw(a.baseW);
+    return `${kw(a.helpW)} (Entladegrenze ${kw(a.valueW)} statt ${base})`;
   }
 
   function view(s) {
@@ -45,6 +56,9 @@
       phaseLimit: num(s.phaseLimitA) ? `${s.phaseLimitA} A je Phase` : 'keine',
       // Woher die wirksame Grenze kommt (DVhub-Einstellung oder Victron Reg. 2714).
       source: (s.limitText || '') + (s.victronReadError ? ' · Victron-Grenze nicht lesbar' : ''),
+      // Akku zuerst: welcher Hebel, und was der Akku gerade abgibt.
+      battery: s.battery && s.battery.text ? s.battery.text : DASH,
+      assist: assist(s.assist),
       state: label,
       tone,
       detail: s.text || (s.active ? 'Keine Begrenzung nötig.' : 'Netzanschluss-Grenze ungültig (2 bis 2 000 kW) — DVhub regelt nicht.')
@@ -67,6 +81,8 @@
     set('gridConnectionLoad', v.load);
     set('gridConnectionPhases', v.phases);
     set('gridConnectionSource', v.source || '–');
+    set('gridConnectionBattery', v.battery);
+    set('gridConnectionAssist', v.assist);
     set('gridConnectionState', v.state);
     set('gridConnectionDetail', v.detail);
     const chip = d.getElementById('gridConnectionChip');

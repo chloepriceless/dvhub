@@ -21,6 +21,9 @@ dvhub/control_state.json
 # Peak Shaving: Merker einer aufgehobenen Akku-Sperre (gleiche DV_DATA_DIR-Gefahr).
 peak_shaving_lift.json
 dvhub/peak_shaving_lift.json
+# Netzanschluss: Merker einer angehobenen Entladegrenze (Akku zuerst, Nicht-Victron).
+grid_connection_assist.json
+dvhub/grid_connection_assist.json
 # Netzstrom im Akku: Zählerstand und Protokoll (gleiche DV_DATA_DIR-Gefahr).
 battery_grid_share.json
 battery_grid_share.json.tmp*

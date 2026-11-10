@@ -85,6 +85,29 @@ verweist hierher.
     „kleinste gilt“ je Gerät.
   - Grenze der Physik: Nicht steuerbare Verbraucher wie Herd oder Durchlauferhitzer kann DVhub nicht abschalten. Es
     nimmt alle steuerbaren schnell zurück und meldet, wenn nichts mehr übrig ist.
+- **Netzanschluss: Akku zuerst auch ohne Victron.** Bisher galt der Akku nur bei Victron als Hebel (der Multi deckt
+  über seiner AC-Eingangsgrenze selbst aus dem Akku); andere Anlagen drosselten sofort Wallbox & Co. Jetzt regelt
+  DVhub „Akku zuerst“ selbst, je nachdem, was das Herstellerprofil schreiben kann — nicht nach dem Herstellernamen,
+  eigene Profile zählen genauso:
+  - **Netz-Sollwert** (z. B. Universal MQTT-Bridge, Universal HA/Loxone): dieselbe Sollwert-Decke wie bei Victron —
+    auch „Akku halten“ von EOS wird auf Grenze − Abstand gedeckelt, der Speicher deckt den Rest aus dem Akku.
+  - **Entladegrenze**: Hält sie den Akku fest (z. B. 0 = „Entladung sperren“) oder deckelt sie ihn zu tief, hebt DVhub
+    sie um den Überschuss + 200 W Regelabstand an, höchstens bis zur Entladeleistung des Akkus bzw. der
+    Wechselrichter-Nennleistung, nur mit frischem Ladestand über der Untergrenze (Sicherheit bzw. Mindest-Ladestand
+    im Wechselrichter). Je Phase gerechnet, wenn der Zähler Phasenwerte liefert.
+  - Der Akku bekommt 10 s, um zu folgen; erst dann (oder wenn er leer bzw. an seiner Leistungsgrenze ist) drosselt
+    DVhub die Lasten wie bisher — und nur um den Rest, den der Akku nicht schafft.
+  - Zurück in Stufen: Reicht weniger, sinkt die Entladegrenze nach 30 s mit Rückschalt-Abstand; liegt der Bezug auch
+    ohne Hilfe mit Abstand unter dem Ziel, schreibt DVhub nach 30 s (frühestens 60 s nach dem letzten Anheben) die
+    Entladegrenze davor zurück. Setzt eine andere Quelle (Handeingabe, MQTT) währenddessen eine kleinere
+    Entladegrenze, hält DVhub die Hilfe und schreibt danach diesen jüngsten Wunsch zurück; eine größere gilt sofort.
+  - Zähler gestört: die Hilfe bleibt stehen (kein Anheben, kein Zurücknehmen), außer der Akku ist leer. Ein Merker
+    (`grid_connection_assist.json`) sorgt dafür, dass nach einem Neustart die Entladegrenze davor zurückkommt.
+  - Not-Halt: DVhub nimmt die eigene Anhebung einmal zurück und greift danach nicht mehr ein. Victron unverändert.
+  - Profile ohne Netz-Sollwert und ohne Entladegrenze (Fronius GEN24, Deye LV) zeigen „Akku nicht steuerbar — DVhub
+    drosselt direkt die Lasten“; dort regelt der Wechselrichter seinen Eigenverbrauch selbst.
+  - Leitstand-Kachel „Netzanschluss“: neue Zeilen „Akku“ (Hebel) und „Akku-Hilfe“ (was der Akku gerade zusätzlich
+    abgibt, mit Entladegrenze vorher/jetzt); Zustand „Akku hilft“, solange nur der Akku eingreift.
 - **EOS plant mit der Bezugsgrenze.** Kennt das EOS den Schlüssel `max_grid_import_power_w` am Wechselrichter (unser
   EOS), bekommt es Grenze − Abstand und kürzt selbst. Ist die Grenze in DVhub entfernt, schickt DVhub 1 GW statt null,
   weil ein null per PUT den Wert in EOS nicht zurücksetzt. Vanilla v0.4.0rc3 kennt den Schlüssel nicht. Dort plant EOS

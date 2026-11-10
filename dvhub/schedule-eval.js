@@ -925,7 +925,14 @@ export function createScheduleEvaluator(ctx) {
     // Sonst bliebe der Akku während des Not-Halts auf DVhubs Freigabe stehen.
     const peakShavingRestore = source === 'peak_shaving_restore'
       && target === 'maxDischargeW' && Number(value) === 0;
-    if (state.ctrl.discretionaryWritesPaused && !isMandatoryControlSource(source) && !peakShavingRestore) {
+    // Ebenso der Netzanschluss (Akku zuerst, Nicht-Victron): seine angehobene
+    // Entladegrenze darf er auf den Wert davor SENKEN — nur abwärts, nie auf
+    // „unbegrenzt“, nur unter dem, was gerade steht.
+    const lwDischarge = state.schedule?.lastWrite?.maxDischargeW;
+    const gridConnectionRestore = source === 'grid_connection_restore' && target === 'maxDischargeW'
+      && Number(value) >= 0 && lwDischarge != null && Number(lwDischarge.value) > 0
+      && Number(value) < Number(lwDischarge.value);
+    if (state.ctrl.discretionaryWritesPaused && !isMandatoryControlSource(source) && !peakShavingRestore && !gridConnectionRestore) {
       const blockKey = `${target}|${source}`;
       if (!state.ctrl._stopBlockLogged) state.ctrl._stopBlockLogged = {};
       if (!state.ctrl._stopBlockLogged[blockKey]) {
@@ -1224,6 +1231,31 @@ export function createScheduleEvaluator(ctx) {
       }
     }
     // === end Netzanschluss ===================================================
+
+    // === Netzanschluss: Akku zuerst (Nicht-Victron) ===========================
+    // Hat der Wächter die Entladegrenze angehoben, damit der Akku den Bezug über
+    // der Grenze deckt, hebt er Vorgaben anderer Quellen darunter (Handeingabe,
+    // MQTT, Zeitplan) auf diesen Wert — nur so weit wie für die Grenze nötig.
+    // Der Wunsch wird gemerkt und nach der Spitze zurückgeschrieben; eine
+    // Vorgabe darüber (oder -1 = unbegrenzt) gilt sofort und beendet die Hilfe.
+    if (target === 'maxDischargeW' && !isMandatoryControlSource(source) && !String(source).startsWith('grid_connection')) {
+      const floorW = typeof ctx.gridConnection?.dischargeFloorW === 'function' ? ctx.gridConnection.dischargeFloorW() : null;
+      if (floorW != null) {
+        const gcState = (state.ctrl._gridConnection ??= {});
+        const requested = Number(value);
+        const clamped = requested !== -1 && requested < floorW;
+        gcState.dischargeSeq = (Number(gcState.dischargeSeq) || 0) + 1;
+        gcState.dischargeRequest = { requestedW: requested, source, seq: gcState.dischargeSeq, clamped, at: Date.now() };
+        if (clamped) {
+          pushLog('grid_connection_discharge_floor', {
+            requestedW: requested, valueW: floorW, source,
+            text: `Netzanschluss: Akku zuerst — Entladegrenze bleibt bei ${(floorW / 1000).toFixed(1).replace('.', ',')} kW, bis die Spitze vorbei ist`
+          });
+          value = floorW;
+        }
+      }
+    }
+    // === end Akku zuerst =====================================================
 
     // === T-0075 universal discharge floor (telemetry-freshness + hard SoC floor) ===
     // Chokepoint floor: EVERY discharge-enabling hardware write (optimizer,

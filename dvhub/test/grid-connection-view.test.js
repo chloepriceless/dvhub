@@ -75,3 +75,37 @@ test('Punkt 7: Kachel zeigt die Quelle der Grenze', () => {
   const v2 = load().view({ ...base, limitText: 'DVhub-Einstellung: 29,0 kW', victronReadError: true });
   assert.match(v2.source, /nicht lesbar/);
 });
+
+test('Akku zuerst: Kachel zeigt den Akku-Hebel und die aktuelle Akku-Hilfe', () => {
+  const native = { kind: 'native', setpoint: true, discharge: true, text: 'Akku zuerst über Netz-Sollwert und Entladegrenze' };
+  const v = load().view({ ...base, battery: native, acting: true,
+    assist: { valueW: 3200, baseW: 0, helpW: 3100, since: 1 },
+    text: 'Netzanschluss: Akku hilft mit 3,1 kW (Entladegrenze 3,2 kW statt 0,0 kW)' });
+  assert.equal(v.battery, 'Akku zuerst über Netz-Sollwert und Entladegrenze');
+  assert.equal(v.assist, '3,1 kW (Entladegrenze 3,2 kW statt 0,0 kW)');
+  assert.equal(v.state, 'Akku hilft');
+  assert.equal(v.tone, 'info');
+  // Akku hilft UND eine Wallbox ist gedrosselt: das ist eine Begrenzung.
+  const v2 = load().view({ ...base, battery: native, acting: true, assist: { valueW: 10000, baseW: 0, helpW: 10000 },
+    caps: [{ id: 'wallbox', kind: 'wallbox', capW: 6000 }] });
+  assert.equal(v2.state, 'Begrenzt');
+  // Ohne Hilfe: Strich; früher gestartete Entladegrenze „unbegrenzt“ lesbar.
+  assert.equal(load().view({ ...base, battery: native }).assist, '–');
+  assert.equal(load().view({ ...base, battery: native, assist: { valueW: 4000, baseW: -1, helpW: 0 } }).assist, '0,0 kW (Entladegrenze 4,0 kW statt unbegrenzt)');
+});
+
+test('Akku nicht steuerbar (Fronius, Deye): klar angezeigt', () => {
+  const v = load().view({ ...base, battery: { kind: 'none', setpoint: false, discharge: false, text: 'Akku nicht steuerbar — DVhub drosselt direkt die Lasten' } });
+  assert.match(v.battery, /Akku nicht steuerbar/);
+  assert.equal(v.assist, '–');
+  // Alter Status ohne battery-Feld: kein Absturz.
+  assert.equal(load().view(base).battery, '–');
+});
+
+test('index.html: Zeilen für Akku-Hebel und Akku-Hilfe, Skript-Version erneuert', () => {
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="gridConnectionBattery"/);
+  assert.match(html, /id="gridConnectionAssist"/);
+  const m = html.match(/<script src="\/grid-connection-view\.js\?v=(\d+)/);
+  assert.ok(m && Number(m[1]) >= 20261110, `Cache-Busting erneuert: ${m && m[1]}`);
+});
