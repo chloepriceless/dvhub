@@ -5,7 +5,7 @@ import {
   createParagraph14aService, resolveParagraph14aConfig, parseRelayPayload,
 } from '../services/paragraph14a/index.js';
 
-function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, eebusDevices = [], evcc = null } = {}) {
+function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, eebusDevices = [], evcc = null, evccConnected, clock } = {}) {
   const cfg = {
     gridPositiveMeans: 'grid_import',
     optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, maxChargeW: 10000, ...optimizer },
@@ -14,6 +14,7 @@ function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, 
   };
   const state = { ctrl: {}, victron: { batteryPowerW }, meter: { grid_total_w: gridTotalW } };
   const logs = [];
+  const plug = { connected: evccConnected };
   const subs = new Map();
   const applied = [];
   const ctx = {
@@ -21,14 +22,14 @@ function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, 
     getCfg: () => cfg,
     pushLog: (e, d) => logs.push([e, d]),
     mqttHub: { subscribe: (topic, fn) => subs.set(topic, fn) },
-    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: evcc ?? 0 }] }) },
+    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: evcc ?? 0, connected: plug.connected }] }) },
     eebus: {
       consumptionDevices: () => eebusDevices,
       applyConsumptionShares: (shares, until) => applied.push({ shares, until }),
     },
   };
-  const svc = createParagraph14aService(ctx, { setInterval: () => 0, clearInterval: () => {} });
-  return { svc, state, cfg, logs, subs, applied };
+  const svc = createParagraph14aService(ctx, { setInterval: () => 0, clearInterval: () => {}, ...(clock ? { now: () => clock.t } : {}) });
+  return { svc, state, cfg, logs, subs, applied, eebusDevices, setConnected: (v) => { plug.connected = v; } };
 }
 
 test('Konfiguration: Vorgaben und ungültige Geräte', () => {
@@ -39,6 +40,8 @@ test('Konfiguration: Vorgaben und ungültige Geräte', () => {
   ] } });
   assert.equal(c.devices.length, 1);
   assert.equal(c.allocation, 'priority');
+  assert.equal(c.demandFirst, true, 'nach Bedarf ist Standard, auch für alte Konfigurationen ohne den Schlüssel');
+  assert.equal(resolveParagraph14aConfig({ paragraph14a: { demandFirst: false } }).demandFirst, false);
   assert.equal(c.usePvSurplus, true);
   assert.equal(c.relay.enabled, false, 'ohne Thema kein Relais');
 });
@@ -64,6 +67,7 @@ test('ohne Vorgabe: nichts begrenzt, Mindestleistung trotzdem berechnet', () => 
 
 test('EEBUS-Grenze: Budget nach Vorrang auf Wärmepumpe, Wallbox, Speicher', () => {
   const s = setup({
+    p14a: { demandFirst: false },
     gridTotalW: 1000, // 1 kW Netzbezug (Haus), keine SteuVE aktiv
     eebusDevices: [{ id: 'eebus:hp', kind: 'waermepumpe', maxW: 3000, powerW: 0 }],
   });
@@ -88,7 +92,7 @@ test('PV-Überschuss kommt zum Budget dazu', () => {
 });
 
 test('Relais: gedimmt → Mindestleistung nach Formel, anteilig wenn eingestellt', () => {
-  const s = setup({ p14a: { relay: { enabled: true, topic: 'steuerbox/relais' }, allocation: 'proportional', usePvSurplus: false } });
+  const s = setup({ p14a: { relay: { enabled: true, topic: 'steuerbox/relais' }, allocation: 'proportional', usePvSurplus: false, demandFirst: false } });
   s.svc.update();
   assert.ok(s.subs.has('steuerbox/relais'));
   assert.equal(s.state.p14a.active, false, 'unbekannter Zustand: nicht gedimmt');
@@ -147,7 +151,7 @@ test('Hysterese hebt die Summe der Anteile nie über das Budget', () => {
   // Anteilig 11 000 : 10 000. 7560 W → 3900 / 3600. Sinkt die Grenze auf 7200 W,
   // liegen beide neuen Anteile (3700 / 3400) je 200 W unter den alten — die
   // Hysterese allein würde 3900 + 3600 = 7500 W > 7200 W stehen lassen.
-  const s = setup({ p14a: { allocation: 'proportional', usePvSurplus: false } });
+  const s = setup({ p14a: { allocation: 'proportional', usePvSurplus: false, demandFirst: false } });
   s.state.ctrl.eebusConsumptionLimitW = 7560;
   s.svc.update();
   assert.deepEqual(s.state.p14a.shares, { wallbox: 3900, speicher: 3600 });
@@ -155,4 +159,76 @@ test('Hysterese hebt die Summe der Anteile nie über das Budget', () => {
   s.svc.update();
   const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
   assert.ok(sum <= 7200, `Summe ${sum} W über der Grenze 7200 W`);
+});
+
+// ── Nach Bedarf (pv magazine 09.11.2026): der Praxisfall mit Wärmepumpe und Wallbox ──
+function articleSetup(extra = {}) {
+  const clock = { t: 1_000_000 };
+  const s = setup({
+    clock,
+    evcc: 4200,
+    evccConnected: true,
+    eebusDevices: [{ id: 'eebus:hp', kind: 'waermepumpe', maxW: 5500, powerW: 1500 }],
+    ...extra,
+  });
+  // Haus 1 kW + Wärmepumpe 1,5 kW + Wallbox 4,2 kW aus dem Netz: kein PV-Überschuss
+  s.state.meter.grid_total_w = 1000 + 1500 + 4200;
+  s.state.ctrl.eebusConsumptionLimitW = 7560;
+  return { ...s, clock };
+}
+
+test('nach Bedarf: Wärmepumpe mit 1,5 kW bekommt ihren Bedarf, nicht 5,5 kW — die Wallbox den Rest', () => {
+  const s = articleSetup();
+  s.svc.update();
+  // WP 1500 + 550 Reserve; Wallbox 4200 + 1100; Speicher steht (Reserve 1000) bekommt den Rest
+  assert.deepEqual(s.state.p14a.shares, { 'eebus:hp': 2000, wallbox: 5300, speicher: 200 });
+  assert.equal(s.state.ctrl.p14aWallboxCapW, 5300);
+  assert.equal(s.svc.summary().devices.find((d) => d.id === 'eebus:hp').needW, 2050);
+  const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
+  assert.ok(sum <= 7560);
+});
+
+test('nach Bedarf: steigt der Bedarf der Wärmepumpe, bekommt sie ihren Anteil im nächsten Takt zurück', () => {
+  const s = articleSetup();
+  s.svc.update();
+  // WP läuft an ihrer Grenze (2 kW) → Bedarf 2,55 kW, Vorrang Wärme
+  s.eebusDevices[0].powerW = 2000;
+  s.state.meter.grid_total_w = 1000 + 2000 + 4200;
+  s.clock.t += 5_000;
+  s.svc.update();
+  assert.equal(s.state.p14a.shares['eebus:hp'], 2500);
+  assert.equal(s.state.p14a.shares.wallbox, 5000);
+});
+
+test('nach Bedarf: sinkender Bedarf wird erst nach 60 s weitergegeben (kein Flattern)', () => {
+  const s = articleSetup();
+  s.svc.update();
+  s.eebusDevices[0].powerW = 300; // kurz abgetaut
+  s.state.meter.grid_total_w = 1000 + 300 + 4200;
+  s.clock.t += 5_000;
+  s.svc.update();
+  assert.equal(s.state.p14a.shares['eebus:hp'], 2000, 'Anteil bleibt');
+  s.clock.t += 61_000;
+  s.svc.update();
+  // dann Anlaufreserve 30 % von 5,5 kW = 1650 W
+  assert.equal(s.state.p14a.shares['eebus:hp'], 1600);
+});
+
+test('nach Bedarf: ohne Auto bekommt die Wallbox nichts vorab; steckt eins an, die Anlaufstufe 6 A', () => {
+  const s = articleSetup({ evcc: 0, evccConnected: false, batteryPowerW: 3000 });
+  s.state.meter.grid_total_w = 1000 + 1500 + 3000;
+  s.svc.update();
+  assert.equal(s.state.p14a.shares.wallbox, 0);
+  assert.equal(s.state.p14a.shares.speicher, 4000, 'Speicher lädt 3 kW: Bedarf 4 kW');
+  // Auto steckt an
+  s.clock.t += 5_000;
+  s.setConnected(true);
+  s.svc.update();
+  assert.ok(s.state.p14a.shares.wallbox >= 4100, `Wallbox ${s.state.p14a.shares.wallbox} W`);
+});
+
+test('nach Bedarf: Gerät ohne Messwert bekommt seine volle Leistung zugeteilt (wie bisher)', () => {
+  const s = articleSetup({ eebusDevices: [{ id: 'eebus:hp', kind: 'waermepumpe', maxW: 5500, powerW: null }] });
+  s.svc.update();
+  assert.equal(s.state.p14a.shares['eebus:hp'], 5500);
 });

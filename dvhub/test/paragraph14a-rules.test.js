@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  simultaneityFactor, groupSteuve, computePmin14a, budgetW, allocateBudget,
+  simultaneityFactor, groupSteuve, computePmin14a, budgetW, allocateBudget, demandW,
 } from '../services/paragraph14a/rules.js';
 
 test('Gleichzeitigkeitsfaktor nach Ziffer 4.5.2', () => {
@@ -96,4 +96,88 @@ test('Aufteilung anteilig nach Höchstleistung', () => {
 
 test('Budget reicht für alle: jedes Gerät bis zur Höchstleistung', () => {
   assert.deepEqual(allocateBudget(30000, [{ id: 'wb', kind: 'ladepunkt', maxW: 11000 }]), { wb: 11000 });
+});
+
+// ── Nach Bedarf (pv magazine 09.11.2026, „Beim Dimmen nur starre Leistungsgrenzen“) ──
+// Erst bekommt jedes Gerät, was es gerade braucht, dann geht der Rest weiter.
+
+test('nach Bedarf: Wärmepumpe mit 1,5 kW Last hält nicht 5,5 kW fest — die Wallbox bekommt den Rest', () => {
+  const consumers = [
+    { id: 'wp', kind: 'waermepumpe', maxW: 5500, needW: 2050 },
+    { id: 'wb', kind: 'ladepunkt', maxW: 11000, needW: 6900, atCap: true },
+  ];
+  // Vorrang Wärme: früher WP 5500 / Wallbox 2060
+  assert.deepEqual(allocateBudget(7560, consumers, { demand: true }), { wp: 2050, wb: 5510 });
+});
+
+test('nach Bedarf: bei Knappheit entscheidet der Vorrang über den Bedarf', () => {
+  const consumers = [
+    { id: 'wb', kind: 'ladepunkt', maxW: 11000, needW: 6000 },
+    { id: 'wp', kind: 'waermepumpe', maxW: 5500, needW: 2000 },
+  ];
+  assert.deepEqual(allocateBudget(3000, consumers, { demand: true }), { wp: 2000, wb: 1000 });
+  assert.deepEqual(allocateBudget(3000, consumers, { demand: true, priority: ['ladepunkt', 'waermepumpe'] }), { wb: 3000, wp: 0 });
+});
+
+test('nach Bedarf: der Rest geht zuerst an Geräte, die an ihrer Grenze laufen, dann nach Vorrang bis zur Höchstleistung', () => {
+  const consumers = [
+    { id: 'wp', kind: 'waermepumpe', maxW: 5500, needW: 2000 },
+    { id: 'wb', kind: 'ladepunkt', maxW: 11000, needW: 4000, atCap: true },
+    { id: 'bat', kind: 'speicher', maxW: 10000, needW: 1000 },
+  ];
+  assert.deepEqual(allocateBudget(10000, consumers, { demand: true }), { wp: 2000, wb: 7000, bat: 1000 });
+  // Mehr als die Wallbox nehmen kann: der Rest nach Vorrang, nichts verfällt
+  assert.deepEqual(allocateBudget(20000, consumers, { demand: true }), { wp: 5500, wb: 11000, bat: 3500 });
+});
+
+test('nach Bedarf: ohne Bedarfswert zählt die Höchstleistung (wie bisher)', () => {
+  const consumers = [{ id: 'wp', kind: 'waermepumpe', maxW: 5500 }, { id: 'wb', kind: 'ladepunkt', maxW: 11000, needW: 3000 }];
+  assert.deepEqual(allocateBudget(7560, consumers, { demand: true }), { wp: 5500, wb: 2060 });
+});
+
+test('nach Bedarf anteilig: knapp nach Bedarf, sonst der Rest nach freiem Spielraum', () => {
+  const consumers = [
+    { id: 'wp', kind: 'waermepumpe', maxW: 5500, needW: 2000 },
+    { id: 'wb', kind: 'ladepunkt', maxW: 11000, needW: 6000 },
+  ];
+  assert.deepEqual(allocateBudget(4000, consumers, { mode: 'proportional', demand: true }), { wp: 1000, wb: 3000 });
+  // Bedarf 8000 gedeckt, Rest 2000 nach Spielraum 3500 : 5000
+  assert.deepEqual(allocateBudget(10000, consumers, { mode: 'proportional', demand: true }), { wp: 2823, wb: 7176 });
+});
+
+test('Aufteilung: die Summe liegt in keiner Betriebsart über dem Budget', () => {
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const kinds = ['waermepumpe', 'klima', 'ladepunkt', 'speicher'];
+  for (let i = 0; i < 500; i++) {
+    const n = 1 + Math.floor(rnd() * 5);
+    const consumers = Array.from({ length: n }, (_, k) => {
+      const maxW = 1000 + Math.floor(rnd() * 12000);
+      return { id: `d${k}`, kind: kinds[k % 4], maxW, needW: rnd() < 0.2 ? null : Math.floor(rnd() * maxW), atCap: rnd() < 0.5 };
+    });
+    const budget = Math.floor(rnd() * 30000);
+    for (const opts of [{}, { mode: 'proportional' }, { demand: true }, { mode: 'proportional', demand: true }]) {
+      const out = allocateBudget(budget, consumers, opts);
+      const sum = Object.values(out).reduce((a, w) => a + w, 0);
+      assert.ok(sum <= budget, `Summe ${sum} > Budget ${budget} (${JSON.stringify(opts)})`);
+      for (const c of consumers) assert.ok(out[c.id] >= 0 && out[c.id] <= c.maxW, `${c.id} außerhalb 0…maxW`);
+    }
+  }
+});
+
+test('Bedarf je Gerät: Messwert plus Reserve, Anlaufstufe, ohne Messwert volle Leistung', () => {
+  // Wärmepumpe 5,5 kW zieht 1,5 kW: + Reserve max(500, 10 %) = 550 W
+  assert.equal(demandW({ kind: 'waermepumpe', maxW: 5500, currentW: 1500 }), 2050);
+  // steht still: Anlaufreserve max(1000, 30 %) = 1650 W
+  assert.equal(demandW({ kind: 'waermepumpe', maxW: 5500, currentW: 0 }), 1650);
+  // Wallbox lädt nicht: Anlaufstufe (6 A · 3 Phasen · 230 V) vom Aufrufer
+  assert.equal(demandW({ kind: 'ladepunkt', maxW: 11000, currentW: 0, startW: 4140 }), 4140);
+  // kein Auto: kein Bedarf
+  assert.equal(demandW({ kind: 'ladepunkt', maxW: 11000, currentW: 0, startW: 4140, available: false }), 0);
+  // nie über der Höchstleistung
+  assert.equal(demandW({ kind: 'ladepunkt', maxW: 11000, currentW: 10900 }), 11000);
+  // ohne Messwert: volle Leistung
+  assert.equal(demandW({ kind: 'waermepumpe', maxW: 5500, currentW: null }), 5500);
+  // Speicher ohne Anlaufstufe: nur die Reserve
+  assert.equal(demandW({ kind: 'speicher', maxW: 10000, currentW: 0 }), 1000);
 });

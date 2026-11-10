@@ -20,7 +20,7 @@ import { resolveEvccBridgeConfig } from '../optimizer/eos-evcc-bridge.js';
 import { directWallboxConfigured } from '../wallbox/types.js';
 import { mergeDeviceCaps } from '../import-limit/core.js';
 import {
-  P14A_MIN_W, STEUVE_KINDS, DEFAULT_PRIORITY, computePmin14a, budgetW, allocateBudget,
+  P14A_MIN_W, STEUVE_KINDS, DEFAULT_PRIORITY, computePmin14a, budgetW, allocateBudget, demandW,
 } from './rules.js';
 
 export const PRIORITY_PRESETS = Object.freeze({
@@ -33,6 +33,12 @@ const TICK_MS = 5_000;
 // Kleine Schwankungen des PV-Überschusses nicht an die Geräte weitergeben.
 const SHARE_STEP_W = 100;
 const SHARE_HYSTERESIS_W = 300;
+// Sinkender Bedarf wird erst nach dieser Zeit weitergegeben: eine Wärmepumpe,
+// die kurz abtaut oder taktet, behält ihren Anteil (kein Flattern).
+const DEMAND_HOLD_MS = 60_000;
+// „Läuft an der Grenze“: Messwert höchstens so weit unter dem letzten Anteil.
+const AT_CAP_TOL_MIN_W = 200;
+const AT_CAP_TOL_SHARE = 0.1;
 
 /** Konfiguration mit Vorgaben; ungültige Geräte fallen raus. */
 export function resolveParagraph14aConfig(cfg) {
@@ -51,6 +57,9 @@ export function resolveParagraph14aConfig(cfg) {
     autoDevices: p.autoDevices !== false,
     devices,
     allocation: p.allocation === 'proportional' ? 'proportional' : 'priority',
+    // Zuerst nach aktuellem Bedarf (ab 1.0.10 Standard; ältere Konfigurationen
+    // ohne den Schlüssel bekommen ihn damit automatisch).
+    demandFirst: p.demandFirst !== false,
     priority: PRIORITY_PRESETS[p.priorityPreset] || DEFAULT_PRIORITY,
     priorityPreset: PRIORITY_PRESETS[p.priorityPreset] ? p.priorityPreset : 'heat_first',
     usePvSurplus: p.usePvSurplus !== false,
@@ -92,6 +101,8 @@ export function createParagraph14aService(ctx, deps = {}) {
   let timer = null;
   let lastShares = {};
   let lastActiveKey = null;
+  // Gehaltener Bedarf je Gerät: id → { w, at }
+  const heldNeed = new Map();
 
   const ui = (state.p14a = {
     active: false,
@@ -116,18 +127,23 @@ export function createParagraph14aService(ctx, deps = {}) {
 
   // --- Geräte ------------------------------------------------------------------
 
-  function wallboxPowerW(cfg) {
-    const bc = resolveEvccBridgeConfig(cfg);
+  // Messwert der Wallbox (null = unbekannt) und ob ein Auto steckt (false = sicher keins).
+  function wallboxState(cfg, bc) {
+    const fin = (v) => (v != null && Number.isFinite(Number(v)) ? Math.max(0, Number(v)) : null);
     if (bc.charger === 'evcc') {
       const lp = ctx.evccIntegration?.getStatus?.()?.loadpoints?.[bc.loadpoint - 1];
-      return Number(lp?.chargePowerW) || 0;
+      return { measuredW: fin(lp?.chargePowerW), available: lp?.connected !== false };
     }
-    return Number(ctx.chargerStatus?.fresh?.()?.powerW) || 0;
+    const st = ctx.chargerStatus?.fresh?.();
+    return { measuredW: fin(st?.powerW), available: st?.connected !== false };
   }
 
   /**
    * Alle SteuVE: was DVhub kennt (steuerbar) plus Einträge von Hand.
-   * @returns {Array<{id,name,kind,powerW,control,controllable,currentW,source}>}
+   * currentW: Leistung fürs Budget (unbekannt = 0); measuredW: Messwert für den
+   * Bedarf (null = unbekannt → volle Leistung); startW: Anlaufstufe; available:
+   * false, wenn das Gerät sicher nichts braucht (kein Auto an der Wallbox).
+   * @returns {Array<{id,name,kind,powerW,control,controllable,currentW,measuredW,startW,available,source}>}
    */
   function devices() {
     const c = cfgNow();
@@ -140,17 +156,25 @@ export function createParagraph14aService(ctx, deps = {}) {
       // nicht plant. Über evcc nur, wenn DVhub evcc auch steuert.
       const direct = bc.charger !== 'evcc' && directWallboxConfigured(cfg);
       if (bc.enabled || direct) {
+        const wb = wallboxState(cfg, bc);
         list.push({ id: 'wallbox', name: 'Wallbox', kind: 'ladepunkt', powerW: bc.maxChargeW, control: 'ems',
-          controllable: true, currentW: wallboxPowerW(cfg), source: 'auto' });
+          controllable: true, currentW: wb.measuredW ?? 0, measuredW: wb.measuredW, available: wb.available,
+          // Anlaufstufe: Mindeststrom (6 A) auf allen Phasen
+          startW: Math.round(bc.minCurrentA * bc.phases * bc.voltageV), source: 'auto' });
       }
       const batW = Number(cfg.optimizer?.maxChargeW);
       if (batW > 0) {
+        const bp = state.victron?.batteryPowerW;
+        const measuredW = bp != null && Number.isFinite(Number(bp)) ? Math.max(0, Number(bp)) : null;
         list.push({ id: 'speicher', name: 'Stromspeicher', kind: 'speicher', powerW: batW, control: 'ems',
-          controllable: true, currentW: Math.max(0, Number(state.victron?.batteryPowerW) || 0), source: 'auto' });
+          controllable: true, currentW: measuredW ?? 0, measuredW, startW: 0, available: true, source: 'auto' });
       }
       for (const d of ctx.eebus?.consumptionDevices?.() || []) {
+        const measuredW = d.powerW != null && Number.isFinite(Number(d.powerW)) ? Math.max(0, Number(d.powerW)) : null;
         list.push({ id: d.id, name: d.name || 'EEBUS-Gerät', kind: d.kind, powerW: d.maxW, control: 'ems',
-          controllable: true, currentW: Math.max(0, Number(d.powerW) || 0), source: 'eebus' });
+          controllable: true, currentW: measuredW ?? 0, measuredW,
+          startW: Number.isFinite(Number(d.startW)) && d.startW != null ? Number(d.startW) : null,
+          available: d.available !== false, source: 'eebus' });
       }
     }
     for (const d of c.devices) {
@@ -211,6 +235,29 @@ export function createParagraph14aService(ctx, deps = {}) {
     return out;
   }
 
+  // Bedarf mit Halten: steigt er, gilt er sofort; sinkt er, erst nach DEMAND_HOLD_MS.
+  function heldDemand(id, w) {
+    const t = now();
+    const h = heldNeed.get(id);
+    if (!h || w >= h.w || t - h.at >= DEMAND_HOLD_MS) {
+      heldNeed.set(id, { w, at: t });
+      return w;
+    }
+    return h.w;
+  }
+
+  function consumersFor(controllable, c) {
+    return controllable.map((d) => {
+      const base = { id: d.id, kind: d.kind, maxW: d.powerW };
+      if (!c.demandFirst) return base;
+      const need = heldDemand(d.id, demandW({ kind: d.kind, maxW: d.powerW, currentW: d.measuredW, startW: d.startW, available: d.available }));
+      const prev = lastShares[d.id];
+      const atCap = d.measuredW != null && prev != null && prev > 0
+        && d.measuredW >= prev - Math.max(AT_CAP_TOL_MIN_W, AT_CAP_TOL_SHARE * prev);
+      return { ...base, needW: need, atCap };
+    });
+  }
+
   function update() {
     const c = cfgNow();
     syncRelaySubscription(c);
@@ -227,14 +274,19 @@ export function createParagraph14aService(ctx, deps = {}) {
 
     let budget = null;
     let shares = {};
+    let consumers = [];
     if (active) {
       const controllable = list.filter((d) => d.controllable);
       const steuveW = controllable.reduce((s, d) => s + d.currentW, 0);
       budget = budgetW({ limitW, gridImportW: gridImportPositiveW(state, getCfg()), steuveW, usePvSurplus: c.usePvSurplus });
-      shares = stable(allocateBudget(budget, controllable.map((d) => ({ id: d.id, kind: d.kind, maxW: d.powerW })),
-        { mode: c.allocation, priority: c.priority }), budget);
+      consumers = consumersFor(controllable, c);
+      shares = stable(allocateBudget(budget, consumers,
+        { mode: c.allocation, priority: c.priority, demand: c.demandFirst }), budget);
+    } else {
+      heldNeed.clear();
     }
     lastShares = shares;
+    const needById = Object.fromEntries(consumers.filter((x) => x.needW != null).map((x) => [x.id, x.needW]));
 
     // Der Netzbetreiber muss mindestens Pmin,14a gewähren (Ziffer 4.5). Eine
     // kleinere Vorgabe setzt DVhub trotzdem um (Ziffer 4.6), meldet sie aber.
@@ -258,7 +310,11 @@ export function createParagraph14aService(ctx, deps = {}) {
       n: pmin.n,
       gzf: pmin.gzf,
       formula: pmin.formula,
-      devices: list.map(({ id, name, kind, powerW, control, controllable, source: src }) => ({ id, name, kind, powerW, control, controllable, source: src })),
+      devices: list.map(({ id, name, kind, powerW, control, controllable, measuredW, source: src }) => ({
+        id, name, kind, powerW, control, controllable, source: src,
+        currentW: controllable ? measuredW ?? null : null,
+        needW: needById[id] ?? null,
+      })),
       ignored: pmin.ignored,
       budgetW: budget,
       shares,
@@ -312,6 +368,8 @@ export function createParagraph14aService(ctx, deps = {}) {
       n: ui.n,
       gzf: ui.gzf,
       formula: ui.formula,
+      allocation: cfgNow().allocation,
+      demandFirst: cfgNow().demandFirst,
       budgetW: ui.budgetW,
       shares: { ...ui.shares },
       devices: ui.devices.map((d) => ({ ...d })),

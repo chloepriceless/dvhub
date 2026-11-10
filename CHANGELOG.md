@@ -93,6 +93,17 @@ verweist hierher.
 
 ### Geändert
 
+- **§14a: Aufteilung nach Bedarf statt nach Nennleistung.** Während einer Dimmung bekam jedes Gerät bisher Leistung
+  bis zu seiner Nennleistung (Vorrang) bzw. nach Nennleistung (anteilig). Eine Wärmepumpe mit 5,5 kW Nennleistung, die
+  1,5 kW zog, hielt so 5,5 kW fest, während der Wallbox Leistung fehlte. Jetzt bekommt jedes Gerät zuerst seinen
+  aktuellen Bedarf (Messwert plus Reserve zum Hochfahren: max(500 W, 10 %); Wallbox mindestens die Ladestufe 6 A, ohne
+  Auto nichts; stehende Wärmepumpe/Klima eine Anlaufreserve von max(1 kW, 30 %)), der Rest geht zuerst an Geräte, die
+  an ihrer Grenze laufen, dann nach der eingestellten Reihenfolge bis zur Nennleistung — es verfällt nichts. Steigt
+  der Bedarf, gibt es den Anteil im nächsten Takt (5 s) zurück; sinkender Bedarf zählt erst nach 60 s. Geräte ohne
+  Messwert bekommen wie bisher ihre volle Leistung. Neue Einstellung „Zuerst nach aktuellem Bedarf verteilen“
+  (System → §14a, ab Werk an, auch für bestehende Konfigurationen); Vorrang-Reihenfolgen und „anteilig“ bleiben
+  wählbar. Integrationen → §14a zeigt je Gerät Bedarf und Messwert. Anlass: Praxistest im pv magazine (09.11.2026);
+  die BNetzA (BK6-22-300, Ziffer 4.5.2) lässt die Aufteilung ausdrücklich dem Betreiber.
 - **Hinweis zum VRM-Feld** (Issue #32): Bei mehreren Anlagen im VRM-Konto ist die Site-ID der sichere Weg; mit der
   Portal-ID sucht DVhub die passende Anlage selbst (Integrationen → VRM-Cloud und Einstellungen → Historie-Import).
 - **Kopierter Lizenzzustand bindet nicht mehr von selbst.** Startet eine Box mit dem Lizenzzustand einer anderen Box
@@ -175,6 +186,9 @@ verweist hierher.
 
 ### Behoben
 
+- **§14a: Summe der Anteile nie über der Vorgabe.** Die Glättung (Änderungen unter 300 W werden nicht
+  weitergegeben) konnte die Summe der Geräte-Anteile über die Grenze des Netzbetreibers heben, wenn mehrere Anteile
+  gleichzeitig leicht sanken (z. B. 7500 W bei 7200 W Vorgabe). Jetzt gilt in dem Fall der neue Anteil.
 - **Kanalwechsel nach langem Stromausfall.** Fiel bei einem Kanalwechsel auf einer Paket-Box der Strom nach dem
   Umschalten länger als 90 Minuten aus, setzte DVhub den Kanal zurück, bevor die Box den Auftrag nach dem Neustart
   abschließen konnte. Jetzt gilt ein stiller Auftrag nur vor dem Umschalten als abgebrochen; danach entscheidet die

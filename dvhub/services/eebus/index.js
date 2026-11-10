@@ -8,7 +8,7 @@
 //
 //   Bezugsgrenze (LPC, §14a)  → Akku lädt nicht aus dem Netz (schedule-eval),
 //                               Wallbox und EEBUS-Geräte (Wärmepumpe …) teilen
-//                               sich die Grenze anteilig nach Nennleistung
+//                               sich die Grenze (services/paragraph14a: nach Bedarf, Vorrang oder anteilig)
 //   Einspeisegrenze (LPP)     → Einspeisebegrenzer (feed-in-limit-arbiter,
 //                               Victron 2706); ohne Begrenzer Einspeisesperre
 //   Netzanschlusspunkt (MGCP) → Leistung und Zählerstände an die Steuerbox

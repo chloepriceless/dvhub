@@ -82,9 +82,10 @@
       if (st.belowPmin) html += '<div class="eebus-error">Die Vorgabe liegt unter der Mindestleistung von ' + esc(kw(st.pminW)) + '. DVhub hält sie trotzdem ein (Ziffer 4.6) — beim Netzbetreiber klären.</div>';
       const parts = (st.devices || []).filter(function (d) { return d.controllable; }).map(function (d) {
         const w = st.shares ? st.shares[d.id] : null;
-        return esc(d.name || KINDS[d.kind] || d.kind) + ': ' + (w == null ? '—' : w > 0 ? '≤ ' + esc(kw(w)) : 'gesperrt');
+        const need = d.needW != null ? ' (Bedarf ' + esc(kw(d.needW)) + (d.currentW != null ? ', zieht ' + esc(kw(d.currentW)) : '') + ')' : '';
+        return esc(d.name || KINDS[d.kind] || d.kind) + ': ' + (w == null ? '—' : w > 0 ? '≤ ' + esc(kw(w)) : 'gesperrt') + need;
       });
-      if (parts.length) html += '<div class="eebus-small">Aufteilung: ' + parts.join(' · ') + '</div>';
+      if (parts.length) html += '<div class="eebus-small">Aufteilung' + (st.demandFirst ? ' nach Bedarf' : '') + ': ' + parts.join(' · ') + '</div>';
     } else {
       html += '<div><strong>Bezug:</strong> frei — keine Vorgabe des Netzbetreibers</div>';
     }
