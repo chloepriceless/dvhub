@@ -470,3 +470,18 @@ test('Akku-Hilfe: langsamer Anbieter — bestätigte Freigabe wird nicht endlos 
   await new Promise((r) => setImmediate(r));
   assert.deepEqual(calls.map((c) => c.coverW), [4200, 0], 'eine Freigabe, keine weiteren');
 });
+
+test('Akku-Hilfe: neue Frist bei gleicher Leistung geht nach der laufenden Anfrage raus (Codex 387f85ec)', async () => {
+  const calls = [];
+  const resolvers = [];
+  const assist = { request: (r) => { calls.push(r); return new Promise((res) => resolvers.push(() => res({ ok: true, acceptedW: r.coverW }))); } };
+  const s = articleSetup({ batteryAssist: assist });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.state.ctrl.eebusConsumptionLimitUntil = 1_000;
+  s.svc.update();
+  s.state.ctrl.eebusConsumptionLimitUntil = 2_000; // Steuerbox verlängert
+  s.svc.update();
+  resolvers.shift()();
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(calls.map((c) => [c.coverW, c.untilMs]), [[4200, 1_000], [4200, 2_000]]);
+});

@@ -116,6 +116,7 @@ export function createParagraph14aService(ctx, deps = {}) {
   let assistReply = null;
   let assistInflight = false;
   let assistInflightW = null;
+  let assistInflightUntil = null;
   let assistQueued = null;
 
   const ui = (state.p14a = {
@@ -356,8 +357,8 @@ export function createParagraph14aService(ctx, deps = {}) {
     assistRequestedW = coverW;
     if (coverW === 0 && assistAckedW === 0 && !assistInflight && assistQueued == null) return;
     if (assistInflight) {
-      // Gleicher Wunsch wie die laufende Anfrage: nichts nachschieben.
-      assistQueued = coverW === assistInflightW ? null : { coverW, untilMs };
+      // Gleicher Wunsch (Leistung und Frist) wie die laufende Anfrage: nichts nachschieben.
+      assistQueued = coverW === assistInflightW && untilMs === assistInflightUntil ? null : { coverW, untilMs };
       return;
     }
     sendAssist(coverW, untilMs);
@@ -369,6 +370,7 @@ export function createParagraph14aService(ctx, deps = {}) {
       assistAckedW = r?.ok === true ? coverW : null;
       assistInflight = false;
       assistInflightW = null;
+      assistInflightUntil = null;
       const next = assistQueued;
       assistQueued = null;
       // Über requestAssist: eine bestätigte Freigabe wird nicht wiederholt (Codex 85412691).
@@ -384,6 +386,7 @@ export function createParagraph14aService(ctx, deps = {}) {
     if (res && typeof res.then === 'function') {
       assistInflight = true;
       assistInflightW = coverW;
+      assistInflightUntil = untilMs;
       res.then(done, (e) => done({ ok: false, reason: e?.message || String(e) }));
     } else {
       done(res);
