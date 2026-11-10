@@ -337,6 +337,19 @@ verweist hierher.
 
 ### Behoben
 
+- **E-Auto-Wochenplan: einzelnen Tag am Handy leeren.** Am iPhone öffnet ein Tipp ins Zeitfeld sofort den
+  Zeit-Picker, und Safari schreibt dabei schon die aktuelle Uhrzeit ins leere Feld. „Zurücksetzen“ im Picker leert
+  nur dieses eine Feld: Der Picker bleibt offen und zeigt weiter eine Zeit, und Safari zeigt auch im geleerten Feld
+  eine Schein-Uhrzeit an. Ankunft, Mind. % und Fahrt % bleiben stehen, und eine Ankunft ohne Abfahrt lässt sich nicht
+  speichern. Ein Tag ließ sich so nicht leeren. Jetzt hat jede Tageszeile einen Knopf „✕ Leeren“ (auf Touch und in
+  schmalen Spalten mindestens 44 px), der Ankunft, Abfahrt, Mindest-Ladestand und Fahrt auf „nicht gesetzt“ stellt,
+  ohne dass man ein Feld antippt. Danach steht in der Zeile „kein Termin“, und leere Zeitfelder zeigen keine
+  Schein-Uhrzeit mehr. Dasselbe gibt es fürs Einmal-Ziel und für „Nur nächste Ankunft“, auf der Leitstand-Kachel, im
+  Family-Panel und auf der Integrationsseite. Gespeichert wird der Tag als nicht gesetzt (leere Zeit, `null` %), nicht
+  als 00:00 oder 0 %, und er erzeugt keine Abfahrt. Der Knopf für alle Tage heißt jetzt „Alle Tage leeren“. In
+  schmalen Spalten, etwa auf der Leitstand-Kachel am Desktop, ist die Zeile jetzt zweizeilig (Container-Abfrage).
+  Tests: `dvhub/test/ev-tag-leeren.test.js` sowie Playwright `tests/visual-parity/ev-wochenplan-leeren-{iphone,desktop}.spec.mjs`
+  (WebKit mit iPhone 15 und Chromium).
 - **Geheimnis-Prüfung vor dem Push findet wieder private Schlüssel.** In `scripts/check-secrets.sh` ging das Muster
   `-----BEGIN … PRIVATE KEY-----` ohne `-e` an `git grep` und wurde als Option gelesen; der Fehler wurde verschluckt,
   die Prüfung meldete nie etwas. Jetzt mit `-e`, und ein scheiterndes `git grep` sperrt, statt als „sauber“ zu gelten.

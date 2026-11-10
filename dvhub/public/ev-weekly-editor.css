@@ -1,8 +1,8 @@
 /* ev-weekly-editor.css -- Wochenplan-Editor E-Auto (ev-weekly-editor.js).
    Leitstand-Kachel, Family-Panel und Integrationsseite. Passt bis 320 px. */
-.evw { display:flex; flex-direction:column; gap:4px; }
+.evw { display:flex; flex-direction:column; gap:4px; container-type:inline-size; container-name:evw; }
 .evw-head, .evw-row { display:grid; grid-template-columns:2.4em minmax(0,1fr) minmax(0,1.15fr) minmax(3.4em,4.2em); gap:4px; align-items:center; }
-.evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:2.4em minmax(0,1fr) minmax(0,1.15fr) minmax(3.4em,4.2em) minmax(3.4em,5em); }
+.evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:2.4em minmax(0,1fr) minmax(0,1.15fr) minmax(3.4em,4.2em) minmax(3.4em,5em) auto; }
 .evw-head { font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0; }
 .evw-day { font-family:var(--f-mono); font-size:11px; color:var(--text-2); }
 .evw-row input { width:100%; min-width:0; padding:3px 4px; font-size:12px; box-sizing:border-box; }
@@ -13,19 +13,49 @@
 .evw-tools { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
 .evw-hint { font-size:10.5px; color:var(--text-dim); margin:2px 0 0; line-height:1.35; }
 .evw-head span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-/* Schmal (Telefon) mit Heimweg-Spalte: Ziel und Heimweg in einer zweiten Zeile
-   unter Ankunft/Abfahrt — die Uhrzeiten bleiben lesbar. Kopf bricht gleich um. */
+/* „Leeren“ je Tag (2026-11-10): ohne ins Zeitfeld zu tippen — am iPhone
+   oeffnete das sofort den Picker und setzte eine Zeit. Fingergross (44 px);
+   breit mit feinem Zeiger (Maus) kleiner in der letzten Spalte. */
+.evw .evw-row button.evw-row-clear { min-width:44px; min-height:44px; padding:2px 4px; justify-content:center; flex-direction:column; gap:1px; letter-spacing:0; text-transform:none; color:var(--text-2); border-color:var(--hairline); touch-action:manipulation; }
+.evw-row-clear .evw-x { font-size:13px; line-height:1; }
+.evw-row-clear .evw-row-clear-t { font-size:9px; line-height:1; }
+.evw-row.is-blank .evw-row-clear { opacity:.45; }
+/* Leeres Zeitfeld ohne Fokus: keine Schein-Uhrzeit (WebKit zeigt sonst die
+   aktuelle Zeit, obwohl nichts gesetzt ist). Mit Fokus wieder normal. */
+.evw-row input.is-unset:not(:focus)::-webkit-datetime-edit { opacity:0; }
+@media (pointer: fine) {
+  .evw .evw-row button.evw-row-clear { min-width:0; min-height:26px; flex-direction:row; gap:4px; padding:2px 6px; }
+}
+/* Schmal (Telefon, Leitstand-Spalte): Mind. und Fahrt in einer zweiten Zeile
+   unter Ankunft/Abfahrt — die Uhrzeiten bleiben lesbar; „Leeren“ steht links
+   darunter in voller Fingergroesse. Kopf bricht gleich um. Container-Abfrage
+   (Breite des Editors), @media als Rueckfall fuer alte Browser. */
 @media (max-width: 560px) {
-  .evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:2.4em minmax(0,1fr) minmax(0,1fr); row-gap:3px; }
+  .evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:44px minmax(0,1fr) minmax(0,1fr); row-gap:3px; }
   .evw-with-km .evw-head span:nth-child(4), .evw-with-km .evw-row .evw-min { grid-column:2; }
   .evw-with-km .evw-head span:nth-child(5), .evw-with-km .evw-row .evw-trip { grid-column:3; }
+  .evw-with-km .evw-head .evw-head-x { display:none; }
+  .evw-with-km .evw-row button.evw-row-clear { grid-column:1; grid-row:2; min-width:44px; min-height:44px; flex-direction:column; gap:1px; padding:2px; }
   .evw-with-km .evw-row { padding-bottom:4px; border-bottom:1px solid var(--hairline); }
+  .evw-with-km .evw-res { padding-left:48px; }
+  .evw-with-km .evw-warn { margin-left:48px; }
+}
+@container evw (max-width: 460px) {
+  .evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:44px minmax(0,1fr) minmax(0,1fr); row-gap:3px; }
+  .evw-with-km .evw-head span:nth-child(4), .evw-with-km .evw-row .evw-min { grid-column:2; }
+  .evw-with-km .evw-head span:nth-child(5), .evw-with-km .evw-row .evw-trip { grid-column:3; }
+  .evw-with-km .evw-head .evw-head-x { display:none; }
+  .evw-with-km .evw-row button.evw-row-clear { grid-column:1; grid-row:2; min-width:44px; min-height:44px; flex-direction:column; gap:1px; padding:2px; }
+  .evw-with-km .evw-row { padding-bottom:4px; border-bottom:1px solid var(--hairline); }
+  .evw-with-km .evw-res { padding-left:48px; }
+  .evw-with-km .evw-warn { margin-left:48px; }
 }
 /* Aufgeloeste Abfahrt je Zeile, Hinweis bei frueher Abfahrt ohne Ankunft und
    die Zusammenfassung oben (2026-10-29). Volle Zeilenbreite unter den Feldern. */
 .evw-res, .evw-warn { grid-column:1 / -1; font-size:10.5px; line-height:1.35; }
 .evw-res { color:var(--text-2); font-family:var(--f-mono); padding-left:2.6em; margin-top:-1px; }
 .evw-res.is-warn { color:var(--yellow); }
+.evw-res.is-none { color:var(--text-dim); font-style:italic; }
 .evw-warn { color:var(--yellow); border-left:2px solid var(--yellow); padding:2px 0 2px 6px; margin:1px 0 3px 2.6em; }
 .evw-summary { display:flex; flex-direction:column; gap:2px; font-size:11.5px; line-height:1.4; color:var(--text-2); padding:6px 8px; margin-bottom:4px; border:1px solid var(--hairline); border-radius:6px; }
 .evw-summary.is-preview { border-style:dashed; border-color:var(--yellow); }
@@ -33,3 +63,9 @@
 .evw-sum-line.is-dim { color:var(--text-dim); }
 .evw-sum-line.is-warn { color:var(--yellow); }
 .evw-summary[hidden], .evw-res[hidden], .evw-warn[hidden] { display:none; }
+/* „Leeren“ fuers Einmal-Ziel und „Nur naechste Ankunft“ (data-evw-clear,
+   Kachel und Integrationsseite): Fingergroesse, ohne ins Datumsfeld zu tippen. */
+button.btn.sm.evw-clear-fields { min-height:44px; justify-content:center; align-self:end; letter-spacing:0; text-transform:none; touch-action:manipulation; }
+.evw-clear-wrap { display:flex; align-items:stretch; gap:6px; min-width:0; }
+.evw-clear-wrap > input { flex:1 1 auto; min-width:0; }
+.evw-clear-wrap > .evw-clear-fields { flex:0 0 auto; align-self:stretch; }
