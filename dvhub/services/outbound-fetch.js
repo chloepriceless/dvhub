@@ -24,13 +24,17 @@ import http from 'node:http';
 import https from 'node:https';
 import { Readable, pipeline } from 'node:stream';
 import zlib from 'node:zlib';
-import { outboundLookup } from './host-address.js';
+import net from 'node:net';
+import { classifyHost, outboundLookup, requestHostname } from './host-address.js';
 
 // Obergrenze für text()/json() — schützt vor riesigen Antworten. Wer kleiner
 // begrenzen will, liest body selbst (readJsonCapped: 1 MB).
 const MAX_TEXT_BYTES = 32 * 1024 * 1024;
 // Frist ohne eigenes signal: ganze Anfrage samt Body.
 const DEFAULT_TIMEOUT_MS = 60_000;
+// Erlaubte Arten für Adressen in Ziffern (classifyHost): wie die Prüfung beim
+// Speichern der priceApiUrl bzw. des Kuma-Push (isInternalHost) — nur Internet.
+const IP_LITERAL_KINDS = Object.freeze(['public']);
 
 // Content-Encoding → Entpacker (wie fetch); unbekannt/identity → roh.
 function decoderFor(encoding) {
@@ -52,16 +56,28 @@ function headerGetter(raw) {
 }
 
 /**
- * @param {{ lookup?: Function, timeoutMs?: number }} [opts] lookup: dns.lookup-kompatibel mit
- *   Prüfung (Tests); timeoutMs: Frist, wenn der Aufrufer kein signal mitgibt (0 = keine)
+ * @param {{ lookup?: Function, timeoutMs?: number, ipLiteralKinds?: string[] }} [opts] lookup:
+ *   dns.lookup-kompatibel mit Prüfung (Tests); timeoutMs: Frist, wenn der Aufrufer kein signal
+ *   mitgibt (0 = keine); ipLiteralKinds: erlaubte classifyHost-Arten für Adressen in Ziffern
  * @returns {(input: string|URL, init?: {method?: string, headers?: object, body?: string|Buffer, signal?: AbortSignal}) => Promise<object>}
  */
-export function createOutboundFetch({ lookup = outboundLookup, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export function createOutboundFetch({ lookup = outboundLookup, timeoutMs = DEFAULT_TIMEOUT_MS, ipLiteralKinds = IP_LITERAL_KINDS } = {}) {
   return function fetchChecked(input, init = {}) {
     return new Promise((resolve, reject) => {
       let u;
       try { u = new URL(String(input)); } catch { reject(new TypeError('invalid_url')); return; }
       if (u.protocol !== 'http:' && u.protocol !== 'https:') { reject(new TypeError('unsupported_protocol')); return; }
+      // Adressen in Ziffern (Fable R3, P3-1): Node ruft für sie kein lookup
+      // auf. new URL() hat 2130706433, 127.1 und [::ffff:127.0.0.1] schon in
+      // die übliche Form gebracht; hier gilt dieselbe Regel wie beim Speichern
+      // (isInternalHost — priceApiUrl und Kuma nur ins Internet).
+      const ipHost = requestHostname(u.hostname);
+      if (net.isIP(ipHost) && !ipLiteralKinds.includes(classifyHost(ipHost))) {
+        const e = new Error(`outbound_address_not_allowed: ${u.hostname}`);
+        e.code = 'EOUTBOUNDBLOCKED';
+        reject(e);
+        return;
+      }
       const signal = init.signal || (timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : null);
       if (signal?.aborted) { reject(signal.reason || new Error('aborted')); return; }
       const payload = init.body == null ? null : (Buffer.isBuffer(init.body) ? init.body : Buffer.from(String(init.body), 'utf8'));

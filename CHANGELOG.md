@@ -289,6 +289,12 @@ verweist hierher.
 
 ### Behoben
 
+- **Preis-Abruf und Kuma-Push prüfen Adressen in Ziffern auch beim Verbinden.** Für `epex.priceApiUrl` und den
+  Uptime-Kuma-Push löst DVhub Namen beim Verbinden auf und prüft jede Adresse. Adressen in Ziffern
+  (`127.0.0.1`, `[::ffff:127.0.0.1]`, `2130706433`, `127.1`) prüfte nur das Speichern; eine von Hand geänderte Config
+  verband trotzdem dorthin. Jetzt gilt beim Verbinden dieselbe Regel wie beim Speichern: nur Adressen im Internet.
+  Fable-Prüfung R3, P3-1.
+
 - **Paket-Veröffentlichung: Vorgänger bleibt im Kanal-Index, Index und Signatur gehen gemeinsam hoch.** Scheiterte in
   `scripts/release/publish-release.sh` der Abruf des bisherigen Index aus einem anderen Grund als „gibt es nicht“
   (Netz, Anmeldung), baute das Skript ohne Vorgänger — im stabilen Index hätte nur die neue Version gestanden, der

@@ -218,3 +218,20 @@ test('Preis-Nachimport (history-import.js) und zentrale Marktwerte holen priceAp
   assert.match(mv, /fetchCentralSolarMarketValues\(\{ year, baseUrl: centralBaseUrl, fetchImpl: centralFetchImpl \}\)/);
   assert.match(mv, /centralFetchImpl = outboundFetch/);
 });
+
+// Fable-Prüfung R3, P3-1 (10.11.2026): Für Adressen in Ziffern ruft Node kein
+// lookup auf — 127.0.0.1, [::ffff:127.0.0.1], 2130706433 und 127.1 verbanden.
+// Beim Verbinden gilt für sie jetzt dieselbe Regel wie beim Speichern
+// (isInternalHost: priceApiUrl und Kuma nur ins Internet).
+test('P3-1: Adressen in Ziffern werden beim Verbinden geprüft wie beim Speichern', async () => {
+  const s = await server((_req, res) => res.end('{}'));
+  try {
+    const f = createOutboundFetch({ lookup: allowLocal });
+    for (const host of ['127.0.0.1', '[::ffff:127.0.0.1]', '2130706433', '127.1', '[::1]', '0.0.0.0', '169.254.169.254', '192.168.1.10', '[::ffff:c0a8:10a]', '10.0.0.1']) {
+      await assert.rejects(() => f(`http://${host}:${s.port}/`), (e) => e.code === 'EOUTBOUNDBLOCKED', host);
+    }
+    assert.equal(s.hits.length, 0, 'keine Verbindung');
+    // Öffentliche Adresse in Ziffern: Prüfung lässt sie durch (Verbindung selbst scheitert hier an Port 9).
+    await assert.rejects(() => f('http://192.0.2.1:9/', { signal: AbortSignal.timeout(300) }), (e) => e.code !== 'EOUTBOUNDBLOCKED');
+  } finally { await s.close(); }
+});
