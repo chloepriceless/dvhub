@@ -18,7 +18,9 @@
 //
 // window.DVhubEvWeekly = { render(host, plan, opts), read(host), validate(plan),
 //   rowInfo(entry), summaryLines(info), setSummary(host, info), updateSaved(host, info),
-//   refreshPreview(host) }
+//   refreshPreview(host), legacyCommuteHint(km) }
+// opts.legacyCommuteKm: alter Heimweg (evCommuteKm) — nur ein Hinweis, dass er
+// nicht mehr genutzt wird.
 (function () {
   'use strict';
 
@@ -314,6 +316,19 @@
     }, 350);
   }
 
+  /**
+   * Hinweis auf einen alten Heimweg in km (bis 1.0.9, optimizer.evCommuteKm):
+   * er fliesst seit 10.11.2026 nicht mehr in die Planung ein (Christin: „der
+   * Heimweg ist ja immer anders“). Leer, wenn keiner eingetragen war.
+   */
+  function legacyCommuteHint(km) {
+    if (km === null || km === undefined || String(km).trim() === '') return '';
+    const v = Number(String(km).replace(',', '.'));
+    if (!isFinite(v) || v <= 0) return '';
+    return 'Der alte Heimweg (' + String(Math.round(v * 10) / 10).replace('.', ',') + ' km) wird nicht mehr genutzt: DVhub plant nur mit „Fahrt %“ je Abfahrt. '
+      + 'Trag dort ein, wie viel Ladestand die Fahrt braucht.';
+  }
+
   function render(host, plan, opts) {
     if (!host) return;
     opts = opts || {};
@@ -330,6 +345,7 @@
       + '<button type="button" class="btn sm ghost evw-copy" title="Ankunft, Abfahrt, Mindest-Ladestand und Fahrt vom Montag auf Dienstag bis Freitag übertragen">Montag gleich für Mo–Fr</button>'
       + '<button type="button" class="btn sm ghost evw-clear" title="Alle Tage leeren">Leeren</button>'
       + '</div>'
+      + (legacyCommuteHint(opts.legacyCommuteKm) ? '<p class="evw-hint evw-legacy">' + esc(legacyCommuteHint(opts.legacyCommuteKm)) + '</p>' : '')
       + '<p class="evw-hint">Jede Zeile gehört zum Tag der Ankunft. Liegt die Abfahrt nicht nach der Ankunft, gilt sie am Folgetag (20:00 → 05:00). Ohne Ankunft gilt die Abfahrt am Tag der Zeile. „Mind. %“: so voll ist das Auto bei der Abfahrt immer — leer heißt allgemeiner Wert. „Fahrt %“: so viel Ladestand braucht die Fahrt bis zur nächsten Ankunft; DVhub rechnet damit voraus, damit auch eine spätere Fahrt kurz danach noch reicht.</p>';
     host.querySelectorAll('.evw-row').forEach(markNextDay);
     paintSummary(host);
@@ -415,6 +431,6 @@
 
   window.DVhubEvWeekly = {
     render: render, read: read, validate: validate, keepHidden: keepHidden, isEditing: isEditing, DAYS: DAYS,
-    rowInfo: rowInfo, summaryLines: summaryLines, setSummary: setSummary, updateSaved: updateSaved, refreshPreview: refreshPreview
+    rowInfo: rowInfo, summaryLines: summaryLines, legacyCommuteHint: legacyCommuteHint, setSummary: setSummary, updateSaved: updateSaved, refreshPreview: refreshPreview
   };
 })();

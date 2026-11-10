@@ -7,7 +7,7 @@
 // unbelegte Felder als null mit aus — Akku und Auto teilen dort dasselbe
 // Modell (BatteriesCommonSettings), also steht das Feld auch an battery1.
 //
-// Rechenbasis (von Hand): 60 kWh, 18 kWh/100 km, Heimweg 20 km → 6 % je Weg.
+// Rechenbasis (von Hand): Fahrt 12 % je Abfahrt (tripSocPct) → 6 % je Weg.
 // TeslaMate meldet unterwegs 70 % → erwartet bei Ankunft 64 %.
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,7 +37,9 @@ const floorMin = (ms) => Math.floor(ms / 60_000) * 60_000;
 function planAround(nowMs, arrOffset, depOffset) {
   const arrival = hhmm(nowMs + arrOffset);
   const departure = hhmm(nowMs + depOffset);
-  return [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival, departure }));
+  // Fahrt 12 % je Abfahrt (Hin- und Rückweg, je Strecke 6 %). Der alte
+  // Heimweg (evCommuteKm) zählt seit 10.11.2026 nicht mehr.
+  return [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival, departure, minSocPct: null, tripSocPct: 12 }));
 }
 
 const EOS_CFG = (withChargeStart) => ({

@@ -1,6 +1,7 @@
 // test/ev-wochenplan-soc.test.js -- Wochenplan in SoC-%: Mindest-Ladestand je
 // Abfahrt, Fahrtverbrauch, Einmal-Ziel, Max-Ladestand und die Fahrtenliste für
-// die Vorausschau. Übernahme alter Pläne (Ziel in %/kWh/km, Heimweg in km).
+// die Vorausschau. Übernahme alter Pläne (Ziel in %/kWh/km; der Heimweg in km
+// wird seit 10.11.2026 nicht mehr umgerechnet).
 //
 // Zeiten von Hand gerechnet: Europe/Berlin im Winter UTC+1. Mo 16.11.2026.
 import { describe, test } from 'node:test';
@@ -54,20 +55,14 @@ describe('Wochenplan in SoC-%: Übernahme alter Pläne', () => {
     assert.equal(km[0].minSocPct, 60);
   });
 
-  test('Heimweg (km, zur Ankunft der Zeile) wird Fahrtverbrauch der Abfahrt davor (Hin- und Rückweg)', () => {
-    // Fr-Ankunft 15:00 kommt von der Abfahrt Fr 05:00 (Zeile Do, Folgetag): 50 km × 18 kWh/100 km = 9 kWh = 15 % je Weg.
-    const plan = migrateWeeklyPlanRows(OWNER_LEGACY, OPT);
-    assert.equal(plan[3].tripSocPct, 30);
-    assert.equal(plan[0].tripSocPct, null);
-    assert.equal(plan[4].tripSocPct, null);
-  });
-
-  test('allgemeiner Heimweg gilt für jede Zeile mit Ankunft ohne eigenen', () => {
-    const plan = migrateWeeklyPlanRows(OWNER_LEGACY, { ...OPT, evCommuteKm: 20 });
-    // 20 km = 3,6 kWh = 6 % je Weg → 12 % je Fahrt. Mo-Ankunft kommt von So? Nein: von der Abfahrt Sa 09:00 (Zeile Fr).
-    assert.equal(plan[4].tripSocPct, 12, 'Sa 09:00 → Mo 20:00');
-    assert.equal(plan[0].tripSocPct, 12, 'Di 05:00 → Di 20:00');
-    assert.equal(plan[3].tripSocPct, 30, 'eigener Heimweg der Fr-Zeile gewinnt');
+  test('Heimweg (km) wird nicht in Fahrten umgerechnet — eigener wie allgemeiner (Christin 10.11.2026)', () => {
+    // „Der Heimweg ist ja immer anders“: geplant wird nur mit dem je Abfahrt
+    // eingetragenen Fahrtverbrauch in %. Bis 10.11. wurden 50 km der Fr-Zeile
+    // zu 30 % Fahrt der Abfahrt Fr 05:00, der allgemeine zu 12 %.
+    for (const opt of [OPT, { ...OPT, evCommuteKm: 20 }]) {
+      const plan = migrateWeeklyPlanRows(OWNER_LEGACY, opt);
+      for (const e of plan) assert.equal(e.tripSocPct, null, `Tag ${e.day} (${JSON.stringify(opt.evCommuteKm ?? null)})`);
+    }
   });
 
   test('schon übernommene Zeilen bleiben, wie sie sind', () => {
@@ -87,7 +82,7 @@ describe('Wochenplan in SoC-%: Übernahme alter Pläne', () => {
     const { persistedConfig } = loadConfigFile(p);
     const opt = persistedConfig.optimizer;
     assert.equal(opt.evWeeklyPlan[4].minSocPct, 100);
-    assert.equal(opt.evWeeklyPlan[3].tripSocPct, 30);
+    assert.equal(opt.evWeeklyPlan[3].tripSocPct, null, 'Heimweg wird keine Fahrt');
     assert.ok(!('targetValue' in opt.evWeeklyPlan[4]));
     assert.equal(opt.evMaxSocPct, 80);
     assert.equal(opt.evValueMarginCt, 1);
@@ -140,11 +135,14 @@ describe('Wochenplan in SoC-%: Eingaben', () => {
     assert.deepEqual(off.patch, { evMaxSocPct: null, evDepartureOnceMinSocPct: null });
   });
 
-  test('alte Oberfläche (Ziel/Heimweg je Zeile) wird beim Speichern umgerechnet', () => {
-    const r = parseEvDeparturePatch({ weeklyPlan: OWNER_LEGACY }, 'departure', { opt: OPT });
+  test('alte Oberfläche (Ziel/Heimweg je Zeile) beim Speichern: Ziel umgerechnet, Heimweg nicht', () => {
+    const r = parseEvDeparturePatch({ weeklyPlan: OWNER_LEGACY }, 'departure', { opt: { ...OPT, evCommuteKm: 20 } });
     assert.equal(r.ok, true, r.error);
     assert.equal(r.patch.evWeeklyPlan[4].minSocPct, 100);
-    assert.equal(r.patch.evWeeklyPlan[3].tripSocPct, 30);
+    for (const e of r.patch.evWeeklyPlan) {
+      assert.equal(e.tripSocPct, null, `Tag ${e.day}`);
+      assert.ok(!('commuteKm' in e));
+    }
   });
 });
 

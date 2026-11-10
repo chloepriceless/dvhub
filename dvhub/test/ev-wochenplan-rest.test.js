@@ -6,8 +6,8 @@
 //      evcc-Modus) — der Netzanschluss-Wächter begrenzt weiter den Strom.
 //      Toleranz gegen veraltete evcc-Meldungen: Frist nach dem eigenen Befehl,
 //      nur Abfragen nach dem Befehl, zwei Beobachtungen.
-//   2. Heimweg (evCommuteKm) bei alten Configs ohne Wochenplan (evWeeklyPlan:
-//      null) und bei Zeilen ohne Ankunft — wie bis 1.0.9 abgezogen.
+//   2. (zurückgenommen, Christin 10.11.2026) Der Heimweg fließt nicht mehr
+//      ein — weder allgemein (evCommuteKm) noch je Zeile (commuteKm).
 //   4. Alter Wert `targetValue: []` (Number([]) = 0) gilt als „nicht gesetzt“.
 // (3. Wertstufen vor dem Lauf: test/eos-forecast-bridge.test.js.)
 import { describe, test } from 'node:test';
@@ -259,46 +259,58 @@ describe('Befund 1: evcc schaltet selbst (phasesConfigured 0 = automatisch)', ()
   });
 });
 
-describe('Befund 2: Heimweg bei alten Configs ohne Wochenplan', () => {
+describe('Heimweg fließt nicht mehr ein (Christin 10.11.2026)', () => {
+  // „Der Heimweg ist ja immer anders … woher weiß man, ob man auf dem Heimweg
+  // ist oder noch woanders hinfährt?“ — geplant wird nur mit dem je Abfahrt
+  // eingetragenen Fahrtverbrauch in % (tripSocPct). Alte Heimweg-Werte
+  // (allgemein evCommuteKm, je Zeile commuteKm) werden nicht umgerechnet.
   const OLD = { evDepartureTime: '07:00', evDepartureDays: [1, 2, 3, 4, 5], evCommuteKm: 20, evCapacityWh: 60000, evConsumptionKwhPer100km: 18 };
 
-  test('evWeeklyPlan fehlt/null: jede Abfahrt bekommt Hin- und Rückweg (2 × 20 km = 12 %)', () => {
+  test('evWeeklyPlan fehlt/null: der allgemeine Heimweg wird keine Fahrt', () => {
     for (const evWeeklyPlan of [undefined, null]) {
       const plan = effectiveWeeklyPlan({ ...OLD, evWeeklyPlan });
-      for (const day of [1, 2, 3, 4, 5]) assert.equal(plan[day - 1].tripSocPct, 12, `Tag ${day}`);
-      assert.equal(plan[5].tripSocPct, null);
-      assert.equal(plan[0].minSocPct, null, 'kein eigenes Ziel');
+      for (const day of [1, 2, 3, 4, 5]) {
+        assert.deepEqual(plan[day - 1], { day, arrival: '', departure: '07:00', minSocPct: null, tripSocPct: null }, `Tag ${day}`);
+      }
     }
   });
 
-  test('Ankunftsschätzung wie bis 1.0.9: Wert von vor der Abfahrt minus 2 × Heimweg', () => {
+  test('Ankunftsschätzung: ohne eingetragene Fahrt geht nichts ab (auch nicht der alte Heimweg)', () => {
     // Di 17.11.2026 12:00 Ortszeit: letzte Abfahrt Di 07:00.
     const nowMs = Date.parse('2026-11-17T11:00:00Z');
     const cfg = { schedule: { timezone: 'Europe/Berlin' }, optimizer: { ...OLD, evWeeklyPlan: null, evDepartureEnabled: true, evTargetMode: 'percent', evTargetValue: 80 } };
     const dep = resolveEvDeparture(cfg, nowMs);
-    assert.equal(dep.prevTripSocPct, 12);
+    assert.ok(!dep.prevTripSocPct, `keine Fahrt: ${dep.prevTripSocPct}`);
     const r = estimateArrivalSoc({
       plugged: false, reading: { pct: 70, source: 'evcc', atMs: Date.parse('2026-11-17T05:30:00Z') },
-      tripStartMs: Date.parse(dep.tripStartAt), tripPct: dep.prevTripSocPct,
+      tripStartMs: Date.parse(dep.tripStartAt), tripPct: dep.prevTripSocPct, commuteKm: 20,
       consumptionKwhPer100km: 18, capacityWh: 60000, nowMs,
     });
-    assert.equal(r.pct, 58, '70 − 2 × 6 %');
+    assert.equal(r.pct, 70);
+    assert.equal(r.deductPct, 0);
   });
 
-  test('alte Zeilen ohne Ankunft: allgemeiner bzw. eigener Heimweg geht nicht verloren', () => {
+  test('alte Zeilen mit und ohne Ankunft: weder allgemeiner noch eigener Heimweg wird Fahrt', () => {
     const plan = migrateWeeklyPlanRows([
       { day: 1, arrival: '', departure: '07:00' },
+      { day: 2, arrival: '18:00', departure: '07:00' },
       { day: 3, arrival: '', departure: '07:00', commuteKm: 50 },
+      { day: 5, arrival: '15:00', departure: '09:00', commuteKm: 50 },
     ], { evCommuteKm: 20, evCapacityWh: 60000, evConsumptionKwhPer100km: 18 });
-    // Mo-Zeile: Heimweg (allgemein 20 km) gehört zur Fahrt ab der Abfahrt davor (Mi 07:00).
-    assert.equal(plan[2].tripSocPct, 12);
-    // Mi-Zeile: eigener Heimweg 50 km → Fahrt ab Mo 07:00: 2 × 15 %.
-    assert.equal(plan[0].tripSocPct, 30);
+    for (const e of plan) {
+      assert.equal(e.tripSocPct, null, `Tag ${e.day}`);
+      assert.ok(!('commuteKm' in e), 'altes Feld verschwindet');
+    }
   });
 
   test('ohne Heimweg bleibt es leer', () => {
     const plan = effectiveWeeklyPlan({ evDepartureTime: '07:00', evDepartureDays: [1, 2] });
     assert.deepEqual(plan[0], { day: 1, arrival: '', departure: '07:00', minSocPct: null, tripSocPct: null });
+  });
+
+  test('eingetragene Fahrt (tripSocPct) gilt weiter', () => {
+    const plan = migrateWeeklyPlanRows([{ day: 1, arrival: '18:00', departure: '07:00', minSocPct: null, tripSocPct: 25 }], { evCommuteKm: 20 });
+    assert.equal(plan[0].tripSocPct, 25);
   });
 });
 
@@ -314,9 +326,9 @@ describe('Befund 4: kaputte alte Zahlen gelten als „nicht gesetzt“', () => {
     assert.equal(migrateWeeklyPlanRows([{ day: 1, departure: '07:00', targetValue: '60' }], OPT)[0].minSocPct, 60);
   });
 
-  test('commuteKm [] gilt als „kein eigener Heimweg“ (allgemeiner gilt)', () => {
+  test('commuteKm [] bleibt folgenlos (Heimweg zählt nicht mehr)', () => {
     const plan = migrateWeeklyPlanRows([{ day: 1, arrival: '18:00', departure: '07:00', commuteKm: [] }], { ...OPT, evCommuteKm: 20 });
-    assert.equal(plan[0].tripSocPct, 12);
+    assert.equal(plan[0].tripSocPct, null);
   });
 
   test('Konfig-Übernahme beim Laden: targetValue [] wird nicht 0 %', () => {

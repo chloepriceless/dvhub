@@ -51,11 +51,14 @@ verweist hierher.
   - **Wertstufen frisch zum Lauf:** Vor jedem von DVhub angestoßenen EOS-Lauf gehen nach dem Prognose-Push auch die
     Wertstufen des Autos an EOS — vorher rechnete ein Lauf mit den Stufen des letzten Abgleichs (nach dem Start leer).
   - **Start-Ladestand des Autos an EOS abgerundet** statt gerundet — EOS plant nie mit mehr, als drin ist.
-  - **Übernahme:** Bestehende Wochenpläne werden beim Start einmal umgerechnet — Ziel in kWh/km in %, der Heimweg in km
-    als Fahrt der Abfahrt davor (Hin- und Rückweg). Status unter `GET /api/ev` (`targets`: Mindestziel, Max,
-    Wertstufen; `maxStop`). Der allgemeine Heimweg gilt auch für alte Einstellungen ohne Wochenplan (nur Uhrzeit und
-    Tage) und für Zeilen ohne Ankunft — wie bis 1.0.9. Kaputte alte Werte (z. B. ein leeres Ziel `[]`) gelten als
-    „nicht gesetzt“ statt als Mindest-Ladestand 0 %.
+  - **Übernahme:** Bestehende Wochenpläne werden beim Start einmal umgerechnet — Ziel in kWh/km in %. Status unter
+    `GET /api/ev` (`targets`: Mindestziel, Max, Wertstufen; `maxStop`). Kaputte alte Werte (z. B. ein leeres Ziel `[]`)
+    gelten als „nicht gesetzt“ statt als Mindest-Ladestand 0 %.
+  - **Der Heimweg zählt nicht mehr:** Geplant wird nur mit dem je Abfahrt eingetragenen Verbrauch der Fahrt in %
+    („Fahrt %“). Ein alter Heimweg in km — allgemein oder je Tag — wird weder in Fahrten umgerechnet noch vom
+    erwarteten Ladestand bei Ankunft abgezogen; der Heimweg ist jedes Mal anders, und DVhub weiß nicht, ob das Auto
+    auf dem Heimweg ist oder noch woanders hinfährt. Der Wochenplan-Editor weist auf einen alten allgemeinen Heimweg
+    hin.
 - **§14a: Hausspeicher deckt zuerst (Schnittstelle).** Verlangt der Netzbetreiber eine Reduzierung, berechnet DVhub
   die benötigte Akku-Hilfe (Bedarf der steuerbaren Verbraucher über der Grenze plus Haushalt ohne Speicher) und fordert
   sie über eine schmale Schnittstelle bei der Akku-Steuerung an (`ctx.batteryAssist.request({ source: 'p14a', coverW,

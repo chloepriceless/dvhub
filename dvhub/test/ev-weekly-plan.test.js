@@ -203,13 +203,11 @@ describe('Wochenplan: Eingaben pruefen', () => {
     ] });
     assert.equal(r.ok, true, r.error);
     assert.equal(r.patch.evWeeklyPlan.length, 7);
-    // Alte Felder werden in SoC-% umgerechnet (seit 1.0.10). Ein Heimweg ohne
-    // Ankunft in derselben Zeile zog bis 1.0.9 die Ankunftsschätzung ab (Heimweg
-    // des Fensters dieser Abfahrt) — er gehört zur Fahrt ab der Abfahrt davor,
-    // hier Sa 09:00 (Fr-Zeile): 25 km × 18 kWh/100 km = 4,5 kWh = 9 % je Weg
-    // bei 50 kWh (Restbefund Codex P2, 1.0.10).
+    // Alte Felder werden in SoC-% umgerechnet (seit 1.0.10) — das Ziel, nicht
+    // der Heimweg: der fließt nicht in die Planung ein, auch nicht als Fahrt
+    // (Christin 10.11.2026, „der Heimweg ist ja immer anders“).
     assert.deepEqual(r.patch.evWeeklyPlan[0], { day: 1, arrival: '', departure: '05:00', minSocPct: null, tripSocPct: null });
-    assert.deepEqual(r.patch.evWeeklyPlan[4], { day: 5, arrival: '15:00', departure: '09:00', minSocPct: 100, tripSocPct: 18 });
+    assert.deepEqual(r.patch.evWeeklyPlan[4], { day: 5, arrival: '15:00', departure: '09:00', minSocPct: 100, tripSocPct: null });
     assert.deepEqual(r.patch.evWeeklyPlan[6], { day: 7, arrival: '', departure: '', minSocPct: null, tripSocPct: null });
   });
 

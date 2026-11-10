@@ -7,7 +7,9 @@
  * einmaligen Abweichungen (naechste Fahrt, heute spaeter heim) gehen vor.
  *
  * Wochenplan (optimizer.evWeeklyPlan, 7 Eintraege Mo..So): je Tag optional
- * eine Ankunft (Anstecken), eine Abfahrt und ein eigenes Ziel/Heimweg. Liegt
+ * eine Ankunft (Anstecken), eine Abfahrt, ein eigenes Mindestziel und der
+ * Verbrauch der Fahrt danach in % (seit 1.0.10; ein alter Heimweg in km
+ * zaehlt seit 10.11.2026 nicht mehr). Liegt
  * die Abfahrtszeit nicht nach der Ankunftszeit, ist sie am Folgetag (Ankunft
  * Mo 20:00, Abfahrt 05:00 → Di 05:00). Ohne Ankunft gilt die Abfahrt am Tag
  * selbst (so wie frueher „Mo–Fr 07:00“). Fehlt evWeeklyPlan (alte Config),
@@ -138,9 +140,7 @@ const pctOrNull = (v) => {
   const n = numOrNull(v);
   return n === null || n < 0 || n > 100 ? null : n;
 };
-const round1 = (v) => Math.round(v * 10) / 10;
 const emptyRow = (day) => ({ day, arrival: '', departure: '', minSocPct: null, tripSocPct: null });
-const WEEK_MIN = 7 * 1440;
 
 /**
  * Wochenplan in SoC-% (seit 1.0.10): je Zeile `minSocPct` (Mindest-Ladestand
@@ -150,12 +150,12 @@ const WEEK_MIN = 7 * 1440;
  * Übernahme alter Zeilen (bis 1.0.9: `targetValue` in der Einheit von
  * evTargetMode, `commuteKm` = Heimweg zur Ankunft DIESER Zeile):
  *   - targetValue → minSocPct (kWh/km einmalig über Kapazität und Verbrauch in %);
- *   - Heimweg → tripSocPct der Abfahrt, von der das Auto zu dieser Ankunft
- *     heimkommt (die letzte Abfahrt davor im Wochenlauf), als Hin- und Rückweg
- *     (2 × Heimweg) — genau das, was die alte Ankunftsschätzung abzog. Ohne
- *     eigenen Heimweg gilt der allgemeine (evCommuteKm). Zeilen ohne Ankunft
- *     zogen bis 1.0.9 ebenso ab (Heimweg des Fensters ihrer Abfahrt): ihr
- *     Heimweg gehört zur Fahrt ab der Abfahrt davor.
+ *   - der Heimweg (je Zeile `commuteKm`, allgemein evCommuteKm) wird NICHT in
+ *     Fahrten umgerechnet und fließt nirgends mehr in die Planung ein
+ *     (Christin 10.11.2026: „Der Heimweg ist ja immer anders … woher weiß man,
+ *     ob man auf dem Heimweg ist oder noch woanders hinfährt?“). Geplant wird
+ *     nur mit dem je Abfahrt eingetragenen Fahrtverbrauch (tripSocPct); die
+ *     Oberfläche weist auf einen alten allgemeinen Heimweg hin.
  * Zeilen mit den neuen Feldern bleiben, wie sie sind.
  */
 export function migrateWeeklyPlanRows(list, opt = {}) {
@@ -169,7 +169,7 @@ export function migrateWeeklyPlanRows(list, opt = {}) {
   const mode = TARGET_MODES.includes(opt.evTargetMode) ? opt.evTargetMode : 'percent';
   const capacityWh = Number(opt.evCapacityWh) || 50000;
   const cons = Number(opt.evConsumptionKwhPer100km) || 18;
-  const plan = WEEK_DAYS.map((day) => {
+  return WEEK_DAYS.map((day) => {
     const e = byDay.get(day);
     if (!e) return emptyRow(day);
     const arrival = parseTime(e.arrival) ? pad5(String(e.arrival).trim()) : '';
@@ -178,36 +178,8 @@ export function migrateWeeklyPlanRows(list, opt = {}) {
     if (Object.prototype.hasOwnProperty.call(e, 'minSocPct')) minSocPct = pctOrNull(e.minSocPct);
     else if (numOrNull(e.targetValue) !== null) minSocPct = targetSocPct({ mode, value: e.targetValue, capacityWh, consumptionKwhPer100km: cons });
     else minSocPct = null;
-    const hasTrip = Object.prototype.hasOwnProperty.call(e, 'tripSocPct');
-    return { day, arrival, departure, minSocPct, tripSocPct: hasTrip ? pctOrNull(e.tripSocPct) : null, _legacyTrip: !hasTrip, _src: e };
+    return { day, arrival, departure, minSocPct, tripSocPct: pctOrNull(e.tripSocPct) };
   });
-  // Heimweg (km) der Ankunftszeile → Fahrt der Abfahrt davor.
-  const depMin = (r) => {
-    const d = parseTime(r.departure);
-    if (!d) return null;
-    return ((r.day - 1) * 1440 + d.h * 60 + d.min + (departsNextDay(r) ? 1440 : 0)) % WEEK_MIN;
-  };
-  const deps = plan.map((r) => ({ r, m: depMin(r) })).filter((x) => x.m !== null);
-  const globalKm = Math.max(0, Number(opt.evCommuteKm) || 0);
-  for (const r of plan) {
-    if (!r.departure || !r._legacyTrip) continue;
-    const a = parseTime(r.arrival);
-    const own = numOrNull(r._src.commuteKm);
-    const km = own !== null ? Math.max(0, own) : globalKm;
-    if (!(km > 0) || !deps.length) continue;
-    // Ohne Ankunft: das Auto kommt irgendwann vor der eigenen Abfahrt heim.
-    const arrMin = a ? (r.day - 1) * 1440 + a.h * 60 + a.min : depMin(r);
-    if (arrMin === null) continue;
-    let best = null;
-    for (const x of deps) {
-      const diff = ((arrMin - x.m) % WEEK_MIN + WEEK_MIN) % WEEK_MIN || WEEK_MIN;
-      if (!best || diff < best.diff) best = { diff, row: x.r };
-    }
-    if (!best.row._legacyTrip) continue;
-    const trip = Math.min(100, round1(2 * (km * cons / 100) * 1000 / capacityWh * 100));
-    best.row.tripSocPct = Math.max(best.row.tripSocPct ?? 0, trip);
-  }
-  return plan.map(({ _legacyTrip, _src, ...row }) => row);
 }
 
 /**
@@ -219,10 +191,9 @@ export function effectiveWeeklyPlan(opt = {}) {
   if (Array.isArray(opt.evWeeklyPlan)) return migrateWeeklyPlanRows(opt.evWeeklyPlan, opt);
   const time = parseTime(opt.evDepartureTime ?? '07:00') ? pad5(String(opt.evDepartureTime ?? '07:00').trim()) : '';
   const days = normalizeDays(opt.evDepartureDays ?? [1, 2, 3, 4, 5]);
-  // Wie alte Zeilen übernommen (ohne eigene Ziele/Fahrten): der allgemeine
-  // Heimweg (evCommuteKm) wird so die Fahrt jeder Abfahrt — bis 1.0.9 zog
-  // die Ankunftsschätzung ihn auch ohne Wochenplan ab (Restbefund Codex P2).
-  return migrateWeeklyPlanRows(WEEK_DAYS.map((d) => ({ day: d, arrival: '', departure: time && days.includes(d) ? time : '' })), opt);
+  // Ohne Ziele und Fahrten — der alte Heimweg (evCommuteKm) zählt nicht mehr
+  // (Christin 10.11.2026).
+  return WEEK_DAYS.map((d) => ({ ...emptyRow(d), departure: time && days.includes(d) ? time : '' }));
 }
 
 /**
@@ -505,19 +476,15 @@ function parseIsoOrEmpty(v) {
 
 /**
  * Wochenplan aus einer Eingabe pruefen → 7 Eintraege Mo..So in SoC-%.
- * Zeilen der alten Oberflaeche (Ziel `targetValue`, Heimweg `commuteKm`)
- * werden wie bei der Konfig-Uebernahme umgerechnet (migrateWeeklyPlanRows) —
- * wer sie noch offen hat, verliert nichts.
+ * Zeilen der alten Oberflaeche (Ziel `targetValue`) werden wie bei der
+ * Konfig-Uebernahme umgerechnet (migrateWeeklyPlanRows); ein alter Heimweg
+ * (`commuteKm`) wird geprueft, fliesst aber nicht mehr ein (10.11.2026).
  */
 function parseWeeklyPlan(list, prefix, opt = {}) {
   if (!Array.isArray(list) || list.length > 7) return { ok: false, error: `${prefix}.weeklyPlan must be a list of up to 7 days` };
   const byDay = new Map();
   const rows = [];
   const present = (v) => v !== null && v !== undefined && v !== '';
-  // Plan der alten Oberflaeche: Ziel/Heimweg, aber keine SoC-%-Felder.
-  const isObj = (e) => e && typeof e === 'object';
-  const legacyPlan = list.some((e) => isObj(e) && ('targetValue' in e || 'commuteKm' in e))
-    && !list.some((e) => isObj(e) && ('minSocPct' in e || 'tripSocPct' in e));
   for (let i = 0; i < list.length; i += 1) {
     const e = list[i];
     const p = `${prefix}.weeklyPlan[${i}]`;
@@ -543,10 +510,10 @@ function parseWeeklyPlan(list, prefix, opt = {}) {
     const commuteKm = numOrNull(e.commuteKm);
     if (present(e.commuteKm) && (commuteKm === null || commuteKm < 0 || commuteKm > 1000)) return { ok: false, error: `${p}.commuteKm must be 0..1000 or empty` };
     if (!('minSocPct' in row) && targetValue !== null) row.targetValue = targetValue;
-    if (!('tripSocPct' in row) && commuteKm !== null) row.commuteKm = commuteKm;
+    // Heimweg der alten Oberfläche: geprüft, aber nicht mehr übernommen.
     // Neue Oberflaeche ohne Wert: leer = null (nicht „alte Zeile“).
     if (!('minSocPct' in row) && !('targetValue' in row)) row.minSocPct = null;
-    if (!('tripSocPct' in row) && !('commuteKm' in row) && !legacyPlan) row.tripSocPct = null;
+    if (!('tripSocPct' in row)) row.tripSocPct = null;
     byDay.set(day, row);
     rows.push(row);
   }
@@ -579,7 +546,7 @@ export function parseEvDeparturePatch(d, prefix = 'departure', { opt = {} } = {}
   if ('weeklyPlan' in d) {
     // Umrechnung alter Zeilen mit den Werten, die im selben Aufruf kommen.
     const conv = { ...opt };
-    for (const [k, key] of [['targetMode', 'evTargetMode'], ['capacityWh', 'evCapacityWh'], ['consumptionKwhPer100km', 'evConsumptionKwhPer100km'], ['commuteKm', 'evCommuteKm']]) {
+    for (const [k, key] of [['targetMode', 'evTargetMode'], ['capacityWh', 'evCapacityWh'], ['consumptionKwhPer100km', 'evConsumptionKwhPer100km']]) {
       if (k in d) conv[key] = d[k];
     }
     const wp = parseWeeklyPlan(d.weeklyPlan, prefix, conv);

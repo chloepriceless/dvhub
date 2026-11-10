@@ -10,8 +10,8 @@
  *   2. live vom Fahrzeug — eine Fahrzeug-Quelle (ev-soc.js
  *      VEHICLE_SOC_SOURCES: TeslaMate, evcc-Fahrzeugtreiber, MQTT, HTTP-
  *      Endpunkt, Home Assistant) hat NACH der letzten Abfahrt einen Wert
- *      geliefert, hoechstens EV_LIVE_MAX_AGE_MS alt: davon geht noch einmal
- *      der Heimweg ab;
+ *      geliefert, hoechstens EV_LIVE_MAX_AGE_MS alt: davon geht noch die
+ *      Rueckfahrt ab (die halbe Fahrt);
  *   3. geschaetzt — sonst der letzte bekannte Wert (auch der beim Abstecken
  *      gemerkte Wallbox-Wert, createEvSocMemory) minus Fahrt. Stammt er von
  *      VOR der Abfahrt, geht die ganze Fahrt ab; von danach nur noch die
@@ -23,6 +23,10 @@
  * Position) — abgezogen wird deshalb immer die ganze Rueckfahrt. Das schaetzt
  * eher zu niedrig: EOS plant dann eher etwas mehr Ladung ein, nie zu wenig.
  * Abgerundet, nie aufgerundet (Start-Ladestand fuer EOS).
+ *
+ * Der alte Heimweg in km (evCommuteKm, `commuteKm`) zaehlt seit 10.11.2026
+ * nicht mehr (Christin: „Der Heimweg ist ja immer anders …“) — ohne
+ * eingetragene Fahrt geht nichts ab.
  */
 import { resolveEvDeparture } from './ev-departure.js';
 // Alle Ladestand-Quellen laufen ueber EINEN Aufloeser (ev-soc.js) — markenneutral.
@@ -43,13 +47,6 @@ const toMs = (v) => {
   return Number.isFinite(ms) ? ms : null;
 };
 
-/** Heimweg in Prozent Ladestand. 0, wenn nicht berechenbar. */
-export function commutePct({ km, consumptionKwhPer100km, capacityWh }) {
-  const k = Number(km); const c = Number(consumptionKwhPer100km); const cap = Number(capacityWh);
-  if (!(k > 0) || !(c > 0) || !(cap > 0)) return 0;
-  return (k * c / 100) * 1000 / cap * 100;
-}
-
 /**
  * Reine Rechnung: erwarteter Ladestand bei Ankunft.
  * @returns {{ pct: number|null, source: 'plugged'|'live'|'estimate'|null,
@@ -58,7 +55,7 @@ export function commutePct({ km, consumptionKwhPer100km, capacityWh }) {
  */
 export function estimateArrivalSoc({
   plugged, pluggedSoc = null, reading = null, tripStartMs = null,
-  tripPct = null, commuteKm = 0, consumptionKwhPer100km, capacityWh, nowMs = Date.now()
+  tripPct = null, nowMs = Date.now()
 }) {
   const none = { pct: null, source: null, basePct: null, baseSource: null, baseAt: null, legs: 0, deductPct: 0 };
   if (plugged === true && validPct(pluggedSoc?.pct) !== null) {
@@ -75,10 +72,8 @@ export function estimateArrivalSoc({
   // Fahrzeug-Schnittstelle als unterwegs gemessen.
   const afterTripStart = atMs !== null && (tripStartMs === null ? carApi : atMs >= tripStartMs);
   const legs = afterTripStart ? 1 : 2;
-  // Ganze Fahrt in %: aus dem Plan, sonst (alte Aufrufer) 2 × Heimweg in km.
-  const trip = Number.isFinite(Number(tripPct)) && tripPct !== null
-    ? Math.max(0, Number(tripPct))
-    : 2 * commutePct({ km: Math.max(0, Number(commuteKm) || 0), consumptionKwhPer100km, capacityWh });
+  // Ganze Fahrt in % aus dem Plan; ohne eingetragene Fahrt nichts.
+  const trip = tripPct !== null && tripPct !== undefined && Number.isFinite(Number(tripPct)) ? Math.max(0, Number(tripPct)) : 0;
   const deductPct = Math.round(legs / 2 * trip * 1000) / 1000;
   const pct = Math.max(0, Math.min(100, Math.floor(base - deductPct + 1e-9)));
   const live = carApi && afterTripStart && nowMs - atMs <= EV_LIVE_MAX_AGE_MS;

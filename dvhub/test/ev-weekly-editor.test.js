@@ -52,4 +52,10 @@ describe('Wochenplan-Editor', () => {
     // nur eine einmalige Abfahrt, Wochenplan leer: erlaubt (der Server kennt das)
     assert.equal(W.validate([{ day: 1, arrival: '', departure: '' }], { enabled: true, hasOnce: true }), null);
   });
+
+  it('Hinweis: alter Heimweg wird nicht mehr genutzt (Christin 10.11.2026)', () => {
+    assert.match(W.legacyCommuteHint(20), /Heimweg \(20 km\).*nicht mehr/);
+    assert.match(W.legacyCommuteHint('12.5'), /12,5 km/);
+    for (const v of [0, null, undefined, '', 'x', -3]) assert.equal(W.legacyCommuteHint(v), '', String(v));
+  });
 });

@@ -5245,8 +5245,8 @@ export function createDefaultConfig() {
       evDepartureEnabled: false,
       // Wochenplan (ev-departure.js effectiveWeeklyPlan): 7 Eintraege
       // { day 1..7, arrival 'HH:MM'|'', departure 'HH:MM'|'', minSocPct, tripSocPct }
-      // in SoC-% (seit 1.0.10; aeltere Zeilen mit targetValue/commuteKm
-      // uebernimmt migrateEvWeeklyPlan beim Laden).
+      // in SoC-% (seit 1.0.10; aeltere Zeilen mit targetValue uebernimmt
+      // migrateEvWeeklyPlan beim Laden, ein alter Heimweg commuteKm entfaellt).
       // null = noch nie gespeichert → aus evDepartureTime + evDepartureDays
       // abgeleitet (gleiche Abfahrt an diesen Tagen, keine Ankunft). Die beiden
       // alten Felder bleiben dafuer stehen.
@@ -5269,8 +5269,10 @@ export function createDefaultConfig() {
       evValueMarginCt: 1,
       // Einphasig laden, wenn die Wallbox umschalten kann (eos-evcc-bridge.js).
       evPhaseSwitch: true,
-      // Heimweg in km (ev-arrival.js): so viel faehrt das Auto noch, bevor es
-      // ansteckt; im Wochenplan je Tag ueberschreibbar. 0 = nichts abziehen.
+      // Alter Heimweg in km (bis 1.0.9). Fliesst seit 10.11.2026 nirgends mehr
+      // in die Planung ein (Christin: „der Heimweg ist ja immer anders“) —
+      // geplant wird nur mit tripSocPct je Abfahrt. Bleibt stehen, damit die
+      // Oberflaeche auf einen alten Wert hinweisen kann.
       evCommuteKm: 0,
       evTargetMode: 'percent',
       evTargetValue: 80,
@@ -6162,8 +6164,9 @@ function migrateLegacyPriceApiUrl(raw) {
 }
 
 // E-Auto-Wochenplan in SoC-% (1.0.10): Zeilen mit Ziel in der Einheit von
-// evTargetMode (targetValue) und Heimweg in km (commuteKm) werden einmalig in
-// minSocPct / tripSocPct umgerechnet (ev-departure.js migrateWeeklyPlanRows).
+// evTargetMode (targetValue) werden einmalig in minSocPct umgerechnet
+// (ev-departure.js migrateWeeklyPlanRows); ein alter Heimweg in km (commuteKm)
+// wird keine Fahrt (tripSocPct bleibt leer, Christin 10.11.2026).
 // Gespeichert ist danach nur noch das neue Format.
 // Danach das allgemeine Ziel: in kWh/km einmalig in % (Ziele nie in km,
 // Christin 07.11.2026). Erst die Zeilen — sie brauchen die alte Einheit.

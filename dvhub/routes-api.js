@@ -6016,7 +6016,7 @@ export function createApiRoutes(ctx) {
       const evSoc = resolveEvSocPct(ctx);
       const plugged = resolveEvPlugged(ctx);
       // Erwarteter Ladestand bei Ankunft (ev-arrival.js): angesteckt der echte,
-      // sonst live vom Auto oder geschaetzt — jeweils minus Heimweg.
+      // sonst live vom Auto oder geschaetzt — jeweils minus Fahrt (tripSocPct).
       const arrival = resolveEvArrival(ctx, getCfg(), { plugged, nowMs, departure: resolved });
       let plan = null;
       let planError = null;

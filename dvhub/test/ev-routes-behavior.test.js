@@ -219,10 +219,11 @@ describe('Wochenplan über /api/ev (2026-10-27)', () => {
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const opt = ctx.saved.at(-1).optimizer;
     assert.equal(opt.evWeeklyPlan.length, 7);
-    // Alte Oberfläche (Ziel/Heimweg) → SoC-%: Ziel 100 % als Mindest-Ladestand,
-    // Heimweg 25 km (allgemein) als Fahrt der Abfahrt davor (Hin- und Rückweg).
+    // Alte Oberfläche (Ziel/Heimweg) → SoC-%: Ziel 100 % als Mindest-Ladestand.
+    // Der Heimweg wird keine Fahrt (Christin 10.11.2026) — er bleibt nur als
+    // alter Wert stehen (Hinweis in der Oberfläche).
     assert.equal(opt.evWeeklyPlan[0].minSocPct, null);
-    assert.ok(opt.evWeeklyPlan[0].tripSocPct > 0, 'Fr-15:00-Ankunft kommt von der Abfahrt Di 05:00');
+    assert.ok(opt.evWeeklyPlan.every((e) => e.tripSocPct === null), JSON.stringify(opt.evWeeklyPlan));
     assert.ok(!('targetValue' in opt.evWeeklyPlan[0]) && !('commuteKm' in opt.evWeeklyPlan[0]));
     assert.equal(opt.evWeeklyPlan[4].minSocPct, 100);
     assert.equal(opt.evArrivalOnce, '2026-10-27T20:30:00.000Z');
@@ -243,11 +244,12 @@ describe('Erwarteter Ladestand bei Ankunft über GET /api/ev', () => {
   // Jeden Tag gleich: Ankunft in 2 h, Abfahrt in 10 h (Ortszeit Berlin) —
   // so liegt die letzte Abfahrt immer 14 h zurück und der Test hängt weder vom
   // Wochentag noch von der Uhrzeit ab (Codex-Befund: feste 20:00/05:00 fielen
-  // zwischen 04:50 und 05:01 um). 60 kWh, 18 kWh/100 km, Heimweg 20 km = 6 %.
+  // zwischen 04:50 und 05:01 um). Fahrt 12 % je Abfahrt (Hin- und Rückweg,
+  // je Strecke 6 %); der alte Heimweg (evCommuteKm) zählt nicht mehr.
   const hhmm = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
   const planNow = () => {
     const now = Date.now();
-    return [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival: hhmm(now + 2 * 3600_000), departure: hhmm(now + 10 * 3600_000) }));
+    return [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival: hhmm(now + 2 * 3600_000), departure: hhmm(now + 10 * 3600_000), minSocPct: null, tripSocPct: 12 }));
   };
   const setup = (ctx) => Object.assign(ctx.getRawCfg().optimizer, {
     evDepartureEnabled: true, evWeeklyPlan: planNow(), evCapacityWh: 60000, evConsumptionKwhPer100km: 18, evCommuteKm: 20,

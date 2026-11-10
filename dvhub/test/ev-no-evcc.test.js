@@ -3,7 +3,7 @@
 // genauso funktionieren — mit DVhubs eigener Wallbox-Anbindung, nur MQTT, nur
 // HTTP-Abruf oder nur Home Assistant. In keinem ctx steht evccIntegration.
 //
-// Rechenbasis (von Hand): 60 kWh, 18 kWh/100 km, Heimweg 20 km → 6 % je Weg.
+// Rechenbasis (von Hand): Fahrt 12 % je Abfahrt (tripSocPct) → 6 % je Weg.
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -19,7 +19,8 @@ const HOUR = 3600_000;
 const hhmm = (ms) => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
 const floorMin = (ms) => Math.floor(ms / 60_000) * 60_000;
 // Jeder Tag gleich: Ankunft in 2 h, Abfahrt in 10 h → letzte Abfahrt vor 14 h.
-const planAround = (now) => [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival: hhmm(now + 2 * HOUR), departure: hhmm(now + 10 * HOUR) }));
+// Fahrt 12 % je Abfahrt (je Strecke 6 %); der alte Heimweg zählt nicht mehr.
+const planAround = (now) => [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival: hhmm(now + 2 * HOUR), departure: hhmm(now + 10 * HOUR), minSocPct: null, tripSocPct: 12 }));
 
 let eos = null;
 afterEach(async () => { if (eos) { await eos.close(); eos = null; } });

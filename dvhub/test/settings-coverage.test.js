@@ -103,7 +103,7 @@ const INTENTIONAL = new Map([
   ['optimizer.evDepartureOnce', 'EVCC-Schublade auf der Integrationsseite (E-Auto-Abfahrt)'],
   ['optimizer.evWeeklyPlan', 'Wochenplan-Editor: EVCC-Schublade + Leitstand-Kachel E-Auto (ev-weekly-editor.js)'],
   ['optimizer.evArrivalOnce', 'EVCC-Schublade auf der Integrationsseite (E-Auto: einmalige Ankunft)'],
-  ['optimizer.evCommuteKm', 'EVCC-Schublade + Leitstand-Kachel E-Auto (Heimweg km)'],
+  ['optimizer.evCommuteKm', 'Wochenplan-Editor: nur Hinweis, dass der alte Heimweg (km) nicht mehr genutzt wird (10.11.2026)'],
   ['optimizer.evTargetMode', 'EVCC-Schublade auf der Integrationsseite (E-Auto-Abfahrt)'],
   ['optimizer.evTargetValue', 'EVCC-Schublade auf der Integrationsseite (E-Auto-Abfahrt)'],
   ['optimizer.evMaxSocPct', 'Wochenplan: Leitstand-Kachel E-Auto + EVCC-Schublade („Max-Ladestand, wenn günstig“, 1.0.10)'],

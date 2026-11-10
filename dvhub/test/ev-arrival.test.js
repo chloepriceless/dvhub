@@ -1,29 +1,22 @@
 // test/ev-arrival.test.js -- erwarteter Ladestand des E-Autos bei Ankunft.
 //
-// Rechenbasis aller Faelle (von Hand): Akku 60 kWh, Verbrauch 18 kWh/100 km,
-// Heimweg 20 km → 20 × 18 / 100 = 3,6 kWh = 3,6 / 60 = 6 % je Strecke.
+// Rechenbasis aller Faelle (von Hand): Fahrt 12 % Ladestand (Hin- und
+// Rueckweg, je Strecke 6 %). Seit 10.11.2026 nur aus dem Wochenplan
+// (tripSocPct) — der alte Heimweg in km (commuteKm) zaehlt nicht mehr.
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  estimateArrivalSoc, readEvSocReading, resolveEvArrival, createEvSocMemory, commutePct,
+  estimateArrivalSoc, readEvSocReading, resolveEvArrival, createEvSocMemory,
   EV_LIVE_MAX_AGE_MS
 } from '../services/optimizer/ev-arrival.js';
 
 const at = (s) => Date.parse(s);
 const NOW = at('2026-09-22T16:00:00Z');         // Di 18:00 CEST
 const TRIP_START = at('2026-09-22T03:00:00Z');  // Di 05:00 CEST (Abfahrt aus dem Mo-Eintrag)
-const CAR = { capacityWh: 60000, consumptionKwhPer100km: 18, commuteKm: 20 };
-
-describe('Heimweg in Prozent', () => {
-  test('20 km × 18 kWh/100 km von 60 kWh = 6 %', () => {
-    assert.equal(commutePct({ km: 20, consumptionKwhPer100km: 18, capacityWh: 60000 }), 6);
-    assert.equal(commutePct({ km: 0, consumptionKwhPer100km: 18, capacityWh: 60000 }), 0);
-    assert.equal(commutePct({ km: 20, consumptionKwhPer100km: 0, capacityWh: 60000 }), 0, 'ohne Verbrauch nichts abziehen');
-  });
-});
+const CAR = { capacityWh: 60000, consumptionKwhPer100km: 18, tripPct: 12 };
 
 describe('estimateArrivalSoc', () => {
   test('angesteckt: der echte Ladestand gewinnt immer', () => {
@@ -34,7 +27,7 @@ describe('estimateArrivalSoc', () => {
     assert.equal(r.deductPct, 0);
   });
 
-  test('live vom Auto (unterwegs gemessen): minus einmal Heimweg → 70 − 6 = 64 %', () => {
+  test('live vom Auto (unterwegs gemessen): minus die Rückfahrt → 70 − 6 = 64 %', () => {
     const r = estimateArrivalSoc({ ...CAR, plugged: false,
       reading: { pct: 70, source: 'teslamate', atMs: at('2026-09-22T15:00:00Z') }, tripStartMs: TRIP_START, nowMs: NOW });
     assert.equal(r.pct, 64);
@@ -55,7 +48,7 @@ describe('estimateArrivalSoc', () => {
     assert.equal(r.deductPct, 12, 'ganze Fahrt');
   });
 
-  test('unterwegs gemessen, aber aelter als 12 h: geschaetzt, einmal Heimweg → 64 %', () => {
+  test('unterwegs gemessen, aber aelter als 12 h: geschaetzt, einmal Rückfahrt → 64 %', () => {
     const atMs = NOW - EV_LIVE_MAX_AGE_MS - 60_000;
     const r = estimateArrivalSoc({ ...CAR, plugged: false, reading: { pct: 70, source: 'evccvehicle', atMs }, tripStartMs: atMs - 3600_000, nowMs: NOW });
     assert.equal(r.pct, 64);
@@ -82,9 +75,18 @@ describe('estimateArrivalSoc', () => {
     assert.equal(r.pct, 0);
   });
 
-  test('ohne Heimweg: nichts abziehen', () => {
-    const r = estimateArrivalSoc({ ...CAR, commuteKm: 0, plugged: false, reading: { pct: 70, source: 'teslamate', atMs: NOW - 60_000 }, tripStartMs: TRIP_START, nowMs: NOW });
+  test('ohne Fahrt: nichts abziehen', () => {
+    const r = estimateArrivalSoc({ ...CAR, tripPct: 0, plugged: false, reading: { pct: 70, source: 'teslamate', atMs: NOW - 60_000 }, tripStartMs: TRIP_START, nowMs: NOW });
     assert.equal(r.pct, 70);
+  });
+
+  test('alter Heimweg in km (commuteKm) zieht nichts ab — auch ohne Fahrt (Christin 10.11.2026)', () => {
+    for (const tripPct of [null, undefined]) {
+      const r = estimateArrivalSoc({ capacityWh: 60000, consumptionKwhPer100km: 18, commuteKm: 20, tripPct, plugged: false,
+        reading: { pct: 70, source: 'teslamate', atMs: at('2026-09-22T02:00:00Z') }, tripStartMs: TRIP_START, nowMs: NOW });
+      assert.equal(r.pct, 70, `tripPct ${tripPct}`);
+      assert.equal(r.deductPct, 0);
+    }
   });
 });
 
@@ -147,9 +149,11 @@ describe('resolveEvArrival (Config + Fahrzeug)', () => {
   const cfg = {
     schedule: { timezone: 'Europe/Berlin' },
     optimizer: {
-      evCapacityWh: 60000, evConsumptionKwhPer100km: 18, evCommuteKm: 20, evDepartureEnabled: true,
+      evCapacityWh: 60000, evConsumptionKwhPer100km: 18, evDepartureEnabled: true,
       evTargetMode: 'percent', evTargetValue: 80,
-      evWeeklyPlan: [1, 2, 3, 4].map((day) => ({ day, arrival: '20:00', departure: '05:00' })).concat([{ day: 5, arrival: '15:00', departure: '09:00', commuteKm: 50 }]),
+      // Fahrt 12 % je Abfahrt (Mo–Mi), Do-Abfahrt (Fr 05:00) 30 %.
+      evWeeklyPlan: [1, 2, 3, 4].map((day) => ({ day, arrival: '20:00', departure: '05:00', minSocPct: null, tripSocPct: day === 4 ? 30 : 12 }))
+        .concat([{ day: 5, arrival: '15:00', departure: '09:00', minSocPct: 100, tripSocPct: null }]),
     },
   };
 
@@ -162,12 +166,12 @@ describe('resolveEvArrival (Config + Fahrzeug)', () => {
     assert.equal(r.arrivalAt, '2026-09-22T18:00:00.000Z');
   });
 
-  test('Freitag: eigener Heimweg 50 km = 15 %, Wert von vor der Abfahrt → 90 − 30 = 60 %', () => {
+  test('Freitag: Fahrt der Abfahrt Fr 05:00 30 %, Wert von vor der Abfahrt → 90 − 30 = 60 %', () => {
     // Fr 25.09. 10:00 CEST; Abfahrt Fr 05:00 CEST (= 03:00Z) aus dem Do-Eintrag
     const ctx = ctxWith({ tesla: 90, teslaAt: at('2026-09-25T02:30:00Z') });
     ctx.getCfg = () => cfg;
     const r = resolveEvArrival(ctx, cfg, { plugged: false, nowMs: at('2026-09-25T08:00:00Z') });
-    // Seit 1.0.10: Heimweg 50 km der Fr-Zeile = Fahrt 30 % der Abfahrt Fr 05:00 (Do-Zeile).
+    // Fahrt 30 % der Abfahrt Fr 05:00 (Do-Zeile).
     assert.equal(r.tripPct, 30);
     assert.equal(r.legs, 2);
     assert.equal(r.pct, 60);

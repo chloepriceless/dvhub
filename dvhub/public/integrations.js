@@ -2619,11 +2619,14 @@
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
   var evccDepWeeklyPlan = [];
+  // Alter Heimweg (km): nur noch Hinweis im Editor, dass er nicht mehr zählt.
+  var evccDepLegacyCommuteKm = 0;
   function renderEvccDepWeekly() {
     var host = document.getElementById('evcc-dep-weekly');
     if (!host || !window.DVhubEvWeekly) return;
     window.DVhubEvWeekly.render(host, evccDepWeeklyPlan, {
       defaultMin: (document.getElementById('evcc-dep-value') || {}).value,
+      legacyCommuteKm: evccDepLegacyCommuteKm,
       onChange: function () { evccDepWeeklyPlan = window.DVhubEvWeekly.read(host); },
       // Vorschau beim Bearbeiten (POST /api/ev/preview): dieselben Felder wie beim Speichern.
       previewBody: function () {
@@ -2664,6 +2667,7 @@
     if (el('evcc-dep-once-trip')) el('evcc-dep-once-trip').value = dep.onceTripSocPct != null ? dep.onceTripSocPct : '';
     if (el('evcc-dep-arr-once')) el('evcc-dep-arr-once').value = toLocalInput(dep.arrivalOnce);
     evccDepWeeklyPlan = Array.isArray(dep.weeklyPlan) ? dep.weeklyPlan : [];
+    evccDepLegacyCommuteKm = Number(dep.commuteKm) || 0;
     renderEvccDepWeekly();
     setEvccDepSummary(dep, capacityWh, eos);
     renderEvccDepState(dep);

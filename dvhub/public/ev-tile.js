@@ -439,6 +439,8 @@
     if (window.DVhubEvWeekly) {
       window.DVhubEvWeekly.render(el('evWeeklyGrid'), draft.weeklyPlan, {
         defaultMin: draft.targetValue,
+        // Alter Heimweg (km): nur ein Hinweis, dass er nicht mehr genutzt wird.
+        legacyCommuteKm: ((data && data.departure) || {}).commuteKm,
         onChange: function () { setDirty(true); },
         // Vorschau beim Bearbeiten (POST /api/ev/preview): derselbe Body wie beim Speichern.
         previewBody: function () { return { departure: formDeparture() }; }
