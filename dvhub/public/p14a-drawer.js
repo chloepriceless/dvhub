@@ -82,12 +82,31 @@
       if (st.belowPmin) html += '<div class="eebus-error">Die Vorgabe liegt unter der Mindestleistung von ' + esc(kw(st.pminW)) + '. DVhub hält sie trotzdem ein (Ziffer 4.6) — beim Netzbetreiber klären.</div>';
       const parts = (st.devices || []).filter(function (d) { return d.controllable; }).map(function (d) {
         const w = st.shares ? st.shares[d.id] : null;
-        return esc(d.name || KINDS[d.kind] || d.kind) + ': ' + (w == null ? '—' : w > 0 ? '≤ ' + esc(kw(w)) : 'gesperrt');
+        const need = d.needW != null ? ' (Bedarf ' + esc(kw(d.needW)) + (d.currentW != null ? ', zieht ' + esc(kw(d.currentW)) : '') + ')' : '';
+        return esc(d.name || KINDS[d.kind] || d.kind) + ': ' + (w == null ? '—' : w > 0 ? '≤ ' + esc(kw(w)) : 'gesperrt') + need;
       });
-      if (parts.length) html += '<div class="eebus-small">Aufteilung: ' + parts.join(' · ') + '</div>';
+      if (parts.length) html += '<div class="eebus-small">Aufteilung' + (st.demandFirst ? ' nach Bedarf' : '') + ': ' + parts.join(' · ') + '</div>';
     } else {
       html += '<div><strong>Bezug:</strong> frei — keine Vorgabe des Netzbetreibers</div>';
     }
+    const ba = st.batteryAssist || {};
+    if (st.active && ba.requestedW > 0) {
+      html += '<div class="eebus-small">Akku-Hilfe angefordert: ' + esc(kw(ba.requestedW))
+        + (ba.acceptedW != null ? ' (Speicher sagt ' + esc(kw(ba.acceptedW)) + ' zu)' : '')
+        + ' — gekürzt wird nur, was der Speicher laut Netzbezug nicht deckt</div>';
+    } else if (st.active && ba.neededW > 0 && ba.reason === 'not_halt') {
+      html += '<div class="eebus-small">Not-Halt: keine Akku-Hilfe, nur die Pflicht-Reduzierung</div>';
+    }
+    (st.issues || []).forEach(function (i) {
+      html += '<div class="eebus-error"><strong>§14a-Steuerung gestört:</strong> ' + esc(i.text)
+        + (i.since ? ' (seit ' + esc(new Date(i.since).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })) + ')' : '') + '</div>';
+    });
+    const reserved = st.reserved || {};
+    Object.keys(reserved).forEach(function (id) {
+      const d = (st.devices || []).find(function (x) { return x.id === id; });
+      html += '<div class="eebus-small">' + esc((d && d.name) || 'Gerät') + ' nicht erreichbar: ' + esc(kw(reserved[id]))
+        + ' als belegt gerechnet (eigener Failsafe-Wert des Geräts, sonst Nennleistung)</div>';
+    });
     if (st.relay && st.relay.enabled) {
       const lvl = st.relay.level;
       const dimmed = lvl != null && lvl === st.relay.activeWhen;
@@ -117,7 +136,7 @@
         + '<div class="eebus-small">'
         + (d.source === 'manual' ? 'von Hand' : d.source === 'eebus' ? 'EEBUS' : 'automatisch')
         + (d.control === 'direct' ? ' · Direktsteuerung (eigene Mindestleistung, nicht in der EMS-Formel)' : '')
-        + (d.controllable ? ' · von DVhub gesteuert' : ' · nicht von DVhub gesteuert')
+        + (d.unreachable ? ' · <span class="eebus-error">nicht erreichbar</span>' : d.controllable ? ' · von DVhub gesteuert' : ' · nicht von DVhub gesteuert')
         + (ignored ? ' · ' + esc(IGNORED[ignored.reason] || ignored.reason) : '')
         + '</div>'
         + (d.source === 'manual' ? '<button type="button" class="btn sm ghost" data-p14a-remove="' + esc(d.id) + '">Entfernen</button>' : '')

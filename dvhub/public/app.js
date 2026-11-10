@@ -2319,6 +2319,7 @@ function renderDashboardStatus(status) {
     else if (eb?.status === 'not_installed') chip = ['warn', 'nicht installiert'];
     else if (eb && eb.status !== 'running') chip = ['warn', 'startet'];
     else if (failsafe) chip = ['danger', 'Failsafe'];
+    else if (eb?.issues?.length) chip = ['danger', '§14a gestört'];
     else if (p?.active) chip = ['warn', p.source === 'relay' ? 'Relais: gedimmt' : 'begrenzt'];
     else if (eb?.grid) chip = eb.grid.connected ? ['ok', 'verbunden'] : ['warn', 'getrennt'];
     else if (relayOn) chip = p.relay.level == null ? ['warn', 'Relais unbekannt'] : ['ok', 'Relais frei'];
@@ -2381,7 +2382,18 @@ function renderDashboardStatus(status) {
 
     const devRow = document.getElementById('eebusDevicesRow');
     if (devRow) devRow.hidden = !(eb?.devices?.total > 0);
-    if (eb?.devices?.total > 0) setText('eebusDevices', `${eb.devices.connected} von ${eb.devices.total} verbunden`);
+    if (eb?.devices?.total > 0) {
+      const all = eb.devices.connected === eb.devices.total;
+      setText('eebusDevices', `${eb.devices.connected} von ${eb.devices.total} verbunden`, all ? '' : 'warn');
+    }
+    // Störung der §14a-Gerätesteuerung (Gerät nicht erreichbar, Vorgabe nicht
+    // umgesetzt oder abgelehnt): deutlich, mit Zeitpunkt — nicht nur im Protokoll.
+    const issues = eb?.issues || [];
+    const issueRow = document.getElementById('p14aIssuesRow');
+    if (issueRow) issueRow.hidden = !issues.length;
+    if (issues.length) {
+      setText('p14aIssues', issues.map((i) => `${i.text} (seit ${fmtHm(i.since)})`).join(' · '), 'danger');
+    }
   });
 
   safeRender('dashboard.meter-flow', () => {

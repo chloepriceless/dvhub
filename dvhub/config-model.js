@@ -755,7 +755,17 @@ function buildFieldDefinitions() {
         { value: 'priority', label: 'Nach Vorrang' },
         { value: 'proportional', label: 'Anteilig nach Leistung' }
       ],
-      help: 'Nach Vorrang: Geräte bekommen in der Reihenfolge unten ihre volle Leistung, bis die Grenze erreicht ist. Anteilig: jedes Gerät nach seiner Leistung (Ziffer 4.5.2 Satz 6: nach eigener Maßgabe).'
+      help: 'Nach Vorrang: Geräte bekommen in der Reihenfolge unten Leistung, bis die Grenze erreicht ist. Anteilig: jedes Gerät nach seiner Leistung. Die Aufteilung legst du als Betreiber fest (Ziffer 4.5.2 Satz 6: nach eigener Maßgabe).'
+    },
+    {
+      section: 'system',
+      group: 'paragraph14a',
+      groupLabel: '§14a – Steuerbare Verbrauchseinrichtungen',
+      groupDescription: 'Netzorientierte Steuerung nach § 14a EnWG (Steuerung mittels EMS): DVhub teilt die Vorgabe des Netzbetreibers auf Wärmepumpe, Wallbox und Stromspeicher auf. Geräteliste und Mindestleistung: Integrationen → §14a.',
+      path: 'paragraph14a.demandFirst',
+      label: 'Zuerst nach aktuellem Bedarf verteilen',
+      type: 'boolean',
+      help: 'Jedes Gerät bekommt zuerst, was es gerade braucht: gemessene Leistung plus Reserve zum Hochfahren (bei der Wallbox mindestens die Ladestufe 6 A, bei einer stehenden Wärmepumpe eine Anlaufreserve). Den Rest verteilt DVhub nach der Einstellung oben — zuerst an Geräte, die an ihrer Grenze laufen. So hält eine Wärmepumpe, die 1,5 kW zieht, nicht ihre volle Nennleistung fest, während der Wallbox Leistung fehlt. Steigt der Bedarf eines Geräts, bekommt es seinen Anteil im nächsten Takt (5 s) zurück; sinkender Bedarf zählt erst nach 60 s. Geräte ohne Messwert bekommen wie bisher ihre volle Leistung. Aus: Aufteilung nur nach Nennleistung.'
     },
     {
       section: 'system',
@@ -782,6 +792,16 @@ function buildFieldDefinitions() {
       label: 'PV-Überschuss zusätzlich nutzen',
       type: 'boolean',
       help: 'Begrenzt ist nur der netzwirksame Bezug (Ziffer 2.3). Mit PV-Überschuss dürfen die Geräte zusätzlich zur Grenze laufen, solange der Strom nicht aus dem Netz kommt.'
+    },
+    {
+      section: 'system',
+      group: 'paragraph14a',
+      groupLabel: '§14a – Steuerbare Verbrauchseinrichtungen',
+      groupDescription: 'Netzorientierte Steuerung nach § 14a EnWG (Steuerung mittels EMS): DVhub teilt die Vorgabe des Netzbetreibers auf Wärmepumpe, Wallbox und Stromspeicher auf. Geräteliste und Mindestleistung: Integrationen → §14a.',
+      path: 'paragraph14a.batteryAssist',
+      label: 'Hausspeicher deckt zuerst (Akku-Hilfe)',
+      type: 'boolean',
+      help: 'Verlangt der Netzbetreiber eine Reduzierung, fordert DVhub zuerst beim Hausspeicher an, die Last von Wärmepumpe, Wallbox & Co. zu decken — begrenzt ist der Netzbezug am Anschlusspunkt. Gekürzt wird nur, was der Speicher laut gemessenem Netzbezug nicht schafft. Solange er hilft, lädt er nicht aus dem Netz. Im Not-Halt keine Akku-Hilfe. Wirkt, sobald die Akku-Steuerung die Anforderung umsetzt; braucht „PV-Überschuss zusätzlich nutzen“.'
     },
     {
       section: 'system',
@@ -4702,6 +4722,8 @@ export function createDefaultConfig() {
       autoDevices: true,
       devices: [],
       allocation: 'priority',
+      demandFirst: true,
+      batteryAssist: true,
       priorityPreset: 'heat_first',
       usePvSurplus: true,
       relay: { enabled: false, topic: '', activeWhen: 'high' },

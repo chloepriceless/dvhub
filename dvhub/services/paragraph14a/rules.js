@@ -135,6 +135,44 @@ export function budgetW({ limitW, gridImportW, steuveW, usePvSurplus = true }) {
   return limit + Math.max(0, -baseW);
 }
 
+// --- Bedarf ---------------------------------------------------------------------
+//
+// Die Vorgabe des Netzbetreibers darf der Betreiber über das EMS „nach eigener
+// Maßgabe“ aufteilen (Ziffer 4.5.2 Satz 6; BNetzA BK6 am 02.11.2026: „Dabei legt
+// der Betreiber fest, in welcher Reihenfolge die verfügbare Bezugsleistung auf
+// seine Geräte aufgeteilt wird.“). Nach Bedarf heißt: jedes Gerät bekommt zuerst,
+// was es gerade braucht, der Rest geht an Geräte, die mehr nutzen können.
+
+/** Reserve zum Hochfahren über der gemessenen Leistung: max(500 W, 10 % der Höchstleistung). */
+export const DEMAND_RAMP_MIN_W = 500;
+export const DEMAND_RAMP_SHARE = 0.1;
+/** Anlaufreserve stehender Wärmepumpen/Klimaanlagen: max(1 kW, 30 % der Höchstleistung). */
+export const DEMAND_START_MIN_W = 1000;
+export const DEMAND_START_SHARE = 0.3;
+
+/**
+ * Aktueller Bedarf eines Geräts (W, höchstens seine Höchstleistung):
+ *   gemessene Leistung + Reserve zum Hochfahren, mindestens die Anlaufstufe
+ *   (Wallbox: Mindeststrom, vom Aufrufer als startW; Wärmepumpe/Klima ohne
+ *   eigene Angabe: Anlaufreserve; Speicher: keine).
+ * Ohne Messwert ist der Bedarf unbekannt → volle Höchstleistung (wie bisher).
+ * available === false (z. B. kein Auto an der Wallbox) → kein Bedarf.
+ *
+ * @param {{kind:string, maxW:number, currentW:number|null, startW?:number|null, available?:boolean}} d
+ */
+export function demandW({ kind, maxW, currentW, startW = null, available = true }) {
+  const max = Math.max(0, Number(maxW) || 0);
+  if (available === false) return 0;
+  if (currentW == null || !Number.isFinite(Number(currentW))) return max;
+  const cur = Math.max(0, Number(currentW));
+  const ramp = Math.max(DEMAND_RAMP_MIN_W, DEMAND_RAMP_SHARE * max);
+  let start = Number.isFinite(Number(startW)) && startW != null ? Math.max(0, Number(startW)) : 0;
+  if (startW == null && (kind === 'waermepumpe' || kind === 'klima')) {
+    start = Math.max(DEMAND_START_MIN_W, DEMAND_START_SHARE * max);
+  }
+  return Math.round(Math.min(max, Math.max(cur + ramp, start)));
+}
+
 /**
  * Teilt das Budget auf die steuerbaren Geräte auf (Ziffer 4.5.2 Satz 6: nach
  * eigener Maßgabe des Betreibers).
@@ -143,12 +181,19 @@ export function budgetW({ limitW, gridImportW, steuveW, usePvSurplus = true }) {
  *                    seiner Höchstleistung, bis das Budget verbraucht ist.
  *  - 'proportional': anteilig nach Höchstleistung.
  *
+ * Mit demand: true zuerst nach Bedarf (needW, ohne Angabe = Höchstleistung):
+ *   1. jedes Gerät bis zu seinem Bedarf — nach Vorrang bzw. anteilig zum Bedarf,
+ *   2. der Rest an Geräte, die an ihrer Grenze laufen (atCap), bis zur
+ *      Höchstleistung — nach Vorrang bzw. anteilig zum freien Spielraum,
+ *   3. was dann noch übrig ist, an alle übrigen bis zur Höchstleistung.
+ * Es verfällt also nichts, und die Summe bleibt immer im Budget.
+ *
  * @param {number} budget
- * @param {Array<{id:string,kind:string,maxW:number}>} consumers
- * @param {{mode?:'priority'|'proportional', priority?:string[]}} [opts]
+ * @param {Array<{id:string,kind:string,maxW:number,needW?:number|null,atCap?:boolean}>} consumers
+ * @param {{mode?:'priority'|'proportional', priority?:string[], demand?:boolean}} [opts]
  * @returns {Record<string, number>} Watt je Gerät (abgerundet)
  */
-export function allocateBudget(budget, consumers, { mode = 'priority', priority = DEFAULT_PRIORITY } = {}) {
+export function allocateBudget(budget, consumers, { mode = 'priority', priority = DEFAULT_PRIORITY, demand = false } = {}) {
   const list = (consumers || []).filter((c) => c && Number(c.maxW) > 0);
   const out = {};
   const total = list.reduce((s, c) => s + Number(c.maxW), 0);
@@ -157,20 +202,43 @@ export function allocateBudget(budget, consumers, { mode = 'priority', priority 
     for (const c of list) out[c.id] = Math.floor(Number(c.maxW));
     return out;
   }
-  if (mode === 'proportional') {
-    for (const c of list) out[c.id] = Math.floor((budget * Number(c.maxW)) / total);
-    return out;
-  }
+  const prio = priority || DEFAULT_PRIORITY;
   const rank = (kind) => {
-    const i = (priority || DEFAULT_PRIORITY).indexOf(kind);
-    return i < 0 ? priority.length : i;
+    const i = prio.indexOf(kind);
+    return i < 0 ? prio.length : i;
   };
   const ordered = [...list].sort((a, b) => rank(a.kind) - rank(b.kind));
+  const maxOf = (c) => Number(c.maxW);
+  const got = Object.fromEntries(list.map((c) => [c.id, 0]));
   let rest = budget;
-  for (const c of ordered) {
-    const w = Math.max(0, Math.min(Number(c.maxW), rest));
-    out[c.id] = Math.floor(w);
-    rest -= w;
+
+  // Füllt die Geräte bis zur Obergrenze cap(c): nach Vorrang oder anteilig zum
+  // jeweils freien Spielraum (anteilig: rest·h/Σh ≤ h, solange rest < Σh).
+  const fill = (items, cap) => {
+    if (!(rest > 0) || !items.length) return;
+    if (mode === 'proportional') {
+      const room = items.map((c) => Math.max(0, cap(c) - got[c.id]));
+      const sum = room.reduce((a, h) => a + h, 0);
+      if (!(sum > 0)) return;
+      const f = Math.min(1, rest / sum);
+      let used = 0;
+      items.forEach((c, i) => { const w = room[i] * f; got[c.id] += w; used += w; });
+      rest -= used;
+      return;
+    }
+    for (const c of items) {
+      const w = Math.max(0, Math.min(cap(c) - got[c.id], rest));
+      got[c.id] += w;
+      rest -= w;
+    }
+  };
+
+  if (demand) {
+    const need = (c) => Math.min(maxOf(c), c.needW == null || !Number.isFinite(Number(c.needW)) ? maxOf(c) : Math.max(0, Number(c.needW)));
+    fill(ordered, need);
+    fill(ordered.filter((c) => c.atCap === true), maxOf);
   }
+  fill(ordered, maxOf);
+  for (const c of list) out[c.id] = Math.max(0, Math.floor(got[c.id]));
   return out;
 }

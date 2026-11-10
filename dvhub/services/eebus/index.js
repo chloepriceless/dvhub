@@ -8,7 +8,7 @@
 //
 //   Bezugsgrenze (LPC, §14a)  → Akku lädt nicht aus dem Netz (schedule-eval),
 //                               Wallbox und EEBUS-Geräte (Wärmepumpe …) teilen
-//                               sich die Grenze anteilig nach Nennleistung
+//                               sich die Grenze (services/paragraph14a: nach Bedarf, Vorrang oder anteilig)
 //   Einspeisegrenze (LPP)     → Einspeisebegrenzer (feed-in-limit-arbiter,
 //                               Victron 2706); ohne Begrenzer Einspeisesperre
 //   Netzanschlusspunkt (MGCP) → Leistung und Zählerstände an die Steuerbox
@@ -25,6 +25,7 @@ import { spawn as nodeSpawn, execFile as nodeExecFile } from 'node:child_process
 
 import { createLimitStateMachine } from './limit-state.js';
 import { readApplianceId } from '../support-tunnel.js';
+import { isReadOnlyMode, noteBlockedWrite } from '../../read-only-guard.js';
 
 export const EEBUS_DEFAULT_PORT = 4712;
 const RESTART_DELAYS_MS = [5_000, 10_000, 30_000, 60_000];
@@ -33,6 +34,25 @@ const PAIRING_WINDOW_MS = 10 * 60_000;
 const GCP_INTERVAL_MS = 5_000;
 const DEVICE_LIMIT_REFRESH_MS = 5 * 60_000;
 const STDERR_KEEP = 40;
+// Anlaufstufe einer EEBUS-Wallbox ohne Angabe des Autos: 6 A auf drei Phasen.
+const EV_START_W = 6 * 3 * 230;
+// §14a-Gerätesteuerung überwachen (pv magazine 09.11.2026): Störungen erst nach
+// dieser Zeit melden (kurze Aussetzer, Gerät braucht Zeit zum Umsetzen) …
+const ISSUE_GRACE_MS = 60_000;
+// … und eine abweichende Rückmeldung des Geräts frühestens so oft neu schreiben.
+const RESEND_MS = 60_000;
+// Vom Hilfsprozess abgelehnte Vorgabe (z. B. „write failed“ direkt nach der
+// Anmeldung, solange die Grenzbeschreibung des Geräts noch nicht gelesen ist):
+// nach dieser Zeit erneut schreiben.
+const RETRY_MS = 10_000;
+const OVER_LIMIT_TOL_MIN_W = 300;
+const OVER_LIMIT_TOL_SHARE = 0.1;
+const ISSUE_TEXT = {
+  unreachable: 'nicht erreichbar — die §14a-Steuerung wirkt nicht, das Gerät fällt auf seinen eigenen Failsafe-Wert zurück',
+  not_applied: 'setzt die Vorgabe nicht um (meldet eine andere Grenze)',
+  over_limit: 'zieht mehr als die Vorgabe',
+  rejected: 'hat die Vorgabe abgelehnt',
+};
 // Gerätetypen von Steuerboxen/Gateways (u. a. EEBUS-Handwerkertool: „GCPH“).
 const GRID_ROLE_HINT = /(control|guard|gateway|grid|smgw|steuer|gcph|connectionhub)/i;
 
@@ -178,6 +198,14 @@ export function createEebusService(ctx, deps = {}) {
   let lastSharesUntilById = null;
   let lastConfigKey = null;
   let prevConsumptionW = null;
+  // §14a-Gerätesteuerung: Geräte mit LPC, die DVhub kennt (ski → { entity,
+  // lostAt, last: {name, kind, maxW} }), letzte Vorgabe je Entität, Zuordnung
+  // Befehls-id → Entität (für write_result), offene Störungen.
+  const lpcKnown = new Map();
+  const deviceWrites = new Map(); // entity → { w, active, durationS, at, rejected, resentAt }
+  const writeIds = new Map();     // id → entity
+  const issues = new Map();       // `${ski}:${code}` → { ski, code, since, logged }
+  const overSince = new Map();    // entity → Zeitpunkt, seit dem das Gerät über der Vorgabe liegt
   const energy = loadJson('energy.json') || { importWh: 0, exportWh: 0, lastDailyImportWh: null, lastDailyExportWh: null };
   let lastEnergySave = 0;
 
@@ -262,9 +290,10 @@ export function createEebusService(ctx, deps = {}) {
     });
   }
 
-  function send(cmd) {
+  function send(cmd, onId = null) {
     if (!child || !child.stdin?.writable) return Promise.resolve({ ok: false, error: 'eebus not running' });
     const id = ++reqId;
+    if (onId) onId(id);
     const line = JSON.stringify({ ...cmd, id });
     return new Promise((resolve) => {
       const timer = setTimer(() => {
@@ -364,6 +393,10 @@ export function createEebusService(ctx, deps = {}) {
       for (const [, p] of pending) { clearTimer(p.timer); p.resolve({ ok: false, error: 'eebus exited' }); }
       pending.clear();
       for (const peer of Object.values(ui.peers)) peer.connected = false;
+      // Der neue Hilfsprozess kennt keine Vorgaben und keinen Herzschlag: alles
+      // neu schreiben, sobald die Geräte sich wieder anmelden.
+      deviceLimitCache.clear();
+      for (const k of lpcKnown.values()) if (k.lostAt == null) k.lostAt = now();
       if (stopping) { ui.status = cfgNow().enabled ? 'stopped' : 'disabled'; return; }
       ui.status = 'restarting';
       ui.restarts += 1;
@@ -442,15 +475,16 @@ export function createEebusService(ctx, deps = {}) {
     if (!e) return;
     switch (ev.ev) {
       case 'ev_connected':
-        Object.assign(e, emptyEv(ev.entity), { connected: true });
+        Object.assign(e, emptyEv(ev.entity), { connected: true, unplugged: false });
         pushLog('eebus_ev_connected', { ski: ev.ski, entity: ev.entity || null });
         break;
       case 'ev_disconnected':
-        Object.assign(e, emptyEv(ev.entity || e.entity));
+        Object.assign(e, emptyEv(ev.entity || e.entity), { unplugged: true });
         pushLog('eebus_ev_disconnected', { ski: ev.ski, entity: ev.entity || null });
         break;
       case 'ev_data':
         e.connected = true;
+        e.unplugged = false;
         if (ev.charge_state != null) e.chargeState = ev.charge_state;
         e.vehicle = {
           ...(e.vehicle || {}),
@@ -466,6 +500,7 @@ export function createEebusService(ctx, deps = {}) {
         break;
       case 'ev_measurement':
         e.connected = true;
+        e.unplugged = false;
         if (ev.phases != null) e.phases = numOrNull(ev.phases);
         if (ev.current_a) e.phasesA = numList(ev.current_a);
         if (ev.power_w) e.powerPerPhaseW = numList(ev.power_w);
@@ -520,9 +555,16 @@ export function createEebusService(ctx, deps = {}) {
         if (p) { clearTimer(p.timer); pending.delete(ev.id); p.resolve(ev); }
         break;
       }
-      case 'write_result':
-        if (!ev.ok) pushLog('eebus_device_write_rejected', { id: ev.id });
+      case 'write_result': {
+        const entity = writeIds.get(ev.id);
+        writeIds.delete(ev.id);
+        const w = entity ? deviceWrites.get(entity) : null;
+        if (w && w.id === ev.id) w.rejected = !ev.ok;
+        if (!ev.ok) {
+          pushLog('eebus_device_write_rejected', { id: ev.id, entity: entity || null, ski: entity ? skiOfEntity(entity) : null }, 'warn');
+        }
         break;
+      }
       case 'mdns':
         ui.discovered = (ev.services || []).filter((s) => s && s.ski && s.ski !== ui.ski).map((s) => ({
           ski: String(s.ski).toLowerCase(), name: s.name || null, brand: s.brand || null, model: s.model || null,
@@ -542,6 +584,8 @@ export function createEebusService(ctx, deps = {}) {
         const p = peer(ev.ski);
         p.connected = false;
         p.lastSeen = now();
+        const known = lpcKnown.get(ev.ski);
+        if (known && known.lostAt == null) known.lostAt = now();
         pushLog('eebus_disconnected', { ski: ev.ski, role: roleOf(ev.ski) });
         break;
       }
@@ -600,14 +644,36 @@ export function createEebusService(ctx, deps = {}) {
         const d = device(ev.ski);
         if (ev.ev === 'device_added') d.entities[ev.uc] = ev.entity;
         else if (d.entities[ev.uc] === ev.entity) delete d.entities[ev.uc];
+        if (ev.uc === 'lpc') {
+          if (ev.ev === 'device_added') {
+            const known = lpcKnown.get(ev.ski) || {};
+            lpcKnown.set(ev.ski, { ...known, entity: ev.entity, lostAt: null });
+          } else if (lpcKnown.has(ev.ski) && lpcKnown.get(ev.ski).lostAt == null) {
+            lpcKnown.get(ev.ski).lostAt = now();
+          }
+        }
         apply();
+        if (ev.ev === 'device_added' && ev.uc === 'lpc') resumeDevice(ev.ski);
         break;
       }
       case 'device_nominal_max':
         if (ev.ski && roleOf(ev.ski) === 'device' && ev.uc === 'lpc') device(ev.ski).nominalW = Number(ev.w) || null;
         break;
       case 'device_limit':
-        if (ev.ski && roleOf(ev.ski) === 'device') device(ev.ski).limit = { uc: ev.uc, w: ev.w, active: ev.active, at: now() };
+        if (ev.ski && roleOf(ev.ski) === 'device') {
+          const d = device(ev.ski);
+          d.limit = { uc: ev.uc, w: ev.w, active: ev.active, at: now() };
+          // Für die Prüfung der §14a-Vorgabe nur die Rückmeldung zur Verbrauchsgrenze.
+          if (ev.uc === 'lpc') d.lpcLimit = d.limit;
+        }
+        break;
+      case 'device_failsafe_limit':
+      case 'device_failsafe_duration':
+        // Failsafe-Werte des Geräts (gilt, wenn DVhub es nicht mehr erreicht).
+        if (ev.ski && roleOf(ev.ski) === 'device' && ev.uc === 'lpc') {
+          const d = device(ev.ski);
+          d.failsafe = { ...(d.failsafe || {}), ...(ev.ev === 'device_failsafe_limit' ? { w: Number(ev.w) } : { durationS: Number(ev.duration_s) }), at: now() };
+        }
         break;
       case 'device_measurement':
         if (ev.ski && roleOf(ev.ski) === 'device') {
@@ -659,26 +725,219 @@ export function createEebusService(ctx, deps = {}) {
   /**
    * Verbundene EEBUS-Geräte mit LPC — für die §14a-Aufteilung
    * (services/paragraph14a). Art: mit Verdichter-Ankündigung (OHPCF) eine
-   * Wärmepumpe, sonst die Rolle aus der Kopplung, Vorgabe Wärmepumpe.
+   * Wärmepumpe; meldet die Box ein Auto (EVCC/EVCEM …) oder ist sie als
+   * Hauptwallbox eingetragen, ein Ladepunkt; sonst wie bisher Wärmepumpe.
+   * Ladepunkt: Anlaufstufe (startW) aus der Mindestleistung des Autos, sonst
+   * 6 A auf drei Phasen; ohne gestecktes Auto kein Bedarf (available: false).
    */
   function consumptionDevices() {
     const c = cfgNow();
     if (!c.devices.forwardGridLimit) return [];
+    const wb = getCfg()?.wallbox;
+    const mainWallboxSki = wb?.type === 'eebus' ? String(wb.eebus?.ski || '').trim().toLowerCase() : '';
     const list = [];
     for (const [ski, d] of Object.entries(ui.devices)) {
       if (!d.entities.lpc || !ui.peers[ski]?.connected) continue;
       const trusted = c.trusted.find((t) => t.ski === ski);
+      const kind = d.entities.ohpcf ? 'waermepumpe' : (d.ev || ski === mainWallboxSki) ? 'ladepunkt' : 'waermepumpe';
+      const minW = Number(d.ev?.vehicle?.powerMinW);
+      const known = lpcKnown.get(ski);
+      if (known) known.last = { name: trusted?.name || null, kind, maxW: d.nominalW || c.devices.defaultNominalW };
       list.push({
         id: `eebus:${ski}`,
         ski,
         entity: d.entities.lpc,
         name: trusted?.name || null,
-        kind: d.entities.ohpcf ? 'waermepumpe' : (trusted?.kind || 'waermepumpe'),
+        kind,
         maxW: d.nominalW || c.devices.defaultNominalW,
         powerW: d.powerW ?? null,
+        ...(kind === 'ladepunkt' ? {
+          startW: minW > 0 ? minW : EV_START_W,
+          // Nur ein gemeldetes Abstecken heißt „kein Bedarf“ — ein unbekannter
+          // Zustand (z. B. nur ev_limits) nicht, und Leistung fließt sichtbar.
+          available: !(d.ev?.unplugged === true && !(Number(d.powerW) > 100)),
+        } : {}),
       });
     }
     return list;
+  }
+
+  // DVhub steuert Geräte nach § 14a: Steuerbox gekoppelt oder Relais ausgewertet.
+  function p14aControlled() {
+    return hasGridPeer() || getCfg()?.paragraph14a?.relay?.enabled === true;
+  }
+
+  function skiOfEntity(entity) {
+    for (const [ski, k] of lpcKnown) if (k.entity === entity) return ski;
+    return null;
+  }
+
+  /**
+   * Geräte mit LPC, die DVhub gesteuert hat und gerade nicht erreicht. Sie
+   * ziehen bis zu ihrem eigenen Failsafe-Wert (ohne Angabe: Nennleistung) —
+   * services/paragraph14a hält das im Budget frei und zählt sie für Pmin.
+   */
+  function lostConsumptionDevices() {
+    const c = cfgNow();
+    if (!c.devices.forwardGridLimit) return [];
+    const list = [];
+    for (const [ski, k] of lpcKnown) {
+      if (k.lostAt == null || !c.trusted.some((t) => t.ski === ski && t.role === 'device')) continue;
+      const d = ui.devices[ski];
+      const maxW = d?.nominalW || k.last?.maxW || c.devices.defaultNominalW;
+      const fs = Number(d?.failsafe?.w);
+      list.push({
+        id: `eebus:${ski}`, ski, name: k.last?.name || c.trusted.find((t) => t.ski === ski)?.name || null,
+        kind: k.last?.kind || 'waermepumpe', maxW, failsafeW: Number.isFinite(fs) && fs >= 0 ? fs : null, since: k.lostAt,
+      });
+    }
+    return list;
+  }
+
+  /** Vorgabe an ein Gerät schreiben und merken (für die Prüfung der Umsetzung). */
+  // owner: wer die Vorgabe führt ('p14a' Aufteilung, 'ems' Wallbox-Steuerung,
+  // 'manual' von Hand); expiresAt: Ende einer befristeten Vorgabe (dann endet
+  // auch die Prüfung — Codex aa32838a).
+  function writeDeviceLimit(entity, { w, durationS = 0, active, owner = 'p14a', expiresAt = null }) {
+    // Lese-Modus: eine beobachtende Instanz steuert kein Gerät (Codex 01dec596).
+    if (isReadOnlyMode()) {
+      noteBlockedWrite(`eebus device_limit ${entity}`);
+      return Promise.resolve({ ok: false, error: 'read_only' });
+    }
+    const rec = { w: active ? w : null, active, durationS, at: now(), sentAt: now(), rejected: false, resentAt: null, id: null, replyOk: null, owner, expiresAt, confirmed: false };
+    deviceWrites.set(entity, rec);
+    return send({ cmd: 'device_limit', uc: 'lpc', entity, w: active ? w : 0, duration_s: durationS, active }, (id) => {
+      rec.id = id;
+      writeIds.set(id, entity);
+      if (writeIds.size > 500) writeIds.delete(writeIds.keys().next().value);
+    }).then((r) => { rec.replyOk = r?.ok === true; return r; });
+  }
+
+  // Letzte Vorgabe erneut schreiben; die Frist der Prüfung läuft weiter.
+  function rewrite(entity, want, t) {
+    deviceLimitCache.delete(entity);
+    const durationS = want.until ? Math.max(60, Math.round((want.until - t) / 1000)) : want.durationS;
+    writeDeviceLimit(entity, { w: want.w, durationS, active: want.active, owner: want.owner, expiresAt: want.expiresAt ?? null });
+    const rec = deviceWrites.get(entity);
+    if (!rec) return null;
+    rec.at = want.at;
+    rec.resentAt = want.resentAt;
+    rec.until = want.until;
+    if (want.active) deviceLimitCache.set(entity, { w: want.w, until: want.until ?? null, at: t });
+    return rec;
+  }
+
+  /**
+   * Gerät (wieder) angemeldet: Kopplung aufnehmen. Eine aktive Grenze geht
+   * sofort neu raus; ohne Grenze schreibt DVhub „frei“ — das startet DVhubs
+   * Herzschlag zum Gerät und beendet einen Failsafe, in den das Gerät nach
+   * einem Neustart von DVhub oder einem Stromausfall gefallen ist (EEBUS LPC:
+   * eine neue Vorgabe beendet den Failsafe). Nur wenn DVhub das Gerät nach
+   * § 14a steuert (Steuerbox oder Relais) oder die Wallbox-Steuerung es führt.
+   */
+  function resumeDevice(ski) {
+    const entity = ui.devices[ski]?.entities?.lpc;
+    if (!entity || !cfgNow().devices.forwardGridLimit) return;
+    deviceLimitCache.delete(entity);
+    if (!p14aControlled() && !emsLimits.has(ski)) return;
+    // Aufteilung mit dem wieder angemeldeten Gerät neu rechnen (es war
+    // inzwischen evtl. aus den Anteilen gefallen) — sonst die letzten Anteile.
+    if (typeof ctx.p14a?.update === 'function') ctx.p14a.update();
+    else applyConsumptionShares(lastShares, lastSharesUntil, lastSharesUntilById);
+    if (deviceLimitCache.has(entity)) return;
+    writeDeviceLimit(entity, { w: 0, durationS: 0, active: false });
+    pushLog('paragraph14a_device_resumed', { ski, entity });
+  }
+
+  function setIssue(ski, code, on, since = now(), detail = {}) {
+    const key = `${ski}:${code}`;
+    const cur = issues.get(key);
+    if (!on) {
+      if (cur) {
+        issues.delete(key);
+        if (cur.logged) pushLog('paragraph14a_device_issue_resolved', { ski, code, name: cur.name });
+      }
+      return;
+    }
+    const name = lpcKnown.get(ski)?.last?.name || cfgNow().trusted.find((t) => t.ski === ski)?.name || 'EEBUS-Gerät';
+    const entry = cur || { ski, code, since, logged: false, name };
+    Object.assign(entry, { detail, name });
+    issues.set(key, entry);
+    const grace = code === 'rejected' ? 0 : ISSUE_GRACE_MS;
+    if (!entry.logged && now() - entry.since >= grace) {
+      entry.logged = true;
+      const text = `${name}: ${ISSUE_TEXT[code]}`;
+      pushLog('paragraph14a_device_issue', { ski, code, name, since: new Date(entry.since).toISOString(), ...detail }, 'warn');
+      Promise.resolve(ctx.notifyDirect?.({
+        event: 'paragraph14a_device_issue', level: 'warning', title: 'DVhub: §14a-Steuerung gestört', body: text,
+      })).catch(() => {});
+    }
+  }
+
+  /**
+   * Umsetzung der §14a-Vorgaben je Gerät prüfen (jeden Takt). Bewertet wird nur,
+   * was das Gerät tatsächlich meldet (eigene Grenze, Messwert) — ohne
+   * Rückmeldung keine Fehlermeldung. Abweichende Grenze → neu schreiben.
+   */
+  function checkDevices() {
+    if (isReadOnlyMode()) return; // keine Schreibvorgänge, also nichts zu prüfen
+    const t = now();
+    const controlled = p14aControlled() && cfgNow().devices.forwardGridLimit;
+    const seen = new Set();
+    for (const [ski, k] of lpcKnown) {
+      const trusted = cfgNow().trusted.some((x) => x.ski === ski && x.role === 'device');
+      if (!trusted) { lpcKnown.delete(ski); continue; }
+      seen.add(ski);
+      setIssue(ski, 'unreachable', controlled && k.lostAt != null, k.lostAt ?? t);
+      const d = ui.devices[ski];
+      // Überwacht wird nur, was DVhub selbst führt: §14a-Weitergabe an, eine
+      // Vorgabe der Wallbox-Steuerung — oder deren Freigabe, bis das Gerät sie
+      // umgesetzt hat (Codex aa32838a). Befristete Vorgaben nur bis zu ihrem Ende.
+      const last = k.lostAt == null && k.entity ? deviceWrites.get(k.entity) : null;
+      const expiry = last ? (last.expiresAt ?? last.until ?? null) : null;
+      const supervised = cfgNow().devices.forwardGridLimit || emsLimits.has(ski)
+        || (last?.owner === 'ems' && last.confirmed !== true);
+      const want = supervised && last && !(expiry != null && t >= expiry) ? last : null;
+      if (!want) {
+        for (const code of ['not_applied', 'over_limit', 'rejected']) setIssue(ski, code, false);
+        overSince.delete(k.entity);
+        continue;
+      }
+      setIssue(ski, 'rejected', want.rejected === true, want.at);
+      // Vom Hilfsprozess nicht angenommen: nach RETRY_MS erneut.
+      if (want.replyOk === false && t - want.sentAt >= RETRY_MS) {
+        rewrite(k.entity, want, t);
+        pushLog('paragraph14a_device_limit_retry', { ski, w: want.w, active: want.active });
+        continue;
+      }
+      // Rückmeldung des Geräts zur Verbrauchsgrenze: weicht sie nach der Frist ab?
+      const rep = d?.lpcLimit;
+      const repActive = rep?.active === true;
+      const differs = rep != null && (repActive !== want.active
+        || (want.active && Math.abs(Number(rep.w) - want.w) > Math.max(50, 0.02 * want.w)));
+      if (rep != null && !differs) want.confirmed = true;
+      const mismatch = differs && t - want.at >= ISSUE_GRACE_MS;
+      setIssue(ski, 'not_applied', mismatch, want.at, mismatch ? { reportedW: repActive ? Number(rep.w) : null, wantW: want.w } : {});
+      if (mismatch && (want.resentAt == null || t - want.resentAt >= RESEND_MS)) {
+        rewrite(k.entity, { ...want, resentAt: t }, t);
+        pushLog('paragraph14a_device_limit_resent', { ski, w: want.w, active: want.active, reportedW: repActive ? Number(rep.w) : null });
+      }
+      // Messwert über der Vorgabe?
+      const p = Number(d?.powerW);
+      const over = want.active && Number.isFinite(p) && d?.powerW != null
+        && p > want.w + Math.max(OVER_LIMIT_TOL_MIN_W, OVER_LIMIT_TOL_SHARE * want.w);
+      if (over && !overSince.has(k.entity)) overSince.set(k.entity, t);
+      if (!over) overSince.delete(k.entity);
+      setIssue(ski, 'over_limit', over, overSince.get(k.entity) ?? t, over ? { powerW: p, wantW: want.w } : {});
+    }
+    for (const [key, i] of issues) if (!seen.has(i.ski)) { issues.delete(key); if (i.logged) pushLog('paragraph14a_device_issue_resolved', { ski: i.ski, code: i.code, name: i.name }); }
+  }
+
+  /** Gemeldete Störungen der §14a-Gerätesteuerung (für Leitstand, §14a-Ansicht). */
+  function controlIssues() {
+    return [...issues.values()].filter((i) => i.logged).map((i) => ({
+      ski: i.ski, code: i.code, name: i.name, since: i.since, text: `${i.name}: ${ISSUE_TEXT[i.code]}`, ...i.detail,
+    }));
   }
 
   /**
@@ -753,8 +1012,8 @@ export function createEebusService(ctx, deps = {}) {
       applyConsumptionShares(lastShares, lastSharesUntil, lastSharesUntilById);
       return { ok: true };
     }
-    if (w == null) return send({ cmd: 'device_limit', uc: 'lpc', entity: d.entities.lpc, w: 0, duration_s: 0, active: false });
-    return send({ cmd: 'device_limit', uc: 'lpc', entity: d.entities.lpc, w: emsLimits.get(ski), duration_s: 0, active: true });
+    if (w == null) return writeDeviceLimit(d.entities.lpc, { w: 0, durationS: 0, active: false, owner: 'ems' });
+    return writeDeviceLimit(d.entities.lpc, { w: emsLimits.get(ski), durationS: 0, active: true, owner: 'ems' });
   }
 
   function apply() {
@@ -827,20 +1086,29 @@ export function createEebusService(ctx, deps = {}) {
       if (cached && cached.w === w && cached.until === until && t - cached.at < DEVICE_LIMIT_REFRESH_MS) continue;
       deviceLimitCache.set(cns.entity, { w, until, at: t });
       const durationS = until ? Math.max(60, Math.round((until - t) / 1000)) : 0;
-      send({ cmd: 'device_limit', uc: 'lpc', entity: cns.entity, w, duration_s: durationS, active: true })
+      // Gleiche Vorgabe (nur aufgefrischt): Frist der Umsetzungsprüfung läuft weiter.
+      const prev = deviceWrites.get(cns.entity);
+      const same = prev && prev.active && prev.w === w;
+      writeDeviceLimit(cns.entity, { w, durationS, active: true })
         .then((r) => { if (!r?.ok) deviceLimitCache.delete(cns.entity); });
+      const rec = deviceWrites.get(cns.entity);
+      if (rec && rec !== prev) {
+        rec.until = until;
+        if (same) { rec.at = prev.at; rec.resentAt = prev.resentAt; }
+      }
     }
     // Geräte, die keine Grenze mehr bekommen: aufheben.
     for (const [entity] of deviceLimitCache) {
       if (active.has(entity)) continue;
       deviceLimitCache.delete(entity);
-      send({ cmd: 'device_limit', uc: 'lpc', entity, w: 0, duration_s: 0, active: false });
+      writeDeviceLimit(entity, { w: 0, durationS: 0, active: false });
     }
   }
 
   function tick() {
     const before = `${machines.lpc.effective().state}/${machines.lpp.effective().state}`;
     apply();
+    checkDevices();
     const after = `${machines.lpc.effective().state}/${machines.lpp.effective().state}`;
     if (before !== after) saveGridState();
     if (ui.pairing.on && ui.pairing.until && now() > ui.pairing.until) setPairing(false);
@@ -1010,6 +1278,7 @@ export function createEebusService(ctx, deps = {}) {
       lpp: lp(ui.grid.lpp),
       applied: { ...ui.applied },
       devices: { total: devices.length, connected: devices.filter((t) => ui.peers[t.ski]?.connected === true).length },
+      issues: controlIssues(),
     };
   }
 
@@ -1017,7 +1286,11 @@ export function createEebusService(ctx, deps = {}) {
     const d = ui.devices[ski];
     if (!d?.entities?.lpc) return { ok: false, error: 'device has no LPC entity' };
     const active = Number.isFinite(Number(w)) && Number(w) >= 0;
-    return send({ cmd: 'device_limit', uc: 'lpc', entity: d.entities.lpc, w: active ? Number(w) : 0, duration_s: Number(durationS) || 0, active });
+    // Über writeDeviceLimit: die Prüfung der Umsetzung kennt dann diese Vorgabe.
+    const dur = Number(durationS) || 0;
+    return writeDeviceLimit(d.entities.lpc, {
+      w: active ? Number(w) : 0, durationS: dur, active, owner: 'manual', expiresAt: dur > 0 ? now() + dur * 1000 : null,
+    });
   }
 
   /**
@@ -1050,6 +1323,8 @@ export function createEebusService(ctx, deps = {}) {
     status,
     summary,
     consumptionDevices,
+    lostConsumptionDevices,
+    controlIssues,
     applyConsumptionShares,
     setPairing,
     setDeviceLimit,
@@ -1060,6 +1335,7 @@ export function createEebusService(ctx, deps = {}) {
     // für Tests
     _handleEvent: handleEvent,
     _apply: apply,
+    _tick: tick,
     _machines: () => machines,
   };
 }

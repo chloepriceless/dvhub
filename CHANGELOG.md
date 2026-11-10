@@ -12,6 +12,14 @@ verweist hierher.
 
 ### Neu
 
+- **§14a: Hausspeicher deckt zuerst (Schnittstelle).** Verlangt der Netzbetreiber eine Reduzierung, berechnet DVhub
+  die benötigte Akku-Hilfe (Bedarf der steuerbaren Verbraucher über der Grenze plus Haushalt ohne Speicher) und fordert
+  sie über eine schmale Schnittstelle bei der Akku-Steuerung an (`ctx.batteryAssist.request({ source: 'p14a', coverW,
+  untilMs })`). Gekürzt wird weiter nach dem gemessenen Netzbezug am Anschlusspunkt — liefert der Speicher, steigen
+  die Anteile, sonst bleibt es bei der Kürzung. Angefordert wird nur mit gültigem, frischem Zählerwert (höchstens
+  30 s alt); Anfragen gehen nacheinander raus, eine Freigabe wird wiederholt, bis die Akku-Steuerung sie bestätigt.
+  Solange er hilft, lädt der Speicher nicht aus dem Netz; im Not-Halt keine Akku-Hilfe. Einstellung „Hausspeicher deckt zuerst (Akku-Hilfe)“ (System → §14a, ab Werk an). Wirksam erst
+  mit der Akku-Steuerung, die die Anforderung umsetzt (eigener Zweig); bis dahin ändert sich nichts.
 - **Bleeding Edge auch für Paket-Installationen.** Native Boxen mit signierten Paketen können wieder auf Bleeding Edge
   wechseln, sobald ein Bleeding-Edge-Paket veröffentlicht ist (signierter Index `channels/index-dev.json`). Gibt es
   keins, bleibt die Box auf Stabil und die Oberfläche sagt: „Für Paket-Installationen ist derzeit kein
@@ -93,6 +101,18 @@ verweist hierher.
 
 ### Geändert
 
+- **§14a: Aufteilung nach Bedarf statt nach Nennleistung.** Während einer Dimmung bekam jedes Gerät bisher Leistung
+  bis zu seiner Nennleistung (Vorrang) bzw. nach Nennleistung (anteilig). Eine Wärmepumpe mit 5,5 kW Nennleistung, die
+  1,5 kW zog, hielt so 5,5 kW fest, während der Wallbox Leistung fehlte. Jetzt bekommt jedes Gerät zuerst seinen
+  aktuellen Bedarf (Messwert plus Reserve zum Hochfahren: max(500 W, 10 %), auf 100 W aufgerundet; Wallbox mindestens
+  die Ladestufe 6 A, ohne Auto nichts; stehende Wärmepumpe/Klima eine Anlaufreserve von max(1 kW, 30 %); Speicher der
+  Netzbezug, den der Plan gerade will), der Rest geht zuerst an Geräte, die
+  an ihrer Grenze laufen, dann nach der eingestellten Reihenfolge bis zur Nennleistung — es verfällt nichts. Steigt
+  der Bedarf, gibt es den Anteil im nächsten Takt (5 s) zurück; sinkender Bedarf zählt erst nach 60 s. Geräte ohne
+  Messwert bekommen wie bisher ihre volle Leistung. Neue Einstellung „Zuerst nach aktuellem Bedarf verteilen“
+  (System → §14a, ab Werk an, auch für bestehende Konfigurationen); Vorrang-Reihenfolgen und „anteilig“ bleiben
+  wählbar. Integrationen → §14a zeigt je Gerät Bedarf und Messwert. Anlass: Praxistest im pv magazine (09.11.2026);
+  die BNetzA (BK6-22-300, Ziffer 4.5.2) lässt die Aufteilung ausdrücklich dem Betreiber.
 - **Hinweis zum VRM-Feld** (Issue #32): Bei mehreren Anlagen im VRM-Konto ist die Site-ID der sichere Weg; mit der
   Portal-ID sucht DVhub die passende Anlage selbst (Integrationen → VRM-Cloud und Einstellungen → Historie-Import).
 - **Kopierter Lizenzzustand bindet nicht mehr von selbst.** Startet eine Box mit dem Lizenzzustand einer anderen Box
@@ -175,6 +195,31 @@ verweist hierher.
 
 ### Behoben
 
+- **Lese-Modus gilt auch für EEBUS-Geräte.** Mit `DVHUB_READ_ONLY=1` schrieb DVhub §14a-Anteile weiter als
+  Verbrauchsgrenze an gekoppelte EEBUS-Geräte (Wärmepumpe, Wallbox). Jetzt blockiert der Lese-Modus auch diese
+  Vorgaben (Eintrag `[READ-ONLY]` im Konsolen-Log).
+- **§14a: Wiederanlauf der EEBUS-Geräte und deutliche Warnung bei Störung.** Nach einem Neustart von DVhub oder des
+  EEBUS-Hilfsprozesses (Update, Stromausfall) schrieb DVhub einem Gerät ohne laufende Begrenzung nichts — der
+  Herzschlag zum Gerät startete nicht, das Gerät fiel nach 120 s in seinen Failsafe und blieb dort bis zur nächsten
+  Vorgabe (mindestens 2 h). Jetzt nimmt DVhub die Kopplung beim Anmelden jedes Geräts selbst wieder auf (laufende
+  Grenze sofort neu, sonst „frei“; das beendet den Failsafe), sofern es nach § 14a steuert (Steuerbox oder Relais).
+  Ist ein gesteuertes Gerät länger als 60 s nicht erreichbar, meldet das Gerät eine andere Grenze als die Vorgabe
+  (DVhub schreibt sie dann erneut), zieht es 60 s deutlich mehr als erlaubt oder lehnt es die Vorgabe ab, zeigt der
+  Leitstand „§14a gestört“ mit Gerät und Uhrzeit, Integrationen → §14a ebenso, dazu ein Protokolleintrag
+  (`paragraph14a_device_issue`, Warnung) und eine Benachrichtigung über die eingerichteten Kanäle. Bewertet wird nur,
+  was das Gerät meldet — ohne Rückmeldung keine „hat nicht reagiert“-Meldung. Eine Freigabe der Wallbox-Steuerung
+  bleibt überwacht, bis das Gerät sie umsetzt; befristete Vorgaben (auch von Hand) nur bis zu ihrem Ende. Ein nicht erreichbares Gerät zählt
+  weiter für die Mindestleistung; sein eigener Failsafe-Wert (ohne Angabe die Nennleistung) gilt während einer
+  Begrenzung als belegt, damit die übrigen Geräte die Grenze nicht allein ausschöpfen.
+- **§14a: EEBUS-Wallbox zählt richtig.** Eine EEBUS-Wallbox lief in der §14a-Geräteliste als Wärmepumpe (falsche
+  Fallgruppe für Vorrang und Mindestleistung); war sie als Hauptwallbox eingetragen, zählte sie zusätzlich als
+  „Wallbox“ — zwei SteuVE statt einer, also eine zu hohe Mindestleistung Pmin,14a (Relais-Grenze, automatischer
+  Failsafe-Wert) und doppelt verteiltes Budget. Jetzt ist eine EEBUS-Box mit Auto-Meldung oder als Hauptwallbox ein
+  Ladepunkt und zählt einmal (mit ihrer Nennleistung laut Gerät); ihr Anteil geht zusätzlich direkt als Watt-Grenze
+  (LPC) an die Box. Ohne gestecktes Auto hat sie keinen Bedarf.
+- **§14a: Summe der Anteile nie über der Vorgabe.** Die Glättung (Änderungen unter 300 W werden nicht
+  weitergegeben) konnte die Summe der Geräte-Anteile über die Grenze des Netzbetreibers heben, wenn mehrere Anteile
+  gleichzeitig leicht sanken (z. B. 7500 W bei 7200 W Vorgabe). Jetzt gilt in dem Fall der neue Anteil.
 - **Kanalwechsel nach langem Stromausfall.** Fiel bei einem Kanalwechsel auf einer Paket-Box der Strom nach dem
   Umschalten länger als 90 Minuten aus, setzte DVhub den Kanal zurück, bevor die Box den Auftrag nach dem Neustart
   abschließen konnte. Jetzt gilt ein stiller Auftrag nur vor dem Umschalten als abgebrochen; danach entscheidet die
