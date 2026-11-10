@@ -37,7 +37,7 @@ import { isGridStorageOnly, createStandbyEstimator, resolveStandbyW, buildGridSt
 import { evSocForEos } from './ev-registration.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
 import { buildEosOptimization } from './eos-config-sync.js';
-import { resolveEosProxy } from './eos-adapter.js';
+import { eosTargetKey, resolveEosProxy } from './eos-adapter.js';
 import http from 'node:http';
 import { summarizeWeightedApplicableValue } from '../../history-runtime.js';
 import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
@@ -1393,6 +1393,10 @@ export function createEosForecastBridge(ctx) {
     const priceSlotsCt = priceFill.slots;
     const priceEstimate = priceFill.estimate;
     if (state) { state.optimizer = state.optimizer || {}; state.optimizer.eosPriceEstimate = priceEstimate; }
+    // Schätzwerte gehen gleich an EOS: Merker „keine Schätzwerte in EOS“ schon
+    // jetzt zurücknehmen — ein abgebrochener Push darf ihn nicht stehen lassen
+    // (Codex d81a0ddc).
+    if (state && priceEstimate) state.optimizer.eosEstimatesClearedAt = null;
     // Nur Netzspeicher: PV = 0, Verbrauch = Ruhebedarf aus dem Netzzähler
     // (grid-storage.js). Prognosen für PV und Hausverbrauch gelten dann nicht.
     let gridStorage = null;
@@ -1606,6 +1610,12 @@ export function createEosForecastBridge(ctx) {
       // nachgezogen; ein Push mit Schätzung nimmt ihn zurück.
       if (state) {
         state.optimizer = state.optimizer || {};
+        // Merker gilt je EOS-Ziel; anderes Ziel → neu ab diesem Löschen (Codex d81a0ddc).
+        const target = eosTargetKey(cfg);
+        if (state.optimizer.eosEstimatesClearedTarget !== target) {
+          state.optimizer.eosEstimatesClearedAt = null;
+          state.optimizer.eosEstimatesClearedTarget = target;
+        }
         if (priceEstimate) state.optimizer.eosEstimatesClearedAt = null;
         else if (clear.cleared === true && !clear.errors.length && !Number.isFinite(state.optimizer.eosEstimatesClearedAt)) {
           state.optimizer.eosEstimatesClearedAt = Date.now();

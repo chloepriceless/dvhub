@@ -55,6 +55,18 @@ export function resolveEosProxy(cfg = {}) {
   };
 }
 
+/**
+ * Kennung des EOS-Ziels (Betriebsart, lokale Adresse, Fern-Endpunkt). Merker
+ * über den Inhalt eines EOS (eosEstimatesClearedAt) gelten nur für dieses Ziel
+ * (Codex d81a0ddc).
+ */
+export function eosTargetKey(cfg = {}) {
+  const p = cfg?.optimizer?.eosProxy || {};
+  const proxy = resolveEosProxy(cfg);
+  const endpoint = String(p.remote?.endpoint || '').trim().replace(/\/+$/, '');
+  return JSON.stringify([proxy.mode, proxy.localUrl, proxy.mode === 'remote' ? endpoint : '']);
+}
+
 // Port 9 (discard): verbindet nie — EOS gilt dann als nicht erreichbar.
 export const EOS_REMOTE_FACADE_UNAVAILABLE = 'http://127.0.0.1:9';
 let remoteFacadeUrl = null;
@@ -143,7 +155,7 @@ function planIdentity(sol) {
  * @param {object} opt  state.optimizer
  * @param {number} nowMs
  */
-export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now()) {
+export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now(), { target = null } = {}) {
   const priceEndMs = Date.parse(opt?.eosRealPriceEnd || '');
   const cutoffs = [priceEndMs];
   const run = opt?.eosRun || {};
@@ -160,7 +172,10 @@ export function estimatedPriceCutoffMs(sol, opt = {}, nowMs = Date.now()) {
     // eigenem Takt bekommt keine) — dann gilt nur die aktuelle Preisgrenze
     // (Fable R3, P3-2: sonst Schnitt an der alten Mitternacht bis ~16 Uhr).
     const clearedAt = Number(opt?.eosEstimatesClearedAt);
-    const noEstimatesInRun = opt?.eosEstimatesClearedAt != null && Number.isFinite(clearedAt)
+    // Nur für dasselbe EOS-Ziel (Codex d81a0ddc: Adresse geändert → Merker
+    // des alten EOS sagt nichts über das neue).
+    const noEstimatesInRun = target != null && opt?.eosEstimatesClearedTarget === target
+      && opt?.eosEstimatesClearedAt != null && Number.isFinite(clearedAt)
       && clearedAt <= generatedMs - EOS_UNKNOWN_RUN_LOOKBACK_MS;
     if (!noEstimatesInRun) cutoffs.push(unknownRunCutoffMs(opt, generatedMs, berlinDayEndMs(generatedMs)));
     // Fertig während eines laufenden Laufs: kann aus ihm stammen (Lösung vor der
@@ -753,7 +768,7 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     // (eos-evcc-bridge) folgt weiter dem Plan.
     // Grenze gehört zum Plan (generated_at), nicht zum Prozess (Codex 8ecb4fa9,
     // Gesamtprüfung 1.0.10): estimatedPriceCutoffMs.
-    const estimatedFromMs = estimatedPriceCutoffMs(sol, ctx.state?.optimizer || {}, Date.now());
+    const estimatedFromMs = estimatedPriceCutoffMs(sol, ctx.state?.optimizer || {}, Date.now(), { target: eosTargetKey(acfg) });
     // Schwellen-Peak-Shaving (EOS-PR D): die Schwelle steht an den Akku-
     // Instruktionen des Plans, nicht in der Lösung. Gilt für Slots, in denen
     // der Plan den Akku hält (Halten, Netzladen) — dort deckt der Akku den
