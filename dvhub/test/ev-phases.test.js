@@ -33,14 +33,14 @@ const T0 = Date.parse('2026-11-16T22:00:00Z');
 const Q = 15 * 60_000;
 function harness({ factors, phases1p3p = true, capW = null, extra = {} }) {
   const calls = [];
-  const ctl = { capW, failCurrent: false };
+  const ctl = { capW, failCurrent: false, failPhases: false, staleTelemetry: false };
   const lp = { id: 1, mode: 'off', connected: true, charging: false, phases1p3p, phasesActive: 3 };
   const fakeEvcc = {
     getStatus: () => ({ url: 'http://evcc.local:7070' }),
     getLoadpoints: () => [lp],
     setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', a]); return ctl.failCurrent ? { ok: false, error: 'HTTP 500' } : { ok: true }; },
     setMode: async (id, m) => { calls.push(['mode', m]); lp.mode = m; return { ok: true }; },
-    setPhases: async (id, n) => { calls.push(['phases', n]); lp.phasesActive = n; return { ok: true }; },
+    setPhases: async (id, n) => { calls.push(['phases', n]); if (ctl.failPhases) return { ok: false, error: 'HTTP 500' }; if (!ctl.staleTelemetry) lp.phasesActive = n; return { ok: true }; },
   };
   const cfg = { evcc: { url: 'http://evcc.local:7070' }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evEvccLoadpoint: 1, evMaxChargeW: 11000, evPhases: 3, ...extra } };
   let clock = T0 + 60_000;
@@ -170,5 +170,33 @@ describe('Codex 42a5d784: Reihenfolge und Phasenzahl', () => {
     h.advance(Q);
     await h.bridge.tick();
     assert.ok(h.calls.slice(3).some((c) => c[0] === 'phases' && c[1] === 1), JSON.stringify(h.calls));
+  });
+});
+
+describe('Codex 1c280569: veraltete Meldung und halber Übergang', () => {
+  test('Sofort laden kurz an und aus, evcc meldet noch eine Phase: Plan schaltet trotzdem wieder auf eine', async () => {
+    const h = harness({ factors: [0.25, 0.25] });
+    await h.bridge.tick();
+    h.ctl.staleTelemetry = true;
+    assert.equal((await h.bridge.setOverride({ powerW: 11000 })).ok, true);
+    const n = h.calls.length;
+    // Beenden stellt sofort den Plan wieder her (einphasiger Slot).
+    await h.bridge.clearOverride();
+    assert.ok(h.calls.slice(n).some((c) => c[0] === 'phases' && c[1] === 1), JSON.stringify(h.calls.slice(n)));
+  });
+
+  test('Strom gesenkt, Umschaltung scheitert, Grenze weg: der alte Befehl wird neu gesendet', async () => {
+    const h = harness({ factors: [0.25, 0.25, 0.25] });
+    await h.bridge.tick();
+    h.ctl.capW = 4140;
+    h.ctl.failPhases = true;
+    h.advance(Q);
+    await h.bridge.tick();
+    h.ctl.capW = null;
+    h.ctl.failPhases = false;
+    const n = h.calls.length;
+    h.advance(60_000);
+    await h.bridge.tick();
+    assert.ok(h.calls.slice(n).some((c) => c[0] === 'maxcurrent' && c[1] === 12), JSON.stringify(h.calls.slice(n)));
   });
 });

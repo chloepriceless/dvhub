@@ -392,6 +392,9 @@ export function createEosEvccBridge(deps) {
           if (typeof c.limit === 'function') {
             const lim = await c.limit(a[0]);
             if (!lim?.ok) return lim || { ok: false, error: 'maxcurrent failed' };
+            // Der Strom an der Box hat sich geändert: der gemerkte Befehl
+            // stimmt nicht mehr — der nächste Takt sendet neu (Codex 1c280569).
+            if (lastSent) lastSent = { ...lastSent, key: null };
           }
           const ph = await c.setPhases(3);
           if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
@@ -502,10 +505,13 @@ export function createEosEvccBridge(deps) {
       // überhaupt — nach einem Ladepunkt-Wechsel gälte sonst der alte).
       if (slot.phases) {
         const lp = (getEvccLoadpoints() || []).find((l) => Number(l?.id) === bc.loadpoint);
-        // Was evcc meldet, gilt zuerst (von Hand umgestellt, Codex 42a5d784);
-        // DVhubs Vermerk nur, wenn evcc nichts meldet.
-        const cur = (Number(lp?.phasesActive) || null) ?? charger.dvhubPhases?.() ?? null;
-        if (cur !== slot.phases) {
+        // Nur auslassen, wenn evcc UND DVhubs letzter bestätigter Befehl
+        // dieselbe Phasenzahl nennen: evcc kann von Hand umgestellt sein
+        // (Codex 42a5d784), seine Meldung aber auch noch veraltet (Codex
+        // 1c280569). Im Zweifel erneut setzen — evcc tut dann nichts.
+        const reported = Number(lp?.phasesActive) || null;
+        const ours = charger.dvhubPhases?.() ?? null;
+        if (reported !== slot.phases || (ours !== null && ours !== slot.phases)) {
           const ph = await charger.setPhases(slot.phases);
           if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
         }
