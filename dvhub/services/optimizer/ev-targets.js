@@ -22,6 +22,8 @@ import {
 export const EV_VALUE_INPUTS_MAX_AGE_MS = 3 * 3600_000;
 /** So weit voraus braucht die Wertbestimmung Preise: E ≤ jetzt + 48 h, dazu 7 Tage. */
 export const EV_VALUE_INPUTS_DAYS = 9.5;
+/** So weit voraus zählt DVhub Fahrten: nächste Abfahrt (≤ 7 Tage) + 8 Tage Vorausschau + 1 Tag Rand. */
+export const TRIP_LOOKAHEAD_DAYS = 16;
 /** Kürzeste Vorausschau der Wertbestimmung über E hinaus. */
 export const MIN_VALUE_WINDOW_MS = 24 * 3600_000;
 
@@ -66,7 +68,9 @@ export function resolveEvTargets(ctx, cfg, { decision = null, valueSupported = f
   const timeZone = cfg?.schedule?.timezone || 'Europe/Berlin';
   const capacityWh = num(opt.evCapacityWh, 50000);
   const chargeW = num(opt.evMaxChargeW, 5000);
-  const { trips } = buildEvTrips(cfg, nowMs, { days: EV_PLAN_LOOKAHEAD_DAYS + 2 });
+  // Bis 8 Tage nach der NÄCHSTEN Abfahrt (propagateMin), die bis zu 7 Tage
+  // entfernt sein kann, plus Wertfenster (E + 7 Tage) — Codex 52c5ee20.
+  const { trips } = buildEvTrips(cfg, nowMs, { days: TRIP_LOOKAHEAD_DAYS });
   const arrivalMs = Date.parse(decision?.arrivalAt || departure.arrivalAt || '');
   const preplan = decision?.mode === 'preplan' && Number.isFinite(arrivalMs);
   const horizonH = Number(ctx?.state?.optimizer?.eosControlHorizonH);

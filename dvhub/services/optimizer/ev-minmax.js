@@ -343,7 +343,10 @@ export function valueSteps(args) {
  */
 export function deriveEvMinMax({ nowMs, refMs, trips, maxSocPct, socPct, ctrlEndMs, propagate = true, chargeW, eta = EV_CHARGE_EFFICIENCY, capacityWh, timeZone = 'Europe/Berlin' }) {
   const ref = Number.isFinite(refMs) ? refMs : nowMs;
-  const future = (Array.isArray(trips) ? trips : []).filter((x) => x.depMs >= ref && x.depMs > nowMs).sort((a, b) => a.depMs - b.depMs);
+  // Die laufende Fahrt (src 'current') ist kein Ziel — im Vorlauf einer
+  // Abfahrt liegt sie noch in der Zukunft (Codex 52c5ee20); für „unterwegs“
+  // zählt sie weiter (futureCostCurve).
+  const future = (Array.isArray(trips) ? trips : []).filter((x) => x.src !== 'current' && x.depMs >= ref && x.depMs > nowMs).sort((a, b) => a.depMs - b.depMs);
   if (!future.length) return null;
   const nxt = future[0];
   const propagated = propagate ? propagateMin(future, { chargeW, eta, capacityWh, timeZone }) : Number(nxt.minPct) || 0;

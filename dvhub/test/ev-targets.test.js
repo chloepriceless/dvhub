@@ -245,3 +245,25 @@ describe('Minuten-Wache: geänderte Ziele gehen sofort an EOS', () => {
     assert.equal(n, 2, 'Max geändert → Fahrzeug neu an EOS');
   });
 });
+
+describe('Codex 52c5ee20: Fahrtenliste und Mindestziel', () => {
+  it('im Vorlauf der Abfahrt (06:55, Auto steckt noch): laufende Fahrt zählt nicht als Ziel 0 %', () => {
+    // Di 17.11. 06:55 Ortszeit = 05:55Z, Abfahrt 07:00 (Mo-Zeile, Folgetag)
+    const t = resolveEvTargets(ctxWith(), cfgWith(), { decision: { mode: 'plugged', socPct: 60 }, valueSupported: false, nowMs: Date.parse('2026-11-17T05:55:00Z') });
+    assert.ok(t.minSocPct >= 50, `Ziel ${t.minSocPct}`);
+    assert.equal(t.deadlineAt, '2026-11-18T06:00:00.000Z');
+  });
+
+  it('nur freitags: die Fahrt der Folgewoche liegt in der Vorausschau des Mindestziels', () => {
+    // Fr 09:00–... Fahrt 30 %, Min 40, Rückkehr Fr 17:00 → nächste Abfahrt Fr eine Woche später.
+    // Damit es greift: kleine Ladeleistung, kurze Zeit — hier Rückkehr erst kurz vor der nächsten Abfahrt.
+    const plan = [{ day: 5, arrival: '', departure: '09:00', minSocPct: 40, tripSocPct: 30 }, { day: 4, arrival: '08:00', departure: '23:59', minSocPct: null, tripSocPct: null }];
+    const c = cfgWith({ evWeeklyPlan: [{ day: 4, arrival: '08:00', departure: '09:00', minSocPct: 40, tripSocPct: 30 }], evMaxChargeW: 5000, evCapacityWh: 60000 });
+    void plan;
+    // So 15.11. 12:00: nächste Abfahrt Fr 20.11. 09:00 (Do-Zeile, Folgetag), Rückkehr Do 26.11. 08:00, wieder Fr 27.11. 09:00
+    const sun = Date.parse('2026-11-15T11:00:00Z');
+    const t = resolveEvTargets({ state: { optimizer: {} } }, c, { decision: { mode: 'plugged', socPct: 30 }, valueSupported: false, nowMs: sun });
+    // 40 + 30 − 1 h × 5 kW × 0,88 / 60 kWh (7,33 %) = 62,7 → 63
+    assert.equal(t.minSocPct, 63);
+  });
+});

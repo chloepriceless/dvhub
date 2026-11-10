@@ -249,3 +249,17 @@ describe('Erwarteter Ladestand bei Ankunft mit Fahrt in %', () => {
     assert.equal(r.source, 'live');
   });
 });
+
+describe('Codex 52c5ee20: Einmal-Fahrt bleibt bis zur nächsten echten Abfahrt', () => {
+  test('Fr 17:00 statt Sa 09:00 mit 60 % Fahrt: am Sonntagabend zählt noch die Einmal-Fahrt', () => {
+    const p = [
+      { day: 5, arrival: '15:00', departure: '09:00', minSocPct: 50, tripSocPct: 30 },
+      { day: 1, arrival: '18:00', departure: '07:00', minSocPct: 50, tripSocPct: 20 },
+    ];
+    // Fr 20.11. 17:00 = 16:00Z; Sonntag 22.11. 20:00 = 19:00Z, Ankunft Mo 23.11. 18:00
+    const c = cfg({ evWeeklyPlan: p, evDepartureOnce: '2026-11-20T16:00:00.000Z', evDepartureOnceTripSocPct: 60 });
+    const r = resolveEvDeparture(c, at('2026-11-22T19:00:00Z'));
+    assert.equal(r.tripStartAt, '2026-11-20T16:00:00.000Z');
+    assert.equal(r.prevTripSocPct, 60);
+  });
+});

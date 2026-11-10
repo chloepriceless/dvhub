@@ -361,10 +361,35 @@ export function createEosEvccBridge(deps) {
     if (hooked) c.beforeSetMode = addMode;
     // Adapter ohne Haken (Test-Attrappen): vor dem Befehl merken.
     const noteAttempt = (mode) => { if (c.type === 'evcc' && !hooked) addMode(mode); };
+    // Phasen, die DVhub an DIESEM Gerät gesetzt hat (je Ziel und Identität).
+    // Hat DVhub auf eine Phase geschaltet, stellt jeder andere Ladebefehl
+    // (Override, Umschaltung aus, Grenze) zuerst drei Phasen her — sonst lüde
+    // „Sofort laden“ mit 11 kW nur 3,7 kW (Codex 52c5ee20).
+    const dvhubPhases = () => { const e = owned.get(key); return e && e.identity === tgt.identity ? e.phases ?? null : null; };
+    const notePhases = (n) => {
+      const prev = owned.get(key);
+      const same = prev && prev.identity === tgt.identity;
+      setOwned(key, { ...(same ? prev : { ...tgt, cmd: 'limit', confirmed: true, gridCap: false }), phases: n });
+    };
+    if (typeof c.setPhases === 'function') {
+      wrapped.setPhases = async (n) => {
+        const r = await c.setPhases(n);
+        if (r?.ok) notePhases(n);
+        return r;
+      };
+      wrapped.dvhubPhases = dvhubPhases;
+    }
     if (typeof c.charge === 'function') {
       wrapped.charge = async (...a) => {
+        // a[1]?.phases: Phasen dieses Befehls (Plan einphasig). Sonst gilt dreiphasig.
+        const want = Number(a[1]?.phases) === 1 ? 1 : 3;
+        if (typeof c.setPhases === 'function' && dvhubPhases() === 1 && want === 3) {
+          const ph = await c.setPhases(3);
+          if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
+          notePhases(3);
+        }
         noteAttempt('now');
-        const r = await c.charge(...a);
+        const r = await c.charge(a[0]);
         // Eine Grenz-Herkunft bleibt, bis ein quittierter normaler Befehl sie
         // ablöst (auch eine unquittierte Grenz-Aktualisierung kann wirken).
         const prev = owned.get(key);
@@ -374,7 +399,7 @@ export function createEosEvccBridge(deps) {
         // können an der Box stehen (Codex 7b3273db, P1).
         const confirmedCurrentA = r?.ok === true ? amps
           : (prev?.cmd === 'charge' && prev.identity === tgt.identity ? prev.confirmedCurrentA ?? null : null);
-        setOwned(key, { ...tgt, ...capFields(prev, tgt.identity), cmd: 'charge', currentA: amps, confirmedCurrentA, confirmed: r?.ok === true, gridCap: prevCap, at: new Date(now()).toISOString() });
+        setOwned(key, { ...tgt, ...capFields(prev, tgt.identity), cmd: 'charge', currentA: amps, confirmedCurrentA, confirmed: r?.ok === true, gridCap: prevCap, phases: dvhubPhases(), at: new Date(now()).toISOString() });
         return r;
       };
     }
@@ -385,7 +410,7 @@ export function createEosEvccBridge(deps) {
         if (r?.ok) {
           const prev = owned.get(key);
           // Eine ausstehende evcc-Rückkehr überlebt einen Stopp (z. B. Not-Halt).
-          setOwned(key, { ...tgt, ...capFields(prev, tgt.identity), cmd: 'stop', confirmed: true, gridCap: prev?.gridCap === true, restore: prev?.restore ?? null, at: new Date(now()).toISOString() });
+          setOwned(key, { ...tgt, ...capFields(prev, tgt.identity), cmd: 'stop', confirmed: true, gridCap: prev?.gridCap === true, restore: prev?.restore ?? null, phases: dvhubPhases(), at: new Date(now()).toISOString() });
         }
         return r;
       };
@@ -464,15 +489,17 @@ export function createEosEvccBridge(deps) {
   async function send(charger, bc, slot) {
     if (slot.action === 'charge') {
       // Phasen nur umschalten, wenn sie sich ändern (jede Umschaltung unterbricht die Ladung kurz).
+      // Gemerkt wird je Ladepunkt und Gerät (nicht der letzte Befehl
+      // überhaupt — nach einem Ladepunkt-Wechsel gälte sonst der alte).
       if (slot.phases) {
         const lp = (getEvccLoadpoints() || []).find((l) => Number(l?.id) === bc.loadpoint);
-        const cur = lastSent?.phases ?? (Number(lp?.phasesActive) || null);
+        const cur = charger.dvhubPhases?.() ?? (Number(lp?.phasesActive) || null);
         if (cur !== slot.phases) {
           const ph = await charger.setPhases(slot.phases);
           if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
         }
       }
-      return charger.charge(slot.currentA);
+      return charger.charge(slot.currentA, { phases: slot.phases || 3 });
     }
     if (charger.type !== 'evcc' && bc.stopMode !== 'off') return charger.release();
     return charger.stop();
@@ -1102,7 +1129,7 @@ export function createEosEvccBridge(deps) {
         action: slot.action,
         currentA: slot.currentA,
         chargePowerW: slot.chargePowerW,
-        ...(slot.phases ? { phases: slot.phases } : (lastSent?.phases ? { phases: lastSent.phases } : {})),
+        ...(slot.phases ? { phases: slot.phases } : {}),
         loadpoint: bc.loadpoint,
         mode: slot.action === 'charge' ? 'now' : (hardStop ? 'off' : bc.stopMode),
         released: slot.action !== 'charge' && !hardStop && bc.charger !== 'evcc' && bc.stopMode !== 'off',

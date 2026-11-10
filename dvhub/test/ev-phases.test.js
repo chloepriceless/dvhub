@@ -52,7 +52,7 @@ function harness({ factors, phases1p3p = true, capW = null, extra = {} }) {
     getGridCapW: () => capW,
     now: () => clock,
   });
-  return { bridge, calls, advance: (ms) => { clock += ms; }, setFactors: (f) => { sol = f; } };
+  return { bridge, calls, cfg, lp, advance: (ms) => { clock += ms; }, setFactors: (f) => { sol = f; } };
 }
 
 describe('Brücke: einphasig bei kleiner Leistung', () => {
@@ -88,4 +88,53 @@ describe('Brücke: einphasig bei kleiner Leistung', () => {
     assert.equal(h.bridge.getStatus().onePhaseCharging, true);
     assert.equal(resolveEvccBridgeConfig({ optimizer: { evPhases: 3 } }).phaseSwitch, true);
   });
+});
+
+describe('Codex 52c5ee20: Phasen zurück und je Ladepunkt', () => {
+  test('nach einphasigem Slot: „Sofort laden“ schaltet erst wieder auf drei Phasen', async () => {
+    const h = harness({ factors: [0.25, 0.25] });
+    await h.bridge.tick();
+    assert.deepEqual(h.calls.slice(0, 1), [['phases', 1]]);
+    const r = await h.bridge.setOverride({ powerW: 11000 });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const after = h.calls.slice(3);
+    assert.deepEqual(after.slice(0, 1), [['phases', 3]], JSON.stringify(after));
+    assert.ok(after.some((c) => c[0] === 'maxcurrent' && c[1] === 16));
+  });
+
+  test('Umschaltung abgeschaltet: der nächste Ladebefehl stellt drei Phasen wieder her', async () => {
+    const h = harness({ factors: [0.25, 0.25] });
+    await h.bridge.tick();
+    h.cfg.optimizer.evPhaseSwitch = false;
+    h.advance(Q);
+    await h.bridge.tick();
+    assert.deepEqual(h.calls.slice(3, 4), [['phases', 3]], JSON.stringify(h.calls));
+  });
+});
+
+test('Codex 52c5ee20: Ladepunkt gewechselt — gemerkte Phasen gelten nur für den alten', async () => {
+  const calls = [];
+  const lps = [1, 2].map((id) => ({ id, mode: 'off', connected: true, charging: false, phases1p3p: true, phasesActive: 3 }));
+  const fakeEvcc = {
+    getStatus: () => ({ url: 'http://evcc.local:7070' }),
+    getLoadpoints: () => lps,
+    setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', id, a]); return { ok: true }; },
+    setMode: async (id, m) => { calls.push(['mode', id, m]); return { ok: true }; },
+    setPhases: async (id, n) => { calls.push(['phases', id, n]); lps[id - 1].phasesActive = n; return { ok: true }; },
+  };
+  const cfg = { evcc: { url: 'http://evcc.local:7070' }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evEvccLoadpoint: 1, evMaxChargeW: 11000, evPhases: 3 } };
+  let clock = T0 + 60_000;
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg,
+    getSolution: async () => ({ generatedAt: 'x', slotMinutes: 15, rows: [0, 1].map((i) => ({ ts_utc: new Date(T0 + i * Q).toISOString(), evChargeFactor: 0.25, evSocPct: 50 })) }),
+    getCharger: (c, bc) => createEvccAdapter(fakeEvcc, () => bc.loadpoint, () => bc.stopMode),
+    getEvccLoadpoints: () => lps,
+    now: () => clock,
+  });
+  await bridge.tick();
+  assert.deepEqual(calls[0], ['phases', 1, 1]);
+  cfg.optimizer.evEvccLoadpoint = 2;
+  clock += Q;
+  await bridge.tick();
+  assert.ok(calls.some((c) => c[0] === 'phases' && c[1] === 2 && c[2] === 1), JSON.stringify(calls));
 });

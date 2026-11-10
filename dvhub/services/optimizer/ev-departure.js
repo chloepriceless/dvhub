@@ -319,7 +319,10 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
   //      eben, nicht die von morgen.
   let superseded = null;
   const DAY = 24 * 3600_000;
-  if (Number.isFinite(onceDep) && (onceActive || nowMs - onceDep < 2 * DAY)) {
+  // Auch nach der einmaligen Abfahrt (so weit planWindows zurückreicht): die
+  // ersetzte Abfahrt wird nie zur Fahrt, die Einmal-Fahrt bleibt bis zur
+  // nächsten echten Abfahrt die laufende (Codex 52c5ee20).
+  if (Number.isFinite(onceDep) && (onceActive || nowMs - onceDep < 7 * DAY)) {
     const refNow = onceActive ? nowMs : onceDep - DEPARTURE_LEAD_MS - 1;
     const goneAt = (ms) => ms - DEPARTURE_LEAD_MS <= refNow;
     const arrivedBefore = (w) => w.arrivalMs === null || w.arrivalMs < onceDep;
