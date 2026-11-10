@@ -142,3 +142,17 @@ test('Vorgabe unter der Mindestleistung: wird eingehalten und gemeldet', () => {
   assert.equal(s.state.p14a.belowPmin, true, 'Pmin 7560 W');
   assert.ok(s.logs.some(([e]) => e === 'paragraph14a_below_minimum'));
 });
+
+test('Hysterese hebt die Summe der Anteile nie über das Budget', () => {
+  // Anteilig 11 000 : 10 000. 7560 W → 3900 / 3600. Sinkt die Grenze auf 7200 W,
+  // liegen beide neuen Anteile (3700 / 3400) je 200 W unter den alten — die
+  // Hysterese allein würde 3900 + 3600 = 7500 W > 7200 W stehen lassen.
+  const s = setup({ p14a: { allocation: 'proportional', usePvSurplus: false } });
+  s.state.ctrl.eebusConsumptionLimitW = 7560;
+  s.svc.update();
+  assert.deepEqual(s.state.p14a.shares, { wallbox: 3900, speicher: 3600 });
+  s.state.ctrl.eebusConsumptionLimitW = 7200;
+  s.svc.update();
+  const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
+  assert.ok(sum <= 7200, `Summe ${sum} W über der Grenze 7200 W`);
+});

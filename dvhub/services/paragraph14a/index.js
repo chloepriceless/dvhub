@@ -191,14 +191,22 @@ export function createParagraph14aService(ctx, deps = {}) {
 
   // --- Umsetzung ---------------------------------------------------------------
 
-  function stable(next) {
+  function stable(next, budget) {
     // Kleine Änderungen nicht weitergeben (PV-Überschuss schwankt ständig);
     // ein Wechsel auf/von 0 oder auf null geht immer durch.
     const out = {};
+    const rounded = {};
     for (const [id, w] of Object.entries(next)) {
       const prev = lastShares[id];
-      const rounded = Math.floor(w / SHARE_STEP_W) * SHARE_STEP_W;
-      out[id] = prev != null && rounded !== 0 && prev !== 0 && Math.abs(rounded - prev) < SHARE_HYSTERESIS_W ? prev : rounded;
+      rounded[id] = Math.floor(w / SHARE_STEP_W) * SHARE_STEP_W;
+      const r = rounded[id];
+      out[id] = prev != null && r !== 0 && prev !== 0 && Math.abs(r - prev) < SHARE_HYSTERESIS_W ? prev : r;
+    }
+    // Die Summe darf nie über dem Budget liegen (Vorgabe des Netzbetreibers):
+    // sonst gilt für alle, die über ihrem neuen Anteil gehalten würden, der neue.
+    const sum = Object.values(out).reduce((a, w) => a + w, 0);
+    if (Number.isFinite(budget) && sum > budget) {
+      for (const id of Object.keys(out)) if (out[id] > rounded[id]) out[id] = rounded[id];
     }
     return out;
   }
@@ -224,7 +232,7 @@ export function createParagraph14aService(ctx, deps = {}) {
       const steuveW = controllable.reduce((s, d) => s + d.currentW, 0);
       budget = budgetW({ limitW, gridImportW: gridImportPositiveW(state, getCfg()), steuveW, usePvSurplus: c.usePvSurplus });
       shares = stable(allocateBudget(budget, controllable.map((d) => ({ id: d.id, kind: d.kind, maxW: d.powerW })),
-        { mode: c.allocation, priority: c.priority }));
+        { mode: c.allocation, priority: c.priority }), budget);
     }
     lastShares = shares;
 
