@@ -1633,6 +1633,15 @@ const DS_SOURCE_LABELS = {
   grid: 'Netzanschluss', gridVoltage: 'Netzspannung (L1–L3)', pv: 'PV-Erzeugung', load: 'Hausverbrauch', battery: 'Batterie',
   devices: 'Geräte (Shelly/MQTT)', mqttTiles: 'MQTT-Kacheln (W)', wallbox: 'Wallbox (evcc)',
 };
+// Quellen mit eigener Zustimmung (Fable R3, P2-3): ab Werk aus, das Kästchen
+// fragt beim Einschalten ausdrücklich nach. Gleiche Liste wie der Server
+// (services/datenspende CONSENT_SOURCE_GROUPS).
+const DS_CONSENT_SOURCES = {
+  gridVoltage: {
+    hint: '(nur mit deiner Zustimmung, ab Werk aus)',
+    question: 'Netzspannung mitspenden?\n\nDann sendet DVhub zusätzlich zu den Leistungswerten die am Netzzähler gemessene Spannung je Phase (L1–L3, in Volt) an das Forschungsprojekt der RWTH Aachen — dafür legt es dort drei weitere Zähler „Netzspannung L1/L2/L3“ an. Die Spannung zeigt, wie stark dein Ortsnetz belastet ist. Du kannst das jederzeit wieder abwählen.',
+  },
+};
 const dsEl = (id) => document.getElementById(id);
 
 async function dsPost(path, body) {
@@ -1680,13 +1689,24 @@ function renderDatenspende(st) {
       const lab = document.createElement('label');
       const cb = document.createElement('input');
       cb.type = 'checkbox';
-      cb.checked = st.sources?.[key] !== false;
+      cb.checked = st.sources?.[key] === true;
+      const consent = DS_CONSENT_SOURCES[key];
       cb.addEventListener('change', async () => {
+        if (consent && cb.checked && !(await window.dvConfirm(consent.question, { title: 'Zustimmung', okLabel: 'Ja, mitspenden', variant: 'primary' }))) {
+          cb.checked = false;
+          return;
+        }
         const r = await dsPost('/api/datenspende/settings', { sources: { [key]: cb.checked } });
         setText('dsResult', r.ok ? `✓ ${label} ${cb.checked ? 'wird gespendet' : 'wird nicht mehr gespendet'}.` : `Fehler: ${r.j.error || r.status}`);
         refreshDatenspende();
       });
       lab.append(cb, ` ${label} `);
+      if (consent) {
+        const hint = document.createElement('small');
+        hint.className = 'config-row-stack-small';
+        hint.textContent = consent.hint;
+        lab.append(hint, ' ');
+      }
       src.appendChild(lab);
     }
   }

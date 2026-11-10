@@ -46,6 +46,21 @@ export const BATCH_INTERVAL_MAX_S = 90;
 export const HEAD_RETRY_BACKOFF_MS = 30_000;   // gleicher Batch nicht Schlag auf Schlag
 export const HEAD_BLOCK_TIMEOUT_MS = 15 * 60_000; // 5xx-Batch blockiert höchstens so lange
 export const SOURCE_GROUPS = ['grid', 'gridVoltage', 'pv', 'load', 'battery', 'devices', 'mqttTiles', 'wallbox'];
+// Quellen, die eine eigene, ausdrückliche Zustimmung brauchen (Fable R3, P2-3):
+// Wer vor 1.0.10 zugestimmt hat, las „Gespendet werden nur Leistungswerte (W)“.
+// Die Netzspannung ist eine neue Datenart — sie geht nur hinaus, wenn der
+// Schalter wörtlich true ist; fehlt er (bestehende Spender, neue Verknüpfung),
+// bleibt sie aus. Alle anderen Quellen sind wie bisher an, bis man sie abwählt.
+export const CONSENT_SOURCE_GROUPS = Object.freeze(['gridVoltage']);
+/** Wird Quelle g gespendet? sources = cfg.datenspende.sources. */
+export function sourceEnabled(sources, g) {
+  const v = (sources && typeof sources === 'object') ? sources[g] : undefined;
+  return CONSENT_SOURCE_GROUPS.includes(g) ? v === true : v !== false;
+}
+/** Alle Quellengruppen als { gruppe: boolean } nach derselben Regel. */
+export function enabledSources(sources) {
+  return Object.fromEntries(SOURCE_GROUPS.map((g) => [g, sourceEnabled(sources, g)]));
+}
 // Nachversand der Bestandsdaten: höflich gegenüber dem Projekt-Server.
 export const BACKFILL_PAUSE_MS = 3_000;          // Pause nach jedem Batch
 export const BACKFILL_RETRY_MS = 60_000;         // Server/Verbindung weg → später erneut
@@ -106,7 +121,7 @@ export function collectSources(ctx, cfg, nowMs) {
     || (ctx.buildFallbackStatusPayload && ctx.buildFallbackStatusPayload(nowMs)) || {};
   const v = payload.victron || {};
   const ds = cfg.datenspende || {};
-  const on = (g) => (ds.sources || {})[g] !== false;
+  const on = (g) => sourceEnabled(ds.sources, g);
   const vendor = String(cfg.manufacturer || 'DVhub');
   const out = [];
 
@@ -601,8 +616,7 @@ export function createDatenspende(ctx = {}, deps = {}) {
       const db = ctx.db;
       if (!db || typeof db.query !== 'function') { setBackfill(sc, { status: 'error', error: 'Keine Datenbank verfügbar' }); return; }
       const cfg = getCfg();
-      const src = cfg.datenspende?.sources || {};
-      const sources = Object.fromEntries(SOURCE_GROUPS.map((g) => [g, src[g] !== false]));
+      const sources = enabledSources(cfg.datenspende?.sources);
       const bf = sc.backfill;
       let cursor = bf.cursor;
       let liveStart = bf.liveStart;
@@ -673,7 +687,7 @@ export function createDatenspende(ctx = {}, deps = {}) {
     return {
       linked: !!sc,
       ...settings(),
-      sources: SOURCE_GROUPS.reduce((o, g) => ({ ...o, [g]: (cfg.datenspende?.sources || {})[g] !== false }), {}),
+      sources: enabledSources(cfg.datenspende?.sources),
       clientId: sc?.clientId || null,
       username: sc?.username || null,
       linkedAt: sc?.linkedAt || null,

@@ -5401,12 +5401,14 @@ export function createDefaultConfig() {
     //                Datenportals; das frühere 'dvhub' kennt der Server nicht, GH #31,
     //                wird beim Laden gehoben: migrateDatenspendeClientType).
     //   sources:     welche Quellen gespendet werden (jeweils true/false);
-    //                gridVoltage = Netzspannung je Phase (V, seit 05.11.2026).
+    //                gridVoltage = Netzspannung je Phase (V, seit 05.11.2026) —
+    //                eigene Zustimmung, ab Werk aus; fehlt der Schlüssel, gilt
+    //                aus (Fable R3, P2-3; services/datenspende sourceEnabled).
     datenspende: {
       enabled: false,
       intervalSec: 10,
       clientType: 'victron',
-      sources: { grid: true, gridVoltage: true, pv: true, load: true, battery: true, devices: true, mqttTiles: true, wallbox: true }
+      sources: { grid: true, gridVoltage: false, pv: true, load: true, battery: true, devices: true, mqttTiles: true, wallbox: true }
     },
     // Ortsnetz-Auslastung (www.ortsnetz-auslastung.de): opt-in, alle 5 min
     // Netzspannung L1–L3 + Frequenz des Netzzählers. latitude/longitude leer =

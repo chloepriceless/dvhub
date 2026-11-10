@@ -57,8 +57,11 @@ verweist hierher.
 - **Datenspende: Netzspannung je Phase.** Liefert die Anlage Spannungen, spendet DVhub sie als `voltage`-Messwert
   (V) — je Phase ein eigener Zähler „Netzspannung L1/L2/L3“, wie ein Spannungs-Sensor in der Home-Assistant-
   Integration. Jede Messung (alle 30 s, über MQTT/SPiNE häufiger) geht einmal hinaus, nur frische Werte. Neue Quelle
-  „Netzspannung (L1–L3)“ in der Datenspende-Kachel, ab Werk an, abwählbar. Bestehende Zähler und Spenden bleiben
-  unverändert; die drei Zähler werden beim ersten Wert registriert.
+  „Netzspannung (L1–L3)“ in der Datenspende-Kachel, **ab Werk aus und nur mit eigener Zustimmung**: Wer bisher
+  spendet, hat nur Leistungswerten zugestimmt — die Spannung geht erst hinaus, wenn man das Kästchen anhakt und die
+  Nachfrage bestätigt (auch bei neuen Verknüpfungen; über den Support-Tunnel nicht einschaltbar). Bestehende Zähler
+  und Spenden bleiben unverändert; die drei Zähler werden erst nach der Zustimmung beim ersten Wert registriert
+  (Fable-Prüfung R3, P2-3).
 - **EOS-Steuerzeitraum „automatisch“.** Neue Auswahl unter Einstellungen → EOS-Optimierung → „EOS Steuerzeitraum
   höchstens“: mindestens 6 h und bis zur Abfahrt des E-Autos (solange es bei EOS angemeldet ist) bzw. bis zum
   Fensterende eines planbaren Geräts, das heute noch nicht gelaufen ist (ohne Fensterende: frühester Start plus
