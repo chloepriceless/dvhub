@@ -5,7 +5,8 @@
 // Consumption“ (LPC) und „… Production“ (LPP) schreiben dafür fünf Zustände vor:
 //
 //   init                  nach dem Start, bis die Steuerbox sich meldet
-//                         (spätestens nach 120 s ohne Heartbeat → failsafe)
+//                         (spätestens nach 120 s ohne Heartbeat → failsafe);
+//                         eine gespeicherte, noch gültige Grenze gilt hier schon
 //   unlimited_controlled  Steuerbox verbunden, keine aktive Grenze
 //   limited               aktive Grenze, bis Ablauf ihrer Dauer oder Aufhebung
 //   failsafe              Heartbeat weg → Failsafe-Grenze, mindestens für die
@@ -104,6 +105,16 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
     s.failsafeWFromEg = true;
   }
 
+  /**
+   * DVhubs eigene Failsafe-Vorgabe ändern (automatisch Pmin,14a) — nur, solange
+   * die Steuerbox keinen eigenen Wert geschrieben hat. true = geändert.
+   */
+  function setDefaultFailsafeW(w) {
+    if (s.failsafeWFromEg || !Number.isFinite(Number(w)) || Number(w) < 0 || Number(w) === s.failsafeW) return false;
+    s.failsafeW = Number(w);
+    return true;
+  }
+
   /** Failsafe-Mindestdauer, von der Steuerbox geschrieben. */
   function onFailsafeDuration(seconds) {
     if (!Number.isFinite(Number(seconds)) || Number(seconds) <= 0) return;
@@ -111,10 +122,17 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
     s.failsafeDurationFromEg = true;
   }
 
-  /** Heartbeat-Zustand laut Brücke (openeebus prüft die Frist). */
-  function onHeartbeat(ok) {
+  /**
+   * Heartbeat-Zustand laut Brücke. durationChecked: die Brücke hat die
+   * 120-s-Frist schon selbst geprüft (Go: eebus-go IsHeartbeatWithinDuration
+   * meldet „weg“ erst nach 2 min) — dann gilt der Verlust sofort, statt noch
+   * einmal 120 s zu warten (Fable R2 P3-1). openeebus (C) meldet einen
+   * Verbindungsabbau sofort; dort wartet heartbeatLost die Frist ab.
+   */
+  function onHeartbeat(ok, { durationChecked = false } = {}) {
     s.heartbeatOk = ok === true;
     if (s.heartbeatOk) s.lastHeartbeatAt = now();
+    else if (durationChecked === true) s.lastHeartbeatAt = Math.min(s.lastHeartbeatAt ?? -Infinity, now() - HEARTBEAT_TIMEOUT_MS);
     return evaluate();
   }
 
@@ -162,6 +180,13 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
    */
   function effective() {
     switch (s.state) {
+      // Nach einem Neustart: eine gespeicherte, noch gültige Grenze der
+      // Steuerbox gilt sofort weiter, nicht erst nach dem ersten Herzschlag
+      // (bis zu 120 s ohne Grenze, Fable R2 P2-4). Eine in init empfangene
+      // Grenze wechselt ohnehin nach limited (onLimit).
+      case 'init':
+        if (limitValid()) return { state: s.state, limitW: s.limit.w, reason: `${kind}_limit_restored`, until: s.limit.until };
+        return { state: s.state, limitW: null, reason: s.state, until: null };
       case 'limited':
         return { state: s.state, limitW: s.limit.w, reason: `${kind}_limit`, until: s.limit.until };
       case 'failsafe':
@@ -215,5 +240,5 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
     }
   }
 
-  return { setEnabled, onLimit, onFailsafeLimit, onFailsafeDuration, onHeartbeat, evaluate, effective, snapshot, toJSON, restore };
+  return { setEnabled, onLimit, onFailsafeLimit, onFailsafeDuration, setDefaultFailsafeW, onHeartbeat, evaluate, effective, snapshot, toJSON, restore };
 }

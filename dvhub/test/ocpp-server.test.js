@@ -23,11 +23,11 @@ async function freePort() {
   return port;
 }
 
-async function start(cfgOver = {}) {
+async function start(cfgOver = {}, ctxExtra = {}) {
   const port = await freePort();
   const logs = [];
   const cfg = { ocpp: { enabled: true, port, host: '127.0.0.1', password: '', ...cfgOver } };
-  const srv = createOcppServer({ getCfg: () => cfg, pushLog: (e, d) => logs.push([e, d]) }, { callTimeoutMs: 2000 });
+  const srv = createOcppServer({ getCfg: () => cfg, pushLog: (e, d) => logs.push([e, d]), ...ctxExtra }, { callTimeoutMs: 2000 });
   const r = await srv.start();
   assert.equal(r?.started, true, `Zentrale startet nicht auf Port ${port}: ${JSON.stringify(logs.at(-1))}`);
   return { srv, port, logs, cfg };
@@ -181,4 +181,33 @@ test('Port belegt → klare Meldung im Status, einmal im Protokoll, kein Absturz
   } finally { blocker.close(); await srv.stop(); }
   const { createDefaultConfig } = await import('../config-model.js');
   assert.equal(createDefaultConfig().ocpp.port, 8889);
+});
+
+// Fable R2 P3-17: Mess-Konfiguration beim Boot der Box ist ein Write an die
+// Wallbox — im Not-Halt („als ob aus“) und im Lese-Modus nicht senden.
+test('BootNotification im Not-Halt: keine ChangeConfiguration an die Box', async () => {
+  const state = { ctrl: { discretionaryWritesPaused: true } };
+  const { srv, port } = await start({}, { state });
+  const cp = chargePoint(port, 'BOX-NH');
+  try {
+    await cp.opened;
+    const boot = await cp.call('BootNotification', { chargePointVendor: 'Alfen', chargePointModel: 'Eve' });
+    assert.equal(boot[2].status, 'Accepted', 'Anmeldung wird beantwortet (Antwort, kein Befehl)');
+    await wait(100);
+    assert.deepEqual(cp.received.filter(([a]) => a === 'ChangeConfiguration'), []);
+  } finally { cp.ws.close(); await srv.stop(); }
+});
+
+test('Lese-Modus: keine ChangeConfiguration beim Boot, keine Steuerbefehle (callAction)', async () => {
+  const { srv, port } = await start();
+  const cp = chargePoint(port, 'BOX-RO');
+  process.env.DVHUB_READ_ONLY = '1';
+  try {
+    await cp.opened;
+    await cp.call('BootNotification', { chargePointVendor: 'Alfen', chargePointModel: 'Eve' });
+    await wait(100);
+    const r = await srv.callAction('BOX-RO', 'RemoteStartTransaction', { idTag: 'dvhub', connectorId: 1 });
+    assert.deepEqual([r.ok, r.error], [false, 'read_only']);
+    assert.deepEqual(cp.received, [], 'nichts an die Box geschickt');
+  } finally { delete process.env.DVHUB_READ_ONLY; cp.ws.close(); await srv.stop(); }
 });

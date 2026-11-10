@@ -125,12 +125,15 @@ export function computePmin14a(devices) {
  * @param {object} p
  * @param {number} p.limitW           Vorgabe des Netzbetreibers (W)
  * @param {number|null} p.gridImportW Netzbezug am Anschlusspunkt, Bezug positiv
+ *                                    (null = kein gültiger, frischer Messwert → nur die Vorgabe)
  * @param {number} p.steuveW          aktuelle Leistung aller gesteuerten SteuVE
  * @param {boolean} [p.usePvSurplus=true]
  */
 export function budgetW({ limitW, gridImportW, steuveW, usePvSurplus = true }) {
   const limit = Math.max(0, Number(limitW) || 0);
-  if (!usePvSurplus || !Number.isFinite(Number(gridImportW))) return limit;
+  // null/undefined = kein gültiger Messwert (Number(null) wäre 0 und damit ein
+  // scheinbar gemessener Bezug von 0 W — Fable R2 P1-1).
+  if (!usePvSurplus || gridImportW == null || !Number.isFinite(Number(gridImportW))) return limit;
   const baseW = Number(gridImportW) - Math.max(0, Number(steuveW) || 0);
   return limit + Math.max(0, -baseW);
 }

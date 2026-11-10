@@ -674,6 +674,14 @@ func (b *Bridge) Tick() {
 	b.lastHB = [2]int{lpc, lpp}
 	b.mu.Unlock()
 	if changed {
-		b.out.Emit(newEvent("grid_heartbeat_state").Bool("lpc_ok", lpc == 1).Bool("lpp_ok", lpp == 1))
+		b.out.Emit(heartbeatStateEvent(lpc == 1, lpp == 1))
 	}
+}
+
+// heartbeatStateEvent: within_duration sagt DVhub, dass ok/nicht ok schon mit
+// der 2-min-Frist geprüft ist (IsHeartbeatWithinDuration) — DVhub wartet dann
+// nicht noch einmal 120 s bis zum Failsafe (Fable R2 P3-1). Die C-Brücke
+// (openeebus) meldet einen Abbau sofort und schickt das Feld nicht.
+func heartbeatStateEvent(lpcOK, lppOK bool) *Obj {
+	return newEvent("grid_heartbeat_state").Bool("lpc_ok", lpcOK).Bool("lpp_ok", lppOK).Bool("within_duration", true)
 }

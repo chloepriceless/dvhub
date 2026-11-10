@@ -240,3 +240,10 @@ func TestOhpcfZustandsnamen(t *testing.T) {
 		}
 	}
 }
+
+// Fable R2 P3-1: grid_heartbeat_state trägt within_duration (Frist schon geprüft).
+func TestHeartbeatStateMitFrist(t *testing.T) {
+	if got, want := mustJSON(t, heartbeatStateEvent(false, true)), `{"ev":"grid_heartbeat_state","lpc_ok":false,"lpp_ok":true,"within_duration":true}`; got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+}

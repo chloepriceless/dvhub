@@ -1184,6 +1184,8 @@ const floorHandoffStore = {
 const EV_OVERRIDE_PATH = path.join(DATA_DIR || __dirname, 'ev_override.json');
 const EV_OWNED_PATH = path.join(DATA_DIR || __dirname, 'ev_owned.json');
 
+// Liefert true, wenn gespeichert; false bei einem Fehler (setEmergencyStop
+// meldet das als Systemwarnung, Fable R2 P3-7).
 function persistControlState() {
   try {
     // Item 25-03: atomar via tmp+rename (control-state-io.js) — ein abgebrochener
@@ -1194,8 +1196,10 @@ function persistControlState() {
       pausedBy: state.ctrl.pausedBy || null,
       pausedReason: state.ctrl.pausedReason || null
     });
+    return true;
   } catch (e) {
     pushLog('control_state_persist_error', { error: e.message }, 'error');
+    return false;
   }
 }
 
@@ -1542,6 +1546,12 @@ const setSystemWarning = (id, message) => {
   if (message == null) { if (i >= 0) state.systemWarnings.splice(i, 1); return; }
   if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
 };
+// T-0099 / Fable R2 P2-7: einen aktiven Not-Halt laden, BEVOR der erste Dienst
+// startet — hier, sobald setSystemWarning steht. Vorher lag das Laden hinter
+// feedInCap.start() (dessen erster Takt läuft sofort und schrieb 2706 einmal),
+// peakShaving, gridConnection, multiGx & Co.: sie sahen beim Start im Not-Halt
+// noch „nicht pausiert“.
+if (IS_RUNTIME_PROCESS) loadControlState();
 ctx.feedInCap = createFeedInCap(ctx, { getTransport: () => transport, setWarning: setSystemWarning });
 // Strompreis-Zeitraum endet bald ohne Nachfolger (Chrissi 28.10.2026): gelber
 // Hinweis 14 Tage vorher — sonst gilt danach still der Grundtarif.
@@ -1889,7 +1899,8 @@ const eebusService = createEebusService(ctx, { dataDir: DATA_DIR || undefined })
 ctx.eebus = eebusService;
 // § 14a EnWG: Vorgabe des Netzbetreibers (EEBUS oder Steuerbox-Relais) auf
 // Wärmepumpe, Wallbox und Speicher aufteilen, Mindestleistung Pmin,14a.
-const paragraph14aService = createParagraph14aService(ctx);
+// dataDir: letzter Relais-Zustand übersteht einen Neustart (p14a_relay.json).
+const paragraph14aService = createParagraph14aService(ctx, { dataDir: DATA_DIR || __dirname });
 ctx.p14a = paragraph14aService;
 // Systemuhr gegen einen Zeitserver prüfen (nur prüfen und warnen — stellen
 // muss das Betriebssystem der Box, siehe services/clock-check.js).
@@ -2701,9 +2712,8 @@ if (IS_WEB_PROCESS) {
 
 if (IS_RUNTIME_PROCESS) {
   loadEnergy(state, ENERGY_PATH, cfg.epex.timezone);
-  // T-0099: restore an active emergency stop BEFORE the schedule evaluator's
-  // first tick so no discretionary write slips through the boot window.
-  loadControlState();
+  // T-0099: der Not-Halt ist schon geladen (vor dem ersten Dienststart, siehe
+  // loadControlState() bei createFeedInCap) — vor dem ersten Takt des Zeitplans.
   // Phase 17 Plan 03 — sync boot-load of license_state.json. Runs BEFORE any
   // service.start() / HTTP listener so the very first request sees the
   // persisted license status (no race window where requirePro returns 403 on

@@ -85,6 +85,20 @@ test('Heartbeat-Verlust in limited → nach 120 s Failsafe mit vom EG geschriebe
   assert.equal(e.limitW, 3000);
 });
 
+// Fable R2 P3-1: dvhub-eebus in Go meldet „weg“ erst, wenn eebus-go selbst
+// 2 min ohne Herzschlag festgestellt hat (IsHeartbeatWithinDuration) — dann
+// nicht noch einmal 120 s warten (sonst Failsafe erst nach rund 4 min).
+test('Herzschlag-Verlust schon mit Frist geprüft (Go): Failsafe sofort, nicht nach weiteren 120 s', () => {
+  const { m, advance } = machine();
+  m.setEnabled(true);
+  m.onHeartbeat(true);
+  m.onLimit({ w: 6000, durationS: 3600, active: true });
+  advance(5_000);
+  m.evaluate();
+  m.onHeartbeat(false, { durationChecked: true });
+  assert.equal(m.effective().state, 'failsafe');
+});
+
 test('kurzer Verbindungsabbruch (< 120 s) löst keinen Failsafe aus', () => {
   const { m, advance } = machine();
   m.setEnabled(true);
@@ -165,6 +179,41 @@ test('Neustart: Failsafe-Werte und laufender Failsafe bleiben erhalten', () => {
   t += 3 * 3600_000 + 1;
   b.evaluate();
   assert.equal(b.effective().state, 'unlimited_autonomous', 'Failsafe endet 4 h nach seinem ursprünglichen Beginn');
+});
+
+// Fable R2 P2-4: Steuerbox dimmt auf 4,2 kW für 2 h, DVhub startet neu (Update).
+// Vorher galt bis zum ersten Herzschlag (bis 120 s) gar keine Grenze.
+test('Neustart während einer Begrenzung: die gespeicherte, noch gültige Grenze gilt sofort (schon in init)', () => {
+  const a = machine();
+  a.m.setEnabled(true);
+  a.m.onHeartbeat(true);
+  a.m.onLimit({ w: 4200, durationS: 7200, active: true });
+  const saved = JSON.parse(JSON.stringify(a.m.toJSON()));
+
+  let t = a.now() + 60_000;
+  const b = createLimitStateMachine({ kind: 'lpc', failsafeW: 4200, failsafeDurationS: 7200, now: () => t });
+  b.setEnabled(true);
+  b.restore(saved);
+  assert.equal(b.effective().state, 'init');
+  assert.equal(b.effective().limitW, 4200, 'sofort nach dem Neustart');
+  assert.equal(b.effective().until, saved.limit.until);
+  t += 100_000;
+  b.evaluate();
+  assert.equal(b.effective().limitW, 4200, 'auch ohne Herzschlag');
+  b.onHeartbeat(true);
+  assert.deepEqual([b.effective().state, b.effective().limitW], ['limited', 4200]);
+});
+
+test('Neustart: abgelaufene oder aufgehobene gespeicherte Grenze gilt in init nicht', () => {
+  const t = 1_000_000;
+  const b = createLimitStateMachine({ kind: 'lpc', failsafeW: 4200, failsafeDurationS: 7200, now: () => t });
+  b.setEnabled(true);
+  b.restore({ limit: { w: 4200, active: true, receivedAt: t - 8000_000, until: t - 1000 } });
+  assert.equal(b.effective().limitW, null, 'abgelaufen');
+  const c = createLimitStateMachine({ kind: 'lpc', failsafeW: 4200, failsafeDurationS: 7200, now: () => t });
+  c.setEnabled(true);
+  c.restore({ limit: { w: 4200, active: false, receivedAt: t - 1000, until: null } });
+  assert.equal(c.effective().limitW, null, 'aufgehoben');
 });
 
 test('nur von der Steuerbox geschriebene Failsafe-Werte werden gespeichert', () => {

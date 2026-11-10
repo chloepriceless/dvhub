@@ -5,14 +5,18 @@ import {
   createParagraph14aService, resolveParagraph14aConfig, parseRelayPayload,
 } from '../services/paragraph14a/index.js';
 
-function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, eebusDevices = [], evcc = null, evccConnected, clock, batteryAssist = null } = {}) {
+function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, eebusDevices = [], evcc = null, evccConnected, clock, batteryAssist = null, meterOk = true, meterAgeMs = 0, evccError = null, evccAgeMs = 0, deps = {} } = {}) {
   const cfg = {
     gridPositiveMeans: 'grid_import',
     optimizer: { eosOptimizeEv: true, evEvccControl: true, evMaxChargeW: 11000, maxChargeW: 10000, ...optimizer },
     wallbox: { type: 'evcc' },
     paragraph14a: p14a,
   };
-  const state = { ctrl: {}, victron: { batteryPowerW }, meter: { grid_total_w: gridTotalW } };
+  // Zähler wie in polling.js: ok + Abfragezeit (P1-1 Fable R2 — das Budget darf
+  // nur mit einem gültigen, frischen Wert rechnen).
+  const meter = { ok: meterOk, grid_total_w: gridTotalW };
+  Object.defineProperty(meter, 'updatedAt', { get: () => (clock ? clock.t : Date.now()) - meterAgeMs, configurable: true, enumerable: true });
+  const state = { ctrl: {}, victron: { batteryPowerW }, meter };
   const logs = [];
   const plug = { connected: evccConnected };
   const lost = [];
@@ -24,7 +28,9 @@ function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, 
     getCfg: () => cfg,
     pushLog: (e, d) => logs.push([e, d]),
     mqttHub: { subscribe: (topic, fn) => subs.set(topic, fn) },
-    evccIntegration: { getStatus: () => ({ loadpoints: [{ chargePowerW: evcc ?? 0, connected: plug.connected }] }) },
+    // wie evcc-integration.js: letzter Stand bleibt bei einem Fehler stehen
+    evccIntegration: { getStatus: () => ({ lastError: evccError, lastPolledAt: (clock ? clock.t : Date.now()) - evccAgeMs,
+      loadpoints: [{ chargePowerW: evcc ?? 0, connected: plug.connected }] }) },
     eebus: {
       consumptionDevices: () => eebusDevices,
       lostConsumptionDevices: () => lost,
@@ -33,7 +39,7 @@ function setup({ p14a = {}, optimizer = {}, gridTotalW = -0, batteryPowerW = 0, 
     },
   };
   if (batteryAssist) ctx.batteryAssist = batteryAssist;
-  const svc = createParagraph14aService(ctx, { setInterval: () => 0, clearInterval: () => {}, ...(clock ? { now: () => clock.t } : {}) });
+  const svc = createParagraph14aService(ctx, { setInterval: () => 0, clearInterval: () => {}, ...(clock ? { now: () => clock.t } : {}), ...deps });
   return { svc, state, cfg, logs, subs, applied, eebusDevices, lost, issues, setConnected: (v) => { plug.connected = v; } };
 }
 
@@ -96,6 +102,34 @@ test('PV-Überschuss kommt zum Budget dazu', () => {
   assert.equal(s.state.p14a.budgetW, 4200 + 5000);
 });
 
+// ── Fable R2 P1-1: Budget nur mit gültigem, frischem Zählerwert ──
+// Szenario A: Start, Zähler nie gelesen (meter.ok false, grid_total_w 0) —
+// Wallbox lädt 11 kW, WP 6 kW. Vorher: „PV-Überschuss“ 17 kW → Budget 21,2 kW.
+test('Budget: Zähler ungültig (Start) → Budget = Vorgabe, kein erfundener PV-Überschuss', () => {
+  const s = setup({ meterOk: false, gridTotalW: 0, evcc: 11000, evccConnected: true,
+    eebusDevices: [{ id: 'eebus:hp', kind: 'waermepumpe', maxW: 6000, powerW: 6000 }] });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  assert.equal(s.state.p14a.budgetW, 4200);
+  const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
+  assert.ok(sum <= 4200, `Summe ${sum} W über der Vorgabe 4200 W`);
+});
+
+// Szenario B: Zähler mittags bei −6 kW eingefroren, abends kommt die Dimmung.
+test('Budget: eingefrorener (alter) Zählerwert → Budget = Vorgabe', () => {
+  const s = setup({ meterAgeMs: 10 * 60_000, gridTotalW: -6000, evcc: 0 });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  assert.equal(s.state.p14a.budgetW, 4200);
+});
+
+test('Budget: frischer, gültiger Zähler → PV-Überschuss zählt weiter', () => {
+  const s = setup({ meterAgeMs: 5_000, gridTotalW: -6000, evcc: 0 });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  assert.equal(s.state.p14a.budgetW, 4200 + 6000);
+});
+
 test('Relais: gedimmt → Mindestleistung nach Formel, anteilig wenn eingestellt', () => {
   const s = setup({ p14a: { relay: { enabled: true, topic: 'steuerbox/relais' }, allocation: 'proportional', usePvSurplus: false, demandFirst: false } });
   s.svc.update();
@@ -121,13 +155,124 @@ test('Relais „aktiv bei offen“ und EEBUS gleichzeitig: die kleinere Grenze g
   assert.equal(s.state.p14a.limitW, 5000);
 });
 
-test('Geräte von Hand zählen für die Mindestleistung, werden aber nicht gesteuert', () => {
+// Fable R2 P2-1: ein von Hand eingetragenes Gerät „über DVhub (EMS)“ zählt
+// für Pmin,14a (BK6-22-300 Ziffer 4.5.2: Pmin gilt für alle SteuVE hinter dem
+// EMS, die Vorgabe für ihren gemeinsamen Bezug). DVhub kann es nicht begrenzen —
+// also ist seine Nennleistung belegt, sonst verteilte DVhub die ganze Vorgabe
+// an die steuerbaren Geräte und die Wärmepumpe zöge ungebremst dazu
+// (vorher: 10,5 kW an Wallbox/Speicher + 6 kW WP = 16,5 kW bei 10,5 kW Vorgabe).
+test('Geräte von Hand (EMS) zählen für die Mindestleistung, ihre Nennleistung ist belegt (Summe nie über der Vorgabe)', () => {
   const s = setup({ p14a: { devices: [{ id: 'wp', name: 'WP Keller', kind: 'waermepumpe', powerW: 6000 }] } });
   s.state.ctrl.eebusConsumptionLimitW = 10500;
   s.svc.update();
   assert.equal(s.state.p14a.pminW, 10500, 'Wallbox + Speicher + WP: 4,2 + 2·0,75·4,2');
-  assert.equal(s.state.p14a.shares.wp, undefined);
-  assert.equal(s.svc.summary().devices.find((d) => d.id === 'wp').controllable, false);
+  assert.equal(s.state.p14a.shares.wp, undefined, 'kein Anteil — DVhub steuert es nicht');
+  assert.deepEqual(s.state.p14a.reserved, { wp: 6000 });
+  const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
+  assert.ok(sum + 6000 <= 10500, `Anteile ${sum} W + 6000 W belegt > 10500 W`);
+  const wp = s.svc.summary().devices.find((d) => d.id === 'wp');
+  assert.equal(wp.controllable, false);
+  assert.equal(wp.reservedW, 6000);
+});
+
+test('Geräte von Hand mit Direktsteuerung: eigene Vorgabe des Netzbetreibers, nichts belegt', () => {
+  const s = setup({ p14a: { devices: [{ id: 'wp', name: 'WP', kind: 'waermepumpe', powerW: 6000, control: 'direct' }] } });
+  s.state.ctrl.eebusConsumptionLimitW = 7560;
+  s.svc.update();
+  assert.deepEqual(s.state.p14a.reserved, {});
+});
+
+test('Relais gedimmt mit Gerät von Hand (EMS): die Relais-Grenze schließt dessen Nennleistung ein', () => {
+  const s = setup({ p14a: { relay: { enabled: true, topic: 'r' }, usePvSurplus: false,
+    devices: [{ id: 'wp', name: 'WP', kind: 'waermepumpe', powerW: 6000 }] } });
+  s.svc.update();
+  s.subs.get('r')('r', '1');
+  assert.equal(s.state.p14a.limitW, 10500);
+  const sum = Object.values(s.state.p14a.shares).reduce((a, w) => a + w, 0);
+  assert.ok(sum + s.state.p14a.reserved.wp <= 10500, `Summe ${sum} + belegt ${s.state.p14a.reserved.wp}`);
+  assert.equal(s.state.p14a.reserved.wp, 6000);
+});
+
+// ── Fable R2 P2-5: veraltete Messwerte blähen das Budget nicht auf ──
+test('evcc nicht erreichbar: der letzte Stand („lädt 11 kW“) zählt nicht als Leistung der SteuVE', () => {
+  // Zähler frisch: 1 kW Bezug (Haus). evcc meldet einen Fehler, letzter Stand 11 kW.
+  // Vorher: baseW = 1000 − 11000 → „Überschuss“ 10 kW → Budget 14,2 kW.
+  const s = setup({ gridTotalW: 1000, evcc: 11000, evccConnected: true, evccError: 'evcc timeout', optimizer: { maxChargeW: 0 } });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  assert.equal(s.state.p14a.budgetW, 4200);
+  assert.equal(s.svc.summary().devices.find((d) => d.id === 'wallbox').currentW, null, 'Messwert unbekannt');
+});
+
+test('evcc-Stand zu alt: ebenfalls unbekannt; frisch: zählt', () => {
+  const stale = setup({ gridTotalW: 1000, evcc: 11000, evccConnected: true, evccAgeMs: 5 * 60_000, optimizer: { maxChargeW: 0 } });
+  stale.state.ctrl.eebusConsumptionLimitW = 4200;
+  stale.svc.update();
+  assert.equal(stale.state.p14a.budgetW, 4200);
+  const fresh = setup({ gridTotalW: -1000, evcc: 3000, evccConnected: true, evccAgeMs: 10_000, optimizer: { maxChargeW: 0 } });
+  fresh.state.ctrl.eebusConsumptionLimitW = 4200;
+  fresh.svc.update();
+  assert.equal(fresh.state.p14a.budgetW, 4200 + 4000, 'Einspeisung 1 kW + Wallbox 3 kW');
+});
+
+// ── Fable R2 P2-4: Relais-Zustand übersteht einen Neustart ──
+function memFs() {
+  const files = new Map();
+  return {
+    files,
+    readFileSync: (f) => { if (!files.has(f)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } return files.get(f); },
+    writeFileSync: (f, d) => { files.set(f, String(d)); },
+    renameSync: (a, b) => { files.set(b, files.get(a)); files.delete(a); },
+    mkdirSync: () => {},
+  };
+}
+
+test('Relais: gedimmter Zustand wird gespeichert und nach einem Neustart sofort wieder angewandt', () => {
+  const mem = memFs();
+  const deps = { fs: mem, dataDir: '/data' };
+  const p14a = { relay: { enabled: true, topic: 'steuerbox/relais' }, usePvSurplus: false };
+  const a = setup({ p14a, deps });
+  a.svc.update();
+  a.subs.get('steuerbox/relais')('steuerbox/relais', '1');
+  assert.equal(a.state.p14a.active, true);
+  // Neustart: neue Instanz, das Relais sendet nur bei einem Wechsel (nicht retained)
+  const b = setup({ p14a, deps });
+  b.svc.update();
+  assert.equal(b.state.p14a.active, true, 'Dimmung gilt sofort weiter');
+  assert.equal(b.state.p14a.source, 'relay');
+  assert.equal(b.svc.summary().relay.restored, true, 'Leitstand: Zustand von vor dem Neustart');
+  assert.ok(b.state.ctrl.p14aWallboxCapW != null, 'Wallbox gedeckelt');
+  b.subs.get('steuerbox/relais')('steuerbox/relais', '0');
+  assert.equal(b.state.p14a.active, false);
+  assert.equal(b.svc.summary().relay.restored, false);
+  // dritter Start: Freigabe ist gespeichert
+  const c = setup({ p14a, deps });
+  c.svc.update();
+  assert.equal(c.state.p14a.active, false);
+});
+
+test('Relais: gespeicherter Zustand eines anderen Themas gilt nicht', () => {
+  const mem = memFs();
+  const deps = { fs: mem, dataDir: '/data' };
+  const a = setup({ p14a: { relay: { enabled: true, topic: 'alt' } }, deps });
+  a.svc.update();
+  a.subs.get('alt')('alt', '1');
+  const b = setup({ p14a: { relay: { enabled: true, topic: 'neu' } }, deps });
+  b.svc.update();
+  assert.equal(b.state.p14a.active, false);
+});
+
+// ── Fable R2 P3-3: nicht erreichbare EEBUS-Hauptwallbox ──
+test('nicht erreichbare EEBUS-Hauptwallbox: Failsafe-Wert belegt, Anteil 0 (nicht „ohne Grenze“)', () => {
+  const SKI = 'e'.repeat(40);
+  const s = setup({ optimizer: { eosOptimizeEv: true, maxChargeW: 0 } });
+  s.cfg.wallbox = { type: 'eebus', eebus: { ski: SKI } };
+  s.lost.push({ id: `eebus:${SKI}`, ski: SKI, name: 'Box', kind: 'ladepunkt', maxW: 11000, failsafeW: 4200 });
+  s.state.ctrl.eebusConsumptionLimitW = 7560;
+  s.svc.update();
+  assert.deepEqual(s.state.p14a.reserved, { wallbox: 4200 });
+  assert.equal(s.state.p14a.shares.wallbox, 0);
+  assert.equal(s.state.ctrl.p14aWallboxCapW, 0);
 });
 
 test('kleine Schwankungen des Budgets erreichen die Geräte nicht', () => {

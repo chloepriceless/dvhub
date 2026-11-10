@@ -77,6 +77,10 @@ test('Budget: nur der netzwirksame Bezug ist begrenzt, PV-Überschuss kommt dazu
   assert.equal(budgetW({ limitW: 4200, gridImportW: 4800, steuveW: 4000 }), 4200);
   assert.equal(budgetW({ limitW: 4200, gridImportW: -1200, steuveW: 4000, usePvSurplus: false }), 4200);
   assert.equal(budgetW({ limitW: 4200, gridImportW: null, steuveW: 0 }), 4200, 'ohne Messwert: nur die Grenze');
+  // Fable R2 P1-1: null ist kein Bezug von 0 W — sonst würde die laufende
+  // Leistung der SteuVE (17 kW) zum „PV-Überschuss“.
+  assert.equal(budgetW({ limitW: 4200, gridImportW: null, steuveW: 17000 }), 4200, 'ohne Messwert kein Zuschlag');
+  assert.equal(budgetW({ limitW: 4200, gridImportW: undefined, steuveW: 17000 }), 4200);
 });
 
 test('Aufteilung nach Vorrang: Wärmepumpe, dann Wallbox, Speicher zuletzt', () => {

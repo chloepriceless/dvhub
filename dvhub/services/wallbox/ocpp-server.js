@@ -15,11 +15,14 @@
 // Zugang: nur Heimnetz-Adressen (wie der Modbus-Server); optional Passwort
 // (OCPP-Sicherheitsprofil 1, HTTP Basic, Benutzer = Ladepunkt-ID).
 import { WebSocketServer } from 'ws';
+import { isReadOnlyMode, noteBlockedWrite } from '../../read-only-guard.js';
 
 // 8887 nutzt evcc für seine eigene OCPP-Zentrale (A7S 2026-10-20) — daneben.
 const DEFAULT_PORT = 8889;
 const HEARTBEAT_S = 60;
 const METER_INTERVAL_S = 10;
+// Aufrufe, die an der Box nichts verändern (nur Abfragen) — im Lese-Modus erlaubt.
+const READ_ACTIONS = new Set(['TriggerMessage', 'GetConfiguration', 'GetCompositeSchedule']);
 
 function privateAddress(addr) {
   const raw = String(addr || '').replace(/^::ffff:/, '');
@@ -71,7 +74,13 @@ export function createOcppServer(ctx, deps = {}) {
         cp.firmware = p?.firmwareVersion ?? null;
         reply(cp.ws, id, { status: 'Accepted', currentTime: t, interval: HEARTBEAT_S });
         log('ocpp_boot', { id: cp.id, vendor: cp.vendor, model: cp.model });
-        // Messwerte regelmäßig und mit Leistung/Energie/Strom anfordern.
+        // Messwerte regelmäßig und mit Leistung/Energie/Strom anfordern. Das ist
+        // ein Write an die Box: im Not-Halt („als ob aus“) und im Lese-Modus
+        // nicht (Fable R2 P3-17) — dann gilt ihre eigene Einstellung.
+        if (ctx.state?.ctrl?.discretionaryWritesPaused === true || isReadOnlyMode()) {
+          log('ocpp_boot_config_skipped', { id: cp.id, reason: isReadOnlyMode() ? 'read_only' : 'not_halt' });
+          return;
+        }
         setTimeout(() => {
           callAction(cp.id, 'ChangeConfiguration', { key: 'MeterValueSampleInterval', value: String(METER_INTERVAL_S) }).catch(() => {});
           callAction(cp.id, 'ChangeConfiguration', { key: 'MeterValuesSampledData', value: 'Energy.Active.Import.Register,Power.Active.Import,Current.Import' }).catch(() => {});
@@ -157,6 +166,11 @@ export function createOcppServer(ctx, deps = {}) {
 
   /** Aufruf an einen Ladepunkt; Ergebnis { ok, payload } oder { ok:false, error }. */
   function callAction(cpId, action, payload) {
+    // Lese-Modus: unterste Sperre für alle Befehle, die an der Box etwas ändern.
+    if (isReadOnlyMode() && !READ_ACTIONS.has(action)) {
+      noteBlockedWrite(`ocpp ${action} ${cpId}`);
+      return Promise.resolve({ ok: false, error: 'read_only' });
+    }
     const cp = points.get(cpId);
     if (!cp?.ws || cp.ws.readyState !== 1) return Promise.resolve({ ok: false, error: `Ladepunkt ${cpId} nicht verbunden` });
     const id = `dv${++msgId}`;

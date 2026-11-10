@@ -14,8 +14,10 @@
 // Die Geräteliste (für Pmin,14a) kommt aus dem, was DVhub kennt, plus Einträgen
 // von Hand (paragraph14a.devices) für Anlagen, die DVhub nicht selbst steuert.
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { parseMqttPayload } from '../../transport-mqtt.js';
-import { gridImportPositiveW } from '../eebus/index.js';
 import { resolveEvccBridgeConfig } from '../optimizer/eos-evcc-bridge.js';
 import { directWallboxConfigured } from '../wallbox/types.js';
 import { mergeDeviceCaps, meterImport } from '../import-limit/core.js';
@@ -39,10 +41,16 @@ const DEMAND_HOLD_MS = 60_000;
 // „Läuft an der Grenze“: Messwert höchstens so weit unter dem letzten Anteil.
 const AT_CAP_TOL_MIN_W = 200;
 const AT_CAP_TOL_SHARE = 0.1;
-// Akku-Hilfe nur mit gültigem Zählerwert, höchstens so alt (Rückkopplung).
-const ASSIST_METER_MAX_AGE_MS = 30_000;
+// Budget (PV-Überschuss) und Akku-Hilfe nur mit gültigem Zählerwert, höchstens
+// so alt (Rückkopplung; der Zähler wird alle paar Sekunden gelesen).
+const METER_MAX_AGE_MS = 30_000;
 // Geplanter Netzbezug des Speichers (schedule-eval) gilt so lange als aktuell.
 const BATTERY_WANT_MAX_AGE_MS = 120_000;
+// Messwert der Wallbox über evcc: höchstens so alt (mindestens drei Abfragen),
+// sonst unbekannt — evcc lässt bei einem Fehler den letzten Stand stehen.
+const EVCC_MEASUREMENT_MIN_AGE_MS = 60_000;
+// Zuletzt gemeldeter Relais-Zustand (übersteht einen Neustart, Fable R2 P2-4).
+const RELAY_STATE_FILE = 'p14a_relay.json';
 
 /** Konfiguration mit Vorgaben; ungültige Geräte fallen raus. */
 export function resolveParagraph14aConfig(cfg) {
@@ -102,8 +110,12 @@ export function createParagraph14aService(ctx, deps = {}) {
   const now = deps.now || (() => Date.now());
   const setIntervalFn = deps.setInterval || setInterval;
   const clearIntervalFn = deps.clearInterval || clearInterval;
+  const fsImpl = deps.fs || fs;
+  // Ohne Datenverzeichnis (Tests) wird der Relais-Zustand nicht gespeichert.
+  const dataDir = deps.dataDir || ctx.dataDir || null;
 
-  const relay = { level: null, at: null, subscribedTopic: null };
+  // restored: Zustand stammt aus der Zeit vor dem Neustart (noch keine neue Nachricht).
+  const relay = { level: null, at: null, subscribedTopic: null, restored: false };
   let timer = null;
   let lastShares = {};
   let lastActiveKey = null;
@@ -148,7 +160,16 @@ export function createParagraph14aService(ctx, deps = {}) {
   function wallboxState(cfg, bc) {
     const fin = (v) => (v != null && Number.isFinite(Number(v)) ? Math.max(0, Number(v)) : null);
     if (bc.charger === 'evcc') {
-      const lp = ctx.evccIntegration?.getStatus?.()?.loadpoints?.[bc.loadpoint - 1];
+      const st = ctx.evccIntegration?.getStatus?.();
+      // evcc lässt bei einem Abfragefehler den letzten Stand stehen: ein altes
+      // „lädt 11 kW“ machte den Zähler um 11 kW zu klein und das Budget um 11 kW
+      // zu groß (Fable R2 P2-5). Ohne frische Antwort: unbekannt.
+      const pollMs = Math.max(5_000, Number(cfg?.evcc?.pollIntervalMs) || 15_000);
+      const maxAge = Math.max(EVCC_MEASUREMENT_MIN_AGE_MS, 3 * pollMs);
+      const polledAt = Number(st?.lastPolledAt) || 0;
+      const fresh = st?.lastError == null && polledAt > 0 && now() - polledAt <= maxAge;
+      if (!fresh) return { measuredW: null, available: true };
+      const lp = st?.loadpoints?.[bc.loadpoint - 1];
       return { measuredW: fin(lp?.chargePowerW), available: lp?.connected !== false };
     }
     const st = ctx.chargerStatus?.fresh?.();
@@ -223,28 +244,73 @@ export function createParagraph14aService(ctx, deps = {}) {
       // weiter für Pmin,14a, bekommen keinen Anteil, und ihr Wert ist im Budget
       // belegt — sonst könnten die übrigen Geräte die ganze Grenze ausschöpfen.
       for (const d of ctx.eebus?.lostConsumptionDevices?.() || []) {
-        if (mainEebusSki && d.ski === mainEebusSki) continue;
+        if (mainEebusSki && d.ski === mainEebusSki) {
+          // Auch die EEBUS-Hauptwallbox zieht, solange DVhub sie nicht erreicht,
+          // bis zu ihrem Failsafe-Wert: belegt, kein Anteil (Fable R2 P3-3).
+          const wb = list.find((x) => x.id === 'wallbox');
+          if (wb) {
+            Object.assign(wb, { controllable: false, unreachable: true, currentW: 0, measuredW: null,
+              reserveW: Math.min(Number(wb.powerW) || d.maxW, d.failsafeW ?? (Number(wb.powerW) || d.maxW)) });
+          }
+          continue;
+        }
         if (list.some((x) => x.id === d.id)) continue;
         list.push({ id: d.id, name: d.name || 'EEBUS-Gerät', kind: d.kind, powerW: d.maxW, control: 'ems',
           controllable: false, unreachable: true, reserveW: Math.min(d.maxW, d.failsafeW ?? d.maxW),
           currentW: 0, measuredW: null, source: 'eebus' });
       }
     }
+    // Einträge von Hand kann DVhub nicht begrenzen. „Über DVhub (EMS)“ zählen
+    // sie für Pmin,14a (Ziffer 4.5.2: alle SteuVE hinter dem EMS) — dann muss
+    // die Summe aller dieser SteuVE unter der Vorgabe bleiben, auch ihre eigene
+    // Leistung. Ohne Messwert ist ihre Nennleistung belegt (wie bei einem nicht
+    // erreichbaren Gerät), der Rest geht an die steuerbaren (Fable R2 P2-1).
+    // Direktsteuerung (Ziffer 4.4.a) hat eine eigene Vorgabe vom Netzbetreiber.
     for (const d of c.devices) {
-      list.push({ ...d, controllable: false, currentW: 0, source: 'manual' });
+      list.push({ ...d, controllable: false, currentW: 0, source: 'manual',
+        ...(d.control === 'ems' ? { reserveW: d.powerW } : {}) });
     }
     return list;
   }
 
   // --- Relais ------------------------------------------------------------------
 
+  // Relais-Zustand speichern: viele Steuerboxen/Brücken senden nur bei einem
+  // Wechsel und nicht „retained“ — nach einem Neustart wäre eine laufende
+  // Dimmung sonst bis zum nächsten Schalten vergessen (Fable R2 P2-4). Der
+  // gespeicherte Zustand gilt, bis eine neue Nachricht kommt (im Zweifel
+  // weiter gedimmt); der Leitstand zeigt ihn als „vor dem Neustart“.
+  function loadRelayState(topic) {
+    if (!dataDir) return null;
+    try {
+      const saved = JSON.parse(fsImpl.readFileSync(path.join(dataDir, RELAY_STATE_FILE), 'utf8'));
+      if (saved?.topic !== topic || (saved.level !== 'high' && saved.level !== 'low')) return null;
+      return { level: saved.level, at: Number(saved.at) || null };
+    } catch { return null; }
+  }
+
+  function saveRelayState(topic) {
+    if (!dataDir) return;
+    try {
+      const file = path.join(dataDir, RELAY_STATE_FILE);
+      fsImpl.mkdirSync(dataDir, { recursive: true });
+      fsImpl.writeFileSync(`${file}.tmp`, JSON.stringify({ topic, level: relay.level, at: relay.at }));
+      fsImpl.renameSync(`${file}.tmp`, file);
+    } catch (e) {
+      pushLog('paragraph14a_relay_persist_error', { error: e?.message || String(e) }, 'warn');
+    }
+  }
+
   function syncRelaySubscription(c) {
     const hub = ctx.mqttHub;
     const topic = c.relay.enabled ? c.relay.topic : null;
     if (topic === relay.subscribedTopic) return;
     relay.subscribedTopic = topic;
-    relay.level = null;
-    relay.at = null;
+    const saved = topic ? loadRelayState(topic) : null;
+    relay.level = saved?.level ?? null;
+    relay.at = saved?.at ?? null;
+    relay.restored = saved != null;
+    if (saved) pushLog('paragraph14a_relay_restored', { topic, level: saved.level, at: saved.at });
     if (!topic || !hub?.subscribe) return;
     hub.subscribe(topic, (t, payload) => {
       // Nachrichten eines inzwischen abbestellten Themas nicht mehr werten.
@@ -252,8 +318,11 @@ export function createParagraph14aService(ctx, deps = {}) {
       const level = parseRelayPayload(payload);
       if (level == null) return;
       const changed = level !== relay.level;
+      const wasRestored = relay.restored;
       relay.level = level;
       relay.at = now();
+      relay.restored = false;
+      if (changed || wasRestored) saveRelayState(topic);
       if (changed) {
         pushLog('paragraph14a_relay', { topic: t, level });
         update();
@@ -420,19 +489,26 @@ export function createParagraph14aService(ctx, deps = {}) {
     if (active && !suspended) {
       const controllable = list.filter((d) => d.controllable);
       const steuveW = controllable.reduce((s, d) => s + d.currentW, 0);
-      budget = budgetW({ limitW, gridImportW: gridImportPositiveW(state, getCfg()), steuveW, usePvSurplus: c.usePvSurplus });
+      // Zählerwert nur gültig und frisch (BK6-22-300: die Vorgabe darf nur um
+      // einen gemessenen PV-Überschuss wachsen). Beim Start steht grid_total_w
+      // schon auf 0, meter.ok aber auf false; bei einem Lesefehler bleibt der
+      // alte Wert stehen (polling.js) — beides ergäbe einen erfundenen
+      // Überschuss (Fable R2 P1-1: 4,2 kW Vorgabe → 21,2 kW verteilt). Ohne
+      // gültigen Wert gilt die Vorgabe ohne Zuschlag (im Zweifel strenger).
+      const meter = meterImport(state, getCfg(), { now: now(), maxAgeMs: METER_MAX_AGE_MS });
+      const gridImportW = meter.fresh ? meter.importW : null;
+      budget = budgetW({ limitW, gridImportW, steuveW, usePvSurplus: c.usePvSurplus });
+      // Belegt: nicht erreichbare Geräte (Failsafe-Wert) und von Hand
+      // eingetragene EMS-Geräte (Nennleistung), die DVhub nicht begrenzen kann.
       let free = budget;
-      for (const d of list.filter((x) => x.unreachable)) {
+      for (const d of list.filter((x) => !x.controllable && x.reserveW > 0)) {
         reserved[d.id] = Math.min(free, d.reserveW);
         free -= reserved[d.id];
       }
       consumers = consumersFor(controllable, c);
       // Akku-Hilfe: nur mit Messwert am Anschlusspunkt (Rückkopplung) und mit
-      // PV-Überschuss-Rechnung, nie im Not-Halt (dort nur die Pflicht-Reduzierung).
-      // Rückkopplung nur über einen gültigen, frischen Zählerwert (beim Start
-      // steht grid_total_w schon auf einer Zahl, meter.ok aber auf false).
-      const meter = meterImport(state, getCfg(), { now: now(), maxAgeMs: ASSIST_METER_MAX_AGE_MS });
-      const gridImportW = meter.fresh ? meter.importW : null;
+      // PV-Überschuss-Rechnung, nie im Not-Halt (dort nur die Pflicht-Reduzierung);
+      // derselbe gültige, frische Zählerwert wie fürs Budget.
       const provider = typeof ctx.batteryAssist?.request === 'function';
       const reservedW = Object.values(reserved).reduce((a, w) => a + w, 0);
       assist.neededW = Number.isFinite(gridImportW)
@@ -449,6 +525,9 @@ export function createParagraph14aService(ctx, deps = {}) {
       shares = stable(allocateBudget(free, allocConsumers,
         { mode: c.allocation, priority: c.priority, demand: c.demandFirst }), free);
       if (assisting) for (const x of consumers) if (x.kind === 'speicher') shares[x.id] = 0;
+      // Nicht erreichbare EEBUS-Hauptwallbox: ausdrücklich 0 statt „kein
+      // Anteil“ — null hieße für die Wallbox-Steuerung „keine Grenze“.
+      if (list.some((d) => d.id === 'wallbox' && d.unreachable)) shares.wallbox = 0;
     } else {
       heldNeed.clear();
       requestAssist(0, null);
@@ -489,6 +568,7 @@ export function createParagraph14aService(ctx, deps = {}) {
         id, name, kind, powerW, control, controllable, source: src, unreachable: unreachable === true,
         currentW: controllable ? measuredW ?? null : null,
         needW: needById[id] ?? null,
+        reservedW: reserved[id] ?? null,
       })),
       ignored: pmin.ignored,
       budgetW: budget,
@@ -497,7 +577,7 @@ export function createParagraph14aService(ctx, deps = {}) {
       batteryAssist: assist,
       batteryGridW: active && !suspended ? (shares.speicher ?? 0) : null,
       wallboxCapW: active && !suspended && shares.wallbox != null ? shares.wallbox : null,
-      relay: { enabled: c.relay.enabled, topic: c.relay.topic, level: relay.level, at: relay.at, activeWhen: c.relay.activeWhen },
+      relay: { enabled: c.relay.enabled, topic: c.relay.topic, level: relay.level, at: relay.at, activeWhen: c.relay.activeWhen, restored: relay.restored },
     });
     state.ctrl.p14aBatteryGridW = ui.batteryGridW;
     state.ctrl.p14aWallboxCapW = ui.wallboxCapW;

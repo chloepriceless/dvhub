@@ -9,6 +9,7 @@
  * 2026-09-23 entfallen; er uebersteuerte EOS' Plan.)
  */
 import { safeInterval } from './services/safe-async.js';
+import { isReadOnlyMode, noteBlockedWrite } from './read-only-guard.js';
 import http from 'node:http';
 import https from 'node:https';
 
@@ -159,6 +160,8 @@ export function createEvccIntegration(ctx) {
    * + evcc REST). mode ∈ {off, pv, minpv, now}. Returns { ok, mode } / { ok:false, error }.
    */
   async function setMode(lpId, mode) {
+    // Lese-Modus: evcc schaltet die echte Ladung — kein Umschalten (Fable R2 P2-9).
+    if (isReadOnlyMode()) { noteBlockedWrite(`evcc mode ${lpId} ${mode}`); return { ok: false, error: 'read_only' }; }
     const c = getCfg();
     const url = c.url;
     if (!url) return { ok: false, error: 'no url configured' };
@@ -186,6 +189,7 @@ export function createEvccIntegration(ctx) {
    * EOS → evcc bridge to pass EOS' planned charge rate on. lpId is 1-based.
    */
   async function setMaxCurrent(lpId, currentA) {
+    if (isReadOnlyMode()) { noteBlockedWrite(`evcc maxcurrent ${lpId} ${currentA}`); return { ok: false, error: 'read_only' }; }
     const c = getCfg();
     const url = c.url;
     if (!url) return { ok: false, error: 'no url configured' };

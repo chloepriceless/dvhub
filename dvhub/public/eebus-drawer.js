@@ -11,6 +11,7 @@
   const STATUS = {
     disabled: 'aus — in den Einstellungen (System → EEBUS) aktivieren',
     not_installed: 'nicht installiert — beim nächsten Update wird dvhub-eebus gebaut',
+    read_only: 'aus — Lese-Modus (DVHUB_READ_ONLY=1): keine Verbindung zu Steuerbox und Geräten',
     starting: 'startet …',
     running: 'läuft',
     restarting: 'startet neu …',

@@ -40,8 +40,9 @@ function fakeChild() {
 const tick = () => new Promise((r) => setImmediate(r));
 async function settle() { for (let i = 0; i < 5; i++) await tick(); }
 
-function setup({ eebus = {}, extraCfg = {}, withBinary = true } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eebus-svc-'));
+function setup({ eebus = {}, extraCfg = {}, withBinary = true, dir: reuseDir = null } = {}) {
+  // reuseDir: gleiches Datenverzeichnis wie ein voriger Prozess (Neustart).
+  const dir = reuseDir || fs.mkdtempSync(path.join(os.tmpdir(), 'eebus-svc-'));
   const bin = path.join(dir, 'dvhub-eebus');
   if (withBinary) { fs.writeFileSync(bin, '#!/bin/sh\n'); fs.chmodSync(bin, 0o755); }
   fs.mkdirSync(path.join(dir, 'eebus'), { recursive: true });
@@ -61,6 +62,7 @@ function setup({ eebus = {}, extraCfg = {}, withBinary = true } = {}) {
   const logs = [];
   const children = [];
   const timers = [];
+  const intervals = [];
   let t = 1_000_000;
   const ctx = {
     state,
@@ -72,14 +74,16 @@ function setup({ eebus = {}, extraCfg = {}, withBinary = true } = {}) {
     dataDir: dir,
     now: () => t,
     spawn: (b, args) => { const c = fakeChild(); c.bin = b; c.args = args; children.push(c); return c; },
-    setInterval: () => 0,
+    // Takte laufen nicht von selbst; Tests rufen sie über intervals auf.
+    setInterval: (fn, ms) => { intervals.push({ fn, ms }); return 0; },
     clearInterval: () => {},
     // Zeitgeber laufen nicht von selbst (Neustart-/Wiederholungs-Timer).
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
     clearTimeout: () => {},
   });
   return {
-    svc, state, ctx, feedIn, logs, children, dir, timers,
+    svc, state, ctx, feedIn, logs, children, dir, timers, intervals,
+    now: () => t,
     setCfg: (next) => { cfg = next(cfg); },
     advance: (ms) => { t += ms; },
     child: () => children.at(-1),
@@ -273,9 +277,14 @@ test('Verdichterlauf: Start im günstigsten Fenster', async () => {
 
 test('Hilfsfunktionen: Aufteilung, Startplanung, Vorzeichen am Netzanschlusspunkt', () => {
   assert.equal(planOhpcfStart({ earliest_start_s: 120, latest_end_s: 3600, min_duration_s: 900 }, [], 0), 120);
-  assert.equal(gridImportPositiveW({ meter: { grid_total_w: -500 } }, { gridPositiveMeans: 'feed_in' }), 500);
-  assert.equal(gridImportPositiveW({ meter: { grid_total_w: -500 } }, { gridPositiveMeans: 'grid_import' }), -500);
-  assert.equal(gridImportPositiveW({ meter: {} }, {}), null);
+  const now = 1_000_000;
+  const m = (x) => ({ meter: { ok: true, updatedAt: now - 1000, ...x } });
+  assert.equal(gridImportPositiveW(m({ grid_total_w: -500 }), { gridPositiveMeans: 'feed_in' }, { now }), 500);
+  assert.equal(gridImportPositiveW(m({ grid_total_w: -500 }), { gridPositiveMeans: 'grid_import' }, { now }), -500);
+  assert.equal(gridImportPositiveW(m({}), {}, { now }), null);
+  // Fable R2 P1-1: nur gültige, frische Werte gehen an die Steuerbox (MGCP)
+  assert.equal(gridImportPositiveW(m({ ok: false, grid_total_w: 0 }), {}, { now }), null, 'Start: Zähler noch nicht gelesen');
+  assert.equal(gridImportPositiveW(m({ updatedAt: now - 60_000, grid_total_w: -500 }), {}, { now }), null, 'eingefroren');
 });
 
 test('Prozess stirbt → Neustart geplant, ausstehende Anfragen enden', async () => {
@@ -478,6 +487,34 @@ test('Failsafe-Vorgabe automatisch: Mindestleistung Pmin,14a aus dem §14a-Diens
   await settle();
   assert.equal(s.svc._machines().lpc.snapshot().failsafeW, 7560);
   assert.ok(s.child().commands.some((x) => x.cmd === 'grid_config' && x.uc === 'lpc' && x.failsafe_w === 7560));
+});
+
+// Fable R2 P3-5: beim Start sind noch keine EEBUS-Geräte angemeldet — die
+// automatische Failsafe-Vorgabe folgt der Geräteliste, solange die Steuerbox
+// keinen eigenen Wert geschrieben hat.
+test('Failsafe-Vorgabe automatisch: folgt Pmin,14a, wenn sich die Geräteliste ändert; nicht nach einem Wert der Steuerbox', async () => {
+  const s = setup();
+  let pmin = 7560;
+  s.ctx.p14a = { pminW: () => pmin, update: () => {} };
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  await settle();
+  pmin = 10500; // Wärmepumpe hat sich angemeldet
+  s.advance(31_000);
+  s.svc._tick();
+  await settle();
+  assert.equal(s.svc._machines().lpc.snapshot().failsafeW, 10500);
+  assert.ok(c.commands.some((x) => x.cmd === 'grid_config' && x.uc === 'lpc' && x.failsafe_w === 10500));
+  // Steuerbox schreibt ihren eigenen Failsafe-Wert: der gilt
+  c.emitEvent({ ev: 'grid_write', ski: SKI_BOX, uc: 'lpc', kind: 'failsafe_limit', w: 5000, approved: true });
+  await settle();
+  pmin = 12000;
+  s.advance(31_000);
+  s.svc._tick();
+  await settle();
+  assert.equal(s.svc._machines().lpc.snapshot().failsafeW, 5000);
+  assert.ok(!c.commands.some((x) => x.cmd === 'grid_config' && x.failsafe_w === 12000));
 });
 
 // ── EEBUS-Wallbox (Christin 2026-10-20, Wallbox-Liste Punkt 2) ──
@@ -881,19 +918,174 @@ test('Prüfung: abweichende Rückmeldung wird nach 60 s gemeldet (nicht erst nac
   assert.deepEqual(s.svc.controlIssues().map((i) => i.code), ['not_applied']);
 });
 
-test('Lese-Modus (DVHUB_READ_ONLY=1): keine Vorgabe an EEBUS-Geräte (Codex 01dec596)', async () => {
+// Fable R2 P2-2: im Lese-Modus startet der EEBUS-Knoten nicht — schon die
+// Teilnahme schreibt (Freigabe/Quittung der Steuerbox-Vorgaben, Herzschlag,
+// Messwerte, Verdichter-Planung). Lesen über EEBUS geht ohne Teilnahme nicht.
+test('Lese-Modus (DVHUB_READ_ONLY=1): EEBUS-Knoten startet nicht (keine Teilnahme gegenüber Steuerbox und Geräten)', async () => {
   process.env.DVHUB_READ_ONLY = '1';
   try {
-    const { s, limits } = await withHeatPump();
+    const s = setup();
+    await s.svc.start();
+    assert.equal(s.children.length, 0, 'kein Hilfsprozess');
+    assert.equal(s.svc.status().status, 'read_only');
+    assert.match(s.svc.status().error, /Lese-Modus/);
+    assert.ok(s.logs.some(([e]) => e === 'eebus_read_only'));
+  } finally {
+    delete process.env.DVHUB_READ_ONLY;
+  }
+});
+
+test('Lese-Modus: letzte Sperre im Befehlsweg — keine Vorgabe, keine Verdichter-Planung, kein Ladestrom', async () => {
+  const { s, c, limits } = await withHeatPump();
+  process.env.DVHUB_READ_ONLY = '1';
+  try {
+    const before = c.commands.length;
     s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 2000 }, null);
+    c.emitEvent({ ev: 'ohpcf_announce', uc: 'ohpcf', entity: 'd:_n:HP/1/1', ski: SKI_HP, max_power_w: 2000, earliest_start_s: 0, latest_end_s: 7200, min_duration_s: 1800 });
     await settle();
     s.advance(11_000);
     s.svc._tick();
     await settle();
-    assert.equal(limits().length, 0, 'weder „frei“ beim Anmelden noch eine Grenze');
+    const r = await s.svc.setEvCurrentLimits(SKI_HP, [6]);
+    const sent = c.commands.slice(before).filter((x) => ['device_limit', 'device_failsafe', 'ohpcf', 'ev_current_limits'].includes(x.cmd));
+    assert.deepEqual(sent, [], 'kein Gerätebefehl im Lese-Modus');
+    assert.equal(limits().filter((x) => x.active).length, 0);
+    assert.equal(r.ok, false);
   } finally {
     delete process.env.DVHUB_READ_ONLY;
   }
+});
+
+// ── Fable R2 P2-3: Wiederanlauf auch für Geräte, die DVhub ohne Steuerbox/Relais begrenzt hat ──
+async function heatPumpWithoutBox(s) {
+  s.ctx.p14a = { update: () => {} };
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  return c;
+}
+
+test('Wiederanlauf ohne Steuerbox: hat DVhub das Gerät begrenzt (Netzanschluss-Deckel), schreibt es nach dem Neustart des Hilfsprozesses „frei“', async () => {
+  const s = setup({ eebus: { trusted: [{ ski: SKI_HP, name: 'Wärmepumpe', role: 'device' }] } });
+  const c = await heatPumpWithoutBox(s);
+  assert.equal(c.commands.filter((x) => x.cmd === 'device_limit').length, 0, 'nie geführt: unberührt');
+  // Netzanschluss-Wächter deckelt die WP einmal (über die Aufteilung)
+  s.svc.applyConsumptionShares({ [`eebus:${SKI_HP}`]: 2000 }, null, { [`eebus:${SKI_HP}`]: null });
+  await settle();
+  assert.deepEqual(c.commands.filter((x) => x.cmd === 'device_limit').map((x) => [x.w, x.active]), [[2000, true]]);
+  // Deckel wieder weg, dann startet der Hilfsprozess neu (DVhubs Herzschlag endet)
+  s.svc.applyConsumptionShares({}, null);
+  await settle();
+  c.emit('exit', 1, null);
+  await settle();
+  await s.timers.find((x) => x.ms === 5_000).fn();
+  const c2 = s.child();
+  c2.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  c2.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c2.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  const sent = c2.commands.filter((x) => x.cmd === 'device_limit');
+  assert.deepEqual(sent.map((x) => x.active), [false], '„frei“ beendet den Failsafe des Geräts');
+});
+
+test('Wiederanlauf ohne Steuerbox: „geführt“ übersteht einen Neustart von DVhub (controlled.json)', async () => {
+  const eebus = { trusted: [{ ski: SKI_HP, name: 'Wärmepumpe', role: 'device' }] };
+  const a = setup({ eebus });
+  const c = await heatPumpWithoutBox(a);
+  await a.svc.setDeviceLimit(SKI_HP, 1500);
+  await settle();
+  assert.equal(c.commands.filter((x) => x.cmd === 'device_limit').length, 1);
+  await a.svc.stop();
+  // neuer Prozess, gleiches Datenverzeichnis
+  const b = setup({ eebus, dir: a.dir });
+  const c2 = await heatPumpWithoutBox(b);
+  assert.deepEqual(c2.commands.filter((x) => x.cmd === 'device_limit').map((x) => x.active), [false]);
+});
+
+// ── Fable R2 P2-5: Leistung eines EEBUS-Geräts nur aus der laufenden Verbindung und nicht zu alt ──
+test('Messwert des Geräts: nach Trennung unbekannt, nach 5 min ohne Meldung unbekannt', async () => {
+  const { s, c } = await withHeatPump();
+  c.emitEvent({ ev: 'device_measurement', uc: 'mpc', entity: 'd:_n:HP/2', ski: SKI_HP, name: 'power_w', value: 3000 });
+  await settle();
+  assert.equal(s.svc.consumptionDevices()[0].powerW, 3000);
+  c.emitEvent({ ev: 'disconnected', ski: SKI_HP });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  await settle();
+  assert.equal(s.svc.consumptionDevices()[0].powerW, null, 'alter Wert aus der vorigen Verbindung zählt nicht');
+  c.emitEvent({ ev: 'device_measurement', uc: 'mpc', entity: 'd:_n:HP/2', ski: SKI_HP, name: 'power_w', value: 2500 });
+  await settle();
+  assert.equal(s.svc.consumptionDevices()[0].powerW, 2500);
+  s.advance(5 * 60_000 + 1);
+  assert.equal(s.svc.consumptionDevices()[0].powerW, null, 'zu alt');
+});
+
+// ── Fable R2 P3-4: Grenz-Rückmeldung aus der vorigen Verbindung zählt nicht ──
+test('Umsetzungsprüfung: alte Grenz-Rückmeldung (vor der Trennung) löst nach dem Wiederanmelden keinen Fehlalarm aus', async () => {
+  const { s, c } = await withHeatPump();
+  c.emitEvent({ ev: 'device_limit', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 4200, active: true });
+  c.emitEvent({ ev: 'disconnected', ski: SKI_HP });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP }); // DVhub schreibt „frei“
+  await settle();
+  s.advance(61_000);
+  s.svc._tick();
+  assert.deepEqual(s.svc.controlIssues().map((i) => i.code), [], 'Gerät hat in dieser Verbindung noch nichts gemeldet');
+});
+
+// ── Fable R2 P1-1: MGCP nur mit gültigem, frischem Zähler ──
+test('Netzanschlusspunkt (MGCP): ungültiger oder alter Zählerwert geht nicht an die Steuerbox', async () => {
+  const s = setup();
+  await s.svc.start();
+  const c = s.child();
+  c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+  await settle();
+  const gcp = () => c.commands.filter((x) => x.cmd === 'gcp');
+  const pushGcp = s.intervals.find((x) => x.ms === 5_000).fn;
+  s.state.meter = { ok: false, updatedAt: s.now(), grid_total_w: 0 };
+  pushGcp();
+  await settle();
+  assert.equal(gcp().length, 0, 'Start: Zähler nicht gelesen');
+  s.state.meter = { ok: true, updatedAt: s.now() - 60_000, grid_total_w: -2500 };
+  pushGcp();
+  await settle();
+  assert.equal(gcp().length, 0, 'eingefroren');
+  s.state.meter = { ok: true, updatedAt: s.now(), grid_total_w: -2500 };
+  pushGcp();
+  await settle();
+  assert.deepEqual(gcp().map((x) => x.power_w), [2500]);
+});
+
+// ── Fable R2 P3-1: Go-Hilfsprozess prüft die 2-min-Frist selbst ──
+test('grid_heartbeat_state mit within_duration (Go): Failsafe sofort; ohne (C): erst nach 120 s', async () => {
+  for (const [flag, want] of [[true, 'failsafe'], [undefined, 'unlimited_controlled']]) {
+    const s = setup();
+    await s.svc.start();
+    const c = s.child();
+    c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
+    c.emitEvent({ ev: 'connected', ski: SKI_BOX });
+    c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true, within_duration: flag });
+    await settle();
+    s.advance(5_000);
+    c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: false, lpp_ok: false, within_duration: flag });
+    await settle();
+    assert.equal(s.svc.status().grid.lpc.state, want, `within_duration=${flag}`);
+  }
+});
+
+// ── Fable R2 P2-4: gespeicherte, noch gültige Grenze gilt gleich beim Start ──
+test('Neustart während einer Begrenzung: Grenze gilt sofort beim Start, nicht erst mit Takt oder Herzschlag', async () => {
+  const s = setup();
+  const t = s.now();
+  fs.writeFileSync(path.join(s.dir, 'eebus', 'grid-state.json'), JSON.stringify({
+    lpc: { failsafeW: null, failsafeDurationS: null, limit: { w: 4200, active: true, receivedAt: t - 60_000, until: t + 3600_000 }, failsafeSince: null },
+    lpp: { failsafeW: null, failsafeDurationS: null, limit: null, failsafeSince: null },
+  }));
+  await s.svc.start();
+  assert.equal(s.state.ctrl.eebusConsumptionLimitW, 4200);
+  assert.equal(s.state.ctrl.eebusConsumptionLimitUntil, t + 3600_000);
 });
 
 // ── Codex aa32838a ──
@@ -1014,6 +1206,20 @@ test('Not-Halt: Hilfsprozess ohne device_heartbeat (C-Bridge, alt) wird neu gest
   assert.equal(r.heartbeat, 'restarted');
   assert.equal(killed, true);
   assert.ok(s.logs.some(([e]) => e === 'eebus_device_heartbeat_restart'));
+});
+
+// Fable R2 P3-11: scheitert „Herzschlag aus“ (Zeitüberschreitung), liefe er im
+// Not-Halt weiter — dann den Hilfsprozess neu starten (frisch ohne Herzschlag;
+// ein Prozess-Neustart ist kein Geräte-Write).
+test('Not-Halt: „Herzschlag aus“ scheitert → Hilfsprozess wird neu gestartet', async () => {
+  const { s, c } = await withHeatPump();
+  c.failCmds = { device_heartbeat: 1 };
+  let killed = false;
+  c.kill = () => { killed = true; setImmediate(() => c.emit('exit', 0, null)); };
+  const r = await enterNotHalt(s);
+  assert.equal(r.heartbeat, 'restarted');
+  assert.equal(killed, true);
+  assert.ok(s.logs.some(([e]) => e === 'eebus_device_heartbeat_stop_failed'));
 });
 
 test('Not-Halt aufheben: Aufteilung neu, Gerät wie beim Anmelden aufgenommen (Herzschlag startet wieder)', async () => {

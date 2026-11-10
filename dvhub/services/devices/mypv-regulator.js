@@ -22,6 +22,7 @@
 import { createMypvClient } from './mypv.js';
 import { loadSchedulableDevices } from './schedulable.js';
 import { localDate } from '../../tz-fast.js';
+import { isReadOnlyMode } from '../../read-only-guard.js';
 
 export const MYPV_DEFAULTS = Object.freeze({
   exportReserveW: 1000,
@@ -223,6 +224,22 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     rt.lastTickMs = t;
   }
 
+  // Nur lesen (Not-Halt): Messwerte und Fehler, kein Befehl.
+  async function readOnlyTick(dev) {
+    const rt = runtime(dev.id);
+    const t = now();
+    const intervalMs = Number(dev.plan?.intervalS || MYPV_DEFAULTS.intervalS) * 1000;
+    if (rt.lastReadMs && t - rt.lastReadMs < intervalMs - 200) return;
+    rt.lastReadMs = t;
+    try {
+      const measured = await clientFor(dev).read();
+      rt.measured = { ...measured, at: t };
+      if (!rt.error?.startsWith('Schreiben')) rt.error = null;
+    } catch (e) {
+      rt.error = `Lesen: ${String(e?.message || e).slice(0, 120)}`;
+    }
+  }
+
   let inflight = null;
   function tick() {
     if (running) return inflight || Promise.resolve();
@@ -239,16 +256,22 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
       const ids = new Set(mine.map((d) => d.id));
       for (const [id, c] of [...clients.entries()]) {
         if (ids.has(id)) continue;
-        // Im Not-Halt nichts schreiben (die eine 0 kam schon mit emergencyStop).
-        if (state?.ctrl?.discretionaryWritesPaused !== true) {
+        // Im Not-Halt nichts schreiben (die eine 0 kam schon mit emergencyStop);
+        // ohne eigene Vorgabe > 0 läuft der Stab höchstens von selbst — dann
+        // nichts senden (Fable R2 P2-8, manuell Gestartetes nie anfassen).
+        if (state?.ctrl?.discretionaryWritesPaused !== true && Number(devices.get(id)?.applied) > 0) {
           try { await c.client.writePower(0); } catch { /* best effort */ }
         }
         c.client.close?.();
         clients.delete(id);
         devices.delete(id);
       }
-      // Not-Halt: Geräte bleiben, wie sie sind (wie überall in DVhub).
-      if (state?.ctrl?.discretionaryWritesPaused === true) return;
+      // Not-Halt: Geräte bleiben, wie sie sind (wie überall in DVhub) — gelesen
+      // wird weiter, damit Leistung und Temperatur nicht einfrieren (Fable R2 P3-8).
+      if (state?.ctrl?.discretionaryWritesPaused === true) {
+        for (const dev of mine) await readOnlyTick(dev);
+        return;
+      }
       const base = liveFromState();
       for (const dev of mine) {
         const rt = runtime(dev.id);
@@ -272,9 +295,16 @@ export function createMypvRegulator({ getCfg, state, pushLog = () => {}, getChar
     },
     async stop() {
       if (timer) { clearInterval(timer); timer = null; }
-      // Beim Beenden aus — zusätzlich greift der Power Timeout am Gerät.
-      for (const c of clients.values()) {
-        try { await c.client.writePower(0); } catch { /* best effort */ }
+      // Einen laufenden Takt abwarten — sonst käme sein Befehl nach der 0.
+      if (inflight) { try { await inflight; } catch { /* egal */ } }
+      // Beim Beenden aus — zusätzlich greift der Power Timeout am Gerät. Nur
+      // wo DVhub selbst Leistung > 0 vorgibt, nie im Not-Halt (danach keine
+      // Writes) und nie im Lese-Modus (Fable R2 P2-8).
+      const mayWrite = state?.ctrl?.discretionaryWritesPaused !== true && !isReadOnlyMode();
+      for (const [id, c] of clients) {
+        if (mayWrite && Number(devices.get(id)?.applied) > 0) {
+          try { await c.client.writePower(0); } catch { /* best effort */ }
+        }
         c.client.close?.();
       }
       clients.clear();

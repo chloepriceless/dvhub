@@ -107,14 +107,17 @@
     const reserved = st.reserved || {};
     Object.keys(reserved).forEach(function (id) {
       const d = (st.devices || []).find(function (x) { return x.id === id; });
-      html += '<div class="eebus-small">' + esc((d && d.name) || 'Gerät') + ' nicht erreichbar: ' + esc(kw(reserved[id]))
-        + ' als belegt gerechnet (eigener Failsafe-Wert des Geräts, sonst Nennleistung)</div>';
+      html += '<div class="eebus-small">' + esc((d && d.name) || 'Gerät') + (d && d.source === 'manual'
+        ? ' (von Hand, von DVhub nicht begrenzbar): ' + esc(kw(reserved[id])) + ' als belegt gerechnet (Nennleistung)'
+        : ' nicht erreichbar: ' + esc(kw(reserved[id])) + ' als belegt gerechnet (eigener Failsafe-Wert des Geräts, sonst Nennleistung)') + '</div>';
     });
     if (st.relay && st.relay.enabled) {
       const lvl = st.relay.level;
       const dimmed = lvl != null && lvl === st.relay.activeWhen;
       html += '<div class="eebus-small">Relais (' + esc(st.relay.topic) + '): '
-        + (lvl == null ? 'kein Signal empfangen' : (lvl === 'high' ? 'geschlossen / 1' : 'offen / 0') + ' → ' + (dimmed ? 'gedimmt' : 'frei')) + '</div>';
+        + (lvl == null ? 'kein Signal empfangen' : (lvl === 'high' ? 'geschlossen / 1' : 'offen / 0') + ' → ' + (dimmed ? 'gedimmt' : 'frei'))
+        + (st.relay.restored ? ' — Stand von vor dem Neustart, gilt bis zur nächsten Meldung des Relais (Tipp: Nachricht „retained“ senden)' : '')
+        + '</div>';
     } else {
       html += '<div class="eebus-small">Relais: aus (Einstellungen → System → §14a)</div>';
     }
@@ -140,6 +143,10 @@
         + (d.source === 'manual' ? 'von Hand' : d.source === 'eebus' ? 'EEBUS' : 'automatisch')
         + (d.control === 'direct' ? ' · Direktsteuerung (eigene Mindestleistung, nicht in der EMS-Formel)' : '')
         + (d.unreachable ? ' · <span class="eebus-error">nicht erreichbar</span>' : d.controllable ? ' · von DVhub gesteuert' : ' · nicht von DVhub gesteuert')
+        + (d.source === 'manual' && d.control !== 'direct'
+          ? ' · <span class="eebus-error">zählt für Pmin, DVhub kann es aber nicht begrenzen — bei einer Begrenzung ist seine Nennleistung belegt'
+            + (d.reservedW != null ? ' (jetzt ' + esc(kw(d.reservedW)) + ')' : '') + '</span>'
+          : '')
         + (ignored ? ' · ' + esc(IGNORED[ignored.reason] || ignored.reason) : '')
         + '</div>'
         + (d.source === 'manual' ? '<button type="button" class="btn sm ghost" data-p14a-remove="' + esc(d.id) + '">Entfernen</button>' : '')

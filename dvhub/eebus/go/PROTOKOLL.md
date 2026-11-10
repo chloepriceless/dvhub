@@ -99,7 +99,7 @@ und `ski`.
 | `grid_limit` | `uc`, `w`, `duration_s`, `active` | `DataUpdateLimit` | ja |
 | `grid_failsafe_limit` / `grid_failsafe_duration` | `uc`, `w` / `duration_s` | `DataUpdateFailsafe…` | ja; keine „Spiegelmeldungen“ des anderen Anwendungsfalls mehr (eigene Entitäten) |
 | `grid_heartbeat` | `uc`, `counter` | `DataUpdateHeartbeat` | jeder 12.; `counter` zählt die empfangenen Herzschläge (eebus-go reicht den Zähler der Steuerbox nicht durch) |
-| `grid_heartbeat_state` | `lpc_ok`, `lpp_ok` | Takt, `IsHeartbeatWithinDuration` (2 min) | ja |
+| `grid_heartbeat_state` | `lpc_ok`, `lpp_ok`, `within_duration` (nur Go, immer `true`) | Takt, `IsHeartbeatWithinDuration` (2 min) | ja, ohne `within_duration` (openeebus meldet einen Abbau sofort; DVhub wartet dann selbst 120 s). Mit `within_duration` gilt „nicht ok“ in DVhub sofort als Herzschlag-Verlust (neu 10.11.2026, Fable R2 P3-1) |
 | `device_added` / `device_removed` | `uc` lpc\|lpp\|mpc\|ohpcf, `entity`, `ski` | `UseCaseSupportUpdate`; beim Trennen für alle Entitäten der SKI | ja |
 | `device_limit` | `uc`, `entity`, `ski`, `w`, `duration_s`, `active` | EG `DataUpdateLimit` | ja |
 | `device_failsafe_limit` / `device_failsafe_duration` | `w` / `duration_s` | EG `DataUpdateFailsafe…` | ja |
