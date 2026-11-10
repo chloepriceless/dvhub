@@ -261,9 +261,13 @@ export function createEosEvccBridge(deps) {
   // Ladung nicht gestartet, nur begrenzt — wichtig für den Not-Halt (Codex
   // 91a6ef65, P1: ein gedeckeltes „Sofort laden“ ist trotzdem DVhubs Ladung).
   let capOnlyCommand = false;
-  async function capOnly(fn) {
+  // restoring: Strom-Rückgabe — der gemerkte Höchststrom des Ziels bleibt
+  // (Codex aecd3f38, P2: sonst überschriebe eine neue Einstellung ihn).
+  let restoringCommand = false;
+  async function capOnly(fn, { restoring = false } = {}) {
     capOnlyCommand = true;
-    try { return await fn(); } finally { capOnlyCommand = false; }
+    restoringCommand = restoring;
+    try { return await fn(); } finally { capOnlyCommand = false; restoringCommand = false; }
   }
 
   function setOwned(key, entry) {
@@ -324,7 +328,8 @@ export function createEosEvccBridge(deps) {
         // Von DVhub gestartet (Plan, „Sofort laden“) bleibt gestartet, auch wenn
         // danach nur noch die Grenze nachgeführt wird.
         const dvhubStarted = !capOnlyCommand || (prev?.cmd === 'charge' && prev.identity === tgt.identity && prev.dvhubStarted === true);
-        setOwned(key, { ...tgt, ...capFields(prev, tgt.identity), cmd: 'charge', currentA: amps, confirmedCurrentA, confirmed: r?.ok === true, gridCap: prevCap, dvhubStarted, at: new Date(now()).toISOString() });
+        const keepMax = restoringCommand && prev?.identity === tgt.identity && Number(prev?.maxCurrentA) > 0;
+        setOwned(key, { ...tgt, ...(keepMax ? { maxCurrentA: Number(prev.maxCurrentA) } : {}), ...capFields(prev, tgt.identity), cmd: 'charge', currentA: amps, confirmedCurrentA, confirmed: r?.ok === true, gridCap: prevCap, dvhubStarted, at: new Date(now()).toISOString() });
         return r;
       };
     }
@@ -456,7 +461,7 @@ export function createEosEvccBridge(deps) {
     // 526a2f95, P2 — sonst gälte eine begrenzte Handladung nach verlorener
     // Quittung als von DVhub gestartet).
     const res = charger.type === 'openwb' && wasGridCap
-      ? await capOnly(() => charger.charge(bc.maxCurrentA))
+      ? await capOnly(() => charger.charge(bc.maxCurrentA), { restoring: true })
       : await charger.release();
     if (res?.ok) {
       pushLog('eos_wallbox_released', { charger: charger.type });
@@ -637,6 +642,11 @@ export function createEosEvccBridge(deps) {
       const capNow = getGridCapW();
       if (capNow != null && Number.isFinite(Number(capNow))
         && applyGridCap({ action: 'charge', currentA: evccTgt.maxCurrentA }, evccTgt, capNow).action === 'stop') {
+        // Herkunft „Deckel“ VOR dem Befehl merken — kommt der Not-Halt
+        // dazwischen, nimmt er dieses „aus“ zurück (Codex aecd3f38, P2).
+        const capKey = targetKey(evccTgt);
+        const ce = owned.get(capKey);
+        if (ce && ce.capOffTried !== true) setOwned(capKey, { ...ce, capOffTried: true });
         const res = await hardStopper(cfg, evccTgt, { type: 'evcc' }).stop();
         if (!res?.ok) {
           // Sicherheits-Stopp nicht angekommen: aus dem „Sofort laden“ wird ein
@@ -1186,7 +1196,7 @@ export function createEosEvccBridge(deps) {
             // openWB: der volle Strom DIESES Ziels, nicht der eines inzwischen
             // gewählten anderen Geräts (Codex 91a6ef65, P2).
             const fullA = Number.isFinite(Number(ref.maxCurrentA)) && Number(ref.maxCurrentA) > 0 ? Number(ref.maxCurrentA) : bc.maxCurrentA;
-            const res = charger.type === 'openwb' ? await capOnly(() => charger.charge(fullA)) : await charger.release();
+            const res = charger.type === 'openwb' ? await capOnly(() => charger.charge(fullA), { restoring: true }) : await charger.release();
             if (!res?.ok) { errors.push(res?.error || 'wallbox release failed'); continue; }
             setOwned(targetKey(bc), null);
             if (lastSent && targetKey({ charger: lastSent.charger || bc.charger, loadpoint: lastSent.loadpoint ?? bc.loadpoint }) === targetKey(bc)) lastSent = null;

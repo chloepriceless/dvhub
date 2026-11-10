@@ -1053,6 +1053,8 @@ export function createScheduleEvaluator(ctx) {
     const v = state.victron || {};
     const at = Number(v.fieldUpdatedAt?.maxDischargeW) || 0;
     const maxAge = Number(getCfg()?.victron?.telemetryMaxAgeMs ?? 90000);
+    // Nicht verfügbar (Poller legt null ab, z. B. NaN-Wert) ist keine 0 (Codex a83e8bc9, P2).
+    if (v.maxDischargeW == null || v.maxDischargeW === '') return null;
     const rb = Number(v.maxDischargeW);
     return at > 0 && Date.now() - at <= maxAge && !v.errors?.maxDischargeW && Number.isFinite(rb) ? rb : null;
   }

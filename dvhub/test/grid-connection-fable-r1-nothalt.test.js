@@ -80,7 +80,7 @@ function evccLoadpoint({ mode = 'pv', maxCurrentA = 16 } = {}) {
     getLoadpoints: () => [{ ...lp }],
     refresh: async () => true,
     setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', id, a]); lp.maxCurrentA = a; return { ok: true }; },
-    setMode: async (id, m) => { calls.push(['mode', id, m]); lp.mode = m; return m === 'off' && h.failOffAck ? { ok: false, error: 'timeout' } : { ok: true }; },
+    setMode: async (id, m) => { calls.push(['mode', id, m]); lp.mode = m; if (m === 'off') h.onOff?.(); return m === 'off' && h.failOffAck ? { ok: false, error: 'timeout' } : { ok: true }; },
   };
   const h = {};
   const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: false, evEvccControl: false, evEvccLoadpoint: 1, evMaxChargeW: 11000, evStopMode: 'pv' } };
@@ -251,4 +251,34 @@ test('Codex 526a2f95 P2: „aus“ vom Not-Halt (nicht vom Deckel) wird beim nä
   });
   await bridge.emergencyStop();
   assert.equal(lp.mode, 'off', JSON.stringify(calls));
+});
+
+// --- Codex aecd3f38 ------------------------------------------------------------------
+
+test('Codex aecd3f38 P2: Not-Halt kommt, während „Sofort laden“ unter Deckel auf „aus“ endet → der Not-Halt nimmt dieses „aus“ zurück', async () => {
+  const h = evccLoadpoint();
+  const res = await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+  assert.equal(res.ok, true);
+  assert.equal(h.lp.mode, 'now');
+  h.ref.capW = 2000; // unter dem Mindeststrom
+  // Not-Halt fällt genau in den Stopp-Befehl.
+  h.onOff = () => { h.ref.paused = true; };
+  await h.bridge.clearOverride();
+  assert.equal(h.lp.mode, 'off');
+  await h.bridge.emergencyStop();
+  assert.equal(h.lp.mode, 'pv', JSON.stringify(h.calls));
+});
+
+test('Codex aecd3f38 P2: Strom-Rückgabe an openWB ohne Quittung behält den Höchststrom des Ziels', async () => {
+  const h = twoBoxes();
+  h.ref.capW = 8300;
+  await h.bridge.tick();
+  h.cfg.optimizer.evMaxChargeW = 22000;
+  h.ref.paused = true;
+  h.ref.failCharge = true;
+  await h.bridge.emergencyStop();
+  h.ref.failCharge = false;
+  await h.bridge.emergencyStop();
+  const charges = h.calls.openwb.filter((c) => c[0] === 'charge').slice(1);
+  assert.ok(charges.length >= 1 && charges.every((c) => c[1] < 17), JSON.stringify(charges));
 });

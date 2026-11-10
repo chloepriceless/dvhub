@@ -684,3 +684,16 @@ test('Codex d15440d1 P2: Neustart im Not-Halt, Rückkehrwert steht schon im Ger�
   assert.equal(fs.existsSync(p), false, 'Merker gelöscht');
   assert.equal(h.guard.persistedRestoreW(), null);
 });
+
+test('Codex a83e8bc9 P2: Rücklesung „nicht verfügbar“ (null) gilt nicht als 0 W — die Rücknahme wird geschrieben', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-assist-'));
+  const p = path.join(dir, 'grid_connection_assist.json');
+  fs.writeFileSync(p, JSON.stringify({ valueW: 5000, baseW: 0, since: Date.now() - 60_000 }));
+  const h = rig('bridge-mqtt', { assistPath: p });
+  h.state.ctrl.discretionaryWritesPaused = true;
+  h.measure({ importW: 5000 });
+  h.state.victron.maxDischargeW = null; // frisch abgefragt, Wert nicht verfügbar
+  h.state.victron.fieldUpdatedAt.maxDischargeW = Date.now();
+  for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
+  assert.deepEqual(h.writes(), [0]);
+});
