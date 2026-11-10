@@ -10,13 +10,15 @@
  *   3. Vorplanung (ev-registration.js): beginnt oder endet sie ohne
  *      Steckwechsel (Ankunft rueckt naeher, EOS kann neu Ladestart, Kulanz
  *      vorbei), ebenso voller Abgleich + Neuplan.
- *   4. Sonst nur das Fahrzeug an EOS schicken, wenn sich Abfahrt, Ziel oder
- *      Ladestart geaendert haben — der volle Abgleich alle 15 min waere zu
- *      spaet: ein vergangener Termin heisst fuer EOS „sofort laden“.
+ *   4. Sonst nur das Fahrzeug an EOS schicken, wenn sich Abfahrt, Ziel,
+ *      Ladestart, Max-Ladestand oder Wertstufen (ev-targets.js) geaendert
+ *      haben — der volle Abgleich alle 15 min waere zu spaet: ein vergangener
+ *      Termin heisst fuer EOS „sofort laden“.
  */
 import { resolveEvDeparture } from './ev-departure.js';
 import { createEvPlugTracker, resolveEvPlugged, resolveEvSocReading } from './ev-soc.js';
 import { computeEvRegistration } from './ev-registration.js';
+import { resolveEvTargets } from './ev-targets.js';
 
 export function createEvWatch({ ctx, eosConfigSync, requestReplan, pushLog = () => {}, stableTicks = 2 }) {
   const plugTracker = createEvPlugTracker({ stableTicks });
@@ -79,7 +81,9 @@ export function createEvWatch({ ctx, eosConfigSync, requestReplan, pushLog = () 
     }
 
     const d = resolveEvDeparture(cfg, nowMs);
-    const key = `${d.enabled}|${d.departureAt}|${d.targetSocPct}|${reg.chargeStartAt}`;
+    let t;
+    try { t = resolveEvTargets(ctx, cfg, { decision: reg, valueSupported: ctx.state?.optimizer?.eos?.evSocValue === true, nowMs }); } catch { t = null; }
+    const key = `${d.enabled}|${d.departureAt}|${d.targetSocPct}|${reg.chargeStartAt}|${t?.minSocPct}|${t?.maxSocPct}|${JSON.stringify(t?.steps ?? null)}`;
     if (key === lastKey) return { action: 'none' };
     const res = await eosConfigSync.syncEv();
     if (res?.ok) lastKey = key; // bei Fehler naechste Minute erneut

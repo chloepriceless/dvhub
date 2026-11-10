@@ -219,8 +219,12 @@ describe('Wochenplan über /api/ev (2026-10-27)', () => {
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const opt = ctx.saved.at(-1).optimizer;
     assert.equal(opt.evWeeklyPlan.length, 7);
-    assert.deepEqual(opt.evWeeklyPlan[0], { day: 1, arrival: '20:00', departure: '05:00', targetValue: null, commuteKm: null });
-    assert.equal(opt.evWeeklyPlan[4].targetValue, 100);
+    // Alte Oberfläche (Ziel/Heimweg) → SoC-%: Ziel 100 % als Mindest-Ladestand,
+    // Heimweg 25 km (allgemein) als Fahrt der Abfahrt davor (Hin- und Rückweg).
+    assert.equal(opt.evWeeklyPlan[0].minSocPct, null);
+    assert.ok(opt.evWeeklyPlan[0].tripSocPct > 0, 'Fr-15:00-Ankunft kommt von der Abfahrt Di 05:00');
+    assert.ok(!('targetValue' in opt.evWeeklyPlan[0]) && !('commuteKm' in opt.evWeeklyPlan[0]));
+    assert.equal(opt.evWeeklyPlan[4].minSocPct, 100);
     assert.equal(opt.evArrivalOnce, '2026-10-27T20:30:00.000Z');
     assert.equal(opt.evCommuteKm, 25);
     assert.deepEqual(ctx.replans, [], 'Planänderung allein stößt keinen Sofort-Lauf an (die Minuten-Wache übernimmt)');
@@ -260,7 +264,7 @@ describe('Erwarteter Ladestand bei Ankunft über GET /api/ev', () => {
     assert.equal(r.body.arrival.expectedSocPct, 64);
     assert.equal(r.body.arrival.source, 'live');
     assert.equal(r.body.arrival.basePct, 70);
-    assert.equal(r.body.arrival.deductKm, 20);
+    assert.equal(r.body.arrival.deductPct, 6);
     assert.ok(r.body.departure.resolved.arrivalAt, 'nächste Ankunft mitgeliefert');
   });
 
@@ -325,5 +329,40 @@ describe('GET /api/integrations/evcc: Wochenplan-Zustand für die Schublade', ()
     assert.equal(dep.vehicleSources.http.error, 'Pfad „data.soc“ nicht in der Antwort gefunden');
     assert.equal(dep.vehicleSources.homeassistant.configured, false);
     assert.doesNotMatch(JSON.stringify(r.body), /geheim/);
+  });
+});
+
+describe('Max-Ladestand und Einmal-Ziel über /api/ev (1.0.10)', () => {
+  it('POST speichert Max, Einmal-Ziel und Plan in SoC-%', async () => {
+    const ctx = makeCtx();
+    const r = await call(ctx, 'POST', '/api/ev', { departure: {
+      enabled: true, maxSocPct: 85, once: '2026-11-17T07:00:00Z', onceMinSocPct: 75, onceTripSocPct: 45,
+      weeklyPlan: [{ day: 2, arrival: '', departure: '07:00', minSocPct: 50, tripSocPct: 30 }],
+    } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const opt = ctx.saved.at(-1).optimizer;
+    assert.equal(opt.evMaxSocPct, 85);
+    assert.equal(opt.evDepartureOnceMinSocPct, 75);
+    assert.equal(opt.evDepartureOnceTripSocPct, 45);
+    assert.deepEqual(opt.evWeeklyPlan[1], { day: 2, arrival: '', departure: '07:00', minSocPct: 50, tripSocPct: 30 });
+  });
+
+  it('GET zeigt Max, Einmal-Ziel, abgeleitete EOS-Ziele (min, max, Wertstufen) und den Wallbox-Stopp', async () => {
+    const ctx = makeCtx();
+    Object.assign(ctx.getRawCfg().optimizer, { evDepartureEnabled: true, evMaxSocPct: 80, evDepartureOnceMinSocPct: 75 });
+    ctx.state.optimizer = {
+      eos: { supported: true, evSocValue: true },
+      evTargets: { minSocPct: 50, maxSocPct: 80, steps: [[55, 0.24], [80, 0.21]], maxActive: true, valueSupported: true, reason: null },
+    };
+    ctx.eosEvccBridge.getStatus = () => ({ maxStop: { maxSocPct: 80, socPct: 80, active: true, since: '2026-11-17T03:00:00.000Z' } });
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.departure.maxSocPct, 80);
+    assert.equal(r.body.departure.onceMinSocPct, 75);
+    assert.equal(r.body.departure.onceTripSocPct, null);
+    assert.equal(r.body.departure.valueSupported, true);
+    assert.deepEqual(r.body.targets.steps, [[55, 0.24], [80, 0.21]]);
+    assert.equal(r.body.targets.maxSocPct, 80);
+    assert.equal(r.body.maxStop.active, true);
   });
 });

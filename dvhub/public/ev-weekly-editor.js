@@ -1,10 +1,12 @@
 // ev-weekly-editor.js -- Wochenplan-Editor fuers E-Auto (Leitstand-Kachel und
-// Integrationsseite teilen ihn): 7 Zeilen Mo..So mit Ankunft, Abfahrt, Ziel
-// und — auf der Integrationsseite — Heimweg je Tag, dazu „gleich fuer Mo–Fr“.
+// Integrationsseite teilen ihn): 7 Zeilen Mo..So mit Ankunft, Abfahrt,
+// Mindest-Ladestand bei der Abfahrt und Verbrauch der Fahrt danach — alles in
+// % Ladestand (seit 1.0.10, vorher Ziel in %/kWh/km und Heimweg in km), dazu
+// „gleich fuer Mo–Fr“.
 //
 // Liegt die Abfahrt nicht nach der Ankunft, ist sie am Folgetag (20:00 →
-// 05:00); die Zeile zeigt dann „+1 Tag“. Leere Ziel-/Heimweg-Felder heissen
-// „allgemeiner Wert“. Kein Inline-JS, keine Inline-Styles (CSP).
+// 05:00); die Zeile zeigt dann „+1 Tag“. Leeres Mindest-Feld heisst
+// „allgemeiner Wert“, leere Fahrt „0 %“. Kein Inline-JS, keine Inline-Styles (CSP).
 //
 // Sichtbar machen, was DVhub aus dem Plan macht (2026-10-29): je Zeile die
 // aufgeloeste Abfahrt („Ankunft Mi 20:00 → Abfahrt Do 02:00 (Folgetag)“), ein
@@ -99,11 +101,14 @@
       if (!(cap > 0) || pct == null) return '';
       return ' ≈ ' + (Math.round(cap * pct / 100 / 100) / 10).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' kWh';
     };
+    const pct = function (v) { return Math.round(Number(v)) + ' %'; };
+    const ct = function (eur) { return Math.round(Number(eur) * 100); };
     if (!r.enabled) lines.push({ text: pre + 'Wochenplan aus — EOS nutzt den allgemeinen Ziel-Ladestand.', cls: 'is-dim' });
     else if (!r.departureAt) lines.push({ text: pre + 'Keine Abfahrt geplant' + (r.reason && r.reason !== 'keine Abfahrt geplant' ? ' (' + r.reason + ')' : '') + '.', cls: 'is-warn' });
     else {
       const parts = ['Nächste Abfahrt: ' + fmtAt(r.departureAt, tz)];
-      if (r.targetSocPct != null) parts.push('Ziel ' + r.targetSocPct + ' %' + kwh(r.targetSocPct));
+      if (r.targetSocPct != null) parts.push('mindestens ' + r.targetSocPct + ' %' + kwh(r.targetSocPct));
+      if (Number(r.tripSocPct) > 0) parts.push('Fahrt danach ≈ ' + pct(r.tripSocPct));
       const dayName = r.day ? DAY_NAMES[r.day - 1] : '';
       if (r.source === 'once') parts.push('einmalig' + (dayName ? ' (statt Wochenplan ' + dayName + ')' : ''));
       else if (dayName) parts.push('aus Wochenplan ' + dayName + (isoWeekday(r.departureAt, tz) !== r.day ? ' (Abfahrt am Folgetag)' : ''));
@@ -123,14 +128,30 @@
       } else {
         const parts = [];
         if (!s.enabled || s.targetSocPct == null) parts.push('allgemeiner Ziel-Ladestand' + (s.enabled ? '' : ' (Wochenplan aus)'));
-        else if (!e.deadlineSupported) parts.push('Ziel ' + s.targetSocPct + ' % ohne Uhrzeit (kein EOS 0.4 erkannt)');
-        else parts.push('Ziel ' + s.targetSocPct + ' %' + (s.departureAt ? ' bis ' + fmtAt(s.departureAt, stz) : ' ohne Frist'));
+        else if (!e.deadlineSupported) parts.push('mindestens ' + s.targetSocPct + ' % ohne Uhrzeit (kein EOS 0.4 erkannt)');
+        else {
+          // Was wirklich an EOS ging (ev-targets.js): vorausschauendes Mindestziel, Max, Wert.
+          const t = e.targets;
+          const min = t && t.minSocPct != null ? t.minSocPct : s.targetSocPct;
+          let txt = 'mindestens ' + min + ' %' + (s.departureAt ? ' bis ' + fmtAt(s.departureAt, stz) : ' ohne Frist');
+          if (t && t.minWeekPct != null && Number(t.minSocPct) > Number(t.minWeekPct)) txt += ' (vorausschauend, Plan ' + t.minWeekPct + ' %)';
+          parts.push(txt);
+          if (t && t.maxActive) {
+            const steps = Array.isArray(t.steps) ? t.steps : [];
+            parts.push('bis ' + t.maxSocPct + ' %, wenn günstig' + (steps.length
+              ? ' (Wert ' + ct(steps[0][1]) + '–' + ct(steps[steps.length - 1][1]) + ' ct je kWh)'
+              : (t.reason ? ' (' + t.reason + ')' : '')));
+          }
+        }
         if (e.deadlineSupported && e.chargeStartSupported) {
           if (e.mode === 'preplan') parts.push('Ladestart ' + (e.chargeStartAt ? fmtAt(e.chargeStartAt, stz) : 'sofort (Ankunft vorbei)'));
           else if (e.mode === 'plugged') parts.push('Ladestart sofort (angesteckt)');
           else if (e.mode === 'always') parts.push('Ladestart sofort');
         }
         lines.push({ text: head + parts.join(' · '), cls: !e.deadlineSupported ? 'is-warn' : '' });
+        if (e.valueSupported === false && e.maxSocPct != null) {
+          lines.push({ text: 'Max-Ladestand ' + e.maxSocPct + ' % wirkt erst mit einem EOS, das Wertstufen kennt — bis dahin lädt EOS nur bis zum Mindestziel.', cls: 'is-dim' });
+        }
       }
     }
     if (info.previewError) lines.push({ text: 'Vorschau nicht möglich: ' + info.previewError, cls: 'is-warn' });
@@ -140,7 +161,7 @@
   function entryFor(plan, day) {
     const list = Array.isArray(plan) ? plan : [];
     for (let i = 0; i < list.length; i += 1) if (Number(list[i] && list[i].day) === day) return list[i];
-    return { day: day, arrival: '', departure: '', targetValue: null, commuteKm: null };
+    return { day: day, arrival: '', departure: '', minSocPct: null, tripSocPct: null };
   }
 
   function rowHtml(e, i, opts) {
@@ -152,8 +173,8 @@
       + '<input type="time" class="input mono evw-arr" step="300" value="' + val(e.arrival) + '" aria-label="Ankunft ' + name + '">'
       + '<span class="evw-depwrap"><input type="time" class="input mono evw-dep" step="300" value="' + val(e.departure) + '" aria-label="Abfahrt ' + name + '">'
       + '<span class="evw-next" hidden>+1 Tag</span></span>'
-      + '<input type="number" class="input mono evw-tgt" min="0" max="' + (opts.unit === '%' ? 100 : 2000) + '" step="' + (opts.unit === '%' ? 5 : 1) + '" value="' + val(e.targetValue) + '" placeholder="' + val(opts.defaultTarget) + '" aria-label="Ziel ' + name + ' (' + esc(opts.unit) + ')">'
-      + (opts.showKm ? '<input type="number" class="input mono evw-km" min="0" max="1000" step="1" value="' + val(e.commuteKm) + '" placeholder="' + val(opts.defaultKm) + '" aria-label="Heimweg ' + name + ' (km)">' : '')
+      + '<input type="number" class="input mono evw-min" min="0" max="100" step="5" value="' + val(e.minSocPct) + '" placeholder="' + val(opts.defaultMin) + '" aria-label="Mindestens bei Abfahrt ' + name + ' (%)" title="Mindest-Ladestand bei dieser Abfahrt — wird immer erreicht. Leer: allgemeiner Wert.">'
+      + '<input type="number" class="input mono evw-trip" min="0" max="100" step="1" value="' + val(e.tripSocPct) + '" placeholder="0" aria-label="Fahrt ab ' + name + ' (% Ladestand)" title="So viel Ladestand verbraucht die Fahrt ab dieser Abfahrt bis zur nächsten Ankunft (geschätzt).">'
       + '<span class="evw-res"></span>'
       + '<span class="evw-warn" role="note" hidden></span>'
       + '</div>';
@@ -297,19 +318,19 @@
     if (!host) return;
     opts = opts || {};
     host._evwPlan = Array.isArray(plan) ? plan : [];
-    const o = { unit: opts.unit || '%', defaultTarget: opts.defaultTarget, defaultKm: opts.defaultKm, showKm: opts.showKm === true };
+    const o = { defaultMin: opts.defaultMin };
     host.classList.add('evw');
-    host.classList.toggle('evw-with-km', o.showKm);
+    host.classList.add('evw-with-km');
     host._evwOpts = opts;
     host.innerHTML = '<div class="evw-summary" aria-live="polite" hidden></div>'
-      + '<div class="evw-head"><span>Tag</span><span>Ankunft</span><span>Abfahrt</span><span>Ziel ' + esc(o.unit) + '</span>'
-      + (o.showKm ? '<span>Heimweg km</span>' : '') + '</div>'
+      + '<div class="evw-head"><span>Tag</span><span>Ankunft</span><span>Abfahrt</span><span title="Mindest-Ladestand bei der Abfahrt">Mind. %</span>'
+      + '<span title="Verbrauch der Fahrt ab der Abfahrt bis zur nächsten Ankunft">Fahrt %</span></div>'
       + DAYS.map(function (_, i) { return rowHtml(entryFor(plan, i + 1), i, o); }).join('')
       + '<div class="evw-tools">'
-      + '<button type="button" class="btn sm ghost evw-copy" title="Ankunft, Abfahrt, Ziel und Heimweg vom Montag auf Dienstag bis Freitag übertragen">Montag gleich für Mo–Fr</button>'
+      + '<button type="button" class="btn sm ghost evw-copy" title="Ankunft, Abfahrt, Mindest-Ladestand und Fahrt vom Montag auf Dienstag bis Freitag übertragen">Montag gleich für Mo–Fr</button>'
       + '<button type="button" class="btn sm ghost evw-clear" title="Alle Tage leeren">Leeren</button>'
       + '</div>'
-      + '<p class="evw-hint">Jede Zeile gehört zum Tag der Ankunft. Liegt die Abfahrt nicht nach der Ankunft, gilt sie am Folgetag (20:00 → 05:00). Ohne Ankunft gilt die Abfahrt am Tag der Zeile. Leere Ziel- und Heimweg-Felder: allgemeiner Wert.</p>';
+      + '<p class="evw-hint">Jede Zeile gehört zum Tag der Ankunft. Liegt die Abfahrt nicht nach der Ankunft, gilt sie am Folgetag (20:00 → 05:00). Ohne Ankunft gilt die Abfahrt am Tag der Zeile. „Mind. %“: so voll ist das Auto bei der Abfahrt immer — leer heißt allgemeiner Wert. „Fahrt %“: so viel Ladestand braucht die Fahrt bis zur nächsten Ankunft; DVhub rechnet damit voraus, damit auch eine spätere Fahrt kurz danach noch reicht.</p>';
     host.querySelectorAll('.evw-row').forEach(markNextDay);
     paintSummary(host);
     if (host.dataset.evwWired === '1') return;
@@ -329,7 +350,7 @@
         const src = host.querySelector('.evw-row[data-day="1"]');
         for (let d = 2; d <= 5; d += 1) {
           const row = host.querySelector('.evw-row[data-day="' + d + '"]');
-          ['.evw-arr', '.evw-dep', '.evw-tgt', '.evw-km'].forEach(function (sel) {
+          ['.evw-arr', '.evw-dep', '.evw-min', '.evw-trip'].forEach(function (sel) {
             const from = src.querySelector(sel); const to = row.querySelector(sel);
             if (from && to) to.value = from.value;
           });
@@ -345,23 +366,19 @@
   }
 
   /**
-   * Felder, die der Editor nicht zeigt, aus dem dargestellten Plan behalten:
-   * ohne Heimweg-Spalte (Kachel) bleiben die je Tag eingetragenen km stehen —
-   * sonst loeschte ein Speichern in der Kachel die Werte der Integrationsseite.
+   * Seit 1.0.10 zeigen Kachel und Integrationsseite dieselben Spalten
+   * (Mindest-Ladestand, Fahrt) — nichts ist versteckt, der gelesene Plan gilt.
+   * Bleibt fuer Aufrufer der alten Schnittstelle.
    */
-  function keepHidden(readPlan, renderedPlan, opts) {
-    if (opts && opts.showKm) return readPlan;
-    return readPlan.map(function (e) {
-      const orig = entryFor(renderedPlan, e.day);
-      return { day: e.day, arrival: e.arrival, departure: e.departure, targetValue: e.targetValue, commuteKm: orig.commuteKm == null ? null : orig.commuteKm };
-    });
+  function keepHidden(readPlan) {
+    return readPlan;
   }
 
   /** Plan aus dem Editor: 7 Eintraege, leere Felder → '' bzw. null. */
   function read(host) {
     const out = [];
     if (!host) return out;
-    const finish = function () { return keepHidden(out, host._evwPlan || [], host._evwOpts || {}); };
+    const finish = function () { return keepHidden(out); };
     host.querySelectorAll('.evw-row').forEach(function (row) {
       const num = function (sel) {
         const el = row.querySelector(sel);
@@ -373,8 +390,8 @@
         day: Number(row.getAttribute('data-day')),
         arrival: row.querySelector('.evw-arr').value || '',
         departure: row.querySelector('.evw-dep').value || '',
-        targetValue: num('.evw-tgt'),
-        commuteKm: num('.evw-km')
+        minSocPct: num('.evw-min'),
+        tripSocPct: num('.evw-trip')
       });
     });
     return finish();

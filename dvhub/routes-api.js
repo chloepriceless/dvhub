@@ -36,7 +36,30 @@ import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, grid
 import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
-import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan, previewEvDeparture } from './services/optimizer/ev-departure.js';
+import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan, previewEvDeparture, targetSocPct } from './services/optimizer/ev-departure.js';
+
+/**
+ * E-Auto-Wochenplan in SoC-% (1.0.10): Einmal-Ziel, Max-Ladestand, Standard-
+ * Mindestziel in % und was zuletzt als Ziel an EOS ging — für /api/ev und die
+ * evcc-Schublade gleich.
+ */
+function evPlanStatusFields(opt = {}, state = null) {
+  return {
+    onceMinSocPct: opt.evDepartureOnceMinSocPct ?? null,
+    onceTripSocPct: opt.evDepartureOnceTripSocPct ?? null,
+    maxSocPct: opt.evMaxSocPct === undefined ? 80 : opt.evMaxSocPct,
+    valueMarginCt: opt.evValueMarginCt ?? 1,
+    // Allgemeiner Mindest-Ladestand in % (alte Ziele in kWh/km umgerechnet).
+    defaultMinSocPct: targetSocPct({
+      mode: opt.evTargetMode || 'percent', value: opt.evTargetValue ?? 80,
+      capacityWh: Number(opt.evCapacityWh) || 50000, consumptionKwhPer100km: opt.evConsumptionKwhPer100km ?? 18,
+    }),
+    // EOS kennt die Wertstufen (sonst nur Mindestziel, eos-capabilities.js).
+    valueSupported: state?.optimizer?.eos?.evSocValue === true,
+    // Zuletzt an EOS: Mindestziel (vorausschauend), Max, Wertstufen, Grund (ev-targets.js).
+    targets: state?.optimizer?.evTargets || null,
+  };
+}
 import { resolveEvSocPct, resolveEvPlugged } from './services/optimizer/ev-soc.js';
 import { resolveEvArrival } from './services/optimizer/ev-arrival.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
@@ -6039,6 +6062,8 @@ export function createApiRoutes(ctx) {
           // Wochenplan (immer 7 Tage; alte Config: aus time + days abgeleitet).
           weeklyPlan: effectiveWeeklyPlan(opt),
           arrivalOnce: opt.evArrivalOnce || '',
+          // Einmal-Ziel, Max-Ladestand, Standard-Mindestziel in %, EOS-Ziele.
+          ...evPlanStatusFields(opt, ctx.state),
           commuteKm: Number(opt.evCommuteKm) || 0,
           consumptionKwhPer100km: opt.evConsumptionKwhPer100km ?? 18,
           targetMode: opt.evTargetMode || 'percent',
@@ -6093,11 +6118,17 @@ export function createApiRoutes(ctx) {
           baseSource: arrival.baseSource,
           baseAt: arrival.baseAt,
           legs: arrival.legs,
-          deductKm: arrival.deductKm,
-          commuteKm: arrival.commuteKm
+          // abgezogener Verbrauch in % (ganze bzw. halbe Fahrt) und die Fahrt selbst
+          deductPct: arrival.deductPct,
+          tripPct: arrival.tripPct
         },
         plan,
         planError,
+        // Was zuletzt als Ziel an EOS ging (ev-targets.js): Mindestziel
+        // (vorausschauend), Max-Ladestand, Wertstufen [[SoC %, € je kWh], …], Grund.
+        targets: ctx.state?.optimizer?.evTargets || null,
+        // Max erreicht → DVhub beendet das Laden an der Wallbox.
+        maxStop: bridge?.maxStop || null,
         // „Sofort laden“ (eos-evcc-bridge): aktiver Override + erlaubte Leistung.
         override: bridge?.override || null,
         overrideLimits: bridge?.overrideLimits || null,
@@ -6205,6 +6236,7 @@ export function createApiRoutes(ctx) {
             once: raw.optimizer?.evDepartureOnce || '',
             weeklyPlan: effectiveWeeklyPlan(raw.optimizer || {}),
             arrivalOnce: raw.optimizer?.evArrivalOnce || '',
+            ...evPlanStatusFields(raw.optimizer || {}, ctx.state),
             commuteKm: Number(raw.optimizer?.evCommuteKm) || 0,
             targetMode: raw.optimizer?.evTargetMode || 'percent',
             targetValue: raw.optimizer?.evTargetValue ?? 80,
@@ -6215,7 +6247,7 @@ export function createApiRoutes(ctx) {
             // beim Einrichten sieht, ob der Ladestand ankommt.
             arrival: (() => {
               const a = resolveEvArrival(ctx, getCfg(), { plugged: resolveEvPlugged(ctx) });
-              return { at: a.arrivalAt, expectedSocPct: a.pct, source: a.source, basePct: a.basePct, baseSource: a.baseSource, baseAt: a.baseAt, legs: a.legs, deductKm: a.deductKm };
+              return { at: a.arrivalAt, expectedSocPct: a.pct, source: a.source, basePct: a.basePct, baseSource: a.baseSource, baseAt: a.baseAt, legs: a.legs, deductPct: a.deductPct };
             })(),
             vehicleSources: Object.fromEntries(['http', 'homeassistant'].map((k) => {
               const st = ctx.vehiclePull?.getState?.(k) || { configured: false };
@@ -6317,7 +6349,7 @@ export function createApiRoutes(ctx) {
           eosPatch.evStopMode = e.stopMode;
         }
         if (e.departure != null) {
-          const dep = parseEvDeparturePatch(e.departure, 'eos.departure');
+          const dep = parseEvDeparturePatch(e.departure, 'eos.departure', { opt: { ...(ctx.getRawCfg?.()?.optimizer || {}), ...eosPatch } });
           if (!dep.ok) return json(res, 400, { ok: false, error: dep.error });
           Object.assign(eosPatch, dep.patch);
         }

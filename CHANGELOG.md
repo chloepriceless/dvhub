@@ -23,6 +23,26 @@ verweist hierher.
   Akku-Hilfe, Victron-Register 2714/2715 bleiben unberührt. Solange eine Schwelle wirkt, sperrt die Einspeisung aus
   Akku 2 den Akku 1 nicht. Leitstand (Kachel „Netzanschluss“): „EOS: Akku deckt über X kW“. Wirkt nur mit
   eingeschaltetem „Akku halten“ (`optimizer.eosGridHoldEnabled`) und einem EOS, das PR D enthält.
+- **E-Auto: Wochenplan mit Mindest- und Max-Ladestand.** Je Wochentag steht im Wochenplan jetzt, wie voll das Auto bei
+  der Abfahrt **mindestens** sein muss und wie viel Ladestand die **Fahrt** danach etwa braucht — beides in %, nicht
+  mehr in km. Dazu ein **Max-Ladestand, wenn günstig** (Standard 80 %, leer = aus): Ist Laden günstig (billige Nacht,
+  PV-Überschuss), lädt EOS über das Mindestziel bis dorthin. Was eine zusätzliche kWh wert ist, schätzt DVhub aus Preisen
+  und PV der nächsten 7 Tage (was sie später an Ladekosten spart, minus 1 ct Sicherheitsabschlag) und gibt es EOS als
+  Wertstufen mit. Ist der Max-Ladestand erreicht, beendet DVhub das Laden an der Wallbox; eine Ladegrenze im Auto kann
+  zusätzlich bestehen. „Sofort laden“ von Hand und der Not-Halt bleiben unberührt.
+  - **Vorausschauend:** Das Mindestziel rechnet DVhub über die Fahrten der nächsten 8 Tage — reicht die Zeit zwischen
+    zwei Fahrten nicht zum Nachladen (z. B. Samstag 09:00 und 13:00), steigt das Ziel der ersten Abfahrt.
+  - **Einmal-Ziel:** „Morgen längere Strecke“ = einmal z. B. 75 % bis 08:00 (Leitstand-Kachel und Integrationen →
+    evcc). Der Wochenplan bleibt, wie er ist; nach der Abfahrt ist das Ziel vorbei. Eine vorgezogene Einmal-Abfahrt
+    lässt die ersetzte reguläre Abfahrt danach nicht wieder aufleben.
+  - **Ohne passendes EOS wie bisher:** Kennt EOS die Wertstufen nicht (Vanilla v0.4.0rc3), lädt EOS nur bis zum
+    Mindestziel, Max-Ladestand und Wallbox-Grenze ruhen; das Mindestziel bleibt vorausschauend. Die Oberfläche sagt es.
+  - **Einphasig laden,** wenn die Wallbox umschalten kann (evcc meldet es je Ladepunkt): kleine Leistungen 1,4–3,7 kW
+    statt erst ab 4,1 kW dreiphasig. EOS bekommt nur noch Ladestufen, die die Wallbox wirklich fahren kann.
+  - **Start-Ladestand des Autos an EOS abgerundet** statt gerundet — EOS plant nie mit mehr, als drin ist.
+  - **Übernahme:** Bestehende Wochenpläne werden beim Start einmal umgerechnet — Ziel in kWh/km in %, der Heimweg in km
+    als Fahrt der Abfahrt davor (Hin- und Rückweg). Status unter `GET /api/ev` (`targets`: Mindestziel, Max,
+    Wertstufen; `maxStop`).
 - **§14a: Hausspeicher deckt zuerst (Schnittstelle).** Verlangt der Netzbetreiber eine Reduzierung, berechnet DVhub
   die benötigte Akku-Hilfe (Bedarf der steuerbaren Verbraucher über der Grenze plus Haushalt ohne Speicher) und fordert
   sie über eine schmale Schnittstelle bei der Akku-Steuerung an (`ctx.batteryAssist.request({ source: 'p14a', coverW,

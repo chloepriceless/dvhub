@@ -32,7 +32,7 @@ import { getWattpilotConnection } from './wattpilot.js';
 // Wallbox nicht steuern. Lesen (status) bleibt erlaubt.
 const READ_ONLY = Object.freeze({ ok: false, error: 'read_only' });
 function guardWrites(adapter) {
-  for (const k of ['charge', 'stop', 'release', 'limit']) {
+  for (const k of ['charge', 'stop', 'release', 'limit', 'setPhases']) {
     const fn = adapter[k];
     if (typeof fn === 'function') adapter[k] = (...a) => (isReadOnlyMode() ? Promise.resolve(READ_ONLY) : fn(...a));
   }
@@ -397,6 +397,12 @@ export function createEvccAdapter(evccIntegration, getLoadpoint, getStopMode) {
     // Netzanschluss-Deckel, wenn evcc im eigenen Modus lädt.
     async limit(currentA) {
       return evccIntegration.setMaxCurrent(getLoadpoint(), currentA);
+    },
+    // Phasen umschalten (1 oder 3), nur wenn evcc den Ladepunkt als
+    // umschaltbar meldet (chargerPhases1p3p) — die Brücke prüft das vorher.
+    async setPhases(phases) {
+      if (typeof evccIntegration?.setPhases !== 'function') return { ok: false, error: 'phases not supported' };
+      return evccIntegration.setPhases(getLoadpoint(), phases);
     },
     async release() {
       // evcc kennt kein "Vorgabe zuruecknehmen". Bewusst nichts tun: so blieb

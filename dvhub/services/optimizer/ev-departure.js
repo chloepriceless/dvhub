@@ -126,27 +126,89 @@ const HHMM_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
 const pad5 = (t) => String(t).padStart(5, '0');
 const numOrNull = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
+/** Zahl in [0, 100] oder null (leer / ungültig). */
+const pctOrNull = (v) => {
+  const n = numOrNull(v);
+  return n === null || n < 0 || n > 100 ? null : n;
+};
+const round1 = (v) => Math.round(v * 10) / 10;
+const emptyRow = (day) => ({ day, arrival: '', departure: '', minSocPct: null, tripSocPct: null });
+const WEEK_MIN = 7 * 1440;
+
+/**
+ * Wochenplan in SoC-% (seit 1.0.10): je Zeile `minSocPct` (Mindest-Ladestand
+ * bei dieser Abfahrt, leer = allgemeiner Ziel-Ladestand) und `tripSocPct`
+ * (erwarteter Verbrauch der Fahrt ab dieser Abfahrt bis zur nächsten Ankunft).
+ *
+ * Übernahme alter Zeilen (bis 1.0.9: `targetValue` in der Einheit von
+ * evTargetMode, `commuteKm` = Heimweg zur Ankunft DIESER Zeile):
+ *   - targetValue → minSocPct (kWh/km einmalig über Kapazität und Verbrauch in %);
+ *   - Heimweg → tripSocPct der Abfahrt, von der das Auto zu dieser Ankunft
+ *     heimkommt (die letzte Abfahrt davor im Wochenlauf), als Hin- und Rückweg
+ *     (2 × Heimweg) — genau das, was die alte Ankunftsschätzung abzog. Ohne
+ *     eigenen Heimweg gilt der allgemeine (evCommuteKm); nur Zeilen MIT Ankunft
+ *     hatten je einen Heimweg.
+ * Zeilen mit den neuen Feldern bleiben, wie sie sind.
+ */
+export function migrateWeeklyPlanRows(list, opt = {}) {
+  const rows = Array.isArray(list) ? list : [];
+  const byDay = new Map();
+  for (const e of rows) {
+    const day = Number(e?.day);
+    if (!WEEK_DAYS.includes(day) || byDay.has(day)) continue;
+    byDay.set(day, e);
+  }
+  const mode = TARGET_MODES.includes(opt.evTargetMode) ? opt.evTargetMode : 'percent';
+  const capacityWh = Number(opt.evCapacityWh) || 50000;
+  const cons = Number(opt.evConsumptionKwhPer100km) || 18;
+  const plan = WEEK_DAYS.map((day) => {
+    const e = byDay.get(day);
+    if (!e) return emptyRow(day);
+    const arrival = parseTime(e.arrival) ? pad5(String(e.arrival).trim()) : '';
+    const departure = parseTime(e.departure) ? pad5(String(e.departure).trim()) : '';
+    let minSocPct;
+    if (Object.prototype.hasOwnProperty.call(e, 'minSocPct')) minSocPct = pctOrNull(e.minSocPct);
+    else if (numOrNull(e.targetValue) !== null) minSocPct = targetSocPct({ mode, value: e.targetValue, capacityWh, consumptionKwhPer100km: cons });
+    else minSocPct = null;
+    const hasTrip = Object.prototype.hasOwnProperty.call(e, 'tripSocPct');
+    return { day, arrival, departure, minSocPct, tripSocPct: hasTrip ? pctOrNull(e.tripSocPct) : null, _legacyTrip: !hasTrip, _src: e };
+  });
+  // Heimweg (km) der Ankunftszeile → Fahrt der Abfahrt davor.
+  const depMin = (r) => {
+    const d = parseTime(r.departure);
+    if (!d) return null;
+    return ((r.day - 1) * 1440 + d.h * 60 + d.min + (departsNextDay(r) ? 1440 : 0)) % WEEK_MIN;
+  };
+  const deps = plan.map((r) => ({ r, m: depMin(r) })).filter((x) => x.m !== null);
+  const globalKm = Math.max(0, Number(opt.evCommuteKm) || 0);
+  for (const r of plan) {
+    const a = parseTime(r.arrival);
+    if (!a || !r.departure || !r._legacyTrip) continue;
+    const km = numOrNull(r._src.commuteKm) !== null ? Math.max(0, Number(r._src.commuteKm)) : globalKm;
+    if (!(km > 0) || !deps.length) continue;
+    const arrMin = (r.day - 1) * 1440 + a.h * 60 + a.min;
+    let best = null;
+    for (const x of deps) {
+      const diff = ((arrMin - x.m) % WEEK_MIN + WEEK_MIN) % WEEK_MIN || WEEK_MIN;
+      if (!best || diff < best.diff) best = { diff, row: x.r };
+    }
+    if (!best.row._legacyTrip) continue;
+    const trip = Math.min(100, round1(2 * (km * cons / 100) * 1000 / capacityWh * 100));
+    best.row.tripSocPct = Math.max(best.row.tripSocPct ?? 0, trip);
+  }
+  return plan.map(({ _legacyTrip, _src, ...row }) => row);
+}
+
 /**
  * Der gueltige Wochenplan: immer 7 Eintraege Mo..So
- * `{ day, arrival: 'HH:MM'|'', departure: 'HH:MM'|'', targetValue: number|null, commuteKm: number|null }`.
+ * `{ day, arrival: 'HH:MM'|'', departure: 'HH:MM'|'', minSocPct: number|null, tripSocPct: number|null }`.
  * Ohne evWeeklyPlan (alte Config) aus evDepartureTime + evDepartureDays.
  */
 export function effectiveWeeklyPlan(opt = {}) {
-  const empty = (day) => ({ day, arrival: '', departure: '', targetValue: null, commuteKm: null });
-  if (Array.isArray(opt.evWeeklyPlan)) {
-    const byDay = new Map();
-    for (const e of opt.evWeeklyPlan) {
-      const day = Number(e?.day);
-      if (!WEEK_DAYS.includes(day) || byDay.has(day)) continue;
-      const arrival = parseTime(e.arrival) ? pad5(String(e.arrival).trim()) : '';
-      const departure = parseTime(e.departure) ? pad5(String(e.departure).trim()) : '';
-      byDay.set(day, { day, arrival, departure, targetValue: numOrNull(e.targetValue), commuteKm: numOrNull(e.commuteKm) });
-    }
-    return WEEK_DAYS.map((d) => byDay.get(d) || empty(d));
-  }
+  if (Array.isArray(opt.evWeeklyPlan)) return migrateWeeklyPlanRows(opt.evWeeklyPlan, opt);
   const time = parseTime(opt.evDepartureTime ?? '07:00') ? pad5(String(opt.evDepartureTime ?? '07:00').trim()) : '';
   const days = normalizeDays(opt.evDepartureDays ?? [1, 2, 3, 4, 5]);
-  return WEEK_DAYS.map((d) => ({ ...empty(d), departure: time && days.includes(d) ? time : '' }));
+  return WEEK_DAYS.map((d) => ({ ...emptyRow(d), departure: time && days.includes(d) ? time : '' }));
 }
 
 /**
@@ -192,7 +254,7 @@ export function earlyDepartureWithoutArrival(entry) {
 
 /**
  * Alle Fenster des Plans rund um `nowMs` (8 Tage zurueck, 8 voraus), nach
- * Abfahrt sortiert: { day, arrivalMs|null, departureMs, targetValue, commuteKm }.
+ * Abfahrt sortiert: { day, arrivalMs|null, departureMs, minSocPct, tripSocPct }.
  */
 function planWindows(plan, timeZone, nowMs) {
   const today = zonedDate(nowMs, timeZone);
@@ -215,7 +277,7 @@ function planWindows(plan, timeZone, nowMs) {
     // nicht, sie rutscht auf 03:30) kann hinter die Abfahrt fallen — dann
     // ohne Ankunft.
     if (arrivalMs !== null && arrivalMs >= departureMs) arrivalMs = null;
-    out.push({ day: d.isoWeekday, arrivalMs, departureMs, targetValue: e.targetValue, commuteKm: e.commuteKm });
+    out.push({ day: d.isoWeekday, arrivalMs, departureMs, minSocPct: e.minSocPct ?? null, tripSocPct: e.tripSocPct ?? null });
   }
   return out.sort((a, b) => a.departureMs - b.departureMs);
 }
@@ -239,10 +301,15 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
   const onceDep = Date.parse(opt.evDepartureOnce || '');
   const onceArr = Date.parse(opt.evArrivalOnce || '');
   const onceActive = Number.isFinite(onceDep) && !gone(onceDep);
+  const onceMin = pctOrNull(opt.evDepartureOnceMinSocPct);
+  const onceTrip = pctOrNull(opt.evDepartureOnceTripSocPct);
   // Die einmalige Abfahrt ersetzt die Abfahrt EINES regulaeren Fensters
-  // (hoechstens 24 h entfernt): dieses behaelt Ankunft, Ziel und Heimweg, und
+  // (hoechstens 24 h entfernt): dieses behaelt Ankunft, Ziel und Fahrt, und
   // seine eigene Abfahrt zaehlt nicht als Fahrt — auch nachdem sie verstrichen
-  // ist. Welches Fenster:
+  // ist, und auch nachdem die einmalige Abfahrt selbst vorbei ist (sonst kaeme
+  // eine ersetzte spaetere Abfahrt danach als Phantom-Fahrt zurueck: „Mi 06:00
+  // statt 07:30“ — um 06:30 ist das Auto weg, 07:30 gibt es nicht). Welches
+  // Fenster (bewertet, solange die einmalige Abfahrt noch kam):
   //   1. das naechste noch kommende, wenn es eine Ankunft VOR der einmaligen
   //      Abfahrt hat — das Auto ist dann da, die Abfahrt wird vorgezogen
   //      oder verschoben (Fr mittags: „heute 17:00 statt Sa 09:00“);
@@ -251,10 +318,15 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
   //      (alte Config, reiner Abfahrtsplan) ist das die verschobene Fahrt von
   //      eben, nicht die von morgen.
   let superseded = null;
-  if (onceActive) {
-    const DAY = 24 * 3600_000;
+  const DAY = 24 * 3600_000;
+  // Auch nach der einmaligen Abfahrt (so weit planWindows zurückreicht): die
+  // ersetzte Abfahrt wird nie zur Fahrt, die Einmal-Fahrt bleibt bis zur
+  // nächsten echten Abfahrt die laufende (Codex 52c5ee20).
+  if (Number.isFinite(onceDep) && (onceActive || nowMs - onceDep < 7 * DAY)) {
+    const refNow = onceActive ? nowMs : onceDep - DEPARTURE_LEAD_MS - 1;
+    const goneAt = (ms) => ms - DEPARTURE_LEAD_MS <= refNow;
     const arrivedBefore = (w) => w.arrivalMs === null || w.arrivalMs < onceDep;
-    const next = windows.find((w) => !gone(w.departureMs));
+    const next = windows.find((w) => !goneAt(w.departureMs));
     if (next && next.arrivalMs !== null && next.arrivalMs < onceDep && Math.abs(next.departureMs - onceDep) < DAY) superseded = next;
     else {
       for (const w of windows) {
@@ -264,19 +336,27 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
       }
     }
   }
-  const past = windows.filter((w) => w !== superseded && gone(w.departureMs)).map((w) => w.departureMs);
+  const candidates = windows.filter((w) => w !== superseded);
+  const pastWindows = candidates.filter((w) => gone(w.departureMs));
+  const past = pastWindows.map((w) => w.departureMs);
   if (Number.isFinite(onceDep) && gone(onceDep)) past.push(onceDep);
   const tripStartMs = past.length ? Math.max(...past) : null;
+  // Fahrt, von der das Auto zur naechsten Ankunft heimkommt (in %).
+  let prevTripSocPct = null;
+  if (tripStartMs !== null) {
+    if (Number.isFinite(onceDep) && tripStartMs === onceDep) prevTripSocPct = onceTrip ?? superseded?.tripSocPct ?? null;
+    else prevTripSocPct = pastWindows.find((w) => w.departureMs === tripStartMs)?.tripSocPct ?? null;
+  }
   const afterTripStart = (ms) => tripStartMs === null || ms > tripStartMs;
-  const nextWeekly = windows.find((w) => !gone(w.departureMs)) || null;
+  const nextWeekly = candidates.find((w) => !gone(w.departureMs)) || null;
 
   let win = null;
   if (onceActive) {
-    win = { day: null, arrivalMs: null, departureMs: onceDep, targetValue: null, commuteKm: null, source: 'once', arrivalSource: null };
+    win = { day: null, arrivalMs: null, departureMs: onceDep, minSocPct: onceMin, tripSocPct: onceTrip, source: 'once', arrivalSource: null };
     const inGap = (w) => w && w.arrivalMs !== null && afterTripStart(w.arrivalMs) && w.arrivalMs < onceDep;
     const base = superseded || (inGap(nextWeekly) ? nextWeekly : null);
     if (base) {
-      Object.assign(win, { day: base.day, targetValue: base.targetValue, commuteKm: base.commuteKm });
+      Object.assign(win, { day: base.day, minSocPct: onceMin ?? base.minSocPct, tripSocPct: onceTrip ?? base.tripSocPct });
       if (base.arrivalMs !== null && afterTripStart(base.arrivalMs) && base.arrivalMs < onceDep) {
         Object.assign(win, { arrivalMs: base.arrivalMs, arrivalSource: 'weekly' });
       }
@@ -290,17 +370,75 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
     win.arrivalMs = onceArr;
     win.arrivalSource = 'once';
   }
-  return { window: win, tripStartMs };
+  return { window: win, tripStartMs, prevTripSocPct };
+}
+
+/**
+ * Fahrten fuer die Vorausschau (ev-minmax.js): ab der laufenden Fahrt bzw. der
+ * naechsten Abfahrt `days` Tage voraus, je Fahrt
+ * `{ depMs, retMs, tripPct, minPct, src }`. Die Fenster kommen aus
+ * resolveEvWindow, das in der Zeit vorgerueckt wird — dieselben Regeln, nach
+ * denen DVhub spaeter wirklich plant (einmalige Abfahrt/Ankunft eingeschlossen).
+ * Rueckkehr = Ankunft des naechsten Fensters; ohne Ankunftszeit ist sie
+ * unbekannt und gilt als sofort (DVhub laedt ohnehin nur angesteckt).
+ * minPct: Mindest-Ladestand der Zeile bzw. des Einmal-Ziels, sonst der
+ * allgemeine Ziel-Ladestand.
+ *
+ * @returns {{ trips: Array, current: object|null }}  current = laufende Fahrt (Auto unterwegs)
+ */
+export function buildEvTrips(cfg, nowMs = Date.now(), { days = 8 } = {}) {
+  const opt = cfg?.optimizer || {};
+  const timeZone = cfg?.schedule?.timezone || 'Europe/Berlin';
+  const mode = TARGET_MODES.includes(opt.evTargetMode) ? opt.evTargetMode : 'percent';
+  const fallbackMin = targetSocPct({
+    mode, value: Number.isFinite(Number(opt.evTargetValue)) ? Number(opt.evTargetValue) : 80,
+    capacityWh: Number(opt.evCapacityWh) || 50000, consumptionKwhPer100km: opt.evConsumptionKwhPer100km
+  }) ?? 80;
+  const minOf = (w) => (w.minSocPct ?? null) !== null ? Number(w.minSocPct) : fallbackMin;
+  const untilMs = nowMs + days * 24 * 3600_000;
+  const wins = [];
+  let t = nowMs;
+  for (let guard = 0; guard < 64; guard += 1) {
+    const { window: w } = resolveEvWindow(opt, timeZone, t);
+    if (!w) break;
+    if (wins.length && w.departureMs <= wins[wins.length - 1].departureMs) break;
+    wins.push(w);
+    // eine Abfahrt NACH der Vorausschau genuegt (sie liefert die Rueckkehr der letzten)
+    if (w.departureMs > untilMs) break;
+    t = w.departureMs - DEPARTURE_LEAD_MS + 1;
+  }
+  const trips = [];
+  for (let k = 0; k < wins.length; k += 1) {
+    const w = wins[k];
+    if (w.departureMs > untilMs) break;
+    const next = wins[k + 1];
+    const retMs = next && next.arrivalMs !== null && next.arrivalMs > w.departureMs ? next.arrivalMs : w.departureMs;
+    trips.push({ depMs: w.departureMs, retMs, tripPct: Number(w.tripSocPct) || 0, minPct: minOf(w), src: w.source });
+  }
+  // Laufende Fahrt: Auto weg seit der letzten Abfahrt, zurueck zur Ankunft des naechsten Fensters.
+  const { tripStartMs, prevTripSocPct } = resolveEvWindow(opt, timeZone, nowMs);
+  let current = null;
+  const first = wins[0];
+  if (tripStartMs !== null && first && first.arrivalMs !== null && first.arrivalMs > nowMs && first.arrivalMs > tripStartMs) {
+    current = { depMs: tripStartMs, retMs: first.arrivalMs, tripPct: Number(prevTripSocPct) || 0, minPct: 0, src: 'current' };
+    trips.unshift(current);
+  }
+  return { trips, current };
 }
 
 /**
  * Die gerade gueltige Abfahrt (und Ankunft) aus der Config.
  *
+ * targetSocPct: Mindest-Ladestand bei dieser Abfahrt (Zeile bzw. Einmal-Ziel,
+ * sonst der allgemeine Ziel-Ladestand). tripSocPct: Verbrauch der Fahrt ab
+ * dieser Abfahrt; prevTripSocPct: der Fahrt, von der das Auto zur Ankunft
+ * heimkommt (Ankunftsschaetzung, ev-arrival.js).
+ *
  * @returns {{
  *   enabled: boolean, departureAt: string|null, source: 'once'|'weekly'|null,
  *   arrivalAt: string|null, arrivalSource: 'once'|'weekly'|null,
- *   tripStartAt: string|null, day: number|null, commuteKm: number,
- *   targetSocPct: number|null, mode: string, value: number|null,
+ *   tripStartAt: string|null, day: number|null, tripSocPct: number, prevTripSocPct: number,
+ *   targetSocPct: number|null, ownTarget: boolean, mode: string, value: number|null,
  *   timeZone: string, reason?: string
  * }}
  */
@@ -312,23 +450,23 @@ export function resolveEvDeparture(cfg, nowMs = Date.now()) {
   const base = {
     enabled: opt.evDepartureEnabled === true, departureAt: null, source: null,
     arrivalAt: null, arrivalSource: null, tripStartAt: null, day: null,
-    commuteKm: Math.max(0, Number(opt.evCommuteKm) || 0),
-    targetSocPct: null, mode, value, timeZone
+    tripSocPct: 0, prevTripSocPct: 0,
+    targetSocPct: null, ownTarget: false, mode, value, timeZone
   };
   if (!base.enabled) return { ...base, reason: 'aus' };
 
-  const pctFor = (v) => targetSocPct({
-    mode, value: v,
+  const pct = targetSocPct({
+    mode, value,
     capacityWh: Number(opt.evCapacityWh) || 50000,
     consumptionKwhPer100km: opt.evConsumptionKwhPer100km
   });
-  const pct = pctFor(value);
   if (pct === null) return { ...base, reason: 'Ziel nicht berechenbar' };
 
-  const { window: w, tripStartMs } = resolveEvWindow(opt, timeZone, nowMs);
+  const { window: w, tripStartMs, prevTripSocPct } = resolveEvWindow(opt, timeZone, nowMs);
   const tripStartAt = tripStartMs !== null ? new Date(tripStartMs).toISOString() : null;
-  if (!w) return { ...base, tripStartAt, targetSocPct: pct, reason: 'keine Abfahrt geplant' };
-  const own = w.targetValue !== null && w.targetValue !== undefined ? pctFor(w.targetValue) : null;
+  const prevTrip = Math.max(0, Number(prevTripSocPct) || 0);
+  if (!w) return { ...base, tripStartAt, prevTripSocPct: prevTrip, targetSocPct: pct, reason: 'keine Abfahrt geplant' };
+  const own = w.minSocPct !== null && w.minSocPct !== undefined ? Math.max(0, Math.min(100, Math.round(Number(w.minSocPct)))) : null;
   return {
     ...base,
     departureAt: new Date(w.departureMs).toISOString(),
@@ -337,8 +475,9 @@ export function resolveEvDeparture(cfg, nowMs = Date.now()) {
     arrivalSource: w.arrivalSource,
     tripStartAt,
     day: w.day,
-    commuteKm: w.commuteKm !== null && w.commuteKm !== undefined ? Math.max(0, Number(w.commuteKm)) : base.commuteKm,
-    value: own !== null ? Number(w.targetValue) : value,
+    tripSocPct: Math.max(0, Number(w.tripSocPct) || 0),
+    prevTripSocPct: prevTrip,
+    ownTarget: own !== null,
     targetSocPct: own !== null ? own : pct
   };
 }
@@ -350,10 +489,21 @@ function parseIsoOrEmpty(v) {
   return Number.isFinite(ms) ? { ok: true, value: new Date(ms).toISOString() } : { ok: false };
 }
 
-/** Wochenplan aus einer Eingabe pruefen → 7 Eintraege Mo..So. */
-function parseWeeklyPlan(list, prefix) {
+/**
+ * Wochenplan aus einer Eingabe pruefen → 7 Eintraege Mo..So in SoC-%.
+ * Zeilen der alten Oberflaeche (Ziel `targetValue`, Heimweg `commuteKm`)
+ * werden wie bei der Konfig-Uebernahme umgerechnet (migrateWeeklyPlanRows) —
+ * wer sie noch offen hat, verliert nichts.
+ */
+function parseWeeklyPlan(list, prefix, opt = {}) {
   if (!Array.isArray(list) || list.length > 7) return { ok: false, error: `${prefix}.weeklyPlan must be a list of up to 7 days` };
   const byDay = new Map();
+  const rows = [];
+  const present = (v) => v !== null && v !== undefined && v !== '';
+  // Plan der alten Oberflaeche: Ziel/Heimweg, aber keine SoC-%-Felder.
+  const isObj = (e) => e && typeof e === 'object';
+  const legacyPlan = list.some((e) => isObj(e) && ('targetValue' in e || 'commuteKm' in e))
+    && !list.some((e) => isObj(e) && ('minSocPct' in e || 'tripSocPct' in e));
   for (let i = 0; i < list.length; i += 1) {
     const e = list[i];
     const p = `${prefix}.weeklyPlan[${i}]`;
@@ -367,15 +517,26 @@ function parseWeeklyPlan(list, prefix) {
       times[k] = raw ? pad5(raw) : '';
     }
     if (times.arrival && !times.departure) return { ok: false, error: `${p}.departure is required with an arrival` };
+    const row = { day, arrival: times.arrival, departure: times.departure };
+    for (const k of ['minSocPct', 'tripSocPct']) {
+      if (!(k in e)) continue;
+      const v = numOrNull(e[k]);
+      if (present(e[k]) && (v === null || v < 0 || v > 100)) return { ok: false, error: `${p}.${k} must be 0..100 or empty` };
+      row[k] = v;
+    }
     const targetValue = numOrNull(e.targetValue);
-    if (e.targetValue !== null && e.targetValue !== undefined && e.targetValue !== ''
-      && (targetValue === null || targetValue < 0 || targetValue > 2000)) return { ok: false, error: `${p}.targetValue must be 0..2000 or empty` };
+    if (present(e.targetValue) && (targetValue === null || targetValue < 0 || targetValue > 2000)) return { ok: false, error: `${p}.targetValue must be 0..2000 or empty` };
     const commuteKm = numOrNull(e.commuteKm);
-    if (e.commuteKm !== null && e.commuteKm !== undefined && e.commuteKm !== ''
-      && (commuteKm === null || commuteKm < 0 || commuteKm > 1000)) return { ok: false, error: `${p}.commuteKm must be 0..1000 or empty` };
-    byDay.set(day, { day, arrival: times.arrival, departure: times.departure, targetValue, commuteKm });
+    if (present(e.commuteKm) && (commuteKm === null || commuteKm < 0 || commuteKm > 1000)) return { ok: false, error: `${p}.commuteKm must be 0..1000 or empty` };
+    if (!('minSocPct' in row) && targetValue !== null) row.targetValue = targetValue;
+    if (!('tripSocPct' in row) && commuteKm !== null) row.commuteKm = commuteKm;
+    // Neue Oberflaeche ohne Wert: leer = null (nicht „alte Zeile“).
+    if (!('minSocPct' in row) && !('targetValue' in row)) row.minSocPct = null;
+    if (!('tripSocPct' in row) && !('commuteKm' in row) && !legacyPlan) row.tripSocPct = null;
+    byDay.set(day, row);
+    rows.push(row);
   }
-  return { ok: true, plan: WEEK_DAYS.map((d) => byDay.get(d) || { day: d, arrival: '', departure: '', targetValue: null, commuteKm: null }) };
+  return { ok: true, plan: migrateWeeklyPlanRows(rows, opt) };
 }
 
 /**
@@ -388,7 +549,7 @@ function parseWeeklyPlan(list, prefix) {
  *
  * @returns {{ ok: true, patch: object } | { ok: false, error: string }}
  */
-export function parseEvDeparturePatch(d, prefix = 'departure') {
+export function parseEvDeparturePatch(d, prefix = 'departure', { opt = {} } = {}) {
   if (!d || typeof d !== 'object') return { ok: false, error: `${prefix} must be an object` };
   const patch = {};
   if ('enabled' in d) patch.evDepartureEnabled = d.enabled === true;
@@ -402,7 +563,12 @@ export function parseEvDeparturePatch(d, prefix = 'departure') {
     patch.evDepartureDays = days;
   }
   if ('weeklyPlan' in d) {
-    const wp = parseWeeklyPlan(d.weeklyPlan, prefix);
+    // Umrechnung alter Zeilen mit den Werten, die im selben Aufruf kommen.
+    const conv = { ...opt };
+    for (const [k, key] of [['targetMode', 'evTargetMode'], ['capacityWh', 'evCapacityWh'], ['consumptionKwhPer100km', 'evConsumptionKwhPer100km'], ['commuteKm', 'evCommuteKm']]) {
+      if (k in d) conv[key] = d[k];
+    }
+    const wp = parseWeeklyPlan(d.weeklyPlan, prefix, conv);
     if (!wp.ok) return wp;
     patch.evWeeklyPlan = wp.plan;
   } else if ('time' in d || 'days' in d) {
@@ -417,6 +583,25 @@ export function parseEvDeparturePatch(d, prefix = 'departure') {
     const once = parseIsoOrEmpty(d.arrivalOnce);
     if (!once.ok) return { ok: false, error: `${prefix}.arrivalOnce must be an ISO date time or empty` };
     patch.evArrivalOnce = once.value;
+  }
+  // Einmal-Ziel „y % bis x Uhr“ (zusammen mit evDepartureOnce) und die
+  // erwartete Fahrt danach; leer = Ziel/Fahrt des ersetzten Fensters.
+  for (const [k, key] of [['onceMinSocPct', 'evDepartureOnceMinSocPct'], ['onceTripSocPct', 'evDepartureOnceTripSocPct']]) {
+    if (!(k in d)) continue;
+    const v = numOrNull(d[k]);
+    if (d[k] !== null && d[k] !== undefined && d[k] !== '' && (v === null || v < 0 || v > 100)) return { ok: false, error: `${prefix}.${k} must be 0..100 or empty` };
+    patch[key] = v;
+  }
+  // Max-Ladestand „wenn günstig“; leer = aus (Verhalten wie bis 1.0.9).
+  if ('maxSocPct' in d) {
+    const v = numOrNull(d.maxSocPct);
+    if (d.maxSocPct !== null && d.maxSocPct !== undefined && d.maxSocPct !== '' && (v === null || v < 10 || v > 100)) return { ok: false, error: `${prefix}.maxSocPct must be 10..100 or empty` };
+    patch.evMaxSocPct = v === null ? null : Math.round(v);
+  }
+  if ('valueMarginCt' in d) {
+    const v = Number(d.valueMarginCt);
+    if (d.valueMarginCt === null || d.valueMarginCt === '' || !Number.isFinite(v) || v < 0 || v > 50) return { ok: false, error: `${prefix}.valueMarginCt must be 0..50` };
+    patch.evValueMarginCt = v;
   }
   if ('commuteKm' in d) {
     const v = Number(d.commuteKm);
@@ -453,7 +638,7 @@ export function parseEvDeparturePatch(d, prefix = 'departure') {
  * @returns {{ ok: true, resolved: object, capacityWh: number } | { ok: false, error: string }}
  */
 export function previewEvDeparture(cfg, departure, { nowMs = Date.now(), capacityWh } = {}) {
-  const parsed = parseEvDeparturePatch(departure, 'departure');
+  const parsed = parseEvDeparturePatch(departure, 'departure', { opt: cfg?.optimizer || {} });
   if (!parsed.ok) return parsed;
   const optimizer = { ...(cfg?.optimizer || {}), ...parsed.patch };
   const cap = Number(capacityWh);

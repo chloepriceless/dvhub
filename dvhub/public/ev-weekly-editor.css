@@ -6,7 +6,7 @@
 .evw-head { font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0; }
 .evw-day { font-family:var(--f-mono); font-size:11px; color:var(--text-2); }
 .evw-row input { width:100%; min-width:0; padding:3px 4px; font-size:12px; box-sizing:border-box; }
-.evw-row .evw-tgt, .evw-row .evw-km { text-align:right; }
+.evw-row .evw-min, .evw-row .evw-trip { text-align:right; }
 .evw-row.is-empty .evw-day { color:var(--text-dim); }
 .evw-depwrap { position:relative; display:flex; align-items:center; min-width:0; }
 .evw-next { position:absolute; right:2px; top:-7px; font-family:var(--f-mono); font-size:9px; color:var(--yellow); background:var(--bg-0); padding:0 2px; border-radius:3px; pointer-events:none; }
@@ -17,8 +17,8 @@
    unter Ankunft/Abfahrt — die Uhrzeiten bleiben lesbar. Kopf bricht gleich um. */
 @media (max-width: 560px) {
   .evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:2.4em minmax(0,1fr) minmax(0,1fr); row-gap:3px; }
-  .evw-with-km .evw-head span:nth-child(4), .evw-with-km .evw-row .evw-tgt { grid-column:2; }
-  .evw-with-km .evw-head span:nth-child(5), .evw-with-km .evw-row .evw-km { grid-column:3; }
+  .evw-with-km .evw-head span:nth-child(4), .evw-with-km .evw-row .evw-min { grid-column:2; }
+  .evw-with-km .evw-head span:nth-child(5), .evw-with-km .evw-row .evw-trip { grid-column:3; }
   .evw-with-km .evw-row { padding-bottom:4px; border-bottom:1px solid var(--hairline); }
 }
 /* Aufgeloeste Abfahrt je Zeile, Hinweis bei frueher Abfahrt ohne Ankunft und

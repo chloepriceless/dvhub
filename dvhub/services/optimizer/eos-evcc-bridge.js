@@ -59,9 +59,51 @@ export function resolveEvccBridgeConfig(cfg) {
     maxCurrentA: Math.max(minCurrentA, snapToWholeAmps(maxChargeW / (DEFAULT_VOLTAGE_V * phases))),
     maxChargeW,
     stopMode: STOP_MODES.includes(opt.evStopMode) ? opt.evStopMode : 'off',
+    // Einphasig laden, wenn die Wallbox umschalten kann (evcc meldet es je
+    // Ladepunkt): kleine Leistungen 1,4–3,7 kW statt erst ab 4,1 kW
+    // dreiphasig. Abschaltbar (optimizer.evPhaseSwitch = false).
+    phaseSwitch: phases === 3 && opt.evPhaseSwitch !== false,
     // Wohin der Befehl geht: evcc (Standard) oder direkt an die Wallbox.
     charger: CHARGER_TYPES.includes(cfg?.wallbox?.type) ? cfg.wallbox.type : 'evcc'
   };
+}
+
+const round2 = (v) => Math.round(v * 100) / 100;
+/**
+ * Ladestufen fürs Auto in EOS (Anteile der max. Ladeleistung): nur, was die
+ * Wallbox wirklich fahren kann. Dreiphasig ab Mindeststrom × 3 × 230 V (6 A:
+ * 4,14 kW), mit Phasenumschaltung zusätzlich einphasig vom Mindeststrom bis
+ * zum Höchststrom je Phase (6–16 A: 1,38–3,68 kW). Vorher plante EOS auch
+ * 1,1 kW, die Wallbox lud dann mit 4,1 kW.
+ */
+export function evChargeRates({ maxChargeW, minCurrentA = 6, maxCurrentA = 16, phases = 3, onePhase = false, voltageV = DEFAULT_VOLTAGE_V }) {
+  const maxW = Number(maxChargeW) > 0 ? Number(maxChargeW) : 5000;
+  const minA = Number(minCurrentA) > 0 ? Number(minCurrentA) : 6;
+  const ph = Number(phases) === 1 ? 1 : 3;
+  const minW = minA * voltageV * ph;
+  const out = new Set([0]);
+  for (let k = 1; k <= 10; k += 1) if (k / 10 * maxW >= minW - 1e-6) out.add(round2(k / 10));
+  if (onePhase && ph === 3) {
+    const lo = Math.ceil(minA * voltageV / maxW * 100 - 1e-9) / 100;
+    const hi = Math.floor(Math.min(Number(maxCurrentA) * voltageV, minW - 1) / maxW * 100 + 1e-9) / 100;
+    if (hi >= lo) {
+      out.add(lo);
+      for (let r = Math.ceil(lo * 20 + 1e-9) / 20; r < hi - 1e-9; r += 0.05) out.add(round2(r));
+      out.add(hi);
+    }
+  }
+  // Liegt der Mindeststrom über der eingestellten Leistung, lädt die Box
+  // trotzdem mit ihm (powerToCurrentA) — EOS darf dann wenigstens „voll“ planen.
+  if (out.size === 1) out.add(1);
+  return [...out].sort((a, b) => a - b);
+}
+
+/** Kann der eingestellte Ladepunkt gerade einphasig laden? (evcc: chargerPhases1p3p) */
+export function onePhaseChargingAvailable(cfg, loadpoints = []) {
+  const bc = resolveEvccBridgeConfig(cfg);
+  if (!bc.phaseSwitch || bc.charger !== 'evcc') return false;
+  const lp = (Array.isArray(loadpoints) ? loadpoints : []).find((l) => Number(l?.id) === bc.loadpoint);
+  return lp?.phases1p3p === true;
 }
 
 /**
@@ -198,6 +240,22 @@ export function slotAt(plan, nowMs) {
  */
 // Wallboxen, deren release() nichts am Ladestrom ändert.
 const RELEASE_NOOP_TYPES = Object.freeze(['evcc', 'openwb']);
+/** Nach dem Stopp am Max-Ladestand erst wieder laden, wenn er so weit darunter liegt (Prozentpunkte). */
+export const MAX_STOP_HOLD_PCT = 1;
+
+/**
+ * Max-Ladestand erreicht? Mit Haltebereich: einmal gestoppt, bleibt es aus,
+ * bis der Ladestand MAX_STOP_HOLD_PCT darunter liegt (oder das Max steigt).
+ * @returns {{ stop: boolean, hold: object|null }}
+ */
+export function evaluateMaxStop(limit, hold, nowMs) {
+  const max = Number(limit?.maxSocPct);
+  const soc = limit?.socPct === null || limit?.socPct === undefined ? NaN : Number(limit.socPct);
+  if (!Number.isFinite(max) || !Number.isFinite(soc)) return { stop: false, hold: null };
+  if (soc >= max) return { stop: true, hold: hold && hold.maxSocPct === max ? hold : { maxSocPct: max, since: new Date(nowMs).toISOString() } };
+  if (hold && hold.maxSocPct === max && soc > max - MAX_STOP_HOLD_PCT) return { stop: true, hold };
+  return { stop: false, hold: null };
+}
 
 // Geräte-Identität: welches physische Gerät DVhub angesprochen hat. Ändert
 // sich die Einstellung (Adresse, Connector, evcc-Adresse), gehört das neue
@@ -221,6 +279,9 @@ export function createEosEvccBridge(deps) {
     getEvccLoadpoints = () => [],
     isProActive = () => true,
     isPaused = () => false,
+    // Max-Ladestand „wenn günstig“ (ev-targets.js evMaxStopSocPct): { maxSocPct,
+    // socPct } oder null (keine Grenze — Vanilla-EOS, Max aus).
+    getEvMaxStop = () => null,
     pushLog = () => {},
     now = () => Date.now(),
     loadOverride = () => null,
@@ -312,10 +373,47 @@ export function createEosEvccBridge(deps) {
     if (hooked) c.beforeSetMode = addMode;
     // Adapter ohne Haken (Test-Attrappen): vor dem Befehl merken.
     const noteAttempt = (mode) => { if (c.type === 'evcc' && !hooked) addMode(mode); };
+    // Phasen, die DVhub an DIESEM Gerät gesetzt hat (je Ziel und Identität).
+    // Hat DVhub auf eine Phase geschaltet, stellt jeder andere Ladebefehl
+    // (Override, Umschaltung aus, Grenze) zuerst drei Phasen her — sonst lüde
+    // „Sofort laden“ mit 11 kW nur 3,7 kW (Codex 52c5ee20).
+    const dvhubPhases = () => { const e = owned.get(key); return e && e.identity === tgt.identity ? e.phases ?? null : null; };
+    const notePhases = (n) => {
+      const prev = owned.get(key);
+      const same = prev && prev.identity === tgt.identity;
+      setOwned(key, { ...(same ? prev : { ...tgt, cmd: 'limit', confirmed: true, gridCap: false }), phases: n });
+    };
+    if (typeof c.setPhases === 'function') {
+      wrapped.setPhases = async (n) => {
+        const r = await c.setPhases(n);
+        if (r?.ok) notePhases(n);
+        return r;
+      };
+      wrapped.dvhubPhases = dvhubPhases;
+    }
     if (typeof c.charge === 'function') {
       wrapped.charge = async (...a) => {
+        // a[1]?.phases: Phasen dieses Befehls (Plan einphasig). Sonst die
+        // eingestellte Phasenzahl der Wallbox (evPhases) — Codex 42a5d784.
+        const cfgPhases = Number(bc?.phases) === 1 ? 1 : 3;
+        const want = Number(a[1]?.phases) === 1 ? 1 : (Number(a[1]?.phases) === 3 ? 3 : cfgPhases);
+        if (typeof c.setPhases === 'function' && dvhubPhases() === 1 && want === 3) {
+          // Erst den (kleineren) Strom bestätigen, dann mehr Phasen: scheitert
+          // der Strom, bleibt es einphasig — nie 12 A dreiphasig unter einer
+          // Grenze (Codex 42a5d784, P1).
+          if (typeof c.limit === 'function') {
+            const lim = await c.limit(a[0]);
+            if (!lim?.ok) return lim || { ok: false, error: 'maxcurrent failed' };
+            // Der Strom an der Box hat sich geändert: der gemerkte Befehl
+            // stimmt nicht mehr — der nächste Takt sendet neu (Codex 1c280569).
+            if (lastSent) lastSent = { ...lastSent, key: null };
+          }
+          const ph = await c.setPhases(3);
+          if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
+          notePhases(3);
+        }
         noteAttempt('now');
-        const r = await c.charge(...a);
+        const r = await c.charge(a[0]);
         // Eine Grenz-Herkunft bleibt, bis ein quittierter normaler Befehl sie
         // ablöst (auch eine unquittierte Grenz-Aktualisierung kann wirken).
         const prev = owned.get(key);
@@ -329,7 +427,7 @@ export function createEosEvccBridge(deps) {
         // danach nur noch die Grenze nachgeführt wird.
         const dvhubStarted = !capOnlyCommand || (prev?.cmd === 'charge' && prev.identity === tgt.identity && prev.dvhubStarted === true);
         const keepMax = restoringCommand && prev?.identity === tgt.identity && Number(prev?.maxCurrentA) > 0;
-        setOwned(key, { ...tgt, ...(keepMax ? { maxCurrentA: Number(prev.maxCurrentA) } : {}), ...capFields(prev, tgt.identity), cmd: 'charge', currentA: amps, confirmedCurrentA, confirmed: r?.ok === true, gridCap: prevCap, dvhubStarted, at: new Date(now()).toISOString() });
+        setOwned(key, { ...tgt, ...(keepMax ? { maxCurrentA: Number(prev.maxCurrentA) } : {}), ...capFields(prev, tgt.identity), cmd: 'charge', currentA: amps, confirmedCurrentA, confirmed: r?.ok === true, gridCap: prevCap, dvhubStarted, phases: dvhubPhases(), at: new Date(now()).toISOString() });
         return r;
       };
     }
@@ -340,7 +438,7 @@ export function createEosEvccBridge(deps) {
         if (r?.ok) {
           const prev = owned.get(key);
           // Eine ausstehende evcc-Rückkehr überlebt einen Stopp (z. B. Not-Halt).
-          setOwned(key, { ...tgt, ...capFields(prev, tgt.identity), cmd: 'stop', confirmed: true, gridCap: prev?.gridCap === true, restore: prev?.restore ?? null, at: new Date(now()).toISOString() });
+          setOwned(key, { ...tgt, ...capFields(prev, tgt.identity), cmd: 'stop', confirmed: true, gridCap: prev?.gridCap === true, restore: prev?.restore ?? null, phases: dvhubPhases(), at: new Date(now()).toISOString() });
         }
         return r;
       };
@@ -361,6 +459,10 @@ export function createEosEvccBridge(deps) {
     const e = owned.get(key);
     if (e && e.gridCap !== value) setOwned(key, { ...e, gridCap: value });
   }
+  // Max erreicht (Laden beendet): { maxSocPct, since } oder null. Haltebereich
+  // MAX_STOP_HOLD_PCT, damit eine kleine Schwankung des gemeldeten Ladestands
+  // die Wallbox nicht wieder anlaufen lässt.
+  let maxHold = null;
   let lastError = null;
   let lastPlan = [];
   let lastGeneratedAt = null;
@@ -406,14 +508,39 @@ export function createEosEvccBridge(deps) {
   }
 
   const commandKey = (bc, slot) => (slot.action === 'charge'
-    ? `${bc.charger}:${bc.loadpoint}:charge:${slot.currentA}`
+    ? `${bc.charger}:${bc.loadpoint}:charge:${slot.currentA}${slot.phases ? `:${slot.phases}p` : ''}`
     : `${bc.charger}:${bc.loadpoint}:stop:${bc.stopMode}`);
 
   // Direkt angesteuerte Wallboxen kennen keine evcc-Modi: "Stopp = Aus" heisst
   // nicht laden, "Stopp = PV/Min+PV" heisst Vorgabe zuruecknehmen — dann
   // regelt die Box selbst (z.B. OpenEVSE-PV-Divert).
   async function send(charger, bc, slot) {
-    if (slot.action === 'charge') return charger.charge(slot.currentA);
+    if (slot.action === 'charge') {
+      // Phasen nur umschalten, wenn sie sich ändern (jede Umschaltung unterbricht die Ladung kurz).
+      // Gemerkt wird je Ladepunkt und Gerät (nicht der letzte Befehl
+      // überhaupt — nach einem Ladepunkt-Wechsel gälte sonst der alte).
+      if (slot.phases) {
+        const lp = (getEvccLoadpoints() || []).find((l) => Number(l?.id) === bc.loadpoint);
+        // Nur auslassen, wenn evcc UND DVhubs letzter bestätigter Befehl
+        // dieselbe Phasenzahl nennen: evcc kann von Hand umgestellt sein
+        // (Codex 42a5d784), seine Meldung aber auch noch veraltet (Codex
+        // 1c280569). Im Zweifel erneut setzen — evcc tut dann nichts.
+        const reported = Number(lp?.phasesActive) || null;
+        const ours = charger.dvhubPhases?.() ?? null;
+        if (reported !== slot.phases || (ours !== null && ours !== slot.phases)) {
+          // Mehr Phasen: erst den Strom bestätigen (wie im Wrapper), sonst
+          // liefe der alte einphasige Strom dreiphasig weiter (Codex d31e5119).
+          if (slot.phases === 3 && typeof charger.limit === 'function') {
+            const lim = await charger.limit(slot.currentA);
+            if (!lim?.ok) return lim || { ok: false, error: 'maxcurrent failed' };
+            if (lastSent) lastSent = { ...lastSent, key: null };
+          }
+          const ph = await charger.setPhases(slot.phases);
+          if (!ph?.ok) return ph || { ok: false, error: 'phases failed' };
+        }
+      }
+      return charger.charge(slot.currentA, { phases: slot.phases || bc.phases });
+    }
     if (charger.type !== 'evcc' && bc.stopMode !== 'off') return charger.release();
     return charger.stop();
   }
@@ -1052,14 +1179,37 @@ export function createEosEvccBridge(deps) {
       }
 
       slot = applyGridCap(slot, bc, getGridCapW());
+      // Max-Ladestand erreicht: Laden endet — hart (wie „aus“), auch wenn der
+      // Plan noch laden will oder der Stopp-Modus PV-Laden erlaubte. Nur DVhubs
+      // eigener Plan; „Sofort laden“ von Hand ist oben schon durch.
+      let maxLimit;
+      try { maxLimit = getEvMaxStop(); } catch { maxLimit = null; }
+      const maxEval = evaluateMaxStop(maxLimit, maxHold, now());
+      if (maxEval.stop && !maxHold) pushLog('ev_max_soc_reached', { maxSocPct: maxEval.hold.maxSocPct, socPct: maxLimit.socPct, planned: slot.action });
+      if (!maxEval.stop && maxHold) pushLog('ev_max_soc_released', { maxSocPct: maxHold.maxSocPct, socPct: maxLimit?.socPct ?? null });
+      maxHold = maxEval.hold;
+      const maxStop = maxEval.stop;
+      if (maxStop) slot = { ...slot, action: 'stop', currentA: null, chargePowerW: null, maxStop: true };
       // Sicherheits-Stopp aus dem wirksamen Deckel, egal ob der Plan laden
       // wollte: auch ein geplanter Stopp-Slot geht bei Deckel unter dem
       // Mindeststrom hart auf „aus“ (Codex 4bf1eb18, P1).
       // Steht irgendein Deckel, heißt ein Stopp-Slot „aus“: ein eigener Modus
       // (pv/minpv, release()) hielte auch eine Teil-Grenze nicht ein
       // (Gesamtprüfung 2, P1).
+      // Einphasig, wenn die geplante Leistung unter dreiphasigem Mindeststrom
+      // liegt und der Ladepunkt umschalten kann — nicht unter einer
+      // Leistungsgrenze (der Netzanschluss-Wächter rechnet die Wallbox dreiphasig).
+      if (slot.action === 'charge' && typeof charger.setPhases === 'function' && getGridCapW() == null
+        && onePhaseChargingAvailable(cfg, getEvccLoadpoints())) {
+        if (Number(slot.chargePowerW) < minChargeW(bc)) {
+          const one = { ...bc, phases: 1 };
+          slot = { ...slot, phases: 1, currentA: powerToCurrentA(slot.chargePowerW, one) };
+        } else slot = { ...slot, phases: 3 };
+      }
       const capStop = slot.action === 'stop' && (slot.gridCapW != null || getGridCapW() != null);
-      const key = capStop ? `${bc.charger}:${bc.loadpoint}:grid-cap-stop` : commandKey(bc, slot);
+      const hardStop = capStop || maxStop;
+      const key = capStop ? `${bc.charger}:${bc.loadpoint}:grid-cap-stop`
+        : (maxStop ? `${bc.charger}:${bc.loadpoint}:max-soc-stop` : commandKey(bc, slot));
       if (!force && lastSent?.key === key) {
         // Unveraendert — aber wurde evcc inzwischen von aussen umgestellt
         // (evcc-App, Anstecken im Standardmodus)? Dann unseren Modus erneut setzen.
@@ -1071,7 +1221,7 @@ export function createEosEvccBridge(deps) {
         pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: drift.found, expected: lastSent.mode });
       }
 
-      const result = capStop ? await hardStopper(cfg, bc, charger).stop() : await send(charger, bc, slot);
+      const result = hardStop ? await hardStopper(cfg, bc, charger).stop() : await send(charger, bc, slot);
       if (!result?.ok) {
         lastError = result?.error || 'evcc write failed';
         pushLog('eos_evcc_error', { loadpoint: bc.loadpoint, action: slot.action, error: lastError });
@@ -1085,10 +1235,12 @@ export function createEosEvccBridge(deps) {
         action: slot.action,
         currentA: slot.currentA,
         chargePowerW: slot.chargePowerW,
+        ...(slot.phases ? { phases: slot.phases } : {}),
         loadpoint: bc.loadpoint,
-        mode: slot.action === 'charge' ? 'now' : (capStop ? 'off' : bc.stopMode),
-        released: slot.action !== 'charge' && !capStop && bc.charger !== 'evcc' && bc.stopMode !== 'off',
+        mode: slot.action === 'charge' ? 'now' : (hardStop ? 'off' : bc.stopMode),
+        released: slot.action !== 'charge' && !hardStop && bc.charger !== 'evcc' && bc.stopMode !== 'off',
         ...(capStop ? { gridCapW: slot.gridCapW ?? getGridCapW() } : {}),
+        ...(maxStop ? { maxSocPct: maxHold?.maxSocPct ?? null } : {}),
         slotTs: new Date(slot.ts).toISOString(),
         at: new Date(now()).toISOString()
       };
@@ -1310,6 +1462,13 @@ export function createEosEvccBridge(deps) {
         minCurrentA: bc.minCurrentA,
         maxCurrentA: Math.round(bc.maxCurrentA * 10) / 10,
         stopMode: bc.stopMode,
+        onePhaseCharging: (() => { try { return onePhaseChargingAvailable(cfg, getEvccLoadpoints()); } catch { return false; } })(),
+        // Max-Ladestand: Grenze, Ladestand und ob DVhub gerade deshalb nicht lädt.
+        maxStop: (() => {
+          let l;
+          try { l = getEvMaxStop(); } catch { l = null; }
+          return l ? { maxSocPct: l.maxSocPct, socPct: l.socPct ?? null, active: !!maxHold, since: maxHold?.since ?? null } : null;
+        })(),
         solutionGeneratedAt: lastGeneratedAt,
         override: override ? { ...override, ...overrideLimits(bc) } : null,
         overrideLimits: overrideLimits(bc),

@@ -13,13 +13,16 @@
  *      geliefert, hoechstens EV_LIVE_MAX_AGE_MS alt: davon geht noch einmal
  *      der Heimweg ab;
  *   3. geschaetzt — sonst der letzte bekannte Wert (auch der beim Abstecken
- *      gemerkte Wallbox-Wert, createEvSocMemory) minus Heimweg. Stammt er von
- *      VOR der Abfahrt, faehrt das Auto Hin- UND Rueckweg (2 × Heimweg); von
- *      danach nur noch den Rueckweg.
+ *      gemerkte Wallbox-Wert, createEvSocMemory) minus Fahrt. Stammt er von
+ *      VOR der Abfahrt, geht die ganze Fahrt ab; von danach nur noch die
+ *      Rueckfahrt (die halbe Fahrt).
  *
- * Wie weit das Auto unterwegs schon gefahren ist, weiss DVhub nicht (keine
- * Position) — abgezogen wird deshalb immer der ganze Heimweg. Das schaetzt
+ * Die Fahrt steht seit 1.0.10 in % Ladestand im Wochenplan (tripSocPct der
+ * Abfahrt, von der das Auto heimkommt; ev-departure.js prevTripSocPct). Wie
+ * weit das Auto unterwegs schon gefahren ist, weiss DVhub nicht (keine
+ * Position) — abgezogen wird deshalb immer die ganze Rueckfahrt. Das schaetzt
  * eher zu niedrig: EOS plant dann eher etwas mehr Ladung ein, nie zu wenig.
+ * Abgerundet, nie aufgerundet (Start-Ladestand fuer EOS).
  */
 import { resolveEvDeparture } from './ev-departure.js';
 // Alle Ladestand-Quellen laufen ueber EINEN Aufloeser (ev-soc.js) — markenneutral.
@@ -51,16 +54,16 @@ export function commutePct({ km, consumptionKwhPer100km, capacityWh }) {
  * Reine Rechnung: erwarteter Ladestand bei Ankunft.
  * @returns {{ pct: number|null, source: 'plugged'|'live'|'estimate'|null,
  *   basePct: number|null, baseSource: string|null, baseAt: string|null,
- *   legs: number, deductKm: number }}
+ *   legs: number, deductPct: number }}
  */
 export function estimateArrivalSoc({
   plugged, pluggedSoc = null, reading = null, tripStartMs = null,
-  commuteKm = 0, consumptionKwhPer100km, capacityWh, nowMs = Date.now()
+  tripPct = null, commuteKm = 0, consumptionKwhPer100km, capacityWh, nowMs = Date.now()
 }) {
-  const none = { pct: null, source: null, basePct: null, baseSource: null, baseAt: null, legs: 0, deductKm: 0 };
+  const none = { pct: null, source: null, basePct: null, baseSource: null, baseAt: null, legs: 0, deductPct: 0 };
   if (plugged === true && validPct(pluggedSoc?.pct) !== null) {
     const pct = validPct(pluggedSoc.pct);
-    return { ...none, pct: Math.round(pct), source: 'plugged', basePct: pct, baseSource: pluggedSoc.source || null, baseAt: new Date(nowMs).toISOString() };
+    return { ...none, pct: Math.floor(pct + 1e-9), source: 'plugged', basePct: pct, baseSource: pluggedSoc.source || null, baseAt: new Date(nowMs).toISOString() };
   }
   const base = validPct(reading?.pct);
   if (base === null) return none;
@@ -72,13 +75,17 @@ export function estimateArrivalSoc({
   // Fahrzeug-Schnittstelle als unterwegs gemessen.
   const afterTripStart = atMs !== null && (tripStartMs === null ? carApi : atMs >= tripStartMs);
   const legs = afterTripStart ? 1 : 2;
-  const km = Math.max(0, Number(commuteKm) || 0);
-  const pct = Math.max(0, Math.min(100, Math.round(base - legs * commutePct({ km, consumptionKwhPer100km, capacityWh }))));
+  // Ganze Fahrt in %: aus dem Plan, sonst (alte Aufrufer) 2 × Heimweg in km.
+  const trip = Number.isFinite(Number(tripPct)) && tripPct !== null
+    ? Math.max(0, Number(tripPct))
+    : 2 * commutePct({ km: Math.max(0, Number(commuteKm) || 0), consumptionKwhPer100km, capacityWh });
+  const deductPct = Math.round(legs / 2 * trip * 1000) / 1000;
+  const pct = Math.max(0, Math.min(100, Math.floor(base - deductPct + 1e-9)));
   const live = carApi && afterTripStart && nowMs - atMs <= EV_LIVE_MAX_AGE_MS;
   return {
     pct, source: live ? 'live' : 'estimate',
     basePct: base, baseSource: reading.source || null, baseAt: atMs !== null ? new Date(atMs).toISOString() : null,
-    legs, deductKm: legs * km
+    legs, deductPct
   };
 }
 
@@ -87,7 +94,6 @@ export function estimateArrivalSoc({
  * `plugged` vom Aufrufer (entprellt bzw. resolveEvPlugged).
  */
 export function resolveEvArrival(ctx, cfg, { plugged = null, nowMs = Date.now(), departure = null } = {}) {
-  const opt = cfg?.optimizer || {};
   const dep = departure || resolveEvDeparture(cfg, nowMs);
   const tripStartMs = toMs(dep.tripStartAt);
   const r = estimateArrivalSoc({
@@ -95,10 +101,8 @@ export function resolveEvArrival(ctx, cfg, { plugged = null, nowMs = Date.now(),
     pluggedSoc: plugged === true ? resolveEvSocPct(ctx) : null,
     reading: resolveEvSocReading(ctx, nowMs),
     tripStartMs,
-    commuteKm: dep.commuteKm,
-    consumptionKwhPer100km: Number(opt.evConsumptionKwhPer100km) || 18,
-    capacityWh: Number(opt.evCapacityWh) || 50000,
+    tripPct: Math.max(0, Number(dep.prevTripSocPct) || 0),
     nowMs
   });
-  return { ...r, arrivalAt: dep.arrivalAt || null, commuteKm: dep.commuteKm || 0 };
+  return { ...r, arrivalAt: dep.arrivalAt || null, tripPct: Math.max(0, Number(dep.prevTripSocPct) || 0) };
 }

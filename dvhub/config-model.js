@@ -7,6 +7,7 @@ import { localDate as fastLocalDate, localMinutesOfDay as fastLocalMinutesOfDay 
 import { POWER_LIMIT_DEFAULTS } from './services/power-limits.js';
 import { SETPOINT_FOLLOW_DEFAULTS } from './services/setpoint-follow-watchdog.js';
 import { providerImportPriceCtKwh, PROVIDER_NAMES, PRICE_BASES } from './services/tariff-provider/provider-pricing.js';
+import { migrateWeeklyPlanRows, targetSocPct } from './services/optimizer/ev-departure.js';
 
 // Plan 09-01 (D-03): canonical minimum apiToken length floor. Re-exported here
 // (also defined in routes-api.js) so the settings-UI field descriptor and the
@@ -3224,6 +3225,33 @@ function buildFieldDefinitions() {
       groupLabel: 'EOS \u2192 E-Auto (Beta)',
       groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eWallbox nach EOS-Plan steuern\u201c gibt DVhub den Plan an die unter Integrationen gew\u00e4hlte Wallbox weiter (evcc, OpenEVSE, go-e oder Fronius Wattpilot): je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Der Ladestand des Autos kommt aus der gew\u00e4hlten Quelle (Wallbox, MQTT, Home Assistant, HTTP-Adresse, Fahrzeugtreiber oder TeslaMate).',
       groupOrder: 21,
+      path: 'optimizer.evPhaseSwitch',
+      label: 'Einphasig laden, wenn die Wallbox umschalten kann',
+      type: 'boolean',
+      default: true,
+      help: 'AN (Standard): Kann die Wallbox zwischen einer und drei Phasen umschalten (evcc meldet das je Ladepunkt), l\u00e4dt DVhub kleine Leistungen einphasig \u2014 1,4 bis 3,7 kW statt erst ab 4,1 kW dreiphasig. So passt die Ladung besser zu PV-\u00dcberschuss und g\u00fcnstigen Viertelstunden. AUS: immer dreiphasig.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eWallbox nach EOS-Plan steuern\u201c gibt DVhub den Plan an die unter Integrationen gew\u00e4hlte Wallbox weiter (evcc, OpenEVSE, go-e oder Fronius Wattpilot): je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Der Ladestand des Autos kommt aus der gew\u00e4hlten Quelle (Wallbox, MQTT, Home Assistant, HTTP-Adresse, Fahrzeugtreiber oder TeslaMate).',
+      groupOrder: 21,
+      path: 'optimizer.evValueMarginCt',
+      label: 'Sicherheitsabschlag Max-Ladestand (ct/kWh)',
+      type: 'number',
+      default: 1,
+      min: 0,
+      max: 50,
+      step: 0.5,
+      help: 'F\u00fcr \u201eMax-Ladestand, wenn g\u00fcnstig\u201c sch\u00e4tzt DVhub, was eine zus\u00e4tzliche kWh im Auto an sp\u00e4teren Ladekosten spart (Preise und PV der n\u00e4chsten 7 Tage). Davon geht dieser Abschlag ab, weil Preise hinter dem Day-Ahead nur gesch\u00e4tzt sind. H\u00f6her = vorsichtiger, das Auto wird seltener \u00fcber das Mindestziel geladen.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eWallbox nach EOS-Plan steuern\u201c gibt DVhub den Plan an die unter Integrationen gew\u00e4hlte Wallbox weiter (evcc, OpenEVSE, go-e oder Fronius Wattpilot): je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Der Ladestand des Autos kommt aus der gew\u00e4hlten Quelle (Wallbox, MQTT, Home Assistant, HTTP-Adresse, Fahrzeugtreiber oder TeslaMate).',
+      groupOrder: 21,
       path: 'optimizer.evStopMode',
       label: 'evcc-Modus bei Stopp',
       type: 'select',
@@ -5216,7 +5244,9 @@ export function createDefaultConfig() {
       evPlanOnlyWhenPlugged: true,
       evDepartureEnabled: false,
       // Wochenplan (ev-departure.js effectiveWeeklyPlan): 7 Eintraege
-      // { day 1..7, arrival 'HH:MM'|'', departure 'HH:MM'|'', targetValue, commuteKm }.
+      // { day 1..7, arrival 'HH:MM'|'', departure 'HH:MM'|'', minSocPct, tripSocPct }
+      // in SoC-% (seit 1.0.10; aeltere Zeilen mit targetValue/commuteKm
+      // uebernimmt migrateEvWeeklyPlan beim Laden).
       // null = noch nie gespeichert → aus evDepartureTime + evDepartureDays
       // abgeleitet (gleiche Abfahrt an diesen Tagen, keine Ankunft). Die beiden
       // alten Felder bleiben dafuer stehen.
@@ -5224,8 +5254,21 @@ export function createDefaultConfig() {
       evDepartureTime: '07:00',
       evDepartureDays: [1, 2, 3, 4, 5],
       evDepartureOnce: '',
+      // Einmal-Ziel „y % bis x Uhr“ zur einmaligen Abfahrt (null = Ziel des
+      // ersetzten Fensters) und die erwartete Fahrt danach in %.
+      evDepartureOnceMinSocPct: null,
+      evDepartureOnceTripSocPct: null,
       // Einmalige Ankunft (ISO) fuer das Fenster, in dessen Luecke sie faellt.
       evArrivalOnce: '',
+      // Max-Ladestand „wenn günstig“ (ev-minmax.js): EOS lädt über das
+      // Mindestziel bis hierher, wenn es sich lohnt; bei Erreichen beendet DVhub
+      // das Laden an der Wallbox. null = aus (nur Mindestziel). Wirkt nur mit
+      // einem EOS, das Wertstufen kennt (eos-capabilities.js).
+      evMaxSocPct: 80,
+      // Sicherheitsabschlag auf den geschätzten Wert der Energie (ct je kWh AC).
+      evValueMarginCt: 1,
+      // Einphasig laden, wenn die Wallbox umschalten kann (eos-evcc-bridge.js).
+      evPhaseSwitch: true,
       // Heimweg in km (ev-arrival.js): so viel faehrt das Auto noch, bevor es
       // ansteckt; im Wochenplan je Tag ueberschreibbar. 0 = nichts abziehen.
       evCommuteKm: 0,
@@ -6118,12 +6161,32 @@ function migrateLegacyPriceApiUrl(raw) {
   }
 }
 
+// E-Auto-Wochenplan in SoC-% (1.0.10): Zeilen mit Ziel in der Einheit von
+// evTargetMode (targetValue) und Heimweg in km (commuteKm) werden einmalig in
+// minSocPct / tripSocPct umgerechnet (ev-departure.js migrateWeeklyPlanRows).
+// Gespeichert ist danach nur noch das neue Format.
+// Danach das allgemeine Ziel: in kWh/km einmalig in % (Ziele nie in km,
+// Christin 07.11.2026). Erst die Zeilen — sie brauchen die alte Einheit.
+function migrateEvWeeklyPlan(raw) {
+  const opt = raw?.optimizer;
+  if (!isPlainObject(opt)) return;
+  if (Array.isArray(opt.evWeeklyPlan)) {
+    const legacy = opt.evWeeklyPlan.some((e) => isPlainObject(e) && (!('minSocPct' in e) || !('tripSocPct' in e)));
+    if (legacy) opt.evWeeklyPlan = migrateWeeklyPlanRows(opt.evWeeklyPlan, opt);
+  }
+  if ((opt.evTargetMode === 'kwh' || opt.evTargetMode === 'km') && opt.evTargetValue != null) {
+    const pct = targetSocPct({ mode: opt.evTargetMode, value: opt.evTargetValue, capacityWh: Number(opt.evCapacityWh) || 50000, consumptionKwhPer100km: Number(opt.evConsumptionKwhPer100km) || 18 });
+    if (pct !== null) { opt.evTargetMode = 'percent'; opt.evTargetValue = pct; }
+  }
+}
+
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
   migrateSetpointWatchdog(raw);
   migrateDatenspendeClientType(raw);
   migrateLegacyPriceApiUrl(raw);
+  migrateEvWeeklyPlan(raw);
   // Sweep package 6: shape-level schema checks run FIRST, on the raw parsed
   // config — before the FIELD_DEFINITIONS coercion pass below, which would
   // otherwise silently string-coerce a wrong-typed scalar (e.g. a numeric

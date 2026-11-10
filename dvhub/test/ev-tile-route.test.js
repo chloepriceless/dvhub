@@ -30,7 +30,7 @@ describe('/api/ev', () => {
     assert.match(b, /applyEvConfigPatch\(ctx,/);
     const cc = fs.readFileSync(path.resolve(__dirname, '..', 'services', 'control-commands.js'), 'utf8');
     assert.match(cc, /Object\.assign\(next\.optimizer, patch\)/);
-    assert.match(cc, /parseEvDeparturePatch\(body\.departure\)/);
+    assert.match(cc, /parseEvDeparturePatch\(body\.departure,/);
     assert.doesNotMatch(cc, /next\.evcc|next\.wallbox/);
   });
 

@@ -945,6 +945,17 @@ test('Standard: kein Ladestand mehr als Messwert — weder minütlich noch im Pr
   }
 });
 
+test('socForRun: Auto-Ladestand abgerundet, nie aufgerundet (63,9 → 63; Akku weiter gerundet)', async () => {
+  const mock = await createMockEos(keysHandler(['date_time', 'battery1-soc-factor', 'ev11-soc-factor']));
+  try {
+    const state = { victron: { soc: 54.6 }, optimizer: { eos: { supported: true } } };
+    const b = createEosForecastBridge(socCtx(mock, { state, teslamate: { batteryLevel: 63.9 } }));
+    assert.deepEqual(await b.socForRun(), { soc: { battery1: 55, ev11: 63 } });
+  } finally {
+    await mock.close();
+  }
+});
+
 test('socForRun: ganze Prozent je EOS-Gerät, Auto nur mit Ladestand', async () => {
   const mock = await createMockEos(keysHandler(['date_time', 'battery1-power-l1-w', 'battery1-soc-factor', 'ev11-soc-factor']));
   try {
@@ -1181,6 +1192,36 @@ test('P3-2: eosEstimatesClearedAt — einmal gesetzt ohne Schätzung, gelöscht 
     assert.ok(state.optimizer.eosEstimatesClearedAt >= before, 'nicht der alte Zeitpunkt');
     assert.equal(state.optimizer.eosEstimatesClearedTarget, eosTargetKey(ctx.getCfg()));
   } finally { await mock3.close(); }
+});
+
+// E-Auto Max-Ladestand (1.0.10): Preise und PV für die Wertbestimmung reichen
+// 7 Tage über die Abfahrt hinaus (bis jetzt + 9,5 Tage), Bezug wie an EOS.
+test('Wertgrundlage E-Auto: Bezug wie an EOS, 9,5 Tage geschätzt, PV-Überschuss aus der Prognose', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const { ctx, state, q0, realEnd } = estimateCtx(mock, { optimizer: { eosOptimizeEv: true, evMaxSocPct: 80 } });
+    state.optimizer.eos.evSocValue = true;
+    await createEosForecastBridge(ctx).push();
+    const v = state.optimizer.evValueInputs;
+    assert.ok(v, 'Wertgrundlage im Zustand');
+    assert.equal(v.baseMs, q0);
+    assert.ok(v.untilMs >= Date.now() + 9 * 86_400_000, `reicht bis ${new Date(v.untilMs).toISOString()}`);
+    // Fester Tarif 30 ct — auch geschätzt; Einspeisung = Börse.
+    assert.equal(v.importCt[0], 30);
+    assert.equal(v.importCt[Math.floor((realEnd - q0) / Q) + 400], 30);
+    // PV 1000 W − Last 500 W = 125 Wh je Viertelstunde, auch hinter der Prognose (Median).
+    assert.equal(v.surplusWh[0], 125);
+    assert.equal(v.surplusWh.at(-1), 125);
+  } finally { await mock.close(); }
+});
+
+test('Wertgrundlage E-Auto: nur mit Max-Ladestand und EOS-Feld', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const { ctx, state } = estimateCtx(mock, { optimizer: { eosOptimizeEv: true, evMaxSocPct: 80 } });
+    await createEosForecastBridge(ctx).push();
+    assert.equal(state.optimizer.evValueInputs ?? null, null, 'Vanilla-EOS: nichts rechnen');
+  } finally { await mock.close(); }
 });
 
 // Leitstand „Laut EOS-Plan“ (Christin 02.11.2026): die Anzeige nennt, womit EOS

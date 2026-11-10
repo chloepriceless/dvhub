@@ -276,7 +276,7 @@
   }
   document.addEventListener('input', function (e) {
     if (e.target && e.target.id === 'intg-search') applyIntgSearch();
-    if (e.target && (e.target.id === 'evcc-dep-value' || e.target.id === 'evcc-dep-capacity' || e.target.id === 'evcc-dep-consumption')) evccDepPreviewSoon();
+    if (e.target && ['evcc-dep-value', 'evcc-dep-capacity', 'evcc-dep-max', 'evcc-dep-once', 'evcc-dep-once-min', 'evcc-dep-once-trip', 'evcc-dep-arr-once'].indexOf(e.target.id) >= 0) evccDepPreviewSoon();
   });
 
   // Statusmeldungen der Einstellungen: „✓ …“ grün, alles andere wie gehabt.
@@ -2622,12 +2622,8 @@
   function renderEvccDepWeekly() {
     var host = document.getElementById('evcc-dep-weekly');
     if (!host || !window.DVhubEvWeekly) return;
-    var mode = (document.getElementById('evcc-dep-mode') || {}).value || 'percent';
     window.DVhubEvWeekly.render(host, evccDepWeeklyPlan, {
-      unit: mode === 'kwh' ? 'kWh' : (mode === 'km' ? 'km' : '%'),
-      defaultTarget: (document.getElementById('evcc-dep-value') || {}).value,
-      defaultKm: (document.getElementById('evcc-dep-commute') || {}).value,
-      showKm: true,
+      defaultMin: (document.getElementById('evcc-dep-value') || {}).value,
       onChange: function () { evccDepWeeklyPlan = window.DVhubEvWeekly.read(host); },
       // Vorschau beim Bearbeiten (POST /api/ev/preview): dieselben Felder wie beim Speichern.
       previewBody: function () {
@@ -2647,7 +2643,9 @@
       eos: {
         optimizeEv: !!(eos && eos.optimizeEv), registered: eos && eos.registration ? reg.register === true : null,
         reason: reg.reason || null, preplanBlocked: reg.preplanBlocked || null, mode: reg.mode || null, chargeStartAt: reg.chargeStartAt || null,
-        deadlineSupported: dep.deadlineSupported === true, chargeStartSupported: dep.chargeStartSupported === true
+        deadlineSupported: dep.deadlineSupported === true, chargeStartSupported: dep.chargeStartSupported === true,
+        // Was an EOS ging (Mindestziel vorausschauend, Max, Wertstufen) und ob EOS die Wertstufen kennt.
+        targets: dep.targets || null, valueSupported: dep.valueSupported === true, maxSocPct: dep.maxSocPct
       }
     });
   }
@@ -2659,14 +2657,14 @@
     var el = function (id) { return document.getElementById(id); };
     if (el('evcc-dep-enabled')) el('evcc-dep-enabled').checked = !!dep.enabled;
     if (el('evcc-dep-capacity')) el('evcc-dep-capacity').value = capacityWh ? Math.round(capacityWh / 100) / 10 : 50;
-    if (el('evcc-dep-commute')) el('evcc-dep-commute').value = dep.commuteKm != null ? dep.commuteKm : 0;
-    if (el('evcc-dep-mode')) el('evcc-dep-mode').value = dep.targetMode || 'percent';
-    if (el('evcc-dep-value')) el('evcc-dep-value').value = dep.targetValue != null ? dep.targetValue : 80;
-    if (el('evcc-dep-consumption')) el('evcc-dep-consumption').value = dep.consumptionKwhPer100km != null ? dep.consumptionKwhPer100km : 18;
+    if (el('evcc-dep-value')) el('evcc-dep-value').value = dep.defaultMinSocPct != null ? dep.defaultMinSocPct : (dep.targetValue != null ? dep.targetValue : 80);
+    if (el('evcc-dep-max')) el('evcc-dep-max').value = dep.maxSocPct != null ? dep.maxSocPct : '';
     if (el('evcc-dep-once')) el('evcc-dep-once').value = toLocalInput(dep.once);
+    if (el('evcc-dep-once-min')) el('evcc-dep-once-min').value = dep.onceMinSocPct != null ? dep.onceMinSocPct : '';
+    if (el('evcc-dep-once-trip')) el('evcc-dep-once-trip').value = dep.onceTripSocPct != null ? dep.onceTripSocPct : '';
     if (el('evcc-dep-arr-once')) el('evcc-dep-arr-once').value = toLocalInput(dep.arrivalOnce);
     evccDepWeeklyPlan = Array.isArray(dep.weeklyPlan) ? dep.weeklyPlan : [];
-    syncEvccDepModeUi();
+    renderEvccDepWeekly();
     setEvccDepSummary(dep, capacityWh, eos);
     renderEvccDepState(dep);
   }
@@ -2846,13 +2844,6 @@
           password: (document.getElementById('wallbox-ocpp-pass') || {}).value || '' } }
     };
   }
-  function syncEvccDepModeUi() {
-    var mode = (document.getElementById('evcc-dep-mode') || {}).value || 'percent';
-    var label = document.getElementById('evcc-dep-value-label');
-    if (label) label.textContent = mode === 'kwh' ? 'kWh im Auto' : (mode === 'km' ? 'km Reichweite' : '% Ladestand');
-    // Der Verbrauch zaehlt immer: er rechnet den Heimweg in Ladestand um.
-    renderEvccDepWeekly();
-  }
   function renderEvccDepState(dep) {
     var box = document.getElementById('evcc-dep-state');
     if (!box) return;
@@ -2867,7 +2858,7 @@
     if (a.expectedSocPct != null) {
       lines.push((a.source === 'plugged' ? 'Ladestand jetzt (angesteckt): ' : 'Erwartet bei Ankunft: ') + a.expectedSocPct + ' %'
         + (a.source === 'live' ? ' (live vom Fahrzeug' : (a.source === 'estimate' ? ' (geschätzt' : ''))
-        + (a.source !== 'plugged' && a.basePct != null ? ': ' + a.basePct + ' %' + (a.deductKm > 0 ? ' − ' + a.deductKm + ' km' : '') + ')' : (a.source === 'plugged' ? '' : ')')));
+        + (a.source !== 'plugged' && a.basePct != null ? ': ' + a.basePct + ' %' + (a.deductPct > 0 ? ' − ' + (a.legs === 2 ? 'Fahrt ' : 'Rückfahrt ') + a.deductPct + ' %' : '') + ')' : (a.source === 'plugged' ? '' : ')')));
     } else if (r.arrivalAt) {
       lines.push('Ladestand bei Ankunft unbekannt — keine Quelle meldet das Fahrzeug (Einstellungen → EOS → E-Auto).');
     }
@@ -2906,14 +2897,22 @@
     return {
       enabled: !!(el('evcc-dep-enabled') && el('evcc-dep-enabled').checked),
       weeklyPlan: host && window.DVhubEvWeekly ? window.DVhubEvWeekly.read(host) : evccDepWeeklyPlan,
-      commuteKm: Number((el('evcc-dep-commute') && el('evcc-dep-commute').value) || 0),
       // datetime-local ist Ortszeit des Browsers → als ISO mit Zeitzone senden.
       once: onceRaw ? new Date(onceRaw).toISOString() : '',
       arrivalOnce: arrRaw ? new Date(arrRaw).toISOString() : '',
-      targetMode: (el('evcc-dep-mode') && el('evcc-dep-mode').value) || 'percent',
-      targetValue: Number((el('evcc-dep-value') && el('evcc-dep-value').value) || 0),
-      consumptionKwhPer100km: Number((el('evcc-dep-consumption') && el('evcc-dep-consumption').value) || 18)
+      // Einmal-Ziel und Max-Ladestand in %; leer = aus bzw. Wert des ersetzten Tages.
+      onceMinSocPct: numOrEmpty('evcc-dep-once-min'),
+      onceTripSocPct: numOrEmpty('evcc-dep-once-trip'),
+      maxSocPct: numOrEmpty('evcc-dep-max'),
+      // Ziele seit 1.0.10 immer in % Ladestand.
+      targetMode: 'percent',
+      targetValue: Number((el('evcc-dep-value') && el('evcc-dep-value').value) || 0)
     };
+    function numOrEmpty(id) {
+      var f = el(id);
+      var raw = f ? String(f.value).trim() : '';
+      return raw === '' ? '' : Number(raw.replace(',', '.'));
+    }
   }
   function renderEvccEosState(eos) {
     var box = document.getElementById('evcc-eos-state');
@@ -3163,7 +3162,7 @@
 
   document.addEventListener('change', function (e) {
     if (e.target && e.target.id === 'vev-product') vevRenderParams(e.target.value, {}, {});
-    if (e.target && e.target.id === 'evcc-dep-mode') syncEvccDepModeUi();
+    if (e.target && e.target.id === 'evcc-dep-value') renderEvccDepWeekly();
     // Vorschau der naechsten Abfahrt, sobald ein Feld der Abfahrt sich aendert
     // (der Wochenplan selbst meldet sich ueber ev-weekly-editor.js).
     if (e.target && e.target.id && e.target.id.indexOf('evcc-dep-') === 0) evccDepPreviewSoon();
