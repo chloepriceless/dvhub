@@ -334,3 +334,17 @@ test('Leitstand: Kachel erscheint auch ohne Netzanschluss-Grenze, wenn §14a Akk
   assert.equal(s.assist.valueW, 4400);
   assert.match(s.text, /§14a/);
 });
+
+test('Codex a0118785 P2: veraltete Akku-Leistung — coverW-Ziel bleibt beim letzten gültigen Wert', async () => {
+  const h = rig('victron');
+  h.assist.request({ source: 'p14a', coverW: 2000, untilMs: null });
+  h.measure({ importW: 10000 });
+  h.guard.tick();
+  assert.equal(h.guard.batteryCeilingW(), 8000);
+  for (let k = 0; k < 5; k += 1) {
+    h.measure({ importW: 8000, dischargeW: 2000 });
+    h.state.victron.fieldUpdatedAt.batteryPowerW = 1; // Akku-Leistung nicht mehr lesbar
+    h.guard.tick();
+  }
+  assert.equal(h.guard.batteryCeilingW(), 8000, 'nicht 6, 4, 2, 0 kW');
+});

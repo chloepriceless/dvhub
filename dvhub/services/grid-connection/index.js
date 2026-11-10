@@ -1035,7 +1035,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     if (!r?.batteryNative) {
       // Victron & Co.: gemessene Entladung nur für die Rückmeldung der Akku-Hilfe.
       const fresh = at > 0 && t - at <= maxAge && !v.errors?.batteryPowerW;
-      return { setpointW, chargeW, dischargeW: fresh ? Math.max(0, Number(v.batteryDischargeW) || 0) : 0 };
+      return { setpointW, chargeW, dischargeW: fresh ? Math.max(0, Number(v.batteryDischargeW) || 0) : 0, batteryFresh: fresh };
     }
     // Akku zuerst (Nicht-Victron): Entladung, Ladestand, Entladegrenze.
     const batFresh = at > 0 && t - at <= maxAge && !v.errors?.batteryPowerW;
@@ -1044,7 +1044,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const maxW = Math.min(Number(limits.batteryMaxDischargeDcW) || 0, Number(limits.inverterMaxPowerW) || 0);
     const gc = s.ctrl?._gridConnection || {};
     return {
-      setpointW, chargeW, dischargeW,
+      setpointW, chargeW, dischargeW, batteryFresh: batFresh,
       // Ohne frische Akku-Leistung weiß DVhub nicht, was der Akku tut — dann
       // keine Akku-Hilfe (lieber drosseln als blind entladen).
       socOk: batFresh && socUsable(c, t),
@@ -1370,7 +1370,10 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     // nicht aus dem angefragten Sollwert (keine Phantom-Hilfe, Codex deefd37f, P2).
     const dis = Math.max(0, Number(battery?.dischargeW) || 0);
     const chg = Math.max(0, Number(battery?.chargeW) || 0);
-    const demand = fresh ? Number(meas.importW) + dis - chg : null;
+    // Nur mit frischer Zähler- UND Akku-Messung neu rechnen; sonst das letzte
+    // Ziel halten (eine fehlende Akku-Leistung als 0 ließe das Ziel wandern,
+    // Codex a0118785, P2).
+    const demand = fresh && battery?.batteryFresh === true ? Number(meas.importW) + dis - chg : null;
     const targets = list.map((q) => {
       if (q.maxImportW != null) return q.maxImportW;
       // Ohne frische Messung das letzte Ziel halten — die Hilfe bleibt stehen
