@@ -2,6 +2,19 @@ function toIso(value) {
   return new Date(value).toISOString();
 }
 
+// Der Schreibpuffer stempelt den Probenabstand in ganzen Sekunden mit
+// Rundungsübertrag (createTelemetryWriteBuffer): ein exakter Abstand ≤ X s
+// ergibt einen Stempel ≤ X + 1 s (5,3-s-Zyklus → 5 und 6). Feine Ansichten
+// (Fenster unter einer Viertelstunde) lassen darum 1 s mehr zu, sonst fielen
+// Proben nur wegen des Übertrags heraus (Codex aabaca15). Grobe Grenzen
+// (≥ 900 s, VRM-/Rollup-Zeilen) bleiben genau.
+export const RESOLUTION_CARRY_SLACK_SECONDS = 1;
+export function resolutionFilterLimit(maxSeconds) {
+  const n = Number(maxSeconds);
+  if (!Number.isFinite(n)) return maxSeconds;
+  return n < 900 ? n + RESOLUTION_CARRY_SLACK_SECONDS : n;
+}
+
 export function normalizePollIntervalMs(value, minimumMs = 1000) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return minimumMs;
