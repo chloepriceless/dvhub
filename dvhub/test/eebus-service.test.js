@@ -895,3 +895,42 @@ test('Lese-Modus (DVHUB_READ_ONLY=1): keine Vorgabe an EEBUS-Geräte (Codex 01de
     delete process.env.DVHUB_READ_ONLY;
   }
 });
+
+// ── Codex aa32838a ──
+test('Prüfung: Freigabe einer Wallbox-Grenze (setEmsLimit null) bleibt überwacht, bis das Gerät sie umsetzt — auch ohne §14a-Weitergabe', async () => {
+  const { s, c, limits } = await withHeatPump({ eebus: { devices: { forwardGridLimit: false } } });
+  await s.svc.setEmsLimit(SKI_HP, 0);
+  c.emitEvent({ ev: 'device_limit', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 0, active: true });
+  await settle();
+  await s.svc.setEmsLimit(SKI_HP, null);
+  await settle();
+  assert.equal(limits().at(-1).active, false);
+  const n = limits().length;
+  s.advance(61_000);
+  s.svc._tick();
+  await settle();
+  assert.deepEqual(s.svc.controlIssues().map((i) => i.code), ['not_applied'], 'Gerät hält noch 0 W');
+  assert.equal(limits().length, n + 1, 'Freigabe erneut geschrieben');
+  assert.equal(limits().at(-1).active, false);
+  c.emitEvent({ ev: 'device_limit', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 0, active: false });
+  await settle();
+  s.svc._tick();
+  assert.equal(s.svc.controlIssues().length, 0);
+});
+
+test('Prüfung: befristete Grenze von Hand wird nach Ablauf nicht erneut geschrieben', async () => {
+  const { s, c, limits } = await withHeatPump();
+  await s.svc.setDeviceLimit(SKI_HP, 1500, 120);
+  c.emitEvent({ ev: 'device_limit', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 1500, active: true });
+  await settle();
+  s.advance(121_000);
+  // abgelaufen: das Gerät meldet „frei“
+  c.emitEvent({ ev: 'device_limit', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP, w: 1500, active: false });
+  await settle();
+  const n = limits().length;
+  s.advance(61_000);
+  s.svc._tick();
+  await settle();
+  assert.equal(limits().length, n, 'nicht wieder aktiviert');
+  assert.equal(s.svc.controlIssues().length, 0, 'keine Fehlmeldung');
+});

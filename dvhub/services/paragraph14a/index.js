@@ -18,7 +18,7 @@ import { parseMqttPayload } from '../../transport-mqtt.js';
 import { gridImportPositiveW } from '../eebus/index.js';
 import { resolveEvccBridgeConfig } from '../optimizer/eos-evcc-bridge.js';
 import { directWallboxConfigured } from '../wallbox/types.js';
-import { mergeDeviceCaps } from '../import-limit/core.js';
+import { mergeDeviceCaps, meterImport } from '../import-limit/core.js';
 import {
   P14A_MIN_W, STEUVE_KINDS, DEFAULT_PRIORITY, computePmin14a, budgetW, allocateBudget, demandW,
 } from './rules.js';
@@ -39,6 +39,8 @@ const DEMAND_HOLD_MS = 60_000;
 // „Läuft an der Grenze“: Messwert höchstens so weit unter dem letzten Anteil.
 const AT_CAP_TOL_MIN_W = 200;
 const AT_CAP_TOL_SHARE = 0.1;
+// Akku-Hilfe nur mit gültigem Zählerwert, höchstens so alt (Rückkopplung).
+const ASSIST_METER_MAX_AGE_MS = 30_000;
 // Geplanter Netzbezug des Speichers (schedule-eval) gilt so lange als aktuell.
 const BATTERY_WANT_MAX_AGE_MS = 120_000;
 
@@ -107,9 +109,13 @@ export function createParagraph14aService(ctx, deps = {}) {
   let lastActiveKey = null;
   // Gehaltener Bedarf je Gerät: id → { w, at }
   const heldNeed = new Map();
-  // Zuletzt beim Speicher angeforderte Akku-Hilfe (W) und seine Antwort.
+  // Akku-Hilfe: zuletzt gewünscht (W), zuletzt vom Anbieter bestätigt (W,
+  // null = unbekannt/gescheitert), laufende Anfrage und die danach fällige.
   let assistRequestedW = 0;
+  let assistAckedW = 0;
   let assistReply = null;
+  let assistInflight = false;
+  let assistQueued = null;
 
   const ui = (state.p14a = {
     active: false,
@@ -340,16 +346,39 @@ export function createParagraph14aService(ctx, deps = {}) {
     return w > 0 ? Math.ceil(w / SHARE_STEP_W) * SHARE_STEP_W : 0;
   }
 
+  // Anfragen nacheinander: eine ältere Anforderung darf eine spätere Freigabe
+  // nicht überholen (asynchrone Anbieter); während einer laufenden Anfrage zählt
+  // nur der jeweils neueste Wunsch. Eine Freigabe gilt erst als erledigt, wenn
+  // der Anbieter sie bestätigt — sonst wird sie wiederholt (Codex 0fc9c779).
   function requestAssist(coverW, untilMs) {
     if (typeof ctx.batteryAssist?.request !== 'function') return;
-    if (coverW === 0 && assistRequestedW === 0) return; // Freigabe nur einmal
     assistRequestedW = coverW;
+    if (coverW === 0 && assistAckedW === 0 && !assistInflight && assistQueued == null) return;
+    if (assistInflight) { assistQueued = { coverW, untilMs }; return; }
+    sendAssist(coverW, untilMs);
+  }
+
+  function sendAssist(coverW, untilMs) {
+    const done = (r) => {
+      assistReply = r || null;
+      assistAckedW = r?.ok === true ? coverW : null;
+      assistInflight = false;
+      const next = assistQueued;
+      assistQueued = null;
+      if (next) sendAssist(next.coverW, next.untilMs);
+    };
+    let res;
     try {
-      Promise.resolve(ctx.batteryAssist.request({ source: 'p14a', coverW, untilMs }))
-        .then((r) => { assistReply = r || null; })
-        .catch((e) => { assistReply = { ok: false, reason: e?.message || String(e) }; });
+      res = ctx.batteryAssist.request({ source: 'p14a', coverW, untilMs });
     } catch (e) {
-      assistReply = { ok: false, reason: e?.message || String(e) };
+      done({ ok: false, reason: e?.message || String(e) });
+      return;
+    }
+    if (res && typeof res.then === 'function') {
+      assistInflight = true;
+      res.then(done, (e) => done({ ok: false, reason: e?.message || String(e) }));
+    } else {
+      done(res);
     }
   }
 
@@ -384,7 +413,10 @@ export function createParagraph14aService(ctx, deps = {}) {
       consumers = consumersFor(controllable, c);
       // Akku-Hilfe: nur mit Messwert am Anschlusspunkt (Rückkopplung) und mit
       // PV-Überschuss-Rechnung, nie im Not-Halt (dort nur die Pflicht-Reduzierung).
-      const gridImportW = gridImportPositiveW(state, getCfg());
+      // Rückkopplung nur über einen gültigen, frischen Zählerwert (beim Start
+      // steht grid_total_w schon auf einer Zahl, meter.ok aber auf false).
+      const meter = meterImport(state, getCfg(), { now: now(), maxAgeMs: ASSIST_METER_MAX_AGE_MS });
+      const gridImportW = meter.fresh ? meter.importW : null;
       const provider = typeof ctx.batteryAssist?.request === 'function';
       const reservedW = Object.values(reserved).reduce((a, w) => a + w, 0);
       assist.neededW = Number.isFinite(gridImportW)
@@ -407,7 +439,8 @@ export function createParagraph14aService(ctx, deps = {}) {
       assist.reason = null;
     }
     assist.requestedW = assistRequestedW;
-    assist.acceptedW = assistRequestedW > 0 && assistReply?.ok === true && Number.isFinite(Number(assistReply.acceptedW))
+    assist.acceptedW = assistRequestedW > 0 && assistAckedW === assistRequestedW && assistReply?.ok === true
+      && Number.isFinite(Number(assistReply.acceptedW))
       ? Number(assistReply.acceptedW) : null;
     lastShares = shares;
     const needById = Object.fromEntries(consumers.filter((x) => x.needW != null).map((x) => [x.id, x.needW]));

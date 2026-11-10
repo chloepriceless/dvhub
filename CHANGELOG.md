@@ -16,8 +16,9 @@ verweist hierher.
   die benötigte Akku-Hilfe (Bedarf der steuerbaren Verbraucher über der Grenze plus Haushalt ohne Speicher) und fordert
   sie über eine schmale Schnittstelle bei der Akku-Steuerung an (`ctx.batteryAssist.request({ source: 'p14a', coverW,
   untilMs })`). Gekürzt wird weiter nach dem gemessenen Netzbezug am Anschlusspunkt — liefert der Speicher, steigen
-  die Anteile, sonst bleibt es bei der Kürzung. Solange er hilft, lädt der Speicher nicht aus dem Netz; im Not-Halt
-  keine Akku-Hilfe. Einstellung „Hausspeicher deckt zuerst (Akku-Hilfe)“ (System → §14a, ab Werk an). Wirksam erst
+  die Anteile, sonst bleibt es bei der Kürzung. Angefordert wird nur mit gültigem, frischem Zählerwert (höchstens
+  30 s alt); Anfragen gehen nacheinander raus, eine Freigabe wird wiederholt, bis die Akku-Steuerung sie bestätigt.
+  Solange er hilft, lädt der Speicher nicht aus dem Netz; im Not-Halt keine Akku-Hilfe. Einstellung „Hausspeicher deckt zuerst (Akku-Hilfe)“ (System → §14a, ab Werk an). Wirksam erst
   mit der Akku-Steuerung, die die Anforderung umsetzt (eigener Zweig); bis dahin ändert sich nichts.
 - **Bleeding Edge auch für Paket-Installationen.** Native Boxen mit signierten Paketen können wieder auf Bleeding Edge
   wechseln, sobald ein Bleeding-Edge-Paket veröffentlicht ist (signierter Index `channels/index-dev.json`). Gibt es
@@ -206,7 +207,8 @@ verweist hierher.
   (DVhub schreibt sie dann erneut), zieht es 60 s deutlich mehr als erlaubt oder lehnt es die Vorgabe ab, zeigt der
   Leitstand „§14a gestört“ mit Gerät und Uhrzeit, Integrationen → §14a ebenso, dazu ein Protokolleintrag
   (`paragraph14a_device_issue`, Warnung) und eine Benachrichtigung über die eingerichteten Kanäle. Bewertet wird nur,
-  was das Gerät meldet — ohne Rückmeldung keine „hat nicht reagiert“-Meldung. Ein nicht erreichbares Gerät zählt
+  was das Gerät meldet — ohne Rückmeldung keine „hat nicht reagiert“-Meldung. Eine Freigabe der Wallbox-Steuerung
+  bleibt überwacht, bis das Gerät sie umsetzt; befristete Vorgaben (auch von Hand) nur bis zu ihrem Ende. Ein nicht erreichbares Gerät zählt
   weiter für die Mindestleistung; sein eigener Failsafe-Wert (ohne Angabe die Nennleistung) gilt während einer
   Begrenzung als belegt, damit die übrigen Geräte die Grenze nicht allein ausschöpfen.
 - **§14a: EEBUS-Wallbox zählt richtig.** Eine EEBUS-Wallbox lief in der §14a-Geräteliste als Wärmepumpe (falsche

@@ -795,13 +795,16 @@ export function createEebusService(ctx, deps = {}) {
   }
 
   /** Vorgabe an ein Gerät schreiben und merken (für die Prüfung der Umsetzung). */
-  function writeDeviceLimit(entity, { w, durationS = 0, active }) {
+  // owner: wer die Vorgabe führt ('p14a' Aufteilung, 'ems' Wallbox-Steuerung,
+  // 'manual' von Hand); expiresAt: Ende einer befristeten Vorgabe (dann endet
+  // auch die Prüfung — Codex aa32838a).
+  function writeDeviceLimit(entity, { w, durationS = 0, active, owner = 'p14a', expiresAt = null }) {
     // Lese-Modus: eine beobachtende Instanz steuert kein Gerät (Codex 01dec596).
     if (isReadOnlyMode()) {
       noteBlockedWrite(`eebus device_limit ${entity}`);
       return Promise.resolve({ ok: false, error: 'read_only' });
     }
-    const rec = { w: active ? w : null, active, durationS, at: now(), sentAt: now(), rejected: false, resentAt: null, id: null, replyOk: null };
+    const rec = { w: active ? w : null, active, durationS, at: now(), sentAt: now(), rejected: false, resentAt: null, id: null, replyOk: null, owner, expiresAt, confirmed: false };
     deviceWrites.set(entity, rec);
     return send({ cmd: 'device_limit', uc: 'lpc', entity, w: active ? w : 0, duration_s: durationS, active }, (id) => {
       rec.id = id;
@@ -814,7 +817,7 @@ export function createEebusService(ctx, deps = {}) {
   function rewrite(entity, want, t) {
     deviceLimitCache.delete(entity);
     const durationS = want.until ? Math.max(60, Math.round((want.until - t) / 1000)) : want.durationS;
-    writeDeviceLimit(entity, { w: want.w, durationS, active: want.active });
+    writeDeviceLimit(entity, { w: want.w, durationS, active: want.active, owner: want.owner, expiresAt: want.expiresAt ?? null });
     const rec = deviceWrites.get(entity);
     if (!rec) return null;
     rec.at = want.at;
@@ -887,10 +890,14 @@ export function createEebusService(ctx, deps = {}) {
       seen.add(ski);
       setIssue(ski, 'unreachable', controlled && k.lostAt != null, k.lostAt ?? t);
       const d = ui.devices[ski];
-      // Überwacht wird nur, was DVhub selbst führt: §14a-Weitergabe an oder
-      // eine Vorgabe der Wallbox-Steuerung.
-      const supervised = cfgNow().devices.forwardGridLimit || emsLimits.has(ski);
-      const want = supervised && k.lostAt == null && k.entity ? deviceWrites.get(k.entity) : null;
+      // Überwacht wird nur, was DVhub selbst führt: §14a-Weitergabe an, eine
+      // Vorgabe der Wallbox-Steuerung — oder deren Freigabe, bis das Gerät sie
+      // umgesetzt hat (Codex aa32838a). Befristete Vorgaben nur bis zu ihrem Ende.
+      const last = k.lostAt == null && k.entity ? deviceWrites.get(k.entity) : null;
+      const expiry = last ? (last.expiresAt ?? last.until ?? null) : null;
+      const supervised = cfgNow().devices.forwardGridLimit || emsLimits.has(ski)
+        || (last?.owner === 'ems' && last.confirmed !== true);
+      const want = supervised && last && !(expiry != null && t >= expiry) ? last : null;
       if (!want) {
         for (const code of ['not_applied', 'over_limit', 'rejected']) setIssue(ski, code, false);
         overSince.delete(k.entity);
@@ -906,8 +913,10 @@ export function createEebusService(ctx, deps = {}) {
       // Rückmeldung des Geräts zur Verbrauchsgrenze: weicht sie nach der Frist ab?
       const rep = d?.lpcLimit;
       const repActive = rep?.active === true;
-      const mismatch = rep != null && t - want.at >= ISSUE_GRACE_MS && (repActive !== want.active
+      const differs = rep != null && (repActive !== want.active
         || (want.active && Math.abs(Number(rep.w) - want.w) > Math.max(50, 0.02 * want.w)));
+      if (rep != null && !differs) want.confirmed = true;
+      const mismatch = differs && t - want.at >= ISSUE_GRACE_MS;
       setIssue(ski, 'not_applied', mismatch, want.at, mismatch ? { reportedW: repActive ? Number(rep.w) : null, wantW: want.w } : {});
       if (mismatch && (want.resentAt == null || t - want.resentAt >= RESEND_MS)) {
         rewrite(k.entity, { ...want, resentAt: t }, t);
@@ -1003,8 +1012,8 @@ export function createEebusService(ctx, deps = {}) {
       applyConsumptionShares(lastShares, lastSharesUntil, lastSharesUntilById);
       return { ok: true };
     }
-    if (w == null) return writeDeviceLimit(d.entities.lpc, { w: 0, durationS: 0, active: false });
-    return writeDeviceLimit(d.entities.lpc, { w: emsLimits.get(ski), durationS: 0, active: true });
+    if (w == null) return writeDeviceLimit(d.entities.lpc, { w: 0, durationS: 0, active: false, owner: 'ems' });
+    return writeDeviceLimit(d.entities.lpc, { w: emsLimits.get(ski), durationS: 0, active: true, owner: 'ems' });
   }
 
   function apply() {
@@ -1278,7 +1287,10 @@ export function createEebusService(ctx, deps = {}) {
     if (!d?.entities?.lpc) return { ok: false, error: 'device has no LPC entity' };
     const active = Number.isFinite(Number(w)) && Number(w) >= 0;
     // Über writeDeviceLimit: die Prüfung der Umsetzung kennt dann diese Vorgabe.
-    return writeDeviceLimit(d.entities.lpc, { w: active ? Number(w) : 0, durationS: Number(durationS) || 0, active });
+    const dur = Number(durationS) || 0;
+    return writeDeviceLimit(d.entities.lpc, {
+      w: active ? Number(w) : 0, durationS: dur, active, owner: 'manual', expiresAt: dur > 0 ? now() + dur * 1000 : null,
+    });
   }
 
   /**

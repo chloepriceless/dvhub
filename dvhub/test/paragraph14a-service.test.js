@@ -178,6 +178,9 @@ function articleSetup(extra = {}) {
   });
   // Haus 1 kW + Wärmepumpe 1,5 kW + Wallbox 4,2 kW aus dem Netz: kein PV-Überschuss
   s.state.meter.grid_total_w = 1000 + 1500 + 4200;
+  // Zähler gültig und frisch (Akku-Hilfe braucht eine echte Rückmeldung)
+  s.state.meter.ok = true;
+  Object.defineProperty(s.state.meter, 'updatedAt', { get: () => clock.t, configurable: true });
   s.state.ctrl.eebusConsumptionLimitW = 7560;
   return { ...s, clock };
 }
@@ -397,4 +400,55 @@ test('Akku-Hilfe: reicht der Bedarf unter die Grenze (PV, kleiner Bedarf), wird 
   s.clock.t += 5_000;
   s.svc.update();
   assert.equal(assist.calls.at(-1).coverW, 0);
+});
+
+// ── Codex 0fc9c779 ──
+test('Akku-Hilfe: ohne gültigen, frischen Zählerwert keine Anforderung', () => {
+  const assist = fakeAssist();
+  const s = articleSetup({ batteryAssist: assist });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.state.meter.ok = false; // Start: Zähler noch nicht gelesen, grid_total_w steht auf einer Zahl
+  s.svc.update();
+  assert.equal(assist.calls.filter((c) => c.coverW > 0).length, 0);
+  assert.equal(s.state.p14a.batteryAssist.reason, 'no_measurement');
+});
+
+test('Akku-Hilfe: eine gescheiterte Freigabe wird wiederholt', () => {
+  const calls = [];
+  let failRelease = true;
+  const assist = { request: (r) => { calls.push(r); return r.coverW === 0 && failRelease ? { ok: false, reason: 'busy' } : { ok: true, acceptedW: r.coverW }; } };
+  const s = articleSetup({ batteryAssist: assist });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  s.state.ctrl.eebusConsumptionLimitW = null;
+  s.svc.update();
+  assert.equal(calls.at(-1).coverW, 0);
+  const n = calls.length;
+  failRelease = false;
+  s.svc.update();
+  assert.equal(calls.length, n + 1, 'erneut freigegeben');
+  assert.equal(calls.at(-1).coverW, 0);
+  s.svc.update();
+  assert.equal(calls.length, n + 1, 'nach bestätigter Freigabe Ruhe');
+});
+
+test('Akku-Hilfe: bei asynchronem Anbieter überholt keine ältere Anforderung die Freigabe', async () => {
+  const calls = [];
+  const resolvers = [];
+  const assist = { request: (r) => { calls.push(r); return new Promise((res) => resolvers.push(() => res({ ok: true, acceptedW: r.coverW }))); } };
+  const s = articleSetup({ batteryAssist: assist });
+  s.state.ctrl.eebusConsumptionLimitW = 4200;
+  s.svc.update();
+  assert.equal(calls.length, 1);
+  s.state.ctrl.eebusConsumptionLimitW = null;
+  s.svc.update(); // Freigabe, während die Anforderung noch läuft
+  assert.equal(calls.length, 1, 'erst nach der laufenden Anfrage');
+  resolvers.shift()();
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(calls.map((c) => c.coverW), [4200, 0]);
+  resolvers.shift()();
+  await new Promise((r) => setImmediate(r));
+  s.svc.update();
+  assert.deepEqual(calls.map((c) => c.coverW), [4200, 0], 'Freigabe bestätigt: nichts mehr');
+  assert.equal(s.state.p14a.batteryAssist.requestedW, 0);
 });
