@@ -25,7 +25,10 @@ for (const file of fs.readdirSync(HERSTELLER).sort()) {
   const hashes = [];
   let commits = [];
   try {
-    commits = execFileSync('git', ['log', '--follow', '--format=%H', '--', rel], { encoding: 'utf8' }).split('\n').filter(Boolean);
+    // -m: auch Merge-Commits, deren Konfliktlösung das Profil geändert hat —
+    // ohne -m blendet --follow sie aus, und ihr Stand fehlte im Manifest
+    // (Codex d7f58676, P2). Doppelte Hashes fallen unten weg.
+    commits = execFileSync('git', ['log', '--follow', '-m', '--format=%H', '--', rel], { encoding: 'utf8' }).split('\n').filter(Boolean);
   } catch { /* nicht in git → nur Working-Tree */ }
   for (const c of commits) {
     try {

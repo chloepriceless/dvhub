@@ -158,7 +158,8 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   // Ruecklesen von vor dem Schreiben zaehlt nicht (MQTT: „ok“ heisst nur
   // veroeffentlicht; Codex 22.10., P1).
   const isMqtt = () => transportType() === 'mqtt';
-  const exactFresh = (cfg, after = 0) => exact != null && exact.at > after && now() - exact.at <= maxAgeMs(cfg);
+  // Ein gescheiterter Leseversuch macht auch die alte Lesung ungueltig (Codex d7f58676, P1).
+  const exactFresh = (cfg, after = 0) => exact != null && exact.error !== true && exact.at > after && now() - exact.at <= maxAgeMs(cfg);
   const lockConfirmed = (cfg) => zeroWritten
     && mainMaxDischargeW(cfg) === 0
     && sentAt() > zeroWrittenAt
@@ -354,6 +355,11 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     if (!paused) stopRestoreUsed = false;
     if (phase === 'restoring') {
       if (!finite(saved)) { finish(); return; }
+      // Nie eine 0 zu schreiben versucht (z. B. alter GX ohne 2720, Bedingung
+      // schon vorher weggefallen): nichts zurueckzunehmen — die Sicherung
+      // verwerfen, sonst ueberschriebe sie spaeter eine neue Einstellung des
+      // Betreibers (Codex d7f58676, P2).
+      if (!zeroTried) { finish('not_locked'); return; }
       const floorPct = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
       const soc = state.victron?.soc;
       const socOk = fieldFresh('soc', cfg) && finite(soc)
@@ -368,7 +374,6 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       if (paused) {
         // Not-Halt: nur lesen — ausser dem einen Rueckschreibversuch.
         if (confirmed) { finish(); return; }
-        if (!zeroTried) { finish('emergency_stop'); return; }
         if (!stopRestoreUsed && aboveHardFloor) {
           stopRestoreUsed = true;
           if (state.schedule?.lastWrite) delete state.schedule.lastWrite.maxDischargeW;
@@ -401,8 +406,8 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     publish(cfg);
   }
 
-  // reason 'restored' = GX meldet den alten Wert; 'emergency_stop' = Not-Halt
-  // vor dem ersten Sperrversuch, es gab nichts zurueckzunehmen.
+  // reason 'restored' = GX meldet den alten Wert; 'not_locked' = vor dem ersten
+  // Sperrversuch beendet, es gab nichts zurueckzunehmen.
   function finish(reason = 'restored') {
     try { store?.clear?.(); } catch (e) { pushLog('multi_gx_handoff_store_error', { error: e?.message || String(e) }, 'error'); }
     const restored = saved;

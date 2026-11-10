@@ -767,11 +767,33 @@ test('Codex db0b6c2d P1: 2720 nicht lesbar (Fehler) → Sperre gilt nicht; alter
   const old = modbusWorld({ mainMaxDischargeW: 5000, reg2720: 'unsupported' });
   request(old);
   await old.handoff.maintain(old.apply);
-  assert.equal(old.state.multiGxHandoff.phase, 'restoring');
-  assert.equal(old.state.multiGxHandoff.reason, 'max_discharge_not_verifiable');
-  assert.ok(!old.applied.some((a) => a.value === 0), 'nie gesperrt');
+  assert.equal(old.state.multiGxHandoff.phase, 'off', 'nie gesperrt → Sicherung verworfen (Codex d7f58676 P2)');
+  assert.equal(old.store.get(), null);
+  assert.ok(old.logs.some(([e, d]) => e === 'multi_gx_handoff' && d.reason === 'max_discharge_not_verifiable'));
+  assert.equal(old.applied.length, 0, 'kein Write');
   assert.equal(request(old), null);
-  assert.equal(old.state.multiGxHandoff.phase, 'restoring');
+  assert.equal(old.state.multiGxHandoff.phase, 'off', 'kein neuer Anlauf');
+});
+
+test('Codex d7f58676 P1: aktive Uebergabe, GX auf unbegrenzt, 2720-Lesung scheitert → sofort Boden', async () => {
+  const w = modbusWorld({ mainMaxDischargeW: 5000, reg2720: 5000 });
+  request(w);
+  w.advance(5000); await w.handoff.maintain(w.apply);
+  w.reg.reg2720 = 0; w.state.victron.maxDischargeW = 0;
+  w.advance(5000); await w.handoff.maintain(w.apply);
+  assert.equal(request(w), -3000);
+  w.reg.reg2720 = 'error';                                    // GX steht inzwischen auf −1, 2704 zeigt 0
+  w.advance(5000); await w.handoff.maintain(w.apply);
+  assert.equal(request(w), null, 'alte Bestaetigung gilt nach einem Lesefehler nicht');
+});
+
+test('Codex d7f58676 P2: alter GX ohne 2720 — spaeter gesenkte Grenze des Betreibers bleibt', async () => {
+  const w = modbusWorld({ mainMaxDischargeW: 5000, reg2720: 'unsupported' });
+  request(w);
+  await w.handoff.maintain(w.apply);
+  w.state.victron.maxDischargeW = 2000;                       // Betreiber senkt die Grenze
+  for (let i = 0; i < 6; i++) { w.state.victron.soc = 30; w.advance(30000); await w.handoff.maintain(w.apply); }
+  assert.equal(w.applied.length, 0, 'kein Zurueckschreiben von 5000 W');
 });
 
 test('Codex db0b6c2d P1: Messwert von vor dem letzten Schreiben (Peak Shaving setzt gerade 0) wird nicht gesichert', () => {
