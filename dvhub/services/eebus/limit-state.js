@@ -123,16 +123,20 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
   }
 
   /**
-   * Heartbeat-Zustand laut Brücke. durationChecked: die Brücke hat die
-   * 120-s-Frist schon selbst geprüft (Go: eebus-go IsHeartbeatWithinDuration
-   * meldet „weg“ erst nach 2 min) — dann gilt der Verlust sofort, statt noch
-   * einmal 120 s zu warten (Fable R2 P3-1). openeebus (C) meldet einen
-   * Verbindungsabbau sofort; dort wartet heartbeatLost die Frist ab.
+   * Heartbeat-Zustand laut Brücke. lastSeenAgoMs: wie lange der letzte
+   * empfangene Herzschlag der Steuerbox her ist (Go-Hilfsprozess). eebus-go
+   * meldet „nicht ok“ erst nach 2 min — die 120-s-Frist läuft dann ab dem
+   * echten letzten Herzschlag, nicht noch einmal ab der Meldung (Fable R2
+   * P3-1). Kurz nach einem Wiederverbinden ist das Alter klein: kein Failsafe
+   * (Codex 8877e4cb). Ohne Angabe (C-Brücke: openeebus meldet einen Abbau
+   * sofort) zählt die Frist ab dem letzten „ok“.
    */
-  function onHeartbeat(ok, { durationChecked = false } = {}) {
+  function onHeartbeat(ok, { lastSeenAgoMs = null } = {}) {
     s.heartbeatOk = ok === true;
     if (s.heartbeatOk) s.lastHeartbeatAt = now();
-    else if (durationChecked === true) s.lastHeartbeatAt = Math.min(s.lastHeartbeatAt ?? -Infinity, now() - HEARTBEAT_TIMEOUT_MS);
+    else if (Number.isFinite(lastSeenAgoMs) && lastSeenAgoMs >= 0 && s.lastHeartbeatAt != null) {
+      s.lastHeartbeatAt = Math.min(s.lastHeartbeatAt, now() - lastSeenAgoMs);
+    }
     return evaluate();
   }
 

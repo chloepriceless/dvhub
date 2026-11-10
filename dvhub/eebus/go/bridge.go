@@ -124,7 +124,8 @@ type Bridge struct {
 	remotes        map[remoteTag]map[string]remoteEntry
 	handled        map[string]bool
 	hbCount        map[string]uint64
-	lastHB         [2]int // -1 unbekannt, 0 verloren, 1 ok
+	hbLastAt       map[string]time.Time // letzter empfangener Herzschlag der Steuerbox je uc
+	lastHB         [2]int               // -1 unbekannt, 0 verloren, 1 ok
 	devHeartbeatOn bool
 	shipIDs        map[string]string
 	lastOhpcf      map[string]string
@@ -138,6 +139,7 @@ func NewBridge(out *Out, opts Options) *Bridge {
 		remotes:   map[remoteTag]map[string]remoteEntry{},
 		handled:   map[string]bool{},
 		hbCount:   map[string]uint64{},
+		hbLastAt:  map[string]time.Time{},
 		lastHB:    [2]int{-1, -1},
 		shipIDs:   map[string]string{},
 		lastOhpcf: map[string]string{},
@@ -672,16 +674,30 @@ func (b *Bridge) Tick() {
 	b.mu.Lock()
 	changed := lpc != b.lastHB[0] || lpp != b.lastHB[1]
 	b.lastHB = [2]int{lpc, lpp}
+	lpcAge, lppAge := heartbeatAgeS(b.hbLastAt["lpc"], time.Now()), heartbeatAgeS(b.hbLastAt["lpp"], time.Now())
 	b.mu.Unlock()
 	if changed {
-		b.out.Emit(heartbeatStateEvent(lpc == 1, lpp == 1))
+		b.out.Emit(heartbeatStateEvent(lpc == 1, lpp == 1, lpcAge, lppAge))
 	}
 }
 
-// heartbeatStateEvent: within_duration sagt DVhub, dass ok/nicht ok schon mit
-// der 2-min-Frist geprüft ist (IsHeartbeatWithinDuration) — DVhub wartet dann
-// nicht noch einmal 120 s bis zum Failsafe (Fable R2 P3-1). Die C-Brücke
-// (openeebus) meldet einen Abbau sofort und schickt das Feld nicht.
-func heartbeatStateEvent(lpcOK, lppOK bool) *Obj {
-	return newEvent("grid_heartbeat_state").Bool("lpc_ok", lpcOK).Bool("lpp_ok", lppOK).Bool("within_duration", true)
+// heartbeatAgeS: Sekunden seit dem letzten empfangenen Herzschlag, -1 = noch keiner.
+func heartbeatAgeS(last, now time.Time) int64 {
+	if last.IsZero() {
+		return -1
+	}
+	return int64(now.Sub(last) / time.Second)
+}
+
+// heartbeatStateEvent: das Alter des letzten Herzschlags der Steuerbox je uc
+// (Fable R2 P3-1). eebus-go meldet „nicht ok“ erst nach 2 min ohne
+// Herzschlag — DVhub soll dann nicht noch einmal 120 s warten. „Nicht ok“
+// kommt aber auch kurz nach einem Wiederverbinden, bevor der erste neue
+// Herzschlag da ist (Codex 8877e4cb): deshalb das echte Alter statt eines
+// pauschalen „Frist geprüft“, DVhub rechnet die 120 s ab dem letzten
+// Herzschlag. -1: keiner empfangen, DVhub wartet selbst. Die C-Brücke
+// (openeebus) schickt die Felder nicht.
+func heartbeatStateEvent(lpcOK, lppOK bool, lpcAgeS, lppAgeS int64) *Obj {
+	return newEvent("grid_heartbeat_state").Bool("lpc_ok", lpcOK).Bool("lpp_ok", lppOK).
+		Int("lpc_heartbeat_age_s", lpcAgeS).Int("lpp_heartbeat_age_s", lppAgeS)
 }

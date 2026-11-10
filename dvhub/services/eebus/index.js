@@ -718,10 +718,11 @@ export function createEebusService(ctx, deps = {}) {
       case 'grid_failsafe_duration':
         break; // siehe grid_write
       case 'grid_heartbeat_state': {
-        // within_duration: der Go-Hilfsprozess hat die 2-min-Frist schon geprüft.
-        const durationChecked = ev.within_duration === true;
-        machines.lpc.onHeartbeat(ev.lpc_ok === true, { durationChecked });
-        machines.lpp.onHeartbeat(ev.lpp_ok === true, { durationChecked });
+        // Go-Hilfsprozess: Alter des letzten Herzschlags je uc (-1 = keiner) —
+        // die 120-s-Frist läuft ab dem echten letzten Herzschlag.
+        const ago = (v) => (Number.isFinite(Number(v)) && v !== null && Number(v) >= 0 ? Number(v) * 1000 : null);
+        machines.lpc.onHeartbeat(ev.lpc_ok === true, { lastSeenAgoMs: ago(ev.lpc_heartbeat_age_s) });
+        machines.lpp.onHeartbeat(ev.lpp_ok === true, { lastSeenAgoMs: ago(ev.lpp_heartbeat_age_s) });
         apply();
         break;
       }
@@ -958,8 +959,23 @@ export function createEebusService(ctx, deps = {}) {
     if (typeof ctx.p14a?.update === 'function') ctx.p14a.update();
     else applyConsumptionShares(lastShares, lastSharesUntil, lastSharesUntilById);
     if (deviceLimitCache.has(entity)) return;
-    writeDeviceLimit(entity, { w: 0, durationS: 0, active: false });
-    pushLog('paragraph14a_device_resumed', { ski, entity });
+    // Eigene, noch gültige Vorgabe außerhalb der Aufteilung zuerst neu
+    // schreiben — „frei“ höbe sonst einen Wallbox-Stopp (EMS) oder eine Grenze
+    // von Hand auf (Codex 8877e4cb, P1).
+    const t = now();
+    const ems = emsLimits.has(ski) ? emsLimits.get(ski) : null;
+    const rec = deviceWrites.get(entity);
+    const manual = rec?.owner === 'manual' && rec.active === true && Number.isFinite(rec.w)
+      && (rec.expiresAt == null || rec.expiresAt > t) ? rec : null;
+    if (ems != null) {
+      writeDeviceLimit(entity, { w: ems, durationS: 0, active: true, owner: 'ems' });
+    } else if (manual) {
+      const durationS = manual.expiresAt != null ? Math.max(60, Math.round((manual.expiresAt - t) / 1000)) : 0;
+      writeDeviceLimit(entity, { w: manual.w, durationS, active: true, owner: 'manual', expiresAt: manual.expiresAt });
+    } else {
+      writeDeviceLimit(entity, { w: 0, durationS: 0, active: false });
+    }
+    pushLog('paragraph14a_device_resumed', { ski, entity, ...(ems != null ? { emsW: ems } : manual ? { manualW: manual.w } : {}) });
   }
 
   function setIssue(ski, code, on, since = now(), detail = {}) {

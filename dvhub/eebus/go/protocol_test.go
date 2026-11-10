@@ -241,9 +241,17 @@ func TestOhpcfZustandsnamen(t *testing.T) {
 	}
 }
 
-// Fable R2 P3-1: grid_heartbeat_state trägt within_duration (Frist schon geprüft).
-func TestHeartbeatStateMitFrist(t *testing.T) {
-	if got, want := mustJSON(t, heartbeatStateEvent(false, true)), `{"ev":"grid_heartbeat_state","lpc_ok":false,"lpp_ok":true,"within_duration":true}`; got != want {
+// Fable R2 P3-1 / Codex 8877e4cb: grid_heartbeat_state trägt das Alter des
+// letzten Herzschlags je uc (-1 = noch keiner).
+func TestHeartbeatStateMitAlter(t *testing.T) {
+	if got, want := mustJSON(t, heartbeatStateEvent(false, true, 121, -1)), `{"ev":"grid_heartbeat_state","lpc_ok":false,"lpp_ok":true,"lpc_heartbeat_age_s":121,"lpp_heartbeat_age_s":-1}`; got != want {
 		t.Fatalf("got %s want %s", got, want)
+	}
+	now := time.Now()
+	if got := heartbeatAgeS(time.Time{}, now); got != -1 {
+		t.Fatalf("ohne Herzschlag: %d", got)
+	}
+	if got := heartbeatAgeS(now.Add(-125*time.Second), now); got != 125 {
+		t.Fatalf("Alter: %d", got)
 	}
 }

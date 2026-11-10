@@ -198,6 +198,7 @@ func (b *Bridge) handleGridEvent(s gridSide, ski string, kind gridEventKind) {
 		b.mu.Lock()
 		b.hbCount[uc]++
 		n := b.hbCount[uc]
+		b.hbLastAt[uc] = time.Now()
 		b.mu.Unlock()
 		if n%12 == 0 {
 			b.out.Emit(newEvent("grid_heartbeat").Str("uc", uc).Int("counter", int64(n)))

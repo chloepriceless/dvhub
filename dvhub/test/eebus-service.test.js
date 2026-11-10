@@ -1005,6 +1005,34 @@ test('Wiederanlauf ohne Steuerbox: „geführt“ übersteht einen Neustart von 
   assert.deepEqual(c2.commands.filter((x) => x.cmd === 'device_limit').map((x) => x.active), [false]);
 });
 
+// Codex 8877e4cb (P1): beim Wiederanmelden zuerst die eigene, noch gültige
+// Vorgabe neu schreiben — nicht „frei“. Sonst hob das Wiederanmelden einen
+// Wallbox-Stopp (EMS 0 W) oder eine Grenze von Hand auf.
+test('Wiederanlauf: Wallbox-Stopp (EMS) und Grenze von Hand bleiben nach dem Wiederanmelden stehen (auch ohne §14a-Weitergabe)', async () => {
+  const s = setup({ eebus: { trusted: [{ ski: SKI_HP, name: 'Wärmepumpe', role: 'device' }], devices: { forwardGridLimit: false } } });
+  const c = await heatPumpWithoutBox(s);
+  await s.svc.setEmsLimit(SKI_HP, 0);
+  await settle();
+  const sent = () => c.commands.filter((x) => x.cmd === 'device_limit').map((x) => [x.w, x.active]);
+  assert.deepEqual(sent(), [[0, true]]);
+  c.emitEvent({ ev: 'disconnected', ski: SKI_HP });
+  c.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  assert.deepEqual(sent().slice(1), [[0, true]], 'Stopp neu geschrieben, nicht freigegeben');
+
+  const m = setup({ eebus: { trusted: [{ ski: SKI_HP, name: 'Wärmepumpe', role: 'device' }] } });
+  const c2 = await heatPumpWithoutBox(m);
+  await m.svc.setDeviceLimit(SKI_HP, 1500);
+  await settle();
+  c2.emitEvent({ ev: 'disconnected', ski: SKI_HP });
+  c2.emitEvent({ ev: 'connected', ski: SKI_HP });
+  c2.emitEvent({ ev: 'device_added', uc: 'lpc', entity: 'd:_n:HP/1', ski: SKI_HP });
+  await settle();
+  const sent2 = c2.commands.filter((x) => x.cmd === 'device_limit').map((x) => [x.w, x.active]);
+  assert.deepEqual(sent2, [[1500, true], [1500, true]], 'Grenze von Hand neu geschrieben');
+});
+
 // ── Fable R2 P2-5: Leistung eines EEBUS-Geräts nur aus der laufenden Verbindung und nicht zu alt ──
 test('Messwert des Geräts: nach Trennung unbekannt, nach 5 min ohne Meldung unbekannt', async () => {
   const { s, c } = await withHeatPump();
@@ -1059,19 +1087,19 @@ test('Netzanschlusspunkt (MGCP): ungültiger oder alter Zählerwert geht nicht a
 });
 
 // ── Fable R2 P3-1: Go-Hilfsprozess prüft die 2-min-Frist selbst ──
-test('grid_heartbeat_state mit within_duration (Go): Failsafe sofort; ohne (C): erst nach 120 s', async () => {
-  for (const [flag, want] of [[true, 'failsafe'], [undefined, 'unlimited_controlled']]) {
+test('grid_heartbeat_state mit Herzschlag-Alter (Go): Failsafe ab dem letzten Herzschlag; ohne Alter (C) bzw. kurz nach Wiederverbinden: erst nach 120 s', async () => {
+  for (const [age, want] of [[121, 'failsafe'], [undefined, 'unlimited_controlled'], [6, 'unlimited_controlled'], [-1, 'unlimited_controlled']]) {
     const s = setup();
     await s.svc.start();
     const c = s.child();
     c.emitEvent({ ev: 'ready', ski: 'd'.repeat(40) });
     c.emitEvent({ ev: 'connected', ski: SKI_BOX });
-    c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true, within_duration: flag });
+    c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: true, lpp_ok: true });
     await settle();
     s.advance(5_000);
-    c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: false, lpp_ok: false, within_duration: flag });
+    c.emitEvent({ ev: 'grid_heartbeat_state', lpc_ok: false, lpp_ok: false, lpc_heartbeat_age_s: age, lpp_heartbeat_age_s: age });
     await settle();
-    assert.equal(s.svc.status().grid.lpc.state, want, `within_duration=${flag}`);
+    assert.equal(s.svc.status().grid.lpc.state, want, `Alter ${age}`);
   }
 });
 

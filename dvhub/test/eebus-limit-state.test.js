@@ -88,15 +88,32 @@ test('Heartbeat-Verlust in limited → nach 120 s Failsafe mit vom EG geschriebe
 // Fable R2 P3-1: dvhub-eebus in Go meldet „weg“ erst, wenn eebus-go selbst
 // 2 min ohne Herzschlag festgestellt hat (IsHeartbeatWithinDuration) — dann
 // nicht noch einmal 120 s warten (sonst Failsafe erst nach rund 4 min).
-test('Herzschlag-Verlust schon mit Frist geprüft (Go): Failsafe sofort, nicht nach weiteren 120 s', () => {
+test('Herzschlag-Verlust mit Alter des letzten Herzschlags (Go): Frist ab dem echten letzten Herzschlag', () => {
   const { m, advance } = machine();
   m.setEnabled(true);
   m.onHeartbeat(true);
   m.onLimit({ w: 6000, durationS: 3600, active: true });
   advance(5_000);
   m.evaluate();
-  m.onHeartbeat(false, { durationChecked: true });
+  m.onHeartbeat(false, { lastSeenAgoMs: 121_000 });
   assert.equal(m.effective().state, 'failsafe');
+});
+
+// Codex 8877e4cb: kurz nach einem Wiederverbinden meldet eebus-go „nicht ok“,
+// bis der erste neue Herzschlag da ist — das ist kein Verlust.
+test('„nicht ok“ kurz nach dem Wiederverbinden (letzter Herzschlag 6 s her): kein Failsafe', () => {
+  const { m, advance } = machine();
+  m.setEnabled(true);
+  m.onHeartbeat(true);
+  advance(5_000);
+  m.evaluate();
+  m.onHeartbeat(false, { lastSeenAgoMs: 6_000 });
+  assert.equal(m.effective().state, 'unlimited_controlled');
+  advance(10_000);
+  m.onHeartbeat(true);
+  advance(200_000);
+  m.evaluate();
+  assert.equal(m.effective().state, 'unlimited_controlled');
 });
 
 test('kurzer Verbindungsabbruch (< 120 s) löst keinen Failsafe aus', () => {

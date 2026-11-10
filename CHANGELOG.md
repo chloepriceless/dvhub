@@ -294,7 +294,8 @@ verweist hierher.
   bis das Relais neu meldet (vorher: keine Dimmung bis zum nächsten Schalten).
 - **EEBUS: Wiederanlauf auch ohne Steuerbox (P2-3).** Hat DVhub einem Gerät je eine Vorgabe geschrieben
   (Netzanschluss-Deckel, von Hand), nimmt es das Gerät nach einem Neustart oder dem Ende des Not-Halts wieder auf
-  („frei“ beendet dessen Failsafe); gespeichert in `eebus/controlled.json`.
+  („frei“ beendet dessen Failsafe); gespeichert in `eebus/controlled.json`. Eine noch gültige eigene Vorgabe
+  (Wallbox-Stopp, Grenze von Hand) wird dabei neu geschrieben statt freigegeben.
 - **Lese-Modus: EEBUS startet nicht, evcc und OCPP schalten nichts (P2-2, P2-9, P3-17).** Vorher plante die
   Lese-Instanz Verdichterläufe, quittierte Steuerbox-Vorgaben und schickte Herzschlag/Messwerte; der Familien-Knopf
   schaltete den evcc-Modus um; OCPP-Boxen bekamen beim Anmelden ihre Mess-Konfiguration. Jetzt: EEBUS-Status
@@ -309,7 +310,8 @@ verweist hierher.
 - **Not-Halt: Hinweis zu EEBUS-Geräten (P2-6, so gewollt).** Der Leitstand sagt, dass EEBUS-Geräte nach kurzer Zeit
   in ihren eigenen Rückfallbetrieb gehen — wie bei ausgeschaltetem DVhub. Heizstab-Messwerte laufen im Not-Halt
   weiter (P3-8); scheitert „Herzschlag aus“, startet der EEBUS-Hilfsprozess neu (P3-11).
-- **EEBUS: Failsafe nach 2 statt 4 min mit dem Go-Hilfsprozess (P3-1),** Failsafe-Vorgabe folgt der Geräteliste
+- **EEBUS: Failsafe nach 2 statt 4 min mit dem Go-Hilfsprozess (P3-1;** der Hilfsprozess meldet das Alter des letzten
+  Herzschlags, die Frist läuft ab dort — kein Failsafe in der kurzen Lücke nach einem Wiederverbinden), Failsafe-Vorgabe folgt der Geräteliste
   (P3-5), keine Fehlalarme aus Rückmeldungen der vorigen Verbindung (P3-4), nicht erreichbare EEBUS-Hauptwallbox
   ist belegt statt „ohne Grenze“ (P3-3).
 - **Lese-Modus gilt auch für EEBUS-Geräte.** Mit `DVHUB_READ_ONLY=1` schrieb DVhub §14a-Anteile weiter als
