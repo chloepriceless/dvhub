@@ -268,6 +268,31 @@ function planWindows(plan, timeZone, nowMs) {
   return out.sort((a, b) => a.departureMs - b.departureMs);
 }
 
+const DAY_MS = 24 * 3600_000;
+
+/**
+ * Das Wochenplan-Fenster, dessen Abfahrt die einmalige Abfahrt `onceDep`
+ * ersetzt (Regeln bei resolveEvWindow), oder null. Bestimmt immer von kurz vor
+ * der einmaligen Abfahrt aus — unabhaengig davon, wann gefragt wird.
+ */
+function supersededWindow(plan, timeZone, onceDep) {
+  const refNow = onceDep - DEPARTURE_LEAD_MS - 1;
+  const goneAt = (ms) => ms - DEPARTURE_LEAD_MS <= refNow;
+  const arrivedBefore = (w) => w.arrivalMs === null || w.arrivalMs < onceDep;
+  const around = planWindows(plan, timeZone, refNow);
+  let pick = null;
+  const next = around.find((w) => !goneAt(w.departureMs));
+  if (next && next.arrivalMs !== null && next.arrivalMs < onceDep && Math.abs(next.departureMs - onceDep) < DAY_MS) pick = next;
+  else {
+    for (const w of around) {
+      const diff = Math.abs(w.departureMs - onceDep);
+      if (diff >= DAY_MS || !arrivedBefore(w)) continue;
+      if (!pick || diff < Math.abs(pick.departureMs - onceDep)) pick = w;
+    }
+  }
+  return pick;
+}
+
 /**
  * Das naechste Fenster (Ankunft → Abfahrt) aus Wochenplan + einmaligen
  * Abweichungen. Regeln:
@@ -315,25 +340,11 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
   // Fenster dafuer rund um die einmalige Abfahrt, damit auch ein Ziel in
   // Wochen dieselbe Abfahrt ersetzt.
   let superseded = null;
-  const DAY = 24 * 3600_000;
   // Auch nach der einmaligen Abfahrt (so weit planWindows zurückreicht): die
   // ersetzte Abfahrt wird nie zur Fahrt, die Einmal-Fahrt bleibt bis zur
   // nächsten echten Abfahrt die laufende (Codex 52c5ee20).
-  if (Number.isFinite(onceDep) && (onceActive || nowMs - onceDep < 7 * DAY)) {
-    const refNow = onceDep - DEPARTURE_LEAD_MS - 1;
-    const goneAt = (ms) => ms - DEPARTURE_LEAD_MS <= refNow;
-    const arrivedBefore = (w) => w.arrivalMs === null || w.arrivalMs < onceDep;
-    const around = planWindows(plan, timeZone, refNow);
-    let pick = null;
-    const next = around.find((w) => !goneAt(w.departureMs));
-    if (next && next.arrivalMs !== null && next.arrivalMs < onceDep && Math.abs(next.departureMs - onceDep) < DAY) pick = next;
-    else {
-      for (const w of around) {
-        const diff = Math.abs(w.departureMs - onceDep);
-        if (diff >= DAY || !arrivedBefore(w)) continue;
-        if (!pick || diff < Math.abs(pick.departureMs - onceDep)) pick = w;
-      }
-    }
+  if (Number.isFinite(onceDep) && (onceActive || nowMs - onceDep < 7 * DAY_MS)) {
+    const pick = supersededWindow(plan, timeZone, onceDep);
     // Liegt die ersetzte Abfahrt ausserhalb der Fenster um jetzt, ist hier
     // nichts auszublenden.
     if (pick) superseded = windows.find((w) => w.departureMs === pick.departureMs) || null;
@@ -486,6 +497,133 @@ export function resolveEvDeparture(cfg, nowMs = Date.now()) {
   };
 }
 
+/**
+ * Einmalige Abfahrt bzw. Ankunft (Einmal-Ziel) fuer die Oberflaeche: ob sie
+ * gerade wirkt, was sie ersetzt und was vorher noch kommt.
+ *
+ * Abfahrt `state`:
+ *   'active' — die Abfahrt kommt noch (gilt bis DEPARTURE_LEAD_MS vorher);
+ *   'ended'  — vorbei. Sie wirkt dann nur noch so nach, dass die ersetzte
+ *              Wochenplan-Abfahrt nicht als Phantom-Fahrt zurueckkommt, bis die
+ *              naechste echte Abfahrt vorbei ist; danach raeumt die
+ *              Minuten-Wache sie ab (evOnceCleanupPatch).
+ * `effective`: aktiv UND die Abfahrtsplanung (evDepartureEnabled) ist an —
+ * sonst plant DVhub gar keine Abfahrt, auch keine einmalige.
+ * `replaces`: die eine Wochenplan-Abfahrt, die sie ersetzt (Ankunft und —
+ * ohne eigenen Wert — Ziel und Fahrt kommen von dort); `weeklyBefore`: wie
+ * viele Wochenplan-Abfahrten vorher noch mit ihrem eigenen Ziel kommen.
+ *
+ * Ankunft `state`: 'active' (ersetzt gerade die Ankunft des naechsten
+ * Fensters), 'pending' (kommt, wirkt erst nach der Abfahrt davor), 'ended'.
+ */
+export function describeEvOnce(cfg, nowMs = Date.now()) {
+  const opt = cfg?.optimizer || {};
+  const timeZone = cfg?.schedule?.timezone || 'Europe/Berlin';
+  const enabled = opt.evDepartureEnabled === true;
+  const gone = (ms) => ms - DEPARTURE_LEAD_MS <= nowMs;
+  const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+  const out = { enabled, leadMinutes: DEPARTURE_LEAD_MS / 60_000, unplugWindowMinutes: ONCE_UNPLUG_WINDOW_MS / 60_000, departure: null, arrival: null };
+  const onceDep = Date.parse(opt.evDepartureOnce || '');
+  if (Number.isFinite(onceDep)) {
+    const plan = effectiveWeeklyPlan(opt);
+    const pick = supersededWindow(plan, timeZone, onceDep);
+    const active = !gone(onceDep);
+    const onceMin = pctOrNull(opt.evDepartureOnceMinSocPct);
+    const onceTrip = pctOrNull(opt.evDepartureOnceTripSocPct);
+    const mode = TARGET_MODES.includes(opt.evTargetMode) ? opt.evTargetMode : 'percent';
+    const fallback = targetSocPct({
+      mode, value: Number.isFinite(Number(opt.evTargetValue)) ? Number(opt.evTargetValue) : 80,
+      capacityWh: Number(opt.evCapacityWh) || 50000, consumptionKwhPer100km: opt.evConsumptionKwhPer100km,
+    });
+    // Wochenplan-Abfahrten vor der einmaligen — genau so, wie DVhub sie
+    // nacheinander plant (resolveEvWindow in der Zeit vorgerueckt).
+    let weeklyBefore = 0;
+    let nextWeeklyAt = null;
+    if (active) {
+      let t = nowMs;
+      for (let guard = 0; guard < 64; guard += 1) {
+        const { window: w } = resolveEvWindow(opt, timeZone, t);
+        if (!w || w.source === 'once' || w.departureMs >= onceDep) break;
+        if (nextWeeklyAt === null) nextWeeklyAt = iso(w.departureMs);
+        weeklyBefore += 1;
+        t = w.departureMs - DEPARTURE_LEAD_MS + 1;
+      }
+    }
+    out.departure = {
+      at: iso(onceDep),
+      state: active ? 'active' : 'ended',
+      effective: active && enabled,
+      minSocPct: onceMin,
+      tripSocPct: onceTrip,
+      // Was bei dieser Abfahrt gilt: eigenes Ziel, sonst das der ersetzten Zeile, sonst das allgemeine.
+      targetSocPct: onceMin ?? pick?.minSocPct ?? fallback,
+      targetFrom: onceMin !== null ? 'once' : (pick && pick.minSocPct !== null && pick.minSocPct !== undefined ? 'weekly' : 'default'),
+      replaces: pick ? { day: pick.day, departureAt: iso(pick.departureMs), arrivalAt: iso(pick.arrivalMs ?? NaN) } : null,
+      weeklyBefore,
+      nextWeeklyAt,
+    };
+  }
+  const onceArr = Date.parse(opt.evArrivalOnce || '');
+  if (Number.isFinite(onceArr)) {
+    const { window: w } = resolveEvWindow(opt, timeZone, nowMs);
+    const active = !!w && w.arrivalSource === 'once' && w.arrivalMs === onceArr;
+    out.arrival = { at: iso(onceArr), state: active ? 'active' : (onceArr <= nowMs ? 'ended' : 'pending'), effective: active && enabled };
+  }
+  return out;
+}
+
+/**
+ * Abgelaufene Einmal-Ziele abraeumen (Minuten-Wache, ev-watch.js). Liefert den
+ * Patch fuer optimizer.* — leer, wenn nichts zu tun ist.
+ *
+ * Abgeraeumt wird erst, wenn es an der Planung nichts mehr aendert: dieselbe
+ * Aufloesung (resolveEvWindow) mit und ohne das Einmal-Ziel. So kommt eine
+ * ersetzte Wochenplan-Abfahrt nach dem Abraeumen nicht doch als Fahrt zurueck
+ * (ersetzt war z. B. „Mi 07:30“ durch „Mi 06:00“ — erst nach der naechsten
+ * echten Abfahrt ist das egal). Spaetestens nach 7 Tagen (so weit wirkt eine
+ * einmalige Abfahrt hoechstens nach) oder sofort, wenn es gar keine
+ * Wochenplan-Abfahrt gibt. Kaputte Zeitangaben und ein Ziel/Fahrt ohne Abfahrt
+ * fliegen gleich raus.
+ */
+export function evOnceCleanupPatch(cfg, nowMs = Date.now()) {
+  const opt = cfg?.optimizer || {};
+  const timeZone = cfg?.schedule?.timezone || 'Europe/Berlin';
+  const gone = (ms) => ms - DEPARTURE_LEAD_MS <= nowMs;
+  const same = (a, b) => JSON.stringify(resolveEvWindow(a, timeZone, nowMs)) === JSON.stringify(resolveEvWindow(b, timeZone, nowMs));
+  const patch = {};
+  const clearDep = { evDepartureOnce: '', evDepartureOnceMinSocPct: null, evDepartureOnceTripSocPct: null };
+  const depRaw = String(opt.evDepartureOnce || '').trim();
+  const onceDep = Date.parse(depRaw);
+  const extras = pctOrNull(opt.evDepartureOnceMinSocPct) !== null || pctOrNull(opt.evDepartureOnceTripSocPct) !== null;
+  if (depRaw && !Number.isFinite(onceDep)) Object.assign(patch, clearDep);
+  else if (!depRaw && extras) Object.assign(patch, { evDepartureOnceMinSocPct: null, evDepartureOnceTripSocPct: null });
+  else if (Number.isFinite(onceDep) && gone(onceDep)) {
+    const without = { ...opt, ...clearDep };
+    const noWeekly = resolveEvWindow(without, timeZone, nowMs).window === null;
+    if (noWeekly || nowMs - onceDep >= 7 * DAY_MS || same(opt, without)) Object.assign(patch, clearDep);
+  }
+  const cur = { ...opt, ...patch };
+  const arrRaw = String(opt.evArrivalOnce || '').trim();
+  const onceArr = Date.parse(arrRaw);
+  if (arrRaw && !Number.isFinite(onceArr)) patch.evArrivalOnce = '';
+  else if (Number.isFinite(onceArr) && onceArr <= nowMs && same(cur, { ...cur, evArrivalOnce: '' })) patch.evArrivalOnce = '';
+  return patch;
+}
+
+/**
+ * Abstecken zur Abfahrt (Minuten-Wache): wird das Auto in den letzten
+ * ONCE_UNPLUG_WINDOW_MS vor einer aktiven einmaligen Abfahrt abgezogen, ist
+ * das die Abfahrt — sie wird auf jetzt gesetzt und ist damit vorbei. Frueher
+ * Abziehen (Auto umparken) laesst das Einmal-Ziel stehen.
+ */
+export const ONCE_UNPLUG_WINDOW_MS = 30 * 60_000;
+export function evOnceUnplugPatch(cfg, nowMs = Date.now()) {
+  const onceDep = Date.parse(cfg?.optimizer?.evDepartureOnce || '');
+  if (!Number.isFinite(onceDep) || onceDep - DEPARTURE_LEAD_MS <= nowMs) return {};
+  if (onceDep - nowMs > ONCE_UNPLUG_WINDOW_MS) return {};
+  return { evDepartureOnce: new Date(Math.floor(nowMs / 60_000) * 60_000).toISOString() };
+}
+
 function parseIsoOrEmpty(v) {
   const s = String(v || '').trim();
   if (!s) return { ok: true, value: '' };
@@ -549,7 +687,7 @@ function parseWeeklyPlan(list, prefix, opt = {}) {
  *
  * @returns {{ ok: true, patch: object } | { ok: false, error: string }}
  */
-export function parseEvDeparturePatch(d, prefix = 'departure', { opt = {} } = {}) {
+export function parseEvDeparturePatch(d, prefix = 'departure', { opt = {}, nowMs = null } = {}) {
   if (!d || typeof d !== 'object') return { ok: false, error: `${prefix} must be an object` };
   const patch = {};
   if ('enabled' in d) patch.evDepartureEnabled = d.enabled === true;
@@ -574,14 +712,27 @@ export function parseEvDeparturePatch(d, prefix = 'departure', { opt = {} } = {}
   } else if ('time' in d || 'days' in d) {
     patch.evWeeklyPlan = null;
   }
+  // Mit nowMs (Speichern, Vorschau): eine NEUE einmalige Abfahrt muss nach
+  // jetzt + Vorlauf liegen, eine neue einmalige Ankunft nach jetzt — ein
+  // vergangener Termin wirkte nie (bzw. hiesse fuer EOS „sofort laden“). Der
+  // schon gespeicherte Wert darf unveraendert zurueckkommen (eine Seite, die
+  // ihn noch im Formular hat); abgeraeumt wird er von der Minuten-Wache.
+  const checkPast = Number.isFinite(nowMs);
+  const stored = (v) => { const p = parseIsoOrEmpty(v); return p.ok ? p.value : ''; };
   if ('once' in d) {
     const once = parseIsoOrEmpty(d.once);
     if (!once.ok) return { ok: false, error: `${prefix}.once must be an ISO date time or empty` };
+    if (checkPast && once.value && once.value !== stored(opt.evDepartureOnce) && Date.parse(once.value) - DEPARTURE_LEAD_MS <= nowMs) {
+      return { ok: false, error: `${prefix}.once must be more than ${DEPARTURE_LEAD_MS / 60_000} min in the future`, code: 'once_in_past' };
+    }
     patch.evDepartureOnce = once.value;
   }
   if ('arrivalOnce' in d) {
     const once = parseIsoOrEmpty(d.arrivalOnce);
     if (!once.ok) return { ok: false, error: `${prefix}.arrivalOnce must be an ISO date time or empty` };
+    if (checkPast && once.value && once.value !== stored(opt.evArrivalOnce) && Date.parse(once.value) <= nowMs) {
+      return { ok: false, error: `${prefix}.arrivalOnce must be in the future`, code: 'arrival_once_in_past' };
+    }
     patch.evArrivalOnce = once.value;
   }
   // Einmal-Ziel „y % bis x Uhr“ (zusammen mit evDepartureOnce) und die
@@ -638,14 +789,16 @@ export function parseEvDeparturePatch(d, prefix = 'departure', { opt = {} } = {}
  * @returns {{ ok: true, resolved: object, capacityWh: number } | { ok: false, error: string }}
  */
 export function previewEvDeparture(cfg, departure, { nowMs = Date.now(), capacityWh } = {}) {
-  const parsed = parseEvDeparturePatch(departure, 'departure', { opt: cfg?.optimizer || {} });
+  const parsed = parseEvDeparturePatch(departure, 'departure', { opt: cfg?.optimizer || {}, nowMs });
   if (!parsed.ok) return parsed;
   const optimizer = { ...(cfg?.optimizer || {}), ...parsed.patch };
   const cap = Number(capacityWh);
   if (Number.isFinite(cap) && cap > 0) optimizer.evCapacityWh = cap;
   // capacityWh: womit das Ziel-% gerechnet ist — die Oberflaeche zeigt „≈ kWh“
   // genau damit, nicht mit einem inzwischen anderen Wert.
-  return { ok: true, resolved: resolveEvDeparture({ ...cfg, optimizer }, nowMs), capacityWh: Number(optimizer.evCapacityWh) || 50000 };
+  // once: was das Einmal-Ziel des Entwurfs bewirkte (Dialog „Einmalige Abfahrt planen“).
+  const next = { ...cfg, optimizer };
+  return { ok: true, resolved: resolveEvDeparture(next, nowMs), once: describeEvOnce(next, nowMs), capacityWh: Number(optimizer.evCapacityWh) || 50000 };
 }
 
 /**

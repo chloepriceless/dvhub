@@ -273,8 +273,9 @@ export function applyEvConfigPatch(ctx, opts) {
   if ('onlyWhenPlugged' in body) patch.evPlanOnlyWhenPlugged = body.onlyWhenPlugged === true;
   if (body.departure != null) {
     // Alte Zeilen (Ziel/Heimweg) mit den gespeicherten Werten in SoC-% umrechnen.
-    const dep = parseEvDeparturePatch(body.departure, 'departure', { opt: ctx.getRawCfg?.()?.optimizer || {} });
-    if (!dep.ok) return { ok: false, status: 400, error: dep.error };
+    // nowMs: eine neue einmalige Abfahrt/Ankunft in der Vergangenheit lehnt die Pruefung ab.
+    const dep = parseEvDeparturePatch(body.departure, 'departure', { opt: ctx.getRawCfg?.()?.optimizer || {}, nowMs: Date.now() });
+    if (!dep.ok) return { ok: false, status: 400, error: dep.error, ...(dep.code ? { code: dep.code } : {}) };
     Object.assign(patch, dep.patch);
   }
   if (!Object.keys(patch).length) return { ok: false, status: 400, error: 'nothing to change' };

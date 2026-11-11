@@ -36,7 +36,7 @@ import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, grid
 import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
-import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan, previewEvDeparture, targetSocPct } from './services/optimizer/ev-departure.js';
+import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan, previewEvDeparture, targetSocPct, describeEvOnce } from './services/optimizer/ev-departure.js';
 import { effectiveEvMaxChargeW } from './services/optimizer/eos-evcc-bridge.js';
 
 /**
@@ -6114,6 +6114,10 @@ export function createApiRoutes(ctx) {
           arrivalOnce: opt.evArrivalOnce || '',
           // Einmal-Ziel, Max-Ladestand, Standard-Mindestziel in %, EOS-Ziele.
           ...evPlanStatusFields(opt, ctx.state),
+          // Einmal-Ziel fuer die Kachel: aktiv/vorbei, was es ersetzt, was vorher
+          // noch kommt (ev-departure.js describeEvOnce). Vorbei = kein Aktiv-Chip,
+          // auch in der Minute, bevor die Minuten-Wache es abraeumt.
+          onceInfo: describeEvOnce(getCfg(), nowMs),
           commuteKm: Number(opt.evCommuteKm) || 0,
           consumptionKwhPer100km: opt.evConsumptionKwhPer100km ?? 18,
           targetMode: opt.evTargetMode || 'percent',
@@ -6399,7 +6403,7 @@ export function createApiRoutes(ctx) {
           eosPatch.evStopMode = e.stopMode;
         }
         if (e.departure != null) {
-          const dep = parseEvDeparturePatch(e.departure, 'eos.departure', { opt: { ...(ctx.getRawCfg?.()?.optimizer || {}), ...eosPatch } });
+          const dep = parseEvDeparturePatch(e.departure, 'eos.departure', { opt: { ...(ctx.getRawCfg?.()?.optimizer || {}), ...eosPatch }, nowMs: Date.now() });
           if (!dep.ok) return json(res, 400, { ok: false, error: dep.error });
           Object.assign(eosPatch, dep.patch);
         }

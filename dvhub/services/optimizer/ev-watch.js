@@ -14,8 +14,12 @@
  *      Ladestart, Max-Ladestand oder Wertstufen (ev-targets.js) geaendert
  *      haben — der volle Abgleich alle 15 min waere zu spaet: ein vergangener
  *      Termin heisst fuer EOS „sofort laden“.
+ *   0. Davor (immer, auch ohne EOS-Planung): Einmal-Ziel beenden — beim
+ *      Abstecken kurz vor der einmaligen Abfahrt (evOnceUnplugPatch) und
+ *      abgelaufene Einmal-Ziele aus der Config raeumen (evOnceCleanupPatch).
+ *      Ein vergangenes Einmal-Ziel wirkt so nie still weiter.
  */
-import { resolveEvDeparture } from './ev-departure.js';
+import { resolveEvDeparture, evOnceCleanupPatch, evOnceUnplugPatch } from './ev-departure.js';
 import { createEvPlugTracker, resolveEvPlugged, resolveEvSocReading } from './ev-soc.js';
 import { computeEvRegistration } from './ev-registration.js';
 import { resolveEvTargets } from './ev-targets.js';
@@ -30,14 +34,49 @@ export function createEvWatch({ ctx, eosConfigSync, requestReplan, pushLog = () 
   let lastKey = null;
   let syncPending = 0;
   let pendingReason = null;
+  const lastOnceKey = new Map();   // je Ereignis der zuletzt gespeicherte Patch
+
+  // Einmal-Ziel-Felder in optimizer.* speichern (wie POST /api/ev). Ohne
+  // Speicherweg (Tests, alte ctx) nichts tun.
+  function saveOncePatch(patch, event) {
+    if (!patch || !Object.keys(patch).length) { lastOnceKey.delete(event); return false; }
+    if (typeof ctx.getRawCfg !== 'function' || typeof ctx.saveAndApplyConfig !== 'function') return false;
+    const raw = ctx.getRawCfg() || {};
+    const next = JSON.parse(JSON.stringify(raw));
+    next.optimizer = (next.optimizer && typeof next.optimizer === 'object') ? next.optimizer : {};
+    const before = {};
+    for (const k of Object.keys(patch)) before[k] = next.optimizer[k] ?? null;
+    // Derselbe Patch auf denselben Stand schon einmal gespeichert und trotzdem
+    // wieder faellig (Config wehrt sich): nicht jede Minute neu schreiben.
+    const key = JSON.stringify([before, patch]);
+    if (key === lastOnceKey.get(event)) return false;
+    lastOnceKey.set(event, key);
+    Object.assign(next.optimizer, patch);
+    try {
+      ctx.saveAndApplyConfig(next);
+    } catch (e) {
+      // naechste Minute erneut (ein vergangenes Ziel soll nicht stehen bleiben)
+      lastOnceKey.delete(event);
+      pushLog('ev_once_save_error', { event, error: e?.message || String(e) });
+      return false;
+    }
+    pushLog(event, { before, patch });
+    return true;
+  }
 
   async function tick(nowMs = Date.now()) {
     ctx.evSocMemory?.observe?.(resolveEvSocReading(ctx, nowMs));
-    const cfg = ctx.getCfg();
+    // Abgelaufenes Einmal-Ziel abraeumen — unabhaengig von der EOS-Planung.
+    saveOncePatch(evOnceCleanupPatch(ctx.getCfg(), nowMs), 'ev_once_expired');
+    let cfg = ctx.getCfg();
     const opt = cfg?.optimizer || {};
     if (opt.eosOptimizeEv !== true || !opt.eosProxy?.enabled) { lastKey = null; regTracker = createEvPlugTracker({ stableTicks }); return { action: 'off' }; }
 
     const plug = plugTracker.update(resolveEvPlugged(ctx));
+    // Abgesteckt kurz vor der einmaligen Abfahrt: das ist die Abfahrt.
+    if (plug.changed && plug.from === true && plug.stable === false) {
+      if (saveOncePatch(evOnceUnplugPatch(cfg, nowMs), 'ev_once_departed')) cfg = ctx.getCfg();
+    }
 
     const reg = computeEvRegistration(ctx, cfg, {
       chargeStartSupported: ctx.state?.optimizer?.eos?.evChargeStart === true,

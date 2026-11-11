@@ -2621,6 +2621,11 @@
   var evccDepWeeklyPlan = [];
   // Alter Heimweg (km): nur noch Hinweis im Editor, dass er nicht mehr zählt.
   var evccDepLegacyCommuteKm = 0;
+  // Einmal-Felder, wie sie geladen wurden (11.11.2026): gesendet wird nur, was
+  // jemand hier geaendert hat. Sonst schickte jedes Speichern ein laengst
+  // vergangenes Einmal-Ziel zurueck, das der Server abgeraeumt hat (und eine
+  // neue Abfahrt in der Vergangenheit lehnt er ab).
+  var evccDepOnceLoaded = {};
   function renderEvccDepWeekly() {
     var host = document.getElementById('evcc-dep-weekly');
     if (!host || !window.DVhubEvWeekly) return;
@@ -2666,6 +2671,10 @@
     if (el('evcc-dep-once-min')) el('evcc-dep-once-min').value = dep.onceMinSocPct != null ? dep.onceMinSocPct : '';
     if (el('evcc-dep-once-trip')) el('evcc-dep-once-trip').value = dep.onceTripSocPct != null ? dep.onceTripSocPct : '';
     if (el('evcc-dep-arr-once')) el('evcc-dep-arr-once').value = toLocalInput(dep.arrivalOnce);
+    evccDepOnceLoaded = {};
+    ['evcc-dep-once', 'evcc-dep-once-min', 'evcc-dep-once-trip', 'evcc-dep-arr-once'].forEach(function (id) {
+      if (el(id)) evccDepOnceLoaded[id] = String(el(id).value);
+    });
     evccDepWeeklyPlan = Array.isArray(dep.weeklyPlan) ? dep.weeklyPlan : [];
     evccDepLegacyCommuteKm = Number(dep.commuteKm) || 0;
     renderEvccDepWeekly();
@@ -2898,20 +2907,27 @@
     var onceRaw = (el('evcc-dep-once') && el('evcc-dep-once').value) || '';
     var arrRaw = (el('evcc-dep-arr-once') && el('evcc-dep-arr-once').value) || '';
     var host = el('evcc-dep-weekly');
-    return {
+    var out = {
       enabled: !!(el('evcc-dep-enabled') && el('evcc-dep-enabled').checked),
       weeklyPlan: host && window.DVhubEvWeekly ? window.DVhubEvWeekly.read(host) : evccDepWeeklyPlan,
-      // datetime-local ist Ortszeit des Browsers → als ISO mit Zeitzone senden.
-      once: onceRaw ? new Date(onceRaw).toISOString() : '',
-      arrivalOnce: arrRaw ? new Date(arrRaw).toISOString() : '',
-      // Einmal-Ziel und Max-Ladestand in %; leer = aus bzw. Wert des ersetzten Tages.
-      onceMinSocPct: numOrEmpty('evcc-dep-once-min'),
-      onceTripSocPct: numOrEmpty('evcc-dep-once-trip'),
       maxSocPct: numOrEmpty('evcc-dep-max'),
       // Ziele seit 1.0.10 immer in % Ladestand.
       targetMode: 'percent',
       targetValue: Number((el('evcc-dep-value') && el('evcc-dep-value').value) || 0)
     };
+    // Einmal-Ziel (Abfahrt, mindestens, Fahrt) nur als Ganzes und nur, wenn
+    // hier geaendert; datetime-local ist Ortszeit des Browsers → ISO.
+    if (['evcc-dep-once', 'evcc-dep-once-min', 'evcc-dep-once-trip'].some(changed)) {
+      out.once = onceRaw ? new Date(onceRaw).toISOString() : '';
+      out.onceMinSocPct = numOrEmpty('evcc-dep-once-min');
+      out.onceTripSocPct = numOrEmpty('evcc-dep-once-trip');
+    }
+    if (changed('evcc-dep-arr-once')) out.arrivalOnce = arrRaw ? new Date(arrRaw).toISOString() : '';
+    return out;
+    function changed(id) {
+      var f = el(id);
+      return !!f && String(f.value) !== (evccDepOnceLoaded[id] == null ? '' : evccDepOnceLoaded[id]);
+    }
     function numOrEmpty(id) {
       var f = el(id);
       var raw = f ? String(f.value).trim() : '';
@@ -3020,7 +3036,7 @@
       wallbox: wallboxBody()
     };
     // Wochenplan vor dem Senden pruefen (deutsche Meldung statt Server-Fehler).
-    var depErr = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(body.eos.departure.weeklyPlan || [], { enabled: body.eos.departure.enabled, hasOnce: !!body.eos.departure.once }) : null;
+    var depErr = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(body.eos.departure.weeklyPlan || [], { enabled: body.eos.departure.enabled, hasOnce: !!((el('evcc-dep-once') && el('evcc-dep-once').value) || '') }) : null;
     if (depErr) {
       if (banner) { banner.textContent = 'Wochenplan: ' + depErr; banner.hidden = false; }
       return;
