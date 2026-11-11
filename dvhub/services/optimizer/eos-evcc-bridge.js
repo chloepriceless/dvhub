@@ -1060,7 +1060,11 @@ export function createEosEvccBridge(deps) {
       // §14a-Grenze unter dem Mindeststrom: „Sofort laden“ pausiert, bis die
       // Steuerbox die Grenze aufhebt.
       const key = `${bc.charger}:${bc.loadpoint}:override:grid-cap`;
-      if (force || lastSent?.key !== key) {
+      // evcc inzwischen von außen umgestellt (z. B. „now“): erneut „aus“
+      // (Codex d4e3104f, P1 — wie in den anderen Override-Zweigen).
+      const drift = charger.type === 'evcc' && st?.ok && (st.raw?.mode ?? null) !== 'off';
+      if (force || lastSent?.key !== key || drift) {
+        if (drift && lastSent?.key === key) pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: st.raw?.mode ?? null, expected: 'off', override: true });
         const res = await hardStopper(cfg, bc, charger).stop();
         if (!res?.ok) return { ok: false, error: res?.error || 'wallbox write failed', override: true };
         // override: true — sonst stellte endOverride() den evcc-Modus von
@@ -1676,8 +1680,12 @@ export function createEosEvccBridge(deps) {
       // einphasig oder vom Kunden auf 1 Phase gestellt): nicht laden, hart aus —
       // ein Strom unter dem Mindeststrom lehnt evcc ab, und eine laufende
       // Ladung liefe mit dem alten Strom weiter (Codex 701bde37, P1).
-      const onePhaseBlocked = slot.action === 'charge' && bc.minCurrentA > bc.onePhaseMaxA
-        && (bc.phases === 1 || slot.phases === 1 || (charger.type === 'evcc' && phasesHandsOff(targetKey(bc)) && customerPhases(bc) === 1));
+      // Lädt das Auto nur einphasig, gilt das auch für Stopp-Slots: ein eigener
+      // Modus (pv/minpv) ließe evcc einphasig mit dem Mindeststrom laden
+      // (Codex d4e3104f, P1) — hart aus, unabhängig vom Plan.
+      const onePhaseBlocked = bc.minCurrentA > bc.onePhaseMaxA && !maxStop && (
+        bc.phases === 1
+        || (slot.action === 'charge' && (slot.phases === 1 || (charger.type === 'evcc' && phasesHandsOff(targetKey(bc)) && customerPhases(bc) === 1))));
       if (onePhaseBlocked) {
         if (lastSent?.key !== `${bc.charger}:${bc.loadpoint}:one-phase-blocked`) pushLog('ev_one_phase_blocked', { minCurrentA: bc.minCurrentA, onePhaseMaxA: bc.onePhaseMaxA }, 'warn');
         slot = { ...slot, action: 'stop', currentA: null, chargePowerW: null, onePhaseBlocked: true };

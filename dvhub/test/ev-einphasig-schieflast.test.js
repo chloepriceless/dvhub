@@ -179,9 +179,10 @@ function harness2({ factors = [1], optimizer = {}, lpExtra = {}, owned = null } 
   };
   const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evEvccLoadpoint: 1, evMaxChargeW: BOX_W, evPhases: 3, evStopMode: 'pv', ...optimizer } };
   const store = { owned, override: null };
+  let sol = factors;
   const bridge = createEosEvccBridge({
     getCfg: () => cfg,
-    getSolution: async () => ({ generatedAt: '2026-11-16T21:58:00Z', slotMinutes: 15, rows: factors.map((f, i) => ({ ts_utc: new Date(T0 + i * Q).toISOString(), evChargeFactor: f, evSocPct: 50 })) }),
+    getSolution: async () => ({ generatedAt: '2026-11-16T21:58:00Z', slotMinutes: 15, rows: sol.map((f, i) => ({ ts_utc: new Date(T0 + i * Q).toISOString(), evChargeFactor: f, evSocPct: 50 })) }),
     getCharger: (c, bc) => createEvccAdapter(fakeEvcc, () => bc.loadpoint, () => bc.stopMode),
     getEvccLoadpoints: () => [lp],
     getGridCapW: () => null,
@@ -191,7 +192,7 @@ function harness2({ factors = [1], optimizer = {}, lpExtra = {}, owned = null } 
     loadOverride: () => store.override,
     saveOverride: (o) => { store.override = o ? JSON.parse(JSON.stringify(o)) : null; },
   });
-  return { bridge, calls, lp };
+  return { bridge, calls, lp, setFactors: (f) => { sol = f; } };
 }
 
 describe('Einphasig unmöglich (Codex 701bde37)', () => {
@@ -223,5 +224,31 @@ describe('Einphasig unmöglich (Codex 701bde37)', () => {
     await h.bridge.setOverride({ kind: 'charge', powerW: BOX_W });
     const amps = h.calls.filter((c) => c[0] === 'maxcurrent').map((c) => c[1]);
     assert.ok(amps.length && amps.every((a) => a <= 20), JSON.stringify(h.calls));
+  });
+});
+
+describe('Einphasig unmöglich (Codex d4e3104f)', () => {
+  const blocked = { evPhases: 1, evMaxChargeW: 7360, evMinCurrentA: 10, evOnePhaseMaxCurrentA: 8 };
+
+  test('auch ein Stopp-Slot ist hart „aus“ — nie der PV-Modus (evcc lüde einphasig mit Mindeststrom)', async () => {
+    const h = harness2({ optimizer: blocked, factors: [0] });
+    await h.bridge.tick();
+    assert.ok(!h.calls.some((c) => c[0] === 'mode' && c[1] !== 'off'), JSON.stringify(h.calls));
+    assert.deepEqual(h.calls.at(-1), ['mode', 'off']);
+    h.setFactors([1]);
+    await h.bridge.tick({ force: true });
+    h.setFactors([0]);
+    await h.bridge.tick({ force: true });
+    assert.ok(!h.calls.some((c) => c[0] === 'mode' && c[1] !== 'off'), JSON.stringify(h.calls));
+  });
+
+  test('„Sofort laden“ blockiert: evcc von außen auf „now“ → nächster Takt setzt wieder „aus“', async () => {
+    const h = harness2({ optimizer: blocked });
+    await h.bridge.setOverride({ kind: 'charge', powerW: 1840 });
+    assert.deepEqual(h.calls.at(-1), ['mode', 'off']);
+    h.lp.mode = 'now';
+    const n = h.calls.length;
+    await h.bridge.tick();
+    assert.deepEqual(h.calls.slice(n), [['mode', 'off']], JSON.stringify(h.calls));
   });
 });
