@@ -54,6 +54,13 @@ describe('Dialog: Prüfung (validate)', () => {
     assert.equal(O.validate({ once: '', arrivalOnce: iso(NOW + HOURS(2)) }, C).error, null);
   });
 
+  it('Codex 5fe74510: gespeicherte, schon vergangene Ankunft blockiert das Ändern nicht', () => {
+    const stored = iso(NOW - HOURS(1));
+    const d = { once: iso(NOW + HOURS(10)), arrivalOnce: stored, minSocPct: '90' };
+    assert.equal(O.validate(d, { ...C, storedArrivalOnce: stored }).error, null);
+    assert.match(O.validate(d, C).error, /Ankunft liegt in der Vergangenheit/);
+  });
+
   it('Hinweis: Abfahrt vor der erwarteten Ankunft (Auto unterwegs)', () => {
     const c = { ...C, plugged: false, nextArrivalAt: iso(NOW + HOURS(20)) };
     const v = O.validate({ once: iso(NOW + HOURS(15)), arrivalOnce: '', minSocPct: '' }, c);

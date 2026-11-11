@@ -109,6 +109,7 @@ const INTENTIONAL = new Map([
   ['optimizer.evMaxSocPct', 'Wochenplan: Leitstand-Kachel E-Auto + EVCC-Schublade („Max-Ladestand, wenn günstig“, 1.0.10)'],
   ['optimizer.evDepartureOnceMinSocPct', 'Wochenplan: Leitstand-Kachel E-Auto + EVCC-Schublade (Einmal-Ziel, 1.0.10)'],
   ['optimizer.evDepartureOnceTripSocPct', 'Wochenplan: Leitstand-Kachel E-Auto + EVCC-Schublade (Einmal-Ziel, 1.0.10)'],
+  ['optimizer.evDepartureOnceLeftAt', 'Intern: Minuten-Wache merkt das Abstecken zur einmaligen Abfahrt (ev-watch.js, 11.11.2026); Leitstand-Kachel zeigt das Ende'],
   ['optimizer.evConsumptionKwhPer100km', 'EVCC-Schublade auf der Integrationsseite (E-Auto-Abfahrt)'],
   ['pvStrings.enabled', 'PV-Strings-Schublade auf der Integrationsseite (Solar-Logger)'],
   ['eebus.trusted', 'EEBUS-Schublade auf der Integrationsseite (Kopplung, /api/eebus/trust)'],

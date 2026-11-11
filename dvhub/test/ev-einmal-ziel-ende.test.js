@@ -94,7 +94,7 @@ describe('describeEvOnce: aktiv, ersetzt, vorher', () => {
 });
 
 describe('evOnceCleanupPatch: vergangenes Einmal-Ziel abräumen', () => {
-  const CLEAR = { evDepartureOnce: '', evDepartureOnceMinSocPct: null, evDepartureOnceTripSocPct: null };
+  const CLEAR = { evDepartureOnce: '', evDepartureOnceMinSocPct: null, evDepartureOnceTripSocPct: null, evDepartureOnceLeftAt: '' };
 
   test('solange es kommt: nichts', () => {
     assert.deepEqual(evOnceCleanupPatch(withOnce(), at('2026-11-16T19:00:00Z')), {});
@@ -120,7 +120,7 @@ describe('evOnceCleanupPatch: vergangenes Einmal-Ziel abräumen', () => {
   test('kaputte Zeit oder Ziel ohne Abfahrt: abgeräumt', () => {
     assert.deepEqual(evOnceCleanupPatch(cfg({ evDepartureOnce: 'kaputt', evDepartureOnceMinSocPct: 70 }), at('2026-11-16T19:00:00Z')), CLEAR);
     assert.deepEqual(evOnceCleanupPatch(cfg({ evDepartureOnce: '', evDepartureOnceTripSocPct: 30 }), at('2026-11-16T19:00:00Z')),
-      { evDepartureOnceMinSocPct: null, evDepartureOnceTripSocPct: null });
+      { evDepartureOnceMinSocPct: null, evDepartureOnceTripSocPct: null, evDepartureOnceLeftAt: '' });
     assert.deepEqual(evOnceCleanupPatch(cfg({ evArrivalOnce: 'kaputt' }), at('2026-11-16T19:00:00Z')), { evArrivalOnce: '' });
   });
 
@@ -167,12 +167,36 @@ describe('evOnceCleanupPatch: vergangenes Einmal-Ziel abräumen', () => {
 
 describe('evOnceUnplugPatch: Abstecken zur Abfahrt', () => {
   const onceMs = at(ONCE);
-  test(`in den letzten ${ONCE_UNPLUG_WINDOW_MS / MIN} min vor der Abfahrt: Abfahrt = jetzt (minutengenau)`, () => {
+  test(`in den letzten ${ONCE_UNPLUG_WINDOW_MS / MIN} min vor der Abfahrt: losgefahren = jetzt (minutengenau), Termin bleibt`, () => {
     const p = evOnceUnplugPatch(withOnce(), onceMs - 25 * MIN + 17_000);
-    assert.deepEqual(p, { evDepartureOnce: new Date(onceMs - 25 * MIN).toISOString() });
+    assert.deepEqual(p, { evDepartureOnceLeftAt: new Date(onceMs - 25 * MIN).toISOString() });
     // danach ist es vorbei
     const after = { ...withOnce(), optimizer: { ...withOnce().optimizer, ...p } };
     assert.equal(describeEvOnce(after, onceMs - 25 * MIN + 17_000).departure.state, 'ended');
+  });
+  test('Codex 5fe74510: frühes Abstecken holt keine andere ersetzte Abfahrt zurück', () => {
+    // Täglich Ankunft 18:00 → Abfahrt 07:00; einmalig Mi 18.11. 18:10 (17:10Z) ersetzt Do 07:00.
+    const DAILY = [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, arrival: '18:00', departure: '07:00', minSocPct: 60, tripSocPct: 20 }));
+    const c = cfg({ evWeeklyPlan: DAILY, evDepartureOnce: '2026-11-18T17:10:00.000Z', evDepartureOnceMinSocPct: 90 });
+    assert.equal(describeEvOnce(c, at('2026-11-18T12:00:00Z')).departure.replaces.departureAt, '2026-11-19T06:00:00.000Z');
+    const unplug = at('2026-11-18T16:45:00Z');   // 17:45 Ortszeit, 25 min vorher
+    const p = evOnceUnplugPatch(c, unplug);
+    const after = { ...c, optimizer: { ...c.optimizer, ...p } };
+    const d = describeEvOnce(after, unplug + MIN);
+    assert.equal(d.departure.state, 'ended');
+    assert.equal(d.departure.leftAt, '2026-11-18T16:45:00.000Z');
+    assert.equal(d.departure.replaces.departureAt, '2026-11-19T06:00:00.000Z', 'ersetzt bleibt Do 07:00');
+    // Do 07:00 kommt nicht zurück: die nächste Abfahrt ist Fr 07:00, die laufende Fahrt begann 17:45.
+    const r = resolveEvDeparture(after, unplug + MIN);
+    assert.equal(r.departureAt, '2026-11-20T06:00:00.000Z');
+    assert.equal(r.tripStartAt, '2026-11-18T16:45:00.000Z');
+    // ein neuer Termin setzt das „schon los“ zurück; derselbe nicht
+    assert.equal(parseEvDeparturePatch({ once: '2026-11-25T08:00:00Z' }, 'departure', { opt: after.optimizer, nowMs: unplug }).patch.evDepartureOnceLeftAt, '');
+    assert.ok(!('evDepartureOnceLeftAt' in parseEvDeparturePatch({ once: '2026-11-18T17:10:00Z' }, 'departure', { opt: after.optimizer, nowMs: unplug }).patch));
+    // abgeräumt wird alles zusammen
+    const clear = evOnceCleanupPatch(after, at('2026-11-20T05:51:00Z'));
+    assert.equal(clear.evDepartureOnce, '');
+    assert.equal(clear.evDepartureOnceLeftAt, '');
   });
   test('früher abgesteckt (umparken): Einmal-Ziel bleibt', () => {
     assert.deepEqual(evOnceUnplugPatch(withOnce(), onceMs - ONCE_UNPLUG_WINDOW_MS - MIN), {});
@@ -258,7 +282,8 @@ describe('Minuten-Wache (ev-watch.js) räumt ab und erkennt das Abstecken', () =
       await watch.tick(t0 + MIN);
       const o = ctx.getRawCfg().optimizer;
       if (ends) {
-        assert.equal(o.evDepartureOnce, new Date(t0 + MIN).toISOString());
+        assert.equal(o.evDepartureOnce, ONCE, 'Termin bleibt');
+        assert.equal(o.evDepartureOnceLeftAt, new Date(t0 + MIN).toISOString());
         assert.ok(logs.some(([e]) => e === 'ev_once_departed'));
         assert.equal(describeEvOnce(ctx.getCfg(), t0 + MIN).departure.state, 'ended');
       } else {

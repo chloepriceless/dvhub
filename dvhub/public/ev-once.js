@@ -66,7 +66,7 @@
   /**
    * Eingaben des Dialogs pruefen.
    * draft: { once: ISO|''|null, arrivalOnce: ISO|''|null, minSocPct, tripSocPct } (null = halb ausgefuellt)
-   * c: { nowMs, leadMinutes, maxSocPct, enabled, weeklyHasDepartures, plugged, nextArrivalAt, tz }
+   * c: { nowMs, leadMinutes, maxSocPct, enabled, weeklyHasDepartures, plugged, nextArrivalAt, tz, storedArrivalOnce }
    * @returns {{ error: string|null, hints: string[] }}
    */
   function validate(draft, c) {
@@ -87,7 +87,9 @@
     if (min !== '' && !(min >= 0 && min <= 100)) return fail('Mindestens: 0–100 % oder leer.');
     if (trip !== '' && !(trip >= 0 && trip <= 100)) return fail('Fahrt: 0–100 % oder leer.');
     if (!isFinite(once) && (min !== '' || trip !== '')) return fail('Mindestens und Fahrt gehören zu einer Abfahrt — bitte die Abfahrt eintragen.');
-    if (isFinite(arr) && arr <= now) return fail('Die Ankunft liegt in der Vergangenheit.');
+    // Die schon gespeicherte Ankunft darf unveraendert bleiben (wie beim Server), auch wenn sie vorbei ist.
+    const storedArr = c.storedArrivalOnce ? Date.parse(c.storedArrivalOnce) : NaN;
+    if (isFinite(arr) && arr <= now && arr !== storedArr) return fail('Die Ankunft liegt in der Vergangenheit.');
     if (isFinite(arr) && isFinite(once) && arr >= once) return fail('Die Ankunft muss vor der Abfahrt liegen.');
     // Hinweise (speichern geht trotzdem)
     const next = c.nextArrivalAt ? Date.parse(c.nextArrivalAt) : NaN;
@@ -304,7 +306,8 @@
       return {
         nowMs: Date.now(), leadMinutes: info.leadMinutes || 10, maxSocPct: dep.maxSocPct, enabled: dep.enabled === true,
         weeklyHasDepartures: Array.isArray(dep.weeklyPlan) && dep.weeklyPlan.some(function (r) { return r && r.departure; }),
-        plugged: data.vehicle ? data.vehicle.plugged : null, nextArrivalAt: nextArrival, tz: tz
+        plugged: data.vehicle ? data.vehicle.plugged : null, nextArrivalAt: nextArrival, tz: tz,
+        storedArrivalOnce: dep.arrivalOnce || null
       };
     };
     const draft = function () {

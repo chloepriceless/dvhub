@@ -5239,6 +5239,9 @@ export function createDefaultConfig() {
       // ersetzten Fensters) und die erwartete Fahrt danach in %.
       evDepartureOnceMinSocPct: null,
       evDepartureOnceTripSocPct: null,
+      // Abgesteckt kurz vor der einmaligen Abfahrt (ev-watch.js): dann ist das
+      // Auto da los (ISO). Der Termin bleibt und bestimmt die ersetzte Abfahrt.
+      evDepartureOnceLeftAt: '',
       // Einmalige Ankunft (ISO) fuer das Fenster, in dessen Luecke sie faellt.
       evArrivalOnce: '',
       // Max-Ladestand „wenn günstig“ (ev-minmax.js): EOS lädt über das
