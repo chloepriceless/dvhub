@@ -2619,7 +2619,23 @@
   // POST /api/ev — das „Speichern“ der Schublade schickt kein Einmal-Ziel mehr.
   function evccOnceCtl() {
     var host = document.getElementById('evcc-once-slot');
-    return host && window.DVhubEvOnce ? window.DVhubEvOnce.attach(host, { fetch: apiFetch }) : null;
+    return host && window.DVhubEvOnce ? window.DVhubEvOnce.attach(host, { fetch: apiFetch, onSaved: evccOnceSaved, poll: true }) : null;
+  }
+  // Nach dem Speichern des Einmal-Ziels: Chip neu und die Zusammenfassung/der
+  // Status der Schublade aus dem Server — ohne die (evtl. ungespeicherten)
+  // Felder der Schublade zu überschreiben (Codex 175975ce).
+  async function evccOnceSaved() {
+    var ctl = evccOnceCtl();
+    if (ctl) ctl.refresh();
+    try {
+      var res = await apiFetch('/api/integrations/evcc');
+      if (!res.ok) return;
+      var data = await res.json();
+      var eos = (data && data.eos) || {};
+      var dep = eos.departure || {};
+      setEvccDepSummary(dep, eos.capacityWh, eos);
+      renderEvccDepState(dep);
+    } catch (_) { /* naechstes Laden */ }
   }
   function renderEvccDepWeekly() {
     var host = document.getElementById('evcc-dep-weekly');

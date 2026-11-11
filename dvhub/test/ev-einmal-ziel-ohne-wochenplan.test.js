@@ -139,4 +139,21 @@ describe('Oberfläche: „Aktivieren“ schaltet den Wochenplan nicht ein', () =
     assert.doesNotMatch(t, /Statt Wochenplan|Davor gilt/);
     assert.match(t, /Wochenplan ist aus/);
   });
+
+  test('Codex 175975ce: Ankunft allein bei Wochenplan aus wird abgelehnt (bewirkte nichts)', () => {
+    const v = O.validate({ once: '', arrivalOnce: new Date(NOW + 3600_000).toISOString() }, { nowMs: NOW, enabled: false, tz: TZ });
+    assert.match(v.error || '', /Ankunft allein bewirkt nichts/);
+    // mit Wochenplan an erlaubt
+    assert.equal(O.validate({ once: '', arrivalOnce: new Date(NOW + 3600_000).toISOString() }, { nowMs: NOW, enabled: true, tz: TZ }).error, null);
+    // ein Rest davon zeigt „wirkt nicht“ statt Aktiv
+    const c = O.chip(describeEvOnce(cfg({ evDepartureOnce: '', evDepartureOnceMinSocPct: null, evArrivalOnce: '2026-11-17T17:00:00.000Z' }), NOW), { tz: TZ });
+    assert.match(c.title, /wirkt nicht/);
+  });
+
+  test('Codex 175975ce: Integrationsseite frischt Status nach dem Speichern auf und fragt selbst regelmäßig', () => {
+    const intg = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'public', 'integrations.js'), 'utf8');
+    assert.match(intg, /attach\(host, \{ fetch: apiFetch, onSaved: evccOnceSaved, poll: true \}\)/);
+    assert.match(intg, /async function evccOnceSaved\(\)[\s\S]*?setEvccDepSummary\(dep[\s\S]*?renderEvccDepState\(dep\)/);
+    assert.match(src, /if \(o && o\.poll\)[\s\S]*?setInterval/);
+  });
 });

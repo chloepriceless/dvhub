@@ -22,6 +22,7 @@
   'use strict';
 
   const MIN = 60000;
+  const POLL_MS = 60000;
 
   // ------------------------------------------------------------ Formatieren
 
@@ -92,6 +93,8 @@
     const storedArr = c.storedArrivalOnce ? Date.parse(c.storedArrivalOnce) : NaN;
     if (isFinite(arr) && arr <= now && arr !== storedArr) return fail('Die Ankunft liegt in der Vergangenheit.');
     if (isFinite(arr) && isFinite(once) && arr >= once) return fail('Die Ankunft muss vor der Abfahrt liegen.');
+    // Ohne Wochenplan gibt es keine Abfahrt, deren Ankunft sie ersetzen koennte (Codex 175975ce).
+    if (isFinite(arr) && !isFinite(once) && c.enabled === false) return fail('Der Wochenplan ist aus — eine Ankunft allein bewirkt nichts. Bitte die Abfahrt dazu eintragen.');
     // Hinweise (speichern geht trotzdem)
     const next = c.nextArrivalAt ? Date.parse(c.nextArrivalAt) : NaN;
     if (isFinite(once) && !isFinite(arr) && c.plugged !== true && isFinite(next) && next > now && next > once) {
@@ -156,6 +159,9 @@
       const own = d.targetFrom === 'once';
       const title = 'Einmal-Ziel aktiv: ' + fmtAt(d.at, c.tz) + (d.targetSocPct !== null && d.targetSocPct !== undefined ? ' · mindestens ' + d.targetSocPct + '\u00a0%' + (own ? '' : ' (wie Plan)') : '');
       return { kind: 'active', title: title, lines: lines };
+    }
+    if (info.weeklyEnabled === false) {
+      return { kind: 'active', title: 'Einmalige Ankunft: ' + fmtAt(a.at, c.tz) + ' — wirkt nicht', lines: ['Der Wochenplan ist aus und es gibt keine Abfahrt dazu. „Beenden“ löscht sie.'] };
     }
     return { kind: 'active', title: 'Einmalige Ankunft: ' + fmtAt(a.at, c.tz), lines: ['Ersetzt die Ankunft vor der nächsten Abfahrt; endet mit dieser Abfahrt.'] };
   }
@@ -452,6 +458,8 @@
    * dem Speichern (Kachel: neu laden); ohne onSaved laedt der Baustein GET
    * /api/ev selbst neu. Gespeichert wird immer ueber POST /api/ev (nur die
    * Einmal-Felder) — gleiche Rechte wie die Kachel: Anmeldung + Pro.
+   * o.poll: true = alle POLL_MS selbst GET /api/ev, solange der Host im Dokument
+   * und die Seite sichtbar ist (Integrationsseite; die Kachel fragt selbst).
    * @returns {{ render(data), refresh(): Promise, data(): object|null, active(): boolean }}
    */
   function attach(host, o) {
@@ -533,6 +541,14 @@
         });
       }
     });
+    if (o && o.poll) {
+      // Ablauf oder Abstecken zeigen, ohne dass jemand neu laedt (Codex 175975ce).
+      const timer = setInterval(function () {
+        if (!document.documentElement.contains(host)) { clearInterval(timer); return; }
+        if (!document.hidden) refresh();
+      }, POLL_MS);
+      document.addEventListener('visibilitychange', function () { if (!document.hidden && document.documentElement.contains(host)) refresh(); });
+    }
     ctl = {
       opts: o || {}, render: render, refresh: refresh,
       data: function () { return state.data; },
