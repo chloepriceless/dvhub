@@ -677,3 +677,20 @@ test('Relais: gespeicherte Dimmung gilt höchstens 24 h nach der letzten Meldung
   c.svc.update();
   assert.equal(c.state.p14a.active, false);
 });
+
+test('Relais: wiederholte gleiche Meldung zählt als letzte Meldung, auch nach dem Neustart (Codex 5d8eafad)', () => {
+  const mem = memFs();
+  const deps = { fs: mem, dataDir: '/data' };
+  const p14a = { relay: { enabled: true, topic: 'steuerbox/relais' }, usePvSurplus: false };
+  const clock = { t: Date.parse('2026-11-16T10:00:00Z') };
+  const a = setup({ p14a, deps, clock });
+  a.svc.update();
+  a.subs.get('steuerbox/relais')('steuerbox/relais', '1');
+  // 25 h später bestätigt das Relais „gedimmt“ noch einmal, dann Neustart.
+  clock.t += 25 * 3600_000;
+  a.subs.get('steuerbox/relais')('steuerbox/relais', '1');
+  clock.t += 60_000;
+  const b = setup({ p14a, deps, clock });
+  b.svc.update();
+  assert.equal(b.state.p14a.active, true, 'gerade bestätigt — gilt weiter');
+});

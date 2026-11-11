@@ -59,6 +59,8 @@ const RELAY_STATE_FILE = 'p14a_relay.json';
  * laufenden Verbindung gilt wie bisher bis zur nächsten.
  */
 export const RELAY_RESTORED_MAX_MS = 24 * 3600_000;
+// Wiederholte gleiche Relais-Meldungen höchstens so oft speichern.
+const RELAY_CONFIRM_PERSIST_MS = 10 * 60_000;
 
 /** Konfiguration mit Vorgaben; ungültige Geräte fallen raus. */
 export function resolveParagraph14aConfig(cfg) {
@@ -123,7 +125,7 @@ export function createParagraph14aService(ctx, deps = {}) {
   const dataDir = deps.dataDir || ctx.dataDir || null;
 
   // restored: Zustand stammt aus der Zeit vor dem Neustart (noch keine neue Nachricht).
-  const relay = { level: null, at: null, subscribedTopic: null, restored: false, restoredAt: null, restoredExpired: false };
+  const relay = { level: null, at: null, subscribedTopic: null, restored: false, restoredAt: null, restoredExpired: false, persistedAt: null };
   let timer = null;
   let lastShares = {};
   let lastActiveKey = null;
@@ -304,6 +306,7 @@ export function createParagraph14aService(ctx, deps = {}) {
       fsImpl.mkdirSync(dataDir, { recursive: true });
       fsImpl.writeFileSync(`${file}.tmp`, JSON.stringify({ topic, level: relay.level, at: relay.at }));
       fsImpl.renameSync(`${file}.tmp`, file);
+      relay.persistedAt = relay.at;
     } catch (e) {
       pushLog('paragraph14a_relay_persist_error', { error: e?.message || String(e) }, 'warn');
     }
@@ -319,6 +322,7 @@ export function createParagraph14aService(ctx, deps = {}) {
     relay.at = saved?.at ?? null;
     relay.restored = saved != null;
     relay.restoredAt = saved ? now() : null;
+    relay.persistedAt = saved?.at ?? null;
     relay.restoredExpired = false;
     if (saved) pushLog('paragraph14a_relay_restored', { topic, level: saved.level, at: saved.at });
     if (!topic || !hub?.subscribe) return;
@@ -333,7 +337,10 @@ export function createParagraph14aService(ctx, deps = {}) {
       relay.at = now();
       relay.restored = false;
       relay.restoredExpired = false;
-      if (changed || wasRestored) saveRelayState(topic);
+      // Auch eine wiederholte gleiche Meldung ist die letzte Meldung — für den
+      // Ablauf nach einem Neustart zählt ihr Zeitpunkt (Codex 5d8eafad).
+      // Gedrosselt: höchstens alle RELAY_CONFIRM_PERSIST_MS.
+      if (changed || wasRestored || relay.persistedAt == null || relay.at - relay.persistedAt >= RELAY_CONFIRM_PERSIST_MS) saveRelayState(topic);
       if (changed) pushLog('paragraph14a_relay', { topic: t, level });
       // Auch eine Bestätigung des Zustands von vor dem Neustart wirkt sofort
       // (er kann inzwischen abgelaufen sein, RELAY_RESTORED_MAX_MS).
