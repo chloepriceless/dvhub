@@ -10,6 +10,11 @@
 //     Anfrage wird abgefangen und ihr Inhalt geprüft; was der Server daraus
 //     machte, rechnet POST /api/ev/preview (ohne Pro) echt nach.
 //
+// Einmal-Ziel (seit 11.11.2026 Knopf + Dialog + Aktiv-Chip, ev-once.js, auf
+// beiden Seiten): „Beenden“ → Rückfrage „Beenden“ → sofort POST /api/ev mit
+// leerem Einmal-Ziel (abgefangen, Pro). Die Wochenplan-Speicher schicken kein
+// Einmal-Ziel mehr mit.
+//
 // Setzt vorher einen Plan mit Werten am Mittwoch und stellt danach den
 // vorherigen Stand wieder her. Screenshots: EVW_SHOT_DIR (sonst test-results).
 
@@ -68,6 +73,32 @@ async function expectRowEmpty(row) {
   await expect(row.locator('.evw-res')).toBeVisible();
 }
 
+// Einmal-Ziel über den Chip beenden; liefert den Inhalt des (abgefangenen) POST /api/ev.
+async function endOnceViaChip(page, slot, posted) {
+  await expect(slot.locator('[data-evo="chip"]')).toBeVisible();
+  await expect(slot.locator('[data-evo="title"]')).toContainText('Einmal-Ziel aktiv');
+  const n = posted.length;
+  await press(page, slot.locator('[data-evo="end"]'));
+  const dlg = page.locator('.ev-once-confirm');
+  await expect(dlg).toBeVisible();
+  await press(page, dlg.getByRole('button', { name: 'Beenden' }));
+  await expect.poll(() => posted.length).toBeGreaterThan(n);
+  const body = posted[posted.length - 1];
+  expect(body).toEqual({ departure: { once: '', onceMinSocPct: '', onceTripSocPct: '', arrivalOnce: '' } });
+  return body;
+}
+
+// POST /api/ev braucht Pro (Rig ohne Lizenz): abfangen, Inhalte sammeln.
+async function catchEvPosts(page) {
+  const posted = [];
+  await page.route('**/api/ev', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    posted.push(route.request().postDataJSON());
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  return posted;
+}
+
 async function expectTouchSize(locator, min) {
   const box = await locator.boundingBox();
   expect(box, 'Knopf sichtbar').not.toBeNull();
@@ -76,10 +107,14 @@ async function expectTouchSize(locator, min) {
 }
 
 export async function integrationsFlow(page, request, testInfo, { touchMin }) {
+  const posted = await catchEvPosts(page);
   await page.goto('/integrations.html#evcc');
   // Wallbox-Schublade öffnen (Karte; inline-Ansicht zeigt sie ggf. schon).
   const weekly = page.locator('#evcc-dep-weekly');
   if (!(await weekly.isVisible())) await press(page, page.locator('.conn-card', { hasText: 'Wallbox' }).first());
+  // Die Schublade baut den Editor nach dem Laden der Daten neu auf — erst danach
+  // greifen (sonst „Element is not attached to the DOM“, gelegentlich).
+  await page.waitForLoadState('networkidle');
   const row = weekly.locator('.evw-row[data-day="3"]');
   await expect(row.locator('.evw-dep')).toHaveValue('07:30');
   await expect(row.locator('.evw-min')).toHaveValue('60');
@@ -92,25 +127,23 @@ export async function integrationsFlow(page, request, testInfo, { touchMin }) {
   await expectRowEmpty(row);
   // Andere Tage bleiben.
   await expect(weekly.locator('.evw-row[data-day="2"] .evw-dep')).toHaveValue('07:00');
-  // Einmal-Ziel leeren, ebenfalls ohne ins Datumsfeld zu tippen.
-  await expect(page.locator('#evcc-dep-once')).not.toHaveValue('');
-  const onceBtn = page.getByRole('button', { name: 'Einmal-Ziel leeren' });
-  await expectTouchSize(onceBtn, 44);
-  await press(page, onceBtn);
+  // Einmal-Ziel: keine Dauerfelder mehr, Chip mit „Beenden“ (sofort gespeichert).
+  await expect(page.locator('#evcc-dep-once')).toHaveCount(0);
+  await endOnceViaChip(page, page.locator('#evcc-once-slot'), posted);
   await noTimeFieldFocused(page);
-  for (const id of ['#evcc-dep-once', '#evcc-dep-once-min', '#evcc-dep-once-trip']) await expect(page.locator(id)).toHaveValue('');
   await page.locator('#evcc-dep-weekly').screenshot({ path: shotPath(testInfo, 'integrations-nachher') });
   const saved = page.waitForResponse((r) => r.url().endsWith('/api/integrations/evcc') && r.request().method() === 'POST');
   await press(page, page.locator('#evcc-save'));
   const res = await saved;
   expect(res.ok(), await res.text()).toBeTruthy();
-  // Konfig am Server: Mittwoch nicht gesetzt, Einmal-Ziel weg.
+  // Die Schublade schickt kein Einmal-Ziel mehr mit.
+  expect(JSON.stringify(res.request().postDataJSON()?.eos?.departure || {})).not.toMatch(/once|arrivalOnce/i);
+  // Konfig am Server: Mittwoch nicht gesetzt; das Einmal-Ziel fasst die
+  // Schublade nicht an (das „Beenden“ oben ging abgefangen an POST /api/ev).
   const dep = (await (await request.get('/api/integrations/evcc')).json()).eos.departure;
   expect(dep.weeklyPlan[2]).toEqual(WED_EMPTY);
   expect(dep.weeklyPlan[1].departure).toBe('07:00');
-  expect(dep.once || '').toBe('');
-  expect(dep.onceMinSocPct ?? null).toBeNull();
-  expect(dep.onceTripSocPct ?? null).toBeNull();
+  expect(dep.once).toBe(ONCE);
   // Und daraus entsteht keine Abfahrt vom Mittwoch.
   const ev = await (await request.get('/api/ev')).json();
   expect(ev.departure.resolved.day).not.toBe(3);
@@ -118,13 +151,7 @@ export async function integrationsFlow(page, request, testInfo, { touchMin }) {
 }
 
 export async function tileFlow(page, request, testInfo, { touchMin }) {
-  let posted = null;
-  // POST /api/ev braucht Pro (Rig ohne Lizenz): Anfrage abfangen und prüfen.
-  await page.route('**/api/ev', async (route) => {
-    if (route.request().method() !== 'POST') return route.fallback();
-    posted = route.request().postDataJSON();
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
+  const posted = await catchEvPosts(page);
   await page.goto('/');
   await press(page, page.locator('#evWeekToggle'));
   const row = page.locator('#evWeeklyGrid .evw-row[data-day="3"]');
@@ -137,17 +164,18 @@ export async function tileFlow(page, request, testInfo, { touchMin }) {
   await noTimeFieldFocused(page);
   await expectRowEmpty(row);
   await expect(page.locator('#evActions')).toBeVisible();
-  await press(page, page.getByRole('button', { name: 'Einmal-Ziel leeren' }));
-  for (const id of ['#evDepOnce', '#evOnceMin', '#evOnceTrip']) await expect(page.locator(id)).toHaveValue('');
+  // Einmal-Ziel: Chip in der Kachel, „Beenden“ speichert sofort für sich.
+  await expect(page.locator('#evDepOnce')).toHaveCount(0);
+  await endOnceViaChip(page, page.locator('#evOnceSlot'), posted);
   await page.locator('#evWeekly').screenshot({ path: shotPath(testInfo, 'kachel-nachher') });
+  const n = posted.length;
   await press(page, page.locator('#evSave'));
-  await expect.poll(() => posted).not.toBeNull();
-  const d = posted.departure;
+  await expect.poll(() => posted.length).toBeGreaterThan(n);
+  const d = posted[posted.length - 1].departure;
   expect(d.weeklyPlan[2]).toEqual(WED_EMPTY);
   expect(d.weeklyPlan[1].departure).toBe('07:00');
-  expect(d.once).toBe('');
-  expect(d.onceMinSocPct).toBe('');
-  expect(d.onceTripSocPct).toBe('');
+  // „Übernehmen“ des Wochenplans überschreibt das Einmal-Ziel nicht.
+  expect('once' in d || 'onceMinSocPct' in d || 'arrivalOnce' in d).toBe(false);
   // Der echte Server nimmt genau diesen Inhalt an und plant keine Abfahrt vom Mittwoch.
   const pv = await (await request.post('/api/ev/preview', { data: { departure: d } })).json();
   expect(pv.ok, JSON.stringify(pv)).toBe(true);

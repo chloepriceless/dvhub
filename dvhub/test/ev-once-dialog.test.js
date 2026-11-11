@@ -17,7 +17,9 @@ import { describeEvOnce } from '../services/optimizer/ev-departure.js';
 const PUB = path.resolve(import.meta.dirname, '..', 'public');
 const src = fs.readFileSync(path.join(PUB, 'ev-once.js'), 'utf8');
 const tile = fs.readFileSync(path.join(PUB, 'ev-tile.js'), 'utf8');
-const css = fs.readFileSync(path.join(PUB, 'ev-tile.css'), 'utf8');
+const css = fs.readFileSync(path.join(PUB, 'ev-once.css'), 'utf8');
+const intgHtml = fs.readFileSync(path.join(PUB, 'integrations.html'), 'utf8');
+const intgJs = fs.readFileSync(path.join(PUB, 'integrations.js'), 'utf8');
 
 function load() {
   const sandbox = { window: {}, document: { addEventListener() {}, getElementById: () => null }, setTimeout, clearTimeout, Date, Promise };
@@ -80,9 +82,9 @@ describe('Dialog: Prüfung (validate)', () => {
     assert.ok(!O.validate({ once: iso(NOW + 86400_000), arrivalOnce: '', minSocPct: '90' }, { ...C, maxSocPct: null }).hints.length, 'Max aus: kein Hinweis');
   });
 
-  it('Hinweis: Abfahrtsplanung aus — Aktivieren schaltet sie ein', () => {
+  it('Hinweis: Wochenplan aus — die Abfahrt ist die einzige, der Wochenplan bleibt aus (11.11.2026)', () => {
     const v = O.validate({ once: iso(NOW + 86400_000), arrivalOnce: '' }, { ...C, enabled: false });
-    assert.ok(v.hints.some((h) => /Abfahrtsplanung ist aus.*Wochenplan wieder/.test(h)), v.hints.join('|'));
+    assert.ok(v.hints.some((h) => /Wochenplan ist aus und bleibt aus.*einzige/.test(h)), v.hints.join('|'));
   });
 });
 
@@ -115,10 +117,10 @@ describe('Kachel: Chip aus dem Server-Status (describeEvOnce → chip)', () => {
     assert.equal(O.chip(describeEvOnce(cfg(), NOW), { tz: TZ }), null);
   });
 
-  it('Abfahrtsplanung aus: Chip warnt, dass es nicht wirkt', () => {
+  it('Wochenplan aus: Chip aktiv, einzige Abfahrt (wirkt seit 11.11.2026 auch ohne Wochenplan)', () => {
     const c = O.chip(describeEvOnce(cfg({ evDepartureEnabled: false, evDepartureOnce: '2026-11-18T05:30:00.000Z' }), NOW), { tz: TZ });
-    assert.equal(c.kind, 'inactive');
-    assert.match(c.title, /wirkt aber nicht/);
+    assert.equal(c.kind, 'active');
+    assert.match(c.lines.join('\n'), /einzige geplante Abfahrt/);
   });
 
   it('nur einmalige Ankunft: eigener Chip', () => {
@@ -138,13 +140,26 @@ describe('Datum + Uhrzeit (Ortszeit) ↔ ISO', () => {
 });
 
 describe('Kachel-Markup, Einbindung, CSP', () => {
-  it('keine dauerhaften Einmal-Felder mehr; Knopf, Chip mit Ändern/Beenden', () => {
+  it('keine dauerhaften Einmal-Felder mehr; Knopf, Chip mit Ändern/Beenden aus dem gemeinsamen Baustein', () => {
     assert.doesNotMatch(tile, /datetime-local/);
     assert.doesNotMatch(tile, /id=\\"evDepOnce\\"|id=\\"evOnceMin\\"|id=\\"evArrOnce\\"/);
-    assert.match(tile, /id=\\"evOncePlan\\"[^"]*"?[^>]*>\+ Einmalige Abfahrt planen/);
-    assert.match(tile, /id=\\"evOnceChip\\"/);
-    assert.match(tile, /id=\\"evOnceEdit\\"/);
-    assert.match(tile, /id=\\"evOnceEnd\\"/);
+    assert.match(tile, /id=\\"evOnceSlot\\"/);
+    assert.match(tile, /DVhubEvOnce\.attach\(slot,/);
+    assert.match(src, /data-evo="plan"[^>]*>\+ Einmalige Abfahrt planen/);
+    for (const k of ['chip', 'edit', 'end', 'start']) assert.match(src, new RegExp(`data-evo="${k}"`));
+  });
+
+  it('Integrationsseite: keine Dauerfelder mehr, derselbe Baustein (keine zweite Logik)', () => {
+    assert.doesNotMatch(intgHtml, /id="evcc-dep-once"|id="evcc-dep-once-min"|id="evcc-dep-once-trip"|id="evcc-dep-arr-once"/);
+    assert.match(intgHtml, /id="evcc-once-slot"/);
+    assert.match(intgJs, /DVhubEvOnce\.attach\(host,/);
+    assert.doesNotMatch(intgJs, /evcc-dep-once|evcc-dep-arr-once|onceMinSocPct|arrivalOnce/);
+    const a = intgHtml.match(/<script src="\/ev-once\.js\?v=([\w-]+)"/);
+    const b = intgHtml.match(/<script src="\/integrations\.js\?v=([\w-]+)"/);
+    const c = intgHtml.match(/href="\/ev-once\.css\?v=([\w-]+)"/);
+    assert.ok(a && b && c);
+    assert.ok(intgHtml.indexOf(a[0]) < intgHtml.indexOf(b[0]), 'ev-once.js vor integrations.js');
+    assert.equal(a[1], c[1]);
   });
 
   it('Wochenplan-Speichern schickt kein Einmal-Ziel mit (überschreibt es nicht)', () => {
@@ -159,7 +174,9 @@ describe('Kachel-Markup, Einbindung, CSP', () => {
       const a = html.match(/<script src="\/ev-once\.js\?v=([\w-]+)"/);
       const b = html.match(/<script src="\/ev-tile\.js\?v=([\w-]+)"/);
       const c = html.match(/href="\/ev-tile\.css\?v=([\w-]+)"/);
-      assert.ok(a && b && c, f);
+      const d = html.match(/href="\/ev-once\.css\?v=([\w-]+)"/);
+      assert.ok(a && b && c && d, f);
+      assert.equal(d[1], b[1]);
       assert.ok(html.indexOf(a[0]) < html.indexOf(b[0]), `${f}: ev-once.js vor ev-tile.js`);
       assert.equal(a[1], b[1]);
       assert.equal(c[1], b[1]);

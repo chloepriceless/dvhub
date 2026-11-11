@@ -186,8 +186,17 @@
       + '<input type="time" class="input mono evw-arr" step="300" value="' + val(e.arrival) + '" aria-label="Ankunft ' + name + '">'
       + '<span class="evw-depwrap"><input type="time" class="input mono evw-dep" step="300" value="' + val(e.departure) + '" aria-label="Abfahrt ' + name + '">'
       + '<span class="evw-next" hidden>+1 Tag</span></span>'
+      // Mind. % und Fahrt % mit eigener Kurz-Beschriftung (nur im schmalen
+      // Layout sichtbar, ev-weekly-editor.css): dort stehen sie in einer zweiten
+      // Zeile — Mind. unter der Abfahrt, Fahrt links daneben —, und ohne Beschriftung
+      // las sich „Mind. %“ unter „Ankunft“ wie der Ladestand bei Ankunft
+      // (Christin 11.11.2026, Prod-Webapp).
+      + '<label class="evw-f evw-f-min"><span class="evw-fl" aria-hidden="true">mind. bei Abfahrt</span>'
       + '<input type="number" class="input mono evw-min" min="0" max="100" step="5" value="' + val(e.minSocPct) + '" placeholder="' + val(opts.defaultMin) + '" aria-label="Mindestens bei Abfahrt ' + name + ' (%)" title="Mindest-Ladestand bei dieser Abfahrt — wird immer erreicht. Leer: allgemeiner Wert.">'
+      + '<span class="evw-fu" aria-hidden="true">%</span></label>'
+      + '<label class="evw-f evw-f-trip"><span class="evw-fl" aria-hidden="true">Fahrt danach</span>'
       + '<input type="number" class="input mono evw-trip" min="0" max="100" step="1" value="' + val(e.tripSocPct) + '" placeholder="0" aria-label="Fahrt ab ' + name + ' (% Ladestand)" title="So viel Ladestand verbraucht die Fahrt ab dieser Abfahrt bis zur nächsten Ankunft (geschätzt).">'
+      + '<span class="evw-fu" aria-hidden="true">%</span></label>'
       // Ohne ins Zeitfeld zu tippen (iOS oeffnete sofort den Picker und setzte eine Zeit).
       + '<button type="button" class="btn sm ghost evw-row-clear" aria-label="' + name + ' leeren" title="' + name + ' leeren: Ankunft, Abfahrt, Mindest-Ladestand und Fahrt entfernen — kein Termin">'
       + '<span class="evw-x" aria-hidden="true">✕</span><span class="evw-row-clear-t" aria-hidden="true">Leeren</span></button>'
@@ -405,8 +414,8 @@
     host.classList.add('evw-with-km');
     host._evwOpts = opts;
     host.innerHTML = '<div class="evw-summary" aria-live="polite" hidden></div>'
-      + '<div class="evw-head"><span>Tag</span><span>Ankunft</span><span>Abfahrt</span><span title="Mindest-Ladestand bei der Abfahrt">Mind. %</span>'
-      + '<span title="Verbrauch der Fahrt ab der Abfahrt bis zur nächsten Ankunft">Fahrt %</span><span class="evw-head-x" aria-hidden="true"></span></div>'
+      + '<div class="evw-head"><span>Tag</span><span>Ankunft</span><span>Abfahrt</span><span class="evw-head-min" title="Mindest-Ladestand bei der Abfahrt">Mind. %</span>'
+      + '<span class="evw-head-trip" title="Verbrauch der Fahrt ab der Abfahrt bis zur nächsten Ankunft">Fahrt %</span><span class="evw-head-x" aria-hidden="true"></span></div>'
       + DAYS.map(function (_, i) { return rowHtml(entryFor(plan, i + 1), i, o); }).join('')
       + '<div class="evw-tools">'
       + '<button type="button" class="btn sm ghost evw-copy" title="Ankunft, Abfahrt, Mindest-Ladestand und Fahrt vom Montag auf Dienstag bis Freitag übertragen">Montag gleich für Mo–Fr</button>'

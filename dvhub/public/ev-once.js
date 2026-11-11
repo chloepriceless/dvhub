@@ -16,11 +16,13 @@
 // DOM — test/ev-once-dialog.test.js laedt die Datei per vm. Kein Inline-JS,
 // keine Inline-Styles (CSP); Stile in ev-tile.css (.ev-once-*).
 //
-// window.DVhubEvOnce = { validate, chip, effectLines, fmtAt, joinLocal, splitLocal, open, confirmEnd }
+// window.DVhubEvOnce = { validate, chip, effectLines, fmtAt, joinLocal, splitLocal, open, confirmEnd, attach }
+// attach(host, { fetch, onSaved }): Knopf/Chip/Dialog in Leitstand-Kachel, Family-Panel und Integrationsseite.
 (function () {
   'use strict';
 
   const MIN = 60000;
+  const POLL_MS = 60000;
 
   // ------------------------------------------------------------ Formatieren
 
@@ -66,7 +68,7 @@
   /**
    * Eingaben des Dialogs pruefen.
    * draft: { once: ISO|''|null, arrivalOnce: ISO|''|null, minSocPct, tripSocPct } (null = halb ausgefuellt)
-   * c: { nowMs, leadMinutes, maxSocPct, enabled, weeklyHasDepartures, plugged, nextArrivalAt, tz, storedArrivalOnce }
+   * c: { nowMs, leadMinutes, maxSocPct, enabled (Wochenplan an), plugged, nextArrivalAt, tz, storedArrivalOnce }
    * @returns {{ error: string|null, hints: string[] }}
    */
   function validate(draft, c) {
@@ -91,6 +93,8 @@
     const storedArr = c.storedArrivalOnce ? Date.parse(c.storedArrivalOnce) : NaN;
     if (isFinite(arr) && arr <= now && arr !== storedArr) return fail('Die Ankunft liegt in der Vergangenheit.');
     if (isFinite(arr) && isFinite(once) && arr >= once) return fail('Die Ankunft muss vor der Abfahrt liegen.');
+    // Ohne Wochenplan gibt es keine Abfahrt, deren Ankunft sie ersetzen koennte (Codex 175975ce).
+    if (isFinite(arr) && !isFinite(once) && c.enabled === false) return fail('Der Wochenplan ist aus — eine Ankunft allein bewirkt nichts. Bitte die Abfahrt dazu eintragen.');
     // Hinweise (speichern geht trotzdem)
     const next = c.nextArrivalAt ? Date.parse(c.nextArrivalAt) : NaN;
     if (isFinite(once) && !isFinite(arr) && c.plugged !== true && isFinite(next) && next > now && next > once) {
@@ -100,8 +104,8 @@
     if (min !== '' && c.maxSocPct !== null && c.maxSocPct !== '' && isFinite(max) && max > 0 && min > max) {
       hints.push('Mindestens ' + min + ' % liegt über „Max, wenn günstig“ (' + max + ' %): Für diese Abfahrt lädt DVhub bis ' + min + ' %, danach gilt wieder ' + max + ' %.');
     }
-    if (c.enabled === false) {
-      hints.push('Die Abfahrtsplanung ist aus. „Aktivieren“ schaltet sie ein' + (c.weeklyHasDepartures ? ' — dann gilt auch der Wochenplan wieder.' : '.'));
+    if (c.enabled === false && isFinite(once)) {
+      hints.push('Der Wochenplan ist aus und bleibt aus: Diese Abfahrt ist dann die einzige, die DVhub plant. Danach plant DVhub wieder keine Abfahrt.');
     }
     return { error: null, hints: hints };
   }
@@ -117,12 +121,18 @@
     const tz = c.tz;
     const lines = [];
     const d = info && info.departure;
-    if (d && d.state === 'active') {
+    const weeklyOff = info && (info.weeklyEnabled === false || (info.weeklyEnabled === undefined && info.enabled === false));
+    if (d && d.state === 'active' && weeklyOff) {
+      lines.push('Der Wochenplan ist aus — das ist die einzige geplante Abfahrt.');
+      if (d.tripSocPct !== null && d.tripSocPct !== undefined) lines.push('Fahrt etwa ' + d.tripSocPct + ' %.');
+      const unplugOff = Date.parse(d.at) - (Number(info.unplugWindowMinutes) || 30) * MIN;
+      lines.push('Endet von selbst mit der Abfahrt — oder wenn du das Auto ab ' + fmtTime(new Date(unplugOff).toISOString(), tz) + ' absteckst.');
+    } else if (d && d.state === 'active') {
       if (d.replaces && d.replaces.departureAt) lines.push('Statt Wochenplan ' + fmtAt(d.replaces.departureAt, tz) + (d.targetFrom === 'weekly' ? ' (Ziel von dort)' : '') + '.');
       else lines.push('Zusätzlich zum Wochenplan.');
       if (d.weeklyBefore > 0 && d.nextWeeklyAt) {
         lines.push('Davor gilt der Wochenplan weiter: nächste Abfahrt ' + fmtAt(d.nextWeeklyAt, tz) + (d.weeklyBefore > 1 ? ' (+' + (d.weeklyBefore - 1) + ' weitere)' : '') + '.');
-      } else if (info.enabled !== false) lines.push('Das ist die nächste Abfahrt.');
+      } else lines.push('Das ist die nächste Abfahrt.');
       if (d.tripSocPct !== null && d.tripSocPct !== undefined) lines.push('Fahrt etwa ' + d.tripSocPct + ' %.');
       const unplugMs = Date.parse(d.at) - (Number(info.unplugWindowMinutes) || 30) * MIN;
       lines.push('Endet von selbst mit der Abfahrt — oder wenn du das Auto ab ' + fmtTime(new Date(unplugMs).toISOString(), tz) + ' absteckst.');
@@ -136,7 +146,7 @@
 
   /**
    * Chip in der Kachel oder null (dann der Knopf „Einmalige Abfahrt planen“).
-   * @returns {null|{ kind: 'active'|'inactive', title: string, lines: string[] }}
+   * @returns {null|{ kind: 'active', title: string, lines: string[] }}
    */
   function chip(info, c) {
     c = c || {};
@@ -145,13 +155,13 @@
     const a = info.arrival && (info.arrival.state === 'active' || info.arrival.state === 'pending') ? info.arrival : null;
     if (!d && !a) return null;
     const lines = effectLines(info, c);
-    if (info.enabled === false) {
-      return { kind: 'inactive', title: 'Einmal-Ziel eingetragen, wirkt aber nicht: die Abfahrtsplanung (Wochenplan-Schalter) ist aus.', lines: lines };
-    }
     if (d) {
       const own = d.targetFrom === 'once';
       const title = 'Einmal-Ziel aktiv: ' + fmtAt(d.at, c.tz) + (d.targetSocPct !== null && d.targetSocPct !== undefined ? ' · mindestens ' + d.targetSocPct + '\u00a0%' + (own ? '' : ' (wie Plan)') : '');
       return { kind: 'active', title: title, lines: lines };
+    }
+    if (info.weeklyEnabled === false) {
+      return { kind: 'active', title: 'Einmalige Ankunft: ' + fmtAt(a.at, c.tz) + ' — wirkt nicht', lines: ['Der Wochenplan ist aus und es gibt keine Abfahrt dazu. „Beenden“ löscht sie.'] };
     }
     return { kind: 'active', title: 'Einmalige Ankunft: ' + fmtAt(a.at, c.tz), lines: ['Ersetzt die Ankunft vor der nächsten Abfahrt; endet mit dieser Abfahrt.'] };
   }
@@ -161,14 +171,14 @@
   const DIALOG = [
     '<div class="ev-once-dialog" role="dialog" aria-modal="true" aria-labelledby="evOnceDlgTitle" aria-describedby="evOnceDlgIntro" tabindex="-1">',
     '  <h2 class="ev-once-title" id="evOnceDlgTitle">Einmalige Abfahrt planen</h2>',
-    '  <p class="ev-once-intro" id="evOnceDlgIntro">F&uuml;r eine Fahrt au&szlig;er der Reihe &mdash; z. B. morgen fr&uuml;her los oder eine l&auml;ngere Strecke. Gilt genau einmal und endet mit der Abfahrt; danach plant DVhub wieder nur nach dem Wochenplan.</p>',
+    '  <p class="ev-once-intro" id="evOnceDlgIntro">F&uuml;r eine Fahrt au&szlig;er der Reihe &mdash; z. B. morgen fr&uuml;her los oder eine l&auml;ngere Strecke. Gilt genau einmal und endet mit der Abfahrt; der Wochenplan bleibt, wie er ist (an oder aus).</p>',
     '  <div class="ev-once-group">',
     '    <span class="ev-once-label" id="evOnceDepL">Abfahrt</span>',
     '    <div class="ev-once-dt" role="group" aria-labelledby="evOnceDepL">',
     '      <input type="date" class="input mono" id="evOnceDate" aria-label="Abfahrt Datum">',
     '      <input type="time" class="input mono" id="evOnceTime" aria-label="Abfahrt Uhrzeit">',
     '    </div>',
-    '    <p class="ev-once-help">Bis dahin soll das Auto geladen sein. Ersetzt die eine Wochenplan-Abfahrt in der N&auml;he; die Abfahrten davor bleiben mit ihrem Ziel.</p>',
+    '    <p class="ev-once-help" id="evOnceDepHelp">Bis dahin soll das Auto geladen sein. Ersetzt die eine Wochenplan-Abfahrt in der N&auml;he; die Abfahrten davor bleiben mit ihrem Ziel.</p>',
     '  </div>',
     '  <div class="ev-once-group">',
     '    <label class="ev-once-label" for="evOnceMinIn">Mindestens bei Abfahrt</label>',
@@ -299,13 +309,17 @@
     $('evOnceMinIn').placeholder = planMin != null ? 'Plan' : '';
     $('evOnceTripIn').placeholder = 'Plan';
     if (editing && (curArr || dep.onceTripSocPct != null)) $('evOnceMore').open = true;
+    // Wochenplan aus: das Einmal-Ziel ist die einzige Abfahrt und ersetzt nichts.
+    if (dep.enabled !== true) {
+      $('evOnceDepHelp').textContent = 'Bis dahin soll das Auto geladen sein. Der Wochenplan ist aus — das ist die einzige geplante Abfahrt.';
+      $('evOnceMinHelp').textContent = 'Ladestand, der zur Abfahrt sicher erreicht sein soll. Leer = allgemeiner Wert „Mindestens bei Abfahrt“.';
+    }
 
     const ctxV = function () {
       const res = dep.resolved || {};
       const nextArrival = (data.arrival && data.arrival.at) || res.arrivalAt || null;
       return {
         nowMs: Date.now(), leadMinutes: info.leadMinutes || 10, maxSocPct: dep.maxSocPct, enabled: dep.enabled === true,
-        weeklyHasDepartures: Array.isArray(dep.weeklyPlan) && dep.weeklyPlan.some(function (r) { return r && r.departure; }),
         plugged: data.vehicle ? data.vehicle.plugged : null, nextArrivalAt: nextArrival, tz: tz,
         storedArrivalOnce: dep.arrivalOnce || null
       };
@@ -322,7 +336,6 @@
         once: d.once || '', arrivalOnce: d.arrivalOnce || '',
         onceMinSocPct: d.once ? pct(d.minSocPct) : '', onceTripSocPct: d.once ? pct(d.tripSocPct) : ''
       };
-      if (dep.enabled !== true) out.enabled = true;
       return out;
     };
 
@@ -409,8 +422,145 @@
     });
   }
 
+  // ------------------------------------------------------------ Knopf + Chip
+
+  // Gleiches Markup in Leitstand-Kachel, Family-Panel (beide ueber ev-tile.js)
+  // und Integrationsseite. Nur festes Markup; Texte per textContent.
+  const SLOT = [
+    '<div class="ev-once-chip" data-evo="chip" role="status" hidden>',
+    '  <div class="ev-once-chip-title" data-evo="title">&mdash;</div>',
+    '  <div class="ev-once-chip-lines" data-evo="lines"></div>',
+    '  <div class="ev-once-chip-actions">',
+    '    <button type="button" class="btn sm" data-evo="edit">&Auml;ndern</button>',
+    '    <button type="button" class="btn sm ghost" data-evo="end">Beenden</button>',
+    '  </div>',
+    '</div>',
+    '<div class="ev-once-start" data-evo="start" hidden>',
+    '  <button type="button" class="btn sm" data-evo="plan" title="F&uuml;r eine Fahrt au&szlig;er der Reihe: einmal Abfahrt und Mindest-Ladestand festlegen. Gilt genau einmal; der Wochenplan bleibt, wie er ist.">+ Einmalige Abfahrt planen</button>',
+    '</div>',
+    '<div class="ev-once-msg" data-evo="msg" role="status" hidden></div>'
+  ].join('\n');
+
+  const controllers = typeof WeakMap === 'function' ? new WeakMap() : null;
+
+  /** Fehlermeldung des Servers beim Speichern in Klartext. */
+  function saveError(res, body) {
+    if (body && body.error === 'pro_required') return 'E-Auto-Planung braucht DVhub Pro.';
+    if (body && body.code === 'once_in_past') return 'Die Abfahrt liegt in der Vergangenheit (oder in weniger als 10 min).';
+    if (body && body.code === 'arrival_once_in_past') return 'Die Ankunft liegt in der Vergangenheit.';
+    if (res && (res.status === 401 || res.status === 403)) return 'Keine Berechtigung (Anmeldung nötig).';
+    return (body && body.error) || ('HTTP ' + (res ? res.status : '?'));
+  }
+
+  /**
+   * Knopf „Einmalige Abfahrt planen“ bzw. Chip mit Ändern/Beenden in `host`.
+   * o.fetch(path, opts) → Response (DVhubCommon.apiFetch); o.onSaved(): nach
+   * dem Speichern (Kachel: neu laden); ohne onSaved laedt der Baustein GET
+   * /api/ev selbst neu. Gespeichert wird immer ueber POST /api/ev (nur die
+   * Einmal-Felder) — gleiche Rechte wie die Kachel: Anmeldung + Pro.
+   * o.poll: true = alle POLL_MS selbst GET /api/ev, solange der Host im Dokument
+   * und die Seite sichtbar ist (Integrationsseite; die Kachel fragt selbst).
+   * @returns {{ render(data), refresh(): Promise, data(): object|null, active(): boolean }}
+   */
+  function attach(host, o) {
+    if (!host) return null;
+    let ctl = controllers ? controllers.get(host) : host.__evOnce;
+    if (ctl) { ctl.opts = o || ctl.opts; return ctl; }
+    host.innerHTML = SLOT;
+    const q = function (k) { return host.querySelector('[data-evo="' + k + '"]'); };
+    const state = { data: null, msgTimer: null };
+    const fetcher = function (path, opts) { return (o && o.fetch ? o.fetch : fetch)(path, opts); };
+    const tzOf = function () { const d = state.data && state.data.departure; return (d && d.resolved && d.resolved.timeZone) || 'Europe/Berlin'; };
+    function msg(text, isError) {
+      const m = q('msg');
+      clearTimeout(state.msgTimer);
+      m.textContent = text || '';
+      m.hidden = !text;
+      m.classList.toggle('is-error', !!isError);
+      if (text && !isError) state.msgTimer = setTimeout(function () { m.hidden = true; }, 5000);
+    }
+    function render(data) {
+      if (data) state.data = data;
+      const info = state.data && state.data.departure && state.data.departure.onceInfo;
+      const c = chip(info, { tz: tzOf() });
+      q('chip').hidden = !c;
+      q('start').hidden = !!c || !state.data;
+      if (!c) return;
+      q('title').textContent = c.title;
+      const box = q('lines');
+      box.textContent = '';
+      c.lines.forEach(function (t) { const p = document.createElement('div'); p.textContent = t; box.appendChild(p); });
+    }
+    async function refresh() {
+      try {
+        const res = await fetcher('/api/ev');
+        if (!res.ok) return;
+        const body = await res.json();
+        if (body && body.ok) render(body);
+      } catch (_) { /* naechstes Mal */ }
+    }
+    async function save(departure, okText) {
+      try {
+        const res = await fetcher('/api/ev', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ departure: departure }) });
+        let body = {};
+        try { body = await res.json(); } catch (_) { /* leer */ }
+        if (!res.ok || !body.ok) return { ok: false, error: saveError(res, body) };
+        msg(okText);
+        if (ctl.opts && typeof ctl.opts.onSaved === 'function') ctl.opts.onSaved(); else refresh();
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    }
+    async function preview(departure) {
+      try {
+        const res = await fetcher('/api/ev/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ departure: departure }) });
+        return res.ok ? await res.json() : null;
+      } catch (_) { return null; }
+    }
+    function openDialog(editing) {
+      if (!state.data) return;
+      open({
+        data: state.data, current: editing, preview: preview,
+        save: function (d) { return save(d, editing ? 'Einmal-Ziel geändert.' : 'Einmal-Ziel aktiv — EOS plant damit beim nächsten Lauf.'); }
+      });
+    }
+    host.addEventListener('click', function (e) {
+      const b = e.target && e.target.closest ? e.target.closest('[data-evo]') : null;
+      if (!b || !host.contains(b)) return;
+      const k = b.getAttribute('data-evo');
+      if (k === 'plan') openDialog(false);
+      else if (k === 'edit') openDialog(true);
+      else if (k === 'end') {
+        const i = state.data && state.data.departure && state.data.departure.onceInfo;
+        confirmEnd('Die einmalige Abfahrt (und eine einmalige Ankunft) wird gelöscht. '
+          + (i && i.weeklyEnabled === false ? 'Danach plant DVhub keine Abfahrt — der Wochenplan ist aus.' : 'Danach gilt wieder nur der Wochenplan.')).then(async function (yes) {
+          if (!yes) return;
+          const out = await save({ once: '', onceMinSocPct: '', onceTripSocPct: '', arrivalOnce: '' }, 'Einmal-Ziel beendet.');
+          if (!out.ok) msg('Nicht beendet: ' + out.error, true);
+        });
+      }
+    });
+    if (o && o.poll) {
+      // Ablauf oder Abstecken zeigen, ohne dass jemand neu laedt (Codex 175975ce).
+      const timer = setInterval(function () {
+        if (!document.documentElement.contains(host)) { clearInterval(timer); return; }
+        if (!document.hidden) refresh();
+      }, POLL_MS);
+      document.addEventListener('visibilitychange', function () { if (!document.hidden && document.documentElement.contains(host)) refresh(); });
+    }
+    ctl = {
+      opts: o || {}, render: render, refresh: refresh,
+      data: function () { return state.data; },
+      active: function () { const i = state.data && state.data.departure && state.data.departure.onceInfo; return !!(i && i.departure && i.departure.state === 'active'); }
+    };
+    if (controllers) controllers.set(host, ctl); else host.__evOnce = ctl;
+    return ctl;
+  }
+
   window.DVhubEvOnce = {
     validate: validate, chip: chip, effectLines: effectLines, fmtAt: fmtAt,
-    joinLocal: joinLocal, splitLocal: splitLocal, open: open, confirmEnd: confirmEnd, close: close
+    joinLocal: joinLocal, splitLocal: splitLocal, open: open, confirmEnd: confirmEnd, close: close,
+    attach: attach, saveError: saveError
   };
 })();

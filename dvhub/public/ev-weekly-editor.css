@@ -7,6 +7,12 @@
 .evw-day { font-family:var(--f-mono); font-size:11px; color:var(--text-2); }
 .evw-row input { width:100%; min-width:0; padding:3px 4px; font-size:12px; box-sizing:border-box; }
 .evw-row .evw-min, .evw-row .evw-trip { text-align:right; }
+/* Mind. %/Fahrt % mit Kurz-Beschriftung (11.11.2026). Breit: nur das Feld,
+   die Kopfzeile beschriftet. Schmal (unten): Beschriftung + „%“ sichtbar. */
+.evw-f { display:flex; align-items:center; gap:3px; min-width:0; margin:0; }
+.evw-f .evw-fl, .evw-f .evw-fu { display:none; }
+.evw-fl { font-size:9.5px; line-height:1.15; color:var(--text-dim); text-transform:none; letter-spacing:0; }
+.evw-fu { font-family:var(--f-mono); font-size:10.5px; color:var(--text-dim); }
 .evw-row.is-empty .evw-day { color:var(--text-dim); }
 .evw-depwrap { position:relative; display:flex; align-items:center; min-width:0; }
 .evw-next { position:absolute; right:2px; top:-7px; font-family:var(--f-mono); font-size:9px; color:var(--yellow); background:var(--bg-0); padding:0 2px; border-radius:3px; pointer-events:none; }
@@ -26,15 +32,24 @@
 @media (pointer: fine) {
   .evw .evw-row button.evw-row-clear { min-width:0; min-height:26px; flex-direction:row; gap:4px; padding:2px 6px; }
 }
-/* Schmal (Telefon, Leitstand-Spalte): Mind. und Fahrt in einer zweiten Zeile
-   unter Ankunft/Abfahrt — die Uhrzeiten bleiben lesbar; „Leeren“ steht links
-   darunter in voller Fingergroesse. Kopf bricht gleich um. Container-Abfrage
-   (Breite des Editors), @media als Rueckfall fuer alte Browser. */
+/* Schmal (Telefon, Leitstand-Spalte): Mind. und Fahrt in einer zweiten Zeile —
+   Mind. unter der Abfahrt, Fahrt daneben, beide mit sichtbarer Kurz-
+   Beschriftung („mind. bei Abfahrt … %“, „Fahrt danach … %“); sonst las sich
+   die Zahl unter „Ankunft“ wie der Ladestand bei Ankunft (Christin 11.11.2026).
+   Die Uhrzeiten bleiben lesbar; „Leeren“ steht links darunter in voller
+   Fingergroesse. Container-Abfrage (Breite des Editors), @media als Rueckfall
+   fuer alte Browser. */
 @media (max-width: 560px) {
   .evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:44px minmax(0,1fr) minmax(0,1fr); row-gap:3px; }
-  .evw-with-km .evw-head span:nth-child(4), .evw-with-km .evw-row .evw-min { grid-column:2; }
-  .evw-with-km .evw-head span:nth-child(5), .evw-with-km .evw-row .evw-trip { grid-column:3; }
-  .evw-with-km .evw-head .evw-head-x { display:none; }
+  /* Kopf nur Tag | Ankunft | Abfahrt — Mind./Fahrt sind an den Feldern beschriftet. */
+  .evw-with-km .evw-head .evw-head-min, .evw-with-km .evw-head .evw-head-trip, .evw-with-km .evw-head .evw-head-x { display:none; }
+  /* Mind. % unter der Abfahrt (Spalte 3), Fahrt links daneben (Spalte 2). */
+  .evw-with-km .evw-row .evw-f-min { grid-column:3; grid-row:2; }
+  .evw-with-km .evw-row .evw-f-trip { grid-column:2; grid-row:2; }
+  .evw-with-km .evw-row .evw-f { flex-wrap:wrap; column-gap:4px; row-gap:1px; }
+  .evw-with-km .evw-row .evw-f .evw-fl { display:block; flex:1 0 100%; }
+  .evw-with-km .evw-row .evw-f .evw-fu { display:inline; }
+  .evw-with-km .evw-row .evw-f input { flex:1 1 0; width:0; min-width:0; }
   .evw-with-km .evw-row button.evw-row-clear { grid-column:1; grid-row:2; min-width:44px; min-height:44px; flex-direction:column; gap:1px; padding:2px; }
   .evw-with-km .evw-row { padding-bottom:4px; border-bottom:1px solid var(--hairline); }
   .evw-with-km .evw-res { padding-left:48px; }
@@ -42,9 +57,15 @@
 }
 @container evw (max-width: 460px) {
   .evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:44px minmax(0,1fr) minmax(0,1fr); row-gap:3px; }
-  .evw-with-km .evw-head span:nth-child(4), .evw-with-km .evw-row .evw-min { grid-column:2; }
-  .evw-with-km .evw-head span:nth-child(5), .evw-with-km .evw-row .evw-trip { grid-column:3; }
-  .evw-with-km .evw-head .evw-head-x { display:none; }
+  /* Kopf nur Tag | Ankunft | Abfahrt — Mind./Fahrt sind an den Feldern beschriftet. */
+  .evw-with-km .evw-head .evw-head-min, .evw-with-km .evw-head .evw-head-trip, .evw-with-km .evw-head .evw-head-x { display:none; }
+  /* Mind. % unter der Abfahrt (Spalte 3), Fahrt links daneben (Spalte 2). */
+  .evw-with-km .evw-row .evw-f-min { grid-column:3; grid-row:2; }
+  .evw-with-km .evw-row .evw-f-trip { grid-column:2; grid-row:2; }
+  .evw-with-km .evw-row .evw-f { flex-wrap:wrap; column-gap:4px; row-gap:1px; }
+  .evw-with-km .evw-row .evw-f .evw-fl { display:block; flex:1 0 100%; }
+  .evw-with-km .evw-row .evw-f .evw-fu { display:inline; }
+  .evw-with-km .evw-row .evw-f input { flex:1 1 0; width:0; min-width:0; }
   .evw-with-km .evw-row button.evw-row-clear { grid-column:1; grid-row:2; min-width:44px; min-height:44px; flex-direction:column; gap:1px; padding:2px; }
   .evw-with-km .evw-row { padding-bottom:4px; border-bottom:1px solid var(--hairline); }
   .evw-with-km .evw-res { padding-left:48px; }

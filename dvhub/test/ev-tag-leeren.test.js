@@ -139,13 +139,10 @@ describe('Wochenplan: einzelnen Tag leeren (Oberfläche)', () => {
     }
   });
 
-  it('Integrationsseite hat einen „Leeren“-Knopf fürs Einmal-Ziel; die Kachel beendet es per „Beenden“ (Dialog seit 11.11.2026)', () => {
-    const tile = fs.readFileSync(path.join(PUB, 'ev-tile.js'), 'utf8');
+  it('Einmal-Ziel beenden geht überall per „Beenden“ im gemeinsamen Baustein; Ankunft im Dialog leeren (seit 11.11.2026)', () => {
     const once = fs.readFileSync(path.join(PUB, 'ev-once.js'), 'utf8');
-    const intg = fs.readFileSync(path.join(PUB, 'integrations.html'), 'utf8');
-    assert.ok(tile.includes('id=\\"evOnceEnd\\"'), 'Kachel: „Beenden“ fürs Einmal-Ziel fehlt');
+    assert.ok(once.includes('data-evo="end"'), '„Beenden“ fürs Einmal-Ziel fehlt');
     assert.ok(once.includes('id="evOnceArrClear"'), 'Dialog: Ankunft leeren fehlt');
-    assert.ok(intg.includes('data-evw-clear="evcc-dep-once evcc-dep-once-min evcc-dep-once-trip"'), 'Integrationsseite: Einmal-Ziel-Leeren fehlt');
   });
 
   it('Cache-Busting: alle Einbindungen von ev-weekly-editor.js/.css und ev-tile.js zeigen auf denselben neuen Stand', () => {

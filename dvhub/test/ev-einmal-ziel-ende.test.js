@@ -69,11 +69,12 @@ describe('describeEvOnce: aktiv, ersetzt, vorher', () => {
     assert.equal(describeEvOnce(withOnce(), onceMs - DEPARTURE_LEAD_MS).departure.effective, false);
   });
 
-  test('Abfahrtsplanung aus: eingetragen, aber nicht wirksam', () => {
+  test('Wochenplan aus: wirkt trotzdem, ersetzt nichts (seit 11.11.2026; Details in ev-einmal-ziel-ohne-wochenplan)', () => {
     const d = describeEvOnce(withOnce({ evDepartureEnabled: false }), at('2026-11-16T19:00:00Z'));
-    assert.equal(d.enabled, false);
+    assert.equal(d.weeklyEnabled, false);
     assert.equal(d.departure.state, 'active');
-    assert.equal(d.departure.effective, false);
+    assert.equal(d.departure.effective, true);
+    assert.equal(d.departure.replaces, null);
   });
 
   test('ohne Einmal-Ziel: departure und arrival null', () => {

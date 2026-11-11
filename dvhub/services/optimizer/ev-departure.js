@@ -271,6 +271,17 @@ function planWindows(plan, timeZone, nowMs) {
 const DAY_MS = 24 * 3600_000;
 
 /**
+ * Die Optionen, nach denen geplant wird: Wochenplan aus (evDepartureEnabled
+ * nicht true) heisst „keine Wochenplan-Abfahrten“ — ein Einmal-Ziel wirkt
+ * trotzdem und ist dann die einzige Abfahrt (Christin 11.11.2026). Die Zeilen
+ * bleiben in der Config stehen, zaehlen aber nicht (auch nicht ihre Ankunft
+ * oder ihr Ziel).
+ */
+function planningOpt(opt = {}) {
+  return opt.evDepartureEnabled === true ? opt : { ...opt, evWeeklyPlan: [] };
+}
+
+/**
  * Einmalige Abfahrt: eingetragener Termin (onceDep) und tatsaechliche Abfahrt
  * (onceAt) — frueher, wenn das Auto davor abgesteckt wurde
  * (optimizer.evDepartureOnceLeftAt), sonst gleich dem Termin. NaN = keine.
@@ -417,7 +428,7 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
  * @returns {{ trips: Array, current: object|null }}  current = laufende Fahrt (Auto unterwegs)
  */
 export function buildEvTrips(cfg, nowMs = Date.now(), { days = 8 } = {}) {
-  const opt = cfg?.optimizer || {};
+  const opt = planningOpt(cfg?.optimizer || {});
   const timeZone = cfg?.schedule?.timezone || 'Europe/Berlin';
   const mode = TARGET_MODES.includes(opt.evTargetMode) ? opt.evTargetMode : 'percent';
   const fallbackMin = targetSocPct({
@@ -477,8 +488,13 @@ export function resolveEvDeparture(cfg, nowMs = Date.now()) {
   const timeZone = cfg?.schedule?.timezone || 'Europe/Berlin';
   const mode = TARGET_MODES.includes(opt.evTargetMode) ? opt.evTargetMode : 'percent';
   const value = Number.isFinite(Number(opt.evTargetValue)) ? Number(opt.evTargetValue) : null;
+  // Abfahrtsplanung an: Wochenplan an ODER ein Einmal-Ziel, das noch kommt
+  // (das wirkt auch bei ausgeschaltetem Wochenplan, 11.11.2026).
+  const weeklyEnabled = opt.evDepartureEnabled === true;
+  const { onceAt } = onceTimes(opt);
+  const onceComing = Number.isFinite(onceAt) && onceAt - DEPARTURE_LEAD_MS > nowMs;
   const base = {
-    enabled: opt.evDepartureEnabled === true, departureAt: null, source: null,
+    enabled: weeklyEnabled || onceComing, weeklyEnabled, departureAt: null, source: null,
     arrivalAt: null, arrivalSource: null, tripStartAt: null, day: null,
     tripSocPct: 0, prevTripSocPct: 0,
     targetSocPct: null, ownTarget: false, mode, value, timeZone
@@ -492,7 +508,7 @@ export function resolveEvDeparture(cfg, nowMs = Date.now()) {
   });
   if (pct === null) return { ...base, reason: 'Ziel nicht berechenbar' };
 
-  const { window: w, tripStartMs, prevTripSocPct } = resolveEvWindow(opt, timeZone, nowMs);
+  const { window: w, tripStartMs, prevTripSocPct } = resolveEvWindow(planningOpt(opt), timeZone, nowMs);
   const tripStartAt = tripStartMs !== null ? new Date(tripStartMs).toISOString() : null;
   const prevTrip = Math.max(0, Number(prevTripSocPct) || 0);
   if (!w) return { ...base, tripStartAt, prevTripSocPct: prevTrip, targetSocPct: pct, reason: 'keine Abfahrt geplant' };
@@ -522,8 +538,9 @@ export function resolveEvDeparture(cfg, nowMs = Date.now()) {
  *              Wochenplan-Abfahrt nicht als Phantom-Fahrt zurueckkommt, bis die
  *              naechste echte Abfahrt vorbei ist; danach raeumt die
  *              Minuten-Wache sie ab (evOnceCleanupPatch).
- * `effective`: aktiv UND die Abfahrtsplanung (evDepartureEnabled) ist an —
- * sonst plant DVhub gar keine Abfahrt, auch keine einmalige.
+ * `effective`: aktiv — seit 11.11.2026 auch bei ausgeschaltetem Wochenplan
+ * (`weeklyEnabled` false): dann ist das Einmal-Ziel die einzige Abfahrt und
+ * ersetzt nichts (`replaces` null).
  * `replaces`: die eine Wochenplan-Abfahrt, die sie ersetzt (Ankunft und —
  * ohne eigenen Wert — Ziel und Fahrt kommen von dort); `weeklyBefore`: wie
  * viele Wochenplan-Abfahrten vorher noch mit ihrem eigenen Ziel kommen.
@@ -534,13 +551,15 @@ export function resolveEvDeparture(cfg, nowMs = Date.now()) {
 export function describeEvOnce(cfg, nowMs = Date.now()) {
   const opt = cfg?.optimizer || {};
   const timeZone = cfg?.schedule?.timezone || 'Europe/Berlin';
-  const enabled = opt.evDepartureEnabled === true;
+  const weeklyEnabled = opt.evDepartureEnabled === true;
+  const popt = planningOpt(opt);
   const gone = (ms) => ms - DEPARTURE_LEAD_MS <= nowMs;
   const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
-  const out = { enabled, leadMinutes: DEPARTURE_LEAD_MS / 60_000, unplugWindowMinutes: ONCE_UNPLUG_WINDOW_MS / 60_000, departure: null, arrival: null };
+  // enabled: wie bisher der Wochenplan-Schalter (das Feld lesen aeltere Seiten).
+  const out = { enabled: weeklyEnabled, weeklyEnabled, leadMinutes: DEPARTURE_LEAD_MS / 60_000, unplugWindowMinutes: ONCE_UNPLUG_WINDOW_MS / 60_000, departure: null, arrival: null };
   const { onceDep, onceAt } = onceTimes(opt);
   if (Number.isFinite(onceDep)) {
-    const plan = effectiveWeeklyPlan(opt);
+    const plan = effectiveWeeklyPlan(popt);
     const pick = supersededWindow(plan, timeZone, onceDep);
     const active = !gone(onceAt);
     const onceMin = pctOrNull(opt.evDepartureOnceMinSocPct);
@@ -557,7 +576,7 @@ export function describeEvOnce(cfg, nowMs = Date.now()) {
     if (active) {
       let t = nowMs;
       for (let guard = 0; guard < 64; guard += 1) {
-        const { window: w } = resolveEvWindow(opt, timeZone, t);
+        const { window: w } = resolveEvWindow(popt, timeZone, t);
         if (!w || w.source === 'once' || w.departureMs >= onceDep) break;
         if (nextWeeklyAt === null) nextWeeklyAt = iso(w.departureMs);
         weeklyBefore += 1;
@@ -569,7 +588,8 @@ export function describeEvOnce(cfg, nowMs = Date.now()) {
       // abgesteckt vor dem Termin: dann los (sonst null)
       leftAt: onceAt !== onceDep ? iso(onceAt) : null,
       state: active ? 'active' : 'ended',
-      effective: active && enabled,
+      // wirkt immer, solange es kommt — auch bei ausgeschaltetem Wochenplan
+      effective: active,
       minSocPct: onceMin,
       tripSocPct: onceTrip,
       // Was bei dieser Abfahrt gilt: eigenes Ziel, sonst das der ersetzten Zeile, sonst das allgemeine.
@@ -582,9 +602,9 @@ export function describeEvOnce(cfg, nowMs = Date.now()) {
   }
   const onceArr = Date.parse(opt.evArrivalOnce || '');
   if (Number.isFinite(onceArr)) {
-    const { window: w } = resolveEvWindow(opt, timeZone, nowMs);
+    const { window: w } = resolveEvWindow(popt, timeZone, nowMs);
     const active = !!w && w.arrivalSource === 'once' && w.arrivalMs === onceArr;
-    out.arrival = { at: iso(onceArr), state: active ? 'active' : (onceArr <= nowMs ? 'ended' : 'pending'), effective: active && enabled };
+    out.arrival = { at: iso(onceArr), state: active ? 'active' : (onceArr <= nowMs ? 'ended' : 'pending'), effective: active };
   }
   return out;
 }
@@ -603,7 +623,8 @@ export function describeEvOnce(cfg, nowMs = Date.now()) {
  * fliegen gleich raus.
  */
 export function evOnceCleanupPatch(cfg, nowMs = Date.now()) {
-  const opt = cfg?.optimizer || {};
+  // Verglichen wird, wonach geplant wird: Wochenplan aus = keine Wochenplan-Abfahrten.
+  const opt = planningOpt(cfg?.optimizer || {});
   const timeZone = cfg?.schedule?.timezone || 'Europe/Berlin';
   const gone = (ms) => ms - DEPARTURE_LEAD_MS <= nowMs;
   const same = (a, b) => JSON.stringify(resolveEvWindow(a, timeZone, nowMs)) === JSON.stringify(resolveEvWindow(b, timeZone, nowMs));
