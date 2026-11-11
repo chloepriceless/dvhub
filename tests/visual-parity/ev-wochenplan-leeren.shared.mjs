@@ -112,6 +112,9 @@ export async function integrationsFlow(page, request, testInfo, { touchMin }) {
   // Wallbox-Schublade öffnen (Karte; inline-Ansicht zeigt sie ggf. schon).
   const weekly = page.locator('#evcc-dep-weekly');
   if (!(await weekly.isVisible())) await press(page, page.locator('.conn-card', { hasText: 'Wallbox' }).first());
+  // Die Schublade baut den Editor nach dem Laden der Daten neu auf — erst danach
+  // greifen (sonst „Element is not attached to the DOM“, gelegentlich).
+  await page.waitForLoadState('networkidle');
   const row = weekly.locator('.evw-row[data-day="3"]');
   await expect(row.locator('.evw-dep')).toHaveValue('07:30');
   await expect(row.locator('.evw-min')).toHaveValue('60');
