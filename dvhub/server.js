@@ -51,6 +51,7 @@ import { createBundesnetzagenturApplicableValueService } from './bundesnetzagent
 import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
 import { restoreRedacted, redactUrlCreds } from './config-redaction.js';
 import { readAppVersionInfo } from './app-version.js';
+import { computeUiBuildId } from './ui-build.js';
 import {
   createMarketAutomationBuilder
 } from './market-automation-builder.js';
@@ -301,6 +302,11 @@ if (!cfg.apiToken || cfg.apiToken === '') {
   }
 }
 const APP_VERSION = readAppVersionInfo({ appDir: __dirname });
+// T-0423: Build-Kennung der Oberfläche (Version + Inhalt von public/), als
+// Kopfzeile X-DVhub-Build an jeder JSON-Antwort — die offene Seite lädt nach
+// einem Update neu (public/build-watch.js).
+let APP_BUILD = null;
+try { APP_BUILD = computeUiBuildId({ appDir: __dirname, versionLabel: APP_VERSION.versionLabel }); } catch (e) { console.warn('[ui-build] Kennung nicht berechnet:', e?.message || e); }
 const APPLICABLE_VALUES_CACHE_PATH = path.join(
   DATA_DIR || __dirname,
   'reference-data',
@@ -2132,6 +2138,7 @@ ctx.getRawCfg = () => rawCfg;
 ctx.getLoadedConfig = () => loadedConfig;
 ctx.getConfigDefinition = () => CONFIG_DEFINITION;
 ctx.getAppVersion = () => APP_VERSION;
+ctx.getAppBuild = () => APP_BUILD;
 ctx.getTransportType = () => transport.type;
 ctx.getAppDir = () => __dirname;
 ctx.getDataDir = () => DATA_DIR || __dirname;

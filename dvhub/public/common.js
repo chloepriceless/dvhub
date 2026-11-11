@@ -99,6 +99,24 @@
     return url.toString();
   }
 
+  // T-0423: jede API-Antwort an Beobachter (build-watch.js) — die Kopfzeile
+  // x-dvhub-build verrät nach einem Update die neue Oberflächen-Version, ein
+  // erfolgreicher Schreibaufruf heißt „gespeichert“. So reichen die
+  // vorhandenen Status-Abfragen jeder Seite, kein eigener Dauer-Poll.
+  const apiResponseObservers = [];
+  function onApiResponse(fn) {
+    if (typeof fn === 'function') apiResponseObservers.push(fn);
+  }
+  function notifyApiResponse(method, response) {
+    if (!apiResponseObservers.length) return;
+    let build = null;
+    try { build = response.headers.get('x-dvhub-build'); } catch { /* ignore */ }
+    const info = { build, ok: response.ok, status: response.status, write: method !== 'GET' && method !== 'HEAD' };
+    for (const fn of apiResponseObservers) {
+      try { fn(info); } catch (err) { console.debug('[apiFetch] observer failed', err); }
+    }
+  }
+
   async function apiFetch(path, options = {}) {
     const headers = new Headers(options.headers || {});
     const token = getStoredApiToken();
@@ -107,6 +125,7 @@
     if (response.status === 401) {
       window.dispatchEvent(new CustomEvent('dvhub:unauthorized'));
     }
+    notifyApiResponse(String(options.method || 'GET').toUpperCase(), response);
     return response;
   }
 
@@ -334,6 +353,7 @@
 
   window.DVhubCommon = {
     apiFetch,
+    onApiResponse,      // T-0423 — build-watch.js: Build-Kennung + Speichern aus jeder Antwort
     buildApiUrl,
     escapeHtml,
     round2,             // Sweep package 6 — shared frontend 2-decimal rounding helper

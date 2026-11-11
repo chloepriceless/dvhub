@@ -1196,10 +1196,15 @@ export function createApiRoutes(ctx) {
   // ── Response helpers ─────────────────────────────────────────────────
   function json(res, code, payload) {
     const body = JSON.stringify(payload);
+    // T-0423: Build-Kennung der Oberfläche (ui-build.js) an jeder JSON-Antwort —
+    // die offene Seite erkennt daran im vorhandenen Status-Poll ein Update und
+    // lädt neu (public/build-watch.js). Nur ein Hash, nichts Internes.
+    const build = typeof ctx.getAppBuild === 'function' ? ctx.getAppBuild() : null;
     res.writeHead(code, {
       ...SECURITY_HEADERS,
       'content-type': 'application/json; charset=utf-8',
-      'content-length': Buffer.byteLength(body, 'utf8')
+      'content-length': Buffer.byteLength(body, 'utf8'),
+      ...(build ? { 'x-dvhub-build': build } : {})
     });
     res.end(body);
   }

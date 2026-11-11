@@ -595,3 +595,38 @@ h1,h2,h3,h4 { font-family:var(--f-brand); font-weight:600; letter-spacing:-.018e
   color: var(--text);
   margin: 1rem 0;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   NEUE VERSION (T-0423, build-watch.js)
+   ─────────────────────────────────────────────────────────────
+   Nicht blockierender Hinweis oben mittig (unten liegt in den
+   Einstellungen die Speicherleiste): „Neue DVhub-Version
+   installiert — neu laden“. Über Dialogen und Seitenleisten,
+   damit er beim Warten auf „fertig bearbeitet“ sichtbar bleibt. */
+.dv-build-notice {
+  position:fixed; z-index:10050;
+  top:calc(64px + env(safe-area-inset-top, 0px));
+  left:50%; transform:translateX(-50%);
+  width:min(560px, calc(100vw - 24px)); box-sizing:border-box;
+  display:flex; align-items:center; gap:var(--gap-3);
+  padding:var(--gap-3) var(--gap-4);
+  background:var(--bg-1); color:var(--text);
+  border:1px solid var(--accent); border-radius:var(--r-lg);
+  box-shadow:var(--shadow-lg), 0 0 0 3px var(--accent-glow);
+  font-family:var(--f-body);
+}
+.dv-build-notice[hidden] { display:none; }
+.dv-build-notice-text { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.dv-build-notice-title { font-size:14px; font-weight:600; color:var(--text); }
+.dv-build-notice-sub { font-size:12.5px; color:var(--text-2); }
+.dv-build-notice-reload { flex:0 0 auto; }
+.dv-build-notice-close { flex:0 0 auto; min-width:32px; padding-left:var(--gap-2); padding-right:var(--gap-2); font-size:18px; line-height:1; }
+.dv-build-notice-close[hidden] { display:none; }
+@media (max-width:520px) {
+  .dv-build-notice { flex-wrap:wrap; }
+  .dv-build-notice-text { flex-basis:100%; }
+}
+@media (prefers-reduced-motion:no-preference) {
+  .dv-build-notice:not([hidden]) { animation:dv-build-notice-in .2s ease-out; }
+}
+@keyframes dv-build-notice-in { from { opacity:0; } to { opacity:1; } }
