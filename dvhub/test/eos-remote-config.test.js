@@ -1,39 +1,61 @@
-// test/eos-remote-config.test.js — Einstellungen für EOS im Fernbetrieb.
+// test/eos-remote-config.test.js — Einstellungen für EOS im Fernbetrieb (seit 1.0.10 abgeschaltet).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getConfigDefinition, createDefaultConfig, normalizeConfigInput } from '../config-model.js';
+import { getConfigDefinition, createDefaultConfig, normalizeConfigInput, loadConfigFile, EOS_REMOTE_MODE_MIGRATION_WARNING } from '../config-model.js';
 import { REDACTED_PATHS, redactConfig } from '../config-redaction.js';
 import { isAllowedRemoteEndpoint, readEosPin, DEFAULT_REMOTE_EOS_VERSION, remoteSettings } from '../services/optimizer/eos-remote.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-test('Felder mit deutschen Beschriftungen, Standard: aus / lokal', () => {
+// Seit 1.0.10 (Christin 11.11.2026): kein Fernbetrieb mehr. Betriebsart und
+// remote.* verschwinden aus der Oberfläche; gespeicherte Werte bleiben, nur
+// 'remote' wird beim Laden zu 'local' (mit Hinweis).
+test('Oberfläche: keine Betriebsart und keine Rechendienst-Felder mehr; Vorgabe lokal', () => {
   const fields = Object.fromEntries(getConfigDefinition().fields.map((f) => [f.path, f]));
-  const mode = fields['optimizer.eosProxy.mode'];
-  assert.ok(mode, 'Betriebsart-Feld fehlt');
-  assert.equal(mode.type, 'select');
-  assert.deepEqual(mode.options.map((o) => o.value), ['local', 'remote']);
-  for (const p of ['optimizer.eosProxy.remote.endpoint', 'optimizer.eosProxy.remote.token', 'optimizer.eosProxy.remote.localFallback',
-    'optimizer.eosProxy.remote.debugBundle', 'optimizer.eosProxy.remote.jobTimeoutMs']) {
-    assert.ok(fields[p], `${p} fehlt`);
-    assert.ok(/[äöüÄÖÜß]|[A-Z][a-z]/.test(fields[p].label), `${p}: Beschriftung`);
+  for (const p of ['optimizer.eosProxy.mode', 'optimizer.eosProxy.remote.endpoint', 'optimizer.eosProxy.remote.token',
+    'optimizer.eosProxy.remote.localFallback', 'optimizer.eosProxy.remote.debugBundle', 'optimizer.eosProxy.remote.jobTimeoutMs']) {
+    assert.equal(fields[p], undefined, `${p} darf nicht mehr angeboten werden`);
   }
-  assert.equal(fields['optimizer.eosProxy.remote.token'].type, 'password');
+  assert.ok(fields['optimizer.eosProxy.url'], 'Adresse des EOS bleibt');
   const d = createDefaultConfig().optimizer.eosProxy;
   assert.equal(d.enabled, false);
   assert.equal(d.mode, 'local');
-  assert.deepEqual(d.remote, { endpoint: '', token: '', tokenEndpoint: '', jobTimeoutMs: 1_200_000, localFallback: false, debugBundle: false });
 });
 
-test('Betriebsart remote bleibt beim Normalisieren erhalten', () => {
-  const r = normalizeConfigInput({ optimizer: { eosProxy: { enabled: true, mode: 'remote', remote: { endpoint: 'https://eos.example.invalid', token: 'dves_x' } } } });
-  const p = r.effectiveConfig?.optimizer?.eosProxy || r.persistedConfig.optimizer.eosProxy;
-  assert.equal(p.mode, 'remote');
-  assert.equal(p.remote.endpoint, 'https://eos.example.invalid');
-  assert.equal(p.remote.token, 'dves_x');
+test('gespeichertes remote → beim Laden lokal, mit Hinweis; Anmeldedaten bleiben stehen', () => {
+  const r = normalizeConfigInput({ optimizer: { eosProxy: { enabled: true, mode: 'remote', url: 'http://127.0.0.1:8503', remote: { endpoint: 'https://eos.example.invalid', token: 'dves_x' } } } });
+  for (const p of [r.persistedConfig.optimizer.eosProxy, r.effectiveConfig.optimizer.eosProxy]) {
+    assert.equal(p.mode, 'local');
+    assert.equal(p.enabled, true, 'EOS bleibt eingeschaltet');
+    assert.equal(p.remote.endpoint, 'https://eos.example.invalid');
+    assert.equal(p.remote.token, 'dves_x');
+  }
+  assert.ok(r.warnings.includes(EOS_REMOTE_MODE_MIGRATION_WARNING), JSON.stringify(r.warnings));
+  assert.match(EOS_REMOTE_MODE_MIGRATION_WARNING, /seit 1\.0\.10/);
+});
+
+test('lokal oder ohne Betriebsart: kein Hinweis; ungültiger Wert → lokal', () => {
+  for (const mode of ['local', undefined]) {
+    const r = normalizeConfigInput({ optimizer: { eosProxy: { enabled: true, ...(mode ? { mode } : {}) } } });
+    assert.equal(r.persistedConfig.optimizer.eosProxy.mode, 'local');
+    assert.ok(!r.warnings.includes(EOS_REMOTE_MODE_MIGRATION_WARNING));
+  }
+  assert.equal(normalizeConfigInput({ optimizer: { eosProxy: { mode: 'irgendwas' } } }).persistedConfig.optimizer.eosProxy.mode, 'local');
+});
+
+test('loadConfigFile: gespeichertes remote → Hinweis in den Warnungen (Protokoll [config], Einstellungen)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-eosremote-'));
+  try {
+    const file = path.join(dir, 'config.json');
+    fs.writeFileSync(file, JSON.stringify({ optimizer: { eosProxy: { enabled: true, mode: 'remote' } } }));
+    const loaded = loadConfigFile(file);
+    assert.equal(loaded.effectiveConfig.optimizer.eosProxy.mode, 'local');
+    assert.ok(loaded.warnings.includes(EOS_REMOTE_MODE_MIGRATION_WARNING));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('Box-Token wird wie andere Tokens geschwärzt', () => {

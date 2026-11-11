@@ -149,7 +149,10 @@ EOS nativ rechnet. Wheels gibt es für x86_64, aarch64 und armv7l (glibc); auf
 anderen Plattformen (z. B. armv6l: Raspberry Pi 1/Zero) rechnet EOS ausdrücklich
 in Python, die Installation warnt. Boxen mit Vanilla `v0.4.0rc3` oder dem
 früheren eigenen Fork wechseln beim nächsten Update automatisch, die EOS-Daten
-werden vorher gesichert. Mit `--no-eos` lässt sich das
+werden vorher gesichert. Den Fernbetrieb im DVhub-Rechendienst gibt es seit
+1.0.10 nicht mehr (EOS rechnet mit dem Rust-Kern überall lokal schnell genug);
+eine gespeicherte Einstellung „Im DVhub-Rechendienst“ wird beim Start auf lokal
+umgestellt. Mit `--no-eos` lässt sich das
 überspringen (z. B. auf RAM-armen/Headless-Boxen); die interne MILP-/Heuristik-
 Optimierung läuft auch ohne EOS. (`--with-eos` bleibt als kompatibler No-op
 erhalten, da EOS jetzt Default ist.)

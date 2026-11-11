@@ -1,4 +1,6 @@
 // test/eos-remote.test.js — EOS im Fernbetrieb (optimizer.eosProxy.mode = 'remote').
+// Seit 1.0.10 abgeschaltet (eos-remote.js ruht); die Fassade bleibt als
+// Dienst-Vertrag getestet.
 //
 // DVhub startet eine lokale EOS-Fassade; alle EOS-Module schreiben wie gewohnt
 // an „EOS“. Die Fassade sammelt Konfiguration, Prognosen und Messwerte und
@@ -124,30 +126,33 @@ async function req(base, method, path, body) {
 
 // ---------------------------------------------------------------------------
 
-describe('Fernbetrieb: Auflösung und Schalter', () => {
-  it('local bleibt wie bisher; remote zeigt auf die Fassade, sobald sie läuft', () => {
+// Seit 1.0.10 abgeschaltet (Christin 11.11.2026): eine gespeicherte
+// Betriebsart 'remote' wirkt wie 'local' — EOS unter optimizer.eosProxy.url,
+// keine Fassade, normales Lauf-Verhalten, Neustart-Knopf wie lokal. Die
+// Fassade selbst (unten) ruht und bleibt als Dienst-Vertrag getestet.
+describe('Fernbetrieb abgeschaltet: Auflösung und Schalter', () => {
+  it('remote zeigt auf das EOS unter der Adresse, auch wenn eine Fassade gemeldet wird', () => {
     const local = resolveEosProxy({ optimizer: { eosProxy: { enabled: true, url: 'http://10.0.0.5:8503' } } });
     assert.equal(local.url, 'http://10.0.0.5:8503');
     assert.equal(local.mode, 'local');
     const cfg = makeCfg('https://eos.example.invalid');
-    const before = resolveEosProxy(cfg);
-    assert.equal(before.mode, 'remote');
-    assert.notEqual(before.url, 'http://127.0.0.1:8503', 'nie das lokale EOS ansprechen');
     setEosRemoteFacadeUrl('http://127.0.0.1:45678');
-    assert.equal(resolveEosProxy(cfg).url, 'http://127.0.0.1:45678');
-    assert.equal(eosRemoteActive(cfg), true);
-    assert.equal(eosRemoteActive({ optimizer: { eosProxy: { enabled: false, mode: 'remote' } } }), false);
+    const r = resolveEosProxy(cfg);
+    assert.equal(r.mode, 'local');
+    assert.equal(r.url, 'http://127.0.0.1:8503');
+    assert.equal(eosRemoteActive(cfg), false);
   });
 
-  it('im Fernbetrieb stößt DVhub jeden Lauf an (eosStartAfterPreviousRun gilt nicht)', () => {
+  it('eosStartAfterPreviousRun gilt wieder (kein Zwang zum Anstoßen durch den Fernbetrieb)', () => {
     const cfg = makeCfg('https://x.invalid');
-    cfg.optimizer.eosStartAfterPreviousRun = true;
     assert.equal(dvhubTriggersEosRuns(cfg), true);
+    cfg.optimizer.eosStartAfterPreviousRun = true;
+    assert.equal(dvhubTriggersEosRuns(cfg), false);
   });
 
-  it('kein Neustart-Knopf für den Rechendienst', () => {
+  it('Neustart-Knopf wie bei einem lokalen EOS', () => {
     setEosRemoteFacadeUrl('http://127.0.0.1:45678');
-    assert.deepEqual(eosRestartability(makeCfg('https://x.invalid')), { ok: false, reason: 'remote' });
+    assert.deepEqual(eosRestartability(makeCfg('https://x.invalid')), { ok: true, reason: null });
   });
 });
 
@@ -356,7 +361,9 @@ describe('Fernbetrieb: EOS-Fassade', () => {
   });
 });
 
-describe('Fernbetrieb: DVhubs EOS-Module sprechen unverändert mit der Fassade', () => {
+// Ruhende Fassade: weiter EOS-kompatibel (falls der Fernbetrieb je zurückkommt).
+// Sie wird hier als „EOS unter optimizer.eosProxy.url“ angesprochen.
+describe('Fernbetrieb (ruhend): DVhubs EOS-Module sprechen unverändert mit der Fassade', () => {
   it('Abgleich, Prognose-Push, Ladestand und Lauf landen über die Fassade im Auftrag; Plan kommt zurück', async () => {
     const { createEosConfigSync } = await import('../services/optimizer/eos-config-sync.js');
     const { createEosForecastBridge } = await import('../services/optimizer/eos-forecast-bridge.js');
@@ -366,7 +373,7 @@ describe('Fernbetrieb: DVhubs EOS-Module sprechen unverändert mit der Fassade',
     cfg.optimizer.batteryCapacityWh = 12000;
     cfg.optimizer.eosOptimizationIntervalSec = 900;
     const { url, state } = await startFacade(cfg);
-    setEosRemoteFacadeUrl(url);
+    cfg.optimizer.eosProxy.url = url;
     state.victron = { soc: 63 };
     const ctx = { getCfg: () => cfg, pushLog: () => {}, state };
 

@@ -247,6 +247,13 @@ verweist hierher.
   der Zahl nach kleiner als `0.4.0rc3` — DVhub vergleicht EOS-Stände deshalb nur auf Gleichheit und erkennt EOS an
   seiner Konfiguration. Die CI baut das Image für amd64 und arm64 aus dem Fork-Tag; das schlanke `dvhub-eos-slim`
   trägt denselben Docker-Tag und prüft den neuen Namen des Healthcheck-Moduls (`containerhealthcheck`).
+- **EOS-Fernbetrieb (DVhub-Rechendienst) entfällt** (Christin 11.11.2026): Mit dem Rust-Kern rechnet DVhub-EOS auch
+  auf schwacher Hardware schnell genug lokal. „Wo rechnet EOS?“ und die Rechendienst-Felder sind aus den
+  Einstellungen verschwunden; eine gespeicherte Betriebsart `remote` wird beim Laden zu `local` (EOS unter
+  `optimizer.eosProxy.url`), mit Hinweis im Protokoll (`[config]`) und in der Warnungszahl der Einstellungen —
+  übernommen wird sie mit dem nächsten Speichern; Adresse und Token des Dienstes bleiben stehen. Der Code
+  (`services/optimizer/eos-remote.js`) ruht statt gelöscht zu werden: `eosRemoteActive()` ist immer `false`,
+  `resolveEosProxy()` kennt nur noch `local`.
 - **Not-Halt „als ob DVhub aus ist“** (Christin 06./07./10.11.2026). Der Not-Halt nimmt jede eigene Vorgabe von
   DVhub genau einmal zurück — nur, wo DVhub gerade selbst vorgibt; im Zweifel sendet er nichts — und schreibt danach
   nichts mehr an die Anlage, ohne Wiederholung. Messwerte, Protokoll und Status laufen weiter. Neu ausgesetzt sind

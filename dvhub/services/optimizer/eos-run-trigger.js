@@ -46,8 +46,7 @@ export const EOS_RUN_STARTUP_GRACE_MS = 60 * 60_000;
  * DVhub dann wieder minütlich schreibt.
  */
 export function dvhubTriggersEosRuns(cfg) {
-  // Fernbetrieb: der Rechendienst rechnet nur auf Auftrag (eos-remote.js).
-  if (cfg?.optimizer?.eosProxy?.mode === 'remote') return true;
+  // (Bis 1.0.9 erzwang der Fernbetrieb hier true; seit 1.0.10 gibt es ihn nicht mehr.)
   return cfg?.optimizer?.eosStartAfterPreviousRun !== true;
 }
 

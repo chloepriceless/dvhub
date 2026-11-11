@@ -1,4 +1,4 @@
-// test/eos-remote-routes.test.js — Oberfläche/API für EOS im Fernbetrieb.
+// test/eos-remote-routes.test.js — Oberfläche/API für EOS im Fernbetrieb (seit 1.0.10 abgeschaltet).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApiRoutes } from '../routes-api.js';
@@ -128,11 +128,13 @@ const REMOTE_STATE = {
   diagnostics: { eosVersion: 'v0.4.0rc3', runMs: 41234, workers: 4, costs: { netAmt: 0.73 }, warnings: ['Tail forecast shortened'] },
 };
 
-test('GET /api/eos/plan — im Fernbetrieb mit Abschnitt „EOS-Rechendienst“ (ohne Token)', async () => {
+// Seit 1.0.10 ist der Fernbetrieb abgeschaltet: eine (noch nicht migrierte)
+// Betriebsart 'remote' wirkt wie 'local' — kein Abschnitt „EOS-Rechendienst“,
+// kein Token in der Antwort.
+test('GET /api/eos/plan — gespeichertes remote: kein Abschnitt „EOS-Rechendienst“ (Fernbetrieb aus)', async () => {
   const eosMonitor = monitorStub();
   const body = JSON.parse((await dispatch(mockCtx({ eosMonitor, eosProxy: REMOTE_PROXY, eosRemoteState: REMOTE_STATE }), makeReq('/api/eos/plan'))).body);
-  assert.equal(body.remote.lastRunMs, 41234);
-  assert.deepEqual(body.remote.diagnostics.warnings, ['Tail forecast shortened']);
+  assert.equal(body.remote ?? null, null);
   assert.doesNotMatch(JSON.stringify(body), /dves_geheim/);
 });
 
@@ -141,10 +143,10 @@ test('GET /api/eos/plan — lokal: kein remote-Abschnitt', async () => {
   assert.equal(body.remote ?? null, null);
 });
 
-test('GET /api/integrations/dveos — nennt Betriebsart und Dienst-Zustand', async () => {
+test('GET /api/integrations/dveos — gespeichertes remote: Betriebsart lokal, kein Dienst-Zustand', async () => {
   const body = JSON.parse((await dispatch(mockCtx({ eosMonitor: monitorStub(), eosProxy: REMOTE_PROXY, eosRemoteState: REMOTE_STATE }), makeReq('/api/integrations/dveos'))).body);
-  assert.equal(body.mode, 'remote');
-  assert.equal(body.remote.endpointHost, 'eos.example.invalid');
+  assert.equal(body.mode, 'local');
+  assert.equal(body.remote ?? null, null);
   assert.doesNotMatch(JSON.stringify(body), /dves_geheim/);
 });
 
@@ -160,10 +162,10 @@ test('GET /api/eos/remote/debug — Diagnosepaket herunterladen; ohne Paket 404;
   assert.equal(noAuth.status, 401);
 });
 
-test('POST /api/eos/sync-from-dvhub — im Fernbetrieb abgelehnt (Abgleich läuft automatisch)', async () => {
+test('POST /api/eos/sync-from-dvhub — gespeichertes remote wird nicht mehr abgelehnt (EOS lokal)', async () => {
   const req = makeReq('/api/eos/sync-from-dvhub', { method: 'POST' });
   req.resume = () => {};
-  const r = await dispatch(mockCtx({ eosProxy: REMOTE_PROXY }), req);
-  assert.equal(r.status, 409);
-  assert.equal(JSON.parse(r.body).error, 'eos_remote_mode');
+  const r = await dispatch(mockCtx({ eosProxy: { ...REMOTE_PROXY, url: 'http://127.0.0.1:9' } }), req);
+  assert.notEqual(r.status, 409);
+  assert.notEqual(JSON.parse(r.body).error, 'eos_remote_mode');
 });

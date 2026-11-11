@@ -42,14 +42,15 @@ export function resolveEosProxy(cfg = {}) {
   const p = cfg?.optimizer?.eosProxy || {};
   const timeoutMs = Number(p.timeoutMs);
   const localUrl = p.url || 'http://127.0.0.1:8503';
-  // Fernbetrieb (eos-remote.js): alle EOS-Module sprechen mit der lokalen
-  // Fassade. Läuft sie (noch) nicht, zeigt die Adresse ins Leere — nie auf das
-  // lokale EOS, sonst gingen Abgleich und Prognosen an die falsche Stelle.
-  const mode = p.mode === 'remote' ? 'remote' : 'local';
+  // Fernbetrieb (eos-remote.js) seit 1.0.10 abgeschaltet: immer das EOS unter
+  // optimizer.eosProxy.url, auch wenn eine alte Config noch 'remote' trägt
+  // (config-model.js migriert sie beim Laden). Bis 1.0.9 zeigte 'remote' hier
+  // auf die lokale Fassade (setEosRemoteFacadeUrl, ruht).
+  const mode = 'local';
   return {
     enabled: p.enabled === true,
     mode,
-    url: mode === 'remote' ? (remoteFacadeUrl || EOS_REMOTE_FACADE_UNAVAILABLE) : localUrl,
+    url: localUrl,
     localUrl,
     timeoutMs: timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS
   };
@@ -69,11 +70,12 @@ export function eosTargetKey(cfg = {}) {
 
 // Port 9 (discard): verbindet nie — EOS gilt dann als nicht erreichbar.
 export const EOS_REMOTE_FACADE_UNAVAILABLE = 'http://127.0.0.1:9';
-let remoteFacadeUrl = null;
-/** Adresse der laufenden EOS-Fassade (Fernbetrieb) setzen oder löschen. */
-export function setEosRemoteFacadeUrl(url) {
-  remoteFacadeUrl = url || null;
-}
+/**
+ * Adresse der EOS-Fassade (Fernbetrieb) setzen oder löschen — seit 1.0.10 ohne
+ * Wirkung: die Fassade startet nicht mehr (eosRemoteActive() ist immer false),
+ * resolveEosProxy() zeigt immer auf das EOS unter optimizer.eosProxy.url.
+ */
+export function setEosRemoteFacadeUrl(_url) {}
 
 /**
  * Create a bidirectional EOS adapter for co-hosted Akkudoktor EOS integration.

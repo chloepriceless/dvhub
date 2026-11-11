@@ -1,5 +1,15 @@
 // services/optimizer/eos-remote.js — EOS im Fernbetrieb (optimizer.eosProxy.mode = 'remote').
 //
+// SEIT 1.0.10 ABGESCHALTET (Christin 11.11.2026): DVhub liefert DVhub-EOS immer
+// mit Rust-Kern aus, der Fernbetrieb wird nicht mehr gebraucht. Das Modul
+// bleibt (ruhend) stehen, statt gelöscht zu werden: eosRemoteActive() ist der
+// einzige Schalter für Fassade, Lauf-Hinweis und Prognose-Horizont und liefert
+// immer false; resolveEosProxy() (eos-adapter.js) kennt nur noch 'local', und
+// config-model.js migriert gespeicherte 'remote' beim Laden auf 'local'. So
+// bleiben Server-Lebenszyklus, Routen und Oberfläche unverändert (kein Umbau
+// kurz vor dem Release), der Dienst-Vertrag (privates Repo dvhub-eos-service)
+// bleibt dokumentiert und getestet, und ein Rückweg wäre eine Zeile.
+//
 // Boxen mit schwacher Hardware lassen ihren EOS-Plan von einem Rechendienst
 // rechnen. Damit das Regelverhalten GENAU gleich bleibt, ändert sich an den
 // EOS-Modulen nichts: DVhub startet eine EOS-Fassade auf 127.0.0.1, und
@@ -92,10 +102,12 @@ const PRED_KEEP_MS = 2 * 24 * 3600_000;
 const MAX_ROWS = 2000;
 const MAX_BODY = 8 * 1024 * 1024;
 
-/** Fernbetrieb eingeschaltet? */
-export function eosRemoteActive(cfg) {
-  const p = cfg?.optimizer?.eosProxy || {};
-  return p.enabled === true && p.mode === 'remote';
+/**
+ * Fernbetrieb eingeschaltet? Seit 1.0.10 nie (siehe Kopf): eine noch
+ * gespeicherte Betriebsart 'remote' gilt als 'local'.
+ */
+export function eosRemoteActive(_cfg) {
+  return false;
 }
 
 export function remoteSettings(cfg) {
