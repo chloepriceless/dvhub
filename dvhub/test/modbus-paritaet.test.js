@@ -322,15 +322,22 @@ test('A7: setEmergencyStop setzt die Schreib-Sperre, bevor es neutralisiert', as
   const { modbusWriteFenceGeneration } = await import('../transport-modbus.js');
   const { setEmergencyStop } = await import('../services/control-commands.js');
   const before = modbusWriteFenceGeneration();
-  let genAtNeutralize = null;
+  // Seit 10.11.2026 (Netz-Sollwert unverändert) schreibt der Eintritt keinen
+  // Sollwert mehr; die einmaligen Rücknahmen (Wallbox, Einspeisegrenze …) müssen
+  // aber alle hinter der Sperre eingereiht werden.
+  const genAt = {};
+  let setpointWrites = 0;
   const ctx = {
     state: { ctrl: {} },
     pushLog: () => {},
-    applyControlTarget: async () => { genAtNeutralize = modbusWriteFenceGeneration(); return { ok: true }; },
+    applyControlTarget: async () => { setpointWrites += 1; return { ok: true }; },
+    eosEvccBridge: { emergencyStop: async () => { genAt.wallbox = modbusWriteFenceGeneration(); return { ok: true }; } },
+    feedInLimit: { emergencyStop: async () => { genAt.feedInLimit = modbusWriteFenceGeneration(); return { ok: true }; } },
   };
   const r = await setEmergencyStop(ctx, { on: true });
   assert.equal(r.ok, true);
-  assert.equal(genAtNeutralize, before + 1);
+  assert.equal(setpointWrites, 0, 'kein Netz-Sollwert beim Eintritt');
+  assert.deepEqual(genAt, { wallbox: before + 1, feedInLimit: before + 1 });
   // Schon im Not-Halt: keine zweite Sperre nötig.
   await setEmergencyStop(ctx, { on: true });
   assert.equal(modbusWriteFenceGeneration(), before + 1);
