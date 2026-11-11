@@ -17,11 +17,11 @@ test.describe('E-Auto-Wochenplan am iPhone: Tag leeren', () => {
   test.beforeEach(async ({ request }) => { before = await seed(request); });
   test.afterEach(async ({ request }) => { await restore(request, before); });
 
-  test('Integrationsseite: „Mittwoch leeren“ tippen → Speichern → Konfig zeigt Mittwoch leer', async ({ page, request }, testInfo) => {
+  test('Integrationsseite: Mittwoch per Schalter heraus, Dienstag im Blatt 90 % → Speichern → Konfig', async ({ page, request }, testInfo) => {
     await integrationsFlow(page, request, testInfo, { touchMin: 44 });
   });
 
-  test('Leitstand-Kachel: „Mittwoch leeren“ tippen → Übernehmen schickt den Tag als nicht gesetzt', async ({ page, request }, testInfo) => {
+  test('Leitstand-Kachel: Mittwoch per Schalter heraus → Übernehmen schickt den Tag als nicht gesetzt', async ({ page, request }, testInfo) => {
     await tileFlow(page, request, testInfo, { touchMin: 44 });
   });
 });

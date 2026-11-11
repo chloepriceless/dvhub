@@ -85,8 +85,8 @@ verweist hierher.
     mit Mindestziel und Frist und kommen zuerst — auch bei einem Ziel in Wochen. Welche Abfahrt ersetzt ist, hängt
     nicht davon ab, wann man nachsieht.
     **Bedienung in der Kachel (11.11.2026):** statt dauerhafter Felder der Knopf **„Einmalige Abfahrt planen“** mit
-    Dialog (Abfahrt als Datum + Uhrzeit, mindestens %, unter „Mehr“ Fahrt % und „Nur nächste Ankunft“; am Handy als
-    Blatt von unten). Solange es gilt, zeigt die Kachel **„Einmal-Ziel aktiv: Fr 14.11. 07:30 · mindestens 80 %“**
+    Dialog (Abfahrt als Datum + Uhrzeit, mindestens %, unter „Erweitert“ Verbrauch der Fahrt und einmal „zuhause ab“;
+    am Handy als Blatt von unten). Solange es gilt, zeigt die Kachel **„Einmalig: Fr 14.11. 07:30 · mind. 80 %“**
     mit „Ändern“/„Beenden“ und was es bewirkt (ersetzte Wochenplan-Abfahrt, welche davor noch gilt, wann es endet).
     **Ende von selbst:** zur Abfahrt (10 min Vorlauf) bzw. beim Abstecken in der halben Stunde davor; danach räumt
     DVhub das Einmal-Ziel (und eine vergangene einmalige Ankunft) aus der Konfiguration, sobald es an der Planung
@@ -97,9 +97,25 @@ verweist hierher.
     wird sofort über `/api/ev` (Anmeldung + Pro, wie die übrige E-Auto-Planung). **Wirkt auch bei ausgeschaltetem
     Wochenplan:** dann ist das Einmal-Ziel die einzige Abfahrt (Frist und Ziel an EOS, Wertstufen, Vorplanung), der
     Wochenplan bleibt aus, nach der Abfahrt plant DVhub wieder keine.
-  - **Wochenplan schmal (Handy, Leitstand-Spalte):** „Mind. %“ steht jetzt unter der Abfahrt und heißt dort
-    „mind. bei Abfahrt … %“, daneben „Fahrt danach … %“; die Kopfzeile zeigt schmal nur Tag/Ankunft/Abfahrt. Vorher
-    stand der Prozentwert unter „Ankunft“ und las sich wie der Ladestand bei Ankunft (Christin 11.11.2026).
+  - **Zeile = Tag der Abfahrt, Bedienung neu (T-0427, Christin 11.11.2026):** Jede Zeile des Wochenplans ist jetzt der
+    Tag, an dem man losfährt — „Dienstag 08:30 mit 80 %“ steht bei Dienstag; vorher war es der Tag der Ankunft, und
+    man musste in die Montagszeile eine Ankunft erfinden. Statt eines Rasters aus Zeitfeldern: oben die
+    **Standardwerte** (Wochenplan an/aus, „Standard: mindestens bei Abfahrt“, „Wenn günstig laden bis“), darunter je
+    Tag eine **Karte in Klartext** („Di · 08:30 · mind. 80 %“) mit Schalter „fahre an diesem Tag“; Antippen öffnet ein
+    **Blatt** wie beim Einmal-Ziel: Abfahrt, mindestens (Knöpfe 50–100 % oder frei), unter „Erweitert“ optional
+    **„zuhause ab“** (am Vortag oder am selben Tag) und **„Verbrauch dieser Fahrt ≈ … %“** mit „→ bei Ankunft ≈ X %“
+    (leer = 0, nicht mehr in jeder Zeile). Dazu **„Pendeln Mo–Fr einrichten“**, „Wie Montag“ und „Woche leeren“.
+    Oben in Klartext, was DVhub daraus macht (nächste Abfahrt, ab wann geladen wird, Ladestand bei Ankunft); die
+    Technik (EOS-Ziele, Wertstufen) eingeklappt unter „Details zur Ladeplanung“. Breit stehen die Tage als
+    Wochenleiste nebeneinander. Gleich in Leitstand-Kachel, Family-Ansicht und Integrationsseite; das Einmal-Ziel
+    steht als eigene Karte („Einmalig: Fr 13.11. 06:30 · mind. 85 %“) über der Woche und nutzt dieselben Begriffe.
+    **Geplant wird genau wie vorher** (Äquivalenztest über Zufallspläne und zwei Wochen). **Alte Pläne werden beim
+    Laden einmal umgerechnet:** Hilfs-Ankünfte (am Vormittag knapp nach der Abfahrtszeit, nur eingetragen, damit die
+    Abfahrt auf den Folgetag rutscht) fallen weg, zwei Abfahrten an einem Tag bleiben beide; der Plan zeigt einmal
+    „Wochenplan umgestellt — bitte prüfen“ mit der Liste der Änderungen, der alte Plan bleibt in der Konfiguration
+    gesichert. **Rückweg auf 1.0.9:** der Plan wird zusätzlich im alten Format mitgeschrieben; ändert eine ältere
+    Version ihn, gilt deren Stand nach dem nächsten Update. `/api/ev`: neues Feld `weeklyDepartures`, das alte
+    `weeklyPlan` wird weiter angenommen.
   - **Ohne passendes EOS wie bisher:** Kennt EOS die Wertstufen nicht (Vanilla v0.4.0rc3), lädt EOS nur bis zum
     Mindestziel, Max-Ladestand und Wallbox-Grenze ruhen; das Mindestziel bleibt vorausschauend. Die Oberfläche sagt es.
   - **Einphasig laden,** wenn die Wallbox umschalten kann (evcc meldet es je Ladepunkt): kleine Leistungen 1,4–3,7 kW

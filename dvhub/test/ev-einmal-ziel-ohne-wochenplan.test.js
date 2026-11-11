@@ -134,7 +134,7 @@ describe('Oberfläche: „Aktivieren“ schaltet den Wochenplan nicht ein', () =
   test('Chip: aktiv (nicht „wirkt nicht“), ohne „Statt Wochenplan“', () => {
     const c = O.chip(describeEvOnce(cfg(), NOW), { tz: TZ });
     assert.equal(c.kind, 'active');
-    assert.match(c.title, /^Einmal-Ziel aktiv: Mi 18\.11\. 06:00 · mindestens 90/);
+    assert.match(c.title, /^Einmalig: Mi 18\.11\. 06:00 · mind\. 90/);
     const t = c.lines.join('\n');
     assert.doesNotMatch(t, /Statt Wochenplan|Davor gilt/);
     assert.match(t, /Wochenplan ist aus/);
@@ -142,7 +142,7 @@ describe('Oberfläche: „Aktivieren“ schaltet den Wochenplan nicht ein', () =
 
   test('Codex 175975ce: Ankunft allein bei Wochenplan aus wird abgelehnt (bewirkte nichts)', () => {
     const v = O.validate({ once: '', arrivalOnce: new Date(NOW + 3600_000).toISOString() }, { nowMs: NOW, enabled: false, tz: TZ });
-    assert.match(v.error || '', /Ankunft allein bewirkt nichts/);
+    assert.match(v.error || '', /„zuhause ab“ allein bewirkt nichts/);
     // mit Wochenplan an erlaubt
     assert.equal(O.validate({ once: '', arrivalOnce: new Date(NOW + 3600_000).toISOString() }, { nowMs: NOW, enabled: true, tz: TZ }).error, null);
     // ein Rest davon zeigt „wirkt nicht“ statt Aktiv
