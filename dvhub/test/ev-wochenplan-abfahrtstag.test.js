@@ -425,3 +425,12 @@ test('Codex 6d342e27: Fahrt-% der älteren Seite wird genau verglichen (12,1 →
   const p = NEW.parseEvDeparturePatch({ weeklyPlan: mirror }, 'departure', { opt: { evWeeklyDepartures: stored } });
   assert.equal(p.patch.evWeeklyDepartures.find((r) => r.day === 2).tripSocPct, 12.4);
 });
+
+test('Codex 0fec84ac: Fingerabdruck veraltet, aber altes Format passt zu den Abfahrten (Zwischenstand ohne Fingerabdruck hat beide geschrieben) → nichts umrechnen', () => {
+  const deps = NEW.normalizeDepartureRows([dep(2, '20:00', 80, '17:30', true)]);
+  const mirror = NEW.legacyFromDepartures(deps).rows;
+  const o = normalizeConfigInput({ optimizer: { evWeeklyDepartures: deps, evWeeklyPlan: mirror, evWeeklyPlanKey: 'deadbeef' } }).rawConfig.optimizer;
+  assert.deepEqual(o.evWeeklyDepartures, deps);
+  assert.equal(o.evWeeklyMigration ?? null, null);
+  assert.equal(o.evWeeklyPlanKey, NEW.legacyPlanKey(mirror));
+});

@@ -504,11 +504,12 @@ export function migrateWeeklyConfig(opt = {}, { nowMs = Date.now() } = {}) {
   if (hasNew) {
     const rows = normalizeDepartureRows(opt.evWeeklyDepartures);
     const mirror = legacyFromDepartures(rows).rows;
-    // Unveraendert: Fingerabdruck passt (mit ihm geschrieben); ohne
-    // Fingerabdruck (Zwischenstaende vor Codex 6d342e27) der Vergleich mit der
-    // eigenen Verteilung.
+    // Unveraendert: der Fingerabdruck passt (mit ihm geschrieben) ODER das
+    // alte Format ist genau die eigene Verteilung der Abfahrten — dann stimmen
+    // beide ohnehin ueberein (ein Zwischenstand ohne Fingerabdruck hat beide
+    // geschrieben und einen alten Fingerabdruck stehen lassen, Codex 0fec84ac).
     const key = typeof opt.evWeeklyPlanKey === 'string' && opt.evWeeklyPlanKey ? opt.evWeeklyPlanKey : null;
-    const unchanged = !hasOld || (key ? legacyPlanKey(opt.evWeeklyPlan, opt) === key : sameLegacyPlan(opt.evWeeklyPlan, mirror, opt));
+    const unchanged = !hasOld || sameLegacyPlan(opt.evWeeklyPlan, mirror, opt) || (key !== null && legacyPlanKey(opt.evWeeklyPlan, opt) === key);
     if (unchanged) return { evWeeklyDepartures: rows, evWeeklyPlan: mirror, evWeeklyPlanKey: legacyPlanKey(mirror) };
     return fromLegacy('older-version');
   }
