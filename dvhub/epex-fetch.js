@@ -26,7 +26,9 @@ const DAY_AHEAD_MINUTE = 13 * 60;
 export function epexRefreshDue(state, cfg, nowMs = Date.now()) {
   const tz = cfg.epex?.timezone;
   const today = berlinDateString(new Date(nowMs), tz);
-  const mustRefresh = !state.epex?.date || state.epex.date !== today;
+  // Preiszone geändert (state.epex.bzn wird beim Abruf gesetzt): sofort neu.
+  const zoneChanged = !!state.epex?.bzn && state.epex.bzn !== (cfg.epex?.bzn || 'DE-LU');
+  const mustRefresh = !state.epex?.date || state.epex.date !== today || zoneChanged;
   const stale = (nowMs - (state.epex?.updatedAt || 0)) > 6 * 60 * 60 * 1000;
   // Day-ahead for tomorrow publishes ~12:45 CET. The plain 6h-staleness
   // check can delay tomorrow's prices by up to 6h, during which EOS ffills a
@@ -46,14 +48,22 @@ export function epexRefreshDue(state, cfg, nowMs = Date.now()) {
   return mustRefresh || stale || dayAheadDue || luoxPending;
 }
 
-/** Deckt `rows` den Ortstag `day` vollständig ab (92/96/100 Viertelstunden bzw. 23–25 Stunden)? */
+/**
+ * Deckt `rows` den Ortstag `day` lückenlos ab? Gleichmäßiger Takt von 15 oder
+ * 60 min, erster Wert um Ortsmitternacht, letzter endet um die nächste
+ * (92/96/100 Viertelstunden bzw. 23–25 Stunden an Umstellungstagen).
+ */
 export function dayComplete(rows, day, timeZone = 'Europe/Berlin') {
   if (!rows.length) return false;
-  const lengthMs = localMidnight(addDays(day, 1), timeZone).ms - localMidnight(day, timeZone).ms;
-  const ts = rows.map((r) => Number(r.ts)).sort((a, b) => a - b);
-  let spacing = 900_000;
-  for (let i = 1; i < ts.length; i++) if (ts[i] > ts[i - 1]) { spacing = Math.max(spacing, ts[i] - ts[i - 1]); break; }
-  return new Set(ts).size * spacing >= lengthMs;
+  const start = localMidnight(day, timeZone).ms;
+  const end = localMidnight(addDays(day, 1), timeZone).ms;
+  const ts = [...new Set(rows.map((r) => Number(r.ts)))].sort((a, b) => a - b);
+  if (ts[0] !== start) return false;
+  for (const step of [900_000, 3_600_000]) {
+    if ((end - start) % step !== 0 || ts.length !== (end - start) / step) continue;
+    if (ts.every((t, i) => t === start + i * step)) return true;
+  }
+  return false;
 }
 
 export function createEpexFetcher(ctx, deps = {}) {
@@ -193,7 +203,9 @@ export function createEpexFetcher(ctx, deps = {}) {
           const p = pub ? pub.data.filter((r) => r.day === d) : [];
           let rows = h;
           let src = heldBy[d] || 'held';
-          if (!dayComplete(h, d, cfg.epex.timezone) && p.length >= h.length && p.length) { rows = p; src = pub.source; }
+          // Ein vollständiger Rückfall-Tag geht immer vor einem unvollständigen
+          // gehaltenen (auch mit weniger Zeilen, z. B. Stundenwerte); sonst der längere.
+          if (p.length && !dayComplete(h, d, cfg.epex.timezone) && (dayComplete(p, d, cfg.epex.timezone) || p.length >= h.length)) { rows = p; src = pub.source; }
           if (rows.length) {
             data = data.concat(rows);
             sourceByDay[d] = src;

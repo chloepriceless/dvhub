@@ -3,7 +3,7 @@
 // Quelle (dvhub.online → Energy-Charts) ein — auch nur für den fehlenden Tag.
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createEpexFetcher, epexRefreshDue } from '../epex-fetch.js';
+import { createEpexFetcher, epexRefreshDue, dayComplete } from '../epex-fetch.js';
 
 const Q = 900_000;
 // 11.11.2026 14:30 Ortszeit; heute ab 10.11. 23:00Z, morgen ab 11.11. 23:00Z
@@ -149,6 +149,20 @@ describe("epex.priceSource = 'luox'", () => {
     assert.equal(state.epex.data.length, 192);
   });
 
+  it('Vollständiger Rückfall-Tag (Stundenwerte) ersetzt einen unvollständigen gehaltenen Tag mit mehr Zeilen', async () => {
+    urls = [];
+    globalThis.fetch = async (url) => {
+      urls.push(String(url));
+      const hourly = Array.from({ length: 24 }, (_, i) => ({ ts: new Date(TODAY0 + i * 4 * Q).toISOString(), price: 55 }));
+      return { ok: true, json: async () => ({ data: hourly }) };
+    };
+    const { ctx, state } = makeCtx({ luox: { fetchDayAhead: async () => { throw Object.assign(new Error('weg'), { code: 'network' }); } } });
+    state.epex = { ok: true, date: '2026-11-11', bzn: 'DE-LU', data: day(TODAY0, 1).slice(0, 48).map((r) => ({ ts: r.ts, day: '2026-11-11', eur_mwh: 1, ct_kwh: 0.1 })), sourceByDay: {} };
+    await createEpexFetcher(ctx, { now: () => NOW }).fetchEpexDay();
+    assert.equal(state.epex.data.filter((r) => r.day === '2026-11-11').length, 24);
+    assert.equal(state.epex.data[0].eur_mwh, 55);
+  });
+
   it('LUOX fällt aus, vor 13 Uhr: was die öffentliche Quelle für morgen schon hat, wird übernommen', async () => {
     installFetch();
     const early = Date.parse('2026-11-11T11:50:00Z'); // 12:50 Ortszeit
@@ -182,6 +196,11 @@ describe('epexRefreshDue', () => {
     assert.equal(epexRefreshDue({ epex: { ...state.epex, updatedAt: late - 60_000 } }, cfg, late), false, 'nach 20 Uhr Ruhe');
     assert.equal(epexRefreshDue(state, { epex: { ...cfg.epex, priceSource: 'dvhub' } }, NOW), false, 'andere Quelle: altes Verhalten');
   });
+  it('Preiszone geändert: sofort neu abrufen', () => {
+    const { state, cfg } = base({ bzn: 'AT' });
+    assert.equal(epexRefreshDue(state, { epex: { ...cfg.epex, bzn: 'FR' } }, NOW), true);
+    assert.equal(epexRefreshDue({ epex: { ...state.epex, bzn: 'FR', sourceByDay: { '2026-11-11': 'dvhub', '2026-11-12': 'dvhub' } } }, { epex: { ...cfg.epex, bzn: 'FR' } }, NOW), false);
+  });
   it('Andere Preiszone als DE-LU: kein Nachfragen bei LUOX (normaler Takt)', () => {
     const { state, cfg } = base({ sourceByDay: { '2026-11-11': 'dvhub', '2026-11-12': 'dvhub' } });
     assert.equal(epexRefreshDue(state, { epex: { ...cfg.epex, bzn: 'AT' } }, NOW), false);
@@ -195,5 +214,23 @@ describe('epexRefreshDue', () => {
     assert.equal(epexRefreshDue({ epex: { ...state.epex, date: '2026-11-10' } }, cfg, NOW), true);
     assert.equal(epexRefreshDue({ epex: { ...state.epex, updatedAt: NOW - 7 * 3600_000 } }, cfg, NOW), true);
     assert.equal(epexRefreshDue({ epex: { ...state.epex, data: state.epex.data.filter((r) => r.day === '2026-11-11') } }, { epex: { ...cfg.epex, priceSource: 'dvhub' } }, NOW), true);
+  });
+});
+
+describe('dayComplete', () => {
+  const rows = (start, n, step) => Array.from({ length: n }, (_, i) => ({ ts: start + i * step }));
+  it('volle Tage: 96 Viertelstunden, 24 Stunden, 92/100 an Umstellungstagen', () => {
+    assert.equal(dayComplete(rows(TODAY0, 96, Q), '2026-11-11'), true);
+    assert.equal(dayComplete(rows(TODAY0, 24, 4 * Q), '2026-11-11'), true);
+    assert.equal(dayComplete(rows(Date.parse('2026-10-24T22:00:00Z'), 100, Q), '2026-10-25'), true);
+    assert.equal(dayComplete(rows(Date.parse('2026-03-28T23:00:00Z'), 92, Q), '2026-03-29'), true);
+  });
+  it('Lücken zählen nicht als voll (fehlendes 00:15, halber Tag, falscher Beginn)', () => {
+    const gap = rows(TODAY0, 96, Q).filter((_, i) => i !== 1);
+    assert.equal(dayComplete(gap, '2026-11-11'), false);
+    const half = rows(TODAY0, 48, Q).filter((_, i) => i !== 1);
+    assert.equal(dayComplete(half, '2026-11-11'), false);
+    assert.equal(dayComplete(rows(TODAY0 + Q, 96, Q), '2026-11-11'), false);
+    assert.equal(dayComplete([], '2026-11-11'), false);
   });
 });
