@@ -730,5 +730,16 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
 
+  // T-0423: ungespeicherter Entwurf (Wochenplan, Ziele) hält das automatische
+  // Neuladen nach einem Update auf (build-watch.js) — nur solange die Kachel
+  // sichtbar ist; eine geschlossene Family-Ansicht hält nichts fest.
+  if (window.DVhubBuildWatch && typeof window.DVhubBuildWatch.registerUnsavedCheck === 'function') {
+    window.DVhubBuildWatch.registerUnsavedCheck(function () {
+      const host = el('evTile');
+      if (!host || host.hidden || !host.getClientRects().length) return false;
+      return dirty || !!(window.DVhubEvWeekly && window.DVhubEvWeekly.isEditing(el('evWeekly')));
+    });
+  }
+
   window.DVhubEvTile = { load: load, mount: mount, stop: function () { clearInterval(timer); timer = null; } };
 })();

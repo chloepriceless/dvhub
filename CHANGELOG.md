@@ -12,6 +12,17 @@ verweist hierher.
 
 ### Neu
 
+- **Oberfläche lädt nach einem Update selbst neu.** Eine offene Seite — besonders die Home-Screen-Webapp — erkennt
+  eine neue DVhub-Version und lädt neu, statt bis zum Schließen den alten Stand zu zeigen (Anlass: nach einem Update
+  fehlte in der offenen Webapp der E-Auto-Wochenplan). Der Server hängt an jede JSON-Antwort die Build-Kennung der
+  Oberfläche (`X-DVhub-Build`, Hash aus Version und Inhalt von `public/`); die vorhandenen Status-Abfragen reichen,
+  beim Zurückkehren in die Webapp prüft die Seite einmal `/health`. Wird nichts bearbeitet, lädt sie nach kurzem
+  Hinweis neu; ist ein Dialog oder eine Seitenleiste offen, stehen ungespeicherte Einstellungen oder ein Entwurf der
+  E-Auto-Kachel an oder wurde ohne Speichern etwas eingegeben, erscheint „Neue DVhub-Version installiert — neu laden“
+  mit Knopf, und sie lädt nach dem Speichern bzw. Schließen von selbst. Kein Endlos-Neuladen: je Kennung höchstens
+  einmal in 10 min, überhaupt höchstens einmal je Minute, sonst nur der Hinweis. Wirkt ab dem ersten Update nach
+  dieser Version (eine schon offene ältere Seite kennt den Mechanismus noch nicht).
+
 - **Sungrow SH Hybrid als Beta-Hersteller (nur Bleeding Edge).** Neues Herstellerprofil `sungrow` für SH3.0–10RS,
   SH5.0–10RT (inkl. -20/-V112/-V122), SH5T–SH25T und MG5/6RL über Modbus TCP (LAN-Port oder WiNet-S/S2, Port 502,
   Unit-ID 1), Register nach Sungrow-Protokoll V1.1.9. DVhub erkennt das Gerät am Typcode und schreibt nur an einen
