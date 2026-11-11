@@ -33,17 +33,7 @@
     "  <div class=\"rail-big card-value value-ev\"><span id=\"evSocNow\">&mdash;</span><span class=\"ev-soc-arrow\">&rarr;</span><span id=\"evSocTarget\">&mdash;</span></div>",
     "  <div class=\"ev-state\" id=\"evState\">&mdash;</div>",
     "  <div class=\"ev-window\" id=\"evWindow\" hidden>&mdash;</div>",
-    "  <div class=\"ev-once-chip\" id=\"evOnceChip\" role=\"status\" hidden>",
-    "    <div class=\"ev-once-chip-title\" id=\"evOnceChipTitle\">&mdash;</div>",
-    "    <div class=\"ev-once-chip-lines\" id=\"evOnceChipLines\"></div>",
-    "    <div class=\"ev-once-chip-actions\">",
-    "      <button type=\"button\" class=\"btn sm\" id=\"evOnceEdit\">&Auml;ndern</button>",
-    "      <button type=\"button\" class=\"btn sm ghost\" id=\"evOnceEnd\">Beenden</button>",
-    "    </div>",
-    "  </div>",
-    "  <div class=\"ev-once-start\" id=\"evOnceStart\" hidden>",
-    "    <button type=\"button\" class=\"btn sm\" id=\"evOncePlan\" title=\"F&uuml;r eine Fahrt au&szlig;er der Reihe: einmal Abfahrt und Mindest-Ladestand festlegen. Gilt genau einmal, der Wochenplan bleibt.\">+ Einmalige Abfahrt planen</button>",
-    "  </div>",
+    "  <div class=\"ev-once-slot\" id=\"evOnceSlot\"></div>",
     "  <div class=\"ev-boost\" id=\"evBoost\" hidden title=\"Jetzt laden, egal was EOS plant &mdash; auch wenn EOS nicht l&auml;uft. Endet zur gew&auml;hlten Zeit, beim Abstecken oder mit Beenden; danach gilt wieder der EOS-Plan.\">",
     "    <div class=\"ev-boost-idle\" id=\"evBoostIdle\">",
     "      <span class=\"l\">Sofort laden</span>",
@@ -584,68 +574,13 @@
     }
   }
 
-  // Einmal-Ziel: Chip, solange es gilt, sonst der Knopf (ev-once.js).
+  // Einmal-Ziel: Knopf bzw. Chip mit Ändern/Beenden und Dialog — alles aus
+  // ev-once.js (DVhubEvOnce.attach), dieselbe Bedienung wie auf der
+  // Integrationsseite. Gespeichert wird über POST /api/ev, danach neu laden.
   function renderOnce() {
-    const chipBox = el('evOnceChip');
-    const start = el('evOnceStart');
-    if (!chipBox || !start) return;
-    const O = window.DVhubEvOnce;
-    const info = data.departure && data.departure.onceInfo;
-    const c = O ? O.chip(info, { tz: tz() }) : null;
-    chipBox.hidden = !c;
-    start.hidden = !!c || !O;
-    if (!c) return;
-    chipBox.classList.toggle('is-inactive', c.kind === 'inactive');
-    el('evOnceChipTitle').textContent = c.title;
-    const lines = el('evOnceChipLines');
-    lines.textContent = '';
-    c.lines.forEach(function (t) {
-      const p = document.createElement('div');
-      p.textContent = t;
-      lines.appendChild(p);
-    });
-  }
-
-  function openOnce(editing) {
-    if (!window.DVhubEvOnce || !data) return;
-    window.DVhubEvOnce.open({
-      data: data,
-      current: editing,
-      save: function (departure) { return saveOnce(departure, editing ? 'Einmal-Ziel geändert.' : 'Einmal-Ziel aktiv — EOS plant damit beim nächsten Lauf.'); },
-      preview: async function (departure) {
-        try {
-          const res = await apiFetch('/api/ev/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ departure: departure }) });
-          return res.ok ? await res.json() : null;
-        } catch (_) { return null; }
-      }
-    });
-  }
-
-  // Einmal-Ziel speichern (nur die Einmal-Felder, POST /api/ev) → { ok, error }.
-  async function saveOnce(departure, okText) {
-    try {
-      const res = await apiFetch('/api/ev', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ departure: departure }) });
-      let body = {};
-      try { body = await res.json(); } catch (_) { /* leer */ }
-      if (body.error === 'pro_required') return { ok: false, error: 'E-Auto-Planung braucht DVhub Pro.' };
-      if (body.code === 'once_in_past') return { ok: false, error: 'Die Abfahrt liegt in der Vergangenheit (oder in weniger als 10 min).' };
-      if (body.code === 'arrival_once_in_past') return { ok: false, error: 'Die Ankunft liegt in der Vergangenheit.' };
-      if (!res.ok || !body.ok) return { ok: false, error: body.error || ('HTTP ' + res.status) };
-      msg(okText);
-      setTimeout(function () { msg(''); }, 4000);
-      load();
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, error: e.message };
-    }
-  }
-
-  async function endOnce() {
-    if (!window.DVhubEvOnce) return;
-    const yes = await window.DVhubEvOnce.confirmEnd('Die einmalige Abfahrt (und eine einmalige Ankunft) wird gelöscht. Danach gilt wieder nur der Wochenplan.');
-    if (!yes) return;
-    const out = await saveOnce({ once: '', onceMinSocPct: '', onceTripSocPct: '', arrivalOnce: '' }, 'Einmal-Ziel beendet — es gilt wieder der Wochenplan.');
-    if (!out.ok) msg('Nicht beendet: ' + out.error, true);
+    const slot = el('evOnceSlot');
+    if (!slot || !window.DVhubEvOnce) return;
+    window.DVhubEvOnce.attach(slot, { fetch: apiFetch, onSaved: load }).render(data);
   }
 
   function render() {
@@ -692,7 +627,8 @@
       data = body;
       try { document.dispatchEvent(new CustomEvent('dvhub:ev-data', { detail: body })); } catch (_) { /* alte Browser */ }
       // Kein Auto eingerichtet (EOS-Planung aus, keine Abfahrt, kein Ladepunkt): Kachel bleibt weg.
-      const any = body.optimizeEv || body.override || (body.departure && body.departure.enabled) || (body.vehicle && body.vehicle.connected !== null);
+      const onceOn = !!(body.departure && body.departure.onceInfo && body.departure.onceInfo.departure && body.departure.onceInfo.departure.state === 'active');
+      const any = body.optimizeEv || body.override || (body.departure && body.departure.enabled) || onceOn || (body.vehicle && body.vehicle.connected !== null);
       if (!any) { el('evTile').hidden = true; return; }
       render();
     } catch (_) { /* naechster Takt */ }
@@ -766,9 +702,6 @@
       return;
     }
     if (e.target.id === 'evStepsToggle') { stepsOpen = !stepsOpen; renderSteps(); return; }
-    if (e.target.id === 'evOncePlan') { openOnce(false); return; }
-    if (e.target.id === 'evOnceEdit') { openOnce(true); return; }
-    if (e.target.id === 'evOnceEnd') { endOnce(); return; }
     if (e.target.id === 'evSave') { save(); return; }
     if (e.target.id === 'evBoostStart') { startBoost(); return; }
     if (e.target.id === 'evBoostStop') { stopBoost(); return; }

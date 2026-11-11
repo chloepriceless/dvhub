@@ -77,8 +77,11 @@ verweist hierher.
     DVhub das Einmal-Ziel (und eine vergangene einmalige Ankunft) aus der Konfiguration, sobald es an der Planung
     nichts mehr ändert — ein vergangenes Ziel wirkt nie still weiter, und der Knopf erscheint wieder. Neue Termine in
     der Vergangenheit lehnt DVhub ab; Hinweise im Dialog, wenn die Abfahrt vor der erwarteten Ankunft liegt oder das
-    Mindestziel über „Max, wenn günstig“. Die Integrationsseite schickt das Einmal-Ziel nur noch mit, wenn es dort
-    geändert wurde.
+    Mindestziel über „Max, wenn günstig“. **Gleiche Bedienung überall:** Leitstand-Kachel, Family-Ansicht (E-Auto-Panel)
+    und Integrationsseite (Einstellungen → E-Auto, statt der alten Dauerfelder) nutzen denselben Baustein; gespeichert
+    wird sofort über `/api/ev` (Anmeldung + Pro, wie die übrige E-Auto-Planung). **Wirkt auch bei ausgeschaltetem
+    Wochenplan:** dann ist das Einmal-Ziel die einzige Abfahrt (Frist und Ziel an EOS, Wertstufen, Vorplanung), der
+    Wochenplan bleibt aus, nach der Abfahrt plant DVhub wieder keine.
   - **Ohne passendes EOS wie bisher:** Kennt EOS die Wertstufen nicht (Vanilla v0.4.0rc3), lädt EOS nur bis zum
     Mindestziel, Max-Ladestand und Wallbox-Grenze ruhen; das Mindestziel bleibt vorausschauend. Die Oberfläche sagt es.
   - **Einphasig laden,** wenn die Wallbox umschalten kann (evcc meldet es je Ladepunkt): kleine Leistungen 1,4–3,7 kW

@@ -276,7 +276,7 @@
   }
   document.addEventListener('input', function (e) {
     if (e.target && e.target.id === 'intg-search') applyIntgSearch();
-    if (e.target && ['evcc-dep-value', 'evcc-dep-capacity', 'evcc-dep-max', 'evcc-dep-once', 'evcc-dep-once-min', 'evcc-dep-once-trip', 'evcc-dep-arr-once'].indexOf(e.target.id) >= 0) evccDepPreviewSoon();
+    if (e.target && ['evcc-dep-value', 'evcc-dep-capacity', 'evcc-dep-max'].indexOf(e.target.id) >= 0) evccDepPreviewSoon();
   });
 
   // Statusmeldungen der Einstellungen: „✓ …“ grün, alles andere wie gehabt.
@@ -2611,21 +2611,16 @@
     renderEvccEosState(eos);
     fillEvccDeparture(eos.departure || {}, eos.capacityWh, eos);
   }
-  function toLocalInput(iso) {
-    if (!iso) return '';
-    var d = new Date(iso);
-    if (isNaN(d)) return '';
-    var p = function (n) { return String(n).padStart(2, '0'); };
-    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
-  }
   var evccDepWeeklyPlan = [];
   // Alter Heimweg (km): nur noch Hinweis im Editor, dass er nicht mehr zählt.
   var evccDepLegacyCommuteKm = 0;
-  // Einmal-Felder, wie sie geladen wurden (11.11.2026): gesendet wird nur, was
-  // jemand hier geaendert hat. Sonst schickte jedes Speichern ein laengst
-  // vergangenes Einmal-Ziel zurueck, das der Server abgeraeumt hat (und eine
-  // neue Abfahrt in der Vergangenheit lehnt er ab).
-  var evccDepOnceLoaded = {};
+  // Einmal-Ziel (11.11.2026): Knopf + Dialog + Aktiv-Chip aus ev-once.js, wie
+  // in der Leitstand-Kachel. Laedt GET /api/ev selbst und speichert sofort ueber
+  // POST /api/ev — das „Speichern“ der Schublade schickt kein Einmal-Ziel mehr.
+  function evccOnceCtl() {
+    var host = document.getElementById('evcc-once-slot');
+    return host && window.DVhubEvOnce ? window.DVhubEvOnce.attach(host, { fetch: apiFetch }) : null;
+  }
   function renderEvccDepWeekly() {
     var host = document.getElementById('evcc-dep-weekly');
     if (!host || !window.DVhubEvWeekly) return;
@@ -2667,14 +2662,8 @@
     if (el('evcc-dep-capacity')) el('evcc-dep-capacity').value = capacityWh ? Math.round(capacityWh / 100) / 10 : 50;
     if (el('evcc-dep-value')) el('evcc-dep-value').value = dep.defaultMinSocPct != null ? dep.defaultMinSocPct : (dep.targetValue != null ? dep.targetValue : 80);
     if (el('evcc-dep-max')) el('evcc-dep-max').value = dep.maxSocPct != null ? dep.maxSocPct : '';
-    if (el('evcc-dep-once')) el('evcc-dep-once').value = toLocalInput(dep.once);
-    if (el('evcc-dep-once-min')) el('evcc-dep-once-min').value = dep.onceMinSocPct != null ? dep.onceMinSocPct : '';
-    if (el('evcc-dep-once-trip')) el('evcc-dep-once-trip').value = dep.onceTripSocPct != null ? dep.onceTripSocPct : '';
-    if (el('evcc-dep-arr-once')) el('evcc-dep-arr-once').value = toLocalInput(dep.arrivalOnce);
-    evccDepOnceLoaded = {};
-    ['evcc-dep-once', 'evcc-dep-once-min', 'evcc-dep-once-trip', 'evcc-dep-arr-once'].forEach(function (id) {
-      if (el(id)) evccDepOnceLoaded[id] = String(el(id).value);
-    });
+    var onceCtl = evccOnceCtl();
+    if (onceCtl) onceCtl.refresh();
     evccDepWeeklyPlan = Array.isArray(dep.weeklyPlan) ? dep.weeklyPlan : [];
     evccDepLegacyCommuteKm = Number(dep.commuteKm) || 0;
     renderEvccDepWeekly();
@@ -2864,7 +2853,8 @@
     var lines = [];
     box.className = 'evcc-eos-state';
     box.hidden = false;
-    if (!dep.enabled) { box.textContent = 'Aus — EOS nutzt den allgemeinen Ziel-SoC am Ende des Planungszeitraums.'; return; }
+    // Aus = weder Wochenplan noch ein kommendes Einmal-Ziel (das wirkt auch ohne Wochenplan).
+    if (!(r.enabled === true || (r.enabled === undefined && dep.enabled))) { box.textContent = 'Aus — EOS nutzt den allgemeinen Ziel-SoC am Ende des Planungszeitraums.'; return; }
     // Naechste Abfahrt (oder dass keine geplant ist), Ankunft davor und Ziel
     // an EOS stehen in der Zusammenfassung ueber dem Wochenplan (setEvccDepSummary).
     var a = dep.arrival || {};
@@ -2904,8 +2894,6 @@
   }
   function evccDepartureBody() {
     var el = function (id) { return document.getElementById(id); };
-    var onceRaw = (el('evcc-dep-once') && el('evcc-dep-once').value) || '';
-    var arrRaw = (el('evcc-dep-arr-once') && el('evcc-dep-arr-once').value) || '';
     var host = el('evcc-dep-weekly');
     var out = {
       enabled: !!(el('evcc-dep-enabled') && el('evcc-dep-enabled').checked),
@@ -2915,19 +2903,9 @@
       targetMode: 'percent',
       targetValue: Number((el('evcc-dep-value') && el('evcc-dep-value').value) || 0)
     };
-    // Einmal-Ziel (Abfahrt, mindestens, Fahrt) nur als Ganzes und nur, wenn
-    // hier geaendert; datetime-local ist Ortszeit des Browsers → ISO.
-    if (['evcc-dep-once', 'evcc-dep-once-min', 'evcc-dep-once-trip'].some(changed)) {
-      out.once = onceRaw ? new Date(onceRaw).toISOString() : '';
-      out.onceMinSocPct = numOrEmpty('evcc-dep-once-min');
-      out.onceTripSocPct = numOrEmpty('evcc-dep-once-trip');
-    }
-    if (changed('evcc-dep-arr-once')) out.arrivalOnce = arrRaw ? new Date(arrRaw).toISOString() : '';
+    // Kein Einmal-Ziel: das speichert der Dialog (ev-once.js) selbst.
     return out;
-    function changed(id) {
-      var f = el(id);
-      return !!f && String(f.value) !== (evccDepOnceLoaded[id] == null ? '' : evccDepOnceLoaded[id]);
-    }
+
     function numOrEmpty(id) {
       var f = el(id);
       var raw = f ? String(f.value).trim() : '';
@@ -3036,7 +3014,7 @@
       wallbox: wallboxBody()
     };
     // Wochenplan vor dem Senden pruefen (deutsche Meldung statt Server-Fehler).
-    var depErr = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(body.eos.departure.weeklyPlan || [], { enabled: body.eos.departure.enabled, hasOnce: !!((el('evcc-dep-once') && el('evcc-dep-once').value) || '') }) : null;
+    var depErr = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(body.eos.departure.weeklyPlan || [], { enabled: body.eos.departure.enabled, hasOnce: !!(evccOnceCtl() && evccOnceCtl().active()) }) : null;
     if (depErr) {
       if (banner) { banner.textContent = 'Wochenplan: ' + depErr; banner.hidden = false; }
       return;
