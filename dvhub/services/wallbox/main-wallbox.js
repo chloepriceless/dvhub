@@ -115,6 +115,9 @@ export function createMainWallbox({ getCfg, evccIntegration, chargerStatus, getA
       return {
         type: t, label, available: Boolean(d), title: label,
         connected: d ? d.connected === true : null,
+        connectedKnown: d ? d.connectedKnown !== false : null,
+        // Zeitpunkt der Abfrage, aus der der Zustand stammt.
+        sampleAt: d?.at ?? null,
         charging: d ? d.charging === true : null,
         carState: d?.carState || null,
         powerW: d?.powerW ?? null,

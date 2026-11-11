@@ -220,7 +220,22 @@ export function createMaxStopSoc() {
     resolve(ctx, nowMs = Date.now()) {
       let plugged;
       try { plugged = resolveEvPlugged(ctx); } catch { plugged = null; }
-      if (plugged === false) { lastUnpluggedAt = nowMs; return null; }
+      let wb;
+      try { wb = ctx?.mainWallbox?.state?.() || null; } catch { wb = null; }
+      // Box ohne Steck-Zustand (EEBUS nur LPC: nach dem Stopp „nicht
+      // verbunden“) — das ist kein Abstecken (Codex e957655a).
+      if (plugged === false && wb && wb.type !== 'evcc' && wb.connectedKnown === false) plugged = null;
+      if (plugged === false) {
+        // Zeitpunkt der Abfrage, die „abgesteckt“ meldete — nicht der des
+        // Lesens: ein frischer Ladestand nach dem Wieder-Anstecken, der vor
+        // der nächsten Abfrage der Box kommt, gilt sonst nicht (Codex e957655a).
+        const sampleAt = wb && wb.type !== 'evcc'
+          ? toMs(wb.sampleAt)
+          : toMs(ctx?.evccIntegration?.getStatus?.()?.lastPolledAt);
+        const at = sampleAt !== null && sampleAt <= nowMs ? sampleAt : nowMs;
+        lastUnpluggedAt = lastUnpluggedAt === null ? at : Math.max(lastUnpluggedAt, at);
+        return null;
+      }
       const r = collectEvSocReadings(ctx, nowMs)[0];
       if (!r || r.atMs === null || r.atMs === undefined) return null;
       if (lastUnpluggedAt !== null && r.atMs <= lastUnpluggedAt) return null;

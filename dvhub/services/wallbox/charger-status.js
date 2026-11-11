@@ -37,6 +37,10 @@ export function createChargerStatusPoller({ getCfg, getAdapter, now = () => Date
         ? {
           type, ok: true, at: now(), error: null,
           connected: st.connected === true,
+          // Kennt die Box den Steck-Zustand überhaupt? (EEBUS nur mit LPC meldet
+          // null — oben wird daraus „nicht verbunden“; der Max-Stopp darf das
+          // nicht als Abstecken werten, Codex e957655a.)
+          connectedKnown: typeof st.connected === 'boolean',
           charging: st.charging === true,
           // go-e/Wattpilot unterscheiden „wartet auf Ladestart“ und „fertig“ (mypv-regulator.js).
           carState: typeof st.carState === 'string' ? st.carState : null,

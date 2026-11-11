@@ -50,3 +50,24 @@ test('Steck-Zustand unbekannt: Wert gilt wie bisher', () => {
   ctx.mainWallbox = { state: () => ({ type: 'goe', available: false }) };
   assert.equal(evSoc.createMaxStopSoc().resolve(ctx, Date.parse('2026-11-16T06:05:00Z'))?.pct, 85);
 });
+
+// ── Codex e957655a ──
+test('Box kennt den Steck-Zustand nicht (EEBUS nur LPC, nach dem Stopp „nicht verbunden“): kein Abstecken', () => {
+  const { ctx } = fakeCtx();
+  ctx.mainWallbox = { state: () => ({ type: 'eebus', available: true, connected: false, connectedKnown: false }) };
+  const m = evSoc.createMaxStopSoc();
+  assert.equal(m.resolve(ctx, Date.parse('2026-11-16T06:05:00Z'))?.pct, 85);
+  assert.equal(m.resolve(ctx, Date.parse('2026-11-16T06:30:00Z'))?.pct, 85, 'Wert gilt weiter');
+});
+
+test('Abstecken zählt mit dem Zeitpunkt der Abfrage, nicht dem des Lesens', () => {
+  const { ctx, s } = fakeCtx();
+  const st = { connected: false, sampleAt: Date.parse('2026-11-16T18:00:00Z') };
+  ctx.mainWallbox = { state: () => ({ type: 'goe', available: true, connected: st.connected, connectedKnown: true, sampleAt: st.sampleAt }) };
+  const m = evSoc.createMaxStopSoc();
+  // Frischer Ladestand kommt 18:00:10, die Box meldet bis zur nächsten Abfrage noch „abgesteckt“.
+  s.soc = 42; s.socAt = Date.parse('2026-11-16T18:00:10Z');
+  assert.equal(m.resolve(ctx, Date.parse('2026-11-16T18:00:12Z')), null);
+  st.connected = true; st.sampleAt = Date.parse('2026-11-16T18:00:15Z');
+  assert.equal(m.resolve(ctx, Date.parse('2026-11-16T18:00:16Z'))?.pct, 42, 'frischer Wert gilt nach dem Anstecken');
+});
