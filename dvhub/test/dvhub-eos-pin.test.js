@@ -184,7 +184,8 @@ for (const wf of ['.github/workflows/container.yml', '.github/workflows/containe
     const steps = y.split(/\n(?=\s+- (?:name|uses): )/);
     const fetch = steps.find((s) => s.includes('scripts/eos-native-wheels.sh fetch'));
     assert.ok(fetch, 'Wheels über die Pins holen');
-    assert.match(fetch, /fetch "\$RUNNER_TEMP\/eos-wheels" X86_64 AARCH64/);
+    // Im Checkout: Bake liest Kontexte außerhalb des Arbeitsordners nur mit Freigabe (Codex c0af4b31, P1).
+    assert.match(fetch, /fetch \.eos-wheels X86_64 AARCH64/);
     assert.match(fetch, /want="\$\{EOS_REPO%\.git\}\/releases\/download\/\$\{EOS_TAG\}"/, 'Wheels gehören zum Git-Tag');
     const build = steps.find((s) => s.includes('docker buildx bake -f docker/eos-native/docker-bake.hcl'));
     assert.ok(build, 'Bau über docker-bake.hcl');
@@ -192,7 +193,7 @@ for (const wf of ['.github/workflows/container.yml', '.github/workflows/containe
     assert.match(build, /PLATFORMS: linux\/amd64,linux\/arm64/);
     assert.match(build, /EOS_TAG: \$\{\{ steps\.eos\.outputs\.tag \}\}/);
     assert.match(build, /EOS_IMAGE_TAG: \$\{\{ steps\.eos\.outputs\.image_tag \}\}/);
-    assert.match(build, /WHEELS_DIR: \$\{\{ runner\.temp \}\}\/eos-wheels/);
+    assert.match(build, /WHEELS_DIR: \.eos-wheels$/m);
     assert.match(build, /TAGS: docker\.io\/bikinibottomcapital\/dvhub-eos:\$\{\{ steps\.eos\.outputs\.image_tag \}\}/);
     assert.match(build, /export \$\(grep -E '\^EOS_NATIVE_\[A-Z0-9_\]\+=' eos-version\.env\)/);
     assert.ok(steps.indexOf(fetch) < steps.indexOf(build));

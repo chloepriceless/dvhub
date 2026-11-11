@@ -141,3 +141,6 @@ tests/node_modules
 /docs/design-mockups/
 /dvhub/docs/superpowers/
 /dvhub/docs/SESSION-NOTES-*.md
+
+# Rust-Kern-Wheels der CI (container*.yml, scripts/eos-native-wheels.sh fetch)
+/.eos-wheels/

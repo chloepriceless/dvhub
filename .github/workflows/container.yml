@@ -213,6 +213,8 @@ jobs:
       # DVhub-EOS immer mit Rust-Kern (T-0415, Christin 11.11.2026). Die Wheels
       # sind Release-Assets des Fork-Tags; eos-version.env pinnt Datei + sha256.
       # Ein Pin, dessen Wheels nicht zu genau diesem Git-Tag gehören, bricht ab.
+      # Ablage im Checkout (.eos-wheels): Bake liest benannte Kontexte außerhalb
+      # des Arbeitsordners nur mit Freigabe (fs-Entitlement, Codex c0af4b31).
       - name: Rust-Kern-Wheels zum Pin holen und prüfen
         if: steps.eos.outputs.build == 'true'
         env:
@@ -223,7 +225,7 @@ jobs:
           url="$(grep -E '^EOS_NATIVE_URL=' eos-version.env | tail -n 1 | cut -d= -f2-)"
           want="${EOS_REPO%.git}/releases/download/${EOS_TAG}"
           test "$url" = "$want" || { echo "::error::EOS_NATIVE_URL=$url gehört nicht zum Pin ($want)"; exit 1; }
-          scripts/eos-native-wheels.sh fetch "$RUNNER_TEMP/eos-wheels" X86_64 AARCH64
+          scripts/eos-native-wheels.sh fetch .eos-wheels X86_64 AARCH64
 
       # Wie tools/dvhub-eos/build-image.sh im Fork: Stufe 1 das unveränderte
       # Root-Dockerfile am Git-Tag (BUILD_VERSION = Docker-Tag), Stufe 2
@@ -237,7 +239,7 @@ jobs:
           EOS_REPO: ${{ steps.eos.outputs.repo }}
           EOS_TAG: ${{ steps.eos.outputs.tag }}
           EOS_IMAGE_TAG: ${{ steps.eos.outputs.image_tag }}
-          WHEELS_DIR: ${{ runner.temp }}/eos-wheels
+          WHEELS_DIR: .eos-wheels
           PLATFORMS: linux/amd64,linux/arm64
           TAGS: docker.io/bikinibottomcapital/dvhub-eos:${{ steps.eos.outputs.image_tag }},docker.io/bikinibottomcapital/dvhub-eos:latest,ghcr.io/${{ github.repository_owner }}/dvhub-eos:${{ steps.eos.outputs.image_tag }}
         run: |
