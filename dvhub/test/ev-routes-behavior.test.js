@@ -212,8 +212,10 @@ describe('Wochenplan über /api/ev (2026-10-27)', () => {
 
   it('POST mit Wochenplan + einmaliger Ankunft + Heimweg → normalisiert gespeichert', async () => {
     const ctx = makeCtx();
+    // Einmalige Ankunft muss in der Zukunft liegen (seit 11.11.2026 geprüft).
+    const arrOnce = new Date(Math.floor(Date.now() / 60_000) * 60_000 + 2 * 86400_000);
     const r = await call(ctx, 'POST', '/api/ev', { departure: {
-      enabled: true, commuteKm: 25, arrivalOnce: '2026-10-27T21:30:00+01:00',
+      enabled: true, commuteKm: 25, arrivalOnce: arrOnce.toISOString().replace('.000Z', '+00:00'),
       weeklyPlan: [{ day: 1, arrival: '20:00', departure: '5:00' }, { day: 5, arrival: '15:00', departure: '09:00', targetValue: 100 }],
     } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -226,7 +228,7 @@ describe('Wochenplan über /api/ev (2026-10-27)', () => {
     assert.ok(opt.evWeeklyPlan.every((e) => e.tripSocPct === null), JSON.stringify(opt.evWeeklyPlan));
     assert.ok(!('targetValue' in opt.evWeeklyPlan[0]) && !('commuteKm' in opt.evWeeklyPlan[0]));
     assert.equal(opt.evWeeklyPlan[4].minSocPct, 100);
-    assert.equal(opt.evArrivalOnce, '2026-10-27T20:30:00.000Z');
+    assert.equal(opt.evArrivalOnce, arrOnce.toISOString());
     assert.equal(opt.evCommuteKm, 25);
     assert.deepEqual(ctx.replans, [], 'Planänderung allein stößt keinen Sofort-Lauf an (die Minuten-Wache übernimmt)');
   });
@@ -337,8 +339,10 @@ describe('GET /api/integrations/evcc: Wochenplan-Zustand für die Schublade', ()
 describe('Max-Ladestand und Einmal-Ziel über /api/ev (1.0.10)', () => {
   it('POST speichert Max, Einmal-Ziel und Plan in SoC-%', async () => {
     const ctx = makeCtx();
+    // Einmalige Abfahrt in der Zukunft (Vergangenheit wird seit 11.11.2026 abgelehnt).
+    const once = new Date(Date.now() + 3 * 86400_000).toISOString();
     const r = await call(ctx, 'POST', '/api/ev', { departure: {
-      enabled: true, maxSocPct: 85, once: '2026-11-17T07:00:00Z', onceMinSocPct: 75, onceTripSocPct: 45,
+      enabled: true, maxSocPct: 85, once, onceMinSocPct: 75, onceTripSocPct: 45,
       weeklyPlan: [{ day: 2, arrival: '', departure: '07:00', minSocPct: 50, tripSocPct: 30 }],
     } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -366,5 +370,51 @@ describe('Max-Ladestand und Einmal-Ziel über /api/ev (1.0.10)', () => {
     assert.deepEqual(r.body.targets.steps, [[55, 0.24], [80, 0.21]]);
     assert.equal(r.body.targets.maxSocPct, 80);
     assert.equal(r.body.maxStop.active, true);
+  });
+});
+
+describe('Einmal-Ziel über /api/ev: Prüfung und Status (11.11.2026)', () => {
+  it('POST mit einmaliger Abfahrt in der Vergangenheit → 400 once_in_past, nichts gespeichert', async () => {
+    const ctx = makeCtx();
+    const r = await call(ctx, 'POST', '/api/ev', { departure: { once: new Date(Date.now() - 3600_000).toISOString(), onceMinSocPct: 80 } });
+    assert.equal(r.status, 400, JSON.stringify(r.body));
+    assert.equal(r.body.code, 'once_in_past');
+    assert.equal(ctx.saved.length, 0);
+  });
+
+  it('POST mit Abfahrt im Vorlauf (in 5 min) → 400; in 30 min → gespeichert', async () => {
+    const ctx = makeCtx();
+    const soon = await call(ctx, 'POST', '/api/ev', { departure: { once: new Date(Date.now() + 5 * 60_000).toISOString() } });
+    assert.equal(soon.status, 400);
+    const ok = await call(ctx, 'POST', '/api/ev', { departure: { enabled: true, once: new Date(Date.now() + 30 * 60_000).toISOString(), onceMinSocPct: 80 } });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ctx.saved.at(-1).optimizer.evDepartureOnceMinSocPct, 80);
+  });
+
+  it('GET liefert onceInfo: aktiv bzw. vorbei (kein Aktiv-Chip für ein vergangenes Ziel)', async () => {
+    const ctx = makeCtx();
+    Object.assign(ctx.getRawCfg().optimizer, { evDepartureEnabled: true, evDepartureOnce: new Date(Date.now() + 86400_000).toISOString(), evDepartureOnceMinSocPct: 85 });
+    const r = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.departure.onceInfo.departure.state, 'active');
+    assert.equal(r.body.departure.onceInfo.departure.effective, true);
+    assert.equal(r.body.departure.onceInfo.departure.targetSocPct, 85);
+    ctx.getRawCfg().optimizer.evDepartureOnce = new Date(Date.now() - 60_000).toISOString();
+    const r2 = await call(ctx, 'GET', '/api/ev');
+    assert.equal(r2.body.departure.onceInfo.departure.state, 'ended');
+    assert.equal(r2.body.departure.onceInfo.departure.effective, false);
+  });
+
+  it('POST /api/ev/preview beschreibt das Einmal-Ziel des Entwurfs und lehnt die Vergangenheit ab', async () => {
+    const ctx = makeCtx();
+    // Leerer Wochenplan: sonst hinge die nächste Abfahrt vom Wochentag des Testlaufs ab.
+    Object.assign(ctx.getRawCfg().optimizer, { evDepartureEnabled: true, evWeeklyPlan: [] });
+    const r = await call(ctx, 'POST', '/api/ev/preview', { departure: { once: new Date(Date.now() + 86400_000).toISOString(), onceMinSocPct: 70 } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.once.departure.state, 'active');
+    assert.equal(r.body.resolved.targetSocPct, 70);
+    const past = await call(ctx, 'POST', '/api/ev/preview', { departure: { once: new Date(Date.now() - 86400_000).toISOString() } });
+    assert.equal(past.status, 400);
+    assert.equal(past.body.code, 'once_in_past');
   });
 });

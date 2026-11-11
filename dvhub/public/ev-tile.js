@@ -5,13 +5,17 @@
 // Speichern: POST /api/ev (fasst nur optimizer.eosOptimizeEv + die
 // Abfahrtsfelder an). Markenneutral — der Ladestand kommt aus der Quelle, die
 // unter Einstellungen gewaehlt ist.
+//
+// Einmal-Ziel (11.11.2026): keine dauerhaften Felder mehr, sondern der Knopf
+// „Einmalige Abfahrt planen“ mit Dialog und — solange es gilt — ein Status-Chip
+// mit „Ändern“/„Beenden“ (ev-once.js, Status vom Server: departure.onceInfo).
 (function () {
   'use strict';
 
   const POLL_MS = 60000;
 
   let data = null;      // letzte Antwort von GET /api/ev
-  let draft = null;     // Bearbeitungsstand { enabled, weeklyPlan[], targetValue, maxSocPct, arrivalOnce, once, onceMinSocPct, onceTripSocPct }
+  let draft = null;     // Bearbeitungsstand { enabled, weeklyPlan[], targetValue, maxSocPct }
   let weekOpen = false; // Wochenplan-Editor aufgeklappt
   let dirty = false;
   let timer = null;
@@ -29,6 +33,17 @@
     "  <div class=\"rail-big card-value value-ev\"><span id=\"evSocNow\">&mdash;</span><span class=\"ev-soc-arrow\">&rarr;</span><span id=\"evSocTarget\">&mdash;</span></div>",
     "  <div class=\"ev-state\" id=\"evState\">&mdash;</div>",
     "  <div class=\"ev-window\" id=\"evWindow\" hidden>&mdash;</div>",
+    "  <div class=\"ev-once-chip\" id=\"evOnceChip\" role=\"status\" hidden>",
+    "    <div class=\"ev-once-chip-title\" id=\"evOnceChipTitle\">&mdash;</div>",
+    "    <div class=\"ev-once-chip-lines\" id=\"evOnceChipLines\"></div>",
+    "    <div class=\"ev-once-chip-actions\">",
+    "      <button type=\"button\" class=\"btn sm\" id=\"evOnceEdit\">&Auml;ndern</button>",
+    "      <button type=\"button\" class=\"btn sm ghost\" id=\"evOnceEnd\">Beenden</button>",
+    "    </div>",
+    "  </div>",
+    "  <div class=\"ev-once-start\" id=\"evOnceStart\" hidden>",
+    "    <button type=\"button\" class=\"btn sm\" id=\"evOncePlan\" title=\"F&uuml;r eine Fahrt au&szlig;er der Reihe: einmal Abfahrt und Mindest-Ladestand festlegen. Gilt genau einmal, der Wochenplan bleibt.\">+ Einmalige Abfahrt planen</button>",
+    "  </div>",
     "  <div class=\"ev-boost\" id=\"evBoost\" hidden title=\"Jetzt laden, egal was EOS plant &mdash; auch wenn EOS nicht l&auml;uft. Endet zur gew&auml;hlten Zeit, beim Abstecken oder mit Beenden; danach gilt wieder der EOS-Plan.\">",
     "    <div class=\"ev-boost-idle\" id=\"evBoostIdle\">",
     "      <span class=\"l\">Sofort laden</span>",
@@ -66,14 +81,6 @@
     "    <div id=\"evWeeklyGrid\"></div>",
     "    <div class=\"ev-weekly-extra\">",
     "      <label class=\"ev-field\"><span>Max, wenn g&uuml;nstig (%)</span><input type=\"number\" class=\"input mono\" id=\"evMaxSoc\" min=\"10\" max=\"100\" step=\"5\" placeholder=\"aus\" title=\"Ist Laden g&uuml;nstig (billige Nacht, PV-&Uuml;berschuss), l&auml;dt EOS &uuml;ber das Mindestziel bis hierher &mdash; mit Blick auf die n&auml;chsten Fahrten. Erreicht: DVhub beendet das Laden. Leer = aus.\"></label>",
-    "      <label class=\"ev-field\"><span>Nur n&auml;chste Ankunft</span><input type=\"datetime-local\" class=\"input mono\" id=\"evArrOnce\"></label>",
-    "      <button type=\"button\" class=\"btn sm ghost evw-clear-fields\" data-evw-clear=\"evArrOnce\" aria-label=\"Nur n&auml;chste Ankunft leeren\" title=\"Nur n&auml;chste Ankunft leeren &mdash; ohne ins Datumsfeld zu tippen\"><span aria-hidden=\"true\">&#x2715;</span> Leeren</button>",
-    "    </div>",
-    "    <div class=\"ev-weekly-extra ev-once\" title=\"Einmal-Ziel, z. B. morgen l&auml;ngere Strecke: einmal 75 % bis 08:00. Der Wochenplan bleibt, wie er ist; nach der Abfahrt ist das Ziel vorbei.\">",
-    "      <label class=\"ev-field\"><span>Einmalig: Abfahrt</span><input type=\"datetime-local\" class=\"input mono\" id=\"evDepOnce\"></label>",
-    "      <label class=\"ev-field\"><span>mindestens (%)</span><input type=\"number\" class=\"input mono\" id=\"evOnceMin\" min=\"0\" max=\"100\" step=\"5\" placeholder=\"wie Plan\"></label>",
-    "      <label class=\"ev-field\"><span>Fahrt etwa (%)</span><input type=\"number\" class=\"input mono\" id=\"evOnceTrip\" min=\"0\" max=\"100\" step=\"1\" placeholder=\"wie Plan\"></label>",
-    "      <button type=\"button\" class=\"btn sm ghost evw-clear-fields\" data-evw-clear=\"evDepOnce evOnceMin evOnceTrip\" aria-label=\"Einmal-Ziel leeren\" title=\"Einmal-Ziel leeren (Abfahrt, mindestens, Fahrt) &mdash; ohne ins Datumsfeld zu tippen\"><span aria-hidden=\"true\">&#x2715;</span> Leeren</button>",
     "    </div>",
     "  </div>",
     "  <div class=\"rail-row ev-edit-row\" title=\"Mindest-Ladestand bei jeder Abfahrt ohne eigenen Wert im Wochenplan.\">",
@@ -119,14 +126,6 @@
     if (day === new Date(now + 86400000).toLocaleDateString('de-DE', opts)) return 'morgen ' + fmtTime(iso);
     return fmtDayTime(iso);
   }
-  // datetime-local (Ortszeit des Browsers) <-> ISO
-  function toLocalInput(iso) {
-    const d = new Date(iso || '');
-    if (!iso || isNaN(d)) return '';
-    const p = function (n) { return String(n).padStart(2, '0'); };
-    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
-  }
-  function fromLocalInput(v) { return v ? new Date(v).toISOString() : ''; }
   const SOURCE_NAMES = { teslamate: 'TeslaMate', evcc: 'evcc', evccvehicle: 'Fahrzeugtreiber', mqtt: 'MQTT', http: 'HTTP-Abruf', homeassistant: 'Home Assistant' };
   function sourceName(src) { return SOURCE_NAMES[src] || (src ? 'Wallbox' : '—'); }
   function fmtKw(w) { return (w / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' kW'; }
@@ -146,11 +145,7 @@
       enabled: d.enabled === true,
       weeklyPlan: Array.isArray(d.weeklyPlan) ? d.weeklyPlan : [],
       targetValue: d.defaultMinSocPct != null ? d.defaultMinSocPct : d.targetValue,
-      maxSocPct: d.maxSocPct != null ? d.maxSocPct : '',
-      arrivalOnce: d.arrivalOnce || '',
-      once: d.once || '',
-      onceMinSocPct: d.onceMinSocPct != null ? d.onceMinSocPct : '',
-      onceTripSocPct: d.onceTripSocPct != null ? d.onceTripSocPct : ''
+      maxSocPct: d.maxSocPct != null ? d.maxSocPct : ''
     };
   }
 
@@ -431,10 +426,6 @@
     el('evTarget').step = 5;
     el('evTargetUnit').textContent = '%';
     el('evMaxSoc').value = draft.maxSocPct;
-    el('evArrOnce').value = toLocalInput(draft.arrivalOnce);
-    el('evDepOnce').value = toLocalInput(draft.once);
-    el('evOnceMin').value = draft.onceMinSocPct;
-    el('evOnceTrip').value = draft.onceTripSocPct;
     el('evWeekly').hidden = !weekOpen;
     el('evWeekToggle').setAttribute('aria-expanded', String(weekOpen));
     el('evWeekToggle').textContent = weekOpen ? 'Zuklappen' : 'Bearbeiten';
@@ -470,14 +461,19 @@
   }
 
   // Abfahrtsfelder aus dem Formular (Speichern und Vorschau), ohne Pruefung.
+  // Das Einmal-Ziel gehoert nicht dazu — es hat seinen eigenen Dialog
+  // (ev-once.js) und wird hier weder gesendet noch ueberschrieben.
   function formDeparture() {
     const plan = window.DVhubEvWeekly ? window.DVhubEvWeekly.read(el('evWeeklyGrid')) : draft.weeklyPlan;
     return {
       enabled: draft.enabled, weeklyPlan: plan, targetMode: 'percent', targetValue: Number(el('evTarget').value),
-      maxSocPct: pctField('evMaxSoc'),
-      arrivalOnce: fromLocalInput(el('evArrOnce').value), once: fromLocalInput(el('evDepOnce').value),
-      onceMinSocPct: pctField('evOnceMin'), onceTripSocPct: pctField('evOnceTrip')
+      maxSocPct: pctField('evMaxSoc')
     };
+  }
+  // Gilt gerade ein Einmal-Ziel (Server-Status)?
+  function onceActive() {
+    const i = data && data.departure && data.departure.onceInfo;
+    return !!(i && i.departure && i.departure.state === 'active');
   }
   // Prozentfeld: leer = '' (aus bzw. „wie Plan“), sonst Zahl.
   function pctField(id) {
@@ -588,6 +584,70 @@
     }
   }
 
+  // Einmal-Ziel: Chip, solange es gilt, sonst der Knopf (ev-once.js).
+  function renderOnce() {
+    const chipBox = el('evOnceChip');
+    const start = el('evOnceStart');
+    if (!chipBox || !start) return;
+    const O = window.DVhubEvOnce;
+    const info = data.departure && data.departure.onceInfo;
+    const c = O ? O.chip(info, { tz: tz() }) : null;
+    chipBox.hidden = !c;
+    start.hidden = !!c || !O;
+    if (!c) return;
+    chipBox.classList.toggle('is-inactive', c.kind === 'inactive');
+    el('evOnceChipTitle').textContent = c.title;
+    const lines = el('evOnceChipLines');
+    lines.textContent = '';
+    c.lines.forEach(function (t) {
+      const p = document.createElement('div');
+      p.textContent = t;
+      lines.appendChild(p);
+    });
+  }
+
+  function openOnce(editing) {
+    if (!window.DVhubEvOnce || !data) return;
+    window.DVhubEvOnce.open({
+      data: data,
+      current: editing,
+      save: function (departure) { return saveOnce(departure, editing ? 'Einmal-Ziel geändert.' : 'Einmal-Ziel aktiv — EOS plant damit beim nächsten Lauf.'); },
+      preview: async function (departure) {
+        try {
+          const res = await apiFetch('/api/ev/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ departure: departure }) });
+          return res.ok ? await res.json() : null;
+        } catch (_) { return null; }
+      }
+    });
+  }
+
+  // Einmal-Ziel speichern (nur die Einmal-Felder, POST /api/ev) → { ok, error }.
+  async function saveOnce(departure, okText) {
+    try {
+      const res = await apiFetch('/api/ev', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ departure: departure }) });
+      let body = {};
+      try { body = await res.json(); } catch (_) { /* leer */ }
+      if (body.error === 'pro_required') return { ok: false, error: 'E-Auto-Planung braucht DVhub Pro.' };
+      if (body.code === 'once_in_past') return { ok: false, error: 'Die Abfahrt liegt in der Vergangenheit (oder in weniger als 10 min).' };
+      if (body.code === 'arrival_once_in_past') return { ok: false, error: 'Die Ankunft liegt in der Vergangenheit.' };
+      if (!res.ok || !body.ok) return { ok: false, error: body.error || ('HTTP ' + res.status) };
+      msg(okText);
+      setTimeout(function () { msg(''); }, 4000);
+      load();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
+  async function endOnce() {
+    if (!window.DVhubEvOnce) return;
+    const yes = await window.DVhubEvOnce.confirmEnd('Die einmalige Abfahrt (und eine einmalige Ankunft) wird gelöscht. Danach gilt wieder nur der Wochenplan.');
+    if (!yes) return;
+    const out = await saveOnce({ once: '', onceMinSocPct: '', onceTripSocPct: '', arrivalOnce: '' }, 'Einmal-Ziel beendet — es gilt wieder der Wochenplan.');
+    if (!out.ok) msg('Nicht beendet: ' + out.error, true);
+  }
+
   function render() {
     const tile = el('evTile');
     if (!tile || !data) return;
@@ -609,6 +669,7 @@
     el('evSocNow').title = v.socSource ? 'Quelle: ' + v.socSource + (v.rangeKm > 0 ? ' · ' + v.rangeKm + ' km' : '') : '';
     renderState();
     renderWindow();
+    renderOnce();
     renderBoost();
     renderTimeline();
     renderSteps();
@@ -672,13 +733,9 @@
     const tv = Number(el('evTarget').value);
     if (!isFinite(tv) || tv < 0 || tv > 100) { msg('Mindestens bei Abfahrt: 0–100 %', true); return; }
     const dep = formDeparture();
-    const err = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(dep.weeklyPlan, { enabled: draft.enabled, hasOnce: !!el('evDepOnce').value }) : null;
+    const err = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(dep.weeklyPlan, { enabled: draft.enabled, hasOnce: onceActive() }) : null;
     if (err) { msg(err, true); return; }
     if (dep.maxSocPct !== '' && !(dep.maxSocPct >= 10 && dep.maxSocPct <= 100)) { msg('Max, wenn günstig: 10–100 % oder leer', true); return; }
-    for (const k of ['onceMinSocPct', 'onceTripSocPct']) {
-      if (dep[k] !== '' && !(dep[k] >= 0 && dep[k] <= 100)) { msg('Einmal-Ziel: 0–100 % oder leer', true); return; }
-    }
-    if (dep.onceMinSocPct !== '' && !dep.once) { msg('Einmal-Ziel: bitte die Abfahrt dazu eintragen', true); return; }
     dep.targetValue = tv;
     const ok = await post({ departure: dep }, 'Übernommen — EOS rechnet mit dem neuen Wochenplan.');
     if (ok) { setDirty(false); load(); }
@@ -692,11 +749,11 @@
     if (e.target.id === 'evOnlyPlugged') { toggleOnlyPlugged(e.target.checked); return; }
     if (e.target.id === 'evDepEnabled') { draft.enabled = e.target.checked; setDirty(true); previewSoon(); return; }
     if (e.target.id === 'evTarget') { draft.targetValue = e.target.value; setDirty(true); previewSoon(); return; }
-    if (['evMaxSoc', 'evArrOnce', 'evDepOnce', 'evOnceMin', 'evOnceTrip'].indexOf(e.target.id) >= 0) { setDirty(true); previewSoon(); }
+    if (e.target.id === 'evMaxSoc') { setDirty(true); previewSoon(); }
   });
   document.addEventListener('input', function (e) {
     if (!data) return;
-    if (['evTarget', 'evMaxSoc', 'evOnceMin', 'evOnceTrip'].indexOf(e.target.id) >= 0) { setDirty(true); previewSoon(); }
+    if (['evTarget', 'evMaxSoc'].indexOf(e.target.id) >= 0) { setDirty(true); previewSoon(); }
     if (e.target.id === 'evBoostKw') boostTouched = true;
   });
   document.addEventListener('click', function (e) {
@@ -709,6 +766,9 @@
       return;
     }
     if (e.target.id === 'evStepsToggle') { stepsOpen = !stepsOpen; renderSteps(); return; }
+    if (e.target.id === 'evOncePlan') { openOnce(false); return; }
+    if (e.target.id === 'evOnceEdit') { openOnce(true); return; }
+    if (e.target.id === 'evOnceEnd') { endOnce(); return; }
     if (e.target.id === 'evSave') { save(); return; }
     if (e.target.id === 'evBoostStart') { startBoost(); return; }
     if (e.target.id === 'evBoostStop') { stopBoost(); return; }
