@@ -71,6 +71,15 @@ export const BETA_FEATURES = {
     gate: 'display',
     paths: ['optimizer.eosProxy']
   },
+  sungrowEms: {
+    label: 'Sungrow-Akkusteuerung',
+    // NUR Anzeige: das Sungrow-Profil selbst ist Beta und nur im Bleeding-Edge-
+    // Kanal wählbar. Wer es fährt, braucht den gewählten Steuermodus auch nach
+    // einem Kanalwechsel — Abschalten hieße, den Herzschlag mitten im Betrieb
+    // zu verlieren (T-0422).
+    gate: 'display',
+    paths: ['sungrow']
+  },
   accessControl: {
     label: 'Sicherheit & Zugang',
     gate: 'display',

@@ -213,7 +213,7 @@ export function createScheduleEvaluator(ctx) {
 
   // Sungrow-Hybrid (T-0422, Beta): Netz-Sollwert über den EMS-Modus nachbilden
   // (controlWrite.gridSetpointW.emulate 'sungrow-ems'). Ohne dieses Profil ruht er.
-  const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog });
+  const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog, statePath: ctx.sungrowEmsStatePath || null });
 
   // Geräte-Tor (Profil identify.requiredForWrites): geschrieben wird erst, wenn
   // polling.js das Gerät erkannt hat und es unterstützt ist — ein falsches oder

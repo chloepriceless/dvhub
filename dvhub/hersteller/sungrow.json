@@ -26,7 +26,8 @@
     "Steuerung (Beta, an echter Hardware NOCH NICHT geprüft):",
     "  • Netz-Sollwert: DVhub bildet ihn über den EMS-Modus nach (services/inverter/sungrow.js).",
     "    Sollwert nahe 0 (±300 W, z. B. Puffer −40 W) → Self-consumption (13050 = 0, 13051 = 0xCC).",
-    "    Sonst Forced mode (13050 = 2), Laden 0xAA / Entladen 0xBB, Leistung 13052 in W, alle 10 s aus",
+    "    Sonst External EMS (13050 = 3, Standard, mit Herzschlag 13080) oder Forced mode (13050 = 2,",
+    "    Einstellung sungrow.controlMode), Laden 0xAA / Entladen 0xBB, Leistung 13052 in W, alle 10 s aus",
     "    Netz- und Akku-Messung nachgeführt. Ohne Netzbezug-Wunsch nie Laden aus dem Netz, ohne",
     "    Einspeise-Wunsch nie Entladen ins Netz. Ohne frische Messwerte oder ohne Sollwert seit 2 min →",
     "    Self-consumption.",
@@ -34,8 +35,9 @@
     "    13088 Quote = 0 (wenn vorhanden), 13074 Wert = 0 W, dann 13087 = 0xAA. Die Werte davor werden",
     "    gesichert und bei Freigabe zurückgeschrieben (eine vom Installateur gesetzte Grenze bleibt).",
     "  • Not-Halt: hat DVhub den Zwangsbetrieb gesetzt, einmal zurück in Self-consumption, dann nichts.",
-    "  • Nicht genutzt: Min-/Max-SoC (13058/13059), Max. Lade-/Entladeleistung (33047/33048),",
-    "    External-EMS-Modus mit Herzschlag (13080) — ungeprüft, folgt nach dem Kundentest.",
+    "  • External EMS: Herzschlag 13080 = Frist (Standard 30 s) in jedem Takt; bleibt er aus, kehrt der",
+    "    Wechselrichter laut Doku selbst in Self-consumption zurück. Firmware ohne 13080 → keine Akku-Steuerung.",
+    "  • Nicht genutzt: Min-/Max-SoC (13058/13059), Max. Lade-/Entladeleistung (33047/33048).",
     "",
     "UNGEPRÜFT bis zum Kundentest: Vorzeichen der Akku-Leistung 5214 (laut mkaiser positiv =",
     "Entladen → scale −1), Verhalten des Forced mode beim Laden aus PV + Netz, Reaktionszeit."
@@ -124,7 +126,7 @@
 
   "controlWrite": {
     "gridSetpointW": {
-      "_comment": "Netz-Sollwert (+ = Bezug) über den Sungrow-EMS nachgebildet (emulate 'sungrow-ems'): Doku 13050 EMS-Modus (0 Self-consumption, 2 Forced), 13051 Befehl (0xAA Laden, 0xBB Entladen, 0xCC Stopp), 13052 Leistung U16 W (0–100 % BDC-Nennleistung). keepaliveMs: DVhub frischt den Sollwert alle 30 s auf; bleibt er 2 min aus, geht der Wechselrichter in Self-consumption.",
+      "_comment": "Netz-Sollwert (+ = Bezug) über den Sungrow-EMS nachgebildet (emulate 'sungrow-ems'): Doku 13050 EMS-Modus (0 Self-consumption, 2 Forced, 3 External EMS mit Herzschlag 13080 — Auswahl über config sungrow.controlMode), 13051 Befehl (0xAA Laden, 0xBB Entladen, 0xCC Stopp), 13052 Leistung U16 W (0–100 % BDC-Nennleistung). keepaliveMs: DVhub frischt den Sollwert alle 30 s auf; bleibt er 2 min aus, geht der Wechselrichter in Self-consumption.",
       "enabled": true,
       "emulate": "sungrow-ems",
       "keepaliveMs": 30000,

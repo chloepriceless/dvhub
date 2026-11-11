@@ -22,8 +22,12 @@ verweist hierher.
   Netz- und Akku-Messung nachgeführt — ohne Bezugs-Wunsch nie Laden aus dem Netz, ohne Einspeise-Wunsch nie Entladen
   ins Netz; ohne frische Messwerte oder Sollwert zurück in Self-consumption. Abregelung (Direktvermarkter, §51) über
   die Einspeisebegrenzung am Netzpunkt (13088/13074/13087), vorher gesichert und bei Freigabe zurückgeschrieben.
-  Jeder Write mit Rücklesen; Holding-Register werden nicht zyklisch gelesen (WiNet-S). Not-Halt nimmt einen von DVhub
-  gesetzten Zwangsbetrieb einmal zurück. Ein fremdes EMS (Modus External/VPP) wird nicht übersteuert. Noch nicht an
+  Jeder Write mit Rücklesen; Holding-Register werden nicht zyklisch gelesen (WiNet-S). Steuermodus einstellbar
+  (Einstellungen → Anlage verbinden → „Sungrow-Akkusteuerung“, Beta): **External EMS** (Standard) mit Herzschlag 13080
+  alle 10 s, Frist 30 s (20–300 s) — fällt DVhub aus, kehrt der Wechselrichter selbst in Self-consumption zurück;
+  ohne das Register (alte Firmware) steuert DVhub den Akku nicht und meldet das. Alternativ **Forced mode** (ohne
+  Rückfall). Ein Moduswechsel geht erst über Self-consumption. Not-Halt nimmt einen von DVhub gesetzten
+  Zwangs-/EMS-Betrieb einmal zurück, danach auch kein Herzschlag. Ein fremdes EMS (Modus External/VPP) wird nicht übersteuert. Noch nicht an
   echter Hardware geprüft — Anleitung für den Test: `docs/SUNGROW-BETA.md`. Allgemein neu dafür: Profil-Punkte mit
   `notAvailableRaw` (Gerät meldet „kein Wert“ → leer statt Zahl), Zähler mit 4×int32 (`meter.readType: 'int32'`,
   Ersatzregister `meter.fallback`), Sequenzschritte mit `optional` (Register fehlt → Schritt übersprungen) und

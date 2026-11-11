@@ -12,14 +12,16 @@ import { createScheduleEvaluator } from '../schedule-eval.js';
 import { createPoller } from '../polling.js';
 import { createModbusTransport } from '../transport-modbus.js';
 import { setEmergencyStop } from '../services/control-commands.js';
+import fs from 'node:fs';
 import {
-  decideEmsCommand, createSungrowEms, emsMatches, EMS_CMD, EMS_MODE, wire
+  decideEmsCommand, createSungrowEms, emsMatches, resolveSungrowControl, EMS_CMD, EMS_MODE, wire
 } from '../services/inverter/sungrow.js';
 import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
 
 const MODE = wire(13050);
 const CMD = wire(13051);
 const POWER = wire(13052);
+const HB = wire(13080);
 
 // --- Regler (rein) ---------------------------------------------------------------
 
@@ -108,8 +110,8 @@ test('emsMatches: Self = Modus 0 + Stopp; Zwang mit Leistungstoleranz', () => {
 
 // --- Aktuator ------------------------------------------------------------------------
 
-function rig({ over = {}, device = sungrowDevice(), mockOpts = {} } = {}) {
-  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import' });
+function rig({ over = {}, device = sungrowDevice(), mockOpts = {}, controlMode = 'forced', heartbeatTimeoutS = 30, statePath = null } = {}) {
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode, heartbeatTimeoutS } });
   const image = sungrowImage(over);
   const t = mockSungrow(image, mockOpts);
   let clock = 1_000_000;
@@ -126,7 +128,7 @@ function rig({ over = {}, device = sungrowDevice(), mockOpts = {} } = {}) {
   };
   telemetry();
   const logs = [];
-  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, pushLog: (event, data) => logs.push({ event, data }), now });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, pushLog: (event, data) => logs.push({ event, data }), now, statePath });
   return { cfg, image, t, state, ems, logs, telemetry, advance: (ms) => { clock += ms; }, now };
 }
 
@@ -378,10 +380,230 @@ test('Codex R2: Not-Halt während des Lesens → fremder Zwangsbetrieb wird nich
   assert.deepEqual(r.t.writes, []);
 });
 
+// --- External EMS (Standard) -------------------------------------------------------------
+
+test('Steuermodus: Standard External EMS, Frist 30 s, Grenzen 20–300 s', () => {
+  assert.deepEqual(resolveSungrowControl({}), { mode: 'external', modeValue: EMS_MODE.EXTERNAL, heartbeatTimeoutS: 30 });
+  assert.equal(resolveSungrowControl({ sungrow: { controlMode: 'forced' } }).modeValue, EMS_MODE.FORCED);
+  assert.equal(resolveSungrowControl({ sungrow: { heartbeatTimeoutS: 5 } }).heartbeatTimeoutS, 20);
+  assert.equal(resolveSungrowControl({ sungrow: { heartbeatTimeoutS: 1000 } }).heartbeatTimeoutS, 300);
+  assert.equal(resolveSungrowControl({ sungrow: { controlMode: 'quatsch' } }).mode, 'external');
+  // Ausgeliefert: Profil + Default-Config → External EMS
+  assert.equal(resolveSungrowControl(loadSungrowConfig()).mode, 'external');
+});
+
+test('External EMS: Leistung → Befehl → Herzschlag (Frist) → Modus 3, Rücklesen inkl. Herzschlag', async () => {
+  const r = rig({ controlMode: 'external' });
+  const res = await r.ems.applySetpoint(4000, 'rule:netzladen');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [
+    [POWER, 2300], [CMD, EMS_CMD.CHARGE], [HB, 30], [MODE, EMS_MODE.EXTERNAL]
+  ]);
+  assert.deepEqual(r.t.reads.map((x) => [x.fc, x.address]), [[3, HB], [3, MODE], [3, MODE], [3, HB]]);
+  assert.equal(r.state.ctrl.sungrowEms.ownMode, EMS_MODE.EXTERNAL);
+});
+
+test('External EMS: Herzschlag in jedem Takt, auch wenn sich sonst nichts ändert; nie im Self-consumption', async () => {
+  const r = rig({ controlMode: 'external' });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  const steady = { gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 };
+  r.t.writes.length = 0;
+  r.t.reads.length = 0;
+  for (let i = 0; i < 3; i += 1) {
+    r.advance(10_000);
+    r.telemetry(steady);
+    await r.ems.tick();
+  }
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[HB, 30], [HB, 30], [HB, 30]]);
+  assert.deepEqual(r.t.reads, [], 'Herzschlag ohne zyklisches Lesen');
+  // Sollwert zurück ins Band → Self-consumption (Modus 0), danach kein Herzschlag mehr.
+  r.t.writes.length = 0;
+  await r.ems.applySetpoint(-40, 'default');
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP], [MODE, EMS_MODE.SELF]]);
+  r.t.writes.length = 0;
+  for (let i = 0; i < 3; i += 1) { r.advance(10_000); r.telemetry(); await r.ems.tick(); }
+  assert.deepEqual(r.t.writes, []);
+});
+
+test('External EMS: Frist 20 s → Takt alle 6,7 s (drei Herzschläge je Frist)', async () => {
+  const r = rig({ controlMode: 'external', heartbeatTimeoutS: 20 });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  r.t.writes.length = 0;
+  r.advance(6_000);
+  r.telemetry({ gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 });
+  await r.ems.tick();
+  assert.deepEqual(r.t.writes, [], '6 s < 6,67 s');
+  r.advance(1_000);
+  await r.ems.tick();
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[HB, 20]]);
+});
+
+for (const variant of ['Register fällt auf 0', 'Register bleibt 3']) {
+  test(`External EMS: DVhub hängt länger als die Frist (${variant}) → beim Wiederanlauf ganzer Befehl neu`, async () => {
+    const r = rig({ controlMode: 'external' });
+    await r.ems.applySetpoint(-5000, 'rule:abend');
+    // DVhub hängt 40 s (> 30 s Frist). Der Wechselrichter fällt laut Doku in Self-consumption zurück;
+    // ob 13050 dabei auf 0 springt, sagt die Doku nicht — beide Fälle.
+    r.advance(40_000);
+    if (variant === 'Register fällt auf 0') { r.image.holding.set(MODE, EMS_MODE.SELF); r.image.holding.set(CMD, EMS_CMD.STOP); }
+    r.telemetry({ gridW: 0, batteryW: -500, pvW: 0, loadW: 500 });
+    r.t.writes.length = 0;
+    await r.ems.tick();
+    assert.deepEqual(r.t.writes.map((w) => w.address), [POWER, CMD, HB, MODE], 'alles neu, auch was gleich aussieht');
+    assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_heartbeat_gap'));
+    assert.equal(r.image.holding.get(MODE), EMS_MODE.EXTERNAL);
+  });
+}
+
+test('External EMS: Firmware ohne Herzschlag-Register → kein Write, klare Meldung; Forced mode geht weiter', async () => {
+  for (const over of [{ dropHolding: [HB] }, { holding: { [HB]: 0xffff } }]) {
+    const r = rig({ controlMode: 'external', over });
+    const res = await r.ems.applySetpoint(4000, 'rule:netzladen');
+    assert.equal(res.ok, false);
+    assert.equal(res.error, 'sungrow_heartbeat_unsupported');
+    assert.deepEqual(r.t.writes, []);
+    assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_heartbeat_unsupported').length, 1);
+    r.advance(10_000);
+    await r.ems.tick();
+    assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_heartbeat_unsupported').length, 1, 'nur einmal gemeldet');
+    // Bewusst Forced mode gewählt → steuert.
+    r.cfg.sungrow.controlMode = 'forced';
+    r.advance(10_000);
+    await r.ems.tick();
+    assert.ok(r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED));
+  }
+});
+
+test('Moduswechsel zur Laufzeit: erst Self-consumption bestätigt, dann der neue Modus', async () => {
+  const r = rig({ controlMode: 'external' });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  const steady = { gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 };
+  r.t.writes.length = 0;
+  r.cfg.sungrow.controlMode = 'forced';
+  r.advance(10_000);
+  r.telemetry(steady);
+  await r.ems.tick();
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP], [MODE, EMS_MODE.SELF]]);
+  assert.equal(r.state.ctrl.sungrowEms.owns, false);
+  r.t.writes.length = 0;
+  r.advance(10_000);
+  r.telemetry(steady);
+  await r.ems.tick();
+  // Leistung steht noch im Register (Self-consumption setzt sie nicht zurück) → nur Befehl und Modus 2.
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.DISCHARGE], [MODE, EMS_MODE.FORCED]]);
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED);
+  assert.ok(!r.t.writes.some((w) => w.address === HB), 'Forced mode ohne Herzschlag');
+});
+
+test('Not-Halt im External EMS: einmal Stopp + Modus 0, danach auch kein Herzschlag mehr', async () => {
+  const r = rig({ controlMode: 'external' });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  r.t.writes.length = 0;
+  r.state.ctrl.discretionaryWritesPaused = true;
+  r.state.ctrl.pausedAt = 21;
+  assert.equal((await r.ems.emergencyStop()).ok, true);
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP], [MODE, EMS_MODE.SELF]]);
+  r.t.writes.length = 0;
+  for (let i = 0; i < 6; i += 1) { r.advance(10_000); r.telemetry(); await r.ems.tick(); }
+  assert.deepEqual(r.t.writes, []);
+});
+
+test('External EMS: fremdes Modus 3 wird nicht übersteuert, das eigene nach Neustart (Merker) schon', async () => {
+  const foreign = rig({ controlMode: 'external', over: { holding: { [MODE]: EMS_MODE.EXTERNAL } } });
+  assert.equal((await foreign.ems.applySetpoint(4000, 'rule:netzladen')).error, 'sungrow_foreign_ems_mode');
+  assert.deepEqual(foreign.t.writes, []);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-ems-state-'));
+  const statePath = path.join(dir, 'sungrow_ems_state.json');
+  const a = rig({ controlMode: 'external', statePath });
+  await a.ems.applySetpoint(-5000, 'rule:abend');
+  assert.deepEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')).ownMode, EMS_MODE.EXTERNAL);
+  // Neustart: neuer Prozess, gleiches Gerät (Modus 3 steht noch), Merker liegt.
+  const b = rig({ controlMode: 'external', statePath, over: { holding: { [MODE]: EMS_MODE.EXTERNAL, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 4000 } } });
+  assert.equal(b.state.ctrl.sungrowEms, undefined);
+  const res = await b.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.ok(b.t.writes.some((w) => w.address === HB), 'eigenes External EMS: Herzschlag weiter');
+  // Not-Halt nach dem Neustart nimmt den eigenen Betrieb zurück; danach ist der Merker weg.
+  b.t.writes.length = 0;
+  b.state.ctrl.discretionaryWritesPaused = true;
+  b.state.ctrl.pausedAt = 22;
+  await b.ems.emergencyStop();
+  assert.deepEqual(b.t.writes.map((w) => w.address), [CMD, MODE]);
+  assert.equal(fs.existsSync(statePath), false);
+});
+
+// --- Regelgüte: Anlagen-Simulation mit Lastsprüngen ------------------------------------------
+// Physik: Netz = Last − PV + Akku (Laden +). Im Zwangs-/EMS-Betrieb folgt der Akku dem Befehl mit Verzögerung
+// `lag` je Takt (1 = sofort, 0,5 = halber Weg), begrenzt auf 10 kW; in Self-consumption deckt er die Netto-Last.
+function plant(r, { loadW, pvW = 0, batteryW = -loadW, lag = 1 }) {
+  const p = { loadW, pvW, batteryW, lag };
+  p.target = () => {
+    const mode = r.image.holding.get(MODE);
+    const cmd = r.image.holding.get(CMD);
+    const pw = r.image.holding.get(POWER);
+    if (mode === EMS_MODE.SELF) return Math.max(-10000, Math.min(10000, p.pvW - p.loadW));
+    return cmd === EMS_CMD.CHARGE ? pw : cmd === EMS_CMD.DISCHARGE ? -pw : 0;
+  };
+  p.settle = () => {
+    p.batteryW += p.lag * (p.target() - p.batteryW);
+    r.telemetry({ gridW: Math.round(p.loadW - p.pvW + p.batteryW), batteryW: Math.round(p.batteryW), pvW: p.pvW, loadW: p.loadW });
+    return p.loadW - p.pvW + p.batteryW;
+  };
+  p.settle();
+  return p;
+}
+
+async function runSteps(r, p, setpointW, n, source = 'rule:test') {
+  const errors = [];
+  for (let i = 0; i < n; i += 1) {
+    r.advance(10_000);
+    // Wie im Betrieb: der Evaluator frischt den Sollwert auf (Keepalive), der Takt regelt nach.
+    await r.ems.applySetpoint(setpointW, source);
+    await r.ems.tick();
+    errors.push(Math.round(p.settle() - setpointW));
+  }
+  return errors;
+}
+
+for (const controlMode of ['external', 'forced']) {
+  for (const lag of [1, 0.5]) {
+    test(`Regelgüte (${controlMode}, Akku-Verzögerung ${lag}): Netzladen 3 kW, Lastsprung +3 kW und −3 kW`, async () => {
+      const r = rig({ controlMode });
+      const p = plant(r, { loadW: 500, lag });
+      await r.ems.applySetpoint(3000, 'rule:test');
+      const e1 = await runSteps(r, p, 3000, 10);
+      // Einschwingen: |Fehler| < 150 W nach höchstens 4 Takten (40 s) bei sofortigem Akku, 9 (90 s) bei halber Verzögerung.
+      const settleBy = lag === 1 ? 4 : 9;
+      assert.ok(e1.slice(settleBy - 1).every((e) => Math.abs(e) < 150), `eingeschwungen: ${e1}`);
+      // Lastsprung: Wärmepumpe +3 kW → der Regler nimmt die Ladung zurück und entlädt notfalls für die Last.
+      p.loadW = 3500;
+      const e2 = await runSteps(r, p, 3000, 12);
+      assert.ok(e2.slice(settleBy).every((e) => Math.abs(e) < 150), `nach +3 kW: ${e2}`);
+      // Kein Aufschwingen: das Vorzeichen des Fehlers wechselt höchstens einmal.
+      const flips = (es) => es.filter((e, i) => i > 0 && Math.sign(e) !== 0 && Math.sign(es[i - 1]) !== 0 && Math.sign(e) !== Math.sign(es[i - 1])).length;
+      assert.ok(flips(e1) <= 1 && flips(e2) <= 1, `kein Pendeln: ${e1} / ${e2}`);
+      p.loadW = 500;
+      const e3 = await runSteps(r, p, 3000, 12);
+      assert.ok(e3.slice(settleBy).every((e) => Math.abs(e) < 150), `nach −3 kW: ${e3}`);
+    });
+  }
+}
+
+test('Regelgüte: Einspeisen 4 kW bei leerem Akku-Limit — Grenze 10 kW BDC wird nie überschritten', async () => {
+  const r = rig({ controlMode: 'external' });
+  const p = plant(r, { loadW: 8000 });
+  await r.ems.applySetpoint(-4000, 'rule:test');
+  await runSteps(r, p, -4000, 8);
+  const powers = r.t.writes.filter((w) => w.address === POWER).map((w) => w.value);
+  assert.ok(powers.length > 0 && powers.every((w) => w <= 10000), `Leistungen: ${powers}`);
+  assert.equal(r.image.holding.get(POWER), 10000, 'an der BDC-Grenze');
+});
+
 // --- Integration: echter Evaluator, ausgeliefertes Profil -------------------------------
 
 function evaluatorRig(persisted = {}) {
-  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', ...persisted });
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced' }, ...persisted });
   const image = sungrowImage();
   const t = mockSungrow(image);
   const now = Date.now();
@@ -549,7 +771,7 @@ function startSungrowServer(image) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, frames, port: server.address().port })));
 }
 
-test('Modbus TCP: Poll liest nur FC 4 an Doku−1-Adressen; Sollwert schreibt FC 6 auf 13050–13052 und liest per FC 3 zurück', async () => {
+test('Modbus TCP: Poll liest nur FC 4 an Doku−1-Adressen; Sollwert (External EMS) schreibt FC 6 auf 13050–13052 + Herzschlag 13080 und liest per FC 3 zurück', async () => {
   const image = sungrowImage();
   const { server, frames, port } = await startSungrowServer(image);
   const transport = createModbusTransport();
@@ -591,12 +813,16 @@ test('Modbus TCP: Poll liest nur FC 4 an Doku−1-Adressen; Sollwert schreibt FC
     // (PV-Überschuss 70 000 − 850 reicht).
     const res = await evaluator.applyControlTarget('gridSetpointW', -4000, 'api_manual_write');
     assert.equal(res.ok, true, JSON.stringify(res));
+    // Standard External EMS: Herzschlag-Register prüfen, Zustand lesen, Leistung → Befehl → Herzschlag 30 s →
+    // Modus 3, dann Block und Herzschlag zurücklesen.
     assert.deepEqual(frames.map((f) => [f.fc, f.address, f.arg]), [
+      [3, 13079, 1],
       [3, 13049, 3],
-      [6, 13051, 310], [6, 13050, 0xaa], [6, 13049, 2],
-      [3, 13049, 3]
+      [6, 13051, 310], [6, 13050, 0xaa], [6, 13079, 30], [6, 13049, 3],
+      [3, 13049, 3],
+      [3, 13079, 1]
     ]);
-    assert.deepEqual([image.holding.get(13049), image.holding.get(13050), image.holding.get(13051)], [2, 0xaa, 310]);
+    assert.deepEqual([image.holding.get(13049), image.holding.get(13050), image.holding.get(13051), image.holding.get(13079)], [3, 0xaa, 310, 30]);
   } finally {
     await transport.destroy();
     await new Promise((r) => server.close(r));
