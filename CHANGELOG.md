@@ -42,6 +42,11 @@ verweist hierher.
     Mindestziel, Max-Ladestand und Wallbox-Grenze ruhen; das Mindestziel bleibt vorausschauend. Die Oberfläche sagt es.
   - **Einphasig laden,** wenn die Wallbox umschalten kann (evcc meldet es je Ladepunkt): kleine Leistungen 1,4–3,7 kW
     statt erst ab 4,1 kW dreiphasig. EOS bekommt nur noch Ladestufen, die die Wallbox wirklich fahren kann.
+    **Einphasig höchstens 20 A** (4,6 kVA Schieflast nach VDE-AR-N 4100; evcc selbst deckelt einphasig nicht): bei
+    einer 22-kW-Box mit Mindeststrom 10 A stellte DVhub sonst bis zu 30 A auf eine Phase. Zwischen 4,6 kW und der
+    dreiphasigen Mindestleistung gibt es keine Stufe; liegt der Mindeststrom über 20 A, lädt DVhub nur dreiphasig.
+    Gilt auch für Autos, die nur einphasig laden. Ein kleinerer Wert ist einstellbar
+    (`optimizer.evOnePhaseMaxCurrentA`), ein größerer gilt nicht.
     Im Not-Halt und im Lese-Modus schaltet DVhub keine Phasen und stoppt nicht am Max-Ladestand — auch nicht, wenn
     der Not-Halt mitten in einem Befehl („erst Strom, dann Phasen“) oder während des Plan-Abrufs kommt.
     **Von Hand umgestellt bleibt umgestellt:** Stellt jemand die Phasen in evcc um (App, auch auf „automatisch“),

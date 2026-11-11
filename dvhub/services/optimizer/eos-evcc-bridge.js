@@ -26,6 +26,14 @@ import { safeInterval } from '../safe-async.js';
 import { WALLBOX_TYPES } from '../wallbox/types.js';
 
 const DEFAULT_VOLTAGE_V = 230;
+/**
+ * Hoechster Strom einphasig: VDE-AR-N 4100 erlaubt einphasig hoechstens
+ * 4,6 kVA Schieflast, an 230 V also 20 A. evcc selbst deckelt einphasig nicht
+ * (1p skaliert bis zum maxCurrent des Ladepunkts, begrenzt nur ueber Fahrzeug,
+ * Box und Lastmanagement-Kreise) — die Grenze zieht DVhub (Fable R5 P2-2).
+ * optimizer.evOnePhaseMaxCurrentA darf sie nur verschaerfen.
+ */
+export const ONE_PHASE_MAX_A = 20;
 const STOP_MODES = ['off', 'pv', 'minpv'];
 export const CHARGER_TYPES = WALLBOX_TYPES;
 
@@ -47,6 +55,8 @@ export function resolveEvccBridgeConfig(cfg) {
   const phases = Number(opt.evPhases) === 1 ? 1 : 3;
   const minCurrentA = num(opt.evMinCurrentA, 6);
   const maxChargeW = num(opt.evMaxChargeW, 5000);
+  const onePhaseMaxA = Math.min(ONE_PHASE_MAX_A, num(opt.evOnePhaseMaxCurrentA, ONE_PHASE_MAX_A));
+  const ampsFromW = snapToWholeAmps(maxChargeW / (DEFAULT_VOLTAGE_V * phases));
   return {
     enabled: opt.eosOptimizeEv === true && opt.evEvccControl === true,
     loadpoint: Number.isInteger(Number(opt.evEvccLoadpoint)) && Number(opt.evEvccLoadpoint) >= 1
@@ -56,7 +66,9 @@ export function resolveEvccBridgeConfig(cfg) {
     minCurrentA,
     // Die Obergrenze folgt aus der Ladeleistung, die EOS kennt — sonst koennte
     // evcc mehr ziehen, als EOS eingeplant hat.
-    maxCurrentA: Math.max(minCurrentA, snapToWholeAmps(maxChargeW / (DEFAULT_VOLTAGE_V * phases))),
+    // Laedt das Auto nur einphasig, gilt auch hier die Schieflast-Grenze.
+    maxCurrentA: Math.max(minCurrentA, phases === 1 ? Math.min(ampsFromW, onePhaseMaxA) : ampsFromW),
+    onePhaseMaxA,
     maxChargeW,
     stopMode: STOP_MODES.includes(opt.evStopMode) ? opt.evStopMode : 'off',
     // Einphasig laden, wenn die Wallbox umschalten kann (evcc meldet es je
@@ -75,17 +87,25 @@ const round2 = (v) => Math.round(v * 100) / 100;
  * 4,14 kW), mit Phasenumschaltung zusätzlich einphasig vom Mindeststrom bis
  * zum Höchststrom je Phase (6–16 A: 1,38–3,68 kW). Vorher plante EOS auch
  * 1,1 kW, die Wallbox lud dann mit 4,1 kW.
+ * Einphasig höchstens onePhaseMaxA (20 A = 4,6 kVA Schieflast): zwischen
+ * 4,6 kW und der dreiphasigen Mindestleistung gibt es keine Stufe; liegt der
+ * Mindeststrom darüber, gibt es gar keine einphasigen Stufen (Fable R5 P2-2).
  */
-export function evChargeRates({ maxChargeW, minCurrentA = 6, maxCurrentA = 16, phases = 3, onePhase = false, voltageV = DEFAULT_VOLTAGE_V }) {
+export function evChargeRates({ maxChargeW, minCurrentA = 6, maxCurrentA = 16, phases = 3, onePhase = false, onePhaseMaxA = ONE_PHASE_MAX_A, voltageV = DEFAULT_VOLTAGE_V }) {
   const maxW = Number(maxChargeW) > 0 ? Number(maxChargeW) : 5000;
   const minA = Number(minCurrentA) > 0 ? Number(minCurrentA) : 6;
   const ph = Number(phases) === 1 ? 1 : 3;
+  const oneMaxA = Math.min(ONE_PHASE_MAX_A, Number(onePhaseMaxA) > 0 ? Number(onePhaseMaxA) : ONE_PHASE_MAX_A);
   const minW = minA * voltageV * ph;
+  // Einphasiges Auto: Stufen nur bis zur Schieflast-Grenze (darüber lädt die
+  // Box ohnehin nicht, maxCurrentA ist gedeckelt), die Grenze selbst als Stufe.
+  const topW = ph === 1 ? Math.max(minW, oneMaxA * voltageV) : Infinity;
   const out = new Set([0]);
-  for (let k = 1; k <= 10; k += 1) if (k / 10 * maxW >= minW - 1e-6) out.add(round2(k / 10));
-  if (onePhase && ph === 3) {
+  for (let k = 1; k <= 10; k += 1) if (k / 10 * maxW >= minW - 1e-6 && k / 10 * maxW <= topW + 1e-6) out.add(round2(k / 10));
+  if (ph === 1 && topW < maxW) out.add(Math.floor(topW / maxW * 100 + 1e-9) / 100);
+  if (onePhase && ph === 3 && minA <= oneMaxA) {
     const lo = Math.ceil(minA * voltageV / maxW * 100 - 1e-9) / 100;
-    const hi = Math.floor(Math.min(Number(maxCurrentA) * voltageV, minW - 1) / maxW * 100 + 1e-9) / 100;
+    const hi = Math.floor(Math.min(Math.min(Number(maxCurrentA), oneMaxA) * voltageV, minW - 1) / maxW * 100 + 1e-9) / 100;
     if (hi >= lo) {
       out.add(lo);
       for (let r = Math.ceil(lo * 20 + 1e-9) / 20; r < hi - 1e-9; r += 0.05) out.add(round2(r));
@@ -101,7 +121,8 @@ export function evChargeRates({ maxChargeW, minCurrentA = 6, maxCurrentA = 16, p
 /** Kann der eingestellte Ladepunkt gerade einphasig laden? (evcc: chargerPhases1p3p) */
 export function onePhaseChargingAvailable(cfg, loadpoints = []) {
   const bc = resolveEvccBridgeConfig(cfg);
-  if (!bc.phaseSwitch || bc.charger !== 'evcc') return false;
+  // Mindeststrom über der Schieflast-Grenze: einphasig geht nichts (P2-2).
+  if (!bc.phaseSwitch || bc.charger !== 'evcc' || bc.minCurrentA > bc.onePhaseMaxA) return false;
   const lp = (Array.isArray(loadpoints) ? loadpoints : []).find((l) => Number(l?.id) === bc.loadpoint);
   return lp?.phases1p3p === true;
 }
@@ -113,7 +134,13 @@ export function onePhaseChargingAvailable(cfg, loadpoints = []) {
  */
 export function powerToCurrentA(powerW, bc) {
   const raw = snapToWholeAmps(powerW / (bc.voltageV * bc.phases));
-  const clamped = Math.min(bc.maxCurrentA, Math.max(bc.minCurrentA, raw));
+  // Einphasig nie über die Schieflast-Grenze (20 A) — aber nicht unter den
+  // Mindeststrom, den evcc sonst ablehnt (dann gibt es einphasig keine Stufe,
+  // onePhaseChargingAvailable schaltet nicht um).
+  const maxA = bc.phases === 1
+    ? Math.max(bc.minCurrentA, Math.min(bc.maxCurrentA, Number(bc.onePhaseMaxA) > 0 ? Math.min(ONE_PHASE_MAX_A, Number(bc.onePhaseMaxA)) : ONE_PHASE_MAX_A))
+    : bc.maxCurrentA;
+  const clamped = Math.min(maxA, Math.max(bc.minCurrentA, raw));
   return Math.round(clamped * 10) / 10;
 }
 
@@ -1489,7 +1516,10 @@ export function createEosEvccBridge(deps) {
         }
       } else if (slot.action === 'charge' && typeof charger.setPhases === 'function' && getGridCapW() == null
         && !unplugged && onePhaseChargingAvailable(cfg, getEvccLoadpoints())) {
-        if (Number(slot.chargePowerW) < minChargeW(bc)) {
+        // Einphasig nur, was mit höchstens onePhaseMaxA geht; darüber (bis zur
+        // dreiphasigen Mindestleistung) dreiphasig mit Mindeststrom — sonst
+        // zöge eine Phase z. B. 30 A (Fable R5 P2-2).
+        if (Number(slot.chargePowerW) < minChargeW(bc) && Number(slot.chargePowerW) <= bc.onePhaseMaxA * bc.voltageV + 1e-6) {
           const one = { ...bc, phases: 1 };
           slot = { ...slot, phases: 1, currentA: powerToCurrentA(slot.chargePowerW, one) };
         } else slot = { ...slot, phases: 3 };

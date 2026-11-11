@@ -186,7 +186,7 @@ export function buildEosElectricVehicles(cfg, { supportsDeadline = false, suppor
     // mit Phasenumschaltung auch einphasig) — eos-evcc-bridge.js evChargeRates.
     charge_rates: (() => {
       const bc = resolveEvccBridgeConfig(cfg);
-      return evChargeRates({ maxChargeW: bc.maxChargeW, minCurrentA: bc.minCurrentA, maxCurrentA: bc.maxCurrentA, phases: bc.phases, onePhase: onePhaseCharging === true });
+      return evChargeRates({ maxChargeW: bc.maxChargeW, minCurrentA: bc.minCurrentA, maxCurrentA: bc.maxCurrentA, phases: bc.phases, onePhase: onePhaseCharging === true, onePhaseMaxA: bc.onePhaseMaxA });
     })(),
     min_soc_percentage: targets ? targets.minSocPct
       : (departure.enabled && departure.targetSocPct !== null ? departure.targetSocPct : fallbackMinSoc),

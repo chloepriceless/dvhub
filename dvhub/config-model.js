@@ -3237,6 +3237,21 @@ function buildFieldDefinitions() {
       groupLabel: 'EOS \u2192 E-Auto (Beta)',
       groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eWallbox nach EOS-Plan steuern\u201c gibt DVhub den Plan an die unter Integrationen gew\u00e4hlte Wallbox weiter (evcc, OpenEVSE, go-e oder Fronius Wattpilot): je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Der Ladestand des Autos kommt aus der gew\u00e4hlten Quelle (Wallbox, MQTT, Home Assistant, HTTP-Adresse, Fahrzeugtreiber oder TeslaMate).',
       groupOrder: 21,
+      path: 'optimizer.evOnePhaseMaxCurrentA',
+      label: 'H\u00f6chster Strom einphasig (A)',
+      type: 'number',
+      default: 20,
+      min: 6,
+      max: 20,
+      step: 1,
+      help: 'Einphasig l\u00e4dt DVhub h\u00f6chstens mit diesem Strom \u2014 auch wenn das Auto nur einphasig l\u00e4dt. 20 A = 4,6 kVA, die Schieflast-Grenze der Anschlussregeln (VDE-AR-N 4100); mehr geht nicht, ein kleinerer Wert (wenn der Netzbetreiber weniger erlaubt) gilt. Liegt der Mindest-Ladestrom dar\u00fcber, l\u00e4dt DVhub nur dreiphasig.'
+    },
+    {
+      section: 'schedule',
+      group: 'eosEv',
+      groupLabel: 'EOS \u2192 E-Auto (Beta)',
+      groupDescription: 'EOS optimiert das E-Auto als zweiten Speicher im Lade-/Entladeplan mit (PV-\u00dcberschuss mittags, Billig-Slots nachts). Mit \u201eWallbox nach EOS-Plan steuern\u201c gibt DVhub den Plan an die unter Integrationen gew\u00e4hlte Wallbox weiter (evcc, OpenEVSE, go-e oder Fronius Wattpilot): je Viertelstunde Laden (mit der von EOS geplanten Ladeleistung als Ladestrom) oder Stopp. Der Ladestand des Autos kommt aus der gew\u00e4hlten Quelle (Wallbox, MQTT, Home Assistant, HTTP-Adresse, Fahrzeugtreiber oder TeslaMate).',
+      groupOrder: 21,
       path: 'optimizer.evValueMarginCt',
       label: 'Sicherheitsabschlag Max-Ladestand (ct/kWh)',
       type: 'number',
@@ -5269,6 +5284,9 @@ export function createDefaultConfig() {
       evValueMarginCt: 1,
       // Einphasig laden, wenn die Wallbox umschalten kann (eos-evcc-bridge.js).
       evPhaseSwitch: true,
+      // Einphasig höchstens so viel Strom (Schieflast 4,6 kVA = 20 A, VDE-AR-N
+      // 4100); ein größerer Wert gilt nicht (eos-evcc-bridge.js ONE_PHASE_MAX_A).
+      evOnePhaseMaxCurrentA: 20,
       // Alter Heimweg in km (bis 1.0.9). Fliesst seit 10.11.2026 nirgends mehr
       // in die Planung ein (Christin: „der Heimweg ist ja immer anders“) —
       // geplant wird nur mit tripSocPct je Abfahrt. Bleibt stehen, damit die
