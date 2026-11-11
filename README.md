@@ -135,12 +135,24 @@ Der Installer:
 curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/install.sh | sudo bash -s -- --no-eos
 ```
 
-Akkudoktor-EOS wird **standardmäßig mitinstalliert** — das offizielle,
-unveränderte EOS 0.4 (15-Minuten-Slots, lastabhängiger Wechselrichter-
-Wirkungsgrad, Akku→Netz-Arbitrage) als eigener Dienst unter
-`127.0.0.1:8503`. DVhub unterstützt **nur EOS 0.4** (`v0.4.0rc2`,
-derselbe Stand wie im Docker-Image); Boxen mit dem früheren eigenen Fork wechseln beim
-nächsten Update automatisch, die EOS-Daten werden vorher gesichert. Mit `--no-eos` lässt sich das
+Akkudoktor-EOS wird **standardmäßig mitinstalliert** — seit 1.0.10 als
+**DVhub-EOS**: Akkudoktor-EOS `main` plus die offenen PRs, die DVhub braucht
+(Netzbezugsgrenze, Schwellen-Peak-Shaving, E-Auto-Wertstufen), gebaut im Fork
+`chloepriceless/EOS` (15-Minuten-Slots, lastabhängiger Wechselrichter-
+Wirkungsgrad, Akku→Netz-Arbitrage), als eigener Dienst unter
+`127.0.0.1:8503`. Nativ und im Docker-Image derselbe Stand
+(`eos-version.env`), **immer mit aktivem Rust-Kern** (`akkudoktoreos-native`,
+GENETIC-Optimierung nativ statt in Python, für genau diesen Stand zertifiziert):
+nativ holt die Installation das zur Box passende Wheel vom Fork-Release (sha256
+gepinnt), Docker-Images bringen es mit; ein kurzer Rauchtest prüft danach, dass
+EOS nativ rechnet. Wheels gibt es für x86_64, aarch64 und armv7l (glibc); auf
+anderen Plattformen (z. B. armv6l: Raspberry Pi 1/Zero) rechnet EOS ausdrücklich
+in Python, die Installation warnt. Boxen mit Vanilla `v0.4.0rc3` oder dem
+früheren eigenen Fork wechseln beim nächsten Update automatisch, die EOS-Daten
+werden vorher gesichert. Den Fernbetrieb im DVhub-Rechendienst gibt es seit
+1.0.10 nicht mehr (EOS rechnet mit dem Rust-Kern überall lokal schnell genug);
+eine gespeicherte Einstellung „Im DVhub-Rechendienst“ wird beim Start auf lokal
+umgestellt. Mit `--no-eos` lässt sich das
 überspringen (z. B. auf RAM-armen/Headless-Boxen); die interne MILP-/Heuristik-
 Optimierung läuft auch ohne EOS. (`--with-eos` bleibt als kompatibler No-op
 erhalten, da EOS jetzt Default ist.)

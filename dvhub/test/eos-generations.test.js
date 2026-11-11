@@ -149,8 +149,10 @@ test('Hinweis: erst ab genug langen Läufen, schlägt nur vor, was noch nicht ei
   h = eosSlowRunHint(slow, { optimizer: { eosControlHorizonMaxHours: 'auto' } });
   assert.deepEqual(h.suggest, { generations: 100 });
   assert.equal(eosSlowRunHint(slow, { optimizer: { eosGeneticGenerations: 100, eosControlHorizonMaxHours: 'auto' } }), null, 'nichts mehr vorzuschlagen');
-  // Fernbetrieb: die Laufzeit hängt am Rechendienst, nicht an dieser Box.
-  assert.equal(eosSlowRunHint(slow, { optimizer: { eosProxy: { enabled: true, mode: 'remote' } } }), null);
+  // Fernbetrieb seit 1.0.10 aus: ein gespeichertes 'remote' rechnet lokal — der Hinweis gilt wie dort.
+  assert.deepEqual(eosSlowRunHint(slow, { optimizer: { eosProxy: { enabled: true, mode: 'remote' } } })?.suggest,
+    eosSlowRunHint(slow, { optimizer: {} })?.suggest);
+  assert.notEqual(eosSlowRunHint(slow, { optimizer: { eosProxy: { enabled: true, mode: 'remote' } } }), null);
 });
 
 // Codex-Gegenprüfung 57608a1e (P2): „automatisch“ ist nicht kürzer als eine

@@ -46,7 +46,7 @@ function sandbox() {
 
 const EOS_BLOCK = block('EOS_DIR="$INSTALL_DIR/eos"', '# ── 11.');
 
-function eosCase({ venvPython }) {
+function eosCase({ venvPython, nativeMarker = 'https://x/eos.git@v1 ok akkudoktoreos_native-0.2.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl\n' }) {
   const s = sandbox();
   const inst = join(s.dir, 'opt');
   const data = join(s.dir, 'data');
@@ -55,6 +55,7 @@ function eosCase({ venvPython }) {
   writeFileSync(join(inst, 'eos-provision.sh'), '');
   writeFileSync(join(inst, 'eos-version.env'), 'EOS_REPO_URL=https://x/eos.git\nEOS_PIN=v1\n');
   writeFileSync(join(data, '.eos-provisioned'), 'https://x/eos.git@v1\n');
+  if (nativeMarker !== null) writeFileSync(join(data, '.eos-native'), nativeMarker);
   const unit = join(s.dir, 'eos.service');
   writeFileSync(unit, '[Unit]\n');
   if (venvPython) {
@@ -83,6 +84,59 @@ test('EOS-Schnellweg: alles vorhanden → OK, keine Provisionierung', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /EOS: OK/);
     assert.ok(!s.calls().some((l) => l.startsWith('systemd-run')));
+  } finally { s.cleanup(); }
+});
+
+// T-0415 (1.0.10): Rust-Kern. EOS ist aktuell, aber der Kern fehlt (kein
+// Marker, alter Stand im Marker) oder scheiterte → NUR den Kern nachziehen
+// (EOS_NATIVE_ONLY=1), nicht still „OK“. „unsupported“ (keine Wheels für die
+// Plattform) und „none“ (eigener Stand) sind erledigt.
+for (const [name, marker, retry] of [
+  ['kein Marker', null, true],
+  ['Kern gescheitert', 'https://x/eos.git@v1 failed Rauchtest gescheitert (rc=1)\n', true],
+  ['Marker eines anderen Stands', 'https://x/eos.git@v0 ok a.whl\n', true],
+  ['keine Plattform', 'https://x/eos.git@v1 unsupported linux-armv6l\n', false],
+  ['eigener Stand', 'https://x/eos.git@v1 none eigener-Stand\n', false],
+]) {
+  test(`EOS-Schnellweg, Rust-Kern: ${name} → ${retry ? 'nur Kern nachziehen' : 'OK'}`, () => {
+    const { s, r } = eosCase({ venvPython: true, nativeMarker: marker });
+    try {
+      assert.equal(r.status, 0, r.stderr);
+      const run = s.calls().find((l) => l.startsWith('systemd-run') && l.includes('eos-provision.sh'));
+      if (retry) {
+        assert.doesNotMatch(r.stdout, /EOS: OK/);
+        assert.ok(run, s.calls().join('\n'));
+        assert.match(run, /--setenv=EOS_NATIVE_ONLY=1/);
+        assert.match(r.stdout, /Rust-Kern fehlt oder scheiterte/);
+      } else {
+        assert.match(r.stdout, /EOS: OK/);
+        assert.equal(run, undefined);
+      }
+    } finally { s.cleanup(); }
+  });
+}
+
+test('EOS: neuer Stand → volle Provisionierung (EOS_NATIVE_ONLY=0)', () => {
+  const s = sandbox();
+  const inst = join(s.dir, 'opt');
+  const data = join(s.dir, 'data');
+  try {
+    mkdirSync(join(inst, 'eos', '.git'), { recursive: true });
+    mkdirSync(join(inst, 'eos-venv', 'bin'), { recursive: true });
+    mkdirSync(data);
+    writeFileSync(join(inst, 'eos-provision.sh'), '');
+    writeFileSync(join(inst, 'eos-version.env'), 'EOS_REPO_URL=https://x/eos.git\nEOS_PIN=v2\n');
+    writeFileSync(join(data, '.eos-provisioned'), 'https://x/eos.git@v1\n');
+    writeFileSync(join(data, '.eos-native'), 'https://x/eos.git@v1 failed x\n');
+    const unit = join(s.dir, 'eos.service');
+    writeFileSync(unit, '[Unit]\n');
+    s.fake('systemctl', '[[ "$1" == is-active ]] && exit 1; exit 0');
+    s.fake('systemd-run');
+    const r = s.run(`INSTALL_DIR='${inst}'\nDATA_DIR='${data}'\nSERVICE_USER=dvhub\nEOS_UNIT_PATH='${unit}'\n${EOS_BLOCK}`);
+    assert.equal(r.status, 0, r.stderr);
+    const run = s.calls().find((l) => l.startsWith('systemd-run'));
+    assert.match(run, /--setenv=EOS_NATIVE_ONLY=0/);
+    assert.match(r.stdout, /neue Version angefordert/);
   } finally { s.cleanup(); }
 });
 

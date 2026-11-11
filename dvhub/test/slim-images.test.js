@@ -29,7 +29,8 @@ test('TimescaleDB-schlank: Update-Weg von der vorher ausgelieferten Version', ()
 
 test('EOS-schlank: Grundlage zum EOS-Pin, EOSdash fest aus', () => {
   const df = read('docker/eos-slim/Dockerfile');
-  assert.equal(arg('docker/eos-slim/Dockerfile', 'EOS_TAG'), env('EOS_TAG'));
+  // DVhub-EOS (1.0.10): das Image trägt den Docker-Tag (EOS_IMAGE_TAG), nicht den Git-Tag.
+  assert.equal(arg('docker/eos-slim/Dockerfile', 'EOS_IMAGE_TAG'), env('EOS_IMAGE_TAG'));
   assert.match(df, /EOS_SERVER__STARTUP_EOSDASH=false/);
   assert.match(df, /^FROM scratch$/m, 'eine Schicht — sonst wird nichts kleiner');
   assert.match(read('docker/timescaledb-slim/Dockerfile'), /^FROM scratch$/m);

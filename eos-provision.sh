@@ -19,10 +19,12 @@ SERVICE_USER="${SERVICE_USER:-dvhub}"
 DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
 EOS_DIR="${EOS_DIR:-$INSTALL_DIR/eos}"
 EOS_VENV="${EOS_VENV:-$INSTALL_DIR/eos-venv}"
-# Akkudoktor-EOS 0.4, unveraendert (seit 2026-10-11; vorher der eigene Fork
-# DV-EOS). DVhub unterstuetzt nur EOS 0.4 (GENETIC-Engine). Ein aelterer Stand
-# (Fork, 0.3-Branch „dvhub-fork“) wird beim naechsten Update automatisch
-# ersetzt. Override repo/ref via env.
+# DVhub-EOS (seit 1.0.10): Akkudoktor-EOS main plus offene PRs aus dem Fork
+# chloepriceless/EOS (2026-10-11 bis 1.0.9 Vanilla v0.4.0rc3, davor der Fork
+# DV-EOS). DVhub braucht die GENETIC-Engine (EOS-0.4-Konfiguration). Jeder
+# andere Stand wird beim naechsten Update automatisch ersetzt — verglichen wird
+# nur auf Gleichheit, nie auf „aelter“ (main heisst 0.3.0.dev…, ist aber neuer
+# als 0.4.0rc3). Override repo/ref via env.
 # Gewuenschter Stand: eos-version.env im Repo ist die einzige Quelle. Env-
 # Variablen gewinnen weiterhin (Tests, Sonderfaelle). EOS_BRANCH bleibt als
 # Alias erhalten, damit bestehende Aufrufe nicht brechen.
@@ -33,8 +35,8 @@ if [[ -f "$EOS_PIN_FILE" ]]; then
   _pin_repo="$(grep -E '^EOS_REPO_URL=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
   _pin_ref="$(grep -E '^EOS_PIN=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
 fi
-EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/Akkudoktor-EOS/EOS.git}}"
-EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-v0.4.0rc3}}}"
+EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/chloepriceless/EOS.git}}"
+EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-eos-0.3.0.dev2611110839161148-dvhub.2}}}"
 EOS_BRANCH="$EOS_PIN"   # Rueckwaertskompatibler Alias
 EOS_STATE_MARKER="${EOS_STATE_MARKER:-$DATA_DIR/.eos-provisioned}"
 # Dienstname und Port sind ueberschreibbar, damit eine zweite Instanz (A/B-Test
@@ -101,6 +103,23 @@ else
   [[ -n "$EOS_HAVE" ]] && echo "  EOS: Versionswechsel ${EOS_HAVE} -> ${EOS_WANT}"
 fi
 
+# Rust-Kern (akkudoktoreos-native, seit 1.0.10 immer aktiv): Stand des Kerns
+# je EOS-Stand in einem eigenen Marker — "<repo@pin> <ok|unsupported|none|failed> <detail>".
+# post-update.sh zieht bei "failed" (oder ohne Marker) nur den Kern nach
+# (EOS_NATIVE_ONLY=1), ohne git/venv/pip anzufassen.
+EOS_NATIVE_MARKER="${EOS_NATIVE_MARKER:-$DATA_DIR/.eos-native}"
+# Hilfsskripte neben diesem Skript (git-Checkout oder Release-Paket; der Verweis
+# /opt/dvhub/eos-provision.sh -> current/… wird aufgeloest).
+EOS_PROVISION_HOME="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")"
+EOS_NATIVE_HELPER="${EOS_NATIVE_HELPER:-$EOS_PROVISION_HOME/scripts/eos-native-wheels.sh}"
+EOS_NATIVE_SMOKE="${EOS_NATIVE_SMOKE:-$EOS_PROVISION_HOME/scripts/eos-native-smoke.py}"
+EOS_NATIVE_ONLY_RUN=0
+if [[ "${EOS_NATIVE_ONLY:-0}" == 1 && "$EOS_PIN_CHANGED" -eq 0 && -d "$EOS_DIR/.git" && -x "$EOS_VENV/bin/python" ]]; then
+  EOS_NATIVE_ONLY_RUN=1
+  echo "  EOS: Stand ${EOS_PIN} ist aktuell — nur der Rust-Kern wird nachgezogen"
+fi
+
+if [[ "$EOS_NATIVE_ONLY_RUN" -eq 0 ]]; then
 echo "  EOS: Installiere/aktualisiere EOS (${EOS_PIN}) bare-metal venv..."
 
 # Idempotent clone / fetch auf den gepinnten Stand. Funktioniert fuer Tag,
@@ -242,7 +261,7 @@ elif [[ "$EOS_PIN_CHANGED" -eq 0 && -n "$(eos_git status --porcelain --untracked
   # offensichtlich gewollt, und es gibt keinen neuen Stand, der sie ersetzt.
   echo "  EOS: lokale Aenderungen im EOS-Ordner, Stand unveraendert — Checkout bleibt wie er ist"
 else
-  # Repo-Wechsel (Fork -> upstream) mitziehen, sonst zeigt origin ins Leere.
+  # Repo-Wechsel (Vanilla <-> DVhub-EOS-Fork) mitziehen, sonst zeigt origin ins Leere.
   eos_git remote set-url origin "$EOS_REPO_URL" 2>/dev/null || true
   # Erst holen (aendert den Arbeitsbaum nicht), dann sichern und umstellen.
   if eos_git fetch -q --depth 1 origin "$EOS_PIN" 2>/dev/null; then
@@ -308,6 +327,7 @@ else
   echo "  EOS: fasthtml < 0.14 — starlette auf die 0.x-Linie pinnen (sonst stuerzt EOSdash ab)"
   "$EOS_VENV/bin/pip" install --upgrade "starlette<1.0"
 fi
+fi  # EOS_NATIVE_ONLY_RUN
 
 # Besitz: root, fuer den Dienstbenutzer nur lesbar/ausfuehrbar (Review
 # 25.10.2026). root fuehrt pip/python aus dem venv und den Build aus EOS_DIR
@@ -318,6 +338,101 @@ if [[ -n "$EOS_HOME" ]]; then
   mkdir -p "$EOS_HOME"
   chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_HOME"
 fi
+
+# ── Rust-Kern (akkudoktoreos-native) ────────────────────────────────────────
+# DVhub liefert DVhub-EOS immer mit aktivem Rust-Kern aus (Christin 11.11.2026).
+# Das Wheel kommt als Release-Asset vom Fork-Tag; eos-version.env pinnt
+# Dateiname und sha256 je Architektur (scripts/eos-native-wheels.sh). Welches
+# Wheel passt, entscheidet das EOS-venv selbst (Plattform-Tags von pip) — so
+# zaehlt der Userspace, nicht der Kernel (Raspberry Pi OS 32 Bit mit 64-Bit-Kernel
+# meldet aarch64, braucht aber armv7l). Danach rechnet scripts/eos-native-smoke.py
+# einen kurzen Lauf: nur "GENETIC native run" ohne Rueckfall zaehlt.
+#   ok          Kern aktiv, Backend native
+#   unsupported kein Wheel fuer diese Plattform (z. B. armv6l Pi 1/Zero, i386,
+#               riscv64): EOS rechnet ausdruecklich in Python (Backend python),
+#               Warnung hier und im Marker — dokumentiert in eos-version.env
+#   none        eigener Stand (EOS_PIN/EOS_REPO_URL per Env ueberschrieben) oder
+#               keine Wheels gepinnt: Backend wird nicht gesetzt
+#   failed      Download/Pruefsumme/Installation/Rauchtest gescheitert: Backend
+#               bleibt native (EOS meldet den Rueckfall bei jedem Start im Log),
+#               dieses Skript endet mit Exit 2, post-update.sh versucht es erneut
+EOS_NATIVE_STATUS=none
+EOS_NATIVE_DETAIL=""
+EOS_BACKEND=""
+eos_pin_val() { { grep -E "^$1=" "$EOS_PIN_FILE" 2>/dev/null || true; } | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r'; }
+eos_native_fail() { EOS_NATIVE_STATUS=failed; EOS_NATIVE_DETAIL="$*"; echo "  EOS: FEHLER Rust-Kern: $*" >&2; }
+eos_native_install() {
+  local listing sel rc tmp plat out
+  local names=()
+  if [[ ! -f "$EOS_PIN_FILE" || "$(eos_pin_val EOS_REPO_URL)" != "$EOS_REPO_URL" || "$(eos_pin_val EOS_PIN)" != "$EOS_PIN" ]]; then
+    EOS_NATIVE_DETAIL="eigener-Stand"
+    echo "  EOS: WARNUNG — fuer ${EOS_WANT} ist kein Rust-Kern hinterlegt (nicht der Stand aus eos-version.env); EOS rechnet in Python" >&2
+    return 0
+  fi
+  if ! listing="$(EOS_PIN_FILE="$EOS_PIN_FILE" bash "$EOS_NATIVE_HELPER" list 2>&1)"; then
+    EOS_BACKEND=native; eos_native_fail "Pins unlesbar: ${listing##*$'\n'}"; return 0
+  fi
+  if [[ -z "$listing" ]]; then
+    EOS_NATIVE_DETAIL="keine-Wheels-gepinnt"
+    echo "  EOS: WARNUNG — eos-version.env pinnt keinen Rust-Kern; EOS rechnet in Python" >&2
+    return 0
+  fi
+  EOS_BACKEND=native
+  # Dateinamen ohne Leerzeichen (Wheel-Namen); kein mapfile — bash 3.2 (macOS-Tests).
+  read -r -a names <<<"$(awk '{print $2}' <<<"$listing" | tr '\n' ' ')"
+  rc=0
+  sel="$("$EOS_VENV/bin/python" - "${names[@]}" <<'PYEOF' 2>/dev/null
+import sys
+try:
+    from pip._vendor.packaging.tags import sys_tags
+    from pip._vendor.packaging.utils import parse_wheel_filename
+except Exception:
+    sys.exit(2)
+names = sys.argv[1:]
+for tag in sys_tags():
+    for name in names:
+        if tag in parse_wheel_filename(name)[3]:
+            print(name)
+            sys.exit(0)
+sys.exit(3)
+PYEOF
+)" || rc=$?
+  if [[ "$rc" -eq 3 ]]; then
+    plat="$("$EOS_VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_platform())' 2>/dev/null || uname -m)"
+    EOS_NATIVE_STATUS=unsupported; EOS_NATIVE_DETAIL="$plat"; EOS_BACKEND=python
+    echo "  EOS: WARNUNG — fuer diese Plattform ($plat) gibt es keinen Rust-Kern; EOS rechnet ausdruecklich in Python (deutlich langsamer)" >&2
+    return 0
+  fi
+  if [[ "$rc" -ne 0 || -z "$sel" ]]; then eos_native_fail "Plattform des venv nicht bestimmbar (pip-Tags, rc=$rc)"; return 0; fi
+  tmp="$(mktemp -d)"
+  if ! out="$(bash "$EOS_NATIVE_HELPER" fetch "$tmp" "$sel" --pin-file "$EOS_PIN_FILE" 2>&1)"; then
+    rm -rf "$tmp"; eos_native_fail "${out##*$'\n'}"; return 0
+  fi
+  if ! "$EOS_VENV/bin/pip" install --no-deps --no-index --force-reinstall "$tmp/$sel"; then
+    rm -rf "$tmp"; eos_native_fail "pip install $sel gescheitert"; return 0
+  fi
+  rm -rf "$tmp"
+  eos_root_own
+  # Rauchtest mit dem Python des venv. EOS vorher anhalten: zwei EOS-Prozesse
+  # gleichzeitig sind auf 1-GB-Boards zu viel; der Dienst startet unten ohnehin neu.
+  echo "  EOS: Rust-Kern ${sel} installiert — Rauchtest (kurzer nativer Lauf)..."
+  systemctl stop "${EOS_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  local tmo=""
+  command -v timeout >/dev/null 2>&1 && tmo="timeout 900"
+  rc=0
+  # $tmo bewusst ohne Anfuehrungszeichen (leer = ohne Zeitlimit).
+  # shellcheck disable=SC2086
+  out="$($tmo env EOS_OPTIMIZATION__GENETIC__BACKEND=native PYTHONDONTWRITEBYTECODE=1 \
+    "$EOS_VENV/bin/python" "$EOS_NATIVE_SMOKE" 2>&1)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    printf '%s\n' "$out" | tail -n 20 | sed 's/^/  EOS: | /' >&2
+    eos_native_fail "Rauchtest gescheitert (rc=$rc): $(printf '%s\n' "$out" | grep -E '^FAIL' | tail -1)"
+    return 0
+  fi
+  EOS_NATIVE_STATUS=ok; EOS_NATIVE_DETAIL="$sel"
+  echo "  EOS: Rust-Kern aktiv ($(printf '%s\n' "$out" | grep -E '^log: GENETIC native run' | tail -1 | sed 's/^log: //'))"
+}
+eos_native_install
 
 # systemd unit — bind 127.0.0.1:$EOS_PORT only (no external access).
 #
@@ -346,7 +461,7 @@ if [[ -z "${EOS_CPU_QUOTA:-}" && "$_ncpu" -ge 2 ]]; then EOS_CPU_QUOTA="$(( (_nc
 # beschrieben — `-e`/`-L` statt `-f`, und set -C legt die Datei mit O_EXCL an.
 if [[ -f "$EOS_UNIT_FILE" && ! -e "$EOS_ENV_FILE" && ! -L "$EOS_ENV_FILE" ]]; then
   _extra_env="$(grep -E '^Environment=' "$EOS_UNIT_FILE" | sed 's/^Environment=//' \
-    | grep -vE '^(EOS_SERVER__(HOST|PORT|EOSDASH_PORT)|MALLOC_ARENA_MAX|PYTHONMALLOC|MALLOC_TRIM_THRESHOLD_|MALLOC_MMAP_THRESHOLD_|OPENBLAS_NUM_THREADS|OMP_NUM_THREADS|EOS_GENERAL__TIMEZONE_OVERRIDE)=' || true)"
+    | grep -vE '^(EOS_SERVER__(HOST|PORT|EOSDASH_PORT)|MALLOC_ARENA_MAX|PYTHONMALLOC|MALLOC_TRIM_THRESHOLD_|MALLOC_MMAP_THRESHOLD_|OPENBLAS_NUM_THREADS|OMP_NUM_THREADS|EOS_GENERAL__TIMEZONE_OVERRIDE|EOS_OPTIMIZATION__GENETIC__BACKEND)=' || true)"
   if [[ -n "$_extra_env" ]]; then
     mkdir -p "$(dirname "$EOS_ENV_FILE")"
     if ( umask 022; set -C; {
@@ -385,6 +500,9 @@ Environment=OPENBLAS_NUM_THREADS=1
 Environment=OMP_NUM_THREADS=1
 # Feste Zeitzone statt Nachschlagen aus Breiten-/Längengrad (spart ~25 MB; EOS ab rc1.5).
 Environment=EOS_GENERAL__TIMEZONE_OVERRIDE=$EOS_TZ
+# GENETIC im Rust-Kern (native) bzw. ausdruecklich Python auf Plattformen ohne
+# Kern; vor EnvironmentFile, damit eos.env es im Notfall ueberschreiben kann.
+${EOS_BACKEND:+Environment=EOS_OPTIMIZATION__GENETIC__BACKEND=$EOS_BACKEND}
 EnvironmentFile=-$EOS_ENV_FILE
 # EOS 0.4 rechnet einen Lauf minutenlang auf voller Last. Niedrige Prioritaet
 # und hoechstens (Kerne - 1) Kerne, damit DVhub und die Regelschleife immer
@@ -414,4 +532,12 @@ mkdir -p "$DATA_DIR"
 printf '%s\n' "$EOS_WANT" > "$EOS_STATE_MARKER"
 chown "$SERVICE_USER:$SERVICE_USER" "$EOS_STATE_MARKER" 2>/dev/null || true
 
-echo "  EOS: systemd ${EOS_SERVICE_NAME}.service bereit (127.0.0.1:${EOS_PORT}), Stand ${EOS_PIN}"
+printf '%s %s %s\n' "$EOS_WANT" "$EOS_NATIVE_STATUS" "$EOS_NATIVE_DETAIL" > "$EOS_NATIVE_MARKER"
+chown "$SERVICE_USER:$SERVICE_USER" "$EOS_NATIVE_MARKER" 2>/dev/null || true
+
+echo "  EOS: systemd ${EOS_SERVICE_NAME}.service bereit (127.0.0.1:${EOS_PORT}), Stand ${EOS_PIN}, Rust-Kern: ${EOS_NATIVE_STATUS}${EOS_NATIVE_DETAIL:+ (${EOS_NATIVE_DETAIL})}"
+if [[ "$EOS_NATIVE_STATUS" == failed ]]; then
+  # EOS laeuft (in Python) — aber DVhub liefert es nie still so aus.
+  echo "  EOS: FEHLER — der Rust-Kern ist NICHT aktiv, EOS rechnet in Python. Naechster Versuch beim naechsten DVhub-Start (post-update.sh)." >&2
+  exit 2
+fi

@@ -57,6 +57,9 @@
 + dvhub-vpn.sh
 + dvhub-release.cjs
 + scripts/reconcile-vendor-profiles.mjs
+# Rust-Kern des DVhub-EOS: Wheel holen/prüfen und Rauchtest (eos-provision.sh)
++ scripts/eos-native-wheels.sh
++ scripts/eos-native-smoke.py
 # Von Hand auf der Box (docs/HERSTELLERPROFIL-MIGRIEREN.md)
 + scripts/vendor-profile-diff.mjs
 # Altbestand SQLite → PostgreSQL (von Hand, README)

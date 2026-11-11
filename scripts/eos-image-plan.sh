@@ -2,16 +2,20 @@
 # scripts/eos-image-plan.sh — welches EOS-Image gehört zum Pin, und muss die CI
 # es bauen?
 #
-# DVhub bindet das unveränderte Akkudoktor-EOS ein. Gibt es zum Pin ein
-# offizielles Image (docker.io/akkudoktor/eos:<Version>), wird genau das
-# gezogen und hier nichts gebaut. Akkudoktor veröffentlicht aber nur Releases
-# als Image, Vorab-Stände (v…rc…) nicht — für die baut unsere CI
-# bikinibottomcapital/dvhub-eos:<EOS_TAG> aus dem Dockerfile des EOS-Repos.
+# Seit 1.0.10 bindet DVhub das DVhub-EOS ein (Fork chloepriceless/EOS:
+# Akkudoktor-EOS main + offene PRs, Git-Tag dvhub-eos-<version>-dvhub.<N>).
+# Dafür baut unsere CI bikinibottomcapital/dvhub-eos:<version>-dvhub.<N> (Git-Tag
+# ohne Präfix — Docker-Tags dürfen kein „+“ enthalten) aus dem unveränderten
+# Dockerfile am Git-Tag, für amd64 und arm64. Ein offizielles Image gibt es dazu
+# nie. Zeigt der Pin wieder auf ein Akkudoktor-Release mit offiziellem Image
+# (docker.io/akkudoktor/eos:<Version>), wird genau das gezogen und hier nichts
+# gebaut; für Vorab-Stände (v…rc…) baut die CI wie bisher dvhub-eos:<EOS_TAG>.
 #
 # Quelle ist docker/.env.example:
 #   EOS_REPO, EOS_TAG   Git-Stand (immer; auch die native Installation)
 #   EOS_IMAGE           leer = unser Image; docker.io/akkudoktor/eos = offiziell
-#   EOS_IMAGE_TAG       Image-Tag, wenn er vom Git-Tag abweicht (offiziell: ohne „v“)
+#   EOS_IMAGE_TAG       Image-Tag; leer = Git-Tag (ohne „dvhub-eos-“).
+#                       Unser Image: muss genau das sein. Offiziell: ohne „v“.
 #
 # Aufruf:  eos-image-plan.sh [--release] [env-Datei]
 #   ohne --release (main):  bauen nur, wenn unser Image zum Pin noch fehlt;
@@ -45,8 +49,13 @@ repo="$(val EOS_REPO)"
 image="$(val EOS_IMAGE)"
 image="$(canon "${image:-$OURS}")"
 image_tag="$(val EOS_IMAGE_TAG)"
-image_tag="${image_tag:-$tag}"
+# Unser Image trägt den Git-Tag, beim DVhub-EOS ohne Präfix.
+ours_tag="${tag#dvhub-eos-}"
+image_tag="${image_tag:-$ours_tag}"
 official_tag="${tag#v}"
+# Zu DVhub-EOS gibt es kein offizielles Image — nicht danach fragen.
+dvhub_eos=0
+[ "$ours_tag" != "$tag" ] && dvhub_eos=1
 build=false
 
 if [ "$image" = "$OFFICIAL" ]; then
@@ -56,21 +65,21 @@ if [ "$image" = "$OFFICIAL" ]; then
     || fail "Offizielles EOS-Image $OFFICIAL:$image_tag gibt es nicht"
   echo "EOS: offizielles Image $OFFICIAL:$image_tag — nichts zu bauen."
 elif [ "$image" = "$OURS" ]; then
-  [ "$image_tag" = "$tag" ] \
-    || fail "EOS_IMAGE_TAG=$image_tag passt nicht zum Pin $tag (unser Image trägt den Git-Tag)"
-  if exists "$OFFICIAL:$official_tag"; then
+  [ "$image_tag" = "$ours_tag" ] \
+    || fail "EOS_IMAGE_TAG=$image_tag passt nicht zum Pin $tag (unser Image trägt den Git-Tag, beim DVhub-EOS ohne „dvhub-eos-“: $ours_tag)"
+  if [ "$dvhub_eos" = 0 ] && exists "$OFFICIAL:$official_tag"; then
     hint="Zu EOS $tag gibt es ein offizielles Image ($OFFICIAL:$official_tag). In docker/.env.example EOS_IMAGE=$OFFICIAL und EOS_IMAGE_TAG=$official_tag setzen (und die Vorgabe in docker/compose.yml), dann entfällt der Eigenbau."
     [ "$release" = 1 ] && fail "$hint"
     echo "::warning::$hint"
   fi
   if [ "$release" = 1 ]; then
     build=true
-    echo "EOS: Release — $OURS:$tag wird gebaut."
-  elif exists "$OURS:$tag"; then
-    echo "EOS: $OURS:$tag ist schon veröffentlicht."
+    echo "EOS: Release — $OURS:$image_tag wird aus $repo#$tag gebaut."
+  elif exists "$OURS:$image_tag"; then
+    echo "EOS: $OURS:$image_tag ist schon veröffentlicht."
   else
     build=true
-    echo "EOS: $OURS:$tag fehlt — wird gebaut."
+    echo "EOS: $OURS:$image_tag fehlt — wird aus $repo#$tag gebaut."
   fi
 else
   fail "EOS_IMAGE=$image ist weder $OFFICIAL noch $OURS"

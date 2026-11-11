@@ -389,7 +389,7 @@ Siehe [EEBUS.md](EEBUS.md).
 | POST | `/api/mobile-link/pair/start`, `/pair/approve` | Token+Nonce | Kopplung per QR-Code starten bzw. bestätigen |
 | POST | `/api/mobile-link/pair/cancel`, `/devices/remove` | Token | Kopplung abbrechen bzw. Gerät entkoppeln |
 | POST | `/api/mobile-link/devices/update` | Token+Nonce | Gekoppeltes Gerät ändern |
-| GET | `/api/eos/remote/debug` | Token | EOS-Fernbetrieb: Diagnosepaket des letzten Laufs (Download) |
+| GET | `/api/eos/remote/debug` | Token | EOS-Fernbetrieb: Diagnosepaket des letzten Laufs (Download). Seit 1.0.10 ohne Fernbetrieb immer 404 |
 | GET | `/api/feed-in-cap/status` | LAN·`integrations` | Einspeisegrenze der Anlage: Zustand und letzte Rücklesung |
 | GET | `/api/ocpp/status` | Token | OCPP-Zentrale: verbundene Ladepunkte |
 | GET | `/api/vehicle-evcc` | Token | Fahrzeug-Ladestand über evccs Fahrzeug-Treiber |

@@ -63,7 +63,7 @@ docker compose -f docker/compose.yml exec dvhub node -p 'require("/etc/dvhub/con
 | Image | Tags |
 |---|---|
 | `bikinibottomcapital/dvhub` | `latest`, `1.0`, `1.0.9` = Releases; `dev` = Vorab-Stand: der aktuelle `main`, automatisch gebaut nach jedem Push mit grüner CI (kein Release) |
-| `bikinibottomcapital/dvhub-eos` | EOS-Stand, z. B. `v0.4.0rc2` (= `EOS_TAG`, gebaut aus dem unveränderten Akkudoktor-EOS), `latest` = der des letzten Releases. Nur für Vorab-Stände, die Akkudoktor nicht als Image veröffentlicht; zeigt der Pin auf ein EOS-Release, gilt das offizielle `akkudoktor/eos:<Version>` (`EOS_IMAGE`, `EOS_IMAGE_TAG`) und die CI baut kein EOS-Image (`scripts/eos-image-plan.sh`) |
+| `bikinibottomcapital/dvhub-eos` | EOS-Stand. Seit 1.0.10 das DVhub-EOS (Akkudoktor-EOS main + offene PRs, Fork `chloepriceless/EOS`) **mit Rust-Kern** (`EOS_OPTIMIZATION__GENETIC__BACKEND=native`, Wheel vom Fork-Release, sha256 aus `eos-version.env`; der Bau verlangt einen nativen Probelauf, `docker/eos-native`), z. B. `0.3.0.dev2611110839161148-dvhub.2` (= `EOS_IMAGE_TAG`, gebaut aus dem Git-Tag `EOS_TAG` = `dvhub-eos-0.3.0.dev…-dvhub.2`); Notfall ohne neues Image: `EOS_OPTIMIZATION__GENETIC__BACKEND=python` in der Umgebung des EOS-Containers; bis 1.0.9 `v0.4.0rc3` (Vanilla). `latest` = der des letzten Releases. Zeigt der Pin auf ein EOS-Release, gilt das offizielle `akkudoktor/eos:<Version>` (`EOS_IMAGE`, `EOS_IMAGE_TAG`) und die CI baut kein EOS-Image (`scripts/eos-image-plan.sh`) |
 
 Beide für `linux/amd64` und `linux/arm64`, auf Docker Hub öffentlich und nach
 `ghcr.io/chloepriceless/…` gespiegelt (`DVHUB_IMAGE`/`EOS_IMAGE` in `.env`).
@@ -123,9 +123,15 @@ curl -fsSL https://raw.githubusercontent.com/chloepriceless/dvhub/main/docker/in
 Config und Daten bleiben in den Volumes. Die Knöpfe „Update“, „System-Updates“,
 „Neustart“, „Reboot“ und „TimescaleDB aktualisieren“ antworten im Container mit
 genau diesem Hinweis (HTTP 409, `code: container_runtime`) statt git/apt/systemd
-aufzurufen. Der Installer zieht beim erneuten Lauf auch `EOS_TAG` und
-`TIMESCALE_TAG` in `.env` auf die Vorgabe nach (TimescaleDB nur aufwärts und
-bei gleicher PostgreSQL-Hauptversion; eigene Stände mit `DVHUB_PIN_VERSIONS=1`).
+aufzurufen. Der Installer zieht beim erneuten Lauf auch `EOS_REPO`, `EOS_TAG`,
+`EOS_IMAGE_TAG` und `TIMESCALE_TAG` in `.env` auf die Vorgabe nach (TimescaleDB
+nur aufwärts und bei gleicher PostgreSQL-Hauptversion; eigene Stände mit
+`DVHUB_PIN_VERSIONS=1`). Beim Update auf 1.0.10 wechselt EOS so von Vanilla
+`v0.4.0rc3` auf das DVhub-EOS; EOS übernimmt seine Konfiguration im Volume beim
+Start selbst (die alte legt es daneben als Sicherung ab). Zurück auf Vanilla:
+`DVHUB_PIN_VERSIONS=1`, `EOS_REPO=https://github.com/Akkudoktor-EOS/EOS.git`,
+`EOS_TAG=v0.4.0rc3`, `EOS_IMAGE_TAG=v0.4.0rc3`, dann
+`docker compose up -d eos`.
 Die Erweiterung in der Datenbank (`ALTER EXTENSION timescaledb UPDATE`) hebt
 DVhub nach einem neuen DB-Image beim Start selbst an (2026-10-15).
 
@@ -342,7 +348,7 @@ was DVhub nicht braucht, und alles liegt in einer Schicht.
 | Image | Grundlage | entpackt | Download (arm64) | weggelassen |
 |---|---|---|---|---|
 | `bikinibottomcapital/timescaledb-slim:<TIMESCALE_TAG>` | `timescale/timescaledb:<TIMESCALE_TAG>` | ~200 MB statt ~1,55 GB | ~79 MB statt ~535 MB | alte TimescaleDB-Versionen (nur die ausgelieferte + Update-Weg von der vorherigen), LLVM-JIT, pgvector, Header |
-| `bikinibottomcapital/dvhub-eos-slim:<EOS_TAG>` | `dvhub-eos:<EOS_TAG>` (unverändertes EOS) | ~700 MB statt ~930 MB | ~220 MB statt ~285 MB | EOSdash (bokeh, fasthtml, monsterui), matplotlib, Testordner der Bibliotheken |
+| `bikinibottomcapital/dvhub-eos-slim:<EOS_IMAGE_TAG>` | `dvhub-eos:<EOS_IMAGE_TAG>` (DVhub-EOS) | ~700 MB statt ~930 MB | ~220 MB statt ~285 MB | EOSdash (bokeh, fasthtml, monsterui), matplotlib, Testordner der Bibliotheken |
 
 Einsetzen in `docker/.env`:
 
@@ -397,7 +403,7 @@ Drei Punkte, die eine Umsetzung beachten muss — alle am Datenbestand belegt:
   hat ~1 GB RAM / ~2,3 GB Disk. Die Node-seitige `services/python-bridge/`
   ist drin (sie wird von `server.js` statisch importiert), nur der Interpreter
   fehlt.
-* **EOS (Pro)** — eigenes Image aus dem unveränderten Akkudoktor-EOS.
+* **EOS (Pro)** — eigenes Image: DVhub-EOS (Fork `chloepriceless/EOS`, unverändertes Root-Dockerfile am Git-Tag) plus Rust-Kern (`docker/eos-native`). `docker compose build eos` baut nur die Grundstufe ohne Kern — EOS meldet dann den Python-Rückfall im Log; ausgeliefert wird nur das CI-Image.
 * **VPN:** OpenVPN und WireGuard zum Direktvermarkter laufen im DVhub-Container (Rechte `NET_ADMIN` + `/dev/net/tun`, in `compose.yml` gesetzt; WireGuard nutzt das Kernelmodul des Hosts). IPsec weiterhin nur nativ.
 * **Fern-Support:** Der Support-Tunnel läuft auch im Container (seit 2026-10-14). Der Entrypoint legt Relay-Schlüssel, Hostschlüssel-Pin und einen sshd im Daten-Volume an (`/var/lib/dvhub/support`). Der sshd startet nur, solange ein Tunnel offen ist, lauscht auf `127.0.0.1:2222` (`DVHUB_SUPPORT_SSH_PORT`) und lässt nur den Support-Schlüssel als Benutzer `dvhub` herein. Geöffnet wird der Tunnel wie nativ in DVhub oder über das Installateurs-Portal.
 * **git** — im Container wird nicht per `git pull` aktualisiert, sondern das
