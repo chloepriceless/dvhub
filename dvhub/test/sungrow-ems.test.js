@@ -425,18 +425,27 @@ test('External EMS: Herzschlag in jedem Takt, auch wenn sich sonst nichts änder
   assert.deepEqual(r.t.writes, []);
 });
 
-test('External EMS: Frist 20 s → Takt alle 6,7 s (drei Herzschläge je Frist)', async () => {
-  const r = rig({ controlMode: 'external', heartbeatTimeoutS: 20 });
-  await r.ems.applySetpoint(-5000, 'rule:abend');
-  r.t.writes.length = 0;
-  r.advance(6_000);
-  r.telemetry({ gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 });
-  await r.ems.tick();
-  assert.deepEqual(r.t.writes, [], '6 s < 6,67 s');
-  r.advance(1_000);
-  await r.ems.tick();
-  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[HB, 20]]);
-});
+for (const [timeoutS, everyS] of [[20, 5], [30, 10], [60, 10]]) {
+  test(`External EMS: Frist ${timeoutS} s → Herzschlag alle ${everyS} s beim echten 5-s-Aufruftakt (Zittern ±200 ms)`, async () => {
+    const r = rig({ controlMode: 'external', heartbeatTimeoutS: timeoutS });
+    await r.ems.applySetpoint(-5000, 'rule:abend');
+    r.t.writes.length = 0;
+    const at = [];
+    let elapsed = 0;
+    for (let i = 1; i <= 12; i += 1) {
+      const step = 5000 + (i % 2 ? -200 : 200); // Intervall-Timer zittert
+      r.advance(step);
+      elapsed += step;
+      r.telemetry({ gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 });
+      const before = r.t.writes.length;
+      await r.ems.tick();
+      if (r.t.writes.slice(before).some((w) => w.address === HB)) at.push(elapsed);
+    }
+    const gaps = at.map((x, i) => (i ? x - at[i - 1] : x));
+    assert.ok(gaps.every((g) => g <= everyS * 1000 + 400), `Abstände ${gaps}`);
+    assert.ok(Math.max(...gaps) * 3 <= timeoutS * 1000 + 1200, 'mindestens drei Herzschläge je Frist');
+  });
+}
 
 for (const variant of ['Register fällt auf 0', 'Register bleibt 3']) {
   test(`External EMS: DVhub hängt länger als die Frist (${variant}) → beim Wiederanlauf ganzer Befehl neu`, async () => {
@@ -472,6 +481,29 @@ test('External EMS: Firmware ohne Herzschlag-Register → kein Write, klare Meld
     await r.ems.tick();
     assert.ok(r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED));
   }
+});
+
+test('Codex R4: liegengebliebener Zwangsbetrieb ohne Merker + Firmware ohne 13080 → Sollwert im Band gibt ihn frei', async () => {
+  const r = rig({ controlMode: 'external', over: { dropHolding: [HB], holding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 4000 } } });
+  const res = await r.ems.applySetpoint(-40, 'default');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP], [MODE, EMS_MODE.SELF]]);
+  // Ein Lade-/Entladewunsch bleibt dagegen ohne Herzschlag gesperrt.
+  r.t.writes.length = 0;
+  assert.equal((await r.ems.applySetpoint(-5000, 'rule:abend')).error, 'sungrow_heartbeat_unsupported');
+  assert.deepEqual(r.t.writes, []);
+});
+
+test('Codex R4: Frist erhöht, bevor ein Hänger auffällt → Lücke gegen die im Gerät geltende alte Frist', async () => {
+  const r = rig({ controlMode: 'external', heartbeatTimeoutS: 30 });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  r.cfg.sungrow.heartbeatTimeoutS = 300; // Betreiber ändert die Frist
+  r.advance(40_000);                      // DVhub hing 40 s — im Gerät galten noch 30 s
+  r.telemetry({ gridW: 0, batteryW: -500, pvW: 0, loadW: 500 });
+  r.t.writes.length = 0;
+  await r.ems.tick();
+  assert.deepEqual(r.t.writes.map((w) => w.address), [POWER, CMD, HB, MODE], 'voller Wiedereintritt');
+  assert.equal(r.t.writes.find((w) => w.address === HB).value, 300, 'neue Frist geht dabei raus');
 });
 
 test('Moduswechsel zur Laufzeit: erst Self-consumption bestätigt, dann der neue Modus', async () => {

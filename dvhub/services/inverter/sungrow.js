@@ -259,6 +259,10 @@ export function sungrowEmsConf(cfg) {
   return c?.enabled === true && c.emulate === 'sungrow-ems' ? c : null;
 }
 
+// Takt, in dem schedule-eval tick() aufruft (ZFI_TICK_MS), und erlaubtes Zittern des Intervall-Timers.
+const CALLER_TICK_MS = 5000;
+const TICK_JITTER_MS = 250;
+
 /** Schlüssel der Geräteverbindung (Adresse, Port, Unit-ID) — Erkennung und Schreib-Tor gelten je Verbindung. */
 export function endpointKeyOf(v) {
   return `${v?.host ?? ''}:${v?.port ?? ''}:${v?.unitId ?? ''}`;
@@ -280,6 +284,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     endpointKey: null,   // Verbindung, für die target/dev/owns gelten
     hb: { key: null, supported: null }, // gibt es das Herzschlag-Register an dieser Verbindung?
     lastHeartbeatAt: 0,
+    sentTimeoutS: null,  // zuletzt an den Wechselrichter geschriebene Frist (gilt dort, bis eine neue rausging)
     lastStepAt: 0,
     decision: null,
     error: null,
@@ -318,7 +323,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     if (st.owns === owns && st.ownMode === (owns ? mode : null)) return;
     st.owns = owns;
     st.ownMode = owns ? mode : null;
-    if (!owns) st.lastHeartbeatAt = 0;
+    if (!owns) { st.lastHeartbeatAt = 0; st.sentTimeoutS = null; }
     if (!statePath) return;
     try {
       if (owns) atomicWriteControlState(statePath, { ownMode: mode, endpointKey: st.endpointKey, at: now() });
@@ -437,6 +442,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       if (forceAll || dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd, opt);
       if (modeValue === EMS_MODE.EXTERNAL && (forceAll || dev.mode !== modeValue)) {
         await writeReg(conf, HEARTBEAT_ADDR, heartbeatS, opt);
+        st.sentTimeoutS = heartbeatS;
         heartbeatWritten = true;
       }
       if (forceAll || dev.mode !== modeValue) await writeReg(conf, EMS_MODE_ADDR, modeValue, opt);
@@ -489,11 +495,16 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     return null;
   }
 
-  // Abstand der Takte, solange DVhub External EMS fährt: höchstens ein Drittel der Herzschlag-Frist.
+  // Abstand der Takte, solange DVhub External EMS fährt: höchstens ein Drittel der Herzschlag-Frist, auf den
+  // 5-s-Takt des Aufrufers (schedule-eval) abgerundet — sonst wird aus 6,7 s faktisch 10 s (Codex ff728d09).
+  // Die Toleranz fängt das Zittern des Intervall-Timers ab.
   function stepEveryMs(opts, ctl) {
-    if (st.owns && st.ownMode === EMS_MODE.EXTERNAL) return Math.min(opts.regulateEveryMs, Math.floor(ctl.heartbeatTimeoutS * 1000 / 3));
-    return opts.regulateEveryMs;
+    if (!(st.owns && st.ownMode === EMS_MODE.EXTERNAL)) return opts.regulateEveryMs;
+    const frist = Math.min(ctl.heartbeatTimeoutS, st.sentTimeoutS ?? ctl.heartbeatTimeoutS) * 1000;
+    const third = Math.max(CALLER_TICK_MS, Math.floor(frist / 3 / CALLER_TICK_MS) * CALLER_TICK_MS);
+    return Math.min(opts.regulateEveryMs, third);
   }
+  const due = (everyMs) => now() - st.lastStepAt >= everyMs - TICK_JITTER_MS;
 
   async function step({ reason = 'tick' } = {}) {
     const cfg = getCfg();
@@ -523,9 +534,10 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       })
       : { mode: 'self', reason: st.target ? 'target_expired' : (st.revokedReason ? 'revoked' : 'no_setpoint') };
     try {
-      if (ctl.mode === 'external' && !(await heartbeatSupported(conf))) {
+      if (ctl.mode === 'external' && decision.mode === 'forced' && !(await heartbeatSupported(conf))) {
         // Ohne Herzschlag kein External EMS. Kein stiller Rückfall auf Forced mode (der hat keinen Rückfall
-        // des Wechselrichters): DVhub steuert den Akku nicht; nur einen eigenen Betrieb gibt es noch zurück.
+        // des Wechselrichters): DVhub lädt/entlädt nicht. Zurück in Self-consumption geht immer — so wird auch
+        // ein liegengebliebener Zwangsbetrieb (ältere Einstellung, Neustart ohne Merker) wieder frei (Codex ff728d09).
         if (!st.owns) {
           st.decision = { ...decision, at: t, trigger: reason, blockedBy: 'heartbeat_unsupported' };
           st.error = 'sungrow_heartbeat_unsupported';
@@ -540,8 +552,10 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       // Herzschlag-Lücke (DVhub hing, Neustart mit Merker): der Wechselrichter kann schon in Self-consumption
       // zurückgefallen sein — frisch lesen und den ganzen Befehl neu setzen.
       const ownsExternal = st.owns && st.ownMode === EMS_MODE.EXTERNAL;
+      // Frist, die im Gerät wirklich gilt: die zuletzt geschriebene, bis eine neue rausging (Codex ff728d09).
+      const deviceTimeoutS = Math.min(ctl.heartbeatTimeoutS, st.sentTimeoutS ?? ctl.heartbeatTimeoutS);
       const gap = ownsExternal && decision.mode === 'forced'
-        && (!st.lastHeartbeatAt || t - st.lastHeartbeatAt > ctl.heartbeatTimeoutS * 1000);
+        && (!st.lastHeartbeatAt || t - st.lastHeartbeatAt > deviceTimeoutS * 1000);
       if (gap) {
         st.dev = null;
         logOnce(String(st.lastHeartbeatAt), 'sungrow_ems_heartbeat_gap', { lastHeartbeatAt: st.lastHeartbeatAt || null, timeoutS: ctl.heartbeatTimeoutS }, 'warn');
@@ -554,6 +568,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       // den Wert innerhalb der Frist erneut schreiben).
       if (ownsExternal && !gap && decision.mode === 'forced' && dev.mode === EMS_MODE.EXTERNAL) {
         await writeReg(conf, HEARTBEAT_ADDR, ctl.heartbeatTimeoutS);
+        st.sentTimeoutS = ctl.heartbeatTimeoutS;
         st.lastHeartbeatAt = now();
       }
       if (!gap && emsMatches(dev, decision, decision.mode === 'forced' ? opts.stepW : 0, ctl.modeValue)) {
@@ -604,7 +619,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       st.revokedReason = null;
       const cfg = getCfg();
       const opts = resolveSungrowEmsOptions(sungrowEmsConf(cfg) || {});
-      if (!changed && now() - st.lastStepAt < stepEveryMs(opts, resolveSungrowControl(cfg))) {
+      if (!changed && !due(stepEveryMs(opts, resolveSungrowControl(cfg)))) {
         publish();
         return { ok: true, refreshed: true };
       }
@@ -643,7 +658,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       if (!conf || state.ctrl?.discretionaryWritesPaused) return { ok: true, idle: true };
       const opts = resolveSungrowEmsOptions(conf);
       if (!st.target && !st.owns) return { ok: true, idle: true };
-      if (now() - st.lastStepAt < stepEveryMs(opts, resolveSungrowControl(cfg))) return { ok: true, idle: true };
+      if (!due(stepEveryMs(opts, resolveSungrowControl(cfg)))) return { ok: true, idle: true };
       return step({ reason: 'tick' });
     });
   }

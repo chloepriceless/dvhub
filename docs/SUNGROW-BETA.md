@@ -81,7 +81,8 @@ nicht unterstützt: DVhub erkennt sie am Typcode und schreibt dann nichts.
 | Gegenprüfung | mkaiser: Auswahl „External EMS“ = 3 am Draht-Register 13049 (bestätigt). Herzschlag 13080 nur aus der Sungrow-Doku; evcc nutzt nur Modus 0/2 | evcc und mkaiser: 2 am Draht-Register 13049 |
 
 **DVhubs Werte:** Herzschlag-Frist 30 s (einstellbar 20–300 s). DVhub schreibt den Herzschlag in jedem Regeltakt
-(10 s, bei kürzerer Frist alle Frist/3) — also drei Meldungen je Frist: zwei dürfen ausfallen (WiNet-S-Zeitüberschreitung
+(10 s; bei kürzerer Frist Frist/3, abgerundet auf DVhubs 5-s-Takt — 20 s Frist → alle 5 s) — also mindestens drei
+Meldungen je Frist: zwei dürfen ausfallen (WiNet-S-Zeitüberschreitung
 3 s, Neuverbindung), ohne dass der Wechselrichter zurückfällt; nach einem Absturz endet ein Lade-/Entladebefehl
 spätestens nach 30 s. Die Werkseinstellung 20 s wäre nur zwei Takte. Der Herzschlag ist das einzige RW-Register,
 das DVhub im Takt schreibt — die Doku verlangt genau das (Note 6 gilt sonst).
@@ -89,7 +90,9 @@ das DVhub im Takt schreibt — die Doku verlangt genau das (Note 6 gilt sonst).
 **Firmware ohne 13080:** DVhub fällt bewusst **nicht** still auf Forced mode zurück. Wer External EMS gewählt hat,
 will den Rückfall des Wechselrichters bei einem DVhub-Ausfall; Forced mode hat ihn nicht. Deshalb: einmal Meldung
 im Protokoll, keine Akku-Steuerung (Abregelung und Messwerte laufen weiter). Hatte DVhub den Akku vorher selbst im
-Zwangsbetrieb, gibt es ihn einmal an Self-consumption zurück. Forced mode bleibt als bewusste Wahl möglich.
+Zwangsbetrieb, gibt es ihn einmal an Self-consumption zurück; zurück in Self-consumption geht immer (auch ein
+liegengebliebener Zwangsbetrieb ohne Merker wird so frei). Forced mode bleibt als bewusste Wahl möglich. Ändert der
+Betreiber die Frist, gilt für die Erkennung eines Hängers die im Gerät zuletzt geschriebene, bis die neue rausging.
 
 **Moduswechsel zur Laufzeit:** erst Befehl Stopp + Modus 0 (bestätigt), der neue Modus folgt im nächsten Takt.
 
