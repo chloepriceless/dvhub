@@ -1,0 +1,44 @@
+{
+  "_quelle": "Lumenaza external API v3.8.0 (lumx_openapi.yaml, https://docs.lumenaza.de/lumx_openapi.yaml), Beispielantworten der Spezifikation (Stand 11.11.2026). epex_day_ahead 200 aus der Online-Doku (Price Calculator API, Beispiel 24-Hour Window), weil die Spezifikation dort kein Beispiel hat; live_data_quality 200 nach dem Schema gebaut (kein Beispiel in der Spezifikation). Koordinaten des plant_data-Beispiels auf 0 gesetzt.",
+  "token": {
+    "200": { "access_token": "eyJ0ZXN0LWFjY2Vzcy10b2tlbiJ9.e30.sig", "token_type": "bearer", "expires_in": 3600, "scope": "read" },
+    "401": { "error": "invalid_client" }
+  },
+  "epex_day_ahead": {
+    "200": [
+      { "start_time": "2024-06-15T00:00:00Z", "end_time": "2024-06-15T01:00:00Z", "price": 68.42 },
+      { "start_time": "2024-06-15T01:00:00Z", "end_time": "2024-06-15T02:00:00Z", "price": 64.10 },
+      { "start_time": "2024-06-15T02:00:00Z", "end_time": "2024-06-15T03:00:00Z", "price": 59.87 },
+      { "start_time": "2024-06-15T12:00:00Z", "end_time": "2024-06-15T13:00:00Z", "price": -4.20 }
+    ],
+    "400": { "from": ["This field is required."], "to": ["This field is required."] }
+  },
+  "producer_feed": {
+    "200": [{ "start": "2024-06-26T00:00:00Z", "end": "2024-06-26T00:15:00Z", "feed": 1000 }],
+    "400": { "detail": "Contract does not have a delivery start" }
+  },
+  "producer_forecast": {
+    "200": [{ "start_time": "2024-06-26T00:00:00Z", "end_time": "2024-06-26T00:15:00Z", "forecast_value": 500 }]
+  },
+  "producer_live_data_quality": {
+    "200": [{ "market_location_id": 1, "market_location_identifier": "00000000000", "start_date": "2024-06-01", "end_date": "2024-06-30", "coverage": 0.98, "relative_error": 0.07, "weighted_metric": 0.91 }]
+  },
+  "producer_outage_energy": {
+    "200": [{ "start": "2024-06-26T00:00:00Z", "end": "2024-06-26T00:15:00Z", "energy": 1000 }]
+  },
+  "producer_plant_data": {
+    "200": {
+      "date_of_commissioning": "2022-05-15", "plant_size": 100, "capacity": 5000, "serial_number": "SN12345678",
+      "meter_id": "METER1234", "status": "feed", "production_type": "solar", "longitude": 0, "latitude": 0,
+      "errors": [], "minimal_feed_power": 10.5, "load_gradient_min_to_max": 0.5, "load_gradient_max_to_min": 0.2,
+      "time_to_power_off_from_minimal_feed_power": 120, "technical_resources": ["TR-001", "TR-002"],
+      "control_resource": { "SR-ID": "SR-001" }, "consumption_by_owner": 30.5
+    }
+  },
+  "consumer_supply": {
+    "200": [[
+      { "start": "2024-06-01T00:00:00Z", "end": "2024-06-01T01:00:00Z", "supply": 1000 },
+      { "start": "2024-06-01T01:00:00Z", "end": "2024-06-01T02:00:00Z", "supply": 1200 }
+    ]]
+  }
+}

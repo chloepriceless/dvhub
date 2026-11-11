@@ -1,0 +1,195 @@
+{
+ "_quelle": "Struktur aus dem LUOX-Portal (products/{C…}/{tag}/{tag}, live 11.11.2026, Tarif „LUOX Dynamisch“); Nummern ersetzt, ortsabhängige Netzentgelte/Konzessionsabgabe verändert, Spot-Schätzwert im Arbeitspreis auf 11,0 ct gesetzt.",
+ "product_infos": [
+  {
+   "product_name": "lumenaza_slp_spot_household_generic",
+   "display_name": "LUOX Dynamisch",
+   "minimum_contract_term": 0,
+   "contract_notice_period": 4,
+   "contract_notice_period_unit": "w",
+   "product_valid_from": "1970-01-01",
+   "product_valid_until": null,
+   "periods": [
+    {
+     "period_start": "2026-11-11",
+     "period_end": "2026-11-11",
+     "product_items": [
+      {
+       "valid_from": "1970-01-01",
+       "valid_until": "3000-12-31",
+       "unit": "ct/m",
+       "amount_gross": 595,
+       "amount_net": 500,
+       "classification": "base_fee",
+       "display_name": "Netzentgelte",
+       "associated_costs": [
+        {
+         "name": "grid_usage_monthly_fee_00000",
+         "unit": "ct/y",
+         "valid_from": "2026-01-01",
+         "valid_until": "2026-12-31",
+         "cost_per_unit_net": 6000,
+         "cost_per_unit_gross": 7140,
+         "display_name": "VNB Tarif (Grundgebühr)"
+        },
+        {
+         "name": "msb_sp_defined_00000",
+         "unit": "ct/y",
+         "valid_from": "2026-01-01",
+         "valid_until": "2026-12-31",
+         "cost_per_unit_net": 0,
+         "cost_per_unit_gross": 0,
+         "display_name": "Messstellengebühr"
+        }
+       ],
+       "internal_name": "base_fee"
+      },
+      {
+       "valid_from": "1970-01-01",
+       "valid_until": "3000-12-31",
+       "unit": "ct/kWh",
+       "amount_gross": 0.42,
+       "amount_net": 0.3529412,
+       "classification": "additional_ct_kwh_price",
+       "display_name": "Herkunftsnachweise",
+       "associated_costs": [],
+       "internal_name": "certificates_of_origin"
+      },
+      {
+       "valid_from": "1970-01-01",
+       "valid_until": "3000-12-31",
+       "unit": "ct/m",
+       "amount_gross": 950,
+       "amount_net": 798.3193277,
+       "classification": "service_fee",
+       "display_name": "LUOX Energy Gebühr",
+       "associated_costs": [],
+       "internal_name": "service_costs_1"
+      },
+      {
+       "valid_from": "1970-01-01",
+       "valid_until": "3000-12-31",
+       "unit": "ct/kWh",
+       "amount_gross": 30.45,
+       "amount_net": 25.586,
+       "classification": "spot_working_price",
+       "display_name": "Börsenstrompreis",
+       "associated_costs": [
+        {
+         "name": "abla_uml",
+         "unit": "ct/kWh",
+         "valid_from": "2026-01-01",
+         "valid_until": "2026-12-31",
+         "cost_per_unit_net": 0,
+         "cost_per_unit_gross": 0,
+         "display_name": "abla_uml"
+        },
+        {
+         "name": "concession_00000_TA",
+         "unit": "ct/kWh",
+         "valid_from": "2017-01-01",
+         "valid_until": null,
+         "cost_per_unit_net": 1.59,
+         "cost_per_unit_gross": 1.8921,
+         "display_name": "Konzessionsabgabe"
+        },
+        {
+         "name": "grid_usage_working_price_00000",
+         "unit": "ct/kWh",
+         "valid_from": "2026-01-01",
+         "valid_until": "2026-12-31",
+         "cost_per_unit_net": 8.0,
+         "cost_per_unit_gross": 9.52,
+         "display_name": "VNB Tariff (Arbeitspreis)"
+        },
+        {
+         "name": "kwk_uml",
+         "unit": "ct/kWh",
+         "valid_from": "2026-01-01",
+         "valid_until": "2026-12-31",
+         "cost_per_unit_net": 0.446,
+         "cost_per_unit_gross": 0.53074,
+         "display_name": "kwk_uml"
+        },
+        {
+         "name": "offshore",
+         "unit": "ct/kWh",
+         "valid_from": "2026-01-01",
+         "valid_until": "2026-12-31",
+         "cost_per_unit_net": 0.941,
+         "cost_per_unit_gross": 1.11979,
+         "display_name": "offshore"
+        },
+        {
+         "name": "stromnev",
+         "unit": "ct/kWh",
+         "valid_from": "2026-01-01",
+         "valid_until": "2026-12-31",
+         "cost_per_unit_net": 1.559,
+         "cost_per_unit_gross": 1.85521,
+         "display_name": "stromnev"
+        },
+        {
+         "name": "stromst",
+         "unit": "ct/kWh",
+         "valid_from": "2026-01-01",
+         "valid_until": "2026-12-31",
+         "cost_per_unit_net": 2.05,
+         "cost_per_unit_gross": 2.4395,
+         "display_name": "stromst"
+        }
+       ],
+       "internal_name": "working_price_1"
+      }
+     ],
+     "totals": [
+      {
+       "total_price_net": 1298.3193277,
+       "total_price_gross": 1545,
+       "unit": "ct/m"
+      },
+      {
+       "total_price_net": 25.9389412,
+       "total_price_gross": 30.87,
+       "unit": "ct/kWh"
+      }
+     ],
+     "variable_costs": [
+      {
+       "cost_type": "distribution_cost_fee_consumer",
+       "unit": "ct/m",
+       "valid_from": "1970-01-01",
+       "valid_until": "3000-12-31",
+       "name": "distribution_cost",
+       "value": null,
+       "explanation": "Distribution cost fee. Retrieve data from dedicated endpoint.",
+       "display_name": "Ausgleichskosten"
+      },
+      {
+       "cost_type": "percentage_service_fee_on_spot_working_price",
+       "unit": "1/100",
+       "valid_from": "1970-01-01",
+       "valid_until": "3000-12-31",
+       "name": "percentage_fee",
+       "value": 3,
+       "explanation": null,
+       "display_name": "Variables Entgelt"
+      },
+      {
+       "cost_type": "spot_working_price",
+       "unit": "ct/kWh",
+       "valid_from": "1970-01-01",
+       "valid_until": "3000-12-31",
+       "name": "working_price_1",
+       "value": null,
+       "explanation": "EPEX Börse ist ein Handelsplatz für Strom. Im Day Ahead Handel entstehen durch Angebot & Nachfrage stündlich schwankende Preise. Der variable Preis muss von einem dedizierten Endpunkt abgerufen werden.",
+       "display_name": "Börsenstrompreis"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "contract_id": "C90000001-1",
+ "customer_id": "90000001"
+}

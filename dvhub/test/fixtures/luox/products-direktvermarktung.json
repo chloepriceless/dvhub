@@ -1,0 +1,64 @@
+{
+ "_quelle": "Struktur aus dem LUOX-Portal (products/{P…}/{tag}/{tag}, live 11.11.2026, „LUOX Direktvermarktung Spot“); Nummern ersetzt.",
+ "contract_id": "P90000001-1",
+ "customer_id": "90000001",
+ "product_infos": [
+  {
+   "product_name": "lumenaza_producer_dv_spot_generic",
+   "display_name": "LUOX Direktvermarktung Spot",
+   "minimum_contract_term": 0,
+   "contract_notice_period": 1,
+   "contract_notice_period_unit": "m",
+   "product_valid_from": "1970-01-01",
+   "product_valid_until": null,
+   "periods": [
+    {
+     "period_start": "2026-11-11",
+     "period_end": "2026-11-11",
+     "product_items": [
+      {
+       "valid_from": "1970-01-01",
+       "valid_until": "3000-12-31",
+       "unit": "ct/m",
+       "amount_gross": 1011.5,
+       "amount_net": 850,
+       "classification": "service_fee_producer_plant_capacity",
+       "display_name": "Dienstleistungsgebühr",
+       "associated_costs": [],
+       "internal_name": "solar_service_fee_producer_plant_capacity_20_1"
+      }
+     ],
+     "totals": [
+      {
+       "total_price_net": 850,
+       "total_price_gross": 1011.5,
+       "unit": "ct/m"
+      }
+     ],
+     "variable_costs": [
+      {
+       "cost_type": "distribution_cost_fee_producer",
+       "unit": "ct/m",
+       "valid_from": "1970-01-01",
+       "valid_until": "3000-12-31",
+       "name": "solar_service_fee_2",
+       "value": null,
+       "explanation": "Distribution cost fee. Retrieve data from dedicated endpoint.",
+       "display_name": "Ausgleichskosten"
+      },
+      {
+       "cost_type": "percentage_service_fee_on_feedin_payout",
+       "unit": "1/100",
+       "valid_from": "1970-01-01",
+       "valid_until": "3000-12-31",
+       "name": "solar_service_fee_3",
+       "value": 3,
+       "explanation": "Percentage service fee on feed-in payout. Value is in percent and is applied as an absolute fraction of the spot price monetary amount.",
+       "display_name": "Variables Entgelt"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

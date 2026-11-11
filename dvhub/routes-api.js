@@ -1685,6 +1685,8 @@ export function createApiRoutes(ctx) {
     ['/api/ocpp/status', 'integrations'], ['/api/vehicle-evcc', 'integrations'], ['/api/vehicle-evcc/settings', 'integrations'], ['/api/vehicle-evcc/refresh', 'integrations'],
     ['/api/tariff-provider', 'integrations'], ['/api/tariff-provider/test', 'integrations'], ['/api/tariff-provider/refresh', 'integrations'],
     ['/api/tariff-provider/stats', 'integrations'],
+    ['/api/luox', 'integrations'], ['/api/luox/contracts', 'integrations'], ['/api/luox/test', 'integrations'],
+    ['/api/luox/refresh', 'integrations'], ['/api/luox/settlement', 'integrations'],
     ['/api/integrations/mqtt/topics', 'integrations'], ['/api/integrations/mqtt/status', 'integrations'],
     ['/api/integrations/mqtt/action', 'integrations'], ['/api/schedule', 'integrations'],
     ['/api/schedule/automation/config', 'integrations'], ['/api/meter/scan', 'integrations'],
@@ -5443,6 +5445,52 @@ export function createApiRoutes(ctx) {
       if (!ctx.tariffProvider) return json(res, 503, { ok: false, error: 'tariff_provider_unavailable' });
       const result = await ctx.tariffProvider.refresh('manual');
       return json(res, 200, { ...result, state: ctx.tariffProvider.getState() });
+    }
+
+    // ── LUOX/Lumenaza (services/tariff-provider/luox-service.js, T-0417) ───
+    // Zugangsdaten stehen in der Konfiguration (REDACTED_PATHS) und gehen nie
+    // zurück; Antworten enthalten keine Kundendaten (nur Vertragsnummer/Status).
+    if (url.pathname === '/api/luox' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      return json(res, 200, { ok: true, state: ctx.luox?.getState?.() ?? null });
+    }
+    if (url.pathname === '/api/luox/contracts' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.luox) return json(res, 503, { ok: false, error: 'luox_unavailable' });
+      const kind = url.searchParams.get('kind');
+      try {
+        return json(res, 200, await ctx.luox.listContracts({
+          kind: kind === 'consumer' || kind === 'producer' ? kind : '',
+          fresh: url.searchParams.get('fresh') === '1'
+        }));
+      } catch (error) {
+        // Auswahl bleibt bedienbar: nur „automatisch“, dazu der Grund.
+        return json(res, 200, { ok: false, code: error.code || 'error', error: error.message, options: [{ value: '', label: 'automatisch (erster liefernder)' }] });
+      }
+    }
+    if (url.pathname === '/api/luox/test' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.luox) return json(res, 503, { ok: false, error: 'luox_unavailable' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const result = await ctx.luox.test(body || {});
+      pushLog('luox_test', { ok: result.ok, code: result.code || null }, actorContext(req));
+      return json(res, 200, result);
+    }
+    if (url.pathname === '/api/luox/refresh' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.luox) return json(res, 503, { ok: false, error: 'luox_unavailable' });
+      const result = await ctx.luox.refresh();
+      return json(res, 200, { ...result, state: ctx.luox.getState() });
+    }
+    if (url.pathname === '/api/luox/settlement' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.luox) return json(res, 503, { ok: false, error: 'luox_unavailable' });
+      try {
+        return json(res, 200, await ctx.luox.settlementReport({ days: url.searchParams.get('days') }));
+      } catch (error) {
+        return json(res, 500, { ok: false, code: 'error', error: error.message });
+      }
     }
 
     // ── OCPP-Zentrale (services/wallbox/ocpp-server.js) — Zustand lesen ───

@@ -8,12 +8,68 @@ import { buildPriceTelemetrySamples } from './telemetry-runtime.js';
 // rejections from the ticker, logs via configured logger + pushLog, and the
 // next tick still fires. Stops one-bad-fetch from disabling the loop forever.
 import { safeInterval } from './services/safe-async.js';
+import { localMidnight } from './services/tariff-provider/common.js';
 import { VRM_API_BASE as VRM_FORECAST_API, resolveVrmSiteId } from './vrm-site.js';
 // priceApiUrl kommt aus der Config: Namen beim Verbinden prüfen (1.0.10).
 import { outboundFetch } from './services/outbound-fetch.js';
 
-export function createEpexFetcher(ctx) {
+// Preisquelle 'luox' (T-0417): Für einen Tag, den LUOX nicht liefert, ab
+// 13 Uhr (Day-Ahead veröffentlicht) bis 20 Uhr weiter bei LUOX nachfragen —
+// die öffentliche Quelle hat ihn bis dahin schon aufgefüllt.
+const LUOX_RETRY_UNTIL_MINUTE = 20 * 60;
+const DAY_AHEAD_MINUTE = 13 * 60;
+
+/**
+ * Ist ein neuer Day-Ahead-Abruf fällig? (15-min-Takt in start(); rein, damit testbar.)
+ * @param {{epex:object}} state  @param {{epex:object}} cfg  @param {number} nowMs
+ */
+export function epexRefreshDue(state, cfg, nowMs = Date.now()) {
+  const tz = cfg.epex?.timezone;
+  const today = berlinDateString(new Date(nowMs), tz);
+  // Preiszone geändert (state.epex.bzn wird beim Abruf gesetzt): sofort neu.
+  const zoneChanged = !!state.epex?.bzn && state.epex.bzn !== (cfg.epex?.bzn || 'DE-LU');
+  const mustRefresh = !state.epex?.date || state.epex.date !== today || zoneChanged;
+  const stale = (nowMs - (state.epex?.updatedAt || 0)) > 6 * 60 * 60 * 1000;
+  // Day-ahead for tomorrow publishes ~12:45 CET. The plain 6h-staleness
+  // check can delay tomorrow's prices by up to 6h, during which EOS ffills a
+  // flat tomorrow and dumps the battery tonight. After 13:00 Berlin, refresh
+  // every tick until tomorrow's rows are actually present (then fetchEpexDay
+  // pushes them to the EOS bridge — see above).
+  const tomorrow = addDays(today, 1);
+  const hasTomorrow = Array.isArray(state.epex?.data) && state.epex.data.some((r) => r.day === tomorrow);
+  const minutes = localMinutesOfDay(new Date(nowMs), tz);
+  const dayAheadDue = minutes >= DAY_AHEAD_MINUTE && !hasTomorrow;
+  const byDay = state.epex?.sourceByDay || {};
+  // LUOX liefert nur DE-LU — bei anderer Zone gilt der normale Takt.
+  const luoxPending = cfg.epex?.priceSource === 'luox' && (cfg.epex?.bzn || 'DE-LU') === 'DE-LU' && !mustRefresh && (
+    byDay[today] !== 'luox'
+    || (minutes >= DAY_AHEAD_MINUTE && minutes < LUOX_RETRY_UNTIL_MINUTE && byDay[tomorrow] !== 'luox')
+  );
+  return mustRefresh || stale || dayAheadDue || luoxPending;
+}
+
+/**
+ * Deckt `rows` den Ortstag `day` lückenlos ab? Gleichmäßiger Takt von 15 oder
+ * 60 min, erster Wert um Ortsmitternacht, letzter endet um die nächste
+ * (92/96/100 Viertelstunden bzw. 23–25 Stunden an Umstellungstagen).
+ */
+export function dayComplete(rows, day, timeZone = 'Europe/Berlin') {
+  if (!rows.length) return false;
+  const start = localMidnight(day, timeZone).ms;
+  const end = localMidnight(addDays(day, 1), timeZone).ms;
+  const ts = [...new Set(rows.map((r) => Number(r.ts)))].sort((a, b) => a - b);
+  if (ts[0] !== start) return false;
+  for (const step of [900_000, 3_600_000]) {
+    if ((end - start) % step !== 0 || ts.length !== (end - start) / step) continue;
+    if (ts.every((t, i) => t === start + i * step)) return true;
+  }
+  return false;
+}
+
+export function createEpexFetcher(ctx, deps = {}) {
   const { state, getCfg, pushLog } = ctx;
+  const nowMs = deps.now || (() => Date.now());
+  let lastLuoxError = null;
 
   const timers = [];  // Track all interval/timeout handles for cleanup
 
@@ -57,11 +113,40 @@ export function createEpexFetcher(ctx) {
     return data;
   }
 
+  // --- Private: fetchEpexFromLuox (T-0417) ---
+  // Day-Ahead direkt aus dem LUOX-Kundenportal bzw. der Lumenaza-Partner-API
+  // (services/tariff-provider/luox-service.js) — dieselben EPEX-Preise, ohne
+  // Umweg über öffentliche Preisanbieter.
+  async function fetchEpexFromLuox(day, day2) {
+    const cfg = getCfg();
+    if (typeof ctx.luox?.fetchDayAhead !== 'function') return null;
+    const r = await ctx.luox.fetchDayAhead();
+    return (r?.rows || []).map((row) => {
+      const ds = berlinDateString(new Date(row.ts), cfg.epex.timezone);
+      return { ts: row.ts, day: ds, eur_mwh: row.eurMwh, ct_kwh: Number((row.eurMwh / 10).toFixed(3)) };
+    }).filter((row) => row.day === day || row.day === day2);
+  }
+
+  // Öffentliche Quelle(n) wie bisher: 'dvhub' = dvhub.online + Energy-Charts
+  // als stiller Fallback, 'public' = nur Energy-Charts.
+  async function fetchEpexPublic(day, day2, bzn, priceSource) {
+    if (priceSource !== 'public') {
+      try {
+        const data = await fetchEpexFromDvhubApi(day, day2, bzn);
+        if (data && data.length > 0) return { data, source: 'dvhub' };
+      } catch (apiErr) {
+        pushLog('epex_dvhub_api_fallback', { error: apiErr.message });
+      }
+    }
+    const data = await fetchEpexFromEnergyCharts(day, day2, bzn);
+    return { data: data || [], source: 'energy_charts' };
+  }
+
   // --- Public: fetchEpexDay ---
   async function fetchEpexDay() {
     const cfg = getCfg();
     if (!cfg.epex.enabled) return;
-    const day = berlinDateString(new Date(), cfg.epex.timezone);
+    const day = berlinDateString(new Date(nowMs()), cfg.epex.timezone);
     const day2 = addDays(day, 1);
     // Did we already hold tomorrow's day-ahead before this fetch? Used to fire
     // the EOS bridge the instant tomorrow's prices first arrive (see below).
@@ -76,20 +161,63 @@ export function createEpexFetcher(ctx) {
       // Preisquelle (2026-06-17): 'dvhub' = dvhub.online primär + Energy-Charts als
       // stiller Fallback; 'public' = direkt Energy-Charts (dvhub.online wird
       // übersprungen). Unset → 'dvhub' (Altverhalten beibehalten).
+      // 'luox' (T-0417): LUOX zuerst; Tage, die LUOX nicht liefert, kommen aus
+      // dem schon gehaltenen Stand oder der öffentlichen Quelle ('dvhub'-Kette).
       const priceSource = cfg.epex.priceSource || 'dvhub';
       let data = null;
       let activeSource = null;
-      if (priceSource === 'dvhub') {
+      const sourceByDay = {};
+      // LUOX liefert nur die deutsche Preiszone (DE-LU); bei anderer Zone gilt
+      // die öffentliche Quelle.
+      if (priceSource === 'luox' && bzn === 'DE-LU') {
         try {
-          data = await fetchEpexFromDvhubApi(day, day2, bzn);
-          if (data && data.length > 0) activeSource = 'dvhub';
-        } catch (apiErr) {
-          pushLog('epex_dvhub_api_fallback', { error: apiErr.message });
+          const luoxData = await fetchEpexFromLuox(day, day2);
+          if (luoxData && luoxData.length > 0) {
+            data = luoxData;
+            activeSource = 'luox';
+            for (const r of luoxData) sourceByDay[r.day] = 'luox';
+          }
+          lastLuoxError = null;
+        } catch (luoxErr) {
+          const msg = luoxErr?.message || String(luoxErr);
+          // Nur bei neuer Meldung protokollieren (Abruf alle 15 min).
+          if (msg !== lastLuoxError) pushLog('epex_luox_fallback', { code: luoxErr?.code || 'error', error: msg });
+          lastLuoxError = msg;
+        }
+        // Auch wenn LUOX ganz ausfällt: Tage, die schon VOLLSTÄNDIG und für
+        // dieselbe Preiszone gehalten werden, nicht bei jedem 15-min-Nachfragen
+        // erneut öffentlich abrufen. Öffentlich abgerufen wird, wenn heute
+        // fehlt oder ab 13 Uhr morgen fehlt; was die Antwort dann für morgen
+        // schon enthält, wird übernommen (auch vor 13 Uhr).
+        data = data || [];
+        const minutes = localMinutesOfDay(new Date(nowMs()), cfg.epex.timezone);
+        const sameZone = (state.epex?.bzn || 'DE-LU') === bzn;
+        const held = sameZone && Array.isArray(state.epex?.data) ? state.epex.data : [];
+        const heldBy = state.epex?.sourceByDay || {};
+        const heldRows = (d) => held.filter((r) => r.day === d);
+        const missing = [day, day2].filter((d) => !sourceByDay[d]);
+        const needPublic = missing.some((d) => !dayComplete(heldRows(d), d, cfg.epex.timezone) && (d === day || minutes >= 13 * 60));
+        const pub = needPublic ? await fetchEpexPublic(day, day2, bzn, 'dvhub').catch(() => ({ data: [], source: null })) : null;
+        for (const d of missing) {
+          const h = heldRows(d);
+          const p = pub ? pub.data.filter((r) => r.day === d) : [];
+          let rows = h;
+          let src = heldBy[d] || 'held';
+          // Ein vollständiger Rückfall-Tag geht immer vor einem unvollständigen
+          // gehaltenen (auch mit weniger Zeilen, z. B. Stundenwerte); sonst der längere.
+          if (p.length && !dayComplete(h, d, cfg.epex.timezone) && (dayComplete(p, d, cfg.epex.timezone) || p.length >= h.length)) { rows = p; src = pub.source; }
+          if (rows.length) {
+            data = data.concat(rows);
+            sourceByDay[d] = src;
+            if (!activeSource) activeSource = src;
+          }
         }
       }
       if (!data || data.length === 0) {
-        data = await fetchEpexFromEnergyCharts(day, day2, bzn);
-        if (data && data.length > 0) activeSource = 'energy_charts';
+        const pub = await fetchEpexPublic(day, day2, bzn, priceSource);
+        data = pub.data;
+        activeSource = data.length ? pub.source : null;
+        for (const r of data) sourceByDay[r.day] = pub.source;
       }
       // Review 2026-06-10 (P2-6): if BOTH sources came back empty this is a
       // FAILED refresh — do not stamp state.epex.ok=true with data:[] (that
@@ -100,7 +228,7 @@ export function createEpexFetcher(ctx) {
       }
 
       data.sort((a, b) => a.ts - b.ts);
-      state.epex = { ok: true, date: day, nextDate: day2, updatedAt: Date.now(), data, error: null };
+      state.epex = { ok: true, date: day, nextDate: day2, updatedAt: nowMs(), data, error: null, activeSource, sourceByDay, bzn };
       // Resolution stamp derived from the actual slot spacing: the hardcoded
       // 3600 mis-stamped the 15-min day-ahead slots (96/day) as hourly from
       // 2026-03-26 until this fix — consumers that filter or weigh by
@@ -304,19 +432,7 @@ export function createEpexFetcher(ctx) {
 
     // EPEX refresh: check every 15 min (aligned to the 15-min slot cadence)
     const epexInterval = safeInterval('epex-fetch.refresh', () => {
-      const cfg = getCfg();
-      const today = berlinDateString(new Date(), cfg.epex.timezone);
-      const mustRefresh = !state.epex.date || state.epex.date !== today;
-      const stale = (Date.now() - state.epex.updatedAt) > 6 * 60 * 60 * 1000;
-      // Day-ahead for tomorrow publishes ~12:45 CET. The plain 6h-staleness
-      // check can delay tomorrow's prices by up to 6h, during which EOS ffills a
-      // flat tomorrow and dumps the battery tonight. After 13:00 Berlin, refresh
-      // every tick until tomorrow's rows are actually present (then fetchEpexDay
-      // pushes them to the EOS bridge — see above).
-      const tomorrow = addDays(today, 1);
-      const hasTomorrow = Array.isArray(state.epex.data) && state.epex.data.some((r) => r.day === tomorrow);
-      const dayAheadDue = localMinutesOfDay(new Date(), cfg.epex.timezone) >= 13 * 60 && !hasTomorrow;
-      if (mustRefresh || stale || dayAheadDue) fetchEpexDay();
+      if (epexRefreshDue(state, getCfg(), nowMs())) fetchEpexDay();
     }, 15 * 60 * 1000);
     timers.push(epexInterval);
 

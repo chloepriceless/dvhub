@@ -17,7 +17,7 @@
 
 import { providerSlotAt, getProviderEstimate } from './price-store.js';
 
-export const PROVIDER_NAMES = Object.freeze(['tibber', 'lichtblick']);
+export const PROVIDER_NAMES = Object.freeze(['tibber', 'lichtblick', 'luox']);
 export const PRICE_BASES = Object.freeze(['gross_total', 'net_energy']);
 
 function roundCtKwh(value) {

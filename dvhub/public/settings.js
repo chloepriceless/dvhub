@@ -117,6 +117,24 @@ function createConfigInput(field, value, inherited) {
     input.appendChild(placeholder);
     if (field.dynamicOptionsUrl) {
       apiFetch(field.dynamicOptionsUrl).then(r => r.json()).then(data => {
+        // Zwei Antwortformen: { zones: [{zone}] } (Preiszonen) und
+        // { options: [{value, label}] } (z. B. LUOX-Verträge, T-0417).
+        if (Array.isArray(data?.options)) {
+          input.innerHTML = '';
+          const current = value == null ? '' : String(value);
+          const list = data.options.slice();
+          // Gespeicherten Wert nie still verlieren (Liste nicht ladbar/Vertrag weg).
+          if (current && !list.some((o) => String(o.value) === current)) list.push({ value: current, label: `${current} (gespeichert)` });
+          for (const o of list) {
+            const opt = document.createElement('option');
+            opt.value = String(o.value);
+            opt.textContent = String(o.label ?? o.value);
+            input.appendChild(opt);
+          }
+          input.value = current;
+          if (data.ok === false && data.error) input.title = String(data.error);
+          return;
+        }
         input.innerHTML = '';
         for (const z of (data?.zones || [])) {
           const opt = document.createElement('option');
@@ -2016,6 +2034,102 @@ const GROUP_ACTIONS = {
   ]
 };
 
+// LUOX/Lumenaza (T-0417): Verbindung prüfen, Stand und Abgleich der
+// Direktvermarktung. Zugangsdaten kommen aus dem Entwurf ('***' = gespeichert).
+GROUP_ACTIONS.luox = [
+  {
+    id: 'luoxTest',
+    label: 'Verbindung testen',
+    busyLabel: 'Prüfe …',
+    run: async ({ setMessage }) => {
+      syncRenderedFieldsToDraft();
+      const l = currentDraftConfig?.luox || {};
+      const r = await apiFetch('/api/luox/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: l.email || '', password: l.password || '' }) });
+      const j = await r.json().catch(() => ({}));
+      setMessage(luoxTestText(j), j.ok ? 'ok' : 'err');
+    }
+  },
+  {
+    id: 'luoxRefresh',
+    label: 'Jetzt abrufen',
+    title: 'Verträge, Day-Ahead-Preise und — falls eingeschaltet — Endkundenpreis und Abgleich der Direktvermarktung jetzt holen (gespeicherte Einstellungen)',
+    busyLabel: 'Abrufen …',
+    run: async ({ setMessage }) => {
+      const r = await apiFetch('/api/luox/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      const j = await r.json().catch(() => ({}));
+      setMessage(luoxStateText(j.state, j), j.ok ? 'ok' : 'warn');
+    }
+  },
+  {
+    id: 'luoxSettlement',
+    label: 'Abgleich Direktvermarktung',
+    title: 'LUOX-Abrechnung (Einspeisung × Day-Ahead) neben DVhubs eigener Einspeisung, letzte 30 Tage',
+    busyLabel: 'Laden …',
+    run: async ({ setMessage }) => {
+      const r = await apiFetch('/api/luox/settlement?days=30');
+      const j = await r.json().catch(() => ({}));
+      setMessage(luoxSettlementText(j), j.ok ? 'ok' : 'warn');
+    }
+  }
+];
+
+function luoxTestText(j) {
+  if (!j || !j.ok) return `Fehlgeschlagen: ${(j && (j.error || j.code)) || 'unbekannt'}`;
+  const list = (j.contracts || []).map((c) => `${c.id} (${c.kind === 'producer' ? 'Erzeugung' : 'Bezug'}, ${c.status || '–'})`);
+  return [`Verbindung in Ordnung. Verträge: ${list.length ? list.join(', ') : 'keine'}`, j.notice || ''].filter(Boolean).join('\n');
+}
+
+function luoxStateText(state, result = {}) {
+  if (!state) return 'Kein Stand verfügbar.';
+  const de = (iso) => (iso ? new Date(iso).toLocaleString('de-DE') : '–');
+  const lines = [];
+  if (!state.portal?.configured) lines.push('Zugangsdaten fehlen (eintragen und speichern).');
+  const d = state.dayAhead || {};
+  if (d.lastSuccessAt) lines.push(`Day-Ahead zuletzt ${de(d.lastSuccessAt)} (${d.source === 'luox_partner' ? 'Partner-API' : 'Kundenportal'}): heute ${d.todayCount ?? '–'}, morgen ${d.tomorrowCount ?? '–'} Viertelstunden`);
+  if (d.error) lines.push(`Day-Ahead: ${d.error}`);
+  if (state.tariff) {
+    const t = state.tariff;
+    lines.push(t.complete
+      ? `Endkundenpreis ${t.displayName || ''} (vorbereitet, ungeprüft): (Spot + ${t.percentOfSpot} % vom Betrag) × ${100 + Number(t.vatPct)} % + ${String(t.perKwh?.gross ?? '–').replace('.', ',')} ct/kWh brutto`
+      : `Endkundenpreis nicht berechenbar: ${(t.notes || [])[0] || 'unvollständig'}`);
+  }
+  const st = state.settlement || {};
+  if (state.dvSync?.enabled) {
+    lines.push(st.lastSuccessAt
+      ? `Abgleich zuletzt ${de(st.lastSuccessAt)}: ${st.rows ?? 0} Viertelstunden (${st.from} – ${st.to}), ${String(st.totals?.feedKwh ?? '–').replace('.', ',')} kWh`
+      : 'Abgleich noch nicht gelaufen (täglich ab 10 Uhr).');
+    if (st.error) lines.push(`Abgleich: ${st.error}`);
+  }
+  if (state.partner?.enabled) {
+    lines.push(state.partner.active
+      ? `Partner-API aktiv (${state.partner.environment})${state.partner.error ? ` — Fehler: ${state.partner.error}` : ''}`
+      : 'Partner-API eingeschaltet, aber ohne Zugangsdaten — es gilt das Kundenportal.');
+  }
+  if (state.authBlockedUntil) lines.push(`Zugangsdaten abgelehnt — neuer Versuch ab ${de(state.authBlockedUntil)} oder nach Änderung.`);
+  for (const k of ['contractsError', 'dayAheadError', 'tariffError']) if (result[k]) lines.push(result[k]);
+  if (state.notice) lines.push(state.notice);
+  return lines.join('\n');
+}
+
+function luoxSettlementText(j) {
+  if (!j) return 'Abgleich nicht abrufbar.';
+  if (!j.ok) return `Abgleich: ${j.error || j.code || 'nicht möglich'}`;
+  const days = j.days || [];
+  if (!days.length) return 'Noch keine Abrechnungsdaten von LUOX gespeichert (Abgleich einschalten, „Jetzt abrufen“).';
+  const n = (v, d = 2) => (v == null ? '–' : Number(v).toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d }));
+  const t = j.totals || {};
+  const lines = [`${days.length} Tage: LUOX ${n(t.luoxFeedKwh, 1)} kWh / ${n(t.luoxRevenueEur)} € · DVhub ${n(t.dvhubExportKwh, 1)} kWh / ${n(t.dvhubRevenueEur)} €`];
+  for (const d of days.slice(-7)) {
+    lines.push(`${d.date}: LUOX ${n(d.luoxFeedKwh, 1)} kWh (${n(d.luoxRevenueEur)} €)${d.luoxPortalDayKwh != null ? `, Tagessumme ${n(d.luoxPortalDayKwh, 1)} kWh` : ''} · DVhub ${n(d.dvhubExportKwh, 1)} kWh (${n(d.dvhubRevenueEur)} €)`);
+  }
+  if (j.note) lines.push(j.note);
+  return lines.join('\n');
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsLuox = { luoxTestText, luoxStateText, luoxSettlementText };
+}
+
 // Der Endpunkt liefert den Dump als Anhang; ein gewöhnlicher Link-Klick zieht
 // ihn direkt auf die Platte, ohne ihn im Browser-Speicher zu puffern.
 function downloadDbBackup(scope) {
@@ -2040,6 +2154,7 @@ function renderGroupActions(groupId) {
 
   const setMessage = (text, kind) => {
     message.hidden = false;
+    message.style.whiteSpace = 'pre-line';
     const cls = kind === 'err' ? 'sa-text-err' : (kind === 'warn' ? 'sa-text-warn' : 'sa-text-ok');
     message.innerHTML = `<span class="${cls}"></span>`;
     message.firstChild.textContent = text;
@@ -2958,7 +3073,7 @@ function renderPricingPeriodsEditor() {
         <select class="config-select" data-std-path="mode" data-std-rerender="1">
           <option value="fixed"${stdMode === 'fixed' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'fixed', 'Fester Bruttopreis')}</option>
           <option value="dynamic"${stdMode === 'dynamic' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'dynamic', 'Dynamisch aus EPEX + Preisbestandteilen')}</option>
-          <option value="provider"${stdMode === 'provider' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'provider', 'Vom Stromanbieter (Tibber, LichtBlick)')}</option>
+          <option value="provider"${stdMode === 'provider' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'provider', 'Vom Stromanbieter (Tibber, LichtBlick, LUOX)')}</option>
         </select>
       </div>
     </div>
@@ -2988,7 +3103,7 @@ function renderPricingPeriodsEditor() {
             <select class="config-select" data-period-id="${escapeHtml(period.id)}" data-period-path="mode">
               <option value="fixed"${period.mode === 'fixed' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'fixed', 'Fester Bruttopreis')}</option>
               <option value="dynamic"${period.mode === 'dynamic' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'dynamic', 'Dynamisch aus EPEX + Preisbestandteilen')}</option>
-              <option value="provider"${period.mode === 'provider' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'provider', 'Vom Stromanbieter (Tibber, LichtBlick)')}</option>
+              <option value="provider"${period.mode === 'provider' ? ' selected' : ''}>${fieldOptionLabelHtml('userEnergyPricing.mode', 'provider', 'Vom Stromanbieter (Tibber, LichtBlick, LUOX)')}</option>
             </select>
           </div>
         </div>
@@ -3096,7 +3211,7 @@ function renderPricingPeriodsEditor() {
 // zurück und bleiben beim Speichern erhalten (restoreRedacted).
 function tariffProviderBlockHtml(uep) {
   const p = uep.provider || {};
-  const name = p.name === 'tibber' || p.name === 'lichtblick' ? p.name : '';
+  const name = p.name === 'tibber' || p.name === 'lichtblick' || p.name === 'luox' ? p.name : '';
   const basis = p.priceBasis === 'net_energy' ? 'net_energy' : 'gross_total';
   const secretAttrs = (value) => `value="${escapeHtml(value || '')}" placeholder="${value === '***' ? 'gespeichert' : ''}" autocomplete="new-password"`;
   const credentials = name === 'tibber' ? `
@@ -3119,7 +3234,8 @@ function tariffProviderBlockHtml(uep) {
         <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.provider.lichtblick.password', 'Passwort (LichtBlick-App)')}</span>
         <input class="config-input" type="password" data-std-path="provider.lichtblick.password" data-std-type="text" ${secretAttrs(p.lichtblick?.password)} />
       </div>
-    </div>` : '';
+    </div>` : name === 'luox' ? `
+    <div class="svc-meta">LUOX-Zugangsdaten und Vertrag stehen unter Strompreise → „LUOX / Lumenaza“. „Nur der Energiepreis netto“ = Day-Ahead-Spot je Viertelstunde (Bestandteile + MwSt kommen hier dazu). „Endpreis“ = vorbereiteter Endkundenpreis „LUOX Dynamisch“ aus den Produktangaben im Portal — dort erst einschalten (ungeprüft bis zur ersten Abrechnung). Inoffizielle Portal-Schnittstelle, kann sich ändern.</div>` : '';
   return `
     <div class="sa-divider-top"></div>
     <div class="config-group-kicker" data-accent="yellow">Preis vom Stromanbieter</div>
@@ -3131,6 +3247,7 @@ function tariffProviderBlockHtml(uep) {
           <option value=""${name === '' ? ' selected' : ''}>— bitte wählen —</option>
           <option value="tibber"${name === 'tibber' ? ' selected' : ''}>Tibber</option>
           <option value="lichtblick"${name === 'lichtblick' ? ' selected' : ''}>LichtBlick ÖkoStrom Dynamic</option>
+          <option value="luox"${name === 'luox' ? ' selected' : ''}>LUOX Dynamisch</option>
         </select>
       </div>
       <div class="config-row">

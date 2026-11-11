@@ -50,6 +50,12 @@ export const REDACTED_PATHS = Object.freeze([
   'userEnergyPricing.provider.tibber.token',
   'userEnergyPricing.provider.lichtblick.email',
   'userEnergyPricing.provider.lichtblick.password',
+  // LUOX/Lumenaza (T-0417): Kundenportal-Login und Partner-API (OAuth2). Ziele
+  // fest (portal.luox-energy.de, api[.test].lumenaza.de) — kein SECRET_TARGETS.
+  'luox.email',
+  'luox.password',
+  'luox.partner.clientId',
+  'luox.partner.clientSecret',
   // EOS-Rechendienst (Fernbetrieb): Zugangsschlüssel der Box, beim
   // Einschreiben mit der Lizenz ausgegeben.
   'optimizer.eosProxy.remote.token'
