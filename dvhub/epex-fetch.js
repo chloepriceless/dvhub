@@ -8,6 +8,7 @@ import { buildPriceTelemetrySamples } from './telemetry-runtime.js';
 // rejections from the ticker, logs via configured logger + pushLog, and the
 // next tick still fires. Stops one-bad-fetch from disabling the loop forever.
 import { safeInterval } from './services/safe-async.js';
+import { localMidnight } from './services/tariff-provider/common.js';
 import { VRM_API_BASE as VRM_FORECAST_API, resolveVrmSiteId } from './vrm-site.js';
 // priceApiUrl kommt aus der Config: Namen beim Verbinden prüfen (1.0.10).
 import { outboundFetch } from './services/outbound-fetch.js';
@@ -37,11 +38,22 @@ export function epexRefreshDue(state, cfg, nowMs = Date.now()) {
   const minutes = localMinutesOfDay(new Date(nowMs), tz);
   const dayAheadDue = minutes >= DAY_AHEAD_MINUTE && !hasTomorrow;
   const byDay = state.epex?.sourceByDay || {};
-  const luoxPending = cfg.epex?.priceSource === 'luox' && !mustRefresh && (
+  // LUOX liefert nur DE-LU — bei anderer Zone gilt der normale Takt.
+  const luoxPending = cfg.epex?.priceSource === 'luox' && (cfg.epex?.bzn || 'DE-LU') === 'DE-LU' && !mustRefresh && (
     byDay[today] !== 'luox'
     || (minutes >= DAY_AHEAD_MINUTE && minutes < LUOX_RETRY_UNTIL_MINUTE && byDay[tomorrow] !== 'luox')
   );
   return mustRefresh || stale || dayAheadDue || luoxPending;
+}
+
+/** Deckt `rows` den Ortstag `day` vollständig ab (92/96/100 Viertelstunden bzw. 23–25 Stunden)? */
+export function dayComplete(rows, day, timeZone = 'Europe/Berlin') {
+  if (!rows.length) return false;
+  const lengthMs = localMidnight(addDays(day, 1), timeZone).ms - localMidnight(day, timeZone).ms;
+  const ts = rows.map((r) => Number(r.ts)).sort((a, b) => a - b);
+  let spacing = 900_000;
+  for (let i = 1; i < ts.length; i++) if (ts[i] > ts[i - 1]) { spacing = Math.max(spacing, ts[i] - ts[i - 1]); break; }
+  return new Set(ts).size * spacing >= lengthMs;
 }
 
 export function createEpexFetcher(ctx, deps = {}) {
@@ -162,32 +174,30 @@ export function createEpexFetcher(ctx, deps = {}) {
           if (msg !== lastLuoxError) pushLog('epex_luox_fallback', { code: luoxErr?.code || 'error', error: msg });
           lastLuoxError = msg;
         }
-        // Auch wenn LUOX ganz ausfällt: Tage, die schon gehalten werden, nicht
-        // bei jedem 15-min-Nachfragen erneut öffentlich abrufen.
-        {
-          data = data || [];
-          const minutes = localMinutesOfDay(new Date(nowMs()), cfg.epex.timezone);
-          const missing = [day, day2].filter((d) => !sourceByDay[d] && (d === day || minutes >= 13 * 60));
-          if (missing.length) {
-            // Erst aus dem gehaltenen Stand (gleicher Tag = dieselben Preise),
-            // sonst einmal öffentlich abrufen.
-            const held = Array.isArray(state.epex?.data) ? state.epex.data : [];
-            const heldBy = state.epex?.sourceByDay || {};
-            let pub = null;
-            for (const d of missing) {
-              let rows = held.filter((r) => r.day === d);
-              let src = heldBy[d] || 'held';
-              if (!rows.length) {
-                if (!pub) pub = await fetchEpexPublic(day, day2, bzn, 'dvhub').catch(() => ({ data: [], source: null }));
-                rows = pub.data.filter((r) => r.day === d);
-                src = pub.source;
-              }
-              if (rows.length) {
-                data = data.concat(rows);
-                sourceByDay[d] = src;
-                if (!activeSource) activeSource = src === 'held' ? 'held' : src;
-              }
-            }
+        // Auch wenn LUOX ganz ausfällt: Tage, die schon VOLLSTÄNDIG und für
+        // dieselbe Preiszone gehalten werden, nicht bei jedem 15-min-Nachfragen
+        // erneut öffentlich abrufen. Öffentlich abgerufen wird, wenn heute
+        // fehlt oder ab 13 Uhr morgen fehlt; was die Antwort dann für morgen
+        // schon enthält, wird übernommen (auch vor 13 Uhr).
+        data = data || [];
+        const minutes = localMinutesOfDay(new Date(nowMs()), cfg.epex.timezone);
+        const sameZone = (state.epex?.bzn || 'DE-LU') === bzn;
+        const held = sameZone && Array.isArray(state.epex?.data) ? state.epex.data : [];
+        const heldBy = state.epex?.sourceByDay || {};
+        const heldRows = (d) => held.filter((r) => r.day === d);
+        const missing = [day, day2].filter((d) => !sourceByDay[d]);
+        const needPublic = missing.some((d) => !dayComplete(heldRows(d), d, cfg.epex.timezone) && (d === day || minutes >= 13 * 60));
+        const pub = needPublic ? await fetchEpexPublic(day, day2, bzn, 'dvhub').catch(() => ({ data: [], source: null })) : null;
+        for (const d of missing) {
+          const h = heldRows(d);
+          const p = pub ? pub.data.filter((r) => r.day === d) : [];
+          let rows = h;
+          let src = heldBy[d] || 'held';
+          if (!dayComplete(h, d, cfg.epex.timezone) && p.length >= h.length && p.length) { rows = p; src = pub.source; }
+          if (rows.length) {
+            data = data.concat(rows);
+            sourceByDay[d] = src;
+            if (!activeSource) activeSource = src;
           }
         }
       }
@@ -206,7 +216,7 @@ export function createEpexFetcher(ctx, deps = {}) {
       }
 
       data.sort((a, b) => a.ts - b.ts);
-      state.epex = { ok: true, date: day, nextDate: day2, updatedAt: nowMs(), data, error: null, activeSource, sourceByDay };
+      state.epex = { ok: true, date: day, nextDate: day2, updatedAt: nowMs(), data, error: null, activeSource, sourceByDay, bzn };
       // Resolution stamp derived from the actual slot spacing: the hardcoded
       // 3600 mis-stamped the 15-min day-ahead slots (96/day) as hourly from
       // 2026-03-26 until this fix — consumers that filter or weigh by

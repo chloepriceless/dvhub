@@ -130,6 +130,33 @@ describe("epex.priceSource = 'luox'", () => {
     assert.ok(urls[0].includes('dvhub.online'));
   });
 
+  it('Gehaltene Preise einer anderen Preiszone werden nicht übernommen', async () => {
+    installFetch();
+    const { ctx, state } = makeCtx({ luox: { fetchDayAhead: async () => { throw Object.assign(new Error('weg'), { code: 'network' }); } } });
+    state.epex = { ok: true, date: '2026-11-11', bzn: 'AT', data: [...day(TODAY0, 1), ...day(TOMORROW0, 1)].map((r) => ({ ts: r.ts, day: r.ts >= TOMORROW0 ? '2026-11-12' : '2026-11-11', eur_mwh: 999, ct_kwh: 99.9 })), sourceByDay: {} };
+    await createEpexFetcher(ctx, { now: () => NOW }).fetchEpexDay();
+    assert.ok(urls[0].includes('dvhub.online'));
+    assert.equal(state.epex.data[0].eur_mwh, 30, 'DE-LU neu abgerufen');
+    assert.equal(state.epex.bzn, 'DE-LU');
+  });
+
+  it('Unvollständig gehaltener Tag wird beim nächsten Lauf neu abgerufen', async () => {
+    installFetch();
+    const { ctx, state } = makeCtx({ luox: { fetchDayAhead: async () => { throw Object.assign(new Error('weg'), { code: 'network' }); } } });
+    state.epex = { ok: true, date: '2026-11-11', bzn: 'DE-LU', data: [{ ts: TODAY0, day: '2026-11-11', eur_mwh: 1, ct_kwh: 0.1 }, { ts: TOMORROW0, day: '2026-11-12', eur_mwh: 1, ct_kwh: 0.1 }], sourceByDay: {} };
+    await createEpexFetcher(ctx, { now: () => NOW }).fetchEpexDay();
+    assert.equal(urls.length, 1);
+    assert.equal(state.epex.data.length, 192);
+  });
+
+  it('LUOX fällt aus, vor 13 Uhr: was die öffentliche Quelle für morgen schon hat, wird übernommen', async () => {
+    installFetch();
+    const early = Date.parse('2026-11-11T11:50:00Z'); // 12:50 Ortszeit
+    const { ctx, state } = makeCtx({ luox: { fetchDayAhead: async () => { throw Object.assign(new Error('weg'), { code: 'network' }); } } });
+    await createEpexFetcher(ctx, { now: () => early }).fetchEpexDay();
+    assert.equal(state.epex.data.length, 192);
+  });
+
   it('Ohne LUOX-Dienst verhält sich „luox“ wie „dvhub“', async () => {
     installFetch();
     const { ctx, state } = makeCtx({ luox: null });
@@ -154,6 +181,10 @@ describe('epexRefreshDue', () => {
     const late = Date.parse('2026-11-11T19:30:00Z');
     assert.equal(epexRefreshDue({ epex: { ...state.epex, updatedAt: late - 60_000 } }, cfg, late), false, 'nach 20 Uhr Ruhe');
     assert.equal(epexRefreshDue(state, { epex: { ...cfg.epex, priceSource: 'dvhub' } }, NOW), false, 'andere Quelle: altes Verhalten');
+  });
+  it('Andere Preiszone als DE-LU: kein Nachfragen bei LUOX (normaler Takt)', () => {
+    const { state, cfg } = base({ sourceByDay: { '2026-11-11': 'dvhub', '2026-11-12': 'dvhub' } });
+    assert.equal(epexRefreshDue(state, { epex: { ...cfg.epex, bzn: 'AT' } }, NOW), false);
   });
   it('heute nicht von LUOX: bei LUOX weiter nachfragen', () => {
     const { state, cfg } = base({ sourceByDay: { '2026-11-11': 'dvhub', '2026-11-12': 'luox' } });
