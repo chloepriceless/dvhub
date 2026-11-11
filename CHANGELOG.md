@@ -441,7 +441,9 @@ verweist hierher.
   alt; sonst unbekannt (strenger).
 - **§14a: Neustart während einer Dimmung (P2-4).** Eine gespeicherte, noch gültige EEBUS-Grenze gilt gleich beim
   Start (vorher bis zu 120 s keine Grenze). Der Relais-Zustand wird gespeichert und gilt nach dem Neustart weiter,
-  bis das Relais neu meldet (vorher: keine Dimmung bis zum nächsten Schalten).
+  bis das Relais neu meldet (vorher: keine Dimmung bis zum nächsten Schalten) — eine gespeicherte Dimmung höchstens
+  24 h nach der letzten Meldung, danach frei mit Warnung `paragraph14a_relay_restored_expired` (Fable R5 P3-1:
+  Boxen, die nur bei einem Wechsel senden, hielten Wallbox und Wärmepumpe sonst tagelang auf 4,2 kW).
 - **EEBUS: Wiederanlauf auch ohne Steuerbox (P2-3).** Hat DVhub einem Gerät je eine Vorgabe geschrieben
   (Netzanschluss-Deckel, von Hand), nimmt es das Gerät nach einem Neustart oder dem Ende des Not-Halts wieder auf
   („frei“ beendet dessen Failsafe); gespeichert in `eebus/controlled.json`. Eine noch gültige eigene Vorgabe
