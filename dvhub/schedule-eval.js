@@ -1134,10 +1134,15 @@ export function createScheduleEvaluator(ctx) {
   // im Aktuator gemerkte Sollwert nicht mehr — er regelt sonst bis zum Ablauf
   // weiter. Ein Fehler des Aktuators selbst (emsFailure) behält den Sollwert für
   // den nächsten Versuch.
+  // Codex 28317bd5: nur widerrufen, wenn seit Beginn dieses Aufrufs kein neuerer
+  // Sollwert angenommen wurde; nach dem Widerruf den Schreib-Cache verwerfen, sonst
+  // hielte das „unchanged“-Kürzel denselben Wert später fest, ohne den Aktuator zu fragen.
   async function applyControlTarget(target, value, source) {
+    const seqAtStart = target === 'gridSetpointW' ? sungrowEms.acceptSeq() : null;
     const res = await applyControlTargetCore(target, value, source);
     if (target === 'gridSetpointW' && res?.ok === false && res.emsFailure !== true && sungrowEmsConf(getCfg())) {
-      await sungrowEms.revoke(res.error || 'rejected');
+      const r = await sungrowEms.revoke(res.error || 'rejected', { unlessAcceptedAfter: seqAtStart });
+      if (r?.revoked) delete state.schedule.lastWrite.gridSetpointW;
     }
     return res;
   }

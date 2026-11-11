@@ -267,6 +267,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     error: null,
     neutralizedAt: null,  // pausedAt des Not-Halts, für den die eine Rücknahme schon lief
     revokedReason: null,  // ein Tor hat den letzten Sollwert abgelehnt
+    acceptSeq: 0,         // zählt angenommene Sollwerte (Aufrufzeitpunkt) — eine ältere Ablehnung widerruft keinen neueren
     logKeys: {}
   };
   let chain = Promise.resolve();
@@ -319,12 +320,15 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
 
   // Not-Halt vor JEDEM Write prüfen: ein Takt, der vor dem Eintritt begann, darf danach nichts mehr setzen.
   // Nur die eine Rücknahme (neutralize) darf im Not-Halt schreiben.
-  async function writeReg(conf, address, value, { neutralize = false } = {}) {
+  async function writeReg(conf, address, value, { neutralize = false, claim = false } = {}) {
     if (state.ctrl?.discretionaryWritesPaused && !neutralize) {
       const err = new Error('emergency_stop_active');
       err.code = 'emergency_stop_active';
       throw err;
     }
+    // Besitz erst, wenn der Write wirklich rausgeht (nach dem Not-Halt-Tor), aber VOR der Bestätigung:
+    // geht sie verloren, kann der Befehl trotzdem wirken (Codex 28317bd5).
+    if (claim) st.owns = true;
     await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
   }
 
@@ -341,13 +345,12 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const dev = st.dev || await readDevice(conf);
     // Ein fremdes EMS/VPP (Modus 3/4) setzt DVhub nie selbst — es wird nie übersteuert, auch nicht im Not-Halt.
     if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
-    const opt = { neutralize };
     if (decision.mode === 'self') {
+      const opt = { neutralize };
       if (dev.cmd !== EMS_CMD.STOP) await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, opt);
       if (dev.mode !== EMS_MODE.SELF) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, opt);
     } else {
-      // Besitz VOR dem ersten Write: geht eine Bestätigung verloren, kann der Befehl trotzdem wirken.
-      st.owns = true;
+      const opt = { neutralize, claim: true };
       const cmd = CMD_BY_NAME[decision.command];
       if (decision.command !== 'stop' && dev.powerW !== decision.powerW) await writeReg(conf, EMS_POWER_ADDR, decision.powerW, opt);
       if (dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd, opt);
@@ -464,6 +467,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
    * Ein geänderter Wert regelt sofort, ein gleicher frischt nur den Sollwert auf (Nachführen im Takt).
    */
   function applySetpoint(setpointW, source) {
+    st.acceptSeq += 1;
     return serial(async () => {
       syncEndpoint(getCfg());
       const changed = !st.target || Number(st.target.setpointW) !== Number(setpointW);
@@ -482,15 +486,24 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
    * Ein Tor in applyControlTarget hat den Sollwert abgelehnt (z. B. Netzladen nicht mehr erlaubt): der
    * gemerkte Sollwert gilt nicht mehr — sofort zurück in Self-consumption, wenn DVhub Zwangsbetrieb fährt.
    */
-  function revoke(reason) {
+  function revoke(reason, { unlessAcceptedAfter = null } = {}) {
+    const newer = () => unlessAcceptedAfter != null && st.acceptSeq > unlessAcceptedAfter;
+    if (newer()) return Promise.resolve({ ok: true, skipped: true, reason: 'newer_setpoint' });
     return serial(async () => {
+      // Ein neuerer Sollwert kam inzwischen an (Codex 28317bd5): die ältere Ablehnung gilt nicht für ihn.
+      if (newer()) return { ok: true, skipped: true, reason: 'newer_setpoint' };
       if (!st.target && !st.owns) return { ok: true, idle: true };
       st.target = null;
       st.revokedReason = String(reason || 'rejected');
-      if (!st.owns) { publish(); return { ok: true, idle: true }; }
-      return step({ reason: 'revoked' });
+      if (!st.owns) { publish(); return { ok: true, revoked: true }; }
+      st.dev = null; // frisch lesen: ein fremdes EMS kann inzwischen übernommen haben
+      const r = await step({ reason: 'revoked' });
+      return { ...r, revoked: true };
     });
   }
+
+  /** Zähler angenommener Sollwerte (für revoke unlessAcceptedAfter). */
+  function acceptSeq() { return st.acceptSeq; }
 
   /** Nachführen im festen Takt (schedule-eval, 5 s); intern höchstens alle regulateEveryMs. */
   function tick() {
@@ -530,7 +543,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     });
   }
 
-  return { applySetpoint, revoke, tick, emergencyStop, status: () => (publish(), state.ctrl?.sungrowEms || null), _st: st };
+  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, status: () => (publish(), state.ctrl?.sungrowEms || null), _st: st };
 }
 
 function describe(d) {

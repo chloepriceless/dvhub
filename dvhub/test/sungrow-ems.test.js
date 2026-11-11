@@ -353,6 +353,31 @@ test('Codex P2: Adresswechsel → Erkennung und Besitz gelten nicht mehr', async
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_endpoint_changed'));
 });
 
+// --- Codex 28317bd5 -----------------------------------------------------------------------
+
+test('Codex R2: Widerruf liest frisch — ein inzwischen übernommenes VPP wird nicht überschrieben', async () => {
+  const r = rig();
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  r.image.holding.set(MODE, EMS_MODE.VPP); // innerhalb des 60-s-Fensters, Cache zeigt noch Zwangsbetrieb
+  r.t.writes.length = 0;
+  await r.ems.revoke('grid_discharge_not_allowed');
+  assert.deepEqual(r.t.writes, []);
+  assert.equal(r.state.ctrl.sungrowEms.owns, false);
+});
+
+test('Codex R2: Not-Halt während des Lesens → fremder Zwangsbetrieb wird nicht zu DVhubs Besitz', async () => {
+  const r = rig({
+    over: { holding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 } },
+    mockOpts: { onRead: ({ fc }) => { if (fc === 3) r.state.ctrl.discretionaryWritesPaused = true; } }
+  });
+  await r.ems.applySetpoint(4000, 'rule:netzladen');
+  assert.deepEqual(r.t.writes, []);
+  assert.equal(r.state.ctrl.sungrowEms.owns, false);
+  r.state.ctrl.pausedAt = 13;
+  assert.equal((await r.ems.emergencyStop()).reason, 'not_owned');
+  assert.deepEqual(r.t.writes, []);
+});
+
 // --- Integration: echter Evaluator, ausgeliefertes Profil -------------------------------
 
 function evaluatorRig(persisted = {}) {
@@ -413,6 +438,32 @@ test('Codex P1: Netzladen-Freigabe zurückgenommen → abgelehnter Sollwert been
   r.t.writes.length = 0;
   await r.evaluator.sungrowEms.tick();
   assert.deepEqual(r.t.writes, [], 'kein Nachladen aus dem gemerkten Sollwert');
+});
+
+test('Codex R2: gleichzeitig abgelehnter und angenommener Sollwert — der angenommene bleibt wirksam', async () => {
+  const r = evaluatorRig({ optimizer: { allowGridDischarge: true } });
+  const [a, b] = await Promise.all([
+    r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write'),   // Netzladen nicht erlaubt
+    r.evaluator.applyControlTarget('gridSetpointW', -4000, 'api_manual_write')
+  ]);
+  assert.equal(a.error, 'grid_charge_not_allowed');
+  assert.equal(b.ok, true);
+  assert.equal(r.state.ctrl.sungrowEms.target?.setpointW, -4000);
+  assert.ok(r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED));
+  assert.ok(!r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.SELF), 'nicht zurück in Self-consumption');
+});
+
+test('Codex R2: nach Widerruf erreicht derselbe, wieder erlaubte Sollwert den Aktuator', async () => {
+  const r = evaluatorRig({ optimizer: { allowGridCharge: true } });
+  await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write');
+  r.cfg.optimizer.allowGridCharge = false;
+  await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write');
+  r.t.writes.length = 0;
+  r.cfg.optimizer.allowGridCharge = true;
+  const res = await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write');
+  assert.equal(res.ok, true);
+  assert.notEqual(res.skipped, true, 'nicht als unverändert übersprungen');
+  assert.ok(r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED));
 });
 
 test('Codex P2: Evaluator schreibt nicht an eine Verbindung, an der nicht erkannt wurde', async () => {
