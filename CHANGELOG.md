@@ -29,16 +29,25 @@ verweist hierher.
   PV-Überschuss), lädt EOS über das Mindestziel bis dorthin. Was eine zusätzliche kWh wert ist, schätzt DVhub aus Preisen
   und PV der nächsten 7 Tage (was sie später an Ladekosten spart, minus 1 ct Sicherheitsabschlag) und gibt es EOS als
   Wertstufen mit. Ist der Max-Ladestand erreicht, beendet DVhub das Laden an der Wallbox; eine Ladegrenze im Auto kann
-  zusätzlich bestehen. „Sofort laden“ von Hand und der Not-Halt bleiben unberührt.
+  zusätzlich bestehen. Dafür zählt nur ein Ladestand, der nach dem zuletzt gesehenen Abstecken gelesen wurde — ein
+  Wert von vor der Fahrt (TeslaMate, Fahrzeugtreiber) stoppt die Box nicht mehr (Fable R5 P3-2). „Sofort laden“ von Hand und der Not-Halt bleiben unberührt.
   - **Vorausschauend:** Das Mindestziel rechnet DVhub über die Fahrten der nächsten 8 Tage — reicht die Zeit zwischen
     zwei Fahrten nicht zum Nachladen (z. B. Samstag 09:00 und 13:00), steigt das Ziel der ersten Abfahrt.
   - **Einmal-Ziel:** „Morgen längere Strecke“ = einmal z. B. 75 % bis 08:00 (Leitstand-Kachel und Integrationen →
     evcc). Der Wochenplan bleibt, wie er ist; nach der Abfahrt ist das Ziel vorbei. Eine vorgezogene Einmal-Abfahrt
-    lässt die ersetzte reguläre Abfahrt danach nicht wieder aufleben.
+    lässt die ersetzte reguläre Abfahrt danach nicht wieder aufleben. Das Einmal-Ziel ersetzt höchstens die eine
+    Abfahrt, zu der es gehört (dasselbe Fenster bzw. die nächste Abfahrt bis 24 h); Wochenplan-Abfahrten davor bleiben
+    mit Mindestziel und Frist und kommen zuerst — auch bei einem Ziel in Wochen. Welche Abfahrt ersetzt ist, hängt
+    nicht davon ab, wann man nachsieht.
   - **Ohne passendes EOS wie bisher:** Kennt EOS die Wertstufen nicht (Vanilla v0.4.0rc3), lädt EOS nur bis zum
     Mindestziel, Max-Ladestand und Wallbox-Grenze ruhen; das Mindestziel bleibt vorausschauend. Die Oberfläche sagt es.
   - **Einphasig laden,** wenn die Wallbox umschalten kann (evcc meldet es je Ladepunkt): kleine Leistungen 1,4–3,7 kW
     statt erst ab 4,1 kW dreiphasig. EOS bekommt nur noch Ladestufen, die die Wallbox wirklich fahren kann.
+    **Einphasig höchstens 20 A** (4,6 kVA Schieflast nach VDE-AR-N 4100; evcc selbst deckelt einphasig nicht): bei
+    einer 22-kW-Box mit Mindeststrom 10 A stellte DVhub sonst bis zu 30 A auf eine Phase. Zwischen 4,6 kW und der
+    dreiphasigen Mindestleistung gibt es keine Stufe; liegt der Mindeststrom über 20 A, lädt DVhub nur dreiphasig.
+    Gilt auch für Autos, die nur einphasig laden. Ein kleinerer Wert ist einstellbar
+    (`optimizer.evOnePhaseMaxCurrentA`), ein größerer gilt nicht.
     Im Not-Halt und im Lese-Modus schaltet DVhub keine Phasen und stoppt nicht am Max-Ladestand — auch nicht, wenn
     der Not-Halt mitten in einem Befehl („erst Strom, dann Phasen“) oder während des Plan-Abrufs kommt.
     **Von Hand umgestellt bleibt umgestellt:** Stellt jemand die Phasen in evcc um (App, auch auf „automatisch“),
@@ -362,6 +371,15 @@ verweist hierher.
 
 ### Behoben
 
+- **Grenze an direkt angebundenen Wallboxen nur als Obergrenze, nicht als Ladebefehl.** Begrenzt §14a oder der
+  Netzanschluss-Wächter eine Wallbox, die DVhub gerade nicht selbst steuert, setzte DVhub bisher einen Ladebefehl
+  (go-e/Wattpilot `frc=2`, OpenEVSE-Auftrag „aktiv“): eine von Hand gestoppte Box lud los, und der nächste
+  Grenz-Schritt startete sie wieder. Jetzt setzt DVhub bei go-e und Wattpilot nur den Strom (`amp`), bei OpenEVSE
+  einen eigenen Auftrag nur mit `max_current` — ob geladen wird, entscheidet weiter die Box. Ist die Grenze weg,
+  stellt DVhub den Strom von vorher wieder her (übersteht einen Neustart); der Not-Halt nimmt die eigene Obergrenze
+  einmal zurück, wenn sie frisch gelesen noch steht. Unter dem Mindeststrom stoppt DVhub wie bisher. Boxen ohne reine
+  Strom-Obergrenze (u. a. Victron-EVCS, KEBA, OCPP) bekommen die Grenze weiter als Ladebefehl (Log
+  `paragraph14a_wallbox_capped`, `mode: charge`). (Fable R1 P2-5)
 - **E-Auto-Wochenplan: einzelnen Tag am Handy leeren.** Am iPhone öffnet ein Tipp ins Zeitfeld sofort den
   Zeit-Picker, und Safari schreibt dabei schon die aktuelle Uhrzeit ins leere Feld. „Zurücksetzen“ im Picker leert
   nur dieses eine Feld: Der Picker bleibt offen und zeigt weiter eine Zeit, und Safari zeigt auch im geleerten Feld
@@ -439,7 +457,9 @@ verweist hierher.
   alt; sonst unbekannt (strenger).
 - **§14a: Neustart während einer Dimmung (P2-4).** Eine gespeicherte, noch gültige EEBUS-Grenze gilt gleich beim
   Start (vorher bis zu 120 s keine Grenze). Der Relais-Zustand wird gespeichert und gilt nach dem Neustart weiter,
-  bis das Relais neu meldet (vorher: keine Dimmung bis zum nächsten Schalten).
+  bis das Relais neu meldet (vorher: keine Dimmung bis zum nächsten Schalten) — eine gespeicherte Dimmung höchstens
+  24 h nach der letzten Meldung, danach frei mit Warnung `paragraph14a_relay_restored_expired` (Fable R5 P3-1:
+  Boxen, die nur bei einem Wechsel senden, hielten Wallbox und Wärmepumpe sonst tagelang auf 4,2 kW).
 - **EEBUS: Wiederanlauf auch ohne Steuerbox (P2-3).** Hat DVhub einem Gerät je eine Vorgabe geschrieben
   (Netzanschluss-Deckel, von Hand), nimmt es das Gerät nach einem Neustart oder dem Ende des Not-Halts wieder auf
   („frei“ beendet dessen Failsafe); gespeichert in `eebus/controlled.json`. Eine noch gültige eigene Vorgabe
