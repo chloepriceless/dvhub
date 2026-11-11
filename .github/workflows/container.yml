@@ -11,11 +11,13 @@
 #   Der Tag muss zur package.json-Version passen, sonst bricht der Lauf ab.
 #
 # EOS: scripts/eos-image-plan.sh entscheidet anhand von docker/.env.example.
-# Zeigt der Pin auf ein offizielles Image (akkudoktor/eos), wird nichts gebaut.
-# Sonst (Vorab-Stände, die Akkudoktor nicht als Image veröffentlicht) wird
-# dvhub-eos aus dem Dockerfile von Akkudoktor-EOS am Tag EOS_TAG gebaut und
-# unter genau diesem Tag veröffentlicht (plus :latest). Gibt es zum Pin ein
-# offizielles Image, das noch nicht eingetragen ist, bricht das Release ab.
+# Seit 1.0.10 das DVhub-EOS: dvhub-eos wird aus dem unveränderten Dockerfile
+# des Forks chloepriceless/EOS am Git-Tag EOS_TAG (dvhub-eos-<version>-dvhub.N)
+# für amd64 + arm64 gebaut und unter EOS_IMAGE_TAG (<version>-dvhub.N)
+# veröffentlicht, plus :latest. Der Git-Tag muss dafür im Fork liegen.
+# Zeigt der Pin auf ein offizielles Image (akkudoktor/eos), wird nichts gebaut;
+# gibt es zu einem Akkudoktor-Pin ein offizielles Image, das noch nicht
+# eingetragen ist, bricht das Release ab.
 #
 # Docker Hub: Benutzer bikinibottomcapital (kein Geheimnis, steht hier fest).
 # Token als Repo-Secret (Settings → Secrets and variables → Actions), Name
@@ -215,10 +217,21 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            docker.io/bikinibottomcapital/dvhub-eos:${{ steps.eos.outputs.tag }}
+            docker.io/bikinibottomcapital/dvhub-eos:${{ steps.eos.outputs.image_tag }}
             docker.io/bikinibottomcapital/dvhub-eos:latest
-            ghcr.io/${{ github.repository_owner }}/dvhub-eos:${{ steps.eos.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/dvhub-eos:${{ steps.eos.outputs.image_tag }}
+          # Wie tools/dvhub-eos/build-image.sh im Fork (Stufe 1: unverändertes
+          # Root-Dockerfile, BUILD_VERSION = Docker-Tag). Die native Schicht
+          # (Rust-Wheel, image/Dockerfile.native) fehlt für 1.0.10 bewusst: der
+          # Kern ist für diesen Stand nicht zertifiziert, also auch kein
+          # EOS_OPTIMIZATION__GENETIC__BACKEND — EOS rechnet mit Python.
           build-args: |
-            BUILD_VERSION=${{ steps.eos.outputs.tag }}
+            BUILD_VERSION=${{ steps.eos.outputs.image_tag }}
+          labels: |
+            org.opencontainers.image.title=DVhub-EOS
+            org.opencontainers.image.version=${{ steps.eos.outputs.image_tag }}
+            org.opencontainers.image.source=https://github.com/chloepriceless/EOS
+            net.dvhub.eos.git-tag=${{ steps.eos.outputs.tag }}
+            net.dvhub.eos.upstream=https://github.com/Akkudoktor-EOS/EOS
           cache-from: type=gha,scope=eos
           cache-to: type=gha,mode=max,scope=eos

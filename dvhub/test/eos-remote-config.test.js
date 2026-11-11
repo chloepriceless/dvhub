@@ -64,11 +64,12 @@ test('Speichern prüft die Adresse des Dienstes (config-routes)', () => {
   assert.match(src, /invalid_eos_remote_endpoint/);
 });
 
-test('Erwartete EOS-Version = EOS_PIN aus eos-version.env', () => {
+test('Erwartete EOS-Version = EOS_PIN aus eos-version.env (DVhub-EOS: ohne Präfix dvhub-eos-, wie der Docker-Tag)', () => {
   const appDir = path.resolve(__dirname, '..');
   const pin = /^EOS_PIN=(\S+)/m.exec(fs.readFileSync(path.resolve(appDir, '..', 'eos-version.env'), 'utf8'))[1];
-  assert.equal(readEosPin(appDir), pin);
-  assert.equal(DEFAULT_REMOTE_EOS_VERSION, pin, 'Rückfallwert (Container ohne eos-version.env) nachziehen');
+  const label = pin.replace(/^dvhub-eos-/, '');
+  assert.equal(readEosPin(appDir), label);
+  assert.equal(DEFAULT_REMOTE_EOS_VERSION, label, 'Rückfallwert (Container ohne eos-version.env) nachziehen');
 });
 
 test('remoteSettings: Grenzen der Wartezeit', () => {

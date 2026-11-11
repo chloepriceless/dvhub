@@ -54,9 +54,14 @@ curl -fsSL -o compose.yml.new "$REPO_RAW/docker/compose.yml"
 mv compose.yml.new compose.yml
 
 rand() { (openssl rand -hex 24 2>/dev/null) || (head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'); }
+# .env neu schreiben, ohne die Datei zu ersetzen: mv hätte die Rechte 600
+# (Passwörter) gegen die umask-Rechte der Zwischendatei getauscht.
+envrewrite() { # envrewrite SED-SKRIPT
+  sed "$1" .env > .env.tmp && cat .env.tmp > .env && rm -f .env.tmp
+}
 setenv() { # setenv KEY VALUE — Zeile ersetzen oder anhängen
   if grep -q "^$1=" .env; then
-    sed "s|^$1=.*|$1=$2|" .env > .env.tmp && mv .env.tmp .env
+    envrewrite "s|^$1=.*|$1=$2|"
   else
     printf '%s=%s\n' "$1" "$2" >> .env
   fi
@@ -81,10 +86,28 @@ if [ -f .env ] && [ "$(grep '^DVHUB_PIN_VERSIONS=' .env | cut -d= -f2)" != 1 ] \
   && curl -fsSL -o .env.example.new "$REPO_RAW/docker/.env.example" 2>/dev/null; then
   exv() { grep "^$1=" .env.example.new | head -1 | cut -d= -f2-; }
   cur() { grep "^$1=" .env | head -1 | cut -d= -f2-; }
+  # EOS als Ganzes: Repo, Git-Tag und Docker-Tag gehören zusammen (1.0.10:
+  # Vanilla v0.4.0rc3 → DVhub-EOS aus dem Fork, Docker-Tag = Git-Tag ohne
+  # „dvhub-eos-“). Nur Gleichheit zählt — die Versionsnummer von DVhub-EOS
+  # (0.3.0.dev…) ist der Zahl nach kleiner als 0.4.0rc3, der Stand aber neuer.
+  # Nennt die Vorgabe keinen EOS_IMAGE_TAG, fällt die Zeile weg (compose nimmt
+  # dann EOS_TAG).
   NEW_EOS="$(exv EOS_TAG)"; OLD_EOS="$(cur EOS_TAG)"
-  if [ -n "$NEW_EOS" ] && [ -n "$OLD_EOS" ] && [ "$OLD_EOS" != "$NEW_EOS" ]; then
-    say "EOS: $OLD_EOS → $NEW_EOS"
-    setenv EOS_TAG "$NEW_EOS"
+  if [ -n "$NEW_EOS" ] && [ -n "$OLD_EOS" ]; then
+    if [ "$OLD_EOS" != "$NEW_EOS" ]; then
+      say "EOS: $OLD_EOS → $NEW_EOS"
+      setenv EOS_TAG "$NEW_EOS"
+    fi
+    NEW_EOS_REPO="$(exv EOS_REPO)"
+    if [ -n "$NEW_EOS_REPO" ] && [ "$(cur EOS_REPO)" != "$NEW_EOS_REPO" ]; then
+      setenv EOS_REPO "$NEW_EOS_REPO"
+    fi
+    NEW_EOS_IMG="$(exv EOS_IMAGE_TAG)"
+    if [ -n "$NEW_EOS_IMG" ]; then
+      if [ "$(cur EOS_IMAGE_TAG)" != "$NEW_EOS_IMG" ]; then setenv EOS_IMAGE_TAG "$NEW_EOS_IMG"; fi
+    elif grep -q '^EOS_IMAGE_TAG=' .env; then
+      envrewrite '/^EOS_IMAGE_TAG=/d'
+    fi
   fi
   NEW_TS="$(exv TIMESCALE_TAG)"; OLD_TS="$(cur TIMESCALE_TAG)"
   if [ -n "$NEW_TS" ] && [ -n "$OLD_TS" ] && [ "$OLD_TS" != "$NEW_TS" ]; then

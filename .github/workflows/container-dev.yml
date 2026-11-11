@@ -6,11 +6,12 @@
 # roter Stand wird nie veröffentlicht. „dev" ist der aktuelle main, kein Release;
 # Releases (:X.Y.Z, :X.Y, :latest) baut weiterhin nur container.yml beim Tag.
 #
-# EOS: das dev-Image braucht den EOS-Stand aus docker/.env.example (EOS_TAG).
-# scripts/eos-image-plan.sh entscheidet: Zeigt der Pin auf ein offizielles
-# Image (akkudoktor/eos), wird nichts gebaut. Sonst (Vorab-Stände, die
-# Akkudoktor nicht als Image veröffentlicht) wird unser dvhub-eos nachgebaut,
-# FALLS der Tag auf Docker Hub fehlt (:latest bleibt dem Release vorbehalten).
+# EOS: das dev-Image braucht den EOS-Stand aus docker/.env.example (EOS_TAG,
+# EOS_IMAGE_TAG). scripts/eos-image-plan.sh entscheidet: Zeigt der Pin auf ein
+# offizielles Image (akkudoktor/eos), wird nichts gebaut. Sonst (DVhub-EOS aus
+# dem Fork, oder ein Vorab-Stand) wird unser dvhub-eos:<EOS_IMAGE_TAG> aus
+# repo#EOS_TAG nachgebaut (amd64 + arm64), FALLS es auf Docker Hub fehlt
+# (:latest bleibt dem Release vorbehalten).
 #
 # Docker-Hub-Token: Repo-Secret BIKINIBOTTOMCAPITAL (oder DOCKERHUB_TOKEN), wie
 # in container.yml.
@@ -134,16 +135,24 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            docker.io/bikinibottomcapital/dvhub-eos:${{ steps.eos.outputs.tag }}
-            ghcr.io/${{ github.repository_owner }}/dvhub-eos:${{ steps.eos.outputs.tag }}
+            docker.io/bikinibottomcapital/dvhub-eos:${{ steps.eos.outputs.image_tag }}
+            ghcr.io/${{ github.repository_owner }}/dvhub-eos:${{ steps.eos.outputs.image_tag }}
+          # Wie container.yml (publish-eos): Root-Dockerfile am Fork-Tag, ohne
+          # native Schicht und ohne GENETIC-Backend (1.0.10 rechnet mit Python).
           build-args: |
-            BUILD_VERSION=${{ steps.eos.outputs.tag }}
+            BUILD_VERSION=${{ steps.eos.outputs.image_tag }}
+          labels: |
+            org.opencontainers.image.title=DVhub-EOS
+            org.opencontainers.image.version=${{ steps.eos.outputs.image_tag }}
+            org.opencontainers.image.source=https://github.com/chloepriceless/EOS
+            net.dvhub.eos.git-tag=${{ steps.eos.outputs.tag }}
+            net.dvhub.eos.upstream=https://github.com/Akkudoktor-EOS/EOS
           cache-from: type=gha,scope=eos
           cache-to: type=gha,mode=max,scope=eos
 
   # Schlanke Images für schwache Geräte (SPiNE EnergyLink, 2026-10-19):
   #   bikinibottomcapital/timescaledb-slim:<TIMESCALE_TAG>   (docker/timescaledb-slim)
-  #   bikinibottomcapital/dvhub-eos-slim:<EOS_TAG>           (docker/eos-slim)
+  #   bikinibottomcapital/dvhub-eos-slim:<EOS_IMAGE_TAG>     (docker/eos-slim)
   # Gebaut wird nur, wenn das Image zum Pin fehlt oder sich sein Dockerfile in
   # diesem Commit geändert hat. Grundlage: das offizielle TimescaleDB-Image zum
   # Pin bzw. das EOS-Image zum Pin (deshalb nach publish-eos).
@@ -185,7 +194,7 @@ jobs:
           {
             echo "ts_tag=$ts_tag"; echo "ts_version=$ts_version"
             echo "ts_build=$(need "docker.io/bikinibottomcapital/timescaledb-slim:$ts_tag" docker/timescaledb-slim)"
-            echo "eos_build=$(need "docker.io/bikinibottomcapital/dvhub-eos-slim:${{ steps.eos.outputs.tag }}" docker/eos-slim)"
+            echo "eos_build=$(need "docker.io/bikinibottomcapital/dvhub-eos-slim:${{ steps.eos.outputs.image_tag }}" docker/eos-slim)"
           } | tee -a "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v4
@@ -226,8 +235,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            docker.io/bikinibottomcapital/dvhub-eos-slim:${{ steps.eos.outputs.tag }}
-            ghcr.io/${{ github.repository_owner }}/dvhub-eos-slim:${{ steps.eos.outputs.tag }}
+            docker.io/bikinibottomcapital/dvhub-eos-slim:${{ steps.eos.outputs.image_tag }}
+            ghcr.io/${{ github.repository_owner }}/dvhub-eos-slim:${{ steps.eos.outputs.image_tag }}
           build-args: |
             EOS_IMAGE=${{ steps.eos.outputs.image }}
-            EOS_TAG=${{ steps.eos.outputs.image_tag }}
+            EOS_IMAGE_TAG=${{ steps.eos.outputs.image_tag }}

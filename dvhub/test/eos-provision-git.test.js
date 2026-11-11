@@ -137,6 +137,45 @@ test('Commit-SHA als Pin funktioniert weiter', () => {
   } finally { s.cleanup(); }
 });
 
+// T-0415 (1.0.10): Update von Vanilla-EOS v0.4.0rc3 (Akkudoktor) auf DVhub-EOS
+// (Fork chloepriceless/EOS, Git-Tag dvhub-eos-<upstream-version>-dvhub.<N>).
+// Die upstream-Version von main (0.3.0.dev…) ist kleiner als 0.4.0rc3 —
+// gezählt wird nur „anders als installiert“, nie „älter“.
+test('Wechsel Vanilla → DVhub-EOS (anderes Repo, Tag mit Präfix) und zurück', () => {
+  const s = setup();
+  const fork = join(s.dir, 'fork');
+  try {
+    git(s.upstream, 'tag', 'v0.4.0rc3', 'v2');
+    git(s.dir, 'clone', '-q', s.upstream, fork);
+    writeFileSync(join(fork, 'pyproject.toml'), 'v = dvhub-eos\n');
+    git(fork, 'commit', '-qam', 'dvhub-eos/main');
+    const forkTag = 'dvhub-eos-0.3.0.dev2611110839161148-dvhub.1';
+    git(fork, 'tag', forkTag);
+    const forkEnv = { EOS_REPO_URL: `file://${fork}` };
+    const eosGit = (...a) => execFileSync('git', ['-c', `safe.directory=${s.eosDir}`, '-C', s.eosDir, ...a], { encoding: 'utf8' }).trim();
+
+    assert.equal(s.run('v0.4.0rc3').status, 0);
+    mkdirSync(join(s.dir, 'eos-home'), { recursive: true });
+    writeFileSync(join(s.dir, 'eos-home', 'EOS.config.json'), '{"general":{"version":"0.4.0rc3"}}');
+
+    const up = s.run(forkTag, forkEnv);
+    assert.equal(up.status, 0, up.stderr);
+    assert.equal(s.head(), git(fork, 'rev-parse', `${forkTag}^{commit}`));
+    assert.equal(s.marker(), `file://${fork}@${forkTag}`);
+    assert.equal(eosGit('remote', 'get-url', 'origin'), `file://${fork}`, 'origin zeigt auf den Fork');
+    assert.match(up.stdout, /Versionswechsel file:\/\/\S+@v0\.4\.0rc3 -> file:\/\/\S+@dvhub-eos-/);
+    assert.match(up.stdout, /venv wird wegen Versionswechsel neu gebaut/);
+    const backups = readdirSync(join(s.dir, 'data', 'eos-backups')).filter((n) => n.includes(`data-before-${forkTag}`));
+    assert.equal(backups.length, 1, 'EOS-Konfiguration vor dem Wechsel gesichert');
+
+    // Rückweg (Downgrade auf 1.0.9 → Pin wieder rc3): ebenso nur „anders“.
+    const back = s.run('v0.4.0rc3');
+    assert.equal(back.status, 0, back.stderr);
+    assert.equal(s.head(), s.tagSha('v0.4.0rc3'));
+    assert.equal(s.marker(), `file://${s.upstream}@v0.4.0rc3`);
+  } finally { s.cleanup(); }
+});
+
 // Gegenprüfung zu 282737f4: ein unbekannter Pin scheitert bei JEDEM Dienststart
 // erneut — die Daten-Sicherung vor dem Versionswechsel darf darum erst laufen,
 // wenn der neue Stand geholt ist, und je Pin nur einmal.

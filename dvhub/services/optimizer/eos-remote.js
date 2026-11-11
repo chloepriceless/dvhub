@@ -73,7 +73,11 @@ const PROVIDER_COLUMNS = Object.freeze({
   FeedInTariffImport: 'feed_in_tariff_wh',
 });
 
-export const DEFAULT_REMOTE_EOS_VERSION = 'v0.4.0rc3';
+// EOS-Stand als Docker-Tag/EOS_BUILD_VERSION des Images — so meldet ihn auch
+// der Runner des Rechendiensts. DVhub-EOS (seit 1.0.10): Git-Tag ohne
+// „dvhub-eos-“ (eosVersionLabel). Nur auf Gleichheit vergleichen: 0.3.0.dev…
+// (DVhub-EOS, main) ist der Zahl nach kleiner als v0.4.0rc3, aber neuer.
+export const DEFAULT_REMOTE_EOS_VERSION = '0.3.0.dev2611110839161148-dvhub.1';
 export const EOS_REMOTE_FACADE_PORT = 8513;
 export const DEFAULT_REMOTE_JOB_TIMEOUT_MS = 20 * 60_000;
 export const MAX_REMOTE_JOB_TIMEOUT_MS = 90 * 60_000;
@@ -152,12 +156,21 @@ export function isAllowedRemoteEndpoint(raw) {
   return isTrustedProofEndpoint(raw);
 }
 
-/** EOS-Stand, den diese DVhub-Fassung erwartet (eos-version.env, EOS_PIN). */
+/**
+ * Git-Tag des EOS-Pins → Bezeichnung des Stands, wie sie Image und Rechendienst
+ * tragen: DVhub-EOS „dvhub-eos-<version>-dvhub.<N>“ → „<version>-dvhub.<N>“,
+ * alles andere (v0.4.0rc3, Commit-SHA) unverändert.
+ */
+export function eosVersionLabel(pin) {
+  return String(pin || '').replace(/^dvhub-eos-/, '');
+}
+
+/** EOS-Stand, den diese DVhub-Fassung erwartet (eos-version.env, EOS_PIN; als eosVersionLabel). */
 export function readEosPin(appDir) {
   for (const p of [path.join(appDir || '.', '..', 'eos-version.env'), path.join(appDir || '.', 'eos-version.env')]) {
     try {
       const m = /^EOS_PIN=([^\s#]+)/m.exec(fs.readFileSync(p, 'utf8'));
-      if (m) return m[1];
+      if (m) return eosVersionLabel(m[1]);
     } catch { /* nächste Stelle */ }
   }
   return DEFAULT_REMOTE_EOS_VERSION;

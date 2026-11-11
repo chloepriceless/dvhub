@@ -213,6 +213,21 @@ verweist hierher.
 
 ### Geändert
 
+- **EOS: DVhub-EOS statt Vanilla v0.4.0rc3** (T-0415, Christin 11.11.2026). DVhub liefert nativ und im Docker-Image das
+  DVhub-EOS aus: Akkudoktor-EOS `main` plus die offenen PRs, die DVhub braucht (Netzbezugsgrenze und
+  Schwellen-Peak-Shaving #1531, E-Auto-Ladestart und Wertstufen #1532, bitgleiche Pläne #1518, optionaler Rust-Kern
+  #1520), je Release im Fork `chloepriceless/EOS` neu gebaut, bis alles upstream ist. Pin
+  `dvhub-eos-0.3.0.dev2611110839161148-dvhub.1` (`eos-version.env`), Image
+  `bikinibottomcapital/dvhub-eos:0.3.0.dev2611110839161148-dvhub.1` (`EOS_IMAGE_TAG` in `docker/.env.example`;
+  Git-Tag ohne Präfix, weil Docker-Tags kein `+` kennen). Der Rust-Kern ist für diesen Stand nicht zertifiziert und
+  nicht enthalten — EOS rechnet wie bisher mit Python. **Update von 1.0.9:** nativ zieht `post-update.sh` den neuen
+  Stand (anderes Repo, anderer Tag) entkoppelt nach, sichert vorher die EOS-Daten und baut das venv neu; im Docker
+  gleicht der Installer `EOS_REPO`, `EOS_TAG` und neu `EOS_IMAGE_TAG` mit der Vorgabe ab (eigene Stände weiter mit
+  `DVHUB_PIN_VERSIONS=1`) und behält dabei die Rechte 600 der `.env`. Die Versionsnummer von `main` (`0.3.0.dev…`) ist
+  der Zahl nach kleiner als `0.4.0rc3` — DVhub vergleicht EOS-Stände deshalb nur auf Gleichheit und erkennt EOS an
+  seiner Konfiguration. Der Fernbetrieb meldet den Stand als Docker-Tag (`0.3.0.dev…-dvhub.1`). Die CI baut das Image
+  für amd64 und arm64 aus dem Fork-Tag; das schlanke `dvhub-eos-slim` trägt denselben Docker-Tag und prüft den neuen
+  Namen des Healthcheck-Moduls (`containerhealthcheck`).
 - **Not-Halt „als ob DVhub aus ist“** (Christin 06./07./10.11.2026). Der Not-Halt nimmt jede eigene Vorgabe von
   DVhub genau einmal zurück — nur, wo DVhub gerade selbst vorgibt; im Zweifel sendet er nichts — und schreibt danach
   nichts mehr an die Anlage, ohne Wiederholung. Messwerte, Protokoll und Status laufen weiter. Neu ausgesetzt sind

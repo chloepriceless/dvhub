@@ -137,14 +137,18 @@ services:
     mem_limit: ${DVHUB_MEM_LIMIT:-192m}
 
   eos:
-    # Akkudoktor-EOS, unverändert, im selben Stand wie auf den Appliances.
-    # Gebaut aus dem Dockerfile des EOS-Repos am Git-Tag — kein zweites Rezept hier.
-    # Vorab-Stände (rc) veröffentlicht Akkudoktor nicht als Image, deshalb
-    # dvhub-eos:<Git-Tag> aus unserer CI. Für ein EOS-Release das offizielle:
+    # DVhub-EOS (seit 1.0.10: Akkudoktor-EOS main + offene PRs, Fork
+    # chloepriceless/EOS), im selben Stand wie auf den Appliances.
+    # Gebaut aus dem unveränderten Dockerfile des Forks am Git-Tag (EOS_TAG) —
+    # kein zweites Rezept hier; das Image heißt dvhub-eos:<EOS_IMAGE_TAG> (Git-Tag
+    # ohne „dvhub-eos-“). Ohne EOS_IMAGE_TAG gilt EOS_TAG (eigene Pins wie
+    # v0.4.0rc3). Für ein EOS-Release das offizielle:
     # EOS_IMAGE=docker.io/akkudoktor/eos, EOS_IMAGE_TAG=<Version ohne „v“>.
-    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_IMAGE_TAG:-${EOS_TAG:-v0.4.0rc3}}
+    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_IMAGE_TAG:-${EOS_TAG:-0.3.0.dev2611110839161148-dvhub.1}}
     build:
-      context: ${EOS_REPO:-https://github.com/Akkudoktor-EOS/EOS.git}#${EOS_TAG:-v0.4.0rc3}
+      context: ${EOS_REPO:-https://github.com/chloepriceless/EOS.git}#${EOS_TAG:-dvhub-eos-0.3.0.dev2611110839161148-dvhub.1}
+      args:
+        BUILD_VERSION: ${EOS_IMAGE_TAG:-${EOS_TAG:-0.3.0.dev2611110839161148-dvhub.1}}
     profiles: [eos]
     restart: unless-stopped
     # Host-Netz wie DVhub; EOS lauscht nur auf 127.0.0.1 (nicht im LAN).

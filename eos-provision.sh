@@ -19,10 +19,12 @@ SERVICE_USER="${SERVICE_USER:-dvhub}"
 DATA_DIR="${DATA_DIR:-${DV_DATA_DIR:-/var/lib/dvhub}}"
 EOS_DIR="${EOS_DIR:-$INSTALL_DIR/eos}"
 EOS_VENV="${EOS_VENV:-$INSTALL_DIR/eos-venv}"
-# Akkudoktor-EOS 0.4, unveraendert (seit 2026-10-11; vorher der eigene Fork
-# DV-EOS). DVhub unterstuetzt nur EOS 0.4 (GENETIC-Engine). Ein aelterer Stand
-# (Fork, 0.3-Branch „dvhub-fork“) wird beim naechsten Update automatisch
-# ersetzt. Override repo/ref via env.
+# DVhub-EOS (seit 1.0.10): Akkudoktor-EOS main plus offene PRs aus dem Fork
+# chloepriceless/EOS (2026-10-11 bis 1.0.9 Vanilla v0.4.0rc3, davor der Fork
+# DV-EOS). DVhub braucht die GENETIC-Engine (EOS-0.4-Konfiguration). Jeder
+# andere Stand wird beim naechsten Update automatisch ersetzt — verglichen wird
+# nur auf Gleichheit, nie auf „aelter“ (main heisst 0.3.0.dev…, ist aber neuer
+# als 0.4.0rc3). Override repo/ref via env.
 # Gewuenschter Stand: eos-version.env im Repo ist die einzige Quelle. Env-
 # Variablen gewinnen weiterhin (Tests, Sonderfaelle). EOS_BRANCH bleibt als
 # Alias erhalten, damit bestehende Aufrufe nicht brechen.
@@ -33,8 +35,8 @@ if [[ -f "$EOS_PIN_FILE" ]]; then
   _pin_repo="$(grep -E '^EOS_REPO_URL=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
   _pin_ref="$(grep -E '^EOS_PIN=' "$EOS_PIN_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
 fi
-EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/Akkudoktor-EOS/EOS.git}}"
-EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-v0.4.0rc3}}}"
+EOS_REPO_URL="${EOS_REPO_URL:-${_pin_repo:-https://github.com/chloepriceless/EOS.git}}"
+EOS_PIN="${EOS_PIN:-${EOS_BRANCH:-${_pin_ref:-dvhub-eos-0.3.0.dev2611110839161148-dvhub.1}}}"
 EOS_BRANCH="$EOS_PIN"   # Rueckwaertskompatibler Alias
 EOS_STATE_MARKER="${EOS_STATE_MARKER:-$DATA_DIR/.eos-provisioned}"
 # Dienstname und Port sind ueberschreibbar, damit eine zweite Instanz (A/B-Test
@@ -242,7 +244,7 @@ elif [[ "$EOS_PIN_CHANGED" -eq 0 && -n "$(eos_git status --porcelain --untracked
   # offensichtlich gewollt, und es gibt keinen neuen Stand, der sie ersetzt.
   echo "  EOS: lokale Aenderungen im EOS-Ordner, Stand unveraendert — Checkout bleibt wie er ist"
 else
-  # Repo-Wechsel (Fork -> upstream) mitziehen, sonst zeigt origin ins Leere.
+  # Repo-Wechsel (Vanilla <-> DVhub-EOS-Fork) mitziehen, sonst zeigt origin ins Leere.
   eos_git remote set-url origin "$EOS_REPO_URL" 2>/dev/null || true
   # Erst holen (aendert den Arbeitsbaum nicht), dann sichern und umstellen.
   if eos_git fetch -q --depth 1 origin "$EOS_PIN" 2>/dev/null; then
