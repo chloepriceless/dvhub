@@ -82,12 +82,13 @@ function goeLike({ capW = 8300, frc = 0, amp = 16, statusOk = true } = {}) {
   const calls = [];
   const box = { frc, amp };
   const ref = { capW, paused: false };
+  const impl = { limit: null };
   const adapter = {
     type: 'goe', isConfigured: () => true,
     charge: async (a) => { calls.push(['charge', a]); box.frc = 2; box.amp = Math.floor(a); return { ok: true }; },
     stop: async () => { calls.push(['stop']); box.frc = 1; return { ok: true }; },
     release: async () => { calls.push(['release']); box.frc = 0; return { ok: true }; },
-    limit: async (a) => { calls.push(['limit', a]); box.amp = Math.floor(a); return { ok: true }; },
+    limit: async (a, o) => (impl.limit ? impl.limit(a, o) : (calls.push(['limit', a]), box.amp = Math.floor(a), (o?.resume ? (box.frc = 0) : 0), { ok: true })),
     unlimit: async ({ origCurrentA }) => { calls.push(['unlimit', origCurrentA]); if (origCurrentA != null) box.amp = origCurrentA; return { ok: true }; },
     limitState: async (r) => ({ known: true, active: box.amp === Math.floor(r.limitA) }),
     status: async () => (statusOk ? { ok: true, connected: true, charging: box.frc !== 1, currentA: box.amp, raw: { frc: box.frc, amp: box.amp } } : { ok: false, error: 'timeout' }),
@@ -95,18 +96,19 @@ function goeLike({ capW = 8300, frc = 0, amp = 16, statusOk = true } = {}) {
   };
   const cfg = { optimizer: { eosOptimizeEv: false, evEvccControl: false, evMaxChargeW: 11000 }, wallbox: { type: 'goe', goe: { url: 'http://192.0.2.30' } } };
   const ownedStore = { value: null };
+  const ovStore = { value: null };
   const make = () => createEosEvccBridge({
     getCfg: () => cfg,
     getSolution: async () => ({ slotMinutes: 15, rows: [] }),
     getCharger: () => adapter,
     getGridCapW: () => ref.capW,
     isPaused: () => ref.paused,
-    loadOverride: () => null,
-    saveOverride: () => {},
+    loadOverride: () => ovStore.value,
+    saveOverride: (o) => { ovStore.value = o ? JSON.parse(JSON.stringify(o)) : null; },
     loadOwned: () => ownedStore.value,
     saveOwned: (list) => { ownedStore.value = list ? JSON.parse(JSON.stringify(list)) : null; },
   });
-  return { bridge: make(), make, calls, box, ref, ownedStore };
+  return { bridge: make(), make, calls, box, ref, ownedStore, setLimit: (fn) => { impl.limit = fn; } };
 }
 
 describe('Brücke: Grenze an direkter Box nur begrenzen (Fable R1 P2-5)', () => {
@@ -176,5 +178,66 @@ describe('Brücke: Grenze an direkter Box nur begrenzen (Fable R1 P2-5)', () => 
     h.ref.paused = true;
     await h.bridge.emergencyStop();
     assert.deepEqual(h.calls, [['limit', 12]]);
+  });
+});
+
+describe('Codex 3a1d403f: Übergänge ohne ungedeckelte Freigabe', () => {
+  test('go-e: limit mit resume = amp und frc=0 in einer Anfrage', async () => {
+    const srv = await mockServer((req) => {
+      const u = new URL(req.url, 'http://x');
+      const out = {}; for (const k of u.searchParams.keys()) out[k] = true;
+      return [200, out];
+    });
+    try {
+      assert.equal((await createGoeAdapter(() => ({ url: srv.url })).limit(9, { resume: true })).ok, true);
+      assert.deepEqual(srv.requests.map((r) => r.url), ['/api/set?amp=9&frc=0']);
+    } finally { await srv.close(); }
+  });
+
+  test('Deckel unter dem Mindeststrom, dann wieder darüber: Grenze und Freigabe in einem Schritt; scheitert er, bleibt gestoppt', async () => {
+    const h = goeLike({ frc: 0, amp: 16 });
+    await h.bridge.tick(); // 12 A Grenze
+    h.ref.capW = 3000;
+    await h.bridge.apply(); // unter Mindeststrom → Stopp
+    assert.equal(h.box.frc, 1);
+    // Neuer Deckel 6 A; der Grenz-Befehl scheitert.
+    h.ref.capW = 4300;
+    let fail = true;
+    const origLimit = h.box;
+    const calls = h.calls;
+    const adapterLimit = async (a, o) => { calls.push(['limit', a, o?.resume === true]); if (fail) return { ok: false, error: 'timeout' }; origLimit.amp = Math.floor(a); if (o?.resume) origLimit.frc = 0; return { ok: true }; };
+    h.setLimit(adapterLimit);
+    await h.bridge.apply();
+    assert.ok(!calls.some((c) => c[0] === 'release'), JSON.stringify(calls));
+    assert.equal(h.box.frc, 1, 'bleibt gestoppt, solange die neue Grenze nicht steht');
+    fail = false;
+    await h.bridge.apply();
+    assert.deepEqual(calls.at(-1), ['limit', 6.2, true], '4,3 kW → 6,2 A, mit Freigabe');
+    assert.equal(h.box.frc, 0);
+    assert.equal(h.box.amp, 6);
+  });
+
+  test('Ende von „Sofort laden“ unter stehender Grenze: direkt an die Grenze, nicht erst der Strom von vorher', async () => {
+    const h = goeLike({ frc: 0, amp: 16 });
+    await h.bridge.tick(); // 12 A Grenze
+    await h.bridge.setOverride({ kind: 'charge', powerW: 11000 });
+    const n = h.calls.length;
+    await h.bridge.clearOverride();
+    const after = h.calls.slice(n);
+    assert.ok(!after.some((c) => c[0] === 'unlimit'), JSON.stringify(after));
+    assert.deepEqual(after.at(-1).slice(0, 2), ['limit', 12]);
+    assert.equal(h.box.amp, 12);
+  });
+
+  test('Not-Halt nach gescheitertem Senken: die zuletzt quittierte Grenze zählt noch als DVhubs', async () => {
+    const h = goeLike({ frc: 0, amp: 16 });
+    await h.bridge.tick(); // 12 A quittiert
+    h.setLimit(async (a) => { h.calls.push(['limit', a]); return { ok: false, error: 'timeout' }; });
+    h.ref.capW = 6000;
+    await h.bridge.apply(); // 8 A versucht, gescheitert — Box steht noch auf 12 A
+    h.ref.paused = true;
+    await h.bridge.emergencyStop();
+    assert.deepEqual(h.calls.at(-1), ['unlimit', 16]);
+    assert.equal(h.box.amp, 16);
   });
 });

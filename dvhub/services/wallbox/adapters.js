@@ -9,7 +9,9 @@
  *   status()          { ok, connected, charging, powerW, currentA, raw }
  * Optional (Fable R1 P2-5) — reine Strom-Obergrenze, ohne den Ladezustand zu
  * ändern (Grenze an einer Box, die DVhub nicht selbst steuert):
- *   limit(currentA)            höchstens dieser Strom; startet und stoppt nicht
+ *   limit(currentA, { resume }) höchstens dieser Strom; startet und stoppt nicht —
+ *                              mit resume: zugleich DVhubs eigenen Stopp/Ladebefehl
+ *                              aufheben, Strom zuerst (nie ungedeckelt frei)
  *   unlimit({ origCurrentA })  eigene Obergrenze zurücknehmen (Strom von vorher)
  *   limitState({ limitA })     { known, active }: steht DVhubs Grenze noch?
  *
@@ -128,6 +130,7 @@ export function createOpenEvseAdapter(getSettings) {
     // Nur Obergrenze: Claim ohne state und charge_current — die Box lädt oder
     // pausiert weiter nach ihrer eigenen Regel (evse_man.cpp: ein Claim ohne
     // state setzt keinen Zustand, max_current deckelt den Strom).
+    // Ersetzt auch einen eigenen Stopp-/Lade-Auftrag in einem Schritt (resume).
     async limit(currentA) {
       return request(claimUrl(), opts({ method: 'POST', body: { max_current: wholeAmps(currentA), auto_release: false } }));
     },
@@ -200,8 +203,9 @@ export function createGoeAdapter(getSettings) {
       return expectOk(await set('frc=0'));
     },
     // Nur Obergrenze: amp, frc bleibt (von Hand gestoppt bleibt gestoppt).
-    async limit(currentA) {
-      return expectOk(await set(`amp=${wholeAmps(currentA)}`));
+    // resume: amp und frc=0 in EINER Anfrage — die Box ist nie ohne Grenze frei.
+    async limit(currentA, { resume = false } = {}) {
+      return expectOk(await set(`amp=${wholeAmps(currentA)}${resume ? '&frc=0' : ''}`));
     },
     async unlimit({ origCurrentA } = {}) {
       const a = Number(origCurrentA);
@@ -270,12 +274,15 @@ export function createWattpilotAdapter(getSettings, deps) {
       return conn().setValue('frc', 0);
     },
     // Nur Obergrenze wie beim go-e: amp (nie über ama), frc bleibt.
-    async limit(currentA) {
+    // resume: erst amp (quittiert), dann frc=0 — scheitert amp, bleibt der Stopp.
+    async limit(currentA, { resume = false } = {}) {
       const c = conn();
       const st = await c.readStatus();
       if (!st.ok) return st;
       const max = Number(st.status.ama);
-      return c.setValue('amp', Number.isFinite(max) && max >= 6 ? Math.min(wholeAmps(currentA), max) : wholeAmps(currentA));
+      const amp = await c.setValue('amp', Number.isFinite(max) && max >= 6 ? Math.min(wholeAmps(currentA), max) : wholeAmps(currentA));
+      if (!amp.ok || !resume) return amp;
+      return c.setValue('frc', 0);
     },
     async unlimit({ origCurrentA } = {}) {
       const a = Number(origCurrentA);
