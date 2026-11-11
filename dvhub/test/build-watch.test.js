@@ -329,6 +329,23 @@ describe('Controller: keine Reload-Schleife', () => {
     assert.equal(t.log.reloads, 1);
   });
 
+  it('Codex 6a3c4016: alter Datensatz { id, at } (Stand 863eaeed) zählt weiter als Sperre', async () => {
+    const c0 = 1_000_000;
+    const t = setup({ storage: memStorage({ [W.GUARD_KEY]: JSON.stringify({ id: B, at: c0 - 20_000 }) }) });
+    t.ctrl.observe(B);
+    t.ctrl.observe(C);
+    t.ctrl.observe(C);
+    await t.c.advance(30_000);
+    assert.equal(t.log.reloads, 0);
+    assert.equal(t.log.notices.at(-1), 'manual');
+    const u = setup({ storage: memStorage({ [W.GUARD_KEY]: JSON.stringify({ id: B, at: c0 - 5 * 60_000 }) }) });
+    u.ctrl.observe(A);
+    u.ctrl.observe(B);
+    u.ctrl.observe(B);
+    await u.c.advance(30_000);
+    assert.equal(u.log.reloads, 0, 'dieselbe Kennung binnen 10 min');
+  });
+
   it('kaputter Speicherinhalt zählt als „noch nie neu geladen“', async () => {
     const t = setup({ storage: memStorage({ [W.GUARD_KEY]: '{kaputt' }) });
     t.ctrl.observe(A);

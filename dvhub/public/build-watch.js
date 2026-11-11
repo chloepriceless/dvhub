@@ -61,6 +61,12 @@
     try {
       const rec = JSON.parse(raw);
       if (rec && Number.isFinite(rec.last) && rec.builds && typeof rec.builds === 'object') return rec;
+      // Erste Fassung (863eaeed) schrieb { id, at } — weiter als Sperre lesen.
+      if (rec && typeof rec.id === 'string' && Number.isFinite(rec.at)) {
+        const builds = {};
+        if (rec.id) builds[rec.id] = rec.at;
+        return { last: rec.at, builds: builds };
+      }
     } catch (_) { /* kaputt = wie nie */ }
     return null;
   }
