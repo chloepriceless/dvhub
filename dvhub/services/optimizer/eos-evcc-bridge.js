@@ -126,8 +126,10 @@ export function evChargeRates({ maxChargeW, minCurrentA = 6, maxCurrentA = 16, p
   }
   // Liegt der Mindeststrom über der eingestellten Leistung, lädt die Box
   // trotzdem mit ihm (powerToCurrentA) — EOS darf dann wenigstens „voll“ planen.
-  // Einphasig nie über die Grenze, auch dann nicht.
-  if (out.size === 1) out.add(ph === 1 ? topRate : 1);
+  // Einphasig nie über die Grenze, auch dann nicht. Liegt der Mindeststrom
+  // eines einphasigen Autos über der Grenze, geht gar nichts: nur 0 (EOS nimmt
+  // eine Liste mit einem Wert; die Brücke stoppt hart — Codex 701bde37).
+  if (out.size === 1 && !(ph === 1 && topW < minW - 1e-6)) out.add(ph === 1 ? topRate : 1);
   return [...out].sort((a, b) => a - b);
 }
 
@@ -1040,7 +1042,13 @@ export function createEosEvccBridge(deps) {
       return { ok: true, sent: lastSent, override: true };
     }
 
-    const capped = applyGridCap({ action: 'charge', currentA: powerToCurrentA(override.powerW, bc) }, bc, getGridCapW());
+    // Einphasig (Auto lädt nur einphasig oder der Kunde hat in evcc 1 Phase
+    // gewählt): Strom für eine Phase, höchstens die Schieflast-Grenze; liegt
+    // der Mindeststrom darüber, nicht laden — hart aus (Codex 701bde37). Die
+    // Netzanschluss-Grenze bleibt dreiphasig gerechnet (die strengere Lesart).
+    const onePhase = bc.phases === 1 || (charger.type === 'evcc' && phasesHandsOff(targetKey(bc)) && customerPhases(bc) === 1);
+    let capped = applyGridCap({ action: 'charge', currentA: powerToCurrentA(override.powerW, onePhase ? { ...bc, phases: 1 } : bc) }, bc, getGridCapW());
+    if (onePhase && bc.minCurrentA > bc.onePhaseMaxA) capped = { action: 'stop', currentA: null, gridCapW: null, onePhaseBlocked: true };
     if (capped.action === 'stop') {
       // §14a-Grenze unter dem Mindeststrom: „Sofort laden“ pausiert, bis die
       // Steuerbox die Grenze aufhebt.
@@ -1657,12 +1665,23 @@ export function createEosEvccBridge(deps) {
           slot = { ...slot, phases: 1, currentA: powerToCurrentA(slot.chargePowerW, one) };
         } else slot = { ...slot, phases: 3 };
       }
+      // Einphasig unmöglich (Mindeststrom über der Schieflast-Grenze, Auto nur
+      // einphasig oder vom Kunden auf 1 Phase gestellt): nicht laden, hart aus —
+      // ein Strom unter dem Mindeststrom lehnt evcc ab, und eine laufende
+      // Ladung liefe mit dem alten Strom weiter (Codex 701bde37, P1).
+      const onePhaseBlocked = slot.action === 'charge' && bc.minCurrentA > bc.onePhaseMaxA
+        && (bc.phases === 1 || slot.phases === 1 || (charger.type === 'evcc' && phasesHandsOff(targetKey(bc)) && customerPhases(bc) === 1));
+      if (onePhaseBlocked) {
+        if (lastSent?.key !== `${bc.charger}:${bc.loadpoint}:one-phase-blocked`) pushLog('ev_one_phase_blocked', { minCurrentA: bc.minCurrentA, onePhaseMaxA: bc.onePhaseMaxA }, 'warn');
+        slot = { ...slot, action: 'stop', currentA: null, chargePowerW: null, onePhaseBlocked: true };
+      }
       const capStop = slot.action === 'stop' && (slot.gridCapW != null || getGridCapW() != null);
-      const hardStop = capStop || maxStop;
+      const hardStop = capStop || maxStop || onePhaseBlocked;
       // DVhubs Ladung vorbei (oder kein Auto da): Phasen danach zurück.
       const phasesDone = slot.action !== 'charge' || unplugged;
       const phaseReason = unplugged ? 'unplugged' : (maxStop ? 'max_soc' : (capStop ? 'grid_cap' : 'plan_stop'));
-      const key = capStop ? `${bc.charger}:${bc.loadpoint}:grid-cap-stop`
+      const key = onePhaseBlocked ? `${bc.charger}:${bc.loadpoint}:one-phase-blocked`
+        : capStop ? `${bc.charger}:${bc.loadpoint}:grid-cap-stop`
         : (maxStop ? `${bc.charger}:${bc.loadpoint}:max-soc-stop` : commandKey(bc, slot));
       if (!force && lastSent?.key === key) {
         // Unveraendert — aber wurde evcc inzwischen von aussen umgestellt

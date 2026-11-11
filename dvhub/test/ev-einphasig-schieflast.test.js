@@ -164,3 +164,64 @@ describe('Brücke: einphasig nur bis 20 A, sonst dreiphasig', () => {
     });
   }
 });
+
+// ── Codex 701bde37: einphasig unmöglich (Mindeststrom über der Grenze) ──
+function harness2({ factors = [1], optimizer = {}, lpExtra = {}, owned = null } = {}) {
+  const calls = [];
+  const lp = { id: 1, mode: 'pv', connected: true, charging: true, phases1p3p: true, phasesActive: 3, ...lpExtra };
+  const fakeEvcc = {
+    getStatus: () => ({ url: 'http://evcc.local:7070' }),
+    getLoadpoints: () => [lp],
+    refresh: async () => true,
+    setMaxCurrent: async (id, a) => { calls.push(['maxcurrent', a]); return { ok: true }; },
+    setMode: async (id, m) => { calls.push(['mode', m]); lp.mode = m; return { ok: true }; },
+    setPhases: async (id, n) => { calls.push(['phases', n]); return { ok: true }; },
+  };
+  const cfg = { evcc: { url: 'http://evcc.local:7070' }, wallbox: { type: 'evcc' }, optimizer: { eosOptimizeEv: true, evEvccControl: true, evEvccLoadpoint: 1, evMaxChargeW: BOX_W, evPhases: 3, evStopMode: 'pv', ...optimizer } };
+  const store = { owned, override: null };
+  const bridge = createEosEvccBridge({
+    getCfg: () => cfg,
+    getSolution: async () => ({ generatedAt: '2026-11-16T21:58:00Z', slotMinutes: 15, rows: factors.map((f, i) => ({ ts_utc: new Date(T0 + i * Q).toISOString(), evChargeFactor: f, evSocPct: 50 })) }),
+    getCharger: (c, bc) => createEvccAdapter(fakeEvcc, () => bc.loadpoint, () => bc.stopMode),
+    getEvccLoadpoints: () => [lp],
+    getGridCapW: () => null,
+    now: () => T0 + 60_000,
+    loadOwned: () => store.owned,
+    saveOwned: (l) => { store.owned = l ? JSON.parse(JSON.stringify(l)) : null; },
+    loadOverride: () => store.override,
+    saveOverride: (o) => { store.override = o ? JSON.parse(JSON.stringify(o)) : null; },
+  });
+  return { bridge, calls, lp };
+}
+
+describe('Einphasig unmöglich (Codex 701bde37)', () => {
+  const blocked = { evPhases: 1, evMaxChargeW: 7360, evMinCurrentA: 10, evOnePhaseMaxCurrentA: 8 };
+
+  test('EOS bekommt keine positive Ladestufe', () => {
+    assert.deepEqual(buildEosElectricVehicles({ optimizer: blocked })[0].charge_rates, [0]);
+  });
+
+  test('Plan will laden → harter Stopp (evcc „aus“), kein Strom unter dem Mindeststrom', async () => {
+    const h = harness2({ optimizer: blocked });
+    await h.bridge.tick();
+    assert.ok(!h.calls.some((c) => c[0] === 'maxcurrent'), JSON.stringify(h.calls));
+    assert.deepEqual(h.calls.at(-1), ['mode', 'off']);
+  });
+
+  test('„Sofort laden“ → harter Stopp statt Strom unter dem Mindeststrom', async () => {
+    const h = harness2({ optimizer: blocked });
+    const r = await h.bridge.setOverride({ kind: 'charge', powerW: 1840 });
+    assert.ok(!h.calls.some((c) => c[0] === 'maxcurrent'), JSON.stringify([r, h.calls]));
+    assert.deepEqual(h.calls.at(-1), ['mode', 'off']);
+  });
+
+  test('„Sofort laden“ mit 22 kW, Kunde hat in evcc einphasig gewählt: höchstens 20 A', async () => {
+    const ident = 'evcc|http://evcc.local:7070';
+    const owned = [{ charger: 'evcc', loadpoint: 1, identity: ident, cmd: 'limit', confirmed: true, gridCap: false, dvhubModes: ['now'],
+      phasesForeign: { found: 1, expected: 3, since: '2026-11-16T21:00:00Z' } }];
+    const h = harness2({ owned, lpExtra: { phasesConfigured: 1, phasesActive: 1 } });
+    await h.bridge.setOverride({ kind: 'charge', powerW: BOX_W });
+    const amps = h.calls.filter((c) => c[0] === 'maxcurrent').map((c) => c[1]);
+    assert.ok(amps.length && amps.every((a) => a <= 20), JSON.stringify(h.calls));
+  });
+});
