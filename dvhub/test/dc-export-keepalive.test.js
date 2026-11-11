@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfigFile } from '../config-model.js';
 import { createScheduleEvaluator } from '../schedule-eval.js';
 import { activeWindow } from './helpers/active-window.js';
+import { setEmergencyStop } from '../services/control-commands.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -31,7 +32,7 @@ function victronCfg() {
   return cfg;
 }
 
-async function run(cfg, { pvSeries = null, evals = 15 } = {}) {
+async function run(cfg, { pvSeries = null, evals = 15, beforeEval = null } = {}) {
   const writes = [];
   const state = {
     victron: { soc: 50, pvTotalW: 5000, pvPowerW: 5000, selfConsumptionW: 0, fieldUpdatedAt: { soc: Date.now() } },
@@ -63,6 +64,7 @@ async function run(cfg, { pvSeries = null, evals = 15 } = {}) {
       fake = t0 + i * 5000;
       state.victron.fieldUpdatedAt.soc = fake;
       if (pvSeries) state.victron.pvTotalW = state.victron.pvPowerW = pvSeries[i % pvSeries.length];
+      if (beforeEval) await beforeEval(i, state);
       await ev.evaluateSchedule();
     }
   } finally { Date.now = realNow; }
@@ -93,4 +95,21 @@ test('ohne Keepalive (persistentes Reg 2700, controlKeepaliveMs 0): Schreibbild 
   cfg.schedule.controlKeepaliveMs = 0;
   const { sp } = await run(cfg);
   assert.deepEqual(sp.map((w) => w.s), [0], 'wie bisher: ein Write, der gleiche Wert wird ohne Keepalive gehalten');
+});
+
+// Codex d9927d73 (P2): Fortsetzen vergisst den gemerkten Netz-Sollwert (der
+// Not-Halt schreibt ihn seit Christins Entscheidung 10.11.2026 nicht mehr).
+// Die DC-Export-Drossel darf dann nicht bis zu 60 s warten — 2716 liefe ab.
+test('dcExportMode nach Not-Halt und Fortsetzen: 2716 geht sofort wieder raus, dann im Keepalive-Takt', async () => {
+  const cfg = victronCfg();
+  const stopCtx = (state) => ({ state, pushLog: () => {}, persistControlState: () => true });
+  const { sp } = await run(cfg, {
+    evals: 6,
+    beforeEval: async (i, state) => {
+      if (i === 1) await setEmergencyStop(stopCtx(state), { on: true });
+      if (i === 2) await setEmergencyStop(stopCtx(state), { on: false });
+    },
+  });
+  assert.deepEqual(sp.map((w) => w.s), [0, 10, 15, 20, 25], `Write-Zeitpunkte ${JSON.stringify(sp.map((w) => w.s))}`);
+  assert.ok(sp.every((w) => w.v === -4900));
 });

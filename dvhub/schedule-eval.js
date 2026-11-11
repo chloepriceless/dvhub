@@ -2051,8 +2051,13 @@ export function createScheduleEvaluator(ctx) {
           const prev = state.schedule.active.gridSetpointW;
           const prevVal = prev?.value;
           // Nur schreiben wenn sich der Wert merklich aendert (>50W Differenz) oder alle 60s
+          // — oder wenn kein geschriebener Sollwert gemerkt ist: Fortsetzen nach
+          // dem Not-Halt vergisst ihn (der Not-Halt schreibt den Netz-Sollwert seit
+          // 10.11.2026 nicht), dann fehlte dem Keepalive unten der Wert und 2716
+          // liefe bis zur 60-s-Drossel ab (Codex d9927d73, P2).
           const timeSinceLastWrite = now - (state.ctrl._dcExportLastWriteAt || 0);
-          if (prevVal == null || Math.abs(exportW - prevVal) > 50 || timeSinceLastWrite > 60000) {
+          const noHeldWrite = state.schedule.lastWrite?.gridSetpointW?.value == null;
+          if (prevVal == null || noHeldWrite || Math.abs(exportW - prevVal) > 50 || timeSinceLastWrite > 60000) {
             await applyControlTarget('gridSetpointW', exportW, 'dc_export_mode');
             state.ctrl._dcExportLastWriteAt = now;
             if (!state.ctrl._dcExportLogged) {
