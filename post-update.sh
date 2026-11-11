@@ -1045,9 +1045,22 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   # einem nachweisbaren Stand statt auf "irgendwas von damals".
   EOS_CURRENT=0
   [[ -n "$EOS_WANT" && "$EOS_HAVE" == "$EOS_WANT" ]] && EOS_CURRENT=1
+  # Rust-Kern (seit 1.0.10, eos-provision.sh): Marker $DATA_DIR/.eos-native
+  # "<repo@pin> <ok|unsupported|none|failed> …". Fehlt er zum aktuellen Stand
+  # oder ist der Kern gescheitert, wird NUR der Kern nachgezogen
+  # (EOS_NATIVE_ONLY=1: kein git/venv/pip) — entkoppelt wie die Provisionierung.
+  EOS_NATIVE_HAVE="$(head -n 1 "$DATA_DIR/.eos-native" 2>/dev/null || true)"
+  EOS_NATIVE_DONE=0
+  case "$EOS_NATIVE_HAVE" in
+    "$EOS_WANT ok "*|"$EOS_WANT unsupported "*|"$EOS_WANT none "*) EOS_NATIVE_DONE=1 ;;
+  esac
+  EOS_NATIVE_ONLY=0
   # Ausfuehrbares venv gehoert dazu (Review 25.10.2026): ein Update, das
   # eos-venv/ weggeraeumt hatte, meldete sonst "EOS: OK" mit totem Dienst.
-  if [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 ]]; then
+  if [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 && "$EOS_NATIVE_DONE" -eq 0 ]]; then
+    EOS_NATIVE_ONLY=1
+  fi
+  if [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 && "$EOS_NATIVE_DONE" -eq 1 ]]; then
     # Aktuell — nur sicherstellen, dass der Dienst läuft (schnell).
     systemctl enable eos.service >/dev/null 2>&1 || true
     systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
@@ -1059,7 +1072,9 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
     # blockiert. Genau hier landet auch das EOS-Upgrade: eine neue Version in
     # eos-version.env macht den Marker ungleich, und der naechste Service-Start
     # stoesst die Neu-Provisionierung an.
-    if [[ -d "$EOS_DIR/.git" && -n "$EOS_HAVE" ]]; then
+    if [[ "$EOS_NATIVE_ONLY" -eq 1 ]]; then
+      echo "  EOS: Stand aktuell, Rust-Kern fehlt oder scheiterte (${EOS_NATIVE_HAVE:-kein Marker}) — ziehe den Kern entkoppelt nach..."
+    elif [[ -d "$EOS_DIR/.git" && -n "$EOS_HAVE" ]]; then
       echo "  EOS: neue Version angefordert (${EOS_HAVE:-unbekannt} -> ${EOS_WANT}) — starte entkoppelte Aktualisierung..."
     else
       echo "  EOS: nicht installiert oder Stand unbekannt — starte entkoppelte Hintergrund-Provisionierung..."
@@ -1070,10 +1085,11 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
         --setenv=SERVICE_USER="$SERVICE_USER" \
         --setenv=INSTALL_DIR="$INSTALL_DIR" \
         --setenv=DATA_DIR="$DATA_DIR" \
+        --setenv=EOS_NATIVE_ONLY="$EOS_NATIVE_ONLY" \
         bash "$INSTALL_DIR/eos-provision.sh" 2>/dev/null \
         || echo "  WARN: EOS-Hintergrund-Provisionierung konnte nicht gestartet werden (non-fatal)." >&2
     else
-      SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" \
+      SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" EOS_NATIVE_ONLY="$EOS_NATIVE_ONLY" \
         setsid bash "$INSTALL_DIR/eos-provision.sh" </dev/null >>"$DATA_DIR/eos-provision.log" 2>&1 &
     fi
   fi

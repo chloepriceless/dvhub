@@ -63,7 +63,7 @@ docker compose -f docker/compose.yml exec dvhub node -p 'require("/etc/dvhub/con
 | Image | Tags |
 |---|---|
 | `bikinibottomcapital/dvhub` | `latest`, `1.0`, `1.0.9` = Releases; `dev` = Vorab-Stand: der aktuelle `main`, automatisch gebaut nach jedem Push mit grüner CI (kein Release) |
-| `bikinibottomcapital/dvhub-eos` | EOS-Stand. Seit 1.0.10 das DVhub-EOS (Akkudoktor-EOS main + offene PRs, Fork `chloepriceless/EOS`), z. B. `0.3.0.dev2611110839161148-dvhub.1` (= `EOS_IMAGE_TAG`, gebaut aus dem Git-Tag `EOS_TAG` = `dvhub-eos-0.3.0.dev…-dvhub.1`); bis 1.0.9 `v0.4.0rc3` (Vanilla). `latest` = der des letzten Releases. Zeigt der Pin auf ein EOS-Release, gilt das offizielle `akkudoktor/eos:<Version>` (`EOS_IMAGE`, `EOS_IMAGE_TAG`) und die CI baut kein EOS-Image (`scripts/eos-image-plan.sh`) |
+| `bikinibottomcapital/dvhub-eos` | EOS-Stand. Seit 1.0.10 das DVhub-EOS (Akkudoktor-EOS main + offene PRs, Fork `chloepriceless/EOS`) **mit Rust-Kern** (`EOS_OPTIMIZATION__GENETIC__BACKEND=native`, Wheel vom Fork-Release, sha256 aus `eos-version.env`; der Bau verlangt einen nativen Probelauf, `docker/eos-native`), z. B. `0.3.0.dev2611110839161148-dvhub.2` (= `EOS_IMAGE_TAG`, gebaut aus dem Git-Tag `EOS_TAG` = `dvhub-eos-0.3.0.dev…-dvhub.2`); Notfall ohne neues Image: `EOS_OPTIMIZATION__GENETIC__BACKEND=python` in der Umgebung des EOS-Containers; bis 1.0.9 `v0.4.0rc3` (Vanilla). `latest` = der des letzten Releases. Zeigt der Pin auf ein EOS-Release, gilt das offizielle `akkudoktor/eos:<Version>` (`EOS_IMAGE`, `EOS_IMAGE_TAG`) und die CI baut kein EOS-Image (`scripts/eos-image-plan.sh`) |
 
 Beide für `linux/amd64` und `linux/arm64`, auf Docker Hub öffentlich und nach
 `ghcr.io/chloepriceless/…` gespiegelt (`DVHUB_IMAGE`/`EOS_IMAGE` in `.env`).
@@ -403,7 +403,7 @@ Drei Punkte, die eine Umsetzung beachten muss — alle am Datenbestand belegt:
   hat ~1 GB RAM / ~2,3 GB Disk. Die Node-seitige `services/python-bridge/`
   ist drin (sie wird von `server.js` statisch importiert), nur der Interpreter
   fehlt.
-* **EOS (Pro)** — eigenes Image aus dem unveränderten Akkudoktor-EOS.
+* **EOS (Pro)** — eigenes Image: DVhub-EOS (Fork `chloepriceless/EOS`, unverändertes Root-Dockerfile am Git-Tag) plus Rust-Kern (`docker/eos-native`). `docker compose build eos` baut nur die Grundstufe ohne Kern — EOS meldet dann den Python-Rückfall im Log; ausgeliefert wird nur das CI-Image.
 * **VPN:** OpenVPN und WireGuard zum Direktvermarkter laufen im DVhub-Container (Rechte `NET_ADMIN` + `/dev/net/tun`, in `compose.yml` gesetzt; WireGuard nutzt das Kernelmodul des Hosts). IPsec weiterhin nur nativ.
 * **Fern-Support:** Der Support-Tunnel läuft auch im Container (seit 2026-10-14). Der Entrypoint legt Relay-Schlüssel, Hostschlüssel-Pin und einen sshd im Daten-Volume an (`/var/lib/dvhub/support`). Der sshd startet nur, solange ein Tunnel offen ist, lauscht auf `127.0.0.1:2222` (`DVHUB_SUPPORT_SSH_PORT`) und lässt nur den Support-Schlüssel als Benutzer `dvhub` herein. Geöffnet wird der Tunnel wie nativ in DVhub oder über das Installateurs-Portal.
 * **git** — im Container wird nicht per `git pull` aktualisiert, sondern das

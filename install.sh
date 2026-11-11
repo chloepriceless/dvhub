@@ -899,7 +899,15 @@ if [ "${EOS_INSTALL:-1}" = "1" ]; then
   rm -f "$DATA_DIR/.no-eos" 2>/dev/null || true
   # T-0118: subshell + `|| true` — an EOS install failure must not abort the
   # essential tail (config/DB/systemd) that follows.
-  ( install_eos ) || echo "  EOS: Installation fehlgeschlagen — uebersprungen, Kern-Install laeuft weiter"
+  # Exit 2 = EOS laeuft, aber der Rust-Kern ist nicht aktiv (eos-provision.sh);
+  # post-update.sh zieht ihn beim naechsten Start nach.
+  _eos_rc=0
+  ( install_eos ) || _eos_rc=$?
+  if [ "$_eos_rc" -eq 2 ]; then
+    echo "  EOS: installiert, aber der Rust-Kern ist NICHT aktiv (Grund oben) — naechster Versuch beim naechsten DVhub-Start"
+  elif [ "$_eos_rc" -ne 0 ]; then
+    echo "  EOS: Installation fehlgeschlagen — uebersprungen, Kern-Install laeuft weiter"
+  fi
 else
   echo "  EOS: Uebersprungen (--no-eos gesetzt) — Opt-out wird fuer Updates gemerkt"
   # Persist the opt-out so post-update.sh does NOT retrofit EOS on this box.

@@ -139,16 +139,19 @@ services:
   eos:
     # DVhub-EOS (seit 1.0.10: Akkudoktor-EOS main + offene PRs, Fork
     # chloepriceless/EOS), im selben Stand wie auf den Appliances.
-    # Gebaut aus dem unveränderten Dockerfile des Forks am Git-Tag (EOS_TAG) —
-    # kein zweites Rezept hier; das Image heißt dvhub-eos:<EOS_IMAGE_TAG> (Git-Tag
-    # ohne „dvhub-eos-“). Ohne EOS_IMAGE_TAG gilt EOS_TAG (eigene Pins wie
-    # v0.4.0rc3). Für ein EOS-Release das offizielle:
+    # Das Image dvhub-eos:<EOS_IMAGE_TAG> (Git-Tag ohne „dvhub-eos-“) baut die CI:
+    # unverändertes Dockerfile des Forks am Git-Tag (EOS_TAG) plus Rust-Kern
+    # (docker/eos-native: Wheel, EOS_OPTIMIZATION__GENETIC__BACKEND=native,
+    # nativer Probelauf im Bau). `build:` unten ist nur die Grundstufe ohne Kern
+    # (lokaler Notbau; EOS meldet dann den Python-Rückfall im Log). Ohne
+    # EOS_IMAGE_TAG gilt EOS_TAG (eigene Pins wie v0.4.0rc3). Für ein
+    # EOS-Release das offizielle:
     # EOS_IMAGE=docker.io/akkudoktor/eos, EOS_IMAGE_TAG=<Version ohne „v“>.
-    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_IMAGE_TAG:-${EOS_TAG:-0.3.0.dev2611110839161148-dvhub.1}}
+    image: ${EOS_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos}:${EOS_IMAGE_TAG:-${EOS_TAG:-0.3.0.dev2611110839161148-dvhub.2}}
     build:
-      context: ${EOS_REPO:-https://github.com/chloepriceless/EOS.git}#${EOS_TAG:-dvhub-eos-0.3.0.dev2611110839161148-dvhub.1}
+      context: ${EOS_REPO:-https://github.com/chloepriceless/EOS.git}#${EOS_TAG:-dvhub-eos-0.3.0.dev2611110839161148-dvhub.2}
       args:
-        BUILD_VERSION: ${EOS_IMAGE_TAG:-${EOS_TAG:-0.3.0.dev2611110839161148-dvhub.1}}
+        BUILD_VERSION: ${EOS_IMAGE_TAG:-${EOS_TAG:-0.3.0.dev2611110839161148-dvhub.2}}
     profiles: [eos]
     restart: unless-stopped
     # Host-Netz wie DVhub; EOS lauscht nur auf 127.0.0.1 (nicht im LAN).

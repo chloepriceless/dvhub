@@ -77,7 +77,7 @@ const PROVIDER_COLUMNS = Object.freeze({
 // der Runner des Rechendiensts. DVhub-EOS (seit 1.0.10): Git-Tag ohne
 // „dvhub-eos-“ (eosVersionLabel). Nur auf Gleichheit vergleichen: 0.3.0.dev…
 // (DVhub-EOS, main) ist der Zahl nach kleiner als v0.4.0rc3, aber neuer.
-export const DEFAULT_REMOTE_EOS_VERSION = '0.3.0.dev2611110839161148-dvhub.1';
+export const DEFAULT_REMOTE_EOS_VERSION = '0.3.0.dev2611110839161148-dvhub.2';
 export const EOS_REMOTE_FACADE_PORT = 8513;
 export const DEFAULT_REMOTE_JOB_TIMEOUT_MS = 20 * 60_000;
 export const MAX_REMOTE_JOB_TIMEOUT_MS = 90 * 60_000;

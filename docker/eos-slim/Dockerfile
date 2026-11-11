@@ -3,9 +3,11 @@
 # DVhub — schlankes EOS-Image (EnergyLink-Profil, 2026-10-19)
 #
 # Grundlage ist unser dvhub-eos:<EOS_IMAGE_TAG> — seit 1.0.10 das DVhub-EOS
-# (Akkudoktor-EOS main + offene PRs, Fork chloepriceless/EOS), gebaut aus dessen
-# unverändertem Dockerfile, ohne Rust-Kern. Hier fliegt nur raus, was DVhub
-# nicht braucht:
+# (Akkudoktor-EOS main + offene PRs, Fork chloepriceless/EOS) mit Rust-Kern
+# (akkudoktoreos-native, docker/eos-native). Der Kern kommt mit dem Dateibaum
+# mit; das Backend steht unten wieder fest (ENV überlebt FROM scratch nicht),
+# und eine Bau-Stufe "smoke" verlangt auch im schlanken Stand einen nativen
+# Lauf ohne Python-Rückfall. Hier fliegt nur raus, was DVhub nicht braucht:
 #   - EOSdash (EOS' eigene Weboberfläche: bokeh, python-fasthtml, monsterui und
 #     was nur an ihnen hängt). EOS startet EOSdash als eigenen Prozess und
 #     importiert es nicht; abgeschaltet ist es ohnehin
@@ -20,11 +22,11 @@
 #
 # Bauen:
 #   docker buildx build --platform linux/arm64,linux/amd64 \
-#     --build-arg EOS_IMAGE_TAG=0.3.0.dev2611110839161148-dvhub.1 \
-#     -t bikinibottomcapital/dvhub-eos-slim:0.3.0.dev2611110839161148-dvhub.1 docker/eos-slim
+#     --build-arg EOS_IMAGE_TAG=0.3.0.dev2611110839161148-dvhub.2 \
+#     -t bikinibottomcapital/dvhub-eos-slim:0.3.0.dev2611110839161148-dvhub.2 docker/eos-slim
 
 ARG EOS_IMAGE=docker.io/bikinibottomcapital/dvhub-eos
-ARG EOS_IMAGE_TAG=0.3.0.dev2611110839161148-dvhub.1
+ARG EOS_IMAGE_TAG=0.3.0.dev2611110839161148-dvhub.2
 
 FROM ${EOS_IMAGE}:${EOS_IMAGE_TAG} AS full
 # Pakete samt allem, was NUR von ihnen gebraucht wird (siehe drop-packages.py).
@@ -42,8 +44,16 @@ RUN set -eux; \
     # Healthcheck unten: das Modul muss es geben (in v0.4.0rc3 hieß es noch anders).
     /opt/venv/bin/python -c 'import importlib.util as u, sys; sys.exit(0 if u.find_spec("akkudoktoreos.server.containerhealthcheck") else 1)'
 
+# Rechnet EOS ohne die entfernten Pakete noch im Rust-Kern? Rauchtest aus dem
+# Grundimage (scripts/eos-native-smoke.py). Eigene Stufe: nur die Quittung
+# kommt ins Image.
+FROM full AS smoke
+RUN EOS_OPTIMIZATION__GENETIC__BACKEND=native /opt/venv/bin/python /usr/local/share/dvhub-eos/native-smoke.py \
+    && touch /native-smoke-ok
+
 FROM scratch
 COPY --from=full / /
+COPY --from=smoke /native-smoke-ok /usr/local/share/dvhub-eos/native-smoke-ok
 # Wie im Ausgangsimage (docker image inspect dvhub-eos:<EOS_IMAGE_TAG>).
 ENV PATH=/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     PYTHON_VERSION=3.13.15 \
@@ -59,11 +69,12 @@ ENV PATH=/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/
     OMP_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \
     LANG=C.UTF-8 \
-    VENV_PATH=/opt/venv
-ARG EOS_IMAGE_TAG=0.3.0.dev2611110839161148-dvhub.1
+    VENV_PATH=/opt/venv \
+    EOS_OPTIMIZATION__GENETIC__BACKEND=native
+ARG EOS_IMAGE_TAG=0.3.0.dev2611110839161148-dvhub.2
 ENV EOS_BUILD_VERSION=${EOS_IMAGE_TAG}
 LABEL org.opencontainers.image.title="DVhub EOS (schlank)" \
-      org.opencontainers.image.description="DVhub-EOS ohne EOSdash, matplotlib und Testordner" \
+      org.opencontainers.image.description="DVhub-EOS mit Rust-Kern, ohne EOSdash, matplotlib und Testordner" \
       org.opencontainers.image.version="${EOS_IMAGE_TAG}" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.source="https://github.com/chloepriceless/EOS"

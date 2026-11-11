@@ -141,9 +141,15 @@ Akkudoktor-EOS wird **standardmäßig mitinstalliert** — seit 1.0.10 als
 `chloepriceless/EOS` (15-Minuten-Slots, lastabhängiger Wechselrichter-
 Wirkungsgrad, Akku→Netz-Arbitrage), als eigener Dienst unter
 `127.0.0.1:8503`. Nativ und im Docker-Image derselbe Stand
-(`eos-version.env`); Boxen mit Vanilla `v0.4.0rc3` oder dem früheren eigenen
-Fork wechseln beim nächsten Update automatisch, die EOS-Daten werden vorher
-gesichert. Mit `--no-eos` lässt sich das
+(`eos-version.env`), **immer mit aktivem Rust-Kern** (`akkudoktoreos-native`,
+GENETIC-Optimierung nativ statt in Python, für genau diesen Stand zertifiziert):
+nativ holt die Installation das zur Box passende Wheel vom Fork-Release (sha256
+gepinnt), Docker-Images bringen es mit; ein kurzer Rauchtest prüft danach, dass
+EOS nativ rechnet. Wheels gibt es für x86_64, aarch64 und armv7l (glibc); auf
+anderen Plattformen (z. B. armv6l: Raspberry Pi 1/Zero) rechnet EOS ausdrücklich
+in Python, die Installation warnt. Boxen mit Vanilla `v0.4.0rc3` oder dem
+früheren eigenen Fork wechseln beim nächsten Update automatisch, die EOS-Daten
+werden vorher gesichert. Mit `--no-eos` lässt sich das
 überspringen (z. B. auf RAM-armen/Headless-Boxen); die interne MILP-/Heuristik-
 Optimierung läuft auch ohne EOS. (`--with-eos` bleibt als kompatibler No-op
 erhalten, da EOS jetzt Default ist.)

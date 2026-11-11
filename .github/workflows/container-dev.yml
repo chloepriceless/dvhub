@@ -128,27 +128,41 @@ jobs:
           username: bikinibottomcapital
           password: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
 
-      - uses: docker/build-push-action@v7
+      # DVhub-EOS immer mit Rust-Kern (T-0415, Christin 11.11.2026). Die Wheels
+      # sind Release-Assets des Fork-Tags; eos-version.env pinnt Datei + sha256.
+      # Ein Pin, dessen Wheels nicht zu genau diesem Git-Tag gehören, bricht ab.
+      - name: Rust-Kern-Wheels zum Pin holen und prüfen
         if: steps.eos.outputs.build == 'true'
-        with:
-          context: ${{ steps.eos.outputs.repo }}#${{ steps.eos.outputs.tag }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            docker.io/bikinibottomcapital/dvhub-eos:${{ steps.eos.outputs.image_tag }}
-            ghcr.io/${{ github.repository_owner }}/dvhub-eos:${{ steps.eos.outputs.image_tag }}
-          # Wie container.yml (publish-eos): Root-Dockerfile am Fork-Tag, ohne
-          # native Schicht und ohne GENETIC-Backend (1.0.10 rechnet mit Python).
-          build-args: |
-            BUILD_VERSION=${{ steps.eos.outputs.image_tag }}
-          labels: |
-            org.opencontainers.image.title=DVhub-EOS
-            org.opencontainers.image.version=${{ steps.eos.outputs.image_tag }}
-            org.opencontainers.image.source=https://github.com/chloepriceless/EOS
-            net.dvhub.eos.git-tag=${{ steps.eos.outputs.tag }}
-            net.dvhub.eos.upstream=https://github.com/Akkudoktor-EOS/EOS
-          cache-from: type=gha,scope=eos
-          cache-to: type=gha,mode=max,scope=eos
+        env:
+          EOS_TAG: ${{ steps.eos.outputs.tag }}
+          EOS_REPO: ${{ steps.eos.outputs.repo }}
+        run: |
+          set -euo pipefail
+          url="$(grep -E '^EOS_NATIVE_URL=' eos-version.env | tail -n 1 | cut -d= -f2-)"
+          want="${EOS_REPO%.git}/releases/download/${EOS_TAG}"
+          test "$url" = "$want" || { echo "::error::EOS_NATIVE_URL=$url gehört nicht zum Pin ($want)"; exit 1; }
+          scripts/eos-native-wheels.sh fetch "$RUNNER_TEMP/eos-wheels" X86_64 AARCH64
+
+      # Wie tools/dvhub-eos/build-image.sh im Fork: Stufe 1 das unveränderte
+      # Root-Dockerfile am Git-Tag (BUILD_VERSION = Docker-Tag), Stufe 2
+      # docker/eos-native (Wheel, EOS_OPTIMIZATION__GENETIC__BACKEND=native) mit
+      # Bau-Stufe "smoke": für amd64 UND arm64 muss ein kurzer Lauf nativ und ohne
+      # Python-Rückfall rechnen (scripts/eos-native-smoke.py), sonst ist der Job
+      # rot und nichts wird veröffentlicht.
+      - name: DVhub-EOS mit Rust-Kern bauen, Rauchtest, veröffentlichen
+        if: steps.eos.outputs.build == 'true'
+        env:
+          EOS_REPO: ${{ steps.eos.outputs.repo }}
+          EOS_TAG: ${{ steps.eos.outputs.tag }}
+          EOS_IMAGE_TAG: ${{ steps.eos.outputs.image_tag }}
+          WHEELS_DIR: ${{ runner.temp }}/eos-wheels
+          PLATFORMS: linux/amd64,linux/arm64
+          TAGS: docker.io/bikinibottomcapital/dvhub-eos:${{ steps.eos.outputs.image_tag }},ghcr.io/${{ github.repository_owner }}/dvhub-eos:${{ steps.eos.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2046
+          export $(grep -E '^EOS_NATIVE_[A-Z0-9_]+=' eos-version.env)
+          docker buildx bake -f docker/eos-native/docker-bake.hcl --push dvhub-eos
 
   # Schlanke Images für schwache Geräte (SPiNE EnergyLink, 2026-10-19):
   #   bikinibottomcapital/timescaledb-slim:<TIMESCALE_TAG>   (docker/timescaledb-slim)
