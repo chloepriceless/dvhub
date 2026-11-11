@@ -125,7 +125,7 @@ describe('Wochenplan: einzelnen Tag leeren (Oberfläche)', () => {
       for (const m of html.matchAll(/ev-weekly-editor\.(?:js|css)\?v=([\w-]+)/g)) vers.add(m[1]);
     }
     assert.equal(vers.size, 1, [...vers].join(', '));
-    assert.equal([...vers][0], '20261111-abfahrtstag', 'neuer Stand (T-0427) — sonst hielten Browser den alten Editor im Cache');
+    assert.equal([...vers][0], '20261111-abfahrtstag2', 'neuer Stand (T-0427) — sonst hielten Browser den alten Editor im Cache');
   });
 });
 

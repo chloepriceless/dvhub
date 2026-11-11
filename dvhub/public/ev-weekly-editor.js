@@ -57,6 +57,10 @@
   }
   function hhmm(min) { return String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0'); }
   function pad5(t) { const m = minutes(t); return m === null ? '' : hhmm(m); }
+  /** Eingabe da, aber keine Zahl in 0–100 (z. B. 120): melden statt still verwerfen. */
+  function badPct(v) {
+    return v !== null && v !== undefined && String(v).trim() !== '' && pctOrNull(v) === null;
+  }
   function pctOrNull(v) {
     if (v === null || v === undefined || String(v).trim() === '') return null;
     const n = Number(String(v).replace(',', '.'));
@@ -198,7 +202,9 @@
       lines.push({ text: pre + head, cls: 'is-next' });
       if (Number(r.tripSocPct) > 0) {
         const planned = !info.preview && info.plannedSocAtDeparture != null && isFinite(Number(info.plannedSocAtDeparture)) ? Number(info.plannedSocAtDeparture) : null;
-        const base = planned !== null ? Math.max(planned, Number(r.targetSocPct) || 0) : r.targetSocPct;
+        // Nach dem Ladeplan, wenn bekannt — auch wenn er das Ziel verfehlt (sonst
+        // verdeckte die Anzeige den Fehlbetrag, Codex 720037e0); sonst das Ziel.
+        const base = planned !== null ? planned : r.targetSocPct;
         const arr = arrivalSocPct(base, r.tripSocPct);
         lines.push({ text: 'Verbrauch der Fahrt ≈ ' + fmtPct(r.tripSocPct) + (arr !== null ? ' → bei Ankunft ≈ ' + fmtPct(arr) + (planned !== null ? ' (nach dem Ladeplan)' : '') : ''), cls: '' });
       }
@@ -448,13 +454,15 @@
   }
 
   function toggleDay(host, idx, on) {
-    const rows = host._evwRows.slice();
+    let rows = host._evwRows.slice();
     const r = rows[idx];
     if (!r) return;
     if (on) rows[idx] = Object.assign({}, r, { departure: suggestTime(host, r.day) });
     else {
+      // Aus = kein Termin an diesem Tag — auch eine zweite Abfahrt fällt weg
+      // (sonst rückte sie als eingeschaltete Karte nach, Codex 720037e0).
       if (r.departure) host._evwMemory[r.day] = r.departure;
-      rows[idx] = emptyRow(r.day);
+      rows = rows.filter(function (x) { return x.day !== r.day; });
     }
     setRows(host, rows);
     // Fokus zurück auf den Schalter derselben Karte (Neuaufbau)
@@ -624,7 +632,10 @@
       const arr = arrivalSocPct(minVal, st.tripSocPct);
       $('evwSheetArr').textContent = arr !== null ? '→ bei Ankunft ≈ ' + fmtPct(arr) : '';
       const info = rowInfo(draft);
-      const err = !minutes(st.departure) ? 'Bitte eine Abfahrtszeit wählen.' : info.error;
+      // 00:00 ist eine gültige Abfahrt (minutes() = 0, Codex 720037e0).
+      const err = minutes(st.departure) === null ? 'Bitte eine Abfahrtszeit wählen.'
+        : st.minBad ? 'Mindestens bei Abfahrt: 0–100 % oder leer.'
+          : st.tripBad ? 'Verbrauch dieser Fahrt: 0–100 % oder leer.' : info.error;
       $('evwSheetError').textContent = err || '';
       $('evwSheetError').hidden = !err;
       $('evwSheetOk').disabled = !!err;
@@ -642,8 +653,8 @@
       const t = e.target;
       if (t.id === 'evwSheetDep') st.departure = pad5(t.value);
       else if (t.id === 'evwSheetHome') st.homeFrom = pad5(t.value);
-      else if (t.id === 'evwSheetTrip') st.tripSocPct = pctOrNull(t.value);
-      else if (t.id === 'evwSheetMin') { st.minSocPct = pctOrNull(t.value); paintKeep(t); return; }
+      else if (t.id === 'evwSheetTrip') { st.tripSocPct = pctOrNull(t.value); st.tripBad = badPct(t.value); }
+      else if (t.id === 'evwSheetMin') { st.minSocPct = pctOrNull(t.value); st.minBad = badPct(t.value); paintKeep(t); return; }
       paint();
     });
     // Beim Tippen in „anderer Wert“ das Feld nicht neu befüllen.
@@ -651,13 +662,13 @@
     dlg.addEventListener('click', function (e) {
       const t = e.target;
       const chip = t.closest && t.closest('.evw-chip-min');
-      if (chip) { const v = chip.getAttribute('data-v'); st.minSocPct = v === '' ? null : Number(v); paint(); return; }
+      if (chip) { const v = chip.getAttribute('data-v'); st.minSocPct = v === '' ? null : Number(v); st.minBad = false; paint(); return; }
       const seg = t.closest && t.closest('.evw-seg-b');
       if (seg) { st.homeFromPrevDay = seg.getAttribute('data-prev') === '1'; st.prevTouched = true; paint(); return; }
       if (t.id === 'evwSheetHomeClear') { st.homeFrom = ''; $('evwSheetHome').value = ''; st.prevTouched = false; paint(); return; }
       if (t.id === 'evwSheetCancel') { closeSheet(); return; }
       if (t.id === 'evwSheetLike' && mo) {
-        Object.assign(st, { departure: mo.departure, minSocPct: mo.minSocPct, tripSocPct: mo.tripSocPct, homeFrom: mo.homeFrom, homeFromPrevDay: mo.homeFromPrevDay, prevTouched: !!mo.homeFrom });
+        Object.assign(st, { departure: mo.departure, minSocPct: mo.minSocPct, tripSocPct: mo.tripSocPct, homeFrom: mo.homeFrom, homeFromPrevDay: mo.homeFromPrevDay, prevTouched: !!mo.homeFrom, minBad: false, tripBad: false });
         $('evwSheetDep').value = st.departure; $('evwSheetHome').value = st.homeFrom; $('evwSheetTrip').value = st.tripSocPct == null ? '' : st.tripSocPct;
         paint(); return;
       }
@@ -895,7 +906,7 @@
   }
 
   window.DVhubEvWeekly = {
-    render: render, read: read, readSettings: readSettings, validate: validate, isEditing: isEditing,
+    render: render, read: read, readSettings: readSettings, validate: validate, isEditing: isEditing, badPct: badPct,
     DAYS: DAYS, DAY_NAMES: DAY_NAMES,
     rowInfo: rowInfo, cardText: cardText, arrivalSocPct: arrivalSocPct, normalizePlan: normalizePlan,
     summaryLines: summaryLines, legacyCommuteHint: legacyCommuteHint, setSummary: setSummary, updateSaved: updateSaved, refreshPreview: refreshPreview,

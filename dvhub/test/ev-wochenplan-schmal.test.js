@@ -63,7 +63,7 @@ describe('E-Auto-Planung am Handy: Karten statt Feldraster', () => {
       const html = fs.readFileSync(path.join(PUB, f), 'utf8');
       const vers = [...html.matchAll(/ev-(?:weekly-editor|tile|once)\.(?:js|css)\?v=([\w-]+)/g)].map((m) => m[1]);
       assert.ok(vers.length >= 2, f);
-      for (const v of vers) assert.equal(v, '20261111-abfahrtstag', f);
+      for (const v of vers) assert.equal(v, '20261111-abfahrtstag2', f);
     }
   });
 });

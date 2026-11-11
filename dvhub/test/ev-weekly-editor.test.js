@@ -137,3 +137,24 @@ describe('E-Auto-Planung: Rückmeldung in Klartext', () => {
     assert.ok(lines.some((l) => l.tech && /wirkt erst mit einem EOS, das Wertstufen kennt/.test(l.text)));
   });
 });
+
+describe('Codex 720037e0', () => {
+  it('Ladestand bei Ankunft nach dem Ladeplan, auch wenn der Plan das Ziel verfehlt', () => {
+    const resolved = { enabled: true, departureAt: '2026-11-17T07:30:00.000Z', targetSocPct: 80, tripSocPct: 20, source: 'weekly', timeZone: 'Europe/Berlin' };
+    const lines = plain(W.summaryLines({ resolved, plannedSocAtDeparture: 50 }));
+    assert.equal(lines[1].text, 'Verbrauch der Fahrt ≈ 20\u00a0% → bei Ankunft ≈ 30\u00a0% (nach dem Ladeplan)');
+  });
+
+  it('ungültige Prozentwerte werden erkannt (nicht still zu „leer“)', () => {
+    for (const v of ['120', '-5', 'abc', '1e3']) assert.equal(W.badPct(v), true, v);
+    for (const v of ['', ' ', null, undefined, '0', '80', '100', '42,5']) assert.equal(W.badPct(v), false, String(v));
+  });
+
+  it('00:00 ist eine gültige Abfahrt', () => {
+    const r = { day: 3, departure: '00:00', minSocPct: null, tripSocPct: null, homeFrom: '', homeFromPrevDay: false };
+    assert.equal(W.rowInfo(r).off, false);
+    assert.equal(W.rowInfo(r).text, 'Abfahrt Mi 00:00');
+    assert.equal(W.cardText(r, 80).time, '00:00');
+    assert.equal(W.validate([r], { enabled: true }), null);
+  });
+});
