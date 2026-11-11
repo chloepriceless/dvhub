@@ -3854,7 +3854,7 @@ function buildFieldDefinitions() {
       options: [
         { value: 'fixed', label: 'Fester Bruttopreis' },
         { value: 'dynamic', label: 'Dynamisch aus EPEX + Preisbestandteilen' },
-        { value: 'provider', label: 'Vom Stromanbieter (Tibber, LichtBlick)' }
+        { value: 'provider', label: 'Vom Stromanbieter (Tibber, LichtBlick, LUOX)' }
       ],
       help: 'Fester Preis bedeutet ein kompletter Endkundenpreis. Dynamisch berechnet DVhub den Bruttopreis pro Slot aus EPEX und deinen Zuschlägen. Vom Stromanbieter holt DVhub mit deinen Zugangsdaten die Viertelstundenpreise deines eigenen Vertrags.'
     },
@@ -3943,9 +3943,10 @@ function buildFieldDefinitions() {
       options: [
         { value: '', label: '— bitte wählen —' },
         { value: 'tibber', label: 'Tibber' },
-        { value: 'lichtblick', label: 'LichtBlick ÖkoStrom Dynamic' }
+        { value: 'lichtblick', label: 'LichtBlick ÖkoStrom Dynamic' },
+        { value: 'luox', label: 'LUOX Dynamisch' }
       ],
-      help: 'Tibber über die offizielle Schnittstelle (Zugangsschlüssel von developer.tibber.com), LichtBlick über das Backend der LichtBlick-App (inoffiziell).'
+      help: 'Tibber über die offizielle Schnittstelle (Zugangsschlüssel von developer.tibber.com), LichtBlick über das Backend der LichtBlick-App (inoffiziell), LUOX über das Kundenportal (inoffiziell; Zugangsdaten unter Einstellungen → LUOX).'
     },
     {
       section: 'pricing',
@@ -4678,9 +4679,10 @@ function buildFieldDefinitions() {
       default: 'dvhub',
       options: [
         { value: 'dvhub', label: 'DVhub (dvhub.online)' },
-        { value: 'public', label: 'Öffentlich (Energy-Charts)' }
+        { value: 'public', label: 'Öffentlich (Energy-Charts)' },
+        { value: 'luox', label: 'LUOX-Kundenportal (Day-Ahead DE-LU, Rückfall auf DVhub)' }
       ],
-      help: 'DVhub: Preise von dvhub.online (mit Energy-Charts als automatischem Fallback). Öffentlich: direkt von der freien Quelle Energy-Charts (api.energy-charts.info), ohne dvhub.online. Hinweis: Zonen-Liste, Lücken-Anzeige und Backfill funktionieren nur mit DVhub.'
+      help: 'DVhub: Preise von dvhub.online (mit Energy-Charts als automatischem Fallback). Öffentlich: direkt von der freien Quelle Energy-Charts (api.energy-charts.info), ohne dvhub.online. LUOX: Day-Ahead-Viertelstundenpreise direkt aus dem LUOX-Kundenportal mit den eigenen Zugangsdaten (Einstellungen → LUOX, nur Preiszone DE-LU); liefert LUOX nicht, springt dvhub.online/Energy-Charts ein. Hinweis: Zonen-Liste, Lücken-Anzeige und Backfill funktionieren nur mit DVhub.'
     },
     {
       section: 'epex',
@@ -4696,10 +4698,43 @@ function buildFieldDefinitions() {
       ],
       help: 'DVhub Price API Endpunkt. Standard: https://dvhub.online'
     },
+    // LUOX/Lumenaza (T-0417, services/tariff-provider/luox-service.js): eigene
+    // Kundendaten aus dem LUOX-Kundenportal; Partner-API vorbereitet.
+    ...luoxFieldDefinitions(),
 
   ];
 
   return addSetupWizardMetadata(fields.filter((entry) => entry.path));
+}
+
+// LUOX/Lumenaza (T-0417): Zugangsdaten, Vertragsauswahl, Schalter. Geheimnisse
+// stehen in REDACTED_PATHS (verschlüsselt gespeichert, nie im Export).
+function luoxFieldDefinitions() {
+  const portal = {
+    section: 'pricing',
+    group: 'luox',
+    groupLabel: 'LUOX / Lumenaza',
+    groupDescription: 'Eigene Daten aus dem LUOX-Kundenportal: Day-Ahead-Preise, Tarif „LUOX Dynamisch“ und Direktvermarktung. Inoffizielle Portal-Schnittstelle — sie kann sich ohne Ankündigung ändern. Die Zugangsdaten bleiben auf dieser Box und gehen nur an LUOX.'
+  };
+  const partner = {
+    section: 'pricing',
+    group: 'luoxPartner',
+    groupLabel: 'Lumenaza-Partner-API (vorbereitet)',
+    groupDescription: 'Offizielle Lumenaza-Schnittstelle (OAuth2). Zugangsdaten vergibt Lumenaza auf Anfrage an Vertriebspartner. Eingeschaltet und ausgefüllt geht sie bei Preisen und Einspeisung vor dem Kundenportal.'
+  };
+  return [
+    { ...portal, path: 'luox.email', label: 'E-Mail (LUOX-Kundenportal)', type: 'password', help: 'Anmeldung wie im LUOX-Kundenportal bzw. in der LUOX-App.' },
+    { ...portal, path: 'luox.password', label: 'Passwort (LUOX-Kundenportal)', type: 'password', help: 'Passwort des LUOX-Kundenportals. Bleibt verschlüsselt auf dieser Box.' },
+    { ...portal, path: 'luox.consumerContractId', label: 'Stromliefervertrag (C…)', type: 'dynamicSelect', dynamicOptionsUrl: '/api/luox/contracts?kind=consumer', help: 'Für den Endkundenpreis. Leer = der erste Vertrag im Konto. Die Liste lädt nach dem Speichern der Zugangsdaten.' },
+    { ...portal, path: 'luox.producerContractId', label: 'Direktvermarktungsvertrag (P…)', type: 'dynamicSelect', dynamicOptionsUrl: '/api/luox/contracts?kind=producer', help: 'Für den Abgleich der Direktvermarktung. Leer = der erste liefernde Erzeugervertrag.' },
+    { ...portal, path: 'luox.endCustomerPrice.enabled', label: 'Endkundenpreis „LUOX Dynamisch“ berechnen (vorbereitet, ungeprüft)', type: 'boolean', help: 'Endpreis brutto je Viertelstunde = (Spot + 3 % vom Betrag) × MwSt + Netzentgelt, Umlagen, Stromsteuer, Herkunftsnachweise laut Produkt im Portal. Ohne Monatsposten und Ausgleichskosten. Erst mit der ersten Abrechnung prüfbar. Nutzen: Strompreis „Vom Stromanbieter“ → LUOX, Lesart „Endpreis“.' },
+    { ...portal, path: 'luox.dvSync.enabled', label: 'Direktvermarktung täglich abgleichen', type: 'boolean', help: 'Holt einmal täglich (ab 10 Uhr) den Abrechnungsschein (Einspeisung × Day-Ahead → Vergütung, 15 min) und die Tagessummen der Einspeisung der letzten 7 Tage. Nur zum Abgleich mit DVhubs Historie — DVhub steuert nicht danach.' },
+    { ...partner, path: 'luox.partner.enabled', label: 'Partner-API verwenden', type: 'boolean', help: 'Ab Werk aus. Nur mit Zugangsdaten von Lumenaza sinnvoll.' },
+    { ...partner, path: 'luox.partner.environment', label: 'Server', type: 'select', options: [{ value: 'prod', label: 'Produktion (api.lumenaza.de)' }, { value: 'test', label: 'Test (api.test.lumenaza.de)' }], help: 'Testserver nur mit Test-Zugangsdaten.' },
+    { ...partner, path: 'luox.partner.clientId', label: 'client_id', type: 'password', help: 'Von Lumenaza vergeben.' },
+    { ...partner, path: 'luox.partner.clientSecret', label: 'client_secret', type: 'password', help: 'Von Lumenaza vergeben. Bleibt verschlüsselt auf dieser Box.' },
+    { ...partner, path: 'luox.partner.userId', label: 'Nutzer-ID (Partner-API)', type: 'text', help: 'Kennung des Kunden in der Partner-API (für Einspeisung je Vertrag).' }
+  ];
 }
 
 const FIELD_DEFINITIONS = buildFieldDefinitions();
@@ -4837,6 +4872,13 @@ export function createDefaultConfig() {
     // Ladestand des E-Autos über evccs Fahrzeug-Treiber (services/vehicle-evcc):
     // aus, bis jemand eine Marke einrichtet; evcc wird erst dann geladen.
     vehicleEvcc: { enabled: false, template: '', params: {}, intervalMin: 15 },
+    // LUOX/Lumenaza (T-0417): alles aus, bis Zugangsdaten eingetragen sind.
+    luox: {
+      email: '', password: '', consumerContractId: '', producerContractId: '',
+      endCustomerPrice: { enabled: false },
+      dvSync: { enabled: false },
+      partner: { enabled: false, environment: 'prod', clientId: '', clientSecret: '', userId: '' }
+    },
     victron: {
       transport: 'modbus',
       // T-0080: generic product default — operator configures their own Victron
@@ -6048,6 +6090,32 @@ function sanitizeTariffProvider(value) {
   };
 }
 
+// LUOX/Lumenaza (T-0417). Vertragsnummern gehen in Portal-Pfade: nur
+// Buchstaben, Ziffern, Bindestrich (sonst leer = automatisch).
+const LUOX_CONTRACT_RX = /^[A-Za-z0-9][A-Za-z0-9-]{0,40}$/;
+function sanitizeLuox(value) {
+  const src = isPlainObject(value) ? value : {};
+  const str = (v) => (v == null ? '' : String(v).trim());
+  const contract = (v) => (LUOX_CONTRACT_RX.test(str(v)) ? str(v) : '');
+  const p = isPlainObject(src.partner) ? src.partner : {};
+  return {
+    email: str(src.email),
+    // Passwort/Geheimnis nicht trimmen: Leerzeichen am Rand können dazugehören.
+    password: src.password == null ? '' : String(src.password),
+    consumerContractId: contract(src.consumerContractId),
+    producerContractId: contract(src.producerContractId),
+    endCustomerPrice: { enabled: src.endCustomerPrice?.enabled === true },
+    dvSync: { enabled: src.dvSync?.enabled === true },
+    partner: {
+      enabled: p.enabled === true,
+      environment: p.environment === 'test' ? 'test' : 'prod',
+      clientId: str(p.clientId),
+      clientSecret: p.clientSecret == null ? '' : String(p.clientSecret),
+      userId: str(p.userId)
+    }
+  };
+}
+
 function isLegacyPlaceholderRegisterEntry(entry) {
   if (!isPlainObject(entry)) return false;
 
@@ -6306,6 +6374,9 @@ function sanitizeRawConfig(rawInput) {
   }
   if (hasPath(raw, 'paragraph14a.devices')) {
     raw.paragraph14a.devices = sanitizeParagraph14aDevices(raw.paragraph14a.devices, warnings);
+  }
+  if (hasPath(raw, 'luox')) {
+    raw.luox = sanitizeLuox(raw.luox);
   }
   resetLegacyPlaceholderRegisters(raw, warnings);
   stripManufacturerManagedFields(raw, warnings);
@@ -6823,8 +6894,8 @@ const SETTINGS_AREAS = [
     label: 'Strompreise',
     icon: '€',
     description: 'Was du für Strom bezahlst und was du für Einspeisung bekommst. Damit rechnen Planung und Auswertung.',
-    groups: ['mode', 'dynamic', 'provider', 'feedinTariff', 'marketPremium', 'market'],
-    advanced: ['costs'],
+    groups: ['mode', 'dynamic', 'provider', 'feedinTariff', 'marketPremium', 'market', 'luox'],
+    advanced: ['costs', 'luoxPartner'],
     editors: ['pricingPeriods', 'pvPlants']
   },
   {

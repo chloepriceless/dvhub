@@ -141,6 +141,7 @@ import { createOrtsnetz } from './services/ortsnetz/index.js';
 import { createVictronGxDevices } from './services/victron-gx/devices.js';
 import { createVehicleEvcc } from './services/vehicle-evcc/index.js';
 import { createTariffProviderService } from './services/tariff-provider/index.js';
+import { createLuoxService } from './services/tariff-provider/luox-service.js';
 // Messwert-Eingang HA/Loxone per HTTP-Push (Push-Schlüssel in DATA_DIR).
 import { createInputPush } from './services/input-push.js';
 // Plan 09-06 (D-06): prom-client is the SINGLE QUAL-03 exception for Phase 9.
@@ -1662,7 +1663,13 @@ if (IS_RUNTIME_PROCESS) ctx.vehicleEvcc.start();
 // Marke ohne evcc und ohne Broker (services/vehicle-pull, ev-soc.js).
 ctx.vehiclePull = createVehiclePull(ctx);
 if (IS_RUNTIME_PROCESS) ctx.vehiclePull.start();
-// Bezugspreis vom Stromanbieter (Tibber, LichtBlick) mit den Zugangsdaten des
+// LUOX/Lumenaza (T-0417): eigene Daten aus dem LUOX-Kundenportal — Day-Ahead
+// (epex.priceSource 'luox'), Anbieterpreis „LUOX“, täglicher Abgleich der
+// Direktvermarktung (luox.dvSync). Ohne Zugangsdaten passiert nichts.
+ctx.luox = createLuoxService(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub' });
+if (IS_RUNTIME_PROCESS) ctx.luox.start();
+else if (IS_WEB_PROCESS) ctx.luox.startReadOnly();
+// Bezugspreis vom Stromanbieter (Tibber, LichtBlick, LUOX) mit den Zugangsdaten des
 // Kunden — nur aktiv, wenn die Preislogik „Vom Stromanbieter“ gewählt ist.
 ctx.tariffProvider = createTariffProviderService(ctx, { dataDir: DATA_DIR || '/var/lib/dvhub' });
 if (IS_RUNTIME_PROCESS) ctx.tariffProvider.start();
@@ -3169,6 +3176,7 @@ async function gracefulShutdown(signal) {
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
   safeSync('vehiclePull.stop', () => ctx.vehiclePull?.stop?.());
   safeSync('tariffProvider.stop', () => ctx.tariffProvider?.stop?.());
+  safeSync('luox.stop', () => ctx.luox?.stop?.());
   safeSync('ocppServer.stop', () => { ctx.ocppServer?.stop?.(); });
   safeSync('mobileLink.stop', () => { ctx.mobileLink?.stop?.(); mobileLinkWss.close(); });
   safeSync('chargerStatus.stop', () => ctx.chargerStatus?.stop?.());

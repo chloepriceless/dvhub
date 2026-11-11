@@ -12,6 +12,19 @@ verweist hierher.
 
 ### Neu
 
+- **LUOX/Lumenaza als Datenquelle (Einstellungen → Strompreise → „LUOX / Lumenaza“).** Mit den eigenen Zugangsdaten
+  des LUOX-Kundenportals (inoffizielle Portal-Schnittstelle, nur lesende Abrufe; Token 0600 im Datenverzeichnis,
+  gebunden an E-Mail und Passwort, Refresh mit Rotation, sonst neue Anmeldung; abgelehnte Zugangsdaten sperren den
+  Abruf 6 h): **Preisquelle „LUOX-Kundenportal“** holt die Day-Ahead-Viertelstundenpreise direkt bei LUOX statt über
+  öffentliche Preisanbieter — fehlt ein Tag, füllt dvhub.online/Energy-Charts ihn auf, und DVhub fragt bis 20 Uhr
+  weiter bei LUOX nach. **Anbieter „LUOX Dynamisch“** im Strompreis „Vom Stromanbieter“: als Energiepreis netto den
+  Spot je Viertelstunde, als Endpreis (vorbereitet, ungeprüft bis zur ersten Abrechnung, eigener Schalter) (Spot + 3 %
+  vom Betrag) × MwSt + Netzentgelt, Umlagen, Stromsteuer und Herkunftsnachweise laut Produktangaben im Portal.
+  **Direktvermarktung täglich abgleichen**: Abrechnungsschein (Einspeisung × Day-Ahead → Vergütung, 15 min, XLSX ohne
+  neue Abhängigkeit gelesen) und Tagessummen der Einspeisung des Erzeugervertrags in die Datenbank, Bericht neben
+  DVhubs eigener Einspeisung × Day-Ahead — nur zum Abgleich, DVhub steuert nicht danach. **Lumenaza-Partner-API**
+  (OAuth2 Client Credentials) vorbereitet und ab Werk aus; eingeschaltet mit Zugangsdaten geht sie bei Preisen und
+  Einspeisung vor dem Portal.
 - **EOS-Schwellen-Peak-Shaving: Akku deckt in gehaltenen Slots den Bezug über der Netzanschlussgrenze.** Liefert der
   EOS-Plan an seinen Akku-Instruktionen `peak_shaving_threshold_w` (unser EOS mit der Netzbezugs-Grenze, PR D; Vanilla
   v0.4.0rc3 kennt das Feld nicht), deckelt DVhub in Slots, in denen der Plan den Akku hält („Akku halten“) oder aus dem

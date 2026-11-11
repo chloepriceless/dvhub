@@ -6,8 +6,13 @@
 // nichts an Dritte. Statt Schätzung aus dem Börsenpreis rechnen Live-Kosten,
 // EOS und Historie dann mit genau dem Preis, den der Kunde bezahlt.
 //
+// LUOX (T-0417, 11.11.2026): Zugangsdaten im eigenen Block `luox` (geteilt mit
+// Day-Ahead-Quelle und Direktvermarktungs-Abgleich), Abruf über den
+// LUOX-Dienst (luox-service.js); die Lesart des Preises entscheidet, ob Spot
+// (nur Energie netto) oder der vorbereitete Endpreis brutto kommt.
+//
 // Takt: beim Start, danach stündlich. Fehlen die Preise für morgen, ab deren
-// Veröffentlichung (Tibber ~13 Uhr, LichtBlick IDA1 ~15 Uhr) alle 15 min. Nach
+// Veröffentlichung (Tibber ~13 Uhr, LUOX ~13 Uhr, LichtBlick IDA1 ~15 Uhr) alle 15 min. Nach
 // Fehlern länger warten; abgelehnte Zugangsdaten sperren den Abruf 6 h (bis sie
 // geändert werden), damit der Anbieter das Konto nicht sperrt.
 //
@@ -33,7 +38,7 @@ import {
   putProviderSlots, providerSlotsBetween, setProviderEstimate, getProviderEstimate, fitProviderEstimate, providerSlotAt,
   markProviderPricesLoading, dropProviderSlotsFrom
 } from './price-store.js';
-import { localDateOf, addDaysToDate, localMidnight, localMinuteOfDay } from './common.js';
+import { localDateOf, addDaysToDate, localMidnight, localMinuteOfDay, TariffProviderError } from './common.js';
 import { pairProviderWithMarket, computeProviderPriceStats, clampStatsDays } from './price-stats.js';
 
 export const SERIES_KEY = 'tariff_import_ct_kwh';
@@ -66,9 +71,10 @@ async function waitAtMost(promise, ms) {
 const TIME_ZONE = 'Europe/Berlin';
 
 // Ab wann die Preise für morgen da sein sollten (Ortszeit, Minute des Tages).
-export const PUBLISH_MINUTE = Object.freeze({ tibber: 13 * 60 + 5, lichtblick: 15 * 60 + 20 });
+// LUOX: Day-Ahead; live am 11.11.2026 um 13:59 schon für morgen da.
+export const PUBLISH_MINUTE = Object.freeze({ tibber: 13 * 60 + 5, lichtblick: 15 * 60 + 20, luox: 13 * 60 + 5 });
 
-export const PROVIDER_LABELS = Object.freeze({ tibber: 'Tibber', lichtblick: 'LichtBlick' });
+export const PROVIDER_LABELS = Object.freeze({ tibber: 'Tibber', lichtblick: 'LichtBlick', luox: 'LUOX' });
 
 const MASK = '***';
 
@@ -76,6 +82,7 @@ const MASK = '***';
 // Passwort ist derselbe Vertrag).
 function contractIdentity(settings = {}) {
   const name = settings.name || '';
+  if (name === 'luox') return JSON.stringify([name, String(settings.luox?.email || '').toLowerCase(), settings.luox?.consumerContractId || '']);
   return JSON.stringify(name === 'tibber'
     ? [name, settings.tibber?.homeId || '']
     : [name, String(settings.lichtblick?.email || '').toLowerCase(), settings.lichtblick?.contractId ?? null]);
@@ -83,9 +90,12 @@ function contractIdentity(settings = {}) {
 
 function credentialFingerprint(settings = {}) {
   const name = settings.name || '';
-  const parts = name === 'tibber'
-    ? [name, settings.tibber?.token, settings.tibber?.homeId]
-    : [name, settings.lichtblick?.email, settings.lichtblick?.password, settings.lichtblick?.contractId];
+  // LUOX: Lesart und Endpreis-Schalter ändern, was geliefert wird → wie neue Zugangsdaten.
+  const parts = name === 'luox'
+    ? [name, settings.luox?.email, settings.luox?.password, settings.luox?.consumerContractId, settings.priceBasis, settings.luox?.endCustomerPrice?.enabled === true]
+    : name === 'tibber'
+      ? [name, settings.tibber?.token, settings.tibber?.homeId]
+      : [name, settings.lichtblick?.email, settings.lichtblick?.password, settings.lichtblick?.contractId];
   return crypto.createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 16);
 }
 
@@ -93,6 +103,7 @@ function credentialFingerprint(settings = {}) {
 export function providerCredentialsComplete(settings = {}) {
   if (settings.name === 'tibber') return !!settings.tibber?.token;
   if (settings.name === 'lichtblick') return !!settings.lichtblick?.email && !!settings.lichtblick?.password;
+  if (settings.name === 'luox') return !!settings.luox?.email && !!settings.luox?.password;
   return false;
 }
 
@@ -127,7 +138,10 @@ export function mergeTestSettings(saved = {}, input = {}) {
       email: pick(input.lichtblick?.email, saved.lichtblick?.email),
       password: pick(input.lichtblick?.password, saved.lichtblick?.password),
       contractId: input.lichtblick?.contractId ?? saved.lichtblick?.contractId ?? null
-    }
+    },
+    // LUOX-Zugangsdaten stehen im eigenen Block (Einstellungen → LUOX) und
+    // werden dort getestet; hier gelten die gespeicherten.
+    luox: saved.luox || {}
   };
 }
 
@@ -173,7 +187,11 @@ export function createTariffProviderService(ctx, deps = {}) {
     lichtblick: deps.fetchLichtblick || ((s, { useCache = true } = {}) => fetchLichtblickPrices({
       email: s.lichtblick.email, password: s.lichtblick.password, contractId: s.lichtblick.contractId,
       cacheFile: useCache ? cacheFile : null, fetchImpl, now
-    }))
+    })),
+    luox: deps.fetchLuox || (async (s) => {
+      if (typeof ctx.luox?.fetchTariffSlots !== 'function') throw new TariffProviderError('not_configured', 'LUOX-Dienst nicht verfügbar.');
+      return ctx.luox.fetchTariffSlots({ priceBasis: s.priceBasis === 'gross_total' ? 'gross_total' : 'net_energy' });
+    })
   };
 
   const st = {
@@ -198,7 +216,11 @@ export function createTariffProviderService(ctx, deps = {}) {
   // Was sicher in der Datenbank steht: `${Anbieter}|${Slotbeginn ms}` → ct/kWh.
   const persisted = new Map();
 
-  const settings = () => ctx.getCfg?.()?.userEnergyPricing?.provider || {};
+  const settings = () => {
+    const cfg = ctx.getCfg?.() || {};
+    const p = cfg.userEnergyPricing?.provider || {};
+    return p.name === 'luox' ? { ...p, luox: cfg.luox || {} } : p;
+  };
   const log = (event, data, level) => { try { ctx.pushLog?.(event, data, level); } catch { /* ignore */ } };
 
   function syncConfigState() {

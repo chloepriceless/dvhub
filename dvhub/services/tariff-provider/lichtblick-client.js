@@ -17,13 +17,8 @@
 // Vortag); Schrittweite, brutto/netto und enthaltene Netzentgelte sind erst ab
 // dem ersten Liefertag an echten Daten prüfbar (Stand 21.10.2026: ungeprüft).
 
-import fs from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
-import { promisify } from 'node:util';
 import { TariffProviderError, postJson, pointsToSlots, localDateOf, addDaysToDate, localMidnight } from './common.js';
-
-const pbkdf2 = promisify(crypto.pbkdf2);
+import { writeCache, loadBoundCache, bindingFor } from './token-cache.js';
 
 export const B2C_TOKEN_URL = 'https://anmelden.lichtblick.de/lichtblickitb2cprod.onmicrosoft.com/oauth2/v2.0/token?p=b2c_1a_ropc_signin';
 export const B2C_CLIENT_ID = 'c6079bc3-9572-4da7-abb7-b69694239976';
@@ -67,37 +62,6 @@ fragment EnergyPriceCurvesFragment on EnergyPriceCurvesPayload {
   }
 }`;
 
-// ── Token-Zwischenspeicher ────────────────────────────────────────────────
-
-function emailKey(email) {
-  return crypto.createHash('sha256').update(String(email).toLowerCase()).digest('hex').slice(0, 16);
-}
-
-async function passwordHash(password, saltHex) {
-  return (await pbkdf2(String(password), Buffer.from(saltHex, 'hex'), 200_000, 32, 'sha256')).toString('hex');
-}
-
-function readCache(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
-}
-
-function writeCache(file, payload) {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  const fd = fs.openSync(tmp, 'wx', 0o600);
-  try { fs.writeFileSync(fd, JSON.stringify(payload)); } finally { fs.closeSync(fd); }
-  fs.renameSync(tmp, file);
-}
-
-async function loadBoundCache(file, email, password) {
-  const raw = readCache(file);
-  if (!raw || raw.emailKey !== emailKey(email) || typeof raw.salt !== 'string' || typeof raw.pwHash !== 'string') return null;
-  const hash = await passwordHash(password, raw.salt);
-  const a = Buffer.from(hash, 'hex');
-  const b = Buffer.from(raw.pwHash, 'hex');
-  return a.length === b.length && crypto.timingSafeEqual(a, b) ? raw : null;
-}
-
 // ── Login ─────────────────────────────────────────────────────────────────
 
 async function b2cToken(fetchImpl, fields) {
@@ -133,11 +97,8 @@ async function accessToken({ email, password, cacheFile, fetchImpl, now, forceRe
     }
   }
   if (!tok) tok = await b2cToken(fetchImpl, { grant_type: 'password', username: email, password });
-  const salt = cached?.salt || crypto.randomBytes(16).toString('hex');
   const next = {
-    emailKey: emailKey(email),
-    salt,
-    pwHash: cached?.pwHash || await passwordHash(password, salt),
+    ...await bindingFor(email, password, cached),
     accessToken: tok.access_token,
     // B2C rotiert den Refresh-Token; fehlt ein neuer, den alten behalten
     refreshToken: tok.refresh_token || cached?.refreshToken || null,
