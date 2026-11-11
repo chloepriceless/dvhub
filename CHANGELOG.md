@@ -179,7 +179,9 @@ verweist hierher.
     ausgeschaltetem DVhub: der flüchtige Victron-2716 wird nicht nachgeführt und läuft nach der Venus-Frist ab, ein
     persistenter 2700 behält den zuletzt geschriebenen Wert. Auch die frühere Quelle `emergency_stop` kommt im
     Not-Halt nicht mehr durch das Tor. Leitstand-Knopf, Rückfrage und Meldung versprechen keinen „Sollwert 0“ mehr;
-    `POST /api/control/stop` meldet `neutralize: { skipped: true, reason: "setpoint_unchanged" }`.
+    `POST /api/control/stop` meldet `neutralize: { skipped: true, reason: "setpoint_unchanged" }`. Beim Fortsetzen
+    schreibt DVhub den geplanten Sollwert im nächsten Takt neu, auch wenn er sich nicht geändert hat (im Gerät kann
+    inzwischen etwas anderes stehen); alte Schreibfehler der zweiten GX lassen sie im Not-Halt nicht mehr flattern.
   - **§14a im Not-Halt ausgesetzt:** Die von DVhub gesetzten EEBUS-Grenzen gehen einmal auf „frei“, danach kein
     Herzschlag, kein Auffrischen, kein Wiederanlauf-„frei“ und keine Verdichter-Planung mehr. Die Geräte gehen nach
     ihrer Frist in ihren eigenen Failsafe, genau wie bei ausgeschaltetem DVhub. Die Vorgabe des Netzbetreibers wird

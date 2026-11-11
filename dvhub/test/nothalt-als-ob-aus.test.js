@@ -512,3 +512,54 @@ test('Not-Halt-Eintritt (Mitschnitt): kein 2716-Write an beiden GX, die eigene P
     [[2707, 1], [2708, 0]], 'eigene §51-PV-Sperre genau einmal frei (unverändert)');
   assert.ok(!logs.some((l) => l.event === 'emergency_stop_neutralize_failed'));
 });
+
+// Codex 9bb263e9 (P2): Ohne die frühere 0 bleibt der gemerkte Sollwert stehen.
+// Mit persistentem 2700 ohne Keepalive übersprang DVhub nach dem Fortsetzen den
+// geplanten Wert als „schon geschrieben“ — auch wenn im Not-Halt jemand am GX
+// etwas anderes eingestellt hatte. Fortsetzen vergisst den gemerkten Sollwert,
+// im Not-Halt selbst wird weiter nichts geschrieben.
+test('Fortsetzen nach dem Not-Halt schreibt den geplanten Netz-Sollwert neu (2700 ohne Keepalive), im Not-Halt nichts', async () => {
+  const log = [];
+  const transport = {
+    type: 'modbus',
+    async mbRequest(req) { return Array.from({ length: req.quantity || 1 }, () => 0); },
+    async mbWriteSingle(req) { log.push({ address: req.address, value: req.value }); return {}; },
+    async mbWriteMultiple(req) { log.push({ address: req.address, values: req.values }); return {}; },
+  };
+  const cfg = {
+    controlWrite: {
+      gridSetpointW: { host: 'gx', port: 502, unitId: 100, enabled: true, fc: 6, address: 2700, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
+      chargeCurrentA: { enabled: false }, maxDischargeW: { enabled: false },
+    },
+    dvControl: { enabled: false },
+    optimizer: { enabled: false, allowGridCharge: false, allowGridDischarge: true, hardFloorSocPct: 5 },
+    schedule: { timezone: 'Europe/Berlin', controlKeepaliveMs: 0, smallMarketAutomation: { enabled: false } },
+  };
+  const state = {
+    victron: { soc: 60, batteryPowerW: 0, pvTotalW: 0, fieldUpdatedAt: { soc: Date.now() } },
+    schedule: { rules: [], active: {}, lastWrite: {}, manualOverride: {}, config: { defaultGridSetpointW: -100, defaultChargeCurrentA: null }, lastEvalAt: 0 },
+    ctrl: { negativePriceActive: false, forcedOff: false, discretionaryWritesPaused: false, pausedAt: 0, _stopBlockLogged: {} },
+    epex: { data: [] },
+  };
+  const ctx = {
+    state, getCfg: () => cfg, transport, pushLog: () => {},
+    telemetrySafeWrite: (fn) => { try { fn?.(); } catch { /* */ } },
+    persistConfig: async () => {}, telemetryStore: null,
+    epexNowNext: () => ({ current: { ct_kwh: 12, eur_mwh: 120 }, next: null }),
+    regenerateSmallMarketAutomationRules: async () => {}, onEvalComplete: () => {},
+    persistControlState: () => true,
+  };
+  const ev = createScheduleEvaluator(ctx);
+  ctx.applyControlTarget = (...a) => ev.applyControlTarget(...a);
+  const sp = () => log.filter((x) => x.address === 2700).map((x) => (x.value > 0x7fff ? x.value - 0x10000 : x.value));
+
+  await ev.evaluateSchedule();
+  assert.deepEqual(sp(), [-100], 'Normalbetrieb: Vorgabe −100 W');
+  await setEmergencyStop(ctx, { on: true });
+  for (let i = 0; i < 3; i++) await ev.evaluateSchedule();
+  assert.deepEqual(sp(), [-100], 'im Not-Halt kein Sollwert-Write');
+  // im Not-Halt stellt jemand am GX +500 W ein (DVhub schreibt nicht)
+  await setEmergencyStop(ctx, { on: false });
+  await ev.evaluateSchedule();
+  assert.deepEqual(sp(), [-100, -100], 'nach dem Fortsetzen geht die Vorgabe wieder raus');
+});

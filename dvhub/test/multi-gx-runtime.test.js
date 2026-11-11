@@ -308,3 +308,23 @@ test('Not-Halt schreibt auch bei scheiterndem Lesen nichts an die zweite Anlage'
   await s.tick(); await s.tick();
   assert.equal(writes(tr).length, before, 'kein 2716-Write im Not-Halt');
 });
+
+// Codex 9bb263e9 (P2): Vor dem Not-Halt gescheiterte Writes dürfen im Nur-Lese-
+// Betrieb des Not-Halts nicht weiterwirken — sonst flattert die Anlage alle 5 s
+// offline/online und EOS plant jedes Mal neu.
+test('Not-Halt nach gescheiterten Writes: kein Offline/Online-Flattern, solange das Lesen klappt', async () => {
+  let failWrites = true;
+  const tr = fakeTransport({ fail: (req) => failWrites && Array.isArray(req.values) });
+  const s = setup({ transport: tr });
+  for (let i = 0; i < 4; i++) await s.tick();
+  assert.equal(s.state.multiGx.online, false, 'drei gescheiterte Writes → nicht verfügbar');
+  failWrites = false; // Verbindung wieder gut, aber im Not-Halt wird nicht geschrieben
+  s.state.ctrl.discretionaryWritesPaused = true;
+  const logsBefore = s.logs.length;
+  const availBefore = s.availability.length;
+  for (let i = 0; i < 6; i++) await s.tick();
+  const flaps = s.logs.slice(logsBefore).filter(([e]) => e === 'multi_gx_offline' || e === 'multi_gx_online');
+  assert.ok(flaps.length <= 1, `höchstens ein Wechsel (zurück auf verfügbar), nicht ${flaps.length}`);
+  assert.ok(s.availability.length - availBefore <= 1, 'keine wiederholten EOS-Abgleiche');
+  assert.equal(s.state.multiGx.online, true, 'lesbar = verfügbar');
+});

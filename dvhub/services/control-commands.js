@@ -236,6 +236,12 @@ async function setEmergencyStopNow(ctx, opts) {
   state.ctrl.pausedBy = null;
   state.ctrl.pausedReason = null;
   state.ctrl._stopBlockLogged = {};
+  // Den gemerkten Netz-Sollwert vergessen (Codex 9bb263e9, P2): seit der
+  // Not-Halt ihn nicht mehr schreibt (Christin 10.11.2026), kann im Gerät
+  // inzwischen etwas anderes stehen. Ohne das übersprang der erste Takt nach
+  // dem Fortsetzen die Vorgabe als „unverändert“ — beim persistenten 2700 ohne
+  // Keepalive für immer. Geschrieben wird erst wieder im nächsten Takt.
+  if (state.schedule?.lastWrite) delete state.schedule.lastWrite.gridSetpointW;
   const persisted = persistNotHalt(ctx, actor);
   if (wasFailsafe) ctx.setSystemWarning?.('control_state_unreadable', null);
   ctx.pushLog('emergency_stop_resumed', wasFailsafe ? { after: 'control_state_unreadable' } : {}, { ...(actor || {}), severity: 'warn' });

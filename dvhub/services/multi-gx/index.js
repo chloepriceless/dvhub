@@ -247,7 +247,11 @@ export function createMultiGx(ctx, deps = {}) {
       lastError = e?.message || String(e);
     }
     // Steuerbar = lesbar UND der Sollwert kommt an; drei Fehlversuche in Folge
-    // bei einem von beiden → nicht verfuegbar.
+    // bei einem von beiden → nicht verfuegbar. Im Not-Halt wird nicht
+    // geschrieben, dann zaehlt nur das Lesen: alte Schreibfehler von vor dem
+    // Not-Halt vergessen, sonst flattert die Anlage alle 5 s offline/online
+    // (Codex 9bb263e9, P2). Nach dem Not-Halt zaehlt wieder der erste Write.
+    if (ctx.state.ctrl?.discretionaryWritesPaused === true) writeErrors = 0;
     if (readErrors >= OFFLINE_AFTER_ERRORS || writeErrors >= OFFLINE_AFTER_ERRORS) setAvailable(false, c.host, lastError || 'write_failed');
 
     const cfg = ctx.getCfg() || {};
