@@ -54,8 +54,13 @@ export function resolveEvccBridgeConfig(cfg) {
   const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
   const phases = Number(opt.evPhases) === 1 ? 1 : 3;
   const minCurrentA = num(opt.evMinCurrentA, 6);
-  const maxChargeW = num(opt.evMaxChargeW, 5000);
   const onePhaseMaxA = Math.min(ONE_PHASE_MAX_A, num(opt.evOnePhaseMaxCurrentA, ONE_PHASE_MAX_A));
+  // Lädt das Auto nur einphasig, ist die Schieflast-Grenze auch die
+  // Höchstleistung — für EOS (max_charge_power_w), die Zielrechnung und
+  // „Sofort laden“ (Codex 6390684a).
+  const maxChargeW = phases === 1
+    ? Math.min(num(opt.evMaxChargeW, 5000), onePhaseMaxA * DEFAULT_VOLTAGE_V)
+    : num(opt.evMaxChargeW, 5000);
   const ampsFromW = snapToWholeAmps(maxChargeW / (DEFAULT_VOLTAGE_V * phases));
   return {
     enabled: opt.eosOptimizeEv === true && opt.evEvccControl === true,
@@ -66,8 +71,9 @@ export function resolveEvccBridgeConfig(cfg) {
     minCurrentA,
     // Die Obergrenze folgt aus der Ladeleistung, die EOS kennt — sonst koennte
     // evcc mehr ziehen, als EOS eingeplant hat.
-    // Laedt das Auto nur einphasig, gilt auch hier die Schieflast-Grenze.
-    maxCurrentA: Math.max(minCurrentA, phases === 1 ? Math.min(ampsFromW, onePhaseMaxA) : ampsFromW),
+    // Laedt das Auto nur einphasig, gilt auch hier die Schieflast-Grenze —
+    // auch vor dem Mindeststrom (liegt er darüber, lädt die Box eben nicht).
+    maxCurrentA: phases === 1 ? Math.min(onePhaseMaxA, Math.max(minCurrentA, ampsFromW)) : Math.max(minCurrentA, ampsFromW),
     onePhaseMaxA,
     maxChargeW,
     stopMode: STOP_MODES.includes(opt.evStopMode) ? opt.evStopMode : 'off',
@@ -78,6 +84,11 @@ export function resolveEvccBridgeConfig(cfg) {
     // Wohin der Befehl geht: evcc (Standard) oder direkt an die Wallbox.
     charger: CHARGER_TYPES.includes(cfg?.wallbox?.type) ? cfg.wallbox.type : 'evcc'
   };
+}
+
+/** Höchste Ladeleistung, die DVhub dem Auto gibt (einphasig höchstens die Schieflast-Grenze). */
+export function effectiveEvMaxChargeW(cfg) {
+  return resolveEvccBridgeConfig(cfg).maxChargeW;
 }
 
 const round2 = (v) => Math.round(v * 100) / 100;
@@ -99,10 +110,11 @@ export function evChargeRates({ maxChargeW, minCurrentA = 6, maxCurrentA = 16, p
   const minW = minA * voltageV * ph;
   // Einphasiges Auto: Stufen nur bis zur Schieflast-Grenze (darüber lädt die
   // Box ohnehin nicht, maxCurrentA ist gedeckelt), die Grenze selbst als Stufe.
-  const topW = ph === 1 ? Math.max(minW, oneMaxA * voltageV) : Infinity;
+  const topW = ph === 1 ? oneMaxA * voltageV : Infinity;
+  const topRate = topW < maxW ? Math.floor(topW / maxW * 100 + 1e-9) / 100 : 1;
   const out = new Set([0]);
   for (let k = 1; k <= 10; k += 1) if (k / 10 * maxW >= minW - 1e-6 && k / 10 * maxW <= topW + 1e-6) out.add(round2(k / 10));
-  if (ph === 1 && topW < maxW) out.add(Math.floor(topW / maxW * 100 + 1e-9) / 100);
+  if (ph === 1 && topW < maxW && topW >= minW - 1e-6) out.add(topRate);
   if (onePhase && ph === 3 && minA <= oneMaxA) {
     const lo = Math.ceil(minA * voltageV / maxW * 100 - 1e-9) / 100;
     const hi = Math.floor(Math.min(Math.min(Number(maxCurrentA), oneMaxA) * voltageV, minW - 1) / maxW * 100 + 1e-9) / 100;
@@ -114,7 +126,8 @@ export function evChargeRates({ maxChargeW, minCurrentA = 6, maxCurrentA = 16, p
   }
   // Liegt der Mindeststrom über der eingestellten Leistung, lädt die Box
   // trotzdem mit ihm (powerToCurrentA) — EOS darf dann wenigstens „voll“ planen.
-  if (out.size === 1) out.add(1);
+  // Einphasig nie über die Grenze, auch dann nicht.
+  if (out.size === 1) out.add(ph === 1 ? topRate : 1);
   return [...out].sort((a, b) => a - b);
 }
 
@@ -134,12 +147,13 @@ export function onePhaseChargingAvailable(cfg, loadpoints = []) {
  */
 export function powerToCurrentA(powerW, bc) {
   const raw = snapToWholeAmps(powerW / (bc.voltageV * bc.phases));
-  // Einphasig nie über die Schieflast-Grenze (20 A) — aber nicht unter den
-  // Mindeststrom, den evcc sonst ablehnt (dann gibt es einphasig keine Stufe,
-  // onePhaseChargingAvailable schaltet nicht um).
-  const maxA = bc.phases === 1
-    ? Math.max(bc.minCurrentA, Math.min(bc.maxCurrentA, Number(bc.onePhaseMaxA) > 0 ? Math.min(ONE_PHASE_MAX_A, Number(bc.onePhaseMaxA)) : ONE_PHASE_MAX_A))
-    : bc.maxCurrentA;
+  // Einphasig nie über die Schieflast-Grenze (20 A bzw. die strengere aus der
+  // Konfiguration). Mit Umschaltung kommt es dazu nicht (onePhaseChargingAvailable
+  // schaltet nur bei Mindeststrom ≤ Grenze um).
+  const oneMaxA = Number(bc.onePhaseMaxA) > 0 ? Math.min(ONE_PHASE_MAX_A, Number(bc.onePhaseMaxA)) : ONE_PHASE_MAX_A;
+  const maxA = bc.phases === 1 ? Math.min(bc.maxCurrentA, oneMaxA) : bc.maxCurrentA;
+  // Einphasig gewinnt die Grenze auch gegen den Mindeststrom (Codex 6390684a):
+  // lieber nicht laden als die Schieflast überschreiten.
   const clamped = Math.min(maxA, Math.max(bc.minCurrentA, raw));
   return Math.round(clamped * 10) / 10;
 }

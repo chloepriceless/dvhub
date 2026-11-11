@@ -25,7 +25,7 @@ import http from 'node:http';
 
 import { createEosCapabilityProbe, EOS_EV_CHARGE_START_FIELD, EOS_EV_SOC_VALUE_FIELD, EOS_GRID_IMPORT_LIMIT_FIELD, validSocValueSteps } from './eos-capabilities.js';
 import { resolveEvTargets } from './ev-targets.js';
-import { evChargeRates, onePhaseChargingAvailable, resolveEvccBridgeConfig } from './eos-evcc-bridge.js';
+import { evChargeRates, onePhaseChargingAvailable, resolveEvccBridgeConfig, effectiveEvMaxChargeW } from './eos-evcc-bridge.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
 import { requestHostname } from '../host-address.js';
 import { resolveEosProxy } from './eos-adapter.js';
@@ -180,7 +180,9 @@ export function buildEosElectricVehicles(cfg, { supportsDeadline = false, suppor
     capacity_wh: Number(opt.evCapacityWh) || 50000,
     charging_efficiency: 0.88,
     discharging_efficiency: 0.88,
-    max_charge_power_w: Number(opt.evMaxChargeW) || 5000,
+    // Wirksame Höchstleistung (einphasiges Auto: Schieflast-Grenze) — dieselbe,
+    // mit der die Brücke EOS' Anteil in Leistung umrechnet.
+    max_charge_power_w: effectiveEvMaxChargeW(cfg),
     min_charge_power_w: 50,
     // Nur Stufen, die die Wallbox fahren kann (dreiphasig ab Mindeststrom,
     // mit Phasenumschaltung auch einphasig) — eos-evcc-bridge.js evChargeRates.

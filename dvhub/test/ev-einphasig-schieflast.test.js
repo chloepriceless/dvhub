@@ -80,6 +80,34 @@ describe('Ladestufen für EOS, 22-kW-Box mit Phasenumschaltung', () => {
   });
 });
 
+describe('Auto lädt nur einphasig (Codex 6390684a)', () => {
+  test('wirksame Höchstleistung 4,6 kW: EOS-Gerät, „Sofort laden“, Plan-Umrechnung', () => {
+    const cfg = { optimizer: { evMaxChargeW: 7360, evPhases: 1, evMinCurrentA: 6 } };
+    assert.equal(bridgeModule.effectiveEvMaxChargeW(cfg), 4600);
+    const bc = resolveEvccBridgeConfig(cfg);
+    assert.equal(bc.maxChargeW, 4600);
+    assert.equal(bridgeModule.overrideLimits(bc).maxPowerW, 4600);
+    const [ev] = buildEosElectricVehicles(cfg);
+    assert.equal(ev.max_charge_power_w, 4600);
+    assert.ok(ev.charge_rates.every((r) => r * 4600 <= 4600 + 1e-6));
+    const plan = bridgeModule.buildEvPlan({ slotMinutes: 15, rows: [{ ts_utc: '2026-11-16T22:00:00Z', evChargeFactor: 1 }] }, bc);
+    assert.equal(plan[0].chargePowerW, 4600);
+    assert.equal(plan[0].currentA, 20);
+  });
+
+  test('Mindeststrom über der strengeren Grenze: nie über die Grenze (10 A Mindeststrom, 8 A Grenze)', () => {
+    const cfg = { optimizer: { evMaxChargeW: 7360, evPhases: 1, evMinCurrentA: 10, evOnePhaseMaxCurrentA: 8 } };
+    const bc = resolveEvccBridgeConfig(cfg);
+    assert.ok(bc.maxCurrentA <= 8, `maxCurrentA ${bc.maxCurrentA}`);
+    assert.ok(powerToCurrentA(7360, bc) <= 8);
+    assert.ok(powerToCurrentA(500, bc) <= 8);
+    const rates = buildEosElectricVehicles(cfg)[0].charge_rates;
+    assert.ok(rates.every((r) => r * bc.maxChargeW <= 8 * V + 1e-6), JSON.stringify(rates));
+    const raw = evChargeRates({ maxChargeW: 7360, minCurrentA: 10, phases: 1, onePhaseMaxA: 8 });
+    assert.ok(raw.every((r) => r * 7360 <= 8 * V + 1e-6), JSON.stringify(raw));
+  });
+});
+
 describe('Strom einphasig', () => {
   test('powerToCurrentA einphasig nie über 20 A', () => {
     const bc = bcFor({ evMinCurrentA: 10 });
