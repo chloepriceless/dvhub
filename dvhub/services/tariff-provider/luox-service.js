@@ -147,6 +147,8 @@ export function createLuoxService(ctx, deps = {}) {
   }
 
   async function contractSummary({ fresh = false } = {}) {
+    // Kontowechsel verwirft den Zwischenspeicher, bevor er benutzt wird.
+    syncFingerprint();
     if (!fresh && contractsCache && now() - contractsCache.at < CONTRACTS_TTL_MS) return contractsCache.summary;
     const summary = summarizeContracts(await guarded((c) => c.getJson('contracts')));
     contractsCache = { at: now(), summary };
@@ -327,6 +329,11 @@ export function createLuoxService(ctx, deps = {}) {
         }
 
         const stored = await writeRows(rows);
+        // Erledigt ist der Tag erst, wenn die Daten in der Datenbank stehen —
+        // sonst stündlich neu versuchen (settlementDue).
+        if (rows.length && !stored) {
+          throw new TariffProviderError('db', 'Abgleichdaten von LUOX geholt, aber nicht gespeichert (Datenbank nicht verfügbar?) — neuer Versuch in einer Stunde.');
+        }
         Object.assign(st.settlement, {
           lastSuccessAt: new Date(now()).toISOString(), lastSuccessDate: today, ok: true, error: null,
           rows: sheet.rows.length, from, to, totals: sheet.totals, dailyDays, stored

@@ -104,6 +104,32 @@ describe("epex.priceSource = 'luox'", () => {
     assert.equal(state.epex.data.length, 192);
   });
 
+  it('LUOX fällt aus: gehaltener Stand wird weiter genutzt, kein erneuter öffentlicher Abruf', async () => {
+    installFetch();
+    let fail = false;
+    const { ctx, state } = makeCtx({ luox: { fetchDayAhead: async () => {
+      if (fail) throw Object.assign(new Error('weg'), { code: 'network' });
+      return { source: 'luox_portal', rows: [...day(TODAY0, 100), ...day(TOMORROW0, 110)] };
+    } } });
+    const f = createEpexFetcher(ctx, { now: () => NOW });
+    await f.fetchEpexDay();
+    fail = true;
+    await f.fetchEpexDay();
+    assert.equal(urls.length, 0, 'kein Abruf bei dvhub.online');
+    assert.equal(state.epex.data.length, 192);
+    assert.equal(state.epex.data[0].eur_mwh, 100);
+  });
+
+  it('Andere Preiszone als DE-LU: LUOX wird nicht gefragt', async () => {
+    installFetch();
+    let asked = 0;
+    const { ctx } = makeCtx({ luox: { fetchDayAhead: async () => { asked += 1; return { rows: [] }; } } });
+    ctx.getCfg().epex.bzn = 'AT';
+    await createEpexFetcher(ctx, { now: () => NOW }).fetchEpexDay();
+    assert.equal(asked, 0);
+    assert.ok(urls[0].includes('dvhub.online'));
+  });
+
   it('Ohne LUOX-Dienst verhält sich „luox“ wie „dvhub“', async () => {
     installFetch();
     const { ctx, state } = makeCtx({ luox: null });

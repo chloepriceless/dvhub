@@ -304,3 +304,28 @@ test('Verbindungstest: gespeicherte Zugangsdaten per ***, fremde ohne Token-Spei
   assert.equal(portal.created.at(-1).opts.useCache, false);
   assert.equal(portal.created.at(-1).settings.email, 'andere@example.invalid');
 });
+
+test('Abgleich: scheitert das Speichern, gilt der Tag nicht als erledigt (stündlich neuer Versuch)', async () => {
+  const { ctx } = makeCtx({ dvSync: { enabled: true } });
+  ctx.telemetrySafeWrite = () => Promise.resolve(false);
+  const svc = createLuoxService(ctx, { now: () => NOW, portalFactory: fakePortal() });
+  const r = await svc.syncSettlement({ days: 7 });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /nicht gespeichert/);
+  const st = svc.getState().settlement;
+  assert.equal(st.ok, false);
+  assert.equal(st.lastSuccessDate, null);
+});
+
+test('Kontowechsel: zwischengespeicherte Verträge des alten Kontos gelten sofort nicht mehr', async () => {
+  const portal = fakePortal();
+  const { ctx } = makeCtx();
+  const svc = createLuoxService(ctx, { now: () => NOW, portalFactory: portal });
+  await svc.listContracts({ kind: 'producer' });
+  const n = portal.calls.filter((p) => p === 'contracts').length;
+  await svc.listContracts({ kind: 'producer' });
+  assert.equal(portal.calls.filter((p) => p === 'contracts').length, n, 'gleiches Konto: aus dem Zwischenspeicher');
+  ctx.setCfg({ ...ctx.getCfg(), luox: { ...ctx.getCfg().luox, email: 'andere@example.invalid' } });
+  await svc.listContracts({ kind: 'producer' });
+  assert.equal(portal.calls.filter((p) => p === 'contracts').length, n + 1, 'neues Konto: neu abgerufen');
+});

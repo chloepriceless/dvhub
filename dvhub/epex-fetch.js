@@ -145,7 +145,9 @@ export function createEpexFetcher(ctx, deps = {}) {
       let data = null;
       let activeSource = null;
       const sourceByDay = {};
-      if (priceSource === 'luox') {
+      // LUOX liefert nur die deutsche Preiszone (DE-LU); bei anderer Zone gilt
+      // die öffentliche Quelle.
+      if (priceSource === 'luox' && bzn === 'DE-LU') {
         try {
           const luoxData = await fetchEpexFromLuox(day, day2);
           if (luoxData && luoxData.length > 0) {
@@ -160,7 +162,10 @@ export function createEpexFetcher(ctx, deps = {}) {
           if (msg !== lastLuoxError) pushLog('epex_luox_fallback', { code: luoxErr?.code || 'error', error: msg });
           lastLuoxError = msg;
         }
-        if (data) {
+        // Auch wenn LUOX ganz ausfällt: Tage, die schon gehalten werden, nicht
+        // bei jedem 15-min-Nachfragen erneut öffentlich abrufen.
+        {
+          data = data || [];
           const minutes = localMinutesOfDay(new Date(nowMs()), cfg.epex.timezone);
           const missing = [day, day2].filter((d) => !sourceByDay[d] && (d === day || minutes >= 13 * 60));
           if (missing.length) {
@@ -180,6 +185,7 @@ export function createEpexFetcher(ctx, deps = {}) {
               if (rows.length) {
                 data = data.concat(rows);
                 sourceByDay[d] = src;
+                if (!activeSource) activeSource = src === 'held' ? 'held' : src;
               }
             }
           }
