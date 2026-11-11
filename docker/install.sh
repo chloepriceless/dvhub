@@ -54,10 +54,11 @@ curl -fsSL -o compose.yml.new "$REPO_RAW/docker/compose.yml"
 mv compose.yml.new compose.yml
 
 rand() { (openssl rand -hex 24 2>/dev/null) || (head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'); }
-# .env neu schreiben, ohne die Datei zu ersetzen: mv hätte die Rechte 600
-# (Passwörter) gegen die umask-Rechte der Zwischendatei getauscht.
+# .env neu schreiben: Zwischendatei mit den Rechten der .env (cp -p; sonst
+# tauschte mv die 600 der Passwortdatei gegen die umask-Rechte), dann atomar
+# umbenennen — ein Abbruch lässt die alte .env vollständig stehen.
 envrewrite() { # envrewrite SED-SKRIPT
-  sed "$1" .env > .env.tmp && cat .env.tmp > .env && rm -f .env.tmp
+  rm -f .env.tmp && cp -p .env .env.tmp && sed "$1" .env > .env.tmp && mv .env.tmp .env
 }
 setenv() { # setenv KEY VALUE — Zeile ersetzen oder anhängen
   if grep -q "^$1=" .env; then

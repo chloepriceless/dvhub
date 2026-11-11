@@ -12,6 +12,13 @@
 //   - optimization.genetic.fitness_cache_max_entries: Speicher und Laufzeit
 //     verwaltet der Rechendienst, nicht die Box.
 // Fehlen sie hier, schickt eos-config-sync sie gar nicht erst.
+//
+// DVhub-EOS (ab 1.0.10, T-0415): Der Fernbetrieb fordert zwar den DVhub-EOS-
+// Stand an (eos-remote.js, eosVersionLabel), die Fassade bietet aber weiter
+// nur die rc3-Felder an. max_grid_import_power_w, charge_start_datetime und
+// soc_value_steps stehen (noch) nicht in der Allowlist des Rechendiensts
+// (dvhub-eos-service src/gateway/schema.js) — er lehnte jeden Auftrag damit
+// ab (422). Erst dort aufnehmen, dann hier an Wechselrichter/Akku-Vorlage.
 
 export const EOS_REMOTE_PROFILE = Object.freeze({
   general: { timezone_override: null },
