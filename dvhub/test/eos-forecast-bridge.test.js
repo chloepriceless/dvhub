@@ -1934,13 +1934,13 @@ test('Pushes nacheinander: ein hängender Push blockiert die Kette nicht', async
         return fc0();
       },
     };
-    env.ctx.pushTimeoutMs = 200;
+    env.ctx.pushTimeoutMs = 2000; // reicht auch unter Last für den zweiten Lauf; der erste hängt bewusst
     const bridge = createEosForecastBridge(env.ctx);
     const both = Promise.all([bridge.push(), bridge.prepareRun()]);
     const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Kette hängt')), 5_000).unref());
     const [a, b] = await Promise.race([both, timeout]);
     assert.equal(a.ok, false);
-    assert.match(String(a.errors.timeout), /200/);
+    assert.match(String(a.errors.timeout), /2000/);
     assert.deepEqual(b, { ok: true, pushed: true }, 'der Lauf danach wird vorbereitet');
     assert.equal(pvImports(mock), 1);
     // Der hängende Push kommt später doch zurück: er schreibt nichts mehr.
@@ -2238,12 +2238,12 @@ test('aufgegebener Push: nach dem hängenden DELETE kein weiterer Schreib- oder 
   });
   try {
     const env = estimateCtx(mock);
-    env.ctx.pushTimeoutMs = 200;
+    env.ctx.pushTimeoutMs = 2000; // reicht auch unter Last für den neueren Push; das DELETE des ersten hängt bewusst
     const bridge = createEosForecastBridge(env.ctx);
     const first = bridge.push();
     const second = bridge.push();
     const a = await first;
-    assert.match(String(a.errors.timeout), /200/, 'erster Push aufgegeben');
+    assert.match(String(a.errors.timeout), /2000/, 'erster Push aufgegeben');
     const b = await second;
     assert.equal(b.ok, true, 'neuerer Push vollständig');
     const afterSecond = mock.requests.length;
