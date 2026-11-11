@@ -16,7 +16,10 @@
 //   sonst            → Forced mode (13050 = 2) mit Laden 0xAA / Entladen 0xBB und Leistung 13052 (W),
 //                      nachgeführt aus Netz- und Akku-Messung (Regler wie docs/DEYE-NODERED-BRIDGE.md Kap. 6).
 
+import fs from 'node:fs';
+
 import { meterImport } from '../import-limit/core.js';
+import { atomicWriteControlState } from '../../control-state-io.js';
 
 /** Doku-Adresse → Draht-Adresse. */
 export const wire = (docAddress) => Number(docAddress) - 1;
@@ -51,6 +54,18 @@ export const EMS_BLOCK_ADDRESS = wire(13050);
 const EMS_MODE_ADDR = wire(13050);
 const EMS_CMD_ADDR = wire(13051);
 const EMS_POWER_ADDR = wire(13052);
+// Doku 13080 „External EMS heartbeat“ (U16, 0–1000 s, Standard 20 s): Wert = Frist; ihn innerhalb der Frist
+// erneut schreiben ist der Herzschlag. Bleibt er aus, kehrt der Wechselrichter in Self-consumption zurück.
+export const HEARTBEAT_ADDR = wire(13080);
+
+/** Betreiber-Einstellung cfg.sungrow: Steuermodus und Herzschlag-Frist (20–300 s, Standard 30 s). */
+export function resolveSungrowControl(cfg) {
+  const o = cfg?.sungrow && typeof cfg.sungrow === 'object' ? cfg.sungrow : {};
+  const mode = o.controlMode === 'forced' ? 'forced' : 'external';
+  const t = Math.round(Number(o.heartbeatTimeoutS));
+  const heartbeatTimeoutS = Number.isFinite(t) ? Math.min(300, Math.max(20, t)) : 30;
+  return { mode, modeValue: mode === 'forced' ? EMS_MODE.FORCED : EMS_MODE.EXTERNAL, heartbeatTimeoutS };
+}
 
 const U16_NA = 0xffff;
 const S16_NA = 0x7fff;
@@ -198,10 +213,10 @@ export function decideEmsCommand({
 const CMD_BY_NAME = { charge: EMS_CMD.CHARGE, discharge: EMS_CMD.DISCHARGE, stop: EMS_CMD.STOP };
 
 /** Ist der Zustand am Gerät (Modus/Befehl/Leistung) schon das Gewünschte? */
-export function emsMatches(dev, decision, toleranceW = 0) {
+export function emsMatches(dev, decision, toleranceW = 0, modeValue = EMS_MODE.FORCED) {
   if (!dev) return false;
   if (decision.mode === 'self') return dev.mode === EMS_MODE.SELF && dev.cmd === EMS_CMD.STOP;
-  if (dev.mode !== EMS_MODE.FORCED || dev.cmd !== CMD_BY_NAME[decision.command]) return false;
+  if (dev.mode !== modeValue || dev.cmd !== CMD_BY_NAME[decision.command]) return false;
   if (decision.command === 'stop') return true;
   return Math.abs(Number(dev.powerW) - Number(decision.powerW)) <= toleranceW;
 }
@@ -244,24 +259,32 @@ export function sungrowEmsConf(cfg) {
   return c?.enabled === true && c.emulate === 'sungrow-ems' ? c : null;
 }
 
+// Takt, in dem schedule-eval tick() aufruft (ZFI_TICK_MS), und erlaubtes Zittern des Intervall-Timers.
+const CALLER_TICK_MS = 5000;
+const TICK_JITTER_MS = 250;
+
 /** Schlüssel der Geräteverbindung (Adresse, Port, Unit-ID) — Erkennung und Schreib-Tor gelten je Verbindung. */
 export function endpointKeyOf(v) {
   return `${v?.host ?? ''}:${v?.port ?? ''}:${v?.unitId ?? ''}`;
 }
 
-const isForeignMode = (mode) => mode === EMS_MODE.EXTERNAL || mode === EMS_MODE.VPP;
-
 /**
- * Aktuator für den nachgebildeten Netz-Sollwert. Alle Writes nur über Holding-Register 13050–13052, jede
- * Änderung mit Rücklesen. Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Zwangsbetrieb selbst
- * gesetzt hat (oder gesetzt haben könnte), danach nichts mehr.
+ * Aktuator für den nachgebildeten Netz-Sollwert. Alle Writes nur über Holding-Register 13050–13052 und den
+ * Herzschlag 13080, jede Änderung mit Rücklesen. Steuermodus nach cfg.sungrow: External EMS (Modus 3, Standard,
+ * mit Herzschlag — fällt DVhub aus, kehrt der Wechselrichter selbst in Self-consumption zurück) oder Forced mode
+ * (Modus 2, ohne Rückfall). Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Modus gesetzt hat
+ * (oder gesetzt haben könnte), danach nichts mehr — auch kein Herzschlag.
  */
-export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now() }) {
+export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now(), statePath = null }) {
   const st = {
     target: null,        // { setpointW, source, at }
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
-    owns: false,         // Zwangsbetrieb ist (womöglich) von DVhub — ab dem ersten Write, bis Self bestätigt ist
+    owns: false,         // Zwangs-/EMS-Betrieb ist (womöglich) von DVhub — ab dem ersten Write, bis Self bestätigt ist
+    ownMode: null,       // welchen Modus DVhub gesetzt hat (2 Forced, 3 External EMS)
     endpointKey: null,   // Verbindung, für die target/dev/owns gelten
+    hb: { key: null, supported: null }, // gibt es das Herzschlag-Register an dieser Verbindung?
+    lastHeartbeatAt: 0,
+    sentTimeoutS: null,  // zuletzt an den Wechselrichter geschriebene Frist (gilt dort, bis eine neue rausging)
     lastStepAt: 0,
     decision: null,
     error: null,
@@ -283,13 +306,50 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     pushLog(event, data, level);
   }
 
+  // Besitz-Merker auf der Platte (wie dv_seq_saved.json): nach einem Neustart erkennt DVhub sein eigenes
+  // External EMS wieder — sonst hielte es den eigenen Modus 3 für ein fremdes EMS.
+  if (statePath) {
+    try {
+      const m = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      if (m && (m.ownMode === EMS_MODE.FORCED || m.ownMode === EMS_MODE.EXTERNAL) && typeof m.endpointKey === 'string') {
+        st.owns = true;
+        st.ownMode = m.ownMode;
+        st.endpointKey = m.endpointKey;
+      }
+    } catch { /* kein Merker → nichts in Besitz */ }
+  }
+  function setOwns(mode) {
+    const owns = mode != null;
+    if (st.owns === owns && st.ownMode === (owns ? mode : null)) return;
+    st.owns = owns;
+    st.ownMode = owns ? mode : null;
+    if (!owns) { st.lastHeartbeatAt = 0; st.sentTimeoutS = null; }
+    if (!statePath) return;
+    try {
+      if (owns) atomicWriteControlState(statePath, { ownMode: mode, endpointKey: st.endpointKey, at: now() });
+      else fs.rmSync(statePath, { force: true });
+    } catch (e) {
+      logOnce(e?.message || 'x', 'sungrow_ems_state_persist_error', { error: e?.message || String(e) }, 'warn');
+    }
+  }
+
+  // Modus 4 (VPP) ist immer fremd, Modus 3 nur dann nicht, wenn DVhub ihn selbst gesetzt hat.
+  const isForeignMode = (mode) => mode === EMS_MODE.VPP
+    || (mode === EMS_MODE.EXTERNAL && !(st.owns && st.ownMode === EMS_MODE.EXTERNAL));
+
   function publish() {
     if (!state.ctrl) return;
+    const ctl = resolveSungrowControl(getCfg());
     state.ctrl.sungrowEms = {
+      controlMode: ctl.mode,
+      heartbeatTimeoutS: ctl.heartbeatTimeoutS,
+      heartbeatSupported: st.hb.supported,
+      lastHeartbeatAt: st.lastHeartbeatAt || null,
       target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at } : null,
       device: st.dev ? { ...st.dev } : null,
       decision: st.decision,
       owns: st.owns,
+      ownMode: st.ownMode,
       error: st.error
     };
   }
@@ -308,7 +368,8 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     st.endpointKey = key;
     st.target = null;
     st.dev = null;
-    st.owns = false;
+    st.hb = { key: null, supported: null };
+    setOwns(null);
   }
 
   async function readDevice(conf) {
@@ -318,9 +379,30 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     return st.dev;
   }
 
+  // Herzschlag-Register vorhanden? Einmal je Verbindung lesen. Exception 1/2 oder 0xFFFF (Doku: nicht
+  // vorhandenes U16) = Firmware zu alt. Andere Lesefehler entscheiden nichts (nächster Takt).
+  async function heartbeatSupported(conf) {
+    if (st.hb.key === st.endpointKey && st.hb.supported != null) return st.hb.supported;
+    let supported;
+    try {
+      const regs = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: HEARTBEAT_ADDR, quantity: 1 });
+      supported = Array.isArray(regs) && regs.length >= 1 && (Number(regs[0]) & 0xffff) !== 0xffff;
+    } catch (e) {
+      if (!/^modbus exception (1|2)\b/.test(String(e?.message))) throw e;
+      supported = false;
+    }
+    st.hb = { key: st.endpointKey, supported };
+    if (!supported) {
+      pushLog('sungrow_ems_heartbeat_unsupported', {
+        text: 'Sungrow kennt das Herzschlag-Register 13080 nicht (Firmware zu alt) — External EMS nicht möglich, DVhub steuert den Akku nicht. Firmware aktualisieren oder bewusst „Forced mode“ wählen.'
+      }, 'warn');
+    }
+    return supported;
+  }
+
   // Not-Halt vor JEDEM Write prüfen: ein Takt, der vor dem Eintritt begann, darf danach nichts mehr setzen.
   // Nur die eine Rücknahme (neutralize) darf im Not-Halt schreiben.
-  async function writeReg(conf, address, value, { neutralize = false, claim = false } = {}) {
+  async function writeReg(conf, address, value, { neutralize = false, claimMode = null } = {}) {
     if (state.ctrl?.discretionaryWritesPaused && !neutralize) {
       const err = new Error('emergency_stop_active');
       err.code = 'emergency_stop_active';
@@ -328,43 +410,61 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     }
     // Besitz erst, wenn der Write wirklich rausgeht (nach dem Not-Halt-Tor), aber VOR der Bestätigung:
     // geht sie verloren, kann der Befehl trotzdem wirken (Codex 28317bd5).
-    if (claim) st.owns = true;
+    if (claimMode != null) setOwns(claimMode);
     await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
   }
 
   function foreignModeError(mode) {
-    st.owns = false;
+    setOwns(null);
     const err = new Error('sungrow_foreign_ems_mode');
     err.code = 'foreign_ems_mode';
     err.mode = mode;
     return err;
   }
 
-  // Gewünschten Zustand schreiben (nur was abweicht) und zurücklesen. Wirft bei Fehler/Abweichung.
-  async function writeDecision(conf, decision, { neutralize = false } = {}) {
+  /**
+   * Gewünschten Zustand schreiben (nur was abweicht; forceAll: alles) und zurücklesen. Wirft bei Fehler/Abweichung.
+   * External EMS: Reihenfolge Leistung → Befehl → Herzschlag (Frist scharf) → Modus 3.
+   */
+  async function writeDecision(conf, decision, { neutralize = false, modeValue = EMS_MODE.FORCED, heartbeatS = null, forceAll = false } = {}) {
     const dev = st.dev || await readDevice(conf);
-    // Ein fremdes EMS/VPP (Modus 3/4) setzt DVhub nie selbst — es wird nie übersteuert, auch nicht im Not-Halt.
+    // Ein fremdes EMS/VPP wird nie übersteuert, auch nicht im Not-Halt.
     if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+    let heartbeatWritten = false;
     if (decision.mode === 'self') {
       const opt = { neutralize };
       if (dev.cmd !== EMS_CMD.STOP) await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, opt);
       if (dev.mode !== EMS_MODE.SELF) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, opt);
     } else {
-      const opt = { neutralize, claim: true };
+      const opt = { neutralize, claimMode: modeValue };
       const cmd = CMD_BY_NAME[decision.command];
-      if (decision.command !== 'stop' && dev.powerW !== decision.powerW) await writeReg(conf, EMS_POWER_ADDR, decision.powerW, opt);
-      if (dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd, opt);
-      if (dev.mode !== EMS_MODE.FORCED) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.FORCED, opt);
+      if (decision.command !== 'stop' && (forceAll || dev.powerW !== decision.powerW)) await writeReg(conf, EMS_POWER_ADDR, decision.powerW, opt);
+      if (forceAll || dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd, opt);
+      if (modeValue === EMS_MODE.EXTERNAL && (forceAll || dev.mode !== modeValue)) {
+        await writeReg(conf, HEARTBEAT_ADDR, heartbeatS, opt);
+        st.sentTimeoutS = heartbeatS;
+        heartbeatWritten = true;
+      }
+      if (forceAll || dev.mode !== modeValue) await writeReg(conf, EMS_MODE_ADDR, modeValue, opt);
     }
     st.dev = null;
     const back = await readDevice(conf);
-    if (!emsMatches(back, decision, 10)) {
-      const err = new Error(`EMS-Rücklesung weicht ab (Soll ${describe(decision)}, Ist Modus ${back.mode}, Befehl 0x${back.cmd.toString(16)}, ${back.powerW} W)`);
+    if (!emsMatches(back, decision, 10, modeValue)) {
+      const err = new Error(`EMS-Rücklesung weicht ab (Soll ${describe(decision, modeValue)}, Ist Modus ${back.mode}, Befehl 0x${back.cmd.toString(16)}, ${back.powerW} W)`);
       err.code = 'readback_mismatch';
       throw err;
     }
+    if (heartbeatWritten) {
+      const hb = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: HEARTBEAT_ADDR, quantity: 1 });
+      if (!Array.isArray(hb) || (Number(hb[0]) & 0xffff) !== heartbeatS) {
+        const err = new Error(`Herzschlag-Rücklesung weicht ab (Soll ${heartbeatS} s, Ist ${Array.isArray(hb) ? hb[0] : hb})`);
+        err.code = 'readback_mismatch';
+        throw err;
+      }
+      st.lastHeartbeatAt = now();
+    }
     // Erst ein bestätigtes Self-consumption gibt den Besitz ab.
-    if (decision.mode === 'self') st.owns = false;
+    if (decision.mode === 'self') setOwns(null);
     return back;
   }
 
@@ -395,6 +495,17 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     return null;
   }
 
+  // Abstand der Takte, solange DVhub External EMS fährt: höchstens ein Drittel der Herzschlag-Frist, auf den
+  // 5-s-Takt des Aufrufers (schedule-eval) abgerundet — sonst wird aus 6,7 s faktisch 10 s (Codex ff728d09).
+  // Die Toleranz fängt das Zittern des Intervall-Timers ab.
+  function stepEveryMs(opts, ctl) {
+    if (!(st.owns && st.ownMode === EMS_MODE.EXTERNAL)) return opts.regulateEveryMs;
+    const frist = Math.min(ctl.heartbeatTimeoutS, st.sentTimeoutS ?? ctl.heartbeatTimeoutS) * 1000;
+    const third = Math.max(CALLER_TICK_MS, Math.floor(frist / 3 / CALLER_TICK_MS) * CALLER_TICK_MS);
+    return Math.min(opts.regulateEveryMs, third);
+  }
+  const due = (everyMs) => now() - st.lastStepAt >= everyMs - TICK_JITTER_MS;
+
   async function step({ reason = 'tick' } = {}) {
     const cfg = getCfg();
     const conf = sungrowEmsConf(cfg);
@@ -408,36 +519,69 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       return { ok: false, error: gate };
     }
     const opts = resolveSungrowEmsOptions(conf);
+    const ctl = resolveSungrowControl(cfg);
     const t = now();
     st.lastStepAt = t;
     const targetFresh = st.target && t - st.target.at <= opts.targetMaxAgeMs;
     const tel = telemetry(cfg, opts);
     const bdc = Number(state.victron.device.bdcRatedW) || null;
     const cap = opts.maxPowerW != null ? (bdc ? Math.min(bdc, opts.maxPowerW) : opts.maxPowerW) : bdc;
-    const decision = targetFresh
+    let decision = targetFresh
       ? decideEmsCommand({
         setpointW: st.target.setpointW, ...tel, maxChargeW: cap, maxDischargeW: cap,
         bandW: opts.bandW, gain: opts.gain, minPowerW: opts.minPowerW,
         noGridCharge: NO_GRID_CHARGE_SOURCES.has(String(st.target.source))
       })
       : { mode: 'self', reason: st.target ? 'target_expired' : (st.revokedReason ? 'revoked' : 'no_setpoint') };
-    st.decision = { ...decision, at: t, trigger: reason };
     try {
+      if (ctl.mode === 'external' && decision.mode === 'forced' && !(await heartbeatSupported(conf))) {
+        // Ohne Herzschlag kein External EMS. Kein stiller Rückfall auf Forced mode (der hat keinen Rückfall
+        // des Wechselrichters): DVhub lädt/entlädt nicht. Zurück in Self-consumption geht immer — so wird auch
+        // ein liegengebliebener Zwangsbetrieb (ältere Einstellung, Neustart ohne Merker) wieder frei (Codex ff728d09).
+        if (!st.owns) {
+          st.decision = { ...decision, at: t, trigger: reason, blockedBy: 'heartbeat_unsupported' };
+          st.error = 'sungrow_heartbeat_unsupported';
+          publish();
+          return { ok: false, error: 'sungrow_heartbeat_unsupported' };
+        }
+        decision = { mode: 'self', reason: 'heartbeat_unsupported' };
+      }
+      // Moduswechsel zur Laufzeit: erst sauber in Self-consumption, der neue Modus folgt im nächsten Takt.
+      if (st.owns && st.ownMode !== ctl.modeValue && decision.mode === 'forced') decision = { mode: 'self', reason: 'mode_switch' };
+      st.decision = { ...decision, at: t, trigger: reason };
+      // Herzschlag-Lücke (DVhub hing, Neustart mit Merker): der Wechselrichter kann schon in Self-consumption
+      // zurückgefallen sein — frisch lesen und den ganzen Befehl neu setzen.
+      const ownsExternal = st.owns && st.ownMode === EMS_MODE.EXTERNAL;
+      // Frist, die im Gerät wirklich gilt: die zuletzt geschriebene, bis eine neue rausging (Codex ff728d09).
+      const deviceTimeoutS = Math.min(ctl.heartbeatTimeoutS, st.sentTimeoutS ?? ctl.heartbeatTimeoutS);
+      const gap = ownsExternal && decision.mode === 'forced'
+        && (!st.lastHeartbeatAt || t - st.lastHeartbeatAt > deviceTimeoutS * 1000);
+      if (gap) {
+        st.dev = null;
+        logOnce(String(st.lastHeartbeatAt), 'sungrow_ems_heartbeat_gap', { lastHeartbeatAt: st.lastHeartbeatAt || null, timeoutS: ctl.heartbeatTimeoutS }, 'warn');
+      }
       // Gerätezustand nur nach eigenen Writes und höchstens einmal je deviceRecheckMs lesen (Note 6);
       // so fällt ein Neustart des Wechselrichters oder ein Eingriff über die App auf.
       const dev = st.dev && t - st.dev.at < opts.deviceRecheckMs ? st.dev : await readDevice(conf);
       if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
-      if (emsMatches(dev, decision, decision.mode === 'forced' ? opts.stepW : 0)) {
-        if (decision.mode === 'self') st.owns = false;
+      // Herzschlag im Takt, solange DVhub External EMS fährt und dabei bleibt (die Doku verlangt genau das:
+      // den Wert innerhalb der Frist erneut schreiben).
+      if (ownsExternal && !gap && decision.mode === 'forced' && dev.mode === EMS_MODE.EXTERNAL) {
+        await writeReg(conf, HEARTBEAT_ADDR, ctl.heartbeatTimeoutS);
+        st.sentTimeoutS = ctl.heartbeatTimeoutS;
+        st.lastHeartbeatAt = now();
+      }
+      if (!gap && emsMatches(dev, decision, decision.mode === 'forced' ? opts.stepW : 0, ctl.modeValue)) {
+        if (decision.mode === 'self') setOwns(null);
         st.error = null;
         publish();
         return { ok: true, unchanged: true, decision };
       }
-      const back = await writeDecision(conf, decision);
+      const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap });
       st.error = null;
       st.logKeys = {};
       pushLog('sungrow_ems_write', {
-        setpointW: st.target?.setpointW ?? null, source: st.target?.source ?? null,
+        setpointW: st.target?.setpointW ?? null, source: st.target?.source ?? null, controlMode: ctl.mode,
         mode: decision.mode, command: decision.command || null, powerW: decision.powerW ?? null,
         reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW }
       });
@@ -447,7 +591,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       st.error = e?.message || String(e);
       if (e?.code === 'foreign_ems_mode') {
         // Ein anderes EMS/VPP steuert den Wechselrichter — nicht dagegen regeln (Besitz ist abgegeben).
-        logOnce(String(e.mode), 'sungrow_ems_foreign_mode', { mode: e.mode, text: 'Sungrow steht im externen EMS-/VPP-Modus — DVhub schreibt nichts' }, 'warn');
+        logOnce(String(e.mode), 'sungrow_ems_foreign_mode', { mode: e.mode, text: 'Sungrow steht im externen EMS-/VPP-Modus eines anderen Systems — DVhub schreibt nichts' }, 'warn');
       } else if (e?.code === 'emergency_stop_active') {
         st.dev = null;
         publish();
@@ -473,8 +617,9 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       const changed = !st.target || Number(st.target.setpointW) !== Number(setpointW);
       st.target = { setpointW: Number(setpointW), source, at: now() };
       st.revokedReason = null;
-      const opts = resolveSungrowEmsOptions(sungrowEmsConf(getCfg()) || {});
-      if (!changed && now() - st.lastStepAt < opts.regulateEveryMs) {
+      const cfg = getCfg();
+      const opts = resolveSungrowEmsOptions(sungrowEmsConf(cfg) || {});
+      if (!changed && !due(stepEveryMs(opts, resolveSungrowControl(cfg)))) {
         publish();
         return { ok: true, refreshed: true };
       }
@@ -484,7 +629,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
 
   /**
    * Ein Tor in applyControlTarget hat den Sollwert abgelehnt (z. B. Netzladen nicht mehr erlaubt): der
-   * gemerkte Sollwert gilt nicht mehr — sofort zurück in Self-consumption, wenn DVhub Zwangsbetrieb fährt.
+   * gemerkte Sollwert gilt nicht mehr — sofort zurück in Self-consumption, wenn DVhub den Betrieb fährt.
    */
   function revoke(reason, { unlessAcceptedAfter = null } = {}) {
     const newer = () => unlessAcceptedAfter != null && st.acceptSeq > unlessAcceptedAfter;
@@ -505,19 +650,23 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   /** Zähler angenommener Sollwerte (für revoke unlessAcceptedAfter). */
   function acceptSeq() { return st.acceptSeq; }
 
-  /** Nachführen im festen Takt (schedule-eval, 5 s); intern höchstens alle regulateEveryMs. */
+  /** Nachführen im festen Takt (schedule-eval, 5 s); intern höchstens alle regulateEveryMs (External EMS: Herzschlag). */
   function tick() {
     return serial(async () => {
-      const conf = sungrowEmsConf(getCfg());
+      const cfg = getCfg();
+      const conf = sungrowEmsConf(cfg);
       if (!conf || state.ctrl?.discretionaryWritesPaused) return { ok: true, idle: true };
       const opts = resolveSungrowEmsOptions(conf);
       if (!st.target && !st.owns) return { ok: true, idle: true };
-      if (now() - st.lastStepAt < opts.regulateEveryMs) return { ok: true, idle: true };
+      if (!due(stepEveryMs(opts, resolveSungrowControl(cfg)))) return { ok: true, idle: true };
       return step({ reason: 'tick' });
     });
   }
 
-  /** Not-Halt-Eintritt: DVhubs Zwangsbetrieb genau einmal zurück in Self-consumption, sonst nichts. */
+  /**
+   * Not-Halt-Eintritt: DVhubs Zwangs-/EMS-Betrieb genau einmal zurück in Self-consumption (Befehl Stopp, Modus 0),
+   * danach kein Write und kein Herzschlag mehr. Nicht von DVhub gesetzt → nichts.
+   */
   function emergencyStop() {
     return serial(async () => {
       const pausedAt = Number(state.ctrl?.pausedAt) || 0;
@@ -546,7 +695,8 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, status: () => (publish(), state.ctrl?.sungrowEms || null), _st: st };
 }
 
-function describe(d) {
+function describe(d, modeValue = EMS_MODE.FORCED) {
   if (d.mode === 'self') return 'Self-consumption';
-  return d.command === 'stop' ? 'Zwangsbetrieb Stopp' : `Zwangsbetrieb ${d.command === 'charge' ? 'Laden' : 'Entladen'} ${d.powerW} W`;
+  const name = modeValue === EMS_MODE.EXTERNAL ? 'External EMS' : 'Zwangsbetrieb';
+  return d.command === 'stop' ? `${name} Stopp` : `${name} ${d.command === 'charge' ? 'Laden' : 'Entladen'} ${d.powerW} W`;
 }

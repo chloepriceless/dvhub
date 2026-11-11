@@ -53,6 +53,7 @@ export function sungrowImage(over = {}) {
   set(13010, le32(2300));                         // Einspeiseleistung +2300 W (positiv = Einspeisung)
   const holding = new Map([
     [wire(13050), 0], [wire(13051), 0xcc], [wire(13052), 0],     // Self-consumption, Stopp
+    [wire(13080), 20],                                            // External-EMS-Herzschlag: Werkseinstellung 20 s
     [wire(13074), 5000], [wire(13087), 0xaa], [wire(13088), 700] // Installateur: 5 kW, an, 70 %
   ]);
   for (const [k, v] of Object.entries(over.input || {})) input.set(Number(k), v);

@@ -1408,6 +1408,45 @@ function buildFieldDefinitions() {
       help: 'Unter diesem Ladestand deckt der Akku keine Spitzen mehr ab. Leer = der harte Mindest-Ladestand (Optimierer → harter SoC-Boden) gilt. Der höhere der beiden Werte zählt.'
     },
 
+    // Sungrow-Steuermodus (T-0422, Christin 11.11.2026): External EMS mit
+    // Herzschlag (Standard) oder Forced mode. Betreiber-einstellbar und deshalb
+    // eine eigene Wurzel — controlWrite gehört dem Herstellerprofil.
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupDescription: 'Wie DVhub den Akku eines Sungrow-Hybrid-Wechselrichters lädt und entlädt. External EMS: DVhub meldet sich regelmäßig beim Wechselrichter (Herzschlag); bleibt die Meldung aus — DVhub abgestürzt, Netzwerk weg —, kehrt der Wechselrichter von selbst in den Eigenverbrauch zurück. Forced mode: dieselben Befehle ohne Herzschlag; fällt DVhub aus, läuft der letzte Befehl weiter, bis der Akku an seiner Grenze steht.',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.controlMode',
+      label: 'Steuermodus',
+      type: 'select',
+      default: 'external',
+      options: [
+        { value: 'external', label: 'External EMS (empfohlen)' },
+        { value: 'forced', label: 'Forced mode' }
+      ],
+      help: 'External EMS (empfohlen): mit Herzschlag — fällt DVhub aus, schaltet der Wechselrichter nach der Herzschlag-Frist selbst auf Eigenverbrauch zurück. Braucht eine Firmware, die das Herzschlag-Register (13080) kennt; fehlt es, steuert DVhub den Akku nicht und meldet das im Protokoll. Forced mode: ohne Herzschlag, auch für ältere Firmware; der letzte Befehl läuft bei einem Ausfall von DVhub weiter. Ein Wechsel stellt den Wechselrichter zuerst auf Eigenverbrauch zurück.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupDescription: 'Wie DVhub den Akku eines Sungrow-Hybrid-Wechselrichters lädt und entlädt.',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.heartbeatTimeoutS',
+      label: 'Herzschlag-Frist (s)',
+      type: 'number',
+      min: 20,
+      max: 300,
+      step: 5,
+      default: 30,
+      help: 'Nur bei External EMS: so lange wartet der Wechselrichter auf die nächste Meldung von DVhub, bevor er selbst auf Eigenverbrauch zurückschaltet. DVhub meldet sich alle 10 s; 30 s (Standard) verkraftet zwei verpasste Meldungen, ohne dass der Wechselrichter zurückfällt, und beendet einen Lade- oder Entladebefehl nach einem Ausfall spätestens nach einer halben Minute. Erlaubt 20–300 s.'
+    },
+
     // B-1112 Stufe 2 — Nulleinspeisung bei Abregelung (Christin 2026-07-19).
     // Wirkt nur auf Profilen, die dvControl.zeroFeedIn deklarieren (Fronius);
     // die Zahlen sind Betreiber-einstellbar und liegen deshalb HIER (dvControl
@@ -4798,6 +4837,8 @@ export function createDefaultConfig() {
     // Mechanismus selbst wird vom Herstellerprofil freigeschaltet
     // (dvControl.zeroFeedIn.enabled, aktuell Fronius GEN24). Lives in
     // createDefaultConfig → automatisch ALLOWED_CONFIG_ROOTS + Save-Roundtrip.
+    // Sungrow-Steuermodus (T-0422): External EMS mit Herzschlag ist der Standard.
+    sungrow: { controlMode: 'external', heartbeatTimeoutS: 30 },
     zeroFeedIn: {
       socThresholdPct: 95,
       socHysteresisPct: 5,
@@ -6854,7 +6895,7 @@ const SETTINGS_AREAS = [
     label: 'Meine Anlage',
     icon: '⌂',
     description: 'Wechselrichter, Akku, PV und Standort — was DVhub über deine Anlage wissen muss.',
-    groups: ['connection', 'batteryLimits', 'setpointWatchdog', 'pv', 'location'],
+    groups: ['connection', 'sungrowEms', 'batteryLimits', 'setpointWatchdog', 'pv', 'location'],
     advanced: ['mqttBridge', 'deviceAlarms', 'freezeWatchdog', 'setpointWatchdogTuning', 'mqttCrossCheck', 'secondGx'],
     editors: ['batteryStages', 'forecastStrings']
   },

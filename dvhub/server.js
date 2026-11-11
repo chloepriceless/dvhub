@@ -1168,6 +1168,8 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 // StorCtl_Mod/OutWRte) müssen einen Neustart WÄHREND einer aktiven Sperre
 // überleben, sonst schreibt die Freigabe nur die pauschalen restoreDefaults.
 const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
+// Sungrow-EMS (T-0422): Merker, dass DVhub den Zwangs-/External-EMS-Betrieb gesetzt hat (übersteht Neustarts).
+const SUNGROW_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_state.json');
 // Peak Shaving (GitHub #28): eine von DVhub aufgehobene Akku-Sperre (Victron
 // 2704) steht gespeichert im GX — der Merker sorgt dafür, dass ein neuer
 // Prozess sie zurückschreibt statt sie zu vergessen.
@@ -1389,6 +1391,7 @@ setNotHaltProbe(() => state.ctrl.discretionaryWritesPaused === true);
 
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
+  sungrowEmsStatePath: SUNGROW_EMS_STATE_PATH,
   peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
   // Nur der Laufzeit-Prozess regelt — nur er liest und schreibt den Merker.
   gridConnectionAssistPath: IS_RUNTIME_PROCESS ? GRID_CONNECTION_ASSIST_PATH : null,
