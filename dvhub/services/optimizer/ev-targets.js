@@ -13,6 +13,7 @@
  * bei zwei Fahrten kurz hintereinander auch ohne Max-Ladestand.
  */
 import { resolveEvDeparture, buildEvTrips } from './ev-departure.js';
+import { effectiveEvMaxChargeW } from './eos-evcc-bridge.js';
 import {
   deriveEvMinMax, valueSteps, medianSurplusProfile, buildSurplusSeries, addLocalDays,
   EV_CHARGE_EFFICIENCY, EV_PLAN_LOOKAHEAD_DAYS, EV_VALUE_MARGIN_CT_DEFAULT, SLOT_MS
@@ -67,7 +68,8 @@ export function resolveEvTargets(ctx, cfg, { decision = null, valueSupported = f
   if (!departure.enabled) return { ...base, reason: 'Wochenplan aus' };
   const timeZone = cfg?.schedule?.timezone || 'Europe/Berlin';
   const capacityWh = num(opt.evCapacityWh, 50000);
-  const chargeW = num(opt.evMaxChargeW, 5000);
+  // Wirksame Höchstleistung (einphasiges Auto: Schieflast-Grenze, Codex 6390684a).
+  const chargeW = effectiveEvMaxChargeW(cfg);
   // Bis 8 Tage nach der NÄCHSTEN Abfahrt (propagateMin), die bis zu 7 Tage
   // entfernt sein kann, plus Wertfenster (E + 7 Tage) — Codex 52c5ee20.
   const { trips } = buildEvTrips(cfg, nowMs, { days: TRIP_LOOKAHEAD_DAYS });

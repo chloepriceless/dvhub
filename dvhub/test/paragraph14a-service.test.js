@@ -641,3 +641,56 @@ test('Akku-Hilfe: neue Frist bei gleicher Leistung geht nach der laufenden Anfra
   await new Promise((r) => setImmediate(r));
   assert.deepEqual(calls.map((c) => [c.coverW, c.untilMs]), [[4200, 1_000], [4200, 2_000]]);
 });
+
+// ── Fable R5 P3-1: gespeicherte Dimmung von vor dem Neustart läuft ab ──
+test('Relais: gespeicherte Dimmung gilt höchstens 24 h nach der letzten Meldung, dann Warnung und frei', async () => {
+  const { RELAY_RESTORED_MAX_MS } = await import('../services/paragraph14a/index.js');
+  assert.equal(RELAY_RESTORED_MAX_MS, 24 * 3600_000);
+  const mem = memFs();
+  const deps = { fs: mem, dataDir: '/data' };
+  const p14a = { relay: { enabled: true, topic: 'steuerbox/relais' }, usePvSurplus: false };
+  const clock = { t: Date.parse('2026-11-16T10:00:00Z') };
+  const a = setup({ p14a, deps, clock });
+  a.svc.update();
+  a.subs.get('steuerbox/relais')('steuerbox/relais', '1');
+  // Neustart 2 h später: Dimmung gilt weiter.
+  clock.t += 2 * 3600_000;
+  const b = setup({ p14a, deps, clock });
+  b.svc.update();
+  assert.equal(b.state.p14a.active, true);
+  // 24 h nach der letzten Meldung ohne neue Nachricht: nicht mehr gedimmt, mit Warnung.
+  clock.t += 22 * 3600_000 + 60_000;
+  b.svc.update();
+  assert.equal(b.state.p14a.active, false);
+  assert.equal(b.svc.summary().relay.restoredExpired, true);
+  assert.equal(b.logs.filter(([e]) => e === 'paragraph14a_relay_restored_expired').length, 1);
+  b.svc.update();
+  assert.equal(b.logs.filter(([e]) => e === 'paragraph14a_relay_restored_expired').length, 1, 'Warnung nur einmal');
+  // Eine echte Meldung „gedimmt“ gilt wieder, ohne Ablauf.
+  b.subs.get('steuerbox/relais')('steuerbox/relais', '1');
+  assert.equal(b.state.p14a.active, true);
+  clock.t += 30 * 3600_000;
+  b.svc.update();
+  assert.equal(b.state.p14a.active, true, 'laufende Verbindung: Zustand gilt bis zur nächsten Meldung');
+  // Neustart lange nach der letzten Meldung: gleich frei.
+  const c = setup({ p14a, deps, clock });
+  c.svc.update();
+  assert.equal(c.state.p14a.active, false);
+});
+
+test('Relais: wiederholte gleiche Meldung zählt als letzte Meldung, auch nach dem Neustart (Codex 5d8eafad)', () => {
+  const mem = memFs();
+  const deps = { fs: mem, dataDir: '/data' };
+  const p14a = { relay: { enabled: true, topic: 'steuerbox/relais' }, usePvSurplus: false };
+  const clock = { t: Date.parse('2026-11-16T10:00:00Z') };
+  const a = setup({ p14a, deps, clock });
+  a.svc.update();
+  a.subs.get('steuerbox/relais')('steuerbox/relais', '1');
+  // 25 h später bestätigt das Relais „gedimmt“ noch einmal, dann Neustart.
+  clock.t += 25 * 3600_000;
+  a.subs.get('steuerbox/relais')('steuerbox/relais', '1');
+  clock.t += 60_000;
+  const b = setup({ p14a, deps, clock });
+  b.svc.update();
+  assert.equal(b.state.p14a.active, true, 'gerade bestätigt — gilt weiter');
+});

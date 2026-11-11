@@ -7,6 +7,13 @@
  *   release()         Vorgabe zuruecknehmen: die Wallbox macht wieder, was sie
  *                     ohne DVhub machen wuerde
  *   status()          { ok, connected, charging, powerW, currentA, raw }
+ * Optional (Fable R1 P2-5) — reine Strom-Obergrenze, ohne den Ladezustand zu
+ * ändern (Grenze an einer Box, die DVhub nicht selbst steuert):
+ *   limit(currentA, { resume }) höchstens dieser Strom; startet und stoppt nicht —
+ *                              mit resume: zugleich DVhubs eigenen Stopp/Ladebefehl
+ *                              aufheben, Strom zuerst (nie ungedeckelt frei)
+ *   unlimit({ origCurrentA })  eigene Obergrenze zurücknehmen (Strom von vorher)
+ *   limitState({ limitA })     { known, active }: steht DVhubs Grenze noch?
  *
  * OpenEVSE (ESP32-Firmware v4/v5, auch Kinetos): Claims-API. Ein Claim ist die
  * Vorgabe eines Clients mit Prioritaet; DVhub meldet sich als eigener Client
@@ -32,7 +39,7 @@ import { getWattpilotConnection } from './wattpilot.js';
 // Wallbox nicht steuern. Lesen (status) bleibt erlaubt.
 const READ_ONLY = Object.freeze({ ok: false, error: 'read_only' });
 function guardWrites(adapter) {
-  for (const k of ['charge', 'stop', 'release', 'limit', 'setPhases']) {
+  for (const k of ['charge', 'stop', 'release', 'limit', 'unlimit', 'setPhases']) {
     const fn = adapter[k];
     if (typeof fn === 'function') adapter[k] = (...a) => (isReadOnlyMode() ? Promise.resolve(READ_ONLY) : fn(...a));
   }
@@ -120,6 +127,24 @@ export function createOpenEvseAdapter(getSettings) {
       // 404 = es gab keinen Claim — Ziel erreicht.
       return res.ok || res.status === 404 ? { ok: true } : res;
     },
+    // Nur Obergrenze: Claim ohne state und charge_current — die Box lädt oder
+    // pausiert weiter nach ihrer eigenen Regel (evse_man.cpp: ein Claim ohne
+    // state setzt keinen Zustand, max_current deckelt den Strom).
+    // Ersetzt auch einen eigenen Stopp-/Lade-Auftrag in einem Schritt (resume).
+    async limit(currentA) {
+      return request(claimUrl(), opts({ method: 'POST', body: { max_current: wholeAmps(currentA), auto_release: false } }));
+    },
+    // Ohne den Claim gilt wieder, was vorher galt.
+    async unlimit() {
+      const res = await request(claimUrl(), opts({ method: 'DELETE' }));
+      return res.ok || res.status === 404 ? { ok: true } : res;
+    },
+    async limitState(ref = {}) {
+      const claims = await request(`${base()}/claims`, opts());
+      if (!claims.ok || !Array.isArray(claims.data)) return { known: false };
+      const own = claims.data.find((c) => c && Number(c.client) === OPENEVSE_DVHUB_CLIENT);
+      return { known: true, active: !!own && own.state === undefined && Number(own.max_current) === wholeAmps(ref.limitA) };
+    },
     // Not-Halt: steht DVhubs eigener Auftrag noch auf „aktiv“? Ohne lesbare
     // Auftragsliste: unbekannt.
     async dvhubState() {
@@ -177,6 +202,20 @@ export function createGoeAdapter(getSettings) {
     async release() {
       return expectOk(await set('frc=0'));
     },
+    // Nur Obergrenze: amp, frc bleibt (von Hand gestoppt bleibt gestoppt).
+    // resume: amp und frc=0 in EINER Anfrage — die Box ist nie ohne Grenze frei.
+    async limit(currentA, { resume = false } = {}) {
+      return expectOk(await set(`amp=${wholeAmps(currentA)}${resume ? '&frc=0' : ''}`));
+    },
+    async unlimit({ origCurrentA } = {}) {
+      const a = Number(origCurrentA);
+      return Number.isFinite(a) && a >= 6 ? expectOk(await set(`amp=${Math.floor(a)}`)) : { ok: true };
+    },
+    async limitState(ref = {}) {
+      const res = await request(`${base()}/api/status?filter=amp,frc`, opts());
+      if (!res.ok || typeof res.data !== 'object' || res.data === null) return { known: false };
+      return { known: true, active: Number(res.data.amp) === wholeAmps(ref.limitA) };
+    },
     // Not-Halt: DVhub lädt mit frc=2 und seinem Strom — beides muss noch stehen
     // (zuletzt bestätigter oder zuletzt versuchter Strom).
     async dvhubState(ref = {}) {
@@ -233,6 +272,28 @@ export function createWattpilotAdapter(getSettings, deps) {
     },
     async release() {
       return conn().setValue('frc', 0);
+    },
+    // Nur Obergrenze wie beim go-e: amp (nie über ama), frc bleibt.
+    // resume: erst amp (quittiert), dann frc=0 — scheitert amp, bleibt der Stopp.
+    async limit(currentA, { resume = false } = {}) {
+      const c = conn();
+      const st = await c.readStatus();
+      if (!st.ok) return st;
+      const max = Number(st.status.ama);
+      const amp = await c.setValue('amp', Number.isFinite(max) && max >= 6 ? Math.min(wholeAmps(currentA), max) : wholeAmps(currentA));
+      if (!amp.ok || !resume) return amp;
+      return c.setValue('frc', 0);
+    },
+    async unlimit({ origCurrentA } = {}) {
+      const a = Number(origCurrentA);
+      return Number.isFinite(a) && a >= 6 ? conn().setValue('amp', Math.floor(a)) : { ok: true };
+    },
+    async limitState(ref = {}) {
+      const res = await conn().readStatus();
+      if (!res.ok) return { known: false };
+      const max = Number(res.status?.ama);
+      const want = Number.isFinite(max) && max >= 6 ? Math.min(wholeAmps(ref.limitA), max) : wholeAmps(ref.limitA);
+      return { known: true, active: Number(res.status?.amp) === want };
     },
     // Wie go-e, der Strom nach der Begrenzung durch die Box (ama).
     async dvhubState(ref = {}) {

@@ -37,6 +37,7 @@ import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
 import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan, previewEvDeparture, targetSocPct } from './services/optimizer/ev-departure.js';
+import { effectiveEvMaxChargeW } from './services/optimizer/eos-evcc-bridge.js';
 
 /**
  * E-Auto-Wochenplan in SoC-% (1.0.10): Einmal-Ziel, Max-Ladestand, Standard-
@@ -6033,7 +6034,8 @@ export function createApiRoutes(ctx) {
             plan = {
               generatedAt: out.generatedAt || null,
               ...summarizeEvPlan(out.rows, {
-                maxChargeW: Number(opt.evMaxChargeW) || 5000,
+                // EOS' Anteil × wirksame Höchstleistung (einphasig gedeckelt).
+                maxChargeW: effectiveEvMaxChargeW(getCfg()),
                 slotMinutes: Number(out.slotMinutes) || 15,
                 nowMs,
                 departureAt: resolved.departureAt,
@@ -7057,7 +7059,7 @@ export function createApiRoutes(ctx) {
           capacity_wh: Number(cfg.optimizer?.evCapacityWh) || 50000,
           charging_efficiency: 0.88,
           discharging_efficiency: 0.88,
-          max_charge_power_w: Number(cfg.optimizer?.evMaxChargeW) || 5000,
+          max_charge_power_w: effectiveEvMaxChargeW(cfg),
           min_charge_power_w: 50,
           charge_rates: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
           min_soc_percentage: Number.isFinite(Number(cfg.optimizer?.evMinSocPct)) ? Number(cfg.optimizer.evMinSocPct) : 70,

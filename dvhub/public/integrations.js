@@ -2951,7 +2951,7 @@
     }
     if (reg && reg.register && reg.socPct != null) lines.push('Ladestand Auto: ' + reg.socPct + ' % (' + reg.socSource + ')');
     if (b.current) lines.push('Jetzt (' + fmtTime(b.current.ts) + '–' + fmtTime(b.current.endTs) + '): ' + cmd(b.current));
-    if (b.lastSent) lines.push('Zuletzt gesendet ' + fmtTime(b.lastSent.at) + ': ' + (b.lastSent.action === 'charge' ? 'Laden ' + b.lastSent.currentA + ' A' : 'Stopp (' + b.lastSent.mode + ')') + ' → Ladepunkt #' + b.lastSent.loadpoint);
+    if (b.lastSent) lines.push('Zuletzt gesendet ' + fmtTime(b.lastSent.at) + ': ' + (b.lastSent.action === 'charge' ? 'Laden ' + b.lastSent.currentA + ' A' : (b.lastSent.action === 'limit' ? 'Grenze ' + b.lastSent.currentA + ' A (Box regelt selbst)' : 'Stopp (' + b.lastSent.mode + ')')) + ' → Ladepunkt #' + b.lastSent.loadpoint);
     if (b.lastError) lines.push('Hinweis: ' + b.lastError);
     var plan = Array.isArray(b.plan) ? b.plan.filter(function (p) { return p.action === 'charge'; }) : [];
     if (eos.optimizeEv && eos.control) {

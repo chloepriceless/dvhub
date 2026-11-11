@@ -74,11 +74,15 @@ describe('ev-departure: Ziel', () => {
 });
 
 describe('ev-departure: aufgeloest', () => {
-  test('einmalige Abfahrt geht vor, solange sie kommt', () => {
+  test('einmalige Abfahrt kommt nach den Wochenplan-Abfahrten davor an die Reihe (Fable R5 P2-1)', () => {
+    // Sa 26.09. 09:30 CEST; Mi–Fr 07:00 liegen davor und bleiben.
     const once = '2026-09-26T07:30:00.000Z';
     const r = resolveEvDeparture(cfg({ evDepartureOnce: once }), TUE_20H);
-    assert.equal(r.source, 'once');
-    assert.equal(r.departureAt, once);
+    assert.equal(r.source, 'weekly');
+    assert.equal(r.departureAt, '2026-09-23T05:00:00.000Z');
+    const fri = resolveEvDeparture(cfg({ evDepartureOnce: once }), Date.parse('2026-09-25T05:00:00Z'));
+    assert.equal(fri.source, 'once', 'nach Fr 07:00 ist sie dran');
+    assert.equal(fri.departureAt, once);
     const after = resolveEvDeparture(cfg({ evDepartureOnce: once }), Date.parse(once));
     assert.equal(after.source, 'weekly', 'vorbei → wieder die woechentliche');
   });

@@ -51,6 +51,16 @@ const BATTERY_WANT_MAX_AGE_MS = 120_000;
 const EVCC_MEASUREMENT_MIN_AGE_MS = 60_000;
 // Zuletzt gemeldeter Relais-Zustand (übersteht einen Neustart, Fable R2 P2-4).
 const RELAY_STATE_FILE = 'p14a_relay.json';
+/**
+ * Eine gespeicherte Dimmung von vor dem Neustart gilt höchstens so lange nach
+ * der letzten echten Meldung (Fable R5 P3-1): Boxen, die nur bei einem Wechsel
+ * senden, hielten Wallbox und Wärmepumpe sonst bis zur nächsten Dimmung — also
+ * Tage — auf 4,2 kW. Danach frei, mit einer Warnung. Eine Meldung in der
+ * laufenden Verbindung gilt wie bisher bis zur nächsten.
+ */
+export const RELAY_RESTORED_MAX_MS = 24 * 3600_000;
+// Wiederholte gleiche Relais-Meldungen höchstens so oft speichern.
+const RELAY_CONFIRM_PERSIST_MS = 10 * 60_000;
 
 /** Konfiguration mit Vorgaben; ungültige Geräte fallen raus. */
 export function resolveParagraph14aConfig(cfg) {
@@ -115,7 +125,7 @@ export function createParagraph14aService(ctx, deps = {}) {
   const dataDir = deps.dataDir || ctx.dataDir || null;
 
   // restored: Zustand stammt aus der Zeit vor dem Neustart (noch keine neue Nachricht).
-  const relay = { level: null, at: null, subscribedTopic: null, restored: false };
+  const relay = { level: null, at: null, subscribedTopic: null, restored: false, restoredAt: null, restoredExpired: false, persistedAt: null };
   let timer = null;
   let lastShares = {};
   let lastActiveKey = null;
@@ -296,6 +306,7 @@ export function createParagraph14aService(ctx, deps = {}) {
       fsImpl.mkdirSync(dataDir, { recursive: true });
       fsImpl.writeFileSync(`${file}.tmp`, JSON.stringify({ topic, level: relay.level, at: relay.at }));
       fsImpl.renameSync(`${file}.tmp`, file);
+      relay.persistedAt = relay.at;
     } catch (e) {
       pushLog('paragraph14a_relay_persist_error', { error: e?.message || String(e) }, 'warn');
     }
@@ -310,6 +321,9 @@ export function createParagraph14aService(ctx, deps = {}) {
     relay.level = saved?.level ?? null;
     relay.at = saved?.at ?? null;
     relay.restored = saved != null;
+    relay.restoredAt = saved ? now() : null;
+    relay.persistedAt = saved?.at ?? null;
+    relay.restoredExpired = false;
     if (saved) pushLog('paragraph14a_relay_restored', { topic, level: saved.level, at: saved.at });
     if (!topic || !hub?.subscribe) return;
     hub.subscribe(topic, (t, payload) => {
@@ -322,17 +336,34 @@ export function createParagraph14aService(ctx, deps = {}) {
       relay.level = level;
       relay.at = now();
       relay.restored = false;
-      if (changed || wasRestored) saveRelayState(topic);
-      if (changed) {
-        pushLog('paragraph14a_relay', { topic: t, level });
-        update();
-      }
+      relay.restoredExpired = false;
+      // Auch eine wiederholte gleiche Meldung ist die letzte Meldung — für den
+      // Ablauf nach einem Neustart zählt ihr Zeitpunkt (Codex 5d8eafad).
+      // Gedrosselt: höchstens alle RELAY_CONFIRM_PERSIST_MS.
+      if (changed || wasRestored || relay.persistedAt == null || relay.at - relay.persistedAt >= RELAY_CONFIRM_PERSIST_MS) saveRelayState(topic);
+      if (changed) pushLog('paragraph14a_relay', { topic: t, level });
+      // Auch eine Bestätigung des Zustands von vor dem Neustart wirkt sofort
+      // (er kann inzwischen abgelaufen sein, RELAY_RESTORED_MAX_MS).
+      if (changed || wasRestored) update();
     });
   }
 
   function relayActive(c) {
     if (!c.relay.enabled || relay.level == null) return false;
-    return relay.level === c.relay.activeWhen;
+    if (relay.level !== c.relay.activeWhen) return false;
+    // Nur von vor dem Neustart: höchstens RELAY_RESTORED_MAX_MS nach der
+    // letzten Meldung (ohne Zeitstempel: ab dem Neustart).
+    if (relay.restored) {
+      const since = Number.isFinite(Number(relay.at)) && relay.at != null ? Number(relay.at) : relay.restoredAt;
+      if (since != null && now() - since > RELAY_RESTORED_MAX_MS) {
+        if (!relay.restoredExpired) {
+          relay.restoredExpired = true;
+          pushLog('paragraph14a_relay_restored_expired', { topic: relay.subscribedTopic, level: relay.level, at: relay.at, maxH: RELAY_RESTORED_MAX_MS / 3600_000 }, 'warn');
+        }
+        return false;
+      }
+    }
+    return true;
   }
 
   // --- Umsetzung ---------------------------------------------------------------
@@ -577,7 +608,7 @@ export function createParagraph14aService(ctx, deps = {}) {
       batteryAssist: assist,
       batteryGridW: active && !suspended ? (shares.speicher ?? 0) : null,
       wallboxCapW: active && !suspended && shares.wallbox != null ? shares.wallbox : null,
-      relay: { enabled: c.relay.enabled, topic: c.relay.topic, level: relay.level, at: relay.at, activeWhen: c.relay.activeWhen, restored: relay.restored },
+      relay: { enabled: c.relay.enabled, topic: c.relay.topic, level: relay.level, at: relay.at, activeWhen: c.relay.activeWhen, restored: relay.restored, restoredExpired: relay.restoredExpired === true },
     });
     state.ctrl.p14aBatteryGridW = ui.batteryGridW;
     state.ctrl.p14aWallboxCapW = ui.wallboxCapW;

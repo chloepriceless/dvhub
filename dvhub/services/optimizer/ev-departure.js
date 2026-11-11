@@ -3,8 +3,9 @@
  *
  * EOS (ab 0.4) kennt am Fahrzeug `min_soc_deadline_datetime`: bis zu diesem
  * Zeitpunkt muss `min_soc_percentage` erreicht sein. EOS nimmt dort einen
- * EINZELNEN Zeitpunkt — den Wochenplan rollt DVhub selbst weiter, und die
- * einmaligen Abweichungen (naechste Fahrt, heute spaeter heim) gehen vor.
+ * EINZELNEN Zeitpunkt — den Wochenplan rollt DVhub selbst weiter. Einmalige
+ * Abweichungen (Einmal-Ziel, heute spaeter heim) ersetzen hoechstens EINE
+ * regulaere Abfahrt bzw. Ankunft; die uebrigen Abfahrten bleiben.
  *
  * Wochenplan (optimizer.evWeeklyPlan, 7 Eintraege Mo..So): je Tag optional
  * eine Ankunft (Anstecken), eine Abfahrt, ein eigenes Mindestziel und der
@@ -271,9 +272,13 @@ function planWindows(plan, timeZone, nowMs) {
  * Das naechste Fenster (Ankunft → Abfahrt) aus Wochenplan + einmaligen
  * Abweichungen. Regeln:
  *   - Eine Abfahrt gilt DEPARTURE_LEAD_MS vorher als vorbei.
- *   - Einmalige Abfahrt (evDepartureOnce) geht vor, solange sie kommt; die
- *     Ankunft (und Ziel/Heimweg) des naechsten Wochenfensters bleibt, wenn sie
- *     davor liegt — „morgen erst 06:30 statt 05:00“.
+ *   - Einmalige Abfahrt (evDepartureOnce) ersetzt hoechstens EINE regulaere
+ *     Abfahrt (siehe unten); die Ankunft (und Ziel/Fahrt) dieses Fensters
+ *     bleibt, wenn sie davor liegt — „morgen erst 06:30 statt 05:00“.
+ *     Wochenplan-Abfahrten VOR der einmaligen bleiben mit Mindestziel und
+ *     Frist und kommen zuerst; die einmalige ist dran, wenn sie vorbei sind
+ *     (Fable R5 P2-1: „Do 09:00 einmalig 100 %“ am Montag liess sonst Di und
+ *     Mi 07:00 fallen, ein Ziel in drei Wochen den ganzen Plan).
  *   - Einmalige Ankunft (evArrivalOnce) ersetzt die Ankunft des Fensters, in
  *     dessen Luecke sie faellt: nach der letzten Abfahrt, vor dessen Abfahrt.
  *     Danach rollt alles von selbst weiter.
@@ -282,7 +287,8 @@ function planWindows(plan, timeZone, nowMs) {
  */
 export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Date.now()) {
   const gone = (ms) => ms - DEPARTURE_LEAD_MS <= nowMs;
-  const windows = planWindows(effectiveWeeklyPlan(opt), timeZone, nowMs);
+  const plan = effectiveWeeklyPlan(opt);
+  const windows = planWindows(plan, timeZone, nowMs);
   const onceDep = Date.parse(opt.evDepartureOnce || '');
   const onceArr = Date.parse(opt.evArrivalOnce || '');
   const onceActive = Number.isFinite(onceDep) && !gone(onceDep);
@@ -302,24 +308,35 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
   //      falls eingetragen — vor der einmaligen Abfahrt). Ohne Ankunftszeiten
   //      (alte Config, reiner Abfahrtsplan) ist das die verschobene Fahrt von
   //      eben, nicht die von morgen.
+  // „Das naechste noch kommende“ zaehlt immer von kurz vor der einmaligen
+  // Abfahrt aus, nicht von jetzt: welche Abfahrt ersetzt ist, haengt sonst von
+  // der Uhrzeit ab (einmalig Do 20:00 bei Ankunft 18:00 → Abfahrt 07:00: am
+  // Montag ersetzt Fr 07:00, am Mittwochabend Do 07:00 — Fable R5 P2-1). Die
+  // Fenster dafuer rund um die einmalige Abfahrt, damit auch ein Ziel in
+  // Wochen dieselbe Abfahrt ersetzt.
   let superseded = null;
   const DAY = 24 * 3600_000;
   // Auch nach der einmaligen Abfahrt (so weit planWindows zurückreicht): die
   // ersetzte Abfahrt wird nie zur Fahrt, die Einmal-Fahrt bleibt bis zur
   // nächsten echten Abfahrt die laufende (Codex 52c5ee20).
   if (Number.isFinite(onceDep) && (onceActive || nowMs - onceDep < 7 * DAY)) {
-    const refNow = onceActive ? nowMs : onceDep - DEPARTURE_LEAD_MS - 1;
+    const refNow = onceDep - DEPARTURE_LEAD_MS - 1;
     const goneAt = (ms) => ms - DEPARTURE_LEAD_MS <= refNow;
     const arrivedBefore = (w) => w.arrivalMs === null || w.arrivalMs < onceDep;
-    const next = windows.find((w) => !goneAt(w.departureMs));
-    if (next && next.arrivalMs !== null && next.arrivalMs < onceDep && Math.abs(next.departureMs - onceDep) < DAY) superseded = next;
+    const around = planWindows(plan, timeZone, refNow);
+    let pick = null;
+    const next = around.find((w) => !goneAt(w.departureMs));
+    if (next && next.arrivalMs !== null && next.arrivalMs < onceDep && Math.abs(next.departureMs - onceDep) < DAY) pick = next;
     else {
-      for (const w of windows) {
+      for (const w of around) {
         const diff = Math.abs(w.departureMs - onceDep);
         if (diff >= DAY || !arrivedBefore(w)) continue;
-        if (!superseded || diff < Math.abs(superseded.departureMs - onceDep)) superseded = w;
+        if (!pick || diff < Math.abs(pick.departureMs - onceDep)) pick = w;
       }
     }
+    // Liegt die ersetzte Abfahrt ausserhalb der Fenster um jetzt, ist hier
+    // nichts auszublenden.
+    if (pick) superseded = windows.find((w) => w.departureMs === pick.departureMs) || null;
   }
   const candidates = windows.filter((w) => w !== superseded);
   const pastWindows = candidates.filter((w) => gone(w.departureMs));
@@ -335,8 +352,10 @@ export function resolveEvWindow(opt = {}, timeZone = 'Europe/Berlin', nowMs = Da
   const afterTripStart = (ms) => tripStartMs === null || ms > tripStartMs;
   const nextWeekly = candidates.find((w) => !gone(w.departureMs)) || null;
 
+  // Eine nicht ersetzte Wochenplan-Abfahrt vor der einmaligen kommt zuerst.
+  const onceNext = onceActive && !(nextWeekly && nextWeekly.departureMs < onceDep);
   let win = null;
-  if (onceActive) {
+  if (onceNext) {
     win = { day: null, arrivalMs: null, departureMs: onceDep, minSocPct: onceMin, tripSocPct: onceTrip, source: 'once', arrivalSource: null };
     const inGap = (w) => w && w.arrivalMs !== null && afterTripStart(w.arrivalMs) && w.arrivalMs < onceDep;
     const base = superseded || (inGap(nextWeekly) ? nextWeekly : null);

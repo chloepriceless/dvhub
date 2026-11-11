@@ -204,6 +204,69 @@ export function resolveEvPlugged(ctx) {
 }
 
 /**
+ * Ladestand für den Max-Stopp (Fable R5 P3-2): nur ein Wert, der nach dem
+ * zuletzt gesehenen Abstecken gelesen wurde. Sonst nähme der Max-Stopp einen
+ * Ladestand von vor der Fahrt (TeslaMate ohne Altersgrenze, evcc-Fahrzeugtreiber
+ * bis 24 h) und schaltete die Wallbox hart aus, obwohl das Auto leer
+ * zurückkommt. Ein Wert aus dem laufenden Ansteckvorgang gilt weiter, auch wenn
+ * danach lange nichts Neues kommt (schlafendes Auto nach dem Stopp — kein
+ * Flattern). Ohne Zeitpunkt: kein Max-Stopp. Steck-Zustand unbekannt bzw.
+ * seit dem Start kein Abstecken gesehen: wie bisher.
+ * @returns {{ resolve(ctx, nowMs?): { pct, source, atMs } | null }}
+ */
+export function createMaxStopSoc() {
+  let lastUnpluggedAt = null;
+  return {
+    resolve(ctx, nowMs = Date.now()) {
+      let sig;
+      try { sig = maxStopPlugSignal(ctx, nowMs); } catch { sig = { plugged: null, at: null }; }
+      if (sig.plugged === false) {
+        lastUnpluggedAt = lastUnpluggedAt === null ? sig.at : Math.max(lastUnpluggedAt, sig.at);
+        return null;
+      }
+      const r = collectEvSocReadings(ctx, nowMs)[0];
+      if (!r || r.atMs === null || r.atMs === undefined) return null;
+      if (lastUnpluggedAt !== null && r.atMs <= lastUnpluggedAt) return null;
+      return r;
+    }
+  };
+}
+
+/**
+ * Steck-Zustand für den Max-Stopp, mit dem Zeitpunkt SEINER Quelle (Codex
+ * e957655a, 5753e29c): Reihenfolge wie resolveEvPlugged, aber eine Box, die den
+ * Zustand nicht kennt (EEBUS nur LPC: connectedKnown false), zählt nicht — dann
+ * die Ersatzquellen (MQTT, HTTP, Home Assistant). Zeitpunkt = Abfrage bzw.
+ * Meldung der Quelle; ohne (oder 0): jetzt.
+ * @returns {{ plugged: boolean|null, at: number|null }}
+ */
+function maxStopPlugSignal(ctx, nowMs) {
+  const pos = (v) => { const ms = toMs(v); return ms !== null && ms > 0 && ms <= nowMs ? ms : null; };
+  const evccPolled = () => pos(ctx?.evccIntegration?.getStatus?.()?.lastPolledAt);
+  const wb = ctx?.mainWallbox?.state?.();
+  if (wb) {
+    if (wb.available && typeof wb.connected === 'boolean' && wb.connectedKnown !== false) {
+      return { plugged: wb.connected, at: (wb.type === 'evcc' ? evccPolled() : pos(wb.sampleAt)) ?? nowMs };
+    }
+  } else {
+    const direct = ctx?.chargerStatus?.fresh?.();
+    if (direct && direct.connectedKnown !== false) return { plugged: direct.connected === true, at: pos(direct.at) ?? nowMs };
+    if (!direct) {
+      const lpId = Number(ctx?.getCfg?.()?.optimizer?.evEvccLoadpoint) || 1;
+      const lp = (ctx?.evccIntegration?.getLoadpoints?.() || []).find((l) => l.id === lpId);
+      if (lp) return { plugged: lp.connected === true, at: evccPolled() ?? nowMs };
+    }
+  }
+  const m = ctx?.vehicleMqtt?.getState?.();
+  if (typeof m?.plugged === 'boolean') return { plugged: m.plugged, at: pos(m.pluggedAt) ?? nowMs };
+  for (const kind of ['http', 'homeassistant']) {
+    const p = ctx?.vehiclePull?.getState?.(kind);
+    if (typeof p?.plugged === 'boolean') return { plugged: p.plugged, at: pos(p.pluggedAt) ?? nowMs };
+  }
+  return { plugged: null, at: null };
+}
+
+/**
  * Entprellt den Steck-Zustand: ein Wechsel zaehlt erst, wenn er `stableTicks`
  * Abfragen in Folge gleich bleibt (evcc meldet beim Anstecken/Abziehen kurz
  * wechselnde Werte; jeder Wechsel kostet einen EOS-Neuplan). Die allererste

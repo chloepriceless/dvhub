@@ -26,6 +26,14 @@ import { safeInterval } from '../safe-async.js';
 import { WALLBOX_TYPES } from '../wallbox/types.js';
 
 const DEFAULT_VOLTAGE_V = 230;
+/**
+ * Hoechster Strom einphasig: VDE-AR-N 4100 erlaubt einphasig hoechstens
+ * 4,6 kVA Schieflast, an 230 V also 20 A. evcc selbst deckelt einphasig nicht
+ * (1p skaliert bis zum maxCurrent des Ladepunkts, begrenzt nur ueber Fahrzeug,
+ * Box und Lastmanagement-Kreise) — die Grenze zieht DVhub (Fable R5 P2-2).
+ * optimizer.evOnePhaseMaxCurrentA darf sie nur verschaerfen.
+ */
+export const ONE_PHASE_MAX_A = 20;
 const STOP_MODES = ['off', 'pv', 'minpv'];
 export const CHARGER_TYPES = WALLBOX_TYPES;
 
@@ -46,7 +54,14 @@ export function resolveEvccBridgeConfig(cfg) {
   const num = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
   const phases = Number(opt.evPhases) === 1 ? 1 : 3;
   const minCurrentA = num(opt.evMinCurrentA, 6);
-  const maxChargeW = num(opt.evMaxChargeW, 5000);
+  const onePhaseMaxA = Math.min(ONE_PHASE_MAX_A, num(opt.evOnePhaseMaxCurrentA, ONE_PHASE_MAX_A));
+  // Lädt das Auto nur einphasig, ist die Schieflast-Grenze auch die
+  // Höchstleistung — für EOS (max_charge_power_w), die Zielrechnung und
+  // „Sofort laden“ (Codex 6390684a).
+  const maxChargeW = phases === 1
+    ? Math.min(num(opt.evMaxChargeW, 5000), onePhaseMaxA * DEFAULT_VOLTAGE_V)
+    : num(opt.evMaxChargeW, 5000);
+  const ampsFromW = snapToWholeAmps(maxChargeW / (DEFAULT_VOLTAGE_V * phases));
   return {
     enabled: opt.eosOptimizeEv === true && opt.evEvccControl === true,
     loadpoint: Number.isInteger(Number(opt.evEvccLoadpoint)) && Number(opt.evEvccLoadpoint) >= 1
@@ -56,7 +71,10 @@ export function resolveEvccBridgeConfig(cfg) {
     minCurrentA,
     // Die Obergrenze folgt aus der Ladeleistung, die EOS kennt — sonst koennte
     // evcc mehr ziehen, als EOS eingeplant hat.
-    maxCurrentA: Math.max(minCurrentA, snapToWholeAmps(maxChargeW / (DEFAULT_VOLTAGE_V * phases))),
+    // Laedt das Auto nur einphasig, gilt auch hier die Schieflast-Grenze —
+    // auch vor dem Mindeststrom (liegt er darüber, lädt die Box eben nicht).
+    maxCurrentA: phases === 1 ? Math.min(onePhaseMaxA, Math.max(minCurrentA, ampsFromW)) : Math.max(minCurrentA, ampsFromW),
+    onePhaseMaxA,
     maxChargeW,
     stopMode: STOP_MODES.includes(opt.evStopMode) ? opt.evStopMode : 'off',
     // Einphasig laden, wenn die Wallbox umschalten kann (evcc meldet es je
@@ -68,6 +86,11 @@ export function resolveEvccBridgeConfig(cfg) {
   };
 }
 
+/** Höchste Ladeleistung, die DVhub dem Auto gibt (einphasig höchstens die Schieflast-Grenze). */
+export function effectiveEvMaxChargeW(cfg) {
+  return resolveEvccBridgeConfig(cfg).maxChargeW;
+}
+
 const round2 = (v) => Math.round(v * 100) / 100;
 /**
  * Ladestufen fürs Auto in EOS (Anteile der max. Ladeleistung): nur, was die
@@ -75,17 +98,26 @@ const round2 = (v) => Math.round(v * 100) / 100;
  * 4,14 kW), mit Phasenumschaltung zusätzlich einphasig vom Mindeststrom bis
  * zum Höchststrom je Phase (6–16 A: 1,38–3,68 kW). Vorher plante EOS auch
  * 1,1 kW, die Wallbox lud dann mit 4,1 kW.
+ * Einphasig höchstens onePhaseMaxA (20 A = 4,6 kVA Schieflast): zwischen
+ * 4,6 kW und der dreiphasigen Mindestleistung gibt es keine Stufe; liegt der
+ * Mindeststrom darüber, gibt es gar keine einphasigen Stufen (Fable R5 P2-2).
  */
-export function evChargeRates({ maxChargeW, minCurrentA = 6, maxCurrentA = 16, phases = 3, onePhase = false, voltageV = DEFAULT_VOLTAGE_V }) {
+export function evChargeRates({ maxChargeW, minCurrentA = 6, maxCurrentA = 16, phases = 3, onePhase = false, onePhaseMaxA = ONE_PHASE_MAX_A, voltageV = DEFAULT_VOLTAGE_V }) {
   const maxW = Number(maxChargeW) > 0 ? Number(maxChargeW) : 5000;
   const minA = Number(minCurrentA) > 0 ? Number(minCurrentA) : 6;
   const ph = Number(phases) === 1 ? 1 : 3;
+  const oneMaxA = Math.min(ONE_PHASE_MAX_A, Number(onePhaseMaxA) > 0 ? Number(onePhaseMaxA) : ONE_PHASE_MAX_A);
   const minW = minA * voltageV * ph;
+  // Einphasiges Auto: Stufen nur bis zur Schieflast-Grenze (darüber lädt die
+  // Box ohnehin nicht, maxCurrentA ist gedeckelt), die Grenze selbst als Stufe.
+  const topW = ph === 1 ? oneMaxA * voltageV : Infinity;
+  const topRate = topW < maxW ? Math.floor(topW / maxW * 100 + 1e-9) / 100 : 1;
   const out = new Set([0]);
-  for (let k = 1; k <= 10; k += 1) if (k / 10 * maxW >= minW - 1e-6) out.add(round2(k / 10));
-  if (onePhase && ph === 3) {
+  for (let k = 1; k <= 10; k += 1) if (k / 10 * maxW >= minW - 1e-6 && k / 10 * maxW <= topW + 1e-6) out.add(round2(k / 10));
+  if (ph === 1 && topW < maxW && topW >= minW - 1e-6) out.add(topRate);
+  if (onePhase && ph === 3 && minA <= oneMaxA) {
     const lo = Math.ceil(minA * voltageV / maxW * 100 - 1e-9) / 100;
-    const hi = Math.floor(Math.min(Number(maxCurrentA) * voltageV, minW - 1) / maxW * 100 + 1e-9) / 100;
+    const hi = Math.floor(Math.min(Math.min(Number(maxCurrentA), oneMaxA) * voltageV, minW - 1) / maxW * 100 + 1e-9) / 100;
     if (hi >= lo) {
       out.add(lo);
       for (let r = Math.ceil(lo * 20 + 1e-9) / 20; r < hi - 1e-9; r += 0.05) out.add(round2(r));
@@ -94,14 +126,18 @@ export function evChargeRates({ maxChargeW, minCurrentA = 6, maxCurrentA = 16, p
   }
   // Liegt der Mindeststrom über der eingestellten Leistung, lädt die Box
   // trotzdem mit ihm (powerToCurrentA) — EOS darf dann wenigstens „voll“ planen.
-  if (out.size === 1) out.add(1);
+  // Einphasig nie über die Grenze, auch dann nicht. Liegt der Mindeststrom
+  // eines einphasigen Autos über der Grenze, geht gar nichts: nur 0 (EOS nimmt
+  // eine Liste mit einem Wert; die Brücke stoppt hart — Codex 701bde37).
+  if (out.size === 1 && !(ph === 1 && topW < minW - 1e-6)) out.add(ph === 1 ? topRate : 1);
   return [...out].sort((a, b) => a - b);
 }
 
 /** Kann der eingestellte Ladepunkt gerade einphasig laden? (evcc: chargerPhases1p3p) */
 export function onePhaseChargingAvailable(cfg, loadpoints = []) {
   const bc = resolveEvccBridgeConfig(cfg);
-  if (!bc.phaseSwitch || bc.charger !== 'evcc') return false;
+  // Mindeststrom über der Schieflast-Grenze: einphasig geht nichts (P2-2).
+  if (!bc.phaseSwitch || bc.charger !== 'evcc' || bc.minCurrentA > bc.onePhaseMaxA) return false;
   const lp = (Array.isArray(loadpoints) ? loadpoints : []).find((l) => Number(l?.id) === bc.loadpoint);
   return lp?.phases1p3p === true;
 }
@@ -113,7 +149,14 @@ export function onePhaseChargingAvailable(cfg, loadpoints = []) {
  */
 export function powerToCurrentA(powerW, bc) {
   const raw = snapToWholeAmps(powerW / (bc.voltageV * bc.phases));
-  const clamped = Math.min(bc.maxCurrentA, Math.max(bc.minCurrentA, raw));
+  // Einphasig nie über die Schieflast-Grenze (20 A bzw. die strengere aus der
+  // Konfiguration). Mit Umschaltung kommt es dazu nicht (onePhaseChargingAvailable
+  // schaltet nur bei Mindeststrom ≤ Grenze um).
+  const oneMaxA = Number(bc.onePhaseMaxA) > 0 ? Math.min(ONE_PHASE_MAX_A, Number(bc.onePhaseMaxA)) : ONE_PHASE_MAX_A;
+  const maxA = bc.phases === 1 ? Math.min(bc.maxCurrentA, oneMaxA) : bc.maxCurrentA;
+  // Einphasig gewinnt die Grenze auch gegen den Mindeststrom (Codex 6390684a):
+  // lieber nicht laden als die Schieflast überschreiten.
+  const clamped = Math.min(maxA, Math.max(bc.minCurrentA, raw));
   return Math.round(clamped * 10) / 10;
 }
 
@@ -380,7 +423,7 @@ export function createEosEvccBridge(deps) {
   // Felder des Netzanschluss-Deckels an evcc (evccCapTick) überleben jeden
   // Befehl am selben Gerät: Ursprungsstrom, gesetzter Deckel, Pause.
   const capFields = (prev, ident) => (prev && prev.identity === ident
-    ? { limitA: prev.limitA ?? null, limitTried: prev.limitTried === true, limitOff: prev.limitOff === true, capOffTried: prev.capOffTried === true, origMaxCurrentA: prev.origMaxCurrentA ?? null, dvhubModes: Array.isArray(prev.dvhubModes) ? prev.dvhubModes : [] }
+    ? { limitA: prev.limitA ?? null, limitTried: prev.limitTried === true, limitOff: prev.limitOff === true, capOffTried: prev.capOffTried === true, origMaxCurrentA: prev.origMaxCurrentA ?? null, dvhubModes: Array.isArray(prev.dvhubModes) ? prev.dvhubModes : [], ...(prev.limitOnly === true ? { limitOnly: true } : {}) }
     : {});
   // Phasen-Felder überleben ebenso jeden Befehl am selben Gerät: zuletzt
   // bestätigte (phases) und versuchte (phasesTried, phasesAt) DVhub-Phasen und
@@ -671,6 +714,23 @@ export function createEosEvccBridge(deps) {
         return { ok: true, skipped: 'identity_changed' };
       }
     }
+    // Reine Obergrenze (Fable R1 P2-5): Strom von vorher zurück.
+    const limitRec = owned.get(targetKey(target));
+    if (limitRec?.limitOnly === true && charger.type !== 'evcc' && typeof charger.unlimit === 'function') {
+      // Steht an DIESER Box noch eine Grenze (z. B. Ende von „Sofort laden“
+      // unter einem Deckel): nicht erst den Strom von vorher, sondern direkt
+      // an die Grenze übergeben (Codex 3a1d403f, P1).
+      if (getGridCapW() != null && targetKey(target) === targetKey(bc)) {
+        const handed = await gridCapOnlyTick(cfg, bc, true);
+        if (handed) return handed;
+      }
+      const res = await undoLimit(charger, targetKey(target), limitRec);
+      if (res?.ok) {
+        pushLog('eos_wallbox_unlimited', { charger: charger.type, currentA: limitRec.origMaxCurrentA ?? null });
+        lastSent = null;
+      }
+      return res;
+    }
     // openWB ohne übergeordneten Regler: release() tut nichts, die letzte
     // Vorgabe bliebe stehen. Nach einer Grenz-Vorgabe bekommt die Box ihren
     // vollen Strom zurück (Gesamtprüfung 5, P2).
@@ -721,7 +781,9 @@ export function createEosEvccBridge(deps) {
         continue;
       }
       // openWB: voller Strom der damaligen Einstellung (Codex a2686af7, P2).
-      const res = e.charger === 'openwb' ? await ch.charge(e.maxCurrentA ?? bc.maxCurrentA) : await ch.release();
+      // Reine Obergrenze: Strom von vorher (Fable R1 P2-5).
+      const res = e.limitOnly === true && typeof ch.unlimit === 'function' ? await undoLimit(ch, key, e)
+        : (e.charger === 'openwb' ? await ch.charge(e.maxCurrentA ?? bc.maxCurrentA) : await ch.release());
       if (res?.ok) {
         setOwned(key, null);
         if (lastSent && targetKey({ charger: lastSent.charger, loadpoint: lastSent.loadpoint }) === key) lastSent = null;
@@ -987,12 +1049,22 @@ export function createEosEvccBridge(deps) {
       return { ok: true, sent: lastSent, override: true };
     }
 
-    const capped = applyGridCap({ action: 'charge', currentA: powerToCurrentA(override.powerW, bc) }, bc, getGridCapW());
+    // Einphasig (Auto lädt nur einphasig oder der Kunde hat in evcc 1 Phase
+    // gewählt): Strom für eine Phase, höchstens die Schieflast-Grenze; liegt
+    // der Mindeststrom darüber, nicht laden — hart aus (Codex 701bde37). Die
+    // Netzanschluss-Grenze bleibt dreiphasig gerechnet (die strengere Lesart).
+    const onePhase = bc.phases === 1 || (charger.type === 'evcc' && phasesHandsOff(targetKey(bc)) && customerPhases(bc) === 1);
+    let capped = applyGridCap({ action: 'charge', currentA: powerToCurrentA(override.powerW, onePhase ? { ...bc, phases: 1 } : bc) }, bc, getGridCapW());
+    if (onePhase && bc.minCurrentA > bc.onePhaseMaxA) capped = { action: 'stop', currentA: null, gridCapW: null, onePhaseBlocked: true };
     if (capped.action === 'stop') {
       // §14a-Grenze unter dem Mindeststrom: „Sofort laden“ pausiert, bis die
       // Steuerbox die Grenze aufhebt.
       const key = `${bc.charger}:${bc.loadpoint}:override:grid-cap`;
-      if (force || lastSent?.key !== key) {
+      // evcc inzwischen von außen umgestellt (z. B. „now“): erneut „aus“
+      // (Codex d4e3104f, P1 — wie in den anderen Override-Zweigen).
+      const drift = charger.type === 'evcc' && st?.ok && (st.raw?.mode ?? null) !== 'off';
+      if (force || lastSent?.key !== key || drift) {
+        if (drift && lastSent?.key === key) pushLog('eos_evcc_mode_corrected', { loadpoint: bc.loadpoint, found: st.raw?.mode ?? null, expected: 'off', override: true });
         const res = await hardStopper(cfg, bc, charger).stop();
         if (!res?.ok) return { ok: false, error: res?.error || 'wallbox write failed', override: true };
         // override: true — sonst stellte endOverride() den evcc-Modus von
@@ -1063,6 +1135,9 @@ export function createEosEvccBridge(deps) {
     if (!charger.isConfigured()) return null;
     // Ohne Grenze lädt die Box mit ihrem Höchststrom; mit Grenze höchstens der Anteil.
     const slot = applyGridCap({ action: 'charge', currentA: bc.maxCurrentA }, bc, capW);
+    // Fable R1 P2-5: nur begrenzen, nicht übernehmen — wo die Box eine reine
+    // Strom-Obergrenze kennt. Unter dem Mindeststrom bleibt es beim Stopp.
+    if (slot.action === 'charge' && limitOnlyCapable(cfg, charger, bc)) return limitOnlyTick(cfg, bc, charger, slot, capW, force);
     const key = `${bc.charger}:${bc.loadpoint}:p14a:${slot.action}:${slot.currentA ?? ''}`;
     // Erzwungen (Wächter: Deckel geändert oder nicht befolgt): ohne Dubletten-Filter.
     if (!force && lastSent?.key === key) return { ok: true, unchanged: true, gridCapW: Number(capW) };
@@ -1074,8 +1149,115 @@ export function createEosEvccBridge(deps) {
     }
     lastSent = { key, charger: bc.charger, action: slot.action, currentA: slot.currentA ?? null, loadpoint: bc.loadpoint, at: new Date(now()).toISOString(), gridCap: true };
     markGridCap(bc, true);
-    pushLog('paragraph14a_wallbox_capped', { charger: charger.type, capW: Number(capW), action: slot.action, currentA: slot.currentA ?? null });
+    // mode 'charge': Box ohne reine Strom-Obergrenze — die Grenze geht als Ladebefehl raus.
+    pushLog('paragraph14a_wallbox_capped', { charger: charger.type, capW: Number(capW), action: slot.action, currentA: slot.currentA ?? null, ...(slot.action === 'charge' ? { mode: 'charge' } : {}) });
     return { ok: true, sent: lastSent, gridCapW: Number(capW) };
+  }
+
+  // Fable R1 P2-5: Kann die direkte Box eine reine Strom-Obergrenze (limit,
+  // unlimit, limitState — go-e, Wattpilot, OpenEVSE), und steuert DVhub sie
+  // gerade nicht selbst (kein Datensatz oder nur die eigene Obergrenze)?
+  function limitOnlyCapable(cfg, charger, bc) {
+    if (bc.charger === 'evcc' || charger?.type === 'evcc') return false;
+    if (!['limit', 'unlimit', 'limitState'].every((k) => typeof charger?.[k] === 'function')) return false;
+    const e = owned.get(targetKey(bc));
+    return !e || e.limitOnly === true;
+  }
+
+  // Eigene Obergrenze zurücknehmen: hat DVhub die Box darunter gestoppt
+  // (Deckel unter dem Mindeststrom) oder selbst laden lassen, erst freigeben,
+  // dann den Strom von vorher. Scheitert der zweite Schritt, bleibt der
+  // Datensatz als Obergrenze stehen (nächster Versuch nur noch unlimit).
+  async function undoLimit(charger, key, rec) {
+    if (rec.cmd !== 'limit') {
+      const rel = await charger.release();
+      if (!rel?.ok) return rel || { ok: false, error: 'release failed' };
+    }
+    const res = await charger.unlimit({ origCurrentA: rec.origMaxCurrentA ?? null });
+    if (res?.ok) setOwned(key, null);
+    else setOwned(key, { ...rec, cmd: 'limit' });
+    return res;
+  }
+
+  async function limitOnlyTick(cfg, bc, charger, slot, capW, force) {
+    const key = targetKey(bc);
+    let ident;
+    try { ident = typeof charger.identity === 'function' ? charger.identity() : wallboxIdentity(cfg, bc.charger); } catch { ident = null; }
+    let e = owned.get(key) || null;
+    if (e && e.identity && ident && e.identity !== ident) {
+      // Anderes Gerät eingetragen: der alte Datensatz gilt nicht für dieses.
+      pushLog('ev_owned_identity_changed', { charger: bc.charger }, 'warn');
+      setOwned(key, null);
+      e = null;
+    }
+    const cmdKey = `${bc.charger}:${bc.loadpoint}:cap-limit:${slot.currentA}`;
+    if (!force && e?.cmd === 'limit' && e.confirmed === true && lastSent?.key === cmdKey) return { ok: true, unchanged: true, gridCapW: Number(capW) };
+    const at = new Date(now()).toISOString();
+    if (!e) {
+      // Strom von vorher VOR dem ersten Befehl merken — eine verlorene Quittung
+      // darf ihn nicht verlieren. Unlesbar: der Höchststrom der Einstellung.
+      let st;
+      try { st = await charger.status(); } catch { st = null; }
+      const cur = Number(st?.currentA);
+      const orig = st?.ok && Number.isFinite(cur) && cur >= 6 ? cur : bc.maxCurrentA;
+      e = { charger: bc.charger, loadpoint: bc.loadpoint, identity: ident, maxCurrentA: bc.maxCurrentA, cmd: 'limit', limitOnly: true, origMaxCurrentA: orig, limitA: null, gridCap: true, confirmed: false, dvhubStarted: false, at };
+      setOwned(key, e);
+    }
+    if (isPaused()) return { ok: false, skipped: 'paused' };
+    // Hatte DVhub die Box gestoppt (Deckel unter dem Mindeststrom) oder selbst
+    // laden lassen: Grenze und Freigabe in einem Schritt, Strom zuerst — nie
+    // frei mit dem alten Strom (Codex 3a1d403f, P1).
+    const resume = e.cmd !== 'limit';
+    // Versuchte Grenze vor dem Befehl merken (limitTriedA), die zuletzt
+    // quittierte bleibt (limitA): der Not-Halt erkennt beide (Codex 3a1d403f, P2).
+    setOwned(key, { ...e, limitTriedA: slot.currentA, gridCap: true, confirmed: false, at });
+    const res = await charger.limit(slot.currentA, { resume });
+    if (!res?.ok) {
+      lastError = res?.error || 'wallbox write failed';
+      pushLog('paragraph14a_wallbox_error', { charger: charger.type, error: lastError });
+      return { ok: false, error: lastError };
+    }
+    // Wieder reine Grenz-Vorgabe (auch nach einer Übergabe aus „Sofort laden“,
+    // das gridCap gelöscht haben kann) — sonst fände der Neustart sie nicht
+    // (Codex 38faa2d6, P2).
+    setOwned(key, { ...(owned.get(key) || e), cmd: 'limit', limitA: slot.currentA, limitTriedA: null, gridCap: true, dvhubStarted: false, confirmed: true, at });
+    lastSent = { key: cmdKey, charger: bc.charger, action: 'limit', currentA: slot.currentA, loadpoint: bc.loadpoint, identity: ident, at, gridCap: true };
+    pushLog('paragraph14a_wallbox_capped', { charger: charger.type, capW: Number(capW), action: 'limit', currentA: slot.currentA });
+    return { ok: true, sent: lastSent, gridCapW: Number(capW) };
+  }
+
+  // Not-Halt: eigene Obergrenzen an direkten Boxen einmal zurück — nur, wenn
+  // sie frisch gelesen noch stehen (sonst hat jemand umgestellt: nichts senden).
+  async function neutralizeDirectLimits(cfg, bc0, { released, skipped, errors }) {
+    for (const e of [...owned.values()]) {
+      if (e.charger === 'evcc' || e.limitOnly !== true || e.cmd !== 'limit') continue;
+      const key = targetKey(e);
+      const bc = { ...bc0, charger: e.charger, loadpoint: e.loadpoint ?? bc0.loadpoint };
+      const charger = getCharger(cfg, bc);
+      if (!charger?.isConfigured?.() || typeof charger.limitState !== 'function' || typeof charger.unlimit !== 'function') { skipped.push('not_configured'); continue; }
+      let curIdent;
+      try { curIdent = typeof charger.identity === 'function' ? charger.identity() : wallboxIdentity(cfg, e.charger); } catch { curIdent = null; }
+      if (e.identity && curIdent == null) { skipped.push('state_unknown'); continue; }
+      if (e.identity && e.identity !== curIdent) { setOwned(key, null); skipped.push('identity_changed'); continue; }
+      // Zuletzt quittierte und zuletzt versuchte Grenze: steht eine davon, ist es DVhubs.
+      const cands = [...new Set([e.limitA, e.limitTriedA].filter((a) => a != null && Number.isFinite(Number(a))).map(Number))];
+      let known = cands.length > 0;
+      let active = false;
+      for (const a of cands) {
+        let ds;
+        try { ds = await charger.limitState({ limitA: a }); } catch { ds = null; }
+        if (!ds?.known) { known = false; break; }
+        if (ds.active) { active = true; break; }
+      }
+      const sameTarget = () => lastSent && targetKey({ charger: lastSent.charger || e.charger, loadpoint: lastSent.loadpoint ?? e.loadpoint }) === key;
+      if (!known) { pushLog('ev_emergency_stop_state_unknown', { charger: e.charger }, 'warn'); skipped.push('state_unknown'); continue; }
+      if (!active) { setOwned(key, null); if (sameTarget()) lastSent = null; skipped.push('not_dvhub_state'); continue; }
+      const r = await charger.unlimit({ origCurrentA: e.origMaxCurrentA ?? null });
+      if (!r?.ok) { errors.push(r?.error || 'wallbox unlimit failed'); continue; }
+      setOwned(key, null);
+      if (sameTarget()) lastSent = null;
+      released.push(`${e.charger}:${e.loadpoint ?? bc0.loadpoint}`);
+    }
   }
 
   // Netzanschluss-Deckel an evcc-Ladepunkten, die DVhub gerade NICHT selbst
@@ -1489,17 +1671,35 @@ export function createEosEvccBridge(deps) {
         }
       } else if (slot.action === 'charge' && typeof charger.setPhases === 'function' && getGridCapW() == null
         && !unplugged && onePhaseChargingAvailable(cfg, getEvccLoadpoints())) {
-        if (Number(slot.chargePowerW) < minChargeW(bc)) {
+        // Einphasig nur, was mit höchstens onePhaseMaxA geht; darüber (bis zur
+        // dreiphasigen Mindestleistung) dreiphasig mit Mindeststrom — sonst
+        // zöge eine Phase z. B. 30 A (Fable R5 P2-2).
+        if (Number(slot.chargePowerW) < minChargeW(bc) && Number(slot.chargePowerW) <= bc.onePhaseMaxA * bc.voltageV + 1e-6) {
           const one = { ...bc, phases: 1 };
           slot = { ...slot, phases: 1, currentA: powerToCurrentA(slot.chargePowerW, one) };
         } else slot = { ...slot, phases: 3 };
       }
+      // Einphasig unmöglich (Mindeststrom über der Schieflast-Grenze, Auto nur
+      // einphasig oder vom Kunden auf 1 Phase gestellt): nicht laden, hart aus —
+      // ein Strom unter dem Mindeststrom lehnt evcc ab, und eine laufende
+      // Ladung liefe mit dem alten Strom weiter (Codex 701bde37, P1).
+      // Lädt das Auto nur einphasig, gilt das auch für Stopp-Slots: ein eigener
+      // Modus (pv/minpv) ließe evcc einphasig mit dem Mindeststrom laden
+      // (Codex d4e3104f, P1) — hart aus, unabhängig vom Plan.
+      const onePhaseBlocked = bc.minCurrentA > bc.onePhaseMaxA && !maxStop && (
+        bc.phases === 1
+        || (slot.action === 'charge' && (slot.phases === 1 || (charger.type === 'evcc' && phasesHandsOff(targetKey(bc)) && customerPhases(bc) === 1))));
+      if (onePhaseBlocked) {
+        if (lastSent?.key !== `${bc.charger}:${bc.loadpoint}:one-phase-blocked`) pushLog('ev_one_phase_blocked', { minCurrentA: bc.minCurrentA, onePhaseMaxA: bc.onePhaseMaxA }, 'warn');
+        slot = { ...slot, action: 'stop', currentA: null, chargePowerW: null, onePhaseBlocked: true };
+      }
       const capStop = slot.action === 'stop' && (slot.gridCapW != null || getGridCapW() != null);
-      const hardStop = capStop || maxStop;
+      const hardStop = capStop || maxStop || onePhaseBlocked;
       // DVhubs Ladung vorbei (oder kein Auto da): Phasen danach zurück.
       const phasesDone = slot.action !== 'charge' || unplugged;
       const phaseReason = unplugged ? 'unplugged' : (maxStop ? 'max_soc' : (capStop ? 'grid_cap' : 'plan_stop'));
-      const key = capStop ? `${bc.charger}:${bc.loadpoint}:grid-cap-stop`
+      const key = onePhaseBlocked ? `${bc.charger}:${bc.loadpoint}:one-phase-blocked`
+        : capStop ? `${bc.charger}:${bc.loadpoint}:grid-cap-stop`
         : (maxStop ? `${bc.charger}:${bc.loadpoint}:max-soc-stop` : commandKey(bc, slot));
       if (!force && lastSent?.key === key) {
         // Unveraendert — aber wurde evcc inzwischen von aussen umgestellt
@@ -1591,6 +1791,8 @@ export function createEosEvccBridge(deps) {
         const phaseSnapshot = [...owned.values()].filter((e) => e.charger === 'evcc' && e.phasesPrev != null && !e.phasesForeign).map((e) => ({ ...e }));
         // evcc-Deckel (evccCapTick) einmal zurücknehmen.
         await neutralizeEvccCaps(cfg, bc0, { released, skipped, errors });
+        // Reine Obergrenzen an direkten Boxen ebenso (Fable R1 P2-5).
+        await neutralizeDirectLimits(cfg, bc0, { released, skipped, errors });
         // Jedes Ziel, an dem DVhubs letzter Befehl „laden“ war (quittiert oder
         // nicht), für sich: frisch prüfen, dann einmal hart aus.
         const targets = [...owned.values()].filter((e) => e.cmd === 'charge');
@@ -1613,7 +1815,10 @@ export function createEosEvccBridge(deps) {
             skipped.push('identity_changed');
             continue;
           }
-          const refState = { ...ref, currentAs: [ref.currentA, ref.confirmedCurrentA].filter((c) => c != null && Number.isFinite(Number(c))) };
+          // Dazu eine versuchte Übergabe an die Grenze (limitTriedA/limitA):
+          // kam nur der Strom an, lädt die Box noch auf DVhubs Befehl mit dem
+          // neuen Strom (Codex 38faa2d6, P1).
+          const refState = { ...ref, currentAs: [ref.currentA, ref.confirmedCurrentA, ref.limitTriedA, ref.limitA].filter((c) => c != null && Number.isFinite(Number(c))) };
           if (charger.type !== 'evcc') {
             // Direkte Box: frisch lesen, ob DVhubs Befehl noch steht (Punkt 2).
             // Kann der Adapter das nicht: nicht senden („im Zweifel nicht“).
