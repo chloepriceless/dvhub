@@ -38,11 +38,14 @@ function stopCtx({ wallbox = { ok: true }, heater = { ok: true }, devices = { ok
   return { ctx, logs, calls };
 }
 
-test('Not-Halt an: Netz-Sollwert 0 und EINMAL Wallbox, Heizstab, Geräte neutralisieren', async () => {
+// Christin 10.11.2026: „Netz-Sollwert – das was in Victron drinsteht – nichts
+// ändern.“ Bis bd18f099 schrieb der Eintritt hier einmal gridSetpointW = 0.
+test('Not-Halt an: Netz-Sollwert unverändert (kein Write) und EINMAL Wallbox, Heizstab, Geräte neutralisieren', async () => {
   const { ctx, calls } = stopCtx();
   const r = await setEmergencyStop(ctx, { on: true });
   assert.equal(r.paused, true);
-  assert.deepEqual(calls.setpoint, [['gridSetpointW', 0, 'emergency_stop']]);
+  assert.deepEqual(calls.setpoint, [], 'kein Netz-Sollwert-Write beim Eintritt');
+  assert.deepEqual(r.neutralize, { ok: true, skipped: true, reason: 'setpoint_unchanged' });
   assert.deepEqual([calls.wallbox, calls.heater, calls.devices], [1, 1, 1]);
   await setEmergencyStop(ctx, { on: true }); // schon aktiv
   assert.deepEqual([calls.wallbox, calls.heater, calls.devices], [1, 1, 1], 'kein zweites Mal');

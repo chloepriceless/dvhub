@@ -2080,7 +2080,9 @@ function renderSourceMismatch(sm) {
 
 async function handleEmergencyStop() {
   const go = typeof window !== 'undefined' && typeof window.confirm === 'function'
-    ? window.confirm('NOT-HALT aktivieren?\n\nGrid-Setpoint wird einmalig auf 0 gesetzt (Eigenverbrauchsregelung), danach werden alle Markt-/Optimizer-/Hand-Steuerbefehle gestoppt, bis du fortsetzt.\n\nDVhub steuert dann nichts mehr — als wäre es aus: auch §51-Abregelung, Direktvermarkter-Abregelung, §14a und der SoC-Boden-Schutz sind ausgesetzt. Von DVhub gesetzte Abregelungen werden einmal aufgehoben. Messwerte und Protokoll laufen weiter.')
+    // Christin 10.11.2026: „Netz-Sollwert – das was in Victron drinsteht –
+    // nichts ändern.“ Der Text verspricht deshalb keinen Sollwert 0 mehr.
+    ? window.confirm('NOT-HALT aktivieren?\n\nDVhub steuert dann nichts mehr — als wäre es aus —, bis du fortsetzt: keine Markt-, Optimizer- oder Hand-Steuerbefehle, auch §51-Abregelung, Direktvermarkter-Abregelung, §14a und der SoC-Boden-Schutz sind ausgesetzt. Von DVhub gesetzte Abregelungen und Gerätevorgaben werden einmal zurückgenommen.\n\nDen Netz-Sollwert schreibt DVhub nicht: es bleibt, was in der Anlage steht (wie bei ausgeschaltetem DVhub). Messwerte und Protokoll laufen weiter.')
     : true;
   if (!go) return;
   try {
@@ -2090,10 +2092,9 @@ async function handleEmergencyStop() {
       setControlMsg(`Not-Halt fehlgeschlagen: ${payload.error || res.status}`, true);
       return;
     }
-    const n = payload.neutralize;
-    setControlMsg(n && (n.ok || n.skipped)
-      ? 'NOT-HALT aktiv — Setpoint neutralisiert (0 W), Steuerung pausiert.'
-      : `NOT-HALT aktiv — ABER Neutralisierung fehlgeschlagen (${n?.error || 'unbekannt'}): letzter Setpoint kann noch anliegen!`, !(n && (n.ok || n.skipped)));
+    // Seit 10.11.2026 kein Sollwert-Write beim Eintritt (neutralize.reason
+    // 'setpoint_unchanged'); Fehlschläge einzelner Rücknahmen stehen im Protokoll.
+    setControlMsg('NOT-HALT aktiv — Steuerung pausiert, Netz-Sollwert unverändert (was in der Anlage steht, bleibt).');
   } catch (e) {
     setControlMsg(`Not-Halt fehlgeschlagen: ${e.message}`, true);
     return;

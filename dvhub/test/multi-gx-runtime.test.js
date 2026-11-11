@@ -1,6 +1,6 @@
 // test/multi-gx-runtime.test.js -- Laufzeitdienst fuer die zweite Victron-GX:
 // liest Ladestand/Akkuleistung/Mindest-SoC, schreibt den Netz-Sollwert 2716/2717
-// (int32, fluechtig → jeden Takt), erkennt Ausfall, folgt Not-Halt und
+// (int32, fluechtig → jeden Takt), erkennt Ausfall, schweigt im Not-Halt, folgt der
 // Einspeisesperre. Modbus ist eine Attrappe.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -117,14 +117,18 @@ test('drei Fehlversuche: offline, Sollwert 0, Meldung einmal im Protokoll; danac
   assert.equal(s.logs.filter(([e]) => e === 'multi_gx_online').length, 1);
 });
 
-test('Not-Halt: sofort 0 an die zweite Anlage', async () => {
+// Christin 10.11.2026: „Netz-Sollwert – das was in Victron drinsteht – nichts
+// ändern.“ Bis bd18f099 ging hier sofort eine 0 an die zweite Anlage.
+test('Not-Halt: kein Sollwert-Write an die zweite Anlage (auch keine 0)', async () => {
   const tr = fakeTransport();
   const s = setup({ transport: tr });
   for (let i = 0; i < 8; i++) await s.tick();
+  const before = writes(tr).length;
   s.state.ctrl.discretionaryWritesPaused = true;
-  await s.tick();
-  assert.equal(int32(writes(tr).at(-1).values), 0);
+  await s.tick(); await s.tick();
+  assert.equal(writes(tr).length, before, 'kein 2716-Write im Not-Halt');
   assert.equal(s.state.multiGx.reason, 'stop');
+  assert.equal(s.state.multiGx.setpointW, null);
 });
 
 test('Direktvermarkter-Abregelung oder negativer Preis: zweite Anlage speist nicht ins Hausnetz', async () => {
@@ -293,15 +297,34 @@ test('EOS-Abgleich: gibt nach maxRetries auf, ein neuer Wechsel ersetzt den alte
   assert.equal(calls.filter((c) => c === 'replan').length, 0);
 });
 
-test('Not-Halt schreibt 0, auch wenn das Lesen gerade scheitert', async () => {
+test('Not-Halt schreibt auch bei scheiterndem Lesen nichts an die zweite Anlage', async () => {
   let readFail = false;
   const tr = fakeTransport({ fail: (req) => readFail && req.address !== 2716 });
   const s = setup({ transport: tr });
   for (let i = 0; i < 6; i++) await s.tick();
+  const before = writes(tr).length;
   readFail = true;
   s.state.ctrl.discretionaryWritesPaused = true;
-  await s.tick();
-  const w = tr.calls.filter((c) => c.op === 'write');
-  assert.equal(((w.at(-1).values[0] << 16) | w.at(-1).values[1]) >> 0, 0);
-  assert.ok(w.at(-1) === tr.calls.at(-1), 'die 0 war der letzte Schreibzugriff');
+  await s.tick(); await s.tick();
+  assert.equal(writes(tr).length, before, 'kein 2716-Write im Not-Halt');
+});
+
+// Codex 9bb263e9 (P2): Vor dem Not-Halt gescheiterte Writes dürfen im Nur-Lese-
+// Betrieb des Not-Halts nicht weiterwirken — sonst flattert die Anlage alle 5 s
+// offline/online und EOS plant jedes Mal neu.
+test('Not-Halt nach gescheiterten Writes: kein Offline/Online-Flattern, solange das Lesen klappt', async () => {
+  let failWrites = true;
+  const tr = fakeTransport({ fail: (req) => failWrites && Array.isArray(req.values) });
+  const s = setup({ transport: tr });
+  for (let i = 0; i < 4; i++) await s.tick();
+  assert.equal(s.state.multiGx.online, false, 'drei gescheiterte Writes → nicht verfügbar');
+  failWrites = false; // Verbindung wieder gut, aber im Not-Halt wird nicht geschrieben
+  s.state.ctrl.discretionaryWritesPaused = true;
+  const logsBefore = s.logs.length;
+  const availBefore = s.availability.length;
+  for (let i = 0; i < 6; i++) await s.tick();
+  const flaps = s.logs.slice(logsBefore).filter(([e]) => e === 'multi_gx_offline' || e === 'multi_gx_online');
+  assert.ok(flaps.length <= 1, `höchstens ein Wechsel (zurück auf verfügbar), nicht ${flaps.length}`);
+  assert.ok(s.availability.length - availBefore <= 1, 'keine wiederholten EOS-Abgleiche');
+  assert.equal(s.state.multiGx.online, true, 'lesbar = verfügbar');
 });

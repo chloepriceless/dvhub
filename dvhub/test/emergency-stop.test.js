@@ -2,16 +2,19 @@
 //
 // T-0099 NOT-HALT contract:
 //   1. isMandatoryControlSource is a WHITELIST — only §51 curtailment, the
-//      SoC-floor safety write and the stop's own neutralization pass; every
-//      other (including future, unclassified) source is discretionary.
+//      SoC-floor safety write and the (retired) emergency_stop source are
+//      mandatory; every other (including future, unclassified) source is
+//      discretionary.
 //   2. With state.ctrl.discretionaryWritesPaused set, applyControlTarget
 //      blocks discretionary sources BEFORE any state mutation (lastWrite/
 //      active untouched) and logs control_write_blocked_nothalt once per
 //      (target,source).
 //   3. Mandatory sources keep writing hardware while paused.
-//   4. POST /api/control/stop sets the flag FIRST, then neutralizes
-//      gridSetpointW=0 via the whitelisted 'emergency_stop' source, persists,
-//      and never auto-resumes. POST /api/control/resume clears flag + throttle.
+//   4. POST /api/control/stop sets the flag FIRST, persists, and never
+//      auto-resumes. Den Netz-Sollwert schreibt es NICHT (Christin 10.11.2026:
+//      „Netz-Sollwert – das was in Victron drinsteht – nichts ändern.“), bis
+//      1.0.10-Kandidat bd18f099 kam hier einmal gridSetpointW=0 über die Quelle
+//      'emergency_stop'. POST /api/control/resume clears flag + throttle.
 //
 // Harness: makeCtx from control-path-hardening.test.js (gate) + minimal-ctx
 // route harness from schedule-rules-toggle.test.js (endpoints).
@@ -122,15 +125,17 @@ test('paused: §51-Abregelung und SoC-Boden-Nullung schreiben im Not-Halt NICHT 
   assert.equal(writes.length, 0, 'im Not-Halt keine Pflicht-Writes mehr');
 });
 
-test('paused: the emergency_stop neutralization itself passes the gate', async () => {
+// Christin 10.11.2026: Netz-Sollwert beim Not-Halt unverändert — auch die
+// frühere Neutralisierungs-Quelle kommt nicht mehr durch das Tor (fail-safe).
+test('paused: die frühere Neutralisierungs-Quelle emergency_stop schreibt den Netz-Sollwert NICHT', async () => {
   const { evaluator, state, writes } = makeEvalCtx();
   state.ctrl.discretionaryWritesPaused = true;
 
   const r = await evaluator.applyControlTarget('gridSetpointW', 0, 'emergency_stop');
 
-  assert.equal(r.ok, true);
-  assert.equal(writes.length, 1, 'neutralization write must pass');
-  assert.equal(writes[0].value, 0);
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'emergency_stop_active');
+  assert.equal(writes.length, 0, 'kein Sollwert-Write im Not-Halt');
 });
 
 test('resume: clearing the flag restores discretionary writes', async () => {
@@ -292,7 +297,7 @@ async function call(ctx, method, urlPath) {
 }
 
 describe('POST /api/control/stop + /resume (T-0099 NOT-HALT)', () => {
-  it('stop sets the flag, neutralizes gridSetpointW=0 via emergency_stop, persists', async () => {
+  it('stop sets the flag and persists, Netz-Sollwert bleibt unverändert (kein Write)', async () => {
     const ctx = mockRouteCtx();
     const out = await call(ctx, 'POST', '/api/control/stop');
 
@@ -301,49 +306,38 @@ describe('POST /api/control/stop + /resume (T-0099 NOT-HALT)', () => {
     assert.equal(out.body.paused, true);
     assert.equal(ctx.state.ctrl.discretionaryWritesPaused, true);
     assert.ok(ctx.state.ctrl.pausedAt > 0);
-    assert.deepEqual(ctx.controlWrites, [{ target: 'gridSetpointW', value: 0, source: 'emergency_stop' }]);
+    assert.deepEqual(ctx.controlWrites, [], 'kein Netz-Sollwert-Write (Christin 10.11.2026)');
+    assert.deepEqual(out.body.neutralize, { ok: true, skipped: true, reason: 'setpoint_unchanged' });
     assert.deepEqual(ctx.persisted, ['control_state']);
     assert.ok(ctx.logged.some((l) => l.event === 'emergency_stop_activated'));
   });
 
-  it('stop is idempotent — second call reports alreadyStopped, no second neutralization', async () => {
+  it('stop is idempotent — second call reports alreadyStopped, no write', async () => {
     const ctx = mockRouteCtx();
     await call(ctx, 'POST', '/api/control/stop');
     const out = await call(ctx, 'POST', '/api/control/stop');
 
     assert.equal(out.status, 200);
     assert.equal(out.body.alreadyStopped, true);
-    assert.equal(ctx.controlWrites.length, 1, 'neutralization fired exactly once');
+    assert.equal(ctx.controlWrites.length, 0, 'auch beim zweiten Mal kein Sollwert-Write');
     assert.equal(ctx.persisted.length, 1);
   });
 
-  it('a failed neutralization still leaves writes paused and logs loudly', async () => {
-    const ctx = mockRouteCtx();
-    ctx.applyControlTarget = async () => ({ ok: false, error: 'modbus timeout' });
-    const out = await call(ctx, 'POST', '/api/control/stop');
-
-    assert.equal(out.status, 200);
-    assert.equal(out.body.ok, true, 'pause succeeds even if neutralize fails');
-    assert.equal(ctx.state.ctrl.discretionaryWritesPaused, true);
-    assert.equal(out.body.neutralize.ok, false);
-    assert.ok(ctx.logged.some((l) => l.event === 'emergency_stop_neutralize_failed'));
-  });
-
-  it('no failure log when NO gridSetpointW write path is enabled (Fronius sequence dialect)', async () => {
-    // Fronius/Deye: Abregelung = M124-/Work-Mode-Sequenz, controlWrite.gridSetpointW
-    // ist enabled:false → der Chokepoint meldet not-enabled. Das ist ein No-op,
-    // kein Fehler — der Ring darf nicht bei jedem Not-Halt fluten.
-    const ctx = mockRouteCtx();
-    ctx.applyControlTarget = async () => ({ ok: false, error: 'write target not enabled in config' });
-    const out = await call(ctx, 'POST', '/api/control/stop');
-
-    assert.equal(out.status, 200);
-    assert.equal(out.body.ok, true);
-    assert.equal(ctx.state.ctrl.discretionaryWritesPaused, true, 'pause active regardless');
-    assert.equal(out.body.neutralize.skipped, true);
-    assert.equal(out.body.neutralize.reason, 'target_not_enabled');
-    assert.ok(!ctx.logged.some((l) => l.event === 'emergency_stop_neutralize_failed'),
-      'benign no-write-path case must not log a failure');
+  it('kein Sollwert-Write, also auch kein Fehlerlog — gleich für jedes Profil (Victron, MQTT-Brücke, Fronius)', async () => {
+    // Der Sollwert-Pfad wird gar nicht mehr angefasst: ob er schreiben könnte
+    // (Victron 2716/2700, MQTT-Brücke) oder nicht freigegeben ist (Fronius/Deye-
+    // Sequenz), ändert am Ergebnis nichts.
+    for (const result of [{ ok: false, error: 'modbus timeout' }, { ok: false, error: 'write target not enabled in config' }]) {
+      const ctx = mockRouteCtx();
+      ctx.applyControlTarget = async (target, value, source) => { ctx.controlWrites.push({ target, value, source }); return result; };
+      const out = await call(ctx, 'POST', '/api/control/stop');
+      assert.equal(out.status, 200);
+      assert.equal(out.body.ok, true);
+      assert.equal(ctx.state.ctrl.discretionaryWritesPaused, true, 'pause active regardless');
+      assert.deepEqual(ctx.controlWrites, []);
+      assert.equal(out.body.neutralize.reason, 'setpoint_unchanged');
+      assert.ok(!ctx.logged.some((l) => l.event === 'emergency_stop_neutralize_failed'));
+    }
   });
 
   it('resume clears flag + throttle map and persists; idempotent when not paused', async () => {

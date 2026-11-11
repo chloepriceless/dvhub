@@ -6,6 +6,9 @@
 // einmal zurück (nur, wo DVhub gerade selbst aktiv vorgibt; im Zweifel nichts
 // senden), danach schreibt es nichts mehr — kein Nachführen, kein Herzschlag,
 // kein Wiederholen. Auch § 14a (EEBUS-Grenzen an Geräte) ist ausgesetzt.
+// Den Netz-Sollwert (Victron 2716/2700, MQTT-Brücke, zweite GX) schreibt der
+// Eintritt gar nicht, auch keine 0 — Christin 10.11.2026: „Netz-Sollwert – das
+// was in Victron drinsteht – nichts ändern.“
 //
 // Entscheidung Christin 10.11.2026: „Ja, Not-Halt heißt auch die Punkte von
 // §51 usw.“ — auch die rechtlichen bzw. Schutz-Abregelungen (§ 51 bei negativem
@@ -62,7 +65,10 @@ export function notHaltSuspendedLabels(policy = NOT_HALT_CONTINUES) {
 }
 
 // Quellen in schedule-eval.applyControlTarget, die das Not-Halt-Tor kennt.
-// emergency_stop = die eine Neutralisierung des Not-Halts selbst (immer).
+// emergency_stop (bis bd18f099 die eine gridSetpointW=0-Neutralisierung) kommt
+// seit Christins Entscheidung vom 10.11.2026 nicht mehr durch: „Netz-Sollwert –
+// das was in Victron drinsteht – nichts ändern.“ Kein Aufrufer schreibt sie
+// mehr; fehlt sie hier, blockt das Tor sie fail-safe wie jede andere Quelle.
 const SOURCE_CLASS = Object.freeze({
   negative_price_protection: 'negativePrice',
   manual_override_soc_floor: 'socFloor',
@@ -90,7 +96,6 @@ export function notHaltContinues(cls, policy = NOT_HALT_CONTINUES) {
 
 /** applyControlTarget-Quelle darf im Not-Halt schreiben. */
 export function notHaltAllowsControlSource(source, policy = NOT_HALT_CONTINUES) {
-  if (String(source) === 'emergency_stop') return true;
   return notHaltContinues(SOURCE_CLASS[String(source)], policy);
 }
 
