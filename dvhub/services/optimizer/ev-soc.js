@@ -218,22 +218,10 @@ export function createMaxStopSoc() {
   let lastUnpluggedAt = null;
   return {
     resolve(ctx, nowMs = Date.now()) {
-      let plugged;
-      try { plugged = resolveEvPlugged(ctx); } catch { plugged = null; }
-      let wb;
-      try { wb = ctx?.mainWallbox?.state?.() || null; } catch { wb = null; }
-      // Box ohne Steck-Zustand (EEBUS nur LPC: nach dem Stopp „nicht
-      // verbunden“) — das ist kein Abstecken (Codex e957655a).
-      if (plugged === false && wb && wb.type !== 'evcc' && wb.connectedKnown === false) plugged = null;
-      if (plugged === false) {
-        // Zeitpunkt der Abfrage, die „abgesteckt“ meldete — nicht der des
-        // Lesens: ein frischer Ladestand nach dem Wieder-Anstecken, der vor
-        // der nächsten Abfrage der Box kommt, gilt sonst nicht (Codex e957655a).
-        const sampleAt = wb && wb.type !== 'evcc'
-          ? toMs(wb.sampleAt)
-          : toMs(ctx?.evccIntegration?.getStatus?.()?.lastPolledAt);
-        const at = sampleAt !== null && sampleAt <= nowMs ? sampleAt : nowMs;
-        lastUnpluggedAt = lastUnpluggedAt === null ? at : Math.max(lastUnpluggedAt, at);
+      let sig;
+      try { sig = maxStopPlugSignal(ctx, nowMs); } catch { sig = { plugged: null, at: null }; }
+      if (sig.plugged === false) {
+        lastUnpluggedAt = lastUnpluggedAt === null ? sig.at : Math.max(lastUnpluggedAt, sig.at);
         return null;
       }
       const r = collectEvSocReadings(ctx, nowMs)[0];
@@ -242,6 +230,40 @@ export function createMaxStopSoc() {
       return r;
     }
   };
+}
+
+/**
+ * Steck-Zustand für den Max-Stopp, mit dem Zeitpunkt SEINER Quelle (Codex
+ * e957655a, 5753e29c): Reihenfolge wie resolveEvPlugged, aber eine Box, die den
+ * Zustand nicht kennt (EEBUS nur LPC: connectedKnown false), zählt nicht — dann
+ * die Ersatzquellen (MQTT, HTTP, Home Assistant). Zeitpunkt = Abfrage bzw.
+ * Meldung der Quelle; ohne (oder 0): jetzt.
+ * @returns {{ plugged: boolean|null, at: number|null }}
+ */
+function maxStopPlugSignal(ctx, nowMs) {
+  const pos = (v) => { const ms = toMs(v); return ms !== null && ms > 0 && ms <= nowMs ? ms : null; };
+  const evccPolled = () => pos(ctx?.evccIntegration?.getStatus?.()?.lastPolledAt);
+  const wb = ctx?.mainWallbox?.state?.();
+  if (wb) {
+    if (wb.available && typeof wb.connected === 'boolean' && wb.connectedKnown !== false) {
+      return { plugged: wb.connected, at: (wb.type === 'evcc' ? evccPolled() : pos(wb.sampleAt)) ?? nowMs };
+    }
+  } else {
+    const direct = ctx?.chargerStatus?.fresh?.();
+    if (direct && direct.connectedKnown !== false) return { plugged: direct.connected === true, at: pos(direct.at) ?? nowMs };
+    if (!direct) {
+      const lpId = Number(ctx?.getCfg?.()?.optimizer?.evEvccLoadpoint) || 1;
+      const lp = (ctx?.evccIntegration?.getLoadpoints?.() || []).find((l) => l.id === lpId);
+      if (lp) return { plugged: lp.connected === true, at: evccPolled() ?? nowMs };
+    }
+  }
+  const m = ctx?.vehicleMqtt?.getState?.();
+  if (typeof m?.plugged === 'boolean') return { plugged: m.plugged, at: pos(m.pluggedAt) ?? nowMs };
+  for (const kind of ['http', 'homeassistant']) {
+    const p = ctx?.vehiclePull?.getState?.(kind);
+    if (typeof p?.plugged === 'boolean') return { plugged: p.plugged, at: pos(p.pluggedAt) ?? nowMs };
+  }
+  return { plugged: null, at: null };
 }
 
 /**

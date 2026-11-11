@@ -71,3 +71,30 @@ test('Abstecken zählt mit dem Zeitpunkt der Abfrage, nicht dem des Lesens', () 
   st.connected = true; st.sampleAt = Date.parse('2026-11-16T18:00:15Z');
   assert.equal(m.resolve(ctx, Date.parse('2026-11-16T18:00:16Z'))?.pct, 42, 'frischer Wert gilt nach dem Anstecken');
 });
+
+// ── Codex 5753e29c ──
+test('Wallbox kennt den Steck-Zustand nicht, MQTT meldet „abgesteckt“: zählt als Abstecken', () => {
+  const { ctx, s } = fakeCtx();
+  const plug = { plugged: true, pluggedAt: Date.parse('2026-11-16T06:00:00Z') };
+  ctx.mainWallbox = { state: () => ({ type: 'eebus', available: true, connected: false, connectedKnown: false }) };
+  ctx.vehicleMqtt = { getState: () => ({ plugged: plug.plugged, pluggedAt: plug.pluggedAt }) };
+  const m = evSoc.createMaxStopSoc();
+  assert.equal(m.resolve(ctx, Date.parse('2026-11-16T06:05:00Z'))?.pct, 85);
+  plug.plugged = false; plug.pluggedAt = Date.parse('2026-11-16T07:00:00Z');
+  assert.equal(m.resolve(ctx, Date.parse('2026-11-16T07:01:00Z')), null);
+  plug.plugged = true; plug.pluggedAt = Date.parse('2026-11-16T18:00:00Z');
+  assert.equal(m.resolve(ctx, Date.parse('2026-11-16T18:01:00Z')), null, 'Wert von vor der Fahrt zählt nicht');
+  void s;
+});
+
+test('evcc noch ohne Ladepunkt (Abfragezeit 0), MQTT meldet „abgesteckt“: Zeitpunkt der MQTT-Meldung', () => {
+  const { ctx } = fakeCtx();
+  const plug = { plugged: false, pluggedAt: Date.parse('2026-11-16T07:00:00Z') };
+  ctx.mainWallbox = { state: () => ({ type: 'evcc', available: false, connected: null }) };
+  ctx.evccIntegration = { getLoadpoints: () => [], getStatus: () => ({ lastPolledAt: 0 }) };
+  ctx.vehicleMqtt = { getState: () => ({ plugged: plug.plugged, pluggedAt: plug.pluggedAt }) };
+  const m = evSoc.createMaxStopSoc();
+  assert.equal(m.resolve(ctx, Date.parse('2026-11-16T07:01:00Z')), null);
+  plug.plugged = true; plug.pluggedAt = Date.parse('2026-11-16T18:00:00Z');
+  assert.equal(m.resolve(ctx, Date.parse('2026-11-16T18:01:00Z')), null, 'Wert von 06:00 liegt vor dem Abstecken um 07:00');
+});
