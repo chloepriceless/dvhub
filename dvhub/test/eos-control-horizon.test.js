@@ -87,9 +87,12 @@ const horizonPut = (mock) => mock.requests.filter((r) => r.method === 'PUT' && r
 const realHoursOf = (e) => Math.floor((e.realEnd - Date.now() - Q) / H);
 
 // E-Auto bei EOS angemeldet, Abfahrt (einmalig) zu einem festen Zeitpunkt.
+// Leerer Wochenplan: sonst käme die Standard-Abfahrt Mo–Fr 07:00 je nach
+// Uhrzeit des Testlaufs vor dem Einmal-Ziel dran (Fable R5 P2-1).
 const evOptimizer = (departureMs) => ({
   eosOptimizeEv: true,
   evDepartureEnabled: true,
+  evWeeklyPlan: [],
   evDepartureOnce: new Date(departureMs).toISOString(),
   evTargetMode: 'percent',
   evTargetValue: 80,

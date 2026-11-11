@@ -34,7 +34,10 @@ verweist hierher.
     zwei Fahrten nicht zum Nachladen (z. B. Samstag 09:00 und 13:00), steigt das Ziel der ersten Abfahrt.
   - **Einmal-Ziel:** „Morgen längere Strecke“ = einmal z. B. 75 % bis 08:00 (Leitstand-Kachel und Integrationen →
     evcc). Der Wochenplan bleibt, wie er ist; nach der Abfahrt ist das Ziel vorbei. Eine vorgezogene Einmal-Abfahrt
-    lässt die ersetzte reguläre Abfahrt danach nicht wieder aufleben.
+    lässt die ersetzte reguläre Abfahrt danach nicht wieder aufleben. Das Einmal-Ziel ersetzt höchstens die eine
+    Abfahrt, zu der es gehört (dasselbe Fenster bzw. die nächste Abfahrt bis 24 h); Wochenplan-Abfahrten davor bleiben
+    mit Mindestziel und Frist und kommen zuerst — auch bei einem Ziel in Wochen. Welche Abfahrt ersetzt ist, hängt
+    nicht davon ab, wann man nachsieht.
   - **Ohne passendes EOS wie bisher:** Kennt EOS die Wertstufen nicht (Vanilla v0.4.0rc3), lädt EOS nur bis zum
     Mindestziel, Max-Ladestand und Wallbox-Grenze ruhen; das Mindestziel bleibt vorausschauend. Die Oberfläche sagt es.
   - **Einphasig laden,** wenn die Wallbox umschalten kann (evcc meldet es je Ladepunkt): kleine Leistungen 1,4–3,7 kW
