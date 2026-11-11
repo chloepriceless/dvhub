@@ -320,6 +320,9 @@ export function departuresFromLegacy(list, opt = {}, { dropHelperArrivals = true
     let day = e.day;
     let homeFrom = '';
     let homeFromPrevDay = false;
+    // Vorrang bei gleicher Abfahrt: die Zeile vom Vortag (Folgetag-Abfahrt)
+    // kam in der alten Aufloesung zuerst — auch wenn ihre Hilfs-Ankunft wegfaellt.
+    const rank = departsNextDay(e) ? 0 : 1;
     if (e.arrival) {
       if (departsNextDay(e)) { day = nextDayOf(e.day); homeFromPrevDay = true; }
       homeFrom = e.arrival;
@@ -329,7 +332,7 @@ export function departuresFromLegacy(list, opt = {}, { dropHelperArrivals = true
         homeFromPrevDay = false;
       }
     }
-    rows.push({ day, departure: e.departure, minSocPct: e.minSocPct, tripSocPct: e.tripSocPct, homeFrom, homeFromPrevDay });
+    rows.push({ day, departure: e.departure, minSocPct: e.minSocPct, tripSocPct: e.tripSocPct, homeFrom, homeFromPrevDay, rank });
   }
   for (const o of orphans) {
     const a = minOfDay(o.arrival);
@@ -342,6 +345,24 @@ export function departuresFromLegacy(list, opt = {}, { dropHelperArrivals = true
       notes.push({ kind: 'orphan-attached', day: next.day, text: `${DAY_NAMES[o.day - 1]}: Ankunft ${o.arrival} ohne Abfahrt — jetzt „zuhause ab“ der Abfahrt ${DAY_NAMES[next.day - 1]} ${next.departure}.` });
     } else {
       notes.push({ kind: 'orphan-dropped', day: o.day, text: `${DAY_NAMES[o.day - 1]}: Ankunft ${o.arrival} ohne Abfahrt hat bisher nichts bewirkt und passt zu keiner Abfahrt — entfernt.` });
+    }
+  }
+  // Bereinigung: dieselbe Abfahrt zweimal (Tag d „Ankunft, Abfahrt 07:00“ →
+  // Folgetag, und Tag d+1 „07:00“) ist eine Abfahrt. Es gilt die, die die alte
+  // Aufloesung zuerst nahm (Vortag zuerst) — mit ihrem Ziel und ihrer Fahrt; die
+  // zweite wurde dort nie die naechste Abfahrt (Codex 4974135c). Verlustfrei
+  // (ohne Bereinigung) bleiben beide, die Reihenfolge haelt homeFromPrevDay.
+  if (dropHelperArrivals) {
+    rows.sort((a, b) => a.rank - b.rank);
+    const seen = new Map();
+    for (let i = 0; i < rows.length; i += 1) {
+      const key = `${rows[i].day} ${rows[i].departure}`;
+      const first = seen.get(key);
+      if (!first) { seen.set(key, rows[i]); continue; }
+      notes.push({ kind: 'duplicate', day: rows[i].day, text: `${DAY_NAMES[rows[i].day - 1]} ${rows[i].departure} stand zweimal im Plan — es gilt wie bisher ${first.minSocPct !== null && first.minSocPct !== undefined ? `mindestens ${first.minSocPct} %` : 'der Standard-Ladestand'}${first.homeFrom ? ` (zuhause ab ${first.homeFrom})` : ''}; die zweite ist entfernt.` });
+      if (!first.homeFrom && rows[i].homeFrom) { first.homeFrom = rows[i].homeFrom; first.homeFromPrevDay = rows[i].homeFromPrevDay; }
+      rows.splice(i, 1);
+      i -= 1;
     }
   }
   const normalized = normalizeDepartureRows(rows);
@@ -385,8 +406,10 @@ export function legacyFromDepartures(list) {
     return [{ slot: own, arrival: '' }, synthetic];
   });
   // Vollstaendige Suche (hoechstens 14 Abfahrten × 2 Plaetze): moeglichst
-  // viele Abfahrten unterbringen, dann moeglichst viele an ihrem ersten Platz;
-  // bei Gleichstand gewinnt die fruehere Abfahrt der Woche (feste Reihenfolge).
+  // viele Abfahrten unterbringen, dann moeglichst viele echte „zuhause ab“
+  // behalten (Codex 4974135c), dann moeglichst viele am ersten Platz; bei
+  // Gleichstand gewinnt die fruehere Abfahrt der Woche (feste Reihenfolge).
+  const keeps = (i, k) => !!items[i].homeFrom && options[i][k].arrival === items[i].homeFrom;
   let best = { score: -1, pick: [] };
   const used = new Set();
   const pick = [];
@@ -395,15 +418,15 @@ export function legacyFromDepartures(list) {
       if (score > best.score) best = { score, pick: pick.slice() };
       return;
     }
-    // obere Schranke: alle restlichen am ersten Platz
-    if (score + (items.length - i) * 101 <= best.score) return;
+    // obere Schranke: alle restlichen untergebracht, mit Ankunft, am ersten Platz
+    if (score + (items.length - i) * 111 <= best.score) return;
     let placed = false;
     for (let k = 0; k < options[i].length; k += 1) {
       const slot = options[i][k].slot;
       if (used.has(slot)) continue;
       placed = true;
       used.add(slot); pick.push(k);
-      walk(i + 1, score + 100 + (k === 0 ? 1 : 0));
+      walk(i + 1, score + 100 + (keeps(i, k) ? 10 : 0) + (k === 0 ? 1 : 0));
       pick.pop(); used.delete(slot);
     }
     if (!placed) { pick.push(-1); walk(i + 1, score); pick.pop(); }
@@ -421,11 +444,12 @@ export function legacyFromDepartures(list) {
 }
 
 /** Planen zwei alte Plaene dieselben Zeiten und Ziele? (Fahrt kennt 1.0.9 nicht.) */
-function sameLegacyPlan(a, b, opt) {
+function sameLegacyPlan(a, b, opt, { withTrip = false } = {}) {
   const x = migrateWeeklyPlanRows(a, opt);
   const y = migrateWeeklyPlanRows(b, opt);
   const pct = (v) => (v === null || v === undefined ? null : Math.round(Number(v)));
-  return x.every((r, i) => r.arrival === y[i].arrival && r.departure === y[i].departure && pct(r.minSocPct) === pct(y[i].minSocPct));
+  return x.every((r, i) => r.arrival === y[i].arrival && r.departure === y[i].departure && pct(r.minSocPct) === pct(y[i].minSocPct)
+    && (!withTrip || pct(r.tripSocPct) === pct(y[i].tripSocPct)));
 }
 
 /**
@@ -1007,7 +1031,12 @@ function parseWeeklyPlan(list, prefix, opt = {}) {
  * defaultHomeFromPrevDay.
  */
 function parseWeeklyDepartures(list, prefix) {
-  if (!Array.isArray(list) || list.length > MAX_WEEKLY_DEPARTURES) return { ok: false, error: `${prefix}.weeklyDepartures must be a list of up to ${MAX_WEEKLY_DEPARTURES} departures` };
+  // Gezaehlt werden Abfahrten; die feste Form hat dazu je leerem Tag eine
+  // leere Zeile (hoechstens 7) — sie muss unveraendert wieder angenommen werden
+  // (Codex 4974135c).
+  const tooMany = () => ({ ok: false, error: `${prefix}.weeklyDepartures must be a list of up to ${MAX_WEEKLY_DEPARTURES} departures` });
+  if (!Array.isArray(list) || list.length > MAX_WEEKLY_DEPARTURES + 7) return tooMany();
+  if (list.filter((e) => e && typeof e === 'object' && String(e.departure ?? '').trim() !== '').length > MAX_WEEKLY_DEPARTURES) return tooMany();
   const present = (v) => v !== null && v !== undefined && v !== '';
   const rows = [];
   for (let i = 0; i < list.length; i += 1) {
@@ -1080,9 +1109,20 @@ export function parseEvDeparturePatch(d, prefix = 'departure', { opt = {}, nowMs
     }
     const wp = parseWeeklyPlan(d.weeklyPlan, prefix, conv);
     if (!wp.ok) return wp;
+    // Eine aeltere offene Seite schickt das mitgelieferte alte Format
+    // unveraendert zurueck: dann gilt der gespeicherte Plan weiter — das alte
+    // Format kann nicht alles ausdruecken (zuhause ab > 24 h, zweite Abfahrt am
+    // Tag) und wuerde es sonst loeschen (Codex 4974135c). Fahrt-Werte zaehlen
+    // mit, wenn die Seite sie schickt.
+    const stored = Array.isArray(opt.evWeeklyDepartures) ? normalizeDepartureRows(opt.evWeeklyDepartures) : null;
+    if (stored && sameLegacyPlan(wp.plan, legacyFromDepartures(stored).rows, conv, { withTrip: d.weeklyPlan.some((e) => e && typeof e === 'object' && 'tripSocPct' in e) })) {
+      patch.evWeeklyDepartures = stored;
+      patch.evWeeklyPlan = legacyFromDepartures(stored).rows;
+    } else {
     const rows = departuresFromLegacy(wp.plan, conv).rows;
     patch.evWeeklyDepartures = rows;
     patch.evWeeklyPlan = legacyFromDepartures(rows).rows;
+    }
   } else if ('time' in d || 'days' in d) {
     patch.evWeeklyPlan = null;
     patch.evWeeklyDepartures = null;

@@ -342,3 +342,54 @@ test('Wochenplan aus: neue Zeilen zählen nicht, ein Einmal-Ziel schon', () => {
   assert.equal(r.departureAt, '2026-11-18T06:00:00.000Z');
   assert.equal(r.source, 'once');
 });
+
+// ------------------------------------------------------------ Codex 4974135c
+
+test('Codex 4974135c: dieselbe Abfahrt aus zwei Zeilen — es gilt wie bisher die vom Vortag, auch ohne ihre Hilfs-Ankunft', () => {
+  const old = [{ day: 7, arrival: '08:00', departure: '07:00', minSocPct: 90 }, { day: 1, arrival: '', departure: '07:00', minSocPct: 40 }];
+  const conv = NEW.departuresFromLegacy(old, {});
+  assert.deepEqual(conv.rows.filter((r) => r.departure), [dep(1, '07:00', 90)]);
+  assert.ok(conv.notes.some((n) => n.kind === 'duplicate' && /Montag 07:00 stand zweimal.*mindestens 90 %/.test(n.text)), JSON.stringify(conv.notes));
+  const t = Date.parse('2026-11-15T11:00:00Z'); // So mittags
+  assert.equal(OLD.resolveEvWindow({ evWeeklyPlan: old }, TZ, t).window.minSocPct, 90);
+  assert.equal(NEW.resolveEvWindow({ evWeeklyDepartures: conv.rows }, TZ, t).window.minSocPct, 90);
+  // Echte Ankunft am Vortag bleibt mit der Abfahrt erhalten
+  const real = NEW.departuresFromLegacy([{ day: 7, arrival: '20:00', departure: '07:00', minSocPct: 90 }, { day: 1, departure: '07:00', minSocPct: 40 }], {});
+  assert.deepEqual(real.rows.filter((r) => r.departure), [dep(1, '07:00', 90, '20:00', true)]);
+});
+
+test('Codex 4974135c: altes Format behält echte „zuhause ab“ vor dem Wunschplatz einer Abfahrt ohne', () => {
+  const rows = [dep(2, '07:00'), dep(2, '10:00', 70, '09:00', false)];
+  const m = NEW.legacyFromDepartures(rows);
+  assert.equal(m.lost.length, 0);
+  assert.deepEqual(m.rows.find((r) => r.day === 2), { day: 2, arrival: '09:00', departure: '10:00', minSocPct: 70, tripSocPct: null, targetValue: 70, commuteKm: null });
+  assert.equal(m.rows.find((r) => r.day === 1).departure, '07:00');
+});
+
+test('Codex 4974135c: ältere Seite schickt das alte Format unverändert zurück → gespeicherter Plan bleibt (auch was das alte Format nicht kann)', () => {
+  const stored = NEW.normalizeDepartureRows([dep(2, '19:00', 80, '17:30', true), dep(6, '09:22', 60, '09:17', false), dep(6, '10:00', 50, '', false, 12)]);
+  const opt = { evWeeklyDepartures: stored };
+  const mirror = NEW.legacyFromDepartures(stored).rows;
+  const back = NEW.parseEvDeparturePatch({ weeklyPlan: mirror }, 'departure', { opt });
+  assert.deepEqual(back.patch.evWeeklyDepartures, stored);
+  // ohne Fahrt-Werte (Seite bis 1.0.9) ebenso
+  const bare = mirror.map(({ day, arrival, departure, targetValue }) => ({ day, arrival, departure, targetValue }));
+  assert.deepEqual(NEW.parseEvDeparturePatch({ weeklyPlan: bare }, 'departure', { opt }).patch.evWeeklyDepartures, stored);
+  // geändert → umgerechnet
+  const edited = mirror.map((r) => (r.day === 1 ? { ...r, minSocPct: 95, targetValue: 95 } : r));
+  const ch = NEW.parseEvDeparturePatch({ weeklyPlan: edited }, 'departure', { opt });
+  assert.equal(ch.patch.evWeeklyDepartures.find((r) => r.day === 2).minSocPct, 95);
+  // Fahrt geändert (Seite schickt tripSocPct) → umgerechnet
+  const trip = mirror.map((r) => (r.day === 1 ? { ...r, tripSocPct: 33 } : r));
+  assert.equal(NEW.parseEvDeparturePatch({ weeklyPlan: trip }, 'departure', { opt }).patch.evWeeklyDepartures.find((r) => r.day === 2).tripSocPct, 33);
+});
+
+test('Codex 4974135c: angenommener Plan lässt sich unverändert wieder speichern (Grenze zählt Abfahrten)', () => {
+  const many = Array.from({ length: 14 }, (_, i) => ({ day: 3, departure: hhmm(6 * 60 + i * 30) }));
+  const a = NEW.parseEvDeparturePatch({ weeklyDepartures: many });
+  assert.equal(a.ok, true, a.error);
+  assert.equal(a.patch.evWeeklyDepartures.length, 20);
+  const b = NEW.parseEvDeparturePatch({ weeklyDepartures: a.patch.evWeeklyDepartures });
+  assert.equal(b.ok, true, b.error);
+  assert.match(NEW.parseEvDeparturePatch({ weeklyDepartures: [...many, { day: 4, departure: '07:00' }] }).error, /up to 14/);
+});
