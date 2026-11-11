@@ -193,7 +193,14 @@ describe('Konfig: Wochenplan-Übernahme und kaputte config.json', () => {
       saveConfigFile(file, loaded.rawConfig);
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
       assert.equal(saved.optimizer.evWeeklyPlan[0].minSocPct, 50);
-      assert.equal('targetValue' in saved.optimizer.evWeeklyPlan[0], false);
+      // Seit T-0427: evWeeklyPlan ist das mitgeschriebene alte Format für den
+      // Rückweg auf 1.0.9 — dort zählt targetValue, jetzt in % (evTargetMode percent).
+      assert.equal(saved.optimizer.evWeeklyPlan[0].targetValue, 50);
+      assert.equal(saved.optimizer.evTargetMode, 'percent');
+      // Die Zeile gehört jetzt zum Tag der Abfahrt (Di 07:00, zuhause ab Mo 17:00);
+      // der alte Plan ist gesichert.
+      assert.deepEqual(saved.optimizer.evWeeklyDepartures.find((r) => r.departure), { day: 2, departure: '07:00', minSocPct: 50, tripSocPct: null, homeFrom: '17:00', homeFromPrevDay: true });
+      assert.deepEqual(saved.optimizer.evWeeklyMigration.previous, legacy.optimizer.evWeeklyPlan);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 

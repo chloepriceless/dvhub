@@ -270,7 +270,7 @@ describe('Heimweg fließt nicht mehr ein (Christin 10.11.2026)', () => {
     for (const evWeeklyPlan of [undefined, null]) {
       const plan = effectiveWeeklyPlan({ ...OLD, evWeeklyPlan });
       for (const day of [1, 2, 3, 4, 5]) {
-        assert.deepEqual(plan[day - 1], { day, arrival: '', departure: '07:00', minSocPct: null, tripSocPct: null }, `Tag ${day}`);
+        assert.deepEqual(plan[day - 1], { day, departure: '07:00', minSocPct: null, tripSocPct: null, homeFrom: '', homeFromPrevDay: false }, `Tag ${day}`);
       }
     }
   });
@@ -305,7 +305,7 @@ describe('Heimweg fließt nicht mehr ein (Christin 10.11.2026)', () => {
 
   test('ohne Heimweg bleibt es leer', () => {
     const plan = effectiveWeeklyPlan({ evDepartureTime: '07:00', evDepartureDays: [1, 2] });
-    assert.deepEqual(plan[0], { day: 1, arrival: '', departure: '07:00', minSocPct: null, tripSocPct: null });
+    assert.deepEqual(plan[0], { day: 1, departure: '07:00', minSocPct: null, tripSocPct: null, homeFrom: '', homeFromPrevDay: false });
   });
 
   test('eingetragene Fahrt (tripSocPct) gilt weiter', () => {

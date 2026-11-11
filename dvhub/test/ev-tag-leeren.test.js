@@ -7,8 +7,9 @@
 // Zeile auf „nicht gesetzt“ stellt, ohne dass man ins Zeitfeld tippen muss —
 // und ein „Leeren“ fürs Einmal-Ziel.
 //
-// Oberfläche (public/ev-weekly-editor.js) über vm mit einer kleinen Attrappe
-// des DOM; Server: ein geleerter Tag kommt als „nicht gesetzt“ an, die Konfig
+// Seit T-0427 (Karten je Abfahrtstag) ist es ein Schalter je Tag statt
+// „Leeren“; Uhrzeiten nur im Blatt. Oberfläche (public/ev-weekly-editor.js)
+// über vm mit einer kleinen Attrappe des DOM; Server: ein geleerter Tag kommt als „nicht gesetzt“ an, die Konfig
 // nimmt ihn so an und er erzeugt keine Abfahrt.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,32 +42,6 @@ function fakeEl(props = {}) {
     ...props,
   };
 }
-function fakeRow(day, v = {}) {
-  const parts = {
-    '.evw-arr': fakeEl({ value: v.arrival || '' }),
-    '.evw-dep': fakeEl({ value: v.departure || '' }),
-    '.evw-min': fakeEl({ value: v.min ?? '' }),
-    '.evw-trip': fakeEl({ value: v.trip ?? '' }),
-    '.evw-next': fakeEl(), '.evw-res': fakeEl(), '.evw-warn': fakeEl(), '.evw-row-clear': fakeEl(),
-  };
-  const row = fakeEl({
-    querySelector: (sel) => parts[sel] || null,
-    querySelectorAll: (sel) => (sel === 'input' ? ['.evw-arr', '.evw-dep', '.evw-min', '.evw-trip'].map((k) => parts[k]) : []),
-    parts,
-  });
-  row.setAttribute('data-day', day);
-  return row;
-}
-function fakeHost(rows) {
-  return fakeEl({
-    querySelector: (sel) => {
-      const m = /^\.evw-row\[data-day="(\d)"\]$/.exec(sel);
-      return m ? rows.find((r) => r.getAttribute('data-day') === m[1]) || null : null;
-    },
-    querySelectorAll: (sel) => (sel === '.evw-row' ? rows : []),
-  });
-}
-
 function loadEditor(doc = {}) {
   const sandbox = {
     window: {},
@@ -79,53 +54,51 @@ function loadEditor(doc = {}) {
 }
 
 describe('Wochenplan: einzelnen Tag leeren (Oberfläche)', () => {
-  it('jede Tageszeile hat einen eigenen „Leeren“-Knopf mit Tagesname (aria-label), ohne dass man ins Zeitfeld tippen muss', () => {
-    // rowHtml baut 7 Zeilen; je Zeile genau ein Knopf, kein type=submit.
-    const m = src.match(/class="[^"]*evw-row-clear[^"]*"/g) || [];
-    assert.ok(m.length >= 1, 'Knopf evw-row-clear fehlt in rowHtml');
-    assert.match(src, /<button type="button" class="[^"]*evw-row-clear/);
-    assert.match(src, /aria-label="' \+ name \+ ' leeren"/, 'aria-label mit Tagesname');
-    // Zeitfelder nie als Pflichtfeld (iOS erzwänge sonst eine Zeit).
+  // Seit T-0427 (Karten je Abfahrtstag): je Tag ein Schalter „fahre an diesem
+  // Tag“ — aus = kein Termin, ohne ein Zeitfeld anzutippen. Uhrzeiten gibt es
+  // nur noch im Blatt (Dialog) nach Antippen der Karte.
+  it('jede Tageskarte hat einen eigenen Schalter mit Tagesname (aria-label); keine Zeitfelder in der Liste', () => {
+    assert.match(src, /switchHtml\('evw-drive', !!ct\.time, DAY_NAMES\[i\] \+ ': fahre an diesem Tag'\)/);
+    assert.match(src, /<input type="checkbox" class="' \+ cls \+ '"/);
+    // Karten-HTML ohne Zeitfeld; Zeitfelder nie als Pflichtfeld (iOS erzwänge sonst eine Zeit).
+    const card = src.slice(src.indexOf('function cardHtml'), src.indexOf('function migrationHtml'));
+    assert.doesNotMatch(card, /type="time"/);
     assert.doesNotMatch(src, /type="time"[^>]*required/);
   });
 
-  it('Fingergröße: der Knopf ist auf Touch und schmal mindestens 44 px groß', () => {
-    assert.ok(/\.evw-row-clear\s*\{[^}]*min-width:\s*44px/.test(css), 'min-width 44px fehlt');
-    assert.ok(/\.evw-row-clear\s*\{[^}]*min-height:\s*44px/.test(css), 'min-height 44px fehlt');
+  it('Fingergröße: Schalter, Löschen und Knöpfe im Blatt mindestens 44 px', () => {
+    for (const sel of ['\\.evw-card-sw', '\\.evw \\.evw-card-del']) {
+      assert.ok(new RegExp(sel + '\\s*\\{[^}]*min-width:\\s*(4[4-9]|[5-9]\\d)px').test(css), `${sel} min-width`);
+      assert.ok(new RegExp(sel + '\\s*\\{[^}]*min-height:\\s*44px').test(css), `${sel} min-height`);
+    }
+    assert.match(css, /\.evw-chip \{[^}]*min-height:44px/);
+    assert.match(css, /\.evw-seg-b \{[^}]*min-height:44px/);
+    assert.match(css, /\.evw-card-main \{[^}]*min-height:44px/);
   });
 
-  it('clearDay stellt Ankunft, Abfahrt, Mind. % und Fahrt % auf „nicht gesetzt“, die Zeile zeigt „kein Termin“, onChange läuft', () => {
+  it('clearDay nimmt alle Abfahrten des Tages heraus (auch eine zweite), die anderen bleiben, onChange läuft', () => {
     const W = loadEditor();
-    const rows = [1, 2, 3, 4, 5, 6, 7].map((d) => fakeRow(d, d === 3 ? { arrival: '18:00', departure: '07:30', min: '60', trip: '25' } : { departure: '07:00' }));
-    const host = fakeHost(rows);
     let changes = 0;
-    host._evwOpts = { onChange: () => { changes += 1; } };
-    assert.equal(typeof W.clearDay, 'function', 'DVhubEvWeekly.clearDay fehlt');
-    W.clearDay(host, 3);
-    const p = rows[2].parts;
-    assert.deepEqual([p['.evw-arr'].value, p['.evw-dep'].value, p['.evw-min'].value, p['.evw-trip'].value], ['', '', '', '']);
-    assert.equal(p['.evw-res'].textContent, 'kein Termin');
-    // Keine Schein-Uhrzeit im leeren Zeitfeld (WebKit malt sonst die aktuelle Zeit).
-    assert.equal(p['.evw-arr'].classList.contains('is-unset'), true);
-    assert.equal(p['.evw-dep'].classList.contains('is-unset'), true);
-    assert.equal(rows[1].parts['.evw-dep'].classList.contains('is-unset'), false);
-    assert.equal(p['.evw-res'].hidden, false);
+    const host = { querySelector: () => null, _evwOpts: { onChange: () => { changes += 1; } } };
+    host._evwRows = W.normalizePlan([
+      { day: 2, departure: '07:00' },
+      { day: 3, departure: '07:30', minSocPct: 60, tripSocPct: 25, homeFrom: '18:00', homeFromPrevDay: true },
+      { day: 3, departure: '19:00' },
+    ]);
+    assert.equal(W.clearDay(host, 3), true);
     assert.equal(changes, 1);
-    // Die anderen Tage bleiben, wie sie sind.
-    assert.equal(rows[1].parts['.evw-dep'].value, '07:00');
-    // Gelesen: nicht gesetzt — kein 00:00, keine 0 %.
-    const plan = W.read(host);
-    assert.deepEqual(JSON.parse(JSON.stringify(plan[2])), { day: 3, arrival: '', departure: '', minSocPct: null, tripSocPct: null });
+    const plan = JSON.parse(JSON.stringify(W.read(host)));
+    assert.deepEqual(plan.filter((r) => r.day === 3), [{ day: 3, departure: '', minSocPct: null, tripSocPct: null, homeFrom: '', homeFromPrevDay: false }]);
+    assert.equal(plan.find((r) => r.day === 2).departure, '07:00');
     assert.equal(W.validate(plan, { enabled: true }), null, 'geleerter Tag blockiert das Speichern nicht');
   });
 
-  it('nur die Abfahrt per iOS-„Zurücksetzen“ geleert: Speichern scheitert an der Ankunft — „Leeren“ nimmt beides weg', () => {
+  it('„zuhause ab“ ohne Abfahrt blockiert das Speichern — Tag ausschalten nimmt beides weg', () => {
     const W = loadEditor();
-    // Das ist der Zustand nach „Zurücksetzen“ im Picker der Abfahrt.
-    assert.match(W.validate([{ day: 3, arrival: '18:00', departure: '' }]) || '', /Ankunft ohne Abfahrt/);
-    const rows = [fakeRow(3, { arrival: '18:00', departure: '' })];
-    W.clearDay(fakeHost(rows), 3);
-    assert.equal(W.validate(W.read(fakeHost(rows))), null);
+    assert.match(W.validate([{ day: 3, departure: '', homeFrom: '18:00' }]) || '', /Mittwoch: „zuhause ab“ ohne Abfahrt/);
+    const host = { querySelector: () => null, _evwOpts: {}, _evwRows: [{ day: 3, departure: '', homeFrom: '18:00' }] };
+    W.clearDay(host, 3);
+    assert.equal(W.validate(W.read(host)), null);
   });
 
   it('Einmal-Ziel leeren: Felder per data-evw-clear auf leer, input + change sprudeln (Seite merkt die Änderung)', () => {
@@ -139,10 +112,10 @@ describe('Wochenplan: einzelnen Tag leeren (Oberfläche)', () => {
     }
   });
 
-  it('Einmal-Ziel beenden geht überall per „Beenden“ im gemeinsamen Baustein; Ankunft im Dialog leeren (seit 11.11.2026)', () => {
+  it('Einmal-Ziel beenden geht überall per „Beenden“ im gemeinsamen Baustein; „zuhause ab“ im Dialog leeren (seit 11.11.2026)', () => {
     const once = fs.readFileSync(path.join(PUB, 'ev-once.js'), 'utf8');
     assert.ok(once.includes('data-evo="end"'), '„Beenden“ fürs Einmal-Ziel fehlt');
-    assert.ok(once.includes('id="evOnceArrClear"'), 'Dialog: Ankunft leeren fehlt');
+    assert.ok(once.includes('id="evOnceArrClear"'), 'Dialog: „zuhause ab“ leeren fehlt');
   });
 
   it('Cache-Busting: alle Einbindungen von ev-weekly-editor.js/.css und ev-tile.js zeigen auf denselben neuen Stand', () => {
@@ -152,7 +125,7 @@ describe('Wochenplan: einzelnen Tag leeren (Oberfläche)', () => {
       for (const m of html.matchAll(/ev-weekly-editor\.(?:js|css)\?v=([\w-]+)/g)) vers.add(m[1]);
     }
     assert.equal(vers.size, 1, [...vers].join(', '));
-    assert.notEqual([...vers][0], '20261110-minmax', 'alte Version — Browser hielten den alten Editor im Cache');
+    assert.equal([...vers][0], '20261111-abfahrtstag3', 'neuer Stand (T-0427) — sonst hielten Browser den alten Editor im Cache');
   });
 });
 
@@ -201,6 +174,10 @@ async function call(ctx, method, url, body) {
 
 // Mi 11.11.2026 08:00 Berlin → nächste Mittwochs-Abfahrt wäre Do 12.11. 07:30 (Folgetag).
 const NOW = Date.parse('2026-11-11T07:00:00Z');
+// Seit T-0427 wird evWeeklyPlan im alten Format mitgeschrieben (Rückweg 1.0.9:
+// targetValue, commuteKm); gilt: evWeeklyDepartures (Zeile = Abfahrtstag).
+const WED_EMPTY_STORED = { ...WED_EMPTY, targetValue: null, commuteKm: null };
+const noWedDeparture = (rows) => rows.every((x) => !(x.day === 3 && x.departure) && !(x.day === 4 && x.departure === WED_FULL.departure));
 
 describe('Wochenplan: geleerter Tag am Server', () => {
   it('POST /api/ev mit geleertem Mittwoch: gespeichert als nicht gesetzt (kein 00:00, keine 0 %)', async () => {
@@ -208,7 +185,8 @@ describe('Wochenplan: geleerter Tag am Server', () => {
     const r = await call(ctx, 'POST', '/api/ev', { departure: { enabled: true, weeklyPlan: planWith(WED_EMPTY), once: '', onceMinSocPct: '', onceTripSocPct: '' } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const opt = ctx.saved.at(-1).optimizer;
-    assert.deepEqual(opt.evWeeklyPlan[2], WED_EMPTY);
+    assert.deepEqual(opt.evWeeklyPlan[2], WED_EMPTY_STORED);
+    assert.ok(noWedDeparture(opt.evWeeklyDepartures), JSON.stringify(opt.evWeeklyDepartures));
     assert.equal(opt.evDepartureOnce, '');
     assert.equal(opt.evDepartureOnceMinSocPct, null);
     assert.equal(opt.evDepartureOnceTripSocPct, null);
@@ -217,7 +195,8 @@ describe('Wochenplan: geleerter Tag am Server', () => {
   it('ältere Oberflächen schicken leere Strings: auch "" bei Mind./Fahrt heißt nicht gesetzt', () => {
     const p = parseEvDeparturePatch({ weeklyPlan: [{ day: 3, arrival: '', departure: '', minSocPct: '', tripSocPct: '' }] });
     assert.equal(p.ok, true, p.error);
-    assert.deepEqual(p.patch.evWeeklyPlan[2], WED_EMPTY);
+    assert.deepEqual(p.patch.evWeeklyPlan[2], WED_EMPTY_STORED);
+    assert.ok(noWedDeparture(p.patch.evWeeklyDepartures));
   });
 
   it('ein geleerter Tag erzeugt keine Abfahrt — weder in der Auflösung noch in den Fahrten', () => {
@@ -225,7 +204,7 @@ describe('Wochenplan: geleerter Tag am Server', () => {
     const empty = { optimizer: { evDepartureEnabled: true, evTargetValue: 80, evWeeklyPlan: planWith(WED_EMPTY) } };
     // Vorher: Abfahrt aus Mittwoch.
     const before = resolveEvDeparture(full, NOW);
-    assert.equal(before.day, 3);
+    assert.equal(before.day, 4, 'Mi 18:00 → Do 07:30: Abfahrtstag Donnerstag (T-0427)');
     assert.ok(buildEvTrips(full, NOW).trips.some((t) => t.depMs === Date.parse(before.departureAt)));
     // Nachher: kein Tag mit Abfahrt → keine Abfahrt, keine Fahrt.
     const after = resolveEvDeparture(empty, NOW);
@@ -244,7 +223,8 @@ describe('Wochenplan: geleerter Tag am Server', () => {
       fs.writeFileSync(file, JSON.stringify({ optimizer: { evDepartureEnabled: true, evWeeklyPlan: planWith(WED_EMPTY) } }, null, 2));
       const loaded = loadConfigFile(file);
       assert.equal(loaded.broken, false);
-      assert.deepEqual(loaded.rawConfig.optimizer.evWeeklyPlan[2], WED_EMPTY);
+      assert.deepEqual(loaded.rawConfig.optimizer.evWeeklyPlan[2], WED_EMPTY_STORED);
+      assert.ok(noWedDeparture(loaded.rawConfig.optimizer.evWeeklyDepartures));
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

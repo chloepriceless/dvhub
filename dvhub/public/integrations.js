@@ -276,7 +276,7 @@
   }
   document.addEventListener('input', function (e) {
     if (e.target && e.target.id === 'intg-search') applyIntgSearch();
-    if (e.target && ['evcc-dep-value', 'evcc-dep-capacity', 'evcc-dep-max'].indexOf(e.target.id) >= 0) evccDepPreviewSoon();
+    if (e.target && e.target.id === 'evcc-dep-capacity') evccDepPreviewSoon();
   });
 
   // Statusmeldungen der Einstellungen: „✓ …“ grün, alles andere wie gehabt.
@@ -2624,7 +2624,11 @@
     renderEvccEosState(eos);
     fillEvccDeparture(eos.departure || {}, eos.capacityWh, eos);
   }
+  // Abfahrtsplan (T-0427): Abfahrten (Zeile = Abfahrtstag) und Standardwerte,
+  // wie sie der Baustein ev-weekly-editor.js zuletzt gemeldet hat.
   var evccDepWeeklyPlan = [];
+  var evccDepSettings = { enabled: false, minSocPct: 80, maxSocPct: '' };
+  var evccDepMigration = null;
   // Alter Heimweg (km): nur noch Hinweis im Editor, dass er nicht mehr zählt.
   var evccDepLegacyCommuteKm = 0;
   // Einmal-Ziel (11.11.2026): Knopf + Dialog + Aktiv-Chip aus ev-once.js, wie
@@ -2654,9 +2658,18 @@
     var host = document.getElementById('evcc-dep-weekly');
     if (!host || !window.DVhubEvWeekly) return;
     window.DVhubEvWeekly.render(host, evccDepWeeklyPlan, {
-      defaultMin: (document.getElementById('evcc-dep-value') || {}).value,
+      settings: evccDepSettings,
+      migration: evccDepMigration,
+      // „Verstanden“: Hinweis sofort am Server als gelesen markieren.
+      onMigrationSeen: function () {
+        evccDepMigration = null;
+        apiFetch('/api/ev', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ departure: { migrationSeen: true } }) }).catch(function () { /* beim Speichern erneut */ });
+      },
       legacyCommuteKm: evccDepLegacyCommuteKm,
-      onChange: function () { evccDepWeeklyPlan = window.DVhubEvWeekly.read(host); },
+      onChange: function () {
+        evccDepWeeklyPlan = window.DVhubEvWeekly.read(host);
+        evccDepSettings = window.DVhubEvWeekly.readSettings(host);
+      },
       // Vorschau beim Bearbeiten (POST /api/ev/preview): dieselben Felder wie beim Speichern.
       previewBody: function () {
         return { departure: evccDepartureBody(), capacityWh: evccDepCapacityWh() };
@@ -2694,13 +2707,16 @@
   }
   function fillEvccDeparture(dep, capacityWh, eos) {
     var el = function (id) { return document.getElementById(id); };
-    if (el('evcc-dep-enabled')) el('evcc-dep-enabled').checked = !!dep.enabled;
     if (el('evcc-dep-capacity')) el('evcc-dep-capacity').value = capacityWh ? Math.round(capacityWh / 100) / 10 : 50;
-    if (el('evcc-dep-value')) el('evcc-dep-value').value = dep.defaultMinSocPct != null ? dep.defaultMinSocPct : (dep.targetValue != null ? dep.targetValue : 80);
-    if (el('evcc-dep-max')) el('evcc-dep-max').value = dep.maxSocPct != null ? dep.maxSocPct : '';
+    evccDepSettings = {
+      enabled: dep.enabled === true,
+      minSocPct: dep.defaultMinSocPct != null ? dep.defaultMinSocPct : (dep.targetValue != null ? dep.targetValue : 80),
+      maxSocPct: dep.maxSocPct != null ? dep.maxSocPct : ''
+    };
+    evccDepMigration = dep.weeklyMigration || null;
     var onceCtl = evccOnceCtl();
     if (onceCtl) onceCtl.refresh();
-    evccDepWeeklyPlan = Array.isArray(dep.weeklyPlan) ? dep.weeklyPlan : [];
+    evccDepWeeklyPlan = Array.isArray(dep.weeklyDepartures) ? dep.weeklyDepartures : [];
     evccDepLegacyCommuteKm = Number(dep.commuteKm) || 0;
     renderEvccDepWeekly();
     setEvccDepSummary(dep, capacityWh, eos);
@@ -2931,22 +2947,21 @@
   function evccDepartureBody() {
     var el = function (id) { return document.getElementById(id); };
     var host = el('evcc-dep-weekly');
+    var W = window.DVhubEvWeekly;
+    var s = host && W ? W.readSettings(host) : evccDepSettings;
+    var num = function (v) { return v === '' || v == null ? '' : Number(String(v).replace(',', '.')); };
     var out = {
-      enabled: !!(el('evcc-dep-enabled') && el('evcc-dep-enabled').checked),
-      weeklyPlan: host && window.DVhubEvWeekly ? window.DVhubEvWeekly.read(host) : evccDepWeeklyPlan,
-      maxSocPct: numOrEmpty('evcc-dep-max'),
+      enabled: s.enabled === true,
+      weeklyDepartures: host && W ? W.read(host) : evccDepWeeklyPlan,
+      maxSocPct: num(s.maxSocPct),
       // Ziele seit 1.0.10 immer in % Ladestand.
       targetMode: 'percent',
-      targetValue: Number((el('evcc-dep-value') && el('evcc-dep-value').value) || 0)
+      targetValue: num(s.minSocPct)
     };
+    // Gespeichert = Hinweis „Wochenplan umgestellt“ gelesen.
+    if (evccDepMigration) out.migrationSeen = true;
     // Kein Einmal-Ziel: das speichert der Dialog (ev-once.js) selbst.
     return out;
-
-    function numOrEmpty(id) {
-      var f = el(id);
-      var raw = f ? String(f.value).trim() : '';
-      return raw === '' ? '' : Number(raw.replace(',', '.'));
-    }
   }
   function renderEvccEosState(eos) {
     var box = document.getElementById('evcc-eos-state');
@@ -3050,7 +3065,10 @@
       wallbox: wallboxBody()
     };
     // Wochenplan vor dem Senden pruefen (deutsche Meldung statt Server-Fehler).
-    var depErr = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(body.eos.departure.weeklyPlan || [], { enabled: body.eos.departure.enabled, hasOnce: !!(evccOnceCtl() && evccOnceCtl().active()) }) : null;
+    var dep0 = body.eos.departure;
+    var depErr = window.DVhubEvWeekly ? window.DVhubEvWeekly.validate(dep0.weeklyDepartures || [], {
+      enabled: dep0.enabled, hasOnce: !!(evccOnceCtl() && evccOnceCtl().active()), settings: { minSocPct: dep0.targetValue, maxSocPct: dep0.maxSocPct }
+    }) : null;
     if (depErr) {
       if (banner) { banner.textContent = 'Wochenplan: ' + depErr; banner.hidden = false; }
       return;
@@ -3196,7 +3214,6 @@
 
   document.addEventListener('change', function (e) {
     if (e.target && e.target.id === 'vev-product') vevRenderParams(e.target.value, {}, {});
-    if (e.target && e.target.id === 'evcc-dep-value') renderEvccDepWeekly();
     // Vorschau der naechsten Abfahrt, sobald ein Feld der Abfahrt sich aendert
     // (der Wochenplan selbst meldet sich ueber ev-weekly-editor.js).
     if (e.target && e.target.id && e.target.id.indexOf('evcc-dep-') === 0) evccDepPreviewSoon();

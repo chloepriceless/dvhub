@@ -1,92 +1,96 @@
-/* ev-weekly-editor.css -- Wochenplan-Editor E-Auto (ev-weekly-editor.js).
-   Leitstand-Kachel, Family-Panel und Integrationsseite. Passt bis 320 px. */
-.evw { display:flex; flex-direction:column; gap:4px; container-type:inline-size; container-name:evw; }
-.evw-head, .evw-row { display:grid; grid-template-columns:2.4em minmax(0,1fr) minmax(0,1.15fr) minmax(3.4em,4.2em); gap:4px; align-items:center; }
-.evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:2.4em minmax(0,1fr) minmax(0,1.15fr) minmax(3.4em,4.2em) minmax(3.4em,5em) auto; }
-.evw-head { font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0; }
-.evw-day { font-family:var(--f-mono); font-size:11px; color:var(--text-2); }
-.evw-row input { width:100%; min-width:0; padding:3px 4px; font-size:12px; box-sizing:border-box; }
-.evw-row .evw-min, .evw-row .evw-trip { text-align:right; }
-/* Mind. %/Fahrt % mit Kurz-Beschriftung (11.11.2026). Breit: nur das Feld,
-   die Kopfzeile beschriftet. Schmal (unten): Beschriftung + „%“ sichtbar. */
-.evw-f { display:flex; align-items:center; gap:3px; min-width:0; margin:0; }
-.evw-f .evw-fl, .evw-f .evw-fu { display:none; }
-.evw-fl { font-size:9.5px; line-height:1.15; color:var(--text-dim); text-transform:none; letter-spacing:0; }
-.evw-fu { font-family:var(--f-mono); font-size:10.5px; color:var(--text-dim); }
-.evw-row.is-empty .evw-day { color:var(--text-dim); }
-.evw-depwrap { position:relative; display:flex; align-items:center; min-width:0; }
-.evw-next { position:absolute; right:2px; top:-7px; font-family:var(--f-mono); font-size:9px; color:var(--yellow); background:var(--bg-0); padding:0 2px; border-radius:3px; pointer-events:none; }
-.evw-tools { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
-.evw-hint { font-size:10.5px; color:var(--text-dim); margin:2px 0 0; line-height:1.35; }
-.evw-head span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-/* „Leeren“ je Tag (2026-11-10): ohne ins Zeitfeld zu tippen — am iPhone
-   oeffnete das sofort den Picker und setzte eine Zeit. Fingergross (44 px);
-   breit mit feinem Zeiger (Maus) kleiner in der letzten Spalte. */
-.evw .evw-row button.evw-row-clear { min-width:44px; min-height:44px; padding:2px 4px; justify-content:center; flex-direction:column; gap:1px; letter-spacing:0; text-transform:none; color:var(--text-2); border-color:var(--hairline); touch-action:manipulation; }
-.evw-row-clear .evw-x { font-size:13px; line-height:1; }
-.evw-row-clear .evw-row-clear-t { font-size:9px; line-height:1; }
-.evw-row.is-blank .evw-row-clear { opacity:.45; }
-/* Leeres Zeitfeld ohne Fokus: keine Schein-Uhrzeit (WebKit zeigt sonst die
-   aktuelle Zeit, obwohl nichts gesetzt ist). Mit Fokus wieder normal. */
-.evw-row input.is-unset:not(:focus)::-webkit-datetime-edit { opacity:0; }
-@media (pointer: fine) {
-  .evw .evw-row button.evw-row-clear { min-width:0; min-height:26px; flex-direction:row; gap:4px; padding:2px 6px; }
-}
-/* Schmal (Telefon, Leitstand-Spalte): Mind. und Fahrt in einer zweiten Zeile —
-   Mind. unter der Abfahrt, Fahrt daneben, beide mit sichtbarer Kurz-
-   Beschriftung („mind. bei Abfahrt … %“, „Fahrt danach … %“); sonst las sich
-   die Zahl unter „Ankunft“ wie der Ladestand bei Ankunft (Christin 11.11.2026).
-   Die Uhrzeiten bleiben lesbar; „Leeren“ steht links darunter in voller
-   Fingergroesse. Container-Abfrage (Breite des Editors), @media als Rueckfall
-   fuer alte Browser. */
-@media (max-width: 560px) {
-  .evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:44px minmax(0,1fr) minmax(0,1fr); row-gap:3px; }
-  /* Kopf nur Tag | Ankunft | Abfahrt — Mind./Fahrt sind an den Feldern beschriftet. */
-  .evw-with-km .evw-head .evw-head-min, .evw-with-km .evw-head .evw-head-trip, .evw-with-km .evw-head .evw-head-x { display:none; }
-  /* Mind. % unter der Abfahrt (Spalte 3), Fahrt links daneben (Spalte 2). */
-  .evw-with-km .evw-row .evw-f-min { grid-column:3; grid-row:2; }
-  .evw-with-km .evw-row .evw-f-trip { grid-column:2; grid-row:2; }
-  .evw-with-km .evw-row .evw-f { flex-wrap:wrap; column-gap:4px; row-gap:1px; }
-  .evw-with-km .evw-row .evw-f .evw-fl { display:block; flex:1 0 100%; }
-  .evw-with-km .evw-row .evw-f .evw-fu { display:inline; }
-  .evw-with-km .evw-row .evw-f input { flex:1 1 0; width:0; min-width:0; }
-  .evw-with-km .evw-row button.evw-row-clear { grid-column:1; grid-row:2; min-width:44px; min-height:44px; flex-direction:column; gap:1px; padding:2px; }
-  .evw-with-km .evw-row { padding-bottom:4px; border-bottom:1px solid var(--hairline); }
-  .evw-with-km .evw-res { padding-left:48px; }
-  .evw-with-km .evw-warn { margin-left:48px; }
-}
-@container evw (max-width: 460px) {
-  .evw-with-km .evw-head, .evw-with-km .evw-row { grid-template-columns:44px minmax(0,1fr) minmax(0,1fr); row-gap:3px; }
-  /* Kopf nur Tag | Ankunft | Abfahrt — Mind./Fahrt sind an den Feldern beschriftet. */
-  .evw-with-km .evw-head .evw-head-min, .evw-with-km .evw-head .evw-head-trip, .evw-with-km .evw-head .evw-head-x { display:none; }
-  /* Mind. % unter der Abfahrt (Spalte 3), Fahrt links daneben (Spalte 2). */
-  .evw-with-km .evw-row .evw-f-min { grid-column:3; grid-row:2; }
-  .evw-with-km .evw-row .evw-f-trip { grid-column:2; grid-row:2; }
-  .evw-with-km .evw-row .evw-f { flex-wrap:wrap; column-gap:4px; row-gap:1px; }
-  .evw-with-km .evw-row .evw-f .evw-fl { display:block; flex:1 0 100%; }
-  .evw-with-km .evw-row .evw-f .evw-fu { display:inline; }
-  .evw-with-km .evw-row .evw-f input { flex:1 1 0; width:0; min-width:0; }
-  .evw-with-km .evw-row button.evw-row-clear { grid-column:1; grid-row:2; min-width:44px; min-height:44px; flex-direction:column; gap:1px; padding:2px; }
-  .evw-with-km .evw-row { padding-bottom:4px; border-bottom:1px solid var(--hairline); }
-  .evw-with-km .evw-res { padding-left:48px; }
-  .evw-with-km .evw-warn { margin-left:48px; }
-}
-/* Aufgeloeste Abfahrt je Zeile, Hinweis bei frueher Abfahrt ohne Ankunft und
-   die Zusammenfassung oben (2026-10-29). Volle Zeilenbreite unter den Feldern. */
-.evw-res, .evw-warn { grid-column:1 / -1; font-size:10.5px; line-height:1.35; }
-.evw-res { color:var(--text-2); font-family:var(--f-mono); padding-left:2.6em; margin-top:-1px; }
-.evw-res.is-warn { color:var(--yellow); }
-.evw-res.is-none { color:var(--text-dim); font-style:italic; }
-.evw-warn { color:var(--yellow); border-left:2px solid var(--yellow); padding:2px 0 2px 6px; margin:1px 0 3px 2.6em; }
-.evw-summary { display:flex; flex-direction:column; gap:2px; font-size:11.5px; line-height:1.4; color:var(--text-2); padding:6px 8px; margin-bottom:4px; border:1px solid var(--hairline); border-radius:6px; }
+/* ev-weekly-editor.css -- E-Auto-Planung (ev-weekly-editor.js): Standardwerte,
+   Karten je Abfahrtstag, Blatt zum Bearbeiten (Optik von ev-once.css), Pendeln.
+   Leitstand-Kachel, Family-Panel und Integrationsseite. Mobil zuerst, passt
+   bis 320 px; ab ~640 px Editorbreite stehen die Tage als Wochenleiste
+   nebeneinander. Nur Design-Tokens, keine Inline-Styles (CSP). */
+.evw { display:flex; flex-direction:column; gap:10px; container-type:inline-size; container-name:evw; }
+
+/* ---------------------------------------------------------- Zusammenfassung */
+.evw-summary { display:flex; flex-direction:column; gap:3px; font-size:12.5px; line-height:1.45; color:var(--text-2); padding:8px 10px; border:1px solid var(--hairline); border-radius:var(--r-md, 10px); background:var(--glass-2); }
 .evw-summary.is-preview { border-style:dashed; border-color:var(--yellow); }
-.evw-sum-line.is-next { color:var(--text); font-weight:600; }
+.evw-sum-line.is-next { color:var(--text); font-weight:600; font-size:13.5px; }
 .evw-sum-line.is-dim { color:var(--text-dim); }
 .evw-sum-line.is-warn { color:var(--yellow); }
-.evw-summary[hidden], .evw-res[hidden], .evw-warn[hidden] { display:none; }
-/* „Leeren“ fuers Einmal-Ziel und „Nur naechste Ankunft“ (data-evw-clear,
-   Kachel und Integrationsseite): Fingergroesse, ohne ins Datumsfeld zu tippen. */
-button.btn.sm.evw-clear-fields { min-height:44px; justify-content:center; align-self:end; letter-spacing:0; text-transform:none; touch-action:manipulation; }
-.evw-clear-wrap { display:flex; align-items:stretch; gap:6px; min-width:0; }
-.evw-clear-wrap > input { flex:1 1 auto; min-width:0; }
-.evw-clear-wrap > .evw-clear-fields { flex:0 0 auto; align-self:stretch; }
+.evw-tech { margin-top:2px; font-size:11.5px; color:var(--text-dim); }
+.evw-tech > summary { cursor:pointer; min-height:28px; display:flex; align-items:center; color:var(--text-dim); }
+.evw-tech .evw-sum-line { padding:1px 0; }
+.evw-summary[hidden] { display:none; }
+
+/* ---------------------------------------------------------- Hinweis Umstellung */
+.evw-migr { display:flex; flex-direction:column; gap:6px; padding:10px 12px; border:1px solid var(--yellow); border-radius:var(--r-md, 10px); color:var(--text-2); font-size:12.5px; line-height:1.45; }
+.evw-migr-t { color:var(--yellow); font-size:13px; }
+.evw-migr-p { margin:0; }
+.evw-migr-l { margin:0; padding-left:18px; display:flex; flex-direction:column; gap:3px; }
+.evw-migr .evw-migr-ok { align-self:flex-start; min-height:44px; }
+
+/* ---------------------------------------------------------- Standardwerte */
+.evw-std { display:grid; grid-template-columns:1fr; gap:8px; padding:10px 12px; border:1px solid var(--hairline); border-radius:var(--r-md, 10px); }
+.evw-std-on, .evw-std-f { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:44px; margin:0; }
+.evw-std-on-l { font-weight:600; color:var(--text); font-size:13.5px; }
+.evw-std-l { font-size:13px; color:var(--text-2); }
+.evw-std-in { display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; }
+.evw-std-in input { width:84px; min-height:40px; font-size:16px; text-align:right; padding:6px 8px; box-sizing:border-box; }
+.evw-unit { font-family:var(--f-mono); font-size:12px; color:var(--text-dim); }
+.evw-std-help { margin:0; font-size:11.5px; line-height:1.4; color:var(--text-dim); }
+.evw-std-on { cursor:pointer; }
+
+/* ---------------------------------------------------------- Karten je Tag */
+.evw-week { display:flex; flex-direction:column; gap:6px; }
+.evw-day { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.evw-week.is-disabled .evw-card { opacity:.55; }
+.evw-card { display:flex; align-items:stretch; gap:0; border:1px solid var(--glass-brd); border-radius:var(--r-md, 10px); background:var(--glass-2); min-height:52px; }
+.evw-card.is-off { background:transparent; border-style:dashed; }
+.evw-card.is-extra { margin-left:18px; }
+.evw-card-main { flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:10px; padding:6px 4px 6px 10px; background:none; border:0; color:inherit; text-align:left; font:inherit; cursor:pointer; border-radius:var(--r-md, 10px) 0 0 var(--r-md, 10px); min-height:44px; }
+.evw-card-main:focus-visible, .evw-card-del:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.evw-card-day { flex:0 0 2.4em; font-family:var(--f-mono); font-size:13px; font-weight:700; color:var(--text); display:flex; flex-direction:column; line-height:1.1; }
+.evw-card.is-off .evw-card-day { color:var(--text-dim); font-weight:500; }
+.evw-card-nr { font-size:10px; font-weight:500; color:var(--text-dim); }
+.evw-card-body { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.evw-card-line { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.evw-card-time { font-family:var(--f-mono); font-size:16px; font-weight:600; color:var(--text); }
+.evw-card-min { font-size:13px; color:var(--text-2); }
+.evw-card-min.is-own { color:var(--text); font-weight:600; }
+.evw-card-none { font-size:13px; color:var(--text-dim); font-style:italic; }
+.evw-card-sub { font-size:11.5px; color:var(--text-dim); line-height:1.35; }
+.evw-card-chev { flex:0 0 auto; color:var(--text-dim); font-size:18px; padding:0 2px; }
+.evw-card-sw { flex:0 0 auto; display:flex; align-items:center; justify-content:center; min-width:56px; min-height:44px; padding:0 8px; cursor:pointer; border-left:1px solid var(--hairline); }
+.evw .evw-card-del { flex:0 0 auto; min-width:56px; min-height:44px; border:0; border-left:1px solid var(--hairline); border-radius:0 var(--r-md, 10px) var(--r-md, 10px) 0; color:var(--text-2); justify-content:center; }
+
+/* ---------------------------------------------------------- Werkzeuge, Hilfe */
+.evw-tools { display:flex; flex-wrap:wrap; gap:8px; }
+.evw-tools .btn { min-height:44px; letter-spacing:0; text-transform:none; }
+.evw-hint { font-size:11.5px; color:var(--text-dim); margin:0; line-height:1.4; }
+
+/* ---------------------------------------------------------- Blatt (Dialog) */
+.evw-sheet .evw-sheet-time { width:150px; max-width:100%; }
+.evw-chips { display:flex; flex-wrap:wrap; gap:6px; }
+.evw-chip { min-height:44px; min-width:52px; padding:6px 12px; border-radius:22px; border:1px solid var(--glass-brd); background:var(--glass-2); color:var(--text-2); font:inherit; font-size:14px; cursor:pointer; }
+.evw-chip[aria-pressed="true"] { background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:#fff; border-color:transparent; font-weight:600; }
+.evw-chip:focus-visible, .evw-seg-b:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.evw-sheet-other { margin-top:4px; }
+.evw-sheet-otherl { font-size:12.5px; color:var(--text-dim); }
+.evw-sheet-other input { width:96px; }
+.evw-seg { display:inline-flex; border:1px solid var(--glass-brd); border-radius:var(--r-md, 10px); overflow:hidden; }
+.evw-seg-b { min-height:44px; padding:6px 12px; border:0; background:transparent; color:var(--text-2); font:inherit; font-size:13.5px; cursor:pointer; }
+.evw-seg-b + .evw-seg-b { border-left:1px solid var(--glass-brd); }
+.evw-seg-b[aria-checked="true"] { background:var(--glass-2); color:var(--text); font-weight:600; box-shadow:inset 0 -2px 0 var(--accent); }
+.evw-sheet-arr { font-size:14px; color:var(--text); font-weight:600; margin-left:4px; }
+.evw-sheet .ev-once-actions { flex-wrap:wrap; }
+.evw-sheet-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.evw-sheet-head .evw-sheet-like { min-height:44px; letter-spacing:0; text-transform:none; }
+.evw-sheet .evw-sheet-del { margin-right:auto; }
+.evw-sheet .btn[hidden] { display:none; }
+
+/* ---------------------------------------------------------- Wochenleiste (breit) */
+@container evw (min-width: 640px) {
+  .evw-std { grid-template-columns:auto 1fr 1fr; align-items:center; column-gap:18px; }
+  .evw-std-help { grid-column:1 / -1; }
+  .evw-week { display:grid; grid-template-columns:repeat(7, minmax(0, 1fr)); gap:6px; }
+  .evw-card { flex-direction:column; min-height:118px; flex:1 1 auto; }
+  .evw-card.is-extra { margin-left:0; }
+  .evw-card-main { flex-direction:column; align-items:flex-start; gap:4px; padding:8px; border-radius:var(--r-md, 10px) var(--r-md, 10px) 0 0; }
+  .evw-card-chev { display:none; }
+  .evw-card-line { flex-direction:column; gap:2px; }
+  .evw-card-sw, .evw .evw-card-del { border-left:0; border-top:1px solid var(--hairline); min-height:40px; border-radius:0 0 var(--r-md, 10px) var(--r-md, 10px); }
+}

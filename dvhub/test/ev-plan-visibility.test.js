@@ -53,15 +53,16 @@ describe('Regeln je Zeile (Server)', () => {
     assert.equal(departsNextDay({ arrival: '20:00', departure: '' }), false);
   });
 
-  it(`Hinweis bei Abfahrt vor ${EARLY_DEPARTURE_HINT_BEFORE} ohne Ankunft`, () => {
+  it(`Hinweis bei Abfahrt vor ${EARLY_DEPARTURE_HINT_BEFORE} ohne „zuhause ab“`, () => {
+    // Seit T-0427 (Zeile = Abfahrtstag): mit „zuhause ab“ ist es eindeutig.
     assert.equal(EARLY_DEPARTURE_HINT_BEFORE, '06:00');
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '02:00' }), true);
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '00:00' }), true);
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '05:55' }), true);
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '06:00' }), false);
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '07:00' }), false, 'alter Plan Mo–Fr 07:00: kein Hinweis');
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '20:00', departure: '02:00' }), false, 'mit Ankunft ist es eindeutig');
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '' }), false);
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '02:00' }), true);
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '00:00' }), true);
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '05:55' }), true);
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '06:00' }), false);
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '07:00' }), false, 'alter Plan Mo–Fr 07:00: kein Hinweis');
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '20:00', departure: '02:00' }), false, 'mit „zuhause ab“ ist es eindeutig');
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '' }), false);
   });
 });
 
@@ -83,7 +84,7 @@ describe('Vorschau ohne Speichern (previewEvDeparture)', () => {
     const out = previewEvDeparture(cfg(), { weeklyPlan: plan }, { nowMs: WED_2300 });
     assert.equal(out.ok, true, out.error);
     assert.equal(out.resolved.departureAt, '2026-10-29T01:00:00.000Z');
-    assert.equal(out.resolved.day, 3);
+    assert.equal(out.resolved.day, 4, 'day = Abfahrtstag (T-0427)');
     assert.equal(out.resolved.targetSocPct, 30);
   });
 
@@ -157,84 +158,16 @@ describe('POST /api/ev/preview', () => {
   });
 });
 
-describe('Editor im Browser: Zeilen-Aufloesung', () => {
-  it('dieselben Regeln wie der Server (alle Zeiten im 5-Minuten-Raster)', () => {
-    const times = [''];
-    for (let m = 0; m < 24 * 60; m += 5) times.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
-    let n = 0;
-    for (const arrival of times.filter((_, i) => i % 7 === 0 || i < 3)) {
-      for (const departure of times) {
-        const e = { arrival, departure };
-        const info = W.rowInfo({ day: 3, ...e });
-        assert.equal(info.nextDay, departsNextDay(e), `${arrival} → ${departure}`);
-        assert.equal(info.early, earlyDepartureWithoutArrival(e), `${arrival} → ${departure}`);
-        n += 1;
-      }
-    }
-    assert.ok(n > 10000);
-  });
-
-  it('Texte je Zeile', () => {
-    assert.equal(W.rowInfo({ day: 3, arrival: '', departure: '02:00' }).text, '→ Abfahrt Mi 02:00');
-    assert.equal(W.rowInfo({ day: 3, arrival: '20:00', departure: '02:00' }).text, 'Ankunft Mi 20:00 → Abfahrt Do 02:00 (Folgetag)');
-    assert.equal(W.rowInfo({ day: 4, arrival: '13:49', departure: '23:59' }).text, 'Ankunft Do 13:49 → Abfahrt Do 23:59');
-    assert.equal(W.rowInfo({ day: 7, arrival: '20:00', departure: '05:00' }).text, 'Ankunft So 20:00 → Abfahrt Mo 05:00 (Folgetag)');
-    assert.equal(W.rowInfo({ day: 1, arrival: '', departure: '' }).text, '');
-    assert.match(W.rowInfo({ day: 2, arrival: '20:00', departure: '' }).text, /Abfahrt fehlt/);
-  });
-
-  it('Hinweis bei der Falle nennt beide Naechte und den Ausweg', () => {
-    const hint = W.rowInfo({ day: 3, arrival: '', departure: '02:00' }).hint;
-    assert.equal(hint, 'Diese Abfahrt gilt für Mittwoch 02:00 (Nacht von Dienstag auf Mittwoch). Ist die Nacht von Mittwoch auf Donnerstag gemeint, trage hier eine Ankunft ein (z. B. 20:00) — dann rutscht die Abfahrt auf Donnerstag 02:00.');
-    assert.equal(W.rowInfo({ day: 1, arrival: '', departure: '07:00' }).hint, '');
-    assert.equal(W.rowInfo({ day: 3, arrival: '20:00', departure: '02:00' }).hint, '');
-    assert.match(W.rowInfo({ day: 7, arrival: '', departure: '04:00' }).hint, /Sonntag 04:00 \(Nacht von Samstag auf Sonntag\).*Sonntag auf Montag.*Montag 04:00/);
-  });
-});
-
-describe('Editor im Browser: Zusammenfassung', () => {
-  const resolved = {
-    enabled: true, departureAt: '2026-10-29T22:59:00.000Z', source: 'weekly', day: 4,
-    arrivalAt: '2026-10-29T12:49:00.000Z', arrivalSource: 'weekly', targetSocPct: 80, timeZone: 'Europe/Berlin'
-  };
-  const eos = { optimizeEv: true, registered: true, mode: 'preplan', chargeStartAt: '2026-10-29T12:49:00.000Z', deadlineSupported: true, chargeStartSupported: true };
-
-  it('naechste Abfahrt mit Quelle, Ankunft davor und was an EOS geht', () => {
-    const lines = W.summaryLines({ resolved, eos, capacityWh: 75000 });
-    assert.equal(lines[0].text, 'Nächste Abfahrt: Do 29.10. 23:59 · mindestens 80 % ≈ 60 kWh · aus Wochenplan Donnerstag');
-    assert.equal(lines[1].text, 'Ankunft davor: Do 29.10. 13:49 (Wochenplan)');
-    assert.equal(lines[2].text, 'An EOS: mindestens 80 % bis Do 29.10. 23:59 · Ladestart Do 29.10. 13:49');
-  });
-
-  it('Abfahrt am Folgetag nennt die Zeile, aus der sie kommt', () => {
-    const lines = W.summaryLines({ resolved: { ...resolved, departureAt: '2026-10-29T01:00:00.000Z', day: 3, arrivalAt: '2026-10-28T19:00:00.000Z', targetSocPct: 30 }, eos: null });
-    assert.equal(lines[0].text, 'Nächste Abfahrt: Do 29.10. 02:00 · mindestens 30 % · aus Wochenplan Mittwoch (Abfahrt am Folgetag)');
-  });
-
-  it('einmalige Abfahrt', () => {
-    const lines = W.summaryLines({ resolved: { ...resolved, source: 'once', day: 4 }, eos: null });
-    assert.equal(lines[0].text, 'Nächste Abfahrt: Do 29.10. 23:59 · mindestens 80 % · einmalig (statt Wochenplan Donnerstag)');
-    const alone = W.summaryLines({ resolved: { ...resolved, source: 'once', day: null, arrivalAt: null }, eos: null });
-    assert.equal(alone[0].text, 'Nächste Abfahrt: Do 29.10. 23:59 · mindestens 80 % · einmalig');
-  });
-
-  it('Vorschau: markiert und sagt, dass an EOS noch der gespeicherte Plan geht', () => {
-    const lines = W.summaryLines({ resolved, eos, preview: true });
-    assert.match(lines[0].text, /^Vorschau \(noch nicht gespeichert\) — Nächste Abfahrt/);
-    assert.match(lines.at(-1).text, /^An EOS \(gespeicherter Plan\):/);
-  });
-
-  it('EOS-Zeile: nicht angemeldet, ohne Uhrzeit, aus', () => {
-    assert.equal(W.summaryLines({ resolved, eos: { ...eos, registered: false, reason: 'nicht angesteckt', preplanBlocked: null } }).at(-1).text, 'An EOS: Auto gerade nicht angemeldet (nicht angesteckt)');
-    assert.equal(W.summaryLines({ resolved, eos: { ...eos, mode: 'plugged', chargeStartAt: null, deadlineSupported: false } }).at(-1).text, 'An EOS: mindestens 80 % ohne Uhrzeit (kein EOS 0.4 erkannt)');
-    assert.equal(W.summaryLines({ resolved, eos: { ...eos, optimizeEv: false } }).at(-1).text, 'An EOS: nichts — EOS plant das Auto nicht mit');
-    assert.equal(W.summaryLines({ resolved, eos: { ...eos, registered: null } }).at(-1).text, 'An EOS: noch nichts — DVhub hat das Auto noch nicht mit EOS abgeglichen');
-    assert.equal(W.summaryLines({ resolved, eos: { ...eos, mode: 'plugged', chargeStartAt: null } }).at(-1).text, 'An EOS: mindestens 80 % bis Do 29.10. 23:59 · Ladestart sofort (angesteckt)');
-  });
-
-  it('Wochenplan aus / keine Abfahrt', () => {
-    assert.equal(W.summaryLines({ resolved: { enabled: false, reason: 'aus' }, eos: null })[0].text, 'Wochenplan aus — EOS nutzt den allgemeinen Ziel-Ladestand.');
-    assert.equal(W.summaryLines({ resolved: { enabled: true, departureAt: null, reason: 'keine Abfahrt geplant', targetSocPct: 80 }, eos: null })[0].text, 'Keine Abfahrt geplant.');
+// Die Oberfläche (Karten je Abfahrtstag, Klartext-Zusammenfassung) prüft seit
+// T-0427 test/ev-weekly-editor.test.js; die Falle vom 29.10. (Zeile = Tag der
+// Ankunft) gibt es dort nicht mehr — die Karte steht beim Tag der Abfahrt.
+describe('Editor im Browser: die Falle vom 29.10. seit T-0427', () => {
+  it('„Mittwoch 02:00“ steht beim Mittwoch und sagt, welche Nacht', () => {
+    const r = { day: 3, departure: '02:00', minSocPct: 30, tripSocPct: null, homeFrom: '', homeFromPrevDay: false };
+    assert.equal(W.rowInfo(r).text, 'Abfahrt Mi 02:00');
+    assert.equal(W.rowInfo(r).hint, 'Nacht von Dienstag auf Mittwoch');
+    // gemeint war Donnerstag 02:00 → Karte Donnerstag, kein Umweg über eine Ankunft
+    assert.equal(W.rowInfo({ ...r, day: 4 }).text, 'Abfahrt Do 02:00');
   });
 });
 
@@ -257,7 +190,7 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     await new Promise((r) => setTimeout(r, 500));
     assert.equal(host._evwShown.preview, true);
     assert.equal(host._evwShown.capacityWh, 60000);
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50\u00a0% \(≈\u00a030\u00a0kWh\)/);
   });
 
   it('gespeicherter EOS-Stand laesst sich waehrend der Vorschau auffrischen, Entwurf bleibt', async () => {
@@ -270,8 +203,8 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     await new Promise((r) => setTimeout(r, 500));
     Wx.updateSaved(host, { ...saved, eos: { ...saved.eos, optimizeEv: false } });
     const lines = Wx.summaryLines(host._evwShown);
-    assert.match(lines[0].text, /^Vorschau .*mindestens 30 %/);
-    assert.equal(lines.at(-1).text, 'An EOS (gespeicherter Plan): nichts — EOS plant das Auto nicht mit');
+    assert.match(lines[0].text, /^Vorschau .*mindestens 30\u00a0%/);
+    assert.equal(lines.at(-1).text, 'Ladeplanung (EOS), gespeicherter Stand: aus — das Auto wird nicht mitgeplant.');
     // Baseline bleibt: zurueck auf den gespeicherten Formularstand → keine Vorschau
     body.current = { departure: { targetValue: 80 } };
     Wx.refreshPreview(host);
@@ -296,13 +229,13 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     body.current = { departure: { targetValue: 30 } };
     Wx.refreshPreview(host);
     await new Promise((r) => setTimeout(r, 500));
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 40 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 40\u00a0% \(≈\u00a030\u00a0kWh\)/);
     Wx.updateSaved(host, { ...saved, capacityWh: 60000 });
     // bis die neue Vorschau da ist: altes % mit alter Kapazitaet, nie gemischt
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 40 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 40\u00a0% \(≈\u00a030\u00a0kWh\)/);
     await new Promise((r) => setTimeout(r, 500));
     assert.equal(calls, 2);
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50\u00a0% \(≈\u00a030\u00a0kWh\)/);
   });
 
   it('Runde 3: Kapazitaet aendert sich, waehrend die Vorschau unterwegs ist → kWh passt zum %', async () => {
@@ -324,7 +257,7 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     Wx.updateSaved(host, { ...saved, capacityWh: 60000 });
     release();
     await new Promise((r) => setTimeout(r, 50));
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50\u00a0% \(≈\u00a030\u00a0kWh\)/);
     assert.equal(calls, 1, 'Antwort passt zur gespeicherten Kapazitaet — kein erneuter Abruf');
   });
 
@@ -344,7 +277,7 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     Wx.refreshPreview(host);
     await new Promise((r) => setTimeout(r, 1300));
     assert.equal(calls, 1);
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50\u00a0% \(≈\u00a030\u00a0kWh\)/);
   });
 
   it('Runde 5: Antwort mit alter Kapazitaet, waehrend der Takt die neue brachte → einmal neu holen', async () => {
@@ -366,6 +299,6 @@ describe('Codex-Befunde Runde 1 (Vorschau)', () => {
     release();
     await new Promise((r) => setTimeout(r, 600));
     assert.equal(calls, 2);
-    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50 % ≈ 30 kWh/);
+    assert.match(Wx.summaryLines(host._evwShown)[0].text, /mindestens 50\u00a0% \(≈\u00a030\u00a0kWh\)/);
   });
 });

@@ -11,13 +11,13 @@ test.describe('E-Auto-Wochenplan am Desktop: Tag leeren', () => {
   test.beforeEach(async ({ request }) => { before = await seed(request); });
   test.afterEach(async ({ request }) => { await restore(request, before); });
 
-  test('Integrationsseite: „Mittwoch leeren“ → Speichern → Konfig zeigt Mittwoch leer', async ({ page, request }, testInfo) => {
-    // Maus: kleinerer Knopf in der letzten Spalte (breite Schublade) ist erlaubt.
-    await integrationsFlow(page, request, testInfo, { touchMin: 24 });
+  test('Integrationsseite: Mittwoch per Schalter heraus, Dienstag im Blatt 90 % → Speichern → Konfig', async ({ page, request }, testInfo) => {
+    // Maus: Schalter in der Wochenleiste (breite Schublade) darf flacher sein.
+    await integrationsFlow(page, request, testInfo, { touchMin: 36 });
   });
 
-  test('Leitstand-Kachel: „Mittwoch leeren“ → Übernehmen schickt den Tag als nicht gesetzt', async ({ page, request }, testInfo) => {
-    // Schmale Leitstand-Spalte: zweizeilige Zeile, Knopf in Fingergröße.
+  test('Leitstand-Kachel: Mittwoch per Schalter heraus → Übernehmen schickt den Tag als nicht gesetzt', async ({ page, request }, testInfo) => {
+    // Schmale Leitstand-Spalte: Karte mit Schalter in Fingergröße.
     await tileFlow(page, request, testInfo, { touchMin: 44 });
   });
 });

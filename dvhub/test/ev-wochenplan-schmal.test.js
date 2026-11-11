@@ -1,11 +1,14 @@
-// test/ev-wochenplan-schmal.test.js -- Wochenplan-Editor im schmalen Layout
-// (Christin 11.11.2026, Prod-Webapp/schmale Kachel): „Meine Prozentwerte im
-// Wochenplan stehen jetzt an der Stelle, die bei Ankunft erwartet wird.“ Im
-// schmalen Layout rutschten „Mind. %“ unter „Ankunft“ und „Fahrt %“ unter
-// „Abfahrt“, die Kopfzeile dafür brach um — das las sich wie „Ladestand bei
-// Ankunft“. Jetzt: Mind. % unter der Abfahrt, Fahrt links daneben, beide mit
-// sichtbarer Kurz-Beschriftung; der Kopf zeigt schmal nur Tag/Ankunft/Abfahrt.
-// Gilt in Leitstand-Kachel, Family-Panel und Integrationsseite (ein Editor).
+// test/ev-wochenplan-schmal.test.js -- E-Auto-Planung am Handy (mobil zuerst).
+//
+// Bis T-0427: ein Raster aus 4–5 Feldern je Tag; im schmalen Layout rutschten
+// „Mind. %“ und „Fahrt %“ in eine zweite Zeile und lasen sich wie der
+// Ladestand bei Ankunft (Christin 11.11.2026), „Fahrt danach 0“ stand in jeder
+// Zeile wie ein Pflichtfeld. Seit T-0427 (Christin: „die Felder und die
+// Eingabe sind sehr unintuitiv“): schmal eine Liste von Karten in Klartext
+// („Di · 08:30 · mind. 80 %“), breit dieselben Karten als Wochenleiste; Werte
+// nur im Blatt, der Verbrauch der Fahrt eindeutig beschriftet und unter
+// „Erweitert“ (leer statt 0). Gilt in Leitstand-Kachel, Family-Panel und
+// Integrationsseite (ein Baustein).
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -27,37 +30,40 @@ function block(start) {
   throw new Error('Block nicht geschlossen');
 }
 
-describe('Wochenplan schmal: Prozente eindeutig der Abfahrt zugeordnet', () => {
-  it('Zeile: Mind. % und Fahrt % je in eigener Beschriftung („mind. bei Abfahrt … %“, „Fahrt danach … %“)', () => {
-    assert.match(js, /<label class="evw-f evw-f-min"><span class="evw-fl" aria-hidden="true">mind\. bei Abfahrt<\/span>'\s*\+ '<input type="number" class="input mono evw-min"/);
-    assert.match(js, /<label class="evw-f evw-f-trip"><span class="evw-fl" aria-hidden="true">Fahrt danach<\/span>'\s*\+ '<input type="number" class="input mono evw-trip"/);
-    // Reihenfolge wie die breite Kopfzeile: Mind. vor Fahrt.
-    assert.ok(js.indexOf('evw-f evw-f-min') < js.indexOf('evw-f evw-f-trip'));
-    assert.match(js, /class="evw-head-min"[^>]*>Mind\. %/);
-    assert.match(js, /class="evw-head-trip"[^>]*>Fahrt %/);
+describe('E-Auto-Planung am Handy: Karten statt Feldraster', () => {
+  it('schmal (Grundlayout): Tage untereinander, je Tag eine Karte; breit ab 640 px eine Wochenleiste mit 7 Spalten', () => {
+    assert.match(css, /\.evw-week \{ display:flex; flex-direction:column;/);
+    const wide = block('@container evw (min-width: 640px)');
+    assert.match(wide, /\.evw-week \{ display:grid; grid-template-columns:repeat\(7, minmax\(0, 1fr\)\);/);
+    // Ein Tag mit zwei Abfahrten bleibt eine Spalte (Gruppe je Tag).
+    assert.match(js, /'<div class="evw-day" role="listitem" data-day="' \+ day \+ '">' \+ cards \+ '<\/div>'/);
   });
 
-  it('breit: Beschriftung an den Feldern aus (die Kopfzeile beschriftet)', () => {
-    assert.match(css, /\.evw-f \.evw-fl, \.evw-f \.evw-fu \{ display:none; \}/);
+  it('Verbrauch der Fahrt: eindeutig beschriftet, mit Hilfe, leer statt 0, nur unter „Erweitert“', () => {
+    assert.match(js, /<summary>Erweitert: zuhause ab, Verbrauch der Fahrt<\/summary>/);
+    const more = js.slice(js.indexOf('id="evwSheetMore"'), js.indexOf('</details>', js.indexOf('id="evwSheetMore"')));
+    assert.match(more, /for="evwSheetTrip">Verbrauch dieser Fahrt ≈<\/label>/);
+    assert.match(more, /id="evwSheetTrip"[^>]*placeholder="—"/);
+    assert.match(more, /So viel Ladestand kostet die Fahrt ab dieser Abfahrt bis zur Heimkehr\. Leer = 0\. Damit schätzt DVhub den Ladestand bei Ankunft und lädt bei knappen Folgefahrten vorher mehr\./);
+    assert.match(more, /id="evwSheetArr" aria-live="polite"/);
+    assert.doesNotMatch(js, /Fahrt danach/);
+    assert.doesNotMatch(js, /placeholder="0"/);
   });
 
-  for (const start of ['@media (max-width: 560px)', '@container evw (max-width: 460px)']) {
-    it(`${start}: Mind. unter Abfahrt (Spalte 3), Fahrt Spalte 2, Beschriftung sichtbar, Kopf ohne Mind./Fahrt`, () => {
-      const b = block(start);
-      assert.match(b, /\.evw-row \.evw-f-min \{ grid-column:3; grid-row:2; \}/);
-      assert.match(b, /\.evw-row \.evw-f-trip \{ grid-column:2; grid-row:2; \}/);
-      assert.match(b, /\.evw-f \.evw-fl \{ display:block;/);
-      assert.match(b, /\.evw-head \.evw-head-min, [^{]*\.evw-head \.evw-head-trip[^{]*\{ display:none; \}/);
-      // Nie mehr ein Prozentfeld unter „Ankunft“ (Spalte 2) ohne Beschriftung.
-      assert.doesNotMatch(b, /\.evw-min \{ grid-column:2/);
-      assert.doesNotMatch(b, /span:nth-child\(4\)/);
-    });
-  }
+  it('Blatt: Eingaben 16 px (kein Zoom am iPhone), Knöpfe als Blatt von unten (ev-once.css)', () => {
+    const once = fs.readFileSync(path.join(PUB, 'ev-once.css'), 'utf8');
+    assert.match(once, /\.ev-once-dialog \.input \{ font-size:16px;/);
+    assert.match(js, /overlay\.className = 'ev-once-overlay evw-overlay'/);
+    assert.match(js, /'<div class="ev-once-dialog evw-sheet" role="dialog" aria-modal="true"/);
+    assert.match(css, /\.evw-std-in input \{[^}]*font-size:16px/);
+  });
 
-  it('Cache-Busting: Leitstand, Family und Integrationsseite laden den neuen Editor-Stand', () => {
+  it('Cache-Busting: Leitstand, Family und Integrationsseite laden den neuen Stand', () => {
     for (const f of ['index.html', 'family.html', 'integrations.html']) {
       const html = fs.readFileSync(path.join(PUB, f), 'utf8');
-      for (const m of html.matchAll(/ev-weekly-editor\.(?:js|css)\?v=([\w-]+)/g)) assert.equal(m[1], '20261111-wochenplan-schmal', f);
+      const vers = [...html.matchAll(/ev-(?:weekly-editor|tile|once)\.(?:js|css)\?v=([\w-]+)/g)].map((m) => m[1]);
+      assert.ok(vers.length >= 2, f);
+      for (const v of vers) assert.equal(v, '20261111-abfahrtstag3', f);
     }
   });
 });

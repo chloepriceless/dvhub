@@ -26,8 +26,8 @@
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
   <link rel="stylesheet" href="/integrations.css?v=20261029-integration" />
-  <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261111-wochenplan-schmal" />
-  <link rel="stylesheet" href="/ev-once.css?v=20261111-einmal-ueberall" />
+  <link rel="stylesheet" href="/ev-weekly-editor.css?v=20261111-abfahrtstag3" />
+  <link rel="stylesheet" href="/ev-once.css?v=20261111-abfahrtstag3" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=20260508">
@@ -987,16 +987,17 @@
                 </select>
               </label>
             </div>
-            <!-- Wochenplan: je Tag Ankunft (Anstecken), Abfahrt und Ziel (EOS ab 0.4;
-                 Vorplanung vor der Ankunft braucht EOS mit Ladestart).
-                 Editor: ev-weekly-editor.js. Geht mit jeder Wallbox, auch ohne evcc. -->
-            <div class="evcc-eos-subtitle">Wochenplan &amp; Ziel</div>
-            <label class="dv-field-row">
-              <input type="checkbox" class="dv-field-check" id="evcc-dep-enabled">
-              <span>Wochenplan ber&uuml;cksichtigen</span>
-            </label>
+            <!-- Abfahrtsplan (T-0427): gemeinsamer Baustein ev-weekly-editor.js wie in
+                 Leitstand-Kachel und Family-Ansicht — Standardwerte (Wochenplan an/aus,
+                 mindestens bei Abfahrt, wenn günstig bis), Karten je Abfahrtstag.
+                 Darüber das Einmal-Ziel (ev-once.js, speichert sofort über POST /api/ev).
+                 Geht mit jeder Wallbox, auch ohne evcc. -->
+            <div class="evcc-eos-subtitle">Abfahrten &amp; Ziel</div>
             <div class="dv-field">
-              <span class="field-label">Ankunft, Abfahrt, Mindest-Ladestand und Fahrt je Wochentag</span>
+              <span class="field-label">Einmalige Abfahrt</span>
+              <div class="ev-once-slot" id="evcc-once-slot"></div>
+            </div>
+            <div class="dv-field">
               <div id="evcc-dep-weekly"></div>
             </div>
             <div class="evcc-eos-grid">
@@ -1004,24 +1005,6 @@
                 <span class="field-label">Akku Auto (kWh)</span>
                 <input type="number" class="input mono" id="evcc-dep-capacity" min="1" max="250" step="0.5">
               </label>
-              <label class="dv-field">
-                <span class="field-label">Mindestens bei Abfahrt (%)</span>
-                <input type="number" class="input mono" id="evcc-dep-value" min="0" max="100" step="5">
-                <span class="field-hint">Gilt f&uuml;r jeden Tag ohne eigenen Wert in &bdquo;Mind. %&ldquo;. So voll ist das Auto bei der Abfahrt immer.</span>
-              </label>
-              <label class="dv-field">
-                <span class="field-label">Max-Ladestand, wenn g&uuml;nstig (%)</span>
-                <input type="number" class="input mono" id="evcc-dep-max" min="10" max="100" step="5" placeholder="aus">
-                <span class="field-hint">Ist Laden g&uuml;nstig (billige Nacht, PV-&Uuml;berschuss), l&auml;dt EOS &uuml;ber das Mindestziel bis hierher &mdash; mit Blick auf die Fahrten der n&auml;chsten Tage. Ist er erreicht, beendet DVhub das Laden an der Wallbox. Leer = aus. Wirkt mit einem EOS, das Wertstufen kennt.</span>
-              </label>
-            </div>
-            <!-- Einmal-Ziel (11.11.2026): derselbe Knopf + Dialog + Aktiv-Chip wie in
-                 der Leitstand-Kachel (ev-once.js); gespeichert sofort über POST /api/ev,
-                 nicht mit „Speichern“ der Schublade. -->
-            <div class="dv-field">
-              <span class="field-label">Einmalige Abfahrt</span>
-              <div class="ev-once-slot" id="evcc-once-slot"></div>
-              <span class="field-hint">&bdquo;Morgen l&auml;ngere Strecke&ldquo;: einmal z.&nbsp;B. 75&nbsp;% bis 08:00. Wirkt auch bei ausgeschaltetem Wochenplan und endet von selbst mit der Abfahrt.</span>
             </div>
             <div class="evcc-eos-state" id="evcc-dep-state">&mdash;</div>
 
@@ -1835,8 +1818,8 @@
   <script src="/pv-strings-drawer.js?v=20261102-vrm-site"></script>
   <script src="/eebus-drawer.js?v=20261110-fable-r2"></script>
   <script src="/p14a-drawer.js?v=20261110-fable-r2"></script>
-  <script src="/ev-weekly-editor.js?v=20261111-wochenplan-schmal"></script>
-  <script src="/ev-once.js?v=20261111-einmal-ueberall"></script>
-  <script src="/integrations.js?v=20261111-einmal-t0423"></script>
+  <script src="/ev-weekly-editor.js?v=20261111-abfahrtstag3"></script>
+  <script src="/ev-once.js?v=20261111-abfahrtstag3"></script>
+  <script src="/integrations.js?v=20261111-abfahrtstag3"></script>
 </body>
 </html>

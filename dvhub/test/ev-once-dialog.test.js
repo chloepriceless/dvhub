@@ -1,7 +1,7 @@
 // test/ev-once-dialog.test.js -- Einmal-Ziel in der E-Auto-Kachel als Knopf +
 // Dialog mit Aktiv-Status (Christin 11.11.2026, Prod-Test test-5 in der
 // Home-Screen-Webapp): statt dauerhafter Felder „Einmalige Abfahrt planen“,
-// solange es gilt ein Chip „Einmal-Ziel aktiv: Fr 20.11. 07:30 · mindestens
+// solange es gilt ein Chip „Einmalig: Fr 20.11. 07:30 · mind.
 // 80 %“ mit „Ändern“/„Beenden“, danach wieder der Knopf.
 //
 // Reine Logik aus public/ev-once.js (validate, chip, effectLines) per vm, mit
@@ -51,7 +51,7 @@ describe('Dialog: Prüfung (validate)', () => {
   });
 
   it('Ankunft: nicht in der Vergangenheit, nicht nach der Abfahrt; allein erlaubt', () => {
-    assert.match(O.validate({ once: '', arrivalOnce: iso(NOW - MIN) }, C).error, /Ankunft liegt in der Vergangenheit/);
+    assert.match(O.validate({ once: '', arrivalOnce: iso(NOW - MIN) }, C).error, /„Zuhause ab“ liegt in der Vergangenheit/);
     assert.match(O.validate({ once: iso(NOW + HOURS(5)), arrivalOnce: iso(NOW + HOURS(6)) }, C).error, /vor der Abfahrt/);
     assert.equal(O.validate({ once: '', arrivalOnce: iso(NOW + HOURS(2)) }, C).error, null);
   });
@@ -60,17 +60,17 @@ describe('Dialog: Prüfung (validate)', () => {
     const stored = iso(NOW - HOURS(1));
     const d = { once: iso(NOW + HOURS(10)), arrivalOnce: stored, minSocPct: '90' };
     assert.equal(O.validate(d, { ...C, storedArrivalOnce: stored }).error, null);
-    assert.match(O.validate(d, C).error, /Ankunft liegt in der Vergangenheit/);
+    assert.match(O.validate(d, C).error, /„Zuhause ab“ liegt in der Vergangenheit/);
   });
 
   it('Hinweis: Abfahrt vor der erwarteten Ankunft (Auto unterwegs)', () => {
     const c = { ...C, plugged: false, nextArrivalAt: iso(NOW + HOURS(20)) };
     const v = O.validate({ once: iso(NOW + HOURS(15)), arrivalOnce: '', minSocPct: '' }, c);
     assert.equal(v.error, null);
-    assert.ok(v.hints.some((h) => /vor der erwarteten Ankunft/.test(h)), v.hints.join('|'));
+    assert.ok(v.hints.some((h) => /vor „zuhause ab“ laut Plan/.test(h)), v.hints.join('|'));
     // mit einmaliger Ankunft davor: kein Hinweis
     const w = O.validate({ once: iso(NOW + HOURS(15)), arrivalOnce: iso(NOW + HOURS(10)) }, c);
-    assert.ok(!w.hints.some((h) => /erwarteten Ankunft/.test(h)));
+    assert.ok(!w.hints.some((h) => /vor „zuhause ab“ laut Plan/.test(h)));
     // angesteckt: kein Hinweis
     assert.ok(!O.validate({ once: iso(NOW + HOURS(15)), arrivalOnce: '' }, { ...c, plugged: true }).hints.length);
   });
@@ -98,7 +98,7 @@ describe('Kachel: Chip aus dem Server-Status (describeEvOnce → chip)', () => {
     const info = describeEvOnce(cfg({ evDepartureOnce: '2026-11-18T05:30:00.000Z', evDepartureOnceMinSocPct: 80 }), NOW);
     const c = O.chip(info, { tz: TZ });
     assert.equal(c.kind, 'active');
-    assert.equal(c.title, 'Einmal-Ziel aktiv: Mi 18.11. 06:30 · mindestens 80\u00a0%');
+    assert.equal(c.title, 'Einmalig: Mi 18.11. 06:30 · mind. 80\u00a0%');
     const t = c.lines.join('\n');
     assert.match(t, /Statt Wochenplan Mi 18\.11\. 07:00/);
     assert.match(t, /Davor gilt der Wochenplan weiter: nächste Abfahrt Di 17\.11\. 07:00/);
@@ -107,7 +107,7 @@ describe('Kachel: Chip aus dem Server-Status (describeEvOnce → chip)', () => {
 
   it('ohne eigenes Mindestziel: „(wie Plan)“ mit dem Wert der ersetzten Zeile', () => {
     const c = O.chip(describeEvOnce(cfg({ evDepartureOnce: '2026-11-18T05:30:00.000Z' }), NOW), { tz: TZ });
-    assert.equal(c.title, 'Einmal-Ziel aktiv: Mi 18.11. 06:30 · mindestens 60\u00a0% (wie Plan)');
+    assert.equal(c.title, 'Einmalig: Mi 18.11. 06:30 · mind. 60\u00a0% (wie Plan)');
   });
 
   it('vorbei: kein Chip (Knopf erscheint wieder), auch bevor die Wache abräumt', () => {
@@ -125,7 +125,7 @@ describe('Kachel: Chip aus dem Server-Status (describeEvOnce → chip)', () => {
 
   it('nur einmalige Ankunft: eigener Chip', () => {
     const c = O.chip(describeEvOnce(cfg({ evArrivalOnce: '2026-11-16T21:00:00.000Z' }), NOW), { tz: TZ });
-    assert.equal(c.title, 'Einmalige Ankunft: Mo 16.11. 22:00');
+    assert.equal(c.title, 'Einmal zuhause ab: Mo 16.11. 22:00');
   });
 });
 

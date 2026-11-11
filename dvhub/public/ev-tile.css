@@ -56,7 +56,6 @@
 .ev-steps-more { display:flex; flex-direction:column; gap:1px; }
 .ev-timeline-axis { display:flex; justify-content:space-between; font-family:var(--f-mono); font-size:10px; color:var(--text-dim); }
 .ev-inline { display:inline-flex; align-items:center; gap:8px; }
-.ev-target { width:62px; padding:3px 6px; font-size:12px; text-align:right; }
 .ev-unit { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); min-width:22px; }
 .switch.switch-sm { width:30px; height:17px; }
 .switch.switch-sm .thumb { width:11px; height:11px; }
@@ -66,9 +65,10 @@
 .ev-window.is-warn { color:var(--yellow); }
 .ev-window[hidden], .ev-weekly[hidden] { display:none; }
 .ev-weekly { padding:4px 0 6px; border-bottom:1px solid var(--hairline); }
-.ev-weekly-extra { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:6px; margin-top:8px; }
-.ev-field { display:flex; flex-direction:column; gap:2px; font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.04em; min-width:0; }
-.ev-field input { width:100%; min-width:0; padding:3px 6px; font-size:12px; box-sizing:border-box; text-transform:none; letter-spacing:0; }
+/* Abfahrtsplan eingeklappt: eine Zeile Klartext (T-0427). */
+.ev-plan-head .ev-inline { min-width:0; }
+.ev-plan-brief { font-size:12px; color:var(--text-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.ev-plan-head #evWeekToggle { min-height:36px; }
 .ev-timeline .ev-arr { stroke:var(--cyan); stroke-width:1.5; vector-effect:non-scaling-stroke; }
 .ev-timeline .ev-win { fill:var(--violet); opacity:.08; }
 .ev-actions { display:flex; justify-content:flex-end; gap:6px; padding-top:4px; }

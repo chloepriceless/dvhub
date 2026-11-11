@@ -36,7 +36,7 @@ import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, grid
 import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
-import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan, previewEvDeparture, targetSocPct, describeEvOnce } from './services/optimizer/ev-departure.js';
+import { resolveEvDeparture, parseEvDeparturePatch, summarizeEvPlan, effectiveWeeklyPlan, effectiveLegacyWeeklyPlan, weeklyMigrationNotice, previewEvDeparture, targetSocPct, describeEvOnce } from './services/optimizer/ev-departure.js';
 import { effectiveEvMaxChargeW } from './services/optimizer/eos-evcc-bridge.js';
 
 /**
@@ -6114,8 +6114,14 @@ export function createApiRoutes(ctx) {
           time: opt.evDepartureTime || '07:00',
           days: Array.isArray(opt.evDepartureDays) ? opt.evDepartureDays : [1, 2, 3, 4, 5],
           once: opt.evDepartureOnce || '',
-          // Wochenplan (immer 7 Tage; alte Config: aus time + days abgeleitet).
-          weeklyPlan: effectiveWeeklyPlan(opt),
+          // Wochenplan, Zeile = Abfahrtstag (T-0427): je Tag mindestens eine
+          // Zeile; alte Config: aus time + days abgeleitet.
+          weeklyDepartures: effectiveWeeklyPlan(opt),
+          // Derselbe Plan im alten Format (Zeile = Ankunftstag) fuer noch
+          // offene aeltere Seiten; deren Speichern wird wieder umgerechnet.
+          weeklyPlan: effectiveLegacyWeeklyPlan(opt),
+          // Einmaliger Hinweis „Wochenplan umgestellt — bitte prüfen“ (null = keiner).
+          weeklyMigration: weeklyMigrationNotice(opt),
           arrivalOnce: opt.evArrivalOnce || '',
           // Einmal-Ziel, Max-Ladestand, Standard-Mindestziel in %, EOS-Ziele.
           ...evPlanStatusFields(opt, ctx.state),
@@ -6293,7 +6299,9 @@ export function createApiRoutes(ctx) {
             time: raw.optimizer?.evDepartureTime || '07:00',
             days: Array.isArray(raw.optimizer?.evDepartureDays) ? raw.optimizer.evDepartureDays : [1, 2, 3, 4, 5],
             once: raw.optimizer?.evDepartureOnce || '',
-            weeklyPlan: effectiveWeeklyPlan(raw.optimizer || {}),
+            weeklyDepartures: effectiveWeeklyPlan(raw.optimizer || {}),
+            weeklyPlan: effectiveLegacyWeeklyPlan(raw.optimizer || {}),
+            weeklyMigration: weeklyMigrationNotice(raw.optimizer || {}),
             arrivalOnce: raw.optimizer?.evArrivalOnce || '',
             ...evPlanStatusFields(raw.optimizer || {}, ctx.state),
             commuteKm: Number(raw.optimizer?.evCommuteKm) || 0,

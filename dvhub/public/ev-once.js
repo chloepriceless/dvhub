@@ -3,7 +3,8 @@
 // ab wann ein Eintrag aktiv ist und wann er endet).
 //
 // - Knopf „Einmalige Abfahrt planen“ oeffnet einen Dialog: Abfahrt (Datum +
-//   Uhrzeit), mindestens %, unter „Mehr“ Fahrt % und eine einmalige Ankunft.
+//   Uhrzeit), mindestens %, unter „Erweitert“ der Verbrauch der Fahrt und
+//   einmal „zuhause ab“ (seit T-0427 dieselben Begriffe wie im Wochenplan).
 //   „Aktivieren“ speichert (POST /api/ev), „Abbrechen“ verwirft.
 // - Solange aktiv, zeigt die Kachel einen Status-Chip mit „Ändern“/„Beenden“
 //   (Text aus chip(), Daten aus GET /api/ev departure.onceInfo — der Server
@@ -78,7 +79,7 @@
     const hints = [];
     const fail = function (e) { return { error: e, hints: hints }; };
     if (draft.once === null) return fail('Abfahrt: bitte Datum und Uhrzeit angeben.');
-    if (draft.arrivalOnce === null) return fail('Ankunft: bitte Datum und Uhrzeit angeben (oder beide Felder leeren).');
+    if (draft.arrivalOnce === null) return fail('Zuhause ab: bitte Datum und Uhrzeit angeben (oder beide Felder leeren).');
     const once = draft.once ? Date.parse(draft.once) : NaN;
     const arr = draft.arrivalOnce ? Date.parse(draft.arrivalOnce) : NaN;
     const min = pct(draft.minSocPct);
@@ -87,18 +88,18 @@
     if (isFinite(once) && once <= now) return fail('Die Abfahrt liegt in der Vergangenheit.');
     if (isFinite(once) && once - lead <= now) return fail('Die Abfahrt muss mehr als ' + (lead / MIN) + ' min in der Zukunft liegen — so kurz vorher plant DVhub nicht mehr um.');
     if (min !== '' && !(min >= 0 && min <= 100)) return fail('Mindestens: 0–100 % oder leer.');
-    if (trip !== '' && !(trip >= 0 && trip <= 100)) return fail('Fahrt: 0–100 % oder leer.');
-    if (!isFinite(once) && (min !== '' || trip !== '')) return fail('Mindestens und Fahrt gehören zu einer Abfahrt — bitte die Abfahrt eintragen.');
+    if (trip !== '' && !(trip >= 0 && trip <= 100)) return fail('Verbrauch: 0–100 % oder leer.');
+    if (!isFinite(once) && (min !== '' || trip !== '')) return fail('Mindestens und Verbrauch gehören zu einer Abfahrt — bitte die Abfahrt eintragen.');
     // Die schon gespeicherte Ankunft darf unveraendert bleiben (wie beim Server), auch wenn sie vorbei ist.
     const storedArr = c.storedArrivalOnce ? Date.parse(c.storedArrivalOnce) : NaN;
-    if (isFinite(arr) && arr <= now && arr !== storedArr) return fail('Die Ankunft liegt in der Vergangenheit.');
-    if (isFinite(arr) && isFinite(once) && arr >= once) return fail('Die Ankunft muss vor der Abfahrt liegen.');
+    if (isFinite(arr) && arr <= now && arr !== storedArr) return fail('„Zuhause ab“ liegt in der Vergangenheit.');
+    if (isFinite(arr) && isFinite(once) && arr >= once) return fail('„Zuhause ab“ muss vor der Abfahrt liegen.');
     // Ohne Wochenplan gibt es keine Abfahrt, deren Ankunft sie ersetzen koennte (Codex 175975ce).
-    if (isFinite(arr) && !isFinite(once) && c.enabled === false) return fail('Der Wochenplan ist aus — eine Ankunft allein bewirkt nichts. Bitte die Abfahrt dazu eintragen.');
+    if (isFinite(arr) && !isFinite(once) && c.enabled === false) return fail('Der Wochenplan ist aus — „zuhause ab“ allein bewirkt nichts. Bitte die Abfahrt dazu eintragen.');
     // Hinweise (speichern geht trotzdem)
     const next = c.nextArrivalAt ? Date.parse(c.nextArrivalAt) : NaN;
     if (isFinite(once) && !isFinite(arr) && c.plugged !== true && isFinite(next) && next > now && next > once) {
-      hints.push('Die Abfahrt liegt vor der erwarteten Ankunft (' + fmtAt(c.nextArrivalAt, c.tz) + '): Das Auto ist laut Plan bis dahin unterwegs, DVhub kann vorher nicht laden. Kommst du früher heim, unter „Mehr“ die Ankunft einmalig eintragen.');
+      hints.push('Die Abfahrt liegt vor „zuhause ab“ laut Plan (' + fmtAt(c.nextArrivalAt, c.tz) + '): Das Auto ist bis dahin unterwegs, DVhub kann vorher nicht laden. Bist du früher zuhause, unter „Erweitert“ einmal „zuhause ab“ eintragen.');
     }
     const max = Number(c.maxSocPct);
     if (min !== '' && c.maxSocPct !== null && c.maxSocPct !== '' && isFinite(max) && max > 0 && min > max) {
@@ -124,7 +125,7 @@
     const weeklyOff = info && (info.weeklyEnabled === false || (info.weeklyEnabled === undefined && info.enabled === false));
     if (d && d.state === 'active' && weeklyOff) {
       lines.push('Der Wochenplan ist aus — das ist die einzige geplante Abfahrt.');
-      if (d.tripSocPct !== null && d.tripSocPct !== undefined) lines.push('Fahrt etwa ' + d.tripSocPct + ' %.');
+      if (d.tripSocPct !== null && d.tripSocPct !== undefined) lines.push('Verbrauch dieser Fahrt ≈ ' + d.tripSocPct + ' %.');
       const unplugOff = Date.parse(d.at) - (Number(info.unplugWindowMinutes) || 30) * MIN;
       lines.push('Endet von selbst mit der Abfahrt — oder wenn du das Auto ab ' + fmtTime(new Date(unplugOff).toISOString(), tz) + ' absteckst.');
     } else if (d && d.state === 'active') {
@@ -133,13 +134,13 @@
       if (d.weeklyBefore > 0 && d.nextWeeklyAt) {
         lines.push('Davor gilt der Wochenplan weiter: nächste Abfahrt ' + fmtAt(d.nextWeeklyAt, tz) + (d.weeklyBefore > 1 ? ' (+' + (d.weeklyBefore - 1) + ' weitere)' : '') + '.');
       } else lines.push('Das ist die nächste Abfahrt.');
-      if (d.tripSocPct !== null && d.tripSocPct !== undefined) lines.push('Fahrt etwa ' + d.tripSocPct + ' %.');
+      if (d.tripSocPct !== null && d.tripSocPct !== undefined) lines.push('Verbrauch dieser Fahrt ≈ ' + d.tripSocPct + ' %.');
       const unplugMs = Date.parse(d.at) - (Number(info.unplugWindowMinutes) || 30) * MIN;
       lines.push('Endet von selbst mit der Abfahrt — oder wenn du das Auto ab ' + fmtTime(new Date(unplugMs).toISOString(), tz) + ' absteckst.');
     }
     const a = info && info.arrival;
     if (a && (a.state === 'active' || a.state === 'pending')) {
-      lines.push('Ankunft einmalig ' + fmtAt(a.at, tz) + (a.state === 'pending' ? ' (gilt nach der Abfahrt davor)' : ' statt laut Wochenplan') + '.');
+      lines.push('Einmal zuhause ab ' + fmtAt(a.at, tz) + (a.state === 'pending' ? ' (gilt nach der Abfahrt davor)' : ' statt laut Wochenplan') + '.');
     }
     return lines;
   }
@@ -157,13 +158,13 @@
     const lines = effectLines(info, c);
     if (d) {
       const own = d.targetFrom === 'once';
-      const title = 'Einmal-Ziel aktiv: ' + fmtAt(d.at, c.tz) + (d.targetSocPct !== null && d.targetSocPct !== undefined ? ' · mindestens ' + d.targetSocPct + '\u00a0%' + (own ? '' : ' (wie Plan)') : '');
+      const title = 'Einmalig: ' + fmtAt(d.at, c.tz) + (d.targetSocPct !== null && d.targetSocPct !== undefined ? ' · mind. ' + d.targetSocPct + '\u00a0%' + (own ? '' : ' (wie Plan)') : '');
       return { kind: 'active', title: title, lines: lines };
     }
     if (info.weeklyEnabled === false) {
-      return { kind: 'active', title: 'Einmalige Ankunft: ' + fmtAt(a.at, c.tz) + ' — wirkt nicht', lines: ['Der Wochenplan ist aus und es gibt keine Abfahrt dazu. „Beenden“ löscht sie.'] };
+      return { kind: 'active', title: 'Einmal zuhause ab: ' + fmtAt(a.at, c.tz) + ' — wirkt nicht', lines: ['Der Wochenplan ist aus und es gibt keine Abfahrt dazu. „Beenden“ löscht sie.'] };
     }
-    return { kind: 'active', title: 'Einmalige Ankunft: ' + fmtAt(a.at, c.tz), lines: ['Ersetzt die Ankunft vor der nächsten Abfahrt; endet mit dieser Abfahrt.'] };
+    return { kind: 'active', title: 'Einmal zuhause ab: ' + fmtAt(a.at, c.tz), lines: ['Gilt vor der nächsten Abfahrt statt „zuhause ab“ laut Plan; endet mit dieser Abfahrt.'] };
   }
 
   // ------------------------------------------------------------ Dialog (DOM)
@@ -178,7 +179,7 @@
     '      <input type="date" class="input mono" id="evOnceDate" aria-label="Abfahrt Datum">',
     '      <input type="time" class="input mono" id="evOnceTime" aria-label="Abfahrt Uhrzeit">',
     '    </div>',
-    '    <p class="ev-once-help" id="evOnceDepHelp">Bis dahin soll das Auto geladen sein. Ersetzt die eine Wochenplan-Abfahrt in der N&auml;he; die Abfahrten davor bleiben mit ihrem Ziel.</p>',
+    '    <p class="ev-once-help" id="evOnceDepHelp">Bis dahin soll das Auto geladen sein. Ersetzt die Abfahrt aus dem Wochenplan, die am n&auml;chsten liegt (h&ouml;chstens 24&nbsp;h entfernt); Abfahrten davor bleiben mit ihrem Ziel.</p>',
     '  </div>',
     '  <div class="ev-once-group">',
     '    <label class="ev-once-label" for="evOnceMinIn">Mindestens bei Abfahrt</label>',
@@ -186,21 +187,21 @@
     '    <p class="ev-once-help" id="evOnceMinHelp">Ladestand, der zur Abfahrt sicher erreicht sein soll. Leer = Wert des Wochenplans.</p>',
     '  </div>',
     '  <details class="ev-once-more" id="evOnceMore">',
-    '    <summary>Mehr: Fahrt und Ankunft</summary>',
+    '    <summary>Erweitert: Verbrauch, zuhause ab</summary>',
     '    <div class="ev-once-group">',
-    '      <label class="ev-once-label" for="evOnceTripIn">Fahrt etwa</label>',
+    '      <label class="ev-once-label" for="evOnceTripIn">Verbrauch dieser Fahrt &asymp;</label>',
     '      <span class="ev-once-pct"><input type="number" inputmode="numeric" class="input mono" id="evOnceTripIn" min="0" max="100" step="1"><span class="ev-unit">%</span></span>',
-    '      <p class="ev-once-help">Verbrauch dieser Fahrt bis zur n&auml;chsten Ankunft &mdash; damit plant DVhub die Tage danach. Leer = wie im Wochenplan.</p>',
+    '      <p class="ev-once-help">So viel Ladestand kostet die Fahrt ab dieser Abfahrt bis zur Heimkehr. Damit sch&auml;tzt DVhub den Ladestand bei Ankunft und l&auml;dt bei knappen Folgefahrten vorher mehr. Leer = wie im Wochenplan.</p>',
     '    </div>',
     '    <div class="ev-once-group">',
-    '      <span class="ev-once-label" id="evOnceArrL">Nur n&auml;chste Ankunft</span>',
-    '      <button type="button" class="btn sm ev-once-arr-add" id="evOnceArrAdd">+ Ankunft eintragen</button>',
+    '      <span class="ev-once-label" id="evOnceArrL">Einmal zuhause ab</span>',
+    '      <button type="button" class="btn sm ev-once-arr-add" id="evOnceArrAdd">+ Zeit eintragen</button>',
     '      <div class="ev-once-dt" id="evOnceArrRow" role="group" aria-labelledby="evOnceArrL" hidden>',
-    '        <input type="date" class="input mono" id="evOnceArrDate" aria-label="Ankunft Datum">',
-    '        <input type="time" class="input mono" id="evOnceArrTime" aria-label="Ankunft Uhrzeit">',
-    '        <button type="button" class="btn sm ghost ev-once-clear" id="evOnceArrClear" aria-label="Ankunft leeren">&#x2715;</button>',
+    '        <input type="date" class="input mono" id="evOnceArrDate" aria-label="Zuhause ab Datum">',
+    '        <input type="time" class="input mono" id="evOnceArrTime" aria-label="Zuhause ab Uhrzeit">',
+    '        <button type="button" class="btn sm ghost ev-once-clear" id="evOnceArrClear" aria-label="Zuhause ab leeren">&#x2715;</button>',
     '      </div>',
-    '      <p class="ev-once-help">Nur wenn das Auto vor dieser Abfahrt zu einer anderen Zeit heimkommt als im Wochenplan (z. B. heute sp&auml;ter). Ersetzt einmal die Ankunft; geht auch ohne Abfahrt.</p>',
+    '      <p class="ev-once-help">Nur wenn das Auto vor dieser Abfahrt zu einer anderen Zeit zuhause ist als im Wochenplan (z. B. heute sp&auml;ter). Gilt einmal; geht auch ohne Abfahrt.</p>',
     '    </div>',
     '  </details>',
     '  <div class="ev-once-effect" id="evOnceEffect" aria-live="polite" hidden></div>',
@@ -447,7 +448,7 @@
   function saveError(res, body) {
     if (body && body.error === 'pro_required') return 'E-Auto-Planung braucht DVhub Pro.';
     if (body && body.code === 'once_in_past') return 'Die Abfahrt liegt in der Vergangenheit (oder in weniger als 10 min).';
-    if (body && body.code === 'arrival_once_in_past') return 'Die Ankunft liegt in der Vergangenheit.';
+    if (body && body.code === 'arrival_once_in_past') return '„Zuhause ab“ liegt in der Vergangenheit.';
     if (res && (res.status === 401 || res.status === 403)) return 'Keine Berechtigung (Anmeldung nötig).';
     return (body && body.error) || ('HTTP ' + (res ? res.status : '?'));
   }
@@ -533,7 +534,7 @@
       else if (k === 'edit') openDialog(true);
       else if (k === 'end') {
         const i = state.data && state.data.departure && state.data.departure.onceInfo;
-        confirmEnd('Die einmalige Abfahrt (und eine einmalige Ankunft) wird gelöscht. '
+        confirmEnd('Die einmalige Abfahrt (und ein einmaliges „zuhause ab“) wird gelöscht. '
           + (i && i.weeklyEnabled === false ? 'Danach plant DVhub keine Abfahrt — der Wochenplan ist aus.' : 'Danach gilt wieder nur der Wochenplan.')).then(async function (yes) {
           if (!yes) return;
           const out = await save({ once: '', onceMinSocPct: '', onceTripSocPct: '', arrivalOnce: '' }, 'Einmal-Ziel beendet.');
