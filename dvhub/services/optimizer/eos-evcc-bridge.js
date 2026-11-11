@@ -1210,14 +1210,17 @@ export function createEosEvccBridge(deps) {
     const resume = e.cmd !== 'limit';
     // Versuchte Grenze vor dem Befehl merken (limitTriedA), die zuletzt
     // quittierte bleibt (limitA): der Not-Halt erkennt beide (Codex 3a1d403f, P2).
-    setOwned(key, { ...e, limitTriedA: slot.currentA, confirmed: false, at });
+    setOwned(key, { ...e, limitTriedA: slot.currentA, gridCap: true, confirmed: false, at });
     const res = await charger.limit(slot.currentA, { resume });
     if (!res?.ok) {
       lastError = res?.error || 'wallbox write failed';
       pushLog('paragraph14a_wallbox_error', { charger: charger.type, error: lastError });
       return { ok: false, error: lastError };
     }
-    setOwned(key, { ...(owned.get(key) || e), cmd: 'limit', limitA: slot.currentA, limitTriedA: null, confirmed: true, at });
+    // Wieder reine Grenz-Vorgabe (auch nach einer Übergabe aus „Sofort laden“,
+    // das gridCap gelöscht haben kann) — sonst fände der Neustart sie nicht
+    // (Codex 38faa2d6, P2).
+    setOwned(key, { ...(owned.get(key) || e), cmd: 'limit', limitA: slot.currentA, limitTriedA: null, gridCap: true, dvhubStarted: false, confirmed: true, at });
     lastSent = { key: cmdKey, charger: bc.charger, action: 'limit', currentA: slot.currentA, loadpoint: bc.loadpoint, identity: ident, at, gridCap: true };
     pushLog('paragraph14a_wallbox_capped', { charger: charger.type, capW: Number(capW), action: 'limit', currentA: slot.currentA });
     return { ok: true, sent: lastSent, gridCapW: Number(capW) };
@@ -1812,7 +1815,10 @@ export function createEosEvccBridge(deps) {
             skipped.push('identity_changed');
             continue;
           }
-          const refState = { ...ref, currentAs: [ref.currentA, ref.confirmedCurrentA].filter((c) => c != null && Number.isFinite(Number(c))) };
+          // Dazu eine versuchte Übergabe an die Grenze (limitTriedA/limitA):
+          // kam nur der Strom an, lädt die Box noch auf DVhubs Befehl mit dem
+          // neuen Strom (Codex 38faa2d6, P1).
+          const refState = { ...ref, currentAs: [ref.currentA, ref.confirmedCurrentA, ref.limitTriedA, ref.limitA].filter((c) => c != null && Number.isFinite(Number(c))) };
           if (charger.type !== 'evcc') {
             // Direkte Box: frisch lesen, ob DVhubs Befehl noch steht (Punkt 2).
             // Kann der Adapter das nicht: nicht senden („im Zweifel nicht“).

@@ -241,3 +241,32 @@ describe('Codex 3a1d403f: Übergänge ohne ungedeckelte Freigabe', () => {
     assert.equal(h.box.amp, 16);
   });
 });
+
+describe('Codex 38faa2d6: Besitz nach der Übergabe', () => {
+  test('Übergabe nur halb angekommen (Strom ja, Freigabe nein): Not-Halt erkennt die Ladung als DVhubs und stoppt', async () => {
+    const h = goeLike({ frc: 0, amp: 16 });
+    await h.bridge.tick(); // Grenze 12 A
+    await h.bridge.setOverride({ kind: 'charge', powerW: 11000 }); // DVhub lädt mit 12 A (frc=2)
+    assert.equal(h.box.frc, 2);
+    h.ref.capW = 6000; // strengere Grenze
+    h.setLimit(async (a, o) => { h.calls.push(['limit', a, o?.resume === true]); h.box.amp = Math.floor(a); return { ok: false, error: 'frc timeout' }; });
+    await h.bridge.clearOverride(); // Übergabe: amp gesetzt, frc=0 gescheitert
+    assert.equal(h.box.frc, 2);
+    h.ref.paused = true;
+    await h.bridge.emergencyStop();
+    assert.deepEqual(h.calls.at(-1), ['stop'], JSON.stringify(h.calls));
+    assert.equal(h.box.frc, 1);
+  });
+
+  test('nach der Übergabe gilt die Grenze wieder als Grenz-Vorgabe — auch nach einem Neustart kommt der Strom von vorher zurück', async () => {
+    const h = goeLike({ frc: 0, amp: 16 });
+    await h.bridge.tick(); // Grenze 12 A, Strom von vorher 16 A
+    await h.bridge.setOverride({ kind: 'charge', powerW: 5000 }); // braucht keine Kürzung
+    await h.bridge.clearOverride(); // Übergabe an die Grenze
+    assert.equal(h.box.amp, 12);
+    h.ref.capW = null;
+    const again = h.make();
+    await again.tick();
+    assert.equal(h.box.amp, 16, JSON.stringify(h.calls));
+  });
+});
