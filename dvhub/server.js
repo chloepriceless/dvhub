@@ -1535,6 +1535,9 @@ const mab = createMarketAutomationBuilder(ctx);
 ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRules;
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
+// Sungrow-EMS (T-0422): Not-Halt nimmt einen von DVhub gesetzten Zwangsbetrieb
+// einmal zurück (services/control-commands.js setEmergencyStop).
+ctx.sungrowEms = scheduler.sungrowEms;
 ctx.applyDvFeedInLimit = scheduler.applyDvFeedInLimit;
 // Eine Einspeisegrenze für alle Quellen (DV-Teilvorgabe, EEBUS-LPP): die
 // kleinste gilt, beim Aufheben wird der Wert davor zurückgeschrieben.

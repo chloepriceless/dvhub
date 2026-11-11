@@ -12,6 +12,23 @@ verweist hierher.
 
 ### Neu
 
+- **Sungrow SH Hybrid als Beta-Hersteller (nur Bleeding Edge).** Neues Herstellerprofil `sungrow` für SH3.0–10RS,
+  SH5.0–10RT (inkl. -20/-V112/-V122), SH5T–SH25T und MG5/6RL über Modbus TCP (LAN-Port oder WiNet-S/S2, Port 502,
+  Unit-ID 1), Register nach Sungrow-Protokoll V1.1.9. DVhub erkennt das Gerät am Typcode und schreibt nur an einen
+  erkannten Hybrid-Wechselrichter (ein String-WR der SG-Serie wird gelesen, aber nicht gesteuert). Liest SoC,
+  Akku-, PV-, Haus- und Netzleistung (Smart Meter 5601–5608, ältere Firmware: Einspeiseleistung 13010), dazu
+  Seriennummer, SoH, Akkutemperatur und Tageswerte. Steuert den Akku über den Netz-Sollwert: nahe 0 W bleibt der
+  Wechselrichter in Self-consumption, sonst Forced mode mit Laden/Entladen und Leistung (13050–13052), alle 10 s aus
+  Netz- und Akku-Messung nachgeführt — ohne Bezugs-Wunsch nie Laden aus dem Netz, ohne Einspeise-Wunsch nie Entladen
+  ins Netz; ohne frische Messwerte oder Sollwert zurück in Self-consumption. Abregelung (Direktvermarkter, §51) über
+  die Einspeisebegrenzung am Netzpunkt (13088/13074/13087), vorher gesichert und bei Freigabe zurückgeschrieben.
+  Jeder Write mit Rücklesen; Holding-Register werden nicht zyklisch gelesen (WiNet-S). Not-Halt nimmt einen von DVhub
+  gesetzten Zwangsbetrieb einmal zurück. Ein fremdes EMS (Modus External/VPP) wird nicht übersteuert. Noch nicht an
+  echter Hardware geprüft — Anleitung für den Test: `docs/SUNGROW-BETA.md`. Allgemein neu dafür: Profil-Punkte mit
+  `notAvailableRaw` (Gerät meldet „kein Wert“ → leer statt Zahl), Zähler mit 4×int32 (`meter.readType: 'int32'`,
+  Ersatzregister `meter.fallback`), Sequenzschritte mit `optional` (Register fehlt → Schritt übersprungen) und
+  Steuerpunkte mit `verify` (Rücklesen nach jedem Write).
+
 - **LUOX/Lumenaza als Datenquelle (Einstellungen → Strompreise → „LUOX / Lumenaza“).** Mit den eigenen Zugangsdaten
   des LUOX-Kundenportals (inoffizielle Portal-Schnittstelle, nur lesende Abrufe; Token 0600 im Datenverzeichnis,
   gebunden an E-Mail und Passwort, Refresh mit Rotation, sonst neue Anmeldung; abgelehnte Zugangsdaten sperren den

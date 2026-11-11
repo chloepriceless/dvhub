@@ -164,7 +164,8 @@ export function resolveBatteryLever(cfg = {}) {
   const writable = (key) => {
     const c = cfg?.controlWrite?.[key];
     if (c?.enabled !== true) return false;
-    return mqtt || c.address != null || c.sunspec != null;
+    // emulate: Sollwert nachgebildet (Sungrow-EMS, T-0422) — schreibbar ohne eigenes Register.
+    return mqtt || c.address != null || c.sunspec != null || c.emulate != null;
   };
   const setpoint = writable('gridSetpointW');
   const discharge = writable('maxDischargeW');

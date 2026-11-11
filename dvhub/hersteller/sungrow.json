@@ -1,0 +1,204 @@
+{
+  "label": "Sungrow SH Hybrid (Modbus TCP) — Beta",
+  "beta": true,
+  "_doc": [
+    "Sungrow-Herstellerprofil (T-0422, Beta seit 11.11.2026) — Hybrid-Wechselrichter mit Akku:",
+    "SH3.0–10RS (1-phasig), SH5.0–10RT inkl. -20/-V112/-V122 und SH5T–SH25T (3-phasig), MG5/6RL.",
+    "Reine String-Wechselrichter (SG) sind NICHT abgedeckt: eigene Registerkarte. DVhub erkennt sie am",
+    "Typcode (Register 5000) und schreibt dann nichts.",
+    "",
+    "Quelle: Sungrow „Communication Protocol of Residential Hybrid Inverter“ V1.1.9 (2025-06-20).",
+    "Gegengeprüft (nur Adressen/Typen/Vorzeichen, kein Code übernommen): evcc-Template sungrow-hybrid",
+    "(MIT) und mkaiser/Sungrow-SHx-Inverter-Modbus-Home-Assistant (MIT).",
+    "",
+    "Adressen: In diesem Profil steht die DRAHT-Adresse = Doku-Adresse − 1 (Doku Kap. 1.2 und Beispiel",
+    "4.1: Register 5000 wird als 4999 gelesen). In jedem _comment steht die Doku-Adresse dazu.",
+    "32-bit-Werte (U32/S32): niederwertiges Wort zuerst (wordOrder 'le', Doku Beispiel 4.2).",
+    "Lesen über FC 4 (Input-Register). Geschrieben werden nur Holding-Register (FC 6), jede Änderung",
+    "mit Rücklesen; Holding-Register werden nicht zyklisch gelesen (Doku Note 6: über WiNet-S nicht",
+    "für häufiges Lesen/Schreiben gedacht).",
+    "",
+    "Anbindung: Modbus TCP Port 502, Unit-ID 1 (Standard), über den LAN-Port des Wechselrichters oder",
+    "das WiNet-S/WiNet-S2 (Modbus TCP dort aktiv, aktuelle Firmware — ältere WiNet-S-Firmware",
+    "verschlüsselte Modbus TCP oder brach Lesevorgänge ab). DVhub hält eine Verbindung und stellt",
+    "Anfragen nacheinander; Zeitlimit 3 s je Anfrage.",
+    "",
+    "Steuerung (Beta, an echter Hardware NOCH NICHT geprüft):",
+    "  • Netz-Sollwert: DVhub bildet ihn über den EMS-Modus nach (services/inverter/sungrow.js).",
+    "    Sollwert nahe 0 (±300 W, z. B. Puffer −40 W) → Self-consumption (13050 = 0, 13051 = 0xCC).",
+    "    Sonst Forced mode (13050 = 2), Laden 0xAA / Entladen 0xBB, Leistung 13052 in W, alle 10 s aus",
+    "    Netz- und Akku-Messung nachgeführt. Ohne Netzbezug-Wunsch nie Laden aus dem Netz, ohne",
+    "    Einspeise-Wunsch nie Entladen ins Netz. Ohne frische Messwerte oder ohne Sollwert seit 2 min →",
+    "    Self-consumption.",
+    "  • Abregelung (Direktvermarkter, §51 bei negativem Preis): Einspeisebegrenzung am Netzpunkt —",
+    "    13088 Quote = 0 (wenn vorhanden), 13074 Wert = 0 W, dann 13087 = 0xAA. Die Werte davor werden",
+    "    gesichert und bei Freigabe zurückgeschrieben (eine vom Installateur gesetzte Grenze bleibt).",
+    "  • Not-Halt: hat DVhub den Zwangsbetrieb gesetzt, einmal zurück in Self-consumption, dann nichts.",
+    "  • Nicht genutzt: Min-/Max-SoC (13058/13059), Max. Lade-/Entladeleistung (33047/33048),",
+    "    External-EMS-Modus mit Herzschlag (13080) — ungeprüft, folgt nach dem Kundentest.",
+    "",
+    "UNGEPRÜFT bis zum Kundentest: Vorzeichen der Akku-Leistung 5214 (laut mkaiser positiv =",
+    "Entladen → scale −1), Verhalten des Forced mode beim Laden aus PV + Netz, Reaktionszeit."
+  ],
+
+  "identify": {
+    "_comment": "Erkennung über Typcode (Doku 5000), Seriennummer (Doku 4990–4999), BDC-Nennleistung (Doku 5628, Obergrenze für die Akku-Leistung). Tageswerte/Zustand (Doku 13000–13045, ein Block) alle 5 min für die Anzeige. Ohne erkannten Sungrow-Hybrid schreibt DVhub nichts.",
+    "kind": "sungrow",
+    "requiredForWrites": true,
+    "infoEveryMs": 300000
+  },
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 3000
+  },
+
+  "meter": {
+    "_comment": "Smart Meter am Wechselrichter (DTSU666): Doku 5601–5608 = Gesamt, L1, L2, L3 je S32, >0 Bezug (Doku Tabelle 3 Nr. 33–36). Gesamt erst ab Protokoll V1.1.7; Phasen nur mit 3-phasigem Zähler. Ohne Block (ältere Firmware): Ersatz Doku 13010–13011 Einspeiseleistung (S32, >0 Einspeisung → scale −1), dann ohne Phasen. gridPositiveMeans bleibt Betreiberwahl (Rohwerte sind Bezug-positiv wie bei Victron).",
+    "fc": 4,
+    "address": 5600,
+    "quantity": 8,
+    "readType": "int32",
+    "wordOrder": "le",
+    "notAvailableRaw": [2147483647],
+    "fallback": { "fc": 4, "address": 13009, "scale": -1 }
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "Doku 13023 Battery SOC, U16, 0,1 %.",
+      "enabled": true,
+      "fc": 4,
+      "address": 13022,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.1,
+      "offset": 0,
+      "notAvailableRaw": [65535]
+    },
+    "batteryPowerW": {
+      "_comment": "Doku 5214–5215 Battery power, S32, W (von Sungrow statt 13022 empfohlen). Sungrow-Doku nennt kein Vorzeichen; laut mkaiser positiv = Entladen → scale −1 für DVhub (positiv = Laden). UNGEPRÜFT am Gerät.",
+      "enabled": true,
+      "fc": 4,
+      "address": 5213,
+      "quantity": 2,
+      "readType": "int32",
+      "wordOrder": "le",
+      "scale": -1,
+      "offset": 0,
+      "notAvailableRaw": [2147483647]
+    },
+    "pvPowerW": {
+      "_comment": "Doku 5017–5018 Total DC power, U32, W (PV gesamt, alle MPPT).",
+      "enabled": true,
+      "fc": 4,
+      "address": 5016,
+      "quantity": 2,
+      "readType": "uint32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [4294967295]
+    },
+    "selfConsumptionW": {
+      "_comment": "Doku 13008–13009 Load power, S32, W (Hausverbrauch; nur mit Smart Meter gültig).",
+      "enabled": true,
+      "fc": 4,
+      "address": 13007,
+      "quantity": 2,
+      "readType": "int32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [2147483647]
+    },
+    "gridSetpointW": { "enabled": false, "_comment": "Der Sollwert steht nicht im Gerät (DVhub bildet ihn nach) — nichts zurückzulesen." },
+    "minSocPct": { "enabled": false, "_comment": "Doku 13059 ist ein Holding-Register — nicht zyklisch lesen (Note 6)." },
+    "maxDischargeW": { "enabled": false },
+    "acPvL1W": { "enabled": false },
+    "acPvL2W": { "enabled": false },
+    "acPvL3W": { "enabled": false }
+  },
+
+  "controlWrite": {
+    "gridSetpointW": {
+      "_comment": "Netz-Sollwert (+ = Bezug) über den Sungrow-EMS nachgebildet (emulate 'sungrow-ems'): Doku 13050 EMS-Modus (0 Self-consumption, 2 Forced), 13051 Befehl (0xAA Laden, 0xBB Entladen, 0xCC Stopp), 13052 Leistung U16 W (0–100 % BDC-Nennleistung). keepaliveMs: DVhub frischt den Sollwert alle 30 s auf; bleibt er 2 min aus, geht der Wechselrichter in Self-consumption.",
+      "enabled": true,
+      "emulate": "sungrow-ems",
+      "keepaliveMs": 30000,
+      "sungrowEms": {
+        "bandW": 300,
+        "gain": 0.7,
+        "stepW": 100,
+        "regulateEveryMs": 10000,
+        "telemetryMaxAgeMs": 20000,
+        "targetMaxAgeMs": 120000,
+        "deviceRecheckMs": 60000
+      }
+    },
+    "chargeCurrentA": { "enabled": false },
+    "minSocPct": { "enabled": false },
+    "maxDischargeW": { "enabled": false },
+    "feedInLimitRatio": {
+      "_comment": "Doku 13088 Feed-in Limitation Ratio, U16, 0,1 % (0–1000). Hat Vorrang vor 13074 — deshalb bei der Abregelung ebenfalls 0. Erst ab Protokoll V1.1.7: ohne das Register (0xFFFF/Exception) wird der Schritt übersprungen.",
+      "enabled": true,
+      "fc": 6,
+      "address": 13087,
+      "writeType": "uint16",
+      "scale": 1,
+      "offset": 0,
+      "verify": true,
+      "notAvailableRaw": [65535]
+    },
+    "feedInLimitW": {
+      "_comment": "Doku 13074 Feed-in Limitation Value, U16, W (Grenze am Netzpunkt mit Smart Meter).",
+      "enabled": true,
+      "fc": 6,
+      "address": 13073,
+      "writeType": "uint16",
+      "scale": 1,
+      "offset": 0,
+      "verify": true
+    },
+    "feedInLimitEnable": {
+      "_comment": "Doku 13087 Feed-in Limitation, U16: 0xAA (170) an, 0x55 (85) aus.",
+      "enabled": true,
+      "fc": 6,
+      "address": 13086,
+      "writeType": "uint16",
+      "scale": 1,
+      "offset": 0,
+      "verify": true
+    }
+  },
+
+  "dvControl": {
+    "_comment": "Abregelung über die Sungrow-Einspeisebegrenzung am Netzpunkt (wie Victron „keine Einspeisung“: Haus und Akku bleiben versorgt, die PV wird gedrosselt). DC-gekoppelte Hybrid-PV → feedExcessDcPv: '0' sperrt, '1' gibt frei. Gesichert wird vorher, was am Gerät steht (dv_seq_saved.json, übersteht Neustarts); die Freigabe stellt genau das wieder her. Kein restoreDefault: ohne Sicherung schreibt die Freigabe nichts (eine Grenze des Netzbetreibers darf DVhub nie abschalten).",
+    "enabled": true,
+    "feedExcessDcPv": {
+      "enabled": true,
+      "sequence": {
+        "0": [
+          { "point": "feedInLimitRatio", "value": 0, "saveBefore": true, "optional": true },
+          { "point": "feedInLimitW", "value": 0, "saveBefore": true },
+          { "point": "feedInLimitEnable", "value": 170, "saveBefore": true }
+        ],
+        "1": [
+          { "point": "feedInLimitRatio", "restore": true, "optional": true },
+          { "point": "feedInLimitW", "restore": true },
+          { "point": "feedInLimitEnable", "restore": true }
+        ]
+      }
+    },
+    "dontFeedExcessAcPv": {
+      "_comment": "Nicht genutzt: die Abregelung läuft über feedExcessDcPv (eine Einspeisebegrenzung für das ganze Gerät).",
+      "enabled": false
+    },
+    "negativePriceProtection": {
+      "_comment": "Bei negativem Preis sperrt DVhub die Einspeisung (Sequenz oben).",
+      "enabled": true
+    }
+  }
+}

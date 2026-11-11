@@ -34,6 +34,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 // Netzanschluss und Peak Shaving: gemeinsamer Kern der Bezugsgrenzen.
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
+import { createSungrowEms, endpointKeyOf, sungrowEmsConf } from './services/inverter/sungrow.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -209,6 +210,23 @@ export function createScheduleEvaluator(ctx) {
     state, getCfg, pushLog,
     getAssist: () => ctx.batteryAssist || ctx.gridConnection?.batteryAssist || null
   });
+
+  // Sungrow-Hybrid (T-0422, Beta): Netz-Sollwert über den EMS-Modus nachbilden
+  // (controlWrite.gridSetpointW.emulate 'sungrow-ems'). Ohne dieses Profil ruht er.
+  const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog });
+
+  // Geräte-Tor (Profil identify.requiredForWrites): geschrieben wird erst, wenn
+  // polling.js das Gerät erkannt hat und es unterstützt ist — ein falsches oder
+  // unbekanntes Gerät hinter derselben Adresse bekommt keinen einzigen Write.
+  function deviceWriteGate(cfg) {
+    if (cfg?.identify?.requiredForWrites !== true) return null;
+    const d = state.victron?.device;
+    // Erkannt gilt nur für die Verbindung, an der erkannt wurde — nach einem
+    // Adresswechsel erst wieder schreiben, wenn polling.js neu erkannt hat.
+    if (!d || d.endpointKey !== endpointKeyOf(cfg.victron)) return 'device_not_identified';
+    if (d.supported !== true) return 'device_not_supported';
+    return null;
+  }
 
   let stopping = false;
   let evalTimeout = null;
@@ -614,10 +632,38 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
+  // Schritt mit optional: true (Sungrow 13088, erst ab Protokoll V1.1.7): kennt
+  // das Gerät das Register nicht (Exception 1/2 bzw. ein notAvailableRaw-Wert
+  // beim Sichern), wird der Schritt in diesem Lauf übersprungen statt die ganze
+  // Sequenz zu kippen.
+  const isMissingRegisterError = (e) => /^modbus exception (1|2)\b/.test(String(e?.message));
+  const notAvailableWords = (regs, pconf) => {
+    const na = Array.isArray(pconf?.notAvailableRaw) ? pconf.notAvailableRaw.map(Number) : [];
+    return na.length > 0 && Array.isArray(regs) && regs.length > 0 && na.includes(Number(regs[0]) & 0xffff);
+  };
+
+  // verify: true am Steuerpunkt — nach dem Write dasselbe Register zurücklesen
+  // (FC 3) und Wort für Wort vergleichen. Abweichung = Fehler der Sequenz
+  // (T-0076: Cache bleibt, nächster Takt schreibt erneut).
+  async function verifySequenceWrite(point, pconf, words) {
+    const regs = await transport.mbRequest({
+      fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
+      address: pconf.address, quantity: words.length, timeoutMs: pconf.timeoutMs
+    });
+    const ok = Array.isArray(regs) && words.every((w, i) => (Number(regs[i]) & 0xffff) === (Number(w) & 0xffff));
+    if (!ok) {
+      pushLog('dv_seq_readback_mismatch', { point, address: pconf.address, expected: words, actual: regs }, 'warn');
+      throw new Error(`Rücklesung ${point} weicht ab (Soll ${words.join(',')}, Ist ${Array.isArray(regs) ? regs.join(',') : regs})`);
+    }
+  }
+
   async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false } = {}) {
     const cfg = getCfg();
+    const gate = deviceWriteGate(cfg);
+    if (gate) throw new Error(gate);
     const saved = (state.ctrl._dvSeqSaved ??= {});
     if (state.ctrl._dvSeqSavedPending) persistDvSeqSaved();
+    const skippedOptional = new Set();
     // Review e9b64f0d (P2): Erst alle zu sichernden Werte lesen und gemeinsam
     // persistieren, dann schreiben. Für Sperr-Sequenzen (requirePersist) gibt es
     // eine Sperre nur, wenn ihre Sicherung auf der Platte liegt — nur so erkennt
@@ -634,10 +680,17 @@ export function createScheduleEvaluator(ctx) {
       if (!pconf?.enabled) throw new Error(`sequence point not enabled: ${step.point}`);
       if (pconf.address == null) throw new Error(`sequence point unresolved (sunspec scan pending): ${step.point}`);
       const words = ['int32', 'uint32', 'float32'].includes(normWriteType(pconf)) ? 2 : 1;
-      const regs = await transport.mbRequest({
-        fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
-        address: pconf.address, quantity: words, timeoutMs: pconf.timeoutMs
-      });
+      let regs;
+      try {
+        regs = await transport.mbRequest({
+          fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
+          address: pconf.address, quantity: words, timeoutMs: pconf.timeoutMs
+        });
+      } catch (e) {
+        if (step.optional === true && isMissingRegisterError(e)) { skippedOptional.add(step.point); continue; }
+        throw e;
+      }
+      if (step.optional === true && notAvailableWords(regs, pconf)) { skippedOptional.add(step.point); continue; }
       // Rohwert mit Vorzeichen/Sentinels in den Engineering-Wert, damit der
       // restore-Write denselben toRawForWrite-Weg exakt zurück nimmt.
       saved[step.point] = fromRawForSave(regs, pconf);
@@ -658,6 +711,7 @@ export function createScheduleEvaluator(ctx) {
     let stepsWritten = 0;
     try {
     for (const step of steps) {
+      if (skippedOptional.has(step.point)) continue;
       const pconf = writeConfFor(step.point, cfg.controlWrite?.[step.point]);
       if (!pconf?.enabled) throw new Error(`sequence point not enabled: ${step.point}`);
       if (pconf.address == null) throw new Error(`sequence point unresolved (sunspec scan pending): ${step.point}`);
@@ -691,6 +745,7 @@ export function createScheduleEvaluator(ctx) {
         await transport.mbWriteSingle({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, value: words[0], timeoutMs: pconf.timeoutMs });
       }
       stepsWritten += 1;
+      if (pconf.verify === true) await verifySequenceWrite(step.point, pconf, words);
       if (step.restore === true && saved[step.point] !== undefined) {
         delete saved[step.point];
         persistDvSeqSaved();
@@ -1074,10 +1129,30 @@ export function createScheduleEvaluator(ctx) {
     return at > 0 && Date.now() - at <= maxAge && !v.errors?.maxDischargeW && Number.isFinite(rb) ? rb : null;
   }
 
+  // Sungrow-EMS (Codex b8aa8e70, P1): lehnt ein Tor den Netz-Sollwert ab
+  // (Netzladen nicht mehr erlaubt, Not-Halt, Gerät nicht erkannt …), gilt auch der
+  // im Aktuator gemerkte Sollwert nicht mehr — er regelt sonst bis zum Ablauf
+  // weiter. Ein Fehler des Aktuators selbst (emsFailure) behält den Sollwert für
+  // den nächsten Versuch.
+  // Codex 28317bd5: nur widerrufen, wenn seit Beginn dieses Aufrufs kein neuerer
+  // Sollwert angenommen wurde; nach dem Widerruf den Schreib-Cache verwerfen, sonst
+  // hielte das „unchanged“-Kürzel denselben Wert später fest, ohne den Aktuator zu fragen.
   async function applyControlTarget(target, value, source) {
+    const seqAtStart = target === 'gridSetpointW' ? sungrowEms.acceptSeq() : null;
+    const res = await applyControlTargetCore(target, value, source);
+    if (target === 'gridSetpointW' && res?.ok === false && res.emsFailure !== true && sungrowEmsConf(getCfg())) {
+      const r = await sungrowEms.revoke(res.error || 'rejected', { unlessAcceptedAfter: seqAtStart });
+      if (r?.revoked) delete state.schedule.lastWrite.gridSetpointW;
+    }
+    return res;
+  }
+
+  async function applyControlTargetCore(target, value, source) {
     const cfg = getCfg();
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
     if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
+    const deviceGate = deviceWriteGate(cfg);
+    if (deviceGate) return { ok: false, error: deviceGate };
     // SunSpec-deklarierte Punkte haben erst nach dem Geräte-Scan (polling.js)
     // eine Adresse — vorher NIE schreiben (der address-0-Guard darunter würde
     // Number(null)===0 zwar auch blocken, aber mit irreführender Meldung).
@@ -1583,9 +1658,23 @@ export function createScheduleEvaluator(ctx) {
     if (state.schedule._lastSkipKey) delete state.schedule._lastSkipKey[target];
     // === end T-0002 keepalive ===============================================
 
+    let emsFailure = false;
     try {
       let encoded, words, fc;
-      if (transport.type === 'mqtt') {
+      if (conf.emulate != null) {
+        // Nachgebildeter Sollwert (Sungrow-EMS, T-0422): alle Tore oben sind
+        // durchlaufen; der Aktuator setzt Modus/Befehl/Leistung mit Rücklesen
+        // und führt im 5-s-Takt nach (tick).
+        if (conf.emulate !== 'sungrow-ems' || target !== 'gridSetpointW') throw new Error(`unsupported emulate: ${conf.emulate}`);
+        const r = await sungrowEms.applySetpoint(value, source);
+        if (!r?.ok) {
+          emsFailure = r?.blocked !== true;
+          throw new Error(r?.error || 'sungrow_ems_failed');
+        }
+        encoded = { raw: value, scaled: value, writeType: 'sungrow-ems', wordOrder: 'n/a' };
+        words = [value];
+        fc = 0;
+      } else if (transport.type === 'mqtt') {
         // MQTT: Engineering-Wert direkt schreiben (kein Register-Encoding)
         const mqttRes = await transport.mqttWrite(target, value);
         // Ohne Broker (HTTP-Push-Eingang, z. B. Loxone) geht nichts über MQTT:
@@ -1625,7 +1714,8 @@ export function createScheduleEvaluator(ctx) {
       state.schedule.active[target] = { value, source, at: Date.now(), keepalive: isKeepalive };
       // T-VERIFY: Read-after-Write-Verifikation planen (non-blocking, Flag-gated,
       // keine Keepalives — die re-asserten ohnehin denselben Wert zyklisch).
-      maybeScheduleWriteVerify(target, conf, cfg, { isKeepalive });
+      // Der Sungrow-Aktuator liest selbst zurück (Register 13050–13052).
+      if (conf.emulate == null) maybeScheduleWriteVerify(target, conf, cfg, { isKeepalive });
       // Real writes (value changed) are always surfaced. Keepalive re-writes
       // (identical value re-asserted every controlKeepaliveMs — ~5 s for the
       // volatile reg-2716 setpoint) used to flood the /api/log ring with one
@@ -1679,7 +1769,7 @@ export function createScheduleEvaluator(ctx) {
         source: 'runtime',
         meta: { error: e.message }
       }));
-      return { ok: false, error: e.message };
+      return { ok: false, error: e.message, ...(emsFailure ? { emsFailure: true } : {}) };
     }
   }
 
@@ -2857,7 +2947,9 @@ export function createScheduleEvaluator(ctx) {
       () => {
         // Erst die Sperre (zfi), dann die feste Einspeisegrenze — nie gleichzeitig.
         zeroFeedInTick().catch(() => { /* zfi loggt selbst (throttled) */ })
-          .then(() => feedInCapTick()).catch(() => {});
+          .then(() => feedInCapTick()).catch(() => {})
+          // Sungrow-EMS nachführen (ruht ohne Profil; intern höchstens alle 10 s).
+          .then(() => sungrowEms.tick()).catch(() => {});
       },
       ZFI_TICK_MS);
   }
@@ -2870,5 +2962,5 @@ export function createScheduleEvaluator(ctx) {
     // aktiver Deckel am Gerät verfällt über WMaxLimPct_RvrtTms von selbst.
   }
 
-  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, applyDvFeedInLimit, zeroFeedInTick, feedInCapTick, start, stop, floorHandoff };
+  return { evaluateSchedule, applyControlTarget, applyDvVictronControl, applyDvFeedInLimit, zeroFeedInTick, feedInCapTick, start, stop, floorHandoff, sungrowEms };
 }
