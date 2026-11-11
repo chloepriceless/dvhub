@@ -29,7 +29,8 @@ verweist hierher.
   PV-Überschuss), lädt EOS über das Mindestziel bis dorthin. Was eine zusätzliche kWh wert ist, schätzt DVhub aus Preisen
   und PV der nächsten 7 Tage (was sie später an Ladekosten spart, minus 1 ct Sicherheitsabschlag) und gibt es EOS als
   Wertstufen mit. Ist der Max-Ladestand erreicht, beendet DVhub das Laden an der Wallbox; eine Ladegrenze im Auto kann
-  zusätzlich bestehen. „Sofort laden“ von Hand und der Not-Halt bleiben unberührt.
+  zusätzlich bestehen. Dafür zählt nur ein Ladestand, der nach dem zuletzt gesehenen Abstecken gelesen wurde — ein
+  Wert von vor der Fahrt (TeslaMate, Fahrzeugtreiber) stoppt die Box nicht mehr (Fable R5 P3-2). „Sofort laden“ von Hand und der Not-Halt bleiben unberührt.
   - **Vorausschauend:** Das Mindestziel rechnet DVhub über die Fahrten der nächsten 8 Tage — reicht die Zeit zwischen
     zwei Fahrten nicht zum Nachladen (z. B. Samstag 09:00 und 13:00), steigt das Ziel der ersten Abfahrt.
   - **Einmal-Ziel:** „Morgen längere Strecke“ = einmal z. B. 75 % bis 08:00 (Leitstand-Kachel und Integrationen →

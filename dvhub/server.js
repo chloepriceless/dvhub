@@ -198,7 +198,7 @@ import { createWallboxAdapterCache } from './services/wallbox/adapter-cache.js';
 import { createOcppServer } from './services/wallbox/ocpp-server.js';
 import { createEvWatch } from './services/optimizer/ev-watch.js';
 import { createVehiclePull } from './services/vehicle-pull/index.js';
-import { resolveEvPlugged, createEvSocMemory, resolveEvSocPct } from './services/optimizer/ev-soc.js';
+import { resolveEvPlugged, createEvSocMemory, createMaxStopSoc } from './services/optimizer/ev-soc.js';
 import { evMaxStopSocPct } from './services/optimizer/ev-targets.js';
 import { createEosConfigSync } from './services/optimizer/eos-config-sync.js';
 import { setpointFollowHeartbeat } from './services/setpoint-follow-watchdog.js';
@@ -1862,6 +1862,8 @@ function directWallboxAdapter(type) {
 // Auch für die Einstellungsseite (Live-Zustand der Victron-Wallbox, routes-api.js).
 ctx.directWallboxAdapter = directWallboxAdapter;
 
+// Ladestand für den Max-Stopp nur aus dem laufenden Ansteckvorgang (Fable R5 P3-2).
+const evMaxStopSoc = createMaxStopSoc();
 const eosEvccBridge = createEosEvccBridge({
   getCfg: () => ctx.getCfg(),
   getSolution: () => ctx.eosMonitor.latestSolution(),
@@ -1884,9 +1886,12 @@ const eosEvccBridge = createEosEvccBridge({
   // Max-Ladestand „wenn günstig“: nur wenn er gilt (EOS kennt die Wertstufen,
   // Max an); Ladestand aus derselben Quelle wie für EOS (ev-soc.js).
   getEvMaxStop: () => {
+    // Ladestand nur aus dem laufenden Ansteckvorgang (Fable R5 P3-2); die
+    // Steck-Beobachtung läuft immer mit, auch ohne Max-Ladestand.
+    const reading = evMaxStopSoc.resolve(ctx);
     const maxSocPct = evMaxStopSocPct(state);
     if (maxSocPct === null) return null;
-    return { maxSocPct, socPct: resolveEvSocPct(ctx)?.pct ?? null };
+    return { maxSocPct, socPct: reading?.pct ?? null };
   },
   pushLog: (event, data) => ctx.pushLog?.(event, data),
   // „Sofort laden“ ueberlebt einen Neustart (Update mitten im Laden) — eigene

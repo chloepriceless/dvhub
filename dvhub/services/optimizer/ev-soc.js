@@ -204,6 +204,32 @@ export function resolveEvPlugged(ctx) {
 }
 
 /**
+ * Ladestand für den Max-Stopp (Fable R5 P3-2): nur ein Wert, der nach dem
+ * zuletzt gesehenen Abstecken gelesen wurde. Sonst nähme der Max-Stopp einen
+ * Ladestand von vor der Fahrt (TeslaMate ohne Altersgrenze, evcc-Fahrzeugtreiber
+ * bis 24 h) und schaltete die Wallbox hart aus, obwohl das Auto leer
+ * zurückkommt. Ein Wert aus dem laufenden Ansteckvorgang gilt weiter, auch wenn
+ * danach lange nichts Neues kommt (schlafendes Auto nach dem Stopp — kein
+ * Flattern). Ohne Zeitpunkt: kein Max-Stopp. Steck-Zustand unbekannt bzw.
+ * seit dem Start kein Abstecken gesehen: wie bisher.
+ * @returns {{ resolve(ctx, nowMs?): { pct, source, atMs } | null }}
+ */
+export function createMaxStopSoc() {
+  let lastUnpluggedAt = null;
+  return {
+    resolve(ctx, nowMs = Date.now()) {
+      let plugged;
+      try { plugged = resolveEvPlugged(ctx); } catch { plugged = null; }
+      if (plugged === false) { lastUnpluggedAt = nowMs; return null; }
+      const r = collectEvSocReadings(ctx, nowMs)[0];
+      if (!r || r.atMs === null || r.atMs === undefined) return null;
+      if (lastUnpluggedAt !== null && r.atMs <= lastUnpluggedAt) return null;
+      return r;
+    }
+  };
+}
+
+/**
  * Entprellt den Steck-Zustand: ein Wechsel zaehlt erst, wenn er `stableTicks`
  * Abfragen in Folge gleich bleibt (evcc meldet beim Anstecken/Abziehen kurz
  * wechselnde Werte; jeder Wechsel kostet einen EOS-Neuplan). Die allererste
