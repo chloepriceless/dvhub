@@ -120,7 +120,7 @@ describe('Eingaben pruefen (Integrationsseite + Leitstand-Kachel)', () => {
     // Alte Felder setzen den Wochenplan zurueck (evWeeklyPlan und — seit
     // T-0427 — evWeeklyDepartures null) — dann gelten Uhrzeit + Tage wieder
     // (ev-weekly-plan.test.js).
-    assert.deepEqual(r, { ok: true, patch: { evDepartureTime: '07:05', evDepartureDays: [1, 3, 5], evWeeklyPlan: null, evWeeklyDepartures: null, evTargetValue: 80 } });
+    assert.deepEqual(r, { ok: true, patch: { evDepartureTime: '07:05', evDepartureDays: [1, 3, 5], evWeeklyPlan: null, evWeeklyDepartures: null, evWeeklyPlanKey: null, evTargetValue: 80 } });
   });
   test('Fehler mit Praefix', () => {
     assert.equal(parseEvDeparturePatch({ time: '25:00' }, 'eos.departure').error, 'eos.departure.time must be HH:MM');

@@ -618,7 +618,9 @@
     function paint() {
       const custom = st.minSocPct !== null && MIN_CHIPS.indexOf(Number(st.minSocPct)) < 0;
       markChips(dlg, 'evw-chip-min', st.minSocPct);
-      $('evwSheetMin').value = custom ? st.minSocPct : '';
+      // Ein ungültiger Wert bleibt sichtbar, solange er gilt — sonst stünde der
+      // Fehler neben einem leeren Feld (Codex 702e901a).
+      $('evwSheetMin').value = st.minBad ? st.minRaw : (custom ? st.minSocPct : '');
       // Tag für „zuhause ab“: Vorschlag folgt der Uhrzeit, bis man selbst wählt.
       if (!st.prevTouched) st.homeFromPrevDay = defaultPrevDay(st.homeFrom || '23:59', st.departure);
       dlg.querySelectorAll('.evw-seg-b').forEach(function (b) {
@@ -654,7 +656,7 @@
       if (t.id === 'evwSheetDep') st.departure = pad5(t.value);
       else if (t.id === 'evwSheetHome') st.homeFrom = pad5(t.value);
       else if (t.id === 'evwSheetTrip') { st.tripSocPct = pctOrNull(t.value); st.tripBad = badPct(t.value); }
-      else if (t.id === 'evwSheetMin') { st.minSocPct = pctOrNull(t.value); st.minBad = badPct(t.value); paintKeep(t); return; }
+      else if (t.id === 'evwSheetMin') { st.minSocPct = pctOrNull(t.value); st.minBad = badPct(t.value); st.minRaw = t.value; paintKeep(t); return; }
       paint();
     });
     // Beim Tippen in „anderer Wert“ das Feld nicht neu befüllen.

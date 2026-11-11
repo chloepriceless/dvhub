@@ -393,3 +393,35 @@ test('Codex 4974135c: angenommener Plan lässt sich unverändert wieder speicher
   assert.equal(b.ok, true, b.error);
   assert.match(NEW.parseEvDeparturePatch({ weeklyDepartures: [...many, { day: 4, departure: '07:00' }] }).error, /up to 14/);
 });
+
+// ------------------------------------------------------------ Codex 6d342e27
+
+test('Codex 6d342e27: mitgeschriebenes Altformat mit Fingerabdruck — andere Verteilung (frühere Version) ist keine Fremdänderung', () => {
+  const deps = NEW.normalizeDepartureRows([dep(2, '07:00'), dep(2, '10:00', 70, '09:00', false), dep(2, '11:00', 60)]);
+  // So hätte eine frühere Verteilung das alte Format schreiben können (gültig, aber anders):
+  const earlier = [
+    { day: 1, arrival: '10:00', departure: '10:00', minSocPct: 70, tripSocPct: null, targetValue: 70, commuteKm: null },
+    { day: 2, arrival: '', departure: '07:00', minSocPct: null, tripSocPct: null, targetValue: null, commuteKm: null },
+    ...[3, 4, 5, 6, 7].map((day) => ({ day, arrival: '', departure: '', minSocPct: null, tripSocPct: null, targetValue: null, commuteKm: null })),
+  ];
+  const o = normalizeConfigInput({ optimizer: { evWeeklyDepartures: deps, evWeeklyPlan: earlier, evWeeklyPlanKey: NEW.legacyPlanKey(earlier, {}) } }).rawConfig.optimizer;
+  assert.deepEqual(o.evWeeklyDepartures, deps, 'nichts verloren');
+  assert.equal(o.evWeeklyMigration ?? null, null, 'kein Hinweis');
+  assert.equal(o.evWeeklyPlanKey, NEW.legacyPlanKey(o.evWeeklyPlan, {}));
+  // Eine ältere Version ändert das alte Format → Fingerabdruck passt nicht mehr → deren Stand gilt
+  const edited = earlier.map((r) => (r.day === 2 ? { day: 2, arrival: '', departure: '06:45', targetValue: 90, commuteKm: null } : r));
+  const e = normalizeConfigInput({ optimizer: { evWeeklyDepartures: deps, evWeeklyPlan: edited, evWeeklyPlanKey: NEW.legacyPlanKey(earlier, {}) } }).rawConfig.optimizer;
+  assert.equal(e.evWeeklyMigration.reason, 'older-version');
+  assert.ok(e.evWeeklyDepartures.some((r) => r.day === 2 && r.departure === '06:45' && r.minSocPct === 90));
+  // Speichern schreibt den Fingerabdruck mit
+  const p = NEW.parseEvDeparturePatch({ weeklyDepartures: deps });
+  assert.equal(p.patch.evWeeklyPlanKey, NEW.legacyPlanKey(p.patch.evWeeklyPlan, {}));
+  assert.equal(NEW.parseEvDeparturePatch({ time: '07:00', days: [1] }).patch.evWeeklyPlanKey, null);
+});
+
+test('Codex 6d342e27: Fahrt-% der älteren Seite wird genau verglichen (12,1 → 12,4 ist eine Änderung)', () => {
+  const stored = NEW.normalizeDepartureRows([dep(2, '07:00', 80, '', false, 12.1)]);
+  const mirror = NEW.legacyFromDepartures(stored).rows.map((r) => (r.day === 2 ? { ...r, tripSocPct: 12.4 } : r));
+  const p = NEW.parseEvDeparturePatch({ weeklyPlan: mirror }, 'departure', { opt: { evWeeklyDepartures: stored } });
+  assert.equal(p.patch.evWeeklyDepartures.find((r) => r.day === 2).tripSocPct, 12.4);
+});

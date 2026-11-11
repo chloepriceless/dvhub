@@ -50,6 +50,15 @@ test.describe('E-Auto-Abfahrtsplan: Blatt und Schalter (Codex 720037e0)', () => 
     await sheet.locator('#evwSheetMin').fill('120');
     await expect(sheet.locator('#evwSheetError')).toHaveText('Mindestens bei Abfahrt: 0–100 % oder leer.');
     await expect(sheet.locator('#evwSheetOk')).toBeDisabled();
+    // Andere Eingabe danach: der ungültige Wert bleibt sichtbar, der Fehler passt dazu (Codex 702e901a)
+    await sheet.locator('#evwSheetDep').fill('00:05');
+    await expect(sheet.locator('#evwSheetMin')).toHaveValue('120');
+    await expect(sheet.locator('#evwSheetOk')).toBeDisabled();
+    await sheet.locator('#evwSheetDep').fill('00:00');
+    // leer ist erlaubt (= Standard)
+    await sheet.locator('#evwSheetMin').fill('');
+    await expect(sheet.locator('#evwSheetError')).toBeHidden();
+    await expect(sheet.locator('#evwSheetOk')).toBeEnabled();
     await sheet.locator('#evwSheetMin').fill('85');
     await expect(sheet.locator('#evwSheetOk')).toBeEnabled();
     await sheet.locator('#evwSheetOk').tap();

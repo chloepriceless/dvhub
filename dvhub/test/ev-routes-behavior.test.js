@@ -96,7 +96,7 @@ describe('POST /api/ev', () => {
     const r = await call(ctx, 'POST', '/api/ev', { departure: { enabled: true, time: '7:30', days: [5, 1, 1, 9], targetMode: 'percent', targetValue: 80 } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     // „7:30“ → „07:30“, Tage entdoppelt + sortiert, 9 verworfen.
-    assert.deepEqual(r.body.patch, { evDepartureEnabled: true, evDepartureTime: '07:30', evDepartureDays: [1, 5], evWeeklyPlan: null, evWeeklyDepartures: null, evTargetMode: 'percent', evTargetValue: 80 });
+    assert.deepEqual(r.body.patch, { evDepartureEnabled: true, evDepartureTime: '07:30', evDepartureDays: [1, 5], evWeeklyPlan: null, evWeeklyDepartures: null, evWeeklyPlanKey: null, evTargetMode: 'percent', evTargetValue: 80 });
     assert.deepEqual(ctx.replans, []);
   });
 

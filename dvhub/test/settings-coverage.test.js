@@ -103,6 +103,7 @@ const INTENTIONAL = new Map([
   ['optimizer.evDepartureOnce', 'EVCC-Schublade auf der Integrationsseite (E-Auto-Abfahrt)'],
   ['optimizer.evWeeklyPlan', 'Wochenplan im alten Format (Zeile = Ankunftstag): mitgeschrieben fuer den Rueckweg auf 1.0.9, ev-departure.js legacyFromDepartures'],
   ['optimizer.evWeeklyDepartures', 'Wochenplan-Editor (Zeile = Abfahrtstag, T-0427): EVCC-Schublade, Leitstand-Kachel, Family (ev-weekly-editor.js)'],
+  ['optimizer.evWeeklyPlanKey', 'Fingerabdruck des mitgeschriebenen alten Wochenplans (ev-departure.js legacyPlanKey) — erkennt Änderungen durch ältere Versionen'],
   ['optimizer.evWeeklyMigration', 'Hinweis „Wochenplan umgestellt — bitte prüfen“ im Wochenplan-Editor + Sicherung des alten Plans (ev-departure.js migrateWeeklyConfig)'],
   ['optimizer.evArrivalOnce', 'EVCC-Schublade auf der Integrationsseite (E-Auto: einmalige Ankunft)'],
   ['optimizer.evCommuteKm', 'Wochenplan-Editor: nur Hinweis, dass der alte Heimweg (km) nicht mehr genutzt wird (10.11.2026)'],

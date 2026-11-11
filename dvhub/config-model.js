@@ -5284,6 +5284,10 @@ export function createDefaultConfig() {
       // evDepartureDays abgeleitet (gleiche Abfahrt an diesen Tagen). Die
       // beiden alten Felder bleiben dafuer stehen.
       evWeeklyPlan: null,
+      // Fingerabdruck des mitgeschriebenen alten Formats (ev-departure.js
+      // legacyPlanKey): passt evWeeklyPlan nicht mehr dazu, hat eine aeltere
+      // Version den Plan geaendert und deren Stand gilt.
+      evWeeklyPlanKey: null,
       // Einmalige Umstellung alter Plaene: { at, reason, seen, notes[], previous }
       // — previous ist der alte Plan (Sicherung), notes zeigt der Editor einmal.
       evWeeklyMigration: null,

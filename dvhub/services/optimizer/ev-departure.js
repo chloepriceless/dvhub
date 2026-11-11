@@ -443,13 +443,33 @@ export function legacyFromDepartures(list) {
   return { rows, lost };
 }
 
-/** Planen zwei alte Plaene dieselben Zeiten und Ziele? (Fahrt kennt 1.0.9 nicht.) */
+/**
+ * Planen zwei alte Plaene dieselben Zeiten und Ziele? Das Ziel gerundet (1.0.9
+ * rechnet targetValue gerundet in %), die Fahrt — nur wenn die Seite sie
+ * schickt — genau (Codex 6d342e27).
+ */
 function sameLegacyPlan(a, b, opt, { withTrip = false } = {}) {
   const x = migrateWeeklyPlanRows(a, opt);
   const y = migrateWeeklyPlanRows(b, opt);
   const pct = (v) => (v === null || v === undefined ? null : Math.round(Number(v)));
+  const num = (v) => (v === null || v === undefined ? null : Number(v));
   return x.every((r, i) => r.arrival === y[i].arrival && r.departure === y[i].departure && pct(r.minSocPct) === pct(y[i].minSocPct)
-    && (!withTrip || pct(r.tripSocPct) === pct(y[i].tripSocPct)));
+    && (!withTrip || num(r.tripSocPct) === num(y[i].tripSocPct)));
+}
+
+/**
+ * Fingerabdruck des mitgeschriebenen alten Formats (Zeiten und Ziel je Zeile,
+ * FNV-1a). Steht als optimizer.evWeeklyPlanKey daneben: passt evWeeklyPlan beim
+ * Laden nicht mehr dazu, hat eine aeltere Version den Plan geaendert — egal,
+ * wie diese Version das alte Format verteilen wuerde (Codex 6d342e27).
+ */
+export function legacyPlanKey(list, opt = {}) {
+  const s = migrateWeeklyPlanRows(list, opt)
+    .map((r) => `${r.day}|${r.arrival}|${r.departure}|${r.minSocPct === null || r.minSocPct === undefined ? '' : Math.round(Number(r.minSocPct))}`)
+    .join(';');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i += 1) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0');
 }
 
 /**
@@ -473,17 +493,23 @@ export function migrateWeeklyConfig(opt = {}, { nowMs = Date.now() } = {}) {
   const hasOld = Array.isArray(opt.evWeeklyPlan);
   const fromLegacy = (reason) => {
     const conv = departuresFromLegacy(opt.evWeeklyPlan, opt);
-    const patch = { evWeeklyDepartures: conv.rows, evWeeklyPlan: legacyFromDepartures(conv.rows).rows };
+    const mirror = legacyFromDepartures(conv.rows).rows;
+    const patch = { evWeeklyDepartures: conv.rows, evWeeklyPlan: mirror, evWeeklyPlanKey: legacyPlanKey(mirror) };
     if (migrateWeeklyPlanRows(opt.evWeeklyPlan, opt).some((r) => r.departure || r.arrival)) {
       patch.evWeeklyMigration = { at: new Date(nowMs).toISOString(), reason, seen: false, notes: conv.notes, previous: JSON.parse(JSON.stringify(opt.evWeeklyPlan)) };
     }
     return patch;
   };
-  if (hasNew && opt.evWeeklyPlan === null) return { evWeeklyDepartures: null };
+  if (hasNew && opt.evWeeklyPlan === null) return { evWeeklyDepartures: null, evWeeklyPlanKey: null };
   if (hasNew) {
     const rows = normalizeDepartureRows(opt.evWeeklyDepartures);
     const mirror = legacyFromDepartures(rows).rows;
-    if (!hasOld || sameLegacyPlan(opt.evWeeklyPlan, mirror, opt)) return { evWeeklyDepartures: rows, evWeeklyPlan: mirror };
+    // Unveraendert: Fingerabdruck passt (mit ihm geschrieben); ohne
+    // Fingerabdruck (Zwischenstaende vor Codex 6d342e27) der Vergleich mit der
+    // eigenen Verteilung.
+    const key = typeof opt.evWeeklyPlanKey === 'string' && opt.evWeeklyPlanKey ? opt.evWeeklyPlanKey : null;
+    const unchanged = !hasOld || (key ? legacyPlanKey(opt.evWeeklyPlan, opt) === key : sameLegacyPlan(opt.evWeeklyPlan, mirror, opt));
+    if (unchanged) return { evWeeklyDepartures: rows, evWeeklyPlan: mirror, evWeeklyPlanKey: legacyPlanKey(mirror) };
     return fromLegacy('older-version');
   }
   if (hasOld) return fromLegacy('legacy');
@@ -1101,6 +1127,7 @@ export function parseEvDeparturePatch(d, prefix = 'departure', { opt = {}, nowMs
     if (!wd.ok) return wd;
     patch.evWeeklyDepartures = wd.rows;
     patch.evWeeklyPlan = legacyFromDepartures(wd.rows).rows;
+    patch.evWeeklyPlanKey = legacyPlanKey(patch.evWeeklyPlan);
   } else if ('weeklyPlan' in d) {
     // Umrechnung alter Zeilen mit den Werten, die im selben Aufruf kommen.
     const conv = { ...opt };
@@ -1118,14 +1145,17 @@ export function parseEvDeparturePatch(d, prefix = 'departure', { opt = {}, nowMs
     if (stored && sameLegacyPlan(wp.plan, legacyFromDepartures(stored).rows, conv, { withTrip: d.weeklyPlan.some((e) => e && typeof e === 'object' && 'tripSocPct' in e) })) {
       patch.evWeeklyDepartures = stored;
       patch.evWeeklyPlan = legacyFromDepartures(stored).rows;
+      patch.evWeeklyPlanKey = legacyPlanKey(patch.evWeeklyPlan);
     } else {
     const rows = departuresFromLegacy(wp.plan, conv).rows;
     patch.evWeeklyDepartures = rows;
     patch.evWeeklyPlan = legacyFromDepartures(rows).rows;
+    patch.evWeeklyPlanKey = legacyPlanKey(patch.evWeeklyPlan);
     }
   } else if ('time' in d || 'days' in d) {
     patch.evWeeklyPlan = null;
     patch.evWeeklyDepartures = null;
+    patch.evWeeklyPlanKey = null;
   }
   if (d.migrationSeen === true && opt.evWeeklyMigration && typeof opt.evWeeklyMigration === 'object') {
     patch.evWeeklyMigration = { ...opt.evWeeklyMigration, seen: true };
