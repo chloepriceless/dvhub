@@ -53,15 +53,16 @@ describe('Regeln je Zeile (Server)', () => {
     assert.equal(departsNextDay({ arrival: '20:00', departure: '' }), false);
   });
 
-  it(`Hinweis bei Abfahrt vor ${EARLY_DEPARTURE_HINT_BEFORE} ohne Ankunft`, () => {
+  it(`Hinweis bei Abfahrt vor ${EARLY_DEPARTURE_HINT_BEFORE} ohne „zuhause ab“`, () => {
+    // Seit T-0427 (Zeile = Abfahrtstag): mit „zuhause ab“ ist es eindeutig.
     assert.equal(EARLY_DEPARTURE_HINT_BEFORE, '06:00');
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '02:00' }), true);
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '00:00' }), true);
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '05:55' }), true);
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '06:00' }), false);
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '07:00' }), false, 'alter Plan Mo–Fr 07:00: kein Hinweis');
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '20:00', departure: '02:00' }), false, 'mit Ankunft ist es eindeutig');
-    assert.equal(earlyDepartureWithoutArrival({ arrival: '', departure: '' }), false);
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '02:00' }), true);
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '00:00' }), true);
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '05:55' }), true);
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '06:00' }), false);
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '07:00' }), false, 'alter Plan Mo–Fr 07:00: kein Hinweis');
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '20:00', departure: '02:00' }), false, 'mit „zuhause ab“ ist es eindeutig');
+    assert.equal(earlyDepartureWithoutArrival({ homeFrom: '', departure: '' }), false);
   });
 });
 
@@ -83,7 +84,7 @@ describe('Vorschau ohne Speichern (previewEvDeparture)', () => {
     const out = previewEvDeparture(cfg(), { weeklyPlan: plan }, { nowMs: WED_2300 });
     assert.equal(out.ok, true, out.error);
     assert.equal(out.resolved.departureAt, '2026-10-29T01:00:00.000Z');
-    assert.equal(out.resolved.day, 3);
+    assert.equal(out.resolved.day, 4, 'day = Abfahrtstag (T-0427)');
     assert.equal(out.resolved.targetSocPct, 30);
   });
 
@@ -167,7 +168,7 @@ describe('Editor im Browser: Zeilen-Aufloesung', () => {
         const e = { arrival, departure };
         const info = W.rowInfo({ day: 3, ...e });
         assert.equal(info.nextDay, departsNextDay(e), `${arrival} → ${departure}`);
-        assert.equal(info.early, earlyDepartureWithoutArrival(e), `${arrival} → ${departure}`);
+        assert.equal(info.early, earlyDepartureWithoutArrival({ departure, homeFrom: arrival }), `${arrival} → ${departure}`);
         n += 1;
       }
     }

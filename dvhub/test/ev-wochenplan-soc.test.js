@@ -72,7 +72,7 @@ describe('Wochenplan in SoC-%: Übernahme alter Pläne', () => {
 
   test('alter Plan ohne evWeeklyPlan: Abfahrten aus Uhrzeit + Tagen, ohne Ziele', () => {
     const plan = effectiveWeeklyPlan({ evDepartureTime: '07:00', evDepartureDays: [1, 2] });
-    assert.deepEqual(plan[0], { day: 1, arrival: '', departure: '07:00', minSocPct: null, tripSocPct: null });
+    assert.deepEqual(plan[0], { day: 1, departure: '07:00', minSocPct: null, tripSocPct: null, homeFrom: '', homeFromPrevDay: false });
   });
 
   test('Konfig-Migration beim Laden: gespeicherter Plan in SoC-%, neue Felder mit Vorgaben', () => {
@@ -83,7 +83,11 @@ describe('Wochenplan in SoC-%: Übernahme alter Pläne', () => {
     const opt = persistedConfig.optimizer;
     assert.equal(opt.evWeeklyPlan[4].minSocPct, 100);
     assert.equal(opt.evWeeklyPlan[3].tripSocPct, null, 'Heimweg wird keine Fahrt');
-    assert.ok(!('targetValue' in opt.evWeeklyPlan[4]));
+    // Seit T-0427: evWeeklyPlan = mitgeschriebenes altes Format, targetValue in % für 1.0.9
+    assert.equal(opt.evWeeklyPlan[4].targetValue, 100);
+    // Gilt: Zeile = Abfahrtstag — Sa 09:00 mit 100 %, zuhause ab Fr 15:00
+    assert.deepEqual(opt.evWeeklyDepartures.find((r) => r.minSocPct === 100), { day: 6, departure: '09:00', minSocPct: 100, tripSocPct: null, homeFrom: '15:00', homeFromPrevDay: true });
+    assert.ok(opt.evWeeklyDepartures.every((r) => r.tripSocPct === null), 'Heimweg wird keine Fahrt');
     assert.equal(opt.evMaxSocPct, 80);
     assert.equal(opt.evValueMarginCt, 1);
     assert.equal(opt.evDepartureOnceMinSocPct, null);
@@ -111,7 +115,9 @@ describe('Wochenplan in SoC-%: Eingaben', () => {
   test('Zeile mit Mindest-Ladestand und Fahrt in %', () => {
     const r = parseEvDeparturePatch({ weeklyPlan: [{ day: 2, departure: '07:00', arrival: '18:00', minSocPct: 50, tripSocPct: 30 }] });
     assert.equal(r.ok, true, r.error);
-    assert.deepEqual(r.patch.evWeeklyPlan[1], { day: 2, arrival: '18:00', departure: '07:00', minSocPct: 50, tripSocPct: 30 });
+    assert.deepEqual(r.patch.evWeeklyPlan[1], { day: 2, arrival: '18:00', departure: '07:00', minSocPct: 50, tripSocPct: 30, targetValue: 50, commuteKm: null });
+    // gilt: Mi 07:00, zuhause ab Di 18:00 (Zeile = Abfahrtstag, T-0427)
+    assert.deepEqual(r.patch.evWeeklyDepartures[2], { day: 3, departure: '07:00', minSocPct: 50, tripSocPct: 30, homeFrom: '18:00', homeFromPrevDay: true });
   });
 
   for (const [name, body, error] of [
@@ -141,7 +147,7 @@ describe('Wochenplan in SoC-%: Eingaben', () => {
     assert.equal(r.patch.evWeeklyPlan[4].minSocPct, 100);
     for (const e of r.patch.evWeeklyPlan) {
       assert.equal(e.tripSocPct, null, `Tag ${e.day}`);
-      assert.ok(!('commuteKm' in e));
+      assert.equal(e.commuteKm, null, 'Heimweg nicht übernommen');
     }
   });
 });

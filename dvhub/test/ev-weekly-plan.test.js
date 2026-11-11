@@ -41,7 +41,8 @@ describe('Wochenplan: Uebernahme der alten Einstellung', () => {
   test('alte Uhrzeit + Tage → gleiche Abfahrt an diesen Tagen, keine Ankunft', () => {
     const plan = effectiveWeeklyPlan({ evDepartureTime: '07:00', evDepartureDays: [1, 2, 3, 4, 5] });
     assert.equal(plan.length, 7);
-    assert.deepEqual(plan.map((e) => [e.day, e.arrival, e.departure, e.minSocPct, e.tripSocPct]), [
+    // Seit T-0427 Zeile = Abfahrtstag: „zuhause ab“ statt Ankunft
+    assert.deepEqual(plan.map((e) => [e.day, e.homeFrom, e.departure, e.minSocPct, e.tripSocPct]), [
       [1, '', '07:00', null, null], [2, '', '07:00', null, null], [3, '', '07:00', null, null],
       [4, '', '07:00', null, null], [5, '', '07:00', null, null], [6, '', '', null, null], [7, '', '', null, null],
     ]);
@@ -72,7 +73,8 @@ describe('Wochenplan: naechstes Fenster', () => {
     assert.equal(r.arrivalAt, '2026-09-22T18:00:00.000Z');
     assert.equal(r.departureAt, '2026-09-23T03:00:00.000Z');
     assert.equal(r.arrivalSource, 'weekly');
-    assert.equal(r.day, 2);
+    // day = Tag der Abfahrt (seit T-0427; vorher die Zeile der Ankunft, Di)
+    assert.equal(r.day, 3);
     // Die Fahrt begann mit der Abfahrt Di 05:00 aus dem Montags-Eintrag.
     assert.equal(r.tripStartAt, '2026-09-22T03:00:00.000Z');
     assert.equal(r.targetSocPct, 80);
@@ -93,7 +95,7 @@ describe('Wochenplan: naechstes Fenster', () => {
     assert.equal(r.arrivalAt, '2026-09-25T13:00:00.000Z');
     assert.equal(r.departureAt, '2026-09-26T07:00:00.000Z');
     assert.equal(r.targetSocPct, 100);
-    assert.equal(r.day, 5);
+    assert.equal(r.day, 6); // Abfahrtstag Samstag (seit T-0427)
   });
 
   test('Wochenende: nach Sa 09:00 ist Montag dran (So hat keinen Plan)', () => {
@@ -205,10 +207,16 @@ describe('Wochenplan: Eingaben pruefen', () => {
     assert.equal(r.patch.evWeeklyPlan.length, 7);
     // Alte Felder werden in SoC-% umgerechnet (seit 1.0.10) — das Ziel, nicht
     // der Heimweg: der fließt nicht in die Planung ein, auch nicht als Fahrt
-    // (Christin 10.11.2026, „der Heimweg ist ja immer anders“).
-    assert.deepEqual(r.patch.evWeeklyPlan[0], { day: 1, arrival: '', departure: '05:00', minSocPct: null, tripSocPct: null });
-    assert.deepEqual(r.patch.evWeeklyPlan[4], { day: 5, arrival: '15:00', departure: '09:00', minSocPct: 100, tripSocPct: null });
-    assert.deepEqual(r.patch.evWeeklyPlan[6], { day: 7, arrival: '', departure: '', minSocPct: null, tripSocPct: null });
+    // (Christin 10.11.2026, „der Heimweg ist ja immer anders“). Seit T-0427
+    // gespeichert als Abfahrten (Zeile = Abfahrtstag) und im alten Format
+    // mitgeschrieben (targetValue in % für 1.0.9).
+    assert.deepEqual(r.patch.evWeeklyPlan[0], { day: 1, arrival: '', departure: '05:00', minSocPct: null, tripSocPct: null, targetValue: null, commuteKm: null });
+    assert.deepEqual(r.patch.evWeeklyPlan[4], { day: 5, arrival: '15:00', departure: '09:00', minSocPct: 100, tripSocPct: null, targetValue: 100, commuteKm: null });
+    assert.deepEqual(r.patch.evWeeklyPlan[6], { day: 7, arrival: '', departure: '', minSocPct: null, tripSocPct: null, targetValue: null, commuteKm: null });
+    assert.deepEqual(r.patch.evWeeklyDepartures.filter((x) => x.departure), [
+      { day: 1, departure: '05:00', minSocPct: null, tripSocPct: null, homeFrom: '', homeFromPrevDay: false },
+      { day: 6, departure: '09:00', minSocPct: 100, tripSocPct: null, homeFrom: '15:00', homeFromPrevDay: true },
+    ]);
   });
 
   for (const [name, body, error] of [

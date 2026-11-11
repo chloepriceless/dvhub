@@ -201,6 +201,10 @@ async function call(ctx, method, url, body) {
 
 // Mi 11.11.2026 08:00 Berlin → nächste Mittwochs-Abfahrt wäre Do 12.11. 07:30 (Folgetag).
 const NOW = Date.parse('2026-11-11T07:00:00Z');
+// Seit T-0427 wird evWeeklyPlan im alten Format mitgeschrieben (Rückweg 1.0.9:
+// targetValue, commuteKm); gilt: evWeeklyDepartures (Zeile = Abfahrtstag).
+const WED_EMPTY_STORED = { ...WED_EMPTY, targetValue: null, commuteKm: null };
+const noWedDeparture = (rows) => rows.every((x) => !(x.day === 3 && x.departure) && !(x.day === 4 && x.departure === WED_FULL.departure));
 
 describe('Wochenplan: geleerter Tag am Server', () => {
   it('POST /api/ev mit geleertem Mittwoch: gespeichert als nicht gesetzt (kein 00:00, keine 0 %)', async () => {
@@ -208,7 +212,8 @@ describe('Wochenplan: geleerter Tag am Server', () => {
     const r = await call(ctx, 'POST', '/api/ev', { departure: { enabled: true, weeklyPlan: planWith(WED_EMPTY), once: '', onceMinSocPct: '', onceTripSocPct: '' } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const opt = ctx.saved.at(-1).optimizer;
-    assert.deepEqual(opt.evWeeklyPlan[2], WED_EMPTY);
+    assert.deepEqual(opt.evWeeklyPlan[2], WED_EMPTY_STORED);
+    assert.ok(noWedDeparture(opt.evWeeklyDepartures), JSON.stringify(opt.evWeeklyDepartures));
     assert.equal(opt.evDepartureOnce, '');
     assert.equal(opt.evDepartureOnceMinSocPct, null);
     assert.equal(opt.evDepartureOnceTripSocPct, null);
@@ -217,7 +222,8 @@ describe('Wochenplan: geleerter Tag am Server', () => {
   it('ältere Oberflächen schicken leere Strings: auch "" bei Mind./Fahrt heißt nicht gesetzt', () => {
     const p = parseEvDeparturePatch({ weeklyPlan: [{ day: 3, arrival: '', departure: '', minSocPct: '', tripSocPct: '' }] });
     assert.equal(p.ok, true, p.error);
-    assert.deepEqual(p.patch.evWeeklyPlan[2], WED_EMPTY);
+    assert.deepEqual(p.patch.evWeeklyPlan[2], WED_EMPTY_STORED);
+    assert.ok(noWedDeparture(p.patch.evWeeklyDepartures));
   });
 
   it('ein geleerter Tag erzeugt keine Abfahrt — weder in der Auflösung noch in den Fahrten', () => {
@@ -225,7 +231,7 @@ describe('Wochenplan: geleerter Tag am Server', () => {
     const empty = { optimizer: { evDepartureEnabled: true, evTargetValue: 80, evWeeklyPlan: planWith(WED_EMPTY) } };
     // Vorher: Abfahrt aus Mittwoch.
     const before = resolveEvDeparture(full, NOW);
-    assert.equal(before.day, 3);
+    assert.equal(before.day, 4, 'Mi 18:00 → Do 07:30: Abfahrtstag Donnerstag (T-0427)');
     assert.ok(buildEvTrips(full, NOW).trips.some((t) => t.depMs === Date.parse(before.departureAt)));
     // Nachher: kein Tag mit Abfahrt → keine Abfahrt, keine Fahrt.
     const after = resolveEvDeparture(empty, NOW);
@@ -244,7 +250,8 @@ describe('Wochenplan: geleerter Tag am Server', () => {
       fs.writeFileSync(file, JSON.stringify({ optimizer: { evDepartureEnabled: true, evWeeklyPlan: planWith(WED_EMPTY) } }, null, 2));
       const loaded = loadConfigFile(file);
       assert.equal(loaded.broken, false);
-      assert.deepEqual(loaded.rawConfig.optimizer.evWeeklyPlan[2], WED_EMPTY);
+      assert.deepEqual(loaded.rawConfig.optimizer.evWeeklyPlan[2], WED_EMPTY_STORED);
+      assert.ok(noWedDeparture(loaded.rawConfig.optimizer.evWeeklyDepartures));
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

@@ -96,7 +96,7 @@ describe('POST /api/ev', () => {
     const r = await call(ctx, 'POST', '/api/ev', { departure: { enabled: true, time: '7:30', days: [5, 1, 1, 9], targetMode: 'percent', targetValue: 80 } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     // „7:30“ → „07:30“, Tage entdoppelt + sortiert, 9 verworfen.
-    assert.deepEqual(r.body.patch, { evDepartureEnabled: true, evDepartureTime: '07:30', evDepartureDays: [1, 5], evWeeklyPlan: null, evTargetMode: 'percent', evTargetValue: 80 });
+    assert.deepEqual(r.body.patch, { evDepartureEnabled: true, evDepartureTime: '07:30', evDepartureDays: [1, 5], evWeeklyPlan: null, evWeeklyDepartures: null, evTargetMode: 'percent', evTargetValue: 80 });
     assert.deepEqual(ctx.replans, []);
   });
 
@@ -197,6 +197,38 @@ describe('Pro (eos): Wallbox-Steuerung und E-Auto-Planung (2026-10-15)', () => {
 });
 
 describe('Wochenplan über /api/ev (2026-10-27)', () => {
+  // T-0427: Zeile = Abfahrtstag. POST nimmt weeklyDepartures, speichert beide
+  // Formate; GET liefert beide und den Umstell-Hinweis, bis er gelesen ist.
+  it('POST weeklyDepartures + migrationSeen → neues und altes Format gespeichert, Hinweis gelesen; GET zeigt beides', async () => {
+    const ctx = makeCtx();
+    ctx.getRawCfg().optimizer.evWeeklyMigration = { at: '2026-11-11T12:00:00.000Z', reason: 'legacy', seen: false, notes: [{ kind: 'helper', day: 2, text: 'x' }], previous: [] };
+    let g = await call(ctx, 'GET', '/api/ev');
+    assert.deepEqual(g.body.departure.weeklyMigration, { at: '2026-11-11T12:00:00.000Z', reason: 'legacy', notes: [{ kind: 'helper', day: 2, text: 'x' }] });
+    const r = await call(ctx, 'POST', '/api/ev', { departure: { enabled: true, migrationSeen: true, weeklyDepartures: [
+      { day: 2, departure: '08:30', minSocPct: 80, homeFrom: '19:15', homeFromPrevDay: true },
+      { day: 6, departure: '09:22', minSocPct: 60, homeFrom: '09:17', homeFromPrevDay: false },
+      { day: 6, departure: '10:00', minSocPct: 50 },
+    ] } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const opt = ctx.saved.at(-1).optimizer;
+    assert.equal(opt.evWeeklyDepartures.length, 8, '7 Tage + zweite Abfahrt am Samstag');
+    assert.equal(opt.evWeeklyMigration.seen, true);
+    assert.deepEqual(opt.evWeeklyPlan.find((x) => x.day === 1), { day: 1, arrival: '19:15', departure: '08:30', minSocPct: 80, tripSocPct: null, targetValue: 80, commuteKm: null });
+    Object.assign(ctx.getRawCfg().optimizer, opt);
+    g = await call(ctx, 'GET', '/api/ev');
+    assert.equal(g.body.departure.weeklyMigration, null);
+    assert.deepEqual(g.body.departure.weeklyDepartures, opt.evWeeklyDepartures);
+    assert.deepEqual(g.body.departure.weeklyPlan, opt.evWeeklyPlan);
+  });
+
+  it('POST weeklyDepartures: „zuhause ab“ am selben Tag nach der Abfahrt → 400', async () => {
+    const ctx = makeCtx();
+    const r = await call(ctx, 'POST', '/api/ev', { departure: { weeklyDepartures: [{ day: 2, departure: '08:30', homeFrom: '09:00', homeFromPrevDay: false }] } });
+    assert.equal(r.status, 400);
+    assert.equal(r.body.error, 'departure.weeklyDepartures[0].homeFrom must be before the departure on the same day');
+    assert.equal(ctx.saved.length, 0);
+  });
+
   it('GET liefert den abgeleiteten Wochenplan einer alten Config (Mo–Fr 07:00, keine Ankunft)', async () => {
     const ctx = makeCtx();
     Object.assign(ctx.getRawCfg().optimizer, { evDepartureEnabled: true, evDepartureTime: '07:00', evDepartureDays: [1, 2, 3, 4, 5] });
@@ -226,8 +258,14 @@ describe('Wochenplan über /api/ev (2026-10-27)', () => {
     // alter Wert stehen (Hinweis in der Oberfläche).
     assert.equal(opt.evWeeklyPlan[0].minSocPct, null);
     assert.ok(opt.evWeeklyPlan.every((e) => e.tripSocPct === null), JSON.stringify(opt.evWeeklyPlan));
-    assert.ok(!('targetValue' in opt.evWeeklyPlan[0]) && !('commuteKm' in opt.evWeeklyPlan[0]));
+    // Mitgeschriebenes altes Format für 1.0.9 (T-0427): targetValue in %, kein Heimweg
+    assert.equal(opt.evWeeklyPlan[0].targetValue, null);
+    assert.equal(opt.evWeeklyPlan[0].commuteKm, null);
     assert.equal(opt.evWeeklyPlan[4].minSocPct, 100);
+    assert.equal(opt.evWeeklyPlan[4].targetValue, 100);
+    // Gilt: Zeile = Abfahrtstag — Di 05:00 (zuhause ab Mo 20:00), Sa 09:00 (zuhause ab Fr 15:00)
+    assert.deepEqual(opt.evWeeklyDepartures.filter((x) => x.departure).map((x) => [x.day, x.departure, x.homeFrom, x.homeFromPrevDay, x.minSocPct]),
+      [[2, '05:00', '20:00', true, null], [6, '09:00', '15:00', true, 100]]);
     assert.equal(opt.evArrivalOnce, arrOnce.toISOString());
     assert.equal(opt.evCommuteKm, 25);
     assert.deepEqual(ctx.replans, [], 'Planänderung allein stößt keinen Sofort-Lauf an (die Minuten-Wache übernimmt)');
@@ -350,7 +388,8 @@ describe('Max-Ladestand und Einmal-Ziel über /api/ev (1.0.10)', () => {
     assert.equal(opt.evMaxSocPct, 85);
     assert.equal(opt.evDepartureOnceMinSocPct, 75);
     assert.equal(opt.evDepartureOnceTripSocPct, 45);
-    assert.deepEqual(opt.evWeeklyPlan[1], { day: 2, arrival: '', departure: '07:00', minSocPct: 50, tripSocPct: 30 });
+    assert.deepEqual(opt.evWeeklyPlan[1], { day: 2, arrival: '', departure: '07:00', minSocPct: 50, tripSocPct: 30, targetValue: 50, commuteKm: null });
+    assert.deepEqual(opt.evWeeklyDepartures[1], { day: 2, departure: '07:00', minSocPct: 50, tripSocPct: 30, homeFrom: '', homeFromPrevDay: false });
   });
 
   it('GET zeigt Max, Einmal-Ziel, abgeleitete EOS-Ziele (min, max, Wertstufen) und den Wallbox-Stopp', async () => {

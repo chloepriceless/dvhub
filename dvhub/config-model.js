@@ -7,7 +7,7 @@ import { localDate as fastLocalDate, localMinutesOfDay as fastLocalMinutesOfDay 
 import { POWER_LIMIT_DEFAULTS } from './services/power-limits.js';
 import { SETPOINT_FOLLOW_DEFAULTS } from './services/setpoint-follow-watchdog.js';
 import { providerImportPriceCtKwh, PROVIDER_NAMES, PRICE_BASES } from './services/tariff-provider/provider-pricing.js';
-import { migrateWeeklyPlanRows, targetSocPct } from './services/optimizer/ev-departure.js';
+import { migrateWeeklyConfig, targetSocPct } from './services/optimizer/ev-departure.js';
 
 // Plan 09-01 (D-03): canonical minimum apiToken length floor. Re-exported here
 // (also defined in routes-api.js) so the settings-UI field descriptor and the
@@ -5272,14 +5272,21 @@ export function createDefaultConfig() {
       // Neuplan aus. false = immer mitplanen (altes Verhalten).
       evPlanOnlyWhenPlugged: true,
       evDepartureEnabled: false,
-      // Wochenplan (ev-departure.js effectiveWeeklyPlan): 7 Eintraege
-      // { day 1..7, arrival 'HH:MM'|'', departure 'HH:MM'|'', minSocPct, tripSocPct }
-      // in SoC-% (seit 1.0.10; aeltere Zeilen mit targetValue uebernimmt
-      // migrateEvWeeklyPlan beim Laden, ein alter Heimweg commuteKm entfaellt).
-      // null = noch nie gespeichert → aus evDepartureTime + evDepartureDays
-      // abgeleitet (gleiche Abfahrt an diesen Tagen, keine Ankunft). Die beiden
-      // alten Felder bleiben dafuer stehen.
+      // Wochenplan seit T-0427 (ev-departure.js effectiveWeeklyPlan): Zeile =
+      // Tag der ABFAHRT, { day 1..7, departure 'HH:MM'|'', minSocPct,
+      // tripSocPct, homeFrom 'HH:MM'|'' („zuhause ab“), homeFromPrevDay }; je
+      // Tag mindestens eine Zeile, bis zu 14. null = noch nie gespeichert.
+      evWeeklyDepartures: null,
+      // Derselbe Plan im ALTEN Format (Zeile = Tag der Ankunft, 7 Eintraege
+      // { day, arrival, departure, minSocPct, tripSocPct, targetValue in % })
+      // — wird immer mitgeschrieben, damit ein Rueckweg auf 1.0.9 ihn liest
+      // (migrateEvWeeklyPlan). Beide null = aus evDepartureTime +
+      // evDepartureDays abgeleitet (gleiche Abfahrt an diesen Tagen). Die
+      // beiden alten Felder bleiben dafuer stehen.
       evWeeklyPlan: null,
+      // Einmalige Umstellung alter Plaene: { at, reason, seen, notes[], previous }
+      // — previous ist der alte Plan (Sicherung), notes zeigt der Editor einmal.
+      evWeeklyMigration: null,
       evDepartureTime: '07:00',
       evDepartureDays: [1, 2, 3, 4, 5],
       evDepartureOnce: '',
@@ -6224,20 +6231,20 @@ function migrateLegacyPriceApiUrl(raw) {
   }
 }
 
-// E-Auto-Wochenplan in SoC-% (1.0.10): Zeilen mit Ziel in der Einheit von
-// evTargetMode (targetValue) werden einmalig in minSocPct umgerechnet
-// (ev-departure.js migrateWeeklyPlanRows); ein alter Heimweg in km (commuteKm)
-// wird keine Fahrt (tripSocPct bleibt leer, Christin 10.11.2026).
-// Gespeichert ist danach nur noch das neue Format.
+// E-Auto-Wochenplan (ev-departure.js migrateWeeklyConfig): seit T-0427 ist die
+// Zeile der Tag der ABFAHRT (evWeeklyDepartures). Ein alter Plan (evWeeklyPlan,
+// Zeile = Tag der Ankunft; auch noch mit Ziel targetValue in der Einheit von
+// evTargetMode und dem nicht mehr genutzten Heimweg commuteKm) wird einmal
+// umgerechnet — Hilfs-Ankuenfte fallen weg, der alte Plan bleibt als Sicherung
+// in evWeeklyMigration.previous, der Editor zeigt einmal, was sich geaendert
+// hat. evWeeklyPlan wird danach immer im alten Format mitgeschrieben (Rueckweg
+// 1.0.9); hat eine aeltere Version ihn geaendert, gilt deren Stand.
 // Danach das allgemeine Ziel: in kWh/km einmalig in % (Ziele nie in km,
 // Christin 07.11.2026). Erst die Zeilen — sie brauchen die alte Einheit.
 function migrateEvWeeklyPlan(raw) {
   const opt = raw?.optimizer;
   if (!isPlainObject(opt)) return;
-  if (Array.isArray(opt.evWeeklyPlan)) {
-    const legacy = opt.evWeeklyPlan.some((e) => isPlainObject(e) && (!('minSocPct' in e) || !('tripSocPct' in e)));
-    if (legacy) opt.evWeeklyPlan = migrateWeeklyPlanRows(opt.evWeeklyPlan, opt);
-  }
+  Object.assign(opt, migrateWeeklyConfig(opt));
   if ((opt.evTargetMode === 'kwh' || opt.evTargetMode === 'km') && opt.evTargetValue != null) {
     const pct = targetSocPct({ mode: opt.evTargetMode, value: opt.evTargetValue, capacityWh: Number(opt.evCapacityWh) || 50000, consumptionKwhPer100km: Number(opt.evConsumptionKwhPer100km) || 18 });
     if (pct !== null) { opt.evTargetMode = 'percent'; opt.evTargetValue = pct; }
