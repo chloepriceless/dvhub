@@ -156,4 +156,12 @@ describe('Oberfläche: „Aktivieren“ schaltet den Wochenplan nicht ein', () =
     assert.match(intg, /async function evccOnceSaved\(\)[\s\S]*?setEvccDepSummary\(dep[\s\S]*?renderEvccDepState\(dep\)/);
     assert.match(src, /if \(o && o\.poll\)[\s\S]*?setInterval/);
   });
+
+  test('Codex d033c61c: nach dem Einmal-Ziel bleibt ein ungespeicherter Wochenplan-Entwurf Entwurf (updateSaved statt setSummary)', () => {
+    const intg = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'public', 'integrations.js'), 'utf8');
+    assert.match(intg, /setEvccDepSummary\(dep, eos\.capacityWh, eos, true\)/);
+    const fn = intg.match(/function setEvccDepSummary\(dep, capacityWh, eos, keepDraft\) \{[\s\S]*?\n {2}\}/);
+    assert.ok(fn, 'setEvccDepSummary mit keepDraft fehlt');
+    assert.match(fn[0], /if \(keepDraft\) \{\s*window\.DVhubEvWeekly\.updateSaved\(host, info\);\s*window\.DVhubEvWeekly\.refreshPreview\(host\);\s*\} else window\.DVhubEvWeekly\.setSummary\(host, info\);/);
+  });
 });

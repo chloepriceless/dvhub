@@ -2633,7 +2633,7 @@
       var data = await res.json();
       var eos = (data && data.eos) || {};
       var dep = eos.departure || {};
-      setEvccDepSummary(dep, eos.capacityWh, eos);
+      setEvccDepSummary(dep, eos.capacityWh, eos, true);
       renderEvccDepState(dep);
     } catch (_) { /* naechstes Laden */ }
   }
@@ -2652,11 +2652,14 @@
   }
   // Zusammenfassung ueber dem Wochenplan (ev-weekly-editor.js summaryLines):
   // naechste Abfahrt mit Quelle und was davon gerade an EOS geht.
-  function setEvccDepSummary(dep, capacityWh, eos) {
+  // keepDraft: nur den gespeicherten Stand auffrischen (updateSaved) und die
+  // Vorschau eines ungespeicherten Entwurfs neu rechnen — setSummary nähme den
+  // Entwurf sonst als gespeichert (Codex d033c61c).
+  function setEvccDepSummary(dep, capacityWh, eos, keepDraft) {
     var host = document.getElementById('evcc-dep-weekly');
     if (!host || !window.DVhubEvWeekly) return;
     var reg = (eos && eos.registration) || {};
-    window.DVhubEvWeekly.setSummary(host, {
+    var info = {
       resolved: dep.resolved || null,
       capacityWh: capacityWh,
       eos: {
@@ -2666,7 +2669,11 @@
         // Was an EOS ging (Mindestziel vorausschauend, Max, Wertstufen) und ob EOS die Wertstufen kennt.
         targets: dep.targets || null, valueSupported: dep.valueSupported === true, maxSocPct: dep.maxSocPct
       }
-    });
+    };
+    if (keepDraft) {
+      window.DVhubEvWeekly.updateSaved(host, info);
+      window.DVhubEvWeekly.refreshPreview(host);
+    } else window.DVhubEvWeekly.setSummary(host, info);
   }
   function evccDepPreviewSoon() {
     var host = document.getElementById('evcc-dep-weekly');
