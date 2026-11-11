@@ -62,7 +62,8 @@ export function sungrowImage(over = {}) {
   return { input, holding };
 }
 
-export function mockSungrow(image, { failWriteAt = null, ignoreWriteAt = null } = {}) {
+export function mockSungrow(image, { failWriteAt = null, ignoreWriteAt = null, applyThenFailAt = null, failReadOnce = null, onRead = null } = {}) {
+  let readFailed = false;
   return {
     type: 'modbus',
     reads: [],
@@ -71,6 +72,8 @@ export function mockSungrow(image, { failWriteAt = null, ignoreWriteAt = null } 
       const fc = Number(conf.fc);
       const img = fc === 4 ? image.input : image.holding;
       this.reads.push({ fc, address: Number(conf.address), quantity: Number(conf.quantity) });
+      if (onRead) onRead({ fc, address: Number(conf.address) });
+      if (failReadOnce === Number(conf.address) && !readFailed) { readFailed = true; throw new Error('modbus timeout'); }
       const regs = [];
       for (let i = 0; i < Number(conf.quantity ?? 1); i += 1) {
         const a = Number(conf.address) + i;
@@ -82,10 +85,18 @@ export function mockSungrow(image, { failWriteAt = null, ignoreWriteAt = null } 
     async mbWriteSingle({ address, value }) {
       this.writes.push({ fc: 6, address, value });
       if (address === failWriteAt) throw new Error('modbus timeout');
+      // Gerät übernimmt den Wert, die Bestätigung geht verloren (einmalig).
+      if (address === applyThenFailAt && !this.ackLost) { this.ackLost = true; image.holding.set(address, value & 0xffff); throw new Error('modbus timeout'); }
       if (!image.holding.has(address)) throw new Error('modbus exception 2');
       if (address !== ignoreWriteAt) image.holding.set(address, value & 0xffff);
       return { addr: address, value };
     },
     async mbWriteMultiple({ address, values }) { this.writes.push({ fc: 16, address, values }); }
   };
+}
+
+/** Erkanntes Gerät wie von polling.js, gebunden an die Verbindung aus loadSungrowConfig. */
+export const SUNGROW_ENDPOINT = '192.0.2.50:502:1';
+export function sungrowDevice(over = {}) {
+  return { vendor: 'sungrow', supported: true, bdcRatedW: 10000, endpointKey: SUNGROW_ENDPOINT, ...over };
 }

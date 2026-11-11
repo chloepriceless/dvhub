@@ -244,20 +244,29 @@ export function sungrowEmsConf(cfg) {
   return c?.enabled === true && c.emulate === 'sungrow-ems' ? c : null;
 }
 
+/** Schlüssel der Geräteverbindung (Adresse, Port, Unit-ID) — Erkennung und Schreib-Tor gelten je Verbindung. */
+export function endpointKeyOf(v) {
+  return `${v?.host ?? ''}:${v?.port ?? ''}:${v?.unitId ?? ''}`;
+}
+
+const isForeignMode = (mode) => mode === EMS_MODE.EXTERNAL || mode === EMS_MODE.VPP;
+
 /**
  * Aktuator für den nachgebildeten Netz-Sollwert. Alle Writes nur über Holding-Register 13050–13052, jede
  * Änderung mit Rücklesen. Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Zwangsbetrieb selbst
- * gesetzt hat, danach nichts mehr.
+ * gesetzt hat (oder gesetzt haben könnte), danach nichts mehr.
  */
 export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now() }) {
   const st = {
     target: null,        // { setpointW, source, at }
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
-    owns: false,         // DVhub hat den Zwangsbetrieb selbst gesetzt (nur dann Not-Halt-Rücknahme)
+    owns: false,         // Zwangsbetrieb ist (womöglich) von DVhub — ab dem ersten Write, bis Self bestätigt ist
+    endpointKey: null,   // Verbindung, für die target/dev/owns gelten
     lastStepAt: 0,
     decision: null,
     error: null,
     neutralizedAt: null,  // pausedAt des Not-Halts, für den die eine Rücknahme schon lief
+    revokedReason: null,  // ein Tor hat den letzten Sollwert abgelehnt
     logKeys: {}
   };
   let chain = Promise.resolve();
@@ -288,6 +297,19 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     return { host: conf.host, port: conf.port, unitId: conf.unitId, timeoutMs: conf.timeoutMs };
   }
 
+  // Verbindung gewechselt (andere Adresse/Port/Unit-ID): alles Gemerkte gehört zum alten Gerät.
+  function syncEndpoint(cfg) {
+    const key = endpointKeyOf(cfg?.victron);
+    if (st.endpointKey === key) return;
+    if (st.endpointKey != null && (st.owns || st.target)) {
+      pushLog('sungrow_ems_endpoint_changed', { from: st.endpointKey, to: key, ownedForced: st.owns }, st.owns ? 'warn' : undefined);
+    }
+    st.endpointKey = key;
+    st.target = null;
+    st.dev = null;
+    st.owns = false;
+  }
+
   async function readDevice(conf) {
     const regs = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: EMS_BLOCK_ADDRESS, quantity: 3 });
     if (!Array.isArray(regs) || regs.length < 3) throw new Error('EMS-Register: unvollständige Antwort');
@@ -295,24 +317,42 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     return st.dev;
   }
 
-  async function writeReg(conf, address, value) {
+  // Not-Halt vor JEDEM Write prüfen: ein Takt, der vor dem Eintritt begann, darf danach nichts mehr setzen.
+  // Nur die eine Rücknahme (neutralize) darf im Not-Halt schreiben.
+  async function writeReg(conf, address, value, { neutralize = false } = {}) {
+    if (state.ctrl?.discretionaryWritesPaused && !neutralize) {
+      const err = new Error('emergency_stop_active');
+      err.code = 'emergency_stop_active';
+      throw err;
+    }
     await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
   }
 
+  function foreignModeError(mode) {
+    st.owns = false;
+    const err = new Error('sungrow_foreign_ems_mode');
+    err.code = 'foreign_ems_mode';
+    err.mode = mode;
+    return err;
+  }
+
   // Gewünschten Zustand schreiben (nur was abweicht) und zurücklesen. Wirft bei Fehler/Abweichung.
-  async function writeDecision(conf, decision) {
+  async function writeDecision(conf, decision, { neutralize = false } = {}) {
     const dev = st.dev || await readDevice(conf);
+    // Ein fremdes EMS/VPP (Modus 3/4) setzt DVhub nie selbst — es wird nie übersteuert, auch nicht im Not-Halt.
+    if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+    const opt = { neutralize };
     if (decision.mode === 'self') {
-      if (dev.cmd !== EMS_CMD.STOP) await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP);
-      if (dev.mode !== EMS_MODE.SELF) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF);
+      if (dev.cmd !== EMS_CMD.STOP) await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, opt);
+      if (dev.mode !== EMS_MODE.SELF) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, opt);
     } else {
+      // Besitz VOR dem ersten Write: geht eine Bestätigung verloren, kann der Befehl trotzdem wirken.
+      st.owns = true;
       const cmd = CMD_BY_NAME[decision.command];
-      if (decision.command !== 'stop' && dev.powerW !== decision.powerW) await writeReg(conf, EMS_POWER_ADDR, decision.powerW);
-      if (dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd);
-      if (dev.mode !== EMS_MODE.FORCED) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.FORCED);
+      if (decision.command !== 'stop' && dev.powerW !== decision.powerW) await writeReg(conf, EMS_POWER_ADDR, decision.powerW, opt);
+      if (dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd, opt);
+      if (dev.mode !== EMS_MODE.FORCED) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.FORCED, opt);
     }
-    // Ab dem ersten Write gilt der Zwangsbetrieb als DVhubs eigener (auch wenn das Rücklesen scheitert).
-    st.owns = decision.mode === 'forced';
     st.dev = null;
     const back = await readDevice(conf);
     if (!emsMatches(back, decision, 10)) {
@@ -320,6 +360,8 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       err.code = 'readback_mismatch';
       throw err;
     }
+    // Erst ein bestätigtes Self-consumption gibt den Besitz ab.
+    if (decision.mode === 'self') st.owns = false;
     return back;
   }
 
@@ -341,9 +383,11 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     };
   }
 
-  function deviceGate() {
+  // Schreiben nur an ein erkanntes, unterstütztes Gerät — und nur an genau die Verbindung, an der es erkannt wurde.
+  function deviceGate(cfg) {
     const d = state.victron?.device;
     if (!d || d.vendor !== 'sungrow') return 'sungrow_device_not_identified';
+    if (d.endpointKey !== endpointKeyOf(cfg?.victron)) return 'sungrow_device_not_identified';
     if (d.supported !== true) return 'sungrow_device_not_supported';
     return null;
   }
@@ -352,8 +396,9 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const cfg = getCfg();
     const conf = sungrowEmsConf(cfg);
     if (!conf || transport?.type !== 'modbus') return { ok: false, error: 'sungrow_ems_not_configured' };
+    syncEndpoint(cfg);
     if (state.ctrl?.discretionaryWritesPaused) return { ok: false, blocked: true, error: 'emergency_stop_active' };
-    const gate = deviceGate();
+    const gate = deviceGate(cfg);
     if (gate) {
       st.error = gate;
       publish();
@@ -372,20 +417,15 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         bandW: opts.bandW, gain: opts.gain, minPowerW: opts.minPowerW,
         noGridCharge: NO_GRID_CHARGE_SOURCES.has(String(st.target.source))
       })
-      : { mode: 'self', reason: st.target ? 'target_expired' : 'no_setpoint' };
+      : { mode: 'self', reason: st.target ? 'target_expired' : (st.revokedReason ? 'revoked' : 'no_setpoint') };
     st.decision = { ...decision, at: t, trigger: reason };
     try {
       // Gerätezustand nur nach eigenen Writes und höchstens einmal je deviceRecheckMs lesen (Note 6);
       // so fällt ein Neustart des Wechselrichters oder ein Eingriff über die App auf.
       const dev = st.dev && t - st.dev.at < opts.deviceRecheckMs ? st.dev : await readDevice(conf);
-      if ((dev.mode === EMS_MODE.EXTERNAL || dev.mode === EMS_MODE.VPP) && !st.owns) {
-        // Ein anderes EMS/VPP steuert den Wechselrichter — nicht dagegen regeln.
-        st.error = 'foreign_ems_mode';
-        logOnce(String(dev.mode), 'sungrow_ems_foreign_mode', { mode: dev.mode, text: 'Sungrow steht im externen EMS-/VPP-Modus — DVhub schreibt nichts' }, 'warn');
-        publish();
-        return { ok: false, error: 'sungrow_foreign_ems_mode' };
-      }
+      if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
       if (emsMatches(dev, decision, decision.mode === 'forced' ? opts.stepW : 0)) {
+        if (decision.mode === 'self') st.owns = false;
         st.error = null;
         publish();
         return { ok: true, unchanged: true, decision };
@@ -401,10 +441,19 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       publish();
       return { ok: true, decision };
     } catch (e) {
-      st.dev = null;
       st.error = e?.message || String(e);
-      logOnce(st.error, e?.code === 'readback_mismatch' ? 'sungrow_ems_readback_mismatch' : 'sungrow_ems_error',
-        { error: st.error, decision }, 'warn');
+      if (e?.code === 'foreign_ems_mode') {
+        // Ein anderes EMS/VPP steuert den Wechselrichter — nicht dagegen regeln (Besitz ist abgegeben).
+        logOnce(String(e.mode), 'sungrow_ems_foreign_mode', { mode: e.mode, text: 'Sungrow steht im externen EMS-/VPP-Modus — DVhub schreibt nichts' }, 'warn');
+      } else if (e?.code === 'emergency_stop_active') {
+        st.dev = null;
+        publish();
+        return { ok: false, blocked: true, error: 'emergency_stop_active' };
+      } else {
+        st.dev = null;
+        logOnce(st.error, e?.code === 'readback_mismatch' ? 'sungrow_ems_readback_mismatch' : 'sungrow_ems_error',
+          { error: st.error, decision }, 'warn');
+      }
       publish();
       return { ok: false, error: st.error };
     }
@@ -416,14 +465,30 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
    */
   function applySetpoint(setpointW, source) {
     return serial(async () => {
+      syncEndpoint(getCfg());
       const changed = !st.target || Number(st.target.setpointW) !== Number(setpointW);
       st.target = { setpointW: Number(setpointW), source, at: now() };
+      st.revokedReason = null;
       const opts = resolveSungrowEmsOptions(sungrowEmsConf(getCfg()) || {});
       if (!changed && now() - st.lastStepAt < opts.regulateEveryMs) {
         publish();
         return { ok: true, refreshed: true };
       }
       return step({ reason: changed ? 'setpoint' : 'refresh' });
+    });
+  }
+
+  /**
+   * Ein Tor in applyControlTarget hat den Sollwert abgelehnt (z. B. Netzladen nicht mehr erlaubt): der
+   * gemerkte Sollwert gilt nicht mehr — sofort zurück in Self-consumption, wenn DVhub Zwangsbetrieb fährt.
+   */
+  function revoke(reason) {
+    return serial(async () => {
+      if (!st.target && !st.owns) return { ok: true, idle: true };
+      st.target = null;
+      st.revokedReason = String(reason || 'rejected');
+      if (!st.owns) { publish(); return { ok: true, idle: true }; }
+      return step({ reason: 'revoked' });
     });
   }
 
@@ -446,24 +511,26 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       st.target = null;
       if (st.neutralizedAt === pausedAt) return { ok: true, skipped: true, reason: 'already_done' };
       st.neutralizedAt = pausedAt;
-      const conf = sungrowEmsConf(getCfg());
+      const cfg = getCfg();
+      const conf = sungrowEmsConf(cfg);
+      syncEndpoint(cfg);
       if (!conf || !st.owns) return { ok: true, skipped: true, reason: 'not_owned' };
       try {
         st.dev = null; // frisch lesen: nur schreiben, was am Gerät wirklich noch abweicht
-        const back = await writeDecision(conf, { mode: 'self', reason: 'emergency_stop' });
-        st.owns = false;
+        const back = await writeDecision(conf, { mode: 'self', reason: 'emergency_stop' }, { neutralize: true });
         pushLog('sungrow_ems_write', { mode: 'self', reason: 'emergency_stop', readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
         publish();
         return { ok: true };
       } catch (e) {
         st.error = e?.message || String(e);
         publish();
+        if (e?.code === 'foreign_ems_mode') return { ok: true, skipped: true, reason: 'foreign_ems_mode' };
         return { ok: false, error: st.error };
       }
     });
   }
 
-  return { applySetpoint, tick, emergencyStop, status: () => (publish(), state.ctrl?.sungrowEms || null), _st: st };
+  return { applySetpoint, revoke, tick, emergencyStop, status: () => (publish(), state.ctrl?.sungrowEms || null), _st: st };
 }
 
 function describe(d) {

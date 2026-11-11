@@ -16,7 +16,7 @@ import { resolveBatteryLever } from '../services/grid-connection/index.js';
 import {
   SUNGROW_HYBRID_MODELS, decodeSungrowString, decodeSungrowInfoBlock, identifySungrow, wire
 } from '../services/inverter/sungrow.js';
-import { SHIPPED, loadSungrowConfig, sungrowImage, mockSungrow } from './helpers/sungrow-fixture.js';
+import { SHIPPED, loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,7 +39,7 @@ function pollerFor(cfg, transport) {
   return { state, poller, logs };
 }
 
-function evaluatorFor(cfg, transport, device = { vendor: 'sungrow', supported: true, bdcRatedW: 10000 }) {
+function evaluatorFor(cfg, transport, device = sungrowDevice()) {
   const state = {
     victron: { soc: 50, errors: {}, fieldUpdatedAt: {}, device },
     meter: {},
@@ -261,6 +261,15 @@ test('Zähler: andere Lesefehler bleiben Fehler (kein stiller Ersatz)', async ()
   assert.match(state.meter.error, /timeout/);
 });
 
+test('Codex P2: BDC-Nennleistung bei der Erkennung nicht lesbar → wird nachgelesen', async () => {
+  const cfg = loadSungrowConfig();
+  const { state, poller, logs } = pollerFor(cfg, mockSungrow(sungrowImage(), { failReadOnce: wire(5628) }));
+  await poller.requestPoll();
+  assert.equal(state.victron.device.supported, true);
+  assert.equal(state.victron.device.bdcRatedW, 10000);
+  assert.ok(logs.some((l) => l.event === 'inverter_bdc_rating_read'));
+});
+
 test('Poller: Typcode eines String-WR → device.supported false', async () => {
   const cfg = loadSungrowConfig();
   const { state, poller, logs } = pollerFor(cfg, mockSungrow(sungrowImage({ input: { [wire(5000)]: 0x0270 } })));
@@ -334,7 +343,7 @@ test('Abregelung: Rücklesen weicht ab → Sperre gilt als gescheitert, nächste
 
 test('Geräte-Tor: ohne erkanntes bzw. mit nicht unterstütztem Gerät kein einziger Write', async () => {
   const cfg = loadSungrowConfig();
-  for (const device of [null, { vendor: 'sungrow', supported: false }]) {
+  for (const device of [null, sungrowDevice({ supported: false })]) {
     const t = mockSungrow(sungrowImage());
     const { state, evaluator } = evaluatorFor(cfg, t, device);
     await evaluator.applyDvVictronControl(false, { reason: 'dv_forced_off' });

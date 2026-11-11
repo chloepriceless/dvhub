@@ -34,7 +34,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 // Netzanschluss und Peak Shaving: gemeinsamer Kern der Bezugsgrenzen.
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
-import { createSungrowEms } from './services/inverter/sungrow.js';
+import { createSungrowEms, endpointKeyOf, sungrowEmsConf } from './services/inverter/sungrow.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -221,7 +221,9 @@ export function createScheduleEvaluator(ctx) {
   function deviceWriteGate(cfg) {
     if (cfg?.identify?.requiredForWrites !== true) return null;
     const d = state.victron?.device;
-    if (!d) return 'device_not_identified';
+    // Erkannt gilt nur für die Verbindung, an der erkannt wurde — nach einem
+    // Adresswechsel erst wieder schreiben, wenn polling.js neu erkannt hat.
+    if (!d || d.endpointKey !== endpointKeyOf(cfg.victron)) return 'device_not_identified';
     if (d.supported !== true) return 'device_not_supported';
     return null;
   }
@@ -1127,7 +1129,20 @@ export function createScheduleEvaluator(ctx) {
     return at > 0 && Date.now() - at <= maxAge && !v.errors?.maxDischargeW && Number.isFinite(rb) ? rb : null;
   }
 
+  // Sungrow-EMS (Codex b8aa8e70, P1): lehnt ein Tor den Netz-Sollwert ab
+  // (Netzladen nicht mehr erlaubt, Not-Halt, Gerät nicht erkannt …), gilt auch der
+  // im Aktuator gemerkte Sollwert nicht mehr — er regelt sonst bis zum Ablauf
+  // weiter. Ein Fehler des Aktuators selbst (emsFailure) behält den Sollwert für
+  // den nächsten Versuch.
   async function applyControlTarget(target, value, source) {
+    const res = await applyControlTargetCore(target, value, source);
+    if (target === 'gridSetpointW' && res?.ok === false && res.emsFailure !== true && sungrowEmsConf(getCfg())) {
+      await sungrowEms.revoke(res.error || 'rejected');
+    }
+    return res;
+  }
+
+  async function applyControlTargetCore(target, value, source) {
     const cfg = getCfg();
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
     if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
@@ -1638,6 +1653,7 @@ export function createScheduleEvaluator(ctx) {
     if (state.schedule._lastSkipKey) delete state.schedule._lastSkipKey[target];
     // === end T-0002 keepalive ===============================================
 
+    let emsFailure = false;
     try {
       let encoded, words, fc;
       if (conf.emulate != null) {
@@ -1646,7 +1662,10 @@ export function createScheduleEvaluator(ctx) {
         // und führt im 5-s-Takt nach (tick).
         if (conf.emulate !== 'sungrow-ems' || target !== 'gridSetpointW') throw new Error(`unsupported emulate: ${conf.emulate}`);
         const r = await sungrowEms.applySetpoint(value, source);
-        if (!r?.ok) throw new Error(r?.error || 'sungrow_ems_failed');
+        if (!r?.ok) {
+          emsFailure = r?.blocked !== true;
+          throw new Error(r?.error || 'sungrow_ems_failed');
+        }
         encoded = { raw: value, scaled: value, writeType: 'sungrow-ems', wordOrder: 'n/a' };
         words = [value];
         fc = 0;
@@ -1745,7 +1764,7 @@ export function createScheduleEvaluator(ctx) {
         source: 'runtime',
         meta: { error: e.message }
       }));
-      return { ok: false, error: e.message };
+      return { ok: false, error: e.message, ...(emsFailure ? { emsFailure: true } : {}) };
     }
   }
 

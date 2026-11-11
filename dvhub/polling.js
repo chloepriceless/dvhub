@@ -7,7 +7,7 @@ import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
-import { identifySungrow, decodeSungrowInfoBlock, wire } from './services/inverter/sungrow.js';
+import { identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire } from './services/inverter/sungrow.js';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms, buildActiveAlarmsFromDbus } from './victron-alarms.js';
 // T-FREEZE (2026-07-24): Einfrier-Wächter. Erkennt eingefrorene Live-Werte trotz
@@ -556,6 +556,7 @@ export function createPoller(ctx) {
   // erkannt ist — ein String-WR (SG) oder ein fremdes Gerät bekommt keinen Write.
   let identifyRetryAt = 0;
   let identifyInfoAt = 0;
+  let bdcRetryAt = 0;
   async function ensureDeviceIdentified(cfg) {
     const kind = cfg?.identify?.kind;
     if (kind !== 'sungrow' || transport.type !== 'modbus') {
@@ -563,7 +564,7 @@ export function createPoller(ctx) {
       return;
     }
     const v = cfg.victron || {};
-    const endpointKey = `${v.host}:${v.port}:${v.unitId}`;
+    const endpointKey = endpointKeyOf(v);
     const read = ({ fc, address, quantity }) => transport.mbRequest({
       fc, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, address, quantity
     });
@@ -574,6 +575,7 @@ export function createPoller(ctx) {
       dev = null;
       identifyRetryAt = 0;
       identifyInfoAt = 0;
+      bdcRetryAt = 0;
     }
     if (!dev) {
       if (now < identifyRetryAt) return;
@@ -593,6 +595,18 @@ export function createPoller(ctx) {
         pushLog('inverter_identify_error', { vendor: 'sungrow', error: e.message }, 'warn');
         return;
       }
+    }
+    // BDC-Nennleistung ist die Obergrenze der Akku-Vorgabe: fehlt sie (Lesefehler bei der
+    // Erkennung), alle 60 s nachlesen — bis dahin gibt es keinen Zwangsbetrieb (Codex b8aa8e70).
+    if (dev.supported && dev.bdcRatedW == null && now >= bdcRetryAt) {
+      bdcRetryAt = now + 60000;
+      try {
+        const w = Number((await read({ fc: 4, address: wire(5628), quantity: 1 }))?.[0]);
+        if (Number.isFinite(w) && w > 0 && w !== 0xffff) {
+          state.victron.device = { ...state.victron.device, bdcRatedW: w * 100 };
+          pushLog('inverter_bdc_rating_read', { vendor: 'sungrow', bdcRatedW: w * 100 });
+        }
+      } catch { /* nächster Versuch in 60 s */ }
     }
     const infoEveryMs = Math.max(30000, Number(cfg.identify.infoEveryMs) || 300000);
     if (now - identifyInfoAt < infoEveryMs) return;

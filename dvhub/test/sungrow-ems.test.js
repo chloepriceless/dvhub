@@ -15,7 +15,7 @@ import { setEmergencyStop } from '../services/control-commands.js';
 import {
   decideEmsCommand, createSungrowEms, emsMatches, EMS_CMD, EMS_MODE, wire
 } from '../services/inverter/sungrow.js';
-import { loadSungrowConfig, sungrowImage, mockSungrow } from './helpers/sungrow-fixture.js';
+import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
 
 const MODE = wire(13050);
 const CMD = wire(13051);
@@ -108,7 +108,7 @@ test('emsMatches: Self = Modus 0 + Stopp; Zwang mit Leistungstoleranz', () => {
 
 // --- Aktuator ------------------------------------------------------------------------
 
-function rig({ over = {}, device = { vendor: 'sungrow', supported: true, bdcRatedW: 10000 }, mockOpts = {} } = {}) {
+function rig({ over = {}, device = sungrowDevice(), mockOpts = {} } = {}) {
   const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import' });
   const image = sungrowImage(over);
   const t = mockSungrow(image, mockOpts);
@@ -259,7 +259,7 @@ test('Aktuator: alte Messwerte oder abgelaufener Sollwert → zurück in Self-co
 });
 
 test('Aktuator: ohne erkanntes Hybrid-Gerät kein Write', async () => {
-  for (const device of [null, { vendor: 'sungrow', supported: false }]) {
+  for (const device of [null, sungrowDevice({ supported: false })]) {
     const r = rig({ device });
     const res = await r.ems.applySetpoint(4000, 'rule:netzladen');
     assert.equal(res.ok, false);
@@ -296,6 +296,63 @@ test('Not-Halt: nicht von DVhub gesetzt (Self-consumption oder nach Neustart unb
   assert.deepEqual(r.t.reads, [], 'nicht einmal gelesen');
 });
 
+// --- Codex b8aa8e70 -----------------------------------------------------------------------
+
+test('Codex P1: Bestätigung des Modus-Writes geht verloren → Besitz bleibt, Not-Halt nimmt zurück', async () => {
+  const r = rig({ mockOpts: { applyThenFailAt: MODE } });
+  const res = await r.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(res.ok, false);
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED, 'Gerät steht trotzdem im Zwangsbetrieb');
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  r.t.writes.length = 0;
+  r.state.ctrl.discretionaryWritesPaused = true;
+  r.state.ctrl.pausedAt = 11;
+  assert.equal((await r.ems.emergencyStop()).ok, true);
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP], [MODE, EMS_MODE.SELF]]);
+});
+
+test('Codex P1: Not-Halt beginnt während des Lesens → kein einziger Write danach', async () => {
+  const r = rig({ mockOpts: { onRead: ({ fc }) => { if (fc === 3) r.state.ctrl.discretionaryWritesPaused = true; } } });
+  const res = await r.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(res.ok, false);
+  assert.equal(res.blocked, true);
+  assert.deepEqual(r.t.writes, []);
+});
+
+test('Codex P2: fremdes EMS übernimmt nach DVhubs Zwangsbetrieb → Besitz weg, nichts übersteuert', async () => {
+  const r = rig();
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  r.image.holding.set(MODE, EMS_MODE.VPP); // z. B. ein Stromanbieter-Programm
+  r.t.writes.length = 0;
+  for (let i = 0; i < 7; i += 1) {
+    r.advance(10_000);
+    r.telemetry({ gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 });
+    await r.ems.tick();
+  }
+  assert.deepEqual(r.t.writes, [], 'VPP-Modus nicht überschrieben');
+  assert.equal(r.state.ctrl.sungrowEms.owns, false);
+  r.state.ctrl.discretionaryWritesPaused = true;
+  r.state.ctrl.pausedAt = 12;
+  assert.equal((await r.ems.emergencyStop()).reason, 'not_owned');
+  assert.deepEqual(r.t.writes, []);
+});
+
+test('Codex P2: Adresswechsel → Erkennung und Besitz gelten nicht mehr', async () => {
+  const r = rig();
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  r.t.writes.length = 0;
+  r.cfg.victron.host = '192.0.2.99';
+  r.cfg.controlWrite.gridSetpointW.host = '192.0.2.99';
+  r.advance(10_000);
+  const res = await r.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'sungrow_device_not_identified');
+  assert.deepEqual(r.t.writes, []);
+  assert.equal(r.state.ctrl.sungrowEms.owns, false);
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_endpoint_changed'));
+});
+
 // --- Integration: echter Evaluator, ausgeliefertes Profil -------------------------------
 
 function evaluatorRig(persisted = {}) {
@@ -307,7 +364,7 @@ function evaluatorRig(persisted = {}) {
     victron: {
       soc: 60, batteryPowerW: -500, pvPowerW: 0, selfConsumptionW: 500, errors: {},
       fieldUpdatedAt: { soc: now, batteryPowerW: now, pvPowerW: now, selfConsumptionW: now },
-      device: { vendor: 'sungrow', supported: true, bdcRatedW: 10000 }
+      device: sungrowDevice()
     },
     meter: { ok: true, updatedAt: now, grid_total_w: 0 },
     schedule: { rules: [], active: {}, lastWrite: {}, manualOverride: {}, config: {}, lastEvalAt: 0 },
@@ -341,6 +398,30 @@ test('Evaluator: Netzladen mit Freigabe → Zwangsbetrieb Laden über den Aktuat
     { fc: 6, address: MODE, value: EMS_MODE.FORCED }
   ]);
   assert.equal(r.state.schedule.lastWrite.gridSetpointW.writeType, 'sungrow-ems');
+});
+
+test('Codex P1: Netzladen-Freigabe zurückgenommen → abgelehnter Sollwert beendet den Zwangsbetrieb sofort', async () => {
+  const r = evaluatorRig({ optimizer: { allowGridCharge: true } });
+  await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write');
+  assert.ok(r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED));
+  r.t.writes.length = 0;
+  r.cfg.optimizer.allowGridCharge = false;
+  const res = await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write');
+  assert.equal(res.error, 'grid_charge_not_allowed');
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP], [MODE, EMS_MODE.SELF]]);
+  assert.equal(r.state.ctrl.sungrowEms.target, null);
+  r.t.writes.length = 0;
+  await r.evaluator.sungrowEms.tick();
+  assert.deepEqual(r.t.writes, [], 'kein Nachladen aus dem gemerkten Sollwert');
+});
+
+test('Codex P2: Evaluator schreibt nicht an eine Verbindung, an der nicht erkannt wurde', async () => {
+  const r = evaluatorRig({ optimizer: { allowGridDischarge: true } });
+  r.state.victron.device = sungrowDevice({ endpointKey: '192.0.2.99:502:1' });
+  const res = await r.evaluator.applyControlTarget('gridSetpointW', -4000, 'api_manual_write');
+  assert.equal(res.error, 'device_not_identified');
+  await r.evaluator.applyDvVictronControl(false, { reason: 'dv_forced_off' });
+  assert.deepEqual(r.t.writes, []);
 });
 
 test('Evaluator: Entladen bei unbekanntem SoC → SoC-Boden hält auf 0 → Self-consumption', async () => {
