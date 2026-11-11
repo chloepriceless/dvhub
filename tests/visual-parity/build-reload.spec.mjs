@@ -51,7 +51,7 @@ test.describe('Neue DVhub-Version: Seite lädt neu', () => {
     await page.waitForTimeout(8_000);
     expect(await page.evaluate(() => window.__nachReload)).toBe(1);
     const guard = await page.evaluate(() => JSON.parse(sessionStorage.getItem('dvhub.buildReload')));
-    expect(guard.id).toBe(fake.build);
+    expect(guard.builds[fake.build]).toBeGreaterThan(0);
   });
 
   test('offener Dialog: Hinweis mit Knopf, kein Neuladen; nach dem Schließen automatisch', async ({ page }) => {

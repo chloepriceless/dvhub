@@ -107,11 +107,11 @@
   function onApiResponse(fn) {
     if (typeof fn === 'function') apiResponseObservers.push(fn);
   }
-  function notifyApiResponse(method, response) {
+  function notifyApiResponse(path, method, response) {
     if (!apiResponseObservers.length) return;
     let build = null;
     try { build = response.headers.get('x-dvhub-build'); } catch { /* ignore */ }
-    const info = { build, ok: response.ok, status: response.status, write: method !== 'GET' && method !== 'HEAD' };
+    const info = { build, ok: response.ok, status: response.status, url: String(path), write: method !== 'GET' && method !== 'HEAD' };
     for (const fn of apiResponseObservers) {
       try { fn(info); } catch (err) { console.debug('[apiFetch] observer failed', err); }
     }
@@ -125,7 +125,7 @@
     if (response.status === 401) {
       window.dispatchEvent(new CustomEvent('dvhub:unauthorized'));
     }
-    notifyApiResponse(String(options.method || 'GET').toUpperCase(), response);
+    notifyApiResponse(path, String(options.method || 'GET').toUpperCase(), response);
     return response;
   }
 

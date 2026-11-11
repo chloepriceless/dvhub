@@ -1307,6 +1307,17 @@
     el.className = 'mte-status' + (kind ? ' is-' + kind : '');
   }
 
+  // T-0423 (Codex 863eaeed): gespeicherter Stand des Kachel-Editors. Weicht
+  // der Editor davon ab (Zeile gelöscht, Symbol/Farbe gewählt, getippt), hält
+  // build-watch.js das automatische Neuladen nach einem Update auf.
+  var mteSavedJson = null;
+  if (window.DVhubBuildWatch && typeof window.DVhubBuildWatch.registerUnsavedCheck === 'function') {
+    window.DVhubBuildWatch.registerUnsavedCheck(function () {
+      if (mteSavedJson === null || !document.getElementById('mteRows')) return false;
+      return JSON.stringify(mteCollect()) !== mteSavedJson;
+    });
+  }
+
   async function loadMqttTilesEditor() {
     var rows = document.getElementById('mteRows');
     if (!rows) return; // editor not present on this page
@@ -1315,6 +1326,7 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var data = await res.json();
       mteRenderRows(Array.isArray(data.tiles) ? data.tiles : []);
+      mteSavedJson = JSON.stringify(mteCollect());
     } catch {
       mteSetStatus('Konfiguration konnte nicht geladen werden.', 'err');
     }
@@ -1370,6 +1382,7 @@
       if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
       var saved = Array.isArray(data.tiles) ? data.tiles : tiles;
       mteRenderRows(saved); // reflect server-normalised ids/labels
+      mteSavedJson = JSON.stringify(mteCollect());
       mteSetStatus(saved.length + ' Kachel(n) gespeichert — erscheinen auf der Familienseite ✓', 'ok');
     } catch (e) {
       mteSetStatus('Fehler beim Speichern: ' + e.message, 'err');

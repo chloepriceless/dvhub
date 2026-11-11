@@ -56,6 +56,11 @@ function clock(start = 1_000_000) {
 }
 async function flush() { for (let i = 0; i < 5; i++) await Promise.resolve(); }
 
+// Sperr-Datensatz: letzte Neuladung + je Kennung der Zeitpunkt.
+function guard(builds) {
+  return JSON.stringify({ last: Math.max(...Object.values(builds)), builds });
+}
+
 function memStorage(init = {}) {
   const m = new Map(Object.entries(init));
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), _m: m };
@@ -128,7 +133,7 @@ describe('Controller: Wechsel erkennen und neu laden', () => {
     assert.equal(t.log.reloads, 0, 'kurz verzögert');
     await t.c.advance(1_500);
     assert.equal(t.log.reloads, 1);
-    assert.equal(JSON.parse(t.storage.getItem(W.GUARD_KEY)).id, B);
+    assert.ok(JSON.parse(t.storage.getItem(W.GUARD_KEY)).builds[B] > 0);
   });
 
   it('zweites Sehen über die normale Abfrage bestätigt ebenso (ohne Extra-Abruf)', async () => {
@@ -223,14 +228,14 @@ describe('Controller: wird gerade bearbeitet', () => {
     t.ctrl.observe(B);
     t.ctrl.reloadNow();
     assert.equal(t.log.reloads, 1);
-    assert.equal(JSON.parse(t.storage.getItem(W.GUARD_KEY)).id, B);
+    assert.ok(JSON.parse(t.storage.getItem(W.GUARD_KEY)).builds[B] > 0);
   });
 });
 
 describe('Controller: keine Reload-Schleife', () => {
   it('für dieselbe Kennung binnen 10 min schon neu geladen: nur Hinweis, nie automatisch', async () => {
     const c0 = 1_000_000;
-    const storage = memStorage({ [W.GUARD_KEY]: JSON.stringify({ id: B, at: c0 - 5 * 60_000 }) });
+    const storage = memStorage({ [W.GUARD_KEY]: guard({ [B]: c0 - 5 * 60_000 }) });
     const t = setup({ storage });
     t.ctrl.observe(A);
     t.ctrl.observe(B);
@@ -246,7 +251,7 @@ describe('Controller: keine Reload-Schleife', () => {
 
   it('nach 10 min darf dieselbe Kennung wieder (z. B. Update zurück und erneut)', async () => {
     const c0 = 1_000_000;
-    const storage = memStorage({ [W.GUARD_KEY]: JSON.stringify({ id: B, at: c0 - 11 * 60_000 }) });
+    const storage = memStorage({ [W.GUARD_KEY]: guard({ [B]: c0 - 11 * 60_000 }) });
     const t = setup({ storage });
     t.ctrl.observe(A);
     t.ctrl.observe(B);
@@ -257,7 +262,7 @@ describe('Controller: keine Reload-Schleife', () => {
 
   it('irgendein Neuladen in der letzten Minute: andere Kennung nur mit Hinweis (Wackeln A/B/C)', async () => {
     const c0 = 1_000_000;
-    const storage = memStorage({ [W.GUARD_KEY]: JSON.stringify({ id: B, at: c0 - 20_000 }) });
+    const storage = memStorage({ [W.GUARD_KEY]: guard({ [B]: c0 - 20_000 }) });
     const t = setup({ storage });
     t.ctrl.observe(B);
     t.ctrl.observe(C);
@@ -278,6 +283,50 @@ describe('Controller: keine Reload-Schleife', () => {
       assert.equal(t.log.reloads, 0);
       assert.equal(t.log.notices.at(-1), 'manual');
     }
+  });
+
+  it('Codex 863eaeed: Sperre je Kennung bleibt, auch wenn dazwischen eine andere geladen wurde (B, C, B)', async () => {
+    const c0 = 1_000_000;
+    // B vor 2 min, C vor 61 s geladen — jetzt wieder B: nur Hinweis
+    const storage = memStorage({ [W.GUARD_KEY]: JSON.stringify({ last: c0 - 61_000, builds: { [B]: c0 - 122_000, [C]: c0 - 61_000 } }) });
+    const t = setup({ storage });
+    t.ctrl.observe(C);
+    t.ctrl.observe(B);
+    t.ctrl.observe(B);
+    await t.c.advance(30_000);
+    assert.equal(t.log.reloads, 0);
+    assert.equal(t.log.notices.at(-1), 'manual');
+  });
+
+  it('Sperr-Datensatz bleibt klein: alte Einträge (> 10 min) fallen weg, höchstens 20', async () => {
+    const c0 = 1_000_000;
+    const builds = { [C]: c0 - 30 * 60_000 };
+    for (let i = 0; i < 30; i++) builds[('d' + String(i).padStart(11, '0'))] = c0 - 5 * 60_000 + i;
+    const storage = memStorage({ [W.GUARD_KEY]: JSON.stringify({ last: c0 - 5 * 60_000, builds }) });
+    const t = setup({ storage });
+    t.ctrl.observe(A);
+    t.ctrl.observe(B);
+    t.ctrl.observe(B);
+    await t.c.advance(2_000);
+    assert.equal(t.log.reloads, 1);
+    const rec = JSON.parse(storage.getItem(W.GUARD_KEY));
+    assert.ok(!(C in rec.builds), 'abgelaufen');
+    assert.ok(B in rec.builds);
+    assert.ok(Object.keys(rec.builds).length <= 20, String(Object.keys(rec.builds).length));
+  });
+
+  it('Codex 863eaeed: Sperre lässt sich nicht speichern (Speicher voll): nicht automatisch, Knopf geht', async () => {
+    const full = memStorage();
+    full.setItem = () => { throw new Error('QuotaExceededError'); };
+    const t = setup({ storage: full });
+    t.ctrl.observe(A);
+    t.ctrl.observe(B);
+    t.ctrl.observe(B);
+    await t.c.advance(30_000);
+    assert.equal(t.log.reloads, 0);
+    assert.equal(t.log.notices.at(-1), 'manual');
+    t.ctrl.reloadNow();
+    assert.equal(t.log.reloads, 1);
   });
 
   it('kaputter Speicherinhalt zählt als „noch nie neu geladen“', async () => {
@@ -418,13 +467,27 @@ describe('Erkennung „wird bearbeitet“', () => {
     d.noteEdit(el({ tag: 'INPUT', type: 'number' }));
     t = 60_000;
     assert.equal(d.isBusy(), true);
-    d.noteWrite();
+    d.noteWrite('/api/config');
     assert.equal(d.isBusy(), false);
     d.noteEdit(el({ tag: 'INPUT', type: 'checkbox' }));
     t += 14 * 60_000;
     assert.equal(d.isBusy(), true);
     t += 2 * 60_000;
     assert.equal(d.isBusy(), false, 'nach 15 min ohne Eingabe nicht mehr');
+  });
+
+  it('Codex 863eaeed: Vorschau-/Test-/Aktualisieren-Aufrufe sind kein Speichern', () => {
+    const t = 0;
+    const d = W.createBusyDetector({ doc: doc(), now: () => t });
+    d.noteEdit(el({ tag: 'INPUT', type: 'time' }));
+    for (const u of ['/api/ev/preview', '/api/tariff-provider/test', '/api/luox/test?x=1', '/api/epex/refresh', '/api/pv-strings/backfill', '/api/integrations/notifications/test']) {
+      d.noteWrite(u);
+      assert.equal(d.isBusy(), true, u);
+    }
+    d.noteWrite('/api/integrations/evcc');
+    assert.equal(d.isBusy(), false);
+    assert.equal(W.isSavingWrite('/api/ev'), true);
+    assert.equal(W.isSavingWrite('http://box:8080/api/ev/preview'), false);
   });
 
   it('Knöpfe lösen keine Bearbeitung aus', () => {
@@ -451,6 +514,12 @@ describe('Einbindung', () => {
     const common = fs.readFileSync(path.join(PUB, 'common.js'), 'utf8');
     assert.match(common, /x-dvhub-build/);
     assert.match(common, /onApiResponse/);
+  });
+
+  it('Codex 863eaeed: MQTT-Kachel-Editor meldet ungespeicherte Änderungen (auch Löschen, Symbol, Farbe)', () => {
+    const intg = fs.readFileSync(path.join(PUB, 'integrations.js'), 'utf8');
+    assert.match(intg, /registerUnsavedCheck\(function \(\) \{[\s\S]{0,200}mteCollect\(\)/);
+    assert.match(intg, /mteSavedJson = JSON\.stringify\(mteCollect\(\)\)/);
   });
 
   it('E-Auto-Kachel meldet ihren Entwurf', () => {

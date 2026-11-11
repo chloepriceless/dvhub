@@ -18,9 +18,11 @@
 //     ungespeicherte Einstellungen, Entwurf der E-Auto-Kachel, Eingabe ohne
 //     anschließendes Speichern) → Hinweis mit Knopf „Neu laden“, sobald frei
 //     automatisch;
-//   · Sperre gegen Schleifen: für dieselbe Kennung höchstens einmal je 10 min,
-//     überhaupt höchstens einmal je Minute, ohne nutzbaren Sitzungsspeicher nie
-//     automatisch — dann bleibt nur der Hinweis.
+//   · Sperre gegen Schleifen: für dieselbe Kennung höchstens einmal je 10 min
+//     (je Kennung gemerkt, auch wenn dazwischen eine andere kam), überhaupt
+//     höchstens einmal je Minute; lässt sich die Sperre nicht speichern
+//     (Sitzungsspeicher gesperrt oder voll), nie automatisch — dann bleibt nur
+//     der Hinweis.
 (function (root) {
   'use strict';
 
@@ -34,6 +36,10 @@
     checkMinIntervalMs: 5000    // Abruf bei Rückkehr höchstens alle 5 s
   };
   const EDIT_IDLE_MS = 15 * 60 * 1000;
+  const GUARD_MAX_BUILDS = 20;
+  // Schreibaufrufe, die nichts speichern (Vorschau beim Tippen, Verbindungstest,
+  // Daten neu holen) — sie geben eine Eingabe nicht frei (Codex 863eaeed, P1).
+  const NON_SAVING_WRITE = /\/(preview|test|refresh|backfill)(\/|\?|$)/i;
   const NON_TEXT_INPUTS = { button: 1, submit: 1, reset: 1, checkbox: 1, radio: 1, range: 1, color: 1, file: 1, image: 1, hidden: 1 };
   const NON_EDIT_INPUTS = { button: 1, submit: 1, reset: 1, image: 1, hidden: 1 };
 
@@ -45,6 +51,7 @@
 
   // ---------------------------------------------------------------- Sperre
 
+  // Datensatz { last: <Zeitpunkt der letzten Neuladung>, builds: { <Kennung>: <Zeitpunkt> } }.
   // undefined = Speicher nicht nutzbar, null = noch nie neu geladen.
   function readGuard(storage) {
     if (!storage) return undefined;
@@ -53,24 +60,43 @@
     if (!raw) return null;
     try {
       const rec = JSON.parse(raw);
-      if (rec && typeof rec.id === 'string' && Number.isFinite(rec.at)) return rec;
+      if (rec && Number.isFinite(rec.last) && rec.builds && typeof rec.builds === 'object') return rec;
     } catch (_) { /* kaputt = wie nie */ }
     return null;
   }
 
-  function writeGuard(storage, id, at) {
+  const within = (at, now, ms) => Number.isFinite(at) && now - at >= 0 && now - at < ms;
+
+  // Merkt die Neuladung; Einträge älter als die Sperrzeit fallen weg, höchstens
+  // GUARD_MAX_BUILDS (die jüngsten). false = nicht gespeichert.
+  function writeGuard(storage, id, now, o) {
     if (!storage) return false;
-    try { storage.setItem(GUARD_KEY, JSON.stringify({ id: id, at: at })); return true; } catch (_) { return false; }
+    const prev = readGuard(storage);
+    const builds = {};
+    if (prev && prev.builds) {
+      const kept = Object.keys(prev.builds)
+        .filter((b) => within(prev.builds[b], now, o.sameBuildGuardMs))
+        .sort((a, b) => prev.builds[b] - prev.builds[a])
+        .slice(0, GUARD_MAX_BUILDS - 1);
+      for (const b of kept) builds[b] = prev.builds[b];
+    }
+    if (id) builds[id] = now;
+    try { storage.setItem(GUARD_KEY, JSON.stringify({ last: now, builds: builds })); return true; } catch (_) { return false; }
   }
 
   function guardAllows(storage, id, now, o) {
     const rec = readGuard(storage);
     if (rec === undefined) return false;
     if (rec === null) return true;
-    const age = now - rec.at;
-    if (age >= 0 && age < o.anyReloadGuardMs) return false;
-    if (rec.id === id && age >= 0 && age < o.sameBuildGuardMs) return false;
+    if (within(rec.last, now, o.anyReloadGuardMs)) return false;
+    if (within(rec.builds[id], now, o.sameBuildGuardMs)) return false;
     return true;
+  }
+
+  function isSavingWrite(url) {
+    let p = String(url || '');
+    try { p = new URL(p, 'http://x').pathname; } catch (_) { /* roh prüfen */ }
+    return !NON_SAVING_WRITE.test(p);
   }
 
   // ---------------------------------------------------------------- Ablauf
@@ -117,10 +143,18 @@
       if (deps.showNotice) deps.showNotice(m);
     }
 
-    function finish() {
+    // auto: nur, wenn die Sperre gespeichert ist (sonst droht eine Schleife,
+    // Codex 863eaeed P2) — dann bleibt der Hinweis. Der Knopf lädt immer.
+    function finish(auto) {
+      const stored = writeGuard(deps.storage, candidate || baseline || '', now(), o);
+      if (auto && !stored) {
+        clearTimers();
+        mode = 'manual';
+        notice('manual');
+        return;
+      }
       clearTimers();
       mode = 'done';
-      writeGuard(deps.storage, candidate || baseline || '', now());
       deps.reload();
     }
 
@@ -134,7 +168,7 @@
         if (busy()) { idleTimer = setT(tick, o.idleCheckMs); return; }
         // Frei (gespeichert, Dialog zu): der Hinweis stand schon — gleich laden.
         if (!guardAllows(deps.storage, candidate, now(), o)) { mode = 'manual'; notice('manual'); return; }
-        finish();
+        finish(true);
       }, o.idleCheckMs);
     }
 
@@ -155,7 +189,7 @@
         reloadTimer = null;
         if (mode !== 'reloading') return;
         if (busy()) { waitForIdle(); return; }
-        finish();
+        finish(true);
       }, o.reloadDelayMs);
     }
 
@@ -206,7 +240,7 @@
     // Knopf im Hinweis: sofort, auch wenn gerade bearbeitet wird (bewusst gewählt).
     function reloadNow() {
       if (mode === 'done') return;
-      finish();
+      finish(false);
     }
 
     // Hinweis zu: beim Warten bleibt das automatische Neuladen, sobald frei.
@@ -286,7 +320,8 @@
     return {
       isBusy: isBusy,
       noteEdit: function (target) { if (isEditControl(target)) lastEditAt = now(); },
-      noteWrite: function () { lastEditAt = null; },
+      // Erfolgreicher Schreibaufruf = gespeichert — außer Vorschau/Test/Neu holen.
+      noteWrite: function (url) { if (isSavingWrite(url)) lastEditAt = null; },
       registerUnsavedCheck: function (fn) { if (typeof fn === 'function') checks.push(fn); }
     };
   }
@@ -294,6 +329,7 @@
   const api = {
     GUARD_KEY: GUARD_KEY,
     normalizeBuild: normalizeBuild,
+    isSavingWrite: isSavingWrite,
     createController: createController,
     createBusyDetector: createBusyDetector
   };
@@ -401,7 +437,7 @@
   const common = root.DVhubCommon;
   if (common && typeof common.onApiResponse === 'function') {
     common.onApiResponse(function (info) {
-      if (info.write && info.ok) detector.noteWrite();
+      if (info.write && info.ok) detector.noteWrite(info.url);
       ctrl.observe(info.build);
     });
   }
