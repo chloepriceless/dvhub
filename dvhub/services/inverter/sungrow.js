@@ -1,0 +1,472 @@
+// services/inverter/sungrow.js — Sungrow Hybrid (SH-RS/SH-RT/SH-T) über Modbus TCP (Beta, T-0422).
+//
+// Quelle der Register: Sungrow „Communication Protocol of Residential Hybrid Inverter“ V1.1.9 (2025-06-20),
+// gegengeprüft mit dem evcc-Template sungrow-hybrid (MIT) und mkaiser/Sungrow-SHx-Inverter-Modbus-Home-Assistant
+// (MIT) — nur Adressen, Typen, Vorzeichen; kein Code übernommen. Konventionen der Sungrow-Doku:
+//   • Auf den Draht geht „Doku-Adresse − 1“ (Kap. 1.2, 4.1: Register 5000 wird als 0x1387 = 4999 gelesen).
+//   • U32/S32: Wortreihenfolge little-endian (niederwertiges Wort zuerst, Beispiel 4.2), Bytes je Wort big-endian.
+//   • Nicht vorhandene Register: U16 0xFFFF, U32 0xFFFFFFFF, S16 0x7FFF, S32 0x7FFFFFFF.
+//   • Lesend: FC 4 (Tabelle 3, RO). Steuerung: FC 3/6/16 auf Tabelle 4 (RW, Holding).
+//   • Über WiNet-S/S2/Logger sind RW-Register nicht für häufiges zyklisches Lesen/Schreiben gedacht (Note 6) —
+//     DVhub liest Holding-Register nur vor/nach eigenen Writes und schreibt nur bei Änderungen.
+//
+// Hier: Gerätetabelle, Erkennung (Typcode/Seriennummer/BDC-Nennleistung), Tageswerte und der Aktuator, der
+// DVhubs Netz-Sollwert (gridSetpointW, + = Bezug) über den EMS-Modus nachbildet:
+//   Sollwert nahe 0  → Self-consumption (13050 = 0, 13051 = 0xCC) — der Wechselrichter regelt selbst auf ~0 W.
+//   sonst            → Forced mode (13050 = 2) mit Laden 0xAA / Entladen 0xBB und Leistung 13052 (W),
+//                      nachgeführt aus Netz- und Akku-Messung (Regler wie docs/DEYE-NODERED-BRIDGE.md Kap. 6).
+
+import { meterImport } from '../import-limit/core.js';
+
+/** Doku-Adresse → Draht-Adresse. */
+export const wire = (docAddress) => Number(docAddress) - 1;
+
+// Appendix 1 „Adaptive Inverter Models“ (V1.1.9) — Typcode (Register 5000) → Modell.
+const MODEL_ROWS = [
+  ['SH3.0-6.0RS', 1, [[0xd17, 'SH3.0RS'], [0xd0d, 'SH3.6RS'], [0xd18, 'SH4.0RS'], [0xd0f, 'SH5.0RS'], [0xd10, 'SH6.0RS']]],
+  ['SH8.0-10RS', 1, [[0xd1a, 'SH8.0RS'], [0xd1b, 'SH10RS']]],
+  ['SH5.0-10RT', 3, [
+    [0xe00, 'SH5.0RT'], [0xe01, 'SH6.0RT'], [0xe02, 'SH8.0RT'], [0xe03, 'SH10RT'],
+    [0xe10, 'SH5.0RT-20'], [0xe11, 'SH6.0RT-20'], [0xe12, 'SH8.0RT-20'], [0xe13, 'SH10RT-20'],
+    [0xe0c, 'SH5.0RT-V112'], [0xe0d, 'SH6.0RT-V112'], [0xe0e, 'SH8.0RT-V112'], [0xe0f, 'SH10RT-V112'],
+    [0xe08, 'SH5.0RT-V122'], [0xe09, 'SH6.0RT-V122'], [0xe0a, 'SH8.0RT-V122'], [0xe0b, 'SH10RT-V122']
+  ]],
+  ['SH5-25T', 3, [
+    [0xe20, 'SH5T'], [0xe21, 'SH6T'], [0xe22, 'SH8T'], [0xe23, 'SH10T'], [0xe24, 'SH12T'],
+    [0xe25, 'SH15T'], [0xe26, 'SH20T'], [0xe28, 'SH25T']
+  ]],
+  ['MG5-6RL', 1, [[0xd27, 'MG5RL'], [0xd28, 'MG6RL']]]
+];
+
+/** Typcode → { model, series, phases } für alle Hybrid-Geräte der Sungrow-Doku. */
+export const SUNGROW_HYBRID_MODELS = new Map(
+  MODEL_ROWS.flatMap(([series, phases, rows]) => rows.map(([code, model]) => [code, { model, series, phases }]))
+);
+
+export const EMS_MODE = Object.freeze({ SELF: 0, FORCED: 2, EXTERNAL: 3, VPP: 4 });
+export const EMS_CMD = Object.freeze({ CHARGE: 0xaa, DISCHARGE: 0xbb, STOP: 0xcc });
+
+// Holding-Register der Energieverwaltung (Tabelle 4/9): 13050 Modus, 13051 Befehl, 13052 Leistung (U16, W).
+export const EMS_BLOCK_ADDRESS = wire(13050);
+const EMS_MODE_ADDR = wire(13050);
+const EMS_CMD_ADDR = wire(13051);
+const EMS_POWER_ADDR = wire(13052);
+
+const U16_NA = 0xffff;
+const S16_NA = 0x7fff;
+
+/**
+ * UTF-8-Zeichenkette aus Registern (High-Byte zuerst), endet am ersten 0x00 (Doku Kap. 1.1/4.7).
+ * @param {number[]} regs
+ */
+export function decodeSungrowString(regs) {
+  const bytes = [];
+  for (const w of Array.isArray(regs) ? regs : []) {
+    bytes.push((Number(w) >> 8) & 0xff, Number(w) & 0xff);
+  }
+  const end = bytes.indexOf(0);
+  const text = Buffer.from(end >= 0 ? bytes.slice(0, end) : bytes).toString('utf8').trim();
+  return text || null;
+}
+
+const u16 = (w) => {
+  const v = Number(w) & 0xffff;
+  return v === U16_NA ? null : v;
+};
+const s16 = (w) => {
+  const v = Number(w) & 0xffff;
+  if (v === S16_NA) return null;
+  return v >= 0x8000 ? v - 0x10000 : v;
+};
+const tenth = (v) => (v == null ? null : Math.round(v) / 10);
+
+/**
+ * Tageswerte und Zustand aus dem Block Doku 13000–13045 (46 Register ab Draht 12999, FC 4).
+ * @param {number[]} regs  46 Registerworte
+ */
+export function decodeSungrowInfoBlock(regs) {
+  if (!Array.isArray(regs) || regs.length < 46) return null;
+  const at = (docAddr) => regs[docAddr - 13000];
+  const runningState = u16(at(13000));
+  return {
+    runningState,
+    runningStateText: runningStateText(runningState),
+    powerFlow: u16(at(13001)),
+    dailyPvKwh: tenth(u16(at(13002))),
+    dailyDirectConsumptionKwh: tenth(u16(at(13017))),
+    sohPct: tenth(u16(at(13024))),
+    batteryTempC: tenth(s16(at(13025))),
+    dailyDischargeKwh: tenth(u16(at(13026))),
+    dailyImportKwh: tenth(u16(at(13036))),
+    dailyChargeKwh: tenth(u16(at(13040))),
+    dailyExportKwh: tenth(u16(at(13045)))
+  };
+}
+
+// Appendix 2 — Running State (die für den Betrieb wichtigen Werte).
+const RUNNING_STATES = new Map([
+  [0x0000, 'Betrieb (Netz)'], [0x0040, 'Betrieb (Netz)'], [0x0400, 'Wartungsbetrieb Akku'],
+  [0x0800, 'Zwangsbetrieb (Compulsory)'], [0x1000, 'Inselbetrieb'], [0x4000, 'Externes EMS'],
+  [0x4001, 'Notladung Akku'], [0x8000, 'Stopp'], [0x0001, 'Stopp'], [0x1300, 'Stopp (Taste/App)'],
+  [0x0002, 'Stopp (Taste/App)'], [0x1500, 'Not-Aus'], [0x0004, 'Not-Aus'], [0x1400, 'Standby'],
+  [0x0008, 'Standby'], [0x1200, 'Start-Standby'], [0x0010, 'Start-Standby'], [0x1600, 'Startet'],
+  [0x0020, 'Startet'], [0x9100, 'Betrieb mit Warnung'], [0x8100, 'Leistung reduziert'],
+  [0x0080, 'Leistung reduziert'], [0x8200, 'Fernvorgabe (Dispatch)'], [0x5500, 'Fehler'], [0x0100, 'Fehler']
+]);
+export function runningStateText(code) {
+  if (code == null) return null;
+  return RUNNING_STATES.get(code) || `Zustand 0x${code.toString(16).padStart(4, '0')}`;
+}
+
+/**
+ * Gerät erkennen. `read({fc, address, quantity})` liefert Registerworte (Transport-agnostisch).
+ * Erkannt = Typcode steht in der Hybrid-Tabelle. Seriennummer und BDC-Nennleistung sind Zusatz:
+ * fehlen sie, bleibt das Gerät erkannt, nur ohne diese Angaben.
+ * @returns {Promise<object>} { typeCode, model, series, phases, supported, serial, nominalW, bdcRatedW }
+ */
+export async function identifySungrow(read) {
+  const head = await read({ fc: 4, address: wire(5000), quantity: 2 });
+  const typeCode = u16(head?.[0]);
+  const nominal = u16(head?.[1]);
+  const known = typeCode == null ? null : SUNGROW_HYBRID_MODELS.get(typeCode) || null;
+  let serial = null;
+  try { serial = decodeSungrowString(await read({ fc: 4, address: wire(4990), quantity: 10 })); } catch { /* Zusatz */ }
+  let bdcRatedW = null;
+  try {
+    const bdc = u16((await read({ fc: 4, address: wire(5628), quantity: 1 }))?.[0]);
+    bdcRatedW = bdc == null || bdc === 0 ? null : bdc * 100;
+  } catch { /* Zusatz */ }
+  return {
+    vendor: 'sungrow',
+    typeCode,
+    typeCodeHex: typeCode == null ? null : `0x${typeCode.toString(16).toUpperCase()}`,
+    model: known?.model || null,
+    series: known?.series || null,
+    phases: known?.phases || null,
+    supported: known != null,
+    serial,
+    nominalW: nominal == null ? null : nominal * 100,
+    bdcRatedW
+  };
+}
+
+/**
+ * Was soll der Wechselrichter tun, damit am Zähler `setpointW` fließt? Rein, ohne I/O.
+ *
+ * Regler (Akku + = Laden): P = Akku_Ist + gain · (Sollwert − Netz_Ist). Begrenzungen:
+ *   • Laden höchstens maxChargeW, Entladen höchstens maxDischargeW.
+ *   • Sollwert ≤ 0 (kein Netzbezug gewollt) oder noGridCharge (Netzbezug nur für die Last, z. B. EOS „Akku
+ *     halten“): Laden höchstens aus dem PV-Überschuss (PV − Last), damit DVhub nie aus dem Netz lädt, wenn es
+ *     das Netzladen nicht angefordert hat.
+ *   • Sollwert ≥ 0 (keine Einspeisung gewollt): Entladen höchstens die Netto-Last (Last − PV), damit kein
+ *     Akkustrom ins Netz geht, wenn keine Einspeisung angefordert ist.
+ * Fehlen Netz- oder Akku-Messung (oder PV/Last für die Begrenzung), gibt es keine Zwangsvorgabe.
+ *
+ * @returns {{ mode: 'self'|'forced', command?: 'charge'|'discharge'|'stop', powerW?: number, reason: string }}
+ */
+export function decideEmsCommand({
+  setpointW, gridImportW, batteryW, pvW = null, loadW = null,
+  maxChargeW, maxDischargeW, bandW = 300, gain = 0.7, minPowerW = 50, noGridCharge = false
+} = {}) {
+  const fin = (v) => v != null && Number.isFinite(Number(v));
+  if (!fin(setpointW)) return { mode: 'self', reason: 'no_setpoint' };
+  const s = Number(setpointW);
+  if (Math.abs(s) <= Math.max(0, Number(bandW) || 0)) return { mode: 'self', reason: 'band' };
+  if (!fin(gridImportW) || !fin(batteryW)) return { mode: 'self', reason: 'telemetry_missing' };
+  if (!(Number(maxChargeW) > 0) || !(Number(maxDischargeW) > 0)) return { mode: 'self', reason: 'power_limit_unknown' };
+  const k = Math.min(1, Math.max(0.1, Number(gain) || 0.7));
+  let p = Number(batteryW) + k * (s - Number(gridImportW));
+  let reason = 'regulate';
+  if (p > 0) {
+    p = Math.min(p, Number(maxChargeW));
+    if (s <= 0 || noGridCharge === true) {
+      const surplus = fin(pvW) && fin(loadW) ? Math.max(0, Number(pvW) - Number(loadW)) : 0;
+      if (p > surplus) { p = surplus; reason = 'charge_pv_only'; }
+    }
+  } else if (p < 0) {
+    p = Math.max(p, -Number(maxDischargeW));
+    if (s >= 0) {
+      const netLoad = fin(pvW) && fin(loadW) ? Math.max(0, Number(loadW) - Number(pvW)) : 0;
+      if (-p > netLoad) { p = -netLoad; reason = 'discharge_load_only'; }
+    }
+  }
+  const powerW = Math.round(Math.abs(p) / 10) * 10;
+  if (powerW < Math.max(0, Number(minPowerW) || 0)) return { mode: 'forced', command: 'stop', powerW: 0, reason };
+  return { mode: 'forced', command: p > 0 ? 'charge' : 'discharge', powerW, reason };
+}
+
+const CMD_BY_NAME = { charge: EMS_CMD.CHARGE, discharge: EMS_CMD.DISCHARGE, stop: EMS_CMD.STOP };
+
+/** Ist der Zustand am Gerät (Modus/Befehl/Leistung) schon das Gewünschte? */
+export function emsMatches(dev, decision, toleranceW = 0) {
+  if (!dev) return false;
+  if (decision.mode === 'self') return dev.mode === EMS_MODE.SELF && dev.cmd === EMS_CMD.STOP;
+  if (dev.mode !== EMS_MODE.FORCED || dev.cmd !== CMD_BY_NAME[decision.command]) return false;
+  if (decision.command === 'stop') return true;
+  return Math.abs(Number(dev.powerW) - Number(decision.powerW)) <= toleranceW;
+}
+
+const DEFAULTS = Object.freeze({
+  bandW: 300,            // |Sollwert| bis hier: Self-consumption (DVhub-Puffer −40/−100 W, „Akku halten“)
+  gain: 0.7,             // Dämpfung je Schritt (Bridge-Doku: 50–70 % des Fehlers)
+  minPowerW: 50,
+  stepW: 100,            // Leistung erst ab dieser Änderung neu schreiben
+  regulateEveryMs: 10000, // Nachführen höchstens so oft (WiNet-S: RW-Register nicht im Sekundentakt)
+  telemetryMaxAgeMs: 20000,
+  targetMaxAgeMs: 120000, // ohne Auffrischung des Sollwerts zurück in Self-consumption
+  deviceRecheckMs: 60000  // Gerätezustand (13050–13052) spätestens so oft neu lesen (Neustart, App-Eingriff)
+});
+
+// Quellen, deren positiver Sollwert nur die Last aus dem Netz holt, nie den Akku lädt (schedule-eval:
+// EOS „Akku halten“ rechnet Live-Last − PV − Puffer).
+const NO_GRID_CHARGE_SOURCES = new Set(['eos_grid_hold']);
+
+/** Regler-Einstellungen aus controlWrite.gridSetpointW.sungrowEms (Profil) mit Standardwerten. */
+export function resolveSungrowEmsOptions(conf = {}) {
+  const o = conf?.sungrowEms && typeof conf.sungrowEms === 'object' ? conf.sungrowEms : {};
+  const num = (v, d, min) => (Number.isFinite(Number(v)) && Number(v) >= min ? Number(v) : d);
+  return {
+    bandW: num(o.bandW, DEFAULTS.bandW, 0),
+    gain: num(o.gain, DEFAULTS.gain, 0.1),
+    minPowerW: num(o.minPowerW, DEFAULTS.minPowerW, 0),
+    stepW: num(o.stepW, DEFAULTS.stepW, 0),
+    regulateEveryMs: num(o.regulateEveryMs, DEFAULTS.regulateEveryMs, 2000),
+    telemetryMaxAgeMs: num(o.telemetryMaxAgeMs, DEFAULTS.telemetryMaxAgeMs, 1000),
+    targetMaxAgeMs: num(o.targetMaxAgeMs, DEFAULTS.targetMaxAgeMs, 10000),
+    deviceRecheckMs: num(o.deviceRecheckMs, DEFAULTS.deviceRecheckMs, 10000),
+    maxPowerW: Number(o.maxPowerW) > 0 ? Number(o.maxPowerW) : null
+  };
+}
+
+/** Profil bildet den Netz-Sollwert über den Sungrow-EMS nach? */
+export function sungrowEmsConf(cfg) {
+  const c = cfg?.controlWrite?.gridSetpointW;
+  return c?.enabled === true && c.emulate === 'sungrow-ems' ? c : null;
+}
+
+/**
+ * Aktuator für den nachgebildeten Netz-Sollwert. Alle Writes nur über Holding-Register 13050–13052, jede
+ * Änderung mit Rücklesen. Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Zwangsbetrieb selbst
+ * gesetzt hat, danach nichts mehr.
+ */
+export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now() }) {
+  const st = {
+    target: null,        // { setpointW, source, at }
+    dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
+    owns: false,         // DVhub hat den Zwangsbetrieb selbst gesetzt (nur dann Not-Halt-Rücknahme)
+    lastStepAt: 0,
+    decision: null,
+    error: null,
+    neutralizedAt: null,  // pausedAt des Not-Halts, für den die eine Rücknahme schon lief
+    logKeys: {}
+  };
+  let chain = Promise.resolve();
+  const serial = (fn) => {
+    const run = chain.then(fn, fn);
+    chain = run.catch(() => {});
+    return run;
+  };
+
+  function logOnce(key, event, data, level) {
+    if (st.logKeys[event] === key) return;
+    st.logKeys[event] = key;
+    pushLog(event, data, level);
+  }
+
+  function publish() {
+    if (!state.ctrl) return;
+    state.ctrl.sungrowEms = {
+      target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at } : null,
+      device: st.dev ? { ...st.dev } : null,
+      decision: st.decision,
+      owns: st.owns,
+      error: st.error
+    };
+  }
+
+  function endpoint(conf) {
+    return { host: conf.host, port: conf.port, unitId: conf.unitId, timeoutMs: conf.timeoutMs };
+  }
+
+  async function readDevice(conf) {
+    const regs = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: EMS_BLOCK_ADDRESS, quantity: 3 });
+    if (!Array.isArray(regs) || regs.length < 3) throw new Error('EMS-Register: unvollständige Antwort');
+    st.dev = { mode: Number(regs[0]) & 0xffff, cmd: Number(regs[1]) & 0xffff, powerW: Number(regs[2]) & 0xffff, at: now() };
+    return st.dev;
+  }
+
+  async function writeReg(conf, address, value) {
+    await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
+  }
+
+  // Gewünschten Zustand schreiben (nur was abweicht) und zurücklesen. Wirft bei Fehler/Abweichung.
+  async function writeDecision(conf, decision) {
+    const dev = st.dev || await readDevice(conf);
+    if (decision.mode === 'self') {
+      if (dev.cmd !== EMS_CMD.STOP) await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP);
+      if (dev.mode !== EMS_MODE.SELF) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF);
+    } else {
+      const cmd = CMD_BY_NAME[decision.command];
+      if (decision.command !== 'stop' && dev.powerW !== decision.powerW) await writeReg(conf, EMS_POWER_ADDR, decision.powerW);
+      if (dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd);
+      if (dev.mode !== EMS_MODE.FORCED) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.FORCED);
+    }
+    // Ab dem ersten Write gilt der Zwangsbetrieb als DVhubs eigener (auch wenn das Rücklesen scheitert).
+    st.owns = decision.mode === 'forced';
+    st.dev = null;
+    const back = await readDevice(conf);
+    if (!emsMatches(back, decision, 10)) {
+      const err = new Error(`EMS-Rücklesung weicht ab (Soll ${describe(decision)}, Ist Modus ${back.mode}, Befehl 0x${back.cmd.toString(16)}, ${back.powerW} W)`);
+      err.code = 'readback_mismatch';
+      throw err;
+    }
+    return back;
+  }
+
+  function telemetry(cfg, opts) {
+    const t = now();
+    const maxAgeMs = opts.telemetryMaxAgeMs;
+    const m = meterImport(state, cfg, { now: t, maxAgeMs });
+    const v = state.victron || {};
+    const fresh = (field) => {
+      const at = Number(v.fieldUpdatedAt?.[field]) || 0;
+      return at > 0 && t - at <= maxAgeMs && v[field] != null && Number.isFinite(Number(v[field]));
+    };
+    const untrusted = v.freeze?.active === true || v.sourceMismatch?.active === true;
+    return {
+      gridImportW: m.fresh && !untrusted ? m.importW : null,
+      batteryW: fresh('batteryPowerW') && !untrusted ? Number(v.batteryPowerW) : null,
+      pvW: fresh('pvPowerW') && !untrusted ? Number(v.pvPowerW) : null,
+      loadW: fresh('selfConsumptionW') && !untrusted ? Number(v.selfConsumptionW) : null
+    };
+  }
+
+  function deviceGate() {
+    const d = state.victron?.device;
+    if (!d || d.vendor !== 'sungrow') return 'sungrow_device_not_identified';
+    if (d.supported !== true) return 'sungrow_device_not_supported';
+    return null;
+  }
+
+  async function step({ reason = 'tick' } = {}) {
+    const cfg = getCfg();
+    const conf = sungrowEmsConf(cfg);
+    if (!conf || transport?.type !== 'modbus') return { ok: false, error: 'sungrow_ems_not_configured' };
+    if (state.ctrl?.discretionaryWritesPaused) return { ok: false, blocked: true, error: 'emergency_stop_active' };
+    const gate = deviceGate();
+    if (gate) {
+      st.error = gate;
+      publish();
+      return { ok: false, error: gate };
+    }
+    const opts = resolveSungrowEmsOptions(conf);
+    const t = now();
+    st.lastStepAt = t;
+    const targetFresh = st.target && t - st.target.at <= opts.targetMaxAgeMs;
+    const tel = telemetry(cfg, opts);
+    const bdc = Number(state.victron.device.bdcRatedW) || null;
+    const cap = opts.maxPowerW != null ? (bdc ? Math.min(bdc, opts.maxPowerW) : opts.maxPowerW) : bdc;
+    const decision = targetFresh
+      ? decideEmsCommand({
+        setpointW: st.target.setpointW, ...tel, maxChargeW: cap, maxDischargeW: cap,
+        bandW: opts.bandW, gain: opts.gain, minPowerW: opts.minPowerW,
+        noGridCharge: NO_GRID_CHARGE_SOURCES.has(String(st.target.source))
+      })
+      : { mode: 'self', reason: st.target ? 'target_expired' : 'no_setpoint' };
+    st.decision = { ...decision, at: t, trigger: reason };
+    try {
+      // Gerätezustand nur nach eigenen Writes und höchstens einmal je deviceRecheckMs lesen (Note 6);
+      // so fällt ein Neustart des Wechselrichters oder ein Eingriff über die App auf.
+      const dev = st.dev && t - st.dev.at < opts.deviceRecheckMs ? st.dev : await readDevice(conf);
+      if ((dev.mode === EMS_MODE.EXTERNAL || dev.mode === EMS_MODE.VPP) && !st.owns) {
+        // Ein anderes EMS/VPP steuert den Wechselrichter — nicht dagegen regeln.
+        st.error = 'foreign_ems_mode';
+        logOnce(String(dev.mode), 'sungrow_ems_foreign_mode', { mode: dev.mode, text: 'Sungrow steht im externen EMS-/VPP-Modus — DVhub schreibt nichts' }, 'warn');
+        publish();
+        return { ok: false, error: 'sungrow_foreign_ems_mode' };
+      }
+      if (emsMatches(dev, decision, decision.mode === 'forced' ? opts.stepW : 0)) {
+        st.error = null;
+        publish();
+        return { ok: true, unchanged: true, decision };
+      }
+      const back = await writeDecision(conf, decision);
+      st.error = null;
+      st.logKeys = {};
+      pushLog('sungrow_ems_write', {
+        setpointW: st.target?.setpointW ?? null, source: st.target?.source ?? null,
+        mode: decision.mode, command: decision.command || null, powerW: decision.powerW ?? null,
+        reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW }
+      });
+      publish();
+      return { ok: true, decision };
+    } catch (e) {
+      st.dev = null;
+      st.error = e?.message || String(e);
+      logOnce(st.error, e?.code === 'readback_mismatch' ? 'sungrow_ems_readback_mismatch' : 'sungrow_ems_error',
+        { error: st.error, decision }, 'warn');
+      publish();
+      return { ok: false, error: st.error };
+    }
+  }
+
+  /**
+   * Neuer bzw. bestätigter Netz-Sollwert aus applyControlTarget (alle Tore davor sind durchlaufen).
+   * Ein geänderter Wert regelt sofort, ein gleicher frischt nur den Sollwert auf (Nachführen im Takt).
+   */
+  function applySetpoint(setpointW, source) {
+    return serial(async () => {
+      const changed = !st.target || Number(st.target.setpointW) !== Number(setpointW);
+      st.target = { setpointW: Number(setpointW), source, at: now() };
+      const opts = resolveSungrowEmsOptions(sungrowEmsConf(getCfg()) || {});
+      if (!changed && now() - st.lastStepAt < opts.regulateEveryMs) {
+        publish();
+        return { ok: true, refreshed: true };
+      }
+      return step({ reason: changed ? 'setpoint' : 'refresh' });
+    });
+  }
+
+  /** Nachführen im festen Takt (schedule-eval, 5 s); intern höchstens alle regulateEveryMs. */
+  function tick() {
+    return serial(async () => {
+      const conf = sungrowEmsConf(getCfg());
+      if (!conf || state.ctrl?.discretionaryWritesPaused) return { ok: true, idle: true };
+      const opts = resolveSungrowEmsOptions(conf);
+      if (!st.target && !st.owns) return { ok: true, idle: true };
+      if (now() - st.lastStepAt < opts.regulateEveryMs) return { ok: true, idle: true };
+      return step({ reason: 'tick' });
+    });
+  }
+
+  /** Not-Halt-Eintritt: DVhubs Zwangsbetrieb genau einmal zurück in Self-consumption, sonst nichts. */
+  function emergencyStop() {
+    return serial(async () => {
+      const pausedAt = Number(state.ctrl?.pausedAt) || 0;
+      st.target = null;
+      if (st.neutralizedAt === pausedAt) return { ok: true, skipped: true, reason: 'already_done' };
+      st.neutralizedAt = pausedAt;
+      const conf = sungrowEmsConf(getCfg());
+      if (!conf || !st.owns) return { ok: true, skipped: true, reason: 'not_owned' };
+      try {
+        st.dev = null; // frisch lesen: nur schreiben, was am Gerät wirklich noch abweicht
+        const back = await writeDecision(conf, { mode: 'self', reason: 'emergency_stop' });
+        st.owns = false;
+        pushLog('sungrow_ems_write', { mode: 'self', reason: 'emergency_stop', readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
+        publish();
+        return { ok: true };
+      } catch (e) {
+        st.error = e?.message || String(e);
+        publish();
+        return { ok: false, error: st.error };
+      }
+    });
+  }
+
+  return { applySetpoint, tick, emergencyStop, status: () => (publish(), state.ctrl?.sungrowEms || null), _st: st };
+}
+
+function describe(d) {
+  if (d.mode === 'self') return 'Self-consumption';
+  return d.command === 'stop' ? 'Zwangsbetrieb Stopp' : `Zwangsbetrieb ${d.command === 'charge' ? 'Laden' : 'Entladen'} ${d.powerW} W`;
+}

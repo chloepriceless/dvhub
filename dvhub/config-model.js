@@ -25,6 +25,8 @@ const MANUFACTURER_MANAGED_PATHS = [
   'meter',
   'points',
   'controlWrite',
+  // Geräteerkennung/Schreib-Tor (Sungrow, T-0422) — nur aus dem Profil.
+  'identify',
   // 2026-07-29 (Christin): NICHT mehr der ganze `dvControl`-Baum. Gemanagt ist
   // nur die Register-Verdrahtung der DV-Abregelung — die beiden Betreiber-
   // Entscheidungen darin (ob DVhub überhaupt schreibt, und der Sollwert-Puffer
@@ -409,6 +411,10 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   if (isPlainObject(manufacturerProfile?.meter)) effectiveConfig.meter = clone(manufacturerProfile.meter);
   if (isPlainObject(manufacturerProfile?.points)) effectiveConfig.points = clone(manufacturerProfile.points);
   if (isPlainObject(manufacturerProfile?.controlWrite)) effectiveConfig.controlWrite = clone(manufacturerProfile.controlWrite);
+  // identify (Sungrow, T-0422): Geräteerkennung und Schreib-Tor gehören zum
+  // Profil — ein Profil ohne den Block hat auch keinen (kein Rest aus config.json).
+  if (isPlainObject(manufacturerProfile?.identify)) effectiveConfig.identify = clone(manufacturerProfile.identify);
+  else delete effectiveConfig.identify;
   // dvControl: Register-Verdrahtung kommt aus dem Profil, die beiden
   // Betreiber-Entscheidungen darin gewinnen. Nur AUSDRÜCKLICH persistierte
   // Werte überschreiben — ein fehlender Schlüssel heißt „Profil-Default gilt",
@@ -1783,9 +1789,10 @@ function buildFieldDefinitions() {
         { value: 'bridge-mqtt', label: 'Universal (MQTT-Bridge)' },
         { value: 'dvhub-mqtt', label: 'Universal (DVhub-MQTT-Schema: HA/Loxone) — Beta' },
         { value: 'fronius', label: 'Fronius GEN24 (SunSpec) — Beta' },
-        { value: 'deye-lv', label: 'Deye SUN-…SG04LP3 (LV, 3-phasig) — Beta' }
+        { value: 'deye-lv', label: 'Deye SUN-…SG04LP3 (LV, 3-phasig) — Beta' },
+        { value: 'sungrow', label: 'Sungrow SH Hybrid (Modbus TCP) — Beta' }
       ],
-      help: 'Victron wird nativ (Modbus) unterstützt. „Universal (MQTT-Bridge)" bindet jeden anderen Wechselrichter über eine kleine MQTT-Bridge an (z. B. Node-RED, siehe Doku DEYE-NODERED-BRIDGE). ⚠️ Fronius GEN24 (SunSpec) und Deye LV-3ph (RS485-Gateway) sind BETA-Profile, deren Test an echter Hardware noch aussteht — aktuell nur Telemetrie/Anzeige (Fronius derzeit OHNE aktive Abregelung). Wer testen möchte, bitte melden (info@bikinibottom.capital); in einer Produktivumgebung bitte noch nicht einsetzen. Die technischen Werte kommen aus der Herstellerdatei.'
+      help: 'Victron wird nativ (Modbus) unterstützt. „Universal (MQTT-Bridge)" bindet jeden anderen Wechselrichter über eine kleine MQTT-Bridge an (z. B. Node-RED, siehe Doku DEYE-NODERED-BRIDGE). ⚠️ Fronius GEN24 (SunSpec), Deye LV-3ph (RS485-Gateway) und Sungrow SH Hybrid (Modbus TCP über LAN oder WiNet-S) sind BETA-Profile, deren Test an echter Hardware noch aussteht — Fronius und Deye aktuell nur Telemetrie/Anzeige (Fronius derzeit OHNE aktive Abregelung); Sungrow steuert zusätzlich Akku (EMS-Modus) und Einspeisebegrenzung. Wer testen möchte, bitte melden (info@bikinibottom.capital); in einer Produktivumgebung bitte noch nicht einsetzen. Die technischen Werte kommen aus der Herstellerdatei.'
     },
     {
       section: 'victron',

@@ -36,7 +36,7 @@ test('U2: Anlagenadresse nur bei Profilen mit Geräteverbindung', () => {
   const { sandbox, withConfig } = settingsSandbox();
   const host = field('victron.host');
   assert.ok(host);
-  for (const manufacturer of ['victron', 'fronius', 'deye-lv', 'bridge-mqtt']) {
+  for (const manufacturer of ['victron', 'fronius', 'deye-lv', 'bridge-mqtt', 'sungrow']) {
     withConfig({ manufacturer, updateChannel: 'dev' });
     assert.equal(sandbox.isFieldVisible(host), true, manufacturer);
   }

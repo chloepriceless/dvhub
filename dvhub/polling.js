@@ -7,6 +7,7 @@ import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
+import { identifySungrow, decodeSungrowInfoBlock, wire } from './services/inverter/sungrow.js';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms, buildActiveAlarmsFromDbus } from './victron-alarms.js';
 // T-FREEZE (2026-07-24): Einfrier-Wächter. Erkennt eingefrorene Live-Werte trotz
@@ -154,15 +155,22 @@ export function createPoller(ctx) {
     // 2716/2717). wordOrder 'be' (default) = high word first (regs[0]); 'le' =
     // low word first. `* 0x10000` (not <<16) avoids JS 32-bit signed overflow.
     const readType = String(conf.readType || '').toLowerCase();
+    // notAvailableRaw (Sungrow, T-0422): Rohwerte, mit denen das Gerät „Register
+    // nicht vorhanden/kein Wert“ meldet (U16 0xFFFF, S32 0x7FFFFFFF …) — vorzeichenlos
+    // gegen das rohe Wort bzw. Doppelwort verglichen, VOR Vorzeichen und Skala.
+    // Ergebnis null (unbelegt) statt einer erfundenen Zahl.
+    const notAvailable = Array.isArray(conf.notAvailableRaw) ? conf.notAvailableRaw.map(Number) : [];
     if (regs.length >= 2 && (readType === 'int32' || readType === 'uint32')) {
       const le = String(conf.wordOrder || 'be').toLowerCase().startsWith('l');
       const hi = le ? regs[1] : regs[0];
       const lo = le ? regs[0] : regs[1];
       let raw = ((hi & 0xffff) * 0x10000) + (lo & 0xffff);
+      if (notAvailable.includes(raw)) return null;
       if (readType === 'int32' && raw > 0x7fffffff) raw -= 0x100000000;
       const v = raw * scale + offset;
       return Number(v.toFixed(3));
     }
+    if (notAvailable.length && regs.some((r) => notAvailable.includes(Number(r) & 0xffff))) return null;
     if (conf.quantity > 1 && conf.sumRegisters) {
       let sum = 0;
       for (const r of regs) sum += conf.signed ? s16(r) : r;
@@ -540,10 +548,123 @@ export function createPoller(ctx) {
     }
   }
 
+  // --- Geräteerkennung (Sungrow, T-0422) -----------------------------------
+  // Profil mit identify.kind 'sungrow': Typcode, Seriennummer, BDC-Nennleistung
+  // einmal lesen (state.victron.device), bei Fehlschlag alle 60 s neu; die
+  // Tageswerte/Zustand (ein FC-4-Block) alle identify.infoEveryMs (Standard 5 min).
+  // Schreiben (Sequenzen, EMS) geht erst, wenn das Gerät als Sungrow-Hybrid
+  // erkannt ist — ein String-WR (SG) oder ein fremdes Gerät bekommt keinen Write.
+  let identifyRetryAt = 0;
+  let identifyInfoAt = 0;
+  async function ensureDeviceIdentified(cfg) {
+    const kind = cfg?.identify?.kind;
+    if (kind !== 'sungrow' || transport.type !== 'modbus') {
+      if (state.victron.device) delete state.victron.device;
+      return;
+    }
+    const v = cfg.victron || {};
+    const endpointKey = `${v.host}:${v.port}:${v.unitId}`;
+    const read = ({ fc, address, quantity }) => transport.mbRequest({
+      fc, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, address, quantity
+    });
+    const now = Date.now();
+    let dev = state.victron.device;
+    if (dev && dev.endpointKey !== endpointKey) {
+      delete state.victron.device;
+      dev = null;
+      identifyRetryAt = 0;
+      identifyInfoAt = 0;
+    }
+    if (!dev) {
+      if (now < identifyRetryAt) return;
+      identifyRetryAt = now + 60000;
+      try {
+        const id = await identifySungrow(read);
+        dev = { ...id, endpointKey, identifiedAt: now };
+        state.victron.device = dev;
+        pushLog(id.supported ? 'inverter_identified' : 'inverter_not_supported', {
+          vendor: 'sungrow', typeCode: id.typeCodeHex, model: id.model, serial: id.serial,
+          nominalW: id.nominalW, bdcRatedW: id.bdcRatedW,
+          text: id.supported
+            ? `Sungrow ${id.model} erkannt (Beta)`
+            : `Sungrow-Typcode ${id.typeCodeHex ?? '?'} ist kein unterstützter Hybrid-Wechselrichter — DVhub liest, steuert aber nicht`
+        }, id.supported ? undefined : 'warn');
+      } catch (e) {
+        pushLog('inverter_identify_error', { vendor: 'sungrow', error: e.message }, 'warn');
+        return;
+      }
+    }
+    const infoEveryMs = Math.max(30000, Number(cfg.identify.infoEveryMs) || 300000);
+    if (now - identifyInfoAt < infoEveryMs) return;
+    identifyInfoAt = now;
+    try {
+      const info = decodeSungrowInfoBlock(await read({ fc: 4, address: wire(13000), quantity: 46 }));
+      if (info) state.victron.device = { ...state.victron.device, info, infoAt: now };
+    } catch { /* Zusatzanzeige — nächster Versuch nach infoEveryMs */ }
+  }
+
+  // --- 32-bit-Zähler (meter.readType 'int32') ------------------------------
+  const METER_PRIMARY_RETRY_MS = 3600_000;
+  let meterFallbackSince = 0;
+  function decodeInt32Words(words, le, notAvailable, signed = true) {
+    const hi = le ? words[1] : words[0];
+    const lo = le ? words[0] : words[1];
+    let raw = ((Number(hi) & 0xffff) * 0x10000) + (Number(lo) & 0xffff);
+    if (notAvailable.includes(raw)) return null;
+    if (signed && raw > 0x7fffffff) raw -= 0x100000000;
+    return raw;
+  }
+  async function readInt32Meter(m) {
+    const le = String(m.wordOrder || 'be').toLowerCase().startsWith('l');
+    const notAvailable = Array.isArray(m.notAvailableRaw) ? m.notAvailableRaw.map(Number) : [];
+    const fb = m.fallback && typeof m.fallback === 'object' ? m.fallback : null;
+    const usePrimary = !fb || !meterFallbackSince || Date.now() - meterFallbackSince >= METER_PRIMARY_RETRY_MS;
+    if (usePrimary) {
+      let regs = null;
+      try {
+        regs = await transport.mbRequest({ ...m, quantity: 8 });
+      } catch (e) {
+        if (!(fb && /^modbus exception (1|2)\b/.test(String(e?.message)))) throw e;
+      }
+      if (regs) {
+        if (!Array.isArray(regs) || regs.length < 8) {
+          throw new Error(`modbus short response (${Array.isArray(regs) ? regs.length : 0} von 8 Registern)`);
+        }
+        const vals = [0, 2, 4, 6].map((i) => decodeInt32Words([regs[i], regs[i + 1]], le, notAvailable));
+        const [t, a, b, c] = vals;
+        const phasesOk = a != null && b != null && c != null;
+        const total = t != null ? t : (phasesOk ? a + b + c : null);
+        if (total != null) {
+          if (meterFallbackSince) pushLog('meter_fallback_cleared', { address: m.address });
+          meterFallbackSince = 0;
+          return { total, l1: a, l2: b, l3: c, raw: regs, fallback: false };
+        }
+        if (!fb) throw new Error('Zähler meldet keinen Gesamtwert (Register nicht verfügbar)');
+      }
+      if (!meterFallbackSince) {
+        pushLog('meter_fallback_active', {
+          address: m.address, fallbackAddress: fb.address,
+          text: 'Zähler-Block ohne Werte (Firmware?) — Gesamtleistung kommt aus dem Ersatzregister, ohne Phasenwerte'
+        }, 'warn');
+      }
+      meterFallbackSince = Date.now();
+    }
+    const fregs = await transport.mbRequest({ ...m, ...fb, quantity: 2 });
+    if (!Array.isArray(fregs) || fregs.length < 2) {
+      throw new Error(`modbus short response (${Array.isArray(fregs) ? fregs.length : 0} von 2 Registern)`);
+    }
+    const fle = String(fb.wordOrder || m.wordOrder || 'be').toLowerCase().startsWith('l');
+    const raw = decodeInt32Words(fregs, fle, notAvailable);
+    if (raw == null) throw new Error('Zähler-Ersatzregister meldet keinen Wert');
+    const total = raw * Number(fb.scale ?? 1);
+    return { total, l1: null, l2: null, l3: null, raw: fregs, fallback: true };
+  }
+
   // --- pollMeter: main polling function (meter + all Victron points) ---
   async function pollMeter() {
     const cfg = getCfg();
     await ensureSunspecResolved(cfg);
+    await ensureDeviceIdentified(cfg);
     // Plan 09-06 (D-06): wall-clock duration of the meter read — recorded into
     // dvhub_meter_poll_duration_seconds gauge on success, dvhub_meter_poll_errors_total
     // counter on catch. Tracked in seconds (Prometheus convention).
@@ -658,6 +779,31 @@ export function createPoller(ctx) {
           ok: true, updatedAt: Date.now(), raw: [fTotal, fL1, fL2, fL3],
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
           error: null,
+          consecutiveErrors: 0,
+          nextRetryAt: null
+        };
+      } else if (String(cfg.meter?.readType || '').toLowerCase() === 'int32') {
+        // 32-bit-Zähler (Sungrow 5601–5608, T-0422): 8 Register = 4×int32 in der
+        // Reihenfolge [Gesamt, L1, L2, L3], Bezug positiv, Wortreihenfolge laut
+        // meter.wordOrder. „Kein Wert“ (notAvailableRaw, Sungrow 0x7FFFFFFF):
+        // Phase → null; Gesamt → Summe der drei Phasen, sonst Lesefehler.
+        // Kennt das Gerät den Block nicht (ältere Firmware: Exception 1/2 oder
+        // kein Gesamtwert), liest DVhub meter.fallback (Gesamtwert allein, z. B.
+        // Sungrow-Einspeiseleistung 13010 mit scale −1) und prüft den Block
+        // stündlich erneut.
+        const r = await readInt32Meter(cfg.meter);
+        const posImport = cfg.gridPositiveMeans === 'grid_import';
+        const sign = posImport ? 1 : -1;
+        const ph = (x) => (x == null ? null : (Math.round(x * sign) || 0));
+        l1 = ph(r.l1);
+        l2 = ph(r.l2);
+        l3 = ph(r.l3);
+        total = Math.round(r.total * sign) || 0;
+        state.meter = {
+          ok: true, updatedAt: Date.now(), raw: r.raw,
+          grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
+          error: null,
+          ...(r.fallback ? { source: 'fallback' } : {}),
           consecutiveErrors: 0,
           nextRetryAt: null
         };

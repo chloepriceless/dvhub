@@ -117,7 +117,8 @@ test('Victron: aktive SoC-Grenze (2903) entschuldigt den Stillstand', async () =
 
 // --- Fronius / Deye: kein Netz-Sollwert → Wächter ruht -----------------------
 
-for (const manufacturer of ['fronius', 'deye-lv']) {
+// sungrow: Sollwert nachgebildet (EMS), aber nicht im Gerät rücklesbar → Wächter ruht ebenso.
+for (const manufacturer of ['fronius', 'deye-lv', 'sungrow']) {
   test(`${manufacturer}: kein Netz-Sollwert im Profil → Wächter ruht, liest nichts, wirft nicht`, async () => {
     const r = rig(manufacturer);
     assert.equal(r.cfg.points.gridSetpointW?.enabled, false, 'Profil liefert keinen Sollwert');

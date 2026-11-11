@@ -64,6 +64,9 @@ const VICTRON_FIELDS = [
   'batteryToSecondBatteryW',
   'secondBatteryToBatteryW',
   'errors',
+  // Erkanntes Gerät eines Herstellerprofils mit identify (Sungrow, T-0422):
+  // Modell, Typcode, Seriennummer, Nennleistungen, Tageswerte/Zustand.
+  'device',
   // Victron device-alarm banner: the poller (a separate runtime-worker process)
   // writes state.victron.alarms; it MUST be whitelisted here or the IPC snapshot
   // drops it and the web process serves payload.victron.alarms = undefined

@@ -214,6 +214,8 @@ async function setEmergencyStopNow(ctx, opts) {
         ['eebus', () => ctx.eebus?.emergencyStop?.()],
         // Einspeisegrenze 2706: DV-Teilvorgabe/Steuerbox-Grenze einmal zurück.
         ['feedInLimit', () => ctx.feedInLimit?.emergencyStop?.()],
+        // Sungrow-EMS: von DVhub gesetzter Zwangsbetrieb einmal zurück in Self-consumption.
+        ['batteryEms', () => ctx.sungrowEms?.emergencyStop?.()],
       ]) {
         let r;
         try { r = await run(); } catch (e) { r = { ok: false, error: e?.message || String(e) }; }
