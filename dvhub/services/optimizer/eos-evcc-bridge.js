@@ -421,7 +421,7 @@ export function createEosEvccBridge(deps) {
   // Felder des Netzanschluss-Deckels an evcc (evccCapTick) überleben jeden
   // Befehl am selben Gerät: Ursprungsstrom, gesetzter Deckel, Pause.
   const capFields = (prev, ident) => (prev && prev.identity === ident
-    ? { limitA: prev.limitA ?? null, limitTried: prev.limitTried === true, limitOff: prev.limitOff === true, capOffTried: prev.capOffTried === true, origMaxCurrentA: prev.origMaxCurrentA ?? null, dvhubModes: Array.isArray(prev.dvhubModes) ? prev.dvhubModes : [] }
+    ? { limitA: prev.limitA ?? null, limitTried: prev.limitTried === true, limitOff: prev.limitOff === true, capOffTried: prev.capOffTried === true, origMaxCurrentA: prev.origMaxCurrentA ?? null, dvhubModes: Array.isArray(prev.dvhubModes) ? prev.dvhubModes : [], ...(prev.limitOnly === true ? { limitOnly: true } : {}) }
     : {});
   // Phasen-Felder überleben ebenso jeden Befehl am selben Gerät: zuletzt
   // bestätigte (phases) und versuchte (phasesTried, phasesAt) DVhub-Phasen und
@@ -712,6 +712,16 @@ export function createEosEvccBridge(deps) {
         return { ok: true, skipped: 'identity_changed' };
       }
     }
+    // Reine Obergrenze (Fable R1 P2-5): Strom von vorher zurück.
+    const limitRec = owned.get(targetKey(target));
+    if (limitRec?.limitOnly === true && charger.type !== 'evcc' && typeof charger.unlimit === 'function') {
+      const res = await undoLimit(charger, targetKey(target), limitRec);
+      if (res?.ok) {
+        pushLog('eos_wallbox_unlimited', { charger: charger.type, currentA: limitRec.origMaxCurrentA ?? null });
+        lastSent = null;
+      }
+      return res;
+    }
     // openWB ohne übergeordneten Regler: release() tut nichts, die letzte
     // Vorgabe bliebe stehen. Nach einer Grenz-Vorgabe bekommt die Box ihren
     // vollen Strom zurück (Gesamtprüfung 5, P2).
@@ -762,7 +772,9 @@ export function createEosEvccBridge(deps) {
         continue;
       }
       // openWB: voller Strom der damaligen Einstellung (Codex a2686af7, P2).
-      const res = e.charger === 'openwb' ? await ch.charge(e.maxCurrentA ?? bc.maxCurrentA) : await ch.release();
+      // Reine Obergrenze: Strom von vorher (Fable R1 P2-5).
+      const res = e.limitOnly === true && typeof ch.unlimit === 'function' ? await undoLimit(ch, key, e)
+        : (e.charger === 'openwb' ? await ch.charge(e.maxCurrentA ?? bc.maxCurrentA) : await ch.release());
       if (res?.ok) {
         setOwned(key, null);
         if (lastSent && targetKey({ charger: lastSent.charger, loadpoint: lastSent.loadpoint }) === key) lastSent = null;
@@ -1104,6 +1116,9 @@ export function createEosEvccBridge(deps) {
     if (!charger.isConfigured()) return null;
     // Ohne Grenze lädt die Box mit ihrem Höchststrom; mit Grenze höchstens der Anteil.
     const slot = applyGridCap({ action: 'charge', currentA: bc.maxCurrentA }, bc, capW);
+    // Fable R1 P2-5: nur begrenzen, nicht übernehmen — wo die Box eine reine
+    // Strom-Obergrenze kennt. Unter dem Mindeststrom bleibt es beim Stopp.
+    if (slot.action === 'charge' && limitOnlyCapable(cfg, charger, bc)) return limitOnlyTick(cfg, bc, charger, slot, capW, force);
     const key = `${bc.charger}:${bc.loadpoint}:p14a:${slot.action}:${slot.currentA ?? ''}`;
     // Erzwungen (Wächter: Deckel geändert oder nicht befolgt): ohne Dubletten-Filter.
     if (!force && lastSent?.key === key) return { ok: true, unchanged: true, gridCapW: Number(capW) };
@@ -1115,8 +1130,112 @@ export function createEosEvccBridge(deps) {
     }
     lastSent = { key, charger: bc.charger, action: slot.action, currentA: slot.currentA ?? null, loadpoint: bc.loadpoint, at: new Date(now()).toISOString(), gridCap: true };
     markGridCap(bc, true);
-    pushLog('paragraph14a_wallbox_capped', { charger: charger.type, capW: Number(capW), action: slot.action, currentA: slot.currentA ?? null });
+    // mode 'charge': Box ohne reine Strom-Obergrenze — die Grenze geht als Ladebefehl raus.
+    pushLog('paragraph14a_wallbox_capped', { charger: charger.type, capW: Number(capW), action: slot.action, currentA: slot.currentA ?? null, ...(slot.action === 'charge' ? { mode: 'charge' } : {}) });
     return { ok: true, sent: lastSent, gridCapW: Number(capW) };
+  }
+
+  // Fable R1 P2-5: Kann die direkte Box eine reine Strom-Obergrenze (limit,
+  // unlimit, limitState — go-e, Wattpilot, OpenEVSE), und steuert DVhub sie
+  // gerade nicht selbst (kein Datensatz oder nur die eigene Obergrenze)?
+  function limitOnlyCapable(cfg, charger, bc) {
+    if (bc.charger === 'evcc' || charger?.type === 'evcc') return false;
+    if (!['limit', 'unlimit', 'limitState'].every((k) => typeof charger?.[k] === 'function')) return false;
+    const e = owned.get(targetKey(bc));
+    return !e || e.limitOnly === true;
+  }
+
+  // Eigene Obergrenze zurücknehmen: hat DVhub die Box darunter gestoppt
+  // (Deckel unter dem Mindeststrom) oder selbst laden lassen, erst freigeben,
+  // dann den Strom von vorher. Scheitert der zweite Schritt, bleibt der
+  // Datensatz als Obergrenze stehen (nächster Versuch nur noch unlimit).
+  async function undoLimit(charger, key, rec) {
+    if (rec.cmd !== 'limit') {
+      const rel = await charger.release();
+      if (!rel?.ok) return rel || { ok: false, error: 'release failed' };
+    }
+    const res = await charger.unlimit({ origCurrentA: rec.origMaxCurrentA ?? null });
+    if (res?.ok) setOwned(key, null);
+    else setOwned(key, { ...rec, cmd: 'limit' });
+    return res;
+  }
+
+  async function limitOnlyTick(cfg, bc, charger, slot, capW, force) {
+    const key = targetKey(bc);
+    let ident;
+    try { ident = typeof charger.identity === 'function' ? charger.identity() : wallboxIdentity(cfg, bc.charger); } catch { ident = null; }
+    let e = owned.get(key) || null;
+    if (e && e.identity && ident && e.identity !== ident) {
+      // Anderes Gerät eingetragen: der alte Datensatz gilt nicht für dieses.
+      pushLog('ev_owned_identity_changed', { charger: bc.charger }, 'warn');
+      setOwned(key, null);
+      e = null;
+    }
+    const cmdKey = `${bc.charger}:${bc.loadpoint}:cap-limit:${slot.currentA}`;
+    if (!force && e?.cmd === 'limit' && e.confirmed === true && lastSent?.key === cmdKey) return { ok: true, unchanged: true, gridCapW: Number(capW) };
+    const at = new Date(now()).toISOString();
+    if (!e) {
+      // Strom von vorher VOR dem ersten Befehl merken — eine verlorene Quittung
+      // darf ihn nicht verlieren. Unlesbar: der Höchststrom der Einstellung.
+      let st;
+      try { st = await charger.status(); } catch { st = null; }
+      const cur = Number(st?.currentA);
+      const orig = st?.ok && Number.isFinite(cur) && cur >= 6 ? cur : bc.maxCurrentA;
+      e = { charger: bc.charger, loadpoint: bc.loadpoint, identity: ident, maxCurrentA: bc.maxCurrentA, cmd: 'limit', limitOnly: true, origMaxCurrentA: orig, limitA: null, gridCap: true, confirmed: false, dvhubStarted: false, at };
+      setOwned(key, e);
+    }
+    if (isPaused()) return { ok: false, skipped: 'paused' };
+    if (e.cmd !== 'limit') {
+      // DVhubs eigener Grenz-Stopp (Deckel war unter dem Mindeststrom): die
+      // Box zuerst wieder ihrer eigenen Regel überlassen.
+      const rel = await charger.release();
+      if (!rel?.ok) {
+        lastError = rel?.error || 'wallbox release failed';
+        pushLog('paragraph14a_wallbox_error', { charger: charger.type, error: lastError });
+        return { ok: false, error: lastError };
+      }
+      e = { ...e, cmd: 'limit', confirmed: false };
+      setOwned(key, e);
+      if (isPaused()) return { ok: false, skipped: 'paused' };
+    }
+    // Versuchte Grenze vor dem Befehl merken: der Not-Halt prüft frisch, ob sie steht.
+    setOwned(key, { ...e, limitA: slot.currentA, confirmed: false, at });
+    const res = await charger.limit(slot.currentA);
+    if (!res?.ok) {
+      lastError = res?.error || 'wallbox write failed';
+      pushLog('paragraph14a_wallbox_error', { charger: charger.type, error: lastError });
+      return { ok: false, error: lastError };
+    }
+    setOwned(key, { ...(owned.get(key) || e), limitA: slot.currentA, confirmed: true, at });
+    lastSent = { key: cmdKey, charger: bc.charger, action: 'limit', currentA: slot.currentA, loadpoint: bc.loadpoint, identity: ident, at, gridCap: true };
+    pushLog('paragraph14a_wallbox_capped', { charger: charger.type, capW: Number(capW), action: 'limit', currentA: slot.currentA });
+    return { ok: true, sent: lastSent, gridCapW: Number(capW) };
+  }
+
+  // Not-Halt: eigene Obergrenzen an direkten Boxen einmal zurück — nur, wenn
+  // sie frisch gelesen noch stehen (sonst hat jemand umgestellt: nichts senden).
+  async function neutralizeDirectLimits(cfg, bc0, { released, skipped, errors }) {
+    for (const e of [...owned.values()]) {
+      if (e.charger === 'evcc' || e.limitOnly !== true || e.cmd !== 'limit') continue;
+      const key = targetKey(e);
+      const bc = { ...bc0, charger: e.charger, loadpoint: e.loadpoint ?? bc0.loadpoint };
+      const charger = getCharger(cfg, bc);
+      if (!charger?.isConfigured?.() || typeof charger.limitState !== 'function' || typeof charger.unlimit !== 'function') { skipped.push('not_configured'); continue; }
+      let curIdent;
+      try { curIdent = typeof charger.identity === 'function' ? charger.identity() : wallboxIdentity(cfg, e.charger); } catch { curIdent = null; }
+      if (e.identity && curIdent == null) { skipped.push('state_unknown'); continue; }
+      if (e.identity && e.identity !== curIdent) { setOwned(key, null); skipped.push('identity_changed'); continue; }
+      let ds;
+      try { ds = await charger.limitState({ limitA: e.limitA }); } catch { ds = null; }
+      const sameTarget = () => lastSent && targetKey({ charger: lastSent.charger || e.charger, loadpoint: lastSent.loadpoint ?? e.loadpoint }) === key;
+      if (!ds?.known) { pushLog('ev_emergency_stop_state_unknown', { charger: e.charger }, 'warn'); skipped.push('state_unknown'); continue; }
+      if (!ds.active) { setOwned(key, null); if (sameTarget()) lastSent = null; skipped.push('not_dvhub_state'); continue; }
+      const r = await charger.unlimit({ origCurrentA: e.origMaxCurrentA ?? null });
+      if (!r?.ok) { errors.push(r?.error || 'wallbox unlimit failed'); continue; }
+      setOwned(key, null);
+      if (sameTarget()) lastSent = null;
+      released.push(`${e.charger}:${e.loadpoint ?? bc0.loadpoint}`);
+    }
   }
 
   // Netzanschluss-Deckel an evcc-Ladepunkten, die DVhub gerade NICHT selbst
@@ -1635,6 +1754,8 @@ export function createEosEvccBridge(deps) {
         const phaseSnapshot = [...owned.values()].filter((e) => e.charger === 'evcc' && e.phasesPrev != null && !e.phasesForeign).map((e) => ({ ...e }));
         // evcc-Deckel (evccCapTick) einmal zurücknehmen.
         await neutralizeEvccCaps(cfg, bc0, { released, skipped, errors });
+        // Reine Obergrenzen an direkten Boxen ebenso (Fable R1 P2-5).
+        await neutralizeDirectLimits(cfg, bc0, { released, skipped, errors });
         // Jedes Ziel, an dem DVhubs letzter Befehl „laden“ war (quittiert oder
         // nicht), für sich: frisch prüfen, dann einmal hart aus.
         const targets = [...owned.values()].filter((e) => e.cmd === 'charge');

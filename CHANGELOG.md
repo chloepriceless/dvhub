@@ -355,6 +355,15 @@ verweist hierher.
 
 ### Behoben
 
+- **Grenze an direkt angebundenen Wallboxen nur als Obergrenze, nicht als Ladebefehl.** Begrenzt §14a oder der
+  Netzanschluss-Wächter eine Wallbox, die DVhub gerade nicht selbst steuert, setzte DVhub bisher einen Ladebefehl
+  (go-e/Wattpilot `frc=2`, OpenEVSE-Auftrag „aktiv“): eine von Hand gestoppte Box lud los, und der nächste
+  Grenz-Schritt startete sie wieder. Jetzt setzt DVhub bei go-e und Wattpilot nur den Strom (`amp`), bei OpenEVSE
+  einen eigenen Auftrag nur mit `max_current` — ob geladen wird, entscheidet weiter die Box. Ist die Grenze weg,
+  stellt DVhub den Strom von vorher wieder her (übersteht einen Neustart); der Not-Halt nimmt die eigene Obergrenze
+  einmal zurück, wenn sie frisch gelesen noch steht. Unter dem Mindeststrom stoppt DVhub wie bisher. Boxen ohne reine
+  Strom-Obergrenze (u. a. Victron-EVCS, KEBA, OCPP) bekommen die Grenze weiter als Ladebefehl (Log
+  `paragraph14a_wallbox_capped`, `mode: charge`). (Fable R1 P2-5)
 - **E-Auto-Wochenplan: einzelnen Tag am Handy leeren.** Am iPhone öffnet ein Tipp ins Zeitfeld sofort den
   Zeit-Picker, und Safari schreibt dabei schon die aktuelle Uhrzeit ins leere Feld. „Zurücksetzen“ im Picker leert
   nur dieses eine Feld: Der Picker bleibt offen und zeigt weiter eine Zeit, und Safari zeigt auch im geleerten Feld
