@@ -3233,7 +3233,7 @@ function buildFieldDefinitions() {
       min: 0,
       max: 50,
       step: 0.5,
-      help: 'F\u00fcr \u201eMax-Ladestand, wenn g\u00fcnstig\u201c sch\u00e4tzt DVhub, was eine zus\u00e4tzliche kWh im Auto an sp\u00e4teren Ladekosten spart (Preise und PV der n\u00e4chsten 7 Tage). Davon geht dieser Abschlag ab, weil Preise hinter dem Day-Ahead nur gesch\u00e4tzt sind. H\u00f6her = vorsichtiger, das Auto wird seltener \u00fcber das Mindestziel geladen.'
+      help: 'F\u00fcr \u201eMax-Ladestand, wenn g\u00fcnstig\u201c sch\u00e4tzt DVhub, was eine zus\u00e4tzliche kWh im Auto an sp\u00e4teren Ladekosten spart: mit Preisen und PV bis zu 7 Tage \u00fcber die Abfahrt hinaus, so weit die festen B\u00f6rsenpreise und die Preisprognose von dvhub.online reichen (meist 4\u20135 Tage). Ohne Preisprognose (andere Preiszone, Prognose aus oder l\u00e4nger ausgefallen) nur so weit wie die festen Preise; reichen sie nicht einen Tag \u00fcber die Abfahrt hinaus, l\u00e4dt EOS nur bis zum Mindestziel. Von dem Wert geht dieser Abschlag ab, weil Preise hinter dem Day-Ahead nur vorhergesagt sind. H\u00f6her = vorsichtiger, das Auto wird seltener \u00fcber das Mindestziel geladen.'
     },
     {
       section: 'schedule',

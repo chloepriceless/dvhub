@@ -1,24 +1,25 @@
-// services/optimizer/price-outlook.js — Preisschwanz für EOS aus der
-// Residuallast-Prognose von dvhub.online (Christin 12.11.2026, 1.0.11).
+// services/optimizer/price-outlook.js — Preisprognose von dvhub.online
+// (Residuallast-Prognose, Christin 12.11.2026, 1.0.11): Preisschwanz für EOS
+// und Preise für die Wertgrundlage des E-Autos (ev-targets.js).
 //
 // Hinter den bekannten Day-Ahead-Preisen braucht EOS Preise für seinen
 // Prognose-Schwanz (tail), sonst bewertet es die Restladung im Akku fast nur
-// zum Einspeisewert (Tail-Fix 01.11.2026). Bis 1.0.10 schrieb DVhub dafür die
-// Börsenpreise per Holt-Winters fort (price-estimate.js). Seit 1.0.11 kommen
-// sie aus der Residuallast-Prognose von dvhub.online
+// zum Einspeisewert (Tail-Fix 01.11.2026). Sie kommen aus der
+// Residuallast-Prognose von dvhub.online
 // (GET /v1/residual-load/outlook, öffentlich, ohne Schlüssel):
 //   Wetter (ECMWF) → Last/Wind/Solar → Residuallast → Börsenpreis DE-LU je
 //   Stunde, P10/P50/P90 in €/MWh, fünf Tage ab dem Tag nach `last_known_day`.
 //   Rückblick (Prüfjahr Nov. 2025 – Nov. 2026): Stunden-MAE 19–28 €/MWh gegen
-//   26–39 bei Holt-Winters, teure Tage zu 61–66 % erkannt (HW 30–36 %).
-// Holt-Winters ist für den Schwanz ganz entfallen (Christin 12.11.2026).
+//   26–39 bei der Fortschreibung aus dem Preisverlauf, die DVhub bis 1.0.10
+//   nutzte; teure Tage zu 61–66 % erkannt (dort 30–36 %). Die Fortschreibung
+//   ist seit 1.0.11 ganz entfallen (Christin 12.11.2026).
 //
 // Regeln:
 //   - Echte Day-Ahead-Preise haben immer Vorrang; der Schwanz beginnt am Ende
 //     der lückenlosen echten Preise und nimmt P50.
 //   - Nur Preiszone DE-LU: Die Prognose gibt es nur für DE-LU. Andere Zonen
 //     bekommen keinen Schwanz (EOS plant dann nur über die echten Preise).
-//   - Rückfall ohne Holt-Winters: die letzte gültige Prognose (auf der Platte,
+//   - Rückfall: die letzte gültige Prognose (auf der Platte,
 //     übersteht Neustarts), solange sie höchstens OUTLOOK_MAX_AGE_MS alt ist
 //     und ihre Stunden noch in der Zukunft liegen. Danach kein Schwanz.
 //   - Kaputte Antworten (Form, Zone, Werte) werden verworfen, die gespeicherte
@@ -49,10 +50,11 @@ export const OUTLOOK_SCHEMA_VERSION = 1;
  * Höchstalter einer Prognose (ab issued_at), bis zu dem DVhub sie weiter
  * benutzt, wenn keine neue kommt — 48 h. Begründung (Rückblick dvhub.online,
  * Prüfjahr Nov. 2025 – Nov. 2026, Stunden-MAE je Vorlauf 1–5: 18,6 / 20,6 /
- * 22,8 / 24,9 / 27,9 €/MWh; Holt-Winters ab Vorlauf 1: 26,4 / 33,8 / 36,4 …):
+ * 22,8 / 24,9 / 27,9 €/MWh; die frühere Fortschreibung aus dem Preisverlauf
+ * ab Vorlauf 1: 26,4 / 33,8 / 36,4 …):
  *   - Nach 48 h sind die Tage, die der Schwanz dann noch braucht, für die alte
  *     Prognose Vorlauf 3–5. Deren Fehler liegt noch unter dem, was
- *     Holt-Winters schon am ersten Tag hatte — bis dahin lohnt das Weiter-
+ *     die frühere Fortschreibung schon am ersten Tag hatte — bis dahin lohnt das Weiter-
  *     benutzen klar.
  *   - Danach blieben nur Vorlauf 5 und Stunden außerhalb der Prognose; das
  *     Brennstoff-Preisniveau (Gas, CO2) der alten Prognose veraltet, und acht
@@ -178,7 +180,7 @@ function round2(v) {
  * Echte Slots bleiben unverändert; neue tragen `estimated: true`,
  * `priceSource: 'residual_load'` und das Band (`p10CtKwh`, `p90CtKwh`).
  *
- * Wie bisher beim Holt-Winters-Schwanz: nur hinter echten Preisen, die
+ * Nur hinter echten Preisen, die
  * mindestens bis jetzt + 1 h 15 min reichen (MIN_REAL_AHEAD_MS), und in der
  * Slot-Länge der echten Preise — eine Reihe mit gemischter Kadenz liest EOS mit
  * Lücken (Gegenprüfung 8c050aae). Der Schwanz ist lückenlos: Er endet an der

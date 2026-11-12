@@ -36,7 +36,7 @@ dvhub.online**.
 - **Nur hinter genug festen Preisen:** Reichen die festen Preise nicht mindestens 1 h 15 min voraus, hängt DVhub
   nichts an (wie bisher). Sonst lägen Prognosepreise im Steuerzeitraum.
 
-## Rückfall ohne Holt-Winters
+## Rückfall
 
 1. **Letzte gültige Prognose weiterverwenden.** DVhub speichert die letzte gültige Antwort in
    `price_outlook_cache.json` im Datenverzeichnis. Sie übersteht also einen Neustart. Kommt keine neue Prognose
@@ -63,7 +63,7 @@ dvhub.online**.
 ## Wer keinen Schwanz bekommt
 
 - **Andere Preiszonen als DE-LU** (DVhub lädt die Zonenliste von dvhub.online, z. B. AT oder NL): Die Prognose gibt
-  es nur für DE-LU. Diese Anlagen hatten bis 1.0.10 den Holt-Winters-Schwanz und haben ab 1.0.11 **keinen
+  es nur für DE-LU. Diese Anlagen hatten bis 1.0.10 einen fortgeschriebenen Schwanz und haben ab 1.0.11 **keinen
   Schwanz** mehr. EOS plant dort nur so weit, wie Börsenpreise feststehen. Hilfe und EOS-Karte sagen das.
 - **Preisquelle „Öffentlich (Energy-Charts)“**: Diese Einstellung heißt ausdrücklich „ohne dvhub.online“. DVhub
   fragt dann keine Prognose ab, es gibt also ebenfalls keinen Schwanz. Ob das so bleiben soll, ist eine offene
@@ -159,9 +159,28 @@ Mit dem Python-EOS wäre der Steuerzeitraum „bis in die Preisprognose“ auf k
   „Preisprognose“.
 - **Integrationen → DV-EOS:** Zeile „Preisprognose“ (aktuell, gespeichert, nicht verfügbar seit …, nur für DE-LU).
 
-## Holt-Winters
+## Wertgrundlage des E-Autos („Max-Ladestand wenn günstig“)
 
-`services/optimizer/price-estimate.js` bleibt nur noch für die **Wertgrundlage des E-Autos** („Max-Ladestand wenn
-günstig“, `ev-targets.js`). Die braucht Preise bis 9,5 Tage voraus, also weiter als die Prognose reicht. Ob sie auf
-die Residuallast-Prognose umgestellt wird (mit Holt-Winters nur dahinter), entscheidet Christin. Für den
-EOS-Schwanz ist Holt-Winters ganz entfallen. Konfigurationsfelder dafür gab es nicht.
+Für „Max-Ladestand wenn günstig“ rechnet DVhub, was eine zusätzliche kWh im Auto an späteren Ladekosten spart
+(`ev-targets.js`, `ev-minmax.js`). Dafür braucht es Bezugs- und Einspeisepreise ab dem Bewertungszeitpunkt E (Abfahrt
+im Steuerzeitraum, sonst dessen Ende) bis zu 7 Tage weiter.
+
+- **Preise:** die festen Börsenpreise, dahinter die Preisprognose, **so weit sie reicht**. Das gilt unabhängig davon,
+  wie lang der EOS-Schwanz eingestellt ist und ob EOS gerade einen Schwanz bekommt. Bezug und Einspeisung entstehen wie
+  für EOS. Dahinter endet die Reihe. Seit 1.0.11 schreibt DVhub keine Preise mehr fort (bis 1.0.10: Holt-Winters bis
+  9,5 Tage voraus).
+- **Fenster:** E bis E + 7 Tage, gekürzt auf das Ende der Preise. Fahrten und Ladegelegenheiten dahinter zählen nicht,
+  Energie am Fensterende zählt nichts. Ein kürzeres Fenster heißt also vorsichtiger.
+- **Unter einem Tag über E** (`MIN_VALUE_WINDOW_MS`, 24 h) gibt es keine Wertstufen. EOS lädt dann nur bis zum
+  Mindestziel, der Max-Ladestand bleibt die Obergrenze. Die E-Auto-Details zeigen den Grund („Preise reichen nicht
+  einen Tag über die Abfahrt hinaus — nur Mindestziel“).
+
+| Lage | Preise reichen bis | Wertbestimmung |
+|---|---|---|
+| Prognose an (DE-LU) | ~5 Tage hinter dem letzten Börsentag | Fenster meist 3–5 Tage über E |
+| Ohne Prognose (andere Zone, „aus“, Ausfall > 48 h), nach ~13 Uhr | Mitternacht des Folgetags | Abfahrt bis Mitternacht heute: Fenster bis zum Preisende; spätere Abfahrt: nur Mindestziel |
+| Ohne Prognose, vormittags | Mitternacht | nur Mindestziel (kein E liegt einen Tag vor dem Preisende) |
+| Steuerzeitraum „Bis in die Preisprognose“, Abfahrt erst in 5+ Tagen | Prognose-Ende | E liegt nahe am Preisende → nur Mindestziel |
+
+Die PV-Seite ist davon unabhängig: Hinter dem Ende der PV-Prognose nimmt DVhub den Median-Überschuss je Viertelstunde
+der Prognosetage; ohne PV-Prognose ist der Überschuss 0 (Laden nur aus dem Netz bewertet).

@@ -132,6 +132,37 @@ describe('resolveEvTargets', () => {
     assert.deepEqual(t.steps, []);
   });
 
+  // 1.0.11 (Christin 12.11.2026): Die Wertgrundlage endet mit der
+  // Preisprognose (~5 Tage) bzw. ohne sie mit den festen Börsenpreisen. Das
+  // Fenster darf nie über das Preisende reichen; unter einem Tag über E gibt es
+  // keine Wertstufen — an jedem Wochentag, mit jedem Steuerzeitraum.
+  for (const [label, days] of [['nur feste Preise (30 h)', 1.25], ['feste + Preisprognose (5 Tage)', 5], ['lang (10 Tage)', 10]]) {
+    for (const ctrlH of [6, 36, 120]) {
+      it(`Fenster endet mit den Preisen — ${label}, Steuerzeitraum ${ctrlH} h, jeder Wochentag`, () => {
+        for (let k = 0; k < 7; k += 1) {
+          _test.resetMemo();
+          const now = NOW + k * 24 * HOUR;
+          const inp = inputs(now, days);
+          const coverEnd = inp.baseMs + inp.importCt.length * SLOT;
+          const t = resolveEvTargets({ state: { optimizer: { eosControlHorizonH: ctrlH, evValueInputs: inp } } }, cfgWith(),
+            { decision: { mode: 'plugged', socPct: 46 }, valueSupported: true, nowMs: now });
+          const eMs = Date.parse(t.valueAt);
+          const why = `Tag ${k}: E ${t.valueAt}, Preise bis ${new Date(coverEnd).toISOString()}, ${t.reason}`;
+          assert.equal(t.maxSocPct, 80, why);
+          if (coverEnd - eMs < 24 * HOUR) {
+            assert.deepEqual(t.steps, [], why);
+            assert.match(t.reason, /Preise reichen nicht/, why);
+            assert.equal(t.valueWindowDays, null, why);
+          } else {
+            assert.ok(t.valueWindowDays >= 1 && t.valueWindowDays <= 7.05, why);
+            // valueWindowDays ist auf 0,01 Tage (14,4 min) gerundet.
+            assert.ok(eMs + t.valueWindowDays * 24 * HOUR <= coverEnd + 8 * 60_000, `Fenster über das Preisende hinaus — ${why}`);
+          }
+        }
+      });
+    }
+  }
+
   it('Wochenplan aus: wie bisher (allgemeiner Ziel-Ladestand, max 100)', () => {
     const t = resolveEvTargets(ctxWith(), cfgWith({ evDepartureEnabled: false, evMinSocPct: 60 }), { valueSupported: true, nowMs: NOW });
     assert.equal(t.minSocPct, 60);

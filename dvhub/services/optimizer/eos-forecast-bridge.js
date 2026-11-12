@@ -46,17 +46,16 @@ import { reserveHeaterLoad } from '../devices/heater-load-reservation.js';
 import { localDate } from '../../tz-fast.js';
 // Zweite GX am selben Anschluss: Ladestand beider Akkus, nach Kapazitaet gewichtet.
 import { planningSocPct } from '../multi-gx/planning.js';
-// Preisschwanz hinter den bekannten Day-Ahead-Preisen: Residuallast-Prognose
-// von dvhub.online (1.0.11, price-outlook.js). Holt-Winters (price-estimate.js)
-// nur noch für die Wertgrundlage des E-Autos (bis 9,5 Tage voraus).
+// Preise hinter den bekannten Day-Ahead-Preisen: Residuallast-Prognose von
+// dvhub.online (1.0.11, price-outlook.js) — für den EOS-Schwanz und für die
+// Wertgrundlage des E-Autos. Weiter geschätzt wird nichts.
 import { fillPriceSlotsFromOutlook, realPriceCoverage, SLOT_MS as PRICE_SLOT_MS } from './price-outlook.js';
-import { fillPriceSlots, HISTORY_DAYS } from './price-estimate.js';
 import { requestHostname } from '../host-address.js';
 import { eosRemoteActive, REMOTE_EOS_PREDICTION_HOURS } from './eos-remote.js';
 // Fristen für den Steuerzeitraum „automatisch“ (05.11.2026): Abfahrt des
 // Autos, Fensterende planbarer Geräte — wie eos-config-sync sie EOS schickt.
 import { resolveEvDeparture } from './ev-departure.js';
-import { buildEvValueInputs, configuredMaxSocPct, EV_VALUE_INPUTS_DAYS } from './ev-targets.js';
+import { buildEvValueInputs, configuredMaxSocPct, EV_VALUE_PRICES_MAX_DAYS } from './ev-targets.js';
 import { buildEosHomeAppliances } from './eos-devices.js';
 
 /**
@@ -762,10 +761,6 @@ export function createEosForecastBridge(ctx) {
   }
   let lastEosPid = null;
 
-  // Gespeicherte Day-Ahead-Historie (price_ct_kwh) für die Preis-Schätzung.
-  // Einmal je Stunde aus der Datenbank; die echten Preise von heute/morgen
-  // kommen bei jedem Push frisch aus der Prognose dazu.
-  let priceHistoryCache = null;
   /**
    * Gespeicherte echte Day-Ahead-Preise (price_ct_kwh) von drei Stunden vor
    * jetzt bis drei Tage voraus als Preis-Slots `{start, end, ctKwh}` —
@@ -821,44 +816,10 @@ export function createEosForecastBridge(ctx) {
     }
   }
 
-  async function loadPriceHistory(nowMs) {
-    if (priceHistoryCache && nowMs - priceHistoryCache.at < 3_600_000) return priceHistoryCache.points;
-    const store = ctx.telemetryStore;
-    if (!store || typeof store.querySeries !== 'function') return [];
-    const points = [];
-    try {
-      const rows = await store.querySeries({
-        // Wie routes-api (EEG-Verlängerung): der Live-Abruf schreibt
-        // price_ct_kwh, spot_price_ct_kwh ist nur der Katalogname.
-        seriesKeys: ['price_ct_kwh', 'spot_price_ct_kwh'],
-        start: new Date(nowMs - (HISTORY_DAYS + 1) * 86_400_000).toISOString(),
-        end: new Date(nowMs + 3 * 86_400_000).toISOString(),
-        maxResolution: 3600,
-      });
-      const live = (rows || []).filter((r) => r.key === 'price_ct_kwh');
-      for (const r of live.length ? live : (rows || [])) {
-        const ms = new Date(r.ts).getTime();
-        const ct = Number(r.value);
-        if (!Number.isFinite(ms) || !Number.isFinite(ct)) continue;
-        // Stundenwerte gelten für alle vier Viertelstunden.
-        const quarters = Number(r.resolution) >= 3600 ? 4 : 1;
-        for (let k = 0; k < quarters; k += 1) points.push({ ms: ms + k * PRICE_SLOT_MS, ct });
-      }
-    } catch (e) {
-      if (pushLog) pushLog('eos_price_estimate_error', { error: e?.message || String(e) });
-      // Fehler nicht zwischenspeichern: sonst bekäme EOS eine Stunde lang keinen
-      // geschätzten Schwanz (Gesamtprüfung Release 1.0.9, Befund 15).
-      return [];
-    }
-    // Eine leere Antwort ebenso wenig — beim nächsten Push neu fragen.
-    if (points.length) priceHistoryCache = { at: nowMs, points };
-    return points;
-  }
-
   /**
-   * Preisreihe für EOS: echte Preise, dahinter bis zum Ende der PV-/Last-
-   * Prognose geschätzte Börsenpreise (price-estimate.js). Bezugs- und
-   * Einspeisepreis werden daraus wie für echte Slots gebildet.
+   * Preisreihen in EOS: Bezugs- und Einspeisepreis — echte Preise, dahinter
+   * der Preisschwanz aus der Residuallast-Prognose (priceSlotsForEos). Beide
+   * werden für Prognose-Slots wie für echte gebildet.
    */
   const PRICE_KEYS = ['elecprice_marketprice_wh', 'feed_in_tariff_wh'];
 
@@ -906,16 +867,19 @@ export function createEosForecastBridge(ctx) {
   // EOS plant dann nur über die echten Preise wie vor dem 01.11.2026 — der
   // Steuerzeitraum bleibt dabei unverändert (er hängt nur an den echten
   // Preisen, siehe push), EOS kürzt nur seinen Schwanz.
-  // Rückgabe: slots, estimate (null = kein Schwanz) und tail (Zustand für
-  // Oberfläche/Log: status, reason, Zeiten der Prognose).
+  // Rückgabe: slots, estimate (null = kein Schwanz), tail (Zustand für
+  // Oberfläche/Log: status, reason, Zeiten der Prognose) und outlook (die
+  // gültige Prognose oder null) — die Wertgrundlage des E-Autos nimmt sie
+  // unabhängig davon, wie lang der EOS-Schwanz ist und ob es ihn gibt.
   async function priceSlotsForEos(realSlots, pvSlots, loadSlots, nowMs, { estimate = true, maxMs = PRICE_FILL_MAX_MS, gone = () => false } = {}) {
     const svc = ctx.priceOutlook;
     let cur = null;
     if (svc && typeof svc.current === 'function') {
       try { await svc.ensureFresh?.(); } catch { /* current() meldet den Zustand */ }
-      if (gone()) return { slots: realSlots, estimate: null, tail: null };
+      if (gone()) return { slots: realSlots, estimate: null, tail: null, outlook: null };
       try { cur = svc.current(Date.now()); } catch { cur = null; }
     }
+    const outlook = cur?.outlook || null;
     const outlookInfo = cur ? {
       status: cur.status,
       reason: cur.reason ?? null,
@@ -923,13 +887,13 @@ export function createEosForecastBridge(ctx) {
       fetchedAt: cur.fetchedAt ?? null,
       unavailableSince: cur.unavailableSince ?? null,
     } : { status: 'unavailable', reason: 'no_service', issuedAt: null, fetchedAt: null, unavailableSince: null };
-    const none = (why) => ({ slots: realSlots, estimate: null, tail: { ...outlookInfo, used: false, why } });
+    const none = (why) => ({ slots: realSlots, estimate: null, tail: { ...outlookInfo, used: false, why }, outlook });
     if (!estimate) return none('eos_not_triggered');
     const untilMs = priceFillUntilMs(pvSlots, loadSlots, nowMs, maxMs);
-    if (!cur?.outlook) return none(outlookInfo.reason || 'no_outlook');
-    const res = fillPriceSlotsFromOutlook(realSlots, { outlook: cur.outlook, untilMs, nowMs });
+    if (!outlook) return none(outlookInfo.reason || 'no_outlook');
+    const res = fillPriceSlotsFromOutlook(realSlots, { outlook, untilMs, nowMs });
     if (!res.estimate) return none(res.reason);
-    return { slots: res.slots, estimate: res.estimate, tail: { ...outlookInfo, used: true, why: null } };
+    return { slots: res.slots, estimate: res.estimate, tail: { ...outlookInfo, used: true, why: null }, outlook };
   }
 
   /**
@@ -1695,25 +1659,25 @@ export function createEosForecastBridge(ctx) {
     if (state) { state.optimizer = state.optimizer || {}; state.optimizer.heaterReservation = heaterReservation; }
 
     // E-Auto Max-Ladestand „wenn günstig“ (ev-targets.js): die Wertbestimmung
-    // braucht Preise und PV-Überschuss bis 7 Tage über die Abfahrt hinaus, also
-    // weiter als EOS (bis jetzt + 9,5 Tage, dahinter geschätzt). Nur wenn sie
-    // wirkt: Auto mitoptimiert, Max-Ladestand an, EOS kennt die Wertstufen.
+    // braucht Preise und PV-Überschuss bis 7 Tage über die Abfahrt hinaus.
+    // Preise: die festen, dahinter die Residuallast-Prognose, so weit sie
+    // reicht — unabhängig vom EOS-Prognosehorizont und davon, ob EOS gerade
+    // einen Schwanz bekommt (Christin 12.11.2026). Dort endet die Reihe; die
+    // Wertbestimmung kürzt ihr Fenster darauf oder lässt die Wertstufen weg
+    // (ev-targets.js MIN_VALUE_WINDOW_MS). Keine Fortschreibung, keine
+    // vorgetäuschten Preise. Nur wenn sie wirkt: Auto mitoptimiert,
+    // Max-Ladestand an, EOS kennt die Wertstufen.
     if (state) {
       let evValueInputs = null;
       const evOpt = cfg?.optimizer || {};
       if (evOpt.eosOptimizeEv === true && configuredMaxSocPct(evOpt) !== null && state?.optimizer?.eos?.evSocValue === true && !gridStorage) {
         try {
           const nowMs = Date.now();
-          const wantedMs = nowMs + EV_VALUE_INPUTS_DAYS * 86_400_000;
-          let longSlots = priceSlotsCt;
-          if (realPriceCoverage(longSlots).end < wantedMs) {
-            const history = await loadPriceHistory(nowMs);
-            if (gone()) return abandoned();
-            longSlots = fillPriceSlots(realPriceSlots, {
-              history, untilMs: wantedMs, nowMs,
-              timeZone: cfg?.optimizer?.timezone || cfg?.epex?.timezone || 'Europe/Berlin',
-            }).slots;
-          }
+          const longSlots = priceFill.outlook
+            ? fillPriceSlotsFromOutlook(realPriceSlots, {
+              outlook: priceFill.outlook, untilMs: nowMs + EV_VALUE_PRICES_MAX_DAYS * 86_400_000, nowMs,
+            }).slots
+            : realPriceSlots;
           evValueInputs = buildEvValueInputs({ priceSlots: longSlots, importCtOf, feedInCtOf, pvSlots, loadSlots: loadSlotsForEos, nowMs, timeZone: tz });
         } catch (e) {
           if (pushLog) pushLog('ev_value_inputs_error', { error: e?.message || String(e) });

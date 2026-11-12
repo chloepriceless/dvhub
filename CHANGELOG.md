@@ -338,8 +338,16 @@ verweist hierher.
   dort nur so weit, wie Börsenpreise feststehen, wie vor dem 01.11.2026. Die Hilfe zu Preiszone und Preisquelle sagt
   das.
 
-  Holt-Winters (`price-estimate.js`) bleibt nur für die Wertgrundlage des E-Autos („Max-Ladestand wenn günstig“, bis
-  9,5 Tage voraus). Konfigurationsfelder gab es dafür nicht.
+- **1.0.11: Holt-Winters ist ganz entfallen, auch für das E-Auto** (Christin 12.11.2026). Die Wertgrundlage für
+  „Max-Ladestand wenn günstig“ nimmt jetzt die festen Börsenpreise und dahinter die Preisprognose, so weit sie reicht
+  (meist ~5 Tage), unabhängig vom eingestellten EOS-Schwanz. Bis 1.0.10 schrieb DVhub die Preise dafür per Holt-Winters
+  bis 9,5 Tage voraus fort.
+  - Das Bewertungsfenster (bis 7 Tage über die Abfahrt) endet am Ende der Preise.
+  - Reicht es nicht einen Tag über die Abfahrt hinaus, gibt es keine Wertstufen. EOS lädt dann nur bis zum Mindestziel,
+    der Max-Ladestand bleibt die Obergrenze. Das betrifft ohne Prognose (andere Preiszone, Prognose aus, Ausfall über
+    48 h) vor allem Abfahrten nach Mitternacht.
+  - `price-estimate.js` und das Laden der Preis-Historie dafür (29 Tage aus der Datenbank, stündlich) sind entfernt.
+    Konfigurationsfelder gab es dafür nicht.
 
 - **EOS: DVhub-EOS statt Vanilla v0.4.0rc3** (T-0415, Christin 11.11.2026). DVhub liefert nativ und im Docker-Image das
   DVhub-EOS aus: Akkudoktor-EOS `main` plus die offenen PRs, die DVhub braucht (Netzbezugsgrenze und

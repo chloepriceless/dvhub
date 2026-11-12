@@ -21,8 +21,15 @@ import {
 
 /** Wertgrundlage (Preise/PV) gilt höchstens so lange nach dem Prognose-Push. */
 export const EV_VALUE_INPUTS_MAX_AGE_MS = 3 * 3600_000;
-/** So weit voraus braucht die Wertbestimmung Preise: E ≤ jetzt + 48 h, dazu 7 Tage. */
-export const EV_VALUE_INPUTS_DAYS = 9.5;
+/**
+ * Höchstens so weit voraus nimmt die Wertbestimmung Preise: E liegt am Ende
+ * des Steuerzeitraums oder davor (höchstens jetzt + 120 h mit „Bis in die
+ * Preisprognose“), dazu 7 Tage. Tatsächlich enden die Preise früher — mit der
+ * Residuallast-Prognose (~5 Tage hinter dem letzten Börsentag) bzw. ohne sie
+ * mit den festen Börsenpreisen. Dann rechnet resolveEvTargets nur so weit
+ * (mindestens MIN_VALUE_WINDOW_MS über E, sonst keine Wertstufen).
+ */
+export const EV_VALUE_PRICES_MAX_DAYS = 12.5;
 /** So weit voraus zählt DVhub Fahrten: nächste Abfahrt (≤ 7 Tage) + 8 Tage Vorausschau + 1 Tag Rand. */
 export const TRIP_LOOKAHEAD_DAYS = 16;
 /** Kürzeste Vorausschau der Wertbestimmung über E hinaus. */
@@ -100,13 +107,18 @@ export function resolveEvTargets(ctx, cfg, { decision = null, valueSupported = f
     return { ...out, steps: [], reason: 'noch keine Preise/PV für die Wertbestimmung' };
   }
   const slotMs = Number(inputs.slotMs) || SLOT_MS;
-  // Reichen die Preise nicht 7 Tage über E (keine Historie für die Schätzung,
-  // z. B. frisch eingerichtet), rechnet DVhub so weit sie reichen — mindestens
-  // einen Tag. Kürzer heißt vorsichtiger: weniger künftige Fahrten, kleinerer Wert.
+  // Reichen die Preise nicht 7 Tage über E — und das ist der Normalfall: die
+  // Preisprognose reicht ~5 Tage, ohne sie (andere Preiszone, Prognose aus oder
+  // länger als 48 h ausgefallen) nur die festen Börsenpreise —, rechnet DVhub
+  // so weit sie reichen, mindestens einen Tag über E. Kürzer heißt
+  // vorsichtiger: Fahrten und Ladegelegenheiten dahinter zählen nicht, Energie
+  // am Fensterende ist nichts wert. Reicht es nicht einen Tag: keine
+  // Wertstufen, EOS lädt nur bis zum Mindestziel (der Max-Ladestand bleibt die
+  // Obergrenze). Nie mit geschätzten Preisen dahinter.
   const coverEnd = inputs.baseMs + inputs.importCt.length * slotMs;
   const windowEndMs = Math.min(wEnd, Math.floor(coverEnd / slotMs) * slotMs);
   if (inputs.baseMs > Math.floor(d.eMs / slotMs) * slotMs || windowEndMs - d.eMs < MIN_VALUE_WINDOW_MS) {
-    return { ...out, steps: [], reason: 'Preise reichen nicht einen Tag über die Abfahrt hinaus' };
+    return { ...out, steps: [], reason: 'Preise reichen nicht einen Tag über die Abfahrt hinaus — nur Mindestziel' };
   }
   out.valueWindowDays = Math.round((windowEndMs - d.eMs) / 864_000) / 100;
   const marginCt = Number.isFinite(Number(opt.evValueMarginCt)) && Number(opt.evValueMarginCt) >= 0 ? Number(opt.evValueMarginCt) : EV_VALUE_MARGIN_CT_DEFAULT;
@@ -125,14 +137,16 @@ export function resolveEvTargets(ctx, cfg, { decision = null, valueSupported = f
 /**
  * Preise und PV-Überschuss je Viertelstunde für die Wertbestimmung, aus dem
  * Prognose-Push (eos-forecast-bridge.js). Reihen ab der laufenden Viertelstunde:
- *   importCt  Bezugspreis (ct/kWh) wie an EOS (Tarif je Slot), dahinter geschätzt;
+ *   importCt  Bezugspreis (ct/kWh) wie an EOS (Tarif je Slot), aus festen
+ *             Börsenpreisen und dahinter der Preisprognose; die Reihe endet an
+ *             der ersten Lücke;
  *   feedInCt  Einspeisewert wie an EOS;
  *   surplusWh max(0, PV − Last) aus der Prognose, dahinter der Median je
  *             Viertelstunde der Prognosetage (Annahme: die nächsten Tage ähneln
  *             den vorhergesagten; die Simulation nahm die letzten 7 Tage Messung).
  *
  * @param {object} a
- * @param {Array<{start:string, ctKwh:number}>} a.priceSlots  Börsenpreise (auch geschätzt), lückenlos
+ * @param {Array<{start:string, ctKwh:number}>} a.priceSlots  Börsenpreise (fest, dahinter Prognose)
  * @param {(slot:object)=>number|null} a.importCtOf
  * @param {(slot:object)=>number|null} a.feedInCtOf
  * @param {Array<{start:string, powerW:number}>} a.pvSlots   15 min
