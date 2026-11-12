@@ -43,6 +43,20 @@ test('Ohne Prognose: „nicht verfügbar seit …“ als Warnung; andere Zone al
   assert.equal(eosPriceTailText(null).text, '');
 });
 
+// Eigener Schalter (1.0.11): bei „Öffentlich“ ab Werk aus, aber einschaltbar;
+// „Aus“ nennt den Schalter.
+test('Prognose aus: Hinweis nennt den Schalter — Öffentlich einschaltbar, ausgeschaltet', () => {
+  const { eosPriceTailText } = helpers();
+  const pub = eosPriceTailText({ used: false, status: 'off', reason: 'source_public' });
+  assert.match(pub.text, /Einschaltbar unter Einstellungen → EPEX/);
+  assert.equal(pub.warn, false);
+  const off = eosPriceTailText({ used: false, status: 'off', reason: 'switched_off' });
+  assert.match(off.text, /^Preisprognose ausgeschaltet/);
+  const integrations = fs.readFileSync(path.resolve(import.meta.dirname, '../public/integrations.js'), 'utf8');
+  assert.match(integrations, /po\.reason === 'switched_off'/);
+  assert.match(integrations, /einschaltbar: Einstellungen → EPEX → Preisprognose/);
+});
+
 // Codex 27983aca: Steuerzeitraum bis 120 h = 480 Zeilen — der Leitstand fragt
 // genug Zeilen an (Standard der API: 300).
 test('EOS-Fahrplan: Leitstand holt bis 8 Tage (768 Zeilen)', () => {

@@ -355,6 +355,53 @@ test('Andere Preiszone oder „Öffentlich (Energy-Charts)“: kein Abruf, Zusta
   assert.equal(outlookDisabledReason({ epex: { priceSource: 'luox' } }), null, 'LUOX fällt auf dvhub.online zurück');
 });
 
+// ── Eigener Schalter „Preisprognose von dvhub.online“ (Christin 12.11.2026) ──
+// Unabhängig von der Preisquelle: „automatisch“ (auch: Feld fehlt) = an bei
+// DVhub und LUOX, aus bei „Öffentlich“ — wie vor dem Schalter. „An“ geht auch
+// mit „Öffentlich“, „Aus“ auch mit DVhub. Nur DE-LU bleibt Bedingung.
+test('Schalter Preisprognose: an/aus unabhängig von der Preisquelle, Feld fehlt = wie bisher', async () => {
+  const cases = [
+    [{}, null, 'Feld fehlt, Quelle DVhub'],
+    [{ epex: { priceSource: 'luox' } }, null, 'Feld fehlt, LUOX'],
+    [{ epex: { priceSource: 'public' } }, 'source_public', 'Feld fehlt, Öffentlich'],
+    [{ epex: { priceSource: 'public', priceOutlook: 'auto' } }, 'source_public', 'automatisch, Öffentlich'],
+    [{ epex: { priceSource: 'public', priceOutlook: 'on' } }, null, 'an, Öffentlich'],
+    [{ epex: { priceSource: 'public', priceOutlook: true } }, null, 'an (true), Öffentlich'],
+    [{ epex: { priceSource: 'dvhub', priceOutlook: 'off' } }, 'switched_off', 'aus, DVhub'],
+    [{ epex: { priceSource: 'luox', priceOutlook: false } }, 'switched_off', 'aus (false), LUOX'],
+    [{ epex: { priceSource: 'dvhub', priceOutlook: 'quatsch' } }, null, 'unbekannt = automatisch'],
+    [{ epex: { priceSource: 'public', priceOutlook: 'on', bzn: 'AT' } }, 'zone', 'an, aber nicht DE-LU'],
+    [{ epex: { priceOutlook: 'on', enabled: false } }, 'prices_off', 'an, Börsenpreise aus'],
+  ];
+  for (const [cfg, reason, label] of cases) {
+    assert.equal(outlookDisabledReason(cfg), reason, label);
+    const fetchImpl = fetchStub([FIXTURE]);
+    const svc = createPriceOutlookService({ getCfg: () => cfg, fetchImpl, cacheFile: null, now: () => ISSUED + H });
+    await svc.ensureFresh({ force: true });
+    assert.equal(fetchImpl.calls.length, reason === null ? 1 : 0, `Abruf nur bei an — ${label}`);
+    const cur = svc.current(ISSUED + H);
+    assert.equal(cur.status, reason === null ? 'live' : 'off', label);
+    if (reason !== null) assert.equal(cur.reason, reason, label);
+  }
+});
+
+test('Schalter Preisprognose: Einstellung mit Standard „automatisch“, alte Configs unverändert', async () => {
+  const { getConfigDefinition, normalizeConfigInput } = await import('../config-model.js');
+  const field = getConfigDefinition().fields.find((f) => f.path === 'epex.priceOutlook');
+  assert.ok(field, 'Feld epex.priceOutlook');
+  assert.equal(field.label, 'Preisprognose von dvhub.online');
+  assert.deepEqual(field.options.map((o) => o.value), ['auto', 'on', 'off']);
+  assert.equal(field.default, 'auto');
+  // Hilfe der Preisquelle verspricht nicht mehr „keine Preisprognose“ bei Öffentlich.
+  const source = getConfigDefinition().fields.find((f) => f.path === 'epex.priceSource');
+  assert.match(source.help, /einschalten/);
+  for (const raw of [{}, { epex: { priceSource: 'public' } }, { epex: { priceSource: 'luox', bzn: 'DE-LU' } }]) {
+    const { effectiveConfig } = normalizeConfigInput(raw);
+    assert.equal(effectiveConfig.epex.priceOutlook, 'auto');
+    assert.equal(outlookDisabledReason(effectiveConfig), raw.epex?.priceSource === 'public' ? 'source_public' : null);
+  }
+});
+
 test('Abruf-Takt: 10 min nach den Prognose-Läufen (08:15/12:30/15:00/20:15 UTC), spätestens alle 3 h', () => {
   const at = (iso) => Date.parse(iso);
   assert.equal(nextScheduledFetchMs(at('2026-11-12T07:00:00Z')), at('2026-11-12T08:25:00Z'));

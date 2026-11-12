@@ -60,14 +60,32 @@ dvhub.online**.
    unter dem Diagramm, als Warnung) und die DV-EOS-Karte unter Integrationen („Preisprognose: nicht verfügbar seit …“).
    Das „seit“ wird ebenfalls gespeichert und übersteht einen Neustart.
 
+## Schalter „Preisprognose von dvhub.online“
+
+Einstellungen → EPEX → „Preisprognose von dvhub.online“ (`epex.priceOutlook`), unabhängig von der Preisquelle
+(Christin 12.11.2026):
+
+| Wert | Wirkung |
+|---|---|
+| `auto` (Standard; auch wenn das Feld fehlt) | an bei Preisquelle DVhub und LUOX, aus bei „Öffentlich (Energy-Charts)“ |
+| `on` | an, auch bei „Öffentlich“. Die Börsenpreise kommen weiter von Energy-Charts, nur die Prognose von dvhub.online |
+| `off` | aus, auch bei DVhub und LUOX |
+
+- Bedingung bleibt die Preiszone DE-LU. In anderen Zonen wird auch bei `on` nichts abgerufen.
+- Abgerufen wird nur, wenn die Prognose an ist. Abgeschaltet nutzt DVhub auch keine gespeicherte Prognose.
+- Bestehende Configs ohne das Feld verhalten sich genau wie vor dem Schalter.
+- Ein Umschalten löst einen neuen EOS-Lauf aus (Schwanz und Wertgrundlage des E-Autos ändern sich).
+- Anzeige im Leitstand unter dem EOS-Fahrplan und auf der DV-EOS-Karte: „aus (Preisquelle Öffentlich) — einschaltbar:
+  Einstellungen → EPEX → Preisprognose“ bzw. „ausgeschaltet — Einstellungen → EPEX → Preisprognose“.
+
 ## Wer keinen Schwanz bekommt
 
 - **Andere Preiszonen als DE-LU** (DVhub lädt die Zonenliste von dvhub.online, z. B. AT oder NL): Die Prognose gibt
   es nur für DE-LU. Diese Anlagen hatten bis 1.0.10 einen fortgeschriebenen Schwanz und haben ab 1.0.11 **keinen
   Schwanz** mehr. EOS plant dort nur so weit, wie Börsenpreise feststehen. Hilfe und EOS-Karte sagen das.
-- **Preisquelle „Öffentlich (Energy-Charts)“**: Diese Einstellung heißt ausdrücklich „ohne dvhub.online“. DVhub
-  fragt dann keine Prognose ab, es gibt also ebenfalls keinen Schwanz. Ob das so bleiben soll, ist eine offene
-  Entscheidung.
+- **Preisprognose aus**: ausdrücklich „Aus“ oder „automatisch“ mit der Preisquelle „Öffentlich (Energy-Charts)“.
+  Diese Quelle heißt ausdrücklich „ohne dvhub.online“, deshalb ist die Prognose dort ab Werk aus. Mit „An“ gibt es
+  den Schwanz auch dort (siehe oben).
 - **EOS nach eigenem Takt** (`optimizer.eosStartAfterPreviousRun`) oder EOS noch nicht als 0.4 erkannt: wie bisher
   kein Schwanz.
 

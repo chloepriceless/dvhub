@@ -1546,7 +1546,8 @@
   var EOS_LIMITED_BY = { pv: 'PV-Prognose', load: 'Verbrauchsprognose', prices: 'Preisprognose', prediction: 'eingestellten Prognosehorizont', tail: 'Schwanzlänge (Prognosehorizont)' };
   var EOS_TAIL_OFF = {
     zone: 'Preisprognose gibt es nur für die Preiszone DE-LU — EOS plant bis zum Ende der festen Börsenpreise.',
-    source_public: 'Preisquelle „Öffentlich“: keine Preisprognose von dvhub.online — EOS plant bis zum Ende der festen Börsenpreise.',
+    source_public: 'Preisprognose aus (Preisquelle „Öffentlich“) — EOS plant bis zum Ende der festen Börsenpreise. Einschaltbar unter Einstellungen → EPEX → „Preisprognose von dvhub.online“.',
+    switched_off: 'Preisprognose ausgeschaltet — EOS plant bis zum Ende der festen Börsenpreise (Einstellungen → EPEX → „Preisprognose von dvhub.online“).',
     prices_off: 'Börsenpreise sind abgeschaltet.'
   };
   function eosTailTime(iso) {

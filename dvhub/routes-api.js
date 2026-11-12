@@ -885,7 +885,8 @@ export function actorContext(req) {
 
 // Einstellungen, die in den EOS-Plan eingehen. Reine Anzeige-, Takt- und
 // Diagnosewerte lösen keinen Sofort-Lauf aus.
-const EOS_REPLAN_PREFIXES = ['optimizer.', 'userEnergyPricing.', 'wallbox.', 'forecast.pv.', 'forecast.location.', 'paragraph14a.'];
+// epex.priceOutlook (1.0.11): Preisprognose an/aus ändert Schwanz und Wertgrundlage des E-Autos.
+const EOS_REPLAN_PREFIXES = ['optimizer.', 'userEnergyPricing.', 'wallbox.', 'forecast.pv.', 'forecast.location.', 'paragraph14a.', 'epex.priceOutlook'];
 const EOS_REPLAN_IGNORE = ['optimizer.eosEmsIntervalSec', 'optimizer.eosGeneticGenerations', 'optimizer.eosFitnessCacheMaxEntries',
   'optimizer.eosStartAfterPreviousRun', 'optimizer.ruleHorizonHours', 'optimizer.eosProxy.timeoutMs', 'optimizer.eosFallbackSma'];
 export function configChangeNeedsEosReplan(changedPaths) {

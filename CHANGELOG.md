@@ -24,8 +24,12 @@ verweist hierher.
     Ausgabe weiter, auch nach einem Neustart. Danach gibt es keinen Schwanz mehr: EOS plant nur über die festen
     Preise. Der Steuerzeitraum bleibt dabei gleich, und der Lauf geht.
   - Leitstand und Integrationen zeigen „Preisprognose nicht verfügbar seit …“.
-  - Nur Preiszone DE-LU und nur mit Preisquelle dvhub.online bzw. LUOX. Andere Zonen und „Öffentlich
-    (Energy-Charts)“ haben keinen Schwanz mehr (siehe Geändert).
+  - Nur Preiszone DE-LU. Andere Zonen haben keinen Schwanz mehr (siehe Geändert).
+  - Eigener Schalter „Preisprognose von dvhub.online“ (Einstellungen → EPEX, `epex.priceOutlook`), unabhängig von der
+    Preisquelle. Standard „automatisch“: an bei DVhub und LUOX, aus bei „Öffentlich (Energy-Charts)“. Nutzer von
+    „Öffentlich“ können die Prognose einschalten, alle anderen sie ausschalten. Configs ohne das Feld verhalten sich wie
+    bisher. Abruf nur bei an; Umschalten löst einen neuen EOS-Lauf aus. Leitstand und DV-EOS-Karte zeigen „aus
+    (Preisquelle Öffentlich) — einschaltbar …“ bzw. „ausgeschaltet …“.
 
   Neue Lese-Schnittstelle `GET /api/price/outlook`. `GET /api/eos/plan` liefert zusätzlich `priceTail` und je
   Zeile `priceSource`. Ausführlich: `docs/PREISPROGNOSE-EOS.md`.
@@ -334,8 +338,9 @@ verweist hierher.
 
 - **1.0.11: Holt-Winters-Fortschreibung für den EOS-Schwanz entfällt.** Der Preisschwanz kommt nur noch aus der
   Residuallast-Prognose (siehe Neu). **Folge für andere Preiszonen als DE-LU und für die Preisquelle „Öffentlich
-  (Energy-Charts)“:** Diese Anlagen hatten bis 1.0.10 einen geschätzten Schwanz und haben jetzt keinen. EOS plant
-  dort nur so weit, wie Börsenpreise feststehen, wie vor dem 01.11.2026. Die Hilfe zu Preiszone und Preisquelle sagt
+  (Energy-Charts)“:** Diese Anlagen hatten bis 1.0.10 einen geschätzten Schwanz. Andere Zonen haben jetzt keinen.
+  EOS plant dort nur so weit, wie Börsenpreise feststehen, wie vor dem 01.11.2026. Bei „Öffentlich“ ist die
+  Preisprognose ab Werk aus und lässt sich einschalten. Die Hilfe zu Preiszone, Preisquelle und Preisprognose sagt
   das.
 
 - **1.0.11: Holt-Winters ist ganz entfallen, auch für das E-Auto** (Christin 12.11.2026). Die Wertgrundlage für

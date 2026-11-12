@@ -14,6 +14,10 @@
 //   nutzte; teure Tage zu 61–66 % erkannt (dort 30–36 %). Die Fortschreibung
 //   ist seit 1.0.11 ganz entfallen (Christin 12.11.2026).
 //
+// Abruf nur, wenn die Preisprognose an ist (epex.priceOutlook, eigener
+// Schalter; Standard „automatisch“: an bei Preisquelle DVhub und LUOX, aus bei
+// „Öffentlich“) und die Preiszone DE-LU ist (outlookDisabledReason).
+//
 // Regeln:
 //   - Echte Day-Ahead-Preise haben immer Vorrang; der Schwanz beginnt am Ende
 //     der lückenlosen echten Preise und nimmt P50.
@@ -283,12 +287,34 @@ export function outlookFetchDue({ cache, lastAttemptAt, lastAttemptOk }, nowMs) 
   return nowMs >= nextScheduledFetchMs(fetchedAt);
 }
 
-/** Warum DVhub die Prognose nicht abruft (null = ruft ab). */
+/**
+ * Schalter „Preisprognose von dvhub.online“ (epex.priceOutlook, 1.0.11):
+ * 'on', 'off' oder 'auto'. Fehlt das Feld oder ist es unbekannt: 'auto' — so
+ * verhalten sich Configs von vor dem Schalter genau wie bisher.
+ */
+export function priceOutlookSetting(cfg) {
+  const v = cfg?.epex?.priceOutlook;
+  if (v === true) return 'on';
+  if (v === false) return 'off';
+  const t = String(v ?? '').trim().toLowerCase();
+  return t === 'on' || t === 'off' ? t : 'auto';
+}
+
+/**
+ * Warum DVhub die Prognose nicht abruft (null = ruft ab):
+ *   'prices_off'    Börsenpreise abgeschaltet;
+ *   'switched_off'  Schalter „Aus“;
+ *   'source_public' Schalter „automatisch“ bei Preisquelle „Öffentlich
+ *                   (Energy-Charts)“ — die heißt ausdrücklich „ohne
+ *                   dvhub.online“; „An“ schaltet die Prognose trotzdem ein;
+ *   'zone'          Preiszone nicht DE-LU (die Prognose gibt es nur dort).
+ */
 export function outlookDisabledReason(cfg) {
   const epex = cfg?.epex || {};
   if (epex.enabled === false) return 'prices_off';
-  // „Öffentlich (Energy-Charts)“ heißt ausdrücklich: ohne dvhub.online.
-  if (String(epex.priceSource || 'dvhub') === 'public') return 'source_public';
+  const setting = priceOutlookSetting(cfg);
+  if (setting === 'off') return 'switched_off';
+  if (setting === 'auto' && String(epex.priceSource || 'dvhub') === 'public') return 'source_public';
   if (String(epex.bzn || OUTLOOK_ZONE) !== OUTLOOK_ZONE) return 'zone';
   return null;
 }
@@ -417,7 +443,7 @@ export function createPriceOutlookService({
    *   live = jüngster Abruf gelang und der Server meldet die Prognose aktuell;
    *   cached = gültige Prognose, aber der letzte Abruf scheiterte oder der
    *   Server meldet sie veraltet (stale); unavailable = keine gültige; off =
-   *   abgeschaltet (reason: prices_off, source_public, zone).
+   *   abgeschaltet (reason: prices_off, switched_off, source_public, zone).
    */
   function current(nowMs = now()) {
     const cfg = getCfg?.() || {};

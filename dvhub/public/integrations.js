@@ -690,7 +690,13 @@
     if (po.status === 'live') return 'aktuell · Stand ' + dm(po.issuedAt);
     if (po.status === 'cached') return 'gespeichert · Stand ' + dm(po.issuedAt);
     if (po.status === 'unavailable') return 'nicht verfügbar seit ' + dm(po.unavailableSince);
-    if (po.status === 'off') return po.reason === 'zone' ? 'nur für DE-LU' : (po.reason === 'source_public' ? 'aus (Preisquelle Öffentlich)' : 'aus');
+    if (po.status === 'off') {
+      if (po.reason === 'zone') return 'nur für DE-LU';
+      // Eigener Schalter (1.0.11): bei „Öffentlich“ ab Werk aus, aber einschaltbar.
+      if (po.reason === 'source_public') return 'aus (Preisquelle Öffentlich) — einschaltbar: Einstellungen → EPEX → Preisprognose';
+      if (po.reason === 'switched_off') return 'ausgeschaltet — Einstellungen → EPEX → Preisprognose';
+      return 'aus';
+    }
     return '—';
   }
   if (typeof window !== 'undefined') window.DVhubPriceOutlookLabel = priceOutlookLabel;
