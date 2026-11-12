@@ -952,6 +952,8 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .eos-plan-hint { margin:6px 0 0; font-family:var(--f-mono); font-size:10px; color:var(--warn); }
 .eos-price-tail { margin:4px 0 0; font-family:var(--f-mono); font-size:10px; color:var(--text-2); }
 .eos-price-tail.is-warn { color:var(--warn); }
+.eos-horizon-hint { margin:2px 0 0; font-family:var(--f-mono); font-size:10px; color:var(--text-3); }
+.eos-horizon-hint.is-warn { color:var(--warn); }
 /* EOS-Rechendienst (Fernbetrieb) unter dem EOS-Fahrplan */
 .eos-remote-info {
   margin-top:8px; padding-top:6px; border-top:1px solid var(--hairline);

@@ -1583,11 +1583,26 @@
     el.hidden = !r.text;
     el.className = 'eos-price-tail' + (r.warn ? ' is-warn' : '');
   }
-  if (typeof window !== 'undefined') window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, { eosPriceTailText: eosPriceTailText });
+  // Hinweis „mit der Preisprognose Tage im Voraus planen“ (1.0.11,
+  // /api/eos/plan horizonHint): Text vom Server, nur textContent.
+  function eosHorizonHintText(hint) {
+    if (!hint || !hint.text) return { text: '', warn: false };
+    return { text: String(hint.text), warn: hint.slow === true };
+  }
+  function renderEosHorizonHint(eos) {
+    var el = document.getElementById('eosHorizonHint');
+    if (!el) return;
+    var r = eosHorizonHintText(eos && eos.horizonHint);
+    el.textContent = r.text;
+    el.hidden = !r.text;
+    el.className = 'eos-horizon-hint' + (r.warn ? ' is-warn' : '');
+  }
+  if (typeof window !== 'undefined') window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, { eosPriceTailText: eosPriceTailText, eosHorizonHintText: eosHorizonHintText });
 
   function renderEosPlanChart(eos) {
     renderEosRemoteInfo(eos && eos.remote ? eos.remote : null);
     renderEosPriceTail(eos);
+    renderEosHorizonHint(eos);
     var canvas = document.getElementById('eosPlanChart');
     var skeleton = document.getElementById('eosPlanSkeleton');
     var subtitle = document.getElementById('eosPlanSubtitle');

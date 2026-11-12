@@ -25,8 +25,9 @@ import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT, resolvePlant
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { resolveEosMinSocPct } from './services/optimizer/eos-config-sync.js';
-import { eosPlanFeedInBasis } from './services/optimizer/eos-forecast-bridge.js';
+import { eosPlanFeedInBasis, controlHorizonMode } from './services/optimizer/eos-forecast-bridge.js';
 import { eosSlowRunHint } from './services/optimizer/eos-run-hint.js';
+import { eosHorizonHint } from './services/optimizer/eos-horizon-hint.js';
 import { planControlFor } from './services/optimizer/eos-run-trigger.js';
 import { requestEosReplanAfterSave } from './services/optimizer/eos-replan-after-save.js';
 import { runtimeInfo } from './runtime-info.js';
@@ -910,7 +911,31 @@ const supportAuditStorage = new AsyncLocalStorage();
 function eosRunStats(run) {
   const num = (v) => (Number.isFinite(Number(v)) && v !== null && v !== undefined ? Number(v) : null);
   if (!run || num(run.lastDurationS) === null) return null;
-  return { avgDurationS: num(run.avgDurationS), recentRuns: num(run.recentRuns), lastDurationS: num(run.lastDurationS) };
+  return {
+    avgDurationS: num(run.avgDurationS), recentRuns: num(run.recentRuns), lastDurationS: num(run.lastDurationS),
+    secPerControlHour: num(run.secPerControlHour), avgControlHours: num(run.avgControlHours),
+  };
+}
+
+/**
+ * Hinweis „mit der Preisprognose bis zu ~5 Tage vorausplanen“ samt
+ * Laufzeit-Schätzung für dieses Gerät (eos-horizon-hint.js, 1.0.11). Ende der
+ * Preisprognose aus dem Dienst, Ende der PV-Prognose aus dem letzten Push.
+ */
+function horizonHintFor({ state, cfg, priceOutlook, nowMs = Date.now() }) {
+  let outlookEndMs = null;
+  try {
+    const hours = priceOutlook?.current?.(nowMs)?.outlook?.hours;
+    if (Array.isArray(hours) && hours.length) outlookEndMs = hours[hours.length - 1].ms + 3_600_000;
+  } catch { outlookEndMs = null; }
+  const pvUntilMs = Date.parse(state?.optimizer?.eosPriceTail?.lookahead?.pvUntil || '');
+  try {
+    return eosHorizonHint({
+      cfg, run: state?.optimizer?.eosRun || null, outlookEndMs,
+      pvUntilMs: Number.isFinite(pvUntilMs) ? pvUntilMs : null,
+      controlMode: controlHorizonMode(cfg), controlHours: state?.optimizer?.eosControlHorizonH ?? null, nowMs,
+    });
+  } catch { return null; }
 }
 
 export function createApiRoutes(ctx) {
@@ -7044,6 +7069,9 @@ export function createApiRoutes(ctx) {
         priceTail: publicPriceTail(state.optimizer?.eosPriceTail),
         run: eosRunStats(state.optimizer?.eosRun),
         runHint: eosSlowRunHint(state.optimizer?.eosRun, getCfg()),
+        // Mit der Preisprognose Tage im Voraus planen (1.0.11): nur Hinweis
+        // mit Laufzeit-Schätzung, nichts wird umgestellt.
+        horizonHint: horizonHintFor({ state, cfg: getCfg(), priceOutlook: ctx.priceOutlook }),
         eos: { status: status.status, push: status.push },
         remote: eosRemoteSummary(),
       });
@@ -7990,7 +8018,14 @@ export function createApiRoutes(ctx) {
     // gespeichert, nicht verfügbar seit …) und — falls EOS läuft — der
     // Preisschwanz des letzten Pushs. Für Leitstand-Preiskurve und EOS-Karte.
     if (url.pathname === '/api/price/outlook' && req.method === 'GET') {
-      return json(res, 200, buildPriceOutlookPayload({ state, cfg: getCfg(), priceOutlook: ctx.priceOutlook, nowMs: Date.now() }));
+      const cfgNow = getCfg();
+      const nowMs = Date.now();
+      return json(res, 200, {
+        ...buildPriceOutlookPayload({ state, cfg: cfgNow, priceOutlook: ctx.priceOutlook, nowMs }),
+        // Für die Einstellungen (Steuerzeitraum/Prognosehorizont): Hinweis mit
+        // Laufzeit-Schätzung für dieses Gerät (1.0.11).
+        horizonHint: horizonHintFor({ state, cfg: cfgNow, priceOutlook: ctx.priceOutlook, nowMs }),
+      });
     }
 
     // --- Combined Forecast API (PV + Load + Price + Confidence per D-01) ---

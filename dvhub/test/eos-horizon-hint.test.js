@@ -1,0 +1,133 @@
+// test/eos-horizon-hint.test.js — Hinweis „mit der Preisprognose bis zu ~5 Tage
+// vorausplanen“ (DVhub 1.0.11, Christin 12.11.2026): Standards bleiben, der
+// Hinweis nennt die Laufzeit auf genau diesem Gerät (gemessene Läufe, linear
+// mit dem Steuerzeitraum hochgerechnet). Nur bei Prognose an und DE-LU.
+// Nichts wird umgestellt.
+import { strict as assert } from 'node:assert';
+import { test } from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { eosHorizonHint, HORIZON_HINT_MAX_H } from '../services/optimizer/eos-horizon-hint.js';
+import { createEosRunTrigger } from '../services/optimizer/eos-run-trigger.js';
+import { buildRuntimeSnapshot } from '../runtime-state.js';
+
+const H = 3_600_000;
+const NOW = Date.parse('2026-11-12T14:00:00Z');
+const DE = { epex: { bzn: 'DE-LU', priceSource: 'dvhub' } };
+// A7S-ähnlich: 8,5 s bei 34 h Steuerzeitraum → 0,25 s je Stunde.
+const RUN = { recentRuns: 8, avgDurationS: 8.5, secPerControlHour: 0.25, avgControlHours: 34 };
+const base = { cfg: DE, run: RUN, outlookEndMs: NOW + 130 * H, pvUntilMs: NOW + 150 * H, nowMs: NOW };
+
+test('Hinweis mit Messung: bis 5 Tage (120 h), Laufzeit linear aus den gemessenen Läufen', () => {
+  const h = eosHorizonHint(base);
+  assert.ok(h);
+  assert.equal(h.targetHours, HORIZON_HINT_MAX_H);
+  assert.equal(h.estimateS, 30);
+  assert.equal(h.currentS, 8.5);
+  assert.equal(h.slow, false);
+  assert.match(h.text, /bis zu 5 Tage \(120 h\) vorausplanen/);
+  assert.match(h.text, /„Bis in die Preisprognose“/);
+  assert.match(h.text, /geschätzt 30 s statt 8,5 s/);
+  assert.match(h.text, /über 8 Läufe bei im Mittel 34 h Steuerzeitraum/);
+  assert.match(h.text, /stellt nichts von selbst um/);
+});
+
+test('PV-Prognose kürzer als die Preisprognose: Ziel ist das Ende der PV-Prognose', () => {
+  const h = eosHorizonHint({ ...base, pvUntilMs: NOW + 70 * H });
+  assert.equal(h.targetHours, 70);
+  assert.equal(h.limitedByPv, true);
+  assert.equal(h.estimateS, 17.5);
+  assert.match(h.text, /bis zu 3 Tage \(70 h\) vorausplanen — so weit reicht hier die PV-Prognose/);
+});
+
+test('Bringt nichts (PV-Prognose kaum länger als der Steuerzeitraum): kein Hinweis', () => {
+  assert.equal(eosHorizonHint({ ...base, pvUntilMs: NOW + 40 * H }), null);
+});
+
+test('Langsames Gerät (Python-EOS): Schätzung über 10 min → Warnung, beim Standard bleiben', () => {
+  const h = eosHorizonHint({ ...base, run: { recentRuns: 5, secPerControlHour: 6, avgControlHours: 34 } });
+  assert.equal(h.estimateS, 720);
+  assert.equal(h.slow, true);
+  assert.match(h.text, /geschätzt 12 min statt 3 min/);
+  assert.match(h.text, /zu lang — besser beim Standard bleiben/);
+});
+
+test('Noch nicht genug gemessen: Hinweis ohne Zahl, mit Verweis auf die Messung', () => {
+  for (const run of [null, { recentRuns: 2, secPerControlHour: 0.25, avgControlHours: 34 }, { recentRuns: 8, avgDurationS: 9 }]) {
+    const h = eosHorizonHint({ ...base, run, controlHours: 34 });
+    assert.ok(h);
+    assert.equal(h.estimateS, null);
+    assert.match(h.text, /sobald einige Läufe gemessen sind/);
+  }
+});
+
+test('Kein Hinweis: Prognose aus, andere Zone, Öffentlich (automatisch), EOS nach eigenem Takt, schon „bis in die Preisprognose“, keine Prognose', () => {
+  const none = [
+    { cfg: { epex: { bzn: 'DE-LU', priceOutlook: 'off' } } },
+    { cfg: { epex: { bzn: 'AT' } } },
+    { cfg: { epex: { bzn: 'DE-LU', priceSource: 'public' } } },
+    { cfg: { epex: { bzn: 'DE-LU', priceSource: 'dvhub' }, optimizer: { eosStartAfterPreviousRun: true } } },
+    { controlMode: 'forecast' },
+    { outlookEndMs: null },
+    { outlookEndMs: NOW - H },
+  ];
+  for (const o of none) assert.equal(eosHorizonHint({ ...base, ...o }), null, JSON.stringify(o));
+  // „Öffentlich“ mit eingeschalteter Prognose: Hinweis kommt.
+  assert.ok(eosHorizonHint({ ...base, cfg: { epex: { bzn: 'DE-LU', priceSource: 'public', priceOutlook: 'on' } } }));
+});
+
+test('Lauf-Auslöser misst je Lauf den Steuerzeitraum: Sekunden je Stunde über die letzten Läufe', async () => {
+  let nowMs = Date.parse('2026-11-12T10:00:02Z');
+  const state = { optimizer: {} };
+  const runs = [[6, 3], [12, 34], [9, 30]]; // [Sekunden, Stunden]
+  let horizon = null;
+  const trigger = createEosRunTrigger({
+    isActive: () => true,
+    getIntervalSec: () => 900,
+    getSlotSec: () => 900,
+    getHorizonHours: () => horizon,
+    collectSoc: async () => ({ soc: { battery1: 50 } }),
+    postOptimize: async () => { nowMs += runs.shift()[0] * 1000; return { ok: true, data: { start_solution: [1], start_solution_datetime: new Date(nowMs).toISOString() } }; },
+    state,
+    now: () => nowMs,
+    setTimer: () => ({}),
+    clearTimer: () => {},
+  });
+  for (const h of [null, 34, 30]) { horizon = h; await trigger.trigger(); nowMs += 120_000; }
+  const r = state.optimizer.eosRun;
+  // Lauf ohne bekannten Steuerzeitraum zählt nur für die mittlere Dauer.
+  assert.equal(r.recentRuns, 3);
+  assert.equal(r.secPerControlHour, Math.round(21 / 64 * 10_000) / 10_000);
+  assert.equal(r.avgControlHours, 32);
+  // Reist im Runtime-Schnappschuss mit (getrennter Web-Prozess).
+  const snap = buildRuntimeSnapshot({ eosRun: r });
+  assert.equal(snap.eosRun.secPerControlHour, r.secPerControlHour);
+  assert.equal(snap.eosRun.avgControlHours, 32);
+});
+
+test('Leitstand: Zeile unter dem EOS-Fahrplan, Text vom Server, Warnung bei zu lang', () => {
+  const dir = path.resolve(import.meta.dirname, '../public');
+  const src = fs.readFileSync(path.join(dir, 'leitstand-charts.js'), 'utf8');
+  const sandbox = {
+    console, Date, Math, Number, JSON, Intl, Set, Map,
+    document: { readyState: 'loading', addEventListener() {}, getElementById: () => null },
+    window: {},
+    setInterval() {},
+  };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(src, sandbox, { filename: 'leitstand-charts.js' });
+  const { eosHorizonHintText } = sandbox.window.DVhubLeitstand;
+  assert.deepEqual({ ...eosHorizonHintText(null) }, { text: '', warn: false });
+  assert.deepEqual({ ...eosHorizonHintText({ text: 'x', slow: true }) }, { text: 'x', warn: true });
+  assert.match(fs.readFileSync(path.join(dir, 'index.html'), 'utf8'), /id="eosHorizonHint"/);
+  assert.match(src, /renderEosHorizonHint\(eos\);/);
+});
+
+test('Einstellungen: Hinweis unter Steuerzeitraum und Prognosehorizont, geladen aus /api/price/outlook', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../public/settings.js'), 'utf8');
+  assert.match(src, /apiFetch\('\/api\/price\/outlook'\)/);
+  assert.match(src, /path === 'optimizer\.eosControlHorizonMaxHours'\) return \{ text: eosHorizonHint\.text/);
+  assert.match(src, /path === 'optimizer\.eosPredictionHours'/);
+  assert.match(src, /loadEosHorizonHint\(\);/);
+});

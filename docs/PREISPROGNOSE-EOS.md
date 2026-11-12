@@ -142,6 +142,29 @@ Nachrechnen mit `~/Projects/eos-bench/preisschwanz/` (`run_timing.sh`, `analyze.
 Mit dem Python-EOS wäre der Steuerzeitraum „bis in die Preisprognose“ auf kleinen Boards zu langsam (dort schon
 24 h ≈ 30–40 min je Lauf).
 
+### Hinweis in der Oberfläche (Laufzeit auf diesem Gerät)
+
+Die Standards stellt DVhub nicht um. Ist die Preisprognose an und die Preiszone DE-LU, steht ein Hinweis unter dem
+EOS-Fahrplan im Leitstand (unter „EOS schaut voraus bis …“) und in den Einstellungen unter „EOS Steuerzeitraum
+höchstens“ (kurz auch unter „EOS Prognosehorizont“). Er sagt, wie weit EOS mit „Bis in die Preisprognose“ planen
+könnte und wie lange ein Lauf dann **auf genau diesem Gerät** etwa dauert.
+
+- **Messung:** `eos-run-trigger.js` schreibt je Lauf, den DVhub anstößt, Dauer und Steuerzeitraum mit. Daraus
+  entsteht `eosRun.secPerControlHour` (Summe Dauer ÷ Summe Stunden über die letzten 8 Läufe) und `avgControlHours`.
+- **Schätzung:** Sekunden je Stunde × Ziel-Stunden, also linear mit dem Steuerzeitraum (Rust-Kern auf dem Mac:
+  13,3 / 12,4 / 12,8 ms je Stunde bei 30 / 72 / 120 h). Ein fester Anteil je Lauf wird dabei mit hochgerechnet; die
+  Schätzung liegt also eher zu hoch.
+- **Ziel-Stunden:** bis zum Ende der Preisprognose, höchstens 120 h. Reicht die PV-Prognose kürzer (Stand des letzten
+  Pushs), gilt ihr Ende, und der Hinweis sagt das.
+- **Kein Hinweis:**
+  - Prognose aus oder nicht DE-LU;
+  - EOS nach eigenem Takt;
+  - Steuerzeitraum steht schon auf „Bis in die Preisprognose“;
+  - es brächte weniger als 12 h mehr (z. B. PV-Prognose kaum länger als der Steuerzeitraum).
+- **Ohne Messung** (weniger als 3 Läufe): der Hinweis nennt nur das Verhältnis (120 h ≈ 4× 30 h).
+- **Geschätzt über 10 min:** Der Hinweis wird zur Warnung („zu lang — besser beim Standard bleiben“).
+- Schnittstelle: `horizonHint` in `GET /api/eos/plan` und `GET /api/price/outlook`.
+
 ### Warum die Standards bleiben
 
 - **Prognosehorizont automatisch (72 h):** Eine Messung auf echten Daten (01.01.–02.11.2026, Rust-Kern, 10.11.2026)

@@ -33,7 +33,10 @@ export const EOS_RUN_BOUNDARY_OFFSET_MS = 2_000;
 // Mindestabstand für außerplanmäßige Anstöße (EOS-Neustart, noch kein Plan).
 export const EOS_RUN_KICK_MIN_GAP_MS = 120_000;
 // Mittlere Laufdauer (eosRun.avgDurationS) über so viele erfolgreiche Läufe —
-// für den Hinweis bei langen Läufen (eos-run-hint.js).
+// für den Hinweis bei langen Läufen (eos-run-hint.js). Dazu je Lauf der
+// Steuerzeitraum: eosRun.secPerControlHour (Sekunden je Stunde Steuerzeitraum)
+// und avgControlHours für die Laufzeit-Schätzung längerer Steuerzeiträume
+// (eos-horizon-hint.js, 1.0.11).
 export const EOS_RUN_DURATION_WINDOW = 8;
 // Nach einem DVhub-Neustart kann EOS noch am Lauf des alten Prozesses rechnen.
 // So lange wird ein beschäftigtes EOS nicht zusätzlich angestoßen.
@@ -157,6 +160,7 @@ export function createEosRunTrigger({
   let finishedRuns = 0;     // beantwortete Aufrufe dieses Prozesses (auch Fehler)
   let lastStart = null;     // { genes, startMs, slots } der letzten Lösung
   const recentDurationsS = []; // Dauer der letzten erfolgreichen Läufe (s)
+  const recentControlH = [];   // Steuerzeitraum dieser Läufe (h, null = unbekannt)
 
   const log = (type, data) => { try { pushLog?.(type, data); } catch { /* Log darf nie stören */ } };
   const publish = (patch) => {
@@ -246,12 +250,28 @@ export function createEosRunTrigger({
       : null;
     log('eos_run_done', { reason, durationS, genes: lastStart ? lastStart.genes.length : null });
     recentDurationsS.push(durationS);
-    if (recentDurationsS.length > EOS_RUN_DURATION_WINDOW) recentDurationsS.shift();
+    const ctrlH = Number(horizonHours);
+    recentControlH.push(Number.isFinite(ctrlH) && ctrlH > 0 ? ctrlH : null);
+    if (recentDurationsS.length > EOS_RUN_DURATION_WINDOW) { recentDurationsS.shift(); recentControlH.shift(); }
     const avgDurationS = Math.round(recentDurationsS.reduce((a, s) => a + s, 0) / recentDurationsS.length * 10) / 10;
+    // Sekunden je Stunde Steuerzeitraum über die Läufe mit bekanntem Zeitraum
+    // (Summe Dauer ÷ Summe Stunden — wechselnde Zeiträume im Modus
+    // „automatisch“ gewichten sich so richtig).
+    let sumS = 0;
+    let sumH = 0;
+    let withH = 0;
+    for (let i = 0; i < recentDurationsS.length; i += 1) {
+      if (recentControlH[i] === null) continue;
+      sumS += recentDurationsS[i];
+      sumH += recentControlH[i];
+      withH += 1;
+    }
+    const secPerControlHour = sumH > 0 ? Math.round(sumS / sumH * 10_000) / 10_000 : null;
+    const avgControlHours = withH > 0 ? Math.round(sumH / withH * 10) / 10 : null;
     const doneAt = now();
     publish({
       inFlight: false, lastDoneAt: doneAt, lastDurationS: durationS, lastError: null, lastErrorAt: null,
-      avgDurationS, recentRuns: recentDurationsS.length,
+      avgDurationS, recentRuns: recentDurationsS.length, secPerControlHour, avgControlHours,
       lastPlanControl: control ? { ...control, runStartedAt: at, runDoneAt: doneAt } : null,
     });
     try { await onSolution?.(); } catch { /* der Monitor holt sie sonst beim nächsten Takt */ }

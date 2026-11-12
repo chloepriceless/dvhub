@@ -43,6 +43,12 @@ verweist hierher.
     bei 30 h. Ein längerer Schwanz kostet fast nichts.
   - Die EOS-Karte zeigt, wie weit EOS vorausschaut und ob PV-, Verbrauchs- oder Preisprognose das begrenzt.
   - Standards bleiben: Prognosehorizont automatisch 72 h, Steuerzeitraum ganzer bekannter Preiszeitraum.
+  - Hinweis statt Umstellen (Christin 12.11.2026): Ist die Preisprognose an (DE-LU), steht unter dem EOS-Fahrplan
+    und in den Einstellungen beim Steuerzeitraum, wie weit EOS mit „Bis in die Preisprognose“ planen könnte (bis
+    120 h, kürzer, wenn die PV-Prognose früher endet) und wie lange ein Lauf dann **auf diesem Gerät** etwa dauert.
+    Die Dauer kommt aus den gemessenen letzten Läufen und wird linear mit dem Steuerzeitraum hochgerechnet
+    (`eosRun.secPerControlHour`, neu je Lauf gemessen). Über 10 min wird der Hinweis zur Warnung. Neu in
+    `/api/eos/plan` und `/api/price/outlook`: `horizonHint`.
 
 - **1.0.11: Preisprognose in der Leitstand-Preiskurve.** Hinter den festen Börsenpreisen erscheint bis jetzt + 36 h
   eine gestrichelte „Preisprognose“ mit einem hellen Band P10–P90 und dem Bereich „Prognose“. Der Tooltip zeigt ganze

@@ -2255,6 +2255,14 @@ function renderGroupedCardsOb(mount, destination, destinationId) {
           noteEl.textContent = note;
           row.appendChild(noteEl);
         }
+        const info = fieldInfoNote(field.path);
+        if (info) {
+          const infoEl = document.createElement('p');
+          infoEl.className = 'sa-field-note' + (info.warn ? ' warn' : '');
+          infoEl.dataset.infoNote = field.path;
+          infoEl.textContent = info.text;
+          row.appendChild(infoEl);
+        }
         if (model.discovery && model.discovery.visible) {
           const discoveryRow = document.createElement('div');
           discoveryRow.className = 'sa-discovery-row';
@@ -2365,6 +2373,24 @@ function renderAreaEditor(name) {
 // (für Sonnenauf- und -untergang) ein zweites Mal — der zweite Satz Felder
 // erscheint nur, solange der Anlagen-Standort fehlt, und folgt ihm beim Speichern.
 const SMA_LOCATION_DEFAULT = { latitude: 51.1657, longitude: 10.4515 };
+// Vom Server: Hinweis „mit der Preisprognose Tage im Voraus planen“ samt
+// Laufzeit-Schätzung für dieses Gerät (1.0.11, /api/price/outlook horizonHint).
+let eosHorizonHint = null;
+function loadEosHorizonHint() {
+  return apiFetch('/api/price/outlook').then((res) => res.json()).then((data) => {
+    eosHorizonHint = data && data.horizonHint && data.horizonHint.text ? data.horizonHint : null;
+    if (definition && eosHorizonHint) renderSettingsShell();
+  }).catch(() => {});
+}
+// Info-Hinweis unter einem Feld (kein Warnhinweis): nur Text vom Server.
+function fieldInfoNote(path) {
+  if (!eosHorizonHint) return null;
+  if (path === 'optimizer.eosControlHorizonMaxHours') return { text: eosHorizonHint.text, warn: eosHorizonHint.slow === true };
+  if (path === 'optimizer.eosPredictionHours') {
+    return { text: `Mit der Preisprognose reichen Preise hier bis etwa ${eosHorizonHint.targetHours} h voraus — Hinweis zur Rechenzeit beim Steuerzeitraum.`, warn: false };
+  }
+  return null;
+}
 // Vom Server: Akku-Werte der Anlage samt gemessenem Wirkungsgrad (falls vorhanden).
 let plantBatteryInfo = null;
 function loadPlantBatteryInfo() {
@@ -4753,6 +4779,7 @@ function initSettingsPage() {
     setBanner(`Konfiguration konnte nicht geladen werden: ${error.message}`, 'error');
   });
   loadPlantBatteryInfo();
+  loadEosHorizonHint();
   loadHistoryImportStatus().then(() => {
     renderSettingsShell();
   }).catch((error) => {

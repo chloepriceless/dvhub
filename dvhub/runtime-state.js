@@ -250,7 +250,9 @@ function buildVpnSnapshot(vpn = null) {
 // Steuerzeitraum des Plans. Im getrennten Betrieb (DVHUB_ENABLE_RUNTIME_WORKER=1)
 // laufen die Läufe im Runtime-Prozess, /api/eos/plan im Web-Prozess
 // (Codex-Gegenprüfung 57608a1e).
-const EOS_RUN_FIELDS = ['avgDurationS', 'recentRuns', 'lastDurationS', 'lastDoneAt', 'lastPlanControl'];
+// secPerControlHour/avgControlHours: Laufzeit je Stunde Steuerzeitraum für den
+// Hinweis „Tage im Voraus planen“ (eos-horizon-hint.js, 1.0.11).
+const EOS_RUN_FIELDS = ['avgDurationS', 'recentRuns', 'lastDurationS', 'lastDoneAt', 'lastPlanControl', 'secPerControlHour', 'avgControlHours'];
 
 function buildEosRunSnapshot(eosRun = null) {
   if (!eosRun || typeof eosRun !== 'object') return null;
