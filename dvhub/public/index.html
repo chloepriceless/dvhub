@@ -586,6 +586,10 @@
           <canvas id="eosPlanChart"></canvas>
         </div>
         <div class="chart-day-summary" id="eosPlanKpis"></div>
+        <!-- Preisschwanz (1.0.11, /api/eos/plan priceTail): wie weit EOS vorausschaut,
+             woher die Preise hinter den festen Börsenpreisen kommen (Residuallast-
+             Prognose dvhub.online) bzw. seit wann sie fehlen. leitstand-charts.js#renderEosPriceTail. -->
+        <p class="eos-price-tail" id="eosPriceTail" hidden></p>
         <!-- Hinweis bei langen EOS-Läufen (/api/eos/plan runHint, eos-run-hint.js):
              schlägt 100 Generationen und Steuerzeitraum „automatisch“ vor, stellt nichts um. -->
         <p class="eos-plan-hint" id="eosPlanHint" hidden></p>

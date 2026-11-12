@@ -4,6 +4,7 @@
 // push and timer/start orchestration are integration-level concerns covered
 // by the live deploy path; here we lock the data-shape contract that EOS'
 // PydanticDateTimeDataFrame import expects.
+import { buildOutlook, outlookService } from './helpers/price-outlook-stub.js';
 
 import { strict as assert } from 'node:assert';
 import { test, describe } from 'node:test';
@@ -1038,7 +1039,7 @@ test('push ohne Prognosedienst meldet den Fehler ebenfalls in lastEosPush', asyn
 // Prognose mit geschätzten Börsenpreisen; der Steuerzeitraum bleibt bei den
 // echten Preisen.
 const Q = 15 * 60 * 1000;
-function estimateCtx(mock, { pricing, tariff = { feedInMode: 'spot', feedInSpotFactor: 1 }, withHistory = true, logs = [], realHours = 10, pvHours = 40, optimizer = {} } = {}) {
+function estimateCtx(mock, { pricing, tariff = { feedInMode: 'spot', feedInSpotFactor: 1 }, withHistory = true, withOutlook = true, logs = [], realHours = 10, pvHours = 40, optimizer = {} } = {}) {
   const now = Date.now();
   const q0 = now - (now % Q);
   const realEnd = q0 + realHours * 3_600_000; // echte Preise bis jetzt + 10 h
@@ -1063,11 +1064,16 @@ function estimateCtx(mock, { pricing, tariff = { feedInMode: 'spot', feedInSpotF
     pushLog: (event, data) => logs.push({ event, data }),
     forecastService: { buildForecastResponse: async () => ({ pv: { slots: pv }, load: { slots: load }, price: { slots: price } }) },
     state,
+    // Historie nur noch für die Wertgrundlage des E-Autos (Holt-Winters).
     ...(withHistory ? { telemetryStore: { querySeries: async () => history } } : {}),
+    // Preisschwanz: Residuallast-Prognose (1.0.11), stündlich nach demselben Muster.
+    ...(withOutlook ? { priceOutlook: outlookService(buildOutlook(pattern)) } : {}),
   };
   // Ende der Reihen: die längere von PV (15 min) und Last (stündlich).
   const fillEnd = Math.max(pvEnd, Date.parse(load[load.length - 1].start) + 3_600_000);
-  return { ctx, state, q0, realEnd, fillEnd, pattern };
+  // Prognose ist stündlich: Wert der Stunde, in der t liegt.
+  const hourly = (t) => pattern(t - (t % 3_600_000));
+  return { ctx, state, q0, realEnd, fillEnd, pattern, hourly };
 }
 
 function seriesOf(mock, provider, key) {
@@ -1080,7 +1086,7 @@ test('Preise auffüllen: Bezug (fest) und Einspeisung (Börse) bis zum Ende der 
   const mock = await createMockEos(okHandler);
   try {
     const logs = [];
-    const { ctx, state, q0, realEnd, fillEnd, pattern } = estimateCtx(mock, { logs });
+    const { ctx, state, q0, realEnd, fillEnd, hourly } = estimateCtx(mock, { logs });
     await createEosForecastBridge(ctx).push();
     const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
     const feed = seriesOf(mock, 'FeedInTariffImport', 'feed_in_tariff_wh');
@@ -1088,9 +1094,9 @@ test('Preise auffüllen: Bezug (fest) und Einspeisung (Börse) bis zum Ende der 
     assert.equal(Math.max(...feed.keys()), fillEnd - Q, 'Einspeisewert reicht bis zum Ende der PV-/Lastprognose');
     // Fester Tarif: auch der geschätzte Slot kostet 30 ct.
     closeTo(elec.get(realEnd + 5 * 3_600_000), 30 / 100 / 1000);
-    // Einspeisung = geschätzter Börsenpreis, folgt dem Tagesmuster.
+    // Einspeisung = P50 der Residuallast-Prognose (Stundenwert je Viertelstunde).
     const t = realEnd + 7 * 3_600_000;
-    assert.ok(Math.abs(feed.get(t) * 100_000 - pattern(t)) < 1, `${feed.get(t) * 100_000} vs ${pattern(t)}`);
+    assert.ok(Math.abs(feed.get(t) * 100_000 - hourly(t)) < 0.01, `${feed.get(t) * 100_000} vs ${hourly(t)}`);
     // Steuerzeitraum aus den echten Preisen (10 h ab Viertelstundenbeginn).
     const hz = mock.requests.find((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/optimization/genetic/horizon_hours'));
     assert.equal(hz.body, Math.floor((realEnd - Date.now() - Q) / 3_600_000));
@@ -1134,10 +1140,10 @@ test('Preise auffüllen: dynamischer Tarif = geschätzter Börsenpreis + Bestand
   } finally { await mock.close(); }
 });
 
-test('Preise auffüllen: ohne gespeicherte Historie bleibt alles wie bisher', async () => {
+test('Preise auffüllen: ohne Residuallast-Prognose kein Schwanz — Preise nur bis zum Ende der echten', async () => {
   const mock = await createMockEos(okHandler);
   try {
-    const { ctx, state, realEnd } = estimateCtx(mock, { withHistory: false });
+    const { ctx, state, realEnd } = estimateCtx(mock, { withOutlook: false });
     await createEosForecastBridge(ctx).push();
     const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
     assert.equal(Math.max(...elec.keys()), realEnd - Q);
@@ -1250,7 +1256,9 @@ test('resolveEosPredictionHours / resolveControlHorizonMaxHours', async () => {
   assert.equal(resolveEosPredictionHours(c({ eosControlHorizonMaxHours: 24 })), 72);
   assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: 48 })), 48);
   assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: '60' })), 60);
-  assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: 500 })), 72);
+  // 1.0.11: fest wählbar bis 168 h (Preisschwanz aus der Residuallast-Prognose).
+  assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: 144 })), 144);
+  assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: 500 })), 168);
   assert.equal(resolveEosPredictionHours(c({ eosPredictionHours: -3 })), 72);
   assert.equal(resolveControlHorizonMaxHours(c({})), 48);
   assert.equal(resolveControlHorizonMaxHours(c({ eosControlHorizonMaxHours: 12 })), 12);
@@ -1348,11 +1356,11 @@ test('Einstellungen: Steuerzeitraum-Grenze und Prognosehorizont mit Rechenzeit-H
   const pred = fields.find((f) => f.path === 'optimizer.eosPredictionHours');
   assert.ok(ctrl && pred, 'beide Felder definiert');
   assert.equal(ctrl.type, 'select');
-  assert.deepEqual(ctrl.options.map((o) => o.value), [0, 'auto', 6, 12, 24]);
+  assert.deepEqual(ctrl.options.map((o) => o.value), [0, 'auto', 6, 12, 24, 'forecast']);
   assert.match(ctrl.options[0].label, /ganze[rn]? bekannte[rn]? Preiszeitraum/i);
   assert.match(ctrl.help, /Rechenzeit/);
   assert.equal(pred.type, 'select');
-  assert.deepEqual(pred.options.map((o) => o.value), [0, 48, 60, 72]);
+  assert.deepEqual(pred.options.map((o) => o.value), [0, 48, 60, 72, 96, 120, 144]);
   assert.match(pred.help, /Rechenzeit/);
   assert.match(pred.help, /mindestens 12 h/);
   assert.match(pred.help, /Steuerzeitraum/);
@@ -2430,38 +2438,44 @@ test('Befund 9: hängende Datenbank hält den Push nicht auf — weiter mit den 
 
 // ── Gesamtprüfung Release 1.0.9, Befund 15 ─────────────────────────────────────
 // Ein Datenbankfehler (oder eine leere Antwort) beim Laden der Preis-Historie
-// blieb 1 h im Zwischenspeicher — so lange bekam EOS keinen geschätzten Schwanz.
-test('Befund 15: Datenbankfehler bei der Preis-Historie wird nicht zwischengespeichert', async () => {
+// blieb 1 h im Zwischenspeicher. Seit 1.0.11 braucht nur noch die Wertgrundlage
+// des E-Autos die Historie (Holt-Winters bis 9,5 Tage); der EOS-Schwanz kommt
+// aus der Residuallast-Prognose und hängt nicht mehr an der Datenbank.
+const historyQueries = (calls) => calls.filter((q) => q.seriesKeys.length === 2).length;
+
+test('Befund 15: Datenbankfehler bei der Preis-Historie wird nicht zwischengespeichert (Wertgrundlage E-Auto)', async () => {
   const mock = await createMockEos(okHandler);
   try {
-    const env = estimateCtx(mock);
+    const env = estimateCtx(mock, { optimizer: { eosOptimizeEv: true, evMaxSocPct: 80 } });
+    env.state.optimizer.eos.evSocValue = true;
     const history = [];
     for (let ms = env.q0 - 20 * 86_400_000; ms < env.q0; ms += Q) history.push({ key: 'price_ct_kwh', ts: new Date(ms), value: env.pattern(ms), resolution: 900 });
     let fail = true;
-    env.ctx.telemetryStore = { querySeries: async () => { if (fail) throw new Error('Verbindung verloren'); return history; } };
+    const calls = [];
+    env.ctx.telemetryStore = { querySeries: async (q) => { calls.push(q); if (fail && q.seriesKeys.length === 2) throw new Error('Verbindung verloren'); return q.seriesKeys.length === 2 ? history : []; } };
     const bridge = createEosForecastBridge(env.ctx);
     await bridge.push();
-    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null, 'ohne Historie keine Schätzung');
+    assert.ok(env.state.optimizer.lastEosPush.priceEstimate?.estimatedSlots > 0, 'Schwanz kommt trotzdem (Prognose, nicht Historie)');
+    assert.equal(historyQueries(calls), 1);
     fail = false;
     await bridge.push();
-    assert.ok(env.state.optimizer.lastEosPush.priceEstimate?.estimatedSlots > 0, 'nächster Push schätzt wieder');
+    assert.equal(historyQueries(calls), 2, 'nächster Push fragt die Historie neu');
+    await bridge.push();
+    assert.equal(historyQueries(calls), 2, 'gelungene Antwort bleibt 1 h im Zwischenspeicher');
   } finally { await mock.close(); }
 });
 
-test('Befund 15: leere Preis-Historie wird nicht zwischengespeichert', async () => {
+test('Befund 15: leere Preis-Historie wird nicht zwischengespeichert (Wertgrundlage E-Auto)', async () => {
   const mock = await createMockEos(okHandler);
   try {
-    const env = estimateCtx(mock);
-    const history = [];
-    for (let ms = env.q0 - 20 * 86_400_000; ms < env.q0; ms += Q) history.push({ key: 'price_ct_kwh', ts: new Date(ms), value: env.pattern(ms), resolution: 900 });
-    let empty = true;
-    env.ctx.telemetryStore = { querySeries: async () => (empty ? [] : history) };
+    const env = estimateCtx(mock, { optimizer: { eosOptimizeEv: true, evMaxSocPct: 80 } });
+    env.state.optimizer.eos.evSocValue = true;
+    const calls = [];
+    env.ctx.telemetryStore = { querySeries: async (q) => { calls.push(q); return []; } };
     const bridge = createEosForecastBridge(env.ctx);
     await bridge.push();
-    assert.equal(env.state.optimizer.lastEosPush.priceEstimate, null);
-    empty = false;
     await bridge.push();
-    assert.ok(env.state.optimizer.lastEosPush.priceEstimate?.estimatedSlots > 0);
+    assert.equal(historyQueries(calls), 2);
   } finally { await mock.close(); }
 });
 
@@ -2482,7 +2496,7 @@ test('Neustart: erst Prognosehorizont 72 h, dann Steuerzeitraum, dann der Zielwe
   try {
     const { ctx } = estimateCtx(mock, { realHours: 34, pvHours: 60, optimizer: { eosPredictionHours: 48 } });
     await createEosForecastBridge(ctx).push();
-    const seq = mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/') && /prediction\/hours|horizon_hours/.test(r.url))
+    const seq = mock.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/') && /prediction\/hours|genetic\/horizon_hours/.test(r.url))
       .map((r) => `${r.url.includes('horizon_hours') ? 'H' : 'P'}${r.body}`);
     assert.deepEqual(seq, ['P72', 'H33', 'P48']);
     assert.deepEqual(violations, []);
@@ -2542,4 +2556,147 @@ test('Laufstart: Fahrzeug-Abgleich scheitert → Lauf trotzdem (Akku-Plan), Fehl
     assert.deepEqual(await createEosForecastBridge(env.ctx).prepareRun(), { ok: true, pushed: true });
     assert.equal(n, 0);
   } finally { await mock2.close(); }
+});
+
+// ── Preisschwanz aus der Residuallast-Prognose (1.0.11, Christin 12.11.2026) ──
+// Holt-Winters ist raus. Ohne gültige Prognose gibt es keinen Schwanz: EOS plant
+// nur über die echten Preise. Der Steuerzeitraum darf dadurch nicht kürzer
+// werden (die 12-h-Schwanz-Regel hängt am Prognosehorizont, nicht an den
+// Preisen), und EOS darf nie ohne Preise im Steuerzeitraum dastehen.
+test('Schwanz: Prognose da → P50 hinter den echten Preisen, Zustand mit Quelle und Ausgabezeit', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const { ctx, state, realEnd } = estimateCtx(mock);
+    await createEosForecastBridge(ctx).push();
+    const tail = state.optimizer.eosPriceTail;
+    assert.equal(tail.used, true);
+    assert.equal(tail.status, 'live');
+    assert.equal(tail.from, new Date(realEnd).toISOString());
+    assert.equal(tail.realUntil, new Date(realEnd).toISOString());
+    assert.ok(tail.slots > 0);
+    assert.equal(tail.issuedAt, ctx.priceOutlook.outlook.issuedAt);
+    assert.equal(state.optimizer.lastEosPush.priceEstimate.method, 'residual_load_p50');
+    assert.ok(ctx.priceOutlook.calls >= 1, 'Abruf bei Bedarf vor dem Push');
+  } finally { await mock.close(); }
+});
+
+for (const realHours of [10, 34]) {
+  test(`Schwanz: ohne Prognose (${realHours} h echte Preise) → Steuerzeitraum unverändert, Preise nur bis zum Ende der echten, dahinter gelöscht, Lauf darf rechnen`, async () => {
+    const withTail = await createMockEos(okHandler);
+    const without = await createMockEos(okHandler);
+    try {
+      const a = estimateCtx(withTail, { realHours, pvHours: 60 });
+      await createEosForecastBridge(a.ctx).push();
+      const b = estimateCtx(without, { realHours, pvHours: 60, withOutlook: false });
+      b.ctx.priceOutlook = outlookService(null);
+      const res = await createEosForecastBridge(b.ctx).prepareRun();
+      assert.deepEqual(res, { ok: true, pushed: true }, 'Lauf mit den echten Preisen');
+      const hz = (m) => m.requests.filter((r) => r.method === 'PUT' && r.url.startsWith('/v1/config/optimization/genetic/horizon_hours')).pop().body;
+      assert.equal(hz(without), hz(withTail), 'Steuerzeitraum wie mit Schwanz');
+      assert.equal(hz(without), Math.floor((b.realEnd - Date.now() - Q) / 3_600_000));
+      const elec = seriesOf(without, 'ElecPriceImport', 'elecprice_marketprice_wh');
+      assert.equal(Math.max(...elec.keys()), b.realEnd - Q, 'nur echte Preise');
+      // Alte Schwanz-Werte in EOS: ab dem Ende der echten Preise gelöscht.
+      const del = without.requests.filter((r) => r.method === 'DELETE' && r.url.includes('key=elecprice_marketprice_wh'));
+      assert.ok(del.length);
+      assert.equal(new URL(del[0].url, 'http://x').searchParams.get('start_datetime'), new Date(b.realEnd).toISOString());
+      const tail = b.state.optimizer.eosPriceTail;
+      assert.equal(tail.used, false);
+      assert.equal(tail.status, 'unavailable');
+      assert.ok(tail.unavailableSince);
+      assert.equal(b.state.optimizer.lastEosPush.priceEstimate, null);
+    } finally { await withTail.close(); await without.close(); }
+  });
+}
+
+test('Schwanz: andere Preiszone → kein Schwanz, Grund „zone“', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const { ctx, state, realEnd } = estimateCtx(mock);
+    const { createPriceOutlookService } = await import('../services/optimizer/price-outlook.js');
+    let fetched = 0;
+    ctx.priceOutlook = createPriceOutlookService({ getCfg: () => ({ epex: { bzn: 'AT' } }), fetchImpl: async () => { fetched += 1; throw new Error('nicht fragen'); } });
+    await createEosForecastBridge(ctx).push();
+    assert.equal(fetched, 0);
+    assert.equal(state.optimizer.eosPriceTail.used, false);
+    assert.equal(state.optimizer.eosPriceTail.status, 'off');
+    assert.equal(state.optimizer.eosPriceTail.reason, 'zone');
+    const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+    assert.equal(Math.max(...elec.keys()), realEnd - Q);
+  } finally { await mock.close(); }
+});
+
+test('Schwanz: Einspeisung im Schwanz = Prognose-Börsenpreis + Marktprämie (dieselbe Regel wie echte Slots)', async () => {
+  const mock = await createMockEos(okHandler);
+  try {
+    const { ctx, realEnd, hourly, pattern } = estimateCtx(mock, { tariff: { feedInMode: 'spot', feedInSpotFactor: 1, feedInIncludeMarketPremium: true } });
+    // Marktprämie = anzulegender Wert 8 ct − Jahresmarktwert 5 ct = 3 ct.
+    ctx.getSolarMarketValueSummary = async () => ({ annualCtKwhByYear: { [new Date().getUTCFullYear() - 1]: 5 } });
+    const cfg0 = ctx.getCfg();
+    ctx.getCfg = () => ({ ...cfg0, userEnergyPricing: { ...cfg0.userEnergyPricing, applicableValueOverrideCtKwh: 8 } });
+    await createEosForecastBridge(ctx).push();
+    const feed = seriesOf(mock, 'FeedInTariffImport', 'feed_in_tariff_wh');
+    const real = realEnd - Q;
+    const t = realEnd + 5 * 3_600_000;
+    const premiumReal = feed.get(real) * 100_000 - pattern(real);
+    const premiumTail = feed.get(t) * 100_000 - hourly(t);
+    closeTo(premiumReal, 3, 1e-6);
+    // Schwanz in ct/kWh auf zwei Stellen gerundet.
+    closeTo(premiumTail, 3, 0.006);
+  } finally { await mock.close(); }
+});
+
+// ── Weiter vorausplanen (1.0.11): Prognosehorizont über 72 h ────────────────
+test('Prognosehorizont 144 h: prediction.hours 144, Schwanz bei EOS angefordert, Preisschwanz bis 144 h (soweit PV/Last reichen)', async () => {
+  const { resolveEosTailHours } = await import('../services/optimizer/eos-forecast-bridge.js');
+  assert.equal(resolveEosTailHours({ optimizer: {} }), null, 'automatisch: EOS-Standard');
+  assert.equal(resolveEosTailHours({ optimizer: { eosPredictionHours: 72 } }), null);
+  assert.equal(resolveEosTailHours({ optimizer: { eosPredictionHours: 120 } }), 120);
+  const mock = await createMockEos(okHandler);
+  try {
+    const logs = [];
+    const { ctx, state } = estimateCtx(mock, { realHours: 34, pvHours: 150, logs, optimizer: { eosPredictionHours: 144 } });
+    const bridge = createEosForecastBridge(ctx);
+    await bridge.push();
+    const put = (re) => mock.requests.filter((r) => r.method === 'PUT' && re.test(r.url)).map((r) => r.body);
+    assert.deepEqual(put(/\/v1\/config\/prediction\/hours/).at(-1), 144);
+    assert.deepEqual(put(/tail_horizon_hours/), [144]);
+    assert.equal(state.optimizer.eosTailHours, 144);
+    const elec = seriesOf(mock, 'ElecPriceImport', 'elecprice_marketprice_wh');
+    const now = Date.now();
+    assert.ok(Math.max(...elec.keys()) >= now + 140 * 3_600_000, 'Preisschwanz reicht über 140 h');
+    assert.ok(Math.max(...elec.keys()) < now + 144 * 3_600_000);
+    await bridge.push();
+    assert.deepEqual(put(/tail_horizon_hours/), [144, 144], 'bei jedem Push wie der Steuerzeitraum');
+  } finally { await mock.close(); }
+});
+
+test('Prognosehorizont automatisch: Schwanz einmal je Start auf EOS-Standard 48 h; älteres EOS ohne Schlüssel wird nicht weiter gefragt', async () => {
+  const mock = await createMockEos((req, res) => {
+    if (req.url.includes('tail_horizon_hours')) { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"detail":"not found"}'); return; }
+    okHandler(req, res);
+  });
+  try {
+    const logs = [];
+    const { ctx } = estimateCtx(mock, { logs });
+    const bridge = createEosForecastBridge(ctx);
+    await bridge.push();
+    await bridge.push();
+    const tails = mock.requests.filter((r) => r.method === 'PUT' && r.url.includes('tail_horizon_hours'));
+    assert.deepEqual(tails.map((r) => r.body), [48]);
+    assert.equal(logs.filter((l) => l.event === 'eos_tail_horizon_error').length, 1);
+    assert.equal(ctx.state.optimizer.lastEosPush.ok, true, 'Push bleibt ok');
+  } finally { await mock.close(); }
+});
+
+test('Lastprognose reicht so weit wie ein Prognosehorizont über 72 h (+1 h ab voller Stunde)', async () => {
+  const { loadForecastHours, formatLoadSlots, LOAD_FORECAST_HOURS } = await import('../services/forecast/load-forecast.js');
+  assert.equal(LOAD_FORECAST_HOURS, 72);
+  assert.equal(loadForecastHours({}), 72);
+  assert.equal(loadForecastHours({ optimizer: { eosPredictionHours: 60 } }), 72);
+  assert.equal(loadForecastHours({ optimizer: { eosPredictionHours: 120 } }), 121);
+  assert.equal(loadForecastHours({ optimizer: { eosPredictionHours: 500 } }), 169);
+  const rows = Array.from({ length: 24 }, (_, h) => ({ hour_of_day: h, avg_power_w: 400 + h, sample_count: '28' }));
+  assert.equal(formatLoadSlots(rows, 800, new Date()).length, 72);
+  assert.equal(formatLoadSlots(rows, 800, new Date(), 121).length, 121);
 });

@@ -92,8 +92,31 @@ export function computeLoadConfidence(sampleCount) {
   return 0.85;
 }
 
+/** Standard-Länge der Lastprognose (Stunden ab der vollen Stunde). */
+export const LOAD_FORECAST_HOURS = 72;
+/** Längste Lastprognose: längster wählbarer EOS-Prognosehorizont (168 h) + 1 h. */
+export const LOAD_FORECAST_MAX_HOURS = 169;
+
 /**
- * Format SQL result rows into 72 x 1h forecast slots.
+ * Wie weit die Lastprognose reicht (1.0.11): Standard 72 h. Wählt man einen
+ * EOS-Prognosehorizont über 72 h (optimizer.eosPredictionHours, für den
+ * Preisschwanz aus der Residuallast-Prognose), reicht sie so weit — plus 1 h,
+ * weil sie zur vollen Stunde beginnt. Sonst kürzte EOS den Schwanz an der Last
+ * („limited by load“). Hinter dem ersten Tag ist das ohnehin das wiederholte
+ * Tagesprofil (SQL-Weg) bzw. die StatsForecast-Fortschreibung.
+ */
+export function loadForecastHours(cfg) {
+  const opt = cfg?.optimizer || {};
+  let p = Math.floor(Number(opt.eosPredictionHours));
+  // Steuerzeitraum „bis in die Preisprognose“ ohne festen Prognosehorizont:
+  // EOS liest dann bis 168 h (eos-forecast-bridge resolveEosPredictionHours).
+  if (!(p > 0) && String(opt.eosControlHorizonMaxHours).trim().toLowerCase() === 'forecast') p = LOAD_FORECAST_MAX_HOURS - 1;
+  if (!Number.isFinite(p) || p <= LOAD_FORECAST_HOURS) return LOAD_FORECAST_HOURS;
+  return Math.min(LOAD_FORECAST_MAX_HOURS, p + 1);
+}
+
+/**
+ * Format SQL result rows into 72 x 1h forecast slots (slotCount, loadForecastHours).
  * Falls back to constant defaultPowerW when fewer than 7 unique hours have data (cold-start).
  * Exported for testability.
  * @param {Array<{hour_of_day: number, avg_power_w: number, sample_count: string}>} sqlRows
@@ -101,8 +124,8 @@ export function computeLoadConfidence(sampleCount) {
  * @param {Date} now - current time reference
  * @returns {Array<{ts_utc: string, power_w: number, confidence: number}>}
  */
-export function formatLoadSlots(sqlRows, defaultPowerW, now) {
-  const SLOT_COUNT = 72;
+export function formatLoadSlots(sqlRows, defaultPowerW, now, slotCount = LOAD_FORECAST_HOURS) {
+  const SLOT_COUNT = Math.max(1, Math.floor(Number(slotCount)) || LOAD_FORECAST_HOURS);
   const isColdStart = sqlRows.length < 7;
 
   // Build hour -> power map from SQL results
@@ -282,7 +305,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
       const scriptPath = path.join(SCRIPTS_DIR, 'load_forecast_sf.py');
       const sfResult = await pythonBridge.call(scriptPath, {
         history,
-        horizon: 72,
+        horizon: loadForecastHours(cfg),
         use_mstl: cfg.ml?.sfUseMstl ?? false
       }, 120000); // 2 min timeout
 
@@ -338,7 +361,7 @@ export function createLoadForecast(ctx, { store, vrmForecast, pythonBridge }) {
     const result = await getDb().query(sql, [new Date().toISOString()]);
     const sqlRows = result.rows;
     const now = new Date();
-    const slots = formatLoadSlots(sqlRows, defaultPowerW, now);
+    const slots = formatLoadSlots(sqlRows, defaultPowerW, now, loadForecastHours(getCfg()));
     const confidence = slots.length > 0 ? slots[0].confidence : 0.3;
     const sqlColdStart = confidence === 0.3 || sqlRows.length < 7;
     const hoursWithData = sqlRows.length;

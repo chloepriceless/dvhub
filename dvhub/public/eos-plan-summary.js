@@ -140,7 +140,11 @@
     const evDeadline = c && c.reason === 'ev_deadline' && Number.isFinite(Date.parse(c.estimatedFrom))
       ? { estimatedFrom: Date.parse(c.estimatedFrom), at: Date.parse(c.deadline && c.deadline.at), covered: c.deadlineCovered !== false }
       : null;
-    const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis, evDeadline };
+    // Steuerzeitraum bis in die Preisprognose (1.0.11): Vorschau über mehrere Tage.
+    const forecastPlan = c && c.reason === 'price_forecast' && Number.isFinite(Date.parse(c.estimatedFrom))
+      ? { estimatedFrom: Date.parse(c.estimatedFrom) }
+      : null;
+    const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis, evDeadline, forecastPlan };
     const rows = raw
       .map((r) => ({ ...r, ts: Date.parse(r && r.ts_utc) }))
       .filter((r) => Number.isFinite(r.ts))
@@ -241,9 +245,11 @@
   }
 
   const REASON_TEXT = { eos_off: 'EOS ist aus', eos_not_answering: 'EOS antwortet nicht' };
-  const ESTIMATED_HELP = 'Die echten Börsenpreise enden hier. Bis zur Abfahrt des E-Autos rechnet EOS mit geschätzten Preisen, '
-    + 'damit das Auto nicht schon vor Mitternacht teuer geladen wird. Sobald die echten Preise da sind (gegen 13 Uhr), '
-    + 'rechnet EOS neu. Aus Slots mit geschätzten Preisen setzt DVhub keine Akku-Regeln um.';
+  const ESTIMATED_HELP = 'Die festen Börsenpreise enden hier. Bis zur Abfahrt des E-Autos rechnet EOS mit der Preisprognose von dvhub.online, '
+    + 'damit das Auto nicht schon vor Mitternacht teuer geladen wird. Sobald die festen Preise da sind (gegen 13 Uhr), '
+    + 'rechnet EOS neu. Aus Slots mit Prognosepreisen setzt DVhub keine Akku-Regeln um.';
+  const FORECAST_HELP = 'Die festen Börsenpreise enden hier. Dahinter plant EOS mit der Preisprognose von dvhub.online — eine Vorschau. '
+    + 'Umgesetzt wird nur, was auf festen Preisen liegt; alle 15 Minuten rechnet EOS neu.';
 
   function view(s) {
     if (!s || !s.available) {
@@ -255,11 +261,11 @@
       if (!d || d.empty) return { head: missing, headTitle: '', export: null, import: null, peak: null, exportTitle: '', importTitle: '' };
       let est = '';
       if (d.estimatedFrom !== null && d.estimatedFrom !== undefined) {
-        est = d.estimatedFrom <= d.from ? ' · Preise geschätzt' : ` · Preise ab ${time(d.estimatedFrom)} geschätzt`;
+        est = d.estimatedFrom <= d.from ? ' · Preisprognose' : ` · ab ${time(d.estimatedFrom)} Preisprognose`;
       }
       return {
         head: `${label}${d.complete ? '' : ` bis ${time(d.until)}`}${est}`,
-        headTitle: est ? ESTIMATED_HELP : '',
+        headTitle: est ? (s.forecastPlan ? FORECAST_HELP : ESTIMATED_HELP) : '',
         export: exportLine(d.export, s.feedInBasis),
         import: importLine(d.import, time),
         peak: peakLine(d.peak),
@@ -276,11 +282,13 @@
       const reach = s.evDeadline.covered || !Number.isFinite(s.evDeadline.planEnd)
         ? `Plan reicht bis zur Abfahrt des E-Autos${at}`
         : `Plan reicht Richtung Abfahrt des E-Autos${at}, aber nur bis ${time(s.evDeadline.planEnd)}`;
-      notes.push(`${reach} — ab ${time(s.evDeadline.estimatedFrom)} mit geschätzten Preisen`);
+      notes.push(`${reach} — ab ${time(s.evDeadline.estimatedFrom)} mit Preisprognose`);
+    } else if (s.forecastPlan) {
+      notes.push(`Plan reicht bis in die Preisprognose (ab ${time(s.forecastPlan.estimatedFrom)}) — Vorschau, umgesetzt wird nur mit festen Preisen`);
     }
     return {
       note: notes.join(' · '),
-      noteTitle: s.evDeadline ? ESTIMATED_HELP : '',
+      noteTitle: s.evDeadline ? ESTIMATED_HELP : (s.forecastPlan ? FORECAST_HELP : ''),
       today: day(s.today, 'Heute ab jetzt', 'Heute: kein Plan mehr ab jetzt'),
       tomorrow: day(s.tomorrow, 'Morgen', 'Morgen: noch nicht im Plan'),
     };

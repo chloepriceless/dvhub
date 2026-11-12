@@ -12,6 +12,39 @@ verweist hierher.
 
 ### Neu
 
+- **1.0.11: Preisschwanz für EOS aus der Residuallast-Prognose von dvhub.online.** Hinter den festen
+  Börsenpreisen rechnet EOS jetzt mit der Preisprognose von dvhub.online (`/v1/residual-load/outlook`). Die
+  Prognose entsteht aus Wetter, Wind, Sonne und Verbrauch. Sie liefert fünf Tage hinter dem letzten bekannten
+  Börsentag je Stunde P10/P50/P90 für DE-LU, im Rückblick mit Fehler 19–28 statt 26–39 €/MWh.
+  - DVhub nimmt P50, je Viertelstunde den Stundenwert. Feste Day-Ahead-Preise haben immer Vorrang.
+  - Bezug und Einspeisung entstehen auf demselben Weg wie für feste Preise: Tarif, Anbieterpreis, Netzentgelte,
+    Marktprämie.
+  - Abruf 10 min nach den vier täglichen Läufen, mit Frist. Die Kennung enthält nur Programm und Version.
+  - Die letzte gültige Prognose liegt auf der Platte (`price_outlook_cache.json`) und gilt bis 48 h nach ihrer
+    Ausgabe weiter, auch nach einem Neustart. Danach gibt es keinen Schwanz mehr: EOS plant nur über die festen
+    Preise. Der Steuerzeitraum bleibt dabei gleich, und der Lauf geht.
+  - Leitstand und Integrationen zeigen „Preisprognose nicht verfügbar seit …“.
+  - Nur Preiszone DE-LU und nur mit Preisquelle dvhub.online bzw. LUOX. Andere Zonen und „Öffentlich
+    (Energy-Charts)“ haben keinen Schwanz mehr (siehe Geändert).
+
+  Neue Lese-Schnittstelle `GET /api/price/outlook`. `GET /api/eos/plan` liefert zusätzlich `priceTail` und je
+  Zeile `priceSource`. Ausführlich: `docs/PREISPROGNOSE-EOS.md`.
+
+- **1.0.11: Tage im Voraus planen.**
+  - Den EOS-Prognosehorizont gibt es zusätzlich mit 96, 120 und 144 h. DVhub fordert dann bei EOS den passenden
+    Schwanz an (`tail_horizon_hours`) und verlängert die Lastprognose mit.
+  - Neu beim Steuerzeitraum ist „Bis in die Preisprognose“: EOS plant bis 120 h Slot für Slot, so weit Preise, PV
+    und Last reichen. Umgesetzt wird nur, was auf festen Preisen liegt.
+  - Gemessene Rechenzeit (Rust-Kern) beim Steuerzeitraum 72 / 96 / 120 h: 2,2- / 3,1- / 3,6- bis 4-mal so lang wie
+    bei 30 h. Ein längerer Schwanz kostet fast nichts.
+  - Die EOS-Karte zeigt, wie weit EOS vorausschaut und ob PV-, Verbrauchs- oder Preisprognose das begrenzt.
+  - Standards bleiben: Prognosehorizont automatisch 72 h, Steuerzeitraum ganzer bekannter Preiszeitraum.
+
+- **1.0.11: Preisprognose in der Leitstand-Preiskurve.** Hinter den festen Börsenpreisen erscheint bis jetzt + 36 h
+  eine gestrichelte „Preisprognose“ mit einem hellen Band P10–P90 und dem Bereich „Prognose“. Der Tooltip zeigt ganze
+  Cent mit Spanne. Prognose-Slots lassen sich nicht für Zeitpläne auswählen. Im EOS-Fahrplan und unter „Laut
+  EOS-Plan“ heißt der Bereich hinter den festen Preisen jetzt „Preisprognose“ statt „Preise geschätzt“.
+
 - **Oberfläche lädt nach einem Update selbst neu.** Eine offene Seite — besonders die Home-Screen-Webapp — erkennt
   eine neue DVhub-Version und lädt neu, statt bis zum Schließen den alten Stand zu zeigen (Anlass: nach einem Update
   fehlte in der offenen Webapp der E-Auto-Wochenplan). Der Server hängt an jede JSON-Antwort die Build-Kennung der
@@ -298,6 +331,15 @@ verweist hierher.
   Shaving eine Sperre aufgehoben hat; nur bei Victron.
 
 ### Geändert
+
+- **1.0.11: Holt-Winters-Fortschreibung für den EOS-Schwanz entfällt.** Der Preisschwanz kommt nur noch aus der
+  Residuallast-Prognose (siehe Neu). **Folge für andere Preiszonen als DE-LU und für die Preisquelle „Öffentlich
+  (Energy-Charts)“:** Diese Anlagen hatten bis 1.0.10 einen geschätzten Schwanz und haben jetzt keinen. EOS plant
+  dort nur so weit, wie Börsenpreise feststehen, wie vor dem 01.11.2026. Die Hilfe zu Preiszone und Preisquelle sagt
+  das.
+
+  Holt-Winters (`price-estimate.js`) bleibt nur für die Wertgrundlage des E-Autos („Max-Ladestand wenn günstig“, bis
+  9,5 Tage voraus). Konfigurationsfelder gab es dafür nicht.
 
 - **EOS: DVhub-EOS statt Vanilla v0.4.0rc3** (T-0415, Christin 11.11.2026). DVhub liefert nativ und im Docker-Image das
   DVhub-EOS aus: Akkudoktor-EOS `main` plus die offenen PRs, die DVhub braucht (Netzbezugsgrenze und

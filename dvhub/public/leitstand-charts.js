@@ -1516,8 +1516,53 @@
     el.hidden = !text;
   }
 
+  // Preisschwanz (1.0.11): Zeile unter dem EOS-Fahrplan — wie weit EOS
+  // vorausschaut, woher die Preise hinter den festen Börsenpreisen kommen und,
+  // ohne Prognose, seit wann sie fehlt. Nur textContent.
+  var EOS_LIMITED_BY = { pv: 'PV-Prognose', load: 'Verbrauchsprognose', prices: 'Preisprognose', prediction: 'eingestellten Prognosehorizont' };
+  var EOS_TAIL_OFF = {
+    zone: 'Preisprognose gibt es nur für die Preiszone DE-LU — EOS plant bis zum Ende der festen Börsenpreise.',
+    source_public: 'Preisquelle „Öffentlich“: keine Preisprognose von dvhub.online — EOS plant bis zum Ende der festen Börsenpreise.',
+    prices_off: 'Börsenpreise sind abgeschaltet.'
+  };
+  function eosTailTime(iso) {
+    var d = iso ? new Date(iso) : null;
+    return d && !isNaN(d.getTime()) ? d.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  }
+  function eosPriceTailText(tail) {
+    if (!tail) return { text: '', warn: false };
+    var look = tail.lookahead || null;
+    var reach = look && look.until
+      ? 'EOS schaut voraus bis ' + eosTailTime(look.until) + (look.limitedBy && look.limitedBy !== 'prediction' && EOS_LIMITED_BY[look.limitedBy] ? ' (begrenzt durch ' + EOS_LIMITED_BY[look.limitedBy] + ')' : '')
+      : '';
+    if (tail.used) {
+      var src = 'Preise ab ' + eosTailTime(tail.from) + ': Prognose dvhub.online, Stand ' + eosTailTime(tail.issuedAt)
+        + (tail.status === 'cached' ? ' (gespeichert, neue nicht abrufbar)' : '');
+      return { text: [reach, src].filter(Boolean).join(' · '), warn: tail.status === 'cached' };
+    }
+    if (tail.status === 'off') return { text: EOS_TAIL_OFF[tail.reason] || '', warn: false };
+    if (tail.status === 'unavailable') {
+      return {
+        text: 'Preisprognose nicht verfügbar' + (tail.unavailableSince ? ' seit ' + eosTailTime(tail.unavailableSince) : '')
+          + ' — EOS plant nur bis zum Ende der festen Börsenpreise' + (tail.realUntil ? ' (' + eosTailTime(tail.realUntil) + ')' : '') + '.',
+        warn: true
+      };
+    }
+    return { text: reach, warn: false };
+  }
+  function renderEosPriceTail(eos) {
+    var el = document.getElementById('eosPriceTail');
+    if (!el) return;
+    var r = eosPriceTailText(eos && eos.priceTail);
+    el.textContent = r.text;
+    el.hidden = !r.text;
+    el.className = 'eos-price-tail' + (r.warn ? ' is-warn' : '');
+  }
+  if (typeof window !== 'undefined') window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, { eosPriceTailText: eosPriceTailText });
+
   function renderEosPlanChart(eos) {
     renderEosRemoteInfo(eos && eos.remote ? eos.remote : null);
+    renderEosPriceTail(eos);
     var canvas = document.getElementById('eosPlanChart');
     var skeleton = document.getElementById('eosPlanSkeleton');
     var subtitle = document.getElementById('eosPlanSubtitle');
@@ -1585,12 +1630,19 @@
         afterBuildTicks: function (axis) {
           var d = new Date(axis.min); d.setMinutes(0, 0, 0);
           if (d.getTime() < axis.min) d.setHours(d.getHours() + 1);
-          var step = 3 * 3600000, ticks = [];
+          // Mehrtägiger Plan (Steuerzeitraum bis in die Preisprognose): weitere Abstände.
+          var span = axis.max - axis.min;
+          var step = (span > 72 * 3600000 ? 12 : span > 40 * 3600000 ? 6 : 3) * 3600000, ticks = [];
           for (var t = d.getTime(); t <= axis.max; t += step) ticks.push({ value: t });
           axis.ticks = ticks;
         },
         ticks: { maxRotation: 0, color: _aur('--chart-axis', '#5a6a8a'), font: { family: 'JetBrains Mono', size: 10 },
-          callback: function (v) { return new Date(v).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); } }
+          callback: function (v) {
+            var d = new Date(v);
+            // Über 40 h: Mitternacht mit Wochentag, sonst nur die Uhrzeit.
+            if (xmax - xmin > 40 * 3600000 && d.getHours() === 0) return d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
+            return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+          } }
       },
       kw: {
         position: 'left', beginAtZero: true,
@@ -1627,7 +1679,7 @@
       options.plugins.annotation.annotations.estimatedPrices = {
         type: 'box', xMin: Math.max(estFromMs, xmin), xMax: xmax,
         backgroundColor: _aurA('--text-dim', 0.10, 'rgba(140,150,170,0.10)'), borderWidth: 0,
-        label: { display: true, content: 'Preise geschätzt', position: { x: 'start', y: 'start' },
+        label: { display: true, content: 'Preisprognose', position: { x: 'start', y: 'start' },
           color: _aur('--text-2', '#8b95a8'), font: { size: 10 } }
       };
     }
@@ -1656,14 +1708,18 @@
     }
     if (subtitle && output.validFrom && output.validUntil) {
       var fmtHm = function (d) { return new Date(d).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); };
-      var text = fmtHm(output.validFrom) + ' → ' + fmtHm(output.validUntil) + ' · ' + (Number(output.slotMinutes) || 15) + '-Min';
+      var multiDay = new Date(output.validUntil).getTime() - new Date(output.validFrom).getTime() > 24 * 3600000;
+      var text = fmtHm(output.validFrom) + ' → ' + (multiDay ? eosTailTime(output.validUntil) : fmtHm(output.validUntil)) + ' · ' + (Number(output.slotMinutes) || 15) + '-Min';
       if (output.generatedAt) text += ' · gerechnet ' + fmtHm(output.generatedAt);
       // Steuerzeitraum bis zur Abfahrt des E-Autos in geschätzte Preise (1.0.10).
       var ctl = eos.control;
       if (ctl && ctl.reason === 'ev_deadline' && ctl.estimatedFrom) {
         var depText = ctl.deadline && ctl.deadline.at ? ' ' + fmtHm(ctl.deadline.at) : '';
         text += (ctl.deadlineCovered === false ? ' · Richtung Abfahrt E-Auto' + depText + ' (nicht ganz erreicht)' : ' · bis Abfahrt E-Auto' + depText)
-          + ', ab ' + fmtHm(ctl.estimatedFrom) + ' geschätzte Preise';
+          + ', ab ' + fmtHm(ctl.estimatedFrom) + ' Preisprognose';
+      } else if (ctl && ctl.reason === 'price_forecast' && ctl.estimatedFrom) {
+        // Steuerzeitraum bis in die Preisprognose (1.0.11): umgesetzt wird nur der Teil mit festen Preisen.
+        text += ' · bis in die Preisprognose (ab ' + eosTailTime(ctl.estimatedFrom) + ', nur Vorschau)';
       }
       // Nach einem EOS-Neustart bleibt der letzte Plan sichtbar, bis EOS neu gerechnet hat.
       if (eos.plan && eos.plan.current === false) text += ' · EOS rechnet neu';

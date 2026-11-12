@@ -1,7 +1,13 @@
 // services/optimizer/price-estimate.js — Börsenpreise über die bekannten
-// Day-Ahead-Preise hinaus schätzen, damit EOS seinen Prognose-Schwanz (tail)
-// nicht auf eine halbe Stunde kürzt.
+// Day-Ahead-Preise hinaus per Holt-Winters fortschreiben.
 //
+// Stand 1.0.11: Für den EOS-Prognose-Schwanz NICHT mehr genutzt — der kommt
+// aus der Residuallast-Prognose von dvhub.online (price-outlook.js, Christin
+// 12.11.2026). Einziger verbliebener Nutzer ist die Wertgrundlage des E-Autos
+// (ev-targets.js buildEvValueInputs, bis 9,5 Tage voraus, weiter als die
+// Prognose reicht); ob sie umgestellt wird, entscheidet Christin.
+//
+// Ursprung (bis 1.0.10 auch der Schwanz):
 // Christin 01.11.2026: DVhub schickt EOS Bezugs- und Einspeisepreise über die
 // Import-Provider. Vormittags enden die bekannten Preise um Mitternacht; EOS
 // kürzt dann den Schwanz („Tail forecast shortened: requested 48 h, effective
@@ -23,8 +29,12 @@
 // bekannten Slot, der nächste Push mit echten Preisen ersetzt die Schätzung.
 
 import { zoneOffsetMs } from '../../tz-fast.js';
+// Seit 1.0.11 kommt der EOS-Preisschwanz aus der Residuallast-Prognose
+// (price-outlook.js). Holt-Winters dient nur noch der Wertgrundlage des
+// E-Autos (ev-targets.js, bis 9,5 Tage voraus) — siehe eos-forecast-bridge.js.
+import { SLOT_MS, MIN_REAL_AHEAD_MS, realPriceCoverage } from './price-outlook.js';
 
-export const SLOT_MS = 15 * 60 * 1000;
+export { SLOT_MS, MIN_REAL_AHEAD_MS, realPriceCoverage };
 const DAY_SLOTS = 96;
 const WEEK_SLOTS = 7 * DAY_SLOTS;
 /** Höchstens so viel Historie (Tage) geht in die Anpassung. */
@@ -32,12 +42,6 @@ export const HISTORY_DAYS = 28;
 /** Unter zwei Tagen Historie wird nicht geschätzt. */
 export const MIN_HISTORY_SLOTS = 2 * DAY_SLOTS;
 export const OUTLIER_SIGMA = 2;
-/**
- * So weit müssen echte Preise mindestens voraus reichen, damit geschätzt wird:
- * EOS' Steuerzeitraum ist mindestens 1 h (computeControlHorizonHours), dazu
- * 15 min Puffer — sonst lägen Schätzwerte im Steuerzeitraum.
- */
-export const MIN_REAL_AHEAD_MS = 75 * 60 * 1000;
 
 const ALPHAS = [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5];
 const GAMMAS = [0, 0.02, 0.05, 0.1, 0.2, 0.3];
@@ -162,23 +166,6 @@ export function forecastSpotPrices(points, lastMs, steps, { sigma = OUTLIER_SIGM
 
 function round2(v) {
   return Math.round((v + Number.EPSILON) * 100) / 100;
-}
-
-/**
- * Ende der echten Preise (ms, exklusiv) und ihre Slot-Länge. Die Länge kommt
- * aus den Daten (kleinster Abstand), damit Stundenpreise nicht als
- * Viertelstunden gelten. Ohne gültige Slots: end = -Infinity.
- */
-export function realPriceCoverage(priceSlots) {
-  const starts = [...new Set((Array.isArray(priceSlots) ? priceSlots : [])
-    .filter((s) => s && Number.isFinite(Number(s.ctKwh)))
-    .map((s) => Date.parse(s.start))
-    .filter(Number.isFinite))].sort((a, b) => a - b);
-  if (!starts.length) return { end: -Infinity, stepMs: SLOT_MS };
-  let stepMs = Infinity;
-  for (let i = 1; i < starts.length; i += 1) stepMs = Math.min(stepMs, starts[i] - starts[i - 1]);
-  if (!Number.isFinite(stepMs) || stepMs <= 0) stepMs = SLOT_MS;
-  return { end: starts[starts.length - 1] + stepMs, stepMs };
 }
 
 /**

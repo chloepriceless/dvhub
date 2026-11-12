@@ -209,6 +209,7 @@ import { createGridShareTracker } from './services/optimizer/grid-share.js';
 import { createGridSharePollTick } from './services/optimizer/grid-share-poll.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
+import { createPriceOutlookService } from './services/optimizer/price-outlook.js';
 import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
 import { createOptimizerService } from './services/optimizer/index.js';
 import { createOptimizerRuleStore, optimizerRulesPath, readOptimizerRules, createScheduleRuleStore, scheduleRulesPath, readScheduleRules } from './services/optimizer/rule-store.js';
@@ -2056,6 +2057,16 @@ ctx.getSolarMarketValueSummary = ({ year }) =>
   energyChartsMarketValueService?.getSolarMarketValueSummary?.({ year });
 ctx.getApplicableValueSummary = ({ year, pvPlants }) =>
   applicableValueService?.getApplicableValueSummary?.({ year, pvPlants });
+// Preisschwanz für EOS (1.0.11): Residuallast-Prognose von dvhub.online,
+// letzte gültige auf der Platte (übersteht Neustarts, höchstens 48 h alt).
+// Kennung ohne persönliche Daten: nur Programm und Version.
+ctx.priceOutlook = createPriceOutlookService({
+  getCfg: () => cfg,
+  cacheFile: path.join(DATA_DIR || __dirname, 'price_outlook_cache.json'),
+  pushLog,
+  userAgent: `DVhub/${String(APP_VERSION?.version || 'unknown').replace(/[^0-9A-Za-z.+-]/g, '')} (price-outlook)`,
+});
+ctx.priceOutlook.start();
 const eosForecastBridge = createEosForecastBridge(ctx);
 // Nur noch fuer optimizer.eosStartAfterPreviousRun (EOS rechnet nach eigenem
 // Takt): dann liest EOS den SoC aus Messwerten und verlangt ihn hoechstens
@@ -3202,6 +3213,7 @@ async function gracefulShutdown(signal) {
   safeSync('mypvRegulator.stop', () => { mypvRegulator.stop?.().catch?.(() => {}); });
   safeSync('evDepartureTimer.stop', () => clearInterval(evDepartureTimer));
   safeSync('eosFreshSocTimer.stop', () => clearInterval(eosFreshSocTimer));
+  safeSync('priceOutlook.stop', () => ctx.priceOutlook?.stop());
   // C2 (2026-07-02, Realitätscheck der alten Worklist 7.7): evcc/license/
   // monitoring-Heartbeat räumen ihre Timer bereits sauber auf (siehe oben +
   // licenseService.close() unten) — das war stale. Echter Rest-Gap: der

@@ -144,3 +144,6 @@ tests/node_modules
 
 # Rust-Kern-Wheels der CI (container*.yml, scripts/eos-native-wheels.sh fetch)
 /.eos-wheels/
+# Preisprognose-Zwischenspeicher (1.0.11, price-outlook.js) ohne DV_DATA_DIR
+price_outlook_cache.json
+price_outlook_cache.json.tmp

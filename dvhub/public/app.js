@@ -711,8 +711,71 @@ function createScheduleRowsFromChartSelection(indices = getSelectedChartIndices(
 }
 
 let priceChartInstance = null;
+/** Letzte Antwort von /api/price/outlook (für die Zeile unter der Preiskurve). */
+let lastPriceOutlook = null;
 
-function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = [], sunTimes = null, optimizerSlotTimestamps = []) {
+/**
+ * Zeile unter der Preiskurve: Stand der festen Börsenpreise und — seit 1.0.11 —
+ * der Preisprognose (bis wann, Stand, oder seit wann sie fehlt).
+ */
+function priceChartMetaText(status, outlook) {
+  const epd = status?.epex?.data || [];
+  const distinctDays = Array.from(new Set(epd.map((r) => r.day).filter(Boolean))).sort();
+  const daysLabel = distinctDays.length
+    ? distinctDays.map((d) => d.slice(5)).join(' + ')
+    : '—';
+  const tomorrowHint = (distinctDays.length < 2 && status?.epex?.nextDate)
+    ? ` · Morgen (${status.epex.nextDate.slice(5)}) wird nach EPEX-Clearing ~13:00 verfügbar`
+    : '';
+  let text = `EPEX Update: ${fmtTs(status?.epex?.updatedAt)} | ${epd.length} Slots · ${daysLabel}${tomorrowHint}`;
+  const o = outlook;
+  const dm = (iso) => {
+    const d = new Date(iso);
+    return Number.isFinite(d.getTime()) ? d.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+  };
+  if (o && (o.status === 'live' || o.status === 'cached') && Array.isArray(o.hours) && o.hours.length) {
+    const last = o.hours[o.hours.length - 1];
+    text += ` | Preisprognose (gestrichelt) liegt vor bis ${dm(Number(last.ts) + 3600000)}, Stand ${dm(o.issuedAt)}${o.status === 'cached' ? ' (gespeichert, neue nicht abrufbar)' : ''}`;
+  } else if (o && o.status === 'unavailable' && o.unavailableSince) {
+    text += ` | Preisprognose nicht verfügbar seit ${dm(o.unavailableSince)}`;
+  }
+  return text;
+}
+
+/**
+ * Prognose-Zeilen für die Preiskurve (1.0.11): Stunden aus /api/price/outlook
+ * hinter dem letzten festen Preis, im Raster der festen Preise (15 oder 60 min),
+ * bis jetzt + 36 h. Preise in ct/kWh (Börse).
+ * @returns {Array<{ts:number, ct_kwh:null, forecast:true, p50:number, p10:number|null, p90:number|null}>}
+ */
+function buildPriceForecastRows(realData, outlook, nowTs) {
+  const hours = Array.isArray(outlook?.hours) ? outlook.hours : [];
+  if (!hours.length || !Array.isArray(realData) || !realData.length || !Number.isFinite(Number(nowTs))) return [];
+  const ts = realData.map((d) => Number(d.ts)).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!ts.length) return [];
+  let stepMs = Infinity;
+  for (let i = 1; i < ts.length; i += 1) stepMs = Math.min(stepMs, ts[i] - ts[i - 1]);
+  if (!Number.isFinite(stepMs) || stepMs <= 0 || stepMs > 3600000) stepMs = 900000;
+  const realEnd = ts[ts.length - 1] + stepMs;
+  const winTo = Number(nowTs) + 36 * 3600000;
+  const byHour = new Map(hours.map((h) => [Number(h.ts), h]));
+  const out = [];
+  for (let t = realEnd; t < winTo; t += stepMs) {
+    const h = byHour.get(t - (t % 3600000));
+    if (!h || !Number.isFinite(Number(h.p50))) break; // Lücke: Prognose endet
+    out.push({
+      ts: t,
+      ct_kwh: null,
+      forecast: true,
+      p50: Number(h.p50),
+      p10: Number.isFinite(Number(h.p10)) && h.p10 !== null ? Number(h.p10) : null,
+      p90: Number.isFinite(Number(h.p90)) && h.p90 !== null ? Number(h.p90) : null
+    });
+  }
+  return out;
+}
+
+function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = [], sunTimes = null, optimizerSlotTimestamps = [], priceOutlook = null) {
   const canvas = document.getElementById('priceChartCanvas');
   const container = document.getElementById('priceChartContainer');
   const tooltip = document.getElementById('tooltip');
@@ -760,7 +823,15 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       return Number.isFinite(ts) && ts >= _winFrom && ts < _winTo;
     });
   }
-  chartSelectionState.data = Array.isArray(data) ? data : [];
+  // Preisprognose (1.0.11, /api/price/outlook): hinter den festen Börsenpreisen
+  // bis jetzt + 36 h als eigene, gestrichelte Reihe mit Band P10–P90. Die
+  // Prognose-Zeilen hängen hinten an `data` (forecast: true, ct_kwh null) —
+  // auswählen lassen sie sich nicht, Zeitpläne entstehen nur aus festen Preisen.
+  const realData = Array.isArray(data) ? data : [];
+  const realCount = realData.length;
+  const fcRows = buildPriceForecastRows(realData, priceOutlook, nowTs);
+  if (fcRows.length) data = realData.concat(fcRows);
+  chartSelectionState.data = realData;
   chartSelectionState.barElements = [];
   chartSelectionState.hoveredIndex = null;
   chartSelectionState.pointerDown = false;
@@ -818,11 +889,12 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   const automationSlots = new Set((automationSlotTimestamps || []).map(Number));
   const userSlots = new Set((userSlotTimestamps || []).map(Number));
   const optimizerSlots = new Set((optimizerSlotTimestamps || []).map(Number));
-  const vals = data.map((d) => Number(d.ct_kwh) / 100);
-  const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals, { timestamps: data.map((d) => d.ts) });
+  // Hoch-/Tiefpunkte nur aus festen Preisen (Prognose-Zeilen hängen hinten an).
+  const vals = realData.map((d) => Number(d.ct_kwh) / 100);
+  const { high: highHighlights, low: lowHighlights } = getChartHighlightSets(vals, { timestamps: realData.map((d) => d.ts) });
 
   const labels = data.map(d => new Date(d.ts));
-  const prices = data.map(d => Number(d.ct_kwh));
+  const prices = data.map(d => (d.forecast ? null : Number(d.ct_kwh)));
   const importPrices = data.map(d => {
     const c = comparisonByTs.get(Number(d.ts));
     const v = Number(c?.importPriceCtKwh);
@@ -917,6 +989,60 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       order: 2
     }
   ];
+
+  // Preisprognose: P50 gestrichelt (beginnt am letzten festen Preis, damit die
+  // Linie anschließt), darunter das Band P10–P90 — „so ungefähr“, keine
+  // Scheingenauigkeit.
+  if (fcRows.length) {
+    const p50 = data.map((d, i) => (d.forecast ? d.p50 : (i === realCount - 1 ? Number(d.ct_kwh) : null)));
+    const hasBand = fcRows.some((r) => r.p10 != null && r.p90 != null);
+    datasets.push({
+      label: 'Preisprognose',
+      type: 'line',
+      data: p50,
+      borderColor: hexToRgba(chartPositive, 0.75),
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+      borderDash: [6, 4],
+      pointRadius: 0,
+      pointHoverRadius: 3,
+      tension: 0,
+      fill: false,
+      spanGaps: false,
+      yAxisID: 'y',
+      order: 2
+    });
+    if (hasBand) {
+      datasets.push({
+        label: '',
+        type: 'line',
+        data: data.map((d) => (d.forecast ? d.p10 : null)),
+        borderColor: 'transparent',
+        backgroundColor: 'transparent',
+        borderWidth: 0,
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        fill: false,
+        spanGaps: false,
+        yAxisID: 'y',
+        order: 3
+      });
+      datasets.push({
+        label: 'Prognose-Spanne',
+        type: 'line',
+        data: data.map((d) => (d.forecast ? d.p90 : null)),
+        borderColor: 'transparent',
+        backgroundColor: hexToRgba(chartPositive, 0.12),
+        borderWidth: 0,
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        fill: '-1',
+        spanGaps: false,
+        yAxisID: 'y',
+        order: 3
+      });
+    }
+  }
 
   if (hasImport) {
     datasets.push({
@@ -1261,7 +1387,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             color: chartLabel,
             font: { size: 11 },
             usePointStyle: true,
-            padding: 16
+            padding: 16,
+            // Untere Kante des Prognose-Bands hat keinen eigenen Eintrag.
+            filter: (item) => !!item.text
           }
         },
         tooltip: {
@@ -1276,7 +1404,15 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             const row = data[idx];
             if (!row) { tt.style.display = 'none'; return; }
             const parts = [fmtDmHm(row.ts)];
-            parts.push(`Börse: ${fmtCt(row.ct_kwh, 2)}`);
+            if (row.forecast) {
+              // Prognose: ganze Cent, mit Spanne — keine Scheingenauigkeit.
+              const r0 = (v) => Math.round(Number(v));
+              parts.push(`Prognose: ≈ ${r0(row.p50)} ct/kWh`);
+              if (row.p10 != null && row.p90 != null) parts.push(`Spanne: ${r0(row.p10)}–${r0(row.p90)} ct/kWh`);
+              parts.push('Börsenpreis noch nicht fest');
+            } else {
+              parts.push(`Börse: ${fmtCt(row.ct_kwh, 2)}`);
+            }
             const comp = comparisonByTs.get(Number(row.ts));
             if (comp) {
               if (comp.importPriceCtKwh != null) parts.push(`Bezug: ${fmtCt(comp.importPriceCtKwh, 2)}`);
@@ -1322,6 +1458,23 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
         },
         annotation: {
           annotations: {
+            ...(fcRows.length ? {
+              priceForecastZone: {
+                type: 'box',
+                xMin: realCount - 0.5,
+                xMax: data.length - 0.5,
+                backgroundColor: hexToRgba(chartAxis, 0.06),
+                borderWidth: 0,
+                drawTime: 'beforeDatasetsDraw',
+                label: {
+                  display: true,
+                  content: 'Prognose',
+                  position: { x: 'start', y: 'start' },
+                  color: chartLabel,
+                  font: { size: 10 }
+                }
+              }
+            } : {}),
             ...slotOverlayAnnotations,
             ...dayBoundaryAnnotations,
             ...negWindowAnnotations,
@@ -1578,6 +1731,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     if (!elements.length) return;
     const idx = elements[0].index;
     if (idx < 0 || idx >= data.length) return;
+    if (data[idx]?.forecast) return; // Prognose: nicht auswählbar
     // Capture so we keep getting pointermove/up even if finger leaves canvas
     try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ }
     e.preventDefault();
@@ -1600,6 +1754,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     if (!elements.length) return;
     const idx = elements[0].index;
     if (idx < 0 || idx >= data.length) return;
+    if (data[idx]?.forecast) return; // Prognose: nicht auswählbar
     chartSelectionState.hoveredIndex = idx;
     if (chartSelectionState.pointerDown && chartSelectionState.anchorIndex != null) {
       e.preventDefault();
@@ -2573,24 +2728,18 @@ function renderDashboardStatus(status) {
     Promise.all([
       apiFetch('/api/forecast').then(r => r.json()).catch(() => null),
       apiFetch(`/api/history/summary?view=day&date=${yesterday}`).then(r => r.json()).catch(() => null),
-      apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null)
-    ]).then(([fc, histYesterday, histToday]) => {
+      apiFetch(`/api/history/summary?view=day&date=${today}`).then(r => r.json()).catch(() => null),
+      // Preisprognose hinter den festen Börsenpreisen (1.0.11).
+      apiFetch('/api/price/outlook').then(r => r.json()).catch(() => null)
+    ]).then(([fc, histYesterday, histToday, outlook]) => {
       const mergedSlots = [...(histYesterday?.slots || []), ...(histToday?.slots || [])];
-      drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, mergedSlots, userSlotTimestamps, sunTimes, optimizerSlotTimestamps);
+      lastPriceOutlook = outlook?.ok ? outlook : null;
+      drawPriceChart(...baseChartArgs, fc?.ok ? fc : null, mergedSlots, userSlotTimestamps, sunTimes, optimizerSlotTimestamps, lastPriceOutlook);
+      setText('chartMeta', priceChartMetaText(status, lastPriceOutlook));
     }).catch(() => {
       drawPriceChart(...baseChartArgs, null, [], userSlotTimestamps, sunTimes, optimizerSlotTimestamps);
     });
-    {
-      const epd = status.epex?.data || [];
-      const distinctDays = Array.from(new Set(epd.map((r) => r.day).filter(Boolean))).sort();
-      const daysLabel = distinctDays.length
-        ? distinctDays.map((d) => d.slice(5)).join(' + ')
-        : '—';
-      const tomorrowHint = (distinctDays.length < 2 && status.epex?.nextDate)
-        ? ` · Morgen (${status.epex.nextDate.slice(5)}) wird nach EPEX-Clearing ~13:00 verfügbar`
-        : '';
-      setText('chartMeta', `EPEX Update: ${fmtTs(status.epex?.updatedAt)} | ${epd.length} Slots · ${daysLabel}${tomorrowHint}`);
-    }
+    setText('chartMeta', priceChartMetaText(status, lastPriceOutlook));
   }, { placeholderTarget: document.getElementById('priceChartContainer') });
 
   safeRender('dashboard.automation', () => {
@@ -4321,6 +4470,8 @@ const dashboardApi = {
   formatChartCentValue,
   getDashboardLogUrl,
   getChartHighlightSets,
+  buildPriceForecastRows,
+  priceChartMetaText,
   groupScheduleRulesForDashboard,
   inferChartSlotMs,
   isScheduleWindowExpired,

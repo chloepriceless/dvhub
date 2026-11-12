@@ -131,6 +131,7 @@ import Cursor from 'pg-cursor';
 // (b) buffering full result sets and shipping CSV/JSON instead — both worse.
 import parquet from '@dsnp/parquetjs';
 import { notHaltSuspendedLabels } from './services/emergency-stop/policy.js';
+import { buildPriceOutlookPayload, publicPriceTail } from './services/optimizer/price-outlook.js';
 
 // Plan 09.2-08 (D-13/D-24 revised): single module-scope schema instance for the
 // streaming Parquet export. Schema is locked to four columns: ts_utc UTF8,
@@ -1559,6 +1560,9 @@ export function createApiRoutes(ctx) {
     '/api/log/dv-signals',
     '/api/telemetry/series',
     '/api/forecast',
+    // Preisprognose (Residuallast dvhub.online, 1.0.11): reine Lese-Antwort,
+    // öffentliche Daten, keine Geheimnisse — wie /api/forecast.
+    '/api/price/outlook',
     '/api/family/status',      // DASH-02 — family dashboard polls every 5s from LAN
     '/api/family/presence',    // DASH-03 — screensaver wake poll (GET only; POST still requires auth)
     '/api/family/tile-history', // Plan 11-03 D-14 — token-less kiosk detail-panel chart fetch; GET-only LAN bypass, Bearer for external. The POST /api/family/mqtt-tiles write path stays OUT.
@@ -1672,7 +1676,7 @@ export function createApiRoutes(ctx) {
     ['/api/db/timescale/status', 'history'],
     ['/api/curtailment/preview', 'history'],
     // forecast — forecast reads + inspector
-    ['/api/forecast', 'forecast'],
+    ['/api/forecast', 'forecast'], ['/api/price/outlook', 'forecast'],
     ['/api/forecast/inspector/pv-providers', 'forecast'], ['/api/forecast/inspector/load', 'forecast'],
     ['/api/forecast/inspector/eos', 'forecast'],
     ['/api/forecast/inspector/optimizer-cold', 'forecast'],
@@ -4591,11 +4595,19 @@ export function createApiRoutes(ctx) {
           const opt = getCfg().optimizer || {};
           const primarySource = opt.primarySource || 'internal';
           const enabled = resolveEosProxy(getCfg()).enabled;
+          // Preisprognose für den EOS-Schwanz (1.0.11, price-outlook.js):
+          // live / gespeichert / nicht verfügbar seit … / aus (Zone, Quelle).
+          let priceOutlook = null;
+          try {
+            const cur = ctx.priceOutlook?.current?.();
+            if (cur) priceOutlook = { status: cur.status, reason: cur.reason ?? null, issuedAt: cur.issuedAt ?? null, unavailableSince: cur.unavailableSince ?? null };
+          } catch { priceOutlook = null; }
           return {
             enabled,
             primarySource,
             active: enabled && (primarySource === 'eos' || primarySource === 'best'),
-            url: (opt.eosProxy && opt.eosProxy.url) || ''
+            url: (opt.eosProxy && opt.eosProxy.url) || '',
+            priceOutlook
           };
         })(),
         luox: {
@@ -7005,7 +7017,9 @@ export function createApiRoutes(ctx) {
       // extendForEvDeadline) — die Kennzeichnung je Zeile (priceEstimated).
       const control = planControlFor(state.optimizer?.eosRun?.lastPlanControl, Date.parse(plan.data?.generatedAt));
       const estimatedFromMs = Date.parse(control?.estimatedFrom || '');
-      const shown = rows.slice(0, maxRows).map((r) => (Number.isFinite(estimatedFromMs) && Date.parse(r?.ts_utc) >= estimatedFromMs ? { ...r, priceEstimated: true } : r));
+      // Quelle des Preises je Zeile (1.0.11): ab estimatedFrom die Residuallast-
+      // Prognose von dvhub.online, davor feste Day-Ahead-Preise.
+      const shown = rows.slice(0, maxRows).map((r) => (Number.isFinite(estimatedFromMs) && Date.parse(r?.ts_utc) >= estimatedFromMs ? { ...r, priceEstimated: true, priceSource: 'residual_load' } : r));
       const output = { ...plan.data, rows: shown, truncated: rows.length > maxRows, totalCount: rows.length };
       return json(res, 200, {
         ok: true,
@@ -7023,6 +7037,10 @@ export function createApiRoutes(ctx) {
         // über 10 min — ein Vorschlag (100 Generationen, Steuerzeitraum
         // „automatisch“; eos-run-hint.js). Nur ein Hinweis, nichts wird umgestellt.
         control,
+        // Preisschwanz des letzten Pushs (1.0.11, eos-forecast-bridge
+        // eosPriceTail): Quelle, Stand der Prognose, Vorausschau und — ohne
+        // Prognose — seit wann sie fehlt.
+        priceTail: publicPriceTail(state.optimizer?.eosPriceTail),
         run: eosRunStats(state.optimizer?.eosRun),
         runHint: eosSlowRunHint(state.optimizer?.eosRun, getCfg()),
         eos: { status: status.status, push: status.push },
@@ -7963,6 +7981,15 @@ export function createApiRoutes(ctx) {
         cleanup();
       }
       return;
+    }
+
+    // --- Preisprognose hinter den Day-Ahead-Preisen (1.0.11) ---
+    // Residuallast-Prognose von dvhub.online (price-outlook.js): Stunden ab dem
+    // Ende der echten Preise mit P10/P50/P90 in ct/kWh, Zustand (live,
+    // gespeichert, nicht verfügbar seit …) und — falls EOS läuft — der
+    // Preisschwanz des letzten Pushs. Für Leitstand-Preiskurve und EOS-Karte.
+    if (url.pathname === '/api/price/outlook' && req.method === 'GET') {
+      return json(res, 200, buildPriceOutlookPayload({ state, cfg: getCfg(), priceOutlook: ctx.priceOutlook, nowMs: Date.now() }));
     }
 
     // --- Combined Forecast API (PV + Load + Price + Confidence per D-01) ---

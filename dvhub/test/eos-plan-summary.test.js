@@ -411,17 +411,17 @@ test('Plan bis zur Abfahrt mit geschätzten Preisen: Hinweis und Kennzeichnung j
   for (const r of out.rows) if (Date.parse(r.ts_utc) >= estFrom) r.priceEstimated = true;
   const control = { reason: 'ev_deadline', estimatedFrom: iso(estFrom), deadline: { kind: 'ev', at: iso(Date.UTC(2026, 9, 27, 6, 0)) } };
   let v = view(summarize({ available: true, output: out, control }, { now: NOW, epex: EPEX }));
-  assert.equal(v.note, 'Plan reicht bis zur Abfahrt des E-Autos (07:00) — ab 00:00 mit geschätzten Preisen');
+  assert.equal(v.note, 'Plan reicht bis zur Abfahrt des E-Autos (07:00) — ab 00:00 mit Preisprognose');
   assert.equal(v.today.head, 'Heute ab jetzt');
-  assert.equal(v.tomorrow.head, 'Morgen bis 10:00 · Preise geschätzt');
-  assert.match(v.tomorrow.headTitle, /geschätzt/);
+  assert.equal(v.tomorrow.head, 'Morgen bis 10:00 · Preisprognose');
+  assert.match(v.tomorrow.headTitle, /Preisprognose/);
   assert.match(v.tomorrow.headTitle, /keine Akku-Regeln/);
   // Schätzung beginnt mitten am Tag: „ab HH:MM“.
   for (const r of out.rows) delete r.priceEstimated;
   const mid = Date.UTC(2026, 9, 26, 21, 0); // 22:00 Uhr
   for (const r of out.rows) if (Date.parse(r.ts_utc) >= mid) r.priceEstimated = true;
   v = view(summarize({ available: true, output: out, control: { ...control, estimatedFrom: iso(mid) } }, { now: NOW, epex: EPEX }));
-  assert.equal(v.today.head, 'Heute ab jetzt · Preise ab 22:00 geschätzt');
+  assert.equal(v.today.head, 'Heute ab jetzt · ab 22:00 Preisprognose');
   // Ohne Kennzeichnung: alles wie bisher.
   v = view(summarize({ available: true, output: plan15() }, { now: NOW, epex: EPEX }));
   assert.equal(v.note, '');
@@ -438,5 +438,19 @@ test('Plan mit geschätzten Preisen, Abfahrt nicht erreicht: Hinweis nennt das E
   for (const r of out.rows) if (Date.parse(r.ts_utc) >= estFrom) r.priceEstimated = true;
   const control = { reason: 'ev_deadline', estimatedFrom: iso(estFrom), deadline: { kind: 'ev', at: iso(Date.UTC(2026, 9, 27, 12, 0)) }, deadlineCovered: false };
   const v = view(summarize({ available: true, output: out, control }, { now: NOW, epex: EPEX }));
-  assert.equal(v.note, 'Plan reicht Richtung Abfahrt des E-Autos (13:00), aber nur bis 10:00 — ab 00:00 mit geschätzten Preisen');
+  assert.equal(v.note, 'Plan reicht Richtung Abfahrt des E-Autos (13:00), aber nur bis 10:00 — ab 00:00 mit Preisprognose');
+});
+
+// 1.0.11: Steuerzeitraum bis in die Preisprognose — der Block sagt, dass es
+// eine Vorschau ist und nur feste Preise umgesetzt werden.
+test('Plan bis in die Preisprognose: Hinweis „Vorschau“ und Kennzeichnung je Tag', () => {
+  const { summarize, view } = load();
+  const out = plan15();
+  const estFrom = Date.UTC(2026, 9, 26, 23, 0); // 00:00 Uhr
+  for (const r of out.rows) if (Date.parse(r.ts_utc) >= estFrom) r.priceEstimated = true;
+  const v = view(summarize({ available: true, output: out, control: { reason: 'price_forecast', estimatedFrom: iso(estFrom) } }, { now: NOW, epex: EPEX }));
+  assert.equal(v.note, 'Plan reicht bis in die Preisprognose (ab 00:00) — Vorschau, umgesetzt wird nur mit festen Preisen');
+  assert.match(v.noteTitle, /dvhub\.online/);
+  assert.equal(v.tomorrow.head, 'Morgen bis 10:00 · Preisprognose');
+  assert.match(v.tomorrow.headTitle, /Vorschau/);
 });

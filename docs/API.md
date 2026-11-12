@@ -165,6 +165,7 @@ Spalte **Zugang** in den Tabellen:
 | Methode | Pfad | Zugang | Beschreibung |
 |---|---|---|---|
 | GET | `/api/forecast` | LAN·forecast | Kombinierte Prognose: PV, Last, Preis, Sicherheit |
+| GET | `/api/price/outlook` | LAN·forecast | Preisprognose hinter den festen Börsenpreisen (Residuallast-Prognose dvhub.online, nur DE-LU): Stunden mit P10/P50/P90 in ct/kWh, Zustand `live`/`cached`/`unavailable`/`off`, Stand, „nicht verfügbar seit“, EOS-Preisschwanz des letzten Pushs (1.0.11) |
 | POST | `/api/forecast/refresh` | Token | Prognose neu rechnen |
 | GET | `/api/forecast/nowcast-track` | LAN·forecast | pvnode-Nowcast vs. Day-Ahead vs. Ist |
 | GET | `/api/forecast/ghi-coverage` | LAN·forecast | Abdeckung gemessener Einstrahlung |
@@ -398,7 +399,7 @@ Siehe [EEBUS.md](EEBUS.md).
 | POST | `/api/victron/devices/scan` | Token+Nonce | Geräte am GX neu suchen |
 | GET | `/api/storage/status` | LAN·`status` | Speicherplatz des Datenträgers: frei/belegt, Stufe, DB-Größe, letzte Maßnahmen |
 | GET | `/api/inverter-efficiency/curve` | LAN·`status` | Selbst kalibrierte Wirkungsgradkurve des Wechselrichters; `applied` sagt, ob EOS sie bekommt |
-| GET | `/api/eos/plan` | LAN·`status`, *Pro* | EOS-Plan für Leitstand („Laut EOS-Plan“), mit Preisgrundlage |
+| GET | `/api/eos/plan` | LAN·`status`, *Pro* | EOS-Plan für Leitstand („Laut EOS-Plan“), mit Preisgrundlage; seit 1.0.11 `priceTail` (Quelle und Stand des Preisschwanzes, Vorausschau, „nicht verfügbar seit“) und je Zeile `priceSource: 'residual_load'` ab dem ersten Prognose-Slot |
 | POST | `/api/eos/solution-ready` | nur Box selbst | Fertig-Meldung des EOS-Laufs (vom EOS-Dienst) |
 
 ### 3.23 Installateurs-Portal

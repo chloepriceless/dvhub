@@ -680,6 +680,21 @@
     }
   }
 
+  // Preisprognose dvhub.online (1.0.11) in einem kurzen Wert für Karte/Drawer.
+  function priceOutlookLabel(po) {
+    if (!po) return '—';
+    var dm = function (iso) {
+      var d = iso ? new Date(iso) : null;
+      return d && !isNaN(d.getTime()) ? d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+    };
+    if (po.status === 'live') return 'aktuell · Stand ' + dm(po.issuedAt);
+    if (po.status === 'cached') return 'gespeichert · Stand ' + dm(po.issuedAt);
+    if (po.status === 'unavailable') return 'nicht verfügbar seit ' + dm(po.unavailableSince);
+    if (po.status === 'off') return po.reason === 'zone' ? 'nur für DE-LU' : (po.reason === 'source_public' ? 'aus (Preisquelle Öffentlich)' : 'aus');
+    return '—';
+  }
+  if (typeof window !== 'undefined') window.DVhubPriceOutlookLabel = priceOutlookLabel;
+
   function statusLabel(status, data) {
     // A 'warn' caused by an error WAVE (statusReason='errors') maps to 'stale'
     // for the colour bucket, but "Veraltet" is wrong when the feed is still
@@ -769,7 +784,9 @@
           { label: 'Optimizer', value: fmtBool(data.enabled, 'Aktiv', 'Aus') },
           { label: 'Quelle', value: data.primarySource === 'eos' ? 'EOS' : (data.primarySource === 'best' ? 'Best' : 'Intern') },
           { label: 'Steuerung', value: data.active ? 'EOS führt' : 'nicht führend' },
-          { label: 'Proxy', value: data.url ? String(data.url).replace(/^https?:\/\//, '') : '—' }
+          // 1.0.11: Preisprognose für den EOS-Schwanz statt der Proxy-Adresse
+          // (die steht im Drawer).
+          { label: 'Preisprognose', value: priceOutlookLabel(data.priceOutlook) }
         ];
       case 'luox':
         return [
