@@ -182,6 +182,7 @@ test('GET /api/eos/plan — mittlere Laufdauer und Hinweis bei langen Läufen', 
 test('GET /api/eos/plan und /api/price/outlook — Hinweis „Tage im Voraus“ mit Laufzeit für dieses Gerät', async () => {
   const ctx = mockCtx({ eosMonitor: monitorStub({ plan: { data: solution, at: Date.UTC(2026, 9, 3, 9, 14), current: true } }) });
   Object.assign(ctx.getCfg().epex, { enabled: true, bzn: 'DE-LU', priceSource: 'dvhub' });
+  ctx.getCfg().optimizer.eosProxy = { enabled: true };
   const now = Date.now();
   const hour0 = now - (now % 3_600_000);
   const hours = Array.from({ length: 140 }, (_, i) => ({ ms: hour0 + i * 3_600_000, p10: 50, p50: 80, p90: 120, leadDays: 1 }));

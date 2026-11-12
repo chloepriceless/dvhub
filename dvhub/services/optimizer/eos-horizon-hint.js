@@ -13,7 +13,7 @@
 // d. h. 13,3 / 12,4 / 12,8 ms je Stunde); der Schwanz kostet fast nichts.
 // Deshalb: Sekunden je Stunde Steuerzeitraum × Ziel-Stunden.
 //
-// Gezeigt nur, wenn die Preisprognose an ist und die Preiszone DE-LU
+// Gezeigt nur, wenn EOS eingeschaltet ist, die Preisprognose an und die Preiszone DE-LU
 // (outlookDisabledReason), DVhub die Läufe anstößt (sonst gibt es weder
 // Schwanz noch Messung) und der Steuerzeitraum nicht schon „bis in die
 // Preisprognose“ steht.
@@ -52,6 +52,8 @@ function fmtSeconds(s) {
  *   estimateS:number|null, currentS:number|null, measuredRuns:number, slow:boolean, limitedByPv:boolean}}
  */
 export function eosHorizonHint({ cfg, run = null, outlookEndMs = null, pvUntilMs = null, controlMode = 'full', controlHours = null, nowMs = Date.now() } = {}) {
+  // Ohne eingeschaltetes EOS gibt es nichts vorauszuplanen.
+  if (!cfg?.optimizer?.eosProxy?.enabled) return null;
   if (outlookDisabledReason(cfg) !== null) return null;
   if (eosRemoteActive(cfg) || !dvhubTriggersEosRuns(cfg)) return null;
   if (controlMode === 'forecast') return null;

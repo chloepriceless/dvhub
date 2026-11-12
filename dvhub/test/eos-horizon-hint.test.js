@@ -14,7 +14,8 @@ import { buildRuntimeSnapshot } from '../runtime-state.js';
 
 const H = 3_600_000;
 const NOW = Date.parse('2026-11-12T14:00:00Z');
-const DE = { epex: { bzn: 'DE-LU', priceSource: 'dvhub' } };
+const EOS_ON = { eosProxy: { enabled: true } };
+const DE = { epex: { bzn: 'DE-LU', priceSource: 'dvhub' }, optimizer: EOS_ON };
 // A7S-ähnlich: 8,5 s bei 34 h Steuerzeitraum → 0,25 s je Stunde.
 const RUN = { recentRuns: 8, avgDurationS: 8.5, secPerControlHour: 0.25, avgControlHours: 34 };
 const base = { cfg: DE, run: RUN, outlookEndMs: NOW + 130 * H, pvUntilMs: NOW + 150 * H, nowMs: NOW };
@@ -62,19 +63,23 @@ test('Noch nicht genug gemessen: Hinweis ohne Zahl, mit Verweis auf die Messung'
   }
 });
 
-test('Kein Hinweis: Prognose aus, andere Zone, Öffentlich (automatisch), EOS nach eigenem Takt, schon „bis in die Preisprognose“, keine Prognose', () => {
+test('Kein Hinweis: EOS aus, Prognose aus, andere Zone, Öffentlich (automatisch), EOS nach eigenem Takt, schon „bis in die Preisprognose“, keine Prognose', () => {
   const none = [
-    { cfg: { epex: { bzn: 'DE-LU', priceOutlook: 'off' } } },
-    { cfg: { epex: { bzn: 'AT' } } },
-    { cfg: { epex: { bzn: 'DE-LU', priceSource: 'public' } } },
-    { cfg: { epex: { bzn: 'DE-LU', priceSource: 'dvhub' }, optimizer: { eosStartAfterPreviousRun: true } } },
+    // EOS gar nicht eingeschaltet (Verify 12.11.2026: der Hinweis stand sonst
+    // auch auf Boxen ohne EOS in den Einstellungen).
+    { cfg: { epex: { bzn: 'DE-LU', priceSource: 'dvhub' } } },
+    { cfg: { epex: { bzn: 'DE-LU', priceSource: 'dvhub' }, optimizer: { eosProxy: { enabled: false } } } },
+    { cfg: { epex: { bzn: 'DE-LU', priceOutlook: 'off' }, optimizer: EOS_ON } },
+    { cfg: { epex: { bzn: 'AT' }, optimizer: EOS_ON } },
+    { cfg: { epex: { bzn: 'DE-LU', priceSource: 'public' }, optimizer: EOS_ON } },
+    { cfg: { epex: { bzn: 'DE-LU', priceSource: 'dvhub' }, optimizer: { ...EOS_ON, eosStartAfterPreviousRun: true } } },
     { controlMode: 'forecast' },
     { outlookEndMs: null },
     { outlookEndMs: NOW - H },
   ];
   for (const o of none) assert.equal(eosHorizonHint({ ...base, ...o }), null, JSON.stringify(o));
   // „Öffentlich“ mit eingeschalteter Prognose: Hinweis kommt.
-  assert.ok(eosHorizonHint({ ...base, cfg: { epex: { bzn: 'DE-LU', priceSource: 'public', priceOutlook: 'on' } } }));
+  assert.ok(eosHorizonHint({ ...base, cfg: { epex: { bzn: 'DE-LU', priceSource: 'public', priceOutlook: 'on' }, optimizer: EOS_ON } }));
 });
 
 test('Lauf-Auslöser misst je Lauf den Steuerzeitraum: Sekunden je Stunde über die letzten Läufe', async () => {

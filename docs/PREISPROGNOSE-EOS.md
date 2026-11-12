@@ -157,6 +157,7 @@ könnte und wie lange ein Lauf dann **auf genau diesem Gerät** etwa dauert.
 - **Ziel-Stunden:** bis zum Ende der Preisprognose, höchstens 120 h. Reicht die PV-Prognose kürzer (Stand des letzten
   Pushs), gilt ihr Ende, und der Hinweis sagt das.
 - **Kein Hinweis:**
+  - EOS nicht eingeschaltet;
   - Prognose aus oder nicht DE-LU;
   - EOS nach eigenem Takt;
   - Steuerzeitraum steht schon auf „Bis in die Preisprognose“;
