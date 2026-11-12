@@ -431,3 +431,18 @@ test('Vorausschau: Steuerzeitraum + Schwanz begrenzt (automatisch 6 h + 48 h = 5
     assert.ok(Math.abs(Date.parse(look.until) - (start + 54 * H)) <= 15 * 60_000, look.until);
   } finally { await mock.close(); }
 });
+
+// Codex 7dadfff9 (P2): Fehlt eine Reihe (z. B. PV leer), zeigt die Vorausschau
+// keine Reichweite („bis —“) statt der eingestellten Grenze.
+test('Vorausschau: fehlende PV-Prognose → keine vorgetäuschte Reichweite', async () => {
+  const mock = await createMockEos();
+  try {
+    const e = env(mock, { realHours: 30 });
+    const fc = await e.ctx.forecastService.buildForecastResponse();
+    e.ctx.forecastService = { buildForecastResponse: async () => ({ ...fc, pv: { slots: [] } }) };
+    await createEosForecastBridge(e.ctx).push();
+    const look = e.state.optimizer.eosPriceTail.lookahead;
+    assert.equal(look.limitedBy, 'pv');
+    assert.equal(look.until, null);
+  } finally { await mock.close(); }
+});

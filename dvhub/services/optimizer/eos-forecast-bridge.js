@@ -1930,7 +1930,13 @@ export function createEosForecastBridge(ctx) {
         ...dataEnds,
       };
       let limitedBy = 'prediction';
-      for (const k of ['tail', 'prices', 'pv', 'load']) if (Number.isFinite(ends[k]) && ends[k] < ends[limitedBy]) limitedBy = k;
+      // Nur die Schwanz-Grenze darf fehlen (kein Steuerzeitraum). Fehlende
+      // Daten (-Infinity) bleiben Grenze: dann „bis —“, keine vorgetäuschte
+      // Reichweite (Codex 7dadfff9).
+      for (const k of ['tail', 'prices', 'pv', 'load']) {
+        if (k === 'tail' && !Number.isFinite(ends.tail)) continue;
+        if (ends[k] < ends[limitedBy]) limitedBy = k;
+      }
       const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
       state.optimizer.eosPriceTail.lookahead = {
         until: iso(ends[limitedBy]),
