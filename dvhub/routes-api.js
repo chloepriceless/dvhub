@@ -132,7 +132,7 @@ import Cursor from 'pg-cursor';
 // (b) buffering full result sets and shipping CSV/JSON instead — both worse.
 import parquet from '@dsnp/parquetjs';
 import { notHaltSuspendedLabels } from './services/emergency-stop/policy.js';
-import { buildPriceOutlookPayload, publicPriceTail } from './services/optimizer/price-outlook.js';
+import { buildPriceOutlookPayload, publicPriceTail, outlookContiguousEndMs, realPriceCoverage, MIN_REAL_AHEAD_MS } from './services/optimizer/price-outlook.js';
 
 // Plan 09.2-08 (D-13/D-24 revised): single module-scope schema instance for the
 // streaming Parquet export. Schema is locked to four columns: ts_utc UTF8,
@@ -923,10 +923,16 @@ function eosRunStats(run) {
  * Preisprognose aus dem Dienst, Ende der PV-Prognose aus dem letzten Push.
  */
 function horizonHintFor({ state, cfg, priceOutlook, nowMs = Date.now() }) {
+  // Wie der Schwanz: ab dem Ende der festen Preise, lückenlos, und nur, wenn
+  // die festen Preise mindestens jetzt + 1 h 15 min decken (Codex b1afb66c).
   let outlookEndMs = null;
   try {
-    const hours = priceOutlook?.current?.(nowMs)?.outlook?.hours;
-    if (Array.isArray(hours) && hours.length) outlookEndMs = hours[hours.length - 1].ms + 3_600_000;
+    const rows = Array.isArray(state?.epex?.data) ? state.epex.data : [];
+    const realEnd = realPriceCoverage(rows
+      .filter((r) => Number.isFinite(Number(r?.ts)) && Number.isFinite(Number(r?.ct_kwh)))
+      .map((r) => ({ start: new Date(Number(r.ts)).toISOString(), ctKwh: Number(r.ct_kwh) }))).end;
+    const outlook = priceOutlook?.current?.(nowMs)?.outlook;
+    if (outlook && Number.isFinite(realEnd) && realEnd >= nowMs + MIN_REAL_AHEAD_MS) outlookEndMs = outlookContiguousEndMs(outlook, realEnd);
   } catch { outlookEndMs = null; }
   const pvUntilMs = Date.parse(state?.optimizer?.eosPriceTail?.lookahead?.pvUntil || '');
   try {

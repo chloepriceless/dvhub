@@ -890,7 +890,8 @@ function buildCurrentRuntimeSnapshot() {
     telemetry: state.telemetry,
     historyImport: historyImportManager ? historyImportManager.getStatus() : null,
     vpn: state.vpn,
-    eosRun: state.optimizer?.eosRun || null
+    eosRun: state.optimizer?.eosRun || null,
+    eosPriceTail: state.optimizer?.eosPriceTail || null
   });
 }
 

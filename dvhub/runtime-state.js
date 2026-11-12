@@ -254,6 +254,17 @@ function buildVpnSnapshot(vpn = null) {
 // Hinweis „Tage im Voraus planen“ (eos-horizon-hint.js, 1.0.11).
 const EOS_RUN_FIELDS = ['avgDurationS', 'recentRuns', 'lastDurationS', 'lastDoneAt', 'lastPlanControl', 'secPerControlHour', 'avgControlHours'];
 
+// Preisschwanz des letzten Pushs (eos-forecast-bridge eosPriceTail): Zeile
+// unter dem EOS-Fahrplan und PV-Grenze für den Hinweis „Tage im Voraus“
+// (Codex b1afb66c) — die Pushes laufen im Runtime-Prozess.
+const EOS_PRICE_TAIL_FIELDS = ['used', 'status', 'reason', 'why', 'from', 'until', 'slots', 'leadDaysMax', 'realUntil',
+  'issuedAt', 'fetchedAt', 'unavailableSince', 'at', 'lookahead'];
+
+function buildEosPriceTailSnapshot(tail = null) {
+  if (!tail || typeof tail !== 'object') return null;
+  return pickFields(tail, EOS_PRICE_TAIL_FIELDS);
+}
+
 function buildEosRunSnapshot(eosRun = null) {
   if (!eosRun || typeof eosRun !== 'object') return null;
   return pickFields(eosRun, EOS_RUN_FIELDS);
@@ -261,8 +272,15 @@ function buildEosRunSnapshot(eosRun = null) {
 
 /** Web-Prozess: eosRun aus dem Runtime-Schnappschuss übernehmen (eigene Felder bleiben). */
 export function applyRuntimeEosRun(state, snapshot) {
-  const run = snapshot && typeof snapshot === 'object' ? snapshot.eosRun : null;
-  if (!state || !run || typeof run !== 'object') return;
+  if (!state || !snapshot || typeof snapshot !== 'object') return;
+  // Preisschwanz: wie im Runtime-Prozess, auch null (kein Schwanz-Zustand) —
+  // unabhängig davon, ob es schon Läufe gab.
+  if ('eosPriceTail' in snapshot) {
+    state.optimizer = state.optimizer || {};
+    state.optimizer.eosPriceTail = snapshot.eosPriceTail;
+  }
+  const run = snapshot.eosRun;
+  if (!run || typeof run !== 'object') return;
   state.optimizer = state.optimizer || {};
   state.optimizer.eosRun = { ...(state.optimizer.eosRun || {}), ...run };
 }
@@ -275,7 +293,8 @@ export function buildRuntimeSnapshot({
   telemetry = {},
   historyImport = null,
   vpn = null,
-  eosRun = null
+  eosRun = null,
+  eosPriceTail = undefined
 } = {}) {
   return {
     capturedAt: normalizeIso(now),
@@ -285,7 +304,8 @@ export function buildRuntimeSnapshot({
     telemetry: buildTelemetrySnapshot(telemetry),
     historyImport: buildHistoryImportSnapshot(historyImport),
     vpn: buildVpnSnapshot(vpn),
-    eosRun: buildEosRunSnapshot(eosRun)
+    eosRun: buildEosRunSnapshot(eosRun),
+    ...(eosPriceTail === undefined ? {} : { eosPriceTail: buildEosPriceTailSnapshot(eosPriceTail) })
   };
 }
 

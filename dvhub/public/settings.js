@@ -2376,10 +2376,14 @@ const SMA_LOCATION_DEFAULT = { latitude: 51.1657, longitude: 10.4515 };
 // Vom Server: Hinweis „mit der Preisprognose Tage im Voraus planen“ samt
 // Laufzeit-Schätzung für dieses Gerät (1.0.11, /api/price/outlook horizonHint).
 let eosHorizonHint = null;
+// Nach jedem Speichern neu laden (Codex b1afb66c, P3): Steuerzeitraum oder
+// Preisprognose geändert → Hinweis neu oder weg; nur bei Änderung neu zeichnen.
 function loadEosHorizonHint() {
   return apiFetch('/api/price/outlook').then((res) => res.json()).then((data) => {
-    eosHorizonHint = data && data.horizonHint && data.horizonHint.text ? data.horizonHint : null;
-    if (definition && eosHorizonHint) renderSettingsShell();
+    const next = data && data.horizonHint && data.horizonHint.text ? data.horizonHint : null;
+    const changed = JSON.stringify(next) !== JSON.stringify(eosHorizonHint);
+    eosHorizonHint = next;
+    if (definition && changed) renderSettingsShell();
   }).catch(() => {});
 }
 // Info-Hinweis unter einem Feld (kein Warnhinweis): nur Text vom Server.
@@ -3781,6 +3785,7 @@ async function saveConfig(config, source = 'settings', opts = {}) {
   await loadHistoryImportStatus();
   tariffProviderStatsCache = null;   // Anbieter oder Lesart evtl. geändert
   renderSettingsShell();
+  loadEosHorizonHint();
   return true;
 }
 

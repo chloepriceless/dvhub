@@ -262,6 +262,20 @@ export function fillPriceSlotsFromOutlook(priceSlots, { outlook, untilMs, nowMs 
   };
 }
 
+/**
+ * Bis wohin (ms, exklusiv) reicht die Prognose lückenlos ab der Stunde, in der
+ * `fromMs` liegt? Wie der Schwanz (fillPriceSlotsFromOutlook): an der ersten
+ * fehlenden Stunde ist Schluss. null, wenn schon die erste fehlt.
+ */
+export function outlookContiguousEndMs(outlook, fromMs) {
+  if (!outlook || !Array.isArray(outlook.hours) || !Number.isFinite(fromMs)) return null;
+  const have = new Set(outlook.hours.map((h) => h.ms));
+  let h = fromMs - (((fromMs % HOUR_MS) + HOUR_MS) % HOUR_MS);
+  if (!have.has(h)) return null;
+  while (have.has(h)) h += HOUR_MS;
+  return h;
+}
+
 /** Nächster Abruf-Termin nach `ms` (UTC-Termine + 10 min). */
 export function nextScheduledFetchMs(ms) {
   const d = new Date(ms);

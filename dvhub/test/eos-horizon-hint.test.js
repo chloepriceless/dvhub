@@ -10,7 +10,8 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { eosHorizonHint, HORIZON_HINT_MAX_H } from '../services/optimizer/eos-horizon-hint.js';
 import { createEosRunTrigger } from '../services/optimizer/eos-run-trigger.js';
-import { buildRuntimeSnapshot } from '../runtime-state.js';
+import { buildRuntimeSnapshot, applyRuntimeEosRun } from '../runtime-state.js';
+import { outlookContiguousEndMs } from '../services/optimizer/price-outlook.js';
 
 const H = 3_600_000;
 const NOW = Date.parse('2026-11-12T14:00:00Z');
@@ -40,6 +41,43 @@ test('PV-Prognose kürzer als die Preisprognose: Ziel ist das Ende der PV-Progno
   assert.equal(h.limitedByPv, true);
   assert.equal(h.estimateS, 17.5);
   assert.match(h.text, /bis zu 3 Tage \(70 h\) vorausplanen — so weit reicht hier die PV-Prognose/);
+});
+
+// Codex b1afb66c (P2): Ein fest eingestellter Prognosehorizont begrenzt auch
+// „bis in die Preisprognose“ (Prognosehorizont − 12 h Schwanz).
+test('Fester Prognosehorizont begrenzt das Ziel: 72 h → 60 h, 48 h → kein Hinweis', () => {
+  const at = (h) => eosHorizonHint({ ...base, cfg: { ...DE, optimizer: { ...EOS_ON, eosPredictionHours: h } } });
+  const h72 = at(72);
+  assert.equal(h72.targetHours, 60);
+  assert.equal(h72.estimateS, 15);
+  assert.match(h72.text, /mehr lässt der eingestellte Prognosehorizont nicht zu/);
+  assert.equal(at(48), null, '36 h bringt gegenüber 34 h nichts');
+  assert.equal(at(144).targetHours, 120);
+  assert.equal(eosHorizonHint(base).targetHours, 120, 'automatisch: bis 120 h');
+});
+
+// Codex b1afb66c (P2): Reichweite lückenlos ab dem Ende der festen Preise.
+test('outlookContiguousEndMs: endet an der ersten fehlenden Stunde, null ohne erste', () => {
+  const t0 = Date.parse('2026-11-12T23:00:00Z');
+  const hours = [0, 1, 2, 4, 5].map((i) => ({ ms: t0 + i * H }));
+  assert.equal(outlookContiguousEndMs({ hours }, t0), t0 + 3 * H);
+  assert.equal(outlookContiguousEndMs({ hours }, t0 + 30 * 60_000), t0 + 3 * H, 'Viertelstunde in der Stunde');
+  assert.equal(outlookContiguousEndMs({ hours }, t0 + 3 * H), null);
+  assert.equal(outlookContiguousEndMs(null, t0), null);
+});
+
+// Codex b1afb66c (P2): Im getrennten Betrieb pusht der Runtime-Prozess; die
+// PV-Grenze (und die Zeile unter dem EOS-Fahrplan) muss in den Web-Prozess.
+test('Runtime-Schnappschuss trägt den Preisschwanz mit, auch ohne Läufe', () => {
+  const tail = { used: true, status: 'live', lookahead: { until: 'u', pvUntil: '2026-11-15T00:00:00.000Z', limitedBy: 'pv' }, at: 5 };
+  const snap = buildRuntimeSnapshot({ eosRun: null, eosPriceTail: tail });
+  assert.equal(snap.eosPriceTail.lookahead.pvUntil, '2026-11-15T00:00:00.000Z');
+  const state = { optimizer: {} };
+  applyRuntimeEosRun(state, snap);
+  assert.equal(state.optimizer.eosPriceTail.lookahead.limitedBy, 'pv');
+  applyRuntimeEosRun(state, buildRuntimeSnapshot({ eosPriceTail: null }));
+  assert.equal(state.optimizer.eosPriceTail, null, 'kein Schwanz mehr → auch im Web-Prozess');
+  assert.ok(!('eosPriceTail' in buildRuntimeSnapshot({})), 'ohne Angabe bleibt der Stand');
 });
 
 test('Bringt nichts (PV-Prognose kaum länger als der Steuerzeitraum): kein Hinweis', () => {
@@ -135,4 +173,7 @@ test('Einstellungen: Hinweis unter Steuerzeitraum und Prognosehorizont, geladen 
   assert.match(src, /path === 'optimizer\.eosControlHorizonMaxHours'\) return \{ text: eosHorizonHint\.text/);
   assert.match(src, /path === 'optimizer\.eosPredictionHours'/);
   assert.match(src, /loadEosHorizonHint\(\);/);
+  // Codex b1afb66c (P3): nach dem Speichern neu laden, nicht den alten Hinweis zeigen.
+  assert.match(src, /renderSettingsShell\(\);\n {2}loadEosHorizonHint\(\);\n {2}return true;/);
+  assert.match(src, /if \(definition && changed\) renderSettingsShell\(\);/);
 });

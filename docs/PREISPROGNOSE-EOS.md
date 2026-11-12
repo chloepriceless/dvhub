@@ -154,8 +154,12 @@ könnte und wie lange ein Lauf dann **auf genau diesem Gerät** etwa dauert.
 - **Schätzung:** Sekunden je Stunde × Ziel-Stunden, also linear mit dem Steuerzeitraum (Rust-Kern auf dem Mac:
   13,3 / 12,4 / 12,8 ms je Stunde bei 30 / 72 / 120 h). Ein fester Anteil je Lauf wird dabei mit hochgerechnet; die
   Schätzung liegt also eher zu hoch.
-- **Ziel-Stunden:** bis zum Ende der Preisprognose, höchstens 120 h. Reicht die PV-Prognose kürzer (Stand des letzten
-  Pushs), gilt ihr Ende, und der Hinweis sagt das.
+- **Ziel-Stunden:** so weit, wie die Preisprognose hinter den festen Preisen lückenlos reicht (wie der Schwanz),
+  höchstens 120 h. Reicht die PV-Prognose kürzer (Stand des letzten Pushs), gilt ihr Ende. Ein fest eingestellter
+  Prognosehorizont begrenzt auf Prognosehorizont − 12 h (z. B. 72 h → 60 h). Der Hinweis nennt die Grenze.
+- **Getrennter Betrieb** (`DVHUB_ENABLE_RUNTIME_WORKER=1`): Laufzeiten und Preisschwanz (mit PV-Grenze) reisen im
+  Runtime-Schnappschuss in den Web-Prozess.
+- **Einstellungen:** Nach jedem Speichern lädt die Seite den Hinweis neu.
 - **Kein Hinweis:**
   - EOS nicht eingeschaltet;
   - Prognose aus oder nicht DE-LU;

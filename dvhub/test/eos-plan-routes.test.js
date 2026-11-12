@@ -188,6 +188,8 @@ test('GET /api/eos/plan und /api/price/outlook — Hinweis „Tage im Voraus“ 
   const hours = Array.from({ length: 140 }, (_, i) => ({ ms: hour0 + i * 3_600_000, p10: 50, p50: 80, p90: 120, leadDays: 1 }));
   const outlook = { issuedAt: new Date(now).toISOString(), issuedMs: now, biddingZone: 'DE-LU', hours };
   ctx.priceOutlook = { current: () => ({ status: 'live', reason: null, outlook, issuedAt: outlook.issuedAt, fetchedAt: outlook.issuedAt, unavailableSince: null }) };
+  // Feste Preise bis zur vollen Stunde + 34 h.
+  ctx.state.epex.data = Array.from({ length: 34 * 4 }, (_, i) => ({ ts: hour0 + i * 900_000, ct_kwh: 10 }));
   ctx.state.optimizer = {
     eosRun: { avgDurationS: 8.5, recentRuns: 8, lastDurationS: 8, secPerControlHour: 0.25, avgControlHours: 34 },
     eosPriceTail: { used: true, lookahead: { pvUntil: new Date(now + 70 * 3_600_000).toISOString() } },
@@ -201,6 +203,15 @@ test('GET /api/eos/plan und /api/price/outlook — Hinweis „Tage im Voraus“ 
   body = JSON.parse((await dispatch(ctx, makeReq('/api/price/outlook', { token: null, ip: LAN_IP }))).body);
   assert.equal(body.horizonHint.targetHours >= 69, true, 'auch für die Einstellungen');
   assert.ok(Array.isArray(body.hours));
+  // Codex b1afb66c (P2): Lücke in der Prognose bei +60 h → Ziel endet davor, nicht bei 120 h.
+  ctx.state.optimizer.eosPriceTail = null;
+  outlook.hours = hours.filter((h) => h.ms !== hour0 + 60 * 3_600_000);
+  body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);
+  assert.ok(body.horizonHint.targetHours >= 59 && body.horizonHint.targetHours <= 60, String(body.horizonHint.targetHours));
+  // Feste Preise reichen nicht über jetzt + 1 h 15 min: kein Schwanz, kein Hinweis.
+  ctx.state.epex.data = ctx.state.epex.data.slice(0, 2);
+  body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);
+  assert.equal(body.horizonHint, null);
   // Prognose aus: kein Hinweis.
   ctx.getCfg().epex.priceOutlook = 'off';
   body = JSON.parse((await dispatch(ctx, makeReq('/api/eos/plan', { token: null, ip: LAN_IP }))).body);

@@ -22,6 +22,7 @@ import { outlookDisabledReason } from './price-outlook.js';
 import { dvhubTriggersEosRuns } from './eos-run-trigger.js';
 import { eosRemoteActive } from './eos-remote.js';
 import { EOS_SLOW_RUN_HINT_S } from './eos-run-hint.js';
+import { resolveControlHorizonMaxHours, CONTROL_HORIZON_FORECAST } from './eos-forecast-bridge.js';
 
 /** So weit plant EOS „bis in die Preisprognose“ höchstens (eos-forecast-bridge CONTROL_HORIZON_FORECAST_MAX_H). */
 export const HORIZON_HINT_MAX_H = 120;
@@ -43,7 +44,7 @@ function fmtSeconds(s) {
  * @param {object} p
  * @param {object} p.cfg
  * @param {object|null} p.run           state.optimizer.eosRun
- * @param {number|null} p.outlookEndMs  Ende der gültigen Preisprognose (null = keine)
+ * @param {number|null} p.outlookEndMs  Ende der lückenlosen Preisprognose hinter den festen Preisen (null = keine)
  * @param {number|null} [p.pvUntilMs]   Ende der PV-Prognose beim letzten Push (null = unbekannt)
  * @param {string} [p.controlMode]      'full' | 'cap' | 'auto' | 'forecast'
  * @param {number|null} [p.controlHours] zuletzt an EOS gesendeter Steuerzeitraum (h)
@@ -62,7 +63,12 @@ export function eosHorizonHint({ cfg, run = null, outlookEndMs = null, pvUntilMs
   // verlängert DVhub mit), höchstens 120 h.
   const pvEnd = Number.isFinite(pvUntilMs) && pvUntilMs > nowMs ? pvUntilMs : null;
   const endMs = pvEnd !== null ? Math.min(outlookEndMs, pvEnd) : outlookEndMs;
-  const targetHours = Math.min(HORIZON_HINT_MAX_H, Math.floor((endMs - nowMs) / HOUR_MS));
+  // Grenze aus den Einstellungen, als stünde der Steuerzeitraum schon auf „bis
+  // in die Preisprognose“: ein fest eingestellter Prognosehorizont (z. B.
+  // 48 h) begrenzt ihn weiter auf Prognosehorizont − 12 h (Codex b1afb66c).
+  const prospective = { ...cfg, optimizer: { ...(cfg?.optimizer || {}), eosControlHorizonMaxHours: CONTROL_HORIZON_FORECAST } };
+  const cfgMaxH = Math.min(HORIZON_HINT_MAX_H, resolveControlHorizonMaxHours(prospective));
+  const targetHours = Math.min(cfgMaxH, Math.floor((endMs - nowMs) / HOUR_MS));
   const n = Number(run?.recentRuns);
   const secPerH = Number(run?.secPerControlHour);
   const curH = Number(run?.avgControlHours);
@@ -72,11 +78,13 @@ export function eosHorizonHint({ cfg, run = null, outlookEndMs = null, pvUntilMs
   // Bringt es nichts (PV-Prognose kurz, Steuerzeitraum schon so lang), schweigen.
   // Unbekannter Steuerzeitraum: der übliche ganze Preiszeitraum (~34 h).
   if (targetHours < (currentHours ?? 34) + HORIZON_HINT_MIN_GAIN_H) return null;
-  const limitedByPv = pvEnd !== null && pvEnd < outlookEndMs && targetHours < HORIZON_HINT_MAX_H;
+  const limitedByPv = pvEnd !== null && pvEnd < outlookEndMs && targetHours < cfgMaxH;
+  const limitedByPrediction = !limitedByPv && cfgMaxH < HORIZON_HINT_MAX_H && targetHours === cfgMaxH;
   const days = Math.round(targetHours / 24 * 2) / 2;
   const daysText = String(days).replace('.', ',');
   let text = `Mit der Preisprognose kann EOS bis zu ${daysText} Tage (${targetHours} h) vorausplanen`
     + (limitedByPv ? ' — so weit reicht hier die PV-Prognose' : '')
+    + (limitedByPrediction ? ' — mehr lässt der eingestellte Prognosehorizont nicht zu (12 h bleiben Schwanz)' : '')
     + ': Steuerzeitraum „Bis in die Preisprognose“ (Einstellungen → EOS-Optimierung).';
   let estimateS = null;
   let currentS = null;
