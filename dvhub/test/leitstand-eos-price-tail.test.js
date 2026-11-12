@@ -42,3 +42,23 @@ test('Ohne Prognose: „nicht verfügbar seit …“ als Warnung; andere Zone al
   assert.match(eosPriceTailText({ used: false, status: 'off', reason: 'zone' }).text, /nur für die Preiszone DE-LU/);
   assert.equal(eosPriceTailText(null).text, '');
 });
+
+// Codex 27983aca: Steuerzeitraum bis 120 h = 480 Zeilen — der Leitstand fragt
+// genug Zeilen an (Standard der API: 300).
+test('EOS-Fahrplan: Leitstand holt bis 8 Tage (768 Zeilen)', () => {
+  assert.match(src, /apiFetch\('\/api\/eos\/plan\?rows=768'\)/);
+});
+
+// Codex 27983aca (P3): Mehrtägiger Plan ab 10:15 — Marken an jeder
+// Ortsmitternacht (dort steht das Datum), nicht 11:00/23:00.
+test('EOS-Fahrplan-Achse: mehrtägig Marken ab Ortsmitternacht, kurz alle 3 h ab voller Stunde', () => {
+  const { eosPlanTicks } = helpers();
+  const min = new Date(2026, 10, 12, 10, 15).getTime();
+  const long = eosPlanTicks(min, min + 120 * 3600000).map((t) => new Date(t.value));
+  assert.ok(long.every((d) => d.getHours() % 12 === 0 && d.getMinutes() === 0), 'alle 12 h ab Mitternacht');
+  assert.ok(long.filter((d) => d.getHours() === 0).length >= 4, 'jede Mitternacht eine Marke');
+  assert.ok(long[0].getTime() >= min);
+  const short = eosPlanTicks(min, min + 30 * 3600000).map((t) => new Date(t.value));
+  assert.equal(short[0].getHours(), 11);
+  assert.equal(short[1].getTime() - short[0].getTime(), 3 * 3600000);
+});

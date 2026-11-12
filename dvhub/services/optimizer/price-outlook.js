@@ -373,6 +373,11 @@ export function createPriceOutlookService({
       const parsed = parseOutlook(body);
       if (!parsed.ok) throw new Error(`invalid_outlook:${parsed.reason}`);
       if (parsed.outlook.biddingZone !== OUTLOOK_ZONE) throw new Error(`zone:${parsed.outlook.biddingZone}`);
+      // Erst prüfen, dann übernehmen: eine unbrauchbare Antwort (z. B. Ausgabe in
+      // der Zukunft) darf die gespeicherte gültige nicht verdrängen — sonst
+      // gälten spätere richtige Antworten als „älter“ (Codex 27983aca, P2).
+      const use = outlookUsable(parsed.outlook, { nowMs: t });
+      if (!use.ok) throw new Error(`unusable_outlook:${use.reason}`);
       lastServerStale = parsed.outlook.stale;
       // Nie auf eine ältere Ausgabe zurückfallen (Server-Cache, Spiegel).
       if (!cache || parsed.outlook.issuedMs >= cache.outlook.issuedMs) {
@@ -540,6 +545,7 @@ export function publicPriceTail(tail) {
       loadUntil: look.loadUntil ?? null,
       pricesUntil: look.pricesUntil ?? null,
       predictionUntil: look.predictionUntil ?? null,
+      tailUntil: look.tailUntil ?? null,
     } : null,
     at: Number.isFinite(tail.at) ? new Date(tail.at).toISOString() : null,
   };

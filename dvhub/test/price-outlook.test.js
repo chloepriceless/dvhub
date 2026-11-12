@@ -398,3 +398,25 @@ test('publicPriceTail: nur die Felder für die Oberfläche', async () => {
   assert.equal(t.secret, undefined);
   assert.equal(publicPriceTail({ used: false, status: 'unavailable', unavailableSince: 's' }).source, null);
 });
+
+// Codex 27983aca (P2): Eine Antwort mit Ausgabe in der Zukunft darf die
+// gespeicherte gültige nicht ersetzen — sonst gälten spätere richtige Antworten
+// als „älter“, und die Prognose bliebe aus, auch wenn der Server sich erholt.
+test('Rückfall: Antwort mit Ausgabe in der Zukunft ersetzt die gültige Prognose nicht; die nächste richtige wird angenommen', async () => {
+  const future = clone(FIXTURE); future.issued_at = new Date(ISSUED + 30 * H).toISOString();
+  const later = clone(FIXTURE); later.issued_at = new Date(ISSUED + 5 * H).toISOString();
+  let now = ISSUED + H;
+  const svc = createPriceOutlookService({ getCfg: () => cfgDe, fetchImpl: fetchStub([FIXTURE, future, later]), cacheFile: tmpFile(), now: () => now });
+  await svc.ensureFresh();
+  now = ISSUED + 4 * H;
+  await svc.ensureFresh({ force: true });
+  let cur = svc.current(now);
+  assert.equal(cur.status, 'cached');
+  assert.equal(cur.outlook.issuedMs, ISSUED);
+  assert.match(cur.lastError, /unusable_outlook:future/);
+  now = ISSUED + 6 * H;
+  await svc.ensureFresh({ force: true });
+  cur = svc.current(now);
+  assert.equal(cur.status, 'live');
+  assert.equal(cur.outlook.issuedMs, ISSUED + 5 * H);
+});

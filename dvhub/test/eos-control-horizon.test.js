@@ -409,3 +409,25 @@ test('Modus „bis in die Preisprognose“ ohne Prognose: wie der ganze Preiszei
     assert.equal(e.state.optimizer.eosControl.reason, 'prices');
   } finally { await mock.close(); }
 });
+
+// Codex 27983aca (P2): Die angezeigte Vorausschau berücksichtigt Steuerzeitraum
+// + Schwanz — „automatisch“ mit 6 h Steuerzeitraum und 48 h Schwanz schaut
+// 54 h voraus, nicht 72 h.
+test('Vorausschau: Steuerzeitraum + Schwanz begrenzt (automatisch 6 h + 48 h = 54 h)', async () => {
+  const mock = await createMockEos();
+  try {
+    const e = env(mock, { realHours: 30, optimizer: { eosControlHorizonMaxHours: 'auto' } });
+    // PV/Last reichen hier 40 h — für diesen Fall weiter (80 h).
+    const fc = await e.ctx.forecastService.buildForecastResponse();
+    const pv = []; const load = [];
+    for (let ms = e.q0; ms < e.q0 + 80 * H; ms += Q) pv.push({ start: new Date(ms).toISOString(), powerW: 1000 });
+    for (let ms = e.q0 - (e.q0 % H); ms < e.q0 + 80 * H; ms += H) load.push({ start: new Date(ms).toISOString(), powerW: 500 });
+    e.ctx.forecastService = { buildForecastResponse: async () => ({ ...fc, pv: { slots: pv }, load: { slots: load } }) };
+    await createEosForecastBridge(e.ctx).push();
+    assert.equal(horizonPut(mock), 6);
+    const look = e.state.optimizer.eosPriceTail.lookahead;
+    assert.equal(look.limitedBy, 'tail');
+    const start = Math.floor(Date.now() / (15 * 60_000)) * 15 * 60_000;
+    assert.ok(Math.abs(Date.parse(look.until) - (start + 54 * H)) <= 15 * 60_000, look.until);
+  } finally { await mock.close(); }
+});

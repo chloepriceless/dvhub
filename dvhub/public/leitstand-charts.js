@@ -1106,7 +1106,7 @@
     };
   }
   window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, {
-    loadForecastHint: loadForecastHint, eosPlanSeries: eosPlanSeries,
+    loadForecastHint: loadForecastHint, eosPlanSeries: eosPlanSeries, eosPlanTicks: eosPlanTicks,
     energyBalanceSummary: energyBalanceSummary, energyBalanceView: energyBalanceView, restKwhFrom: restKwhFrom, seriesCoversToday: seriesCoversToday, seriesCoversUntil: seriesCoversUntil, berlinMidnightAfter: berlinMidnightAfter,
   });
 
@@ -1436,9 +1436,33 @@
     return out;
   }
 
+  // Achsenmarken des EOS-Fahrplans: bis 40 h alle 3 h ab der nächsten vollen
+  // Stunde; mehrtägig (Steuerzeitraum bis in die Preisprognose) alle 6 bzw.
+  // 12 h ab Ortsmitternacht, damit jede Mitternacht eine Marke (mit Datum)
+  // bekommt (Codex 27983aca). setHours rechnet in Ortszeit, Zeitumstellung inklusive.
+  function eosPlanTicks(min, max) {
+    var span = max - min;
+    var stepH = span > 72 * 3600000 ? 12 : span > 40 * 3600000 ? 6 : 3;
+    var d = new Date(min);
+    if (stepH === 3) {
+      d.setMinutes(0, 0, 0);
+      if (d.getTime() < min) d.setHours(d.getHours() + 1);
+    } else {
+      d.setHours(0, 0, 0, 0);
+    }
+    var ticks = [];
+    for (var guard = 0; d.getTime() <= max && guard < 500; guard += 1) {
+      if (d.getTime() >= min) ticks.push({ value: d.getTime() });
+      d.setHours(d.getHours() + stepH);
+    }
+    return ticks;
+  }
+
   async function fetchEosPlan() {
     try {
-      var res = await apiFetch('/api/eos/plan');
+      // Bis 8 Tage à 96 Slots: Steuerzeitraum „bis in die Preisprognose“ (bis
+      // 120 h = 480 Zeilen) passt nicht in den Standard von 300 (Codex 27983aca).
+      var res = await apiFetch('/api/eos/plan?rows=768');
       return (res && res.ok) ? await res.json() : null;
     } catch { return null; }
   }
@@ -1519,7 +1543,7 @@
   // Preisschwanz (1.0.11): Zeile unter dem EOS-Fahrplan — wie weit EOS
   // vorausschaut, woher die Preise hinter den festen Börsenpreisen kommen und,
   // ohne Prognose, seit wann sie fehlt. Nur textContent.
-  var EOS_LIMITED_BY = { pv: 'PV-Prognose', load: 'Verbrauchsprognose', prices: 'Preisprognose', prediction: 'eingestellten Prognosehorizont' };
+  var EOS_LIMITED_BY = { pv: 'PV-Prognose', load: 'Verbrauchsprognose', prices: 'Preisprognose', prediction: 'eingestellten Prognosehorizont', tail: 'Schwanzlänge (Prognosehorizont)' };
   var EOS_TAIL_OFF = {
     zone: 'Preisprognose gibt es nur für die Preiszone DE-LU — EOS plant bis zum Ende der festen Börsenpreise.',
     source_public: 'Preisquelle „Öffentlich“: keine Preisprognose von dvhub.online — EOS plant bis zum Ende der festen Börsenpreise.',
@@ -1533,7 +1557,7 @@
     if (!tail) return { text: '', warn: false };
     var look = tail.lookahead || null;
     var reach = look && look.until
-      ? 'EOS schaut voraus bis ' + eosTailTime(look.until) + (look.limitedBy && look.limitedBy !== 'prediction' && EOS_LIMITED_BY[look.limitedBy] ? ' (begrenzt durch ' + EOS_LIMITED_BY[look.limitedBy] + ')' : '')
+      ? 'EOS schaut voraus bis ' + eosTailTime(look.until) + (look.limitedBy && look.limitedBy !== 'prediction' && look.limitedBy !== 'tail' && EOS_LIMITED_BY[look.limitedBy] ? ' (begrenzt durch ' + EOS_LIMITED_BY[look.limitedBy] + ')' : '')
       : '';
     if (tail.used) {
       var src = 'Preise ab ' + eosTailTime(tail.from) + ': Prognose dvhub.online, Stand ' + eosTailTime(tail.issuedAt)
@@ -1627,15 +1651,7 @@
       x: {
         type: 'linear', min: xmin, max: xmax,
         grid: { color: _aur('--chart-grid', 'rgba(90,106,138,0.15)') },
-        afterBuildTicks: function (axis) {
-          var d = new Date(axis.min); d.setMinutes(0, 0, 0);
-          if (d.getTime() < axis.min) d.setHours(d.getHours() + 1);
-          // Mehrtägiger Plan (Steuerzeitraum bis in die Preisprognose): weitere Abstände.
-          var span = axis.max - axis.min;
-          var step = (span > 72 * 3600000 ? 12 : span > 40 * 3600000 ? 6 : 3) * 3600000, ticks = [];
-          for (var t = d.getTime(); t <= axis.max; t += step) ticks.push({ value: t });
-          axis.ticks = ticks;
-        },
+        afterBuildTicks: function (axis) { axis.ticks = eosPlanTicks(axis.min, axis.max); },
         ticks: { maxRotation: 0, color: _aur('--chart-axis', '#5a6a8a'), font: { family: 'JetBrains Mono', size: 10 },
           callback: function (v) {
             var d = new Date(v);

@@ -1723,37 +1723,24 @@ export function createEosForecastBridge(ctx) {
       state.optimizer.evValueInputs = evValueInputs;
     }
 
-    // Wie weit EOS vorausschauen kann (1.0.11): Ende von PV, Last und Preisen
-    // gegen den Prognosehorizont — EOS kürzt seinen Schwanz an der kürzesten
-    // Reihe. Für die Anzeige „Vorausschau bis …, begrenzt durch …“.
-    if (state?.optimizer?.eosPriceTail) {
-      const endOf = (list, stepMs) => {
-        let end = -Infinity;
-        for (const x of Array.isArray(list) ? list : []) {
-          const ms = Date.parse(x?.start);
-          if (Number.isFinite(ms) && Number.isFinite(Number(x?.powerW ?? x?.ctKwh))) end = Math.max(end, ms + stepMs);
-        }
-        return end;
-      };
-      const nowMs = Date.now();
-      const ends = {
-        prediction: nowMs + resolveEosPredictionHours(cfg) * 3_600_000,
-        pv: endOf(pvSlots, PRICE_SLOT_MS),
-        load: endOf(loadSlotsForEos, 3_600_000),
-        prices: realPriceCoverage(priceSlotsCt).end,
-      };
-      let limitedBy = 'prediction';
-      for (const k of ['prices', 'pv', 'load']) if (ends[k] < ends[limitedBy]) limitedBy = k;
-      const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
-      state.optimizer.eosPriceTail.lookahead = {
-        until: iso(ends[limitedBy]),
-        limitedBy,
-        predictionUntil: iso(ends.prediction),
-        pvUntil: iso(ends.pv),
-        loadUntil: iso(ends.load),
-        pricesUntil: iso(ends.prices),
-      };
-    }
+    // Wie weit EOS vorausschauen kann (1.0.11): Ende von PV, Last und Preisen —
+    // EOS kürzt seinen Schwanz an der kürzesten Reihe. Dazu unten (nach dem
+    // Steuerzeitraum) die eingestellten Grenzen: Prognosehorizont und
+    // Steuerzeitraum + angeforderter Schwanz (Codex 27983aca). Für die Anzeige
+    // „EOS schaut voraus bis …, begrenzt durch …“.
+    const endOf = (list, stepMs) => {
+      let end = -Infinity;
+      for (const x of Array.isArray(list) ? list : []) {
+        const ms = Date.parse(x?.start);
+        if (Number.isFinite(ms) && Number.isFinite(Number(x?.powerW ?? x?.ctKwh))) end = Math.max(end, ms + stepMs);
+      }
+      return end;
+    };
+    const dataEnds = {
+      pv: endOf(pvSlots, PRICE_SLOT_MS),
+      load: endOf(loadSlotsForEos, 3_600_000),
+      prices: realPriceCoverage(priceSlotsCt).end,
+    };
 
     const tasks = [
       {
@@ -1931,6 +1918,30 @@ export function createEosForecastBridge(ctx) {
     const horizon = await syncControlHorizon(baseUrl, decision, { gone });
     if (horizon.error) errors.horizon = horizon.error;
     if (gone()) return abandoned();
+    if (state?.optimizer?.eosPriceTail) {
+      // Vorausschau = früheste Grenze aus Daten (PV, Last, Preise) und
+      // Einstellung (Prognosehorizont; Steuerzeitraum + Schwanz, EOS
+      // tail_slots = min(angefordert, Prognosehorizont − Steuerzeitraum)).
+      const { windowStartMs: startMs } = runWindow(runNowMs);
+      const ctrlH = Number.isFinite(horizon.hours) ? horizon.hours : decision?.hours;
+      const ends = {
+        prediction: startMs + resolveEosPredictionHours(cfg) * 3_600_000,
+        ...(Number.isFinite(ctrlH) ? { tail: startMs + (ctrlH + (resolveEosTailHours(cfg) ?? EOS_DEFAULT_TAIL_HOURS)) * 3_600_000 } : {}),
+        ...dataEnds,
+      };
+      let limitedBy = 'prediction';
+      for (const k of ['tail', 'prices', 'pv', 'load']) if (Number.isFinite(ends[k]) && ends[k] < ends[limitedBy]) limitedBy = k;
+      const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+      state.optimizer.eosPriceTail.lookahead = {
+        until: iso(ends[limitedBy]),
+        limitedBy,
+        predictionUntil: iso(ends.prediction),
+        tailUntil: iso(ends.tail),
+        pvUntil: iso(ends.pv),
+        loadUntil: iso(ends.load),
+        pricesUntil: iso(ends.prices),
+      };
+    }
 
     // Darf ein Lauf auf diesem Stand rechnen (prepareRun)? Nur wenn der
     // Preis-Import ankam und der Steuerzeitraum ab dem spätest möglichen
