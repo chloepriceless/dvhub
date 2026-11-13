@@ -3,6 +3,7 @@
 import Foundation
 import Observation
 import UIKit
+import WidgetKit
 import DVhubLink
 
 @MainActor
@@ -41,6 +42,8 @@ final class AppModel {
     /// Nur für Simulator-Tests (Debug-Startargument): Link ohne Rückfrage koppeln.
     var pendingPairAutoStart = false
 
+    private let widgets = WidgetBridge()
+
     init() {}
 
     /// Anlagen aus dem Schlüsselbund lesen. Wird bei jedem Wechsel in den
@@ -68,6 +71,10 @@ final class AppModel {
     private func attach(_ creds: LinkCredentials) {
         let c = SystemController(credentials: creds)
         c.onCredentialsChanged = { [weak self] updated in self?.store(updated) }
+        c.onStatus = { [weak self, weak c] status, at in
+            guard let self, let c, c.credentials.id == self.selectedId else { return }
+            self.widgets.update(status, at: at, boxName: c.credentials.boxName)
+        }
         controllers[creds.id] = c
     }
 
@@ -98,12 +105,17 @@ final class AppModel {
 
     func deactivate() {
         for c in controllers.values { c.stop() }
+        // Beim Verlassen den letzten Stand sicher an die Widgets geben.
+        if let c = selected, let s = c.displayStatus, let at = c.displayAt {
+            widgets.update(s, at: at, boxName: c.credentials.boxName, force: true)
+        }
     }
 
     func select(_ id: String) {
         guard id != selectedId else { return }
         selected?.stop()
         selectedId = id
+        widgets.reset()
         selected?.start()
     }
 
@@ -214,7 +226,49 @@ final class AppModel {
         persist()
         if selectedId == id {
             selectedId = systems.first?.id
+            widgets.reset()
             selected?.start()
         }
+    }
+}
+
+/// Gibt den letzten Stand der gewählten Anlage an die Widgets (App-Gruppe).
+/// Gedrosselt: Live-Werte kommen alle 2 s, die Widgets brauchen das nicht —
+/// und das System begrenzt, wie oft eine App ihre Widgets neu zeichnen lässt.
+@MainActor
+final class WidgetBridge {
+    private var lastWrite: Date?
+    private var lastReload: Date?
+    private var lastSnapshot: WidgetSnapshot?
+    static let writeEvery: TimeInterval = 30
+    static let reloadEvery: TimeInterval = 300
+
+    func update(_ s: LiveStatus, at: Date, boxName: String, force: Bool = false) {
+        guard SharedStore.isAvailable else { return }
+        let now = Date()
+        if !force, let lastWrite, now.timeIntervalSince(lastWrite) < Self.writeEvery { return }
+        let snap = WidgetSnapshot(boxName: boxName, at: at, soc: s.soc, pvW: s.pvTotalW, loadW: s.loadW, gridImportW: s.gridImportW,
+                                  gridExportW: s.gridExportW, batteryW: s.batteryPowerW, todayNetEur: s.todayNetEur,
+                                  todayRevenueEur: s.todayRevenueEur, todayCostEur: s.todayCostEur, emergencyStop: s.emergencyStop,
+                                  alarmsActive: s.alarmsActive)
+        guard SharedStore.write(snap) else { return }
+        lastWrite = now
+        // Sofort neu zeichnen, wenn sich etwas Wichtiges ändert (Not-Halt, Alarm), sonst alle fünf Minuten.
+        let urgent = lastSnapshot.map { $0.emergencyStop != snap.emergencyStop || $0.alarmsActive != snap.alarmsActive } ?? true
+        lastSnapshot = snap
+        if force || urgent || lastReload.map({ now.timeIntervalSince($0) >= Self.reloadEvery }) ?? true {
+            lastReload = now
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+    }
+
+    /// Anlage gewechselt oder entfernt: alten Stand löschen.
+    func reset() {
+        guard SharedStore.isAvailable else { return }
+        SharedStore.clear()
+        lastWrite = nil
+        lastSnapshot = nil
+        lastReload = Date()
+        WidgetCenter.shared.reloadAllTimelines()
     }
 }

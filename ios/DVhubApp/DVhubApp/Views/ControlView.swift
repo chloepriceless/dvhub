@@ -49,7 +49,7 @@ struct ControlView: View {
             SwiftUI.Section {
                 HStack {
                     Image(systemName: stopped ? "exclamationmark.octagon.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(stopped ? .red : .green)
+                        .foregroundStyle(stopped ? Brand.red : Brand.green)
                         .font(.title2)
                     VStack(alignment: .leading) {
                         Text(stopped ? "Not-Halt ist aktiv" : "Regelung läuft").font(.headline)
@@ -82,6 +82,7 @@ struct ControlView: View {
             }
         }
         .navigationTitle("Steuern")
+        .auroraList()
         .confirmationDialog("Not-Halt auslösen?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Not-Halt auslösen", role: .destructive) { Task { await send("/api/control/stop", "Not-Halt auslösen") } }
         } message: { Text("DVhub hört auf, Sollwerte an die Anlage zu schreiben.") }

@@ -22,7 +22,7 @@ struct PairView: View {
             if onboarding {
                 SwiftUI.Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Image(systemName: "bolt.horizontal.circle.fill").font(.system(size: 44)).foregroundStyle(.tint)
+                        Image(systemName: "bolt.horizontal.circle.fill").font(.system(size: 44)).foregroundStyle(Brand.auroraLinear)
                         Text("DVhub koppeln").font(.title2.bold())
                         Text("Öffne in der DVhub-Oberfläche Einstellungen → „Handy-App“ und tippe auf „Handy koppeln“. Scanne dann den QR-Code.")
                             .foregroundStyle(.secondary)
@@ -79,6 +79,7 @@ struct PairView: View {
             SwiftUI.Section { status }
         }
         .navigationTitle(onboarding ? "Willkommen" : "Anlage koppeln")
+        .auroraList()
         .toolbar {
             if !onboarding {
                 ToolbarItem(placement: .cancellationAction) { Button("Schließen") { dismiss() } }

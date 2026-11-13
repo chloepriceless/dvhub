@@ -40,6 +40,7 @@ struct SystemsView: View {
             }
         }
         .navigationTitle("Anlagen")
+        .auroraList()
         .confirmationDialog("Anlage von diesem Gerät entfernen?", isPresented: Binding(get: { removeId != nil }, set: { if !$0 { removeId = nil } }), titleVisibility: .visible) {
             Button("Entfernen", role: .destructive) { if let id = removeId { model.remove(id) }; removeId = nil }
         }

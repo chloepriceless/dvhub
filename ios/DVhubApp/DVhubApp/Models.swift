@@ -12,14 +12,6 @@ struct SeriesPoint: Identifiable, Equatable {
     var id: String { "\(key)|\(date.timeIntervalSince1970)" }
 }
 
-struct PlanRow: Identifiable, Equatable {
-    let date: Date
-    let socPct: Double?
-    let pvKw: Double
-    let feedInKw: Double
-    var id: Date { date }
-}
-
 enum ISO {
     static let fractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -38,33 +30,75 @@ enum ISO {
     static func string(_ d: Date) -> String { fractional.string(from: d) }
 }
 
-enum Format {
-    static let de = Locale(identifier: "de_DE")
+// Format (Zahlen/Zeiten) liegt in Shared/Format.swift — auch für die Widgets.
 
-    /// 850 W, 4,2 kW — ohne Vorzeichen.
-    static func power(_ w: Double?) -> String {
-        guard let w else { return "–" }
-        let a = abs(w)
-        if a >= 1000 { return (a / 1000).formatted(.number.precision(.fractionLength(1)).locale(de)) + " kW" }
-        return a.formatted(.number.precision(.fractionLength(0)).locale(de)) + " W"
+// MARK: - Abrufe bei der Box
+
+enum BoxData {
+    struct Failure: Error { let message: String }
+
+    static let powerKeys = ["pv_total_w", "load_power_w", "self_consumption_w", "grid_import_w", "grid_export_w", "battery_power_w"]
+    static let socKey = "battery_soc_pct"
+    static let dayKeys = powerKeys + [socKey]
+
+    static func enc(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? s
     }
 
-    static func percent(_ p: Double?) -> String {
-        guard let p else { return "–" }
-        return p.formatted(.number.precision(.fractionLength(0)).locale(de)) + " %"
+    /// Messreihen aus /api/telemetry/series. 300 s: Die Box fasst in
+    /// 5-Minuten-Mittel zusammen (rund 1 500 Zeilen am Tag). Mit 900 käme jeder
+    /// 5-s-Messwert und sprengte den Kanal. Bleibt das leer, gibt es an dem Tag
+    /// nur grobe Werte (z. B. VRM-Import, 15 min) — dann diese holen.
+    static func series(_ c: SystemController, keys: [String], start: Date, end: Date) async -> Result<[SeriesPoint], Failure> {
+        let base = "/api/telemetry/series?keys=\(keys.joined(separator: ","))&start=\(enc(ISO.string(start)))&end=\(enc(ISO.string(end)))&maxResolution="
+        do {
+            var r = try await c.request("GET", base + "300")
+            if r.status == 200, r.body["ok"]?.bool != false, (r.body["data"]?.array ?? []).isEmpty {
+                r = try await c.request("GET", base + "900")
+            }
+            // Bricht die Datenbank mitten im Strom ab, bleibt es bei HTTP 200,
+            // aber ok:false — dann keine halben Kurven zeigen.
+            guard r.status == 200, r.body["ok"]?.bool != false, let rows = r.body["data"]?.array else {
+                switch r.status {
+                case 200: return .failure(Failure(message: "Verlauf unvollständig: \(r.body["error"]?.string ?? "Fehler in der Anlage")."))
+                case 503: return .failure(Failure(message: "Die Anlage hat keine Messwert-Datenbank."))
+                case 413: return .failure(Failure(message: "Der Verlauf ist für die Übertragung zu groß."))
+                case 429: return .failure(Failure(message: "Gerade zu viele Anfragen. Bitte gleich noch einmal."))
+                default: return .failure(Failure(message: "Verlauf nicht verfügbar (HTTP \(r.status))."))
+                }
+            }
+            return .success(rows.compactMap { row in
+                guard let key = row["key"]?.string, let d = ISO.parse(row["ts"]?.string), let v = row["value"]?.double else { return nil }
+                return SeriesPoint(key: key, date: d, value: v)
+            })
+        } catch {
+            return .failure(Failure(message: userMessage(for: error)))
+        }
     }
 
-    static func euro(_ e: Double?) -> String {
-        guard let e else { return "–" }
-        return e.formatted(.currency(code: "EUR").locale(de))
+    enum HistoryResult {
+        case ok(HistorySummary)
+        case proRequired
+        case failed(String)
     }
 
-    static func time(_ d: Date) -> String {
-        d.formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(de))
-    }
-
-    static func dateTime(_ d: Date) -> String {
-        if Calendar.current.isDateInToday(d) { return "heute " + time(d) }
-        return d.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(de))
+    static func history(_ c: SystemController, view: HistoryPeriod, date: Date) async -> HistoryResult {
+        let param = HistorySummary.dateParam(date)
+        do {
+            let r = try await c.request("GET", "/api/history/summary?view=\(view.rawValue)&date=\(param)&lean=1")
+            if HistorySummary.isProRequired(status: r.status, body: r.body) { return .proRequired }
+            switch r.status {
+            case 200:
+                guard let s = HistorySummary.from(r.body, view: view, date: param) else { return .failed("Unerwartete Antwort der Anlage.") }
+                return .ok(s)
+            case 503: return .failed("Die Anlage hat keine Messwert-Datenbank.")
+            // Ältere DVhub-Stände kennen lean=1 nicht und schicken alles.
+            case 413: return .failed("Die Auswertung ist für die Übertragung zu groß. Ein neuerer DVhub-Stand schickt sie schlanker.")
+            case 429: return .failed("Gerade zu viele Anfragen. Bitte gleich noch einmal.")
+            default: return .failed("Historie nicht verfügbar (HTTP \(r.status)).")
+            }
+        } catch {
+            return .failed(userMessage(for: error))
+        }
     }
 }

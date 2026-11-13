@@ -17,8 +17,10 @@ targets:
     platform: iOS
     sources:
       - DVhubApp
+      - Shared
     dependencies:
       - package: DVhubLink
+      - target: DVhubWidgets
     info:
       path: DVhubApp/Info.plist
       properties:
@@ -43,6 +45,7 @@ targets:
         NSCameraUsageDescription: Die Kamera liest den Kopplungs-QR-Code aus der DVhub-Oberfläche.
         NSLocalNetworkUsageDescription: DVhub verbindet sich im Heimnetz direkt mit deiner Anlage.
         NSFaceIDUsageDescription: Face ID bestätigt Schaltbefehle an deine Anlage.
+        DVhubAppGroup: $(DVHUB_APP_GROUP)
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         CFBundleURLTypes:
@@ -54,11 +57,38 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(DVHUB_BUNDLE_ID)
         PRODUCT_NAME: DVhub
         CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: $(DVHUB_APP_ENTITLEMENTS)
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
+  DVhubWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - DVhubWidgets
+      - Shared
+    info:
+      path: DVhubWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: DVhub
+        CFBundleDevelopmentRegion: de
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        DVhubAppGroup: $(DVHUB_APP_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DVHUB_BUNDLE_ID).widgets
+        PRODUCT_NAME: DVhubWidgets
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: $(DVHUB_WIDGET_ENTITLEMENTS)
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        SKIP_INSTALL: YES
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
   DVhubAppUITests:
     type: bundle.ui-testing
     platform: iOS

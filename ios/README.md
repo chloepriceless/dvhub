@@ -1,16 +1,18 @@
 # DVhub für iPhone
 
-Native App (SwiftUI, iOS 17+) für die Handy-Kopplung mit DVhub. Sie zeigt die
-Live-Werte der Anlage, den Tagesverlauf und den EOS-Plan. Mit Freigabe
-„Steuern“ kann sie auch den Not-Halt auslösen. Alles läuft Ende zu Ende
-verschlüsselt: im Heimnetz direkt zur Box, unterwegs über das Relay
+Native App (SwiftUI, iOS 17+) für die Handy-Kopplung mit DVhub: Leitstand mit
+Energiefluss, Detailwerte, Börsenpreise und Residuallast-Frühwarnung, Historie,
+Fahrplan, Zustand der Anbindungen, Nachrichten und Widgets. Mit Freigabe
+„Steuern“ kann sie auch den Not-Halt auslösen. Anlagendaten laufen Ende zu
+Ende verschlüsselt: im Heimnetz direkt zur Box, unterwegs über das Relay
 (`relay.dvhub.de` oder ein selbst gehostetes). Das Protokoll steht in
-[`docs/HANDY-APP-PROTOKOLL.md`](../docs/HANDY-APP-PROTOKOLL.md).
+[`docs/HANDY-APP-PROTOKOLL.md`](../docs/HANDY-APP-PROTOKOLL.md). Öffentliche
+Daten (Preise, Prognose, Nachrichten) holt die App direkt bei `dvhub.online`.
 
 | Ordner | Inhalt |
 |---|---|
 | `DVhubLink/` | Swift-Paket: Kryptografie, QR-Code, Kopplung, Verbindung, Schlüsselbund |
-| `DVhubApp/` | Die App (Xcode-Projekt aus `project.yml` per XcodeGen) |
+| `DVhubApp/` | Die App und die Widget-Erweiterung `DVhubWidgets` (Xcode-Projekt aus `project.yml` per XcodeGen); `Shared/` gehört beiden |
 | `interop/harness.mjs` | Echte DVhub-Gegenstelle (Relay + Box-Agent mit Beispielwerten) für Tests |
 
 ## Bauen
@@ -82,27 +84,91 @@ Face ID oder dem Gerätecode.
 
 ## Bedienung
 
-- **Übersicht:** PV, Akku (+ = Laden), Netz (Bezug/Einspeisung), Haus, Ertrag
-  heute und Zustand (Alarme, Not-Halt, Abregelung), dazu „Meldungen“ aus dem
-  Briefkasten (Alarm-/Not-Halt-Wechsel; auf dem Handy gespeichert, erst dann am
-  Relay quittiert). Ist die Anlage nicht erreichbar, zeigt die App den letzten
-  Stand aus dem Briefkasten mit Uhrzeit.
-- **Verlauf:** heute/gestern aus `/api/telemetry/series`.
-- **Plan:** EOS-Fahrplan aus `/api/eos/plan` (braucht in DVhub Pro).
-- **Steuern:** Not-Halt auslösen/aufheben, nur mit Freigabe „Steuern“.
-- **Anlagen:** mehrere Anlagen. Entfernen löscht nur die Zugangsdaten auf dem
-  Handy; in DVhub die Kopplung ebenfalls entfernen.
+Fünf Reiter:
+
+- **Leitstand:** Energiefluss mit Partikeln (PV, Akku, Netz, Haus; Richtung,
+  Dichte und Tempo folgen der Leistung; mit „Bewegung reduzieren“ stehen Pfeile).
+  Darunter antippbare Karten mit Tagesverlauf: PV, Akku, Netz, Haus, Heute
+  (Erlöse/Kosten), Börse, Zustand, Meldungen aus dem Briefkasten. Jede Karte und
+  jeder Knoten öffnet Detailwerte (Phasen, Flüsse, Min-SoC, Sollwert, Zähler,
+  Tagessummen). Ist die Anlage nicht erreichbar, zeigt die App den letzten Stand
+  aus dem Briefkasten mit Uhrzeit.
+- **Markt:** Börsenpreis jetzt, Frühwarnung vor teuren Tagen und eine
+  Tagesleiste: Heute und Morgen als feste Börsentage (Viertelstunden, günstigste
+  und teuerste drei Stunden, eigener Bezugspreis aus DVhub), danach fünf
+  Prognosetage mit Bandbreite, Einstufung, Residuallast, Wind und Sonne. Dazu
+  die Bilanz der Prognose und, als „explorativ“ gekennzeichnet, die Vergleiche
+  (Darius-Nachbau, EpexPredictor). Quelle: `dvhub.online`
+  (`/api/prices`, `/v1/residual-load/outlook`, `/v1/residual-load/score`).
+- **Historie:** Tag, Woche, Monat, Jahr aus `/api/history/summary?lean=1`
+  (Energie, Erlöse, Kosten, Autarkie, Kennzahlen); Zeile antippen öffnet den
+  Tag bzw. Monat. Woche/Monat/Jahr brauchen in DVhub Pro.
+- **Nachrichten:** Energie-Meldungen von `dvhub.online/api/news`, Filter nach
+  Quelle, Artikel im eingebauten Browser mit Lesemodus.
+- **Mehr:** Fahrplan (EOS-Plan aus `/api/eos/plan`, Zeitplan aus
+  `/api/schedule`), Integrationen (Zustand und Datenfluss), System
+  (Einstellungen zum Nachsehen), Steuern (Not-Halt, nur mit Freigabe
+  „Steuern“), Anlagen, Darstellung, Über.
+
+Die App liest nur. Geschaltet wird allein der Not-Halt. Die Konfiguration
+(`/api/config`) und `/api/integrations/status` sind für die App nicht
+freigegeben, weil sie Adressen, Kennungen und Standortdaten enthalten.
 
 **Verbindung:** zuerst die Heimnetz-Adressen (2,5 s), dann das Relay. Über das
 Relay prüft die App alle 30 s, ob das Heimnetz wieder erreichbar ist, und
 wechselt dann. Bricht eine Verbindung ab (oder hält sie keine 10 s), wartet die
 App wachsend 1, 2, 4 … bis 30 s.
 
-**iPhone Duo und iPad:** Ist das Gerät zugeklappt (schmal), gibt es eine
-Tab-Leiste mit einer Spalte. Aufgeklappt (breit) gibt es eine Seitenleiste mit
-Anlagen und Bereichen; die Kacheln stehen zweispaltig, Verlauf und Diagramme
-nebeneinander, sobald genug Breite da ist. Drehen und Auf-/Zuklappen bauen nur
-die Ansicht neu, die Verbindung bleibt stehen.
+## iPhone Duo und iPad
+
+Nach Apples Richtlinien (Stand 13.11.2026: HIG „Designing for iPhone Duo“,
+<https://developer.apple.com/design/human-interface-guidelines/designing-for-iphone-duo>;
+Tech Talk „Prepare your app for iPhone Duo“,
+<https://developer.apple.com/videos/play/tech-talks/111461/>;
+<https://developer.apple.com/documentation/technologyoverviews/preparing-your-app-for-iphone-duo>):
+
+- **Zugeklappt** (und aufgeklappt im Querformat) legt das System Reiter und
+  Toolbar an den rechten Rand, **aufgeklappt im Hochformat** bleiben sie
+  waagerecht oben und unten, und der Inhalt füllt die Fläche. Das gilt nur für
+  Standard-Bausteine. Die App nutzt deshalb `TabView`, `NavigationStack` und
+  Toolbar-Einträge als `Label` mit Symbol und Titel.
+- Das System legt die Leisten erst um, wenn die App mit dem **iOS-27.1-SDK**
+  (Xcode 27.1) gebaut ist. Mit älterem SDK gibt es dafür einen Ersatz mit
+  derselben Anordnung (`SideRail` in `Views/RootView.swift`): Reiter und
+  Aktionen der Ansicht stehen rechts, wenn die Fläche niedrig ist (Querformat)
+  oder kurz und breit wie das Außendisplay. Er schaltet sich ab, sobald
+  `DTSDKName` 27.1 oder neuer meldet. Unter Mehr → Darstellung lässt sich die
+  Leiste auch fest auf „Rechts“ oder „Unten“ stellen.
+- Layout nur nach Fläche und Größenklasse, nie nach Gerätetyp: Ab 600 pt
+  Inhaltsbreite stehen Karten und Diagramme zweispaltig.
+- Auf-/Zuklappen und Drehen bauen nur die Ansicht neu. Verbindung, Auswahl und
+  Navigationspfade bleiben stehen.
+- Schaltbefehle bestätigt man mit Touch ID (iPhone Duo), Face ID oder
+  Gerätecode; der Text richtet sich nach `LAContext.biometryType`.
+
+**Annahmen (von Apple nicht belegt):** die Punktgrößen 466 × 678 (außen) und
+669 × 951 (innen), abgeleitet aus den Pixelmaßen bei @3x; daraus die Schwelle
+„Seitenverhältnis unter 1,72“ für das Außendisplay. Einen iPhone-Duo-Simulator
+gibt es erst ab Xcode 27.1. Bis dahin zeigen die Debug-Startargumente
+`-DVHUB_DUO closed|closed-landscape|open` die App in diesen Flächen (auf einem
+iPad-Simulator starten). Nach dem Umstieg auf Xcode 27.1 offen: Falz über
+`reservedRegions(kind: .division)` berücksichtigen, `toolbarVerticalBehavior`
+prüfen.
+
+## Widgets
+
+Zwei Widgets: **Anlage** (klein, mittel, Sperrbildschirm rund/rechteckig/
+einzeilig: Akkustand, Erzeugung, Einspeisung bzw. Bezug, Hausverbrauch) und
+**Heute** (klein, Sperrbildschirm rechteckig: verdient oder gekostet, Erlös,
+Kosten). Sie zeigen den letzten Stand, den die App gesehen hat, mit Uhrzeit.
+Selbst holen können sie nichts: Der Geräteschlüssel liegt in der Secure
+Enclave der App.
+
+App und Widgets teilen sich die Daten über eine App-Gruppe. Ihre Kennung folgt
+der Bundle-ID (`group.$(DVHUB_BUNDLE_ID)`, `Config/App.xcconfig`). Lehnt eine
+Signatur die App-Gruppe ab, beim Bauen
+`DVHUB_APP_ENTITLEMENTS= DVHUB_WIDGET_ENTITLEMENTS= DVHUB_APP_GROUP=` anhängen:
+Die App läuft normal, die Widgets zeigen einen Hinweis.
 
 ## Tests
 
@@ -124,11 +190,16 @@ xcodebuild test -project ios/DVhubApp/DVhubApp.xcodeproj -scheme DVhubApp \
   -destination 'platform=iOS Simulator,name=iPhone 18 Pro'
 ```
 
-Nur im Debug-Build gibt es Startargumente für Simulator-Tests:
-`-DVHUB_PAIR '<QR-Text>'` koppelt beim Start, `-DVHUB_TAB history|plan|control|systems`
-öffnet einen Bereich.
+Nur im Debug-Build gibt es Startargumente für Simulator-Tests und Bildschirmfotos:
+`-DVHUB_PAIR '<QR-Text>'` koppelt beim Start,
+`-DVHUB_TAB dashboard|market|history|news|more|plan|integrations|system|control|systems`
+öffnet einen Bereich, `-DVHUB_OPEN pv|battery|grid|home|money|state` eine
+Detailansicht, `-DVHUB_HISTORY week|month|year` und `-DVHUB_MARKET_DAY <n>`
+wählen Zeitraum bzw. Tag, `-DVHUB_DUO closed|closed-landscape|open` zeigt die
+Flächen des iPhone Duo, `-navPlacement side|bottom` erzwingt die Leistenlage.
 
 Der Harness kennt außerdem diese Umgebungsvariablen:
 - `HARNESS_APPROVE_DELAY_MS`: Freigabe verzögern, um den Vergleichscode anzusehen.
 - `HARNESS_NO_LAN=1`: Kopplung nur über das Relay.
+- `HARNESS_FULL_DAY=1`: Verlauf und Historie für den ganzen heutigen Tag liefern.
 - `SIGUSR1` / `SIGUSR2`: Box vom Netz nehmen bzw. wieder verbinden.
