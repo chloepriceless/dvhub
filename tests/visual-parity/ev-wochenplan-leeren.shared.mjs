@@ -172,7 +172,9 @@ export async function integrationsFlow(page, request, testInfo, { touchMin }) {
 
 export async function tileFlow(page, request, testInfo, { touchMin }) {
   const posted = await catchEvPosts(page);
-  await page.goto('/');
+  // Leitstand direkt: „/“ zeigt auf einer frischen Box (config.example.json,
+  // setupCompleted:false — so wie in der CI) den Einrichtungs-Assistenten.
+  await page.goto('/index.html');
   const tog = page.locator('#evWeekToggle');
   if ((await tog.getAttribute('aria-expanded')) !== 'true') await press(page, tog);
   const weekly = page.locator('#evWeeklyGrid');
