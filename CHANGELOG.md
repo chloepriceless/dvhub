@@ -494,6 +494,8 @@ Themen — die Einzelheiten stehen in den Einträgen darunter:
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.
+- **README und Bilder erneuert.** Oben Free & Pro mit Preisen und Links auf dvhub.de, Funktionen mit Free/Pro, neue
+  Bilder (hell und dunkel, synthetische Daten), neues Logo; das alte Logo ist entfernt.
 
 ### Behoben
 

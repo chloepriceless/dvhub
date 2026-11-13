@@ -1,72 +1,178 @@
 <p align="center">
-  <img src="assets/dvhub-wordmark.png" alt="DVhub" width="640" />
+  <img src="assets/dvhub-wordmark.png" alt="DVhub" width="560" />
 </p>
-
-```
-██████╗ ██╗   ██╗██╗  ██╗██╗   ██╗██████╗
-██╔══██╗██║   ██║██║  ██║██║   ██║██╔══██╗
-██║  ██║██║   ██║███████║██║   ██║██████╔╝
-██║  ██║╚██╗ ██╔╝██╔══██║██║   ██║██╔══██╗
-██████╔╝ ╚████╔╝ ██║  ██║╚██████╔╝██████╔╝
-╚═════╝   ╚═══╝  ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
-```
 
 <p align="center">
-  <strong>Hack the Grid</strong><br/>
-  Direktvermarktung als Software — ohne neue Hardware.
+  <strong>Hack the Grid</strong> — Direktvermarktung als Software, ohne neue Hardware.
 </p>
 
-> **DVhub** macht eine bestehende Victron-ESS-Anlage direktvermarktungs-tauglich:
-> Es bildet die PLEXLOG-kompatible Modbus-Schnittstelle des Direktvermarkters in
-> Software nach und erweitert sie zu einem vollwertigen Home Energy Management
-> System (HEMS) — mit Web-Leitstand, Day-Ahead-Börsenautomatik, Prognose- und
-> Optimierungs-Engine, Telemetrie-Historie und Familien-Dashboard. Alles läuft
-> auf eigener Linux-Hardware, ohne Cloud-Zwang. Getestet mit LUOX Energy
-> (ehem. Lumenaza) als Direktvermarkter.
+**DVhub** macht eine PV-Anlage mit Speicher direktvermarktungs-tauglich und steuert sie als
+Home Energy Management System (HEMS): Es bildet die DV-Schnittstelle des Direktvermarkters in
+Software nach, plant Akku, E-Auto und Geräte nach Day-Ahead-Preisen und läuft komplett auf eigener
+Linux-Hardware, ohne Cloud-Zwang. Getestet mit Victron und LUOX Energy (ehem. Lumenaza).
 
-<p align="center">
-  <strong>0 € Zusatz-Hardware</strong> &nbsp;·&nbsp; <strong>1 Befehl zur Installation</strong> &nbsp;·&nbsp; <strong>100 % auf eigener Hardware</strong>
-</p>
+> [!IMPORTANT]
+> **Free & Pro — DVhub ist Source Available unter der [Energy Community License (ECL-1.0)](LICENSE.md).**
+> **DVhub Free** kostet nichts und läuft selbst gehostet. Die **Pro-Funktionen** schaltest du mit einem
+> Lizenzschlüssel frei — einmalig gekauft (Pro S/M/L) oder im Jahresabo (Pro XS/XL/XXL, 1 Seat = 1 kWp).
+>
+> | Stufe | Modell | Anlagengröße | Preis |
+> |---|---|---|---|
+> | **Free** | kostenlos, selbst gehostet | — | 0 € |
+> | **Pro S** | Einmalkauf | bis 40 kWp | 149 € |
+> | **Pro M** | Einmalkauf | bis 70 kWp | 199 € |
+> | **Pro L** | Einmalkauf | bis 100 kWp | 249 € |
+> | **Pro XS** | Jahresabo | 10–24 kWp | ab 30 € / Jahr |
+> | **Pro XL** | Jahresabo | 25–99 kWp | ab 62,50 € / Jahr |
+> | **Pro XXL** | Jahresabo | ab 100 kWp | ab 299 € / Jahr |
+>
+> **Pro enthält:** DV-Schnittstelle mit VPN-Manager · Akkudoktor-EOS-Optimierung (Akku, E-Auto, Geräte) ·
+> Wallbox-Steuerung · Historie über den Tag hinaus (Woche bis Gesamtzeitraum) · Familien-Dashboard.
+> Das Jahresabo enthält zusätzlich bevorzugten Support per E-Mail. Preise inkl. MwSt., Kauf über Polar.
+>
+> **[Preise und Vergleich auf dvhub.de →](https://dvhub.de/#preise)** ·
+> **[Lizenzbedingungen →](https://dvhub.de/lizenzbedingungen/)** ·
+> Details: [DVhub Pro](#dvhub-pro) und [Lizenz](#lizenz)
 
 | | |
 |---|---|
-| **Status** | Version 1.0.10 „Sushi" — DVhub-EOS mit Rust-Kern, Netzanschluss-Grenze, Not-Halt „als ob aus“, §14a nach Bedarf, E-Auto-Wochenplan mit Min-/Max-Ladestand, LUOX/Lumenaza |
+| **Status** | Version 1.0.10 „Sushi“ — Änderungen in [`CHANGELOG.md`](CHANGELOG.md) |
 | **Getestet mit** | LUOX Energy · Victron Ekrano-GX / Cerbo-GX · Fronius AC-PV |
-| **Plattform** | Debian/Ubuntu (x86_64) · Node.js 22 · PostgreSQL |
-| **Lizenz** | Energy Community License (ECL-1.0) — siehe [Lizenz](#lizenz) |
-| **Drittlizenzen** | [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md) |
+| **Plattform** | Debian, Ubuntu, Raspberry Pi OS (Node.js 22, PostgreSQL) · Docker (amd64/arm64) |
+| **Lizenz** | Energy Community License (ECL-1.0) · Pro per Lizenzschlüssel · [Drittlizenzen](THIRD-PARTY-LICENSES.md) |
+
+---
+
+## Funktionen
+
+### Neu in 1.0.10
+
+| Funktion | Was sie tut | Edition |
+|---|---|---|
+| **DVhub-EOS mit Rust-Kern** | Akkudoktor-EOS `main` plus die PRs, die DVhub braucht. Rechnet bitgleich, aber rund 25-mal schneller — auch auf kleinen Geräten. Plant mit der Netzanschluss-Grenze; der Steuerzeitraum reicht auf Wunsch automatisch bis zur nächsten Frist. | Pro |
+| **Netzanschluss-Grenze** | Hält die Bezugsgrenze des Hausanschlusses ein (ab Werk aus). Zuerst lädt der Akku weniger aus dem Netz und deckt mit, erst dann werden Wallbox, Heizstab und EEBUS-Geräte gekürzt. Mit Victron gilt zusätzlich die Eingangsgrenze aus dem GX. | Free |
+| **Not-Halt „als ob DVhub aus ist“** | Nimmt DVhubs eigene Vorgaben einmal zurück und schreibt danach nichts mehr — auch nicht §51, Direktvermarkter-Abregelung, §14a oder SoC-Boden. Messwerte laufen weiter. | Free |
+| **§14a nach Bedarf** | Teilt die Vorgabe des Netzbetreibers nach aktuellem Bedarf statt nach Nennleistung auf. Der Hausspeicher deckt zuerst; EEBUS-Geräte laufen nach Neustart oder Störung wieder an. | Free |
+| **E-Auto-Wochenplan** | Eine Zeile je Abfahrtstag mit Mindest-Ladestand und Max-Ladestand „wenn günstig“, in %. Bedienung mit Karten und Blatt, „Pendeln Mo–Fr“, Einmal-Ziel per Dialog, einphasiges Laden. | Pro |
+| **LUOX/Lumenaza als Datenquelle** | Day-Ahead-Preise direkt aus dem LUOX-Kundenportal und täglicher Abgleich der Direktvermarktung mit DVhubs eigener Messung. | Free |
+| **Sungrow SH Hybrid** | Neues Herstellerprofil über Modbus TCP, mit Akkusteuerung und Abregelung — Beta, nur im Kanal Bleeding Edge. | Free |
+| **Netz · Zähler** | Netzspannung L1–L3 und Netzfrequenz zentral im Leitstand; an die Datenspende nur mit eigener Zustimmung. | Free |
+| **Zweite Victron-Anlage** | Speist aus Akku 2 ein, wenn Akku 1 leer ist (Beta). | Free |
+| **Updates** | Die Oberfläche lädt nach einem Update selbst neu. Bleeding Edge gibt es auch für Paket-Installationen. | Free |
+
+### Grundfunktionen
+
+| Funktion | Edition |
+|---|---|
+| **Leitstand** mit Energiefluss, Live-Werten, Day-Ahead-Preisen und Steuerung · Explorer | Free |
+| **Kleine Börsenautomatik** (Stufe 1 und 2) und **Negativpreis-Schutz** | Free |
+| **Sicherheits-Gates**: EEG/§14a-Schreibsperre, SoC-/Entlade-Boden, Not-Halt, Lese-Modus | Free |
+| **Integrationen**: Home Assistant, Loxone, evcc, MQTT, EMHASS, TeslaMate, Shelly, Benachrichtigungen | Free |
+| **§14a-Steuerbox (EEBUS)**, Heizstab, Shelly | Free |
+| **Prognosen** für PV und Last (Ensemble aus mehreren Anbietern) | Free |
+| **Historie** — Tagesansicht | Free |
+| **Datenspende** an die RWTH Aachen *(freiwillig)* | Free |
+| **DV-Schnittstelle** (Modbus-Server für den Direktvermarkter, PLEXLOG-kompatibel oder LUOX-Belegung) mit **VPN-Manager** | Pro |
+| **Akkudoktor-EOS-Optimierung** für Akku, E-Auto und planbare Geräte | Pro |
+| **Wallbox-Steuerung** nach EOS-Plan über evcc, OpenEVSE oder go-e, „Sofort laden“ | Pro |
+| **Historie** — Woche, Monat, Jahr und Gesamtzeitraum mit Finanzkarten | Pro |
+| **Familien-Dashboard** | Pro |
+| **Installateurs-Portal** *(freiwillig, nur mit Kopplung und Freigabe)* | Pro |
+
+Die vollständige Liste mit allen Einstellungen steht unter [Funktionsumfang](#funktionsumfang-community)
+und [DVhub Pro](#dvhub-pro).
+
+---
+
+## Bilder
+
+Alle Bilder stammen aus einem lokal gestarteten DVhub 1.0.10 mit synthetischen Messwerten
+(Lese-Modus, keine echte Anlage). Sie folgen dem hellen oder dunklen Design deines GitHub-Themes.
+
+### Leitstand
+
+Live-Werte, Energiefluss, Day-Ahead-Preise, E-Auto-Plan und Netzanschluss auf einen Blick.
 
 <p align="center">
-  <img src="assets/screenshots/leitstand-2026-05-18.png" alt="DVhub Leitstand — Live-Dashboard" width="900" />
-  <br/>
-  <em>Leitstand — Live-Dashboard mit Energy-Flow-Visualisierung, Day-Ahead-Preisen und Steuerung</em>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/leitstand-2026-11-13-dunkel.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/leitstand-2026-11-13-hell.png" />
+    <img src="assets/screenshots/leitstand-2026-11-13-dunkel.png" alt="DVhub Leitstand mit Energiefluss, Netzanschluss-Grenze und E-Auto-Plan" width="900" />
+  </picture>
+</p>
+
+### Historie
+
+Monat mit Finanzkarten: Netzbezug, Gestehungskosten, Einnahmen, vermiedene Kosten und Energiebilanz.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/historie-monat-2026-11-13-dunkel.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/historie-monat-2026-11-13-hell.png" />
+    <img src="assets/screenshots/historie-monat-2026-11-13-dunkel.png" alt="DVhub Historie, Monatsansicht mit Finanzkarten" width="900" />
+  </picture>
+</p>
+
+Jahr mit Netto-Analyse je Monat und Energiefluss.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/historie-jahr-2026-11-13-dunkel.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/historie-jahr-2026-11-13-hell.png" />
+    <img src="assets/screenshots/historie-jahr-2026-11-13-dunkel.png" alt="DVhub Historie, Jahresansicht mit Netto-Analyse und Energiefluss" width="900" />
+  </picture>
+</p>
+
+### E-Auto-Wochenplan
+
+Eine Karte je Abfahrtstag: Abfahrt, Mindest-Ladestand, „zuhause ab“ und Verbrauch der Fahrt. Darüber steht in Klartext, was DVhub daraus macht.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/e-auto-wochenplan-2026-11-13-dunkel.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/e-auto-wochenplan-2026-11-13-hell.png" />
+    <img src="assets/screenshots/e-auto-wochenplan-2026-11-13-dunkel.png" alt="DVhub E-Auto-Wochenplan mit Karten je Abfahrtstag" width="900" />
+  </picture>
+</p>
+
+### Einstellungen: Netzanschluss
+
+Bezugsgrenze des Hausanschlusses mit Sicherheitsabstand und Reihenfolge beim Zurücknehmen.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/einstellungen-netzanschluss-2026-11-13-dunkel.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/einstellungen-netzanschluss-2026-11-13-hell.png" />
+    <img src="assets/screenshots/einstellungen-netzanschluss-2026-11-13-dunkel.png" alt="DVhub Einstellungen, Netz und Recht, Netzanschluss-Bezugsgrenze" width="900" />
+  </picture>
+</p>
+
+### Familien-Dashboard
+
+Die vereinfachte Ansicht für den Haushalt, gedacht auch für ein Wanddisplay.
+
+<p align="center">
+  <img src="assets/screenshots/familie-2026-11-13.png" alt="DVhub Familien-Dashboard" width="900" />
+</p>
+
+### Am Handy
+
+Alle Seiten passen sich an schmale Bildschirme an.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/handy-leitstand-2026-11-13-dunkel.png" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/handy-leitstand-2026-11-13-hell.png" />
+    <img src="assets/screenshots/handy-leitstand-2026-11-13-dunkel.png" alt="DVhub Leitstand am Handy" width="300" />
+  </picture>
 </p>
 
 ---
 
-## Kurzüberblick
-
-DVhub ersetzt bzw. ergänzt einen physischen Plexlog als DV-Schnittstelle: Die
-Modbus-Kommunikation des Direktvermarkters wird in Software nachgebildet, während
-die Live-Werte direkt vom Victron-GX-System kommen. Darüber hinaus ist DVhub zu
-einem vollwertigen HEMS ausgebaut.
-
-- **DV-Schnittstelle** *(DVhub Pro)* **und Web-Leitstand** in einer Anwendung — keine zusätzliche Hardware
-- **Dashboard** mit Energy-Flow-Visualisierung, Live-Werten, Day-Ahead-Preisen und Steuerung
-- **Kleine Börsenautomatik** mit zweistufigem Forecast-aware-Modus (Stufe 2: vorausschauendes Akku-Leeren)
-- **Prognose-Engine** — PV-Ertrag (pvlib), Lastvorhersage und Multi-Modell-Ensemble mit Accuracy-Tracking
-- **Optimierung** — freie kleine Börsenautomatik (Greedy/MILP-Abend-Slots) plus der **Akkudoktor-EOS-Arbitrage-Optimizer** *(DVhub Pro)* (DV-Direktvermarktungs-Fork, 15-Minuten-Slots, standardmäßig mitinstalliert)
-- **Historie** mit PostgreSQL-Telemetrie, Finanz-Karten und 14 Visualisierungs-Karten
-- **Familien-Dashboard** als haushaltstaugliche Übersicht inkl. Tesla-/Haus-Flow und Screensaver *(DVhub Pro)*
-- **Integrationsplattform** für Home Assistant, Loxone, EOS, EMHASS, evcc, MQTT und TeslaMate — Home Assistant und Loxone können DVhub auch **Messwerte liefern** (MQTT oder HTTP-Push)
-- **E-Auto-Laden nach EOS-Plan** *(DVhub Pro)* über evcc, OpenEVSE oder go-e, mit Abfahrtszeit, Ladeziel und „Sofort laden“
-- **Installateurs-Portal** *(opt-in)* — der Installateur sieht Status und Historie; Updates und Support-Tunnel nur mit Freigabe des Kunden
-- **Datenspende** *(opt-in)* — Leistungsdaten an das Forschungsprojekt der RWTH Aachen (COMSYS) spenden
-- **DVhub Price Feed** (dvhub.online) als zentraler Preisfeed für alle EPEX-Preiszonen
-- **VPN-Manager** für OpenVPN-/WireGuard-/IPsec-Tunnel zum Direktvermarkter *(DVhub Pro)*
-
 ## Inhaltsverzeichnis
 
+- [Funktionen](#funktionen)
+- [Bilder](#bilder)
 - [Schnellstart](#schnellstart)
 - [Funktionsumfang (Community)](#funktionsumfang-community)
 - [DVhub Pro](#dvhub-pro)
@@ -190,8 +296,8 @@ Nach der Erstinstallation (bzw. wenn die Config fehlt/ungültig ist) öffnet DVh
 
 ### Hardware
 
-DVhub läuft ab **1 GB RAM** vollständig, **inklusive Akkudoktor-EOS** (DVhub-
-Direktvermarktungs-Fork) als Optimierer — standardmäßig mitinstalliert, opt-out
+DVhub läuft ab **1 GB RAM** vollständig, **inklusive DVhub-EOS** (Akkudoktor-EOS
+mit Rust-Kern) als Optimierer — standardmäßig mitinstalliert, opt-out
 mit `--no-eos`. Es gibt keine RAM-Stufen mehr: Funktionen werden nicht nach
 Speichergröße abgeschaltet. Die Python-Prognosemodule (pvlib, StatsForecast)
 laufen nur, wenn ihre Python-Umgebung installiert ist und sie in
@@ -223,9 +329,9 @@ wählbar (Code-Default ohne Beispiel-Config: `8080`).
 
 ## Funktionsumfang (Community)
 
-Alle hier gelisteten Funktionen sind in der freien **ECL-1.0**-Edition ohne
-Lizenzschlüssel nutzbar. Die wenigen lizenzpflichtigen Komfort-Features stehen
-separat unter [DVhub Pro](#dvhub-pro).
+Funktionen ohne Kennzeichnung sind in der freien **ECL-1.0**-Edition ohne
+Lizenzschlüssel nutzbar. Was einen Lizenzschlüssel braucht, ist mit *(DVhub Pro)*
+markiert und steht gesammelt unter [DVhub Pro](#dvhub-pro).
 
 ### Direktvermarktung &amp; Steuerung
 
@@ -246,7 +352,7 @@ separat unter [DVhub Pro](#dvhub-pro).
 - **Day-Ahead-Preis-Engine** mit Heute-/Morgen-Daten, Hover-Details und Chart-Auswahl
 - **Schedule-System** mit Defaults, manuellen und persistenten Overrides sowie Chart-zu-Schedule-Auswahl
 - **Kleine Börsenautomatik** für automatische Entladung in Hochpreisphasen — energiebasierte Slot-Allokation, dynamischer sonnenstandsabhängiger SOC-Floor und wahlweise Greedy- oder MILP-Engine
-- **Forecast-aware Börsenautomatik (Stufe 2)** — leitet Reserve und Hoarding-Gate aus dem PV-/Last-Forecast der nächsten 24 h ab (Über-Nacht-SOC-Schutz, `forecastAware`). *(„Forecast Aware++"/Stage 2++ — das vorausschauende aktive Akku-Leeren — wurde **entfernt** und in der UI ausgeblendet; die EOS-Arbitrage ist der produktive Nachfolger. Der Code bleibt mitinstalliert.)*
+- **Forecast-aware Börsenautomatik (Stufe 2)** — leitet Reserve und Hoarding-Gate aus dem PV-/Last-Forecast der nächsten 24 h ab (Über-Nacht-SOC-Schutz, `forecastAware`). *(„Forecast Aware++"/Stage 2++ — das vorausschauende aktive Akku-Leeren — wurde **entfernt**; die EOS-Arbitrage ist der Nachfolger.)*
 - **DC-Export-Modus (100 % Einspeisung)** mit Live-Hausverbrauchs-Abzug (`subtractHouseLoad`) und SOC-/Deadline-Schutz vor dem Abend-Peak
 - **§51-EEG Förderzeitraum-Verlängerungs-KPI** aus den Negativpreis-Viertelstunden (Solarspitzengesetz)
 - **Victron-Alarm-Banner** — read-only Anzeige aktiver VE.Bus-/BMS-Alarme im Status, entkoppelt vom Steuerpfad
@@ -259,7 +365,7 @@ separat unter [DVhub Pro](#dvhub-pro).
 - **Lastvorhersage** über statistische Modelle (statsforecast) mit SQL-Wochentag-Fallback
 - **Nebel-Korrektur** und **Accuracy-Tracking** — jede Prognose wird als Snapshot gespeichert und gegen die Messwerte ausgewertet
 - **Optimizer-Dispatch** *(DVhub Pro)* — MILP-Batterieoptimierung über den HiGHS-Solver (15-Minuten-Slots) mit schneller Heuristik als Fallback; der `internal`-Modus ist Teil des Pro-Optimizer-Layers (`services/optimizer`) und geht ohne Lizenz mit aus. Die freie kleine Börsenautomatik oben nutzt ihre eigene Engine
-- **Akkudoktor-EOS-Anbindung** *(DVhub Pro — Arbitrage)* (standardmäßig mitinstalliert als DVhub-Direktvermarktungs-Fork; opt-out `--no-eos`) — externer Optimizer-Dienst mit Config-Sync, Forecast-Bridge (Selbstheilung nach EOS-Neustart) und Akku→Netz-Arbitrage; **ohne aktive Lizenz aktuiert EOS nicht** (automatischer Fallback auf Stufe 1/2, Prognosewerte bleiben sichtbar)
+- **Akkudoktor-EOS-Anbindung** *(DVhub Pro — Arbitrage)* (standardmäßig mitinstalliert als DVhub-EOS mit Rust-Kern; opt-out `--no-eos`) — externer Optimizer-Dienst mit Config-Sync, Forecast-Bridge (Selbstheilung nach EOS-Neustart) und Akku→Netz-Arbitrage; **ohne aktive Lizenz aktuiert EOS nicht** (automatischer Fallback auf Stufe 1/2, Prognosewerte bleiben sichtbar)
 - **Marktprämien-Modulation** (optional, `optimizer.tariff.feedInIncludeMarketPremium`) — bewertet die Einspeisung am realen Direktvermarktungs-Margin (Spot + Marktprämie) statt am Rohspot; §51-konform (keine Prämie in Negativpreis-Slots)
 - **Quellen-Selektor** `best`/`internal`/`eos` *(DVhub Pro)* — wählt anhand einer Netzkosten-Schätzung den günstigeren Plan (Teil des Pro-Optimizer-Layers)
 - **MiSpeL-Guard** — setzt das §14a-konforme Netzlade-Verbot durch (außer bei lizenzierter Arbitrage)
@@ -278,11 +384,11 @@ separat unter [DVhub Pro](#dvhub-pro).
 
 - **Home Assistant** (JSON-Endpunkt + MQTT-Auto-Discovery), **Loxone** (Textformat), **EOS**, **EMHASS**, **evcc**, **TeslaMate**
 - **Messwert-Eingang** für Home Assistant und Loxone per MQTT oder HTTP-Push (siehe oben, Universal-Profil)
-- **E-Auto** *(DVhub Pro — ohne Lizenz steuert DVhub die Wallbox nicht)*: EOS plant die Ladung bis zur Abfahrt (Ziel in %, kWh oder km), DVhub gibt den Plan an **evcc**, **OpenEVSE** oder **go-e** weiter; „**Sofort laden**“ übersteuert den Plan, auch wenn EOS nicht läuft. Fällt der EOS-Plan kurz aus, gelten die schon geplanten Viertelstunden weiter (kein Ein/Aus-Flattern an der Wallbox)
+- **E-Auto** *(DVhub Pro — ohne Lizenz steuert DVhub die Wallbox nicht)*: EOS plant die Ladung nach dem Wochenplan (je Abfahrtstag Mindest-Ladestand in %, dazu „Max-Ladestand, wenn günstig“ und ein Einmal-Ziel), DVhub gibt den Plan an **evcc**, **OpenEVSE** oder **go-e** weiter; „**Sofort laden**“ übersteuert den Plan, auch wenn EOS nicht läuft. Fällt der EOS-Plan kurz aus, gelten die schon geplanten Viertelstunden weiter (kein Ein/Aus-Flattern an der Wallbox)
 - **Planbare Verbraucher** — Geschirrspüler & Co. legt EOS in die günstigste bzw. PV-reichste Zeit; Heizstäbe (MYPV Elwa, AC Thor) regelt DVhub dem PV-Überschuss nach — [Anleitung](docs/PLANBARE-GERAETE.md)
 - **Datenspende** *(opt-in)* — Netz, PV, Hausverbrauch, Batterie und alle Geräte alle 10 s an die COMSYS-Datenspende (RWTH Aachen); historische Daten lassen sich nachsenden. API-Schlüssel bleibt lokal (`/var/lib/dvhub/datenspende.json`, 0600)
 - **Ortsnetz-Auslastung** *(opt-in)* — Netzspannung L1–L3 und Netzfrequenz des Netzzählers alle 5 min an die Karte [ortsnetz-auslastung.de](https://www.ortsnetz-auslastung.de) ([Projekt](https://github.com/thomaslehmann1234/datenerfassung-ortsnetz-auslastung)); die Antwort (Ampel je Phase, Speicherempfehlung bei Über-/Unterspannung) erscheint in der Kachel. Quelle bisher: Victron GX per Modbus
-- **Installateurs-Portal** *(opt-in)* — Kopplung per Code, Anmeldung mit Signatur; der Installateur liest Status/Historie, Updates und Support-Tunnel brauchen eine eigene Kunden-Freigabe
+- **Installateurs-Portal** *(opt-in, DVhub Pro)* — Kopplung per Code, Anmeldung mit Signatur; der Installateur liest Status/Historie, Updates und Support-Tunnel brauchen eine eigene Kunden-Freigabe
 - **Eingebauter MQTT-Broker** (aedes, gebunden auf Loopback) + Publisher + MQTT-Inspector
 - **Geräte-Schaltung** über Shelly-HTTP- und MQTT-Generic-Adapter (Live-Leistung + schaltbares Relais)
 - **Benachrichtigungen** über **Telegram, Pushover und ntfy**; separater **Uptime-Kuma-Heartbeat** (signiert, SSRF-geschützt)
@@ -335,8 +441,7 @@ Live-Dienste) und die Frontend-Whitelist `ALLOWED_FEATURES` sind deckungsgleich:
 > **EOS-Arbitrage**, die **Wallbox-Steuerung** und die **Historie-Zeiträume Woche/Monat/Jahr/Alle** frei —
 > alle vier sind ohne Lizenz serverseitig aus (die Historie-Tagesansicht bleibt frei). „Stage 2++"
 > (`predictivePreEmpty` / „Forecast Aware++", das nie produktive Morgens-Entleeren)
-> wurde **entfernt** (in der UI ausgeblendet; EOS ist der Nachfolger) — der Code
-> bleibt mitinstalliert.
+> wurde **entfernt**; EOS ist der Nachfolger.
 >
 > Das Pro-Gating prüft ausschließlich den Lizenzstatus (`active`) und gilt
 > **netzwerkunabhängig** — auch im eigenen LAN sind die Pro-Features ohne aktive
@@ -348,7 +453,7 @@ Live-Dienste) und die Frontend-Whitelist `ALLOWED_FEATURES` sind deckungsgleich:
 1. Lizenz kaufen auf **https://dvhub.de/#preise** – Einmalkauf oder Jahresabo, Checkout über Polar; danach erhältst du den Lizenzschlüssel (Format `DVHB-XXXX-XXXX-XXXX-XXXX`).
 2. **Einstellungen → Lizenz** öffnen (oder direkt `/settings.html#license`).
 3. Schlüssel einfügen → **Aktivieren**. DVhub validiert gegen **https://license.dvhub.de** (Keygen CE); bei Erfolg flippt der Status-Chip auf **Aktiv**, die Pro-Features sind frei und die Family-Nav verliert ihr 🔒-Icon.
-4. DVhub revalidiert die Lizenz alle ~6 h im Hintergrund; manuell via **Jetzt prüfen**.
+4. DVhub prüft die Lizenz einmal täglich im Hintergrund; manuell via **Jetzt prüfen**.
 5. **Lizenz entfernen** setzt den Status zurück auf **Keine Lizenz**; die Pro-Routen liefern wieder `403 pro_required`.
 
 Headless-Aktivierung (z. B. für Provisioning):
@@ -363,8 +468,8 @@ curl -X POST http://127.0.0.1/api/license/activate \
 ### Lizenz-Architektur (Kurzfassung)
 
 - **Source of Truth** ist Keygen CE auf `license.dvhub.de` (Status `active`/`invalid`/`expired`/`suspended`). Der Kauf läuft über Polar (Webhook → Keygen); Polar ist nicht Source-of-Truth für die Aktivierung.
-- **Floating-Modell ohne Machine-Pinning:** Ein Schlüssel darf auf beliebig vielen eigenen DVhub-Instanzen gleichzeitig aktiv sein (Test-LXC, Prod, Backup).
-- **Offline-Survival:** Ist `license.dvhub.de` nicht erreichbar, läuft DVhub mit dem zuletzt persistierten `active`-Status weiter — ein Keygen-Ausfall sperrt dich nicht aus dem eigenen Dashboard aus.
+- **Eine Box je Lizenz:** Der Schlüssel wird an die aktivierte Box gebunden. Bindet eine andere Box die Lizenz an sich, meldet die bisherige Box den Umzug (seit 1.0.10) und zeigt den Weg zurück (Einstellungen → Lizenz → „An diese Box binden“). Ein kopierter Lizenzzustand bindet nicht von selbst.
+- **Offline-Survival:** Ist `license.dvhub.de` nicht erreichbar, läuft DVhub mit dem zuletzt gespeicherten `active`-Status weiter — ein Keygen-Ausfall sperrt dich nicht aus dem eigenen Dashboard aus. Die Kulanz ist begrenzt: ein Schlüssel ohne Signatur gilt bis 14 Tage nach der letzten erfolgreichen Prüfung, eine gebundene Lizenz bis 14 Tage nach dem signierten Ablauf ihrer Bindung.
 - **Persistenz:** `${DV_DATA_DIR}/license_state.json` (Mode `0600`). Der Klar-Schlüssel verlässt den Server nie über die API — `GET /api/license/state` redacted ihn.
 - **Config:** `licensing.keygenAccount` (Fallback `KEYGEN_ACCOUNT`-Env). Fehlt der Account-Slug, liefert die Aktivierung `503 keygen_account_not_configured`.
 
@@ -391,13 +496,11 @@ Startseite unter `/`:
 - Kleine Börsenautomatik mit Planungsanzeige und Chart-Highlighting
 - Steuerung mit aktiven Werten, Defaults und manuellen Writes
 - Forecast- &amp; Energiebilanz-Karte und Optimizer-Plan (48 h)
+- Kacheln **Netz · Zähler** (Spannung, Frequenz), **Netzanschluss** und **E-Auto** (Wochenplan, Einmal-Ziel, „Sofort laden“)
+- **Not-Halt** „als ob DVhub aus ist“
 - letzte Events aus dem Systemlog
 
 ### Historie
-
-<p align="center">
-  <img src="assets/screenshots/historie-2026-05-18.png" alt="DVhub Historie — Finanz- und Telemetrie-Auswertung" width="900" />
-</p>
 
 PostgreSQL-Telemetrie als eigene Analyseansicht (`/history.html`):
 
@@ -411,10 +514,6 @@ PostgreSQL-Telemetrie als eigene Analyseansicht (`/history.html`):
 - CSV- und Parquet-Export der Rohdaten
 
 ### Familien-Dashboard *(DVhub Pro)*
-
-<p align="center">
-  <img src="assets/screenshots/familie-2026-05-18.png" alt="DVhub Familien-Dashboard" width="900" />
-</p>
 
 Eine bewusst vereinfachte Haushaltsansicht (`/family`):
 
@@ -442,17 +541,22 @@ Rohdaten in der PostgreSQL-Datenbank.
 
 ### Einstellungen
 
-**Acht Tabs** decken die Konfiguration ab, dazu eine stets sichtbare Lizenz-Karte:
+Links stehen **acht Bereiche** nach Aufgabe, darunter **vier Bereiche für Diagnose und Dienste**; oben
+sitzt immer die Lizenz-Karte. Eine Suche findet jede Einstellung, Selteneres liegt unter „Erweitert“.
 
-| Tab | Inhalt |
+| Bereich | Inhalt |
 |-----|--------|
-| **Anlage** | Victron-Verbindung (Modbus/MQTT), Hardware-Grunddaten |
-| **Steuerung** | Schedule, Defaults, manuelle Writes, DV-Steuerung |
-| **Preise** | Bezugspreis (fix/dynamisch), Tarif-Perioden, §14a Modul 3, Marktwert, EPEX-Preiszone/-quelle |
-| **Status** | Health, Service, Config Import/Export, Update-Channel, System-Updates/Reboot, Modbus Register Scan, VRM-Import, DB-Backup |
-| **Forecast** | Prognose-Provider und Forecast-Inspector-Subsections (ML / EOS / Stufe 2 — *Pro*) |
-| **ML &amp; AI** | ML-Prognose-Korrektur und Training |
-| **EOS** | Akkudoktor-EOS-Konfiguration |
+| **Meine Anlage** | Wechselrichter, Akku, PV und Standort |
+| **Strompreise** | Bezugspreis und Einspeisevergütung, Tarif-Zeiträume, Preisquelle (auch LUOX) |
+| **Betriebsart** | Wer über den Akku entscheidet: Aus, kleine Börsenautomatik oder EOS |
+| **Geräte** | Verbraucher, die DVhub mitplant |
+| **Netz &amp; Recht** | Netzladen und Netzentladung, Netzanschluss-Grenze, Einspeisegrenze, §14a, EEBUS |
+| **Prognosen** | Quellen für PV-Ertrag, Wetter und Verbrauch |
+| **System** | Zeitzone, Datenbank und Sicherung, Zugang und Fernwartung |
+| **Freigaben** | Zugriff von außen und Datenweitergabe — alles freiwillig |
+| **Status** | Health, Dienst, Config Import/Export, Update-Kanal, System-Updates, Register-Scan, VRM-Import, DB-Backup |
+| **Prognose-Daten** | Prognose-Anbieter und Forecast-Inspector |
+| **EOS-Daten** | Was EOS bekommt und plant *(Inspector: Pro)* |
 | **VPN** *(Pro)* | Tunnel-Status, Config-Upload, Restart, Verlauf |
 
 Die EPEX-Preiszone wird über einen dynamischen Selektor gewählt, der die
@@ -495,19 +599,16 @@ DVhub trifft Lade-/Entladeentscheidungen nicht nur reaktiv, sondern vorausschaue
 2. **Optimierung** — Ein interner Optimizer plant das Batterie-Lade-/Entladeprofil
    über bis zu 192 Viertelstunden-Slots gegen die Day-Ahead-Preise: als MILP
    (HiGHS-Solver) oder als schnelle Heuristik. Alternativ übernimmt **Akkudoktor-EOS**
-   die Optimierung — DVhubs standardmäßig mitinstallierter Direktvermarktungs-Fork
-   (15-Minuten-Slots, Akku→Netz-Arbitrage). Eine Confidence-Stufe skaliert die Batterieparameter
+   die Optimierung — als standardmäßig mitinstalliertes DVhub-EOS mit Rust-Kern
+   (15-Minuten-Slots, Akku→Netz-Arbitrage, Netzanschluss-Grenze, E-Auto-Wochenplan). Eine Confidence-Stufe skaliert die Batterieparameter
    (Min-SOC, Entladeleistung) linear mit der Prognose-Sicherheit. Optional bewertet
    eine **Marktprämien-Modulation** die Einspeisung am realen
    Direktvermarktungs-Margin statt am Rohspot.
 
-4. **Forecast-aware Börsenautomatik** — Stufe 1 dimensioniert Reserve und
-   Hoarding-Gate aus dem erwarteten PV-Ertrag der nächsten 24 h. Stufe 2
-   („Forecast Aware++", `predictive-pre-empty.js`) leert den Akku vorausschauend,
-   wenn der Börsenpreis unter die PV-Erzeugungskosten fällt — mit Soft-/Hard-Limit-
-   Taper auf die Entladeleistung und einer Live-Runtime-Clamp im Schreibpfad
-   (`schedule-eval.js`), die die gemessene Akku-Entladung hart auf das
-   Akku-Hard-Limit begrenzt.
+3. **Forecast-aware Börsenautomatik** — dimensioniert Reserve und Hoarding-Gate
+   aus dem erwarteten PV-Ertrag der nächsten 24 h (`forecastAware`). Das frühere
+   vorausschauende Akku-Leeren („Forecast Aware++“) ist entfernt; das übernimmt
+   heute EOS.
 
 Die ML- und EOS-Komponenten laufen vollständig lokal (siehe [Hardware](#hardware)).
 
@@ -521,7 +622,7 @@ DVhub stellt Daten bereit oder nimmt Optimierungsergebnisse entgegen für:
 - **Loxone** — Textformat-Endpunkt zum Lesen, HTTP-Push als Messwert-Eingang ([Anleitung](docs/LOXONE.md))
 - **EOS (Akkudoktor)** — Messwerte/Preise raus, Optimierung rein; EOSdash-Proxy unter `/eosdash/`
 - **EMHASS** — Messwerte/Preisarrays raus, Optimierung rein
-- **evcc** — schützt den Hausakku während der EV-Ladung (setzt `MaxDischargePower`-Hold, damit das Fahrzeug aus dem Netz statt aus dem Akku lädt) und zeigt/steuert Ladepunkte im Familien-Dashboard
+- **evcc** — liest Ladepunkte und Fahrzeug, zeigt sie im Leitstand und Familien-Dashboard und gibt mit DVhub Pro den EOS-Ladeplan an die Wallbox weiter. Ob das Auto aus Akku oder Netz lädt, entscheidet EOS
 - **MQTT** — eingebauter Broker (aedes) und Publisher (~25 retained State-Topics), plus MQTT-Inspector
 - **TeslaMate** — Fahrzeug-/Ladedaten und Lade-Sessions im Familien-Dashboard
 - **Shelly / Smart Plugs** — HTTP- und MQTT-Generic-Adapter mit Live-Leistung und schaltbarem Relais
@@ -651,7 +752,7 @@ iptables-Regeln (`DST_PORT` = Modbus Listen Port von DVhub).
 
 ### Voraussetzungen
 
-- Debian/Ubuntu mit `apt-get` (x86_64)
+- Debian, Ubuntu oder Raspberry Pi OS mit `apt-get` (x86_64 oder ARM)
 - Node.js 22+ (Installer und `package.json` fordern `>=22`)
 - PostgreSQL 14+ (für Telemetrie)
 - Victron GX-Gerät im lokalen Netz
@@ -905,10 +1006,9 @@ Schlüssel strikt ab — jedes neue Feld muss in `ALLOWED_CONFIG_ROOTS`.
 | `datenspende` | Datenspende (an/aus, Intervall, Quellen) — Zugangsdaten liegen nicht in der Config |
 | `scan` | Modbus Scan-Parameter |
 
-> Die `schedule.smallMarketAutomation`-Sektion enthält die zweistufige
-> Forecast-aware-Logik: `forecastAware` aktiviert Stufe 1, der
-> `predictivePreEmpty`-Unterblock (mit `enabled`, `akkuHardLimitW`,
-> `akkuSoftLimitW`, Confidence-Faktoren) steuert Stufe 2 („Forecast Aware++").
+> Die `schedule.smallMarketAutomation`-Sektion enthält die Forecast-aware-Logik:
+> `forecastAware` schaltet die Reserve nach PV-Prognose ein. Der frühere
+> `predictivePreEmpty`-Block („Forecast Aware++“) ist entfernt.
 
 Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
 
@@ -940,18 +1040,7 @@ dieses Ordners.
 Die vollständige Versionshistorie steht in [`CHANGELOG.md`](CHANGELOG.md)
 (Keep-a-Changelog-Format, SemVer).
 
-### 1.0.0
-
-Erstes öffentliches v1.0-Release. Konsolidiert den HEMS-Funktionsumfang aus 0.8.0
-(Prognose-Engine, MILP-/EOS-Optimierung, Forecast-aware Börsenautomatik, Aurora-UI,
-Familien-Dashboard, Integrationen, Lizenz-Gating) und ergänzt fünf Go-Live-
-Härtungswellen:
-
-- **Deploy-Blocker** — Frischinstall läuft sauber durch (gegatete Migrationen, fehlertoleranter Migrations-Runner)
-- **Sichere Defaults** — gehärtete LAN-Trust-/Host-/Proxy-Defaults, Bootstrap-Token constant-time, Redaction-Lücken geschlossen, `family.html` hinter Pro-Gate
-- **Steuerpfad-Korrektheit** — EEG-Gate verfeinert, atomare Not-Halt-Persistenz, konfigurierbarer Modbus-Connect-Timeout
-- **Forecast-Qualität** — VRM/forecast_solar/open_meteo im gewichteten Ensemble, Slot-Renorm, Zeitzonen-Guard
-- **Test-Fundament &amp; CI** — reparierte Test-Suite, GitHub-Actions-CI (Fast-Lane + ephemeres Postgres + e2e)
+Die wichtigsten Neuerungen von **1.0.10** stehen oben unter [Neu in 1.0.10](#neu-in-1010).
 
 > Hinweis zur Versionierung: `package.json`/`app-version.js` führen `1.0.10`.
 > Ältere Einträge (1.0.9, 1.0.8, 1.0.7, 1.0.6, 1.0.5, 1.0.4, 1.0.2, 1.0.1, 1.0.0, 0.8.0, 0.4.x, 0.3.x)

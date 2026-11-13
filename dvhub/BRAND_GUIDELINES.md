@@ -11,6 +11,9 @@ Diese Richtlinie beschreibt das visuelle System für DVhub und ist auf die Websi
 ## 2. Logo System
 - Primarlogo: `public/assets/dvhub-wordmark.png` (Aurora-Wordmark "D⚡hub", 2048×1002, transparent)
 - Logoaufbau: Wordmark mit Aurora-Verlauf (Cyan → Blau → Gelb → Grün) und gelbem Bolt zwischen `D` und `hub`
+- App-Icon: „D⚡“ im dunklen abgerundeten Quadrat mit Aurora-Rand (`public/assets/logo-512.png`, `logo-192.png`, `apple-touch-icon.png`)
+- GitHub: Vorschaubild `assets/github/social-preview.png` (1280×640) und Avatar `assets/github/avatar.png` (1024×1024) im Repo-Wurzelordner; hochgeladen werden sie in der GitHub-Weboberfläche
+- Das alte Kreis-Logo („DVhub“ in Weiß mit Blitz im Ring) wird nicht mehr verwendet
 - Mindestfreiraum: links/rechts/oben/unten mindestens die Hoehe des Buchstabens `D` im Wort `Dhub`
 - Nicht erlaubt:
   - Logo verzerren
