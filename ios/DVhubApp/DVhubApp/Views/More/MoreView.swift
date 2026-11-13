@@ -138,6 +138,7 @@ struct WidgetInfoCard: View {
                     Spacer()
                     Pill(text: SharedStore.isAvailable ? "bereit" : "nicht verfügbar", tint: SharedStore.isAvailable ? Brand.green : Brand.orange)
                 }
+                WidgetGallery(snapshot: SharedStore.read() ?? .sample)
                 if SharedStore.isAvailable {
                     Text("Home-Bildschirm lange drücken → „Bearbeiten“ → „Widget hinzufügen“ → DVhub. Für den Sperrbildschirm: Sperrbildschirm lange drücken → „Anpassen“.")
                     Text("Die Widgets zeigen den letzten Stand, den die App gesehen hat (Akku, Erzeugung, Einspeisung, Verbrauch, heute verdient). Sie holen selbst nichts – die Verbindung zur Anlage braucht den Geräteschlüssel, und der ist nur in der geöffneten App nutzbar.")
@@ -205,5 +206,50 @@ struct AboutView: View {
                     .font(.subheadline.weight(.semibold))
             }
         }
+    }
+}
+
+/// So sehen die Widgets aus — dieselben Ansichten wie in der Erweiterung.
+struct WidgetGallery: View {
+    let snapshot: WidgetSnapshot
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 12) {
+                tile(StatusWidgetContent(snapshot: snapshot, family: .systemSmall), CGSize(width: 158, height: 158))
+                tile(StatusWidgetContent(snapshot: snapshot, family: .systemMedium), CGSize(width: 338, height: 158))
+                tile(MoneyWidgetContent(snapshot: snapshot, family: .systemSmall), CGSize(width: 158, height: 158))
+                VStack(alignment: .leading, spacing: 8) {
+                    lock(StatusWidgetContent(snapshot: snapshot, family: .accessoryRectangular), CGSize(width: 160, height: 66))
+                    HStack(spacing: 8) {
+                        lock(StatusWidgetContent(snapshot: snapshot, family: .accessoryCircular), CGSize(width: 66, height: 66))
+                        lock(MoneyWidgetContent(snapshot: snapshot, family: .accessoryRectangular), CGSize(width: 160, height: 66))
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.horizontal, -16)
+        .environment(\.colorScheme, .dark)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Vorschau der Widgets")
+        .accessibilityIdentifier("widgetGallery")
+    }
+
+    private func tile<V: View>(_ v: V, _ size: CGSize) -> some View {
+        v.padding(14)
+            .frame(width: size.width, height: size.height)
+            .background(WidgetBackground())
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Brand.border, lineWidth: 1))
+    }
+
+    /// Sperrbildschirm: einfarbig auf dunklem Grund.
+    private func lock<V: View>(_ v: V, _ size: CGSize) -> some View {
+        v.foregroundStyle(.white)
+            .tint(.white)
+            .padding(6)
+            .frame(width: size.width, height: size.height)
+            .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }

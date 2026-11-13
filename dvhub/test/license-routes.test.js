@@ -739,3 +739,23 @@ test('GET /api/history/export?view=all returns 403 pro_required when license !==
   const body = JSON.parse(res._captured.body);
   assert.equal(body.feature, 'history-multiperiod');
 });
+
+test('GET /api/history/summary reicht ?lean=1 an die Historie durch (Handy-App)', async () => {
+  const ctx = mockCtx();
+  ctx.licenseService.setStatusForTest('none');
+  const seen = [];
+  ctx.historyApi = { async getSummary(q) { seen.push(q); return { status: 200, body: { view: q.view, slots: [] } }; } };
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  const p = '/api/history/summary?view=day&date=2026-03-09&lean=1';
+  await routes.handleRequest(makeReq('GET', p), res, urlFor(p));
+  assert.equal(res._captured.status, 200);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].lean, '1');
+  assert.equal(seen[0].view, 'day');
+  // Ohne den Parameter kommt er nicht an.
+  const res2 = mockRes();
+  const p2 = '/api/history/summary?view=day&date=2026-03-10';
+  await routes.handleRequest(makeReq('GET', p2), res2, urlFor(p2));
+  assert.equal(seen[1].lean, null);
+});

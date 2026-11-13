@@ -217,9 +217,13 @@ struct AuroraPage<Content: View>: View {
     @Environment(Chrome.self) private var chrome
 
     var body: some View {
-        page
-            // Mit Seitenleiste ist die Höhe knapp: kleiner Titel statt großem.
-            .navigationBarTitleDisplayMode(chrome.railActive ? .inline : .automatic)
+        // Mit Seitenleiste ist die Höhe knapp: kleiner Titel statt großem. Ohne
+        // sie bleibt die Wahl der Ansicht unberührt (Detailseiten sind klein betitelt).
+        if chrome.railActive {
+            page.navigationBarTitleDisplayMode(.inline)
+        } else {
+            page
+        }
     }
 
     private var page: some View {

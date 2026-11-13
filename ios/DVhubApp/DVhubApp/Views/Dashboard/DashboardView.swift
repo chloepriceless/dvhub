@@ -37,7 +37,8 @@ struct DashboardView: View {
             if let s = controller.displayStatus {
                 if Layout.isWide(width) {
                     HStack(alignment: .top, spacing: 14) {
-                        flowCard(s, height: 420)
+                        // Höhe folgt der Spaltenbreite — im Querformat ist wenig Höhe da.
+                        flowCard(s, height: max(290, min(420, (width - max(300, width * 0.44)) * 0.95)))
                         VStack(spacing: 14) {
                             metricGrid(s)
                             moneyCard(s)

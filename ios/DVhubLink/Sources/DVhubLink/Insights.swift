@@ -241,9 +241,12 @@ public struct StatusDetail: Equatable, Sendable {
         return d
     }
 
-    /// Phasenleistung des Netzzählers als Bezug (+) / Einspeisung (−).
+    /// Phasenleistung des Netzzählers als Bezug (+) / Einspeisung (−). DVhub
+    /// kennt zwei Einstellungen (`gridPositiveMeans`): „grid_import“ (positiv =
+    /// Bezug) und den Standard „feed_in“ (positiv = Einspeisung) — alles außer
+    /// „grid_import“ gilt wie auf der Box als „feed_in“ (server-utils.js gridDirection).
     public func gridPhaseAsImport(_ w: Double) -> Double {
-        gridPositiveMeans == "grid_export" ? -w : w
+        gridPositiveMeans == "grid_import" ? w : -w
     }
 }
 

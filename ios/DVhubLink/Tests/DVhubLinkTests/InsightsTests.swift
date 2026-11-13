@@ -84,9 +84,12 @@ final class InsightsTests: XCTestCase {
         XCTAssertEqual(d.importPriceNowCtKwh, 30.2)
         XCTAssertEqual(d.loadW, 3600)
         XCTAssertNotNil(d.at)
-        var exportMeter = d
-        exportMeter.gridPositiveMeans = "grid_export"
-        XCTAssertEqual(exportMeter.gridPhaseAsImport(-800), 800)
+        // Standard in DVhub ist „feed_in“ (positiv = Einspeisung) — auch wenn die Angabe fehlt.
+        var feedIn = d
+        feedIn.gridPositiveMeans = "feed_in"
+        XCTAssertEqual(feedIn.gridPhaseAsImport(3000), -3000)
+        feedIn.gridPositiveMeans = nil
+        XCTAssertEqual(feedIn.gridPhaseAsImport(3000), -3000)
         XCTAssertNil(StatusDetail.from(status: .array([])))
     }
 

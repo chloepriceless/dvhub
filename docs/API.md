@@ -129,7 +129,7 @@ Spalte **Zugang** in den Tabellen:
 
 | Methode | Pfad | Zugang | Beschreibung |
 |---|---|---|---|
-| GET | `/api/history/summary` | LAN·history, *Pro* für Woche/Monat/Jahr | Zusammenfassung (`?view=day&date=YYYY-MM-DD`). 15-min-Daten (`slots`, `series`) nur in der Tagesansicht; für Woche/Monat mit `&slots=1` |
+| GET | `/api/history/summary` | LAN·history, *Pro* für Woche/Monat/Jahr | Zusammenfassung (`?view=day&date=YYYY-MM-DD`). 15-min-Daten (`slots`, `series`) nur in der Tagesansicht; für Woche/Monat mit `&slots=1`. `&lean=1` (Handy-App): ohne `slots`/`series`, in der Tagesansicht auch ohne `rows` – Kennzahlen und `charts` bleiben |
 | GET | `/api/history/mispel` | LAN·history | MiSpeL-Übersicht eines Jahres (`?year=YYYY`): Pauschaloption je (Rumpf-)Jahr (P1–P15 aus den Messwerten), bei Abgrenzungsoption zusätzlich Formelsatz A1 je Monat. Leer, solange keine Option gewählt ist |
 | GET | `/api/history/export` | Token, *Pro* für Mehrperioden | Aggregierter Export |
 | GET | `/api/history/viz/<karte>` | LAN·history, *Pro* für Mehrperioden | Analyse-Karten: `sankey`, `heatmap`, `ledger`, `day-profile`, `stack`, `autarky-calendar`, `ring`, `duration`, `pheat`, `neg-price`, `spaghetti`, `cycles`, `top10`, `cal-year`, `scatter`, `inverter-efficiency` (`?view=&date=&granularity=`) |

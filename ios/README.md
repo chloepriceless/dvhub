@@ -170,6 +170,16 @@ Signatur die App-Gruppe ab, beim Bauen
 `DVHUB_APP_ENTITLEMENTS= DVHUB_WIDGET_ENTITLEMENTS= DVHUB_APP_GROUP=` anhängen:
 Die App läuft normal, die Widgets zeigen einen Hinweis.
 
+**Kostenloses Personal Team (geprüft 14.11.2026, Xcode 27.0):** Die Fähigkeit
+„App Groups“ ist erlaubt, aber `xcodebuild -allowProvisioningUpdates` legt die
+Gruppe nicht an – das Profil kommt mit leerer Gruppenliste, und der Bau
+scheitert („doesn't match the entitlements file's value for the
+com.apple.security.application-groups entitlement“). Abhilfe: einmal in Xcode
+bei beiden Zielen (DVhubApp, DVhubWidgets) unter *Signing & Capabilities* →
+*App Groups* die Gruppe `group.<Bundle-ID>` mit „+“ anlegen und anhaken; danach
+baut auch die Kommandozeile mit Gruppe. Bis dahin mit den drei leeren Werten
+oben bauen.
+
 ## Tests
 
 ```bash

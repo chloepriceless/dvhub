@@ -433,7 +433,8 @@ public struct NewsPage: Equatable, Sendable {
     /// RSS-Texte: HTML-Reste, Zeichenreferenzen und Leerraum glätten.
     static func clean(_ s: String) -> String {
         var t = s.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-        for (a, b) in [("&amp;", "&"), ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " "), ("&shy;", "")] {
+        // &amp; zuletzt: sonst würde aus „&amp;lt;“ erst „&lt;“ und dann „<“.
+        for (a, b) in [("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " "), ("&shy;", ""), ("&amp;", "&")] {
             t = t.replacingOccurrences(of: a, with: b)
         }
         return t.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)

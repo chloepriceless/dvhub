@@ -115,7 +115,8 @@
         "tags": ["Historie"],
         "parameters": [
           { "name": "view", "in": "query", "required": true, "schema": { "type": "string", "enum": ["day", "week", "month", "year"] } },
-          { "name": "date", "in": "query", "required": true, "schema": { "type": "string", "format": "date" }, "example": "2026-03-18" }
+          { "name": "date", "in": "query", "required": true, "schema": { "type": "string", "format": "date" }, "example": "2026-03-18" },
+          { "name": "lean", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Schlanke Antwort (Handy-App): ohne slots/series, in der Tagesansicht auch ohne rows. Kennzahlen und charts bleiben." }
         ],
         "responses": { "200": { "description": "Summary mit Bezug, Einspeisung, Kosten, Erlöse" } }
       }

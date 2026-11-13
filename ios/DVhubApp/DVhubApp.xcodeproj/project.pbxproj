@@ -22,6 +22,7 @@
 		6AC5B818740FE9316E8EFBA9 /* Format.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748A282D30493583589F4A8D /* Format.swift */; };
 		7496936D1A5941D2F32F3364 /* IntegrationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 223D590A0111D62B6BD6EC5C /* IntegrationsView.swift */; };
 		79F25E903549A416821D34EB /* Brand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D69B2CD79AD93582D1160BD /* Brand.swift */; };
+		7D52F6A11B80D4D8F32CE560 /* WidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DF0D29DE48BAED14F6A6732 /* WidgetViews.swift */; };
 		7EB7F4EBEADFC880B0FC0905 /* Brand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D69B2CD79AD93582D1160BD /* Brand.swift */; };
 		84E13E2E779647520305EE39 /* NavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83E59AD14D725021C77A6C2B /* NavigationTests.swift */; };
 		8B85DB65A16904E879A31C19 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FE10E70F51CB32DA22D7507 /* WidgetSnapshot.swift */; };
@@ -29,6 +30,7 @@
 		A231FD845FCF56AFFA243E92 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FE10E70F51CB32DA22D7507 /* WidgetSnapshot.swift */; };
 		A3C171711096CFF0BFF8BAD9 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7594ACFDDAEB82F2CEF6AC /* Models.swift */; };
 		B1CCB733D799109353CCCCB5 /* PairLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9FA19FB543D2093BB13EF32 /* PairLinkTests.swift */; };
+		B3A0974EA40108B2737D270C /* WidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DF0D29DE48BAED14F6A6732 /* WidgetViews.swift */; };
 		B84B115F911AEFB9BC71BC31 /* DVhubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C1447A1B3BAF774CFB0FD97 /* DVhubApp.swift */; };
 		BEF1190AC9955C44EB0EC2CF /* RotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9006D35AD69BBA8CA87C109E /* RotationTests.swift */; };
 		C67E035ABCF3F5E8C39A7771 /* PlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3B202121B0C31FA6AFEDD76 /* PlanView.swift */; };
@@ -86,6 +88,7 @@
 		300A0166D732DBCC96CC77C8 /* SystemInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemInfoView.swift; sourceTree = "<group>"; };
 		4AD10C4835C6B83E88ABEE7B /* NewsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewsView.swift; sourceTree = "<group>"; };
 		5C1447A1B3BAF774CFB0FD97 /* DVhubApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVhubApp.swift; sourceTree = "<group>"; };
+		5DF0D29DE48BAED14F6A6732 /* WidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetViews.swift; sourceTree = "<group>"; };
 		6A550B0EB4E28046A4531E62 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		6C556938C1D9991CA7985DE2 /* DVhubLink */ = {isa = PBXFileReference; lastKnownFileType = folder; name = DVhubLink; path = ../DVhubLink; sourceTree = SOURCE_ROOT; };
 		748A282D30493583589F4A8D /* Format.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Format.swift; sourceTree = "<group>"; };
@@ -188,6 +191,7 @@
 				8D69B2CD79AD93582D1160BD /* Brand.swift */,
 				748A282D30493583589F4A8D /* Format.swift */,
 				7FE10E70F51CB32DA22D7507 /* WidgetSnapshot.swift */,
+				5DF0D29DE48BAED14F6A6732 /* WidgetViews.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -449,6 +453,7 @@
 				00B9EE70515270300E38D346 /* SystemsView.swift in Sources */,
 				F1BC2CE2FED5143D7EFDB502 /* Theme.swift in Sources */,
 				A231FD845FCF56AFFA243E92 /* WidgetSnapshot.swift in Sources */,
+				7D52F6A11B80D4D8F32CE560 /* WidgetViews.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -460,6 +465,7 @@
 				647016EA31A598295E3D6367 /* DVhubWidgets.swift in Sources */,
 				F35C0CEA9089387AFDD0F9F0 /* Format.swift in Sources */,
 				8B85DB65A16904E879A31C19 /* WidgetSnapshot.swift in Sources */,
+				B3A0974EA40108B2737D270C /* WidgetViews.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

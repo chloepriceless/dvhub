@@ -175,5 +175,7 @@ final class MarketTests: XCTestCase {
         XCTAssertEqual(p.items[1].excerpt, "") // Auszug = Titel → leer
         XCTAssertNotNil(p.items[1].imageURL)
         XCTAssertNil(NewsPage.from(["error": "x"]))
+        // Doppelt maskierter Text bleibt Text und wird nicht zu einem Tag.
+        XCTAssertEqual(NewsPage.clean("A&amp;lt;b&amp;gt; &amp; B"), "A&lt;b&gt; & B")
     }
 }
