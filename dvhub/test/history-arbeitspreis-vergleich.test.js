@@ -296,3 +296,43 @@ test('Jahr: je Monat Ø und Ersparnis, Jahressumme = Summe der Monate; Ablage li
   assert.deepStrictEqual(warm, expected, 'warm');
   assert.deepEqual(warm.kpis.fixedCompareSources.map((s) => s.periodId), ['alt']);
 });
+
+// ── Codex ec0c105c ──────────────────────────────────────────────────────────
+
+test('Ø Arbeitspreis gesamt: Viertelstunden ohne Preis zählen weder mit 0 ct noch mit Zuschlägen allein', async () => {
+  // 01.05.: Festpreis 30 ct; 02.05.: Festtarif ohne Preis (null); 03.05.: dynamisch ohne Börsenpreis.
+  const store = makeStore({ fromUtc: '2026-04-30T22:00:00Z', toUtc: '2026-05-03T22:00:00Z' });
+  const noPriceStore = { ...store, listPriceSlots: async () => [] };
+  const pricing = {
+    mode: 'fixed', fixedGrossImportCtKwh: null, dynamicComponents: DYN,
+    periods: [
+      { id: 'f', label: 'Fest', startDate: '2026-05-01', endDate: '2026-05-01', mode: 'fixed', fixedGrossImportCtKwh: 30 },
+      { id: 'd', label: 'Dyn', startDate: '2026-05-03', endDate: '2026-12-31', mode: 'dynamic', dynamicComponents: DYN }
+    ]
+  };
+  const r = await runtimeFor(noPriceStore, pricing).getSummary({ view: 'week', date: '2026-05-01' });
+  const dayKwh = store.slots.filter((s) => berlinDate(s.ts) === '2026-05-01').reduce((a, s) => a + s.importKwh, 0);
+  close(r.kpis.userImportPriceWeightedCtKwh, 30, 'nur der bepreiste Tag zählt');
+  close(r.kpis.userImportPriceWeightKwh, dayKwh, 'bepreiste kWh');
+  close(r.kpis.importPricedCostEur, dayKwh * 0.3, 'Bezugskosten des Ø');
+  const may2 = r.rows.find((row) => row.key === '2026-05-02');
+  const may3 = r.rows.find((row) => row.key === '2026-05-03');
+  assert.equal(may2.userImportPriceWeightedCtKwh, null, 'Festtarif ohne Preis: kein Ø');
+  assert.equal(may3.userImportPriceWeightedCtKwh, null, 'dynamisch ohne Börsenpreis: kein Ø');
+});
+
+test('Bezugskosten zum Ø: aus derselben ungerundeten Summe (kleine Viertelstunden-Bezüge)', async () => {
+  const slots = [];
+  const start = Date.parse('2026-04-30T22:00:00Z');
+  for (let i = 0; i < 96; i++) {
+    slots.push({ ts: new Date(start + i * SLOT_MS).toISOString(), importKwh: 0.01, exportKwh: 0, loadKwh: 0.01, pvKwh: 0, sourceKind: 'local_live', sourceKinds: ['local_live'] });
+  }
+  const store = {
+    async listMaterializedEnergySlots() { return slots; },
+    async listAggregatedEnergySlots() { return slots; },
+    async listPriceSlots() { return []; }
+  };
+  const r = await runtimeFor(store, { mode: 'fixed', fixedGrossImportCtKwh: 32, periods: [] }).getSummary({ view: 'day', date: '2026-05-01' });
+  close(r.kpis.userImportPriceWeightedCtKwh, 32, 'Ø');
+  assert.equal(r.kpis.importPricedCostEur, 0.31, '96 × 0,01 kWh × 32 ct = 0,3072 € → 0,31 €');
+});

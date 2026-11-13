@@ -458,6 +458,12 @@ function addTariffCompareFields(target, slot) {
 }
 
 function finalizeTariffCompare(target) {
+  // Bezugskosten zum Ø Arbeitspreis: derselbe ungerundete Zähler (nur
+  // bepreiste Viertelstunden), erst hier auf Cent gerundet — gridCostEur ist je
+  // Viertelstunde gerundet und weicht bei kleinen Bezügen ab (Codex ec0c105c).
+  if ('userImportPriceWeightedCtTotal' in target) {
+    target.importPricedCostEur = round2(Number(target.userImportPriceWeightedCtTotal || 0) / 100);
+  }
   const variableKwh = Number(target.variableImportKwh || 0);
   target.variableImportCtKwh = variableKwh > 0
     ? round2(Number(target.variableImportCtTotal || 0) / variableKwh)
@@ -599,7 +605,10 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
       row.spotPriceSlotCount += 1;
     }
     const importWeight = Number(slot.importKwh || 0);
-    if (Number.isFinite(Number(slot.userImportPriceCtKwh)) && importWeight > 0) {
+    // Nur echt bepreiste Viertelstunden (Codex ec0c105c): Number(null) ist 0 und
+    // zählte fehlende Preise mit 0 ct; dynamisch ohne Börsenpreis wären es nur
+    // die Zuschläge.
+    if (slot.importPriceKnown && importWeight > 0) {
       row.userImportPriceWeightKwh += importWeight;
       row.userImportPriceWeightedCtTotal += importWeight * Number(slot.userImportPriceCtKwh);
     }
@@ -1816,15 +1825,26 @@ export function createHistoryRuntime({
       }
       return comparisonByDate.get(localDate);
     }
+    // Preislogik hängt nur am lokalen Tag (Zeiträume sind tageweise) — je Tag
+    // einmal auflösen statt je Viertelstunde.
+    const tariffModeByDate = new Map();
     function tariffCompareForSlot(slot, userImportPriceCtKwh, marketPriceCtKwh) {
-      const mode = resolveUserImportTariffModeForTimestamp(slot.ts, pricingConfig);
+      const localDate = localDateString(slot.ts);
+      let mode = tariffModeByDate.get(localDate);
+      if (mode === undefined) {
+        mode = resolveUserImportTariffModeForTimestamp(slot.ts, pricingConfig);
+        tariffModeByDate.set(localDate, mode);
+      }
       const variableTariff = mode !== 'fixed';
-      const priceKnown = variableTariff
-        && Number.isFinite(userImportPriceCtKwh)
+      // Ein echter Arbeitspreis: eine Zahl (nicht null) und beim dynamischen
+      // Tarif mit Börsenpreis — sonst setzt der Rechner 0 ct Börse ein.
+      const importPriceKnown = Number.isFinite(userImportPriceCtKwh)
         && (mode !== 'dynamic' || Number.isFinite(marketPriceCtKwh));
-      const cmp = priceKnown ? comparisonForDate(localDateString(slot.ts)) : null;
+      const priceKnown = variableTariff && importPriceKnown;
+      const cmp = priceKnown ? comparisonForDate(localDate) : null;
       const importKwh = Math.max(Number(slot.importKwh || 0), 0);
       return {
+        importPriceKnown,
         variableTariff,
         variablePriceCtKwh: priceKnown ? userImportPriceCtKwh : null,
         variableImportKwh: priceKnown ? importKwh : 0,
@@ -2062,7 +2082,7 @@ export function createHistoryRuntime({
         : totals.hypSurplusFeedInCtTotal;
       // Ø Arbeitspreis über den ganzen Zeitraum (alle Tarife, nur bepreister Bezug).
       const importWeight = Number(slot.importKwh || 0);
-      if (Number.isFinite(Number(slot.userImportPriceCtKwh)) && importWeight > 0) {
+      if (slot.importPriceKnown && importWeight > 0) {
         totals.userImportPriceWeightKwh += importWeight;
         totals.userImportPriceWeightedCtTotal += importWeight * Number(slot.userImportPriceCtKwh);
       }

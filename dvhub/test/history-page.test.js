@@ -525,8 +525,8 @@ test('Protokoll-CSV „Netzstrom im Akku“ wird mit Token geladen, nicht per sc
 // Slot (history-runtime.js), die Karte zeigt sie nur an.
 function tariffKpis(extra = {}) {
   return {
-    importKwh: 120, gridCostEur: 33.6, importCostEur: 33.6,
-    userImportPriceWeightedCtKwh: 28,
+    importKwh: 120, gridCostEur: 33.5, importCostEur: 33.5,
+    userImportPriceWeightedCtKwh: 28, userImportPriceWeightKwh: 120, importPricedCostEur: 33.6,
     variableTariffSlotCount: 1628, variableImportKwh: 80, variableImportCtKwh: 26.5,
     variablePriceAvgCtKwh: 29.25, variablePriceSlotCount: 1628,
     fixedCompareSlotCount: 1628, fixedCompareImportKwh: 80,
@@ -616,4 +616,35 @@ test('Arbeitspreis-Karte: Jahresansicht mit Monatstabelle und Jahreszeile', () =
   assert.match(html, /tariff-loss[^>]*>-0,40 €/);
   assert.match(html, /<tfoot>[\s\S]*Jahr[\s\S]*28,00 ct\/kWh[\s\S]*2,80 €/);
   assert.match(elements.get('historyTariffTableLabel').textContent, /Monate/);
+});
+
+test('Arbeitspreis-Karte: fehlende Börsenpreise werden als solche benannt (Codex ec0c105c)', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({
+    view: 'month', date: '2026-05-10',
+    kpis: tariffKpis({ variableTariffSlotCount: 2976, variablePriceSlotCount: 0, variableImportKwh: 0, variableImportCtKwh: null,
+      variablePriceAvgCtKwh: null, userImportPriceWeightKwh: 0, userImportPriceWeightedCtKwh: null, importPricedCostEur: 0,
+      fixedCompareSlotCount: 0, fixedCompareImportKwh: 0, fixedCompareActualEur: null, fixedCompareFixedEur: null,
+      fixedCompareSavingsEur: null, fixedCompareCtKwh: null, fixedCompareSources: [] }),
+    rows: [], meta: { unresolved: { slotCount: 2976 } }
+  });
+  const text = elements.get('historyTariffCompareText').textContent;
+  assert.match(text, /Börsenpreise fehlen/);
+  assert.doesNotMatch(text, /Vergleichs-Festpreis eintragen/);
+  assert.equal(elements.get('historyTariffDynHint').hidden, false);
+  assert.doesNotMatch(elements.get('historyTariffDynHint').textContent, /Festtarif/, 'kein Tarifwechsel im Zeitraum');
+  assert.match(elements.get('historyTariffDynHint').textContent, /2\.976 Viertelstunden ohne Preis/);
+  assert.match(elements.get('historyTariffImportKwh').textContent, /davon 0,00 kWh mit Preis/);
+});
+
+test('Arbeitspreis-Karte: Tarifwechsel-Hinweis hängt an den Viertelstunden, Bezugskosten am Ø (Codex ec0c105c)', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({ view: 'month', date: '2026-03-10', kpis: tariffKpis(), rows: [], meta: { unresolved: { slotCount: 2972 } } });
+  assert.match(elements.get('historyTariffDynHint').textContent, /auch ein Festtarif/);
+  assert.match(elements.get('historyTariffImportCost').textContent, /33,60 €/, 'Zähler des Ø, nicht die je Slot gerundete Summe');
+  assert.equal(elements.get('historyTariffImportKwh').textContent, '120,00 kWh', 'alles bepreist: keine Zusatzangabe');
+  // Ganz dynamisch, alle Viertelstunden bepreist, aber weniger Bezug-kWh im dyn. Teil: kein Festtarif-Hinweis.
+  helpers.renderSummary({ view: 'month', date: '2026-05-10', kpis: tariffKpis({ variableTariffSlotCount: 2976, variablePriceSlotCount: 2976 }),
+    rows: [], meta: { unresolved: { slotCount: 2976 } } });
+  assert.equal(elements.get('historyTariffDynHint').hidden, true);
 });

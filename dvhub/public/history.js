@@ -2484,8 +2484,14 @@ function renderTariffCard(summary) {
 
   // 1: Ø Arbeitspreis über den ganzen Zeitraum (alle Tarife).
   setText('historyTariffAvg', hasFiniteNumber(kpis.userImportPriceWeightedCtKwh) ? fmtCt(kpis.userImportPriceWeightedCtKwh) : '-');
-  setText('historyTariffImportKwh', fmtKwh(kpis.importKwh || 0));
-  setText('historyTariffImportCost', fmtEur(importCostEur(kpis)));
+  // Bezugskosten = Zähler des Ø (nur bepreiste Viertelstunden, ungerundet
+  // summiert); fehlt für einen Teil des Bezugs der Preis, steht das dabei.
+  const importKwh = Number(kpis.importKwh || 0);
+  const pricedKwh = hasFiniteNumber(kpis.userImportPriceWeightKwh) ? Number(kpis.userImportPriceWeightKwh) : importKwh;
+  setText('historyTariffImportKwh', pricedKwh < importKwh - 0.005
+    ? `${fmtKwh(importKwh)} · davon ${fmtKwh(pricedKwh)} mit Preis`
+    : fmtKwh(importKwh));
+  setText('historyTariffImportCost', fmtEur(hasFiniteNumber(kpis.importPricedCostEur) ? kpis.importPricedCostEur : importCostEur(kpis)));
 
   // 2: dynamischer Tarif — mengengewichtet vs. je Viertelstunde.
   const hasVariable = Number(kpis.variableTariffSlotCount || 0) > 0;
@@ -2500,9 +2506,16 @@ function renderTariffCard(summary) {
   }
   setText('historyTariffShift', shiftText);
   setText('historyTariffDynKwh', hasVariable ? fmtKwh(kpis.variableImportKwh || 0) : '-');
-  const partial = hasVariable && Number(kpis.variableImportKwh || 0) < Number(kpis.importKwh || 0) - 0.005;
-  setText('historyTariffDynHint', partial ? 'Nur die Tage mit dynamischem Tarif; im Zeitraum galt auch ein Festtarif.' : '');
-  setHidden('historyTariffDynHint', !partial);
+  // Tarifwechsel im Zeitraum: an den Viertelstunden gemessen, nicht an den kWh
+  // (Codex ec0c105c) — fehlende Preise sind kein Festtarif.
+  const slotCount = Number(summary?.meta?.unresolved?.slotCount || 0);
+  const variableSlots = Number(kpis.variableTariffSlotCount || 0);
+  const unpricedSlots = Math.max(0, variableSlots - Number(kpis.variablePriceSlotCount || 0));
+  const dynHints = [];
+  if (hasVariable && slotCount > variableSlots) dynHints.push('Nur die Tage mit dynamischem Tarif; im Zeitraum galt auch ein Festtarif.');
+  if (unpricedSlots > 0) dynHints.push(`${unpricedSlots.toLocaleString('de-DE')} Viertelstunden ohne Preis sind nicht enthalten.`);
+  setText('historyTariffDynHint', dynHints.join(' '));
+  setHidden('historyTariffDynHint', dynHints.length === 0);
 
   // 3: Vergleich mit Festpreis.
   const savingsEl = byId('historyTariffSavings');
@@ -2511,6 +2524,8 @@ function renderTariffCard(summary) {
   let compareText;
   if (!hasVariable) {
     compareText = 'Im Zeitraum galt nur ein Festtarif – kein Vergleich.';
+  } else if (!compared && Number(kpis.variablePriceSlotCount || 0) === 0) {
+    compareText = 'Börsenpreise fehlen für den dynamischen Tarif – kein Vergleich möglich („Preise nachladen“).';
   } else if (!compared) {
     compareText = 'Kein Vergleichspreis: unter Einstellungen → Strompreise einen Vergleichs-Festpreis eintragen.';
   } else if (!hasFiniteNumber(kpis.fixedCompareCtKwh)) {
