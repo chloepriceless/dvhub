@@ -488,6 +488,9 @@ function finalizeTariffCompare(target) {
 }
 
 function finalizeAggregateSums(target, fields = AGGREGATE_SUM_FIELDS) {
+  // Zuerst, solange die ct-Summen noch ungerundet sind: sonst würde zweimal
+  // gerundet (4,4985 ct → 4,50 ct → 0,05 € statt 0,04 €; Codex 7dc5e9e9).
+  if ('fixedCompareSlotCount' in target) finalizeTariffCompare(target);
   for (const field of fields) {
     if (field in target) target[field] = round2(Number(target[field] || 0));
   }
@@ -552,7 +555,6 @@ function finalizeAggregateSums(target, fields = AGGREGATE_SUM_FIELDS) {
         + Number(target.exportSecondBatteryRevenueEur || 0)) / valuedKwh) * 100)
       : null;
   }
-  if ('fixedCompareSlotCount' in target) finalizeTariffCompare(target);
   if ('spotPriceCtSum' in target) {
     target.spotPriceAvgCtKwh = Number(target.spotPriceSlotCount || 0) > 0
       ? round2(Number(target.spotPriceCtSum || 0) / Number(target.spotPriceSlotCount))
@@ -669,7 +671,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // 4 (25.10.2026): VRM-Abschnitte im Zwischenstand (Akku-2-Ladestand-Uebertrag).
 // 5 (05.11.2026): eigene Messwerte zuerst, VRM fuellt auf (energy-source-rule.js).
 // 6 (13.11.2026): Ø Arbeitspreis und Festpreis-Vergleich je Slot (1.0.11).
-export const SUMMARY_CACHE_VERSION = 6;
+// 7 (13.11.2026): Ø nur aus echt bepreisten Viertelstunden (Codex 7dc5e9e9).
+export const SUMMARY_CACHE_VERSION = 7;
 
 // Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;

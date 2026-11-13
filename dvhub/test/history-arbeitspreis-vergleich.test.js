@@ -286,7 +286,7 @@ test('Jahr: je Monat Ø und Ersparnis, Jahressumme = Summe der Monate; Ablage li
   close(k.variableImportCtKwh, yearExp.avgDynCt, 'Jahres-Ø dynamisch');
 
   // Vorberechnete Monate (Ablage) ergeben exakt dasselbe — auch die Quellen.
-  assert.ok(SUMMARY_CACHE_VERSION >= 6, 'Slot-Bewertung geändert → Ablage-Version erhöht');
+  assert.ok(SUMMARY_CACHE_VERSION >= 7, 'Slot-Bewertung geändert (zuletzt bepreiste Viertelstunden, Codex 7dc5e9e9) → Ablage-Version erhöht');
   const cached = makeStore({ ...range, withCache: true });
   const rt = runtimeFor(cached, PRICING_SWITCH, '2026-05-02');
   assert.deepStrictEqual(await rt.getSummary({ view: 'year', date: '2026-03-01' }), expected, 'kalt');
@@ -335,4 +335,26 @@ test('Bezugskosten zum Ø: aus derselben ungerundeten Summe (kleine Viertelstund
   const r = await runtimeFor(store, { mode: 'fixed', fixedGrossImportCtKwh: 32, periods: [] }).getSummary({ view: 'day', date: '2026-05-01' });
   close(r.kpis.userImportPriceWeightedCtKwh, 32, 'Ø');
   assert.equal(r.kpis.importPricedCostEur, 0.31, '96 × 0,01 kWh × 32 ct = 0,3072 € → 0,31 €');
+});
+
+// ── Codex 7dc5e9e9 ──────────────────────────────────────────────────────────
+
+test('Euro-Beträge aus den ungerundeten ct-Summen (keine doppelte Rundung an der Halb-Cent-Grenze)', async () => {
+  // Eine Viertelstunde, 0,15 kWh: Festtag 29,99 ct → 4,4985 ct = 0,04 €; dynamisch 17,99 + 12 = 29,99 ct.
+  const one = (ts, price) => {
+    const slots = [{ ts, importKwh: 0.15, exportKwh: 0, loadKwh: 0.15, pvKwh: 0, sourceKind: 'local_live', sourceKinds: ['local_live'] }];
+    return {
+      async listMaterializedEnergySlots() { return slots; },
+      async listAggregatedEnergySlots() { return slots; },
+      async listPriceSlots() { return price == null ? [] : [{ ts, priceCtKwh: price }]; }
+    };
+  };
+  const fixed = await runtimeFor(one('2026-05-01T10:00:00.000Z', null), { mode: 'fixed', fixedGrossImportCtKwh: 29.99, periods: [] })
+    .getSummary({ view: 'day', date: '2026-05-01' });
+  assert.equal(fixed.kpis.importPricedCostEur, 0.04, '4,4985 ct → 0,04 € (nicht über 4,50 ct → 0,05 €)');
+  const dyn = await runtimeFor(one('2026-05-01T10:00:00.000Z', 17.99), { ...PRICING_SWITCH, comparisonFixedCtKwh: 29.99 })
+    .getSummary({ view: 'day', date: '2026-05-01' });
+  assert.equal(dyn.kpis.fixedCompareActualEur, 0.04);
+  assert.equal(dyn.kpis.fixedCompareFixedEur, 0.04);
+  assert.equal(dyn.kpis.fixedCompareSavingsEur, 0);
 });

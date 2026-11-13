@@ -21,7 +21,7 @@ verweist hierher.
   Monatstabelle mit Jahreszeile. Der Vergleichspreis steht in Einstellungen → Strompreise („Vergleichs-Festpreis“);
   leer = automatisch der Festpreis des letzten Festpreis-Zeitraums vor dem dynamischen Tarif, sonst der feste
   Bruttopreis des Standard-Tarifs. Die Karte nennt die Quelle. Die vorberechnete Jahres-Historie wird dafür einmal neu
-  gerechnet (Ablage-Version 6).
+  gerechnet (Ablage-Version 7).
 
 ## [Unreleased]
 
