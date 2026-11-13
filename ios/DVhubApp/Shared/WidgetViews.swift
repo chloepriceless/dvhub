@@ -20,9 +20,18 @@ private extension WidgetSnapshot {
         return nil
     }
     var netPositive: Bool { (todayNetEur ?? 0) >= 0 }
-    /// Die Tagessummen gehören zum Tag des Stands — nach Mitternacht nicht mehr „heute“.
-    var isToday: Bool { Calendar.current.isDateInToday(at) }
-    var dayWord: String { isToday ? "Heute" : (Calendar.current.isDateInYesterday(at) ? "Gestern" : "Zuletzt") }
+    /// Die Tagessummen gehören zum Tag des Stands — nach Mitternacht nicht mehr
+    /// „heute“. `now` ist der Zeitpunkt des Timeline-Eintrags, nicht die Uhr beim
+    /// Zeichnen: Das System zeichnet Einträge im Voraus.
+    func isToday(_ now: Date) -> Bool { Calendar.current.isDate(at, inSameDayAs: now) }
+    func dayWord(_ now: Date) -> String {
+        if isToday(now) { return "Heute" }
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now) ?? now
+        return Calendar.current.isDate(at, inSameDayAs: yesterday) ? "Gestern" : "Zuletzt"
+    }
+    func standText(_ now: Date) -> String {
+        isToday(now) ? Format.time(at) : at.formatted(Date.FormatStyle(date: .numeric, time: .shortened).locale(Format.de))
+    }
 }
 
 private struct Missing: View {
@@ -38,10 +47,11 @@ private struct Missing: View {
 }
 
 private struct Stand: View {
-    let at: Date
+    let snapshot: WidgetSnapshot
+    let now: Date
     var body: some View {
         // Mit Datum, sobald der Stand nicht von heute ist.
-        Text("Stand \(Calendar.current.isDateInToday(at) ? Format.time(at) : Format.dateTime(at))")
+        Text("Stand \(snapshot.standText(now))")
             .font(.system(size: 10, weight: .medium).monospacedDigit()).foregroundStyle(Brand.dim)
             .lineLimit(1).minimumScaleFactor(0.7)
     }
@@ -95,6 +105,8 @@ struct StatusWidgetContent: View {
     let snapshot: WidgetSnapshot?
     let family: WidgetFamily
     var groupAvailable = true
+    /// Zeitpunkt, für den gezeichnet wird (Timeline-Eintrag).
+    var now = Date()
 
     var body: some View {
         Group {
@@ -136,7 +148,7 @@ struct StatusWidgetContent: View {
             }
             Spacer(minLength: 0)
             Cell(icon: "sun.max.fill", title: "Erzeugung", value: Format.power(s.pvW), tint: Brand.pv)
-            Stand(at: s.at)
+            Stand(snapshot: s, now: now)
         }
     }
 
@@ -165,7 +177,7 @@ struct StatusWidgetContent: View {
                 HStack(spacing: 8) {
                     Cell(icon: s.exporting ? "arrow.up.to.line" : "arrow.down.to.line", title: s.gridTitle, value: Format.power(s.gridW),
                          tint: s.exporting ? Brand.cyan : Brand.grid)
-                    Cell(icon: "eurosign.circle.fill", title: s.netPositive ? "\(s.dayWord) verdient" : "\(s.dayWord) gekostet",
+                    Cell(icon: "eurosign.circle.fill", title: s.netPositive ? "\(s.dayWord(now)) verdient" : "\(s.dayWord(now)) gekostet",
                          value: Format.euro(abs(s.todayNetEur ?? 0)), tint: s.netPositive ? Brand.money : Brand.red)
                 }
                 HStack {
@@ -175,7 +187,7 @@ struct StatusWidgetContent: View {
                         Text(s.boxName).font(.system(size: 10, weight: .semibold)).foregroundStyle(Brand.text2).lineLimit(1)
                     }
                     Spacer()
-                    Stand(at: s.at)
+                    Stand(snapshot: s, now: now)
                 }
             }
         }
@@ -197,7 +209,7 @@ struct StatusWidgetContent: View {
                 Image(systemName: "bolt.fill")
                 Text("DVhub").fontWeight(.bold)
                 Spacer()
-                Text(s.isToday ? Format.time(s.at) : s.dayWord).font(.caption2.monospacedDigit())
+                Text(s.isToday(now) ? Format.time(s.at) : s.dayWord(now)).font(.caption2.monospacedDigit())
             }
             .font(.caption)
             Text("Akku \(Format.percent(s.soc)) · PV \(Format.power(s.pvW))").font(.caption.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.7)
@@ -217,6 +229,8 @@ struct MoneyWidgetContent: View {
     let snapshot: WidgetSnapshot?
     let family: WidgetFamily
     var groupAvailable = true
+    /// Zeitpunkt, für den gezeichnet wird (Timeline-Eintrag).
+    var now = Date()
 
     var body: some View {
         Group {
@@ -231,7 +245,7 @@ struct MoneyWidgetContent: View {
     private func small(_ s: WidgetSnapshot) -> some View {
         let tint = s.netPositive ? Brand.money : Brand.red
         return VStack(alignment: .leading, spacing: 4) {
-            Label(s.netPositive ? "\(s.dayWord) verdient" : "\(s.dayWord) gekostet", systemImage: "eurosign.circle.fill")
+            Label(s.netPositive ? "\(s.dayWord(now)) verdient" : "\(s.dayWord(now)) gekostet", systemImage: "eurosign.circle.fill")
                 .font(.system(size: 11, weight: .semibold)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.8)
             Text(Format.euro(abs(s.todayNetEur ?? 0)))
                 .font(.system(.title, design: .rounded).weight(.bold)).monospacedDigit().foregroundStyle(Brand.text)
@@ -249,14 +263,14 @@ struct MoneyWidgetContent: View {
             }
             .font(.system(.caption, design: .rounded).weight(.semibold)).monospacedDigit()
             .accessibilityElement(children: .ignore).accessibilityLabel("Kosten \(Format.euro(s.todayCostEur))")
-            Stand(at: s.at)
+            Stand(snapshot: s, now: now)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func rectangular(_ s: WidgetSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Label(s.netPositive ? "\(s.dayWord) verdient" : "\(s.dayWord) gekostet", systemImage: "eurosign.circle.fill").font(.caption.weight(.bold))
+            Label(s.netPositive ? "\(s.dayWord(now)) verdient" : "\(s.dayWord(now)) gekostet", systemImage: "eurosign.circle.fill").font(.caption.weight(.bold))
             Text(Format.euro(abs(s.todayNetEur ?? 0))).font(.system(.title3, design: .rounded).weight(.bold)).monospacedDigit()
             Text("Erlös \(Format.euro(s.todayRevenueEur)) · Kosten \(Format.euro(s.todayCostEur))").font(.caption2.monospacedDigit())
                 .lineLimit(1).minimumScaleFactor(0.7)

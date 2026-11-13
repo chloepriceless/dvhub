@@ -27,8 +27,15 @@ struct StatusProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<StatusEntry>) -> Void) {
         // Neu lesen, sobald die App schreibt (reloadAllTimelines); sonst alle
-        // 30 min, damit die Altersangabe stimmt.
-        completion(Timeline(entries: [entry()], policy: .after(Date().addingTimeInterval(1800))))
+        // 30 min. Dazu ein Eintrag zum Tageswechsel: Ab Mitternacht sind die
+        // Tagessummen nicht mehr „heute“ — das darf nicht vom Neuladen abhängen.
+        let now = entry()
+        var entries = [now]
+        let cal = Calendar.current
+        if let midnight = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now.date)) {
+            entries.append(StatusEntry(date: midnight, snapshot: now.snapshot, groupAvailable: now.groupAvailable))
+        }
+        completion(Timeline(entries: entries, policy: .after(Date().addingTimeInterval(1800))))
     }
 
     private func entry() -> StatusEntry {
@@ -43,7 +50,7 @@ struct StatusWidgetView: View {
     let entry: StatusEntry
 
     var body: some View {
-        StatusWidgetContent(snapshot: entry.snapshot, family: family, groupAvailable: entry.groupAvailable)
+        StatusWidgetContent(snapshot: entry.snapshot, family: family, groupAvailable: entry.groupAvailable, now: entry.date)
             .containerBackground(for: .widget) { WidgetBackground() }
             .environment(\.colorScheme, .dark)
     }
@@ -65,7 +72,7 @@ struct MoneyWidgetView: View {
     let entry: StatusEntry
 
     var body: some View {
-        MoneyWidgetContent(snapshot: entry.snapshot, family: family, groupAvailable: entry.groupAvailable)
+        MoneyWidgetContent(snapshot: entry.snapshot, family: family, groupAvailable: entry.groupAvailable, now: entry.date)
             .containerBackground(for: .widget) { WidgetBackground() }
             .environment(\.colorScheme, .dark)
     }

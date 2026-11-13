@@ -12,7 +12,7 @@ struct SystemInfoView: View {
     private var raw: JSONValue { controller.statusRaw ?? .null }
 
     var body: some View {
-        AuroraPage { width in
+        AuroraPage(inlineTitle: true) { width in
             if !controller.isOnline && controller.statusRaw == nil {
                 NoticeBanner(text: "Die Einstellungen brauchen eine Verbindung zur Anlage.")
             }
@@ -23,7 +23,6 @@ struct SystemInfoView: View {
             NoticeBanner(text: "Ändern geht in der DVhub-Weboberfläche unter „Einstellungen“. Die App liest hier nur mit.", icon: "lock", tint: Brand.cyan)
         }
         .navigationTitle("System")
-        .navigationBarTitleDisplayMode(.inline)
         .refreshable { await controller.refreshDetail(maxAge: 0) }
         .task(id: controller.isOnline) { await controller.refreshDetail(maxAge: 30) }
     }

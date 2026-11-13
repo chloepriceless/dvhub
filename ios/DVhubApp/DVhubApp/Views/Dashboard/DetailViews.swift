@@ -17,7 +17,7 @@ struct DetailView: View {
     private var detail: StatusDetail { controller.detail ?? StatusDetail() }
 
     var body: some View {
-        AuroraPage { width in
+        AuroraPage(inlineTitle: true) { width in
             if !controller.isOnline {
                 NoticeBanner(text: "Keine Verbindung zur Anlage – Detailwerte zeigen den letzten bekannten Stand.")
             }
@@ -31,7 +31,6 @@ struct DetailView: View {
             }
         }
         .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
         .task(id: controller.isOnline) {
             guard controller.isOnline else { return }
             if case .ok(let s) = await BoxData.history(controller, view: .day, date: Date()) { day = s }

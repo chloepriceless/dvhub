@@ -20,7 +20,7 @@ struct IntegrationsView: View {
     ]
 
     var body: some View {
-        AuroraPage { width in
+        AuroraPage(inlineTitle: true) { width in
             if !controller.isOnline { NoticeBanner(text: "Der Zustand der Anbindungen braucht eine Verbindung zur Anlage.") }
             let cards = self.cards
             if cards.isEmpty && loading { ProgressView().frame(maxWidth: .infinity, minHeight: 200) }
@@ -32,7 +32,6 @@ struct IntegrationsView: View {
                 .font(.caption2).foregroundStyle(Brand.dim)
         }
         .navigationTitle("Integrationen")
-        .navigationBarTitleDisplayMode(.inline)
         .screenActions(.more, [
             ScreenAction(id: "refresh", title: "Aktualisieren", icon: "arrow.clockwise", disabled: loading) { Task { await load() } },
         ])

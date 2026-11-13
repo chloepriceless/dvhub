@@ -212,18 +212,17 @@ struct EmptyState: View {
 /// damit Ansichten nach Platz statt nach Gerät umbrechen (iPhone Duo auf/zu).
 struct AuroraPage<Content: View>: View {
     var spacing: CGFloat = 14
+    /// Detailseiten: kleiner Titel.
+    var inlineTitle = false
     @ViewBuilder var content: (CGFloat) -> Content
     @State private var width: CGFloat = 0
     @Environment(Chrome.self) private var chrome
 
     var body: some View {
-        // Mit Seitenleiste ist die Höhe knapp: kleiner Titel statt großem. Ohne
-        // sie bleibt die Wahl der Ansicht unberührt (Detailseiten sind klein betitelt).
-        if chrome.railActive {
-            page.navigationBarTitleDisplayMode(.inline)
-        } else {
-            page
-        }
+        // Ein Pfad für beide Fälle: Die Seite behält ihre Identität (Rollposition,
+        // Zustand), wenn die Seitenleiste beim Drehen oder Auf-/Zuklappen kommt
+        // oder geht. Mit Seitenleiste ist die Höhe knapp: dann immer kleiner Titel.
+        page.navigationBarTitleDisplayMode(chrome.railActive || inlineTitle ? .inline : .automatic)
     }
 
     private var page: some View {

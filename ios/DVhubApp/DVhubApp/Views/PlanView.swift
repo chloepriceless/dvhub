@@ -26,7 +26,7 @@ struct PlanView: View {
     @State private var selection: Date?
 
     var body: some View {
-        AuroraPage { width in
+        AuroraPage(inlineTitle: true) { width in
             if let message { NoticeBanner(text: message, icon: "info.circle", tint: Brand.violet) }
             if !rows.isEmpty {
                 if Layout.isWide(width) {
@@ -40,7 +40,6 @@ struct PlanView: View {
             if let s = schedule { scheduleCard(s) }
         }
         .navigationTitle("Fahrplan")
-        .navigationBarTitleDisplayMode(.inline)
         .screenActions(.more, [
             ScreenAction(id: "refresh", title: "Aktualisieren", icon: "arrow.clockwise") { Task { await load() } },
         ])

@@ -94,7 +94,7 @@ struct AppearanceView: View {
     @Environment(Chrome.self) private var chrome
 
     var body: some View {
-        AuroraPage { _ in
+        AuroraPage(inlineTitle: true) { _ in
             GlassCard(tint: Brand.pink) {
                 VStack(alignment: .leading, spacing: 10) {
                     Eyebrow(text: "Farben", icon: "circle.lefthalf.filled", tint: Brand.pink)
@@ -125,7 +125,6 @@ struct AppearanceView: View {
             WidgetInfoCard()
         }
         .navigationTitle("Darstellung")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -167,7 +166,7 @@ struct AboutView: View {
     }
 
     var body: some View {
-        AuroraPage { _ in
+        AuroraPage(inlineTitle: true) { _ in
             GlassCard(tint: Brand.cyan) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("DVhub").font(.system(size: 40, weight: .heavy, design: .rounded)).foregroundStyle(Brand.auroraLinear)
@@ -195,7 +194,6 @@ struct AboutView: View {
             }
         }
         .navigationTitle("Über")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     @ViewBuilder
