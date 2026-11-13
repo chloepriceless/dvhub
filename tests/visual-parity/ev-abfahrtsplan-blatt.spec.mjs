@@ -33,7 +33,14 @@ test.describe('E-Auto-Abfahrtsplan: Blatt und Schalter (Codex 720037e0)', () => 
   test('Samstag mit zwei Abfahrten ausschalten, Mittwoch 00:00 anlegen, 120 % wird abgelehnt → Speichern', async ({ page, request }) => {
     await page.goto('/integrations.html#evcc');
     const weekly = page.locator('#evcc-dep-weekly');
-    if (!(await weekly.isVisible())) await page.locator('.conn-card', { hasText: 'Wallbox' }).first().tap();
+    // Playwright-WebKit unter Linux (CI): tap() ohne nachfolgenden Klick — bleibt die Schublade zu, einmal klicken.
+    await page.waitForLoadState('networkidle');
+    if (!(await weekly.isVisible())) {
+      const card = page.locator('.conn-card', { hasText: 'Wallbox' }).first();
+      await card.tap();
+      if (!(await weekly.isVisible())) await card.click();
+    }
+    await expect(weekly).toBeVisible();
     await page.waitForLoadState('networkidle');
     const sat = weekly.locator('.evw-day[data-day="6"]');
     await expect(sat.locator('.evw-card')).toHaveCount(2);

@@ -62,6 +62,8 @@ export function shotPath(testInfo, name) {
 // Tippen (Touch-Geraet) oder klicken.
 async function press(page, locator) {
   const touch = await page.evaluate(() => 'ontouchstart' in window || navigator.maxTouchPoints > 0);
+  // Mittig scrollen: Am unteren Rand lag „Übernehmen“ in der CI unter dem Warnbanner (Linux-WebKit, iPhone-Viewport).
+  await locator.evaluate((el) => el.scrollIntoView({ block: 'center' }));
   if (touch) await locator.tap(); else await locator.click();
 }
 
@@ -131,7 +133,16 @@ export async function integrationsFlow(page, request, testInfo, { touchMin }) {
   await page.goto('/integrations.html#evcc');
   // Wallbox-Schublade öffnen (Karte; inline-Ansicht zeigt sie ggf. schon).
   const weekly = page.locator('#evcc-dep-weekly');
-  if (!(await weekly.isVisible())) await press(page, page.locator('.conn-card', { hasText: 'Wallbox' }).first());
+  // Playwright-WebKit unter Linux (CI) erzeugt bei tap() nur Touch-Events, keinen nachfolgenden Klick; die Karte öffnet
+  // ihre Schublade per Klick (echtes iOS und macOS-WebKit synthetisieren ihn). Bleibt sie zu, deshalb einmal klicken
+  // (CI-Lauf cd33efa0, 13.11.2026).
+  await page.waitForLoadState('networkidle');
+  if (!(await weekly.isVisible())) {
+    const card = page.locator('.conn-card', { hasText: 'Wallbox' }).first();
+    await press(page, card);
+    if (!(await weekly.isVisible())) await card.click();
+  }
+  await expect(weekly).toBeVisible();
   // Die Schublade baut den Editor nach dem Laden der Daten neu auf — erst danach greifen.
   await page.waitForLoadState('networkidle');
   const wed = weekly.locator('.evw-day[data-day="3"] .evw-card').first();
