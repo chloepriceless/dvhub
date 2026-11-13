@@ -38,7 +38,8 @@ test.describe('E-Auto-Abfahrtsplan: Blatt und Schalter (Codex 720037e0)', () => 
     if (!(await weekly.isVisible())) {
       const card = page.locator('.conn-card', { hasText: 'Wallbox' }).first();
       await card.tap();
-      if (!(await weekly.isVisible())) await card.click();
+      const open = await expect(page.locator('#dv-drawer-evcc')).toHaveClass(/is-open/, { timeout: 2000 }).then(() => true, () => false);
+      if (!open) await card.click();
     }
     await expect(weekly).toBeVisible();
     await page.waitForLoadState('networkidle');

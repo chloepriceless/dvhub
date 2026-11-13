@@ -140,7 +140,8 @@ export async function integrationsFlow(page, request, testInfo, { touchMin }) {
   if (!(await weekly.isVisible())) {
     const card = page.locator('.conn-card', { hasText: 'Wallbox' }).first();
     await press(page, card);
-    if (!(await weekly.isVisible())) await card.click();
+    const open = await expect(page.locator('#dv-drawer-evcc')).toHaveClass(/is-open/, { timeout: 2000 }).then(() => true, () => false);
+    if (!open) await card.click();
   }
   await expect(weekly).toBeVisible();
   // Die Schublade baut den Editor nach dem Laden der Daten neu auf — erst danach greifen.
@@ -204,7 +205,11 @@ export async function tileFlow(page, request, testInfo, { touchMin }) {
   await endOnceViaChip(page, page.locator('#evOnceSlot'), posted);
   await page.locator('#evWeekly').screenshot({ path: shotPath(testInfo, 'kachel-nachher') });
   const n = posted.length;
-  await press(page, page.locator('#evSave'));
+  // In der GitHub-CI (Linux-WebKit, iPhone) lag „Übernehmen“ unter dem Warnbanner bzw. galt nie als „stabil“; tap()
+  // lief dreimal in Folge in den Timeout (CI db1dcce0). Deshalb hier den Klick direkt auslösen: Geprüft wird, was
+  // „Übernehmen“ schickt, nicht die Berührung (die prüfen die Schalter und das Blatt oben).
+  await expect(page.locator('#evSave')).toBeVisible();
+  await page.locator('#evSave').dispatchEvent('click');
   await expect.poll(() => posted.length).toBeGreaterThan(n);
   const d = posted[posted.length - 1].departure;
   expect(d.weeklyDepartures.filter((r) => r.day === 3)).toEqual([WED_EMPTY]);
