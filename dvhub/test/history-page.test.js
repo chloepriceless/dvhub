@@ -519,3 +519,101 @@ test('Protokoll-CSV „Netzstrom im Akku“ wird mit Token geladen, nicht per sc
   assert.match(fn.slice(0, 1500), /response\.ok/);
   assert.match(js, /byId\('historyGridShareCsv'\)[\s\S]{0,200}addEventListener\('click'/);
 });
+
+// ── Arbeitspreis-Karte (13.11.2026, Ziel 1.0.11) ──────────────────────────
+// Ø Arbeitspreis und Festpreis-Vergleich; die Zahlen rechnet das Backend je
+// Slot (history-runtime.js), die Karte zeigt sie nur an.
+function tariffKpis(extra = {}) {
+  return {
+    importKwh: 120, gridCostEur: 33.6, importCostEur: 33.6,
+    userImportPriceWeightedCtKwh: 28,
+    variableTariffSlotCount: 1628, variableImportKwh: 80, variableImportCtKwh: 26.5,
+    variablePriceAvgCtKwh: 29.25, variablePriceSlotCount: 1628,
+    fixedCompareSlotCount: 1628, fixedCompareImportKwh: 80,
+    fixedCompareActualEur: 21.2, fixedCompareFixedEur: 24, fixedCompareSavingsEur: 2.8, fixedCompareCtKwh: 30,
+    fixedCompareSources: [{ ctKwh: 30, source: 'period', periodId: 'alt', label: 'Stadtwerke Fest', importKwh: 80 }],
+    ...extra
+  };
+}
+
+test('Arbeitspreis-Karte: Monat mit Tarifwechsel zeigt Ø, Lastverschiebung und Ersparnis mit Quelle', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({ view: 'month', date: '2026-03-10', kpis: tariffKpis(), rows: [], meta: {} });
+  assert.equal(elements.get('historyTariffCard').hidden, false);
+  assert.match(elements.get('historyTariffAvg').textContent, /28,00 ct\/kWh/);
+  assert.match(elements.get('historyTariffImportKwh').textContent, /120,00 kWh/);
+  assert.match(elements.get('historyTariffImportCost').textContent, /33,60 €/);
+  assert.match(elements.get('historyTariffDynAvg').textContent, /26,50 ct\/kWh/);
+  assert.match(elements.get('historyTariffDynTimeAvg').textContent, /29,25 ct\/kWh/);
+  assert.match(elements.get('historyTariffShift').textContent, /2,75 ct\/kWh günstiger/);
+  assert.match(elements.get('historyTariffSavings').textContent, /2,80 € gespart/);
+  assert.match(elements.get('historyTariffCompareText').textContent,
+    /Mit Festpreis 30,00 ct\/kWh hätte der Netzbezug \(80,00 kWh\) 24,00 € gekostet → 2,80 € gespart\./);
+  assert.match(elements.get('historyTariffSource').textContent, /Festpreis 30,00 ct\/kWh aus Zeitraum ‚Stadtwerke Fest‘/);
+  assert.equal(elements.get('historyTariffSource').hidden, false);
+  assert.equal(elements.get('historyTariffTableWrap').hidden, true, 'Monatsansicht ohne Monatstabelle');
+});
+
+test('Arbeitspreis-Karte: Mehrkosten, eigener Vergleichspreis', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({
+    view: 'week', date: '2026-03-10',
+    kpis: tariffKpis({ fixedCompareSavingsEur: -1.5, fixedCompareFixedEur: 19.7,
+      fixedCompareSources: [{ ctKwh: 24.63, source: 'configured', periodId: null, label: null, importKwh: 80 }] }),
+    rows: [], meta: {}
+  });
+  assert.match(elements.get('historyTariffSavings').textContent, /1,50 € mehr bezahlt/);
+  assert.match(elements.get('historyTariffCompareText').textContent, /→ 1,50 € mehr bezahlt\./);
+  assert.match(elements.get('historyTariffSource').textContent, /eigener Wert aus den Einstellungen/);
+});
+
+test('Arbeitspreis-Karte: nur Festtarif → kein Vergleich; Tag → Karte aus', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({
+    view: 'month', date: '2026-02-10',
+    kpis: tariffKpis({ variableTariffSlotCount: 0, variableImportKwh: 0, variableImportCtKwh: null, variablePriceAvgCtKwh: null,
+      fixedCompareSlotCount: 0, fixedCompareImportKwh: 0, fixedCompareActualEur: null, fixedCompareFixedEur: null,
+      fixedCompareSavingsEur: null, fixedCompareCtKwh: null, fixedCompareSources: [] }),
+    rows: [], meta: {}
+  });
+  assert.equal(elements.get('historyTariffCard').hidden, false);
+  assert.equal(elements.get('historyTariffSavings').textContent, 'Festtarif');
+  assert.equal(elements.get('historyTariffDynAvg').textContent, 'Festtarif');
+  assert.match(elements.get('historyTariffCompareText').textContent, /nur ein Festtarif/);
+  assert.equal(elements.get('historyTariffSource').hidden, true);
+
+  helpers.renderSummary({ view: 'day', date: '2026-02-10', kpis: tariffKpis(), rows: [], meta: {} });
+  assert.equal(elements.get('historyTariffCard').hidden, true);
+});
+
+test('Arbeitspreis-Karte: variabler Tarif ohne Vergleichspreis sagt, wo er einzutragen ist', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({
+    view: 'month', date: '2026-03-10',
+    kpis: tariffKpis({ fixedCompareSlotCount: 0, fixedCompareImportKwh: 0, fixedCompareActualEur: null,
+      fixedCompareFixedEur: null, fixedCompareSavingsEur: null, fixedCompareCtKwh: null, fixedCompareSources: [] }),
+    rows: [], meta: {}
+  });
+  assert.equal(elements.get('historyTariffSavings').textContent, '-');
+  assert.match(elements.get('historyTariffCompareText').textContent, /Einstellungen/);
+});
+
+test('Arbeitspreis-Karte: Jahresansicht mit Monatstabelle und Jahreszeile', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const fixedMonth = { key: '2026-02', label: '2026-02', importKwh: 50, userImportPriceWeightedCtKwh: 30,
+    variableTariffSlotCount: 0, variablePriceAvgCtKwh: null, fixedCompareSavingsEur: null, fixedCompareFixedEur: null };
+  const dynMonth = { key: '2026-03', label: '2026-03', importKwh: 70, userImportPriceWeightedCtKwh: 27.2,
+    variableTariffSlotCount: 1628, variablePriceAvgCtKwh: 29.25, fixedCompareSavingsEur: 2.8, fixedCompareFixedEur: 24 };
+  const lossMonth = { key: '2026-04', label: '2026-04', importKwh: 0, userImportPriceWeightedCtKwh: null,
+    variableTariffSlotCount: 2880, variablePriceAvgCtKwh: 27, fixedCompareSavingsEur: -0.4, fixedCompareFixedEur: 0 };
+  helpers.renderSummary({ view: 'year', date: '2026-03-10', kpis: tariffKpis(), rows: [fixedMonth, dynMonth, lossMonth], meta: {} });
+  assert.equal(elements.get('historyTariffTableWrap').hidden, false);
+  const html = elements.get('historyTariffTable').innerHTML;
+  assert.match(html, /<td>Feb<\/td>/);
+  assert.match(html, /<td>Mär<\/td>/);
+  assert.match(html, /Festtarif/, 'Monat im Festtarif ohne Ersparnis');
+  assert.match(html, /2,80 €/);
+  assert.match(html, /tariff-loss[^>]*>-0,40 €/);
+  assert.match(html, /<tfoot>[\s\S]*Jahr[\s\S]*28,00 ct\/kWh[\s\S]*2,80 €/);
+  assert.match(elements.get('historyTariffTableLabel').textContent, /Monate/);
+});

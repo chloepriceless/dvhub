@@ -326,6 +326,24 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .dv-section + .dv-section { border-left: 0; border-top: 1px solid var(--hairline); }
 }
 
+/* Arbeitspreis-Karte (1.0.11): drei Abschnitte statt vier; unter 900px wie die
+   DV-Karte einspaltig. Die Monatstabelle lässt auf dem Handy die zwei
+   Nebenspalten weg, damit nichts quer scrollt. */
+.dv-grid.tariff-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) {
+  .dv-grid.tariff-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.tariff-gain { color: var(--green); }
+.tariff-loss { color: var(--orange); }
+.tariff-table .tariff-muted { color: var(--text-dim); }
+.tariff-table td:first-child { white-space: nowrap; }
+@media (max-width: 560px) {
+  .tariff-table .tariff-col-opt { display: none; }
+  .tariff-table table { font-size: 12px; }
+  .tariff-table th,
+  .tariff-table td { padding: 8px 4px; }
+}
+
 /* ══════════════════════════════════════════════════════════════════════
    CHART PANELS — the 4 Chart.js panels (#historyFinancialPanel etc.)
 

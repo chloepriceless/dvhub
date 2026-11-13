@@ -1915,6 +1915,8 @@ const HIDDEN_FIELD_PATHS = [
   // costs / dvCost trotzdem nicht-leer → Pricing-Editor wird weiter gemountet.
   'userEnergyPricing.mode',
   'userEnergyPricing.fixedGrossImportCtKwh',
+  // Vergleichs-Festpreis der Historie (1.0.11): im Preis-Editor unter den Zeiträumen.
+  'userEnergyPricing.comparisonFixedCtKwh',
   'userEnergyPricing.dynamicComponents.energyMarkupCtKwh',
   'userEnergyPricing.dynamicComponents.gridChargesCtKwh',
   'userEnergyPricing.dynamicComponents.leviesAndFeesCtKwh',
@@ -3149,6 +3151,15 @@ function renderPricingPeriodsEditor() {
         <div class="sa-pad-tight"><button class="btn btn-danger btn-small" type="button" data-remove-period="${escapeHtml(period.id)}">Entfernen</button></div>
       </div>
     `).join('')}
+    <div class="sa-divider-top"></div>
+    <div class="config-group-kicker" data-accent="yellow">Vergleich mit Festpreis (Historie)</div>
+    <div class="svc-meta">Die Historie zeigt, was der Netzbezug im dynamischen Tarif mit diesem Festpreis gekostet hätte (nur Arbeitspreis, ohne Grundgebühr). Leer = automatisch: Festpreis des letzten Festpreis-Zeitraums vor dem dynamischen Tarif, sonst der feste Bruttopreis des Standard-Tarifs.</div>
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.comparisonFixedCtKwh', 'Vergleichs-Festpreis (ct/kWh)')}</span>
+        <input class="config-input sa-w-num" data-std-path="comparisonFixedCtKwh" type="number" step="0.01" min="0" placeholder="automatisch" value="${escapeHtml(uep.comparisonFixedCtKwh ?? '')}" />
+      </div>
+    </div>
   `;
 
   if (providerInUse) bindTariffProviderBlock(section, uep);

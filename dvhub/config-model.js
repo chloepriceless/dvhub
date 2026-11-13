@@ -3853,6 +3853,19 @@ function buildFieldDefinitions() {
     },
     {
       section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Festpreis, mit dem die Historie den dynamischen Tarif vergleicht.',
+      path: 'userEnergyPricing.comparisonFixedCtKwh',
+      label: 'Vergleichs-Festpreis (ct/kWh)',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      empty: 'null',
+      help: 'Brutto-Arbeitspreis eines Festpreis-Tarifs, mit dem die Historie deinen dynamischen Tarif vergleicht (nur Arbeitspreis, ohne Grundgebühr). Leer = automatisch: der Festpreis des letzten Festpreis-Zeitraums vor dem dynamischen Tarif, sonst der Feste Bruttopreis des Standard-Tarifs.'
+    },
+    {
+      section: 'pricing',
       group: 'marketPremium',
       groupLabel: 'PV-Anlagen für Marktprämie',
       groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung für den gewichteten anzulegenden Wert.',
@@ -5097,6 +5110,9 @@ export function createDefaultConfig() {
     userEnergyPricing: {
       mode: 'fixed',
       fixedGrossImportCtKwh: 30,
+      // Festpreis für den Vergleich in der Historie (brutto ct/kWh, 1.0.11).
+      // null = automatisch: letzter Festpreis-Zeitraum vor dem dynamischen Tarif.
+      comparisonFixedCtKwh: null,
       periods: [],
       marketValueMode: 'annual',
       pvPlants: [],
@@ -6058,6 +6074,18 @@ function sanitizeUserEnergyPricing(value, warnings) {
       delete next.fixedGrossImportCtKwh;
     }
   }
+  // Vergleichs-Festpreis für die Historie (1.0.11): leer = automatisch.
+  if (next.comparisonFixedCtKwh == null || next.comparisonFixedCtKwh === '') {
+    next.comparisonFixedCtKwh = null;
+  } else {
+    const cmp = Number(next.comparisonFixedCtKwh);
+    if (!Number.isFinite(cmp) || cmp < 0) {
+      warnings.push('userEnergyPricing.comparisonFixedCtKwh: invalid number, field was reset');
+      next.comparisonFixedCtKwh = null;
+    } else {
+      next.comparisonFixedCtKwh = cmp;
+    }
+  }
   if (next.usesParagraph14aModule3 != null) next.usesParagraph14aModule3 = coerceBoolean(next.usesParagraph14aModule3);
   next.periods = sanitizeUserEnergyPricingPeriods(next.periods, warnings);
   next.pvPlants = sanitizeUserEnergyPricingPvPlants(next.pvPlants, warnings);
@@ -6677,6 +6705,54 @@ function cachedModule3Windows(pricing, effectivePricing) {
     cache.windows.set(effectivePricing, windows);
   }
   return windows;
+}
+
+// Preislogik, die für den Slot gilt ('fixed' | 'dynamic' | 'provider') — aus
+// dem passenden Zeitraum, sonst aus dem Standard-Tarif. Für den Festpreis-
+// Vergleich der Historie: verglichen werden nur Slots mit variablem Tarif.
+export function resolveUserImportTariffModeForTimestamp(ts, pricing = {}, options = {}) {
+  const timeZone = options.timeZone || BERLIN_TIME_ZONE;
+  const effectivePricing = pricing && typeof pricing === 'object'
+    ? cachedEffectivePricingForTimestamp(ts, pricing, timeZone)
+    : buildEffectiveUserEnergyPricing(pricing);
+  const mode = effectivePricing?.mode;
+  return mode === 'dynamic' || mode === 'provider' ? mode : 'fixed';
+}
+
+function finiteCtOrNull(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Vergleichs-Festpreis (brutto ct/kWh) für einen Tag mit variablem Tarif
+// (Christin 13.11.2026, Ziel 1.0.11): „was hätte ein Festpreis gebracht?“
+//   1. userEnergyPricing.comparisonFixedCtKwh, wenn eingetragen,
+//   2. sonst der Festpreis des letzten Festpreis-Zeitraums, der VOR diesem Tag
+//      endet (der Vertrag vor dem Wechsel),
+//   3. sonst der Festpreis des Standard-Tarifs,
+//   4. sonst keiner (null) — dann zeigt die Historie keinen Vergleich.
+// Zeiträume überlappen nie (sanitizeUserEnergyPricingPeriods), daher ist „vor
+// dem Tag“ für alle Tage eines variablen Zeitraums derselbe Festpreis-Zeitraum.
+export function resolveComparisonFixedPriceForDate(localDate, pricing = {}) {
+  const configured = finiteCtOrNull(pricing?.comparisonFixedCtKwh);
+  if (configured != null && configured >= 0) {
+    return { ctKwh: roundCtKwh(configured), source: 'configured', periodId: null, label: null };
+  }
+  const periods = Array.isArray(pricing?.periods) ? pricing.periods : [];
+  let best = null;
+  for (const period of periods) {
+    if (period?.mode !== 'fixed' || !(String(period.endDate || '') < String(localDate || ''))) continue;
+    const ct = finiteCtOrNull(period.fixedGrossImportCtKwh);
+    if (ct == null) continue;
+    if (!best || String(period.endDate) > String(best.endDate)) best = { ...period, ct };
+  }
+  if (best) {
+    return { ctKwh: roundCtKwh(best.ct), source: 'period', periodId: best.id == null ? null : String(best.id), label: best.label ? String(best.label) : null };
+  }
+  const base = finiteCtOrNull(pricing?.fixedGrossImportCtKwh);
+  if (base != null) return { ctKwh: roundCtKwh(base), source: 'base', periodId: null, label: null };
+  return null;
 }
 
 export function resolveUserImportPriceCtKwhForSlot(row, pricing = {}, options = {}) {

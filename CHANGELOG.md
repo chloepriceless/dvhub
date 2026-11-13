@@ -8,6 +8,21 @@ die Versionierung folgt [Semantic Versioning](https://semver.org/lang/de/).
 CHANGELOG.md ist die Single Source of Truth für die Versionshistorie; der README
 verweist hierher.
 
+## [1.0.11] — in Arbeit (Arbeitspreis-Vergleich, Merge erst nach dem 1.0.10-Release)
+
+### Neu
+
+- **Historie: Ø Arbeitspreis und Vergleich mit einem Festpreis.** Neue Karte „Arbeitspreis“ in Woche, Monat, Jahr und
+  Alle: Ø Arbeitspreis des Zeitraums (Bezugskosten ÷ Netzbezug, brutto, nur Arbeitspreis ohne Grundgebühr), beim
+  dynamischen Tarif zusätzlich der Ø je Viertelstunde — der Abstand zeigt, was die Lastverschiebung gebracht hat — und
+  „Mit Festpreis X ct hätte der Netzbezug Y € gekostet → Z € gespart / mehr bezahlt“. Gerechnet wird je Viertelstunde
+  und nur dort, wo ein dynamischer oder Anbieter-Tarif galt; Monate mit Tarifwechsel stimmen so, Monate ganz im
+  Festtarif zeigen „Festtarif“. Viertelstunden ohne Börsenpreis zählen nicht mit 0 ct. Die Jahresansicht hat eine
+  Monatstabelle mit Jahreszeile. Der Vergleichspreis steht in Einstellungen → Strompreise („Vergleichs-Festpreis“);
+  leer = automatisch der Festpreis des letzten Festpreis-Zeitraums vor dem dynamischen Tarif, sonst der feste
+  Bruttopreis des Standard-Tarifs. Die Karte nennt die Quelle. Die vorberechnete Jahres-Historie wird dafür einmal neu
+  gerechnet (Ablage-Version 6).
+
 ## [Unreleased]
 
 ### Neu
