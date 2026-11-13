@@ -1,6 +1,6 @@
 # DVhub HTTP-API — alle Endpunkte
 
-Vollständige Liste der HTTP-Endpunkte von DVhub (Stand: Version 1.0.9, November 2026), gruppiert nach Bereich.
+Vollständige Liste der HTTP-Endpunkte von DVhub (Stand: Version 1.0.10, November 2026), gruppiert nach Bereich.
 Quelle ist der Router `dvhub/routes-api.js`. Die interaktive Swagger-Oberfläche unter `/api-docs.html` (`/openapi.json`) beschreibt nur einen Teil davon (≈ 35 Kern-Endpunkte) und zeigt dafür Beispiel-Antworten.
 
 - [1. Grundlagen](#1-grundlagen)
@@ -159,6 +159,11 @@ Spalte **Zugang** in den Tabellen:
 | POST | `/api/tariff-provider/test` | Token | Zugangsdaten prüfen, ohne zu speichern (`{"name":"tibber","tibber":{"token":"…"}}`; `***` oder leer = gespeicherter Wert) |
 | POST | `/api/tariff-provider/refresh` | Token | Anbieterpreise sofort abrufen (gespeicherte Einstellungen; nach abgelehnten Zugangsdaten 6 h gesperrt) |
 | GET | `/api/tariff-provider/stats?days=30` | Token | Auswertung Anbieterpreis ↔ Day-Ahead über 1–365 Tage (Standard 30) plus bekannte Preise für morgen: Mittelwerte, Formel brutto und netto ≈ a + b × Börsenpreis, mittlere und größte Abweichung, R² |
+| GET | `/api/luox` | Token | LUOX/Lumenaza (seit 1.0.10): Zustand von Portal/Partner-API, Anmeldesperre, Day-Ahead-Abruf, Verträge, Endkundenpreis und Abgleich der Direktvermarktung — ohne Zugangsdaten |
+| GET | `/api/luox/contracts?kind=consumer\|producer&fresh=1` | Token | Verträge im LUOX-Konto als Auswahlliste (Vertragsnummer, Status); bei Fehler `ok:false` mit Grund und nur der Option „automatisch“ |
+| POST | `/api/luox/test` | Token | Zugangsdaten prüfen, ohne zu speichern (`{"email":"…","password":"…"}`; `***` oder leer = gespeicherter Wert); Antwort: gefundene Verträge. Höchstens alle 10 s (`too_fast`) |
+| POST | `/api/luox/refresh` | Token | Sofort abrufen: Verträge, Day-Ahead, Endkundenpreis (falls an), Abgleich (falls an) |
+| GET | `/api/luox/settlement?days=30` | Token | Abgleich Direktvermarktung je Tag über 1–366 Tage (Standard 30): LUOX-Einspeisung und -Vergütung aus dem Portal neben DVhubs eigener Einspeisung × Day-Ahead, mit Summen — nur zum Abgleich |
 
 ### 3.9 Prognose
 
@@ -229,8 +234,8 @@ jedes Einzelergebnis.
 
 | Methode | Pfad | Zugang | Beschreibung |
 |---|---|---|---|
-| GET | `/api/ev` | LAN·status | Auto-Planung: Abfahrt, Ziel, Fahrzeugzustand, EOS-Plan bis zur Abfahrt |
-| POST | `/api/ev` | Token | Abfahrt/Ziel setzen |
+| GET | `/api/ev` | LAN·status | Auto-Planung: Abfahrt, Ziel, Fahrzeugzustand, EOS-Plan bis zur Abfahrt. Wochenplan seit 1.0.10 in `departure.weeklyDepartures` (Zeile = Tag der Abfahrt); `departure.weeklyPlan` liefert denselben Plan im alten Format (Zeile = Ankunftstag) für ältere Seiten |
+| POST | `/api/ev` | Token | Abfahrt/Ziel setzen (Wochenplan als `weeklyDepartures`; das alte `weeklyPlan` wird weiter angenommen und umgerechnet) |
 | POST | `/api/ev/preview` | Token | Vorschau beim Bearbeiten: `{ departure, capacityWh? }` wie bei `POST /api/ev` → `resolved` (nächste Abfahrt, Quelle/Zeile, Ziel); speichert nichts |
 | POST | `/api/ev/override` | Token, *Pro* | „Sofort laden“: `{ powerW, untilMs? \| durationMin? }` — lädt unabhängig vom EOS-Plan |
 | DELETE | `/api/ev/override` | Token, *Pro* | „Sofort laden“ beenden |

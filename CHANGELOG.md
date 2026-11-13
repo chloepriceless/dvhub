@@ -10,6 +10,38 @@ verweist hierher.
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-11-13
+
+Release nach gut einer Woche; genau dieser Stand lief vorher im Echtbetrieb auf der eigenen Anlage. Überblick nach
+Themen — die Einzelheiten stehen in den Einträgen darunter:
+
+- **EOS:** DVhub liefert das DVhub-EOS aus (Akkudoktor-EOS `main` plus die offenen PRs, die DVhub braucht) statt
+  Vanilla v0.4.0rc3, **immer mit aktivem Rust-Kern** — die Optimierung rechnet bitgleich, aber rund 25-mal schneller,
+  auch auf kleinen Geräten. EOS plant mit der Netzanschlussgrenze (Schwellen-Peak-Shaving), der Steuerzeitraum kann
+  „automatisch“ bis zur nächsten Frist reichen, Generationen sind eine Auswahl (Standard 200), das E-Auto-Ziel gilt
+  erst zur Abfahrt. Der EOS-Fernbetrieb (Rechendienst) entfällt.
+- **Netzanschluss:** DVhub hält die Bezugsgrenze des Hausanschlusses ein (ab Werk aus). Zuerst gibt die
+  Akku-Netzladung nach und der Akku deckt mit — jetzt auch ohne Victron —, erst dann werden Wallbox, Heizstab und
+  EEBUS-Geräte gekürzt. Mit Victron gilt zusätzlich die Eingangsgrenze aus dem GX (Reg. 2714), die strengere gewinnt.
+- **Not-Halt „als ob DVhub aus ist“:** DVhubs eigene Vorgaben werden einmal zurückgenommen, danach schreibt DVhub
+  nichts mehr — auch nicht §51, Direktvermarkter-Abregelung, §14a oder SoC-Boden. Der Netz-Sollwert bleibt, wie er
+  ist.
+- **§14a:** Aufteilung nach aktuellem Bedarf statt nach Nennleistung, der Hausspeicher deckt zuerst, EEBUS-Geräte
+  laufen nach Neustart oder Störung wieder an.
+- **E-Auto:** Wochenplan mit Mindest- und Max-Ladestand, eine Zeile je Abfahrtstag, neue Bedienung (Karten, Blatt,
+  „Pendeln Mo–Fr“); Einmal-Ziel als Knopf mit Dialog, auch ohne Wochenplan; einphasiges Laden; der Heimweg zählt
+  nicht mehr.
+- **Neu:** LUOX/Lumenaza als Datenquelle (Day-Ahead aus dem Kundenportal, Abgleich der Direktvermarktung), Sungrow
+  SH Hybrid (Beta, nur Bleeding Edge), Netzspannung und -frequenz zentral (Kachel „Netz · Zähler“, Datenspende nur
+  mit eigener Zustimmung), zweite Victron-Anlage: Einspeisen aus Akku 2 (Beta); die Oberfläche lädt nach einem Update
+  selbst neu.
+- **Updates und Lizenz:** Bleeding Edge auch für Paket-Installationen; ein Lizenz-Umzug auf eine andere Box wird
+  gemeldet, ein kopierter Lizenzzustand bindet nicht mehr von selbst.
+- **Historie:** eigene Messwerte zuerst, der VRM-Import füllt nur auf.
+- **Robustheit:** Modbus (Zeitüberschreitungen, zu kurze Antworten, Lese-Anfragen), kaputte `config.json` wird
+  gesichert statt überschrieben, der Lese-Modus schreibt wirklich nichts; dazu die Befunde mehrerer Prüfrunden
+  (Abschnitt „Behoben“).
+
 ### Neu
 
 - **Oberfläche lädt nach einem Update selbst neu.** Eine offene Seite — besonders die Home-Screen-Webapp — erkennt
@@ -56,7 +88,7 @@ verweist hierher.
   neue Abhängigkeit gelesen) und Tagessummen der Einspeisung des Erzeugervertrags in die Datenbank, Bericht neben
   DVhubs eigener Einspeisung × Day-Ahead — nur zum Abgleich, DVhub steuert nicht danach. **Lumenaza-Partner-API**
   (OAuth2 Client Credentials) vorbereitet und ab Werk aus; eingeschaltet mit Zugangsdaten geht sie bei Preisen und
-  Einspeisung vor dem Portal.
+  Einspeisung vor dem Portal. LUOX liefert nur die Preiszone DE-LU; bei einer anderen Zone gilt die öffentliche Quelle.
 - **EOS-Schwellen-Peak-Shaving: Akku deckt in gehaltenen Slots den Bezug über der Netzanschlussgrenze.** Liefert der
   EOS-Plan an seinen Akku-Instruktionen `peak_shaving_threshold_w` (unser EOS mit der Netzbezugs-Grenze, PR D; Vanilla
   v0.4.0rc3 kennt das Feld nicht), deckelt DVhub in Slots, in denen der Plan den Akku hält („Akku halten“) oder aus dem
