@@ -29,6 +29,29 @@
     return `${num(s) ? s + ' s' : DASH}${fc}${dev}`;
   }
 
+  // F1: welcher Modus gilt — Eigenverbrauch (0) / Forced-Split (2) / External EMS (3). Im Dauer-Forced bleibt der
+  // Master in Modus 2, auch im Leerlauf (Besitz ja, Befehl Stopp); nur ohne Besitz/echte Rücknahme ist es Modus 0.
+  function modeText(status) {
+    const ems = status && status.sungrowEms;
+    if (!ems) return DASH;
+    const owns = ems.owns === true;
+    const dec = ems.decision || {};
+    if (!owns || dec.mode === 'self') return 'Eigenverbrauch (0)';
+    if (ems.controlMode === 'external') return 'External EMS (3)';
+    return status && status.sungrowSecond ? 'Forced-Split (2)' : 'Forced (2)';
+  }
+  // F1: Countdown nur in External EMS (Modus 3) — die geltende Herzschlag-Frist; im Forced mode (2) gibt es keinen.
+  function countdownText(ems) {
+    if (!ems || ems.controlMode !== 'external') return DASH;
+    const s = num(ems.heartbeatSentS) ? Number(ems.heartbeatSentS) : ems.heartbeatTimeoutS;
+    return num(s) ? `${s} s` : DASH;
+  }
+  // F1: Leistungsgrenze je WR (Laden/Entladen). Slave zeigt die gelesenen Gerätegrenzen (33047/33048), sonst BDC.
+  function limitText({ charge, discharge, bdcRatedW }) {
+    const c = num(charge) ? kw(charge) : kw(bdcRatedW);
+    const d = num(discharge) ? kw(discharge) : kw(bdcRatedW);
+    return `Lad ${c} / Entl ${d}`;
+  }
   // Aufteilung + Regeltakt + Tages-Schreibzähler je WR (Punkt 1/2) für die Kachel.
   function splitText(ems) {
     const sp = ems && ems.decision && ems.decision.split;
@@ -69,6 +92,8 @@
       owns: ems ? ems.owns === true : false,
       decision: decisionText(ems),
       heartbeat: ems ? heartbeatText(ems) : DASH,
+      countdown: countdownText(ems),
+      limit: limitText({ bdcRatedW: dev.bdcRatedW }), // Master: ohne gelesene Gerätegrenze → BDC
       split: splitText(ems),
       regulate: regulateText(ems),
       writes: writesText(ems),
@@ -93,6 +118,11 @@
       owns: controlled && ems ? ems.owns === true : false,
       decision: controlled ? decisionText(ems) : DASH,
       heartbeat: controlled && ems ? heartbeatText(ems) : DASH,
+      countdown: controlled && ems ? countdownText(ems) : DASH,
+      // F1: gelesene Slave-Gerätegrenzen (33047/33048), sonst BDC.
+      limit: limitText({ charge: s.maxChargeWDevice, discharge: s.maxDischargeWDevice, bdcRatedW: s.bdcRatedW }),
+      // Christin-Ergänzung: gemessene Rate/Antwortzeit JE WR (der Slave hat seinen eigenen Aktuator-Status).
+      regulate: controlled ? regulateText(ems) : DASH,
       writes: controlled ? writesText(ems) : DASH,
     };
   }
@@ -103,6 +133,7 @@
     const v = s.victron || {};
     return {
       hidden: false,
+      mode: modeText(s), // F1: welcher EMS-Modus gilt (0 / Forced-Split / External)
       master: masterRow(s),
       slave: slaveRow(s),
       sum: { pv: watt(v.sungrowSystemPvW), battery: watt(v.sungrowSystemBatteryW), soc: pct(v.soc) },
@@ -120,17 +151,19 @@
     if (nameEl) nameEl.textContent = vw.hidden ? 'Victron' : 'Sungrow (Master + Slave)';
     if (vw.hidden) return;
     const set = (id, text) => { const el = d.getElementById(id); if (el) el.textContent = text; };
-    const line = (r) => `${r.soc} · Akku ${r.battery} · PV ${r.pv}`;
+    // F1: feste Spalten je WR — SoC | Akku | PV | Befehl/Leistung | Countdown (bei 3) | Grenze.
+    const cols = (r) => `${r.soc} · Akku ${r.battery} · PV ${r.pv} · ${r.decision} · Countdown ${r.countdown} · Grenze ${r.limit}`;
+    set('sungrowWrMode', `Modus: ${vw.mode}`);
     set('sungrowWrMasterRole', vw.master.role);
     set('sungrowWrMasterMeta', `${vw.master.model} · ${vw.master.serial} · BDC ${vw.master.bdc}`);
-    set('sungrowWrMasterVals', line(vw.master));
+    set('sungrowWrMasterVals', cols(vw.master));
     set('sungrowWrMasterEms', `${vw.master.decision} · Besitz ${vw.master.owns ? 'ja' : 'nein'} · Herzschlag ${vw.master.heartbeat}`);
     // Aufteilung + Regeltakt + Tages-Schreibzähler (Punkt 1/2).
     set('sungrowWrMasterSplit', `Aufteilung ${vw.master.split} · Takt ${vw.master.regulate} · Rückfall ${vw.master.fallback}`);
     set('sungrowWrMasterWrites', `Writes heute: ${vw.master.writes}`);
     set('sungrowWrSlaveRole', vw.slave.role);
-    set('sungrowWrSlaveVals', vw.slave.online ? line(vw.slave) : vw.slave.running);
-    set('sungrowWrSlaveEms', vw.slave.role.indexOf('gesteuert') >= 0 ? `${vw.slave.decision} · Besitz ${vw.slave.owns ? 'ja' : 'nein'} · Herzschlag ${vw.slave.heartbeat}` : `BDC ${vw.slave.bdc}`);
+    set('sungrowWrSlaveVals', vw.slave.online ? cols(vw.slave) : vw.slave.running);
+    set('sungrowWrSlaveEms', vw.slave.role.indexOf('gesteuert') >= 0 ? `${vw.slave.decision} · Besitz ${vw.slave.owns ? 'ja' : 'nein'} · Takt ${vw.slave.regulate}` : `BDC ${vw.slave.bdc}`);
     set('sungrowWrSlaveWrites', vw.slave.role.indexOf('gesteuert') >= 0 ? `Writes heute: ${vw.slave.writes}` : '');
     set('sungrowWrSum', `System: Akku ${vw.sum.battery} · PV ${vw.sum.pv} · SoC ${vw.sum.soc}`);
   }

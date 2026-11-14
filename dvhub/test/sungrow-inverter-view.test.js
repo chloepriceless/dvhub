@@ -52,6 +52,32 @@ test('Split-Steuerung: Master- und Slave-Zeile + Summenzeile, Rollen, EMS-Status
   assert.ok(vw.slave.writes.indexOf('13052 4') >= 0, vw.slave.writes);
   assert.equal(vw.sum.battery, '-2168 W');
   assert.equal(vw.sum.soc, '60 %');
+  // F1: aktiver Modus (hier External EMS), Countdown (bei 3), Grenze je WR.
+  assert.equal(vw.mode, 'External EMS (3)');
+  assert.equal(vw.master.countdown, '30 s');
+  assert.equal(vw.master.limit, 'Lad 10 kW / Entl 10 kW');
+  assert.equal(vw.slave.limit, 'Lad 10 kW / Entl 10 kW');
+});
+
+test('F1: Dauer-Forced-Split → Modus „Forced-Split (2)", kein Countdown, Slave-Gerätegrenzen als Grenze', () => {
+  const status = {
+    victron: { soc: 50, sungrowMasterSocPct: 50, sungrowMasterBatteryW: -1200, device: { model: 'SH10RT-20', bdcRatedW: 10000 } },
+    sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 50, batteryPowerW: -1200, bdcRatedW: 10000, maxChargeWDevice: 10600, maxDischargeWDevice: 5000 },
+    sungrowEms: { controlMode: 'forced', owns: true, regulateEveryMs: 250, responseMs: 241, decision: { mode: 'forced', command: 'discharge', powerW: 1200, split: { masterW: 600, slaveW: 600, strategy: 'soc-balance' } } },
+    sungrowEmsSlave: { controlMode: 'forced', owns: true, regulateEveryMs: 250, responseMs: 238, decision: { mode: 'forced', command: 'discharge', powerW: 600 } },
+  };
+  const vw = V.view(status);
+  assert.equal(vw.mode, 'Forced-Split (2)');
+  assert.equal(vw.master.countdown, '–', 'im Forced mode kein Countdown');
+  assert.equal(vw.slave.limit, 'Lad 10.6 kW / Entl 5 kW', 'Slave-Gerätegrenzen (33047/33048)');
+  // Christin-Ergänzung: gemessene Rate/Antwortzeit JE WR.
+  assert.equal(vw.master.regulate, '250 ms · Antwort 241 ms');
+  assert.equal(vw.slave.regulate, '250 ms · Antwort 238 ms');
+});
+
+test('F1: Leerlauf (Eigenverbrauch) ohne Besitz → Modus „Eigenverbrauch (0)"', () => {
+  const vw = V.view({ victron: { soc: 50, device: {} }, sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance' }, sungrowEms: { controlMode: 'forced', owns: false, decision: { mode: 'self' } } });
+  assert.equal(vw.mode, 'Eigenverbrauch (0)');
 });
 
 test('self-only: Slave „gelesen", offline → Nicht erreichbar, kein EMS', () => {
