@@ -81,6 +81,26 @@
         }
       }
     },
+    "Bitte die Uhrzeiten vollständig angeben." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Please enter the times completely."
+          }
+        }
+      }
+    },
+    "Bitte einen Wochentag wählen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Please choose a weekday."
+          }
+        }
+      }
+    },
     "Dafür braucht DVhub eine Pro-Lizenz." : {
       "localizations" : {
         "en" : {
@@ -137,6 +157,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The value is outside the allowed range (at most %lld)."
+          }
+        }
+      }
+    },
+    "Der Wochenplan hat sich inzwischen geändert. Bitte noch einmal ansehen und dann speichern." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The weekly plan has changed in the meantime. Please check it again and then save."
           }
         }
       }
@@ -411,6 +441,16 @@
         }
       }
     },
+    "Mehr als %lld Abfahrten in der Woche gehen nicht." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "More than %lld departures per week are not possible."
+          }
+        }
+      }
+    },
     "Not-Halt aktiv" : {
       "localizations" : {
         "en" : {
@@ -633,6 +673,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "unknown"
+          }
+        }
+      }
+    },
+    "„Zuhause ab“ muss vor der Abfahrt liegen – oder am Vortag." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“Home from” must be before the departure – or on the day before."
           }
         }
       }

@@ -200,9 +200,62 @@ final class InteropTests: XCTestCase {
         XCTAssertEqual(cleared, .done)
         let afterClear = try await evNow()
         XCTAssertNil(afterClear.once)
-        // Sofortladen ist für die App nicht freigegeben.
-        let override = try await conn.request("POST", "/api/ev/override", body: ["powerW": 11000])
-        XCTAssertEqual(override.status, 403)
+        // Wochenplan ganz: zweite Abfahrt am Montag anlegen (mit „Zuhause ab“ und Fahrt), ändern, löschen.
+        // Die Gegenstelle prüft und ordnet mit dem echten Code der Box (parseEvDeparturePatch).
+        let weekBefore = try await evNow().week
+        let addBody = try EVEdit.weekPlan(weekBefore, change: .add(.init(day: 1, departure: "16:30", minSocPct: 70, tripSocPct: 15, homeFrom: "12:00"))).get()
+        let addedDeparture = try await post("/api/ev", addBody)
+        XCTAssertEqual(addedDeparture, .done)
+        var week = try await evNow().week
+        XCTAssertEqual(week.count, weekBefore.count + 1)
+        let extra = try XCTUnwrap(week.first { $0.day == 1 && $0.departure == "16:30" })
+        XCTAssertEqual(extra.homeFrom, "12:00")
+        XCTAssertFalse(extra.homeFromPrevDay)
+        XCTAssertEqual(extra.tripSocPct, 15)
+        XCTAssertEqual(extra.minSocPct, 70)
+        let changeBody = try EVEdit.weekPlan(week, change: .update(index: extra.index, .init(day: 1, departure: "17:00", minSocPct: 70, tripSocPct: 15, homeFrom: "22:00", homeFromPrevDay: true))).get()
+        let changedDeparture = try await post("/api/ev", changeBody)
+        XCTAssertEqual(changedDeparture, .done)
+        week = try await evNow().week
+        let moved = try XCTUnwrap(week.first { $0.day == 1 && $0.departure == "17:00" })
+        XCTAssertEqual(moved.homeFrom, "22:00")
+        XCTAssertTrue(moved.homeFromPrevDay)
+        // Was die App vorher ablehnt, lehnt auch die Box ab („Zuhause ab“ am selben Tag nach der Abfahrt).
+        var wrong = moved.raw.object ?? [:]
+        wrong["homeFromPrevDay"] = false
+        let wrongList: [JSONValue] = week.map { $0.index == moved.index ? .object(wrong) : $0.raw }
+        let refused = try await post("/api/ev", ["departure": ["weeklyDepartures": .array(wrongList)]])
+        if case .invalid = refused {} else { XCTFail("ungültige Zeile wurde angenommen: \(refused)") }
+        let removeBody = try EVEdit.weekPlan(week, change: .remove(index: moved.index)).get()
+        let removedDeparture = try await post("/api/ev", removeBody)
+        XCTAssertEqual(removedDeparture, .done)
+        week = try await evNow().week
+        XCTAssertEqual(week.map(\.raw), weekBefore.map(\.raw))
+
+        // Sofort laden: starten (die Box begrenzt die Leistung), stoppen, beenden mit DELETE.
+        let limits = try XCTUnwrap(ev.overrideLimits)
+        let startBody = try XCTUnwrap(EVEdit.chargeNow(powerW: 50_000, durationMin: 60))
+        let started = try await conn.request("POST", "/api/ev/override", body: startBody)
+        XCTAssertEqual(WriteOutcome.from(started), .done)
+        XCTAssertEqual(started.body["override"]?["powerW"]?.number, limits.maxPowerW)
+        var charging = try await evNow()
+        XCTAssertEqual(charging.override?.stop, false)
+        XCTAssertEqual(charging.override?.powerW, limits.maxPowerW)
+        XCTAssertEqual(charging.override?.until?.timeIntervalSinceNow ?? 0, 3600, accuracy: 30)
+        let stopBody = try XCTUnwrap(EVEdit.stopCharging(durationMin: nil))
+        let stopped = try await post("/api/ev/override", stopBody)
+        XCTAssertEqual(stopped, .done)
+        charging = try await evNow()
+        XCTAssertEqual(charging.override, EVState.Override(stop: true, powerW: 0, until: nil))
+        let ended = try await conn.request("DELETE", "/api/ev/override")
+        XCTAssertEqual(WriteOutcome.from(ended), .done)
+        charging = try await evNow()
+        XCTAssertNil(charging.override)
+        // DELETE gibt es nur dort; die Vorschau bleibt zu.
+        let deleteElsewhere = try await conn.request("DELETE", "/api/ev")
+        XCTAssertEqual(deleteElsewhere.status, 405)
+        let preview = try await conn.request("POST", "/api/ev/preview", body: [:])
+        XCTAssertEqual(preview.status, 403)
         await conn.close()
     }
 

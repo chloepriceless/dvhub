@@ -238,11 +238,10 @@ struct ScheduleSection: View {
         return direction.signed(n)
     }
 
-    /// Stopp-Stand: Regel und Begründung in ScheduleEdit.stopLevel (Paket, getestet).
-    private var offersStop: Bool { ScheduleEdit.offersStop(signedValue: signedAmount) }
-    private var stopLevel: Double? {
-        ScheduleEdit.stopLevel(signedValue: signedAmount, chosen: stopOn ? stopSoc : nil, opened: opened)
-    }
+    /// Stopp-Stand: Gespeichert wird genau, was der Schalter zeigt. Wo er angeboten wird und wann er
+    /// warnt, steht in ScheduleEdit.offersStop/stopNeedsWarning (Paket, getestet).
+    private var offersStop: Bool { ScheduleEdit.offersStop(signedValue: signedAmount, hasStop: stopOn) }
+    private var stopLevel: Double? { offersStop && stopOn ? stopSoc : nil }
 
     private func editor(_ rule: ScheduleRule?) -> some View {
         let problem = draft.map(ScheduleEdit.validate) ?? .some(.valueOutOfRange(max: target == "gridSetpointW" ? ScheduleEdit.maxGridSetpointW : ScheduleEdit.maxChargeCurrentA))
@@ -265,6 +264,11 @@ struct ScheduleSection: View {
                 if offersStop {
                     Toggle("Beenden, wenn der Akku unter einen Stand fällt", isOn: $stopOn)
                     if stopOn { PercentField(title: "Akku-Stand", value: $stopSoc, range: 0...100) }
+                    if ScheduleEdit.stopNeedsWarning(signedValue: signedAmount, hasStop: stopOn) {
+                        Label("Beim Beziehen schaltet DVhub diese Regel ab, solange der Akku unter diesem Stand ist – sie lädt einen leeren Akku dann nicht. Meist ist das nicht gewollt: Schalter aus.", systemImage: "exclamationmark.triangle")
+                            .font(.footnote).foregroundStyle(Brand.orange)
+                            .accessibilityIdentifier("schedule.edit.stopWarning")
+                    }
                 }
                 FormNote(text: direction == .feedIn
                          ? "DVhub regelt in diesem Zeitfenster so, dass am Netzanschluss diese Leistung eingespeist wird – auch aus dem Akku."
@@ -335,7 +339,9 @@ struct ScheduleSection: View {
         }
         busy = false
         feedback = result
-        if result.ok { editing = nil }
+        // Stand die Regel inzwischen anders da, den Editor schließen: Seine Felder zeigen den alten Stand,
+        // und ein zweites „Speichern“ würde die fremde Änderung überschreiben (Gegenprüfung 1a16b945).
+        if result.ok || result.text == ScheduleEdit.Problem.changedMeanwhile.message { editing = nil }
         // Auch nach einem Fehler neu laden: Der Zeitplan kann sich inzwischen geändert haben.
         await reload()
     }

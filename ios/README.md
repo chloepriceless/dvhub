@@ -138,10 +138,17 @@ eine Seitenleiste mit allen Bereichen, siehe unten):
     Ladestrom), jede Regel – auch die vom Optimierer – einzeln aus- und
     einschalten, Grundwerte, Börsenautomatik (an/aus, Suchfenster, Reserve,
     Entladeleistung) und „Neu planen“.
-  - **E-Auto:** Zustand, nächste Abfahrt, was EOS bis dahin lädt; Planung
-    (EOS plant mit, nur wenn angesteckt, Abfahrten planen, Mindest-Ladestand,
-    „weiter laden, wenn günstig“ bis zu einem Höchststand), Einmal-Ziel und
-    Wochenplan (Abfahrtszeit und Ziel je Tag).
+  - **E-Auto:** Zustand, nächste Abfahrt, was EOS bis dahin lädt.
+    **Sofort laden** und **Laden stoppen** mit Leistung (in den Grenzen der
+    Wallbox) und Dauer (bis zum Abstecken oder 30 min … 8 h), jederzeit zu
+    beenden – je mit Rückfrage und Bestätigung am Gerät. Planung (EOS plant
+    mit, nur wenn angesteckt, Abfahrten planen, Mindest-Ladestand, „weiter
+    laden, wenn günstig“ bis zu einem Höchststand), Einmal-Ziel und der ganze
+    **Wochenplan**: Abfahrten anlegen (auch mehrere am Tag, höchstens 14),
+    ändern und löschen, je mit eigenem Ziel, Verbrauch der Fahrt (in % des
+    Akkus, wie in der Weboberfläche) und „Zuhause ab“ (am selben Tag oder am
+    Vortag). Der Plan geht als Ganzes zur Box: Die App liest ihn vor dem
+    Speichern frisch und ändert genau eine Zeile (`EVEdit.weekPlan`).
   - **Integrationen:** Zustand und Datenfluss, dazu „Eingerichtet“: was in DVhub
     eingerichtet ist – ohne Adressen und Zugangsdaten (siehe unten).
   - System (Einstellungen zum Nachsehen), Steuern (Not-Halt), Anlagen,
@@ -163,6 +170,7 @@ Protokoll ein.
 | Grundwerte | `POST /api/schedule/config` |
 | Börsenautomatik, Neu planen | `POST /api/schedule/automation/config`, `/replan` |
 | E-Auto-Planung, Einmal-Ziel, Wochenplan | `POST /api/ev` |
+| Sofort laden / Laden stoppen starten, beenden | `POST /api/ev/override`, `DELETE /api/ev/override` |
 
 `POST /api/schedule/rules` ersetzt **alle** Regeln von Hand. Die App liest
 deshalb vor jedem Speichern den Stand frisch, ändert genau eine Regel und
@@ -177,8 +185,9 @@ Verhalten zugeklappt und aufgeklappt.
 
 **Nicht freigegeben** (`dvhub/services/mobile-link/permissions.js`): die
 Konfiguration (`/api/config`), `/api/integrations/status` (nennt Adressen im
-Heimnetz, Benutzernamen, Kennungen) und „Sofort laden“ (`/api/ev/override`) –
-läuft ein Sofortladen, zeigt die App das nur an. Für die Integrationen baut die
+Heimnetz, Benutzernamen, Kennungen) und die Vorschau des Wochenplans
+(`/api/ev/preview` – die App prüft den Entwurf selbst mit denselben Regeln,
+die Box prüft beim Speichern). Für die Integrationen baut die
 Box eine eigene Sicht per Positivliste, `GET /api/mobile-link/integrations`:
 nur Wahrheitswerte, Zähler, Modell und Firmware. Die Börsenautomatik liest und
 schreibt die App ebenfalls nur über benannte Felder – der Standort der Anlage,
@@ -417,7 +426,7 @@ Flächen des iPhone Duo, `-navPlacement side|bottom` erzwingt die Leistenlage.
 `ControlPagesTests` prüft die Bedien-Seiten in der Pose, in der der Simulator steht: Leitstand (Anordnung wie
 im Web-Leitstand, Momentanwerte nur im Energiefluss), Markt (Einspeisung und Bezug in einem Diagramm, aktueller
 Preis klein), Integrationen (nichts auf der Seite sieht nach Adresse aus – der Harness legt Köder in die große
-Übersicht), E-Auto (speichern und zurücklesen) und Zeitplan (Regel anlegen, in der Liste sehen, löschen). Die
+Übersicht), E-Auto (speichern und zurücklesen; Sofort laden starten und beenden; Abfahrt anlegen und löschen) und Zeitplan (Regel anlegen, in der Liste sehen, löschen). Die
 Schreib-Tests brauchen `HARNESS_PERMS=read,control`, eingeschriebene Biometrie und die Freigabe in Schleife
 (iPhone Duo: `com.apple.BiometricKit_Sim.fingerTouch.match`).
 

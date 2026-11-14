@@ -118,20 +118,15 @@ public enum ScheduleEdit {
     /// Der Stopp-Stand ist auf der Box eine Untergrenze: Die Regel schaltet ab,
     /// sobald der Akku UNTER ihn fällt (schedule-runtime.js). Sinnvoll ist er
     /// beim Einspeisen und bei 0 W (der Akku deckt das Haus) — dort bietet die
-    /// App ihn an. Beim Beziehen nicht: Er würde das Laden beenden, solange
-    /// der Akku leer ist.
-    public static func offersStop(signedValue: Double) -> Bool { signedValue <= 0 }
+    /// App ihn an. Beim Beziehen nicht: Er würde das Laden beenden, solange der
+    /// Akku leer ist. Trägt eine Regel dort trotzdem einen (aus der
+    /// Weboberfläche, oder weil man eine Einspeise-Regel umstellt), bleibt der
+    /// Schalter sichtbar — mit Warnung und abschaltbar. Gespeichert wird immer
+    /// genau, was der Schalter zeigt: kein Stopp-Stand geht unsichtbar mit.
+    public static func offersStop(signedValue: Double, hasStop: Bool) -> Bool { signedValue <= 0 || hasStop }
 
-    /// Stopp-Stand, der mit der Regel gespeichert wird. `chosen`: Wahl in der
-    /// App (nil = keiner). Beim Beziehen bleibt nur ein Stand stehen, den die
-    /// geöffnete Regel schon ALS BEZUGS-REGEL trug (die App fasst fremde Werte
-    /// nicht an). Wer eine Einspeise-Regel auf Beziehen umstellt, nimmt ihren
-    /// Stopp-Stand nicht unsichtbar mit.
-    public static func stopLevel(signedValue: Double, chosen: Double?, opened: ScheduleRule?) -> Double? {
-        if offersStop(signedValue: signedValue) { return chosen }
-        if let opened, (opened.value ?? 0) > 0 { return opened.stopSocPct }
-        return nil
-    }
+    /// Der gewählte Stopp-Stand passt nicht zur Richtung (Beziehen): warnen.
+    public static func stopNeedsWarning(signedValue: Double, hasStop: Bool) -> Bool { signedValue > 0 && hasStop }
 
     public enum Change: Equatable, Sendable {
         case add(Draft)
@@ -257,14 +252,26 @@ public struct EVState: Equatable, Sendable {
         /// „HH:MM“ oder leer (an dem Tag keine Abfahrt).
         public var departure: String
         public var minSocPct: Double?
+        /// Verbrauch der Fahrt ab dieser Abfahrt in % des Akkus.
+        public var tripSocPct: Double? = nil
+        /// „Zuhause ab“: ab wann das Auto vor dieser Abfahrt wieder da ist („HH:MM“ oder leer).
+        public var homeFrom: String = ""
+        /// „Zuhause ab“ liegt am Vortag der Abfahrt.
+        public var homeFromPrevDay: Bool = false
         public var id: Int { index }
     }
 
-    /// „Sofort laden“ bzw. „Laden stoppen“ läuft (nur Anzeige).
+    /// „Sofort laden“ bzw. „Laden stoppen“ läuft.
     public struct Override: Equatable, Sendable {
         public let stop: Bool
         public let powerW: Double?
         public let until: Date?
+    }
+
+    /// Leistung, die „Sofort laden“ annehmen kann (die Box begrenzt selbst darauf).
+    public struct OverrideLimits: Equatable, Sendable {
+        public let minPowerW: Double
+        public let maxPowerW: Double
     }
 
     public var optimizeEv = false
@@ -287,6 +294,7 @@ public struct EVState: Equatable, Sendable {
     public var planSocAtDeparture: Double?
     public var planError: String?
     public var override: Override?
+    public var overrideLimits: OverrideLimits?
     public var lastCommandError: String?
 
     public init() {}
@@ -313,7 +321,8 @@ public struct EVState: Equatable, Sendable {
         s.nextSource = resolved["source"]?.string
         s.week = (dep["weeklyDepartures"]?.array ?? []).enumerated().compactMap { i, r in
             guard let day = r["day"]?.number, (1...7).contains(Int(day)) else { return nil }
-            return WeekRow(raw: r, index: i, day: Int(day), departure: r["departure"]?.string ?? "", minSocPct: r["minSocPct"]?.number)
+            return WeekRow(raw: r, index: i, day: Int(day), departure: r["departure"]?.string ?? "", minSocPct: r["minSocPct"]?.number,
+                           tripSocPct: r["tripSocPct"]?.number, homeFrom: r["homeFrom"]?.string ?? "", homeFromPrevDay: r["homeFromPrevDay"]?.bool == true)
         }
         let plan = v["plan"] ?? .null
         if plan["hasEv"]?.bool == true {
@@ -323,6 +332,9 @@ public struct EVState: Equatable, Sendable {
         s.planError = v["planError"]?.string
         if let o = v["override"], o.object != nil {
             s.override = Override(stop: o["kind"]?.string == "stop", powerW: o["powerW"]?.number, until: o["until"]?.string.flatMap(parseISODate))
+        }
+        if let lo = v["overrideLimits"]?["minPowerW"]?.number, let hi = v["overrideLimits"]?["maxPowerW"]?.number, lo > 0, hi >= lo {
+            s.overrideLimits = OverrideLimits(minPowerW: lo, maxPowerW: hi)
         }
         s.lastCommandError = v["lastCommandError"]?.string
         return s
@@ -357,23 +369,149 @@ public enum EVEdit {
 
     public static func clearOnce() -> JSONValue { ["departure": ["once": "", "onceMinSocPct": .null]] }
 
-    /// Wochenplan mit einer geänderten Zeile; alle anderen Zeilen und Felder
-    /// (zuhause ab, Fahrt) gehen unverändert zurück.
-    public static func week(_ rows: [EVState.WeekRow], changing index: Int, departure: String, minSocPct: Double?) -> JSONValue? {
-        guard rows.contains(where: { $0.index == index }) else { return nil }
-        let time = departure.isEmpty ? "" : ScheduleEdit.normalizeTime(departure)
-        guard let time else { return nil }
-        if let m = minSocPct, !(m.isFinite && (0...100).contains(m)) { return nil }
-        let list: [JSONValue] = rows.map { row in
-            guard row.index == index, var o = row.raw.object else { return row.raw }
-            o["departure"] = .string(time)
-            // Unverändertes Ziel bleibt, wie die Box es hält (kein Runden nebenbei).
-            if minSocPct != row.minSocPct { o["minSocPct"] = minSocPct.map { .double($0.rounded()) } ?? .null }
-            // Ohne Abfahrt gibt es kein „zuhause ab“ (die Box lehnt das sonst ab).
-            if time.isEmpty { o["homeFrom"] = .string(""); o.removeValue(forKey: "homeFromPrevDay") }
-            return .object(o)
+    // MARK: Wochenplan
+
+    /// Höchstzahl der Abfahrten in der Woche (ev-departure.js MAX_WEEKLY_DEPARTURES).
+    public static let maxWeeklyDepartures = 14
+
+    /// Eingaben einer Abfahrt im Wochenplan.
+    public struct WeekDraft: Equatable, Sendable {
+        /// 1 = Montag … 7 = Sonntag (zählt beim Anlegen; eine bestehende Zeile behält ihren Tag).
+        public var day: Int
+        public var departure: String
+        /// Eigenes Mindestziel für diese Abfahrt; nil = das allgemeine.
+        public var minSocPct: Double?
+        /// Verbrauch der Fahrt in % des Akkus; nil = keine Angabe.
+        public var tripSocPct: Double?
+        /// „Zuhause ab“ („HH:MM“) oder leer.
+        public var homeFrom: String
+        /// nil = die Box entscheidet nach der Uhrzeit (nicht vor der Abfahrt → Vortag).
+        public var homeFromPrevDay: Bool?
+
+        public init(day: Int, departure: String, minSocPct: Double? = nil, tripSocPct: Double? = nil, homeFrom: String = "", homeFromPrevDay: Bool? = nil) {
+            self.day = day; self.departure = departure; self.minSocPct = minSocPct; self.tripSocPct = tripSocPct
+            self.homeFrom = homeFrom; self.homeFromPrevDay = homeFromPrevDay
         }
-        return ["departure": ["weeklyDepartures": .array(list)]]
+    }
+
+    public enum WeekChange: Equatable, Sendable {
+        case add(WeekDraft)
+        case update(index: Int, WeekDraft)
+        /// Abfahrt löschen; die letzte eines Tages hinterlässt den Tag ohne Abfahrt.
+        case remove(index: Int)
+    }
+
+    public enum WeekProblem: Error, Equatable, Sendable {
+        case badDay, badTime, homeNotBeforeDeparture, badPercent, tooMany, unknownRow
+
+        public var message: String {
+            switch self {
+            case .badDay: return L("Bitte einen Wochentag wählen.")
+            case .badTime: return L("Bitte die Uhrzeiten vollständig angeben.")
+            case .homeNotBeforeDeparture: return L("„Zuhause ab“ muss vor der Abfahrt liegen – oder am Vortag.")
+            case .badPercent: return L("Der Ladestand muss zwischen 0 und 100 % liegen.")
+            case .tooMany: return L("Mehr als \(EVEdit.maxWeeklyDepartures) Abfahrten in der Woche gehen nicht.")
+            case .unknownRow: return L("Der Wochenplan hat sich inzwischen geändert. Bitte noch einmal ansehen und dann speichern.")
+            }
+        }
+    }
+
+    static func minutes(_ hhmm: String) -> Int? {
+        guard let t = ScheduleEdit.normalizeTime(hhmm) else { return nil }
+        let p = t.split(separator: ":").compactMap { Int($0) }
+        return p[0] * 60 + p[1]
+    }
+
+    /// Wie die Box (defaultHomeFromPrevDay): „Zuhause ab“ nicht vor der Abfahrt → am Vortag.
+    public static func defaultHomeFromPrevDay(homeFrom: String, departure: String) -> Bool {
+        guard let h = minutes(homeFrom) else { return false }
+        guard let d = minutes(departure) else { return true }
+        return h >= d
+    }
+
+    /// Körper für `POST /api/ev` mit dem ganzen Wochenplan und genau einer
+    /// Änderung. `rows` ist der frisch von der Box gelesene Plan; alle anderen
+    /// Zeilen gehen unverändert zurück, unveränderte Zahlen der geänderten Zeile
+    /// auch (kein Runden nebenbei). Geprüft wird wie auf der Box
+    /// (ev-departure.js parseWeeklyDepartures) — sie prüft trotzdem selbst.
+    public static func weekPlan(_ rows: [EVState.WeekRow], change: WeekChange) -> Result<JSONValue, WeekProblem> {
+        func pctOK(_ v: Double?) -> Bool { v.map { $0.isFinite && (0...100).contains($0) } ?? true }
+        func empty(_ day: Int) -> JSONValue {
+            ["day": .int(Int64(day)), "departure": "", "homeFrom": "", "homeFromPrevDay": false, "minSocPct": .null, "tripSocPct": .null]
+        }
+        /// Felder des Entwurfs in eine Zeile schreiben (`base` trägt, was die Box sonst noch hält).
+        func fill(_ d: WeekDraft, day: Int, base: [String: JSONValue], old: EVState.WeekRow?) -> Result<JSONValue, WeekProblem> {
+            guard (1...7).contains(day) else { return .failure(.badDay) }
+            guard let dep = ScheduleEdit.normalizeTime(d.departure) else { return .failure(.badTime) }
+            let home = d.homeFrom.trimmingCharacters(in: .whitespaces)
+            var homeTime = ""
+            var prevDay = false
+            if !home.isEmpty {
+                guard let h = ScheduleEdit.normalizeTime(home) else { return .failure(.badTime) }
+                homeTime = h
+                prevDay = d.homeFromPrevDay ?? defaultHomeFromPrevDay(homeFrom: h, departure: dep)
+                if !prevDay, (minutes(h) ?? 0) >= (minutes(dep) ?? 0) { return .failure(.homeNotBeforeDeparture) }
+            }
+            guard pctOK(d.minSocPct), pctOK(d.tripSocPct) else { return .failure(.badPercent) }
+            var o = base
+            o["day"] = .int(Int64(day))
+            o["departure"] = .string(dep)
+            o["homeFrom"] = .string(homeTime)
+            o["homeFromPrevDay"] = .bool(prevDay)
+            if old == nil || d.minSocPct != old?.minSocPct { o["minSocPct"] = d.minSocPct.map { .double($0.rounded()) } ?? .null }
+            if old == nil || d.tripSocPct != old?.tripSocPct { o["tripSocPct"] = d.tripSocPct.map { .double($0.rounded()) } ?? .null }
+            return .success(.object(o))
+        }
+
+        var list = rows.map(\.raw)
+        switch change {
+        case .add(let d):
+            guard rows.filter({ !$0.departure.isEmpty }).count < maxWeeklyDepartures else { return .failure(.tooMany) }
+            switch fill(d, day: d.day, base: [:], old: nil) {
+            case .failure(let p): return .failure(p)
+            case .success(let row):
+                // Die leere Zeile des Tages ersetzen, sonst anhängen (die Box ordnet nach Tag und Uhrzeit).
+                if let i = rows.firstIndex(where: { $0.day == d.day && $0.departure.isEmpty }) { list[i] = row } else { list.append(row) }
+            }
+        case .update(let index, let d):
+            guard let i = rows.firstIndex(where: { $0.index == index }) else { return .failure(.unknownRow) }
+            if rows[i].departure.isEmpty, rows.filter({ !$0.departure.isEmpty }).count >= maxWeeklyDepartures { return .failure(.tooMany) }
+            switch fill(d, day: rows[i].day, base: rows[i].raw.object ?? [:], old: rows[i]) {
+            case .failure(let p): return .failure(p)
+            case .success(let row): list[i] = row
+            }
+        case .remove(let index):
+            guard let i = rows.firstIndex(where: { $0.index == index }) else { return .failure(.unknownRow) }
+            let day = rows[i].day
+            if rows.contains(where: { $0.day == day && $0.index != index }) { list.remove(at: i) } else { list[i] = empty(day) }
+        }
+        return .success(["departure": ["weeklyDepartures": .array(list)]])
+    }
+
+    // MARK: Sofort laden
+
+    /// Körper für `POST /api/ev/override`: jetzt mit `powerW` laden, egal was
+    /// EOS plant. `durationMin` nil = bis zum Abstecken oder Beenden; sonst
+    /// höchstens 48 h (wie die Box). Die Leistung begrenzt die Box selbst auf
+    /// das, was die Wallbox kann.
+    public static func chargeNow(powerW: Double, durationMin: Int?) -> JSONValue? {
+        guard powerW.isFinite, powerW > 0, powerW <= 100_000 else { return nil }
+        var body: [String: JSONValue] = ["kind": "charge", "powerW": .int(Int64(powerW.rounded()))]
+        if let durationMin {
+            guard (1...(48 * 60)).contains(durationMin) else { return nil }
+            body["durationMin"] = .int(Int64(durationMin))
+        }
+        return .object(body)
+    }
+
+    /// „Laden stoppen“: Die Wallbox lädt nicht, egal was EOS plant.
+    public static func stopCharging(durationMin: Int?) -> JSONValue? {
+        var body: [String: JSONValue] = ["kind": "stop"]
+        if let durationMin {
+            guard (1...(48 * 60)).contains(durationMin) else { return nil }
+            body["durationMin"] = .int(Int64(durationMin))
+        }
+        return .object(body)
     }
 
     /// Mehrere Änderungen in einem Körper (eine Anfrage, eine Bestätigung):

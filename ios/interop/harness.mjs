@@ -30,6 +30,7 @@ const require = createRequire(path.join(dvhubDir, 'package.json'));
 const { WebSocketServer } = require('ws');
 const { startRelayServer } = await import(path.join(dvhubDir, 'services/mobile-link/relay-server.js'));
 const { createMobileLink } = await import(path.join(dvhubDir, 'services/mobile-link/agent.js'));
+const { parseEvDeparturePatch } = await import(path.join(dvhubDir, 'services/optimizer/ev-departure.js'));
 const { mobileIntegrationsView } = await import(path.join(dvhubDir, 'services/mobile-link/integrations-view.js'));
 const { mobileAutomationConfigView, parseMobileAutomationPatch } = await import(path.join(dvhubDir, 'services/mobile-link/automation-view.js'));
 
@@ -205,7 +206,37 @@ function evState() {
       resolved: { enabled: evOpt.enabled || !!once, departureAt: once || (evOpt.enabled ? next.toISOString() : null), source: once ? 'once' : (evOpt.enabled ? 'weekly' : null),
         targetSocPct: once ? evOpt.onceMinSocPct : evOpt.minSocPct } },
     vehicle: { title: 'E-Auto', connected: true, charging: false, chargePowerW: 0, socPct: 64, rangeKm: 268, plugged: true },
-    plan: evOpt.optimizeEv ? { hasEv: true, energyKwh: 12.4, socAtDeparture: Math.max(64, evOpt.minSocPct) } : null, planError: null, override: null, lastCommandError: null };
+    plan: evOpt.optimizeEv ? { hasEv: true, energyKwh: 12.4, socAtDeparture: Math.max(64, evOpt.minSocPct) } : null, planError: null,
+    override: currentOverride(), overrideLimits: OVERRIDE_LIMITS, lastCommandError: null };
+}
+
+// „Sofort laden“ / „Laden stoppen“ (POST/DELETE /api/ev/override), geprüft wie normalizeOverride auf der Box.
+const OVERRIDE_LIMITS = { minPowerW: 4140, maxPowerW: 11000 };
+let evOverride = null;
+function currentOverride() {
+  if (evOverride?.until && Date.parse(evOverride.until) <= Date.now()) evOverride = null;
+  return evOverride ? { ...evOverride, ...OVERRIDE_LIMITS } : null;
+}
+function setOverride(body) {
+  const bad = (error) => ({ status: 400, body: { ok: false, error } });
+  let untilMs = null;
+  if (body.untilMs != null) untilMs = Number(body.untilMs);
+  else if (body.durationMin != null) {
+    const d = Number(body.durationMin);
+    if (!Number.isFinite(d) || d <= 0) return bad('durationMin must be > 0');
+    untilMs = Date.now() + d * 60_000;
+  }
+  if (untilMs != null && (!Number.isFinite(untilMs) || untilMs <= Date.now())) return bad('until must lie in the future');
+  if (untilMs != null && untilMs > Date.now() + 48 * 3600_000) return bad('until must be within 48 h');
+  const until = untilMs == null ? null : new Date(untilMs).toISOString();
+  const startedAt = new Date().toISOString();
+  if (body.kind === 'stop') evOverride = { kind: 'stop', powerW: 0, requestedW: 0, startedAt, until, seenConnected: false };
+  else {
+    const p = Number(body.powerW);
+    if (!Number.isFinite(p) || p <= 0) return bad('powerW must be > 0');
+    evOverride = { kind: 'charge', powerW: Math.round(Math.min(OVERRIDE_LIMITS.maxPowerW, Math.max(OVERRIDE_LIMITS.minPowerW, p))), requestedW: Math.round(p), startedAt, until, seenConnected: false };
+  }
+  return { status: 200, body: { ok: true, override: evOverride } };
 }
 // POST /api/ev: nur die Felder im Körper, mit denselben Grenzen wie die Box (ev-departure.js).
 function evPatch(body) {
@@ -226,8 +257,10 @@ function evPatch(body) {
     }
     if ('onceMinSocPct' in d) { const v = d.onceMinSocPct; if (v !== null && !(Number(v) >= 0 && Number(v) <= 100)) return bad('departure.onceMinSocPct must be 0..100 or empty'); evOpt.onceMinSocPct = v === null ? null : Number(v); changed++; }
     if ('weeklyDepartures' in d) {
-      if (!Array.isArray(d.weeklyDepartures) || d.weeklyDepartures.some((e) => !e || !(e.day >= 1 && e.day <= 7) || (e.departure && !/^\d{2}:\d{2}$/.test(e.departure)) || (e.homeFrom && !e.departure))) return bad('departure.weeklyDepartures invalid');
-      evOpt.weekly = d.weeklyDepartures; changed++;
+      // Geprüft und geordnet mit dem echten Code der Box (ev-departure.js).
+      const parsed = parseEvDeparturePatch({ weeklyDepartures: d.weeklyDepartures }, 'departure', { opt: {}, nowMs: Date.now() });
+      if (!parsed.ok) return bad(parsed.error);
+      evOpt.weekly = parsed.patch.evWeeklyDepartures; changed++;
     }
   }
   if (!changed) return bad('nothing to change');
@@ -402,11 +435,17 @@ async function loopback(method, p, bodyText) {
   if (method === 'GET' && READ[pathname]) return { status: 200, body: READ[pathname](query) };
   if (method === 'POST' && pathname === '/api/control/stop') { emergencyStop = true; return { status: 200, body: { ok: true, emergencyStop: true } }; }
   if (method === 'POST' && pathname === '/api/control/resume') { emergencyStop = false; return { status: 200, body: { ok: true, emergencyStop: false } }; }
+  if (method === 'DELETE' && pathname === '/api/ev/override') {
+    console.log(`[box] DELETE ${pathname}`);
+    evOverride = null;
+    return { status: 200, body: { ok: true, override: null } };
+  }
   if (method === 'POST') {
     let body;
     try { body = bodyText ? JSON.parse(bodyText) : {}; } catch { return { status: 400, body: { ok: false, error: 'invalid json' } }; }
     console.log(`[box] POST ${pathname} ${JSON.stringify(body)}`);
     if (pathname === '/api/ev') return evPatch(body);
+    if (pathname === '/api/ev/override') return setOverride(body);
     // Wie die Box: Der Körper ersetzt alle Regeln von Hand; Plan-Regeln bleiben, wie sie sind.
     if (pathname === '/api/schedule/rules') {
       if (!Array.isArray(body.rules) || body.rules.some((r) => !r || typeof r.target !== 'string' || (r.value !== undefined && !Number.isFinite(Number(r.value))))) return { status: 400, body: { ok: false, error: 'invalid rule structure' } };

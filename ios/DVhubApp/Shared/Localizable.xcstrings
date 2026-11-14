@@ -31,6 +31,16 @@
         }
       }
     },
+    " bis zum Abstecken oder Beenden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " until unplugged or ended"
+          }
+        }
+      }
+    },
     " · solange Akku über %@" : {
       "localizations" : {
         "en" : {
@@ -744,6 +754,56 @@
         }
       }
     },
+    "1 Stunde" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 hour"
+          }
+        }
+      }
+    },
+    "2 Stunden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "2 hours"
+          }
+        }
+      }
+    },
+    "30 Minuten" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "30 minutes"
+          }
+        }
+      }
+    },
+    "4 Stunden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4 hours"
+          }
+        }
+      }
+    },
+    "8 Stunden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "8 hours"
+          }
+        }
+      }
+    },
     "9+" : {
       "localizations" : {
         "en" : {
@@ -784,6 +844,16 @@
         }
       }
     },
+    "Ab dann steht das Auto vor dieser Abfahrt wieder an der Wallbox – vorher kann nicht geladen werden." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From then on the car is back at the wallbox before this departure – it cannot be charged earlier."
+          }
+        }
+      }
+    },
     "Abbrechen" : {
       "localizations" : {
         "en" : {
@@ -804,12 +874,42 @@
         }
       }
     },
-    "Abfahrt an diesem Tag" : {
+    "Abfahrt anlegen" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Departure on this day"
+            "value" : "Create departure"
+          }
+        }
+      }
+    },
+    "Abfahrt hinzufügen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add departure"
+          }
+        }
+      }
+    },
+    "Abfahrt löschen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete departure"
+          }
+        }
+      }
+    },
+    "Abfahrt löschen?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete departure?"
           }
         }
       }
@@ -1212,6 +1312,16 @@
         }
       }
     },
+    "Anlegen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create"
+          }
+        }
+      }
+    },
     "Anteil der Anlagenleistung" : {
       "localizations" : {
         "en" : {
@@ -1392,12 +1502,42 @@
         }
       }
     },
+    "Beenden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End"
+          }
+        }
+      }
+    },
+    "Beenden und EOS wieder planen lassen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End and let EOS plan again"
+          }
+        }
+      }
+    },
     "Beenden, wenn der Akku unter einen Stand fällt" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "End when the battery drops below a level"
+          }
+        }
+      }
+    },
+    "Beendet. Es gilt wieder der Plan von EOS." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ended. The EOS plan applies again."
           }
         }
       }
@@ -1428,6 +1568,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "While iPhone is locked, the device key cannot be used. The last data then stays in place, with its time; money values are hidden on the Lock Screen."
+          }
+        }
+      }
+    },
+    "Beim Beziehen schaltet DVhub diese Regel ab, solange der Akku unter diesem Stand ist – sie lädt einen leeren Akku dann nicht. Meist ist das nicht gewollt: Schalter aus." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When drawing, DVhub switches this rule off while the battery is below this level – so it does not charge an empty battery. Usually that is not what you want: switch it off."
           }
         }
       }
@@ -1930,6 +2080,26 @@
         }
       }
     },
+    "Dafür braucht DVhub eine Wallbox, die es steuern kann. Eingerichtet wird sie in der Weboberfläche." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This needs a wallbox DVhub can control. It is set up in the web interface."
+          }
+        }
+      }
+    },
+    "Danach gilt wieder der Plan von EOS." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "After that the EOS plan applies again."
+          }
+        }
+      }
+    },
     "Darstellung" : {
       "localizations" : {
         "en" : {
@@ -2224,16 +2394,6 @@
         }
       }
     },
-    "Der Wochenplan hat sich inzwischen geändert. Bitte noch einmal ansehen und dann speichern." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The weekly plan has changed in the meantime. Please check it again and then save."
-          }
-        }
-      }
-    },
     "Der Wochenplan ist ausgeschaltet („Abfahrten planen“). Ein Einmal-Ziel gilt trotzdem." : {
       "localizations" : {
         "en" : {
@@ -2340,12 +2500,22 @@
         }
       }
     },
-    "Die E-Auto-Planung baut auf EOS auf und braucht in DVhub Pro. Fahrzeug, Wallbox und Fahrtwerte richtest du in der Weboberfläche ein." : {
+    "Die Dauer passt nicht." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "EV planning builds on EOS and needs Pro in DVhub. You set up vehicle, wallbox and trip values in the web interface."
+            "value" : "The duration is not valid."
+          }
+        }
+      }
+    },
+    "Die E-Auto-Planung baut auf EOS auf und braucht in DVhub Pro. Fahrzeug und Wallbox richtest du in der Weboberfläche ein." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "EV planning builds on EOS and needs Pro in DVhub. You set up vehicle and wallbox in the web interface."
           }
         }
       }
@@ -2356,6 +2526,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The settings need a connection to the system."
+          }
+        }
+      }
+    },
+    "Die Fahrt braucht" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The trip uses"
           }
         }
       }
@@ -2400,6 +2580,16 @@
         }
       }
     },
+    "Die Ladeleistung passt nicht." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The charging power is not valid."
+          }
+        }
+      }
+    },
     "Die Nachrichten sind gerade nicht verfügbar." : {
       "localizations" : {
         "en" : {
@@ -2416,6 +2606,32 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The forecast is more than 18 hours old and may be outdated."
+          }
+        }
+      }
+    },
+    "Die Wallbox lädt mit %@ – egal, was EOS plant und was der Strom gerade kostet. Dauer: %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Die Wallbox lädt mit %1$@ – egal, was EOS plant und was der Strom gerade kostet. Dauer: %2$@."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The wallbox charges at %@ – regardless of the EOS plan and the current electricity price. Duration: %@."
+          }
+        }
+      }
+    },
+    "Die Wallbox lädt nicht – egal, was EOS plant. Auch ein Mindest-Ladestand zur Abfahrt wird dann nicht geladen. Dauer: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The wallbox does not charge – regardless of the EOS plan. A minimum charge level for departure is not charged either. Duration: %@."
           }
         }
       }
@@ -2690,12 +2906,12 @@
         }
       }
     },
-    "Eigenes Ziel für diesen Tag" : {
+    "Eigenes Ziel für diese Abfahrt" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Own target for this day"
+            "value" : "Own target for this departure"
           }
         }
       }
@@ -3218,6 +3434,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Plan, EV, integrations, system and app settings are on the left."
+          }
+        }
+      }
+    },
+    "Fahrt braucht %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "trip uses %@"
           }
         }
       }
@@ -4090,6 +4316,16 @@
         }
       }
     },
+    "Jetzt laden, egal was EOS plant – oder das Laden anhalten." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge now regardless of the EOS plan – or pause charging."
+          }
+        }
+      }
+    },
     "Jetzt: %@" : {
       "localizations" : {
         "en" : {
@@ -4347,12 +4583,32 @@
         }
       }
     },
+    "Laden ist gestoppt." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charging is stopped."
+          }
+        }
+      }
+    },
     "Laden planen, Ziele setzen" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Plan charging, set targets"
+          }
+        }
+      }
+    },
+    "Laden stoppen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop charging"
           }
         }
       }
@@ -4563,6 +4819,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Live Activities are turned off for DVhub in iOS Settings."
+          }
+        }
+      }
+    },
+    "Lädt jetzt mit %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Now charging at %@."
           }
         }
       }
@@ -5093,6 +5359,16 @@
         }
       }
     },
+    "Neue Abfahrt am %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New departure on %@"
+          }
+        }
+      }
+    },
     "Neue Regel" : {
       "localizations" : {
         "en" : {
@@ -5143,12 +5419,12 @@
         }
       }
     },
-    "Noch kein Wochenplan. Angelegt wird er in der Weboberfläche; hier lassen sich Abfahrtszeit und Ziel je Tag ändern." : {
+    "Noch keine Abfahrten. Mit „Abfahrt hinzufügen“ legst du die erste an." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No weekly plan yet. It is created in the web interface; here you can change departure time and target per day."
+            "value" : "No departures yet. Create the first one with “Add departure”."
           }
         }
       }
@@ -6029,6 +6305,16 @@
         }
       }
     },
+    "So viel Akku kostet die Fahrt ab dieser Abfahrt. DVhub schätzt damit, wie voll das Auto zurückkommt." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This is how much battery the trip from this departure uses. DVhub uses it to estimate how full the car comes back."
+          }
+        }
+      }
+    },
     "So voll ist das Auto zur Abfahrt mindestens – auch wenn der Strom gerade teuer ist." : {
       "localizations" : {
         "en" : {
@@ -6049,6 +6335,16 @@
         }
       }
     },
+    "Sofort laden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge now"
+          }
+        }
+      }
+    },
     "Sofort laden läuft mit %@%@." : {
       "localizations" : {
         "de" : {
@@ -6061,6 +6357,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Charge now is running at %@%@."
+          }
+        }
+      }
+    },
+    "Solange das gilt, folgt die Wallbox nicht dem Plan von EOS." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "While this applies, the wallbox does not follow the EOS plan."
           }
         }
       }
@@ -6397,16 +6703,6 @@
         }
       }
     },
-    "Tag speichern" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Save day"
-          }
-        }
-      }
-    },
     "Tage" : {
       "localizations" : {
         "en" : {
@@ -6635,6 +6931,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Consumption"
+          }
+        }
+      }
+    },
+    "Verbrauch der Fahrt angeben" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter trip consumption"
           }
         }
       }
@@ -7329,6 +7635,16 @@
         }
       }
     },
+    "Zuhause ab" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Home from"
+          }
+        }
+      }
+    },
     "Zuletzt erreichbar" : {
       "localizations" : {
         "en" : {
@@ -7485,6 +7801,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "up to date"
+          }
+        }
+      }
+    },
+    "am Vortag" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the day before"
+          }
+        }
+      }
+    },
+    "am selben Tag" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the same day"
           }
         }
       }
@@ -7665,6 +8001,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "imported %@"
+          }
+        }
+      }
+    },
+    "bis zum Abstecken" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "until unplugged"
+          }
+        }
+      }
+    },
+    "bis zum Abstecken oder Beenden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "until unplugged or ended"
           }
         }
       }
@@ -7885,6 +8241,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "blocked"
+          }
+        }
+      }
+    },
+    "gestoppt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "stopped"
           }
         }
       }
@@ -8426,6 +8792,26 @@
         }
       }
     },
+    "zuhause ab %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "home from %@"
+          }
+        }
+      }
+    },
+    "zuhause ab %@ am Vortag" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "home from %@ the day before"
+          }
+        }
+      }
+    },
     "zuletzt %@" : {
       "localizations" : {
         "en" : {
@@ -8672,6 +9058,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "exceeded"
+          }
+        }
+      }
+    },
+    "„Zuhause ab“ angeben" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter “home from”"
           }
         }
       }

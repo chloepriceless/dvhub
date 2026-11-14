@@ -105,26 +105,20 @@ final class ControlLogicTests: XCTestCase {
     }
 
     /// Die Box schaltet eine Regel ab, sobald der Akku unter den Stopp-Stand fällt.
-    func testStopLevelIsOnlyCarriedWhereItMakesSense() {
-        let rules = ScheduleEdit.rules(from: [
-            "rules": [
-                ["id": "feed", "target": "gridSetpointW", "start": "10:00", "end": "11:00", "value": -3000, "stopSocPct": 20],
-                ["id": "draw", "target": "gridSetpointW", "start": "00:00", "end": "05:00", "value": 2000, "stopSocPct": 80],
-            ],
-        ])
-        // Einspeisen und 0 W: Die Wahl in der App gilt.
-        XCTAssertTrue(ScheduleEdit.offersStop(signedValue: -3000))
-        XCTAssertTrue(ScheduleEdit.offersStop(signedValue: 0))
-        XCTAssertFalse(ScheduleEdit.offersStop(signedValue: 2000))
-        XCTAssertEqual(ScheduleEdit.stopLevel(signedValue: -3000, chosen: 25, opened: rules[0]), 25)
-        XCTAssertNil(ScheduleEdit.stopLevel(signedValue: -3000, chosen: nil, opened: rules[0]))
-        XCTAssertEqual(ScheduleEdit.stopLevel(signedValue: 0, chosen: 30, opened: nil), 30)
-        // Einspeise-Regel auf Beziehen umgestellt: Ihr Stopp-Stand geht NICHT unsichtbar mit.
-        XCTAssertNil(ScheduleEdit.stopLevel(signedValue: 3000, chosen: 20, opened: rules[0]))
-        // Neue Bezugs-Regel: nie ein Stopp-Stand.
-        XCTAssertNil(ScheduleEdit.stopLevel(signedValue: 3000, chosen: 50, opened: nil))
-        // Bestehende Bezugs-Regel mit Stopp-Stand (aus der Weboberfläche): bleibt, wie sie ist.
-        XCTAssertEqual(ScheduleEdit.stopLevel(signedValue: 2500, chosen: nil, opened: rules[1]), 80)
+    /// Gespeichert wird, was der Schalter zeigt — also muss er überall sichtbar sein, wo einer gesetzt ist.
+    func testStopLevelIsNeverHidden() {
+        // Einspeisen und 0 W: angeboten.
+        XCTAssertTrue(ScheduleEdit.offersStop(signedValue: -3000, hasStop: false))
+        XCTAssertTrue(ScheduleEdit.offersStop(signedValue: 0, hasStop: false))
+        // Beziehen ohne Stopp-Stand: nicht angeboten (neue Laderegel bekommt keinen).
+        XCTAssertFalse(ScheduleEdit.offersStop(signedValue: 2000, hasStop: false))
+        // Beziehen MIT Stopp-Stand (aus der Weboberfläche, umgestellte Einspeise-Regel, 0 W → wieder 2000 W):
+        // sichtbar, mit Warnung — und damit abschaltbar.
+        XCTAssertTrue(ScheduleEdit.offersStop(signedValue: 2000, hasStop: true))
+        XCTAssertTrue(ScheduleEdit.stopNeedsWarning(signedValue: 2000, hasStop: true))
+        XCTAssertFalse(ScheduleEdit.stopNeedsWarning(signedValue: 2000, hasStop: false))
+        XCTAssertFalse(ScheduleEdit.stopNeedsWarning(signedValue: -3000, hasStop: true))
+        XCTAssertFalse(ScheduleEdit.stopNeedsWarning(signedValue: 0, hasStop: true))
     }
 
     func testWriteOutcome() {
@@ -208,28 +202,92 @@ final class ControlLogicTests: XCTestCase {
         XCTAssertEqual(EVEdit.merge([]), [:])
     }
 
-    func testWeekEditKeepsTheOtherRowsAndFields() throws {
+    func testWeekPlanChangesExactlyOneRow() throws {
         let s = try XCTUnwrap(EVState.from(ev))
-        let body = try XCTUnwrap(EVEdit.week(s.week, changing: 0, departure: "6:45", minSocPct: 85))
+        XCTAssertEqual(s.week[0].homeFrom, "18:00")
+        XCTAssertTrue(s.week[0].homeFromPrevDay)
+        XCTAssertEqual(s.week[0].tripSocPct, 25)
+        // Abfahrt, Ziel, Fahrt und „Zuhause ab“ einer Zeile ändern.
+        let draft = EVEdit.WeekDraft(day: 1, departure: "6:45", minSocPct: 85, tripSocPct: 30, homeFrom: "17:30", homeFromPrevDay: true)
+        let body = try EVEdit.weekPlan(s.week, change: .update(index: 0, draft)).get()
         let rows = try XCTUnwrap(body["departure"]?["weeklyDepartures"]?.array)
         XCTAssertEqual(rows.count, 2)
-        XCTAssertEqual(rows[0], ["day": 1, "departure": "06:45", "homeFrom": "18:00", "homeFromPrevDay": true, "minSocPct": 85.0, "tripSocPct": 25])
+        XCTAssertEqual(rows[0], ["day": 1, "departure": "06:45", "homeFrom": "17:30", "homeFromPrevDay": true, "minSocPct": 85.0, "tripSocPct": 30.0])
         XCTAssertEqual(rows[1], s.week[1].raw)
-        // Nur die Zeit geändert: Ein krummes Ziel der Box bleibt, wie es ist.
+        // Nur die Zeit geändert: Krumme Werte der Box bleiben, wie sie sind.
         var odd = s.week
-        odd[0] = EVState.WeekRow(raw: ["day": 1, "departure": "07:00", "minSocPct": 72.5], index: 0, day: 1, departure: "07:00", minSocPct: 72.5)
-        let timeOnly = try XCTUnwrap(EVEdit.week(odd, changing: 0, departure: "08:00", minSocPct: 72.5))
-        XCTAssertEqual(timeOnly["departure"]?["weeklyDepartures"]?.array?.first, ["day": 1, "departure": "08:00", "minSocPct": 72.5])
-        // Tag leeren: ohne Abfahrt kein „zuhause ab“.
-        let cleared = try XCTUnwrap(EVEdit.week(s.week, changing: 0, departure: "", minSocPct: nil))
-        let first = try XCTUnwrap(cleared["departure"]?["weeklyDepartures"]?.array?.first)
-        XCTAssertEqual(first["departure"]?.string, "")
-        XCTAssertEqual(first["homeFrom"]?.string, "")
-        XCTAssertNil(first["homeFromPrevDay"])
-        XCTAssertEqual(first["minSocPct"], .null)
-        XCTAssertNil(EVEdit.week(s.week, changing: 0, departure: "25:00", minSocPct: nil))
-        XCTAssertNil(EVEdit.week(s.week, changing: 0, departure: "07:00", minSocPct: 140))
-        XCTAssertNil(EVEdit.week(s.week, changing: 9, departure: "07:00", minSocPct: nil))
+        odd[0] = EVState.WeekRow(raw: ["day": 1, "departure": "07:00", "minSocPct": 72.5, "tripSocPct": 12.5, "homeFrom": "", "homeFromPrevDay": false, "neuesFeld": "x"],
+                                 index: 0, day: 1, departure: "07:00", minSocPct: 72.5, tripSocPct: 12.5)
+        let timeOnly = try EVEdit.weekPlan(odd, change: .update(index: 0, .init(day: 1, departure: "08:00", minSocPct: 72.5, tripSocPct: 12.5))).get()
+        XCTAssertEqual(timeOnly["departure"]?["weeklyDepartures"]?.array?.first,
+                       ["day": 1, "departure": "08:00", "minSocPct": 72.5, "tripSocPct": 12.5, "homeFrom": "", "homeFromPrevDay": false, "neuesFeld": "x"])
+    }
+
+    func testWeekPlanAddAndRemove() throws {
+        let s = try XCTUnwrap(EVState.from(ev))
+        // Anlegen an einem Tag ohne Abfahrt: Die leere Zeile wird zur Abfahrt.
+        let tuesday = try EVEdit.weekPlan(s.week, change: .add(.init(day: 2, departure: "09:15", tripSocPct: 10))).get()
+        var rows = try XCTUnwrap(tuesday["departure"]?["weeklyDepartures"]?.array)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[1], ["day": 2, "departure": "09:15", "homeFrom": "", "homeFromPrevDay": false, "minSocPct": nil, "tripSocPct": 10.0])
+        // Zweite Abfahrt am selben Tag: kommt dazu.
+        let second = try EVEdit.weekPlan(s.week, change: .add(.init(day: 1, departure: "16:00", homeFrom: "12:00"))).get()
+        rows = try XCTUnwrap(second["departure"]?["weeklyDepartures"]?.array)
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertEqual(rows[2]["homeFrom"]?.string, "12:00")
+        XCTAssertEqual(rows[2]["homeFromPrevDay"]?.bool, false)   // 12:00 liegt vor 16:00 → selber Tag
+        // Löschen der einzigen Abfahrt eines Tages: Der Tag bleibt, ohne Abfahrt.
+        let cleared = try EVEdit.weekPlan(s.week, change: .remove(index: 0)).get()
+        rows = try XCTUnwrap(cleared["departure"]?["weeklyDepartures"]?.array)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0], ["day": 1, "departure": "", "homeFrom": "", "homeFromPrevDay": false, "minSocPct": nil, "tripSocPct": nil])
+        // Löschen einer von zwei Abfahrten am Tag: Die Zeile verschwindet.
+        let two = EVState.from(["ok": true, "departure": ["weeklyDepartures": [["day": 1, "departure": "07:00"], ["day": 1, "departure": "16:00"]]]])!.week
+        let one = try EVEdit.weekPlan(two, change: .remove(index: 1)).get()
+        XCTAssertEqual(one["departure"]?["weeklyDepartures"]?.array, [["day": 1, "departure": "07:00"]])
+    }
+
+    func testWeekPlanValidationMirrorsTheBox() throws {
+        let s = try XCTUnwrap(EVState.from(ev))
+        func update(_ d: EVEdit.WeekDraft) -> EVEdit.WeekProblem? {
+            if case .failure(let p) = EVEdit.weekPlan(s.week, change: .update(index: 0, d)) { return p }
+            return nil
+        }
+        XCTAssertNil(update(.init(day: 1, departure: "07:00")))
+        XCTAssertEqual(update(.init(day: 1, departure: "25:00")), .badTime)
+        XCTAssertEqual(update(.init(day: 1, departure: "")), .badTime)
+        XCTAssertEqual(update(.init(day: 1, departure: "07:00", homeFrom: "7")), .badTime)
+        XCTAssertEqual(update(.init(day: 1, departure: "07:00", minSocPct: 140)), .badPercent)
+        XCTAssertEqual(update(.init(day: 1, departure: "07:00", tripSocPct: -1)), .badPercent)
+        // „Zuhause ab“ am selben Tag muss vor der Abfahrt liegen; am Vortag ist jede Uhrzeit recht.
+        XCTAssertEqual(update(.init(day: 1, departure: "07:00", homeFrom: "18:00", homeFromPrevDay: false)), .homeNotBeforeDeparture)
+        XCTAssertNil(update(.init(day: 1, departure: "07:00", homeFrom: "18:00", homeFromPrevDay: true)))
+        XCTAssertNil(update(.init(day: 1, departure: "07:00", homeFrom: "18:00")))   // ohne Angabe: Vortag, wie auf der Box
+        XCTAssertTrue(EVEdit.defaultHomeFromPrevDay(homeFrom: "19:15", departure: "08:30"))
+        XCTAssertFalse(EVEdit.defaultHomeFromPrevDay(homeFrom: "06:00", departure: "08:30"))
+        XCTAssertEqual(EVEdit.weekPlan(s.week, change: .update(index: 9, .init(day: 1, departure: "07:00"))), .failure(.unknownRow))
+        XCTAssertEqual(EVEdit.weekPlan(s.week, change: .remove(index: 9)), .failure(.unknownRow))
+        XCTAssertEqual(EVEdit.weekPlan(s.week, change: .add(.init(day: 8, departure: "07:00"))), .failure(.badDay))
+        // Höchstens 14 Abfahrten in der Woche.
+        let full = EVState.from(["ok": true, "departure": ["weeklyDepartures": .array((0..<14).map { ["day": .int(Int64($0 % 7 + 1)), "departure": .string(String(format: "%02d:00", 6 + $0))] })]])!.week
+        XCTAssertEqual(EVEdit.weekPlan(full, change: .add(.init(day: 3, departure: "22:00"))), .failure(.tooMany))
+        XCTAssertNoThrow(try EVEdit.weekPlan(full, change: .update(index: 3, .init(day: 4, departure: "23:00"))).get())
+    }
+
+    func testChargeNowBodies() throws {
+        XCTAssertEqual(EVEdit.chargeNow(powerW: 7360.4, durationMin: nil), ["kind": "charge", "powerW": 7360])
+        XCTAssertEqual(EVEdit.chargeNow(powerW: 11000, durationMin: 120), ["kind": "charge", "powerW": 11000, "durationMin": 120])
+        XCTAssertNil(EVEdit.chargeNow(powerW: 0, durationMin: nil))
+        XCTAssertNil(EVEdit.chargeNow(powerW: .nan, durationMin: nil))
+        XCTAssertNil(EVEdit.chargeNow(powerW: 11000, durationMin: 0))
+        XCTAssertNil(EVEdit.chargeNow(powerW: 11000, durationMin: 48 * 60 + 1))
+        XCTAssertEqual(EVEdit.stopCharging(durationMin: nil), ["kind": "stop"])
+        XCTAssertEqual(EVEdit.stopCharging(durationMin: 60), ["kind": "stop", "durationMin": 60])
+        XCTAssertNil(EVEdit.stopCharging(durationMin: -5))
+        let s = try XCTUnwrap(EVState.from(["ok": true, "overrideLimits": ["minPowerW": 1380, "maxPowerW": 11000], "override": ["kind": "stop", "powerW": 0, "until": nil]]))
+        XCTAssertEqual(s.overrideLimits, EVState.OverrideLimits(minPowerW: 1380, maxPowerW: 11000))
+        XCTAssertEqual(s.override, EVState.Override(stop: true, powerW: 0, until: nil))
+        XCTAssertNil(try XCTUnwrap(EVState.from(["ok": true, "overrideLimits": ["minPowerW": 0, "maxPowerW": 0]])).overrideLimits)
     }
 
     // MARK: Tarif

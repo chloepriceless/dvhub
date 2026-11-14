@@ -165,6 +165,68 @@ final class ControlPagesTests: XCTestCase {
         if week.exists { Shots.take("eauto-wochenplan", app: app, defaultPose: "ui") }
     }
 
+    /// Sofort laden starten und beenden; eine Abfahrt im Wochenplan anlegen und wieder löschen.
+    func testChargeNowAndWeeklyDeparture() throws {
+        let app = try launch("ev")
+        guard app.switches["ev.optimize"].firstMatch.waitForExistence(timeout: 60) else { throw XCTSkip("Keine gekoppelte Anlage") }
+        let start = app.buttons["ev.chargeNow"].firstMatch
+        reveal(start, in: app)
+        guard start.exists, start.isEnabled else { throw XCTSkip("Dieses Gerät darf nicht steuern oder es läuft schon ein Sofortladen") }
+        Shots.take("eauto-sofortladen", app: app, defaultPose: "ui")
+        start.tap()
+        // Rückfrage: der zweite Knopf mit derselben Beschriftung.
+        let confirmStart = app.buttons.matching(NSPredicate(format: "label == 'Sofort laden'")).allElementsBoundByIndex.last
+        XCTAssertTrue(confirmStart?.waitForExistence(timeout: 5) ?? false, "Rückfrage fehlt")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'egal, was EOS plant'")).firstMatch.exists, "Rückfrage sagt nicht, was passiert")
+        confirmStart?.tap()
+        let active = any(app, "ev.overrideActive")
+        XCTAssertTrue(active.waitForExistence(timeout: 40), "Sofort laden startet nicht – Biometrie-Freigabe läuft?")
+        XCTAssertTrue(active.label.contains("Sofort laden läuft mit"), active.label)
+        Shots.take("eauto-sofortladen-laeuft", app: app, defaultPose: "ui")
+        sleep(2)
+        let end = app.buttons["ev.overrideEnd"].firstMatch
+        reveal(end, in: app, tries: 3)
+        end.tap()
+        let confirmEnd = app.buttons["Beenden und EOS wieder planen lassen"].firstMatch
+        XCTAssertTrue(confirmEnd.waitForExistence(timeout: 5))
+        confirmEnd.tap()
+        XCTAssertTrue(start.waitForExistence(timeout: 40), "Sofort laden endet nicht")
+        XCTAssertFalse(active.exists)
+        sleep(2)
+
+        // Wochenplan: Abfahrt am Samstag anlegen (im Harness ohne Abfahrt), sehen, löschen.
+        let add = app.buttons["ev.week.add"].firstMatch
+        reveal(add, in: app, tries: 12)
+        XCTAssertTrue(add.exists, "„Abfahrt hinzufügen“ fehlt")
+        add.tap()
+        let saturday = app.buttons["Samstag"].firstMatch
+        XCTAssertTrue(saturday.waitForExistence(timeout: 5))
+        saturday.tap()
+        let save = app.buttons["ev.week.save"].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Neue Abfahrt am Samstag"].exists)
+        reveal(save, in: app, tries: 4)
+        Shots.take("eauto-neue-abfahrt", app: app, defaultPose: "ui")
+        save.tap()
+        let status = any(app, "ev.weekStatus")
+        XCTAssertTrue(status.waitForExistence(timeout: 40), "keine Rückmeldung – Biometrie-Freigabe läuft?")
+        XCTAssertTrue(status.label.contains("Gespeichert"), status.label)
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'ev.week.' AND label CONTAINS 'Samstag' AND label CONTAINS '07:00'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "neue Abfahrt fehlt im Wochenplan")
+        sleep(2)
+        reveal(row, in: app, tries: 3)
+        row.tap()
+        let delete = app.buttons["ev.week.delete"].firstMatch
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        reveal(delete, in: app, tries: 4)
+        delete.tap()
+        let confirmDelete = app.buttons["Abfahrt löschen"].firstMatch
+        XCTAssertTrue(confirmDelete.waitForExistence(timeout: 5))
+        confirmDelete.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: row)
+        waitForExpectations(timeout: 40)
+    }
+
     // MARK: Zeitplan
 
     func testScheduleRuleCanBeAddedToggledAndDeleted() throws {
