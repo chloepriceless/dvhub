@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApiRoutes } from '../routes-api.js';
 import { mobileIntegrationsView, safeText } from '../services/mobile-link/integrations-view.js';
-import { checkRequest, READ_PATHS, CONTROL_PATHS } from '../services/mobile-link/permissions.js';
+import { checkRequest, READ_PATHS, CONTROL_PATHS, DELETE_PATHS } from '../services/mobile-link/permissions.js';
 import { mobileAutomationConfigView, parseMobileAutomationPatch, MOBILE_AUTOMATION_KEYS } from '../services/mobile-link/automation-view.js';
 import { withPlantBattery } from '../market-automation-builder.js';
 
@@ -377,12 +377,32 @@ describe('mobile-link Rechte — Stand 14.11.2026', () => {
       '/api/victron/devices', '/api/vpn/status',
     ]);
     assert.deepEqual([...CONTROL_PATHS].sort(), [
-      '/api/control/resume', '/api/control/stop', '/api/control/write', '/api/ev', '/api/schedule/automation/config',
+      '/api/control/resume', '/api/control/stop', '/api/control/write', '/api/ev', '/api/ev/override', '/api/schedule/automation/config',
       '/api/schedule/automation/replan', '/api/schedule/config', '/api/schedule/rules', '/api/schedule/rules/toggle',
     ]);
-    // Weiterhin zu: Konfiguration, Sofortladen, MQTT-Aktionen, Sicherungen.
-    for (const p of ['/api/config', '/api/ev/override', '/api/ev/preview', '/api/integrations/mqtt/action', '/api/integrations/evcc', '/api/db/backup']) {
+    assert.deepEqual([...DELETE_PATHS], ['/api/ev/override']);
+    // Weiterhin zu: Konfiguration, Vorschau, MQTT-Aktionen, Sicherungen.
+    for (const p of ['/api/config', '/api/ev/preview', '/api/integrations/mqtt/action', '/api/integrations/evcc', '/api/db/backup']) {
       assert.equal(checkRequest(['read', 'control'], 'POST', p).ok, false, p);
     }
+  });
+
+  it('Sofort laden: POST und DELETE auf /api/ev/override nur mit „Steuern“; DELETE sonst nirgends', () => {
+    assert.equal(checkRequest(['read', 'control'], 'POST', '/api/ev/override').ok, true);
+    assert.deepEqual(checkRequest(['read', 'control'], 'DELETE', '/api/ev/override'), { ok: true, path: '/api/ev/override', search: '' });
+    for (const m of ['POST', 'DELETE']) assert.equal(checkRequest(['read'], m, '/api/ev/override').error, 'control_not_allowed', m);
+    // Lesen gibt es dort nicht (der Stand steht in GET /api/ev).
+    assert.equal(checkRequest(['read', 'control'], 'GET', '/api/ev/override').status, 403);
+    // DELETE: jeder andere Pfad bleibt 405 — auch die, die POST oder GET erlauben, und alle Umwege.
+    for (const p of [...READ_PATHS, ...CONTROL_PATHS, '/api/config', '/api/history/viz/day', '/api/mobile-link/devices/remove', '/api/ev/override/', '/api/ev/override/x']) {
+      if (p === '/api/ev/override') continue;
+      assert.equal(checkRequest(['read', 'control'], 'DELETE', p).status, 405, p);
+    }
+    for (const p of ['/api/ev/../ev/override', '/api/ev//override', '/api/%65v/override', 'http://evil/api/ev/override']) {
+      assert.equal(checkRequest(['read', 'control'], 'DELETE', p).ok, false, p);
+    }
+    for (const m of ['PUT', 'PATCH', 'HEAD', 'OPTIONS', 'delete ', '']) assert.equal(checkRequest(['read', 'control'], m, '/api/ev/override').ok, false, m);
+    // Kleinschreibung der Methode wie bei GET/POST.
+    assert.equal(checkRequest(['read', 'control'], 'delete', '/api/ev/override').ok, true);
   });
 });
