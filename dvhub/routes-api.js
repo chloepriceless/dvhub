@@ -5773,8 +5773,12 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/eos/status' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
       const restart = ctx.eosRestarter?.status?.() || null;
-      if (!ctx.eosMonitor) return json(res, 200, { ok: true, status: 'disabled', enabled: false, restart });
-      return json(res, 200, { ok: true, ...ctx.eosMonitor.status(), restart });
+      // DVhub-EOS-Bauidentität: der rohe `version`-String von EOS ist nur Upstreams
+      // Paketnummer (z. B. 0.3.0.dev…) und hinkt den Tags hinterher. `dvhubEos` zeigt,
+      // was tatsächlich läuft (unser Build-Tag + Rust-Kern), für eine klare Anzeige.
+      const dvhubEos = ctx.eosBuildInfo || null;
+      if (!ctx.eosMonitor) return json(res, 200, { ok: true, status: 'disabled', enabled: false, restart, dvhubEos });
+      return json(res, 200, { ok: true, ...ctx.eosMonitor.status(), restart, dvhubEos });
     }
 
     // EOS neu starten (Knopf in der Oberfläche). Antwortet sofort; der Neustart

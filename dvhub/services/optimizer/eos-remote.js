@@ -188,6 +188,30 @@ export function readEosPin(appDir) {
   return DEFAULT_REMOTE_EOS_VERSION;
 }
 
+/**
+ * DVhub-EOS-Bauidentität aus eos-version.env: der native Rust-Kern (EOS_NATIVE_VERSION)
+ * und der DVhub-EOS-Build-Tag (aus EOS_NATIVE_URL; „dvhub-eos-"-Präfix abgeschnitten).
+ * Für die Anzeige: der rohe /v1/health-`version`-String ist nur Upstreams Paketnummer
+ * (z. B. 0.3.0.dev…), nicht unser Build. Liefert { build, nativeCore, label } oder null.
+ */
+export function readEosBuildInfo(appDir) {
+  for (const p of [path.join(appDir || '.', '..', 'eos-version.env'), path.join(appDir || '.', 'eos-version.env')]) {
+    try {
+      const txt = fs.readFileSync(p, 'utf8');
+      const nativeCore = (/^EOS_NATIVE_VERSION=([^\s#]+)/m.exec(txt) || [])[1] || null;
+      const url = (/^EOS_NATIVE_URL=([^\s#]+)/m.exec(txt) || [])[1] || null;
+      const tag = url ? (/\/(dvhub-eos-[^/]+)$/.exec(url) || [])[1] || null : null;
+      const build = tag ? eosVersionLabel(tag) : null;
+      if (!build && !nativeCore) continue;
+      const label = build
+        ? `DVhub-EOS ${build}${nativeCore ? ` · Rust-Kern ${nativeCore}` : ''}`
+        : (nativeCore ? `Rust-Kern ${nativeCore}` : null);
+      return { build, nativeCore, label };
+    } catch { /* nächste Stelle */ }
+  }
+  return null;
+}
+
 class RemoteError extends Error {
   /** @param {boolean} fallbackOk  darf das lokale EOS einspringen? */
   constructor(code, message, fallbackOk = true) { super(message); this.code = code; this.fallbackOk = fallbackOk; }

@@ -10,6 +10,8 @@ verweist hierher.
 
 ## [Unreleased]
 
+- EOS-Status: `/api/eos/status` zeigt jetzt die DVhub-EOS-Bauidentität (`dvhubEos`: Build-Tag + Rust-Kern aus eos-version.env). Der rohe `version`-String von EOS ist nur Upstreams Paketnummer (z. B. 0.3.0.dev…) und hinkt den Tags hinterher — die Anzeige nennt jetzt den tatsächlichen Stand.
+
 ## [1.0.10] - 2026-11-13
 
 Release nach gut einer Woche; genau dieser Stand lief vorher im Echtbetrieb auf der eigenen Anlage. Überblick nach
