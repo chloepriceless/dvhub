@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { createApiRoutes } from '../routes-api.js';
 import { mobileIntegrationsView, safeText } from '../services/mobile-link/integrations-view.js';
 import { checkRequest, READ_PATHS, CONTROL_PATHS } from '../services/mobile-link/permissions.js';
+import { mobileAutomationConfigView, parseMobileAutomationPatch, MOBILE_AUTOMATION_KEYS } from '../services/mobile-link/automation-view.js';
 
 function mockRes() {
   const captured = { status: 0, body: '' };
@@ -47,7 +48,14 @@ function mockCtx() {
     apiToken: null,
     epex: { enabled: false, timezone: 'Europe/Berlin' },
     optimizer: { enabled: true, primarySource: 'eos', eosProxy: { enabled: true, url: BAIT.eosUrl } },
-    schedule: { timezone: 'Europe/Berlin' },
+    schedule: {
+      timezone: 'Europe/Berlin',
+      smallMarketAutomation: {
+        enabled: true, searchWindowStart: '14:00', searchWindowEnd: '09:00', targetSlotCount: 4, maxDischargeW: -12000, minSocPct: 20,
+        location: { label: 'KOEDER-Ort', latitude: 53.5511, longitude: 9.9937 },
+        stages: [{ dischargeW: -9000, dischargeSlots: 2 }], engine: 'chain',
+      },
+    },
     telemetry: { enabled: false, historyImport: { enabled: true, vrmPortalId: BAIT.vrmPortal, vrmToken: BAIT.vrmToken } },
     family: {},
     gridPositiveMeans: 'grid_import',
@@ -98,6 +106,8 @@ function mockCtx() {
     epexNowNext: () => null,
     expireLeaseIfNeeded: () => {},
     persistConfig: () => {},
+    saveAndApplyConfig: (next) => { Object.assign(cfg, next); },
+    regenerateSmallMarketAutomationRules: async () => {},
     buildSystemDiscoveryPayload: async () => ({ ok: true }),
     mqttHub: { connected: true },
     mqttPublisher: { topicCount: 42 },
@@ -110,6 +120,25 @@ function mockCtx() {
       fresh: () => ({ connected: true, charging: false, powerW: 0, type: 'evcc' }),
     },
   };
+}
+
+// Anfrage wie vom Agenten der Handy-App: Loopback mit der Kennung x-dvhub-client.
+async function asApp(ctx, method, urlPath, body) {
+  const routes = createApiRoutes(ctx);
+  const raw = body === undefined ? '' : JSON.stringify(body);
+  const listeners = {};
+  const req = {
+    method, url: urlPath, headers: { host: 'dvhub.test', 'content-type': 'application/json', 'x-dvhub-client': 'mobile-link' }, socket: { remoteAddress: '127.0.0.1' },
+    on(event, cb) {
+      listeners[event] = cb;
+      if (event === 'end') setTimeout(() => { if (raw && listeners.data) listeners.data(Buffer.from(raw)); cb(); }, 0);
+      return req;
+    },
+    destroy() {},
+  };
+  const res = mockRes();
+  await routes.handleRequest(req, res, new URL(urlPath, 'http://dvhub.test'));
+  return { status: res._captured.status, text: res._captured.body, body: res._captured.body ? JSON.parse(res._captured.body) : null };
 }
 
 async function get(ctx, urlPath) {
@@ -172,6 +201,85 @@ describe('GET /api/mobile-link/integrations — Integrationen ohne Adressen und 
     await routes.handleRequest(req, res, new URL(req.url, 'http://dvhub.test'));
     assert.notEqual(res._captured.status, 200);
     assert.doesNotMatch(res._captured.body, /victron/);
+  });
+});
+
+// Gegenprüfung 3a6035d7 (P2): Die Config der Börsenautomatik trägt den Standort
+// der Anlage. Über die für die App geöffnete Route darf er weder hinaus noch
+// vom Handy aus geändert werden.
+describe('Börsenautomatik für die Handy-App — ohne Standort, nur benannte Felder', () => {
+  it('lesen: die App bekommt Fenster, Reserve und Leistung, aber keinen Standort und keine Stufen', async () => {
+    const out = await asApp(mockCtx(), 'GET', '/api/schedule/automation/config');
+    assert.equal(out.status, 200);
+    assert.deepEqual(out.body.config, { enabled: true, searchWindowStart: '14:00', searchWindowEnd: '09:00', targetSlotCount: 4, maxDischargeW: -12000, minSocPct: 20 });
+    assert.equal(out.body.optimizerEnabled, true);
+    assert.equal(typeof out.body.globalMinSocPct, 'number');
+    assert.doesNotMatch(out.text, /KOEDER|location|latitude|longitude|53\.5511|9\.9937|stages|plantBattery/);
+  });
+
+  it('Gegenprobe: die Weboberfläche (ohne Kennung) bekommt die volle Config wie bisher', async () => {
+    const out = await get(mockCtx(), '/api/schedule/automation/config');
+    assert.equal(out.body.config.location.latitude, 53.5511);
+    assert.ok(Array.isArray(out.body.config.stages));
+  });
+
+  it('schreiben: benannte Felder werden gespeichert, die Antwort bleibt schmal', async () => {
+    const ctx = mockCtx();
+    const out = await asApp(ctx, 'POST', '/api/schedule/automation/config', { enabled: false, minSocPct: 35, searchWindowStart: '15:30' });
+    assert.equal(out.status, 200);
+    assert.deepEqual(out.body.config, { enabled: false, searchWindowStart: '15:30', searchWindowEnd: '09:00', targetSlotCount: 4, maxDischargeW: -12000, minSocPct: 35 });
+    assert.doesNotMatch(out.text, /KOEDER|location|latitude|stages/);
+    const saved = ctx.getCfg().schedule.smallMarketAutomation;
+    assert.equal(saved.minSocPct, 35);
+    // Was die App nicht anfasst, bleibt stehen.
+    assert.deepEqual(saved.location, { label: 'KOEDER-Ort', latitude: 53.5511, longitude: 9.9937 });
+    assert.equal(saved.engine, 'chain');
+  });
+
+  it('schreiben: Standort, Stufen und unbekannte Felder lehnt die Route ab — nichts wird gespeichert', async () => {
+    for (const body of [
+      { location: { latitude: 1, longitude: 2 } },
+      { enabled: true, location: { label: 'x' } },
+      { stages: [] },
+      { engine: 'eos' },
+      { enabled: true, irgendwas: 1 },
+    ]) {
+      const ctx = mockCtx();
+      const before = JSON.stringify(ctx.getCfg().schedule.smallMarketAutomation);
+      const out = await asApp(ctx, 'POST', '/api/schedule/automation/config', body);
+      assert.equal(out.status, 400, JSON.stringify(body));
+      assert.match(out.body.error, /^field_not_allowed:/);
+      assert.equal(JSON.stringify(ctx.getCfg().schedule.smallMarketAutomation), before);
+    }
+  });
+
+  it('schreiben: ungültige Werte lehnt die Route ab', async () => {
+    for (const body of [{ enabled: 'ja' }, { minSocPct: 101 }, { minSocPct: '20' }, { searchWindowStart: '24:00' }, { searchWindowEnd: '9:00' },
+      { maxDischargeW: 200000 }, { targetSlotCount: 0 }, { targetSlotCount: 2.5 }, {}]) {
+      const ctx = mockCtx();
+      const out = await asApp(ctx, 'POST', '/api/schedule/automation/config', body);
+      assert.equal(out.status, 400, JSON.stringify(body));
+      assert.equal(ctx.getCfg().schedule.smallMarketAutomation.minSocPct, 20);
+    }
+  });
+
+  it('die Sicht selbst: nur benannte, gültige Felder', () => {
+    assert.deepEqual(MOBILE_AUTOMATION_KEYS, ['enabled', 'searchWindowStart', 'searchWindowEnd', 'targetSlotCount', 'maxDischargeW', 'minSocPct']);
+    assert.deepEqual(mobileAutomationConfigView({ enabled: true, minSocPct: 'viel', location: { latitude: 1 }, neu: 'KOEDER' }), { enabled: true });
+    for (const input of [undefined, null, [], 'x']) assert.deepEqual(mobileAutomationConfigView(input), {});
+    assert.deepEqual(parseMobileAutomationPatch({ minSocPct: 25 }), { ok: true, patch: { minSocPct: 25 } });
+    assert.equal(parseMobileAutomationPatch([1]).ok, false);
+  });
+
+  it('die übrigen für die App geöffneten Zeitplan-Antworten tragen keinen Standort', async () => {
+    const ctx = mockCtx();
+    for (const [method, path, body] of [['GET', '/api/schedule'], ['POST', '/api/schedule/config', { defaultGridSetpointW: -40 }],
+      ['POST', '/api/schedule/rules', { rules: [{ id: 'grid_1', target: 'gridSetpointW', start: '10:00', end: '11:00', value: -500, enabled: true }] }],
+      ['POST', '/api/schedule/rules/toggle', { ids: ['grid_1'], enabled: false }]]) {
+      const out = await asApp(ctx, method, path, body);
+      assert.equal(out.status, 200, `${method} ${path}`);
+      assert.doesNotMatch(out.text, /KOEDER|latitude|longitude|53\.5511|192\.168\./, `${method} ${path}`);
+    }
   });
 });
 
