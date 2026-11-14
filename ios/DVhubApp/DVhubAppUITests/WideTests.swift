@@ -24,7 +24,7 @@ final class WideTests: XCTestCase {
             throw XCTSkip("Schmale Fläche (\(Int(app.windows.firstMatch.frame.width)) pt): keine Seitenleiste – iPhone Duo aufklappen oder iPad nehmen")
         }
 
-        let all = [("dashboard", nil), ("market", "Markt"), ("history", "Historie"), ("news", "Nachrichten"), ("plan", "Fahrplan"),
+        let all = [("dashboard", nil), ("market", "Markt"), ("history", "Historie"), ("news", "Nachrichten"), ("plan", "Fahrplan"), ("ev", "E-Auto"),
                    ("integrations", "Integrationen"), ("system", "System"), ("systems", "Anlagen"), ("appearance", "Darstellung"), ("about", "Über")] as [(String, String?)]
         let startedWide = app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height
         try walk(app, sidebar, areas: all, suffix: startedWide ? "-quer" : "")

@@ -436,10 +436,11 @@ public struct FlowEdge: Equatable, Sendable {
         let pv = max(0, s.pvTotalW ?? 0)
         let load = max(0, s.loadW ?? 0)
         let bat = s.batteryPowerW ?? 0
-        let imp = max(0, s.gridImportW ?? 0), exp = max(0, s.gridExportW ?? 0)
+        // Netz netto wie im Web-Leitstand (app.js updateFlowDiagram): Bezug minus Einspeisung.
+        let net = max(0, s.gridImportW ?? 0) - max(0, s.gridExportW ?? 0)
         // Quellen in der Mitte: PV, entladender Akku, Netzbezug (netto).
         let batOut = max(0, -bat)
-        let gridIn = imp >= exp ? imp : 0
+        let gridIn = max(0, net)
         func shares(_ parts: [(Node, Double)]) -> [Node: Double]? {
             let total = parts.reduce(0) { $0 + $1.1 }
             guard total > 0 else { return nil }
@@ -451,7 +452,7 @@ public struct FlowEdge: Equatable, Sendable {
             // + = Laden: Energie fließt von der Mitte in den Akku — aus PV und Netz.
             FlowEdge(node: .battery, towardHub: bat < 0, watts: abs(bat), sources: bat > 0 ? shares([(.pv, pv), (.grid, gridIn)]) : nil),
             // Einspeisung kommt aus PV und Akku.
-            FlowEdge(node: .grid, towardHub: imp >= exp, watts: max(imp, exp), sources: imp >= exp ? nil : shares([(.pv, pv), (.battery, batOut)])),
+            FlowEdge(node: .grid, towardHub: net >= 0, watts: abs(net), sources: net >= 0 ? nil : shares([(.pv, pv), (.battery, batOut)])),
         ]
     }
 }

@@ -31,7 +31,8 @@ final class RotationTests: XCTestCase {
         expectation(for: online, evaluatedWith: state)
         waitForExpectations(timeout: 30)
 
-        let pv = app.staticTexts["loadValue"]
+        // Der Knoten „Haus“ im Energiefluss trägt den Live-Wert in seiner Beschriftung.
+        let pv = app.buttons["flowNode.home"].firstMatch
         XCTAssertTrue(pv.waitForExistence(timeout: 15))
         shot("ui-portrait")
         let before = pv.label

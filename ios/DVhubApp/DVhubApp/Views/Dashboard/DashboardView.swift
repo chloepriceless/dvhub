@@ -1,5 +1,8 @@
-// DashboardView.swift — Leitstand: Energiefluss, antippbare Karten (PV, Akku,
-// Netz, Haus, Heute, Zustand), Blick auf die Börse, Meldungen.
+// DashboardView.swift — Leitstand. Jede Angabe steht genau einmal:
+//   • der Energiefluss sagt, was JETZT fließt (Leistung an jedem Knoten),
+//   • die Karten darunter sagen, was HEUTE zusammenkam (Energie, Spitze,
+//     Tagesverlauf) — keine zweite Anzeige der Momentanwerte,
+//   • dazu Erlös und Kosten, der Preisverlauf, Zustand und Meldungen.
 
 import SwiftUI
 import Charts
@@ -42,8 +45,8 @@ struct DashboardView: View {
                     HStack(alignment: .top, spacing: 14) {
                         // Höhe folgt der Spaltenbreite — im Querformat ist wenig Höhe da.
                         flowCard(s, height: max(320, min(440, (pageWidth - max(300, pageWidth * 0.44)) * 1.12)))
-                        VStack(spacing: 14) {
-                            metricGrid(s)
+                        VStack(alignment: .leading, spacing: 14) {
+                            todayGrid
                             moneyCard(s)
                         }
                         .frame(width: max(300, pageWidth * 0.44))
@@ -54,7 +57,7 @@ struct DashboardView: View {
                     }
                 } else {
                     flowCard(s, height: min(380, max(290, pageWidth * 0.84)))
-                    metricGrid(s)
+                    todayGrid
                     moneyCard(s)
                     marketCard
                     stateCard(s)
@@ -70,8 +73,10 @@ struct DashboardView: View {
         .navigationTitle(controller.credentials.boxName)
         .animation(.default, value: controller.displayStatus)
         .task(id: controller.isOnline) {
-            // Verlaufslinien der Karten: beim Öffnen und dann alle zehn Minuten.
+            // Tageswerte der Karten: beim Öffnen und dann alle zehn Minuten.
+            // Der volle Status liefert den eigenen Bezugspreis für die Preis-Karte.
             while !Task.isCancelled && controller.isOnline {
+                await controller.refreshDetail(maxAge: 600)
                 await controller.refreshToday()
                 try? await Task.sleep(nanoseconds: 600 * 1_000_000_000)
             }
@@ -108,21 +113,40 @@ struct DashboardView: View {
 
     // MARK: Karten
 
-    private func metricGrid(_ s: LiveStatus) -> some View {
-        let load = controller.todayValues("load_power_w").isEmpty ? "self_consumption_w" : "load_power_w"
+    /// Energie und Spitze eines Tages aus dem Verlauf (5-Minuten-Mittel der Box).
+    private func energy(_ key: String, _ part: (Double) -> Double = { $0 }) -> DayEnergy? {
+        DayEnergy.from(controller.todayValues(key).map { (date: $0.date, watts: part($0.value)) })
+    }
+
+    private static func peak(_ e: DayEnergy?) -> String {
+        guard let e, e.peakW > 0 else { return String(localized: "noch kein Verlauf") }
+        return String(localized: "Spitze \(Format.power(e.peakW)) · \(Format.time(e.peakAt))")
+    }
+
+    /// Was heute zusammenkam. Die Momentanwerte stehen im Energiefluss — hier
+    /// stehen Tagesenergie, Spitze und Verlauf, also nichts doppelt.
+    private var todayGrid: some View {
+        let loadKey = controller.todayValues("load_power_w").isEmpty ? "self_consumption_w" : "load_power_w"
+        let pv = energy("pv_total_w"), load = energy(loadKey)
+        let exported = energy("grid_export_w"), imported = energy("grid_import_w")
+        // DVhub: Akku + = Laden, − = Entladen.
+        let charged = energy("battery_power_w") { max(0, $0) }, discharged = energy("battery_power_w") { max(0, -$0) }
         // In den Bedienungshilfen-Größen eine Karte je Zeile.
         let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: typeSize.isAccessibilitySize ? 1 : 2)
-        return LazyVGrid(columns: columns, spacing: 12) {
-            // Ohne Symbole: Die stehen schon im Energiefluss; hier verbindet die Farbe.
-            MetricCard(cardId: "PV", title: "PV", tint: Brand.pv, value: Format.power(s.pvTotalW), caption: String(localized: "Erzeugung"),
-                       spark: controller.todayValues("pv_total_w"), valueId: "pvValue") { open(.pv) }
-            MetricCard(cardId: "Akku", title: String(localized: "Akku"), tint: Brand.battery, value: Format.percent(s.soc),
-                       caption: StatusText.batteryCaption(s), spark: controller.todayValues(BoxData.socKey), sparkRange: 0...100) { open(.battery) }
-            MetricCard(cardId: "Netz", title: String(localized: "Netz"), tint: StatusText.isExporting(s) ? Brand.cyan : Brand.grid,
-                       value: Format.power(StatusText.gridValue(s)), caption: StatusText.gridCaption(s),
-                       spark: gridSpark) { open(.grid) }
-            MetricCard(cardId: "Haus", title: String(localized: "Haus"), tint: Brand.home, value: Format.power(s.loadW), caption: String(localized: "Verbrauch"),
-                       spark: controller.todayValues(load), valueId: "loadValue") { open(.home) }
+        return VStack(alignment: .leading, spacing: 8) {
+            Eyebrow(text: "Heute bisher", icon: "sun.horizon", tint: Brand.text2)
+            LazyVGrid(columns: columns, spacing: 12) {
+                MetricCard(cardId: "PV", title: String(localized: "Erzeugt"), tint: Brand.pv, value: Format.energy(pv?.kwh), caption: Self.peak(pv),
+                           spark: controller.todayValues("pv_total_w"), valueId: "pvToday") { open(.pv) }
+                MetricCard(cardId: "Haus", title: String(localized: "Verbraucht"), tint: Brand.home, value: Format.energy(load?.kwh), caption: Self.peak(load),
+                           spark: controller.todayValues(loadKey), valueId: "loadToday") { open(.home) }
+                MetricCard(cardId: "Akku", title: String(localized: "Akku geladen"), tint: Brand.battery, value: Format.energy(charged?.kwh),
+                           caption: String(localized: "entladen \(Format.energy(discharged?.kwh))"),
+                           spark: controller.todayValues(BoxData.socKey), sparkRange: 0...100, sparkLabel: String(localized: "Ladestand")) { open(.battery) }
+                MetricCard(cardId: "Netz", title: String(localized: "Eingespeist"), tint: Brand.grid, value: Format.energy(exported?.kwh),
+                           caption: String(localized: "bezogen \(Format.energy(imported?.kwh))"),
+                           spark: gridSpark, sparkLabel: String(localized: "oben Einspeisung, unten Bezug")) { open(.grid) }
+            }
         }
     }
 
@@ -141,7 +165,7 @@ struct DashboardView: View {
             GlassCard(tint: tint) {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Eyebrow(text: "Heute", icon: "eurosign.circle.fill", tint: tint)
+                        Eyebrow(text: "Erlös und Kosten heute", icon: "eurosign.circle.fill", tint: tint)
                         Spacer()
                         Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(Brand.dim)
                     }
@@ -168,9 +192,12 @@ struct DashboardView: View {
         .accessibilityIdentifier("moneyCard")
     }
 
+    /// Preise: der Tagesverlauf und was vorausliegt. Der Preis der laufenden
+    /// Viertelstunde steht klein dabei — er allein sagt wenig.
     private var marketCard: some View {
         let today = market.prices(on: market.today)
         let now = market.currentPrice
+        let importNow = controller.detail?.importPriceNowCtKwh
         // Die kommenden Tage wie im Markt: morgen aus Börsenpreisen eingestuft, danach die Prognose.
         let ahead = MarketDay.build(today: market.today, tomorrow: market.tomorrow, prices: { market.prices(on: $0) }, outlook: market.outlook)
             .filter { $0.date > market.today }
@@ -179,25 +206,26 @@ struct DashboardView: View {
             GlassCard(tint: Brand.blue) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Eyebrow(text: "Börse", icon: "chart.bar.fill", tint: Brand.blue)
+                        Eyebrow(text: "Preise", icon: "chart.bar.fill", tint: Brand.blue)
                         Spacer()
                         Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(Brand.dim)
                     }
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        MetricValue(value: MarketStyle.ct1(now?.ctKwh), style: .title)
-                        Text("ct/kWh jetzt").font(.footnote).foregroundStyle(Brand.text2)
+                    if let warn {
+                        Label("Teurer Tag voraus: \(MarketStyle.weekday(warn.date)) ⌀ \(Format.ct(warn.meanCt))", systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(Brand.red)
+                    } else if let cheap = ahead.first(where: { $0.priceClass == .cheap }) {
+                        Label("Günstiger Tag voraus: \(MarketStyle.weekday(cheap.date)) ⌀ \(Format.ct(cheap.meanCt))", systemImage: "arrow.down.circle.fill")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(Brand.green)
+                    } else if market.outlook != nil {
+                        Label("Keine teuren Tage in Sicht", systemImage: "checkmark.seal").font(.subheadline.weight(.semibold)).foregroundStyle(Brand.text)
                     }
                     if !today.isEmpty {
                         MiniPriceBars(slots: today).frame(height: 40)
                     }
-                    if let warn {
-                        Label("Teurer Tag voraus: \(MarketStyle.weekday(warn.date)) ⌀ \(Format.ct(warn.meanCt))", systemImage: "exclamationmark.triangle.fill")
-                            .font(.footnote.weight(.semibold)).foregroundStyle(Brand.red)
-                    } else if let cheap = ahead.first(where: { $0.priceClass == .cheap }) {
-                        Label("Günstiger Tag voraus: \(MarketStyle.weekday(cheap.date)) ⌀ \(Format.ct(cheap.meanCt))", systemImage: "arrow.down.circle.fill")
-                            .font(.footnote.weight(.semibold)).foregroundStyle(Brand.green)
-                    } else if market.outlook != nil {
-                        Label("Keine teuren Tage in Sicht", systemImage: "checkmark.seal").font(.footnote).foregroundStyle(Brand.text2)
+                    if let now {
+                        Text(importNow.map { String(localized: "Gerade: Einspeisung \(Format.ct(now.ctKwh)) · Bezug \(Format.ct($0))") }
+                             ?? String(localized: "Gerade: Börse \(Format.ct(now.ctKwh))"))
+                            .font(.caption.monospacedDigit()).foregroundStyle(Brand.text2)
                     }
                 }
             }
@@ -250,6 +278,8 @@ struct MetricCard: View {
     let caption: String
     var spark: [SeriesPoint] = []
     var sparkRange: ClosedRange<Double>? = nil
+    /// Was die Linie zeigt, wenn es nicht der Wert darüber ist (z. B. Ladestand).
+    var sparkLabel: String? = nil
     var valueId: String? = nil
     let action: () -> Void
 
@@ -266,6 +296,9 @@ struct MetricCard: View {
                 Sparkline(points: spark, tint: tint, range: sparkRange)
                     .frame(height: 30)
                     .padding(.top, 2)
+                if let sparkLabel {
+                    Text(sparkLabel).font(.caption2).foregroundStyle(Brand.dim).lineLimit(1).minimumScaleFactor(0.7)
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .topLeading)

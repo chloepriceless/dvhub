@@ -1,13 +1,16 @@
 // MarketView.swift — Markt: Börsenpreise und die Vorhersage der nächsten Tage.
 //
-// Vier Dinge, mehr nicht:
-//   1. der Börsenpreis jetzt,
-//   2. die Tage als Karten — Datum, Tagesmittel, Spanne, Ampel und die Lage
+// Drei Dinge, mehr nicht:
+//   1. die Tage als Karten — Datum, Tagesmittel, Spanne, Ampel und die Lage
 //      des Tagesmittels im üblichen Bereich. Prognosetage tragen die Einstufung
 //      der Schnittstelle; heute und morgen dieselbe Regel aus den Börsenpreisen,
-//   3. das Börsenpreis-Diagramm: feste Viertelstunden von heute bzw. morgen,
-//   4. getrennt davon die Preisprognose der nächsten Tage mit Band.
-// Daten: dvhub.online (öffentlich), eigener Bezugspreis aus der Box.
+//   2. Einspeisung und Bezug in EINEM Diagramm: Balken = was die Einspeisung
+//      bringt (Börsenpreis je Viertelstunde von heute bzw. morgen), Linie = was
+//      der Bezug kostet (eigener Tarif aus DVhub). Der Abstand ist die Spanne.
+//      Was gerade gilt, steht klein darüber,
+//   3. getrennt davon die Preisprognose der nächsten Tage mit Band.
+// Daten: dvhub.online (öffentlich), eigener Bezugspreis aus der Box
+// (/api/status → userEnergyPricing.slots).
 
 import SwiftUI
 import Charts
@@ -19,6 +22,7 @@ struct MarketView: View {
     @Environment(Chrome.self) private var chrome
     @State private var selectedKey: String
     @State private var boxPrices: [PricePoint] = []
+    @State private var boxLoaded = false
     @State private var debugDayApplied = false
 
     /// Der gewählte Tag beginnt dort, wo man zuletzt war (`Chrome`) — auch wenn
@@ -32,10 +36,9 @@ struct MarketView: View {
         AuroraPage { width in
             let days = self.days
             if let err = market.priceError, market.prices.isEmpty { NoticeBanner(text: err, icon: "wifi.slash") }
-            NowPriceCard(point: currentPoint, today: days.first { $0.key == MarketTime.key(Date()) }, importCt: currentImportCt)
             if !days.isEmpty {
                 DayStrip(days: days, selected: $selectedKey, outlook: market.outlook, width: width)
-                ExchangeCard(days: days.filter { !$0.slots.isEmpty }, selectedKey: $selectedKey)
+                ExchangeCard(days: days.filter { !$0.slots.isEmpty }, box: boxPrices, now: currentPoint, tariffState: tariffState, selectedKey: $selectedKey)
                 if let o = market.outlook, days.contains(where: { !$0.isFixed }) {
                     ForecastCard(days: days.filter { !$0.isFixed }, hours: o.hours, selectedKey: $selectedKey, wide: Layout.isWide(width))
                 }
@@ -47,7 +50,7 @@ struct MarketView: View {
             } else if let err = market.outlookError, market.outlook == nil {
                 NoticeBanner(text: "Prognose nicht verfügbar: \(err)", icon: "wifi.slash")
             }
-            Text("Börsenpreise (Day-Ahead DE-LU) und Prognose: dvhub.online\(market.pricesAt.map { " · Stand \(Format.dateTime($0))" } ?? ""). Ohne Netzentgelte, Steuern und Abgaben; Prognose ohne Gewähr.")
+            Text("Börsenpreise (Day-Ahead DE-LU) und Prognose: dvhub.online\(market.pricesAt.map { " · Stand \(Format.dateTime($0))" } ?? ""). Einspeisung zum Börsenpreis, wie DVhub die Erlöse rechnet – ohne Marktprämie. Bezug: dein Tarif aus DVhub mit Netzentgelten, Abgaben und Steuern. Prognose ohne Gewähr.")
                 .font(.caption2)
                 .foregroundStyle(Brand.dim)
         }
@@ -82,13 +85,21 @@ struct MarketView: View {
     }
 
     private var currentPoint: PricePoint? { market.currentPrice ?? PriceSeries.current(boxPrices) }
-    private var currentImportCt: Double? { PriceSeries.current(boxPrices)?.importCtKwh }
+
+    /// Warum (noch) kein Bezugstarif im Diagramm steht — nil, wenn er da ist.
+    private var tariffState: String? {
+        if boxPrices.contains(where: { $0.importCtKwh != nil }) { return nil }
+        guard let controller else { return String(localized: "Den Bezugstarif zeigt das Diagramm, sobald eine Anlage gekoppelt ist.") }
+        if !controller.isOnline { return String(localized: "Der Bezugstarif kommt von der Anlage – sie ist gerade nicht verbunden.") }
+        return boxLoaded ? String(localized: "In DVhub ist kein Bezugstarif eingerichtet (Einstellungen → Strompreise).") : nil
+    }
 
     /// Eigener Bezugspreis je Viertelstunde aus der Box (Tarif aus DVhub).
     private func loadBoxPrices() async {
         guard let controller, controller.isOnline else { return }
         guard let r = try? await controller.request("GET", "/api/status"), r.status == 200 else { return }
         boxPrices = PriceSeries.from(status: r.body)
+        boxLoaded = true
     }
 }
 
@@ -216,108 +227,6 @@ func CtAxis() -> some AxisContent {
                     .foregroundStyle(Brand.dim)
             }
         }
-    }
-}
-
-// MARK: - Jetzt
-
-private struct NowPriceCard: View {
-    let point: PricePoint?
-    let today: MarketDay?
-    let importCt: Double?
-
-    var body: some View {
-        GlassCard(tint: tint) {
-            VStack(alignment: .leading, spacing: 10) {
-                // Jede Zeile steht nebeneinander, wenn der Platz reicht — sonst
-                // (große Schrift) untereinander statt abgeschnitten.
-                ViewThatFits(in: .horizontal) {
-                    HStack { eyebrow; Spacer(); pill }
-                    VStack(alignment: .leading, spacing: 6) { eyebrow; pill }
-                }
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) { price; Spacer(); myImport(.trailing) }
-                    VStack(alignment: .leading, spacing: 6) { HStack(alignment: .firstTextBaseline, spacing: 6) { price }; myImport(.leading) }
-                }
-                if let s = stats, let p = point {
-                    DayPositionBar(min: s.min.ctKwh, max: s.max.ctKwh, average: s.average, value: p.ctKwh, tint: tint)
-                    let low = Text("Tief \(MarketStyle.ct1(s.min.ctKwh)) · \(MarketStyle.hour(s.min.start))")
-                    let mean = Text("⌀ \(MarketStyle.ct1(s.average))")
-                    let high = Text("Hoch \(MarketStyle.ct1(s.max.ctKwh)) · \(MarketStyle.hour(s.max.start))")
-                    ViewThatFits(in: .horizontal) {
-                        HStack { low; Spacer(); mean; Spacer(); high }
-                        VStack(alignment: .leading, spacing: 2) { low; mean; high }
-                    }
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(Brand.text2)
-                    .lineLimit(1)
-                } else if point == nil {
-                    Text("Noch keine Preise geladen.").font(.footnote).foregroundStyle(Brand.text2)
-                }
-            }
-        }
-    }
-
-    private var eyebrow: some View { Eyebrow(text: "Börse jetzt", icon: "chart.bar.fill", tint: tint) }
-
-    @ViewBuilder private var pill: some View {
-        if let level { Pill(text: level.0, tint: level.1) }
-    }
-
-    @ViewBuilder private var price: some View {
-        MetricValue(value: MarketStyle.ct1(point?.ctKwh), style: .largeTitle, id: "marketNowPrice")
-        Text("ct/kWh").font(.subheadline).foregroundStyle(Brand.text2).fixedSize()
-    }
-
-    @ViewBuilder private func myImport(_ alignment: HorizontalAlignment) -> some View {
-        if let importCt {
-            VStack(alignment: alignment, spacing: 0) {
-                Text("Mein Bezug").font(.caption2).foregroundStyle(Brand.dim)
-                Text(Format.ct(importCt)).font(.system(.headline, design: .rounded)).monospacedDigit().foregroundStyle(Brand.text)
-            }
-            .fixedSize()
-            .accessibilityElement(children: .combine)
-        }
-    }
-
-    /// Tief, Mittel, Hoch und die Lage im Tag nur aus echten Börsenpreisen: Die
-    /// Ersatz-Stunden aus der Prognose sind lückenhaft und gäben andere Werte als die Tageskarte.
-    private var stats: PriceStats? { today.flatMap { $0.slotsAreFallback ? nil : PriceSeries.stats($0.slots) } }
-    private var tint: Color { (point?.ctKwh ?? 0) < 0 ? Brand.red : Brand.blue }
-
-    /// Lage im Tagesverlauf: unteres/oberes Drittel der heutigen Spanne.
-    private var level: (String, Color)? {
-        guard let s = stats, let p = point, s.max.ctKwh > s.min.ctKwh else { return nil }
-        if p.ctKwh < 0 { return (String(localized: "negativ"), Brand.red) }
-        let pos = (p.ctKwh - s.min.ctKwh) / (s.max.ctKwh - s.min.ctKwh)
-        if pos < 1 / 3 { return (String(localized: "heute günstig"), Brand.green) }
-        if pos > 2 / 3 { return (String(localized: "heute teuer"), Brand.orange) }
-        return (String(localized: "heute mittel"), Brand.cyan)
-    }
-}
-
-/// Wo liegt der aktuelle Preis zwischen Tagestief und Tageshoch?
-private struct DayPositionBar: View {
-    let min: Double, max: Double, average: Double, value: Double
-    let tint: Color
-
-    var body: some View {
-        GeometryReader { g in
-            let span = Swift.max(0.0001, max - min)
-            let x = { (v: Double) in CGFloat(Swift.min(1, Swift.max(0, (v - min) / span))) * g.size.width }
-            ZStack(alignment: .leading) {
-                Capsule().fill(LinearGradient(colors: [Brand.green.opacity(0.5), Brand.cyan.opacity(0.5), Brand.orange.opacity(0.6)], startPoint: .leading, endPoint: .trailing))
-                    .frame(height: 6)
-                Rectangle().fill(Brand.text2).frame(width: 1.5, height: 12).offset(x: x(average))
-                Circle().fill(Brand.now).frame(width: 14, height: 14)
-                    .overlay(Circle().strokeBorder(Brand.bg0, lineWidth: 2))
-                    .shadow(color: Brand.now.opacity(0.7), radius: 6)
-                    .offset(x: x(value) - 7)
-            }
-            .frame(height: 14)
-        }
-        .frame(height: 14)
-        .accessibilityHidden(true)
     }
 }
 
@@ -527,11 +436,17 @@ private struct DaySpark: View {
     }
 }
 
-// MARK: - Börsenpreise (heute / morgen)
+// MARK: - Einspeisung und Bezug (heute / morgen)
 
-/// Feste Viertelstunden-Preise eines Börsentags, zum Ablesen und Auswerten.
+/// Feste Viertelstunden eines Börsentags: Balken = Einspeisung (Börsenpreis),
+/// Linie = eigener Bezugstarif. Zum Ablesen und Auswerten.
 private struct ExchangeCard: View {
     let days: [MarketDay]
+    /// Preise der Box mit dem eigenen Bezugstarif je Slot.
+    let box: [PricePoint]
+    let now: PricePoint?
+    /// Hinweis, warum kein Bezugstarif da ist (nil = vorhanden oder noch unklar).
+    let tariffState: String?
     @Binding var selectedKey: String
     @State private var shownKey: String?
     @State private var selection: Date?
@@ -541,23 +456,17 @@ private struct ExchangeCard: View {
     var body: some View {
         GlassCard(tint: Brand.blue) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Eyebrow(text: "Börsenpreis · Day-Ahead", icon: "chart.bar.fill", tint: Brand.blue)
-                    Spacer()
-                    if days.count > 1 {
-                        Picker("Tag", selection: Binding(get: { day?.key ?? "" }, set: { shownKey = $0; selectedKey = $0 })) {
-                            ForEach(days) { Text(MarketStyle.weekday($0.date)).tag($0.key) }
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(maxWidth: 190)
-                    } else if let d = day {
-                        Text("\(MarketStyle.weekday(d.date)) \(MarketStyle.dayMonth(d.date))").font(.caption.monospacedDigit()).foregroundStyle(Brand.text2)
-                    }
+                ViewThatFits(in: .horizontal) {
+                    HStack { title; Spacer(); dayPicker }
+                    VStack(alignment: .leading, spacing: 8) { title; dayPicker }
                 }
                 if let d = day {
-                    readout(d)
-                    chart(d).frame(height: 220)
-                    stats(d)
+                    let points = Tariff.points(market: d.slots, box: box)
+                    nowLine(points)
+                    readout(d, points)
+                    chart(d, points).frame(height: 220)
+                    legend(points)
+                    stats(d, points)
                 } else {
                     Text("Noch keine Börsenpreise geladen.").font(.footnote).foregroundStyle(Brand.text2)
                 }
@@ -569,38 +478,96 @@ private struct ExchangeCard: View {
         }
     }
 
-    private func selected(_ d: MarketDay) -> PricePoint? {
-        if let selection { return d.slots.first { $0.contains(selection) } }
-        return PriceSeries.current(d.slots)
+    private var title: some View { Eyebrow(text: "Einspeisung und Bezug", icon: "arrow.up.arrow.down", tint: Brand.blue) }
+
+    @ViewBuilder private var dayPicker: some View {
+        if days.count > 1 {
+            Picker("Tag", selection: Binding(get: { day?.key ?? "" }, set: { shownKey = $0; selectedKey = $0 })) {
+                ForEach(days) { Text(MarketStyle.weekday($0.date)).tag($0.key) }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 190)
+        } else if let d = day {
+            Text("\(MarketStyle.weekday(d.date)) \(MarketStyle.dayMonth(d.date))").font(.caption.monospacedDigit()).foregroundStyle(Brand.text2)
+        }
     }
 
-    private func readout(_ d: MarketDay) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            if let p = selected(d) {
-                Text(MarketStyle.range(p.start, p.end)).foregroundStyle(Brand.text2)
-                Spacer()
-                Text(Format.ct(p.ctKwh)).font(.system(.title3, design: .rounded).weight(.bold)).foregroundStyle(p.ctKwh < 0 ? Brand.red : Brand.text)
+    /// Was gerade gilt — bewusst klein: Der Verlauf darunter sagt mehr als die eine Zahl.
+    @ViewBuilder
+    private func nowLine(_ points: [TariffPoint]) -> some View {
+        if let now {
+            let importNow = (PriceSeries.current(box)?.importCtKwh) ?? points.first { $0.contains(Date()) }?.importCt
+            HStack(spacing: 4) {
+                Text("Gerade gilt:")
+                Text(verbatim: MarketStyle.ct1(now.ctKwh)).accessibilityIdentifier("marketNowPrice")
+                Text(importNow.map { String(localized: "ct Einspeisung · \(MarketStyle.ct1($0)) ct Bezug") } ?? String(localized: "ct/kWh an der Börse"))
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(Brand.text2)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func selected(_ points: [TariffPoint]) -> TariffPoint? {
+        if let selection { return points.first { $0.contains(selection) } }
+        return points.first { $0.contains(Date()) }
+    }
+
+    private func readout(_ d: MarketDay, _ points: [TariffPoint]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let p = selected(points) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(MarketStyle.range(p.start, p.end)).foregroundStyle(Brand.text2)
+                    Spacer()
+                    if let spread = p.spreadCt {
+                        Text("Spanne \(Format.ct(spread))").font(.system(.headline, design: .rounded).weight(.bold)).foregroundStyle(Brand.text)
+                    } else {
+                        Text(Format.ct(p.exportCt)).font(.system(.headline, design: .rounded).weight(.bold)).foregroundStyle(p.exportCt < 0 ? Brand.red : Brand.text)
+                    }
+                }
+                if let imp = p.importCt {
+                    HStack {
+                        Label("Einspeisung \(Format.ct(p.exportCt))", systemImage: "arrow.up.right").foregroundStyle(p.exportCt < 0 ? Brand.red : Brand.priceUp)
+                        Spacer(minLength: 8)
+                        Label("Bezug \(Format.ct(imp))", systemImage: "arrow.down.right").foregroundStyle(Brand.orange)
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                }
             } else {
                 Text((d.slotSeconds ?? 900) >= 3600 ? String(localized: "Halten und ziehen zeigt die Stunde.") : String(localized: "Halten und ziehen zeigt die Viertelstunde."))
                     .foregroundStyle(Brand.dim)
-                Spacer()
             }
         }
         .font(.subheadline.monospacedDigit())
-        .frame(minHeight: 26)
+        .frame(minHeight: 44, alignment: .top)
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("tariffReadout")
     }
 
-    private func chart(_ d: MarketDay) -> some View {
+    private func chart(_ d: MarketDay, _ points: [TariffPoint]) -> some View {
         let now = Date()
+        // Treppe: je Slot ein Punkt am Beginn, am Ende des letzten noch einer.
+        let importSteps: [(Date, Double)] = points.compactMap { p in p.importCt.map { (p.start, $0) } }
+            + (points.last.flatMap { p in p.importCt.map { [(p.end, $0)] } } ?? [])
         return Chart {
-            ForEach(d.slots) { p in
-                RectangleMark(xStart: .value("Beginn", p.start), xEnd: .value("Ende", p.end), yStart: .value("Null", 0.0), yEnd: .value("ct/kWh", p.ctKwh))
+            ForEach(points) { p in
+                RectangleMark(xStart: .value("Beginn", p.start), xEnd: .value("Ende", p.end), yStart: .value("Null", 0.0), yEnd: .value("ct/kWh", p.exportCt))
                     .foregroundStyle(barStyle(p, now: now))
                     .accessibilityLabel(MarketStyle.range(p.start, p.end))
-                    .accessibilityValue(Format.ct(p.ctKwh))
+                    .accessibilityValue(p.importCt.map { String(localized: "Einspeisung \(Format.ct(p.exportCt)), Bezug \(Format.ct($0))") } ?? Format.ct(p.exportCt))
             }
-            if d.slots.contains(where: { $0.contains(now) }) {
+            ForEach(Array(importSteps.enumerated()), id: \.offset) { _, step in
+                LineMark(x: .value("Zeit", step.0), y: .value("Bezug", step.1), series: .value("Reihe", "Bezug"))
+                    .interpolationMethod(.stepEnd)
+                    .foregroundStyle(Brand.orange)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    .accessibilityHidden(true)
+            }
+            if points.contains(where: { $0.contains(now) }) {
                 RuleMark(x: .value("Jetzt", now))
                     .foregroundStyle(Brand.now)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
@@ -614,20 +581,40 @@ private struct ExchangeCard: View {
         .chartXScale(domain: d.date...MarketTime.dayEnd(d.date))
         .chartXAxis { MarketHourAxis(everyHours: 3) }
         .chartYAxis { CtAxis() }
-        .accessibilityLabel((d.slotSeconds ?? 900) >= 3600 ? Text("Börsenpreise je Stunde") : Text("Börsenpreise je Viertelstunde"))
+        .accessibilityLabel(importSteps.isEmpty ? Text("Börsenpreise im Tagesverlauf") : Text("Einspeisung und Bezug im Tagesverlauf"))
         .accessibilityChartDescriptor(TimeSeriesDescriptor(
-            title: String(localized: "Börsenpreise \(MarketStyle.longDay(d.date))"),
-            summary: ChartSummary.lowHigh(d.slots.map { ($0.start, $0.ctKwh) }, format: Format.ct),
+            title: String(localized: "Einspeisung und Bezug \(MarketStyle.longDay(d.date))"),
+            summary: ChartSummary.lowHigh(points.map { ($0.start, $0.exportCt) }, format: Format.ct),
             yTitle: String(localized: "Cent je Kilowattstunde"),
-            series: [.init(name: String(localized: "Börsenpreis"), points: d.slots.map { ($0.start, $0.ctKwh) })],
+            series: [.init(name: String(localized: "Einspeisung"), points: points.map { ($0.start, $0.exportCt) })]
+                + (importSteps.isEmpty ? [] : [.init(name: String(localized: "Bezug"), points: points.compactMap { p in p.importCt.map { (p.start, $0) } })]),
             format: Format.ct))
         .accessibilityIdentifier("priceChart")
     }
 
-    private func barStyle(_ p: PricePoint, now: Date) -> Color {
-        let base = p.ctKwh < 0 ? Brand.priceDown : Brand.priceUp
+    private func barStyle(_ p: TariffPoint, now: Date) -> Color {
+        let base = p.exportCt < 0 ? Brand.priceDown : Brand.priceUp
         if p.contains(now) { return Brand.now }
         return p.end <= now ? base.opacity(0.4) : base
+    }
+
+    @ViewBuilder
+    private func legend(_ points: [TariffPoint]) -> some View {
+        let hasImport = points.contains { $0.importCt != nil }
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                HStack(spacing: 5) { RoundedRectangle(cornerRadius: 2).fill(Brand.priceUp).frame(width: 10, height: 10); Text("Einspeisung (Börsenpreis)") }
+                if hasImport {
+                    HStack(spacing: 5) { Capsule().fill(Brand.orange).frame(width: 14, height: 3); Text("Bezug (dein Tarif, brutto)") }
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            if !hasImport, let tariffState { Text(tariffState).foregroundStyle(Brand.dim) }
+        }
+        .font(.caption2)
+        .foregroundStyle(Brand.text2)
+        .accessibilityIdentifier("tariffLegend")
     }
 
     /// Einstufung des Börsentags: Tagesmittel gegen den üblichen Bereich der letzten vier Wochen.
@@ -638,7 +625,17 @@ private struct ExchangeCard: View {
     }
 
     @ViewBuilder
-    private func stats(_ d: MarketDay) -> some View {
+    private func stats(_ d: MarketDay, _ points: [TariffPoint]) -> some View {
+        if let t = Tariff.stats(points) {
+            RowStack {
+                ValueRow(label: "Einspeisung im Mittel", value: Format.ct(t.meanExportCt), tint: Brand.priceUp)
+                ValueRow(label: "Bezug im Mittel", value: Format.ct(t.meanImportCt), tint: Brand.orange)
+                ValueRow(label: "Spanne im Mittel", value: Format.ct(t.meanSpreadCt),
+                         hint: String(localized: "kleinste \(MarketStyle.ct1(t.minSpread.spreadCt)) ct um \(MarketStyle.hour(t.minSpread.start)) · größte \(MarketStyle.ct1(t.maxSpread.spreadCt)) ct um \(MarketStyle.hour(t.maxSpread.start))"))
+            }
+            .accessibilityIdentifier("tariffStats")
+            Text("Börsenpreise im Einzelnen").font(.caption.weight(.bold)).foregroundStyle(Brand.text).padding(.top, 2)
+        }
         if d.slotsAreFallback {
             // Ersatz-Stunden aus der Prognose-Antwort: Tageswerte des Servers zeigen,
             // nicht aus (womöglich lückenhaften) Stunden neu rechnen.

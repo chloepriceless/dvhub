@@ -61,6 +61,36 @@
         }
       }
     },
+    "Beginn und Ende dürfen nicht gleich sein." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start and end must not be the same."
+          }
+        }
+      }
+    },
+    "Bitte Beginn und Ende als Uhrzeit angeben." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Please enter start and end as times."
+          }
+        }
+      }
+    },
+    "Dafür braucht DVhub eine Pro-Lizenz." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This needs a Pro licence in DVhub."
+          }
+        }
+      }
+    },
     "Das Relay hat die Verbindung begrenzt. Gleich erneut." : {
       "localizations" : {
         "en" : {
@@ -87,6 +117,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The relay is restarting."
+          }
+        }
+      }
+    },
+    "Der Ladestand muss zwischen 0 und 100 % liegen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The charge level must be between 0 and 100%."
+          }
+        }
+      }
+    },
+    "Der Wert liegt außerhalb des erlaubten Bereichs (höchstens %lld)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The value is outside the allowed range (at most %lld)."
+          }
+        }
+      }
+    },
+    "Der Zeitplan hat sich inzwischen geändert. Bitte neu laden und noch einmal versuchen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The schedule has changed in the meantime. Please reload and try again."
           }
         }
       }
@@ -121,6 +181,16 @@
         }
       }
     },
+    "Die Anlage nimmt die Eingabe nicht an: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The system does not accept the input: %@."
+          }
+        }
+      }
+    },
     "Die Box hat sich nicht korrekt ausgewiesen" : {
       "localizations" : {
         "en" : {
@@ -141,12 +211,42 @@
         }
       }
     },
+    "Diese Art von Regel lässt sich in der App nicht anlegen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This kind of rule cannot be created in the app."
+          }
+        }
+      }
+    },
+    "Diese Regel verwaltet DVhub selbst. In der App lässt sie sich nur ein- und ausschalten." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DVhub manages this rule itself. In the app it can only be switched on and off."
+          }
+        }
+      }
+    },
     "Dieser QR-Code ist schon verbraucht oder abgelaufen. Bitte in DVhub einen neuen erzeugen." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "This QR code has already been used or has expired. Please create a new one in DVhub."
+          }
+        }
+      }
+    },
+    "Dieses Gerät darf das nicht. Die Freigabe „Steuern“ vergibst du in DVhub unter „Handy-App“." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device is not allowed to do that. You grant “Control” in DVhub under “Mobile app”."
           }
         }
       }
@@ -217,6 +317,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Too many requests right now. Please try again in a moment."
+          }
+        }
+      }
+    },
+    "Gespeichert." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved."
           }
         }
       }

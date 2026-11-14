@@ -2,9 +2,9 @@
 
 Native App (SwiftUI, iOS 18+, Deutsch und Englisch) für die Handy-Kopplung mit DVhub: Leitstand mit
 Energiefluss, Detailwerte, Börsenpreise und Residuallast-Frühwarnung, Historie,
-Fahrplan, Zustand der Anbindungen, Nachrichten, Widgets, Kurzbefehle/Siri, ein Knopf
+Fahrplan, E-Auto, Zustand der Anbindungen, Nachrichten, Widgets, Kurzbefehle/Siri, ein Knopf
 im Kontrollzentrum und eine Live-Aktivität. Mit Freigabe
-„Steuern“ kann sie auch den Not-Halt auslösen. Anlagendaten laufen Ende zu
+„Steuern“ bedient sie die Anlage: Zeitplan, Börsenautomatik, E-Auto-Planung und Not-Halt. Anlagendaten laufen Ende zu
 Ende verschlüsselt: im Heimnetz direkt zur Box, unterwegs über das Relay
 (`relay.dvhub.de` oder ein selbst gehostetes). Das Protokoll steht in
 [`docs/HANDY-APP-PROTOKOLL.md`](../docs/HANDY-APP-PROTOKOLL.md). Öffentliche
@@ -89,18 +89,21 @@ Face ID oder dem Gerätecode.
 Fünf Reiter (auf breiter Fläche – iPhone Duo aufgeklappt, iPad – stattdessen
 eine Seitenleiste mit allen Bereichen, siehe unten):
 
-- **Leitstand:** Energiefluss mit Partikelstrom nach dem Vorbild des
-  Web-Leitstands (`dvhub/public/dvhub-powerflow.js`): viele kleine Leuchtpunkte
-  mit Schweif und Lichtschein in der Farbe ihrer Quelle (PV gelb, Akku grün,
-  Netz blau – zum Haus gemischt nach Anteilen); Richtung, Dichte und Tempo
-  folgen der Leistung; mit „Bewegung reduzieren“ stehen Pfeile. Die Symbole
-  stehen nur im Energiefluss, die Karten darunter tragen Farbe und Namen.
-  Antippbare Karten mit Tagesverlauf: PV, Akku, Netz, Haus, Heute
-  (Erlöse/Kosten), Börse, Zustand, Meldungen aus dem Briefkasten. Jede Karte und
-  jeder Knoten öffnet Detailwerte (Phasen, Flüsse, Min-SoC, Sollwert, Zähler,
-  Tagessummen). Ist die Anlage nicht erreichbar, zeigt die App den letzten Stand
+- **Leitstand:** Jede Angabe steht einmal. Der Energiefluss zeigt, was
+  **jetzt** fließt: Leistung an jedem Knoten, angeordnet wie im Web-Leitstand
+  (PV oben, Haus links, Netz rechts, Akku unten; Netz mit Vorzeichen wie dort:
+  + Bezug, − Einspeisung, gerechnet als Bezug minus Einspeisung). Partikelstrom
+  nach dem Vorbild von `dvhub/public/dvhub-powerflow.js`: Leuchtpunkte mit
+  Schweif in der Farbe ihrer Quelle; Richtung, Dichte und Tempo folgen der
+  Leistung; mit „Bewegung reduzieren“ stehen Pfeile. Die Karten darunter zeigen,
+  was **heute** zusammenkam – erzeugt, verbraucht, Akku geladen/entladen,
+  eingespeist/bezogen, je mit Spitze und Tagesverlauf (aus den 5-Minuten-Werten
+  der Box, `DayEnergy` im Paket) – also keine zweite Anzeige der Momentanwerte.
+  Dazu Erlös und Kosten, die Preis-Karte (Tagesverlauf und Ausblick; was gerade
+  gilt, steht klein), Zustand und Meldungen. Jede Karte und jeder Knoten öffnet
+  Detailwerte. Ist die Anlage nicht erreichbar, zeigt die App den letzten Stand
   aus dem Briefkasten mit Uhrzeit.
-- **Markt:** Börsenpreis jetzt; die nächsten Tage als Karten (Datum,
+- **Markt:** die nächsten Tage als Karten (Datum,
   Tagesmittel, Spanne, Ampel und die Lage des Tagesmittels zwischen den
   Schwellen P20 und P80 der letzten vier Wochen). Prognosetage tragen die
   Einstufung der Schnittstelle. Heute und morgen stuft die Schnittstelle nicht
@@ -111,8 +114,13 @@ eine Seitenleiste mit allen Bereichen, siehe unten):
   einem normalen Tag nahe einer Schwelle glimmt in der Ampel das Nachbarlicht
   mit. Die Lage ist eine Darstellung, keine zweite Einstufung. Darunter zwei
   getrennte Diagramme:
-  die Börsenpreise von heute bzw. morgen in Viertelstunden (Tief, Mittel, Hoch,
-  günstigste und teuerste drei Stunden) und die Preisprognose der Folgetage
+  **Einspeisung und Bezug** von heute bzw. morgen in einem Bild – Balken: was
+  die Einspeisung bringt (Börsenpreis je Viertelstunde, so rechnet DVhub die
+  Erlöse, ohne Marktprämie); Linie: was der Bezug kostet (eigener Tarif brutto
+  aus der Box, `/api/status` → `userEnergyPricing.slots`); der Abstand ist die
+  Spanne, mit Mittelwerten, kleinster und größter Spanne. Was gerade gilt,
+  steht klein darüber. Ohne gekoppelte Anlage oder ohne Tarif in DVhub bleiben
+  die Balken, mit Hinweis. Dazu die Preisprognose der Folgetage
   mit Band. Quelle: `dvhub.online` (`/api/prices`, `/v1/residual-load/outlook`).
   Methodik, Bilanz und Vergleichsverfahren zeigt die App bewusst nicht.
 - **Historie:** Tag, Woche, Monat, Jahr aus `/api/history/summary?lean=1`
@@ -123,14 +131,58 @@ eine Seitenleiste mit allen Bereichen, siehe unten):
   neben der Seitenleiste, Lesespalte höchstens 620 pt); „Ganzen Artikel lesen“
   öffnet die Website der Redaktion im eingebauten Browser (ohne erzwungenen
   Lesemodus).
-- **Mehr:** Fahrplan (EOS-Plan aus `/api/eos/plan`, Zeitplan aus
-  `/api/schedule`), Integrationen (Zustand und Datenfluss), System
-  (Einstellungen zum Nachsehen), Steuern (Not-Halt, nur mit Freigabe
-  „Steuern“), Anlagen, Darstellung, Über.
+- **Mehr:**
+  - **Fahrplan:** EOS-Plan (`/api/eos/plan`, lesend) und der Zeitplan der
+    Steuerung zum Bedienen: Regeln von Hand anlegen, ändern, löschen (Netz-Sollwert
+    mit Richtung „Einspeisen/Beziehen“ und optionalem Stopp bei einem Akku-Stand,
+    Ladestrom), jede Regel – auch die vom Optimierer – einzeln aus- und
+    einschalten, Grundwerte, Börsenautomatik (an/aus, Suchfenster, Reserve,
+    Entladeleistung) und „Neu planen“.
+  - **E-Auto:** Zustand, nächste Abfahrt, was EOS bis dahin lädt; Planung
+    (EOS plant mit, nur wenn angesteckt, Abfahrten planen, Mindest-Ladestand,
+    „weiter laden, wenn günstig“ bis zu einem Höchststand), Einmal-Ziel und
+    Wochenplan (Abfahrtszeit und Ziel je Tag).
+  - **Integrationen:** Zustand und Datenfluss, dazu „Eingerichtet“: was in DVhub
+    eingerichtet ist – ohne Adressen und Zugangsdaten (siehe unten).
+  - System (Einstellungen zum Nachsehen), Steuern (Not-Halt), Anlagen,
+    Darstellung, Über.
 
-Die App liest nur. Geschaltet wird allein der Not-Halt. Die Konfiguration
-(`/api/config`) und `/api/integrations/status` sind für die App nicht
-freigegeben, weil sie Adressen, Kennungen und Standortdaten enthalten.
+### Was die App ändern darf
+
+Nur mit der Freigabe „Anzeigen und steuern“ (in DVhub unter „Handy-App“), und
+jede Änderung bestätigt man am Gerät mit Touch ID, Face ID oder Gerätecode
+(`SystemController.confirmed`, `Views/Control/WriteSupport.swift`). Die Box
+prüft das Recht selbst und trägt jede Schaltung mit der Kennung des Handys ins
+Protokoll ein.
+
+| Was | Endpunkt |
+|---|---|
+| Not-Halt auslösen/aufheben | `POST /api/control/stop`, `/resume` |
+| Regeln von Hand anlegen, ändern, löschen | `POST /api/schedule/rules` |
+| Regel aus-/einschalten | `POST /api/schedule/rules/toggle` |
+| Grundwerte | `POST /api/schedule/config` |
+| Börsenautomatik, Neu planen | `POST /api/schedule/automation/config`, `/replan` |
+| E-Auto-Planung, Einmal-Ziel, Wochenplan | `POST /api/ev` |
+
+`POST /api/schedule/rules` ersetzt **alle** Regeln von Hand. Die App liest
+deshalb vor jedem Speichern den Stand frisch, ändert genau eine Regel und
+schickt alle anderen unverändert zurück (auch Felder, die sie nicht kennt);
+steht die Regel auf der Box inzwischen anders, schickt sie nichts
+(`ScheduleEdit.payload` im Paket, getestet). Plan-Regeln (Optimierer,
+Börsenautomatik) verwaltet die Box; die App kann sie nur umschalten. Anlegen
+und ändern kann die App Netz-Sollwert und Ladestrom.
+
+Die Editoren stehen auf der Seite selbst, nicht in Blättern – gleiches
+Verhalten zugeklappt und aufgeklappt.
+
+**Nicht freigegeben** (`dvhub/services/mobile-link/permissions.js`): die
+Konfiguration (`/api/config`), `/api/integrations/status` (nennt Adressen im
+Heimnetz, Benutzernamen, Kennungen) und „Sofort laden“ (`/api/ev/override`) –
+läuft ein Sofortladen, zeigt die App das nur an. Für die Integrationen baut die
+Box eine eigene Sicht per Positivliste, `GET /api/mobile-link/integrations`:
+nur Wahrheitswerte, Zähler, Modell und Firmware. Die Börsenautomatik liest und
+schreibt die App ebenfalls nur über benannte Felder – der Standort der Anlage,
+der in derselben Config steht, bleibt auf der Box.
 
 **Verbindung:** zuerst die Heimnetz-Adressen (2,5 s), dann das Relay. Über das
 Relay prüft die App alle 30 s, ob das Heimnetz wieder erreichbar ist, und
@@ -356,11 +408,18 @@ xcodebuild test -project ios/DVhubApp/DVhubApp.xcodeproj -scheme DVhubApp \
 
 Nur im Debug-Build gibt es Startargumente für Simulator-Tests und Bildschirmfotos:
 `-DVHUB_PAIR '<QR-Text>'` koppelt beim Start,
-`-DVHUB_TAB dashboard|market|history|news|more|plan|integrations|system|control|systems`
+`-DVHUB_TAB dashboard|market|history|news|more|plan|ev|integrations|system|control|systems`
 öffnet einen Bereich, `-DVHUB_OPEN pv|battery|grid|home|money|state` eine
 Detailansicht, `-DVHUB_HISTORY week|month|year` und `-DVHUB_MARKET_DAY <n>`
 wählen Zeitraum bzw. Tag, `-DVHUB_DUO closed|closed-landscape|open` zeigt die
 Flächen des iPhone Duo, `-navPlacement side|bottom` erzwingt die Leistenlage.
+
+`ControlPagesTests` prüft die Bedien-Seiten in der Pose, in der der Simulator steht: Leitstand (Anordnung wie
+im Web-Leitstand, Momentanwerte nur im Energiefluss), Markt (Einspeisung und Bezug in einem Diagramm, aktueller
+Preis klein), Integrationen (nichts auf der Seite sieht nach Adresse aus – der Harness legt Köder in die große
+Übersicht), E-Auto (speichern und zurücklesen) und Zeitplan (Regel anlegen, in der Liste sehen, löschen). Die
+Schreib-Tests brauchen `HARNESS_PERMS=read,control`, eingeschriebene Biometrie und die Freigabe in Schleife
+(iPhone Duo: `com.apple.BiometricKit_Sim.fingerTouch.match`).
 
 Weitere Oberflächentests: `AccessibilityTests` (Schriftgröße accessibility-XL: Karten einspaltig, nichts
 abgeschnitten), `DuoTests` (nur im iPhone-Duo-Simulator, in der Pose, in der er steht: Leisten des Systems bzw.

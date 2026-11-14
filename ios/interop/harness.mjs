@@ -30,6 +30,8 @@ const require = createRequire(path.join(dvhubDir, 'package.json'));
 const { WebSocketServer } = require('ws');
 const { startRelayServer } = await import(path.join(dvhubDir, 'services/mobile-link/relay-server.js'));
 const { createMobileLink } = await import(path.join(dvhubDir, 'services/mobile-link/agent.js'));
+const { mobileIntegrationsView } = await import(path.join(dvhubDir, 'services/mobile-link/integrations-view.js'));
+const { mobileAutomationConfigView, parseMobileAutomationPatch } = await import(path.join(dvhubDir, 'services/mobile-link/automation-view.js'));
 
 const relayPort = Number(process.env.HARNESS_RELAY_PORT) || 18787;
 const lanPort = Number(process.env.HARNESS_LAN_PORT) || 18788;
@@ -173,16 +175,87 @@ function fullStatus() {
   };
 }
 
+// Zeitplan, Börsenautomatik und E-Auto halten ihren Stand: Die App schreibt
+// hinein (POST) und liest ihn danach wieder. Form und Regeln wie routes-api.js.
+const scheduleRules = [
+  { id: 'opt-1-0', enabled: true, target: 'gridSetpointW', start: '11:00', end: '14:00', value: -3000, source: 'forecast_optimizer', slotTs: Date.now() },
+  { id: 'sma-1', enabled: true, target: 'gridSetpointW', start: '18:00', end: '18:15', value: -4000, source: 'small_market_automation' },
+  { id: 'grid_1', enabled: false, target: 'gridSetpointW', start: '00:00', end: '05:00', value: 2000, stopSocPct: 80, _wasActive: false },
+];
+const scheduleConfig = { defaultGridSetpointW: -50, defaultChargeCurrentA: 70, defaultFeedExcessDcPv: 1 };
+// Mit Standort als Köder: Die App bekommt die Config nur durch die echte Sicht für die App.
+const automationConfig = { enabled: false, searchWindowStart: '14:00', searchWindowEnd: '09:00', targetSlotCount: 4, maxDischargeW: -12000, minSocPct: 20,
+  location: { label: 'koeder-ort', latitude: 53.55, longitude: 9.99 }, stages: [{ dischargeW: -9000, dischargeSlots: 2 }] };
+const isAutomationRule = (r) => r.source === 'small_market_automation' || r.source === 'forecast_optimizer' || /^(sma-|opt-)/.test(String(r.id || ''));
 function scheduleState() {
-  const rules = [
-    { id: 'r1', enabled: true, target: 'gridSetpointW', start: '11:00', end: '14:00', value: -3000, source: 'forecast_optimizer' },
-    { id: 'r2', enabled: true, target: 'minSocPct', start: '17:00', end: '21:00', value: 25, source: 'eos' },
-    { id: 'r3', enabled: false, target: 'gridSetpointW', start: '00:00', end: '05:00', value: 2000, source: 'manual' },
-  ];
-  return { config: { defaultGridSetpointW: -50, defaultChargeCurrentA: 70, defaultFeedExcessDcPv: 1 }, rules,
+  return { config: scheduleConfig, rules: scheduleRules,
     active: { gridSetpointW: { value: -50, source: 'default', at: Date.now() - 60_000 }, minSocPct: { value: 10, source: 'default', at: Date.now() - 60_000 } },
     lastWrite: { gridSetpointW: { value: -50, source: 'default', writeType: 'holding', at: Date.now() - 60_000 } },
-    smallMarketAutomation: { lastRunDate: localDate(new Date()), lastOutcome: 'ok', generatedRuleCount: 2 } };
+    smallMarketAutomation: { lastRunDate: localDate(new Date()), lastOutcome: 'ok', generatedRuleCount: scheduleRules.filter((r) => r.source === 'small_market_automation').length } };
+}
+
+const evOpt = { optimizeEv: true, onlyWhenPlugged: true, enabled: true, once: '', onceMinSocPct: null, maxSocPct: 80, minSocPct: 60,
+  weekly: [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, departure: day <= 5 ? '07:00' : '', homeFrom: day <= 5 ? '18:00' : '', homeFromPrevDay: day <= 5, minSocPct: day === 5 ? 90 : null, tripSocPct: day <= 5 ? 25 : null })) };
+function evState() {
+  const next = new Date(dayStart(1).getTime() + 7 * 3600_000);
+  const once = evOpt.once && Date.parse(evOpt.once) > Date.now() ? evOpt.once : '';
+  return { ok: true, optimizeEv: evOpt.optimizeEv, onlyWhenPlugged: evOpt.onlyWhenPlugged, chargerConfigured: true,
+    departure: { enabled: evOpt.enabled, once, onceMinSocPct: once ? evOpt.onceMinSocPct : null, maxSocPct: evOpt.maxSocPct, defaultMinSocPct: evOpt.minSocPct,
+      weeklyDepartures: evOpt.weekly, targetMode: 'percent', targetValue: evOpt.minSocPct,
+      resolved: { enabled: evOpt.enabled || !!once, departureAt: once || (evOpt.enabled ? next.toISOString() : null), source: once ? 'once' : (evOpt.enabled ? 'weekly' : null),
+        targetSocPct: once ? evOpt.onceMinSocPct : evOpt.minSocPct } },
+    vehicle: { title: 'E-Auto', connected: true, charging: false, chargePowerW: 0, socPct: 64, rangeKm: 268, plugged: true },
+    plan: evOpt.optimizeEv ? { hasEv: true, energyKwh: 12.4, socAtDeparture: Math.max(64, evOpt.minSocPct) } : null, planError: null, override: null, lastCommandError: null };
+}
+// POST /api/ev: nur die Felder im Körper, mit denselben Grenzen wie die Box (ev-departure.js).
+function evPatch(body) {
+  const bad = (error) => ({ status: 400, body: { ok: false, error } });
+  let changed = 0;
+  if ('optimizeEv' in body) { evOpt.optimizeEv = body.optimizeEv === true; changed++; }
+  if ('onlyWhenPlugged' in body) { evOpt.onlyWhenPlugged = body.onlyWhenPlugged === true; changed++; }
+  const d = body.departure;
+  if (d != null) {
+    if (typeof d !== 'object') return bad('departure must be an object');
+    if ('enabled' in d) { evOpt.enabled = d.enabled === true; changed++; }
+    if ('targetValue' in d) { const v = Number(d.targetValue); if (!Number.isFinite(v) || v < 0 || v > 2000) return bad('departure.targetValue must be 0..2000'); evOpt.minSocPct = v; changed++; }
+    if ('maxSocPct' in d) { const v = d.maxSocPct; if (v !== null && (!(Number(v) >= 10) || Number(v) > 100)) return bad('departure.maxSocPct must be 10..100 or empty'); evOpt.maxSocPct = v === null ? null : Math.round(Number(v)); changed++; }
+    if ('once' in d) {
+      if (d.once !== '' && !Number.isFinite(Date.parse(d.once))) return bad('departure.once must be an ISO date time or empty');
+      if (d.once !== '' && Date.parse(d.once) - 30 * 60_000 <= Date.now()) return bad('departure.once must be more than 30 min in the future');
+      evOpt.once = d.once; changed++;
+    }
+    if ('onceMinSocPct' in d) { const v = d.onceMinSocPct; if (v !== null && !(Number(v) >= 0 && Number(v) <= 100)) return bad('departure.onceMinSocPct must be 0..100 or empty'); evOpt.onceMinSocPct = v === null ? null : Number(v); changed++; }
+    if ('weeklyDepartures' in d) {
+      if (!Array.isArray(d.weeklyDepartures) || d.weeklyDepartures.some((e) => !e || !(e.day >= 1 && e.day <= 7) || (e.departure && !/^\d{2}:\d{2}$/.test(e.departure)) || (e.homeFrom && !e.departure))) return bad('departure.weeklyDepartures invalid');
+      evOpt.weekly = d.weeklyDepartures; changed++;
+    }
+  }
+  if (!changed) return bad('nothing to change');
+  return { status: 200, body: { ok: true } };
+}
+
+// Die große Übersicht der Weboberfläche — mit Adressen und Kennungen als Köder.
+// Die App bekommt sie nur durch die echte Sicht für die App (mobileIntegrationsView).
+function integrationsStatus() {
+  return {
+    timestamp: Date.now(),
+    mqtt: { enabled: true, connected: true, broker: 'mqtt://10.11.12.13:1883', embedded: false, topicCount: 148, config: { username: 'koeder-user', passwordSet: true, brokerUrl: 'mqtt://10.11.12.13:1883' } },
+    tesla: { enabled: true, state: { battery_level: 64, latitude: 53.55, longitude: 9.99 }, lastUpdate: Date.now() - 90_000, config: { name: 'Model Y' } },
+    homeAssistant: { haDiscovery: true, topicsPublished: 148 },
+    victron: { host: '10.11.12.14', modelId: 'MultiPlus-II 48/5000', firmware: 'v3.60' },
+    mid: { serial: 'KOEDER-4711', host: '10.11.12.15', port: 502, configured: true, firmware: '1.4' },
+    dveos: { enabled: true, primarySource: 'eos', active: true, url: 'http://10.11.12.16:8503' },
+    luox: { identifier: null, firmware: null }, loxone: { configured: false },
+    devices: { total: 2, online: 2, list: [{ id: 'd1', host: '10.11.12.17' }] },
+    notifications: { enabled: true, providers: [{ name: 'ntfy', enabled: true }, { name: 'telegram', enabled: false }] },
+    vrm: { enabled: true, vrmPortalId: 'koederportal', vrmTokenSet: true },
+    'forecast-providers': { solcast: { enabled: false, apiKeySet: false, siteIdSet: false }, pvnode: { enabled: true, apiKeySet: true, siteIdSet: true, nowcastEnabled: true } },
+    evcc: { url: 'http://10.11.12.18:7070', reachable: true, loadpointCount: 1, wallboxType: 'evcc', lastError: null, charger: null },
+    p14a: { available: true, active: false, source: null, limitW: null, pminW: 4200, n: 1, devices: 1, relayEnabled: false },
+    eebus: { enabled: false, status: 'disabled', statusLabel: 'aus', gridPeer: false, gridConnected: false, gridStateLabel: null, devices: 0 },
+    schedulable: { total: 2, deferrable: 1, modulating: 1, eosActive: true },
+    pvstrings: { enabled: true, sourceCount: 3, groupCount: 1, lastSyncAt: Date.now() - 600_000, lastError: null, backfillRunning: false },
+  };
 }
 
 // Eine Viertelstunde der nachgebildeten Anlage (kWh und €).
@@ -306,7 +379,7 @@ const READ = {
         dvSignal: { value: 1, forcedOff: false }, gridLimit: null,
         lastWrites: [{ key: 'gridSetpointW', value: -50, writeType: 'holding', source: 'default', at: Date.now() - 60_000 }], channels: [] } };
   },
-  '/api/eos/status': () => ({ ok: true, status: 'up', version: '0.4.0', enabled: true, reachable: true, lastOkAt: new Date(Date.now() - 20_000).toISOString(),
+  '/api/eos/status': () => ({ ok: true, status: 'up', version: '0.3.0.dev2611101200', dvhubEos: { build: '0.3.0.dev2611101200-dvhub.2', nativeCore: '0.2.0', label: 'DVhub-EOS 0.3.0.dev2611101200-dvhub.2 · Rust-Kern 0.2.0' }, enabled: true, reachable: true, lastOkAt: new Date(Date.now() - 20_000).toISOString(),
     solutionAt: new Date(Date.now() - 1500_000).toISOString(), restarts: 0, push: { active: true, count: 12 } }),
   '/api/vpn/status': () => ({ enabled: true, status: 'connected', protocol: 'openvpn', uptimeSeconds: 93600, reconnectAttempts: 0, certDaysRemaining: 212, watchdogOk: true,
     lastModbusActivity: { ts: Date.now() - 45_000, fc: 3, addr: 0, qty: 2 } }),
@@ -316,8 +389,9 @@ const READ = {
   ]),
   '/api/victron/devices': () => ({ ok: true, supported: true, scannedAt: Date.now() - 3600_000, scanning: false, scanError: null, devices: [
     { kind: 'evcharger', unitId: 40, label: 'Wallbox', statusText: 'bereit', connected: false, charging: false, powerW: 0, sessionEnergyKwh: 0, error: null } ] }),
-  '/api/ev': () => ({ ok: true, optimizeEv: true, onlyWhenPlugged: true, chargerConfigured: true,
-    vehicle: { title: 'E-Auto', connected: true, charging: false, chargePowerW: 0, socPct: 64, rangeKm: 268, plugged: true } }),
+  '/api/ev': () => evState(),
+  '/api/schedule/automation/config': () => ({ ok: true, config: mobileAutomationConfigView(automationConfig), optimizerEnabled: true, globalMinSocPct: 10 }),
+  '/api/mobile-link/integrations': () => mobileIntegrationsView(integrationsStatus()),
   '/api/feed-in-cap/status': () => ({ ok: true, mode: 'static', configured: true, limitW: 16200, pct: 60, kwp: 27, path: 'native', effectiveW: 16200,
     monitor: { exceeding: false, current: null, episodes: 0, lastEpisode: null } }),
   '/api/storage/status': () => ({ ok: true, at: Date.now(), freePct: 61, freeMb: 18200, totalMb: 29800, level: 'ok', dbMb: 2350, actions: [] }),
@@ -328,6 +402,48 @@ async function loopback(method, p, bodyText) {
   if (method === 'GET' && READ[pathname]) return { status: 200, body: READ[pathname](query) };
   if (method === 'POST' && pathname === '/api/control/stop') { emergencyStop = true; return { status: 200, body: { ok: true, emergencyStop: true } }; }
   if (method === 'POST' && pathname === '/api/control/resume') { emergencyStop = false; return { status: 200, body: { ok: true, emergencyStop: false } }; }
+  if (method === 'POST') {
+    let body;
+    try { body = bodyText ? JSON.parse(bodyText) : {}; } catch { return { status: 400, body: { ok: false, error: 'invalid json' } }; }
+    console.log(`[box] POST ${pathname} ${JSON.stringify(body)}`);
+    if (pathname === '/api/ev') return evPatch(body);
+    // Wie die Box: Der Körper ersetzt alle Regeln von Hand; Plan-Regeln bleiben, wie sie sind.
+    if (pathname === '/api/schedule/rules') {
+      if (!Array.isArray(body.rules) || body.rules.some((r) => !r || typeof r.target !== 'string' || (r.value !== undefined && !Number.isFinite(Number(r.value))))) return { status: 400, body: { ok: false, error: 'invalid rule structure' } };
+      const keep = scheduleRules.filter(isAutomationRule);
+      scheduleRules.splice(0, scheduleRules.length, ...body.rules.filter((r) => !isAutomationRule(r)), ...keep);
+      return { status: 200, body: { ok: true, count: scheduleRules.length } };
+    }
+    if (pathname === '/api/schedule/rules/toggle') {
+      const ids = Array.isArray(body.ids) ? body.ids : [];
+      if (!ids.length || typeof body.enabled !== 'boolean') return { status: 400, body: { ok: false, error: 'ids array required' } };
+      const hit = scheduleRules.filter((r) => ids.includes(r.id));
+      if (!hit.length) return { status: 404, body: { ok: false, error: 'no matching rules' } };
+      for (const r of hit) r.enabled = body.enabled;
+      return { status: 200, body: { ok: true, toggled: hit.length } };
+    }
+    if (pathname === '/api/schedule/config') {
+      for (const k of ['defaultGridSetpointW', 'defaultChargeCurrentA', 'defaultFeedExcessDcPv']) {
+        if (body[k] === undefined) continue;
+        if (!Number.isFinite(Number(body[k]))) return { status: 400, body: { ok: false, error: `${k} invalid` } };
+        scheduleConfig[k] = Number(body[k]);
+      }
+      return { status: 200, body: { ok: true, config: scheduleConfig } };
+    }
+    if (pathname === '/api/schedule/automation/config') {
+      const parsed = parseMobileAutomationPatch(body);
+      if (!parsed.ok) return { status: 400, body: { ok: false, error: parsed.error } };
+      Object.assign(automationConfig, parsed.patch);
+      return { status: 200, body: { ok: true, config: mobileAutomationConfigView(automationConfig) } };
+    }
+    if (pathname === '/api/schedule/automation/replan') {
+      const n = automationConfig.enabled ? 2 : 0;
+      const keep = scheduleRules.filter((r) => r.source !== 'small_market_automation');
+      const made = Array.from({ length: n }, (_, i) => ({ id: `sma-${i + 1}`, enabled: true, target: 'gridSetpointW', start: `18:${String(i * 15).padStart(2, '0')}`, end: `18:${String(i * 15 + 15).padStart(2, '0')}`, value: automationConfig.maxDischargeW, source: 'small_market_automation' }));
+      scheduleRules.splice(0, scheduleRules.length, ...keep, ...made);
+      return { status: 200, body: { ok: true, generatedRuleCount: n, availableEnergyKwh: 8.4, lastOutcome: 'ok', plan: null } };
+    }
+  }
   return { status: 404, body: { ok: false, error: 'harness_not_found', method, path: p, body: bodyText ? JSON.parse(bodyText) : null } };
 }
 

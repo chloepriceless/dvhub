@@ -21,6 +21,26 @@
         }
       }
     },
+    " bis %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " until %@"
+          }
+        }
+      }
+    },
+    " · bis %@ Akku" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " · until battery at %@"
+          }
+        }
+      }
+    },
     "%" : {
       "localizations" : {
         "en" : {
@@ -136,7 +156,7 @@
       }
     },
     "%@ an %@" : {
-      "comment" : "Grund für Touch ID: z. B. Not-Halt auslösen an Meine Anlage",
+      "comment" : "Grund für Touch ID: z. B. Not-Halt auslösen an Meine Anlage\nGrund für Touch ID: z. B. Zeitplan ändern an Meine Anlage",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -270,12 +290,44 @@
         }
       }
     },
+    "%@ · Rust-Kern %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · Rust-Kern %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · Rust core %@"
+          }
+        }
+      }
+    },
     "%@ · kWh" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ · kWh"
+          }
+        }
+      }
+    },
+    "%@ · mind. %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · mind. %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · at least %@"
           }
         }
       }
@@ -408,6 +460,22 @@
         }
       }
     },
+    "%@–%@ · %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@–%2$@ · %3$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@–%@ · %@"
+          }
+        }
+      }
+    },
     "%lld" : {
       "localizations" : {
         "en" : {
@@ -428,6 +496,26 @@
         }
       }
     },
+    "%lld Geräte" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld devices"
+          }
+        }
+      }
+    },
+    "%lld Ladepunkte" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld charge points"
+          }
+        }
+      }
+    },
     "%lld MB" : {
       "localizations" : {
         "en" : {
@@ -438,12 +526,42 @@
         }
       }
     },
+    "%lld Quellen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld sources"
+          }
+        }
+      }
+    },
+    "%lld Regeln aus dem Plan" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld rules from the plan"
+          }
+        }
+      }
+    },
     "%lld Regeln erzeugt" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld rules created"
+          }
+        }
+      }
+    },
+    "%lld Themen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld topics"
           }
         }
       }
@@ -470,16 +588,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld of %lld active"
-          }
-        }
-      }
-    },
-    "%lld aktive Regeln" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%lld active rules"
           }
         }
       }
@@ -606,6 +714,16 @@
         }
       }
     },
+    "0" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "0"
+          }
+        }
+      }
+    },
     "1 Alarm" : {
       "localizations" : {
         "en" : {
@@ -616,12 +734,12 @@
         }
       }
     },
-    "1 aktive Regel" : {
+    "1 Regel aus dem Plan" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1 active rule"
+            "value" : "1 rule from the plan"
           }
         }
       }
@@ -672,6 +790,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "Abfahrt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Departure"
+          }
+        }
+      }
+    },
+    "Abfahrt an diesem Tag" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Departure on this day"
+          }
+        }
+      }
+    },
+    "Abfahrt um" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Departure at"
+          }
+        }
+      }
+    },
+    "Abfahrten planen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plan departures"
           }
         }
       }
@@ -810,6 +968,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Battery and price"
+          }
+        }
+      }
+    },
+    "Akku-Stand" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Battery level"
           }
         }
       }
@@ -1104,6 +1272,16 @@
         }
       }
     },
+    "Art" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Type"
+          }
+        }
+      }
+    },
     "Aufheben …" : {
       "localizations" : {
         "en" : {
@@ -1174,6 +1352,16 @@
         }
       }
     },
+    "Auto bei EOS mitplanen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Include the car in the EOS plan"
+          }
+        }
+      }
+    },
     "Automatisch" : {
       "localizations" : {
         "en" : {
@@ -1200,6 +1388,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Automatic: in landscape and on the closed iPhone Duo, tabs and actions are on the right, otherwise at the bottom. “Right” forces the side bar everywhere."
+          }
+        }
+      }
+    },
+    "Beenden, wenn der Akku einen Stand erreicht" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End when the battery reaches a level"
           }
         }
       }
@@ -1234,6 +1432,16 @@
         }
       }
     },
+    "Benachrichtigungen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications"
+          }
+        }
+      }
+    },
     "Bereich wählen" : {
       "localizations" : {
         "en" : {
@@ -1260,6 +1468,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Operation"
+          }
+        }
+      }
+    },
+    "Beziehen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Draw"
           }
         }
       }
@@ -1294,6 +1512,26 @@
         }
       }
     },
+    "Bezug (dein Tarif, brutto)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import (your tariff, gross)"
+          }
+        }
+      }
+    },
+    "Bezug im Mittel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Average import"
+          }
+        }
+      }
+    },
     "Bezugspreis jetzt" : {
       "localizations" : {
         "en" : {
@@ -1310,6 +1548,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Import tariff"
+          }
+        }
+      }
+    },
+    "Bis" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To"
           }
         }
       }
@@ -1346,6 +1594,32 @@
         }
       }
     },
+    "Bis %@ mindestens %@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Bis %1$@ mindestens %2$@."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "At least %2$@ by %1$@."
+          }
+        }
+      }
+    },
+    "Broker auf der Anlage" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "broker on the system"
+          }
+        }
+      }
+    },
     "Börse" : {
       "localizations" : {
         "en" : {
@@ -1356,12 +1630,22 @@
         }
       }
     },
-    "Börse jetzt" : {
+    "Börsenautomatik" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Exchange now"
+            "value" : "Market automation"
+          }
+        }
+      }
+    },
+    "Börsenautomatik aktiv" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Market automation active"
           }
         }
       }
@@ -1376,12 +1660,12 @@
         }
       }
     },
-    "Börsenpreis" : {
+    "Börsenautomatik ändern" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Exchange price"
+            "value" : "Change market automation"
           }
         }
       }
@@ -1406,32 +1690,12 @@
         }
       }
     },
-    "Börsenpreis · Day-Ahead" : {
+    "Börsenpreise (Day-Ahead DE-LU) und Prognose: dvhub.online%@. Einspeisung zum Börsenpreis, wie DVhub die Erlöse rechnet – ohne Marktprämie. Bezug: dein Tarif aus DVhub mit Netzentgelten, Abgaben und Steuern. Prognose ohne Gewähr." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Exchange price · day-ahead"
-          }
-        }
-      }
-    },
-    "Börsenpreise %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Exchange prices %@"
-          }
-        }
-      }
-    },
-    "Börsenpreise (Day-Ahead DE-LU) und Prognose: dvhub.online%@. Ohne Netzentgelte, Steuern und Abgaben; Prognose ohne Gewähr." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Exchange prices (day-ahead DE-LU) and forecast: dvhub.online%@. Excluding grid fees, taxes and levies; forecast without guarantee."
+            "value" : "Exchange prices (day-ahead DE-LU) and forecast: dvhub.online%@. Feed-in at the exchange price, the way DVhub calculates revenue – without market premium. Import: your tariff from DVhub including grid fees, levies and taxes. Forecast without guarantee."
           }
         }
       }
@@ -1446,32 +1710,32 @@
         }
       }
     },
+    "Börsenpreise im Einzelnen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exchange prices in detail"
+          }
+        }
+      }
+    },
+    "Börsenpreise im Tagesverlauf" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exchange prices over the day"
+          }
+        }
+      }
+    },
     "Börsenpreise in DVhub" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Exchange prices in DVhub"
-          }
-        }
-      }
-    },
-    "Börsenpreise je Stunde" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Exchange prices per hour"
-          }
-        }
-      }
-    },
-    "Börsenpreise je Viertelstunde" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Exchange prices per quarter hour"
           }
         }
       }
@@ -1586,6 +1850,26 @@
         }
       }
     },
+    "DVhub regelt in diesem Zeitfenster so, dass am Netzanschluss diese Leistung bezogen wird – der Akku lädt dann auch aus dem Netz." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In this time window DVhub regulates so that this power is drawn at the grid connection – the battery then also charges from the grid."
+          }
+        }
+      }
+    },
+    "DVhub regelt in diesem Zeitfenster so, dass am Netzanschluss diese Leistung eingespeist wird – auch aus dem Akku." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In this time window DVhub regulates so that this power is fed in at the grid connection – also from the battery."
+          }
+        }
+      }
+    },
     "DVhub schreibt keine Sollwerte an die Anlage." : {
       "localizations" : {
         "en" : {
@@ -1666,6 +1950,26 @@
         }
       }
     },
+    "Das E-Auto braucht eine Verbindung zur Anlage." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The EV page needs a connection to the system."
+          }
+        }
+      }
+    },
+    "Das Einmal-Ziel gilt einmal und ersetzt die nächste Abfahrt aus dem Wochenplan. Danach gilt wieder der Wochenplan." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The one-time target applies once and replaces the next departure from the weekly plan. After that the weekly plan applies again."
+          }
+        }
+      }
+    },
     "Das Haus verbraucht gerade %@." : {
       "localizations" : {
         "en" : {
@@ -1732,6 +2036,16 @@
         }
       }
     },
+    "Den Bezugstarif zeigt das Diagramm, sobald eine Anlage gekoppelt ist." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The chart shows the import tariff as soon as a system is paired."
+          }
+        }
+      }
+    },
     "Der Akku ist zu %@ geladen und entlädt mit %@." : {
       "localizations" : {
         "de" : {
@@ -1790,6 +2104,16 @@
         }
       }
     },
+    "Der Bezugstarif kommt von der Anlage – sie ist gerade nicht verbunden." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The import tariff comes from the system – it is not connected right now."
+          }
+        }
+      }
+    },
     "Der Code gilt 5 Minuten und nur für ein Gerät." : {
       "localizations" : {
         "en" : {
@@ -1820,6 +2144,16 @@
         }
       }
     },
+    "Der Höchststand liegt unter dem Mindest-Ladestand." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The maximum is below the minimum charge level."
+          }
+        }
+      }
+    },
     "Der Not-Halt ist aktiv." : {
       "localizations" : {
         "en" : {
@@ -1836,6 +2170,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Emergency stop has been released. DVhub is controlling again."
+          }
+        }
+      }
+    },
+    "Der Optimierer (EOS) plant bereits. Die Börsenautomatik wird dann meist nicht gebraucht." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The optimiser (EOS) is already planning. The market automation is then usually not needed."
           }
         }
       }
@@ -1880,12 +2224,42 @@
         }
       }
     },
+    "Der Wochenplan ist ausgeschaltet („Abfahrten planen“). Ein Einmal-Ziel gilt trotzdem." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The weekly plan is switched off (“Plan departures”). A one-time target still applies."
+          }
+        }
+      }
+    },
     "Der Zustand der Anbindungen braucht eine Verbindung zur Anlage." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "The integration status needs a connection to the system."
+          }
+        }
+      }
+    },
+    "Der letzte Befehl an die Wallbox ist fehlgeschlagen. Einzelheiten stehen in der Weboberfläche." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The last command to the wallbox failed. Details are in the web interface."
+          }
+        }
+      }
+    },
+    "Die Abfahrt muss in der Zukunft liegen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The departure must be in the future."
           }
         }
       }
@@ -1952,6 +2326,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The summary is too large to transfer. A newer DVhub version sends a leaner one."
+          }
+        }
+      }
+    },
+    "Die E-Auto-Planung baut auf EOS auf und braucht in DVhub Pro. Fahrzeug, Wallbox und Fahrtwerte richtest du in der Weboberfläche ein." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "EV planning builds on EOS and needs Pro in DVhub. You set up vehicle, wallbox and trip values in the web interface."
           }
         }
       }
@@ -2116,6 +2500,16 @@
         }
       }
     },
+    "Dieses Gerät darf nur anzeigen. Zum Ändern in DVhub unter „Handy-App“ die Freigabe „Anzeigen und steuern“ vergeben." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device may only view. To make changes, grant “View and control” in DVhub under “Mobile app”."
+          }
+        }
+      }
+    },
     "Direkt verbraucht" : {
       "localizations" : {
         "en" : {
@@ -2176,6 +2570,26 @@
         }
       }
     },
+    "E-Auto nicht verfügbar (HTTP %lld)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "EV not available (HTTP %lld)."
+          }
+        }
+      }
+    },
+    "E-Auto-Planung ändern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change EV planning"
+          }
+        }
+      }
+    },
     "EOS antwortet gerade nicht – der Plan erscheint nach dem nächsten Lauf." : {
       "localizations" : {
         "en" : {
@@ -2196,6 +2610,26 @@
         }
       }
     },
+    "EOS lädt bis dahin" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "EOS charges until then"
+          }
+        }
+      }
+    },
+    "EOS plant sie ein" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "EOS schedules them"
+          }
+        }
+      }
+    },
     "EOS-Optimierer" : {
       "localizations" : {
         "en" : {
@@ -2206,12 +2640,12 @@
         }
       }
     },
-    "EOS-Plan und Zeitplan" : {
+    "EOS-Plan" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "EOS plan and schedule"
+            "value" : "EOS plan"
           }
         }
       }
@@ -2226,12 +2660,32 @@
         }
       }
     },
+    "EOS-Plan, Zeitplan, Börsenautomatik" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "EOS plan, schedule, market automation"
+          }
+        }
+      }
+    },
     "ESS-Modus" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "ESS mode"
+          }
+        }
+      }
+    },
+    "Eigenes Ziel für diesen Tag" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Own target for this day"
           }
         }
       }
@@ -2266,12 +2720,62 @@
         }
       }
     },
+    "Eingerichtet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set up"
+          }
+        }
+      }
+    },
     "Eingespeist" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fed in"
+          }
+        }
+      }
+    },
+    "Einmal-Ziel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "One-time target"
+          }
+        }
+      }
+    },
+    "Einmal-Ziel löschen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete one-time target"
+          }
+        }
+      }
+    },
+    "Einmal-Ziel setzen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set one-time target"
+          }
+        }
+      }
+    },
+    "Einmal-Ziel ändern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change one-time target"
           }
         }
       }
@@ -2296,12 +2800,12 @@
         }
       }
     },
-    "Einrichten und Ändern der Anbindungen geht in der DVhub-Weboberfläche unter „Integrationen“.%@" : {
+    "Einrichten und Ändern der Anbindungen geht in der DVhub-Weboberfläche unter „Integrationen“. Adressen und Zugangsdaten zeigt die App nicht – sie verlassen die Anlage nicht.%@" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Integrations are set up and changed in the DVhub web interface under “Integrations”.%@"
+            "value" : "Integrations are set up and changed in the DVhub web interface under “Integrations”. The app does not show addresses or credentials – they never leave the system.%@"
           }
         }
       }
@@ -2312,6 +2816,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Feed-in limit"
+          }
+        }
+      }
+    },
+    "Einspeisen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feed in"
           }
         }
       }
@@ -2346,12 +2860,78 @@
         }
       }
     },
+    "Einspeisung %@, Bezug %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Einspeisung %1$@, Bezug %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feed-in %@, import %@"
+          }
+        }
+      }
+    },
+    "Einspeisung (Börsenpreis)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feed-in (exchange price)"
+          }
+        }
+      }
+    },
     "Einspeisung gesperrt" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Feed-in blocked"
+          }
+        }
+      }
+    },
+    "Einspeisung im Mittel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Average feed-in"
+          }
+        }
+      }
+    },
+    "Einspeisung und Bezug" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feed-in and import"
+          }
+        }
+      }
+    },
+    "Einspeisung und Bezug %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feed-in and import %@"
+          }
+        }
+      }
+    },
+    "Einspeisung und Bezug im Tagesverlauf" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feed-in and import over the day"
           }
         }
       }
@@ -2502,6 +3082,16 @@
         }
       }
     },
+    "Erlös und Kosten heute" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revenue and costs today"
+          }
+        }
+      }
+    },
     "Erlöse" : {
       "localizations" : {
         "en" : {
@@ -2612,12 +3202,12 @@
         }
       }
     },
-    "Fahrplan, Integrationen, System und Einstellungen der App stehen links." : {
+    "Fahrplan, E-Auto, Integrationen, System und Einstellungen der App stehen links." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Plan, integrations, system and app settings are on the left."
+            "value" : "Plan, EV, integrations, system and app settings are on the left."
           }
         }
       }
@@ -2712,6 +3302,16 @@
         }
       }
     },
+    "Firmware %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Firmware %@"
+          }
+        }
+      }
+    },
     "Frei" : {
       "localizations" : {
         "en" : {
@@ -2762,6 +3362,16 @@
         }
       }
     },
+    "Für eine Fahrt außer der Reihe: bis zu einem Zeitpunkt einmal auf einen bestimmten Stand laden." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "For an out-of-the-ordinary trip: charge once to a given level by a given time."
+          }
+        }
+      }
+    },
     "Ganzen Artikel lesen" : {
       "localizations" : {
         "en" : {
@@ -2808,6 +3418,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Charged"
+          }
+        }
+      }
+    },
+    "Gelten immer dann, wenn keine Regel greift." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apply whenever no rule is in effect."
           }
         }
       }
@@ -2872,12 +3492,48 @@
         }
       }
     },
+    "Gerade gilt:" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Right now:"
+          }
+        }
+      }
+    },
     "Gerade zu viele Anfragen. Bitte gleich noch einmal." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Too many requests right now. Please try again in a moment."
+          }
+        }
+      }
+    },
+    "Gerade: Börse %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Right now: exchange %@"
+          }
+        }
+      }
+    },
+    "Gerade: Einspeisung %@ · Bezug %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Gerade: Einspeisung %1$@ · Bezug %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Right now: feed-in %@ · import %@"
           }
         }
       }
@@ -2988,6 +3644,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Limit"
+          }
+        }
+      }
+    },
+    "Grenze %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limit %@"
+          }
+        }
+      }
+    },
+    "Grundwerte" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Defaults"
+          }
+        }
+      }
+    },
+    "Grundwerte ändern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change defaults"
           }
         }
       }
@@ -3144,6 +3830,16 @@
         }
       }
     },
+    "Heute bisher" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today so far"
+          }
+        }
+      }
+    },
     "Heute gekostet" : {
       "localizations" : {
         "en" : {
@@ -3234,22 +3930,6 @@
         }
       }
     },
-    "Hoch %@ · %@" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Hoch %1$@ · %2$@"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "High %@ · %@"
-          }
-        }
-      }
-    },
     "Holt den aktuellen Stand der Anlage für die Widgets." : {
       "localizations" : {
         "en" : {
@@ -3260,12 +3940,42 @@
         }
       }
     },
+    "Home-Assistant-Erkennung an" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Home Assistant discovery on"
+          }
+        }
+      }
+    },
     "Home-Bildschirm lange drücken → „Bearbeiten“ → „Widget hinzufügen“ → DVhub. Für den Sperrbildschirm: Sperrbildschirm lange drücken → „Anpassen“." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Touch and hold the Home Screen → “Edit” → “Add Widget” → DVhub. For the Lock Screen: touch and hold the Lock Screen → “Customize”."
+          }
+        }
+      }
+    },
+    "Höchste Entladeleistung" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maximum discharge power"
+          }
+        }
+      }
+    },
+    "Höchstens bis" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "At most up to"
           }
         }
       }
@@ -3286,6 +3996,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Rejected in DVhub."
+          }
+        }
+      }
+    },
+    "In DVhub ist kein Bezugstarif eingerichtet (Einstellungen → Strompreise)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No import tariff is set up in DVhub (Settings → Electricity prices)."
           }
         }
       }
@@ -3360,6 +4080,16 @@
         }
       }
     },
+    "Jetzt: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Now: %@"
+          }
+        }
+      }
+    },
     "KW %@ · %@" : {
       "comment" : "Kalenderwoche und Jahr",
       "localizations" : {
@@ -3417,6 +4147,16 @@
         }
       }
     },
+    "Keine Regeln von Hand." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No manual rules."
+          }
+        }
+      }
+    },
     "Keine Verbindung" : {
       "localizations" : {
         "en" : {
@@ -3453,16 +4193,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No values for this day."
-          }
-        }
-      }
-    },
-    "Keine aktiven Regeln." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No active rules."
           }
         }
       }
@@ -3597,6 +4327,26 @@
         }
       }
     },
+    "Laden ist gestoppt%@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charging is stopped%@."
+          }
+        }
+      }
+    },
+    "Laden planen, Ziele setzen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plan charging, set targets"
+          }
+        }
+      }
+    },
     "Laderegler am Akku" : {
       "localizations" : {
         "en" : {
@@ -3627,12 +4377,32 @@
         }
       }
     },
+    "Ladestand bei Abfahrt %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge level at departure %@"
+          }
+        }
+      }
+    },
     "Ladestand heute" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "State of charge today"
+          }
+        }
+      }
+    },
+    "Ladestand zur Abfahrt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge level at departure"
           }
         }
       }
@@ -3663,6 +4433,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Power"
+          }
+        }
+      }
+    },
+    "Leistung am Netzpunkt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Power at the grid point"
           }
         }
       }
@@ -3773,6 +4553,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Live Activities are turned off for DVhub in iOS Settings."
+          }
+        }
+      }
+    },
+    "Löschen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete"
           }
         }
       }
@@ -3957,6 +4747,26 @@
         }
       }
     },
+    "Mindest-Ladestand bis zur Abfahrt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minimum charge level by departure"
+          }
+        }
+      }
+    },
+    "Mindest-Ladestand der Anlage %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "System minimum charge level %@"
+          }
+        }
+      }
+    },
     "Mitte der Prognose" : {
       "localizations" : {
         "en" : {
@@ -3983,6 +4793,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Average"
+          }
+        }
+      }
+    },
+    "Modus %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mode %@"
           }
         }
       }
@@ -4173,6 +4993,26 @@
         }
       }
     },
+    "Netzbetreiber nicht verbunden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "grid operator not connected"
+          }
+        }
+      }
+    },
+    "Netzbetreiber verbunden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "grid operator connected"
+          }
+        }
+      }
+    },
     "Netzentgelte" : {
       "localizations" : {
         "en" : {
@@ -4199,6 +5039,56 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Grid power into the battery"
+          }
+        }
+      }
+    },
+    "Netzzähler" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grid meter"
+          }
+        }
+      }
+    },
+    "Neu geplant: %lld Regeln." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replanned: %lld rules."
+          }
+        }
+      }
+    },
+    "Neu geplant: 1 Regel." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replanned: 1 rule."
+          }
+        }
+      }
+    },
+    "Neu planen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replan"
+          }
+        }
+      }
+    },
+    "Neue Regel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New rule"
           }
         }
       }
@@ -4243,6 +5133,16 @@
         }
       }
     },
+    "Noch kein Wochenplan. Angelegt wird er in der Weboberfläche; hier lassen sich Abfahrtszeit und Ziel je Tag ändern." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No weekly plan yet. It is created in the web interface; here you can change departure time and target per day."
+          }
+        }
+      }
+    },
     "Noch keine Anlage gekoppelt" : {
       "localizations" : {
         "en" : {
@@ -4259,16 +5159,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No exchange prices loaded yet."
-          }
-        }
-      }
-    },
-    "Noch keine Preise geladen." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No prices loaded yet."
           }
         }
       }
@@ -4423,6 +5313,26 @@
         }
       }
     },
+    "Nur planen, wenn angesteckt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only plan when plugged in"
+          }
+        }
+      }
+    },
+    "Nächste Abfahrt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Next departure"
+          }
+        }
+      }
+    },
     "Obere Grenze (90 %)" : {
       "localizations" : {
         "en" : {
@@ -4473,12 +5383,42 @@
         }
       }
     },
+    "PV-Prognose %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PV forecast %@"
+          }
+        }
+      }
+    },
+    "PV-Strings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PV strings"
+          }
+        }
+      }
+    },
     "PV-Wechselrichter" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "PV inverter"
+          }
+        }
+      }
+    },
+    "Passwort gesetzt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "password set"
           }
         }
       }
@@ -4499,6 +5439,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Plan from %@"
+          }
+        }
+      }
+    },
+    "Planbare Verbraucher" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schedulable loads"
           }
         }
       }
@@ -4703,12 +5653,128 @@
         }
       }
     },
+    "Regel %@ bis %@ aktiv" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Regel %1$@ bis %2$@ aktiv"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rule %@ to %@ active"
+          }
+        }
+      }
+    },
+    "Regel aktiv" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rule active"
+          }
+        }
+      }
+    },
+    "Regel anlegen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create rule"
+          }
+        }
+      }
+    },
+    "Regel ausschalten" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch rule off"
+          }
+        }
+      }
+    },
+    "Regel einschalten" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch rule on"
+          }
+        }
+      }
+    },
+    "Regel hinzufügen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add rule"
+          }
+        }
+      }
+    },
+    "Regel löschen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete rule"
+          }
+        }
+      }
+    },
+    "Regel löschen?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete rule?"
+          }
+        }
+      }
+    },
+    "Regel ändern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change rule"
+          }
+        }
+      }
+    },
+    "Regeln aus dem Plan erzeugt DVhub selbst (Optimierer, Börsenautomatik). Hier lassen sie sich einzeln aus- und einschalten." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DVhub creates rules from the plan itself (optimiser, market automation). Here they can be switched off and on individually."
+          }
+        }
+      }
+    },
     "Regeln im Zeitplan" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Rules in the schedule"
+          }
+        }
+      }
+    },
+    "Regeln von Hand" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manual rules"
           }
         }
       }
@@ -4773,12 +5839,32 @@
         }
       }
     },
+    "Reserve im Akku" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Battery reserve"
+          }
+        }
+      }
+    },
     "Residuallast-Frühwarnung" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Residual load early warning"
+          }
+        }
+      }
+    },
+    "Richtung" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Direction"
           }
         }
       }
@@ -4883,6 +5969,26 @@
         }
       }
     },
+    "Schlüssel fehlt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "key missing"
+          }
+        }
+      }
+    },
+    "Schlüssel hinterlegt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "key stored"
+          }
+        }
+      }
+    },
     "Schneller Zugriff" : {
       "localizations" : {
         "en" : {
@@ -4913,12 +6019,38 @@
         }
       }
     },
+    "So voll ist das Auto zur Abfahrt mindestens – auch wenn der Strom gerade teuer ist." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The car is at least this full at departure – even if electricity is expensive right now."
+          }
+        }
+      }
+    },
     "Sobald die Anlage antwortet, erscheinen hier die Live-Werte." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Live values appear here as soon as the system responds."
+          }
+        }
+      }
+    },
+    "Sofort laden läuft mit %@%@." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Sofort laden läuft mit %1$@%2$@."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge now is running at %@%@."
           }
         }
       }
@@ -4973,12 +6105,42 @@
         }
       }
     },
+    "Spanne %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Spread %@"
+          }
+        }
+      }
+    },
     "Spanne (10–90 %)" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Range (10–90%)"
+          }
+        }
+      }
+    },
+    "Spanne im Mittel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Average spread"
+          }
+        }
+      }
+    },
+    "Speichern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save"
           }
         }
       }
@@ -5009,6 +6171,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Peak"
+          }
+        }
+      }
+    },
+    "Spitze %@ · %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Spitze %1$@ · %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Peak %@ · %@"
           }
         }
       }
@@ -5139,6 +6317,46 @@
         }
       }
     },
+    "Suchfenster" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search window"
+          }
+        }
+      }
+    },
+    "Suchfenster bis" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search window to"
+          }
+        }
+      }
+    },
+    "Suchfenster von" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search window from"
+          }
+        }
+      }
+    },
+    "Sucht die teuersten Viertelstunden im Suchfenster und speist dann aus dem Akku ein – bis zur Reserve." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finds the most expensive quarter hours in the search window and then feeds in from the battery – down to the reserve."
+          }
+        }
+      }
+    },
     "Summe %@" : {
       "localizations" : {
         "en" : {
@@ -5165,6 +6383,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Day"
+          }
+        }
+      }
+    },
+    "Tag speichern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save day"
           }
         }
       }
@@ -5291,22 +6519,6 @@
         }
       }
     },
-    "Tief %@ · %@" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Tief %1$@ · %2$@"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Low %@ · %@"
-          }
-        }
-      }
-    },
     "Umlagen und Abgaben" : {
       "localizations" : {
         "en" : {
@@ -5353,6 +6565,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lower bound (10%)"
+          }
+        }
+      }
+    },
+    "VRM-Import" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "VRM import"
           }
         }
       }
@@ -5547,12 +6769,32 @@
         }
       }
     },
+    "Verwerfen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Discard"
+          }
+        }
+      }
+    },
     "Volllaststunden PV" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "PV full-load hours"
+          }
+        }
+      }
+    },
+    "Von" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From"
           }
         }
       }
@@ -5593,6 +6835,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Direct marketing advantage"
+          }
+        }
+      }
+    },
+    "Wallbox" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wallbox"
           }
         }
       }
@@ -5657,6 +6909,16 @@
         }
       }
     },
+    "Was eingerichtet ist, zeigt die App ab einem neueren DVhub-Stand." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The app shows what is set up from a newer DVhub version on."
+          }
+        }
+      }
+    },
     "Wechselrichter" : {
       "localizations" : {
         "en" : {
@@ -5703,6 +6965,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Next"
+          }
+        }
+      }
+    },
+    "Weiter laden, wenn es günstig ist" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep charging when it is cheap"
           }
         }
       }
@@ -5787,6 +7059,16 @@
         }
       }
     },
+    "Wird gespeichert …" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving …"
+          }
+        }
+      }
+    },
     "Wirksam" : {
       "localizations" : {
         "en" : {
@@ -5823,6 +7105,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Week, month and year in History"
+          }
+        }
+      }
+    },
+    "Wochenplan" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weekly plan"
+          }
+        }
+      }
+    },
+    "Wochenplan ändern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change weekly plan"
           }
         }
       }
@@ -5957,6 +7259,16 @@
         }
       }
     },
+    "Zeitplan nicht lesbar (HTTP %lld)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schedule not readable (HTTP %lld)."
+          }
+        }
+      }
+    },
     "Zeitraum" : {
       "localizations" : {
         "en" : {
@@ -5983,6 +7295,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Certificate valid"
+          }
+        }
+      }
+    },
+    "Zugang hinterlegt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "access stored"
+          }
+        }
+      }
+    },
+    "Zugang unvollständig" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "access incomplete"
           }
         }
       }
@@ -6067,12 +7399,12 @@
         }
       }
     },
-    "Zustand der Anbindungen" : {
+    "Zustand und Einrichtung" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Integration status"
+            "value" : "Status and setup"
           }
         }
       }
@@ -6153,6 +7485,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "on"
+          }
+        }
+      }
+    },
+    "an, plant nicht" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "on, not planning"
+          }
+        }
+      }
+    },
+    "angesteckt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "plugged in"
           }
         }
       }
@@ -6247,6 +7599,16 @@
         }
       }
     },
+    "aus „Meine Anlage“ in DVhub" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "from “My system” in DVhub"
+          }
+        }
+      }
+    },
     "ausgeglichen" : {
       "localizations" : {
         "en" : {
@@ -6267,12 +7629,32 @@
         }
       }
     },
+    "begrenzt gerade" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "limiting now"
+          }
+        }
+      }
+    },
     "bereit" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "ready"
+          }
+        }
+      }
+    },
+    "bezogen %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "imported %@"
           }
         }
       }
@@ -6287,6 +7669,16 @@
         }
       }
     },
+    "ct Einspeisung · %@ ct Bezug" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ct feed-in · %@ ct import"
+          }
+        }
+      }
+    },
     "ct/kWh" : {
       "localizations" : {
         "en" : {
@@ -6297,12 +7689,12 @@
         }
       }
     },
-    "ct/kWh jetzt" : {
+    "ct/kWh an der Börse" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ct/kWh now"
+            "value" : "ct/kWh at the exchange"
           }
         }
       }
@@ -6377,12 +7769,42 @@
         }
       }
     },
+    "eigener Broker" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "own broker"
+          }
+        }
+      }
+    },
     "eingehalten" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "within limit"
+          }
+        }
+      }
+    },
+    "eingerichtet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "set up"
+          }
+        }
+      }
+    },
+    "entladen %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "discharged %@"
           }
         }
       }
@@ -6413,6 +7835,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "detected"
+          }
+        }
+      }
+    },
+    "erreichbar" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "reachable"
           }
         }
       }
@@ -6478,36 +7910,6 @@
         }
       }
     },
-    "heute günstig" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "cheap today"
-          }
-        }
-      }
-    },
-    "heute mittel" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "average today"
-          }
-        }
-      }
-    },
-    "heute teuer" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "expensive today"
-          }
-        }
-      }
-    },
     "instabil" : {
       "localizations" : {
         "en" : {
@@ -6558,6 +7960,16 @@
         }
       }
     },
+    "keine Abfahrt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no departure"
+          }
+        }
+      }
+    },
     "keine Verbindung" : {
       "localizations" : {
         "en" : {
@@ -6574,6 +7986,42 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "no values"
+          }
+        }
+      }
+    },
+    "keine geplant" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "none planned"
+          }
+        }
+      }
+    },
+    "kleinste %@ ct um %@ · größte %@ ct um %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "kleinste %1$@ ct um %2$@ · größte %3$@ ct um %4$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "smallest %@ ct at %@ · largest %@ ct at %@"
+          }
+        }
+      }
+    },
+    "liefert Werte" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "delivering values"
           }
         }
       }
@@ -6628,6 +8076,26 @@
         }
       }
     },
+    "meldet einen Fehler" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "reports an error"
+          }
+        }
+      }
+    },
+    "mindestens %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "at least %@"
+          }
+        }
+      }
+    },
     "mit Verlusten" : {
       "localizations" : {
         "en" : {
@@ -6668,16 +8136,6 @@
         }
       }
     },
-    "negativ" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "negative"
-          }
-        }
-      }
-    },
     "nein" : {
       "localizations" : {
         "en" : {
@@ -6708,12 +8166,32 @@
         }
       }
     },
+    "nicht angesteckt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "not plugged in"
+          }
+        }
+      }
+    },
     "nicht eingerichtet" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "not set up"
+          }
+        }
+      }
+    },
+    "nicht erreichbar" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "not reachable"
           }
         }
       }
@@ -6748,12 +8226,72 @@
         }
       }
     },
+    "noch kein Verlauf" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no history yet"
+          }
+        }
+      }
+    },
+    "noch keine Werte" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no values yet"
+          }
+        }
+      }
+    },
+    "noch keiner" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "none yet"
+          }
+        }
+      }
+    },
+    "oben Einspeisung, unten Bezug" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "feed-in above, import below"
+          }
+        }
+      }
+    },
     "offline" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "offline"
+          }
+        }
+      }
+    },
+    "ohne Passwort" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no password"
+          }
+        }
+      }
+    },
+    "plant" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "planning"
           }
         }
       }
@@ -6878,6 +8416,26 @@
         }
       }
     },
+    "zuletzt %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "last %@"
+          }
+        }
+      }
+    },
+    "§ 14a" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "§ 14a"
+          }
+        }
+      }
+    },
     "§14a Modul 3" : {
       "localizations" : {
         "en" : {
@@ -6928,12 +8486,32 @@
         }
       }
     },
+    "Ändern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change"
+          }
+        }
+      }
+    },
     "Ändern geht in der DVhub-Weboberfläche unter „Einstellungen“. Die App liest hier nur mit." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Changes are made in the DVhub web interface under “Settings”. The app only reads here."
+          }
+        }
+      }
+    },
+    "Ändern geht nur, wenn die Anlage verbunden ist." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changes are only possible while the system is connected."
           }
         }
       }
@@ -6978,6 +8556,16 @@
         }
       }
     },
+    "Öffnet die Regel zum Ändern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens the rule for editing"
+          }
+        }
+      }
+    },
     "Öffnet diesen Zeitraum" : {
       "localizations" : {
         "en" : {
@@ -6994,6 +8582,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "About"
+          }
+        }
+      }
+    },
+    "Über dem Mindest-Ladestand lädt EOS nur, wenn es sich lohnt. Bei diesem Stand beendet DVhub das Laden." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Above the minimum charge level EOS only charges when it pays off. At this level DVhub ends charging."
           }
         }
       }
@@ -7094,16 +8692,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "− means: this much should be fed in"
-          }
-        }
-      }
-    },
-    "⌀ %@" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "avg %@"
           }
         }
       }

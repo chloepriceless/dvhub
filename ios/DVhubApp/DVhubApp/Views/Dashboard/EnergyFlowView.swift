@@ -1,5 +1,8 @@
-// EnergyFlowView.swift — Energiefluss mit Partikeln: PV oben, Netz links, Haus
-// rechts, Akku unten, alles über die Mitte. Der Partikelstrom folgt dem
+// EnergyFlowView.swift — Energiefluss mit Partikeln: PV oben, Haus links, Netz
+// rechts, Akku unten, alles über die Mitte — dieselbe Anordnung wie im
+// Web-Leitstand (dvhub-powerflow.css: .pf-nHouse links, .pf-nGrid rechts).
+// Auch die Vorzeichen folgen ihm: Netz + = Bezug, − = Einspeisung, gerechnet
+// als Bezug minus Einspeisung (app.js updateFlowDiagram). Der Partikelstrom folgt dem
 // Web-Leitstand (dvhub/public/dvhub-powerflow.js), fürs iPhone angepasst:
 // viele kleine Leuchtpunkte mit Schweif und Lichtschein in der Farbe ihrer
 // Quelle (PV gelb, Akku grün, Netz blau); Dichte und Tempo folgen der
@@ -65,8 +68,8 @@ struct EnergyFlowView: View {
         }
         .accessibilityElement(children: .contain)
         // Die Grafik hat feste Maße: Ihre Beschriftung wächst nur bis xxLarge mit,
-        // sonst liefe sie ineinander. Dieselben Werte stehen in den Karten
-        // darunter in voller Größe; jeder Knoten öffnet die Detailansicht.
+        // sonst liefe sie ineinander. Jeder Knoten öffnet die Detailansicht mit
+        // denselben Werten in voller Größe.
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
     }
 
@@ -100,8 +103,9 @@ struct EnergyFlowView: View {
             switch n {
             case .pv: return CGPoint(x: size.width / 2, y: r + 6)
             case .battery: return CGPoint(x: size.width / 2, y: size.height - r - 6)
-            case .grid: return CGPoint(x: r + 8, y: size.height / 2)
-            case .home: return CGPoint(x: size.width - r - 8, y: size.height / 2)
+            // Wie im Web-Leitstand: Haus links, Netz rechts.
+            case .home: return CGPoint(x: r + 8, y: size.height / 2)
+            case .grid: return CGPoint(x: size.width - r - 8, y: size.height / 2)
             }
         }
 
@@ -313,7 +317,7 @@ struct EnergyFlowView: View {
 
         // Beschriftung: bei PV und Akku seitlich (die Leitung läuft senkrecht),
         // bei Netz und Haus zur Mitte hin versetzt über/unter dem Knoten.
-        let label = VStack(alignment: n == .home ? .trailing : .leading, spacing: 0) {
+        let label = VStack(alignment: n == .grid ? .trailing : .leading, spacing: 0) {
             Text(info.value)
                 .font(.system(.headline, design: .rounded).weight(.bold))
                 .monospacedDigit()
@@ -331,11 +335,11 @@ struct EnergyFlowView: View {
             label
                 .frame(width: max(60, m.size.width / 2 - m.r - 18), alignment: .leading)
                 .position(x: c.x + m.r + 10 + max(60, m.size.width / 2 - m.r - 18) / 2, y: c.y)
-        case .grid:
+        case .home:
             label
                 .frame(width: max(70, m.size.width / 2 - m.hubR - 16), alignment: .leading)
                 .position(x: 8 + max(70, m.size.width / 2 - m.hubR - 16) / 2, y: c.y + m.r + 24)
-        case .home:
+        case .grid:
             label
                 .frame(width: max(70, m.size.width / 2 - m.hubR - 16), alignment: .trailing)
                 .position(x: m.size.width - 8 - max(70, m.size.width / 2 - m.hubR - 16) / 2, y: c.y + m.r + 24)
@@ -361,7 +365,8 @@ struct EnergyFlowView: View {
             }
             return NodeInfo(title: String(localized: "Akku"), icon: StatusText.batteryIcon(s.soc), value: Format.power(w), caption: cap)
         case .grid:
-            return NodeInfo(title: String(localized: "Netz"), icon: "bolt.horizontal.fill", value: Format.power(StatusText.gridValue(s)), caption: StatusText.gridCaption(s))
+            // Mit Vorzeichen wie im Web-Leitstand: + Bezug, − Einspeisung.
+            return NodeInfo(title: String(localized: "Netz"), icon: "bolt.horizontal.fill", value: StatusText.gridSigned(s), caption: StatusText.gridCaption(s))
         }
     }
 }
@@ -386,17 +391,29 @@ enum StatusText {
         return w > 0 ? String(localized: "lädt \(Format.power(w))") : String(localized: "entlädt \(Format.power(w))")
     }
 
+    /// Betrag am Netzpunkt: Bezug minus Einspeisung, wie der Web-Leitstand rechnet.
     static func gridValue(_ s: LiveStatus) -> Double? {
+        gridNet(s).map(abs)
+    }
+
+    /// Netto am Netzpunkt: + = Bezug, − = Einspeisung (Web-Leitstand: grid = gridImportW − gridExportW).
+    static func gridNet(_ s: LiveStatus) -> Double? {
         if s.gridImportW == nil && s.gridExportW == nil { return nil }
-        return max(s.gridImportW ?? 0, s.gridExportW ?? 0)
+        return (s.gridImportW ?? 0) - (s.gridExportW ?? 0)
+    }
+
+    /// „+1,2 kW“ bei Bezug, „−3,4 kW“ bei Einspeisung; in Ruhe ohne Vorzeichen.
+    static func gridSigned(_ s: LiveStatus) -> String {
+        guard let net = gridNet(s) else { return Format.power(nil) }
+        return abs(net) < FlowEdge.idleW ? Format.power(abs(net)) : (net > 0 ? "+" : "−") + Format.power(abs(net))
     }
 
     static func gridCaption(_ s: LiveStatus) -> String {
         guard s.gridImportW != nil || s.gridExportW != nil else { return String(localized: "kein Zähler") }
-        let imp = s.gridImportW ?? 0, exp = s.gridExportW ?? 0
-        if max(imp, exp) < FlowEdge.idleW { return String(localized: "ausgeglichen") }
-        return imp >= exp ? String(localized: "Bezug") : String(localized: "Einspeisung")
+        let net = gridNet(s) ?? 0
+        if abs(net) < FlowEdge.idleW { return String(localized: "ausgeglichen") }
+        return net > 0 ? String(localized: "Bezug") : String(localized: "Einspeisung")
     }
 
-    static func isExporting(_ s: LiveStatus) -> Bool { (s.gridExportW ?? 0) > (s.gridImportW ?? 0) }
+    static func isExporting(_ s: LiveStatus) -> Bool { (gridNet(s) ?? 0) < 0 }
 }

@@ -1,5 +1,5 @@
 // MoreView.swift — „Mehr“ (schmal) und die Seitenleiste (breit): Fahrplan,
-// Integrationen, System, Steuern, Anlagen, Darstellung, Widgets, Über.
+// E-Auto, Integrationen, System, Steuern, Anlagen, Darstellung, Widgets, Über.
 
 import SwiftUI
 import WidgetKit
@@ -7,12 +7,13 @@ import DVhubLink
 
 extension MoreRoute {
     /// Bereiche der Anlage bzw. der App — in dieser Reihenfolge in „Mehr“ und in der Seitenleiste.
-    static let plantRoutes: [MoreRoute] = [.plan, .integrations, .system, .control]
+    static let plantRoutes: [MoreRoute] = [.plan, .ev, .integrations, .system, .control]
     static let appRoutes: [MoreRoute] = [.systems, .appearance, .about]
 
     var title: String {
         switch self {
         case .plan: return String(localized: "Fahrplan")
+        case .ev: return String(localized: "E-Auto")
         case .integrations: return String(localized: "Integrationen")
         case .system: return String(localized: "System")
         case .control: return String(localized: "Steuern")
@@ -25,6 +26,7 @@ extension MoreRoute {
     var icon: String {
         switch self {
         case .plan: return "calendar.day.timeline.left"
+        case .ev: return "car.fill"
         case .integrations: return "point.3.connected.trianglepath.dotted"
         case .system: return "gearshape.2.fill"
         case .control: return "exclamationmark.octagon.fill"
@@ -37,6 +39,7 @@ extension MoreRoute {
     var tint: Color {
         switch self {
         case .plan: return Brand.violet
+        case .ev: return Brand.green
         case .integrations: return Brand.cyan
         case .system: return Brand.blue
         case .control: return Brand.red
@@ -93,8 +96,9 @@ struct MoreView: View {
 
     private func subtitle(_ route: MoreRoute) -> String {
         switch route {
-        case .plan: return String(localized: "EOS-Plan und Zeitplan")
-        case .integrations: return String(localized: "Zustand der Anbindungen")
+        case .plan: return String(localized: "EOS-Plan, Zeitplan, Börsenautomatik")
+        case .ev: return String(localized: "Laden planen, Ziele setzen")
+        case .integrations: return String(localized: "Zustand und Einrichtung")
         case .system: return String(localized: "Einstellungen ansehen")
         case .control: return String(localized: "Not-Halt")
         case .systems: return String(localized: "\(model.systems.count) gekoppelt")
@@ -164,7 +168,7 @@ struct SidebarView: View {
 struct MoreOverview: View {
     var body: some View {
         ContentUnavailableView("Bereich wählen", systemImage: "sidebar.left",
-                               description: Text("Fahrplan, Integrationen, System und Einstellungen der App stehen links."))
+                               description: Text("Fahrplan, E-Auto, Integrationen, System und Einstellungen der App stehen links."))
             .background(AuroraBackground())
     }
 }

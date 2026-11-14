@@ -51,7 +51,7 @@ enum AppTab: String, CaseIterable, Identifiable, Hashable {
 
 enum MoreRoute: String, Hashable, Identifiable {
     var id: String { rawValue }
-    case plan, integrations, system, control, systems, appearance, about
+    case plan, ev, integrations, system, control, systems, appearance, about
 }
 
 /// Eintrag der Seitenleiste auf breiter Fläche: ein Reiter oder ein Bereich,
@@ -531,6 +531,7 @@ struct RootView: View {
                 Group {
                     switch route {
                     case .plan: PlanView(controller: c)
+                    case .ev: EVView(controller: c)
                     case .integrations: IntegrationsView(controller: c)
                     case .system: SystemInfoView(controller: c)
                     default: ControlView(controller: c)
@@ -563,7 +564,7 @@ struct RootView: View {
     #if DEBUG
     /// Nur für Simulator-Tests und Bildschirmfotos:
     ///   -DVHUB_PAIR '<QR-Text>'   beim Start koppeln
-    ///   -DVHUB_TAB  dashboard|market|history|news|more|plan|integrations|system|control|systems
+    ///   -DVHUB_TAB  dashboard|market|history|news|more|plan|ev|integrations|system|control|systems
     ///   -DVHUB_OPEN pv|battery|grid|home|money|state
     private func applyDebugArguments() {
         let d = UserDefaults.standard

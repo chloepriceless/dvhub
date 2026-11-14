@@ -92,7 +92,8 @@ final class DuoTests: XCTestCase {
         if !wide {
             // Zurück zur Liste: „Mehr“ führt hinein und wieder heraus.
             app.goBack(to: "Mehr")
-            XCTAssertTrue(app.descendants(matching: .any)["more.about"].firstMatch.waitForExistence(timeout: 5), "zurück zur Liste „Mehr“ geht nicht")
+            // Der eben angetippte Eintrag steht wieder da (der letzte, „Über“, liegt zugeklappt unter dem Rand).
+            XCTAssertTrue(app.descendants(matching: .any)["more.appearance"].firstMatch.waitForExistence(timeout: 5), "zurück zur Liste „Mehr“ geht nicht")
         }
 
         go("Leitstand", "dashboard")

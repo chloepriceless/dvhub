@@ -1,5 +1,6 @@
-// PlanView.swift — Fahrplan: EOS-Plan aus /api/eos/plan (Pro) und der
-// Zeitplan der Steuerung aus /api/schedule. Nur lesend.
+// PlanView.swift — Fahrplan: EOS-Plan aus /api/eos/plan (Pro, nur lesend) und
+// der Zeitplan der Steuerung aus /api/schedule — den bedient man hier auch
+// (ScheduleSection: Regeln, Grundwerte, Börsenautomatik).
 
 import SwiftUI
 import Charts
@@ -22,7 +23,8 @@ struct PlanView: View {
     @State private var rows: [PlanRow] = []
     @State private var message: String?
     @State private var fetchedAt: Date?
-    @State private var schedule: JSONValue?
+    @State var schedule: JSONValue?
+    @State var automation: JSONValue?
     @State private var selection: Date?
 
     var body: some View {
@@ -37,7 +39,10 @@ struct PlanView: View {
                 }
                 stepsCard
             }
-            if let s = schedule { scheduleCard(s) }
+            if let s = schedule {
+                ControlHint(controller: controller)
+                ScheduleSection(controller: controller, schedule: s, automation: automation, wide: Layout.isWide(width)) { await loadSchedule() }
+            }
         }
         .navigationTitle("Fahrplan")
         .screenActions(.more, [
@@ -178,38 +183,6 @@ struct PlanView: View {
         }
     }
 
-    private func scheduleCard(_ s: JSONValue) -> some View {
-        let active = s["active"] ?? .null
-        let rules = (s["rules"]?.array ?? []).filter { $0["enabled"]?.bool != false }
-        let targets = ["gridSetpointW", "minSocPct", "maxDischargeW", "chargeCurrentA"]
-        return GlassCard(tint: Brand.yellow) {
-            VStack(alignment: .leading, spacing: 0) {
-                Eyebrow(text: "Zeitplan der Steuerung", icon: "clock.badge.checkmark", tint: Brand.yellow)
-                RowStack {
-                    ForEach(targets, id: \.self) { t in
-                        if let v = active[t]?["value"]?.number {
-                            ValueRow(label: "Jetzt: " + IntegrationsView.targetName(t), value: Self.targetValue(t, v),
-                                     hint: active[t]?["source"]?.string.map(DetailView.sourceName))
-                        }
-                    }
-                }
-                if rules.isEmpty {
-                    Text("Keine aktiven Regeln.").font(.footnote).foregroundStyle(Brand.text2).padding(.top, 8)
-                } else {
-                    Text(rules.count == 1 ? "1 aktive Regel" : "\(rules.count) aktive Regeln").font(.caption.weight(.bold)).foregroundStyle(Brand.text).padding(.top, 10)
-                    RowStack {
-                        ForEach(Array(rules.prefix(14).enumerated()), id: \.offset) { _, r in
-                            ValueRow(label: "\(r["start"]?.string ?? "–")–\(r["end"]?.string ?? "–")",
-                                     value: IntegrationsView.targetName(r["target"]?.string ?? "") + " " + Self.targetValue(r["target"]?.string ?? "", r["value"]?.number),
-                                     hint: r["source"]?.string.map(DetailView.sourceName))
-                        }
-                    }
-                    if rules.count > 14 { Text("… und \(rules.count - 14) weitere").font(.caption2).foregroundStyle(Brand.dim).padding(.top, 4) }
-                }
-            }
-        }
-    }
-
     static func targetValue(_ target: String, _ v: Double?) -> String {
         guard let v else { return "–" }
         switch target {
@@ -230,7 +203,7 @@ struct PlanView: View {
             if rows.isEmpty { message = String(localized: "Der Fahrplan braucht eine Verbindung zur Anlage.") }
             return
         }
-        if let r = try? await controller.request("GET", "/api/schedule"), r.status == 200 { schedule = r.body }
+        await loadSchedule()
         do {
             let r = try await controller.request("GET", "/api/eos/plan?rows=192")
             if r.status == 403 { message = String(localized: "Der EOS-Plan braucht eine Pro-Lizenz in DVhub."); rows = []; return }
@@ -259,6 +232,16 @@ struct PlanView: View {
         } catch {
             message = userMessage(for: error)
         }
+    }
+}
+
+extension PlanView {
+    /// Zeitplan und Börsenautomatik neu lesen (auch nach jeder Änderung).
+    func loadSchedule() async {
+        guard controller.isOnline else { return }
+        if let r = try? await controller.request("GET", "/api/schedule"), r.status == 200 { schedule = r.body }
+        // Ältere DVhub-Stände geben die Börsenautomatik der App nicht frei (403) — dann fehlt nur diese Karte.
+        if let r = try? await controller.request("GET", "/api/schedule/automation/config") { automation = r.status == 200 ? r.body : nil }
     }
 }
 
