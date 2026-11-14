@@ -1178,6 +1178,9 @@ const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
 // Sungrow-EMS (T-0422): Merker, dass DVhub den Zwangs-/External-EMS-Betrieb gesetzt hat (übersteht Neustarts).
 const SUNGROW_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_state.json');
 const SUNGROW_SLAVE_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_slave_state.json');
+// Lebenszeichen für den unabhängigen Box-Watchdog (Absicherung C4, Dauer-Forced): der Master-Aktuator frischt es
+// auf, der externe Watchdog (scripts/sungrow-forced-watchdog.mjs) liest es.
+const SUNGROW_FORCED_HEARTBEAT_PATH = path.join(DATA_DIR || __dirname, 'sungrow_forced_heartbeat.json');
 // Peak Shaving (GitHub #28): eine von DVhub aufgehobene Akku-Sperre (Victron
 // 2704) steht gespeichert im GX — der Merker sorgt dafür, dass ein neuer
 // Prozess sie zurückschreibt statt sie zu vergessen.
@@ -1401,6 +1404,7 @@ const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
   sungrowEmsStatePath: SUNGROW_EMS_STATE_PATH,
   sungrowSlaveEmsStatePath: SUNGROW_SLAVE_EMS_STATE_PATH,
+  sungrowForcedHeartbeatPath: IS_RUNTIME_PROCESS ? SUNGROW_FORCED_HEARTBEAT_PATH : null,
   peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
   // Nur der Laufzeit-Prozess regelt — nur er liest und schreibt den Merker.
   gridConnectionAssistPath: IS_RUNTIME_PROCESS ? GRID_CONNECTION_ASSIST_PATH : null,

@@ -546,7 +546,7 @@ export function sungrowSecondView(state, cfg) {
  * (Modus 2, ohne Rückfall). Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Modus gesetzt hat
  * (oder gesetzt haben könnte), danach nichts mehr — auch kein Herzschlag.
  */
-export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false }) {
+export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false, forcedHeartbeatPath = null }) {
   const st = {
     target: null,        // { setpointW, source, at }
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
@@ -612,6 +612,19 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     } catch (e) {
       logOnce(e?.message || 'x', 'sungrow_ems_state_persist_error', { error: e?.message || String(e) }, 'warn');
     }
+  }
+
+  // Lebenszeichen-Zeitstempel für den unabhängigen Box-Watchdog (Absicherung C4): solange DVhub den Forced mode
+  // aktiv fährt, wird diese Datei regelmäßig aufgefrischt. Der Watchdog (systemd-Timer) nimmt den Forced mode
+  // zurück, wenn der Master in Modus 2 steht, aber die Datei älter als seine Frist ist (DVhub hängt). Gedrosselt
+  // auf ≥ 5 s (Datei-I/O nicht in jedem 1-s-Takt). Nur der Master schreibt sie (der Slave folgt).
+  function touchForcedHeartbeat() {
+    if (!forcedHeartbeatPath || isSlave) return;
+    const t = now();
+    if (st.lastForcedHeartbeatFileAt && t - st.lastForcedHeartbeatFileAt < 5000) return;
+    st.lastForcedHeartbeatFileAt = t;
+    try { atomicWriteControlState(forcedHeartbeatPath, { at: t, endpointKey: st.endpointKey }); }
+    catch (e) { logOnce(e?.message || 'x', 'sungrow_ems_heartbeat_file_error', { error: e?.message || String(e) }, 'warn'); }
   }
 
   // Modus 4 (VPP) ist immer fremd; Modus 3 (External EMS) nur dann nicht, wenn DVhub ihn selbst gesetzt hat
@@ -1083,6 +1096,9 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
       // Fremder Modus (VPP, oder Modus 2/3 ohne DVhub-Besitz) → nicht übersteuern (B4).
       if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+      // Lebenszeichen für den Box-Watchdog (C4): DVhub fährt den Forced mode aktiv (Befehl, nicht Rückfall) → die
+      // Zeitstempel-Datei auffrischen, auch wenn in diesem Takt nichts geschrieben wird (ausgeregelt).
+      if (decision.mode === 'forced') touchForcedHeartbeat();
       // Split (zwei WR mit aggregierter, frischer Slave-Telemetrie) oder Einzel-WR (alles am Master).
       if (slaveActuator && second != null) {
         return await stepSplit({ conf, ctl, decision, gap: false, second, reason, t, opts });

@@ -110,7 +110,7 @@ test('emsMatches: Self = Modus 0 + Stopp; Zwang mit Leistungstoleranz', () => {
 
 // --- Aktuator ------------------------------------------------------------------------
 
-function rig({ over = {}, device = sungrowDevice(), mockOpts = {}, controlMode = 'forced', heartbeatTimeoutS = 30, statePath = null } = {}) {
+function rig({ over = {}, device = sungrowDevice(), mockOpts = {}, controlMode = 'forced', heartbeatTimeoutS = 30, statePath = null, forcedHeartbeatPath = null } = {}) {
   const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode, heartbeatTimeoutS } });
   const image = sungrowImage(over);
   const t = mockSungrow(image, mockOpts);
@@ -128,7 +128,7 @@ function rig({ over = {}, device = sungrowDevice(), mockOpts = {}, controlMode =
   };
   telemetry();
   const logs = [];
-  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, pushLog: (event, data) => logs.push({ event, data }), now, statePath });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, pushLog: (event, data) => logs.push({ event, data }), now, statePath, forcedHeartbeatPath });
   return { cfg, image, t, state, ems, logs, telemetry, advance: (ms) => { clock += ms; }, now };
 }
 
@@ -225,6 +225,22 @@ test('Absicherung C: releaseControl nimmt im Split BEIDE WR zurück (Slave 0xCC,
   assert.ok(!r.slaveT.writes.some((w) => w.address === MODE), 'Slave bekommt KEINEN Modus-Write');
   assert.equal(r.state.ctrl.sungrowEms.owns, false, 'Master-Besitz abgegeben');
   assert.equal(r.state.ctrl.sungrowEmsSlave.owns, false, 'Slave-Besitz abgegeben');
+});
+
+test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf, solange er Forced fährt', async () => {
+  const hbPath = path.join(os.tmpdir(), `dvhub-forced-hb-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  try {
+    const r = rig({ controlMode: 'forced', forcedHeartbeatPath: hbPath });
+    await r.ems.applySetpoint(-5000, 'rule:abend'); // Forced-Entladen
+    const at1 = JSON.parse(fs.readFileSync(hbPath, 'utf8')).at;
+    assert.ok(Number.isFinite(at1), 'Lebenszeichen nach dem ersten Forced-Takt geschrieben');
+    // Auch ein ausgeregelter Takt (kein Write ans Gerät) frischt das Lebenszeichen auf (DVhub lebt).
+    r.advance(10_000);
+    r.telemetry({ gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 });
+    await r.ems.tick();
+    const at2 = JSON.parse(fs.readFileSync(hbPath, 'utf8')).at;
+    assert.ok(at2 >= at1, 'Lebenszeichen im Takt aufgefrischt');
+  } finally { try { fs.rmSync(hbPath, { force: true }); } catch { /* ignore */ } }
 });
 
 test('Aktuator: Netzladen → Leistung, Befehl, Modus (in dieser Reihenfolge), dann Rücklesen', async () => {
