@@ -290,6 +290,35 @@ final class ControlLogicTests: XCTestCase {
         XCTAssertNil(try XCTUnwrap(EVState.from(["ok": true, "overrideLimits": ["minPowerW": 0, "maxPowerW": 0]])).overrideLimits)
     }
 
+    /// „Gespeichert“ ist nicht „geschehen“: Antworten wie eos-evcc-bridge.js setOverride/clearOverride.
+    func testOverrideOutcomeReadsWhatTheWallboxDid() {
+        func res(_ body: JSONValue, _ status: Int = 200) -> LinkResponse { LinkResponse(status: status, body: body) }
+        let ov: JSONValue = ["kind": "charge", "powerW": 11000, "requestedW": 50000]
+        XCTAssertEqual(OverrideOutcome.from(res(["ok": true, "override": ov, "result": ["ok": true]]), action: .charge), .done(.charge, powerW: 11000))
+        XCTAssertTrue(OverrideOutcome.done(.charge, powerW: 11000).ok)
+        // Not-Halt aktiv: gespeichert, aber die Box steuert nicht.
+        let paused = OverrideOutcome.from(res(["ok": true, "override": ov, "result": ["ok": false, "skipped": "paused"]]), action: .charge)
+        XCTAssertEqual(paused, .savedButPaused(.charge))
+        XCTAssertFalse(paused.ok)
+        XCTAssertEqual(OverrideOutcome.from(res(["ok": true, "override": ov, "result": ["skipped": "pro required"]]), action: .stop), .savedButNoPro(.stop))
+        // Die Wallbox antwortet nicht.
+        let dead = OverrideOutcome.from(res(["ok": true, "override": ov, "result": ["ok": false, "error": "timeout"]]), action: .charge)
+        XCTAssertEqual(dead, .chargerError(.charge, "timeout"))
+        XCTAssertFalse(dead.ok)
+        // Ohne result (ältere Box): gilt als geschehen.
+        XCTAssertEqual(OverrideOutcome.from(res(["ok": true, "override": ["kind": "stop", "powerW": 0]]), action: .stop), .done(.stop, powerW: nil))
+        // Beenden.
+        XCTAssertEqual(OverrideOutcome.from(res(["ok": true, "override": nil, "result": ["ok": true], "error": nil]), action: .end), .done(.end, powerW: nil))
+        XCTAssertEqual(OverrideOutcome.from(res(["ok": true, "override": nil, "result": nil, "error": "Wallbox hat nicht geantwortet"]), action: .end),
+                       .chargerError(.end, "Wallbox hat nicht geantwortet"))
+        XCTAssertEqual(OverrideOutcome.from(res(["ok": false, "error": "emergency_stop_active", "override": ["kind": "stop"]]), action: .end), .keptByEmergencyStop)
+        XCTAssertFalse(OverrideOutcome.keptByEmergencyStop.ok)
+        // Abgelehnt.
+        XCTAssertEqual(OverrideOutcome.from(res(["ok": false, "error": "pro_required"], 403), action: .charge), .failed(.proRequired))
+        XCTAssertEqual(OverrideOutcome.from(res(["ok": false, "error": "until must be within 48 h"], 400), action: .charge), .failed(.invalid("until must be within 48 h")))
+        XCTAssertEqual(OverrideOutcome.from(res(["error": "control_not_allowed"], 403), action: .end), .failed(.notAllowed))
+    }
+
     // MARK: Tarif
 
     private func price(_ iso: String, _ ct: Double, minutes: Double = 15, importCt: Double? = nil) -> PricePoint {

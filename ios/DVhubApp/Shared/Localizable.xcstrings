@@ -1532,16 +1532,6 @@
         }
       }
     },
-    "Beendet. Es gilt wieder der Plan von EOS." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ended. The EOS plan applies again."
-          }
-        }
-      }
-    },
     "Beginn" : {
       "localizations" : {
         "en" : {
@@ -4583,16 +4573,6 @@
         }
       }
     },
-    "Laden ist gestoppt." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Charging is stopped."
-          }
-        }
-      }
-    },
     "Laden planen, Ziele setzen" : {
       "localizations" : {
         "en" : {
@@ -4819,16 +4799,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Live Activities are turned off for DVhub in iOS Settings."
-          }
-        }
-      }
-    },
-    "Lädt jetzt mit %@." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Now charging at %@."
           }
         }
       }

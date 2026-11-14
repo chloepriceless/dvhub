@@ -61,6 +61,36 @@
         }
       }
     },
+    "Beendet – der Not-Halt ist aktiv, DVhub steuert die Wallbox erst nach dem Aufheben wieder." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ended – the emergency stop is active; DVhub controls the wallbox again only after it is lifted."
+          }
+        }
+      }
+    },
+    "Beendet, aber die Wallbox meldet: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ended, but the wallbox reports: %@."
+          }
+        }
+      }
+    },
+    "Beendet. Es gilt wieder der Plan von EOS." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ended. The EOS plan applies again."
+          }
+        }
+      }
+    },
     "Beginn und Ende dürfen nicht gleich sein." : {
       "localizations" : {
         "en" : {
@@ -147,6 +177,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The charge level must be between 0 and 100%."
+          }
+        }
+      }
+    },
+    "Der Not-Halt ist aktiv – „Laden stoppen“ bleibt bis zum Aufheben bestehen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The emergency stop is active – “Stop charging” stays in place until it is lifted."
           }
         }
       }
@@ -351,6 +391,36 @@
         }
       }
     },
+    "Gespeichert – aber der Not-Halt ist aktiv. Es wirkt erst nach dem Aufheben." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved – but the emergency stop is active. It takes effect only after it is lifted."
+          }
+        }
+      }
+    },
+    "Gespeichert – aber ohne Pro-Lizenz steuert DVhub die Wallbox nicht." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved – but without a Pro licence DVhub does not control the wallbox."
+          }
+        }
+      }
+    },
+    "Gespeichert, aber die Wallbox meldet: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved, but the wallbox reports: %@."
+          }
+        }
+      }
+    },
     "Gespeichert." : {
       "localizations" : {
         "en" : {
@@ -441,6 +511,26 @@
         }
       }
     },
+    "Laden ist gestoppt." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charging is stopped."
+          }
+        }
+      }
+    },
+    "Lädt jetzt mit %@ kW." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Now charging at %@ kW."
+          }
+        }
+      }
+    },
     "Mehr als %lld Abfahrten in der Woche gehen nicht." : {
       "localizations" : {
         "en" : {
@@ -507,6 +597,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Keychain error %@"
+          }
+        }
+      }
+    },
+    "Sofort laden läuft." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge now is running."
           }
         }
       }
@@ -643,6 +743,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "cheap"
+          }
+        }
+      }
+    },
+    "keine Antwort" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no response"
           }
         }
       }

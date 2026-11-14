@@ -535,6 +535,70 @@ public enum EVEdit {
     }
 }
 
+/// Was die Box auf „Sofort laden“, „Laden stoppen“ und „Beenden“ antwortet.
+/// HTTP 200 mit ok:true heißt nur: gespeichert. Ob die Wallbox es auch tut,
+/// steht in `result` bzw. `error` — ausgewertet wie in der Weboberfläche
+/// (dvhub/public/ev-tile.js; Form: eos-evcc-bridge.js setOverride/clearOverride).
+public enum OverrideOutcome: Equatable, Sendable {
+    public enum Action: Sendable { case charge, stop, end }
+
+    /// Wirkt. `powerW`: die Leistung, auf die die Box begrenzt hat (nur beim Laden).
+    case done(Action, powerW: Double?)
+    /// Gespeichert, aber der Not-Halt ist aktiv: Die Box steuert die Wallbox gerade nicht.
+    case savedButPaused(Action)
+    /// Gespeichert, aber ohne Pro-Lizenz steuert DVhub die Wallbox nicht.
+    case savedButNoPro(Action)
+    /// Gespeichert bzw. beendet, aber die Wallbox hat den Befehl nicht angenommen.
+    case chargerError(Action, String?)
+    /// Beenden abgelehnt: Im Not-Halt bleibt „Laden stoppen“ stehen.
+    case keptByEmergencyStop
+    case failed(WriteOutcome)
+
+    public static func from(_ r: LinkResponse, action: Action) -> OverrideOutcome {
+        if action == .end, r.body["error"]?.string == "emergency_stop_active" { return .keptByEmergencyStop }
+        let out = WriteOutcome.from(r)
+        guard out.ok else { return .failed(out) }
+        let result = r.body["result"] ?? .null
+        switch result["skipped"]?.string {
+        case "paused": return .savedButPaused(action)
+        case "pro required": return .savedButNoPro(action)
+        default: break
+        }
+        if action == .end {
+            // clearOverride nennt einen Fehler der Wallbox oben in `error`.
+            if let e = r.body["error"]?.string, !e.isEmpty { return .chargerError(action, e) }
+        } else if result["ok"]?.bool == false, result["skipped"] == nil || result["skipped"]?.isNull == true {
+            return .chargerError(action, result["error"]?.string)
+        }
+        return .done(action, powerW: action == .charge ? r.body["override"]?["powerW"]?.number : nil)
+    }
+
+    /// Nur dann ist wirklich geschehen, was der Knopf sagt.
+    public var ok: Bool { if case .done = self { return true }; return false }
+
+    public var message: String {
+        switch self {
+        case .done(.charge, let w):
+            guard let w else { return L("Sofort laden läuft.") }
+            let kw = (w / 100).rounded() / 10
+            return L("Lädt jetzt mit \(kw.formatted(.number.precision(.fractionLength(0...1)))) kW.")
+        case .done(.stop, _): return L("Laden ist gestoppt.")
+        case .done(.end, _): return L("Beendet. Es gilt wieder der Plan von EOS.")
+        case .savedButPaused(.end): return L("Beendet – der Not-Halt ist aktiv, DVhub steuert die Wallbox erst nach dem Aufheben wieder.")
+        case .savedButPaused: return L("Gespeichert – aber der Not-Halt ist aktiv. Es wirkt erst nach dem Aufheben.")
+        case .savedButNoPro: return L("Gespeichert – aber ohne Pro-Lizenz steuert DVhub die Wallbox nicht.")
+        case .chargerError(.end, let e):
+            let text = e ?? L("unbekannt")
+            return L("Beendet, aber die Wallbox meldet: \(text).")
+        case .chargerError(_, let e):
+            let text = e ?? L("keine Antwort")
+            return L("Gespeichert, aber die Wallbox meldet: \(text).")
+        case .keptByEmergencyStop: return L("Der Not-Halt ist aktiv – „Laden stoppen“ bleibt bis zum Aufheben bestehen.")
+        case .failed(let out): return out.message
+        }
+    }
+}
+
 // MARK: - Tarif: Einspeisung gegen Bezug
 
 /// Eine Viertelstunde (oder Stunde) mit beiden Preisen.

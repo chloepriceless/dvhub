@@ -236,7 +236,7 @@ function setOverride(body) {
     if (!Number.isFinite(p) || p <= 0) return bad('powerW must be > 0');
     evOverride = { kind: 'charge', powerW: Math.round(Math.min(OVERRIDE_LIMITS.maxPowerW, Math.max(OVERRIDE_LIMITS.minPowerW, p))), requestedW: Math.round(p), startedAt, until, seenConnected: false };
   }
-  return { status: 200, body: { ok: true, override: evOverride } };
+  return { status: 200, body: { ok: true, override: evOverride, result: { ok: true } } };
 }
 // POST /api/ev: nur die Felder im Körper, mit denselben Grenzen wie die Box (ev-departure.js).
 function evPatch(body) {
@@ -438,7 +438,7 @@ async function loopback(method, p, bodyText) {
   if (method === 'DELETE' && pathname === '/api/ev/override') {
     console.log(`[box] DELETE ${pathname}`);
     evOverride = null;
-    return { status: 200, body: { ok: true, override: null } };
+    return { status: 200, body: { ok: true, override: null, result: { ok: true }, error: null } };
   }
   if (method === 'POST') {
     let body;

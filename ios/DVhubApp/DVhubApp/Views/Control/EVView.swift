@@ -319,7 +319,9 @@ struct EVView: View {
                                 Spacer(minLength: 8)
                                 Text(Format.power(chargeW)).font(.system(.body, design: .rounded).weight(.semibold)).monospacedDigit().foregroundStyle(Brand.text)
                             }
-                            Slider(value: $chargeW, in: limits.minPowerW...limits.maxPowerW, step: 100)
+                            // Ohne Raster: Die Grenzen der Wallbox sind oft krumm (4140 … 11000 W), mit festen
+                            // Schritten wäre der Höchstwert nicht zu erreichen. Gesendet werden ganze Watt.
+                            Slider(value: $chargeW, in: limits.minPowerW...limits.maxPowerW)
                                 .accessibilityLabel("Ladeleistung")
                                 .accessibilityValue(Format.power(chargeW))
                                 .accessibilityIdentifier("ev.chargePower")
@@ -367,16 +369,10 @@ struct EVView: View {
             case .end:
                 r = try await controller.request("DELETE", "/api/ev/override")
             }
-            let out = WriteOutcome.from(r)
-            guard out.ok else { return WriteFeedback(ok: false, text: out.message) }
-            switch action {
-            case .start:
-                // Die Box begrenzt auf das, was die Wallbox kann — sagen, womit wirklich geladen wird.
-                let w = r.body["override"]?["powerW"]?.number ?? chargeW
-                return WriteFeedback(ok: true, text: String(localized: "Lädt jetzt mit \(Format.power(w))."))
-            case .stop: return WriteFeedback(ok: true, text: String(localized: "Laden ist gestoppt."))
-            case .end: return WriteFeedback(ok: true, text: String(localized: "Beendet. Es gilt wieder der Plan von EOS."))
-            }
+            // „Gespeichert“ ist nicht „geschehen“: Not-Halt, fehlende Lizenz oder eine stumme Wallbox
+            // meldet die Box im Ergebnis — ausgewertet im Paket (OverrideOutcome, getestet).
+            let out = OverrideOutcome.from(r, action: action == .start ? .charge : (action == .stop ? .stop : .end))
+            return WriteFeedback(ok: out.ok, text: out.message)
         }
         busy = false
         chargeFeedback = result
@@ -582,7 +578,10 @@ struct EVView: View {
         }
         busy = false
         weekFeedback = result
-        if result.ok { editingRow = nil; newDay = nil }
+        // Stand die Zeile inzwischen anders da, den Editor ebenfalls schließen: Seine Felder zeigen den alten
+        // Entwurf, der Index kann nach dem Neuladen eine andere Zeile meinen — ein zweites „Speichern“
+        // überschriebe sie (Gegenprüfung 6d123f87).
+        if result.ok || result.text == EVEdit.WeekProblem.unknownRow.message { editingRow = nil; newDay = nil }
         // Auch nach einer Ablehnung neu laden: Die Seite zeigt dann den Stand der Box.
         await load()
     }
