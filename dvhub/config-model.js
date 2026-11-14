@@ -1447,6 +1447,47 @@ function buildFieldDefinitions() {
       help: 'Nur bei External EMS: so lange wartet der Wechselrichter auf die nächste Meldung von DVhub, bevor er selbst auf Eigenverbrauch zurückschaltet. DVhub meldet sich alle 10 s; 30 s (Standard) verkraftet zwei verpasste Meldungen, ohne dass der Wechselrichter zurückfällt, und beendet einen Lade- oder Entladebefehl nach einem Ausfall spätestens nach einer halben Minute. Erlaubt 20–300 s.'
     },
 
+    // Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (T-0422, Feldabnahme). Der Master mit dem Smart Meter
+    // regelt (bestehende Verbindung victron.*); der zweite WR wird NUR gelesen. host leer = ein WR wie bisher.
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.host',
+      label: 'Zweiter Sungrow-WR: Adresse (Master/Slave-Parallelbetrieb)',
+      type: 'text',
+      help: 'Nur für zwei Sungrow-Hybrid-WR im Master/Slave-Verbund: IP/Name des ZWEITEN WR (Slave). Der erste WR (der mit dem Smart Meter = Master) bleibt die normale Verbindung oben und regelt weiter; der zweite WR wird nur ausgelesen (nie gesteuert — der Master verteilt die Vorgabe intern). Leer = ein WR wie bisher.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.aggregateTelemetry',
+      label: 'Zweiter WR: Werte zur Systemsumme zusammenzählen',
+      type: 'boolean',
+      help: 'Nur einschalten, wenn am Gerät geprüft ist, dass der Master NICHT bereits die Summe beider WR meldet (jeder WR meldet dann nur seine eigene PV-/Akku-Leistung). An = DVhub zählt PV, Akku-Leistung, SoC und Hauslast beider WR zusammen und nimmt die Summe beider BDC-Nennleistungen als Leistungsgrenze. Aus = nur die Werte des Masters.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.batteryCapacityWh',
+      label: 'Akkukapazität zweiter WR (Wh)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Nutzbare Akkukapazität des ZWEITEN WR. Zusammen mit der Kapazität der Hauptanlage (Optimierer) bildet sie die Systemkapazität für den Netzstrom-im-Akku-Zähler und den kapazitätsgewichteten System-SoC. DVhub liest die Kapazität beider WR aus Register 5639 und zeigt sie als Vorschlag (Leitstand/Installateur-Portal) an — bitte den gelesenen Wert prüfen und hier eintragen (nicht automatisch gesetzt).'
+    },
+
     // B-1112 Stufe 2 — Nulleinspeisung bei Abregelung (Christin 2026-07-19).
     // Wirkt nur auf Profilen, die dvControl.zeroFeedIn deklarieren (Fronius);
     // die Zahlen sind Betreiber-einstellbar und liegen deshalb HIER (dvControl

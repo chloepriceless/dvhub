@@ -26,6 +26,14 @@ verweist hierher.
 
 ### Hinzugefügt
 
+- **Sungrow zwei WR: Netzstrom-im-Akku-Zähler und Akkukapazität für beide Akkus.** Der Netzstrom-Zähler
+  rechnet bei aktiver Aggregation mit der **Systemkapazität = Summe beider Akkus** (Hauptanlage +
+  `sungrow.secondInverter.batteryCapacityWh`) und dem System-SoC; ist die Zweit-Kapazität nicht
+  eingetragen, gilt die Summe als unbekannt (keine Kappung, nichts abbuchen — Sperre bleibt im Zweifel
+  an). Neue Einstellungen unter „Sungrow-Akkusteuerung" (Beta): Adresse des zweiten WR, „Werte zur
+  Systemsumme zusammenzählen" und die Akkukapazität des zweiten WR. DVhub liest die Akkukapazität beider
+  WR aus Register 5639 und zeigt sie als **Vorschlag** (Leitstand/Installateur-Portal) an — sie wird
+  nicht automatisch gesetzt.
 - **Sungrow: zwei WR im Master/Slave-Parallelbetrieb (Beta).** Laut Sungrow-Doku V1.1.9/V1.1.11
   (Energy-Management sowie Einspeise-/Wirkleistungsbegrenzung) werden die Steuerregister
   (EMS-Modus 13050, Befehl 13051, Leistung 13052, Herzschlag 13080) im Parallelbetrieb **nur an den

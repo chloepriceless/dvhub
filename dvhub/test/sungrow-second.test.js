@@ -189,8 +189,8 @@ test('sungrowSecondView: ohne Konfiguration null', () => {
 
 test('sungrowSecondView: online → Werte, OHNE host/LAN-IP; offline → Werte null, online:false', () => {
   const cfg = { sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true } } };
-  const online = sungrowSecondView({ sungrowSecond: { online: true, host: '192.168.68.83', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000 } }, cfg);
-  assert.deepEqual(online, { online: true, aggregate: true, socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, runningState: null, runningStateText: null });
+  const online = sungrowSecondView({ sungrowSecond: { online: true, host: '192.168.68.83', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600 } }, cfg);
+  assert.deepEqual(online, { online: true, aggregate: true, socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, runningState: null, runningStateText: null });
   // Keine LAN-IP / kein host in der Statusausgabe.
   assert.ok(!('host' in online));
   const off = sungrowSecondView({ sungrowSecond: { online: false, host: '192.168.68.83', socPct: 61 } }, cfg);

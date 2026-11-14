@@ -24,6 +24,27 @@
 // fehlende Kapazität (capacityMissing).
 
 import { planningCfg, planningSocPct, secondGxMissing, followerBatteryStale } from '../multi-gx/planning.js';
+import { resolveSecondInverter, secondInverterTelemetry } from '../inverter/sungrow.js';
+
+/**
+ * Zwei Sungrow-WR im Parallelbetrieb (aggregateTelemetry + Slave einbezogen): die Systemkapazität des
+ * Netzstrom-Zählers ist die SUMME beider Akkus, der Ladestand der System-SoC (state.victron.soc, Punkt 2).
+ * Fehlt die Zweit-Kapazität (sungrow.secondInverter.batteryCapacityWh), ist die Summe unbekannt → wie eine
+ * fehlende Kapazität behandeln (keine Kappung, nichts abbuchen). Gibt null zurück, wenn gerade NICHT aggregiert
+ * wird (Slave offline/aggregateTelemetry aus) → dann gilt der normale (Master-only) Pfad darunter.
+ * @returns {{capacityWh:number|null, socPct:number|null, capacityMissing:boolean}|null}
+ */
+function sungrowSystemCapacityInput(ctx, cfg, mainCapWh) {
+  if (!resolveSecondInverter(cfg).aggregateTelemetry) return null;
+  if (secondInverterTelemetry(ctx?.state, cfg, {}) == null) return null; // Slave nicht einbezogen → Master-only
+  const socRaw = Number(ctx?.state?.victron?.soc);
+  const socPct = Number.isFinite(socRaw) ? socRaw : null;
+  const secondCapWh = Number(cfg?.sungrow?.secondInverter?.batteryCapacityWh);
+  if (!(Number.isFinite(secondCapWh) && secondCapWh > 0)) {
+    return { capacityWh: null, socPct, capacityMissing: true };
+  }
+  return { capacityWh: mainCapWh + secondCapWh, socPct, capacityMissing: false };
+}
 
 /**
  * Kapazität und Ladestand für den Zähler.
@@ -32,6 +53,9 @@ import { planningCfg, planningSocPct, secondGxMissing, followerBatteryStale } fr
 export function gridShareCapacityInput(ctx, cfg = ctx?.getCfg?.()) {
   const main = Number(cfg?.optimizer?.batteryCapacityWh);
   if (!(Number.isFinite(main) && main > 0)) return { capacityWh: null, socPct: null, capacityMissing: true };
+  // Zwei Sungrow-WR: Systemkapazität = Summe beider Akkus (vor dem multi-gx-Pfad; sie schließen sich aus).
+  const sungrow = sungrowSystemCapacityInput(ctx, cfg, main);
+  if (sungrow) return sungrow;
   // Zweite GX eingeschaltet, aber gerade nicht einbezogen: Kapazität und
   // Ladestand wären nur die der Hauptanlage → Akku-Inhalt unbekannt, damit die
   // Kappung keinen Netzstrom abschreibt (Gegenprüfung 8465a540, P2).

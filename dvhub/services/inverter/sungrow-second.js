@@ -30,6 +30,7 @@ const ADDR = {
   pvPowerW: wire(5017),      // U32 le, Doku 5017–5018 Total DC power (alle MPPT dieses WR)
   socPct: wire(13023),       // U16, Doku 13023, 0,1 %
   bdcRatedW: wire(5628),     // U16, Doku 5628, ×100 W (Nennleistung des Lade-/Entladewandlers)
+  batteryCapacityWh: wire(5639), // U16, Doku 5639 „Battery Capacity – High precision", 0,01 kWh → Wh = ·10 (nur Vorschlag)
   runningState: wire(13000), // U16, Doku 13000
 };
 
@@ -104,7 +105,7 @@ export function createSungrowSecond(ctx, deps = {}) {
 
     let readOk = false;
     let lastError = null;
-    const out = { batteryPowerW: null, pvPowerW: null, socPct: null, bdcRatedW: null, runningState: null };
+    const out = { batteryPowerW: null, pvPowerW: null, socPct: null, bdcRatedW: null, batteryCapacitySuggestionWh: null, runningState: null };
     try {
       const bat = await readReg(c, ADDR.batteryPowerW, 2);
       const sv = s32le(bat);
@@ -114,6 +115,7 @@ export function createSungrowSecond(ctx, deps = {}) {
       const soc = await readReg(c, ADDR.socPct, 1);
       out.socPct = u16(soc?.[0]) == null ? null : u16(soc[0]) / 10;
       try { const bdc = u16((await readReg(c, ADDR.bdcRatedW, 1))?.[0]); out.bdcRatedW = bdc == null || bdc === 0 ? null : bdc * 100; } catch { out.bdcRatedW = null; }
+      try { const cap = u16((await readReg(c, ADDR.batteryCapacityWh, 1))?.[0]); out.batteryCapacitySuggestionWh = cap == null || cap === 0 ? null : Math.round(cap * 10); } catch { out.batteryCapacitySuggestionWh = null; }
       try { out.runningState = u16((await readReg(c, ADDR.runningState, 1))?.[0]); } catch { out.runningState = null; }
       errors = 0;
       readOk = true;
@@ -132,6 +134,7 @@ export function createSungrowSecond(ctx, deps = {}) {
       pvPowerW: ok ? out.pvPowerW : null,
       socPct: ok ? out.socPct : null,
       bdcRatedW: ok ? out.bdcRatedW : null,
+      batteryCapacitySuggestionWh: ok ? out.batteryCapacitySuggestionWh : null,
       runningState: ok ? out.runningState : null,
       runningStateText: ok ? runningStateText(out.runningState) : null,
       reason: ok ? null : (readOk ? null : 'read_failed'),

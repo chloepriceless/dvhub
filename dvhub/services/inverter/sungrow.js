@@ -151,6 +151,13 @@ export async function identifySungrow(read) {
     const bdc = u16((await read({ fc: 4, address: wire(5628), quantity: 1 }))?.[0]);
     bdcRatedW = bdc == null || bdc === 0 ? null : bdc * 100;
   } catch { /* Zusatz */ }
+  // Akkukapazität (Doku 5639 „Battery Capacity – High precision", U16, 0,01 kWh → Wh = Rohwert·10): nur als
+  // Vorschlag für die GUI gelesen, NICHT automatisch gesetzt (Betreiber prüft und trägt ein).
+  let batteryCapacitySuggestionWh = null;
+  try {
+    const capRaw = u16((await read({ fc: 4, address: wire(5639), quantity: 1 }))?.[0]);
+    batteryCapacitySuggestionWh = capRaw == null || capRaw === 0 ? null : Math.round(capRaw * 10);
+  } catch { /* Zusatz */ }
   return {
     vendor: 'sungrow',
     typeCode,
@@ -161,7 +168,8 @@ export async function identifySungrow(read) {
     supported: known != null,
     serial,
     nominalW: nominal == null ? null : nominal * 100,
-    bdcRatedW
+    bdcRatedW,
+    batteryCapacitySuggestionWh
   };
 }
 
@@ -374,6 +382,7 @@ export function sungrowSecondView(state, cfg) {
     batteryPowerW: pick(s?.batteryPowerW),
     pvPowerW: pick(s?.pvPowerW),
     bdcRatedW: pick(s?.bdcRatedW),
+    batteryCapacitySuggestionWh: pick(s?.batteryCapacitySuggestionWh),
     runningState: online ? (s?.runningState ?? null) : null,
     runningStateText: online ? (s?.runningStateText ?? null) : null,
   };
