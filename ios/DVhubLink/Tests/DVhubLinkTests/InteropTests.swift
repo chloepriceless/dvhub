@@ -204,4 +204,62 @@ final class InteropTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(lives, 2, "Sitzung nach paralleler Last nicht mehr nutzbar")
         await conn.close()
     }
+
+    /// Einzelabruf ohne Dauer-Verbindung (Widgets, Hintergrundabruf, Kurzbefehle):
+    /// frischer Stand von der Box, daneben bleibt eine zweite Verbindung
+    /// desselben Geräts ungestört.
+    func testQuickSnapshotLiveAndSideBySide() async throws {
+        let (creds, signer, conn, _) = try await pairAndConnect(via: .relay)
+        let snap = try await QuickLink.snapshot(credentials: creds, signer: signer)
+        XCTAssertTrue(snap.live)
+        XCTAssertNotNil(snap.status.soc)
+        XCTAssertEqual(snap.perms?.contains("read"), true)
+        XCTAssertLessThan(abs(snap.at.timeIntervalSinceNow), 60)
+        // Die erste Verbindung (die „App“) lebt weiter.
+        let r = try await conn.request("GET", "/api/status")
+        XCTAssertEqual(r.status, 200)
+        await conn.close()
+    }
+
+    /// Not-Halt als Einzelabruf: Antwort auswerten, danach kommt der neue Stand
+    /// über dieselbe Verbindung; verbotene Pfade bleiben verboten.
+    func testQuickRequestEmergencyStopAndOutcome() async throws {
+        let (creds, signer, conn, _) = try await pairAndConnect(via: .relay)
+        await conn.close()
+        guard creds.canControl else { throw XCTSkip("Harness ohne Recht „control“ (HARNESS_PERMS=read,control)") }
+        let stop = try await QuickLink.request(credentials: creds, signer: signer, method: "POST", path: "/api/control/stop", body: [:])
+        XCTAssertTrue(ControlOutcome.from(stop.response).applied, "\(stop.response.status) \(stop.response.body)")
+        XCTAssertEqual(stop.after?.status.emergencyStop, true)
+        let resume = try await QuickLink.request(credentials: creds, signer: signer, method: "POST", path: "/api/control/resume", body: [:])
+        XCTAssertEqual(ControlOutcome.from(resume.response), .done)
+        XCTAssertEqual(resume.after?.status.emergencyStop, false)
+        let forbidden = try await QuickLink.request(credentials: creds, signer: signer, method: "POST", path: "/api/config", body: [:])
+        XCTAssertEqual(ControlOutcome.from(forbidden.response), .notAllowed)
+    }
+
+    /// Box nicht verbunden: Der Einzelabruf liefert den letzten Stand aus dem
+    /// Briefkasten (nicht live); Schalten meldet „nicht verbunden“.
+    func testQuickSnapshotFallsBackToMailbox() async throws {
+        guard let pidText = ProcessInfo.processInfo.environment["DVHUB_INTEROP_HARNESS_PID"], let pid = Int32(pidText) else {
+            throw XCTSkip("DVHUB_INTEROP_HARNESS_PID nicht gesetzt")
+        }
+        let (creds, signer, conn, _) = try await pairAndConnect(via: .relay)
+        try await Task.sleep(nanoseconds: 3_500_000_000)  // Briefkasten füllen lassen
+        await conn.close()
+        kill(pid, SIGUSR1)
+        defer { kill(pid, SIGUSR2) }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        var relayOnly = creds
+        relayOnly.lan = []
+        let snap = try await QuickLink.snapshot(credentials: relayOnly, signer: signer)
+        XCTAssertFalse(snap.live)
+        XCTAssertNotNil(snap.status.soc)
+        do {
+            _ = try await QuickLink.request(credentials: relayOnly, signer: signer, method: "POST", path: "/api/control/stop", body: [:])
+            XCTFail("ohne Box darf nicht geschaltet werden")
+        } catch LinkError.boxOffline {
+        } catch {
+            XCTFail("unerwarteter Fehler \(error)")
+        }
+    }
 }

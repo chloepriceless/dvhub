@@ -20,7 +20,11 @@ final class AppModel {
     private(set) var systems: [LinkCredentials] = []
     /// Gewählte Anlage — bleibt über Neustarts erhalten.
     var selectedId: String? {
-        didSet { UserDefaults.standard.set(selectedId, forKey: Self.selectedKey) }
+        didSet {
+            UserDefaults.standard.set(selectedId, forKey: Self.selectedKey)
+            // Auch für Widgets, Kurzbefehle und den Hintergrundabruf (App-Gruppe).
+            SharedStore.selectedSystemId = selectedId
+        }
     }
     static let selectedKey = "selectedSystem"
     private(set) var controllers: [String: SystemController] = [:]
@@ -42,9 +46,42 @@ final class AppModel {
     /// Nur für Simulator-Tests (Debug-Startargument): Link ohne Rückfrage koppeln.
     var pendingPairAutoStart = false
 
+    /// Bereich, den ein Link, ein Widget oder das Kontrollzentrum öffnen will
+    /// (`dvhub://open/<Bereich>`); die Wurzelansicht übernimmt und leert ihn.
+    var pendingOpen: String?
+    /// Rückfrage zum Not-Halt, die von außen angestoßen wurde (Kontrollzentrum):
+    /// true = auslösen, false = aufheben. Die Ansicht „Steuern“ zeigt sie.
+    var pendingStopRequest: Bool?
+
     private let widgets = WidgetBridge()
 
-    init() {}
+    init() {
+        // Geteilte Schlüsselbund-Gruppe einrichten und vorhandene Einträge
+        // umziehen, bevor irgendetwas gelesen wird.
+        LinkAccess.configure()
+        IntentHooks.openEmergencyStop = { [weak self] stop in
+            self?.pendingStopRequest = stop
+            self?.pendingOpen = "control"
+        }
+        IntentHooks.snapshotChanged = { snapshot in await LiveActivityManager.sync(snapshot) }
+    }
+
+    /// Link in die App. Liefert false, wenn er nicht für die App ist.
+    @discardableResult
+    func handle(url: URL) -> Bool {
+        guard url.scheme == "dvhub" else { return false }
+        switch url.host {
+        case "pair":
+            // Kamera-App oder Link: dvhub://pair?…
+            pendingPairLink = url.absoluteString
+            return true
+        case "open":
+            pendingOpen = url.pathComponents.dropFirst().first
+            return true
+        default:
+            return false
+        }
+    }
 
     /// Anlagen aus dem Schlüsselbund lesen. Wird bei jedem Wechsel in den
     /// Vordergrund wiederholt, solange es nicht geklappt hat.
@@ -56,11 +93,11 @@ final class AppModel {
             storageError = nil
         } catch {
             loadFailed = true
-            storageError = "Gespeicherte Anlagen konnten nicht gelesen werden (Gerät gesperrt?). Neuer Versuch beim nächsten Öffnen."
+            storageError = String(localized: "Gespeicherte Anlagen konnten nicht gelesen werden (Gerät gesperrt?). Neuer Versuch beim nächsten Öffnen.")
         }
         loaded = true
         for s in systems where controllers[s.id] == nil { attach(s) }
-        let remembered = UserDefaults.standard.string(forKey: Self.selectedKey)
+        let remembered = SharedStore.selectedSystemId ?? UserDefaults.standard.string(forKey: Self.selectedKey)
         if selectedId == nil || !systems.contains(where: { $0.id == selectedId }) {
             selectedId = systems.contains(where: { $0.id == remembered }) ? remembered : systems.first?.id
         }
@@ -73,7 +110,7 @@ final class AppModel {
         c.onCredentialsChanged = { [weak self] updated in self?.store(updated) }
         c.onStatus = { [weak self, weak c] status, at in
             guard let self, let c, c.credentials.id == self.selectedId else { return }
-            self.widgets.update(status, at: at, boxName: c.credentials.boxName)
+            self.widgets.update(status, at: at, boxName: c.credentials.boxName, boxId: c.credentials.id)
         }
         controllers[creds.id] = c
     }
@@ -91,7 +128,7 @@ final class AppModel {
             storageError = nil
             return true
         } catch {
-            storageError = "Speichern im Schlüsselbund fehlgeschlagen."
+            storageError = String(localized: "Speichern im Schlüsselbund fehlgeschlagen.")
             return false
         }
     }
@@ -107,8 +144,9 @@ final class AppModel {
         for c in controllers.values { c.stop() }
         // Beim Verlassen den letzten Stand sicher an die Widgets geben.
         if let c = selected, let s = c.displayStatus, let at = c.displayAt {
-            widgets.update(s, at: at, boxName: c.credentials.boxName, force: true)
+            widgets.update(s, at: at, boxName: c.credentials.boxName, boxId: c.credentials.id, force: true)
         }
+        BackgroundRefresh.schedule()
     }
 
     func select(_ id: String) {
@@ -147,7 +185,7 @@ final class AppModel {
 
     private func pair(qr: String) async {
         guard !loadFailed else {
-            pairState = .failed("Die gespeicherten Anlagen sind gerade nicht lesbar. Bitte Gerät entsperren und App neu öffnen.")
+            pairState = .failed(String(localized: "Die gespeicherten Anlagen sind gerade nicht lesbar. Bitte Gerät entsperren und App neu öffnen."))
             return
         }
         let payload: PairPayload
@@ -158,11 +196,11 @@ final class AppModel {
             return
         }
         guard payload.expires > Date() else {
-            pairState = .failed("Der QR-Code ist abgelaufen. Bitte in DVhub einen neuen erzeugen.")
+            pairState = .failed(String(localized: "Der QR-Code ist abgelaufen. Bitte in DVhub einen neuen erzeugen."))
             return
         }
         guard !payload.lan.isEmpty || payload.relay != nil else {
-            pairState = .failed("Der QR-Code enthält keinen Weg zur Anlage.")
+            pairState = .failed(String(localized: "Der QR-Code enthält keinen Weg zur Anlage."))
             return
         }
         pairState = .connecting
@@ -170,7 +208,7 @@ final class AppModel {
         do {
             created = try KeyStore.createSigner()
         } catch {
-            pairState = .failed("Geräteschlüssel konnte nicht angelegt werden: \(error.localizedDescription)")
+            pairState = .failed(String(localized: "Geräteschlüssel konnte nicht angelegt werden: \(error.localizedDescription)"))
             return
         }
         let boxName = payload.name
@@ -189,7 +227,7 @@ final class AppModel {
             guard persist() else {
                 systems = previous
                 KeyStore.deleteKey(created.keyRef)
-                pairState = .failed("Die Kopplung konnte nicht im Schlüsselbund gespeichert werden. Bitte erneut versuchen.")
+                pairState = .failed(String(localized: "Die Kopplung konnte nicht im Schlüsselbund gespeichert werden. Bitte erneut versuchen."))
                 return
             }
             if let old {
@@ -205,8 +243,8 @@ final class AppModel {
         } catch {
             KeyStore.deleteKey(created.keyRef)
             switch error as? LinkError {
-            case .pairingDenied: pairState = .failed("In DVhub abgelehnt.")
-            case .boxSignatureInvalid: pairState = .failed("Die Gegenstelle hat sich nicht als diese Anlage ausgewiesen.")
+            case .pairingDenied: pairState = .failed(String(localized: "In DVhub abgelehnt."))
+            case .boxSignatureInvalid: pairState = .failed(String(localized: "Die Gegenstelle hat sich nicht als diese Anlage ausgewiesen."))
             default: pairState = .failed(userMessage(for: error))
             }
         }
@@ -232,9 +270,10 @@ final class AppModel {
     }
 }
 
-/// Gibt den letzten Stand der gewählten Anlage an die Widgets (App-Gruppe).
-/// Gedrosselt: Live-Werte kommen alle 2 s, die Widgets brauchen das nicht —
-/// und das System begrenzt, wie oft eine App ihre Widgets neu zeichnen lässt.
+/// Gibt den letzten Stand der gewählten Anlage an Widgets, Kontrollzentrum
+/// und Live-Aktivität (App-Gruppe). Gedrosselt: Live-Werte kommen alle 2 s,
+/// die Widgets brauchen das nicht — und das System begrenzt, wie oft eine App
+/// ihre Widgets neu zeichnen lässt. Not-Halt und Alarme gehen sofort durch.
 @MainActor
 final class WidgetBridge {
     private var lastWrite: Date?
@@ -243,19 +282,18 @@ final class WidgetBridge {
     static let writeEvery: TimeInterval = 30
     static let reloadEvery: TimeInterval = 300
 
-    func update(_ s: LiveStatus, at: Date, boxName: String, force: Bool = false) {
-        guard SharedStore.isAvailable else { return }
+    func update(_ s: LiveStatus, at: Date, boxName: String, boxId: String, force: Bool = false) {
         let now = Date()
-        if !force, let lastWrite, now.timeIntervalSince(lastWrite) < Self.writeEvery { return }
-        let snap = WidgetSnapshot(boxName: boxName, at: at, soc: s.soc, pvW: s.pvTotalW, loadW: s.loadW, gridImportW: s.gridImportW,
-                                  gridExportW: s.gridExportW, batteryW: s.batteryPowerW, todayNetEur: s.todayNetEur,
-                                  todayRevenueEur: s.todayRevenueEur, todayCostEur: s.todayCostEur, emergencyStop: s.emergencyStop,
-                                  alarmsActive: s.alarmsActive)
-        guard SharedStore.write(snap) else { return }
-        lastWrite = now
-        // Sofort neu zeichnen, wenn sich etwas Wichtiges ändert (Not-Halt, Alarm), sonst alle fünf Minuten.
+        let snap = WidgetSnapshot(s, at: at, boxName: boxName, boxId: boxId)
+        // Wichtiges (Not-Halt, Alarm) wartet nicht auf die Drosselung.
         let urgent = lastSnapshot.map { $0.emergencyStop != snap.emergencyStop || $0.alarmsActive != snap.alarmsActive } ?? true
+        if !force, !urgent, let lastWrite, now.timeIntervalSince(lastWrite) < Self.writeEvery { return }
+        lastWrite = now
         lastSnapshot = snap
+        // Die Live-Aktivität braucht keine App-Gruppe.
+        Task { await LiveActivityManager.sync(snap) }
+        guard SharedStore.isAvailable, SharedStore.write(snap) else { return }
+        if urgent { ControlCenter.shared.reloadControls(ofKind: SharedStore.controlKindStop) }
         if force || urgent || lastReload.map({ now.timeIntervalSince($0) >= Self.reloadEvery }) ?? true {
             lastReload = now
             WidgetCenter.shared.reloadAllTimelines()
@@ -264,11 +302,13 @@ final class WidgetBridge {
 
     /// Anlage gewechselt oder entfernt: alten Stand löschen.
     func reset() {
-        guard SharedStore.isAvailable else { return }
-        SharedStore.clear()
         lastWrite = nil
         lastSnapshot = nil
+        Task { await LiveActivityManager.endAll() }
+        guard SharedStore.isAvailable else { return }
+        SharedStore.clear()
         lastReload = Date()
         WidgetCenter.shared.reloadAllTimelines()
+        ControlCenter.shared.reloadControls(ofKind: SharedStore.controlKindStop)
     }
 }

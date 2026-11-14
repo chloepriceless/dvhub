@@ -5,6 +5,11 @@ options:
     iOS: "18.0"
   createIntermediateGroups: true
   developmentLanguage: de
+settings:
+  base:
+    # Texte: String-Kataloge (Shared/Localizable.xcstrings, …), Ausgangssprache Deutsch.
+    SWIFT_EMIT_LOC_STRINGS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
 configFiles:
   Debug: Config/App.xcconfig
   Release: Config/App.xcconfig
@@ -28,6 +33,7 @@ targets:
         CFBundleDevelopmentRegion: de
         CFBundleLocalizations:
           - de
+          - en
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
@@ -50,6 +56,14 @@ targets:
         NSLocalNetworkUsageDescription: DVhub verbindet sich im Heimnetz direkt mit deiner Anlage.
         NSFaceIDUsageDescription: Face ID bestätigt Schaltbefehle an deine Anlage.
         DVhubAppGroup: $(DVHUB_APP_GROUP)
+        DVhubKeychainGroup: $(DVHUB_KEYCHAIN_GROUP)
+        # Live-Aktivität „Not-Halt aktiv“ (ActivityKit, ohne Push).
+        NSSupportsLiveActivities: true
+        # Hintergrundabruf (BGAppRefreshTask): hält Widgets und Live-Aktivität aktuell.
+        UIBackgroundModes:
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - $(DVHUB_BUNDLE_ID).refresh
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         CFBundleURLTypes:
@@ -83,6 +97,10 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         DVhubAppGroup: $(DVHUB_APP_GROUP)
+        DVhubKeychainGroup: $(DVHUB_KEYCHAIN_GROUP)
+        CFBundleLocalizations:
+          - de
+          - en
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
@@ -118,5 +136,8 @@ schemes:
       config: Debug
     test:
       config: Debug
+      # Die Oberflächentests suchen deutsche Beschriftungen.
+      language: de
+      region: DE
       targets:
         - DVhubAppUITests

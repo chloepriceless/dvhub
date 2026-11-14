@@ -17,10 +17,11 @@ struct DVhubApp: App {
                 .environment(market)
                 .environment(news)
                 .preferredColorScheme((Appearance(rawValue: appearance) ?? .dark).scheme)
-                .onOpenURL { url in
-                    // Kamera-App oder Link: dvhub://pair?…
-                    if url.scheme == "dvhub", url.host == "pair" { model.pendingPairLink = url.absoluteString }
-                }
+                .onOpenURL { model.handle(url: $0) }
+        }
+        // Hintergrundabruf (BGAppRefreshTask): hält Widgets und Live-Aktivität aktuell.
+        .backgroundTask(.appRefresh(BackgroundRefresh.taskId)) {
+            await BackgroundRefresh.run()
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
