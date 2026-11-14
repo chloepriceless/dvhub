@@ -157,7 +157,9 @@ Box → Gerät zuerst: `{"t":"welcome","box":{"id","name","version"},"perms":["r
 | `{"t":"ping","id":…}` | `{"t":"pong","id":…}` |
 | — | `{"t":"relay","relay":"wss://…"|null}` wenn in DVhub die Relay-Adresse geändert oder das Relay ausgeschaltet wurde — speichern (wie `relay` im `welcome`); danach trennt die Box die alte Relay-Verbindung |
 
-Erlaubte Pfade: `dvhub/services/mobile-link/permissions.js`. Passt eine Antwort
+Erlaubte Pfade: `dvhub/services/mobile-link/permissions.js`. Methoden: `GET` und
+`POST`; `DELETE` nur für `/api/ev/override` („Sofort laden“ beenden, ohne `b`),
+jedes andere `DELETE` → `s: 405`. Passt eine Antwort
 verschlüsselt nicht in einen Relay-Rahmen (1 MiB, also gut 750 KiB JSON), kommt
 `s: 413` mit `{"error":"response_too_large"}`.
 
