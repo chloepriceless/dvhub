@@ -5,6 +5,13 @@
 // passiert, entscheidet allein diese Liste: „Anzeigen“ = ausgewählte lesende
 // Endpunkte, „Steuern“ zusätzlich wenige Schalt-Endpunkte. Konfiguration,
 // Admin, Sicherungen, Exporte und Kopplungen bleiben dem Browser vorbehalten.
+//
+// 14.11.2026 (von Christin freigegeben): Zeitplan anlegen und ändern
+// (/api/schedule/rules, /api/schedule/config), Börsenautomatik lesen und
+// einstellen (/api/schedule/automation/config) — nur mit „Steuern“. Dazu die
+// Integrationen in einer eigenen Sicht ohne Adressen und Zugangsdaten
+// (/api/mobile-link/integrations). /api/integrations/status selbst bleibt zu:
+// Es nennt Adressen im Heimnetz, Benutzernamen und Kennungen.
 
 export const PERMS = Object.freeze(['read', 'control']);
 
@@ -15,6 +22,7 @@ export const READ_PATHS = new Set([
   '/api/ev',
   '/api/forecast',
   '/api/schedule',
+  '/api/schedule/automation/config',
   '/api/eos/plan',
   '/api/eos/status',
   '/api/storage/status',
@@ -28,6 +36,7 @@ export const READ_PATHS = new Set([
   '/api/eeg/extension',
   '/api/integrations/health',
   '/api/integrations/dataflow',
+  '/api/mobile-link/integrations',
   '/api/victron/devices',
   '/api/devices',
   '/api/vpn/status',
@@ -40,7 +49,10 @@ export const CONTROL_PATHS = new Set([
   '/api/control/resume',
   '/api/control/write',
   '/api/ev',
+  '/api/schedule/rules',
   '/api/schedule/rules/toggle',
+  '/api/schedule/config',
+  '/api/schedule/automation/config',
   '/api/schedule/automation/replan',
 ]);
 
