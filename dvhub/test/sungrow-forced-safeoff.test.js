@@ -59,6 +59,9 @@ test('forcedConnections: Master aus victron, Slave aus secondInverter', () => {
   assert.equal(c.masterKey, '192.0.2.84:502:1');
   // Ohne zweiten WR: kein Slave.
   assert.equal(forcedConnections({ victron: { host: '192.0.2.84' } }).slave, null);
+  // Review-Befund 2: masterKey wird GENAU wie der Besitz-Merker (endpointKeyOf, Rohform) gebildet — auch ohne
+  // explizite port/unitId, damit die Skripte nicht fälschlich überspringen.
+  assert.equal(forcedConnections({ victron: { host: '192.0.2.84' } }).masterKey, '192.0.2.84::');
 });
 
 test('watchdogShouldRelease: verwaister Forced mode (Modus 2 + besessen + Lebenszeichen alt) → Rücknahme', () => {

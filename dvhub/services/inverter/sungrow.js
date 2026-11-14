@@ -955,12 +955,13 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     return null;
   }
 
-  // Regeltakt (Punkt 2): beim aktiven Regeln (External EMS, Besitz) der adaptive Takt 1–5 s aus der gemessenen
-  // Antwortzeit (fester sungrow.regulateEveryMs hat Vorrang) — unabhängig vom 5-s-Takt des Aufrufers. Sonst der
-  // ruhige Profil-Takt (regulateEveryMs). Der Keepalive (Punkt 3) hält den Herzschlag unabhängig davon am Leben;
-  // der adaptive Höchsttakt 5 s speist bei jeder erlaubten Frist (≥ 20 s) ≥ 4 Herzschläge je Frist.
+  // Regeltakt (Punkt 2): beim aktiven Regeln (DVhub besitzt Forced ODER External EMS) der adaptive Takt 1–5 s aus
+  // der gemessenen Antwortzeit (fester sungrow.regulateEveryMs hat Vorrang, wird aber ebenfalls auf 1–5 s geklemmt)
+  // — unabhängig vom 5-s-Takt des Aufrufers. Sonst der ruhige Profil-Takt (regulateEveryMs). Wichtig für Forced:
+  // so bleibt das Box-Watchdog-Lebenszeichen immer frisch (≤ 5 s), ein großer regulateEveryMs kann es nicht über
+  // die Watchdog-Frist altern lassen (Review-Befund 3).
   function stepEveryMs(opts) {
-    if (!(st.owns && st.ownMode === EMS_MODE.EXTERNAL)) return opts.regulateEveryMs;
+    if (!(st.owns && (st.ownMode === EMS_MODE.EXTERNAL || st.ownMode === EMS_MODE.FORCED))) return opts.regulateEveryMs;
     return adaptiveRegulateMs(getCfg());
   }
   const due = (everyMs) => now() - st.lastStepAt >= everyMs - TICK_JITTER_MS;
@@ -1103,6 +1104,11 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       if (slaveActuator && second != null) {
         return await stepSplit({ conf, ctl, decision, gap: false, second, reason, t, opts });
       }
+      // Slave-Telemetrie fehlt (offline/veraltet/nicht aggregiert), DVhub steuert aber weiter (Einzel-WR am Master):
+      // einen zuvor von DVhub gesetzten Slave-Befehl sicher zurücknehmen (0xCC). Sonst hielte der Slave im Forced
+      // mode (ohne geräteeigenen Rückfall) seinen letzten Lade-/Entladebefehl unbeaufsichtigt — die SoC-Grenzen aus
+      // stepSplit greifen nicht mehr (Review-Befund 1). neutralize ist ein No-op, wenn der Slave nicht besessen ist.
+      if (slaveActuator) { try { await slaveActuator.neutralize('slave_telemetry_lost'); } catch { /* best effort */ } }
       if (decision.mode === 'self') {
         // Nur Einzel-WR, nicht besitzend: der Zustand passt schon (Gerät steht in Self), nichts schreiben.
         if (emsMatches(dev, decision, 0, ctl.modeValue)) { st.error = null; publish(); return { ok: true, unchanged: true, decision }; }

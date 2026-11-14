@@ -227,6 +227,21 @@ test('Absicherung C: releaseControl nimmt im Split BEIDE WR zurück (Slave 0xCC,
   assert.equal(r.state.ctrl.sungrowEmsSlave.owns, false, 'Slave-Besitz abgegeben');
 });
 
+test('Review-Befund 1: Slave-Telemetrie fällt mitten in der Vorgabe aus → Slave-Befehl wird sicher angehalten (0xCC)', async () => {
+  const r = splitRig();
+  await r.ems.applySetpoint(-6000, 'rule:abend'); // Split-Entladen, Slave bekam Befehl
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, true, 'Slave wurde gefahren');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE);
+  // Slave geht offline → secondInverterTelemetry liefert null → Einzel-WR-Zweig. Der Slave darf seinen
+  // Entladebefehl NICHT unbeaufsichtigt weiterfahren (Forced ohne Rückfall).
+  r.state.sungrowSecond.online = false;
+  r.slaveT.writes.length = 0;
+  r.advance(6000);
+  await r.ems.tick();
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, 'Slave-Befehl auf 0xCC angehalten');
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, false, 'Slave-Besitz abgegeben');
+});
+
 test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf, solange er Forced fährt', async () => {
   const hbPath = path.join(os.tmpdir(), `dvhub-forced-hb-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   try {

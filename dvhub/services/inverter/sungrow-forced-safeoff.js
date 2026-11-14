@@ -78,5 +78,9 @@ export function forcedConnections(cfg) {
   const master = { host: String(v.host || '').trim(), port: Number(v.port) || 502, unitId: Number.isFinite(Number(v.unitId)) ? Number(v.unitId) : 1, timeoutMs: Number(v.modbusConnectTimeoutMs) || 1500 };
   const si = resolveSecondInverter(cfg);
   const slave = si.enabled ? { host: si.host, port: si.port, unitId: si.unitId, timeoutMs: si.timeoutMs } : null;
-  return { master, slave, masterKey: endpointKeyOf({ host: master.host, port: master.port, unitId: master.unitId }) };
+  // masterKey GENAU wie der Besitz-Merker bilden: der Merker speichert endpointKeyOf(cfg.victron) in Rohform
+  // (host:port:unitId, fehlende Felder leer). Würde man hier die normalisierten Werte (port 502, unitId 1) nehmen,
+  // wichen die Schlüssel bei einer Config ohne explizite port/unitId ab → die Skripte übersprängen fälschlich und
+  // der Forced mode (ohne Rückfall) bliebe hängen (Review-Befund 2).
+  return { master, slave, masterKey: endpointKeyOf(v) };
 }
