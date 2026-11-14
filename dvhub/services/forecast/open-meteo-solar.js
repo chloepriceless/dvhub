@@ -2,6 +2,7 @@
 // Uses GHI/DNI/DHI weather data (already fetched by weather-fetch.js) to estimate
 // PV power output using a simple irradiance-to-power model.
 // Free, no API key, no additional API calls needed (reuses weather data).
+import { effectivePvKwp } from './effective-pv.js';
 
 /**
  * Create Open-Meteo solar forecast estimator.
@@ -60,6 +61,7 @@ export function createOpenMeteoSolar(ctx, { store }) {
     if (!kwp && Array.isArray(cfg.userEnergyPricing?.pvPlants)) {
       kwp = cfg.userEnergyPricing.pvPlants.reduce((sum, p) => sum + (p.kwp || 0), 0);
     }
+    kwp = effectivePvKwp(cfg, kwp); // Punkt 5: + PV am zweiten Sungrow-WR (pvKwp)
     if (!kwp) {
       pushLog('open_meteo_solar_skip', { reason: 'no_kwp' });
       return null;

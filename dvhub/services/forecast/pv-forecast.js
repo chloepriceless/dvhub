@@ -16,6 +16,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeWeights, mergeForecasts, resampleTo15min } from './ensemble.js';
+import { effectivePvKwp } from './effective-pv.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PV_FORECAST_SCRIPT = path.join(__dirname, '..', 'python-bridge', 'scripts', 'pv_forecast.py');
@@ -77,11 +78,13 @@ export function buildPvlibInput(cfg) {
     };
   }
 
+  // Punkt 5: PV am zweiten Sungrow-WR zur Gesamtgröße dazuzählen (simple/standard nutzen totalKwp).
+  const effKwp = effectivePvKwp(cfg, pv.totalKwp) ?? pv.totalKwp;
   if (level === 'standard') {
     // Standard mode: use configured tilt and azimuth
     return {
       ...base,
-      kwp: pv.totalKwp,
+      kwp: effKwp,
       tilt: pv.tiltDeg ?? 35,
       azimuth: pv.azimuthDeg ?? 180,
       strings: []
@@ -91,7 +94,7 @@ export function buildPvlibInput(cfg) {
   // Simple mode (default): use defaults
   return {
     ...base,
-    kwp: pv.totalKwp,
+    kwp: effKwp,
     tilt: 35,
     azimuth: 180,
     strings: []

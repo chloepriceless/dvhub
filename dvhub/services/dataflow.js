@@ -13,6 +13,7 @@
 
 import { PUSH_FIELDS } from './input-push.js';
 import { gridDirection } from '../server-utils.js';
+import { effectivePvKwp } from './forecast/effective-pv.js';
 
 // Ohne diese beiden kann DVhub nicht steuern; alles andere ist optional.
 const REQUIRED_INPUTS = new Set(['grid_total', 'battery_soc']);
@@ -124,7 +125,7 @@ function loadIsDerived(cfg, inputs) {
 export function plausibilityChecks({ cfg, state, inputs = [] }) {
   const out = [];
   const v = state?.victron || {};
-  const kwp = num(Number(cfg?.forecast?.pv?.totalKwp));
+  const kwp = num(Number(effectivePvKwp(cfg))); // Punkt 5: Gesamt-kWp inkl. zweitem Sungrow-WR
   const pv = num(v.pvTotalW);
   if (kwp && pv !== null && pv > kwp * 1000 * 1.2) {
     out.push({ key: 'pvTotalW', level: 'warn',

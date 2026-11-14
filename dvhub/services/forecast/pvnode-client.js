@@ -23,6 +23,7 @@
 import pRetry, { AbortError } from 'p-retry';
 
 import { resolvePvnodePlan } from './pvnode-plans.js';
+import { effectivePvKwp } from './effective-pv.js';
 
 const PVNODE_BASE = 'https://api.pvnode.com/v2';
 
@@ -218,10 +219,10 @@ function resolvePlants(cfg) {
       tiltDeg: Number(p.tiltDeg),
       azimuthDeg: Number(p.azimuthDeg)
     }));
-  // Legacy single-string fallback: cfg.forecast.pv.totalKwp/tiltDeg/azimuthDeg.
+  // Legacy single-string fallback: cfg.forecast.pv.totalKwp/tiltDeg/azimuthDeg (+ PV zweiter WR, Punkt 5).
   if (plants.length === 0 && Number(fc.pv?.totalKwp) > 0) {
     plants.push({
-      kwp: Number(fc.pv.totalKwp),
+      kwp: effectivePvKwp(cfg, Number(fc.pv.totalKwp)),
       tiltDeg: Number(fc.pv.tiltDeg ?? 35),
       azimuthDeg: Number(fc.pv.azimuthDeg ?? 180)
     });

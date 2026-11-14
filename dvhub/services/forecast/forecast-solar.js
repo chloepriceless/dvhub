@@ -1,6 +1,7 @@
 // services/forecast/forecast-solar.js -- Forecast.Solar API client.
 // Free, no API key required. 12 requests/hour limit.
 // API: https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}
+import { effectivePvKwp } from './effective-pv.js';
 
 /**
  * Create Forecast.Solar client.
@@ -31,11 +32,12 @@ export function createForecastSolar(ctx, { store }) {
 
     if (!lat || !lon) return null;
 
-    // kWp: forecast.pv.totalKwp -> sum of pvPlants
+    // kWp: forecast.pv.totalKwp -> sum of pvPlants, plus PV am zweiten Sungrow-WR (Punkt 5)
     let kwp = pv.totalKwp;
     if (!kwp && Array.isArray(cfg.userEnergyPricing?.pvPlants)) {
       kwp = cfg.userEnergyPricing.pvPlants.reduce((sum, p) => sum + (p.kwp || 0), 0);
     }
+    kwp = effectivePvKwp(cfg, kwp);
     if (!kwp) return null;
 
     // Tilt and azimuth with defaults
