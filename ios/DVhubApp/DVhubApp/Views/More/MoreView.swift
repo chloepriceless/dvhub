@@ -25,17 +25,17 @@ struct MoreView: View {
                 }
             }
             SwiftUI.Section("Anlage") {
-                row(.plan, "Fahrplan", "EOS-Plan und Zeitplan", "calendar.day.timeline.left", Brand.violet)
-                row(.integrations, "Integrationen", "Zustand der Anbindungen", "point.3.connected.trianglepath.dotted", Brand.cyan)
-                row(.system, "System", "Einstellungen ansehen", "gearshape.2.fill", Brand.blue)
+                row(.plan, String(localized: "Fahrplan"), String(localized: "EOS-Plan und Zeitplan"), "calendar.day.timeline.left", Brand.violet)
+                row(.integrations, String(localized: "Integrationen"), String(localized: "Zustand der Anbindungen"), "point.3.connected.trianglepath.dotted", Brand.cyan)
+                row(.system, String(localized: "System"), String(localized: "Einstellungen ansehen"), "gearshape.2.fill", Brand.blue)
                 if model.selected?.canControl == true {
-                    row(.control, "Steuern", "Not-Halt", "exclamationmark.octagon.fill", Brand.red)
+                    row(.control, String(localized: "Steuern"), String(localized: "Not-Halt"), "exclamationmark.octagon.fill", Brand.red)
                 }
             }
             SwiftUI.Section("App") {
-                row(.systems, "Anlagen", "\(model.systems.count) gekoppelt", "qrcode.viewfinder", Brand.green)
-                row(.appearance, "Darstellung", "Farben, Navigation, Widgets", "paintpalette.fill", Brand.pink)
-                row(.about, "Über", "Version, Datenschutz", "info.circle.fill", Brand.yellow)
+                row(.systems, String(localized: "Anlagen"), String(localized: "\(model.systems.count) gekoppelt"), "qrcode.viewfinder", Brand.green)
+                row(.appearance, String(localized: "Darstellung"), String(localized: "Farben, Navigation, Widgets, Live-Aktivität"), "paintpalette.fill", Brand.pink)
+                row(.about, String(localized: "Über"), String(localized: "Version, Datenschutz"), "info.circle.fill", Brand.yellow)
             }
             if let err = model.storageError {
                 SwiftUI.Section { Label(err, systemImage: "exclamationmark.triangle").foregroundStyle(Brand.orange) }
@@ -76,9 +76,9 @@ enum Appearance: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .dark: return "Dunkel"
-        case .light: return "Hell"
-        case .system: return "Wie das iPhone"
+        case .dark: return String(localized: "Dunkel")
+        case .light: return String(localized: "Hell")
+        case .system: return String(localized: "Wie das iPhone")
         }
     }
     var scheme: ColorScheme? {
@@ -117,10 +117,10 @@ struct AppearanceView: View {
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("navPlacement")
                     Text(Chrome.systemPlacesBars
-                         ? "Automatisch: Das iPhone legt die Leisten selbst – zugeklappt (iPhone Duo) und im Querformat an den rechten Rand."
-                         : "Automatisch: Im Querformat und auf dem zugeklappten iPhone Duo stehen Reiter und Aktionen rechts, sonst unten. „Rechts“ erzwingt die Seitenleiste überall.")
+                         ? String(localized: "Automatisch: Das iPhone legt die Leisten selbst – zugeklappt (iPhone Duo) und im Querformat an den rechten Rand.")
+                         : String(localized: "Automatisch: Im Querformat und auf dem zugeklappten iPhone Duo stehen Reiter und Aktionen rechts, sonst unten. „Rechts“ erzwingt die Seitenleiste überall."))
                         .font(.caption).foregroundStyle(Brand.text2)
-                    Text(chrome.railActive ? "Gerade aktiv: Seitenleiste rechts." : "Gerade aktiv: Leiste unten bzw. oben.")
+                    Text(chrome.railActive ? String(localized: "Gerade aktiv: Seitenleiste rechts.") : String(localized: "Gerade aktiv: Leiste unten bzw. oben."))
                         .font(.caption2).foregroundStyle(Brand.dim)
                     if !chrome.diagnostics.isEmpty {
                         Text(chrome.diagnostics).font(.caption2.monospaced()).foregroundStyle(Brand.dim)
@@ -136,25 +136,52 @@ struct AppearanceView: View {
 }
 
 struct WidgetInfoCard: View {
+    @State private var liveActivity = LiveActivityManager.enabled
+    @State private var reloads = 0
+
     var body: some View {
         GlassCard(tint: Brand.yellow) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Eyebrow(text: "Widgets", icon: "square.grid.2x2.fill", tint: Brand.yellow)
                     Spacer()
-                    Pill(text: SharedStore.isAvailable ? "bereit" : "nicht verfügbar", tint: SharedStore.isAvailable ? Brand.green : Brand.orange)
+                    Pill(text: SharedStore.isAvailable ? String(localized: "bereit") : String(localized: "nicht verfügbar"), tint: SharedStore.isAvailable ? Brand.green : Brand.orange)
                 }
                 WidgetGallery(snapshot: SharedStore.read() ?? .sample)
                 if SharedStore.isAvailable {
                     Text("Home-Bildschirm lange drücken → „Bearbeiten“ → „Widget hinzufügen“ → DVhub. Für den Sperrbildschirm: Sperrbildschirm lange drücken → „Anpassen“.")
-                    Text("Die Widgets zeigen den letzten Stand, den die App gesehen hat (Akku, Erzeugung, Einspeisung, Verbrauch, heute verdient). Sie holen selbst nichts – die Verbindung zur Anlage braucht den Geräteschlüssel, und der ist nur in der geöffneten App nutzbar.")
+                    if LinkAccess.sharedGroupActive {
+                        Text("Die Widgets halten sich selbst aktuell: Die App holt im Hintergrund neue Werte, und ein Widget ruft selbst ab, wenn sein Stand älter als zehn Minuten ist – Ende zu Ende verschlüsselt wie die App. Wie oft das geschieht, entscheidet iOS.")
+                        Text("Bei gesperrtem iPhone ist der Geräteschlüssel nicht nutzbar. Dann bleibt der letzte Stand stehen, mit Uhrzeit; Geldwerte sind auf dem Sperrbildschirm verdeckt.")
+                    } else {
+                        Text("Die Widgets zeigen den letzten Stand, den die App gesehen hat. Selbst abrufen können sie in dieser Installation nicht: Ihr fehlt die geteilte Schlüsselbund-Gruppe für die Zugangsdaten.")
+                    }
                     if let s = SharedStore.read() {
                         Text("Letzter Stand für die Widgets: \(Format.dateTime(s.at)).").foregroundStyle(Brand.dim)
                     }
-                    Button { WidgetCenter.shared.reloadAllTimelines() } label: { Label("Widgets jetzt aktualisieren", systemImage: "arrow.clockwise") }
+                    Button {
+                        reloads += 1
+                        WidgetCenter.shared.reloadAllTimelines()
+                    } label: { Label("Widgets jetzt aktualisieren", systemImage: "arrow.clockwise") }
                         .font(.footnote.weight(.semibold))
+                        .sensoryFeedback(.impact(weight: .light), trigger: reloads)
                 } else {
                     Text("Diese Installation hat keine App-Gruppe, über die App und Widgets Daten teilen. Die App läuft normal; die Widgets zeigen einen Hinweis. Mit einer Signatur, die App-Gruppen erlaubt, gehen sie ohne weitere Änderung.")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(Brand.text2)
+        }
+        GlassCard(tint: Brand.red) {
+            VStack(alignment: .leading, spacing: 8) {
+                Eyebrow(text: "Live-Aktivität", icon: "platter.filled.top.iphone", tint: Brand.red)
+                Toggle("Not-Halt auf dem Sperrbildschirm zeigen", isOn: $liveActivity)
+                    .font(.subheadline)
+                    .foregroundStyle(Brand.text)
+                    .onChange(of: liveActivity) { _, on in LiveActivityManager.enabled = on }
+                Text("Solange der Not-Halt aktiv ist, zeigt das iPhone ihn auf dem Sperrbildschirm und in der Dynamic Island, mit Dauer und letzten Werten. Die Werte kommen von der App: sofort, solange sie offen ist, sonst bei jedem Hintergrundabruf, den iOS zulässt.")
+                if !LiveActivityManager.allowedBySystem {
+                    Text("Live-Aktivitäten sind für DVhub in den iOS-Einstellungen ausgeschaltet.").foregroundStyle(Brand.orange)
                 }
             }
             .font(.caption)
@@ -176,8 +203,8 @@ struct AboutView: View {
         AuroraPage(inlineTitle: true) { _ in
             GlassCard(tint: Brand.cyan) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("DVhub").font(.system(size: 40, weight: .heavy, design: .rounded)).foregroundStyle(Brand.auroraLinear)
-                    Text("The unofficial DV interface").font(.subheadline).foregroundStyle(Brand.text2)
+                    Text(verbatim: "DVhub").font(.system(.largeTitle, design: .rounded).weight(.heavy)).foregroundStyle(Brand.auroraLinear)
+                    Text(verbatim: "The unofficial DV interface").font(.subheadline).foregroundStyle(Brand.text2)
                     Text("Version \(version)").font(.caption.monospaced()).foregroundStyle(Brand.dim)
                 }
             }
@@ -195,8 +222,8 @@ struct AboutView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Eyebrow(text: "Links", icon: "link", tint: Brand.text2)
                     link("dvhub.online", "https://dvhub.online")
-                    link("Residuallast-Frühwarnung", "https://dvhub.online/tools/residuallast/")
-                    link("Nachrichten im Browser", "https://dvhub.online/nachrichten")
+                    link(String(localized: "Residuallast-Frühwarnung"), "https://dvhub.online/tools/residuallast/")
+                    link(String(localized: "Nachrichten im Browser"), "https://dvhub.online/nachrichten")
                 }
             }
         }
