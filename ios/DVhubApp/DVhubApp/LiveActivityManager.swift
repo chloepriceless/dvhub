@@ -47,10 +47,13 @@ enum LiveActivityManager {
     static func sync(_ snapshot: WidgetSnapshot) async {
         guard let boxId = snapshot.boxId else { return }
         // Aktivitäten anderer Anlagen gehören nicht mehr hierher.
-        let all = Activity<EmergencyStopAttributes>.activities
-        for a in all where a.attributes.boxId != boxId { await a.end(nil, dismissalPolicy: .immediate) }
+        for a in Activity<EmergencyStopAttributes>.activities where a.attributes.boxId != boxId {
+            await a.end(nil, dismissalPolicy: .immediate)
+        }
         // Alle dieser Anlage — auch vom System beendete, die noch auf dem Sperrbildschirm stehen.
-        let everyMine = all.filter { $0.attributes.boxId == boxId }
+        // Erst nach dem Warten oben gelesen: Zwischen dieser Prüfung und dem Start unten
+        // liegt keine Unterbrechung, zwei gleichzeitige Abgleiche starten also nicht je eine.
+        let everyMine = Activity<EmergencyStopAttributes>.activities.filter { $0.attributes.boxId == boxId }
         let mine = running(everyMine)
         switch snapshot.emergencyStop {
         case true?:
@@ -64,11 +67,14 @@ enum LiveActivityManager {
                 guard snapshot.at >= a.content.state.updatedAt else { return }
                 await a.update(content)
             } else if allowedBySystem {
-                // Beendete erst wegräumen, sonst stünden zwei auf dem Sperrbildschirm.
-                for a in everyMine { await a.end(nil, dismissalPolicy: .immediate) }
                 // Scheitert im Hintergrund außerhalb eines LiveActivityIntent — dann beim nächsten Öffnen.
-                _ = try? Activity.request(attributes: EmergencyStopAttributes(boxName: snapshot.boxName, boxId: boxId),
-                                          content: content, pushType: nil)
+                // Beendete erst wegräumen, wenn die neue steht: Sonst wäre im Hintergrund
+                // die alte fort und keine neue da.
+                let started = try? Activity.request(attributes: EmergencyStopAttributes(boxName: snapshot.boxName, boxId: boxId),
+                                                    content: content, pushType: nil)
+                if let started {
+                    for a in everyMine where a.id != started.id { await a.end(nil, dismissalPolicy: .immediate) }
+                }
             }
         case false?:
             for a in everyMine { await a.end(nil, dismissalPolicy: .immediate) }
