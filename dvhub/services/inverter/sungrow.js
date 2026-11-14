@@ -442,6 +442,7 @@ export function sungrowSecondView(state, cfg) {
   return {
     online,
     aggregate: c.aggregateTelemetry === true,
+    control: c.control,
     socPct: pick(s?.socPct),
     batteryPowerW: pick(s?.batteryPowerW),
     pvPowerW: pick(s?.pvPowerW),

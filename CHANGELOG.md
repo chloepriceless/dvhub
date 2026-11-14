@@ -69,6 +69,11 @@ verweist hierher.
 
 ### Hinzugefügt
 
+- **Wechselrichter-Kachel für zwei Sungrow-WR (Leitstand).** Neue Kachel mit einer Zeile je WR (Rolle
+  Master – gesteuert / Slave – gelesen bzw. gesteuert bei Vorgaben, Modell/SN, Akku/PV/SoC/BDC,
+  EMS-Modus/Befehl/Besitz/Herzschlag inkl. erkannter Schreibfunktion) und einer Summenzeile. Die Daten
+  stehen jetzt vollständig in `/api/status` (`sungrowEms`, `sungrowEmsSlave`, Master-Rohwerte und
+  System-Summen) — ohne LAN-IP (die steht nur in der Konfiguration).
 - **Netzspannung und -frequenz für Sungrow.** DVhub liest am Sungrow-Hybrid (Master) alle 30 s die
   Phasenspannungen L1–L3 (Register 5019–5021) und die Netzfrequenz (5036) und behandelt sie wie eine
   normale Netzspannung (Quelle `sungrow-inverter`) — bisher blieb das Feld bei Sungrow leer. Ortsnetz,

@@ -2468,6 +2468,7 @@ function renderDashboardStatus(status) {
   // Zweite Victron-Anlage am selben Anschluss (second-gx-view.js).
   safeRender('dashboard.second-gx', () => {
     window.DVhubSecondGx?.render(status.multiGx);
+    window.DVhubSungrowInverters?.render(status);
   });
 
   // „Laut EOS-Plan“ (eos-plan-summary.js, Issue #27): Uhrzeit, Börsenpreise und

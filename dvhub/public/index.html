@@ -159,6 +159,19 @@
         <div class="rail-row" data-leit="adv" title="Netz-Sollwert, den DVhub der zweiten GX schreibt (wirkt auf ihren AC-IN, Register 2716)."><span class="l">Sollwert AC-IN</span><strong class="v" id="secondGxSetpoint">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Minimum-SOC</span><strong class="v" id="secondGxMinSoc">&mdash;</strong></div>
       </div>
+      <!-- Zwei Sungrow-WR im Master/Slave-Parallelbetrieb (T-0422, sungrow-inverter-view.js).
+           Nur sichtbar, wenn ein zweiter WR konfiguriert ist. -->
+      <div class="card rail-card" data-accent="bat" id="sungrowWrCard" hidden>
+        <div class="rail-card-head">
+          <span class="ttl"><span class="dot dot-bat"></span>Wechselrichter &middot; Sungrow</span>
+        </div>
+        <div class="rail-row"><span class="l" id="sungrowWrMasterRole">Master</span><strong class="v" id="sungrowWrMasterVals">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l" id="sungrowWrMasterMeta">&mdash;</span></div>
+        <div class="rail-row" data-leit="adv" title="EMS-Entscheidung, Besitz und Herzschlag des Masters."><span class="l">EMS</span><strong class="v" id="sungrowWrMasterEms">&mdash;</strong></div>
+        <div class="rail-row"><span class="l" id="sungrowWrSlaveRole">Slave</span><strong class="v" id="sungrowWrSlaveVals">&mdash;</strong></div>
+        <div class="rail-row" data-leit="adv"><span class="l">Slave-EMS/BDC</span><strong class="v" id="sungrowWrSlaveEms">&mdash;</strong></div>
+        <div class="rail-row"><span class="l">Summe</span><strong class="v" id="sungrowWrSum">&mdash;</strong></div>
+      </div>
       <!-- Netzanschluss: Bezugsgrenze des Hausanschlusses (services/grid-connection,
            grid-connection-view.js). Nur sichtbar, wenn eine Grenze eingetragen ist. -->
       <div class="card rail-card" data-accent="ctrl" id="gridConnectionCard" hidden>
@@ -650,6 +663,7 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20261006-zaehlen"></script>
 <script src="/second-gx-view.js?v=20261021"></script>
+<script src="/sungrow-inverter-view.js?v=20261115"></script>
 <script src="/eos-plan-summary.js?v=20261105-eos-frist"></script>
 <script src="/peak-shaving-view.js?v=20261026"></script>
 <script src="/license-banner.js?v=20261105-lizenz-umzug"></script>

@@ -2699,6 +2699,10 @@ export function createApiRoutes(ctx) {
     // die System-Summen reisen im Victron-Snapshot (runtime-state Whitelist) zuverlässig auch im Split-Prozess.
     // Zusätzlich als Top-Level, damit die App sie ohne Umweg findet.
     payload.sungrowSecond = payload.victron?.sungrowSecond ?? null;
+    // Sungrow-EMS-Zustand (Master und — bei Split-Steuerung — Slave) für die Wechselrichter-Kachel: EMS-Modus,
+    // Befehl/Leistung, Besitz, Herzschlag (Soll/erkannte FC). Nur In-Memory; im Runtime-Worker-Betrieb hier null.
+    payload.sungrowEms = state.ctrl?.sungrowEms ?? null;
+    payload.sungrowEmsSlave = state.ctrl?.sungrowEmsSlave ?? null;
     // Victron device alarms (read-only display). Source is payload.victron.alarms,
     // which the POLLER (possibly a separate runtime-worker process) writes and
     // which reaches here through the runtime IPC snapshot — NOT web-process-local
