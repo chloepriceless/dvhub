@@ -62,7 +62,7 @@ final class MarketTests: XCTestCase {
      "days":[
        {"date":"2026-11-16","hours":24,"lead_days":2,"wind_gw_mean":12.5,"solar_gw_mean":2,
         "price_eur_mwh":{"p10":220,"p50":270.5,"p90":330,"max_hour_p50":340,"min_hour_p50":190},
-        "classification":{"p20":157.76,"p80":265.1,"class":"teuer"},
+        "classification":{"p20":160,"p80":260,"class":"teuer"},
         "residual_load_gw":{"max":52.2,"min":30.2,"mean":44.6},"backtest_mae_eur_mwh":20},
        {"date":"2026-11-15","hours":24,"lead_days":1,"wind_gw_mean":29.1,"solar_gw_mean":3,
         "price_eur_mwh":{"p10":141.2,"p50":175.1,"p90":216.2,"max_hour_p50":221.6,"min_hour_p50":134.7},
@@ -121,6 +121,8 @@ final class MarketTests: XCTestCase {
         XCTAssertEqual(o.position(meanCt: 15.776) ?? -1, 0, accuracy: 1e-9)
         XCTAssertEqual(o.position(meanCt: 26.51) ?? -1, 1, accuracy: 1e-9)
         XCTAssertEqual(o.position(meanCt: 17.51, day: o.days[0]) ?? -1, (17.51 - 15.776) / (26.51 - 15.776), accuracy: 1e-9)
+        // Schwellen des Tages selbst (zweiter Tag: p20 16 / p80 26 ct), nicht die des ersten.
+        XCTAssertEqual(o.position(meanCt: 21, day: o.days[1]) ?? -1, 0.5, accuracy: 1e-9)
         XCTAssertLessThan(o.position(meanCt: 12) ?? 0, 0)
         XCTAssertGreaterThan(o.position(meanCt: 30) ?? 0, 1)
         // Die Einstufung selbst bleibt die der Schnittstelle.

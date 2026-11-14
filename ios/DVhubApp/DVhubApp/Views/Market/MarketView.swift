@@ -109,6 +109,12 @@ struct MarketView: View {
         for k in market.outlook?.knownDays ?? [] where k.key >= todayKey {
             var day = out[k.key] ?? MarketDay(key: k.key, date: k.date)
             day.known = k
+            // Ohne Viertelstunden von /api/prices: die festen Stunden aus der Prognose-Antwort.
+            if day.slots.isEmpty {
+                day.slots = (market.outlook?.hours(on: k.key) ?? []).compactMap { h in
+                    h.knownCt.map { PricePoint(start: h.start, end: h.start.addingTimeInterval(3600), ctKwh: $0, importCtKwh: nil) }
+                }
+            }
             out[k.key] = day
         }
         for f in market.outlook?.days ?? [] where f.key >= todayKey && out[f.key] == nil {
