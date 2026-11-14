@@ -28,7 +28,7 @@ test('Split-Steuerung: Master- und Slave-Zeile + Summenzeile, Rollen, EMS-Status
       device: { model: 'SH10RT-20', serial: 'A2351909042', bdcRatedW: 10000, info: { runningStateText: 'Externes EMS' } },
     },
     sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 20, batteryPowerW: -1168, pvPowerW: 0, bdcRatedW: 10000, runningStateText: 'Externes EMS' },
-    sungrowEms: { controlMode: 'external', owns: true, heartbeatTimeoutS: 30, heartbeatWorkingFc: 16, heartbeatSentS: 30, regulateEveryMs: 1000, responseMs: 420, modeBudgetLeft: 18, writesToday: { mode13050: 2, cmd13051: 3, power13052: 5, heartbeat13080: 40 }, decision: { mode: 'forced', command: 'discharge', powerW: 1000, split: { masterW: 1000, slaveW: 1168, strategy: 'soc-balance' } } },
+    sungrowEms: { controlMode: 'external', owns: true, heartbeatTimeoutS: 30, heartbeatWorkingFc: 16, heartbeatSentS: 30, regulateEveryMs: 1000, responseMs: 420, modeBudgetLeft: 18, deviceFallbackAfterS: 31, deviceFallbackCount60s: 1, writesToday: { mode13050: 2, cmd13051: 3, power13052: 5, heartbeat13080: 40 }, decision: { mode: 'forced', command: 'discharge', powerW: 1000, split: { masterW: 1000, slaveW: 1168, strategy: 'soc-balance' } } },
     sungrowEmsSlave: { controlMode: 'external', owns: true, heartbeatWorkingFc: 16, heartbeatSentS: 30, writesToday: { mode13050: 1, cmd13051: 2, power13052: 4, heartbeat13080: 40 }, modeBudgetLeft: 19, decision: { mode: 'forced', command: 'discharge', powerW: 1168 } },
   };
   const vw = V.view(status);
@@ -45,6 +45,7 @@ test('Split-Steuerung: Master- und Slave-Zeile + Summenzeile, Rollen, EMS-Status
   assert.equal(vw.master.split, '1000 W/1168 W (soc-balance)');
   assert.equal(vw.master.regulate, '1000 ms · Antwort 420 ms');
   assert.ok(vw.master.writes.indexOf('13050 2 (Rest 18)') >= 0, vw.master.writes);
+  assert.equal(vw.master.fallback, '31 s · 1/min');
   assert.equal(vw.slave.role, 'Slave – gesteuert bei Vorgaben');
   assert.equal(vw.slave.soc, '20 %');
   assert.equal(vw.slave.decision, 'Entladen 1168 W');
@@ -64,4 +65,18 @@ test('self-only: Slave „gelesen", offline → Nicht erreichbar, kein EMS', () 
   assert.equal(vw.slave.online, false);
   assert.equal(vw.slave.decision, '–');          // self-only → kein Slave-EMS
   assert.equal(vw.master.heartbeat, 'Forced mode');
+});
+
+test('Punkt 6: render benennt den Akku bei zwei WR als „Sungrow (Master + Slave)", sonst „Victron"', () => {
+  const els = {};
+  const el = (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false }));
+  const doc = { getElementById: (id) => el(id) };
+  // Mit zweitem WR → Sungrow-Name, Kachel sichtbar.
+  V.render({ sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance' }, victron: { device: {} }, sungrowEms: { owns: false, decision: { mode: 'self' } } }, doc);
+  assert.equal(els.batSourceName.textContent, 'Sungrow (Master + Slave)');
+  assert.equal(els.sungrowWrCard.hidden, false);
+  // Ohne zweiten WR → zurück auf Victron, Kachel versteckt.
+  V.render({}, doc);
+  assert.equal(els.batSourceName.textContent, 'Victron');
+  assert.equal(els.sungrowWrCard.hidden, true);
 });

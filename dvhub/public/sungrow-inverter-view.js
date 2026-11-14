@@ -46,6 +46,13 @@
     const left = num(ems.modeBudgetLeft) ? Number(ems.modeBudgetLeft) : null;
     return `13050 ${w.mode13050 || 0}${left != null ? ` (Rest ${left})` : ''} · 13051 ${w.cmd13051 || 0} · 13052 ${w.power13052 || 0} · 13080 ${w.heartbeat13080 || 0}`;
   }
+  // Letzter geräteeigener Rückfall (Punkt 3): gemessene Zeit + Rate der letzten Minute.
+  function fallbackText(ems) {
+    if (!ems) return DASH;
+    if (!num(ems.deviceFallbackAfterS)) return 'keiner';
+    const n = Number(ems.deviceFallbackCount60s) || 0;
+    return `${Math.round(Number(ems.deviceFallbackAfterS))} s${n ? ` · ${n}/min` : ''}`;
+  }
   function masterRow(status) {
     const v = (status && status.victron) || {};
     const dev = v.device || {};
@@ -65,6 +72,7 @@
       split: splitText(ems),
       regulate: regulateText(ems),
       writes: writesText(ems),
+      fallback: fallbackText(ems),
     };
   }
   function slaveRow(status) {
@@ -107,6 +115,9 @@
     if (!card) return;
     const vw = view(status);
     card.hidden = vw.hidden;
+    // Punkt 6: bei zwei Sungrow-WR den Akku im Leitstand als „Sungrow (Master + Slave)" benennen (statt „Victron").
+    const nameEl = d && d.getElementById('batSourceName');
+    if (nameEl) nameEl.textContent = vw.hidden ? 'Victron' : 'Sungrow (Master + Slave)';
     if (vw.hidden) return;
     const set = (id, text) => { const el = d.getElementById(id); if (el) el.textContent = text; };
     const line = (r) => `${r.soc} · Akku ${r.battery} · PV ${r.pv}`;
@@ -115,7 +126,7 @@
     set('sungrowWrMasterVals', line(vw.master));
     set('sungrowWrMasterEms', `${vw.master.decision} · Besitz ${vw.master.owns ? 'ja' : 'nein'} · Herzschlag ${vw.master.heartbeat}`);
     // Aufteilung + Regeltakt + Tages-Schreibzähler (Punkt 1/2).
-    set('sungrowWrMasterSplit', `Aufteilung ${vw.master.split} · Takt ${vw.master.regulate}`);
+    set('sungrowWrMasterSplit', `Aufteilung ${vw.master.split} · Takt ${vw.master.regulate} · Rückfall ${vw.master.fallback}`);
     set('sungrowWrMasterWrites', `Writes heute: ${vw.master.writes}`);
     set('sungrowWrSlaveRole', vw.slave.role);
     set('sungrowWrSlaveVals', vw.slave.online ? line(vw.slave) : vw.slave.running);
