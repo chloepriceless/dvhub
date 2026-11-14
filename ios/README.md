@@ -165,8 +165,8 @@ Was Apple vorgibt, und wie die App es umsetzt:
   zugeklappt, und zugeklappt dreht er die App nicht ins Querformat. `DuoTests` fotografiert die Pose, in der der
   Simulator gerade steht (`TEST_RUNNER_DVHUB_POSE=auf` benennt die Bilder).
 - **Falz.** Das System meldet ihn als reservierte Fläche (`GeometryProxy.reservedRegions(kind: .division)`,
-  iOS 27.1+). Meldet es einen aktiven senkrechten Falz, rückt `AuroraPage` den Inhalt so ein, dass seine Mitte
-  auf dem Falz liegt – der Spaltenabstand der zweispaltigen Anordnungen liegt dann dort, keine Karte darüber
+  iOS 27.1+). Meldet es einen aktiven senkrechten Falz und bleibt der Inhalt danach zweispaltig, rückt `AuroraPage`
+  ihn so ein, dass seine Mitte auf dem Falz liegt – der Spaltenabstand liegt dann dort, keine Karte darüber
   (`FoldRule` im Paket, getestet; `FoldInsets` in `Design/Theme.swift`). Ein waagerechter Falz (aufgeklappt
   hochkant) teilt nur die Rollrichtung und ändert nichts. Zugeklappt meldet der Simulator keine reservierten
   Flächen. Ob und wie das aufgeklappte Gerät den Falz meldet, ist noch nicht gesehen – unter Mehr → Darstellung
@@ -228,7 +228,8 @@ einzeilige Anzeige über der Uhr zeigt bewusst keine Geldwerte.
 DVhub mit der Rückfrage. Er schaltet nicht selbst: Das Kontrollzentrum kann keine Rückfrage zeigen (Apple
 dokumentiert für Controls keinen Dialog), ein Schalter würde ohne Bestätigung schalten. Ablauf: iOS verlangt das
 entsperrte iPhone (`authenticationPolicy = .requiresLocalDeviceAuthentication`), die App fragt nach
-(`confirmationDialog`) und lässt mit Touch ID, Face ID oder Gerätecode bestätigen.
+(`confirmationDialog`) und lässt mit Touch ID, Face ID oder Gerätecode bestätigen. Ob ausgelöst oder aufgehoben wird,
+entscheidet die App nach dem Live-Zustand der Anlage, nicht nach dem Stand, den der Knopf zuletzt kannte.
 
 **Live-Aktivität (ActivityKit).** Solange der Not-Halt aktiv ist: Sperrbildschirm und Dynamic Island mit laufender
 Dauer, Akku, Erzeugung, Netz und Uhrzeit des Stands; Antippen öffnet „Steuern“. Abschaltbar unter Mehr →

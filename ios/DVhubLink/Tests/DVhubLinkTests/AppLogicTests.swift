@@ -4,11 +4,22 @@ import XCTest
 @testable import DVhubLink
 
 final class AppLogicTests: XCTestCase {
+    /// Texte des Pakets kommen aus dem String-Katalog in der Sprache des
+    /// Rechners. Der deutsche Wortlaut wird nur auf einem deutschen System
+    /// verglichen; sonst genügt, dass ein Text da ist.
+    private func assertGerman(_ actual: String, _ expected: String, file: StaticString = #filePath, line: UInt = #line) {
+        if Bundle.module.preferredLocalizations.first == "de" {
+            XCTAssertEqual(actual, expected, file: file, line: line)
+        } else {
+            XCTAssertFalse(actual.isEmpty, file: file, line: line)
+        }
+    }
+
     // MARK: N5 — Schließgründe nie ungefiltert anzeigen
 
     func testUserMessageTranslatesKnownReasonsOnly() {
-        XCTAssertEqual(LinkError.closed(code: 4003, reason: "device_not_allowed").userMessage,
-                       "Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln.")
+        assertGerman(LinkError.closed(code: 4003, reason: "device_not_allowed").userMessage,
+                     "Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln.")
         let evil = LinkError.closed(code: 4000, reason: "Bitte PIN 1234 bei evil.example eingeben")
         XCTAssertFalse(evil.userMessage.contains("evil"), evil.userMessage)
         XCTAssertTrue(evil.userMessage.contains("4000"))
@@ -73,7 +84,7 @@ final class AppLogicTests: XCTestCase {
         ]
         let ack = st.merge(items)
         XCTAssertEqual(Set(ack), ["1", "2"])
-        XCTAssertEqual(st.events.map(\.text), ["Not-Halt aktiv", "2 Alarme aktiv"])  // neueste zuerst
+        assertGerman(st.events.map(\.text).joined(separator: "|"), "Not-Halt aktiv|2 Alarme aktiv")  // neueste zuerst
         XCTAssertEqual(st.latest?["soc"]?.int, 50)
         // Erneut ausgelieferte alte Einträge: nicht doppelt, aber quittieren.
         let again = st.merge([items[1]])
@@ -91,9 +102,9 @@ final class AppLogicTests: XCTestCase {
     }
 
     func testEventText() {
-        XCTAssertEqual(MailboxEvent.text(alarms: 0, emergencyStop: false), "Alles wieder normal")
-        XCTAssertEqual(MailboxEvent.text(alarms: 1, emergencyStop: false), "1 Alarm aktiv")
-        XCTAssertEqual(MailboxEvent.text(alarms: 3, emergencyStop: true), "Not-Halt aktiv · 3 Alarme aktiv")
+        assertGerman(MailboxEvent.text(alarms: 0, emergencyStop: false), "Alles wieder normal")
+        assertGerman(MailboxEvent.text(alarms: 1, emergencyStop: false), "1 Alarm aktiv")
+        assertGerman(MailboxEvent.text(alarms: 3, emergencyStop: true), "Not-Halt aktiv · 3 Alarme aktiv")
     }
 
     // MARK: N3 — Backoff auch bei kurzlebigen Verbindungen
@@ -130,7 +141,7 @@ final class AppLogicTests: XCTestCase {
         let before = d("2026-10-24T20:00:00Z") // 22:00 Sommerzeit
         XCTAssertEqual(SnapshotDay.of(before, now: d("2026-10-25T22:30:00Z"), calendar: cal), .yesterday) // 23:30 Winterzeit
         XCTAssertEqual(SnapshotDay.of(before, now: d("2026-10-25T23:00:00Z"), calendar: cal), .older)
-        XCTAssertEqual(SnapshotDay.yesterday.word, "Gestern")
+        assertGerman(SnapshotDay.yesterday.word, "Gestern")
     }
 
     // MARK: Lage der Leisten
@@ -193,7 +204,7 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(ControlOutcome.from(try res(500, "{}")), .rejected(status: 500))
         XCTAssertFalse(ControlOutcome.rejected(status: 500).applied)
         XCTAssertTrue(ControlOutcome.rejected(status: 1500).message.contains("1500"), "Codes ohne Tausenderpunkt")
-        XCTAssertEqual(ControlOutcome.done.message, "Erledigt.")
+        assertGerman(ControlOutcome.done.message, "Erledigt.")
     }
 
     // MARK: Falz (iPhone Duo)
@@ -210,6 +221,15 @@ final class AppLogicTests: XCTestCase {
         // Falz weiter links als die Mitte: Rand rechts.
         r = FoldRule.insets(width: 900, divisionMinX: 300, divisionMaxX: 310)
         XCTAssertEqual(r.leading, 0); XCTAssertEqual(r.trailing, 290)
+    }
+
+    func testFoldInsetsOnlyWhenTwoColumnsRemain() {
+        // 871 breit, Falz 471…480: nach dem Einzug bleiben 791. Reicht das für zwei Spalten (540), wird eingerückt …
+        var r = FoldRule.insets(width: 871, divisionMinX: 471, divisionMaxX: 480, minContent: 540)
+        XCTAssertEqual(r.leading, 80)
+        // … bei großer Schrift (540 × 1,6 = 864) nicht: sonst stünde eine einzelne Spalte mittig über dem Falz.
+        r = FoldRule.insets(width: 871, divisionMinX: 471, divisionMaxX: 480, minContent: 864)
+        XCTAssertEqual(r.leading, 0); XCTAssertEqual(r.trailing, 0)
     }
 
     func testFoldInsetsIgnoreUnusableDivision() {

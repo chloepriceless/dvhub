@@ -259,6 +259,8 @@ struct RootView: View {
             Color.clear
                 .onAppear { size = g.size; logGeometry(g) }
                 .onChange(of: g.size) { _, s in size = s; logGeometry(g) }
+                // Auf-/Zuklappen kann den Falz ändern, ohne dass sich die Fläche ändert.
+                .onChange(of: g.reservedRegionsText) { _, _ in logGeometry(g) }
         }.ignoresSafeArea())
         .environment(chrome)
         .onChange(of: rail, initial: true) { _, r in chrome.railActive = r }
@@ -304,7 +306,7 @@ struct RootView: View {
         if let b = scene?.screen.bounds.size { screen = b }
         let sdk = Bundle.main.object(forInfoDictionaryKey: "DTSDKName") as? String ?? "?"
         // Diagnosezeile für Rückfragen — bewusst nicht übersetzt.
-        let text = "Fenster \(Int(g.size.width))×\(Int(g.size.height)) pt · Bildschirm \(Int(screen.width))×\(Int(screen.height)) pt · Breite \(win?.traitCollection.horizontalSizeClass == .regular ? "regular" : "compact"), Höhe \(vSize == .compact ? "compact" : "regular") · SDK \(sdk) · \(g.reservedRegionsText)"
+        let text = "Fenster \(Int(g.size.width))×\(Int(g.size.height)) pt · Bildschirm \(Int(screen.width))×\(Int(screen.height)) pt · Breite \(win?.traitCollection.horizontalSizeClass == .regular ? "regular" : "compact"), Höhe \(vSize == .compact ? "compact" : "regular") · SDK \(sdk)\(g.reservedRegionsText.isEmpty ? "" : " · " + g.reservedRegionsText)"
         chrome.diagnostics = text
         #if DEBUG
         print("DVHUB_GEOMETRY \(text) rail=\(rail)")

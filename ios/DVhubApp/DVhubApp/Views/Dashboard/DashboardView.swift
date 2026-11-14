@@ -36,22 +36,24 @@ struct DashboardView: View {
             }
             if let banner { NoticeBanner(text: banner) }
             if let s = controller.displayStatus {
+                // Spaltenwahl nach `width`, Maße nach der tatsächlichen Breite.
+                let pageWidth = typeSize.pageWidth(width)
                 if Layout.isWide(width) {
                     HStack(alignment: .top, spacing: 14) {
                         // Höhe folgt der Spaltenbreite — im Querformat ist wenig Höhe da.
-                        flowCard(s, height: max(290, min(420, (width - max(300, width * 0.44)) * 0.95)))
+                        flowCard(s, height: max(290, min(420, (pageWidth - max(300, pageWidth * 0.44)) * 0.95)))
                         VStack(spacing: 14) {
                             metricGrid(s)
                             moneyCard(s)
                         }
-                        .frame(width: max(300, width * 0.44))
+                        .frame(width: max(300, pageWidth * 0.44))
                     }
                     HStack(alignment: .top, spacing: 14) {
                         marketCard
                         stateCard(s)
                     }
                 } else {
-                    flowCard(s, height: min(380, max(290, width * 0.84)))
+                    flowCard(s, height: min(380, max(290, pageWidth * 0.84)))
                     metricGrid(s)
                     moneyCard(s)
                     marketCard

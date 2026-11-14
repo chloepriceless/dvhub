@@ -278,7 +278,7 @@ struct AuroraPage<Content: View>: View {
     /// Breite, nach der die Ansichten umbrechen. In den Bedienungshilfen-Größen
     /// braucht Text deutlich mehr Platz — dann zählt die Fläche entsprechend
     /// schmaler, und zweispaltige Anordnungen werden einspaltig.
-    private var layoutWidth: CGFloat { typeSize.isAccessibilitySize ? width / 1.6 : width }
+    private var layoutWidth: CGFloat { typeSize.isAccessibilitySize ? width / Layout.accessibilityFactor : width }
 
     var body: some View {
         // Ein Pfad für beide Fälle: Die Seite behält ihre Identität (Rollposition,
@@ -308,7 +308,8 @@ struct AuroraPage<Content: View>: View {
         }
         // Die Fläche der Rollansicht hängt nicht vom Einzug ab — hier wird gemessen.
         .background(GeometryReader { g in
-            Color.clear.onChange(of: FoldInsets(g), initial: true) { _, f in fold = f }
+            // Nur einrücken, wenn danach zwei Spalten bleiben (große Schrift braucht mehr Breite).
+            Color.clear.onChange(of: FoldInsets(g, minContent: Layout.twoColumns * (typeSize.isAccessibilitySize ? Layout.accessibilityFactor : 1)), initial: true) { _, f in fold = f }
         })
         .scrollContentBackground(.hidden)
         .background(AuroraBackground())
@@ -325,9 +326,11 @@ struct FoldInsets: Equatable {
 
     init() {}
 
-    init(_ g: GeometryProxy) {
+    /// `minContent`: So breit muss der Inhalt nach dem Einzug noch sein, damit er
+    /// zweispaltig steht — sonst kein Einzug (eine einzelne Spalte läge mittig über dem Falz).
+    init(_ g: GeometryProxy, minContent: CGFloat) {
         guard let d = g.verticalDivision else { return }
-        let r = FoldRule.insets(width: g.size.width, divisionMinX: d.minX, divisionMaxX: d.maxX)
+        let r = FoldRule.insets(width: g.size.width, divisionMinX: d.minX, divisionMaxX: d.maxX, minContent: minContent)
         leading = r.leading
         trailing = r.trailing
     }
@@ -351,7 +354,7 @@ extension GeometryProxy {
             }
         }
         let all = list(.division, "Falz") + list(.occlusion, "Verdeckt")
-        return all.isEmpty ? "keine reservierten Flächen" : all.joined(separator: " · ")
+        return all.isEmpty ? "keine reservierten Flächen" : all.joined(separator: ", ")
     }
 }
 
@@ -361,6 +364,16 @@ enum Layout {
     /// und iPad. Gewöhnliche iPhones (≤ 440 pt) und das Außendisplay bleiben einspaltig.
     static let twoColumns = CGFloat(BarPlacementRule.wideWidth)
     static func isWide(_ w: CGFloat) -> Bool { w >= twoColumns }
+    /// In den Bedienungshilfen-Schriftgrößen zählt die Breite für die Spaltenwahl um diesen Faktor schmaler.
+    static let accessibilityFactor: CGFloat = 1.6
+}
+
+extension DynamicTypeSize {
+    /// Tatsächliche Inhaltsbreite für Maße. Die Breite, die AuroraPage an ihren
+    /// Inhalt übergibt, dient der Spaltenwahl und ist bei großer Schrift kleiner.
+    func pageWidth(_ layoutWidth: CGFloat) -> CGFloat {
+        isAccessibilitySize ? layoutWidth * Layout.accessibilityFactor : layoutWidth
+    }
 }
 
 extension View {

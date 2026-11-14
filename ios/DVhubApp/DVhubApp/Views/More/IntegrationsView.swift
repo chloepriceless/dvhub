@@ -143,11 +143,11 @@ struct IntegrationsView: View {
             if let w = f["effectiveW"]?.number { rows.append((String(localized: "Wirksam"), Format.power(w))) }
             let exceeding = f["monitor"]?["exceeding"]?.bool == true
             if let n = f["monitor"]?["episodes"]?.number, n > 0 { rows.append((String(localized: "Überschreitungen"), "\(Int(n))")) }
-            out.append(IntegrationCard(id: "cap", title: String(localized: "Einspeisegrenze"), icon: "arrow.up.to.line.compact", state: exceeding ? String(localized: "überschritten") : "eingehalten",
+            out.append(IntegrationCard(id: "cap", title: String(localized: "Einspeisegrenze"), icon: "arrow.up.to.line.compact", state: exceeding ? String(localized: "überschritten") : String(localized: "eingehalten"),
                                        tint: exceeding ? Brand.red : Brand.green, rows: rows))
         }
         if let s = data["storage"] {
-            let level = s["level"]?.string ?? "unbekannt"
+            let level = s["level"]?.string ?? String(localized: "unbekannt")
             var rows: [(String, String)] = []
             if let p = s["freePct"]?.number { rows.append((String(localized: "Frei"), Format.percent(p))) }
             if let mb = s["freeMb"]?.number { rows.append((String(localized: "Freier Platz"), mb >= 1024 ? String(localized: "\(Format.number(mb / 1024)) GB") : String(localized: "\(Int(mb)) MB"))) }

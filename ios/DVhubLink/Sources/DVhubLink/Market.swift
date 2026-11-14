@@ -284,8 +284,6 @@ public struct ResidualOutlook: Equatable, Sendable {
     }
 }
 
-/// ISO-Zeit mit mehr als drei Nachkommastellen („…00.002349Z“), die
-/// ISO8601DateFormatter nicht liest: Bruchteil abschneiden.
 // MARK: - Tage der Marktansicht
 
 /// Ein Tag der Tagesleiste — fest (Börse) oder Prognose.
@@ -387,6 +385,8 @@ public struct MarketDay: Identifiable, Equatable, Sendable {
     }
 }
 
+/// ISO-Zeit mit mehr als drei Nachkommastellen („…00.002349Z“), die
+/// ISO8601DateFormatter nicht liest: Bruchteil abschneiden.
 public func parseLooseISO(_ s: String?) -> Date? {
     guard let s else { return nil }
     if let d = parseISODate(s) { return d }

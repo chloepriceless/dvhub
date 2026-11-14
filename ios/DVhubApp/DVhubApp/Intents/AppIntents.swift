@@ -43,8 +43,10 @@ struct IntentReading {
     /// Gerade eben von der Anlage geholt (sonst: letzter gespeicherter Stand).
     let fresh: Bool
 
-    /// Der Stand ist jung genug, um ihn ohne Uhrzeit zu nennen.
-    var current: Bool { fresh || Date().timeIntervalSince(snapshot.at) < 120 }
+    /// Der Stand ist jung genug, um ihn ohne Uhrzeit zu nennen. Allein nach
+    /// seinem Alter: Auch ein eben geholter Stand kann alt sein — ist die Anlage
+    /// nicht erreichbar, liefert das Relay den letzten aus dem Briefkasten.
+    var current: Bool { Date().timeIntervalSince(snapshot.at) < 120 }
     var time: String { Format.dateTime(snapshot.at) }
 
     static func load() async throws -> IntentReading {
@@ -239,6 +241,9 @@ struct TriggerEmergencyStopIntent: LiveActivityIntent {
             actionName: .custom(acceptLabel: "Not-Halt auslösen", acceptAlternatives: [], denyLabel: "Abbrechen", denyAlternatives: [], destructive: true),
             dialog: "Not-Halt auslösen? DVhub hört auf, Sollwerte an die Anlage zu schreiben.")
         let outcome = try await EmergencyStopAction.run(stop: true)
+        // Hat die Anlage nicht geschaltet, ist das ein Fehler — sonst liefe ein
+        // Kurzbefehl nach „Not-Halt auslösen“ weiter, als wäre er aktiv.
+        guard outcome.applied else { throw IntentFailure.message(outcome.message) }
         return .result(dialog: outcome == .done ? "Der Not-Halt ist aktiv." : "\(outcome.message)")
     }
 }
@@ -255,6 +260,7 @@ struct ReleaseEmergencyStopIntent: LiveActivityIntent {
             actionName: .custom(acceptLabel: "Not-Halt aufheben", acceptAlternatives: [], denyLabel: "Abbrechen", denyAlternatives: [], destructive: false),
             dialog: "Not-Halt aufheben? DVhub regelt die Anlage dann wieder.")
         let outcome = try await EmergencyStopAction.run(stop: false)
+        guard outcome.applied else { throw IntentFailure.message(outcome.message) }
         return .result(dialog: outcome == .done ? "Der Not-Halt ist aufgehoben. DVhub regelt wieder." : "\(outcome.message)")
     }
 }

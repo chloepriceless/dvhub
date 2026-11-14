@@ -2636,6 +2636,16 @@
         }
       }
     },
+    "Fehler in der Anlage" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "error at the system"
+          }
+        }
+      }
+    },
     "Fertig" : {
       "localizations" : {
         "en" : {
@@ -6337,6 +6347,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "dynamic (exchange + surcharges)"
+          }
+        }
+      }
+    },
+    "eingehalten" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "within limit"
           }
         }
       }

@@ -101,6 +101,9 @@ targets:
         CFBundleLocalizations:
           - de
           - en
+        # Selbstabruf des Widgets im Heimnetz (ws:// zur Box, auch über Hostnamen).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

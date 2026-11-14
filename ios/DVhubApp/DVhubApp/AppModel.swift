@@ -49,8 +49,9 @@ final class AppModel {
     /// Bereich, den ein Link, ein Widget oder das Kontrollzentrum öffnen will
     /// (`dvhub://open/<Bereich>`); die Wurzelansicht übernimmt und leert ihn.
     var pendingOpen: String?
-    /// Rückfrage zum Not-Halt, die von außen angestoßen wurde (Kontrollzentrum):
-    /// true = auslösen, false = aufheben. Die Ansicht „Steuern“ zeigt sie.
+    /// Rückfrage zum Not-Halt, die von außen angestoßen wurde (Kontrollzentrum).
+    /// Der Wert ist nur die Vermutung des Knopfs; ob ausgelöst oder aufgehoben
+    /// wird, entscheidet die Ansicht „Steuern“ nach dem Live-Zustand.
     var pendingStopRequest: Bool?
 
     private let widgets = WidgetBridge()

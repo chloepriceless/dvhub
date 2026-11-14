@@ -29,6 +29,11 @@
 	<string>$(DVHUB_APP_GROUP)</string>
 	<key>DVhubKeychainGroup</key>
 	<string>$(DVHUB_KEYCHAIN_GROUP)</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>

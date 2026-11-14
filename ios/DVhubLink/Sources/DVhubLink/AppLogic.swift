@@ -306,12 +306,15 @@ public enum FoldRule {
 
     /// Zusätzlicher Rand links und rechts. `divisionMinX`/`divisionMaxX` im
     /// Koordinatenraum der Fläche mit der Breite `width`. (0, 0), wenn der Falz
-    /// außerhalb liegt oder eine Seite zu schmal wäre.
-    public static func insets(width: Double, divisionMinX: Double, divisionMaxX: Double) -> (leading: Double, trailing: Double) {
+    /// außerhalb liegt, eine Seite zu schmal wäre oder der Inhalt nach dem
+    /// Einzug schmaler als `minContent` würde: Dann steht er einspaltig, und
+    /// eine einzelne Spalte läge mittig über dem Falz — da ist ohne Einzug mehr Platz.
+    public static func insets(width: Double, divisionMinX: Double, divisionMaxX: Double, minContent: Double = 0) -> (leading: Double, trailing: Double) {
         guard width > 0, divisionMinX.isFinite, divisionMaxX.isFinite, divisionMinX <= divisionMaxX else { return (0, 0) }
         let left = divisionMinX, right = width - divisionMaxX
         guard left >= minSide, right >= minSide else { return (0, 0) }
         let half = min(left, right)
+        guard half * 2 + (divisionMaxX - divisionMinX) >= minContent else { return (0, 0) }
         return (left - half, right - half)
     }
 }

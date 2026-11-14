@@ -105,18 +105,21 @@ struct ControlView: View {
         .sensoryFeedback(.warning, trigger: confirmStop) { _, shown in shown }
         .sensoryFeedback(.success, trigger: successes)
         .sensoryFeedback(.error, trigger: failures)
-        // Rückfrage von außen (Kontrollzentrum, Live-Aktivität): erst zeigen, wenn
-        // die Anlage verbunden ist — und nur in der Richtung, die zum Zustand passt.
+        // Rückfrage von außen (Kontrollzentrum): erst zeigen, wenn die Anlage
+        // verbunden ist und ein Live-Wert da ist. Die Richtung bestimmt allein der
+        // Live-Zustand — der Knopf im Kontrollzentrum kennt nur den gespeicherten
+        // Stand (ohne App-Gruppe gar keinen), und der kann veraltet sein.
         .task(id: externalRequestKey) { applyExternalRequest() }
     }
 
-    private var externalRequestKey: String { "\(String(describing: model.pendingStopRequest))-\(controller.isOnline)" }
+    private var externalRequestKey: String {
+        "\(model.pendingStopRequest != nil)-\(controller.isOnline)-\(controller.liveAt != nil)-\(busy)"
+    }
 
     private func applyExternalRequest() {
-        guard let stop = model.pendingStopRequest, controller.isOnline, !busy else { return }
+        guard model.pendingStopRequest != nil, controller.isOnline, controller.liveAt != nil, !busy else { return }
         model.pendingStopRequest = nil
-        if stop, !stopped { confirmStop = true }
-        if !stop, stopped { confirmResume = true }
+        if stopped { confirmResume = true } else { confirmStop = true }
     }
 
     private func send(_ path: String, _ reason: String) async {

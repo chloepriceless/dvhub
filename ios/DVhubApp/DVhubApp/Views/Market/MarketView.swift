@@ -250,7 +250,9 @@ private struct NowPriceCard: View {
         }
     }
 
-    private var stats: PriceStats? { today.flatMap { PriceSeries.stats($0.slots) } }
+    /// Tief, Mittel, Hoch und die Lage im Tag nur aus echten Börsenpreisen: Die
+    /// Ersatz-Stunden aus der Prognose sind lückenhaft und gäben andere Werte als die Tageskarte.
+    private var stats: PriceStats? { today.flatMap { $0.slotsAreFallback ? nil : PriceSeries.stats($0.slots) } }
     private var tint: Color { (point?.ctKwh ?? 0) < 0 ? Brand.red : Brand.blue }
 
     /// Lage im Tagesverlauf: unteres/oberes Drittel der heutigen Spanne.

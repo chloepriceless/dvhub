@@ -60,7 +60,7 @@ enum BoxData {
             // aber ok:false — dann keine halben Kurven zeigen.
             guard r.status == 200, r.body["ok"]?.bool != false, let rows = r.body["data"]?.array else {
                 switch r.status {
-                case 200: return .failure(Failure(message: String(localized: "Verlauf unvollständig: \(r.body["error"]?.string ?? "Fehler in der Anlage").")))
+                case 200: return .failure(Failure(message: String(localized: "Verlauf unvollständig: \(r.body["error"]?.string ?? String(localized: "Fehler in der Anlage")).")))
                 case 503: return .failure(Failure(message: String(localized: "Die Anlage hat keine Messwert-Datenbank.")))
                 case 413: return .failure(Failure(message: String(localized: "Der Verlauf ist für die Übertragung zu groß.")))
                 case 429: return .failure(Failure(message: String(localized: "Gerade zu viele Anfragen. Bitte gleich noch einmal.")))

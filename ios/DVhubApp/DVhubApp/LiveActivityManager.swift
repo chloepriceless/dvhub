@@ -35,7 +35,12 @@ enum LiveActivityManager {
     /// Erlaubt das System Live-Aktivitäten für diese App (Einstellungen → DVhub)?
     static var allowedBySystem: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
 
-    private static var current: [Activity<EmergencyStopAttributes>] { Activity<EmergencyStopAttributes>.activities }
+    /// Nur laufende Aktivitäten: Eine vom System beendete (nach acht Stunden) steht
+    /// noch bis zu vier Stunden auf dem Sperrbildschirm und ließe sich nicht mehr
+    /// aktualisieren — dann beginnt eine neue.
+    private static var current: [Activity<EmergencyStopAttributes>] {
+        Activity<EmergencyStopAttributes>.activities.filter { $0.activityState == .active || $0.activityState == .stale }
+    }
 
     /// Aktivität an den Stand angleichen: Not-Halt aktiv → zeigen bzw.
     /// aktualisieren; aufgehoben → beenden; unbekannt → nichts ändern.
