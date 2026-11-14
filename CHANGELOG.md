@@ -10,6 +10,21 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Sungrow: zwei WR im Master/Slave-Parallelbetrieb (Beta).** Laut Sungrow-Doku V1.1.9/V1.1.11
+  (Energy-Management sowie Einspeise-/Wirkleistungsbegrenzung) werden die Steuerregister
+  (EMS-Modus 13050, Befehl 13051, Leistung 13052, Herzschlag 13080) im Parallelbetrieb **nur an den
+  Master** geschrieben; der Master verteilt Laden/Entladen intern auf den Slave. DVhub steuert daher
+  weiterhin ausschließlich den Master (Verbindung `victron.*` = der WR mit dem Smart Meter). Ein
+  zweiter Schreibpfad würde gegen die Master-Koordination arbeiten und ist bewusst nicht gebaut.
+  Optional lässt sich der zweite WR über `sungrow.secondInverter.host` (Port 502, Unit-ID 1)
+  **nur lesend** anbinden (eigener Modbus-Pool, kein Schreibzugriff); Netz und Last liefert der
+  einzige Zähler am Master als System-Werte. Erst wenn am Gerät bestätigt ist, dass der Master die
+  System-Summen *nicht* meldet, zählt `sungrow.secondInverter.aggregateTelemetry` PV, Akku-Leistung
+  und Leistungsgrenze beider WR für den Regler zusammen. Standard aus — ohne zweite Verbindung
+  arbeitet der Einzel-WR-Pfad unverändert wie bisher.
+
 ## [1.0.10] - 2026-11-13
 
 Release nach gut einer Woche; genau dieser Stand lief vorher im Echtbetrieb auf der eigenen Anlage. Überblick nach

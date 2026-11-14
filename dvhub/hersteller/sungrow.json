@@ -40,7 +40,19 @@
     "  • Nicht genutzt: Min-/Max-SoC (13058/13059), Max. Lade-/Entladeleistung (33047/33048).",
     "",
     "UNGEPRÜFT bis zum Kundentest: Vorzeichen der Akku-Leistung 5214 (laut mkaiser positiv =",
-    "Entladen → scale −1), Verhalten des Forced mode beim Laden aus PV + Netz, Reaktionszeit."
+    "Entladen → scale −1), Verhalten des Forced mode beim Laden aus PV + Netz, Reaktionszeit.",
+    "",
+    "Zwei WR (Master/Slave-Parallelbetrieb, seit 2026-11-14): Laut Sungrow-Doku V1.1.9/V1.1.11 (Energy-",
+    "Management, Note; ebenso Einspeise- und Wirkleistungsbegrenzung Note 4) werden die Steuerregister NUR an",
+    "den Master geschrieben — der Master verteilt Laden/Entladen intern auf den Slave. DVhub steuert daher nur",
+    "den Master (die victron.*-Verbindung = Master mit dem Smart Meter); ein zweiter Schreibpfad würde gegen die",
+    "Master-Koordination arbeiten und ist bewusst NICHT gebaut. Netz/Last/Einspeisung kommen vom einzigen Zähler",
+    "am Master = System-Werte. PV (5017) und Akku (5214) sind je WR eigene DC-Messungen; ob der Master sie im",
+    "Parallelbetrieb aufsummiert, steht NICHT in der Doku → am Gerät zu prüfen. Optional kann der zweite WR über",
+    "sungrow.secondInverter.host (Port 502, Unit-ID 1) NUR LESEND angebunden werden (services/inverter/",
+    "sungrow-second.js, eigener Modbus-Pool, kein Write). Erst wenn am Gerät bestätigt ist, dass der Master die",
+    "System-Summen NICHT meldet, darf sungrow.secondInverter.aggregateTelemetry eingeschaltet werden — dann",
+    "zählt der Regler PV/Akku/Leistungsgrenze beider WR zusammen. Standard aus = ein WR wie bisher."
   ],
 
   "identify": {

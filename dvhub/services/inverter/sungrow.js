@@ -269,6 +269,48 @@ export function endpointKeyOf(v) {
 }
 
 /**
+ * Betreiber-Einstellung cfg.sungrow.secondInverter: Verbindung des ZWEITEN Sungrow-WR im Master/Slave-
+ * Parallelbetrieb und der Aggregations-Schalter. Steuerung geht laut Sungrow-Doku (V1.1.11, Energy-Management:
+ * „For multi-inverter (master/slave) systems, this parameter only needs to be issued to the master.“) NUR an
+ * den Master — der zweite WR wird hier ausschließlich LESEND angebunden (services/inverter/sungrow-second.js).
+ */
+export function resolveSecondInverter(cfg) {
+  const o = cfg?.sungrow?.secondInverter;
+  const c = o && typeof o === 'object' ? o : {};
+  const host = String(c.host || '').trim();
+  const t = Number(c.timeoutMs);
+  return {
+    host,
+    port: Number(c.port) || 502,
+    unitId: Number.isFinite(Number(c.unitId)) ? Number(c.unitId) : 1,
+    timeoutMs: Number.isFinite(t) && t > 0 ? t : 1500,
+    aggregateTelemetry: c.aggregateTelemetry === true,
+    enabled: host.length > 0,
+  };
+}
+
+/**
+ * Frische, als System-Summe aggregierbare Messung des zweiten WR aus state.sungrowSecond — oder null. Reine
+ * Lesefunktion (kein Modbus). Liefert nur etwas, wenn der Betreiber aggregateTelemetry eingeschaltet hat (am
+ * Gerät geprüft: der Master meldet NICHT die System-Summen, jeder WR nur seine eigene PV/Akku-Leistung), der
+ * zweite WR online und der Wert nicht älter als maxAgeMs ist. Netz/Last bleiben immer die Master-Werte
+ * (einziger Zähler am Master).
+ */
+export function secondInverterTelemetry(state, cfg, { nowMs = Date.now(), maxAgeMs = 20000 } = {}) {
+  const c = resolveSecondInverter(cfg);
+  if (!c.aggregateTelemetry) return null;
+  const s = state?.sungrowSecond;
+  if (!s || s.online !== true) return null;
+  const fin = (v) => v != null && Number.isFinite(Number(v));
+  if (!fin(s.updatedAt) || nowMs - Number(s.updatedAt) > maxAgeMs) return null;
+  return {
+    batteryPowerW: fin(s.batteryPowerW) ? Number(s.batteryPowerW) : null,
+    pvPowerW: fin(s.pvPowerW) ? Number(s.pvPowerW) : null,
+    bdcRatedW: fin(s.bdcRatedW) && Number(s.bdcRatedW) > 0 ? Number(s.bdcRatedW) : null,
+  };
+}
+
+/**
  * Aktuator für den nachgebildeten Netz-Sollwert. Alle Writes nur über Holding-Register 13050–13052 und den
  * Herzschlag 13080, jede Änderung mit Rücklesen. Steuermodus nach cfg.sungrow: External EMS (Modus 3, Standard,
  * mit Herzschlag — fällt DVhub aus, kehrt der Wechselrichter selbst in Self-consumption zurück) oder Forced mode
@@ -524,11 +566,26 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     st.lastStepAt = t;
     const targetFresh = st.target && t - st.target.at <= opts.targetMaxAgeMs;
     const tel = telemetry(cfg, opts);
-    const bdc = Number(state.victron.device.bdcRatedW) || null;
+    // Zweiter WR (Parallelbetrieb): nur wenn der Betreiber aggregateTelemetry eingeschaltet hat, zählt DVhub
+    // PV + Akku-Leistung beider WR zusammen (System-Werte für den Regler) und nimmt die Summe beider BDC-
+    // Nennleistungen als Leistungsgrenze — der Master verteilt die eine EMS-Vorgabe intern auf den Slave.
+    // Netz und Last bleiben die Master-Werte (einziger Zähler). Ohne zweite Verbindung/aggregateTelemetry: null.
+    const second = secondInverterTelemetry(state, cfg, { nowMs: t, maxAgeMs: opts.telemetryMaxAgeMs });
+    const masterBdc = Number(state.victron.device.bdcRatedW) || null;
+    // System-Leistungsgrenze nur anheben, wenn BEIDE BDC-Nennleistungen bekannt sind. Fehlt die des Masters,
+    // bleibt die Grenze unbekannt (→ Self-consumption wie ohne zweiten WR), statt mit halbem Wissen zu forcieren.
+    const bdc = second?.bdcRatedW && masterBdc ? masterBdc + second.bdcRatedW : masterBdc;
     const cap = opts.maxPowerW != null ? (bdc ? Math.min(bdc, opts.maxPowerW) : opts.maxPowerW) : bdc;
+    const emsTel = second
+      ? {
+        ...tel,
+        batteryW: tel.batteryW != null && second.batteryPowerW != null ? tel.batteryW + second.batteryPowerW : tel.batteryW,
+        pvW: tel.pvW != null && second.pvPowerW != null ? tel.pvW + second.pvPowerW : tel.pvW,
+      }
+      : tel;
     let decision = targetFresh
       ? decideEmsCommand({
-        setpointW: st.target.setpointW, ...tel, maxChargeW: cap, maxDischargeW: cap,
+        setpointW: st.target.setpointW, ...emsTel, maxChargeW: cap, maxDischargeW: cap,
         bandW: opts.bandW, gain: opts.gain, minPowerW: opts.minPowerW,
         noGridCharge: NO_GRID_CHARGE_SOURCES.has(String(st.target.source))
       })

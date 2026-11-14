@@ -208,6 +208,7 @@ import { energyBalanceBattery } from './services/energy-balance-battery.js';
 import { createGridShareTracker } from './services/optimizer/grid-share.js';
 import { createGridSharePollTick } from './services/optimizer/grid-share-poll.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
+import { createSungrowSecond } from './services/inverter/sungrow-second.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
 import { createOptimizerService } from './services/optimizer/index.js';
@@ -1604,6 +1605,11 @@ ctx.onMultiGxAvailability = createEosResyncOnAvailability({
 });
 ctx.multiGx = createMultiGx(ctx, { transport: createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
 if (IS_RUNTIME_PROCESS) ctx.multiGx.start();
+// Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (services/inverter/sungrow-second): NUR LESEND, eigener
+// Modbus-Pool. Steuerung geht laut Sungrow-Doku nur an den Master (createSungrowEms). Ohne
+// sungrow.secondInverter.host keine einzige Anfrage.
+ctx.sungrowSecond = createSungrowSecond(ctx, { transport: createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
+if (IS_RUNTIME_PROCESS) ctx.sungrowSecond.start();
 ctx.applyControlTarget = scheduler.applyControlTarget;
 // Geteilte Steuer-Primitiven (services/control-commands.js): HTTP-Routen UND der
 // MQTT-Command-Subscriber gehen durch denselben geprüften Pfad.
@@ -3191,6 +3197,7 @@ async function gracefulShutdown(signal) {
   safeSync('peakShaving.stop', () => ctx.peakShaving?.stop?.());
   safeSync('gridConnection.stop', () => ctx.gridConnection?.stop?.());
   safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
+  safeSync('sungrowSecond.stop', () => ctx.sungrowSecond?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
   safeSync('vehiclePull.stop', () => ctx.vehiclePull?.stop?.());
   safeSync('tariffProvider.stop', () => ctx.tariffProvider?.stop?.());
