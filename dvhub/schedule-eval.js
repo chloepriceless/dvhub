@@ -475,7 +475,12 @@ export function createScheduleEvaluator(ctx) {
     const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
     const loadRaw = state.victron.selfConsumptionW;
     const pvRaw = state.victron.pvTotalW ?? state.victron.pvPowerW;
-    const known = loadRaw != null && Number.isFinite(Number(loadRaw))
+    // Punkt 4: Last 0 bei nennenswertem Netzbezug ist unplausibel (bezieht das Netz, gibt es Last) — das passiert
+    // kurz, während der Master-Akku umschaltet oder ein Slave-Wert fehlt. Dann die Last als UNBEKANNT behandeln
+    // (nicht auf 0 deckeln), damit das Netzlade-Tor den Sollwert nicht fälschlich auf 0 zieht.
+    const gridImportW = Math.max(0, Number(state.victron.gridImportW || 0));
+    const loadImplausibleZero = Number(loadRaw) <= 0 && gridImportW > 100;
+    const known = loadRaw != null && Number.isFinite(Number(loadRaw)) && !loadImplausibleZero
       && !victronFieldStale(state, 'selfConsumptionW', maxAgeMs)
       && !victronFieldStale(state, 'pvTotalW', maxAgeMs);
     const netLoadW = known ? Math.max(0, Number(loadRaw)) - Math.max(0, Number(pvRaw) || 0) : 0;

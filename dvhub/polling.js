@@ -1115,6 +1115,19 @@ export function createPoller(ctx) {
     } else if (sungrowSecondCfg.enabled && !sungrowSecond) {
       delete state.victron.sungrowMasterLoadW;
     }
+    // Punkt 4: eine Systemlast von 0 bei Netzbezug ist unplausibel (Master-Akku schaltet um, Slave-Wert fehlt
+    // kurz). Nicht die 0 übernehmen — den letzten gültigen Wert bis telemetryMaxAgeMs halten, sonst deckelt das
+    // Netzlade-Tor den Sollwert fälschlich auf 0. Nur bei zweitem WR (Aggregation).
+    if (sungrowSecondCfg.enabled) {
+      const giW = Math.max(0, Number(state.victron.gridImportW || 0));
+      const loadNow = Number(state.victron.selfConsumptionW);
+      const maxAge = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
+      if (Number.isFinite(loadNow) && loadNow > 0) {
+        state.victron._sungrowLoadHold = { w: loadNow, at: Date.now() };
+      } else if (giW > 100 && state.victron._sungrowLoadHold && Date.now() - state.victron._sungrowLoadHold.at <= maxAge) {
+        state.victron.selfConsumptionW = state.victron._sungrowLoadHold.w;
+      }
+    }
 
     const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
     const pvTotalW = Math.max(0, Number(state.victron.pvTotalW || 0));

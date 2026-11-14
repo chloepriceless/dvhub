@@ -1352,3 +1352,12 @@ test('Netzlade-Tor: Victron (kein Sungrow-EMS) → positiver Sollwert weiter abg
   assert.equal(res.ok, false);
   assert.equal(res.error, 'grid_charge_not_allowed');
 });
+
+test('Netzlade-Tor (Punkt 4): Last 0 bei Netzbezug → als unbekannt behandelt, nicht auf 0 gedeckelt', async () => {
+  const g = sungrowGateCtx({ loadW: 0, pvW: 0 });
+  g.state.victron.gridImportW = 2000; // Netz bezieht → Last 0 ist unplausibel (Umschaltung/Slave fehlt)
+  const res = await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'grid_charge_not_allowed'); // abgelehnt, NICHT auf 0 gedeckelt
+  assert.equal(g.calls.length, 0);
+});

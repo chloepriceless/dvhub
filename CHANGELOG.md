@@ -12,6 +12,19 @@ verweist hierher.
 
 ### Behoben
 
+- **Sungrow zwei WR: Last 0 bei Netzbezug deckelt den Sollwert nicht mehr auf 0.** Eine Hauslast von 0 W
+  bei nennenswertem Netzbezug ist unplausibel (sie entsteht kurz, während der Master-Akku umschaltet oder
+  ein Slave-Wert fehlt). DVhub behandelt sie jetzt als unbekannt (das Netzlade-Tor lehnt dann ab statt auf
+  0 zu deckeln) und hält im Poller den letzten gültigen Lastwert bis `telemetryMaxAgeMs`.
+
+### Geändert
+
+- **Sungrow zwei WR: PV-Größe des zweiten WR zählt zur Prognose.** `sungrow.secondInverter.pvKwp` fließt
+  jetzt an einer zentralen Stelle in die PV-Gesamtgröße ein (Prognose pvlib/Open-Meteo/Forecast.Solar/
+  pvnode, MiSpeL-kWp, Plausibilitätsprüfung) — Feldbox 12,32 + 11,88 = 24,2 kWp. (Bei String-genauer
+  Prognose „detailliert" gehört der Slave als eigener String in die Liste.)
+
+
 - **Sungrow External EMS: Herzschlag 13080 per FC 16, Diagnose-Anzeige, lösbare Sperre
   (sicherheitskritisch, Feldtest).** Der Master (SH10RT-20) übernahm 13080 per FC 06 (Write Single)
   nicht (geschrieben 30, gelesen 600). DVhub versucht den Herzschlag jetzt automatisch erst per FC 06 und
