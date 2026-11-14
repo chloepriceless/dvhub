@@ -69,6 +69,10 @@ verweist hierher.
 
 ### Hinzugefügt
 
+- **Netzspannung und -frequenz für Sungrow.** DVhub liest am Sungrow-Hybrid (Master) alle 30 s die
+  Phasenspannungen L1–L3 (Register 5019–5021) und die Netzfrequenz (5036) und behandelt sie wie eine
+  normale Netzspannung (Quelle `sungrow-inverter`) — bisher blieb das Feld bei Sungrow leer. Ortsnetz,
+  Datenspende und Leitstand nutzen sie wie die Victron-/EnergyLink-Werte.
 - **Sungrow zwei WR: Vorgaben einzeln auf beide WR aufteilen (Split-Steuerung, Beta).** Neue Einstellung
   „Steuerung des zweiten WR": „Nur im Eigenverbrauch" (Standard = wie bisher, der Master verteilt) oder
   „Vorgaben aufteilen". Im Split-Modus teilt DVhub bei Lade-/Entlade-Vorgaben die Reglerleistung nach

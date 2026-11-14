@@ -383,7 +383,7 @@ test('Codex R2: Not-Halt während des Lesens → fremder Zwangsbetrieb wird nich
 // --- External EMS (Standard) -------------------------------------------------------------
 
 test('Steuermodus: Standard External EMS, Frist 30 s, Grenzen 20–300 s', () => {
-  assert.deepEqual(resolveSungrowControl({}), { mode: 'external', modeValue: EMS_MODE.EXTERNAL, heartbeatTimeoutS: 30 });
+  assert.deepEqual(resolveSungrowControl({}), { mode: 'external', modeValue: EMS_MODE.EXTERNAL, heartbeatTimeoutS: 30, heartbeatAfterMode: true, heartbeatWriteFc: null, acceptDeviceHeartbeatS: 0 });
   assert.equal(resolveSungrowControl({ sungrow: { controlMode: 'forced' } }).modeValue, EMS_MODE.FORCED);
   assert.equal(resolveSungrowControl({ sungrow: { heartbeatTimeoutS: 5 } }).heartbeatTimeoutS, 20);
   assert.equal(resolveSungrowControl({ sungrow: { heartbeatTimeoutS: 1000 } }).heartbeatTimeoutS, 300);
@@ -392,14 +392,16 @@ test('Steuermodus: Standard External EMS, Frist 30 s, Grenzen 20–300 s', () =>
   assert.equal(resolveSungrowControl(loadSungrowConfig()).mode, 'external');
 });
 
-test('External EMS: Leistung → Befehl → Herzschlag (Frist) → Modus 3, Rücklesen inkl. Herzschlag', async () => {
+test('External EMS: Leistung → Befehl → Modus 3 → Herzschlag (nach Moduswechsel), Rücklesen inkl. Herzschlag', async () => {
   const r = rig({ controlMode: 'external' });
   const res = await r.ems.applySetpoint(4000, 'rule:netzladen');
   assert.equal(res.ok, true, JSON.stringify(res));
+  // Punkt 1: Herzschlag NACH dem Moduswechsel (der WR setzt 13080 beim Eintritt in Modus 3 selbst).
   assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [
-    [POWER, 2300], [CMD, EMS_CMD.CHARGE], [HB, 30], [MODE, EMS_MODE.EXTERNAL]
+    [POWER, 2300], [CMD, EMS_CMD.CHARGE], [MODE, EMS_MODE.EXTERNAL], [HB, 30]
   ]);
-  assert.deepEqual(r.t.reads.map((x) => [x.fc, x.address]), [[3, HB], [3, MODE], [3, MODE], [3, HB]]);
+  // Lesen: Herzschlag-Vorhandensein, Gerätezustand, Herzschlag-Rücklesung (applyHeartbeat), Gerätezustand-Rücklesung.
+  assert.deepEqual(r.t.reads.map((x) => [x.fc, x.address]), [[3, HB], [3, MODE], [3, HB], [3, MODE]]);
   assert.equal(r.state.ctrl.sungrowEms.ownMode, EMS_MODE.EXTERNAL);
 });
 
@@ -458,7 +460,7 @@ for (const variant of ['Register fällt auf 0', 'Register bleibt 3']) {
     r.telemetry({ gridW: 0, batteryW: -500, pvW: 0, loadW: 500 });
     r.t.writes.length = 0;
     await r.ems.tick();
-    assert.deepEqual(r.t.writes.map((w) => w.address), [POWER, CMD, HB, MODE], 'alles neu, auch was gleich aussieht');
+    assert.deepEqual(r.t.writes.map((w) => w.address), [POWER, CMD, MODE, HB], 'alles neu, auch was gleich aussieht');
     assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_heartbeat_gap'));
     assert.equal(r.image.holding.get(MODE), EMS_MODE.EXTERNAL);
   });
@@ -502,7 +504,7 @@ test('Codex R4: Frist erhöht, bevor ein Hänger auffällt → Lücke gegen die 
   r.telemetry({ gridW: 0, batteryW: -500, pvW: 0, loadW: 500 });
   r.t.writes.length = 0;
   await r.ems.tick();
-  assert.deepEqual(r.t.writes.map((w) => w.address), [POWER, CMD, HB, MODE], 'voller Wiedereintritt');
+  assert.deepEqual(r.t.writes.map((w) => w.address), [POWER, CMD, MODE, HB], 'voller Wiedereintritt');
   assert.equal(r.t.writes.find((w) => w.address === HB).value, 300, 'neue Frist geht dabei raus');
 });
 
@@ -657,8 +659,11 @@ function evaluatorRig(persisted = {}) {
   return { cfg, t, state, evaluator, logs };
 }
 
-test('Evaluator: Netzladen ohne Freigabe (EEG/MiSpeL-Tor) → abgelehnt, kein Write', async () => {
+test('Evaluator: Netzladen ohne Freigabe + Last unbekannt (EEG/MiSpeL-Tor) → abgelehnt, kein Write', async () => {
+  // Punkt 1: ein positiver Sollwert wird bei bekannter Last auf die Hauslast gedeckelt; ist die Last
+  // unbekannt/veraltet, lehnt das Tor wie bisher ab.
   const r = evaluatorRig();
+  r.state.victron.fieldUpdatedAt.selfConsumptionW = 1; // Last unbekannt
   const res = await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'rule:netzladen');
   assert.equal(res.ok, false);
   assert.equal(res.error, 'grid_charge_not_allowed');
@@ -681,6 +686,7 @@ test('Evaluator: Netzladen mit Freigabe → Zwangsbetrieb Laden über den Aktuat
 
 test('Codex P1: Netzladen-Freigabe zurückgenommen → abgelehnter Sollwert beendet den Zwangsbetrieb sofort', async () => {
   const r = evaluatorRig({ optimizer: { allowGridCharge: true } });
+  r.state.victron.fieldUpdatedAt.selfConsumptionW = 1; // Last unbekannt → Rücknahme lehnt ab (statt zu deckeln)
   await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write');
   assert.ok(r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED));
   r.t.writes.length = 0;
@@ -696,6 +702,7 @@ test('Codex P1: Netzladen-Freigabe zurückgenommen → abgelehnter Sollwert been
 
 test('Codex R2: gleichzeitig abgelehnter und angenommener Sollwert — der angenommene bleibt wirksam', async () => {
   const r = evaluatorRig({ optimizer: { allowGridDischarge: true } });
+  r.state.victron.fieldUpdatedAt.selfConsumptionW = 1; // Last unbekannt → positiver Sollwert wird abgelehnt
   const [a, b] = await Promise.all([
     r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write'),   // Netzladen nicht erlaubt
     r.evaluator.applyControlTarget('gridSetpointW', -4000, 'api_manual_write')
@@ -845,14 +852,14 @@ test('Modbus TCP: Poll liest nur FC 4 an Doku−1-Adressen; Sollwert (External E
     // (PV-Überschuss 70 000 − 850 reicht).
     const res = await evaluator.applyControlTarget('gridSetpointW', -4000, 'api_manual_write');
     assert.equal(res.ok, true, JSON.stringify(res));
-    // Standard External EMS: Herzschlag-Register prüfen, Zustand lesen, Leistung → Befehl → Herzschlag 30 s →
-    // Modus 3, dann Block und Herzschlag zurücklesen.
+    // Standard External EMS (Punkt 1): Herzschlag-Register prüfen, Zustand lesen, Leistung → Befehl → Modus 3 →
+    // Herzschlag 30 s (NACH dem Moduswechsel, per FC 06), Herzschlag zurücklesen, dann Block zurücklesen.
     assert.deepEqual(frames.map((f) => [f.fc, f.address, f.arg]), [
       [3, 13079, 1],
       [3, 13049, 3],
-      [6, 13051, 310], [6, 13050, 0xaa], [6, 13079, 30], [6, 13049, 3],
-      [3, 13049, 3],
-      [3, 13079, 1]
+      [6, 13051, 310], [6, 13050, 0xaa], [6, 13049, 3], [6, 13079, 30],
+      [3, 13079, 1],
+      [3, 13049, 3]
     ]);
     assert.deepEqual([image.holding.get(13049), image.holding.get(13050), image.holding.get(13051), image.holding.get(13079)], [3, 0xaa, 310, 30]);
   } finally {

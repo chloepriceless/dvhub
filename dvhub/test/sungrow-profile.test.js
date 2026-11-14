@@ -152,7 +152,7 @@ test('Erkennung: Typcode-Tabelle, Seriennummer, Nennleistungen', async () => {
   assert.deepEqual(
     { model: id.model, supported: id.supported, serial: id.serial, nominalW: id.nominalW, bdcRatedW: id.bdcRatedW, typeCodeHex: id.typeCodeHex },
     { model: 'SH10RT', supported: true, serial: 'A2231234567', nominalW: 10000, bdcRatedW: 10000, typeCodeHex: '0xE03' });
-  assert.deepEqual(t.reads.map((r) => [r.fc, r.address]), [[4, 4999], [4, 4989], [4, 5627]]);
+  assert.deepEqual(t.reads.map((r) => [r.fc, r.address]), [[4, 4999], [4, 4989], [4, 5627], [4, 5638]]);
   // String-WR (SG, Typcode nicht in der Hybrid-Tabelle) → erkannt, aber nicht unterstützt.
   const sg = mockSungrow(sungrowImage({ input: { [wire(5000)]: 0x0270 } }));
   const idSg = await identifySungrow((q) => sg.mbRequest(q));

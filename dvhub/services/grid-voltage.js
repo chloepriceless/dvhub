@@ -77,6 +77,25 @@ export async function readVictronGridVoltage(mbRequest, { host, port, unitId, ti
   };
 }
 
+// Sungrow-Hybrid (FC 4): Phasenspannungen Doku 5019–5021 (×0,1 V) und Netzfrequenz Doku 5036 (×0,1 Hz).
+// Draht-Adresse = Doku − 1. Der WR/Zähler sitzt direkt hinter dem Netzzähler → als normale Netzspannung behandeln.
+const SUNGROW_V_ADDR = 5018;  // Doku 5019, 3 Register (5019–5021)
+const SUNGROW_F_ADDR = 5035;  // Doku 5036
+/** Sungrow-Netzspannung/-frequenz lesen. Rohwerte uint16 → V / Hz; 0xFFFF = nicht verfügbar. */
+export async function readSungrowGridVoltage(mbRequest, { host, port, unitId, timeoutMs }) {
+  const base = { fc: 4, host, port: port || 502, unitId: unitId || 1, timeoutMs: timeoutMs || TIMEOUT_MS };
+  const v = await mbRequest({ ...base, address: SUNGROW_V_ADDR, quantity: 3 });
+  const f = await mbRequest({ ...base, address: SUNGROW_F_ADDR, quantity: 1 });
+  const regs = Array.isArray(v) ? v : v?.values;
+  const fr = Array.isArray(f) ? f : f?.values;
+  if (!Array.isArray(regs) || regs.length < 3) throw new Error('grid_meter_unreadable');
+  const volt = (r) => (r == null || (Number(r) & 0xffff) === 0xffff ? null : (Number(r) & 0xffff) / 10);
+  return {
+    l1: volt(regs[0]), l2: volt(regs[1]), l3: volt(regs[2]),
+    frequencyHz: Array.isArray(fr) && fr[0] != null && (Number(fr[0]) & 0xffff) !== 0xffff ? (Number(fr[0]) & 0xffff) / 10 : null,
+  };
+}
+
 /**
  * Frische Netzwerte für Abnehmer.
  * @returns {{ok:true,l1,l2,l3,frequencyHz,updatedAt,source} | {ok:false,reason:string,error?:string}}
@@ -130,9 +149,30 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
   function sourceOf(cfg, transport) {
     if (String(cfg?.meter?.readType || '').toLowerCase() === 'spine-http') return 'spine';
     if (transport?.type === 'mqtt') return 'mqtt';
+    // Sungrow-Hybrid liefert Netzspannung/-frequenz selbst (5019–5021/5036) — eigener Modbus-Pfad.
+    if (cfg?.manufacturer === 'sungrow') {
+      return (transport?.type === 'modbus' && typeof transport.mbRequest === 'function' && cfg?.victron?.host) ? 'sungrow' : null;
+    }
     if (cfg?.manufacturer && cfg.manufacturer !== 'victron') return null;
     if (transport?.type === 'modbus' && typeof transport.mbRequest === 'function' && cfg?.victron?.host) return 'modbus';
     return null;
+  }
+
+  async function readSungrow(cfg, mbRequest) {
+    const v = cfg.victron || {};
+    const unit = unitIdOrNull(v.unitId) ?? 1;
+    try {
+      const m = await readSungrowGridVoltage(mbRequest, { host: v.host, port: v.port, unitId: unit, timeoutMs: v.timeoutMs });
+      if (![m.l1, m.l2, m.l3].some(isNum)) throw new NoGridVoltageError();
+      set({ ...m, updatedAt: now(), source: 'sungrow-inverter', unitId: unit, error: null });
+    } catch (e) {
+      const prev = victronState().gridVoltage;
+      set({
+        l1: prev?.l1 ?? null, l2: prev?.l2 ?? null, l3: prev?.l3 ?? null, frequencyHz: prev?.frequencyHz ?? null,
+        updatedAt: prev?.updatedAt ?? null, source: 'sungrow-inverter', unitId: prev?.unitId ?? unit,
+        error: String(e?.message || 'unbekannt').slice(0, 160),
+      });
+    }
   }
 
   async function readModbus(cfg, mbRequest) {
@@ -229,6 +269,17 @@ export function createGridVoltagePoller({ state, pushLog = () => {}, getTranspor
         // lassen, damit die Frische-Prüfung „veraltet“ meldet statt „keine
         // Werte“ (Codex-Gegenprüfung 7f88bc74, P2).
         return;
+      }
+      if (src === 'sungrow') {
+        if (running) return running;
+        const ts = now();
+        if (ts < nextModbusAt) return;
+        nextModbusAt = ts + GRID_VOLTAGE_POLL_MS;
+        if (Number(state.meter?.consecutiveErrors) > 0) return;
+        running = readSungrow(cfg, transport.mbRequest)
+          .catch((e) => { try { pushLog('grid_voltage_error', { error: String(e?.message || e).slice(0, 160) }); } catch { /* nie werfen */ } })
+          .finally(() => { running = null; });
+        return running;
       }
       if (src !== 'modbus') {
         if (victronState().gridVoltage !== null) set(null);
