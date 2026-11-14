@@ -515,10 +515,17 @@ export function sungrowSecondView(state, cfg) {
   const c = resolveSecondInverter(cfg);
   if (!c.enabled) return null;
   const s = state?.sungrowSecond;
-  const online = s?.online === true;
-  const pick = (v) => (online && v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  // online dreiwertig durchreichen: true (bestätigt erreichbar) / false (nicht
+  // bestätigt bzw. unerreichbar — wie der Begleitdienst publiziert, offline bis
+  // bestätigt) / null (nur im Start-Fenster vor dem ersten Takt). Messwerte nur
+  // live. Das Installateur-Portal bindet „blocked" an false und spiegelt damit
+  // denselben Erreichbarkeits-Zustand wie der Leitstand.
+  const online = s?.online === true ? true : (s?.online === false ? false : null);
+  const live = online === true;
+  const pick = (v) => (live && v != null && Number.isFinite(Number(v)) ? Number(v) : null);
   return {
     online,
+    reason: s?.reason ?? null,
     aggregate: c.aggregateTelemetry === true,
     strategyCharge: c.strategyCharge,
     strategyDischarge: c.strategyDischarge,
@@ -527,8 +534,8 @@ export function sungrowSecondView(state, cfg) {
     pvPowerW: pick(s?.pvPowerW),
     bdcRatedW: pick(s?.bdcRatedW),
     batteryCapacitySuggestionWh: pick(s?.batteryCapacitySuggestionWh),
-    runningState: online ? (s?.runningState ?? null) : null,
-    runningStateText: online ? (s?.runningStateText ?? null) : null,
+    runningState: live ? (s?.runningState ?? null) : null,
+    runningStateText: live ? (s?.runningStateText ?? null) : null,
   };
 }
 
