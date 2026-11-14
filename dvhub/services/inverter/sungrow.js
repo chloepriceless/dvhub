@@ -61,7 +61,13 @@ export const HEARTBEAT_ADDR = wire(13080);
 /** Betreiber-Einstellung cfg.sungrow: Steuermodus und Herzschlag-Frist (20–300 s, Standard 30 s). */
 export function resolveSungrowControl(cfg) {
   const o = cfg?.sungrow && typeof cfg.sungrow === 'object' ? cfg.sungrow : {};
-  const mode = o.controlMode === 'forced' ? 'forced' : 'external';
+  // Standard-Steuermodus (Christin 14.11.): bei ZWEI WR Forced-Split (Dauer-Modus 2 mit Aufteilung auf beide WR —
+  // der Slave liefert in External EMS 0 W, Feld #6/#7), bei EINEM WR External EMS (Modus 3 mit geräteeigenem
+  // Rückfall, sicherer). Eine ausdrückliche Einstellung sungrow.controlMode gewinnt immer: 'forced' = Forced-Split,
+  // 'external' = External EMS (bei zwei WR die master-only-Option, sicherer Rückfall, aber nur Master-Akku).
+  const twoWr = typeof o.secondInverter?.host === 'string' && o.secondInverter.host.trim().length > 0;
+  const mode = o.controlMode === 'forced' ? 'forced'
+    : (o.controlMode === 'external' ? 'external' : (twoWr ? 'forced' : 'external'));
   const t = Math.round(Number(o.heartbeatTimeoutS));
   const heartbeatTimeoutS = Number.isFinite(t) ? Math.min(300, Math.max(20, t)) : 30;
   // Herzschlag 13080 NACH dem Moduswechsel schreiben (Standard an): der WR setzt 13080 beim Eintritt in External
@@ -607,9 +613,20 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     }
   }
 
-  // Modus 4 (VPP) ist immer fremd, Modus 3 nur dann nicht, wenn DVhub ihn selbst gesetzt hat.
-  const isForeignMode = (mode) => mode === EMS_MODE.VPP
-    || (mode === EMS_MODE.EXTERNAL && !(st.owns && st.ownMode === EMS_MODE.EXTERNAL));
+  // Modus 4 (VPP) ist immer fremd; Modus 3 (External EMS) nur dann nicht, wenn DVhub ihn selbst gesetzt hat
+  // (Merker). Modus 2 (Forced) gilt als fremdes EMS NUR, wenn DVhub gerade im Forced-Modus steuert (dann ist
+  // Modus 2 „seiner" — ein nicht besessener Modus 2 am Master kommt von einem anderen System, B4). Steuert DVhub
+  // per External EMS (Modus 3), ist ein Modus 2 nicht sein erwarteter Modus → die bisherige Bereinigung eines
+  // liegengebliebenen Zwangsbetriebs (zurück in Self-consumption) bleibt.
+  const isForeignMode = (mode) => {
+    if (mode === EMS_MODE.VPP) return true;
+    if (mode === EMS_MODE.EXTERNAL) return !(st.owns && st.ownMode === EMS_MODE.EXTERNAL);
+    if (mode === EMS_MODE.FORCED) {
+      const controlForced = resolveSungrowControl(getCfg()).modeValue === EMS_MODE.FORCED;
+      return controlForced && !(st.owns && st.ownMode === EMS_MODE.FORCED);
+    }
+    return false;
+  };
 
   function publish() {
     if (!state.ctrl) return;
@@ -1021,6 +1038,93 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     }
   }
 
+  // Dauer-Forced-Split (Christin 14.11.): Bei Forced mode (Modus 2) läuft DVhub DAUERHAFT in Modus 2. Der Master
+  // wird EINMAL beim Eintritt auf 13050=2 gestellt und bleibt dort (kein Wechsel 0↔2 im Tagesverlauf); Vorgaben
+  // ändern nur Befehl/Leistung je WR, nie den Modus. Ohne Vorgabe regelt DVhub den Eigenverbrauch selbst auf den
+  // Netz-Sollwert (der Scheduler liefert den Default-Puffer als Sollwert). KEIN Band→Self-Rückfall (bandW = 0):
+  // lässt sich nicht regeln (Messwerte/Ziel fehlen) oder ist der Sollwert ausgeglichen, hält DVhub den Akku mit
+  // 0xCC an, BLEIBT aber in Modus 2. Modus 0 nur bei Not-Halt, Beenden/Ausfall (Absicherung C), abgeschalteter
+  // Steuerung oder fremdem Modus — nie hier.
+  async function stepForced({ conf, ctl, opts, reason, t, targetFresh, maxChargeCap, maxDischargeCap, tel, second }) {
+    // Netzlade-Tor (wie im External-Pfad; das universelle Verbot am Aktuator kommt in D nach): ein positiver
+    // Sollwert mit noGridCharge/eos_grid_hold lädt nur aus dem PV-Überschuss.
+    const noGridChargeNow = st.target?.noGridCharge === true || NO_GRID_CHARGE_SOURCES.has(String(st.target?.source));
+    let decision = targetFresh
+      ? decideEmsCommand({
+        setpointW: st.target.setpointW, ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
+        bandW: 0, gain: opts.gain, minPowerW: opts.minPowerW, noGridCharge: noGridChargeNow,
+      })
+      : { mode: 'self', reason: st.target ? 'target_expired' : (st.revokedReason ? 'revoked' : 'no_setpoint') };
+    const ownsForced = st.owns && st.ownMode === EMS_MODE.FORCED;
+    // Moduswechsel zur Laufzeit von External EMS (Modus 3) auf Forced: DVhub besitzt noch Modus 3 → erst sauber in
+    // Self-consumption (Modus 0), der Forced-Eintritt folgt im nächsten Takt (kein direkter 3→2-Sprung).
+    if (st.owns && st.ownMode !== EMS_MODE.FORCED) {
+      decision = { mode: 'self', reason: 'mode_switch' };
+    } else if (decision.mode === 'self') {
+      // Frische-Wächter (Absicherung C): Sollwert veraltet (target_expired) oder Messwerte veraltet
+      // (telemetry_missing) → sicher zurück in Self-consumption (Modus 0), Besitz abgeben; blind weiterfahren wäre
+      // gefährlich. Alle anderen Self-Gründe (Band/ausgeglichen, power_limit_unknown, kein/zurückgenommener
+      // Sollwert) sind kein Sicherheitsfall: besitzt DVhub Forced, den Akku mit 0xCC anhalten und in Modus 2
+      // BLEIBEN (der Scheduler liefert gleich wieder den Default-Puffer). Modus 0 nur bei den oben genannten Fällen.
+      const staleRelease = decision.reason === 'target_expired' || decision.reason === 'telemetry_missing';
+      if (!staleRelease && ownsForced) decision = { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason };
+    }
+    st.decision = { ...decision, at: t, trigger: reason };
+    st.selfBridgeSince = 0;
+    st.externalEnteredAt = 0;
+    try {
+      // Gerätezustand höchstens alle deviceRecheckMs neu lesen (Note 6: RW-Register nicht im Sekundentakt lesen);
+      // zwischendurch die Rücklesung der eigenen Writes nutzen. So fällt ein geräteeigener Rückfall auf Modus 0
+      // (WR-Neustart) spätestens nach deviceRecheckMs auf — der Akku steht bis dahin im sicheren Eigenverbrauch.
+      const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
+      // Fremder Modus (VPP, oder Modus 2/3 ohne DVhub-Besitz) → nicht übersteuern (B4).
+      if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+      // Split (zwei WR mit aggregierter, frischer Slave-Telemetrie) oder Einzel-WR (alles am Master).
+      if (slaveActuator && second != null) {
+        return await stepSplit({ conf, ctl, decision, gap: false, second, reason, t, opts });
+      }
+      if (decision.mode === 'self') {
+        // Nur Einzel-WR, nicht besitzend: der Zustand passt schon (Gerät steht in Self), nichts schreiben.
+        if (emsMatches(dev, decision, 0, ctl.modeValue)) { st.error = null; publish(); return { ok: true, unchanged: true, decision }; }
+        await writeDecision(conf, decision, { modeValue: ctl.modeValue });
+        setOwns(null);
+        st.error = null; publish();
+        return { ok: true, decision };
+      }
+      if (emsMatches(dev, decision, opts.stepW, ctl.modeValue)) {
+        st.error = null; publish();
+        return { ok: true, unchanged: true, decision };
+      }
+      const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue });
+      st.error = null; st.logKeys = {};
+      pushLog('sungrow_ems_write', {
+        setpointW: st.target?.setpointW ?? null, source: st.target?.source ?? null, controlMode: ctl.mode,
+        mode: decision.mode, command: decision.command || null, powerW: decision.powerW ?? null,
+        reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW },
+      });
+      publish();
+      return { ok: true, decision };
+    } catch (e) {
+      st.error = e?.message || String(e);
+      if (e?.code === 'foreign_ems_mode') {
+        logOnce(String(e.mode), 'sungrow_ems_foreign_mode', { mode: e.mode, text: 'Sungrow steht im Forced-/External-EMS-/VPP-Modus eines anderen Systems — DVhub schreibt nichts' }, 'warn');
+      } else if (e?.code === 'emergency_stop_active') {
+        st.dev = null; publish();
+        return { ok: false, blocked: true, error: 'emergency_stop_active' };
+      } else if (e?.code === 'ems_read_error') {
+        st.dev = null;
+        logOnce(st.error, 'sungrow_ems_read_error', { error: st.error, decision }, 'warn');
+        publish();
+        return { ok: false, readError: true, error: st.error };
+      } else {
+        st.dev = null;
+        logOnce(st.error, e?.code === 'readback_mismatch' ? 'sungrow_ems_readback_mismatch' : 'sungrow_ems_error', { error: st.error, decision }, 'warn');
+      }
+      publish();
+      return { ok: false, error: st.error };
+    }
+  }
+
   async function step({ reason = 'tick' } = {}) {
     const cfg = getCfg();
     const conf = sungrowEmsConf(cfg);
@@ -1071,6 +1175,11 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     };
     const maxChargeCap = capFor(sumChargeW);
     const maxDischargeCap = capFor(sumDischargeW);
+    // Forced mode (Modus 2): Dauer-Forced-Split über den eigenen Pfad — der Master bleibt in Modus 2, DVhub
+    // regelt im Takt. External EMS (Modus 3) läuft weiter über die bestehende Logik unten (Herzschlag, Rückfall).
+    if (ctl.modeValue === EMS_MODE.FORCED) {
+      return await stepForced({ conf, ctl, opts, reason, t, targetFresh, maxChargeCap, maxDischargeCap, tel, second });
+    }
     let decision = targetFresh
       ? decideEmsCommand({
         setpointW: st.target.setpointW, ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,

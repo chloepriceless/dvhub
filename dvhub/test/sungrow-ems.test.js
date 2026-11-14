@@ -147,6 +147,46 @@ test('Aktuator: Netzladen → Leistung, Befehl, Modus (in dieser Reihenfolge), d
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_write' && l.data.powerW === 2300));
 });
 
+// --- Dauer-Forced-Split (Christin 14.11.): Modus dauerhaft 2, ohne Vorgabe regelt DVhub den Eigenverbrauch ---
+
+test('Dauer-Forced B1: Leerlauf (Default-Puffer −40) mit PV-Überschuss regelt (Laden), fällt NICHT in Modus 0', async () => {
+  const r = rig({ controlMode: 'forced' });
+  // Leerlauf mittags: PV 6 kW, Haus 800 W, Netz −5200 (Einspeisung), Akku 0. Ziel Netz ≈ −40 → DVhub lädt den
+  // Überschuss in den Akku (statt ihn einzuspeisen). decideEmsCommand(band 0): p = 0 + 0,7·(−40+5200) = 3612.
+  r.telemetry({ gridW: -5200, batteryW: 0, pvW: 6000, loadW: 800 });
+  const res = await r.ems.applySetpoint(-40, 'default');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED, 'Forced mode 2 (nicht Modus 0)');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.CHARGE, 'lädt den PV-Überschuss');
+  assert.ok(r.image.holding.get(POWER) >= 3500 && r.image.holding.get(POWER) <= 3700, `Leistung ${r.image.holding.get(POWER)}`);
+  // 13050 genau einmal geschrieben (Eintritt); danach bleibt der Modus stehen.
+  assert.equal(r.t.writes.filter((w) => w.address === MODE).length, 1);
+});
+
+test('Dauer-Forced B1: nach dem Eintritt bleibt der Modus 2 — ein Takt im Band schreibt NIE Modus 0', async () => {
+  const r = rig({ controlMode: 'forced' });
+  r.telemetry({ gridW: -5200, batteryW: 0, pvW: 6000, loadW: 800 });
+  await r.ems.applySetpoint(-40, 'default');
+  r.t.writes.length = 0;
+  // Perfekt ausgeglichen: PV = Last, kein Netz, Akku 0 → Regler < minPowerW → Stopp (0xCC), aber Modus BLEIBT 2.
+  r.advance(10_000);
+  r.telemetry({ gridW: 0, batteryW: 0, pvW: 800, loadW: 800 });
+  await r.ems.tick();
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED, 'Modus bleibt 2');
+  assert.ok(!r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.SELF), 'nie Modus 0 geschrieben');
+  assert.equal(r.state.ctrl.sungrowEms.owns, true, 'DVhub behält die Steuerung');
+});
+
+test('Dauer-Forced B1: fremder Modus 2 (DVhub besitzt ihn nicht) wird nicht übersteuert', async () => {
+  const r = rig({ controlMode: 'forced', over: { holding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 } } });
+  const res = await r.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(res.ok, false);
+  assert.deepEqual(r.t.writes, [], 'kein Write auf ein fremdes EMS');
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED);
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_foreign_mode'));
+  assert.equal(r.state.ctrl.sungrowEms.owns, false);
+});
+
 test('Aktuator: gleicher Sollwert im Takt nur nachgeführt, kleine Änderung (< 100 W) ohne Write', async () => {
   const r = rig();
   await r.ems.applySetpoint(4000, 'rule:netzladen');
@@ -200,21 +240,18 @@ test('Aktuator: Wechselrichter-Neustart (zurück in Self-consumption) fällt nac
   assert.ok(r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED), 'Zwangsbetrieb wieder gesetzt');
 });
 
-test('Aktuator: Sollwert zurück auf −40 W → Befehl Stopp, dann Self-consumption', async () => {
-  const r = rig();
-  await r.ems.applySetpoint(-5000, 'rule:abend');
+test('Dauer-Forced B1: Sollwert zurück auf −40 W → regelt den Eigenverbrauch (klein), BLEIBT Modus 2', async () => {
+  const r = rig({ controlMode: 'forced' });
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // Entladen 4000, Modus 2
   r.t.writes.length = 0;
+  // Zurück auf den Default-Puffer: kein Rückfall in Modus 0, sondern weiter in Modus 2 auf Netz ≈ −40 regeln
+  // (deckt die Last 500 W aus dem Akku → Entladen ~530 W). So fährt DVhub den Eigenverbrauch selbst.
   await r.ems.applySetpoint(-40, 'default');
-  assert.deepEqual(r.t.writes, [
-    { fc: 6, address: CMD, value: EMS_CMD.STOP },
-    { fc: 6, address: MODE, value: EMS_MODE.SELF }
-  ]);
-  assert.equal(r.state.ctrl.sungrowEms.owns, false);
-  // Steht schon so: kein weiterer Write.
-  r.t.writes.length = 0;
-  r.advance(30_000);
-  await r.ems.applySetpoint(-40, 'default');
-  assert.deepEqual(r.t.writes, []);
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED, 'bleibt Modus 2');
+  assert.ok(!r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.SELF), 'nie Modus 0');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.DISCHARGE, 'entlädt weiter, um die Last zu decken');
+  assert.ok(r.image.holding.get(POWER) >= 400 && r.image.holding.get(POWER) <= 700, `Leistung ${r.image.holding.get(POWER)}`);
+  assert.equal(r.state.ctrl.sungrowEms.owns, true, 'DVhub behält die Steuerung');
 });
 
 test('Aktuator: Gerät übernimmt den Modus nicht → Fehler mit Rücklesung, nächster Takt neu', async () => {
@@ -388,8 +425,12 @@ test('Steuermodus: Standard External EMS, Frist 30 s, Grenzen 20–300 s', () =>
   assert.equal(resolveSungrowControl({ sungrow: { heartbeatTimeoutS: 5 } }).heartbeatTimeoutS, 20);
   assert.equal(resolveSungrowControl({ sungrow: { heartbeatTimeoutS: 1000 } }).heartbeatTimeoutS, 300);
   assert.equal(resolveSungrowControl({ sungrow: { controlMode: 'quatsch' } }).mode, 'external');
-  // Ausgeliefert: Profil + Default-Config → External EMS
+  // Ausgeliefert: Profil + Default-Config (ein WR) → External EMS (Modus 3, geräteeigener Rückfall).
   assert.equal(resolveSungrowControl(loadSungrowConfig()).mode, 'external');
+  // Christin 14.11.: Standard bei ZWEI WR ist Forced-Split (Dauer-Modus 2). Ein ausdrückliches 'external' gewinnt.
+  assert.equal(resolveSungrowControl({ sungrow: { secondInverter: { host: '192.0.2.83' } } }).mode, 'forced');
+  assert.equal(resolveSungrowControl({ sungrow: { controlMode: 'external', secondInverter: { host: '192.0.2.83' } } }).mode, 'external');
+  assert.equal(resolveSungrowControl({ sungrow: { secondInverter: { host: '  ' } } }).mode, 'external');
 });
 
 test('External EMS: Leistung → Befehl → Modus 3 → Herzschlag (nach Moduswechsel), Rücklesen inkl. Herzschlag', async () => {
@@ -753,7 +794,9 @@ test('Codex P1: Netzladen-Freigabe zurückgenommen → abgelehnter Sollwert been
   r.cfg.optimizer.allowGridCharge = false;
   const res = await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write');
   assert.equal(res.error, 'grid_charge_not_allowed');
-  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP], [MODE, EMS_MODE.SELF]]);
+  // Dauer-Forced: der Zwangs-Ladebefehl wird sofort angehalten (0xCC), der Modus BLEIBT 2 (kein Rückfall in 0).
+  assert.ok(r.t.writes.some((w) => w.address === CMD && w.value === EMS_CMD.STOP), 'Akku angehalten');
+  assert.ok(!r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.SELF), 'kein Rückfall in Modus 0');
   assert.equal(r.state.ctrl.sungrowEms.target, null);
   r.t.writes.length = 0;
   await r.evaluator.sungrowEms.tick();
@@ -784,7 +827,9 @@ test('Codex R2: nach Widerruf erreicht derselbe, wieder erlaubte Sollwert den Ak
   const res = await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write');
   assert.equal(res.ok, true);
   assert.notEqual(res.skipped, true, 'nicht als unverändert übersprungen');
-  assert.ok(r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED));
+  // Dauer-Forced: der Modus bleibt 2; der wieder erlaubte Sollwert erreicht den Aktuator als Lade-Befehl.
+  assert.ok(r.t.writes.some((w) => w.address === CMD && w.value === EMS_CMD.CHARGE), 'lädt wieder');
+  assert.ok(!r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.SELF), 'kein Rückfall in Modus 0');
 });
 
 test('Codex P2: Evaluator schreibt nicht an eine Verbindung, an der nicht erkannt wurde', async () => {
