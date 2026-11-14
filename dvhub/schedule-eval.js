@@ -2657,10 +2657,15 @@ export function createScheduleEvaluator(ctx) {
   // bereits gesichert; die Freigabe-Sequenz restauriert sie unabhängig vom Loop.
 
   const ZFI_TICK_MS = 5000;
-  // Eigener, schnellerer Aufruftakt für den Sungrow-EMS-Regler (Punkt 2): Basis 1 s, unabhängig vom 5-s-ZFI/Eval.
+  // Eigener, schnellerer Aufruftakt für den Sungrow-EMS-Regler (Punkt 2 / E): Basis 1 s, unabhängig vom 5-s-ZFI/Eval.
   // Der Aktuator steuert sich intern über due(stepEveryMs) selbst heraus (adaptiv 1–5 s beim Regeln, sonst ruhig),
   // und tick() kehrt ohne Profil/Sollwert sofort zurück — die 1-s-Basis ist auf Nicht-Sungrow-Anlagen ein No-op.
-  const SUNGROW_TICK_MS = 1000;
+  // 0,25-s-Option (Christin 15.11.): hat der Betreiber einen Sub-Sekunden-Takt gewählt (sungrow.regulateEveryMs),
+  // tickt der Aufrufer entsprechend schneller (bis 250 ms) — serial() + due() + Auto-Strecken fangen einen Rückstau
+  // ab (es wird nie schneller geregelt, als die gemessene Antwortzeit hergibt). Erst ab Neustart wirksam.
+  const sungrowFixedMs = Number(getCfg()?.sungrow?.regulateEveryMs);
+  const SUNGROW_TICK_MS = Number.isFinite(sungrowFixedMs) && sungrowFixedMs > 0 && sungrowFixedMs < 1000
+    ? Math.max(250, Math.round(sungrowFixedMs)) : 1000;
   const ZFI_GAIN = 0.7;               // Dämpfung des integrierenden Reglers
   const ZFI_EXPORT_ENTER_STREAK = 3;  // Export-Ticks in Folge bis Deckel-Enter
   const ZFI_READBACK_MS = 60000;      // Steuerprioritäten-Drift-Check (throttled)

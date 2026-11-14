@@ -310,6 +310,10 @@ const FORCED_REENTRY_MAX_PER_HOUR = 6;
 // Adaptiver Regeltakt (Punkt 2): Grenzen 1–5 s, gemessen aus der Antwortzeit (gleitender Mittelwert).
 const REGULATE_MIN_MS = 1000;
 const REGULATE_MAX_MS = 5000;
+// Wählbarer fester Takt bis hinunter zu 0,25 s (Christin 15.11.): ein ausdrücklich gesetzter sungrow.regulateEveryMs
+// darf schneller als die adaptive Untergrenze gehen (bis zur Hardware-Grenze). Die ADAPTIVE Messung bleibt bei
+// 1–5 s (kein Überschwingen); nur der explizite Wert nutzt diese Untergrenze.
+const REGULATE_FIXED_MIN_MS = 250;
 
 /** Schlüssel der Geräteverbindung (Adresse, Port, Unit-ID) — Erkennung und Schreib-Tor gelten je Verbindung. */
 export function endpointKeyOf(v) {
@@ -847,12 +851,18 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     if (!Number.isFinite(v) || v < 0) return;
     st.responseMs = st.responseMs == null ? v : Math.round(0.7 * st.responseMs + 0.3 * v);
   }
-  // Adaptiver Regeltakt (Punkt 2): fester sungrow.regulateEveryMs hat Vorrang; sonst aus der Antwortzeit (×2),
-  // geklemmt auf 1–5 s. Ohne Messung konservativ der langsamste erlaubte Takt. So überschwingt 1 s nicht und
-  // die RW-Register werden nicht unnötig oft beschrieben.
+  // Adaptiver Regeltakt (Punkt 2 / E): fester sungrow.regulateEveryMs hat Vorrang und ist bis 0,25 s wählbar
+  // (REGULATE_FIXED_MIN_MS). Auto-Strecken (Christin 15.11.): lässt sich der gewünschte kurze Takt nicht halten —
+  // die gemessene Antwortzeit (Lesen+Schreiben beider WR, Round-Trip ~241 ms) ist länger —, auf die gemessene Rate
+  // strecken, sonst liefe der Takt auf. Ohne festen Wert aus der Antwortzeit (×2), geklemmt auf 1–5 s (kein
+  // Überschwingen). Ob der Takt gehalten wird, zeigt der Vergleich regulateEveryMs vs. responseMs in der Kachel.
   function adaptiveRegulateMs(cfg) {
     const fixed = Number(cfg?.sungrow?.regulateEveryMs);
-    if (Number.isFinite(fixed) && fixed > 0) return Math.min(REGULATE_MAX_MS, Math.max(REGULATE_MIN_MS, Math.round(fixed)));
+    if (Number.isFinite(fixed) && fixed > 0) {
+      const want = Math.min(REGULATE_MAX_MS, Math.max(REGULATE_FIXED_MIN_MS, Math.round(fixed)));
+      if (st.responseMs != null && st.responseMs > want) return Math.min(REGULATE_MAX_MS, Math.round(st.responseMs));
+      return want;
+    }
     if (st.responseMs != null && st.responseMs > 0) return Math.min(REGULATE_MAX_MS, Math.max(REGULATE_MIN_MS, Math.round(st.responseMs * 2)));
     return REGULATE_MAX_MS;
   }

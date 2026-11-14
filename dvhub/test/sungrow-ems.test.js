@@ -1168,14 +1168,25 @@ test('Punkt 2: Tages-Schreibzähler je Register + regulateEveryMs/responseMs in 
   assert.ok('responseMs' in s && 'modeBudgetLeft' in s);
 });
 
-test('Punkt 2: fester sungrow.regulateEveryMs hat Vorrang, auf 1–5 s geklemmt', async () => {
+test('Punkt 2 / E: fester sungrow.regulateEveryMs hat Vorrang, wählbar bis 0,25 s, Deckel 5 s', async () => {
   const r = rig({ controlMode: 'external' });
   r.cfg.sungrow.regulateEveryMs = 2000;
   assert.equal(r.ems.status().regulateEveryMs, 2000);
-  r.cfg.sungrow.regulateEveryMs = 50;   // unter Minimum → 1 s
-  assert.equal(r.ems.status().regulateEveryMs, 1000);
+  r.cfg.sungrow.regulateEveryMs = 250;   // 0,25-s-Option (wählbar)
+  assert.equal(r.ems.status().regulateEveryMs, 250);
+  r.cfg.sungrow.regulateEveryMs = 50;    // unter der 0,25-s-Grenze → 250
+  assert.equal(r.ems.status().regulateEveryMs, 250);
   r.cfg.sungrow.regulateEveryMs = 99999; // über Maximum → 5 s
   assert.equal(r.ems.status().regulateEveryMs, 5000);
+});
+
+test('E: Auto-Strecken — hält die gemessene Antwortzeit den kurzen Takt nicht, streckt es auf die Rate', async () => {
+  const r = rig({ controlMode: 'external' });
+  r.cfg.sungrow.regulateEveryMs = 250;   // Wunsch 0,25 s
+  r.ems._st.responseMs = 480;            // gemessen: ein Takt dauert 480 ms (beide WR) → 250 nicht haltbar
+  assert.equal(r.ems.status().regulateEveryMs, 480, 'auf die gemessene Rate gestreckt');
+  r.ems._st.responseMs = 120;            // schnell genug → gewünschte 250 ms
+  assert.equal(r.ems.status().regulateEveryMs, 250);
 });
 
 test('Punkt 2: ohne festen Wert adaptiv aus der Antwortzeit (×2, geklemmt), sonst langsamster Takt', async () => {
