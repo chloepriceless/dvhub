@@ -465,7 +465,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       heartbeatTimeoutS: ctl.heartbeatTimeoutS,
       heartbeatSupported: st.hb.supported,
       lastHeartbeatAt: st.lastHeartbeatAt || null,
-      target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at } : null,
+      target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at, noGridCharge: st.target.noGridCharge === true } : null,
       device: st.dev ? { ...st.dev } : null,
       decision: st.decision,
       owns: st.owns,
@@ -658,7 +658,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       ? decideEmsCommand({
         setpointW: st.target.setpointW, ...tel, maxChargeW: cap, maxDischargeW: cap,
         bandW: opts.bandW, gain: opts.gain, minPowerW: opts.minPowerW,
-        noGridCharge: NO_GRID_CHARGE_SOURCES.has(String(st.target.source))
+        noGridCharge: st.target.noGridCharge === true || NO_GRID_CHARGE_SOURCES.has(String(st.target.source))
       })
       : { mode: 'self', reason: st.target ? 'target_expired' : (st.revokedReason ? 'revoked' : 'no_setpoint') };
     try {
@@ -738,12 +738,14 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
    * Neuer bzw. bestätigter Netz-Sollwert aus applyControlTarget (alle Tore davor sind durchlaufen).
    * Ein geänderter Wert regelt sofort, ein gleicher frischt nur den Sollwert auf (Nachführen im Takt).
    */
-  function applySetpoint(setpointW, source) {
+  function applySetpoint(setpointW, source, { noGridCharge = false } = {}) {
     st.acceptSeq += 1;
     return serial(async () => {
       syncEndpoint(getCfg());
       const changed = !st.target || Number(st.target.setpointW) !== Number(setpointW);
-      st.target = { setpointW: Number(setpointW), source, at: now() };
+      // noGridCharge trägt das Netzlade-Tor (schedule-eval) mit: dieser positive Sollwert darf nur die Last aus
+      // dem Netz decken, nie den Akku laden → der Regler begrenzt das Laden auf den PV-Überschuss.
+      st.target = { setpointW: Number(setpointW), source, at: now(), noGridCharge: noGridCharge === true };
       st.revokedReason = null;
       const cfg = getCfg();
       const opts = resolveSungrowEmsOptions(sungrowEmsConf(cfg) || {});

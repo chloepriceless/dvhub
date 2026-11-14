@@ -12,6 +12,15 @@ verweist hierher.
 
 ### Geändert
 
+- **Netzlade-Tor: Netzbezug bis zur Hauslast ist kein Netzladen (Sungrow).** Bei abgeschaltetem
+  Netzladen (`allowGridCharge=false`) wird ein positiver Netz-Sollwert nicht mehr pauschal abgelehnt,
+  sondern auf die Live-Netto-Last (`Last − PV − Puffer`) gedeckelt und dem Sungrow-EMS-Regler mit
+  `noGridCharge` übergeben — so deckt der Bezug nur die Hauslast, der Akku lädt nie aus dem Netz (der
+  Regler begrenzt das Laden auf den PV-Überschuss, auch wenn die Last unter den Bezug fällt). Sind Last
+  oder PV unbekannt/veraltet, wird wie bisher abgelehnt; gedeckelt unter dem Ruheband gilt
+  Eigenverbrauch. Positive Optimizer-Regeln werden bei Sungrow nicht mehr pauschal verworfen, sondern
+  laufen durch dieses Tor. Für Victron (Sollwert geht direkt ans ESS, Bezug ≤ Last nicht garantiert)
+  bleibt die Ablehnung. Neues Log `grid_charge_capped_to_load`.
 - **Sungrow zwei WR: Akku, PV und SoC sind jetzt durchgängig die Systemsumme.** Bei aktiver Aggregation
   (`aggregateTelemetry`) setzt der Poller `batteryPowerW`, `pvPowerW`/`pvTotalW` und `soc` auf die Summe
   beider WR, bevor daraus Lade-/Entladeleistung, Energieflüsse und Hauslast abgeleitet werden; die

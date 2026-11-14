@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { createScheduleEvaluator } from '../schedule-eval.js';
 import { enforcementPath } from '../services/feed-in-cap/index.js';
 import { resolveBatteryLever } from '../services/grid-connection/index.js';
-import { EMS_CMD, EMS_MODE, wire } from '../services/inverter/sungrow.js';
+import { EMS_CMD, EMS_MODE, wire, decideEmsCommand } from '../services/inverter/sungrow.js';
 import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
 
 const MODE = wire(13050);
@@ -69,16 +69,34 @@ test('EOS NON_EXPORT / IDLE (Akku halten, Netz deckt die Last): nie aus dem Netz
   assert.ok(!r.t.writes.some((w) => w.address === CMD && w.value === EMS_CMD.CHARGE));
 });
 
-test('EOS FORCED_CHARGE / GRID_SUPPORT_IMPORT (Netzladen mit Faktor): nur mit Freigabe, sonst Self-consumption', async () => {
-  const blocked = rig();
-  const no = await blocked.evaluator.applyControlTarget('gridSetpointW', 3000, 'eos_grid_charge');
-  assert.equal(no.error, 'grid_charge_not_allowed');
-  assert.deepEqual(blocked.t.writes, []);
+test('EOS Netzladen ohne Freigabe (Punkt 1): auf die Hauslast gedeckelt, kein Netzladen; mit Freigabe volles Netzladen', async () => {
+  // Ohne allowGridCharge deckelt das Netzlade-Tor +3000 auf Last − PV − Puffer (800 − 0 − 300 = 500) und gibt
+  // noGridCharge mit — der Akku lädt nicht aus dem Netz (Befehl ist kein Laden). Nicht mehr pauschal abgelehnt.
+  const capped = rig();
+  const r0 = await capped.evaluator.applyControlTarget('gridSetpointW', 3000, 'eos_grid_charge');
+  assert.equal(r0.ok, true);
+  assert.equal(capped.ems().target.setpointW, 500);
+  assert.equal(capped.ems().target.noGridCharge, true);
+  assert.notEqual(capped.ems().decision.command, 'charge', 'kein Netzladen');
+  assert.ok(capped.logs.some((l) => l.event === 'grid_charge_capped_to_load' && l.data.cappedTo === 500));
+  // Mit Freigabe: volles Netzladen wie bisher. Haus 800 aus dem Akku: P = −800 + 0,7 · 3000 = 1300 → Laden 1300 W.
   const r = rig({ persisted: { optimizer: { allowGridCharge: true } } });
   const res = await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'eos_grid_charge');
   assert.equal(res.ok, true);
-  // Haus 800 aus dem Akku: P = −800 + 0,7 · 3000 = 1300 → Laden 1300 W (wächst im Takt zum Ziel)
   assert.deepEqual([r.ems().decision.command, r.ems().decision.powerW], ['charge', 1300]);
+});
+
+test('Regler-Schutz (Punkt 1): noGridCharge begrenzt das Laden auf den PV-Überschuss (kein Netzladen)', () => {
+  // Gedeckelter Sollwert 1700 (noGridCharge) läuft im Takt nach; die Last fällt auf 200, Netz zieht noch 1700.
+  // P = 0 + 0,7·(1700 − 1700) = 0 — aber selbst wenn der Regler laden wollte, begrenzt noGridCharge auf den
+  // PV-Überschuss (PV − Last = 0) → kein Netzladen. Gegenprobe: ohne noGridCharge würde er laden.
+  const base = { maxChargeW: 10000, maxDischargeW: 10000, bandW: 300, gain: 0.7, minPowerW: 50 };
+  // Netz unter dem Sollwert (1000 < 1700): der Regler will laden (P = 0 + 0,7·700 = 490).
+  const withGuard = decideEmsCommand({ ...base, setpointW: 1700, gridImportW: 1000, batteryW: 0, pvW: 0, loadW: 200, noGridCharge: true });
+  assert.equal(withGuard.reason, 'charge_pv_only');
+  assert.notEqual(withGuard.command, 'charge');          // Überschuss 0 → kein Laden aus dem Netz
+  const without = decideEmsCommand({ ...base, setpointW: 1700, gridImportW: 1000, batteryW: 0, pvW: 0, loadW: 200, noGridCharge: false });
+  assert.equal(without.command, 'charge');                // ohne Schutz: lädt aus dem Netz
 });
 
 test('EOS GRID_SUPPORT_EXPORT (Akku ins Netz): nur mit Freigabe Netzentladung; begrenzt auf die BDC-Leistung', async () => {

@@ -456,6 +456,27 @@ export function createScheduleEvaluator(ctx) {
     });
   }
 
+  // Live-Netto-Last (Last − PV) minus Sicherheitspuffer, höchstens so viel Netzbezug deckt nur die Hauslast,
+  // nie den Akku (Grundlage für „EOS Akku halten" eos_grid_hold UND das Netzlade-Tor Punkt 1). known=false,
+  // wenn Last oder PV fehlt/veraltet ist → der Aufrufer lehnt dann ab bzw. hält.
+  function liveNetLoadHoldW(cfg, marginW) {
+    const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
+    const loadRaw = state.victron.selfConsumptionW;
+    const pvRaw = state.victron.pvTotalW ?? state.victron.pvPowerW;
+    const known = loadRaw != null && Number.isFinite(Number(loadRaw))
+      && !victronFieldStale(state, 'selfConsumptionW', maxAgeMs)
+      && !victronFieldStale(state, 'pvTotalW', maxAgeMs);
+    const netLoadW = known ? Math.max(0, Number(loadRaw)) - Math.max(0, Number(pvRaw) || 0) : 0;
+    const m = Math.max(0, Number(marginW) || 0);
+    return {
+      known,
+      loadW: known ? Math.round(Number(loadRaw)) : null,
+      pvW: known ? Math.round(Number(pvRaw) || 0) : null,
+      netLoadW,
+      holdW: known ? Math.max(0, Math.round(netLoadW - m)) : 0,
+    };
+  }
+
   function effectiveTargetValue(target) {
     const cfg = getCfg();
     const optimizerEnabled = cfg.optimizer?.enabled ?? false;
@@ -486,7 +507,9 @@ export function createScheduleEvaluator(ctx) {
         if (!optimizerEnabled || proGateClosed) return false;
         if (r.target === 'gridSetpointW') {
           const val = Number(r.value);
-          if (val > 0 && !allowGridCharge && !isEosGridHoldRule(r)) return false;   // Netzladen blocked
+          // Punkt 1: positive Optimizer-Regeln bei Sungrow NICHT pauschal verwerfen — sie laufen durchs
+          // Netzlade-Tor (applyControlTarget), das sie auf die Hauslast deckelt. Nur Victron verwirft weiter.
+          if (val > 0 && !allowGridCharge && !isEosGridHoldRule(r) && !sungrowEmsConf(cfg)) return false;   // Netzladen blocked
           if (val < 0 && !allowGridDischarge) return false; // Netzentladung blocked
         }
       }
@@ -1149,6 +1172,10 @@ export function createScheduleEvaluator(ctx) {
 
   async function applyControlTargetCore(target, value, source) {
     const cfg = getCfg();
+    // Punkt 1 (Netzlade-Tor): ein positiver Sollwert, der nur die Hauslast aus dem Netz deckt (nicht den Akku
+    // lädt), ist bei allowGridCharge=false erlaubt — der Aktuator muss aber „nicht aus dem Netz laden" (noGridCharge)
+    // sicher umsetzen. Das Tor setzt die Flagge, der Sungrow-EMS-Write unten gibt sie weiter.
+    let noGridChargeForActuator = false;
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
     if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
     const deviceGate = deviceWriteGate(cfg);
@@ -1373,8 +1400,29 @@ export function createScheduleEvaluator(ctx) {
       // liegt damit immer unter der Netto-Last — der Akku laedt dabei nie aus
       // dem Netz, das Netzlade-Verbot (EEG/MiSpeL) bleibt gewahrt.
       if (numericValue > 0 && !allowGridCharge && source !== 'eos_grid_hold') {
-        pushLog('control_write_rejected', { target, value: numericValue, source, reason: 'grid_charge_not_allowed' });
-        return { ok: false, error: 'grid_charge_not_allowed' };
+        // Punkt 1: Netzbezug bis zur Hauslast ist KEIN Netzladen. Statt pauschal abzulehnen, den positiven
+        // Sollwert auf die Live-Netto-Last (Last − PV − Puffer) deckeln und dem Aktuator noGridCharge=true
+        // mitgeben — so deckt der Bezug nur die Last, der Akku lädt nie aus dem Netz. NUR für Aktuatoren, die das
+        // sicher umsetzen (Sungrow-EMS: der Regler begrenzt das Laden auf den PV-Überschuss). Victron-ESS kann
+        // Bezug ≤ Last nicht garantieren (Sollwert geht direkt ans ESS) → dort weiter ablehnen. Last/PV
+        // unbekannt oder veraltet → ablehnen wie bisher.
+        const marginW = Math.max(0, Number(cfg.optimizer?.eosGridHoldMarginW ?? 300));
+        const nl = liveNetLoadHoldW(cfg, marginW);
+        if (!sungrowEmsConf(cfg) || !nl.known) {
+          pushLog('control_write_rejected', { target, value: numericValue, source, reason: 'grid_charge_not_allowed' });
+          return { ok: false, error: 'grid_charge_not_allowed' };
+        }
+        const cappedTo = Math.min(numericValue, nl.holdW);
+        noGridChargeForActuator = true;
+        if (cappedTo !== numericValue) {
+          if (state.ctrl._gridChargeCapKey !== source) {
+            state.ctrl._gridChargeCapKey = source;
+            pushLog('grid_charge_capped_to_load', { requested: numericValue, cappedTo, loadW: nl.loadW, pvW: nl.pvW, source });
+          }
+        } else if (state.ctrl._gridChargeCapKey === source) {
+          state.ctrl._gridChargeCapKey = null;
+        }
+        value = cappedTo;
       }
       const isForcedGridDischarge = numericValue <= FORCED_EXPORT_THRESHOLD_W
         && !isMandatoryControlSource(source)
@@ -1668,7 +1716,7 @@ export function createScheduleEvaluator(ctx) {
         // durchlaufen; der Aktuator setzt Modus/Befehl/Leistung mit Rücklesen
         // und führt im 5-s-Takt nach (tick).
         if (conf.emulate !== 'sungrow-ems' || target !== 'gridSetpointW') throw new Error(`unsupported emulate: ${conf.emulate}`);
-        const r = await sungrowEms.applySetpoint(value, source);
+        const r = await sungrowEms.applySetpoint(value, source, { noGridCharge: noGridChargeForActuator });
         if (!r?.ok) {
           emsFailure = r?.blocked !== true;
           throw new Error(r?.error || 'sungrow_ems_failed');
@@ -1982,7 +2030,9 @@ export function createScheduleEvaluator(ctx) {
         if (!optimizerEnabled) return false; // optimizer off → purge all
         if (r.target === 'gridSetpointW') {
           const val = Number(r.value);
-          if (val > 0 && !allowGridCharge && !isEosGridHoldRule(r)) return false;   // Netzladen verboten
+          // Punkt 1: positive Optimizer-Regeln bei Sungrow nicht pauschal entfernen — sie laufen durchs
+          // Netzlade-Tor und werden auf die Hauslast gedeckelt. Nur Victron entfernt weiter.
+          if (val > 0 && !allowGridCharge && !isEosGridHoldRule(r) && !sungrowEmsConf(cfg)) return false;   // Netzladen verboten
           if (val < 0 && !allowGridDischarge) return false; // Netzentladung verboten
         }
         return true;
@@ -2288,23 +2338,18 @@ export function createScheduleEvaluator(ctx) {
       if (target === 'gridSetpointW'
           && eff.rule?.optimizer === 'eos'
           && eff.rule?.closedLoopHold) {
-        const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
-        const loadRaw = state.victron.selfConsumptionW;
-        const pvRaw = state.victron.pvTotalW ?? state.victron.pvPowerW;
-        const known = Number.isFinite(Number(loadRaw)) && loadRaw != null
-          && !victronFieldStale(state, 'selfConsumptionW', maxAgeMs)
-          && !victronFieldStale(state, 'pvTotalW', maxAgeMs);
         const marginW = eff.rule.evPlanned
           ? Math.max(0, Number(cfg.optimizer?.eosGridHoldEvMarginW ?? 1000))
           : Math.max(0, Number(cfg.optimizer?.eosGridHoldMarginW ?? 300));
-        const netLoadW = known ? Math.max(0, Number(loadRaw)) - Math.max(0, Number(pvRaw) || 0) : 0;
-        const holdW = known ? Math.max(0, Math.round(netLoadW - marginW)) : 0;
+        const nl = liveNetLoadHoldW(cfg, marginW);
+        const known = nl.known;
+        const holdW = nl.holdW;
         eff.value = holdW;
         eff.source = 'eos_grid_hold';
         eosGridHoldThisTick = { at: Date.now(), known, valueW: holdW, evPlanned: !!eff.rule.evPlanned, ruleId: eff.rule.id ?? null };
         const key = `${eff.rule.id}:${known}`;
         if (state.ctrl._eosHoldKey !== key) {
-          pushLog('eos_grid_hold', { known, loadW: known ? Math.round(Number(loadRaw)) : null, pvW: known ? Math.round(Number(pvRaw) || 0) : null, marginW, gridSetpointW: holdW, evPlanned: !!eff.rule.evPlanned });
+          pushLog('eos_grid_hold', { known, loadW: nl.loadW, pvW: nl.pvW, marginW, gridSetpointW: holdW, evPlanned: !!eff.rule.evPlanned });
           state.ctrl._eosHoldKey = key;
         }
       }
