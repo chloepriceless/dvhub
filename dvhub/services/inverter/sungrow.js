@@ -311,6 +311,51 @@ export function secondInverterTelemetry(state, cfg, { nowMs = Date.now(), maxAge
 }
 
 /**
+ * Sanitierte Zusammenfassung des zweiten WR für Anzeige/Status (OHNE host/LAN-IP — /api/status ist für die App
+ * freigegeben). null, wenn keine zweite Verbindung konfiguriert ist; sonst immer die Online-Lage, damit die App
+ * sieht, ob der zweite WR erreichbar ist.
+ */
+export function sungrowSecondView(state, cfg) {
+  const c = resolveSecondInverter(cfg);
+  if (!c.enabled) return null;
+  const s = state?.sungrowSecond;
+  const online = s?.online === true;
+  const pick = (v) => (online && v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  return {
+    online,
+    aggregate: c.aggregateTelemetry === true,
+    socPct: pick(s?.socPct),
+    batteryPowerW: pick(s?.batteryPowerW),
+    pvPowerW: pick(s?.pvPowerW),
+    bdcRatedW: pick(s?.bdcRatedW),
+    runningState: online ? (s?.runningState ?? null) : null,
+    runningStateText: online ? (s?.runningStateText ?? null) : null,
+  };
+}
+
+/**
+ * Aggregierte System-Felder für Anzeige/Telemetrie aus der Master-Telemetrie `victron` und der aggregierbaren
+ * Slave-Messung `second` (secondInverterTelemetry(...) oder null). System-PV/-Akku = Master + Slave. Die
+ * Hauslast des Masters (13008) rechnet den Slave-Beitrag nicht ein — der einzige Zähler sitzt am Master —, also
+ * korrigiert: Last_sys = Last_master + Slave-PV − Slave-Akku (= PV_sys + Netzbezug − Akku_sys). Ohne `second`
+ * alle Felder null (keine Aggregation → Master-Werte bleiben unverändert).
+ */
+export function sungrowAggregateFields(victron, second) {
+  if (!second) return { sungrowSystemPvW: null, sungrowSystemBatteryW: null, sungrowSystemLoadW: null };
+  const num = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  const mPv = num(victron?.pvTotalW);
+  const mBat = num(victron?.batteryPowerW);
+  const mLoad = num(victron?.selfConsumptionW);
+  const sPv = second.pvPowerW ?? 0;
+  const sBat = second.batteryPowerW ?? 0;
+  return {
+    sungrowSystemPvW: mPv != null ? Number((mPv + sPv).toFixed(3)) : null,
+    sungrowSystemBatteryW: mBat != null ? Number((mBat + sBat).toFixed(3)) : null,
+    sungrowSystemLoadW: mLoad != null ? Number(Math.max(0, mLoad + sPv - sBat).toFixed(3)) : null,
+  };
+}
+
+/**
  * Aktuator für den nachgebildeten Netz-Sollwert. Alle Writes nur über Holding-Register 13050–13052 und den
  * Herzschlag 13080, jede Änderung mit Rücklesen. Steuermodus nach cfg.sungrow: External EMS (Modus 3, Standard,
  * mit Herzschlag — fällt DVhub aus, kehrt der Wechselrichter selbst in Self-consumption zurück) oder Forced mode

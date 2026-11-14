@@ -2695,6 +2695,10 @@ export function createApiRoutes(ctx) {
     // Zweite GX-Anlage am selben Anschluss (services/multi-gx), nur In-Memory.
     // Im Runtime-Worker-Betrieb steht der Zustand im Worker → hier null.
     payload.multiGx = state.multiGx ?? null;
+    // Zweiter Sungrow-WR (Master/Slave-Parallelbetrieb): die sanitierte Slave-Zusammenfassung (ohne LAN-IP) und
+    // die System-Summen reisen im Victron-Snapshot (runtime-state Whitelist) zuverlässig auch im Split-Prozess.
+    // Zusätzlich als Top-Level, damit die App sie ohne Umweg findet.
+    payload.sungrowSecond = payload.victron?.sungrowSecond ?? null;
     // Victron device alarms (read-only display). Source is payload.victron.alarms,
     // which the POLLER (possibly a separate runtime-worker process) writes and
     // which reaches here through the runtime IPC snapshot — NOT web-process-local

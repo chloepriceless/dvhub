@@ -82,7 +82,16 @@ const VICTRON_FIELDS = [
   'sourceMismatch',
   // Netzspannung L1–L3 + Frequenz des Netzzählers (services/grid-voltage.js,
   // 05.11.2026) — Ortsnetz und Datenspende lesen sie hier, der Leitstand zeigt sie.
-  'gridVoltage'
+  'gridVoltage',
+  // Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (services/inverter/sungrow-second, T-0422): sanitierte
+  // Slave-Zusammenfassung (ohne host/LAN-IP) und die effektiven System-Summen PV/Akku/Last. Müssen whitelisted
+  // sein, sonst verliert der IPC-Snapshot sie und /api/status zeigt im Split-Prozess-Betrieb nichts davon.
+  'sungrowSecond',
+  'sungrowSystemPvW',
+  'sungrowSystemBatteryW',
+  'sungrowSystemLoadW',
+  // Rohwert der Master-Hauslast vor der System-Korrektur (Diagnose: Master vs. System).
+  'sungrowMasterLoadW'
 ];
 
 const SCHEDULE_FIELDS = [

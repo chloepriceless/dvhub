@@ -23,7 +23,13 @@ verweist hierher.
   einzige Zähler am Master als System-Werte. Erst wenn am Gerät bestätigt ist, dass der Master die
   System-Summen *nicht* meldet, zählt `sungrow.secondInverter.aggregateTelemetry` PV, Akku-Leistung
   und Leistungsgrenze beider WR für den Regler zusammen. Standard aus — ohne zweite Verbindung
-  arbeitet der Einzel-WR-Pfad unverändert wie bisher.
+  arbeitet der Einzel-WR-Pfad unverändert wie bisher. Der Kundentest (1.0.11-dev) bestätigte: der
+  Master meldet **nicht** die System-Summen (Slave trug 2,1–2,4 kW, Master-Akku 0 W), daher ist die
+  Aggregation bei zwei WR nötig und richtig. Mit aktiver Aggregation zeigt `/api/status` jetzt die
+  Slave-Werte (ohne LAN-IP) und die System-Summen (`sungrowSystemPvW/BatteryW/LoadW`), und die
+  angezeigte/telemetrische **Hauslast** wird auf die System-Last korrigiert
+  (`Last_System = Last_Master + Slave-PV − Slave-Akku`), weil der einzige Zähler am Master die
+  Slave-Leistung nicht als Hausverbrauch sieht.
 
 ## [1.0.10] - 2026-11-13
 

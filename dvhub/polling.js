@@ -7,7 +7,10 @@ import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
-import { identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire } from './services/inverter/sungrow.js';
+import {
+  identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
+  resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowAggregateFields
+} from './services/inverter/sungrow.js';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms, buildActiveAlarmsFromDbus } from './victron-alarms.js';
 // T-FREEZE (2026-07-24): Einfrier-Wächter. Erkennt eingefrorene Live-Werte trotz
@@ -1127,6 +1130,29 @@ export function createPoller(ctx) {
     state.victron.secondBatterySocPct = followerFlow ? followerFlow.socPct : null;
     state.victron.batteryToSecondBatteryW = followerFlow ? batteryToSecondBatteryW : null;
     state.victron.secondBatteryToBatteryW = followerFlow ? secondBatteryToBatteryW : null;
+
+    // Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (services/inverter/sungrow-second): Slave-Werte +
+    // aggregierte System-Summen für Anzeige/Status und — wenn aggregateTelemetry an und der Slave online+frisch
+    // ist — die korrigierte System-Hauslast (der Master meldet nur seine eigene Last, der einzige Zähler aber die
+    // System-Größen). Steuerung bleibt am Master; dieser Dienst schreibt NIE. Ohne zweite Verbindung: kein Feld.
+    if (resolveSecondInverter(cfg).enabled) {
+      const second = secondInverterTelemetry(state, cfg, {});
+      const agg = sungrowAggregateFields(state.victron, second);
+      state.victron.sungrowSystemPvW = agg.sungrowSystemPvW;
+      state.victron.sungrowSystemBatteryW = agg.sungrowSystemBatteryW;
+      state.victron.sungrowSystemLoadW = agg.sungrowSystemLoadW;
+      // Nur einen frisch gelesenen Master-Wert korrigieren (bei Lesefehler steht der korrigierte alte noch, nie
+      // doppelt). Rohwert des Masters bleibt für die Diagnose in sungrowMasterLoadW.
+      if (second && agg.sungrowSystemLoadW != null && !state.victron.errors?.selfConsumptionW
+        && state.victron.selfConsumptionW != null) {
+        state.victron.sungrowMasterLoadW = Number(state.victron.selfConsumptionW);
+        state.victron.selfConsumptionW = agg.sungrowSystemLoadW;
+        if (state.victron.fieldUpdatedAt) state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
+      } else if (!second) {
+        delete state.victron.sungrowMasterLoadW;
+      }
+      state.victron.sungrowSecond = sungrowSecondView(state, cfg);
+    }
 
     // T-FREEZE Einfrier-Wächter: NACH allen Reads/Ableitungen, VOR dem Snapshot —
     // so trägt der Powerflow-Snapshot bereits den erkannten Einfrierer und die
