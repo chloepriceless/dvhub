@@ -67,6 +67,7 @@ import { resolveEvArrival } from './services/optimizer/ev-arrival.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
 import { WALLBOX_TYPES } from './services/wallbox/types.js';
 import { loadCatalog as loadEvccVehicleCatalog, maskVehicleSettings, mergeVehicleSettings, validateVehicleSettings } from './services/vehicle-evcc/index.js';
+import { mobileIntegrationsView } from './services/mobile-link/integrations-view.js';
 import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost } from './services/pv-strings/index.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
@@ -4597,7 +4598,13 @@ export function createApiRoutes(ctx) {
     }
 
     // GET /api/integrations/status — integration status overview (D-08)
-    if (url.pathname === '/api/integrations/status' && req.method === 'GET') {
+    // GET /api/mobile-link/integrations — dieselbe Übersicht für die Handy-App,
+    // aber neu aufgebaut per Positivliste (services/mobile-link/integrations-view.js):
+    // ohne Adressen im Heimnetz, Benutzernamen, Kennungen und Fehlertexte. Nur
+    // dieser Weg ist für die App freigegeben (permissions.js), nie /status selbst.
+    const mobileIntegrations = url.pathname === '/api/mobile-link/integrations' && req.method === 'GET';
+    // (Die Bedingung beginnt bewusst mit dem /status-Vergleich: Daran finden die Quelltext-Tests den Block.)
+    if (url.pathname === '/api/integrations/status' && req.method === 'GET' || mobileIntegrations) {
       const mqttCfg = getCfg().mqtt || {};
       const payload = {
         timestamp: Date.now(),
@@ -4821,6 +4828,7 @@ export function createApiRoutes(ctx) {
           };
         })()
       };
+      if (mobileIntegrations) return json(res, 200, mobileIntegrationsView(payload));
       return json(res, 200, payload);
     }
 
