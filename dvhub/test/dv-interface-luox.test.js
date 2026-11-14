@@ -184,6 +184,7 @@ async function withServer(profile, fn) {
     setForcedOff: (r) => { events.push(['setForcedOff', r]); state.ctrl.forcedOff = true; },
     clearForcedOff: (r) => { events.push(['clearForcedOff', r]); state.ctrl.forcedOff = false; },
     setDvLimitPct: (p, r) => events.push(['setDvLimitPct', p, r]),
+    setDvLimitW: (w, r) => events.push(['setDvLimitW', w, r]),
     luoxWatchdogRefresh: () => events.push(['watchdog']),
   };
   const server = createModbusServer(ctx);
@@ -192,31 +193,47 @@ async function withServer(profile, fn) {
   try { await fn({ port, events, state, cfg }); } finally { server.close(); }
 }
 
-test('Modbus: Plexlog-Steuerung bleibt unverändert (Reg 0 = 0000 und Reg 3 = 1 sperren)', async () => {
+// Plexlog spricht jetzt wie das echte Gerät (dekompilierter Code, 14.11.2026):
+// Holding 0 = Watt-Sollwert → setDvLimitW, Holding 3 = Watchdog → Lebenszeichen.
+test('Modbus: Plexlog Holding 0 = Watt-Sollwert, Holding 3 = Watchdog (kein Aus)', async () => {
   await withServer('plexlog', async ({ port, events }) => {
     assert.deepEqual(regsOf(await request(port, readPdu(3, 0, 2))), [130, 0], 'FC3 liest weiter den gemeinsamen Bereich');
+    // 0 W → aus
     await request(port, writeMultiPdu(0, [0, 0]));
-    assert.ok(events.some((e) => e[0] === 'setForcedOff' && e[1] === 'fc16_addr0_0000'));
+    assert.deepEqual(events.filter((e) => e[0] === 'setDvLimitW').at(-1), ['setDvLimitW', 0, 'plexlog_holding0_0']);
+    // 14500 W → Teilgrenze
+    await request(port, writeMultiPdu(0, [14500, 0]));
+    assert.deepEqual(events.filter((e) => e[0] === 'setDvLimitW').at(-1), ['setDvLimitW', 14500, 'plexlog_holding0_14500']);
+    // FFFF,FFFF = −1 → voll frei (keine Vorgabe)
+    await request(port, writeMultiPdu(0, [0xffff, 0xffff]));
+    assert.deepEqual(events.filter((e) => e[0] === 'setDvLimitW').at(-1), ['setDvLimitW', -1, 'plexlog_holding0_-1']);
+    // Holding 3 = Watchdog, jeder Wert → Lebenszeichen, kein Schalten
+    const before = events.length;
     await request(port, writeMultiPdu(3, [0]));
-    assert.ok(events.some((e) => e[0] === 'clearForcedOff' && e[1] === 'fc16_addr3_0000'));
     await request(port, writeMultiPdu(3, [1]));
-    assert.ok(events.some((e) => e[0] === 'setForcedOff' && e[1] === 'fc16_addr3_0001'));
+    await request(port, writeMultiPdu(3, [42]));
+    const after = events.slice(before);
+    assert.equal(after.filter((e) => e[0] === 'watchdog').length, 3, 'jedes Schreiben frischt den Watchdog');
+    assert.ok(!after.some((e) => e[0] === 'setForcedOff' || e[0] === 'clearForcedOff'), 'Watchdog schaltet nichts');
   });
 });
 
-// Christin 2026-10-20: Die Plexlog-Leseregister waren nur abgeschaut; die
-// offizielle Tabelle (LUOX 02.06.2026) beschreibt die Input-Register FC4
-// vollständig. Plexlog liefert sie jetzt genauso — Schreiben bleibt Plexlog,
-// bis Luox den Treiber der Anlage umstellt.
-test('Modbus: Plexlog liest FC4 nach der offiziellen Tabelle (Einspeisung i32, Produktion, NB-%, Referenz)', async () => {
-  await withServer('plexlog', async ({ port }) => {
-    const input = regsOf(await request(port, readPdu(4, 0, 7)));
-    assert.equal(i32(input[0], input[1]), -1500);
-    assert.equal(wordsToU32(input[2], input[3]), 5000);
-    assert.equal(input[4], 100, 'Netzbetreiber-Vorgabe 100 % = volle Einspeisung (bisher 0)');
-    assert.equal(wordsToU32(input[5], input[6]), 40000);
-    // Der echte Abruf des DV: FC4 ab 3, 2 Register.
-    assert.deepEqual(regsOf(await request(port, readPdu(4, 3, 2))), [input[3], 100]);
+// FC4-Belegung nach dem echten Gerätecode: 0–1 Einspeisung, 3–4 Referenz,
+// 7 Produktion, ab 10 Spiegel der Holding-Register.
+test('Modbus: Plexlog liest FC4 nach der echten Gerätebelegung (Einspeisung/Referenz/Produktion/Spiegel)', async () => {
+  await withServer('plexlog', async ({ port, state }) => {
+    // Sollwert setzen, damit der Spiegel ab Register 10 geprüft werden kann.
+    await request(port, writeMultiPdu(0, [14500, 0]));
+    await request(port, writeMultiPdu(3, [7]));
+    const input = regsOf(await request(port, readPdu(4, 0, 14)));
+    assert.equal(i32(input[0], input[1]), -1500, 'Reg 0–1 Einspeisung');
+    assert.equal(i32(input[3], input[4]), 40000, 'Reg 3–4 Referenz-/Anlagenleistung');
+    assert.equal(i32(input[7], input[8]), 5000, 'Reg 7–8 Produktion');
+    assert.equal(i32(input[10], input[11]), 14500, 'Reg 10–11 Spiegel Soll-Wirkleistung');
+    assert.equal(input[13], 7, 'Reg 13 Spiegel Watchdog');
+    // LUOX ruft FC4 0–1 und 3–4 ab.
+    assert.equal(i32(...regsOf(await request(port, readPdu(4, 0, 2)))), -1500);
+    assert.equal(i32(...regsOf(await request(port, readPdu(4, 3, 2)))), 40000);
   });
 });
 
@@ -267,19 +284,19 @@ test('Modbus: LUOX-Schreibvorgänge — Watchdog vor Vorgabe, >100 % abgelehnt',
 // wird gemeldet (Protokoll + Systemwarnung) — bisher wurde es still ignoriert.
 import { classifyDvRequest } from '../dv-profile-check.js';
 
-test('Plexlog: bekannte Befehle und Abrufe sind unauffällig', () => {
+test('Plexlog: Watt-Sollwerte, Watchdog und Spiegel-Abrufe sind unauffällig', () => {
   for (const r of [
     { fc: 16, addr: 0, values: [0, 0] }, { fc: 16, addr: 0, values: [255, 255] }, { fc: 16, addr: 0, values: [0xffff, 0xffff] },
-    { fc: 16, addr: 3, values: [1] }, { fc: 16, addr: 3, values: [0] }, { fc: 6, addr: 3, values: [1] },
-    { fc: 4, addr: 0, qty: 2 }, { fc: 4, addr: 3, qty: 2 }, { fc: 4, addr: 0, qty: 7 }, { fc: 3, addr: 0, qty: 5 },
+    { fc: 16, addr: 0, values: [14500, 0] }, { fc: 6, addr: 0, values: [20000] },
+    { fc: 16, addr: 3, values: [1] }, { fc: 16, addr: 3, values: [0] }, { fc: 6, addr: 3, values: [42] },
+    { fc: 4, addr: 0, qty: 2 }, { fc: 4, addr: 3, qty: 2 }, { fc: 4, addr: 0, qty: 14 }, { fc: 4, addr: 10, qty: 2 }, { fc: 3, addr: 0, qty: 5 },
   ]) assert.equal(classifyDvRequest('plexlog', r), null, JSON.stringify(r));
 });
 
-test('Plexlog: Zwischenwerte, fremde Adressen und Abrufe außerhalb der Tabelle werden gemeldet', () => {
-  assert.match(classifyDvRequest('plexlog', { fc: 16, addr: 0, values: [60, 60] }), /Adresse 0.*60, 60/);
-  assert.match(classifyDvRequest('plexlog', { fc: 16, addr: 3, values: [2] }), /Adresse 3/);
+test('Plexlog: fremde Adressen und Abrufe außerhalb der Belegung werden gemeldet', () => {
   assert.match(classifyDvRequest('plexlog', { fc: 6, addr: 2, values: [60] }), /Adresse 2/);
-  assert.match(classifyDvRequest('plexlog', { fc: 4, addr: 10, qty: 2 }), /Lesen FC4/);
+  assert.match(classifyDvRequest('plexlog', { fc: 16, addr: 5, values: [1, 2] }), /Adresse 5/);
+  assert.match(classifyDvRequest('plexlog', { fc: 4, addr: 14, qty: 2 }), /Lesen FC4/);
   assert.match(classifyDvRequest('plexlog', { fc: 5, addr: 0 }), /Funktionscode 5/);
 });
 
@@ -294,18 +311,18 @@ test('LUOX: Vorgabe 0–100 und Watchdog sind bekannt, alles andere wird gemelde
   assert.match(classifyDvRequest('luox', { fc: 3, addr: 0, qty: 2 }), /Lesen FC3/);
 });
 
-test('Modbus Plexlog: unbekannter Wert → Meldung + Systemwarnung; Ein über Adresse 0 (255,255) wirkt', async () => {
+test('Modbus Plexlog: fremde Adresse → Meldung + Systemwarnung; Watt-Sollwert wirkt', async () => {
   await withServer('plexlog', async ({ port, events, state }) => {
-    await request(port, writeMultiPdu(0, [60, 60]));
+    // Adresse 2 gehört nicht zur Plexlog-Belegung → gemeldet, keine Wirkung.
+    await request(port, writeSinglePdu(2, 60));
     const ev = events.find((e) => e[0] === 'dv_unknown_command');
     assert.ok(ev, 'gemeldet');
-    assert.match(ev[1].reason, /60, 60/);
+    assert.match(ev[1].reason, /Adresse 2/);
     assert.match((state.systemWarnings.find((w) => w.id === 'dv_unknown_command') || {}).message || '', /Plexlog/);
-    assert.ok(!events.some((e) => e[0] === 'setForcedOff'), 'unbekannter Wert schaltet nichts');
+    assert.ok(!events.some((e) => e[0] === 'setDvLimitW'), 'fremde Adresse setzt keinen Sollwert');
 
-    await request(port, writeMultiPdu(0, [0, 0]));
-    assert.ok(state.ctrl.forcedOff);
-    await request(port, writeMultiPdu(0, [255, 255]));
-    assert.ok(events.some((e) => e[0] === 'clearForcedOff' && e[1] === 'fc16_addr0_00ff'));
+    // Watt-Sollwert auf Holding 0 wirkt über setDvLimitW.
+    await request(port, writeMultiPdu(0, [20000, 0]));
+    assert.deepEqual(events.filter((e) => e[0] === 'setDvLimitW').at(-1), ['setDvLimitW', 20000, 'plexlog_holding0_20000']);
   });
 });

@@ -5,7 +5,7 @@
 import net from 'node:net';
 import { u16 } from './server-utils.js';
 import {
-  dvInterfaceProfile, luoxInputRegisters, luoxHoldingRegisters, readWindow, luoxApplyWrite,
+  dvInterfaceProfile, luoxInputRegisters, plexlogInputRegisters, luoxHoldingRegisters, readWindow, luoxApplyWrite,
 } from './dv-interface-luox.js';
 import { classifyDvRequest } from './dv-profile-check.js';
 
@@ -70,16 +70,28 @@ export function createModbusServer(ctx) {
     return { out, regs };
   }
 
-  function handleWriteSignal(addr, values) {
-    if (addr === 0 && values.length >= 2) {
-      if (values[0] === 0 && values[1] === 0) return ctx.setForcedOff('fc16_addr0_0000');
-      if (values[0] === 0xffff && values[1] === 0xffff) return ctx.clearForcedOff('fc16_addr0_ffff');
-      // So schaltet LUOX tatsächlich frei (Audit Mai–Okt 2026, zusammen mit Adresse 3 = 0).
-      if (values[0] === 0x00ff && values[1] === 0x00ff) return ctx.clearForcedOff('fc16_addr0_00ff');
+  // Plexlog-Schreibvorgänge (FC6/FC16) wie das echte Gerät auswerten
+  // (MIClientHandle.cs, RequestServedEvent_handler; am echten Gerät
+  // am 14.11.2026 gegengemessen):
+  //   Holding 0 (Int32, niederwertiges Wort zuerst) = Soll-Wirkleistung in Watt
+  //     (misollvalue, „SETPowerReducing"): 0 = aus, −1/≥ Anlagenleistung = voll
+  //     frei, dazwischen = Einspeise-/Wirkleistungsgrenze in Watt.
+  //   Holding 3 (Int16) = Watchdog (miwatchdog, „SETWachtdog"): jedes Schreiben
+  //     ist ein Lebenszeichen und frischt die Lease auf — KEIN Aus-Befehl.
+  // Die Werte stehen schon in dvRegs (setReg); wir lesen den aktuellen Int32
+  // aus Register 0/1, damit auch Teilschreibvorgänge (nur Lo- oder Hi-Wort)
+  // greifen — genau wie der Logger den Holding-Puffer neu auswertet.
+  function handlePlexlogWrite(addr, values) {
+    const touches = (reg) => addr <= reg && reg < addr + values.length;
+    if (touches(0) || touches(1)) {
+      // Int32, niederwertiges Wort zuerst, als vorzeichenbehaftet interpretiert
+      // (0xffffffff = −1 = keine Vorgabe).
+      const watts = ((getReg(1) << 16) | getReg(0)) | 0;
+      ctx.setDvLimitW(watts, `plexlog_holding0_${watts}`);
     }
-    if (addr === 3 && values.length >= 1) {
-      if (values[0] === 1) return ctx.setForcedOff('fc16_addr3_0001');
-      if (values[0] === 0) return ctx.clearForcedOff('fc16_addr3_0000');
+    if (touches(3)) {
+      // Watchdog: Lebenszeichen, kein Schalten.
+      ctx.luoxWatchdogRefresh();
     }
   }
 
@@ -156,12 +168,12 @@ export function createModbusServer(ctx) {
       const addr = frame.readUInt16BE(8);
       const qty = frame.readUInt16BE(10);
       if (qty < 1 || qty > 125) return buildException(tid, unit, fc, 3);
-      // FC4 (Input) nach der offiziellen LUOX/Lumenaza-Tabelle (02.06.2026):
-      // die Plexlog-Leseregister waren nur abgeschaut — Reg 0–1 Einspeisung
-      // (jetzt volles i32), 2–3 Produktion, 4 Netzbetreiber-%, 5–6 Referenz.
-      // FC3 und das Schreiben bleiben im gemeinsamen Plexlog-Bereich.
+      // FC4 (Input) nach der ECHTEN Plexlog-Belegung (dekompilierter Gerätecode,
+      // geprüft am Gerät 14.11.2026): Reg 0–1 Einspeisung (i32), 3–4 Referenz-/
+      // Anlagenleistung, 7 Produktion, ab 10 Spiegel der Holding-Register.
+      // FC3 und das Schreiben bleiben im gemeinsamen Plexlog-Bereich (dvRegs).
       if (fc === 4) {
-        const regs = readWindow(luoxInputRegisters(state, getCfg()), addr, qty);
+        const regs = readWindow(plexlogInputRegisters(state, getCfg()), addr, qty);
         rememberModbusQuery({ remote, fc, addr, qty, sample: regs.slice(0, 8) });
         return regsResponse(tid, unit, fc, regs);
       }
@@ -175,7 +187,7 @@ export function createModbusServer(ctx) {
       const addr = frame.readUInt16BE(8);
       const val = frame.readUInt16BE(10);
       setReg(addr, val);
-      handleWriteSignal(addr, [val]);
+      handlePlexlogWrite(addr, [val]);
       pushLog('modbus_fc6', { remote, addr, value: val, forcedOff: state.ctrl.forcedOff });
       return frame.subarray(0, 12);
     }
@@ -194,7 +206,7 @@ export function createModbusServer(ctx) {
         values.push(v);
         setReg(addr + i, v);
       }
-      handleWriteSignal(addr, values);
+      handlePlexlogWrite(addr, values);
       pushLog('modbus_fc16', { remote, addr, qty, values, forcedOff: state.ctrl.forcedOff });
 
       const ack = Buffer.alloc(12);

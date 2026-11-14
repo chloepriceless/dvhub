@@ -1381,6 +1381,7 @@ const dvLimit = createDvLimitController({
   writeControlEvent: (event) => telemetrySafeWrite(() => telemetryStore.writeControlEvent(event)),
 });
 const setDvLimitPct = dvLimit.setDvLimitPct;
+const setDvLimitW = dvLimit.setDvLimitW;
 const luoxWatchdogRefresh = dvLimit.watchdogRefresh;
 
 function controlValue() {
@@ -1415,6 +1416,7 @@ const ctx = {
   clearForcedOff,
   expireLeaseIfNeeded,
   setDvLimitPct,
+  setDvLimitW,
   luoxWatchdogRefresh,
   persistControlState,
   setSystemWarning: (id, message) => setSystemWarning(id, message),

@@ -10,6 +10,22 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Behoben
+
+- **Plexlog-Direktvermarkter-Treiber verhält sich wie das echte Gerät.** Grundlage ist der dekompilierte
+  Plexlog-Gerätecode, am echten Logger gegengemessen. Bisher deutete DVhub das Plexlog-Profil nur grob (Aus/An über
+  feste Extremwerte). Jetzt:
+  - **Holding-Register 0** ist die Soll-Wirkleistung in Watt (Int32, niederwertiges Wort zuerst): `0` = aus,
+    `−1`/`≥ Anlagenleistung` = voll frei, Werte dazwischen = Einspeise-/Wirkleistungsgrenze in Watt (über den
+    DV-Begrenzer, analog zur LUOX-Teilvorgabe). Zwischenwerte wurden vorher ignoriert — die Anlage hätte voll weiter
+    eingespeist.
+  - **Holding-Register 3** ist der Watchdog: jedes Schreiben ist ein Lebenszeichen und frischt die Lease auf — kein
+    Aus-Befehl mehr. Bleibt das Auffrischen aus, geht die Vorgabe (wie beim Gerät) zurück auf 100 %.
+  - **Leseregister (FC4)** folgen der echten Belegung: `0–1` Einspeisung, `3–4` Referenz-/Anlagenleistung, `7`
+    Produktion, ab `10` Spiegel der Holding-Register (vorher die nur abgeschaute LUOX-PDF-Tabelle).
+  - Die Einstellungs-Hilfe weist jetzt aus, dass reale Plexlog-Logger das **plexlog**-Profil brauchen; das
+    **luox**-Profil bleibt für Geräte, die wirklich die LUOX/Lumenaza-PDF-Tabelle sprechen.
+
 ## [1.0.10] - 2026-11-13
 
 Release nach gut einer Woche; genau dieser Stand lief vorher im Echtbetrieb auf der eigenen Anlage. Überblick nach

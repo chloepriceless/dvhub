@@ -866,10 +866,10 @@ function buildFieldDefinitions() {
       label: 'Direktvermarkter-Schnittstelle',
       type: 'select',
       options: [
-        { value: 'plexlog', label: 'Plexlog (bisher)' },
-        { value: 'luox', label: 'LUOX / Lumenaza (Belegung 06/2026)' }
+        { value: 'plexlog', label: 'Plexlog (echtes Gerät)' },
+        { value: 'luox', label: 'LUOX / Lumenaza (PDF-Tabelle 06/2026)' }
       ],
-      help: 'Wie der Direktvermarkter per Modbus steuert. Lesen ist in beiden gleich und folgt der LUOX/Lumenaza-Tabelle (Input-Register: Einspeisung, Produktion, Netzbetreiber-Vorgabe, Referenzleistung). Plexlog: Aus/An über Register 0 und 3 (so steuert LUOX heute Anlagen mit Plexlog-Treiber). LUOX: Vorgabe 0–100 % über Holding-Register 2 mit 15-min-Watchdog — erst umstellen, wenn der Direktvermarkter seinen Treiber für die Anlage ebenfalls umgestellt hat, sonst wirkt sein Abschalten nicht. Wirkt sofort, ohne Neustart.'
+      help: 'Wie der Direktvermarkter per Modbus steuert. Plexlog ist der reale Weg und für echte Plexlog-Logger der richtige: belegt durch den dekompilierten Gerätecode und am Gerät geprüft — Holding-Register 0 = Soll-Wirkleistung in Watt (Int32, niederwertiges Wort zuerst; 0 = aus, −1/≥ Anlagenleistung = voll frei, dazwischen = Einspeisegrenze in Watt), Holding-Register 3 = Watchdog (jedes Schreiben ist ein Lebenszeichen, kein Aus-Befehl; ohne Auffrischen zurück auf 100 %). Lesen (FC4): Register 0–1 Einspeisung, 3–4 Referenz-/Anlagenleistung, 7 Produktion, ab 10 Spiegel der Holding-Register. LUOX: NICHT für reale Plexlog-Geräte — nur die LUOX/Lumenaza-PDF-Tabelle (Holding 2 = 0–100 %, Holding 3–4 = Watchdog, getrennte Input-Register). Nur wählen, wenn ein Gerät wirklich diese PDF-Belegung spricht. Grundlage für die Watt-Teilvorgabe ist die Referenzleistung (siehe unten). Wirkt sofort, ohne Neustart.'
     },
     {
       section: 'system',
