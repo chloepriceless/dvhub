@@ -555,7 +555,7 @@ dvhub_root_own_install_dir "$INSTALL_DIR" "$OWN_LIMIT" || echo "  WARN: Rechte f
 # → libstrongswan-standard-plugins = Crypto-Plugins). NIE pauschal
 # --no-install-recommends auf die ganze Liste!
 NEEDED_PKGS=""
-for pkg in openvpn strongswan autossh openssh-client libjemalloc2; do
+for pkg in openvpn strongswan autossh openssh-client openssh-server libjemalloc2; do
   if ! dpkg -s "$pkg" >/dev/null 2>&1; then
     NEEDED_PKGS="$NEEDED_PKGS $pkg"
   fi

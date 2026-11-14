@@ -199,6 +199,27 @@ export function tunnelBinaryAvailable(fsImpl = fs) {
   return false;
 }
 
+/**
+ * Lauscht nativ ein sshd auf Port 22? Ehrliche Prüfung über /proc/net/tcp(6): eine LISTEN-Zeile (st=0A) mit
+ * lokalem Port 0x16. true = lauscht, false = /proc lesbar, aber kein Listener, null = /proc nicht lesbar
+ * (Container/Nicht-Linux/Dev) → unbekannt, der Aufrufer fällt dann auf die Einstellung zurück.
+ */
+export function sshdListeningOnPort22(fsImpl = fs) {
+  let anyRead = false;
+  for (const f of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let data;
+    try { data = fsImpl.readFileSync(f, 'utf8'); } catch { continue; }
+    anyRead = true;
+    for (const line of String(data).split('\n').slice(1)) {
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 4 || cols[3] !== '0A') continue; // 0A = TCP_LISTEN
+      const port = cols[1].split(':')[1];
+      if (port && parseInt(port, 16) === 22) return true;
+    }
+  }
+  return anyRead ? false : null;
+}
+
 // Factory — manages a single tunnel lifecycle. Deps are injectable for tests.
 export function createSupportTunnel(ctx, deps = {}) {
   const spawnFn = deps.spawn || nodeSpawn;
@@ -439,6 +460,23 @@ export function createSupportTunnel(ctx, deps = {}) {
     return { ok: true, changed: true };
   }
 
+  // Ehrliche Verfügbarkeit der Fern-Shell + Grund. Nativ reicht die Einstellung (localUserEnabled) nicht —
+  // ohne laufenden sshd auf :22 (openssh-server) kommt der Tunnel nicht an der Box an. Container: eigener sshd
+  // (sshd_config + Support-Schlüssel vom Entrypoint).
+  function shellState() {
+    const rc = relayConfig();
+    const p = supportPaths();
+    if (inContainer) {
+      const ok = exists(p.sshdConfigPath) && exists(p.supportKeysPath);
+      return { shellAvailable: ok, shellReason: ok ? null : 'container_sshd_not_ready' };
+    }
+    if (!rc.localUserEnabled) return { shellAvailable: false, shellReason: 'local_user_disabled' };
+    const listening = sshdListeningOnPort22(fsImpl);
+    if (listening === false) return { shellAvailable: false, shellReason: 'sshd_not_listening' };
+    // listening true oder unbekannt (Dev/Nicht-Linux) → als verfügbar gelten (Einstellung ist an).
+    return { shellAvailable: true, shellReason: null };
+  }
+
   function status() {
     const rc = relayConfig();
     const p = supportPaths();
@@ -472,7 +510,7 @@ export function createSupportTunnel(ctx, deps = {}) {
       // Anmeldename für den Support: nativ der eigene Benutzer dvhub-support,
       // im Container der App-Benutzer (der sshd dort läuft ohne root).
       loginUser: inContainer ? 'dvhub' : 'dvhub-support',
-      shellAvailable: inContainer ? (exists(p.sshdConfigPath) && exists(p.supportKeysPath)) : rc.localUserEnabled,
+      ...shellState(),
       lastError: cur.open ? null : (unitMode() ? (unitLastError() || lastError) : lastError),
       // B7: CSRF-Nonce für POST /open — die UI schickt ihn automatisch mit.
       uiToken: issueUiToken(),

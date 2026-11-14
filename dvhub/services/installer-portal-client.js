@@ -114,6 +114,8 @@ export function buildSupportInfo(ctx) {
     capable: st.capable !== false,
     loginUser: st.loginUser || null,
     shellAvailable: st.shellAvailable !== false,
+    // Warum keine Fern-Shell (sshd_not_listening = openssh-server fehlt/aus, local_user_disabled, …).
+    shellReason: st.shellReason || null,
     shellPort: st.relay?.shellPort || null,
     webPort: st.relay?.webPort || null,
     open: st.open === true,

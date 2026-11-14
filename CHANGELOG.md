@@ -35,6 +35,12 @@ verweist hierher.
 
 ### Hinzugefügt
 
+- **Fern-Support-Shell: openssh-server wird installiert, Verfügbarkeit ehrlich gemeldet.** Die
+  Installation und die Updates (`install.sh`, `post-update.sh`, `stack-update.sh`) ziehen jetzt
+  `openssh-server` mit; die Installation aktiviert den SSH-Dienst (`enable --now ssh`). Der
+  Support-Tunnel prüft nativ ehrlich, ob ein sshd auf Port 22 lauscht (über `/proc/net/tcp`), statt sich
+  auf die Einstellung zu verlassen; ein neues Feld `shellReason` (`sshd_not_listening`,
+  `local_user_disabled`, …) sagt im Installateur-Portal, warum keine Fern-Shell möglich ist.
 - **Sungrow: Betreiber-Leistungsgrenze `sungrow.maxPowerW`.** Neue Beta-Einstellung („Maximale
   Akku-Leistung") begrenzt die von DVhub vorgegebene Lade-/Entladeleistung für ALLE Quellen (EOS,
   Regeln, §14a, Netzanschluss, Hand-Sollwert) — sie wirkt im Aktuator als Kleinstwert aus

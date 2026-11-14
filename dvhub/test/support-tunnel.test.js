@@ -8,6 +8,7 @@ import {
   buildTunnelArgs,
   resolveTunnelBinary,
   createSupportTunnel,
+  sshdListeningOnPort22,
   TTL_MIN_FLOOR,
   TTL_MIN_CEIL,
   TTL_MIN_DEFAULT,
@@ -571,4 +572,52 @@ test('Prozess-Modus: spätes exit des alten Tunnels lässt die PID-Datei des neu
   tun.open({ ttlMin: 30 });
   spawned[0].emit('exit', null, 'SIGTERM');
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { pid: 5001 });
+});
+
+// --- Punkt 5: ehrliches shellAvailable (sshd auf :22) ---------------------------------
+
+const PROC_LISTEN_22 = 'sl  local_address rem_address   st\n   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1\n';
+const PROC_NO_LISTEN = 'sl  local_address rem_address   st\n   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1\n';
+
+test('sshdListeningOnPort22: LISTEN auf :22 → true, kein Listener → false, /proc fehlt → null', () => {
+  const listen = { readFileSync: (p) => (p === '/proc/net/tcp' ? PROC_LISTEN_22 : (() => { throw new Error('ENOENT'); })()) };
+  assert.equal(sshdListeningOnPort22(listen), true);
+  const none = { readFileSync: (p) => (p === '/proc/net/tcp' || p === '/proc/net/tcp6' ? PROC_NO_LISTEN : (() => { throw new Error('x'); })()) };
+  assert.equal(sshdListeningOnPort22(none), false);
+  const missing = { readFileSync: () => { throw new Error('ENOENT'); } };
+  assert.equal(sshdListeningOnPort22(missing), null);
+});
+
+function nativeShellTun(proc) {
+  const { ctx } = makeCtx();
+  const fsMock = {
+    existsSync: () => true,
+    readFileSync: (p) => {
+      if (p === '/proc/net/tcp') return proc;
+      if (p === '/proc/net/tcp6') return 'sl  local_address rem_address   st\n';
+      return 'box-01';
+    },
+  };
+  return createSupportTunnel(ctx, { unitMode: () => false, fs: fsMock });
+}
+
+test('Nativ: sshd lauscht auf :22 → shellAvailable true, kein Grund', () => {
+  const st = nativeShellTun(PROC_LISTEN_22).status();
+  assert.equal(st.shellAvailable, true);
+  assert.equal(st.shellReason, null);
+});
+
+test('Nativ: openssh-server fehlt/aus (kein Listener) → shellAvailable false, shellReason sshd_not_listening', () => {
+  const st = nativeShellTun(PROC_NO_LISTEN).status();
+  assert.equal(st.shellAvailable, false);
+  assert.equal(st.shellReason, 'sshd_not_listening');
+});
+
+test('Nativ: Login vom Kunden abgeschaltet → shellAvailable false, shellReason local_user_disabled', () => {
+  const { ctx } = makeCtx({ });
+  ctx.getCfg = () => ({ support: { relay: { host: 'h', port: 47821, user: 'u', shellPort: 49101, webPort: 49102 }, tunnel: { autoCloseMin: 60 }, localUser: { enabled: false } } });
+  const tun = createSupportTunnel(ctx, { unitMode: () => false, fs: { existsSync: () => true, readFileSync: (p) => (p.startsWith('/proc') ? PROC_LISTEN_22 : 'box-01') } });
+  const st = tun.status();
+  assert.equal(st.shellAvailable, false);
+  assert.equal(st.shellReason, 'local_user_disabled');
 });
