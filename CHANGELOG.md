@@ -10,8 +10,19 @@ verweist hierher.
 
 ## [Unreleased]
 
-### Geändert
+### Behoben
 
+- **Sungrow External EMS: Herzschlag 13080 wird jetzt nach dem Moduswechsel geschrieben — und bei
+  Nichtübernahme sicher abgebrochen (sicherheitskritisch).** Am Gerät übernahm der Wechselrichter den
+  Herzschlag-Wert nicht (geschrieben 30 s, gelesen 600 s), weil DVhub ihn VOR dem Moduswechsel schrieb
+  und der Wechselrichter 13080 beim Eintritt in External EMS selbst setzt. Damit griff der
+  Rückfall-Schutz (Wechselrichter geht bei Ausfall von DVhub nach der Frist in Eigenverbrauch) nicht.
+  Jetzt schreibt DVhub den Herzschlag **nach** dem Moduswechsel (Doku V1.1.11: „set mode 3, then deliver
+  the heartbeat value"; abschaltbar über `sungrow.heartbeatAfterMode`). Stimmt die Herzschlag-Rücklesung
+  trotzdem nicht, neutralisiert DVhub **sofort im selben Durchlauf** zurück in Eigenverbrauch (der Akku
+  deckt die Last autonom, kein kurzer voller Netzbezug), gibt die Steuerung ab, verwirft den Sollwert
+  und schaltet External EMS für diese Verbindung ab (`sungrow_ems_heartbeat_unsupported`) — kein
+  irreführendes `control_write_error`.
 - **Sungrow: Kontroll-Lesefehler getrennt gemeldet, kurzer Wiederholversuch.** Schlägt das reine Lesen
   der EMS-Register 13050–13052 fehl (es wurde nichts geschrieben), meldet DVhub das als
   `sungrow_ems_read_error` (Warnung) statt als irreführendes `control_write_error`. Bei „modbus

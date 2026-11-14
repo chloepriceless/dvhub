@@ -363,3 +363,90 @@ test('6a: dauerhafter Kontroll-Lesefehler → sungrow_ems_read_error (warn) + re
   assert.ok(ev && ev.level === 'warn');
   assert.deepEqual(r.transport.writes, []);          // nichts geschrieben
 });
+
+// --- Herzschlag 13080 nicht übernommen: sicher scheitern (a/c/d/e, Feldtest 851e973e) ---------------
+
+const MODEA = wire(13050), CMDA = wire(13051), HBA = wire(13080);
+
+// Modbus-Mock, der das WR-Verhalten bei 13080 nachbildet: beim Eintritt in Modus 3 setzt der WR 13080 selbst
+// auf 600; unseren Schreibwert übernimmt er je nach `accept` nie oder nur in Modus 3.
+function hbMock(image, { accept = 'never' } = {}) {
+  const base = mockSungrow(image);
+  return {
+    type: 'modbus', reads: [], writes: [],
+    async mbRequest(conf) { this.reads.push({ fc: Number(conf.fc), address: Number(conf.address) }); return base.mbRequest(conf); },
+    async mbWriteSingle({ address, value }) {
+      const v = value & 0xffff;
+      this.writes.push({ address, value: v });
+      if (address === MODEA && v === EMS_MODE.EXTERNAL) { image.holding.set(HBA, 600); image.holding.set(MODEA, v); return { addr: address, value: v }; }
+      if (address === HBA) {
+        if (accept === 'mode3' && image.holding.get(MODEA) === EMS_MODE.EXTERNAL) image.holding.set(HBA, v);
+        return { addr: address, value: v }; // sonst ignoriert (bleibt 600)
+      }
+      image.holding.set(address, v);
+      return { addr: address, value: v };
+    },
+    async mbWriteMultiple() {},
+  };
+}
+
+function extRig(mock) {
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'external', heartbeatTimeoutS: 30 } });
+  const clock = 1_000_000;
+  const state = {
+    victron: { soc: 60, batteryPowerW: 0, pvPowerW: 0, selfConsumptionW: 2100, errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock }, device: sungrowDevice() },
+    meter: { ok: true, updatedAt: clock, grid_total_w: 2100 }, ctrl: {},
+  };
+  const logs = [];
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: mock, pushLog: (event, data, level) => logs.push({ event, data, level }), now: () => clock });
+  return { ems, state, logs, mock };
+}
+
+test('Herzschlag (a/d/e): WR übernimmt 13080 nie → sofort in Self-consumption, owns false, Ziel verworfen, Event', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'never' }));
+  const res = await r.ems.applySetpoint(1000, 'api_manual_write'); // forced discharge, External EMS
+  assert.equal(res.ok, false);
+  assert.equal(res.readError, true);                 // kein control_write_error beim Aufrufer
+  // (a) sofort neutralisiert: Modus 0 (Self), Befehl Stop.
+  assert.equal(image.holding.get(MODEA), EMS_MODE.SELF);
+  assert.equal(image.holding.get(CMDA), EMS_CMD.STOP);
+  // (d) External EMS für diese Verbindung als nicht übernommen gemerkt + Event.
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_heartbeat_unsupported'));
+  // owns false, Ziel verworfen (b): kein Weiterfahren im nächsten Takt.
+  assert.equal(r.state.ctrl.sungrowEms.owns, false);
+  assert.equal(r.state.ctrl.sungrowEms.target, null);
+  // (e) nach dem Fehler steht der WR in Self-consumption (Akku deckt die Last autonom) — kein forced Stop.
+  const tick = await r.ems.tick();
+  assert.ok(tick.ok === true || tick.idle === true);
+  assert.ok(!r.mock.writes.some((w) => w.address === MODEA && w.value === EMS_MODE.EXTERNAL && r.mock.writes.indexOf(w) > 6));
+});
+
+test('Herzschlag (c): WR nimmt 13080 nur in Modus 3 an → heartbeatAfterMode (Standard) gelingt', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'mode3' }));
+  const res = await r.ems.applySetpoint(1000, 'api_manual_write');
+  assert.equal(res.ok, true);                         // Herzschlag nach dem Moduswechsel übernommen
+  assert.equal(image.holding.get(HBA), 30);           // unser Wert steht
+  assert.equal(image.holding.get(MODEA), EMS_MODE.EXTERNAL);
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  // Reihenfolge: Modus 3 VOR dem Herzschlag geschrieben.
+  const idxMode = r.mock.writes.findIndex((w) => w.address === MODEA && w.value === EMS_MODE.EXTERNAL);
+  const idxHb = r.mock.writes.findIndex((w) => w.address === HBA && w.value === 30);
+  assert.ok(idxMode >= 0 && idxHb > idxMode, 'Herzschlag nach dem Moduswechsel');
+});
+
+test('Herzschlag (c-Gegenprobe): alte Reihenfolge (heartbeatAfterMode=false) scheitert bei mode3-Annahme', async () => {
+  const image = sungrowImage();
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'external', heartbeatTimeoutS: 30, heartbeatAfterMode: false } });
+  const clock = 1_000_000;
+  const state = {
+    victron: { soc: 60, batteryPowerW: 0, pvPowerW: 0, selfConsumptionW: 2100, errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock }, device: sungrowDevice() },
+    meter: { ok: true, updatedAt: clock, grid_total_w: 2100 }, ctrl: {},
+  };
+  const logs = [];
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: hbMock(image, { accept: 'mode3' }), pushLog: (e, d, l) => logs.push({ event: e, level: l }), now: () => clock });
+  const res = await ems.applySetpoint(1000, 'api_manual_write');
+  assert.equal(res.ok, false);                        // Herzschlag vor dem Moduswechsel → nicht angenommen → Abbruch
+  assert.ok(logs.some((l) => l.event === 'sungrow_ems_heartbeat_unsupported'));
+});
