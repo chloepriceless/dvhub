@@ -108,5 +108,9 @@ extension Data {
     var hex: String { map { String(format: "%02x", $0) }.joined() }
 }
 
+/// Bündel, aus dem `L` liest. Nur Tests stellen es um, damit der geprüfte
+/// Wortlaut nicht von der Sprache des Rechners abhängt.
+nonisolated(unsafe) var catalogBundle: Bundle = .module
+
 /// Text aus dem String-Katalog dieses Pakets (Ausgangssprache Deutsch).
-func L(_ key: String.LocalizationValue) -> String { String(localized: key, bundle: .module) }
+func L(_ key: String.LocalizationValue) -> String { String(localized: key, bundle: catalogBundle) }

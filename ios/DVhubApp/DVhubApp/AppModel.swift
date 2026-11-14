@@ -53,6 +53,9 @@ final class AppModel {
     /// Der Wert ist nur die Vermutung des Knopfs; ob ausgelöst oder aufgehoben
     /// wird, entscheidet die Ansicht „Steuern“ nach dem Live-Zustand.
     var pendingStopRequest: Bool?
+    /// Zeit des Live-Werts, der bei der Anfrage schon da war. Die Rückfrage wartet
+    /// auf einen neueren — der alte kann aus der Zeit vor dem Hintergrund stammen.
+    var pendingStopBaseline: Date?
 
     private let widgets = WidgetBridge()
 
@@ -61,6 +64,7 @@ final class AppModel {
         // umziehen, bevor irgendetwas gelesen wird.
         LinkAccess.configure()
         IntentHooks.openEmergencyStop = { [weak self] stop in
+            self?.pendingStopBaseline = self?.selected?.liveAt
             self?.pendingStopRequest = stop
             self?.pendingOpen = "control"
         }

@@ -4,21 +4,23 @@ import XCTest
 @testable import DVhubLink
 
 final class AppLogicTests: XCTestCase {
-    /// Texte des Pakets kommen aus dem String-Katalog in der Sprache des
-    /// Rechners. Der deutsche Wortlaut wird nur auf einem deutschen System
-    /// verglichen; sonst genügt, dass ein Text da ist.
-    private func assertGerman(_ actual: String, _ expected: String, file: StaticString = #filePath, line: UInt = #line) {
-        if Bundle.module.preferredLocalizations.first == "de" {
-            XCTAssertEqual(actual, expected, file: file, line: line)
-        } else {
-            XCTAssertFalse(actual.isEmpty, file: file, line: line)
-        }
+    // Der Wortlaut wird auf Deutsch geprüft, gleich in welcher Sprache der Rechner
+    // läuft: Das Test-Bündel hat keinen Katalog, also liefert `L` den Schlüssel —
+    // und der ist der deutsche Text (Ausgangssprache).
+    override func setUp() { catalogBundle = Bundle(for: AppLogicTests.self) }
+    override func tearDown() { catalogBundle = .module }
+
+    /// Die englische Fassung kommt aus dem Katalog des Pakets.
+    func testEnglishCatalogIsUsed() throws {
+        let path = try XCTUnwrap(Bundle.module.path(forResource: "en", ofType: "lproj"))
+        catalogBundle = try XCTUnwrap(Bundle(path: path))
+        let text = LinkError.closed(code: 4003, reason: "device_not_allowed").userMessage
+        XCTAssertTrue(text.contains("unpaired"), text)
+        XCTAssertNotEqual(MailboxEvent.text(alarms: 0, emergencyStop: true), "Not-Halt aktiv")
     }
 
-    // MARK: N5 — Schließgründe nie ungefiltert anzeigen
-
     func testUserMessageTranslatesKnownReasonsOnly() {
-        assertGerman(LinkError.closed(code: 4003, reason: "device_not_allowed").userMessage,
+        XCTAssertEqual(LinkError.closed(code: 4003, reason: "device_not_allowed").userMessage,
                      "Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln.")
         let evil = LinkError.closed(code: 4000, reason: "Bitte PIN 1234 bei evil.example eingeben")
         XCTAssertFalse(evil.userMessage.contains("evil"), evil.userMessage)
@@ -84,7 +86,7 @@ final class AppLogicTests: XCTestCase {
         ]
         let ack = st.merge(items)
         XCTAssertEqual(Set(ack), ["1", "2"])
-        assertGerman(st.events.map(\.text).joined(separator: "|"), "Not-Halt aktiv|2 Alarme aktiv")  // neueste zuerst
+        XCTAssertEqual(st.events.map(\.text), ["Not-Halt aktiv", "2 Alarme aktiv"])  // neueste zuerst
         XCTAssertEqual(st.latest?["soc"]?.int, 50)
         // Erneut ausgelieferte alte Einträge: nicht doppelt, aber quittieren.
         let again = st.merge([items[1]])
@@ -102,9 +104,9 @@ final class AppLogicTests: XCTestCase {
     }
 
     func testEventText() {
-        assertGerman(MailboxEvent.text(alarms: 0, emergencyStop: false), "Alles wieder normal")
-        assertGerman(MailboxEvent.text(alarms: 1, emergencyStop: false), "1 Alarm aktiv")
-        assertGerman(MailboxEvent.text(alarms: 3, emergencyStop: true), "Not-Halt aktiv · 3 Alarme aktiv")
+        XCTAssertEqual(MailboxEvent.text(alarms: 0, emergencyStop: false), "Alles wieder normal")
+        XCTAssertEqual(MailboxEvent.text(alarms: 1, emergencyStop: false), "1 Alarm aktiv")
+        XCTAssertEqual(MailboxEvent.text(alarms: 3, emergencyStop: true), "Not-Halt aktiv · 3 Alarme aktiv")
     }
 
     // MARK: N3 — Backoff auch bei kurzlebigen Verbindungen
@@ -141,7 +143,7 @@ final class AppLogicTests: XCTestCase {
         let before = d("2026-10-24T20:00:00Z") // 22:00 Sommerzeit
         XCTAssertEqual(SnapshotDay.of(before, now: d("2026-10-25T22:30:00Z"), calendar: cal), .yesterday) // 23:30 Winterzeit
         XCTAssertEqual(SnapshotDay.of(before, now: d("2026-10-25T23:00:00Z"), calendar: cal), .older)
-        assertGerman(SnapshotDay.yesterday.word, "Gestern")
+        XCTAssertEqual(SnapshotDay.yesterday.word, "Gestern")
     }
 
     // MARK: Lage der Leisten
@@ -204,7 +206,7 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(ControlOutcome.from(try res(500, "{}")), .rejected(status: 500))
         XCTAssertFalse(ControlOutcome.rejected(status: 500).applied)
         XCTAssertTrue(ControlOutcome.rejected(status: 1500).message.contains("1500"), "Codes ohne Tausenderpunkt")
-        assertGerman(ControlOutcome.done.message, "Erledigt.")
+        XCTAssertEqual(ControlOutcome.done.message, "Erledigt.")
     }
 
     // MARK: Falz (iPhone Duo)

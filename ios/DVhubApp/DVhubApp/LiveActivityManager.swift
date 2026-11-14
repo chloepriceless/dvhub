@@ -38,8 +38,8 @@ enum LiveActivityManager {
     /// Nur laufende Aktivitäten: Eine vom System beendete (nach acht Stunden) steht
     /// noch bis zu vier Stunden auf dem Sperrbildschirm und ließe sich nicht mehr
     /// aktualisieren — dann beginnt eine neue.
-    private static var current: [Activity<EmergencyStopAttributes>] {
-        Activity<EmergencyStopAttributes>.activities.filter { $0.activityState == .active || $0.activityState == .stale }
+    private static func running(_ list: [Activity<EmergencyStopAttributes>]) -> [Activity<EmergencyStopAttributes>] {
+        list.filter { $0.activityState == .active || $0.activityState == .stale }
     }
 
     /// Aktivität an den Stand angleichen: Not-Halt aktiv → zeigen bzw.
@@ -47,12 +47,16 @@ enum LiveActivityManager {
     static func sync(_ snapshot: WidgetSnapshot) async {
         guard let boxId = snapshot.boxId else { return }
         // Aktivitäten anderer Anlagen gehören nicht mehr hierher.
-        for a in current where a.attributes.boxId != boxId { await a.end(nil, dismissalPolicy: .immediate) }
-        let mine = current.filter { $0.attributes.boxId == boxId }
+        let all = Activity<EmergencyStopAttributes>.activities
+        for a in all where a.attributes.boxId != boxId { await a.end(nil, dismissalPolicy: .immediate) }
+        // Alle dieser Anlage — auch vom System beendete, die noch auf dem Sperrbildschirm stehen.
+        let everyMine = all.filter { $0.attributes.boxId == boxId }
+        let mine = running(everyMine)
         switch snapshot.emergencyStop {
         case true?:
             guard enabled else { return }
-            let since = mine.first?.content.state.since ?? snapshot.at
+            // Der Beginn bleibt, auch wenn nach dem Ende durch das System eine neue Aktivität startet.
+            let since = (mine.first ?? everyMine.first)?.content.state.since ?? snapshot.at
             let content = ActivityContent(state: EmergencyStopAttributes.ContentState(snapshot, since: since),
                                           staleDate: snapshot.at.addingTimeInterval(staleAfter), relevanceScore: 100)
             if let a = mine.first {
@@ -60,18 +64,20 @@ enum LiveActivityManager {
                 guard snapshot.at >= a.content.state.updatedAt else { return }
                 await a.update(content)
             } else if allowedBySystem {
+                // Beendete erst wegräumen, sonst stünden zwei auf dem Sperrbildschirm.
+                for a in everyMine { await a.end(nil, dismissalPolicy: .immediate) }
                 // Scheitert im Hintergrund außerhalb eines LiveActivityIntent — dann beim nächsten Öffnen.
                 _ = try? Activity.request(attributes: EmergencyStopAttributes(boxName: snapshot.boxName, boxId: boxId),
                                           content: content, pushType: nil)
             }
         case false?:
-            for a in mine { await a.end(nil, dismissalPolicy: .immediate) }
+            for a in everyMine { await a.end(nil, dismissalPolicy: .immediate) }
         case nil:
             break
         }
     }
 
     static func endAll() async {
-        for a in current { await a.end(nil, dismissalPolicy: .immediate) }
+        for a in Activity<EmergencyStopAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
     }
 }
