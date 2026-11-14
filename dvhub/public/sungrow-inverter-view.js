@@ -29,6 +29,23 @@
     return `${num(s) ? s + ' s' : DASH}${fc}${dev}`;
   }
 
+  // Aufteilung + Regeltakt + Tages-Schreibzähler je WR (Punkt 1/2) für die Kachel.
+  function splitText(ems) {
+    const sp = ems && ems.decision && ems.decision.split;
+    if (!sp) return DASH;
+    return `${watt(sp.masterW)}/${watt(sp.slaveW)} (${sp.strategy || '?'})`;
+  }
+  function regulateText(ems) {
+    if (!ems || !num(ems.regulateEveryMs)) return DASH;
+    const resp = num(ems.responseMs) ? ` · Antwort ${Math.round(Number(ems.responseMs))} ms` : '';
+    return `${Math.round(Number(ems.regulateEveryMs))} ms${resp}`;
+  }
+  function writesText(ems) {
+    const w = ems && ems.writesToday;
+    if (!w) return DASH;
+    const left = num(ems.modeBudgetLeft) ? Number(ems.modeBudgetLeft) : null;
+    return `13050 ${w.mode13050 || 0}${left != null ? ` (Rest ${left})` : ''} · 13051 ${w.cmd13051 || 0} · 13052 ${w.power13052 || 0} · 13080 ${w.heartbeat13080 || 0}`;
+  }
   function masterRow(status) {
     const v = (status && status.victron) || {};
     const dev = v.device || {};
@@ -45,13 +62,18 @@
       owns: ems ? ems.owns === true : false,
       decision: decisionText(ems),
       heartbeat: ems ? heartbeatText(ems) : DASH,
+      split: splitText(ems),
+      regulate: regulateText(ems),
+      writes: writesText(ems),
     };
   }
   function slaveRow(status) {
     const s = (status && status.sungrowSecond) || {};
     const ems = status && status.sungrowEmsSlave;
     const online = s.online === true;
-    const controlled = s.control === 'split';
+    // „gesteuert", sobald eine Strategie den Slave steuert (nicht reines master-only). Fehlt die Strategie → gelesen.
+    const controlled = (s.strategyCharge && s.strategyCharge !== 'master-only')
+      || (s.strategyDischarge && s.strategyDischarge !== 'master-only');
     return {
       role: controlled ? 'Slave – gesteuert bei Vorgaben' : 'Slave – gelesen',
       online,
@@ -63,6 +85,7 @@
       owns: controlled && ems ? ems.owns === true : false,
       decision: controlled ? decisionText(ems) : DASH,
       heartbeat: controlled && ems ? heartbeatText(ems) : DASH,
+      writes: controlled ? writesText(ems) : DASH,
     };
   }
 
@@ -91,9 +114,13 @@
     set('sungrowWrMasterMeta', `${vw.master.model} · ${vw.master.serial} · BDC ${vw.master.bdc}`);
     set('sungrowWrMasterVals', line(vw.master));
     set('sungrowWrMasterEms', `${vw.master.decision} · Besitz ${vw.master.owns ? 'ja' : 'nein'} · Herzschlag ${vw.master.heartbeat}`);
+    // Aufteilung + Regeltakt + Tages-Schreibzähler (Punkt 1/2).
+    set('sungrowWrMasterSplit', `Aufteilung ${vw.master.split} · Takt ${vw.master.regulate}`);
+    set('sungrowWrMasterWrites', `Writes heute: ${vw.master.writes}`);
     set('sungrowWrSlaveRole', vw.slave.role);
     set('sungrowWrSlaveVals', vw.slave.online ? line(vw.slave) : vw.slave.running);
     set('sungrowWrSlaveEms', vw.slave.role.indexOf('gesteuert') >= 0 ? `${vw.slave.decision} · Besitz ${vw.slave.owns ? 'ja' : 'nein'} · Herzschlag ${vw.slave.heartbeat}` : `BDC ${vw.slave.bdc}`);
+    set('sungrowWrSlaveWrites', vw.slave.role.indexOf('gesteuert') >= 0 ? `Writes heute: ${vw.slave.writes}` : '');
     set('sungrowWrSum', `System: Akku ${vw.sum.battery} · PV ${vw.sum.pv} · SoC ${vw.sum.soc}`);
   }
 

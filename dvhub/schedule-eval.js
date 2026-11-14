@@ -2654,6 +2654,10 @@ export function createScheduleEvaluator(ctx) {
   // bereits gesichert; die Freigabe-Sequenz restauriert sie unabhängig vom Loop.
 
   const ZFI_TICK_MS = 5000;
+  // Eigener, schnellerer Aufruftakt für den Sungrow-EMS-Regler (Punkt 2): Basis 1 s, unabhängig vom 5-s-ZFI/Eval.
+  // Der Aktuator steuert sich intern über due(stepEveryMs) selbst heraus (adaptiv 1–5 s beim Regeln, sonst ruhig),
+  // und tick() kehrt ohne Profil/Sollwert sofort zurück — die 1-s-Basis ist auf Nicht-Sungrow-Anlagen ein No-op.
+  const SUNGROW_TICK_MS = 1000;
   const ZFI_GAIN = 0.7;               // Dämpfung des integrierenden Reglers
   const ZFI_EXPORT_ENTER_STREAK = 3;  // Export-Ticks in Folge bis Deckel-Enter
   const ZFI_READBACK_MS = 60000;      // Steuerprioritäten-Drift-Check (throttled)
@@ -2661,6 +2665,7 @@ export function createScheduleEvaluator(ctx) {
   const ZFI_EXPORT_CLEAR_TICKS = 6;    // Export-Deckel: Takte bei 100 % ohne Export bis Exit
   const ZFI_MIN_PCT = 1;              // 0 % legt den WR still — nie schreiben
   let zfiInterval = null;
+  let sungrowTickInterval = null;
   let zfiBusy = false;
 
   function zfiState() {
@@ -3020,17 +3025,20 @@ export function createScheduleEvaluator(ctx) {
       () => {
         // Erst die Sperre (zfi), dann die feste Einspeisegrenze — nie gleichzeitig.
         zeroFeedInTick().catch(() => { /* zfi loggt selbst (throttled) */ })
-          .then(() => feedInCapTick()).catch(() => {})
-          // Sungrow-EMS nachführen (ruht ohne Profil; intern höchstens alle 10 s).
-          .then(() => sungrowEms.tick()).catch(() => {});
+          .then(() => feedInCapTick()).catch(() => {});
       },
       ZFI_TICK_MS);
+    // Sungrow-EMS-Regler im eigenen, schnelleren Takt nachführen (Punkt 2): ruht ohne Profil; intern adaptiv 1–5 s.
+    sungrowTickInterval = safeInterval('schedule-eval.sungrow-tick',
+      () => { sungrowEms.tick().catch(() => {}); },
+      SUNGROW_TICK_MS);
   }
 
   function stop() {
     stopping = true;
     if (evalTimeout) { clearTimeout(evalTimeout); evalTimeout = null; }
     if (zfiInterval) { clearInterval(zfiInterval); zfiInterval = null; }
+    if (sungrowTickInterval) { clearInterval(sungrowTickInterval); sungrowTickInterval = null; }
     // Bewusst KEIN Modbus-Write im Stop-Pfad (Shutdown-Hänger-Historie) — ein
     // aktiver Deckel am Gerät verfällt über WMaxLimPct_RvrtTms von selbst.
   }

@@ -285,8 +285,7 @@ export function sungrowEmsConf(cfg) {
   return c?.enabled === true && c.emulate === 'sungrow-ems' ? c : null;
 }
 
-// Takt, in dem schedule-eval tick() aufruft (ZFI_TICK_MS), und erlaubtes Zittern des Intervall-Timers.
-const CALLER_TICK_MS = 5000;
+// Erlaubtes Zittern des Intervall-Timers (der Aufrufer tickt den Regler im eigenen schnellen Takt, Punkt 2).
 const TICK_JITTER_MS = 250;
 // Nach einem geräteeigenen Rückfall frühestens nach dieser Zeit wieder in External EMS eintreten (Punkt 3c).
 const REENTRY_AFTER_FALLBACK_MS = 10000;
@@ -295,6 +294,11 @@ const FALLBACK_COOLDOWN_MS = 60000;
 // Übergangs-Prinzip (Christin, Punkt 1): erst nach SO langem Eigenverbrauch (kein Sollwert / Band) aus External
 // EMS zurück in Modus 0; kürzere Löcher werden mit Akku-0 W in External EMS überbrückt (kein Mode-Flattern).
 const SELF_RELEASE_MS = 15 * 60 * 1000;
+// Schreibbudget 13050 (Modus) je WR und Tag (Punkt 2): danach im aktuellen Modus bleiben, bis Mitternacht.
+const MODE_WRITES_PER_DAY = 20;
+// Adaptiver Regeltakt (Punkt 2): Grenzen 1–5 s, gemessen aus der Antwortzeit (gleitender Mittelwert).
+const REGULATE_MIN_MS = 1000;
+const REGULATE_MAX_MS = 5000;
 
 /** Schlüssel der Geräteverbindung (Adresse, Port, Unit-ID) — Erkennung und Schreib-Tor gelten je Verbindung. */
 export function endpointKeyOf(v) {
@@ -554,6 +558,8 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     fallbackTimes: [],    // Zeitstempel der letzten geräteeigenen Rückfälle (Ratenbegrenzung Neueintritt)
     sentTimeoutS: null,  // zuletzt an den Wechselrichter geschriebene Frist (gilt dort, bis eine neue rausging)
     lastStepAt: 0,
+    writeDay: { key: null, regs: {} }, // Tages-Schreibzähler je Register (Verschleißschutz, Punkt 2)
+    responseMs: null,    // gleitender Mittelwert der Schreib-/Rücklese-Antwortzeit (adaptiver Takt, Punkt 2)
     decision: null,
     error: null,
     neutralizedAt: null,  // pausedAt des Not-Halts, für den die eine Rücknahme schon lief
@@ -620,6 +626,11 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       deviceFallbackAfterS: st.lastFallbackAfterS || null, // gemessene Zeit, nach der der WR von selbst zurückfiel
       deviceFallbackCount60s: (st.fallbackTimes || []).filter((x) => now() - x < 60000).length, // Rückfälle letzte 60 s
       lastHeartbeatAt: st.lastHeartbeatAt || null,
+      // Punkt 2: adaptiver Regeltakt + gemessene Antwortzeit + Tages-Schreibzähler je Register (13050 mit Budget).
+      regulateEveryMs: adaptiveRegulateMs(getCfg()),
+      responseMs: st.responseMs,
+      writesToday: { mode13050: writeDayBucket().regs[EMS_MODE_ADDR] || 0, cmd13051: st.writeDay.regs[EMS_CMD_ADDR] || 0, power13052: st.writeDay.regs[EMS_POWER_ADDR] || 0, heartbeat13080: st.writeDay.regs[HEARTBEAT_ADDR] || 0 },
+      modeBudgetLeft: modeBudgetLeft(),
       target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at, noGridCharge: st.target.noGridCharge === true } : null,
       device: st.dev ? { ...st.dev } : null,
       decision: st.decision,
@@ -727,6 +738,37 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     // Register, u. a. 13080 am SH10RT-20): dasselbe Register, ein Wort.
     if (fc === 16) await transport.mbWriteMultiple({ ...endpoint(conf), address, values: [value & 0xffff] });
     else await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
+    countWrite(address); // Tages-Schreibzähler je Register (Punkt 2)
+  }
+
+  // Tages-Schreibzähler je Register, Reset zur lokalen Mitternacht (Verschleißschutz/Transparenz, Punkt 2).
+  function writeDayBucket() {
+    const key = new Date(now()).toDateString(); // lokaler Tag → Reset um Mitternacht
+    if (st.writeDay.key !== key) st.writeDay = { key, regs: {} };
+    return st.writeDay;
+  }
+  function countWrite(address) {
+    const b = writeDayBucket();
+    b.regs[address] = (b.regs[address] || 0) + 1;
+  }
+  // Verbleibendes 13050-Tagesbudget (Moduswechsel). ≤ 0 → nicht mehr wechseln (im Modus bleiben, Punkt 2).
+  function modeBudgetLeft() {
+    return MODE_WRITES_PER_DAY - (writeDayBucket().regs[EMS_MODE_ADDR] || 0);
+  }
+  // Gleitender Mittelwert der gemessenen Antwortzeit (Schreiben → bestätigtes Rücklesen), für den adaptiven Takt.
+  function updateResponseMs(ms) {
+    const v = Number(ms);
+    if (!Number.isFinite(v) || v < 0) return;
+    st.responseMs = st.responseMs == null ? v : Math.round(0.7 * st.responseMs + 0.3 * v);
+  }
+  // Adaptiver Regeltakt (Punkt 2): fester sungrow.regulateEveryMs hat Vorrang; sonst aus der Antwortzeit (×2),
+  // geklemmt auf 1–5 s. Ohne Messung konservativ der langsamste erlaubte Takt. So überschwingt 1 s nicht und
+  // die RW-Register werden nicht unnötig oft beschrieben.
+  function adaptiveRegulateMs(cfg) {
+    const fixed = Number(cfg?.sungrow?.regulateEveryMs);
+    if (Number.isFinite(fixed) && fixed > 0) return Math.min(REGULATE_MAX_MS, Math.max(REGULATE_MIN_MS, Math.round(fixed)));
+    if (st.responseMs != null && st.responseMs > 0) return Math.min(REGULATE_MAX_MS, Math.max(REGULATE_MIN_MS, Math.round(st.responseMs * 2)));
+    return REGULATE_MAX_MS;
   }
 
   function foreignModeError(mode) {
@@ -814,6 +856,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const dev = st.dev || await readDevice(conf);
     // Ein fremdes EMS/VPP wird nie übersteuert, auch nicht im Not-Halt.
     if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+    const writeStartedAt = now(); // Antwortzeit (Schreiben bis bestätigtes Rücklesen) für den adaptiven Takt (Punkt 2)
     if (decision.mode === 'self') {
       const opt = { neutralize };
       if (dev.cmd !== EMS_CMD.STOP) await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, opt);
@@ -833,6 +876,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     }
     st.dev = null;
     const back = await readDevice(conf);
+    updateResponseMs(now() - writeStartedAt); // gleitender Mittelwert der Antwortzeit (adaptiver Takt, Punkt 2)
     if (!emsMatches(back, decision, 10, modeValue)) {
       const err = new Error(`EMS-Rücklesung weicht ab (Soll ${describe(decision, modeValue)}, Ist Modus ${back.mode}, Befehl 0x${back.cmd.toString(16)}, ${back.powerW} W)`);
       err.code = 'readback_mismatch';
@@ -870,14 +914,13 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     return null;
   }
 
-  // Abstand der Takte, solange DVhub External EMS fährt: höchstens ein Drittel der Herzschlag-Frist, auf den
-  // 5-s-Takt des Aufrufers (schedule-eval) abgerundet — sonst wird aus 6,7 s faktisch 10 s (Codex ff728d09).
-  // Die Toleranz fängt das Zittern des Intervall-Timers ab.
-  function stepEveryMs(opts, ctl) {
+  // Regeltakt (Punkt 2): beim aktiven Regeln (External EMS, Besitz) der adaptive Takt 1–5 s aus der gemessenen
+  // Antwortzeit (fester sungrow.regulateEveryMs hat Vorrang) — unabhängig vom 5-s-Takt des Aufrufers. Sonst der
+  // ruhige Profil-Takt (regulateEveryMs). Der Keepalive (Punkt 3) hält den Herzschlag unabhängig davon am Leben;
+  // der adaptive Höchsttakt 5 s speist bei jeder erlaubten Frist (≥ 20 s) ≥ 4 Herzschläge je Frist.
+  function stepEveryMs(opts) {
     if (!(st.owns && st.ownMode === EMS_MODE.EXTERNAL)) return opts.regulateEveryMs;
-    const frist = Math.min(ctl.heartbeatTimeoutS, st.sentTimeoutS ?? ctl.heartbeatTimeoutS) * 1000;
-    const third = Math.max(CALLER_TICK_MS, Math.floor(frist / 3 / CALLER_TICK_MS) * CALLER_TICK_MS);
-    return Math.min(opts.regulateEveryMs, third);
+    return adaptiveRegulateMs(getCfg());
   }
   const due = (everyMs) => now() - st.lastStepAt >= everyMs - TICK_JITTER_MS;
 
@@ -1055,15 +1098,26 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       // Herzschlag und Moduswechsel gehen weiter direkt in Self zurück.
       const bridgeableSelf = decision.mode === 'self'
         && (decision.reason === 'band' || decision.reason === 'target_expired' || decision.reason === 'no_setpoint');
+      // Schreibbudget 13050 (Punkt 2): nach ≤20 Moduswechseln/Tag nicht mehr wechseln, bis Mitternacht — im Modus
+      // bleiben. Not-Halt/Widerruf (eigene Pfade, neutralize) und die Herzschlag-Lücke (gap, Wiederaufnahme) sind aus.
+      const modeBudgetOut = modeBudgetLeft() <= 0;
       if (ownsExternal && ctl.modeValue === EMS_MODE.EXTERNAL && bridgeableSelf) {
         if (!st.selfBridgeSince) st.selfBridgeSince = t;
-        if (t - st.selfBridgeSince < SELF_RELEASE_MS) {
-          decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'bridge_idle' };
+        const holdForBudget = modeBudgetOut; // Budget erschöpft → nicht zurück in Modus 0
+        if (holdForBudget || t - st.selfBridgeSince < SELF_RELEASE_MS) {
+          decision = { mode: 'forced', command: 'stop', powerW: 0, reason: holdForBudget ? 'mode_budget_hold' : 'bridge_idle' };
           st.decision = { ...decision, at: t, trigger: reason };
+          if (holdForBudget) logOnce('mode-budget', 'sungrow_ems_mode_budget', { writesToday: MODE_WRITES_PER_DAY - modeBudgetLeft(), text: 'Sungrow: Tagesbudget für Moduswechsel (13050, ≤20) erreicht — DVhub bleibt bis Mitternacht im aktuellen Modus (Akku 0 W statt Eigenverbrauch).' }, 'warn');
         }
         // sonst: länger Eigenverbrauch → decision bleibt 'self' → unten Rückkehr in Modus 0 (owns wird freigegeben).
       } else {
         st.selfBridgeSince = 0;
+        // Budget erschöpft und für einen Befehl müsste erst der Modus gewechselt werden (aktuell Self) → im Self bleiben.
+        if (modeBudgetOut && decision.mode === 'forced' && !st.owns) {
+          decision = { mode: 'self', reason: 'mode_budget' };
+          st.decision = { ...decision, at: t, trigger: reason };
+          logOnce('mode-budget', 'sungrow_ems_mode_budget', { writesToday: MODE_WRITES_PER_DAY - modeBudgetLeft(), text: 'Sungrow: Tagesbudget für Moduswechsel (13050, ≤20) erreicht — DVhub bleibt bis Mitternacht im Eigenverbrauch (keine neue Lade-/Entlade-Vorgabe an den WR).' }, 'warn');
+        }
       }
       // Frist, die im Gerät wirklich gilt: die zuletzt geschriebene, bis eine neue rausging (Codex ff728d09).
       const deviceTimeoutS = Math.min(ctl.heartbeatTimeoutS, st.sentTimeoutS ?? ctl.heartbeatTimeoutS);

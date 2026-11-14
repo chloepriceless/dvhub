@@ -892,3 +892,44 @@ test('Modbus TCP: Poll liest nur FC 4 an Doku−1-Adressen; Sollwert (External E
     await new Promise((r) => server.close(r));
   }
 });
+
+// --- Punkt 2: adaptiver Regeltakt + Schreibbudget ------------------------------------------
+test('Punkt 2: Tages-Schreibzähler je Register + regulateEveryMs/responseMs in /api/status', async () => {
+  const r = rig({ controlMode: 'external' });
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // schreibt Leistung, Befehl, Modus, Herzschlag
+  const s = r.state.ctrl.sungrowEms;
+  assert.ok(s.writesToday.mode13050 >= 1 && s.writesToday.cmd13051 >= 1 && s.writesToday.power13052 >= 1, JSON.stringify(s.writesToday));
+  assert.equal(typeof s.regulateEveryMs, 'number');
+  assert.ok('responseMs' in s && 'modeBudgetLeft' in s);
+});
+
+test('Punkt 2: fester sungrow.regulateEveryMs hat Vorrang, auf 1–5 s geklemmt', async () => {
+  const r = rig({ controlMode: 'external' });
+  r.cfg.sungrow.regulateEveryMs = 2000;
+  assert.equal(r.ems.status().regulateEveryMs, 2000);
+  r.cfg.sungrow.regulateEveryMs = 50;   // unter Minimum → 1 s
+  assert.equal(r.ems.status().regulateEveryMs, 1000);
+  r.cfg.sungrow.regulateEveryMs = 99999; // über Maximum → 5 s
+  assert.equal(r.ems.status().regulateEveryMs, 5000);
+});
+
+test('Punkt 2: ohne festen Wert adaptiv aus der Antwortzeit (×2, geklemmt), sonst langsamster Takt', async () => {
+  const r = rig({ controlMode: 'external' });
+  assert.equal(r.ems.status().regulateEveryMs, 5000); // ohne Messung konservativ
+  r.ems._st.responseMs = 400;
+  assert.equal(r.ems.status().regulateEveryMs, 1000); // 800 → auf 1 s angehoben
+  r.ems._st.responseMs = 1800;
+  assert.equal(r.ems.status().regulateEveryMs, 3600);
+  r.ems._st.responseMs = 9000;
+  assert.equal(r.ems.status().regulateEveryMs, 5000); // geklemmt
+});
+
+test('Punkt 2: 13050-Tagesbudget erschöpft → kein neuer Moduswechsel (bleibt im Eigenverbrauch), Warnung', async () => {
+  const r = rig({ controlMode: 'external' });
+  r.ems._st.writeDay = { key: new Date(r.now()).toDateString(), regs: { [MODE]: 20 } };
+  r.t.writes.length = 0;
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // würde sonst External EMS verlangen
+  assert.ok(!r.t.writes.some((x) => x.address === MODE && x.value === EMS_MODE.EXTERNAL), 'kein Moduswechsel nach External');
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'mode_budget');
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_mode_budget'));
+});

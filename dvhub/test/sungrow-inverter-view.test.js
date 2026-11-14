@@ -27,9 +27,9 @@ test('Split-Steuerung: Master- und Slave-Zeile + Summenzeile, Rollen, EMS-Status
       sungrowSystemBatteryW: -2168, sungrowSystemPvW: 0,
       device: { model: 'SH10RT-20', serial: 'A2351909042', bdcRatedW: 10000, info: { runningStateText: 'Externes EMS' } },
     },
-    sungrowSecond: { online: true, control: 'split', socPct: 20, batteryPowerW: -1168, pvPowerW: 0, bdcRatedW: 10000, runningStateText: 'Externes EMS' },
-    sungrowEms: { controlMode: 'external', owns: true, heartbeatTimeoutS: 30, heartbeatWorkingFc: 16, heartbeatSentS: 30, decision: { mode: 'forced', command: 'discharge', powerW: 1000 } },
-    sungrowEmsSlave: { controlMode: 'external', owns: true, heartbeatWorkingFc: 16, heartbeatSentS: 30, decision: { mode: 'forced', command: 'discharge', powerW: 1168 } },
+    sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 20, batteryPowerW: -1168, pvPowerW: 0, bdcRatedW: 10000, runningStateText: 'Externes EMS' },
+    sungrowEms: { controlMode: 'external', owns: true, heartbeatTimeoutS: 30, heartbeatWorkingFc: 16, heartbeatSentS: 30, regulateEveryMs: 1000, responseMs: 420, modeBudgetLeft: 18, writesToday: { mode13050: 2, cmd13051: 3, power13052: 5, heartbeat13080: 40 }, decision: { mode: 'forced', command: 'discharge', powerW: 1000, split: { masterW: 1000, slaveW: 1168, strategy: 'soc-balance' } } },
+    sungrowEmsSlave: { controlMode: 'external', owns: true, heartbeatWorkingFc: 16, heartbeatSentS: 30, writesToday: { mode13050: 1, cmd13051: 2, power13052: 4, heartbeat13080: 40 }, modeBudgetLeft: 19, decision: { mode: 'forced', command: 'discharge', powerW: 1168 } },
   };
   const vw = V.view(status);
   assert.equal(vw.hidden, false);
@@ -41,9 +41,14 @@ test('Split-Steuerung: Master- und Slave-Zeile + Summenzeile, Rollen, EMS-Status
   assert.equal(vw.master.owns, true);
   assert.equal(vw.master.decision, 'Entladen 1000 W');
   assert.equal(vw.master.heartbeat, '30 s (FC 16)');
+  // Punkt 1/2: Aufteilung, Regeltakt, Tages-Schreibzähler in der Kachel.
+  assert.equal(vw.master.split, '1000 W/1168 W (soc-balance)');
+  assert.equal(vw.master.regulate, '1000 ms · Antwort 420 ms');
+  assert.ok(vw.master.writes.indexOf('13050 2 (Rest 18)') >= 0, vw.master.writes);
   assert.equal(vw.slave.role, 'Slave – gesteuert bei Vorgaben');
   assert.equal(vw.slave.soc, '20 %');
   assert.equal(vw.slave.decision, 'Entladen 1168 W');
+  assert.ok(vw.slave.writes.indexOf('13052 4') >= 0, vw.slave.writes);
   assert.equal(vw.sum.battery, '-2168 W');
   assert.equal(vw.sum.soc, '60 %');
 });
@@ -51,7 +56,7 @@ test('Split-Steuerung: Master- und Slave-Zeile + Summenzeile, Rollen, EMS-Status
 test('self-only: Slave „gelesen", offline → Nicht erreichbar, kein EMS', () => {
   const status = {
     victron: { soc: 60, device: { model: 'SH10RT-20', bdcRatedW: 10000 } },
-    sungrowSecond: { online: false, control: 'self-only', bdcRatedW: 10000 },
+    sungrowSecond: { online: false, strategyCharge: 'master-only', strategyDischarge: 'master-only', bdcRatedW: 10000 },
     sungrowEms: { controlMode: 'forced', owns: false, decision: { mode: 'self' } },
   };
   const vw = V.view(status);
