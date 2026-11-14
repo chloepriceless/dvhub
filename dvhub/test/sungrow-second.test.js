@@ -653,12 +653,14 @@ function splitRig({ masterSoc = 80, slaveSoc = 20, batteryPowerW = -3000, grid =
   return { ems, slaveEms, t, state, cfg, mImage, sImage, logs, setpoint };
 }
 
-test('Split: Entladen 3 kW bei SoC 80/20 → Master 2800 (mehr Reserve), Slave 200, beide forced discharge', async () => {
+test('Split: Entladen 3 kW bei SoC 80/20 → Master 2571 (Kapazität 2:1 + Gegensteuern zum volleren), Slave 429, beide forced discharge', async () => {
+  // Verfeinerte soc-balance: Grundaufteilung nach Kapazität (10000/5000 → 2:1), zusätzlich beim Entladen mehr auf
+  // den volleren WR (Master 80 %) — SoC-Diff 60 % weit über dem Totband, Shift gedeckelt bei 0,5. → ~2571/429.
   const r = splitRig({ masterSoc: 80, slaveSoc: 20 });
   const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
   assert.equal(res.ok, true);
-  assert.equal(r.mImage.holding.get(SPOWER), 2800);
-  assert.equal(r.sImage.holding.get(SPOWER), 200);
+  assert.equal(r.mImage.holding.get(SPOWER), 2571);
+  assert.equal(r.sImage.holding.get(SPOWER), 429);
   assert.equal(r.mImage.holding.get(SMODE), EMS_MODE.FORCED);
   assert.equal(r.sImage.holding.get(SMODE), EMS_MODE.FORCED);
   assert.equal(r.mImage.holding.get(SCMD), EMS_CMD.DISCHARGE);
@@ -793,6 +795,39 @@ test('Strategie soc-balance (Standard): Entladen → mehr nutzbare Reserve bekom
   assert.equal(s.masterW + s.slaveW, 4000);
   assert.ok(s.masterW > s.slaveW, `master ${s.masterW} > slave ${s.slaveW}`);
   assert.equal(s.slaveUncommanded, false);
+});
+
+test('soc-balance verfeinert: Grundaufteilung nach Kapazität bei gleichem SoC (60/40-Kapazität → 60/40-Leistung)', () => {
+  // Gleicher SoC → kein Gegensteuern, nur die kapazitäts-proportionale Grundaufteilung.
+  const s = splitStrategyShares('soc-balance', { powerW: 3000, charge: true, masterMax: 5000, slaveMax: 5000, masterSoc: 50, slaveSoc: 50, masterCapacityWh: 6000, slaveCapacityWh: 4000, minPowerW: 50 });
+  assert.deepEqual([s.masterW, s.slaveW], [1800, 1200]); // 60/40
+});
+
+test('soc-balance verfeinert: Totband hält kleine SoC-Differenz (50 vs 60) auf der Grundaufteilung', () => {
+  const s = splitStrategyShares('soc-balance', { powerW: 3000, charge: false, masterMax: 5000, slaveMax: 5000, masterSoc: 60, slaveSoc: 50, masterCapacityWh: 5000, slaveCapacityWh: 5000, minPowerW: 50 });
+  assert.deepEqual([s.masterW, s.slaveW], [1500, 1500]); // Diff 10 ≤ Totband 10 → kein Gegensteuern
+});
+
+test('soc-balance verfeinert: Laden steuert zum LEEREREN WR gegen (Richtung oberes Ende)', () => {
+  // Master 85 % (voller), Slave 55 % (leerer), Laden → mehr Ladeleistung auf den Slave, damit der Master nicht
+  // zuerst ans obere Limit kommt.
+  const s = splitStrategyShares('soc-balance', { powerW: 3000, charge: true, masterMax: 5000, slaveMax: 5000, masterSoc: 85, slaveSoc: 55, masterCapacityWh: 5000, slaveCapacityWh: 5000, minPowerW: 50 });
+  assert.ok(s.slaveW > s.masterW, `Slave (leerer) ${s.slaveW} > Master ${s.masterW}`);
+  assert.equal(s.masterW + s.slaveW, 3000);
+});
+
+test('soc-balance verfeinert: Entladen steuert zum VOLLEREN WR gegen (Symmetrie am Boden)', () => {
+  // Master 15 % (nahe Boden), Slave 45 % (voller), Entladen → mehr auf den Slave, damit der Master nicht zuerst
+  // auf den Boden fällt.
+  const s = splitStrategyShares('soc-balance', { powerW: 3000, charge: false, masterMax: 5000, slaveMax: 5000, masterSoc: 15, slaveSoc: 45, masterCapacityWh: 5000, slaveCapacityWh: 5000, floorSocPct: 10, minPowerW: 50 });
+  assert.ok(s.slaveW > s.masterW, `Slave (voller) ${s.slaveW} > Master (nahe Boden) ${s.masterW}`);
+});
+
+test('soc-balance verfeinert: Überlauf über eine WR-Grenze geht an den anderen', () => {
+  // Starkes Gegensteuern zum Master (voll, Entladen), aber Master-Grenze nur 1000 → Rest an den Slave.
+  const s = splitStrategyShares('soc-balance', { powerW: 4000, charge: false, masterMax: 1000, slaveMax: 5000, masterSoc: 90, slaveSoc: 20, masterCapacityWh: 5000, slaveCapacityWh: 5000, floorSocPct: 5, minPowerW: 50 });
+  assert.equal(s.masterW, 1000, 'Master an der Grenze');
+  assert.equal(s.slaveW, 3000, 'Slave übernimmt den Überlauf');
 });
 
 test('Strategie master-only: Slave nicht gesteuert (Modus 0), Master bekommt alles (an Grenze)', () => {

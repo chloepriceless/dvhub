@@ -335,6 +335,9 @@ export function resolveSecondInverter(cfg) {
     strategyCharge: strategyCharge(c),
     strategyDischarge: strategyDischarge(c),
     ratioMasterPct: clampRatioPct(c.ratioMasterPct),
+    // Totband der soc-balance auf die SoC-Differenz (konfigurierbar, Christin 15.11.): kleinere Unterschiede
+    // werden nicht aktiv ausgeglichen. 0–50 %, Standard 10 %.
+    socBalanceDeadbandPct: Number.isFinite(Number(c.socBalanceDeadbandPct)) ? Math.min(50, Math.max(0, Number(c.socBalanceDeadbandPct))) : SOC_BALANCE_DEADBAND_PCT,
     maxChargeW: Number(c.maxChargeW) || 0,
     maxDischargeW: Number(c.maxDischargeW) || 0,
     batteryCapacityWh: Number(c.batteryCapacityWh) || 0,
@@ -344,6 +347,44 @@ export function resolveSecondInverter(cfg) {
 
 /** Gültige Aufteilungs-Strategien für den zweiten WR (Punkt 1). */
 export const SPLIT_STRATEGIES = ['master-only', 'ratio', 'by-capacity', 'by-power', 'soc-balance', 'priority-master', 'priority-slave'];
+
+// soc-balance verfeinert (Christin 15.11.): Totband auf die SoC-Differenz (kleine Unterschiede NICHT aktiv
+// ausgleichen, z. B. 50 vs 60) und proportionales Gegensteuern außerhalb — je 1 % SoC-Differenz über dem Totband
+// verschiebt sich SHIFT_PER_PCT der Grundaufteilung Richtung leererer (Laden) bzw. vollerer (Entladen) WR,
+// gedeckelt bei MAX_SHIFT (nie einen WR ganz aushungern).
+export const SOC_BALANCE_DEADBAND_PCT = 10;
+const SOC_BALANCE_SHIFT_PER_PCT = 0.02;
+const SOC_BALANCE_MAX_SHIFT = 0.5;
+
+/**
+ * Grundgewichte der verfeinerten soc-balance (Christin 15.11.): Grundaufteilung nach KAPAZITÄT (gleiche Kapazität →
+ * 50/50; 60/40 → 60/40, beide bleiben auf gleichem SoC % → parallel, kein Gegensteuern). Ohne bekannte Kapazitäten
+ * nach der Leistungsgrenze. Außerhalb eines Totbands auf die SoC-Differenz zusätzlich proportional gegensteuern:
+ * Laden mehr auf den leereren WR (damit der vollere nicht zuerst ans obere Limit kommt), Entladen mehr auf den
+ * volleren WR (symmetrisch unten: so fällt keiner zuerst auf den SoC-Boden). splitSungrowPower klemmt danach an die
+ * Grenzen (Überlauf an den anderen).
+ * @returns {{mW:number, sW:number}}
+ */
+export function socBalanceWeights({ charge, masterMax = 0, slaveMax = 0, masterSoc, slaveSoc, masterCapacityWh, slaveCapacityWh, socDeadbandPct = SOC_BALANCE_DEADBAND_PCT } = {}) {
+  const capM = Math.max(0, Number(masterCapacityWh) || 0);
+  const capS = Math.max(0, Number(slaveCapacityWh) || 0);
+  let baseM = capM; let baseS = capS;
+  if (baseM + baseS <= 0) { baseM = Math.max(0, Number(masterMax) || 0); baseS = Math.max(0, Number(slaveMax) || 0); }
+  const socM = Number.isFinite(Number(masterSoc)) ? Number(masterSoc) : null;
+  const socS = Number.isFinite(Number(slaveSoc)) ? Number(slaveSoc) : null;
+  let shift = 0; // + = zum Master, − = zum Slave
+  if (socM != null && socS != null) {
+    const dead = Math.max(0, Number(socDeadbandPct) || 0);
+    const diff = socM - socS; // + = Master voller
+    const excess = Math.abs(diff) - dead;
+    if (excess > 0) {
+      const mag = Math.min(SOC_BALANCE_MAX_SHIFT, excess * SOC_BALANCE_SHIFT_PER_PCT);
+      const favorMaster = charge ? (diff < 0) : (diff > 0); // Laden → leererer; Entladen → vollerer
+      shift = favorMaster ? mag : -mag;
+    }
+  }
+  return { mW: baseM * (1 + shift), sW: baseS * (1 - shift) };
+}
 
 function legacyStrategy(c) {
   // Altes Feld control → neue Strategie (Migration ohne Config-Umschreiben).
@@ -373,6 +414,7 @@ function clampRatioPct(v) {
 export function splitStrategyShares(strategy, {
   powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
   masterCapacityWh, slaveCapacityWh, floorSocPct = 0, maxSocPct = 100, ratioMasterPct = 50, minPowerW = 50,
+  socDeadbandPct = SOC_BALANCE_DEADBAND_PCT,
 } = {}) {
   const p = Math.max(0, Math.round(Number(powerW) || 0));
   const mMax = Math.max(0, Number(masterMax) || 0);
@@ -389,9 +431,8 @@ export function splitStrategyShares(strategy, {
   else if (strat === 'by-power') { mW = mMax; sW = sMax; }
   else if (strat === 'priority-master') { mW = 1; sW = 0; }
   else if (strat === 'priority-slave') { mW = 0; sW = 1; }
-  else { // soc-balance (Standard): Entladen nach nutzbarer Reserve, Laden nach freiem Platz
-    mW = charge ? (sungrowHeadroomWh(masterSoc, masterCapacityWh, maxSocPct) || 0) : (sungrowReserveWh(masterSoc, masterCapacityWh, floorSocPct) || 0);
-    sW = charge ? (sungrowHeadroomWh(slaveSoc, slaveCapacityWh, maxSocPct) || 0) : (sungrowReserveWh(slaveSoc, slaveCapacityWh, floorSocPct) || 0);
+  else { // soc-balance (verfeinert, Christin 15.11.)
+    ({ mW, sW } = socBalanceWeights({ charge, masterMax: mMax, slaveMax: sMax, masterSoc, slaveSoc, masterCapacityWh, slaveCapacityWh, socDeadbandPct }));
   }
   let { masterW, slaveW } = splitSungrowPower({ powerW: p }, { maxW: mMax, weight: mW }, { maxW: sMax, weight: sW });
   // Anteil < minPowerW dem anderen WR zuschlagen (sonst ginge Leistung verloren). Nur, wenn der andere sie fasst.
@@ -1018,6 +1059,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       powerW: decision.powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
       masterCapacityWh: optMaster.batteryCapacityWh, slaveCapacityWh: si.batteryCapacityWh,
       floorSocPct: floor, maxSocPct: maxSoc, ratioMasterPct: secondCfg.ratioMasterPct, minPowerW: opts.minPowerW,
+      socDeadbandPct: secondCfg.socBalanceDeadbandPct,
     });
     const mk = (w) => (w >= opts.minPowerW ? { mode: 'forced', command: decision.command, powerW: w, reason: decision.reason } : { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason });
     // master-only: Slave NICHT steuern → in Modus 0 (Self) halten; sonst der berechnete Anteil.
