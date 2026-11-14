@@ -210,8 +210,8 @@ Spalte **Zugang** in den Tabellen:
 | POST | `/api/schedule/rules` | Token | Regeln setzen |
 | POST | `/api/schedule/rules/toggle` | Token | Regeln per ID ein-/ausschalten |
 | POST | `/api/schedule/config` | Token | Standardwerte setzen |
-| GET | `/api/schedule/automation/config` | LAN·integrations | Kleine Börsenautomatik lesen |
-| POST | `/api/schedule/automation/config` | Token | Kleine Börsenautomatik setzen |
+| GET | `/api/schedule/automation/config` | LAN·integrations | Kleine Börsenautomatik lesen. Für die Handy-App (Kennung `x-dvhub-client: mobile-link`) nur benannte Felder (`enabled`, `searchWindowStart`, `searchWindowEnd`, `targetSlotCount`, `maxDischargeW`, `minSocPct`) – ohne Standort und Stufen |
+| POST | `/api/schedule/automation/config` | Token | Kleine Börsenautomatik setzen. Von der Handy-App nur dieselben benannten Felder, geprüft; anderes → 400 `field_not_allowed:<Feld>` |
 | POST | `/api/schedule/automation/replan` | Token | Sofort neu planen |
 | POST | `/api/control/write` | Token | Manueller Sollwert: `{ target, value, persist?, clear? }`, `target` ∈ `gridSetpointW`, `chargeCurrentA`, `minSocPct`, `maxDischargeW`, `feedExcessDcPv`; `clear: true` hebt den Override auf |
 | POST | `/api/control/stop` | Token | **Not-Halt** „als ob DVhub aus ist“: DVhubs eigene Vorgaben einmal zurücknehmen, danach keine Schreibvorgänge mehr — auch nicht §51, Direktvermarkter-Abregelung, §14a, SoC-Boden-Schutz (seit 1.0.10); den Netz-Sollwert schreibt er nicht (Antwort `neutralize.reason: "setpoint_unchanged"`); `/api/status.emergencyStop.suspended` nennt alles Ausgesetzte |
