@@ -10,6 +10,20 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Geändert
+
+- **Sungrow zwei WR: Akku, PV und SoC sind jetzt durchgängig die Systemsumme.** Bei aktiver Aggregation
+  (`aggregateTelemetry`) setzt der Poller `batteryPowerW`, `pvPowerW`/`pvTotalW` und `soc` auf die Summe
+  beider WR, bevor daraus Lade-/Entladeleistung, Energieflüsse und Hauslast abgeleitet werden; die
+  Master-Rohwerte bleiben in `sungrowMaster*` erhalten. Der **SoC** ist das kapazitätsgewichtete Mittel
+  beider Akkus (ohne hinterlegte Kapazität das einfache Mittel), beide Einzel-SoC sind sichtbar
+  (`sungrowMasterSocPct`, `sungrowSecond.socPct`, auch im Installateur-Portal). Der **SoC-Boden**
+  (Entlade-Boden und `manual_override_soc_floor`) nutzt den **niedrigeren** der beiden SoC
+  (`socFloorPct`), damit der schwächere Akku nicht unter den Boden entladen wird. Der Akku-Regler zählt
+  den zweiten WR dadurch **nicht mehr selbst** dazu (keine Doppelzählung) — er liest die bereits
+  aggregierten Systemwerte und nutzt vom zweiten WR nur noch die BDC-Nennleistung für die
+  System-Leistungsgrenze. Ohne zweite Verbindung/Aggregation unverändert.
+
 ### Hinzugefügt
 
 - **Sungrow: zwei WR im Master/Slave-Parallelbetrieb (Beta).** Laut Sungrow-Doku V1.1.9/V1.1.11

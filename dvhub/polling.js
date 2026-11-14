@@ -9,7 +9,7 @@ import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
 import {
   identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
-  resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowAggregateFields
+  resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry
 } from './services/inverter/sungrow.js';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms, buildActiveAlarmsFromDbus } from './victron-alarms.js';
@@ -994,6 +994,42 @@ export function createPoller(ctx) {
       }
     }
 
+    // --- Zwei Sungrow-WR im Master/Slave-Parallelbetrieb: kanonische System-Telemetrie BEVOR daraus Lade-/
+    // Entladeleistung, Flüsse und Hauslast abgeleitet werden. Akku/PV/SoC = Master + Slave (nur frische
+    // Master-Werte), die Master-Rohwerte nach sungrowMaster*; der SoC-Boden nutzt den niedrigeren der beiden SoC
+    // (socFloorPct). Steuerung bleibt am Master (dieser Dienst schreibt nie). `sungrowSecond`/`sungrowSecondCfg`
+    // werden unten für Hauslast-Korrektur und Anzeige wiederverwendet.
+    const sungrowSecondCfg = resolveSecondInverter(cfg);
+    let sungrowSecond = null;
+    if (sungrowSecondCfg.enabled) {
+      sungrowSecond = secondInverterTelemetry(state, cfg, {});
+      const sysT = sungrowSystemTelemetry(state.victron, sungrowSecond, {
+        masterCapacityWh: Number(cfg.optimizer?.batteryCapacityWh) || 0,
+        secondCapacityWh: Number(cfg.sungrow?.secondInverter?.batteryCapacityWh) || 0,
+      });
+      if (sysT) {
+        if (sysT.batteryPowerW != null && !state.victron.errors?.batteryPowerW) {
+          state.victron.sungrowMasterBatteryW = sysT.sungrowMasterBatteryW;
+          state.victron.batteryPowerW = sysT.batteryPowerW;
+        }
+        if (sysT.pvPowerW != null && !state.victron.errors?.pvPowerW) {
+          state.victron.sungrowMasterPvW = sysT.sungrowMasterPvW;
+          state.victron.pvPowerW = sysT.pvPowerW;
+          state.victron.pvTotalW = sysT.pvTotalW;
+        }
+        if (sysT.soc != null && !state.victron.errors?.soc) {
+          state.victron.sungrowMasterSocPct = sysT.sungrowMasterSocPct;
+          state.victron.soc = sysT.soc;
+        }
+        if (sysT.socFloorPct != null) state.victron.socFloorPct = sysT.socFloorPct;
+      } else {
+        delete state.victron.sungrowMasterBatteryW;
+        delete state.victron.sungrowMasterPvW;
+        delete state.victron.sungrowMasterSocPct;
+        delete state.victron.socFloorPct;
+      }
+    }
+
     const batP = Number(state.victron.batteryPowerW || 0);
     state.victron.batteryChargeW = Math.max(0, batP);
     state.victron.batteryDischargeW = Math.max(0, -batP);
@@ -1065,6 +1101,21 @@ export function createPoller(ctx) {
       }
     }
 
+    // Zwei Sungrow-WR: System-Hauslast VOR der Fluss-Aufteilung, damit die Flüsse (solarToBattery … batteryToGrid)
+    // aus Systemwerten gerechnet werden. Der Master meldet nur seine eigene Last (einziger Zähler) → korrigieren:
+    // Last_System = Last_Master + Slave-PV − Slave-Akku. Nur einen frisch gelesenen Master-Wert korrigieren; der
+    // Rohwert bleibt in sungrowMasterLoadW. PV/Akku stehen hier schon als Systemsumme (Block oben).
+    if (sungrowSecondCfg.enabled && sungrowSecond
+      && !state.victron.errors?.selfConsumptionW && state.victron.selfConsumptionW != null) {
+      const sPv = sungrowSecond.pvPowerW ?? 0;
+      const sBat = sungrowSecond.batteryPowerW ?? 0;
+      state.victron.sungrowMasterLoadW = Number(state.victron.selfConsumptionW);
+      state.victron.selfConsumptionW = Number(Math.max(0, Number(state.victron.selfConsumptionW) + sPv - sBat).toFixed(3));
+      if (state.victron.fieldUpdatedAt) state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
+    } else if (sungrowSecondCfg.enabled && !sungrowSecond) {
+      delete state.victron.sungrowMasterLoadW;
+    }
+
     const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
     const pvTotalW = Math.max(0, Number(state.victron.pvTotalW || 0));
     const gridImportW = Math.max(0, Number(state.victron.gridImportW || 0));
@@ -1131,26 +1182,13 @@ export function createPoller(ctx) {
     state.victron.batteryToSecondBatteryW = followerFlow ? batteryToSecondBatteryW : null;
     state.victron.secondBatteryToBatteryW = followerFlow ? secondBatteryToBatteryW : null;
 
-    // Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (services/inverter/sungrow-second): Slave-Werte +
-    // aggregierte System-Summen für Anzeige/Status und — wenn aggregateTelemetry an und der Slave online+frisch
-    // ist — die korrigierte System-Hauslast (der Master meldet nur seine eigene Last, der einzige Zähler aber die
-    // System-Größen). Steuerung bleibt am Master; dieser Dienst schreibt NIE. Ohne zweite Verbindung: kein Feld.
-    if (resolveSecondInverter(cfg).enabled) {
-      const second = secondInverterTelemetry(state, cfg, {});
-      const agg = sungrowAggregateFields(state.victron, second);
-      state.victron.sungrowSystemPvW = agg.sungrowSystemPvW;
-      state.victron.sungrowSystemBatteryW = agg.sungrowSystemBatteryW;
-      state.victron.sungrowSystemLoadW = agg.sungrowSystemLoadW;
-      // Nur einen frisch gelesenen Master-Wert korrigieren (bei Lesefehler steht der korrigierte alte noch, nie
-      // doppelt). Rohwert des Masters bleibt für die Diagnose in sungrowMasterLoadW.
-      if (second && agg.sungrowSystemLoadW != null && !state.victron.errors?.selfConsumptionW
-        && state.victron.selfConsumptionW != null) {
-        state.victron.sungrowMasterLoadW = Number(state.victron.selfConsumptionW);
-        state.victron.selfConsumptionW = agg.sungrowSystemLoadW;
-        if (state.victron.fieldUpdatedAt) state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
-      } else if (!second) {
-        delete state.victron.sungrowMasterLoadW;
-      }
+    // Zweiter Sungrow-WR: Anzeige-/Status-Felder. Akku/PV/Last/SoC stehen oben bereits als Systemsumme in den
+    // kanonischen Feldern; hier nur die ausdrücklich benannten System-Summen (zur Kontrolle, dass die Aggregation
+    // greift) und die sanitierte Slave-Zusammenfassung (ohne LAN-IP). Null, wenn gerade nicht aggregiert wird.
+    if (sungrowSecondCfg.enabled) {
+      state.victron.sungrowSystemPvW = sungrowSecond ? Number(state.victron.pvTotalW ?? 0) : null;
+      state.victron.sungrowSystemBatteryW = sungrowSecond && state.victron.batteryPowerW != null ? Number(state.victron.batteryPowerW) : null;
+      state.victron.sungrowSystemLoadW = sungrowSecond && state.victron.selfConsumptionW != null ? Number(state.victron.selfConsumptionW) : null;
       state.victron.sungrowSecond = sungrowSecondView(state, cfg);
     }
 

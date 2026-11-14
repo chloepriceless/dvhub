@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import {
   createSungrowEms, resolveSecondInverter, secondInverterTelemetry, wire, EMS_CMD, EMS_MODE,
-  sungrowSecondView, sungrowAggregateFields
+  sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor
 } from '../services/inverter/sungrow.js';
 import { createSungrowSecond } from '../services/inverter/sungrow-second.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
@@ -38,16 +38,16 @@ test('secondInverterTelemetry: null ohne aggregateTelemetry, auch wenn Werte da 
 });
 
 test('secondInverterTelemetry: Werte nur online + frisch', () => {
-  const s = { online: true, updatedAt: 1000, batteryPowerW: -500, pvPowerW: 2000, bdcRatedW: 3000 };
+  const s = { online: true, updatedAt: 1000, batteryPowerW: -500, pvPowerW: 2000, socPct: 55, bdcRatedW: 3000 };
   assert.deepEqual(secondInverterTelemetry({ sungrowSecond: s }, cfgAgg, { nowMs: 1000, maxAgeMs: 20000 }),
-    { batteryPowerW: -500, pvPowerW: 2000, bdcRatedW: 3000 });
+    { batteryPowerW: -500, pvPowerW: 2000, socPct: 55, bdcRatedW: 3000 });
   // offline → null
   assert.equal(secondInverterTelemetry({ sungrowSecond: { ...s, online: false } }, cfgAgg, { nowMs: 1000 }), null);
   // veraltet → null
   assert.equal(secondInverterTelemetry({ sungrowSecond: s }, cfgAgg, { nowMs: 1000 + 25000, maxAgeMs: 20000 }), null);
   // fehlender Einzelwert bleibt null, die anderen zählen
   assert.deepEqual(secondInverterTelemetry({ sungrowSecond: { ...s, batteryPowerW: null } }, cfgAgg, { nowMs: 1000 }),
-    { batteryPowerW: null, pvPowerW: 2000, bdcRatedW: 3000 });
+    { batteryPowerW: null, pvPowerW: 2000, socPct: 55, bdcRatedW: 3000 });
 });
 
 // --- Begleitdienst (Poller), NUR LESEND ------------------------------------------
@@ -114,7 +114,9 @@ test('Begleitdienst: drei Lesefehler in Folge → offline, keine Werte', async (
 // --- Aggregation im Master-Regler ------------------------------------------------
 
 // Eigenes Rig für den Aktuator mit zweitem WR (Forced mode, damit kein Herzschlag die Writes verschiebt).
-function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), second = null, aggregateTelemetry = false } = {}) {
+// batteryPowerW in state.victron ist der SYSTEM-Wert (der Poller hat PV/Akku schon aggregiert); der Regler
+// zählt NICHT noch einmal dazu, er nutzt vom zweiten WR nur die BDC-Nennleistung für die System-Leistungsgrenze.
+function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), batteryPowerW = -500, second = null, aggregateTelemetry = false } = {}) {
   const secondInverter = { host: '192.168.68.83', aggregateTelemetry };
   const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter } });
   const image = sungrowImage();
@@ -124,7 +126,7 @@ function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), second = null, ag
   const state = {
     victron: {
       errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock },
-      device, batteryPowerW: -500, pvPowerW: 0, selfConsumptionW: 500
+      device, batteryPowerW, pvPowerW: 0, selfConsumptionW: 500
     },
     meter: { ok: true, updatedAt: clock, grid_total_w: 0 },
     ctrl: {},
@@ -144,13 +146,24 @@ test('Regler ohne zweiten WR: Entladen auf die Master-Leistungsgrenze (3 kW) beg
   assert.ok(r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED));
 });
 
-test('Regler mit zweitem WR (aggregateTelemetry): System-Akku + System-Grenze → 5,2 kW', async () => {
-  // batteryW = −500 (Master) + −500 (zweiter) = −1000; P = −1000 + 0,7·(−6000) = −5200.
-  // Grenze = Master-BDC 3000 + zweiter-BDC 3000 = 6000 → 5200 passt durch.
-  const r = emsRig({ second: { batteryPowerW: -500, pvPowerW: 0, bdcRatedW: 3000 }, aggregateTelemetry: true });
+test('Regler mit zweitem WR: Systemakku kommt aus state.victron (nicht doppelt summiert), System-Grenze', async () => {
+  // Der Poller hat batteryPowerW bereits auf die Systemsumme −1000 gesetzt. P = −1000 + 0,7·(−6000) = −5200.
+  // Der Regler darf den zweiten Akku NICHT nochmal addieren (−1000, nicht −2000). Grenze = 3000+3000 = 6000.
+  const r = emsRig({ batteryPowerW: -1000, second: { batteryPowerW: -500, pvPowerW: 0, socPct: 50, bdcRatedW: 3000 }, aggregateTelemetry: true });
   await r.ems.applySetpoint(-6000, 'rule:abend');
   const pw = r.t.writes.find((w) => w.address === POWER);
   assert.equal(pw.value, 5200);
+});
+
+test('Regler-Doppelzählung: Kundenfall batteryPowerW −2168 → Regler-Eingang −2168 (nicht −4336)', async () => {
+  // Poller hat Master-Akku 0 + Slave −2168 = −2168 in state.victron.batteryPowerW gelegt. Netz −56.
+  // P = −2168 + 0,7·(−6000−(−56)) = −2168 − 4160,8 = −6328,8 → 6330 W (Grenze 3000+10000 = 13000 bindet nicht).
+  // Mit fälschlicher Doppelzählung (−4336) wäre P = −8496,8 → 8500 W. Die 6330 belegen: kein Doppelzählen.
+  const r = emsRig({ batteryPowerW: -2168, second: { batteryPowerW: -2168, pvPowerW: 0, socPct: 40, bdcRatedW: 10000 }, aggregateTelemetry: true });
+  r.state.meter.grid_total_w = -56;
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  const pw = r.t.writes.find((w) => w.address === POWER);
+  assert.equal(pw.value, 6330);
 });
 
 test('Regler mit zweitem WR, aber aggregateTelemetry AUS: unverändert wie Master allein (3 kW)', async () => {
@@ -160,9 +173,8 @@ test('Regler mit zweitem WR, aber aggregateTelemetry AUS: unverändert wie Maste
   assert.equal(pw.value, 3000);
 });
 
-test('Regler: zweiter WR offline → keine Aggregation, Master allein (3 kW)', async () => {
+test('Regler: zweiter WR offline → keine System-Grenze, Master allein (3 kW)', async () => {
   const r = emsRig({ second: { online: false, batteryPowerW: -500, bdcRatedW: 3000 }, aggregateTelemetry: true });
-  // online:false im second-Objekt überschreibt das Rig-Default online:true.
   r.state.sungrowSecond.online = false;
   await r.ems.applySetpoint(-6000, 'rule:abend');
   const pw = r.t.writes.find((w) => w.address === POWER);
@@ -186,73 +198,109 @@ test('sungrowSecondView: online → Werte, OHNE host/LAN-IP; offline → Werte n
   assert.ok(!('host' in off));
 });
 
-// --- Hauslast-/Summen-Aggregation (sungrowAggregateFields, rein) -------------------
+// --- System-SoC und SoC-Boden (rein) ----------------------------------------------
 
-test('sungrowAggregateFields: ohne zweiten WR alle Felder null', () => {
-  assert.deepEqual(sungrowAggregateFields({ pvTotalW: 2000, batteryPowerW: 0, selfConsumptionW: 0 }, null),
-    { sungrowSystemPvW: null, sungrowSystemBatteryW: null, sungrowSystemLoadW: null });
+test('sungrowSystemSoc: kapazitätsgewichtet, ohne Kapazität einfaches Mittel, Einzelfälle', () => {
+  // 10 kWh @ 80 % + 10 kWh @ 40 % = 60 %.
+  assert.equal(sungrowSystemSoc(80, 40, { masterCapacityWh: 10000, secondCapacityWh: 10000 }), 60);
+  // Ungleiche Kapazität: 15 kWh @ 80 % + 5 kWh @ 40 % = (12000+2000)/20000·... = 70 %.
+  assert.equal(sungrowSystemSoc(80, 40, { masterCapacityWh: 15000, secondCapacityWh: 5000 }), 70);
+  // Ohne Kapazitäten: einfaches Mittel.
+  assert.equal(sungrowSystemSoc(80, 40), 60);
+  // Nur einer bekannt → dieser; keiner → null.
+  assert.equal(sungrowSystemSoc(55, null), 55);
+  assert.equal(sungrowSystemSoc(null, null), null);
 });
 
-test('sungrowAggregateFields: System-Hauslast = Master-Last + Slave-PV − Slave-Akku (Kundenfall)', () => {
-  // Kundenbefund: Master-Akku 0 W, Master-Last ~0; Slave entlädt 2,3 kW (batteryPowerW −2300) → Systemlast 2,3 kW.
-  const victron = { pvTotalW: 0, batteryPowerW: 0, selfConsumptionW: 0 };
-  const second = { pvPowerW: 0, batteryPowerW: -2300, bdcRatedW: 5000 };
-  assert.deepEqual(sungrowAggregateFields(victron, second),
-    { sungrowSystemPvW: 0, sungrowSystemBatteryW: -2300, sungrowSystemLoadW: 2300 });
+test('sungrowSocFloor: niedrigerer der beiden (schützt den schwächeren Akku)', () => {
+  assert.equal(sungrowSocFloor(80, 12), 12);
+  assert.equal(sungrowSocFloor(12, 80), 12);
+  assert.equal(sungrowSocFloor(55, null), 55);
+  assert.equal(sungrowSocFloor(null, null), null);
 });
 
-test('sungrowAggregateFields: PV + Akku summieren, Last nie negativ, fehlende Master-Werte → null', () => {
-  const v = { pvTotalW: 1200, batteryPowerW: -500, selfConsumptionW: 300 };
-  const s = { pvPowerW: 1500, batteryPowerW: -800, bdcRatedW: 5000 };
-  // PV 1200+1500=2700; Akku −500+−800=−1300; Last 300+1500−(−800)=2600.
-  assert.deepEqual(sungrowAggregateFields(v, s), { sungrowSystemPvW: 2700, sungrowSystemBatteryW: -1300, sungrowSystemLoadW: 2600 });
-  // Master-Last fehlt → Last-Summe null, PV/Akku trotzdem.
-  const r = sungrowAggregateFields({ pvTotalW: 1000, batteryPowerW: 0, selfConsumptionW: null }, { pvPowerW: 500, batteryPowerW: 0 });
-  assert.deepEqual([r.sungrowSystemPvW, r.sungrowSystemBatteryW, r.sungrowSystemLoadW], [1500, 0, null]);
+// --- Kanonische System-Telemetrie (sungrowSystemTelemetry, rein) -------------------
+
+test('sungrowSystemTelemetry: ohne zweiten WR null (keine Aggregation)', () => {
+  assert.equal(sungrowSystemTelemetry({ batteryPowerW: 0, pvPowerW: 0, soc: 50 }, null), null);
 });
 
-// --- Poller-Anwendung: Felder setzen + Hauslast korrigieren ------------------------
+test('sungrowSystemTelemetry: Akku/PV/SoC = Master + Slave, Master-Rohwerte erhalten, SoC-Boden = Minimum', () => {
+  // Kundenfall: Master-Akku 0 / PV 0 / SoC 80 ; Slave −2168 / PV 0 / SoC 40 (je 10 kWh).
+  const out = sungrowSystemTelemetry(
+    { batteryPowerW: 0, pvPowerW: 0, pvTotalW: 0, soc: 80 },
+    { batteryPowerW: -2168, pvPowerW: 0, socPct: 40, bdcRatedW: 10000 },
+    { masterCapacityWh: 10000, secondCapacityWh: 10000 }
+  );
+  assert.equal(out.batteryPowerW, -2168);           // Systemakku
+  assert.equal(out.sungrowMasterBatteryW, 0);       // Master-Rohwert bleibt
+  assert.equal(out.soc, 60);                         // (80+40)/2 gewichtet gleich = 60
+  assert.equal(out.sungrowMasterSocPct, 80);
+  assert.equal(out.socFloorPct, 40);                // niedrigerer SoC für den Boden
+});
 
-// Spiegelt den Poller-Block (polling.js): aus state.sungrowSecond die System-Felder + korrigierte Hauslast.
-function applyPollerBlock(state, cfg) {
-  if (!resolveSecondInverter(cfg).enabled) return;
+test('sungrowSystemTelemetry: fehlende Slave-Teilwerte zählen nicht dazu, pvTotalW folgt pvPowerW', () => {
+  const out = sungrowSystemTelemetry(
+    { batteryPowerW: -500, pvPowerW: 1200, pvTotalW: 1200, soc: 50 },
+    { batteryPowerW: -800, pvPowerW: 1500, socPct: 55, bdcRatedW: 10000 }
+  );
+  assert.equal(out.batteryPowerW, -1300);
+  assert.equal(out.pvPowerW, 2700);
+  assert.equal(out.pvTotalW, 2700);
+  assert.equal(out.soc, 52.5);                      // (50+55)/2 (keine Kapazitäten)
+  assert.equal(out.socFloorPct, 50);
+});
+
+// --- Poller-Anwendung (Kundenfall): kanonische Werte + Hauslast-Korrektur ----------
+
+// Spiegelt die zwei Poller-Blöcke (polling.js): kanonische System-Telemetrie + System-Hauslast.
+function applyPollerBlocks(state, cfg) {
+  const c = resolveSecondInverter(cfg);
+  if (!c.enabled) return;
   const second = secondInverterTelemetry(state, cfg, {});
-  const agg = sungrowAggregateFields(state.victron, second);
-  state.victron.sungrowSystemPvW = agg.sungrowSystemPvW;
-  state.victron.sungrowSystemBatteryW = agg.sungrowSystemBatteryW;
-  state.victron.sungrowSystemLoadW = agg.sungrowSystemLoadW;
-  if (second && agg.sungrowSystemLoadW != null && !state.victron.errors?.selfConsumptionW && state.victron.selfConsumptionW != null) {
-    state.victron.sungrowMasterLoadW = Number(state.victron.selfConsumptionW);
-    state.victron.selfConsumptionW = agg.sungrowSystemLoadW;
+  const sysT = sungrowSystemTelemetry(state.victron, second, {
+    masterCapacityWh: Number(cfg.optimizer?.batteryCapacityWh) || 0,
+    secondCapacityWh: Number(cfg.sungrow?.secondInverter?.batteryCapacityWh) || 0,
+  });
+  if (sysT) {
+    if (sysT.batteryPowerW != null) { state.victron.sungrowMasterBatteryW = sysT.sungrowMasterBatteryW; state.victron.batteryPowerW = sysT.batteryPowerW; }
+    if (sysT.pvPowerW != null) { state.victron.sungrowMasterPvW = sysT.sungrowMasterPvW; state.victron.pvPowerW = sysT.pvPowerW; state.victron.pvTotalW = sysT.pvTotalW; }
+    if (sysT.soc != null) { state.victron.sungrowMasterSocPct = sysT.sungrowMasterSocPct; state.victron.soc = sysT.soc; }
+    if (sysT.socFloorPct != null) state.victron.socFloorPct = sysT.socFloorPct;
   }
-  state.victron.sungrowSecond = sungrowSecondView(state, cfg);
+  if (second && !state.victron.errors?.selfConsumptionW && state.victron.selfConsumptionW != null) {
+    const sPv = second.pvPowerW ?? 0; const sBat = second.batteryPowerW ?? 0;
+    state.victron.sungrowMasterLoadW = Number(state.victron.selfConsumptionW);
+    state.victron.selfConsumptionW = Number(Math.max(0, Number(state.victron.selfConsumptionW) + sPv - sBat).toFixed(3));
+  }
 }
 
-test('Poller-Block: korrigiert die Hauslast und setzt die System-Felder (Rohwert bleibt in sungrowMasterLoadW)', () => {
-  const cfg = { sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true } } };
+test('Poller (Kundenfall): Master-Akku 0 / Slave −2168 / Last 2091 / Netz −56 → System-Akku −2168, Last 2091', () => {
+  const cfg = { sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true, batteryCapacityWh: 10000 } }, optimizer: { batteryCapacityWh: 10000 } };
   const state = {
-    victron: { pvTotalW: 0, batteryPowerW: 0, selfConsumptionW: 0, errors: {}, fieldUpdatedAt: {} },
-    sungrowSecond: { online: true, updatedAt: Date.now(), host: '192.168.68.83', socPct: 61, batteryPowerW: -2300, pvPowerW: 0, bdcRatedW: 5000 }
+    victron: { batteryPowerW: 0, pvPowerW: 0, pvTotalW: 0, soc: 80, selfConsumptionW: -77, errors: {}, fieldUpdatedAt: {} },
+    sungrowSecond: { online: true, updatedAt: Date.now(), host: '192.168.68.83', socPct: 40, batteryPowerW: -2168, pvPowerW: 0, bdcRatedW: 10000 }
   };
-  applyPollerBlock(state, cfg);
-  assert.equal(state.victron.selfConsumptionW, 2300);   // korrigierte System-Hauslast
-  assert.equal(state.victron.sungrowMasterLoadW, 0);    // Rohwert des Masters bleibt
-  assert.equal(state.victron.sungrowSystemLoadW, 2300);
-  assert.equal(state.victron.sungrowSystemBatteryW, -2300);
-  assert.ok(!('host' in state.victron.sungrowSecond));  // keine LAN-IP im Status
+  applyPollerBlocks(state, cfg);
+  assert.equal(state.victron.batteryPowerW, -2168);     // Systemakku (nicht Master 0)
+  assert.equal(state.victron.sungrowMasterBatteryW, 0);
+  // Master-Last roh −77 → System-Last = max(0, −77 + 0 − (−2168)) = 2091.
+  assert.equal(state.victron.selfConsumptionW, 2091);
+  assert.equal(state.victron.sungrowMasterLoadW, -77);
+  assert.equal(state.victron.socFloorPct, 40);          // SoC-Boden nutzt den niedrigeren (Slave 40)
+  assert.equal(state.victron.soc, 60);                  // System-SoC
 });
 
-test('Poller-Block: aggregateTelemetry AUS → Hauslast unverändert, System-Felder null, Slave-Ansicht trotzdem', () => {
-  const cfg = { sungrow: { secondInverter: { host: '192.168.68.83' } } }; // aggregate aus
+test('Poller: aggregateTelemetry AUS → Master-Werte unverändert, kein System-Feld', () => {
+  const cfg = { sungrow: { secondInverter: { host: '192.168.68.83' } } };
   const state = {
-    victron: { pvTotalW: 0, batteryPowerW: 0, selfConsumptionW: 0, errors: {}, fieldUpdatedAt: {} },
-    sungrowSecond: { online: true, updatedAt: Date.now(), host: '192.168.68.83', socPct: 61, batteryPowerW: -2300, pvPowerW: 0, bdcRatedW: 5000 }
+    victron: { batteryPowerW: 0, pvPowerW: 0, pvTotalW: 0, soc: 80, selfConsumptionW: 0, errors: {}, fieldUpdatedAt: {} },
+    sungrowSecond: { online: true, updatedAt: Date.now(), host: '192.168.68.83', socPct: 40, batteryPowerW: -2168, pvPowerW: 0, bdcRatedW: 10000 }
   };
-  applyPollerBlock(state, cfg);
-  assert.equal(state.victron.selfConsumptionW, 0);       // unverändert (keine Korrektur)
-  assert.equal(state.victron.sungrowSystemLoadW, null);
-  assert.equal(state.victron.sungrowSecond.online, true); // Slave-Lage bleibt sichtbar
-  assert.equal(state.victron.sungrowSecond.aggregate, false);
+  applyPollerBlocks(state, cfg);
+  assert.equal(state.victron.batteryPowerW, 0);          // unverändert
+  assert.equal(state.victron.selfConsumptionW, 0);
+  assert.equal(state.victron.socFloorPct, undefined);
 });
 
 // --- Status-Sichtbarkeit: Felder überleben den IPC-Snapshot ------------------------

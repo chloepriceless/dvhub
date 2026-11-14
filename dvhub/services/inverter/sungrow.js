@@ -306,8 +306,54 @@ export function secondInverterTelemetry(state, cfg, { nowMs = Date.now(), maxAge
   return {
     batteryPowerW: fin(s.batteryPowerW) ? Number(s.batteryPowerW) : null,
     pvPowerW: fin(s.pvPowerW) ? Number(s.pvPowerW) : null,
+    socPct: fin(s.socPct) ? Number(s.socPct) : null,
     bdcRatedW: fin(s.bdcRatedW) && Number(s.bdcRatedW) > 0 ? Number(s.bdcRatedW) : null,
   };
+}
+
+/** Kapazitätsgewichtetes System-SoC beider WR (ohne Kapazitäten: einfaches Mittel). null, wenn keiner bekannt. */
+export function sungrowSystemSoc(masterSoc, secondSoc, { masterCapacityWh = 0, secondCapacityWh = 0 } = {}) {
+  const fin = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  const m = fin(masterSoc); const s = fin(secondSoc);
+  if (m == null && s == null) return null;
+  if (m == null) return s;
+  if (s == null) return m;
+  const cm = Number(masterCapacityWh) > 0 ? Number(masterCapacityWh) : 0;
+  const cs = Number(secondCapacityWh) > 0 ? Number(secondCapacityWh) : 0;
+  if (cm > 0 && cs > 0) return Number(((m * cm + s * cs) / (cm + cs)).toFixed(2));
+  return Number(((m + s) / 2).toFixed(2));
+}
+
+/** Niedrigerer der beiden SoC — Grundlage des SoC-Bodens (schützt den schwächeren Akku). null, wenn keiner bekannt. */
+export function sungrowSocFloor(masterSoc, secondSoc) {
+  const vals = [masterSoc, secondSoc].filter((v) => v != null && Number.isFinite(Number(v))).map(Number);
+  return vals.length ? Math.min(...vals) : null;
+}
+
+/**
+ * Kanonische System-Telemetrie beider WR: aus der Master-Telemetrie `victron` und der aggregierbaren Slave-
+ * Messung `second` die Felder, die DVhub auf die Systemsumme setzt (Akku-/PV-Leistung, SoC) — der Master-Rohwert
+ * wandert nach sungrowMaster*. socFloorPct = niedrigerer SoC (SoC-Boden). null wenn `second` fehlt (keine
+ * Aggregation → Master-Werte bleiben). Rein; der Poller wendet das Ergebnis feldweise an (nur frische Master-Werte).
+ */
+export function sungrowSystemTelemetry(victron, second, { masterCapacityWh = 0, secondCapacityWh = 0 } = {}) {
+  if (!second) return null;
+  const num = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  const mBat = num(victron?.batteryPowerW); const mPv = num(victron?.pvPowerW);
+  const mPvTot = num(victron?.pvTotalW); const mSoc = num(victron?.soc);
+  const out = { socFloorPct: sungrowSocFloor(mSoc, second.socPct) };
+  if (mBat != null && second.batteryPowerW != null) {
+    out.sungrowMasterBatteryW = mBat;
+    out.batteryPowerW = Number((mBat + second.batteryPowerW).toFixed(3));
+  }
+  if (mPv != null && second.pvPowerW != null) {
+    out.sungrowMasterPvW = mPv;
+    out.pvPowerW = Number((mPv + second.pvPowerW).toFixed(3));
+    out.pvTotalW = mPvTot != null ? Number((mPvTot + second.pvPowerW).toFixed(3)) : out.pvPowerW;
+  }
+  const sysSoc = sungrowSystemSoc(mSoc, second.socPct, { masterCapacityWh, secondCapacityWh });
+  if (sysSoc != null && mSoc != null) { out.sungrowMasterSocPct = mSoc; out.soc = sysSoc; }
+  return out;
 }
 
 /**
@@ -330,28 +376,6 @@ export function sungrowSecondView(state, cfg) {
     bdcRatedW: pick(s?.bdcRatedW),
     runningState: online ? (s?.runningState ?? null) : null,
     runningStateText: online ? (s?.runningStateText ?? null) : null,
-  };
-}
-
-/**
- * Aggregierte System-Felder für Anzeige/Telemetrie aus der Master-Telemetrie `victron` und der aggregierbaren
- * Slave-Messung `second` (secondInverterTelemetry(...) oder null). System-PV/-Akku = Master + Slave. Die
- * Hauslast des Masters (13008) rechnet den Slave-Beitrag nicht ein — der einzige Zähler sitzt am Master —, also
- * korrigiert: Last_sys = Last_master + Slave-PV − Slave-Akku (= PV_sys + Netzbezug − Akku_sys). Ohne `second`
- * alle Felder null (keine Aggregation → Master-Werte bleiben unverändert).
- */
-export function sungrowAggregateFields(victron, second) {
-  if (!second) return { sungrowSystemPvW: null, sungrowSystemBatteryW: null, sungrowSystemLoadW: null };
-  const num = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
-  const mPv = num(victron?.pvTotalW);
-  const mBat = num(victron?.batteryPowerW);
-  const mLoad = num(victron?.selfConsumptionW);
-  const sPv = second.pvPowerW ?? 0;
-  const sBat = second.batteryPowerW ?? 0;
-  return {
-    sungrowSystemPvW: mPv != null ? Number((mPv + sPv).toFixed(3)) : null,
-    sungrowSystemBatteryW: mBat != null ? Number((mBat + sBat).toFixed(3)) : null,
-    sungrowSystemLoadW: mLoad != null ? Number(Math.max(0, mLoad + sPv - sBat).toFixed(3)) : null,
   };
 }
 
@@ -610,27 +634,20 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const t = now();
     st.lastStepAt = t;
     const targetFresh = st.target && t - st.target.at <= opts.targetMaxAgeMs;
+    // Zweiter WR (Parallelbetrieb): PV/Akku/Last/SoC sind in state.victron bereits die Systemsumme (der Poller
+    // aggregiert sie bei aggregateTelemetry, polling.js), deshalb liest der Regler sie hier UNVERÄNDERT — NICHT
+    // noch einmal selbst dazuzählen (sonst Akku doppelt, Codex). Vom zweiten WR braucht der Regler nur die
+    // BDC-Nennleistung für die System-Leistungsgrenze; der Master verteilt die eine EMS-Vorgabe intern.
     const tel = telemetry(cfg, opts);
-    // Zweiter WR (Parallelbetrieb): nur wenn der Betreiber aggregateTelemetry eingeschaltet hat, zählt DVhub
-    // PV + Akku-Leistung beider WR zusammen (System-Werte für den Regler) und nimmt die Summe beider BDC-
-    // Nennleistungen als Leistungsgrenze — der Master verteilt die eine EMS-Vorgabe intern auf den Slave.
-    // Netz und Last bleiben die Master-Werte (einziger Zähler). Ohne zweite Verbindung/aggregateTelemetry: null.
     const second = secondInverterTelemetry(state, cfg, { nowMs: t, maxAgeMs: opts.telemetryMaxAgeMs });
     const masterBdc = Number(state.victron.device.bdcRatedW) || null;
     // System-Leistungsgrenze nur anheben, wenn BEIDE BDC-Nennleistungen bekannt sind. Fehlt die des Masters,
     // bleibt die Grenze unbekannt (→ Self-consumption wie ohne zweiten WR), statt mit halbem Wissen zu forcieren.
     const bdc = second?.bdcRatedW && masterBdc ? masterBdc + second.bdcRatedW : masterBdc;
     const cap = opts.maxPowerW != null ? (bdc ? Math.min(bdc, opts.maxPowerW) : opts.maxPowerW) : bdc;
-    const emsTel = second
-      ? {
-        ...tel,
-        batteryW: tel.batteryW != null && second.batteryPowerW != null ? tel.batteryW + second.batteryPowerW : tel.batteryW,
-        pvW: tel.pvW != null && second.pvPowerW != null ? tel.pvW + second.pvPowerW : tel.pvW,
-      }
-      : tel;
     let decision = targetFresh
       ? decideEmsCommand({
-        setpointW: st.target.setpointW, ...emsTel, maxChargeW: cap, maxDischargeW: cap,
+        setpointW: st.target.setpointW, ...tel, maxChargeW: cap, maxDischargeW: cap,
         bandW: opts.bandW, gain: opts.gain, minPowerW: opts.minPowerW,
         noGridCharge: NO_GRID_CHARGE_SOURCES.has(String(st.target.source))
       })

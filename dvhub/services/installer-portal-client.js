@@ -250,6 +250,10 @@ export function buildCompactStatus(ctx, now = Date.now()) {
     soc: v.soc ?? null,
     batteryPowerW: v.batteryPowerW ?? null,
     pvTotalW: v.pvTotalW ?? v.pvPowerW ?? null,
+    // Zwei Sungrow-WR (Parallelbetrieb): soc/batteryPowerW/pvTotalW oben sind die Systemsumme. Beide Einzel-SoC
+    // und der zweite WR sichtbar machen, damit der Installateur jeden Akku einzeln prüfen kann (ohne LAN-IP).
+    sungrowMasterSocPct: v.sungrowMasterSocPct ?? null,
+    sungrowSecond: v.sungrowSecond ?? null,
     gridSetpointW: v.gridSetpointW ?? null,
     // Netzübergabepunkt (gemessen) — getrennt, damit das Portal kein
     // Vorzeichen-Setting kennen muss; ohne gültigen Zähler null.

@@ -90,8 +90,13 @@ const VICTRON_FIELDS = [
   'sungrowSystemPvW',
   'sungrowSystemBatteryW',
   'sungrowSystemLoadW',
-  // Rohwert der Master-Hauslast vor der System-Korrektur (Diagnose: Master vs. System).
-  'sungrowMasterLoadW'
+  // Master-Rohwerte vor der System-Aggregation (Diagnose: Master vs. System) und der niedrigere der beiden
+  // SoC als SoC-Boden-Grundlage.
+  'sungrowMasterLoadW',
+  'sungrowMasterBatteryW',
+  'sungrowMasterPvW',
+  'sungrowMasterSocPct',
+  'socFloorPct'
 ];
 
 const SCHEDULE_FIELDS = [

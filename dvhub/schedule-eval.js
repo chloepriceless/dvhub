@@ -1546,7 +1546,9 @@ export function createScheduleEvaluator(ctx) {
     // unknown/stale telemetry => no forced/enabled discharge.
     const safeHold = dischargeFloorHold(target, value);
     if (safeHold !== null) {
-      const socRaw = state.victron.soc;
+      // Zwei Sungrow-WR: der SoC-Boden nutzt den NIEDRIGEREN der beiden SoC (socFloorPct, polling.js), damit der
+      // schwächere Akku nicht unter den Boden entladen wird; ohne zweiten WR ist das der normale System-SoC.
+      const socRaw = state.victron.socFloorPct ?? state.victron.soc;
       const soc = Number(socRaw);
       const floorPct = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
       const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
@@ -2326,7 +2328,8 @@ export function createScheduleEvaluator(ctx) {
           && eff.source === 'manual_override_persistent'
           && Number(eff.value) < 0) {
         const floorPct = Number(cfg.schedule?.manualOverrideMinSocPct ?? 10);
-        const socRaw = state.victron.soc;
+        // Zwei Sungrow-WR: niedrigerer der beiden SoC als Boden (socFloorPct, polling.js); sonst System-SoC.
+        const socRaw = state.victron.socFloorPct ?? state.victron.soc;
         const soc = Number(socRaw);
         const socKnown = socRaw != null && Number.isFinite(soc);
         if (!socKnown || soc <= floorPct) {
