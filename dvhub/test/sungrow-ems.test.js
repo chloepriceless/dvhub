@@ -419,13 +419,37 @@ test('External EMS: Herzschlag in jedem Takt, auch wenn sich sonst nichts änder
   assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[HB, 30], [HB, 30], [HB, 30]]);
   // Punkt 3b: solange DVhub External EMS besitzt, in jedem Takt den Gerätemodus frisch lesen (Rückfall-Erkennung).
   assert.deepEqual(r.t.reads.map((x) => [x.fc, x.address]), [[3, MODE], [3, MODE], [3, MODE]], 'Gerätemodus je Takt gelesen');
-  // Sollwert zurück ins Band → Self-consumption (Modus 0), danach kein Herzschlag mehr.
+  // Sollwert zurück ins Band = kurzes Loch: Übergangs-Prinzip (Punkt 1) → in External EMS BLEIBEN, Akku auf 0 W
+  // (Stopp), KEIN Moduswechsel. So kein Mode-Flattern, wenn gleich wieder eine Vorgabe kommt.
   r.t.writes.length = 0;
   await r.ems.applySetpoint(-40, 'default');
-  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP], [MODE, EMS_MODE.SELF]]);
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.EXTERNAL, 'bleibt in External EMS (überbrückt)');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.STOP, 'Akku gestoppt (0 W)');
+  assert.ok(!r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.SELF), 'kein Wechsel in Modus 0');
+  // Nach längerem Eigenverbrauch (> 15 min Band) → zurück in Modus 0, der Akku folgt wieder dem Eigenverbrauch.
+  r.advance(15 * 60 * 1000 + 1000);
+  await r.ems.applySetpoint(-40, 'default');
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.SELF, 'nach langem Band zurück in Modus 0');
+});
+
+test('Übergang (Punkt 1): kurzes Loch zwischen zwei Vorgaben bleibt in External EMS; Widerruf geht sofort in Modus 0', async () => {
+  const r = rig({ controlMode: 'external' });
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // Entladen, External EMS
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.EXTERNAL);
+  // Kurzes Loch (Sollwert ins Band), dann gleich wieder eine Vorgabe → durchweg External EMS, kein Modus 0.
+  r.advance(60_000); r.telemetry({ gridW: -40, batteryW: 0, pvW: 0, loadW: 300 });
+  await r.ems.applySetpoint(-40, 'default'); // Band → überbrückt (0 W), bleibt External
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.EXTERNAL, 'kurzes Loch bleibt External EMS');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.STOP, 'Akku 0 W im Loch');
+  r.advance(60_000); r.telemetry({ gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 });
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // neue Vorgabe → wieder entladen, nie Modus 0
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.EXTERNAL);
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.DISCHARGE, 'neue Vorgabe fährt sofort wieder');
+  // Widerruf ist KEIN überbrückbares Loch → sofort zurück in Modus 0.
   r.t.writes.length = 0;
-  for (let i = 0; i < 3; i += 1) { r.advance(10_000); r.telemetry(); await r.ems.tick(); }
-  assert.deepEqual(r.t.writes, []);
+  await r.ems.revoke('grid_discharge_not_allowed');
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.SELF, 'Widerruf sofort Modus 0');
+  assert.equal(r.state.ctrl.sungrowEms.owns, false);
 });
 
 for (const [timeoutS, everyS] of [[20, 5], [30, 10], [60, 10]]) {

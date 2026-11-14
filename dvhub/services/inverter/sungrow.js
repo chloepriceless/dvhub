@@ -292,6 +292,9 @@ const TICK_JITTER_MS = 250;
 const REENTRY_AFTER_FALLBACK_MS = 10000;
 // Nach >3 Rückfällen/min so lange nicht wieder eintreten (Mode-Register 13050 schonen, Punkt 3c).
 const FALLBACK_COOLDOWN_MS = 60000;
+// Übergangs-Prinzip (Christin, Punkt 1): erst nach SO langem Eigenverbrauch (kein Sollwert / Band) aus External
+// EMS zurück in Modus 0; kürzere Löcher werden mit Akku-0 W in External EMS überbrückt (kein Mode-Flattern).
+const SELF_RELEASE_MS = 15 * 60 * 1000;
 
 /** Schlüssel der Geräteverbindung (Adresse, Port, Unit-ID) — Erkennung und Schreib-Tor gelten je Verbindung. */
 export function endpointKeyOf(v) {
@@ -546,6 +549,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     lastKeepaliveAt: 0,   // letztes Lebenszeichen (Keepalive)
     lastFallbackAfterS: 0, // gemessene Zeit bis der WR von selbst in Self zurückfiel
     lastFallbackAt: 0,    // Zeitpunkt des letzten geräteeigenen Rückfalls (Neueintritt-Sperre 10 s, 3c)
+    selfBridgeSince: 0,   // seit wann der Sollwert im Band/aus ist, während DVhub External EMS besitzt (Brücke, Punkt 1)
     fallbackCooldownUntil: 0, // bis hierhin nach >3 Rückfällen/min NICHT wieder eintreten (Mode-Register schonen, 3c)
     fallbackTimes: [],    // Zeitstempel der letzten geräteeigenen Rückfälle (Ratenbegrenzung Neueintritt)
     sentTimeoutS: null,  // zuletzt an den Wechselrichter geschriebene Frist (gilt dort, bis eine neue rausging)
@@ -1043,6 +1047,24 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       // Herzschlag-Lücke (DVhub hing, Neustart mit Merker): der Wechselrichter kann schon in Self-consumption
       // zurückgefallen sein — frisch lesen und den ganzen Befehl neu setzen.
       const ownsExternal = st.owns && st.ownMode === EMS_MODE.EXTERNAL;
+      // Übergangs-Prinzip (Christin, Punkt 1): External EMS ist der gewünschte Betrieb, solange DVhub überhaupt steuert.
+      // Ein kurzes Loch (Sollwert im Band / kurz kein Sollwert) NICHT mit einem Moduswechsel quittieren, sondern in
+      // External EMS bleiben und den Akku auf 0 W (Stopp) setzen. Erst bei LÄNGEREM Eigenverbrauch (≥ SELF_RELEASE_MS)
+      // zurück in Modus 0, damit der Akku wieder dem Eigenverbrauch folgt. So kein Mode-Flattern (Hysterese).
+      // Nur für External EMS und nur bei „normalem" Self (Band/kein Sollwert) — Not-Halt, Widerruf, fehlender
+      // Herzschlag und Moduswechsel gehen weiter direkt in Self zurück.
+      const bridgeableSelf = decision.mode === 'self'
+        && (decision.reason === 'band' || decision.reason === 'target_expired' || decision.reason === 'no_setpoint');
+      if (ownsExternal && ctl.modeValue === EMS_MODE.EXTERNAL && bridgeableSelf) {
+        if (!st.selfBridgeSince) st.selfBridgeSince = t;
+        if (t - st.selfBridgeSince < SELF_RELEASE_MS) {
+          decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'bridge_idle' };
+          st.decision = { ...decision, at: t, trigger: reason };
+        }
+        // sonst: länger Eigenverbrauch → decision bleibt 'self' → unten Rückkehr in Modus 0 (owns wird freigegeben).
+      } else {
+        st.selfBridgeSince = 0;
+      }
       // Frist, die im Gerät wirklich gilt: die zuletzt geschriebene, bis eine neue rausging (Codex ff728d09).
       const deviceTimeoutS = Math.min(ctl.heartbeatTimeoutS, st.sentTimeoutS ?? ctl.heartbeatTimeoutS);
       const gap = ownsExternal && decision.mode === 'forced'
