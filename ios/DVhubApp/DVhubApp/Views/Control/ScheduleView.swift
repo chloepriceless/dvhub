@@ -49,6 +49,8 @@ struct ScheduleSection: View {
     @State private var amount = ""
     @State private var stopOn = false
     @State private var stopSoc = 20.0
+    /// Stopp-Stand der geöffneten Regel, wie die Box ihn hält (bleibt, wo die App ihn nicht anbietet).
+    @State private var originalStop: Double?
     @State private var enabled = true
     @State private var confirmDelete: ScheduleRule?
 
@@ -94,9 +96,15 @@ struct ScheduleSection: View {
 
     // MARK: Regeln
 
+    /// Zahl fürs Eingabefeld, ohne sie zu verändern: ganze Zahlen ohne Komma, alles andere unverändert.
+    /// (Gerundet gälte ein Wert schon beim Öffnen als geändert und ginge beim Speichern verändert zurück.)
+    static func plain(_ v: Double) -> String {
+        v == v.rounded() && abs(v) < 1e12 ? String(Int(v)) : String(v)
+    }
+
     static func summary(_ r: ScheduleRule) -> String {
         var text = IntegrationsView.targetName(r.target) + " " + PlanView.targetValue(r.target, r.value)
-        if let stop = r.stopSocPct { text += String(localized: " · bis \(Format.percent(stop)) Akku") }
+        if let stop = r.stopSocPct { text += String(localized: " · solange Akku über \(Format.percent(stop))") }
         return text
     }
 
@@ -196,6 +204,7 @@ struct ScheduleSection: View {
         amount = ""
         stopOn = false
         stopSoc = 20
+        originalStop = nil
         enabled = true
         feedback = nil
         withAnimation(.snappy) { editing = .new }
@@ -206,9 +215,11 @@ struct ScheduleSection: View {
         start = ClockTime.date(rule.start)
         end = ClockTime.date(rule.end)
         direction = GridDirection.of(rule.value ?? 0)
-        amount = String(Int(abs(rule.value ?? 0).rounded()))
+        amount = Self.plain(abs(rule.value ?? 0))
         stopOn = rule.stopSocPct != nil
-        stopSoc = ((rule.stopSocPct ?? 20) / 5).rounded() * 5
+        // Den Wert der Box unverändert übernehmen: Nur wer den Schieber bewegt, ändert ihn (Gegenprüfung 37f6e34f).
+        stopSoc = rule.stopSocPct ?? 20
+        originalStop = rule.stopSocPct
         enabled = rule.enabled
         feedback = nil
         editing = .rule(rule.id)
@@ -218,7 +229,15 @@ struct ScheduleSection: View {
         guard let n = Double(amount.replacingOccurrences(of: ",", with: ".")), n.isFinite, n >= 0 else { return nil }
         let grid = target == "gridSetpointW"
         return ScheduleEdit.Draft(target: target, start: ClockTime.string(start), end: ClockTime.string(end),
-                                  value: grid ? direction.signed(n) : n, stopSocPct: grid && stopOn ? stopSoc : nil, enabled: enabled)
+                                  value: grid ? direction.signed(n) : n, stopSocPct: grid ? stopLevel : nil, enabled: enabled)
+    }
+
+    /// Die Box schaltet eine Netz-Regel ab, sobald der Akku UNTER den Stopp-Stand
+    /// fällt (schedule-runtime.js) — eine Untergrenze fürs Einspeisen. Beim
+    /// Beziehen bietet die App ihn nicht an (er würde das Laden sofort beenden);
+    /// trägt eine solche Regel schon einen, bleibt er, wie er ist.
+    private var stopLevel: Double? {
+        direction == .feedIn ? (stopOn ? stopSoc : nil) : originalStop
     }
 
     private func editor(_ rule: ScheduleRule?) -> some View {
@@ -239,8 +258,10 @@ struct ScheduleSection: View {
                 }
                 .pickerStyle(.segmented)
                 numberField("Leistung am Netzpunkt", unit: "W", text: $amount, id: "schedule.edit.amount")
-                Toggle("Beenden, wenn der Akku einen Stand erreicht", isOn: $stopOn)
-                if stopOn { PercentField(title: "Akku-Stand", value: $stopSoc, range: 0...100) }
+                if direction == .feedIn {
+                    Toggle("Beenden, wenn der Akku unter einen Stand fällt", isOn: $stopOn)
+                    if stopOn { PercentField(title: "Akku-Stand", value: $stopSoc, range: 0...100) }
+                }
                 FormNote(text: direction == .feedIn
                          ? "DVhub regelt in diesem Zeitfenster so, dass am Netzanschluss diese Leistung eingespeist wird – auch aus dem Akku."
                          : "DVhub regelt in diesem Zeitfenster so, dass am Netzanschluss diese Leistung bezogen wird – der Akku lädt dann auch aus dem Netz.")
@@ -341,8 +362,8 @@ struct ScheduleSection: View {
                     if controller.canControl && !editingDefaults {
                         Button("Ändern") {
                             defDirection = GridDirection.of(grid ?? 0)
-                            defAmount = String(Int(abs(grid ?? 0).rounded()))
-                            defCharge = charge.map { String(Int($0.rounded())) } ?? ""
+                            defAmount = Self.plain(abs(grid ?? 0))
+                            defCharge = charge.map(Self.plain) ?? ""
                             defDcFeed = dc == 1
                             feedback = nil
                             withAnimation(.snappy) { editingDefaults = true }
@@ -465,8 +486,9 @@ struct ScheduleSection: View {
                                     autoOn = on
                                     autoStart = ClockTime.date(cfg["searchWindowStart"]?.string ?? "14:00")
                                     autoEnd = ClockTime.date(cfg["searchWindowEnd"]?.string ?? "09:00")
-                                    autoReserve = ((cfg["minSocPct"]?.number ?? 20) / 5).rounded() * 5
-                                    autoMaxW = cfg["maxDischargeW"]?.number.map { String(Int(abs($0).rounded())) } ?? ""
+                                    // Wert der Box unverändert: sonst gälte er schon beim Öffnen als geändert.
+                                    autoReserve = cfg["minSocPct"]?.number ?? 20
+                                    autoMaxW = cfg["maxDischargeW"]?.number.map { Self.plain(abs($0)) } ?? ""
                                     feedback = nil
                                     withAnimation(.snappy) { editingAutomation = true }
                                 }

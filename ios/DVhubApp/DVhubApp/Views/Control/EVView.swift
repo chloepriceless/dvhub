@@ -278,7 +278,7 @@ struct EVView: View {
         rowHasDeparture = !row.departure.isEmpty
         rowTime = ClockTime.date(row.departure.isEmpty ? "07:00" : row.departure)
         rowOwnTarget = row.minSocPct != nil
-        rowSoc = (row.minSocPct ?? ev.defaultMinSocPct ?? 80).rounded()
+        rowSoc = row.minSocPct ?? (ev.defaultMinSocPct ?? 80).rounded()
     }
 
     private func rowEditor(_ row: EVState.WeekRow, _ ev: EVState) -> some View {
@@ -290,11 +290,8 @@ struct EVView: View {
                 if rowOwnTarget { PercentField(title: "Mindest-Ladestand", value: $rowSoc, range: 0...100) }
             }
             Button {
-                let body = EVEdit.week(ev.week, changing: row.index, departure: rowHasDeparture ? ClockTime.string(rowTime) : "",
-                                       minSocPct: rowHasDeparture && rowOwnTarget ? rowSoc : nil)
-                guard let body else { return }
                 Task {
-                    await send(body, reason: String(localized: "Wochenplan ändern"))
+                    await saveWeekRow(row)
                     if feedback?.ok == true { editingRow = nil }
                 }
             } label: { Label("Tag speichern", systemImage: "checkmark") }
@@ -305,6 +302,33 @@ struct EVView: View {
         .font(.subheadline)
         .padding(.bottom, 8)
         .disabled(!controller.canControl)
+    }
+
+    /// Der Wochenplan geht als Ganzes zur Box. Deshalb vor dem Speichern frisch
+    /// lesen und nur die eine Zeile ändern — sonst nähme die App Änderungen
+    /// zurück, die inzwischen in der Weboberfläche gemacht wurden. Steht die
+    /// Zeile selbst inzwischen anders da, wird nichts geschickt.
+    private func saveWeekRow(_ row: EVState.WeekRow) async {
+        let departure = rowHasDeparture ? ClockTime.string(rowTime) : ""
+        let target = rowHasDeparture && rowOwnTarget ? rowSoc : nil
+        feedback = nil
+        busy = true
+        let result = await controller.confirmed(String(localized: "Wochenplan ändern")) {
+            let fresh = try await controller.request("GET", "/api/ev")
+            guard fresh.status == 200, let now = EVState.from(fresh.body) else {
+                return WriteFeedback(ok: false, text: String(localized: "E-Auto nicht verfügbar (HTTP \(fresh.status))."))
+            }
+            guard let same = now.week.first(where: { $0.index == row.index }), same.raw == row.raw,
+                  let body = EVEdit.week(now.week, changing: row.index, departure: departure, minSocPct: target) else {
+                return WriteFeedback(ok: false, text: String(localized: "Der Wochenplan hat sich inzwischen geändert. Bitte noch einmal ansehen und dann speichern."))
+            }
+            let out = WriteOutcome.from(try await controller.request("POST", "/api/ev", body: body))
+            return WriteFeedback(ok: out.ok, text: out.message)
+        }
+        busy = false
+        feedback = result
+        // Auch nach einer Ablehnung neu laden: Die Seite zeigt dann den Stand der Box.
+        await load()
     }
 
     // MARK: Laden und Schreiben

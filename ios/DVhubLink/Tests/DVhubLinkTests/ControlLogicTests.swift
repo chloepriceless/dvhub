@@ -192,6 +192,11 @@ final class ControlLogicTests: XCTestCase {
         XCTAssertEqual(rows.count, 2)
         XCTAssertEqual(rows[0], ["day": 1, "departure": "06:45", "homeFrom": "18:00", "homeFromPrevDay": true, "minSocPct": 85.0, "tripSocPct": 25])
         XCTAssertEqual(rows[1], s.week[1].raw)
+        // Nur die Zeit geändert: Ein krummes Ziel der Box bleibt, wie es ist.
+        var odd = s.week
+        odd[0] = EVState.WeekRow(raw: ["day": 1, "departure": "07:00", "minSocPct": 72.5], index: 0, day: 1, departure: "07:00", minSocPct: 72.5)
+        let timeOnly = try XCTUnwrap(EVEdit.week(odd, changing: 0, departure: "08:00", minSocPct: 72.5))
+        XCTAssertEqual(timeOnly["departure"]?["weeklyDepartures"]?.array?.first, ["day": 1, "departure": "08:00", "minSocPct": 72.5])
         // Tag leeren: ohne Abfahrt kein „zuhause ab“.
         let cleared = try XCTUnwrap(EVEdit.week(s.week, changing: 0, departure: "", minSocPct: nil))
         let first = try XCTUnwrap(cleared["departure"]?["weeklyDepartures"]?.array?.first)

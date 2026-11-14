@@ -349,7 +349,8 @@ public enum EVEdit {
         let list: [JSONValue] = rows.map { row in
             guard row.index == index, var o = row.raw.object else { return row.raw }
             o["departure"] = .string(time)
-            o["minSocPct"] = minSocPct.map { .double($0.rounded()) } ?? .null
+            // Unverändertes Ziel bleibt, wie die Box es hält (kein Runden nebenbei).
+            if minSocPct != row.minSocPct { o["minSocPct"] = minSocPct.map { .double($0.rounded()) } ?? .null }
             // Ohne Abfahrt gibt es kein „zuhause ab“ (die Box lehnt das sonst ab).
             if time.isEmpty { o["homeFrom"] = .string(""); o.removeValue(forKey: "homeFromPrevDay") }
             return .object(o)

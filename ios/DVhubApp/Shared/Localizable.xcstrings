@@ -31,12 +31,12 @@
         }
       }
     },
-    " · bis %@ Akku" : {
+    " · solange Akku über %@" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : " · until battery at %@"
+            "value" : " · while battery above %@"
           }
         }
       }
@@ -1392,12 +1392,12 @@
         }
       }
     },
-    "Beenden, wenn der Akku einen Stand erreicht" : {
+    "Beenden, wenn der Akku unter einen Stand fällt" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "End when the battery reaches a level"
+            "value" : "End when the battery drops below a level"
           }
         }
       }
@@ -2220,6 +2220,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The history is too large to transfer."
+          }
+        }
+      }
+    },
+    "Der Wochenplan hat sich inzwischen geändert. Bitte noch einmal ansehen und dann speichern." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The weekly plan has changed in the meantime. Please check it again and then save."
           }
         }
       }

@@ -197,7 +197,9 @@ struct DashboardView: View {
     private var marketCard: some View {
         let today = market.prices(on: market.today)
         let now = market.currentPrice
-        let importNow = controller.detail?.importPriceNowCtKwh
+        // Bezugspreis der laufenden Viertelstunde aus der Preisreihe der Box — nicht der Wert „jetzt“ vom
+        // letzten Abruf: Der wäre nach einem Slotwechsel der alte (Gegenprüfung 37f6e34f).
+        let importNow = PriceSeries.current(controller.detail?.prices ?? [])?.importCtKwh
         // Die kommenden Tage wie im Markt: morgen aus Börsenpreisen eingestuft, danach die Prognose.
         let ahead = MarketDay.build(today: market.today, tomorrow: market.tomorrow, prices: { market.prices(on: $0) }, outlook: market.outlook)
             .filter { $0.date > market.today }
