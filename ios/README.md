@@ -1,6 +1,6 @@
 # DVhub für iPhone
 
-Native App (SwiftUI, iOS 17+) für die Handy-Kopplung mit DVhub: Leitstand mit
+Native App (SwiftUI, iOS 18+) für die Handy-Kopplung mit DVhub: Leitstand mit
 Energiefluss, Detailwerte, Börsenpreise und Residuallast-Frühwarnung, Historie,
 Fahrplan, Zustand der Anbindungen, Nachrichten und Widgets. Mit Freigabe
 „Steuern“ kann sie auch den Not-Halt auslösen. Anlagendaten laufen Ende zu
@@ -17,7 +17,7 @@ Daten (Preise, Prognose, Nachrichten) holt die App direkt bei `dvhub.online`.
 
 ## Bauen
 
-Voraussetzung: Xcode 26 oder neuer, für die Gegenstelle Node 22.
+Voraussetzung: Xcode 27 oder neuer (für das iPhone Duo Xcode 27.1 oder neuer, siehe unten), für die Gegenstelle Node 22.
 
 ```bash
 brew install xcodegen                     # einmalig
@@ -93,13 +93,13 @@ Fünf Reiter:
   jeder Knoten öffnet Detailwerte (Phasen, Flüsse, Min-SoC, Sollwert, Zähler,
   Tagessummen). Ist die Anlage nicht erreichbar, zeigt die App den letzten Stand
   aus dem Briefkasten mit Uhrzeit.
-- **Markt:** Börsenpreis jetzt, Frühwarnung vor teuren Tagen und eine
-  Tagesleiste: Heute und Morgen als feste Börsentage (Viertelstunden, günstigste
-  und teuerste drei Stunden, eigener Bezugspreis aus DVhub), danach fünf
-  Prognosetage mit Bandbreite, Einstufung, Residuallast, Wind und Sonne. Dazu
-  die Bilanz der Prognose und, als „explorativ“ gekennzeichnet, die Vergleiche
-  (Darius-Nachbau, EpexPredictor). Quelle: `dvhub.online`
-  (`/api/prices`, `/v1/residual-load/outlook`, `/v1/residual-load/score`).
+- **Markt:** Börsenpreis jetzt; die nächsten Tage als Karten (Datum,
+  erwarteter Preis mit Spanne, Ampel günstig/normal/teuer – heute und morgen
+  als feste Börsentage, danach die Prognose); ein Diagramm auf einer
+  Zeitachse: feste Viertelstunden-Preise als Balken, die Prognose der
+  Folgetage als gestrichelte Linie mit Band. Quelle: `dvhub.online`
+  (`/api/prices`, `/v1/residual-load/outlook`). Methodik, Bilanz und
+  Vergleichsverfahren zeigt die App bewusst nicht; die stehen auf der Webseite.
 - **Historie:** Tag, Woche, Monat, Jahr aus `/api/history/summary?lean=1`
   (Energie, Erlöse, Kosten, Autarkie, Kennzahlen); Zeile antippen öffnet den
   Tag bzw. Monat. Woche/Monat/Jahr brauchen in DVhub Pro.
@@ -121,39 +121,58 @@ App wachsend 1, 2, 4 … bis 30 s.
 
 ## iPhone Duo und iPad
 
-Nach Apples Richtlinien (Stand 13.11.2026: HIG „Designing for iPhone Duo“,
-<https://developer.apple.com/design/human-interface-guidelines/designing-for-iphone-duo>;
-Tech Talk „Prepare your app for iPhone Duo“,
-<https://developer.apple.com/videos/play/tech-talks/111461/>;
-<https://developer.apple.com/documentation/technologyoverviews/preparing-your-app-for-iphone-duo>):
+Gelesen (Stand 14.11.2026): HIG „Designing for iPhone Duo“
+(<https://developer.apple.com/design/human-interface-guidelines/designing-for-iphone-duo>),
+„Preparing your app for iPhone Duo“
+(<https://developer.apple.com/documentation/technologyoverviews/preparing-your-app-for-iphone-duo>),
+Tech Talk 111461 (<https://developer.apple.com/videos/play/tech-talks/111461/>),
+TN3192 (<https://developer.apple.com/documentation/technotes/tn3192-migrating-your-app-from-the-deprecated-uirequiresfullscreen-key>).
 
-- **Zugeklappt** (und aufgeklappt im Querformat) legt das System Reiter und
-  Toolbar an den rechten Rand, **aufgeklappt im Hochformat** bleiben sie
-  waagerecht oben und unten, und der Inhalt füllt die Fläche. Das gilt nur für
-  Standard-Bausteine. Die App nutzt deshalb `TabView`, `NavigationStack` und
-  Toolbar-Einträge als `Label` mit Symbol und Titel.
-- Das System legt die Leisten erst um, wenn die App mit dem **iOS-27.1-SDK**
-  (Xcode 27.1) gebaut ist. Mit älterem SDK gibt es dafür einen Ersatz mit
-  derselben Anordnung (`SideRail` in `Views/RootView.swift`): Reiter und
-  Aktionen der Ansicht stehen rechts, wenn die Fläche niedrig ist (Querformat)
-  oder kurz und breit wie das Außendisplay. Er schaltet sich ab, sobald
-  `DTSDKName` 27.1 oder neuer meldet. Unter Mehr → Darstellung lässt sich die
-  Leiste auch fest auf „Rechts“ oder „Unten“ stellen.
-- Layout nur nach Fläche und Größenklasse, nie nach Gerätetyp: Ab 600 pt
-  Inhaltsbreite stehen Karten und Diagramme zweispaltig.
-- Auf-/Zuklappen und Drehen bauen nur die Ansicht neu. Verbindung, Auswahl und
-  Navigationspfade bleiben stehen.
+Was Apple vorgibt, und wie die App es umsetzt:
+
+- **Standard-Bausteine statt Eigenbau.** Reiter: `TabView` mit `Tab` und
+  `.tabViewStyle(.sidebarAdaptable)`. Navigation: `NavigationStack`; „Mehr“
+  ist eine `NavigationSplitView` mit `List(selection:)` – zugeklappt eine
+  Liste, die in den Bereich führt, aufgeklappt Liste und Bereich nebeneinander
+  (HIG: auf dem Innendisplay eine Ebene mehr zeigen). Aktionen stehen in
+  `.toolbar` an der `NavigationStack`, als `Label` mit Symbol und Titel in
+  einer `ToolbarItemGroup`; Schließen-Knöpfe mit `.cancellationAction`.
+  Blätter: `.sheet`, Bestätigungen: `.confirmationDialog`.
+- **Leisten an der Seite.** Zugeklappt und aufgeklappt im Querformat legt das
+  System Tab-Leiste, Toolbar und Navigation an den rechten Rand, aufgeklappt
+  im Hochformat bleiben sie waagerecht. Das macht das System selbst – aber
+  erst bei einem Build mit dem **iOS-27.1-SDK oder neuer** (aktuell Xcode 27.2).
+- **Größe frei änderbar.** Alle vier Ausrichtungen sind freigegeben, kein
+  `UIRequiresFullScreen` (TN3192). Layout nur nach Fläche und Größenklasse:
+  ab 540 pt Inhaltsbreite stehen Karten und Diagramme zweispaltig.
+- **Gleicher Zustand in jeder Pose.** Verbindung, Auswahl und Navigationspfade
+  leben außerhalb der Ansichten; Auf-/Zuklappen baut nur die Oberfläche neu.
 - Schaltbefehle bestätigt man mit Touch ID (iPhone Duo), Face ID oder
   Gerätecode; der Text richtet sich nach `LAContext.biometryType`.
 
-**Annahmen (von Apple nicht belegt):** die Punktgrößen 466 × 678 (außen) und
-669 × 951 (innen), abgeleitet aus den Pixelmaßen bei @3x; daraus die Schwelle
-„Seitenverhältnis unter 1,72“ für das Außendisplay. Einen iPhone-Duo-Simulator
-gibt es erst ab Xcode 27.1. Bis dahin zeigen die Debug-Startargumente
-`-DVHUB_DUO closed|closed-landscape|open` die App in diesen Flächen (auf einem
-iPad-Simulator starten). Nach dem Umstieg auf Xcode 27.1 offen: Falz über
-`reservedRegions(kind: .division)` berücksichtigen, `toolbarVerticalBehavior`
-prüfen.
+**Bewusste Abweichung, solange mit Xcode 27.0 gebaut wird:** Das iOS-27.0-SDK
+kennt die senkrechten Leisten nicht (`toolbarVerticalEdge`,
+`toolbarVerticalBehavior`, `ReservedRegion`, `ArrangementView` fehlen im SDK).
+Damit die Bedienelemente zugeklappt trotzdem rechts stehen, gibt es einen
+Ersatz mit derselben Anordnung (`SideRail` in `Views/RootView.swift`): Er
+blendet die Tab-Leiste aus und zeigt Reiter und Aktionen der Ansicht rechts.
+Die Regel (`BarPlacementRule` im Paket, getestet) greift zugeklappt und im
+Querformat, nie aufgeklappt hochkant. Der Ersatz schaltet sich von selbst ab,
+sobald `DTSDKName` 27.1 oder neuer meldet – dann gilt allein das System. Unter
+Mehr → Darstellung lässt sich die Lage auch fest wählen; dort steht auch die
+gemessene Fläche.
+
+Am Gerät gemessen (iPhone Duo, iOS 27.2.1, Build mit iOS-27.0-SDK): zugeklappt
+386 × 678 pt (das System behält rechts 80 pt für Statusleiste und Kamera),
+aufgeklappt quer 871 × 669 pt. Volle Flächen laut Gerät: 466 × 678 pt außen,
+669 × 951 pt innen (@3x).
+
+**Nach dem Umstieg auf Xcode 27.2 offen:** im Duo-Simulator (Device Hub)
+prüfen, dass der Ersatz aus ist und die Systemleisten stimmen; Falz über
+`reservedRegions(kind: .division)` bzw. `ArrangementView` für den Energiefluss;
+`visibilityPriority` für die Aktionen. Bis dahin zeigen die Debug-Startargumente
+`-DVHUB_DUO closed|closed-27.0|closed-landscape|open|open-landscape` die App in
+diesen Flächen (auf einem iPad-Simulator starten).
 
 ## Widgets
 

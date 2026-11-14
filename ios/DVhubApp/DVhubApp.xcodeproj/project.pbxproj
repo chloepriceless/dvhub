@@ -27,6 +27,7 @@
 		84E13E2E779647520305EE39 /* NavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83E59AD14D725021C77A6C2B /* NavigationTests.swift */; };
 		8B85DB65A16904E879A31C19 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FE10E70F51CB32DA22D7507 /* WidgetSnapshot.swift */; };
 		8F883119B3D261BBFE9A5DE3 /* SystemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56FC4DBCADF84E70A5F80AA /* SystemController.swift */; };
+		A0C292BD863AC82AF94E6E2A /* DVhubLink in Frameworks */ = {isa = PBXBuildFile; productRef = 2AD0FCAA6B45D0E5FE1C45A3 /* DVhubLink */; };
 		A231FD845FCF56AFFA243E92 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FE10E70F51CB32DA22D7507 /* WidgetSnapshot.swift */; };
 		A3C171711096CFF0BFF8BAD9 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7594ACFDDAEB82F2CEF6AC /* Models.swift */; };
 		B1CCB733D799109353CCCCB5 /* PairLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9FA19FB543D2093BB13EF32 /* PairLinkTests.swift */; };
@@ -124,6 +125,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				37555C87B5DCCB7ECC225849 /* DVhubLink in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C203905BF3E68B80BB8F8B5C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A0C292BD863AC82AF94E6E2A /* DVhubLink in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -302,6 +311,7 @@
 			buildConfigurationList = DDA1581F3CA92A7948AA8FD6 /* Build configuration list for PBXNativeTarget "DVhubWidgets" */;
 			buildPhases = (
 				FAE8D79B41955D25ADD7D729 /* Sources */,
+				C203905BF3E68B80BB8F8B5C /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -309,6 +319,7 @@
 			);
 			name = DVhubWidgets;
 			packageProductDependencies = (
+				2AD0FCAA6B45D0E5FE1C45A3 /* DVhubLink */,
 			);
 			productName = DVhubWidgets;
 			productReference = 2A5F593C4C1925961F2C5564 /* DVhubWidgets.appex */;
@@ -571,7 +582,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -697,7 +708,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -779,6 +790,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		2AD0FCAA6B45D0E5FE1C45A3 /* DVhubLink */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DVhubLink;
+		};
 		8F30040ED9C49179AD560377 /* DVhubLink */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = DVhubLink;

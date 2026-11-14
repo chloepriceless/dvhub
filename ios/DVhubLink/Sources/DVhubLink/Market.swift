@@ -1,5 +1,6 @@
 // Market.swift — öffentliche Daten von dvhub.online tolerant lesen:
-// Day-Ahead-Preise, Residuallast-Frühwarnung (Prognose, Bilanz) und Nachrichten.
+// Day-Ahead-Preise, Preisprognose der nächsten Tage (Residuallast-Frühwarnung)
+// und Nachrichten.
 // Schema: https://dvhub.online/openapi.json (Stand 13.11.2026). Die App ruft
 // diese Dienste direkt per HTTPS ab — nicht über die Box.
 //
@@ -160,24 +161,6 @@ public struct ResidualOutlook: Equatable, Sendable {
         public var ct: Double? { knownCt ?? band?.p50 }
     }
 
-    public struct DariusDay: Equatable, Sendable, Identifiable {
-        public let key: String
-        public let date: Date
-        /// guenstig | normal | erhoeht | hoch
-        public let ampel: String
-        public let peakGw: Double?
-        public let priceCt: Double?
-        public var id: String { key }
-
-        public var title: String {
-            switch ampel {
-            case "guenstig": return "günstig"
-            case "erhoeht": return "erhöht"
-            default: return ampel
-            }
-        }
-    }
-
     public struct Source: Equatable, Sendable, Identifiable {
         public let name: String
         public let url: String?
@@ -198,9 +181,6 @@ public struct ResidualOutlook: Equatable, Sendable {
     public var knownDays: [KnownDay] = []
     /// Stunden: erst die festen Tage, dann die Prognose — lückenlos sortiert.
     public var hours: [Hour] = []
-    public var dariusLabel: String?
-    public var dariusRule: String?
-    public var darius: [DariusDay] = []
     public var sources: [Source] = []
 
     /// Wie auf der Webseite: älter als 18 Stunden gilt als überholt.
@@ -221,6 +201,15 @@ public struct ResidualOutlook: Equatable, Sendable {
         let h = hours(on: key).filter { $0.ct != nil }
         let sorted = h.sorted { cheapest ? $0.ct! < $1.ct! : $0.ct! > $1.ct! }
         return Array(sorted.prefix(n)).sorted { $0.start < $1.start }
+    }
+
+    /// Ampel für einen Tag mit festem Börsenpreis: dieselben Schwellen wie
+    /// bei den Prognosetagen (20-%- und 80-%-Quantil der letzten 28 Tage).
+    public func classify(meanCt: Double) -> PriceClass? {
+        guard let d = days.first(where: { $0.p20Ct != nil && $0.p80Ct != nil }), let p20 = d.p20Ct, let p80 = d.p80Ct else { return nil }
+        if meanCt > p80 { return .expensive }
+        if meanCt < p20 { return .cheap }
+        return .normal
     }
 
     /// Nächster als teuer eingestufter Prognosetag (für die Frühwarnung).
@@ -281,13 +270,6 @@ public struct ResidualOutlook: Equatable, Sendable {
                             solarGw: h["solar_gw"]?.number, loadGw: h["load_gw"]?.number)
         }
         o.hours = hours.values.sorted { $0.start < $1.start }
-        let dar = v["explorativ"]?["darius"]
-        o.dariusLabel = dar?["label"]?.string
-        o.dariusRule = dar?["rule"]?.string
-        o.darius = (dar?["days"]?.array ?? []).compactMap { d in
-            guard let key = d["date"]?.string, let date = MarketTime.day(key), let ampel = d["ampel"]?.string else { return nil }
-            return DariusDay(key: key, date: date, ampel: ampel, peakGw: d["rl_peak_gw"]?.number, priceCt: ct(d["price_mean_eur_mwh"]))
-        }.sorted { $0.date < $1.date }
         o.sources = (v["sources"]?.array ?? []).compactMap { s in
             guard let name = s["name"]?.string else { return nil }
             return Source(name: name, url: s["url"]?.string, license: s["license"]?.string)
@@ -304,88 +286,6 @@ public func parseLooseISO(_ s: String?) -> Date? {
     guard let dot = s.firstIndex(of: ".") else { return nil }
     let tail = s[dot...].drop { $0 == "." || $0.isNumber }
     return parseISODate(String(s[..<dot]) + tail)
-}
-
-// MARK: - Bilanz der Frühwarnung (/v1/residual-load/score)
-
-public struct ResidualScore: Equatable, Sendable {
-    public struct Metrics: Equatable, Sendable {
-        public var maeCt: Double?
-        public var classAccuracy: Double?
-        public var expensiveRecall: Double?
-        public var storageCapture: Double?
-        public var bandCoverage: Double?
-
-        static func from(_ v: JSONValue?) -> Metrics {
-            Metrics(maeCt: v?["mae_eur_mwh"]?.number.map { $0 / 10 }, classAccuracy: v?["class_accuracy"]?.number,
-                    expensiveRecall: v?["expensive_recall"]?.number, storageCapture: v?["storage_capture"]?.number,
-                    bandCoverage: v?["band_coverage"]?.number)
-        }
-    }
-
-    public struct Lead: Equatable, Sendable, Identifiable {
-        public let leadDays: Int
-        /// Live gezählte Tage seit Start der Bilanz.
-        public let liveDays: Int
-        public let lowData: Bool
-        public let live: Metrics
-        public let backtest: Metrics
-        public var id: Int { leadDays }
-        /// Solange live zu wenige Tage vorliegen, zählt der Rückblick.
-        public var shown: Metrics { lowData ? backtest : live }
-    }
-
-    public struct Comparison: Equatable, Sendable, Identifiable {
-        public struct Row: Equatable, Sendable, Identifiable {
-            public let leadDays: Int
-            public let liveDays: Int
-            public let ours: Metrics
-            public let other: Metrics
-            public var id: Int { leadDays }
-        }
-        public let key: String
-        public let label: String
-        public let note: String?
-        public let url: String?
-        /// Nur zum Vergleich, nicht Teil der Prüfung (EpexPredictor, Darius-Nachbau).
-        public let explorative: Bool
-        public let rows: [Row]
-        public var id: String { key }
-        public var hasLiveData: Bool { rows.contains { $0.liveDays > 0 } }
-    }
-
-    public var since: String?
-    public var rule: String?
-    public var lowDataDays: Int?
-    public var backtestPeriod: String?
-    public var definitions: [String: String] = [:]
-    public var leads: [Lead] = []
-    public var comparisons: [Comparison] = []
-
-    public static func from(_ v: JSONValue) -> ResidualScore? {
-        guard v.object != nil, let leads = v["leads"]?.array else { return nil }
-        var s = ResidualScore()
-        s.since = v["since"]?.string
-        s.rule = v["rule"]?.string
-        s.lowDataDays = v["low_data_days"]?.number.map { Int($0) }
-        s.backtestPeriod = v["backtest"]?["period"]?.string
-        for (k, d) in v["definitions"]?.object ?? [:] { if let t = d.string { s.definitions[k] = t } }
-        s.leads = leads.compactMap { l in
-            guard let lead = l["lead_days"]?.number else { return nil }
-            return Lead(leadDays: Int(lead), liveDays: Int(l["n_days"]?.number ?? 0), lowData: l["low_data"]?.bool ?? true,
-                        live: .from(l), backtest: .from(l["backtest"]))
-        }.sorted { $0.leadDays < $1.leadDays }
-        s.comparisons = (v["comparisons"]?.object ?? [:]).compactMap { key, c in
-            guard let label = c["label"]?.string else { return nil }
-            let rows = (c["leads"]?.array ?? []).compactMap { l -> Comparison.Row? in
-                guard let lead = l["lead_days"]?.number else { return nil }
-                return .init(leadDays: Int(lead), liveDays: Int(l["n_days"]?.number ?? 0), ours: .from(l["ours"]), other: .from(l["other"] ?? l["eos"]))
-            }.sorted { $0.leadDays < $1.leadDays }
-            return Comparison(key: key, label: label, note: c["note"]?.string, url: c["url"]?.string,
-                              explorative: c["explorative"]?.bool ?? true, rows: rows)
-        }.sorted { ($0.explorative ? 1 : 0, $0.key) < ($1.explorative ? 1 : 0, $1.key) }
-        return s
-    }
 }
 
 // MARK: - Nachrichten (/api/news)

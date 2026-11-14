@@ -269,3 +269,60 @@ public struct ReconnectBackoff: Sendable {
         return afterFailure()
     }
 }
+
+// MARK: - Tag eines gespeicherten Stands (Widgets)
+
+/// Zu welchem Tag gehört ein Stand, gesehen vom Zeitpunkt `now`? Die Widgets
+/// zeichnen Einträge im Voraus (auch den zum Tageswechsel) — maßgeblich ist
+/// deshalb der Zeitpunkt des Eintrags, nie die Uhr beim Zeichnen.
+public enum SnapshotDay: Equatable, Sendable {
+    case today, yesterday, older
+
+    public static func of(_ at: Date, now: Date, calendar: Calendar = .current) -> SnapshotDay {
+        if calendar.isDate(at, inSameDayAs: now) { return .today }
+        if let y = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(at, inSameDayAs: y) { return .yesterday }
+        return .older
+    }
+
+    /// Wort vor den Tagessummen: „Heute verdient“, „Gestern verdient“ …
+    public var word: String {
+        switch self {
+        case .today: return "Heute"
+        case .yesterday: return "Gestern"
+        case .older: return "Zuletzt"
+        }
+    }
+}
+
+// MARK: - Lage der Leisten (iPhone Duo)
+
+/// Wann stehen Reiter und Aktionen in einer Leiste am rechten Rand statt unten?
+/// Nur für Builds, bei denen das System die Leisten nicht selbst umlegt
+/// (vor iOS-27.1-SDK). Maße in Punkten.
+public enum BarPlacementRule {
+    /// Ab dieser Breite gilt die Fläche als breit (Innendisplay, iPad).
+    public static let wideWidth: Double = 540
+
+    /// Am iPhone Duo abgelesen (14.11.2026, Build mit iOS-27.0-SDK, iOS 27.2.1):
+    /// zugeklappt 386 × 678 pt — das System behält rechts eine 80 pt breite
+    /// Spalte für Statusleiste und Kamera und meldet auch den Bildschirm so;
+    /// aufgeklappt quer 871 × 669 pt. Volle Flächen: 466 × 678 und 669 × 951.
+    public static func sideRail(windowWidth w: Double, windowHeight h: Double, screenWidth sw: Double = 0, screenHeight sh: Double = 0,
+                                verticalCompact: Bool) -> Bool {
+        guard w > 0, h > 0 else { return false }
+        // Querformat mit wenig Höhe (jedes iPhone quer, Außendisplay quer).
+        if verticalCompact { return true }
+        // Innendisplay quer (871 × 669): breit, aber niedrig — Leisten an die
+        // Seite, wie es das System ab dem iOS-27.1-SDK selbst macht. iPads sind höher.
+        if w > h { return h < 700 }
+        // Breite Hochformat-Fläche (aufgeklappt, iPad): Leisten waagerecht, Inhalt füllt.
+        guard w < wideWidth else { return false }
+        // Außendisplay im Hochformat: niedrig und dafür breit. Gewöhnliche iPhones
+        // sind höher (≥ 736 pt) oder schmaler (iPhone SE 375 × 667).
+        if h < 700 && w >= 380 { return true }
+        if h / w < 1.72 { return true }
+        // Der Bildschirm selbst ist kurz und breit, das Fenster nur ein Teil davon.
+        let short = min(sw, sh), long = max(sw, sh)
+        return short > 0 && short < wideWidth && long / short < 1.62
+    }
+}

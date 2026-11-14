@@ -82,7 +82,8 @@ struct PairView: View {
         .auroraList()
         .toolbar {
             if !onboarding {
-                ToolbarItem(placement: .cancellationAction) { Button("Schließen") { dismiss() } }
+                // Symbol und Titel: So kann das System den Knopf auch in eine senkrechte Leiste legen.
+                ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Schließen", systemImage: "xmark") } }
             }
         }
         .sheet(isPresented: $scanning) {

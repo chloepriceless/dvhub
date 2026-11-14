@@ -5,65 +5,67 @@ import SwiftUI
 import WidgetKit
 import DVhubLink
 
+/// Liste der Bereiche — die Seitenspalte der geteilten Ansicht. Eine
+/// System-Liste mit Auswahl: zugeklappt führt sie in den Bereich hinein,
+/// aufgeklappt steht der Bereich daneben.
 struct MoreView: View {
     @Environment(AppModel.self) private var model
-    @Binding var showPairing: Bool
+    @Binding var selection: MoreRoute?
 
     var body: some View {
-        AuroraPage { width in
+        List(selection: $selection) {
             if let c = model.selected {
-                GlassCard(tint: Brand.cyan) {
+                SwiftUI.Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Eyebrow(text: "Anlage", icon: "house.fill", tint: Brand.cyan)
-                        Text(c.credentials.boxName).font(.title2.weight(.bold)).foregroundStyle(Brand.text)
+                        Text(c.credentials.boxName).font(.title3.weight(.bold)).foregroundStyle(Brand.text)
                         ConnectionBadge(controller: c)
                     }
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 8, trailing: 4))
                 }
             }
-            let cols = Array(repeating: GridItem(.flexible(), spacing: 12), count: Layout.isWide(width) ? 3 : 2)
-            SectionTitle(text: "Anlage")
-            LazyVGrid(columns: cols, spacing: 12) {
-                MoreTile(route: .plan, title: "Fahrplan", text: "EOS-Plan und Zeitplan", icon: "calendar.day.timeline.left", tint: Brand.violet)
-                MoreTile(route: .integrations, title: "Integrationen", text: "Zustand der Anbindungen", icon: "point.3.connected.trianglepath.dotted", tint: Brand.cyan)
-                MoreTile(route: .system, title: "System", text: "Einstellungen ansehen", icon: "gearshape.2.fill", tint: Brand.blue)
+            SwiftUI.Section("Anlage") {
+                row(.plan, "Fahrplan", "EOS-Plan und Zeitplan", "calendar.day.timeline.left", Brand.violet)
+                row(.integrations, "Integrationen", "Zustand der Anbindungen", "point.3.connected.trianglepath.dotted", Brand.cyan)
+                row(.system, "System", "Einstellungen ansehen", "gearshape.2.fill", Brand.blue)
                 if model.selected?.canControl == true {
-                    MoreTile(route: .control, title: "Steuern", text: "Not-Halt", icon: "exclamationmark.octagon.fill", tint: Brand.red)
+                    row(.control, "Steuern", "Not-Halt", "exclamationmark.octagon.fill", Brand.red)
                 }
             }
-            SectionTitle(text: "App")
-            LazyVGrid(columns: cols, spacing: 12) {
-                MoreTile(route: .systems, title: "Anlagen", text: "\(model.systems.count) gekoppelt", icon: "qrcode.viewfinder", tint: Brand.green)
-                MoreTile(route: .appearance, title: "Darstellung", text: "Farben, Navigation, Widgets", icon: "paintpalette.fill", tint: Brand.pink)
-                MoreTile(route: .about, title: "Über", text: "Version, Datenschutz", icon: "info.circle.fill", tint: Brand.yellow)
+            SwiftUI.Section("App") {
+                row(.systems, "Anlagen", "\(model.systems.count) gekoppelt", "qrcode.viewfinder", Brand.green)
+                row(.appearance, "Darstellung", "Farben, Navigation, Widgets", "paintpalette.fill", Brand.pink)
+                row(.about, "Über", "Version, Datenschutz", "info.circle.fill", Brand.yellow)
             }
-            if let err = model.storageError { NoticeBanner(text: err, icon: "exclamationmark.triangle") }
+            if let err = model.storageError {
+                SwiftUI.Section { Label(err, systemImage: "exclamationmark.triangle").foregroundStyle(Brand.orange) }
+            }
         }
         .navigationTitle("Mehr")
+        .auroraList()
+    }
+
+    private func row(_ route: MoreRoute, _ title: String, _ text: String, _ icon: String, _ tint: Color) -> some View {
+        NavigationLink(value: route) {
+            Label {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.body.weight(.semibold))
+                    Text(text).font(.caption).foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: icon).foregroundStyle(tint)
+            }
+        }
+        .accessibilityIdentifier("more.\(route.rawValue)")
     }
 }
 
-private struct MoreTile: View {
-    let route: MoreRoute
-    let title: String
-    let text: String
-    let icon: String
-    let tint: Color
-
+/// Aufgeklappt, noch nichts gewählt: der Platz neben der Liste.
+struct MoreOverview: View {
     var body: some View {
-        NavigationLink(value: route) {
-            VStack(alignment: .leading, spacing: 8) {
-                Image(systemName: icon).font(.title2).foregroundStyle(tint)
-                    .frame(width: 44, height: 44)
-                    .background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                Text(title).font(.headline).foregroundStyle(Brand.text)
-                Text(text).font(.caption).foregroundStyle(Brand.text2).lineLimit(2).multilineTextAlignment(.leading)
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, minHeight: 124, alignment: .topLeading)
-            .background(CardBackground(tint: tint))
-        }
-        .buttonStyle(CardButtonStyle())
-        .accessibilityIdentifier("more.\(route.rawValue)")
+        ContentUnavailableView("Bereich wählen", systemImage: "sidebar.left",
+                               description: Text("Fahrplan, Integrationen, System und Einstellungen der App stehen links."))
+            .background(AuroraBackground())
     }
 }
 
@@ -120,6 +122,11 @@ struct AppearanceView: View {
                         .font(.caption).foregroundStyle(Brand.text2)
                     Text(chrome.railActive ? "Gerade aktiv: Seitenleiste rechts." : "Gerade aktiv: Leiste unten bzw. oben.")
                         .font(.caption2).foregroundStyle(Brand.dim)
+                    if !chrome.diagnostics.isEmpty {
+                        Text(chrome.diagnostics).font(.caption2.monospaced()).foregroundStyle(Brand.dim)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("layoutDiagnostics")
+                    }
                 }
             }
             WidgetInfoCard()

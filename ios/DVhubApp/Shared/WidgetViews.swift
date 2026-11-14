@@ -3,6 +3,7 @@
 
 import WidgetKit
 import SwiftUI
+import DVhubLink
 
 // MARK: - Gemeinsame Bausteine
 
@@ -21,14 +22,9 @@ private extension WidgetSnapshot {
     }
     var netPositive: Bool { (todayNetEur ?? 0) >= 0 }
     /// Die Tagessummen gehören zum Tag des Stands — nach Mitternacht nicht mehr
-    /// „heute“. `now` ist der Zeitpunkt des Timeline-Eintrags, nicht die Uhr beim
-    /// Zeichnen: Das System zeichnet Einträge im Voraus.
-    func isToday(_ now: Date) -> Bool { Calendar.current.isDate(at, inSameDayAs: now) }
-    func dayWord(_ now: Date) -> String {
-        if isToday(now) { return "Heute" }
-        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now) ?? now
-        return Calendar.current.isDate(at, inSameDayAs: yesterday) ? "Gestern" : "Zuletzt"
-    }
+    /// „heute“. `now` ist der Zeitpunkt des Timeline-Eintrags (SnapshotDay im Paket DVhubLink).
+    func isToday(_ now: Date) -> Bool { SnapshotDay.of(at, now: now) == .today }
+    func dayWord(_ now: Date) -> String { SnapshotDay.of(at, now: now).word }
     func standText(_ now: Date) -> String {
         isToday(now) ? Format.time(at) : at.formatted(Date.FormatStyle(date: .numeric, time: .shortened).locale(Format.de))
     }
@@ -218,8 +214,14 @@ struct StatusWidgetContent: View {
         .accessibilityElement(children: .combine)
     }
 
+    private func isTodayText(_ s: WidgetSnapshot) -> String {
+        let base = "\(Format.percent(s.soc)) · PV \(Format.power(s.pvW))"
+        return s.isToday(now) ? "\(base) · \(Format.euro(s.todayNetEur))" : "\(base) · \(s.dayWord(now).lowercased())"
+    }
+
     private func inline(_ s: WidgetSnapshot) -> some View {
-        Label("\(Format.percent(s.soc)) · PV \(Format.power(s.pvW)) · \(Format.euro(s.todayNetEur))", systemImage: "bolt.fill")
+        // Nach Mitternacht ist die Tagessumme von gestern — dann stattdessen sagen, von wann der Stand ist.
+        Label(isTodayText(s), systemImage: "bolt.fill")
     }
 }
 

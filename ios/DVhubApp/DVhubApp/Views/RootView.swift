@@ -41,7 +41,8 @@ enum AppTab: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-enum MoreRoute: String, Hashable {
+enum MoreRoute: String, Hashable, Identifiable {
+    var id: String { rawValue }
     case plan, integrations, system, control, systems, appearance, about
 }
 
@@ -90,19 +91,23 @@ final class Chrome {
         return major > 27 || (major == 27 && (parts.count > 1 ? parts[1] : 0) >= 1)
     }()
 
-    /// Seitenleiste statt Leiste unten? Nur nach Fläche und Größenklasse, nie
-    /// nach Gerätetyp (HIG): niedrige Höhe (Querformat) oder ein kurzes,
-    /// breites Hochformat wie das zugeklappte iPhone Duo (Annahme: rund
-    /// 466 × 678 pt, Seitenverhältnis 1,45 — gewöhnliche iPhones liegen bei ≥ 1,78).
-    static func wantsRail(size: CGSize, vertical: UserInterfaceSizeClass?, placement: Placement) -> Bool {
+    /// Fläche, Bildschirm und Größenklassen als Text — unter Mehr → Darstellung
+    /// ablesbar, um das Verhalten am echten Gerät nachzuvollziehen.
+    var diagnostics = ""
+
+    /// Seitenleiste statt Leiste unten? Zugeklappt (Außendisplay) und überall,
+    /// wo die Fläche niedrig ist (Querformat) — aufgeklappt hochkant nie: Dort
+    /// stehen die Leisten waagerecht, und der Inhalt füllt die Fläche. Nur nach
+    /// Fläche und Größenklasse, nie nach Gerätetyp (BarPlacementRule im Paket).
+    static func wantsRail(size: CGSize, screen: CGSize = .zero, vertical: UserInterfaceSizeClass?, placement: Placement) -> Bool {
         switch placement {
         case .side: return true
         case .bottom: return false
         case .auto:
             if systemPlacesBars { return false }
-            guard size.width > 0, size.height > 0 else { return false }
-            if vertical == .compact { return true }
-            return size.width < Layout.twoColumns && size.height / size.width < 1.72
+            // Die Regel selbst liegt im Paket DVhubLink (BarPlacementRule) und ist dort getestet.
+            return BarPlacementRule.sideRail(windowWidth: size.width, windowHeight: size.height, screenWidth: screen.width,
+                                             screenHeight: screen.height, verticalCompact: vertical == .compact)
         }
     }
 }
@@ -146,7 +151,10 @@ struct SideRail: View {
     let actions: [ScreenAction]
     let badges: [AppTab: Int]
     var compact = false
+    /// Schmales Fenster (Außendisplay mit Systemspalte, 386 pt): Leiste schlanker.
+    var narrow = false
     let reselect: (AppTab) -> Void
+    private var width: CGFloat { narrow ? 56 : 66 }
 
     var body: some View {
         VStack(spacing: compact ? 2 : 6) {
@@ -170,9 +178,9 @@ struct SideRail: View {
                             }
                         }
                         Text(t.title).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(tab == t ? Brand.cyan : Brand.dim)
-                            .lineLimit(1).minimumScaleFactor(0.6).frame(width: 60)
+                            .lineLimit(1).minimumScaleFactor(0.55).frame(width: width - 6)
                     }
-                    .frame(width: 60)
+                    .frame(width: width - 6)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -197,7 +205,7 @@ struct SideRail: View {
             }
         }
         .padding(.vertical, 10)
-        .frame(width: 66)
+        .frame(width: width)
         .frame(maxHeight: .infinity)
         .background(
             Rectangle().fill(.ultraThinMaterial)
@@ -220,12 +228,13 @@ struct RootView: View {
     @State private var chrome = Chrome()
     @State private var tab: AppTab = .dashboard
     @State private var dashboardPath: [DetailKind] = []
-    @State private var morePath: [MoreRoute] = []
+    @State private var moreRoute: MoreRoute?
     @State private var showPairing = false
     @State private var size: CGSize = .zero
+    @State private var screen: CGSize = .zero
 
     private var rail: Bool {
-        Chrome.wantsRail(size: size, vertical: vSize, placement: Chrome.Placement(rawValue: placementRaw) ?? .auto)
+        Chrome.wantsRail(size: size, screen: screen, vertical: vSize, placement: Chrome.Placement(rawValue: placementRaw) ?? .auto)
     }
 
     var body: some View {
@@ -238,8 +247,8 @@ struct RootView: View {
         }
         .background(GeometryReader { g in
             Color.clear
-                .onAppear { size = g.size }
-                .onChange(of: g.size) { _, s in size = s }
+                .onAppear { size = g.size; logGeometry(g) }
+                .onChange(of: g.size) { _, s in size = s; logGeometry(g) }
         }.ignoresSafeArea())
         .environment(chrome)
         .onChange(of: rail, initial: true) { _, r in chrome.railActive = r }
@@ -260,6 +269,21 @@ struct RootView: View {
         }
     }
 
+    /// Fläche und Bildschirm merken; als Diagnose ablegen (Mehr → Darstellung)
+    /// und im Debug-Build in die Konsole schreiben
+    /// (`xcrun devicectl device process launch --console …`).
+    private func logGeometry(_ g: GeometryProxy) {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let win = scene?.windows.first
+        if let b = scene?.screen.bounds.size { screen = b }
+        let sdk = Bundle.main.object(forInfoDictionaryKey: "DTSDKName") as? String ?? "?"
+        let text = "Fenster \(Int(g.size.width))×\(Int(g.size.height)) pt · Bildschirm \(Int(screen.width))×\(Int(screen.height)) pt · Breite \(win?.traitCollection.horizontalSizeClass == .regular ? "regular" : "compact"), Höhe \(vSize == .compact ? "compact" : "regular") · SDK \(sdk)"
+        chrome.diagnostics = text
+        #if DEBUG
+        print("DVHUB_GEOMETRY \(text) rail=\(rail)")
+        #endif
+    }
+
     /// Inhalt links, Seitenleiste rechts daneben (nicht darüber gelegt — die
     /// Navigationsleisten der Reiter enden an der Leiste).
     private var shell: some View {
@@ -267,10 +291,10 @@ struct RootView: View {
             tabs
             if rail {
                 SideRail(tab: $tab, actions: chrome.actions[tab.rawValue] ?? [], badges: [.news: news.unseenCount],
-                         compact: size.height < 520) { t in
+                         compact: size.height < 520, narrow: size.width < 420) { t in
                     // Gewählten Reiter erneut antippen: zurück zur ersten Ebene.
                     if t == .dashboard { dashboardPath = [] }
-                    if t == .more { morePath = [] }
+                    if t == .more { moreRoute = nil }
                 }
                 .transition(.move(edge: .trailing))
             }
@@ -279,53 +303,63 @@ struct RootView: View {
         .tint(Brand.cyan)
     }
 
+    /// Reiter als System-TabView. `.sidebarAdaptable`: Wo die Fläche breit ist
+    /// (aufgeklappt, iPad), bietet das System von sich aus die Leiste oben und
+    /// die ausklappbare Seitenleiste an; schmal bleibt es die Tab-Leiste.
     private var tabs: some View {
         TabView(selection: $tab) {
-            NavigationStack(path: $dashboardPath) {
-                dashboardRoot
-                    .navigationDestination(for: DetailKind.self) { kind in
-                        if let c = model.selected {
-                            DetailView(kind: kind, controller: c) { tab = .history }
-                                .id(c.credentials.boxId)
+            Tab(AppTab.dashboard.title, systemImage: AppTab.dashboard.icon, value: AppTab.dashboard) {
+                NavigationStack(path: $dashboardPath) {
+                    dashboardRoot
+                        .navigationDestination(for: DetailKind.self) { kind in
+                            if let c = model.selected {
+                                DetailView(kind: kind, controller: c) { tab = .history }
+                                    .id(c.credentials.boxId)
+                            }
+                        }
+                }
+                .tabBarHidden(rail)
+            }
+            Tab(AppTab.market.title, systemImage: AppTab.market.icon, value: AppTab.market) {
+                NavigationStack { MarketView(controller: model.selected) }
+                    .tabBarHidden(rail)
+            }
+            Tab(AppTab.history.title, systemImage: AppTab.history.icon, value: AppTab.history) {
+                NavigationStack {
+                    if let c = model.selected {
+                        // Je Anlage eigene Ansichts-Identität: Werte der vorigen
+                        // Anlage dürfen nach dem Wechsel nicht stehen bleiben.
+                        HistoryView(controller: c).id(c.credentials.boxId)
+                    } else {
+                        needsSystem("Historie")
+                    }
+                }
+                .tabBarHidden(rail)
+            }
+            Tab(AppTab.news.title, systemImage: AppTab.news.icon, value: AppTab.news) {
+                NavigationStack { NewsView() }
+                    .tabBarHidden(rail)
+            }
+            .badge(news.unseenCount)
+            Tab(AppTab.more.title, systemImage: AppTab.more.icon, value: AppTab.more) {
+                // Geteilte Ansicht des Systems: zugeklappt eine Liste, die in den
+                // Bereich hineinführt; aufgeklappt Liste und Bereich nebeneinander
+                // (HIG: auf dem Innendisplay eine Ebene mehr zeigen).
+                NavigationSplitView {
+                    MoreView(selection: $moreRoute)
+                } detail: {
+                    NavigationStack {
+                        if let route = moreRoute {
+                            moreDestination(route)
+                        } else {
+                            MoreOverview()
                         }
                     }
-            }
-            .tabBarHidden(rail)
-            .tabItem { Label(AppTab.dashboard.title, systemImage: AppTab.dashboard.icon) }
-            .tag(AppTab.dashboard)
-
-            NavigationStack { MarketView(controller: model.selected) }
-                .tabBarHidden(rail)
-                .tabItem { Label(AppTab.market.title, systemImage: AppTab.market.icon) }
-                .tag(AppTab.market)
-
-            NavigationStack {
-                if let c = model.selected {
-                    // Je Anlage eigene Ansichts-Identität: Werte der vorigen
-                    // Anlage dürfen nach dem Wechsel nicht stehen bleiben.
-                    HistoryView(controller: c).id(c.credentials.boxId)
-                } else {
-                    needsSystem("Historie")
                 }
-            }
-            .tabBarHidden(rail)
-            .tabItem { Label(AppTab.history.title, systemImage: AppTab.history.icon) }
-            .tag(AppTab.history)
-
-            NavigationStack { NewsView() }
                 .tabBarHidden(rail)
-                .tabItem { Label(AppTab.news.title, systemImage: AppTab.news.icon) }
-                .badge(news.unseenCount)
-                .tag(AppTab.news)
-
-            NavigationStack(path: $morePath) {
-                MoreView(showPairing: $showPairing)
-                    .navigationDestination(for: MoreRoute.self) { moreDestination($0) }
             }
-            .tabBarHidden(rail)
-            .tabItem { Label(AppTab.more.title, systemImage: AppTab.more.icon) }
-            .tag(AppTab.more)
         }
+        .tabViewStyle(.sidebarAdaptable)
     }
 
     @ViewBuilder
@@ -406,7 +440,7 @@ struct RootView: View {
                 tab = .dashboard
             } else if let route = MoreRoute(rawValue: t) {
                 tab = .more
-                morePath = [route]
+                moreRoute = route
             }
         }
         if let o = d.string(forKey: "DVHUB_OPEN").flatMap(DetailKind.init(rawValue:)) {
@@ -434,11 +468,14 @@ private extension View {
 /// zeigt die App in der Fläche des Außen- bzw. Innendisplays.
 ///   -DVHUB_DUO closed   466 × 678 pt (Annahme, aus 1398 × 2034 px bei @3x)
 ///   -DVHUB_DUO open     669 × 951 pt (Annahme, aus 2007 × 2853 px bei @3x)
+///   -DVHUB_DUO closed-27.0 | open-landscape   am Gerät gemessene Flächen (iOS-27.0-SDK)
 struct DuoPreviewFrame<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
         switch UserDefaults.standard.string(forKey: "DVHUB_DUO") {
+        case "closed-27.0": framed(CGSize(width: 386, height: 678), .compact, "iPhone Duo zugeklappt, Build mit iOS-27.0-SDK · 386 × 678 pt (am Gerät gemessen)")
+        case "open-landscape": framed(CGSize(width: 871, height: 669), .regular, "iPhone Duo aufgeklappt quer · 871 × 669 pt (am Gerät gemessen)")
         case "closed": framed(CGSize(width: 466, height: 678), .compact, "iPhone Duo zugeklappt · 466 × 678 pt (Nachbildung)")
         case "closed-landscape": framed(CGSize(width: 678, height: 466), .compact, "iPhone Duo zugeklappt quer · 678 × 466 pt (Nachbildung)", vertical: .compact)
         case "open": framed(CGSize(width: 669, height: 951), .regular, "iPhone Duo aufgeklappt · 669 × 951 pt (Nachbildung)")

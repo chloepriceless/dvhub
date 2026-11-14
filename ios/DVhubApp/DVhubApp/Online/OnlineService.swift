@@ -73,7 +73,6 @@ final class MarketStore {
     private(set) var tomorrowStatus: String?
     private(set) var outlook: ResidualOutlook?
     private(set) var outlookAt: Date?
-    private(set) var score: ResidualScore?
     private(set) var loading = false
     private(set) var priceError: String?
     private(set) var outlookError: String?
@@ -81,7 +80,6 @@ final class MarketStore {
     init() {
         if let (v, at) = Online.cached("prices") { prices = OnlinePrices.parse(v); pricesAt = at }
         if let (v, at) = Online.cached("outlook") { outlook = ResidualOutlook.from(v); outlookAt = at }
-        if let (v, _) = Online.cached("score") { score = ResidualScore.from(v) }
     }
 
     func prices(on day: Date) -> [PricePoint] { OnlinePrices.day(prices, day) }
@@ -139,10 +137,6 @@ final class MarketStore {
             Online.store("outlook", v)
         } catch {
             outlookError = Online.message(error)
-        }
-        if let v = try? await Online.get("v1/residual-load/score"), let s = ResidualScore.from(v) {
-            score = s
-            Online.store("score", v)
         }
     }
 }

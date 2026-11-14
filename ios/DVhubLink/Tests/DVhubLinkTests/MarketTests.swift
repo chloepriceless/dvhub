@@ -1,5 +1,5 @@
 // MarketTests.swift — Antwortformen von dvhub.online (abgerufen 13.11.2026,
-// gekürzt): Preise, Residuallast-Frühwarnung, Bilanz, Nachrichten.
+// gekürzt): Preise, Preisprognose (Residuallast-Frühwarnung), Nachrichten.
 
 import XCTest
 @testable import DVhubLink
@@ -113,8 +113,10 @@ final class MarketTests: XCTestCase {
         XCTAssertEqual(k.meanCt, 19.772, accuracy: 1e-9)
         XCTAssertEqual(k.earlierClass, .cheap)
         XCTAssertEqual(k.earlierP50Ct ?? 0, 14.78, accuracy: 1e-9)
-        XCTAssertEqual(o.darius.map(\.title), ["günstig", "erhöht"])
-        XCTAssertEqual(o.darius[1].priceCt ?? 0, 26.018, accuracy: 1e-9)
+        // Ampel für feste Tage nach denselben Schwellen (p20 15,776 / p80 26,51 ct).
+        XCTAssertEqual(o.classify(meanCt: 19.8), .normal)
+        XCTAssertEqual(o.classify(meanCt: 12), .cheap)
+        XCTAssertEqual(o.classify(meanCt: 27), .expensive)
         XCTAssertEqual(o.sources.first?.license, "CC BY 4.0")
     }
 
@@ -127,34 +129,6 @@ final class MarketTests: XCTestCase {
         XCTAssertNil(o?.days.first?.priceClass)
         XCTAssertEqual(o?.days.first?.band.p10, 10)
         XCTAssertTrue(o?.isStale() ?? false) // ohne Ausgabezeit: überholt
-    }
-
-    func testScoreUsesBacktestWhileLiveDataIsThin() throws {
-        let s = try XCTUnwrap(ResidualScore.from(try json("""
-        {"since":"2026-11-14","low_data_days":14,"rule":"Je Ausgabetag …","definitions":{"mae_eur_mwh":"mittlerer Betrag"},
-         "backtest":{"period":"Prüfjahr Nov. 2025 – Nov. 2026"},
-         "leads":[
-          {"lead_days":2,"n_days":20,"mae_eur_mwh":25,"class_accuracy":0.7,"expensive_recall":0.6,"storage_capture":0.95,"band_coverage":0.81,"low_data":false,
-           "backtest":{"mae_eur_mwh":20,"class_accuracy":0.711,"expensive_recall":0.636,"storage_capture":0.961,"band_coverage":0.801}},
-          {"lead_days":1,"n_days":0,"mae_eur_mwh":null,"low_data":true,
-           "backtest":{"mae_eur_mwh":18.2,"class_accuracy":0.743,"expensive_recall":0.721,"storage_capture":0.966,"band_coverage":0.795}}],
-         "comparisons":{
-          "epex":{"label":"EpexPredictor (b3nn0)","explorative":true,"note":"Explorativ: nur zum Vergleich","url":"https://github.com/b3nn0/EpexPredictor",
-            "leads":[{"lead_days":1,"n_days":3,"ours":{"mae_eur_mwh":18},"other":{"mae_eur_mwh":21}}]},
-          "eos_hw":{"label":"EOS-eigene Prognose (Holt-Winters)","explorative":false,
-            "leads":[{"lead_days":1,"n_days":0,"ours":{"mae_eur_mwh":null},"other":{"mae_eur_mwh":null}}]}}}
-        """)))
-        XCTAssertEqual(s.leads.map(\.leadDays), [1, 2])
-        XCTAssertEqual(s.leads[0].shown.maeCt ?? 0, 1.82, accuracy: 1e-9) // Rückblick
-        XCTAssertEqual(s.leads[1].shown.maeCt ?? 0, 2.5, accuracy: 1e-9)  // live
-        XCTAssertEqual(s.leads[1].shown.bandCoverage, 0.81)
-        // Geprüfte Vergleiche zuerst, explorative danach und als solche markiert.
-        XCTAssertEqual(s.comparisons.map(\.key), ["eos_hw", "epex"])
-        XCTAssertTrue(s.comparisons[1].explorative)
-        XCTAssertTrue(s.comparisons[1].hasLiveData)
-        XCTAssertFalse(s.comparisons[0].hasLiveData)
-        XCTAssertEqual(s.comparisons[1].rows[0].other.maeCt ?? 0, 2.1, accuracy: 1e-9)
-        XCTAssertNil(ResidualScore.from(["x": 1]))
     }
 
     func testNewsCleansTextAndDropsUnsafeLinks() throws {

@@ -2,6 +2,7 @@
 // Monospace-Versalien, große runde Ziffern, Pillen. Farben: Shared/Brand.swift.
 
 import SwiftUI
+import DVhubLink
 
 // MARK: Karte
 
@@ -247,9 +248,10 @@ struct AuroraPage<Content: View>: View {
 }
 
 enum Layout {
-    /// Ab dieser Inhaltsbreite stehen zwei Spalten nebeneinander
-    /// (iPhone Duo aufgeklappt, iPad; nicht: iPhone quer mit Seitenleiste).
-    static let twoColumns: CGFloat = 600
+    /// Ab dieser Inhaltsbreite stehen zwei Spalten nebeneinander: iPhone Duo
+    /// aufgeklappt (669 pt, auch wenn ein älteres SDK rechts eine Spalte abzieht)
+    /// und iPad. Gewöhnliche iPhones (≤ 440 pt) und das Außendisplay bleiben einspaltig.
+    static let twoColumns = CGFloat(BarPlacementRule.wideWidth)
     static func isWide(_ w: CGFloat) -> Bool { w >= twoColumns }
 }
 
