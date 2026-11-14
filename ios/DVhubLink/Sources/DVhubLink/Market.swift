@@ -383,7 +383,8 @@ public struct MarketDay: Identifiable, Equatable, Sendable {
             d.p20Ct = t?.p20
             d.p80Ct = t?.p80
             d.position = d.meanCt.flatMap { outlook?.position(meanCt: $0, day: d.forecast) }
-            d.priceClass = d.forecast?.priceClass ?? d.position.map(PriceClass.init(position:))
+            // Prognosetag: nur die Einstufung der Schnittstelle (fehlt sie, bleibt die Ampel aus).
+            d.priceClass = d.forecast != nil ? d.forecast?.priceClass : d.position.map(PriceClass.init(position:))
             return d
         }
     }

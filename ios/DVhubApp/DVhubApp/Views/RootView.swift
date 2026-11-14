@@ -111,7 +111,8 @@ final class Chrome {
     /// Auswahl in Historie und Markt. Sie überdauert das Auf- und Zuklappen:
     /// Der Wechsel zwischen Reitern und Seitenleiste baut die Ansichten neu auf.
     var historyPeriod: HistoryPeriod = .day
-    var historyDate = Date()
+    /// nil = heute — ein Datum würde über Nacht veralten (Chrome lebt so lange wie die App).
+    var historyDate: Date?
     var historyMetric: HistoryView.Metric = .pv
     var marketDay: String?
 
@@ -292,6 +293,8 @@ struct RootView: View {
         }.ignoresSafeArea())
         .environment(chrome)
         .onChange(of: rail, initial: true) { _, r in chrome.railActive = r }
+        // Nachrichten verlassen (Reiter oder Seitenleiste): Gesehenes gilt als gesehen.
+        .onChange(of: tab) { old, _ in if old == .news { news.markSeen() } }
         // Haptik des Systems: leichter Anschlag beim Auslösen einer Aktion
         // (Aktualisieren …), Erfolg bzw. Fehler am Ende einer Kopplung.
         .sensoryFeedback(.impact(weight: .light), trigger: chrome.actionTaps)

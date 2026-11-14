@@ -163,7 +163,6 @@ final class MarketTests: XCTestCase {
         XCTAssertEqual(withPrices[0].meanCt ?? 0, 1.5, accuracy: 1e-9)
     }
 
-    /// Liefert die Prognose-Antwort Viertelstunden, überlappen die Abschnitte nicht.
     /// Heute und morgen stuft die Schnittstelle nicht ein (die Prognose beginnt
     /// danach). Die Ampel folgt dann derselben Regel aus den Börsenpreisen;
     /// Prognosetage behalten die Einstufung der Schnittstelle.
@@ -173,7 +172,8 @@ final class MarketTests: XCTestCase {
         {"days":[
           {"date":"2026-11-16","lead_days":1,"price_eur_mwh":{"p10":125.3,"p50":160.6,"p90":202.7},"classification":{"p20":151.21,"p80":265.1,"class":"normal"}},
           {"date":"2026-11-17","lead_days":2,"price_eur_mwh":{"p10":175.6,"p50":211.3,"p90":257.2},"classification":{"p20":151.21,"p80":265.1,"class":"normal"}},
-          {"date":"2026-11-18","lead_days":3,"price_eur_mwh":{"p10":250,"p50":262,"p90":290},"classification":{"p20":151.21,"p80":265.1,"class":"teuer"}}]}
+          {"date":"2026-11-18","lead_days":3,"price_eur_mwh":{"p10":250,"p50":262,"p90":290},"classification":{"p20":151.21,"p80":265.1,"class":"teuer"}},
+          {"date":"2026-11-19","lead_days":4,"price_eur_mwh":{"p10":250,"p50":280,"p90":290},"classification":{"p20":151.21,"p80":265.1}}]}
         """)))
         let today = try XCTUnwrap(MarketTime.day("2026-11-14"))
         let tomorrow = try XCTUnwrap(MarketTime.day("2026-11-15"))
@@ -182,7 +182,7 @@ final class MarketTests: XCTestCase {
         }
         var prices: [Date: [PricePoint]] = [today: flat(today, 19.772), tomorrow: flat(tomorrow, 13.97)]
         var days = MarketDay.build(today: today, tomorrow: tomorrow, prices: { prices[$0] ?? [] }, outlook: o)
-        XCTAssertEqual(days.map(\.key), ["2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17", "2026-11-18"])
+        XCTAssertEqual(days.map(\.key), ["2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19"])
         // Heute 19,8 ct: im üblichen Bereich → normal, Lage 41 %.
         XCTAssertEqual(days[0].priceClass, .normal)
         XCTAssertTrue(days[0].classFromExchange)
@@ -202,6 +202,10 @@ final class MarketTests: XCTestCase {
         // Prognosetag: die Einstufung der Schnittstelle gilt, auch wenn die Lage (97 %) noch im Bereich liegt.
         XCTAssertEqual(days[4].priceClass, .expensive)
         XCTAssertEqual(days[4].zone, .high)
+        // Prognosetag ohne Einstufung der Schnittstelle: keine selbst errechnete Ampel, nur die Lage.
+        XCTAssertNil(days[5].priceClass)
+        XCTAssertFalse(days[5].classFromExchange)
+        XCTAssertEqual(days[5].zone, .above)
 
         // Über P80 (26,51 ct) → teuer; knapp über P20 normal (die Schwelle selbst: testPriceBandZones).
         prices[today] = flat(today, 27)
@@ -233,6 +237,7 @@ final class MarketTests: XCTestCase {
         XCTAssertEqual(PriceClass(position: 1.001), .expensive)
     }
 
+    /// Liefert die Prognose-Antwort Viertelstunden, überlappen die Abschnitte nicht.
     func testFallbackSlotsFollowTimestampSpacing() throws {
         let t0 = try XCTUnwrap(parseISODate("2026-11-14T00:00:00Z"))
         func hour(_ i: Int) -> ResidualOutlook.Hour {

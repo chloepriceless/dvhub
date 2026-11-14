@@ -67,8 +67,6 @@ struct NewsView: View {
         ])
         .refreshable { await news.refresh(force: true) }
         .task { await news.refresh() }
-        // Verlassen der Liste – nicht, wenn nur die Vorschau einer Meldung darüber liegt.
-        .onDisappear { if reading == nil { news.markSeen() } }
         .sheet(item: Binding(get: { wide ? nil : reading }, set: { reading = $0 })) { item in
             NavigationStack { ArticleView(item: item, inSheet: true) }
         }

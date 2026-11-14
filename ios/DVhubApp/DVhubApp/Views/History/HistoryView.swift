@@ -26,7 +26,7 @@ struct HistoryView: View {
     init(controller: SystemController, chrome: Chrome) {
         self.controller = controller
         _period = State(initialValue: chrome.historyPeriod)
-        _date = State(initialValue: chrome.historyDate)
+        _date = State(initialValue: chrome.historyDate ?? Date())
         _metric = State(initialValue: chrome.historyMetric)
     }
 
@@ -71,7 +71,7 @@ struct HistoryView: View {
         .refreshable { await load(force: true) }
         .task(id: key) { await load(force: false) }
         .onChange(of: period) { _, p in chrome.historyPeriod = p }
-        .onChange(of: date) { _, d in chrome.historyDate = d }
+        .onChange(of: date) { _, d in chrome.historyDate = Calendar.current.isDateInToday(d) ? nil : d }
         .onChange(of: metric) { _, m in chrome.historyMetric = m }
         #if DEBUG
         // Nur für Bildschirmfotos: -DVHUB_HISTORY week|month|year
