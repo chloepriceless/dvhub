@@ -708,7 +708,9 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     if (st.hb.key === st.endpointKey && st.hb.supported != null) return st.hb.supported;
     let supported;
     try {
-      const regs = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: HEARTBEAT_ADDR, quantity: 1 });
+      // Feld #3: 13080 IMMER mit Menge 2 lesen — mit Menge 1 liefert der WR einen falschen Festwert (am
+      // SH10RT-20: 600), erst ab Menge 2 den echten Wert (zweites Wort 0xFFFF). Wert = regs[0].
+      const regs = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: HEARTBEAT_ADDR, quantity: 2 });
       supported = Array.isArray(regs) && regs.length >= 1 && (Number(regs[0]) & 0xffff) !== 0xffff;
     } catch (e) {
       if (!/^modbus exception (1|2)\b/.test(String(e?.message))) throw e;
@@ -809,13 +811,18 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   // scheitern (neutralizeHeartbeatFailure).
   async function applyHeartbeat(conf, heartbeatS, opt, { writeFc = null, acceptDeviceS = 0 } = {}) {
     const readHb = async () => {
-      const hb = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: HEARTBEAT_ADDR, quantity: 1 });
+      // Feld #3: 13080 mit Menge 2 lesen (Menge 1 = falscher Festwert); Wert = regs[0], zweites Wort 0xFFFF.
+      const hb = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: HEARTBEAT_ADDR, quantity: 2 });
       return Array.isArray(hb) ? (Number(hb[0]) & 0xffff) : NaN;
     };
     const tryFc = async (fc) => {
       await writeReg(conf, HEARTBEAT_ADDR, heartbeatS, { ...opt, fc });
       const hbRead = await readHb();
-      return { ok: hbRead === heartbeatS, hbRead, fc };
+      // Übernommen = der Wechselrichter zählt ab unserem Wert herunter: direkt nach dem Schreiben liegt der
+      // Rücklesewert in [Soll−3, Soll] (der Countdown tickt schon). 0/65535 (NA) oder weit darunter = NICHT
+      // übernommen — dann scheitert der Herzschlag sicher (Feld #1/#2/#3).
+      const ok = Number.isFinite(hbRead) && hbRead <= heartbeatS && hbRead >= heartbeatS - 3;
+      return { ok, hbRead, fc };
     };
     const order = writeFc ? [writeFc]
       : (st.hb.workingFc ? [st.hb.workingFc, st.hb.workingFc === 6 ? 16 : 6] : [6, 16]);

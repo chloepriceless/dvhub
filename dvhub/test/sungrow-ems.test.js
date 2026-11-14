@@ -405,6 +405,41 @@ test('External EMS: Leistung → Befehl → Modus 3 → Herzschlag (nach Moduswe
   assert.equal(r.state.ctrl.sungrowEms.ownMode, EMS_MODE.EXTERNAL);
 });
 
+test('Herzschlag 13080 (Feld #3): Menge 1 liefert Festwert 600, erst Menge 2 den echten Countdown; External EMS hält > 60 s', async () => {
+  const r = rig({ controlMode: 'external', heartbeatTimeoutS: 30 });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  // Der Aktuator liest 13080 nur mit Menge 2 (sonst käme der falsche Festwert 600, und der Herzschlag-
+  // Vergleich schlüge immer fehl). Jede 13080-Lesung geht mit Menge ≥ 2 raus.
+  for (const rd of r.t.reads.filter((x) => x.fc === 3 && x.address === HB)) {
+    assert.ok(rd.quantity >= 2, `13080 mit Menge ${rd.quantity} gelesen — muss ≥ 2 sein (Feld #3)`);
+  }
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.EXTERNAL, 'Herzschlag übernommen → External EMS');
+  // Über 60 s (12 Takte à 5 s) bleibt der WR in Modus 3, der Herzschlag wird je Takt neu geschrieben.
+  const steady = { gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 };
+  let hbWrites = 0;
+  for (let i = 0; i < 13; i += 1) {
+    r.advance(5000); r.telemetry(steady);
+    const before = r.t.writes.length;
+    await r.ems.tick();
+    if (r.t.writes.slice(before).some((w) => w.address === HB)) hbWrites += 1;
+    assert.equal(r.image.holding.get(MODE), EMS_MODE.EXTERNAL, `Takt ${i}: hält External EMS`);
+  }
+  assert.ok(hbWrites >= 6, `mindestens 6 Herzschläge über 65 s, waren ${hbWrites}`);
+});
+
+test('Herzschlag 13080: Rücklese-Toleranz — Ist in [Soll−3, Soll] akzeptiert, darunter (Countdown zu weit) = nicht übernommen', async () => {
+  // Der WR zählt sofort herunter: direkt nach dem Schreiben liest man etwas unter dem Soll. 2 s weniger ist ok.
+  const ok = rig({ controlMode: 'external', heartbeatTimeoutS: 30, mockOpts: { hbReadDelta: 2 } });
+  assert.equal((await ok.ems.applySetpoint(-5000, 'rule:abend')).ok, true);
+  assert.equal(ok.image.holding.get(MODE), EMS_MODE.EXTERNAL, 'Soll−2 noch in Toleranz → External EMS');
+  // Fällt der Rücklesewert zu weit ab (Soll−5), gilt der Herzschlag als nicht übernommen → sofort sicher Self.
+  const bad = rig({ controlMode: 'external', heartbeatTimeoutS: 30, mockOpts: { hbReadDelta: 5 } });
+  const res = await bad.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(res.ok, false);
+  assert.equal(bad.image.holding.get(MODE), EMS_MODE.SELF, 'Herzschlag nicht übernommen → Self-consumption');
+  assert.ok(bad.logs.some((l) => l.event === 'sungrow_ems_heartbeat_unsupported'));
+});
+
 test('External EMS: Herzschlag in jedem Takt, auch wenn sich sonst nichts ändert; nie im Self-consumption', async () => {
   const r = rig({ controlMode: 'external' });
   await r.ems.applySetpoint(-5000, 'rule:abend');
@@ -880,10 +915,10 @@ test('Modbus TCP: Poll liest nur FC 4 an Doku−1-Adressen; Sollwert (External E
     // Standard External EMS (Punkt 1): Herzschlag-Register prüfen, Zustand lesen, Leistung → Befehl → Modus 3 →
     // Herzschlag 30 s (NACH dem Moduswechsel, per FC 06), Herzschlag zurücklesen, dann Block zurücklesen.
     assert.deepEqual(frames.map((f) => [f.fc, f.address, f.arg]), [
-      [3, 13079, 1],
+      [3, 13079, 2],
       [3, 13049, 3],
       [6, 13051, 310], [6, 13050, 0xaa], [6, 13049, 3], [6, 13079, 30],
-      [3, 13079, 1],
+      [3, 13079, 2],
       [3, 13049, 3]
     ]);
     assert.deepEqual([image.holding.get(13049), image.holding.get(13050), image.holding.get(13051), image.holding.get(13079)], [3, 0xaa, 310, 30]);
