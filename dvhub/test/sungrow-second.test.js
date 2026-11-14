@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 
 import {
   createSungrowEms, resolveSecondInverter, secondInverterTelemetry, wire, EMS_CMD, EMS_MODE,
-  sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor, sungrowReserveWh, sungrowHeadroomWh, splitSungrowPower
+  sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor, sungrowReserveWh, sungrowHeadroomWh, splitSungrowPower,
+  splitStrategyShares, SPLIT_STRATEGIES
 } from '../services/inverter/sungrow.js';
 import { createSungrowSecond } from '../services/inverter/sungrow-second.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
@@ -191,7 +192,7 @@ test('sungrowSecondView: ohne Konfiguration null', () => {
 test('sungrowSecondView: online → Werte, OHNE host/LAN-IP; offline → Werte null, online:false', () => {
   const cfg = { sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true } } };
   const online = sungrowSecondView({ sungrowSecond: { online: true, host: '192.168.68.83', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600 } }, cfg);
-  assert.deepEqual(online, { online: true, aggregate: true, control: 'self-only', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, runningState: null, runningStateText: null });
+  assert.deepEqual(online, { online: true, aggregate: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, runningState: null, runningStateText: null });
   // Keine LAN-IP / kein host in der Statusausgabe.
   assert.ok(!('host' in online));
   const off = sungrowSecondView({ sungrowSecond: { online: false, host: '192.168.68.83', socPct: 61 } }, cfg);
@@ -780,4 +781,79 @@ test('3c: >3 Rückfälle/min → DVhub steuert vorerst nicht (Self, Warnung)', a
   const res = await r.ems.applySetpoint(1500, 'api_manual_write');
   assert.equal(res.error, 'device_fallback_rate');
   assert.ok(!r.mock.writes.some((w) => w.address === MODEA && w.value === EMS_MODE.EXTERNAL), 'kein Wiedereintritt in der Abkühlung');
+});
+
+// --- Aufteilungs-Strategien (Punkt 1, splitStrategyShares, rein) -----------------
+test('Strategie soc-balance (Standard): Entladen → mehr nutzbare Reserve bekommt mehr', () => {
+  // Master SoC 80 %, Slave 20 %, gleiche Kapazität/Grenze → Master (mehr Reserve) bekommt mehr.
+  const s = splitStrategyShares('soc-balance', {
+    powerW: 4000, charge: false, masterMax: 5000, slaveMax: 5000,
+    masterSoc: 80, slaveSoc: 20, masterCapacityWh: 5000, slaveCapacityWh: 5000, floorSocPct: 5, minPowerW: 50,
+  });
+  assert.equal(s.masterW + s.slaveW, 4000);
+  assert.ok(s.masterW > s.slaveW, `master ${s.masterW} > slave ${s.slaveW}`);
+  assert.equal(s.slaveUncommanded, false);
+});
+
+test('Strategie master-only: Slave nicht gesteuert (Modus 0), Master bekommt alles (an Grenze)', () => {
+  const s = splitStrategyShares('master-only', { powerW: 4000, charge: true, masterMax: 3000, slaveMax: 5000, minPowerW: 50 });
+  assert.deepEqual([s.masterW, s.slaveW, s.slaveUncommanded], [3000, 0, true]);
+});
+
+test('Strategie ratio: fester Master-Anteil', () => {
+  const s = splitStrategyShares('ratio', { powerW: 4000, charge: true, masterMax: 5000, slaveMax: 5000, ratioMasterPct: 70, minPowerW: 50 });
+  assert.deepEqual([s.masterW, s.slaveW], [2800, 1200]);
+});
+
+test('Strategie by-capacity: im Verhältnis der Akku-Kapazitäten', () => {
+  const s = splitStrategyShares('by-capacity', { powerW: 3000, charge: true, masterMax: 9000, slaveMax: 9000, masterCapacityWh: 9600, slaveCapacityWh: 9690, maxSocPct: 100, masterSoc: 50, slaveSoc: 50, minPowerW: 50 });
+  assert.equal(s.masterW + s.slaveW, 3000);
+  assert.ok(Math.abs(s.masterW - 1493) <= 1, `master ~1493: ${s.masterW}`); // 3000*9600/19290
+});
+
+test('Strategie by-power: im Verhältnis der Leistungsgrenzen', () => {
+  const s = splitStrategyShares('by-power', { powerW: 3000, charge: true, masterMax: 2000, slaveMax: 4000, minPowerW: 50 });
+  assert.deepEqual([s.masterW, s.slaveW], [1000, 2000]);
+});
+
+test('Strategie priority-master: Master zuerst voll, Rest an den Slave', () => {
+  const s = splitStrategyShares('priority-master', { powerW: 5000, charge: true, masterMax: 3000, slaveMax: 5000, minPowerW: 50 });
+  assert.deepEqual([s.masterW, s.slaveW], [3000, 2000]);
+});
+
+test('Strategie priority-slave: Slave zuerst voll, Rest an den Master', () => {
+  const s = splitStrategyShares('priority-slave', { powerW: 5000, charge: true, masterMax: 5000, slaveMax: 3000, minPowerW: 50 });
+  assert.deepEqual([s.masterW, s.slaveW], [2000, 3000]);
+});
+
+test('Split: Überlauf — ein WR an der Grenze, der andere übernimmt den Rest; Summe bleibt die Vorgabe', () => {
+  const s = splitStrategyShares('ratio', { powerW: 4000, charge: true, masterMax: 1000, slaveMax: 5000, ratioMasterPct: 80, minPowerW: 50 });
+  assert.equal(s.masterW, 1000);           // an die Master-Grenze geklemmt
+  assert.equal(s.masterW + s.slaveW, 4000); // Rest an den Slave
+});
+
+test('Split: Anteil < minPowerW wird dem anderen WR zugeschlagen (keine Leistung verloren)', () => {
+  const s = splitStrategyShares('ratio', { powerW: 2000, charge: true, masterMax: 5000, slaveMax: 5000, ratioMasterPct: 1, minPowerW: 50 });
+  // 1 % = 20 W < 50 W → dem Slave zugeschlagen.
+  assert.deepEqual([s.masterW, s.slaveW], [0, 2000]);
+});
+
+test('Split: Slave offline (slaveMax 0) → alles an den Master', () => {
+  const s = splitStrategyShares('soc-balance', { powerW: 4000, charge: false, masterMax: 5000, slaveMax: 0, masterSoc: 50, masterCapacityWh: 5000, minPowerW: 50 });
+  assert.deepEqual([s.masterW, s.slaveW, s.slaveUncommanded], [4000, 0, false]);
+});
+
+test('resolveSecondInverter: Strategien + Rückwärtskompatibilität zum alten control-Feld', () => {
+  assert.equal(SPLIT_STRATEGIES.length, 7);
+  // Standard ohne Angabe: soc-balance, Entladen erbt Laden.
+  const d = resolveSecondInverter({ sungrow: { secondInverter: { host: 'x' } } });
+  assert.deepEqual([d.strategyCharge, d.strategyDischarge, d.ratioMasterPct], ['soc-balance', 'soc-balance', 50]);
+  // Alt: control self-only → master-only; split → soc-balance.
+  assert.equal(resolveSecondInverter({ sungrow: { secondInverter: { host: 'x', control: 'self-only' } } }).strategyCharge, 'master-only');
+  assert.equal(resolveSecondInverter({ sungrow: { secondInverter: { host: 'x', control: 'split' } } }).strategyCharge, 'soc-balance');
+  // Entladen erbt Laden, wenn nicht gesetzt; eigener Wert gewinnt.
+  const e = resolveSecondInverter({ sungrow: { secondInverter: { host: 'x', strategyCharge: 'by-power' } } });
+  assert.deepEqual([e.strategyCharge, e.strategyDischarge], ['by-power', 'by-power']);
+  const f = resolveSecondInverter({ sungrow: { secondInverter: { host: 'x', strategyCharge: 'by-power', strategyDischarge: 'ratio', ratioMasterPct: 150 } } });
+  assert.deepEqual([f.strategyCharge, f.strategyDischarge, f.ratioMasterPct], ['by-power', 'ratio', 100]); // ratioMasterPct geklemmt
 });

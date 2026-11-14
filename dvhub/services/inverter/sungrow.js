@@ -315,14 +315,76 @@ export function resolveSecondInverter(cfg) {
     unitId: Number.isFinite(Number(c.unitId)) ? Number(c.unitId) : 1,
     timeoutMs: Number.isFinite(t) && t > 0 ? t : 1500,
     aggregateTelemetry: c.aggregateTelemetry === true,
-    // Steuerung des zweiten WR (Punkt 3): 'self-only' (Standard = heute, nur Lesen; der Master verteilt bei
-    // Vorgaben intern) oder 'split' (DVhub teilt die Reglerleistung auf und schreibt an BEIDE WR).
-    control: c.control === 'split' ? 'split' : 'self-only',
+    // Aufteilungs-Strategie des zweiten WR (Punkt 1), getrennt für Laden/Entladen. Standard 'soc-balance'
+    // (= bisheriges Verhalten: nach nutzbarer Reserve/freiem Platz). strategyDischarge erbt strategyCharge, wenn
+    // nicht gesetzt. Rückwärtskompatibel zum alten Feld control: 'self-only' → 'master-only', 'split' → 'soc-balance'.
+    strategyCharge: strategyCharge(c),
+    strategyDischarge: strategyDischarge(c),
+    ratioMasterPct: clampRatioPct(c.ratioMasterPct),
     maxChargeW: Number(c.maxChargeW) || 0,
     maxDischargeW: Number(c.maxDischargeW) || 0,
     batteryCapacityWh: Number(c.batteryCapacityWh) || 0,
     enabled: host.length > 0,
   };
+}
+
+/** Gültige Aufteilungs-Strategien für den zweiten WR (Punkt 1). */
+export const SPLIT_STRATEGIES = ['master-only', 'ratio', 'by-capacity', 'by-power', 'soc-balance', 'priority-master', 'priority-slave'];
+
+function legacyStrategy(c) {
+  // Altes Feld control → neue Strategie (Migration ohne Config-Umschreiben).
+  if (c?.control === 'self-only') return 'master-only';
+  return 'soc-balance'; // Standard und Migration von 'split'
+}
+function strategyCharge(c) {
+  const v = String(c?.strategyCharge || '');
+  return SPLIT_STRATEGIES.includes(v) ? v : legacyStrategy(c);
+}
+function strategyDischarge(c) {
+  const v = String(c?.strategyDischarge || '');
+  return SPLIT_STRATEGIES.includes(v) ? v : strategyCharge(c); // erbt Laden, wenn nicht eigens gesetzt
+}
+function clampRatioPct(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(100, Math.max(0, Math.round(n))) : 50;
+}
+
+/**
+ * Reglerleistung nach der gewählten Strategie (Punkt 1) auf zwei WR aufteilen. Alle Strategien halten die
+ * Per-WR-Grenzen ein, der Überlauf geht an den anderen WR, und ein Anteil < minPowerW wird dem anderen WR
+ * zugeschlagen (die Summe bleibt die Reglerleistung, ≤ maxPowerW). 'master-only' lässt den Slave in Modus 0
+ * (slaveUncommanded=true). Ohne verfügbaren Slave (slaveMax ≤ 0) bekommt der Master alles.
+ * @returns {{masterW:number, slaveW:number, slaveUncommanded:boolean}}
+ */
+export function splitStrategyShares(strategy, {
+  powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
+  masterCapacityWh, slaveCapacityWh, floorSocPct = 0, maxSocPct = 100, ratioMasterPct = 50, minPowerW = 50,
+} = {}) {
+  const p = Math.max(0, Math.round(Number(powerW) || 0));
+  const mMax = Math.max(0, Number(masterMax) || 0);
+  const sMax = Math.max(0, Number(slaveMax) || 0);
+  const strat = SPLIT_STRATEGIES.includes(String(strategy)) ? String(strategy) : 'soc-balance';
+  if (p <= 0) return { masterW: 0, slaveW: 0, slaveUncommanded: strat === 'master-only' };
+  // master-only: Slave bleibt in Modus 0, Master bekommt alles (an seine Grenze geklemmt).
+  if (strat === 'master-only') return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: true };
+  if (sMax <= 0) return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: false }; // Slave offline → alles Master
+  // Gewichte je Strategie; splitSungrowPower verteilt danach und klemmt an die Grenzen (Überlauf an den anderen).
+  let mW; let sW;
+  if (strat === 'ratio') { mW = clampRatioPct(ratioMasterPct); sW = 100 - mW; }
+  else if (strat === 'by-capacity') { mW = Math.max(0, Number(masterCapacityWh) || 0); sW = Math.max(0, Number(slaveCapacityWh) || 0); }
+  else if (strat === 'by-power') { mW = mMax; sW = sMax; }
+  else if (strat === 'priority-master') { mW = 1; sW = 0; }
+  else if (strat === 'priority-slave') { mW = 0; sW = 1; }
+  else { // soc-balance (Standard): Entladen nach nutzbarer Reserve, Laden nach freiem Platz
+    mW = charge ? (sungrowHeadroomWh(masterSoc, masterCapacityWh, maxSocPct) || 0) : (sungrowReserveWh(masterSoc, masterCapacityWh, floorSocPct) || 0);
+    sW = charge ? (sungrowHeadroomWh(slaveSoc, slaveCapacityWh, maxSocPct) || 0) : (sungrowReserveWh(slaveSoc, slaveCapacityWh, floorSocPct) || 0);
+  }
+  let { masterW, slaveW } = splitSungrowPower({ powerW: p }, { maxW: mMax, weight: mW }, { maxW: sMax, weight: sW });
+  // Anteil < minPowerW dem anderen WR zuschlagen (sonst ginge Leistung verloren). Nur, wenn der andere sie fasst.
+  const min = Math.max(0, Number(minPowerW) || 0);
+  if (masterW > 0 && masterW < min && slaveW + masterW <= sMax) { slaveW += masterW; masterW = 0; }
+  else if (slaveW > 0 && slaveW < min && masterW + slaveW <= mMax) { masterW += slaveW; slaveW = 0; }
+  return { masterW, slaveW, slaveUncommanded: false };
 }
 
 /**
@@ -451,7 +513,8 @@ export function sungrowSecondView(state, cfg) {
   return {
     online,
     aggregate: c.aggregateTelemetry === true,
-    control: c.control,
+    strategyCharge: c.strategyCharge,
+    strategyDischarge: c.strategyDischarge,
     socPct: pick(s?.socPct),
     batteryPowerW: pick(s?.batteryPowerW),
     pvPowerW: pick(s?.pvPowerW),
@@ -847,7 +910,8 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       st.error = null; publish();
       return { ok: true, split: true, decision };
     }
-    // Forced: Aufteilung berechnen.
+    // Forced: Aufteilung nach gewählter Strategie (Punkt 1) berechnen.
+    const secondCfg = resolveSecondInverter(cfg);
     const masterBdc = Number(state.victron.device.bdcRatedW) || null;
     const charge = decision.command === 'charge';
     const perWrMax = (ownMaxCfg, wrBdc) => {
@@ -860,28 +924,37 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const slaveSoc = second.socPct;
     const masterMax = perWrMax(charge ? optMaster.maxChargeW : optMaster.maxDischargeW, masterBdc);
     const slaveMax = perWrMax(charge ? si.maxChargeW : si.maxDischargeW, second.bdcRatedW);
-    const masterWeight = charge ? sungrowHeadroomWh(masterSoc, optMaster.batteryCapacityWh, maxSoc) : sungrowReserveWh(masterSoc, optMaster.batteryCapacityWh, floor);
-    const slaveWeight = charge ? sungrowHeadroomWh(slaveSoc, si.batteryCapacityWh, maxSoc) : sungrowReserveWh(slaveSoc, si.batteryCapacityWh, floor);
-    const { masterW, slaveW } = splitSungrowPower(decision, { maxW: masterMax, weight: masterWeight || 0 }, { maxW: slaveMax, weight: slaveWeight || 0 });
+    const strategy = charge ? secondCfg.strategyCharge : secondCfg.strategyDischarge;
+    const { masterW, slaveW, slaveUncommanded } = splitStrategyShares(strategy, {
+      powerW: decision.powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
+      masterCapacityWh: optMaster.batteryCapacityWh, slaveCapacityWh: si.batteryCapacityWh,
+      floorSocPct: floor, maxSocPct: maxSoc, ratioMasterPct: secondCfg.ratioMasterPct, minPowerW: opts.minPowerW,
+    });
     const mk = (w) => (w >= opts.minPowerW ? { mode: 'forced', command: decision.command, powerW: w, reason: decision.reason } : { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason });
-    const slaveDecision = mk(slaveW);
+    // master-only: Slave NICHT steuern → in Modus 0 (Self) halten; sonst der berechnete Anteil.
+    const slaveDecision = slaveUncommanded ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveW);
     const masterDecision = mk(masterW);
     // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst). Scheitert er → beide sicher in Self.
-    const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
-    if (!sr.ok) {
-      await neutralizeBoth('split_slave_failed');
-      st.error = `split_slave: ${sr.error || 'failed'}`;
-      logOnce(st.error, 'sungrow_ems_split_aborted', { side: 'slave', error: sr.error || null }, 'warn');
-      st.decision = { mode: 'self', reason: 'split_slave_failed', at: t };
-      publish();
-      return { ok: false, readError: sr.readError === true, error: st.error };
+    if (slaveUncommanded) {
+      // master-only: Slave in Modus 0 (Self) halten. Scheitert das nicht hart — der Slave liegt dann ohnehin in Self.
+      try { await slaveActuator.neutralize('self'); } catch { /* best effort */ }
+    } else {
+      const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
+      if (!sr.ok) {
+        await neutralizeBoth('split_slave_failed');
+        st.error = `split_slave: ${sr.error || 'failed'}`;
+        logOnce(st.error, 'sungrow_ems_split_aborted', { side: 'slave', error: sr.error || null }, 'warn');
+        st.decision = { mode: 'self', reason: 'split_slave_failed', at: t };
+        publish();
+        return { ok: false, readError: sr.readError === true, error: st.error };
+      }
     }
     // Master-Anteil. Scheitert er → beide sicher in Self.
     try {
       const back = await writeDecision(conf, masterDecision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
       st.error = null; st.logKeys = {};
-      st.decision = { ...decision, at: t, trigger: reason, split: { masterW, slaveW } };
-      pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW, slaveW, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
+      st.decision = { ...decision, at: t, trigger: reason, split: { masterW, slaveW, strategy } };
+      pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW, slaveW, strategy, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
       publish();
       return { ok: true, split: true, decision, masterW, slaveW };
     } catch (e) {
@@ -1048,9 +1121,10 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         }
       }
       if (decision.mode !== 'forced') st.externalEnteredAt = 0;
-      // Split-Steuerung (Punkt 3): zweiter WR ist 'split' UND einbezogen → Reglerleistung auf BEIDE schreiben.
-      const secondCfg = resolveSecondInverter(cfg);
-      if (slaveActuator && secondCfg.control === 'split' && second != null) {
+      // Split-Steuerung (Punkt 1): zweiter WR angebunden und als Systemsumme bekannt → Reglerleistung nach der
+      // gewählten Strategie aufteilen und BEIDE WR steuern (auch 'master-only' läuft hier durch: Slave in Modus 0).
+      // Ohne frische Slave-Telemetrie (second==null, offline/keine Aggregation) steuert nur der Master (alles Master).
+      if (slaveActuator && second != null) {
         return await stepSplit({ conf, ctl, decision, gap, second, reason, t, opts });
       }
       if (!gap && emsMatches(dev, decision, decision.mode === 'forced' ? opts.stepW : 0, ctl.modeValue)) {

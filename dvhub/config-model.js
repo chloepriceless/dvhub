@@ -1515,15 +1515,57 @@ function buildFieldDefinitions() {
       groupOrder: 15,
       beta: true,
       visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
-      path: 'sungrow.secondInverter.control',
-      label: 'Steuerung des zweiten WR',
+      path: 'sungrow.secondInverter.strategyCharge',
+      label: 'Aufteilung beim Laden',
       type: 'select',
-      default: 'self-only',
+      default: 'soc-balance',
       options: [
-        { value: 'self-only', label: 'Nur im Eigenverbrauch (Master verteilt)' },
-        { value: 'split', label: 'Vorgaben aufteilen (beide WR einzeln)' }
+        { value: 'soc-balance', label: 'Ladestand ausgleichen (Standard)' },
+        { value: 'by-capacity', label: 'Nach Akku-Kapazität' },
+        { value: 'by-power', label: 'Nach max. Ladeleistung' },
+        { value: 'ratio', label: 'Festes Verhältnis (Master-Anteil %)' },
+        { value: 'priority-master', label: 'Master zuerst, Rest Slave' },
+        { value: 'priority-slave', label: 'Slave zuerst, Rest Master' },
+        { value: 'master-only', label: 'Nur Master (Slave im Eigenverbrauch)' }
       ],
-      help: 'Im Eigenverbrauch regelt der Master beide WR (Standard „Nur im Eigenverbrauch"). „Vorgaben aufteilen": bei Lade-/Entlade-Vorgaben teilt DVhub die Leistung nach Akku-Leistung und SoC auf und steuert BEIDE WR einzeln (nach Kundenaussage nötig, weil der Master nur im Eigenverbrauch verteilt). Scheitert dabei EINER (Herzschlag, Rücklesen, fremder Modus), gehen BEIDE sicher in Eigenverbrauch zurück.'
+      help: 'Wie DVhub eine Lade-Vorgabe auf beide WR verteilt (jeder WR wird einzeln gesteuert, weil der Master nach Kundenaussage nicht verteilt). „Ladestand ausgleichen" (Standard) füllt den WR mit mehr freiem Platz stärker; „Nach Akku-Kapazität" im Verhältnis der Kapazitäten; „Nach max. Ladeleistung" im Verhältnis der Leistungsgrenzen; „Festes Verhältnis" nach dem eingestellten Master-Anteil; „Master/Slave zuerst" lastet erst den einen voll aus, der Rest geht an den anderen; „Nur Master" lässt den Slave im Eigenverbrauch (Modus 0). Jeder WR hält seine eigene Grenze; der Überlauf geht an den anderen. Scheitert EINER (Herzschlag, Rücklesen, fremder Modus), gehen BEIDE sicher in den Eigenverbrauch zurück.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.strategyDischarge',
+      label: 'Aufteilung beim Entladen',
+      type: 'select',
+      default: 'soc-balance',
+      options: [
+        { value: 'soc-balance', label: 'Ladestand ausgleichen (Standard)' },
+        { value: 'by-capacity', label: 'Nach Akku-Kapazität' },
+        { value: 'by-power', label: 'Nach max. Entladeleistung' },
+        { value: 'ratio', label: 'Festes Verhältnis (Master-Anteil %)' },
+        { value: 'priority-master', label: 'Master zuerst, Rest Slave' },
+        { value: 'priority-slave', label: 'Slave zuerst, Rest Master' },
+        { value: 'master-only', label: 'Nur Master (Slave im Eigenverbrauch)' }
+      ],
+      help: 'Wie DVhub eine Entlade-Vorgabe auf beide WR verteilt. „Ladestand ausgleichen" (Standard) entlädt den WR mit mehr nutzbarer Reserve stärker (gleicht die Ladestände an). Übrige Werte wie beim Laden. Leer/nicht gesetzt = wie beim Laden.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.ratioMasterPct',
+      label: 'Master-Anteil bei „Festes Verhältnis" (%)',
+      type: 'number',
+      default: 50,
+      min: 0,
+      max: 100,
+      help: 'Nur für die Strategie „Festes Verhältnis": Anteil der Vorgabe, den der Master übernimmt (Rest der Slave). 50 = je zur Hälfte. Jeder WR hält seine Grenze; der Überlauf geht an den anderen.'
     },
     {
       section: 'victron',
