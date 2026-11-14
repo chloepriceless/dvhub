@@ -383,7 +383,7 @@ test('Codex R2: Not-Halt während des Lesens → fremder Zwangsbetrieb wird nich
 // --- External EMS (Standard) -------------------------------------------------------------
 
 test('Steuermodus: Standard External EMS, Frist 30 s, Grenzen 20–300 s', () => {
-  assert.deepEqual(resolveSungrowControl({}), { mode: 'external', modeValue: EMS_MODE.EXTERNAL, heartbeatTimeoutS: 30, heartbeatAfterMode: true, heartbeatWriteFc: null, acceptDeviceHeartbeatS: 0 });
+  assert.deepEqual(resolveSungrowControl({}), { mode: 'external', modeValue: EMS_MODE.EXTERNAL, heartbeatTimeoutS: 30, heartbeatAfterMode: true, heartbeatWriteFc: null, acceptDeviceHeartbeatS: 0, keepaliveRegister: '13080' });
   assert.equal(resolveSungrowControl({ sungrow: { controlMode: 'forced' } }).modeValue, EMS_MODE.FORCED);
   assert.equal(resolveSungrowControl({ sungrow: { heartbeatTimeoutS: 5 } }).heartbeatTimeoutS, 20);
   assert.equal(resolveSungrowControl({ sungrow: { heartbeatTimeoutS: 1000 } }).heartbeatTimeoutS, 300);
@@ -417,7 +417,8 @@ test('External EMS: Herzschlag in jedem Takt, auch wenn sich sonst nichts änder
     await r.ems.tick();
   }
   assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[HB, 30], [HB, 30], [HB, 30]]);
-  assert.deepEqual(r.t.reads, [], 'Herzschlag ohne zyklisches Lesen');
+  // Punkt 3b: solange DVhub External EMS besitzt, in jedem Takt den Gerätemodus frisch lesen (Rückfall-Erkennung).
+  assert.deepEqual(r.t.reads.map((x) => [x.fc, x.address]), [[3, MODE], [3, MODE], [3, MODE]], 'Gerätemodus je Takt gelesen');
   // Sollwert zurück ins Band → Self-consumption (Modus 0), danach kein Herzschlag mehr.
   r.t.writes.length = 0;
   await r.ems.applySetpoint(-40, 'default');

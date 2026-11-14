@@ -410,7 +410,16 @@ function extRig(mock, sungrowExtra = {}) {
   };
   const logs = [];
   const ems = createSungrowEms({ state, getCfg: () => cfg, transport: mock, pushLog: (event, data, level) => logs.push({ event, data, level }), now: () => clock });
-  return { ems, state, logs, mock, cfg, advance: (ms) => { clock += ms; } };
+  return {
+    ems, state, logs, mock, cfg,
+    // Uhr vorstellen und dabei die Telemetrie frisch halten (wie der laufende Poller), damit die Regelentscheidung
+    // nicht allein durch Veraltung auf Self kippt.
+    advance: (ms) => {
+      clock += ms;
+      state.victron.fieldUpdatedAt = { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock };
+      state.meter.updatedAt = clock;
+    },
+  };
 }
 
 test('Herzschlag (a/d/e): WR übernimmt 13080 nie → sofort in Self-consumption, owns false, Ziel verworfen, Event', async () => {
@@ -689,4 +698,86 @@ test('Split (External EMS): Herzschlag am Slave scheitert → BEIDE neutralisier
   assert.equal(r.mImage.holding.get(SMODE), EMS_MODE.SELF);   // Master neutralisiert
   assert.equal(r.sImage.holding.get(SMODE), EMS_MODE.SELF);   // Slave neutralisiert
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_split_aborted'));
+});
+
+// --- Punkt 3: Keepalive + Geräte-Rückfall (Feldtest 12c8122e) -----------------------------------------
+
+const POWER13052 = wire(13052);
+
+test('3a: deviceManaged → Lebenszeichen (13052 neu) im Keepalive-Takt, auch ohne Sollwert-Änderung', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'never' }), { acceptDeviceHeartbeatS: 600 });
+  await r.ems.applySetpoint(1000, 'api_manual_write'); // External EMS, deviceManaged (13080 nicht beschreibbar)
+  assert.equal(r.state.ctrl.sungrowEms.heartbeatDeviceManaged, true);
+  r.mock.writes.length = 0;
+  r.advance(11000); // > Keepalive-Takt (max 10 s)
+  await r.ems.tick();
+  assert.ok(r.mock.writes.some((w) => w.address === POWER13052 && w.fc === 6), 'Leistung als Lebenszeichen neu geschrieben');
+});
+
+test('3a: keepaliveRegister=13052 → Lebenszeichen per Leistung (nicht 13080)', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'mode3' }), { keepaliveRegister: '13052' });
+  await r.ems.applySetpoint(1000, 'api_manual_write');
+  r.mock.writes.length = 0;
+  r.advance(11000);
+  await r.ems.tick();
+  assert.ok(r.mock.writes.some((w) => w.address === POWER13052));
+  assert.ok(!r.mock.writes.some((w) => w.address === HBA), 'kein 13080-Lebenszeichen bei keepaliveRegister 13052');
+});
+
+test('3b: Geräte-Rückfall (WR steht in Self trotz Besitz) → sungrow_ems_device_fallback mit afterS', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'never' }), { acceptDeviceHeartbeatS: 600 });
+  await r.ems.applySetpoint(1000, 'api_manual_write');
+  image.holding.set(MODEA, EMS_MODE.SELF); // WR fällt von selbst zurück
+  r.advance(30000);
+  await r.ems.tick();
+  const ev = r.logs.find((l) => l.event === 'sungrow_ems_device_fallback');
+  assert.ok(ev, 'Rückfall gemeldet');
+  assert.ok(ev.data.afterS >= 30, `afterS gemessen: ${ev.data.afterS}`);
+});
+
+test('3c: Neueintritt nach Rückfall erst nach 10 s (kein sofortiger Wiedereintritt)', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'never' }), { acceptDeviceHeartbeatS: 600 });
+  await r.ems.applySetpoint(1000, 'api_manual_write'); // External, Eintritt bestätigt
+  image.holding.set(MODEA, EMS_MODE.SELF);             // WR fällt von selbst zurück
+  r.advance(1000);
+  await r.ems.applySetpoint(1100, 'api_manual_write'); // frischer (geänderter) Sollwert erkennt den Rückfall
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_device_fallback'), 'Rückfall erkannt');
+  image.holding.set(MODEA, EMS_MODE.SELF);
+  r.mock.writes.length = 0;
+  r.advance(5000);                                     // < 10 s seit Rückfall
+  const res = await r.ems.applySetpoint(1200, 'api_manual_write');
+  assert.equal(res.error, 'fallback_reentry_wait');
+  assert.ok(!r.mock.writes.some((w) => w.address === MODEA && w.value === EMS_MODE.EXTERNAL), 'kein Wiedereintritt < 10 s');
+  r.mock.writes.length = 0;
+  r.advance(6000);                                     // jetzt > 10 s seit Rückfall
+  await r.ems.applySetpoint(1300, 'api_manual_write');
+  assert.ok(r.mock.writes.some((w) => w.address === MODEA && w.value === EMS_MODE.EXTERNAL), 'Wiedereintritt nach 10 s');
+});
+
+test('3c: >3 Rückfälle/min → DVhub steuert vorerst nicht (Self, Warnung)', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'never' }), { acceptDeviceHeartbeatS: 600 });
+  await r.ems.applySetpoint(1000, 'api_manual_write');
+  // Vier echte Rückfall→Wiedereintritt-Zyklen in < 60 s: je Rückfall erkennen (wait), nach 10 s wieder eintreten,
+  // dann erneut von Hand in Self zwingen. So zählt jeder Rückfall genau einmal.
+  for (let i = 0; i < 4; i += 1) {
+    image.holding.set(MODEA, EMS_MODE.SELF); // Gerät fällt von selbst zurück
+    r.advance(1000);
+    const res = await r.ems.applySetpoint(1000 + i * 20 + 1, 'api_manual_write'); // geänderter Sollwert → Rückfall i erkannt
+    if (res.error === 'device_fallback_rate') break;
+    r.advance(11000);
+    await r.ems.applySetpoint(1000 + i * 20 + 2, 'api_manual_write'); // > 10 s → Wiedereintritt (External)
+  }
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_device_fallback_rate'), 'Raten-Warnung');
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'device_fallback_rate');
+  // Abkühlung: innerhalb der nächsten Minute KEIN Wiedereintritt (Mode-Register 13050 nicht weiter thrashen).
+  r.mock.writes.length = 0;
+  r.advance(30000);
+  const res = await r.ems.applySetpoint(1500, 'api_manual_write');
+  assert.equal(res.error, 'device_fallback_rate');
+  assert.ok(!r.mock.writes.some((w) => w.address === MODEA && w.value === EMS_MODE.EXTERNAL), 'kein Wiedereintritt in der Abkühlung');
 });

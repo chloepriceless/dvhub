@@ -77,7 +77,12 @@ export function resolveSungrowControl(cfg) {
   // Wert statt 30 s). 0/leer = aus (sicher scheitern).
   const a = Math.round(Number(o.acceptDeviceHeartbeatS));
   const acceptDeviceHeartbeatS = Number.isFinite(a) && a > 0 ? Math.min(600, a) : 0;
-  return { mode, modeValue: mode === 'forced' ? EMS_MODE.FORCED : EMS_MODE.EXTERNAL, heartbeatTimeoutS, heartbeatAfterMode, heartbeatWriteFc, acceptDeviceHeartbeatS };
+  // Lebenszeichen-Register (Punkt 3): solange DVhub External EMS fährt, wird dieses Register regelmäßig
+  // beschrieben, damit der WR nicht von selbst in Self-consumption zurückfällt. '13080' (Herzschlag, Standard),
+  // '13052' (Leistung neu schreiben — auch wenn 13080 nicht beschreibbar ist) oder 'both'.
+  const kr = String(o.keepaliveRegister || '').trim();
+  const keepaliveRegister = kr === '13052' || kr === 'both' ? kr : '13080';
+  return { mode, modeValue: mode === 'forced' ? EMS_MODE.FORCED : EMS_MODE.EXTERNAL, heartbeatTimeoutS, heartbeatAfterMode, heartbeatWriteFc, acceptDeviceHeartbeatS, keepaliveRegister };
 }
 
 const U16_NA = 0xffff;
@@ -283,6 +288,10 @@ export function sungrowEmsConf(cfg) {
 // Takt, in dem schedule-eval tick() aufruft (ZFI_TICK_MS), und erlaubtes Zittern des Intervall-Timers.
 const CALLER_TICK_MS = 5000;
 const TICK_JITTER_MS = 250;
+// Nach einem geräteeigenen Rückfall frühestens nach dieser Zeit wieder in External EMS eintreten (Punkt 3c).
+const REENTRY_AFTER_FALLBACK_MS = 10000;
+// Nach >3 Rückfällen/min so lange nicht wieder eintreten (Mode-Register 13050 schonen, Punkt 3c).
+const FALLBACK_COOLDOWN_MS = 60000;
 
 /** Schlüssel der Geräteverbindung (Adresse, Port, Unit-ID) — Erkennung und Schreib-Tor gelten je Verbindung. */
 export function endpointKeyOf(v) {
@@ -470,6 +479,12 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     hb: { key: null, supported: null, workingFc: null, deviceManaged: false }, // Herzschlag-Register: vorhanden? welche Schreibfunktion (FC) nimmt es an?
     hbCfgSig: null,      // Signatur der Herzschlag-Einstellung (eigenes Feld, damit es st.hb-Neuzuweisungen überlebt) — für die lösbare Sperre (1d)
     lastHeartbeatAt: 0,
+    externalEnteredAt: 0, // wann External EMS (Modus 3) bestätigt wurde — für die gemessene Rückfallzeit (Punkt 3)
+    lastKeepaliveAt: 0,   // letztes Lebenszeichen (Keepalive)
+    lastFallbackAfterS: 0, // gemessene Zeit bis der WR von selbst in Self zurückfiel
+    lastFallbackAt: 0,    // Zeitpunkt des letzten geräteeigenen Rückfalls (Neueintritt-Sperre 10 s, 3c)
+    fallbackCooldownUntil: 0, // bis hierhin nach >3 Rückfällen/min NICHT wieder eintreten (Mode-Register schonen, 3c)
+    fallbackTimes: [],    // Zeitstempel der letzten geräteeigenen Rückfälle (Ratenbegrenzung Neueintritt)
     sentTimeoutS: null,  // zuletzt an den Wechselrichter geschriebene Frist (gilt dort, bis eine neue rausging)
     lastStepAt: 0,
     decision: null,
@@ -534,6 +549,9 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       heartbeatWorkingFc: st.hb.workingFc,             // je Verbindung ermittelte funktionierende FC
       heartbeatDeviceManaged: st.hb.deviceManaged === true, // Opt-in: WR verwaltet 13080 selbst
       heartbeatSentS: st.sentTimeoutS ?? null,         // zuletzt wirksame Frist (unser Wert oder Gerätewert)
+      keepaliveRegister: ctl.keepaliveRegister,        // Lebenszeichen-Register (13080/13052/both)
+      deviceFallbackAfterS: st.lastFallbackAfterS || null, // gemessene Zeit, nach der der WR von selbst zurückfiel
+      deviceFallbackCount60s: (st.fallbackTimes || []).filter((x) => now() - x < 60000).length, // Rückfälle letzte 60 s
       lastHeartbeatAt: st.lastHeartbeatAt || null,
       target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at, noGridCharge: st.target.noGridCharge === true } : null,
       device: st.dev ? { ...st.dev } : null,
@@ -962,19 +980,74 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       }
       // Gerätezustand nur nach eigenen Writes und höchstens einmal je deviceRecheckMs lesen (Note 6);
       // so fällt ein Neustart des Wechselrichters oder ein Eingriff über die App auf.
-      const dev = st.dev && t - st.dev.at < opts.deviceRecheckMs ? st.dev : await readDevice(conf);
+      // Solange DVhub External EMS besitzt, den Gerätezustand in JEDEM Takt frisch lesen — sonst bliebe ein
+      // geräteeigener Rückfall (Modus 0) bis deviceRecheckMs unbemerkt (Punkt 3). Sonst wie bisher gecacht.
+      const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs && !ownsExternal) ? st.dev : await readDevice(conf);
       if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
-      // Herzschlag im Takt, solange DVhub External EMS fährt und dabei bleibt (die Doku verlangt genau das:
-      // den Wert innerhalb der Frist erneut schreiben).
+      // (3b) Geräte-Rückfall: DVhub besitzt External EMS, der WR steht aber in Self-consumption → er ist von
+      // selbst zurückgefallen (Lebenszeichen zu selten / 13080 nicht beschreibbar). Zeit messen + melden
+      // (sungrow_ems_device_fallback, nicht readback_mismatch); (3c) bei >3 Rückfällen/min nicht wieder eintreten.
+      // Nur bei bestätigtem External-Eintritt (externalEnteredAt gesetzt): so wird EIN Rückfall genau einmal gezählt
+      // und der WR nicht in jedem Folgetakt erneut als „Rückfall" gewertet — sonst bliebe die Neueintritt-Sperre ewig
+      // stehen. Eine Herzschlag-Lücke (gap, Neustart mit externalEnteredAt=0) ist kein Rückfall, sondern Wiederaufnahme.
+      if (ownsExternal && decision.mode === 'forced' && dev.mode === EMS_MODE.SELF && st.externalEnteredAt && !gap) {
+        const afterS = Math.round((t - st.externalEnteredAt) / 1000);
+        if (afterS > 0) st.lastFallbackAfterS = afterS;
+        st.lastFallbackAt = t;
+        st.fallbackTimes = [...(st.fallbackTimes || []), t].filter((x) => t - x < 60000);
+        logOnce(String(afterS), 'sungrow_ems_device_fallback', { afterS, side: 'master', count60s: st.fallbackTimes.length }, 'warn');
+        st.externalEnteredAt = 0;
+        st.lastKeepaliveAt = 0;
+        if (st.fallbackTimes.length > 3) {
+          st.fallbackCooldownUntil = t + FALLBACK_COOLDOWN_MS; // Mode-Register nicht weiter thrashen — WR zur Ruhe kommen lassen
+          st.decision = { mode: 'self', reason: 'device_fallback_rate', at: t };
+          logOnce('rate', 'sungrow_ems_device_fallback_rate', { text: 'Sungrow fällt wiederholt selbst aus External EMS zurück (>3/min) — DVhub steuert vorerst nicht; Keepalive-Register (sungrow.keepaliveRegister) oder Firmware prüfen.' }, 'warn');
+          publish();
+          return { ok: false, error: 'device_fallback_rate' };
+        }
+      }
+      // (3c) Abkühlung nach zu vielen Rückfällen: eine Minute lang NICHT wieder eintreten — sonst würde DVhub das
+      // Mode-Register (13050) im Sekundentakt hin- und herschreiben. Der WR steht in Self (neutral, sicher).
+      if (ownsExternal && decision.mode === 'forced' && st.fallbackCooldownUntil && t < st.fallbackCooldownUntil) {
+        st.decision = { mode: 'self', reason: 'device_fallback_rate', at: t };
+        publish();
+        return { ok: false, error: 'device_fallback_rate' };
+      }
+      // (3c) Neueintritt-Sperre: nach einem Rückfall frühestens nach 10 s wieder in External EMS eintreten. Bis dahin
+      // nichts schreiben (der WR steht ohnehin in Self) — sonst würde DVhub sofort wieder eintreten und erneut abfallen.
+      if (ownsExternal && decision.mode === 'forced' && st.lastFallbackAt && t - st.lastFallbackAt < REENTRY_AFTER_FALLBACK_MS) {
+        st.decision = { mode: 'self', reason: 'fallback_reentry_wait', at: t };
+        publish();
+        return { ok: false, error: 'fallback_reentry_wait', wait: true };
+      }
+      // Lebenszeichen, solange DVhub External EMS fährt und der WR in Modus 3 steht. Zwei getrennte Mechanismen:
       if (ownsExternal && !gap && decision.mode === 'forced' && dev.mode === EMS_MODE.EXTERNAL) {
-        // Takt-Herzschlag mit der je Verbindung funktionierenden FC (Auto-Ergebnis). Gerätewert-Modus
-        // (deviceManaged): DVhub kann 13080 nicht auffrischen → nicht schreiben, der WR verwaltet die Frist selbst.
-        if (!st.hb.deviceManaged) {
+        if (!st.externalEnteredAt) st.externalEnteredAt = t;
+        // (a) Takt-Herzschlag 13080 (Geräte-Watchdog): in JEDEM Steuertakt erneut schreiben — die Doku verlangt den
+        //     Wert innerhalb der Frist, und der Steuertakt (stepEveryMs) ist bereits auf ≤ Frist/3 begrenzt. Nicht
+        //     ausgedünnt, damit der Watchdog auch bei kurzer Frist sicher gespeist bleibt. Nur wenn das Register
+        //     beschreibbar ist (nicht deviceManaged) und als Keepalive-Register gewählt (13080/both, Standard 13080).
+        const reg = ctl.keepaliveRegister;
+        if ((reg === '13080' || reg === 'both') && !st.hb.deviceManaged) {
           await writeReg(conf, HEARTBEAT_ADDR, ctl.heartbeatTimeoutS, { fc: st.hb.workingFc || 6 });
           st.sentTimeoutS = ctl.heartbeatTimeoutS;
           st.lastHeartbeatAt = now();
         }
+        // (b) Punkt 3a — Leistungs-Lebenszeichen 13052: der WR fällt am Gerät ~30 s nach Eintritt von selbst zurück,
+        //     auch bei 13080=600. Dagegen die Leistung regelmäßig neu schreiben. Takt = gemessene Rückfallzeit/3,
+        //     max 10 s. Genutzt bei keepaliveRegister 13052/both oder wenn 13080 nicht beschreibbar ist
+        //     (deviceManaged). Ein Leistungs-Write bei Sollwert-Änderung (unten) frischt dasselbe Fenster auf.
+        if (reg === '13052' || reg === 'both' || st.hb.deviceManaged) {
+          const fallbackMs = st.lastFallbackAfterS > 0 ? st.lastFallbackAfterS * 1000 : ctl.heartbeatTimeoutS * 1000;
+          const kaEvery = Math.min(10000, Math.max(3000, Math.floor(fallbackMs / 3)));
+          if (t - (st.lastKeepaliveAt || 0) >= kaEvery - TICK_JITTER_MS) {
+            await writeReg(conf, EMS_POWER_ADDR, dev.powerW, { fc: 6 }); // Leistung neu schreiben = Lebenszeichen
+            st.lastKeepaliveAt = now();
+            if (st.hb.deviceManaged) st.lastHeartbeatAt = now();
+          }
+        }
       }
+      if (decision.mode !== 'forced') st.externalEnteredAt = 0;
       // Split-Steuerung (Punkt 3): zweiter WR ist 'split' UND einbezogen → Reglerleistung auf BEIDE schreiben.
       const secondCfg = resolveSecondInverter(cfg);
       if (slaveActuator && secondCfg.control === 'split' && second != null) {
@@ -987,6 +1060,9 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         return { ok: true, unchanged: true, decision };
       }
       const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
+      // Ein frischer Write (Modus/Leistung) ist ein Lebenszeichen → Keepalive-Fenster neu; bei External EMS gilt
+      // der Eintrittszeitpunkt ab jetzt (für die gemessene Rückfallzeit).
+      if (decision.mode === 'forced') { st.lastKeepaliveAt = now(); if (ctl.modeValue === EMS_MODE.EXTERNAL && !st.externalEnteredAt) st.externalEnteredAt = now(); }
       st.error = null;
       st.logKeys = {};
       pushLog('sungrow_ems_write', {
