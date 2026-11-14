@@ -12,6 +12,7 @@ struct HistoryView: View {
     @State private var period: HistoryPeriod
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(Chrome.self) private var chrome
+    @Environment(\.scenePhase) private var scenePhase
     @State private var date: Date
     @State private var summary: HistorySummary?
     @State private var soc: [SeriesPoint] = []
@@ -73,6 +74,10 @@ struct HistoryView: View {
         .onChange(of: period) { _, p in chrome.historyPeriod = p }
         .onChange(of: date) { _, d in chrome.historyDate = Calendar.current.isDateInToday(d) ? nil : d }
         .onChange(of: metric) { _, m in chrome.historyMetric = m }
+        // Stand die Historie auf „heute“ und die App kommt an einem neuen Tag zurück: wieder heute zeigen.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, chrome.historyDate == nil, !Calendar.current.isDateInToday(date) { date = Date() }
+        }
         #if DEBUG
         // Nur für Bildschirmfotos: -DVHUB_HISTORY week|month|year
         .onAppear { if let p = UserDefaults.standard.string(forKey: "DVHUB_HISTORY").flatMap(HistoryPeriod.init(rawValue:)) { period = p } }
