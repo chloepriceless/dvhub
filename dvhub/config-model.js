@@ -1446,6 +1446,20 @@ function buildFieldDefinitions() {
       default: 30,
       help: 'Nur bei External EMS: so lange wartet der Wechselrichter auf die nächste Meldung von DVhub, bevor er selbst auf Eigenverbrauch zurückschaltet. DVhub meldet sich alle 10 s; 30 s (Standard) verkraftet zwei verpasste Meldungen, ohne dass der Wechselrichter zurückfällt, und beendet einen Lade- oder Entladebefehl nach einem Ausfall spätestens nach einer halben Minute. Erlaubt 20–300 s.'
     },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.maxPowerW',
+      label: 'Maximale Akku-Leistung (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Obergrenze für die Lade-/Entladeleistung, die DVhub dem Wechselrichter vorgibt — für ALLE Quellen (EOS, Regeln, §14a, Netzanschluss, Hand-Sollwert). Leer/0 = die Nennleistung des Geräts (bei zwei WR die Summe beider) gilt. Nützlich zur Inbetriebnahme, um die Leistung vorsichtig zu begrenzen. Es gilt immer der kleinste Wert aus Geräte-Nennleistung und dieser Vorgabe.'
+    },
 
     // Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (T-0422, Feldabnahme). Der Master mit dem Smart Meter
     // regelt (bestehende Verbindung victron.*); der zweite WR wird NUR gelesen. host leer = ein WR wie bisher.

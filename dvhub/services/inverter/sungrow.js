@@ -653,7 +653,12 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     // System-Leistungsgrenze nur anheben, wenn BEIDE BDC-Nennleistungen bekannt sind. Fehlt die des Masters,
     // bleibt die Grenze unbekannt (→ Self-consumption wie ohne zweiten WR), statt mit halbem Wissen zu forcieren.
     const bdc = second?.bdcRatedW && masterBdc ? masterBdc + second.bdcRatedW : masterBdc;
-    const cap = opts.maxPowerW != null ? (bdc ? Math.min(bdc, opts.maxPowerW) : opts.maxPowerW) : bdc;
+    // Leistungsgrenze = Kleinste aus BDC-Nennleistung (Summe beider WR), Profil-Grenze und der
+    // Betreiber-Einstellung sungrow.maxPowerW. Letztere gilt für ALLE Quellen (EOS, Regeln, §14a,
+    // Netzanschluss, Hand-Sollwert), weil sie hier im Aktuator die Lade-/Entladeleistung begrenzt (Punkt 4).
+    const operatorMaxW = Number(cfg.sungrow?.maxPowerW) > 0 ? Number(cfg.sungrow.maxPowerW) : null;
+    const capCandidates = [bdc, opts.maxPowerW, operatorMaxW].filter((x) => Number(x) > 0);
+    const cap = capCandidates.length ? Math.min(...capCandidates) : null;
     let decision = targetFresh
       ? decideEmsCommand({
         setpointW: st.target.setpointW, ...tel, maxChargeW: cap, maxDischargeW: cap,

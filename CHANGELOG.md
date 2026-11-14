@@ -35,6 +35,11 @@ verweist hierher.
 
 ### Hinzugefügt
 
+- **Sungrow: Betreiber-Leistungsgrenze `sungrow.maxPowerW`.** Neue Beta-Einstellung („Maximale
+  Akku-Leistung") begrenzt die von DVhub vorgegebene Lade-/Entladeleistung für ALLE Quellen (EOS,
+  Regeln, §14a, Netzanschluss, Hand-Sollwert) — sie wirkt im Aktuator als Kleinstwert aus
+  Geräte-Nennleistung (bei zwei WR die Summe beider BDC), Profil-Grenze und Betreiber-Vorgabe. Leer/0 =
+  die Geräte-Nennleistung gilt. Nützlich zur vorsichtigen Inbetriebnahme.
 - **Sungrow zwei WR: Netzstrom-im-Akku-Zähler und Akkukapazität für beide Akkus.** Der Netzstrom-Zähler
   rechnet bei aktiver Aggregation mit der **Systemkapazität = Summe beider Akkus** (Hauptanlage +
   `sungrow.secondInverter.batteryCapacityWh`) und dem System-SoC; ist die Zweit-Kapazität nicht

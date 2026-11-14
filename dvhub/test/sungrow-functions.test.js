@@ -99,6 +99,18 @@ test('Regler-Schutz (Punkt 1): noGridCharge begrenzt das Laden auf den PV-Übers
   assert.equal(without.command, 'charge');                // ohne Schutz: lädt aus dem Netz
 });
 
+test('Betreiber-Leistungsgrenze (Punkt 4): sungrow.maxPowerW deckelt die Akku-Leistung für alle Quellen', async () => {
+  // Ohne Grenze ginge das Entladen auf die BDC-Leistung (10 kW). sungrow.maxPowerW 3000 deckelt jede Quelle
+  // über den Aktuator → Entladen 3000 W (Feldbox-Default 3000).
+  const r = rig({ persisted: { optimizer: { allowGridDischarge: true }, sungrow: { controlMode: 'forced', maxPowerW: 3000 } } });
+  await r.evaluator.applyControlTarget('gridSetpointW', -12000, 'eos_optimization');
+  assert.deepEqual([r.ems().decision.command, r.ems().decision.powerW], ['discharge', 3000]);
+  // Auch beim Netzladen (mit Freigabe): +12000 würde ~viel laden, maxPowerW deckelt auf 3000.
+  const c = rig({ persisted: { optimizer: { allowGridCharge: true }, sungrow: { controlMode: 'forced', maxPowerW: 3000 } } });
+  await c.evaluator.applyControlTarget('gridSetpointW', 12000, 'eos_grid_charge');
+  assert.deepEqual([c.ems().decision.command, c.ems().decision.powerW], ['charge', 3000]);
+});
+
 test('EOS GRID_SUPPORT_EXPORT (Akku ins Netz): nur mit Freigabe Netzentladung; begrenzt auf die BDC-Leistung', async () => {
   const blocked = rig();
   const no = await blocked.evaluator.applyControlTarget('gridSetpointW', -4000, 'eos_optimization');
