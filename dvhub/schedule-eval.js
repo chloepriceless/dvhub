@@ -220,6 +220,9 @@ export function createScheduleEvaluator(ctx) {
     state, getCfg, transport: ctx.sungrowSlaveTransport || transport, pushLog,
     statePath: ctx.sungrowSlaveEmsStatePath || null,
     statusKey: 'sungrowEmsSlave',
+    // Slave: der zweite WR folgt dem Master-Modus (Feld #5) — der Aktuator schreibt NIE 13050 und prüft seinen
+    // Modus nicht zurück, nur Befehl/Leistung (13051/13052).
+    isSlave: true,
     connOverride: () => {
       const c = resolveSecondInverter(getCfg());
       return c.enabled ? { host: c.host, port: c.port, unitId: c.unitId, timeoutMs: c.timeoutMs } : null;

@@ -245,10 +245,11 @@ export function decideEmsCommand({
 const CMD_BY_NAME = { charge: EMS_CMD.CHARGE, discharge: EMS_CMD.DISCHARGE, stop: EMS_CMD.STOP };
 
 /** Ist der Zustand am Gerät (Modus/Befehl/Leistung) schon das Gewünschte? */
-export function emsMatches(dev, decision, toleranceW = 0, modeValue = EMS_MODE.FORCED) {
+export function emsMatches(dev, decision, toleranceW = 0, modeValue = EMS_MODE.FORCED, { ignoreMode = false } = {}) {
   if (!dev) return false;
-  if (decision.mode === 'self') return dev.mode === EMS_MODE.SELF && dev.cmd === EMS_CMD.STOP;
-  if (dev.mode !== modeValue || dev.cmd !== CMD_BY_NAME[decision.command]) return false;
+  // Slave (ignoreMode, Feld #5): der Slave folgt dem Master-Modus — nur Befehl/Leistung prüfen, nie seinen Modus.
+  if (decision.mode === 'self') return (ignoreMode || dev.mode === EMS_MODE.SELF) && dev.cmd === EMS_CMD.STOP;
+  if ((!ignoreMode && dev.mode !== modeValue) || dev.cmd !== CMD_BY_NAME[decision.command]) return false;
   if (decision.command === 'stop') return true;
   return Math.abs(Number(dev.powerW) - Number(decision.powerW)) <= toleranceW;
 }
@@ -545,7 +546,7 @@ export function sungrowSecondView(state, cfg) {
  * (Modus 2, ohne Rückfall). Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Modus gesetzt hat
  * (oder gesetzt haben könnte), danach nichts mehr — auch kein Herzschlag.
  */
-export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null }) {
+export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false }) {
   const st = {
     target: null,        // { setpointW, source, at }
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
@@ -878,30 +879,33 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
    */
   async function writeDecision(conf, decision, { neutralize = false, modeValue = EMS_MODE.FORCED, heartbeatS = null, forceAll = false, heartbeatAfterMode = true, heartbeatWriteFc = null, acceptDeviceHeartbeatS = 0 } = {}) {
     const dev = st.dev || await readDevice(conf);
-    // Ein fremdes EMS/VPP wird nie übersteuert, auch nicht im Not-Halt.
-    if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+    // Ein fremdes EMS/VPP wird nie übersteuert, auch nicht im Not-Halt. Der Slave (isSlave) folgt dem Master-Modus
+    // (Feld #5) — ein Modus 2/3 am Slave ist Master-gesteuert, nicht fremd; nur VPP (4) am Slave wäre fremd.
+    if (isSlave ? dev.mode === EMS_MODE.VPP : isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
     const writeStartedAt = now(); // Antwortzeit (Schreiben bis bestätigtes Rücklesen) für den adaptiven Takt (Punkt 2)
     if (decision.mode === 'self') {
       const opt = { neutralize };
       if (dev.cmd !== EMS_CMD.STOP) await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, opt);
-      if (dev.mode !== EMS_MODE.SELF) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, opt);
+      // Modus 0 nur am Master schreiben — der Slave verwirft 13050 und folgt dem Master (Feld #5).
+      if (!isSlave && dev.mode !== EMS_MODE.SELF) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, opt);
     } else {
       const opt = { neutralize, claimMode: modeValue };
       const cmd = CMD_BY_NAME[decision.command];
       if (decision.command !== 'stop' && (forceAll || dev.powerW !== decision.powerW)) await writeReg(conf, EMS_POWER_ADDR, decision.powerW, opt);
       if (forceAll || dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd, opt);
-      const needHeartbeat = modeValue === EMS_MODE.EXTERNAL && (forceAll || dev.mode !== modeValue);
-      // applyHeartbeat schreibt 13080 + liest zurück (FC-Fallback), scheitert sicher bzw. fährt opt-in mit dem
-      // Gerätewert. Standard NACH dem Moduswechsel (der WR setzt 13080 beim Eintritt in Modus 3 selbst).
+      // Nur am Master: Modus (13050) und — in External EMS — der Herzschlag. Der Slave bekommt NIE einen
+      // Modus-Write (Feld #5: wird verworfen, der Slave folgt dem Master-Modus 2).
+      const needHeartbeat = !isSlave && modeValue === EMS_MODE.EXTERNAL && (forceAll || dev.mode !== modeValue);
       const hb = async () => applyHeartbeat(conf, heartbeatS, opt, { writeFc: heartbeatWriteFc, acceptDeviceS: acceptDeviceHeartbeatS });
       if (needHeartbeat && !heartbeatAfterMode) await hb();
-      if (forceAll || dev.mode !== modeValue) await writeReg(conf, EMS_MODE_ADDR, modeValue, opt);
+      if (!isSlave && (forceAll || dev.mode !== modeValue)) await writeReg(conf, EMS_MODE_ADDR, modeValue, opt);
       if (needHeartbeat && heartbeatAfterMode) await hb();
     }
     st.dev = null;
     const back = await readDevice(conf);
     updateResponseMs(now() - writeStartedAt); // gleitender Mittelwert der Antwortzeit (adaptiver Takt, Punkt 2)
-    if (!emsMatches(back, decision, 10, modeValue)) {
+    // Der Slave-Modus folgt dem Master (Feld #5) → beim Slave nur Befehl/Leistung zurückprüfen (ignoreMode).
+    if (!emsMatches(back, decision, 10, modeValue, { ignoreMode: isSlave })) {
       const err = new Error(`EMS-Rücklesung weicht ab (Soll ${describe(decision, modeValue)}, Ist Modus ${back.mode}, Befehl 0x${back.cmd.toString(16)}, ${back.powerW} W)`);
       err.code = 'readback_mismatch';
       throw err;

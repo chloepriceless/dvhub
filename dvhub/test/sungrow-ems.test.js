@@ -132,6 +132,64 @@ function rig({ over = {}, device = sungrowDevice(), mockOpts = {}, controlMode =
   return { cfg, image, t, state, ems, logs, telemetry, advance: (ms) => { clock += ms; }, now };
 }
 
+// Zwei-WR-Forced-Split: Master und Slave an GETRENNTEN Transports/Abbildern (ein WiNet-S je WR). Der Slave bekommt
+// NUR 13051/13052 (Feld #5: 13050-Writes am Slave werden verworfen, der Slave folgt dem Master-Modus).
+const SLAVE_HOST = '192.168.68.83';
+function splitRig({ masterOver = {}, slaveOver = {}, second = { batteryPowerW: -500, pvPowerW: 0, socPct: 50, bdcRatedW: 10000 },
+  masterBattW = -1000, gridW = 0, strategyCharge = 'soc-balance', strategyDischarge = 'soc-balance',
+  maxChargeW = 5000, maxDischargeW = 5000, batteryCapacityWh = 10000, optimizer = { maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 } } = {}) {
+  const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge, strategyDischarge, maxChargeW, maxDischargeW, batteryCapacityWh };
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter }, optimizer });
+  const masterImage = sungrowImage(masterOver);
+  const slaveImage = sungrowImage(slaveOver);
+  const masterT = mockSungrow(masterImage);
+  const slaveT = mockSungrow(slaveImage);
+  let clock = 1_000_000;
+  const now = () => clock;
+  const state = {
+    victron: { errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock }, device: sungrowDevice({ bdcRatedW: 10000 }), batteryPowerW: masterBattW, pvPowerW: 0, selfConsumptionW: 500, soc: 50, sungrowMasterSocPct: 50 },
+    meter: { ok: true, updatedAt: clock, grid_total_w: gridW },
+    ctrl: {},
+    sungrowSecond: { online: true, updatedAt: clock, host: SLAVE_HOST, aggregate: true, ...second },
+  };
+  const logs = [];
+  const slaveEms = createSungrowEms({
+    state, getCfg: () => cfg, transport: slaveT, pushLog: (e, d) => logs.push({ event: e, data: d }), now,
+    statusKey: 'sungrowEmsSlave', isSlave: true, connOverride: () => ({ host: SLAVE_HOST, port: 502, unitId: 1, timeoutMs: 1500 }),
+  });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: masterT, pushLog: (e, d) => logs.push({ event: e, data: d }), now, slaveActuator: slaveEms });
+  return { cfg, state, ems, slaveEms, masterT, slaveT, masterImage, slaveImage, logs, advance: (ms) => { clock += ms; }, now };
+}
+
+test('Forced-Split B2: Eintritt — Slave bekommt NUR Leistung+Befehl (kein 13050), Master Leistung+Befehl+Modus 2', async () => {
+  // System-Akku −1000, Netz 0, Sollwert −6000 → P = −1000 + 0,7·(−6000) = −5200 → Entladen, 50/50 → je ~2600.
+  const r = splitRig();
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  // Slave: NUR 13052 (Leistung) + 13051 (Befehl Entladen) — NIE 13050 (Feld #5).
+  assert.deepEqual(r.slaveT.writes.map((w) => w.address).sort(), [CMD, POWER].sort());
+  assert.ok(!r.slaveT.writes.some((w) => w.address === MODE), 'Slave bekommt KEINEN Modus-Write');
+  assert.ok(r.slaveT.writes.some((w) => w.address === CMD && w.value === EMS_CMD.DISCHARGE));
+  // Master: Leistung + Befehl + Modus 2.
+  assert.ok(r.masterT.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED), 'Master Modus 2');
+  assert.ok(r.masterT.writes.some((w) => w.address === CMD && w.value === EMS_CMD.DISCHARGE));
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+  // Beide Leistungen ~2600 (50/50), Summe ~5200.
+  const mp = r.masterImage.holding.get(POWER); const sp = r.slaveImage.holding.get(POWER);
+  assert.ok(Math.abs(mp - 2600) <= 60 && Math.abs(sp - 2600) <= 60, `master ${mp} slave ${sp}`);
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_split_write'));
+});
+
+test('Forced-Split B2: Slave-Rücklesung prüft NUR Befehl/Leistung (Modus folgt dem Master) — Eintritt scheitert nicht, obwohl Slave-Modus noch 0 ist', async () => {
+  // Der Slave-Modus bleibt im Abbild 0 (folgt in echt dem Master; der Mock koppelt das nicht). Mit der Modus-
+  // Prüfung am Slave würde der Eintritt fälschlich scheitern — er darf NICHT.
+  const r = splitRig();
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.slaveImage.holding.get(MODE), EMS_MODE.SELF, 'Slave-Modus im Abbild unverändert (nie geschrieben)');
+  assert.equal(r.state.ctrl.sungrowEmsSlave?.owns, true, 'DVhub merkt sich den Slave-Besitz (für Not-Halt)');
+});
+
 test('Aktuator: Netzladen → Leistung, Befehl, Modus (in dieser Reihenfolge), dann Rücklesen', async () => {
   const r = rig();
   const res = await r.ems.applySetpoint(4000, 'rule:netzladen');
