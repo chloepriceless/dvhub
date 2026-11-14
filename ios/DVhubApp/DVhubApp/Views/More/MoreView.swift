@@ -1,41 +1,87 @@
-// MoreView.swift — „Mehr“: Fahrplan, Integrationen, System, Steuern, Anlagen,
-// Darstellung, Widgets, Über.
+// MoreView.swift — „Mehr“ (schmal) und die Seitenleiste (breit): Fahrplan,
+// Integrationen, System, Steuern, Anlagen, Darstellung, Widgets, Über.
 
 import SwiftUI
 import WidgetKit
 import DVhubLink
 
-/// Liste der Bereiche — die Seitenspalte der geteilten Ansicht. Eine
-/// System-Liste mit Auswahl: zugeklappt führt sie in den Bereich hinein,
-/// aufgeklappt steht der Bereich daneben.
-struct MoreView: View {
+extension MoreRoute {
+    /// Bereiche der Anlage bzw. der App — in dieser Reihenfolge in „Mehr“ und in der Seitenleiste.
+    static let plantRoutes: [MoreRoute] = [.plan, .integrations, .system, .control]
+    static let appRoutes: [MoreRoute] = [.systems, .appearance, .about]
+
+    var title: String {
+        switch self {
+        case .plan: return String(localized: "Fahrplan")
+        case .integrations: return String(localized: "Integrationen")
+        case .system: return String(localized: "System")
+        case .control: return String(localized: "Steuern")
+        case .systems: return String(localized: "Anlagen")
+        case .appearance: return String(localized: "Darstellung")
+        case .about: return String(localized: "Über")
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .plan: return "calendar.day.timeline.left"
+        case .integrations: return "point.3.connected.trianglepath.dotted"
+        case .system: return "gearshape.2.fill"
+        case .control: return "exclamationmark.octagon.fill"
+        case .systems: return "qrcode.viewfinder"
+        case .appearance: return "paintpalette.fill"
+        case .about: return "info.circle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .plan: return Brand.violet
+        case .integrations: return Brand.cyan
+        case .system: return Brand.blue
+        case .control: return Brand.red
+        case .systems: return Brand.green
+        case .appearance: return Brand.pink
+        case .about: return Brand.yellow
+        }
+    }
+
+    /// „Steuern“ gibt es nur mit der Freigabe dafür.
+    @MainActor static func visible(_ routes: [MoreRoute], model: AppModel) -> [MoreRoute] {
+        routes.filter { $0 != .control || model.selected?.canControl == true }
+    }
+}
+
+/// Kopf beider Listen: Name der Anlage und Verbindung.
+private struct SystemHeaderRow: View {
     @Environment(AppModel.self) private var model
-    @Binding var selection: MoreRoute?
 
     var body: some View {
-        List(selection: $selection) {
-            if let c = model.selected {
-                SwiftUI.Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(c.credentials.boxName).font(.title3.weight(.bold)).foregroundStyle(Brand.text)
-                        ConnectionBadge(controller: c)
-                    }
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 8, trailing: 4))
+        if let c = model.selected {
+            SwiftUI.Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(c.credentials.boxName).font(.title3.weight(.bold)).foregroundStyle(Brand.text)
+                    ConnectionBadge(controller: c)
                 }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 8, trailing: 4))
             }
+        }
+    }
+}
+
+/// „Mehr“ auf schmaler Fläche: Liste der Bereiche, die in den Bereich hineinführt.
+struct MoreView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        List {
+            SystemHeaderRow()
             SwiftUI.Section("Anlage") {
-                row(.plan, String(localized: "Fahrplan"), String(localized: "EOS-Plan und Zeitplan"), "calendar.day.timeline.left", Brand.violet)
-                row(.integrations, String(localized: "Integrationen"), String(localized: "Zustand der Anbindungen"), "point.3.connected.trianglepath.dotted", Brand.cyan)
-                row(.system, String(localized: "System"), String(localized: "Einstellungen ansehen"), "gearshape.2.fill", Brand.blue)
-                if model.selected?.canControl == true {
-                    row(.control, String(localized: "Steuern"), String(localized: "Not-Halt"), "exclamationmark.octagon.fill", Brand.red)
-                }
+                ForEach(MoreRoute.visible(MoreRoute.plantRoutes, model: model)) { row($0) }
             }
             SwiftUI.Section("App") {
-                row(.systems, String(localized: "Anlagen"), String(localized: "\(model.systems.count) gekoppelt"), "qrcode.viewfinder", Brand.green)
-                row(.appearance, String(localized: "Darstellung"), String(localized: "Farben, Navigation, Widgets, Live-Aktivität"), "paintpalette.fill", Brand.pink)
-                row(.about, String(localized: "Über"), String(localized: "Version, Datenschutz"), "info.circle.fill", Brand.yellow)
+                ForEach(MoreRoute.visible(MoreRoute.appRoutes, model: model)) { row($0) }
             }
             if let err = model.storageError {
                 SwiftUI.Section { Label(err, systemImage: "exclamationmark.triangle").foregroundStyle(Brand.orange) }
@@ -45,22 +91,76 @@ struct MoreView: View {
         .auroraList()
     }
 
-    private func row(_ route: MoreRoute, _ title: String, _ text: String, _ icon: String, _ tint: Color) -> some View {
+    private func subtitle(_ route: MoreRoute) -> String {
+        switch route {
+        case .plan: return String(localized: "EOS-Plan und Zeitplan")
+        case .integrations: return String(localized: "Zustand der Anbindungen")
+        case .system: return String(localized: "Einstellungen ansehen")
+        case .control: return String(localized: "Not-Halt")
+        case .systems: return String(localized: "\(model.systems.count) gekoppelt")
+        case .appearance: return String(localized: "Farben, Navigation, Widgets, Live-Aktivität")
+        case .about: return String(localized: "Version, Datenschutz")
+        }
+    }
+
+    private func row(_ route: MoreRoute) -> some View {
         NavigationLink(value: route) {
             Label {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.body.weight(.semibold))
-                    Text(text).font(.caption).foregroundStyle(.secondary)
+                    Text(route.title).font(.body.weight(.semibold))
+                    Text(subtitle(route)).font(.caption).foregroundStyle(.secondary)
                 }
             } icon: {
-                Image(systemName: icon).foregroundStyle(tint)
+                Image(systemName: route.icon).foregroundStyle(route.tint)
             }
         }
         .accessibilityIdentifier("more.\(route.rawValue)")
     }
 }
 
-/// Aufgeklappt, noch nichts gewählt: der Platz neben der Liste.
+/// Seitenleiste auf breiter Fläche (iPhone Duo aufgeklappt, iPad): alle
+/// Bereiche der App in einer Liste des Systems — die Reiter und darunter, was
+/// schmal unter „Mehr“ steht.
+struct SidebarView: View {
+    @Environment(AppModel.self) private var model
+    @Binding var selection: SidebarItem?
+    let newsBadge: Int
+
+    var body: some View {
+        List(selection: $selection) {
+            SystemHeaderRow()
+            SwiftUI.Section {
+                ForEach(AppTab.allCases.filter { $0 != .more }) { t in
+                    Label(t.title, systemImage: t.icon)
+                        .badge(t == .news ? newsBadge : 0)
+                        .tag(SidebarItem.tab(t))
+                        .accessibilityIdentifier("side.\(t.rawValue)")
+                }
+            }
+            SwiftUI.Section("Anlage") {
+                ForEach(MoreRoute.visible(MoreRoute.plantRoutes, model: model)) { row($0) }
+            }
+            SwiftUI.Section("App") {
+                ForEach(MoreRoute.visible(MoreRoute.appRoutes, model: model)) { row($0) }
+            }
+            if let err = model.storageError {
+                SwiftUI.Section { Label(err, systemImage: "exclamationmark.triangle").foregroundStyle(Brand.orange) }
+            }
+        }
+        .listStyle(.sidebar)
+        .navigationTitle(Text(verbatim: "DVhub"))
+        .auroraList()
+        .accessibilityIdentifier("sidebar")
+    }
+
+    private func row(_ route: MoreRoute) -> some View {
+        Label(route.title, systemImage: route.icon)
+            .tag(SidebarItem.more(route))
+            .accessibilityIdentifier("side.\(route.rawValue)")
+    }
+}
+
+/// Breit, „Mehr“ gewählt, aber noch kein Bereich: der Platz neben der Seitenleiste.
 struct MoreOverview: View {
     var body: some View {
         ContentUnavailableView("Bereich wählen", systemImage: "sidebar.left",

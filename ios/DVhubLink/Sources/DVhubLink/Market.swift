@@ -213,9 +213,15 @@ public struct ResidualOutlook: Equatable, Sendable {
     /// Schnittstelle — vom Tag selbst, sonst vom ersten Prognosetag. Das ist
     /// nur eine Darstellung; die Einstufung bleibt `Day.priceClass`.
     public func position(meanCt: Double, day: Day? = nil) -> Double? {
+        guard let t = thresholds(day: day) else { return nil }
+        return (meanCt - t.p20) / (t.p80 - t.p20)
+    }
+
+    /// Schwellen des üblichen Bereichs in ct/kWh: vom Tag selbst, sonst vom ersten Prognosetag.
+    public func thresholds(day: Day? = nil) -> (p20: Double, p80: Double)? {
         let src = (day.flatMap { $0.p20Ct != nil && $0.p80Ct != nil ? $0 : nil }) ?? days.first { $0.p20Ct != nil && $0.p80Ct != nil }
         guard let p20 = src?.p20Ct, let p80 = src?.p80Ct, p80 > p20 else { return nil }
-        return (meanCt - p20) / (p80 - p20)
+        return (p20, p80)
     }
 
     /// Nächster als teuer eingestufter Prognosetag (für die Frühwarnung).
@@ -302,9 +308,18 @@ public struct MarketDay: Identifiable, Equatable, Sendable {
     /// Lage des Tagesmittels im üblichen Bereich: 0 = untere Schwelle (P20),
     /// 1 = obere (P80) der Prognose; darunter/darüber = außerhalb. Nur Darstellung.
     public var position: Double?
-    /// Ampel: die Einstufung der Prognose, unverändert aus der Schnittstelle.
-    /// Feste Börsentage haben keine.
-    public var priceClass: PriceClass? { forecast?.priceClass }
+    /// Die Schwellen dazu in ct/kWh (üblicher Bereich), wenn die Prognose sie liefert.
+    public var p20Ct: Double?
+    public var p80Ct: Double?
+    /// Ampel. Prognosetage: die Einstufung der Schnittstelle, unverändert.
+    /// Feste Börsentage (heute, morgen) stuft die Schnittstelle nicht ein — für
+    /// sie gilt dieselbe Regel auf das echte Tagesmittel der Börse: unter P20
+    /// günstig, über P80 teuer, sonst normal (`build`). Ohne Schwellen: keine.
+    public var priceClass: PriceClass?
+    /// Die Einstufung ist aus Börsenpreisen abgeleitet, nicht aus der Prognose.
+    public var classFromExchange: Bool { forecast == nil && priceClass != nil }
+    /// Wo im üblichen Bereich das Tagesmittel liegt (für Farbe, Text und Ampel).
+    public var zone: PriceBandZone? { position.map(PriceBandZone.init(position:)) }
     public var id: String { key }
 
     public init(key: String, date: Date, known: ResidualOutlook.KnownDay? = nil, forecast: ResidualOutlook.Day? = nil, slots: [PricePoint] = []) {
@@ -364,7 +379,11 @@ public struct MarketDay: Identifiable, Equatable, Sendable {
         }
         return out.values.sorted { $0.date < $1.date }.map { d in
             var d = d
+            let t = outlook?.thresholds(day: d.forecast)
+            d.p20Ct = t?.p20
+            d.p80Ct = t?.p80
             d.position = d.meanCt.flatMap { outlook?.position(meanCt: $0, day: d.forecast) }
+            d.priceClass = d.forecast?.priceClass ?? d.position.map(PriceClass.init(position:))
             return d
         }
     }
@@ -385,6 +404,31 @@ public struct MarketDay: Identifiable, Equatable, Sendable {
     }
 }
 
+extension PriceClass {
+    /// Regel der Schnittstelle auf eine Lage angewandt: Tagesmittel unter der
+    /// unteren Schwelle (P20) günstig, über der oberen (P80) teuer, sonst normal.
+    public init(position p: Double) {
+        self = p < 0 ? .cheap : (p > 1 ? .expensive : .normal)
+    }
+}
+
+/// Lage eines Tagesmittels im üblichen Bereich (P20 … P80) in fünf Stufen —
+/// eine Darstellung der Lage, keine zweite Einstufung.
+public enum PriceBandZone: String, Sendable, Equatable, CaseIterable {
+    /// Unter P20 bzw. über P80.
+    case below, above
+    /// Im Bereich: unteres Drittel, Mitte, oberes Drittel.
+    case low, middle, high
+
+    public init(position p: Double) {
+        if p < 0 { self = .below }
+        else if p > 1 { self = .above }
+        else if p < 1.0 / 3 { self = .low }
+        else if p > 2.0 / 3 { self = .high }
+        else { self = .middle }
+    }
+}
+
 /// ISO-Zeit mit mehr als drei Nachkommastellen („…00.002349Z“), die
 /// ISO8601DateFormatter nicht liest: Bruchteil abschneiden.
 public func parseLooseISO(_ s: String?) -> Date? {
@@ -397,7 +441,7 @@ public func parseLooseISO(_ s: String?) -> Date? {
 
 // MARK: - Nachrichten (/api/news)
 
-public struct NewsItem: Equatable, Sendable, Identifiable, Codable {
+public struct NewsItem: Hashable, Sendable, Identifiable, Codable {
     public let title: String
     public let excerpt: String
     public let link: String

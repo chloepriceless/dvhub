@@ -41,7 +41,7 @@ struct DashboardView: View {
                 if Layout.isWide(width) {
                     HStack(alignment: .top, spacing: 14) {
                         // Höhe folgt der Spaltenbreite — im Querformat ist wenig Höhe da.
-                        flowCard(s, height: max(290, min(420, (pageWidth - max(300, pageWidth * 0.44)) * 0.95)))
+                        flowCard(s, height: max(320, min(440, (pageWidth - max(300, pageWidth * 0.44)) * 1.12)))
                         VStack(spacing: 14) {
                             metricGrid(s)
                             moneyCard(s)
@@ -94,7 +94,7 @@ struct DashboardView: View {
         GlassCard(tint: Brand.cyan, padding: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Eyebrow(text: "Energiefluss", icon: "bolt.fill", tint: Brand.cyan)
+                    Eyebrow(text: "Energiefluss", tint: Brand.cyan)
                     Spacer()
                     if let w = s.gridSetpointW, abs(w) > 0 {
                         Text("Sollwert \(Format.signedPower(w))").font(.caption2.monospacedDigit()).foregroundStyle(Brand.dim)
@@ -113,14 +113,15 @@ struct DashboardView: View {
         // In den Bedienungshilfen-Größen eine Karte je Zeile.
         let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: typeSize.isAccessibilitySize ? 1 : 2)
         return LazyVGrid(columns: columns, spacing: 12) {
-            MetricCard(cardId: "PV", title: "PV", icon: "sun.max.fill", tint: Brand.pv, value: Format.power(s.pvTotalW), caption: String(localized: "Erzeugung"),
+            // Ohne Symbole: Die stehen schon im Energiefluss; hier verbindet die Farbe.
+            MetricCard(cardId: "PV", title: "PV", tint: Brand.pv, value: Format.power(s.pvTotalW), caption: String(localized: "Erzeugung"),
                        spark: controller.todayValues("pv_total_w"), valueId: "pvValue") { open(.pv) }
-            MetricCard(cardId: "Akku", title: String(localized: "Akku"), icon: StatusText.batteryIcon(s.soc), tint: Brand.battery, value: Format.percent(s.soc),
+            MetricCard(cardId: "Akku", title: String(localized: "Akku"), tint: Brand.battery, value: Format.percent(s.soc),
                        caption: StatusText.batteryCaption(s), spark: controller.todayValues(BoxData.socKey), sparkRange: 0...100) { open(.battery) }
-            MetricCard(cardId: "Netz", title: String(localized: "Netz"), icon: "bolt.horizontal.fill", tint: StatusText.isExporting(s) ? Brand.cyan : Brand.grid,
+            MetricCard(cardId: "Netz", title: String(localized: "Netz"), tint: StatusText.isExporting(s) ? Brand.cyan : Brand.grid,
                        value: Format.power(StatusText.gridValue(s)), caption: StatusText.gridCaption(s),
                        spark: gridSpark) { open(.grid) }
-            MetricCard(cardId: "Haus", title: String(localized: "Haus"), icon: "house.fill", tint: Brand.home, value: Format.power(s.loadW), caption: String(localized: "Verbrauch"),
+            MetricCard(cardId: "Haus", title: String(localized: "Haus"), tint: Brand.home, value: Format.power(s.loadW), caption: String(localized: "Verbrauch"),
                        spark: controller.todayValues(load), valueId: "loadValue") { open(.home) }
         }
     }
@@ -170,7 +171,10 @@ struct DashboardView: View {
     private var marketCard: some View {
         let today = market.prices(on: market.today)
         let now = market.currentPrice
-        let warn = market.outlook?.nextExpensiveDay
+        // Die kommenden Tage wie im Markt: morgen aus Börsenpreisen eingestuft, danach die Prognose.
+        let ahead = MarketDay.build(today: market.today, tomorrow: market.tomorrow, prices: { market.prices(on: $0) }, outlook: market.outlook)
+            .filter { $0.date > market.today }
+        let warn = ahead.first { $0.priceClass == .expensive }
         return Button(action: openMarket) {
             GlassCard(tint: Brand.blue) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -187,10 +191,10 @@ struct DashboardView: View {
                         MiniPriceBars(slots: today).frame(height: 40)
                     }
                     if let warn {
-                        Label("Teurer Tag voraus: \(MarketStyle.weekday(warn.date)) ⌀ \(Format.ct(warn.band.p50))", systemImage: "exclamationmark.triangle.fill")
+                        Label("Teurer Tag voraus: \(MarketStyle.weekday(warn.date)) ⌀ \(Format.ct(warn.meanCt))", systemImage: "exclamationmark.triangle.fill")
                             .font(.footnote.weight(.semibold)).foregroundStyle(Brand.red)
-                    } else if let cheap = market.outlook?.nextCheapDay {
-                        Label("Günstiger Tag voraus: \(MarketStyle.weekday(cheap.date)) ⌀ \(Format.ct(cheap.band.p50))", systemImage: "arrow.down.circle.fill")
+                    } else if let cheap = ahead.first(where: { $0.priceClass == .cheap }) {
+                        Label("Günstiger Tag voraus: \(MarketStyle.weekday(cheap.date)) ⌀ \(Format.ct(cheap.meanCt))", systemImage: "arrow.down.circle.fill")
                             .font(.footnote.weight(.semibold)).foregroundStyle(Brand.green)
                     } else if market.outlook != nil {
                         Label("Keine teuren Tage in Sicht", systemImage: "checkmark.seal").font(.footnote).foregroundStyle(Brand.text2)
@@ -241,7 +245,6 @@ struct MetricCard: View {
     /// Feste Kennung für Tests — unabhängig von der Sprache.
     let cardId: String
     let title: String
-    let icon: String
     let tint: Color
     let value: String
     let caption: String
@@ -254,7 +257,7 @@ struct MetricCard: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Eyebrow(text: title, icon: icon, tint: tint)
+                    Eyebrow(text: title, tint: tint)
                     Spacer(minLength: 4)
                     Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(Brand.dim)
                 }

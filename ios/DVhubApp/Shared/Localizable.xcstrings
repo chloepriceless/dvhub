@@ -280,6 +280,22 @@
         }
       }
     },
+    "%@ · üblich %@–%@ ct" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · üblich %2$@–%3$@ ct"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · usual %2$@–%3$@ ct"
+          }
+        }
+      }
+    },
     "%@ · ⌀ %@ ct" : {
       "localizations" : {
         "de" : {
@@ -2356,6 +2372,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Rating"
+          }
+        }
+      }
+    },
+    "Einstufung des Tagesmittels" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rating of the daily average"
           }
         }
       }
@@ -6622,6 +6648,26 @@
         }
       }
     },
+    "nahe günstig" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "near cheap"
+          }
+        }
+      }
+    },
+    "nahe teuer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "near expensive"
+          }
+        }
+      }
+    },
     "negativ" : {
       "localizations" : {
         "en" : {
@@ -6702,26 +6748,6 @@
         }
       }
     },
-    "näher an günstig" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "closer to cheap"
-          }
-        }
-      }
-    },
-    "näher an teuer" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "closer to expensive"
-          }
-        }
-      }
-    },
     "offline" : {
       "localizations" : {
         "en" : {
@@ -6788,6 +6814,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "unknown"
+          }
+        }
+      }
+    },
+    "unter dem Üblichen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "below the usual"
           }
         }
       }
@@ -6998,6 +7034,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Usual range"
+          }
+        }
+      }
+    },
+    "über dem Üblichen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "above the usual"
           }
         }
       }

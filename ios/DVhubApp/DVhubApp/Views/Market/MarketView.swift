@@ -2,8 +2,9 @@
 //
 // Vier Dinge, mehr nicht:
 //   1. der Börsenpreis jetzt,
-//   2. die Tage als Karten — Datum, Tagesmittel, Spanne, Ampel (Einstufung
-//      der Prognose) und die Lage des Tagesmittels im üblichen Bereich,
+//   2. die Tage als Karten — Datum, Tagesmittel, Spanne, Ampel und die Lage
+//      des Tagesmittels im üblichen Bereich. Prognosetage tragen die Einstufung
+//      der Schnittstelle; heute und morgen dieselbe Regel aus den Börsenpreisen,
 //   3. das Börsenpreis-Diagramm: feste Viertelstunden von heute bzw. morgen,
 //   4. getrennt davon die Preisprognose der nächsten Tage mit Band.
 // Daten: dvhub.online (öffentlich), eigener Bezugspreis aus der Box.
@@ -15,9 +16,17 @@ import DVhubLink
 struct MarketView: View {
     let controller: SystemController?
     @Environment(MarketStore.self) private var market
-    @State private var selectedKey: String = MarketTime.key(Date())
+    @Environment(Chrome.self) private var chrome
+    @State private var selectedKey: String
     @State private var boxPrices: [PricePoint] = []
     @State private var debugDayApplied = false
+
+    /// Der gewählte Tag beginnt dort, wo man zuletzt war (`Chrome`) — auch wenn
+    /// Auf- oder Zuklappen die Ansicht neu aufbaut. Ein vergangener Tag fällt auf heute zurück (unten).
+    init(controller: SystemController?, chrome: Chrome) {
+        self.controller = controller
+        _selectedKey = State(initialValue: chrome.marketDay ?? MarketTime.key(Date()))
+    }
 
     var body: some View {
         AuroraPage { width in
@@ -25,7 +34,7 @@ struct MarketView: View {
             if let err = market.priceError, market.prices.isEmpty { NoticeBanner(text: err, icon: "wifi.slash") }
             NowPriceCard(point: currentPoint, today: days.first { $0.key == MarketTime.key(Date()) }, importCt: currentImportCt)
             if !days.isEmpty {
-                DayStrip(days: days, selected: $selectedKey, outlook: market.outlook, wide: Layout.isWide(width))
+                DayStrip(days: days, selected: $selectedKey, outlook: market.outlook, width: width)
                 ExchangeCard(days: days.filter { !$0.slots.isEmpty }, selectedKey: $selectedKey)
                 if let o = market.outlook, days.contains(where: { !$0.isFixed }) {
                     ForecastCard(days: days.filter { !$0.isFixed }, hours: o.hours, selectedKey: $selectedKey, wide: Layout.isWide(width))
@@ -51,6 +60,7 @@ struct MarketView: View {
         .refreshable { await market.refresh(force: true) }
         .task { await market.refresh() }
         .task(id: controller?.isOnline) { await loadBoxPrices() }
+        .onChange(of: selectedKey) { _, k in chrome.marketDay = k }
         .onChange(of: days.map(\.key), initial: true) { _, keys in
             #if DEBUG
             // Nur für Bildschirmfotos: -DVHUB_MARKET_DAY <n> wählt den n-ten Tag der Leiste.
@@ -95,23 +105,43 @@ enum MarketStyle {
     }
 
     /// Farbe nach Lage im üblichen Bereich: grün (unten) über gelb zu rot (oben).
-    static func color(position p: Double?) -> Color {
-        guard let p else { return Brand.dim }
-        if p < 0 { return Brand.green }
-        if p > 1 { return Brand.red }
-        if p < 1 / 3 { return Color(hex: 0x9be36a) }
-        if p > 2 / 3 { return Brand.orange }
-        return Brand.yellow
+    static func color(zone z: PriceBandZone?) -> Color {
+        switch z {
+        case .below: return Brand.green
+        case .low: return Color(hex: 0x9be36a)
+        case .middle: return Brand.yellow
+        case .high: return Brand.orange
+        case .above: return Brand.red
+        case nil: return Brand.dim
+        }
     }
 
     /// Lage in Worten — eine Darstellung, keine zweite Einstufung.
-    static func positionText(_ p: Double?) -> String {
-        guard let p else { return " " }
-        if p < 0 { return String(localized: "unter dem üblichen Bereich") }
-        if p > 1 { return String(localized: "über dem üblichen Bereich") }
-        if p < 1 / 3 { return String(localized: "näher an günstig") }
-        if p > 2 / 3 { return String(localized: "näher an teuer") }
-        return String(localized: "mittig")
+    static func zoneText(_ z: PriceBandZone?) -> String {
+        switch z {
+        case .below: return String(localized: "unter dem üblichen Bereich")
+        case .low: return String(localized: "nahe günstig")
+        case .middle: return String(localized: "mittig")
+        case .high: return String(localized: "nahe teuer")
+        case .above: return String(localized: "über dem üblichen Bereich")
+        case nil: return " "
+        }
+    }
+
+    /// Lage mit Zahl: „nahe günstig · 8 %“ (0 % = untere, 100 % = obere Schwelle).
+    /// Außerhalb des Bereichs sagt der Text schon alles; `short` für die schmale Tageskarte.
+    static func zoneDetail(_ d: MarketDay, short: Bool = false) -> String {
+        guard let z = d.zone, let p = d.position else { return " " }
+        if z == .below { return short ? String(localized: "unter dem Üblichen") : zoneText(z) }
+        if z == .above { return short ? String(localized: "über dem Üblichen") : zoneText(z) }
+        return "\(zoneText(z)) · \(pct(p))"
+    }
+
+    /// Herkunft und Einstufung: „Börse · günstig“, „Prognose · normal“.
+    static func classLine(_ d: MarketDay) -> String {
+        let source = d.isFixed ? String(localized: "Börse") : String(localized: "Prognose")
+        guard let c = d.priceClass else { return source }
+        return "\(source) · \(c.title)"
     }
 
     static func icon(_ c: PriceClass?) -> String {
@@ -297,9 +327,18 @@ private struct DayStrip: View {
     let days: [MarketDay]
     @Binding var selected: String
     let outlook: ResidualOutlook?
-    let wide: Bool
+    /// Breite der Seite (Spaltenwahl von AuroraPage).
+    let width: CGFloat
     /// Kachelbreite wächst mit der Schriftgröße mit.
     @ScaledMetric(relativeTo: .title2) private var tileWidth: CGFloat = 118
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// Alle Tage nebeneinander nur, wenn jede Kachel ihre volle Breite bekommt —
+    /// sonst rollt die Leiste (schmaler würden die Texte abgeschnitten).
+    private var wide: Bool {
+        let n = CGFloat(max(1, days.count))
+        return typeSize.pageWidth(width) - 32 >= n * tileWidth + (n - 1) * 10
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -321,7 +360,7 @@ private struct DayStrip: View {
 
     private func tile(_ d: MarketDay) -> some View {
         let isSel = d.key == selected
-        let tint = MarketStyle.color(position: d.position)
+        let tint = MarketStyle.color(zone: d.zone)
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         return Button { withAnimation(.snappy) { selected = d.key } } label: {
             VStack(alignment: .leading, spacing: 6) {
@@ -332,7 +371,7 @@ private struct DayStrip: View {
                         Text(MarketStyle.dayMonth(d.date)).font(.caption2.monospacedDigit()).foregroundStyle(Brand.dim)
                     }
                     Spacer(minLength: 2)
-                    Ampel(priceClass: d.priceClass)
+                    Ampel(priceClass: d.priceClass, zone: d.zone)
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text(MarketStyle.ct1(d.meanCt))
@@ -349,20 +388,20 @@ private struct DayStrip: View {
                 DaySpark(hours: outlook?.hours(on: d.key) ?? [], slots: d.slots, tint: tint)
                     .frame(height: 20)
                 VStack(alignment: .leading, spacing: 0) {
-                    // Einstufung aus der Prognose; feste Tage heißen „Börse“.
-                    Text(d.isFixed ? String(localized: "Börse") : (d.priceClass?.title ?? String(localized: "Prognose")))
-                        .foregroundStyle(d.isFixed ? Brand.text2 : MarketStyle.color(d.priceClass))
-                    Text(MarketStyle.positionText(d.position)).foregroundStyle(Brand.dim)
+                    // Herkunft und Einstufung in der Farbe der Lage, darunter die Lage selbst.
+                    Text(MarketStyle.classLine(d)).foregroundStyle(d.priceClass == nil ? Brand.text2 : tint)
+                    Text(MarketStyle.zoneDetail(d, short: true)).foregroundStyle(Brand.text2)
                 }
                 .font(.caption2.weight(.semibold))
                 .lineLimit(1).minimumScaleFactor(0.6)
             }
             .padding(10)
             .background(shape.fill(.ultraThinMaterial))
-            .background(shape.fill(tint.opacity(isSel ? 0.22 : 0.06)))
+            .background(shape.fill(tint.opacity(isSel ? 0.24 : 0.10)))
             // Prognose gestrichelt: Sie ist eine Schätzung, kein Börsenpreis.
-            .overlay(shape.strokeBorder(isSel ? tint : Brand.border,
+            .overlay(shape.strokeBorder(isSel ? tint : tint.opacity(d.zone == nil ? 0 : 0.35),
                                         style: StrokeStyle(lineWidth: isSel ? 2 : 1, dash: d.isFixed ? [] : [5, 3])))
+            .overlay { if !isSel, d.zone == nil { shape.strokeBorder(Brand.border, style: StrokeStyle(lineWidth: 1, dash: d.isFixed ? [] : [5, 3])) } }
         }
         .buttonStyle(CardButtonStyle())
         .accessibilityElement(children: .ignore)
@@ -376,14 +415,27 @@ private struct DayStrip: View {
         var s = d.isFixed ? String(localized: "\(day), Börsenpreis im Mittel \(mean)") : String(localized: "\(day), Prognose im Mittel \(mean)")
         if let r = d.rangeCt { s += String(localized: ", Spanne \(Format.ct(r.0)) bis \(Format.ct(r.1))") }
         if let c = d.priceClass { s += String(localized: ", Einstufung \(c.title)") }
-        if d.position != nil { s += ", \(MarketStyle.positionText(d.position))" }
+        if d.zone != nil { s += ", \(MarketStyle.zoneText(d.zone))" }
         return s
     }
 }
 
-/// Ampel: günstig (grün), normal (gelb), teuer (rot) — das aktive Licht leuchtet.
+/// Ampel: günstig (grün), normal (gelb), teuer (rot) — das Licht der Einstufung
+/// leuchtet. Liegt ein normaler Tag nahe an einer Schwelle, glimmt das
+/// Nachbarlicht mit: gelb mit grün = normal, nahe günstig.
 struct Ampel: View {
     let priceClass: PriceClass?
+    var zone: PriceBandZone? = nil
+
+    /// Wohin der Tag neigt, ohne so eingestuft zu sein.
+    private var leaning: PriceClass? {
+        guard priceClass == .normal else { return nil }
+        switch zone {
+        case .low, .below: return .cheap
+        case .high, .above: return .expensive
+        default: return nil
+        }
+    }
 
     var body: some View {
         VStack(spacing: 3) {
@@ -400,10 +452,11 @@ struct Ampel: View {
 
     private func light(_ c: PriceClass, _ color: Color) -> some View {
         let on = priceClass == c
+        let glow = leaning == c
         return Circle()
-            .fill(on ? color : color.opacity(0.14))
+            .fill(on ? color : color.opacity(glow ? 0.6 : 0.14))
             .frame(width: 9, height: 9)
-            .shadow(color: on ? color.opacity(0.9) : .clear, radius: 4)
+            .shadow(color: on ? color.opacity(0.9) : (glow ? color.opacity(0.5) : .clear), radius: on ? 4 : 2)
     }
 }
 
@@ -423,20 +476,20 @@ private struct PositionScale: View {
                     .init(color: Brand.yellow, location: 0.5),
                     .init(color: Brand.red, location: 0.84), .init(color: Brand.red, location: 1),
                 ], startPoint: .leading, endPoint: .trailing))
-                .opacity(position == nil ? 0.2 : 0.75)
-                .frame(height: 5)
+                .opacity(position == nil ? 0.2 : 0.9)
+                .frame(height: 6)
                 // Marken für P20 und P80.
-                Rectangle().fill(Brand.bg0).frame(width: 1.5, height: 9).offset(x: g.size.width / 6)
-                Rectangle().fill(Brand.bg0).frame(width: 1.5, height: 9).offset(x: g.size.width * 5 / 6)
+                Rectangle().fill(Brand.bg0).frame(width: 1.5, height: 11).offset(x: g.size.width / 6)
+                Rectangle().fill(Brand.bg0).frame(width: 1.5, height: 11).offset(x: g.size.width * 5 / 6)
                 if position != nil {
-                    Circle().fill(Brand.text).frame(width: 9, height: 9)
-                        .overlay(Circle().strokeBorder(Brand.bg0, lineWidth: 1.5))
-                        .offset(x: x - 4.5)
+                    Circle().fill(Brand.text).frame(width: 11, height: 11)
+                        .overlay(Circle().strokeBorder(Brand.bg0, lineWidth: 2))
+                        .offset(x: min(g.size.width - 11, max(0, x - 5.5)))
                 }
             }
-            .frame(height: 9)
+            .frame(height: 11)
         }
-        .frame(height: 9)
+        .frame(height: 11)
         .accessibilityHidden(true)
     }
 }
@@ -577,6 +630,13 @@ private struct ExchangeCard: View {
         return p.end <= now ? base.opacity(0.4) : base
     }
 
+    /// Einstufung des Börsentags: Tagesmittel gegen den üblichen Bereich der letzten vier Wochen.
+    private func classRow(_ d: MarketDay) -> ValueRow? {
+        guard let c = d.priceClass, let p20 = d.p20Ct, let p80 = d.p80Ct else { return nil }
+        return ValueRow(label: "Einstufung des Tagesmittels", value: c.title, tint: MarketStyle.color(zone: d.zone),
+                        hint: String(localized: "\(MarketStyle.zoneDetail(d)) · üblich \(MarketStyle.ct1(p20))–\(MarketStyle.ct1(p80)) ct"))
+    }
+
     @ViewBuilder
     private func stats(_ d: MarketDay) -> some View {
         if d.slotsAreFallback {
@@ -586,6 +646,7 @@ private struct ExchangeCard: View {
                 if let r = d.rangeCt { ValueRow(label: "Tief", value: Format.ct(r.0), tint: Brand.green) }
                 if let m = d.meanCt { ValueRow(label: "Mittel", value: Format.ct(m)) }
                 if let r = d.rangeCt { ValueRow(label: "Hoch", value: Format.ct(r.1), tint: Brand.orange) }
+                if let row = classRow(d) { row }
             }
             if d.slotsIncomplete {
                 Text("Für diesen Tag liegen noch nicht alle Stunden vor.").font(.caption).foregroundStyle(Brand.dim)
@@ -607,6 +668,7 @@ private struct ExchangeCard: View {
                     let step = d.slots.first.map { $0.end.timeIntervalSince($0.start) } ?? 900
                     ValueRow(label: "Negative Preise", value: Format.hours(Double(s.negativeSlots) * step / 3600), tint: Brand.red)
                 }
+                if let row = classRow(d) { row }
             }
         }
     }
@@ -653,8 +715,8 @@ private struct ForecastCard: View {
                         if let lo = f.minHourCt, let hi = f.maxHourCt {
                             ValueRow(label: "Günstigste / teuerste Stunde", value: String(localized: "\(MarketStyle.ct1(lo)) / \(MarketStyle.ct1(hi)) ct"))
                         }
-                        ValueRow(label: "Einstufung", value: f.priceClass?.title ?? "–", tint: MarketStyle.color(f.priceClass),
-                                 hint: d.position == nil ? nil : MarketStyle.positionText(d.position))
+                        ValueRow(label: "Einstufung", value: f.priceClass?.title ?? "–", tint: MarketStyle.color(zone: d.zone),
+                                 hint: d.zone == nil ? nil : MarketStyle.zoneDetail(d))
                         if let p20 = f.p20Ct, let p80 = f.p80Ct {
                             ValueRow(label: "Üblicher Bereich", value: String(localized: "\(MarketStyle.ct1(p20))–\(MarketStyle.ct1(p80)) ct"), hint: String(localized: "Tagesmittel der letzten vier Wochen"))
                         }

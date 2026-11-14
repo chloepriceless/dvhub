@@ -172,8 +172,12 @@ final class InsightsTests: XCTestCase {
         let big = FlowEdge(node: .pv, towardHub: true, watts: 9000)
         XCTAssertGreaterThan(big.speed, small.speed)
         XCTAssertGreaterThan(big.particleCount, small.particleCount)
-        XCTAssertLessThanOrEqual(FlowEdge(node: .pv, towardHub: true, watts: 1e9).particleCount, 14)
-        XCTAssertLessThanOrEqual(FlowEdge(node: .pv, towardHub: true, watts: 1e9).speed, 1.6)
+        XCTAssertLessThanOrEqual(FlowEdge(node: .pv, towardHub: true, watts: 1e9).particleCount, FlowEdge.maxParticles)
+        XCTAssertLessThanOrEqual(FlowEdge(node: .pv, towardHub: true, watts: 1e9).speed, 0.6)
+        // Dichte wie im Web-Leitstand proportional zur Leistung: 2 kW ≈ doppelt so dicht wie 1 kW.
+        XCTAssertEqual(FlowEdge(node: .pv, towardHub: true, watts: 1000).particleCount, 18)
+        XCTAssertEqual(FlowEdge(node: .pv, towardHub: true, watts: 2000).particleCount, 36)
+        XCTAssertGreaterThanOrEqual(small.particleCount, 4)
         // Positionen bleiben in 0…1 und laufen in Flussrichtung.
         for t in stride(from: 0.0, to: 5, by: 0.37) {
             for i in 0..<big.particleCount {
@@ -184,5 +188,40 @@ final class InsightsTests: XCTestCase {
         let out = FlowEdge(node: .home, towardHub: false, watts: 2000)
         let a = out.position(particle: 0, time: 0.10), b = out.position(particle: 0, time: 0.12)
         XCTAssertLessThan(b, a, "vom Mittelpunkt weg: Position (0 = Knoten) nimmt ab")
+    }
+
+    /// Partikel tragen die Farbe ihrer Quelle: zum Haus gemischt aus PV, Akku und Netz.
+    func testFlowSourcesMixLikeTheWebDashboard() {
+        var s = LiveStatus()
+        s.pvTotalW = 3000; s.loadW = 4000; s.batteryPowerW = -500; s.gridImportW = 500; s.gridExportW = 0
+        var e = Dictionary(uniqueKeysWithValues: FlowEdge.edges(from: s).map { ($0.node, $0) })
+        XCTAssertEqual(e[.pv]?.sources, [.pv: 1])
+        XCTAssertEqual(e[.battery]?.sources, [.battery: 1], "Entladen: der Akku ist selbst die Quelle")
+        XCTAssertEqual(e[.grid]?.sources, [.grid: 1])
+        let home = e[.home]!
+        XCTAssertEqual(home.sources[.pv] ?? 0, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(home.sources[.battery] ?? 0, 0.125, accuracy: 1e-9)
+        XCTAssertEqual(home.sources[.grid] ?? 0, 0.125, accuracy: 1e-9)
+        XCTAssertEqual(home.source(rank: 0.1), .pv)
+        XCTAssertEqual(home.source(rank: 0.8), .battery)
+        XCTAssertEqual(home.source(rank: 0.9), .grid)
+        XCTAssertEqual(home.source(rank: 0.999999), .grid)
+
+        // Überschuss: Akku lädt aus PV, Einspeisung aus PV; kein Bezug.
+        s.pvTotalW = 6000; s.loadW = 1000; s.batteryPowerW = 2000; s.gridImportW = 0; s.gridExportW = 3000
+        e = Dictionary(uniqueKeysWithValues: FlowEdge.edges(from: s).map { ($0.node, $0) })
+        XCTAssertEqual(e[.home]?.sources, [.pv: 1])
+        XCTAssertEqual(e[.battery]?.sources, [.pv: 1])
+        XCTAssertEqual(e[.grid]?.sources, [.pv: 1])
+        XCTAssertEqual(e[.grid]?.source(rank: 0.5), .pv)
+
+        // Nachts: Akku lädt aus dem Netz, das Haus läuft am Netz.
+        s.pvTotalW = 0; s.loadW = 500; s.batteryPowerW = 1500; s.gridImportW = 2000; s.gridExportW = 0
+        e = Dictionary(uniqueKeysWithValues: FlowEdge.edges(from: s).map { ($0.node, $0) })
+        XCTAssertEqual(e[.battery]?.sources, [.grid: 1])
+        XCTAssertEqual(e[.home]?.source(rank: 0.3), .grid)
+
+        // Keine Quelle gemessen (alles 0): Rückfall ohne Absturz.
+        XCTAssertEqual(FlowEdge.edges(from: LiveStatus()).first { $0.node == .home }?.source(rank: 0.5), .grid)
     }
 }

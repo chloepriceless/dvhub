@@ -1,6 +1,9 @@
 // EnergyFlowView.swift — Energiefluss mit Partikeln: PV oben, Netz links, Haus
-// rechts, Akku unten, alles über die Mitte. Partikel laufen in Flussrichtung;
-// Dichte und Tempo folgen der Leistung (FlowEdge im Paket DVhubLink).
+// rechts, Akku unten, alles über die Mitte. Der Partikelstrom folgt dem
+// Web-Leitstand (dvhub/public/dvhub-powerflow.js), fürs iPhone angepasst:
+// viele kleine Leuchtpunkte mit Schweif und Lichtschein in der Farbe ihrer
+// Quelle (PV gelb, Akku grün, Netz blau); Dichte und Tempo folgen der
+// Leistung (FlowEdge im Paket DVhubLink).
 //
 // Gezeichnet wird in einem Canvas (ein Durchlauf je Bild, keine Views je
 // Partikel). Mit „Bewegung reduzieren“ steht das Bild: Pfeile zeigen die Richtung.
@@ -87,8 +90,9 @@ struct EnergyFlowView: View {
 
         init(size: CGSize) {
             self.size = size
-            r = max(26, min(40, min(size.width, size.height) * 0.105))
-            hubR = r * 0.72
+            // Knoten eher klein: Die Strecken dazwischen gehören dem Partikelstrom.
+            r = max(24, min(36, min(size.width, size.height) * 0.092))
+            hubR = r * 0.64
             hub = CGPoint(x: size.width / 2, y: size.height / 2)
         }
 
@@ -123,24 +127,65 @@ struct EnergyFlowView: View {
 
     // MARK: Zeichnen
 
+    /// Farbe einer Quelle (PV, Akku, Netz) — die Partikel tragen sie bis ans Ziel.
+    private static let sourceOrder: [FlowEdge.Node] = [.pv, .battery, .grid]
+
+    /// Feste Eigenschaften je Partikel (Versatz auf der Strecke, Rang für die
+    /// Quelle, Größe, seitliches Pendeln) — einmal gewürfelt, immer gleich:
+    /// So springt nichts, wenn sich die Leistung ändert.
+    private struct Dust {
+        let offset: Double, rank: Double, size: CGFloat, sway: CGFloat, wobble: Double
+    }
+
+    private struct SplitMix: RandomNumberGenerator {
+        var state: UInt64
+        mutating func next() -> UInt64 {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            return z ^ (z >> 31)
+        }
+    }
+
+    private static let dust: [Dust] = {
+        var g = SplitMix(state: 0xD0B5_F10A)
+        return (0..<(FlowEdge.maxParticles * FlowEdge.Node.allCases.count)).map { _ in
+            Dust(offset: .random(in: 0..<1, using: &g), rank: .random(in: 0..<1, using: &g),
+                 size: .random(in: 0.9...2.1, using: &g), sway: .random(in: -0.05...0.05, using: &g),
+                 wobble: .random(in: 0..<(2 * .pi), using: &g))
+        }
+    }()
+
+    /// Deckkraft in fünf Stufen: Kreise gleicher Farbe und Stufe werden in
+    /// einem Pfad gesammelt und zusammen gefüllt (wenige Füllungen je Bild).
+    private static let alphaLevels: [Double] = [0.05, 0.15, 0.3, 0.5, 0.7, 0.9]
+    /// Nächstliegende Stufe.
+    private static func level(_ a: Double) -> Int {
+        alphaLevels.indices.min { abs(alphaLevels[$0] - a) < abs(alphaLevels[$1] - a) } ?? 0
+    }
+
+    /// Partikelstrom wie im Web-Leitstand (dvhub-powerflow.js): viele kleine
+    /// Leuchtpunkte in der Farbe ihrer Quelle, die leicht pendelnd in
+    /// Flussrichtung treiben, mit Schweif und Lichtschein. Dichte und Tempo
+    /// folgen der Leistung (FlowEdge). Dunkel addieren sich die Lichter
+    /// (plusLighter), hell stehen sie in den kräftigeren Farben des hellen
+    /// Designs mit dunklem Kern.
     private func draw(_ ctx: inout GraphicsContext, m: Metrics, time: Date?) {
+        let dark = scheme == .dark
         for e in edges {
             let (a, b) = m.segment(e.node)
             let color = Self.color(e.node)
             var line = Path()
             line.move(to: a)
             line.addLine(to: b)
-            // Leitung: ruhend haarfein, aktiv mit Lichtschein.
-            if e.active {
-                ctx.drawLayer { l in
-                    l.addFilter(.blur(radius: 5))
-                    l.stroke(line, with: .color(color.opacity(0.35)), style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                }
-                ctx.stroke(line, with: .color(color.opacity(0.45)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-            } else {
+            guard e.active else {
                 ctx.stroke(line, with: .color(Brand.dim.opacity(0.35)), style: StrokeStyle(lineWidth: 1, lineCap: .round, dash: [2, 5]))
                 continue
             }
+            // Leitung: weicher Schein und feine Linie als Bahn der Partikel.
+            ctx.stroke(line, with: .color(color.opacity(dark ? 0.10 : 0.08)), style: StrokeStyle(lineWidth: 9, lineCap: .round))
+            ctx.stroke(line, with: .color(color.opacity(0.32)), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
             let dx = b.x - a.x, dy = b.y - a.y
             let len = max(1, sqrt(dx * dx + dy * dy))
             if time == nil {
@@ -158,33 +203,60 @@ struct EnergyFlowView: View {
                 }
                 continue
             }
-            let n = e.particleCount
+            // Quer zur Strecke (für das Pendeln).
+            let nx = -dy / len, ny = dx / len
             let phase = phases.phase[e.node] ?? 0
-            // Schweif-Länge wächst mit dem Tempo.
-            let tail = min(0.16, 0.05 + e.speed * 0.06)
-            var glow = Path()
-            var cores: [(CGPoint, CGFloat)] = []
-            for i in 0..<n {
-                var along = (phase + Double(i) / Double(n)).truncatingRemainder(dividingBy: 1)
+            let base = (FlowEdge.Node.allCases.firstIndex(of: e.node) ?? 0) * FlowEdge.maxParticles
+            // Schweif: Nachbilder hinter dem Partikel, länger bei höherem Tempo.
+            let step = 0.008 + e.speed * 0.035
+            var bodies = Array(repeating: Array(repeating: Path(), count: Self.alphaLevels.count), count: Self.sourceOrder.count)
+            var cores = Array(repeating: Path(), count: Self.alphaLevels.count)
+
+            func point(_ along: Double, _ d: Dust) -> CGPoint {
+                let f = CGFloat(e.towardHub ? along : 1 - along)
+                let sway = CGFloat(sin(along * .pi * 8 + d.wobble)) * d.sway * len
+                return CGPoint(x: a.x + dx * f + nx * sway, y: a.y + dy * f + ny * sway)
+            }
+            func dot(_ path: inout Path, _ c: CGPoint, _ r: CGFloat) {
+                path.addEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+            }
+
+            // Dichte je Länge: Auf kurzen Strecken weniger Partikel, sonst verklumpt der Strom.
+            let count = max(4, Int((Double(min(e.particleCount, FlowEdge.maxParticles)) * min(1, Double(len) / 120)).rounded()))
+            for i in 0..<count {
+                let d = Self.dust[base + i]
+                var along = (phase + d.offset).truncatingRemainder(dividingBy: 1)
                 if along < 0 { along += 1 }
-                let head = e.towardHub ? along : 1 - along
-                let back = e.towardHub ? max(0, head - tail) : min(1, head + tail)
-                let ph = CGPoint(x: a.x + dx * head, y: a.y + dy * head)
-                let pb = CGPoint(x: a.x + dx * back, y: a.y + dy * back)
-                glow.move(to: pb)
-                glow.addLine(to: ph)
                 // An den Enden weich ein- und ausblenden.
-                cores.append((ph, CGFloat(sin(.pi * along)).squareRoot()))
+                let env = sin(.pi * along)
+                let alpha = env * 0.9
+                let src = Self.sourceOrder.firstIndex(of: e.source(rank: d.rank)) ?? 0
+                let r = d.size * CGFloat(0.6 + env * 0.6)
+                let head = point(along, d)
+                dot(&bodies[src][0], head, r * 2.6)                       // Lichtschein (schwächste Stufe)
+                for k in 1...4 {                                           // Schweif
+                    let back = along - Double(k) * step
+                    guard back > 0 else { break }
+                    let fade = pow(0.62, Double(k))
+                    dot(&bodies[src][Self.level(alpha * fade)], point(back, d), r * CGFloat(1 - 0.12 * Double(k)))
+                }
+                dot(&bodies[src][Self.level(alpha)], head, r)              // Partikel
+                dot(&cores[Self.level(alpha * (dark ? 0.6 : 0.35))], head, r * 0.4)
             }
+
             ctx.drawLayer { l in
-                l.addFilter(.blur(radius: 3))
-                l.stroke(glow, with: .color(color.opacity(0.9)), style: StrokeStyle(lineWidth: 4, lineCap: .round))
-            }
-            ctx.stroke(glow, with: .color(color.opacity(0.55)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-            let core = scheme == .dark ? Color.white : color
-            for (p, alpha) in cores {
-                let rr: CGFloat = len > 60 ? 2.4 : 1.8
-                ctx.fill(Path(ellipseIn: CGRect(x: p.x - rr, y: p.y - rr, width: rr * 2, height: rr * 2)), with: .color(core.opacity(Double(alpha))))
+                if dark { l.blendMode = .plusLighter }
+                for (si, levels) in bodies.enumerated() {
+                    let c = Self.color(Self.sourceOrder[si])
+                    for (li, path) in levels.enumerated() where !path.isEmpty {
+                        l.fill(path, with: .color(c.opacity(Self.alphaLevels[li])))
+                    }
+                }
+                // Kern: weißes Glühen im Dunkeln, dunkler Kern im Hellen.
+                let core = dark ? Color.white : Brand.text
+                for (li, path) in cores.enumerated() where !path.isEmpty {
+                    l.fill(path, with: .color(core.opacity(Self.alphaLevels[li])))
+                }
             }
         }
     }

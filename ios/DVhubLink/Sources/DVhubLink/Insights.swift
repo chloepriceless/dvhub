@@ -378,23 +378,38 @@ public struct FlowEdge: Equatable, Sendable {
     /// true: vom Knoten zur Mitte (PV, Entladen, Bezug); false: zur Mitte hin weg (Haus, Laden, Einspeisung).
     public let towardHub: Bool
     public let watts: Double
+    /// Woher die Energie auf dieser Strecke stammt, als Anteile (Summe 1):
+    /// PV, Akku (Entladen), Netz (Bezug). Die Partikel tragen die Farbe ihrer
+    /// Quelle — zum Haus laufen sie gemischt, wie im Web-Leitstand.
+    public let sources: [Node: Double]
+
+    public init(node: Node, towardHub: Bool, watts: Double, sources: [Node: Double]? = nil) {
+        self.node = node
+        self.towardHub = towardHub
+        self.watts = watts
+        self.sources = sources ?? [node == .home ? .grid : node: 1]
+    }
 
     /// Unter dieser Leistung ruht ein Fluss (Messrauschen).
     public static let idleW: Double = 20
+    /// Obergrenze der Partikel je Strecke (Zeichenaufwand auf dem Handy).
+    public static let maxParticles = 72
 
     public var active: Bool { watts >= Self.idleW }
 
-    /// Weg pro Sekunde als Anteil der Strecke: wächst logarithmisch mit der
-    /// Leistung (50 W kriecht, 10 kW eilt), damit kleine Flüsse sichtbar bleiben.
+    /// Weg pro Sekunde als Anteil der Strecke. Wie im Web-Leitstand wächst
+    /// das Tempo mit der Wurzel der Leistung (0,2 kW treibt, 9 kW strömt) —
+    /// für die kurzen Strecken auf dem Handy schneller gestellt.
     public var speed: Double {
         guard active else { return 0 }
-        return min(1.6, 0.18 + 0.32 * log10(1 + watts / 100))
+        return min(0.6, 0.05 + 0.14 * (watts / 1000).squareRoot())
     }
 
-    /// Anzahl Partikel auf der Strecke (Dichte), 2 … 14.
+    /// Anzahl Partikel auf der Strecke (Dichte): wie im Web-Leitstand
+    /// proportional zur Leistung (18 je kW), 4 … `maxParticles`.
     public var particleCount: Int {
         guard active else { return 0 }
-        return max(2, min(14, Int((2 + 3 * log2(1 + watts / 500)).rounded())))
+        return max(4, min(Self.maxParticles, Int((watts / 1000 * 18).rounded())))
     }
 
     /// Lage des i-ten Partikels (0 … 1, 0 = am Knoten) zur Zeit t.
@@ -405,17 +420,38 @@ public struct FlowEdge: Equatable, Sendable {
         return towardHub ? along : 1 - along
     }
 
+    /// Quelle eines Partikels: `rank` (0 … 1, je Partikel fest) fällt in die
+    /// Anteile der Quellen in der Reihenfolge PV, Akku, Netz.
+    public func source(rank: Double) -> Node {
+        var edge = 0.0
+        let order: [Node] = [.pv, .battery, .grid]
+        for n in order {
+            edge += sources[n] ?? 0
+            if rank < edge { return n }
+        }
+        return order.last { (sources[$0] ?? 0) > 0 } ?? node
+    }
+
     public static func edges(from s: LiveStatus) -> [FlowEdge] {
         let pv = max(0, s.pvTotalW ?? 0)
         let load = max(0, s.loadW ?? 0)
         let bat = s.batteryPowerW ?? 0
         let imp = max(0, s.gridImportW ?? 0), exp = max(0, s.gridExportW ?? 0)
+        // Quellen in der Mitte: PV, entladender Akku, Netzbezug (netto).
+        let batOut = max(0, -bat)
+        let gridIn = imp >= exp ? imp : 0
+        func shares(_ parts: [(Node, Double)]) -> [Node: Double]? {
+            let total = parts.reduce(0) { $0 + $1.1 }
+            guard total > 0 else { return nil }
+            return Dictionary(uniqueKeysWithValues: parts.filter { $0.1 > 0 }.map { ($0.0, $0.1 / total) })
+        }
         return [
             FlowEdge(node: .pv, towardHub: true, watts: pv),
-            FlowEdge(node: .home, towardHub: false, watts: load),
-            // + = Laden: Energie fließt von der Mitte in den Akku.
-            FlowEdge(node: .battery, towardHub: bat < 0, watts: abs(bat)),
-            FlowEdge(node: .grid, towardHub: imp >= exp, watts: max(imp, exp)),
+            FlowEdge(node: .home, towardHub: false, watts: load, sources: shares([(.pv, pv), (.battery, batOut), (.grid, gridIn)])),
+            // + = Laden: Energie fließt von der Mitte in den Akku — aus PV und Netz.
+            FlowEdge(node: .battery, towardHub: bat < 0, watts: abs(bat), sources: bat > 0 ? shares([(.pv, pv), (.grid, gridIn)]) : nil),
+            // Einspeisung kommt aus PV und Akku.
+            FlowEdge(node: .grid, towardHub: imp >= exp, watts: max(imp, exp), sources: imp >= exp ? nil : shares([(.pv, pv), (.battery, batOut)])),
         ]
     }
 }

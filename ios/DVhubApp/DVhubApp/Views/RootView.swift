@@ -1,7 +1,15 @@
 // RootView.swift — Grundgerüst nach Apples Richtlinien für das iPhone Duo
 // (HIG „Designing for iPhone Duo“, Tech Talk 111461; siehe ios/README.md).
 //
-// Die App nutzt die Standard-Bausteine TabView, NavigationStack und .toolbar.
+// Zwei Anordnungen, beide aus Standard-Bausteinen, gewählt nach der
+// Breiten-Größenklasse (nie nach Gerätetyp):
+//   • schmal (zugeklappt, gewöhnliches iPhone): TabView mit fünf Reitern;
+//     „Mehr“ ist eine Liste, die in ihre Bereiche hineinführt.
+//   • breit (aufgeklappt, iPad): eine NavigationSplitView mit EINER
+//     Seitenleiste für alle Bereiche — Leitstand, Markt, Historie,
+//     Nachrichten und die Bereiche, die schmal unter „Mehr“ stehen.
+//
+// Schmal nutzt die App TabView, NavigationStack und .toolbar.
 // Gebaut mit dem iOS-27.1-SDK legt das System deren Leisten selbst um:
 //   • zugeklappt (und aufgeklappt im Querformat) an den rechten Rand,
 //   • aufgeklappt im Hochformat waagerecht oben und unten — der Inhalt füllt
@@ -44,6 +52,13 @@ enum AppTab: String, CaseIterable, Identifiable, Hashable {
 enum MoreRoute: String, Hashable, Identifiable {
     var id: String { rawValue }
     case plan, integrations, system, control, systems, appearance, about
+}
+
+/// Eintrag der Seitenleiste auf breiter Fläche: ein Reiter oder ein Bereich,
+/// der schmal unter „Mehr“ steht.
+enum SidebarItem: Hashable {
+    case tab(AppTab)
+    case more(MoreRoute)
 }
 
 // MARK: - Leisten
@@ -92,6 +107,13 @@ final class Chrome {
         guard let major = parts.first else { return false }
         return major > 27 || (major == 27 && (parts.count > 1 ? parts[1] : 0) >= 1)
     }()
+
+    /// Auswahl in Historie und Markt. Sie überdauert das Auf- und Zuklappen:
+    /// Der Wechsel zwischen Reitern und Seitenleiste baut die Ansichten neu auf.
+    var historyPeriod: HistoryPeriod = .day
+    var historyDate = Date()
+    var historyMetric: HistoryView.Metric = .pv
+    var marketDay: String?
 
     /// Fläche, Bildschirm und Größenklassen als Text — unter Mehr → Darstellung
     /// ablesbar, um das Verhalten am echten Gerät nachzuvollziehen.
@@ -234,7 +256,9 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(NewsStore.self) private var news
     @Environment(\.verticalSizeClass) private var vSize
+    @Environment(\.horizontalSizeClass) private var hSize
     @AppStorage("navPlacement") private var placementRaw = Chrome.Placement.auto.rawValue
+    @State private var columns: NavigationSplitViewVisibility = .all
     @State private var chrome = Chrome()
     @State private var tab: AppTab = .dashboard
     @State private var dashboardPath: [DetailKind] = []
@@ -243,8 +267,12 @@ struct RootView: View {
     @State private var size: CGSize = .zero
     @State private var screen: CGSize = .zero
 
+    /// Breite Fläche (aufgeklappt, iPad): Seitenleiste des Systems statt Reiter.
+    private var wide: Bool { hSize == .regular }
+
+    /// Ersatz-Seitenleiste rechts — nur schmal; breit führt die Seitenleiste links.
     private var rail: Bool {
-        Chrome.wantsRail(size: size, screen: screen, vertical: vSize, placement: Chrome.Placement(rawValue: placementRaw) ?? .auto)
+        !wide && Chrome.wantsRail(size: size, screen: screen, vertical: vSize, placement: Chrome.Placement(rawValue: placementRaw) ?? .auto)
     }
 
     var body: some View {
@@ -313,82 +341,139 @@ struct RootView: View {
         #endif
     }
 
-    /// Inhalt links, Seitenleiste rechts daneben (nicht darüber gelegt — die
-    /// Navigationsleisten der Reiter enden an der Leiste).
+    /// Schmal: Reiter (und bei Bedarf die Ersatz-Seitenleiste rechts daneben —
+    /// nicht darüber gelegt, die Navigationsleisten der Reiter enden an ihr).
+    /// Breit: geteilte Ansicht mit einer Seitenleiste für alle Bereiche.
     private var shell: some View {
-        HStack(spacing: 0) {
-            tabs
-            if rail {
-                SideRail(tab: $tab, actions: chrome.actions[tab.rawValue] ?? [], badges: [.news: news.unseenCount],
-                         compact: size.height < 520, narrow: size.width < 420) { t in
-                    // Gewählten Reiter erneut antippen: zurück zur ersten Ebene.
-                    if t == .dashboard { dashboardPath = [] }
-                    if t == .more { moreRoute = nil }
+        Group {
+            if wide {
+                split
+            } else {
+                HStack(spacing: 0) {
+                    tabs
+                    if rail {
+                        SideRail(tab: $tab, actions: chrome.actions[tab.rawValue] ?? [], badges: [.news: news.unseenCount],
+                                 compact: size.height < 520, narrow: size.width < 420) { t in
+                            // Gewählten Reiter erneut antippen: zurück zur ersten Ebene.
+                            if t == .dashboard { dashboardPath = [] }
+                            if t == .more { moreRoute = nil }
+                        }
+                        .transition(.move(edge: .trailing))
+                    }
                 }
-                .transition(.move(edge: .trailing))
+                .animation(.snappy, value: rail)
             }
         }
-        .animation(.snappy, value: rail)
         .tint(Brand.cyan)
     }
 
-    /// Reiter als System-TabView. `.sidebarAdaptable`: Wo die Fläche breit ist
-    /// (aufgeklappt, iPad), bietet das System von sich aus die Leiste oben und
-    /// die ausklappbare Seitenleiste an; schmal bleibt es die Tab-Leiste.
+    // MARK: Breit — eine Seitenleiste für alles
+
+    /// Auswahl der Seitenleiste, abgeleitet aus Reiter und Bereich: Beim
+    /// Auf- und Zuklappen bleibt man, wo man war.
+    private var sidebarSelection: Binding<SidebarItem?> {
+        Binding(
+            get: { tab == .more ? moreRoute.map(SidebarItem.more) : .tab(tab) },
+            set: { new in
+                switch new {
+                case .tab(let t): tab = t
+                case .more(let r): tab = .more; moreRoute = r
+                case nil: break
+                }
+            })
+    }
+
+    private var split: some View {
+        NavigationSplitView(columnVisibility: $columns) {
+            SidebarView(selection: sidebarSelection, newsBadge: news.unseenCount)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 236, max: 280)
+        } detail: {
+            switch tab {
+            case .dashboard: dashboardStack
+            case .market: marketStack
+            case .history: historyStack
+            case .news: newsStack
+            case .more:
+                NavigationStack {
+                    if let route = moreRoute {
+                        moreDestination(route)
+                    } else {
+                        MoreOverview()
+                    }
+                }
+                // Je Bereich ein eigener Stapel: kein Zustand des vorigen Bereichs bleibt stehen.
+                .id(moreRoute)
+            }
+        }
+        // Seitenleiste und Inhalt nebeneinander — auch hochkant, wo das System
+        // sie sonst über den Inhalt legt. Einklappen kann man sie mit dem Knopf des Systems.
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    // MARK: Schmal — Reiter
+
+    /// Reiter als System-TabView; auf dem zugeklappten iPhone Duo legt das
+    /// System die Leiste an den rechten Rand.
     private var tabs: some View {
         TabView(selection: $tab) {
             Tab(AppTab.dashboard.title, systemImage: AppTab.dashboard.icon, value: AppTab.dashboard) {
-                NavigationStack(path: $dashboardPath) {
-                    dashboardRoot
-                        .navigationDestination(for: DetailKind.self) { kind in
-                            if let c = model.selected {
-                                DetailView(kind: kind, controller: c) { tab = .history }
-                                    .id(c.credentials.boxId)
-                            }
-                        }
-                }
-                .tabBarHidden(rail)
+                dashboardStack.tabBarHidden(rail)
             }
             Tab(AppTab.market.title, systemImage: AppTab.market.icon, value: AppTab.market) {
-                NavigationStack { MarketView(controller: model.selected) }
-                    .tabBarHidden(rail)
+                marketStack.tabBarHidden(rail)
             }
             Tab(AppTab.history.title, systemImage: AppTab.history.icon, value: AppTab.history) {
-                NavigationStack {
-                    if let c = model.selected {
-                        // Je Anlage eigene Ansichts-Identität: Werte der vorigen
-                        // Anlage dürfen nach dem Wechsel nicht stehen bleiben.
-                        HistoryView(controller: c).id(c.credentials.boxId)
-                    } else {
-                        needsSystem(String(localized: "Historie"))
-                    }
-                }
-                .tabBarHidden(rail)
+                historyStack.tabBarHidden(rail)
             }
             Tab(AppTab.news.title, systemImage: AppTab.news.icon, value: AppTab.news) {
-                NavigationStack { NewsView() }
-                    .tabBarHidden(rail)
+                newsStack.tabBarHidden(rail)
             }
             .badge(news.unseenCount)
             Tab(AppTab.more.title, systemImage: AppTab.more.icon, value: AppTab.more) {
-                // Geteilte Ansicht des Systems: zugeklappt eine Liste, die in den
-                // Bereich hineinführt; aufgeklappt Liste und Bereich nebeneinander
-                // (HIG: auf dem Innendisplay eine Ebene mehr zeigen).
-                NavigationSplitView {
-                    MoreView(selection: $moreRoute)
-                } detail: {
-                    NavigationStack {
-                        if let route = moreRoute {
-                            moreDestination(route)
-                        } else {
-                            MoreOverview()
-                        }
-                    }
+                // Liste, die in den Bereich hineinführt.
+                NavigationStack(path: Binding(get: { moreRoute.map { [$0] } ?? [] }, set: { moreRoute = $0.last })) {
+                    MoreView()
+                        .navigationDestination(for: MoreRoute.self) { moreDestination($0) }
                 }
                 .tabBarHidden(rail)
             }
         }
+        // Wie bisher: Stil, mit dem das System die Leiste selbst passend legt.
         .tabViewStyle(.sidebarAdaptable)
+    }
+
+    // MARK: Bereiche (für beide Anordnungen dieselben)
+
+    private var dashboardStack: some View {
+        NavigationStack(path: $dashboardPath) {
+            dashboardRoot
+                .navigationDestination(for: DetailKind.self) { kind in
+                    if let c = model.selected {
+                        DetailView(kind: kind, controller: c) { tab = .history }
+                            .id(c.credentials.boxId)
+                    }
+                }
+        }
+    }
+
+    private var marketStack: some View {
+        NavigationStack { MarketView(controller: model.selected, chrome: chrome) }
+    }
+
+    private var historyStack: some View {
+        NavigationStack {
+            if let c = model.selected {
+                // Je Anlage eigene Ansichts-Identität: Werte der vorigen
+                // Anlage dürfen nach dem Wechsel nicht stehen bleiben.
+                HistoryView(controller: c, chrome: chrome).id(c.credentials.boxId)
+            } else {
+                needsSystem(String(localized: "Historie"))
+            }
+        }
+    }
+
+    private var newsStack: some View {
+        NavigationStack { NewsView() }
     }
 
     @ViewBuilder

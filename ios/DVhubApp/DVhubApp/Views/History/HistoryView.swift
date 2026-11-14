@@ -9,16 +9,26 @@ import DVhubLink
 struct HistoryView: View {
     let controller: SystemController
 
-    @State private var period: HistoryPeriod = .day
+    @State private var period: HistoryPeriod
     @Environment(\.dynamicTypeSize) private var typeSize
-    @State private var date = Date()
+    @Environment(Chrome.self) private var chrome
+    @State private var date: Date
     @State private var summary: HistorySummary?
     @State private var soc: [SeriesPoint] = []
     @State private var loading = false
     @State private var message: String?
     @State private var proRequired = false
     @State private var showPicker = false
-    @State private var metric: Metric = .pv
+    @State private var metric: Metric
+
+    /// Zeitraum, Datum und Kennzahl beginnen dort, wo man zuletzt war
+    /// (`Chrome`) — auch wenn Auf- oder Zuklappen die Ansicht neu aufbaut.
+    init(controller: SystemController, chrome: Chrome) {
+        self.controller = controller
+        _period = State(initialValue: chrome.historyPeriod)
+        _date = State(initialValue: chrome.historyDate)
+        _metric = State(initialValue: chrome.historyMetric)
+    }
 
     struct Key: Equatable { let period: HistoryPeriod; let day: String; let online: Bool }
     private var key: Key { Key(period: period, day: HistorySummary.dateParam(date), online: controller.isOnline) }
@@ -60,6 +70,9 @@ struct HistoryView: View {
         ])
         .refreshable { await load(force: true) }
         .task(id: key) { await load(force: false) }
+        .onChange(of: period) { _, p in chrome.historyPeriod = p }
+        .onChange(of: date) { _, d in chrome.historyDate = d }
+        .onChange(of: metric) { _, m in chrome.historyMetric = m }
         #if DEBUG
         // Nur für Bildschirmfotos: -DVHUB_HISTORY week|month|year
         .onAppear { if let p = UserDefaults.standard.string(forKey: "DVHUB_HISTORY").flatMap(HistoryPeriod.init(rawValue:)) { period = p } }

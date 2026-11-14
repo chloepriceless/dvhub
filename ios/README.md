@@ -86,19 +86,31 @@ Face ID oder dem Gerätecode.
 
 ## Bedienung
 
-Fünf Reiter:
+Fünf Reiter (auf breiter Fläche – iPhone Duo aufgeklappt, iPad – stattdessen
+eine Seitenleiste mit allen Bereichen, siehe unten):
 
-- **Leitstand:** Energiefluss mit Partikeln (PV, Akku, Netz, Haus; Richtung,
-  Dichte und Tempo folgen der Leistung; mit „Bewegung reduzieren“ stehen Pfeile).
-  Darunter antippbare Karten mit Tagesverlauf: PV, Akku, Netz, Haus, Heute
+- **Leitstand:** Energiefluss mit Partikelstrom nach dem Vorbild des
+  Web-Leitstands (`dvhub/public/dvhub-powerflow.js`): viele kleine Leuchtpunkte
+  mit Schweif und Lichtschein in der Farbe ihrer Quelle (PV gelb, Akku grün,
+  Netz blau – zum Haus gemischt nach Anteilen); Richtung, Dichte und Tempo
+  folgen der Leistung; mit „Bewegung reduzieren“ stehen Pfeile. Die Symbole
+  stehen nur im Energiefluss, die Karten darunter tragen Farbe und Namen.
+  Antippbare Karten mit Tagesverlauf: PV, Akku, Netz, Haus, Heute
   (Erlöse/Kosten), Börse, Zustand, Meldungen aus dem Briefkasten. Jede Karte und
   jeder Knoten öffnet Detailwerte (Phasen, Flüsse, Min-SoC, Sollwert, Zähler,
   Tagessummen). Ist die Anlage nicht erreichbar, zeigt die App den letzten Stand
   aus dem Briefkasten mit Uhrzeit.
 - **Markt:** Börsenpreis jetzt; die nächsten Tage als Karten (Datum,
-  Tagesmittel, Spanne, Ampel mit der Einstufung der Prognose und die Lage des
-  Tagesmittels zwischen deren Schwellen P20 und P80 – die Lage ist nur eine
-  Darstellung, keine zweite Einstufung); darunter zwei getrennte Diagramme:
+  Tagesmittel, Spanne, Ampel und die Lage des Tagesmittels zwischen den
+  Schwellen P20 und P80 der letzten vier Wochen). Prognosetage tragen die
+  Einstufung der Schnittstelle. Heute und morgen stuft die Schnittstelle nicht
+  ein (die Prognose beginnt danach) – für sie gilt dieselbe Regel auf das echte
+  Tagesmittel der Börse: unter P20 günstig, über P80 teuer, sonst normal
+  (`MarketDay.build` im Paket). Die Lage zeigt jede Karte dreifach: Marke auf
+  der Skala, Text („nahe günstig · 8 %“; 0 % = P20, 100 % = P80) und Farbe; bei
+  einem normalen Tag nahe einer Schwelle glimmt in der Ampel das Nachbarlicht
+  mit. Die Lage ist eine Darstellung, keine zweite Einstufung. Darunter zwei
+  getrennte Diagramme:
   die Börsenpreise von heute bzw. morgen in Viertelstunden (Tief, Mittel, Hoch,
   günstigste und teuerste drei Stunden) und die Preisprognose der Folgetage
   mit Band. Quelle: `dvhub.online` (`/api/prices`, `/v1/residual-load/outlook`).
@@ -107,7 +119,10 @@ Fünf Reiter:
   (Energie, Erlöse, Kosten, Autarkie, Kennzahlen); Zeile antippen öffnet den
   Tag bzw. Monat. Woche/Monat/Jahr brauchen in DVhub Pro.
 - **Nachrichten:** Energie-Meldungen von `dvhub.online/api/news`, Filter nach
-  Quelle, Artikel im eingebauten Browser mit Lesemodus.
+  Quelle. Antippen zeigt Bild und Auszug (schmal als Blatt, breit als Seite
+  neben der Seitenleiste, Lesespalte höchstens 620 pt); „Ganzen Artikel lesen“
+  öffnet die Website der Redaktion im eingebauten Browser (ohne erzwungenen
+  Lesemodus).
 - **Mehr:** Fahrplan (EOS-Plan aus `/api/eos/plan`, Zeitplan aus
   `/api/schedule`), Integrationen (Zustand und Datenfluss), System
   (Einstellungen zum Nachsehen), Steuern (Not-Halt, nur mit Freigabe
@@ -133,11 +148,21 @@ TN3192 (<https://developer.apple.com/documentation/technotes/tn3192-migrating-yo
 
 Was Apple vorgibt, und wie die App es umsetzt:
 
-- **Standard-Bausteine statt Eigenbau.** Reiter: `TabView` mit `Tab` und
-  `.tabViewStyle(.sidebarAdaptable)`. Navigation: `NavigationStack`; „Mehr“
-  ist eine `NavigationSplitView` mit `List(selection:)` – zugeklappt eine
-  Liste, die in den Bereich führt, aufgeklappt Liste und Bereich nebeneinander
-  (HIG: auf dem Innendisplay eine Ebene mehr zeigen). Aktionen stehen in
+- **Standard-Bausteine statt Eigenbau.** Zwei Anordnungen, gewählt nach der
+  Breiten-Größenklasse (`Views/RootView.swift`):
+  - *schmal* (zugeklappt, gewöhnliches iPhone): `TabView` mit `Tab` und
+    `.tabViewStyle(.sidebarAdaptable)`, je Reiter ein `NavigationStack`;
+    „Mehr“ ist eine Liste, die in den Bereich hineinführt.
+  - *breit* (aufgeklappt, iPad): eine `NavigationSplitView` (`.balanced`) mit
+    **einer** Seitenleiste (`List(selection:)`, `.listStyle(.sidebar)`) für
+    alle Bereiche – Leitstand, Markt, Historie, Nachrichten und darunter, was
+    schmal unter „Mehr“ steht. Es gibt keine zweite Navigation daneben; die
+    Seitenleiste lässt sich mit dem Knopf des Systems einklappen.
+
+  Reiter, Bereich und Navigationspfade leben in `RootView`: Beim Auf- und
+  Zuklappen bleibt man im selben Bereich. Die Ansichten selbst baut der
+  Wechsel der Anordnung neu auf (Rollposition, gewählter Tag im Markt und
+  Zeitraum der Historie beginnen neu). Aktionen stehen in
   `.toolbar` an der `NavigationStack`, als `Label` mit Symbol und Titel in
   einer `ToolbarItemGroup`; Schließen-Knöpfe mit `.cancellationAction`.
   Blätter: `.sheet`, Bestätigungen: `.confirmationDialog`.
@@ -160,16 +185,19 @@ Was Apple vorgibt, und wie die App es umsetzt:
   Ansicht (Aktualisieren, Zurück) darüber, Uhr und Status in der Spalte neben der Kamera. Die App bekommt die
   volle Fläche des Außendisplays (466 × 678 pt; mit dem iOS-27.0-SDK waren es 386 × 678 pt). Die eigene
   Seitenleiste ist aus. Abgesichert durch `DVhubAppUITests/DuoTests` (läuft nur im Duo-Simulator).
-- **Aufgeklappt (hochkant und quer) ist im Simulator noch nicht geprüft:** Auf- und Zuklappen geht nur in
-  Device Hub (Inspektor → *Device Configuration*), nicht mit `simctl` – von der Kommandozeile bleibt der Simulator
-  zugeklappt, und zugeklappt dreht er die App nicht ins Querformat. `DuoTests` fotografiert die Pose, in der der
-  Simulator gerade steht (`TEST_RUNNER_DVHUB_POSE=auf` benennt die Bilder).
+- **Aufgeklappt quer** (951 × 669 pt, Breite regular): geprüft mit `DuoTests` und `WideTests` – Seitenleiste links
+  für alle Bereiche, Karten zweispaltig, Aktionen und Zurück-Knopf legt das System in seine Leiste am rechten Rand.
+  **Aufgeklappt hochkant ist nicht geprüft:** Der aufgeklappte Simulator nahm die andere Ausrichtung nicht ein.
+  Auf- und Zuklappen geht nur in Device Hub (Inspektor → *Device Configuration*), nicht mit `simctl`. Die Tests
+  prüfen und fotografieren die Pose, in der der Simulator gerade steht (`TEST_RUNNER_DVHUB_POSE=auf` benennt die
+  Bilder; aufgeklappt liegt die App auf dem zweiten Bildschirm, die Bilder kommen im Hochformat des Panels heraus).
 - **Falz.** Das System meldet ihn als reservierte Fläche (`GeometryProxy.reservedRegions(kind: .division)`,
   iOS 27.1+). Meldet es einen aktiven senkrechten Falz und bleibt der Inhalt danach zweispaltig, rückt `AuroraPage`
   ihn so ein, dass seine Mitte auf dem Falz liegt – der Spaltenabstand liegt dann dort, keine Karte darüber
   (`FoldRule` im Paket, getestet; `FoldInsets` in `Design/Theme.swift`). Ein waagerechter Falz (aufgeklappt
   hochkant) teilt nur die Rollrichtung und ändert nichts. Zugeklappt meldet der Simulator keine reservierten
-  Flächen. Ob und wie das aufgeklappte Gerät den Falz meldet, ist noch nicht gesehen – unter Mehr → Darstellung
+  Flächen. Aufgeklappt und flach meldet er den Falz als **inaktiv** (`Falz 455,0 40×669 (inaktiv)`) – dann rückt
+  nichts ein; aktiv wird er vermutlich erst halb geklappt, das ist nicht gesehen. Unter Mehr → Darstellung
   steht dafür eine Diagnosezeile (Fläche, SDK, reservierte Flächen).
 - Das SDK bietet außerdem `toolbarVerticalBehavior`, `toolbarVerticalCompressionBehavior` und `ArrangementView`
   (Inhalt in zwei Hälften um den Falz). Die App nutzt sie bisher nicht: Die Vorgaben des Systems passen
@@ -335,11 +363,15 @@ wählen Zeitraum bzw. Tag, `-DVHUB_DUO closed|closed-landscape|open` zeigt die
 Flächen des iPhone Duo, `-navPlacement side|bottom` erzwingt die Leistenlage.
 
 Weitere Oberflächentests: `AccessibilityTests` (Schriftgröße accessibility-XL: Karten einspaltig, nichts
-abgeschnitten) und `DuoTests` (nur im iPhone-Duo-Simulator: Leisten des Systems, Ersatz aus):
+abgeschnitten), `DuoTests` (nur im iPhone-Duo-Simulator, in der Pose, in der er steht: Leisten des Systems bzw.
+Seitenleiste, Ersatz aus, Artikel-Vorschau im Bild) und `WideTests` (breite Fläche – iPhone Duo aufgeklappt oder
+iPad: eine Seitenleiste für alle Bereiche, keine zweite Navigation, Artikel-Vorschau neben der Seitenleiste;
+schmal übersprungen):
 
 ```bash
 xcodebuild test -project ios/DVhubApp/DVhubApp.xcodeproj -scheme DVhubApp \
-  -destination 'platform=iOS Simulator,name=iPhone Duo' -only-testing:DVhubAppUITests/DuoTests
+  -destination 'platform=iOS Simulator,name=iPhone Duo' \
+  -only-testing:DVhubAppUITests/DuoTests -only-testing:DVhubAppUITests/WideTests
 ```
 
 Die Gegenstelle hält höchstens zehn Geräte und entfernt dann das älteste. Meldet die App danach „entkoppelt“,

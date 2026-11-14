@@ -1,6 +1,6 @@
 // NewsView.swift — Nachrichten-Leser: Energie-Meldungen von dvhub.online
 // (RSS-Sammlung, u. a. pv magazine, Erneuerbare Energien). Liste mit Bildern,
-// Filter nach Quelle, Artikel im eingebauten Browser mit Lesemodus.
+// Filter nach Quelle; der Artikel öffnet als Website im eingebauten Browser.
 
 import SwiftUI
 import SafariServices
@@ -8,8 +8,14 @@ import DVhubLink
 
 struct NewsView: View {
     @Environment(NewsStore.self) private var news
+    @Environment(\.horizontalSizeClass) private var hSize
     @State private var source: String?
     @State private var reading: NewsItem?
+
+    /// Breite Fläche (iPhone Duo aufgeklappt, iPad): Die Meldung öffnet als
+    /// Seite im Bereich neben der Seitenleiste — kein schwebendes Blatt, das
+    /// das System um den Falz herum verschiebt. Schmal bleibt es ein Blatt.
+    private var wide: Bool { hSize == .regular }
 
     private var items: [NewsItem] {
         guard let source else { return news.items }
@@ -61,9 +67,13 @@ struct NewsView: View {
         ])
         .refreshable { await news.refresh(force: true) }
         .task { await news.refresh() }
-        .onDisappear { news.markSeen() }
-        .sheet(item: $reading) { item in
-            ArticleSheet(item: item)
+        // Verlassen der Liste – nicht, wenn nur die Vorschau einer Meldung darüber liegt.
+        .onDisappear { if reading == nil { news.markSeen() } }
+        .sheet(item: Binding(get: { wide ? nil : reading }, set: { reading = $0 })) { item in
+            NavigationStack { ArticleView(item: item, inSheet: true) }
+        }
+        .navigationDestination(item: Binding(get: { wide ? reading : nil }, set: { reading = $0 })) { item in
+            ArticleView(item: item, inSheet: false)
         }
     }
 
@@ -112,20 +122,23 @@ private struct NewsImage: View {
     let item: NewsItem
 
     var body: some View {
-        ZStack {
-            // Platzhalter: Aurora mit dem Anfangsbuchstaben der Quelle.
-            LinearGradient(colors: [Brand.bg2, Brand.blue.opacity(0.35), Brand.violet.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            // Platzhalter-Grafik in fester Größe (kein Lesetext).
-            Text(String(item.source.prefix(1))).font(.system(size: 34, weight: .bold, design: .rounded)).foregroundStyle(Brand.text.opacity(0.25))
-                .accessibilityHidden(true)
-            if let url = item.imageURL {
-                AsyncImage(url: url, transaction: Transaction(animation: .easeIn(duration: 0.2))) { phase in
-                    if case .success(let img) = phase { img.resizable().scaledToFill() }
+        // Das Bild liegt als Überlagerung auf der Fläche: Es füllt sie und wird
+        // beschnitten, bestimmt aber nie deren Größe (ein breites Bild schöbe
+        // sonst den Inhalt über den Rand).
+        LinearGradient(colors: [Brand.bg2, Brand.blue.opacity(0.35), Brand.violet.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            .overlay {
+                // Platzhalter: Aurora mit dem Anfangsbuchstaben der Quelle (Grafik in fester Größe, kein Lesetext).
+                Text(String(item.source.prefix(1))).font(.system(size: 34, weight: .bold, design: .rounded)).foregroundStyle(Brand.text.opacity(0.25))
+            }
+            .overlay {
+                if let url = item.imageURL {
+                    AsyncImage(url: url, transaction: Transaction(animation: .easeIn(duration: 0.2))) { phase in
+                        if case .success(let img) = phase { img.resizable().scaledToFill() }
+                    }
                 }
             }
-        }
-        .clipped()
-        .accessibilityHidden(true)
+            .clipped()
+            .accessibilityHidden(true)
     }
 }
 
@@ -205,61 +218,75 @@ private struct NewsRow: View {
 }
 
 /// Meldung mit Bild und Auszug; der ganze Artikel öffnet im eingebauten Browser.
-private struct ArticleSheet: View {
+/// Schmal ein Blatt (mit Schließen-Knopf), breit eine Seite im Stapel (mit Zurück).
+private struct ArticleView: View {
     let item: NewsItem
+    let inSheet: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var showArticle = false
 
+    /// Lesebreite: Auf breiter Fläche (iPhone Duo aufgeklappt, iPad) bleibt die
+    /// Spalte schmal und steht mittig, statt die ganze Breite zu füllen.
+    private static let readingWidth: CGFloat = 620
+
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    NewsImage(item: item)
-                        .frame(maxWidth: .infinity).frame(height: 220)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    NewsMeta(item: item, unseen: false)
-                    Text(item.title).font(.title2.weight(.bold)).foregroundStyle(Brand.text)
-                    if let d = item.publishedAt {
-                        Text(d.formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute().locale(Format.locale)))
-                            .font(.caption).foregroundStyle(Brand.dim)
-                    }
-                    if !item.excerpt.isEmpty { Text(item.excerpt).font(.body).foregroundStyle(Brand.text2) }
-                    if let url = item.linkURL {
-                        Button { showArticle = true } label: {
-                            Label("Ganzen Artikel lesen", systemImage: "doc.text.magnifyingglass")
-                                .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 14)
-                                .foregroundStyle(Brand.bg0)
-                                .background(LinearGradient(colors: [Color(hex: 0xffd421), Color(hex: 0xffab08)], startPoint: .top, endPoint: .bottom),
-                                            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        }
-                        .accessibilityIdentifier("readArticle")
-                        Text(url.host ?? "").font(.caption2.monospaced()).foregroundStyle(Brand.dim).frame(maxWidth: .infinity)
-                    }
+        // Dieselbe Seite wie überall (rollt, hält die Ränder, Aurora-Hintergrund).
+        AuroraPage(inlineTitle: true) { _ in
+            VStack(alignment: .leading, spacing: 14) {
+                NewsImage(item: item)
+                    .frame(maxWidth: .infinity).frame(height: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                NewsMeta(item: item, unseen: false)
+                Text(item.title).font(.title2.weight(.bold)).foregroundStyle(Brand.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let d = item.publishedAt {
+                    Text(d.formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute().locale(Format.locale)))
+                        .font(.caption).foregroundStyle(Brand.dim)
                 }
-                .padding(16)
-            }
-            .background(AuroraBackground())
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Schließen", systemImage: "xmark") } }
+                if !item.excerpt.isEmpty {
+                    Text(item.excerpt).font(.body).foregroundStyle(Brand.text2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let url = item.linkURL {
-                    ToolbarItem(placement: .topBarTrailing) { ShareLink(item: url) { Label("Teilen", systemImage: "square.and.arrow.up") } }
+                    Button { showArticle = true } label: {
+                        Label("Ganzen Artikel lesen", systemImage: "safari")
+                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 14)
+                            .foregroundStyle(Color(hex: 0x030610))
+                            .background(LinearGradient(colors: [Color(hex: 0xffd421), Color(hex: 0xffab08)], startPoint: .top, endPoint: .bottom),
+                                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .accessibilityIdentifier("readArticle")
+                    Text(url.host ?? "").font(.caption2.monospaced()).foregroundStyle(Brand.dim).frame(maxWidth: .infinity)
                 }
             }
-            .fullScreenCover(isPresented: $showArticle) {
-                if let url = item.linkURL { SafariView(url: url).ignoresSafeArea() }
+            .frame(maxWidth: Self.readingWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("articleContent")
+        }
+        .navigationTitle(item.source)
+        .toolbar {
+            if inSheet {
+                ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Schließen", systemImage: "xmark") } }
             }
+            if let url = item.linkURL {
+                ToolbarItem(placement: .topBarTrailing) { ShareLink(item: url) { Label("Teilen", systemImage: "square.and.arrow.up") } }
+            }
+        }
+        .fullScreenCover(isPresented: $showArticle) {
+            if let url = item.linkURL { SafariView(url: url).ignoresSafeArea() }
         }
     }
 }
 
-/// Eingebauter Browser (Safari View Controller) mit Lesemodus, wenn die Seite ihn anbietet.
+/// Eingebauter Browser (Safari View Controller). Zeigt die echte Website der
+/// Redaktion — den Lesemodus kann man dort selbst einschalten.
 struct SafariView: UIViewControllerRepresentable {
     let url: URL
 
     func makeUIViewController(context: Context) -> SFSafariViewController {
         let cfg = SFSafariViewController.Configuration()
-        cfg.entersReaderIfAvailable = true
+        cfg.entersReaderIfAvailable = false
         let vc = SFSafariViewController(url: url, configuration: cfg)
         vc.preferredControlTintColor = UIColor(hex: 0x34dbff)
         vc.dismissButtonStyle = .close

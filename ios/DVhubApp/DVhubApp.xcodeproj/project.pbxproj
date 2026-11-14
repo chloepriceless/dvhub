@@ -56,12 +56,14 @@
 		DAC8CED6D490C897539CD97B /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1CF7FADFACEF58A30B904B4 /* DashboardView.swift */; };
 		DC3EE19ADAD061130A1E3743 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8318441977710D0BD4E72103 /* Components.swift */; };
 		E3E9CEA136081AEC5BC94579 /* OnlineService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E491BD43EA9B37E1976FDF9F /* OnlineService.swift */; };
+		EC2D0F124BC6555F061D1201 /* WideTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEB46DD489054E3756A6F066 /* WideTests.swift */; };
 		EDCF847A0409AC9D45CE80ED /* ControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF808B9006DF7EE5F4117BF8 /* ControlTests.swift */; };
 		F1BC2CE2FED5143D7EFDB502 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A550B0EB4E28046A4531E62 /* Theme.swift */; };
 		F35C0CEA9089387AFDD0F9F0 /* Format.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748A282D30493583589F4A8D /* Format.swift */; };
 		F45BDA634031C4E454C831A5 /* LinkAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4888EF76EADCC1243945752 /* LinkAccess.swift */; };
 		FBCCB3A2B6E166FD36D1417D /* MoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 863DD7DCD40BFB45710BAF98 /* MoreView.swift */; };
 		FC61F6A8867C81F62E0CB0B5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C712DE8551A06A4E3B93087A /* Assets.xcassets */; };
+		FC7A54A30DF0888958E99A53 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE271BDBADBC7DAB30CA8468 /* TestSupport.swift */; };
 		FF188F53A75B3DD6AED29D29 /* NewsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AD10C4835C6B83E88ABEE7B /* NewsView.swift */; };
 /* End PBXBuildFile section */
 
@@ -131,8 +133,10 @@
 		991F9D5F0708F9B5C486C79A /* SystemsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemsView.swift; sourceTree = "<group>"; };
 		AB1B999E6833677D04CEB6C2 /* PairView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairView.swift; sourceTree = "<group>"; };
 		ADE5CFE180AB041476ABB709 /* MarketView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketView.swift; sourceTree = "<group>"; };
+		AEB46DD489054E3756A6F066 /* WideTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WideTests.swift; sourceTree = "<group>"; };
 		B56FC4DBCADF84E70A5F80AA /* SystemController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemController.swift; sourceTree = "<group>"; };
 		B7060F9DE5F61F47A01B4B16 /* AccessibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTests.swift; sourceTree = "<group>"; };
+		BE271BDBADBC7DAB30CA8468 /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
 		C008527AAC611B566FA90BC6 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		C30B1337522AADA74B4377BF /* EnergyFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnergyFlowView.swift; sourceTree = "<group>"; };
 		C3B202121B0C31FA6AFEDD76 /* PlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanView.swift; sourceTree = "<group>"; };
@@ -190,6 +194,8 @@
 				83E59AD14D725021C77A6C2B /* NavigationTests.swift */,
 				F9FA19FB543D2093BB13EF32 /* PairLinkTests.swift */,
 				9006D35AD69BBA8CA87C109E /* RotationTests.swift */,
+				BE271BDBADBC7DAB30CA8468 /* TestSupport.swift */,
+				AEB46DD489054E3756A6F066 /* WideTests.swift */,
 			);
 			path = DVhubAppUITests;
 			sourceTree = "<group>";
@@ -504,6 +510,8 @@
 				84E13E2E779647520305EE39 /* NavigationTests.swift in Sources */,
 				B1CCB733D799109353CCCCB5 /* PairLinkTests.swift in Sources */,
 				BEF1190AC9955C44EB0EC2CF /* RotationTests.swift in Sources */,
+				FC7A54A30DF0888958E99A53 /* TestSupport.swift in Sources */,
+				EC2D0F124BC6555F061D1201 /* WideTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

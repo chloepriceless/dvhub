@@ -164,6 +164,75 @@ final class MarketTests: XCTestCase {
     }
 
     /// Liefert die Prognose-Antwort Viertelstunden, überlappen die Abschnitte nicht.
+    /// Heute und morgen stuft die Schnittstelle nicht ein (die Prognose beginnt
+    /// danach). Die Ampel folgt dann derselben Regel aus den Börsenpreisen;
+    /// Prognosetage behalten die Einstufung der Schnittstelle.
+    func testFixedDaysAreClassifiedFromExchangePrices() throws {
+        // Schwellen wie am 14.11.2026: P20 151,21 und P80 265,1 EUR/MWh.
+        let o = try XCTUnwrap(ResidualOutlook.from(try json("""
+        {"days":[
+          {"date":"2026-11-16","lead_days":1,"price_eur_mwh":{"p10":125.3,"p50":160.6,"p90":202.7},"classification":{"p20":151.21,"p80":265.1,"class":"normal"}},
+          {"date":"2026-11-17","lead_days":2,"price_eur_mwh":{"p10":175.6,"p50":211.3,"p90":257.2},"classification":{"p20":151.21,"p80":265.1,"class":"normal"}},
+          {"date":"2026-11-18","lead_days":3,"price_eur_mwh":{"p10":250,"p50":262,"p90":290},"classification":{"p20":151.21,"p80":265.1,"class":"teuer"}}]}
+        """)))
+        let today = try XCTUnwrap(MarketTime.day("2026-11-14"))
+        let tomorrow = try XCTUnwrap(MarketTime.day("2026-11-15"))
+        func flat(_ day: Date, _ ct: Double) -> [PricePoint] {
+            (0..<96).map { PricePoint(start: day.addingTimeInterval(Double($0) * 900), end: day.addingTimeInterval(Double($0 + 1) * 900), ctKwh: ct, importCtKwh: nil) }
+        }
+        var prices: [Date: [PricePoint]] = [today: flat(today, 19.772), tomorrow: flat(tomorrow, 13.97)]
+        var days = MarketDay.build(today: today, tomorrow: tomorrow, prices: { prices[$0] ?? [] }, outlook: o)
+        XCTAssertEqual(days.map(\.key), ["2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17", "2026-11-18"])
+        // Heute 19,8 ct: im üblichen Bereich → normal, Lage 41 %.
+        XCTAssertEqual(days[0].priceClass, .normal)
+        XCTAssertTrue(days[0].classFromExchange)
+        XCTAssertEqual(days[0].zone, .middle)
+        XCTAssertEqual(days[0].p20Ct ?? 0, 15.121, accuracy: 1e-9)
+        XCTAssertEqual(days[0].p80Ct ?? 0, 26.51, accuracy: 1e-9)
+        // Morgen 14,0 ct: unter P20 (15,1 ct) → günstig.
+        XCTAssertEqual(days[1].priceClass, .cheap)
+        XCTAssertTrue(days[1].classFromExchange)
+        XCTAssertEqual(days[1].zone, .below)
+        // Montag 16,06 ct: knapp über P20 → normal, aber nahe günstig (Lage 8 %).
+        XCTAssertEqual(days[2].priceClass, .normal)
+        XCTAssertFalse(days[2].classFromExchange)
+        XCTAssertEqual(days[2].position ?? -1, 0.082, accuracy: 0.001)
+        XCTAssertEqual(days[2].zone, .low)
+        XCTAssertEqual(days[3].zone, .middle)
+        // Prognosetag: die Einstufung der Schnittstelle gilt, auch wenn die Lage (97 %) noch im Bereich liegt.
+        XCTAssertEqual(days[4].priceClass, .expensive)
+        XCTAssertEqual(days[4].zone, .high)
+
+        // Über P80 (26,51 ct) → teuer; knapp über P20 normal (die Schwelle selbst: testPriceBandZones).
+        prices[today] = flat(today, 27)
+        prices[tomorrow] = flat(tomorrow, 15.2)
+        days = MarketDay.build(today: today, tomorrow: tomorrow, prices: { prices[$0] ?? [] }, outlook: o)
+        XCTAssertEqual(days[0].priceClass, .expensive)
+        XCTAssertEqual(days[0].zone, .above)
+        XCTAssertEqual(days[1].priceClass, .normal)
+
+        // Ohne Prognose gibt es keine Schwellen: keine Ampel, keine Lage.
+        let alone = MarketDay.build(today: today, tomorrow: tomorrow, prices: { prices[$0] ?? [] }, outlook: nil)
+        XCTAssertEqual(alone.count, 2)
+        XCTAssertNil(alone[0].priceClass)
+        XCTAssertNil(alone[0].zone)
+        XCTAssertFalse(alone[0].classFromExchange)
+    }
+
+    func testPriceBandZones() {
+        XCTAssertEqual(PriceBandZone(position: -0.01), .below)
+        XCTAssertEqual(PriceBandZone(position: 0), .low)
+        XCTAssertEqual(PriceBandZone(position: 0.33), .low)
+        XCTAssertEqual(PriceBandZone(position: 0.5), .middle)
+        XCTAssertEqual(PriceBandZone(position: 0.67), .high)
+        XCTAssertEqual(PriceBandZone(position: 1), .high)
+        XCTAssertEqual(PriceBandZone(position: 1.01), .above)
+        XCTAssertEqual(PriceClass(position: 0), .normal)
+        XCTAssertEqual(PriceClass(position: 1), .normal)
+        XCTAssertEqual(PriceClass(position: -0.001), .cheap)
+        XCTAssertEqual(PriceClass(position: 1.001), .expensive)
+    }
+
     func testFallbackSlotsFollowTimestampSpacing() throws {
         let t0 = try XCTUnwrap(parseISODate("2026-11-14T00:00:00Z"))
         func hour(_ i: Int) -> ResidualOutlook.Hour {
