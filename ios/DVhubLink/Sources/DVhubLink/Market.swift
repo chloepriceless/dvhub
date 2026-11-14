@@ -104,9 +104,9 @@ public enum PriceClass: String, Sendable, Equatable {
 
     public var title: String {
         switch self {
-        case .cheap: return "günstig"
-        case .normal: return "normal"
-        case .expensive: return "teuer"
+        case .cheap: return L("günstig")
+        case .normal: return L("normal")
+        case .expensive: return L("teuer")
         }
     }
 }
@@ -286,6 +286,107 @@ public struct ResidualOutlook: Equatable, Sendable {
 
 /// ISO-Zeit mit mehr als drei Nachkommastellen („…00.002349Z“), die
 /// ISO8601DateFormatter nicht liest: Bruchteil abschneiden.
+// MARK: - Tage der Marktansicht
+
+/// Ein Tag der Tagesleiste — fest (Börse) oder Prognose.
+public struct MarketDay: Identifiable, Equatable, Sendable {
+    public let key: String
+    public let date: Date
+    public var known: ResidualOutlook.KnownDay?
+    public var forecast: ResidualOutlook.Day?
+    /// Preise der Börse (nur feste Tage): Viertelstunden aus /api/prices,
+    /// ersatzweise die festen Stunden der Prognose-Antwort.
+    public var slots: [PricePoint] = []
+    /// Die `slots` stammen aus der Prognose-Antwort (Ersatz). Sie können
+    /// lückenhaft sein und sind oft Stundenmittel — Tagesmittel und Spanne
+    /// kommen dann aus den Tageswerten des Servers, nicht aus diesen Punkten.
+    public var slotsAreFallback = false
+    /// Lage des Tagesmittels im üblichen Bereich: 0 = untere Schwelle (P20),
+    /// 1 = obere (P80) der Prognose; darunter/darüber = außerhalb. Nur Darstellung.
+    public var position: Double?
+    /// Ampel: die Einstufung der Prognose, unverändert aus der Schnittstelle.
+    /// Feste Börsentage haben keine.
+    public var priceClass: PriceClass? { forecast?.priceClass }
+    public var id: String { key }
+
+    public init(key: String, date: Date, known: ResidualOutlook.KnownDay? = nil, forecast: ResidualOutlook.Day? = nil, slots: [PricePoint] = []) {
+        self.key = key
+        self.date = date
+        self.known = known
+        self.forecast = forecast
+        self.slots = slots
+    }
+
+    public var isFixed: Bool { forecast == nil }
+    public var meanCt: Double? {
+        if let f = forecast { return f.band.p50 }
+        if slotsAreFallback, let k = known { return k.meanCt }
+        if let s = PriceSeries.stats(slots) { return s.average }
+        return known?.meanCt
+    }
+    /// Spanne: Band der Prognose bzw. Tagestief bis Tageshoch.
+    public var rangeCt: (Double, Double)? {
+        if let f = forecast { return (f.band.p10, f.band.p90) }
+        if slotsAreFallback, let k = known, let lo = k.minCt, let hi = k.maxCt { return (lo, hi) }
+        if let s = PriceSeries.stats(slots) { return (s.min.ctKwh, s.max.ctKwh) }
+        if let k = known, let lo = k.minCt, let hi = k.maxCt { return (lo, hi) }
+        return nil
+    }
+    /// Länge eines Preisabschnitts in Sekunden (900 = Viertelstunde, 3600 = Stunde).
+    public var slotSeconds: TimeInterval? {
+        slots.map { $0.end.timeIntervalSince($0.start) }.filter { $0 > 0 }.min()
+    }
+    /// Die Preise decken den Tag nur teilweise ab (Ersatz-Stunden mit Lücken).
+    public var slotsIncomplete: Bool {
+        guard slotsAreFallback, let step = slotSeconds else { return false }
+        return Double(slots.count) * step < 23 * 3600
+    }
+
+    /// Heute, morgen (sobald fest) und die Prognosetage.
+    /// `prices(day)` liefert die Viertelstunden von /api/prices für einen Tag.
+    public static func build(today: Date, tomorrow: Date, prices: (Date) -> [PricePoint], outlook: ResidualOutlook?) -> [MarketDay] {
+        var out: [String: MarketDay] = [:]
+        let todayKey = MarketTime.key(today)
+        for d in [today, tomorrow] {
+            let slots = prices(d)
+            if !slots.isEmpty { out[MarketTime.key(d)] = MarketDay(key: MarketTime.key(d), date: d, slots: slots) }
+        }
+        for k in outlook?.knownDays ?? [] where k.key >= todayKey {
+            var day = out[k.key] ?? MarketDay(key: k.key, date: k.date)
+            day.known = k
+            // Ohne Viertelstunden von /api/prices: die festen Preise aus der Prognose-Antwort.
+            if day.slots.isEmpty {
+                day.slots = fallbackSlots(outlook?.hours(on: k.key) ?? [])
+                day.slotsAreFallback = !day.slots.isEmpty
+            }
+            out[k.key] = day
+        }
+        for f in outlook?.days ?? [] where f.key >= todayKey && out[f.key] == nil {
+            out[f.key] = MarketDay(key: f.key, date: f.date, forecast: f)
+        }
+        return out.values.sorted { $0.date < $1.date }.map { d in
+            var d = d
+            d.position = d.meanCt.flatMap { outlook?.position(meanCt: $0, day: d.forecast) }
+            return d
+        }
+    }
+
+    /// Feste Preise der Prognose-Antwort als Abschnitte. Die Länge folgt dem
+    /// kleinsten Abstand der Zeitstempel (Stunden oder Viertelstunden), nie
+    /// mehr als eine Stunde — so überlappen Viertelstunden-Werte nicht.
+    static func fallbackSlots(_ hours: [ResidualOutlook.Hour]) -> [PricePoint] {
+        let known = hours.filter { $0.knownCt != nil }.sorted { $0.start < $1.start }
+        var step: TimeInterval = 3600
+        for (a, b) in zip(known, known.dropFirst()) {
+            let gap = b.start.timeIntervalSince(a.start)
+            if gap > 0 { step = min(step, gap) }
+        }
+        return known.compactMap { h in
+            h.knownCt.map { PricePoint(start: h.start, end: h.start.addingTimeInterval(step), ctKwh: $0, importCtKwh: nil) }
+        }
+    }
+}
+
 public func parseLooseISO(_ s: String?) -> Date? {
     guard let s else { return nil }
     if let d = parseISODate(s) { return d }

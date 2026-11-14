@@ -10,6 +10,7 @@ struct HistoryView: View {
     let controller: SystemController
 
     @State private var period: HistoryPeriod = .day
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var date = Date()
     @State private var summary: HistorySummary?
     @State private var soc: [SeriesPoint] = []
@@ -55,7 +56,7 @@ struct HistoryView: View {
         }
         .navigationTitle("Historie")
         .screenActions(.history, [
-            ScreenAction(id: "today", title: "Heute", icon: "calendar.badge.clock", disabled: Calendar.current.isDateInToday(date)) { date = Date() },
+            ScreenAction(id: "today", title: String(localized: "Heute"), icon: "calendar.badge.clock", disabled: Calendar.current.isDateInToday(date)) { date = Date() },
         ])
         .refreshable { await load(force: true) }
         .task(id: key) { await load(force: false) }
@@ -65,9 +66,9 @@ struct HistoryView: View {
         #endif
         .sheet(isPresented: $showPicker) {
             NavigationStack {
-                DatePicker("Datum", selection: $date, in: ...Date(), displayedComponents: .date)
+                DatePicker(String(localized: "Datum"), selection: $date, in: ...Date(), displayedComponents: .date)
                     .datePickerStyle(.graphical)
-                    .environment(\.locale, Format.de)
+                    .environment(\.locale, Format.locale)
                     .padding()
                     .navigationTitle("Datum wählen")
                     .navigationBarTitleDisplayMode(.inline)
@@ -122,29 +123,31 @@ struct HistoryView: View {
         return cal.isDate(date, equalTo: Date(), toGranularity: unit) || date > Date()
     }
 
+    /// Heute oder gestern (dann steht das Wort als Titel, das Datum darunter).
+    private var isRecentDay: Bool { Calendar.current.isDateInToday(date) || Calendar.current.isDateInYesterday(date) }
+
     private var rangeTitle: String {
         switch period {
-        case .day: return Format.day(date) == "Heute" || Format.day(date) == "Gestern"
-            ? Format.day(date) : date.formatted(.dateTime.weekday(.wide).day().month(.wide).locale(Format.de))
+        case .day: return isRecentDay
+            ? Format.day(date) : date.formatted(.dateTime.weekday(.wide).day().month(.wide).locale(Format.locale))
         case .week:
             let cal = Calendar.current
             let w = cal.component(.weekOfYear, from: date)
-            return "KW \(w) · \(cal.component(.yearForWeekOfYear, from: date))"
-        case .month: return date.formatted(.dateTime.month(.wide).year().locale(Format.de))
-        case .year: return date.formatted(.dateTime.year().locale(Format.de))
+            return String(localized: "KW \(String(w)) · \(String(cal.component(.yearForWeekOfYear, from: date)))", comment: "Kalenderwoche und Jahr")
+        case .month: return date.formatted(.dateTime.month(.wide).year().locale(Format.locale))
+        case .year: return date.formatted(.dateTime.year().locale(Format.locale))
         }
     }
 
     private var rangeSubtitle: String? {
         switch period {
         case .day:
-            let t = Format.day(date)
-            return t == "Heute" || t == "Gestern" ? date.formatted(.dateTime.weekday(.wide).day().month(.wide).locale(Format.de)) : nil
+            return isRecentDay ? date.formatted(.dateTime.weekday(.wide).day().month(.wide).locale(Format.locale)) : nil
         case .week:
             var cal = Calendar.current
             cal.firstWeekday = 2
             guard let iv = cal.dateInterval(of: .weekOfYear, for: date) else { return nil }
-            let f = Date.FormatStyle.dateTime.day().month(.abbreviated).locale(Format.de)
+            let f = Date.FormatStyle.dateTime.day().month(.abbreviated).locale(Format.locale)
             return "\(iv.start.formatted(f)) – \(iv.end.addingTimeInterval(-1).formatted(f))"
         default: return nil
         }
@@ -154,7 +157,7 @@ struct HistoryView: View {
 
     private func load(force: Bool) async {
         guard controller.isOnline else {
-            if shown == nil { message = "Die Historie braucht eine Verbindung zur Anlage." }
+            if shown == nil { message = String(localized: "Die Historie braucht eine Verbindung zur Anlage.") }
             return
         }
         if !force, shown != nil, !Calendar.current.isDateInToday(date) { return }
@@ -168,7 +171,7 @@ struct HistoryView: View {
         case .ok(let s):
             summary = s
             proRequired = false
-            message = s.kpis.isEmpty ? "Für diesen Zeitraum liegen keine Werte vor." : nil
+            message = s.kpis.isEmpty ? String(localized: "Für diesen Zeitraum liegen keine Werte vor.") : nil
         case .proRequired:
             summary = nil
             proRequired = true
@@ -202,12 +205,12 @@ struct HistoryView: View {
                 }
                 MoneyBar(revenue: s.exportRevenueEur, cost: s.importCostEur)
                 HStack(alignment: .top) {
-                    money("Einnahmen", s.exportRevenueEur, Brand.money)
+                    money(String(localized: "Einnahmen"), s.exportRevenueEur, Brand.money)
                     Spacer(minLength: 6)
-                    money("Strombezug", s.importCostEur, Brand.red)
+                    money(String(localized: "Strombezug"), s.importCostEur, Brand.red)
                     if let a = s.kpi("avoidedImportGrossEur") {
                         Spacer(minLength: 6)
-                        money("Vermieden", a, Brand.cyan)
+                        money(String(localized: "Vermieden"), a, Brand.cyan)
                     }
                 }
             }
@@ -226,14 +229,14 @@ struct HistoryView: View {
     // MARK: Energie
 
     private func energyGrid(_ s: HistorySummary, wide: Bool) -> some View {
-        let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: wide ? 6 : 3)
+        let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: typeSize.isAccessibilitySize ? (wide ? 3 : 1) : (wide ? 6 : 3))
         return LazyVGrid(columns: cols, spacing: 10) {
             EnergyTile(title: "PV", icon: "sun.max.fill", tint: Brand.pv, value: s.kpi("pvKwh"))
-            EnergyTile(title: "Verbrauch", icon: "house.fill", tint: Brand.home, value: s.kpi("loadKwh"))
-            EnergyTile(title: "Bezug", icon: "arrow.down.to.line", tint: Brand.red, value: s.kpi("importKwh"))
-            EnergyTile(title: "Einspeisung", icon: "arrow.up.to.line", tint: Brand.cyan, value: s.kpi("exportKwh"))
-            EnergyTile(title: "Akku geladen", icon: "battery.100percent.bolt", tint: Brand.battery, value: s.kpi("batteryChargeKwh"))
-            EnergyTile(title: "Akku entladen", icon: "battery.25percent", tint: Brand.battery, value: s.kpi("batteryDischargeKwh"))
+            EnergyTile(title: String(localized: "Verbrauch"), icon: "house.fill", tint: Brand.home, value: s.kpi("loadKwh"))
+            EnergyTile(title: String(localized: "Bezug"), icon: "arrow.down.to.line", tint: Brand.red, value: s.kpi("importKwh"))
+            EnergyTile(title: String(localized: "Einspeisung"), icon: "arrow.up.to.line", tint: Brand.cyan, value: s.kpi("exportKwh"))
+            EnergyTile(title: String(localized: "Akku geladen"), icon: "battery.100percent.bolt", tint: Brand.battery, value: s.kpi("batteryChargeKwh"))
+            EnergyTile(title: String(localized: "Akku entladen"), icon: "battery.25percent", tint: Brand.battery, value: s.kpi("batteryDischargeKwh"))
         }
     }
 
@@ -245,17 +248,17 @@ struct HistoryView: View {
         let prices = priceLines(s)
         if wide {
             HStack(alignment: .top, spacing: 14) {
-                SlotChartCard(title: "Leistung", unit: "kW", tint: Brand.pv, lines: power, day: date)
-                SlotChartCard(title: "Ladestand", unit: "%", tint: Brand.battery, range: 0...100,
+                SlotChartCard(title: String(localized: "Leistung"), unit: "kW", tint: Brand.pv, lines: power, day: date)
+                SlotChartCard(title: String(localized: "Ladestand"), unit: "%", tint: Brand.battery, range: 0...100,
                               lines: [.init(name: "SoC", color: Brand.battery, points: soc.map { ($0.date, $0.value) }, area: true)], day: date)
             }
         } else {
-            SlotChartCard(title: "Leistung", unit: "kW", tint: Brand.pv, lines: power, day: date)
-            SlotChartCard(title: "Ladestand", unit: "%", tint: Brand.battery, range: 0...100,
+            SlotChartCard(title: String(localized: "Leistung"), unit: "kW", tint: Brand.pv, lines: power, day: date)
+            SlotChartCard(title: String(localized: "Ladestand"), unit: "%", tint: Brand.battery, range: 0...100,
                           lines: [.init(name: "SoC", color: Brand.battery, points: soc.map { ($0.date, $0.value) }, area: true)], day: date)
         }
         if !prices.isEmpty {
-            SlotChartCard(title: "Preise", unit: "ct/kWh", tint: Brand.blue, lines: prices, day: date, step: true)
+            SlotChartCard(title: String(localized: "Preise"), unit: "ct/kWh", tint: Brand.blue, lines: prices, day: date, step: true)
         }
         if s.rows.contains(where: { $0.values["netEur"] != nil }) { NetCurveCard(rows: s.rows) }
     }
@@ -268,8 +271,8 @@ struct HistoryView: View {
                 return (d, v * 4)
             }, area: area)
         }
-        return [line("PV", "pvKwh", Brand.pv, area: true), line("Haus", "loadKwh", Brand.home),
-                line("Bezug", "importKwh", Brand.red), line("Einspeisung", "exportKwh", Brand.cyan)]
+        return [line("PV", "pvKwh", Brand.pv, area: true), line(String(localized: "Haus"), "loadKwh", Brand.home),
+                line(String(localized: "Bezug"), "importKwh", Brand.red), line(String(localized: "Einspeisung"), "exportKwh", Brand.cyan)]
             .filter { !$0.points.isEmpty }
     }
 
@@ -280,14 +283,23 @@ struct HistoryView: View {
                 return (d, v)
             })
         }
-        return [line("Börse", "marketPriceCtKwh", Brand.blue), line("Mein Bezug", "userImportPriceCtKwh", Brand.violet)].filter { !$0.points.isEmpty }
+        return [line(String(localized: "Börse"), "marketPriceCtKwh", Brand.blue), line(String(localized: "Mein Bezug"), "userImportPriceCtKwh", Brand.violet)].filter { !$0.points.isEmpty }
     }
 
     // MARK: Woche / Monat / Jahr
 
     enum Metric: String, CaseIterable, Identifiable {
-        case pv = "PV", load = "Verbrauch", imp = "Bezug", exp = "Einspeisung", net = "Netto €"
+        case pv, load, imp, exp, net
         var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .pv: return "PV"
+            case .load: return String(localized: "Verbrauch")
+            case .imp: return String(localized: "Bezug")
+            case .exp: return String(localized: "Einspeisung")
+            case .net: return String(localized: "Netto €")
+            }
+        }
         var key: String {
             switch self {
             case .pv: return "pvKwh"
@@ -313,12 +325,12 @@ struct HistoryView: View {
     private func periodCharts(_ s: HistorySummary) -> some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 10) {
-                Eyebrow(text: s.view == .year ? "Je Monat" : "Je Tag", icon: "chart.bar.fill", tint: metric.color)
+                Eyebrow(text: s.view == .year ? String(localized: "Je Monat") : String(localized: "Je Tag"), icon: "chart.bar.fill", tint: metric.color)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(Metric.allCases) { m in
                             Button { withAnimation(.snappy) { metric = m } } label: {
-                                Pill(text: m.rawValue, tint: m.color, filled: metric == m)
+                                Pill(text: m.title, tint: m.color, filled: metric == m)
                             }
                             .buttonStyle(.plain)
                             .accessibilityAddTraits(metric == m ? .isSelected : [])
@@ -340,7 +352,7 @@ struct HistoryView: View {
     private func rowsTable(_ s: HistorySummary) -> some View {
         GlassCard {
             VStack(alignment: .leading, spacing: 0) {
-                Eyebrow(text: s.view == .year ? "Monate" : "Tage", icon: "list.bullet", tint: Brand.text2)
+                Eyebrow(text: s.view == .year ? String(localized: "Monate") : String(localized: "Tage"), icon: "list.bullet", tint: Brand.text2)
                 Grid(alignment: .trailing, horizontalSpacing: 10, verticalSpacing: 0) {
                     GridRow {
                         Text("").gridColumnAlignment(.leading)
@@ -374,8 +386,8 @@ struct HistoryView: View {
 
     private func rowLabel(_ r: HistoryRow, _ view: HistoryPeriod) -> String {
         guard let d = r.date else { return r.label }
-        if view == .year { return d.formatted(.dateTime.month(.wide).locale(Format.de)) }
-        return d.formatted(.dateTime.weekday(.abbreviated).day().month(.twoDigits).locale(Format.de))
+        if view == .year { return d.formatted(.dateTime.month(.wide).locale(Format.locale)) }
+        return d.formatted(.dateTime.weekday(.abbreviated).day().month(.twoDigits).locale(Format.locale))
     }
 
     /// Zeile antippen: Woche/Monat → Tag, Jahr → Monat.
@@ -397,9 +409,9 @@ struct HistoryView: View {
                     if let a = s.autarkyPct { Pill(text: "Autarkie \(Format.percent(a))", tint: Brand.green) }
                 }
                 ShareBar(parts: [
-                    .init(name: "Solar", value: s.kpi("solarDirectUseKwh"), color: Brand.pv),
-                    .init(name: "Akku", value: s.kpi("batteryDirectUseKwh"), color: Brand.battery),
-                    .init(name: "Netz", value: s.kpi("gridDirectUseKwh"), color: Brand.grid),
+                    .init(name: String(localized: "Solar"), value: s.kpi("solarDirectUseKwh"), color: Brand.pv),
+                    .init(name: String(localized: "Akku"), value: s.kpi("batteryDirectUseKwh"), color: Brand.battery),
+                    .init(name: String(localized: "Netz"), value: s.kpi("gridDirectUseKwh"), color: Brand.grid),
                 ], format: Format.energy)
             }
         }
@@ -411,9 +423,9 @@ struct HistoryView: View {
                     if let q = s.selfUsePct { Pill(text: "Eigenverbrauch \(Format.percent(q))", tint: Brand.pv) }
                 }
                 ShareBar(parts: [
-                    .init(name: "Haus", value: s.kpi("solarDirectUseKwh"), color: Brand.home),
-                    .init(name: "Akku", value: s.kpi("solarToBatteryKwh"), color: Brand.battery),
-                    .init(name: "Netz", value: s.kpi("solarToGridKwh"), color: Brand.grid),
+                    .init(name: String(localized: "Haus"), value: s.kpi("solarDirectUseKwh"), color: Brand.home),
+                    .init(name: String(localized: "Akku"), value: s.kpi("solarToBatteryKwh"), color: Brand.battery),
+                    .init(name: String(localized: "Netz"), value: s.kpi("solarToGridKwh"), color: Brand.grid),
                 ], format: Format.energy)
             }
         }
@@ -433,7 +445,7 @@ struct HistoryView: View {
                     if let v = s.kpi("avgSpotPriceCtKwh") { ValueRow(label: "Börsenpreis im Mittel", value: Format.ct(v)) }
                     if let v = s.kpi("exportPvCtKwh"), v != 0 { ValueRow(label: "Erlös je kWh Solar", value: Format.ct(v)) }
                     if let v = s.kpi("marketPremiumEur"), abs(v) > 0.004 { ValueRow(label: "Marktprämie", value: Format.euro(v), tint: Brand.money) }
-                    if let v = s.kpi("dvNetAdvantageEur") { ValueRow(label: "Vorteil Direktvermarktung", value: Format.signedEuro(v), tint: v >= 0 ? Brand.money : Brand.red, hint: "gegenüber fester Einspeisevergütung") }
+                    if let v = s.kpi("dvNetAdvantageEur") { ValueRow(label: "Vorteil Direktvermarktung", value: Format.signedEuro(v), tint: v >= 0 ? Brand.money : Brand.red, hint: String(localized: "gegenüber fester Einspeisevergütung")) }
                     if let v = s.kpi("pvFullLoadHours") { ValueRow(label: "Volllaststunden PV", value: Format.number(v) + " h") }
                     if let v = s.kpi("cycles") { ValueRow(label: "Akku-Zyklen", value: Format.number(v, digits: 2)) }
                     if let v = s.kpi("gridToBatteryKwh"), v > 0.05 { ValueRow(label: "Netzstrom in den Akku", value: Format.energy(v)) }
@@ -550,6 +562,10 @@ struct SlotChartCard: View {
         .chartXAxis { DayHourAxis() }
         .chartYAxis { PlainYAxis() }
         .accessibilityLabel(title)
+        .accessibilityChartDescriptor(TimeSeriesDescriptor(
+            title: title, yTitle: unit,
+            series: lines.map { .init(name: $0.name, points: $0.points) },
+            format: { "\(Format.number($0, digits: unit == "%" ? 0 : 1)) \(unit)" }))
     }
 
     private struct YDomain: ViewModifier {
@@ -563,8 +579,8 @@ struct SlotChartCard: View {
 private func periodAxisLabel(_ r: HistoryRow, _ view: HistoryPeriod) -> String {
     guard let d = r.date else { return r.label }
     switch view {
-    case .year: return d.formatted(.dateTime.month(.narrow).locale(Format.de))
-    case .week: return d.formatted(.dateTime.weekday(.short).locale(Format.de))
+    case .year: return d.formatted(.dateTime.month(.narrow).locale(Format.locale))
+    case .week: return d.formatted(.dateTime.weekday(.short).locale(Format.locale))
     default: return String(Calendar.current.component(.day, from: d))
     }
 }
@@ -582,7 +598,7 @@ private struct PeriodBarChart: View {
             Chart {
                 ForEach(rows) { r in
                     let v = r.value(metric.key)
-                    BarMark(x: .value("Zeitraum", r.key), y: .value(metric.rawValue, v))
+                    BarMark(x: .value("Zeitraum", r.key), y: .value(metric.title, v))
                         .foregroundStyle(metric.isMoney && v < 0 ? Brand.red : metric.color)
                         .opacity(selection == nil || selection == r.key ? 1 : 0.4)
                         .cornerRadius(3)
@@ -601,7 +617,24 @@ private struct PeriodBarChart: View {
                 }
             }
             .chartYAxis { PlainYAxis() }
+            .accessibilityLabel(metric.title)
+            .accessibilityChartDescriptor(CategoryDescriptor(
+                title: metric.title, summary: readoutSum,
+                xTitle: view == .year ? String(localized: "Monat") : String(localized: "Tag"),
+                yTitle: metric.isMoney ? String(localized: "Euro") : String(localized: "Kilowattstunden"),
+                categories: rows.map(longLabel),
+                series: [.init(name: metric.title, values: rows.map { $0.value(metric.key) })],
+                format: { metric.isMoney ? Format.signedEuro($0) : Format.energy($0) }))
         }
+    }
+
+    private func longLabel(_ r: HistoryRow) -> String {
+        r.date.map { view == .year ? $0.formatted(.dateTime.month(.wide).locale(Format.locale)) : $0.formatted(.dateTime.weekday(.abbreviated).day().month().locale(Format.locale)) } ?? r.label
+    }
+
+    private var readoutSum: String {
+        let sum = rows.reduce(0) { $0 + $1.value(metric.key) }
+        return String(localized: "Summe \(metric.isMoney ? Format.signedEuro(sum) : Format.energy(sum))")
     }
 
     /// Im Monat nur jeden fünften Tag beschriften.
@@ -610,13 +643,9 @@ private struct PeriodBarChart: View {
     }
 
     private var readout: String {
-        guard let selection, let r = rows.first(where: { $0.key == selection }) else {
-            let sum = rows.reduce(0) { $0 + $1.value(metric.key) }
-            return "Summe " + (metric.isMoney ? Format.signedEuro(sum) : Format.energy(sum))
-        }
+        guard let selection, let r = rows.first(where: { $0.key == selection }) else { return readoutSum }
         let v = r.value(metric.key)
-        let label = r.date.map { view == .year ? $0.formatted(.dateTime.month(.wide).locale(Format.de)) : $0.formatted(.dateTime.weekday(.abbreviated).day().month().locale(Format.de)) } ?? r.label
-        return "\(label) · " + (metric.isMoney ? Format.signedEuro(v) : Format.energy(v))
+        return "\(longLabel(r)) · " + (metric.isMoney ? Format.signedEuro(v) : Format.energy(v))
     }
 }
 
@@ -650,8 +679,21 @@ private struct MoneyBarChart: View {
             }
             .chartYAxis { PlainYAxis() }
             .accessibilityLabel("Einnahmen, Bezugskosten und Netto je Zeitraum")
+            .accessibilityChartDescriptor(CategoryDescriptor(
+                title: String(localized: "Erlöse und Kosten"),
+                xTitle: view == .year ? String(localized: "Monat") : String(localized: "Tag"),
+                yTitle: String(localized: "Euro"),
+                categories: rows.map { r in
+                    r.date.map { view == .year ? $0.formatted(.dateTime.month(.wide).locale(Format.locale)) : $0.formatted(.dateTime.weekday(.abbreviated).day().month().locale(Format.locale)) } ?? r.label
+                },
+                series: [
+                    .init(name: String(localized: "Einnahmen"), values: rows.map { $0.value("exportRevenueEur") }),
+                    .init(name: String(localized: "Strombezug"), values: rows.map { -($0.values["gridCostEur"] ?? $0.value("importCostEur")) }),
+                    .init(name: String(localized: "Netto"), values: rows.map { $0.value("netEur") }),
+                ],
+                format: Format.signedEuro))
             HStack(spacing: 10) {
-                key(Brand.money, "Einnahmen"); key(Brand.red, "Strombezug"); key(Brand.text, "Netto")
+                key(Brand.money, String(localized: "Einnahmen")); key(Brand.red, String(localized: "Strombezug")); key(Brand.text, String(localized: "Netto"))
             }
         }
     }

@@ -23,6 +23,7 @@ struct DashboardView: View {
     var open: (DetailKind) -> Void
     var openMarket: () -> Void
     @Environment(MarketStore.self) private var market
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         AuroraPage { width in
@@ -60,7 +61,7 @@ struct DashboardView: View {
             } else {
                 GlassCard {
                     EmptyState(title: "Noch keine Werte", icon: "antenna.radiowaves.left.and.right",
-                               text: "Sobald die Anlage antwortet, erscheinen hier die Live-Werte.")
+                               text: String(localized: "Sobald die Anlage antwortet, erscheinen hier die Live-Werte."))
                 }
             }
         }
@@ -79,8 +80,8 @@ struct DashboardView: View {
     private var banner: String? {
         switch controller.state {
         case .boxOffline, .offline:
-            if let at = controller.mailboxAt { return "Anlage gerade nicht erreichbar – letzter Stand von \(Format.dateTime(at))." }
-            return "Anlage gerade nicht erreichbar."
+            if let at = controller.mailboxAt { return String(localized: "Anlage gerade nicht erreichbar – letzter Stand von \(Format.dateTime(at)).") }
+            return String(localized: "Anlage gerade nicht erreichbar.")
         default: return nil
         }
     }
@@ -107,15 +108,17 @@ struct DashboardView: View {
 
     private func metricGrid(_ s: LiveStatus) -> some View {
         let load = controller.todayValues("load_power_w").isEmpty ? "self_consumption_w" : "load_power_w"
-        return LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-            MetricCard(title: "PV", icon: "sun.max.fill", tint: Brand.pv, value: Format.power(s.pvTotalW), caption: "Erzeugung",
+        // In den Bedienungshilfen-Größen eine Karte je Zeile.
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: typeSize.isAccessibilitySize ? 1 : 2)
+        return LazyVGrid(columns: columns, spacing: 12) {
+            MetricCard(cardId: "PV", title: "PV", icon: "sun.max.fill", tint: Brand.pv, value: Format.power(s.pvTotalW), caption: String(localized: "Erzeugung"),
                        spark: controller.todayValues("pv_total_w"), valueId: "pvValue") { open(.pv) }
-            MetricCard(title: "Akku", icon: StatusText.batteryIcon(s.soc), tint: Brand.battery, value: Format.percent(s.soc),
+            MetricCard(cardId: "Akku", title: String(localized: "Akku"), icon: StatusText.batteryIcon(s.soc), tint: Brand.battery, value: Format.percent(s.soc),
                        caption: StatusText.batteryCaption(s), spark: controller.todayValues(BoxData.socKey), sparkRange: 0...100) { open(.battery) }
-            MetricCard(title: "Netz", icon: "bolt.horizontal.fill", tint: StatusText.isExporting(s) ? Brand.cyan : Brand.grid,
+            MetricCard(cardId: "Netz", title: String(localized: "Netz"), icon: "bolt.horizontal.fill", tint: StatusText.isExporting(s) ? Brand.cyan : Brand.grid,
                        value: Format.power(StatusText.gridValue(s)), caption: StatusText.gridCaption(s),
                        spark: gridSpark) { open(.grid) }
-            MetricCard(title: "Haus", icon: "house.fill", tint: Brand.home, value: Format.power(s.loadW), caption: "Verbrauch",
+            MetricCard(cardId: "Haus", title: String(localized: "Haus"), icon: "house.fill", tint: Brand.home, value: Format.power(s.loadW), caption: String(localized: "Verbrauch"),
                        spark: controller.todayValues(load), valueId: "loadValue") { open(.home) }
         }
     }
@@ -141,7 +144,7 @@ struct DashboardView: View {
                     }
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         MetricValue(value: Format.signedEuro(net), style: .largeTitle, color: tint)
-                        Text((net ?? 0) >= 0 ? "verdient" : "gekostet").font(.subheadline).foregroundStyle(Brand.text2)
+                        Text((net ?? 0) >= 0 ? String(localized: "verdient") : String(localized: "gekostet")).font(.subheadline).foregroundStyle(Brand.text2)
                     }
                     MoneyBar(revenue: s.todayRevenueEur ?? 0, cost: s.todayCostEur ?? 0)
                     HStack {
@@ -233,6 +236,8 @@ struct DashboardView: View {
 // MARK: - Bausteine
 
 struct MetricCard: View {
+    /// Feste Kennung für Tests — unabhängig von der Sprache.
+    let cardId: String
     let title: String
     let icon: String
     let tint: Color
@@ -266,7 +271,7 @@ struct MetricCard: View {
         // VoiceOver liest die Karte als einen Knopf.
         .accessibilityElement(children: .combine)
         .accessibilityHint("Zeigt Detailwerte")
-        .accessibilityIdentifier("card.\(title)")
+        .accessibilityIdentifier("card.\(cardId)")
     }
 }
 
@@ -374,7 +379,7 @@ struct StateLines: View {
             if s.emergencyStop == true {
                 Label("Not-Halt aktiv", systemImage: "exclamationmark.octagon.fill").foregroundStyle(Brand.red).fontWeight(.semibold)
             }
-            Label(alarms == 0 ? "Keine Alarme" : "\(alarms) Alarm\(alarms == 1 ? "" : "e") aktiv",
+            Label(alarms == 0 ? String(localized: "Keine Alarme") : MailboxEvent.text(alarms: alarms, emergencyStop: false),
                   systemImage: alarms == 0 ? "bell" : "bell.badge.fill")
                 .foregroundStyle(alarms == 0 ? Brand.text2 : Brand.red)
             if s.alarmsStale == true { Label("Alarm-Überwachung veraltet", systemImage: "clock.badge.exclamationmark").foregroundStyle(Brand.orange) }

@@ -53,17 +53,30 @@ struct CardButtonStyle: ButtonStyle {
 }
 
 // MARK: Text
+//
+// Beschriftungen nehmen wie SwiftUIs `Text` entweder ein Literal (Schlüssel im
+// String-Katalog, wird übersetzt) oder einen fertigen String (bleibt, wie er ist).
 
 /// Überzeile wie im Leitstand: Monospace, Versalien, gesperrt.
 struct Eyebrow: View {
-    let text: String
+    private let label: Text
     var icon: String? = nil
     var tint: Color = Brand.dim
+
+    init(text: LocalizedStringKey, icon: String? = nil, tint: Color = Brand.dim) {
+        label = Text(text); self.icon = icon; self.tint = tint
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(text: S, icon: String? = nil, tint: Color = Brand.dim) {
+        label = Text(text); self.icon = icon; self.tint = tint
+    }
 
     var body: some View {
         HStack(spacing: 6) {
             if let icon { Image(systemName: icon).imageScale(.small) }
-            Text(text.uppercased())
+            label
+                .textCase(.uppercase)
                 .tracking(1.4)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
@@ -71,7 +84,7 @@ struct Eyebrow: View {
         .font(.caption2.monospaced().weight(.semibold))
         .foregroundStyle(tint)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(text)
+        .accessibilityLabel(label)
     }
 }
 
@@ -94,15 +107,24 @@ struct MetricValue: View {
 }
 
 struct Pill: View {
-    let text: String
+    private let label: Text
     var icon: String? = nil
     var tint: Color = Brand.cyan
     var filled = false
 
+    init(text: LocalizedStringKey, icon: String? = nil, tint: Color = Brand.cyan, filled: Bool = false) {
+        label = Text(text); self.icon = icon; self.tint = tint; self.filled = filled
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(text: S, icon: String? = nil, tint: Color = Brand.cyan, filled: Bool = false) {
+        label = Text(text); self.icon = icon; self.tint = tint; self.filled = filled
+    }
+
     var body: some View {
         HStack(spacing: 5) {
             if let icon { Image(systemName: icon).imageScale(.small) }
-            Text(text).lineLimit(1)
+            label.lineLimit(1)
         }
         .font(.caption.weight(.semibold))
         .padding(.horizontal, 10)
@@ -115,15 +137,24 @@ struct Pill: View {
 
 /// Zeile „Bezeichnung … Wert“ in Detailansichten.
 struct ValueRow: View {
-    let label: String
+    private let label: Text
     let value: String
     var tint: Color? = nil
     var hint: String? = nil
 
+    init(label: LocalizedStringKey, value: String, tint: Color? = nil, hint: String? = nil) {
+        self.label = Text(label); self.value = value; self.tint = tint; self.hint = hint
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(label: S, value: String, tint: Color? = nil, hint: String? = nil) {
+        self.label = Text(label); self.value = value; self.tint = tint; self.hint = hint
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.subheadline).foregroundStyle(Brand.text2)
+                label.font(.subheadline).foregroundStyle(Brand.text2)
                 if let hint { Text(hint).font(.caption2).foregroundStyle(Brand.dim) }
             }
             Spacer(minLength: 8)
@@ -163,9 +194,13 @@ private struct RowStackLayout: _VariadicView_MultiViewRoot {
 }
 
 struct SectionTitle: View {
-    let text: String
+    private let label: Text
+    init(text: LocalizedStringKey) { label = Text(text) }
+    @_disfavoredOverload
+    init<S: StringProtocol>(text: S) { label = Text(text) }
+
     var body: some View {
-        Text(text)
+        label
             .font(.title3.weight(.bold))
             .foregroundStyle(Brand.text)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -176,12 +211,21 @@ struct SectionTitle: View {
 
 /// Hinweis-Band (veraltete Werte, Fehler, Lizenz).
 struct NoticeBanner: View {
-    let text: String
+    private let label: Text
     var icon: String = "clock.arrow.circlepath"
     var tint: Color = Brand.orange
 
+    init(text: LocalizedStringKey, icon: String = "clock.arrow.circlepath", tint: Color = Brand.orange) {
+        label = Text(text); self.icon = icon; self.tint = tint
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(text: S, icon: String = "clock.arrow.circlepath", tint: Color = Brand.orange) {
+        label = Text(text); self.icon = icon; self.tint = tint
+    }
+
     var body: some View {
-        Label(text, systemImage: icon)
+        Label { label } icon: { Image(systemName: icon) }
             .font(.footnote)
             .foregroundStyle(Brand.text)
             .padding(12)
@@ -192,14 +236,24 @@ struct NoticeBanner: View {
 }
 
 struct EmptyState: View {
-    let title: String
+    private let title: Text
     let icon: String
     var text: String? = nil
 
+    init(title: LocalizedStringKey, icon: String, text: String? = nil) {
+        self.title = Text(title); self.icon = icon; self.text = text
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(title: S, icon: String, text: String? = nil) {
+        self.title = Text(title); self.icon = icon; self.text = text
+    }
+
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: icon).font(.system(size: 34)).foregroundStyle(Brand.auroraLinear)
-            Text(title).font(.headline).foregroundStyle(Brand.text)
+            Image(systemName: icon).font(.largeTitle).imageScale(.large).foregroundStyle(Brand.auroraLinear)
+                .accessibilityHidden(true)
+            title.font(.headline).foregroundStyle(Brand.text)
             if let text { Text(text).font(.footnote).foregroundStyle(Brand.text2).multilineTextAlignment(.center) }
         }
         .frame(maxWidth: .infinity, minHeight: 180)
@@ -218,6 +272,12 @@ struct AuroraPage<Content: View>: View {
     @ViewBuilder var content: (CGFloat) -> Content
     @State private var width: CGFloat = 0
     @Environment(Chrome.self) private var chrome
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// Breite, nach der die Ansichten umbrechen. In den Bedienungshilfen-Größen
+    /// braucht Text deutlich mehr Platz — dann zählt die Fläche entsprechend
+    /// schmaler, und zweispaltige Anordnungen werden einspaltig.
+    private var layoutWidth: CGFloat { typeSize.isAccessibilitySize ? width / 1.6 : width }
 
     var body: some View {
         // Ein Pfad für beide Fälle: Die Seite behält ihre Identität (Rollposition,
@@ -229,7 +289,7 @@ struct AuroraPage<Content: View>: View {
     private var page: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: spacing) {
-                content(width)
+                content(layoutWidth)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)

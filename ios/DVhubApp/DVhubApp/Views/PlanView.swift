@@ -41,7 +41,7 @@ struct PlanView: View {
         }
         .navigationTitle("Fahrplan")
         .screenActions(.more, [
-            ScreenAction(id: "plan.refresh", title: "Aktualisieren", icon: "arrow.clockwise") { Task { await load() } },
+            ScreenAction(id: "plan.refresh", title: String(localized: "Aktualisieren"), icon: "arrow.clockwise") { Task { await load() } },
         ])
         .refreshable { await load() }
         .task(id: controller.isOnline) { await load() }
@@ -86,8 +86,17 @@ struct PlanView: View {
                 .chartYAxis { PlainYAxis() }
                 .frame(height: 200)
                 .accessibilityLabel("Geplante Leistung: PV, Haus, Einspeisung, Bezug")
+                .accessibilityChartDescriptor(TimeSeriesDescriptor(
+                    title: String(localized: "Geplante Leistung"), yTitle: "kW",
+                    series: [
+                        .init(name: "PV", points: rows.map { ($0.date, $0.pvKw) }),
+                        .init(name: String(localized: "Haus"), points: rows.map { ($0.date, $0.loadKw) }),
+                        .init(name: String(localized: "Einspeisung"), points: rows.map { ($0.date, $0.feedInKw) }),
+                        .init(name: String(localized: "Bezug"), points: rows.map { ($0.date, $0.gridKw) }),
+                    ],
+                    format: { Format.power($0 * 1000) }))
                 HStack(spacing: 10) {
-                    key(Brand.pv, "PV"); key(Brand.home, "Haus"); key(Brand.cyan, "Einspeisung"); key(Brand.red, "Bezug")
+                    key(Brand.pv, "PV"); key(Brand.home, String(localized: "Haus")); key(Brand.cyan, String(localized: "Einspeisung")); key(Brand.red, String(localized: "Bezug"))
                 }
                 if let fetchedAt { Text("Plan von \(Format.dateTime(fetchedAt))").font(.caption2).foregroundStyle(Brand.dim) }
             }
@@ -123,6 +132,10 @@ struct PlanView: View {
                 .chartYAxis { PlainYAxis() }
                 .frame(height: 140)
                 .accessibilityLabel("Geplanter Ladestand")
+                .accessibilityChartDescriptor(TimeSeriesDescriptor(
+                    title: String(localized: "Geplanter Ladestand"), yTitle: String(localized: "Prozent"),
+                    series: [.init(name: String(localized: "Akku"), points: rows.compactMap { r in r.socPct.map { (r.date, $0) } })],
+                    format: Format.percent))
                 if rows.contains(where: { $0.priceCt != nil }) {
                     Chart(rows.filter { $0.priceCt != nil }) { r in
                         BarMark(x: .value("Zeit", r.date, unit: .minute, calendar: .current), y: .value("ct", r.priceCt ?? 0), width: .fixed(2))
@@ -132,6 +145,12 @@ struct PlanView: View {
                     .chartYAxis { PlainYAxis() }
                     .frame(height: 70)
                     .accessibilityLabel("Preis je Viertelstunde im Plan")
+                    .accessibilityChartDescriptor(TimeSeriesDescriptor(
+                        title: String(localized: "Preis im Plan"),
+                        summary: ChartSummary.lowHigh(rows.compactMap { r in r.priceCt.map { (r.date, $0) } }, format: Format.ct),
+                        yTitle: String(localized: "Cent je Kilowattstunde"),
+                        series: [.init(name: String(localized: "Preis"), points: rows.compactMap { r in r.priceCt.map { (r.date, $0) } })],
+                        format: Format.ct))
                 }
             }
         }
@@ -151,7 +170,7 @@ struct PlanView: View {
                     Eyebrow(text: "Was der Plan vorgibt", icon: "list.bullet.rectangle", tint: Brand.violet)
                     RowStack {
                         ForEach(Array(merged.prefix(10).enumerated()), id: \.offset) { _, m in
-                            ValueRow(label: m.0.label ?? "", value: "\(Format.dateTime(m.0.date))–\(Format.time(m.1.addingTimeInterval(900)))")
+                            ValueRow(label: m.0.label ?? "", value: String(localized: "\(Format.dateTime(m.0.date))–\(Format.time(m.1.addingTimeInterval(900)))"))
                         }
                     }
                 }
@@ -177,7 +196,7 @@ struct PlanView: View {
                 if rules.isEmpty {
                     Text("Keine aktiven Regeln.").font(.footnote).foregroundStyle(Brand.text2).padding(.top, 8)
                 } else {
-                    Text("\(rules.count) aktive Regel\(rules.count == 1 ? "" : "n")").font(.caption.weight(.bold)).foregroundStyle(Brand.text).padding(.top, 10)
+                    Text(rules.count == 1 ? "1 aktive Regel" : "\(rules.count) aktive Regeln").font(.caption.weight(.bold)).foregroundStyle(Brand.text).padding(.top, 10)
                     RowStack {
                         ForEach(Array(rules.prefix(14).enumerated()), id: \.offset) { _, r in
                             ValueRow(label: "\(r["start"]?.string ?? "–")–\(r["end"]?.string ?? "–")",
@@ -195,7 +214,7 @@ struct PlanView: View {
         guard let v else { return "–" }
         switch target {
         case "gridSetpointW": return Format.signedPower(v)
-        case "maxDischargeW": return v < 0 ? "unbegrenzt" : Format.power(v)
+        case "maxDischargeW": return v < 0 ? String(localized: "unbegrenzt") : Format.power(v)
         case "minSocPct": return Format.percent(v)
         case "chargeCurrentA": return "\(Format.number(v, digits: 0)) A"
         default: return Format.number(v, digits: 0)
@@ -208,19 +227,19 @@ struct PlanView: View {
 
     private func load() async {
         guard controller.isOnline else {
-            if rows.isEmpty { message = "Der Fahrplan braucht eine Verbindung zur Anlage." }
+            if rows.isEmpty { message = String(localized: "Der Fahrplan braucht eine Verbindung zur Anlage.") }
             return
         }
         if let r = try? await controller.request("GET", "/api/schedule"), r.status == 200 { schedule = r.body }
         do {
             let r = try await controller.request("GET", "/api/eos/plan?rows=192")
-            if r.status == 403 { message = "Der EOS-Plan braucht eine Pro-Lizenz in DVhub."; rows = []; return }
-            guard r.status == 200 else { message = "Plan nicht verfügbar (HTTP \(r.status))."; return }
+            if r.status == 403 { message = String(localized: "Der EOS-Plan braucht eine Pro-Lizenz in DVhub."); rows = []; return }
+            guard r.status == 200 else { message = String(localized: "Plan nicht verfügbar (HTTP \(r.status))."); return }
             if r.body["available"]?.bool != true || (r.body["output"]?.isNull ?? true) {
                 switch r.body["reason"]?.string {
-                case "eos_off": message = "EOS ist ausgeschaltet."
-                case "eos_not_answering": message = "EOS antwortet gerade nicht – der Plan erscheint nach dem nächsten Lauf."
-                default: message = "Kein EOS-Fahrplan verfügbar."
+                case "eos_off": message = String(localized: "EOS ist ausgeschaltet.")
+                case "eos_not_answering": message = String(localized: "EOS antwortet gerade nicht – der Plan erscheint nach dem nächsten Lauf.")
+                default: message = String(localized: "Kein EOS-Fahrplan verfügbar.")
                 }
                 rows = []
                 return
@@ -236,7 +255,7 @@ struct PlanView: View {
                                priceCt: row["priceCtKwh"]?.double, label: row["zeitplanLabel"]?.string)
             }
             fetchedAt = ISO.parse(r.body["plan"]?["fetchedAt"]?.string)
-            message = rows.isEmpty ? "Der Plan ist leer." : nil
+            message = rows.isEmpty ? String(localized: "Der Plan ist leer.") : nil
         } catch {
             message = userMessage(for: error)
         }
@@ -250,7 +269,7 @@ func PlanAxis() -> some AxisContent {
         if let d = value.as(Date.self) {
             AxisValueLabel {
                 Text(Calendar.current.component(.hour, from: d) == 0
-                     ? d.formatted(.dateTime.weekday(.abbreviated).locale(Format.de))
+                     ? d.formatted(.dateTime.weekday(.abbreviated).locale(Format.locale))
                      : String(format: "%02d", Calendar.current.component(.hour, from: d)))
                     .font(.caption2.monospacedDigit()).foregroundStyle(Brand.dim)
             }

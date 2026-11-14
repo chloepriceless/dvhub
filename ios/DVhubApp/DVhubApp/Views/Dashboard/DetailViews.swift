@@ -46,11 +46,11 @@ struct DetailView: View {
     private var title: String {
         switch kind {
         case .pv: return "PV"
-        case .battery: return "Akku"
-        case .grid: return "Netz"
-        case .home: return "Haus"
-        case .money: return "Heute"
-        case .state: return "Zustand"
+        case .battery: return String(localized: "Akku")
+        case .grid: return String(localized: "Netz")
+        case .home: return String(localized: "Haus")
+        case .money: return String(localized: "Heute")
+        case .state: return String(localized: "Zustand")
         }
     }
 
@@ -61,17 +61,17 @@ struct DetailView: View {
 
     @ViewBuilder
     private func pv(_ width: CGFloat) -> some View {
-        Hero(eyebrow: "Erzeugung jetzt", icon: "sun.max.fill", tint: Brand.pv, value: Format.power(status.pvTotalW),
-             caption: kpi("pvKwh").map { "Heute \(Format.energy($0))" })
-        DayChartCard(title: "Leistung heute", unit: "kW", tint: Brand.pv, lines: [.init(name: "PV", color: Brand.pv, points: series("pv_total_w"), area: true)])
+        Hero(eyebrow: String(localized: "Erzeugung jetzt"), icon: "sun.max.fill", tint: Brand.pv, value: Format.power(status.pvTotalW),
+             caption: kpi("pvKwh").map { String(localized: "Heute \(Format.energy($0))") })
+        DayChartCard(title: String(localized: "Leistung heute"), unit: "kW", tint: Brand.pv, lines: [.init(name: "PV", color: Brand.pv, points: series("pv_total_w"), area: true)])
         columns(width) {
             GlassCard(tint: Brand.pv) {
                 VStack(alignment: .leading, spacing: 4) {
                     Eyebrow(text: "Wohin geht der Solarstrom?", icon: "arrow.triangle.branch", tint: Brand.pv)
                     ShareBar(parts: [
-                        .init(name: "Haus", value: detail.solarDirectUseW, color: Brand.home),
-                        .init(name: "Akku", value: detail.solarToBatteryW, color: Brand.battery),
-                        .init(name: "Netz", value: detail.solarToGridW, color: Brand.grid),
+                        .init(name: String(localized: "Haus"), value: detail.solarDirectUseW, color: Brand.home),
+                        .init(name: String(localized: "Akku"), value: detail.solarToBatteryW, color: Brand.battery),
+                        .init(name: String(localized: "Netz"), value: detail.solarToGridW, color: Brand.grid),
                     ], format: Format.power)
                 }
             }
@@ -80,10 +80,10 @@ struct DetailView: View {
                     Eyebrow(text: "Quellen", icon: "square.stack.3d.up", tint: Brand.text2)
                     RowStack {
                         ValueRow(label: "Gesamt", value: Format.power(detail.pvTotalW ?? status.pvTotalW), tint: Brand.pv)
-                        if detail.pvDcW != nil { ValueRow(label: "DC-gekoppelt", value: Format.power(detail.pvDcW), hint: "Laderegler am Akku") }
-                        if detail.pvAcW != nil { ValueRow(label: "AC-gekoppelt", value: Format.power(detail.pvAcW), hint: "PV-Wechselrichter") }
-                        phases("AC-PV", detail.pvAcPhasesW)
-                        phases("AC-PV 2", detail.pvAc2PhasesW)
+                        if detail.pvDcW != nil { ValueRow(label: "DC-gekoppelt", value: Format.power(detail.pvDcW), hint: String(localized: "Laderegler am Akku")) }
+                        if detail.pvAcW != nil { ValueRow(label: "AC-gekoppelt", value: Format.power(detail.pvAcW), hint: String(localized: "PV-Wechselrichter")) }
+                        phases(String(localized: "AC-PV"), detail.pvAcPhasesW)
+                        phases(String(localized: "AC-PV 2"), detail.pvAc2PhasesW)
                     }
                 }
             }
@@ -98,7 +98,7 @@ struct DetailView: View {
                         ValueRow(label: "In den Akku", value: Format.energy(kpi("solarToBatteryKwh")))
                         ValueRow(label: "Eingespeist", value: Format.energy(kpi("solarToGridKwh")))
                         if let p = peak("pv_total_w") { ValueRow(label: "Spitze", value: "\(Format.power(p.value)) · \(Format.time(p.date))") }
-                        if let q = day?.selfUsePct { ValueRow(label: "Eigenverbrauch", value: Format.percent(q), hint: "Anteil der Erzeugung, der nicht eingespeist wurde") }
+                        if let q = day?.selfUsePct { ValueRow(label: "Eigenverbrauch", value: Format.percent(q), hint: String(localized: "Anteil der Erzeugung, der nicht eingespeist wurde")) }
                         if let c = kpi("curtailedPvKwh"), c > 0.05 { ValueRow(label: "Abgeregelt", value: Format.energy(c), tint: Brand.orange) }
                     }
                 }
@@ -128,22 +128,22 @@ struct DetailView: View {
             }
         }
         .accessibilityElement(children: .combine)
-        DayChartCard(title: "Ladestand heute", unit: "%", tint: Brand.battery, range: 0...100, scale: 1,
+        DayChartCard(title: String(localized: "Ladestand heute"), unit: "%", tint: Brand.battery, range: 0...100, scale: 1,
                      lines: [.init(name: "SoC", color: Brand.battery, points: series(BoxData.socKey), area: true)],
                      threshold: status.minSocPct ?? detail.minSocPct)
-        DayChartCard(title: "Leistung heute", unit: "kW", tint: Brand.battery,
-                     lines: [.init(name: "Laden (+) / Entladen (−)", color: Brand.cyan, points: series("battery_power_w"), area: true)])
+        DayChartCard(title: String(localized: "Leistung heute"), unit: "kW", tint: Brand.battery,
+                     lines: [.init(name: String(localized: "Laden (+) / Entladen (−)"), color: Brand.cyan, points: series("battery_power_w"), area: true)])
         columns(width) {
             GlassCard {
                 VStack(alignment: .leading, spacing: 0) {
                     Eyebrow(text: "Jetzt", icon: "bolt", tint: Brand.text2)
                     RowStack {
                         ValueRow(label: "Ladestand", value: Format.percent(status.soc), tint: Brand.battery)
-                        ValueRow(label: "Leistung", value: Format.signedPower(w), hint: "+ lädt, − entlädt")
-                        ValueRow(label: "Min-SoC", value: Format.percent(status.minSocPct ?? detail.minSocPct), hint: "Darunter entlädt DVhub nicht")
+                        ValueRow(label: "Leistung", value: Format.signedPower(w), hint: String(localized: "+ lädt, − entlädt"))
+                        ValueRow(label: "Min-SoC", value: Format.percent(status.minSocPct ?? detail.minSocPct), hint: String(localized: "Darunter entlädt DVhub nicht"))
                         if let a = detail.activeMinSocPct { ValueRow(label: "Min-SoC laut Zeitplan", value: Format.percent(a)) }
                         if let m = detail.maxDischargeW {
-                            ValueRow(label: "Max. Entladung", value: m < 0 ? "unbegrenzt" : (m == 0 ? "halten (0 W)" : Format.power(m)))
+                            ValueRow(label: "Max. Entladung", value: m < 0 ? String(localized: "unbegrenzt") : (m == 0 ? String(localized: "halten (0 W)") : Format.power(m)))
                         }
                         if let s2 = detail.secondSocPct { ValueRow(label: "Zweiter Akku", value: "\(Format.percent(s2)) · \(Format.signedPower(detail.secondBatteryW))") }
                     }
@@ -153,12 +153,12 @@ struct DetailView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if (w ?? 0) >= 0 {
                         Eyebrow(text: "Womit wird geladen?", icon: "arrow.down.to.line", tint: Brand.battery)
-                        ShareBar(parts: [.init(name: "Solar", value: detail.solarToBatteryW, color: Brand.pv),
-                                         .init(name: "Netz", value: detail.gridToBatteryW, color: Brand.grid)], format: Format.power)
+                        ShareBar(parts: [.init(name: String(localized: "Solar"), value: detail.solarToBatteryW, color: Brand.pv),
+                                         .init(name: String(localized: "Netz"), value: detail.gridToBatteryW, color: Brand.grid)], format: Format.power)
                     } else {
                         Eyebrow(text: "Wohin entlädt der Akku?", icon: "arrow.up.to.line", tint: Brand.battery)
-                        ShareBar(parts: [.init(name: "Haus", value: detail.batteryDirectUseW, color: Brand.home),
-                                         .init(name: "Netz", value: detail.batteryToGridW, color: Brand.grid)], format: Format.power)
+                        ShareBar(parts: [.init(name: String(localized: "Haus"), value: detail.batteryDirectUseW, color: Brand.home),
+                                         .init(name: String(localized: "Netz"), value: detail.batteryToGridW, color: Brand.grid)], format: Format.power)
                     }
                 }
             }
@@ -186,12 +186,12 @@ struct DetailView: View {
     @ViewBuilder
     private func grid(_ width: CGFloat) -> some View {
         let exporting = StatusText.isExporting(status)
-        Hero(eyebrow: StatusText.gridCaption(status) + " jetzt", icon: "bolt.horizontal.fill", tint: exporting ? Brand.cyan : Brand.grid,
+        Hero(eyebrow: String(localized: "\(StatusText.gridCaption(status)) jetzt", comment: "z. B. Bezug jetzt / Einspeisung jetzt"), icon: "bolt.horizontal.fill", tint: exporting ? Brand.cyan : Brand.grid,
              value: Format.power(StatusText.gridValue(status)),
-             caption: status.gridSetpointW.map { "Sollwert \(Format.signedPower($0))" })
-        DayChartCard(title: "Netz heute", unit: "kW", tint: Brand.grid, lines: [
-            .init(name: "Einspeisung", color: Brand.cyan, points: series("grid_export_w"), area: true),
-            .init(name: "Bezug", color: Brand.red, points: series("grid_import_w"), area: true),
+             caption: status.gridSetpointW.map { String(localized: "Sollwert \(Format.signedPower($0))") })
+        DayChartCard(title: String(localized: "Netz heute"), unit: "kW", tint: Brand.grid, lines: [
+            .init(name: String(localized: "Einspeisung"), color: Brand.cyan, points: series("grid_export_w"), area: true),
+            .init(name: String(localized: "Bezug"), color: Brand.red, points: series("grid_import_w"), area: true),
         ])
         columns(width) {
             GlassCard {
@@ -201,14 +201,14 @@ struct DetailView: View {
                         ValueRow(label: "Bezug", value: Format.power(status.gridImportW), tint: (status.gridImportW ?? 0) > FlowEdge.idleW ? Brand.red : nil)
                         ValueRow(label: "Einspeisung", value: Format.power(status.gridExportW), tint: (status.gridExportW ?? 0) > FlowEdge.idleW ? Brand.cyan : nil)
                         ValueRow(label: "Sollwert am Netzpunkt", value: Format.signedPower(status.gridSetpointW ?? detail.gridSetpointW),
-                                 hint: "− heißt: so viel soll eingespeist werden")
+                                 hint: String(localized: "− heißt: so viel soll eingespeist werden"))
                         if let a = detail.activeSetpointW {
                             ValueRow(label: "Vorgabe von DVhub", value: Format.signedPower(a), hint: detail.activeSetpointSource.map(Self.sourceName))
                         }
                         if let t = detail.gridTotalW {
-                            ValueRow(label: "Zähler gesamt", value: Format.signedPower(detail.gridPhaseAsImport(t)), hint: "+ Bezug, − Einspeisung")
+                            ValueRow(label: "Zähler gesamt", value: Format.signedPower(detail.gridPhaseAsImport(t)), hint: String(localized: "+ Bezug, − Einspeisung"))
                         }
-                        phases("Zähler", detail.gridPhasesW.map { $0.map(detail.gridPhaseAsImport) }, signed: true)
+                        phases(String(localized: "Zähler"), detail.gridPhasesW.map { $0.map(detail.gridPhaseAsImport) }, signed: true)
                     }
                 }
             }
@@ -221,7 +221,7 @@ struct DetailView: View {
                                 ForEach(Array(detail.gridVoltagesV.enumerated()), id: \.offset) { i, v in
                                     if let v { ValueRow(label: "L\(i + 1)", value: "\(Format.number(v)) V") }
                                 }
-                                if let f = detail.gridFrequencyHz { ValueRow(label: "Frequenz", value: "\(Format.number(f, digits: 2)) Hz") }
+                                if let f = detail.gridFrequencyHz { ValueRow(label: "Frequenz", value: String(localized: "\(Format.number(f, digits: 2)) Hz")) }
                             }
                         }
                     }
@@ -231,11 +231,11 @@ struct DetailView: View {
                         VStack(alignment: .leading, spacing: 0) {
                             Eyebrow(text: "Begrenzungen", icon: "hand.raised.fill", tint: Brand.orange)
                             RowStack {
-                                if c.dv?.curtailed == true { ValueRow(label: "Direktvermarkter regelt ab", value: c.dv?.limitPct.map(Format.percent) ?? "aktiv", tint: Brand.orange) }
-                                if c.negativePrice?.active == true { ValueRow(label: "Negativpreis-Schutz", value: "aktiv", tint: Brand.orange) }
+                                if c.dv?.curtailed == true { ValueRow(label: "Direktvermarkter regelt ab", value: c.dv?.limitPct.map(Format.percent) ?? String(localized: "aktiv"), tint: Brand.orange) }
+                                if c.negativePrice?.active == true { ValueRow(label: "Negativpreis-Schutz", value: String(localized: "aktiv"), tint: Brand.orange) }
                                 if let l = c.feedInLimit?.limitW { ValueRow(label: "Einspeisegrenze", value: Format.power(l)) }
-                                if c.feedInLimit?.blocked == true { ValueRow(label: "Einspeisung", value: "gesperrt", tint: Brand.orange) }
-                                if c.p14a?.active == true { ValueRow(label: "§14a-Begrenzung", value: c.p14a?.limitW.map(Format.power) ?? "aktiv", tint: Brand.orange) }
+                                if c.feedInLimit?.blocked == true { ValueRow(label: "Einspeisung", value: String(localized: "gesperrt"), tint: Brand.orange) }
+                                if c.p14a?.active == true { ValueRow(label: "§14a-Begrenzung", value: c.p14a?.limitW.map(Format.power) ?? String(localized: "aktiv"), tint: Brand.orange) }
                             }
                         }
                     }
@@ -262,13 +262,13 @@ struct DetailView: View {
     /// Herkunft einer Vorgabe in Worten — unbekannte Kennungen werden nicht angezeigt.
     static func sourceName(_ s: String) -> String {
         switch s {
-        case "forecast_optimizer", "optimizer": return "aus dem Optimierer"
-        case "eos", "eos_plan": return "aus dem EOS-Plan"
-        case "manual", "manual_write": return "von Hand gesetzt"
-        case "small_market_automation", "sma": return "aus der Börsenautomatik"
-        case "default", "default_setpoint": return "Standardwert"
-        case "schedule", "rule": return "aus dem Zeitplan"
-        default: return "aus der Steuerung"
+        case "forecast_optimizer", "optimizer": return String(localized: "aus dem Optimierer")
+        case "eos", "eos_plan": return String(localized: "aus dem EOS-Plan")
+        case "manual", "manual_write": return String(localized: "von Hand gesetzt")
+        case "small_market_automation", "sma": return String(localized: "aus der Börsenautomatik")
+        case "default", "default_setpoint": return String(localized: "Standardwert")
+        case "schedule", "rule": return String(localized: "aus dem Zeitplan")
+        default: return String(localized: "aus der Steuerung")
         }
     }
 
@@ -277,20 +277,20 @@ struct DetailView: View {
     @ViewBuilder
     private func home(_ width: CGFloat) -> some View {
         let loadKey = series("load_power_w").isEmpty ? "self_consumption_w" : "load_power_w"
-        Hero(eyebrow: "Verbrauch jetzt", icon: "house.fill", tint: Brand.home, value: Format.power(status.loadW),
-             caption: kpi("loadKwh").map { "Heute \(Format.energy($0))" })
+        Hero(eyebrow: String(localized: "Verbrauch jetzt"), icon: "house.fill", tint: Brand.home, value: Format.power(status.loadW),
+             caption: kpi("loadKwh").map { String(localized: "Heute \(Format.energy($0))") })
         GlassCard(tint: Brand.home) {
             VStack(alignment: .leading, spacing: 4) {
                 Eyebrow(text: "Woher kommt der Strom?", icon: "arrow.triangle.merge", tint: Brand.home)
                 ShareBar(parts: [
-                    .init(name: "Solar", value: detail.solarDirectUseW, color: Brand.pv),
-                    .init(name: "Akku", value: detail.batteryDirectUseW, color: Brand.battery),
-                    .init(name: "Netz", value: detail.gridDirectUseW, color: Brand.grid),
+                    .init(name: String(localized: "Solar"), value: detail.solarDirectUseW, color: Brand.pv),
+                    .init(name: String(localized: "Akku"), value: detail.batteryDirectUseW, color: Brand.battery),
+                    .init(name: String(localized: "Netz"), value: detail.gridDirectUseW, color: Brand.grid),
                 ], format: Format.power)
             }
         }
-        DayChartCard(title: "Verbrauch heute", unit: "kW", tint: Brand.home, lines: [
-            .init(name: "Haus", color: Brand.home, points: series(loadKey), area: true),
+        DayChartCard(title: String(localized: "Verbrauch heute"), unit: "kW", tint: Brand.home, lines: [
+            .init(name: String(localized: "Haus"), color: Brand.home, points: series(loadKey), area: true),
             .init(name: "PV", color: Brand.pv, points: series("pv_total_w"), area: false),
         ])
         if day != nil {
@@ -298,13 +298,13 @@ struct DetailView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Eyebrow(text: "Heute", icon: "calendar", tint: Brand.text2)
                     ShareBar(parts: [
-                        .init(name: "Solar", value: kpi("solarDirectUseKwh"), color: Brand.pv),
-                        .init(name: "Akku", value: kpi("batteryDirectUseKwh"), color: Brand.battery),
-                        .init(name: "Netz", value: kpi("gridDirectUseKwh"), color: Brand.grid),
+                        .init(name: String(localized: "Solar"), value: kpi("solarDirectUseKwh"), color: Brand.pv),
+                        .init(name: String(localized: "Akku"), value: kpi("batteryDirectUseKwh"), color: Brand.battery),
+                        .init(name: String(localized: "Netz"), value: kpi("gridDirectUseKwh"), color: Brand.grid),
                     ], format: Format.energy)
                     RowStack {
                         ValueRow(label: "Verbraucht", value: Format.energy(kpi("loadKwh")), tint: Brand.home)
-                        if let a = day?.autarkyPct { ValueRow(label: "Autarkie", value: Format.percent(a), tint: Brand.green, hint: "Anteil, der nicht aus dem Netz kam") }
+                        if let a = day?.autarkyPct { ValueRow(label: "Autarkie", value: Format.percent(a), tint: Brand.green, hint: String(localized: "Anteil, der nicht aus dem Netz kam")) }
                         if let p = peak(loadKey) { ValueRow(label: "Spitze", value: "\(Format.power(p.value)) · \(Format.time(p.date))") }
                     }
                 }
@@ -318,8 +318,8 @@ struct DetailView: View {
     private func money(_ width: CGFloat) -> some View {
         let net = status.todayNetEur ?? detail.netEur
         let tint = (net ?? 0) >= 0 ? Brand.money : Brand.red
-        Hero(eyebrow: "Heute netto", icon: "eurosign.circle.fill", tint: tint, value: Format.signedEuro(net),
-             caption: (net ?? 0) >= 0 ? "verdient" : "gekostet", color: tint)
+        Hero(eyebrow: String(localized: "Heute netto"), icon: "eurosign.circle.fill", tint: tint, value: Format.signedEuro(net),
+             caption: (net ?? 0) >= 0 ? String(localized: "verdient") : String(localized: "gekostet"), color: tint)
         columns(width) {
             GlassCard(tint: Brand.money) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -341,7 +341,7 @@ struct DetailView: View {
                     RowStack {
                         ValueRow(label: "Bezogen", value: Format.energy(detail.importKwh ?? kpi("importKwh")))
                         if let p = detail.importPriceNowCtKwh { ValueRow(label: "Mein Bezugspreis jetzt", value: Format.ct(p)) }
-                        if let v = kpi("avoidedImportGrossEur") { ValueRow(label: "Vermiedener Bezug", value: Format.euro(v), tint: Brand.money, hint: "Was der Eigenverbrauch am Netz gekostet hätte") }
+                        if let v = kpi("avoidedImportGrossEur") { ValueRow(label: "Vermiedener Bezug", value: Format.euro(v), tint: Brand.money, hint: String(localized: "Was der Eigenverbrauch am Netz gekostet hätte")) }
                     }
                 }
             }
@@ -382,7 +382,7 @@ struct DetailView: View {
                     }
                     RowStack {
                         ForEach(detail.alarms) { a in
-                            ValueRow(label: a.label, value: a.severity >= 2 ? "Alarm" : "Warnung", tint: a.severity >= 2 ? Brand.red : Brand.orange)
+                            ValueRow(label: a.label, value: a.severity >= 2 ? String(localized: "Alarm") : String(localized: "Warnung"), tint: a.severity >= 2 ? Brand.red : Brand.orange)
                         }
                     }
                 }
@@ -404,7 +404,7 @@ struct DetailView: View {
                 RowStack {
                     ValueRow(label: "Weg", value: connectionText)
                     ValueRow(label: "DVhub-Version", value: controller.boxVersion ?? status.version ?? "–")
-                    ValueRow(label: "Rechte dieses Geräts", value: controller.canControl ? "Anzeigen und steuern" : "Nur anzeigen")
+                    ValueRow(label: "Rechte dieses Geräts", value: controller.canControl ? String(localized: "Anzeigen und steuern") : String(localized: "Nur anzeigen"))
                     if let at = controller.displayAt { ValueRow(label: "Letzter Stand", value: Format.dateTime(at)) }
                 }
             }
@@ -424,11 +424,11 @@ struct DetailView: View {
 
     private var connectionText: String {
         switch controller.state {
-        case .online(let k): return k == .lan ? "Heimnetz, direkt" : "Relay, Ende zu Ende verschlüsselt"
-        case .connecting: return "verbindet …"
-        case .boxOffline: return "Anlage nicht erreichbar"
-        case .offline: return "keine Verbindung"
-        case .idle: return "getrennt"
+        case .online(let k): return k == .lan ? String(localized: "Heimnetz, direkt") : String(localized: "Relay, Ende zu Ende verschlüsselt")
+        case .connecting: return String(localized: "verbindet …")
+        case .boxOffline: return String(localized: "Anlage nicht erreichbar")
+        case .offline: return String(localized: "keine Verbindung")
+        case .idle: return String(localized: "getrennt")
         }
     }
 
@@ -467,6 +467,8 @@ struct Hero: View {
     let value: String
     var caption: String? = nil
     var color: Color = Brand.text
+    /// Große Ziffern, die mit der Schriftgröße des Systems mitwachsen.
+    @ScaledMetric(relativeTo: .largeTitle) private var heroSize: CGFloat = 52
 
     var body: some View {
         GlassCard(tint: tint) {
@@ -474,7 +476,7 @@ struct Hero: View {
                 Eyebrow(text: eyebrow, icon: icon, tint: tint)
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(value)
-                        .font(.system(size: 52, weight: .bold, design: .rounded))
+                        .font(.system(size: heroSize, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(color)
                         .contentTransition(.numericText())
@@ -656,6 +658,12 @@ struct DayChartCard: View {
         .chartXAxis { DayHourAxis() }
         .chartYAxis { PlainYAxis() }
         .accessibilityLabel(title)
+        .accessibilityChartDescriptor(TimeSeriesDescriptor(
+            title: title,
+            summary: lines.first.flatMap { l in ChartSummary.lowHigh(l.points.map { ($0.date, $0.value / scale) }) { "\(Format.number($0, digits: scale == 1 ? 0 : 2)) \(unit)" } },
+            yTitle: unit,
+            series: lines.map { l in .init(name: l.name, points: l.points.map { ($0.date, $0.value / scale) }) },
+            format: { "\(Format.number($0, digits: scale == 1 ? 0 : 2)) \(unit)" }))
     }
 }
 
@@ -684,7 +692,7 @@ func PlainYAxis() -> some AxisContent {
         AxisGridLine().foregroundStyle(Brand.hairline)
         AxisValueLabel {
             if let v = value.as(Double.self) {
-                Text(v.formatted(.number.precision(.fractionLength(0...1)).locale(Format.de)))
+                Text(v.formatted(.number.precision(.fractionLength(0...1)).locale(Format.locale)))
                     .font(.caption2.monospacedDigit()).foregroundStyle(Brand.dim)
             }
         }

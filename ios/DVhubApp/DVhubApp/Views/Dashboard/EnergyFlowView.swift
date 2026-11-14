@@ -35,16 +35,24 @@ struct EnergyFlowView: View {
         GeometryReader { g in
             let m = Metrics(size: g.size)
             ZStack {
-                if reduceMotion {
-                    Canvas { ctx, _ in draw(&ctx, m: m, time: nil) }
-                } else {
-                    TimelineView(.animation) { tl in
-                        Canvas { ctx, _ in
-                            phases.advance(to: tl.date, edges: edges)
-                            draw(&ctx, m: m, time: tl.date)
+                Group {
+                    if reduceMotion {
+                        Canvas { ctx, _ in draw(&ctx, m: m, time: nil) }
+                    } else {
+                        TimelineView(.animation) { tl in
+                            Canvas { ctx, _ in
+                                phases.advance(to: tl.date, edges: edges)
+                                draw(&ctx, m: m, time: tl.date)
+                            }
                         }
                     }
                 }
+                // Die Leitungen sind gezeichnet — für VoiceOver steht hier in
+                // Worten, wohin gerade Energie fließt.
+                .accessibilityElement()
+                .accessibilityLabel("Energiefluss")
+                .accessibilityValue(Self.summary(status))
+                .accessibilityAddTraits(.updatesFrequently)
                 hub(m)
                 node(.pv, m)
                 node(.grid, m)
@@ -53,7 +61,20 @@ struct EnergyFlowView: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Energiefluss")
+        // Die Grafik hat feste Maße: Ihre Beschriftung wächst nur bis xxLarge mit,
+        // sonst liefe sie ineinander. Dieselben Werte stehen in den Karten
+        // darunter in voller Größe; jeder Knoten öffnet die Detailansicht.
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+    }
+
+    /// Der Fluss in einem Satz je Knoten.
+    static func summary(_ s: LiveStatus) -> String {
+        [
+            String(localized: "Erzeugung \(Format.power(s.pvTotalW))"),
+            String(localized: "Hausverbrauch \(Format.power(s.loadW))"),
+            String(localized: "Akku \(Format.percent(s.soc)), \(StatusText.batteryCaption(s))"),
+            String(localized: "Netz: \(StatusText.gridCaption(s)) \(Format.power(StatusText.gridValue(s)))"),
+        ].joined(separator: ". ")
     }
 
     // MARK: Maße
@@ -175,6 +196,7 @@ struct EnergyFlowView: View {
             Circle().fill(Brand.bg0.opacity(0.85))
             Circle().strokeBorder(Brand.aurora, lineWidth: 2.5)
             Image(systemName: "bolt.fill")
+                // Teil der Grafik: Größe folgt dem Kreis, nicht der Schriftgröße.
                 .font(.system(size: m.hubR * 0.85, weight: .bold))
                 .foregroundStyle(Brand.yellow)
         }
@@ -253,16 +275,21 @@ struct EnergyFlowView: View {
     static func info(_ n: FlowEdge.Node, _ s: LiveStatus) -> NodeInfo {
         switch n {
         case .pv:
-            return NodeInfo(title: "PV", icon: "sun.max.fill", value: Format.power(s.pvTotalW), caption: "Erzeugung")
+            return NodeInfo(title: "PV", icon: "sun.max.fill", value: Format.power(s.pvTotalW), caption: String(localized: "Erzeugung"))
         case .home:
-            return NodeInfo(title: "Haus", icon: "house.fill", value: Format.power(s.loadW), caption: "Verbrauch")
+            return NodeInfo(title: String(localized: "Haus"), icon: "house.fill", value: Format.power(s.loadW), caption: String(localized: "Verbrauch"))
         case .battery:
             let w = s.batteryPowerW
             let cap: String
-            if let w, abs(w) >= FlowEdge.idleW { cap = (w > 0 ? "lädt · " : "entlädt · ") + Format.percent(s.soc) } else { cap = "Ruhe · " + Format.percent(s.soc) }
-            return NodeInfo(title: "Akku", icon: StatusText.batteryIcon(s.soc), value: Format.power(w), caption: cap)
+            let soc = Format.percent(s.soc)
+            if let w, abs(w) >= FlowEdge.idleW {
+                cap = w > 0 ? String(localized: "lädt · \(soc)") : String(localized: "entlädt · \(soc)")
+            } else {
+                cap = String(localized: "Ruhe · \(soc)")
+            }
+            return NodeInfo(title: String(localized: "Akku"), icon: StatusText.batteryIcon(s.soc), value: Format.power(w), caption: cap)
         case .grid:
-            return NodeInfo(title: "Netz", icon: "bolt.horizontal.fill", value: Format.power(StatusText.gridValue(s)), caption: StatusText.gridCaption(s))
+            return NodeInfo(title: String(localized: "Netz"), icon: "bolt.horizontal.fill", value: Format.power(StatusText.gridValue(s)), caption: StatusText.gridCaption(s))
         }
     }
 }
@@ -283,8 +310,8 @@ enum StatusText {
     /// DVhub: + = Laden, − = Entladen.
     static func batteryCaption(_ s: LiveStatus) -> String {
         guard let w = s.batteryPowerW else { return "–" }
-        if abs(w) < FlowEdge.idleW { return "Ruhe" }
-        return (w > 0 ? "lädt " : "entlädt ") + Format.power(w)
+        if abs(w) < FlowEdge.idleW { return String(localized: "Ruhe") }
+        return w > 0 ? String(localized: "lädt \(Format.power(w))") : String(localized: "entlädt \(Format.power(w))")
     }
 
     static func gridValue(_ s: LiveStatus) -> Double? {
@@ -293,10 +320,10 @@ enum StatusText {
     }
 
     static func gridCaption(_ s: LiveStatus) -> String {
-        guard s.gridImportW != nil || s.gridExportW != nil else { return "kein Zähler" }
+        guard s.gridImportW != nil || s.gridExportW != nil else { return String(localized: "kein Zähler") }
         let imp = s.gridImportW ?? 0, exp = s.gridExportW ?? 0
-        if max(imp, exp) < FlowEdge.idleW { return "ausgeglichen" }
-        return imp >= exp ? "Bezug" : "Einspeisung"
+        if max(imp, exp) < FlowEdge.idleW { return String(localized: "ausgeglichen") }
+        return imp >= exp ? String(localized: "Bezug") : String(localized: "Einspeisung")
     }
 
     static func isExporting(_ s: LiveStatus) -> Bool { (s.gridExportW ?? 0) > (s.gridImportW ?? 0) }

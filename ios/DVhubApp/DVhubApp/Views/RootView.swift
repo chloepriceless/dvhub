@@ -22,11 +22,11 @@ enum AppTab: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .dashboard: return "Leitstand"
-        case .market: return "Markt"
-        case .history: return "Historie"
-        case .news: return "Nachrichten"
-        case .more: return "Mehr"
+        case .dashboard: return String(localized: "Leitstand")
+        case .market: return String(localized: "Markt")
+        case .history: return String(localized: "Historie")
+        case .news: return String(localized: "Nachrichten")
+        case .more: return String(localized: "Mehr")
         }
     }
 
@@ -68,15 +68,17 @@ final class Chrome {
     var actions: [String: [ScreenAction]] = [:]
     /// Die Ersatz-Seitenleiste ist aktiv (dann keine Toolbar-Knöpfe oben).
     var railActive = false
+    /// Zählt angetippte Aktionen (Aktualisieren, Heute …) — löst die Haptik aus.
+    var actionTaps = 0
 
     enum Placement: String, CaseIterable, Identifiable {
         case auto, bottom, side
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .auto: return "Automatisch"
-            case .bottom: return "Unten"
-            case .side: return "Rechts"
+            case .auto: return String(localized: "Automatisch")
+            case .bottom: return String(localized: "Unten")
+            case .side: return String(localized: "Rechts")
             }
         }
     }
@@ -124,7 +126,7 @@ private struct ScreenActionsModifier: ViewModifier {
                 if !chrome.railActive {
                     ToolbarItemGroup(placement: .topBarTrailing) {
                         ForEach(actions) { a in
-                            Button(action: a.run) { Label(a.title, systemImage: a.icon) }
+                            Button { chrome.actionTaps += 1; a.run() } label: { Label(a.title, systemImage: a.icon) }
                                 .disabled(a.disabled)
                         }
                     }
@@ -156,7 +158,11 @@ struct SideRail: View {
     /// Schmales Fenster (Außendisplay mit Systemspalte, 386 pt): Leiste schlanker.
     var narrow = false
     let reselect: (AppTab) -> Void
+    @Environment(Chrome.self) private var chrome
     private var width: CGFloat { narrow ? 56 : 66 }
+    // Wie die Leisten des Systems wächst diese nicht mit der Schriftgröße mit
+    // (feste Maße unten). Dafür zeigt langes Drücken jeden Eintrag groß an
+    // (Large Content Viewer) — so macht es auch die Tab-Leiste des Systems.
 
     var body: some View {
         VStack(spacing: compact ? 2 : 6) {
@@ -188,13 +194,14 @@ struct SideRail: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(t.title)
                 .accessibilityAddTraits(tab == t ? [.isSelected, .isButton] : .isButton)
+                .accessibilityShowsLargeContentViewer { Label(t.title, systemImage: t.icon) }
                 .accessibilityIdentifier("rail.\(t.rawValue)")
             }
             Spacer(minLength: 4)
             if !actions.isEmpty {
                 Rectangle().fill(Brand.border).frame(width: 30, height: 1)
                 ForEach(actions) { a in
-                    Button(action: a.run) {
+                    Button { chrome.actionTaps += 1; a.run() } label: {
                         Image(systemName: a.icon).font(.system(size: 18, weight: .semibold))
                             .frame(width: 44, height: 40)
                             .background(Brand.glassStrong, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -203,6 +210,7 @@ struct SideRail: View {
                     .foregroundStyle(a.disabled ? Brand.dim : Brand.text)
                     .disabled(a.disabled)
                     .accessibilityLabel(a.title)
+                    .accessibilityShowsLargeContentViewer { Label(a.title, systemImage: a.icon) }
                 }
             }
         }
@@ -254,11 +262,27 @@ struct RootView: View {
         }.ignoresSafeArea())
         .environment(chrome)
         .onChange(of: rail, initial: true) { _, r in chrome.railActive = r }
+        // Haptik des Systems: leichter Anschlag beim Auslösen einer Aktion
+        // (Aktualisieren …), Erfolg bzw. Fehler am Ende einer Kopplung.
+        .sensoryFeedback(.impact(weight: .light), trigger: chrome.actionTaps)
+        .sensoryFeedback(trigger: model.pairState) { _, new in
+            switch new {
+            case .done: return .success
+            case .failed: return .error
+            default: return nil
+            }
+        }
         .sheet(isPresented: $showPairing) {
             NavigationStack { PairView(onboarding: false, initialText: model.pendingPairLink) }
         }
         .onChange(of: model.pendingPairLink) { _, link in
             if link != nil { showPairing = true }
+        }
+        // Link, Widget, Live-Aktivität oder Kontrollzentrum wollen einen Bereich öffnen.
+        .onChange(of: model.pendingOpen, initial: true) { _, target in
+            guard let target else { return }
+            model.pendingOpen = nil
+            open(target)
         }
         .onChange(of: showPairing) { _, shown in
             if !shown { model.pendingPairLink = nil; model.resetPairState() }
@@ -279,6 +303,7 @@ struct RootView: View {
         let win = scene?.windows.first
         if let b = scene?.screen.bounds.size { screen = b }
         let sdk = Bundle.main.object(forInfoDictionaryKey: "DTSDKName") as? String ?? "?"
+        // Diagnosezeile für Rückfragen — bewusst nicht übersetzt.
         let text = "Fenster \(Int(g.size.width))×\(Int(g.size.height)) pt · Bildschirm \(Int(screen.width))×\(Int(screen.height)) pt · Breite \(win?.traitCollection.horizontalSizeClass == .regular ? "regular" : "compact"), Höhe \(vSize == .compact ? "compact" : "regular") · SDK \(sdk)"
         chrome.diagnostics = text
         #if DEBUG
@@ -333,7 +358,7 @@ struct RootView: View {
                         // Anlage dürfen nach dem Wechsel nicht stehen bleiben.
                         HistoryView(controller: c).id(c.credentials.boxId)
                     } else {
-                        needsSystem("Historie")
+                        needsSystem(String(localized: "Historie"))
                     }
                 }
                 .tabBarHidden(rail)
@@ -396,7 +421,7 @@ struct RootView: View {
             GlassCard {
                 VStack(spacing: 12) {
                     EmptyState(title: "Noch keine Anlage gekoppelt", icon: "qrcode.viewfinder",
-                               text: "Markt und Nachrichten gehen ohne Anlage. Für \(title) koppelst du DVhub per QR-Code.")
+                               text: String(localized: "Markt und Nachrichten gehen ohne Anlage. Für \(title) koppelst du DVhub per QR-Code."))
                     Button { showPairing = true } label: { Label("Anlage koppeln", systemImage: "qrcode.viewfinder") }
                         .buttonStyle(.borderedProminent)
                 }
@@ -423,8 +448,25 @@ struct RootView: View {
                 }
                 .id(c.credentials.boxId)
             } else {
-                needsSystem("diesen Bereich")
+                needsSystem(String(localized: "diesen Bereich"))
             }
+        }
+    }
+
+    /// Bereich nach Namen öffnen: Reiter (`market`), Bereich unter „Mehr“
+    /// (`control`) oder Detailansicht des Leitstands (`money`).
+    private func open(_ name: String) {
+        if let known = AppTab(rawValue: name) {
+            tab = known
+            if known == .dashboard { dashboardPath = [] }
+        } else if name == "overview" {
+            tab = .dashboard
+        } else if let route = MoreRoute(rawValue: name) {
+            tab = .more
+            moreRoute = route
+        } else if let detail = DetailKind(rawValue: name) {
+            tab = .dashboard
+            dashboardPath = [detail]
         }
     }
 
@@ -435,20 +477,8 @@ struct RootView: View {
     ///   -DVHUB_OPEN pv|battery|grid|home|money|state
     private func applyDebugArguments() {
         let d = UserDefaults.standard
-        if let t = d.string(forKey: "DVHUB_TAB") {
-            if let known = AppTab(rawValue: t) {
-                tab = known
-            } else if t == "overview" {
-                tab = .dashboard
-            } else if let route = MoreRoute(rawValue: t) {
-                tab = .more
-                moreRoute = route
-            }
-        }
-        if let o = d.string(forKey: "DVHUB_OPEN").flatMap(DetailKind.init(rawValue:)) {
-            tab = .dashboard
-            dashboardPath = [o]
-        }
+        if let t = d.string(forKey: "DVHUB_TAB") { open(t) }
+        if let o = d.string(forKey: "DVHUB_OPEN"), DetailKind(rawValue: o) != nil { open(o) }
         if let qr = d.string(forKey: "DVHUB_PAIR"), !qr.isEmpty, model.pendingPairLink == nil,
            !model.systems.contains(where: { (try? PairPayload(qr).boxId) == $0.id }) {
             model.pendingPairAutoStart = true

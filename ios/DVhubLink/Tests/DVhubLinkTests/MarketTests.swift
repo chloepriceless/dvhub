@@ -130,6 +130,51 @@ final class MarketTests: XCTestCase {
         XCTAssertEqual(o.sources.first?.license, "CC BY 4.0")
     }
 
+    /// Ohne /api/prices: Das Diagramm bekommt die festen Stunden der Prognose-Antwort,
+    /// Tagesmittel und Spanne bleiben aber die Tageswerte des Servers.
+    func testMarketDaysFallBackToKnownHoursButKeepServerDayValues() throws {
+        let o = try XCTUnwrap(ResidualOutlook.from(try json(outlookJSON)))
+        let today = try XCTUnwrap(MarketTime.day("2026-11-14"))
+        let tomorrow = try XCTUnwrap(MarketTime.day("2026-11-15"))
+        let days = MarketDay.build(today: today, tomorrow: tomorrow, prices: { _ in [] }, outlook: o)
+        XCTAssertEqual(days.map(\.key), ["2026-11-14", "2026-11-15", "2026-11-16"])
+        let d = days[0]
+        XCTAssertTrue(d.isFixed)
+        XCTAssertTrue(d.slotsAreFallback)
+        XCTAssertEqual(d.slots.map(\.ctKwh), [14.628, 15])
+        XCTAssertEqual(d.slotSeconds, 3600)
+        XCTAssertTrue(d.slotsIncomplete) // nur 2 von 24 Stunden
+        // Mittel und Spanne vom Server (197,72 / 146,28 / 263,37 EUR/MWh), nicht aus den 2 Stunden.
+        XCTAssertEqual(d.meanCt ?? 0, 19.772, accuracy: 1e-9)
+        XCTAssertEqual(d.rangeCt?.0 ?? 0, 14.628, accuracy: 1e-9)
+        XCTAssertEqual(d.rangeCt?.1 ?? 0, 26.337, accuracy: 1e-9)
+        XCTAssertEqual(d.position ?? -1, (19.772 - 15.776) / (26.51 - 15.776), accuracy: 1e-9)
+        XCTAssertFalse(days[1].isFixed)
+        XCTAssertEqual(days[1].meanCt ?? 0, 17.51, accuracy: 1e-9)
+
+        // Mit Viertelstunden von /api/prices gelten diese — kein Ersatz.
+        let q = (0..<96).map { i in
+            PricePoint(start: today.addingTimeInterval(Double(i) * 900), end: today.addingTimeInterval(Double(i + 1) * 900), ctKwh: Double(i % 4), importCtKwh: nil)
+        }
+        let withPrices = MarketDay.build(today: today, tomorrow: tomorrow, prices: { $0 == today ? q : [] }, outlook: o)
+        XCTAssertFalse(withPrices[0].slotsAreFallback)
+        XCTAssertEqual(withPrices[0].slots.count, 96)
+        XCTAssertEqual(withPrices[0].slotSeconds, 900)
+        XCTAssertEqual(withPrices[0].meanCt ?? 0, 1.5, accuracy: 1e-9)
+    }
+
+    /// Liefert die Prognose-Antwort Viertelstunden, überlappen die Abschnitte nicht.
+    func testFallbackSlotsFollowTimestampSpacing() throws {
+        let t0 = try XCTUnwrap(parseISODate("2026-11-14T00:00:00Z"))
+        func hour(_ i: Int) -> ResidualOutlook.Hour {
+            ResidualOutlook.Hour(start: t0.addingTimeInterval(Double(i) * 900), band: nil, knownCt: Double(i), earlierP50Ct: nil,
+                                 residualGw: nil, windGw: nil, solarGw: nil, loadGw: nil)
+        }
+        let slots = MarketDay.fallbackSlots((0..<8).map(hour))
+        XCTAssertEqual(slots.count, 8)
+        XCTAssertTrue(slots.allSatisfy { $0.end.timeIntervalSince($0.start) == 900 })
+    }
+
     func testOutlookRejectsForeignShapes() throws {
         XCTAssertNil(ResidualOutlook.from(["error": "nope"]))
         XCTAssertNil(ResidualOutlook.from("text"))
