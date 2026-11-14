@@ -1056,6 +1056,17 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     }
   }
 
+  // Netzlade-Verbot universell am Aktuator erzwingen (D, Ref d54a3fab, rechtlich EEG/MiSpeL): es hängt NICHT an der
+  // Quelle oder an einem durchgereichten noGridCharge-Flag (das verliert sich im Feld, z. B. bei der Override-
+  // Neuanwendung). Solange der Nutzer das Netzladen nicht ausdrücklich freigegeben hat (optimizer.allowGridCharge),
+  // lädt der Regler für JEDES Ziel und jeden Takt (auch manual_override, Regeln, EOS) nur aus dem PV-Überschuss.
+  // Ein durchgereichtes Flag/eos_grid_hold kann nur zusätzlich verschärfen, nie lockern. Gilt für Forced UND External.
+  function noGridChargeForce() {
+    const cfg = getCfg();
+    return cfg?.optimizer?.allowGridCharge !== true
+      || st.target?.noGridCharge === true || NO_GRID_CHARGE_SOURCES.has(String(st.target?.source));
+  }
+
   // Dauer-Forced-Split (Christin 14.11.): Bei Forced mode (Modus 2) läuft DVhub DAUERHAFT in Modus 2. Der Master
   // wird EINMAL beim Eintritt auf 13050=2 gestellt und bleibt dort (kein Wechsel 0↔2 im Tagesverlauf); Vorgaben
   // ändern nur Befehl/Leistung je WR, nie den Modus. Ohne Vorgabe regelt DVhub den Eigenverbrauch selbst auf den
@@ -1064,9 +1075,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   // 0xCC an, BLEIBT aber in Modus 2. Modus 0 nur bei Not-Halt, Beenden/Ausfall (Absicherung C), abgeschalteter
   // Steuerung oder fremdem Modus — nie hier.
   async function stepForced({ conf, ctl, opts, reason, t, targetFresh, maxChargeCap, maxDischargeCap, tel, second }) {
-    // Netzlade-Tor (wie im External-Pfad; das universelle Verbot am Aktuator kommt in D nach): ein positiver
-    // Sollwert mit noGridCharge/eos_grid_hold lädt nur aus dem PV-Überschuss.
-    const noGridChargeNow = st.target?.noGridCharge === true || NO_GRID_CHARGE_SOURCES.has(String(st.target?.source));
+    const noGridChargeNow = noGridChargeForce();
     let decision = targetFresh
       ? decideEmsCommand({
         setpointW: st.target.setpointW, ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
@@ -1210,7 +1219,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       ? decideEmsCommand({
         setpointW: st.target.setpointW, ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
         bandW: opts.bandW, gain: opts.gain, minPowerW: opts.minPowerW,
-        noGridCharge: st.target.noGridCharge === true || NO_GRID_CHARGE_SOURCES.has(String(st.target.source))
+        noGridCharge: noGridChargeForce()
       })
       : { mode: 'self', reason: st.target ? 'target_expired' : (st.revokedReason ? 'revoked' : 'no_setpoint') };
     try {

@@ -110,8 +110,10 @@ test('emsMatches: Self = Modus 0 + Stopp; Zwang mit Leistungstoleranz', () => {
 
 // --- Aktuator ------------------------------------------------------------------------
 
-function rig({ over = {}, device = sungrowDevice(), mockOpts = {}, controlMode = 'forced', heartbeatTimeoutS = 30, statePath = null, forcedHeartbeatPath = null } = {}) {
-  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode, heartbeatTimeoutS } });
+function rig({ over = {}, device = sungrowDevice(), mockOpts = {}, controlMode = 'forced', heartbeatTimeoutS = 30, statePath = null, forcedHeartbeatPath = null, allowGridCharge = false } = {}) {
+  // Netzladen ist am Aktuator standardmäßig verboten (D, rechtlich): Tests, die aus dem Netz laden, geben es
+  // ausdrücklich frei (optimizer.allowGridCharge).
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode, heartbeatTimeoutS }, ...(allowGridCharge ? { optimizer: { allowGridCharge: true } } : {}) });
   const image = sungrowImage(over);
   const t = mockSungrow(image, mockOpts);
   let clock = 1_000_000;
@@ -259,7 +261,7 @@ test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf
 });
 
 test('Aktuator: Netzladen → Leistung, Befehl, Modus (in dieser Reihenfolge), dann Rücklesen', async () => {
-  const r = rig();
+  const r = rig({ allowGridCharge: true });
   const res = await r.ems.applySetpoint(4000, 'rule:netzladen');
   assert.equal(res.ok, true);
   assert.deepEqual(r.t.writes, [
@@ -274,6 +276,19 @@ test('Aktuator: Netzladen → Leistung, Befehl, Modus (in dieser Reihenfolge), d
 });
 
 // --- Dauer-Forced-Split (Christin 14.11.): Modus dauerhaft 2, ohne Vorgabe regelt DVhub den Eigenverbrauch ---
+
+test('Netzlade-Verbot D: ohne Freigabe lädt KEIN Ziel aus dem Netz (auch manual_override), mit Freigabe schon', async () => {
+  // Ohne optimizer.allowGridCharge: ein positiver Sollwert (Netzladen) ohne PV darf NICHT aus dem Netz laden —
+  // das Verbot hängt am Aktuator, nicht am durchgereichten Flag (Ref d54a3fab). PV 0, Last 500 → Überschuss 0 → Stopp.
+  const blocked = rig({ controlMode: 'forced' }); // allowGridCharge default false
+  await blocked.ems.applySetpoint(4000, 'manual_override');
+  assert.equal(blocked.image.holding.get(CMD), EMS_CMD.STOP, 'kein Netzladen ohne Freigabe (auch manual_override)');
+  assert.equal(blocked.state.ctrl.sungrowEms.decision.reason, 'charge_pv_only');
+  // Mit ausdrücklicher Freigabe lädt es wie gehabt.
+  const ok = rig({ controlMode: 'forced', allowGridCharge: true });
+  await ok.ems.applySetpoint(4000, 'manual_override');
+  assert.equal(ok.image.holding.get(CMD), EMS_CMD.CHARGE, 'mit Freigabe lädt es aus dem Netz');
+});
 
 test('Dauer-Forced B1: Leerlauf (Default-Puffer −40) mit PV-Überschuss regelt (Laden), fällt NICHT in Modus 0', async () => {
   const r = rig({ controlMode: 'forced' });
@@ -314,7 +329,7 @@ test('Dauer-Forced B1: fremder Modus 2 (DVhub besitzt ihn nicht) wird nicht übe
 });
 
 test('Aktuator: gleicher Sollwert im Takt nur nachgeführt, kleine Änderung (< 100 W) ohne Write', async () => {
-  const r = rig();
+  const r = rig({ allowGridCharge: true });
   await r.ems.applySetpoint(4000, 'rule:netzladen');
   r.t.writes.length = 0;
   // Auffrischen vor Ablauf des Takts: nichts geschrieben.
@@ -404,7 +419,7 @@ test('Aktuator: fremdes EMS (Modus 3/4) → DVhub schreibt nichts', async () => 
 });
 
 test('Aktuator: alte Messwerte oder abgelaufener Sollwert → zurück in Self-consumption', async () => {
-  const r = rig();
+  const r = rig({ allowGridCharge: true });
   await r.ems.applySetpoint(4000, 'rule:netzladen');
   r.t.writes.length = 0;
   // 30 s keine frischen Werte (Zähler/Akku älter als 20 s)
@@ -413,7 +428,7 @@ test('Aktuator: alte Messwerte oder abgelaufener Sollwert → zurück in Self-co
   assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP], [MODE, EMS_MODE.SELF]]);
   assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'telemetry_missing');
   // Wieder frisch, Sollwert läuft aber ohne Auffrischung ab (2 min) → bleibt Self-consumption.
-  const r2 = rig();
+  const r2 = rig({ allowGridCharge: true });
   await r2.ems.applySetpoint(4000, 'rule:netzladen');
   r2.t.writes.length = 0;
   r2.advance(121_000);
@@ -560,7 +575,7 @@ test('Steuermodus: Standard External EMS, Frist 30 s, Grenzen 20–300 s', () =>
 });
 
 test('External EMS: Leistung → Befehl → Modus 3 → Herzschlag (nach Moduswechsel), Rücklesen inkl. Herzschlag', async () => {
-  const r = rig({ controlMode: 'external' });
+  const r = rig({ controlMode: 'external', allowGridCharge: true });
   const res = await r.ems.applySetpoint(4000, 'rule:netzladen');
   assert.equal(res.ok, true, JSON.stringify(res));
   // Punkt 1: Herzschlag NACH dem Moduswechsel (der WR setzt 13080 beim Eintritt in Modus 3 selbst).
@@ -830,7 +845,7 @@ async function runSteps(r, p, setpointW, n, source = 'rule:test') {
 for (const controlMode of ['external', 'forced']) {
   for (const lag of [1, 0.5]) {
     test(`Regelgüte (${controlMode}, Akku-Verzögerung ${lag}): Netzladen 3 kW, Lastsprung +3 kW und −3 kW`, async () => {
-      const r = rig({ controlMode });
+      const r = rig({ controlMode, allowGridCharge: true }); // Netzladen 3 kW ausdrücklich freigegeben (D)
       const p = plant(r, { loadW: 500, lag });
       await r.ems.applySetpoint(3000, 'rule:test');
       const e1 = await runSteps(r, p, 3000, 10);
