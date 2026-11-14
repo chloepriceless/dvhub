@@ -33,11 +33,11 @@ struct ConnectionBadge: View {
 
     private var text: String {
         switch controller.state {
-        case .idle: return "Getrennt"
-        case .connecting: return "Verbinde …"
-        case .online(let k): return k == .lan ? "Verbunden im Heimnetz" : "Verbunden über Relay"
-        case .boxOffline(let k): return k == .lan ? "Anlage antwortet nicht (Heimnetz)" : "Anlage nicht mit dem Relay verbunden"
-        case .offline(let e): return "Keine Verbindung – \(e)"
+        case .idle: return String(localized: "Getrennt")
+        case .connecting: return String(localized: "Verbinde …")
+        case .online(let k): return k == .lan ? String(localized: "Verbunden im Heimnetz") : String(localized: "Verbunden über Relay")
+        case .boxOffline(let k): return k == .lan ? String(localized: "Anlage antwortet nicht (Heimnetz)") : String(localized: "Anlage nicht mit dem Relay verbunden")
+        case .offline(let e): return String(localized: "Keine Verbindung – \(e)")
         }
     }
 }

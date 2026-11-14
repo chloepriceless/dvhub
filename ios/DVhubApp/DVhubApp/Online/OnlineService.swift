@@ -36,11 +36,11 @@ enum Online {
 
     static func message(_ error: Error) -> String {
         switch error {
-        case Failure.status(let s): return "dvhub.online antwortet mit HTTP \(s)."
-        case Failure.tooLarge, Failure.notJSON: return "Unerwartete Antwort von dvhub.online."
+        case Failure.status(let s): return String(localized: "dvhub.online antwortet mit HTTP \(s).")
+        case Failure.tooLarge, Failure.notJSON: return String(localized: "Unerwartete Antwort von dvhub.online.")
         default:
-            if (error as NSError).domain == NSURLErrorDomain { return "dvhub.online ist gerade nicht erreichbar." }
-            return "Abruf fehlgeschlagen."
+            if (error as NSError).domain == NSURLErrorDomain { return String(localized: "dvhub.online ist gerade nicht erreichbar.") }
+            return String(localized: "Abruf fehlgeschlagen.")
         }
     }
 
@@ -114,7 +114,7 @@ final class MarketStore {
                 URLQueryItem(name: "end", value: iso.string(from: end)),
             ])
             let parsed = OnlinePrices.parse(v)
-            guard !parsed.isEmpty else { priceError = "dvhub.online liefert gerade keine Preise."; return }
+            guard !parsed.isEmpty else { priceError = String(localized: "dvhub.online liefert gerade keine Preise."); return }
             prices = parsed
             pricesAt = Date()
             priceError = nil
@@ -130,7 +130,7 @@ final class MarketStore {
     private func loadOutlook() async {
         do {
             let v = try await Online.get("v1/residual-load/outlook")
-            guard let o = ResidualOutlook.from(v) else { outlookError = "Unerwartete Antwort von dvhub.online."; return }
+            guard let o = ResidualOutlook.from(v) else { outlookError = String(localized: "Unerwartete Antwort von dvhub.online."); return }
             outlook = o
             outlookAt = Date()
             outlookError = nil
@@ -190,7 +190,7 @@ final class NewsStore {
                 URLQueryItem(name: "limit", value: String(Self.pageSize)),
                 URLQueryItem(name: "offset", value: String(offset)),
             ])
-            guard let page = NewsPage.from(v), page.available else { error = "Die Nachrichten sind gerade nicht verfügbar."; return }
+            guard let page = NewsPage.from(v), page.available else { error = String(localized: "Die Nachrichten sind gerade nicht verfügbar."); return }
             total = page.total
             if offset == 0 {
                 items = page.items

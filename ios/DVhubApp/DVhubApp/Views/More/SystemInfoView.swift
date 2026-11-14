@@ -37,14 +37,14 @@ struct SystemInfoView: View {
                     ValueRow(label: "Anlage", value: controller.credentials.boxName)
                     ValueRow(label: "DVhub-Version", value: controller.boxVersion ?? controller.displayStatus?.version ?? "–")
                     if let tz = raw["timeZone"]?.string { ValueRow(label: "Zeitzone", value: tz) }
-                    if let ready = run["ready"]?.bool { ValueRow(label: "Regelung", value: ready ? "bereit" : "startet", tint: ready ? Brand.green : Brand.orange) }
+                    if let ready = run["ready"]?.bool { ValueRow(label: "Regelung", value: ready ? String(localized: "bereit") : String(localized: "startet"), tint: ready ? Brand.green : Brand.orange) }
                     if let e = tel["enabled"]?.bool {
-                        ValueRow(label: "Messwert-Datenbank", value: !e ? "aus" : (tel["ok"]?.bool == false ? "Störung" : "läuft"),
+                        ValueRow(label: "Messwert-Datenbank", value: !e ? String(localized: "aus") : (tel["ok"]?.bool == false ? String(localized: "Störung") : String(localized: "läuft")),
                                  tint: !e ? Brand.dim : (tel["ok"]?.bool == false ? Brand.red : Brand.green),
-                                 hint: IntegrationsView.date(tel["lastWriteAt"]).map { "Letzter Eintrag \(Format.dateTime($0))" })
+                                 hint: IntegrationsView.date(tel["lastWriteAt"]).map { String(localized: "Letzter Eintrag \(Format.dateTime($0))") })
                     }
-                    if let stop = raw["emergencyStop"]?["active"]?.bool { ValueRow(label: "Not-Halt", value: stop ? "aktiv" : "aus", tint: stop ? Brand.red : nil) }
-                    ValueRow(label: "Rechte dieses Geräts", value: controller.canControl ? "Anzeigen und steuern" : "Nur anzeigen")
+                    if let stop = raw["emergencyStop"]?["active"]?.bool { ValueRow(label: "Not-Halt", value: stop ? String(localized: "aktiv") : String(localized: "aus"), tint: stop ? Brand.red : nil) }
+                    ValueRow(label: "Rechte dieses Geräts", value: controller.canControl ? String(localized: "Anzeigen und steuern") : String(localized: "Nur anzeigen"))
                 }
             }
         }
@@ -71,12 +71,12 @@ struct SystemInfoView: View {
                     if let v = p["current"]?["importPriceCtKwh"]?.number { ValueRow(label: "Bezugspreis jetzt", value: Format.ct(v), tint: Brand.violet) }
                     if let v = p["current"]?["exportPriceCtKwh"]?.number { ValueRow(label: "Einspeisepreis jetzt", value: Format.ct(v)) }
                     if let v = costs["pvCtKwh"]?.number { ValueRow(label: "Gestehungskosten Solar", value: Format.ct(v)) }
-                    if let v = costs["batteryEffectiveCtKwh"]?.number { ValueRow(label: "Kosten Akku-Strom", value: Format.ct(v), hint: "mit Verlusten") }
-                    if p["usesParagraph14aModule3"]?.bool == true { ValueRow(label: "§14a Modul 3", value: "\(windows.count) Zeitfenster") }
+                    if let v = costs["batteryEffectiveCtKwh"]?.number { ValueRow(label: "Kosten Akku-Strom", value: Format.ct(v), hint: String(localized: "mit Verlusten")) }
+                    if p["usesParagraph14aModule3"]?.bool == true { ValueRow(label: "§14a Modul 3", value: String(localized: "\(windows.count) Zeitfenster")) }
                 }
                 ForEach(Array(windows.enumerated()), id: \.offset) { _, w in
                     if let s = w["start"]?.string, let e = w["end"]?.string {
-                        ValueRow(label: w["label"]?.string ?? "Zeitfenster", value: "\(s)–\(e) · \(Format.ct(w["priceCtKwh"]?.number))")
+                        ValueRow(label: w["label"]?.string ?? String(localized: "Zeitfenster"), value: "\(s)–\(e) · \(Format.ct(w["priceCtKwh"]?.number))")
                     }
                 }
             }
@@ -84,11 +84,11 @@ struct SystemInfoView: View {
     }
 
     static func modeName(_ mode: String?, configured: Bool) -> String {
-        guard configured else { return "nicht eingerichtet" }
+        guard configured else { return String(localized: "nicht eingerichtet") }
         switch mode {
-        case "fixed": return "Festpreis"
-        case "dynamic": return "dynamisch (Börse + Aufschläge)"
-        case "provider": return "Preis vom Anbieter"
+        case "fixed": return String(localized: "Festpreis")
+        case "dynamic": return String(localized: "dynamisch (Börse + Aufschläge)")
+        case "provider": return String(localized: "Preis vom Anbieter")
         default: return "–"
         }
     }
@@ -100,16 +100,16 @@ struct SystemInfoView: View {
                 Eyebrow(text: "Börsenpreise in DVhub", icon: "chart.bar.fill", tint: Brand.blue)
                 RowStack {
                     if let z = e["bzn"]?.string { ValueRow(label: "Gebotszone", value: z) }
-                    ValueRow(label: "Zustand", value: e["ok"]?.bool == true ? "aktuell" : "Störung", tint: e["ok"]?.bool == true ? Brand.green : Brand.orange)
+                    ValueRow(label: "Zustand", value: e["ok"]?.bool == true ? String(localized: "aktuell") : String(localized: "Störung"), tint: e["ok"]?.bool == true ? Brand.green : Brand.orange)
                     if let at = IntegrationsView.date(e["updatedAt"]) { ValueRow(label: "Zuletzt geholt", value: Format.dateTime(at)) }
                     if let s = e["summary"], s.object != nil {
                         if let lo = s["todayMin"]?.number, let hi = s["todayMax"]?.number {
-                            ValueRow(label: "Heute", value: "\(MarketStyle.ct1(lo / 10))–\(MarketStyle.ct1(hi / 10)) ct")
+                            ValueRow(label: "Heute", value: String(localized: "\(MarketStyle.ct1(lo / 10))–\(MarketStyle.ct1(hi / 10)) ct"))
                         }
                         if let lo = s["tomorrowMin"]?.number, let hi = s["tomorrowMax"]?.number {
-                            ValueRow(label: "Morgen", value: "\(MarketStyle.ct1(lo / 10))–\(MarketStyle.ct1(hi / 10)) ct")
+                            ValueRow(label: "Morgen", value: String(localized: "\(MarketStyle.ct1(lo / 10))–\(MarketStyle.ct1(hi / 10)) ct"))
                         }
-                        if s["hasFutureNegative"]?.bool == true { ValueRow(label: "Negative Preise", value: "stehen bevor", tint: Brand.red) }
+                        if s["hasFutureNegative"]?.bool == true { ValueRow(label: "Negative Preise", value: String(localized: "stehen bevor"), tint: Brand.red) }
                     }
                 }
             }
@@ -127,8 +127,8 @@ struct SystemInfoView: View {
                 RowStack {
                     if let v = cfg["defaultGridSetpointW"]?.number { ValueRow(label: "Standard-Sollwert am Netzpunkt", value: Format.signedPower(v)) }
                     if let v = cfg["defaultChargeCurrentA"]?.number { ValueRow(label: "Standard-Ladestrom", value: "\(Format.number(v, digits: 0)) A") }
-                    ValueRow(label: "Regeln im Zeitplan", value: "\(rules.filter { $0["enabled"]?.bool != false }.count) aktiv von \(rules.count)")
-                    if let d = sma["lastRunDate"]?.string { ValueRow(label: "Börsenautomatik zuletzt", value: d, hint: sma["generatedRuleCount"]?.number.map { "\(Int($0)) Regeln erzeugt" }) }
+                    ValueRow(label: "Regeln im Zeitplan", value: String(localized: "\(rules.filter { $0["enabled"]?.bool != false }.count) aktiv von \(rules.count)"))
+                    if let d = sma["lastRunDate"]?.string { ValueRow(label: "Börsenautomatik zuletzt", value: d, hint: sma["generatedRuleCount"]?.number.map { String(localized: "\(Int($0)) Regeln erzeugt") }) }
                     if let min = controller.displayStatus?.minSocPct { ValueRow(label: "Min-SoC", value: Format.percent(min)) }
                 }
             }

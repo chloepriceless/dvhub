@@ -13,25 +13,25 @@ public extension LinkError {
         switch self {
         case .closed(let code, let reason):
             switch reason {
-            case "device_not_allowed": return "Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln."
-            case "box_not_allowed": return "Unter der gespeicherten Adresse antwortet eine andere Anlage."
-            case "mobile_link_disabled": return "Die Handy-App ist in DVhub ausgeschaltet."
-            case "pairing_not_open": return "Dieser QR-Code ist schon verbraucht oder abgelaufen. Bitte in DVhub einen neuen erzeugen."
-            case "auth_failed", "auth_timeout": return "Anmeldung abgelehnt. Bitte neu koppeln."
-            case "rate_limited", "too_many_devices", "relay_full": return "Das Relay ist gerade ausgelastet. Gleich erneut."
-            case "replaced", "shutdown", "box_offline": return "Die Anlage ist gerade nicht verbunden."
+            case "device_not_allowed": return L("Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln.")
+            case "box_not_allowed": return L("Unter der gespeicherten Adresse antwortet eine andere Anlage.")
+            case "mobile_link_disabled": return L("Die Handy-App ist in DVhub ausgeschaltet.")
+            case "pairing_not_open": return L("Dieser QR-Code ist schon verbraucht oder abgelaufen. Bitte in DVhub einen neuen erzeugen.")
+            case "auth_failed", "auth_timeout": return L("Anmeldung abgelehnt. Bitte neu koppeln.")
+            case "rate_limited", "too_many_devices", "relay_full": return L("Das Relay ist gerade ausgelastet. Gleich erneut.")
+            case "replaced", "shutdown", "box_offline": return L("Die Anlage ist gerade nicht verbunden.")
             default: break
             }
             switch code {
-            case 4002: return "Anmeldung abgelehnt. Bitte neu koppeln."
-            case 4003: return "Zugriff nicht erlaubt (Code 4003)."
-            case 4008: return "Das Relay hat die Verbindung begrenzt. Gleich erneut."
-            case 4011: return "Das Relay startet neu."
-            default: return "Verbindung getrennt (Code \(code))."
+            case 4002: return L("Anmeldung abgelehnt. Bitte neu koppeln.")
+            case 4003: return L("Zugriff nicht erlaubt (Code 4003).")
+            case 4008: return L("Das Relay hat die Verbindung begrenzt. Gleich erneut.")
+            case 4011: return L("Das Relay startet neu.")
+            default: return L("Verbindung getrennt (Code \(String(code))).")
             }
-        case .timeout: return "Keine Antwort (Zeitüberschreitung)."
-        case .boxOffline: return "Die Anlage ist gerade nicht verbunden."
-        case .relay, .protocolError, .handshake: return "Unerwartete Antwort der Gegenstelle."
+        case .timeout: return L("Keine Antwort (Zeitüberschreitung).")
+        case .boxOffline: return L("Die Anlage ist gerade nicht verbunden.")
+        case .relay, .protocolError, .handshake: return L("Unerwartete Antwort der Gegenstelle.")
         default: return description
         }
     }
@@ -39,10 +39,10 @@ public extension LinkError {
 
 public func userMessage(for error: Error) -> String {
     if let e = error as? LinkError { return e.userMessage }
-    if error is CancellationError { return "Abgebrochen." }
+    if error is CancellationError { return L("Abgebrochen.") }
     let ns = error as NSError
-    if ns.domain == NSURLErrorDomain { return "Keine Verbindung (Netzwerkfehler \(ns.code))." }
-    return "Unbekannter Fehler."
+    if ns.domain == NSURLErrorDomain { return L("Keine Verbindung (Netzwerkfehler \(String(ns.code))).") }
+    return L("Unbekannter Fehler.")
 }
 
 // MARK: - Begrüßung übernehmen
@@ -187,9 +187,9 @@ public struct MailboxEvent: Codable, Equatable, Identifiable, Sendable {
 
     public static func text(alarms: Int, emergencyStop: Bool) -> String {
         var parts: [String] = []
-        if emergencyStop { parts.append("Not-Halt aktiv") }
-        if alarms > 0 { parts.append(alarms == 1 ? "1 Alarm aktiv" : "\(alarms) Alarme aktiv") }
-        return parts.isEmpty ? "Alles wieder normal" : parts.joined(separator: " · ")
+        if emergencyStop { parts.append(L("Not-Halt aktiv")) }
+        if alarms > 0 { parts.append(alarms == 1 ? L("1 Alarm aktiv") : L("\(alarms) Alarme aktiv")) }
+        return parts.isEmpty ? L("Alles wieder normal") : parts.joined(separator: " · ")
     }
 }
 
@@ -287,9 +287,9 @@ public enum SnapshotDay: Equatable, Sendable {
     /// Wort vor den Tagessummen: „Heute verdient“, „Gestern verdient“ …
     public var word: String {
         switch self {
-        case .today: return "Heute"
-        case .yesterday: return "Gestern"
-        case .older: return "Zuletzt"
+        case .today: return L("Heute")
+        case .yesterday: return L("Gestern")
+        case .older: return L("Zuletzt")
         }
     }
 }

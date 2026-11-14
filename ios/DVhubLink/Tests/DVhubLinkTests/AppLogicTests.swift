@@ -172,4 +172,27 @@ final class AppLogicTests: XCTestCase {
         XCTAssertFalse(rail(1032, 1376, screen: (1032, 1376)))
         XCTAssertFalse(rail(0, 0))
     }
+
+    /// Antwort auf „Not-Halt“: dieselbe Auswertung für App, Kurzbefehle, Kontrollzentrum.
+    func testControlOutcome() throws {
+        func res(_ status: Int, _ body: String) throws -> LinkResponse {
+            LinkResponse(status: status, body: try JSONValue.decode(Data(body.utf8)))
+        }
+        XCTAssertEqual(ControlOutcome.from(try res(200, #"{"ok":true}"#)), .done)
+        XCTAssertEqual(ControlOutcome.from(try res(200, #"{"ok":true,"neutralize":{"ok":true}}"#)), .done)
+        XCTAssertEqual(ControlOutcome.from(try res(200, #"{"ok":true,"neutralize":{"skipped":true}}"#)), .done)
+        XCTAssertEqual(ControlOutcome.from(try res(200, #"{"ok":true,"neutralize":null}"#)), .done)
+        // Schreibsperre greift, Sollwert aber nicht zurückgesetzt: deutlich warnen.
+        let warn = ControlOutcome.from(try res(200, #"{"ok":true,"neutralize":{"ok":false,"error":"modbus timeout"}}"#))
+        XCTAssertEqual(warn, .stoppedButNotNeutralized(reason: "modbus timeout"))
+        XCTAssertTrue(warn.applied)
+        XCTAssertTrue(warn.message.contains("modbus timeout"))
+        XCTAssertEqual(ControlOutcome.from(try res(200, #"{"ok":false,"error":"kaputt"}"#)), .boxError("kaputt"))
+        XCTAssertEqual(ControlOutcome.from(try res(403, #"{"error":"control_not_allowed"}"#)), .notAllowed)
+        XCTAssertEqual(ControlOutcome.from(try res(429, "{}")), .busy)
+        XCTAssertEqual(ControlOutcome.from(try res(500, "{}")), .rejected(status: 500))
+        XCTAssertFalse(ControlOutcome.rejected(status: 500).applied)
+        XCTAssertTrue(ControlOutcome.rejected(status: 1500).message.contains("1500"), "Codes ohne Tausenderpunkt")
+        XCTAssertEqual(ControlOutcome.done.message, "Erledigt.")
+    }
 }

@@ -1,0 +1,532 @@
+{
+  "sourceLanguage" : "de",
+  "strings" : {
+    "%lld Alarme aktiv" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld alarms active"
+          }
+        }
+      }
+    },
+    "1 Alarm aktiv" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 alarm active"
+          }
+        }
+      }
+    },
+    "Abgebrochen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelled."
+          }
+        }
+      }
+    },
+    "Alles wieder normal" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Everything back to normal"
+          }
+        }
+      }
+    },
+    "Anlage nicht verbunden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "System not connected"
+          }
+        }
+      }
+    },
+    "Anmeldung abgelehnt. Bitte neu koppeln." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign-in rejected. Please pair again."
+          }
+        }
+      }
+    },
+    "Das Relay hat die Verbindung begrenzt. Gleich erneut." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The relay limited the connection. Trying again shortly."
+          }
+        }
+      }
+    },
+    "Das Relay ist gerade ausgelastet. Gleich erneut." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The relay is busy right now. Trying again shortly."
+          }
+        }
+      }
+    },
+    "Das Relay startet neu." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The relay is restarting."
+          }
+        }
+      }
+    },
+    "Die Anlage hat abgelehnt (HTTP %@)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The system rejected the request (HTTP %@)."
+          }
+        }
+      }
+    },
+    "Die Anlage ist gerade nicht verbunden." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The system is not connected right now."
+          }
+        }
+      }
+    },
+    "Die Anlage meldet einen Fehler: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The system reports an error: %@."
+          }
+        }
+      }
+    },
+    "Die Box hat sich nicht korrekt ausgewiesen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The box did not identify itself correctly"
+          }
+        }
+      }
+    },
+    "Die Handy-App ist in DVhub ausgeschaltet." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The phone app is turned off in DVhub."
+          }
+        }
+      }
+    },
+    "Dieser QR-Code ist schon verbraucht oder abgelaufen. Bitte in DVhub einen neuen erzeugen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This QR code has already been used or has expired. Please create a new one in DVhub."
+          }
+        }
+      }
+    },
+    "Dieses Gerät darf nicht steuern. In DVhub unter „Handy-App“ freigeben." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device is not allowed to control. Allow it in DVhub under “Phone app”."
+          }
+        }
+      }
+    },
+    "Dieses Gerät wurde in DVhub entkoppelt. Bitte neu koppeln." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device was unpaired in DVhub. Please pair again."
+          }
+        }
+      }
+    },
+    "Entschlüsselung fehlgeschlagen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Decryption failed"
+          }
+        }
+      }
+    },
+    "Erledigt." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done."
+          }
+        }
+      }
+    },
+    "Falsche Länge" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wrong length"
+          }
+        }
+      }
+    },
+    "Feld zu lang" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Field too long"
+          }
+        }
+      }
+    },
+    "Gerade zu viele Anfragen. Bitte gleich noch einmal." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Too many requests right now. Please try again in a moment."
+          }
+        }
+      }
+    },
+    "Gestern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yesterday"
+          }
+        }
+      }
+    },
+    "Handshake: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Handshake: %@"
+          }
+        }
+      }
+    },
+    "Heute" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today"
+          }
+        }
+      }
+    },
+    "Kein DVhub-Kopplungscode" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not a DVhub pairing code"
+          }
+        }
+      }
+    },
+    "Kein Weg zur Anlage" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No route to the system"
+          }
+        }
+      }
+    },
+    "Keine Antwort (Zeitüberschreitung)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No response (timed out)."
+          }
+        }
+      }
+    },
+    "Keine Verbindung (Netzwerkfehler %@)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No connection (network error %@)."
+          }
+        }
+      }
+    },
+    "Kopplung abgelehnt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing rejected"
+          }
+        }
+      }
+    },
+    "Not-Halt aktiv" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emergency stop active"
+          }
+        }
+      }
+    },
+    "Not-Halt ist aktiv, aber der Wechselrichter konnte nicht auf 0 W gesetzt werden%@. Der letzte Sollwert kann noch wirken — bitte an der Anlage prüfen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emergency stop is active, but the inverter could not be set to 0 W%@. The last setpoint may still be in effect — please check at the system."
+          }
+        }
+      }
+    },
+    "Protokollfehler: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocol error: %@"
+          }
+        }
+      }
+    },
+    "Protokollversion wird nicht unterstützt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocol version is not supported"
+          }
+        }
+      }
+    },
+    "Relay: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Relay: %@"
+          }
+        }
+      }
+    },
+    "Schlüsselbund-Fehler %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keychain error %@"
+          }
+        }
+      }
+    },
+    "Unbekannter Fehler." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unknown error."
+          }
+        }
+      }
+    },
+    "Unerwartete Antwort der Gegenstelle." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unexpected response from the other side."
+          }
+        }
+      }
+    },
+    "Ungültige Kodierung" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid encoding"
+          }
+        }
+      }
+    },
+    "Ungültiger Schlüssel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid key"
+          }
+        }
+      }
+    },
+    "Ungültiger Sitzungsschlüssel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid session key"
+          }
+        }
+      }
+    },
+    "Unter der gespeicherten Adresse antwortet eine andere Anlage." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A different system answers at the saved address."
+          }
+        }
+      }
+    },
+    "Verbindung geschlossen (%@)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection closed (%@)"
+          }
+        }
+      }
+    },
+    "Verbindung geschlossen: %@ (%@)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Verbindung geschlossen: %1$@ (%2$@)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection closed: %@ (%@)"
+          }
+        }
+      }
+    },
+    "Verbindung getrennt (Code %@)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection lost (code %@)."
+          }
+        }
+      }
+    },
+    "Zeitüberschreitung" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timed out"
+          }
+        }
+      }
+    },
+    "Zugriff nicht erlaubt (Code 4003)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access not allowed (code 4003)."
+          }
+        }
+      }
+    },
+    "Zuletzt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last"
+          }
+        }
+      }
+    },
+    "günstig" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cheap"
+          }
+        }
+      }
+    },
+    "normal" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "normal"
+          }
+        }
+      }
+    },
+    "teuer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "expensive"
+          }
+        }
+      }
+    },
+    "unbekannt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "unknown"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

@@ -33,7 +33,7 @@ struct IntegrationsView: View {
         }
         .navigationTitle("Integrationen")
         .screenActions(.more, [
-            ScreenAction(id: "integrations.refresh", title: "Aktualisieren", icon: "arrow.clockwise", disabled: loading) { Task { await load() } },
+            ScreenAction(id: "integrations.refresh", title: String(localized: "Aktualisieren"), icon: "arrow.clockwise", disabled: loading) { Task { await load() } },
         ])
         .refreshable { await load() }
         .task(id: controller.isOnline) { await load() }
@@ -58,59 +58,59 @@ struct IntegrationsView: View {
     private var cards: [IntegrationCard] {
         var out: [IntegrationCard] = []
         if let h = data["health"] {
-            for (key, title, icon) in [("victron", "Wechselrichter", "bolt.batteryblock.fill"), ("epex", "Börsenpreise (EPEX)", "chart.bar.fill"), ("mqtt", "MQTT", "antenna.radiowaves.left.and.right")] {
+            for (key, title, icon) in [("victron", String(localized: "Wechselrichter"), "bolt.batteryblock.fill"), ("epex", String(localized: "Börsenpreise (EPEX)"), "chart.bar.fill"), ("mqtt", String(localized: "MQTT"), "antenna.radiowaves.left.and.right")] {
                 guard let s = h[key], s.object != nil else { continue }
                 var rows: [(String, String)] = []
-                if let ms = s["latencyMs"]?.number { rows.append(("Antwortzeit", "\(Int(ms)) ms")) }
-                if let e = s["errors24h"]?.number { rows.append(("Fehler in 24 h", "\(Int(e))")) }
-                if let at = parseISODate(s["lastSampleAt"]?.string) { rows.append(("Letzter Wert", Format.dateTime(at))) }
-                if let fw = s["firmware"]?.string, !fw.isEmpty { rows.append(("Firmware", fw)) }
-                if key == "victron", let mode = h["featured"]?["victronEssMode"]?.number { rows.append(("ESS-Modus", "\(Int(mode))")) }
+                if let ms = s["latencyMs"]?.number { rows.append((String(localized: "Antwortzeit"), String(localized: "\(Int(ms)) ms"))) }
+                if let e = s["errors24h"]?.number { rows.append((String(localized: "Fehler in 24 h"), "\(Int(e))")) }
+                if let at = parseISODate(s["lastSampleAt"]?.string) { rows.append((String(localized: "Letzter Wert"), Format.dateTime(at))) }
+                if let fw = s["firmware"]?.string, !fw.isEmpty { rows.append((String(localized: "Firmware"), fw)) }
+                if key == "victron", let mode = h["featured"]?["victronEssMode"]?.number { rows.append((String(localized: "ESS-Modus"), "\(Int(mode))")) }
                 let (text, tint) = Self.health(s["status"]?.string, reason: s["statusReason"]?.string)
                 out.append(IntegrationCard(id: key, title: title, icon: icon, state: text, tint: tint, rows: rows))
             }
         }
         if let e = data["eos"] {
             let st = e["status"]?.string ?? "unknown"
-            let map: [String: (String, Color)] = ["up": ("läuft", Brand.green), "busy": ("rechnet", Brand.cyan), "down": ("antwortet nicht", Brand.red),
-                                                  "disabled": ("aus", Brand.dim), "unknown": ("unbekannt", Brand.dim)]
+            let map: [String: (String, Color)] = ["up": (String(localized: "läuft"), Brand.green), "busy": (String(localized: "rechnet"), Brand.cyan), "down": (String(localized: "antwortet nicht"), Brand.red),
+                                                  "disabled": (String(localized: "aus"), Brand.dim), "unknown": (String(localized: "unbekannt"), Brand.dim)]
             var rows: [(String, String)] = []
-            if let v = e["version"]?.string { rows.append(("Version", v)) }
-            if let at = Self.date(e["solutionAt"]) { rows.append(("Letzter Plan", Format.dateTime(at))) }
-            if let at = Self.date(e["lastOkAt"]) { rows.append(("Zuletzt erreichbar", Format.dateTime(at))) }
-            if let n = e["restarts"]?.number, n > 0 { rows.append(("Neustarts", "\(Int(n))")) }
-            out.append(IntegrationCard(id: "eos", title: "EOS-Optimierer", icon: "brain", state: map[st]?.0 ?? st, tint: map[st]?.1 ?? Brand.dim, rows: rows))
+            if let v = e["version"]?.string { rows.append((String(localized: "Version"), v)) }
+            if let at = Self.date(e["solutionAt"]) { rows.append((String(localized: "Letzter Plan"), Format.dateTime(at))) }
+            if let at = Self.date(e["lastOkAt"]) { rows.append((String(localized: "Zuletzt erreichbar"), Format.dateTime(at))) }
+            if let n = e["restarts"]?.number, n > 0 { rows.append((String(localized: "Neustarts"), "\(Int(n))")) }
+            out.append(IntegrationCard(id: "eos", title: String(localized: "EOS-Optimierer"), icon: "brain", state: map[st]?.0 ?? st, tint: map[st]?.1 ?? Brand.dim, rows: rows))
         } else if statusCode["eos"] == 403 {
-            out.append(IntegrationCard(id: "eos", title: "EOS-Optimierer", icon: "brain", state: "Pro", tint: Brand.violet, rows: []))
+            out.append(IntegrationCard(id: "eos", title: String(localized: "EOS-Optimierer"), icon: "brain", state: "Pro", tint: Brand.violet, rows: []))
         }
         if let v = data["vpn"] {
             let enabled = v["enabled"]?.bool ?? false
             let st = v["status"]?.string ?? "–"
             let up = st == "connected" || st == "up"
             var rows: [(String, String)] = []
-            if let s = v["uptimeSeconds"]?.number, s > 0 { rows.append(("Verbunden seit", Format.hours(s / 3600))) }
-            if let d = v["certDaysRemaining"]?.number { rows.append(("Zertifikat gültig", "noch \(Int(d)) Tage")) }
-            if let at = Self.date(v["lastModbusActivity"]?["ts"]) { rows.append(("Letzte Abfrage des Direktvermarkters", Format.dateTime(at))) }
-            if let n = v["reconnectAttempts"]?.number, n > 0 { rows.append(("Neuverbindungen", "\(Int(n))")) }
-            if v["watchdogOk"]?.bool == false { rows.append(("Wächter", "meldet Störung")) }
-            out.append(IntegrationCard(id: "vpn", title: "DV-VPN", icon: "lock.shield.fill", state: !enabled ? "aus" : (up ? "verbunden" : st),
+            if let s = v["uptimeSeconds"]?.number, s > 0 { rows.append((String(localized: "Verbunden seit"), Format.hours(s / 3600))) }
+            if let d = v["certDaysRemaining"]?.number { rows.append((String(localized: "Zertifikat gültig"), String(localized: "noch \(Int(d)) Tage"))) }
+            if let at = Self.date(v["lastModbusActivity"]?["ts"]) { rows.append((String(localized: "Letzte Abfrage des Direktvermarkters"), Format.dateTime(at))) }
+            if let n = v["reconnectAttempts"]?.number, n > 0 { rows.append((String(localized: "Neuverbindungen"), "\(Int(n))")) }
+            if v["watchdogOk"]?.bool == false { rows.append((String(localized: "Wächter"), String(localized: "meldet Störung"))) }
+            out.append(IntegrationCard(id: "vpn", title: String(localized: "DV-VPN"), icon: "lock.shield.fill", state: !enabled ? String(localized: "aus") : (up ? String(localized: "verbunden") : st),
                                        tint: !enabled ? Brand.dim : (up ? Brand.green : Brand.orange), rows: rows))
         } else if statusCode["vpn"] == 403 {
-            out.append(IntegrationCard(id: "vpn", title: "DV-VPN", icon: "lock.shield.fill", state: "Pro", tint: Brand.violet, rows: []))
+            out.append(IntegrationCard(id: "vpn", title: String(localized: "DV-VPN"), icon: "lock.shield.fill", state: "Pro", tint: Brand.violet, rows: []))
         }
         if let ev = data["ev"], ev.object != nil {
             let veh = ev["vehicle"] ?? .null
             var rows: [(String, String)] = []
-            if let soc = veh["socPct"]?.number { rows.append(("Ladestand", Format.percent(soc))) }
-            if let r = veh["rangeKm"]?.number { rows.append(("Reichweite", "\(Int(r)) km")) }
-            if let w = veh["chargePowerW"]?.number, w > 0 { rows.append(("Ladeleistung", Format.power(w))) }
-            if let p = veh["plugged"]?.bool { rows.append(("Angesteckt", p ? "ja" : "nein")) }
-            rows.append(("Planung", ev["optimizeEv"]?.bool == true ? "an" : "aus"))
+            if let soc = veh["socPct"]?.number { rows.append((String(localized: "Ladestand"), Format.percent(soc))) }
+            if let r = veh["rangeKm"]?.number { rows.append((String(localized: "Reichweite"), String(localized: "\(Int(r)) km"))) }
+            if let w = veh["chargePowerW"]?.number, w > 0 { rows.append((String(localized: "Ladeleistung"), Format.power(w))) }
+            if let p = veh["plugged"]?.bool { rows.append((String(localized: "Angesteckt"), p ? String(localized: "ja") : String(localized: "nein"))) }
+            rows.append((String(localized: "Planung"), ev["optimizeEv"]?.bool == true ? String(localized: "an") : String(localized: "aus")))
             let charging = veh["charging"]?.bool == true
             let connected = veh["connected"]?.bool == true
             if ev["chargerConfigured"]?.bool == true || connected || !rows.isEmpty {
-                out.append(IntegrationCard(id: "ev", title: veh["title"]?.string ?? "E-Auto", icon: "car.fill",
-                                           state: charging ? "lädt" : (connected ? "verbunden" : "nicht verbunden"),
+                out.append(IntegrationCard(id: "ev", title: veh["title"]?.string ?? String(localized: "E-Auto"), icon: "car.fill",
+                                           state: charging ? String(localized: "lädt") : (connected ? String(localized: "verbunden") : String(localized: "nicht verbunden")),
                                            tint: charging ? Brand.green : (connected ? Brand.cyan : Brand.dim), rows: rows))
             }
         }
@@ -118,12 +118,12 @@ struct IntegrationsView: View {
             for (i, d) in list.enumerated() {
                 let kind = d["kind"]?.string ?? ""
                 var rows: [(String, String)] = []
-                if let w = d["powerW"]?.number { rows.append(("Leistung", Format.power(w))) }
-                if let e = d["sessionEnergyKwh"]?.number, e > 0 { rows.append(("Ladung", Format.energy(e))) }
-                if let t = d["temperatureC"]?.number { rows.append(("Temperatur", "\(Format.number(t)) °C")) }
-                if let t = d["targetTemperatureC"]?.number { rows.append(("Soll", "\(Format.number(t)) °C")) }
-                let state = d["statusText"]?.string ?? d["stateText"]?.string ?? (d["error"]?.isNull == false ? "Fehler" : "erkannt")
-                out.append(IntegrationCard(id: "vd\(i)", title: d["label"]?.string ?? d["name"]?.string ?? "Gerät",
+                if let w = d["powerW"]?.number { rows.append((String(localized: "Leistung"), Format.power(w))) }
+                if let e = d["sessionEnergyKwh"]?.number, e > 0 { rows.append((String(localized: "Ladung"), Format.energy(e))) }
+                if let t = d["temperatureC"]?.number { rows.append((String(localized: "Temperatur"), "\(Format.number(t)) °C")) }
+                if let t = d["targetTemperatureC"]?.number { rows.append((String(localized: "Soll"), "\(Format.number(t)) °C")) }
+                let state = d["statusText"]?.string ?? d["stateText"]?.string ?? (d["error"]?.isNull == false ? String(localized: "Fehler") : String(localized: "erkannt"))
+                out.append(IntegrationCard(id: "vd\(i)", title: d["label"]?.string ?? d["name"]?.string ?? String(localized: "Gerät"),
                                            icon: kind == "evcharger" ? "ev.charger.fill" : (kind == "heatpump" ? "heat.waves" : "powerplug.fill"),
                                            state: state, tint: d["error"]?.isNull == false ? Brand.orange : Brand.cyan, rows: rows))
             }
@@ -131,28 +131,28 @@ struct IntegrationsView: View {
         if let devs = data["devices"]?.array, !devs.isEmpty {
             let online = devs.filter { $0["online"]?.bool == true }.count
             let rows = devs.prefix(8).map { d in
-                (d["name"]?.string ?? "Gerät", d["online"]?.bool == true ? Format.power(d["powerW"]?.number) : "offline")
+                (d["name"]?.string ?? String(localized: "Gerät"), d["online"]?.bool == true ? Format.power(d["powerW"]?.number) : String(localized: "offline"))
             }
-            out.append(IntegrationCard(id: "devices", title: "Schaltbare Geräte", icon: "powerplug.fill", state: "\(online) von \(devs.count) online",
+            out.append(IntegrationCard(id: "devices", title: String(localized: "Schaltbare Geräte"), icon: "powerplug.fill", state: String(localized: "\(online) von \(devs.count) online"),
                                        tint: online == devs.count ? Brand.green : Brand.orange, rows: Array(rows)))
         }
         if let f = data["feedInCap"], f["configured"]?.bool == true {
             var rows: [(String, String)] = []
-            if let w = f["limitW"]?.number { rows.append(("Grenze", Format.power(w))) }
-            if let p = f["pct"]?.number { rows.append(("Anteil der Anlagenleistung", Format.percent(p))) }
-            if let w = f["effectiveW"]?.number { rows.append(("Wirksam", Format.power(w))) }
+            if let w = f["limitW"]?.number { rows.append((String(localized: "Grenze"), Format.power(w))) }
+            if let p = f["pct"]?.number { rows.append((String(localized: "Anteil der Anlagenleistung"), Format.percent(p))) }
+            if let w = f["effectiveW"]?.number { rows.append((String(localized: "Wirksam"), Format.power(w))) }
             let exceeding = f["monitor"]?["exceeding"]?.bool == true
-            if let n = f["monitor"]?["episodes"]?.number, n > 0 { rows.append(("Überschreitungen", "\(Int(n))")) }
-            out.append(IntegrationCard(id: "cap", title: "Einspeisegrenze", icon: "arrow.up.to.line.compact", state: exceeding ? "überschritten" : "eingehalten",
+            if let n = f["monitor"]?["episodes"]?.number, n > 0 { rows.append((String(localized: "Überschreitungen"), "\(Int(n))")) }
+            out.append(IntegrationCard(id: "cap", title: String(localized: "Einspeisegrenze"), icon: "arrow.up.to.line.compact", state: exceeding ? String(localized: "überschritten") : "eingehalten",
                                        tint: exceeding ? Brand.red : Brand.green, rows: rows))
         }
         if let s = data["storage"] {
             let level = s["level"]?.string ?? "unbekannt"
             var rows: [(String, String)] = []
-            if let p = s["freePct"]?.number { rows.append(("Frei", Format.percent(p))) }
-            if let mb = s["freeMb"]?.number { rows.append(("Freier Platz", mb >= 1024 ? "\(Format.number(mb / 1024)) GB" : "\(Int(mb)) MB")) }
-            if let mb = s["dbMb"]?.number { rows.append(("Messwert-Datenbank", mb >= 1024 ? "\(Format.number(mb / 1024)) GB" : "\(Int(mb)) MB")) }
-            out.append(IntegrationCard(id: "storage", title: "Speicherplatz", icon: "internaldrive.fill", state: level,
+            if let p = s["freePct"]?.number { rows.append((String(localized: "Frei"), Format.percent(p))) }
+            if let mb = s["freeMb"]?.number { rows.append((String(localized: "Freier Platz"), mb >= 1024 ? String(localized: "\(Format.number(mb / 1024)) GB") : String(localized: "\(Int(mb)) MB"))) }
+            if let mb = s["dbMb"]?.number { rows.append((String(localized: "Messwert-Datenbank"), mb >= 1024 ? String(localized: "\(Format.number(mb / 1024)) GB") : String(localized: "\(Int(mb)) MB"))) }
+            out.append(IntegrationCard(id: "storage", title: String(localized: "Speicherplatz"), icon: "internaldrive.fill", state: level,
                                        tint: level == "ok" ? Brand.green : (level == "kritisch" ? Brand.red : Brand.orange), rows: rows))
         }
         return out
@@ -160,11 +160,11 @@ struct IntegrationsView: View {
 
     static func health(_ status: String?, reason: String?) -> (String, Color) {
         switch (status, reason) {
-        case ("ok", _): return ("verbunden", Brand.green)
-        case ("warn", "errors"): return ("instabil", Brand.orange)
-        case ("warn", _): return ("Werte verzögert", Brand.orange)
-        case ("err", _): return ("keine Werte", Brand.red)
-        default: return ("unbekannt", Brand.dim)
+        case ("ok", _): return (String(localized: "verbunden"), Brand.green)
+        case ("warn", "errors"): return (String(localized: "instabil"), Brand.orange)
+        case ("warn", _): return (String(localized: "Werte verzögert"), Brand.orange)
+        case ("err", _): return (String(localized: "keine Werte"), Brand.red)
+        default: return (String(localized: "unbekannt"), Brand.dim)
         }
     }
 
@@ -240,12 +240,12 @@ struct IntegrationsView: View {
 
     static func targetName(_ key: String) -> String {
         switch key {
-        case "gridSetpointW": return "Netz-Sollwert"
-        case "chargeCurrentA": return "Ladestrom"
-        case "minSocPct": return "Mindest-Ladestand"
-        case "maxDischargeW": return "Max. Entladeleistung"
-        case "feedExcessDcPv": return "DC-Überschuss einspeisen"
-        default: return "Vorgabe"
+        case "gridSetpointW": return String(localized: "Netz-Sollwert")
+        case "chargeCurrentA": return String(localized: "Ladestrom")
+        case "minSocPct": return String(localized: "Mindest-Ladestand")
+        case "maxDischargeW": return String(localized: "Max. Entladeleistung")
+        case "feedExcessDcPv": return String(localized: "DC-Überschuss einspeisen")
+        default: return String(localized: "Vorgabe")
         }
     }
 }

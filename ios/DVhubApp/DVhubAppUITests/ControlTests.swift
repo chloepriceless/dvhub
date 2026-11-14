@@ -10,6 +10,8 @@ final class ControlTests: XCTestCase {
 
     func testEmergencyStopAndResume() throws {
         let app = XCUIApplication()
+        // Die Tests suchen deutsche Beschriftungen — unabhängig von der Sprache des Simulators.
+        app.launchArguments += ["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"]
         app.launchArguments += ["-DVHUB_TAB", "control"]
         app.launch()
         let stop = app.buttons["Not-Halt auslösen"].firstMatch

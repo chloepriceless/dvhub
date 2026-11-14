@@ -5,12 +5,13 @@ import PackageDescription
 
 let package = Package(
     name: "DVhubLink",
+    defaultLocalization: "de",
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
         .library(name: "DVhubLink", targets: ["DVhubLink"]),
     ],
     targets: [
-        .target(name: "DVhubLink"),
+        .target(name: "DVhubLink", resources: [.process("Resources")]),
         .testTarget(name: "DVhubLinkTests", dependencies: ["DVhubLink"]),
     ]
 )

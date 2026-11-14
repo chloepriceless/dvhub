@@ -60,11 +60,11 @@ enum BoxData {
             // aber ok:false — dann keine halben Kurven zeigen.
             guard r.status == 200, r.body["ok"]?.bool != false, let rows = r.body["data"]?.array else {
                 switch r.status {
-                case 200: return .failure(Failure(message: "Verlauf unvollständig: \(r.body["error"]?.string ?? "Fehler in der Anlage")."))
-                case 503: return .failure(Failure(message: "Die Anlage hat keine Messwert-Datenbank."))
-                case 413: return .failure(Failure(message: "Der Verlauf ist für die Übertragung zu groß."))
-                case 429: return .failure(Failure(message: "Gerade zu viele Anfragen. Bitte gleich noch einmal."))
-                default: return .failure(Failure(message: "Verlauf nicht verfügbar (HTTP \(r.status))."))
+                case 200: return .failure(Failure(message: String(localized: "Verlauf unvollständig: \(r.body["error"]?.string ?? "Fehler in der Anlage").")))
+                case 503: return .failure(Failure(message: String(localized: "Die Anlage hat keine Messwert-Datenbank.")))
+                case 413: return .failure(Failure(message: String(localized: "Der Verlauf ist für die Übertragung zu groß.")))
+                case 429: return .failure(Failure(message: String(localized: "Gerade zu viele Anfragen. Bitte gleich noch einmal.")))
+                default: return .failure(Failure(message: String(localized: "Verlauf nicht verfügbar (HTTP \(r.status)).")))
                 }
             }
             return .success(rows.compactMap { row in
@@ -89,13 +89,13 @@ enum BoxData {
             if HistorySummary.isProRequired(status: r.status, body: r.body) { return .proRequired }
             switch r.status {
             case 200:
-                guard let s = HistorySummary.from(r.body, view: view, date: param) else { return .failed("Unerwartete Antwort der Anlage.") }
+                guard let s = HistorySummary.from(r.body, view: view, date: param) else { return .failed(String(localized: "Unerwartete Antwort der Anlage.")) }
                 return .ok(s)
-            case 503: return .failed("Die Anlage hat keine Messwert-Datenbank.")
+            case 503: return .failed(String(localized: "Die Anlage hat keine Messwert-Datenbank."))
             // Ältere DVhub-Stände kennen lean=1 nicht und schicken alles.
-            case 413: return .failed("Die Auswertung ist für die Übertragung zu groß. Ein neuerer DVhub-Stand schickt sie schlanker.")
-            case 429: return .failed("Gerade zu viele Anfragen. Bitte gleich noch einmal.")
-            default: return .failed("Historie nicht verfügbar (HTTP \(r.status)).")
+            case 413: return .failed(String(localized: "Die Auswertung ist für die Übertragung zu groß. Ein neuerer DVhub-Stand schickt sie schlanker."))
+            case 429: return .failed(String(localized: "Gerade zu viele Anfragen. Bitte gleich noch einmal."))
+            default: return .failed(String(localized: "Historie nicht verfügbar (HTTP \(r.status))."))
             }
         } catch {
             return .failed(userMessage(for: error))

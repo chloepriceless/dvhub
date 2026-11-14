@@ -8,6 +8,8 @@ final class NavigationTests: XCTestCase {
 
     private func launch(_ args: [String] = []) throws -> XCUIApplication {
         let app = XCUIApplication()
+        // Die Tests suchen deutsche Beschriftungen — unabhängig von der Sprache des Simulators.
+        app.launchArguments += ["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"]
         if let qr = ProcessInfo.processInfo.environment["DVHUB_QR"], !qr.isEmpty { app.launchArguments += ["-DVHUB_PAIR", qr] }
         app.launchArguments += args
         XCUIDevice.shared.orientation = .portrait

@@ -24,14 +24,14 @@ struct NewsView: View {
     var body: some View {
         AuroraPage { width in
             if let err = news.error {
-                NoticeBanner(text: news.items.isEmpty ? err : "\(err) Gezeigt wird der letzte Stand.", icon: "wifi.slash")
+                NoticeBanner(text: news.items.isEmpty ? err : String(localized: "\(err) Gezeigt wird der letzte Stand."), icon: "wifi.slash")
             }
             if sources.count > 1 { sourceChips }
             if items.isEmpty {
                 if news.loading {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 240)
                 } else {
-                    GlassCard { EmptyState(title: "Keine Nachrichten", icon: "newspaper", text: "Zum Aktualisieren nach unten ziehen.") }
+                    GlassCard { EmptyState(title: "Keine Nachrichten", icon: "newspaper", text: String(localized: "Zum Aktualisieren nach unten ziehen.")) }
                 }
             } else {
                 let wide = Layout.isWide(width)
@@ -55,7 +55,7 @@ struct NewsView: View {
         }
         .navigationTitle("Nachrichten")
         .screenActions(.news, [
-            ScreenAction(id: "refresh", title: "Aktualisieren", icon: "arrow.clockwise", disabled: news.loading) {
+            ScreenAction(id: "refresh", title: String(localized: "Aktualisieren"), icon: "arrow.clockwise", disabled: news.loading) {
                 Task { await news.refresh(force: true) }
             },
         ])
@@ -75,7 +75,7 @@ struct NewsView: View {
     private var sourceChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                chip("Alle", nil)
+                chip(String(localized: "Alle"), nil)
                 ForEach(sources, id: \.self) { chip($0, $0) }
             }
             .padding(.horizontal, 16)
@@ -96,10 +96,15 @@ enum NewsText {
     static func age(_ d: Date?) -> String {
         guard let d else { return "" }
         let s = Date().timeIntervalSince(d)
-        if s < 3600 { return "vor \(max(1, Int(s / 60))) min" }
-        if s < 86400 { return "vor \(Int(s / 3600)) h" }
-        if s < 2 * 86400 { return "gestern" }
-        return d.formatted(.dateTime.day().month(.abbreviated).locale(Format.de))
+        // „vor 5 Min.“, „gestern“ — in der Gerätesprache, vom System formatiert.
+        if s < 2 * 86400 {
+            let f = RelativeDateTimeFormatter()
+            f.locale = Format.locale
+            f.unitsStyle = .short
+            f.dateTimeStyle = .named
+            return f.localizedString(for: min(d, Date().addingTimeInterval(-60)), relativeTo: Date())
+        }
+        return d.formatted(.dateTime.day().month(.abbreviated).locale(Format.locale))
     }
 }
 
@@ -110,7 +115,9 @@ private struct NewsImage: View {
         ZStack {
             // Platzhalter: Aurora mit dem Anfangsbuchstaben der Quelle.
             LinearGradient(colors: [Brand.bg2, Brand.blue.opacity(0.35), Brand.violet.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            // Platzhalter-Grafik in fester Größe (kein Lesetext).
             Text(String(item.source.prefix(1))).font(.system(size: 34, weight: .bold, design: .rounded)).foregroundStyle(Brand.text.opacity(0.25))
+                .accessibilityHidden(true)
             if let url = item.imageURL {
                 AsyncImage(url: url, transaction: Transaction(animation: .easeIn(duration: 0.2))) { phase in
                     if case .success(let img) = phase { img.resizable().scaledToFill() }
@@ -213,7 +220,7 @@ private struct ArticleSheet: View {
                     NewsMeta(item: item, unseen: false)
                     Text(item.title).font(.title2.weight(.bold)).foregroundStyle(Brand.text)
                     if let d = item.publishedAt {
-                        Text(d.formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute().locale(Format.de)))
+                        Text(d.formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute().locale(Format.locale)))
                             .font(.caption).foregroundStyle(Brand.dim)
                     }
                     if !item.excerpt.isEmpty { Text(item.excerpt).font(.body).foregroundStyle(Brand.text2) }

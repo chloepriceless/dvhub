@@ -120,7 +120,7 @@ final class SystemController {
         while !Task.isCancelled {
             state = .connecting
             var conn: DeviceConnection?
-            var lastError = "Keine Verbindung"
+            var lastError = String(localized: "Keine Verbindung")
             do {
                 let s = try signer()
                 if let up = pendingUpgrade {
