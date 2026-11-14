@@ -190,6 +190,43 @@ test('Forced-Split B2: Slave-Rücklesung prüft NUR Befehl/Leistung (Modus folgt
   assert.equal(r.state.ctrl.sungrowEmsSlave?.owns, true, 'DVhub merkt sich den Slave-Besitz (für Not-Halt)');
 });
 
+test('Absicherung C: releaseControl (Shutdown) nimmt den Einzel-WR sicher zurück — Modus 0 + Befehl 0xCC', async () => {
+  const r = rig({ controlMode: 'forced' });
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // Entladen, Modus 2, owns
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  r.t.writes.length = 0;
+  const res = await r.ems.releaseControl('shutdown');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.SELF, 'Modus 0');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.STOP, 'Befehl 0xCC');
+  assert.equal(r.state.ctrl.sungrowEms.owns, false, 'Besitz abgegeben');
+});
+
+test('Absicherung C: releaseControl schreibt auch im Not-Halt (sichere Rücknahme hat Vorrang)', async () => {
+  const r = rig({ controlMode: 'forced' });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  r.state.ctrl.discretionaryWritesPaused = true; // Not-Halt aktiv
+  r.t.writes.length = 0;
+  const res = await r.ems.releaseControl('shutdown');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.SELF, 'auch im Not-Halt zurückgenommen');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.STOP);
+});
+
+test('Absicherung C: releaseControl nimmt im Split BEIDE WR zurück (Slave 0xCC, Master Modus 0)', async () => {
+  const r = splitRig();
+  await r.ems.applySetpoint(-6000, 'rule:abend'); // Split-Entladen, beide gefahren
+  r.masterT.writes.length = 0; r.slaveT.writes.length = 0;
+  const res = await r.ems.releaseControl('shutdown');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF, 'Master Modus 0');
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.STOP, 'Master Befehl 0xCC');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, 'Slave Befehl 0xCC');
+  assert.ok(!r.slaveT.writes.some((w) => w.address === MODE), 'Slave bekommt KEINEN Modus-Write');
+  assert.equal(r.state.ctrl.sungrowEms.owns, false, 'Master-Besitz abgegeben');
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, false, 'Slave-Besitz abgegeben');
+});
+
 test('Aktuator: Netzladen → Leistung, Befehl, Modus (in dieser Reihenfolge), dann Rücklesen', async () => {
   const r = rig();
   const res = await r.ems.applySetpoint(4000, 'rule:netzladen');

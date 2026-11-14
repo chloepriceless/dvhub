@@ -1528,7 +1528,39 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     });
   }
 
-  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, neutralize, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
+  /**
+   * Freigabe der Steuerung (Absicherung C): beide WR sicher in Self-consumption — erst den Slave anhalten (0xCC),
+   * dann den Master in Modus 0 (Befehl 0xCC + Modus 0). Für den geordneten Shutdown (SIGTERM/Update-Neustart) und
+   * als Ziel des externen Not-Stop-Skripts (ExecStopPost). Schreibt auch im Not-Halt (neutralize). Ein fremdes EMS
+   * wird nicht angefasst (writeDecision prüft isForeignMode). Best effort — Self-consumption ist die sichere Seite.
+   */
+  function releaseControl(reason = 'shutdown_release') {
+    return serial(async () => {
+      const cfg = getCfg();
+      const conf = sungrowEmsConf(cfg);
+      if (!conf || transport?.type !== 'modbus') return { ok: true, skipped: true };
+      syncEndpoint(cfg);
+      // Slave zuerst anhalten (0xCC), dann Master auf Modus 0 — so hält der Slave keinen Lade-/Entladebefehl mehr,
+      // wenn der Master in Modus 0 fällt (der Slave folgt dann dem Master, Feld #5).
+      if (slaveActuator) { try { await slaveActuator.neutralize(reason); } catch { /* best effort */ } }
+      if (!st.owns) return { ok: true, skipped: true, reason: 'not_owned' };
+      try {
+        st.dev = null;
+        await writeDecision(conf, { mode: 'self', reason }, { neutralize: true });
+        setOwns(null); st.target = null; st.revokedReason = reason;
+        pushLog('sungrow_ems_release', { reason });
+        publish();
+        return { ok: true };
+      } catch (e) {
+        st.error = e?.message || String(e);
+        publish();
+        if (e?.code === 'foreign_ems_mode') return { ok: true, skipped: true, reason: 'foreign_ems_mode' };
+        return { ok: false, error: st.error };
+      }
+    });
+  }
+
+  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, neutralize, releaseControl, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
 }
 
 function describe(d, modeValue = EMS_MODE.FORCED) {

@@ -3228,6 +3228,14 @@ async function gracefulShutdown(signal) {
   // bereits laufenden Dump nicht ab, das wäre ein separater, größerer Fix.
   safeSync('dbBackupScheduler.stop', () => ctx.dbBackupScheduler?.stop?.());
 
+  // Absicherung Forced mode (C, Sungrow Dauer-Forced): Forced mode (13050=2) hat KEINEN geräteeigenen Rückfall —
+  // ohne Freigabe bliebe der Akku beim geordneten Stop (systemctl restart, Update-Neustart = SIGTERM) im letzten
+  // Lade-/Entladebefehl stehen. Darum beide WR hier sicher in Self-consumption (Master Modus 0, beide 0xCC),
+  // SOLANGE der Modbus-Transport noch lebt (vor transport.destroy unten). Sequenziell awaited, best effort; ein
+  // 5-s-Timeout (safeAsync) bricht den Shutdown nie ab. Das externe ExecStopPost-Skript ist der Gürtel-und-
+  // Hosenträger für einen Prozess, der diesen Pfad nicht mehr durchläuft (Crash/SIGKILL).
+  await safeAsync('sungrowEms.release', () => ctx.sungrowEms?.releaseControl?.('shutdown'));
+
   // 2. Parallel async closes — one rejection must NOT block the others.
   //    Order-of-init is preserved only where needed (forecastSnapshots before forecast above).
   await Promise.all([
