@@ -49,8 +49,8 @@ struct ScheduleSection: View {
     @State private var amount = ""
     @State private var stopOn = false
     @State private var stopSoc = 20.0
-    /// Stopp-Stand der geöffneten Regel, wie die Box ihn hält (bleibt, wo die App ihn nicht anbietet).
-    @State private var originalStop: Double?
+    /// Die geöffnete Regel, wie die Box sie hält (nil = neue Regel).
+    @State private var opened: ScheduleRule?
     @State private var enabled = true
     @State private var confirmDelete: ScheduleRule?
 
@@ -204,7 +204,7 @@ struct ScheduleSection: View {
         amount = ""
         stopOn = false
         stopSoc = 20
-        originalStop = nil
+        opened = nil
         enabled = true
         feedback = nil
         withAnimation(.snappy) { editing = .new }
@@ -219,7 +219,7 @@ struct ScheduleSection: View {
         stopOn = rule.stopSocPct != nil
         // Den Wert der Box unverändert übernehmen: Nur wer den Schieber bewegt, ändert ihn (Gegenprüfung 37f6e34f).
         stopSoc = rule.stopSocPct ?? 20
-        originalStop = rule.stopSocPct
+        opened = rule
         enabled = rule.enabled
         feedback = nil
         editing = .rule(rule.id)
@@ -232,12 +232,16 @@ struct ScheduleSection: View {
                                   value: grid ? direction.signed(n) : n, stopSocPct: grid ? stopLevel : nil, enabled: enabled)
     }
 
-    /// Die Box schaltet eine Netz-Regel ab, sobald der Akku UNTER den Stopp-Stand
-    /// fällt (schedule-runtime.js) — eine Untergrenze fürs Einspeisen. Beim
-    /// Beziehen bietet die App ihn nicht an (er würde das Laden sofort beenden);
-    /// trägt eine solche Regel schon einen, bleibt er, wie er ist.
+    /// Eingegebene Leistung mit Vorzeichen; ohne brauchbare Zahl zählt die Richtung.
+    private var signedAmount: Double {
+        let n = Double(amount.replacingOccurrences(of: ",", with: ".")) ?? 1
+        return direction.signed(n)
+    }
+
+    /// Stopp-Stand: Regel und Begründung in ScheduleEdit.stopLevel (Paket, getestet).
+    private var offersStop: Bool { ScheduleEdit.offersStop(signedValue: signedAmount) }
     private var stopLevel: Double? {
-        direction == .feedIn ? (stopOn ? stopSoc : nil) : originalStop
+        ScheduleEdit.stopLevel(signedValue: signedAmount, chosen: stopOn ? stopSoc : nil, opened: opened)
     }
 
     private func editor(_ rule: ScheduleRule?) -> some View {
@@ -258,7 +262,7 @@ struct ScheduleSection: View {
                 }
                 .pickerStyle(.segmented)
                 numberField("Leistung am Netzpunkt", unit: "W", text: $amount, id: "schedule.edit.amount")
-                if direction == .feedIn {
+                if offersStop {
                     Toggle("Beenden, wenn der Akku unter einen Stand fällt", isOn: $stopOn)
                     if stopOn { PercentField(title: "Akku-Stand", value: $stopSoc, range: 0...100) }
                 }

@@ -104,6 +104,29 @@ final class ControlLogicTests: XCTestCase {
         for bad in ["", "7", "7:60", "-1:00", "07:05:00", "a:b", "007:05", "7:"] { XCTAssertNil(ScheduleEdit.normalizeTime(bad), bad) }
     }
 
+    /// Die Box schaltet eine Regel ab, sobald der Akku unter den Stopp-Stand fällt.
+    func testStopLevelIsOnlyCarriedWhereItMakesSense() {
+        let rules = ScheduleEdit.rules(from: [
+            "rules": [
+                ["id": "feed", "target": "gridSetpointW", "start": "10:00", "end": "11:00", "value": -3000, "stopSocPct": 20],
+                ["id": "draw", "target": "gridSetpointW", "start": "00:00", "end": "05:00", "value": 2000, "stopSocPct": 80],
+            ],
+        ])
+        // Einspeisen und 0 W: Die Wahl in der App gilt.
+        XCTAssertTrue(ScheduleEdit.offersStop(signedValue: -3000))
+        XCTAssertTrue(ScheduleEdit.offersStop(signedValue: 0))
+        XCTAssertFalse(ScheduleEdit.offersStop(signedValue: 2000))
+        XCTAssertEqual(ScheduleEdit.stopLevel(signedValue: -3000, chosen: 25, opened: rules[0]), 25)
+        XCTAssertNil(ScheduleEdit.stopLevel(signedValue: -3000, chosen: nil, opened: rules[0]))
+        XCTAssertEqual(ScheduleEdit.stopLevel(signedValue: 0, chosen: 30, opened: nil), 30)
+        // Einspeise-Regel auf Beziehen umgestellt: Ihr Stopp-Stand geht NICHT unsichtbar mit.
+        XCTAssertNil(ScheduleEdit.stopLevel(signedValue: 3000, chosen: 20, opened: rules[0]))
+        // Neue Bezugs-Regel: nie ein Stopp-Stand.
+        XCTAssertNil(ScheduleEdit.stopLevel(signedValue: 3000, chosen: 50, opened: nil))
+        // Bestehende Bezugs-Regel mit Stopp-Stand (aus der Weboberfläche): bleibt, wie sie ist.
+        XCTAssertEqual(ScheduleEdit.stopLevel(signedValue: 2500, chosen: nil, opened: rules[1]), 80)
+    }
+
     func testWriteOutcome() {
         XCTAssertEqual(WriteOutcome.from(LinkResponse(status: 200, body: ["ok": true])), .done)
         XCTAssertEqual(WriteOutcome.from(LinkResponse(status: 200, body: ["ok": false, "error": "x"])), .failed(status: 200, error: "x"))

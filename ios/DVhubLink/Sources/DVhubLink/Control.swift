@@ -115,6 +115,24 @@ public enum ScheduleEdit {
         return nil
     }
 
+    /// Der Stopp-Stand ist auf der Box eine Untergrenze: Die Regel schaltet ab,
+    /// sobald der Akku UNTER ihn fällt (schedule-runtime.js). Sinnvoll ist er
+    /// beim Einspeisen und bei 0 W (der Akku deckt das Haus) — dort bietet die
+    /// App ihn an. Beim Beziehen nicht: Er würde das Laden beenden, solange
+    /// der Akku leer ist.
+    public static func offersStop(signedValue: Double) -> Bool { signedValue <= 0 }
+
+    /// Stopp-Stand, der mit der Regel gespeichert wird. `chosen`: Wahl in der
+    /// App (nil = keiner). Beim Beziehen bleibt nur ein Stand stehen, den die
+    /// geöffnete Regel schon ALS BEZUGS-REGEL trug (die App fasst fremde Werte
+    /// nicht an). Wer eine Einspeise-Regel auf Beziehen umstellt, nimmt ihren
+    /// Stopp-Stand nicht unsichtbar mit.
+    public static func stopLevel(signedValue: Double, chosen: Double?, opened: ScheduleRule?) -> Double? {
+        if offersStop(signedValue: signedValue) { return chosen }
+        if let opened, (opened.value ?? 0) > 0 { return opened.stopSocPct }
+        return nil
+    }
+
     public enum Change: Equatable, Sendable {
         case add(Draft)
         case update(ScheduleRule, Draft)
