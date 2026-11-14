@@ -12,6 +12,14 @@ verweist hierher.
 
 ### Geändert
 
+- **Sungrow: Kontroll-Lesefehler getrennt gemeldet, kurzer Wiederholversuch.** Schlägt das reine Lesen
+  der EMS-Register 13050–13052 fehl (es wurde nichts geschrieben), meldet DVhub das als
+  `sungrow_ems_read_error` (Warnung) statt als irreführendes `control_write_error`. Bei „modbus
+  exception 4" oder `ECONNRESET` liest DVhub einmal nach 300 ms neu; häufen sich die Abbrüche, weist ein
+  einmaliger Hinweis auf einen möglichen zweiten Modbus-Client hin (WiNet-S erlaubt meist nur einen).
+- **Weniger Log-Rauschen.** Dauerfehler werden gedrosselt: `storage_guard_error` (TimescaleDB nicht
+  erreichbar) höchstens einmal je Stunde, `eosdash_proxy_error` (EOSdash :8504) je Phase einmal je
+  5 min, wiederkehrende MQTT-Verbindungsfehler (z. B. `EHOSTUNREACH`) einmal je Minute.
 - **Netzlade-Tor: Netzbezug bis zur Hauslast ist kein Netzladen (Sungrow).** Bei abgeschaltetem
   Netzladen (`allowGridCharge=false`) wird ein positiver Netz-Sollwert nicht mehr pauschal abgelehnt,
   sondern auf die Live-Netto-Last (`Last − PV − Puffer`) gedeckelt und dem Sungrow-EMS-Regler mit

@@ -319,3 +319,47 @@ test('Status: sungrowSecond + System-Summen überstehen buildVictronSnapshot (si
   assert.deepEqual(snap.sungrowSecond, victron.sungrowSecond);
   assert.ok(!('host' in snap.sungrowSecond));
 });
+
+// --- Punkt 6a: Kontroll-Lesefehler getrennt melden + Retry -------------------------
+
+function readFailRig({ failReads = 0, sleep = () => Promise.resolve() } = {}) {
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30 } });
+  const image = sungrowImage();
+  const base = mockSungrow(image);
+  let fails = failReads;
+  const EMS = wire(13050);
+  const transport = {
+    type: 'modbus', reads: [], writes: [],
+    async mbRequest(conf) {
+      if (Number(conf.fc) === 3 && Number(conf.address) === EMS && fails > 0) { fails -= 1; throw new Error('modbus exception 4 (slave device failure)'); }
+      return base.mbRequest(conf);
+    },
+    mbWriteSingle: (a) => base.mbWriteSingle(a),
+    mbWriteMultiple: (a) => base.mbWriteMultiple(a),
+  };
+  const clock = 1_000_000;
+  const state = {
+    victron: { soc: 60, batteryPowerW: -500, pvPowerW: 0, selfConsumptionW: 500, errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock }, device: sungrowDevice() },
+    meter: { ok: true, updatedAt: clock, grid_total_w: 0 }, ctrl: {},
+  };
+  const logs = [];
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport, pushLog: (event, data, level) => logs.push({ event, data, level }), now: () => clock, sleep });
+  return { ems, transport, logs };
+}
+
+test('6a: exc4 beim Kontroll-Lesen → einmal neu lesen (Retry erfolgreich, kein Fehler-Event)', async () => {
+  const r = readFailRig({ failReads: 1 });
+  const res = await r.ems.applySetpoint(4000, 'rule:netzladen');
+  assert.equal(res.ok, true);                       // zweiter Leseversuch gelang
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_read_error'));
+});
+
+test('6a: dauerhafter Kontroll-Lesefehler → sungrow_ems_read_error (warn) + readError, kein Write', async () => {
+  const r = readFailRig({ failReads: 2 });            // beide Versuche scheitern
+  const res = await r.ems.applySetpoint(4000, 'rule:netzladen');
+  assert.equal(res.ok, false);
+  assert.equal(res.readError, true);
+  const ev = r.logs.find((l) => l.event === 'sungrow_ems_read_error');
+  assert.ok(ev && ev.level === 'warn');
+  assert.deepEqual(r.transport.writes, []);          // nichts geschrieben
+});

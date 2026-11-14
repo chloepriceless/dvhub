@@ -395,7 +395,7 @@ export function sungrowSecondView(state, cfg) {
  * (Modus 2, ohne Rückfall). Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Modus gesetzt hat
  * (oder gesetzt haben könnte), danach nichts mehr — auch kein Herzschlag.
  */
-export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now(), statePath = null }) {
+export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const st = {
     target: null,        // { setpointW, source, at }
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
@@ -492,11 +492,40 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     setOwns(null);
   }
 
+  // Kontroll-Register 13050–13052 lesen (vor/nach eigenen Writes). Reines LESEN: schlägt es fehl, wurde nichts
+  // geschrieben → eigener Fehlercode 'ems_read_error' (der Aufrufer meldet das als sungrow_ems_read_error, nicht
+  // als control_write_error). Bei „modbus exception 4" (Geräte-/Slave-Fehler, oft WiNet-S kurz belegt) oder
+  // ECONNRESET einmal nach 300 ms neu lesen. Häufen sich die Resets, steht womöglich ein anderer Modbus-Client
+  // auf dem Gerät (WiNet-S erlaubt nur einen) — einmaliger Hinweis.
   async function readDevice(conf) {
-    const regs = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: EMS_BLOCK_ADDRESS, quantity: 3 });
-    if (!Array.isArray(regs) || regs.length < 3) throw new Error('EMS-Register: unvollständige Antwort');
-    st.dev = { mode: Number(regs[0]) & 0xffff, cmd: Number(regs[1]) & 0xffff, powerW: Number(regs[2]) & 0xffff, at: now() };
-    return st.dev;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const regs = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: EMS_BLOCK_ADDRESS, quantity: 3 });
+        if (!Array.isArray(regs) || regs.length < 3) throw new Error('EMS-Register: unvollständige Antwort');
+        st.dev = { mode: Number(regs[0]) & 0xffff, cmd: Number(regs[1]) & 0xffff, powerW: Number(regs[2]) & 0xffff, at: now() };
+        st.readResetStreak = 0;
+        return st.dev;
+      } catch (e) {
+        lastErr = e;
+        const retryable = /modbus exception 4\b|ECONNRESET/i.test(String(e?.message));
+        if (attempt === 0 && retryable) {
+          st.readResetStreak = (st.readResetStreak || 0) + 1;
+          if (st.readResetStreak >= 3) {
+            logOnce('reset-hint', 'sungrow_ems_read_reset_streak', {
+              streak: st.readResetStreak,
+              text: 'Mehrfach abgebrochene Modbus-Lesevorgänge am Sungrow — steht ein anderer Modbus-Client auf dem Gerät? (WiNet-S/Logger erlaubt meist nur einen.)'
+            }, 'warn');
+          }
+          await sleep(300);
+          continue;
+        }
+        break;
+      }
+    }
+    const err = new Error(`EMS-Register (13050–13052) lesen fehlgeschlagen: ${lastErr?.message || lastErr}`);
+    err.code = 'ems_read_error';
+    throw err;
   }
 
   // Herzschlag-Register vorhanden? Einmal je Verbindung lesen. Exception 1/2 oder 0xFFFF (Doku: nicht
@@ -729,6 +758,13 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         st.dev = null;
         publish();
         return { ok: false, blocked: true, error: 'emergency_stop_active' };
+      } else if (e?.code === 'ems_read_error') {
+        // Reines Lesen der Kontroll-Register fehlgeschlagen — es wurde NICHTS geschrieben. Eigenes Event (warn),
+        // kein control_write_error beim Aufrufer (readError-Flag).
+        st.dev = null;
+        logOnce(st.error, 'sungrow_ems_read_error', { error: st.error, decision }, 'warn');
+        publish();
+        return { ok: false, readError: true, error: st.error };
       } else {
         st.dev = null;
         logOnce(st.error, e?.code === 'readback_mismatch' ? 'sungrow_ems_readback_mismatch' : 'sungrow_ems_error',

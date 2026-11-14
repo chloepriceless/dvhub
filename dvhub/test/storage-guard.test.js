@@ -69,3 +69,22 @@ test('Ohne TimescaleDB: in Portionen löschen', async () => {
   assert.ok(db.calls.some(([s]) => /DELETE FROM timeseries_samples WHERE ctid IN/.test(s)));
   assert.ok(!db.calls.some(([s]) => /compress_chunk/.test(s)));
 });
+
+test('6c: storage_guard_error wird gedrosselt (gleicher Fehler nicht in jedem Zyklus)', async () => {
+  const logs = [];
+  let t = 1_000_000;
+  const g = createStorageGuard({
+    getDb: () => { throw new Error('TimescaleDB-Apache nicht erreichbar'); },
+    statfs: () => ({ bsize: 4096, blocks: 1000, bavail: 500 }),
+    pushLog: (event, data, level) => logs.push({ event, data, level }),
+    now: () => t,
+  });
+  await g.check();
+  await g.check(); // gleicher Fehler, gleiche Zeit → nur einmal
+  t += 10 * 60_000; // 10 min später → immer noch gedrosselt (<1 h)
+  await g.check();
+  assert.equal(logs.filter((l) => l.event === 'storage_guard_error').length, 1);
+  t += 3600_001; // über 1 h → wieder einmal
+  await g.check();
+  assert.equal(logs.filter((l) => l.event === 'storage_guard_error').length, 2);
+});

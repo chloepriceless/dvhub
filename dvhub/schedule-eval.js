@@ -1709,6 +1709,7 @@ export function createScheduleEvaluator(ctx) {
     // === end T-0002 keepalive ===============================================
 
     let emsFailure = false;
+    let emsReadError = false;
     try {
       let encoded, words, fc;
       if (conf.emulate != null) {
@@ -1719,6 +1720,9 @@ export function createScheduleEvaluator(ctx) {
         const r = await sungrowEms.applySetpoint(value, source, { noGridCharge: noGridChargeForActuator });
         if (!r?.ok) {
           emsFailure = r?.blocked !== true;
+          // Reiner Kontroll-Lesefehler (nichts geschrieben): der Aktuator hat schon sungrow_ems_read_error
+          // gemeldet — kein (irreführendes) control_write_error.
+          emsReadError = r?.readError === true;
           throw new Error(r?.error || 'sungrow_ems_failed');
         }
         encoded = { raw: value, scaled: value, writeType: 'sungrow-ems', wordOrder: 'n/a' };
@@ -1810,16 +1814,20 @@ export function createScheduleEvaluator(ctx) {
       }));
       return { ok: true, raw: encoded.raw, words, scaled: encoded.scaled, writeType: encoded.writeType, wordOrder: encoded.wordOrder, fc, address: conf.address, keepalive: isKeepalive };
     } catch (e) {
-      pushLog('control_write_error', { target, value, source, error: e.message });
-      telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
-        eventType: 'control_write_error',
-        target,
-        valueNum: Number.isFinite(Number(value)) ? Number(value) : null,
-        reason: source,
-        source: 'runtime',
-        meta: { error: e.message }
-      }));
-      return { ok: false, error: e.message, ...(emsFailure ? { emsFailure: true } : {}) };
+      // Reiner Sungrow-Kontroll-Lesefehler: schon als sungrow_ems_read_error gemeldet, nichts geschrieben →
+      // kein control_write_error (wäre irreführend).
+      if (!emsReadError) {
+        pushLog('control_write_error', { target, value, source, error: e.message });
+        telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+          eventType: 'control_write_error',
+          target,
+          valueNum: Number.isFinite(Number(value)) ? Number(value) : null,
+          reason: source,
+          source: 'runtime',
+          meta: { error: e.message }
+        }));
+      }
+      return { ok: false, error: e.message, ...(emsFailure ? { emsFailure: true } : {}), ...(emsReadError ? { readError: true } : {}) };
     }
   }
 
