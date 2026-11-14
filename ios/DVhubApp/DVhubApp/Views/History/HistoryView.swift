@@ -31,6 +31,11 @@ struct HistoryView: View {
         _metric = State(initialValue: chrome.historyMetric)
     }
 
+    /// „Heute“ folgt dem Kalender; ein bewusst gewählter früherer Tag (`chrome.historyDate`) bleibt stehen.
+    private func followToday() {
+        if chrome.historyDate == nil, !Calendar.current.isDateInToday(date) { date = Date() }
+    }
+
     struct Key: Equatable { let period: HistoryPeriod; let day: String; let online: Bool }
     private var key: Key { Key(period: period, day: HistorySummary.dateParam(date), online: controller.isOnline) }
 
@@ -74,10 +79,11 @@ struct HistoryView: View {
         .onChange(of: period) { _, p in chrome.historyPeriod = p }
         .onChange(of: date) { _, d in chrome.historyDate = Calendar.current.isDateInToday(d) ? nil : d }
         .onChange(of: metric) { _, m in chrome.historyMetric = m }
-        // Stand die Historie auf „heute“ und die App kommt an einem neuen Tag zurück: wieder heute zeigen.
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active, chrome.historyDate == nil, !Calendar.current.isDateInToday(date) { date = Date() }
-        }
+        // Stand die Historie auf „heute“ und der Tag hat gewechselt: wieder heute zeigen — beim
+        // Zurückkommen in die App, beim Öffnen des Reiters und um Mitternacht bei offener App.
+        .onChange(of: scenePhase) { _, phase in if phase == .active { followToday() } }
+        .onAppear { followToday() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in followToday() }
         #if DEBUG
         // Nur für Bildschirmfotos: -DVHUB_HISTORY week|month|year
         .onAppear { if let p = UserDefaults.standard.string(forKey: "DVHUB_HISTORY").flatMap(HistoryPeriod.init(rawValue:)) { period = p } }
