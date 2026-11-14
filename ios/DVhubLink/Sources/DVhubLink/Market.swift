@@ -36,6 +36,11 @@ public enum MarketTime {
     }
 
     public static func startOfDay(_ d: Date) -> Date { calendar.startOfDay(for: d) }
+
+    /// Beginn des Folgetags — nicht „+ 24 h“: Tage mit Zeitumstellung sind 23 oder 25 Stunden lang.
+    public static func dayEnd(_ d: Date) -> Date {
+        calendar.date(byAdding: .day, value: 1, to: startOfDay(d)) ?? startOfDay(d).addingTimeInterval(86400)
+    }
 }
 
 // MARK: - Day-Ahead-Preise (/api/prices)
@@ -203,13 +208,14 @@ public struct ResidualOutlook: Equatable, Sendable {
         return Array(sorted.prefix(n)).sorted { $0.start < $1.start }
     }
 
-    /// Ampel für einen Tag mit festem Börsenpreis: dieselben Schwellen wie
-    /// bei den Prognosetagen (20-%- und 80-%-Quantil der letzten 28 Tage).
-    public func classify(meanCt: Double) -> PriceClass? {
-        guard let d = days.first(where: { $0.p20Ct != nil && $0.p80Ct != nil }), let p20 = d.p20Ct, let p80 = d.p80Ct else { return nil }
-        if meanCt > p80 { return .expensive }
-        if meanCt < p20 { return .cheap }
-        return .normal
+    /// Lage eines Tagesmittels zwischen den Schwellen der Einstufung (P20 = 0,
+    /// P80 = 1; kleiner bzw. größer = außerhalb). Die Schwellen kommen aus der
+    /// Schnittstelle — vom Tag selbst, sonst vom ersten Prognosetag. Das ist
+    /// nur eine Darstellung; die Einstufung bleibt `Day.priceClass`.
+    public func position(meanCt: Double, day: Day? = nil) -> Double? {
+        let src = (day.flatMap { $0.p20Ct != nil && $0.p80Ct != nil ? $0 : nil }) ?? days.first { $0.p20Ct != nil && $0.p80Ct != nil }
+        guard let p20 = src?.p20Ct, let p80 = src?.p80Ct, p80 > p20 else { return nil }
+        return (meanCt - p20) / (p80 - p20)
     }
 
     /// Nächster als teuer eingestufter Prognosetag (für die Frühwarnung).

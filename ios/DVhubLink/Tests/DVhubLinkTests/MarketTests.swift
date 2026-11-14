@@ -30,6 +30,10 @@ final class MarketTests: XCTestCase {
         XCTAssertEqual(MarketTime.key(t), "2026-11-13")
         XCTAssertEqual(MarketTime.day("2026-11-13"), t)
         XCTAssertNil(MarketTime.day("2026-11"))
+        // 25.10.2026: Zeitumstellung, der Tag hat 25 Stunden.
+        let dst = try XCTUnwrap(MarketTime.day("2026-10-25"))
+        XCTAssertEqual(MarketTime.dayEnd(dst).timeIntervalSince(dst), 25 * 3600)
+        XCTAssertEqual(MarketTime.dayEnd(t).timeIntervalSince(t), 24 * 3600)
         let pts = (0..<8).map { i in
             PricePoint(start: t.addingTimeInterval(Double(i - 4) * 900), end: t.addingTimeInterval(Double(i - 3) * 900), ctKwh: Double(i), importCtKwh: nil)
         }
@@ -113,10 +117,14 @@ final class MarketTests: XCTestCase {
         XCTAssertEqual(k.meanCt, 19.772, accuracy: 1e-9)
         XCTAssertEqual(k.earlierClass, .cheap)
         XCTAssertEqual(k.earlierP50Ct ?? 0, 14.78, accuracy: 1e-9)
-        // Ampel für feste Tage nach denselben Schwellen (p20 15,776 / p80 26,51 ct).
-        XCTAssertEqual(o.classify(meanCt: 19.8), .normal)
-        XCTAssertEqual(o.classify(meanCt: 12), .cheap)
-        XCTAssertEqual(o.classify(meanCt: 27), .expensive)
+        // Lage im üblichen Bereich (p20 15,776 / p80 26,51 ct): 0 = P20, 1 = P80.
+        XCTAssertEqual(o.position(meanCt: 15.776) ?? -1, 0, accuracy: 1e-9)
+        XCTAssertEqual(o.position(meanCt: 26.51) ?? -1, 1, accuracy: 1e-9)
+        XCTAssertEqual(o.position(meanCt: 17.51, day: o.days[0]) ?? -1, (17.51 - 15.776) / (26.51 - 15.776), accuracy: 1e-9)
+        XCTAssertLessThan(o.position(meanCt: 12) ?? 0, 0)
+        XCTAssertGreaterThan(o.position(meanCt: 30) ?? 0, 1)
+        // Die Einstufung selbst bleibt die der Schnittstelle.
+        XCTAssertEqual(o.days[0].priceClass, .normal)
         XCTAssertEqual(o.sources.first?.license, "CC BY 4.0")
     }
 
@@ -128,6 +136,7 @@ final class MarketTests: XCTestCase {
         XCTAssertEqual(o?.days.count, 1)
         XCTAssertNil(o?.days.first?.priceClass)
         XCTAssertEqual(o?.days.first?.band.p10, 10)
+        XCTAssertNil(o?.position(meanCt: 10)) // ohne Schwellen keine Lage
         XCTAssertTrue(o?.isStale() ?? false) // ohne Ausgabezeit: überholt
     }
 

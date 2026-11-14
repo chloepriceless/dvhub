@@ -33,7 +33,7 @@ struct IntegrationsView: View {
         }
         .navigationTitle("Integrationen")
         .screenActions(.more, [
-            ScreenAction(id: "refresh", title: "Aktualisieren", icon: "arrow.clockwise", disabled: loading) { Task { await load() } },
+            ScreenAction(id: "integrations.refresh", title: "Aktualisieren", icon: "arrow.clockwise", disabled: loading) { Task { await load() } },
         ])
         .refreshable { await load() }
         .task(id: controller.isOnline) { await load() }

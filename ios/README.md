@@ -94,12 +94,13 @@ Fünf Reiter:
   Tagessummen). Ist die Anlage nicht erreichbar, zeigt die App den letzten Stand
   aus dem Briefkasten mit Uhrzeit.
 - **Markt:** Börsenpreis jetzt; die nächsten Tage als Karten (Datum,
-  erwarteter Preis mit Spanne, Ampel günstig/normal/teuer – heute und morgen
-  als feste Börsentage, danach die Prognose); ein Diagramm auf einer
-  Zeitachse: feste Viertelstunden-Preise als Balken, die Prognose der
-  Folgetage als gestrichelte Linie mit Band. Quelle: `dvhub.online`
-  (`/api/prices`, `/v1/residual-load/outlook`). Methodik, Bilanz und
-  Vergleichsverfahren zeigt die App bewusst nicht; die stehen auf der Webseite.
+  Tagesmittel, Spanne, Ampel mit der Einstufung der Prognose und die Lage des
+  Tagesmittels zwischen deren Schwellen P20 und P80 – die Lage ist nur eine
+  Darstellung, keine zweite Einstufung); darunter zwei getrennte Diagramme:
+  die Börsenpreise von heute bzw. morgen in Viertelstunden (Tief, Mittel, Hoch,
+  günstigste und teuerste drei Stunden) und die Preisprognose der Folgetage
+  mit Band. Quelle: `dvhub.online` (`/api/prices`, `/v1/residual-load/outlook`).
+  Methodik, Bilanz und Vergleichsverfahren zeigt die App bewusst nicht.
 - **Historie:** Tag, Woche, Monat, Jahr aus `/api/history/summary?lean=1`
   (Energie, Erlöse, Kosten, Autarkie, Kennzahlen); Zeile antippen öffnet den
   Tag bzw. Monat. Woche/Monat/Jahr brauchen in DVhub Pro.

@@ -132,7 +132,9 @@ private struct ScreenActionsModifier: ViewModifier {
             }
             .onAppear { chrome.actions[owner.rawValue] = actions }
             .onChange(of: actions) { _, new in chrome.actions[owner.rawValue] = new }
-            .onDisappear { chrome.actions[owner.rawValue] = nil }
+            // Nur die eigenen Aktionen abräumen: In der geteilten Ansicht kann die
+            // nächste Seite schon erschienen sein, bevor diese verschwindet.
+            .onDisappear { if chrome.actions[owner.rawValue] == actions { chrome.actions[owner.rawValue] = nil } }
     }
 }
 

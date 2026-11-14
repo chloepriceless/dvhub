@@ -162,6 +162,12 @@ final class AppLogicTests: XCTestCase {
         XCTAssertFalse(rail(440, 956, screen: (440, 956)))
         // … im Querformat rechts.
         XCTAssertTrue(rail(874, 402, screen: (874, 402), compactHeight: true))
+        // Nur das Seitenverhältnis entscheidet (geteilte Fläche, kurz und breit).
+        XCTAssertTrue(rail(500, 800, screen: (1032, 1376)))
+        XCTAssertFalse(rail(500, 900, screen: (1032, 1376)))
+        // Nur der Bildschirm entscheidet: schmales, hohes Fenster auf dem Außendisplay.
+        XCTAssertTrue(rail(370, 678, screen: (466, 678)))
+        XCTAssertFalse(rail(370, 678, screen: (375, 812)))
         // iPad und unbekannte Fläche.
         XCTAssertFalse(rail(1032, 1376, screen: (1032, 1376)))
         XCTAssertFalse(rail(0, 0))

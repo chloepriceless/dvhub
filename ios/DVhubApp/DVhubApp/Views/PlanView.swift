@@ -41,7 +41,7 @@ struct PlanView: View {
         }
         .navigationTitle("Fahrplan")
         .screenActions(.more, [
-            ScreenAction(id: "refresh", title: "Aktualisieren", icon: "arrow.clockwise") { Task { await load() } },
+            ScreenAction(id: "plan.refresh", title: "Aktualisieren", icon: "arrow.clockwise") { Task { await load() } },
         ])
         .refreshable { await load() }
         .task(id: controller.isOnline) { await load() }
