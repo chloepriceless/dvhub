@@ -18,8 +18,24 @@
  */
 import { getPowerLimits } from '../power-limits.js';
 import { betaGateOpen } from '../../beta-features.js';
+import { resolveSecondInverter, secondInverterTelemetry } from '../inverter/sungrow.js';
 
 const finite = (v) => v != null && v !== '' && Number.isFinite(Number(v));
+
+// Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (Punkt 2): die zusätzliche Akkukapazität und Lade-/
+// Entladeleistung des Slave für die Planung (EOS, Umrechnung). Nur wenn aggregateTelemetry an und der Slave
+// einbezogen ist (sonst null → nur Master). Der System-SoC steht schon in state.victron.soc (Poller), daher
+// braucht es hier keine SoC-Gewichtung.
+function sungrowSecondAdd(ctx, cfg) {
+  if (resolveSecondInverter(cfg).aggregateTelemetry !== true) return null;
+  if (secondInverterTelemetry(ctx?.state, cfg, {}) == null) return null;
+  const si = cfg?.sungrow?.secondInverter || {};
+  return {
+    capacityWh: Number(si.batteryCapacityWh) || 0,
+    maxChargeW: Number(si.maxChargeW) || 0,
+    maxDischargeW: Number(si.maxDischargeW) || 0,
+  };
+}
 
 function follower(ctx, cfg) {
   const c = cfg?.multiGx || {};
@@ -55,7 +71,8 @@ const weighted = (a, capA, b, capB) => Number(((a * capA + b * capB) / (capA + c
 
 /** Config fuer EOS/Plan-Umrechnung: Akku- und Wechselrichterwerte beider Anlagen. */
 export function planningCfg(ctx, cfg = ctx?.getCfg?.()) {
-  const f = follower(ctx, cfg);
+  // Entweder zweite Victron-GX (multi-gx) ODER zweiter Sungrow-WR (Parallelbetrieb) — sie schließen sich aus.
+  const f = follower(ctx, cfg) || sungrowSecondAdd(ctx, cfg);
   if (!f) return cfg;
   const opt = cfg.optimizer || {};
   const sp = cfg.system?.power || {};

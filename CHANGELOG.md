@@ -49,6 +49,12 @@ verweist hierher.
   Eigenverbrauch. Positive Optimizer-Regeln werden bei Sungrow nicht mehr pauschal verworfen, sondern
   laufen durch dieses Tor. Für Victron (Sollwert geht direkt ans ESS, Bezug ≤ Last nicht garantiert)
   bleibt die Ablehnung. Neues Log `grid_charge_capped_to_load`.
+- **Sungrow zwei WR: Anlagendaten und Leistungsgrenzen je WR.** Für den zweiten WR lassen sich jetzt
+  max. Lade-/Entladeleistung, Akkukapazität und PV-Größe getrennt eintragen. Die Regler-Leistungsgrenze
+  ist der kleinste Wert aus Summe der Lade-/Entladeleistungen beider WR, Summe der Nennleistungen und
+  `sungrow.maxPowerW` — Laden und Entladen getrennt; ist der Slave offline, zählt nur der Master-Anteil.
+  EOS plant mit der Summe aus Kapazität und Leistung beider WR. PV-Prognose über die vorhandene
+  String-Liste (Summe), Ist-Ertrag je WR aus Register 5017.
 - **Sungrow zwei WR: Akku, PV und SoC sind jetzt durchgängig die Systemsumme.** Bei aktiver Aggregation
   (`aggregateTelemetry`) setzt der Poller `batteryPowerW`, `pvPowerW`/`pvTotalW` und `soc` auf die Summe
   beider WR, bevor daraus Lade-/Entladeleistung, Energieflüsse und Hauslast abgeleitet werden; die

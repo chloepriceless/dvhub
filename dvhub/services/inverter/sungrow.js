@@ -345,6 +345,23 @@ export function sungrowSystemSoc(masterSoc, secondSoc, { masterCapacityWh = 0, s
   return Number(((m + s) / 2).toFixed(2));
 }
 
+/**
+ * Nutzbare Reserve eines Akkus über dem Mindest-SoC: (SoC − minSoC)/100 × Kapazität (Wh, ≥ 0). null, wenn SoC
+ * oder Kapazität fehlen. Für die Anzeige und die Lastaufteilung je WR (Punkt 2/3: Entladen → mehr Reserve mehr).
+ */
+export function sungrowReserveWh(socPct, capacityWh, minSocPct = 0) {
+  if (socPct == null || !Number.isFinite(Number(socPct)) || !(Number(capacityWh) > 0)) return null;
+  const soc = Number(socPct); const cap = Number(capacityWh); const floor = Number(minSocPct) || 0;
+  return Math.round(Math.max(0, ((soc - floor) / 100) * cap));
+}
+
+/** Freier Platz eines Akkus bis zum Max-SoC: (maxSoC − SoC)/100 × Kapazität (Wh, ≥ 0). Für Laden → mehr Platz mehr. */
+export function sungrowHeadroomWh(socPct, capacityWh, maxSocPct = 100) {
+  if (socPct == null || !Number.isFinite(Number(socPct)) || !(Number(capacityWh) > 0)) return null;
+  const soc = Number(socPct); const cap = Number(capacityWh); const ceil = Number.isFinite(Number(maxSocPct)) ? Number(maxSocPct) : 100;
+  return Math.round(Math.max(0, ((ceil - soc) / 100) * cap));
+}
+
 /** Niedrigerer der beiden SoC — Grundlage des SoC-Bodens (schützt den schwächeren Akku). null, wenn keiner bekannt. */
 export function sungrowSocFloor(masterSoc, secondSoc) {
   const vals = [masterSoc, secondSoc].filter((v) => v != null && Number.isFinite(Number(v))).map(Number);
@@ -771,15 +788,24 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     // System-Leistungsgrenze nur anheben, wenn BEIDE BDC-Nennleistungen bekannt sind. Fehlt die des Masters,
     // bleibt die Grenze unbekannt (→ Self-consumption wie ohne zweiten WR), statt mit halbem Wissen zu forcieren.
     const bdc = second?.bdcRatedW && masterBdc ? masterBdc + second.bdcRatedW : masterBdc;
-    // Leistungsgrenze = Kleinste aus BDC-Nennleistung (Summe beider WR), Profil-Grenze und der
-    // Betreiber-Einstellung sungrow.maxPowerW. Letztere gilt für ALLE Quellen (EOS, Regeln, §14a,
-    // Netzanschluss, Hand-Sollwert), weil sie hier im Aktuator die Lade-/Entladeleistung begrenzt (Punkt 4).
+    // Leistungsgrenze = Kleinste aus: Summe der Akku-Lade-/Entladeleistungen je WR (Punkt 2), BDC-Nennleistung
+    // (Summe beider WR), Profil-Grenze und der Betreiber-Einstellung sungrow.maxPowerW. Letztere gilt für ALLE
+    // Quellen (EOS, Regeln, §14a, Netzanschluss, Hand-Sollwert), weil sie hier im Aktuator begrenzt (Punkt 4).
+    // Laden und Entladen getrennt; Slave nicht einbezogen (offline) → nur der Master-Anteil.
     const operatorMaxW = Number(cfg.sungrow?.maxPowerW) > 0 ? Number(cfg.sungrow.maxPowerW) : null;
-    const capCandidates = [bdc, opts.maxPowerW, operatorMaxW].filter((x) => Number(x) > 0);
-    const cap = capCandidates.length ? Math.min(...capCandidates) : null;
+    const optMaster = cfg.optimizer || {};
+    const si = cfg.sungrow?.secondInverter || {};
+    const sumChargeW = (Number(optMaster.maxChargeW) || 0) + (second ? (Number(si.maxChargeW) || 0) : 0);
+    const sumDischargeW = (Number(optMaster.maxDischargeW) || 0) + (second ? (Number(si.maxDischargeW) || 0) : 0);
+    const capFor = (sumPower) => {
+      const cands = [bdc, opts.maxPowerW, operatorMaxW, sumPower].filter((x) => Number(x) > 0);
+      return cands.length ? Math.min(...cands) : null;
+    };
+    const maxChargeCap = capFor(sumChargeW);
+    const maxDischargeCap = capFor(sumDischargeW);
     let decision = targetFresh
       ? decideEmsCommand({
-        setpointW: st.target.setpointW, ...tel, maxChargeW: cap, maxDischargeW: cap,
+        setpointW: st.target.setpointW, ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
         bandW: opts.bandW, gain: opts.gain, minPowerW: opts.minPowerW,
         noGridCharge: st.target.noGridCharge === true || NO_GRID_CHARGE_SOURCES.has(String(st.target.source))
       })

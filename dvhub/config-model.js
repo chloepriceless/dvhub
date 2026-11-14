@@ -1534,6 +1534,48 @@ function buildFieldDefinitions() {
       step: 100,
       help: 'Nutzbare Akkukapazität des ZWEITEN WR. Zusammen mit der Kapazität der Hauptanlage (Optimierer) bildet sie die Systemkapazität für den Netzstrom-im-Akku-Zähler und den kapazitätsgewichteten System-SoC. DVhub liest die Kapazität beider WR aus Register 5639 und zeigt sie als Vorschlag (Leitstand/Installateur-Portal) an — bitte den gelesenen Wert prüfen und hier eintragen (nicht automatisch gesetzt).'
     },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.maxChargeW',
+      label: 'Max. Ladeleistung zweiter WR (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Maximale Akku-Ladeleistung des ZWEITEN WR (Datenblatt/HA-Konfig, z. B. 5000 W). Die Lade-Leistungsgrenze des Systems ist die Summe aus Haupt- und zweitem WR (begrenzt durch Nennleistung und sungrow.maxPowerW). Leer/0 = der zweite WR zählt nicht zur Ladegrenze.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.maxDischargeW',
+      label: 'Max. Entladeleistung zweiter WR (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Maximale Akku-Entladeleistung des ZWEITEN WR. Die Entlade-Leistungsgrenze des Systems ist die Summe aus Haupt- und zweitem WR (begrenzt durch Nennleistung und sungrow.maxPowerW). Leer/0 = der zweite WR zählt nicht zur Entladegrenze.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.pvKwp',
+      label: 'PV-Größe zweiter WR (kWp)',
+      type: 'number',
+      min: 0,
+      step: 0.1,
+      help: 'Installierte PV-Leistung am ZWEITEN WR (kWp). Für die Prognose zählt DVhub sie zur PV-Gesamtgröße dazu; den Ist-Ertrag je WR liest DVhub aus Register 5017. Leer/0 = keine eigene PV am zweiten WR.'
+    },
 
     // B-1112 Stufe 2 — Nulleinspeisung bei Abregelung (Christin 2026-07-19).
     // Wirkt nur auf Profilen, die dvControl.zeroFeedIn deklarieren (Fronius);

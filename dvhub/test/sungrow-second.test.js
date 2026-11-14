@@ -6,10 +6,11 @@ import assert from 'node:assert/strict';
 
 import {
   createSungrowEms, resolveSecondInverter, secondInverterTelemetry, wire, EMS_CMD, EMS_MODE,
-  sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor
+  sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor, sungrowReserveWh, sungrowHeadroomWh
 } from '../services/inverter/sungrow.js';
 import { createSungrowSecond } from '../services/inverter/sungrow-second.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
+import { planningCfg } from '../services/multi-gx/planning.js';
 import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
 
 const POWER = wire(13052);
@@ -116,9 +117,9 @@ test('Begleitdienst: drei Lesefehler in Folge → offline, keine Werte', async (
 // Eigenes Rig für den Aktuator mit zweitem WR (Forced mode, damit kein Herzschlag die Writes verschiebt).
 // batteryPowerW in state.victron ist der SYSTEM-Wert (der Poller hat PV/Akku schon aggregiert); der Regler
 // zählt NICHT noch einmal dazu, er nutzt vom zweiten WR nur die BDC-Nennleistung für die System-Leistungsgrenze.
-function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), batteryPowerW = -500, second = null, aggregateTelemetry = false } = {}) {
-  const secondInverter = { host: '192.168.68.83', aggregateTelemetry };
-  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter } });
+function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), batteryPowerW = -500, second = null, aggregateTelemetry = false, optimizer = null, secondPowers = null } = {}) {
+  const secondInverter = { host: '192.168.68.83', aggregateTelemetry, ...(secondPowers || {}) };
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter }, ...(optimizer ? { optimizer } : {}) });
   const image = sungrowImage();
   const t = mockSungrow(image);
   const clock = 1_000_000;
@@ -531,4 +532,64 @@ test('1d: Sperre löst sich ohne Neustart, wenn die Herzschlag-Einstellung geän
   assert.equal(yes.ok, true);
   assert.equal(r.state.ctrl.sungrowEms.heartbeatWorkingFc, 16);
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_heartbeat_config_changed'));
+});
+
+// --- Punkt 2: Anlagendaten je WR — getrennte Lade-/Entlade-Grenzen + EOS-Summen -----------------------
+
+test('Punkt 2: Entlade-Grenze = Summe der WR-Entladeleistungen (Master 5 + Slave 5 = 10 kW)', async () => {
+  const r = emsRig({
+    device: sungrowDevice({ bdcRatedW: 10000 }), batteryPowerW: 0, aggregateTelemetry: true,
+    optimizer: { maxChargeW: 5000, maxDischargeW: 5000 },
+    secondPowers: { maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 5000 },
+    second: { batteryPowerW: 0, pvPowerW: 0, socPct: 50, bdcRatedW: 10000 },
+  });
+  await r.ems.applySetpoint(-20000, 'rule:abend');
+  const pw = r.t.writes.find((w) => w.address === POWER);
+  assert.equal(pw.value, 10000); // min(BDC-Summe 20000, Entlade-Summe 10000)
+});
+
+test('Punkt 2: Slave offline → nur Master-Anteil der Entlade-Grenze (5 kW)', async () => {
+  const r = emsRig({
+    device: sungrowDevice({ bdcRatedW: 10000 }), batteryPowerW: 0, aggregateTelemetry: true,
+    optimizer: { maxChargeW: 5000, maxDischargeW: 5000 },
+    secondPowers: { maxChargeW: 5000, maxDischargeW: 5000 },
+    second: { batteryPowerW: 0, pvPowerW: 0, socPct: 50, bdcRatedW: 10000 },
+  });
+  r.state.sungrowSecond.online = false;             // Slave nicht einbezogen
+  await r.ems.applySetpoint(-20000, 'rule:abend');
+  const pw = r.t.writes.find((w) => w.address === POWER);
+  assert.equal(pw.value, 5000);                     // nur Master-Entladeleistung
+});
+
+test('Punkt 2: planningCfg summiert Kapazität und Leistung für EOS (10/5 kWh je 5 kW → 15 kWh/10 kW)', () => {
+  const cfg = {
+    manufacturer: 'sungrow',
+    optimizer: { batteryCapacityWh: 10000, maxChargeW: 5000, maxDischargeW: 5000 },
+    sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true, batteryCapacityWh: 5000, maxChargeW: 5000, maxDischargeW: 5000 } },
+  };
+  const ctx = { getCfg: () => cfg, state: { victron: { soc: 60 }, sungrowSecond: { online: true, updatedAt: Date.now(), socPct: 40, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 10000 } } };
+  const p = planningCfg(ctx, cfg);
+  assert.equal(p.optimizer.batteryCapacityWh, 15000);
+  assert.equal(p.optimizer.maxChargeW, 10000);
+  assert.equal(p.optimizer.maxDischargeW, 10000);
+});
+
+test('Punkt 2: planningCfg ohne Aggregation/Slave offline → unverändert (nur Master)', () => {
+  const cfg = {
+    manufacturer: 'sungrow',
+    optimizer: { batteryCapacityWh: 10000, maxChargeW: 5000, maxDischargeW: 5000 },
+    sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true, batteryCapacityWh: 5000 } },
+  };
+  const ctx = { getCfg: () => cfg, state: { victron: { soc: 60 }, sungrowSecond: { online: false, updatedAt: Date.now() } } };
+  assert.equal(planningCfg(ctx, cfg), cfg); // dasselbe Objekt, keine Summe
+});
+
+test('Punkt 2: SoC-Reserve/Headroom je WR (SoC 80/20, Kapazität 10/5 kWh, Boden 10 %)', () => {
+  // Reserve = (SoC − Boden)/100 × Kapazität; Headroom = (max − SoC)/100 × Kapazität.
+  assert.equal(sungrowReserveWh(80, 10000, 10), 7000);
+  assert.equal(sungrowReserveWh(20, 5000, 10), 500);
+  assert.equal(sungrowReserveWh(5, 10000, 10), 0);     // unter dem Boden → 0
+  assert.equal(sungrowReserveWh(null, 10000), null);
+  assert.equal(sungrowHeadroomWh(80, 10000, 100), 2000);
+  assert.equal(sungrowHeadroomWh(20, 5000, 100), 4000);
 });
