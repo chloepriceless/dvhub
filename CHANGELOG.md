@@ -12,6 +12,15 @@ verweist hierher.
 
 ### Behoben
 
+- **Sungrow External EMS: Herzschlag 13080 per FC 16, Diagnose-Anzeige, lösbare Sperre
+  (sicherheitskritisch, Feldtest).** Der Master (SH10RT-20) übernahm 13080 per FC 06 (Write Single)
+  nicht (geschrieben 30, gelesen 600). DVhub versucht den Herzschlag jetzt automatisch erst per FC 06 und
+  bei Nichtübernahme einmal per **FC 16** (Write Multiple) und merkt sich je Verbindung die funktionierende
+  Schreibfunktion (`sungrow.heartbeatWriteFc` erzwingt 6 oder 16). Nimmt der Wechselrichter gar keinen
+  Wert an, bricht DVhub External EMS sicher ab; als letzter Ausweg fährt `sungrow.acceptDeviceHeartbeatS`
+  (Opt-in, ≤600 s) mit der geräteeigenen Frist. Nach einem Abbruch zeigt die Oberfläche jetzt sofort
+  Eigenverbrauch statt ~20 s den alten Zwangsbefehl, und eine geänderte Herzschlag-Einstellung löst die
+  External-EMS-Sperre ohne Neustart. Status zeigt Schreibfunktion (Soll/erkannt) und die wirksame Frist.
 - **Sungrow External EMS: Herzschlag 13080 wird jetzt nach dem Moduswechsel geschrieben — und bei
   Nichtübernahme sicher abgebrochen (sicherheitskritisch).** Am Gerät übernahm der Wechselrichter den
   Herzschlag-Wert nicht (geschrieben 30 s, gelesen 600 s), weil DVhub ihn VOR dem Moduswechsel schrieb

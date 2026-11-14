@@ -68,7 +68,16 @@ export function resolveSungrowControl(cfg) {
   // EMS selbst (am Gerät 600 s beobachtet) und übernimmt unseren Wert erst danach — Doku V1.1.11: „set mode 3,
   // then deliver the heartbeat value". false = alte Reihenfolge (vor dem Moduswechsel), nur zur Diagnose.
   const heartbeatAfterMode = o.heartbeatAfterMode !== false;
-  return { mode, modeValue: mode === 'forced' ? EMS_MODE.FORCED : EMS_MODE.EXTERNAL, heartbeatTimeoutS, heartbeatAfterMode };
+  // Schreibfunktion für 13080: fest 6 (FC 06 Write Single) oder 16 (FC 16 Write Multiple), sonst null = Auto
+  // (erst FC 06, bei Abweichung einmal FC 16; die funktionierende Variante wird je Verbindung gemerkt).
+  const fc = Number(o.heartbeatWriteFc);
+  const heartbeatWriteFc = fc === 6 || fc === 16 ? fc : null;
+  // Opt-in letzter Ausweg (nur auf Christins Entscheidung): Übernimmt der WR KEINEN geschriebenen Herzschlag,
+  // mit dem geräteeigenen Wert fahren, solange er ≤ acceptDeviceHeartbeatS ist (Rückfall dann bis zu diesem
+  // Wert statt 30 s). 0/leer = aus (sicher scheitern).
+  const a = Math.round(Number(o.acceptDeviceHeartbeatS));
+  const acceptDeviceHeartbeatS = Number.isFinite(a) && a > 0 ? Math.min(600, a) : 0;
+  return { mode, modeValue: mode === 'forced' ? EMS_MODE.FORCED : EMS_MODE.EXTERNAL, heartbeatTimeoutS, heartbeatAfterMode, heartbeatWriteFc, acceptDeviceHeartbeatS };
 }
 
 const U16_NA = 0xffff;
@@ -406,7 +415,8 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     owns: false,         // Zwangs-/EMS-Betrieb ist (womöglich) von DVhub — ab dem ersten Write, bis Self bestätigt ist
     ownMode: null,       // welchen Modus DVhub gesetzt hat (2 Forced, 3 External EMS)
     endpointKey: null,   // Verbindung, für die target/dev/owns gelten
-    hb: { key: null, supported: null }, // gibt es das Herzschlag-Register an dieser Verbindung?
+    hb: { key: null, supported: null, workingFc: null, deviceManaged: false }, // Herzschlag-Register: vorhanden? welche Schreibfunktion (FC) nimmt es an?
+    hbCfgSig: null,      // Signatur der Herzschlag-Einstellung (eigenes Feld, damit es st.hb-Neuzuweisungen überlebt) — für die lösbare Sperre (1d)
     lastHeartbeatAt: 0,
     sentTimeoutS: null,  // zuletzt an den Wechselrichter geschriebene Frist (gilt dort, bis eine neue rausging)
     lastStepAt: 0,
@@ -468,6 +478,10 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       controlMode: ctl.mode,
       heartbeatTimeoutS: ctl.heartbeatTimeoutS,
       heartbeatSupported: st.hb.supported,
+      heartbeatWriteFc: ctl.heartbeatWriteFc,          // feste FC (config) oder null = Auto
+      heartbeatWorkingFc: st.hb.workingFc,             // je Verbindung ermittelte funktionierende FC
+      heartbeatDeviceManaged: st.hb.deviceManaged === true, // Opt-in: WR verwaltet 13080 selbst
+      heartbeatSentS: st.sentTimeoutS ?? null,         // zuletzt wirksame Frist (unser Wert oder Gerätewert)
       lastHeartbeatAt: st.lastHeartbeatAt || null,
       target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at, noGridCharge: st.target.noGridCharge === true } : null,
       device: st.dev ? { ...st.dev } : null,
@@ -555,7 +569,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
 
   // Not-Halt vor JEDEM Write prüfen: ein Takt, der vor dem Eintritt begann, darf danach nichts mehr setzen.
   // Nur die eine Rücknahme (neutralize) darf im Not-Halt schreiben.
-  async function writeReg(conf, address, value, { neutralize = false, claimMode = null } = {}) {
+  async function writeReg(conf, address, value, { neutralize = false, claimMode = null, fc = 6 } = {}) {
     if (state.ctrl?.discretionaryWritesPaused && !neutralize) {
       const err = new Error('emergency_stop_active');
       err.code = 'emergency_stop_active';
@@ -564,7 +578,10 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     // Besitz erst, wenn der Write wirklich rausgeht (nach dem Not-Halt-Tor), aber VOR der Bestätigung:
     // geht sie verloren, kann der Befehl trotzdem wirken (Codex 28317bd5).
     if (claimMode != null) setOwns(claimMode);
-    await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
+    // FC 16 (Write Multiple) für Register, die FC 06 (Write Single) nicht annehmen (manche Sungrow-Holding-
+    // Register, u. a. 13080 am SH10RT-20): dasselbe Register, ein Wort.
+    if (fc === 16) await transport.mbWriteMultiple({ ...endpoint(conf), address, values: [value & 0xffff] });
+    else await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
   }
 
   function foreignModeError(mode) {
@@ -598,17 +615,60 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     return err;
   }
 
+  // Herzschlag 13080 schreiben + zurücklesen, mit FC-Wahl. writeFc (config) → nur diese FC; sonst die zuletzt
+  // funktionierende FC zuerst, dann die andere; unbekannt → erst FC 06, dann FC 16 (manche Sungrow nehmen 13080
+  // nur per „Write Multiple" an). Wird der Wert übernommen, FC je Verbindung merken. Übernimmt der WR gar keinen
+  // Wert: acceptDeviceS > 0 und Gerätewert ≤ Grenze → Opt-in mit dem Gerätewert fahren (Warnung); sonst sicher
+  // scheitern (neutralizeHeartbeatFailure).
+  async function applyHeartbeat(conf, heartbeatS, opt, { writeFc = null, acceptDeviceS = 0 } = {}) {
+    const readHb = async () => {
+      const hb = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: HEARTBEAT_ADDR, quantity: 1 });
+      return Array.isArray(hb) ? (Number(hb[0]) & 0xffff) : NaN;
+    };
+    const tryFc = async (fc) => {
+      await writeReg(conf, HEARTBEAT_ADDR, heartbeatS, { ...opt, fc });
+      const hbRead = await readHb();
+      return { ok: hbRead === heartbeatS, hbRead, fc };
+    };
+    const order = writeFc ? [writeFc]
+      : (st.hb.workingFc ? [st.hb.workingFc, st.hb.workingFc === 6 ? 16 : 6] : [6, 16]);
+    let last = null;
+    for (const fc of order) {
+      last = await tryFc(fc);
+      if (last.ok) {
+        st.hb = { ...st.hb, key: st.endpointKey, supported: true, workingFc: fc, deviceManaged: false };
+        st.sentTimeoutS = heartbeatS;
+        st.lastHeartbeatAt = now();
+        logOnce('hb-fc-' + fc, 'sungrow_ems_heartbeat_fc', { fc, heartbeatS });
+        return;
+      }
+    }
+    const devHb = last?.hbRead;
+    if (acceptDeviceS > 0 && Number.isFinite(devHb) && devHb > 0 && devHb <= acceptDeviceS) {
+      // Opt-in: der WR verwaltet 13080 selbst — mit seinem Wert fahren. DVhub kann den Herzschlag nicht auffrischen;
+      // der Rückfall-Schutz greift erst nach dem (längeren) Gerätewert. Am Gerät prüfen.
+      st.hb = { ...st.hb, key: st.endpointKey, supported: true, workingFc: null, deviceManaged: true };
+      st.sentTimeoutS = devHb;
+      st.lastHeartbeatAt = now();
+      logOnce('hb-device-' + devHb, 'sungrow_ems_heartbeat_device_managed', {
+        deviceS: devHb, acceptS: acceptDeviceS,
+        text: 'Sungrow übernimmt keinen geschriebenen Herzschlag — DVhub fährt External EMS mit dem geräteeigenen Wert (' + devHb + ' s). Der Rückfall dauert bei einem Ausfall entsprechend länger. Am Gerät prüfen.'
+      }, 'warn');
+      return;
+    }
+    throw await neutralizeHeartbeatFailure(conf, devHb, heartbeatS);
+  }
+
   /**
    * Gewünschten Zustand schreiben (nur was abweicht; forceAll: alles) und zurücklesen. Wirft bei Fehler/Abweichung.
    * External EMS: Leistung → Befehl → Modus 3 → Herzschlag (heartbeatAfterMode, Standard; der WR setzt 13080 beim
    * Moduswechsel selbst und übernimmt unseren Wert erst danach). Der Herzschlag wird nach dem Schreiben zurückgelesen;
    * stimmt er nicht, wird sofort sicher in Self-consumption neutralisiert (heartbeat_mismatch).
    */
-  async function writeDecision(conf, decision, { neutralize = false, modeValue = EMS_MODE.FORCED, heartbeatS = null, forceAll = false, heartbeatAfterMode = true } = {}) {
+  async function writeDecision(conf, decision, { neutralize = false, modeValue = EMS_MODE.FORCED, heartbeatS = null, forceAll = false, heartbeatAfterMode = true, heartbeatWriteFc = null, acceptDeviceHeartbeatS = 0 } = {}) {
     const dev = st.dev || await readDevice(conf);
     // Ein fremdes EMS/VPP wird nie übersteuert, auch nicht im Not-Halt.
     if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
-    let heartbeatWritten = false;
     if (decision.mode === 'self') {
       const opt = { neutralize };
       if (dev.cmd !== EMS_CMD.STOP) await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, opt);
@@ -619,12 +679,12 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       if (decision.command !== 'stop' && (forceAll || dev.powerW !== decision.powerW)) await writeReg(conf, EMS_POWER_ADDR, decision.powerW, opt);
       if (forceAll || dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd, opt);
       const needHeartbeat = modeValue === EMS_MODE.EXTERNAL && (forceAll || dev.mode !== modeValue);
-      const writeHb = async () => { await writeReg(conf, HEARTBEAT_ADDR, heartbeatS, opt); st.sentTimeoutS = heartbeatS; heartbeatWritten = true; };
-      // Alte Reihenfolge (Herzschlag VOR dem Moduswechsel) nur, wenn heartbeatAfterMode ausdrücklich aus ist.
-      if (needHeartbeat && !heartbeatAfterMode) await writeHb();
+      // applyHeartbeat schreibt 13080 + liest zurück (FC-Fallback), scheitert sicher bzw. fährt opt-in mit dem
+      // Gerätewert. Standard NACH dem Moduswechsel (der WR setzt 13080 beim Eintritt in Modus 3 selbst).
+      const hb = async () => applyHeartbeat(conf, heartbeatS, opt, { writeFc: heartbeatWriteFc, acceptDeviceS: acceptDeviceHeartbeatS });
+      if (needHeartbeat && !heartbeatAfterMode) await hb();
       if (forceAll || dev.mode !== modeValue) await writeReg(conf, EMS_MODE_ADDR, modeValue, opt);
-      // Standard: Herzschlag NACH dem Moduswechsel (der WR hat 13080 beim Eintritt in Modus 3 selbst gesetzt).
-      if (needHeartbeat && heartbeatAfterMode) await writeHb();
+      if (needHeartbeat && heartbeatAfterMode) await hb();
     }
     st.dev = null;
     const back = await readDevice(conf);
@@ -632,12 +692,6 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       const err = new Error(`EMS-Rücklesung weicht ab (Soll ${describe(decision, modeValue)}, Ist Modus ${back.mode}, Befehl 0x${back.cmd.toString(16)}, ${back.powerW} W)`);
       err.code = 'readback_mismatch';
       throw err;
-    }
-    if (heartbeatWritten) {
-      const hb = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: HEARTBEAT_ADDR, quantity: 1 });
-      const hbRead = Array.isArray(hb) ? (Number(hb[0]) & 0xffff) : hb;
-      if (hbRead !== heartbeatS) throw await neutralizeHeartbeatFailure(conf, hbRead, heartbeatS);
-      st.lastHeartbeatAt = now();
     }
     // Erst ein bestätigtes Self-consumption gibt den Besitz ab.
     if (decision.mode === 'self') setOwns(null);
@@ -698,6 +752,14 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const ctl = resolveSungrowControl(cfg);
     const t = now();
     st.lastStepAt = t;
+    // (1d) Sperre ohne Neustart lösen: ändert der Betreiber die Herzschlag-Frist oder die Schreibfunktion (FC),
+    // die External-EMS-Sperre und die gemerkte FC zurücksetzen — der nächste Takt probiert es neu.
+    const hbSig = `${ctl.heartbeatTimeoutS}:${ctl.heartbeatWriteFc ?? 'auto'}:${ctl.acceptDeviceHeartbeatS}`;
+    if (st.hbCfgSig != null && st.hbCfgSig !== hbSig) {
+      st.hb = { key: null, supported: null, workingFc: null, deviceManaged: false };
+      pushLog('sungrow_ems_heartbeat_config_changed', { text: 'Herzschlag-Einstellung geändert — External-EMS-Sperre zurückgesetzt, neuer Versuch.' });
+    }
+    st.hbCfgSig = hbSig;
     const targetFresh = st.target && t - st.target.at <= opts.targetMaxAgeMs;
     // Zweiter WR (Parallelbetrieb): PV/Akku/Last/SoC sind in state.victron bereits die Systemsumme (der Poller
     // aggregiert sie bei aggregateTelemetry, polling.js), deshalb liest der Regler sie hier UNVERÄNDERT — NICHT
@@ -756,9 +818,13 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       // Herzschlag im Takt, solange DVhub External EMS fährt und dabei bleibt (die Doku verlangt genau das:
       // den Wert innerhalb der Frist erneut schreiben).
       if (ownsExternal && !gap && decision.mode === 'forced' && dev.mode === EMS_MODE.EXTERNAL) {
-        await writeReg(conf, HEARTBEAT_ADDR, ctl.heartbeatTimeoutS);
-        st.sentTimeoutS = ctl.heartbeatTimeoutS;
-        st.lastHeartbeatAt = now();
+        // Takt-Herzschlag mit der je Verbindung funktionierenden FC (Auto-Ergebnis). Gerätewert-Modus
+        // (deviceManaged): DVhub kann 13080 nicht auffrischen → nicht schreiben, der WR verwaltet die Frist selbst.
+        if (!st.hb.deviceManaged) {
+          await writeReg(conf, HEARTBEAT_ADDR, ctl.heartbeatTimeoutS, { fc: st.hb.workingFc || 6 });
+          st.sentTimeoutS = ctl.heartbeatTimeoutS;
+          st.lastHeartbeatAt = now();
+        }
       }
       if (!gap && emsMatches(dev, decision, decision.mode === 'forced' ? opts.stepW : 0, ctl.modeValue)) {
         if (decision.mode === 'self') setOwns(null);
@@ -766,7 +832,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         publish();
         return { ok: true, unchanged: true, decision };
       }
-      const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode });
+      const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
       st.error = null;
       st.logKeys = {};
       pushLog('sungrow_ems_write', {
@@ -793,13 +859,14 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         publish();
         return { ok: false, readError: true, error: st.error };
       } else if (e?.code === 'heartbeat_mismatch') {
-        // Herzschlag nicht übernommen: writeDecision hat bereits in Self-consumption neutralisiert und den Besitz
-        // abgegeben. Das Ziel NICHT weiterfahren (sonst triebe der nächste Takt denselben External-EMS-Versuch an
-        // und spränge wieder kurz auf vollen Netzbezug). Der Lauf-Fehler ist schon als heartbeat_unsupported
-        // gemeldet; der Aufrufer bekommt readError (kein control_write_error).
-        st.dev = null;
+        // Herzschlag nicht übernommen: writeDecision/applyHeartbeat hat bereits in Self-consumption neutralisiert
+        // und den Besitz abgegeben. Das Ziel NICHT weiterfahren (sonst triebe der nächste Takt denselben
+        // External-EMS-Versuch an und spränge wieder kurz auf vollen Netzbezug). Der Aufrufer bekommt readError
+        // (kein control_write_error). (1c) Die Anzeige zeigt jetzt Self-consumption statt ~20 s den alten
+        // forced-Befehl: st.dev stammt aus der Rücklesung der Neutralisierung, st.decision auf self.
         st.target = null;
         st.revokedReason = 'heartbeat_mismatch';
+        st.decision = { mode: 'self', reason: 'heartbeat_mismatch', at: now() };
         publish();
         return { ok: false, readError: true, error: st.error };
       } else {

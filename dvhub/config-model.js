@@ -1460,6 +1460,39 @@ function buildFieldDefinitions() {
       step: 100,
       help: 'Obergrenze für die Lade-/Entladeleistung, die DVhub dem Wechselrichter vorgibt — für ALLE Quellen (EOS, Regeln, §14a, Netzanschluss, Hand-Sollwert). Leer/0 = die Nennleistung des Geräts (bei zwei WR die Summe beider) gilt. Nützlich zur Inbetriebnahme, um die Leistung vorsichtig zu begrenzen. Es gilt immer der kleinste Wert aus Geräte-Nennleistung und dieser Vorgabe.'
     },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.heartbeatWriteFc',
+      label: 'Herzschlag-Schreibfunktion (13080)',
+      type: 'select',
+      default: 'auto',
+      options: [
+        { value: 'auto', label: 'Automatisch (erst FC 06, sonst FC 16)' },
+        { value: '6', label: 'FC 06 (Write Single)' },
+        { value: '16', label: 'FC 16 (Write Multiple)' }
+      ],
+      help: 'Nur bei External EMS: wie DVhub das Herzschlag-Register 13080 schreibt. Manche Sungrow (u. a. SH10RT-20) übernehmen 13080 nur per „Write Multiple" (FC 16). Automatisch (Standard): DVhub versucht beim ersten Mal FC 06 und bei Nichtübernahme einmal FC 16 und merkt sich, was funktioniert. Übernimmt der Wechselrichter gar keinen Wert, bricht DVhub External EMS sicher ab.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.acceptDeviceHeartbeatS',
+      label: 'Letzter Ausweg: geräteeigene Herzschlag-Frist akzeptieren (s)',
+      type: 'number',
+      min: 0,
+      max: 600,
+      step: 10,
+      help: 'Nur setzen, wenn der Wechselrichter den Herzschlag-Wert partout nicht übernimmt (nach Rücksprache). Dann fährt DVhub External EMS mit der geräteeigenen Frist, solange sie ≤ diesem Wert ist — der Rückfall-Schutz greift bei einem Ausfall dann erst nach dieser (längeren) Frist, nicht nach 30 s. 0/leer = aus (DVhub bricht bei Nichtübernahme sicher ab).'
+    },
 
     // Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (T-0422, Feldabnahme). Der Master mit dem Smart Meter
     // regelt (bestehende Verbindung victron.*); der zweite WR wird NUR gelesen. host leer = ein WR wie bisher.

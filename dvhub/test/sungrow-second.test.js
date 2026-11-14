@@ -369,37 +369,47 @@ test('6a: dauerhafter Kontroll-Lesefehler → sungrow_ems_read_error (warn) + re
 const MODEA = wire(13050), CMDA = wire(13051), HBA = wire(13080);
 
 // Modbus-Mock, der das WR-Verhalten bei 13080 nachbildet: beim Eintritt in Modus 3 setzt der WR 13080 selbst
-// auf 600; unseren Schreibwert übernimmt er je nach `accept` nie oder nur in Modus 3.
+// auf 600; unseren Schreibwert übernimmt er je nach `accept`: 'never' nie, 'mode3' per FC 06 nur in Modus 3,
+// 'fc16' nur per FC 16 (Write Multiple).
 function hbMock(image, { accept = 'never' } = {}) {
   const base = mockSungrow(image);
+  const setHb = (v, viaFc) => {
+    const mode = image.holding.get(MODEA);
+    if (accept === 'mode3' && viaFc === 6 && mode === EMS_MODE.EXTERNAL) image.holding.set(HBA, v);
+    else if (accept === 'fc16' && viaFc === 16) image.holding.set(HBA, v);
+    // sonst ignoriert (bleibt 600)
+  };
   return {
     type: 'modbus', reads: [], writes: [],
     async mbRequest(conf) { this.reads.push({ fc: Number(conf.fc), address: Number(conf.address) }); return base.mbRequest(conf); },
     async mbWriteSingle({ address, value }) {
       const v = value & 0xffff;
-      this.writes.push({ address, value: v });
+      this.writes.push({ fc: 6, address, value: v });
       if (address === MODEA && v === EMS_MODE.EXTERNAL) { image.holding.set(HBA, 600); image.holding.set(MODEA, v); return { addr: address, value: v }; }
-      if (address === HBA) {
-        if (accept === 'mode3' && image.holding.get(MODEA) === EMS_MODE.EXTERNAL) image.holding.set(HBA, v);
-        return { addr: address, value: v }; // sonst ignoriert (bleibt 600)
-      }
+      if (address === HBA) { setHb(v, 6); return { addr: address, value: v }; }
       image.holding.set(address, v);
       return { addr: address, value: v };
     },
-    async mbWriteMultiple() {},
+    async mbWriteMultiple({ address, values }) {
+      const v = Number(values?.[0]) & 0xffff;
+      this.writes.push({ fc: 16, address, value: v });
+      if (address === HBA) { setHb(v, 16); return {}; }
+      image.holding.set(address, v);
+      return {};
+    },
   };
 }
 
-function extRig(mock) {
-  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'external', heartbeatTimeoutS: 30 } });
-  const clock = 1_000_000;
+function extRig(mock, sungrowExtra = {}) {
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'external', heartbeatTimeoutS: 30, ...sungrowExtra } });
+  let clock = 1_000_000;
   const state = {
     victron: { soc: 60, batteryPowerW: 0, pvPowerW: 0, selfConsumptionW: 2100, errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock }, device: sungrowDevice() },
     meter: { ok: true, updatedAt: clock, grid_total_w: 2100 }, ctrl: {},
   };
   const logs = [];
   const ems = createSungrowEms({ state, getCfg: () => cfg, transport: mock, pushLog: (event, data, level) => logs.push({ event, data, level }), now: () => clock });
-  return { ems, state, logs, mock };
+  return { ems, state, logs, mock, cfg, advance: (ms) => { clock += ms; } };
 }
 
 test('Herzschlag (a/d/e): WR übernimmt 13080 nie → sofort in Self-consumption, owns false, Ziel verworfen, Event', async () => {
@@ -449,4 +459,76 @@ test('Herzschlag (c-Gegenprobe): alte Reihenfolge (heartbeatAfterMode=false) sch
   const res = await ems.applySetpoint(1000, 'api_manual_write');
   assert.equal(res.ok, false);                        // Herzschlag vor dem Moduswechsel → nicht angenommen → Abbruch
   assert.ok(logs.some((l) => l.event === 'sungrow_ems_heartbeat_unsupported'));
+});
+
+// --- Punkt 1 (Feldtest 2cc50b5c): FC-16-Fallback, Gerätewert-Opt-in, Anzeige, lösbare Sperre ----------
+
+test('1a: WR nimmt 13080 nur per FC 16 an → Auto-Fallback gelingt, workingFc=16', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'fc16' }));
+  const res = await r.ems.applySetpoint(1000, 'api_manual_write');
+  assert.equal(res.ok, true);                          // FC 06 scheiterte, FC 16 übernahm
+  assert.equal(image.holding.get(HBA), 30);
+  assert.equal(r.state.ctrl.sungrowEms.heartbeatWorkingFc, 16);
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  // Es wurde sowohl per FC 06 (ignoriert) als auch per FC 16 (übernommen) auf 13080 geschrieben.
+  assert.ok(r.mock.writes.some((w) => w.address === HBA && w.fc === 6));
+  assert.ok(r.mock.writes.some((w) => w.address === HBA && w.fc === 16 && w.value === 30));
+});
+
+test('1a: feste Schreibfunktion sungrow.heartbeatWriteFc=16 → direkt FC 16, kein FC-06-Versuch', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'fc16' }), { heartbeatWriteFc: 16 });
+  const res = await r.ems.applySetpoint(1000, 'api_manual_write');
+  assert.equal(res.ok, true);
+  assert.ok(!r.mock.writes.some((w) => w.address === HBA && w.fc === 6));
+  assert.ok(r.mock.writes.some((w) => w.address === HBA && w.fc === 16));
+});
+
+test('1b: WR übernimmt keinen Wert, acceptDeviceHeartbeatS=600 → mit Gerätewert fahren (Opt-in), owns bleibt', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'never' }), { acceptDeviceHeartbeatS: 600 });
+  const res = await r.ems.applySetpoint(1000, 'api_manual_write');
+  assert.equal(res.ok, true);                          // kein sicheres Scheitern — mit 600 s gefahren
+  assert.equal(r.state.ctrl.sungrowEms.heartbeatDeviceManaged, true);
+  assert.equal(r.state.ctrl.sungrowEms.heartbeatSentS, 600);
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_heartbeat_device_managed'));
+});
+
+test('1b: Gerätewert über der Grenze → kein Opt-in, sicher scheitern', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'never' }), { acceptDeviceHeartbeatS: 300 }); // 600 > 300
+  const res = await r.ems.applySetpoint(1000, 'api_manual_write');
+  assert.equal(res.ok, false);
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_heartbeat_unsupported'));
+});
+
+test('1c: Anzeige nach Abbruch zeigt Self-consumption, nicht den alten forced-Befehl', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'never' }));
+  await r.ems.applySetpoint(1000, 'api_manual_write');
+  const s = r.state.ctrl.sungrowEms;
+  assert.equal(s.decision.mode, 'self');
+  assert.equal(s.decision.reason, 'heartbeat_mismatch');
+  assert.equal(s.owns, false);
+  // device stammt aus der Rücklesung der Neutralisierung → Self (Modus 0), nicht der forced-Discharge-Stand.
+  assert.ok(s.device == null || s.device.mode === EMS_MODE.SELF);
+});
+
+test('1d: Sperre löst sich ohne Neustart, wenn die Herzschlag-Einstellung geändert wird', async () => {
+  const image = sungrowImage();
+  const r = extRig(hbMock(image, { accept: 'fc16' })); // FC 06 scheitert zunächst
+  // Erst FC 06 erzwingen → scheitert, Sperre.
+  r.cfg.sungrow.heartbeatWriteFc = 6;
+  const no = await r.ems.applySetpoint(1000, 'api_manual_write');
+  assert.equal(no.ok, false);
+  assert.equal(r.state.ctrl.sungrowEms.heartbeatSupported, false);
+  // Einstellung ändern (auf Auto) → Sperre zurückgesetzt, nächster Versuch gelingt per FC 16.
+  r.cfg.sungrow.heartbeatWriteFc = undefined;
+  r.advance(1000);
+  const yes = await r.ems.applySetpoint(1000, 'api_manual_write');
+  assert.equal(yes.ok, true);
+  assert.equal(r.state.ctrl.sungrowEms.heartbeatWorkingFc, 16);
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_heartbeat_config_changed'));
 });
