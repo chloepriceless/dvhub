@@ -13,6 +13,7 @@ import { createApiRoutes } from '../routes-api.js';
 import { mobileIntegrationsView, safeText } from '../services/mobile-link/integrations-view.js';
 import { checkRequest, READ_PATHS, CONTROL_PATHS } from '../services/mobile-link/permissions.js';
 import { mobileAutomationConfigView, parseMobileAutomationPatch, MOBILE_AUTOMATION_KEYS } from '../services/mobile-link/automation-view.js';
+import { withPlantBattery } from '../market-automation-builder.js';
 
 function mockRes() {
   const captured = { status: 0, body: '' };
@@ -211,7 +212,7 @@ describe('Börsenautomatik für die Handy-App — ohne Standort, nur benannte Fe
   it('lesen: die App bekommt Fenster, Reserve und Leistung, aber keinen Standort und keine Stufen', async () => {
     const out = await asApp(mockCtx(), 'GET', '/api/schedule/automation/config');
     assert.equal(out.status, 200);
-    assert.deepEqual(out.body.config, { enabled: true, searchWindowStart: '14:00', searchWindowEnd: '09:00', targetSlotCount: 4, maxDischargeW: -12000, minSocPct: 20 });
+    assert.deepEqual(out.body.config, { enabled: true, searchWindowStart: '14:00', searchWindowEnd: '09:00', targetSlotCount: 4, maxDischargeW: -12000, minSocPct: 20, maxDischargeFromPlant: false });
     assert.equal(out.body.optimizerEnabled, true);
     assert.equal(typeof out.body.globalMinSocPct, 'number');
     assert.doesNotMatch(out.text, /KOEDER|location|latitude|longitude|53\.5511|9\.9937|stages|plantBattery/);
@@ -227,7 +228,7 @@ describe('Börsenautomatik für die Handy-App — ohne Standort, nur benannte Fe
     const ctx = mockCtx();
     const out = await asApp(ctx, 'POST', '/api/schedule/automation/config', { enabled: false, minSocPct: 35, searchWindowStart: '15:30' });
     assert.equal(out.status, 200);
-    assert.deepEqual(out.body.config, { enabled: false, searchWindowStart: '15:30', searchWindowEnd: '09:00', targetSlotCount: 4, maxDischargeW: -12000, minSocPct: 35 });
+    assert.deepEqual(out.body.config, { enabled: false, searchWindowStart: '15:30', searchWindowEnd: '09:00', targetSlotCount: 4, maxDischargeW: -12000, minSocPct: 35, maxDischargeFromPlant: false });
     assert.doesNotMatch(out.text, /KOEDER|location|latitude|stages/);
     const saved = ctx.getCfg().schedule.smallMarketAutomation;
     assert.equal(saved.minSocPct, 35);
@@ -255,7 +256,7 @@ describe('Börsenautomatik für die Handy-App — ohne Standort, nur benannte Fe
 
   it('schreiben: ungültige Werte lehnt die Route ab', async () => {
     for (const body of [{ enabled: 'ja' }, { minSocPct: 101 }, { minSocPct: '20' }, { searchWindowStart: '24:00' }, { searchWindowEnd: '9:00' },
-      { maxDischargeW: 200000 }, { targetSlotCount: 0 }, { targetSlotCount: 2.5 }, {}]) {
+      { maxDischargeW: 200000 }, { targetSlotCount: 25 }, { targetSlotCount: -1 }, { targetSlotCount: 2.5 }, {}]) {
       const ctx = mockCtx();
       const out = await asApp(ctx, 'POST', '/api/schedule/automation/config', body);
       assert.equal(out.status, 400, JSON.stringify(body));
@@ -263,10 +264,40 @@ describe('Börsenautomatik für die Handy-App — ohne Standort, nur benannte Fe
     }
   });
 
+  // Gegenprüfung 56e1e0a8 (P2): Gibt „Meine Anlage“ die Entladeleistung vor, plant
+  // die Automatik mit ihr (withPlantBattery) — das eigene Feld wäre nur Schein.
+  it('Entladeleistung aus „Meine Anlage“: die App sieht den wirksamen Wert und kann ihn nicht überschreiben', async () => {
+    const ctx = mockCtx();
+    ctx.getCfg().optimizer.maxDischargeW = 8000;
+    ctx.getCfg().optimizer.inverterMaxPowerW = 10000;
+    const read = await asApp(ctx, 'GET', '/api/schedule/automation/config');
+    assert.equal(read.body.config.maxDischargeW, -8000, 'wirksam ist die kleinere Grenze der Anlage, nicht der Wert der Automatik (-12000)');
+    assert.equal(read.body.config.maxDischargeFromPlant, true);
+    assert.equal(withPlantBattery(ctx.getCfg().schedule.smallMarketAutomation, ctx.getCfg()).maxDischargeW, read.body.config.maxDischargeW, 'derselbe Wert, mit dem geplant wird');
+    const write = await asApp(ctx, 'POST', '/api/schedule/automation/config', { maxDischargeW: -5000, minSocPct: 30 });
+    assert.equal(write.status, 409);
+    assert.equal(write.body.error, 'managed_by_plant');
+    assert.equal(ctx.getCfg().schedule.smallMarketAutomation.maxDischargeW, -12000);
+    assert.equal(ctx.getCfg().schedule.smallMarketAutomation.minSocPct, 20, 'bei einem abgelehnten Feld wird nichts gespeichert');
+    // Die anderen Felder bleiben änderbar.
+    const other = await asApp(ctx, 'POST', '/api/schedule/automation/config', { minSocPct: 30 });
+    assert.equal(other.status, 200);
+    assert.equal(other.body.config.maxDischargeW, -8000);
+  });
+
+  it('Höchstzahl der Viertelstunden wie im Config-Modell: leer oder 0 = automatisch, höchstens 24', async () => {
+    const ctx = mockCtx();
+    for (const v of [0, null, 24]) {
+      const out = await asApp(ctx, 'POST', '/api/schedule/automation/config', { targetSlotCount: v });
+      assert.equal(out.status, 200, String(v));
+      assert.equal(out.body.config.targetSlotCount, v);
+    }
+  });
+
   it('die Sicht selbst: nur benannte, gültige Felder', () => {
     assert.deepEqual(MOBILE_AUTOMATION_KEYS, ['enabled', 'searchWindowStart', 'searchWindowEnd', 'targetSlotCount', 'maxDischargeW', 'minSocPct']);
-    assert.deepEqual(mobileAutomationConfigView({ enabled: true, minSocPct: 'viel', location: { latitude: 1 }, neu: 'KOEDER' }), { enabled: true });
-    for (const input of [undefined, null, [], 'x']) assert.deepEqual(mobileAutomationConfigView(input), {});
+    assert.deepEqual(mobileAutomationConfigView({ enabled: true, minSocPct: 'viel', location: { latitude: 1 }, neu: 'KOEDER' }), { enabled: true, maxDischargeFromPlant: false });
+    for (const input of [undefined, null, [], 'x']) assert.deepEqual(mobileAutomationConfigView(input), { maxDischargeFromPlant: false });
     assert.deepEqual(parseMobileAutomationPatch({ minSocPct: 25 }), { ok: true, patch: { minSocPct: 25 } });
     assert.equal(parseMobileAutomationPatch([1]).ok, false);
   });

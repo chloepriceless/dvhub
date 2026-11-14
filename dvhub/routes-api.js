@@ -8873,7 +8873,7 @@ export function createApiRoutes(ctx) {
       if (req.headers['x-dvhub-client'] === 'mobile-link') {
         return json(res, 200, {
           ok: true,
-          config: mobileAutomationConfigView(getCfg().schedule?.smallMarketAutomation),
+          config: mobileAutomationConfigView(getCfg().schedule?.smallMarketAutomation, resolvePlantBattery(getCfg())),
           optimizerEnabled: getCfg().optimizer?.enabled === true,
           globalMinSocPct
         });
@@ -8902,15 +8902,15 @@ export function createApiRoutes(ctx) {
       // nie location, stages oder engine (automation-view.js). Die Antwort
       // trägt dieselbe schmale Sicht.
       if (req.headers['x-dvhub-client'] === 'mobile-link') {
-        const parsed = parseMobileAutomationPatch(body);
-        if (!parsed.ok) return json(res, 400, { ok: false, error: parsed.error });
+        const parsed = parseMobileAutomationPatch(body, resolvePlantBattery(getCfg()));
+        if (!parsed.ok) return json(res, parsed.status || 400, { ok: false, error: parsed.error });
         const current = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
         current.schedule = current.schedule || {};
         current.schedule.smallMarketAutomation = { ...current.schedule.smallMarketAutomation, ...parsed.patch };
         ctx.saveAndApplyConfig(current);
         pushLog('sma_config_updated', { keys: Object.keys(parsed.patch) }, actorContext(req));
         ctx.regenerateSmallMarketAutomationRules().catch(e => pushLog('sma_regen_error', { error: e.message }));
-        return json(res, 200, { ok: true, config: mobileAutomationConfigView(getCfg().schedule?.smallMarketAutomation) });
+        return json(res, 200, { ok: true, config: mobileAutomationConfigView(getCfg().schedule?.smallMarketAutomation, resolvePlantBattery(getCfg())) });
       }
       const allowedKeys = new Set([
         'enabled', 'searchWindowStart', 'searchWindowEnd', 'targetSlotCount',
