@@ -54,6 +54,7 @@ export function sungrowImage(over = {}) {
   const holding = new Map([
     [wire(13050), 0], [wire(13051), 0xcc], [wire(13052), 0],     // Self-consumption, Stopp
     [wire(13080), 20], [wire(13081), 0xffff],                     // External-EMS-Herzschlag 20 s; 2. Wort 0xFFFF (Feld #3, Menge-2-Lesung)
+    [wire(33047), 1060], [wire(33048), 1000], [wire(33049), 1000], // Gerätegrenzen ×10: Laden 10,6 kW, Entladen 10 kW, Kapazität 10 kWh
     [wire(13074), 5000], [wire(13087), 0xaa], [wire(13088), 700] // Installateur: 5 kW, an, 70 %
   ]);
   for (const [k, v] of Object.entries(over.input || {})) input.set(Number(k), v);

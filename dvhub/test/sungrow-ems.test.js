@@ -182,6 +182,15 @@ test('Forced-Split B2: Eintritt — Slave bekommt NUR Leistung+Befehl (kein 1305
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_split_write'));
 });
 
+test('Forced-Split B3: gelesene Slave-Gerätegrenze (33048) kappt die Slave-Entladeleistung, Überlauf an den Master', async () => {
+  // Slave meldet eine Entlade-Gerätegrenze von 1500 W (33048) — kleiner als das 5-kW-Feld. Der Slave bekommt
+  // höchstens 1500 W, der Rest geht an den Master (Laden erbt diese Entladegrenze NICHT).
+  const r = splitRig({ second: { batteryPowerW: -500, pvPowerW: 0, socPct: 50, bdcRatedW: 10000, maxDischargeWDevice: 1500 } });
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.ok(r.slaveImage.holding.get(POWER) <= 1500, `Slave ≤ 1500: ${r.slaveImage.holding.get(POWER)}`);
+  assert.ok(r.masterImage.holding.get(POWER) > r.slaveImage.holding.get(POWER), 'Master übernimmt den Überlauf');
+});
+
 test('Forced-Split B2: Slave-Rücklesung prüft NUR Befehl/Leistung (Modus folgt dem Master) — Eintritt scheitert nicht, obwohl Slave-Modus noch 0 ist', async () => {
   // Der Slave-Modus bleibt im Abbild 0 (folgt in echt dem Master; der Mock koppelt das nicht). Mit der Modus-
   // Prüfung am Slave würde der Eintritt fälschlich scheitern — er darf NICHT.

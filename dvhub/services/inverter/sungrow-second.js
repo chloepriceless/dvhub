@@ -35,6 +35,9 @@ const ADDR = {
   bdcRatedW: wire(5628),     // U16, Doku 5628, ×100 W (Nennleistung des Lade-/Entladewandlers)
   batteryCapacityWh: wire(5639), // U16, Doku 5639 „Battery Capacity – High precision", 0,01 kWh → Wh = ·10 (nur Vorschlag)
   runningState: wire(13000), // U16, Doku 13000
+  maxChargeW: wire(33047),   // Holding, U16, ×10 W — Gerätegrenze Laden (B3: Standard-Ladegrenze)
+  maxDischargeW: wire(33048), // Holding, U16, ×10 W — Gerätegrenze Entladen
+  batteryCapacityLimit: wire(33049), // Holding, U16, ×10 Wh — konfigurierte Kapazität (GUI-Vorschlag)
 };
 
 const U16_NA = 0xffff;
@@ -70,6 +73,7 @@ export function createSungrowSecond(ctx, deps = {}) {
     ctx.state.sungrowSecond = {
       enabled: false, online: null, host: null,
       batteryPowerW: null, pvPowerW: null, socPct: null, bdcRatedW: null,
+      maxChargeWDevice: null, maxDischargeWDevice: null, batteryCapacityLimitWh: null,
       runningState: null, runningStateText: null, aggregate: false,
       errors, updatedAt: now(), ...extra,
     };
@@ -108,7 +112,12 @@ export function createSungrowSecond(ctx, deps = {}) {
 
     let readOk = false;
     let lastError = null;
-    const out = { batteryPowerW: null, pvPowerW: null, socPct: null, bdcRatedW: null, batteryCapacitySuggestionWh: null, runningState: null };
+    const out = { batteryPowerW: null, pvPowerW: null, socPct: null, bdcRatedW: null, batteryCapacitySuggestionWh: null, runningState: null, maxChargeWDevice: null, maxDischargeWDevice: null, batteryCapacityLimitWh: null };
+    // Holding-Register (FC 3, ×10): Gerätegrenzen Laden/Entladen (33047/33048) und Kapazität (33049) — best effort.
+    const readTen10 = async (address) => {
+      try { const v = u16((await transport.mbRequest({ host: c.host, port: c.port, unitId: c.unitId, fc: 3, address, quantity: 1, timeoutMs: c.timeoutMs }))?.[0]); return v == null || v === 0 ? null : v * 10; }
+      catch { return null; }
+    };
     try {
       const bat = await readReg(c, ADDR.batteryPowerW, 2);
       const sv = s32le(bat);
@@ -120,6 +129,9 @@ export function createSungrowSecond(ctx, deps = {}) {
       try { const bdc = u16((await readReg(c, ADDR.bdcRatedW, 1))?.[0]); out.bdcRatedW = bdc == null || bdc === 0 ? null : bdc * 100; } catch { out.bdcRatedW = null; }
       try { const cap = u16((await readReg(c, ADDR.batteryCapacityWh, 1))?.[0]); out.batteryCapacitySuggestionWh = cap == null || cap === 0 ? null : Math.round(cap * 10); } catch { out.batteryCapacitySuggestionWh = null; }
       try { out.runningState = u16((await readReg(c, ADDR.runningState, 1))?.[0]); } catch { out.runningState = null; }
+      out.maxChargeWDevice = await readTen10(ADDR.maxChargeW);
+      out.maxDischargeWDevice = await readTen10(ADDR.maxDischargeW);
+      out.batteryCapacityLimitWh = await readTen10(ADDR.batteryCapacityLimit);
       errors = 0;
       readOk = true;
     } catch (e) {
@@ -138,6 +150,9 @@ export function createSungrowSecond(ctx, deps = {}) {
       socPct: ok ? out.socPct : null,
       bdcRatedW: ok ? out.bdcRatedW : null,
       batteryCapacitySuggestionWh: ok ? out.batteryCapacitySuggestionWh : null,
+      maxChargeWDevice: ok ? out.maxChargeWDevice : null,
+      maxDischargeWDevice: ok ? out.maxDischargeWDevice : null,
+      batteryCapacityLimitWh: ok ? out.batteryCapacityLimitWh : null,
       runningState: ok ? out.runningState : null,
       runningStateText: ok ? runningStateText(out.runningState) : null,
       reason: ok ? null : (readOk ? null : 'read_failed'),

@@ -579,6 +579,10 @@ export function sungrowSecondView(state, cfg) {
     pvPowerW: pick(s?.pvPowerW),
     bdcRatedW: pick(s?.bdcRatedW),
     batteryCapacitySuggestionWh: pick(s?.batteryCapacitySuggestionWh),
+    // Gerätegrenzen (B3/H): gelesene Lade-/Entladegrenze (33047/33048) und Kapazität (33049) als GUI-Vorschlag.
+    maxChargeWDevice: pick(s?.maxChargeWDevice),
+    maxDischargeWDevice: pick(s?.maxDischargeWDevice),
+    batteryCapacityLimitWh: pick(s?.batteryCapacityLimitWh),
     runningState: online ? (s?.runningState ?? null) : null,
     runningStateText: online ? (s?.runningStateText ?? null) : null,
   };
@@ -1052,16 +1056,22 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const secondCfg = resolveSecondInverter(cfg);
     const masterBdc = Number(state.victron.device.bdcRatedW) || null;
     const charge = decision.command === 'charge';
-    const perWrMax = (ownMaxCfg, wrBdc) => {
-      const base = Number(ownMaxCfg) > 0 ? Number(ownMaxCfg) : (Number(wrBdc) > 0 ? Number(wrBdc) : 0);
-      return Number(wrBdc) > 0 ? Math.min(base, Number(wrBdc)) : base;
+    // Per-WR-Grenze (B3): die kleinste aus Feldeinstellung (optional), Gerätegrenze (Laden 33047, Entladen 33048,
+    // je ×10 W gelesen) und BDC-Nennleistung. Laden erbt NIE die Entladegrenze — jede Richtung ihre eigene Grenze.
+    // Fehlt eine Angabe, zählt sie nicht; ohne jede Angabe 0. Ein zu hoch gelesener Gerätewert kann nicht schaden
+    // (min mit BDC), ein zu niedriger regelt nur konservativer.
+    const perWrMax = (ownMaxCfg, deviceLimit, wrBdc) => {
+      const cands = [ownMaxCfg, deviceLimit, wrBdc].map(Number).filter((x) => Number.isFinite(x) && x > 0);
+      return cands.length ? Math.min(...cands) : 0;
     };
     const floor = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
     const maxSoc = Number(cfg.optimizer?.maxSocPct ?? 100);
     const masterSoc = state.victron.sungrowMasterSocPct ?? state.victron.soc;
     const slaveSoc = second.socPct;
-    const masterMax = perWrMax(charge ? optMaster.maxChargeW : optMaster.maxDischargeW, masterBdc);
-    const slaveMax = perWrMax(charge ? si.maxChargeW : si.maxDischargeW, second.bdcRatedW);
+    const masterDev = state.victron.device || {};
+    const slaveDev = state.sungrowSecond || {};
+    const masterMax = perWrMax(charge ? optMaster.maxChargeW : optMaster.maxDischargeW, charge ? masterDev.maxChargeWDevice : masterDev.maxDischargeWDevice, masterBdc);
+    const slaveMax = perWrMax(charge ? si.maxChargeW : si.maxDischargeW, charge ? slaveDev.maxChargeWDevice : slaveDev.maxDischargeWDevice, second.bdcRatedW);
     const strategy = charge ? secondCfg.strategyCharge : secondCfg.strategyDischarge;
     const { masterW, slaveW, slaveUncommanded } = splitStrategyShares(strategy, {
       powerW: decision.powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,

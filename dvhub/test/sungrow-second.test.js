@@ -82,8 +82,13 @@ test('Begleitdienst: liest den zweiten WR aus (PV, Akku −scale, SoC, BDC) und 
   assert.equal(s.bdcRatedW, 10000);
   // Entscheidend: kein einziger Schreibzugriff.
   assert.deepEqual(t.writes, []);
-  // Nur FC-4-Lesen.
-  assert.ok(t.reads.every((x) => x.fc === 4));
+  // Gerätegrenzen 33047/48/49 (Holding, FC 3) werden als GUI-Vorschlag mitgelesen (×10).
+  assert.equal(s.maxChargeWDevice, image.holding.get(wire(33047)) * 10);
+  assert.equal(s.maxDischargeWDevice, image.holding.get(wire(33048)) * 10);
+  assert.equal(s.batteryCapacityLimitWh, image.holding.get(wire(33049)) * 10);
+  // Telemetrie ist FC-4-Lesen; die einzigen FC-3-Lesungen sind die Holding-Gerätegrenzen (nie ein Write).
+  const nonFc4 = t.reads.filter((x) => x.fc !== 4);
+  assert.ok(nonFc4.every((x) => x.fc === 3 && [wire(33047), wire(33048), wire(33049)].includes(x.address)), 'nur die Gerätegrenzen per FC 3');
 });
 
 test('Begleitdienst: ohne host keine einzige Anfrage', async () => {
@@ -191,8 +196,8 @@ test('sungrowSecondView: ohne Konfiguration null', () => {
 
 test('sungrowSecondView: online → Werte, OHNE host/LAN-IP; offline → Werte null, online:false', () => {
   const cfg = { sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true } } };
-  const online = sungrowSecondView({ sungrowSecond: { online: true, host: '192.168.68.83', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600 } }, cfg);
-  assert.deepEqual(online, { online: true, aggregate: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, runningState: null, runningStateText: null });
+  const online = sungrowSecondView({ sungrowSecond: { online: true, host: '192.168.68.83', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, maxChargeWDevice: 10000, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000 } }, cfg);
+  assert.deepEqual(online, { online: true, aggregate: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, maxChargeWDevice: 10000, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000, runningState: null, runningStateText: null });
   // Keine LAN-IP / kein host in der Statusausgabe.
   assert.ok(!('host' in online));
   const off = sungrowSecondView({ sungrowSecond: { online: false, host: '192.168.68.83', socPct: 61 } }, cfg);
