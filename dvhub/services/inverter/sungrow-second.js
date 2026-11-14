@@ -11,6 +11,9 @@
 //
 // Dieser Dienst liest den ZWEITEN Wechselrichter nur aus (eigener Modbus-Pool, eigener träger Takt, kurzes
 // Zeitlimit), damit eine hängende zweite Verbindung den Master-Steuerpfad nie ausbremst. Er schreibt NIE.
+// (Punkt 3, Split-Steuerung: ein separater EMS-Aktuator — zweite createSungrowEms-Instanz in schedule-eval —
+// SCHREIBT bei sungrow.secondInverter.control = 'split' an den Slave, über DENSELBEN Modbus-Pool wie dieser
+// Lesedienst, damit ein WiNet-S nur einen Modbus-Client sieht. Dieser Lesedienst selbst bleibt reines Lesen.)
 // Veröffentlicht state.sungrowSecond für die Anzeige. Nur wenn der Betreiber am Gerät geprüft hat, dass der
 // Master die System-Summen NICHT meldet (jeder WR meldet nur seine eigene PV/Akku-Leistung), darf er
 // sungrow.secondInverter.aggregateTelemetry einschalten — dann zählt createSungrowEms PV/Akku/Leistungsgrenze

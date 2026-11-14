@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import {
   createSungrowEms, resolveSecondInverter, secondInverterTelemetry, wire, EMS_CMD, EMS_MODE,
-  sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor, sungrowReserveWh, sungrowHeadroomWh
+  sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor, sungrowReserveWh, sungrowHeadroomWh, splitSungrowPower
 } from '../services/inverter/sungrow.js';
 import { createSungrowSecond } from '../services/inverter/sungrow-second.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
@@ -592,4 +592,101 @@ test('Punkt 2: SoC-Reserve/Headroom je WR (SoC 80/20, Kapazität 10/5 kWh, Boden
   assert.equal(sungrowReserveWh(null, 10000), null);
   assert.equal(sungrowHeadroomWh(80, 10000, 100), 2000);
   assert.equal(sungrowHeadroomWh(20, 5000, 100), 4000);
+});
+
+// --- Punkt 3: Split-Steuerung — Vorgabe auf BEIDE WR, sicher scheitern ---------------------------------
+
+test('splitSungrowPower (rein): nach Gewicht, an die Grenze geklemmt, Überlauf zum anderen', () => {
+  // Entladen 5600, Master-Reserve 7000 / Slave-Reserve 500, je max 5000 → Master 5000 (an der Grenze), Slave 600.
+  assert.deepEqual(splitSungrowPower({ command: 'discharge', powerW: 5600 }, { maxW: 5000, weight: 7000 }, { maxW: 5000, weight: 500 }), { masterW: 5000, slaveW: 600 });
+  // 3000 auf 5/5 bei Reserve 7000/500 → Master 2800, Slave 200.
+  assert.deepEqual(splitSungrowPower({ command: 'discharge', powerW: 3000 }, { maxW: 5000, weight: 7000 }, { maxW: 5000, weight: 500 }), { masterW: 2800, slaveW: 200 });
+  // Ein WR an der Grenze (Master max 1000) → Rest auf den Slave.
+  assert.deepEqual(splitSungrowPower({ command: 'discharge', powerW: 3000 }, { maxW: 1000, weight: 5000 }, { maxW: 5000, weight: 5000 }), { masterW: 1000, slaveW: 2000 });
+  // Ohne Slave → alles auf den Master (bis zu dessen Grenze).
+  assert.deepEqual(splitSungrowPower({ command: 'discharge', powerW: 3000 }, { maxW: 5000, weight: 5000 }, null), { masterW: 3000, slaveW: 0 });
+});
+
+const SPOWER = wire(13052), SMODE = wire(13050), SCMD = wire(13051);
+
+function dualMock(mImage, sImage, slaveHost, opts = {}) {
+  const m = mockSungrow(mImage, opts.master || {});
+  const s = mockSungrow(sImage, opts.slave || {});
+  const pick = (host) => (host === slaveHost ? s : m);
+  return {
+    type: 'modbus',
+    mbRequest: (c) => pick(c.host).mbRequest(c),
+    mbWriteSingle: (c) => pick(c.host).mbWriteSingle(c),
+    mbWriteMultiple: (c) => pick(c.host).mbWriteMultiple(c),
+    master: m, slave: s,
+  };
+}
+
+function splitRig({ masterSoc = 80, slaveSoc = 20, batteryPowerW = -3000, grid = -3000, setpoint = -3000, controlMode = 'forced', optimizer = {}, secondPowers = {}, slaveMock = {} } = {}) {
+  const slaveHost = '192.168.68.83';
+  const cfg = loadSungrowConfig({
+    gridPositiveMeans: 'grid_import',
+    sungrow: { controlMode, heartbeatTimeoutS: 30, secondInverter: { host: slaveHost, aggregateTelemetry: true, control: 'split', maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 5000, ...secondPowers } },
+    optimizer: { maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000, hardFloorSocPct: 10, maxSocPct: 100, ...optimizer },
+  });
+  const mImage = sungrowImage(); const sImage = sungrowImage();
+  const t = dualMock(mImage, sImage, slaveHost, { slave: slaveMock });
+  const clock = 1_000_000;
+  const state = {
+    victron: { soc: Math.round((masterSoc + slaveSoc) / 2), sungrowMasterSocPct: masterSoc, batteryPowerW, pvPowerW: 0, selfConsumptionW: 500, errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock }, device: sungrowDevice({ bdcRatedW: 10000 }) },
+    meter: { ok: true, updatedAt: clock, grid_total_w: grid }, ctrl: {},
+    sungrowSecond: { online: true, updatedAt: clock, socPct: slaveSoc, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 10000 },
+  };
+  const logs = [];
+  const slaveEms = createSungrowEms({ state, getCfg: () => cfg, transport: t, now: () => clock, statusKey: 'sungrowEmsSlave', connOverride: () => ({ host: slaveHost, port: 502, unitId: 1 }) });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, now: () => clock, pushLog: (e, d, l) => logs.push({ event: e, data: d, level: l }), slaveActuator: slaveEms });
+  return { ems, slaveEms, t, state, cfg, mImage, sImage, logs, setpoint };
+}
+
+test('Split: Entladen 3 kW bei SoC 80/20 → Master 2800 (mehr Reserve), Slave 200, beide forced discharge', async () => {
+  const r = splitRig({ masterSoc: 80, slaveSoc: 20 });
+  const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  assert.equal(res.ok, true);
+  assert.equal(r.mImage.holding.get(SPOWER), 2800);
+  assert.equal(r.sImage.holding.get(SPOWER), 200);
+  assert.equal(r.mImage.holding.get(SMODE), EMS_MODE.FORCED);
+  assert.equal(r.sImage.holding.get(SMODE), EMS_MODE.FORCED);
+  assert.equal(r.mImage.holding.get(SCMD), EMS_CMD.DISCHARGE);
+  assert.equal(r.sImage.holding.get(SCMD), EMS_CMD.DISCHARGE);
+});
+
+test('Split: ein WR an der Grenze → der andere übernimmt', async () => {
+  const r = splitRig({ masterSoc: 80, slaveSoc: 20, optimizer: { maxDischargeW: 1000 } }); // Master nur 1000 W
+  await r.ems.applySetpoint(r.setpoint, 'rule:abend'); // System-Entladung 3000
+  assert.equal(r.mImage.holding.get(SPOWER), 1000);     // Master an der Grenze
+  assert.equal(r.sImage.holding.get(SPOWER), 2000);     // Slave übernimmt den Rest
+});
+
+test('Split: Slave offline → nur Master (voller Anteil), kein Slave-Write', async () => {
+  const r = splitRig({ masterSoc: 80, slaveSoc: 20 });
+  r.state.sungrowSecond.online = false;                 // Slave nicht einbezogen → kein Split
+  await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  assert.equal(r.mImage.holding.get(SPOWER), 3000);     // voller System-Anteil auf den Master
+  assert.deepEqual(r.t.slave.writes, []);               // nichts an den Slave geschrieben
+});
+
+test('Split: Not-Halt → beide zurück in Self-consumption', async () => {
+  const r = splitRig({ masterSoc: 80, slaveSoc: 20 });
+  await r.ems.applySetpoint(r.setpoint, 'rule:abend');   // beide forced discharge
+  r.state.ctrl.discretionaryWritesPaused = true;
+  r.state.ctrl.pausedAt = 42;
+  await r.ems.emergencyStop();
+  assert.equal(r.mImage.holding.get(SMODE), EMS_MODE.SELF);
+  assert.equal(r.sImage.holding.get(SMODE), EMS_MODE.SELF);
+});
+
+test('Split (External EMS): Herzschlag am Slave scheitert → BEIDE neutralisiert', async () => {
+  // Slave ignoriert 13080-Writes (bleibt 20) → Herzschlag-Rücklesung weicht ab → applyDirectCommand scheitert
+  // → neutralizeBoth.
+  const r = splitRig({ masterSoc: 80, slaveSoc: 20, controlMode: 'external', slaveMock: { ignoreWriteAt: HBA } });
+  const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  assert.equal(res.ok, false);
+  assert.equal(r.mImage.holding.get(SMODE), EMS_MODE.SELF);   // Master neutralisiert
+  assert.equal(r.sImage.holding.get(SMODE), EMS_MODE.SELF);   // Slave neutralisiert
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_split_aborted'));
 });

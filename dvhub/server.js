@@ -1177,6 +1177,7 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
 // Sungrow-EMS (T-0422): Merker, dass DVhub den Zwangs-/External-EMS-Betrieb gesetzt hat (übersteht Neustarts).
 const SUNGROW_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_state.json');
+const SUNGROW_SLAVE_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_slave_state.json');
 // Peak Shaving (GitHub #28): eine von DVhub aufgehobene Akku-Sperre (Victron
 // 2704) steht gespeichert im GX — der Merker sorgt dafür, dass ein neuer
 // Prozess sie zurückschreibt statt sie zu vergessen.
@@ -1399,6 +1400,7 @@ setNotHaltProbe(() => state.ctrl.discretionaryWritesPaused === true);
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
   sungrowEmsStatePath: SUNGROW_EMS_STATE_PATH,
+  sungrowSlaveEmsStatePath: SUNGROW_SLAVE_EMS_STATE_PATH,
   peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
   // Nur der Laufzeit-Prozess regelt — nur er liest und schreibt den Merker.
   gridConnectionAssistPath: IS_RUNTIME_PROCESS ? GRID_CONNECTION_ASSIST_PATH : null,
@@ -1543,6 +1545,12 @@ ctx.getIsDay = (now = Date.now()) => {
 };
 const mab = createMarketAutomationBuilder(ctx);
 ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRules;
+// Gemeinsamer Modbus-Pool für den ZWEITEN Sungrow-WR (Lesen durch den Companion, Schreiben durch den
+// Slave-EMS der Split-Steuerung): EINE Verbindung zum Slave, damit ein WiNet-S (nur ein Modbus-Client) nicht
+// durch zwei Verbindungen blockiert. Eigener Pool, damit ein hängender Slave den Master-Pfad nie ausbremst.
+ctx.sungrowSlaveTransport = (transport.type === 'modbus')
+  ? createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs })
+  : null;
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 // Sungrow-EMS (T-0422): Not-Halt nimmt einen von DVhub gesetzten Zwangsbetrieb
@@ -1608,7 +1616,7 @@ if (IS_RUNTIME_PROCESS) ctx.multiGx.start();
 // Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (services/inverter/sungrow-second): NUR LESEND, eigener
 // Modbus-Pool. Steuerung geht laut Sungrow-Doku nur an den Master (createSungrowEms). Ohne
 // sungrow.secondInverter.host keine einzige Anfrage.
-ctx.sungrowSecond = createSungrowSecond(ctx, { transport: createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
+ctx.sungrowSecond = createSungrowSecond(ctx, { transport: ctx.sungrowSlaveTransport || createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
 if (IS_RUNTIME_PROCESS) ctx.sungrowSecond.start();
 ctx.applyControlTarget = scheduler.applyControlTarget;
 // Geteilte Steuer-Primitiven (services/control-commands.js): HTTP-Routen UND der
@@ -3237,6 +3245,7 @@ async function gracefulShutdown(signal) {
     safeAsync('mqttHub.close', () => mqttHub.close()),
     // Close Modbus TCP connections gracefully (FIN, not RST)
     safeAsync('transport.destroy', () => transport.destroy()),
+    safeAsync('sungrowSlaveTransport.destroy', () => ctx.sungrowSlaveTransport?.destroy?.()),
     safeAsync('scanTransport.destroy', () => scanTransport.destroy()),
     safeAsync('vpnManager.close', () => vpnManager.close()),
     // Plan 29-07A: license poller has a 24h setInterval + boot timeout (close() at services/license/index.js).

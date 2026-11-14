@@ -306,6 +306,12 @@ export function resolveSecondInverter(cfg) {
     unitId: Number.isFinite(Number(c.unitId)) ? Number(c.unitId) : 1,
     timeoutMs: Number.isFinite(t) && t > 0 ? t : 1500,
     aggregateTelemetry: c.aggregateTelemetry === true,
+    // Steuerung des zweiten WR (Punkt 3): 'self-only' (Standard = heute, nur Lesen; der Master verteilt bei
+    // Vorgaben intern) oder 'split' (DVhub teilt die Reglerleistung auf und schreibt an BEIDE WR).
+    control: c.control === 'split' ? 'split' : 'self-only',
+    maxChargeW: Number(c.maxChargeW) || 0,
+    maxDischargeW: Number(c.maxDischargeW) || 0,
+    batteryCapacityWh: Number(c.batteryCapacityWh) || 0,
     enabled: host.length > 0,
   };
 }
@@ -360,6 +366,34 @@ export function sungrowHeadroomWh(socPct, capacityWh, maxSocPct = 100) {
   if (socPct == null || !Number.isFinite(Number(socPct)) || !(Number(capacityWh) > 0)) return null;
   const soc = Number(socPct); const cap = Number(capacityWh); const ceil = Number.isFinite(Number(maxSocPct)) ? Number(maxSocPct) : 100;
   return Math.round(Math.max(0, ((ceil - soc) / 100) * cap));
+}
+
+/**
+ * Reglerleistung auf zwei WR aufteilen (Punkt 3, Split-Steuerung). master/slave: { maxW, weight }. maxW = die
+ * Lade- bzw. Entladegrenze DIESES WR für die aktuelle Richtung; weight = nutzbare Reserve (Entladen) bzw. freier
+ * Platz (Laden) in Wh. Aufteilung nach Gewicht (ohne Gewicht nach maxW); an die jeweilige Grenze geklemmt, der
+ * Überlauf geht an den anderen (ein WR an der Grenze bekommt den Rest nicht — der andere übernimmt). Ohne
+ * verfügbaren Slave alles auf den Master.
+ * @returns {{masterW:number, slaveW:number}}
+ */
+export function splitSungrowPower(decision, master, slave) {
+  const p = Math.max(0, Math.round(Number(decision?.powerW) || 0));
+  const mMax = Math.max(0, Number(master?.maxW) || 0);
+  const sMax = slave ? Math.max(0, Number(slave?.maxW) || 0) : 0;
+  if (p <= 0 || mMax + sMax <= 0) return { masterW: 0, slaveW: 0 };
+  if (!slave || sMax <= 0) return { masterW: Math.min(p, mMax), slaveW: 0 };
+  const mW = Math.max(0, Number(master?.weight) || 0);
+  const sW = Math.max(0, Number(slave?.weight) || 0);
+  const totalW = mW + sW;
+  const masterShare = totalW > 0 ? p * (mW / totalW) : p * (mMax / (mMax + sMax));
+  let masterW = Math.min(Math.round(masterShare), mMax);
+  let slaveW = Math.min(p - masterW, sMax);
+  const rest = p - (masterW + slaveW);
+  if (rest > 0) {
+    if (masterW < mMax) masterW = Math.min(mMax, masterW + rest);
+    else slaveW = Math.min(sMax, slaveW + rest);
+  }
+  return { masterW, slaveW };
 }
 
 /** Niedrigerer der beiden SoC — Grundlage des SoC-Bodens (schützt den schwächeren Akku). null, wenn keiner bekannt. */
@@ -425,7 +459,7 @@ export function sungrowSecondView(state, cfg) {
  * (Modus 2, ohne Rückfall). Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Modus gesetzt hat
  * (oder gesetzt haben könnte), danach nichts mehr — auch kein Herzschlag.
  */
-export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null }) {
   const st = {
     target: null,        // { setpointW, source, at }
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
@@ -491,7 +525,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   function publish() {
     if (!state.ctrl) return;
     const ctl = resolveSungrowControl(getCfg());
-    state.ctrl.sungrowEms = {
+    state.ctrl[statusKey] = {
       controlMode: ctl.mode,
       heartbeatTimeoutS: ctl.heartbeatTimeoutS,
       heartbeatSupported: st.hb.supported,
@@ -509,13 +543,21 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     };
   }
 
+  // connOverride: zweite (Slave-)Instanz schreibt an eine andere Verbindung als die victron.*-Hauptverbindung;
+  // als Funktion ausgewertet (Host/Port/Unit-ID kommen aus der Config und können sich ändern).
+  const resolveOverride = () => (typeof connOverride === 'function' ? connOverride() : connOverride);
   function endpoint(conf) {
+    const o = resolveOverride();
+    if (o && o.host) {
+      return { host: o.host, port: Number(o.port) || 502, unitId: Number.isFinite(Number(o.unitId)) ? Number(o.unitId) : 1, timeoutMs: o.timeoutMs || conf.timeoutMs };
+    }
     return { host: conf.host, port: conf.port, unitId: conf.unitId, timeoutMs: conf.timeoutMs };
   }
+  const overrideKey = () => { const o = resolveOverride(); return o && o.host ? `${o.host}:${Number(o.port) || 502}:${Number.isFinite(Number(o.unitId)) ? Number(o.unitId) : 1}` : null; };
 
   // Verbindung gewechselt (andere Adresse/Port/Unit-ID): alles Gemerkte gehört zum alten Gerät.
   function syncEndpoint(cfg) {
-    const key = endpointKeyOf(cfg?.victron);
+    const key = overrideKey() || endpointKeyOf(cfg?.victron);
     if (st.endpointKey === key) return;
     if (st.endpointKey != null && (st.owns || st.target)) {
       pushLog('sungrow_ems_endpoint_changed', { from: st.endpointKey, to: key, ownedForced: st.owns }, st.owns ? 'warn' : undefined);
@@ -753,6 +795,86 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   }
   const due = (everyMs) => now() - st.lastStepAt >= everyMs - TICK_JITTER_MS;
 
+  // Beide WR sicher in Self-consumption (Split-Abbruch): Master neutralisieren (writeDecision self), Slave über
+  // seinen eigenen Pfad, Besitz abgeben, Ziel verwerfen. Best effort — Self ist immer die sichere Seite.
+  async function neutralizeBoth(reason) {
+    try { st.dev = null; await writeDecision(sungrowEmsConf(getCfg()), { mode: 'self', reason }, { neutralize: true }); } catch { /* best effort */ }
+    try { await slaveActuator.neutralize(reason); } catch { /* best effort */ }
+    setOwns(null);
+    st.target = null;
+    st.revokedReason = reason;
+  }
+
+  // Split-Steuerung: die Reglerentscheidung auf beide WR schreiben. Self → Master Self + Slave zurückziehen.
+  // Forced → Leistung nach Punkt-2-Grenzen und SoC-Reserve/Headroom aufteilen, Slave zuerst, dann Master;
+  // scheitert EINER (Herzschlag, Rücklesen, fremder Modus, …) → BEIDE sicher in Self-consumption.
+  async function stepSplit({ conf, ctl, decision, gap, second, reason, t, opts }) {
+    const cfg = getCfg();
+    const optMaster = cfg.optimizer || {};
+    const si = cfg.sungrow?.secondInverter || {};
+    if (decision.mode === 'self') {
+      try {
+        if (!emsMatches(st.dev, decision, 0, ctl.modeValue) || gap) {
+          const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
+          void back;
+        } else if (decision.mode === 'self') setOwns(null);
+      } catch (e) {
+        st.error = e?.message || String(e); st.dev = null; publish();
+        logOnce(st.error, 'sungrow_ems_error', { error: st.error, decision }, 'warn');
+        return { ok: false, error: st.error };
+      }
+      // Slave bei Self zurückziehen (auf 0 / Self-consumption), falls er noch von DVhub gefahren wird.
+      try { await slaveActuator.neutralize('self'); } catch { /* best effort */ }
+      st.error = null; publish();
+      return { ok: true, split: true, decision };
+    }
+    // Forced: Aufteilung berechnen.
+    const masterBdc = Number(state.victron.device.bdcRatedW) || null;
+    const charge = decision.command === 'charge';
+    const perWrMax = (ownMaxCfg, wrBdc) => {
+      const base = Number(ownMaxCfg) > 0 ? Number(ownMaxCfg) : (Number(wrBdc) > 0 ? Number(wrBdc) : 0);
+      return Number(wrBdc) > 0 ? Math.min(base, Number(wrBdc)) : base;
+    };
+    const floor = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
+    const maxSoc = Number(cfg.optimizer?.maxSocPct ?? 100);
+    const masterSoc = state.victron.sungrowMasterSocPct ?? state.victron.soc;
+    const slaveSoc = second.socPct;
+    const masterMax = perWrMax(charge ? optMaster.maxChargeW : optMaster.maxDischargeW, masterBdc);
+    const slaveMax = perWrMax(charge ? si.maxChargeW : si.maxDischargeW, second.bdcRatedW);
+    const masterWeight = charge ? sungrowHeadroomWh(masterSoc, optMaster.batteryCapacityWh, maxSoc) : sungrowReserveWh(masterSoc, optMaster.batteryCapacityWh, floor);
+    const slaveWeight = charge ? sungrowHeadroomWh(slaveSoc, si.batteryCapacityWh, maxSoc) : sungrowReserveWh(slaveSoc, si.batteryCapacityWh, floor);
+    const { masterW, slaveW } = splitSungrowPower(decision, { maxW: masterMax, weight: masterWeight || 0 }, { maxW: slaveMax, weight: slaveWeight || 0 });
+    const mk = (w) => (w >= opts.minPowerW ? { mode: 'forced', command: decision.command, powerW: w, reason: decision.reason } : { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason });
+    const slaveDecision = mk(slaveW);
+    const masterDecision = mk(masterW);
+    // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst). Scheitert er → beide sicher in Self.
+    const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
+    if (!sr.ok) {
+      await neutralizeBoth('split_slave_failed');
+      st.error = `split_slave: ${sr.error || 'failed'}`;
+      logOnce(st.error, 'sungrow_ems_split_aborted', { side: 'slave', error: sr.error || null }, 'warn');
+      st.decision = { mode: 'self', reason: 'split_slave_failed', at: t };
+      publish();
+      return { ok: false, readError: sr.readError === true, error: st.error };
+    }
+    // Master-Anteil. Scheitert er → beide sicher in Self.
+    try {
+      const back = await writeDecision(conf, masterDecision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
+      st.error = null; st.logKeys = {};
+      st.decision = { ...decision, at: t, trigger: reason, split: { masterW, slaveW } };
+      pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW, slaveW, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
+      publish();
+      return { ok: true, split: true, decision, masterW, slaveW };
+    } catch (e) {
+      await neutralizeBoth('split_master_failed');
+      st.error = e?.message || String(e);
+      logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error }, 'warn');
+      st.decision = { mode: 'self', reason: 'split_master_failed', at: t };
+      publish();
+      return { ok: false, readError: e?.code === 'heartbeat_mismatch', error: st.error };
+    }
+  }
+
   async function step({ reason = 'tick' } = {}) {
     const cfg = getCfg();
     const conf = sungrowEmsConf(cfg);
@@ -851,6 +973,11 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
           st.sentTimeoutS = ctl.heartbeatTimeoutS;
           st.lastHeartbeatAt = now();
         }
+      }
+      // Split-Steuerung (Punkt 3): zweiter WR ist 'split' UND einbezogen → Reglerleistung auf BEIDE schreiben.
+      const secondCfg = resolveSecondInverter(cfg);
+      if (slaveActuator && secondCfg.control === 'split' && second != null) {
+        return await stepSplit({ conf, ctl, decision, gap, second, reason, t, opts });
       }
       if (!gap && emsMatches(dev, decision, decision.mode === 'forced' ? opts.stepW : 0, ctl.modeValue)) {
         if (decision.mode === 'self') setOwns(null);
@@ -972,6 +1099,8 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     return serial(async () => {
       const pausedAt = Number(state.ctrl?.pausedAt) || 0;
       st.target = null;
+      // Not-Halt gilt für BEIDE WR: auch den Slave (Split-Steuerung) einmal zurück in Self-consumption.
+      if (slaveActuator) { try { await slaveActuator.neutralize('emergency_stop'); } catch { /* best effort */ } }
       if (st.neutralizedAt === pausedAt) return { ok: true, skipped: true, reason: 'already_done' };
       st.neutralizedAt = pausedAt;
       const cfg = getCfg();
@@ -993,7 +1122,66 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     });
   }
 
-  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, status: () => (publish(), state.ctrl?.sungrowEms || null), _st: st };
+  /**
+   * Zweite (Slave-)Instanz (Punkt 3, Split-Steuerung): einen fertigen Befehl (nicht Sollwert-geregelt) direkt an
+   * den Slave schreiben — alle Sicherheits-Schritte wie beim Master (Herzschlag-FC-Fallback, Rücklesen, sicheres
+   * Scheitern, fremder Modus). Umgeht das Geräte-Tor (das Slave-Gerät wird nicht separat erkannt). Serialisiert.
+   */
+  function applyDirectCommand(decision, ctl) {
+    return serial(async () => {
+      const cfg = getCfg();
+      const conf = sungrowEmsConf(cfg);
+      if (!conf || transport?.type !== 'modbus') return { ok: false, error: 'sungrow_ems_not_configured' };
+      syncEndpoint(cfg);
+      if (state.ctrl?.discretionaryWritesPaused) return { ok: false, blocked: true, error: 'emergency_stop_active' };
+      const control = ctl || resolveSungrowControl(cfg);
+      st.lastStepAt = now();
+      try {
+        st.dev = null;
+        const back = await writeDecision(conf, decision, {
+          modeValue: control.modeValue, heartbeatS: control.heartbeatTimeoutS, forceAll: true,
+          heartbeatAfterMode: control.heartbeatAfterMode, heartbeatWriteFc: control.heartbeatWriteFc,
+          acceptDeviceHeartbeatS: control.acceptDeviceHeartbeatS,
+        });
+        st.decision = { ...decision, at: now() };
+        st.error = null;
+        publish();
+        return { ok: true, decision, readback: back };
+      } catch (e) {
+        st.error = e?.message || String(e);
+        st.dev = null;
+        publish();
+        if (e?.code === 'foreign_ems_mode') return { ok: false, foreign: true, error: st.error };
+        if (e?.code === 'heartbeat_mismatch') return { ok: false, heartbeatMismatch: true, error: st.error };
+        if (e?.code === 'emergency_stop_active') return { ok: false, blocked: true, error: st.error };
+        return { ok: false, error: st.error };
+      }
+    });
+  }
+
+  /** Slave einmal sicher in Self-consumption (Not-Halt, Split-Abbruch, Rückzug). Schreibt auch im Not-Halt. */
+  function neutralize(reason = 'neutralize') {
+    return serial(async () => {
+      const cfg = getCfg();
+      const conf = sungrowEmsConf(cfg);
+      if (!conf || transport?.type !== 'modbus') return { ok: true, skipped: true };
+      syncEndpoint(cfg);
+      if (!st.owns) return { ok: true, skipped: true, reason: 'not_owned' };
+      try {
+        st.dev = null;
+        await writeDecision(conf, { mode: 'self', reason }, { neutralize: true });
+        publish();
+        return { ok: true };
+      } catch (e) {
+        st.error = e?.message || String(e);
+        publish();
+        if (e?.code === 'foreign_ems_mode') return { ok: true, skipped: true, reason: 'foreign_ems_mode' };
+        return { ok: false, error: st.error };
+      }
+    });
+  }
+
+  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, neutralize, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
 }
 
 function describe(d, modeValue = EMS_MODE.FORCED) {

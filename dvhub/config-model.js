@@ -1515,6 +1515,23 @@ function buildFieldDefinitions() {
       groupOrder: 15,
       beta: true,
       visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.control',
+      label: 'Steuerung des zweiten WR',
+      type: 'select',
+      default: 'self-only',
+      options: [
+        { value: 'self-only', label: 'Nur im Eigenverbrauch (Master verteilt)' },
+        { value: 'split', label: 'Vorgaben aufteilen (beide WR einzeln)' }
+      ],
+      help: 'Im Eigenverbrauch regelt der Master beide WR (Standard „Nur im Eigenverbrauch"). „Vorgaben aufteilen": bei Lade-/Entlade-Vorgaben teilt DVhub die Leistung nach Akku-Leistung und SoC auf und steuert BEIDE WR einzeln (nach Kundenaussage nötig, weil der Master nur im Eigenverbrauch verteilt). Scheitert dabei EINER (Herzschlag, Rücklesen, fremder Modus), gehen BEIDE sicher in Eigenverbrauch zurück.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
       path: 'sungrow.secondInverter.aggregateTelemetry',
       label: 'Zweiter WR: Werte zur Systemsumme zusammenzählen',
       type: 'boolean',

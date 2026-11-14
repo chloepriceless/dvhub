@@ -69,6 +69,16 @@ verweist hierher.
 
 ### Hinzugefügt
 
+- **Sungrow zwei WR: Vorgaben einzeln auf beide WR aufteilen (Split-Steuerung, Beta).** Neue Einstellung
+  „Steuerung des zweiten WR": „Nur im Eigenverbrauch" (Standard = wie bisher, der Master verteilt) oder
+  „Vorgaben aufteilen". Im Split-Modus teilt DVhub bei Lade-/Entlade-Vorgaben die Reglerleistung nach
+  Akku-Leistung und SoC auf (Entladen → WR mit mehr Reserve mehr, Laden → WR mit mehr freiem Platz mehr;
+  ein WR an seiner Grenze bekommt 0, der andere übernimmt) und steuert beide WR einzeln — jeder mit
+  eigenem EMS-Modus, Befehl, Herzschlag und Rücklesen. Sicherheit je WR: scheitert einer (Herzschlag,
+  Rücklesen, fremder EMS-Modus), gehen **beide** sofort in Eigenverbrauch zurück; Not-Halt setzt beide
+  zurück und schreibt dann nichts mehr; jeder WR hat einen eigenen Besitz-Merker. Der Schreibpfad zum
+  Slave nutzt denselben Modbus-Pool wie die Leseabfrage (ein Modbus-Client je WR). Ist der Slave offline,
+  steuert DVhub nur den Master.
 - **Fern-Support-Shell: openssh-server wird installiert, Verfügbarkeit ehrlich gemeldet.** Die
   Installation und die Updates (`install.sh`, `post-update.sh`, `stack-update.sh`) ziehen jetzt
   `openssh-server` mit; die Installation aktiviert den SSH-Dienst (`enable --now ssh`). Der
