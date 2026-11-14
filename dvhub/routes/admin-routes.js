@@ -146,6 +146,9 @@ export function createAdminRoutes(deps) {
     if (onStarted) {
       try { more = onStarted(out) || {}; } catch (e) { more = { warning: String(e?.message || e) }; pushLog(`${event}_after_start_error`, { error: more.warning }); }
     }
+    // Task G4 (Support-Tunnel): Zeitstempel des Update-Starts, damit der Support-Tunnel während eines laufenden
+    // Updates nicht automatisch schließt (der Support arbeitet womöglich gerade daran).
+    try { ctx.lastUpdateStartedAt = Date.now(); } catch { /* best effort */ }
     pushLog(event, { args: args.join(' '), ...extra });
     return json(res, 200, { ok: true, mode: 'package', job: args[0], started: out.started !== false, ...extra, ...more,
       message: 'Auftrag gestartet — Fortschritt unter /api/admin/update/status' });

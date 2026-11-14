@@ -195,6 +195,71 @@ test('open is idempotent while already open', () => {
   assert.equal(r2.alreadyOpen, true);
 });
 
+// --- Task G: Support-Tunnel-Zeitgeber (re-arm, Schließ-Protokoll, Update-Aufschub, Policy-Deckel) --------------
+function timerHarness() {
+  let seq = 0; const timers = new Map();
+  return {
+    setTimeout: (cb) => { const id = ++seq; timers.set(id, cb); return { id, unref() {} }; },
+    clearTimeout: (h) => { if (h && timers.has(h.id)) timers.delete(h.id); },
+    fireAll() { for (const [id, cb] of [...timers]) { timers.delete(id); cb(); } },
+    pending: () => timers.size,
+  };
+}
+
+test('G1: erneutes open() frischt den Schließ-Zeitgeber auf (refreshed), statt ihn nur zu ignorieren', () => {
+  const { ctx } = makeCtx();
+  const tm = timerHarness();
+  let t = 1_000_000;
+  const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
+  tun.open({ ttlMin: 30 }, 'a');
+  assert.equal(tm.pending(), 1, 'ein Auto-Schließ-Zeitgeber läuft');
+  t += 10 * 60 * 1000; // 10 min später
+  const r2 = tun.open({ ttlMin: 30 }, 'b');
+  assert.equal(r2.refreshed, true, 'erneutes open frischt auf');
+  assert.equal(tm.pending(), 1, 'genau ein Zeitgeber (alter abgebrochen, neuer gesetzt)');
+  // Die Frist beginnt von vorn: ~30 min Rest.
+  assert.ok(tun.status().ttlRemainingSec >= 29 * 60, `Rest ${tun.status().ttlRemainingSec}s`);
+});
+
+test('G2: jedes Schließen loggt Grund + openedAt + expiresAt', () => {
+  const { ctx, logs } = makeCtx();
+  const tm = timerHarness();
+  const t = 1_000_000;
+  const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
+  tun.open({ ttlMin: 30 }, 'christin');
+  tun.close('christin');
+  const closed = logs.find((l) => l.ev === 'support_tunnel_closed');
+  assert.equal(closed.data.reason, 'manual');
+  assert.equal(closed.data.openedAt, t);
+  assert.equal(closed.data.expiresAt, t + 30 * 60 * 1000);
+});
+
+test('G3: angefragte TTL über der Policy autoCloseMin wird auf die Policy gedeckelt (60, nicht 120)', () => {
+  const { ctx } = makeCtx(); // autoCloseMin: 60
+  const tm = timerHarness();
+  const t = 1_000_000;
+  const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
+  tun.open({ ttlMin: 120 }, 'christin'); // angefragt 120, Policy 60
+  assert.equal(tun.status().expiresAt, t + 60 * 60 * 1000, 'auf 60 min gedeckelt');
+});
+
+test('G4: Auto-Schließen während eines Updates wird aufgeschoben (Tunnel bleibt offen)', () => {
+  const { ctx, logs } = makeCtx();
+  const tm = timerHarness();
+  let updating = true;
+  const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout, isUpdateInProgress: () => updating });
+  tun.open({ ttlMin: 30 }, 'christin');
+  tm.fireAll(); // Auto-Schließ-Zeitgeber feuert — Update läuft → aufschieben
+  assert.ok(logs.some((l) => l.ev === 'support_tunnel_autoclose_deferred'), 'Aufschub protokolliert');
+  assert.equal(tun.status().open, true, 'Tunnel bleibt offen während des Updates');
+  assert.equal(tm.pending(), 1, 'Nachprüf-Zeitgeber gesetzt');
+  // Update fertig → nächster Nachprüf-Takt schließt.
+  updating = false;
+  tm.fireAll();
+  assert.equal(tun.status().open, false, 'nach dem Update schließt der Nachprüf-Takt');
+  assert.ok(logs.some((l) => l.ev === 'support_tunnel_closed' && l.data.reason === 'auto_close'));
+});
+
 test('unexpected process exit clears open state + audits', () => {
   const { ctx, logs } = makeCtx();
   const proc = fakeProc();

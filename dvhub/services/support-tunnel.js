@@ -250,6 +250,21 @@ export function createSupportTunnel(ctx, deps = {}) {
   let lastError = null;
   let lastOpenedBy = null;
 
+  // Task G (Support-Tunnel-Zeitgeber): während eines laufenden DVhub-Updates NICHT automatisch schließen (der
+  // Support arbeitet womöglich gerade am Update). Signal: ctx.lastUpdateStartedAt (admin-routes setzt es beim
+  // Start eines Release-Jobs) innerhalb einer Karenzzeit, oder eine injizierte Prüffunktion (Tests).
+  const UPDATE_GRACE_MS = 20 * 60 * 1000;
+  const AUTOCLOSE_RECHECK_MS = 2 * 60 * 1000; // bei aufgeschobenem Auto-Schließen so bald erneut prüfen
+  const isUpdateInProgress = deps.isUpdateInProgress || (() => {
+    const t = Number(ctx?.lastUpdateStartedAt);
+    return Number.isFinite(t) && t > 0 && (now() - t) < UPDATE_GRACE_MS;
+  });
+  // Auto-Schließen nie länger als die konfigurierte Policy (autoCloseMin): eine angefragte TTL darf zusätzlich
+  // kürzen, aber nie verlängern. Klärt die Diskrepanz autoCloseMin 60 vs. expiresAt 120 (Task G): die Policy deckelt.
+  const effectiveTtlMin = (ttlMin, autoCloseMin) => Math.min(clampTtlMin(ttlMin, autoCloseMin), clampTtlMin(autoCloseMin));
+  // Zeiten für die Schließen-Protokolle (Task G: jedes Schließen mit openedAt/expiresAt), BEVOR sie genullt werden.
+  const closeTimes = () => ({ openedAt, expiresAt });
+
   // Review 2026-06-10 (B7, Christin-Entscheid Lösung 1): CSRF-Nonce für den
   // Open-Endpunkt. Der Status-GET liefert ein kurzlebiges Einmal-Token mit; die
   // eigene UI schickt es beim Öffnen automatisch zurück. Eine fremde Website im
@@ -607,9 +622,24 @@ export function createSupportTunnel(ctx, deps = {}) {
     try { fsImpl.unlinkSync(supportPaths().processStatePath); } catch { /* war nicht da */ }
   }
 
+  // Auto-Schließen fällig (Prozessmodus): läuft gerade ein Update, NICHT schließen, sondern den Zeitgeber kurz
+  // neu setzen und später erneut prüfen (Task G4). Sonst regulär abbauen.
+  function autoCloseDue(actor) {
+    autoCloseTimer = null;
+    if (!child) return; // schon zu
+    if (isUpdateInProgress()) {
+      pushLog('support_tunnel_autoclose_deferred', { reason: 'update_in_progress', recheckMs: AUTOCLOSE_RECHECK_MS, ...closeTimes() }, actor || lastOpenedBy);
+      autoCloseTimer = setTimer(() => autoCloseDue(actor), AUTOCLOSE_RECHECK_MS);
+      if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
+      return;
+    }
+    teardown('auto_close', actor);
+  }
+
   function teardown(reason, actor) {
     if (autoCloseTimer) { clearTimer(autoCloseTimer); autoCloseTimer = null; }
     const wasOpen = !!child;
+    const times = closeTimes(); // openedAt/expiresAt VOR dem Nullen festhalten (Task G: jedes Schließen mit Grund + Zeiten)
     const proc = child;
     child = null;
     openedAt = null;
@@ -620,7 +650,7 @@ export function createSupportTunnel(ctx, deps = {}) {
     removeProcessState();
     stopContainerSshd();
     if (wasOpen) {
-      pushLog('support_tunnel_closed', { reason: reason || 'manual' }, actor || lastOpenedBy);
+      pushLog('support_tunnel_closed', { reason: reason || 'manual', ...times }, actor || lastOpenedBy);
       notifyClosed(reason);
     }
     lastOpenedBy = null;
@@ -676,19 +706,33 @@ export function createSupportTunnel(ctx, deps = {}) {
 
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
 
-  async function openUnit({ ttlMin } = {}, actor = null) {
-    if (unitState()) return { ok: true, alreadyOpen: true, status: status() };
-    const pre = preflight(actor);
-    if (pre.error) return pre.error;
-    const { rc, p, applianceId } = pre;
-    const ttl = clampTtlMin(ttlMin, rc.autoCloseMin);
+  // Request-Datei mit neuer Frist schreiben (Unit-Modus: das Tunnel-Skript nimmt expiresAt von hier). Für den
+  // Erst-Start UND für das Auffrischen beim erneuten open() (Task G1).
+  function writeUnitRequest(p, rc, ttl, actor) {
     const exp = now() + ttl * 60 * 1000;
+    const openedBy = actor ? { ip: actor.ip || null, via: actor.via || actor.source || null } : null;
+    const relay = { host: rc.host, port: rc.port, user: rc.user, shellPort: rc.shellPort, webPort: rc.webPort, localShellPort: rc.localShellPort, localWebPort: rc.localWebPort };
+    writeFileAtomic(p.requestPath, JSON.stringify({ expiresAt: exp, ttlMin: ttl, openedBy, ...relay }) + '\n', 0o600);
+    return exp;
+  }
+
+  async function openUnit({ ttlMin } = {}, actor = null) {
+    const pre = preflight(actor);
+    if (pre.error) { if (unitState()) return { ok: true, alreadyOpen: true, status: status() }; return pre.error; }
+    const { rc, p, applianceId } = pre;
+    const ttl = effectiveTtlMin(ttlMin, rc.autoCloseMin); // Task G3: nie länger als die Policy autoCloseMin
+    if (unitState()) {
+      // Task G1: erneutes open() frischt die Frist auf — Request neu schreiben (Skript verlängert) + Zeitgeber neu.
+      try { expiresAt = writeUnitRequest(p, rc, ttl, actor); openedAt = openedAt || now(); } catch (e) { pushLog('support_tunnel_error', { error: `refresh write failed: ${e.message}` }, actor); return { ok: true, alreadyOpen: true, status: status() }; }
+      if (autoCloseTimer) clearTimer(autoCloseTimer);
+      autoCloseTimer = setTimer(() => { autoCloseTimer = null; if (isUpdateInProgress()) { pushLog('support_tunnel_autoclose_deferred', { reason: 'update_in_progress', ...closeTimes() }, actor); return; } pushLog('support_tunnel_closed', { reason: 'auto_close', ...closeTimes() }, actor); notifyClosed('auto_close'); }, ttl * 60 * 1000);
+      if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
+      pushLog('support_tunnel_refreshed', { ttlMin: ttl, openedAt, expiresAt }, actor);
+      return { ok: true, alreadyOpen: true, refreshed: true, status: status() };
+    }
+    let exp;
     try {
-      const openedBy = actor ? { ip: actor.ip || null, via: actor.via || actor.source || null } : null;
-      // Die wirksamen Relay-Werte mitgeben (config.support.relay geht vor
-      // relay.json) — das Tunnel-Skript nimmt sie von hier.
-      const relay = { host: rc.host, port: rc.port, user: rc.user, shellPort: rc.shellPort, webPort: rc.webPort, localShellPort: rc.localShellPort, localWebPort: rc.localWebPort };
-      writeFileAtomic(p.requestPath, JSON.stringify({ expiresAt: exp, ttlMin: ttl, openedBy, ...relay }) + '\n', 0o600);
+      exp = writeUnitRequest(p, rc, ttl, actor);
       try { fsImpl.writeFileSync(p.logPath, ''); } catch { /* neues Protokoll je Lauf */ }
     } catch (e) {
       lastError = `request write failed: ${e.message}`;
@@ -714,8 +758,19 @@ export function createSupportTunnel(ctx, deps = {}) {
       return { ok: false, error: 'tunnel_failed', detail: lastError };
     }
     lastError = null;
+    openedAt = now();
+    expiresAt = exp;
     if (autoCloseTimer) clearTimer(autoCloseTimer);
-    autoCloseTimer = setTimer(() => { autoCloseTimer = null; pushLog('support_tunnel_closed', { reason: 'auto_close' }, actor); notifyClosed('auto_close'); }, ttl * 60 * 1000);
+    // Task G4: läuft ein Update, nicht schließen, sondern den Zeitgeber kurz neu setzen. Das echte Ablaufen
+    // erzwingt ohnehin das Tunnel-Skript über expiresAt in der Request-Datei; dieser Zeitgeber ist Log/Notify.
+    const unitAutoClose = () => {
+      autoCloseTimer = null;
+      if (!unitState()) return;
+      if (isUpdateInProgress()) { pushLog('support_tunnel_autoclose_deferred', { reason: 'update_in_progress', ...closeTimes() }, actor); autoCloseTimer = setTimer(unitAutoClose, AUTOCLOSE_RECHECK_MS); if (autoCloseTimer?.unref) autoCloseTimer.unref(); return; }
+      pushLog('support_tunnel_closed', { reason: 'auto_close', ...closeTimes() }, actor);
+      notifyClosed('auto_close');
+    };
+    autoCloseTimer = setTimer(unitAutoClose, ttl * 60 * 1000);
     if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
     announceOpened({ ttl, binary: 'service', rc, applianceId, actor });
     return { ok: true, status: status() };
@@ -723,16 +778,18 @@ export function createSupportTunnel(ctx, deps = {}) {
 
   async function closeUnit(actor = null) {
     const wasOpen = !!unitState();
+    const times = closeTimes();
     const r = await runSystemctl('stop');
     try { fsImpl.unlinkSync(supportPaths().requestPath); } catch { /* war nicht da */ }
     if (autoCloseTimer) { clearTimer(autoCloseTimer); autoCloseTimer = null; }
+    openedAt = null; expiresAt = null;
     if (!r.ok && unitState()) {
       lastError = `systemctl stop failed: ${r.error}`;
       pushLog('support_tunnel_error', { error: lastError }, actor);
       return { ok: false, error: 'close_failed', detail: r.error, status: status() };
     }
     if (!wasOpen) return { ok: true, alreadyClosed: true, status: status() };
-    pushLog('support_tunnel_closed', { reason: 'manual' }, actor);
+    pushLog('support_tunnel_closed', { reason: 'manual', ...times }, actor);
     notifyClosed('manual');
     return { ok: true, status: status() };
   }
@@ -758,13 +815,25 @@ export function createSupportTunnel(ctx, deps = {}) {
   }
 
   function openProcess({ ttlMin } = {}, actor = null) {
-    if (child) {
-      // Idempotent: already open. Refresh nothing — surface current state.
-      return { ok: true, alreadyOpen: true, status: status() };
-    }
     const pre = preflight(actor);
-    if (pre.error) return pre.error;
+    if (pre.error) {
+      // Schon offen, aber die Vorprüfung schlägt jetzt fehl: nicht hart scheitern, den offenen Tunnel lassen.
+      if (child) return { ok: true, alreadyOpen: true, status: status() };
+      return pre.error;
+    }
     const { rc, p, applianceId } = pre;
+    if (child) {
+      // Task G1: ein erneutes open() ist NICHT nur idempotent — es bricht den laufenden Schließ-Zeitgeber ab und
+      // setzt ihn neu (die TTL beginnt von vorn), damit „nochmal öffnen" den Tunnel verlängert statt ihn
+      // überraschend ablaufen zu lassen.
+      const ttlR = effectiveTtlMin(ttlMin, rc.autoCloseMin);
+      if (autoCloseTimer) clearTimer(autoCloseTimer);
+      expiresAt = now() + ttlR * 60 * 1000;
+      autoCloseTimer = setTimer(() => autoCloseDue(lastOpenedBy), ttlR * 60 * 1000);
+      if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
+      pushLog('support_tunnel_refreshed', { ttlMin: ttlR, openedAt, expiresAt }, actor || lastOpenedBy);
+      return { ok: true, alreadyOpen: true, refreshed: true, status: status() };
+    }
 
     const { binary, bin } = resolveTunnelBinary(fsImpl);
     let args;
@@ -786,7 +855,7 @@ export function createSupportTunnel(ctx, deps = {}) {
       return { ok: false, error: 'misconfigured', detail: e.message };
     }
 
-    const ttl = clampTtlMin(ttlMin, rc.autoCloseMin);
+    const ttl = effectiveTtlMin(ttlMin, rc.autoCloseMin); // Task G3: nie länger als die Policy autoCloseMin
     startContainerSshd(p, actor);
     let proc;
     try {
@@ -823,12 +892,13 @@ export function createSupportTunnel(ctx, deps = {}) {
       if (child !== proc) return; // already torn down by close()/auto-close
       removeProcessState();
       if (autoCloseTimer) { clearTimer(autoCloseTimer); autoCloseTimer = null; }
+      const times = closeTimes();
       child = null;
       openedAt = null;
       expiresAt = null;
       const reason = signal ? `signal:${signal}` : `exit:${code}`;
       stopContainerSshd();
-      pushLog('support_tunnel_closed', { reason, unexpected: true, lastError }, lastOpenedBy);
+      pushLog('support_tunnel_closed', { reason, unexpected: true, lastError, ...times }, lastOpenedBy);
       lastOpenedBy = null;
     });
     proc.on('error', (e) => {
@@ -836,7 +906,7 @@ export function createSupportTunnel(ctx, deps = {}) {
       pushLog('support_tunnel_error', { error: lastError }, lastOpenedBy);
     });
 
-    autoCloseTimer = setTimer(() => teardown('auto_close', lastOpenedBy), ttl * 60 * 1000);
+    autoCloseTimer = setTimer(() => autoCloseDue(lastOpenedBy), ttl * 60 * 1000);
     if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
 
     announceOpened({ ttl, binary, rc, applianceId, actor });
