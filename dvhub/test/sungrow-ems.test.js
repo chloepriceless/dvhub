@@ -318,6 +318,22 @@ test('Dauer-Forced B1: nach dem Eintritt bleibt der Modus 2 — ein Takt im Band
   assert.equal(r.state.ctrl.sungrowEms.owns, true, 'DVhub behält die Steuerung');
 });
 
+test('Dauer-Forced B3: Wiedereintritt nach Selbst-Rückfall; >6/Stunde → Modus 0 lassen (13050-Budget), Warnung', async () => {
+  const r = rig({ controlMode: 'forced' });
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // Forced-Entladen, owns
+  for (let i = 1; i <= 7; i += 1) {
+    // Der WR fällt von selbst auf Modus 0 zurück.
+    r.image.holding.set(MODE, EMS_MODE.SELF);
+    r.image.holding.set(CMD, EMS_CMD.STOP);
+    r.advance(61_000); // > deviceRecheckMs → frisch lesen; Takt fällig
+    r.telemetry({ gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 });
+    await r.ems.applySetpoint(-5000, 'rule:abend'); // Scheduler-Keepalive hält den Sollwert frisch
+    if (i <= 6) assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED, `Wiedereintritt ${i} tritt neu ein`);
+  }
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.SELF, '7. Rückfall: DVhub tritt nicht mehr ein, Modus 0 bleibt');
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_reentry_rate'), 'Warnung zur Wiedereintritt-Rate');
+});
+
 test('Dauer-Forced B1: fremder Modus 2 (DVhub besitzt ihn nicht) wird nicht übersteuert', async () => {
   const r = rig({ controlMode: 'forced', over: { holding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 } } });
   const res = await r.ems.applySetpoint(-5000, 'rule:abend');

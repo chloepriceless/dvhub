@@ -303,6 +303,10 @@ const FALLBACK_COOLDOWN_MS = 60000;
 const SELF_RELEASE_MS = 15 * 60 * 1000;
 // Schreibbudget 13050 (Modus) je WR und Tag (Punkt 2): danach im aktuellen Modus bleiben, bis Mitternacht.
 const MODE_WRITES_PER_DAY = 20;
+// Dauer-Forced-Wiedereintritt (B3): fällt der Master von selbst auf Modus 0 (WR-Neustart/Firmware/Netzfehler),
+// tritt DVhub einmal neu ein. Mehr als so viele Wiedereintritte je Stunde → nicht mehr eintreten (13050-Budget
+// schonen), Modus 0 lassen, Warnung.
+const FORCED_REENTRY_MAX_PER_HOUR = 6;
 // Adaptiver Regeltakt (Punkt 2): Grenzen 1–5 s, gemessen aus der Antwortzeit (gleitender Mittelwert).
 const REGULATE_MIN_MS = 1000;
 const REGULATE_MAX_MS = 5000;
@@ -1148,6 +1152,20 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
       // Fremder Modus (VPP, oder Modus 2/3 ohne DVhub-Besitz) → nicht übersteuern (B4).
       if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+      // Wiedereintritt (B3): DVhub besitzt Forced, der Master steht aber von selbst in Modus 0 → er ist von selbst
+      // zurückgefallen (WR-Neustart/Firmware/Netzfehler). EINMAL neu eintreten (die Writes unten setzen 13050=2
+      // neu). Bei zu vielen Wiedereintritten/Stunde das Mode-Register (13050) schonen: nicht mehr eintreten, Modus 0
+      // lassen, Warnung — sonst würde DVhub 13050 immer wieder hin- und herschreiben, wenn der WR es nicht hält.
+      if (ownsForced && decision.mode === 'forced' && dev.mode === EMS_MODE.SELF) {
+        st.forcedReentryTimes = [...(st.forcedReentryTimes || []), t].filter((x) => t - x < 3600000);
+        if (st.forcedReentryTimes.length > FORCED_REENTRY_MAX_PER_HOUR) {
+          st.decision = { mode: 'self', reason: 'reentry_rate', at: t };
+          logOnce('reentry-rate', 'sungrow_ems_reentry_rate', { count1h: st.forcedReentryTimes.length, text: 'Sungrow fällt wiederholt von selbst aus dem Forced mode in Modus 0 zurück (>6/Stunde) — DVhub tritt vorerst nicht wieder ein (13050-Budget), der Akku bleibt im Eigenverbrauch (Modus 0). Firmware/Verkabelung prüfen.' }, 'warn');
+          publish();
+          return { ok: false, error: 'reentry_rate' };
+        }
+        logOnce(`reentry-${st.forcedReentryTimes.length}`, 'sungrow_ems_reentry', { count1h: st.forcedReentryTimes.length }, 'warn');
+      }
       // Lebenszeichen für den Box-Watchdog (C4): DVhub fährt den Forced mode aktiv (Befehl, nicht Rückfall) → die
       // Zeitstempel-Datei auffrischen, auch wenn in diesem Takt nichts geschrieben wird (ausgeregelt).
       if (decision.mode === 'forced') touchForcedHeartbeat();
