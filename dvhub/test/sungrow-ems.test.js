@@ -318,6 +318,25 @@ test('Dauer-Forced B1: nach dem Eintritt bleibt der Modus 2 — ein Takt im Band
   assert.equal(r.state.ctrl.sungrowEms.owns, true, 'DVhub behält die Steuerung');
 });
 
+test('Absicherung C3: Start mit Forced-Merker → erster Takt setzt den Akku-Befehl auf 0xCC (Modus 2 bleibt), dann regelt es', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-c3-'));
+  const statePath = path.join(dir, 'sungrow_ems_state.json');
+  fs.writeFileSync(statePath, JSON.stringify({ ownMode: EMS_MODE.FORCED, endpointKey: '192.0.2.50:502:1', at: Date.now() }));
+  // Gerät hält noch einen alten Entladebefehl (Modus 2) aus der Zeit vor dem Neustart.
+  const r = rig({ controlMode: 'forced', statePath, over: { holding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 4000 } } });
+  assert.equal(r.state.ctrl ? r.ems._st.startupResetPending : null, true, 'Merker geladen → Start-Reset steht aus');
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // würde sonst sofort entladen
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED, 'Modus 2 bleibt (kein Flap)');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.STOP, 'alter Befehl zuerst auf 0xCC zurückgesetzt');
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_startup_reset'));
+  // Nächster Takt regelt frisch → Entladen.
+  r.advance(6000);
+  r.telemetry({ gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.DISCHARGE, 'danach regelt es normal (Entladen)');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('Dauer-Forced B3: Wiedereintritt nach Selbst-Rückfall; >6/Stunde → Modus 0 lassen (13050-Budget), Warnung', async () => {
   const r = rig({ controlMode: 'forced' });
   await r.ems.applySetpoint(-5000, 'rule:abend'); // Forced-Entladen, owns

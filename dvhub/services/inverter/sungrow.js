@@ -641,6 +641,10 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         st.owns = true;
         st.ownMode = m.ownMode;
         st.endpointKey = m.endpointKey;
+        // Merker-Start-Reset (C3): DVhub besaß den Forced mode vor dem Neustart → der WR hält womöglich noch den
+        // ALTEN Lade-/Entladebefehl. Beim ersten Forced-Takt zuerst auf 0xCC (Akku anhalten, Modus 2 bleibt) setzen,
+        // damit kein stehengebliebener Befehl über den ersten Takt hinaus läuft; der nächste Takt regelt frisch.
+        if (m.ownMode === EMS_MODE.FORCED) st.startupResetPending = true;
       }
     } catch { /* kein Merker → nichts in Besitz */ }
   }
@@ -1141,6 +1145,16 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       // BLEIBEN (der Scheduler liefert gleich wieder den Default-Puffer). Modus 0 nur bei den oben genannten Fällen.
       const staleRelease = decision.reason === 'target_expired' || decision.reason === 'telemetry_missing';
       if (!staleRelease && ownsForced) decision = { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason };
+    }
+    // Merker-Start-Reset (C3): erster Forced-Takt nach einem Neustart mit Forced-Merker → den Akku-Befehl zuerst auf
+    // 0xCC (Modus 2 bleibt), damit ein stehengebliebener Lade-/Entladebefehl nicht über den ersten Takt hinaus
+    // läuft. Nur, wenn DVhub Forced wirklich besitzt und steuert (nicht bei Moduswechsel/stale-Rückfall in Self).
+    if (st.startupResetPending && ownsForced && decision.mode === 'forced') {
+      decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'startup_reset' };
+      st.startupResetPending = false;
+      logOnce('startup-reset', 'sungrow_ems_startup_reset', { text: 'Sungrow: nach Neustart mit Forced-Merker den Akku-Befehl einmal auf 0xCC zurückgesetzt (Modus 2 bleibt), bevor neu geregelt wird.' });
+    } else if (st.startupResetPending && decision.mode === 'self') {
+      st.startupResetPending = false; // in Self/Modus 0 ohnehin kein stehengebliebener Befehl mehr
     }
     st.decision = { ...decision, at: t, trigger: reason };
     st.selfBridgeSince = 0;
