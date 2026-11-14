@@ -296,6 +296,26 @@ public enum SnapshotDay: Equatable, Sendable {
 
 // MARK: - Lage der Leisten (iPhone Duo)
 
+/// Falz des iPhone Duo: Meldet das System einen aktiven senkrechten Falz
+/// (SwiftUI `ReservedRegion`, Art „division“), rückt der Inhalt so ein, dass
+/// seine Mitte auf dem Falz liegt — zweispaltige Anordnungen haben ihren
+/// Spaltenabstand dann genau dort, und keine Karte liegt über dem Falz.
+public enum FoldRule {
+    /// Schmaler darf eine Seite neben dem Falz nicht sein; sonst bleibt alles, wie es ist.
+    public static let minSide: Double = 240
+
+    /// Zusätzlicher Rand links und rechts. `divisionMinX`/`divisionMaxX` im
+    /// Koordinatenraum der Fläche mit der Breite `width`. (0, 0), wenn der Falz
+    /// außerhalb liegt oder eine Seite zu schmal wäre.
+    public static func insets(width: Double, divisionMinX: Double, divisionMaxX: Double) -> (leading: Double, trailing: Double) {
+        guard width > 0, divisionMinX.isFinite, divisionMaxX.isFinite, divisionMinX <= divisionMaxX else { return (0, 0) }
+        let left = divisionMinX, right = width - divisionMaxX
+        guard left >= minSide, right >= minSide else { return (0, 0) }
+        let half = min(left, right)
+        return (left - half, right - half)
+    }
+}
+
 /// Wann stehen Reiter und Aktionen in einer Leiste am rechten Rand statt unten?
 /// Nur für Builds, bei denen das System die Leisten nicht selbst umlegt
 /// (vor iOS-27.1-SDK). Maße in Punkten.

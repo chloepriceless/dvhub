@@ -1,8 +1,9 @@
 # DVhub für iPhone
 
-Native App (SwiftUI, iOS 18+) für die Handy-Kopplung mit DVhub: Leitstand mit
+Native App (SwiftUI, iOS 18+, Deutsch und Englisch) für die Handy-Kopplung mit DVhub: Leitstand mit
 Energiefluss, Detailwerte, Börsenpreise und Residuallast-Frühwarnung, Historie,
-Fahrplan, Zustand der Anbindungen, Nachrichten und Widgets. Mit Freigabe
+Fahrplan, Zustand der Anbindungen, Nachrichten, Widgets, Kurzbefehle/Siri, ein Knopf
+im Kontrollzentrum und eine Live-Aktivität. Mit Freigabe
 „Steuern“ kann sie auch den Not-Halt auslösen. Anlagendaten laufen Ende zu
 Ende verschlüsselt: im Heimnetz direkt zur Box, unterwegs über das Relay
 (`relay.dvhub.de` oder ein selbst gehostetes). Das Protokoll steht in
@@ -13,11 +14,12 @@ Daten (Preise, Prognose, Nachrichten) holt die App direkt bei `dvhub.online`.
 |---|---|
 | `DVhubLink/` | Swift-Paket: Kryptografie, QR-Code, Kopplung, Verbindung, Schlüsselbund |
 | `DVhubApp/` | Die App und die Widget-Erweiterung `DVhubWidgets` (Xcode-Projekt aus `project.yml` per XcodeGen); `Shared/` gehört beiden |
+| `tools/` | String-Kataloge abgleichen und prüfen |
 | `interop/harness.mjs` | Echte DVhub-Gegenstelle (Relay + Box-Agent mit Beispielwerten) für Tests |
 
 ## Bauen
 
-Voraussetzung: Xcode 27 oder neuer (für das iPhone Duo Xcode 27.1 oder neuer, siehe unten), für die Gegenstelle Node 22.
+Voraussetzung: Xcode 27 oder neuer (für das iPhone Duo Xcode 27.1 oder neuer, siehe unten), für die Gegenstelle Node 22 oder neuer.
 
 ```bash
 brew install xcodegen                     # einmalig
@@ -141,7 +143,8 @@ Was Apple vorgibt, und wie die App es umsetzt:
   Blätter: `.sheet`, Bestätigungen: `.confirmationDialog`.
 - **Leisten an der Seite.** Zugeklappt und aufgeklappt im Querformat legt das
   System Tab-Leiste, Toolbar und Navigation an den rechten Rand, aufgeklappt
-  im Hochformat bleiben sie waagerecht. Das macht das System selbst – aber
+  im Hochformat bleiben sie waagerecht (so die Richtlinie; gesehen ist bisher
+  nur zugeklappt, siehe unten). Das macht das System selbst – aber
   erst bei einem Build mit dem **iOS-27.1-SDK oder neuer** (aktuell Xcode 27.2).
 - **Größe frei änderbar.** Alle vier Ausrichtungen sind freigegeben, kein
   `UIRequiresFullScreen` (TN3192). Layout nur nach Fläche und Größenklasse:
@@ -151,54 +154,156 @@ Was Apple vorgibt, und wie die App es umsetzt:
 - Schaltbefehle bestätigt man mit Touch ID (iPhone Duo), Face ID oder
   Gerätecode; der Text richtet sich nach `LAContext.biometryType`.
 
-**Bewusste Abweichung, solange mit Xcode 27.0 gebaut wird:** Das iOS-27.0-SDK
-kennt die senkrechten Leisten nicht (`toolbarVerticalEdge`,
-`toolbarVerticalBehavior`, `ReservedRegion`, `ArrangementView` fehlen im SDK).
-Damit die Bedienelemente zugeklappt trotzdem rechts stehen, gibt es einen
-Ersatz mit derselben Anordnung (`SideRail` in `Views/RootView.swift`): Er
-blendet die Tab-Leiste aus und zeigt Reiter und Aktionen der Ansicht rechts.
-Die Regel (`BarPlacementRule` im Paket, getestet) greift zugeklappt und im
-Querformat, nie aufgeklappt hochkant. Der Ersatz schaltet sich von selbst ab,
-sobald `DTSDKName` 27.1 oder neuer meldet – dann gilt allein das System. Unter
-Mehr → Darstellung lässt sich die Lage auch fest wählen; dort steht auch die
-gemessene Fläche.
+**Stand mit Xcode 27.2 (iOS-27.2-SDK), geprüft am 14.11.2026 im iPhone-Duo-Simulator (iOS 27.2, iPhone19,4):**
 
-Am Gerät gemessen (iPhone Duo, iOS 27.2.1, Build mit iOS-27.0-SDK): zugeklappt
-386 × 678 pt (das System behält rechts 80 pt für Statusleiste und Kamera),
-aufgeklappt quer 871 × 669 pt. Volle Flächen laut Gerät: 466 × 678 pt außen,
-669 × 951 pt innen (@3x).
+- **Zugeklappt** legt das System die Leisten selbst: Reiter als senkrechte Leiste unten rechts, Aktionen der
+  Ansicht (Aktualisieren, Zurück) darüber, Uhr und Status in der Spalte neben der Kamera. Die App bekommt die
+  volle Fläche des Außendisplays (466 × 678 pt; mit dem iOS-27.0-SDK waren es 386 × 678 pt). Die eigene
+  Seitenleiste ist aus. Abgesichert durch `DVhubAppUITests/DuoTests` (läuft nur im Duo-Simulator).
+- **Aufgeklappt (hochkant und quer) ist im Simulator noch nicht geprüft:** Auf- und Zuklappen geht nur in
+  Device Hub (Inspektor → *Device Configuration*), nicht mit `simctl` – von der Kommandozeile bleibt der Simulator
+  zugeklappt, und zugeklappt dreht er die App nicht ins Querformat. `DuoTests` fotografiert die Pose, in der der
+  Simulator gerade steht (`TEST_RUNNER_DVHUB_POSE=auf` benennt die Bilder).
+- **Falz.** Das System meldet ihn als reservierte Fläche (`GeometryProxy.reservedRegions(kind: .division)`,
+  iOS 27.1+). Meldet es einen aktiven senkrechten Falz, rückt `AuroraPage` den Inhalt so ein, dass seine Mitte
+  auf dem Falz liegt – der Spaltenabstand der zweispaltigen Anordnungen liegt dann dort, keine Karte darüber
+  (`FoldRule` im Paket, getestet; `FoldInsets` in `Design/Theme.swift`). Ein waagerechter Falz (aufgeklappt
+  hochkant) teilt nur die Rollrichtung und ändert nichts. Zugeklappt meldet der Simulator keine reservierten
+  Flächen. Ob und wie das aufgeklappte Gerät den Falz meldet, ist noch nicht gesehen – unter Mehr → Darstellung
+  steht dafür eine Diagnosezeile (Fläche, SDK, reservierte Flächen).
+- Das SDK bietet außerdem `toolbarVerticalBehavior`, `toolbarVerticalCompressionBehavior` und `ArrangementView`
+  (Inhalt in zwei Hälften um den Falz). Die App nutzt sie bisher nicht: Die Vorgaben des Systems passen
+  zugeklappt, und für `ArrangementView` fehlt die Prüfung am aufgeklappten Gerät.
 
-**Nach dem Umstieg auf Xcode 27.2 offen:** im Duo-Simulator (Device Hub)
-prüfen, dass der Ersatz aus ist und die Systemleisten stimmen; Falz über
-`reservedRegions(kind: .division)` bzw. `ArrangementView` für den Energiefluss;
-`visibilityPriority` für die Aktionen. Bis dahin zeigen die Debug-Startargumente
-`-DVHUB_DUO closed|closed-27.0|closed-landscape|open|open-landscape` die App in
-diesen Flächen (auf einem iPad-Simulator starten).
+**Ersatz-Seitenleiste (`SideRail` in `Views/RootView.swift`).** Nur noch Rückfall: Sie greift von selbst, wenn mit
+einem SDK vor 27.1 gebaut wird (`Chrome.systemPlacesBars` liest `DTSDKName`; Regel `BarPlacementRule` im Paket),
+und wenn man unter Mehr → Darstellung „Rechts“ wählt. Mit „Automatisch“ gilt bei einem Build mit Xcode 27.2
+allein das System.
 
-## Widgets
+Am Gerät gemessen (iPhone Duo, iOS 27.2.1, Build mit iOS-27.0-SDK): zugeklappt 386 × 678 pt (das System behielt
+rechts 80 pt für Statusleiste und Kamera), aufgeklappt quer 871 × 669 pt. Volle Flächen laut Gerät: 466 × 678 pt
+außen, 669 × 951 pt innen (@3x).
 
-Zwei Widgets: **Anlage** (klein, mittel, Sperrbildschirm rund/rechteckig/
-einzeilig: Akkustand, Erzeugung, Einspeisung bzw. Bezug, Hausverbrauch) und
-**Heute** (klein, Sperrbildschirm rechteckig: verdient oder gekostet, Erlös,
-Kosten). Sie zeigen den letzten Stand, den die App gesehen hat, mit Uhrzeit.
-Selbst holen können sie nichts: Der Geräteschlüssel liegt in der Secure
-Enclave der App.
+Ohne Duo-Simulator zeigen die Debug-Startargumente
+`-DVHUB_DUO closed|closed-27.0|closed-landscape|open|open-landscape` die App in diesen Flächen (auf einem
+iPad-Simulator starten) – das bildet nur die Fläche nach, nicht die Leisten des Systems.
 
-App und Widgets teilen sich die Daten über eine App-Gruppe. Ihre Kennung folgt
-der Bundle-ID (`group.$(DVHUB_BUNDLE_ID)`, `Config/App.xcconfig`). Lehnt eine
-Signatur die App-Gruppe ab, beim Bauen
-`DVHUB_APP_ENTITLEMENTS= DVHUB_WIDGET_ENTITLEMENTS= DVHUB_APP_GROUP=` anhängen:
-Die App läuft normal, die Widgets zeigen einen Hinweis.
+## Widgets, Kontrollzentrum, Live-Aktivität
 
-**Kostenloses Personal Team (geprüft 14.11.2026, Xcode 27.0):** Die Fähigkeit
-„App Groups“ ist erlaubt, aber `xcodebuild -allowProvisioningUpdates` legt die
-Gruppe nicht an – das Profil kommt mit leerer Gruppenliste, und der Bau
-scheitert („doesn't match the entitlements file's value for the
-com.apple.security.application-groups entitlement“). Abhilfe: einmal in Xcode
-bei beiden Zielen (DVhubApp, DVhubWidgets) unter *Signing & Capabilities* →
-*App Groups* die Gruppe `group.<Bundle-ID>` mit „+“ anlegen und anhaken; danach
-baut auch die Kommandozeile mit Gruppe. Bis dahin mit den drei leeren Werten
-oben bauen.
+**Widgets.** Zwei Widgets: **Anlage** (klein, mittel, Sperrbildschirm rund/rechteckig/einzeilig: Akkustand,
+Erzeugung, Einspeisung bzw. Bezug, Hausverbrauch) und **Heute** (klein, Sperrbildschirm rechteckig: verdient oder
+gekostet, Erlös, Kosten). Antippen öffnet den Leitstand bzw. die Tageswerte; das mittlere Widget hat einen
+Aktualisieren-Knopf (App Intent, nur Lesen).
+
+So bleiben sie aktuell (Apple: „Keeping a widget up to date“):
+
+1. Ist die App offen, schreibt sie alle 30 s den Stand in die App-Gruppe (Not-Halt und Alarme sofort).
+2. Im Hintergrund holt die App ihn mit einer `BGAppRefreshTask` (`DVhubApp/BackgroundRefresh.swift`,
+   `.backgroundTask(.appRefresh)`), schreibt ihn und ruft `WidgetCenter.reloadAllTimelines()`.
+3. Zeichnet das System ein Widget neu und der Stand ist älter als zehn Minuten, ruft das Widget selbst ab
+   (`Shared/LinkAccess.swift`, `QuickLink` im Paket): Heimnetz zuerst, sonst Relay, Ende zu Ende verschlüsselt.
+   Die Timeline bittet alle 15 min um Neuladen.
+
+Was das System dabei begrenzt: Wann eine Hintergrundaufgabe läuft und wie oft ein Widget neu geladen wird
+(Richtwert 40–70-mal am Tag), entscheidet iOS. Ein Widget hat für seinen Abruf nur wenige Sekunden; reicht die
+Zeit nicht, bleibt der alte Stand.
+
+**Zugangsdaten.** Sie liegen ausschließlich im Schlüsselbund, in einer Gruppe, die App und Erweiterung teilen
+(`keychain-access-groups`: `$(AppIdentifierPrefix)$(DVHUB_BUNDLE_ID).shared`, `Config/App.xcconfig`). Beim ersten
+Start nach dem Update zieht die App vorhandene Einträge in diese Gruppe um (`KeyStore.migrateToSharedGroup`).
+Im Container der App-Gruppe liegen nur Anzeigewerte (`widget-snapshot.json`) und die Kennung der gewählten Anlage.
+Schutzklasse und Geräteschlüssel bleiben, wie sie waren: Der Schlüssel liegt in der **Secure Enclave** und ist nur
+bei entsperrtem Gerät nutzbar (`WhenUnlockedThisDeviceOnly`). Folgen:
+
+- **Gesperrt ruft niemand ab** – weder App noch Widget. Der letzte Stand bleibt stehen, mit Uhrzeit.
+- Ob die Erweiterung den Secure-Enclave-Schlüssel der App verwenden kann, ist im Simulator nicht prüfbar (dort
+  gibt es nur Software-Schlüssel). Laut Apple ist die gespeicherte Hülle an das Gerät gebunden, nicht an die App
+  (CryptoKit „Storing CryptoKit Keys in the Keychain“; Apple-Forum 804612, 810676) – es sollte also gehen. Geht es
+  auf einem Gerät doch nicht, greifen die Wege 1 und 2 unverändert; das Widget zeigt dann den Stand der App.
+
+**Sperrbildschirm.** Geldwerte tragen `privacySensitive()`: Bei gesperrtem Gerät zeigt iOS dort Platzhalter. Die
+einzeilige Anzeige über der Uhr zeigt bewusst keine Geldwerte.
+
+**Kontrollzentrum (iOS 18+).** Der Knopf **Not-Halt** (`ControlWidget`) zeigt, ob der Not-Halt aktiv ist, und öffnet
+DVhub mit der Rückfrage. Er schaltet nicht selbst: Das Kontrollzentrum kann keine Rückfrage zeigen (Apple
+dokumentiert für Controls keinen Dialog), ein Schalter würde ohne Bestätigung schalten. Ablauf: iOS verlangt das
+entsperrte iPhone (`authenticationPolicy = .requiresLocalDeviceAuthentication`), die App fragt nach
+(`confirmationDialog`) und lässt mit Touch ID, Face ID oder Gerätecode bestätigen.
+
+**Live-Aktivität (ActivityKit).** Solange der Not-Halt aktiv ist: Sperrbildschirm und Dynamic Island mit laufender
+Dauer, Akku, Erzeugung, Netz und Uhrzeit des Stands; Antippen öffnet „Steuern“. Abschaltbar unter Mehr →
+Darstellung. Ohne eigenen Push-Server gilt:
+
+- Starten kann die App nur im Vordergrund oder aus einem `LiveActivityIntent` (Kurzbefehl „Not-Halt auslösen“).
+  Erkennt erst der Hintergrundabruf den Not-Halt, erscheint die Aktivität beim nächsten Öffnen.
+- Aktualisiert und beendet wird sie, solange die App offen ist, sonst bei jedem Hintergrundabruf. Dazwischen zählt
+  das System die Dauer selbst weiter; nach 20 min ohne neue Werte sagt die Ansicht, von wann sie sind.
+- iOS beendet eine Aktivität nach acht Stunden und zeigt sie noch bis zu vier Stunden auf dem Sperrbildschirm.
+
+**App-Gruppe.** Ihre Kennung folgt der Bundle-ID (`group.$(DVHUB_BUNDLE_ID)`). Lehnt eine Signatur App-Gruppe oder
+Schlüsselbund-Gruppe ab, beim Bauen
+`DVHUB_APP_ENTITLEMENTS= DVHUB_WIDGET_ENTITLEMENTS= DVHUB_APP_GROUP= DVHUB_KEYCHAIN_GROUP=` anhängen: Die App läuft
+normal, die Widgets zeigen einen Hinweis.
+
+**Kostenloses Personal Team (geprüft 14.11.2026, Xcode 27.0):** „App Groups“ und „Keychain Sharing“ sind erlaubt,
+aber `xcodebuild -allowProvisioningUpdates` legt die App-Gruppe nicht an – das Profil kommt mit leerer Gruppenliste.
+Abhilfe: einmal in Xcode bei beiden Zielen (DVhubApp, DVhubWidgets) unter *Signing & Capabilities* → *App Groups*
+die Gruppe `group.<Bundle-ID>` mit „+“ anlegen und anhaken; danach baut auch die Kommandozeile mit Gruppe. Die
+Schlüsselbund-Gruppe braucht keine Anmeldung bei Apple. Push gibt es mit dem Personal Team nicht – die
+Live-Aktivität braucht keinen.
+
+## Kurzbefehle und Siri (App Intents)
+
+`DVhubApp/Intents/AppIntents.swift`, ohne Einrichtung in der Kurzbefehle-App und per Siri verfügbar
+(`AppShortcutsProvider`):
+
+| Kurzbefehl | Beispiel | Schutz |
+|---|---|---|
+| Akkustand, Erzeugung, Netz, Verbrauch, Überblick | „Wie voll ist der Akku in DVhub?“ | – |
+| Tagesverdienst | „Was hat DVhub heute verdient?“ | entsperrtes Gerät |
+| Not-Halt auslösen / aufheben | „Not-Halt mit DVhub auslösen“ | entsperrtes iPhone **und** Rückfrage |
+
+Die Antwort kommt frisch von der Anlage, wenn das geht, sonst vom letzten Stand – dann mit Uhrzeit. Der Not-Halt
+verlangt `authenticationPolicy = .requiresLocalDeviceAuthentication` (das iPhone selbst, nicht nur eine entsperrte
+Uhr) und `requestConfirmation`. Weitere Schaltpfade gibt es nicht; die Box prüft das Recht „Steuern“ selbst.
+
+## Sprachen
+
+Ausgangssprache Deutsch, dazu Englisch. Texte stehen in String-Katalogen: `DVhubApp/Shared/Localizable.xcstrings`
+(App, Widgets, Intents), `DVhubApp/DVhubApp/InfoPlist.xcstrings`, `DVhubApp/DVhubApp/AppShortcuts.xcstrings` (Sätze
+für Siri) und `DVhubLink/Sources/DVhubLink/Resources/Localizable.xcstrings` (Fehlertexte des Pakets). Zahlen,
+Einheiten, Währung, Datum und Dauer formatiert Foundation in der Sprache und Region des Geräts
+(`Shared/Format.swift`).
+
+```bash
+ios/tools/sync-strings.sh          # neue Texte aus dem Quelltext in die Kataloge (macht Xcode beim Bauen selbst)
+python3 ios/tools/strings.py check # jede Zeichenkette hat Englisch, Platzhalter stimmen überein
+```
+
+Im Code: Literale in `Text`, `Label`, `Button` … übersetzt SwiftUI selbst; wo ein `String` gebraucht wird, steht
+`String(localized:)`. Kennungen, Codes und Jahreszahlen als `String(zahl)` einsetzen – sonst setzt der Katalog
+Tausenderpunkte („4.003“).
+
+## Bedienungshilfen
+
+- **Dynamic Type:** Textstile statt fester Größen; große Ziffern mit `@ScaledMetric`. In den Bedienungshilfen-Größen
+  stehen Karten ein- statt zweispaltig (`AuroraPage.layoutWidth`). Feste Maße haben nur Grafiken (Energiefluss,
+  Platzhalterbild) und die Ersatz-Seitenleiste – die zeigt wie die Leisten des Systems jeden Eintrag groß an, wenn
+  man ihn gedrückt hält (Large Content Viewer).
+- **VoiceOver:** Jede Karte ist ein Element mit Wert und Hinweis. Der Energiefluss sagt in Worten, wohin Energie
+  fließt. Diagramme tragen einen `AXChartDescriptor` (`Design/ChartAccessibility.swift`) – VoiceOver beschreibt sie
+  und spielt sie als Audiograph ab.
+- **Haptik** (`sensoryFeedback`): Warnung bei der Rückfrage zum Not-Halt, Erfolg bzw. Fehler nach dem Schalten und
+  nach einer Kopplung, leichter Anschlag bei Aktionen wie „Aktualisieren“.
+
+## Datenschutz-Manifest
+
+`DVhubApp/PrivacyInfo.xcprivacy` und `DVhubWidgets/PrivacyInfo.xcprivacy`: kein Tracking, keine Tracking-Domains,
+keine erhobenen Datenarten. Begründung: Anlagendaten laufen Ende zu Ende verschlüsselt zwischen dem iPhone und der
+eigenen Anlage; das Relay sieht nur verschlüsselte Daten, der Entwickler nichts. Von `dvhub.online` holt die App
+öffentliche Daten ohne Kennung. Required-Reason-APIs: `UserDefaults` (CA92.1 eigene Einstellungen, 1C8F.1
+App-Gruppe) und in der App Dateizeitstempel (C617.1, Alter der eigenen Zwischenspeicher-Dateien).
+Vor der Einreichung die Angaben in App Store Connect gleich halten („Data Not Collected“).
 
 ## Tests
 
@@ -227,6 +332,17 @@ Nur im Debug-Build gibt es Startargumente für Simulator-Tests und Bildschirmfot
 Detailansicht, `-DVHUB_HISTORY week|month|year` und `-DVHUB_MARKET_DAY <n>`
 wählen Zeitraum bzw. Tag, `-DVHUB_DUO closed|closed-landscape|open` zeigt die
 Flächen des iPhone Duo, `-navPlacement side|bottom` erzwingt die Leistenlage.
+
+Weitere Oberflächentests: `AccessibilityTests` (Schriftgröße accessibility-XL: Karten einspaltig, nichts
+abgeschnitten) und `DuoTests` (nur im iPhone-Duo-Simulator: Leisten des Systems, Ersatz aus):
+
+```bash
+xcodebuild test -project ios/DVhubApp/DVhubApp.xcodeproj -scheme DVhubApp \
+  -destination 'platform=iOS Simulator,name=iPhone Duo' -only-testing:DVhubAppUITests/DuoTests
+```
+
+Die Gegenstelle hält höchstens zehn Geräte und entfernt dann das älteste. Meldet die App danach „entkoppelt“,
+den Schlüsselbund des Simulators leeren (`xcrun simctl keychain <Gerät> reset`) und neu koppeln.
 
 Der Harness kennt außerdem diese Umgebungsvariablen:
 - `HARNESS_APPROVE_DELAY_MS`: Freigabe verzögern, um den Vergleichscode anzusehen.

@@ -2816,6 +2816,16 @@
         }
       }
     },
+    "Gerade aktiv: Leisten des Systems." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Currently active: system bars."
+          }
+        }
+      }
+    },
     "Gerade aktiv: Seitenleiste rechts." : {
       "localizations" : {
         "en" : {

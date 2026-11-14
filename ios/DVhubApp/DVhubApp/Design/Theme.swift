@@ -271,6 +271,7 @@ struct AuroraPage<Content: View>: View {
     var inlineTitle = false
     @ViewBuilder var content: (CGFloat) -> Content
     @State private var width: CGFloat = 0
+    @State private var fold = FoldInsets()
     @Environment(Chrome.self) private var chrome
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -300,10 +301,57 @@ struct AuroraPage<Content: View>: View {
                     .onAppear { width = g.size.width }
                     .onChange(of: g.size.width) { _, w in width = w }
             })
+            // Falz (iPhone Duo): Der Inhalt rückt so ein, dass seine Mitte auf dem
+            // Falz liegt. Die Breite oben misst den eingerückten Inhalt.
+            .padding(.leading, fold.leading)
+            .padding(.trailing, fold.trailing)
         }
+        // Die Fläche der Rollansicht hängt nicht vom Einzug ab — hier wird gemessen.
+        .background(GeometryReader { g in
+            Color.clear.onChange(of: FoldInsets(g), initial: true) { _, f in fold = f }
+        })
         .scrollContentBackground(.hidden)
         .background(AuroraBackground())
         .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+    }
+}
+
+/// Einzug um den Falz des iPhone Duo. Das System meldet ihn als reservierte
+/// Fläche der Art „division“ (`GeometryProxy.reservedRegions`, ab iOS 27.1) —
+/// nur solange sie aktiv ist. Die Rechnung liegt im Paket (FoldRule, getestet).
+struct FoldInsets: Equatable {
+    var leading: CGFloat = 0
+    var trailing: CGFloat = 0
+
+    init() {}
+
+    init(_ g: GeometryProxy) {
+        guard let d = g.verticalDivision else { return }
+        let r = FoldRule.insets(width: g.size.width, divisionMinX: d.minX, divisionMaxX: d.maxX)
+        leading = r.leading
+        trailing = r.trailing
+    }
+}
+
+extension GeometryProxy {
+    /// Aktiver senkrechter Falz in den Koordinaten dieser Ansicht. Ein
+    /// waagerechter Falz (aufgeklappt hochkant) teilt nur die Rollrichtung und
+    /// braucht keinen Einzug.
+    var verticalDivision: CGRect? {
+        guard #available(iOS 27.1, *) else { return nil }
+        return reservedRegions(kind: .division).first { $0.isActive && $0.frame.height > $0.frame.width }?.frame
+    }
+
+    /// Reservierte Flächen als Text für die Diagnose (Mehr → Darstellung).
+    var reservedRegionsText: String {
+        guard #available(iOS 27.1, *) else { return "" }
+        func list(_ kind: ReservedRegion.Kind, _ name: String) -> [String] {
+            reservedRegions(kind: kind, options: .includeInactive).map { r in
+                "\(name) \(Int(r.frame.minX)),\(Int(r.frame.minY)) \(Int(r.frame.width))×\(Int(r.frame.height))\(r.isActive ? "" : " (inaktiv)")"
+            }
+        }
+        let all = list(.division, "Falz") + list(.occlusion, "Verdeckt")
+        return all.isEmpty ? "keine reservierten Flächen" : all.joined(separator: " · ")
     }
 }
 

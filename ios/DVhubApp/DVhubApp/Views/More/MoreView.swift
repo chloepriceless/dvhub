@@ -120,7 +120,9 @@ struct AppearanceView: View {
                          ? String(localized: "Automatisch: Das iPhone legt die Leisten selbst – zugeklappt (iPhone Duo) und im Querformat an den rechten Rand.")
                          : String(localized: "Automatisch: Im Querformat und auf dem zugeklappten iPhone Duo stehen Reiter und Aktionen rechts, sonst unten. „Rechts“ erzwingt die Seitenleiste überall."))
                         .font(.caption).foregroundStyle(Brand.text2)
-                    Text(chrome.railActive ? String(localized: "Gerade aktiv: Seitenleiste rechts.") : String(localized: "Gerade aktiv: Leiste unten bzw. oben."))
+                    Text(chrome.railActive ? String(localized: "Gerade aktiv: Seitenleiste rechts.")
+                         : Chrome.systemPlacesBars ? String(localized: "Gerade aktiv: Leisten des Systems.")
+                         : String(localized: "Gerade aktiv: Leiste unten bzw. oben."))
                         .font(.caption2).foregroundStyle(Brand.dim)
                     if !chrome.diagnostics.isEmpty {
                         Text(chrome.diagnostics).font(.caption2.monospaced()).foregroundStyle(Brand.dim)

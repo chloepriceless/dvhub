@@ -37,6 +37,7 @@
 		8B85DB65A16904E879A31C19 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FE10E70F51CB32DA22D7507 /* WidgetSnapshot.swift */; };
 		8E157C74A84041EF63288910 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = F1DD0B712AEA313D509E08A7 /* InfoPlist.xcstrings */; };
 		8F883119B3D261BBFE9A5DE3 /* SystemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56FC4DBCADF84E70A5F80AA /* SystemController.swift */; };
+		964E1CB27EB364E17DB0576D /* DuoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 255AB1A59DE047F683EAF54D /* DuoTests.swift */; };
 		A0C292BD863AC82AF94E6E2A /* DVhubLink in Frameworks */ = {isa = PBXBuildFile; productRef = 2AD0FCAA6B45D0E5FE1C45A3 /* DVhubLink */; };
 		A231FD845FCF56AFFA243E92 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FE10E70F51CB32DA22D7507 /* WidgetSnapshot.swift */; };
 		A3C171711096CFF0BFF8BAD9 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7594ACFDDAEB82F2CEF6AC /* Models.swift */; };
@@ -102,6 +103,7 @@
 		19DE8A490A17E431BBCE61E0 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		1FF2EB65A9B693ED74FA3AD4 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		223D590A0111D62B6BD6EC5C /* IntegrationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationsView.swift; sourceTree = "<group>"; };
+		255AB1A59DE047F683EAF54D /* DuoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoTests.swift; sourceTree = "<group>"; };
 		2A5F593C4C1925961F2C5564 /* DVhubWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = DVhubWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		2F7594ACFDDAEB82F2CEF6AC /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		300A0166D732DBCC96CC77C8 /* SystemInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemInfoView.swift; sourceTree = "<group>"; };
@@ -184,6 +186,7 @@
 			children = (
 				B7060F9DE5F61F47A01B4B16 /* AccessibilityTests.swift */,
 				DF808B9006DF7EE5F4117BF8 /* ControlTests.swift */,
+				255AB1A59DE047F683EAF54D /* DuoTests.swift */,
 				83E59AD14D725021C77A6C2B /* NavigationTests.swift */,
 				F9FA19FB543D2093BB13EF32 /* PairLinkTests.swift */,
 				9006D35AD69BBA8CA87C109E /* RotationTests.swift */,
@@ -497,6 +500,7 @@
 			files = (
 				380B954B17207B75F5A24EBB /* AccessibilityTests.swift in Sources */,
 				EDCF847A0409AC9D45CE80ED /* ControlTests.swift in Sources */,
+				964E1CB27EB364E17DB0576D /* DuoTests.swift in Sources */,
 				84E13E2E779647520305EE39 /* NavigationTests.swift in Sources */,
 				B1CCB733D799109353CCCCB5 /* PairLinkTests.swift in Sources */,
 				BEF1190AC9955C44EB0EC2CF /* RotationTests.swift in Sources */,

@@ -195,4 +195,27 @@ final class AppLogicTests: XCTestCase {
         XCTAssertTrue(ControlOutcome.rejected(status: 1500).message.contains("1500"), "Codes ohne Tausenderpunkt")
         XCTAssertEqual(ControlOutcome.done.message, "Erledigt.")
     }
+
+    // MARK: Falz (iPhone Duo)
+
+    func testFoldInsetsCentreContentOnDivision() {
+        // Falz mittig: nichts zu tun.
+        var r = FoldRule.insets(width: 951, divisionMinX: 471, divisionMaxX: 480)
+        XCTAssertEqual(r.leading, 0); XCTAssertEqual(r.trailing, 0)
+        // Systemleiste rechts nimmt 80 pt: Fläche 871, Falz bei 471…480 — links ist mehr Platz als rechts.
+        r = FoldRule.insets(width: 871, divisionMinX: 471, divisionMaxX: 480)
+        XCTAssertEqual(r.leading, 80); XCTAssertEqual(r.trailing, 0)
+        // Danach liegt die Mitte des Inhalts auf der Mitte des Falzes.
+        XCTAssertEqual((r.leading + 871 - r.trailing) / 2, (471 + 480) / 2)
+        // Falz weiter links als die Mitte: Rand rechts.
+        r = FoldRule.insets(width: 900, divisionMinX: 300, divisionMaxX: 310)
+        XCTAssertEqual(r.leading, 0); XCTAssertEqual(r.trailing, 290)
+    }
+
+    func testFoldInsetsIgnoreUnusableDivision() {
+        for (w, a, b) in [(600.0, 100.0, 110.0), (600.0, 500.0, 510.0), (0.0, 0.0, 0.0), (600.0, 700.0, 710.0), (600.0, 310.0, 300.0), (600.0, Double.nan, 300.0)] {
+            let r = FoldRule.insets(width: w, divisionMinX: a, divisionMaxX: b)
+            XCTAssertEqual(r.leading, 0, "\(w) \(a) \(b)"); XCTAssertEqual(r.trailing, 0, "\(w) \(a) \(b)")
+        }
+    }
 }
