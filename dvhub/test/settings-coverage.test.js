@@ -127,7 +127,6 @@ const INTENTIONAL = new Map([
   // EOS-Fernbetrieb seit 1.0.10 abgeschaltet (Christin 11.11.2026): Felder aus der
   // Oberfläche genommen, eos-remote.js ruht. Die Werte bleiben gespeichert (Rückweg
   // auf 1.0.9 kennt die Anmeldung noch); 'remote' migriert config-model.js zu 'local'.
-  ['optimizer.eosProxy.mode', 'Fernbetrieb aus (1.0.10): nur noch local, Migration beim Laden'],
   ['optimizer.eosProxy.remote.endpoint', 'Fernbetrieb aus (1.0.10): Wert ruht'],
   ['optimizer.eosProxy.remote.token', 'Fernbetrieb aus (1.0.10): Wert ruht'],
   ['optimizer.eosProxy.remote.jobTimeoutMs', 'Fernbetrieb aus (1.0.10): Wert ruht'],
