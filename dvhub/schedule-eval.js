@@ -2089,17 +2089,23 @@ export function createScheduleEvaluator(ctx) {
     // T-0075: stale SoC telemetry latches active stop-SoC rules off (fail-safe),
     // keyed on soc's per-field success timestamp — not the frozen value.
     const stopSocStale = victronFieldStale(state, 'soc', Number(cfg.victron?.telemetryMaxAgeMs ?? 90000));
+    // M1-Geist (Christin 16.11.): die Zeitplan-SoC-Bedingung gegen den ECHTEN SoC prüfen.
+    // planningSocPct rechnet bei Sungrow den fensterrelativen gemeldeten Wert in echt um (konsistent
+    // mit Anzeige/Boden/EOS); für Victron und andere ist es der normale SoC → kein Verhaltenswechsel.
+    // Ohne gelesenes Gerätefenster Rückfall auf den gemeldeten Wert (rückwärtskompatibel).
+    const stopSocValueRaw = planningSocPct(ctx);
+    const stopSocValue = Number.isFinite(Number(stopSocValueRaw)) ? stopSocValueRaw : state.victron.soc;
     const stopSocDisable = autoDisableStopSocScheduleRules({
       rules: state.schedule.rules,
       nowMin,
-      batterySocPct: state.victron.soc,
+      batterySocPct: stopSocValue,
       socStale: stopSocStale
     });
     if (stopSocDisable.changed) {
       state.schedule.rules = stopSocDisable.rules;
       for (const ruleId of stopSocDisable.disabledRuleIds) {
         pushLog('schedule_stop_soc_reached', {
-          id: ruleId, target: 'gridSetpointW', soc: state.victron.soc,
+          id: ruleId, target: 'gridSetpointW', soc: stopSocValue,
           reason: stopSocStale ? 'soc_stale' : 'below_stop_soc'
         });
       }
