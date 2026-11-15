@@ -45,6 +45,7 @@
 + eebus-provision.sh
 + node-runtime-provision.sh
 + clock-provision.sh
++ sungrow-provision.sh
 + pg-write-tuning.sh
 + pkg-maintain.sh
 + stack-update.sh

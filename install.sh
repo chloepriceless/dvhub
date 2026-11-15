@@ -1335,6 +1335,15 @@ PKGTIMER
 systemctl daemon-reload
 systemctl enable --now dvhub-pkg-maintain.timer >/dev/null 2>&1 || true
 
+# Sungrow-Absicherung C2/C4 (M3): ExecStopPost-Rückgabe (scripts/sungrow-forced-release.mjs) + unabhängiger
+# Watchdog-Timer (scripts/sungrow-forced-watchdog.mjs) als Drop-in/Unit einhängen. Nur für Sungrow-Anlagen; auf
+# anderen Boxen räumt das Skript ein früheres Drop-in wieder weg. Geteilt mit post-update.sh. NON-FATAL.
+if [[ -f "$INSTALL_DIR/sungrow-provision.sh" ]]; then
+  INSTALL_DIR="$INSTALL_DIR" APP_DIR="$APP_DIR" SERVICE_NAME="$SERVICE_NAME" \
+    DATA_DIR="$DATA_DIR" DV_APP_CONFIG="$CONFIG_PATH" \
+    bash "$INSTALL_DIR/sungrow-provision.sh" || true
+fi
+
 PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [[ -z "${PRIMARY_IP}" ]]; then
   PRIMARY_IP="127.0.0.1"

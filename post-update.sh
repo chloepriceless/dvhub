@@ -1003,6 +1003,19 @@ if [[ -f "$INSTALL_DIR/clock-provision.sh" ]]; then
   fi
 fi
 
+# Sungrow-Absicherung C2/C4 (M3, Feld 16.11.): ExecStopPost-Rückgabe + Watchdog-Timer als Drop-in/Unit einhängen —
+# auf der Paket-Box fehlten sie nach dem Update. Nur für Sungrow-Anlagen; sonst wird ein früheres Drop-in entfernt.
+# Geteilt mit install.sh. NON-FATAL, überspringt Container von selbst.
+if [[ -f "$INSTALL_DIR/sungrow-provision.sh" ]]; then
+  echo "  Sungrow-Absicherung (ExecStopPost + Watchdog)..."
+  if pu_bounded 20 env INSTALL_DIR="$INSTALL_DIR" APP_DIR="$APP_DIR" SERVICE_NAME="$SERVICE_NAME" \
+       DATA_DIR="$DATA_DIR" DV_APP_CONFIG="$CONFIG_PATH" bash "$INSTALL_DIR/sungrow-provision.sh"; then
+    echo "  Sungrow-Absicherung: OK"
+  else
+    echo "  WARN: Sungrow-Absicherung fehlgeschlagen (non-fatal)." >&2
+  fi
+fi
+
 # ── 9b. EEBUS (dvhub-eebus) bauen/aktualisieren (entkoppelt, idempotent) ──
 # Nur wenn EEBUS aktiviert ist oder dvhub-eebus schon installiert war: dann
 # baut eebus-provision.sh den Hilfsprozess im Hintergrund (Go-Fassung: Go von
