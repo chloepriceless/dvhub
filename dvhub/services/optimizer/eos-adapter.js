@@ -42,11 +42,14 @@ export function resolveEosProxy(cfg = {}) {
   const p = cfg?.optimizer?.eosProxy || {};
   const timeoutMs = Number(p.timeoutMs);
   const localUrl = p.url || 'http://127.0.0.1:8503';
-  // Fernbetrieb (eos-remote.js) seit 1.0.10 abgeschaltet: immer das EOS unter
-  // optimizer.eosProxy.url, auch wenn eine alte Config noch 'remote' trägt
-  // (config-model.js migriert sie beim Laden). Bis 1.0.9 zeigte 'remote' hier
-  // auf die lokale Fassade (setEosRemoteFacadeUrl, ruht).
-  const mode = 'local';
+  // Betriebsart: 'local' (Python-EOS + Rust-Wheel, Standard) oder 'local-native'
+  // (reiner Rust-Dienst dvhub-optimize, 1.0.11, PLAN rust-1.1 §6.2 E2). Beide
+  // reden dieselbe EOS-HTTP-Schnittstelle unter optimizer.eosProxy.url; der
+  // Betrieb hier (Adapter, Monitor, Run-Trigger, Restarter) ist identisch —
+  // 'local-native' wählt nur, welchen Dienst die Box provisioniert.
+  // Fernbetrieb ('remote') ist seit 1.0.10 weg (config-model.js migriert ihn
+  // beim Laden zu 'local'); ein unbekannter Wert fällt sicher auf 'local'.
+  const mode = p.mode === 'local-native' ? 'local-native' : 'local';
   return {
     enabled: p.enabled === true,
     mode,

@@ -57,6 +57,10 @@ export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = ()
     status: 'unknown', pid: null, version: null, startedAt: null,
     lastCheckAt: null, lastOkAt: null, lastError: null, restarts: 0, lastRestartAt: null,
     lastRestartReason: null,
+    // Welcher Motor antwortet: 'native' (dvhub-optimize serve, local-native) oder
+    // 'python' (Python-EOS). Die native Fassade meldet health.native=true und
+    // health.engine; Python-EOS meldet beides nicht. Bis zur ersten Antwort null.
+    engine: null, native: null,
   };
   let refusedSinceOk = false; // Verbindung abgelehnt, seit EOS zuletzt geantwortet hat
   let solution = null;       // { data, at }
@@ -91,7 +95,12 @@ export function createEosMonitor({ isEnabled, getHealth, fetchSolution, now = ()
         const restarted = reason !== null;
         const oldPid = st.pid;
         refusedSinceOk = false;
-        Object.assign(st, { status: 'up', lastOkAt: now(), lastError: null, version: res.data?.version || st.version });
+        const isNative = res.data?.native === true;
+        Object.assign(st, {
+          status: 'up', lastOkAt: now(), lastError: null, version: res.data?.version || st.version,
+          native: isNative,
+          engine: isNative ? (typeof res.data?.engine === 'string' && res.data.engine ? res.data.engine : 'native') : 'python',
+        });
         if (newPid !== null) st.pid = newPid;
         if (newStartedAt !== null) st.startedAt = newStartedAt;
         if (restarted) {

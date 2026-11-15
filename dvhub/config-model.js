@@ -2906,10 +2906,28 @@ function buildFieldDefinitions() {
       step: 1000,
       help: 'So lange wartet DVhub auf eine Antwort des Optimierers. Ein vollständiger Rechenlauf dauert mehrere Minuten, die einzelnen Abfragen hier sind aber kurz. Zu knapp = der Fahrplan kommt nie an, DVhub fällt auf die eingebaute Planung zurück. Standard: 30 Sekunden.'
     },
+    {
+      section: 'schedule',
+      group: 'eosProxy',
+      groupLabel: 'DV-EOS-Optimierer (Beta)',
+      groupDescription: 'Der eigene EOS-Fork als Planer: DVhub schickt ihm Prognosen und Preise und übernimmt seinen Fahrplan. Noch im Feldtest — erscheint und wirkt nur im Bleeding-Edge-Kanal.',
+      groupOrder: 11,
+      beta: true,
+      path: 'optimizer.eosProxy.mode',
+      label: 'Betriebsart des Optimierers',
+      type: 'select',
+      default: 'local',
+      options: [
+        { value: 'local', label: 'Python-EOS mit Rust-Kern (Standard)' },
+        { value: 'local-native', label: 'Reiner Rust-Dienst, ohne Python (1.0.11)' }
+      ],
+      help: '„Reiner Rust-Dienst“ soll den mitgelieferten nativen Optimierer (dvhub-optimize) direkt als EOS-Dienst laufen lassen — ohne Python-Laufzeit (spart dann ~170–230 MB RAM), bei gleicher Schnittstelle. NOCH OHNE WIRKUNG: die Einrichtung des nativen Dienstes auf dieser Box kommt erst mit einem der nächsten Updates; bis dahin ändert diese Auswahl nichts am laufenden EOS. Standard: Python-EOS mit Rust-Kern.'
+    },
     // Fernbetrieb im DVhub-Rechendienst (optimizer.eosProxy.mode = 'remote' und
     // optimizer.eosProxy.remote.*) gibt es seit 1.0.10 nicht mehr (Christin
     // 11.11.2026): DVhub-EOS rechnet mit dem Rust-Kern überall schnell genug
     // lokal. Gespeicherte Werte migriert migrateEosRemoteMode beim Laden.
+    // Die Betriebsart 'local-native' (reiner Rust-Dienst) kommt mit 1.0.11 dazu.
 
     {
       section: 'schedule',
@@ -6511,8 +6529,10 @@ function migrateEosRemoteMode(raw, warnings) {
   const proxy = raw?.optimizer?.eosProxy;
   if (!isPlainObject(proxy) || !('mode' in proxy)) return;
   if (proxy.mode === 'remote') warnings.push(EOS_REMOTE_MODE_MIGRATION_WARNING);
-  // Jeder andere Wert als 'local' ist ebenso ungültig (früher: Feldprüfung).
-  proxy.mode = 'local';
+  // Gültig: 'local' (Python-EOS + Rust-Wheel, Standard) und 'local-native'
+  // (reiner Rust-Dienst dvhub-optimize, 1.0.11, PLAN rust-1.1 §6.2 E2). Alles
+  // andere — auch das alte 'remote' — fällt auf 'local' zurück.
+  if (proxy.mode !== 'local' && proxy.mode !== 'local-native') proxy.mode = 'local';
 }
 
 function sanitizeRawConfig(rawInput) {

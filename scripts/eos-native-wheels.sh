@@ -41,30 +41,43 @@ sha256_of() {
   else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 
+# --prefix wählt die Schlüsselfamilie: EOS_NATIVE (Wheels, Vorgabe) oder
+# EOS_NATIVE_BIN (das native Optimierer-Binär für mode=local-native). Beide
+# haben je Arch <PREFIX>_<ARCH> und <PREFIX>_<ARCH>_SHA256.
 cmd_list() {
-  local pf="${1:-$(pin_file_default)}" a f s
+  local pf="" prefix="EOS_NATIVE" a f s
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --prefix) prefix="$2"; shift 2 ;;
+      *) pf="$1"; shift ;;
+    esac
+  done
+  pf="${pf:-$(pin_file_default)}"
   [[ -f "$pf" ]] || die "Pin-Datei $pf fehlt"
   for a in "${ARCHS[@]}"; do
-    f="$(val "EOS_NATIVE_$a" "$pf")"; s="$(val "EOS_NATIVE_${a}_SHA256" "$pf")"
+    f="$(val "${prefix}_$a" "$pf")"; s="$(val "${prefix}_${a}_SHA256" "$pf")"
     [[ -n "$f" ]] || continue
-    [[ "$s" =~ ^[0-9a-f]{64}$ ]] || die "EOS_NATIVE_${a}_SHA256 fehlt oder ist kein sha256 ($pf)"
+    [[ "$s" =~ ^[0-9a-f]{64}$ ]] || die "${prefix}_${a}_SHA256 fehlt oder ist kein sha256 ($pf)"
     printf '%s %s %s\n' "$a" "$f" "$s"
   done
 }
 
 cmd_fetch() {
-  local dest="" pf; pf="$(pin_file_default)"
+  local dest="" pf prefix="EOS_NATIVE" urlkey=""; pf="$(pin_file_default)"
   local want=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --pin-file) pf="$2"; shift 2 ;;
+      --prefix) prefix="$2"; shift 2 ;;
+      --url-key) urlkey="$2"; shift 2 ;;
       *) if [[ -z "$dest" ]]; then dest="$1"; else want+=("$1"); fi; shift ;;
     esac
   done
-  [[ -n "$dest" && ${#want[@]} -gt 0 ]] || die "Aufruf: fetch <ziel> <ARCH|datei>... [--pin-file F]"
-  local url; url="$(val EOS_NATIVE_URL "$pf")"
-  [[ -n "$url" ]] || die "EOS_NATIVE_URL fehlt ($pf)"
-  local listing; listing="$(cmd_list "$pf")"
+  [[ -n "$dest" && ${#want[@]} -gt 0 ]] || die "Aufruf: fetch <ziel> <ARCH|datei>... [--pin-file F] [--prefix P] [--url-key K]"
+  urlkey="${urlkey:-${prefix}_URL}"
+  local url; url="$(val "$urlkey" "$pf")"
+  [[ -n "$url" ]] || die "$urlkey fehlt ($pf)"
+  local listing; listing="$(cmd_list --prefix "$prefix" "$pf")"
   mkdir -p "$dest"
   local w line a f s got
   for w in "${want[@]}"; do

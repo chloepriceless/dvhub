@@ -1078,14 +1078,54 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   case "$EOS_NATIVE_HAVE" in
     "$EOS_WANT ok "*|"$EOS_WANT unsupported "*|"$EOS_WANT none "*) EOS_NATIVE_DONE=1 ;;
   esac
+  # local-native (1.0.11): läuft dvhub-optimize als EOS-Dienst statt Python-EOS?
+  # GEWÜNSCHT nur bei DREIERLEI — Config mode=local-native, Opt-in-Freigabe UND ein
+  # Binär-Pin für die Arch dieser Box (ohne Pin gar nicht erst versuchen → kein
+  # Churn auf z. B. armv7l). Der Steuer-Marker .eos-native-engine (eos-provision.sh)
+  # sagt, was läuft: "native <want> <binsig>" oder "fallback <want> <binsig>"
+  # (nativ gewünscht, hier nicht möglich → Python; als erledigt vermerkt, damit kein
+  # teurer Neuversuch je Start). Stimmt Motor+Binär mit dem Soll, bleibt alles; sonst
+  # Neu-Provisionierung (EOS_CURRENT=0). .eos-native-engine ist NICHT .eos-provisioned
+  # (Python-Stand) — der Rückweg erkennt so den Versionswechsel korrekt.
+  EOS_PROXY_MODE="$(node -e 'try{const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String(c?.optimizer?.eosProxy?.mode||""))}catch{}' "${CONFIG_PATH:-}" 2>/dev/null || true)"
+  EOS_NATIVE_OPTIN=0; [[ -e "${EOS_NATIVE_OPTIN_MARKER:-/etc/dvhub-release/eos-native-optin}" ]] && EOS_NATIVE_OPTIN=1
+  case "$(uname -m 2>/dev/null)" in
+    x86_64|amd64) EOS_BIN_ARCH=X86_64 ;; aarch64|arm64) EOS_BIN_ARCH=AARCH64 ;;
+    armv7l|armv7|armhf) EOS_BIN_ARCH=ARMV7L ;; *) EOS_BIN_ARCH="" ;;
+  esac
+  EOS_BIN_SIG=""
+  if [[ -n "$EOS_BIN_ARCH" && -f "$INSTALL_DIR/eos-version.env" ]]; then
+    _bf="$({ grep -E "^EOS_NATIVE_BIN_${EOS_BIN_ARCH}=" "$INSTALL_DIR/eos-version.env" || true; } | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
+    _bs="$({ grep -E "^EOS_NATIVE_BIN_${EOS_BIN_ARCH}_SHA256=" "$INSTALL_DIR/eos-version.env" || true; } | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r')"
+    [[ -n "$_bf" && -n "$_bs" ]] && EOS_BIN_SIG="${_bf}:${_bs:0:12}"
+  fi
+  EOS_DESIRED_NATIVE=0; [[ "$EOS_PROXY_MODE" == "local-native" && "$EOS_NATIVE_OPTIN" -eq 1 && -n "$EOS_BIN_SIG" ]] && EOS_DESIRED_NATIVE=1
+  EOS_ENGINE_HAVE="$(cat "$DATA_DIR/.eos-native-engine" 2>/dev/null || true)"
+  EOS_CURRENT_NATIVE=0; [[ "$EOS_ENGINE_HAVE" == "native $EOS_WANT $EOS_BIN_SIG" ]] && EOS_CURRENT_NATIVE=1
+  EOS_ENGINE_SETTLED=0
+  if [[ "$EOS_DESIRED_NATIVE" -eq 1 ]]; then
+    case "$EOS_ENGINE_HAVE" in "native $EOS_WANT $EOS_BIN_SIG"|"fallback $EOS_WANT $EOS_BIN_SIG") EOS_ENGINE_SETTLED=1 ;; esac
+  elif [[ -z "$EOS_ENGINE_HAVE" ]]; then
+    EOS_ENGINE_SETTLED=1
+  fi
+  if [[ "$EOS_ENGINE_SETTLED" -eq 0 ]]; then EOS_CURRENT=0; fi
   EOS_NATIVE_ONLY=0
   # Ausfuehrbares venv gehoert dazu (Review 25.10.2026): ein Update, das
   # eos-venv/ weggeraeumt hatte, meldete sonst "EOS: OK" mit totem Dienst.
   if [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 && "$EOS_NATIVE_DONE" -eq 0 ]]; then
     EOS_NATIVE_ONLY=1
   fi
-  if [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 && "$EOS_NATIVE_DONE" -eq 1 ]]; then
-    # Aktuell — nur sicherstellen, dass der Dienst läuft (schnell).
+  if [[ "$EOS_CURRENT_NATIVE" -eq 1 && "$EOS_DESIRED_NATIVE" -eq 1 && -x "$INSTALL_DIR/bin/dvhub-optimize" && -f "$EOS_UNIT_PATH" ]] \
+     && grep -q 'dvhub-optimize serve' "$EOS_UNIT_PATH" 2>/dev/null; then
+    # Nativer Optimierer aktuell (Motor-Marker, Binär + Unit stimmen) — nur laufen lassen.
+    systemctl enable eos.service >/dev/null 2>&1 || true
+    systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
+    echo "  EOS: OK (nativer Optimierer aktuell: ${EOS_HAVE})"
+  elif [[ -d "$EOS_DIR/.git" && -f "$EOS_UNIT_PATH" && -x "$EOS_VENV/bin/python" && "$EOS_CURRENT" -eq 1 && "$EOS_NATIVE_DONE" -eq 1 ]] \
+       && ! grep -q 'dvhub-optimize serve' "$EOS_UNIT_PATH" 2>/dev/null; then
+    # Aktuell (Python-EOS + Rust-Wheel) — nur sicherstellen, dass der Dienst läuft
+    # (schnell). Eine native Unit zählt hier NIE als „Python aktuell" (Codex-P2):
+    # sonst bliebe nach einem abgebrochenen Rückweg der native Dienst unter „OK".
     systemctl enable eos.service >/dev/null 2>&1 || true
     systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
     echo "  EOS: OK (aktuell: ${EOS_HAVE})"
@@ -1110,10 +1150,11 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
         --setenv=INSTALL_DIR="$INSTALL_DIR" \
         --setenv=DATA_DIR="$DATA_DIR" \
         --setenv=EOS_NATIVE_ONLY="$EOS_NATIVE_ONLY" \
+        --setenv=EOS_PROXY_MODE="$EOS_PROXY_MODE" \
         bash "$INSTALL_DIR/eos-provision.sh" 2>/dev/null \
         || echo "  WARN: EOS-Hintergrund-Provisionierung konnte nicht gestartet werden (non-fatal)." >&2
     else
-      SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" EOS_NATIVE_ONLY="$EOS_NATIVE_ONLY" \
+      SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" EOS_NATIVE_ONLY="$EOS_NATIVE_ONLY" EOS_PROXY_MODE="$EOS_PROXY_MODE" \
         setsid bash "$INSTALL_DIR/eos-provision.sh" </dev/null >>"$DATA_DIR/eos-provision.log" 2>&1 &
     fi
   fi
