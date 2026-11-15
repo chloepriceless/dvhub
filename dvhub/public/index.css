@@ -72,20 +72,19 @@
   .topbar-nav a.is-active::after { display:none; }
 }
 
-/* ─── leit-grid: zwei ~gleiche Spalten + Energiefluss fest in der Mitte ───
-   M5 (Feld 16.11., 1600×1000, zwei Sungrow-WR): früher bestimmte die (mit der
-   WR-Kachel 1522 px hohe) linke Spalte die Höhe des Energieflusses → der
-   Börsenchart rutschte unter den Bildschirm. Jetzt: der Energiefluss hat eine
-   FESTE Höhe (wächst NICHT mit den Spalten), die Spalten sind oben ausgerichtet
-   (align-self:start), und die Wechselrichter-Kachel sitzt als volle Reihe UNTER
-   dem Energiefluss (Master | Slave | Summe nebeneinander), erst danach der Chart. */
+/* ─── leit-grid: schmale Seitenspalten (300/320 px) + breite Mitte ───
+   M5b (Feld 16.11.): Spalten 300px/1fr/320px (Mitte breit). Der Energiefluss hat eine FESTE Höhe
+   (clamp, wächst NICHT mit den Spalten); die Wechselrichter-Kachel (zwei Sungrow-WR) stapelt sich in der
+   MITTELSPALTE direkt UNTER dem Energiefluss (keine eigene volle Reihe — die ließe neben den Seitenspalten
+   Leerraum). Die Seitenspalten spannen beide Zeilen (align-self:start), damit ihre Kacheln die Höhe neben
+   Energiefluss UND WR-Kachel füllen. Danach der Börsenchart über die volle Breite. */
 .leit-grid {
   display:grid;
   gap:var(--gap-3);
-  grid-template-columns:1fr minmax(0, 1.25fr) 1fr;
+  grid-template-columns:300px 1fr 320px;
   grid-template-areas:
     "left pf   right"
-    "wr   wr   wr"
+    "left wr   right"
     "epex epex epex";
   grid-template-rows:auto auto auto;
   align-items:start;
@@ -109,10 +108,19 @@
 
 .rail { display:flex; flex-direction:column; gap:10px; }
 
-/* M5: Wechselrichter-Kachel als volle Reihe — Master | Slave | Summe nebeneinander (ab genug Breite). */
-.leit-wr .wr-cols { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:var(--gap-3); align-items:start; }
-.leit-wr .wr-col { display:flex; flex-direction:column; gap:6px; min-width:0; }
-.leit-wr .rail-card-head { flex-wrap:wrap; gap:6px; }
+/* M5b: Wechselrichter-Kachel kompakt in der Mittelspalte — zwei Spalten Master | Slave (keine eigene
+   Summe-Spalte; Summe einzeilig im Kopf). Lange Werte werden gekürzt (Ellipsis), nicht umgebrochen. */
+.leit-wr .wr-cols { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--gap-3); align-items:start; }
+.leit-wr .wr-col { display:flex; flex-direction:column; gap:4px; min-width:0; }
+/* Kopf: Titel · Modus · Freigeben-Knopf; Summe darunter einzeilig. */
+.leit-wr .rail-card-head { flex-wrap:wrap; gap:6px 10px; align-items:baseline; }
+.leit-wr .wr-head-mode { font-family:var(--f-mono); font-size:11px; color:var(--text-2); }
+.leit-wr .wr-head-spacer { flex:1 1 auto; }
+.leit-wr .wr-sum { font-size:12px; color:var(--text-2); margin:0 0 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Kompakte Zeilen wie andere Kacheln; lange Werte kürzen statt umbrechen. */
+.leit-wr .wr-line, .leit-wr .rail-row { min-height:0; }
+.leit-wr .wr-line .wr-v, .leit-wr .rail-row .v { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+.leit-wr .wr-grid-3 .v { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 @media (max-width:900px) { .leit-wr .wr-cols { grid-template-columns:1fr; } }
 
 /* ─── Rail cards ─── */

@@ -275,7 +275,14 @@
       showCountdown: s.sungrowEms ? isExternalActive(s.sungrowEms) : false,
       master: masterRow(s),
       slave: slaveRow(s),
-      sum: { pv: watt(v.sungrowSystemPvW), battery: batteryDirText(v.sungrowSystemBatteryW), soc: pct(v.soc) },
+      // Summe (M5b): SoC = ECHTER System-SoC (energyBalance.battery.socPct, von planningSocPct real berechnet),
+      // NICHT der gemeldete Fenster-Mittel (v.soc). Akku/PV = Systemsummen.
+      sum: {
+        pv: watt(v.sungrowSystemPvW),
+        battery: batteryDirText(v.sungrowSystemBatteryW),
+        soc: pct(v.soc),
+        socReal: pct(s.energyBalance && s.energyBalance.battery ? s.energyBalance.battery.socPct : null),
+      },
     };
   }
 
@@ -329,7 +336,9 @@
     set('sungrowWrSlaveEms', vw.slave.role.indexOf('gesteuert') >= 0 ? `${vw.slave.decision} · Besitz ${vw.slave.owns ? 'ja' : 'nein'} · Takt ${vw.slave.regulate}` : `BDC ${vw.slave.bdc}`);
     set('sungrowWrSlaveHealth', vw.slave.health);
     set('sungrowWrSlaveWrites', vw.slave.role.indexOf('gesteuert') >= 0 ? `Writes heute: ${vw.slave.writes}` : '');
-    set('sungrowWrSumSoc', vw.sum.soc); set('sungrowWrSumAkku', vw.sum.battery); set('sungrowWrSumPv', vw.sum.pv);
+    // Summe einzeilig im Kopfbereich (M5b): echter System-SoC, sonst gemeldeter als Rückfall.
+    const sumSoc = vw.sum.socReal !== DASH ? `real ${vw.sum.socReal}` : `${vw.sum.soc} (gemeldet)`;
+    set('sungrowWrSum', `Summe: SoC ${sumSoc} · Akku ${vw.sum.battery} · PV ${vw.sum.pv}`);
     wireReleaseButton(d);
   }
 
