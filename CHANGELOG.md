@@ -16,6 +16,41 @@ verweist hierher.
   bei nennenswertem Netzbezug ist unplausibel (sie entsteht kurz, während der Master-Akku umschaltet oder
   ein Slave-Wert fehlt). DVhub behandelt sie jetzt als unbekannt (das Netzlade-Tor lehnt dann ab statt auf
   0 zu deckeln) und hält im Poller den letzten gültigen Lastwert bis `telemetryMaxAgeMs`.
+- **Sungrow Dauerbetrieb (Forced): kein hängender Zwangsbefehl mehr (Bug 1/F1a, Feldtest).** Im
+  dauerhaften Forced-Split-Betrieb blieb ein einmal gesetzter Lade-/Entladebefehl stehen, wenn die
+  Vorgabe wegfiel; DVhub nimmt den EMS-Sollwert jetzt sofort zurück (Eigenverbrauch) und schreibt im
+  selben Takt Stopp (0xCC).
+- **Sungrow: echter SoC statt fensterrelativem SoC (M1, kritisch).** Der Sungrow meldet den SoC
+  fensterrelativ (gemeldet 0 % = reale Geräte-Untergrenze). DVhub rechnet den gemeldeten SoC jetzt über
+  das Geräte-Fenster (Min-/Max-SoC 13059/13058) in den **echten** SoC um — für Anzeige, SoC-Boden und
+  EOS. „Gemeldet 1 %" entspricht real ~11 %.
+- **Sungrow: eigener EMS-Modus nach Neustart nicht als fremd fehlgedeutet (M2, kritisch).** Ging der
+  Besitz-Merker verloren (Neustart im Forced-Betrieb), hielt DVhub den selbst gesetzten Modus 2 für eine
+  Fremdsteuerung und gab ab. Der Merker wird jetzt beim Wiedereintritt sicher gesetzt.
+- **Sungrow: Wettlauf nach „clear" — EMS-Sollwert sofort zurücknehmen.** Nach dem Löschen einer Vorgabe
+  wird der Sollwert sofort zurückgenommen, statt kurz weiterzuwirken.
+- **Support-Tunnel: im Portal gewählte Dauer gilt (M6).** Die im Installateur-Portal gewählte Laufzeit
+  wurde fälschlich auf `autoCloseMin` gedeckelt; jetzt gilt die gewählte Dauer. Zusätzlich nullt der
+  timergetriebene Auto-Close `openedAt` sauber (kein Doppel-Schließen-Log) und protokolliert externes
+  Schließen mit Grund plus Ablaufwarnung.
+- **Automationsplan zeigt lokale Zeit statt UTC (GH #20).** Die Plan-Zusammenfassung rechnete in UTC;
+  jetzt in lokaler Zeit.
+- **Sungrow: Netzstrom-Anteil im Akku bleibt bei leerem Akku nicht mehr stehen (M10).** Der
+  Netzstrom-Zähler rechnet jetzt mit dem **echten** SoC und deckelt den Netzanteil auf den nutzbaren
+  Inhalt **über** dem wirksamen Boden ((real − Boden) × Kapazität). Erreicht der Akku die Entladegrenze
+  (Split 0/0), wird der Anteil auf 0 gesetzt, der Rest als Verlust gebucht und die Einspeisesperre
+  **gelöst** — damit greift auch EOS-„Halten" (M8) wieder, statt dauerhaft ausgesetzt zu bleiben.
+- **Sungrow: Akku-Kachel zeigte den gemeldeten statt des echten SoC, Felder leer (M9).** Die Kachel
+  zeigt jetzt den echten System-SoC groß (gemeldeten klein daneben), eine echte 0–100-%-Skala mit Marken,
+  je Akku Master/Slave, und füllt Grid-Setpoint (aus dem Sungrow-Steuerpfad), wirksame Minimum-SoC-Grenze
+  und Max-Entladung statt „—".
+- **Sungrow: Regeltakt „Automatisch" hing auf 5 s (M7b).** Die gemessene Antwortzeit wird jetzt laufend
+  als gleitender Median geführt (Startphase übersprungen) statt mit dem eingefrorenen Startwert; die
+  Master-Modbus-Gesundheit zählt Poll **und** EMS zusammen, und es gibt eine „Antwort"-Zahl plus
+  separaten „Regelzyklus".
+- **Leitstand-Layout: Spaltenverhältnis zurück, WR-Kachel kompakt (M5b).** Das Spaltenverhältnis
+  (`300px 1fr 320px`) ist wiederhergestellt; die Wechselrichter-Kachel sitzt kompakt in der Mittelspalte
+  unter dem Energiefluss statt als volle Reihe mit Leerfläche.
 
 ### Geändert
 
@@ -79,6 +114,27 @@ verweist hierher.
   den zweiten WR dadurch **nicht mehr selbst** dazu (keine Doppelzählung) — er liest die bereits
   aggregierten Systemwerte und nutzt vom zweiten WR nur noch die BDC-Nennleistung für die
   System-Leistungsgrenze. Ohne zweite Verbindung/Aggregation unverändert.
+- **Sungrow: Dauer-Forced-Split als Betriebsart (Beta).** Der Wechselrichter bleibt dauerhaft im
+  External-EMS-Modus 2; DVhub regelt den Eigenverbrauch selbst und verteilt Lade-/Entladevorgaben im
+  Split auf beide WR. Der Slave folgt dem Master-Modus und bekommt nur Befehl (13051) und Leistung
+  (13052). Ein Übergangs-Prinzip überbrückt kurze Löcher in External EMS; Keepalive hält die echte
+  Rückfallfrist; der Wiedereintritt ist ratenbegrenzt.
+- **Sungrow: SoC-Aufteilung im Split verfeinert.** Die Reglerleistung wird nach Kapazitäts-Grundanteil
+  plus Totband und proportionalem Gegensteuern auf beide WR verteilt (Entladen → WR mit mehr Reserve
+  mehr, Laden → WR mit mehr freiem Platz mehr; ein WR an der Grenze bekommt 0, der andere übernimmt). Je
+  WR werden Min-/Max-SoC (13059/13058) eingehalten, Notladung erkannt (Running-State-Bit) und der SoC
+  angeglichen; der SoC-Boden je WR schützt den schwächeren Akku.
+- **Sungrow: Schreibdrossel und adaptiver Regeltakt je WR.** Writes werden je WR gedrosselt und nur bei
+  echtem Schreibvorgang geloggt; je Register gilt ein Schreibbudget. Der Regeltakt ist einstellbar
+  (Auto/0,25/1/2/5 s, Slave separat) und streckt sich im Auto-Modus nach Antwortzeit.
+- **Sungrow: EOS-„Halten"/„Netzladen" aussetzen bei gesperrtem Netzanteil (M8).** Solange Netzstrom im
+  Akku gesperrt ist (`gridShare.locked`), setzt DVhub Halten und Netzladen aus und verbraucht erst den
+  Netzanteil im Haus (Eigenverbrauch), bis die Sperre fällt; danach greift Halten wieder.
+- **Netzlade-Verbot universell am Aktuator (rechtlich).** Das Verbot des Netzladens greift jetzt zentral
+  im Aktuator für alle Quellen (EOS, Regeln, §14a, Netzanschluss, Hand-Sollwert).
+- **Sungrow: Slave-Fehler im Split → Master-only statt Modus 0 (Absicherung C6).** Scheitert der Slave
+  im Split (Herzschlag/Rücklesen/Telemetrie), steuert DVhub nur noch den Master weiter, statt beide auf
+  Modus 0 zu zwingen; bei Telemetrie-Ausfall wird der Slave angehalten.
 
 ### Hinzugefügt
 
@@ -138,6 +194,24 @@ verweist hierher.
   angezeigte/telemetrische **Hauslast** wird auf die System-Last korrigiert
   (`Last_System = Last_Master + Slave-PV − Slave-Akku`), weil der einzige Zähler am Master die
   Slave-Leistung nicht als Hausverbrauch sieht.
+- **Sungrow: Absicherung gegen hängenden Zwangsbetrieb (M3/M3a, sicherheitskritisch).** Auf Paket-Boxen
+  provisioniert DVhub ein externes Not-Aus (`ExecStopPost` → gibt den Forced-Modus beim geordneten
+  Dienst-Stop sicher frei) und einen Box-Watchdog-Timer (alle 60 s), der bei eingefrorenem DVhub den
+  Wechselrichter freigibt. Das systemd-Drop-in wird zuverlässig angelegt (Allowlist erweitert,
+  `daemon-reload` läuft mit) und die Absicherungs-Skripte liegen im Paket. Zusätzlich Merker-Start-Reset
+  nach Neustart im Forced-Modus (C3).
+- **Sungrow: Block-Reads statt Einzel-Lesungen je Takt (N3).** Register werden blockweise gelesen statt
+  einzeln — deutlich weniger Modbus-Anfragen je Regeltakt.
+- **Sungrow: Gerätegrenzen 33047/33048/33049 lesen (nur lesend, B3/H).** Max. Lade-/Entladeleistung je
+  WR werden aus den Geräteregistern gelesen (Laden ≠ Entladen) und als GUI-Vorschlag angezeigt — kein
+  Schreibzugriff auf diese Register.
+- **Leitstand: Regeltakt-Einstellung und Modbus-Gesundheit je WR (M7).** Neue Einstellung „Regeltakt"
+  (`sungrow.regulateEveryMs`, Slave separat) und eine Modbus-Zeile (Takt · Antwort · Fehler 24 h) je WR
+  in der Wechselrichter-Kachel; je WR eigener Anteil, Akku-Richtung und wirksame Grenze.
+- **Box-Uhr: NTP beim Provisionieren aktivieren (Aufgabe 11).** Die Provisionierung aktiviert
+  `systemd-timesyncd` und meldet den Zustand.
+- **Installateur-Portal: Steuerungs-Report.** Zeigt Provider, Netzzähler, Steuermodus und Topologie auf
+  einen Blick.
 
 ## [1.0.10] - 2026-11-13
 
