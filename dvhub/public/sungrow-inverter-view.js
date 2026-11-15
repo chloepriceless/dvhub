@@ -303,9 +303,12 @@
     if (!card) return;
     const vw = view(status);
     card.hidden = vw.hidden;
-    // Punkt 6: bei zwei Sungrow-WR den Akku im Leitstand als „Sungrow (Master + Slave)" benennen (statt „Victron").
+    // Punkt 6 + Kann-3 (Feld 16.11.): bei zwei Sungrow-WR heißt der Akku „Sungrow" (einzeilig), die Rollen
+    // „Master + Slave" stehen als Untertitel darunter — bei 300 px Spaltenbreite brach der lange Name sonst dreizeilig um.
     const nameEl = d && d.getElementById('batSourceName');
-    if (nameEl) nameEl.textContent = vw.hidden ? 'Victron' : 'Sungrow (Master + Slave)';
+    if (nameEl) nameEl.textContent = vw.hidden ? 'Victron' : 'Sungrow';
+    const subEl = d && d.getElementById('batSourceSub');
+    if (subEl) { subEl.textContent = 'Master + Slave'; subEl.hidden = vw.hidden; }
     if (vw.hidden) return;
     const set = (id, text) => { const el = d.getElementById(id); if (el) el.textContent = text; };
     // M5c: lange Zeilen werden per CSS gekürzt (Ellipsis) — den VOLLEN Text als Tooltip (title) mitgeben, damit
