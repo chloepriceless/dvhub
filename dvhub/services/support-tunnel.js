@@ -259,9 +259,15 @@ export function createSupportTunnel(ctx, deps = {}) {
     const t = Number(ctx?.lastUpdateStartedAt);
     return Number.isFinite(t) && t > 0 && (now() - t) < UPDATE_GRACE_MS;
   });
-  // Auto-Schließen nie länger als die konfigurierte Policy (autoCloseMin): eine angefragte TTL darf zusätzlich
-  // kürzen, aber nie verlängern. Klärt die Diskrepanz autoCloseMin 60 vs. expiresAt 120 (Task G): die Policy deckelt.
-  const effectiveTtlMin = (ttlMin, autoCloseMin) => Math.min(clampTtlMin(ttlMin, autoCloseMin), clampTtlMin(autoCloseMin));
+  // Die im Portal gewählte Dauer gilt (M6, Feld 16.11.): 30 min / 1 h / 2 h / 4 h. NUR an die feste Produkt-
+  // Obergrenze geklemmt (clampTtlMin → [TTL_MIN_FLOOR, TTL_MIN_CEIL] = 5 min…4 h), NICHT durch autoCloseMin gedeckelt.
+  // Früher deckelte Math.min(…, clampTtlMin(autoCloseMin)) jede Portal-Dauer auf autoCloseMin (60) → 2 h/4 h wurden
+  // still auf 1 h gekürzt. autoCloseMin ist nur noch der STANDARD, wenn das Portal KEINE Dauer schickt.
+  const effectiveTtlMin = (ttlMin, autoCloseMin) => {
+    const n = Number(ttlMin);
+    if (Number.isFinite(n) && n > 0) return clampTtlMin(n);
+    return clampTtlMin(autoCloseMin);
+  };
   // Zeiten für die Schließen-Protokolle (Task G: jedes Schließen mit openedAt/expiresAt), BEVOR sie genullt werden.
   const closeTimes = () => ({ openedAt, expiresAt });
 

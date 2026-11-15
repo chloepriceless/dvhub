@@ -1739,14 +1739,15 @@ function buildFieldDefinitions() {
       groupLabel: 'Fern-Support · Voreinstellungen',
       groupDescription: 'Optionaler, vom Kunden kontrollierter Support-Zugang.',
       path: 'support.tunnel.autoCloseMin',
-      label: 'Tunnel-Auto-Schließung (Minuten)',
+      label: 'Standard-Tunnel-Dauer (Minuten)',
       type: 'select',
       options: [
         { value: 30, label: '30 Minuten' },
         { value: 60, label: '60 Minuten (Standard)' },
-        { value: 120, label: '120 Minuten' }
+        { value: 120, label: '120 Minuten' },
+        { value: 240, label: '240 Minuten (4 Stunden)' }
       ],
-      help: 'Spätestens nach dieser Zeit schließt sich ein geöffneter Support-Tunnel automatisch wieder. Du kannst ihn jederzeit vorher manuell beenden.'
+      help: 'Standard-Laufzeit eines Support-Tunnels, wenn beim Öffnen KEINE Dauer gewählt wurde. Wird der Tunnel über das Support-Portal mit einer Dauer geöffnet (30 min / 1 h / 2 h / 4 h), gilt immer diese gewählte Dauer. Du kannst den Tunnel jederzeit vorher manuell beenden.'
     },
 
     {

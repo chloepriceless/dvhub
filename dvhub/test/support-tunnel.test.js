@@ -234,13 +234,39 @@ test('G2: jedes Schließen loggt Grund + openedAt + expiresAt', () => {
   assert.equal(closed.data.expiresAt, t + 30 * 60 * 1000);
 });
 
-test('G3: angefragte TTL über der Policy autoCloseMin wird auf die Policy gedeckelt (60, nicht 120)', () => {
+test('M6: die im Portal gewählte Dauer gilt — 120 wird NICHT auf autoCloseMin 60 gedeckelt', () => {
   const { ctx } = makeCtx(); // autoCloseMin: 60
   const tm = timerHarness();
   const t = 1_000_000;
   const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
-  tun.open({ ttlMin: 120 }, 'christin'); // angefragt 120, Policy 60
-  assert.equal(tun.status().expiresAt, t + 60 * 60 * 1000, 'auf 60 min gedeckelt');
+  tun.open({ ttlMin: 120 }, 'christin'); // Portal wählte 2 h → 2 h gelten
+  assert.equal(tun.status().expiresAt, t + 120 * 60 * 1000, '2 h bleiben 2 h');
+});
+
+test('M6: 4 h (größte Portal-Option) bleibt 4 h; ohne Portal-Dauer gilt autoCloseMin als Standard', () => {
+  const { ctx } = makeCtx(); // autoCloseMin: 60
+  const tm = timerHarness();
+  const t = 2_000_000;
+  const mk = () => createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
+  const a = mk();
+  a.open({ ttlMin: 240 }, 'christin');
+  assert.equal(a.status().expiresAt, t + 240 * 60 * 1000, '4 h bleiben 4 h');
+  a.close('christin');
+  const b = mk();
+  b.open({}, 'christin'); // keine Dauer → autoCloseMin (60) als Standard
+  assert.equal(b.status().expiresAt, t + 60 * 60 * 1000, 'ohne Portal-Dauer: autoCloseMin 60');
+});
+
+test('M6: erneutes Öffnen verlängert auf die neue (längere) Dauer', () => {
+  const { ctx } = makeCtx();
+  const tm = timerHarness();
+  const t = 1_000_000;
+  const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
+  tun.open({ ttlMin: 30 }, 'christin');
+  assert.equal(tun.status().expiresAt, t + 30 * 60 * 1000);
+  const r = tun.open({ ttlMin: 240 }, 'christin'); // nochmal öffnen mit längerer Dauer
+  assert.equal(r.refreshed, true);
+  assert.equal(tun.status().expiresAt, t + 240 * 60 * 1000, 'auf 4 h verlängert (nicht auf 60 gedeckelt)');
 });
 
 test('G4: Auto-Schließen während eines Updates wird aufgeschoben (Tunnel bleibt offen)', () => {
