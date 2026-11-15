@@ -1173,20 +1173,27 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     // Slave nicht kommandieren bei master-only ODER Notladung (uncontrollable) → nur best effort in Self halten.
     const skipSlave = slaveUncommanded || slaveEmergency;
     const slaveDecision = skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveW);
-    const masterDecision = mk(masterW);
-    // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst). Scheitert er → beide sicher in Self.
+    let masterDecision = mk(masterW);
+    let effMasterW = masterW; let effSlaveW = slaveW; let slaveFellBack = false;
+    // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst).
     if (skipSlave) {
-      // master-only: Slave in Modus 0 (Self) halten. Scheitert das nicht hart — der Slave liegt dann ohnehin in Self.
+      // master-only/Notladung: Slave in Modus 0 (Self) halten. Scheitert das nicht hart — der Slave liegt dann ohnehin in Self.
       try { await slaveActuator.neutralize('self'); } catch { /* best effort */ }
     } else {
       const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
       if (!sr.ok) {
-        await neutralizeBoth('split_slave_failed');
-        st.error = `split_slave: ${sr.error || 'failed'}`;
-        logOnce(st.error, 'sungrow_ems_split_aborted', { side: 'slave', error: sr.error || null }, 'warn');
-        st.decision = { mode: 'self', reason: 'split_slave_failed', at: t };
-        publish();
-        return { ok: false, readError: sr.readError === true, error: st.error };
+        // Absicherung C6 (Aufgabe 3): EIN Slave-Fehler (z. B. „EMS-Register lesen fehlgeschlagen: modbus exception 4",
+        // Feld 15.11.) darf NICHT beide WR auf Modus 0 werfen (~20 s Ausfall). readDevice hat den Lesevorgang bereits
+        // 1× nach 300 ms wiederholt (retryable). Scheitert der Slave trotzdem, faellt DVhub auf Master-only zurueck:
+        // den Slave sicher zurueckziehen (0xCC, best effort) und seinen Anteil dem Master geben (bis zu dessen Grenze).
+        // Der Master steuert weiter. Modus 0 (beide in Self) nur, wenn der MASTER selbst nicht sicher steuerbar ist
+        // (naechster try-Block). Ein fremdes EMS am Slave (sr.foreign) wird ebenfalls nicht angefasst → Master-only.
+        try { await slaveActuator.neutralize('split_slave_failed'); } catch { /* best effort */ }
+        effSlaveW = 0;
+        effMasterW = Math.min(decision.powerW, masterMax);
+        masterDecision = mk(effMasterW);
+        slaveFellBack = true;
+        logOnce(`${sr.error}`, 'sungrow_ems_split_slave_fallback', { side: 'slave', error: sr.error || null, readError: sr.readError === true, masterW: effMasterW, text: 'Sungrow: Slave-Fehler im Split — Anteil auf den Master verlagert, der Master steuert weiter (kein Modus 0).' }, 'warn');
       }
     }
     // Master-Anteil. Scheitert er → beide sicher in Self.
@@ -1199,24 +1206,27 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       st.decision = {
         ...decision, at: t, trigger: reason,
         split: {
-          masterW, slaveW, strategy, charge,
+          masterW: effMasterW, slaveW: effSlaveW, strategy, charge,
           masterMaxW: masterMax, slaveMaxW: slaveMax,
           masterFloorPct, slaveFloorPct, masterCeilPct, slaveCeilPct,
           masterLimitPct: charge ? masterCeilPct : masterFloorPct,
           slaveLimitPct: charge ? slaveCeilPct : slaveFloorPct,
           slaveEmergencyCharge: slaveEmergency,
+          slaveFellBack, // Aufgabe 3: Slave-Fehler → Anteil auf den Master verlagert, Master steuert weiter
         },
       };
-      pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW, slaveW, strategy, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
+      pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, strategy, slaveFellBack, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
       publish();
-      return { ok: true, split: true, decision, masterW, slaveW };
+      return { ok: true, split: true, decision, masterW: effMasterW, slaveW: effSlaveW, slaveFellBack };
     } catch (e) {
+      // Der MASTER ist nicht sicher steuerbar → beide sicher in Self (Modus 0). Das ist der EINZIGE Weg zu Modus 0 im
+      // Split (ein Slave-Fehler fuehrt oben nur auf Master-only, Aufgabe 3).
       await neutralizeBoth('split_master_failed');
       st.error = e?.message || String(e);
       logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error }, 'warn');
       st.decision = { mode: 'self', reason: 'split_master_failed', at: t };
       publish();
-      return { ok: false, readError: e?.code === 'heartbeat_mismatch', error: st.error };
+      return { ok: false, readError: e?.code === 'heartbeat_mismatch' || e?.code === 'ems_read_error', error: st.error };
     }
   }
 
@@ -1742,6 +1752,9 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         if (e?.code === 'foreign_ems_mode') return { ok: false, foreign: true, error: st.error };
         if (e?.code === 'heartbeat_mismatch') return { ok: false, heartbeatMismatch: true, error: st.error };
         if (e?.code === 'emergency_stop_active') return { ok: false, blocked: true, error: st.error };
+        // Reines Lesen der Slave-Register fehlgeschlagen (modbus exception 4 o. Ä.) — es wurde NICHTS geschrieben.
+        // Der Aufrufer (stepSplit, Aufgabe 3) faellt dann auf Master-only zurueck statt beide auf Modus 0 zu werfen.
+        if (e?.code === 'ems_read_error') return { ok: false, readError: true, error: st.error };
         return { ok: false, error: st.error };
       }
     });

@@ -70,7 +70,7 @@ export function sungrowImage(over = {}) {
 // Code auffällt (falscher Wert) und nur das Menge-2-Lesen den echten Wert sieht.
 const HB_ADDR = wire(13080);
 
-export function mockSungrow(image, { failWriteAt = null, ignoreWriteAt = null, applyThenFailAt = null, failReadOnce = null, onRead = null, hbQty1Bogus = 600, hbReadDelta = 0 } = {}) {
+export function mockSungrow(image, { failWriteAt = null, ignoreWriteAt = null, applyThenFailAt = null, failReadOnce = null, failReadAt = null, onRead = null, hbQty1Bogus = 600, hbReadDelta = 0 } = {}) {
   let readFailed = false;
   return {
     type: 'modbus',
@@ -83,6 +83,9 @@ export function mockSungrow(image, { failWriteAt = null, ignoreWriteAt = null, a
       const quantity = Number(conf.quantity ?? 1);
       this.reads.push({ fc, address, quantity });
       if (onRead) onRead({ fc, address });
+      // Dauerhafter „modbus exception 4" (Geräte-/Slave-Fehler, Feld 15.11.) auf einer Adresse — readDevice wiederholt
+      // einmal (retryable) und scheitert dann (ems_read_error). Für den C6-Test (Aufgabe 3).
+      if (failReadAt === address) throw new Error('modbus exception 4');
       if (failReadOnce === address && !readFailed) { readFailed = true; throw new Error('modbus timeout'); }
       // Feld #3: Herzschlag 13080 nur ab Menge 2 echt; Menge 1 = Festwert. Fehlt das Register, Exception 2
       // (Firmware zu alt) — wie jedes fehlende Register.

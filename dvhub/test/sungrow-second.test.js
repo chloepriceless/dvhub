@@ -692,6 +692,23 @@ test('Split: Slave offline → nur Master (voller Anteil), kein Slave-Write', as
   assert.deepEqual(r.t.slave.writes, []);               // nichts an den Slave geschrieben
 });
 
+test('Aufgabe 3 (C6): Slave-Lesefehler (modbus exception 4) → Master steuert weiter, KEIN Modus 0 bei beiden', async () => {
+  // Feld 15.11.: ein einmaliges „EMS-Register lesen fehlgeschlagen: modbus exception 4" warf beide WR auf Modus 0
+  // (~20 s Ausfall). Jetzt: Slave-Anteil auf den Master, der Master steuert weiter. Slave-EMS-Block (wire 13050).
+  const r = splitRig({ masterSoc: 80, slaveSoc: 20, slaveMock: { failReadAt: wire(13050) } });
+  const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  assert.equal(res.ok, true, 'Master steuert weiter (ok)');
+  assert.equal(res.slaveFellBack, true, 'Slave-Anteil auf den Master verlagert');
+  // Master steht in Forced (NICHT Modus 0/Self) und entlädt den vollen System-Anteil.
+  assert.equal(r.mImage.holding.get(SMODE), EMS_MODE.FORCED);
+  assert.notEqual(r.mImage.holding.get(SMODE), EMS_MODE.SELF);
+  assert.equal(r.mImage.holding.get(SCMD), EMS_CMD.DISCHARGE);
+  assert.equal(r.mImage.holding.get(SPOWER), 3000); // voller System-Anteil (bis Master-Grenze)
+  // Es gibt ein Fallback-Log, aber KEIN split_aborted.
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_split_slave_fallback'));
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_split_aborted'));
+});
+
 test('Aufgabe 2: Slave in Notladung → aus dem Split, Master bekommt alles, kein Lade-/Entladebefehl an den Slave', async () => {
   const r = splitRig({ masterSoc: 80, slaveSoc: 10 });
   r.state.sungrowSecond.emergencyCharge = true;         // Slave lädt eigenmächtig (0x4001) → nicht steuerbar
@@ -713,15 +730,18 @@ test('Split: Not-Halt → beide zurück in Self-consumption', async () => {
   assert.equal(r.sImage.holding.get(SMODE), EMS_MODE.SELF);
 });
 
-test('Split (External EMS): Herzschlag am Slave scheitert → BEIDE neutralisiert', async () => {
-  // Slave ignoriert 13080-Writes (bleibt 20) → Herzschlag-Rücklesung weicht ab → applyDirectCommand scheitert
-  // → neutralizeBoth.
+test('Split (External EMS): Herzschlag am Slave scheitert → C6 Master-only (Master steuert weiter, Slave in Self)', async () => {
+  // Slave ignoriert 13080-Writes (bleibt 20) → Herzschlag-Rücklesung weicht ab → applyDirectCommand scheitert.
+  // Aufgabe 3/C6: NICHT beide auf Modus 0 — der Master ist sicher steuerbar und läuft weiter (External EMS), der
+  // Slave wird sicher in Self zurückgezogen. Modus 0 (beide) nur bei MASTER-Fehler.
   const r = splitRig({ masterSoc: 80, slaveSoc: 20, controlMode: 'external', slaveMock: { ignoreWriteAt: HBA } });
   const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
-  assert.equal(res.ok, false);
-  assert.equal(r.mImage.holding.get(SMODE), EMS_MODE.SELF);   // Master neutralisiert
-  assert.equal(r.sImage.holding.get(SMODE), EMS_MODE.SELF);   // Slave neutralisiert
-  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_split_aborted'));
+  assert.equal(res.ok, true);
+  assert.equal(res.slaveFellBack, true);
+  assert.equal(r.mImage.holding.get(SMODE), EMS_MODE.EXTERNAL); // Master steuert weiter (nicht Self)
+  assert.equal(r.sImage.holding.get(SMODE), EMS_MODE.SELF);     // Slave sicher zurückgezogen
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_split_slave_fallback'));
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_split_aborted'));
 });
 
 // --- Punkt 3: Keepalive + Geräte-Rückfall (Feldtest 12c8122e) -----------------------------------------
