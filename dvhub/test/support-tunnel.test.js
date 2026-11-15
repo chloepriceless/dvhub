@@ -494,6 +494,26 @@ test('Dienst-Modus: Restzeit-Warnung (expiringSoon) und Ablauf wird als auto_clo
   assert.equal(closed[0].d.external, true);
 });
 
+test('Dienst-Modus: Timer-auto_close + späteres Unit-Ende → nur EIN support_tunnel_closed (kein Doppel-Log)', async () => {
+  const { sup, ctx, logs } = realBox({ ports: [49120, 49121] });
+  const nowMs = 1_800_000_000_000;
+  const statePath = path.join(sup, 'tunnel-state.json');
+  const timers = [];
+  const tun = createSupportTunnel(ctx, {
+    unitMode: () => true, now: () => nowMs, sleep: async () => {}, isAlive: () => true,
+    setTimeout: (fn) => { timers.push(fn); return { unref() {} }; }, clearTimeout: () => {},
+    execFile: (bin, args, opts, cb) => { if (args[2] === 'start') fs.writeFileSync(statePath, JSON.stringify({ pid: 4242, startedAt: nowMs, expiresAt: nowMs + 30 * 60_000 })); cb(null, '', ''); },
+  });
+  await tun.open({ ttlMin: 30 });
+  // Auto-Close-Zeitgeber feuert, während die Unit noch läuft → ein auto_close.
+  timers.at(-1)();
+  assert.equal(logs.filter((l) => l.ev === 'support_tunnel_closed').length, 1);
+  // Danach endet die Unit wirklich → der Wächter darf NICHT erneut schließen.
+  fs.rmSync(statePath, { force: true });
+  tun.liteStatus();
+  assert.equal(logs.filter((l) => l.ev === 'support_tunnel_closed').length, 1, 'kein zweites Schließen-Log');
+});
+
 test('Dienst-Modus: lehnt das Relay ab, meldet open den Fehler aus dem Protokoll', async () => {
   const { sup, ctx } = realBox({ ports: [49120, 49121] });
   const tun = createSupportTunnel(ctx, {

@@ -756,7 +756,7 @@ export function createSupportTunnel(ctx, deps = {}) {
       // Task G1: erneutes open() frischt die Frist auf — Request neu schreiben (Skript verlängert) + Zeitgeber neu.
       try { expiresAt = writeUnitRequest(p, rc, ttl, actor); openedAt = openedAt || now(); } catch (e) { pushLog('support_tunnel_error', { error: `refresh write failed: ${e.message}` }, actor); return { ok: true, alreadyOpen: true, status: status() }; }
       if (autoCloseTimer) clearTimer(autoCloseTimer);
-      autoCloseTimer = setTimer(() => { autoCloseTimer = null; if (isUpdateInProgress()) { pushLog('support_tunnel_autoclose_deferred', { reason: 'update_in_progress', ...closeTimes() }, actor); return; } pushLog('support_tunnel_closed', { reason: 'auto_close', ...closeTimes() }, actor); notifyClosed('auto_close'); }, ttl * 60 * 1000);
+      autoCloseTimer = setTimer(() => { autoCloseTimer = null; if (isUpdateInProgress()) { pushLog('support_tunnel_autoclose_deferred', { reason: 'update_in_progress', ...closeTimes() }, actor); return; } pushLog('support_tunnel_closed', { reason: 'auto_close', ...closeTimes() }, actor); notifyClosed('auto_close'); openedAt = null; expiresAt = null; }, ttl * 60 * 1000);
       if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
       pushLog('support_tunnel_refreshed', { ttlMin: ttl, openedAt, expiresAt }, actor);
       return { ok: true, alreadyOpen: true, refreshed: true, status: status() };
@@ -800,6 +800,9 @@ export function createSupportTunnel(ctx, deps = {}) {
       if (isUpdateInProgress()) { pushLog('support_tunnel_autoclose_deferred', { reason: 'update_in_progress', ...closeTimes() }, actor); autoCloseTimer = setTimer(unitAutoClose, AUTOCLOSE_RECHECK_MS); if (autoCloseTimer?.unref) autoCloseTimer.unref(); return; }
       pushLog('support_tunnel_closed', { reason: 'auto_close', ...closeTimes() }, actor);
       notifyClosed('auto_close');
+      // Geschlossen protokolliert → openedAt nullen, damit reconcileUnitClose beim späteren Unit-Ende nicht
+      // ein ZWEITES support_tunnel_closed schreibt (Aufgabe 10).
+      openedAt = null; expiresAt = null;
     };
     autoCloseTimer = setTimer(unitAutoClose, ttl * 60 * 1000);
     if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
