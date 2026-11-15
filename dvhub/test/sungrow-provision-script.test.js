@@ -75,25 +75,33 @@ test('idempotent: zweiter Lauf ändert nichts (kein zweites daemon-reload nötig
   assert.doesNotMatch(log, /daemon-reload/, 'keine Unit-Änderung → kein daemon-reload');
 });
 
-test('keine Sungrow-Anlage → nichts eingehängt (und früheres Drop-in wird entfernt)', () => {
-  // Erst als Sungrow einhängen, dann Hersteller wechseln → Aufräumen.
+test('M3a: ExecStopPost-Drop-in auch OHNE Sungrow-Anlage (unbedingt) — nur der Timer bleibt weg', () => {
+  // Die Rückgabe soll auf ALLEN Boxen am Dienst-Stop greifen (das Skript ist ein sicherer No-op ohne Forced-Merker).
+  const { sysd, env } = setup({ manufacturer: 'victron' });
+  const r = run(env);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(fs.existsSync(dropin(sysd)), 'Drop-in auch bei Nicht-Sungrow angelegt');
+  assert.match(fs.readFileSync(dropin(sysd), 'utf8'), /ExecStopPost=.*sungrow-forced-release\.mjs/);
+  assert.ok(!fs.existsSync(wdTimer(sysd)), 'kein Watchdog-Timer ohne Sungrow');
+});
+
+test('M3a: Herstellerwechsel sungrow→victron entfernt den Timer, lässt den ExecStopPost-Drop-in stehen', () => {
   const { sysd, app, env } = setup({ manufacturer: 'sungrow' });
   run(env);
-  assert.ok(fs.existsSync(dropin(sysd)));
+  assert.ok(fs.existsSync(dropin(sysd)) && fs.existsSync(wdTimer(sysd)));
   fs.writeFileSync(path.join(app, 'config.json'), JSON.stringify({ manufacturer: 'victron' }));
   const r = run(env);
   assert.equal(r.status, 0);
-  assert.ok(!fs.existsSync(dropin(sysd)), 'Drop-in entfernt');
+  assert.ok(fs.existsSync(dropin(sysd)), 'Drop-in BLEIBT (unbedingt)');
   assert.ok(!fs.existsSync(wdTimer(sysd)), 'Timer entfernt');
-  assert.match(r.stdout, /keine Sungrow-Anlage/);
 });
 
-test('Opt-out (.no-sungrow-watchdog) → nichts eingehängt, auch bei Sungrow', () => {
+test('Opt-out (.no-sungrow-watchdog) → Drop-in bleibt, nur der Timer entfällt', () => {
   const { sysd, env } = setup({ manufacturer: 'sungrow', optOut: true });
   const r = run(env);
   assert.equal(r.status, 0);
-  assert.ok(!fs.existsSync(dropin(sysd)));
-  assert.ok(!fs.existsSync(wdTimer(sysd)));
+  assert.ok(fs.existsSync(dropin(sysd)), 'Drop-in trotz Opt-out (unbedingt)');
+  assert.ok(!fs.existsSync(wdTimer(sysd)), 'kein Timer bei Opt-out');
 });
 
 test('--check: read-only, legt nichts an', () => {
@@ -102,4 +110,11 @@ test('--check: read-only, legt nichts an', () => {
   assert.equal(r.status, 0);
   assert.ok(!fs.existsSync(dropin(sysd)), 'check legt nichts an');
   assert.match(r.stdout, /Sungrow-Absicherung/);
+});
+
+test('M3a: daemon-reload wird nach Anlegen des Drop-ins aufgerufen (systemd kennt den ExecStopPost)', () => {
+  const { calls, env } = setup({ manufacturer: 'victron' }); // Nicht-Sungrow: nur Drop-in, aber reload nötig
+  const r = run(env);
+  assert.equal(r.status, 0);
+  assert.match(fs.readFileSync(calls, 'utf8'), /daemon-reload/, 'daemon-reload nach Drop-in');
 });

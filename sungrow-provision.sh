@@ -57,19 +57,6 @@ report() {
   echo "  Sungrow-Absicherung: ExecStopPost-Rückgabe ${dropin}, Watchdog-Timer ${timer}."
 }
 
-remove_all() {
-  local changed=0
-  [[ -f "$DROPIN_FILE" ]] && { rm -f "$DROPIN_FILE" && changed=1; }
-  # leeres Drop-in-Verzeichnis aufräumen
-  [[ -d "$DROPIN_DIR" ]] && rmdir "$DROPIN_DIR" 2>/dev/null || true
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl disable --now dvhub-sungrow-watchdog.timer >/dev/null 2>&1 || true
-  fi
-  [[ -f "$WATCHDOG_TIMER" ]] && { rm -f "$WATCHDOG_TIMER" && changed=1; }
-  [[ -f "$WATCHDOG_SERVICE" ]] && { rm -f "$WATCHDOG_SERVICE" && changed=1; }
-  if [[ "$changed" == "1" ]] && command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload || true; fi
-}
-
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "  Sungrow-Absicherung: systemctl nicht vorhanden (kein systemd) — übersprungen."
   exit 0
@@ -86,17 +73,14 @@ if in_container; then
   exit 0
 fi
 
-# Keine Sungrow-Anlage (oder Opt-out) → etwaige frühere Absicherung entfernen und fertig.
-if ! is_sungrow || [[ -f "$DATA_DIR/.no-sungrow-watchdog" ]]; then
-  remove_all
-  echo "  Sungrow-Absicherung: keine Sungrow-Anlage (oder Opt-out) — nichts eingehängt."
-  exit 0
-fi
-
 CHANGED=0
 
-# (C2) ExecStopPost-Drop-in: nimmt beim Dienst-Stop den Forced mode zurück. DATA_DIR explizit (die Haupt-Unit setzt
-# DV_DATA_DIR, die Skripte lesen aber DATA_DIR) — sonst fände das Skript den Merker im falschen Verzeichnis.
+# (C2) ExecStopPost-Drop-in IMMER einhängen (M3a, Feld 16.11.: der Drop-in fehlte auf der Paket-Box, nur der
+# Watchdog-Timer lief). Der Drop-in hängt NICHT an der Sungrow-Erkennung: das Rückgabe-Skript ist ein sicherer
+# No-op, wenn keine Sungrow-Anlage läuft (kein Forced-Merker → nichts zu tun). So greift die Rückgabe auf ALLEN
+# Stop-Pfaden (sauberer Stop, Crash/SIGKILL, Neustart), unabhängig davon, ob die Konfiguration gerade als Sungrow
+# erkannt wird. DATA_DIR explizit (die Haupt-Unit setzt DV_DATA_DIR, die Skripte lesen aber DATA_DIR) — sonst fände
+# das Skript den Merker im falschen Verzeichnis.
 mkdir -p "$DROPIN_DIR"
 NEW_DROPIN="$(cat <<DROPIN
 # Von sungrow-provision.sh verwaltet (Absicherung C2) — nicht von Hand ändern.
@@ -107,9 +91,23 @@ DROPIN
 )"
 if [[ ! -f "$DROPIN_FILE" ]] || [[ "$(cat "$DROPIN_FILE" 2>/dev/null)" != "$NEW_DROPIN" ]]; then
   printf '%s\n' "$NEW_DROPIN" >"$DROPIN_FILE" && CHANGED=1
+  echo "  Sungrow-Absicherung: ExecStopPost-Drop-in angelegt ($DROPIN_FILE)."
 fi
 
-# (C4) Unabhängiger Watchdog als eigener Timer (~alle 60 s).
+# (C4) Unabhängiger Watchdog-Timer (~alle 60 s) NUR für Sungrow-Anlagen (periodischer Node-Start). Keine Sungrow-
+# Anlage oder Opt-out → einen etwaigen früheren Timer entfernen (den ExecStopPost-Drop-in NICHT anfassen).
+if ! is_sungrow || [[ -f "$DATA_DIR/.no-sungrow-watchdog" ]]; then
+  if [[ -f "$WATCHDOG_TIMER" || -f "$WATCHDOG_SERVICE" ]]; then
+    systemctl disable --now dvhub-sungrow-watchdog.timer >/dev/null 2>&1 || true
+    rm -f "$WATCHDOG_TIMER" "$WATCHDOG_SERVICE"
+    CHANGED=1
+  fi
+  if [[ "$CHANGED" == "1" ]]; then systemctl daemon-reload || true; fi
+  echo "  Sungrow-Absicherung: ExecStopPost aktiv; kein Watchdog-Timer (keine Sungrow-Anlage)."
+  report
+  exit 0
+fi
+
 NEW_WD_SVC="$(cat <<WDSVC
 # Von sungrow-provision.sh verwaltet (Absicherung C4) — nicht von Hand ändern.
 [Unit]
