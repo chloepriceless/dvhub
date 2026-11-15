@@ -191,7 +191,10 @@ test('render: Badges + Countdown-Zeile schalten, Modus auf eigener Zeile, Akku-N
   }, doc);
   assert.equal(els.sungrowWrMode.textContent, 'Modus: Forced-Split (2)');
   assert.equal(els.sungrowWrCard.hidden, false);
-  assert.equal(els.batSourceName.textContent, 'Sungrow (Master + Slave)');
+  // Kann-3: Kopf einzeilig „Sungrow", Rollen als Untertitel darunter.
+  assert.equal(els.batSourceName.textContent, 'Sungrow');
+  assert.equal(els.batSourceSub.textContent, 'Master + Slave');
+  assert.equal(els.batSourceSub.hidden, false);
   assert.equal(els.sungrowWrSlaveBadges.hidden, false);
   assert.equal(els.sungrowWrSlaveBadges.textContent, 'Notladung · Slave-Anteil am Master');
   assert.equal(els.sungrowWrMasterBadges.hidden, true); // Master keine Notladung
@@ -200,6 +203,7 @@ test('render: Badges + Countdown-Zeile schalten, Modus auf eigener Zeile, Akku-N
   // Ohne zweiten WR → zurück auf Victron, Kachel versteckt.
   V.render({}, doc);
   assert.equal(els.batSourceName.textContent, 'Victron');
+  assert.equal(els.batSourceSub.hidden, true);
   assert.equal(els.sungrowWrCard.hidden, true);
 });
 

@@ -96,6 +96,8 @@
           <span class="ttl"><span class="dot dot-bat"></span>Batterie &middot; <span id="batSourceName">Victron</span></span>
           <span class="chip info sm" id="batModeChip" hidden><span class="dot"></span><span id="batMode">&mdash;</span></span>
         </div>
+        <!-- Kann-3 (Feld 16.11.): bei zwei Sungrow-WR steht der Kopf einzeilig „Batterie · Sungrow", die Rollen als Untertitel darunter. -->
+        <div class="rail-card-sub" id="batSourceSub" hidden>Master + Slave</div>
         <div class="rail-big card-value value-bat" id="soc">&mdash;</div>
         <!-- M9: bei Sungrow steht groß der ECHTE System-SoC, klein daneben der gemeldete (fensterrelative) Wert. -->
         <div class="soc-reported" id="socReported" hidden></div>

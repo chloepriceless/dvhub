@@ -718,9 +718,13 @@ export function createSupportTunnel(ctx, deps = {}) {
     return { rc, p, applianceId };
   }
 
-  function announceOpened({ ttl, binary, rc, applianceId, actor }) {
+  function announceOpened({ ttl, requestedMin = null, binary, rc, applianceId, actor }) {
     pushLog('support_tunnel_opened', {
       ttlMin: ttl,
+      // M6 (Feld 16.11.): zeigt, ob die vom Portal GEWÜNSCHTE Dauer ankam (requestedMin) und was WIRKSAM gilt
+      // (effectiveMin). requestedMin null = das Portal hat keine Dauer geschickt → es gilt der Standard (autoCloseMin).
+      requestedMin: Number.isFinite(Number(requestedMin)) && Number(requestedMin) > 0 ? Math.round(Number(requestedMin)) : null,
+      effectiveMin: ttl,
       binary,
       relay: `${rc.user}@${rc.host}:${rc.port}`,
       shellPort: rc.shellPort,
@@ -812,7 +816,7 @@ export function createSupportTunnel(ctx, deps = {}) {
     };
     autoCloseTimer = setTimer(unitAutoClose, ttl * 60 * 1000);
     if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
-    announceOpened({ ttl, binary: 'service', rc, applianceId, actor });
+    announceOpened({ ttl, requestedMin: ttlMin, binary: 'service', rc, applianceId, actor });
     return { ok: true, status: status() };
   }
 
@@ -949,7 +953,7 @@ export function createSupportTunnel(ctx, deps = {}) {
     autoCloseTimer = setTimer(() => autoCloseDue(lastOpenedBy), ttl * 60 * 1000);
     if (autoCloseTimer && typeof autoCloseTimer.unref === 'function') autoCloseTimer.unref();
 
-    announceOpened({ ttl, binary, rc, applianceId, actor });
+    announceOpened({ ttl, requestedMin: ttlMin, binary, rc, applianceId, actor });
     return { ok: true, status: status() };
   }
 

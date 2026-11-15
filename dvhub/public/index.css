@@ -86,7 +86,10 @@
     "left pf   right"
     "left wr   right"
     "epex epex epex";
-  grid-template-rows:auto auto auto;
+  /* M5c (Feld 16.11.): Zeile 2 = 1fr fängt die ÜBERSCHÜSSIGE Höhe der (über beide Zeilen spannenden) Seitenspalten
+     auf — sonst verteilt der Browser sie auf Zeile 1 und drückt die WR-Kachel mit ~300 px Lücke unter den
+     Energiefluss. Die WR-Kachel bleibt oben (align-self:start), also direkt unter dem Energiefluss. */
+  grid-template-rows:auto 1fr auto;
   align-items:start;
 }
 .leit-grid > .rail:first-child { grid-area:left; align-self:start; }
@@ -138,6 +141,13 @@
   font-family:var(--f-mono); font-size:10.5px; letter-spacing:.18em;
   text-transform:uppercase; color:var(--text-2);
   display:inline-flex; align-items:center; gap:8px;
+  white-space:nowrap;
+}
+/* Kann-3: Untertitel der Akku-Kachel (z. B. „Master + Slave") — klein, gedämpft, unter dem Kopf. */
+.rail-card-sub {
+  font-family:var(--f-mono); font-size:10px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--text-2); opacity:.8;
+  margin:-2px 0 6px 14px;
 }
 .rail-card-head .ttl .dot { width:6px; height:6px; border-radius:50%; box-shadow:0 0 6px currentColor; }
 .rail-card-head .dot-pv { background:var(--yellow); color:var(--yellow); }

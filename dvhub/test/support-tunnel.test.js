@@ -172,13 +172,35 @@ test('open spawns tunnel, status reflects open, close tears down', () => {
   assert.equal(st.open, true);
   assert.equal(st.openedBy, 'christin');
   assert.equal(st.relay.shellPort, 49101);
-  assert.ok(logs.some((l) => l.ev === 'support_tunnel_opened'));
+  const opened = logs.find((l) => l.ev === 'support_tunnel_opened');
+  assert.ok(opened, 'support_tunnel_opened protokolliert');
+  // M6: gewünschte und wirksame Dauer protokolliert (Portal schickte 30 → wirksam 30).
+  assert.equal(opened.data.requestedMin, 30);
+  assert.equal(opened.data.effectiveMin, 30);
 
   const c = tun.close('christin');
   assert.equal(c.ok, true);
   assert.equal(proc.killed, true);
   assert.equal(tun.status().open, false);
   assert.ok(logs.some((l) => l.ev === 'support_tunnel_closed'));
+});
+
+test('M6: ohne vom Portal geschickte Dauer ist requestedMin null, effectiveMin der Standard', () => {
+  const { ctx, logs } = makeCtx();
+  const proc = fakeProc();
+  const tun = createSupportTunnel(ctx, {
+    fs: { existsSync: () => true, readFileSync: () => 'box-01' },
+    spawn: () => proc,
+    now: () => 1_000_000,
+    setTimeout: () => ({ unref() {} }),
+    clearTimeout: () => {},
+  });
+  const r = tun.open({}, 'christin');
+  assert.equal(r.ok, true);
+  const opened = logs.find((l) => l.ev === 'support_tunnel_opened');
+  assert.ok(opened, 'support_tunnel_opened protokolliert');
+  assert.equal(opened.data.requestedMin, null);
+  assert.equal(Number.isFinite(opened.data.effectiveMin) && opened.data.effectiveMin > 0, true);
 });
 
 test('open is idempotent while already open', () => {

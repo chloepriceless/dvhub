@@ -55,6 +55,7 @@ function makeReq(method, urlPath, body, { viaSupport = false } = {}) {
 function ctxWith(cfg, extra = {}) {
   const logs = [];
   const opened = [];
+  const openOpts = [];
   const saved = [];
   const recorded = [];
   const ctx = {
@@ -68,13 +69,13 @@ function ctxWith(cfg, extra = {}) {
     supportTunnel: {
       status: () => ({ open: false, uiToken: 'tok' }),
       consumeUiToken: (t) => t === 'tok',
-      open: async (o, actor) => { opened.push(actor); return { ok: true }; },
+      open: async (o, actor) => { openOpts.push(o); opened.push(actor); return { ok: true }; },
       close: async () => ({ ok: true }),
       recordAction: (entry) => { recorded.push(entry); return entry; },
     },
     ...extra,
   };
-  return { ctx, logs, opened, saved, recorded };
+  return { ctx, logs, opened, openOpts, saved, recorded };
 }
 
 test('Port des Support-Listeners: fester Standard, per Umgebung änderbar, Notfall-Skript nimmt denselben', () => {
@@ -116,6 +117,36 @@ test('Support kann den Tunnel nicht selbst öffnen oder verlängern', async () =
   await routes.handleRequest(makeReq('POST', '/api/support/tunnel/open', { ttlMin: 30, uiToken: 'tok' }), res2, new URL('http://x/api/support/tunnel/open'));
   assert.equal(res2._captured.status, 200, res2._captured.body);
   assert.equal(opened.length, 1);
+});
+
+test('M6: Portal schickt 120 → Box öffnet 120 (ttlMin erreicht open)', async () => {
+  const { ctx, openOpts } = ctxWith({ security: { lanTrust: 'open' } });
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/support/tunnel/open', { ttlMin: 120, uiToken: 'tok' }), res, new URL('http://x/api/support/tunnel/open'));
+  assert.equal(res._captured.status, 200, res._captured.body);
+  assert.equal(openOpts.length, 1);
+  assert.equal(openOpts[0].ttlMin, 120);
+});
+
+test('M6: Portal schickt die Dauer unter durationMin → Box übernimmt sie als ttlMin', async () => {
+  const { ctx, openOpts } = ctxWith({ security: { lanTrust: 'open' } });
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/support/tunnel/open', { durationMin: 120, uiToken: 'tok' }), res, new URL('http://x/api/support/tunnel/open'));
+  assert.equal(res._captured.status, 200, res._captured.body);
+  assert.equal(openOpts.length, 1);
+  assert.equal(openOpts[0].ttlMin, 120);
+});
+
+test('M6: ohne Dauer bleibt ttlMin undefiniert (Standard entscheidet der Tunnel)', async () => {
+  const { ctx, openOpts } = ctxWith({ security: { lanTrust: 'open' } });
+  const routes = createApiRoutes(ctx);
+  const res = mockRes();
+  await routes.handleRequest(makeReq('POST', '/api/support/tunnel/open', { uiToken: 'tok' }), res, new URL('http://x/api/support/tunnel/open'));
+  assert.equal(res._captured.status, 200, res._captured.body);
+  assert.equal(openOpts.length, 1);
+  assert.equal(openOpts[0].ttlMin, undefined);
 });
 
 test('Support kann keine Fernzugangs-Freigabe erteilen, Abschalten bleibt erlaubt', async () => {

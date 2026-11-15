@@ -2714,7 +2714,9 @@ function renderDashboardStatus(status) {
       if (sgBat.minSoc != null) setText('minSoc', sgBat.minSoc);
       setText('sungrowBatMaster', sgBat.master); setHidden('sungrowBatMasterRow', false);
       setText('sungrowBatSlave', sgBat.slave); setHidden('sungrowBatSlaveRow', false);
-      if (sgBat.maxDischarge != null) setText('maxDischargeReadback', sgBat.maxDischarge);
+      // Kann-2 (Feld 16.11.): der Summenwert beider WR ist korrekt — nicht rot färben. Die rote „off"-Tönung
+      // aus der Victron-Zeile oben (maxDischargeW === 0) hier bewusst zurücknehmen (null = neutrale Farbe).
+      if (sgBat.maxDischarge != null) setText('maxDischargeReadback', sgBat.maxDischarge, null);
     }
   });
 
@@ -2761,7 +2763,12 @@ function renderDashboardStatus(status) {
     const lwMD = sch.lastWrite?.maxDischargeW;
     setText('activeGridSetpoint', ag?.value == null ? '-' : `${ag.value} W (${ag.source || '-'})`);
     setText('activeChargeCurrent', ac?.value == null ? '-' : `${ac.value} A (${ac.source || '-'})`);
-    setText('activeMinSoc', am?.value == null ? '-' : `${am.value} % (${am.source || '-'})`);
+    // Kann-3 (Feld 16.11.): bei zwei Sungrow-WR bleibt schedule.active.minSocPct/maxDischargeW leer (die Grenzen
+    // stehen im Geräte-/Energiebilanz-Pfad). Dann dieselben Werte wie die Akku-Kachel zeigen — aus derselben Quelle
+    // (computeSungrowBatteryView), nicht neu gerechnet.
+    const sgCtrl = computeSungrowBatteryView(status);
+    if (am?.value == null && sgCtrl.isSungrow && sgCtrl.minSoc != null) setText('activeMinSoc', `${sgCtrl.minSoc} (Sungrow)`);
+    else setText('activeMinSoc', am?.value == null ? '-' : `${am.value} % (${am.source || '-'})`);
     // Max Discharge: prominent so the operator sees the cap before manually changing it.
     // 0 = Hold (no discharge), -1 = unlimited (default), positive = AC cap in W.
     let mdLabel = '-';
@@ -2771,7 +2778,8 @@ function renderDashboardStatus(status) {
       else if (Number(amd.value) === -1) { mdLabel = `unbegrenzt (${amd.source || '-'})`; }
       else { mdLabel = `${amd.value} W (${amd.source || '-'})`; mdClass = 'ok'; }
     }
-    setText('activeMaxDischarge', mdLabel, mdClass);
+    if (amd?.value == null && sgCtrl.isSungrow && sgCtrl.maxDischarge != null) setText('activeMaxDischarge', `${sgCtrl.maxDischarge} (Sungrow)`, null);
+    else setText('activeMaxDischarge', mdLabel, mdClass);
     const adc = sch.active?.feedExcessDcPv;
     setText('activeDcFeed', adc?.value == null ? '-' : `${adc.value ? 'EIN' : 'AUS'} (${adc.source || '-'})`);
     const lwParts = [];
