@@ -180,6 +180,15 @@ export function sungrowChargeCeilPct(maxSocPct, deviceMaxSocPct) {
   return vals.length ? Math.min(...vals) : 100;
 }
 
+// Wirksame Lade-/Entladeleistung eines WR (Aufgabe 1/4): die kleinste aus Feldeinstellung (Übersteuerung),
+// gelesener Gerätegrenze (33047 Laden / 33048 Entladen) und BDC-Nennleistung. GLEICHE Regel für die Regelgrenze
+// (stepSplit) UND die EOS-Vorgabe (planning). Das Feld ist nur Übersteuerung: leer → Gerätewert; gesetzt → der
+// strengere (min). Fehlt jede Angabe, 0.
+export function sungrowEffectivePowerW(fieldW, deviceW, bdcW) {
+  const cands = [fieldW, deviceW, bdcW].filter((v) => v != null && v !== '' && Number.isFinite(Number(v)) && Number(v) > 0).map(Number);
+  return cands.length ? Math.min(...cands) : 0;
+}
+
 /**
  * Gerät erkennen. `read({fc, address, quantity})` liefert Registerworte (Transport-agnostisch).
  * Erkannt = Typcode steht in der Hybrid-Tabelle. Seriennummer und BDC-Nennleistung sind Zusatz:
@@ -825,12 +834,15 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
 
   // Kontroll-Register 13050–13052 lesen (vor/nach eigenen Writes). Reines LESEN: schlägt es fehl, wurde nichts
   // geschrieben → eigener Fehlercode 'ems_read_error' (der Aufrufer meldet das als sungrow_ems_read_error, nicht
-  // als control_write_error). Bei „modbus exception 4" (Geräte-/Slave-Fehler, oft WiNet-S kurz belegt) oder
-  // ECONNRESET einmal nach 300 ms neu lesen. Häufen sich die Resets, steht womöglich ein anderer Modbus-Client
-  // auf dem Gerät (WiNet-S erlaubt nur einen) — einmaliger Hinweis.
+  // als control_write_error). N2 (Feld 15.11.): ein transienter Lesefehler („modbus exception 4", ECONNRESET ODER
+  // „modbus timeout"/ETIMEDOUT — im 1-s-Dauer-Forced ~1 auf 4000 Slave-Anfragen) darf die Anlage nicht auf Modus 0
+  // werfen. Deshalb bis zu 2× wiederholen (je 250 ms) statt sofort zu scheitern; erst danach ems_read_error (der
+  // Aufrufer faellt dann auf Master-only zurueck, C6). Häufen sich die Resets, steht womöglich ein anderer Modbus-
+  // Client auf dem Gerät (WiNet-S erlaubt nur einen) — einmaliger Hinweis.
+  const EMS_READ_RETRIES = 2; // Wiederholungen (⇒ bis zu 3 Versuche)
   async function readDevice(conf) {
     let lastErr = null;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt <= EMS_READ_RETRIES; attempt += 1) {
       try {
         const regs = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: EMS_BLOCK_ADDRESS, quantity: 3 });
         if (!Array.isArray(regs) || regs.length < 3) throw new Error('EMS-Register: unvollständige Antwort');
@@ -839,8 +851,8 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         return st.dev;
       } catch (e) {
         lastErr = e;
-        const retryable = /modbus exception 4\b|ECONNRESET/i.test(String(e?.message));
-        if (attempt === 0 && retryable) {
+        const retryable = /modbus exception 4\b|ECONNRESET|modbus timeout|ETIMEDOUT/i.test(String(e?.message));
+        if (attempt < EMS_READ_RETRIES && retryable) {
           st.readResetStreak = (st.readResetStreak || 0) + 1;
           if (st.readResetStreak >= 3) {
             logOnce('reset-hint', 'sungrow_ems_read_reset_streak', {
@@ -848,7 +860,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
               text: 'Mehrfach abgebrochene Modbus-Lesevorgänge am Sungrow — steht ein anderer Modbus-Client auf dem Gerät? (WiNet-S/Logger erlaubt meist nur einen.)'
             }, 'warn');
           }
-          await sleep(300);
+          await sleep(250);
           continue;
         }
         break;
@@ -1139,10 +1151,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     // je ×10 W gelesen) und BDC-Nennleistung. Laden erbt NIE die Entladegrenze — jede Richtung ihre eigene Grenze.
     // Fehlt eine Angabe, zählt sie nicht; ohne jede Angabe 0. Ein zu hoch gelesener Gerätewert kann nicht schaden
     // (min mit BDC), ein zu niedriger regelt nur konservativer.
-    const perWrMax = (ownMaxCfg, deviceLimit, wrBdc) => {
-      const cands = [ownMaxCfg, deviceLimit, wrBdc].map(Number).filter((x) => Number.isFinite(x) && x > 0);
-      return cands.length ? Math.min(...cands) : 0;
-    };
+    const perWrMax = sungrowEffectivePowerW; // gemeinsamer Resolver (Feld-Übersteuerung ∧ Gerätewert ∧ BDC), Aufgabe 1/4
     const floor = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
     const maxSoc = Number(cfg.optimizer?.maxSocPct ?? 100);
     const masterSoc = state.victron.sungrowMasterSocPct ?? state.victron.soc;
@@ -1258,10 +1267,20 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     // Entlade-Boden (SoC < hardFloorSocPct): sperrt im Regler nur das Entladen, nicht das Laden aus PV.
     const floorSocPct = Number(cfg?.optimizer?.hardFloorSocPct ?? 5);
     const socPct = state.victron?.sungrowMasterSocPct ?? state.victron?.soc ?? null;
+    // N1 (Feld 15.11., gefährlich): im SPLIT den System-Entlade-Boden NICHT am Master-SoC prüfen. Sonst stoppt
+    // decideEmsCommand bei Master 9,8 % die GANZE Vorgabe (beide WR 0xCC), obwohl der Slave noch 14,4 % hat →
+    // Hauslast komplett aus dem Netz, Slave-Reserve ungenutzt. Die je-WR-Grenze sitzt im Split-Gate
+    // (splitStrategyShares, Aufgabe 1): der WR an SEINER Grenze liefert 0 W, der andere übernimmt. Sind BEIDE am
+    // Boden, sperrt das Gate beide → Stopp. Einzel-WR (kein Split): weiter der Master-Boden. Unbekannter/veralteter
+    // SoC bleibt über releaseForFloor (Modus 0) abgesichert.
+    const isSplit = !!(slaveActuator && second != null);
+    // 4b: positiven Sollwert zusätzlich hart auf die Anschlussgrenze deckeln (Netzladen ≤ limitKw).
+    const gridLimitW = Number(cfg?.gridConnection?.limitKw) > 0 ? Number(cfg.gridConnection.limitKw) * 1000 : null;
+    const clampGrid = (s) => (gridLimitW != null && Number.isFinite(Number(s)) && Number(s) > gridLimitW ? gridLimitW : s);
     const regulate = (setpointW) => decideEmsCommand({
-      setpointW, ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
+      setpointW: clampGrid(setpointW), ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
       bandW: 0, gain: opts.gain, minPowerW: opts.minPowerW, noGridCharge: noGridChargeNow,
-      forced: true, socPct, floorSocPct,
+      forced: true, socPct: isSplit ? null : socPct, floorSocPct: isSplit ? null : floorSocPct,
     });
     let decision;
     if (targetFresh && st.target.releaseForFloor) {
@@ -1421,11 +1440,17 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const si = cfg.sungrow?.secondInverter || {};
     const sumChargeW = (Number(optMaster.maxChargeW) || 0) + (second ? (Number(si.maxChargeW) || 0) : 0);
     const sumDischargeW = (Number(optMaster.maxDischargeW) || 0) + (second ? (Number(si.maxDischargeW) || 0) : 0);
-    const capFor = (sumPower) => {
-      const cands = [bdc, opts.maxPowerW, operatorMaxW, sumPower].filter((x) => Number(x) > 0);
+    // Hausanschluss (Aufgabe 4): das Netzladen beider WR darf die Anschlussgrenze (gridConnection.limitKw, z. B.
+    // 28 kW) nicht überschreiten. Defense-in-depth AM AKTUATOR — der Netz-Sollwert wird zwar schon in applyControl-
+    // Target auf die Wächter-Decke geklemmt (schedule-eval), aber der Akku-Ladecap wird hier zusätzlich hart auf die
+    // rohe Anschlussgrenze gedeckelt (gilt für ALLE Quellen). Nur Laden (Netzbezug); Entladen/Einspeisung hat eine
+    // eigene Grenze (gridConnectionExportLimitW).
+    const gridLimitW = Number(cfg?.gridConnection?.limitKw) > 0 ? Number(cfg.gridConnection.limitKw) * 1000 : null;
+    const capFor = (sumPower, extra = null) => {
+      const cands = [bdc, opts.maxPowerW, operatorMaxW, sumPower, extra].filter((x) => Number(x) > 0);
       return cands.length ? Math.min(...cands) : null;
     };
-    const maxChargeCap = capFor(sumChargeW);
+    const maxChargeCap = capFor(sumChargeW, gridLimitW);
     const maxDischargeCap = capFor(sumDischargeW);
     // Forced mode (Modus 2): Dauer-Forced-Split über den eigenen Pfad — der Master bleibt in Modus 2, DVhub
     // regelt im Takt. External EMS (Modus 3) läuft weiter über die bestehende Logik unten (Herzschlag, Rückfall).

@@ -11,7 +11,7 @@ import {
 } from '../services/inverter/sungrow.js';
 import { createSungrowSecond } from '../services/inverter/sungrow-second.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
-import { planningCfg } from '../services/multi-gx/planning.js';
+import { planningCfg, planningMinSocPct } from '../services/multi-gx/planning.js';
 import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
 
 const POWER = wire(13052);
@@ -127,9 +127,9 @@ test('Begleitdienst: drei Lesefehler in Folge → offline, keine Werte', async (
 // Eigenes Rig für den Aktuator mit zweitem WR (Forced mode, damit kein Herzschlag die Writes verschiebt).
 // batteryPowerW in state.victron ist der SYSTEM-Wert (der Poller hat PV/Akku schon aggregiert); der Regler
 // zählt NICHT noch einmal dazu, er nutzt vom zweiten WR nur die BDC-Nennleistung für die System-Leistungsgrenze.
-function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), batteryPowerW = -500, second = null, aggregateTelemetry = false, optimizer = null, secondPowers = null } = {}) {
+function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), batteryPowerW = -500, second = null, aggregateTelemetry = false, optimizer = null, secondPowers = null, extra = null, pvPowerW = 0, selfConsumptionW = 500 } = {}) {
   const secondInverter = { host: '192.168.68.83', aggregateTelemetry, ...(secondPowers || {}) };
-  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter }, ...(optimizer ? { optimizer } : {}) });
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter }, ...(optimizer ? { optimizer } : {}), ...(extra || {}) });
   const image = sungrowImage();
   const t = mockSungrow(image);
   const clock = 1_000_000;
@@ -137,7 +137,7 @@ function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), batteryPowerW = -
   const state = {
     victron: {
       errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock },
-      device, batteryPowerW, pvPowerW: 0, selfConsumptionW: 500
+      device, batteryPowerW, pvPowerW, selfConsumptionW
     },
     meter: { ok: true, updatedAt: clock, grid_total_w: 0 },
     ctrl: {},
@@ -366,7 +366,7 @@ test('6a: exc4 beim Kontroll-Lesen → einmal neu lesen (Retry erfolgreich, kein
 });
 
 test('6a: dauerhafter Kontroll-Lesefehler → sungrow_ems_read_error (warn) + readError, kein Write', async () => {
-  const r = readFailRig({ failReads: 2 });            // beide Versuche scheitern
+  const r = readFailRig({ failReads: 3 });            // alle Versuche scheitern (N2: bis zu 2 Retries → 3 Versuche)
   const res = await r.ems.applySetpoint(4000, 'rule:netzladen');
   assert.equal(res.ok, false);
   assert.equal(res.readError, true);
@@ -603,6 +603,59 @@ test('Punkt 2: planningCfg ohne Aggregation/Slave offline → unverändert (nur 
   assert.equal(planningCfg(ctx, cfg), cfg); // dasselbe Objekt, keine Summe
 });
 
+test('Aufgabe 4: EOS bekommt die GERÄTEWERTE beider WR (battery_max_charge ≈ 21200, inverter = Summe 20000)', () => {
+  // Feld 15.11.: Slave-Konfig leer → EOS bekam 10600 (nur Master) statt 21200. Jetzt: Gerätewerte beider WR, Feld
+  // nur als Übersteuerung. BDC 11 kW (deckelt NICHT): je WR Laden 10600 (33047), Entladen 10000 (33048).
+  const cfg = {
+    manufacturer: 'sungrow',
+    optimizer: { batteryCapacityWh: 10000 }, // maxChargeW/maxDischargeW LEER → Gerätewert zieht
+    sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true } },
+  };
+  const ctx = { getCfg: () => cfg, state: {
+    victron: { soc: 60, device: { vendor: 'sungrow', bdcRatedW: 11000, maxChargeWDevice: 10600, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000 } },
+    sungrowSecond: { online: true, updatedAt: Date.now(), socPct: 40, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 11000, maxChargeWDevice: 10600, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000 },
+  } };
+  const p = planningCfg(ctx, cfg);
+  assert.equal(p.optimizer.maxChargeW, 21200);          // 10600 + 10600 (≈ Feld-Erwartung 21200)
+  assert.equal(p.optimizer.maxDischargeW, 20000);       // 10000 + 10000
+  assert.equal(p.system.power.inverterMaxPowerW, 20000); // Summe der WR-Nennleistungen (Entladeseite), nicht maxPowerW
+  assert.equal(p.optimizer.batteryCapacityWh, 20000);   // Feld 10000 (Master) + Slave-Kapazität 10000
+});
+
+test('Aufgabe 4: Feld übersteuert strenger (gesetzter Wert < Gerätewert gewinnt)', () => {
+  const cfg = {
+    manufacturer: 'sungrow',
+    optimizer: { batteryCapacityWh: 10000, maxChargeW: 8000 }, // strenger als 33047
+    sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true, maxChargeW: 7000 } },
+  };
+  const ctx = { getCfg: () => cfg, state: {
+    victron: { soc: 60, device: { vendor: 'sungrow', bdcRatedW: 11000, maxChargeWDevice: 10600, maxDischargeWDevice: 10000 } },
+    sungrowSecond: { online: true, updatedAt: Date.now(), socPct: 40, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 11000, maxChargeWDevice: 10600, maxDischargeWDevice: 10000 },
+  } };
+  const p = planningCfg(ctx, cfg);
+  assert.equal(p.optimizer.maxChargeW, 15000); // min(8000,10600,11000)=8000 + min(7000,10600,11000)=7000
+});
+
+test('Aufgabe 4: Min-SoC an EOS = max(hartem Boden, 13059 beider WR)', () => {
+  const cfg = {
+    manufacturer: 'sungrow', optimizer: { hardFloorSocPct: 5 },
+    sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true } },
+  };
+  const ctx = { getCfg: () => cfg, state: {
+    victron: { soc: 60, device: { vendor: 'sungrow', minSocPctDevice: 10 } },
+    sungrowSecond: { online: true, updatedAt: Date.now(), socPct: 40, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 11000, minSocPctDevice: 12 },
+  } };
+  assert.equal(planningMinSocPct(ctx, 5), 12); // max(5, 10, 12)
+});
+
+test('Aufgabe 4: Einzel-Master ohne Slave, aber mit Gerätewert → Master-Gerätewert an EOS', () => {
+  const cfg = { manufacturer: 'sungrow', optimizer: { batteryCapacityWh: 10000 } };
+  const ctx = { getCfg: () => cfg, state: { victron: { soc: 60, device: { vendor: 'sungrow', bdcRatedW: 11000, maxChargeWDevice: 10600, maxDischargeWDevice: 10000 } } } };
+  const p = planningCfg(ctx, cfg);
+  assert.equal(p.optimizer.maxChargeW, 10600);
+  assert.equal(p.optimizer.maxDischargeW, 10000);
+});
+
 test('Punkt 2: SoC-Reserve/Headroom je WR (SoC 80/20, Kapazität 10/5 kWh, Boden 10 %)', () => {
   // Reserve = (SoC − Boden)/100 × Kapazität; Headroom = (max − SoC)/100 × Kapazität.
   assert.equal(sungrowReserveWh(80, 10000, 10), 7000);
@@ -707,6 +760,57 @@ test('Aufgabe 3 (C6): Slave-Lesefehler (modbus exception 4) → Master steuert w
   // Es gibt ein Fallback-Log, aber KEIN split_aborted.
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_split_slave_fallback'));
   assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_split_aborted'));
+});
+
+test('N1 (gefährlich): Master unter Boden (9 %), Slave darüber (15 %) → NUR Master 0, Slave entlädt weiter (nicht beide 0xCC)', async () => {
+  // Feld 15.11. 13:49: Master 9,8 % → discharge_floor → BEIDE 0xCC, obwohl der Slave 14,4 % hatte → 4,8 kW Hauslast
+  // aus dem Netz, Slave-Reserve ungenutzt. Ursache: stepForced prüfte den Boden NUR am Master-SoC. Jetzt: Boden je
+  // WR im Split-Gate, der System-Regler stoppt NICHT mehr am Master-SoC.
+  const r = splitRig({ masterSoc: 9, slaveSoc: 15 }); // hardFloorSocPct 10 → Master unter Boden, Slave darüber
+  const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  assert.equal(res.ok, true);
+  assert.equal(r.mImage.holding.get(SCMD), EMS_CMD.STOP);       // Master am Boden → 0xCC
+  assert.equal(r.sImage.holding.get(SCMD), EMS_CMD.DISCHARGE);  // Slave entlädt weiter
+  assert.equal(r.sImage.holding.get(SPOWER), 3000);             // Slave übernimmt den vollen Anteil
+});
+
+test('N1 (umgekehrt): Slave unter Boden, Master darüber → NUR Slave 0, Master entlädt weiter (kein Entladen unter Grenze)', async () => {
+  const r = splitRig({ masterSoc: 15, slaveSoc: 9 });
+  const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  assert.equal(res.ok, true);
+  assert.equal(r.sImage.holding.get(SCMD), EMS_CMD.STOP);       // Slave am Boden → 0xCC (keine Notladung provoziert)
+  assert.equal(r.mImage.holding.get(SCMD), EMS_CMD.DISCHARGE);
+  assert.equal(r.mImage.holding.get(SPOWER), 3000);
+});
+
+test('N1: BEIDE unter Boden → beide 0xCC (Stopp), keiner entlädt', async () => {
+  const r = splitRig({ masterSoc: 8, slaveSoc: 9 });
+  await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  assert.equal(r.mImage.holding.get(SCMD), EMS_CMD.STOP);
+  assert.equal(r.sImage.holding.get(SCMD), EMS_CMD.STOP);
+});
+
+test('N2: transienter modbus timeout am Slave → bis zu 2× wiederholt → Split gelingt (kein Master-only, kein Modus 0)', async () => {
+  // 'modbus timeout' ist jetzt retryable (N2). failReadOnce feuert EINMAL → der Retry gelingt → normaler Split.
+  const r = splitRig({ masterSoc: 60, slaveSoc: 40, slaveMock: { failReadOnce: wire(13050) } });
+  const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  assert.equal(res.ok, true);
+  assert.notEqual(res.slaveFellBack, true);                     // kein Fallback nötig — Retry hat's getragen
+  assert.equal(r.sImage.holding.get(SCMD), EMS_CMD.DISCHARGE);  // Slave normal gesteuert
+});
+
+test('4b: Netzanschluss-Grenze deckelt das Netzladen am Aktuator (gridConnection.limitKw)', async () => {
+  // allowGridCharge an, großer positiver Sollwert (Netzladen) → Akku-Ladung ≤ Anschlussgrenze (3 kW).
+  const r = emsRig({
+    batteryPowerW: 0, pvPowerW: 0, selfConsumptionW: 0,
+    optimizer: { allowGridCharge: true, maxChargeW: 10000, maxDischargeW: 10000 },
+    extra: { gridConnection: { limitKw: 3 } },
+    device: sungrowDevice({ bdcRatedW: 20000 }),
+  });
+  await r.ems.applySetpoint(10000, 'rule:netzladen'); // will 10 kW Netzbezug → Laden
+  const pw = r.t.writes.find((w) => w.address === POWER);
+  assert.ok(pw && pw.value <= 3000, `Ladung ${pw?.value} ≤ 3000 (Anschlussgrenze)`);
+  assert.ok(r.t.writes.some((w) => w.address === CMD && w.value === EMS_CMD.CHARGE));
 });
 
 test('Aufgabe 2: Slave in Notladung → aus dem Split, Master bekommt alles, kein Lade-/Entladebefehl an den Slave', async () => {
