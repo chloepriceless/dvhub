@@ -561,6 +561,9 @@ export function createPoller(ctx) {
   let identifyRetryAt = 0;
   let identifyInfoAt = 0;
   let bdcRetryAt = 0;
+  // Block-Fähigkeit der FC-3-Gerätegrenzen je Verbindung (N3, Feld 15.11.): wirft der WR auf einen Block eine
+  // Modbus-Ausnahme (illegale Adresse), dauerhaft auf Einzellesen zurückfallen und das je Verbindung merken.
+  const blockCaps = { limits: true, soc: true };
   async function ensureDeviceIdentified(cfg) {
     const kind = cfg?.identify?.kind;
     if (kind !== 'sungrow' || transport.type !== 'modbus') {
@@ -580,6 +583,8 @@ export function createPoller(ctx) {
       identifyRetryAt = 0;
       identifyInfoAt = 0;
       bdcRetryAt = 0;
+      blockCaps.limits = true;
+      blockCaps.soc = true;
     }
     if (!dev) {
       if (now < identifyRetryAt) return;
@@ -624,21 +629,41 @@ export function createPoller(ctx) {
     // Sekundentakt, Note 6). Genau wie der Slave (sungrow-second.js), damit Anzeige UND Regelgrenzen je WR auf dem
     // echten Gerätewert stehen (begrenzt durch BDC) und nicht auf der BDC-Nennleistung hängen bleiben (Grenzen-
     // Vertauschung im Feld). 0 oder 0xFFFF (kein Wert) → null.
-    const readTen10 = async (doc) => {
-      try { const v = Number((await read({ fc: 3, address: wire(doc), quantity: 1 }))?.[0]) & 0xffff; return v === 0 || v === 0xffff ? null : v * 10; }
-      catch { return null; }
+    // Als BLÖCKE lesen (N3, Feld 15.11.): statt fünf Einzel-Lesungen zwei FC-3-Blöcke — 33047+3 (Laden 33047 /
+    // Entladen 33048 / Kapazität 33049) und 13057+4 (Max-SoC 13058 Offset 1, Min-SoC 13059 Offset 2). Block je
+    // Verbindung einmal proben; bei Modbus-Ausnahme dauerhaft auf Einzellesen zurückfallen (per Verbindung gemerkt).
+    // Transienter Fehler (Timeout/Reset) → KEIN Rückfall, nächster Info-Takt probt erneut. Nur im langsamen Info-Takt.
+    const readFc3BlockOrSingle = async (startDoc, quantity, capName, docByOffset) => {
+      const res = new Array(quantity).fill(null);
+      if (blockCaps[capName]) {
+        try {
+          const b = await read({ fc: 3, address: wire(startDoc), quantity });
+          if (!Array.isArray(b) || b.length < quantity) throw new Error('short block');
+          for (let i = 0; i < quantity; i += 1) res[i] = Number(b[i]) & 0xffff;
+          return res;
+        } catch (e) {
+          if (/modbus exception \d/i.test(String(e?.message))) blockCaps[capName] = false;
+          else return res; // transient: dieser Takt null, nächster Info-Takt probt den Block erneut
+        }
+      }
+      for (let i = 0; i < quantity; i += 1) {
+        const doc = docByOffset[i];
+        if (doc == null) continue;
+        try { res[i] = Number((await read({ fc: 3, address: wire(doc), quantity: 1 }))?.[0]) & 0xffff; }
+        catch { /* null */ }
+      }
+      return res;
     };
-    const maxChargeWDevice = await readTen10(33047);
-    const maxDischargeWDevice = await readTen10(33048);
-    const batteryCapacityLimitWh = await readTen10(33049);
-    // Max-/Min-SoC des Masters (Aufgabe 1): Holding, FC 3, EINZELN, Einheit 0,1 % (raw/10, auf [0,100] geklemmt).
+    const ten10 = (v) => (v == null || v === 0 || v === 0xffff ? null : v * 10);
     // 13058 Max-SoC (Lade-Grenze), 13059 Min-SoC (Entlade-Grenze). 0xFFFF → null; 0 ist ein gültiger Min-SoC.
-    const readSocPct = async (doc) => {
-      try { const v = Number((await read({ fc: 3, address: wire(doc), quantity: 1 }))?.[0]) & 0xffff; return v === 0xffff ? null : Math.min(100, Math.max(0, v / 10)); }
-      catch { return null; }
-    };
-    const maxSocPctDevice = await readSocPct(13058);
-    const minSocPctDevice = await readSocPct(13059);
+    const socPct = (v) => (v == null || v === 0xffff ? null : Math.min(100, Math.max(0, v / 10)));
+    const limits = await readFc3BlockOrSingle(33047, 3, 'limits', [33047, 33048, 33049]);
+    const maxChargeWDevice = ten10(limits[0]);
+    const maxDischargeWDevice = ten10(limits[1]);
+    const batteryCapacityLimitWh = ten10(limits[2]);
+    const socBlock = await readFc3BlockOrSingle(13057, 4, 'soc', [null, 13058, 13059, null]);
+    const maxSocPctDevice = socPct(socBlock[1]);
+    const minSocPctDevice = socPct(socBlock[2]);
     state.victron.device = { ...state.victron.device, maxChargeWDevice, maxDischargeWDevice, batteryCapacityLimitWh, maxSocPctDevice, minSocPctDevice, limitsAt: now };
   }
 

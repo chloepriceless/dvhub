@@ -1232,9 +1232,10 @@ test('Modbus TCP: Poll liest nur FC 4 an Doku−1-Adressen; Sollwert (External E
     assert.equal(state.victron.pvPowerW, 70000);
     assert.equal(state.meter.grid_total_w, -2300);
     // Zyklische Messwerte nur über Input-Register (FC 4); die einzigen Holding-Lesevorgänge (FC 3) sind die
-    // Master-Gerätegrenzen 33047/33048 + Kapazität 33049 (F1a) und Min-/Max-SoC 13058/13059 (Aufgabe 1), nur im
-    // langsamen Info-Takt.
-    const limitAddrs = new Set([wire(33047), wire(33048), wire(33049), wire(13058), wire(13059)]);
+    // Master-Gerätegrenzen + Min-/Max-SoC als BLÖCKE (N3): 33047+3 (Laden/Entladen/Kapazität) und 13057+4
+    // (Max-SoC 13058, Min-SoC 13059). Fehlt 13057–13060 im Abbild → Modbus-Ausnahme → Rückfall auf Einzellesen
+    // 13058/13059. Nur im langsamen Info-Takt.
+    const limitAddrs = new Set([wire(33047), wire(13057), wire(13058), wire(13059)]);
     assert.ok(frames.every((f) => f.fc === 4 || (f.fc === 3 && limitAddrs.has(f.address))), 'Poll: nur Input-Register + Gerätegrenzen (FC 3)');
     const readAddrs = new Set(frames.map((f) => f.address));
     for (const doc of [5000, 4990, 5628, 13000, 5601, 13023, 5214, 5017, 13008]) assert.ok(readAddrs.has(doc - 1), `Doku ${doc} → ${doc - 1}`);

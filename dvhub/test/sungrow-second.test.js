@@ -90,9 +90,43 @@ test('Begleitdienst: liest den zweiten WR aus (PV, Akku −scale, SoC, BDC) und 
   assert.equal(s.maxChargeWDevice, image.holding.get(wire(33047)) * 10);
   assert.equal(s.maxDischargeWDevice, image.holding.get(wire(33048)) * 10);
   assert.equal(s.batteryCapacityLimitWh, image.holding.get(wire(33049)) * 10);
-  // Telemetrie ist FC-4-Lesen; die einzigen FC-3-Lesungen sind die Holding-Gerätegrenzen (nie ein Write).
-  const nonFc4 = t.reads.filter((x) => x.fc !== 4);
-  assert.ok(nonFc4.every((x) => x.fc === 3 && [wire(33047), wire(33048), wire(33049), wire(13058), wire(13059)].includes(x.address)), 'nur die Gerätegrenzen + Min/Max-SoC per FC 3');
+  // N3 (Feld 15.11.): Live-Telemetrie je Takt sind nur noch DREI FC-4-Anfragen — Akku (5214+2), PV (5017+2) und der
+  // Zustands-/SoC-Block (13000+46, liefert runningState UND SoC in EINER Anfrage statt zwei Einzel-Lesungen).
+  const fc4 = t.reads.filter((x) => x.fc === 4);
+  for (const want of [[wire(5017), 2], [wire(5214), 2], [wire(13000), 46]]) {
+    assert.ok(fc4.some((x) => x.address === want[0] && x.quantity === want[1]), `Live-Block ${want[0]}+${want[1]}`);
+  }
+  // KEINE FC-4-Einzel-Lesung von SoC (13023) oder runningState (13000, Menge 1) mehr — die kommen aus dem Block.
+  assert.ok(!fc4.some((x) => x.address === wire(13023)), 'SoC nicht mehr einzeln');
+  assert.ok(!fc4.some((x) => x.address === wire(13000) && x.quantity === 1), 'runningState nicht mehr einzeln');
+  // bdc (5628) und Kapazität (5639) sind die einzigen zusätzlichen FC-4-Einzel-Lesungen — im langsamen Config-Takt.
+  const liveOrConfig = new Set([wire(5017), wire(5214), wire(13000), wire(5628), wire(5639)]);
+  assert.ok(fc4.every((x) => liveOrConfig.has(x.address)), 'keine anderen FC-4-Lesungen');
+  // FC 3 nur für Geräte-/Grenzwerte (nie ein Write): Grenzen-Block 33047+3, SoC-Grenzen-Block 13057+4; dieser fehlt im
+  // Abbild → Modbus-Ausnahme → Rückfall auf Einzellesen 13058/13059 (Probe + per-Verbindung-Fallback, N3).
+  const fc3 = t.reads.filter((x) => x.fc === 3);
+  assert.ok(fc3.some((x) => x.address === wire(33047) && x.quantity === 3), 'Grenzen als EIN FC-3-Block');
+  assert.ok(fc3.some((x) => x.address === wire(13057) && x.quantity === 4), 'SoC-Grenzen als EIN FC-3-Block (Probe)');
+  assert.ok(fc3.some((x) => x.address === wire(13058) && x.quantity === 1), 'Max-SoC einzeln nach Block-Ausnahme');
+  assert.ok(fc3.some((x) => x.address === wire(13059) && x.quantity === 1), 'Min-SoC einzeln nach Block-Ausnahme');
+  assert.deepEqual(t.writes, []);
+});
+
+test('Begleitdienst: Geräte-/Grenzwerte im langsamen Takt gecacht — zweiter Takt liest sie NICHT neu', async () => {
+  const image = sungrowImage();
+  const t = mockSungrow(image);
+  const r = pollerRig({ transport: t }); // fester Takt (now konstant) → innerhalb SUNGROW_SECOND_CONFIG_EVERY_MS
+  await r.sec.tick();
+  const fc3First = t.reads.filter((x) => x.fc === 3).length;
+  assert.ok(fc3First > 0, 'erster Takt liest die Grenzwerte');
+  const beforeSecond = t.reads.length;
+  await r.sec.tick();
+  const fc3Second = t.reads.filter((x) => x.fc === 3).length;
+  assert.equal(fc3Second, fc3First, 'zweiter Takt liest KEINE weiteren FC-3-Grenzwerte (gecacht)');
+  // Der zweite Takt macht nur noch die 3 Live-FC-4-Blöcke.
+  assert.equal(t.reads.length - beforeSecond, 3, 'zweiter Takt: nur die 3 Live-Anfragen');
+  // Gecachte Grenzwerte bleiben in der Anzeige.
+  assert.equal(r.state.sungrowSecond.maxChargeWDevice, image.holding.get(wire(33047)) * 10);
 });
 
 test('Begleitdienst: ohne host keine einzige Anfrage', async () => {
