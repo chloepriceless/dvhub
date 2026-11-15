@@ -108,6 +108,11 @@
 
 .rail { display:flex; flex-direction:column; gap:10px; }
 
+/* M9: Akku-Kachel Sungrow — gemeldeter SoC klein unter dem großen echten; Skala-Marken; je-WR-Zeilen (gekürzt). */
+.soc-reported { font-size:12px; color:var(--text-2); margin:-2px 0 4px; }
+.soc-marks { font-size:11px; color:var(--text-2); margin:2px 0 2px; }
+.sungrow-bat-wr .v { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+
 /* M5b: Wechselrichter-Kachel kompakt in der Mittelspalte — zwei Spalten Master | Slave (keine eigene
    Summe-Spalte; Summe einzeilig im Kopf). Lange Werte werden gekürzt (Ellipsis), nicht umgebrochen. */
 .leit-wr .wr-cols { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--gap-3); align-items:start; }

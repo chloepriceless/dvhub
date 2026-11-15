@@ -97,13 +97,20 @@
           <span class="chip info sm" id="batModeChip" hidden><span class="dot"></span><span id="batMode">&mdash;</span></span>
         </div>
         <div class="rail-big card-value value-bat" id="soc">&mdash;</div>
+        <!-- M9: bei Sungrow steht groß der ECHTE System-SoC, klein daneben der gemeldete (fensterrelative) Wert. -->
+        <div class="soc-reported" id="socReported" hidden></div>
         <div class="battery-vis"><i class="progress-fill-init" id="socBar"></i></div>
         <div class="battery-vis-labels">
           <span>0%</span>
           <span id="socMid">SOC &mdash;</span>
           <span>100%</span>
         </div>
+        <!-- M9: Marken der echten Skala (Sungrow): Geräte-Untergrenze + DVhub-Boden. Nur bei Sungrow sichtbar. -->
+        <div class="soc-marks" id="sungrowSocMarks" hidden></div>
         <div class="rail-row"><span class="l">Akku-Leistung</span><strong class="v" id="batP">&mdash;</strong></div>
+        <!-- M9: je Akku (Master/Slave) echter SoC · nutzbar über der Grenze · Leistung mit Richtung · Anteil. -->
+        <div class="rail-row sungrow-bat-wr" id="sungrowBatMasterRow" hidden><span class="l">Master</span><strong class="v" id="sungrowBatMaster">&mdash;</strong></div>
+        <div class="rail-row sungrow-bat-wr" id="sungrowBatSlaveRow" hidden><span class="l">Slave</span><strong class="v" id="sungrowBatSlave">&mdash;</strong></div>
         <div class="rail-row" id="gridShareRow" hidden title="Virtueller Zähler: so viel Netzstrom steckt durch Netzladen im Akku. Entladen senkt ihn anteilig (Anteil × Entladung). Solange er über der Schwelle liegt, gibt der Akku nichts ins Netz ab — kein Netzstrom mit Marktprämie. PV-Einspeisung bleibt."><span class="l">davon Netzstrom</span><strong class="v" id="gridShare">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Grid Setpoint</span><strong class="v" id="gridSetpoint">&mdash;</strong></div>
         <div class="rail-row rail-row-action" id="minSocRow" role="button" tabindex="0" aria-expanded="false" aria-controls="minSocEditor" data-leit="adv">

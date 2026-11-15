@@ -245,9 +245,10 @@ function updateFlowDiagram(status) {
     const w = Number(status?.victron?.batteryPowerW || 0);
     let label;
     let tone;
-    if (w > 50) { label = 'CHARGE'; tone = 'info'; }
-    else if (w < -50) { label = 'DISCHARGE'; tone = 'ok'; }
-    else { label = 'IDLE'; tone = ''; }
+    // M9: deutsche Statusworte (nicht „CHARGE/DISCHARGE/IDLE").
+    if (w > 50) { label = 'Laden'; tone = 'info'; }
+    else if (w < -50) { label = 'Entladen'; tone = 'ok'; }
+    else { label = 'Leerlauf'; tone = ''; }
     modeEl.textContent = label;
     chip.classList.remove('info', 'ok', 'warn');
     if (tone) chip.classList.add(tone);
@@ -1692,6 +1693,67 @@ function computeMinSocRenderState({ readbackValue, pendingState }) {
   };
 }
 
+// M9: reine Anzeige-Logik der Akku-Kachel für zwei Sungrow-WR (testbar, ohne DOM). Liefert die anzuzeigenden
+// Zeichenketten; der Renderer setzt sie per textContent. socBig = echter System-SoC (energyBalance.battery.socPct),
+// nie der gemeldete fensterrelative Wert; Grid-Setpoint aus ctrl.sungrowEms.target (bzw. schedule.active), nicht
+// victron.gridSetpointW (bei Sungrow null); wirksame Grenze real; Statusworte deutsch.
+function computeSungrowBatteryView(status) {
+  const s = status || {};
+  const sec = s.sungrowSecond;
+  if (!sec) return { isSungrow: false };
+  const vic = s.victron || {};
+  const dev = vic.device || {};
+  const ems = s.sungrowEms;
+  const split = ems && ems.decision && ems.decision.split;
+  const eb = s.energyBalance && s.energyBalance.battery;
+  const fin = (v) => v != null && v !== '' && Number.isFinite(Number(v));
+  const deNum = (v, d = 1) => (fin(v) ? Number(v).toLocaleString('de-DE', { maximumFractionDigits: d }) : null);
+  const realSoc = (rep, mn, mx) => {
+    if (!fin(rep)) return null;
+    const r = Number(rep);
+    if (!fin(mn) || !fin(mx) || Number(mx) <= Number(mn)) return Math.max(0, Math.min(100, r));
+    return Math.max(0, Math.min(100, Number(mn) + (r * (Number(mx) - Number(mn))) / 100));
+  };
+  const realSys = eb && fin(eb.socPct) ? Number(eb.socPct) : null;
+  const reported = fin(vic.soc) ? Number(vic.soc) : null;
+  const floor = eb && fin(eb.minSocPct) ? Number(eb.minSocPct) : null;
+  const devMin = fin(dev.minSocPctDevice) ? Number(dev.minSocPctDevice) : null;
+  const marks = [];
+  if (devMin != null) marks.push(`Geräte-Untergrenze ${deNum(devMin, 0)} %`);
+  if (floor != null) marks.push(`DVhub-Boden ${deNum(floor)} %`);
+  const spW = ems && ems.target && fin(ems.target.setpointW) ? Number(ems.target.setpointW)
+    : (fin(s.schedule && s.schedule.active && s.schedule.active.gridSetpointW && s.schedule.active.gridSetpointW.value) ? Number(s.schedule.active.gridSetpointW.value) : null);
+  const spSrc = (ems && ems.target && ems.target.source) || (s.schedule && s.schedule.active && s.schedule.active.gridSetpointW && s.schedule.active.gridSetpointW.source) || null;
+  const srcDe = { default: 'Standard', schedule: 'Zeitplan', rule: 'Zeitplan', eos: 'EOS', forecast_optimizer: 'EOS', eos_grid_hold: 'EOS', api_manual_write: 'Hand' };
+  const wrLine = (real, powerW, shareW, emergency) => {
+    const parts = [real == null ? 'SoC –' : `SoC ${deNum(real)} %`];
+    if (fin(powerW)) { const p = Number(powerW); parts.push(p > 0 ? `lädt ${Math.round(p)} W` : p < 0 ? `entlädt ${Math.round(-p)} W` : '0 W'); }
+    if (fin(shareW)) parts.push(`Anteil ${Math.round(Number(shareW))} W`);
+    if (emergency) parts.push('Notladung');
+    return parts.join(' · ');
+  };
+  const effW = (d, b) => { const c = [Number(d), Number(b)].filter((x) => Number.isFinite(x) && x > 0); return c.length ? Math.min(...c) : null; };
+  const sOnline = sec.online === true;
+  const mReal = realSoc(vic.sungrowMasterSocPct != null ? vic.sungrowMasterSocPct : vic.soc, dev.minSocPctDevice, dev.maxSocPctDevice);
+  const sReal = sOnline ? realSoc(sec.socPct, sec.minSocPctDevice, sec.maxSocPctDevice) : null;
+  const mDis = effW(dev.maxDischargeWDevice, dev.bdcRatedW);
+  const sDis = sOnline ? effW(sec.maxDischargeWDevice, sec.bdcRatedW) : null;
+  const maxDischarge = (mDis != null || sDis != null) ? `${deNum(((mDis || 0) + (sDis || 0)) / 1000, 1)} kW (Summe beider WR)` : null;
+  return {
+    isSungrow: true,
+    socBig: realSys != null ? `${deNum(realSys)} %` : null,
+    socReported: reported != null ? `Sungrow-Anzeige ${deNum(reported)} %` : null,
+    socBarPct: realSys != null ? Math.max(0, Math.min(100, realSys)) : null,
+    socMid: realSys != null ? `SoC ${deNum(realSys)} %` : null,
+    marks: marks.join(' · '),
+    gridSetpoint: spW == null ? '–' : `${Math.round(spW)} W${spSrc ? ` (${srcDe[spSrc] || spSrc})` : ''}`,
+    minSoc: floor != null ? `${deNum(floor)} %${devMin != null ? ` (Gerät ${deNum(devMin, 0)} % + Puffer)` : ''}` : null,
+    master: wrLine(mReal, vic.sungrowMasterBatteryW != null ? vic.sungrowMasterBatteryW : vic.batteryPowerW, split ? split.masterW : null, vic.emergencyCharge === true),
+    slave: sOnline ? wrLine(sReal, sec.batteryPowerW, split ? split.slaveW : null, sec.emergencyCharge === true) : 'Nicht erreichbar',
+    maxDischarge,
+  };
+}
+
 function syncMinSocEditorPreview(value) {
   const numericValue = Number(value);
   const preview = document.getElementById('minSocEditorValue');
@@ -2478,6 +2540,27 @@ function renderDashboardStatus(status) {
     // T-0118: live readback of the Cerbo AC discharge cap (reg 2704).
     dashboardState.lastMaxDischargeReadback = vic.maxDischargeW == null ? null : Number(vic.maxDischargeW);
     setText('maxDischargeReadback', formatMaxDischarge(vic.maxDischargeW), Number(vic.maxDischargeW) === 0 ? 'off' : null);
+
+    // M9: Akku-Kachel für zwei Sungrow-WR (reine Logik in computeSungrowBatteryView, hier nur ins DOM gesetzt).
+    const setHidden = (id, h) => { const el = document.getElementById(id); if (el) el.hidden = h; };
+    const sgBat = computeSungrowBatteryView(status);
+    if (!sgBat.isSungrow) {
+      for (const id of ['socReported', 'sungrowSocMarks', 'sungrowBatMasterRow', 'sungrowBatSlaveRow']) setHidden(id, true);
+    } else {
+      if (sgBat.socBig != null) setText('soc', sgBat.socBig);
+      const socRep = document.getElementById('socReported');
+      if (socRep) { socRep.hidden = sgBat.socReported == null; socRep.textContent = sgBat.socReported || ''; }
+      const bar = document.getElementById('socBar');
+      if (bar && sgBat.socBarPct != null) { bar.classList.remove('progress-fill-init'); bar.style.width = `${sgBat.socBarPct}%`; }
+      if (sgBat.socMid != null) { const mid = document.getElementById('socMid'); if (mid) mid.textContent = sgBat.socMid; }
+      const marks = document.getElementById('sungrowSocMarks');
+      if (marks) { marks.hidden = !sgBat.marks; marks.textContent = sgBat.marks || ''; }
+      setText('gridSetpoint', sgBat.gridSetpoint);
+      if (sgBat.minSoc != null) setText('minSoc', sgBat.minSoc);
+      setText('sungrowBatMaster', sgBat.master); setHidden('sungrowBatMasterRow', false);
+      setText('sungrowBatSlave', sgBat.slave); setHidden('sungrowBatSlaveRow', false);
+      if (sgBat.maxDischarge != null) setText('maxDischargeReadback', sgBat.maxDischarge);
+    }
   });
 
   // Zweite Victron-Anlage am selben Anschluss (second-gx-view.js).
@@ -4326,6 +4409,7 @@ const dashboardApi = {
   buildScheduleWindowsFromSelection,
   collectScheduleRulesFromRowState,
   computeMinSocRenderState,
+  computeSungrowBatteryView,
   computeDynamicGrossImportCtKwh,
   describeSlotControl,
   estimateSlotEconomics,
