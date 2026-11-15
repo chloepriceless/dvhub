@@ -209,6 +209,7 @@ import { createGridShareTracker } from './services/optimizer/grid-share.js';
 import { createGridSharePollTick } from './services/optimizer/grid-share-poll.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createSungrowSecond } from './services/inverter/sungrow-second.js';
+import { createModbusHealth } from './services/inverter/modbus-health.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
 import { createOptimizerService } from './services/optimizer/index.js';
@@ -1527,6 +1528,10 @@ ctx.gridConnection = createGridConnectionGuard(ctx);
 // Akku zuerst für mehrere Quellen (§14a, EOS-Schwelle): request/release/
 // status — das strengste Ziel gewinnt (services/grid-connection).
 ctx.batteryAssist = ctx.gridConnection.batteryAssist;
+// M7b: gemeinsamer Modbus-Gesundheitszähler des Master-WR — Poll UND EMS zählen hinein (wie beim Slave der Poller).
+// Nur für Sungrow über Modbus; der Poller (createPoller) und der Master-EMS (schedule-eval) legen sich damit über
+// dieselbe Verbindung, sodass die Kachel den vollen Master-Modbus-Verkehr zeigt, nicht nur die wenigen EMS-Writes.
+if (cfg.manufacturer === 'sungrow' && transport.type === 'modbus') ctx.sungrowMasterHealth = createModbusHealth();
 const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;

@@ -722,11 +722,13 @@ export function sungrowSecondView(state, cfg) {
  * (Modus 2, ohne Rückfall). Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Modus gesetzt hat
  * (oder gesetzt haben könnte), danach nichts mehr — auch kein Herzschlag.
  */
-export function createSungrowEms({ state, getCfg, transport: baseTransport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false, forcedHeartbeatPath = null }) {
-  // Modbus-Gesundheit dieser Verbindung (N5): zählt jede Anfrage/jeden Fehler transparent. wrap() legt sich vor den
-  // Transport; der Rest des Aktuators nutzt nur noch `transport` (gezählt). snapshot() geht in publish() an die Kachel.
-  const modbusHealth = createModbusHealth(now);
-  const transport = modbusHealth.wrap(baseTransport);
+export function createSungrowEms({ state, getCfg, transport: baseTransport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false, forcedHeartbeatPath = null, modbusHealth = null }) {
+  // Modbus-Gesundheit dieser Verbindung (N5/M7b): zählt jede Anfrage/jeden Fehler transparent. wrap() legt sich vor
+  // den Transport; der Rest des Aktuators nutzt nur noch `transport` (gezählt). snapshot() geht in publish() an die
+  // Kachel. Ein von außen übergebener Zähler (Master: ctx.sungrowMasterHealth) wird GETEILT — dann zählen Poll UND
+  // EMS in denselben Master-Zähler (M7b). Ohne Übergabe ein eigener (Slave, Tests).
+  const modbusHealthInst = modbusHealth || createModbusHealth(now);
+  const transport = modbusHealthInst.wrap(baseTransport);
   const st = {
     target: null,        // { setpointW, source, at }
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
@@ -862,10 +864,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       lastHeartbeatAt: st.lastHeartbeatAt || null,
       // Punkt 2: adaptiver Regeltakt + gemessene Antwortzeit + Tages-Schreibzähler je Register (13050 mit Budget).
       regulateEveryMs: adaptiveRegulateMs(getCfg()),
-      // N5: gewählter Takt (0 = Auto) + Modbus-Gesundheit dieser Verbindung (Anfragen/s, Antwortzeit, Fehler 24 h).
+      // N5/M7b: gewählter Takt (0 = Auto) + Modbus-Gesundheit dieser Verbindung. responseMs = der Median aus der
+      // Gesundheit (EINE „Antwort"-Zahl; der Regelzyklus steht separat in regulateEveryMs), kein eingefrorener Wert.
       regulateConfiguredMs: configuredRegulateMs(getCfg()),
-      health: modbusHealth.snapshot(),
-      responseMs: st.responseMs,
+      health: modbusHealthInst.snapshot(),
+      responseMs: modbusHealthInst.responseMs() ?? st.responseMs,
       writesToday: { mode13050: writeDayBucket().regs[EMS_MODE_ADDR] || 0, cmd13051: st.writeDay.regs[EMS_CMD_ADDR] || 0, power13052: st.writeDay.regs[EMS_POWER_ADDR] || 0, heartbeat13080: st.writeDay.regs[HEARTBEAT_ADDR] || 0 },
       modeBudgetLeft: modeBudgetLeft(),
       target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at, noGridCharge: st.target.noGridCharge === true } : null,
@@ -1011,12 +1014,16 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   const configuredRegulateMs = (cfg) => sungrowConfiguredRegulateMs(cfg, { isSlave });
   function adaptiveRegulateMs(cfg) {
     const fixed = configuredRegulateMs(cfg);
+    // M7b: die gemessene Antwortzeit ist der gleitende MEDIAN der letzten Modbus-Anfragen (laufend, Startphase
+    // übersprungen) — NICHT der eingefrorene Write-EWMA (der bei wenigen Writes auf dem langsamen Startwert hing und
+    // Auto fälschlich auf 5 s klemmte). In der Startphase (noch kein Median) als Rückfall der Write-EWMA.
+    const rt = modbusHealthInst.responseMs() ?? st.responseMs;
     if (Number.isFinite(fixed) && fixed > 0) {
       const want = Math.min(REGULATE_MAX_MS, Math.max(REGULATE_FIXED_MIN_MS, Math.round(fixed)));
-      if (st.responseMs != null && st.responseMs > want) return Math.min(REGULATE_MAX_MS, Math.round(st.responseMs));
+      if (rt != null && rt > want) return Math.min(REGULATE_MAX_MS, Math.round(rt));
       return want;
     }
-    if (st.responseMs != null && st.responseMs > 0) return Math.min(REGULATE_MAX_MS, Math.max(REGULATE_MIN_MS, Math.round(st.responseMs * 2)));
+    if (rt != null && rt > 0) return Math.min(REGULATE_MAX_MS, Math.max(REGULATE_MIN_MS, Math.round(rt * 2)));
     return REGULATE_MAX_MS;
   }
 

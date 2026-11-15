@@ -20,6 +20,20 @@ test('ohne zweiten WR → Kachel versteckt', () => {
   assert.equal(V.view({ sungrowSecond: null }).hidden, true);
 });
 
+test('M7b: EMS-Zeile — Bedarf > 0, aber beide WR an der Grenze (Split 0/0) → „Bedarf X → 0 W (beide an der Grenze 11 %)"', () => {
+  const status = {
+    victron: { soc: 11, sungrowMasterSocPct: 11, device: { model: 'SH10RT', bdcRatedW: 10000, minSocPctDevice: 10, maxSocPctDevice: 100 } },
+    sungrowSecond: { online: true, socPct: 11, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 10000, minSocPctDevice: 10, maxSocPctDevice: 100 },
+    sungrowEms: {
+      controlMode: 'forced', owns: true,
+      decision: { mode: 'forced', command: 'discharge', powerW: 1990, split: { masterW: 0, slaveW: 0, strategy: 'soc-balance', charge: false, masterFloorPct: 11, slaveFloorPct: 11, masterCeilPct: 100, slaveCeilPct: 100 } },
+    },
+  };
+  const vw = V.view(status);
+  assert.match(vw.master.decision, /Bedarf 1990 W → 0 W/, vw.master.decision);
+  assert.match(vw.master.decision, /an der Grenze 11 %/);
+});
+
 test('N5: Modbus-Gesundheit je WR — Takt, Anfragen/s, Antwortzeit, Fehler 24 h, letzter Fehler', () => {
   const status = {
     victron: { soc: 50, sungrowMasterSocPct: 50, device: { model: 'SH10RT', bdcRatedW: 10000 } },
@@ -34,14 +48,12 @@ test('N5: Modbus-Gesundheit je WR — Takt, Anfragen/s, Antwortzeit, Fehler 24 h
     },
   };
   const vw = V.view(status);
-  // Master: wirksamer Takt 1000 ms, Rate, Antwortzeit, Fehlerzahl, letzter Fehler mit Zeit.
-  assert.match(vw.master.health, /Takt 1000 ms/);
+  // Master: Rate, Antwortzeit (Median), Fehlerzahl, letzter Fehler mit Zeit — der Takt steht separat (regulate).
   assert.match(vw.master.health, /2,1\/s/);
   assert.match(vw.master.health, /Antwort 240 ms/);
   assert.match(vw.master.health, /Fehler 24 h 3/);
   assert.match(vw.master.health, /zuletzt Timeout 14:05/);
   // Slave: Lesetakt 5000 ms, keine Fehler.
-  assert.match(vw.slave.health, /Takt 5000 ms/);
   assert.match(vw.slave.health, /Fehler 24 h 0/);
 });
 
@@ -80,7 +92,7 @@ test('External-Split: je WR EIGENER Anteil (nicht Summe), Akku mit Richtung, wir
   assert.equal(vw.slave.fellBack, false);
   // Advanced-Zeilen unverändert.
   assert.equal(vw.master.split, '1000 W/1168 W (soc-balance)');
-  assert.equal(vw.master.regulate, '1000 ms · Antwort 420 ms');
+  assert.equal(vw.master.regulate, 'Regelzyklus 1000 ms');
   assert.ok(vw.master.writes.indexOf('13050 2 (Rest 18)') >= 0, vw.master.writes);
   assert.equal(vw.master.fallback, '31 s · 1/min');
   // Summe (NUR hier die Systemsumme), Akku mit Richtung.
@@ -106,7 +118,7 @@ test('Forced-Split laden: Modus 2, kein Countdown, Akku lädt, Slave-Notladung +
   assert.equal(vw.slave.emergencyCharge, true);
   assert.equal(vw.slave.fellBack, true);
   assert.equal(vw.slave.command, 'Stopp');
-  assert.equal(vw.master.regulate, '250 ms · Antwort 241 ms');
+  assert.equal(vw.master.regulate, 'Regelzyklus 250 ms');
 });
 
 test('Grenze zeigt die wirksame SoC-Spanne der Anlage (Min-/Max-SoC), nicht nur die Leistung', () => {

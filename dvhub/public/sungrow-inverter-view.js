@@ -106,8 +106,20 @@
     if (!d) return DASH;
     if (d.mode === 'self') return 'Eigenverbrauch';
     if (d.command === 'stop') return 'Zwangs-Stopp';
-    const w = num(d.powerW) ? ` ${Math.round(Number(d.powerW))} W` : '';
-    return (d.command === 'charge' ? 'Laden' : d.command === 'discharge' ? 'Entladen' : 'Zwang') + w;
+    const w = num(d.powerW) ? Math.round(Number(d.powerW)) : null;
+    const label = d.command === 'charge' ? 'Laden' : d.command === 'discharge' ? 'Entladen' : 'Zwang';
+    // M7b: Bedarf > 0, aber beide WR an ihrer SoC-Grenze (Split 0/0) → es wird nichts gefahren. Nicht „Entladen
+    // 1990 W" (irreführend), sondern „Bedarf 1990 W → 0 W (beide an der Grenze 11 %)".
+    const sp = d.split;
+    if (sp && w != null && w > 0) {
+      const sumW = (num(sp.masterW) ? Number(sp.masterW) : 0) + (num(sp.slaveW) ? Number(sp.slaveW) : 0);
+      if (Math.round(sumW) <= 0) {
+        const limit = d.command === 'charge' ? sp.masterCeilPct : sp.masterFloorPct;
+        const atStr = num(limit) ? ` (beide an der Grenze ${de(Math.round(Number(limit)))} %)` : ' (beide an der Grenze)';
+        return `Bedarf ${w} W → 0 W${atStr}`;
+      }
+    }
+    return `${label}${w != null ? ` ${w} W` : ''}`;
   }
 
   // F1: welcher Modus gilt — Eigenverbrauch (0) / Forced-Split (2) / External EMS (3). Im Dauer-Forced bleibt der
@@ -140,10 +152,11 @@
     if (!sp) return DASH;
     return `${watt(sp.masterW)}/${watt(sp.slaveW)} (${sp.strategy || '?'})`;
   }
+  // M7b: nur der Regelzyklus (wirksamer Takt). Die Antwortzeit steht EINMAL in der Modbus-Zeile (healthText),
+  // nicht zusätzlich hier — sonst zwei „Antwort"-Werte.
   function regulateText(ems) {
     if (!ems || !num(ems.regulateEveryMs)) return DASH;
-    const resp = num(ems.responseMs) ? ` · Antwort ${Math.round(Number(ems.responseMs))} ms` : '';
-    return `${Math.round(Number(ems.regulateEveryMs))} ms${resp}`;
+    return `Regelzyklus ${Math.round(Number(ems.regulateEveryMs))} ms`;
   }
   // Uhrzeit HH:MM aus einem Zeitstempel (ms) — für „letzter Fehler".
   function hhmm(ms) {
@@ -156,18 +169,16 @@
     if (kind === 'exception') return 'Ausnahme';
     return 'Fehler';
   }
-  // Modbus-Gesundheit einer Verbindung (N5): Anfragen/s · Antwortzeit · Fehler 24 h · letzter Fehler mit Zeit.
-  // effectiveMs = der wirksame Takt (Master: regulateEveryMs; Slave: Lesetakt tickMs).
-  function healthText(health, effectiveMs) {
-    if (!health && !num(effectiveMs)) return DASH;
+  // Modbus-Gesundheit einer Verbindung (N5/M7b): Anfragen/s · Antwortzeit (EIN Median-Wert) · Fehler 24 h · letzter
+  // Fehler mit Zeit. Der wirksame Takt/Regelzyklus steht separat (regulateText), nicht hier — sonst doppelt.
+  function healthText(health) {
     const h = health || {};
     const parts = [];
-    if (num(effectiveMs)) parts.push(`Takt ${Math.round(Number(effectiveMs))} ms`);
     if (num(h.requestsPerSec)) parts.push(`${de(h.requestsPerSec)}/s`);
     if (num(h.responseMs)) parts.push(`Antwort ${Math.round(Number(h.responseMs))} ms`);
     parts.push(`Fehler 24 h ${num(h.errors24h) ? Math.round(Number(h.errors24h)) : 0}`);
     if (h.lastError && num(h.lastError.at)) parts.push(`zuletzt ${errKindText(h.lastError.kind)} ${hhmm(h.lastError.at)}`);
-    return parts.join(' · ');
+    return parts.length ? parts.join(' · ') : DASH;
   }
   function writesText(ems) {
     const w = ems && ems.writesToday;
@@ -218,7 +229,7 @@
       writes: writesText(ems),
       fallback: fallbackText(ems),
       // N5: Modbus-Gesundheit des Master-Steuerpfads.
-      health: healthText(ems && ems.health, ems && ems.regulateEveryMs),
+      health: healthText(ems && ems.health),
     };
   }
 
@@ -261,7 +272,7 @@
       regulate: controlled ? regulateText(emsSlave) : DASH,
       writes: controlled ? writesText(emsSlave) : DASH,
       // N5: Modbus-Gesundheit des Slave-Lesepfads (Poller) — auch ohne Steuerung aussagekräftig.
-      health: healthText(s.health, s.tickMs),
+      health: healthText(s.health),
     };
   }
 

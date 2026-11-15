@@ -13,6 +13,18 @@
 const REQ_WINDOW_MS = 10_000;   // Fenster für „Anfragen/s"
 const DAY_MS = 86_400_000;      // 24 h für die Fehlerzählung
 const MAX_REQ_TIMES = 2048;     // Kappung des Zeitstempel-Puffers (Speicher)
+// Antwortzeit (N5/M7b): gleitender MEDIAN der letzten Anfragen (robust gegen den langsamen ersten Verbindungsaufbau),
+// LAUFEND aktualisiert — nicht ein eingefrorener Startwert. Die ersten STARTUP_MS werden NICHT gewertet (die erste
+// Verbindung ist einmalig langsam, am Feld 6436 ms → Auto-Takt hing fälschlich auf 5 s).
+const RESP_SAMPLES = 30;
+const STARTUP_MS = 60_000;
+
+function median(arr) {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+}
 
 // Fehlerart grob einordnen: Modbus-Ausnahme (illegale Adresse/Daten, Geräteseite) vs. Timeout/Verbindung.
 function classify(message) {
@@ -27,7 +39,8 @@ export function createModbusHealth(now = Date.now) {
   let reqTimes = [];        // Zeitstempel der letzten Anfragen (für Anfragen/s)
   const errTimes = [];      // Zeitstempel der Fehler (für die 24-h-Zählung)
   let lastError = null;     // { message, kind, at }
-  let responseMs = null;    // gleitender Mittelwert (nur erfolgreiche Anfragen)
+  const respSamples = [];   // Antwortzeiten der letzten RESP_SAMPLES erfolgreichen Anfragen (nach der Startphase)
+  let startedAt = null;     // erster Messpunkt — die ersten STARTUP_MS werden nicht gewertet
 
   function trimReq(t) {
     const cut = t - REQ_WINDOW_MS;
@@ -38,11 +51,17 @@ export function createModbusHealth(now = Date.now) {
 
   function record(ok, ms, errMsg) {
     const t = now();
+    if (startedAt == null) startedAt = t;
     total += 1;
     reqTimes.push(t);
     trimReq(t);
     if (ok) {
-      if (Number.isFinite(ms) && ms >= 0) responseMs = responseMs == null ? ms : Math.round(0.7 * responseMs + 0.3 * ms);
+      // Antwortzeit nur NACH der Startphase werten (der erste Verbindungsaufbau ist einmalig langsam) und als
+      // gleitenden Median der letzten RESP_SAMPLES Anfragen — laufend, ohne einen eingefrorenen Startwert.
+      if (t - startedAt >= STARTUP_MS && Number.isFinite(ms) && ms >= 0) {
+        respSamples.push(ms);
+        if (respSamples.length > RESP_SAMPLES) respSamples.shift();
+      }
     } else {
       errTimes.push(t);
       const day = t - DAY_MS;
@@ -83,11 +102,14 @@ export function createModbusHealth(now = Date.now) {
     return {
       totalRequests: total,
       requestsPerSec: recent.length ? Math.round((recent.length / spanS) * 10) / 10 : 0,
-      responseMs,
+      responseMs: median(respSamples),
       errors24h,
       lastError: lastError ? { ...lastError } : null,
     };
   }
 
-  return { wrap, snapshot, record };
+  // Gleitender Median der Antwortzeit (null in der Startphase/ohne Werte) — für den adaptiven Regeltakt.
+  function responseMs() { return median(respSamples); }
+
+  return { wrap, snapshot, record, responseMs };
 }
