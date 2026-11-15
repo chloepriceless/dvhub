@@ -91,6 +91,15 @@ export function resolveSungrowControl(cfg) {
   return { mode, modeValue: mode === 'forced' ? EMS_MODE.FORCED : EMS_MODE.EXTERNAL, heartbeatTimeoutS, heartbeatAfterMode, heartbeatWriteFc, acceptDeviceHeartbeatS, keepaliveRegister };
 }
 
+// Notladungs-Puffer über Sungrows Geräte-Untergrenze (M1, Christin 16.11.): kundeneinstellbar je Anlage,
+// Standard 1 Prozentpunkt (real). Der effektive Entlade-Boden ist max(hardFloorSocPct, geräteMinReal + Puffer).
+// 0 = kein Puffer (DVhub entlädt bis exakt zur Geräte-Untergrenze). Geklemmt auf [0, 50].
+export const SUNGROW_DEFAULT_SOC_FLOOR_BUFFER_PCT = 1;
+export function sungrowSocFloorBufferPct(cfg) {
+  const v = Number(cfg?.sungrow?.socFloorBufferPct);
+  return Number.isFinite(v) && v >= 0 ? Math.min(50, v) : SUNGROW_DEFAULT_SOC_FLOOR_BUFFER_PCT;
+}
+
 const U16_NA = 0xffff;
 const S16_NA = 0x7fff;
 
@@ -166,11 +175,33 @@ export function isSungrowEmergencyCharge(runningState) {
   return (Number(runningState) & 0xffff) === RUNNING_STATE_EMERGENCY_CHARGE;
 }
 
-// Wirksame Entlade-Grenze eines WR (Aufgabe 1): der höhere aus hartem Boden und dem geräteeigenen Min-SoC (13059) —
-// unter DIESE Grenze darf DVhub den WR im Forced mode nicht entladen (der WR hält sie dort nicht selbst ein).
-export function sungrowDischargeFloorPct(hardFloorPct, deviceMinSocPct) {
+// Fensterrelativer SoC → echter SoC (M1, Feld 16.11., kritisch): Sungrow meldet den SoC (Reg 13022/Doku 13023)
+// RELATIV zum Min…Max-SoC-Fenster des WR (13059…13058), NICHT absolut. Echter SoC = min + gemeldet × (max − min)/100.
+// Feld (Min 10 / Max 100): real = 10 + 0,9 × gemeldet; gemeldet 0 % = real 10 % = die geräteeigene Untergrenze (der
+// WR gibt darunter nichts mehr frei). An diesen WR gibt es KEIN Register mit dem echten SoC (gescannt). DVhub rechnet
+// intern auf EINER Skala — REAL — weil die Grenzen (13059/13058, hardFloorSocPct) real sind. Ohne gültiges Fenster
+// (min/max fehlen oder max ≤ min) bleibt der gemeldete Wert stehen (keine Umrechnung möglich). Ergebnis [0,100].
+export function sungrowRealSocPct(reportedPct, minSocPctDevice, maxSocPctDevice) {
+  const fin = (v) => v != null && v !== '' && Number.isFinite(Number(v));
+  if (!fin(reportedPct)) return null;
+  const r = Number(reportedPct);
+  if (!fin(minSocPctDevice) || !fin(maxSocPctDevice)) return Math.min(100, Math.max(0, r));
+  const min = Number(minSocPctDevice); const max = Number(maxSocPctDevice);
+  if (!(max > min)) return Math.min(100, Math.max(0, r));
+  return Math.min(100, Math.max(0, min + (r * (max - min)) / 100));
+}
+
+// Wirksame Entlade-Grenze eines WR (Aufgabe 1 + M1): der höhere aus hartem Boden und dem geräteeigenen Min-SoC
+// (13059, real) PLUS Notladungs-Puffer. Unter DIESE Grenze (real %) darf DVhub den WR nicht entladen. Der Puffer
+// (Christin 16.11., kundeneinstellbar, Default 1 pp) hält DVhub knapp ÜBER Sungrows eigener Untergrenze (real =
+// 13059), damit der WR nicht selbst in die Notladung (runningState 0x4001) fällt, die im Feld bei gemeldet 0 %
+// (= real = Gerätemin) kam. Fehlt der Gerätewert, zählt nur der harte Boden (ohne Puffer — kein bekanntes Gerätemin).
+export function sungrowDischargeFloorPct(hardFloorPct, deviceMinSocPct, bufferPct = 0) {
+  const fin = (v) => v != null && v !== '' && Number.isFinite(Number(v));
+  const buf = fin(bufferPct) ? Math.max(0, Number(bufferPct)) : 0;
+  const devFloor = fin(deviceMinSocPct) ? Number(deviceMinSocPct) + buf : null;
   // Erst nullish/'' aussortieren, DANN nach Zahl — sonst würde Number(null)=0 als gültige Grenze zählen.
-  const vals = [hardFloorPct, deviceMinSocPct].filter((v) => v != null && v !== '' && Number.isFinite(Number(v))).map(Number);
+  const vals = [hardFloorPct, devFloor].filter((v) => v != null && v !== '' && Number.isFinite(Number(v))).map(Number);
   return vals.length ? Math.max(...vals) : 0;
 }
 // Wirksame Lade-Grenze eines WR (Aufgabe 1): der kleinere aus konfigurierter Max-SoC und dem geräteeigenen
@@ -1154,15 +1185,21 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const perWrMax = sungrowEffectivePowerW; // gemeinsamer Resolver (Feld-Übersteuerung ∧ Gerätewert ∧ BDC), Aufgabe 1/4
     const floor = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
     const maxSoc = Number(cfg.optimizer?.maxSocPct ?? 100);
-    const masterSoc = state.victron.sungrowMasterSocPct ?? state.victron.soc;
-    const slaveSoc = second.socPct;
     const masterDev = state.victron.device || {};
     const slaveDev = state.sungrowSecond || {};
-    // Je-WR-SoC-Grenze (Aufgabe 1): Entlade-Boden = max(hardFloor, 13059), Lade-Decke = min(maxSoc, 13058). Fehlt der
-    // Gerätewert, zählt nur die Konfig-Grenze. splitStrategyShares sperrt damit je WR und leitet den Anteil an den
-    // anderen (bis zu DESSEN Grenze) um.
-    const masterFloorPct = sungrowDischargeFloorPct(floor, masterDev.minSocPctDevice);
-    const slaveFloorPct = sungrowDischargeFloorPct(floor, slaveDev.minSocPctDevice);
+    // M1 (Feld 16.11., kritisch): der gemeldete SoC (13022) ist fensterrelativ — vor dem Vergleich mit den realen
+    // Grenzen in den ECHTEN SoC umrechnen (min + gemeldet × (max−min)/100, je WR aus 13059/13058). Sonst sperrt das
+    // Split-Gate bei gemeldet 0,8/2,2 % beide WR (verglichen mit real 10/11 %), obwohl Sungrow real ~10,7/12 % hält
+    // und noch Energie freigibt → kein Entladen, Notladung.
+    const masterSoc = sungrowRealSocPct(state.victron.sungrowMasterSocPct ?? state.victron.soc, masterDev.minSocPctDevice, masterDev.maxSocPctDevice);
+    const slaveSoc = sungrowRealSocPct(second.socPct, slaveDev.minSocPctDevice, slaveDev.maxSocPctDevice);
+    // Je-WR-SoC-Grenze (Aufgabe 1 + M1): Entlade-Boden = max(hardFloor, 13059 + Puffer), Lade-Decke = min(maxSoc,
+    // 13058) — alles real %. Der Puffer (kundeneinstellbar, Default 1) hält DVhub knapp über Sungrows Untergrenze
+    // (verhindert die Notladung). Fehlt der Gerätewert, zählt nur die Konfig-Grenze. splitStrategyShares sperrt damit
+    // je WR und leitet den Anteil an den anderen (bis zu DESSEN Grenze) um.
+    const socFloorBuffer = sungrowSocFloorBufferPct(cfg);
+    const masterFloorPct = sungrowDischargeFloorPct(floor, masterDev.minSocPctDevice, socFloorBuffer);
+    const slaveFloorPct = sungrowDischargeFloorPct(floor, slaveDev.minSocPctDevice, socFloorBuffer);
     const masterCeilPct = sungrowChargeCeilPct(maxSoc, masterDev.maxSocPctDevice);
     const slaveCeilPct = sungrowChargeCeilPct(maxSoc, slaveDev.maxSocPctDevice);
     const masterMax = perWrMax(charge ? optMaster.maxChargeW : optMaster.maxDischargeW, charge ? masterDev.maxChargeWDevice : masterDev.maxDischargeWDevice, masterBdc);
@@ -1276,9 +1313,13 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   async function stepForced({ conf, ctl, opts, reason, t, targetFresh, maxChargeCap, maxDischargeCap, tel, second }) {
     const noGridChargeNow = noGridChargeForce();
     const cfg = getCfg();
-    // Entlade-Boden (SoC < hardFloorSocPct): sperrt im Regler nur das Entladen, nicht das Laden aus PV.
-    const floorSocPct = Number(cfg?.optimizer?.hardFloorSocPct ?? 5);
-    const socPct = state.victron?.sungrowMasterSocPct ?? state.victron?.soc ?? null;
+    // Entlade-Boden (SoC < Boden): sperrt im Regler nur das Entladen, nicht das Laden aus PV. M1: der Boden ist der
+    // effektive Entlade-Boden real % — max(hardFloor, geräteMin 13059 + Puffer); der SoC wird vor dem Vergleich vom
+    // fensterrelativen gemeldeten Wert in den echten SoC umgerechnet (Einzel-WR; im Split sitzt die Grenze je WR im
+    // Split-Gate). Ohne gelesenes Gerätefenster bleibt es beim harten Boden bzw. gemeldeten Wert (rückwärtskompatibel).
+    const emsDev = state.victron?.device || {};
+    const floorSocPct = sungrowDischargeFloorPct(Number(cfg?.optimizer?.hardFloorSocPct ?? 5), emsDev.minSocPctDevice, sungrowSocFloorBufferPct(cfg));
+    const socPct = sungrowRealSocPct(state.victron?.sungrowMasterSocPct ?? state.victron?.soc ?? null, emsDev.minSocPctDevice, emsDev.maxSocPctDevice);
     // N1 (Feld 15.11., gefährlich): im SPLIT den System-Entlade-Boden NICHT am Master-SoC prüfen. Sonst stoppt
     // decideEmsCommand bei Master 9,8 % die GANZE Vorgabe (beide WR 0xCC), obwohl der Slave noch 14,4 % hat →
     // Hauslast komplett aus dem Netz, Slave-Reserve ungenutzt. Die je-WR-Grenze sitzt im Split-Gate

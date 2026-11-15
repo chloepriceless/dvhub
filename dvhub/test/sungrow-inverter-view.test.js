@@ -37,7 +37,8 @@ test('External-Split: je WR EIGENER Anteil (nicht Summe), Akku mit Richtung, wir
   assert.equal(vw.showCountdown, true);
   // Master: eigener Anteil 1000 W (NICHT die Summe 2168), Akku mit Richtung.
   assert.equal(vw.master.role, 'Master – gesteuert');
-  assert.equal(vw.master.soc, '80 %');
+  // M1: gemeldeter SoC + echter (Fenster 10–100): real = 10 + 80×0,9 = 82 %.
+  assert.equal(vw.master.soc, '80 % · real 82 %');
   assert.equal(vw.master.battery, 'entlädt 1000 W');
   assert.equal(vw.master.command, 'Entladen 1000 W');
   assert.equal(vw.master.countdown, '30 s');

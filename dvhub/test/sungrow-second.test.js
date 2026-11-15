@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import {
   createSungrowEms, resolveSecondInverter, secondInverterTelemetry, wire, EMS_CMD, EMS_MODE,
   sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor, sungrowReserveWh, sungrowHeadroomWh, splitSungrowPower,
-  splitStrategyShares, SPLIT_STRATEGIES, isSungrowEmergencyCharge, sungrowDischargeFloorPct, sungrowChargeCeilPct
+  splitStrategyShares, SPLIT_STRATEGIES, isSungrowEmergencyCharge, sungrowDischargeFloorPct, sungrowChargeCeilPct,
+  sungrowRealSocPct, sungrowSocFloorBufferPct
 } from '../services/inverter/sungrow.js';
 import { createSungrowSecond } from '../services/inverter/sungrow-second.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
@@ -670,7 +671,7 @@ test('Aufgabe 4: Feld übersteuert strenger (gesetzter Wert < Gerätewert gewinn
   assert.equal(p.optimizer.maxChargeW, 15000); // min(8000,10600,11000)=8000 + min(7000,10600,11000)=7000
 });
 
-test('Aufgabe 4: Min-SoC an EOS = max(hartem Boden, 13059 beider WR)', () => {
+test('Aufgabe 4 + M1: Min-SoC an EOS = effektiver Entlade-Boden inkl. Puffer = max(hartem Boden, 13059 beider WR + Puffer)', () => {
   const cfg = {
     manufacturer: 'sungrow', optimizer: { hardFloorSocPct: 5 },
     sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true } },
@@ -679,7 +680,12 @@ test('Aufgabe 4: Min-SoC an EOS = max(hartem Boden, 13059 beider WR)', () => {
     victron: { soc: 60, device: { vendor: 'sungrow', minSocPctDevice: 10 } },
     sungrowSecond: { online: true, updatedAt: Date.now(), socPct: 40, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 11000, minSocPctDevice: 12 },
   } };
-  assert.equal(planningMinSocPct(ctx, 5), 12); // max(5, 10, 12)
+  // M1 (Christin 16.11.): EOS bekommt denselben Boden wie der Aktuator — geräteMin real + Puffer (Default 1).
+  // max(5, 10+1, 12+1) = 13.
+  assert.equal(planningMinSocPct(ctx, 5), 13);
+  // Puffer kundeneinstellbar: 0 → roher Geräte-Boden max(5,10,12)=12; 3 → max(5,13,15)=15.
+  assert.equal(planningMinSocPct({ ...ctx, getCfg: () => ({ ...cfg, sungrow: { ...cfg.sungrow, socFloorBufferPct: 0 } }) }, 5), 12);
+  assert.equal(planningMinSocPct({ ...ctx, getCfg: () => ({ ...cfg, sungrow: { ...cfg.sungrow, socFloorBufferPct: 3 } }) }, 5), 15);
 });
 
 test('Aufgabe 4: Einzel-Master ohne Slave, aber mit Gerätewert → Master-Gerätewert an EOS', () => {
@@ -688,6 +694,37 @@ test('Aufgabe 4: Einzel-Master ohne Slave, aber mit Gerätewert → Master-Gerä
   const p = planningCfg(ctx, cfg);
   assert.equal(p.optimizer.maxChargeW, 10600);
   assert.equal(p.optimizer.maxDischargeW, 10000);
+});
+
+// --- M1: fensterrelativer SoC → echter SoC + Notladungs-Puffer (rein) ----------------
+
+test('M1: sungrowRealSocPct — real = min + gemeldet×(max−min)/100, ohne Fenster unverändert', () => {
+  // Feldbox Min 10 / Max 100: real = 10 + 0,9×gemeldet.
+  assert.equal(sungrowRealSocPct(0, 10, 100), 10);      // gemeldet 0 % = real = Geräte-Untergrenze
+  assert.equal(sungrowRealSocPct(100, 10, 100), 100);   // gemeldet 100 % = real = Obergrenze
+  assert.ok(Math.abs(sungrowRealSocPct(0.8, 10, 100) - 10.72) < 1e-9);
+  assert.ok(Math.abs(sungrowRealSocPct(2.2, 10, 100) - 11.98) < 1e-9);
+  assert.equal(sungrowRealSocPct(50, 20, 80), 50);      // Fenster 20–80: 20 + 0,6×50 = 50
+  // Ohne gültiges Fenster bleibt der gemeldete Wert (geklemmt).
+  assert.equal(sungrowRealSocPct(57, null, null), 57);
+  assert.equal(sungrowRealSocPct(57, 10, 10), 57);      // max ≤ min → keine Umrechnung
+  assert.equal(sungrowRealSocPct(null, 10, 100), null); // kein SoC → null
+});
+
+test('M1: sungrowDischargeFloorPct — effektiver Boden = max(hardFloor, geräteMin + Puffer)', () => {
+  assert.equal(sungrowDischargeFloorPct(0, 10, 1), 11);   // Feld: hardFloor 0, geräteMin 10, Puffer 1 → 11
+  assert.equal(sungrowDischargeFloorPct(15, 10, 1), 15);  // hoher hardFloor gewinnt
+  assert.equal(sungrowDischargeFloorPct(0, 10, 0), 10);   // Puffer 0 → roher Geräte-Boden
+  assert.equal(sungrowDischargeFloorPct(5, null, 1), 5);  // kein Gerätewert → nur hardFloor, kein Puffer
+  assert.equal(sungrowDischargeFloorPct(null, null, 1), 0); // nichts bekannt → 0
+});
+
+test('M1: sungrowSocFloorBufferPct — Default 1, kundeneinstellbar, geklemmt [0,50]', () => {
+  assert.equal(sungrowSocFloorBufferPct({}), 1);
+  assert.equal(sungrowSocFloorBufferPct({ sungrow: { socFloorBufferPct: 0 } }), 0);
+  assert.equal(sungrowSocFloorBufferPct({ sungrow: { socFloorBufferPct: 3 } }), 3);
+  assert.equal(sungrowSocFloorBufferPct({ sungrow: { socFloorBufferPct: 99 } }), 50);
+  assert.equal(sungrowSocFloorBufferPct({ sungrow: { socFloorBufferPct: -2 } }), 1); // ungültig → Default
 });
 
 test('Punkt 2: SoC-Reserve/Headroom je WR (SoC 80/20, Kapazität 10/5 kWh, Boden 10 %)', () => {
@@ -762,6 +799,24 @@ test('Split: Entladen 3 kW bei SoC 80/20 → Master 2889 (Angleich), Slave 111, 
   assert.equal(r.sImage.holding.get(SMODE), EMS_MODE.FORCED);
   assert.equal(r.mImage.holding.get(SCMD), EMS_CMD.DISCHARGE);
   assert.equal(r.sImage.holding.get(SCMD), EMS_CMD.DISCHARGE);
+});
+
+test('M1 (Feld 16.11., kritisch): gemeldet 0,8/2,2 % bei Fenster 10–100 → Slave entlädt (nicht beide gesperrt)', async () => {
+  // Feld-Bug in b6c19495: der gemeldete SoC (0,8/2,2 %) wurde mit den REALEN Grenzen (Boden 11) verglichen → beide
+  // WR < Boden → split 0/0, kein Entladen, obwohl Sungrow real ~10,7/12 % hält und noch Energie freigibt → Notladung.
+  // Fix (M1): vor dem Vergleich in echten SoC umrechnen. Master real 10,72 (≤ Boden 11 → gesperrt), Slave real 11,98
+  // (> 11 → entlädt den vollen System-Anteil 3000 W).
+  const r = splitRig({ masterSoc: 0.8, slaveSoc: 2.2, optimizer: { hardFloorSocPct: 0 } });
+  r.state.victron.device = { ...r.state.victron.device, minSocPctDevice: 10, maxSocPctDevice: 100 };
+  r.state.sungrowSecond = { ...r.state.sungrowSecond, minSocPctDevice: 10, maxSocPctDevice: 100 };
+  const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  assert.equal(res.ok, true);
+  // Slave entlädt (real 11,98 > Boden 11), Master gesperrt (real 10,72 ≤ 11) → Stopp.
+  assert.equal(r.sImage.holding.get(SPOWER), 3000);
+  assert.equal(r.sImage.holding.get(SCMD), EMS_CMD.DISCHARGE);
+  assert.equal(r.mImage.holding.get(SCMD), EMS_CMD.STOP, 'Master am Boden → Stopp, nicht Entladen');
+  // Entscheidend: NICHT beide gesperrt (der alte Bug).
+  assert.ok(r.sImage.holding.get(SPOWER) > 0, 'Slave entlädt — nicht split 0/0');
 });
 
 test('Split: ein WR an der Grenze → der andere übernimmt', async () => {

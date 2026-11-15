@@ -18,7 +18,7 @@
  */
 import { getPowerLimits } from '../power-limits.js';
 import { betaGateOpen } from '../../beta-features.js';
-import { resolveSecondInverter, secondInverterTelemetry, sungrowEffectivePowerW } from '../inverter/sungrow.js';
+import { resolveSecondInverter, secondInverterTelemetry, sungrowEffectivePowerW, sungrowRealSocPct, sungrowSocFloorBufferPct, sungrowSystemSoc } from '../inverter/sungrow.js';
 
 const finite = (v) => v != null && v !== '' && Number.isFinite(Number(v));
 
@@ -192,6 +192,21 @@ export function followerBatteryStale(ctx, nowMs = Date.now()) {
 export function planningSocPct(ctx) {
   const cfg = ctx?.getCfg?.();
   const primary = ctx?.state?.victron?.soc;
+  // M1 (Christin 16.11.): EOS bekommt den ECHTEN SoC (real %), nicht den fensterrelativen gemeldeten Sungrow-Wert.
+  // Je WR aus 13059/13058 in echt umrechnen, dann kapazitätsgewichtet mitteln — konsistent mit dem Boden (ebenfalls
+  // real). Ohne gelesenes Gerätefenster bleibt der gemeldete Wert stehen (rückwärtskompatibel).
+  if (isSungrow(ctx, cfg)) {
+    const dev = ctx?.state?.victron?.device || {};
+    const opt = cfg?.optimizer || {};
+    const masterReported = finite(ctx?.state?.victron?.sungrowMasterSocPct) ? Number(ctx.state.victron.sungrowMasterSocPct) : primary;
+    const masterReal = sungrowRealSocPct(masterReported, dev.minSocPctDevice, dev.maxSocPctDevice);
+    const slaveTel = resolveSecondInverter(cfg).aggregateTelemetry === true ? secondInverterTelemetry(ctx?.state, cfg, {}) : null;
+    const slaveReal = slaveTel ? sungrowRealSocPct(slaveTel.socPct, slaveTel.minSocPctDevice, slaveTel.maxSocPctDevice) : null;
+    const s = ctx?.state?.sungrowSecond || {};
+    const masterCap = Number(opt.batteryCapacityWh) || Number(dev.batteryCapacityLimitWh) || 0;
+    const slaveCap = slaveTel ? (Number(cfg?.sungrow?.secondInverter?.batteryCapacityWh) || Number(s.batteryCapacityLimitWh) || 0) : 0;
+    return sungrowSystemSoc(masterReal, slaveReal, { masterCapacityWh: masterCap, secondCapacityWh: slaveCap }) ?? masterReal ?? primary;
+  }
   const f = follower(ctx, cfg);
   if (!f || !finite(primary)) return primary;
   return weighted(Number(primary), primaryCapacityWh(cfg), f.socPct, f.capacityWh);
@@ -200,12 +215,16 @@ export function planningSocPct(ctx) {
 /** Mindest-SoC fuer die Planung: Untergrenze der Hauptanlage und der zweiten, gewichtet. */
 export function planningMinSocPct(ctx, primaryMinSocPct) {
   const cfg = ctx?.getCfg?.();
-  // Zwei Sungrow-WR (Aufgabe 4): Min-SoC an EOS = max(hartem Boden/Live, 13059 beider WR). Keine Gewichtung — der
-  // SoC-Boden schützt den SCHWÄCHEREN Akku, deshalb der HÖHERE der gelesenen Min-SoC-Gerätewerte (konservativ).
+  // Zwei Sungrow-WR (Aufgabe 4 + M1, Christin 16.11.): Min-SoC an EOS = der EFFEKTIVE Entlade-Boden, den der Aktuator
+  // einhält — max(hartem Boden/Live, 13059 je WR + Puffer), alles real %. KEINE Gewichtung (der Boden schützt den
+  // schwächeren Akku → der HÖHERE Wert, konservativ). Puffer kundeneinstellbar (Default 1). Gleicher Boden wie im
+  // Aktuator, sonst plant EOS Entladung bis 10 %, die DVhub bei 11 % abbricht (Mismatch).
   if (isSungrow(ctx, cfg)) {
     const dev = ctx?.state?.victron?.device || {};
     const slaveTel = resolveSecondInverter(cfg).aggregateTelemetry === true ? secondInverterTelemetry(ctx?.state, cfg, {}) : null;
-    const cands = [primaryMinSocPct, dev.minSocPctDevice, slaveTel?.minSocPctDevice].filter((v) => finite(v)).map(Number);
+    const buffer = sungrowSocFloorBufferPct(cfg);
+    const devFloor = (v) => (finite(v) ? Number(v) + buffer : null);
+    const cands = [primaryMinSocPct, devFloor(dev.minSocPctDevice), devFloor(slaveTel?.minSocPctDevice)].filter((v) => finite(v)).map(Number);
     return cands.length ? Math.max(...cands) : primaryMinSocPct;
   }
   const f = follower(ctx, cfg);

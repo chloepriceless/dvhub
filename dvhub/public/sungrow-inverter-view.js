@@ -19,6 +19,21 @@
   const pct = (v) => (num(v) ? `${de(Math.round(Number(v) * 10) / 10)} %` : DASH);
   const kw = (v) => (num(v) ? `${de(Math.round(Number(v) / 100) / 10)} kW` : DASH);
 
+  // Fensterrelativer SoC → echter SoC (M1, Feld 16.11.): Sungrow meldet den SoC relativ zum Min…Max-SoC-Fenster des
+  // WR (13059…13058). real = min + gemeldet × (max − min)/100. Ohne gültiges Fenster null (keine Umrechnung möglich).
+  function realSoc(reported, min, max) {
+    if (!num(reported)) return null;
+    if (!num(min) || !num(max) || Number(max) <= Number(min)) return null;
+    return Math.min(100, Math.max(0, Number(min) + (Number(reported) * (Number(max) - Number(min))) / 100));
+  }
+  // SoC-Text: gemeldet, und falls umrechenbar der echte dahinter („0,8 % · real 10,7 %"). So sieht der Betreiber
+  // beides — der gemeldete Wert (am WR-Display) und der echte, mit dem DVhub/EOS rechnen.
+  function socText(reported, min, max) {
+    if (!num(reported)) return DASH;
+    const real = realSoc(reported, min, max);
+    return real == null ? pct(reported) : `${pct(reported)} · real ${pct(real)}`;
+  }
+
   // Akku mit Richtung (Feld 15.11.): Energiefluss-Konvention — positiv = lädt, negativ = entlädt. Nicht
   // richtungslos „1442 W", sondern „lädt 1442 W" / „entlädt 1442 W" (bei ~0 „0 W").
   function batteryDirText(v) {
@@ -155,7 +170,8 @@
       model: dev.model || DASH,
       serial: dev.serial || DASH,
       bdc: kw(dev.bdcRatedW),
-      soc: pct(v.sungrowMasterSocPct != null ? v.sungrowMasterSocPct : v.soc),
+      // M1: gemeldeter SoC + echter (umgerechnet mit dem Gerätefenster 13059/13058).
+      soc: socText(v.sungrowMasterSocPct != null ? v.sungrowMasterSocPct : v.soc, dev.minSocPctDevice, dev.maxSocPctDevice),
       battery: batteryDirText(v.sungrowMasterBatteryW != null ? v.sungrowMasterBatteryW : v.batteryPowerW),
       pv: watt(v.sungrowMasterPvW != null ? v.sungrowMasterPvW : v.pvPowerW),
       running: v.runningStateText || (dev.info && dev.info.runningStateText) || DASH,
@@ -196,7 +212,8 @@
       role: controlled ? 'Slave – gesteuert' : 'Slave – gelesen',
       online,
       bdc: kw(s.bdcRatedW),
-      soc: online ? pct(s.socPct) : DASH,
+      // M1: gemeldeter SoC + echter (Gerätefenster 13059/13058 des Slave).
+      soc: online ? socText(s.socPct, s.minSocPctDevice, s.maxSocPctDevice) : DASH,
       battery: online ? batteryDirText(s.batteryPowerW) : DASH,
       pv: online ? watt(s.pvPowerW) : DASH,
       running: online ? (s.runningStateText || DASH) : 'Nicht erreichbar',
