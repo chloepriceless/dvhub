@@ -11,6 +11,7 @@ import {
   sungrowRealSocPct, sungrowSocFloorBufferPct, sungrowConfiguredRegulateMs
 } from '../services/inverter/sungrow.js';
 import { createSungrowSecond } from '../services/inverter/sungrow-second.js';
+import { createModbusHealth } from '../services/inverter/modbus-health.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
 import { planningCfg, planningMinSocPct } from '../services/multi-gx/planning.js';
 import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
@@ -162,7 +163,7 @@ test('Begleitdienst: drei Lesefehler in Folge → offline, keine Werte', async (
 // Eigenes Rig für den Aktuator mit zweitem WR (Forced mode, damit kein Herzschlag die Writes verschiebt).
 // batteryPowerW in state.victron ist der SYSTEM-Wert (der Poller hat PV/Akku schon aggregiert); der Regler
 // zählt NICHT noch einmal dazu, er nutzt vom zweiten WR nur die BDC-Nennleistung für die System-Leistungsgrenze.
-function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), batteryPowerW = -500, second = null, aggregateTelemetry = false, optimizer = null, secondPowers = null, extra = null, pvPowerW = 0, selfConsumptionW = 500 } = {}) {
+function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), batteryPowerW = -500, second = null, aggregateTelemetry = false, optimizer = null, secondPowers = null, extra = null, pvPowerW = 0, selfConsumptionW = 500, modbusHealth = null } = {}) {
   const secondInverter = { host: '192.168.68.83', aggregateTelemetry, ...(secondPowers || {}) };
   const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter }, ...(optimizer ? { optimizer } : {}), ...(extra || {}) });
   const image = sungrowImage();
@@ -178,7 +179,7 @@ function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), batteryPowerW = -
     ctrl: {},
     ...(second ? { sungrowSecond: { online: true, updatedAt: clock, ...second } } : {})
   };
-  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, now });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, now, modbusHealth });
   return { ems, t, state, image };
 }
 
@@ -246,6 +247,19 @@ test('N5: Master-Status trägt Modbus-Gesundheit + gewählten Takt', async () =>
   assert.equal(st.health.errors24h, 0, 'keine Fehler am Mock');
   assert.equal(st.regulateConfiguredMs, 0, 'kein fester Takt gesetzt → Auto (0)');
   assert.ok(Number.isFinite(st.regulateEveryMs), 'wirksamer Takt ist eine Zahl');
+});
+
+test('M7b: Master-EMS zählt in den GETEILTEN Modbus-Health (Poll + EMS gemeinsam)', async () => {
+  const shared = createModbusHealth();
+  // Vorab einen „Poll" simulieren (wie der Poller über denselben ctx.sungrowMasterHealth).
+  const pollTx = shared.wrap({ type: 'modbus', async mbRequest() { return [0]; }, async mbWriteSingle() {}, async mbWriteMultiple() {} });
+  await pollTx.mbRequest({ address: 1 });
+  const pollOnly = shared.snapshot().totalRequests;
+  assert.equal(pollOnly, 1);
+  // Der Master-EMS nutzt denselben Zähler → seine Anfragen kommen dazu.
+  const r = emsRig({ batteryPowerW: -500, modbusHealth: shared });
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.ok(r.ems.status().health.totalRequests > pollOnly, 'EMS zählt in denselben Zähler (Poll + EMS)');
 });
 
 test('M2: forceRelease — Modus 0 + 0xCC, UNABHÄNGIG vom Besitz-Merker', async () => {

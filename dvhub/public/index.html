@@ -97,13 +97,20 @@
           <span class="chip info sm" id="batModeChip" hidden><span class="dot"></span><span id="batMode">&mdash;</span></span>
         </div>
         <div class="rail-big card-value value-bat" id="soc">&mdash;</div>
+        <!-- M9: bei Sungrow steht groß der ECHTE System-SoC, klein daneben der gemeldete (fensterrelative) Wert. -->
+        <div class="soc-reported" id="socReported" hidden></div>
         <div class="battery-vis"><i class="progress-fill-init" id="socBar"></i></div>
         <div class="battery-vis-labels">
           <span>0%</span>
           <span id="socMid">SOC &mdash;</span>
           <span>100%</span>
         </div>
+        <!-- M9: Marken der echten Skala (Sungrow): Geräte-Untergrenze + DVhub-Boden. Nur bei Sungrow sichtbar. -->
+        <div class="soc-marks" id="sungrowSocMarks" hidden></div>
         <div class="rail-row"><span class="l">Akku-Leistung</span><strong class="v" id="batP">&mdash;</strong></div>
+        <!-- M9: je Akku (Master/Slave) echter SoC · nutzbar über der Grenze · Leistung mit Richtung · Anteil. -->
+        <div class="rail-row sungrow-bat-wr" id="sungrowBatMasterRow" hidden><span class="l">Master</span><strong class="v" id="sungrowBatMaster">&mdash;</strong></div>
+        <div class="rail-row sungrow-bat-wr" id="sungrowBatSlaveRow" hidden><span class="l">Slave</span><strong class="v" id="sungrowBatSlave">&mdash;</strong></div>
         <div class="rail-row" id="gridShareRow" hidden title="Virtueller Zähler: so viel Netzstrom steckt durch Netzladen im Akku. Entladen senkt ihn anteilig (Anteil × Entladung). Solange er über der Schwelle liegt, gibt der Akku nichts ins Netz ab — kein Netzstrom mit Marktprämie. PV-Einspeisung bleibt."><span class="l">davon Netzstrom</span><strong class="v" id="gridShare">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Grid Setpoint</span><strong class="v" id="gridSetpoint">&mdash;</strong></div>
         <div class="rail-row rail-row-action" id="minSocRow" role="button" tabindex="0" aria-expanded="false" aria-controls="minSocEditor" data-leit="adv">
@@ -338,17 +345,22 @@
     <!-- Wechselrichter-Kachel (zwei Sungrow-WR): volle Reihe UNTER dem Energiefluss, Master | Slave | Summe
          nebeneinander (M5, Feld 16.11.). Ohne zweiten WR bleibt sie versteckt (die Reihe kollabiert). -->
     <div class="card rail-card leit-wr" data-accent="bat" id="sungrowWrCard" data-screen-label="Inverters (two)" hidden>
+      <!-- M5b: Kopf einzeilig — Titel · Modus · Freigeben-Knopf; Summe einzeilig darunter. -->
       <div class="rail-card-head">
         <span class="ttl"><span class="dot dot-bat"></span>Wechselrichter &middot; Sungrow</span>
-        <!-- Modus auf EIGENER Zeile unter dem Titel (nicht daneben, Feld 15.11.). -->
-        <span class="wr-mode" id="sungrowWrMode" title="Aktiver EMS-Modus: Eigenverbrauch (0), Forced-Split (2) oder External EMS (3).">&mdash;</span>
+        <span class="wr-head-mode" id="sungrowWrMode" title="Aktiver EMS-Modus: Eigenverbrauch (0), Forced-Split (2) oder External EMS (3).">&mdash;</span>
+        <span class="wr-head-spacer"></span>
+        <!-- M2: manuelle Freigabe (Modus 0, beide 0xCC) — der Weg ohne Shell, falls der Master in DVhubs Forced mode hängt. -->
+        <button type="button" class="btn sm" id="sungrowWrReleaseBtn" title="Nimmt den Forced/External-EMS-Betrieb am Master zurück: Modus 0 (Eigenverbrauch), beide Wechselrichter auf Stopp (0xCC). Nutze dies, wenn der Wechselrichter fest in einem Lade-/Entladebefehl steht.">Sungrow freigeben</button>
+        <span class="v" id="sungrowWrReleaseStatus"></span>
       </div>
+      <div class="wr-sum" id="sungrowWrSum" title="Systemsumme beider WR (SoC = echter System-SoC).">&mdash;</div>
       <div class="wr-cols">
         <!-- Master -->
         <div class="wr-col">
           <div class="rail-row wr-role"><span class="l" id="sungrowWrMasterRole">Master</span></div>
           <div class="wr-badges" id="sungrowWrMasterBadges" hidden></div>
-          <div class="wr-grid wr-grid-3" title="Master: SoC · Akku (Richtung) · PV.">
+          <div class="wr-grid wr-grid-3" title="Master: SoC (gemeldet · real) · Akku (Richtung) · PV.">
             <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrMasterSoc">&mdash;</strong></div>
             <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrMasterAkku">&mdash;</strong></div>
             <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrMasterPv">&mdash;</strong></div>
@@ -356,10 +368,10 @@
           <div class="wr-line"><span class="wr-l">Befehl</span><strong class="wr-v" id="sungrowWrMasterCmd">&mdash;</strong></div>
           <div class="wr-line" id="sungrowWrMasterCountdownRow" hidden title="Herzschlag-Countdown — nur im External EMS (Modus 3)."><span class="wr-l">Countdown</span><strong class="wr-v" id="sungrowWrMasterCountdown">&mdash;</strong></div>
           <div class="wr-line" title="Wirksame Grenzen = min(Gerät 33047/33048, BDC) je Richtung + SoC-Spanne der Anlage."><span class="wr-l">Grenzen</span><strong class="wr-v" id="sungrowWrMasterLimit">&mdash;</strong></div>
+          <div class="wr-line" title="Modbus-Gesundheit des Master-Pfads: wirksamer Takt · Antwortzeit · Anfragen/s · Modbus-Fehler 24 h · letzter Fehler."><span class="wr-l">Modbus</span><strong class="wr-v" id="sungrowWrMasterHealth">&mdash;</strong></div>
           <div class="rail-row" data-leit="adv"><span class="l" id="sungrowWrMasterMeta">&mdash;</span></div>
           <div class="rail-row" data-leit="adv" title="EMS-Entscheidung, Besitz und Herzschlag des Masters."><span class="l">EMS</span><strong class="v" id="sungrowWrMasterEms">&mdash;</strong></div>
-          <div class="rail-row" data-leit="adv" title="Aufteilung Master/Slave (Strategie) und adaptiver Regeltakt mit gemessener Antwortzeit."><span class="l">Aufteilung/Takt</span><strong class="v" id="sungrowWrMasterSplit">&mdash;</strong></div>
-          <div class="rail-row" data-leit="adv" title="Modbus-Gesundheit des Master-Steuerpfads: wirksamer Takt, Anfragen/s, Antwortzeit, Modbus-Fehler der letzten 24 h und letzter Fehler mit Zeit."><span class="l">Modbus</span><strong class="v" id="sungrowWrMasterHealth">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Aufteilung Master/Slave (Strategie) und Regelzyklus."><span class="l">Aufteilung/Takt</span><strong class="v" id="sungrowWrMasterSplit">&mdash;</strong></div>
           <div class="rail-row" data-leit="adv" title="Tages-Schreibzähler je Register (13050 Modus mit Budget, 13051 Befehl, 13052 Leistung, 13080 Herzschlag)."><span class="l">Writes Master</span><strong class="v" id="sungrowWrMasterWrites">&mdash;</strong></div>
         </div>
         <!-- Slave -->
@@ -368,7 +380,7 @@
           <div class="wr-badges" id="sungrowWrSlaveBadges" hidden></div>
           <div class="wr-status" id="sungrowWrSlaveStatus" hidden>&mdash;</div>
           <div id="sungrowWrSlaveGrid">
-            <div class="wr-grid wr-grid-3" title="Slave: SoC · Akku (Richtung) · PV.">
+            <div class="wr-grid wr-grid-3" title="Slave: SoC (gemeldet · real) · Akku (Richtung) · PV.">
               <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrSlaveSoc">&mdash;</strong></div>
               <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrSlaveAkku">&mdash;</strong></div>
               <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrSlavePv">&mdash;</strong></div>
@@ -376,25 +388,10 @@
             <div class="wr-line"><span class="wr-l">Befehl</span><strong class="wr-v" id="sungrowWrSlaveCmd">&mdash;</strong></div>
             <div class="wr-line" id="sungrowWrSlaveCountdownRow" hidden><span class="wr-l">Countdown</span><strong class="wr-v" id="sungrowWrSlaveCountdown">&mdash;</strong></div>
             <div class="wr-line"><span class="wr-l">Grenzen</span><strong class="wr-v" id="sungrowWrSlaveLimit">&mdash;</strong></div>
+            <div class="wr-line" title="Modbus-Gesundheit des Slave-Lesepfads: wirksamer Lesetakt · Antwortzeit · Anfragen/s · Modbus-Fehler 24 h · letzter Fehler."><span class="wr-l">Modbus</span><strong class="wr-v" id="sungrowWrSlaveHealth">&mdash;</strong></div>
           </div>
           <div class="rail-row" data-leit="adv"><span class="l">Slave-EMS/BDC</span><strong class="v" id="sungrowWrSlaveEms">&mdash;</strong></div>
-          <div class="rail-row" data-leit="adv" title="Modbus-Gesundheit des Slave-Lesepfads: wirksamer Lesetakt, Anfragen/s, Antwortzeit, Modbus-Fehler der letzten 24 h und letzter Fehler mit Zeit."><span class="l">Modbus</span><strong class="v" id="sungrowWrSlaveHealth">&mdash;</strong></div>
           <div class="rail-row" data-leit="adv"><span class="l">Writes Slave</span><strong class="v" id="sungrowWrSlaveWrites">&mdash;</strong></div>
-        </div>
-        <!-- Summe -->
-        <div class="wr-col">
-          <div class="rail-row wr-role"><span class="l">Summe</span></div>
-          <div class="wr-grid wr-grid-3">
-            <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrSumSoc">&mdash;</strong></div>
-            <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrSumAkku">&mdash;</strong></div>
-            <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrSumPv">&mdash;</strong></div>
-          </div>
-          <!-- M2: manuelle Freigabe (Modus 0, beide 0xCC) — der Weg ohne Shell, falls der Master in DVhubs
-               Forced mode „hängt" (Besitz-Merker nach Lesefehler/Neustart verloren). Mit Bestätigung. -->
-          <div class="rail-row" data-leit="adv">
-            <button type="button" class="btn sm" id="sungrowWrReleaseBtn" title="Nimmt den Forced/External-EMS-Betrieb am Master zurück: Modus 0 (Eigenverbrauch), beide Wechselrichter auf Stopp (0xCC). Nutze dies, wenn der Wechselrichter fest in einem Lade-/Entladebefehl steht.">Sungrow freigeben</button>
-            <span class="v" id="sungrowWrReleaseStatus"></span>
-          </div>
         </div>
       </div>
     </div>

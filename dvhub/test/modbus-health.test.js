@@ -8,19 +8,35 @@ function clockFrom(start) {
   return { now: () => t, advance: (ms) => { t += ms; } };
 }
 
-test('wrap zählt erfolgreiche Anfragen, misst Antwortzeit, reicht das Ergebnis durch', async () => {
+test('wrap zählt erfolgreiche Anfragen, misst Antwortzeit (Median nach der Startphase), reicht das Ergebnis durch', async () => {
   const c = clockFrom(1_000_000);
   const h = createModbusHealth(c.now);
   const base = { type: 'modbus', async mbRequest(a) { c.advance(20); return ['ok', a.address]; }, async mbWriteSingle() {}, async mbWriteMultiple() {} };
   const tx = h.wrap(base);
   assert.equal(tx.type, 'modbus');
+  // Erste Anfrage in der Startphase (60 s): wird gezählt, aber die Antwortzeit NICHT gewertet.
   const r = await tx.mbRequest({ address: 5 });
   assert.deepEqual(r, ['ok', 5], 'Ergebnis unverändert durchgereicht');
+  assert.equal(h.snapshot().responseMs, null, 'Startphase: noch keine Antwortzeit');
+  // Nach der Startphase: die Antwortzeit (20 ms) wird als Median gewertet.
+  c.advance(61_000);
+  await tx.mbRequest({ address: 6 });
   const s = h.snapshot();
-  assert.equal(s.totalRequests, 1);
+  assert.equal(s.totalRequests, 2);
   assert.equal(s.responseMs, 20);
   assert.equal(s.errors24h, 0);
   assert.equal(s.lastError, null);
+});
+
+test('M7b: Antwortzeit als gleitender Median, Startphase übersprungen', () => {
+  const c = clockFrom(2_000_000);
+  const h = createModbusHealth(c.now);
+  h.record(true, 6436); // langsamer Startwert — NICHT werten (Startphase)
+  assert.equal(h.responseMs(), null);
+  c.advance(61_000);
+  for (const ms of [500, 100, 600, 400, 50]) h.record(true, ms);
+  // Median von [50,100,400,500,600] = 400.
+  assert.equal(h.responseMs(), 400, 'Median, der langsame Startwert 6436 zählt nicht');
 });
 
 test('Fehler werden nach Art eingeordnet und als letzter Fehler gemerkt', async () => {
@@ -69,4 +85,14 @@ test('Anfragen/s über das 10-s-Fenster', () => {
 test('null-Transport wird unverändert zurückgegeben (kein Wrap)', () => {
   const h = createModbusHealth();
   assert.equal(h.wrap(null), null);
+});
+
+test('M7b: ein GETEILTER Health zählt zwei Verbindungen zusammen (Master: Poll + EMS)', async () => {
+  const c = clockFrom(1_000_000);
+  const h = createModbusHealth(c.now);
+  // Zwei Transporte (Poll und EMS) über DENSELBEN Health-Zähler gewickelt — wie ctx.sungrowMasterHealth beim Master.
+  const poll = h.wrap({ type: 'modbus', async mbRequest() { c.advance(10); return [1]; }, async mbWriteSingle() {}, async mbWriteMultiple() {} });
+  const ems = h.wrap({ type: 'modbus', async mbRequest() { c.advance(500); return [2]; }, async mbWriteSingle() {}, async mbWriteMultiple() {} });
+  await poll.mbRequest({}); await poll.mbRequest({}); await ems.mbRequest({});
+  assert.equal(h.snapshot().totalRequests, 3, 'Poll (2) + EMS (1) zusammen');
 });

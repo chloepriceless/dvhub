@@ -60,7 +60,10 @@ export function loadEnergy(state, energyPath, timezone = 'Europe/Berlin') {
  * @returns {{ start: Function, stop: Function, requestPoll: Function }}
  */
 export function createPoller(ctx) {
-  const { state, getCfg, transport, pushLog } = ctx;
+  const { state, getCfg, pushLog } = ctx;
+  // M7b: bei Sungrow den Poll-Modbus in die gemeinsame Master-Gesundheit zählen (Poll + EMS zusammen). Der Wrapper
+  // reicht Ergebnis/Fehler unverändert durch; ohne ctx.sungrowMasterHealth (Tests, andere Hersteller) der rohe Transport.
+  const transport = ctx.sungrowMasterHealth ? ctx.sungrowMasterHealth.wrap(ctx.transport) : ctx.transport;
   // spine-http-Meterzweig (EnergyLink): HTTP-Client injizierbar für Tests,
   // Default ist das globale fetch (Node >= 18).
   const fetchImpl = ctx.fetchImpl || globalThis.fetch;

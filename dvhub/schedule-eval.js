@@ -228,7 +228,7 @@ export function createScheduleEvaluator(ctx) {
       return c.enabled ? { host: c.host, port: c.port, unitId: c.unitId, timeoutMs: c.timeoutMs } : null;
     },
   });
-  const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog, statePath: ctx.sungrowEmsStatePath || null, slaveActuator: sungrowSlaveEms, forcedHeartbeatPath: ctx.sungrowForcedHeartbeatPath || null });
+  const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog, statePath: ctx.sungrowEmsStatePath || null, slaveActuator: sungrowSlaveEms, forcedHeartbeatPath: ctx.sungrowForcedHeartbeatPath || null, modbusHealth: ctx.sungrowMasterHealth || null });
 
   // Geräte-Tor (Profil identify.requiredForWrites): geschrieben wird erst, wenn
   // polling.js das Gerät erkannt hat und es unterstützt ist — ein falsches oder
