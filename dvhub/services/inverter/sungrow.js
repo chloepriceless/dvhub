@@ -1183,13 +1183,14 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const skipSlave = slaveUncommanded || slaveEmergency;
     const slaveDecision = skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveW);
     let masterDecision = mk(masterW);
-    let effMasterW = masterW; let effSlaveW = slaveW; let slaveFellBack = false;
+    let effMasterW = masterW; let effSlaveW = slaveW; let slaveFellBack = false; let slaveWrote = false;
     // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst).
     if (skipSlave) {
       // master-only/Notladung: Slave in Modus 0 (Self) halten. Scheitert das nicht hart — der Slave liegt dann ohnehin in Self.
       try { await slaveActuator.neutralize('self'); } catch { /* best effort */ }
     } else {
       const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
+      slaveWrote = sr.ok === true && sr.unchanged !== true; // echter Slave-Write (N4: Log/Status nur bei Änderung)
       if (!sr.ok) {
         // Absicherung C6 (Aufgabe 3): EIN Slave-Fehler (z. B. „EMS-Register lesen fehlgeschlagen: modbus exception 4",
         // Feld 15.11.) darf NICHT beide WR auf Modus 0 werfen (~20 s Ausfall). readDevice hat den Lesevorgang bereits
@@ -1205,25 +1206,36 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         logOnce(`${sr.error}`, 'sungrow_ems_split_slave_fallback', { side: 'slave', error: sr.error || null, readError: sr.readError === true, masterW: effMasterW, text: 'Sungrow: Slave-Fehler im Split — Anteil auf den Master verlagert, der Master steuert weiter (kein Modus 0).' }, 'warn');
       }
     }
+    // Split-Detail für GUI/Leitstand (Aufgabe 1/2/6): Anteil, wirksame Leistungsgrenze und wirksame SoC-Grenze je
+    // WR sowie Notladungs-Flag des Slave. „wirksame Grenze" = die in DIESER Richtung geltende (Laden: Decke/Max,
+    // Entladen: Boden/Min). masterW/slaveW = Anteil je WR.
+    const splitDetail = {
+      masterW: effMasterW, slaveW: effSlaveW, strategy, charge,
+      masterMaxW: masterMax, slaveMaxW: slaveMax,
+      masterFloorPct, slaveFloorPct, masterCeilPct, slaveCeilPct,
+      masterLimitPct: charge ? masterCeilPct : masterFloorPct,
+      slaveLimitPct: charge ? slaveCeilPct : slaveFloorPct,
+      slaveEmergencyCharge: slaveEmergency,
+      slaveFellBack, // Aufgabe 3: Slave-Fehler → Anteil auf den Master verlagert, Master steuert weiter
+    };
     // Master-Anteil. Scheitert er → beide sicher in Self.
     try {
+      const mdev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
+      if (isForeignMode(mdev.mode)) throw foreignModeError(mdev.mode);
+      // Schreibdrossel (N4/Aufgabe 5): Master 13051 nur bei Befehlswechsel, 13052 nur bei Änderung > stepW — und das
+      // Log sungrow_ems_split_write NUR bei echtem Write (im Feld lief es jede Sekunde, /api/log reichte ~3 min).
+      // Bei gap (Herzschlag-Lücke/Wiederaufnahme) immer voll schreiben.
+      if (!gap && emsMatches(mdev, masterDecision, opts.stepW, ctl.modeValue)) {
+        st.error = null;
+        st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
+        // Hat der Slave in diesem Takt geschrieben, ist es ein echter Write → protokollieren; sonst stiller Takt.
+        if (slaveWrote) pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, strategy, slaveFellBack, side: 'slave', reason: decision.reason, trigger: reason, readback: { mode: mdev.mode, cmd: mdev.cmd, powerW: mdev.powerW } });
+        publish();
+        return { ok: true, split: true, unchanged: !slaveWrote, decision, masterW: effMasterW, slaveW: effSlaveW, slaveFellBack };
+      }
       const back = await writeDecision(conf, masterDecision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
       st.error = null; st.logKeys = {};
-      // Split-Detail für GUI/Leitstand (Aufgabe 1/2/6): Anteil, wirksame Leistungsgrenze und wirksame SoC-Grenze je
-      // WR sowie Notladungs-Flag des Slave. „wirksame Grenze" = die in DIESER Richtung geltende (Laden: Decke/Max,
-      // Entladen: Boden/Min). masterW/slaveW = Anteil je WR.
-      st.decision = {
-        ...decision, at: t, trigger: reason,
-        split: {
-          masterW: effMasterW, slaveW: effSlaveW, strategy, charge,
-          masterMaxW: masterMax, slaveMaxW: slaveMax,
-          masterFloorPct, slaveFloorPct, masterCeilPct, slaveCeilPct,
-          masterLimitPct: charge ? masterCeilPct : masterFloorPct,
-          slaveLimitPct: charge ? slaveCeilPct : slaveFloorPct,
-          slaveEmergencyCharge: slaveEmergency,
-          slaveFellBack, // Aufgabe 3: Slave-Fehler → Anteil auf den Master verlagert, Master steuert weiter
-        },
-      };
+      st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
       pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, strategy, slaveFellBack, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
       publish();
       return { ok: true, split: true, decision, masterW: effMasterW, slaveW: effSlaveW, slaveFellBack };
@@ -1758,11 +1770,24 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       syncEndpoint(cfg);
       if (state.ctrl?.discretionaryWritesPaused) return { ok: false, blocked: true, error: 'emergency_stop_active' };
       const control = ctl || resolveSungrowControl(cfg);
+      const opts = resolveSungrowEmsOptions(conf);
       st.lastStepAt = now();
       try {
+        // Schreibdrossel je WR (N4/Aufgabe 5, Feld 15.11.: der Slave schrieb per forceAll JEDEN Takt 13051+13052):
+        // erst lesen, dann NUR schreiben, wenn der Befehl wechselt ODER die Leistung > stepW abweicht. Der Slave
+        // folgt dem Master-Modus (ignoreMode), hält seinen Befehl im Forced mode — ein Rück-Schreiben jeden Takt
+        // ist unnötig und verschleißt die Holding-Register.
         st.dev = null;
+        const dev = await readDevice(conf);
+        if (isSlave ? dev.mode === EMS_MODE.VPP : isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+        if (emsMatches(dev, decision, opts.stepW, control.modeValue, { ignoreMode: isSlave })) {
+          st.decision = { ...decision, at: now() };
+          st.error = null;
+          publish();
+          return { ok: true, unchanged: true, decision, readback: dev };
+        }
         const back = await writeDecision(conf, decision, {
-          modeValue: control.modeValue, heartbeatS: control.heartbeatTimeoutS, forceAll: true,
+          modeValue: control.modeValue, heartbeatS: control.heartbeatTimeoutS, forceAll: false,
           heartbeatAfterMode: control.heartbeatAfterMode, heartbeatWriteFc: control.heartbeatWriteFc,
           acceptDeviceHeartbeatS: control.acceptDeviceHeartbeatS,
         });

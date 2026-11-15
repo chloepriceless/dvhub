@@ -762,6 +762,28 @@ test('Aufgabe 3 (C6): Slave-Lesefehler (modbus exception 4) → Master steuert w
   assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_split_aborted'));
 });
 
+test('N4/Aufgabe 5: zweiter Takt mit gleicher Entscheidung → KEINE neuen 13051/13052-Writes (je WR gedrosselt)', async () => {
+  // Feld 15.11.: der Slave schrieb per forceAll JEDEN Takt 13051+13052 (Master 13052 jeden Takt). Jetzt: nur bei
+  // Befehlswechsel (13051) bzw. Änderung > stepW (13052). Zweiter Sollwert −3001 rundet auf dieselbe Leistung
+  // (3000) → identische Entscheidung → kein Write an beiden WR.
+  const r = splitRig({ masterSoc: 60, slaveSoc: 40 });
+  await r.ems.applySetpoint(-3000, 'rule:abend');
+  const cnt = (mock) => mock.writes.filter((w) => w.address === SCMD || w.address === SPOWER).length;
+  const mAfter1 = cnt(r.t.master); const sAfter1 = cnt(r.t.slave);
+  assert.ok(sAfter1 > 0 && mAfter1 > 0, 'erster Takt schreibt beide WR');
+  await r.ems.applySetpoint(-3071, 'rule:abend'); // ≈3050: Änderung 50 W < stepW 100 → kein Write (stepW-Toleranz je WR)
+  assert.equal(cnt(r.t.master), mAfter1, 'Master: kein neuer 13051/13052-Write');
+  assert.equal(cnt(r.t.slave), sAfter1, 'Slave: kein neuer 13051/13052-Write');
+});
+
+test('N4/Aufgabe 5: split_write-Log nur bei echtem Write (nicht bei gleichbleibendem Zustand)', async () => {
+  const r = splitRig({ masterSoc: 60, slaveSoc: 40 });
+  await r.ems.applySetpoint(-3000, 'rule:abend');
+  const logs1 = r.logs.filter((l) => l.event === 'sungrow_ems_split_write').length;
+  await r.ems.applySetpoint(-3071, 'rule:abend'); // Änderung < stepW → kein Write → kein Log
+  assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_split_write').length, logs1);
+});
+
 test('N1 (gefährlich): Master unter Boden (9 %), Slave darüber (15 %) → NUR Master 0, Slave entlädt weiter (nicht beide 0xCC)', async () => {
   // Feld 15.11. 13:49: Master 9,8 % → discharge_floor → BEIDE 0xCC, obwohl der Slave 14,4 % hatte → 4,8 kW Hauslast
   // aus dem Netz, Slave-Reserve ungenutzt. Ursache: stepForced prüfte den Boden NUR am Master-SoC. Jetzt: Boden je
