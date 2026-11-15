@@ -1483,6 +1483,44 @@ function buildFieldDefinitions() {
       groupOrder: 15,
       beta: true,
       visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.regulateEveryMs',
+      label: 'Regeltakt',
+      type: 'select',
+      default: 0,
+      options: [
+        { value: 0, label: 'Automatisch (1–5 s nach Antwortzeit)' },
+        { value: 1000, label: '1 Sekunde' },
+        { value: 2000, label: '2 Sekunden' },
+        { value: 5000, label: '5 Sekunden' }
+      ],
+      help: 'Wie oft DVhub die Akku-Vorgabe an den Wechselrichter nachführt. Automatisch (Standard): DVhub wählt 1–5 s anhand der gemessenen Modbus-Antwortzeit. Fest 1 s regelt am schnellsten auf Lastsprünge (mit den Block-Reads bleibt die Modbus-Last niedrig); 5 s ist als Dauertakt träge (das Netz schwankt bei Lastsprüngen). Die Modbus-Gesundheit in der Wechselrichter-Kachel zeigt, ob der gewählte Takt wirklich gehalten wird (wirksamer Takt vs. Antwortzeit).'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.regulateEveryMs',
+      label: 'Regeltakt zweiter Wechselrichter',
+      type: 'select',
+      default: 0,
+      options: [
+        { value: 0, label: 'Wie erster Wechselrichter' },
+        { value: 1000, label: '1 Sekunde' },
+        { value: 2000, label: '2 Sekunden' },
+        { value: 5000, label: '5 Sekunden' }
+      ],
+      help: 'Optional ein eigener Regeltakt für den zweiten (Slave-)Wechselrichter. „Wie erster Wechselrichter" (Standard) übernimmt den oben gewählten Takt. Nur nötig, wenn der zweite Wechselrichter einen anderen Takt braucht als der erste.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
       path: 'sungrow.heartbeatWriteFc',
       label: 'Herzschlag-Schreibfunktion (13080)',
       type: 'select',

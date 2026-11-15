@@ -20,6 +20,31 @@ test('ohne zweiten WR → Kachel versteckt', () => {
   assert.equal(V.view({ sungrowSecond: null }).hidden, true);
 });
 
+test('N5: Modbus-Gesundheit je WR — Takt, Anfragen/s, Antwortzeit, Fehler 24 h, letzter Fehler', () => {
+  const status = {
+    victron: { soc: 50, sungrowMasterSocPct: 50, device: { model: 'SH10RT', bdcRatedW: 10000 } },
+    sungrowSecond: {
+      online: true, socPct: 40, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 10000,
+      tickMs: 5000, health: { requestsPerSec: 0.4, responseMs: 300, errors24h: 0, lastError: null },
+    },
+    sungrowEms: {
+      controlMode: 'forced', owns: true, regulateEveryMs: 1000,
+      health: { requestsPerSec: 2.1, responseMs: 240, errors24h: 3, lastError: { kind: 'timeout', at: new Date(2026, 10, 16, 14, 5).getTime() } },
+      decision: { mode: 'forced', command: 'discharge', powerW: 1000 },
+    },
+  };
+  const vw = V.view(status);
+  // Master: wirksamer Takt 1000 ms, Rate, Antwortzeit, Fehlerzahl, letzter Fehler mit Zeit.
+  assert.match(vw.master.health, /Takt 1000 ms/);
+  assert.match(vw.master.health, /2,1\/s/);
+  assert.match(vw.master.health, /Antwort 240 ms/);
+  assert.match(vw.master.health, /Fehler 24 h 3/);
+  assert.match(vw.master.health, /zuletzt Timeout 14:05/);
+  // Slave: Lesetakt 5000 ms, keine Fehler.
+  assert.match(vw.slave.health, /Takt 5000 ms/);
+  assert.match(vw.slave.health, /Fehler 24 h 0/);
+});
+
 test('External-Split: je WR EIGENER Anteil (nicht Summe), Akku mit Richtung, wirksame Grenze, Countdown in Modus 3', () => {
   const status = {
     victron: {

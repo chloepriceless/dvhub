@@ -8,7 +8,7 @@ import {
   createSungrowEms, resolveSecondInverter, secondInverterTelemetry, wire, EMS_CMD, EMS_MODE,
   sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor, sungrowReserveWh, sungrowHeadroomWh, splitSungrowPower,
   splitStrategyShares, SPLIT_STRATEGIES, isSungrowEmergencyCharge, sungrowDischargeFloorPct, sungrowChargeCeilPct,
-  sungrowRealSocPct, sungrowSocFloorBufferPct
+  sungrowRealSocPct, sungrowSocFloorBufferPct, sungrowConfiguredRegulateMs
 } from '../services/inverter/sungrow.js';
 import { createSungrowSecond } from '../services/inverter/sungrow-second.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
@@ -223,6 +223,31 @@ test('M2: fremder Modus 2 (NICHT DVhubs letzter Write) bleibt fremd → kein Üb
   assert.notEqual(r.ems._st.owns, true, 'DVhub beansprucht den fremden Modus 2 NICHT');
 });
 
+test('N5: sungrowConfiguredRegulateMs — Master-Takt, Slave getrennt bzw. geerbt, 0 = Auto', () => {
+  // Kein Wert → Auto (0).
+  assert.equal(sungrowConfiguredRegulateMs({}), 0);
+  assert.equal(sungrowConfiguredRegulateMs({}, { isSlave: true }), 0);
+  // Master 5 s gesetzt.
+  const m = { sungrow: { regulateEveryMs: 5000 } };
+  assert.equal(sungrowConfiguredRegulateMs(m), 5000);
+  // Slave erbt den Master-Takt, wenn kein eigener gesetzt ist.
+  assert.equal(sungrowConfiguredRegulateMs(m, { isSlave: true }), 5000);
+  // Slave mit eigenem Takt (1 s) — unabhängig vom Master.
+  const s = { sungrow: { regulateEveryMs: 5000, secondInverter: { regulateEveryMs: 1000 } } };
+  assert.equal(sungrowConfiguredRegulateMs(s), 5000, 'Master bleibt 5 s');
+  assert.equal(sungrowConfiguredRegulateMs(s, { isSlave: true }), 1000, 'Slave 1 s');
+});
+
+test('N5: Master-Status trägt Modbus-Gesundheit + gewählten Takt', async () => {
+  const r = emsRig({ batteryPowerW: -500 });
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  const st = r.ems.status();
+  assert.ok(st.health && st.health.totalRequests > 0, 'Modbus-Anfragen gezählt');
+  assert.equal(st.health.errors24h, 0, 'keine Fehler am Mock');
+  assert.equal(st.regulateConfiguredMs, 0, 'kein fester Takt gesetzt → Auto (0)');
+  assert.ok(Number.isFinite(st.regulateEveryMs), 'wirksamer Takt ist eine Zahl');
+});
+
 test('M2: forceRelease — Modus 0 + 0xCC, UNABHÄNGIG vom Besitz-Merker', async () => {
   const r = emsRig({ batteryPowerW: -500 });
   await r.ems.applySetpoint(-6000, 'rule:abend');          // Modus 2, owns
@@ -279,8 +304,10 @@ test('sungrowSecondView: ohne Konfiguration null', () => {
 
 test('sungrowSecondView: online → Werte, OHNE host/LAN-IP; offline → Werte null, online:false', () => {
   const cfg = { sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true } } };
-  const online = sungrowSecondView({ sungrowSecond: { online: true, host: '192.168.68.83', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, maxChargeWDevice: 10000, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000, minSocPctDevice: 10, maxSocPctDevice: 95 } }, cfg);
-  assert.deepEqual(online, { online: true, reason: null, aggregate: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, maxChargeWDevice: 10000, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000, minSocPctDevice: 10, maxSocPctDevice: 95, runningState: null, runningStateText: null, emergencyCharge: false });
+  const health = { totalRequests: 100, requestsPerSec: 0.6, responseMs: 240, errors24h: 1, lastError: { message: 'modbus timeout', kind: 'timeout', at: 5 } };
+  const online = sungrowSecondView({ sungrowSecond: { online: true, host: '192.168.68.83', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, maxChargeWDevice: 10000, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000, minSocPctDevice: 10, maxSocPctDevice: 95, health, tickMs: 5000 } }, cfg);
+  assert.deepEqual(online, { online: true, reason: null, aggregate: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, maxChargeWDevice: 10000, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000, minSocPctDevice: 10, maxSocPctDevice: 95, runningState: null, runningStateText: null, emergencyCharge: false, health, tickMs: 5000 });
+  // Modbus-Gesundheit wird durchgereicht (N5); keine LAN-IP enthalten.
   // Keine LAN-IP / kein host in der Statusausgabe.
   assert.ok(!('host' in online));
   const off = sungrowSecondView({ sungrowSecond: { online: false, host: '192.168.68.83', socPct: 61 } }, cfg);

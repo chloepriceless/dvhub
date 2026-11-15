@@ -20,6 +20,7 @@ import fs from 'node:fs';
 
 import { meterImport } from '../import-limit/core.js';
 import { atomicWriteControlState } from '../../control-state-io.js';
+import { createModbusHealth } from './modbus-health.js';
 
 /** Doku-Adresse → Draht-Adresse. */
 export const wire = (docAddress) => Number(docAddress) - 1;
@@ -341,6 +342,15 @@ const DEFAULTS = Object.freeze({
 // Quellen, deren positiver Sollwert nur die Last aus dem Netz holt, nie den Akku lädt (schedule-eval:
 // EOS „Akku halten“ rechnet Live-Last − PV − Puffer).
 const NO_GRID_CHARGE_SOURCES = new Set(['eos_grid_hold']);
+
+// Gewählter fester Regeltakt (N5): Master aus cfg.sungrow.regulateEveryMs, Slave aus
+// cfg.sungrow.secondInverter.regulateEveryMs (optional getrennt; leer/0 → erbt den Master-Takt). 0 = Auto (adaptiv).
+export function sungrowConfiguredRegulateMs(cfg, { isSlave = false } = {}) {
+  const slaveVal = Number(cfg?.sungrow?.secondInverter?.regulateEveryMs);
+  if (isSlave && Number.isFinite(slaveVal) && slaveVal > 0) return slaveVal;
+  const masterVal = Number(cfg?.sungrow?.regulateEveryMs);
+  return Number.isFinite(masterVal) && masterVal > 0 ? masterVal : 0;
+}
 
 /** Regler-Einstellungen aus controlWrite.gridSetpointW.sungrowEms (Profil) mit Standardwerten. */
 export function resolveSungrowEmsOptions(conf = {}) {
@@ -698,6 +708,10 @@ export function sungrowSecondView(state, cfg) {
     runningStateText: live ? (s?.runningStateText ?? null) : null,
     // Notladung (Aufgabe 2): der Slave lädt eigenmächtig unter Min-SoC aus dem Netz (0x4001) — nicht steuerbar.
     emergencyCharge: live ? (s?.emergencyCharge === true) : false,
+    // N5: Modbus-Gesundheit des Slave-Lesepfads (Anfragen/s, Antwortzeit, Fehler 24 h) + wirksamer Lesetakt. Keine
+    // LAN-IP enthalten; auch offline aussagekräftig (zeigt, ob/wie oft der Slave antwortet).
+    health: s?.health ?? null,
+    tickMs: Number.isFinite(Number(s?.tickMs)) ? Number(s.tickMs) : null,
   };
 }
 
@@ -708,7 +722,11 @@ export function sungrowSecondView(state, cfg) {
  * (Modus 2, ohne Rückfall). Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Modus gesetzt hat
  * (oder gesetzt haben könnte), danach nichts mehr — auch kein Herzschlag.
  */
-export function createSungrowEms({ state, getCfg, transport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false, forcedHeartbeatPath = null }) {
+export function createSungrowEms({ state, getCfg, transport: baseTransport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false, forcedHeartbeatPath = null }) {
+  // Modbus-Gesundheit dieser Verbindung (N5): zählt jede Anfrage/jeden Fehler transparent. wrap() legt sich vor den
+  // Transport; der Rest des Aktuators nutzt nur noch `transport` (gezählt). snapshot() geht in publish() an die Kachel.
+  const modbusHealth = createModbusHealth(now);
+  const transport = modbusHealth.wrap(baseTransport);
   const st = {
     target: null,        // { setpointW, source, at }
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
@@ -844,6 +862,9 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       lastHeartbeatAt: st.lastHeartbeatAt || null,
       // Punkt 2: adaptiver Regeltakt + gemessene Antwortzeit + Tages-Schreibzähler je Register (13050 mit Budget).
       regulateEveryMs: adaptiveRegulateMs(getCfg()),
+      // N5: gewählter Takt (0 = Auto) + Modbus-Gesundheit dieser Verbindung (Anfragen/s, Antwortzeit, Fehler 24 h).
+      regulateConfiguredMs: configuredRegulateMs(getCfg()),
+      health: modbusHealth.snapshot(),
       responseMs: st.responseMs,
       writesToday: { mode13050: writeDayBucket().regs[EMS_MODE_ADDR] || 0, cmd13051: st.writeDay.regs[EMS_CMD_ADDR] || 0, power13052: st.writeDay.regs[EMS_POWER_ADDR] || 0, heartbeat13080: st.writeDay.regs[HEARTBEAT_ADDR] || 0 },
       modeBudgetLeft: modeBudgetLeft(),
@@ -987,8 +1008,9 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   // die gemessene Antwortzeit (Lesen+Schreiben beider WR, Round-Trip ~241 ms) ist länger —, auf die gemessene Rate
   // strecken, sonst liefe der Takt auf. Ohne festen Wert aus der Antwortzeit (×2), geklemmt auf 1–5 s (kein
   // Überschwingen). Ob der Takt gehalten wird, zeigt der Vergleich regulateEveryMs vs. responseMs in der Kachel.
+  const configuredRegulateMs = (cfg) => sungrowConfiguredRegulateMs(cfg, { isSlave });
   function adaptiveRegulateMs(cfg) {
-    const fixed = Number(cfg?.sungrow?.regulateEveryMs);
+    const fixed = configuredRegulateMs(cfg);
     if (Number.isFinite(fixed) && fixed > 0) {
       const want = Math.min(REGULATE_MAX_MS, Math.max(REGULATE_FIXED_MIN_MS, Math.round(fixed)));
       if (st.responseMs != null && st.responseMs > want) return Math.min(REGULATE_MAX_MS, Math.round(st.responseMs));
@@ -1158,8 +1180,15 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   // so bleibt das Box-Watchdog-Lebenszeichen immer frisch (≤ 5 s), ein großer regulateEveryMs kann es nicht über
   // die Watchdog-Frist altern lassen (Review-Befund 3).
   function stepEveryMs(opts) {
+    const cfg = getCfg();
+    // Quirk-Fix (N5, Feld 16.11.): ändert sich der GEWÄHLTE Takt (Config), soll er an beiden WR ZEITNAH greifen —
+    // nicht erst nach Ablauf des alten (langen) Takts (der Slave übernahm sofort, der Master erst ~10 s später).
+    // Darum den internen Takt-Zeitgeber einmal zurücksetzen, damit der nächste Aufruf-Takt sofort nachregelt.
+    const taktCfg = configuredRegulateMs(cfg);
+    if (st.lastTaktCfg !== undefined && taktCfg !== st.lastTaktCfg) st.lastStepAt = 0;
+    st.lastTaktCfg = taktCfg;
     if (!(st.owns && (st.ownMode === EMS_MODE.EXTERNAL || st.ownMode === EMS_MODE.FORCED))) return opts.regulateEveryMs;
-    return adaptiveRegulateMs(getCfg());
+    return adaptiveRegulateMs(cfg);
   }
   const due = (everyMs) => now() - st.lastStepAt >= everyMs - TICK_JITTER_MS;
 

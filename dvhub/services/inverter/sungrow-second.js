@@ -23,6 +23,7 @@
 
 import { safeInterval } from '../safe-async.js';
 import { wire, runningStateText, resolveSecondInverter, isSungrowEmergencyCharge } from './sungrow.js';
+import { createModbusHealth } from './modbus-health.js';
 
 export const SUNGROW_SECOND_TICK_MS = 5000;
 const OFFLINE_AFTER_ERRORS = 3;
@@ -94,8 +95,11 @@ const u16 = (w) => {
 };
 
 export function createSungrowSecond(ctx, deps = {}) {
-  const transport = deps.transport;
   const now = deps.now || Date.now;
+  // Modbus-Gesundheit des Slave-WR (N5): zählt die Lese-Anfragen/Fehler dieses Pollers (Feld: ~1 Lesefehler auf
+  // 4000 Slave-Anfragen). wrap() zählt transparent; der eigentliche Transport bleibt unverändert.
+  const modbusHealth = createModbusHealth(now);
+  const transport = modbusHealth.wrap(deps.transport);
   let timer = null;
   let running = false;
   let online = null;
@@ -124,6 +128,8 @@ export function createSungrowSecond(ctx, deps = {}) {
       maxChargeWDevice: null, maxDischargeWDevice: null, batteryCapacityLimitWh: null,
       maxSocPctDevice: null, minSocPctDevice: null,
       runningState: null, runningStateText: null, emergencyCharge: false, aggregate: false,
+      // N5: Modbus-Gesundheit des Slave-Lesepfads + wirksamer Lesetakt (ms).
+      health: modbusHealth.snapshot(), tickMs: SUNGROW_SECOND_TICK_MS,
       errors, updatedAt: now(), ...extra,
     };
   }

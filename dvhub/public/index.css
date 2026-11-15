@@ -72,32 +72,48 @@
   .topbar-nav a.is-active::after { display:none; }
 }
 
-/* ─── 3-col leit-grid ─── */
+/* ─── leit-grid: zwei ~gleiche Spalten + Energiefluss fest in der Mitte ───
+   M5 (Feld 16.11., 1600×1000, zwei Sungrow-WR): früher bestimmte die (mit der
+   WR-Kachel 1522 px hohe) linke Spalte die Höhe des Energieflusses → der
+   Börsenchart rutschte unter den Bildschirm. Jetzt: der Energiefluss hat eine
+   FESTE Höhe (wächst NICHT mit den Spalten), die Spalten sind oben ausgerichtet
+   (align-self:start), und die Wechselrichter-Kachel sitzt als volle Reihe UNTER
+   dem Energiefluss (Master | Slave | Summe nebeneinander), erst danach der Chart. */
 .leit-grid {
   display:grid;
   gap:var(--gap-3);
-  grid-template-columns:300px 1fr 320px;
-  /* Boersenchart unter linker Spalte + Energiefluss, rechte Spalte ueber beide
-     Zeilen: so bestimmt die linke Spalte die Hoehe des Energieflusses, nicht
-     die (mit der E-Auto-Kachel hoehere) rechte. */
+  grid-template-columns:1fr minmax(0, 1.25fr) 1fr;
   grid-template-areas:
     "left pf   right"
-    "epex epex right";
-  grid-template-rows:auto 1fr;
+    "wr   wr   wr"
+    "epex epex epex";
+  grid-template-rows:auto auto auto;
+  align-items:start;
 }
-.leit-grid > .rail:first-child { grid-area:left; }
-.leit-grid > .pf-shell { grid-area:pf; }
-.leit-grid > .rail:last-of-type { grid-area:right; }
+.leit-grid > .rail:first-child { grid-area:left; align-self:start; }
+.leit-grid > .pf-shell { grid-area:pf; align-self:start; }
+.leit-grid > .rail:last-of-type { grid-area:right; align-self:start; }
+.leit-grid > .leit-wr { grid-area:wr; align-self:start; margin:0; }
 .leit-grid > .leit-epex { grid-area:epex; margin-top:0; align-self:start; }
+/* Energiefluss: feste Höhe (≈ Bildschirmhöhe − Kopf). Darf NICHT mit den Spalten
+   wachsen; so bleibt der Chart darunter im sichtbaren Bereich (Ziel ≤ ~1000 px). */
+.leit-grid > .pf-shell { height:clamp(560px, 72vh, 780px); }
+.leit-grid > .pf-shell .dvhub-powerflow { height:100%; }
 @media (max-width:1280px) {
-  .leit-grid { grid-template-columns:1fr; grid-template-areas:none; grid-template-rows:none; }
-  .leit-grid > .rail:first-child, .leit-grid > .pf-shell, .leit-grid > .rail:last-of-type, .leit-grid > .leit-epex { grid-area:auto; }
+  .leit-grid { grid-template-columns:1fr; grid-template-areas:none; grid-template-rows:none; align-items:stretch; }
+  .leit-grid > .rail:first-child, .leit-grid > .pf-shell, .leit-grid > .rail:last-of-type, .leit-grid > .leit-wr, .leit-grid > .leit-epex { grid-area:auto; }
   /* Mobile / narrow: Powerflow is the most actionable info — surface it
      first so the user doesn't have to scroll past the rails on a phone. */
-  .leit-grid > .pf-shell { order:-1; }
+  .leit-grid > .pf-shell { order:-1; height:auto; }
 }
 
 .rail { display:flex; flex-direction:column; gap:10px; }
+
+/* M5: Wechselrichter-Kachel als volle Reihe — Master | Slave | Summe nebeneinander (ab genug Breite). */
+.leit-wr .wr-cols { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:var(--gap-3); align-items:start; }
+.leit-wr .wr-col { display:flex; flex-direction:column; gap:6px; min-width:0; }
+.leit-wr .rail-card-head { flex-wrap:wrap; gap:6px; }
+@media (max-width:900px) { .leit-wr .wr-cols { grid-template-columns:1fr; } }
 
 /* ─── Rail cards ─── */
 .rail-card { padding:14px; display:flex; flex-direction:column; gap:6px; }

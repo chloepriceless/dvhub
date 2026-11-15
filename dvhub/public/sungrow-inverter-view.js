@@ -145,6 +145,30 @@
     const resp = num(ems.responseMs) ? ` · Antwort ${Math.round(Number(ems.responseMs))} ms` : '';
     return `${Math.round(Number(ems.regulateEveryMs))} ms${resp}`;
   }
+  // Uhrzeit HH:MM aus einem Zeitstempel (ms) — für „letzter Fehler".
+  function hhmm(ms) {
+    if (!num(ms)) return '';
+    try { const d = new Date(Number(ms)); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
+    catch { return ''; }
+  }
+  function errKindText(kind) {
+    if (kind === 'timeout') return 'Timeout';
+    if (kind === 'exception') return 'Ausnahme';
+    return 'Fehler';
+  }
+  // Modbus-Gesundheit einer Verbindung (N5): Anfragen/s · Antwortzeit · Fehler 24 h · letzter Fehler mit Zeit.
+  // effectiveMs = der wirksame Takt (Master: regulateEveryMs; Slave: Lesetakt tickMs).
+  function healthText(health, effectiveMs) {
+    if (!health && !num(effectiveMs)) return DASH;
+    const h = health || {};
+    const parts = [];
+    if (num(effectiveMs)) parts.push(`Takt ${Math.round(Number(effectiveMs))} ms`);
+    if (num(h.requestsPerSec)) parts.push(`${de(h.requestsPerSec)}/s`);
+    if (num(h.responseMs)) parts.push(`Antwort ${Math.round(Number(h.responseMs))} ms`);
+    parts.push(`Fehler 24 h ${num(h.errors24h) ? Math.round(Number(h.errors24h)) : 0}`);
+    if (h.lastError && num(h.lastError.at)) parts.push(`zuletzt ${errKindText(h.lastError.kind)} ${hhmm(h.lastError.at)}`);
+    return parts.join(' · ');
+  }
   function writesText(ems) {
     const w = ems && ems.writesToday;
     if (!w) return DASH;
@@ -193,6 +217,8 @@
       regulate: regulateText(ems),
       writes: writesText(ems),
       fallback: fallbackText(ems),
+      // N5: Modbus-Gesundheit des Master-Steuerpfads.
+      health: healthText(ems && ems.health, ems && ems.regulateEveryMs),
     };
   }
 
@@ -234,6 +260,8 @@
       fellBack: sp ? sp.slaveFellBack === true : false,
       regulate: controlled ? regulateText(emsSlave) : DASH,
       writes: controlled ? writesText(emsSlave) : DASH,
+      // N5: Modbus-Gesundheit des Slave-Lesepfads (Poller) — auch ohne Steuerung aussagekräftig.
+      health: healthText(s.health, s.tickMs),
     };
   }
 
@@ -288,6 +316,7 @@
     fillGroup('sungrowWrMaster', vw.master);
     set('sungrowWrMasterEms', `${vw.master.decision} · Besitz ${vw.master.owns ? 'ja' : 'nein'} · Herzschlag ${vw.master.heartbeat}`);
     set('sungrowWrMasterSplit', `Aufteilung ${vw.master.split} · Takt ${vw.master.regulate} · Rückfall ${vw.master.fallback}`);
+    set('sungrowWrMasterHealth', vw.master.health);
     set('sungrowWrMasterWrites', `Writes heute: ${vw.master.writes}`);
     set('sungrowWrSlaveRole', vw.slave.role);
     setBadges('sungrowWrSlaveBadges', [
@@ -298,6 +327,7 @@
     if (vw.slave.online) { setHidden('sungrowWrSlaveStatus', true); setHidden('sungrowWrSlaveGrid', false); fillGroup('sungrowWrSlave', vw.slave); }
     else { set('sungrowWrSlaveStatus', vw.slave.running); setHidden('sungrowWrSlaveStatus', false); setHidden('sungrowWrSlaveGrid', true); }
     set('sungrowWrSlaveEms', vw.slave.role.indexOf('gesteuert') >= 0 ? `${vw.slave.decision} · Besitz ${vw.slave.owns ? 'ja' : 'nein'} · Takt ${vw.slave.regulate}` : `BDC ${vw.slave.bdc}`);
+    set('sungrowWrSlaveHealth', vw.slave.health);
     set('sungrowWrSlaveWrites', vw.slave.role.indexOf('gesteuert') >= 0 ? `Writes heute: ${vw.slave.writes}` : '');
     set('sungrowWrSumSoc', vw.sum.soc); set('sungrowWrSumAkku', vw.sum.battery); set('sungrowWrSumPv', vw.sum.pv);
     wireReleaseButton(d);
