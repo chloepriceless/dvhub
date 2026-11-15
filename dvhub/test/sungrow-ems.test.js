@@ -268,6 +268,26 @@ test('Absicherung C: releaseControl nimmt im Split BEIDE WR zurück (Slave 0xCC,
   assert.equal(r.state.ctrl.sungrowEmsSlave.owns, false, 'Slave-Besitz abgegeben');
 });
 
+test('Aufgabe 7 (Frische-Wächter): veralteter Sollwert im Split → BEIDE WR sicher zurück (Modus 0 / 0xCC)', async () => {
+  const r = splitRig();
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+  r.advance(130000); // > targetMaxAgeMs (120 s): Sollwert veraltet → Rückgabe an den WR (Absicherung C)
+  await r.ems.tick();
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF, 'Master Modus 0');
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.STOP, 'Master 0xCC');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, 'Slave 0xCC');
+});
+
+test('Aufgabe 7 (Frische-Wächter): veraltete Master-Messwerte im Split → BEIDE WR sicher zurück', async () => {
+  const r = splitRig();
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  r.advance(30000); // > telemetryMaxAgeMs (20 s): Messwerte veraltet → telemetry_missing → Self
+  await r.ems.tick();
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF, 'Master Modus 0');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, 'Slave 0xCC');
+});
+
 test('Review-Befund 1: Slave-Telemetrie fällt mitten in der Vorgabe aus → Slave-Befehl wird sicher angehalten (0xCC)', async () => {
   const r = splitRig();
   await r.ems.applySetpoint(-6000, 'rule:abend'); // Split-Entladen, Slave bekam Befehl
@@ -327,6 +347,27 @@ test('Netzlade-Verbot D: ohne Freigabe lädt KEIN Ziel aus dem Netz (auch manual
   const ok = rig({ controlMode: 'forced', allowGridCharge: true });
   await ok.ems.applySetpoint(4000, 'manual_override');
   assert.equal(ok.image.holding.get(CMD), EMS_CMD.CHARGE, 'mit Freigabe lädt es aus dem Netz');
+});
+
+test('Aufgabe 8 (D): Netzlade-Riegel greift für JEDES Ziel und JEDEN Takt (allowGridCharge=false)', async () => {
+  // Der Riegel hängt am Aktuator (noGridChargeForce), nicht an einem durchgereichten Flag — er gilt für jede Quelle
+  // (EOS, Regel, Hand) und in jedem Takt, solange der Nutzer das Netzladen nicht freigegeben hat.
+  const r = rig({ controlMode: 'forced' }); // allowGridCharge default false
+  r.telemetry({ gridW: 0, batteryW: 0, pvW: 0, loadW: 500 }); // kein PV-Überschuss
+  await r.ems.applySetpoint(6000, 'eos'); // EOS-Ziel: wollte 6 kW Netzbezug zum Laden
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.STOP, 'kein Netzladen (eos)');
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'charge_pv_only');
+  // Nächster Takt, gleiches Ziel, frische Messwerte → weiter kein Netzladen.
+  r.advance(6000);
+  r.telemetry({ gridW: 0, batteryW: 0, pvW: 0, loadW: 500 });
+  await r.ems.tick();
+  assert.notEqual(r.image.holding.get(CMD), EMS_CMD.CHARGE, 'auch im nächsten Takt kein Netzladen');
+  // Mit PV-Überschuss lädt es (nur aus PV, nicht aus dem Netz) — der Riegel sperrt NICHT das PV-Laden.
+  r.advance(6000);
+  r.telemetry({ gridW: -3000, batteryW: 0, pvW: 4000, loadW: 500 });
+  await r.ems.applySetpoint(6000, 'eos');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.CHARGE, 'PV-Überschuss wird geladen (charge_pv_only)');
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'charge_pv_only');
 });
 
 test('Dauer-Forced B1: Leerlauf (Default-Puffer −40) mit PV-Überschuss regelt (Laden), fällt NICHT in Modus 0', async () => {
