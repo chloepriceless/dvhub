@@ -155,9 +155,46 @@ test('Kappung am Ladestand erst, wenn er 60 s lang zu niedrig ist (einzelner Feh
     t.tick({ nowMs: t0 + 70_000, victron: {}, socPct: 50, capacityWh: 8_000 });
     near(t.summary().gridWh, 200, 0.01);
     assert.equal(t.isLocked(), true);
-    // Echt niedrig über 60 s: dann wird gekappt (Obergrenze 1 % von 8 kWh = 80 Wh).
+    // Echt am Boden (0 %) über 60 s UND nicht am Laden: der Netzanteil ist dort gefangen → Boden-Reset auf 0
+    // (M10, Feld 16.11.), der Rest als Verlust gebucht, die Sperre fällt.
     for (let i = 1; i <= 8; i++) t.tick({ nowMs: t0 + 70_000 + i * 10_000, victron: {}, socPct: 0, capacityWh: 8_000 });
-    near(t.summary().gridWh, 80, 0.01);
+    near(t.summary().gridWh, 0, 0.01);
+    assert.equal(t.isLocked(), false, 'Sperre fällt bei leerem Akku (M10)');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('M10: Deckel am nutzbaren Inhalt ÜBER dem Boden (floorPct)', () => {
+  // soc 50 %, Boden 11 %, Kapazität 10 kWh → nutzbar (50−11)=39 % → storedWh 3900 Wh, Obergrenze (39+1)% = 4000 Wh.
+  const r = stepGridShare(5000, { dtMs: 0, socPct: 50, capacityWh: 10000, floorPct: 11 });
+  assert.equal(Math.round(r.storedWh), 3900);
+  assert.equal(Math.round(r.gridWh), 4000);
+  assert.equal(Math.round(r.lossWh), 1000);
+});
+
+test('M10: Akku am Boden → nutzbarer Inhalt 0, Deckel auf die 1 %-Ladereserve (Reset übernimmt der Tracker)', () => {
+  // soc 10,95 %, Boden 11 % → nutzbar 0; Obergrenze = 1 % von 19290 ≈ 193 Wh (die Ladereserve). Den endgültigen
+  // Reset auf 0 macht der Tracker (nur bei idle) — der reine Deckel darf eine Netzladung am Boden nicht sofort fressen.
+  const r = stepGridShare(400, { dtMs: 0, socPct: 10.95, capacityWh: 19290, floorPct: 11 });
+  assert.equal(Math.round(r.storedWh), 0);
+  assert.ok(r.gridWh <= 194 && r.gridWh > 100, `gridWh ${r.gridWh}`);
+});
+
+test('M10 (Feld 16.11.): Akku real knapp unter dem Boden + idle → Netzanteil auf 0, Sperre fällt', () => {
+  const dir = mkDir();
+  try {
+    const cfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const t = createGridShareTracker({ getCfg: () => cfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.now();
+    t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 19290, floorPct: 11 });
+    t.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 19290, floorPct: 11 });
+    assert.ok(t.summary().gridWh > 100);
+    assert.equal(t.isLocked(), true, 'erst gesperrt');
+    // Akku entleert sich bis knapp unter den Boden (real 10,95 %, Boden 11 %), idle (kein Laden), über 60 s.
+    for (let i = 1; i <= 8; i++) t.tick({ nowMs: t0 + 60_000 + i * 10_000, victron: {}, socPct: 10.95, capacityWh: 19290, floorPct: 11 });
+    near(t.summary().gridWh, 0, 0.01);
+    assert.equal(t.isLocked(), false, 'Sperre gefallen (M10)');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

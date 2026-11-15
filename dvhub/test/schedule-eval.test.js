@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createScheduleEvaluator } from '../schedule-eval.js';
+import { createGridShareTracker } from '../services/optimizer/grid-share.js';
 import { activeWindow } from './helpers/active-window.js';
 
 // makeCtx — a fake ctx matching the real createScheduleEvaluator destructure:
@@ -1203,6 +1207,30 @@ test('M8: Sperre gelöst → EOS-Halten greift wieder', async () => {
   assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold');
   assert.equal(Number(state.schedule.active.gridSetpointW.value), 1000);
   assert.ok(!state.ctrl.eosGridShareSuspend, 'kein Aussetz-Hinweis mehr');
+});
+
+test('M8+M10: leerer Akku → Netzstrom-Sperre fällt → EOS-Halten läuft wieder (gemeinsamer Akzeptanztest)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-m8m10-'));
+  try {
+    const trackerCfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
+    const tracker = createGridShareTracker({ getCfg: () => trackerCfg, pushLog: () => {}, dataDir: dir });
+    const t0 = Date.now();
+    tracker.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 19290, floorPct: 11 });
+    tracker.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 19290, floorPct: 11 });
+    assert.equal(tracker.isLocked(), true, 'erst gesperrt → M8 setzt Halten aus');
+    // Akku bis knapp unter den Boden entleeren (real 10,95 %, Boden 11 %), idle → M10 löst die Sperre.
+    for (let i = 1; i <= 8; i++) tracker.tick({ nowMs: t0 + 60_000 + i * 10_000, victron: {}, socPct: 10.95, capacityWh: 19290, floorPct: 11 });
+    assert.equal(tracker.isLocked(), false, 'M10: Sperre gefallen bei leerem Akku');
+    // schedule-eval mit DIESEM (entsperrten) Tracker: eos_grid_hold NICHT mehr ausgesetzt, „Halten" läuft wieder.
+    const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
+    ctx.gridShare = tracker;
+    await createScheduleEvaluator(ctx).evaluateSchedule();
+    assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold', 'Halten läuft wieder');
+    assert.equal(Number(state.schedule.active.gridSetpointW.value), 1000);
+    assert.ok(!state.ctrl.eosGridShareSuspend, 'kein Aussetz-Hinweis mehr');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('M8: gridShare gesperrt → EOS-Netzladen ebenfalls ausgesetzt (erzeugt den Anteil sonst neu)', async () => {

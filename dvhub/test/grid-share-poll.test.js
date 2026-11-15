@@ -49,7 +49,7 @@ function chargeThenDischarge({ state, tickPoll }, t0) {
 
 test('Befund 3: Kapazität fehlt → keine Ersatzzahl, kein Kappen, kein Abbuchen, Sperre bleibt, Meldung in Log und Status', () => {
   assert.deepEqual(gridShareCapacityInput({ state: { victron: { soc: 50 } } }, { optimizer: {} }),
-    { capacityWh: null, socPct: null, capacityMissing: true });
+    { capacityWh: null, socPct: null, floorPct: 0, capacityMissing: true });
   const s = setup();
   try {
     chargeThenDischarge(s, Date.now() - 4 * 3600_000);
@@ -166,20 +166,20 @@ function sungrowCtx({ aggregate = true, online = true, secondCapWh = 9600, mainC
 
 test('Zwei Sungrow-WR: Kapazität = Master + Slave, SoC = System-SoC', () => {
   const { ctx, cfg } = sungrowCtx({ secondCapWh: 9600, mainCapWh: 10000, soc: 55 });
-  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 19600, socPct: 55, capacityMissing: false });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 19600, socPct: 55, floorPct: 5, capacityMissing: false });
 });
 
 test('Zwei Sungrow-WR: Zweit-Kapazität fehlt → Summe unbekannt (capacityMissing), kein Abbuchen', () => {
   const { ctx, cfg } = sungrowCtx({ secondCapWh: 0, soc: 55 });
-  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: null, socPct: 55, capacityMissing: true });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: null, socPct: 55, floorPct: 5, capacityMissing: true });
 });
 
 test('Zwei Sungrow-WR: aggregateTelemetry AUS → Master-only wie bisher', () => {
   const { ctx, cfg } = sungrowCtx({ aggregate: false, mainCapWh: 10000, soc: 55 });
-  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 10000, socPct: 55, capacityMissing: false });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 10000, socPct: 55, floorPct: 5, capacityMissing: false });
 });
 
 test('Zwei Sungrow-WR: Slave offline → Master-only (kein Sungrow-Sonderfall)', () => {
   const { ctx, cfg } = sungrowCtx({ online: false, mainCapWh: 10000, soc: 55 });
-  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 10000, socPct: 55, capacityMissing: false });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 10000, socPct: 55, floorPct: 5, capacityMissing: false });
 });

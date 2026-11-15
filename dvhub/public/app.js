@@ -2441,7 +2441,10 @@ function renderDashboardStatus(status) {
     const gs = status.gridShare;
     const gsRow = document.getElementById('gridShareRow');
     if (gsRow) {
-      const showGs = !!gs && (gs.gridChargeEnabled === true || Number(gs.gridKwh) > 0 || gs.locked === true);
+      // M10: nach einem Boden-Reset (leerer Akku, Netzanteil verbraucht/verloren) die Zeile kurz (2 min) sichtbar
+      // halten und den Grund anzeigen, auch wenn der Anteil schon 0 und die Sperre weg ist.
+      const resetRecent = !!(gs && gs.floorResetAt) && (Date.now() - new Date(gs.floorResetAt).getTime() < 120_000);
+      const showGs = !!gs && (gs.gridChargeEnabled === true || Number(gs.gridKwh) > 0 || gs.locked === true || resetRecent);
       gsRow.hidden = !showGs;
       if (showGs) {
         const kwh = Number(gs.gridKwh || 0).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
@@ -2454,7 +2457,9 @@ function renderDashboardStatus(status) {
         const suspHint = (gs.locked && susp)
           ? ` · ${susp.kind === 'charge' ? 'Netzladen' : 'Halten'} ausgesetzt (wird zuerst verbraucht)`
           : '';
-        setText('gridShare', `${kwh} kWh (${pct} %)${gs.locked ? ' · Einspeisung gesperrt' : ''}${suspHint}${capHint}`, gs.locked || gs.capacityMissing ? 'warn' : null);
+        // M10: nach dem Boden-Reset kurz anzeigen, dass der Netzanteil verbraucht/als Verlust gebucht wurde.
+        const resetHint = (resetRecent && !gs.locked) ? ' · Netzanteil verbraucht, Rest als Verlust gebucht' : '';
+        setText('gridShare', `${kwh} kWh (${pct} %)${gs.locked ? ' · Einspeisung gesperrt' : ''}${suspHint}${resetHint}${capHint}`, gs.locked || gs.capacityMissing ? 'warn' : null);
       }
     }
     setText('pvP', vic.pvPowerW == null ? '-' : `${vic.pvPowerW} W`);
