@@ -1230,6 +1230,11 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   border-bottom:1px solid #f59e0b;
   box-shadow:0 2px 8px rgba(0,0,0,.4);
 }
+/* Aufgabe 10: vor Ablauf warnen — ≤ 5 min Restzeit, deutlicher roter Banner. */
+.support-tunnel-banner.support-tunnel-banner-soon {
+  background:linear-gradient(90deg, #7f1d1d, #b91c1c);
+  border-bottom-color:#ef4444;
+}
 
 /* T-0099 NOT-HALT — button in the Steuerung card + sticky banner while active
    (rendered by app.js renderEmergencyStop from /api/status.emergencyStop) */

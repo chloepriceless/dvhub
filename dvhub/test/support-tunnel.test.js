@@ -325,7 +325,7 @@ test('B7: liteStatus exposes only in-memory fields and NO uiToken', () => {
   const ls = tun.liteStatus();
   // recentChanges (2026-11-04): Fern-Support-Änderungen seit dem Öffnen,
   // nur bei offenem Tunnel (aus dem Speicher; die Datei einmal beim ersten Mal).
-  assert.deepEqual(Object.keys(ls).sort(), ['expiresAt', 'open', 'recentChanges', 'ttlRemainingSec']);
+  assert.deepEqual(Object.keys(ls).sort(), ['expiresAt', 'expiringSoon', 'open', 'recentChanges', 'ttlRemainingSec']);
   assert.equal(ls.open, false);
   assert.deepEqual(ls.recentChanges, []);
   assert.ok(!('uiToken' in ls), 'liteStatus must never leak the nonce');
@@ -433,6 +433,65 @@ test('Dienst-Modus: Öffnen schreibt den Auftrag und startet die Unit, Schließe
   assert.equal(fs.existsSync(path.join(sup, 'tunnel.json')), false);
   assert.equal(tun.status().open, false);
   assert.ok(logs.some((l) => l.ev === 'support_tunnel_opened') && logs.some((l) => l.ev === 'support_tunnel_closed'));
+});
+
+test('Dienst-Modus: externes Beenden der Unit wird mit Grund + Zeiten protokolliert (Feld 15.11.: Grund war nicht auffindbar)', async () => {
+  const { sup, ctx, logs } = realBox({ ports: [49120, 49121] });
+  const nowMs = 1_800_000_000_000;
+  const statePath = path.join(sup, 'tunnel-state.json');
+  const tun = createSupportTunnel(ctx, {
+    unitMode: () => true,
+    now: () => nowMs,
+    sleep: async () => {},
+    isAlive: (pid) => pid === 4242,
+    setTimeout: () => ({ unref() {} }),
+    clearTimeout: () => {},
+    execFile: (bin, args, opts, cb) => {
+      if (args[2] === 'start') fs.writeFileSync(statePath, JSON.stringify({ pid: 4242, startedAt: nowMs, expiresAt: nowMs + 30 * 60_000 }));
+      if (args[2] === 'stop') fs.rmSync(statePath, { force: true });
+      cb(null, '', '');
+    },
+  });
+  await tun.open({ ttlMin: 30 }, { ip: '127.0.0.1' });
+  assert.equal(tun.status().open, true);
+  // Die Unit beendet sich SELBST (Relay-Abbruch/ssh tot): Zustandsdatei weg, aber DVhub hat NICHT geschlossen.
+  fs.rmSync(statePath, { force: true });
+  fs.writeFileSync(path.join(sup, 'tunnel.log'), 'Error: remote port forwarding failed for listen port 49120\n');
+  const ls = tun.liteStatus();
+  assert.equal(ls.open, false);
+  const closed = logs.filter((l) => l.ev === 'support_tunnel_closed');
+  assert.equal(closed.length, 1, 'genau einmal „geschlossen" mit Grund protokolliert');
+  assert.equal(closed[0].d.reason, 'unit_exited');
+  assert.equal(closed[0].d.external, true);
+  assert.match(closed[0].d.detail, /remote port forwarding failed/);
+  assert.ok(Number.isFinite(closed[0].d.openedAt) && Number.isFinite(closed[0].d.expiresAt), 'openedAt/expiresAt mitprotokolliert');
+  // Ein weiterer Poll protokolliert NICHT erneut.
+  tun.status();
+  assert.equal(logs.filter((l) => l.ev === 'support_tunnel_closed').length, 1);
+});
+
+test('Dienst-Modus: Restzeit-Warnung (expiringSoon) und Ablauf wird als auto_close nachgezogen', async () => {
+  const { sup, ctx, logs } = realBox({ ports: [49120, 49121] });
+  let nowMs = 1_800_000_000_000;
+  const statePath = path.join(sup, 'tunnel-state.json');
+  const exp = nowMs + 30 * 60_000;
+  const tun = createSupportTunnel(ctx, {
+    unitMode: () => true, now: () => nowMs, sleep: async () => {}, isAlive: () => true,
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+    execFile: (bin, args, opts, cb) => { if (args[2] === 'start') fs.writeFileSync(statePath, JSON.stringify({ pid: 4242, startedAt: nowMs, expiresAt: exp })); cb(null, '', ''); },
+  });
+  await tun.open({ ttlMin: 30 });
+  assert.equal(tun.liteStatus().expiringSoon, false);
+  // < 5 min Restzeit → Warnung in beiden Ansichten.
+  nowMs = exp - 4 * 60_000;
+  assert.equal(tun.liteStatus().expiringSoon, true);
+  assert.equal(tun.status().expiringSoon, true);
+  // Ablauf: Zustandsdatei abgelaufen → unitState null; der Wächter zieht auto_close nach.
+  nowMs = exp + 1000;
+  assert.equal(tun.liteStatus().open, false);
+  const closed = logs.filter((l) => l.ev === 'support_tunnel_closed' && l.d.reason === 'auto_close');
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0].d.external, true);
 });
 
 test('Dienst-Modus: lehnt das Relay ab, meldet open den Fehler aus dem Protokoll', async () => {

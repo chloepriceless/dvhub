@@ -1880,6 +1880,9 @@ function renderSupportTunnelBanner(st) {
     document.body.prepend(el);
   }
   const mins = st.ttlRemainingSec != null ? Math.max(0, Math.round(st.ttlRemainingSec / 60)) : null;
+  // Aufgabe 10: vor Ablauf warnen — ≤ 5 min Restzeit hebt das Banner hervor.
+  const soon = st.expiringSoon === true;
+  el.classList.toggle('support-tunnel-banner-soon', soon);
   // Fern-Support-Protokoll (2026-11-04): Token-, Kopplungs- und
   // Sicherheitsänderungen seit dem Öffnen gleich im Banner.
   const changes = Array.isArray(st.recentChanges) ? st.recentChanges : [];
@@ -1890,9 +1893,11 @@ function renderSupportTunnelBanner(st) {
       return `${c.label || c.kind}${hhmm ? ` (${hhmm})` : ''}`;
     }).join(', ') + '.'
     : '';
-  el.textContent = '🔓 Support-Tunnel aktiv — Fernzugriff für den Support möglich'
-    + (mins != null ? `, schließt automatisch in ~${mins} min` : '')
-    + '.' + changeText + ' Alle Aktionen und Schließen: Einstellungen → Fern-Support.';
+  const ttlText = mins != null
+    ? (soon ? `, schließt bald automatisch (~${mins} min)` : `, schließt automatisch in ~${mins} min`)
+    : '';
+  el.textContent = (soon ? '⏳' : '🔓') + ' Support-Tunnel aktiv — Fernzugriff für den Support möglich'
+    + ttlText + '.' + changeText + ' Alle Aktionen und Schließen: Einstellungen → Fern-Support.';
 }
 
 // T-0099 NOT-HALT: sticky Banner solange der Not-Halt aktiv ist (Quelle:

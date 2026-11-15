@@ -492,7 +492,33 @@ export function createSupportTunnel(ctx, deps = {}) {
     return { shellAvailable: true, shellReason: null };
   }
 
+  // Restzeit-Warnschwelle fürs Portal/Leitstand (Aufgabe 10): „vor Ablauf warnen". Unter 5 min gilt der Tunnel
+  // als bald fällig; die Oberfläche hebt das hervor.
+  const TTL_WARN_SEC = 5 * 60;
+
+  // Dienst-Modus: hat sich die systemd-Unit SELBST beendet (Relay-Abbruch, ssh tot, Ablauf durchs Tunnel-Skript,
+  // „systemctl stop" von außen), ohne dass DVhub geschlossen hat? Dann protokolliert sonst NIEMAND den Grund (Feld
+  // 15.11.: „13:03:44 Tunnel zu, Grund war nicht auffindbar"). Hier ein einziges Mal support_tunnel_closed mit Grund
+  // + Zeiten nachziehen und den Zustand aufräumen. Der Wächter läuft bei jedem Status-Poll (liteStatus/status).
+  // Greift nur, wenn DIESER Prozess den Tunnel geöffnet hat (openedAt gesetzt) — nach einem DVhub-Neustart ist die
+  // Öffnungszeit unbekannt, dann gibt es nichts nachzuziehen.
+  function reconcileUnitClose() {
+    if (!unitMode() || openedAt == null) return;
+    if (unitState()) return;                       // Unit läuft noch → nichts zu tun
+    const times = closeTimes();                    // openedAt/expiresAt VOR dem Nullen festhalten
+    const expired = Number.isFinite(Number(expiresAt)) && Number(expiresAt) <= now();
+    const detail = unitLastError();
+    const reason = expired ? 'auto_close' : 'unit_exited';
+    if (autoCloseTimer) { clearTimer(autoCloseTimer); autoCloseTimer = null; }
+    openedAt = null;
+    expiresAt = null;
+    pushLog('support_tunnel_closed', { reason, external: true, ...(detail ? { detail } : {}), ...times }, lastOpenedBy);
+    notifyClosed(reason);
+    lastOpenedBy = null;
+  }
+
   function status() {
+    reconcileUnitClose();
     const rc = relayConfig();
     const p = supportPaths();
     const applianceId = readApplianceId(p.dataDir, fsImpl);
@@ -506,6 +532,8 @@ export function createSupportTunnel(ctx, deps = {}) {
       openedBy: cur.openedBy,
       expiresAt: cur.expiresAt,
       ttlRemainingSec: (cur.open && cur.expiresAt) ? Math.max(0, Math.round((cur.expiresAt - t) / 1000)) : null,
+      // Aufgabe 10: „vor Ablauf warnen" — offen und ≤ 5 min Restzeit.
+      expiringSoon: (cur.open && cur.expiresAt) ? (cur.expiresAt - t) <= TTL_WARN_SEC * 1000 : false,
       provisioned,
       applianceId,
       applianceKeyFingerprint: readApplianceKeyFingerprint(p.pubPath),
@@ -538,6 +566,7 @@ export function createSupportTunnel(ctx, deps = {}) {
   // KEIN uiToken, keine Schlüssel-/ID-Dateien (im Dienst-Modus nur die kleine
   // Zustandsdatei des Tunnels).
   function liteStatus() {
+    reconcileUnitClose();
     const t = now();
     const cur = currentState();
     // Für den Leitstand-Banner: Token-, Kopplungs- und Sicherheitsänderungen
@@ -551,6 +580,8 @@ export function createSupportTunnel(ctx, deps = {}) {
       open: cur.open,
       expiresAt: cur.expiresAt,
       ttlRemainingSec: (cur.open && cur.expiresAt) ? Math.max(0, Math.round((cur.expiresAt - t) / 1000)) : null,
+      // Aufgabe 10: Leitstand-Banner warnt vor Ablauf (≤ 5 min Restzeit).
+      expiringSoon: (cur.open && cur.expiresAt) ? (cur.expiresAt - t) <= TTL_WARN_SEC * 1000 : false,
       recentChanges: sensitive,
     };
   }

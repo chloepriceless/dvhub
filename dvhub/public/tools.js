@@ -1181,9 +1181,11 @@ function fmtTunnelState(st) {
   if (!st) return '—';
   if (st.open) {
     const mins = st.ttlRemainingSec != null ? Math.max(0, Math.round(st.ttlRemainingSec / 60)) : null;
-    return mins != null
-      ? `🟢 OFFEN — schließt in ~${mins} min automatisch`
-      : '🟢 OFFEN';
+    if (mins == null) return '🟢 OFFEN';
+    // Aufgabe 10: vor Ablauf warnen (≤ 5 min Restzeit).
+    return st.expiringSoon === true
+      ? `⏳ OFFEN — schließt bald automatisch (~${mins} min)`
+      : `🟢 OFFEN — schließt in ~${mins} min automatisch`;
   }
   if (!st.provisioned) return '⚪ Nicht freigeschaltet (Support muss die Box erst registrieren)';
   return '🔒 Geschlossen (Support hat keinen Zugang)';
