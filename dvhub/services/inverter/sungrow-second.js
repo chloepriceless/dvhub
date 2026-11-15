@@ -22,7 +22,7 @@
 // @module services/inverter/sungrow-second
 
 import { safeInterval } from '../safe-async.js';
-import { wire, runningStateText, resolveSecondInverter } from './sungrow.js';
+import { wire, runningStateText, resolveSecondInverter, isSungrowEmergencyCharge } from './sungrow.js';
 
 export const SUNGROW_SECOND_TICK_MS = 5000;
 const OFFLINE_AFTER_ERRORS = 3;
@@ -38,6 +38,12 @@ const ADDR = {
   maxChargeW: wire(33047),   // Holding, U16, ×10 W — Gerätegrenze Laden (B3: Standard-Ladegrenze)
   maxDischargeW: wire(33048), // Holding, U16, ×10 W — Gerätegrenze Entladen
   batteryCapacityLimit: wire(33049), // Holding, U16, ×10 Wh — konfigurierte Kapazität (GUI-Vorschlag)
+  // Max-/Min-SoC je WR (Feld 15.11., Aufgabe 1): der WR hält seinen Min-SoC beim Entladen im Forced mode NICHT
+  // selbst ein (der Slave lief per Notladung bis 10 % leer) — DVhub muss die Grenze je WR SELBST einhalten. Max-SoC
+  // (13058) begrenzt das Laden, Min-SoC (13059) das Entladen. Holding, FC 3, EINZELN gelesen (der Block ab 33046
+  // liefert am Slave Modbus-Exception 4). Einheit 0,1 % wie der SoC 13023 (raw/10 = %).
+  maxSoc: wire(13058),       // Holding, U16, 0,1 % — Gerätegrenze Laden (Max-SoC)
+  minSoc: wire(13059),       // Holding, U16, 0,1 % — Gerätegrenze Entladen (Min-SoC)
 };
 
 const U16_NA = 0xffff;
@@ -74,7 +80,8 @@ export function createSungrowSecond(ctx, deps = {}) {
       enabled: false, online: null, host: null,
       batteryPowerW: null, pvPowerW: null, socPct: null, bdcRatedW: null,
       maxChargeWDevice: null, maxDischargeWDevice: null, batteryCapacityLimitWh: null,
-      runningState: null, runningStateText: null, aggregate: false,
+      maxSocPctDevice: null, minSocPctDevice: null,
+      runningState: null, runningStateText: null, emergencyCharge: false, aggregate: false,
       errors, updatedAt: now(), ...extra,
     };
   }
@@ -112,10 +119,16 @@ export function createSungrowSecond(ctx, deps = {}) {
 
     let readOk = false;
     let lastError = null;
-    const out = { batteryPowerW: null, pvPowerW: null, socPct: null, bdcRatedW: null, batteryCapacitySuggestionWh: null, runningState: null, maxChargeWDevice: null, maxDischargeWDevice: null, batteryCapacityLimitWh: null };
+    const out = { batteryPowerW: null, pvPowerW: null, socPct: null, bdcRatedW: null, batteryCapacitySuggestionWh: null, runningState: null, maxChargeWDevice: null, maxDischargeWDevice: null, batteryCapacityLimitWh: null, maxSocPctDevice: null, minSocPctDevice: null };
     // Holding-Register (FC 3, ×10): Gerätegrenzen Laden/Entladen (33047/33048) und Kapazität (33049) — best effort.
     const readTen10 = async (address) => {
       try { const v = u16((await transport.mbRequest({ host: c.host, port: c.port, unitId: c.unitId, fc: 3, address, quantity: 1, timeoutMs: c.timeoutMs }))?.[0]); return v == null || v === 0 ? null : v * 10; }
+      catch { return null; }
+    };
+    // Max-/Min-SoC je WR (Aufgabe 1): Holding, FC 3, EINZELN. Einheit 0,1 % → raw/10, auf [0,100] geklemmt. 0xFFFF
+    // (nicht belegt) → null; 0 als gültiger Min-SoC zulässig (0 % = keine Entladesperre durch den WR).
+    const readSocPct = async (address) => {
+      try { const v = u16((await transport.mbRequest({ host: c.host, port: c.port, unitId: c.unitId, fc: 3, address, quantity: 1, timeoutMs: c.timeoutMs }))?.[0]); return v == null ? null : Math.min(100, Math.max(0, v / 10)); }
       catch { return null; }
     };
     try {
@@ -132,6 +145,8 @@ export function createSungrowSecond(ctx, deps = {}) {
       out.maxChargeWDevice = await readTen10(ADDR.maxChargeW);
       out.maxDischargeWDevice = await readTen10(ADDR.maxDischargeW);
       out.batteryCapacityLimitWh = await readTen10(ADDR.batteryCapacityLimit);
+      out.maxSocPctDevice = await readSocPct(ADDR.maxSoc);
+      out.minSocPctDevice = await readSocPct(ADDR.minSoc);
       errors = 0;
       readOk = true;
     } catch (e) {
@@ -153,8 +168,13 @@ export function createSungrowSecond(ctx, deps = {}) {
       maxChargeWDevice: ok ? out.maxChargeWDevice : null,
       maxDischargeWDevice: ok ? out.maxDischargeWDevice : null,
       batteryCapacityLimitWh: ok ? out.batteryCapacityLimitWh : null,
+      maxSocPctDevice: ok ? out.maxSocPctDevice : null,
+      minSocPctDevice: ok ? out.minSocPctDevice : null,
       runningState: ok ? out.runningState : null,
       runningStateText: ok ? runningStateText(out.runningState) : null,
+      // Notladung (Aufgabe 2): der WR lädt unter seinem Min-SoC eigenmächtig aus dem Netz (runningState 0x4001) —
+      // NICHT steuerbar. Nur bei bestätigter Verbindung aussagekräftig.
+      emergencyCharge: ok ? isSungrowEmergencyCharge(out.runningState) : false,
       reason: ok ? null : (readOk ? null : 'read_failed'),
     });
   }

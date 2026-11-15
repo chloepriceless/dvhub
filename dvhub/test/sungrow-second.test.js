@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {
   createSungrowEms, resolveSecondInverter, secondInverterTelemetry, wire, EMS_CMD, EMS_MODE,
   sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor, sungrowReserveWh, sungrowHeadroomWh, splitSungrowPower,
-  splitStrategyShares, SPLIT_STRATEGIES
+  splitStrategyShares, SPLIT_STRATEGIES, isSungrowEmergencyCharge, sungrowDischargeFloorPct, sungrowChargeCeilPct
 } from '../services/inverter/sungrow.js';
 import { createSungrowSecond } from '../services/inverter/sungrow-second.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
@@ -41,15 +41,19 @@ test('secondInverterTelemetry: null ohne aggregateTelemetry, auch wenn Werte da 
 
 test('secondInverterTelemetry: Werte nur online + frisch', () => {
   const s = { online: true, updatedAt: 1000, batteryPowerW: -500, pvPowerW: 2000, socPct: 55, bdcRatedW: 3000 };
+  const extra = { maxChargeWDevice: null, maxDischargeWDevice: null, minSocPctDevice: null, maxSocPctDevice: null, emergencyCharge: false };
   assert.deepEqual(secondInverterTelemetry({ sungrowSecond: s }, cfgAgg, { nowMs: 1000, maxAgeMs: 20000 }),
-    { batteryPowerW: -500, pvPowerW: 2000, socPct: 55, bdcRatedW: 3000 });
+    { batteryPowerW: -500, pvPowerW: 2000, socPct: 55, bdcRatedW: 3000, ...extra });
   // offline → null
   assert.equal(secondInverterTelemetry({ sungrowSecond: { ...s, online: false } }, cfgAgg, { nowMs: 1000 }), null);
   // veraltet → null
   assert.equal(secondInverterTelemetry({ sungrowSecond: s }, cfgAgg, { nowMs: 1000 + 25000, maxAgeMs: 20000 }), null);
   // fehlender Einzelwert bleibt null, die anderen zählen
   assert.deepEqual(secondInverterTelemetry({ sungrowSecond: { ...s, batteryPowerW: null } }, cfgAgg, { nowMs: 1000 }),
-    { batteryPowerW: null, pvPowerW: 2000, socPct: 55, bdcRatedW: 3000 });
+    { batteryPowerW: null, pvPowerW: 2000, socPct: 55, bdcRatedW: 3000, ...extra });
+  // Notladung (0x4001): batteryPowerW NICHT dem Regler zurechnen (null), Flag gesetzt (Aufgabe 2)
+  assert.deepEqual(secondInverterTelemetry({ sungrowSecond: { ...s, runningState: 0x4001 } }, cfgAgg, { nowMs: 1000 }),
+    { batteryPowerW: null, pvPowerW: 2000, socPct: 55, bdcRatedW: 3000, ...extra, emergencyCharge: true });
 });
 
 // --- Begleitdienst (Poller), NUR LESEND ------------------------------------------
@@ -88,7 +92,7 @@ test('Begleitdienst: liest den zweiten WR aus (PV, Akku −scale, SoC, BDC) und 
   assert.equal(s.batteryCapacityLimitWh, image.holding.get(wire(33049)) * 10);
   // Telemetrie ist FC-4-Lesen; die einzigen FC-3-Lesungen sind die Holding-Gerätegrenzen (nie ein Write).
   const nonFc4 = t.reads.filter((x) => x.fc !== 4);
-  assert.ok(nonFc4.every((x) => x.fc === 3 && [wire(33047), wire(33048), wire(33049)].includes(x.address)), 'nur die Gerätegrenzen per FC 3');
+  assert.ok(nonFc4.every((x) => x.fc === 3 && [wire(33047), wire(33048), wire(33049), wire(13058), wire(13059)].includes(x.address)), 'nur die Gerätegrenzen + Min/Max-SoC per FC 3');
 });
 
 test('Begleitdienst: ohne host keine einzige Anfrage', async () => {
@@ -196,8 +200,8 @@ test('sungrowSecondView: ohne Konfiguration null', () => {
 
 test('sungrowSecondView: online → Werte, OHNE host/LAN-IP; offline → Werte null, online:false', () => {
   const cfg = { sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: true } } };
-  const online = sungrowSecondView({ sungrowSecond: { online: true, host: '192.168.68.83', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, maxChargeWDevice: 10000, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000 } }, cfg);
-  assert.deepEqual(online, { online: true, reason: null, aggregate: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, maxChargeWDevice: 10000, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000, runningState: null, runningStateText: null });
+  const online = sungrowSecondView({ sungrowSecond: { online: true, host: '192.168.68.83', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, maxChargeWDevice: 10000, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000, minSocPctDevice: 10, maxSocPctDevice: 95 } }, cfg);
+  assert.deepEqual(online, { online: true, reason: null, aggregate: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 61, batteryPowerW: 2300, pvPowerW: 0, bdcRatedW: 5000, batteryCapacitySuggestionWh: 9600, maxChargeWDevice: 10000, maxDischargeWDevice: 10000, batteryCapacityLimitWh: 10000, minSocPctDevice: 10, maxSocPctDevice: 95, runningState: null, runningStateText: null, emergencyCharge: false });
   // Keine LAN-IP / kein host in der Statusausgabe.
   assert.ok(!('host' in online));
   const off = sungrowSecondView({ sungrowSecond: { online: false, host: '192.168.68.83', socPct: 61 } }, cfg);
@@ -658,14 +662,15 @@ function splitRig({ masterSoc = 80, slaveSoc = 20, batteryPowerW = -3000, grid =
   return { ems, slaveEms, t, state, cfg, mImage, sImage, logs, setpoint };
 }
 
-test('Split: Entladen 3 kW bei SoC 80/20 → Master 2571 (Kapazität 2:1 + Gegensteuern zum volleren), Slave 429, beide forced discharge', async () => {
-  // Verfeinerte soc-balance: Grundaufteilung nach Kapazität (10000/5000 → 2:1), zusätzlich beim Entladen mehr auf
-  // den volleren WR (Master 80 %) — SoC-Diff 60 % weit über dem Totband, Shift gedeckelt bei 0,5. → ~2571/429.
+test('Split: Entladen 3 kW bei SoC 80/20 → Master 2889 (Angleich), Slave 111, beide forced discharge', async () => {
+  // soc-balance Angleich (Aufgabe 6): Referenz = min(80,20)−5 = 15. Gewicht = (SoC − Ref)×Kapazität. Master
+  // 65·10000 = 650000, Slave (20−15)·5000 = 25000 → 26:1 → 3000·650000/675000 = 2889 auf den volleren Master, 111
+  // auf den Slave. Der vollere WR entlädt deutlich mehr und die SoC nähern sich an — beide WR bleiben aktiv.
   const r = splitRig({ masterSoc: 80, slaveSoc: 20 });
   const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
   assert.equal(res.ok, true);
-  assert.equal(r.mImage.holding.get(SPOWER), 2571);
-  assert.equal(r.sImage.holding.get(SPOWER), 429);
+  assert.equal(r.mImage.holding.get(SPOWER), 2889);
+  assert.equal(r.sImage.holding.get(SPOWER), 111);
   assert.equal(r.mImage.holding.get(SMODE), EMS_MODE.FORCED);
   assert.equal(r.sImage.holding.get(SMODE), EMS_MODE.FORCED);
   assert.equal(r.mImage.holding.get(SCMD), EMS_CMD.DISCHARGE);
@@ -685,6 +690,17 @@ test('Split: Slave offline → nur Master (voller Anteil), kein Slave-Write', as
   await r.ems.applySetpoint(r.setpoint, 'rule:abend');
   assert.equal(r.mImage.holding.get(SPOWER), 3000);     // voller System-Anteil auf den Master
   assert.deepEqual(r.t.slave.writes, []);               // nichts an den Slave geschrieben
+});
+
+test('Aufgabe 2: Slave in Notladung → aus dem Split, Master bekommt alles, kein Lade-/Entladebefehl an den Slave', async () => {
+  const r = splitRig({ masterSoc: 80, slaveSoc: 10 });
+  r.state.sungrowSecond.emergencyCharge = true;         // Slave lädt eigenmächtig (0x4001) → nicht steuerbar
+  const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  assert.equal(res.ok, true);
+  assert.equal(r.mImage.holding.get(SPOWER), 3000);     // voller System-Anteil auf den steuerbaren Master
+  // Kein Lade-/Entladebefehl (0xAA/0xBB) an den Slave — er bleibt bei sich (höchstens 0xCC best effort).
+  const slaveCmdWrites = r.t.slave.writes.filter((w) => w.address === SCMD && [EMS_CMD.CHARGE, EMS_CMD.DISCHARGE].includes(w.value));
+  assert.deepEqual(slaveCmdWrites, []);
 });
 
 test('Split: Not-Halt → beide zurück in Self-consumption', async () => {
@@ -808,9 +824,91 @@ test('soc-balance verfeinert: Grundaufteilung nach Kapazität bei gleichem SoC (
   assert.deepEqual([s.masterW, s.slaveW], [1800, 1200]); // 60/40
 });
 
-test('soc-balance verfeinert: Totband hält kleine SoC-Differenz (50 vs 60) auf der Grundaufteilung', () => {
+test('soc-balance (Angleich, Aufgabe 6): KEIN Totband mehr — auch kleine Differenz (60 vs 50) gleicht aus', () => {
+  // Entladen, gleiche Kapazität: Referenz = min(60,50)−5 = 45 → Gewicht 15·5000 vs 5·5000 = 3:1 → Master (voller)
+  // bekommt deutlich mehr (früher: Totband 10 → 50/50, das glich im Feld NICHTS aus). 3000·3/4 = 2250.
   const s = splitStrategyShares('soc-balance', { powerW: 3000, charge: false, masterMax: 5000, slaveMax: 5000, masterSoc: 60, slaveSoc: 50, masterCapacityWh: 5000, slaveCapacityWh: 5000, minPowerW: 50 });
-  assert.deepEqual([s.masterW, s.slaveW], [1500, 1500]); // Diff 10 ≤ Totband 10 → kein Gegensteuern
+  assert.equal(s.masterW + s.slaveW, 3000);
+  assert.ok(s.masterW > s.slaveW, `Master (voller) ${s.masterW} > Slave ${s.slaveW}`);
+  assert.deepEqual([s.masterW, s.slaveW], [2250, 750]);
+});
+
+// --- Aufgabe 6 (MUSS): SoC-Angleich in BEIDE Richtungen + Grenzen-Übernahme -------------------------
+test('Aufgabe 6: Entladen SoC 10/15 → der vollere WR (15 %) bekommt mehr', () => {
+  const s = splitStrategyShares('soc-balance', {
+    powerW: 2000, charge: false, masterMax: 5000, slaveMax: 5000,
+    masterSoc: 10, slaveSoc: 15, masterCapacityWh: 10000, slaveCapacityWh: 10000,
+    masterFloorPct: 5, slaveFloorPct: 5, minPowerW: 50,
+  });
+  assert.equal(s.masterW + s.slaveW, 2000);
+  assert.ok(s.slaveW > s.masterW, `Slave (voller, 15 %) ${s.slaveW} > Master (10 %) ${s.masterW}`);
+});
+
+test('Aufgabe 6: Laden SoC 10/15 → der leerere WR (10 %) bekommt mehr', () => {
+  const s = splitStrategyShares('soc-balance', {
+    powerW: 2000, charge: true, masterMax: 5000, slaveMax: 5000,
+    masterSoc: 10, slaveSoc: 15, masterCapacityWh: 10000, slaveCapacityWh: 10000,
+    masterCeilPct: 100, slaveCeilPct: 100, minPowerW: 50,
+  });
+  assert.equal(s.masterW + s.slaveW, 2000);
+  assert.ok(s.masterW > s.slaveW, `Master (leerer, 10 %) ${s.masterW} > Slave (15 %) ${s.slaveW}`);
+});
+
+test('Aufgabe 6 (Feld-Befund): Laden SoC 9,2/14,4 → Master (leerer) deutlich mehr (nicht 50/50)', () => {
+  // Der Feld-Split war ≈50/50 (1543/1557) — soc-balance glich NICHTS aus (Totband). Jetzt: leererer Master mehr.
+  const s = splitStrategyShares('soc-balance', {
+    powerW: 3100, charge: true, masterMax: 10000, slaveMax: 10000,
+    masterSoc: 9.2, slaveSoc: 14.4, masterCapacityWh: 10000, slaveCapacityWh: 10000, minPowerW: 50,
+  });
+  assert.equal(s.masterW + s.slaveW, 3100);
+  assert.ok(s.masterW - s.slaveW > 500, `Master ${s.masterW} deutlich > Slave ${s.slaveW} (nicht 50/50)`);
+});
+
+// --- Aufgabe 1 (MUSS): je WR an SEINER Grenze → 0 W, der andere übernimmt ----------------------------
+test('Aufgabe 1: Entladen — Master an seinem Min-SoC (10 %) → 0 W, Slave übernimmt den Rest', () => {
+  const s = splitStrategyShares('soc-balance', {
+    powerW: 3000, charge: false, masterMax: 5000, slaveMax: 5000,
+    masterSoc: 10, slaveSoc: 50, masterCapacityWh: 10000, slaveCapacityWh: 10000,
+    masterFloorPct: 10, slaveFloorPct: 10, minPowerW: 50,
+  });
+  assert.equal(s.masterW, 0, 'Master am Boden → kein Entladen');
+  assert.equal(s.slaveW, 3000, 'Slave übernimmt (bis zu seiner Grenze)');
+});
+
+test('Aufgabe 1: Laden — Slave an seinem Max-SoC (95 %) → 0 W, Master übernimmt den Rest', () => {
+  const s = splitStrategyShares('soc-balance', {
+    powerW: 3000, charge: true, masterMax: 5000, slaveMax: 5000,
+    masterSoc: 50, slaveSoc: 95, masterCapacityWh: 10000, slaveCapacityWh: 10000,
+    masterCeilPct: 100, slaveCeilPct: 95, minPowerW: 50,
+  });
+  assert.equal(s.slaveW, 0, 'Slave an der Decke → kein Laden');
+  assert.equal(s.masterW, 3000, 'Master übernimmt');
+});
+
+test('Aufgabe 1: Entladen — BEIDE am Boden → kein Entladen (0/0), keiner unter Grenze', () => {
+  const s = splitStrategyShares('soc-balance', {
+    powerW: 3000, charge: false, masterMax: 5000, slaveMax: 5000,
+    masterSoc: 10, slaveSoc: 10, masterFloorPct: 10, slaveFloorPct: 10, minPowerW: 50,
+  });
+  assert.deepEqual([s.masterW, s.slaveW], [0, 0]);
+});
+
+test('Aufgabe 1: wirksame Grenzen — Entlade-Boden = max(hardFloor, 13059), Lade-Decke = min(maxSoc, 13058)', () => {
+  assert.equal(sungrowDischargeFloorPct(5, 10), 10);   // Gerät strenger
+  assert.equal(sungrowDischargeFloorPct(15, 10), 15);  // harter Boden strenger
+  assert.equal(sungrowDischargeFloorPct(5, null), 5);  // kein Gerätewert → nur harter Boden
+  assert.equal(sungrowChargeCeilPct(100, 95), 95);     // Gerät strenger
+  assert.equal(sungrowChargeCeilPct(90, 95), 90);      // Konfig strenger
+  assert.equal(sungrowChargeCeilPct(100, null), 100);  // kein Gerätewert → nur Konfig
+});
+
+// --- Aufgabe 2 (MUSS): Notladung (runningState 0x4001) -----------------------------------------------
+test('Aufgabe 2: isSungrowEmergencyCharge erkennt nur 0x4001', () => {
+  assert.equal(isSungrowEmergencyCharge(0x4001), true);
+  assert.equal(isSungrowEmergencyCharge(16385), true);
+  assert.equal(isSungrowEmergencyCharge(0x0000), false);
+  assert.equal(isSungrowEmergencyCharge(0x4000), false); // Externes EMS, keine Notladung
+  assert.equal(isSungrowEmergencyCharge(null), false);
 });
 
 test('soc-balance verfeinert: Laden steuert zum LEEREREN WR gegen (Richtung oberes Ende)', () => {

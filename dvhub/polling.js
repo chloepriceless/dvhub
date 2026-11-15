@@ -9,7 +9,8 @@ import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
 import {
   identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
-  resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry
+  resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry,
+  runningStateText, isSungrowEmergencyCharge
 } from './services/inverter/sungrow.js';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms, buildActiveAlarmsFromDbus } from './victron-alarms.js';
@@ -630,7 +631,15 @@ export function createPoller(ctx) {
     const maxChargeWDevice = await readTen10(33047);
     const maxDischargeWDevice = await readTen10(33048);
     const batteryCapacityLimitWh = await readTen10(33049);
-    state.victron.device = { ...state.victron.device, maxChargeWDevice, maxDischargeWDevice, batteryCapacityLimitWh, limitsAt: now };
+    // Max-/Min-SoC des Masters (Aufgabe 1): Holding, FC 3, EINZELN, Einheit 0,1 % (raw/10, auf [0,100] geklemmt).
+    // 13058 Max-SoC (Lade-Grenze), 13059 Min-SoC (Entlade-Grenze). 0xFFFF → null; 0 ist ein gültiger Min-SoC.
+    const readSocPct = async (doc) => {
+      try { const v = Number((await read({ fc: 3, address: wire(doc), quantity: 1 }))?.[0]) & 0xffff; return v === 0xffff ? null : Math.min(100, Math.max(0, v / 10)); }
+      catch { return null; }
+    };
+    const maxSocPctDevice = await readSocPct(13058);
+    const minSocPctDevice = await readSocPct(13059);
+    state.victron.device = { ...state.victron.device, maxChargeWDevice, maxDischargeWDevice, batteryCapacityLimitWh, maxSocPctDevice, minSocPctDevice, limitsAt: now };
   }
 
   // --- 32-bit-Zähler (meter.readType 'int32') ------------------------------
@@ -690,11 +699,28 @@ export function createPoller(ctx) {
     return { total, l1: null, l2: null, l3: null, raw: fregs, fallback: true };
   }
 
+  // Live-Betriebszustand des Masters (Aufgabe 2): der Info-Block (13000) wird nur alle 5 min gelesen — zu langsam,
+  // um eine Notladung (runningState 0x4001) rechtzeitig zu erkennen. runningState (Doku 13000) ist ein Input-
+  // Register (FC 4, RO) und darf häufig gelesen werden (anders als die RW-Holding-Register). Nur für einen
+  // erkannten Sungrow-Hybrid über Modbus; best effort (ein Fehler lässt den letzten Wert stehen und meldet nichts).
+  async function readMasterRunningState(cfg) {
+    const d = state.victron?.device;
+    if (cfg?.identify?.kind !== 'sungrow' || transport.type !== 'modbus' || !d || d.vendor !== 'sungrow') return;
+    const v = cfg.victron || {};
+    try {
+      const rs = Number((await transport.mbRequest({ fc: 4, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, address: wire(13000), quantity: 1 }))?.[0]) & 0xffff;
+      state.victron.runningState = rs;
+      state.victron.runningStateText = runningStateText(rs);
+      state.victron.emergencyCharge = isSungrowEmergencyCharge(rs);
+    } catch { /* letzten Wert stehen lassen — nächster Takt */ }
+  }
+
   // --- pollMeter: main polling function (meter + all Victron points) ---
   async function pollMeter() {
     const cfg = getCfg();
     await ensureSunspecResolved(cfg);
     await ensureDeviceIdentified(cfg);
+    await readMasterRunningState(cfg);
     // Plan 09-06 (D-06): wall-clock duration of the meter read — recorded into
     // dvhub_meter_poll_duration_seconds gauge on success, dvhub_meter_poll_errors_total
     // counter on catch. Tracked in seconds (Prometheus convention).

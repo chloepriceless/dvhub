@@ -157,6 +157,29 @@ export function runningStateText(code) {
   return RUNNING_STATES.get(code) || `Zustand 0x${code.toString(16).padStart(4, '0')}`;
 }
 
+// Notladung (Appendix 2, runningState 0x4001 = 16385): der WR lädt unter seinem Min-SoC eigenmächtig aus dem Netz,
+// UNABHÄNGIG von Modus/Befehl, bis sein Min-SoC (13059) erreicht ist (Feld 15.11., Aufgabe 2). Ein WR in diesem
+// Zustand ist NICHT über den EMS steuerbar — DVhub nimmt ihn aus dem Split und rechnet seine Ladeleistung dem
+// Regler nicht zu.
+export const RUNNING_STATE_EMERGENCY_CHARGE = 0x4001;
+export function isSungrowEmergencyCharge(runningState) {
+  return (Number(runningState) & 0xffff) === RUNNING_STATE_EMERGENCY_CHARGE;
+}
+
+// Wirksame Entlade-Grenze eines WR (Aufgabe 1): der höhere aus hartem Boden und dem geräteeigenen Min-SoC (13059) —
+// unter DIESE Grenze darf DVhub den WR im Forced mode nicht entladen (der WR hält sie dort nicht selbst ein).
+export function sungrowDischargeFloorPct(hardFloorPct, deviceMinSocPct) {
+  // Erst nullish/'' aussortieren, DANN nach Zahl — sonst würde Number(null)=0 als gültige Grenze zählen.
+  const vals = [hardFloorPct, deviceMinSocPct].filter((v) => v != null && v !== '' && Number.isFinite(Number(v))).map(Number);
+  return vals.length ? Math.max(...vals) : 0;
+}
+// Wirksame Lade-Grenze eines WR (Aufgabe 1): der kleinere aus konfigurierter Max-SoC und dem geräteeigenen
+// Max-SoC (13058) — über DIESE Grenze darf DVhub den WR nicht laden.
+export function sungrowChargeCeilPct(maxSocPct, deviceMaxSocPct) {
+  const vals = [maxSocPct, deviceMaxSocPct].filter((v) => v != null && v !== '' && Number.isFinite(Number(v))).map(Number);
+  return vals.length ? Math.min(...vals) : 100;
+}
+
 /**
  * Gerät erkennen. `read({fc, address, quantity})` liefert Registerworte (Transport-agnostisch).
  * Erkannt = Typcode steht in der Hybrid-Tabelle. Seriennummer und BDC-Nennleistung sind Zusatz:
@@ -366,42 +389,46 @@ export function resolveSecondInverter(cfg) {
 /** Gültige Aufteilungs-Strategien für den zweiten WR (Punkt 1). */
 export const SPLIT_STRATEGIES = ['master-only', 'ratio', 'by-capacity', 'by-power', 'soc-balance', 'priority-master', 'priority-slave'];
 
-// soc-balance verfeinert (Christin 15.11.): Totband auf die SoC-Differenz (kleine Unterschiede NICHT aktiv
-// ausgleichen, z. B. 50 vs 60) und proportionales Gegensteuern außerhalb — je 1 % SoC-Differenz über dem Totband
-// verschiebt sich SHIFT_PER_PCT der Grundaufteilung Richtung leererer (Laden) bzw. vollerer (Entladen) WR,
-// gedeckelt bei MAX_SHIFT (nie einen WR ganz aushungern).
+// soc-balance (Feld 15.11., Aufgabe 6 — von SOLLTE auf MUSS): die Aufteilung richtet sich NACH DEM SoC, sodass sich
+// beide Akkus ANGLEICHEN. Entladen bekommt der WR mit dem HÖHEREN SoC mehr (mehr nutzbare Reserve über seinem
+// Min-SoC), Laden der mit dem NIEDRIGEREN SoC mehr (mehr freier Platz bis zu seinem Max-SoC); bei gleichem SoC nach
+// Kapazität. Das frühere Totband-Modell (10 % Deadband + schwaches Gegensteuern) glich im Feld NICHTS aus — eine
+// Differenz von 5 % (9,2 % vs 14,4 %) lag ganz im Totband → 50/50. socBalanceDeadbandPct wird hier nicht mehr genutzt.
 export const SOC_BALANCE_DEADBAND_PCT = 10;
-const SOC_BALANCE_SHIFT_PER_PCT = 0.02;
-const SOC_BALANCE_MAX_SHIFT = 0.5;
+// Angleich-Marge (Aufgabe 6): die Referenz, auf die sich beide WR zubewegen, liegt um diese Marge UNTER dem
+// niedrigeren (Entladen) bzw. ÜBER dem höheren (Laden) SoC. So bekommt der WR, der angleichen soll, deutlich mehr,
+// OHNE den anderen ganz auszuhungern (beide bleiben aktiv — der Regler verteilt die eine Vorgabe auf beide). Klein
+// genug, dass eine SoC-Differenz von wenigen Prozent kräftig differenziert (5 % Differenz → ≈2:1), groß genug gegen
+// Flattern bei winziger Differenz. SYMMETRISCH für Laden/Entladen (die alte Reserve-zur-Grenze war asymmetrisch:
+// nahe leer unterschied sie beim Laden kaum → Feld 9,2/14,4 blieb ≈50/50).
+const SOC_BALANCE_MARGIN_PCT = 5;
 
 /**
- * Grundgewichte der verfeinerten soc-balance (Christin 15.11.): Grundaufteilung nach KAPAZITÄT (gleiche Kapazität →
- * 50/50; 60/40 → 60/40, beide bleiben auf gleichem SoC % → parallel, kein Gegensteuern). Ohne bekannte Kapazitäten
- * nach der Leistungsgrenze. Außerhalb eines Totbands auf die SoC-Differenz zusätzlich proportional gegensteuern:
- * Laden mehr auf den leereren WR (damit der vollere nicht zuerst ans obere Limit kommt), Entladen mehr auf den
- * volleren WR (symmetrisch unten: so fällt keiner zuerst auf den SoC-Boden). splitSungrowPower klemmt danach an die
- * Grenzen (Überlauf an den anderen).
+ * Angleich-Gewichte der soc-balance (Aufgabe 6). Grundgewicht = Kapazität (ohne Kapazität die Leistungsgrenze als
+ * Proxy); multipliziert mit dem Abstand des WR zur gemeinsamen Angleich-Referenz IN DER RICHTUNG. Entladen: Referenz
+ * = niedrigerer der beiden SoC minus Marge → der HÖHERE SoC hat mehr Abstand → bekommt mehr (beide entladen sich auf
+ * den niedrigeren zu). Laden: Referenz = höherer der beiden SoC plus Marge → der NIEDRIGERE SoC hat mehr Abstand →
+ * bekommt mehr. Gleicher SoC → gleicher Abstand (= Marge) → rein kapazitätsproportional. SoC unbekannt → parallel
+ * nach Kapazität (kein Angleich möglich). splitSungrowPower klemmt danach an die je-WR-Grenzen (Überlauf an den
+ * anderen); die harte Grenz-Sperre (Min-/Max-SoC, Aufgabe 1) sitzt separat in splitStrategyShares.
  * @returns {{mW:number, sW:number}}
  */
-export function socBalanceWeights({ charge, masterMax = 0, slaveMax = 0, masterSoc, slaveSoc, masterCapacityWh, slaveCapacityWh, socDeadbandPct = SOC_BALANCE_DEADBAND_PCT } = {}) {
-  const capM = Math.max(0, Number(masterCapacityWh) || 0);
-  const capS = Math.max(0, Number(slaveCapacityWh) || 0);
-  let baseM = capM; let baseS = capS;
-  if (baseM + baseS <= 0) { baseM = Math.max(0, Number(masterMax) || 0); baseS = Math.max(0, Number(slaveMax) || 0); }
-  const socM = Number.isFinite(Number(masterSoc)) ? Number(masterSoc) : null;
-  const socS = Number.isFinite(Number(slaveSoc)) ? Number(slaveSoc) : null;
-  let shift = 0; // + = zum Master, − = zum Slave
-  if (socM != null && socS != null) {
-    const dead = Math.max(0, Number(socDeadbandPct) || 0);
-    const diff = socM - socS; // + = Master voller
-    const excess = Math.abs(diff) - dead;
-    if (excess > 0) {
-      const mag = Math.min(SOC_BALANCE_MAX_SHIFT, excess * SOC_BALANCE_SHIFT_PER_PCT);
-      const favorMaster = charge ? (diff < 0) : (diff > 0); // Laden → leererer; Entladen → vollerer
-      shift = favorMaster ? mag : -mag;
-    }
-  }
-  return { mW: baseM * (1 + shift), sW: baseS * (1 - shift) };
+export function socBalanceWeights({ charge, masterMax = 0, slaveMax = 0, masterSoc, slaveSoc, masterCapacityWh, slaveCapacityWh, marginPct = SOC_BALANCE_MARGIN_PCT } = {}) {
+  const fin = (v) => v != null && Number.isFinite(Number(v));
+  // Kapazität als Grundgewicht; fehlt sie, die Leistungsgrenze als Proxy (gleiche SoC-Lage → leistungsproportional).
+  const capM = Math.max(0, Number(masterCapacityWh) || 0) || Math.max(0, Number(masterMax) || 0);
+  const capS = Math.max(0, Number(slaveCapacityWh) || 0) || Math.max(0, Number(slaveMax) || 0);
+  const socM = fin(masterSoc) ? Number(masterSoc) : null;
+  const socS = fin(slaveSoc) ? Number(slaveSoc) : null;
+  if (socM == null || socS == null) return { mW: capM, sW: capS }; // SoC unbekannt → parallel nach Kapazität
+  const margin = Math.max(0, Number(marginPct) || 0);
+  const ref = charge ? Math.max(socM, socS) + margin : Math.min(socM, socS) - margin;
+  const spanM = charge ? Math.max(0, ref - socM) : Math.max(0, socM - ref);
+  const spanS = charge ? Math.max(0, ref - socS) : Math.max(0, socS - ref);
+  const mW = spanM * capM;
+  const sW = spanS * capS;
+  if (mW + sW <= 0) return { mW: capM, sW: capS }; // beide ohne Abstand (Marge 0, gleicher SoC) → kapazitätsproportional
+  return { mW, sW };
 }
 
 function legacyStrategy(c) {
@@ -432,16 +459,26 @@ function clampRatioPct(v) {
 export function splitStrategyShares(strategy, {
   powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
   masterCapacityWh, slaveCapacityWh, floorSocPct = 0, maxSocPct = 100, ratioMasterPct = 50, minPowerW = 50,
+  masterFloorPct = floorSocPct, slaveFloorPct = floorSocPct, masterCeilPct = maxSocPct, slaveCeilPct = maxSocPct,
   socDeadbandPct = SOC_BALANCE_DEADBAND_PCT,
 } = {}) {
+  const fin = (v) => v != null && Number.isFinite(Number(v));
   const p = Math.max(0, Math.round(Number(powerW) || 0));
-  const mMax = Math.max(0, Number(masterMax) || 0);
-  const sMax = Math.max(0, Number(slaveMax) || 0);
+  let mMax = Math.max(0, Number(masterMax) || 0);
+  let sMax = Math.max(0, Number(slaveMax) || 0);
+  // Per-WR-SoC-Grenze (Aufgabe 1): ein WR, der seine Grenze in DIESER Richtung erreicht hat — beim Entladen den
+  // eigenen Min-SoC (max aus hardFloor und 13059), beim Laden den eigenen Max-SoC (min aus maxSoc und 13058) —
+  // bekommt 0 W; sein Anteil geht über splitSungrowPower an den anderen WR (bis zu DESSEN Grenze). SoC unbekannt →
+  // nicht sperren (die System-Grenze im Regler schützt weiter). Symmetrisch für Laden/Entladen.
+  const atLimit = (soc, floor, ceil) => fin(soc) && (charge ? (fin(ceil) && Number(soc) >= Number(ceil)) : (fin(floor) && Number(soc) <= Number(floor)));
+  if (atLimit(masterSoc, masterFloorPct, masterCeilPct)) mMax = 0;
+  if (atLimit(slaveSoc, slaveFloorPct, slaveCeilPct)) sMax = 0;
   const strat = SPLIT_STRATEGIES.includes(String(strategy)) ? String(strategy) : 'soc-balance';
   if (p <= 0) return { masterW: 0, slaveW: 0, slaveUncommanded: strat === 'master-only' };
   // master-only: Slave bleibt in Modus 0, Master bekommt alles (an seine Grenze geklemmt).
   if (strat === 'master-only') return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: true };
-  if (sMax <= 0) return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: false }; // Slave offline → alles Master
+  if (sMax <= 0) return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: false }; // Slave offline/an Grenze → alles Master
+  if (mMax <= 0) return { masterW: 0, slaveW: Math.min(p, sMax), slaveUncommanded: false }; // Master an Grenze → alles Slave
   // Gewichte je Strategie; splitSungrowPower verteilt danach und klemmt an die Grenzen (Überlauf an den anderen).
   let mW; let sW;
   if (strat === 'ratio') { mW = clampRatioPct(ratioMasterPct); sW = 100 - mW; }
@@ -449,8 +486,8 @@ export function splitStrategyShares(strategy, {
   else if (strat === 'by-power') { mW = mMax; sW = sMax; }
   else if (strat === 'priority-master') { mW = 1; sW = 0; }
   else if (strat === 'priority-slave') { mW = 0; sW = 1; }
-  else { // soc-balance (verfeinert, Christin 15.11.)
-    ({ mW, sW } = socBalanceWeights({ charge, masterMax: mMax, slaveMax: sMax, masterSoc, slaveSoc, masterCapacityWh, slaveCapacityWh, socDeadbandPct }));
+  else { // soc-balance (Angleich, Aufgabe 6)
+    ({ mW, sW } = socBalanceWeights({ charge, masterMax: mMax, slaveMax: sMax, masterSoc, slaveSoc, masterCapacityWh, slaveCapacityWh }));
   }
   let { masterW, slaveW } = splitSungrowPower({ powerW: p }, { maxW: mMax, weight: mW }, { maxW: sMax, weight: sW });
   // Anteil < minPowerW dem anderen WR zuschlagen (sonst ginge Leistung verloren). Nur, wenn der andere sie fasst.
@@ -474,11 +511,21 @@ export function secondInverterTelemetry(state, cfg, { nowMs = Date.now(), maxAge
   if (!s || s.online !== true) return null;
   const fin = (v) => v != null && Number.isFinite(Number(v));
   if (!fin(s.updatedAt) || nowMs - Number(s.updatedAt) > maxAgeMs) return null;
+  // Notladung (Aufgabe 2): der Slave lädt eigenmächtig unter seinem Min-SoC aus dem Netz (runningState 0x4001) und
+  // ist NICHT steuerbar. Seine Akku-Ladeleistung darf dem Regler NICHT zugerechnet werden (sonst verschöbe sie die
+  // Systemsumme und DVhub regelte den Master in die falsche Richtung) → batteryPowerW hier auf null, der Poller
+  // aggregiert ihn dann nicht in die System-Akkuleistung. SoC/PV/BDC bleiben für Anzeige und Split-Grenzen erhalten.
+  const emergencyCharge = s.emergencyCharge === true || isSungrowEmergencyCharge(s.runningState);
   return {
-    batteryPowerW: fin(s.batteryPowerW) ? Number(s.batteryPowerW) : null,
+    batteryPowerW: !emergencyCharge && fin(s.batteryPowerW) ? Number(s.batteryPowerW) : null,
     pvPowerW: fin(s.pvPowerW) ? Number(s.pvPowerW) : null,
     socPct: fin(s.socPct) ? Number(s.socPct) : null,
     bdcRatedW: fin(s.bdcRatedW) && Number(s.bdcRatedW) > 0 ? Number(s.bdcRatedW) : null,
+    maxChargeWDevice: fin(s.maxChargeWDevice) && Number(s.maxChargeWDevice) > 0 ? Number(s.maxChargeWDevice) : null,
+    maxDischargeWDevice: fin(s.maxDischargeWDevice) && Number(s.maxDischargeWDevice) > 0 ? Number(s.maxDischargeWDevice) : null,
+    minSocPctDevice: fin(s.minSocPctDevice) ? Number(s.minSocPctDevice) : null,
+    maxSocPctDevice: fin(s.maxSocPctDevice) ? Number(s.maxSocPctDevice) : null,
+    emergencyCharge,
   };
 }
 
@@ -604,8 +651,13 @@ export function sungrowSecondView(state, cfg) {
     maxChargeWDevice: pick(s?.maxChargeWDevice),
     maxDischargeWDevice: pick(s?.maxDischargeWDevice),
     batteryCapacityLimitWh: pick(s?.batteryCapacityLimitWh),
+    // Min-/Max-SoC je WR (Aufgabe 1): gelesene Gerätewerte (13059/13058), 0,1 % → %. GUI zeigt sie neben dem Feld.
+    minSocPctDevice: pick(s?.minSocPctDevice),
+    maxSocPctDevice: pick(s?.maxSocPctDevice),
     runningState: live ? (s?.runningState ?? null) : null,
     runningStateText: live ? (s?.runningStateText ?? null) : null,
+    // Notladung (Aufgabe 2): der Slave lädt eigenmächtig unter Min-SoC aus dem Netz (0x4001) — nicht steuerbar.
+    emergencyCharge: live ? (s?.emergencyCharge === true) : false,
   };
 }
 
@@ -1097,21 +1149,33 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const slaveSoc = second.socPct;
     const masterDev = state.victron.device || {};
     const slaveDev = state.sungrowSecond || {};
+    // Je-WR-SoC-Grenze (Aufgabe 1): Entlade-Boden = max(hardFloor, 13059), Lade-Decke = min(maxSoc, 13058). Fehlt der
+    // Gerätewert, zählt nur die Konfig-Grenze. splitStrategyShares sperrt damit je WR und leitet den Anteil an den
+    // anderen (bis zu DESSEN Grenze) um.
+    const masterFloorPct = sungrowDischargeFloorPct(floor, masterDev.minSocPctDevice);
+    const slaveFloorPct = sungrowDischargeFloorPct(floor, slaveDev.minSocPctDevice);
+    const masterCeilPct = sungrowChargeCeilPct(maxSoc, masterDev.maxSocPctDevice);
+    const slaveCeilPct = sungrowChargeCeilPct(maxSoc, slaveDev.maxSocPctDevice);
     const masterMax = perWrMax(charge ? optMaster.maxChargeW : optMaster.maxDischargeW, charge ? masterDev.maxChargeWDevice : masterDev.maxDischargeWDevice, masterBdc);
-    const slaveMax = perWrMax(charge ? si.maxChargeW : si.maxDischargeW, charge ? slaveDev.maxChargeWDevice : slaveDev.maxDischargeWDevice, second.bdcRatedW);
+    // Notladung (Aufgabe 2): ein Slave in Notladung ist NICHT steuerbar → aus dem Split nehmen (Grenze 0, nicht
+    // kommandieren), sein Anteil geht an den Master. second.emergencyCharge kommt aus secondInverterTelemetry.
+    const slaveEmergency = second.emergencyCharge === true;
+    const slaveMax = slaveEmergency ? 0 : perWrMax(charge ? si.maxChargeW : si.maxDischargeW, charge ? slaveDev.maxChargeWDevice : slaveDev.maxDischargeWDevice, second.bdcRatedW);
     const strategy = charge ? secondCfg.strategyCharge : secondCfg.strategyDischarge;
     const { masterW, slaveW, slaveUncommanded } = splitStrategyShares(strategy, {
       powerW: decision.powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
       masterCapacityWh: optMaster.batteryCapacityWh, slaveCapacityWh: si.batteryCapacityWh,
-      floorSocPct: floor, maxSocPct: maxSoc, ratioMasterPct: secondCfg.ratioMasterPct, minPowerW: opts.minPowerW,
+      floorSocPct: floor, maxSocPct: maxSoc, masterFloorPct, slaveFloorPct, masterCeilPct, slaveCeilPct,
+      ratioMasterPct: secondCfg.ratioMasterPct, minPowerW: opts.minPowerW,
       socDeadbandPct: secondCfg.socBalanceDeadbandPct,
     });
     const mk = (w) => (w >= opts.minPowerW ? { mode: 'forced', command: decision.command, powerW: w, reason: decision.reason } : { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason });
-    // master-only: Slave NICHT steuern → in Modus 0 (Self) halten; sonst der berechnete Anteil.
-    const slaveDecision = slaveUncommanded ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveW);
+    // Slave nicht kommandieren bei master-only ODER Notladung (uncontrollable) → nur best effort in Self halten.
+    const skipSlave = slaveUncommanded || slaveEmergency;
+    const slaveDecision = skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveW);
     const masterDecision = mk(masterW);
     // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst). Scheitert er → beide sicher in Self.
-    if (slaveUncommanded) {
+    if (skipSlave) {
       // master-only: Slave in Modus 0 (Self) halten. Scheitert das nicht hart — der Slave liegt dann ohnehin in Self.
       try { await slaveActuator.neutralize('self'); } catch { /* best effort */ }
     } else {
@@ -1129,7 +1193,20 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     try {
       const back = await writeDecision(conf, masterDecision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
       st.error = null; st.logKeys = {};
-      st.decision = { ...decision, at: t, trigger: reason, split: { masterW, slaveW, strategy } };
+      // Split-Detail für GUI/Leitstand (Aufgabe 1/2/6): Anteil, wirksame Leistungsgrenze und wirksame SoC-Grenze je
+      // WR sowie Notladungs-Flag des Slave. „wirksame Grenze" = die in DIESER Richtung geltende (Laden: Decke/Max,
+      // Entladen: Boden/Min). masterW/slaveW = Anteil je WR.
+      st.decision = {
+        ...decision, at: t, trigger: reason,
+        split: {
+          masterW, slaveW, strategy, charge,
+          masterMaxW: masterMax, slaveMaxW: slaveMax,
+          masterFloorPct, slaveFloorPct, masterCeilPct, slaveCeilPct,
+          masterLimitPct: charge ? masterCeilPct : masterFloorPct,
+          slaveLimitPct: charge ? slaveCeilPct : slaveFloorPct,
+          slaveEmergencyCharge: slaveEmergency,
+        },
+      };
       pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW, slaveW, strategy, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
       publish();
       return { ok: true, split: true, decision, masterW, slaveW };
