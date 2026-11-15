@@ -144,6 +144,53 @@ test('T-0075 2b: stop-SoC rule stays active when SoC is fresh + above threshold 
   assert.equal(findLog(logs, 'schedule_stop_soc_reached').length, 0);
 });
 
+// --- M1-Geist: Zeitplan-SoC-Bedingung gegen den ECHTEN SoC (Sungrow-Fenster) ------
+// Sungrow meldet den SoC fensterrelativ: gemeldet 15 % = real 23,5 % (Fenster 10–100).
+// Die Stop-SoC-Bedingung muss gegen den ECHTEN SoC prüfen (planningSocPct), sonst stoppt
+// „bis SoC 20" viel zu früh. Für Victron/andere ist echt = gemeldet → kein Verhaltenswechsel.
+
+test('Sungrow Stop-SoC prüft den ECHTEN SoC — gemeldet 15 % (= real 23,5 %) bleibt über Schwelle 20', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      cfg.manufacturer = 'sungrow';
+      state.victron.device = { vendor: 'sungrow', minSocPctDevice: 10, maxSocPctDevice: 100 };
+      state.schedule.rules = [{
+        id: 'stopsoc-sg', enabled: true, target: 'gridSetpointW',
+        ...activeWindow(), value: -8000, source: 'manual', stopSocPct: 20
+      }];
+      state.victron.soc = 15;             // gemeldet; real = 10 + 15·0,9 = 23,5 %
+      state.victron.fieldUpdatedAt = { soc: Date.now() };
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.schedule.rules[0].enabled, true,
+    'echter SoC 23,5 % ≥ 20 → Regel bleibt aktiv (gemeldeter 15 % hätte sie fälschlich abgeschaltet)');
+  assert.equal(findLog(logs, 'schedule_stop_soc_reached').length, 0);
+});
+
+test('Sungrow Stop-SoC schaltet ab, wenn der ECHTE SoC unter die Schwelle fällt — und loggt den echten Wert', async () => {
+  const { ctx, state, logs } = makeCtx({
+    mutate: ({ state, cfg }) => {
+      cfg.manufacturer = 'sungrow';
+      state.victron.device = { vendor: 'sungrow', minSocPctDevice: 10, maxSocPctDevice: 100 };
+      state.schedule.rules = [{
+        id: 'stopsoc-sg', enabled: true, target: 'gridSetpointW',
+        ...activeWindow(), value: -8000, source: 'manual', stopSocPct: 20
+      }];
+      state.victron.soc = 5;              // gemeldet; real = 10 + 5·0,9 = 14,5 % < 20
+      state.victron.fieldUpdatedAt = { soc: Date.now() };
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.schedule.rules[0].enabled, false,
+    'echter SoC 14,5 % < 20 → Regel abgeschaltet');
+  const ev = findLog(logs, 'schedule_stop_soc_reached');
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].payload.reason, 'below_stop_soc');
+  assert.ok(Math.abs(Number(ev[0].payload.soc) - 14.5) < 0.01,
+    'Log zeigt den echten SoC (14,5 %), nicht den gemeldeten 5 %');
+});
+
 // --- T-0118 sell-price floor ---
 
 test('T-0118: forced grid export is suppressed (held) when the spot price is below minSellPriceCtKwh', async () => {

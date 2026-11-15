@@ -228,7 +228,11 @@ test('server schedule evaluator wires stop-soc auto-disable and dedicated loggin
 
   assert.match(source, /autoDisableStopSocScheduleRules/);
   assert.match(source, /schedule_stop_soc_reached/);
-  assert.match(source, /batterySocPct:\s*state\.victron\.soc/);
+  // M1-Geist: die Stop-SoC-Bedingung prüft den ECHTEN SoC (planningSocPct rechnet bei Sungrow
+  // den fensterrelativen gemeldeten Wert real um), mit Rückfall auf den gemeldeten Wert.
+  assert.match(source, /stopSocValueRaw\s*=\s*planningSocPct\(ctx\)/);
+  assert.match(source, /stopSocValue\s*=\s*Number\.isFinite\(Number\(stopSocValueRaw\)\)\s*\?\s*stopSocValueRaw\s*:\s*state\.victron\.soc/);
+  assert.match(source, /batterySocPct:\s*stopSocValue/);
 });
 
 test('server delegates price-slot window filtering to shared automation helper', () => {
