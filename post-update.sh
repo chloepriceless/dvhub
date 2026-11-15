@@ -992,6 +992,17 @@ if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
   fi
 fi
 
+# Box-Uhr: NTP (systemd-timesyncd) aktivieren/prüfen — DVhub hängt an der Uhr (EOS-Slots,
+# Zeitpläne). Geteilt mit install.sh. NON-FATAL, überspringt Container von selbst.
+if [[ -f "$INSTALL_DIR/clock-provision.sh" ]]; then
+  echo "  Box-Uhr (NTP)..."
+  if pu_bounded 20 env DATA_DIR="$DATA_DIR" bash "$INSTALL_DIR/clock-provision.sh"; then
+    echo "  Box-Uhr: OK"
+  else
+    echo "  WARN: NTP-Provisioning fehlgeschlagen (non-fatal). Zeitabgleich am Betriebssystem prüfen." >&2
+  fi
+fi
+
 # ── 9b. EEBUS (dvhub-eebus) bauen/aktualisieren (entkoppelt, idempotent) ──
 # Nur wenn EEBUS aktiviert ist oder dvhub-eebus schon installiert war: dann
 # baut eebus-provision.sh den Hilfsprozess im Hintergrund (Go-Fassung: Go von

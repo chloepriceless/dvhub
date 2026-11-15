@@ -1060,6 +1060,15 @@ if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
     || echo "  Support: Provisioning fehlgeschlagen (non-fatal) — Fern-Support ggf. erst nach dem nächsten Neustart bereit." >&2
 fi
 
+# Box-Uhr: NTP (systemd-timesyncd) aktivieren/prüfen. DVhub hängt an der Uhr (EOS-Slots,
+# Zeitpläne). Geteilt mit post-update.sh. Non-fatal — ein Uhr-Problem darf den Install nie
+# abbrechen; das Skript überspringt Container von selbst.
+if [[ -f "$INSTALL_DIR/clock-provision.sh" ]]; then
+  echo "[6c/7] Box-Uhr (NTP)"
+  ( DATA_DIR="$DATA_DIR" bash "$INSTALL_DIR/clock-provision.sh" ) \
+    || echo "  Uhr: NTP-Provisioning fehlgeschlagen (non-fatal) — Zeitabgleich am Betriebssystem prüfen." >&2
+fi
+
 echo "[7/7] systemd Service einrichten"
 SYSTEMCTL_PATH="$(command -v systemctl)"
 IPSEC_PATH="$(command -v ipsec || echo /usr/sbin/ipsec)"
