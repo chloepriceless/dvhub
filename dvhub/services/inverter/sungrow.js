@@ -213,17 +213,24 @@ export async function identifySungrow(read) {
  */
 export function decideEmsCommand({
   setpointW, gridImportW, batteryW, pvW = null, loadW = null,
-  maxChargeW, maxDischargeW, bandW = 300, gain = 0.7, minPowerW = 50, noGridCharge = false
+  maxChargeW, maxDischargeW, bandW = 300, gain = 0.7, minPowerW = 50, noGridCharge = false,
+  forced = false, socPct = null, floorSocPct = null
 } = {}) {
   const fin = (v) => v != null && Number.isFinite(Number(v));
   if (!fin(setpointW)) return { mode: 'self', reason: 'no_setpoint' };
   const s = Number(setpointW);
-  if (Math.abs(s) <= Math.max(0, Number(bandW) || 0)) return { mode: 'self', reason: 'band' };
+  // Band = Ruhezustand nur im External-/Default-Pfad. Im Forced mode (forced:true) gibt es KEIN Band
+  // (Christin 15.11.): die Regelschleife läuft immer auf den Sollwert, auch bei s = 0 (PV-Überschuss laden,
+  // Defizit entladen). Ruhe entsteht nur taktweise, wenn |p| < minPowerW (unten → 0xCC für genau diesen Takt).
+  if (!forced && Math.abs(s) <= Math.max(0, Number(bandW) || 0)) return { mode: 'self', reason: 'band' };
   if (!fin(gridImportW) || !fin(batteryW)) return { mode: 'self', reason: 'telemetry_missing' };
   if (!(Number(maxChargeW) > 0) || !(Number(maxDischargeW) > 0)) return { mode: 'self', reason: 'power_limit_unknown' };
   const k = Math.min(1, Math.max(0.1, Number(gain) || 0.7));
   let p = Number(batteryW) + k * (s - Number(gridImportW));
   let reason = 'regulate';
+  // Entlade-Boden (SoC < hardFloorSocPct): nur das ENTLADEN sperren. Das Laden aus PV-Überschuss bleibt
+  // erlaubt (Sollwert 0 + Einspeisung → p > 0 → Laden bis Netz ≈ 0). Gilt nur im Forced-Pfad.
+  const belowFloor = forced && fin(socPct) && fin(floorSocPct) && Number(socPct) < Number(floorSocPct);
   if (p > 0) {
     p = Math.min(p, Number(maxChargeW));
     if (s <= 0 || noGridCharge === true) {
@@ -231,10 +238,13 @@ export function decideEmsCommand({
       if (p > surplus) { p = surplus; reason = 'charge_pv_only'; }
     }
   } else if (p < 0) {
-    p = Math.max(p, -Number(maxDischargeW));
-    if (s >= 0) {
-      const netLoad = fin(pvW) && fin(loadW) ? Math.max(0, Number(loadW) - Number(pvW)) : 0;
-      if (-p > netLoad) { p = -netLoad; reason = 'discharge_load_only'; }
+    if (belowFloor) { p = 0; reason = 'discharge_floor'; } // SoC am Boden → kein Entladen (nur dieser Takt)
+    else {
+      p = Math.max(p, -Number(maxDischargeW));
+      if (s >= 0) {
+        const netLoad = fin(pvW) && fin(loadW) ? Math.max(0, Number(loadW) - Number(pvW)) : 0;
+        if (-p > netLoad) { p = -netLoad; reason = 'discharge_load_only'; }
+      }
     }
   }
   const powerW = Math.round(Math.abs(p) / 10) * 10;
@@ -1144,35 +1154,54 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       || st.target?.noGridCharge === true || NO_GRID_CHARGE_SOURCES.has(String(st.target?.source));
   }
 
-  // Dauer-Forced-Split (Christin 14.11.): Bei Forced mode (Modus 2) läuft DVhub DAUERHAFT in Modus 2. Der Master
+  // Dauer-Forced-Split (Christin 14./15.11.): Bei Forced mode (Modus 2) läuft DVhub DAUERHAFT in Modus 2. Der Master
   // wird EINMAL beim Eintritt auf 13050=2 gestellt und bleibt dort (kein Wechsel 0↔2 im Tagesverlauf); Vorgaben
-  // ändern nur Befehl/Leistung je WR, nie den Modus. Ohne Vorgabe regelt DVhub den Eigenverbrauch selbst auf den
-  // Netz-Sollwert (der Scheduler liefert den Default-Puffer als Sollwert). KEIN Band→Self-Rückfall (bandW = 0):
-  // lässt sich nicht regeln (Messwerte/Ziel fehlen) oder ist der Sollwert ausgeglichen, hält DVhub den Akku mit
-  // 0xCC an, BLEIBT aber in Modus 2. Modus 0 nur bei Not-Halt, Beenden/Ausfall (Absicherung C), abgeschalteter
-  // Steuerung oder fremdem Modus — nie hier.
+  // ändern nur Befehl/Leistung je WR, nie den Modus.
+  // NEUE REGEL (Christin 15.11.): Im Forced mode gibt es KEIN „Stopp" als Ruhezustand. Die Regelschleife läuft
+  // IMMER auf den Netz-Sollwert; fehlt eine Vorgabe (kein/zurückgenommener Sollwert), regelt DVhub auf den
+  // Standard-Puffer schedule.defaultGridSetpointW (≈ −40/0 W, neutral) weiter — PV-Überschuss wird geladen, ein
+  // Defizit entladen. KEIN band-/no_setpoint/revoked-Dauerstopp mehr. 0xCC entsteht nur taktweise, wenn der
+  // Regler |p| < minPowerW rechnet (decideEmsCommand → forced/stop), und gilt nur für diesen Takt.
+  // Absicherungsfälle (Messwerte/Sollwert veraltet) → NICHT Stopp in Modus 2, sondern Rückgabe an den WR
+  // (Modus 0, Absicherung C), damit er selbst weiterregelt. Modus 0 außerdem bei Not-Halt, Beenden/Ausfall,
+  // abgeschalteter Steuerung, fremdem Modus oder Moduswechsel — nie ein Dauerstopp in Modus 2.
   async function stepForced({ conf, ctl, opts, reason, t, targetFresh, maxChargeCap, maxDischargeCap, tel, second }) {
     const noGridChargeNow = noGridChargeForce();
-    let decision = targetFresh
-      ? decideEmsCommand({
-        setpointW: st.target.setpointW, ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
-        bandW: 0, gain: opts.gain, minPowerW: opts.minPowerW, noGridCharge: noGridChargeNow,
-      })
-      : { mode: 'self', reason: st.target ? 'target_expired' : (st.revokedReason ? 'revoked' : 'no_setpoint') };
+    const cfg = getCfg();
+    // Entlade-Boden (SoC < hardFloorSocPct): sperrt im Regler nur das Entladen, nicht das Laden aus PV.
+    const floorSocPct = Number(cfg?.optimizer?.hardFloorSocPct ?? 5);
+    const socPct = state.victron?.sungrowMasterSocPct ?? state.victron?.soc ?? null;
+    const regulate = (setpointW) => decideEmsCommand({
+      setpointW, ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
+      bandW: 0, gain: opts.gain, minPowerW: opts.minPowerW, noGridCharge: noGridChargeNow,
+      forced: true, socPct, floorSocPct,
+    });
+    let decision;
+    if (targetFresh && st.target.releaseForFloor) {
+      // Entlade-Boden wegen unbekanntem/veraltetem SoC (Absicherung C): an den WR zurückgeben (Modus 0), nicht
+      // mit unsicherem SoC weiterregeln. Laden aus PV läuft dann über die geräteeigene Self-consumption.
+      decision = { mode: 'self', reason: 'discharge_floor_release' };
+    } else if (targetFresh) {
+      // Frischer Sollwert → regeln (kein Band-Ruhezustand; s = 0 wird geregelt).
+      decision = regulate(st.target.setpointW);
+    } else if (st.target) {
+      // Sollwert veraltet (Absicherung C): sicher an den WR zurückgeben (Modus 0), nicht blind weiterregeln.
+      decision = { mode: 'self', reason: 'target_expired' };
+    } else {
+      // Kein/zurückgenommener Sollwert → Standard-Puffer, in Modus 2 WEITERREGELN (kein Dauer-Stopp).
+      const dflt = Number(cfg?.schedule?.defaultGridSetpointW);
+      decision = regulate(Number.isFinite(dflt) ? dflt : 0);
+    }
     const ownsForced = st.owns && st.ownMode === EMS_MODE.FORCED;
     // Moduswechsel zur Laufzeit von External EMS (Modus 3) auf Forced: DVhub besitzt noch Modus 3 → erst sauber in
     // Self-consumption (Modus 0), der Forced-Eintritt folgt im nächsten Takt (kein direkter 3→2-Sprung).
     if (st.owns && st.ownMode !== EMS_MODE.FORCED) {
       decision = { mode: 'self', reason: 'mode_switch' };
-    } else if (decision.mode === 'self') {
-      // Frische-Wächter (Absicherung C): Sollwert veraltet (target_expired) oder Messwerte veraltet
-      // (telemetry_missing) → sicher zurück in Self-consumption (Modus 0), Besitz abgeben; blind weiterfahren wäre
-      // gefährlich. Alle anderen Self-Gründe (Band/ausgeglichen, power_limit_unknown, kein/zurückgenommener
-      // Sollwert) sind kein Sicherheitsfall: besitzt DVhub Forced, den Akku mit 0xCC anhalten und in Modus 2
-      // BLEIBEN (der Scheduler liefert gleich wieder den Default-Puffer). Modus 0 nur bei den oben genannten Fällen.
-      const staleRelease = decision.reason === 'target_expired' || decision.reason === 'telemetry_missing';
-      if (!staleRelease && ownsForced) decision = { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason };
     }
+    // KEIN Dauer-Stopp mehr bei band/no_setpoint/revoked (Christin 15.11.): alle verbliebenen 'self'-Gründe
+    // (telemetry_missing, power_limit_unknown, target_expired, mode_switch) sind Absicherungsfälle → Rückgabe an
+    // den WR (Modus 0, Absicherung C) über den Self-Pfad unten. Das 0xCC bei |p| < minPowerW bleibt mode:'forced'
+    // (Modus 2 bleibt) und gilt nur taktweise.
     // Merker-Start-Reset (C3): erster Forced-Takt nach einem Neustart mit Forced-Merker → den Akku-Befehl zuerst auf
     // 0xCC (Modus 2 bleibt), damit ein stehengebliebener Lade-/Entladebefehl nicht über den ersten Takt hinaus
     // läuft. Nur, wenn DVhub Forced wirklich besitzt und steuert (nicht bei Moduswechsel/stale-Rückfall in Self).
@@ -1515,14 +1544,17 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
    * Neuer bzw. bestätigter Netz-Sollwert aus applyControlTarget (alle Tore davor sind durchlaufen).
    * Ein geänderter Wert regelt sofort, ein gleicher frischt nur den Sollwert auf (Nachführen im Takt).
    */
-  function applySetpoint(setpointW, source, { noGridCharge = false } = {}) {
+  function applySetpoint(setpointW, source, { noGridCharge = false, releaseForFloor = false } = {}) {
     st.acceptSeq += 1;
     return serial(async () => {
       syncEndpoint(getCfg());
       const changed = !st.target || Number(st.target.setpointW) !== Number(setpointW);
       // noGridCharge trägt das Netzlade-Tor (schedule-eval) mit: dieser positive Sollwert darf nur die Last aus
       // dem Netz decken, nie den Akku laden → der Regler begrenzt das Laden auf den PV-Überschuss.
-      st.target = { setpointW: Number(setpointW), source, at: now(), noGridCharge: noGridCharge === true };
+      // releaseForFloor: der Entlade-Boden hat wegen UNBEKANNTEM/veraltetem SoC gehalten (schedule-eval) — ein
+      // Absicherungsfall. Im Forced mode nicht blind weiterregeln, sondern an den WR zurückgeben (Modus 0,
+      // Absicherung C); der WR deckt die Last/lädt PV mit seinem eigenen SoC-Wissen.
+      st.target = { setpointW: Number(setpointW), source, at: now(), noGridCharge: noGridCharge === true, releaseForFloor: releaseForFloor === true };
       st.revokedReason = null;
       const cfg = getCfg();
       const opts = resolveSungrowEmsOptions(sungrowEmsConf(cfg) || {});

@@ -192,8 +192,16 @@ test('Poller: SoC 0,1 %, Akku S32 LE mit Vorzeichenwechsel, PV U32 LE, Last, Zä
   assert.equal(state.victron.device.supported, true);
   assert.equal(state.victron.device.info.sohPct, 98.5);
   assert.ok(logs.some((l) => l.event === 'inverter_identified'));
-  // Nur Input-Register zyklisch gelesen — kein FC 3 (Holding) im Poll.
-  assert.deepEqual(t.reads.filter((r) => r.fc !== 4), []);
+  // Zyklische Messwerte nur über Input-Register (FC 4). Die einzigen Holding-Lesevorgänge (FC 3) im Poll sind die
+  // Master-Gerätegrenzen 33047/33048 + Kapazität 33049 (F1a) — NUR im langsamen Info-Takt (nicht im Sekundentakt).
+  assert.deepEqual(t.reads.filter((r) => r.fc !== 4), [
+    { fc: 3, address: wire(33047), quantity: 1 },
+    { fc: 3, address: wire(33048), quantity: 1 },
+    { fc: 3, address: wire(33049), quantity: 1 },
+  ]);
+  // Gelesene Master-Gerätegrenzen landen am device (×10): Laden 33047 = 10,6 kW, Entladen 33048 = 10,0 kW.
+  assert.equal(state.victron.device.maxChargeWDevice, 10600);
+  assert.equal(state.victron.device.maxDischargeWDevice, 10000);
 });
 
 test('Poller: feed_in-Konvention (Standard) dreht den Zähler wie bei Victron', async () => {

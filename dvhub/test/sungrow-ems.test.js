@@ -100,6 +100,26 @@ test('Regler: ohne Messung oder ohne Leistungsgrenze keine Zwangsvorgabe; kleine
     { mode: 'forced', command: 'stop', powerW: 0, reason: 'regulate' });
 });
 
+test('BUG1 Forced: kein Band-Ruhezustand — Sollwert 0 wird geregelt (ohne forced bleibt Band)', () => {
+  // Ohne forced-Flag (External/Default): Sollwert 0 liegt im Band → Self-consumption.
+  assert.equal(decideEmsCommand({ ...base, setpointW: 0, gridImportW: -1000, batteryW: 0, pvW: 2000, loadW: 500 }).reason, 'band');
+  // Im Forced mode (forced:true): KEIN Band. P = 0 + 0,7·(0 − (−1000)) = 700 → Laden (PV-Überschuss 1500 ≥ 700).
+  assert.deepEqual(
+    decideEmsCommand({ ...base, forced: true, setpointW: 0, gridImportW: -1000, batteryW: 0, pvW: 2000, loadW: 500 }),
+    { mode: 'forced', command: 'charge', powerW: 700, reason: 'regulate' });
+});
+
+test('BUG1 Forced: Entlade-Boden (SoC < hardFloor) sperrt NUR Entladen, Laden aus PV bleibt erlaubt', () => {
+  // SoC 3 < Boden 5, Sollwert 0, Netzbezug 800 (Defizit) → p<0 → Entladen gesperrt (0xCC nur diesen Takt).
+  assert.deepEqual(
+    decideEmsCommand({ ...base, forced: true, setpointW: 0, gridImportW: 800, batteryW: 0, pvW: 0, loadW: 800, socPct: 3, floorSocPct: 5 }),
+    { mode: 'forced', command: 'stop', powerW: 0, reason: 'discharge_floor' });
+  // Gleicher Boden, aber PV-Überschuss (Einspeisung −1200) → Laden ERLAUBT. P = 0 + 0,7·1200 = 840 (≤ Überschuss 1500).
+  assert.deepEqual(
+    decideEmsCommand({ ...base, forced: true, setpointW: 0, gridImportW: -1200, batteryW: 0, pvW: 2000, loadW: 500, socPct: 3, floorSocPct: 5 }),
+    { mode: 'forced', command: 'charge', powerW: 840, reason: 'regulate' });
+});
+
 test('emsMatches: Self = Modus 0 + Stopp; Zwang mit Leistungstoleranz', () => {
   assert.equal(emsMatches({ mode: 0, cmd: 0xcc, powerW: 999 }, { mode: 'self' }), true);
   assert.equal(emsMatches({ mode: 0, cmd: 0xaa, powerW: 0 }, { mode: 'self' }), false);
@@ -189,6 +209,16 @@ test('Forced-Split B3: gelesene Slave-Gerätegrenze (33048) kappt die Slave-Entl
   await r.ems.applySetpoint(-6000, 'rule:abend');
   assert.ok(r.slaveImage.holding.get(POWER) <= 1500, `Slave ≤ 1500: ${r.slaveImage.holding.get(POWER)}`);
   assert.ok(r.masterImage.holding.get(POWER) > r.slaveImage.holding.get(POWER), 'Master übernimmt den Überlauf');
+});
+
+test('F1a Forced-Split: gelesene MASTER-Gerätegrenze (33048) kappt die Master-Entladeleistung, Überlauf an den Slave', async () => {
+  // Gegenstück zu B3 für den Master: die im Poll gelesene Entlade-Gerätegrenze (state.victron.device.maxDischargeWDevice)
+  // begrenzt den Master-Anteil — vorher hing er auf der BDC-Nennleistung (Grenzen-Vertauschung im Feld).
+  const r = splitRig();
+  r.state.victron.device.maxDischargeWDevice = 1500; // 33048 am Master, kleiner als das 5-kW-Feld
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.ok(r.masterImage.holding.get(POWER) <= 1500, `Master ≤ 1500: ${r.masterImage.holding.get(POWER)}`);
+  assert.ok(r.slaveImage.holding.get(POWER) > r.masterImage.holding.get(POWER), 'Slave übernimmt den Überlauf');
 });
 
 test('Forced-Split B2: Slave-Rücklesung prüft NUR Befehl/Leistung (Modus folgt dem Master) — Eintritt scheitert nicht, obwohl Slave-Modus noch 0 ist', async () => {
@@ -344,6 +374,35 @@ test('Absicherung C3: Start mit Forced-Merker → erster Takt setzt den Akku-Bef
   await r.ems.applySetpoint(-5000, 'rule:abend');
   assert.equal(r.image.holding.get(CMD), EMS_CMD.DISCHARGE, 'danach regelt es normal (Entladen)');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('BUG1 Forced: Sollwert gelöscht + PV-Überschuss → GELADEN (Standard-Puffer), kein 0xCC-Dauer-Stopp, bleibt Modus 2', async () => {
+  const r = rig({ controlMode: 'forced' });
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // DVhub besitzt Forced (Modus 2)
+  r.ems._st.target = null; // Scheduler liefert keinen Sollwert mehr (gelöscht) → Standard-Puffer −40
+  r.t.writes.length = 0;
+  r.advance(6000); // Regeltakt fällig
+  // Mittags-Leerlauf, SoC niedrig (3 %): PV 3000, Last 500, Netz −1500 (Einspeisung), Akku 0.
+  r.state.victron.soc = 3;
+  r.telemetry({ gridW: -1500, batteryW: 0, pvW: 3000, loadW: 500 });
+  await r.ems.tick();
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED, 'bleibt Modus 2 (kein Rückfall in Modus 0)');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.CHARGE, 'lädt den PV-Überschuss statt ihn einzuspeisen (kein 0xCC)');
+  assert.ok(r.image.holding.get(POWER) > 0, `Leistung > 0 (${r.image.holding.get(POWER)})`);
+  assert.equal(r.state.ctrl.sungrowEms.owns, true, 'DVhub behält die Steuerung');
+});
+
+test('BUG1 Absicherung C: Forced besessen, Messwerte veraltet → Rückgabe an den WR (Modus 0), kein Dauer-Stopp in Modus 2', async () => {
+  const r = rig({ controlMode: 'forced' });
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // besitzt Forced, Modus 2
+  r.t.writes.length = 0;
+  r.advance(6000); // Regeltakt fällig
+  // Messwerte veralten (kein frischer Zähler / keine frischen Felder) → telemetry_missing.
+  r.state.meter = { ok: false, updatedAt: 0, grid_total_w: 0 };
+  r.state.victron.fieldUpdatedAt = {};
+  await r.ems.tick();
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.SELF, 'zurück in Modus 0 (Absicherung C), nicht Stopp in Modus 2');
+  assert.equal(r.state.ctrl.sungrowEms.owns, false, 'Besitz abgegeben — der WR regelt selbst weiter');
 });
 
 test('Dauer-Forced B3: Wiedereintritt nach Selbst-Rückfall; >6/Stunde → Modus 0 lassen (13050-Budget), Warnung', async () => {
@@ -979,10 +1038,12 @@ test('Codex P1: Netzladen-Freigabe zurückgenommen → abgelehnter Sollwert been
   r.cfg.optimizer.allowGridCharge = false;
   const res = await r.evaluator.applyControlTarget('gridSetpointW', 3000, 'api_manual_write');
   assert.equal(res.error, 'grid_charge_not_allowed');
-  // Dauer-Forced: der Zwangs-Ladebefehl wird sofort angehalten (0xCC), der Modus BLEIBT 2 (kein Rückfall in 0).
-  assert.ok(r.t.writes.some((w) => w.address === CMD && w.value === EMS_CMD.STOP), 'Akku angehalten');
+  // Dauer-Forced (Christin 15.11.): der abgelehnte Ladesollwert fällt weg → DVhub regelt wieder den Standard-Puffer
+  // (neutrale Self-consumption), lädt dabei NIE aus dem Netz. Der Modus BLEIBT 2 (kein Rückfall in 0), kein Dauer-Stopp.
+  assert.ok(!r.t.writes.some((w) => w.address === CMD && w.value === EMS_CMD.CHARGE), 'kein Netz-Ladebefehl mehr');
   assert.ok(!r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.SELF), 'kein Rückfall in Modus 0');
   assert.equal(r.state.ctrl.sungrowEms.target, null);
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'regulate', 'regelt den Standard-Puffer');
   r.t.writes.length = 0;
   await r.evaluator.sungrowEms.tick();
   assert.deepEqual(r.t.writes, [], 'kein Nachladen aus dem gemerkten Sollwert');
@@ -1129,7 +1190,10 @@ test('Modbus TCP: Poll liest nur FC 4 an Doku−1-Adressen; Sollwert (External E
     assert.equal(state.victron.soc, 57.3);
     assert.equal(state.victron.pvPowerW, 70000);
     assert.equal(state.meter.grid_total_w, -2300);
-    assert.ok(frames.every((f) => f.fc === 4), 'Poll: nur Input-Register');
+    // Zyklische Messwerte nur über Input-Register (FC 4); die einzigen Holding-Lesevorgänge (FC 3) sind die
+    // Master-Gerätegrenzen 33047/33048 + Kapazität 33049 (F1a), nur im langsamen Info-Takt.
+    const limitAddrs = new Set([wire(33047), wire(33048), wire(33049)]);
+    assert.ok(frames.every((f) => f.fc === 4 || (f.fc === 3 && limitAddrs.has(f.address))), 'Poll: nur Input-Register + Gerätegrenzen (FC 3)');
     const readAddrs = new Set(frames.map((f) => f.address));
     for (const doc of [5000, 4990, 5628, 13000, 5601, 13023, 5214, 5017, 13008]) assert.ok(readAddrs.has(doc - 1), `Doku ${doc} → ${doc - 1}`);
 

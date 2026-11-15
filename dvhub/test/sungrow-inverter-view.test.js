@@ -69,10 +69,38 @@ test('F1: Dauer-Forced-Split → Modus „Forced-Split (2)", kein Countdown, Sla
   const vw = V.view(status);
   assert.equal(vw.mode, 'Forced-Split (2)');
   assert.equal(vw.master.countdown, '–', 'im Forced mode kein Countdown');
-  assert.equal(vw.slave.limit, 'Lad 10.6 kW / Entl 5 kW', 'Slave-Gerätegrenzen (33047/33048)');
+  assert.equal(vw.slave.limit, 'Lad 10,6 kW / Entl 5 kW', 'Slave-Gerätegrenzen (33047/33048), deutsches Dezimalzeichen');
   // Christin-Ergänzung: gemessene Rate/Antwortzeit JE WR.
   assert.equal(vw.master.regulate, '250 ms · Antwort 241 ms');
   assert.equal(vw.slave.regulate, '250 ms · Antwort 238 ms');
+});
+
+test('F1a: Master zeigt die GELESENEN Gerätegrenzen (33047/33048), nicht die BDC-Nennleistung (Grenzen = Gerätewerte)', () => {
+  const status = {
+    victron: { soc: 50, sungrowMasterSocPct: 50, device: { model: 'SH10RT-20', bdcRatedW: 10000, maxChargeWDevice: 10600, maxDischargeWDevice: 10000 } },
+    sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 50, bdcRatedW: 10000, maxChargeWDevice: 10000, maxDischargeWDevice: 10000 },
+    sungrowEms: { controlMode: 'forced', owns: true, decision: { mode: 'forced', command: 'discharge', powerW: 1000 } },
+  };
+  const vw = V.view(status);
+  // Laden 10,6 kW (33047) ≠ Entladen 10,0 kW (33048) — der Master hängt NICHT mehr auf BDC fest.
+  assert.equal(vw.master.limit, 'Lad 10,6 kW / Entl 10 kW');
+});
+
+test('F1a: Countdown nur im echten Modus 3 — Modus 0 (Eigenverbrauch) zeigt „—" trotz External-Konfiguration', () => {
+  // Feld: External konfiguriert, aber am Gerät Modus 0 (Besitz abgegeben / Self) → es lief fälschlich „30 s".
+  const idle = V.view({
+    victron: { soc: 60, device: { model: 'SH10RT-20', bdcRatedW: 10000 } },
+    sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', bdcRatedW: 10000 },
+    sungrowEms: { controlMode: 'external', owns: false, heartbeatTimeoutS: 30, heartbeatSentS: 30, decision: { mode: 'self' } },
+  });
+  assert.equal(idle.master.countdown, '–', 'Modus 0 → kein Countdown');
+  // Gerät meldet Modus 0, obwohl DVhub (noch) besitzt → ebenfalls „—".
+  const devSelf = V.view({
+    victron: { soc: 60, device: { model: 'SH10RT-20', bdcRatedW: 10000 } },
+    sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', bdcRatedW: 10000 },
+    sungrowEms: { controlMode: 'external', owns: true, heartbeatTimeoutS: 30, heartbeatSentS: 30, device: { mode: 0 }, decision: { mode: 'forced', command: 'discharge', powerW: 1000 } },
+  });
+  assert.equal(devSelf.master.countdown, '–', 'Gerät in Modus 0 → kein Countdown');
 });
 
 test('F1: Leerlauf (Eigenverbrauch) ohne Besitz → Modus „Eigenverbrauch (0)"', () => {

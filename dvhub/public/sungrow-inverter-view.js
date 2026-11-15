@@ -7,10 +7,13 @@
 (function () {
   'use strict';
   const DASH = '–';
+  const EMS_MODE_EXTERNAL = 3; // Doku 13050: External EMS = Modus 3 (Countdown gilt nur hier)
   const num = (v) => v != null && v !== '' && Number.isFinite(Number(v));
+  // Deutsches Dezimaltrennzeichen durchgängig (Christin 15.11.): 2,6 % und 10,6 kW.
+  const de = (v) => String(v).replace('.', ',');
   const watt = (v) => (num(v) ? `${Math.round(Number(v))} W` : DASH);
-  const pct = (v) => (num(v) ? `${Math.round(Number(v) * 10) / 10} %` : DASH);
-  const kw = (v) => (num(v) ? `${Math.round(Number(v) / 100) / 10} kW` : DASH);
+  const pct = (v) => (num(v) ? `${de(Math.round(Number(v) * 10) / 10)} %` : DASH);
+  const kw = (v) => (num(v) ? `${de(Math.round(Number(v) / 100) / 10)} kW` : DASH);
 
   function decisionText(ems) {
     const d = ems && ems.decision;
@@ -40,10 +43,16 @@
     if (ems.controlMode === 'external') return 'External EMS (3)';
     return status && status.sungrowSecond ? 'Forced-Split (2)' : 'Forced (2)';
   }
-  // F1: Countdown nur in External EMS (Modus 3) — die geltende Herzschlag-Frist; im Forced mode (2) gibt es keinen.
+  // F1a: Countdown NUR im echten External EMS (Modus 3) — wenn DVhub ihn besitzt UND aktiv steuert (Befehl, nicht
+  // Self). Im Eigenverbrauch (Modus 0) oder Forced mode (2) läuft kein Herzschlag-Countdown → „—" (Feld: fälschlich
+  // 30 s im Modus 0). Angezeigt wird der WIRKSAME (zuletzt gesendete/gerätegemanagte) Wert, NICHT der Sollwert
+  // (heartbeatTimeoutS).
   function countdownText(ems) {
     if (!ems || ems.controlMode !== 'external') return DASH;
-    const s = num(ems.heartbeatSentS) ? Number(ems.heartbeatSentS) : ems.heartbeatTimeoutS;
+    const activeExternal = ems.owns === true && ems.decision && ems.decision.mode !== 'self'
+      && (!ems.device || ems.device.mode == null || Number(ems.device.mode) === EMS_MODE_EXTERNAL);
+    if (!activeExternal) return DASH;
+    const s = num(ems.heartbeatSentS) ? Number(ems.heartbeatSentS) : null; // wirksamer/gelesener Wert, nicht der Sollwert
     return num(s) ? `${s} s` : DASH;
   }
   // F1: Leistungsgrenze je WR (Laden/Entladen). Slave zeigt die gelesenen Gerätegrenzen (33047/33048), sonst BDC.
@@ -93,7 +102,8 @@
       decision: decisionText(ems),
       heartbeat: ems ? heartbeatText(ems) : DASH,
       countdown: countdownText(ems),
-      limit: limitText({ bdcRatedW: dev.bdcRatedW }), // Master: ohne gelesene Gerätegrenze → BDC
+      // F1a: gelesene Master-Gerätegrenzen (33047/33048), sonst BDC — je Richtung getrennt (Laden 33047 ≠ Entladen 33048).
+      limit: limitText({ charge: dev.maxChargeWDevice, discharge: dev.maxDischargeWDevice, bdcRatedW: dev.bdcRatedW }),
       split: splitText(ems),
       regulate: regulateText(ems),
       writes: writesText(ems),
@@ -151,21 +161,28 @@
     if (nameEl) nameEl.textContent = vw.hidden ? 'Victron' : 'Sungrow (Master + Slave)';
     if (vw.hidden) return;
     const set = (id, text) => { const el = d.getElementById(id); if (el) el.textContent = text; };
-    // F1: feste Spalten je WR — SoC | Akku | PV | Befehl/Leistung | Countdown (bei 3) | Grenze.
-    const cols = (r) => `${r.soc} · Akku ${r.battery} · PV ${r.pv} · ${r.decision} · Countdown ${r.countdown} · Grenze ${r.limit}`;
+    const setHidden = (id, h) => { const el = d.getElementById(id); if (el) el.hidden = h; };
+    // F1a: feste Spalten je Gruppe — SoC | Akku | PV ; Befehl | Countdown | Grenze — in getrennte Grid-Zellen,
+    // NICHT als ein zusammengesetzter String (kein Wort-für-Wort-Umbruch, Label nie neben dem Wert).
+    const fillGroup = (prefix, r) => {
+      set(`${prefix}Soc`, r.soc); set(`${prefix}Akku`, r.battery); set(`${prefix}Pv`, r.pv);
+      set(`${prefix}Cmd`, r.decision); set(`${prefix}Countdown`, r.countdown); set(`${prefix}Limit`, r.limit);
+    };
     set('sungrowWrMode', `Modus: ${vw.mode}`);
     set('sungrowWrMasterRole', vw.master.role);
     set('sungrowWrMasterMeta', `${vw.master.model} · ${vw.master.serial} · BDC ${vw.master.bdc}`);
-    set('sungrowWrMasterVals', cols(vw.master));
+    fillGroup('sungrowWrMaster', vw.master);
     set('sungrowWrMasterEms', `${vw.master.decision} · Besitz ${vw.master.owns ? 'ja' : 'nein'} · Herzschlag ${vw.master.heartbeat}`);
     // Aufteilung + Regeltakt + Tages-Schreibzähler (Punkt 1/2).
     set('sungrowWrMasterSplit', `Aufteilung ${vw.master.split} · Takt ${vw.master.regulate} · Rückfall ${vw.master.fallback}`);
     set('sungrowWrMasterWrites', `Writes heute: ${vw.master.writes}`);
     set('sungrowWrSlaveRole', vw.slave.role);
-    set('sungrowWrSlaveVals', vw.slave.online ? cols(vw.slave) : vw.slave.running);
+    // Slave online → Grid füllen; offline → nur die Statuszeile (Nicht erreichbar), Grid aus.
+    if (vw.slave.online) { setHidden('sungrowWrSlaveStatus', true); setHidden('sungrowWrSlaveGrid', false); fillGroup('sungrowWrSlave', vw.slave); }
+    else { set('sungrowWrSlaveStatus', vw.slave.running); setHidden('sungrowWrSlaveStatus', false); setHidden('sungrowWrSlaveGrid', true); }
     set('sungrowWrSlaveEms', vw.slave.role.indexOf('gesteuert') >= 0 ? `${vw.slave.decision} · Besitz ${vw.slave.owns ? 'ja' : 'nein'} · Takt ${vw.slave.regulate}` : `BDC ${vw.slave.bdc}`);
     set('sungrowWrSlaveWrites', vw.slave.role.indexOf('gesteuert') >= 0 ? `Writes heute: ${vw.slave.writes}` : '');
-    set('sungrowWrSum', `System: Akku ${vw.sum.battery} · PV ${vw.sum.pv} · SoC ${vw.sum.soc}`);
+    set('sungrowWrSumSoc', vw.sum.soc); set('sungrowWrSumAkku', vw.sum.battery); set('sungrowWrSumPv', vw.sum.pv);
   }
 
   if (typeof window !== 'undefined') window.DVhubSungrowInverters = { view, render };

@@ -147,6 +147,20 @@
   font-size:11.5px;
 }
 .rail-row:last-child { border-bottom:0; }
+/* F1a Wechselrichter-Kachel (zwei Sungrow-WR): Werte je Gruppe (Master/Slave/Summe) UNTER dem Label in einem
+   festen 3-Spalten-Grid. So steht nie ein Label neben seinem Wert, und die Werte brechen nicht Wort-für-Wort um
+   (jede Zelle eine Spalte, einzeilig mit Ellipsis). Deutsches Dezimaltrennzeichen kommt aus der View. */
+.wr-role { border-bottom:0; padding:5px 0 0; }
+.wr-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:4px 10px; padding:4px 0 6px; border-bottom:1px solid var(--hairline); }
+.wr-grid .wr-cell { display:flex; flex-direction:column; min-width:0; }
+.wr-grid .wr-cell .cap {
+  font-family:var(--f-mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim);
+}
+.wr-grid .wr-cell .v {
+  font-family:var(--f-mono); font-variant-numeric:tabular-nums; color:var(--text); font-weight:500;
+  font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.wr-status { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); padding:4px 0 6px; border-bottom:1px solid var(--hairline); }
 .rail-row .l {
   font-family:var(--f-mono); font-size:10.5px; letter-spacing:.1em;
   text-transform:uppercase; color:var(--text-dim);

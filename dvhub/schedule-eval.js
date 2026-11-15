@@ -1196,6 +1196,10 @@ export function createScheduleEvaluator(ctx) {
     // lädt), ist bei allowGridCharge=false erlaubt — der Aktuator muss aber „nicht aus dem Netz laden" (noGridCharge)
     // sicher umsetzen. Das Tor setzt die Flagge, der Sungrow-EMS-Write unten gibt sie weiter.
     let noGridChargeForActuator = false;
+    // Entlade-Boden wegen UNBEKANNTEM/veraltetem SoC: der Sungrow-EMS gibt dann an den WR zurück (Modus 0,
+    // Absicherung C) statt mit unsicherem SoC weiterzuregeln. Bei bekanntem SoC am Boden regelt der Aktuator
+    // selbst weiter (Entladen gesperrt, Laden aus PV erlaubt).
+    let releaseForFloorForActuator = false;
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
     if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
     const deviceGate = deviceWriteGate(cfg);
@@ -1655,6 +1659,10 @@ export function createScheduleEvaluator(ctx) {
             ageMs: victronFieldAgeMs(state, 'soc'), floorPct, reason
           });
           value = safeHold;
+          // Unbekannter/veralteter SoC (oder Einfrierer/Quellenstreit): Messwert unzuverlässig → den Sungrow-EMS
+          // an den WR zurückgeben lassen (Modus 0). Bei bekanntem SoC am Boden (below_hard_floor) nicht — der
+          // Aktuator sperrt dort nur das Entladen und lädt PV-Überschuss weiter (Forced bleibt).
+          if (reason !== 'below_hard_floor') releaseForFloorForActuator = true;
         }
       }
     }
@@ -1737,7 +1745,7 @@ export function createScheduleEvaluator(ctx) {
         // durchlaufen; der Aktuator setzt Modus/Befehl/Leistung mit Rücklesen
         // und führt im 5-s-Takt nach (tick).
         if (conf.emulate !== 'sungrow-ems' || target !== 'gridSetpointW') throw new Error(`unsupported emulate: ${conf.emulate}`);
-        const r = await sungrowEms.applySetpoint(value, source, { noGridCharge: noGridChargeForActuator });
+        const r = await sungrowEms.applySetpoint(value, source, { noGridCharge: noGridChargeForActuator, releaseForFloor: releaseForFloorForActuator });
         if (!r?.ok) {
           emsFailure = r?.blocked !== true;
           // Reiner Kontroll-Lesefehler (nichts geschrieben): der Aktuator hat schon sungrow_ems_read_error

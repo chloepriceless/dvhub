@@ -618,6 +618,19 @@ export function createPoller(ctx) {
       const info = decodeSungrowInfoBlock(await read({ fc: 4, address: wire(13000), quantity: 46 }));
       if (info) state.victron.device = { ...state.victron.device, info, infoAt: now };
     } catch { /* Zusatzanzeige — nächster Versuch nach infoEveryMs */ }
+    // Gerätegrenzen des MASTERS (F1a, Christin 14./15.11.): gelesene Lade-/Entladegrenze (33047/33048, ×10 W) und
+    // konfigurierte Kapazität (33049, ×10 Wh). Holding-Register, daher NUR im langsamen Info-Takt (nicht im
+    // Sekundentakt, Note 6). Genau wie der Slave (sungrow-second.js), damit Anzeige UND Regelgrenzen je WR auf dem
+    // echten Gerätewert stehen (begrenzt durch BDC) und nicht auf der BDC-Nennleistung hängen bleiben (Grenzen-
+    // Vertauschung im Feld). 0 oder 0xFFFF (kein Wert) → null.
+    const readTen10 = async (doc) => {
+      try { const v = Number((await read({ fc: 3, address: wire(doc), quantity: 1 }))?.[0]) & 0xffff; return v === 0 || v === 0xffff ? null : v * 10; }
+      catch { return null; }
+    };
+    const maxChargeWDevice = await readTen10(33047);
+    const maxDischargeWDevice = await readTen10(33048);
+    const batteryCapacityLimitWh = await readTen10(33049);
+    state.victron.device = { ...state.victron.device, maxChargeWDevice, maxDischargeWDevice, batteryCapacityLimitWh, limitsAt: now };
   }
 
   // --- 32-bit-Zähler (meter.readType 'int32') ------------------------------
