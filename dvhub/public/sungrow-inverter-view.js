@@ -308,6 +308,9 @@
     if (nameEl) nameEl.textContent = vw.hidden ? 'Victron' : 'Sungrow (Master + Slave)';
     if (vw.hidden) return;
     const set = (id, text) => { const el = d.getElementById(id); if (el) el.textContent = text; };
+    // M5c: lange Zeilen werden per CSS gekürzt (Ellipsis) — den VOLLEN Text als Tooltip (title) mitgeben, damit
+    // nichts verloren geht („Besitz ja · Herzschlag …", „Takt Regel…", „Writes heute: …").
+    const setT = (id, text) => { const el = d.getElementById(id); if (el) { el.textContent = text; el.title = text; } };
     const setHidden = (id, h) => { const el = d.getElementById(id); if (el) el.hidden = h; };
     // Badges je WR (Notladung / Slave-Anteil am Master): Text + sichtbar, sonst versteckt.
     const setBadges = (id, labels) => {
@@ -332,10 +335,10 @@
     setBadges('sungrowWrMasterBadges', [vw.master.emergencyCharge ? 'Notladung' : null]);
     set('sungrowWrMasterMeta', `${vw.master.model} · ${vw.master.serial} · BDC ${vw.master.bdc}`);
     fillGroup('sungrowWrMaster', vw.master);
-    set('sungrowWrMasterEms', `${vw.master.decision} · Besitz ${vw.master.owns ? 'ja' : 'nein'} · Herzschlag ${vw.master.heartbeat}`);
-    set('sungrowWrMasterSplit', `Aufteilung ${vw.master.split} · Takt ${vw.master.regulate} · Rückfall ${vw.master.fallback}`);
-    set('sungrowWrMasterHealth', vw.master.health);
-    set('sungrowWrMasterWrites', `Writes heute: ${vw.master.writes}`);
+    setT('sungrowWrMasterEms', `${vw.master.decision} · Besitz ${vw.master.owns ? 'ja' : 'nein'} · Herzschlag ${vw.master.heartbeat}`);
+    setT('sungrowWrMasterSplit', `Aufteilung ${vw.master.split} · Takt ${vw.master.regulate} · Rückfall ${vw.master.fallback}`);
+    setT('sungrowWrMasterHealth', vw.master.health);
+    setT('sungrowWrMasterWrites', `Writes heute: ${vw.master.writes}`);
     set('sungrowWrSlaveRole', vw.slave.role);
     setBadges('sungrowWrSlaveBadges', [
       vw.slave.emergencyCharge ? 'Notladung' : null,
@@ -344,9 +347,9 @@
     // Slave online → Grid füllen; offline → nur die Statuszeile (Nicht erreichbar), Grid aus.
     if (vw.slave.online) { setHidden('sungrowWrSlaveStatus', true); setHidden('sungrowWrSlaveGrid', false); fillGroup('sungrowWrSlave', vw.slave); }
     else { set('sungrowWrSlaveStatus', vw.slave.running); setHidden('sungrowWrSlaveStatus', false); setHidden('sungrowWrSlaveGrid', true); }
-    set('sungrowWrSlaveEms', vw.slave.role.indexOf('gesteuert') >= 0 ? `${vw.slave.decision} · Besitz ${vw.slave.owns ? 'ja' : 'nein'} · Takt ${vw.slave.regulate}` : `BDC ${vw.slave.bdc}`);
-    set('sungrowWrSlaveHealth', vw.slave.health);
-    set('sungrowWrSlaveWrites', vw.slave.role.indexOf('gesteuert') >= 0 ? `Writes heute: ${vw.slave.writes}` : '');
+    setT('sungrowWrSlaveEms', vw.slave.role.indexOf('gesteuert') >= 0 ? `${vw.slave.decision} · Besitz ${vw.slave.owns ? 'ja' : 'nein'} · Takt ${vw.slave.regulate}` : `BDC ${vw.slave.bdc}`);
+    setT('sungrowWrSlaveHealth', vw.slave.health);
+    setT('sungrowWrSlaveWrites', vw.slave.role.indexOf('gesteuert') >= 0 ? `Writes heute: ${vw.slave.writes}` : '');
     // Summe einzeilig im Kopfbereich (M5b): echter System-SoC, sonst gemeldeter als Rückfall.
     const sumSoc = vw.sum.socReal !== DASH ? `real ${vw.sum.socReal}` : `${vw.sum.soc} (gemeldet)`;
     set('sungrowWrSum', `Summe: SoC ${sumSoc} · Akku ${vw.sum.battery} · PV ${vw.sum.pv}`);

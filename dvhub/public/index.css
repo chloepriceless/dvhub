@@ -86,7 +86,10 @@
     "left pf   right"
     "left wr   right"
     "epex epex epex";
-  grid-template-rows:auto auto auto;
+  /* M5c (Feld 16.11.): Zeile 2 = 1fr fängt die ÜBERSCHÜSSIGE Höhe der (über beide Zeilen spannenden) Seitenspalten
+     auf — sonst verteilt der Browser sie auf Zeile 1 und drückt die WR-Kachel mit ~300 px Lücke unter den
+     Energiefluss. Die WR-Kachel bleibt oben (align-self:start), also direkt unter dem Energiefluss. */
+  grid-template-rows:auto 1fr auto;
   align-items:start;
 }
 .leit-grid > .rail:first-child { grid-area:left; align-self:start; }
