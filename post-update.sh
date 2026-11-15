@@ -555,7 +555,7 @@ dvhub_root_own_install_dir "$INSTALL_DIR" "$OWN_LIMIT" || echo "  WARN: Rechte f
 # → libstrongswan-standard-plugins = Crypto-Plugins). NIE pauschal
 # --no-install-recommends auf die ganze Liste!
 NEEDED_PKGS=""
-for pkg in openvpn strongswan autossh openssh-client libjemalloc2; do
+for pkg in openvpn strongswan autossh openssh-client openssh-server libjemalloc2; do
   if ! dpkg -s "$pkg" >/dev/null 2>&1; then
     NEEDED_PKGS="$NEEDED_PKGS $pkg"
   fi
@@ -989,6 +989,30 @@ if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
     echo "  Support-Provisioning: OK"
   else
     echo "  WARN: Support-Provisioning fehlgeschlagen (non-fatal). Fern-Support ggf. bis zum nächsten Lauf eingeschränkt." >&2
+  fi
+fi
+
+# Box-Uhr: NTP (systemd-timesyncd) aktivieren/prüfen — DVhub hängt an der Uhr (EOS-Slots,
+# Zeitpläne). Geteilt mit install.sh. NON-FATAL, überspringt Container von selbst.
+if [[ -f "$INSTALL_DIR/clock-provision.sh" ]]; then
+  echo "  Box-Uhr (NTP)..."
+  if pu_bounded 20 env DATA_DIR="$DATA_DIR" bash "$INSTALL_DIR/clock-provision.sh"; then
+    echo "  Box-Uhr: OK"
+  else
+    echo "  WARN: NTP-Provisioning fehlgeschlagen (non-fatal). Zeitabgleich am Betriebssystem prüfen." >&2
+  fi
+fi
+
+# Sungrow-Absicherung C2/C4 (M3, Feld 16.11.): ExecStopPost-Rückgabe + Watchdog-Timer als Drop-in/Unit einhängen —
+# auf der Paket-Box fehlten sie nach dem Update. Nur für Sungrow-Anlagen; sonst wird ein früheres Drop-in entfernt.
+# Geteilt mit install.sh. NON-FATAL, überspringt Container von selbst.
+if [[ -f "$INSTALL_DIR/sungrow-provision.sh" ]]; then
+  echo "  Sungrow-Absicherung (ExecStopPost + Watchdog)..."
+  if pu_bounded 20 env INSTALL_DIR="$INSTALL_DIR" APP_DIR="$APP_DIR" SERVICE_NAME="$SERVICE_NAME" \
+       DATA_DIR="$DATA_DIR" DV_APP_CONFIG="$CONFIG_PATH" bash "$INSTALL_DIR/sungrow-provision.sh"; then
+    echo "  Sungrow-Absicherung: OK"
+  else
+    echo "  WARN: Sungrow-Absicherung fehlgeschlagen (non-fatal)." >&2
   fi
 fi
 

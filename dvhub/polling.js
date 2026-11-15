@@ -7,7 +7,11 @@ import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
-import { identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire } from './services/inverter/sungrow.js';
+import {
+  identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
+  resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry,
+  runningStateText, isSungrowEmergencyCharge
+} from './services/inverter/sungrow.js';
 import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
 import { VEBUS_BLOCK, BATTERY_BLOCK, buildActiveAlarms, buildActiveAlarmsFromDbus } from './victron-alarms.js';
 // T-FREEZE (2026-07-24): Einfrier-Wächter. Erkennt eingefrorene Live-Werte trotz
@@ -557,6 +561,9 @@ export function createPoller(ctx) {
   let identifyRetryAt = 0;
   let identifyInfoAt = 0;
   let bdcRetryAt = 0;
+  // Block-Fähigkeit der FC-3-Gerätegrenzen je Verbindung (N3, Feld 15.11.): wirft der WR auf einen Block eine
+  // Modbus-Ausnahme (illegale Adresse), dauerhaft auf Einzellesen zurückfallen und das je Verbindung merken.
+  const blockCaps = { limits: true, soc: true };
   async function ensureDeviceIdentified(cfg) {
     const kind = cfg?.identify?.kind;
     if (kind !== 'sungrow' || transport.type !== 'modbus') {
@@ -576,6 +583,8 @@ export function createPoller(ctx) {
       identifyRetryAt = 0;
       identifyInfoAt = 0;
       bdcRetryAt = 0;
+      blockCaps.limits = true;
+      blockCaps.soc = true;
     }
     if (!dev) {
       if (now < identifyRetryAt) return;
@@ -615,6 +624,47 @@ export function createPoller(ctx) {
       const info = decodeSungrowInfoBlock(await read({ fc: 4, address: wire(13000), quantity: 46 }));
       if (info) state.victron.device = { ...state.victron.device, info, infoAt: now };
     } catch { /* Zusatzanzeige — nächster Versuch nach infoEveryMs */ }
+    // Gerätegrenzen des MASTERS (F1a, Christin 14./15.11.): gelesene Lade-/Entladegrenze (33047/33048, ×10 W) und
+    // konfigurierte Kapazität (33049, ×10 Wh). Holding-Register, daher NUR im langsamen Info-Takt (nicht im
+    // Sekundentakt, Note 6). Genau wie der Slave (sungrow-second.js), damit Anzeige UND Regelgrenzen je WR auf dem
+    // echten Gerätewert stehen (begrenzt durch BDC) und nicht auf der BDC-Nennleistung hängen bleiben (Grenzen-
+    // Vertauschung im Feld). 0 oder 0xFFFF (kein Wert) → null.
+    // Als BLÖCKE lesen (N3, Feld 15.11.): statt fünf Einzel-Lesungen zwei FC-3-Blöcke — 33047+3 (Laden 33047 /
+    // Entladen 33048 / Kapazität 33049) und 13057+4 (Max-SoC 13058 Offset 1, Min-SoC 13059 Offset 2). Block je
+    // Verbindung einmal proben; bei Modbus-Ausnahme dauerhaft auf Einzellesen zurückfallen (per Verbindung gemerkt).
+    // Transienter Fehler (Timeout/Reset) → KEIN Rückfall, nächster Info-Takt probt erneut. Nur im langsamen Info-Takt.
+    const readFc3BlockOrSingle = async (startDoc, quantity, capName, docByOffset) => {
+      const res = new Array(quantity).fill(null);
+      if (blockCaps[capName]) {
+        try {
+          const b = await read({ fc: 3, address: wire(startDoc), quantity });
+          if (!Array.isArray(b) || b.length < quantity) throw new Error('short block');
+          for (let i = 0; i < quantity; i += 1) res[i] = Number(b[i]) & 0xffff;
+          return res;
+        } catch (e) {
+          if (/modbus exception \d/i.test(String(e?.message))) blockCaps[capName] = false;
+          else return res; // transient: dieser Takt null, nächster Info-Takt probt den Block erneut
+        }
+      }
+      for (let i = 0; i < quantity; i += 1) {
+        const doc = docByOffset[i];
+        if (doc == null) continue;
+        try { res[i] = Number((await read({ fc: 3, address: wire(doc), quantity: 1 }))?.[0]) & 0xffff; }
+        catch { /* null */ }
+      }
+      return res;
+    };
+    const ten10 = (v) => (v == null || v === 0 || v === 0xffff ? null : v * 10);
+    // 13058 Max-SoC (Lade-Grenze), 13059 Min-SoC (Entlade-Grenze). 0xFFFF → null; 0 ist ein gültiger Min-SoC.
+    const socPct = (v) => (v == null || v === 0xffff ? null : Math.min(100, Math.max(0, v / 10)));
+    const limits = await readFc3BlockOrSingle(33047, 3, 'limits', [33047, 33048, 33049]);
+    const maxChargeWDevice = ten10(limits[0]);
+    const maxDischargeWDevice = ten10(limits[1]);
+    const batteryCapacityLimitWh = ten10(limits[2]);
+    const socBlock = await readFc3BlockOrSingle(13057, 4, 'soc', [null, 13058, 13059, null]);
+    const maxSocPctDevice = socPct(socBlock[1]);
+    const minSocPctDevice = socPct(socBlock[2]);
+    state.victron.device = { ...state.victron.device, maxChargeWDevice, maxDischargeWDevice, batteryCapacityLimitWh, maxSocPctDevice, minSocPctDevice, limitsAt: now };
   }
 
   // --- 32-bit-Zähler (meter.readType 'int32') ------------------------------
@@ -674,11 +724,28 @@ export function createPoller(ctx) {
     return { total, l1: null, l2: null, l3: null, raw: fregs, fallback: true };
   }
 
+  // Live-Betriebszustand des Masters (Aufgabe 2): der Info-Block (13000) wird nur alle 5 min gelesen — zu langsam,
+  // um eine Notladung (runningState 0x4001) rechtzeitig zu erkennen. runningState (Doku 13000) ist ein Input-
+  // Register (FC 4, RO) und darf häufig gelesen werden (anders als die RW-Holding-Register). Nur für einen
+  // erkannten Sungrow-Hybrid über Modbus; best effort (ein Fehler lässt den letzten Wert stehen und meldet nichts).
+  async function readMasterRunningState(cfg) {
+    const d = state.victron?.device;
+    if (cfg?.identify?.kind !== 'sungrow' || transport.type !== 'modbus' || !d || d.vendor !== 'sungrow') return;
+    const v = cfg.victron || {};
+    try {
+      const rs = Number((await transport.mbRequest({ fc: 4, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, address: wire(13000), quantity: 1 }))?.[0]) & 0xffff;
+      state.victron.runningState = rs;
+      state.victron.runningStateText = runningStateText(rs);
+      state.victron.emergencyCharge = isSungrowEmergencyCharge(rs);
+    } catch { /* letzten Wert stehen lassen — nächster Takt */ }
+  }
+
   // --- pollMeter: main polling function (meter + all Victron points) ---
   async function pollMeter() {
     const cfg = getCfg();
     await ensureSunspecResolved(cfg);
     await ensureDeviceIdentified(cfg);
+    await readMasterRunningState(cfg);
     // Plan 09-06 (D-06): wall-clock duration of the meter read — recorded into
     // dvhub_meter_poll_duration_seconds gauge on success, dvhub_meter_poll_errors_total
     // counter on catch. Tracked in seconds (Prometheus convention).
@@ -991,6 +1058,42 @@ export function createPoller(ctx) {
       }
     }
 
+    // --- Zwei Sungrow-WR im Master/Slave-Parallelbetrieb: kanonische System-Telemetrie BEVOR daraus Lade-/
+    // Entladeleistung, Flüsse und Hauslast abgeleitet werden. Akku/PV/SoC = Master + Slave (nur frische
+    // Master-Werte), die Master-Rohwerte nach sungrowMaster*; der SoC-Boden nutzt den niedrigeren der beiden SoC
+    // (socFloorPct). Steuerung bleibt am Master (dieser Dienst schreibt nie). `sungrowSecond`/`sungrowSecondCfg`
+    // werden unten für Hauslast-Korrektur und Anzeige wiederverwendet.
+    const sungrowSecondCfg = resolveSecondInverter(cfg);
+    let sungrowSecond = null;
+    if (sungrowSecondCfg.enabled) {
+      sungrowSecond = secondInverterTelemetry(state, cfg, {});
+      const sysT = sungrowSystemTelemetry(state.victron, sungrowSecond, {
+        masterCapacityWh: Number(cfg.optimizer?.batteryCapacityWh) || 0,
+        secondCapacityWh: Number(cfg.sungrow?.secondInverter?.batteryCapacityWh) || 0,
+      });
+      if (sysT) {
+        if (sysT.batteryPowerW != null && !state.victron.errors?.batteryPowerW) {
+          state.victron.sungrowMasterBatteryW = sysT.sungrowMasterBatteryW;
+          state.victron.batteryPowerW = sysT.batteryPowerW;
+        }
+        if (sysT.pvPowerW != null && !state.victron.errors?.pvPowerW) {
+          state.victron.sungrowMasterPvW = sysT.sungrowMasterPvW;
+          state.victron.pvPowerW = sysT.pvPowerW;
+          state.victron.pvTotalW = sysT.pvTotalW;
+        }
+        if (sysT.soc != null && !state.victron.errors?.soc) {
+          state.victron.sungrowMasterSocPct = sysT.sungrowMasterSocPct;
+          state.victron.soc = sysT.soc;
+        }
+        if (sysT.socFloorPct != null) state.victron.socFloorPct = sysT.socFloorPct;
+      } else {
+        delete state.victron.sungrowMasterBatteryW;
+        delete state.victron.sungrowMasterPvW;
+        delete state.victron.sungrowMasterSocPct;
+        delete state.victron.socFloorPct;
+      }
+    }
+
     const batP = Number(state.victron.batteryPowerW || 0);
     state.victron.batteryChargeW = Math.max(0, batP);
     state.victron.batteryDischargeW = Math.max(0, -batP);
@@ -1062,6 +1165,34 @@ export function createPoller(ctx) {
       }
     }
 
+    // Zwei Sungrow-WR: System-Hauslast VOR der Fluss-Aufteilung, damit die Flüsse (solarToBattery … batteryToGrid)
+    // aus Systemwerten gerechnet werden. Der Master meldet nur seine eigene Last (einziger Zähler) → korrigieren:
+    // Last_System = Last_Master + Slave-PV − Slave-Akku. Nur einen frisch gelesenen Master-Wert korrigieren; der
+    // Rohwert bleibt in sungrowMasterLoadW. PV/Akku stehen hier schon als Systemsumme (Block oben).
+    if (sungrowSecondCfg.enabled && sungrowSecond
+      && !state.victron.errors?.selfConsumptionW && state.victron.selfConsumptionW != null) {
+      const sPv = sungrowSecond.pvPowerW ?? 0;
+      const sBat = sungrowSecond.batteryPowerW ?? 0;
+      state.victron.sungrowMasterLoadW = Number(state.victron.selfConsumptionW);
+      state.victron.selfConsumptionW = Number(Math.max(0, Number(state.victron.selfConsumptionW) + sPv - sBat).toFixed(3));
+      if (state.victron.fieldUpdatedAt) state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
+    } else if (sungrowSecondCfg.enabled && !sungrowSecond) {
+      delete state.victron.sungrowMasterLoadW;
+    }
+    // Punkt 4: eine Systemlast von 0 bei Netzbezug ist unplausibel (Master-Akku schaltet um, Slave-Wert fehlt
+    // kurz). Nicht die 0 übernehmen — den letzten gültigen Wert bis telemetryMaxAgeMs halten, sonst deckelt das
+    // Netzlade-Tor den Sollwert fälschlich auf 0. Nur bei zweitem WR (Aggregation).
+    if (sungrowSecondCfg.enabled) {
+      const giW = Math.max(0, Number(state.victron.gridImportW || 0));
+      const loadNow = Number(state.victron.selfConsumptionW);
+      const maxAge = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
+      if (Number.isFinite(loadNow) && loadNow > 0) {
+        state.victron._sungrowLoadHold = { w: loadNow, at: Date.now() };
+      } else if (giW > 100 && state.victron._sungrowLoadHold && Date.now() - state.victron._sungrowLoadHold.at <= maxAge) {
+        state.victron.selfConsumptionW = state.victron._sungrowLoadHold.w;
+      }
+    }
+
     const loadW = Math.max(0, Number(state.victron.selfConsumptionW || 0));
     const pvTotalW = Math.max(0, Number(state.victron.pvTotalW || 0));
     const gridImportW = Math.max(0, Number(state.victron.gridImportW || 0));
@@ -1127,6 +1258,16 @@ export function createPoller(ctx) {
     state.victron.secondBatterySocPct = followerFlow ? followerFlow.socPct : null;
     state.victron.batteryToSecondBatteryW = followerFlow ? batteryToSecondBatteryW : null;
     state.victron.secondBatteryToBatteryW = followerFlow ? secondBatteryToBatteryW : null;
+
+    // Zweiter Sungrow-WR: Anzeige-/Status-Felder. Akku/PV/Last/SoC stehen oben bereits als Systemsumme in den
+    // kanonischen Feldern; hier nur die ausdrücklich benannten System-Summen (zur Kontrolle, dass die Aggregation
+    // greift) und die sanitierte Slave-Zusammenfassung (ohne LAN-IP). Null, wenn gerade nicht aggregiert wird.
+    if (sungrowSecondCfg.enabled) {
+      state.victron.sungrowSystemPvW = sungrowSecond ? Number(state.victron.pvTotalW ?? 0) : null;
+      state.victron.sungrowSystemBatteryW = sungrowSecond && state.victron.batteryPowerW != null ? Number(state.victron.batteryPowerW) : null;
+      state.victron.sungrowSystemLoadW = sungrowSecond && state.victron.selfConsumptionW != null ? Number(state.victron.selfConsumptionW) : null;
+      state.victron.sungrowSecond = sungrowSecondView(state, cfg);
+    }
 
     // T-FREEZE Einfrier-Wächter: NACH allen Reads/Ableitungen, VOR dem Snapshot —
     // so trägt der Powerflow-Snapshot bereits den erkannten Einfrierer und die

@@ -2731,6 +2731,17 @@ export function createApiRoutes(ctx) {
     // Zweite GX-Anlage am selben Anschluss (services/multi-gx), nur In-Memory.
     // Im Runtime-Worker-Betrieb steht der Zustand im Worker → hier null.
     payload.multiGx = state.multiGx ?? null;
+    // Zweiter Sungrow-WR (Master/Slave-Parallelbetrieb): die sanitierte Slave-Zusammenfassung (ohne LAN-IP) und
+    // die System-Summen reisen im Victron-Snapshot (runtime-state Whitelist) zuverlässig auch im Split-Prozess.
+    // Zusätzlich als Top-Level, damit die App sie ohne Umweg findet.
+    payload.sungrowSecond = payload.victron?.sungrowSecond ?? null;
+    // Sungrow-EMS-Zustand (Master und — bei Split-Steuerung — Slave) für die Wechselrichter-Kachel: EMS-Modus,
+    // Befehl/Leistung, Besitz, Herzschlag (Soll/erkannte FC). Nur In-Memory; im Runtime-Worker-Betrieb hier null.
+    payload.sungrowEms = state.ctrl?.sungrowEms ?? null;
+    payload.sungrowEmsSlave = state.ctrl?.sungrowEmsSlave ?? null;
+    // M8: EOS-„Halten"/„Netzladen" ausgesetzt, weil der Netzstrom-Anteil im Akku gesperrt ist (erst im Haus
+    // verbrauchen). In-Memory wie sungrowEms (im Runtime-Worker-Betrieb hier null).
+    payload.eosGridShareSuspend = state.ctrl?.eosGridShareSuspend ?? null;
     // Victron device alarms (read-only display). Source is payload.victron.alarms,
     // which the POLLER (possibly a separate runtime-worker process) writes and
     // which reaches here through the runtime IPC snapshot — NOT web-process-local
@@ -4253,6 +4264,22 @@ export function createApiRoutes(ctx) {
         bridge: ctx.eosDeviceBridge?.getStatus?.() || null,
         mypv: ctx.mypvRegulator?.getStatus?.() || null,
       });
+    }
+
+    // POST /api/sungrow/release — Sungrow manuell freigeben (Modus 0, beide 0xCC), M2 (Feld 16.11.). Nimmt den
+    // Forced/External-EMS-Betrieb am Master UNABHÄNGIG vom Besitz-Merker zurück — der Weg ohne Shell, wenn DVhub den
+    // Master nach einem Lesefehler/Neustart im eigenen Modus 2 „hängen" ließ. Erfordert body.confirm === true.
+    if (url.pathname === '/api/sungrow/release' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid_json' }); }
+      if (body?.confirm !== true) return json(res, 400, { ok: false, error: 'confirm_required' });
+      if (typeof ctx.sungrowEms?.forceRelease !== 'function') return json(res, 409, { ok: false, error: 'sungrow_not_active' });
+      let result;
+      try { result = await ctx.sungrowEms.forceRelease('manual_release'); }
+      catch (e) { pushLog('sungrow_manual_release_error', { error: e?.message || String(e) }, 'warn'); return json(res, 500, { ok: false, error: 'release_failed' }); }
+      pushLog('sungrow_manual_release', { ok: result?.ok === true, device: result?.device || null }, actorContext(req));
+      return json(res, 200, { ok: result?.ok === true, device: result?.device || null, error: result?.error || null });
     }
 
     // POST: ein planbares Gerät anlegen/aktualisieren (Upsert nach id).

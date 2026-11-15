@@ -10,6 +10,167 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Behoben
+
+- **Sungrow zwei WR: Last 0 bei Netzbezug deckelt den Sollwert nicht mehr auf 0.** Eine Hauslast von 0 W
+  bei nennenswertem Netzbezug ist unplausibel (sie entsteht kurz, während der Master-Akku umschaltet oder
+  ein Slave-Wert fehlt). DVhub behandelt sie jetzt als unbekannt (das Netzlade-Tor lehnt dann ab statt auf
+  0 zu deckeln) und hält im Poller den letzten gültigen Lastwert bis `telemetryMaxAgeMs`.
+
+### Geändert
+
+- **Sungrow zwei WR: PV-Größe des zweiten WR zählt zur Prognose.** `sungrow.secondInverter.pvKwp` fließt
+  jetzt an einer zentralen Stelle in die PV-Gesamtgröße ein (Prognose pvlib/Open-Meteo/Forecast.Solar/
+  pvnode, MiSpeL-kWp, Plausibilitätsprüfung) — Feldbox 12,32 + 11,88 = 24,2 kWp. (Bei String-genauer
+  Prognose „detailliert" gehört der Slave als eigener String in die Liste.)
+
+
+- **Sungrow External EMS: Herzschlag 13080 per FC 16, Diagnose-Anzeige, lösbare Sperre
+  (sicherheitskritisch, Feldtest).** Der Master (SH10RT-20) übernahm 13080 per FC 06 (Write Single)
+  nicht (geschrieben 30, gelesen 600). DVhub versucht den Herzschlag jetzt automatisch erst per FC 06 und
+  bei Nichtübernahme einmal per **FC 16** (Write Multiple) und merkt sich je Verbindung die funktionierende
+  Schreibfunktion (`sungrow.heartbeatWriteFc` erzwingt 6 oder 16). Nimmt der Wechselrichter gar keinen
+  Wert an, bricht DVhub External EMS sicher ab; als letzter Ausweg fährt `sungrow.acceptDeviceHeartbeatS`
+  (Opt-in, ≤600 s) mit der geräteeigenen Frist. Nach einem Abbruch zeigt die Oberfläche jetzt sofort
+  Eigenverbrauch statt ~20 s den alten Zwangsbefehl, und eine geänderte Herzschlag-Einstellung löst die
+  External-EMS-Sperre ohne Neustart. Status zeigt Schreibfunktion (Soll/erkannt) und die wirksame Frist.
+- **Sungrow External EMS: Herzschlag 13080 wird jetzt nach dem Moduswechsel geschrieben — und bei
+  Nichtübernahme sicher abgebrochen (sicherheitskritisch).** Am Gerät übernahm der Wechselrichter den
+  Herzschlag-Wert nicht (geschrieben 30 s, gelesen 600 s), weil DVhub ihn VOR dem Moduswechsel schrieb
+  und der Wechselrichter 13080 beim Eintritt in External EMS selbst setzt. Damit griff der
+  Rückfall-Schutz (Wechselrichter geht bei Ausfall von DVhub nach der Frist in Eigenverbrauch) nicht.
+  Jetzt schreibt DVhub den Herzschlag **nach** dem Moduswechsel (Doku V1.1.11: „set mode 3, then deliver
+  the heartbeat value"; abschaltbar über `sungrow.heartbeatAfterMode`). Stimmt die Herzschlag-Rücklesung
+  trotzdem nicht, neutralisiert DVhub **sofort im selben Durchlauf** zurück in Eigenverbrauch (der Akku
+  deckt die Last autonom, kein kurzer voller Netzbezug), gibt die Steuerung ab, verwirft den Sollwert
+  und schaltet External EMS für diese Verbindung ab (`sungrow_ems_heartbeat_unsupported`) — kein
+  irreführendes `control_write_error`.
+- **Sungrow: Kontroll-Lesefehler getrennt gemeldet, kurzer Wiederholversuch.** Schlägt das reine Lesen
+  der EMS-Register 13050–13052 fehl (es wurde nichts geschrieben), meldet DVhub das als
+  `sungrow_ems_read_error` (Warnung) statt als irreführendes `control_write_error`. Bei „modbus
+  exception 4" oder `ECONNRESET` liest DVhub einmal nach 300 ms neu; häufen sich die Abbrüche, weist ein
+  einmaliger Hinweis auf einen möglichen zweiten Modbus-Client hin (WiNet-S erlaubt meist nur einen).
+- **Weniger Log-Rauschen.** Dauerfehler werden gedrosselt: `storage_guard_error` (TimescaleDB nicht
+  erreichbar) höchstens einmal je Stunde, `eosdash_proxy_error` (EOSdash :8504) je Phase einmal je
+  5 min, wiederkehrende MQTT-Verbindungsfehler (z. B. `EHOSTUNREACH`) einmal je Minute.
+- **Netzlade-Tor: Netzbezug bis zur Hauslast ist kein Netzladen (Sungrow).** Bei abgeschaltetem
+  Netzladen (`allowGridCharge=false`) wird ein positiver Netz-Sollwert nicht mehr pauschal abgelehnt,
+  sondern auf die Live-Netto-Last (`Last − PV − Puffer`) gedeckelt und dem Sungrow-EMS-Regler mit
+  `noGridCharge` übergeben — so deckt der Bezug nur die Hauslast, der Akku lädt nie aus dem Netz (der
+  Regler begrenzt das Laden auf den PV-Überschuss, auch wenn die Last unter den Bezug fällt). Sind Last
+  oder PV unbekannt/veraltet, wird wie bisher abgelehnt; gedeckelt unter dem Ruheband gilt
+  Eigenverbrauch. Positive Optimizer-Regeln werden bei Sungrow nicht mehr pauschal verworfen, sondern
+  laufen durch dieses Tor. Für Victron (Sollwert geht direkt ans ESS, Bezug ≤ Last nicht garantiert)
+  bleibt die Ablehnung. Neues Log `grid_charge_capped_to_load`.
+- **Sungrow zwei WR: Anlagendaten und Leistungsgrenzen je WR.** Für den zweiten WR lassen sich jetzt
+  max. Lade-/Entladeleistung, Akkukapazität und PV-Größe getrennt eintragen. Die Regler-Leistungsgrenze
+  ist der kleinste Wert aus Summe der Lade-/Entladeleistungen beider WR, Summe der Nennleistungen und
+  `sungrow.maxPowerW` — Laden und Entladen getrennt; ist der Slave offline, zählt nur der Master-Anteil.
+  EOS plant mit der Summe aus Kapazität und Leistung beider WR. PV-Prognose über die vorhandene
+  String-Liste (Summe), Ist-Ertrag je WR aus Register 5017.
+- **Sungrow zwei WR: Akku, PV und SoC sind jetzt durchgängig die Systemsumme.** Bei aktiver Aggregation
+  (`aggregateTelemetry`) setzt der Poller `batteryPowerW`, `pvPowerW`/`pvTotalW` und `soc` auf die Summe
+  beider WR, bevor daraus Lade-/Entladeleistung, Energieflüsse und Hauslast abgeleitet werden; die
+  Master-Rohwerte bleiben in `sungrowMaster*` erhalten. Der **SoC** ist das kapazitätsgewichtete Mittel
+  beider Akkus (ohne hinterlegte Kapazität das einfache Mittel), beide Einzel-SoC sind sichtbar
+  (`sungrowMasterSocPct`, `sungrowSecond.socPct`, auch im Installateur-Portal). Der **SoC-Boden**
+  (Entlade-Boden und `manual_override_soc_floor`) nutzt den **niedrigeren** der beiden SoC
+  (`socFloorPct`), damit der schwächere Akku nicht unter den Boden entladen wird. Der Akku-Regler zählt
+  den zweiten WR dadurch **nicht mehr selbst** dazu (keine Doppelzählung) — er liest die bereits
+  aggregierten Systemwerte und nutzt vom zweiten WR nur noch die BDC-Nennleistung für die
+  System-Leistungsgrenze. Ohne zweite Verbindung/Aggregation unverändert.
+
+### Hinzugefügt
+
+- **Wechselrichter-Kachel für zwei Sungrow-WR (Leitstand).** Neue Kachel mit einer Zeile je WR (Rolle
+  Master – gesteuert / Slave – gelesen bzw. gesteuert bei Vorgaben, Modell/SN, Akku/PV/SoC/BDC,
+  EMS-Modus/Befehl/Besitz/Herzschlag inkl. erkannter Schreibfunktion) und einer Summenzeile. Die Daten
+  stehen jetzt vollständig in `/api/status` (`sungrowEms`, `sungrowEmsSlave`, Master-Rohwerte und
+  System-Summen) — ohne LAN-IP (die steht nur in der Konfiguration).
+- **Netzspannung und -frequenz für Sungrow.** DVhub liest am Sungrow-Hybrid (Master) alle 30 s die
+  Phasenspannungen L1–L3 (Register 5019–5021) und die Netzfrequenz (5036) und behandelt sie wie eine
+  normale Netzspannung (Quelle `sungrow-inverter`) — bisher blieb das Feld bei Sungrow leer. Ortsnetz,
+  Datenspende und Leitstand nutzen sie wie die Victron-/EnergyLink-Werte.
+- **Sungrow zwei WR: Vorgaben einzeln auf beide WR aufteilen (Split-Steuerung, Beta).** Neue Einstellung
+  „Steuerung des zweiten WR": „Nur im Eigenverbrauch" (Standard = wie bisher, der Master verteilt) oder
+  „Vorgaben aufteilen". Im Split-Modus teilt DVhub bei Lade-/Entlade-Vorgaben die Reglerleistung nach
+  Akku-Leistung und SoC auf (Entladen → WR mit mehr Reserve mehr, Laden → WR mit mehr freiem Platz mehr;
+  ein WR an seiner Grenze bekommt 0, der andere übernimmt) und steuert beide WR einzeln — jeder mit
+  eigenem EMS-Modus, Befehl, Herzschlag und Rücklesen. Sicherheit je WR: scheitert einer (Herzschlag,
+  Rücklesen, fremder EMS-Modus), gehen **beide** sofort in Eigenverbrauch zurück; Not-Halt setzt beide
+  zurück und schreibt dann nichts mehr; jeder WR hat einen eigenen Besitz-Merker. Der Schreibpfad zum
+  Slave nutzt denselben Modbus-Pool wie die Leseabfrage (ein Modbus-Client je WR). Ist der Slave offline,
+  steuert DVhub nur den Master.
+- **Fern-Support-Shell: openssh-server wird installiert, Verfügbarkeit ehrlich gemeldet.** Die
+  Installation und die Updates (`install.sh`, `post-update.sh`, `stack-update.sh`) ziehen jetzt
+  `openssh-server` mit; die Installation aktiviert den SSH-Dienst (`enable --now ssh`). Der
+  Support-Tunnel prüft nativ ehrlich, ob ein sshd auf Port 22 lauscht (über `/proc/net/tcp`), statt sich
+  auf die Einstellung zu verlassen; ein neues Feld `shellReason` (`sshd_not_listening`,
+  `local_user_disabled`, …) sagt im Installateur-Portal, warum keine Fern-Shell möglich ist.
+- **Sungrow: Betreiber-Leistungsgrenze `sungrow.maxPowerW`.** Neue Beta-Einstellung („Maximale
+  Akku-Leistung") begrenzt die von DVhub vorgegebene Lade-/Entladeleistung für ALLE Quellen (EOS,
+  Regeln, §14a, Netzanschluss, Hand-Sollwert) — sie wirkt im Aktuator als Kleinstwert aus
+  Geräte-Nennleistung (bei zwei WR die Summe beider BDC), Profil-Grenze und Betreiber-Vorgabe. Leer/0 =
+  die Geräte-Nennleistung gilt. Nützlich zur vorsichtigen Inbetriebnahme.
+- **Sungrow zwei WR: Netzstrom-im-Akku-Zähler und Akkukapazität für beide Akkus.** Der Netzstrom-Zähler
+  rechnet bei aktiver Aggregation mit der **Systemkapazität = Summe beider Akkus** (Hauptanlage +
+  `sungrow.secondInverter.batteryCapacityWh`) und dem System-SoC; ist die Zweit-Kapazität nicht
+  eingetragen, gilt die Summe als unbekannt (keine Kappung, nichts abbuchen — Sperre bleibt im Zweifel
+  an). Neue Einstellungen unter „Sungrow-Akkusteuerung" (Beta): Adresse des zweiten WR, „Werte zur
+  Systemsumme zusammenzählen" und die Akkukapazität des zweiten WR. DVhub liest die Akkukapazität beider
+  WR aus Register 5639 und zeigt sie als **Vorschlag** (Leitstand/Installateur-Portal) an — sie wird
+  nicht automatisch gesetzt.
+- **Sungrow: zwei WR im Master/Slave-Parallelbetrieb (Beta).** Laut Sungrow-Doku V1.1.9/V1.1.11
+  (Energy-Management sowie Einspeise-/Wirkleistungsbegrenzung) werden die Steuerregister
+  (EMS-Modus 13050, Befehl 13051, Leistung 13052, Herzschlag 13080) im Parallelbetrieb **nur an den
+  Master** geschrieben; der Master verteilt Laden/Entladen intern auf den Slave. DVhub steuert daher
+  weiterhin ausschließlich den Master (Verbindung `victron.*` = der WR mit dem Smart Meter). Ein
+  zweiter Schreibpfad würde gegen die Master-Koordination arbeiten und ist bewusst nicht gebaut.
+  Optional lässt sich der zweite WR über `sungrow.secondInverter.host` (Port 502, Unit-ID 1)
+  **nur lesend** anbinden (eigener Modbus-Pool, kein Schreibzugriff); Netz und Last liefert der
+  einzige Zähler am Master als System-Werte. Erst wenn am Gerät bestätigt ist, dass der Master die
+  System-Summen *nicht* meldet, zählt `sungrow.secondInverter.aggregateTelemetry` PV, Akku-Leistung
+  und Leistungsgrenze beider WR für den Regler zusammen. Standard aus — ohne zweite Verbindung
+  arbeitet der Einzel-WR-Pfad unverändert wie bisher. Der Kundentest (1.0.11-dev) bestätigte: der
+  Master meldet **nicht** die System-Summen (Slave trug 2,1–2,4 kW, Master-Akku 0 W), daher ist die
+  Aggregation bei zwei WR nötig und richtig. Mit aktiver Aggregation zeigt `/api/status` jetzt die
+  Slave-Werte (ohne LAN-IP) und die System-Summen (`sungrowSystemPvW/BatteryW/LoadW`), und die
+  angezeigte/telemetrische **Hauslast** wird auf die System-Last korrigiert
+  (`Last_System = Last_Master + Slave-PV − Slave-Akku`), weil der einzige Zähler am Master die
+  Slave-Leistung nicht als Hausverbrauch sieht.
+
+## [1.0.10] - 2026-11-13
+
+Release nach gut einer Woche; genau dieser Stand lief vorher im Echtbetrieb auf der eigenen Anlage. Überblick nach
+Themen — die Einzelheiten stehen in den Einträgen darunter:
+
+- **EOS:** DVhub liefert das DVhub-EOS aus (Akkudoktor-EOS `main` plus die offenen PRs, die DVhub braucht) statt
+  Vanilla v0.4.0rc3, **immer mit aktivem Rust-Kern** — die Optimierung rechnet bitgleich, aber rund 25-mal schneller,
+  auch auf kleinen Geräten. EOS plant mit der Netzanschlussgrenze (Schwellen-Peak-Shaving), der Steuerzeitraum kann
+  „automatisch“ bis zur nächsten Frist reichen, Generationen sind eine Auswahl (Standard 200), das E-Auto-Ziel gilt
+  erst zur Abfahrt. Der EOS-Fernbetrieb (Rechendienst) entfällt.
+- **Netzanschluss:** DVhub hält die Bezugsgrenze des Hausanschlusses ein (ab Werk aus). Zuerst gibt die
+  Akku-Netzladung nach und der Akku deckt mit — jetzt auch ohne Victron —, erst dann werden Wallbox, Heizstab und
+  EEBUS-Geräte gekürzt. Mit Victron gilt zusätzlich die Eingangsgrenze aus dem GX (Reg. 2714), die strengere gewinnt.
+- **Not-Halt „als ob DVhub aus ist“:** DVhubs eigene Vorgaben werden einmal zurückgenommen, danach schreibt DVhub
+  nichts mehr — auch nicht §51, Direktvermarkter-Abregelung, §14a oder SoC-Boden. Der Netz-Sollwert bleibt, wie er
+  ist.
+- **§14a:** Aufteilung nach aktuellem Bedarf statt nach Nennleistung, der Hausspeicher deckt zuerst, EEBUS-Geräte
+  laufen nach Neustart oder Störung wieder an.
+- **E-Auto:** Wochenplan mit Mindest- und Max-Ladestand, eine Zeile je Abfahrtstag, neue Bedienung (Karten, Blatt,
+  „Pendeln Mo–Fr“); Einmal-Ziel als Knopf mit Dialog, auch ohne Wochenplan; einphasiges Laden; der Heimweg zählt
+  nicht mehr.
+- **Neu:** LUOX/Lumenaza als Datenquelle (Day-Ahead aus dem Kundenportal, Abgleich der Direktvermarktung), Sungrow
+  SH Hybrid (Beta, nur Bleeding Edge), Netzspannung und -frequenz zentral (Kachel „Netz · Zähler“, Datenspende nur
+  mit eigener Zustimmung), zweite Victron-Anlage: Einspeisen aus Akku 2 (Beta); die Oberfläche lädt nach einem Update
+  selbst neu.
+- **Updates und Lizenz:** Bleeding Edge auch für Paket-Installationen; ein Lizenz-Umzug auf eine andere Box wird
+  gemeldet, ein kopierter Lizenzzustand bindet nicht mehr von selbst.
+- **Historie:** eigene Messwerte zuerst, der VRM-Import füllt nur auf.
+- **Robustheit:** Modbus (Zeitüberschreitungen, zu kurze Antworten, Lese-Anfragen), kaputte `config.json` wird
+  gesichert statt überschrieben, der Lese-Modus schreibt wirklich nichts; dazu die Befunde mehrerer Prüfrunden
+  (Abschnitt „Behoben“).
+
 ### Neu
 
 - **1.0.11: Preisschwanz für EOS aus der Residuallast-Prognose von dvhub.online.** Hinter den festen
@@ -99,7 +260,7 @@ verweist hierher.
   neue Abhängigkeit gelesen) und Tagessummen der Einspeisung des Erzeugervertrags in die Datenbank, Bericht neben
   DVhubs eigener Einspeisung × Day-Ahead — nur zum Abgleich, DVhub steuert nicht danach. **Lumenaza-Partner-API**
   (OAuth2 Client Credentials) vorbereitet und ab Werk aus; eingeschaltet mit Zugangsdaten geht sie bei Preisen und
-  Einspeisung vor dem Portal.
+  Einspeisung vor dem Portal. LUOX liefert nur die Preiszone DE-LU; bei einer anderen Zone gilt die öffentliche Quelle.
 - **EOS-Schwellen-Peak-Shaving: Akku deckt in gehaltenen Slots den Bezug über der Netzanschlussgrenze.** Liefert der
   EOS-Plan an seinen Akku-Instruktionen `peak_shaving_threshold_w` (unser EOS mit der Netzbezugs-Grenze, PR D; Vanilla
   v0.4.0rc3 kennt das Feld nicht), deckelt DVhub in Slots, in denen der Plan den Akku hält („Akku halten“) oder aus dem
@@ -523,6 +684,8 @@ verweist hierher.
 - **Lizenz-Link zeigt auf dvhub.de.** „Noch keine Lizenz? Jetzt bestellen.“ in den Einstellungen führt jetzt auf
   https://dvhub.de/#preise statt auf den abgeschalteten Test-Shop shop.dvhub.de. Das README nennt dieselbe Adresse und
   führt die Wallbox-Steuerung (Ladeplan nach EOS, „Sofort laden“) als Pro-Funktion, wie sie im Code schon gesperrt ist.
+- **README und Bilder erneuert.** Oben Free & Pro mit Preisen und Links auf dvhub.de, Funktionen mit Free/Pro, neue
+  Bilder (hell und dunkel, synthetische Daten), neues Logo; das alte Logo ist entfernt.
 
 ### Behoben
 

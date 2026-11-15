@@ -1446,6 +1446,249 @@ function buildFieldDefinitions() {
       default: 30,
       help: 'Nur bei External EMS: so lange wartet der Wechselrichter auf die nächste Meldung von DVhub, bevor er selbst auf Eigenverbrauch zurückschaltet. DVhub meldet sich alle 10 s; 30 s (Standard) verkraftet zwei verpasste Meldungen, ohne dass der Wechselrichter zurückfällt, und beendet einen Lade- oder Entladebefehl nach einem Ausfall spätestens nach einer halben Minute. Erlaubt 20–300 s.'
     },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.maxPowerW',
+      label: 'Maximale Akku-Leistung (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Obergrenze für die Lade-/Entladeleistung, die DVhub dem Wechselrichter vorgibt — für ALLE Quellen (EOS, Regeln, §14a, Netzanschluss, Hand-Sollwert). Leer/0 = die Nennleistung des Geräts (bei zwei WR die Summe beider) gilt. Nützlich zur Inbetriebnahme, um die Leistung vorsichtig zu begrenzen. Es gilt immer der kleinste Wert aus Geräte-Nennleistung und dieser Vorgabe.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.socFloorBufferPct',
+      label: 'Puffer über Geräte-Untergrenze (%)',
+      type: 'number',
+      min: 0,
+      max: 50,
+      step: 1,
+      default: 1,
+      help: 'Abstand, den DVhub beim Entladen über der geräteeigenen SoC-Untergrenze des Wechselrichters hält. Sungrow meldet den Ladestand fensterrelativ (gemeldet 0 % = die eigene Untergrenze, z. B. 10 %). Entlädt DVhub bis genau dorthin, lädt der Wechselrichter von selbst aus dem Netz nach (Notladung). Mit dem Standard 1 % hält DVhub einen Prozentpunkt darüber (effektiver Entlade-Boden = max(harter Boden, Geräte-Untergrenze + Puffer)). 0 = kein Puffer. Gilt für beide Wechselrichter und auch für die EOS-Planung.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.regulateEveryMs',
+      label: 'Regeltakt',
+      type: 'select',
+      default: 0,
+      options: [
+        { value: 0, label: 'Automatisch (1–5 s nach Antwortzeit)' },
+        { value: 1000, label: '1 Sekunde' },
+        { value: 2000, label: '2 Sekunden' },
+        { value: 5000, label: '5 Sekunden' }
+      ],
+      help: 'Wie oft DVhub die Akku-Vorgabe an den Wechselrichter nachführt. Automatisch (Standard): DVhub wählt 1–5 s anhand der gemessenen Modbus-Antwortzeit. Fest 1 s regelt am schnellsten auf Lastsprünge (mit den Block-Reads bleibt die Modbus-Last niedrig); 5 s ist als Dauertakt träge (das Netz schwankt bei Lastsprüngen). Die Modbus-Gesundheit in der Wechselrichter-Kachel zeigt, ob der gewählte Takt wirklich gehalten wird (wirksamer Takt vs. Antwortzeit).'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.regulateEveryMs',
+      label: 'Regeltakt zweiter Wechselrichter',
+      type: 'select',
+      default: 0,
+      options: [
+        { value: 0, label: 'Wie erster Wechselrichter' },
+        { value: 1000, label: '1 Sekunde' },
+        { value: 2000, label: '2 Sekunden' },
+        { value: 5000, label: '5 Sekunden' }
+      ],
+      help: 'Optional ein eigener Regeltakt für den zweiten (Slave-)Wechselrichter. „Wie erster Wechselrichter" (Standard) übernimmt den oben gewählten Takt. Nur nötig, wenn der zweite Wechselrichter einen anderen Takt braucht als der erste.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.heartbeatWriteFc',
+      label: 'Herzschlag-Schreibfunktion (13080)',
+      type: 'select',
+      default: 'auto',
+      options: [
+        { value: 'auto', label: 'Automatisch (erst FC 06, sonst FC 16)' },
+        { value: '6', label: 'FC 06 (Write Single)' },
+        { value: '16', label: 'FC 16 (Write Multiple)' }
+      ],
+      help: 'Nur bei External EMS: wie DVhub das Herzschlag-Register 13080 schreibt. Manche Sungrow (u. a. SH10RT-20) übernehmen 13080 nur per „Write Multiple" (FC 16). Automatisch (Standard): DVhub versucht beim ersten Mal FC 06 und bei Nichtübernahme einmal FC 16 und merkt sich, was funktioniert. Übernimmt der Wechselrichter gar keinen Wert, bricht DVhub External EMS sicher ab.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.acceptDeviceHeartbeatS',
+      label: 'Letzter Ausweg: geräteeigene Herzschlag-Frist akzeptieren (s)',
+      type: 'number',
+      min: 0,
+      max: 600,
+      step: 10,
+      help: 'Nur setzen, wenn der Wechselrichter den Herzschlag-Wert partout nicht übernimmt (nach Rücksprache). Dann fährt DVhub External EMS mit der geräteeigenen Frist, solange sie ≤ diesem Wert ist — der Rückfall-Schutz greift bei einem Ausfall dann erst nach dieser (längeren) Frist, nicht nach 30 s. 0/leer = aus (DVhub bricht bei Nichtübernahme sicher ab).'
+    },
+
+    // Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (T-0422, Feldabnahme). Der Master mit dem Smart Meter
+    // regelt (bestehende Verbindung victron.*); der zweite WR wird NUR gelesen. host leer = ein WR wie bisher.
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.host',
+      label: 'Zweiter Sungrow-WR: Adresse (Master/Slave-Parallelbetrieb)',
+      type: 'text',
+      help: 'Nur für zwei Sungrow-Hybrid-WR im Master/Slave-Verbund: IP/Name des ZWEITEN WR (Slave). Der erste WR (der mit dem Smart Meter = Master) bleibt die normale Verbindung oben und regelt weiter; der zweite WR wird nur ausgelesen (nie gesteuert — der Master verteilt die Vorgabe intern). Leer = ein WR wie bisher.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.strategyCharge',
+      label: 'Aufteilung beim Laden',
+      type: 'select',
+      default: 'soc-balance',
+      options: [
+        { value: 'soc-balance', label: 'Ladestand ausgleichen (Standard)' },
+        { value: 'by-capacity', label: 'Nach Akku-Kapazität' },
+        { value: 'by-power', label: 'Nach max. Ladeleistung' },
+        { value: 'ratio', label: 'Festes Verhältnis (Master-Anteil %)' },
+        { value: 'priority-master', label: 'Master zuerst, Rest Slave' },
+        { value: 'priority-slave', label: 'Slave zuerst, Rest Master' },
+        { value: 'master-only', label: 'Nur Master (Slave im Eigenverbrauch)' }
+      ],
+      help: 'Wie DVhub eine Lade-Vorgabe auf beide WR verteilt (jeder WR wird einzeln gesteuert, weil der Master nach Kundenaussage nicht verteilt). „Ladestand ausgleichen" (Standard) füllt den WR mit mehr freiem Platz stärker; „Nach Akku-Kapazität" im Verhältnis der Kapazitäten; „Nach max. Ladeleistung" im Verhältnis der Leistungsgrenzen; „Festes Verhältnis" nach dem eingestellten Master-Anteil; „Master/Slave zuerst" lastet erst den einen voll aus, der Rest geht an den anderen; „Nur Master" lässt den Slave im Eigenverbrauch (Modus 0). Jeder WR hält seine eigene Grenze; der Überlauf geht an den anderen. Scheitert EINER (Herzschlag, Rücklesen, fremder Modus), gehen BEIDE sicher in den Eigenverbrauch zurück.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.strategyDischarge',
+      label: 'Aufteilung beim Entladen',
+      type: 'select',
+      default: 'soc-balance',
+      options: [
+        { value: 'soc-balance', label: 'Ladestand ausgleichen (Standard)' },
+        { value: 'by-capacity', label: 'Nach Akku-Kapazität' },
+        { value: 'by-power', label: 'Nach max. Entladeleistung' },
+        { value: 'ratio', label: 'Festes Verhältnis (Master-Anteil %)' },
+        { value: 'priority-master', label: 'Master zuerst, Rest Slave' },
+        { value: 'priority-slave', label: 'Slave zuerst, Rest Master' },
+        { value: 'master-only', label: 'Nur Master (Slave im Eigenverbrauch)' }
+      ],
+      help: 'Wie DVhub eine Entlade-Vorgabe auf beide WR verteilt. „Ladestand ausgleichen" (Standard) entlädt den WR mit mehr nutzbarer Reserve stärker (gleicht die Ladestände an). Übrige Werte wie beim Laden. Leer/nicht gesetzt = wie beim Laden.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.ratioMasterPct',
+      label: 'Master-Anteil bei „Festes Verhältnis" (%)',
+      type: 'number',
+      default: 50,
+      min: 0,
+      max: 100,
+      help: 'Nur für die Strategie „Festes Verhältnis": Anteil der Vorgabe, den der Master übernimmt (Rest der Slave). 50 = je zur Hälfte. Jeder WR hält seine Grenze; der Überlauf geht an den anderen.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.aggregateTelemetry',
+      label: 'Zweiter WR: Werte zur Systemsumme zusammenzählen',
+      type: 'boolean',
+      help: 'Nur einschalten, wenn am Gerät geprüft ist, dass der Master NICHT bereits die Summe beider WR meldet (jeder WR meldet dann nur seine eigene PV-/Akku-Leistung). An = DVhub zählt PV, Akku-Leistung, SoC und Hauslast beider WR zusammen und nimmt die Summe beider BDC-Nennleistungen als Leistungsgrenze. Aus = nur die Werte des Masters.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.batteryCapacityWh',
+      label: 'Akkukapazität zweiter WR (Wh)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Nutzbare Akkukapazität des ZWEITEN WR. Zusammen mit der Kapazität der Hauptanlage (Optimierer) bildet sie die Systemkapazität für den Netzstrom-im-Akku-Zähler und den kapazitätsgewichteten System-SoC. DVhub liest die Kapazität beider WR aus Register 5639 und zeigt sie als Vorschlag (Leitstand/Installateur-Portal) an — bitte den gelesenen Wert prüfen und hier eintragen (nicht automatisch gesetzt).'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.maxChargeW',
+      label: 'Max. Ladeleistung zweiter WR (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Maximale Akku-Ladeleistung des ZWEITEN WR (Datenblatt/HA-Konfig, z. B. 5000 W). Die Lade-Leistungsgrenze des Systems ist die Summe aus Haupt- und zweitem WR (begrenzt durch Nennleistung und sungrow.maxPowerW). Leer/0 = der zweite WR zählt nicht zur Ladegrenze.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.maxDischargeW',
+      label: 'Max. Entladeleistung zweiter WR (W)',
+      type: 'number',
+      min: 0,
+      step: 100,
+      help: 'Maximale Akku-Entladeleistung des ZWEITEN WR. Die Entlade-Leistungsgrenze des Systems ist die Summe aus Haupt- und zweitem WR (begrenzt durch Nennleistung und sungrow.maxPowerW). Leer/0 = der zweite WR zählt nicht zur Entladegrenze.'
+    },
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.pvKwp',
+      label: 'PV-Größe zweiter WR (kWp)',
+      type: 'number',
+      min: 0,
+      step: 0.1,
+      help: 'Installierte PV-Leistung am ZWEITEN WR (kWp). Für die Prognose zählt DVhub sie zur PV-Gesamtgröße dazu; den Ist-Ertrag je WR liest DVhub aus Register 5017. Leer/0 = keine eigene PV am zweiten WR.'
+    },
 
     // B-1112 Stufe 2 — Nulleinspeisung bei Abregelung (Christin 2026-07-19).
     // Wirkt nur auf Profilen, die dvControl.zeroFeedIn deklarieren (Fronius);
@@ -1534,14 +1777,15 @@ function buildFieldDefinitions() {
       groupLabel: 'Fern-Support · Voreinstellungen',
       groupDescription: 'Optionaler, vom Kunden kontrollierter Support-Zugang.',
       path: 'support.tunnel.autoCloseMin',
-      label: 'Tunnel-Auto-Schließung (Minuten)',
+      label: 'Standard-Tunnel-Dauer (Minuten)',
       type: 'select',
       options: [
         { value: 30, label: '30 Minuten' },
         { value: 60, label: '60 Minuten (Standard)' },
-        { value: 120, label: '120 Minuten' }
+        { value: 120, label: '120 Minuten' },
+        { value: 240, label: '240 Minuten (4 Stunden)' }
       ],
-      help: 'Spätestens nach dieser Zeit schließt sich ein geöffneter Support-Tunnel automatisch wieder. Du kannst ihn jederzeit vorher manuell beenden.'
+      help: 'Standard-Laufzeit eines Support-Tunnels, wenn beim Öffnen KEINE Dauer gewählt wurde. Wird der Tunnel über das Support-Portal mit einer Dauer geöffnet (30 min / 1 h / 2 h / 4 h), gilt immer diese gewählte Dauer. Du kannst den Tunnel jederzeit vorher manuell beenden.'
     },
 
     {

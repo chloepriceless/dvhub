@@ -53,7 +53,8 @@ export function sungrowImage(over = {}) {
   set(13010, le32(2300));                         // Einspeiseleistung +2300 W (positiv = Einspeisung)
   const holding = new Map([
     [wire(13050), 0], [wire(13051), 0xcc], [wire(13052), 0],     // Self-consumption, Stopp
-    [wire(13080), 20],                                            // External-EMS-Herzschlag: Werkseinstellung 20 s
+    [wire(13080), 20], [wire(13081), 0xffff],                     // External-EMS-Herzschlag 20 s; 2. Wort 0xFFFF (Feld #3, Menge-2-Lesung)
+    [wire(33047), 1060], [wire(33048), 1000], [wire(33049), 1000], // Gerätegrenzen ×10: Laden 10,6 kW, Entladen 10 kW, Kapazität 10 kWh
     [wire(13074), 5000], [wire(13087), 0xaa], [wire(13088), 700] // Installateur: 5 kW, an, 70 %
   ]);
   for (const [k, v] of Object.entries(over.input || {})) input.set(Number(k), v);
@@ -63,7 +64,13 @@ export function sungrowImage(over = {}) {
   return { input, holding };
 }
 
-export function mockSungrow(image, { failWriteAt = null, ignoreWriteAt = null, applyThenFailAt = null, failReadOnce = null, onRead = null } = {}) {
+// Draht-Adresse des External-EMS-Herzschlags (Doku 13080). Feld #3 (am Gerät gemessen): mit Menge 1 gelesen
+// liefert 13080 IMMER einen falschen Festwert (am SH10RT-20: 600), erst ab Menge 2 kommt der echte Countdown,
+// das zweite Wort ist 0xFFFF (nicht belegtes Register). Das Abbild modelliert das, damit ein Menge-1-Lesen im
+// Code auffällt (falscher Wert) und nur das Menge-2-Lesen den echten Wert sieht.
+const HB_ADDR = wire(13080);
+
+export function mockSungrow(image, { failWriteAt = null, ignoreWriteAt = null, applyThenFailAt = null, failReadOnce = null, failReadAt = null, onRead = null, hbQty1Bogus = 600, hbReadDelta = 0 } = {}) {
   let readFailed = false;
   return {
     type: 'modbus',
@@ -72,12 +79,26 @@ export function mockSungrow(image, { failWriteAt = null, ignoreWriteAt = null, a
     async mbRequest(conf) {
       const fc = Number(conf.fc);
       const img = fc === 4 ? image.input : image.holding;
-      this.reads.push({ fc, address: Number(conf.address), quantity: Number(conf.quantity) });
-      if (onRead) onRead({ fc, address: Number(conf.address) });
-      if (failReadOnce === Number(conf.address) && !readFailed) { readFailed = true; throw new Error('modbus timeout'); }
+      const address = Number(conf.address);
+      const quantity = Number(conf.quantity ?? 1);
+      this.reads.push({ fc, address, quantity });
+      if (onRead) onRead({ fc, address });
+      // Dauerhafter „modbus exception 4" (Geräte-/Slave-Fehler, Feld 15.11.) auf einer Adresse — readDevice wiederholt
+      // einmal (retryable) und scheitert dann (ems_read_error). Für den C6-Test (Aufgabe 3).
+      if (failReadAt === address) throw new Error('modbus exception 4');
+      if (failReadOnce === address && !readFailed) { readFailed = true; throw new Error('modbus timeout'); }
+      // Feld #3: Herzschlag 13080 nur ab Menge 2 echt; Menge 1 = Festwert. Fehlt das Register, Exception 2
+      // (Firmware zu alt) — wie jedes fehlende Register.
+      if (fc === 3 && address === HB_ADDR) {
+        if (quantity <= 1) return [hbQty1Bogus & 0xffff];
+        if (!image.holding.has(HB_ADDR)) throw new Error('modbus exception 2');
+        const shown = Math.max(0, (image.holding.get(HB_ADDR) & 0xffff) - hbReadDelta);
+        const regs = [shown & 0xffff, 0xffff];
+        return regs.slice(0, quantity);
+      }
       const regs = [];
-      for (let i = 0; i < Number(conf.quantity ?? 1); i += 1) {
-        const a = Number(conf.address) + i;
+      for (let i = 0; i < quantity; i += 1) {
+        const a = address + i;
         if (!img.has(a)) throw new Error('modbus exception 2');
         regs.push(img.get(a));
       }

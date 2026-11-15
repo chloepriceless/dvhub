@@ -13,6 +13,11 @@
 - dvhub/BRAND_GUIDELINES.md
 # Entwickler-Diagnose, von keinem Modul geladen
 - dvhub/scripts/
+# Ausnahme (M3a): die Sungrow-Absicherung läuft als systemd ExecStopPost / Watchdog-Timer auf der Box — diese
+# beiden Skripte MÜSSEN im Paket sein, sonst zeigen Drop-in/Timer auf eine fehlende Datei. Ihre Importe liegen
+# unter dvhub/ (mitverpackt).
++ dvhub/scripts/sungrow-forced-release.mjs
++ dvhub/scripts/sungrow-forced-watchdog.mjs
 # Python-Testsuite der Prognose (die Bridge selbst wird gebraucht)
 - dvhub/services/python-bridge/scripts/tests/
 # EEBUS: Quellen bleiben (C-Fassung und Architekturen ohne vorgebautes Binary
@@ -44,6 +49,8 @@
 + support-provision.sh
 + eebus-provision.sh
 + node-runtime-provision.sh
++ clock-provision.sh
++ sungrow-provision.sh
 + pg-write-tuning.sh
 + pkg-maintain.sh
 + stack-update.sh

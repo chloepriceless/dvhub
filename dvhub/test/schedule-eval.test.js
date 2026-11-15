@@ -1181,6 +1181,45 @@ test('Akku halten: veraltete Hauslast → 0 (Eigenverbrauch), kein blinder Netzb
   assert.equal(Number(state.schedule.active.gridSetpointW.value), 0);
 });
 
+// --- M8 (Feld 16.11.): EOS-„Halten"/„Netzladen" aussetzen, solange der Netzstrom-Anteil im Akku gesperrt ist ---
+
+test('M8: gridShare gesperrt → EOS-Halten ausgesetzt, Eigenverbrauch statt Halten, Leitstand-Hinweis', async () => {
+  const { ctx, state, logs } = holdCtx({ load: 1500, pv: 200 });
+  ctx.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 2.19 }) };
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const gp = state.schedule.active.gridSetpointW;
+  assert.equal(gp.source, 'eos_grid_hold_suspended', 'Halten ausgesetzt');
+  assert.notEqual(Number(gp.value), 1000, 'nicht der Halte-Netzbezug (1000)');
+  assert.equal(Number(gp.value), 0, 'Eigenverbrauch (Standard-Sollwert 0)');
+  assert.equal(state.ctrl.eosGridShareSuspend.kind, 'hold');
+  assert.equal(state.ctrl.eosGridShareSuspend.gridKwh, 2.19);
+  assert.ok(logs.some((l) => l.event === 'eos_grid_hold_suspended'), 'Hinweis protokolliert');
+});
+
+test('M8: Sperre gelöst → EOS-Halten greift wieder', async () => {
+  const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
+  ctx.gridShare = { isLocked: () => false };
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold');
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), 1000);
+  assert.ok(!state.ctrl.eosGridShareSuspend, 'kein Aussetz-Hinweis mehr');
+});
+
+test('M8: gridShare gesperrt → EOS-Netzladen ebenfalls ausgesetzt (erzeugt den Anteil sonst neu)', async () => {
+  const { ctx, state } = makeCtx({ mutate: ({ state: st, cfg, ctx: c }) => {
+    st.victron.soc = 60; st.victron.selfConsumptionW = 1000; st.victron.pvTotalW = 0;
+    st.victron.fieldUpdatedAt = { ...(st.victron.fieldUpdatedAt || {}), selfConsumptionW: Date.now(), pvTotalW: Date.now() };
+    st.schedule.rules = [{ id: 'eos-charge', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: 3000, optimizer: 'eos', source: 'forecast_optimizer', autoManaged: true }];
+    cfg.optimizer = { enabled: true, allowGridCharge: true, allowGridDischarge: true };
+    c.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 1.5 }) };
+  } });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const gp = state.schedule.active.gridSetpointW;
+  assert.equal(gp.source, 'eos_grid_charge_suspended', 'Netzladen ausgesetzt');
+  assert.notEqual(Number(gp.value), 3000, 'nicht der geplante Netzbezug');
+  assert.equal(state.ctrl.eosGridShareSuspend.kind, 'charge');
+});
+
 // Entlade-Wächter (Gegenprüfung 415a2f25): der Halte-Zweig meldet sich selbst
 // in state.ctrl.eosGridHold — auch wenn der Sollwert danach umgeschrieben wird
 // (negativer Preis), und mit `known`, damit der Wächter „Last unbekannt →
@@ -1282,4 +1321,82 @@ test('§14a-Speicherbedarf: ohne Sollwert-Ziel unbekannt (nicht 0)', async () =>
   state.ctrl.p14aBatteryWantW = { w: 0, at: 1 };
   await createScheduleEvaluator(ctx).evaluateSchedule();
   assert.equal(state.ctrl.p14aBatteryWantW, null);
+});
+
+// --- Punkt 1: Netzlade-Tor — Bezug bis zur Hauslast ist kein Netzladen (Sungrow) ---------------------
+
+function sungrowGateCtx({ allowGridCharge = false, loadW = 2000, pvW = 0, fresh = true, emulate = 'sungrow-ems' } = {}) {
+  const calls = [];
+  const now = Date.now();
+  const r = makeCtx({
+    mutate: ({ state, cfg, ctx }) => {
+      cfg.controlWrite.gridSetpointW = { enabled: true, emulate, keepaliveMs: 30000 };
+      cfg.optimizer = { enabled: false, allowGridCharge, allowGridDischarge: true };
+      cfg.victron = { host: 'x', port: 502, unitId: 1, telemetryMaxAgeMs: 90000 };
+      state.schedule.rules = [];
+      state.victron.selfConsumptionW = loadW;
+      state.victron.pvTotalW = pvW;
+      state.victron.pvPowerW = pvW;
+      state.victron.soc = 50;
+      state.victron.fieldUpdatedAt = fresh
+        ? { soc: now, selfConsumptionW: now, pvTotalW: now }
+        : { soc: now, selfConsumptionW: now - 200000, pvTotalW: now - 200000 };
+      ctx.sungrowEms = {
+        applySetpoint: (v, s, opts) => { calls.push({ v, s, opts }); return { ok: true }; },
+        revoke: () => ({ ok: true }), acceptSeq: () => 0, tick: () => ({ ok: true }), emergencyStop: () => ({ ok: true }),
+      };
+    }
+  });
+  return { ...r, calls, evaluator: createScheduleEvaluator(r.ctx) };
+}
+
+test('Netzlade-Tor: +1000 bei Last 2000 / PV 0 → 1000 durch, noGridCharge=true (deckt nur die Last)', async () => {
+  const g = sungrowGateCtx({ loadW: 2000, pvW: 0 });
+  const res = await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(res.ok, true);
+  assert.equal(g.calls.length, 1);
+  assert.equal(g.calls[0].v, 1000);                 // min(1000, 2000−300) = 1000
+  assert.equal(g.calls[0].opts.noGridCharge, true);
+  assert.equal(findLog(g.logs, 'control_write_rejected').length, 0);
+});
+
+test('Netzlade-Tor: +1000 bei Last 600 → auf ~600−Puffer (300) gedeckelt, Log grid_charge_capped_to_load', async () => {
+  const g = sungrowGateCtx({ loadW: 600, pvW: 0 });
+  await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(g.calls[0].v, 300);                  // 600 − 300 Puffer
+  assert.equal(g.calls[0].opts.noGridCharge, true);
+  const capped = findLog(g.logs, 'grid_charge_capped_to_load');
+  assert.equal(capped.length, 1);
+  assert.deepEqual([capped[0].payload.requested, capped[0].payload.cappedTo, capped[0].payload.loadW], [1000, 300, 600]);
+});
+
+test('Netzlade-Tor: +1000 ohne frische Last → abgelehnt (grid_charge_not_allowed), kein Write', async () => {
+  const g = sungrowGateCtx({ loadW: 2000, pvW: 0, fresh: false });
+  const res = await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'grid_charge_not_allowed');
+  assert.equal(g.calls.length, 0);
+});
+
+test('Netzlade-Tor: allowGridCharge=true → unverändert durch, kein noGridCharge-Zwang', async () => {
+  const g = sungrowGateCtx({ allowGridCharge: true, loadW: 600, pvW: 0 });
+  await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(g.calls[0].v, 1000);                 // nicht gedeckelt
+  assert.equal(g.calls[0].opts.noGridCharge, false);
+});
+
+test('Netzlade-Tor: Victron (kein Sungrow-EMS) → positiver Sollwert weiter abgelehnt', async () => {
+  const g = sungrowGateCtx({ loadW: 2000, pvW: 0, emulate: null });
+  const res = await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'grid_charge_not_allowed');
+});
+
+test('Netzlade-Tor (Punkt 4): Last 0 bei Netzbezug → als unbekannt behandelt, nicht auf 0 gedeckelt', async () => {
+  const g = sungrowGateCtx({ loadW: 0, pvW: 0 });
+  g.state.victron.gridImportW = 2000; // Netz bezieht → Last 0 ist unplausibel (Umschaltung/Slave fehlt)
+  const res = await g.evaluator.applyControlTarget('gridSetpointW', 1000, 'manual');
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'grid_charge_not_allowed'); // abgelehnt, NICHT auf 0 gedeckelt
+  assert.equal(g.calls.length, 0);
 });

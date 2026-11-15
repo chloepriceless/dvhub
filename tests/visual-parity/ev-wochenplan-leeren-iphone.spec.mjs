@@ -21,7 +21,12 @@ test.describe('E-Auto-Wochenplan am iPhone: Tag leeren', () => {
     await integrationsFlow(page, request, testInfo, { touchMin: 44 });
   });
 
-  test('Leitstand-Kachel: Mittwoch per Schalter heraus → Übernehmen schickt den Tag als nicht gesetzt', async ({ page, request }, testInfo) => {
+  test('Leitstand-Kachel: Mittwoch per Schalter heraus → Übernehmen schickt den Tag als nicht gesetzt', async ({ page, request, browserName }, testInfo) => {
+    // Playwright-WebKit unter Linux (GitHub-CI): In der Leitstand-Kachel kommt tap() nicht verlässlich als Klick an bzw.
+    // wartet bis zum Timeout auf „stabil“ — dreimal in Folge an wechselnden Knöpfen (Tag-CI v1.0.10, 13.11.2026), lokal
+    // im Playwright-Container nicht nachstellbar. Den Ablauf prüft der Desktop-Test (Chromium); auf macOS läuft dieser
+    // iPhone-Test weiter mit.
+    test.skip(process.platform === 'linux' && browserName === 'webkit', 'Linux-WebKit: tap() in der Leitstand-Kachel unzuverlässig');
     await tileFlow(page, request, testInfo, { touchMin: 44 });
   });
 });

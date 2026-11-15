@@ -8,6 +8,7 @@ import {
   buildTunnelArgs,
   resolveTunnelBinary,
   createSupportTunnel,
+  sshdListeningOnPort22,
   TTL_MIN_FLOOR,
   TTL_MIN_CEIL,
   TTL_MIN_DEFAULT,
@@ -194,6 +195,97 @@ test('open is idempotent while already open', () => {
   assert.equal(r2.alreadyOpen, true);
 });
 
+// --- Task G: Support-Tunnel-Zeitgeber (re-arm, Schließ-Protokoll, Update-Aufschub, Policy-Deckel) --------------
+function timerHarness() {
+  let seq = 0; const timers = new Map();
+  return {
+    setTimeout: (cb) => { const id = ++seq; timers.set(id, cb); return { id, unref() {} }; },
+    clearTimeout: (h) => { if (h && timers.has(h.id)) timers.delete(h.id); },
+    fireAll() { for (const [id, cb] of [...timers]) { timers.delete(id); cb(); } },
+    pending: () => timers.size,
+  };
+}
+
+test('G1: erneutes open() frischt den Schließ-Zeitgeber auf (refreshed), statt ihn nur zu ignorieren', () => {
+  const { ctx } = makeCtx();
+  const tm = timerHarness();
+  let t = 1_000_000;
+  const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
+  tun.open({ ttlMin: 30 }, 'a');
+  assert.equal(tm.pending(), 1, 'ein Auto-Schließ-Zeitgeber läuft');
+  t += 10 * 60 * 1000; // 10 min später
+  const r2 = tun.open({ ttlMin: 30 }, 'b');
+  assert.equal(r2.refreshed, true, 'erneutes open frischt auf');
+  assert.equal(tm.pending(), 1, 'genau ein Zeitgeber (alter abgebrochen, neuer gesetzt)');
+  // Die Frist beginnt von vorn: ~30 min Rest.
+  assert.ok(tun.status().ttlRemainingSec >= 29 * 60, `Rest ${tun.status().ttlRemainingSec}s`);
+});
+
+test('G2: jedes Schließen loggt Grund + openedAt + expiresAt', () => {
+  const { ctx, logs } = makeCtx();
+  const tm = timerHarness();
+  const t = 1_000_000;
+  const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
+  tun.open({ ttlMin: 30 }, 'christin');
+  tun.close('christin');
+  const closed = logs.find((l) => l.ev === 'support_tunnel_closed');
+  assert.equal(closed.data.reason, 'manual');
+  assert.equal(closed.data.openedAt, t);
+  assert.equal(closed.data.expiresAt, t + 30 * 60 * 1000);
+});
+
+test('M6: die im Portal gewählte Dauer gilt — 120 wird NICHT auf autoCloseMin 60 gedeckelt', () => {
+  const { ctx } = makeCtx(); // autoCloseMin: 60
+  const tm = timerHarness();
+  const t = 1_000_000;
+  const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
+  tun.open({ ttlMin: 120 }, 'christin'); // Portal wählte 2 h → 2 h gelten
+  assert.equal(tun.status().expiresAt, t + 120 * 60 * 1000, '2 h bleiben 2 h');
+});
+
+test('M6: 4 h (größte Portal-Option) bleibt 4 h; ohne Portal-Dauer gilt autoCloseMin als Standard', () => {
+  const { ctx } = makeCtx(); // autoCloseMin: 60
+  const tm = timerHarness();
+  const t = 2_000_000;
+  const mk = () => createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
+  const a = mk();
+  a.open({ ttlMin: 240 }, 'christin');
+  assert.equal(a.status().expiresAt, t + 240 * 60 * 1000, '4 h bleiben 4 h');
+  a.close('christin');
+  const b = mk();
+  b.open({}, 'christin'); // keine Dauer → autoCloseMin (60) als Standard
+  assert.equal(b.status().expiresAt, t + 60 * 60 * 1000, 'ohne Portal-Dauer: autoCloseMin 60');
+});
+
+test('M6: erneutes Öffnen verlängert auf die neue (längere) Dauer', () => {
+  const { ctx } = makeCtx();
+  const tm = timerHarness();
+  const t = 1_000_000;
+  const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), now: () => t, setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout });
+  tun.open({ ttlMin: 30 }, 'christin');
+  assert.equal(tun.status().expiresAt, t + 30 * 60 * 1000);
+  const r = tun.open({ ttlMin: 240 }, 'christin'); // nochmal öffnen mit längerer Dauer
+  assert.equal(r.refreshed, true);
+  assert.equal(tun.status().expiresAt, t + 240 * 60 * 1000, 'auf 4 h verlängert (nicht auf 60 gedeckelt)');
+});
+
+test('G4: Auto-Schließen während eines Updates wird aufgeschoben (Tunnel bleibt offen)', () => {
+  const { ctx, logs } = makeCtx();
+  const tm = timerHarness();
+  let updating = true;
+  const tun = createSupportTunnel(ctx, { fs: { existsSync: () => true, readFileSync: () => 'box-01' }, spawn: () => fakeProc(), setTimeout: tm.setTimeout, clearTimeout: tm.clearTimeout, isUpdateInProgress: () => updating });
+  tun.open({ ttlMin: 30 }, 'christin');
+  tm.fireAll(); // Auto-Schließ-Zeitgeber feuert — Update läuft → aufschieben
+  assert.ok(logs.some((l) => l.ev === 'support_tunnel_autoclose_deferred'), 'Aufschub protokolliert');
+  assert.equal(tun.status().open, true, 'Tunnel bleibt offen während des Updates');
+  assert.equal(tm.pending(), 1, 'Nachprüf-Zeitgeber gesetzt');
+  // Update fertig → nächster Nachprüf-Takt schließt.
+  updating = false;
+  tm.fireAll();
+  assert.equal(tun.status().open, false, 'nach dem Update schließt der Nachprüf-Takt');
+  assert.ok(logs.some((l) => l.ev === 'support_tunnel_closed' && l.data.reason === 'auto_close'));
+});
+
 test('unexpected process exit clears open state + audits', () => {
   const { ctx, logs } = makeCtx();
   const proc = fakeProc();
@@ -259,7 +351,7 @@ test('B7: liteStatus exposes only in-memory fields and NO uiToken', () => {
   const ls = tun.liteStatus();
   // recentChanges (2026-11-04): Fern-Support-Änderungen seit dem Öffnen,
   // nur bei offenem Tunnel (aus dem Speicher; die Datei einmal beim ersten Mal).
-  assert.deepEqual(Object.keys(ls).sort(), ['expiresAt', 'open', 'recentChanges', 'ttlRemainingSec']);
+  assert.deepEqual(Object.keys(ls).sort(), ['expiresAt', 'expiringSoon', 'open', 'recentChanges', 'ttlRemainingSec']);
   assert.equal(ls.open, false);
   assert.deepEqual(ls.recentChanges, []);
   assert.ok(!('uiToken' in ls), 'liteStatus must never leak the nonce');
@@ -367,6 +459,85 @@ test('Dienst-Modus: Öffnen schreibt den Auftrag und startet die Unit, Schließe
   assert.equal(fs.existsSync(path.join(sup, 'tunnel.json')), false);
   assert.equal(tun.status().open, false);
   assert.ok(logs.some((l) => l.ev === 'support_tunnel_opened') && logs.some((l) => l.ev === 'support_tunnel_closed'));
+});
+
+test('Dienst-Modus: externes Beenden der Unit wird mit Grund + Zeiten protokolliert (Feld 15.11.: Grund war nicht auffindbar)', async () => {
+  const { sup, ctx, logs } = realBox({ ports: [49120, 49121] });
+  const nowMs = 1_800_000_000_000;
+  const statePath = path.join(sup, 'tunnel-state.json');
+  const tun = createSupportTunnel(ctx, {
+    unitMode: () => true,
+    now: () => nowMs,
+    sleep: async () => {},
+    isAlive: (pid) => pid === 4242,
+    setTimeout: () => ({ unref() {} }),
+    clearTimeout: () => {},
+    execFile: (bin, args, opts, cb) => {
+      if (args[2] === 'start') fs.writeFileSync(statePath, JSON.stringify({ pid: 4242, startedAt: nowMs, expiresAt: nowMs + 30 * 60_000 }));
+      if (args[2] === 'stop') fs.rmSync(statePath, { force: true });
+      cb(null, '', '');
+    },
+  });
+  await tun.open({ ttlMin: 30 }, { ip: '127.0.0.1' });
+  assert.equal(tun.status().open, true);
+  // Die Unit beendet sich SELBST (Relay-Abbruch/ssh tot): Zustandsdatei weg, aber DVhub hat NICHT geschlossen.
+  fs.rmSync(statePath, { force: true });
+  fs.writeFileSync(path.join(sup, 'tunnel.log'), 'Error: remote port forwarding failed for listen port 49120\n');
+  const ls = tun.liteStatus();
+  assert.equal(ls.open, false);
+  const closed = logs.filter((l) => l.ev === 'support_tunnel_closed');
+  assert.equal(closed.length, 1, 'genau einmal „geschlossen" mit Grund protokolliert');
+  assert.equal(closed[0].d.reason, 'unit_exited');
+  assert.equal(closed[0].d.external, true);
+  assert.match(closed[0].d.detail, /remote port forwarding failed/);
+  assert.ok(Number.isFinite(closed[0].d.openedAt) && Number.isFinite(closed[0].d.expiresAt), 'openedAt/expiresAt mitprotokolliert');
+  // Ein weiterer Poll protokolliert NICHT erneut.
+  tun.status();
+  assert.equal(logs.filter((l) => l.ev === 'support_tunnel_closed').length, 1);
+});
+
+test('Dienst-Modus: Restzeit-Warnung (expiringSoon) und Ablauf wird als auto_close nachgezogen', async () => {
+  const { sup, ctx, logs } = realBox({ ports: [49120, 49121] });
+  let nowMs = 1_800_000_000_000;
+  const statePath = path.join(sup, 'tunnel-state.json');
+  const exp = nowMs + 30 * 60_000;
+  const tun = createSupportTunnel(ctx, {
+    unitMode: () => true, now: () => nowMs, sleep: async () => {}, isAlive: () => true,
+    setTimeout: () => ({ unref() {} }), clearTimeout: () => {},
+    execFile: (bin, args, opts, cb) => { if (args[2] === 'start') fs.writeFileSync(statePath, JSON.stringify({ pid: 4242, startedAt: nowMs, expiresAt: exp })); cb(null, '', ''); },
+  });
+  await tun.open({ ttlMin: 30 });
+  assert.equal(tun.liteStatus().expiringSoon, false);
+  // < 5 min Restzeit → Warnung in beiden Ansichten.
+  nowMs = exp - 4 * 60_000;
+  assert.equal(tun.liteStatus().expiringSoon, true);
+  assert.equal(tun.status().expiringSoon, true);
+  // Ablauf: Zustandsdatei abgelaufen → unitState null; der Wächter zieht auto_close nach.
+  nowMs = exp + 1000;
+  assert.equal(tun.liteStatus().open, false);
+  const closed = logs.filter((l) => l.ev === 'support_tunnel_closed' && l.d.reason === 'auto_close');
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0].d.external, true);
+});
+
+test('Dienst-Modus: Timer-auto_close + späteres Unit-Ende → nur EIN support_tunnel_closed (kein Doppel-Log)', async () => {
+  const { sup, ctx, logs } = realBox({ ports: [49120, 49121] });
+  const nowMs = 1_800_000_000_000;
+  const statePath = path.join(sup, 'tunnel-state.json');
+  const timers = [];
+  const tun = createSupportTunnel(ctx, {
+    unitMode: () => true, now: () => nowMs, sleep: async () => {}, isAlive: () => true,
+    setTimeout: (fn) => { timers.push(fn); return { unref() {} }; }, clearTimeout: () => {},
+    execFile: (bin, args, opts, cb) => { if (args[2] === 'start') fs.writeFileSync(statePath, JSON.stringify({ pid: 4242, startedAt: nowMs, expiresAt: nowMs + 30 * 60_000 })); cb(null, '', ''); },
+  });
+  await tun.open({ ttlMin: 30 });
+  // Auto-Close-Zeitgeber feuert, während die Unit noch läuft → ein auto_close.
+  timers.at(-1)();
+  assert.equal(logs.filter((l) => l.ev === 'support_tunnel_closed').length, 1);
+  // Danach endet die Unit wirklich → der Wächter darf NICHT erneut schließen.
+  fs.rmSync(statePath, { force: true });
+  tun.liteStatus();
+  assert.equal(logs.filter((l) => l.ev === 'support_tunnel_closed').length, 1, 'kein zweites Schließen-Log');
 });
 
 test('Dienst-Modus: lehnt das Relay ab, meldet open den Fehler aus dem Protokoll', async () => {
@@ -571,4 +742,52 @@ test('Prozess-Modus: spätes exit des alten Tunnels lässt die PID-Datei des neu
   tun.open({ ttlMin: 30 });
   spawned[0].emit('exit', null, 'SIGTERM');
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { pid: 5001 });
+});
+
+// --- Punkt 5: ehrliches shellAvailable (sshd auf :22) ---------------------------------
+
+const PROC_LISTEN_22 = 'sl  local_address rem_address   st\n   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1\n';
+const PROC_NO_LISTEN = 'sl  local_address rem_address   st\n   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1\n';
+
+test('sshdListeningOnPort22: LISTEN auf :22 → true, kein Listener → false, /proc fehlt → null', () => {
+  const listen = { readFileSync: (p) => (p === '/proc/net/tcp' ? PROC_LISTEN_22 : (() => { throw new Error('ENOENT'); })()) };
+  assert.equal(sshdListeningOnPort22(listen), true);
+  const none = { readFileSync: (p) => (p === '/proc/net/tcp' || p === '/proc/net/tcp6' ? PROC_NO_LISTEN : (() => { throw new Error('x'); })()) };
+  assert.equal(sshdListeningOnPort22(none), false);
+  const missing = { readFileSync: () => { throw new Error('ENOENT'); } };
+  assert.equal(sshdListeningOnPort22(missing), null);
+});
+
+function nativeShellTun(proc) {
+  const { ctx } = makeCtx();
+  const fsMock = {
+    existsSync: () => true,
+    readFileSync: (p) => {
+      if (p === '/proc/net/tcp') return proc;
+      if (p === '/proc/net/tcp6') return 'sl  local_address rem_address   st\n';
+      return 'box-01';
+    },
+  };
+  return createSupportTunnel(ctx, { unitMode: () => false, fs: fsMock });
+}
+
+test('Nativ: sshd lauscht auf :22 → shellAvailable true, kein Grund', () => {
+  const st = nativeShellTun(PROC_LISTEN_22).status();
+  assert.equal(st.shellAvailable, true);
+  assert.equal(st.shellReason, null);
+});
+
+test('Nativ: openssh-server fehlt/aus (kein Listener) → shellAvailable false, shellReason sshd_not_listening', () => {
+  const st = nativeShellTun(PROC_NO_LISTEN).status();
+  assert.equal(st.shellAvailable, false);
+  assert.equal(st.shellReason, 'sshd_not_listening');
+});
+
+test('Nativ: Login vom Kunden abgeschaltet → shellAvailable false, shellReason local_user_disabled', () => {
+  const { ctx } = makeCtx({ });
+  ctx.getCfg = () => ({ support: { relay: { host: 'h', port: 47821, user: 'u', shellPort: 49101, webPort: 49102 }, tunnel: { autoCloseMin: 60 }, localUser: { enabled: false } } });
+  const tun = createSupportTunnel(ctx, { unitMode: () => false, fs: { existsSync: () => true, readFileSync: (p) => (p.startsWith('/proc') ? PROC_LISTEN_22 : 'box-01') } });
+  const st = tun.status();
+  assert.equal(st.shellAvailable, false);
+  assert.equal(st.shellReason, 'local_user_disabled');
 });

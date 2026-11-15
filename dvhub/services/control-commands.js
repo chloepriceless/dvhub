@@ -66,6 +66,15 @@ export async function applyManualControlWrite(ctx, opts) {
   // Default/Regel zurück.
   if (clear === true) {
     delete state.schedule.manualOverride[target];
+    // Wettlauf nach clear (Ref 21e73f78, im Forced-Kontext): Der Sungrow-EMS-Aktuator hält den Sollwert in st.target
+    // und führt ihn in SEINEM eigenen schnellen Takt (sungrow-tick, 1–5 s) nach — der clear-Pfad löscht aber nur
+    // manualOverride[target]. Ohne Rücknahme re-applizierte der Tick nach dem Löschen noch Takte lang den ALTEN
+    // Override, bis der nächste volle Eval (~15 s) den Default setzt. Darum den gemerkten Sollwert hier sofort
+    // zurücknehmen. Im Dauer-Forced heißt das: Akku 0xCC (Modus 2 bleibt), der nächste Eval setzt den Default-Puffer.
+    // Nur für den EMS-Sollwert (gridSetpointW), best effort — das Löschen gilt immer.
+    if (target === 'gridSetpointW' && ctx.sungrowEms?.revoke) {
+      try { await ctx.sungrowEms.revoke('override_cleared'); } catch { /* Rücknahme best effort — Löschen gilt trotzdem */ }
+    }
     ctx.pushLog('control_override_cleared', { target }, actor || undefined);
     return { ok: true, status: 200, cleared: true, target };
   }

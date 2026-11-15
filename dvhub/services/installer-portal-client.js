@@ -31,6 +31,7 @@ import { readApplianceId, validateRelayPorts } from './support-tunnel.js';
 import { runtimeInfo } from '../runtime-info.js';
 import { buildVictronAlarmsPayload } from '../victron-alarms.js';
 import { isPrivateOrLoopbackHost } from './host-address.js';
+import { isReadOnlyMode } from '../read-only-guard.js';
 
 export const SIDECAR_NAME = 'installer-portal-client.json';
 // Vorgemerkte Abmeldung beim Portal (2026-10-15): war das Portal beim Trennen
@@ -114,6 +115,8 @@ export function buildSupportInfo(ctx) {
     capable: st.capable !== false,
     loginUser: st.loginUser || null,
     shellAvailable: st.shellAvailable !== false,
+    // Warum keine Fern-Shell (sshd_not_listening = openssh-server fehlt/aus, local_user_disabled, …).
+    shellReason: st.shellReason || null,
     shellPort: st.relay?.shellPort || null,
     webPort: st.relay?.webPort || null,
     open: st.open === true,
@@ -154,6 +157,7 @@ export function nextReportDay(lastReported, yesterday) {
 const isNum = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 const num2 = (v) => (isNum(v) ? Math.round(Number(v) * 100) / 100 : null);
 const num0 = (v) => (isNum(v) ? Math.round(Number(v)) : null);
+const isObj = (o) => o != null && typeof o === 'object' && !Array.isArray(o);
 
 // Tages- und Monats-Zusammenfassung → kompakter Bericht (nur Zahlen).
 // withMonth: nur beim NEUESTEN Tag. Die Monats-Zusammenfassung umfasst immer den
@@ -190,19 +194,278 @@ function proActive(ctx) {
   try { return ctx.licenseService?.isProActive?.() === true; } catch { return false; }
 }
 
+// Menschenlesbare Namen der Herstellerprofile fürs Portal. Unbekannte (neu im
+// hersteller/-Ordner abgelegte) Profile fallen auf die ID zurück — die ID ist
+// kein Geheimnis. Ohne Auswahl gilt der config-model-Default (victron).
+const MANUFACTURER_LABELS = {
+  victron: 'Victron',
+  'bridge-mqtt': 'Universal (MQTT-Bridge)',
+  'dvhub-mqtt': 'Universal (DVhub-MQTT: HA/Loxone)',
+  fronius: 'Fronius GEN24',
+  'deye-lv': 'Deye SUN-…SG04LP3 (LV, 3-phasig)',
+  sungrow: 'Sungrow SH Hybrid',
+};
+
+// Ausgewählter Provider/Hersteller (menschenlesbar) — nur Auswahl, kein Host.
+function buildProviderInfo(cfg) {
+  const id = (typeof cfg.manufacturer === 'string' && cfg.manufacturer) ? cfg.manufacturer : 'victron';
+  return { id, label: MANUFACTURER_LABELS[id] || id };
+}
+
+// Welcher Netzzähler die Netzmessung liefert — nur Quelle/Name, nie Host/Register.
+//   source  = AKTIV genutzte Netzmessung: 'profile' (Zähler am WR/GX aus dem
+//             Herstellerprofil, z. B. Victron-GX-Smart-Meter, Sungrow-Master) oder
+//             'bridge' (kommt über die MQTT-Bridge; Profile mit transport 'mqtt',
+//             d. h. bridge-mqtt/dvhub-mqtt, haben keinen eigenen Zähler).
+//             Abgeleitet am Transport, NICHT an cfg.meter — die Default-Config
+//             seedet immer einen meter-Block, auch für MQTT-Profile.
+//   mode    = vom Betreiber GEWÄHLTER Zähler-Selektor (cfg.meterSource.mode):
+//             'profile'|'modbus'|'mqtt'|'http'. Die externen Modi sind erst
+//             konfiguriert, der Datenpfad ist noch nicht aktiv (config-model.js:
+//             4987-4991) — darum getrennt von der aktiven `source` gemeldet.
+//   live    = frische gemessene Netzgröße (payload.meter.ok); ohne Snapshot null.
+function buildGridMeterInfo(cfg, payload) {
+  const ms = isObj(cfg.meterSource) ? cfg.meterSource : {};
+  const mode = (typeof ms.mode === 'string' && ms.mode) ? ms.mode : 'profile';
+  const bridgeTransport = cfg.victron?.transport === 'mqtt';
+  const source = bridgeTransport ? 'bridge' : 'profile';
+  const label = (typeof ms.label === 'string' && ms.label.trim()) ? ms.label.trim().slice(0, 80) : null;
+  const live = isObj(payload.meter) ? payload.meter.ok !== false : null;
+  return { source, mode, externalConfigured: mode !== 'profile', label, live };
+}
+
+// WIE DVhub die Anlage fährt — herstellerneutral aus Config (controlWrite/
+// dvControl) und Runtime abgeleitet:
+//   'sungrow-ems'        — External EMS (Modus 3) / Forced (Modus 2)
+//   'battery-regulation' — Akku-/Work-Mode-Abregelung (Fronius Zero-Feed-in, Deye)
+//   'ess-setpoint'       — Victron/generischer ESS-Netzsollwert
+//   'read-only'          — keine schreibende Steuerung konfiguriert
+// writes = DVhub schreibt aktiv (nicht read-only und nicht im Not-Halt).
+function buildControlModeInfo(cfg, ctrl, payload, v) {
+  const paused = ctrl.discretionaryWritesPaused === true;
+  const cw = isObj(cfg.controlWrite) ? cfg.controlWrite : {};
+  const dvc = isObj(cfg.dvControl) ? cfg.dvControl : {};
+  const setpointWritable = cw.gridSetpointW?.enabled === true;
+  const sungrowEmu = cw.gridSetpointW?.emulate === 'sungrow-ems';
+  const zeroFeedIn = dvc.zeroFeedIn?.enabled === true;
+  // Steuermodus an der Config festmachen (Quelle der Wahrheit), nicht am
+  // Runtime-ems — sonst bliebe nach einem Profilwechsel ein stehengebliebener
+  // sungrowEms-State als 'sungrow-ems' hängen. ems nur für die Detail-Werte.
+  const ems = isObj(payload.ctrl?.sungrowEms) ? payload.ctrl.sungrowEms
+    : (isObj(ctrl.sungrowEms) ? ctrl.sungrowEms : null);
+  const emsErr = typeof ems?.error === 'string' ? ems.error : '';
+
+  let kind; let detail = {};
+  if (sungrowEmu || cfg.manufacturer === 'sungrow') {
+    kind = 'sungrow-ems';
+    const cfgMode = cfg.sungrow?.controlMode === 'forced' ? 'forced' : 'external';
+    const mode = (ems && (ems.controlMode === 'forced' || ems.controlMode === 'external')) ? ems.controlMode : cfgMode;
+    detail = {
+      mode,                                 // 'external' (EMS-Modus 3) | 'forced' (Modus 2)
+      emsModeValue: mode === 'forced' ? 2 : 3,
+      owns: ems ? ems.owns === true : null,              // hält DVhub den EMS-Modus?
+      foreign: ems ? emsErr.includes('foreign_ems_mode') : null,  // fremdes EMS aktiv (Fehlermeldung, nicht .code)
+      heartbeatSupported: ems ? (ems.heartbeatSupported ?? null) : null,
+      heartbeatTimeoutS: num0(ems?.heartbeatTimeoutS ?? cfg.sungrow?.heartbeatTimeoutS),
+    };
+  } else if (zeroFeedIn || cfg.manufacturer === 'fronius' || cfg.manufacturer === 'deye-lv') {
+    kind = 'battery-regulation';
+    // dvControl.*-Schalter sind Objekte ({enabled, …}) — auf .enabled prüfen. Beide
+    // Abregelpfade melden: feedExcessDcPv (DC-seitig, Fronius Model-124-Zwangsladung)
+    // und dontFeedExcessAcPv (AC-seitig, Deye Work-Mode-Nulleinspeisung).
+    detail = {
+      zeroFeedIn: zeroFeedIn === true,
+      feedExcessDcPv: dvc.feedExcessDcPv?.enabled === true,
+      dontFeedExcessAcPv: dvc.dontFeedExcessAcPv?.enabled === true,
+    };
+  } else if (setpointWritable) {
+    kind = 'ess-setpoint';
+    detail = { gridSetpointW: num0(v.gridSetpointW) };
+  } else {
+    kind = 'read-only';
+  }
+  // Schreibt DVhub WIRKLICH? Je Modus verschieden gesperrt:
+  //  - sungrow-ems: ein EMS-Fehler (foreign/heartbeat/nicht erkannt) hält den
+  //    letzten Schreibvorgang an (sungrow.js:1025/1081/1227) → keine Writes.
+  //  - battery-regulation (Fronius/Deye): läuft nur über die dvControl-Sequenz;
+  //    ist dvControl.enabled aus (EEG-Festtarif-Hinweis), wird nichts geschrieben.
+  //  - ess-setpoint: der Netzsollwert-Schreibpfad (EOS/Regeln/§14a) hängt nicht an
+  //    dvControl.enabled (das ist die DV-Schnittstelle) → nur Not-Halt sperrt.
+  const dvControlEnabled = dvc.enabled !== false;
+  // Lese-Modus (DVHUB_READ_ONLY=1): der Transport weist JEDEN Schreibzugriff ab
+  // (read-only-guard.js), unabhängig von Config/Modus — dann schreibt DVhub nie.
+  const readOnly = isReadOnlyMode();
+  let writes;
+  if (kind === 'read-only' || readOnly) writes = false;
+  else if (paused) writes = false;
+  else if (kind === 'sungrow-ems') writes = !emsErr;
+  else if (kind === 'battery-regulation') writes = dvControlEnabled;
+  else writes = true;   // ess-setpoint
+  return { kind, writes, paused, readOnly, dvControl: dvControlEnabled, detail };
+}
+
+// Mehrgeräte-/Split-Topologie fürs Portal — universell für Sungrow Master/Slave
+// UND die zweite GX (multi-gx). Je Gerät nur nicht-geheime Metadaten (Rolle,
+// kWp, Akku-kWh, Leistungsgrenze, SoC, Ist-Leistung, Steuer-/Rückfall-Status) —
+// NIE Host/IP. Ohne zweites Gerät: { multiDevice:false, kind:'single', … }.
+function buildTopologyInfo(cfg, ctx, payload, v) {
+  const ems = isObj(payload.ctrl?.sungrowEms) ? payload.ctrl.sungrowEms
+    : (isObj(ctx.state?.ctrl?.sungrowEms) ? ctx.state.ctrl.sungrowEms : null);
+  // Not-Halt und EMS-Fehler fahren BEIDE WR in den Eigenverbrauch zurück; das
+  // zuletzt geschriebene st.decision.split bleibt aber stehen (sungrow.js räumt
+  // es im Not-Halt/Fehler nicht auf). Darum Steuer-/Split-Status daran binden,
+  // dass gerade wirklich gesteuert wird — sonst meldet das Portal einen aktiven
+  // Split, obwohl die Anlage still ist.
+  // Not-Halt immer aus dem Web-Prozess-State lesen (wie controlMode/buildCompact-
+  // Status) — er wird dort gesetzt und reist NICHT im Worker-Poller-Snapshot mit.
+  const paused = ctx.state?.ctrl?.discretionaryWritesPaused === true;
+  const emsErr = typeof ems?.error === 'string' ? ems.error : '';
+  const steering = !paused && !emsErr;
+
+  // 1) Sungrow Master/Slave-Parallelbetrieb (zweiter WR). Entscheidung an der
+  //    Config (eingetragene Adresse) UND am aktiven Hersteller: der sungrow.*-Block
+  //    ist nicht herstellergebunden und bleibt beim Wechsel weg von Sungrow in der
+  //    config.json stehen (die UI-Felder sind dann ausgeblendet, nicht löschbar).
+  //    Ohne die Hersteller-Bindung würde ein liegengebliebener zweiter WR eine
+  //    echte zweite GX verdecken. Das Runtime-sungrowSecond ist zudem klebrig.
+  const sg2 = isObj(cfg.sungrow?.secondInverter) ? cfg.sungrow.secondInverter : null;
+  const sg2Configured = cfg.manufacturer === 'sungrow'
+    && !!(sg2 && typeof sg2.host === 'string' && sg2.host.trim());
+  const s2 = sg2Configured && isObj(v.sungrowSecond) ? v.sungrowSecond : null;
+  if (sg2Configured) {
+    const split = isObj(ems?.decision?.split) ? ems.decision.split : null;
+    // dreiwertig aus der View übernehmen: null = Start/unbekannt (nicht „offline").
+    const online = s2 ? (s2.online === true ? true : (s2.online === false ? false : null)) : null;
+    // Slave gilt nur als gesteuert, wenn ein Split aktiv läuft UND die Strategie
+    // nicht 'master-only' ist (dann hält der Slave nur Eigenverbrauch, slaveW 0).
+    const slaveCommanded = !!split && split.strategy !== 'master-only' && steering;
+    // Wirksamer Master-Anteil wie zur Laufzeit (clampRatioPct): ohne Angabe 50,
+    // sonst auf 0–100 begrenzt (sungrow.js:354).
+    const ratioMasterPct = isNum(sg2?.ratioMasterPct)
+      ? Math.min(100, Math.max(0, Math.round(Number(sg2.ratioMasterPct)))) : 50;
+    return {
+      multiDevice: true,
+      kind: 'sungrow-dual',
+      deviceCount: 2,
+      split: {
+        active: !!split && online === true && steering,
+        blocked: sg2Configured && online === false,     // Slave offline → master-only-Rückfall
+        strategyCharge: s2?.strategyCharge ?? sg2?.strategyCharge ?? null,
+        strategyDischarge: s2?.strategyDischarge ?? sg2?.strategyDischarge ?? null,
+        strategyActive: split?.strategy ?? null,
+        masterW: num0(split?.masterW),
+        slaveW: num0(split?.slaveW),
+        ratioMasterPct,
+      },
+      devices: [
+        {
+          role: 'master',
+          controlled: steering,
+          socPct: num0(v.sungrowMasterSocPct ?? v.soc),
+          batteryPowerW: num0(v.sungrowMasterBatteryW ?? v.batteryPowerW),
+          pvPowerW: num0(v.sungrowMasterPvW ?? v.pvPowerW ?? v.pvTotalW),
+        },
+        {
+          role: 'slave',
+          online,
+          controlled: slaveCommanded,
+          socPct: num0(s2?.socPct),
+          batteryPowerW: num0(s2?.batteryPowerW),
+          pvPowerW: num0(s2?.pvPowerW),
+          ratedW: num0(s2?.bdcRatedW),
+          capacityWh: num0(sg2?.batteryCapacityWh),
+          maxChargeW: num0(sg2?.maxChargeW),
+          maxDischargeW: num0(sg2?.maxDischargeW),
+          pvKwp: isNum(sg2?.pvKwp) ? Number(sg2.pvKwp) : null,
+          runningState: s2?.runningStateText ?? null,
+        },
+      ],
+    };
+  }
+
+  // 2) Zweite GX (multi-gx). ENTSCHEIDUNG am Runtime-Zustand des Dienstes
+  //    (mg.enabled === true), NICHT allein an der Config, UND an einer eingetragenen
+  //    Adresse: der Dienst meldet bei offener Beta-Sperre ohne Adresse
+  //    {enabled:true, reason:'not_configured'} — das wäre sonst eine Phantom-GX.
+  //    Config mgCfg.enabled allein würde zudem eine Einzelanlage auf dem Stable-
+  //    Kanal (Beta-Sperre zu → enabled:false) fälschlich als zweite GX melden.
+  //    Hinweis: state.multiGx wird noch nicht im Worker-Poller-Snapshot gespiegelt
+  //    — im Split-Prozess-Betrieb (DVHUB_ENABLE_RUNTIME_WORKER) ist mg null und die
+  //    zweite GX erscheint als Einzelgerät (bekannte Lücke; dieser Modus ist
+  //    laut server.js:2089 ungenutzt).
+  const mgCfg = isObj(cfg.multiGx) ? cfg.multiGx : null;
+  const mgHost = String(mgCfg?.host || '').trim();
+  const mg = isObj(payload.multiGx) ? payload.multiGx : (isObj(ctx.state?.multiGx) ? ctx.state.multiGx : null);
+  if (mg && mg.enabled === true && mgHost) {
+    const online = mg.online === true ? true : (mg.online === false ? false : null);
+    // aktiv nur, wenn online, nicht im Not-Halt und ein Sollwert anliegt (im
+    // Not-Halt publiziert der Dienst setpointW null).
+    const mgActive = online === true && !paused && mg.setpointW != null;
+    const secondControlled = mgActive === true;
+    return {
+      multiDevice: true,
+      kind: 'second-gx',
+      deviceCount: 2,
+      split: {
+        active: mgActive,
+        // „blockiert" nur am echten Dienst-Grund — der Dienst meldet online in den
+        // ersten Takten nach Start schon als false, bevor er wirklich offline ist.
+        blocked: mg.reason === 'follower_offline',
+        strategy: 'floor-handoff',
+        sharePct: num0(mg.sharePct),
+        mainDischargeBlocked: mg.mainDischargeBlocked === true,
+      },
+      devices: [
+        {
+          role: 'main-gx',
+          controlled: !paused,
+          socPct: num0(v.soc),
+          batteryPowerW: num0(v.batteryPowerW),
+          pvPowerW: num0(v.pvTotalW ?? v.pvPowerW),
+        },
+        {
+          role: 'second-gx',
+          online,
+          controlled: secondControlled,
+          socPct: num0(mg.socPct),
+          batteryPowerW: num0(mg.batteryPowerW),
+          setpointW: num0(mg.setpointW),
+          capacityWh: num0(mgCfg?.batteryCapacityWh),
+          maxChargeW: num0(mgCfg?.maxChargeW),
+          maxDischargeW: num0(mgCfg?.maxDischargeW),
+          minSocPct: num0(mgCfg?.minSocPct),
+          fallback: mg.reason ?? null,
+        },
+      ],
+    };
+  }
+
+  // 3) Einzelgerät (Regelfall).
+  return { multiDevice: false, kind: 'single', deviceCount: 1, split: null, devices: [] };
+}
+
 /**
  * Welche Steuerungen und Abregelungen für die Anlage gelten — damit der
  * Installateur im Portal sieht, wer die Anlage gerade begrenzen darf:
  * Direktvermarktung (Plexlog/LUOX), §51-Negativpreis-Abregelung,
  * Einspeisebegrenzung (§9 / DV-Teilvorgabe), §14a (EEBUS-Steuerbox oder
  * Relais, Mindestleistung, steuerbare Verbrauchseinrichtungen).
+ * Zusätzlich (Christin 2026-11-14) WIE die Anlage angesteuert wird: ausgewählter
+ * Provider, genutzter Netzzähler, Steuermodus und — bei mehreren Wechselrichtern
+ * — Topologie + Aufteilung. Universell für alle Hersteller, nie Geheimnisse.
  */
 export function buildControlsSummary(ctx, payload = {}) {
   const cfg = (ctx.getCfg && ctx.getCfg()) || {};
   const ctrl = ctx.state?.ctrl || {};
+  const v = isObj(payload.victron) ? payload.victron : {};
   const p = payload.p14a || null;
   const eb = payload.eebus?.enabled ? payload.eebus : null;
   return {
+    // Wie die Anlage angesteuert wird (Provider/Zähler/Modus/Topologie).
+    provider: buildProviderInfo(cfg),
+    gridMeter: buildGridMeterInfo(cfg, payload),
+    controlMode: buildControlModeInfo(cfg, ctrl, payload, v),
+    topology: buildTopologyInfo(cfg, ctx, payload, v),
     dv: {
       profile: cfg.dvInterface?.profile === 'luox' ? 'luox' : 'plexlog',
       curtailed: ctrl.forcedOff === true,
@@ -250,6 +513,10 @@ export function buildCompactStatus(ctx, now = Date.now()) {
     soc: v.soc ?? null,
     batteryPowerW: v.batteryPowerW ?? null,
     pvTotalW: v.pvTotalW ?? v.pvPowerW ?? null,
+    // Zwei Sungrow-WR (Parallelbetrieb): soc/batteryPowerW/pvTotalW oben sind die Systemsumme. Beide Einzel-SoC
+    // und der zweite WR sichtbar machen, damit der Installateur jeden Akku einzeln prüfen kann (ohne LAN-IP).
+    sungrowMasterSocPct: v.sungrowMasterSocPct ?? null,
+    sungrowSecond: v.sungrowSecond ?? null,
     gridSetpointW: v.gridSetpointW ?? null,
     // Netzübergabepunkt (gemessen) — getrennt, damit das Portal kein
     // Vorzeichen-Setting kennen muss; ohne gültigen Zähler null.

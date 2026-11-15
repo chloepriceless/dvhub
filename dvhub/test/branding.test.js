@@ -227,12 +227,23 @@ test('global styles use the Aurora DVhub design tokens', () => {
 
 test('readme references the DVhub assets folder for logo and screenshot gallery', () => {
   // Plan 16-04 (D-06 triage, UI-drift): the screenshot filenames in the README
-  // were refreshed (the 2026-03-24 captures were replaced by the 2026-05-18
-  // Aurora-UI captures). Assert the shipped asset paths.
+  // were refreshed (2026-03-24 → 2026-05-18 → 2026-11-13 für 1.0.10, mit
+  // synthetischen Daten). Assert the shipped asset paths — und dass jedes
+  // verlinkte Bild auch im Repo liegt (GitHub zeigt sonst ein kaputtes Bild).
   const readme = fs.readFileSync(readmePath, 'utf8');
 
   assert.match(readme, /assets\/dvhub-wordmark\.png/);
   assert.match(readme, /assets\/screenshots\/[a-z0-9-]+\.png/);
+  const readmeDir = path.dirname(readmePath);
+  const linked = [...readme.matchAll(/(?:src|srcset)="(assets\/[^"]+)"/g)].map((m) => m[1]);
+  assert.ok(linked.length > 0);
+  for (const rel of linked) assert.ok(fs.existsSync(path.join(readmeDir, rel)), `README verlinkt fehlendes Bild ${rel}`);
+  // Prominenter Lizenz-Hinweis oben (Free & Pro, Preise und Lizenzbedingungen auf dvhub.de).
+  const top = readme.slice(0, readme.indexOf('## Funktionen'));
+  assert.match(top, /Free &amp; Pro|Free & Pro/);
+  assert.match(top, /https:\/\/dvhub\.de\/#preise/);
+  assert.match(top, /https:\/\/dvhub\.de\/lizenzbedingungen\//);
+  assert.match(top, /ECL-1\.0/);
   assert.doesNotMatch(readme, /docs\/dvhub-logo\.png|docs\/dashboard-desktop\.png/);
   assert.doesNotMatch(readme, /cd \/opt\/dvhub\/dv-control-webapp|WorkingDirectory=\/opt\/dvhub\/dv-control-webapp|ExecStart=\/usr\/bin\/node --experimental-sqlite \/opt\/dvhub\/dv-control-webapp\/server\.js/);
 });

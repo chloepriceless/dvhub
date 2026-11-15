@@ -741,7 +741,7 @@ apt-get update
 # Distro-generic name pulls python3.11-venv@Debian12 / python3.12-venv@Ubuntu24.
 # autossh + openssh-client: T-0113 reverse-SSH support tunnel (autossh self-heals
 # the outbound tunnel; ssh-keygen from openssh-client mints the relay keypair).
-apt-get install -y curl ca-certificates git sudo postgresql openvpn strongswan python3-venv python3-pip autossh openssh-client libjemalloc2
+apt-get install -y curl ca-certificates git sudo postgresql openvpn strongswan python3-venv python3-pip autossh openssh-client openssh-server libjemalloc2
 # wireguard-tools SEPARAT und OHNE Recommends (T-UPDATE-SHARPEN 2026-07-03): sein
 # Recommends `wireguard-modules` ist ein virtuelles Paket, das nur von linux-image-*
 # bereitgestellt wird — in einem LXC/Container (kein Kernel-Paket installiert) löst
@@ -1003,6 +1003,13 @@ dvhub_cfg_dir "$CONFIG_DIR" 700 vpn profiles
 # Vorlage kam mit 0644, die Gruppe dvhub — Support-Login — las mit).
 dvhub_cfg_secure_file "$CONFIG_PATH" "$SERVICE_USER"
 
+# SSH-Server für den Fern-Support-Tunnel (T-0113): der autossh-Tunnel bildet
+# relay:<shellPort> → 127.0.0.1:22 ab — dafür muss nativ ein sshd auf :22 lauschen
+# (openssh-server oben). Ohne ihn meldet support-tunnel.js shellAvailable=false.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
+fi
+
 # PostgreSQL: Datenbank und User anlegen falls noch nicht vorhanden
 if command -v psql >/dev/null 2>&1; then
   systemctl enable --now postgresql 2>/dev/null || true
@@ -1051,6 +1058,15 @@ if [[ -f "$INSTALL_DIR/support-provision.sh" ]]; then
   ( SERVICE_USER="$SERVICE_USER" DATA_DIR="$DATA_DIR" CONFIG_PATH="$CONFIG_PATH" SUPPORT_LOCAL_USER="$SUPPORT_LOCAL_USER" \
       bash "$INSTALL_DIR/support-provision.sh" ) \
     || echo "  Support: Provisioning fehlgeschlagen (non-fatal) — Fern-Support ggf. erst nach dem nächsten Neustart bereit." >&2
+fi
+
+# Box-Uhr: NTP (systemd-timesyncd) aktivieren/prüfen. DVhub hängt an der Uhr (EOS-Slots,
+# Zeitpläne). Geteilt mit post-update.sh. Non-fatal — ein Uhr-Problem darf den Install nie
+# abbrechen; das Skript überspringt Container von selbst.
+if [[ -f "$INSTALL_DIR/clock-provision.sh" ]]; then
+  echo "[6c/7] Box-Uhr (NTP)"
+  ( DATA_DIR="$DATA_DIR" bash "$INSTALL_DIR/clock-provision.sh" ) \
+    || echo "  Uhr: NTP-Provisioning fehlgeschlagen (non-fatal) — Zeitabgleich am Betriebssystem prüfen." >&2
 fi
 
 echo "[7/7] systemd Service einrichten"
@@ -1318,6 +1334,15 @@ WantedBy=timers.target
 PKGTIMER
 systemctl daemon-reload
 systemctl enable --now dvhub-pkg-maintain.timer >/dev/null 2>&1 || true
+
+# Sungrow-Absicherung C2/C4 (M3): ExecStopPost-Rückgabe (scripts/sungrow-forced-release.mjs) + unabhängiger
+# Watchdog-Timer (scripts/sungrow-forced-watchdog.mjs) als Drop-in/Unit einhängen. Nur für Sungrow-Anlagen; auf
+# anderen Boxen räumt das Skript ein früheres Drop-in wieder weg. Geteilt mit post-update.sh. NON-FATAL.
+if [[ -f "$INSTALL_DIR/sungrow-provision.sh" ]]; then
+  INSTALL_DIR="$INSTALL_DIR" APP_DIR="$APP_DIR" SERVICE_NAME="$SERVICE_NAME" \
+    DATA_DIR="$DATA_DIR" DV_APP_CONFIG="$CONFIG_PATH" \
+    bash "$INSTALL_DIR/sungrow-provision.sh" || true
+fi
 
 PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 if [[ -z "${PRIMARY_IP}" ]]; then

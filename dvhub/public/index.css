@@ -72,32 +72,48 @@
   .topbar-nav a.is-active::after { display:none; }
 }
 
-/* ─── 3-col leit-grid ─── */
+/* ─── leit-grid: zwei ~gleiche Spalten + Energiefluss fest in der Mitte ───
+   M5 (Feld 16.11., 1600×1000, zwei Sungrow-WR): früher bestimmte die (mit der
+   WR-Kachel 1522 px hohe) linke Spalte die Höhe des Energieflusses → der
+   Börsenchart rutschte unter den Bildschirm. Jetzt: der Energiefluss hat eine
+   FESTE Höhe (wächst NICHT mit den Spalten), die Spalten sind oben ausgerichtet
+   (align-self:start), und die Wechselrichter-Kachel sitzt als volle Reihe UNTER
+   dem Energiefluss (Master | Slave | Summe nebeneinander), erst danach der Chart. */
 .leit-grid {
   display:grid;
   gap:var(--gap-3);
-  grid-template-columns:300px 1fr 320px;
-  /* Boersenchart unter linker Spalte + Energiefluss, rechte Spalte ueber beide
-     Zeilen: so bestimmt die linke Spalte die Hoehe des Energieflusses, nicht
-     die (mit der E-Auto-Kachel hoehere) rechte. */
+  grid-template-columns:1fr minmax(0, 1.25fr) 1fr;
   grid-template-areas:
     "left pf   right"
-    "epex epex right";
-  grid-template-rows:auto 1fr;
+    "wr   wr   wr"
+    "epex epex epex";
+  grid-template-rows:auto auto auto;
+  align-items:start;
 }
-.leit-grid > .rail:first-child { grid-area:left; }
-.leit-grid > .pf-shell { grid-area:pf; }
-.leit-grid > .rail:last-of-type { grid-area:right; }
+.leit-grid > .rail:first-child { grid-area:left; align-self:start; }
+.leit-grid > .pf-shell { grid-area:pf; align-self:start; }
+.leit-grid > .rail:last-of-type { grid-area:right; align-self:start; }
+.leit-grid > .leit-wr { grid-area:wr; align-self:start; margin:0; }
 .leit-grid > .leit-epex { grid-area:epex; margin-top:0; align-self:start; }
+/* Energiefluss: feste Höhe (≈ Bildschirmhöhe − Kopf). Darf NICHT mit den Spalten
+   wachsen; so bleibt der Chart darunter im sichtbaren Bereich (Ziel ≤ ~1000 px). */
+.leit-grid > .pf-shell { height:clamp(560px, 72vh, 780px); }
+.leit-grid > .pf-shell .dvhub-powerflow { height:100%; }
 @media (max-width:1280px) {
-  .leit-grid { grid-template-columns:1fr; grid-template-areas:none; grid-template-rows:none; }
-  .leit-grid > .rail:first-child, .leit-grid > .pf-shell, .leit-grid > .rail:last-of-type, .leit-grid > .leit-epex { grid-area:auto; }
+  .leit-grid { grid-template-columns:1fr; grid-template-areas:none; grid-template-rows:none; align-items:stretch; }
+  .leit-grid > .rail:first-child, .leit-grid > .pf-shell, .leit-grid > .rail:last-of-type, .leit-grid > .leit-wr, .leit-grid > .leit-epex { grid-area:auto; }
   /* Mobile / narrow: Powerflow is the most actionable info — surface it
      first so the user doesn't have to scroll past the rails on a phone. */
-  .leit-grid > .pf-shell { order:-1; }
+  .leit-grid > .pf-shell { order:-1; height:auto; }
 }
 
 .rail { display:flex; flex-direction:column; gap:10px; }
+
+/* M5: Wechselrichter-Kachel als volle Reihe — Master | Slave | Summe nebeneinander (ab genug Breite). */
+.leit-wr .wr-cols { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:var(--gap-3); align-items:start; }
+.leit-wr .wr-col { display:flex; flex-direction:column; gap:6px; min-width:0; }
+.leit-wr .rail-card-head { flex-wrap:wrap; gap:6px; }
+@media (max-width:900px) { .leit-wr .wr-cols { grid-template-columns:1fr; } }
 
 /* ─── Rail cards ─── */
 .rail-card { padding:14px; display:flex; flex-direction:column; gap:6px; }
@@ -147,6 +163,34 @@
   font-size:11.5px;
 }
 .rail-row:last-child { border-bottom:0; }
+/* F1a Wechselrichter-Kachel (zwei Sungrow-WR): SoC|Akku|PV je Gruppe (Master/Slave/Summe) UNTER dem Label in
+   einem festen 3-Spalten-Grid; Befehl und Grenzen darunter als ganze Zeile (Label links, Wert rechts). Werte
+   dürfen umbrechen, aber NIE mit „…" abschneiden (Feld 15.11., Handy ~375 px). Dezimalkomma kommt aus der View. */
+.wr-mode { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); padding:0 0 5px; }
+.wr-role { border-bottom:0; padding:5px 0 0; }
+/* Hinweis-Abzeichen je WR (Notladung / Slave-Anteil am Master). */
+.wr-badges { font-family:var(--f-mono); font-size:10px; letter-spacing:.04em; color:var(--warn, #e0a33e); padding:2px 0 3px; overflow-wrap:anywhere; }
+.wr-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:4px 10px; padding:4px 0 6px; border-bottom:1px solid var(--hairline); }
+.wr-grid.wr-grid-3 { grid-template-columns:repeat(3, minmax(0,1fr)); }
+.wr-grid .wr-cell { display:flex; flex-direction:column; min-width:0; }
+.wr-grid .wr-cell .cap {
+  font-family:var(--f-mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim);
+}
+.wr-grid .wr-cell .v {
+  font-family:var(--f-mono); font-variant-numeric:tabular-nums; color:var(--text); font-weight:500;
+  font-size:11.5px; white-space:normal; overflow-wrap:anywhere; word-break:break-word;
+}
+/* Befehl/Grenzen/Countdown: ganze Zeile, Label links, Wert rechts — der Wert darf umbrechen, nie kürzen. */
+.wr-line { display:flex; justify-content:space-between; align-items:baseline; gap:10px; padding:3px 0; border-bottom:1px solid var(--hairline); }
+.wr-line .wr-l {
+  font-family:var(--f-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim);
+  flex:0 0 auto; white-space:nowrap;
+}
+.wr-line .wr-v {
+  font-family:var(--f-mono); font-variant-numeric:tabular-nums; color:var(--text); font-weight:500; font-size:11.5px;
+  text-align:right; white-space:normal; overflow-wrap:anywhere; word-break:break-word; min-width:0;
+}
+.wr-status { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); padding:4px 0 6px; border-bottom:1px solid var(--hairline); }
 .rail-row .l {
   font-family:var(--f-mono); font-size:10.5px; letter-spacing:.1em;
   text-transform:uppercase; color:var(--text-dim);
@@ -1205,6 +1249,11 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
   color:#fff7ed; font-weight:600; font-size:14px;
   border-bottom:1px solid #f59e0b;
   box-shadow:0 2px 8px rgba(0,0,0,.4);
+}
+/* Aufgabe 10: vor Ablauf warnen — ≤ 5 min Restzeit, deutlicher roter Banner. */
+.support-tunnel-banner.support-tunnel-banner-soon {
+  background:linear-gradient(90deg, #7f1d1d, #b91c1c);
+  border-bottom-color:#ef4444;
 }
 
 /* T-0099 NOT-HALT — button in the Steuerung card + sticky banner while active

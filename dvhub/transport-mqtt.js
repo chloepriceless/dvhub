@@ -10,6 +10,16 @@
 import { safeInterval } from './services/safe-async.js';
 import { isReadOnlyMode, noteBlockedWrite, ReadOnlyViolation } from './read-only-guard.js';
 
+// Fehler-Drosselung: eine dauerhaft nicht erreichbare Broker-Adresse (EHOSTUNREACH) feuert bei jedem
+// Reconnect-Versuch ein 'error' — dieselbe Meldung höchstens einmal je 60 s auf die Konsole.
+const _mqttErrLog = { msg: null, at: 0 };
+function logMqttErrorThrottled(msg) {
+  const now = Date.now();
+  if (msg === _mqttErrLog.msg && now - _mqttErrLog.at < 60_000) return;
+  _mqttErrLog.msg = msg; _mqttErrLog.at = now;
+  console.error('[MQTT] Fehler:', msg);
+}
+
 // T-0080 (P1 sweep): MQTT cache freshness. Venus OS pushes N/ values on change +
 // after each keepalive; if the broker connection wedges or a subscription is
 // silently dropped, the cache keeps the LAST value forever. Serving that stale
@@ -576,7 +586,7 @@ export function createMqttTransport(victronConfig, options = {}) {
             if (client) { client.end(true); client = null; }
             reject(err);
           } else {
-            console.error('[MQTT] Fehler:', err?.message || err);
+            logMqttErrorThrottled(err?.message || String(err));
           }
         });
         // Broker-Neustart/Keepalive-Aus: mqtt.js feuert dafür nur 'close', kein

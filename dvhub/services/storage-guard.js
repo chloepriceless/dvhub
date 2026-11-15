@@ -37,6 +37,7 @@ export function nextKeepDays(oldestRawAgeDays) {
 export function createStorageGuard({ getDb, getDataDir, pushLog, setWarning, now = () => Date.now(), statfs = (p) => fs.statfsSync(p) } = {}) {
   let last = null;
   let running = false;
+  let lastGuardErr = null; // Fehler-Drosselung: gleiche Meldung nicht in jedem Zyklus (TimescaleDB-Apache-Rauschen)
   const log = (e, d, lvl) => { try { pushLog?.(e, d, lvl); } catch { /* egal */ } };
 
   async function check() {
@@ -120,7 +121,14 @@ export function createStorageGuard({ getDb, getDataDir, pushLog, setWarning, now
       last = out;
       return out;
     } catch (e) {
-      log('storage_guard_error', { error: e.message }, 'warn');
+      // Gleicher Fehler nicht in jedem Zyklus (z. B. TimescaleDB-Apache dauerhaft nicht erreichbar): nur bei
+      // Änderung oder höchstens einmal je Stunde melden.
+      const msg = e?.message || String(e);
+      const n = now();
+      if (msg !== lastGuardErr?.msg || n - (lastGuardErr?.at || 0) > 3600_000) {
+        log('storage_guard_error', { error: msg }, 'warn');
+        lastGuardErr = { msg, at: n };
+      }
       return last;
     } finally {
       running = false;

@@ -18,8 +18,60 @@
  */
 import { getPowerLimits } from '../power-limits.js';
 import { betaGateOpen } from '../../beta-features.js';
+import { resolveSecondInverter, secondInverterTelemetry, sungrowEffectivePowerW, sungrowRealSocPct, sungrowSocFloorBufferPct, sungrowSystemSoc } from '../inverter/sungrow.js';
 
 const finite = (v) => v != null && v !== '' && Number.isFinite(Number(v));
+
+function isSungrow(ctx, cfg) {
+  return cfg?.manufacturer === 'sungrow' || cfg?.identify?.kind === 'sungrow' || ctx?.state?.victron?.device?.vendor === 'sungrow';
+}
+
+/**
+ * Anlagen-Lade-/Entladeleistung + Kapazität beider Sungrow-WR aus den GELESENEN GERÄTEWERTEN für EOS/Planung
+ * (Aufgabe 4, Feld 15.11.: EOS bekam battery_max_charge_w 10600 statt 21200, weil die Slave-Konfig leer war und
+ * der Slave mit 0 W zählte). GLEICHE Regel wie die Regelgrenze im Aktuator: je WR min(Feld-Übersteuerung,
+ * Gerätegrenze 33047/33048, BDC-Nennleistung). Der Master nimmt seine Gerätewerte (state.victron.device) statt
+ * optimizer.maxChargeW, der Slave die seinen (state.sungrowSecond); das Feld ist nur Übersteuerung (strenger).
+ *
+ * - inverterMaxPowerW an EOS (Christin 15.11.) = Summe der WR-Nennleistungen (je WR min(Entlade-Gerätewert, BDC)),
+ *   NICHT sungrow.maxPowerW (Testgrenze/operator-Cap). EOS soll die volle Anlagenfähigkeit sehen.
+ * - Kapazität: Feld (operator) zuerst, sonst der Gerätevorschlag 33049 (Master 33049=0 → Feld).
+ * Null, wenn es kein Sungrow ist oder weder Master-Gerätewerte noch ein aggregierter Slave vorliegen (dann bleibt
+ * die Config unverändert — Rückwärtskompatibilität).
+ */
+function sungrowSystemLimits(ctx, cfg) {
+  if (!isSungrow(ctx, cfg)) return null;
+  const opt = cfg?.optimizer || {};
+  const dev = ctx?.state?.victron?.device || {};
+  const masterBdc = Number(dev.bdcRatedW) || null;
+  const masterCharge = sungrowEffectivePowerW(opt.maxChargeW, dev.maxChargeWDevice, masterBdc);
+  const masterDischarge = sungrowEffectivePowerW(opt.maxDischargeW, dev.maxDischargeWDevice, masterBdc);
+  const masterHasDevice = finite(dev.maxChargeWDevice) || finite(dev.maxDischargeWDevice);
+
+  // Slave nur, wenn aggregiert UND online/frisch (wie bisher). Gerätewerte aus der Telemetrie.
+  const slaveTel = resolveSecondInverter(cfg).aggregateTelemetry === true ? secondInverterTelemetry(ctx?.state, cfg, {}) : null;
+  const si = cfg?.sungrow?.secondInverter || {};
+  const s = ctx?.state?.sungrowSecond || {};
+  let slaveCharge = 0; let slaveDischarge = 0; let slaveCap = 0;
+  if (slaveTel) {
+    const slaveBdc = Number(slaveTel.bdcRatedW) || null;
+    slaveCharge = sungrowEffectivePowerW(si.maxChargeW, slaveTel.maxChargeWDevice, slaveBdc);
+    slaveDischarge = sungrowEffectivePowerW(si.maxDischargeW, slaveTel.maxDischargeWDevice, slaveBdc);
+    slaveCap = Number(si.batteryCapacityWh) || Number(s.batteryCapacityLimitWh) || 0;
+  }
+  // Nichts zu ändern (Einzel-WR ohne gelesene Gerätewerte, kein Slave) → null, Config bleibt unverändert.
+  if (!slaveTel && !masterHasDevice) return null;
+
+  const masterCap = Number(opt.batteryCapacityWh) || Number(dev.batteryCapacityLimitWh) || 0;
+  return {
+    hasSlave: slaveTel != null,
+    maxChargeW: masterCharge + slaveCharge,
+    maxDischargeW: masterDischarge + slaveDischarge,
+    // inverter_max_power_w = Summe der WR-Nennleistungen (Entladeseite ∧ BDC), nicht die operator-Testgrenze maxPowerW.
+    inverterMaxPowerW: masterDischarge + slaveDischarge,
+    capacityWh: masterCap + slaveCap,
+  };
+}
 
 function follower(ctx, cfg) {
   const c = cfg?.multiGx || {};
@@ -55,6 +107,28 @@ const weighted = (a, capA, b, capB) => Number(((a * capA + b * capB) / (capA + c
 
 /** Config fuer EOS/Plan-Umrechnung: Akku- und Wechselrichterwerte beider Anlagen. */
 export function planningCfg(ctx, cfg = ctx?.getCfg?.()) {
+  // Zwei parallele Sungrow-WR (Aufgabe 4): Akku-/Wechselrichterwerte aus den GELESENEN GERÄTEWERTEN beider WR
+  // (Master device + Slave), nicht aus der (im Feld leeren) Slave-Konfig. Schließt den Multi-GX-Zweig aus.
+  const sg = sungrowSystemLimits(ctx, cfg);
+  if (sg) {
+    const opt = cfg.optimizer || {};
+    const sp = cfg.system?.power || {};
+    const power = { ...sp, inverterMaxPowerW: sg.inverterMaxPowerW };
+    if (sg.capacityWh > 0) power.batteryCapacityWh = sg.capacityWh;
+    power.batteryMaxChargeW = sg.maxChargeW;
+    power.batteryMaxDischargeDcW = sg.maxDischargeW;
+    return {
+      ...cfg,
+      optimizer: {
+        ...opt,
+        ...(sg.capacityWh > 0 ? { batteryCapacityWh: sg.capacityWh } : {}),
+        maxChargeW: sg.maxChargeW,
+        maxDischargeW: sg.maxDischargeW,
+      },
+      system: { ...(cfg.system || {}), power },
+    };
+  }
+  // Zweite Victron-GX-Anlage (multi-gx) — getrennter Pfad.
   const f = follower(ctx, cfg);
   if (!f) return cfg;
   const opt = cfg.optimizer || {};
@@ -118,6 +192,21 @@ export function followerBatteryStale(ctx, nowMs = Date.now()) {
 export function planningSocPct(ctx) {
   const cfg = ctx?.getCfg?.();
   const primary = ctx?.state?.victron?.soc;
+  // M1 (Christin 16.11.): EOS bekommt den ECHTEN SoC (real %), nicht den fensterrelativen gemeldeten Sungrow-Wert.
+  // Je WR aus 13059/13058 in echt umrechnen, dann kapazitätsgewichtet mitteln — konsistent mit dem Boden (ebenfalls
+  // real). Ohne gelesenes Gerätefenster bleibt der gemeldete Wert stehen (rückwärtskompatibel).
+  if (isSungrow(ctx, cfg)) {
+    const dev = ctx?.state?.victron?.device || {};
+    const opt = cfg?.optimizer || {};
+    const masterReported = finite(ctx?.state?.victron?.sungrowMasterSocPct) ? Number(ctx.state.victron.sungrowMasterSocPct) : primary;
+    const masterReal = sungrowRealSocPct(masterReported, dev.minSocPctDevice, dev.maxSocPctDevice);
+    const slaveTel = resolveSecondInverter(cfg).aggregateTelemetry === true ? secondInverterTelemetry(ctx?.state, cfg, {}) : null;
+    const slaveReal = slaveTel ? sungrowRealSocPct(slaveTel.socPct, slaveTel.minSocPctDevice, slaveTel.maxSocPctDevice) : null;
+    const s = ctx?.state?.sungrowSecond || {};
+    const masterCap = Number(opt.batteryCapacityWh) || Number(dev.batteryCapacityLimitWh) || 0;
+    const slaveCap = slaveTel ? (Number(cfg?.sungrow?.secondInverter?.batteryCapacityWh) || Number(s.batteryCapacityLimitWh) || 0) : 0;
+    return sungrowSystemSoc(masterReal, slaveReal, { masterCapacityWh: masterCap, secondCapacityWh: slaveCap }) ?? masterReal ?? primary;
+  }
   const f = follower(ctx, cfg);
   if (!f || !finite(primary)) return primary;
   return weighted(Number(primary), primaryCapacityWh(cfg), f.socPct, f.capacityWh);
@@ -126,6 +215,18 @@ export function planningSocPct(ctx) {
 /** Mindest-SoC fuer die Planung: Untergrenze der Hauptanlage und der zweiten, gewichtet. */
 export function planningMinSocPct(ctx, primaryMinSocPct) {
   const cfg = ctx?.getCfg?.();
+  // Zwei Sungrow-WR (Aufgabe 4 + M1, Christin 16.11.): Min-SoC an EOS = der EFFEKTIVE Entlade-Boden, den der Aktuator
+  // einhält — max(hartem Boden/Live, 13059 je WR + Puffer), alles real %. KEINE Gewichtung (der Boden schützt den
+  // schwächeren Akku → der HÖHERE Wert, konservativ). Puffer kundeneinstellbar (Default 1). Gleicher Boden wie im
+  // Aktuator, sonst plant EOS Entladung bis 10 %, die DVhub bei 11 % abbricht (Mismatch).
+  if (isSungrow(ctx, cfg)) {
+    const dev = ctx?.state?.victron?.device || {};
+    const slaveTel = resolveSecondInverter(cfg).aggregateTelemetry === true ? secondInverterTelemetry(ctx?.state, cfg, {}) : null;
+    const buffer = sungrowSocFloorBufferPct(cfg);
+    const devFloor = (v) => (finite(v) ? Number(v) + buffer : null);
+    const cands = [primaryMinSocPct, devFloor(dev.minSocPctDevice), devFloor(slaveTel?.minSocPctDevice)].filter((v) => finite(v)).map(Number);
+    return cands.length ? Math.max(...cands) : primaryMinSocPct;
+  }
   const f = follower(ctx, cfg);
   if (!f || !finite(primaryMinSocPct)) return primaryMinSocPct;
   return weighted(Number(primaryMinSocPct), primaryCapacityWh(cfg), f.minSocPct, f.capacityWh);

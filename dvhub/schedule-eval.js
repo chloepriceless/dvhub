@@ -34,7 +34,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 // Netzanschluss und Peak Shaving: gemeinsamer Kern der Bezugsgrenzen.
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
-import { createSungrowEms, endpointKeyOf, sungrowEmsConf } from './services/inverter/sungrow.js';
+import { createSungrowEms, endpointKeyOf, sungrowEmsConf, resolveSecondInverter } from './services/inverter/sungrow.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -213,7 +213,22 @@ export function createScheduleEvaluator(ctx) {
 
   // Sungrow-Hybrid (T-0422, Beta): Netz-Sollwert über den EMS-Modus nachbilden
   // (controlWrite.gridSetpointW.emulate 'sungrow-ems'). Ohne dieses Profil ruht er.
-  const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog, statePath: ctx.sungrowEmsStatePath || null });
+  // Zweiter Sungrow-WR mit eigenem Schreibpfad (Punkt 3, Split-Steuerung): separate EMS-Instanz auf die
+  // Slave-Verbindung (eigener Besitz-Merker, eigener Status-Key), vom Master bei Vorgaben angesteuert. Nur aktiv,
+  // wenn sungrow.secondInverter.control = 'split'; sonst bleibt der Slave ungenutzt (Standard self-only).
+  const sungrowSlaveEms = ctx.sungrowSlaveEms || createSungrowEms({
+    state, getCfg, transport: ctx.sungrowSlaveTransport || transport, pushLog,
+    statePath: ctx.sungrowSlaveEmsStatePath || null,
+    statusKey: 'sungrowEmsSlave',
+    // Slave: der zweite WR folgt dem Master-Modus (Feld #5) — der Aktuator schreibt NIE 13050 und prüft seinen
+    // Modus nicht zurück, nur Befehl/Leistung (13051/13052).
+    isSlave: true,
+    connOverride: () => {
+      const c = resolveSecondInverter(getCfg());
+      return c.enabled ? { host: c.host, port: c.port, unitId: c.unitId, timeoutMs: c.timeoutMs } : null;
+    },
+  });
+  const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog, statePath: ctx.sungrowEmsStatePath || null, slaveActuator: sungrowSlaveEms, forcedHeartbeatPath: ctx.sungrowForcedHeartbeatPath || null });
 
   // Geräte-Tor (Profil identify.requiredForWrites): geschrieben wird erst, wenn
   // polling.js das Gerät erkannt hat und es unterstützt ist — ein falsches oder
@@ -456,6 +471,32 @@ export function createScheduleEvaluator(ctx) {
     });
   }
 
+  // Live-Netto-Last (Last − PV) minus Sicherheitspuffer, höchstens so viel Netzbezug deckt nur die Hauslast,
+  // nie den Akku (Grundlage für „EOS Akku halten" eos_grid_hold UND das Netzlade-Tor Punkt 1). known=false,
+  // wenn Last oder PV fehlt/veraltet ist → der Aufrufer lehnt dann ab bzw. hält.
+  function liveNetLoadHoldW(cfg, marginW) {
+    const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
+    const loadRaw = state.victron.selfConsumptionW;
+    const pvRaw = state.victron.pvTotalW ?? state.victron.pvPowerW;
+    // Punkt 4: Last 0 bei nennenswertem Netzbezug ist unplausibel (bezieht das Netz, gibt es Last) — das passiert
+    // kurz, während der Master-Akku umschaltet oder ein Slave-Wert fehlt. Dann die Last als UNBEKANNT behandeln
+    // (nicht auf 0 deckeln), damit das Netzlade-Tor den Sollwert nicht fälschlich auf 0 zieht.
+    const gridImportW = Math.max(0, Number(state.victron.gridImportW || 0));
+    const loadImplausibleZero = Number(loadRaw) <= 0 && gridImportW > 100;
+    const known = loadRaw != null && Number.isFinite(Number(loadRaw)) && !loadImplausibleZero
+      && !victronFieldStale(state, 'selfConsumptionW', maxAgeMs)
+      && !victronFieldStale(state, 'pvTotalW', maxAgeMs);
+    const netLoadW = known ? Math.max(0, Number(loadRaw)) - Math.max(0, Number(pvRaw) || 0) : 0;
+    const m = Math.max(0, Number(marginW) || 0);
+    return {
+      known,
+      loadW: known ? Math.round(Number(loadRaw)) : null,
+      pvW: known ? Math.round(Number(pvRaw) || 0) : null,
+      netLoadW,
+      holdW: known ? Math.max(0, Math.round(netLoadW - m)) : 0,
+    };
+  }
+
   function effectiveTargetValue(target) {
     const cfg = getCfg();
     const optimizerEnabled = cfg.optimizer?.enabled ?? false;
@@ -486,7 +527,9 @@ export function createScheduleEvaluator(ctx) {
         if (!optimizerEnabled || proGateClosed) return false;
         if (r.target === 'gridSetpointW') {
           const val = Number(r.value);
-          if (val > 0 && !allowGridCharge && !isEosGridHoldRule(r)) return false;   // Netzladen blocked
+          // Punkt 1: positive Optimizer-Regeln bei Sungrow NICHT pauschal verwerfen — sie laufen durchs
+          // Netzlade-Tor (applyControlTarget), das sie auf die Hauslast deckelt. Nur Victron verwirft weiter.
+          if (val > 0 && !allowGridCharge && !isEosGridHoldRule(r) && !sungrowEmsConf(cfg)) return false;   // Netzladen blocked
           if (val < 0 && !allowGridDischarge) return false; // Netzentladung blocked
         }
       }
@@ -1149,6 +1192,14 @@ export function createScheduleEvaluator(ctx) {
 
   async function applyControlTargetCore(target, value, source) {
     const cfg = getCfg();
+    // Punkt 1 (Netzlade-Tor): ein positiver Sollwert, der nur die Hauslast aus dem Netz deckt (nicht den Akku
+    // lädt), ist bei allowGridCharge=false erlaubt — der Aktuator muss aber „nicht aus dem Netz laden" (noGridCharge)
+    // sicher umsetzen. Das Tor setzt die Flagge, der Sungrow-EMS-Write unten gibt sie weiter.
+    let noGridChargeForActuator = false;
+    // Entlade-Boden wegen UNBEKANNTEM/veraltetem SoC: der Sungrow-EMS gibt dann an den WR zurück (Modus 0,
+    // Absicherung C) statt mit unsicherem SoC weiterzuregeln. Bei bekanntem SoC am Boden regelt der Aktuator
+    // selbst weiter (Entladen gesperrt, Laden aus PV erlaubt).
+    let releaseForFloorForActuator = false;
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
     if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
     const deviceGate = deviceWriteGate(cfg);
@@ -1373,8 +1424,29 @@ export function createScheduleEvaluator(ctx) {
       // liegt damit immer unter der Netto-Last — der Akku laedt dabei nie aus
       // dem Netz, das Netzlade-Verbot (EEG/MiSpeL) bleibt gewahrt.
       if (numericValue > 0 && !allowGridCharge && source !== 'eos_grid_hold') {
-        pushLog('control_write_rejected', { target, value: numericValue, source, reason: 'grid_charge_not_allowed' });
-        return { ok: false, error: 'grid_charge_not_allowed' };
+        // Punkt 1: Netzbezug bis zur Hauslast ist KEIN Netzladen. Statt pauschal abzulehnen, den positiven
+        // Sollwert auf die Live-Netto-Last (Last − PV − Puffer) deckeln und dem Aktuator noGridCharge=true
+        // mitgeben — so deckt der Bezug nur die Last, der Akku lädt nie aus dem Netz. NUR für Aktuatoren, die das
+        // sicher umsetzen (Sungrow-EMS: der Regler begrenzt das Laden auf den PV-Überschuss). Victron-ESS kann
+        // Bezug ≤ Last nicht garantieren (Sollwert geht direkt ans ESS) → dort weiter ablehnen. Last/PV
+        // unbekannt oder veraltet → ablehnen wie bisher.
+        const marginW = Math.max(0, Number(cfg.optimizer?.eosGridHoldMarginW ?? 300));
+        const nl = liveNetLoadHoldW(cfg, marginW);
+        if (!sungrowEmsConf(cfg) || !nl.known) {
+          pushLog('control_write_rejected', { target, value: numericValue, source, reason: 'grid_charge_not_allowed' });
+          return { ok: false, error: 'grid_charge_not_allowed' };
+        }
+        const cappedTo = Math.min(numericValue, nl.holdW);
+        noGridChargeForActuator = true;
+        if (cappedTo !== numericValue) {
+          if (state.ctrl._gridChargeCapKey !== source) {
+            state.ctrl._gridChargeCapKey = source;
+            pushLog('grid_charge_capped_to_load', { requested: numericValue, cappedTo, loadW: nl.loadW, pvW: nl.pvW, source });
+          }
+        } else if (state.ctrl._gridChargeCapKey === source) {
+          state.ctrl._gridChargeCapKey = null;
+        }
+        value = cappedTo;
       }
       const isForcedGridDischarge = numericValue <= FORCED_EXPORT_THRESHOLD_W
         && !isMandatoryControlSource(source)
@@ -1546,7 +1618,9 @@ export function createScheduleEvaluator(ctx) {
     // unknown/stale telemetry => no forced/enabled discharge.
     const safeHold = dischargeFloorHold(target, value);
     if (safeHold !== null) {
-      const socRaw = state.victron.soc;
+      // Zwei Sungrow-WR: der SoC-Boden nutzt den NIEDRIGEREN der beiden SoC (socFloorPct, polling.js), damit der
+      // schwächere Akku nicht unter den Boden entladen wird; ohne zweiten WR ist das der normale System-SoC.
+      const socRaw = state.victron.socFloorPct ?? state.victron.soc;
       const soc = Number(socRaw);
       const floorPct = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
       const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
@@ -1585,6 +1659,10 @@ export function createScheduleEvaluator(ctx) {
             ageMs: victronFieldAgeMs(state, 'soc'), floorPct, reason
           });
           value = safeHold;
+          // Unbekannter/veralteter SoC (oder Einfrierer/Quellenstreit): Messwert unzuverlässig → den Sungrow-EMS
+          // an den WR zurückgeben lassen (Modus 0). Bei bekanntem SoC am Boden (below_hard_floor) nicht — der
+          // Aktuator sperrt dort nur das Entladen und lädt PV-Überschuss weiter (Forced bleibt).
+          if (reason !== 'below_hard_floor') releaseForFloorForActuator = true;
         }
       }
     }
@@ -1659,6 +1737,7 @@ export function createScheduleEvaluator(ctx) {
     // === end T-0002 keepalive ===============================================
 
     let emsFailure = false;
+    let emsReadError = false;
     try {
       let encoded, words, fc;
       if (conf.emulate != null) {
@@ -1666,9 +1745,12 @@ export function createScheduleEvaluator(ctx) {
         // durchlaufen; der Aktuator setzt Modus/Befehl/Leistung mit Rücklesen
         // und führt im 5-s-Takt nach (tick).
         if (conf.emulate !== 'sungrow-ems' || target !== 'gridSetpointW') throw new Error(`unsupported emulate: ${conf.emulate}`);
-        const r = await sungrowEms.applySetpoint(value, source);
+        const r = await sungrowEms.applySetpoint(value, source, { noGridCharge: noGridChargeForActuator, releaseForFloor: releaseForFloorForActuator });
         if (!r?.ok) {
           emsFailure = r?.blocked !== true;
+          // Reiner Kontroll-Lesefehler (nichts geschrieben): der Aktuator hat schon sungrow_ems_read_error
+          // gemeldet — kein (irreführendes) control_write_error.
+          emsReadError = r?.readError === true;
           throw new Error(r?.error || 'sungrow_ems_failed');
         }
         encoded = { raw: value, scaled: value, writeType: 'sungrow-ems', wordOrder: 'n/a' };
@@ -1760,16 +1842,20 @@ export function createScheduleEvaluator(ctx) {
       }));
       return { ok: true, raw: encoded.raw, words, scaled: encoded.scaled, writeType: encoded.writeType, wordOrder: encoded.wordOrder, fc, address: conf.address, keepalive: isKeepalive };
     } catch (e) {
-      pushLog('control_write_error', { target, value, source, error: e.message });
-      telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
-        eventType: 'control_write_error',
-        target,
-        valueNum: Number.isFinite(Number(value)) ? Number(value) : null,
-        reason: source,
-        source: 'runtime',
-        meta: { error: e.message }
-      }));
-      return { ok: false, error: e.message, ...(emsFailure ? { emsFailure: true } : {}) };
+      // Reiner Sungrow-Kontroll-Lesefehler: schon als sungrow_ems_read_error gemeldet, nichts geschrieben →
+      // kein control_write_error (wäre irreführend).
+      if (!emsReadError) {
+        pushLog('control_write_error', { target, value, source, error: e.message });
+        telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+          eventType: 'control_write_error',
+          target,
+          valueNum: Number.isFinite(Number(value)) ? Number(value) : null,
+          reason: source,
+          source: 'runtime',
+          meta: { error: e.message }
+        }));
+      }
+      return { ok: false, error: e.message, ...(emsFailure ? { emsFailure: true } : {}), ...(emsReadError ? { readError: true } : {}) };
     }
   }
 
@@ -1980,7 +2066,9 @@ export function createScheduleEvaluator(ctx) {
         if (!optimizerEnabled) return false; // optimizer off → purge all
         if (r.target === 'gridSetpointW') {
           const val = Number(r.value);
-          if (val > 0 && !allowGridCharge && !isEosGridHoldRule(r)) return false;   // Netzladen verboten
+          // Punkt 1: positive Optimizer-Regeln bei Sungrow nicht pauschal entfernen — sie laufen durchs
+          // Netzlade-Tor und werden auf die Hauslast gedeckelt. Nur Victron entfernt weiter.
+          if (val > 0 && !allowGridCharge && !isEosGridHoldRule(r) && !sungrowEmsConf(cfg)) return false;   // Netzladen verboten
           if (val < 0 && !allowGridDischarge) return false; // Netzentladung verboten
         }
         return true;
@@ -2283,27 +2371,46 @@ export function createScheduleEvaluator(ctx) {
       // beim E-Auto groesser (1 kW): dessen Last springt, und 5 s Regeltakt
       // duerfen dann nicht in den Akku laden. Fehlen Live-Werte oder sind sie
       // alt → 0 (Eigenverbrauch wie ohne Regel).
-      if (target === 'gridSetpointW'
-          && eff.rule?.optimizer === 'eos'
-          && eff.rule?.closedLoopHold) {
-        const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
-        const loadRaw = state.victron.selfConsumptionW;
-        const pvRaw = state.victron.pvTotalW ?? state.victron.pvPowerW;
-        const known = Number.isFinite(Number(loadRaw)) && loadRaw != null
-          && !victronFieldStale(state, 'selfConsumptionW', maxAgeMs)
-          && !victronFieldStale(state, 'pvTotalW', maxAgeMs);
-        const marginW = eff.rule.evPlanned
-          ? Math.max(0, Number(cfg.optimizer?.eosGridHoldEvMarginW ?? 1000))
-          : Math.max(0, Number(cfg.optimizer?.eosGridHoldMarginW ?? 300));
-        const netLoadW = known ? Math.max(0, Number(loadRaw)) - Math.max(0, Number(pvRaw) || 0) : 0;
-        const holdW = known ? Math.max(0, Math.round(netLoadW - marginW)) : 0;
-        eff.value = holdW;
-        eff.source = 'eos_grid_hold';
-        eosGridHoldThisTick = { at: Date.now(), known, valueW: holdW, evPlanned: !!eff.rule.evPlanned, ruleId: eff.rule.id ?? null };
-        const key = `${eff.rule.id}:${known}`;
-        if (state.ctrl._eosHoldKey !== key) {
-          pushLog('eos_grid_hold', { known, loadW: known ? Math.round(Number(loadRaw)) : null, pvW: known ? Math.round(Number(pvRaw) || 0) : null, marginW, gridSetpointW: holdW, evPlanned: !!eff.rule.evPlanned });
-          state.ctrl._eosHoldKey = key;
+      // M8 (Feld 16.11., Muss): solange der Netzstrom-Anteil im Akku GESPERRT ist (gridShare.locked:
+      // battery_grid_export_blocked an EOS), EOS-„Halten" NICHT ausführen — und EOS-Netzladen ebenfalls nicht.
+      // Die Sperre löst sich NUR durch Entladen ins Haus (Netzanteil < releaseKwh). „Halten" verhindert genau das,
+      // und das „Entladen" im Plan ist nur das Ende des rollenden Regel-Horizonts (ruleHorizonHours) → die Sperre
+      // könnte sich sonst NIE lösen (PV bleibt in teuren Stunden ausgesperrt). Stattdessen Eigenverbrauch
+      // (Standard-Sollwert): der Akku deckt die Last, der Netzanteil wird im Haus verbraucht; fällt die Sperre
+      // (< releaseKwh), greift „Halten"/„Netzladen" wieder nach Plan. (Netzladen während der Sperre erzeugte den
+      // Anteil neu — es bleibt daher ebenfalls ausgesetzt, bis die Sperre fällt.)
+      const m8ShareLocked = ctx.gridShare?.isLocked?.() === true;
+      const m8IsHold = target === 'gridSetpointW' && eff.rule?.optimizer === 'eos' && eff.rule?.closedLoopHold === true;
+      const m8IsGridCharge = target === 'gridSetpointW' && eff.rule?.optimizer === 'eos'
+        && !eff.rule?.closedLoopHold && !eff.rule?.closedLoopExport && Number(eff.value) > 0;
+      if (m8ShareLocked && (m8IsHold || m8IsGridCharge)) {
+        const selfW = Number(cfg.schedule?.defaultGridSetpointW);
+        eff.value = Number.isFinite(selfW) ? selfW : 0; // Eigenverbrauch (Netzanteil im Haus verbrauchen)
+        eff.source = m8IsHold ? 'eos_grid_hold_suspended' : 'eos_grid_charge_suspended';
+        let gridKwh = null; try { gridKwh = ctx.gridShare?.summary?.()?.gridKwh ?? null; } catch { /* best effort */ }
+        state.ctrl.eosGridShareSuspend = { at: Date.now(), kind: m8IsHold ? 'hold' : 'charge', gridKwh, ruleId: eff.rule?.id ?? null };
+        const key = `${eff.source}:${eff.rule?.id ?? ''}`;
+        if (state.ctrl._eosSuspendKey !== key) {
+          pushLog(eff.source, { gridKwh, text: `EOS-${m8IsHold ? 'Halten' : 'Netzladen'} ausgesetzt: Netzstrom im Akku (${gridKwh != null ? gridKwh.toFixed(2) : '?'} kWh) wird zuerst im Haus verbraucht.` });
+          state.ctrl._eosSuspendKey = key;
+        }
+      } else {
+        if (state.ctrl.eosGridShareSuspend) { state.ctrl.eosGridShareSuspend = null; state.ctrl._eosSuspendKey = null; }
+        if (m8IsHold) {
+          const marginW = eff.rule.evPlanned
+            ? Math.max(0, Number(cfg.optimizer?.eosGridHoldEvMarginW ?? 1000))
+            : Math.max(0, Number(cfg.optimizer?.eosGridHoldMarginW ?? 300));
+          const nl = liveNetLoadHoldW(cfg, marginW);
+          const known = nl.known;
+          const holdW = nl.holdW;
+          eff.value = holdW;
+          eff.source = 'eos_grid_hold';
+          eosGridHoldThisTick = { at: Date.now(), known, valueW: holdW, evPlanned: !!eff.rule.evPlanned, ruleId: eff.rule.id ?? null };
+          const key = `${eff.rule.id}:${known}`;
+          if (state.ctrl._eosHoldKey !== key) {
+            pushLog('eos_grid_hold', { known, loadW: nl.loadW, pvW: nl.pvW, marginW, gridSetpointW: holdW, evPlanned: !!eff.rule.evPlanned });
+            state.ctrl._eosHoldKey = key;
+          }
         }
       }
       // === end EOS Akku halten =================================================
@@ -2326,7 +2433,8 @@ export function createScheduleEvaluator(ctx) {
           && eff.source === 'manual_override_persistent'
           && Number(eff.value) < 0) {
         const floorPct = Number(cfg.schedule?.manualOverrideMinSocPct ?? 10);
-        const socRaw = state.victron.soc;
+        // Zwei Sungrow-WR: niedrigerer der beiden SoC als Boden (socFloorPct, polling.js); sonst System-SoC.
+        const socRaw = state.victron.socFloorPct ?? state.victron.soc;
         const soc = Number(socRaw);
         const socKnown = socRaw != null && Number.isFinite(soc);
         if (!socKnown || soc <= floorPct) {
@@ -2581,6 +2689,15 @@ export function createScheduleEvaluator(ctx) {
   // bereits gesichert; die Freigabe-Sequenz restauriert sie unabhängig vom Loop.
 
   const ZFI_TICK_MS = 5000;
+  // Eigener, schnellerer Aufruftakt für den Sungrow-EMS-Regler (Punkt 2 / E): Basis 1 s, unabhängig vom 5-s-ZFI/Eval.
+  // Der Aktuator steuert sich intern über due(stepEveryMs) selbst heraus (adaptiv 1–5 s beim Regeln, sonst ruhig),
+  // und tick() kehrt ohne Profil/Sollwert sofort zurück — die 1-s-Basis ist auf Nicht-Sungrow-Anlagen ein No-op.
+  // 0,25-s-Option (Christin 15.11.): hat der Betreiber einen Sub-Sekunden-Takt gewählt (sungrow.regulateEveryMs),
+  // tickt der Aufrufer entsprechend schneller (bis 250 ms) — serial() + due() + Auto-Strecken fangen einen Rückstau
+  // ab (es wird nie schneller geregelt, als die gemessene Antwortzeit hergibt). Erst ab Neustart wirksam.
+  const sungrowFixedMs = Number(getCfg()?.sungrow?.regulateEveryMs);
+  const SUNGROW_TICK_MS = Number.isFinite(sungrowFixedMs) && sungrowFixedMs > 0 && sungrowFixedMs < 1000
+    ? Math.max(250, Math.round(sungrowFixedMs)) : 1000;
   const ZFI_GAIN = 0.7;               // Dämpfung des integrierenden Reglers
   const ZFI_EXPORT_ENTER_STREAK = 3;  // Export-Ticks in Folge bis Deckel-Enter
   const ZFI_READBACK_MS = 60000;      // Steuerprioritäten-Drift-Check (throttled)
@@ -2588,6 +2705,7 @@ export function createScheduleEvaluator(ctx) {
   const ZFI_EXPORT_CLEAR_TICKS = 6;    // Export-Deckel: Takte bei 100 % ohne Export bis Exit
   const ZFI_MIN_PCT = 1;              // 0 % legt den WR still — nie schreiben
   let zfiInterval = null;
+  let sungrowTickInterval = null;
   let zfiBusy = false;
 
   function zfiState() {
@@ -2947,17 +3065,20 @@ export function createScheduleEvaluator(ctx) {
       () => {
         // Erst die Sperre (zfi), dann die feste Einspeisegrenze — nie gleichzeitig.
         zeroFeedInTick().catch(() => { /* zfi loggt selbst (throttled) */ })
-          .then(() => feedInCapTick()).catch(() => {})
-          // Sungrow-EMS nachführen (ruht ohne Profil; intern höchstens alle 10 s).
-          .then(() => sungrowEms.tick()).catch(() => {});
+          .then(() => feedInCapTick()).catch(() => {});
       },
       ZFI_TICK_MS);
+    // Sungrow-EMS-Regler im eigenen, schnelleren Takt nachführen (Punkt 2): ruht ohne Profil; intern adaptiv 1–5 s.
+    sungrowTickInterval = safeInterval('schedule-eval.sungrow-tick',
+      () => { sungrowEms.tick().catch(() => {}); },
+      SUNGROW_TICK_MS);
   }
 
   function stop() {
     stopping = true;
     if (evalTimeout) { clearTimeout(evalTimeout); evalTimeout = null; }
     if (zfiInterval) { clearInterval(zfiInterval); zfiInterval = null; }
+    if (sungrowTickInterval) { clearInterval(sungrowTickInterval); sungrowTickInterval = null; }
     // Bewusst KEIN Modbus-Write im Stop-Pfad (Shutdown-Hänger-Historie) — ein
     // aktiver Deckel am Gerät verfällt über WMaxLimPct_RvrtTms von selbst.
   }

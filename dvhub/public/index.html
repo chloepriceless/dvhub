@@ -93,7 +93,7 @@
 
       <div class="card rail-card" data-accent="bat">
         <div class="rail-card-head">
-          <span class="ttl"><span class="dot dot-bat"></span>Batterie &middot; Victron</span>
+          <span class="ttl"><span class="dot dot-bat"></span>Batterie &middot; <span id="batSourceName">Victron</span></span>
           <span class="chip info sm" id="batModeChip" hidden><span class="dot"></span><span id="batMode">&mdash;</span></span>
         </div>
         <div class="rail-big card-value value-bat" id="soc">&mdash;</div>
@@ -159,6 +159,8 @@
         <div class="rail-row" data-leit="adv" title="Netz-Sollwert, den DVhub der zweiten GX schreibt (wirkt auf ihren AC-IN, Register 2716)."><span class="l">Sollwert AC-IN</span><strong class="v" id="secondGxSetpoint">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Minimum-SOC</span><strong class="v" id="secondGxMinSoc">&mdash;</strong></div>
       </div>
+      <!-- Zwei Sungrow-WR im Master/Slave-Parallelbetrieb (T-0422, sungrow-inverter-view.js).
+           Nur sichtbar, wenn ein zweiter WR konfiguriert ist. -->
       <!-- Netzanschluss: Bezugsgrenze des Hausanschlusses (services/grid-connection,
            grid-connection-view.js). Nur sichtbar, wenn eine Grenze eingetragen ist. -->
       <div class="card rail-card" data-accent="ctrl" id="gridConnectionCard" hidden>
@@ -333,6 +335,70 @@
     <!-- EPEX Day-Ahead chart: unter linker Spalte + Energiefluss, die rechte
          Spalte laeuft daneben weiter (Christin 2026-09-23 — sonst zog die hohe
          rechte Spalte den Energiefluss in die Laenge). -->
+    <!-- Wechselrichter-Kachel (zwei Sungrow-WR): volle Reihe UNTER dem Energiefluss, Master | Slave | Summe
+         nebeneinander (M5, Feld 16.11.). Ohne zweiten WR bleibt sie versteckt (die Reihe kollabiert). -->
+    <div class="card rail-card leit-wr" data-accent="bat" id="sungrowWrCard" data-screen-label="Inverters (two)" hidden>
+      <div class="rail-card-head">
+        <span class="ttl"><span class="dot dot-bat"></span>Wechselrichter &middot; Sungrow</span>
+        <!-- Modus auf EIGENER Zeile unter dem Titel (nicht daneben, Feld 15.11.). -->
+        <span class="wr-mode" id="sungrowWrMode" title="Aktiver EMS-Modus: Eigenverbrauch (0), Forced-Split (2) oder External EMS (3).">&mdash;</span>
+      </div>
+      <div class="wr-cols">
+        <!-- Master -->
+        <div class="wr-col">
+          <div class="rail-row wr-role"><span class="l" id="sungrowWrMasterRole">Master</span></div>
+          <div class="wr-badges" id="sungrowWrMasterBadges" hidden></div>
+          <div class="wr-grid wr-grid-3" title="Master: SoC · Akku (Richtung) · PV.">
+            <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrMasterSoc">&mdash;</strong></div>
+            <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrMasterAkku">&mdash;</strong></div>
+            <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrMasterPv">&mdash;</strong></div>
+          </div>
+          <div class="wr-line"><span class="wr-l">Befehl</span><strong class="wr-v" id="sungrowWrMasterCmd">&mdash;</strong></div>
+          <div class="wr-line" id="sungrowWrMasterCountdownRow" hidden title="Herzschlag-Countdown — nur im External EMS (Modus 3)."><span class="wr-l">Countdown</span><strong class="wr-v" id="sungrowWrMasterCountdown">&mdash;</strong></div>
+          <div class="wr-line" title="Wirksame Grenzen = min(Gerät 33047/33048, BDC) je Richtung + SoC-Spanne der Anlage."><span class="wr-l">Grenzen</span><strong class="wr-v" id="sungrowWrMasterLimit">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv"><span class="l" id="sungrowWrMasterMeta">&mdash;</span></div>
+          <div class="rail-row" data-leit="adv" title="EMS-Entscheidung, Besitz und Herzschlag des Masters."><span class="l">EMS</span><strong class="v" id="sungrowWrMasterEms">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Aufteilung Master/Slave (Strategie) und adaptiver Regeltakt mit gemessener Antwortzeit."><span class="l">Aufteilung/Takt</span><strong class="v" id="sungrowWrMasterSplit">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Modbus-Gesundheit des Master-Steuerpfads: wirksamer Takt, Anfragen/s, Antwortzeit, Modbus-Fehler der letzten 24 h und letzter Fehler mit Zeit."><span class="l">Modbus</span><strong class="v" id="sungrowWrMasterHealth">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Tages-Schreibzähler je Register (13050 Modus mit Budget, 13051 Befehl, 13052 Leistung, 13080 Herzschlag)."><span class="l">Writes Master</span><strong class="v" id="sungrowWrMasterWrites">&mdash;</strong></div>
+        </div>
+        <!-- Slave -->
+        <div class="wr-col">
+          <div class="rail-row wr-role"><span class="l" id="sungrowWrSlaveRole">Slave</span></div>
+          <div class="wr-badges" id="sungrowWrSlaveBadges" hidden></div>
+          <div class="wr-status" id="sungrowWrSlaveStatus" hidden>&mdash;</div>
+          <div id="sungrowWrSlaveGrid">
+            <div class="wr-grid wr-grid-3" title="Slave: SoC · Akku (Richtung) · PV.">
+              <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrSlaveSoc">&mdash;</strong></div>
+              <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrSlaveAkku">&mdash;</strong></div>
+              <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrSlavePv">&mdash;</strong></div>
+            </div>
+            <div class="wr-line"><span class="wr-l">Befehl</span><strong class="wr-v" id="sungrowWrSlaveCmd">&mdash;</strong></div>
+            <div class="wr-line" id="sungrowWrSlaveCountdownRow" hidden><span class="wr-l">Countdown</span><strong class="wr-v" id="sungrowWrSlaveCountdown">&mdash;</strong></div>
+            <div class="wr-line"><span class="wr-l">Grenzen</span><strong class="wr-v" id="sungrowWrSlaveLimit">&mdash;</strong></div>
+          </div>
+          <div class="rail-row" data-leit="adv"><span class="l">Slave-EMS/BDC</span><strong class="v" id="sungrowWrSlaveEms">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Modbus-Gesundheit des Slave-Lesepfads: wirksamer Lesetakt, Anfragen/s, Antwortzeit, Modbus-Fehler der letzten 24 h und letzter Fehler mit Zeit."><span class="l">Modbus</span><strong class="v" id="sungrowWrSlaveHealth">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv"><span class="l">Writes Slave</span><strong class="v" id="sungrowWrSlaveWrites">&mdash;</strong></div>
+        </div>
+        <!-- Summe -->
+        <div class="wr-col">
+          <div class="rail-row wr-role"><span class="l">Summe</span></div>
+          <div class="wr-grid wr-grid-3">
+            <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrSumSoc">&mdash;</strong></div>
+            <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrSumAkku">&mdash;</strong></div>
+            <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrSumPv">&mdash;</strong></div>
+          </div>
+          <!-- M2: manuelle Freigabe (Modus 0, beide 0xCC) — der Weg ohne Shell, falls der Master in DVhubs
+               Forced mode „hängt" (Besitz-Merker nach Lesefehler/Neustart verloren). Mit Bestätigung. -->
+          <div class="rail-row" data-leit="adv">
+            <button type="button" class="btn sm" id="sungrowWrReleaseBtn" title="Nimmt den Forced/External-EMS-Betrieb am Master zurück: Modus 0 (Eigenverbrauch), beide Wechselrichter auf Stopp (0xCC). Nutze dies, wenn der Wechselrichter fest in einem Lade-/Entladebefehl steht.">Sungrow freigeben</button>
+            <span class="v" id="sungrowWrReleaseStatus"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <section class="section-block leit-epex" data-screen-label="EPEX Day-Ahead">
       <div class="card chart-card">
         <div class="card-head">
@@ -657,6 +723,7 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20261006-zaehlen"></script>
 <script src="/second-gx-view.js?v=20261021"></script>
+<script src="/sungrow-inverter-view.js?v=20261115"></script>
 <script src="/eos-plan-summary.js?v=20261105-eos-frist"></script>
 <script src="/peak-shaving-view.js?v=20261026"></script>
 <script src="/license-banner.js?v=20261105-lizenz-umzug"></script>

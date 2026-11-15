@@ -149,3 +149,37 @@ test('Befund 3: das Börsenautomatik-Feld (Standard 30 kWh) gilt nicht als Akkuk
   const cfg = { optimizer: {}, schedule: { smallMarketAutomation: { batteryCapacityKwh: 30 } } };
   assert.equal(gridShareCapacityInput({ state: { victron: { soc: 50 } } }, cfg).capacityMissing, true);
 });
+
+// --- Zwei Sungrow-WR (Parallelbetrieb): Systemkapazität = Summe beider Akkus, System-SoC ---------------
+
+function sungrowCtx({ aggregate = true, online = true, secondCapWh = 9600, mainCapWh = 10000, soc = 55 } = {}) {
+  const cfg = {
+    optimizer: { batteryCapacityWh: mainCapWh },
+    sungrow: { secondInverter: { host: '192.168.68.83', aggregateTelemetry: aggregate, ...(secondCapWh ? { batteryCapacityWh: secondCapWh } : {}) } },
+  };
+  const state = {
+    victron: { soc },
+    sungrowSecond: { online, updatedAt: Date.now(), socPct: 40, batteryPowerW: -2168, pvPowerW: 0, bdcRatedW: 10000 },
+  };
+  return { ctx: { state, getCfg: () => cfg }, cfg };
+}
+
+test('Zwei Sungrow-WR: Kapazität = Master + Slave, SoC = System-SoC', () => {
+  const { ctx, cfg } = sungrowCtx({ secondCapWh: 9600, mainCapWh: 10000, soc: 55 });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 19600, socPct: 55, capacityMissing: false });
+});
+
+test('Zwei Sungrow-WR: Zweit-Kapazität fehlt → Summe unbekannt (capacityMissing), kein Abbuchen', () => {
+  const { ctx, cfg } = sungrowCtx({ secondCapWh: 0, soc: 55 });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: null, socPct: 55, capacityMissing: true });
+});
+
+test('Zwei Sungrow-WR: aggregateTelemetry AUS → Master-only wie bisher', () => {
+  const { ctx, cfg } = sungrowCtx({ aggregate: false, mainCapWh: 10000, soc: 55 });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 10000, socPct: 55, capacityMissing: false });
+});
+
+test('Zwei Sungrow-WR: Slave offline → Master-only (kein Sungrow-Sonderfall)', () => {
+  const { ctx, cfg } = sungrowCtx({ online: false, mainCapWh: 10000, soc: 55 });
+  assert.deepEqual(gridShareCapacityInput(ctx, cfg), { capacityWh: 10000, socPct: 55, capacityMissing: false });
+});

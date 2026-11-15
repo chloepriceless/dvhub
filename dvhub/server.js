@@ -208,6 +208,7 @@ import { energyBalanceBattery } from './services/energy-balance-battery.js';
 import { createGridShareTracker } from './services/optimizer/grid-share.js';
 import { createGridSharePollTick } from './services/optimizer/grid-share-poll.js';
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
+import { createSungrowSecond } from './services/inverter/sungrow-second.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createPriceOutlookService } from './services/optimizer/price-outlook.js';
 import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
@@ -1178,6 +1179,10 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
 // Sungrow-EMS (T-0422): Merker, dass DVhub den Zwangs-/External-EMS-Betrieb gesetzt hat (übersteht Neustarts).
 const SUNGROW_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_state.json');
+const SUNGROW_SLAVE_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_slave_state.json');
+// Lebenszeichen für den unabhängigen Box-Watchdog (Absicherung C4, Dauer-Forced): der Master-Aktuator frischt es
+// auf, der externe Watchdog (scripts/sungrow-forced-watchdog.mjs) liest es.
+const SUNGROW_FORCED_HEARTBEAT_PATH = path.join(DATA_DIR || __dirname, 'sungrow_forced_heartbeat.json');
 // Peak Shaving (GitHub #28): eine von DVhub aufgehobene Akku-Sperre (Victron
 // 2704) steht gespeichert im GX — der Merker sorgt dafür, dass ein neuer
 // Prozess sie zurückschreibt statt sie zu vergessen.
@@ -1400,6 +1405,8 @@ setNotHaltProbe(() => state.ctrl.discretionaryWritesPaused === true);
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
   sungrowEmsStatePath: SUNGROW_EMS_STATE_PATH,
+  sungrowSlaveEmsStatePath: SUNGROW_SLAVE_EMS_STATE_PATH,
+  sungrowForcedHeartbeatPath: IS_RUNTIME_PROCESS ? SUNGROW_FORCED_HEARTBEAT_PATH : null,
   peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
   // Nur der Laufzeit-Prozess regelt — nur er liest und schreibt den Merker.
   gridConnectionAssistPath: IS_RUNTIME_PROCESS ? GRID_CONNECTION_ASSIST_PATH : null,
@@ -1544,6 +1551,12 @@ ctx.getIsDay = (now = Date.now()) => {
 };
 const mab = createMarketAutomationBuilder(ctx);
 ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRules;
+// Gemeinsamer Modbus-Pool für den ZWEITEN Sungrow-WR (Lesen durch den Companion, Schreiben durch den
+// Slave-EMS der Split-Steuerung): EINE Verbindung zum Slave, damit ein WiNet-S (nur ein Modbus-Client) nicht
+// durch zwei Verbindungen blockiert. Eigener Pool, damit ein hängender Slave den Master-Pfad nie ausbremst.
+ctx.sungrowSlaveTransport = (transport.type === 'modbus')
+  ? createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs })
+  : null;
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 // Sungrow-EMS (T-0422): Not-Halt nimmt einen von DVhub gesetzten Zwangsbetrieb
@@ -1606,6 +1619,11 @@ ctx.onMultiGxAvailability = createEosResyncOnAvailability({
 });
 ctx.multiGx = createMultiGx(ctx, { transport: createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
 if (IS_RUNTIME_PROCESS) ctx.multiGx.start();
+// Zweiter Sungrow-WR im Master/Slave-Parallelbetrieb (services/inverter/sungrow-second): NUR LESEND, eigener
+// Modbus-Pool. Steuerung geht laut Sungrow-Doku nur an den Master (createSungrowEms). Ohne
+// sungrow.secondInverter.host keine einzige Anfrage.
+ctx.sungrowSecond = createSungrowSecond(ctx, { transport: ctx.sungrowSlaveTransport || createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs }) });
+if (IS_RUNTIME_PROCESS) ctx.sungrowSecond.start();
 ctx.applyControlTarget = scheduler.applyControlTarget;
 // Geteilte Steuer-Primitiven (services/control-commands.js): HTTP-Routen UND der
 // MQTT-Command-Subscriber gehen durch denselben geprüften Pfad.
@@ -3203,6 +3221,7 @@ async function gracefulShutdown(signal) {
   safeSync('peakShaving.stop', () => ctx.peakShaving?.stop?.());
   safeSync('gridConnection.stop', () => ctx.gridConnection?.stop?.());
   safeSync('multiGx.stop', () => ctx.multiGx?.stop?.());
+  safeSync('sungrowSecond.stop', () => ctx.sungrowSecond?.stop?.());
   safeSync('vehicleEvcc.stop', () => ctx.vehicleEvcc?.stop?.());
   safeSync('vehiclePull.stop', () => ctx.vehiclePull?.stop?.());
   safeSync('tariffProvider.stop', () => ctx.tariffProvider?.stop?.());
@@ -3226,6 +3245,14 @@ async function gracefulShutdown(signal) {
   // bereits laufenden Dump nicht ab, das wäre ein separater, größerer Fix.
   safeSync('dbBackupScheduler.stop', () => ctx.dbBackupScheduler?.stop?.());
 
+  // Absicherung Forced mode (C, Sungrow Dauer-Forced): Forced mode (13050=2) hat KEINEN geräteeigenen Rückfall —
+  // ohne Freigabe bliebe der Akku beim geordneten Stop (systemctl restart, Update-Neustart = SIGTERM) im letzten
+  // Lade-/Entladebefehl stehen. Darum beide WR hier sicher in Self-consumption (Master Modus 0, beide 0xCC),
+  // SOLANGE der Modbus-Transport noch lebt (vor transport.destroy unten). Sequenziell awaited, best effort; ein
+  // 5-s-Timeout (safeAsync) bricht den Shutdown nie ab. Das externe ExecStopPost-Skript ist der Gürtel-und-
+  // Hosenträger für einen Prozess, der diesen Pfad nicht mehr durchläuft (Crash/SIGKILL).
+  await safeAsync('sungrowEms.release', () => ctx.sungrowEms?.releaseControl?.('shutdown'));
+
   // 2. Parallel async closes — one rejection must NOT block the others.
   //    Order-of-init is preserved only where needed (forecastSnapshots before forecast above).
   await Promise.all([
@@ -3243,6 +3270,7 @@ async function gracefulShutdown(signal) {
     safeAsync('mqttHub.close', () => mqttHub.close()),
     // Close Modbus TCP connections gracefully (FIN, not RST)
     safeAsync('transport.destroy', () => transport.destroy()),
+    safeAsync('sungrowSlaveTransport.destroy', () => ctx.sungrowSlaveTransport?.destroy?.()),
     safeAsync('scanTransport.destroy', () => scanTransport.destroy()),
     safeAsync('vpnManager.close', () => vpnManager.close()),
     // Plan 29-07A: license poller has a 24h setInterval + boot timeout (close() at services/license/index.js).

@@ -127,6 +127,20 @@ describe('POST /api/control/write — Erfolg', () => {
     assert.deepEqual(writes, []);
   });
 
+  it('clear gridSetpointW nimmt den Sungrow-EMS-Sollwert sofort zurück (Wettlauf, Ref 21e73f78)', async () => {
+    const { ctx, state } = setup();
+    const revokes = [];
+    ctx.sungrowEms = { revoke: async (reason) => { revokes.push(reason); return { ok: true, revoked: true }; } };
+    state.schedule.manualOverride.gridSetpointW = { value: -800, at: Date.now(), persistent: true };
+    await post(ctx, '/api/control/write', { target: 'gridSetpointW', clear: true });
+    assert.deepEqual(revokes, ['override_cleared'], 'EMS-Sollwert sofort zurückgenommen');
+    // Ein anderes Ziel nimmt den EMS-Sollwert NICHT zurück.
+    revokes.length = 0;
+    state.schedule.manualOverride.minSocPct = { value: 20, at: Date.now() };
+    await post(ctx, '/api/control/write', { target: 'minSocPct', clear: true });
+    assert.deepEqual(revokes, [], 'anderes Ziel nimmt den EMS-Sollwert nicht zurück');
+  });
+
   it('Min-SoC 3 % bei hartem Boden 10 % → geklemmt auf 10', async () => {
     const { ctx, writes } = setup();
     const r = await post(ctx, '/api/control/write', { target: 'minSocPct', value: 3 });
