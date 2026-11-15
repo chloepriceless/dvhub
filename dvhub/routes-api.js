@@ -2703,6 +2703,9 @@ export function createApiRoutes(ctx) {
     // Befehl/Leistung, Besitz, Herzschlag (Soll/erkannte FC). Nur In-Memory; im Runtime-Worker-Betrieb hier null.
     payload.sungrowEms = state.ctrl?.sungrowEms ?? null;
     payload.sungrowEmsSlave = state.ctrl?.sungrowEmsSlave ?? null;
+    // M8: EOS-„Halten"/„Netzladen" ausgesetzt, weil der Netzstrom-Anteil im Akku gesperrt ist (erst im Haus
+    // verbrauchen). In-Memory wie sungrowEms (im Runtime-Worker-Betrieb hier null).
+    payload.eosGridShareSuspend = state.ctrl?.eosGridShareSuspend ?? null;
     // Victron device alarms (read-only display). Source is payload.victron.alarms,
     // which the POLLER (possibly a separate runtime-worker process) writes and
     // which reaches here through the runtime IPC snapshot — NOT web-process-local

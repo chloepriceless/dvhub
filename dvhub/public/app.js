@@ -2449,7 +2449,12 @@ function renderDashboardStatus(status) {
         // Ohne eingestellte Akkukapazität bucht der Zähler nicht ab (die Sperre
         // bleibt) — das muss sichtbar sein (Gesamtprüfung Release 1.0.9, Befund 3).
         const capHint = gs.capacityMissing ? ' · Akkukapazität fehlt (Einstellungen)' : '';
-        setText('gridShare', `${kwh} kWh (${pct} %)${gs.locked ? ' · Einspeisung gesperrt' : ''}${capHint}`, gs.locked || gs.capacityMissing ? 'warn' : null);
+        // M8: zeigt, wenn EOS-„Halten"/„Netzladen" ausgesetzt ist, weil der Netzanteil zuerst im Haus verbraucht wird.
+        const susp = status.eosGridShareSuspend;
+        const suspHint = (gs.locked && susp)
+          ? ` · ${susp.kind === 'charge' ? 'Netzladen' : 'Halten'} ausgesetzt (wird zuerst verbraucht)`
+          : '';
+        setText('gridShare', `${kwh} kWh (${pct} %)${gs.locked ? ' · Einspeisung gesperrt' : ''}${suspHint}${capHint}`, gs.locked || gs.capacityMissing ? 'warn' : null);
       }
     }
     setText('pvP', vic.pvPowerW == null ? '-' : `${vic.pvPowerW} W`);

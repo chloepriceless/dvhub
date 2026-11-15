@@ -2371,22 +2371,46 @@ export function createScheduleEvaluator(ctx) {
       // beim E-Auto groesser (1 kW): dessen Last springt, und 5 s Regeltakt
       // duerfen dann nicht in den Akku laden. Fehlen Live-Werte oder sind sie
       // alt → 0 (Eigenverbrauch wie ohne Regel).
-      if (target === 'gridSetpointW'
-          && eff.rule?.optimizer === 'eos'
-          && eff.rule?.closedLoopHold) {
-        const marginW = eff.rule.evPlanned
-          ? Math.max(0, Number(cfg.optimizer?.eosGridHoldEvMarginW ?? 1000))
-          : Math.max(0, Number(cfg.optimizer?.eosGridHoldMarginW ?? 300));
-        const nl = liveNetLoadHoldW(cfg, marginW);
-        const known = nl.known;
-        const holdW = nl.holdW;
-        eff.value = holdW;
-        eff.source = 'eos_grid_hold';
-        eosGridHoldThisTick = { at: Date.now(), known, valueW: holdW, evPlanned: !!eff.rule.evPlanned, ruleId: eff.rule.id ?? null };
-        const key = `${eff.rule.id}:${known}`;
-        if (state.ctrl._eosHoldKey !== key) {
-          pushLog('eos_grid_hold', { known, loadW: nl.loadW, pvW: nl.pvW, marginW, gridSetpointW: holdW, evPlanned: !!eff.rule.evPlanned });
-          state.ctrl._eosHoldKey = key;
+      // M8 (Feld 16.11., Muss): solange der Netzstrom-Anteil im Akku GESPERRT ist (gridShare.locked:
+      // battery_grid_export_blocked an EOS), EOS-„Halten" NICHT ausführen — und EOS-Netzladen ebenfalls nicht.
+      // Die Sperre löst sich NUR durch Entladen ins Haus (Netzanteil < releaseKwh). „Halten" verhindert genau das,
+      // und das „Entladen" im Plan ist nur das Ende des rollenden Regel-Horizonts (ruleHorizonHours) → die Sperre
+      // könnte sich sonst NIE lösen (PV bleibt in teuren Stunden ausgesperrt). Stattdessen Eigenverbrauch
+      // (Standard-Sollwert): der Akku deckt die Last, der Netzanteil wird im Haus verbraucht; fällt die Sperre
+      // (< releaseKwh), greift „Halten"/„Netzladen" wieder nach Plan. (Netzladen während der Sperre erzeugte den
+      // Anteil neu — es bleibt daher ebenfalls ausgesetzt, bis die Sperre fällt.)
+      const m8ShareLocked = ctx.gridShare?.isLocked?.() === true;
+      const m8IsHold = target === 'gridSetpointW' && eff.rule?.optimizer === 'eos' && eff.rule?.closedLoopHold === true;
+      const m8IsGridCharge = target === 'gridSetpointW' && eff.rule?.optimizer === 'eos'
+        && !eff.rule?.closedLoopHold && !eff.rule?.closedLoopExport && Number(eff.value) > 0;
+      if (m8ShareLocked && (m8IsHold || m8IsGridCharge)) {
+        const selfW = Number(cfg.schedule?.defaultGridSetpointW);
+        eff.value = Number.isFinite(selfW) ? selfW : 0; // Eigenverbrauch (Netzanteil im Haus verbrauchen)
+        eff.source = m8IsHold ? 'eos_grid_hold_suspended' : 'eos_grid_charge_suspended';
+        let gridKwh = null; try { gridKwh = ctx.gridShare?.summary?.()?.gridKwh ?? null; } catch { /* best effort */ }
+        state.ctrl.eosGridShareSuspend = { at: Date.now(), kind: m8IsHold ? 'hold' : 'charge', gridKwh, ruleId: eff.rule?.id ?? null };
+        const key = `${eff.source}:${eff.rule?.id ?? ''}`;
+        if (state.ctrl._eosSuspendKey !== key) {
+          pushLog(eff.source, { gridKwh, text: `EOS-${m8IsHold ? 'Halten' : 'Netzladen'} ausgesetzt: Netzstrom im Akku (${gridKwh != null ? gridKwh.toFixed(2) : '?'} kWh) wird zuerst im Haus verbraucht.` });
+          state.ctrl._eosSuspendKey = key;
+        }
+      } else {
+        if (state.ctrl.eosGridShareSuspend) { state.ctrl.eosGridShareSuspend = null; state.ctrl._eosSuspendKey = null; }
+        if (m8IsHold) {
+          const marginW = eff.rule.evPlanned
+            ? Math.max(0, Number(cfg.optimizer?.eosGridHoldEvMarginW ?? 1000))
+            : Math.max(0, Number(cfg.optimizer?.eosGridHoldMarginW ?? 300));
+          const nl = liveNetLoadHoldW(cfg, marginW);
+          const known = nl.known;
+          const holdW = nl.holdW;
+          eff.value = holdW;
+          eff.source = 'eos_grid_hold';
+          eosGridHoldThisTick = { at: Date.now(), known, valueW: holdW, evPlanned: !!eff.rule.evPlanned, ruleId: eff.rule.id ?? null };
+          const key = `${eff.rule.id}:${known}`;
+          if (state.ctrl._eosHoldKey !== key) {
+            pushLog('eos_grid_hold', { known, loadW: nl.loadW, pvW: nl.pvW, marginW, gridSetpointW: holdW, evPlanned: !!eff.rule.evPlanned });
+            state.ctrl._eosHoldKey = key;
+          }
         }
       }
       // === end EOS Akku halten =================================================

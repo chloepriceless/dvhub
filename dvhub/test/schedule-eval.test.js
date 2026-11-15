@@ -1181,6 +1181,45 @@ test('Akku halten: veraltete Hauslast → 0 (Eigenverbrauch), kein blinder Netzb
   assert.equal(Number(state.schedule.active.gridSetpointW.value), 0);
 });
 
+// --- M8 (Feld 16.11.): EOS-„Halten"/„Netzladen" aussetzen, solange der Netzstrom-Anteil im Akku gesperrt ist ---
+
+test('M8: gridShare gesperrt → EOS-Halten ausgesetzt, Eigenverbrauch statt Halten, Leitstand-Hinweis', async () => {
+  const { ctx, state, logs } = holdCtx({ load: 1500, pv: 200 });
+  ctx.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 2.19 }) };
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const gp = state.schedule.active.gridSetpointW;
+  assert.equal(gp.source, 'eos_grid_hold_suspended', 'Halten ausgesetzt');
+  assert.notEqual(Number(gp.value), 1000, 'nicht der Halte-Netzbezug (1000)');
+  assert.equal(Number(gp.value), 0, 'Eigenverbrauch (Standard-Sollwert 0)');
+  assert.equal(state.ctrl.eosGridShareSuspend.kind, 'hold');
+  assert.equal(state.ctrl.eosGridShareSuspend.gridKwh, 2.19);
+  assert.ok(logs.some((l) => l.event === 'eos_grid_hold_suspended'), 'Hinweis protokolliert');
+});
+
+test('M8: Sperre gelöst → EOS-Halten greift wieder', async () => {
+  const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
+  ctx.gridShare = { isLocked: () => false };
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold');
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), 1000);
+  assert.ok(!state.ctrl.eosGridShareSuspend, 'kein Aussetz-Hinweis mehr');
+});
+
+test('M8: gridShare gesperrt → EOS-Netzladen ebenfalls ausgesetzt (erzeugt den Anteil sonst neu)', async () => {
+  const { ctx, state } = makeCtx({ mutate: ({ state: st, cfg, ctx: c }) => {
+    st.victron.soc = 60; st.victron.selfConsumptionW = 1000; st.victron.pvTotalW = 0;
+    st.victron.fieldUpdatedAt = { ...(st.victron.fieldUpdatedAt || {}), selfConsumptionW: Date.now(), pvTotalW: Date.now() };
+    st.schedule.rules = [{ id: 'eos-charge', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: 3000, optimizer: 'eos', source: 'forecast_optimizer', autoManaged: true }];
+    cfg.optimizer = { enabled: true, allowGridCharge: true, allowGridDischarge: true };
+    c.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 1.5 }) };
+  } });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const gp = state.schedule.active.gridSetpointW;
+  assert.equal(gp.source, 'eos_grid_charge_suspended', 'Netzladen ausgesetzt');
+  assert.notEqual(Number(gp.value), 3000, 'nicht der geplante Netzbezug');
+  assert.equal(state.ctrl.eosGridShareSuspend.kind, 'charge');
+});
+
 // Entlade-Wächter (Gegenprüfung 415a2f25): der Halte-Zweig meldet sich selbst
 // in state.ctrl.eosGridHold — auch wenn der Sollwert danach umgeschrieben wird
 // (negativer Preis), und mit `known`, damit der Wächter „Last unbekannt →
