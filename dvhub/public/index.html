@@ -164,36 +164,41 @@
       <div class="card rail-card" data-accent="bat" id="sungrowWrCard" hidden>
         <div class="rail-card-head">
           <span class="ttl"><span class="dot dot-bat"></span>Wechselrichter &middot; Sungrow</span>
-          <span class="v" id="sungrowWrMode" title="Aktiver EMS-Modus: Eigenverbrauch (0), Forced-Split (2) oder External EMS (3).">&mdash;</span>
         </div>
-        <!-- F1a: Werte je Gruppe UNTER dem Label in festem 3-Spalten-Grid (Label nie neben dem Wert, kein Wort-für-Wort-Umbruch). -->
+        <!-- Modus auf EIGENER Zeile unter dem Titel (nicht daneben, Feld 15.11.). -->
+        <div class="wr-mode" id="sungrowWrMode" title="Aktiver EMS-Modus: Eigenverbrauch (0), Forced-Split (2) oder External EMS (3).">&mdash;</div>
+        <!-- Je WR: SoC|Akku|PV als 3-Spalten-Grid, darunter Befehl + Grenzen als ganze Zeilen (Werte umbrechen, nie gekürzt). -->
         <div class="rail-row wr-role"><span class="l" id="sungrowWrMasterRole">Master</span></div>
-        <div class="wr-grid" title="Master: SoC · Akku · PV · Befehl/Leistung · Countdown (nur Modus 3) · Leistungsgrenze.">
+        <div class="wr-badges" id="sungrowWrMasterBadges" hidden></div>
+        <div class="wr-grid wr-grid-3" title="Master: SoC · Akku (Richtung) · PV.">
           <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrMasterSoc">&mdash;</strong></div>
           <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrMasterAkku">&mdash;</strong></div>
           <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrMasterPv">&mdash;</strong></div>
-          <div class="wr-cell"><span class="cap">Befehl</span><strong class="v" id="sungrowWrMasterCmd">&mdash;</strong></div>
-          <div class="wr-cell"><span class="cap">Countdown</span><strong class="v" id="sungrowWrMasterCountdown">&mdash;</strong></div>
-          <div class="wr-cell"><span class="cap">Grenze</span><strong class="v" id="sungrowWrMasterLimit">&mdash;</strong></div>
         </div>
+        <div class="wr-line"><span class="wr-l">Befehl</span><strong class="wr-v" id="sungrowWrMasterCmd">&mdash;</strong></div>
+        <div class="wr-line" id="sungrowWrMasterCountdownRow" hidden title="Herzschlag-Countdown — nur im External EMS (Modus 3)."><span class="wr-l">Countdown</span><strong class="wr-v" id="sungrowWrMasterCountdown">&mdash;</strong></div>
+        <div class="wr-line" title="Wirksame Grenzen = min(Gerät 33047/33048, BDC) je Richtung + SoC-Spanne der Anlage."><span class="wr-l">Grenzen</span><strong class="wr-v" id="sungrowWrMasterLimit">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l" id="sungrowWrMasterMeta">&mdash;</span></div>
         <div class="rail-row" data-leit="adv" title="EMS-Entscheidung, Besitz und Herzschlag des Masters."><span class="l">EMS</span><strong class="v" id="sungrowWrMasterEms">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv" title="Aufteilung Master/Slave (Strategie) und adaptiver Regeltakt mit gemessener Antwortzeit."><span class="l">Aufteilung/Takt</span><strong class="v" id="sungrowWrMasterSplit">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv" title="Tages-Schreibzähler je Register (13050 Modus mit Budget, 13051 Befehl, 13052 Leistung, 13080 Herzschlag)."><span class="l">Writes Master</span><strong class="v" id="sungrowWrMasterWrites">&mdash;</strong></div>
         <div class="rail-row wr-role"><span class="l" id="sungrowWrSlaveRole">Slave</span></div>
+        <div class="wr-badges" id="sungrowWrSlaveBadges" hidden></div>
         <div class="wr-status" id="sungrowWrSlaveStatus" hidden>&mdash;</div>
-        <div class="wr-grid" id="sungrowWrSlaveGrid">
-          <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrSlaveSoc">&mdash;</strong></div>
-          <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrSlaveAkku">&mdash;</strong></div>
-          <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrSlavePv">&mdash;</strong></div>
-          <div class="wr-cell"><span class="cap">Befehl</span><strong class="v" id="sungrowWrSlaveCmd">&mdash;</strong></div>
-          <div class="wr-cell"><span class="cap">Countdown</span><strong class="v" id="sungrowWrSlaveCountdown">&mdash;</strong></div>
-          <div class="wr-cell"><span class="cap">Grenze</span><strong class="v" id="sungrowWrSlaveLimit">&mdash;</strong></div>
+        <div id="sungrowWrSlaveGrid">
+          <div class="wr-grid wr-grid-3" title="Slave: SoC · Akku (Richtung) · PV.">
+            <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrSlaveSoc">&mdash;</strong></div>
+            <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrSlaveAkku">&mdash;</strong></div>
+            <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrSlavePv">&mdash;</strong></div>
+          </div>
+          <div class="wr-line"><span class="wr-l">Befehl</span><strong class="wr-v" id="sungrowWrSlaveCmd">&mdash;</strong></div>
+          <div class="wr-line" id="sungrowWrSlaveCountdownRow" hidden><span class="wr-l">Countdown</span><strong class="wr-v" id="sungrowWrSlaveCountdown">&mdash;</strong></div>
+          <div class="wr-line"><span class="wr-l">Grenzen</span><strong class="wr-v" id="sungrowWrSlaveLimit">&mdash;</strong></div>
         </div>
         <div class="rail-row" data-leit="adv"><span class="l">Slave-EMS/BDC</span><strong class="v" id="sungrowWrSlaveEms">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Writes Slave</span><strong class="v" id="sungrowWrSlaveWrites">&mdash;</strong></div>
         <div class="rail-row wr-role"><span class="l">Summe</span></div>
-        <div class="wr-grid">
+        <div class="wr-grid wr-grid-3">
           <div class="wr-cell"><span class="cap">SoC</span><strong class="v" id="sungrowWrSumSoc">&mdash;</strong></div>
           <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrSumAkku">&mdash;</strong></div>
           <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrSumPv">&mdash;</strong></div>

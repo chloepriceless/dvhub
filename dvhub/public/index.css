@@ -147,18 +147,32 @@
   font-size:11.5px;
 }
 .rail-row:last-child { border-bottom:0; }
-/* F1a Wechselrichter-Kachel (zwei Sungrow-WR): Werte je Gruppe (Master/Slave/Summe) UNTER dem Label in einem
-   festen 3-Spalten-Grid. So steht nie ein Label neben seinem Wert, und die Werte brechen nicht Wort-für-Wort um
-   (jede Zelle eine Spalte, einzeilig mit Ellipsis). Deutsches Dezimaltrennzeichen kommt aus der View. */
+/* F1a Wechselrichter-Kachel (zwei Sungrow-WR): SoC|Akku|PV je Gruppe (Master/Slave/Summe) UNTER dem Label in
+   einem festen 3-Spalten-Grid; Befehl und Grenzen darunter als ganze Zeile (Label links, Wert rechts). Werte
+   dürfen umbrechen, aber NIE mit „…" abschneiden (Feld 15.11., Handy ~375 px). Dezimalkomma kommt aus der View. */
+.wr-mode { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); padding:0 0 5px; }
 .wr-role { border-bottom:0; padding:5px 0 0; }
+/* Hinweis-Abzeichen je WR (Notladung / Slave-Anteil am Master). */
+.wr-badges { font-family:var(--f-mono); font-size:10px; letter-spacing:.04em; color:var(--warn, #e0a33e); padding:2px 0 3px; overflow-wrap:anywhere; }
 .wr-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:4px 10px; padding:4px 0 6px; border-bottom:1px solid var(--hairline); }
+.wr-grid.wr-grid-3 { grid-template-columns:repeat(3, minmax(0,1fr)); }
 .wr-grid .wr-cell { display:flex; flex-direction:column; min-width:0; }
 .wr-grid .wr-cell .cap {
   font-family:var(--f-mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim);
 }
 .wr-grid .wr-cell .v {
   font-family:var(--f-mono); font-variant-numeric:tabular-nums; color:var(--text); font-weight:500;
-  font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  font-size:11.5px; white-space:normal; overflow-wrap:anywhere; word-break:break-word;
+}
+/* Befehl/Grenzen/Countdown: ganze Zeile, Label links, Wert rechts — der Wert darf umbrechen, nie kürzen. */
+.wr-line { display:flex; justify-content:space-between; align-items:baseline; gap:10px; padding:3px 0; border-bottom:1px solid var(--hairline); }
+.wr-line .wr-l {
+  font-family:var(--f-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-dim);
+  flex:0 0 auto; white-space:nowrap;
+}
+.wr-line .wr-v {
+  font-family:var(--f-mono); font-variant-numeric:tabular-nums; color:var(--text); font-weight:500; font-size:11.5px;
+  text-align:right; white-space:normal; overflow-wrap:anywhere; word-break:break-word; min-width:0;
 }
 .wr-status { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); padding:4px 0 6px; border-bottom:1px solid var(--hairline); }
 .rail-row .l {

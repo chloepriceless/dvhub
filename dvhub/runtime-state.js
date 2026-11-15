@@ -96,7 +96,13 @@ const VICTRON_FIELDS = [
   'sungrowMasterBatteryW',
   'sungrowMasterPvW',
   'sungrowMasterSocPct',
-  'socFloorPct'
+  'socFloorPct',
+  // Master-Betriebszustand (Sungrow 13000) für die Wechselrichter-Kachel: Klartext + Notladungs-Flag (runningState
+  // 16385 = lädt eigenmächtig unter Min-SoC aus dem Netz). Müssen whitelisted sein, sonst verliert der IPC-Snapshot
+  // sie und die Kachel zeigt im Split-Prozess-Betrieb weder Zustand noch den Notladungs-Hinweis.
+  'runningState',
+  'runningStateText',
+  'emergencyCharge'
 ];
 
 const SCHEDULE_FIELDS = [
