@@ -6515,6 +6515,19 @@ function migrateEosRemoteMode(raw, warnings) {
   proxy.mode = 'local';
 }
 
+// M11 (Feld 16.11.): forecast.pv.totalKwp blieb beim Speichern der detaillierten Strings auf dem alten Wert stehen
+// (Lizenz/Portal zeigten „12,3 kWp" statt 24,2 = Summe zweier Strings 12,32 + 11,88). Die Prognose rechnet in der
+// Detail-Ansicht schon mit den einzelnen Strings; nur totalKwp (von Lizenz/Portal und der einfachen/Standard-
+// Prognose gelesen) hing nach. Sind Strings konfiguriert, ist ihre kWp-Summe die maßgebliche Anlagengröße → totalKwp
+// daraus ableiten (bei LADEN = Migration bestehender Boxen UND bei SPEICHERN = synchron halten), wenn sie abweicht.
+// Nur der gemeldete kWp-Wert wird korrigiert; Tier-/Limit-Logik bleibt unberührt.
+function migratePvTotalKwp(raw) {
+  const pv = raw?.forecast?.pv;
+  if (!isPlainObject(pv) || !Array.isArray(pv.strings) || pv.strings.length === 0) return;
+  const sum = pv.strings.reduce((a, s) => a + (Number(s?.kwp) > 0 ? Number(s.kwp) : 0), 0);
+  if (sum > 0 && Math.abs(sum - (Number(pv.totalKwp) || 0)) > 1e-6) pv.totalKwp = Math.round(sum * 100) / 100;
+}
+
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
@@ -6523,6 +6536,7 @@ function sanitizeRawConfig(rawInput) {
   migrateDatenspendeClientType(raw);
   migrateLegacyPriceApiUrl(raw);
   migrateEvWeeklyPlan(raw);
+  migratePvTotalKwp(raw);
   // Sweep package 6: shape-level schema checks run FIRST, on the raw parsed
   // config — before the FIELD_DEFINITIONS coercion pass below, which would
   // otherwise silently string-coerce a wrong-typed scalar (e.g. a numeric
