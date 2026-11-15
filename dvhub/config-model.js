@@ -3004,9 +3004,11 @@ function buildFieldDefinitions() {
         { value: 'auto', label: 'Automatisch (mindestens 6 h, bis zur Frist von E-Auto oder Gerät)' },
         { value: 6, label: '6 Stunden' },
         { value: 12, label: '12 Stunden' },
-        { value: 24, label: '24 Stunden' }
+        { value: 24, label: '24 Stunden' },
+        // 1.0.11: Tage im Voraus planen (eos-forecast-bridge.js extendIntoForecast).
+        { value: 'forecast', label: 'Bis in die Preisprognose (Tage im Voraus, 2–4× Rechenzeit)' }
       ],
-      help: 'Wie weit EOS den Akku Slot für Slot plant. Standard: so weit, wie Börsenpreise bekannt sind — vormittags bis Mitternacht, ab etwa 13 Uhr bis Mitternacht des Folgetags (gut 30 h). Dahinter bewertet EOS die Restladung über den Prognose-Schwanz. Die Rechenzeit wächst mit dem Steuerzeitraum etwa im selben Verhältnis (gemessen auf einem eHive mit E-Auto: 10 h ≈ 15 min, 24 h ≈ 30–40 min je Lauf). „Automatisch“: mindestens 6 h und bis zur Abfahrt des E-Autos bzw. bis zum Fensterende eines planbaren Geräts, höchstens so weit, wie Börsenpreise bekannt sind. Über ein Jahr gerechnet so gut wie der ganze Preiszeitraum, braucht aber deutlich weniger Rechenzeit — für schwache Boards die erste Wahl. Eine feste Grenze (6/12/24 h) gilt dagegen immer, auch wenn eine Abfahrt dahinter liegt; dann verlangt EOS das Ladeziel schon am Ende des Steuerzeitraums.'
+      help: 'Wie weit EOS den Akku Slot für Slot plant. Standard: so weit, wie Börsenpreise bekannt sind — vormittags bis Mitternacht, ab etwa 13 Uhr bis Mitternacht des Folgetags (gut 30 h). Dahinter bewertet EOS die Restladung über den Prognose-Schwanz. Die Rechenzeit wächst mit dem Steuerzeitraum etwa im selben Verhältnis (gemessen auf einem eHive mit E-Auto: 10 h ≈ 15 min, 24 h ≈ 30–40 min je Lauf). „Automatisch“: mindestens 6 h und bis zur Abfahrt des E-Autos bzw. bis zum Fensterende eines planbaren Geräts, höchstens so weit, wie Börsenpreise bekannt sind. Über ein Jahr gerechnet so gut wie der ganze Preiszeitraum, braucht aber deutlich weniger Rechenzeit — für schwache Boards die erste Wahl. Eine feste Grenze (6/12/24 h) gilt dagegen immer, auch wenn eine Abfahrt dahinter liegt; dann verlangt EOS das Ladeziel schon am Ende des Steuerzeitraums. „Bis in die Preisprognose“: EOS plant auch die nächsten Tage Slot für Slot, mit den vorhergesagten Preisen von dvhub.online (höchstens 120 h, so weit auch PV- und Verbrauchsprognose reichen). Ausgeführt wird weiter nur, was auf festen Börsenpreisen liegt; alle 15 Minuten rechnet EOS neu. Die Rechenzeit steigt dabei etwa auf das Zwei- bis Vierfache (mit dem schnellen Rechenkern auf einer Radxa A7S grob 20–40 s statt 7–10 s je Lauf). Ohne Preisprognose (andere Preiszone, unter EPEX ausgeschaltet, keine Verbindung) wie der Standard. Ist die Preisprognose an, steht unter diesem Feld und unter dem EOS-Fahrplan im Leitstand, wie lange ein Lauf damit auf diesem Gerät etwa dauern würde (aus den gemessenen letzten Läufen hochgerechnet).'
     },
     {
       section: 'schedule',
@@ -3021,9 +3023,13 @@ function buildFieldDefinitions() {
         { value: 0, label: 'Automatisch: Steuerzeitraum + 48 h, höchstens 72 h (Standard)' },
         { value: 48, label: '48 Stunden' },
         { value: 60, label: '60 Stunden' },
-        { value: 72, label: '72 Stunden' }
+        { value: 72, label: '72 Stunden' },
+        // 1.0.11: Preisschwanz aus der Residuallast-Prognose reicht ~5 Tage.
+        { value: 96, label: '96 Stunden (4 Tage)' },
+        { value: 120, label: '120 Stunden (5 Tage)' },
+        { value: 144, label: '144 Stunden (6 Tage, bis Ende der Preisprognose)' }
       ],
-      help: 'Wie weit EOS Prognosen und Preise liest (EOS prediction.hours, bisher fest 48 h): Steuerzeitraum plus Schwanz, in dem EOS den Wert der Restladung abschätzt. So weit schreibt DVhub auch die Börsenpreise fort. Hinter dem Steuerzeitraum bleiben immer mindestens 12 h Schwanz — reicht der Prognosehorizont dafür nicht, kürzt DVhub den Steuerzeitraum. Ein kurzer Schwanz lässt EOS die Restladung im Akku nur zum Einspeisewert bewerten. Kostet wenig Rechenzeit — den Schwanz rechnet EOS je Lauf nur einmal durch; das meiste kostet der Steuerzeitraum. Im Fernbetrieb (Rechendienst) gilt fest 48 h, der Steuerzeitraum dann höchstens 36 h.'
+      help: 'Wie weit EOS vorausschaut: Steuerzeitraum plus „Schwanz“. Im Schwanz plant EOS nicht mehr Slot für Slot, sondern schätzt nur, was die Restladung im Akku später noch wert ist. Dort, wo noch keine Börsenpreise feststehen, nimmt DVhub die Preisprognose von dvhub.online (aus Wetter, Wind und Sonne vorhergesagt; nur für die deutsche Preiszone; an/aus unter EPEX → „Preisprognose von dvhub.online“). Hinter dem Steuerzeitraum bleiben immer mindestens 12 h Schwanz — reicht der Prognosehorizont dafür nicht, kürzt DVhub den Steuerzeitraum. Längere Werte (96–144 h) lassen EOS mehrere Tage vorausschauen. Das kostet kaum Rechenzeit, bringt aber nur etwas, wenn auch die PV-Prognose so weit reicht (pvnode bis 6 Tage, andere Anbieter meist 2–4 Tage): EOS schaut nur so weit, wie Preise, PV- und Verbrauchsprognose alle reichen; wie weit tatsächlich, steht auf der EOS-Karte im Leitstand. Die Verbrauchsprognose verlängert DVhub dafür automatisch (hinter dem ersten Tag ist sie das übliche Tagesprofil). Auf einer Anlage mit echten Daten brachte ein längerer Schwanz bisher keinen messbaren Vorteil; Standard bleibt darum automatisch. Im Fernbetrieb (Rechendienst) gilt fest 48 h, der Steuerzeitraum dann höchstens 36 h.'
     },
     {
       section: 'schedule',
@@ -3489,7 +3495,7 @@ function buildFieldDefinitions() {
       min: 0,
       max: 50,
       step: 0.5,
-      help: 'F\u00fcr \u201eMax-Ladestand, wenn g\u00fcnstig\u201c sch\u00e4tzt DVhub, was eine zus\u00e4tzliche kWh im Auto an sp\u00e4teren Ladekosten spart (Preise und PV der n\u00e4chsten 7 Tage). Davon geht dieser Abschlag ab, weil Preise hinter dem Day-Ahead nur gesch\u00e4tzt sind. H\u00f6her = vorsichtiger, das Auto wird seltener \u00fcber das Mindestziel geladen.'
+      help: 'F\u00fcr \u201eMax-Ladestand, wenn g\u00fcnstig\u201c sch\u00e4tzt DVhub, was eine zus\u00e4tzliche kWh im Auto an sp\u00e4teren Ladekosten spart: mit Preisen und PV bis zu 7 Tage \u00fcber die Abfahrt hinaus, so weit die festen B\u00f6rsenpreise und die Preisprognose von dvhub.online reichen (meist 4\u20135 Tage). Ohne Preisprognose (andere Preiszone, Prognose aus oder l\u00e4nger ausgefallen) nur so weit wie die festen Preise; reichen sie nicht einen Tag \u00fcber die Abfahrt hinaus, l\u00e4dt EOS nur bis zum Mindestziel. Von dem Wert geht dieser Abschlag ab, weil Preise hinter dem Day-Ahead nur vorhergesagt sind. H\u00f6her = vorsichtiger, das Auto wird seltener \u00fcber das Mindestziel geladen.'
     },
     {
       section: 'schedule',
@@ -4911,7 +4917,7 @@ function buildFieldDefinitions() {
       label: 'Preiszone',
       type: 'dynamicSelect',
       dynamicOptionsUrl: '/api/epex/zones',
-      help: 'EPEX Day-Ahead Bidding Zone. Wird von dvhub.online geladen.'
+      help: 'EPEX Day-Ahead Bidding Zone. Wird von dvhub.online geladen. Hinweis: Die Preisprognose für die kommenden Tage (Preisschwanz für EOS, gestrichelte Linie im Leitstand) gibt es nur für die deutsche Zone DE-LU. In anderen Zonen plant EOS nur so weit, wie Börsenpreise feststehen.'
     },
     {
       section: 'epex',
@@ -4927,7 +4933,7 @@ function buildFieldDefinitions() {
         { value: 'public', label: 'Öffentlich (Energy-Charts)' },
         { value: 'luox', label: 'LUOX-Kundenportal (Day-Ahead DE-LU, Rückfall auf DVhub)' }
       ],
-      help: 'DVhub: Preise von dvhub.online (mit Energy-Charts als automatischem Fallback). Öffentlich: direkt von der freien Quelle Energy-Charts (api.energy-charts.info), ohne dvhub.online. LUOX: Day-Ahead-Viertelstundenpreise direkt aus dem LUOX-Kundenportal mit den eigenen Zugangsdaten (Einstellungen → LUOX, nur Preiszone DE-LU); liefert LUOX nicht, springt dvhub.online/Energy-Charts ein. Hinweis: Zonen-Liste, Lücken-Anzeige und Backfill funktionieren nur mit DVhub.'
+      help: 'DVhub: Preise von dvhub.online (mit Energy-Charts als automatischem Fallback). Öffentlich: direkt von der freien Quelle Energy-Charts (api.energy-charts.info), ohne dvhub.online — die Preisprognose für die kommenden Tage ist dann ab Werk aus, lässt sich aber unten unter „Preisprognose von dvhub.online“ einschalten. LUOX: Day-Ahead-Viertelstundenpreise direkt aus dem LUOX-Kundenportal mit den eigenen Zugangsdaten (Einstellungen → LUOX, nur Preiszone DE-LU); liefert LUOX nicht, springt dvhub.online/Energy-Charts ein. Hinweis: Zonen-Liste, Lücken-Anzeige und Backfill funktionieren nur mit DVhub.'
     },
     {
       section: 'epex',
@@ -4942,6 +4948,26 @@ function buildFieldDefinitions() {
         { value: 'https://dvhub.online', label: 'DVhub (dvhub.online)' }
       ],
       help: 'DVhub Price API Endpunkt. Standard: https://dvhub.online'
+    },
+    {
+      // 1.0.11 (Christin 12.11.2026): eigener Schalter, unabhängig von der
+      // Preisquelle. „automatisch“ (auch: Feld fehlt) = an bei DVhub und LUOX,
+      // aus bei „Öffentlich“ — genau wie vor dem Schalter
+      // (price-outlook.js outlookDisabledReason).
+      section: 'epex',
+      group: 'market',
+      groupLabel: 'EPEX',
+      groupDescription: 'Day-Ahead-Preisfeed für Preise, Prognosen und Negativpreis-Logik.',
+      path: 'epex.priceOutlook',
+      label: 'Preisprognose von dvhub.online',
+      type: 'select',
+      default: 'auto',
+      options: [
+        { value: 'auto', label: 'Automatisch: an bei Preisquelle DVhub und LUOX, aus bei „Öffentlich“ (Standard)' },
+        { value: 'on', label: 'An (auch bei Preisquelle „Öffentlich“)' },
+        { value: 'off', label: 'Aus' }
+      ],
+      help: 'Börsenpreise für die Tage hinter den festen Day-Ahead-Preisen, vorhergesagt aus Wetter, Wind, Sonne und Verbrauch (dvhub.online, je Stunde, etwa 5 Tage voraus; nur Preiszone DE-LU). Damit bewertet EOS die Restladung im Akku hinter den festen Preisen und kann auf Wunsch Tage im Voraus planen (Prognosehorizont, Steuerzeitraum „Bis in die Preisprognose“); auch „Max-Ladestand wenn günstig“ beim E-Auto rechnet damit. DVhub fragt sie 4× täglich ab und schickt dabei nur Programmname und Version, keine Daten der Anlage. Aus: EOS plant nur so weit, wie Börsenpreise feststehen. Funktioniert mit jeder Preisquelle; die Preise selbst kommen weiter aus der gewählten Quelle.'
     },
     // LUOX/Lumenaza (T-0417, services/tariff-provider/luox-service.js): eigene
     // Kundendaten aus dem LUOX-Kundenportal; Partner-API vorbereitet.
@@ -5458,6 +5484,8 @@ export function createDefaultConfig() {
       bzn: 'DE-LU',
       timezone: 'Europe/Berlin',
       priceSource: 'dvhub',
+      // Preisprognose von dvhub.online (1.0.11): 'auto' | 'on' | 'off'.
+      priceOutlook: 'auto',
       priceApiUrl: 'https://dvhub.online'
     },
     // Nur noch die StatsForecast-Lastprognose (services/forecast/load-forecast.js).

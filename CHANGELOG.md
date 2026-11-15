@@ -247,6 +247,49 @@ Themen — die Einzelheiten stehen in den Einträgen darunter:
 
 ### Neu
 
+- **1.0.11: Preisschwanz für EOS aus der Residuallast-Prognose von dvhub.online.** Hinter den festen
+  Börsenpreisen rechnet EOS jetzt mit der Preisprognose von dvhub.online (`/v1/residual-load/outlook`). Die
+  Prognose entsteht aus Wetter, Wind, Sonne und Verbrauch. Sie liefert fünf Tage hinter dem letzten bekannten
+  Börsentag je Stunde P10/P50/P90 für DE-LU, im Rückblick mit Fehler 19–28 statt 26–39 €/MWh.
+  - DVhub nimmt P50, je Viertelstunde den Stundenwert. Feste Day-Ahead-Preise haben immer Vorrang.
+  - Bezug und Einspeisung entstehen auf demselben Weg wie für feste Preise: Tarif, Anbieterpreis, Netzentgelte,
+    Marktprämie.
+  - Abruf 10 min nach den vier täglichen Läufen, mit Frist. Die Kennung enthält nur Programm und Version.
+  - Die letzte gültige Prognose liegt auf der Platte (`price_outlook_cache.json`) und gilt bis 48 h nach ihrer
+    Ausgabe weiter, auch nach einem Neustart. Danach gibt es keinen Schwanz mehr: EOS plant nur über die festen
+    Preise. Der Steuerzeitraum bleibt dabei gleich, und der Lauf geht.
+  - Leitstand und Integrationen zeigen „Preisprognose nicht verfügbar seit …“.
+  - Nur Preiszone DE-LU. Andere Zonen haben keinen Schwanz mehr (siehe Geändert).
+  - Eigener Schalter „Preisprognose von dvhub.online“ (Einstellungen → EPEX, `epex.priceOutlook`), unabhängig von der
+    Preisquelle. Standard „automatisch“: an bei DVhub und LUOX, aus bei „Öffentlich (Energy-Charts)“. Nutzer von
+    „Öffentlich“ können die Prognose einschalten, alle anderen sie ausschalten. Configs ohne das Feld verhalten sich wie
+    bisher. Abruf nur bei an; Umschalten löst einen neuen EOS-Lauf aus. Leitstand und DV-EOS-Karte zeigen „aus
+    (Preisquelle Öffentlich) — einschaltbar …“ bzw. „ausgeschaltet …“.
+
+  Neue Lese-Schnittstelle `GET /api/price/outlook`. `GET /api/eos/plan` liefert zusätzlich `priceTail` und je
+  Zeile `priceSource`. Ausführlich: `docs/PREISPROGNOSE-EOS.md`.
+
+- **1.0.11: Tage im Voraus planen.**
+  - Den EOS-Prognosehorizont gibt es zusätzlich mit 96, 120 und 144 h. DVhub fordert dann bei EOS den passenden
+    Schwanz an (`tail_horizon_hours`) und verlängert die Lastprognose mit.
+  - Neu beim Steuerzeitraum ist „Bis in die Preisprognose“: EOS plant bis 120 h Slot für Slot, so weit Preise, PV
+    und Last reichen. Umgesetzt wird nur, was auf festen Preisen liegt.
+  - Gemessene Rechenzeit (Rust-Kern) beim Steuerzeitraum 72 / 96 / 120 h: 2,2- / 3,1- / 3,6- bis 4-mal so lang wie
+    bei 30 h. Ein längerer Schwanz kostet fast nichts.
+  - Die EOS-Karte zeigt, wie weit EOS vorausschaut und ob PV-, Verbrauchs- oder Preisprognose das begrenzt.
+  - Standards bleiben: Prognosehorizont automatisch 72 h, Steuerzeitraum ganzer bekannter Preiszeitraum.
+  - Hinweis statt Umstellen (Christin 12.11.2026): Ist die Preisprognose an (DE-LU), steht unter dem EOS-Fahrplan
+    und in den Einstellungen beim Steuerzeitraum, wie weit EOS mit „Bis in die Preisprognose“ planen könnte (bis
+    120 h, kürzer, wenn die PV-Prognose früher endet) und wie lange ein Lauf dann **auf diesem Gerät** etwa dauert.
+    Die Dauer kommt aus den gemessenen letzten Läufen und wird linear mit dem Steuerzeitraum hochgerechnet
+    (`eosRun.secPerControlHour`, neu je Lauf gemessen). Über 10 min wird der Hinweis zur Warnung. Neu in
+    `/api/eos/plan` und `/api/price/outlook`: `horizonHint`.
+
+- **1.0.11: Preisprognose in der Leitstand-Preiskurve.** Hinter den festen Börsenpreisen erscheint bis jetzt + 36 h
+  eine gestrichelte „Preisprognose“ mit einem hellen Band P10–P90 und dem Bereich „Prognose“. Der Tooltip zeigt ganze
+  Cent mit Spanne. Prognose-Slots lassen sich nicht für Zeitpläne auswählen. Im EOS-Fahrplan und unter „Laut
+  EOS-Plan“ heißt der Bereich hinter den festen Preisen jetzt „Preisprognose“ statt „Preise geschätzt“.
+
 - **Oberfläche lädt nach einem Update selbst neu.** Eine offene Seite — besonders die Home-Screen-Webapp — erkennt
   eine neue DVhub-Version und lädt neu, statt bis zum Schließen den alten Stand zu zeigen (Anlass: nach einem Update
   fehlte in der offenen Webapp der E-Auto-Wochenplan). Der Server hängt an jede JSON-Antwort die Build-Kennung der
@@ -533,6 +576,24 @@ Themen — die Einzelheiten stehen in den Einträgen darunter:
   Shaving eine Sperre aufgehoben hat; nur bei Victron.
 
 ### Geändert
+
+- **1.0.11: Holt-Winters-Fortschreibung für den EOS-Schwanz entfällt.** Der Preisschwanz kommt nur noch aus der
+  Residuallast-Prognose (siehe Neu). **Folge für andere Preiszonen als DE-LU und für die Preisquelle „Öffentlich
+  (Energy-Charts)“:** Diese Anlagen hatten bis 1.0.10 einen geschätzten Schwanz. Andere Zonen haben jetzt keinen.
+  EOS plant dort nur so weit, wie Börsenpreise feststehen, wie vor dem 01.11.2026. Bei „Öffentlich“ ist die
+  Preisprognose ab Werk aus und lässt sich einschalten. Die Hilfe zu Preiszone, Preisquelle und Preisprognose sagt
+  das.
+
+- **1.0.11: Holt-Winters ist ganz entfallen, auch für das E-Auto** (Christin 12.11.2026). Die Wertgrundlage für
+  „Max-Ladestand wenn günstig“ nimmt jetzt die festen Börsenpreise und dahinter die Preisprognose, so weit sie reicht
+  (meist ~5 Tage), unabhängig vom eingestellten EOS-Schwanz. Bis 1.0.10 schrieb DVhub die Preise dafür per Holt-Winters
+  bis 9,5 Tage voraus fort.
+  - Das Bewertungsfenster (bis 7 Tage über die Abfahrt) endet am Ende der Preise.
+  - Reicht es nicht einen Tag über die Abfahrt hinaus, gibt es keine Wertstufen. EOS lädt dann nur bis zum Mindestziel,
+    der Max-Ladestand bleibt die Obergrenze. Das betrifft ohne Prognose (andere Preiszone, Prognose aus, Ausfall über
+    48 h) vor allem Abfahrten nach Mitternacht.
+  - `price-estimate.js` und das Laden der Preis-Historie dafür (29 Tage aus der Datenbank, stündlich) sind entfernt.
+    Konfigurationsfelder gab es dafür nicht.
 
 - **EOS: DVhub-EOS statt Vanilla v0.4.0rc3** (T-0415, Christin 11.11.2026). DVhub liefert nativ und im Docker-Image das
   DVhub-EOS aus: Akkudoktor-EOS `main` plus die offenen PRs, die DVhub braucht (Netzbezugsgrenze und
