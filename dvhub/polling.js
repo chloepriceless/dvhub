@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { safeInterval } from './services/safe-async.js';
-import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
+import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses, parseM160Modules, m160ModuleDcw, m160PvStrings } from './services/inverter/sunspec.js';
 import {
   identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
   resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry
@@ -942,6 +942,10 @@ export function createPoller(ctx) {
     // Ein Block-Read pro Zyklus; SunSpec not-implemented (int16 0x8000) →
     // Punkt bleibt unangetastet statt einen falschen Wert zu stempeln.
     const bpConf = cfg.points?.batteryPowerW;
+    // T-MPPT-TELEMETRY: Per-MPPT/String-Logging aus demselben M160-Block. Fronius
+    // GEN24-Hybrid legt PV-Strings UND Akku-Kanäle als M160-Module ab (1/2 = PV,
+    // 3/4 = Akku laden/entladen). Deshalb EIN Block-Read pro Zyklus für beides.
+    const mpptConf = cfg.points?.mppt;
     // Ausfall nach einem gültigen Wert = Lesefehler wie in pollPoint: der alte
     // Wert bleibt stehen, errors sagt es (Netzstrom-Zähler, Entlade-Boden;
     // Gegenprüfung 4cf16a5a, P3). Ohne je gelesenen Wert (Anlage ohne Akku)
@@ -949,47 +953,76 @@ export function createPoller(ctx) {
     const m160Failed = (msg) => {
       if (Number(state.victron.fieldUpdatedAt?.batteryPowerW) > 0) (state.victron.errors ??= {}).batteryPowerW = `M160: ${msg}`;
     };
-    if (bpConf?.derive === 'm160_battery' && state.ctrl?._sunspecM160 && transport.type !== 'mqtt') {
+    const wantBattery = bpConf?.derive === 'm160_battery';
+    // Gate rein auf derive (wie batteryPowerW) — der Point bleibt enabled:false,
+    // damit der generische Poller ihn nicht als Register liest.
+    const wantMppt = mpptConf?.derive === 'm160_mppt';
+    if ((wantBattery || wantMppt) && state.ctrl?._sunspecM160 && transport.type !== 'mqtt') {
+      const chargeModule = Number(bpConf?.chargeModule ?? 3);
+      const dischargeModule = Number(bpConf?.dischargeModule ?? 4);
       try {
         const m160 = state.ctrl._sunspecM160;
-        const chargeModule = Number(bpConf.chargeModule ?? 3);
-        const dischargeModule = Number(bpConf.dischargeModule ?? 4);
-        const needQty = 8 + Math.max(chargeModule, dischargeModule) * 20;
         const v = cfg.victron || {};
+        // Der ganze Modellblock in einem Request (Modbus: höchstens 125 Register
+        // je Lesung). parseM160Modules verträgt einen gekürzten Block — fehlende
+        // Module fallen weg statt Müll zu liefern (Offset-korrekt: DCW @ Modul+11,
+        // der alte Inline-Parser las fälschlich +3 mitten im IDStr).
+        const quantity = Math.min(Number(m160.length) || 0, 125);
         const regs = await transport.mbRequest({
           fc: 3, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs,
-          address: m160.address, quantity: Math.min(needQty, m160.length)
+          address: m160.address, quantity
         });
-        const int16 = (w) => (Number(w) > 0x7fff ? Number(w) - 0x10000 : Number(w));
-        const NOT_IMPL = -32768; // SunSpec int16 not-implemented (0x8000)
-        const sfRaw = int16(regs[2]);   // DCW_SF @ Datenbereich +2
-        const nModules = Number(regs[6]); // N @ +6
-        if (nModules >= Math.max(chargeModule, dischargeModule) && sfRaw !== NOT_IMPL) {
-          const dcwAt = (k) => int16(regs[8 + (k - 1) * 20 + 3]); // DCW @ Modul +3
-          const chargeRaw = dcwAt(chargeModule);
-          const dischargeRaw = dcwAt(dischargeModule);
-          if (chargeRaw !== NOT_IMPL && dischargeRaw !== NOT_IMPL) {
-            const sf = 10 ** sfRaw;
-            state.victron.batteryPowerW = Number(((chargeRaw - dischargeRaw) * sf).toFixed(3));
+        const parsed = parseM160Modules(regs);
+
+        // --- Echte DC-Akku-Leistung (positiv = Laden): charge-DCW − discharge-DCW ---
+        if (wantBattery) {
+          const charge = m160ModuleDcw(parsed, chargeModule);
+          const discharge = m160ModuleDcw(parsed, dischargeModule);
+          if (charge !== null && discharge !== null) {
+            state.victron.batteryPowerW = Number((charge - discharge).toFixed(3));
             // T-0075-Frische: der Discharge-Floor keyt auf batteryPowerW —
             // ohne Stempel gälte der abgeleitete Wert sofort als stale.
             (state.victron.fieldUpdatedAt ??= {}).batteryPowerW = Date.now();
             if (state.victron.errors) delete state.victron.errors.batteryPowerW;
           } else {
-            m160Failed('Akku-Modul meldet keinen Wert (SunSpec not implemented)');
-          }
-        } else {
-          m160Failed('Akku-Module fehlen oder Skalierung unbekannt');
-          if (Date.now() - m160DeriveLogAt > 300000) {
-            m160DeriveLogAt = Date.now();
-            pushLog('m160_battery_unavailable', { nModules, sfRaw, chargeModule, dischargeModule });
+            m160Failed('Akku-Module fehlen oder melden keinen Wert (SunSpec not implemented)');
+            if (Date.now() - m160DeriveLogAt > 300000) {
+              m160DeriveLogAt = Date.now();
+              pushLog('m160_battery_unavailable', { n: parsed.n, dcwSf: parsed.dcwSf, chargeModule, dischargeModule });
+            }
           }
         }
+
+        // --- Per-MPPT/String-Logging: DCW je PV-String (Akku-Module ausgenommen) ---
+        // Reihen pv_mppt_<n>_w (telemetry-runtime.js) → energy_slots_15m. Die
+        // Akku-Module werden nie als PV-String geloggt (sie sind batteryPowerW).
+        if (wantMppt) {
+          const exclude = [...new Set([
+            ...(Array.isArray(mpptConf.excludeModules) ? mpptConf.excludeModules.map(Number) : []),
+            ...(wantBattery ? [chargeModule, dischargeModule] : [])
+          ])];
+          const strings = m160PvStrings(parsed, exclude);
+          // PV-Erzeugung ist nicht negativ (Nacht-Rauschen auf 0 kappen, wie der
+          // Fronius-Solar-API-Pfad). DCW (_w) ist Pflicht; die Zusatzreihen
+          // DCV/DCA/DCWH bleiben standardmaessig aus (DB-Wachstum: je Reihe eigene
+          // Rohdaten) — nur mit profil-opt-in logExtras=true, dann je String +3 Reihen.
+          const extras = mpptConf.logExtras === true;
+          state.victron.mppt = strings.map((s) => ({
+            n: s.module,
+            w: Math.max(0, Number(s.w.toFixed(3))),
+            v: extras && s.v != null ? Number(s.v.toFixed(2)) : null,
+            a: extras && s.a != null ? Number(s.a.toFixed(3)) : null,
+            wh: extras && s.wh != null ? Math.round(s.wh) : null
+          }));
+          (state.victron.fieldUpdatedAt ??= {}).mppt = Date.now();
+        }
       } catch (e) {
-        m160Failed(e?.message || String(e));
+        // Lesefehler: Akku-Wert bleibt stehen (wie pollPoint), MPPT-Reihen
+        // behalten ihren letzten Stand bis zum nächsten erfolgreichen Zyklus.
+        if (wantBattery) m160Failed(e?.message || String(e));
         if (Date.now() - m160DeriveLogAt > 300000) {
           m160DeriveLogAt = Date.now();
-          pushLog('m160_battery_read_error', { error: e?.message || String(e) });
+          pushLog('m160_read_error', { error: e?.message || String(e) });
         }
       }
     }

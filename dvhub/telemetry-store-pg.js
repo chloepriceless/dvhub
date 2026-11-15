@@ -94,6 +94,38 @@ const MATERIALIZED_ENERGY_SERIES = new Set([
   ...SECOND_BATTERY_SERIES
 ]);
 
+// T-MPPT-TELEMETRY: Per-MPPT/String-Leistungsreihen pv_mppt_<n>_w werden wie
+// pv_total_w zu 15-min-kWh-Slots verdichtet. <n> ist dynamisch (M160-N), daher
+// ein Praefix-Muster statt fester Set-Eintraege. NUR die _w-Leistungsreihe zaehlt
+// als Energie — die optionalen _v/_a/_wh-Reihen bleiben Rohdaten (keine Slots).
+const PV_MPPT_POWER_SERIES_RE = /^pv_mppt_[1-9]\d{0,2}_w$/;
+function isMaterializedEnergySeries(seriesKey) {
+  return MATERIALIZED_ENERGY_SERIES.has(seriesKey) || PV_MPPT_POWER_SERIES_RE.test(seriesKey);
+}
+
+// Je (Slot, Reihe) genau EINE Quelle wählen (Reihenfolge preferredSourceKinds),
+// nie zwei Quellen mitteln. Eingabe nach ts,series sortiert; Ausgabe behält die
+// Reihenfolge. Reine Funktion (readMaterializedSeries, pvnode-Export).
+function dedupeMaterializedSeries(rows, preferredSourceKinds = []) {
+  const rank = new Map((preferredSourceKinds || []).map((k, i) => [k, i]));
+  const rankOf = (kind) => (rank.has(kind) ? rank.get(kind) : Number.MAX_SAFE_INTEGER);
+  const best = new Map();
+  for (const row of rows) {
+    const key = `${row.ts}\u0000${row.seriesKey}`;
+    const cur = best.get(key);
+    if (!cur || rankOf(row.sourceKind) < rankOf(cur.sourceKind)) best.set(key, row);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const key = `${row.ts}\u0000${row.seriesKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(best.get(key));
+  }
+  return out;
+}
+
 // The 29 series that become value fields on a returned slot (23 + the 6
 // second-battery series). NOTE this is
 // deliberately NOT all of MATERIALIZED_ENERGY_SERIES: 'load_power_w_ex_managed'
@@ -254,7 +286,7 @@ export function buildMaterializedEnergySlotWrites(rows, isNewSample = () => true
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const seriesKey = String(row.seriesKey || '').trim();
-    if (!MATERIALIZED_ENERGY_SERIES.has(seriesKey)) continue;
+    if (!isMaterializedEnergySeries(seriesKey)) continue;
 
     let sourceKind = null;
     let writeMode = null;
@@ -924,6 +956,39 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       )
       SELECT m.b FROM measured m LEFT JOIN priced p ON p.b = m.b WHERE p.b IS NULL ORDER BY m.b`, params);
     return (res.rows || []).map((r) => bucketIso(r.b, DEFAULT_PRICE_BUCKET_SECONDS));
+  }
+
+  // T-MPPT-TELEMETRY: materialisierte 15-min-Slots einzelner Reihen (kWh), roh.
+  // Für den pvnode-Export je MPPT: liefert je (Slot, Reihe) genau EINE Quelle
+  // (Reihenfolge sourceKinds), nie ein Mittel aus mehreren. Langzeit-Tier
+  // (energy_slots_15m hält Jahre, der Rohdaten-Tier nur Wochen) — deshalb hier
+  // und nicht über querySeries.
+  async function readMaterializedSeries({ seriesKeys, start, end, sourceKinds = ['local_live', 'vrm_import'] }) {
+    const keys = (Array.isArray(seriesKeys) ? seriesKeys : [seriesKeys]).map((k) => String(k || '').trim()).filter(Boolean);
+    if (!keys.length) return [];
+    const kinds = (Array.isArray(sourceKinds) ? sourceKinds : [sourceKinds]).map((k) => String(k || '').trim()).filter(Boolean);
+    const params = [keys, isoTimestamp(start), isoTimestamp(end)];
+    let kindClause = '';
+    if (kinds.length) {
+      params.push(kinds);
+      kindClause = ` AND source_kind = ANY($${params.length}::text[])`;
+    }
+    const res = await pool.query(`
+      SELECT slot_start_utc, series_key, source_kind, value_num, unit
+      FROM energy_slots_15m
+      WHERE series_key = ANY($1::text[])
+        AND slot_start_utc >= $2 AND slot_start_utc < $3
+        AND value_num IS NOT NULL
+        ${kindClause}
+      ORDER BY slot_start_utc ASC, series_key ASC
+    `, params);
+    return dedupeMaterializedSeries(res.rows.map((r) => ({
+      seriesKey: r.series_key,
+      ts: r.slot_start_utc instanceof Date ? r.slot_start_utc.toISOString() : new Date(r.slot_start_utc).toISOString(),
+      sourceKind: r.source_kind,
+      kWh: Number(r.value_num),
+      unit: r.unit || 'kWh'
+    })), kinds);
   }
 
   async function listAggregatedEnergySlots({ start, end, bucketSeconds = DEFAULT_PRICE_BUCKET_SECONDS, scopes = null }) {
@@ -1810,6 +1875,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     listMissingPriceBuckets,
     listAggregatedEnergySlots,
     listMaterializedEnergySlots,
+    readMaterializedSeries,
     historySectionFingerprints,
     getHistoryCacheEntries,
     putHistoryCacheEntry,

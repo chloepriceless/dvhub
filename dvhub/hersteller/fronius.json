@@ -116,6 +116,13 @@
       "chargeModule": 3,
       "dischargeModule": 4
     },
+    "mppt": {
+      "_comment": "T-MPPT-TELEMETRY: Per-MPPT/String-Logging via SunSpec Model 160 (derive 'm160_mppt' in polling.js, KEIN Register-Punkt — wie batteryPowerW: enabled bleibt false, der generische Poller fasst es nicht an, gelesen wird im M160-Block-Derive). JEDER PV-String (DC-Eingang) wird als eigene Reihe pv_mppt_<n>_w (15-min-kWh in energy_slots_15m, Muster pv_total_w) geloggt — fuer pvnode-Kalibrierung je String und Verschattungs-/Degradations-Tracking im Leitstand. Die Modulzahl loest DVhub beim Scan aus M160 N auf; der M160-Block wird zur Laufzeit EINMAL/Zyklus gemeinsam mit batteryPowerW gelesen (state.ctrl._sunspecM160). excludeModules nennt die NICHT-PV-Kanaele: beim GEN24-Hybrid die Akku-Module 3/4 (= chargeModule/dischargeModule von batteryPowerW), die bleiben batteryPowerW vorbehalten und werden nie als String geloggt. GEN24 OHNE Akku: alle M160-Module sind PV-Strings (excludeModules []). Am Geraet noch zu verifizieren (DCW-Offset +11, Modulzuordnung). Dieselbe mppt-Deklaration gilt fuer Kostal/SolarEdge/SMA (alle M160).",
+      "enabled": false,
+      "derive": "m160_mppt",
+      "excludeModules": [3, 4],
+      "logExtras": false
+    },
     "gridSetpointW": { "enabled": false },
     "acPvL1W": { "enabled": false },
     "acPvL2W": { "enabled": false },

@@ -93,6 +93,150 @@ export function resolveSunspecAddresses(pointsConf, scanResult) {
   return { resolved, missing };
 }
 
+// ── SunSpec Model 160 (Multiple MPPT Inverter Extension) ───────────────────
+// Per-MPPT/String-Telemetrie (T-MPPT-TELEMETRY). Ein GEN24/Kostal/SolarEdge/SMA
+// legt die DC-Eingänge (PV-Strings UND — bei Fronius-Hybrid — die Akku-Kanäle)
+// als Model-160-Module ab. Layout spec-verifiziert (SunSpec Information Model
+// 160, Fixblock + 20-Register-Wiederholblock, evcc/gosunspec identisch):
+//
+//   Datenbereich (ab model.address = headerAddress+2):
+//     +0 DCA_SF  +1 DCV_SF  +2 DCW_SF  +3 DCWH_SF   (int16-Skalenfaktoren)
+//     +4..+5 Evt (bitfield32)   +6 N (Modulzahl)    +7 TmsPer
+//   Modul m (1-basiert), Basis = 8 + (m-1)*20, Relativ-Offsets:
+//     +0 ID   +1..+8 IDStr(16)   +9 DCA   +10 DCV   +11 DCW
+//     +12..+13 DCWH(acc32)   +14..+15 Tms   +16 Tmp   +17 DCSt   +18..+19 DCEvt
+//
+// WICHTIG (Offset-Korrektur 2026-11-15): Ein früherer Inline-Parser in
+// polling.js las DCW am Modul-Relativ-Offset +3 — das liegt MITTEN im 16-Zeichen-
+// IDStr und lieferte Müll. Der spec-korrekte DCW-Offset ist +11. Diese Funktion
+// ist ab jetzt die EINZIGE M160-Modulquelle (Akku-Derive UND MPPT-Logging), am
+// Gerät noch zu verifizieren (keine Live-M160-Auslesung verfügbar).
+const M160_SF_DCA = 0;
+const M160_SF_DCV = 1;
+const M160_SF_DCW = 2;
+const M160_SF_DCWH = 3;
+const M160_N_OFFSET = 6;
+const M160_MODULE_BASE = 8;
+const M160_MODULE_STRIDE = 20;
+// Modul-interne Relativ-Offsets (siehe Layout oben).
+const M160_MOD_ID = 0;
+const M160_MOD_DCA = 9;
+const M160_MOD_DCV = 10;
+const M160_MOD_DCW = 11;
+const M160_MOD_DCWH = 12; // acc32 → +12/+13
+const M160_NOT_IMPL_I16 = -32768; // 0x8000
+const M160_NOT_IMPL_U16 = 0xffff;
+
+function m160Int16(w) {
+  const n = Number(w) & 0xffff;
+  return n > 0x7fff ? n - 0x10000 : n;
+}
+function m160Uint16(w) {
+  return Number(w) & 0xffff;
+}
+function m160Acc32(hi, lo) {
+  return ((m160Uint16(hi) * 0x10000) + m160Uint16(lo)) >>> 0;
+}
+// Skalenfaktor anwenden: rawValue × 10^sf. sf===null (not-implemented) → null,
+// damit ein unbekannter Faktor nie einen falsch skalierten Wert erzeugt.
+function m160Scale(raw, sf) {
+  if (raw === null || sf === null) return null;
+  return raw * (10 ** sf);
+}
+
+/**
+ * Dekodiert einen SunSpec-Model-160-Datenblock in seine DC-Module.
+ *
+ * Reine Funktion (kein I/O): `regs` ist der bereits gelesene Datenbereich ab
+ * model.address (NICHT inkl. des 2-Register-Headers). Fehlt Register-Material
+ * für ein Modul, wird es ausgelassen statt mit Müll gefüllt. `not-implemented`-
+ * Sentinels (int16 0x8000, uint16 0xFFFF) und ein unbekannter Skalenfaktor
+ * ergeben `null` für das betroffene Feld — nie einen falschen Zahlenwert.
+ *
+ * @param {number[]} regs - Model-160-Datenregister ab model.address
+ * @param {object} [opts]
+ * @param {number} [opts.maxModules=16] - Obergrenze gegen Müll-N
+ * @returns {{ n:number, dcwSf:(number|null), modules: Array<{
+ *   module:number, id:(number|null), dcw:(number|null), dcv:(number|null),
+ *   dca:(number|null), dcwh:(number|null) }> }}
+ */
+export function parseM160Modules(regs, opts = {}) {
+  const out = { n: 0, dcwSf: null, modules: [] };
+  if (!Array.isArray(regs) || regs.length < M160_MODULE_BASE) return out;
+  const maxModules = Number(opts.maxModules) > 0 ? Number(opts.maxModules) : 16;
+
+  const sfOrNull = (idx) => {
+    const raw = m160Int16(regs[idx]);
+    return raw === M160_NOT_IMPL_I16 ? null : raw;
+  };
+  const dcaSf = sfOrNull(M160_SF_DCA);
+  const dcvSf = sfOrNull(M160_SF_DCV);
+  const dcwSf = sfOrNull(M160_SF_DCW);
+  const dcwhSf = sfOrNull(M160_SF_DCWH);
+  out.dcwSf = dcwSf;
+
+  const nRaw = m160Uint16(regs[M160_N_OFFSET]);
+  const n = nRaw === M160_NOT_IMPL_U16 ? 0 : Math.min(nRaw, maxModules);
+  out.n = n;
+
+  const i16OrNull = (v) => {
+    const r = m160Int16(v);
+    return r === M160_NOT_IMPL_I16 ? null : r;
+  };
+  const u16OrNull = (v) => {
+    const r = m160Uint16(v);
+    return r === M160_NOT_IMPL_U16 ? null : r;
+  };
+
+  for (let m = 1; m <= n; m += 1) {
+    const base = M160_MODULE_BASE + (m - 1) * M160_MODULE_STRIDE;
+    // Mindestens bis DCW (+11) muss das gelesene Material reichen.
+    if (regs.length < base + M160_MOD_DCW + 1) break;
+    const hasWh = regs.length >= base + M160_MOD_DCWH + 2;
+    out.modules.push({
+      module: m,
+      id: u16OrNull(regs[base + M160_MOD_ID]),
+      dcw: m160Scale(i16OrNull(regs[base + M160_MOD_DCW]), dcwSf),
+      dcv: m160Scale(u16OrNull(regs[base + M160_MOD_DCV]), dcvSf),
+      dca: m160Scale(u16OrNull(regs[base + M160_MOD_DCA]), dcaSf),
+      dcwh: hasWh ? m160Scale(m160Acc32(regs[base + M160_MOD_DCWH], regs[base + M160_MOD_DCWH + 1]), dcwhSf) : null
+    });
+  }
+  return out;
+}
+
+/**
+ * Leistung (DCW, W) eines einzelnen M160-Moduls — für den Akku-Derive, der
+ * genau das Lade-/Entlade-Modul braucht. `null`, wenn das Modul fehlt oder
+ * keinen gültigen Wert meldet.
+ * @param {ReturnType<typeof parseM160Modules>} parsed
+ * @param {number} moduleNumber - 1-basierte Modulnummer
+ * @returns {number|null}
+ */
+export function m160ModuleDcw(parsed, moduleNumber) {
+  const hit = parsed?.modules?.find((x) => x.module === Number(moduleNumber));
+  return hit ? hit.dcw : null;
+}
+
+/**
+ * Welche M160-Module sind PV-Strings (nicht die Akku-Kanäle)? GEN24: Module
+ * 1/2 = PV, 3/4 = Akku laden/entladen. `exclude` nennt die Akku-Module; alles
+ * andere mit gültigem DCW ist ein PV-String. Für das Per-MPPT-Logging.
+ * @param {ReturnType<typeof parseM160Modules>} parsed
+ * @param {number[]} [exclude=[]] - Modulnummern, die KEINE PV-Strings sind
+ * @returns {Array<{ module:number, w:number, v:(number|null), a:(number|null), wh:(number|null) }>}
+ */
+export function m160PvStrings(parsed, exclude = []) {
+  const skip = new Set((Array.isArray(exclude) ? exclude : []).map(Number));
+  const out = [];
+  for (const mod of parsed?.modules || []) {
+    if (skip.has(mod.module)) continue;
+    if (mod.dcw === null) continue; // kein gültiger Wert → keine Reihe (nie Müll)
+    out.push({ module: mod.module, w: mod.dcw, v: mod.dcv, a: mod.dca, wh: mod.dcwh });
+  }
+  return out;
+}
+
 /**
  * Scannt die SunSpec-Modellkette eines Geräts und liefert die tatsächlichen
  * Registeradressen jedes Modells. Einzige zulässige Adressquelle für
