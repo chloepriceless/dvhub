@@ -203,6 +203,12 @@
           <div class="wr-cell"><span class="cap">Akku</span><strong class="v" id="sungrowWrSumAkku">&mdash;</strong></div>
           <div class="wr-cell"><span class="cap">PV</span><strong class="v" id="sungrowWrSumPv">&mdash;</strong></div>
         </div>
+        <!-- M2: manuelle Freigabe (Modus 0, beide 0xCC) — der Weg ohne Shell, falls der Master in DVhubs
+             Forced mode „hängt" (Besitz-Merker nach Lesefehler/Neustart verloren). Mit Bestätigung. -->
+        <div class="rail-row" data-leit="adv">
+          <button type="button" class="btn sm" id="sungrowWrReleaseBtn" title="Nimmt den Forced/External-EMS-Betrieb am Master zurück: Modus 0 (Eigenverbrauch), beide Wechselrichter auf Stopp (0xCC). Nutze dies, wenn der Wechselrichter fest in einem Lade-/Entladebefehl steht.">Sungrow freigeben</button>
+          <span class="v" id="sungrowWrReleaseStatus"></span>
+        </div>
       </div>
       <!-- Netzanschluss: Bezugsgrenze des Hausanschlusses (services/grid-connection,
            grid-connection-view.js). Nur sichtbar, wenn eine Grenze eingetragen ist. -->

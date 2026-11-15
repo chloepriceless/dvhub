@@ -714,6 +714,8 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
     owns: false,         // Zwangs-/EMS-Betrieb ist (womöglich) von DVhub — ab dem ersten Write, bis Self bestätigt ist
     ownMode: null,       // welchen Modus DVhub gesetzt hat (2 Forced, 3 External EMS)
+    lastMasterWrite: null, // zuletzt am MASTER bestätigter DVhub-Write { mode, cmd, powerW, at } — erkennt den
+                           // EIGENEN Modus 2/3 wieder, wenn der Besitz-Merker verloren ging (M2, Feld 16.11.)
     endpointKey: null,   // Verbindung, für die target/dev/owns gelten
     hb: { key: null, supported: null, workingFc: null, deviceManaged: false }, // Herzschlag-Register: vorhanden? welche Schreibfunktion (FC) nimmt es an?
     hbCfgSig: null,      // Signatur der Herzschlag-Einstellung (eigenes Feld, damit es st.hb-Neuzuweisungen überlebt) — für die lösbare Sperre (1d)
@@ -798,12 +800,29 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   // Modus 2 „seiner" — ein nicht besessener Modus 2 am Master kommt von einem anderen System, B4). Steuert DVhub
   // per External EMS (Modus 3), ist ein Modus 2 nicht sein erwarteter Modus → die bisherige Bereinigung eines
   // liegengebliebenen Zwangsbetriebs (zurück in Self-consumption) bleibt.
-  const isForeignMode = (mode) => {
+  // Stimmt der Gerätezustand (Modus 2/3, Befehl, Leistung) mit DVhubs zuletzt am Master BESTÄTIGTEM Write überein?
+  // Dann ist der Modus DVhubs EIGENER, auch wenn der Besitz-Merker verloren ging (M2, Feld 16.11.: nach einem
+  // Lesefehler löschte DVhub owns, schrieb die Rückgabe aber nicht durch — danach hielt es seinen eigenen Modus 2
+  // für fremd und schrieb nichts mehr). KEIN Alter-Fenster: solange das Gerät exakt DVhubs Write spiegelt, hat
+  // niemand sonst eingegriffen. Stop ignoriert die Leistung. Nur am Master (der Slave folgt dem Master-Modus).
+  const ownWroteMode = (mode, dev) => {
+    const lw = st.lastMasterWrite;
+    if (isSlave || !lw || !dev) return false;
+    if (lw.mode !== mode || dev.mode !== mode) return false;
+    if (lw.cmd !== dev.cmd) return false;
+    if (dev.cmd !== EMS_CMD.STOP && Math.abs(Number(lw.powerW) - Number(dev.powerW)) > 10) return false;
+    return true;
+  };
+  // mode ohne dev (ältere Aufrufer): nur der Modus zählt; mit dev zusätzlich der Eigen-Write-Abgleich (M2).
+  const isForeignMode = (mode, dev = null) => {
     if (mode === EMS_MODE.VPP) return true;
-    if (mode === EMS_MODE.EXTERNAL) return !(st.owns && st.ownMode === EMS_MODE.EXTERNAL);
+    if (mode === EMS_MODE.EXTERNAL) return !(st.owns && st.ownMode === EMS_MODE.EXTERNAL) && !ownWroteMode(EMS_MODE.EXTERNAL, dev);
     if (mode === EMS_MODE.FORCED) {
       const controlForced = resolveSungrowControl(getCfg()).modeValue === EMS_MODE.FORCED;
-      return controlForced && !(st.owns && st.ownMode === EMS_MODE.FORCED);
+      if (!controlForced) return false;
+      if (st.owns && st.ownMode === EMS_MODE.FORCED) return false;
+      // Besitz-Merker weg, aber das Gerät zeigt DVhubs zuletzt geschriebenen Modus 2 → EIGENER Modus, NICHT fremd.
+      return !ownWroteMode(EMS_MODE.FORCED, dev);
     }
     return false;
   };
@@ -1069,7 +1088,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     const dev = st.dev || await readDevice(conf);
     // Ein fremdes EMS/VPP wird nie übersteuert, auch nicht im Not-Halt. Der Slave (isSlave) folgt dem Master-Modus
     // (Feld #5) — ein Modus 2/3 am Slave ist Master-gesteuert, nicht fremd; nur VPP (4) am Slave wäre fremd.
-    if (isSlave ? dev.mode === EMS_MODE.VPP : isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+    if (isSlave ? dev.mode === EMS_MODE.VPP : isForeignMode(dev.mode, dev)) throw foreignModeError(dev.mode);
     const writeStartedAt = now(); // Antwortzeit (Schreiben bis bestätigtes Rücklesen) für den adaptiven Takt (Punkt 2)
     if (decision.mode === 'self') {
       const opt = { neutralize };
@@ -1098,6 +1117,9 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       err.code = 'readback_mismatch';
       throw err;
     }
+    // Zuletzt am Master bestätigter Zustand (M2): erkennt den eigenen Modus wieder, falls der Besitz-Merker verloren
+    // geht. Auch ein bestätigtes Self (Modus 0) wird gemerkt — danach gilt Modus 2 nicht mehr als „eigener".
+    if (!isSlave) st.lastMasterWrite = { mode: back.mode, cmd: back.cmd, powerW: back.powerW, at: now() };
     // Erst ein bestätigtes Self-consumption gibt den Besitz ab.
     if (decision.mode === 'self') setOwns(null);
     return back;
@@ -1144,11 +1166,14 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
   // Beide WR sicher in Self-consumption (Split-Abbruch): Master neutralisieren (writeDecision self), Slave über
   // seinen eigenen Pfad, Besitz abgeben, Ziel verwerfen. Best effort — Self ist immer die sichere Seite.
   async function neutralizeBoth(reason) {
-    try { st.dev = null; await writeDecision(sungrowEmsConf(getCfg()), { mode: 'self', reason }, { neutralize: true }); } catch { /* best effort */ }
+    // M2 (Feld 16.11.): den Besitz-Merker ERST abgeben, wenn die Rückgabe am Master BESTÄTIGT ist (writeDecision self
+    // liest 13050=0 zurück). Scheitert sie (Lesefehler/Abweichung), Merker UND Ziel behalten — der nächste Takt tritt
+    // die Rückgabe erneut an. Sonst hielte DVhub seinen eigenen Modus 2 für fremd (owns weg) und schriebe nie wieder.
+    let masterSafe = false;
+    try { st.dev = null; await writeDecision(sungrowEmsConf(getCfg()), { mode: 'self', reason }, { neutralize: true }); masterSafe = true; } catch { /* best effort — Merker bleibt, Wiederholung nächster Takt */ }
     try { await slaveActuator.neutralize(reason); } catch { /* best effort */ }
-    setOwns(null);
-    st.target = null;
     st.revokedReason = reason;
+    if (masterSafe) { setOwns(null); st.target = null; }
   }
 
   // Split-Steuerung: die Reglerentscheidung auf beide WR schreiben. Self → Master Self + Slave zurückziehen.
@@ -1258,7 +1283,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     // Master-Anteil. Scheitert er → beide sicher in Self.
     try {
       const mdev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
-      if (isForeignMode(mdev.mode)) throw foreignModeError(mdev.mode);
+      if (isForeignMode(mdev.mode, mdev)) throw foreignModeError(mdev.mode);
       // Schreibdrossel (N4/Aufgabe 5): Master 13051 nur bei Befehlswechsel, 13052 nur bei Änderung > stepW — und das
       // Log sungrow_ems_split_write NUR bei echtem Write (im Feld lief es jede Sekunde, /api/log reichte ~3 min).
       // Bei gap (Herzschlag-Lücke/Wiederaufnahme) immer voll schreiben.
@@ -1380,7 +1405,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       // (WR-Neustart) spätestens nach deviceRecheckMs auf — der Akku steht bis dahin im sicheren Eigenverbrauch.
       const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
       // Fremder Modus (VPP, oder Modus 2/3 ohne DVhub-Besitz) → nicht übersteuern (B4).
-      if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+      if (isForeignMode(dev.mode, dev)) throw foreignModeError(dev.mode);
       // Wiedereintritt (B3): DVhub besitzt Forced, der Master steht aber von selbst in Modus 0 → er ist von selbst
       // zurückgefallen (WR-Neustart/Firmware/Netzfehler). EINMAL neu eintreten (die Writes unten setzen 13050=2
       // neu). Bei zu vielen Wiedereintritten/Stunde das Mode-Register (13050) schonen: nicht mehr eintreten, Modus 0
@@ -1578,7 +1603,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
       // Solange DVhub External EMS besitzt, den Gerätezustand in JEDEM Takt frisch lesen — sonst bliebe ein
       // geräteeigener Rückfall (Modus 0) bis deviceRecheckMs unbemerkt (Punkt 3). Sonst wie bisher gecacht.
       const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs && !ownsExternal) ? st.dev : await readDevice(conf);
-      if (isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+      if (isForeignMode(dev.mode, dev)) throw foreignModeError(dev.mode);
       // (3b) Geräte-Rückfall: DVhub besitzt External EMS, der WR steht aber in Self-consumption → er ist von
       // selbst zurückgefallen (Lebenszeichen zu selten / 13080 nicht beschreibbar). Zeit messen + melden
       // (sungrow_ems_device_fallback, nicht readback_mismatch); (3c) bei >3 Rückfällen/min nicht wieder eintreten.
@@ -1820,7 +1845,7 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
         // ist unnötig und verschleißt die Holding-Register.
         st.dev = null;
         const dev = await readDevice(conf);
-        if (isSlave ? dev.mode === EMS_MODE.VPP : isForeignMode(dev.mode)) throw foreignModeError(dev.mode);
+        if (isSlave ? dev.mode === EMS_MODE.VPP : isForeignMode(dev.mode, dev)) throw foreignModeError(dev.mode);
         if (emsMatches(dev, decision, opts.stepW, control.modeValue, { ignoreMode: isSlave })) {
           st.decision = { ...decision, at: now() };
           st.error = null;
@@ -1905,7 +1930,35 @@ export function createSungrowEms({ state, getCfg, transport, pushLog = () => {},
     });
   }
 
-  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, neutralize, releaseControl, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
+  // Manuelle Freigabe per Knopf/API (M2, Feld 16.11.): Master in Modus 0, beide WR 0xCC — UNABHÄNGIG vom
+  // Besitz-Merker. Der Merker kann nach einem Neustart/Lesefehler fehlen, während der Master real noch in DVhubs
+  // Modus 2 mit fester Leistung steht (Feld: ~10 min, API-Neustart half nicht, nur sungrowForcedSafeOff löste es).
+  // Darum NICHT über writeDecision (das lehnt einen vermeintlich „fremden" Modus 2 ab) — die Register direkt setzen
+  // und zurücklesen. Danach Besitz/Ziel/letzten Write zurücksetzen, damit DVhub nicht sofort wieder eintritt.
+  function forceRelease(reason = 'manual_release') {
+    return serial(async () => {
+      const cfg = getCfg();
+      const conf = sungrowEmsConf(cfg);
+      if (!conf || transport?.type !== 'modbus') return { ok: true, skipped: true, reason: 'no_modbus' };
+      syncEndpoint(cfg);
+      const out = { ok: false };
+      if (slaveActuator) { try { await slaveActuator.forceRelease(reason); } catch { /* best effort */ } }
+      try {
+        st.dev = null;
+        await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, { neutralize: true });
+        if (!isSlave) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, { neutralize: true });
+        const back = await readDevice(conf);
+        out.ok = back.cmd === EMS_CMD.STOP && (isSlave || back.mode === EMS_MODE.SELF);
+        out.device = { mode: back.mode, cmd: back.cmd, powerW: back.powerW };
+      } catch (e) { out.error = e?.message || String(e); }
+      setOwns(null); st.target = null; st.revokedReason = reason; st.lastMasterWrite = null;
+      if (!isSlave) pushLog('sungrow_ems_manual_release', { reason, ok: out.ok, error: out.error || null, text: 'Sungrow manuell freigegeben (Modus 0, beide 0xCC).' }, out.ok ? undefined : 'warn');
+      publish();
+      return out;
+    });
+  }
+
+  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, neutralize, releaseControl, forceRelease, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
 }
 
 function describe(d, modeValue = EMS_MODE.FORCED) {

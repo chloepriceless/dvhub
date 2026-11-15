@@ -179,7 +179,7 @@ function emsRig({ device = sungrowDevice({ bdcRatedW: 3000 }), batteryPowerW = -
     ...(second ? { sungrowSecond: { online: true, updatedAt: clock, ...second } } : {})
   };
   const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, now });
-  return { ems, t, state };
+  return { ems, t, state, image };
 }
 
 test('Regler ohne zweiten WR: Entladen auf die Master-Leistungsgrenze (3 kW) begrenzt', async () => {
@@ -190,6 +190,50 @@ test('Regler ohne zweiten WR: Entladen auf die Master-Leistungsgrenze (3 kW) beg
   assert.equal(pw.value, 3000);
   assert.ok(r.t.writes.some((w) => w.address === CMD && w.value === EMS_CMD.DISCHARGE));
   assert.ok(r.t.writes.some((w) => w.address === MODE && w.value === EMS_MODE.FORCED));
+});
+
+test('M2: Besitz-Merker verloren, Master in DVhubs EIGENEM Modus 2 → NICHT fremd, DVhub übernimmt wieder', async () => {
+  // Feld 16.11.: nach einem Lesefehler löschte DVhub owns, schrieb die Rückgabe aber nicht durch. Danach hielt es
+  // seinen eigenen Modus 2 für fremd (sungrow_foreign_ems_mode) und schrieb nichts mehr → Master ~10 min fest.
+  const r = emsRig({ batteryPowerW: -500 });
+  await r.ems.applySetpoint(-6000, 'rule:abend');          // DVhub tritt Modus 2 an → owns + lastMasterWrite gesetzt
+  assert.equal(r.ems._st.owns, true);
+  assert.ok(r.ems._st.lastMasterWrite && r.ems._st.lastMasterWrite.mode === EMS_MODE.FORCED);
+  // Besitz-Merker geht verloren (owns weg), das Gerät steht aber noch in DVhubs Modus 2.
+  r.ems._st.owns = false; r.ems._st.ownMode = null; r.ems._st.dev = null; // frisch vom Gerät lesen
+  const writesBefore = r.t.writes.length;
+  const res = await r.ems.applySetpoint(-1000, 'rule:abend'); // andere (kleinere) Leistung → neue Vorgabe
+  assert.equal(res.ok, true, 'kein foreign-Abbruch — DVhub erkennt den eigenen Modus 2 wieder');
+  assert.notEqual(res.error, 'sungrow_foreign_ems_mode');
+  assert.ok(r.t.writes.length > writesBefore, 'DVhub schreibt wieder (übernimmt), statt hängen zu bleiben');
+  assert.equal(r.ems._st.owns, true, 'Besitz zurückgenommen');
+});
+
+test('M2: fremder Modus 2 (NICHT DVhubs letzter Write) bleibt fremd → kein Übersteuern', async () => {
+  const r = emsRig({ batteryPowerW: -500 });
+  // Gerät steht real in Modus 2 mit FREMDEM Befehl (anderes System), DVhub hat nichts geschrieben.
+  r.image.holding.set(wire(13050), EMS_MODE.FORCED);
+  r.image.holding.set(wire(13051), EMS_CMD.CHARGE);
+  r.image.holding.set(wire(13052), 1234);
+  r.ems._st.dev = null; r.ems._st.lastMasterWrite = null;
+  r.ems._st.owns = false; r.ems._st.ownMode = null;
+  const res = await r.ems.applySetpoint(-4000, 'rule:abend');
+  // Ohne passenden eigenen Write ist Modus 2 fremd → foreign, DVhub übersteuert NICHT (kein claim).
+  assert.ok(res.ok === false || res.error === 'sungrow_foreign_ems_mode' || res.skipped === true, JSON.stringify(res));
+  assert.notEqual(r.ems._st.owns, true, 'DVhub beansprucht den fremden Modus 2 NICHT');
+});
+
+test('M2: forceRelease — Modus 0 + 0xCC, UNABHÄNGIG vom Besitz-Merker', async () => {
+  const r = emsRig({ batteryPowerW: -500 });
+  await r.ems.applySetpoint(-6000, 'rule:abend');          // Modus 2, owns
+  r.ems._st.owns = false; r.ems._st.ownMode = null;        // Merker verloren
+  const out = await r.ems.forceRelease('manual_release');
+  assert.equal(out.ok, true);
+  assert.equal(out.device.mode, EMS_MODE.SELF);
+  assert.equal(out.device.cmd, EMS_CMD.STOP);
+  assert.equal(r.ems._st.owns, false);
+  assert.equal(r.ems._st.target, null);
+  assert.equal(r.ems._st.lastMasterWrite, null);
 });
 
 test('Regler mit zweitem WR: Systemakku kommt aus state.victron (nicht doppelt summiert), System-Grenze', async () => {

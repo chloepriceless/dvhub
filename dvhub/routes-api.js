@@ -4227,6 +4227,22 @@ export function createApiRoutes(ctx) {
       });
     }
 
+    // POST /api/sungrow/release — Sungrow manuell freigeben (Modus 0, beide 0xCC), M2 (Feld 16.11.). Nimmt den
+    // Forced/External-EMS-Betrieb am Master UNABHÄNGIG vom Besitz-Merker zurück — der Weg ohne Shell, wenn DVhub den
+    // Master nach einem Lesefehler/Neustart im eigenen Modus 2 „hängen" ließ. Erfordert body.confirm === true.
+    if (url.pathname === '/api/sungrow/release' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      let body;
+      try { body = await parseBody(req); } catch { return json(res, 400, { ok: false, error: 'invalid_json' }); }
+      if (body?.confirm !== true) return json(res, 400, { ok: false, error: 'confirm_required' });
+      if (typeof ctx.sungrowEms?.forceRelease !== 'function') return json(res, 409, { ok: false, error: 'sungrow_not_active' });
+      let result;
+      try { result = await ctx.sungrowEms.forceRelease('manual_release'); }
+      catch (e) { pushLog('sungrow_manual_release_error', { error: e?.message || String(e) }, 'warn'); return json(res, 500, { ok: false, error: 'release_failed' }); }
+      pushLog('sungrow_manual_release', { ok: result?.ok === true, device: result?.device || null }, actorContext(req));
+      return json(res, 200, { ok: result?.ok === true, device: result?.device || null, error: result?.error || null });
+    }
+
     // POST: ein planbares Gerät anlegen/aktualisieren (Upsert nach id).
     if (url.pathname === '/api/devices/schedulable' && req.method === 'POST') {
       if (!checkAuth(req, res)) return;

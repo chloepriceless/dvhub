@@ -300,6 +300,33 @@
     set('sungrowWrSlaveEms', vw.slave.role.indexOf('gesteuert') >= 0 ? `${vw.slave.decision} · Besitz ${vw.slave.owns ? 'ja' : 'nein'} · Takt ${vw.slave.regulate}` : `BDC ${vw.slave.bdc}`);
     set('sungrowWrSlaveWrites', vw.slave.role.indexOf('gesteuert') >= 0 ? `Writes heute: ${vw.slave.writes}` : '');
     set('sungrowWrSumSoc', vw.sum.soc); set('sungrowWrSumAkku', vw.sum.battery); set('sungrowWrSumPv', vw.sum.pv);
+    wireReleaseButton(d);
+  }
+
+  // M2: den Freigabe-Button einmalig verdrahten (render läuft bei jedem Status-Update). POST /api/sungrow/release
+  // über den Auth-Helfer (Bearer-Token). Mit Bestätigung; der Button nimmt den Forced/External-EMS-Betrieb zurück.
+  function wireReleaseButton(d) {
+    const btn = d.getElementById('sungrowWrReleaseBtn');
+    if (!btn || btn.__wired || typeof btn.addEventListener !== 'function') return;
+    btn.__wired = true;
+    const statusEl = d.getElementById('sungrowWrReleaseStatus');
+    const apiFetch = (typeof window !== 'undefined' && window.DVhubCommon && window.DVhubCommon.apiFetch) || null;
+    btn.addEventListener('click', async () => {
+      if (typeof window !== 'undefined' && window.confirm && !window.confirm('Sungrow freigeben: Master auf Eigenverbrauch (Modus 0), beide Wechselrichter auf Stopp (0xCC). Fortfahren?')) return;
+      btn.disabled = true;
+      if (statusEl) statusEl.textContent = 'läuft…';
+      try {
+        const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) };
+        const res = apiFetch ? await apiFetch('/api/sungrow/release', opts) : await fetch('/api/sungrow/release', opts);
+        let j = {};
+        try { j = await res.json(); } catch { j = {}; }
+        if (statusEl) statusEl.textContent = (res.ok && j.ok) ? 'freigegeben (Modus 0)' : ('Fehler' + (j.error ? ': ' + j.error : ''));
+      } catch (e) {
+        if (statusEl) statusEl.textContent = 'Fehler: ' + (e && e.message ? e.message : 'Netzwerk');
+      } finally {
+        btn.disabled = false;
+      }
+    });
   }
 
   if (typeof window !== 'undefined') window.DVhubSungrowInverters = { view, render };
