@@ -272,12 +272,16 @@ final class MarketTests: XCTestCase {
         """)))
         XCTAssertEqual(p.total, 4541)
         XCTAssertEqual(p.offset, 8)
-        XCTAssertEqual(p.items.map(\.title), ["Speicher & Netz: neue Regeln", "Gleich"])
+        // http-Artikel (z. B. top50-solar) werden gezeigt und öffnen in Safari;
+        // nur javascript:/data: o. ä. werden verworfen.
+        XCTAssertEqual(p.items.map(\.title), ["Speicher & Netz: neue Regeln", "Unsicher", "Gleich"])
         XCTAssertEqual(p.items[0].excerpt, "Kurz gesagt")
         XCTAssertNil(p.items[0].imageURL) // http-Bild wird nicht geladen
         XCTAssertEqual(p.items[0].publishedAt, parseISODate("2026-11-13T17:44:30Z"))
-        XCTAssertEqual(p.items[1].excerpt, "") // Auszug = Titel → leer
-        XCTAssertNotNil(p.items[1].imageURL)
+        XCTAssertNotNil(p.items[1].linkURL) // http-Artikel-Link öffnet (extern in Safari)
+        XCTAssertNil(p.items[1].imageURL)   // aber ohne Bild
+        XCTAssertEqual(p.items[2].excerpt, "") // Auszug = Titel → leer
+        XCTAssertNotNil(p.items[2].imageURL)
         XCTAssertNil(NewsPage.from(["error": "x"]))
         // Doppelt maskierter Text bleibt Text und wird nicht zu einem Tag.
         XCTAssertEqual(NewsPage.clean("A&amp;lt;b&amp;gt; &amp; B"), "A&lt;b&gt; & B")

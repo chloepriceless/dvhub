@@ -451,12 +451,24 @@ public struct NewsItem: Hashable, Sendable, Identifiable, Codable {
     public let image: String?
     public var id: String { link }
 
-    /// Nur https — fremde Bilder und Artikel nie unverschlüsselt laden.
-    public var linkURL: URL? { Self.httpsURL(link) }
+    /// Artikel-Link in Safari öffnen: http wie https erlaubt (nutzer-initiiert,
+    /// SFSafariViewController; javascript:/data: o. ä. werden abgewiesen). Bilder
+    /// dagegen nur https — fremde Bilder nie unverschlüsselt in den App-Prozess laden.
+    public var linkURL: URL? { Self.webURL(link) }
     public var imageURL: URL? { image.flatMap(Self.httpsURL) }
 
     static func httpsURL(_ s: String) -> URL? {
         guard let u = URL(string: s.trimmingCharacters(in: .whitespacesAndNewlines)), u.scheme?.lowercased() == "https", u.host?.isEmpty == false else { return nil }
+        return u
+    }
+
+    /// http ODER https — für Artikel-Links, die der Nutzer extern in Safari öffnet.
+    /// Quellen wie top50-solar liefern http-Links; die Artikel sollen trotzdem
+    /// erscheinen (sonst fehlen die neuesten Meldungen in der Liste).
+    static func webURL(_ s: String) -> URL? {
+        guard let u = URL(string: s.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = u.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              u.host?.isEmpty == false else { return nil }
         return u
     }
 }
@@ -472,7 +484,7 @@ public struct NewsPage: Equatable, Sendable {
         var seen = Set<String>()
         let items = rows.compactMap { r -> NewsItem? in
             guard let title = r["title"]?.string.map(clean), !title.isEmpty, let link = r["link"]?.string,
-                  NewsItem.httpsURL(link) != nil, seen.insert(link).inserted else { return nil }
+                  NewsItem.webURL(link) != nil, seen.insert(link).inserted else { return nil }
             var excerpt = clean(r["excerpt"]?.string ?? "")
             if excerpt == title { excerpt = "" }
             return NewsItem(title: title, excerpt: excerpt, link: link, source: clean(r["source_name"]?.string ?? ""),
