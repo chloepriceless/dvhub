@@ -259,6 +259,11 @@ test('update-pins: glibc-Wheels aus SHA256SUMS in die Pin-Datei, musllinux bleib
 // Binär/passt die Prüfsumme nicht, Rückfall auf Python.
 const nativeExec = (unit) => /^ExecStart=\S*dvhub-optimize serve --listen 127\.0\.0\.1:8503 /m.test(unit);
 const pythonExec = (unit) => /ExecStart=\S*python -m akkudoktoreos\.server\.eos/.test(unit);
+// Der native Pfad wählt das Binär per `uname -m` (HOST-Arch) — FAKE_ARCH steuert nur
+// die pip/python-Plattform, nicht uname. Die Markererwartung richtet sich deshalb nach der
+// echten Laufzeit-Arch, damit der Test auf jedem Runner stimmt (arm64 lokal → AARCH64,
+// x86_64 CI → X86_64).
+const HOST_NATIVE_ARCH = { arm64: 'AARCH64', x64: 'X86_64', arm: 'ARMV7L' }[process.arch] || process.arch.toUpperCase();
 
 test('local-native + Opt-in: nativer Dienst, kein venv/pip, Marker native', () => {
   const s = setup({ arch: 'aarch64' });
@@ -271,7 +276,7 @@ test('local-native + Opt-in: nativer Dienst, kein venv/pip, Marker native', () =
     assert.doesNotMatch(s.calls(), /^pip install -e /m, 'kein Python-Install im nativen Weg');
     assert.match(s.calls(), /^systemctl restart eos\.service/m);
     assert.ok(s.nativeBin(), 'Binär nach INSTALL_DIR/bin/dvhub-optimize installiert');
-    assert.match(s.native(), /\bok native:dvhub-optimize-0\.1\.0-test-AARCH64:/);
+    assert.match(s.native(), new RegExp(`\\bok native:dvhub-optimize-0\\.1\\.0-test-${HOST_NATIVE_ARCH}:`));
     // Steuer-Marker .eos-native-engine getrennt; .eos-provisioned (Python-Stand)
     // fasst der native Weg NICHT an (Rückweg-Datensicherung, Codex-P2 #3).
     assert.match(s.engine(), /^native file:\/\/\S+@\S+ dvhub-optimize-0\.1\.0-test:[0-9a-f]{12}$/);
