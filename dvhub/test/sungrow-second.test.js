@@ -871,6 +871,41 @@ function splitRig({ masterSoc = 80, slaveSoc = 20, batteryPowerW = -3000, grid =
   return { ems, slaveEms, t, state, cfg, mImage, sImage, logs, setpoint };
 }
 
+// M12 (Feld 16.11.): echter Slave-EMS (isSlave) mit einem Abbild im Zustand Modus 2 + 0xCC (wie nach Freigabe/Neustart).
+function slaveEmsRig({ mode = EMS_MODE.FORCED, cmd = EMS_CMD.STOP, power = 0 } = {}) {
+  const image = sungrowImage({ holding: { [wire(13050)]: mode, [wire(13051)]: cmd, [wire(13052)]: power } });
+  const t = mockSungrow(image);
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter: { host: '192.168.68.83' } } });
+  const state = { victron: { device: sungrowDevice() }, ctrl: {} };
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, now: () => 1_000_000, isSlave: true });
+  return { ems, t, image, state, cfg };
+}
+
+test('M12: Slave im von DVhub geführten Zustand (Modus 2 + 0xCC) → Besitz übernommen, auch ohne Write', async () => {
+  const r = slaveEmsRig({ mode: EMS_MODE.FORCED, cmd: EMS_CMD.STOP, power: 0 });
+  assert.equal(r.ems._st.owns, false, 'vorher Besitz nein');
+  const res = await r.ems.applyDirectCommand({ mode: 'forced', command: 'stop', powerW: 0, reason: 'floor' });
+  assert.equal(res.ok, true);
+  assert.equal(res.unchanged, true, 'kein Write (schon im Zielzustand)');
+  assert.equal(r.ems._st.owns, true, 'Besitz übernommen');
+  assert.equal(r.ems._st.ownMode, EMS_MODE.FORCED);
+  assert.deepEqual(r.t.writes, [], 'kein Write ausgelöst');
+});
+
+test('M12: Slave bei Rückzug (self-Vorgabe) übernimmt NICHT den Besitz', async () => {
+  const r = slaveEmsRig({ mode: EMS_MODE.SELF, cmd: EMS_CMD.STOP, power: 0 });
+  await r.ems.applyDirectCommand({ mode: 'self', command: 'stop', powerW: 0 });
+  assert.notEqual(r.ems._st.owns, true, 'kein Besitz bei Rückzug');
+});
+
+test('M12: echter fremder Zustand am Slave (VPP, Modus 4) bleibt fremd, kein Besitz', async () => {
+  const r = slaveEmsRig({ mode: EMS_MODE.VPP, cmd: EMS_CMD.STOP, power: 0 });
+  const res = await r.ems.applyDirectCommand({ mode: 'forced', command: 'stop', powerW: 0 });
+  assert.equal(res.ok, false);
+  assert.equal(res.foreign, true, 'VPP am Slave ist fremd');
+  assert.notEqual(r.ems._st.owns, true);
+});
+
 test('Split: Entladen 3 kW bei SoC 80/20 → Master 2889 (Angleich), Slave 111, beide forced discharge', async () => {
   // soc-balance Angleich (Aufgabe 6): Referenz = min(80,20)−5 = 15. Gewicht = (SoC − Ref)×Kapazität. Master
   // 65·10000 = 650000, Slave (20−15)·5000 = 25000 → 26:1 → 3000·650000/675000 = 2889 auf den volleren Master, 111

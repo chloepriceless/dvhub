@@ -1883,6 +1883,12 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         const dev = await readDevice(conf);
         if (isSlave ? dev.mode === EMS_MODE.VPP : isForeignMode(dev.mode, dev)) throw foreignModeError(dev.mode);
         if (emsMatches(dev, decision, opts.stepW, control.modeValue, { ignoreMode: isSlave })) {
+          // M12 (Feld 16.11.): steht der Slave schon im von DVhub geführten Zustand (Modus 2 + passender Befehl, z. B.
+          // 0xCC am SoC-Boden — genau der Zustand nach eigener Freigabe / Neustart) und führt DVhub ihn regulär in
+          // forced (decision.mode !== 'self', Gerät NICHT fremd — oben geprüft), dann ist das DVhubs EIGENER Zustand:
+          // Besitz übernehmen, auch ohne Write. Sonst zeigt die Kachel „Besitz nein", obwohl DVhub den Slave führt.
+          // Nur für den Slave; die M2-Fremderkennung am Master bleibt unberührt.
+          if (isSlave && decision.mode !== 'self' && !(st.owns && st.ownMode === control.modeValue)) setOwns(control.modeValue);
           st.decision = { ...decision, at: now() };
           st.error = null;
           publish();
