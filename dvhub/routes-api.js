@@ -7320,7 +7320,10 @@ export function createApiRoutes(ctx) {
           detail: 'Sicherheits-Token fehlt oder abgelaufen — Status neu laden und erneut öffnen.'
         });
       }
-      const ttlRaw = Number(body?.ttlMin);
+      // M6 (Feld 16.11.): die im Portal gewählte Dauer wurde im Feld nicht übernommen (Tunnel kam mit 60 min). Die
+      // Box akzeptiert die Dauer robust unter mehreren Feldnamen (ttlMin/durationMin/minutes/ttl), damit ein
+      // abweichender Portal-Feldname sie nicht verliert; welcher Wert ankam, protokolliert support_tunnel_opened.
+      const ttlRaw = Number(body?.ttlMin ?? body?.durationMin ?? body?.minutes ?? body?.ttl);
       const r = await ctx.supportTunnel.open({ ttlMin: Number.isFinite(ttlRaw) ? ttlRaw : undefined }, actor);
       // not_provisioned / misconfigured / spawn_failed -> 409 (caller can't open yet)
       return json(res, r.ok ? 200 : 409, r);
