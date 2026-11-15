@@ -188,3 +188,97 @@ test('.gitignore: Laufzeitordner im Repo-Ordner gelten nicht als untracked', () 
   const ignored = out.stdout.trim().split('\n').filter(Boolean);
   assert.deepEqual(ignored.sort(), [...paths].sort());
 });
+
+// ── local-native: Motor-Entscheidung im EOS-Schnellweg (engine-Marker) ──────
+// Deckt Codex-P2 #1 (Fallback-Box darf nicht bei jedem Start neu provisionieren)
+// und die native Schnellweg-Erkennung ab. Arch-agnostisch: alle drei Binär-Pins.
+const SHA = 'a'.repeat(64);
+function eosNativeCase({ mode = 'local-native', optin = true, engineMarker, binExists = true, unitNative = true, binPin = true }) {
+  const s = sandbox();
+  const inst = join(s.dir, 'opt');
+  const data = join(s.dir, 'data');
+  mkdirSync(join(inst, 'eos', '.git'), { recursive: true });
+  mkdirSync(join(inst, 'bin'), { recursive: true });
+  mkdirSync(data);
+  writeFileSync(join(inst, 'eos-provision.sh'), '');
+  const pins = ['EOS_REPO_URL=https://x/eos.git', 'EOS_PIN=v1'];
+  if (binPin) for (const a of ['X86_64', 'AARCH64', 'ARMV7L']) pins.push(`EOS_NATIVE_BIN_${a}=dvhub-optimize-x`, `EOS_NATIVE_BIN_${a}_SHA256=${SHA}`);
+  writeFileSync(join(inst, 'eos-version.env'), pins.join('\n') + '\n');
+  writeFileSync(join(data, '.eos-provisioned'), 'https://x/eos.git@v1\n');
+  writeFileSync(join(data, '.eos-native'), 'https://x/eos.git@v1 ok akkudoktoreos_native-...whl\n');
+  if (engineMarker) writeFileSync(join(data, '.eos-native-engine'), engineMarker);
+  if (binExists) { writeFileSync(join(inst, 'bin', 'dvhub-optimize'), '#!/bin/sh\n'); chmodSync(join(inst, 'bin', 'dvhub-optimize'), 0o755); }
+  // venv vorhanden (für den Python-Schnellweg im Fallback-Fall)
+  mkdirSync(join(inst, 'eos-venv', 'bin'), { recursive: true });
+  writeFileSync(join(inst, 'eos-venv', 'bin', 'python'), '#!/bin/sh\n'); chmodSync(join(inst, 'eos-venv', 'bin', 'python'), 0o755);
+  const unit = join(s.dir, 'eos.service');
+  writeFileSync(unit, unitNative ? '[Service]\nExecStart=/opt/bin/dvhub-optimize serve --listen 127.0.0.1:8503\n' : '[Unit]\n');
+  const cfg = join(s.dir, 'config.json');
+  writeFileSync(cfg, JSON.stringify({ optimizer: { eosProxy: { mode } } }));
+  const optinMarker = join(s.dir, 'optin'); if (optin) writeFileSync(optinMarker, '');
+  s.fake('systemctl', '[[ "$1" == is-active ]] && exit 1; exit 0');
+  s.fake('systemd-run');
+  const r = s.run(`INSTALL_DIR='${inst}'\nDATA_DIR='${data}'\nSERVICE_USER=dvhub\nEOS_UNIT_PATH='${unit}'\nCONFIG_PATH='${cfg}'\nEOS_NATIVE_OPTIN_MARKER='${optinMarker}'\n${EOS_BLOCK}`);
+  return { s, r };
+}
+const sig = `dvhub-optimize-x:${SHA.slice(0, 12)}`;
+
+test('local-native: Motor-Marker native + Binär + Unit → OK, keine Provisionierung', () => {
+  const { s, r } = eosNativeCase({ engineMarker: `native https://x/eos.git@v1 ${sig}\n` });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /nativer Optimierer aktuell/);
+    assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'keine (Neu-)Provisionierung');
+  } finally { s.cleanup(); }
+});
+
+test('local-native Fallback vermerkt → kein Churn: OK, keine Neu-Provisionierung (Codex-P2 #1)', () => {
+  const { s, r } = eosNativeCase({ engineMarker: `fallback https://x/eos.git@v1 ${sig}\n`, unitNative: false });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'Fallback ist abgeschlossen — kein teurer Neuversuch');
+  } finally { s.cleanup(); }
+});
+
+test('local-native gewünscht, aber noch kein Motor-Marker → Provisionierung angestoßen', () => {
+  const { s, r } = eosNativeCase({ engineMarker: null });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(s.calls().some((c) => c.startsWith('systemd-run')), 'Motorwechsel → Neu-Provisionierung');
+  } finally { s.cleanup(); }
+});
+
+test('local-native, aber anderer Binär-Pin als der Marker → Neu-Provisionierung (Codex-P2 #2)', () => {
+  const { s, r } = eosNativeCase({ engineMarker: `native https://x/eos.git@v1 dvhub-optimize-x:${'b'.repeat(12)}\n` });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(s.calls().some((c) => c.startsWith('systemd-run')), 'neuer Binär-Pin → neu provisionieren');
+  } finally { s.cleanup(); }
+});
+
+test('Rückweg: mode=local, aber Motor-Marker noch native → Neu-Provisionierung (stellt Python her)', () => {
+  const { s, r } = eosNativeCase({ mode: 'local', engineMarker: `native https://x/eos.git@v1 ${sig}\n` });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(s.calls().some((c) => c.startsWith('systemd-run')), 'Motorwechsel native→python');
+  } finally { s.cleanup(); }
+});
+
+test('mode=local-native ohne Opt-in → kein nativer Wunsch, Python-Schnellweg (kein Churn)', () => {
+  const { s, r } = eosNativeCase({ optin: false, engineMarker: null, unitNative: false });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /EOS: OK \(aktuell/);
+    assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'ohne Opt-in bleibt alles Python, kein Churn');
+  } finally { s.cleanup(); }
+});
+
+test('local-native gewünscht, aber kein Binär-Pin für diese Arch → Python, kein Churn (Codex-P2 #1)', () => {
+  // ohne Pin: DESIRED_NATIVE=0, kein Motor-Marker → settled, Python-Schnellweg
+  const { s, r } = eosNativeCase({ binPin: false, engineMarker: null, unitNative: false });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /EOS: OK \(aktuell/);
+    assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'kein Pin → kein teurer Neuversuch je Start');
+  } finally { s.cleanup(); }
+});

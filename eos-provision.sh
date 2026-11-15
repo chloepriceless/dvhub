@@ -119,6 +119,227 @@ if [[ "${EOS_NATIVE_ONLY:-0}" == 1 && "$EOS_PIN_CHANGED" -eq 0 && -d "$EOS_DIR/.
   echo "  EOS: Stand ${EOS_PIN} ist aktuell — nur der Rust-Kern wird nachgezogen"
 fi
 
+# ── local-native: der native Optimierer dvhub-optimize ALS EOS-Dienst ────────
+# Statt Python-EOS + Rust-Wheel läuft das eigenständige Binär (dvhub-rs
+# crates/eos-genetic) direkt als EOS-kompatible HTTP-Fassade — ohne Python,
+# −170..−230 MB RAM (PLAN rust-1.1 §6.2 E2). GENAU DANN aktiv, wenn BEIDES gilt:
+#   (a) gewünscht: EOS_ENGINE=native ODER die DVhub-Config mode=local-native
+#       (post-update.sh reicht sie als EOS_PROXY_MODE durch), UND
+#   (b) ausdrückliche Opt-in-Freigabe: Marker $EOS_NATIVE_OPTIN_MARKER vorhanden.
+# Der Config-Schalter ALLEIN aktiviert nie (Codex-P3 af845955): ein Update darf
+# den Python-EOS nicht still ersetzen. Fehlt/scheitert das Binär, Rückfall auf
+# den unveränderten Python-Weg unten (der bleibt für Fallback UND Rückweg).
+eos_pin_val_early() { { grep -E "^$1=" "$EOS_PIN_FILE" 2>/dev/null || true; } | tail -1 | cut -d= -f2- | tr -d '"'"'"'\r'; }
+eos_sha256_file() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+
+# Opt-in-Freigabe in einem ROOT-eigenen Ordner (nicht /etc/dvhub — das gehört dem
+# Dienstbenutzer): nur wer root ist, kann den nativen Dienst freischalten.
+EOS_NATIVE_OPTIN_MARKER="${EOS_NATIVE_OPTIN_MARKER:-/etc/dvhub-release/eos-native-optin}"
+EOS_NATIVE_BIN="${EOS_NATIVE_BIN:-$INSTALL_DIR/bin/dvhub-optimize}"
+EOS_NATIVE_STATE_DIR="${EOS_NATIVE_STATE_DIR:-$DATA_DIR/eos-native-state}"
+# Motor-Steuermarker (post-update.sh liest NUR ihn für die Motor-Entscheidung):
+#   "native <repo@pin> <binsig>"   nativer Dienst läuft für genau diesen Stand/Binär
+#   "fallback <repo@pin> <binsig>" nativ gewünscht, aber hier nicht möglich → Python
+# Fehlt der Marker: Motor ist Python. <binsig> = "<datei>:<sha12>" des Arch-Binärs.
+# BEWUSST getrennt von .eos-provisioned (= Python-Checkout/venv-Stand): der native
+# Weg fasst .eos-provisioned NIE an, damit ein späterer Rückweg zu Python den
+# Versionswechsel (Datensicherung, venv-Neubau) korrekt erkennt.
+EOS_NATIVE_ENGINE_MARKER="${EOS_NATIVE_ENGINE_MARKER:-$DATA_DIR/.eos-native-engine}"
+# Betriebsart: vom Aufrufer (post-update.sh) durchgereicht ODER selbst aus der
+# DVhub-Config gelesen. So wählt auch ein manueller Lauf (install.sh, Reparatur,
+# ohne EOS_PROXY_MODE) denselben Motor wie die Config — sonst schaltete er einen
+# nativen Box auf Python zurück, den der nächste Start wieder auf nativ brächte
+# (Codex-P3). EOS_ENGINE bleibt der einmalige Override darüber.
+EOS_PROXY_MODE="${EOS_PROXY_MODE:-}"
+if [[ -z "$EOS_PROXY_MODE" ]]; then
+  _eos_cfg="${CONFIG_PATH:-${DV_APP_CONFIG:-}}"
+  if [[ -n "${_eos_cfg:-}" && -f "$_eos_cfg" ]] && command -v node >/dev/null 2>&1; then
+    EOS_PROXY_MODE="$(node -e 'try{const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String(c?.optimizer?.eosProxy?.mode||""))}catch{}' "$_eos_cfg" 2>/dev/null || true)"
+  fi
+fi
+EOS_NATIVE_BIN_VERSION="${EOS_NATIVE_BIN_VERSION:-$(eos_pin_val_early EOS_NATIVE_BIN_VERSION)}"
+
+eos_engine_native_wanted() {
+  # Harte Freigabe: ohne Opt-in-Marker nie nativ.
+  [[ -e "$EOS_NATIVE_OPTIN_MARKER" ]] || return 1
+  # EOS_ENGINE ist ein EINMALIGER manueller/Test-Override und wird NICHT über
+  # Neustarts getragen (post-update.sh reicht es nicht durch). Dauerhafte Quelle
+  # der Wahrheit ist die DVhub-Config (EOS_PROXY_MODE); ein manueller Override
+  # kehrt beim nächsten regulären Lauf zur Config zurück.
+  case "${EOS_ENGINE:-}" in
+    native) return 0 ;;
+    python) return 1 ;;
+  esac
+  [[ "$EOS_PROXY_MODE" == "local-native" ]]
+}
+
+# uname -m → Arch-Schlüssel der EOS_NATIVE_BIN_*-Pins (standalone: Maschinen-Arch,
+# nicht pip-Tags).
+eos_native_bin_arch() {
+  case "$(uname -m 2>/dev/null)" in
+    x86_64|amd64) echo X86_64 ;;
+    aarch64|arm64) echo AARCH64 ;;
+    armv7l|armv7|armhf) echo ARMV7L ;;
+    *) echo "" ;;
+  esac
+}
+
+# "<datei>:<sha12>" des für diese Box gepinnten Binärs, oder leer (keine Arch/kein Pin).
+# Dieselbe Signatur bildet post-update.sh — ändert sich der Pin, greift die
+# Neu-Provisionierung.
+eos_bin_sig() {
+  local arch line f s
+  arch="$(eos_native_bin_arch)"; [[ -n "$arch" ]] || return 0
+  line="$(bash "$EOS_NATIVE_HELPER" list --prefix EOS_NATIVE_BIN "$EOS_PIN_FILE" 2>/dev/null | awk -v a="$arch" '$1==a{print;exit}')" || true
+  [[ -n "$line" ]] || return 0
+  read -r _ f s <<<"$line"
+  printf '%s:%s' "$f" "${s:0:12}"
+}
+
+# Motor-Marker setzen (<state> ∈ native|fallback) oder löschen (state=python).
+eos_write_engine_marker() {
+  local state="$1" sig="$2"
+  # retry = vorübergehender Fehler: Marker UNVERÄNDERT lassen (nächster Start versucht erneut).
+  [[ "$state" == retry ]] && return 0
+  if [[ "$state" == python ]]; then
+    rm -f "$EOS_NATIVE_ENGINE_MARKER" 2>/dev/null || true
+    return 0
+  fi
+  mkdir -p "$DATA_DIR"
+  printf '%s %s %s\n' "$state" "$EOS_WANT" "$sig" > "$EOS_NATIVE_ENGINE_MARKER"
+  chown "$SERVICE_USER:$SERVICE_USER" "$EOS_NATIVE_ENGINE_MARKER" 2>/dev/null || true
+}
+
+eos_write_native_unit() {
+  local unit tz cpuq ncpu
+  unit="${EOS_UNIT_FILE:-/etc/systemd/system/${EOS_SERVICE_NAME}.service}"
+  tz="$(timedatectl show -p Timezone --value 2>/dev/null || true)"; tz="${tz:-Europe/Berlin}"
+  ncpu="$(nproc 2>/dev/null || echo 1)"; cpuq="${EOS_CPU_QUOTA:-}"
+  [[ -z "$cpuq" && "$ncpu" -ge 2 ]] && cpuq="$(( (ncpu - 1) * 100 ))%"
+  cat <<UNIT >"$unit"
+[Unit]
+Description=DVhub nativer EOS-Optimierer (dvhub-optimize serve)
+After=network.target dvhub.service
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+ExecStart=$EOS_NATIVE_BIN serve --listen 127.0.0.1:$EOS_PORT --state-dir $EOS_NATIVE_STATE_DIR --run-timeout-s 1200
+Environment=TZ=$tz
+Nice=10
+CPUWeight=20
+${cpuq:+CPUQuota=$cpuq}
+EnvironmentFile=-$EOS_ENV_FILE
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+
+# NUR der Diagnose-Marker .eos-native (den Steuer-Marker schreibt
+# eos_write_engine_marker). .eos-provisioned fasst der native Weg NICHT an —
+# er gehört dem Python-Stand (Datensicherung/venv-Neubau beim Rückweg).
+eos_write_native_markers() {
+  local sha="$1" arch="$2"
+  mkdir -p "$DATA_DIR"
+  printf '%s ok native:dvhub-optimize-%s-%s:%s\n' "$EOS_WANT" "${EOS_NATIVE_BIN_VERSION:-0}" "$arch" "${sha:0:12}" > "$EOS_NATIVE_MARKER"
+  chown "$SERVICE_USER:$SERVICE_USER" "$EOS_NATIVE_MARKER" 2>/dev/null || true
+}
+
+# 0 = nativer Dienst steht; 1 = kein lauffähiges Binär → Rückfall auf Python.
+eos_provision_native() {
+  local arch line f want_sha bin_sha tmp out unit
+  arch="$(eos_native_bin_arch)"
+  unit="${EOS_UNIT_FILE:-/etc/systemd/system/${EOS_SERVICE_NAME}.service}"
+  if [[ -z "$arch" ]]; then
+    echo "  EOS: local-native gewünscht, aber für $(uname -m 2>/dev/null) kein natives Binär — Rückfall auf Python-EOS" >&2
+    return 1
+  fi
+  line="$(bash "$EOS_NATIVE_HELPER" list --prefix EOS_NATIVE_BIN "$EOS_PIN_FILE" 2>/dev/null | awk -v a="$arch" '$1==a{print;exit}')" || true
+  if [[ -z "$line" ]]; then
+    echo "  EOS: local-native gewünscht, aber kein natives Binär für $arch gepinnt (eos-version.env) — Rückfall auf Python-EOS" >&2
+    return 1
+  fi
+  read -r _ f want_sha <<<"$line"
+  # Schon installiert (gleiche Prüfsumme) + Unit schon nativ + Marker nativ →
+  # nur sicherstellen, dass der Dienst läuft (idempotent, kein Neustart-Karussell).
+  bin_sha=""; [[ -x "$EOS_NATIVE_BIN" ]] && bin_sha="$(eos_sha256_file "$EOS_NATIVE_BIN")"
+  if [[ -n "$bin_sha" && "$bin_sha" == "$want_sha" ]] \
+     && grep -q 'dvhub-optimize serve' "$unit" 2>/dev/null \
+     && head -n1 "$EOS_NATIVE_MARKER" 2>/dev/null | grep -q ' ok native:'; then
+    systemctl is-active --quiet "${EOS_SERVICE_NAME}.service" 2>/dev/null || systemctl start "${EOS_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+    eos_write_native_markers "$want_sha" "$arch"
+    echo "  EOS: nativer Optimierer aktuell (dvhub-optimize ${EOS_NATIVE_BIN_VERSION:-}, $arch) — nichts zu tun"
+    return 0
+  fi
+  tmp="$(mktemp -d)"
+  if ! out="$(bash "$EOS_NATIVE_HELPER" fetch "$tmp" "$arch" --prefix EOS_NATIVE_BIN --pin-file "$EOS_PIN_FILE" 2>&1)"; then
+    rm -rf "$tmp"
+    # Prüfsumme/kein Pin = DAUERHAFT (rc 1, als Fallback vermerken); ein Download-/
+    # Netzfehler ist VORÜBERGEHEND (rc 2 → nicht vermerken, nächster Start versucht
+    # es erneut; ein einmaliger GitHub-Aussetzer deaktiviert nativ nicht für immer, Codex-P3).
+    if printf '%s' "$out" | grep -q 'Prüfsumme'; then
+      echo "  EOS: natives Binär: Prüfsumme passt nicht: ${out##*$'\n'} — Rückfall auf Python-EOS" >&2
+      return 1
+    fi
+    echo "  EOS: natives Binär gerade nicht abrufbar: ${out##*$'\n'} — Python vorerst, erneuter Versuch beim nächsten Start" >&2
+    return 2
+  fi
+  mkdir -p "$(dirname "$EOS_NATIVE_BIN")"
+  install -m 0755 "$tmp/$f" "$EOS_NATIVE_BIN" || { rm -rf "$tmp"; echo "  EOS: natives Binär nicht installierbar — Rückfall auf Python-EOS" >&2; return 1; }
+  rm -rf "$tmp"
+  # Rauchtest: läuft das Binär auf dieser Box überhaupt? (falsche Arch → Abbruch)
+  if ! "$EOS_NATIVE_BIN" version >/dev/null 2>&1; then
+    echo "  EOS: natives Binär nicht lauffähig ($arch) — Rückfall auf Python-EOS" >&2
+    rm -f "$EOS_NATIVE_BIN"
+    return 1
+  fi
+  mkdir -p "$EOS_NATIVE_STATE_DIR"
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_NATIVE_STATE_DIR" 2>/dev/null || true
+  eos_write_native_unit
+  systemctl daemon-reload
+  systemctl enable "${EOS_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  systemctl restart "${EOS_SERVICE_NAME}.service"
+  eos_write_native_markers "$want_sha" "$arch"
+  echo "  EOS: nativer Optimierer AKTIV (dvhub-optimize ${EOS_NATIVE_BIN_VERSION:-}, $arch, 127.0.0.1:${EOS_PORT}) — ohne Python"
+  return 0
+}
+
+# Motor-Ergebnis: wird ERST am Ende geschrieben (nach erfolgreichem Python-Weg),
+# damit ein abgebrochener Rückweg/Fallback den laufenden nativen Dienst nicht
+# verwaist unter „OK" zurücklässt (Codex-P2): bis Python wirklich steht, bleibt
+# der Marker — und damit der Soll-Ist-Unterschied — stehen, post-update versucht
+# es weiter. "native" schreibt eos_provision_native selbst und steigt dann aus.
+EOS_ENGINE_RESULT=python EOS_ENGINE_SIG=""
+if eos_engine_native_wanted; then
+  _eos_bin_sig="$(eos_bin_sig)"
+  if [[ -z "$_eos_bin_sig" ]]; then
+    # Kein Binär für diese Arch gepinnt (z. B. armv7l): gar nicht erst nativ
+    # versuchen — kein Fallback-Vermerk, kein Churn. Derselbe „braucht einen Pin"-
+    # Test wie in post-update.sh (sonst entscheiden beide verschieden, Codex-P2).
+    echo "  EOS: local-native gewünscht, aber kein natives Binär für $(uname -m 2>/dev/null) gepinnt — EOS rechnet in Python" >&2
+  elif eos_provision_native; then
+    eos_write_engine_marker native "$_eos_bin_sig"
+    exit 0
+  else
+    _eos_native_rc=$?
+    if [[ "$_eos_native_rc" -eq 2 ]]; then
+      # Vorübergehend (Netz/Download): Motor-Marker NICHT setzen → nächster Start
+      # versucht nativ erneut. EOS läuft derweil mit Python.
+      EOS_ENGINE_RESULT=retry
+    else
+      # Dauerhaft (Prüfsumme/Arch/Installation): als Rückfall vermerken (erst am
+      # Ende), damit post-update nicht je Start teuer neu provisioniert.
+      EOS_ENGINE_RESULT=fallback EOS_ENGINE_SIG="$_eos_bin_sig"
+    fi
+    echo "  EOS: nativer Dienst nicht eingerichtet — EOS läuft weiter mit Python" >&2
+  fi
+fi
+
 if [[ "$EOS_NATIVE_ONLY_RUN" -eq 0 ]]; then
 echo "  EOS: Installiere/aktualisiere EOS (${EOS_PIN}) bare-metal venv..."
 
@@ -534,6 +755,12 @@ chown "$SERVICE_USER:$SERVICE_USER" "$EOS_STATE_MARKER" 2>/dev/null || true
 
 printf '%s %s %s\n' "$EOS_WANT" "$EOS_NATIVE_STATUS" "$EOS_NATIVE_DETAIL" > "$EOS_NATIVE_MARKER"
 chown "$SERVICE_USER:$SERVICE_USER" "$EOS_NATIVE_MARKER" 2>/dev/null || true
+
+# Motor-Marker ERST JETZT (Python-Dienst steht): python → Marker weg (Rückweg
+# sauber abgeschlossen), fallback → vermerkt. Bricht der Python-Weg vorher ab,
+# bleibt der alte (ggf. native) Marker stehen und post-update versucht es erneut
+# — der laufende native Dienst wird nicht verwaist unter „OK" gelassen (Codex-P2).
+eos_write_engine_marker "$EOS_ENGINE_RESULT" "$EOS_ENGINE_SIG"
 
 echo "  EOS: systemd ${EOS_SERVICE_NAME}.service bereit (127.0.0.1:${EOS_PORT}), Stand ${EOS_PIN}, Rust-Kern: ${EOS_NATIVE_STATUS}${EOS_NATIVE_DETAIL:+ (${EOS_NATIVE_DETAIL})}"
 if [[ "$EOS_NATIVE_STATUS" == failed ]]; then
