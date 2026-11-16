@@ -393,3 +393,76 @@ test('Standard-Install ohne EOS_HOME: EOS_CONFIG_DIR gesetzt + angelegt, keine A
     assertWritableConfigDir(unit, { notEqualTo: s.eosDir });
   } finally { s.cleanup(); }
 });
+
+// A2 (1.0.11): die einmalige Übernahme von Zusatz-Environment-Zeilen aus einer
+// alten Unit nach /etc/dvhub/eos.env darf EOS_CONFIG_DIR (und EOS_DIR) NICHT
+// mitnehmen. Täte sie es, überschriebe EnvironmentFile die in der Unit frisch
+// gesetzte Environment=EOS_CONFIG_DIR-Zeile → der Ordner friert auf dem alten
+// Wert ein, und eine zweite Instanz (teilt eos.env) erbte den falschen Ordner.
+// ROT gegen den Stand vor A2 (EOS_CONFIG_DIR/EOS_DIR nicht in der Ausschluss-Regex).
+test('A2: Zweitlauf friert EOS_CONFIG_DIR/EOS_DIR NICHT in eos.env ein', () => {
+  const s = setup();
+  const envFile = join(s.dir, 'eos.env');
+  try {
+    assert.equal(s.run('v1').status, 0, 'erster Lauf (schreibt Unit mit EOS_CONFIG_DIR/EOS_DIR)');
+    // Sicherstellen, dass die erste Unit beide Zeilen trägt (EOS_HOME gesetzt → EOS_DIR).
+    const unit1 = readFileSync(join(s.dir, 'eos.service'), 'utf8');
+    assert.ok(unitEnv(unit1, 'EOS_CONFIG_DIR'), 'Unit setzt EOS_CONFIG_DIR');
+    assert.ok(/^Environment=EOS_DIR=/m.test(unit1), 'Unit setzt EOS_DIR (EOS_HOME gesetzt)');
+    // Zweiter Lauf: die Übernahme-Logik greift (Unit da, eos.env fehlt noch).
+    assert.equal(s.run('v1').status, 0, 'zweiter Lauf');
+    const envTxt = existsSync(envFile) ? readFileSync(envFile, 'utf8') : '';
+    assert.ok(!/(^|\n)EOS_CONFIG_DIR=/.test(envTxt), `EOS_CONFIG_DIR darf nicht nach eos.env eingefroren werden:\n${envTxt}`);
+    assert.ok(!/(^|\n)EOS_DIR=/.test(envTxt), `EOS_DIR darf nicht nach eos.env eingefroren werden:\n${envTxt}`);
+  } finally { s.cleanup(); }
+});
+
+// A1 (1.0.11): leichter Nachzieh-Lauf (EOS_CONFIG_FIX_ONLY=1), wie ihn
+// post-update.sh für Bestandsboxen entkoppelt startet. Zieht NUR Konfig-Ordner,
+// Alt-Konfig-Migration und die Unit (mit EOS_CONFIG_DIR) nach — ohne git/clone/pip.
+test('A1 leicht: EOS_CONFIG_FIX_ONLY zieht Unit+Migration nach, ohne git/pip, BACKEND bleibt', () => {
+  const s = setup();
+  try {
+    // Gesunde Bestandsbox herstellen (Checkout + venv), dann die Unit auf den
+    // 1.0.10-Stand zurücksetzen: OHNE EOS_CONFIG_DIR, MIT BACKEND=native.
+    assert.equal(s.run('v1').status, 0);
+    const unitFile = join(s.dir, 'eos.service');
+    writeFileSync(unitFile, `[Service]\nWorkingDirectory=${s.eosDir}\nEnvironment=EOS_OPTIMIZATION__GENETIC__BACKEND=native\n`);
+    // Alt-Konfig im root-eigenen Checkout = die PermissionError-Falle.
+    writeFileSync(join(s.eosDir, 'EOS.config.json'), '{"v":"alt"}');
+    // calls.log leeren, um git/pip des leichten Laufs sauber zu messen.
+    writeFileSync(join(s.dir, 'calls.log'), '');
+    const r = s.run('v1', { EOS_CONFIG_FIX_ONLY: '1' });
+    assert.equal(r.status, 0, r.stderr);
+    const unit = readFileSync(unitFile, 'utf8');
+    const cfgDir = assertWritableConfigDir(unit, { notEqualTo: s.eosDir });
+    assertNoStrayConfigInCheckout(s.eosDir);
+    assert.equal(existsSync(join(cfgDir, 'EOS.config.json')), true, 'Alt-Konfig migriert');
+    assert.equal(unitEnv(unit, 'EOS_OPTIMIZATION__GENETIC__BACKEND'), 'native', 'BACKEND=native bleibt erhalten');
+    // leicht: im Fix-Lauf wird das venv-pip NIE aufgerufen (nur im schweren Weg).
+    const calls = readFileSync(join(s.dir, 'calls.log'), 'utf8');
+    assert.ok(!/(^|\n)pip\b/.test(calls), `kein pip im leichten Lauf:\n${calls}`);
+  } finally { s.cleanup(); }
+});
+
+// N1 (1.0.11): scheitert das Wegräumen der Alt-Konfig, darf das NICHT still
+// passieren (Exit 0, keine Meldung) — sonst bliebe die PermissionError-Falle
+// unbemerkt offen. Mindestens eine Warnung nach stderr. ROT gegen den Stand vor N1.
+test('N1: scheiterndes mv der Alt-Konfig → Warnung auf stderr, Falle nicht stillschweigend offen', () => {
+  const s = setup();
+  try {
+    assert.equal(s.run('v1').status, 0);
+    // Alt-Konfig im Checkout; mv so verbiegen, dass das Verschieben der
+    // EOS.config.json scheitert (gezieltes Attrappen-mv im PATH).
+    writeFileSync(join(s.eosDir, 'EOS.config.json'), '{"v":"alt"}');
+    writeFileSync(join(s.dir, 'bin', 'mv'),
+      '#!/usr/bin/env bash\nif [[ "$*" == *EOS.config.json* ]]; then echo "mv blockiert (Test)" >&2; exit 1; fi\nexec /bin/mv "$@"\n');
+    chmodSync(join(s.dir, 'bin', 'mv'), 0o755);
+    const r = s.run('v1');
+    assert.equal(r.status, 0, 'non-fatal: Lauf bricht nicht ab');
+    assert.match(r.stderr, /WARNUNG.*EOS\.config\.json.*(verschoben|beiseite)/s, r.stderr);
+    assert.match(r.stderr, /Falle bleibt offen/);
+    // Alt-Konfig bleibt liegen (konnte nicht weggeräumt werden) — nicht still gelöscht.
+    assert.equal(existsSync(join(s.eosDir, 'EOS.config.json')), true, 'Alt-Datei bleibt, da mv scheiterte');
+  } finally { s.cleanup(); }
+});

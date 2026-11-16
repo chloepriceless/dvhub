@@ -46,7 +46,7 @@ function sandbox() {
 
 const EOS_BLOCK = block('EOS_DIR="$INSTALL_DIR/eos"', '# ── 11.');
 
-function eosCase({ venvPython, nativeMarker = 'https://x/eos.git@v1 ok akkudoktoreos_native-0.2.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl\n' }) {
+function eosCase({ venvPython, configDir = true, nativeMarker = 'https://x/eos.git@v1 ok akkudoktoreos_native-0.2.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl\n' }) {
   const s = sandbox();
   const inst = join(s.dir, 'opt');
   const data = join(s.dir, 'data');
@@ -57,7 +57,9 @@ function eosCase({ venvPython, nativeMarker = 'https://x/eos.git@v1 ok akkudokto
   writeFileSync(join(data, '.eos-provisioned'), 'https://x/eos.git@v1\n');
   if (nativeMarker !== null) writeFileSync(join(data, '.eos-native'), nativeMarker);
   const unit = join(s.dir, 'eos.service');
-  writeFileSync(unit, '[Unit]\n');
+  // configDir=true: gesunde Box MIT dem 1.0.11-Fix (Unit setzt EOS_CONFIG_DIR).
+  // false: 1.0.10-Bestandsbox ohne den Fix (A1-Falle).
+  writeFileSync(unit, configDir ? '[Unit]\nEnvironment=EOS_CONFIG_DIR=/var/lib/dvhub/cfg\n' : '[Unit]\n');
   if (venvPython) {
     mkdirSync(join(inst, 'eos-venv', 'bin'), { recursive: true });
     writeFileSync(join(inst, 'eos-venv', 'bin', 'python'), '#!/bin/sh\n');
@@ -84,6 +86,33 @@ test('EOS-Schnellweg: alles vorhanden → OK, keine Provisionierung', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /EOS: OK/);
     assert.ok(!s.calls().some((l) => l.startsWith('systemd-run')));
+  } finally { s.cleanup(); }
+});
+
+// A1 (1.0.11): Bestandsbox 1.0.10→1.0.11 — EOS gesund und aktuell (Pin
+// unverändert, Rust-Kern ok), aber die Unit stammt noch von VOR dem
+// EOS_CONFIG_DIR-Fix. Der Schnellweg meldete bisher „EOS: OK" und rief
+// eos-provision.sh NIE auf → die PermissionError-Falle lief weiter. Jetzt muss der
+// leichte Konfig-Fix entkoppelt angestoßen werden (ROT gegen den Stand vor A1).
+test('A1: aktuell, aber Unit OHNE EOS_CONFIG_DIR (1.0.10-Falle) → leichter Konfig-Fix entkoppelt (EOS_CONFIG_FIX_ONLY=1), nicht still OK', () => {
+  const { s, r } = eosCase({ venvPython: true, configDir: false });
+  try {
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stdout, /EOS: OK/);
+    const run = s.calls().find((l) => l.startsWith('systemd-run') && l.includes('eos-provision.sh'));
+    assert.ok(run, `erwartet: entkoppelter Konfig-Fix.\n${s.calls().join('\n')}`);
+    assert.match(run, /--setenv=EOS_CONFIG_FIX_ONLY=1/);
+    assert.ok(!/--setenv=EOS_NATIVE_ONLY=1/.test(run), 'kein Kern-Nachzug, nur der leichte Konfig-Fix');
+    assert.match(r.stdout, /ohne git\/pip/);
+  } finally { s.cleanup(); }
+});
+
+test('A1 idempotent: Unit MIT EOS_CONFIG_DIR → OK, kein erneuter Konfig-Fix', () => {
+  const { s, r } = eosCase({ venvPython: true, configDir: true });
+  try {
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /EOS: OK/);
+    assert.ok(!s.calls().some((l) => l.startsWith('systemd-run')), 'Fix bereits angewandt — kein erneuter Lauf');
   } finally { s.cleanup(); }
 });
 
@@ -212,7 +241,7 @@ function eosNativeCase({ mode = 'local-native', optin = true, engineMarker, binE
   mkdirSync(join(inst, 'eos-venv', 'bin'), { recursive: true });
   writeFileSync(join(inst, 'eos-venv', 'bin', 'python'), '#!/bin/sh\n'); chmodSync(join(inst, 'eos-venv', 'bin', 'python'), 0o755);
   const unit = join(s.dir, 'eos.service');
-  writeFileSync(unit, unitNative ? '[Service]\nExecStart=/opt/bin/dvhub-optimize serve --listen 127.0.0.1:8503\n' : '[Unit]\n');
+  writeFileSync(unit, unitNative ? '[Service]\nExecStart=/opt/bin/dvhub-optimize serve --listen 127.0.0.1:8503\n' : '[Unit]\nEnvironment=EOS_CONFIG_DIR=/var/lib/dvhub/cfg\n');
   const cfg = join(s.dir, 'config.json');
   writeFileSync(cfg, JSON.stringify({ optimizer: { eosProxy: { mode } } }));
   const optinMarker = join(s.dir, 'optin'); if (optin) writeFileSync(optinMarker, '');

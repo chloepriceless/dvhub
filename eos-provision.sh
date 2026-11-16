@@ -129,6 +129,15 @@ if [[ "${EOS_NATIVE_ONLY:-0}" == 1 && "$EOS_PIN_CHANGED" -eq 0 && -d "$EOS_DIR/.
   EOS_NATIVE_ONLY_RUN=1
   echo "  EOS: Stand ${EOS_PIN} ist aktuell — nur der Rust-Kern wird nachgezogen"
 fi
+# A1 (1.0.11): leichter Nachzieh-Lauf aus post-update.sh fuer Bestandsboxen, deren
+# eos.service-Unit noch von VOR dem EOS_CONFIG_DIR-Fix stammt (1.0.10-Falle:
+# PermissionError, weil EOS die Alt-Konfig aus dem root-eigenen Checkout nimmt).
+# EOS_PIN unveraendert → der Schnellweg in post-update.sh rief eos-provision.sh nie
+# auf. In diesem Modus macht das Skript NUR Konfig-Ordner anlegen, Alt-Konfig
+# migrieren und die Unit mit EOS_CONFIG_DIR neu schreiben — KEIN git/clone/venv/
+# pip/Wheel/Rauchtest, keine Marker-Aenderung. Laeuft entkoppelt (systemd-run), der
+# Boot wird nie blockiert.
+EOS_CONFIG_FIX_ONLY="${EOS_CONFIG_FIX_ONLY:-0}"
 
 # ── local-native: der native Optimierer dvhub-optimize ALS EOS-Dienst ────────
 # Statt Python-EOS + Rust-Wheel läuft das eigenständige Binär (dvhub-rs
@@ -326,7 +335,7 @@ eos_provision_native() {
 # der Marker — und damit der Soll-Ist-Unterschied — stehen, post-update versucht
 # es weiter. "native" schreibt eos_provision_native selbst und steigt dann aus.
 EOS_ENGINE_RESULT=python EOS_ENGINE_SIG=""
-if eos_engine_native_wanted; then
+if [[ "$EOS_CONFIG_FIX_ONLY" != 1 ]] && eos_engine_native_wanted; then
   _eos_bin_sig="$(eos_bin_sig)"
   if [[ -z "$_eos_bin_sig" ]]; then
     # Kein Binär für diese Arch gepinnt (z. B. armv7l): gar nicht erst nativ
@@ -351,7 +360,7 @@ if eos_engine_native_wanted; then
   fi
 fi
 
-if [[ "$EOS_NATIVE_ONLY_RUN" -eq 0 ]]; then
+if [[ "$EOS_NATIVE_ONLY_RUN" -eq 0 && "$EOS_CONFIG_FIX_ONLY" != 1 ]]; then
 echo "  EOS: Installiere/aktualisiere EOS (${EOS_PIN}) bare-metal venv..."
 
 # Idempotent clone / fetch auf den gepinnten Stand. Funktioniert fuer Tag,
@@ -590,9 +599,18 @@ if [[ -f "$_eos_stray_cfg" ]]; then
     if mv "$_eos_stray_cfg" "$EOS_CONFIG_DIR/EOS.config.json" 2>/dev/null; then
       chown "$SERVICE_USER:$SERVICE_USER" "$EOS_CONFIG_DIR/EOS.config.json" 2>/dev/null || true
       echo "  EOS: alte EOS.config.json aus $EOS_DIR nach $EOS_CONFIG_DIR verschoben"
+    else
+      # N1: nicht still scheitern (Exit 0, keine Meldung) — sonst bliebe die
+      # PermissionError-Falle unbemerkt offen. Mindestens eine Warnung nach stderr.
+      echo "  EOS: WARNUNG — alte EOS.config.json in $EOS_DIR konnte NICHT nach $EOS_CONFIG_DIR verschoben werden; die PermissionError-Falle bleibt offen (bitte von Hand wegraeumen)." >&2
     fi
-  elif mv "$_eos_stray_cfg" "$_eos_stray_cfg.pre-$(date +%Y%m%d-%H%M%S).bak" 2>/dev/null; then
-    echo "  EOS: alte EOS.config.json in $EOS_DIR beiseite gelegt (Konfig existiert bereits in $EOS_CONFIG_DIR)"
+  else
+    if mv "$_eos_stray_cfg" "$_eos_stray_cfg.pre-$(date +%Y%m%d-%H%M%S).bak" 2>/dev/null; then
+      echo "  EOS: alte EOS.config.json in $EOS_DIR beiseite gelegt (Konfig existiert bereits in $EOS_CONFIG_DIR)"
+    else
+      # N1: wie oben — Beiseitelegen gescheitert, nicht stillschweigend hinnehmen.
+      echo "  EOS: WARNUNG — alte EOS.config.json in $EOS_DIR konnte NICHT beiseite gelegt werden; die PermissionError-Falle bleibt offen (bitte von Hand wegraeumen)." >&2
+    fi
   fi
 fi
 
@@ -689,7 +707,15 @@ PYEOF
   EOS_NATIVE_STATUS=ok; EOS_NATIVE_DETAIL="$sel"
   echo "  EOS: Rust-Kern aktiv ($(printf '%s\n' "$out" | grep -E '^log: GENETIC native run' | tail -1 | sed 's/^log: //'))"
 }
-eos_native_install
+if [[ "$EOS_CONFIG_FIX_ONLY" == 1 ]]; then
+  # A1 (1.0.11): leichter Lauf — KEIN Wheel/pip/Rauchtest. Das in der bestehenden
+  # Unit gesetzte BACKEND uebernehmen, damit der Rust-Kern-Schalter (native) beim
+  # Unit-Neuschreiben erhalten bleibt und EOS nicht still auf Python zurueckfaellt.
+  _fixonly_unit="${EOS_UNIT_FILE:-/etc/systemd/system/${EOS_SERVICE_NAME}.service}"
+  EOS_BACKEND="$({ grep -E '^Environment=EOS_OPTIMIZATION__GENETIC__BACKEND=' "$_fixonly_unit" 2>/dev/null || true; } | tail -1 | sed 's/^Environment=EOS_OPTIMIZATION__GENETIC__BACKEND=//')"
+else
+  eos_native_install
+fi
 
 # systemd unit — bind 127.0.0.1:$EOS_PORT only (no external access).
 #
@@ -718,7 +744,7 @@ if [[ -z "${EOS_CPU_QUOTA:-}" && "$_ncpu" -ge 2 ]]; then EOS_CPU_QUOTA="$(( (_nc
 # beschrieben — `-e`/`-L` statt `-f`, und set -C legt die Datei mit O_EXCL an.
 if [[ -f "$EOS_UNIT_FILE" && ! -e "$EOS_ENV_FILE" && ! -L "$EOS_ENV_FILE" ]]; then
   _extra_env="$(grep -E '^Environment=' "$EOS_UNIT_FILE" | sed 's/^Environment=//' \
-    | grep -vE '^(EOS_SERVER__(HOST|PORT|EOSDASH_PORT)|MALLOC_ARENA_MAX|PYTHONMALLOC|MALLOC_TRIM_THRESHOLD_|MALLOC_MMAP_THRESHOLD_|OPENBLAS_NUM_THREADS|OMP_NUM_THREADS|EOS_GENERAL__TIMEZONE_OVERRIDE|EOS_OPTIMIZATION__GENETIC__BACKEND)=' || true)"
+    | grep -vE '^(EOS_SERVER__(HOST|PORT|EOSDASH_PORT)|MALLOC_ARENA_MAX|PYTHONMALLOC|MALLOC_TRIM_THRESHOLD_|MALLOC_MMAP_THRESHOLD_|OPENBLAS_NUM_THREADS|OMP_NUM_THREADS|EOS_GENERAL__TIMEZONE_OVERRIDE|EOS_OPTIMIZATION__GENETIC__BACKEND|EOS_CONFIG_DIR|EOS_DIR)=' || true)"
   if [[ -n "$_extra_env" ]]; then
     mkdir -p "$(dirname "$EOS_ENV_FILE")"
     if ( umask 022; set -C; {
@@ -784,6 +810,15 @@ UNIT
 systemctl daemon-reload
 systemctl enable "${EOS_SERVICE_NAME}.service"
 systemctl restart "${EOS_SERVICE_NAME}.service"
+
+if [[ "$EOS_CONFIG_FIX_ONLY" == 1 ]]; then
+  # A1 (1.0.11): leichter Lauf fertig — Konfig-Ordner, Alt-Konfig-Migration und
+  # Unit mit EOS_CONFIG_DIR stehen. Die Marker (.eos-provisioned/.eos-native/
+  # .eos-native-engine) bleiben UNVERAENDERT: der Stand hat sich nicht geaendert,
+  # und der Rust-Kern-Status gehoert nicht hierher (sonst naechste Runde Churn).
+  echo "  EOS: Unit mit EOS_CONFIG_DIR nachgezogen (leichter Lauf ohne git/pip); Marker unveraendert, Stand ${EOS_PIN}"
+  exit 0
+fi
 
 # Den tatsaechlich installierten Stand festhalten -- post-update.sh vergleicht
 # ihn gegen eos-version.env und erkennt so eine neue Version ohne Netzzugriff.

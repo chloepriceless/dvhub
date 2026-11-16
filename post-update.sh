@@ -1126,9 +1126,33 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
     # Aktuell (Python-EOS + Rust-Wheel) — nur sicherstellen, dass der Dienst läuft
     # (schnell). Eine native Unit zählt hier NIE als „Python aktuell" (Codex-P2):
     # sonst bliebe nach einem abgebrochenen Rückweg der native Dienst unter „OK".
-    systemctl enable eos.service >/dev/null 2>&1 || true
-    systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
-    echo "  EOS: OK (aktuell: ${EOS_HAVE})"
+    if ! grep -q '^Environment=EOS_CONFIG_DIR=' "$EOS_UNIT_PATH" 2>/dev/null; then
+      # A1 (1.0.11): Bestandsbox mit gesundem EOS (Pin unverändert, Rust-Kern ok),
+      # aber die Unit stammt noch von VOR dem EOS_CONFIG_DIR-Fix (1.0.10-Falle:
+      # PermissionError jede Minute). Der Schnellweg rief eos-provision.sh bisher
+      # NIE auf, die Falle lief weiter. Jetzt leichtgewichtig nachziehen:
+      # EOS_CONFIG_FIX_ONLY=1 schreibt NUR Konfig-Ordner, Alt-Konfig-Migration und
+      # Unit (mit EOS_CONFIG_DIR) — KEIN git/clone/pip/Wheel/Rauchtest. Entkoppelt
+      # wie jede Provisionierung (systemd-run), damit der Boot nie blockiert wird.
+      echo "  EOS: aktuell, aber Unit ohne EOS_CONFIG_DIR (1.0.10-Falle) — ziehe Konfig-Fix entkoppelt nach (ohne git/pip)..."
+      if command -v systemd-run >/dev/null 2>&1; then
+        systemd-run --collect --quiet --unit "dvhub-eos-provision" \
+          --description "DVhub EOS config-dir retrofit" \
+          --setenv=SERVICE_USER="$SERVICE_USER" \
+          --setenv=INSTALL_DIR="$INSTALL_DIR" \
+          --setenv=DATA_DIR="$DATA_DIR" \
+          --setenv=EOS_CONFIG_FIX_ONLY=1 \
+          bash "$INSTALL_DIR/eos-provision.sh" 2>/dev/null \
+          || echo "  WARN: EOS-Konfig-Fix konnte nicht gestartet werden (non-fatal)." >&2
+      else
+        SERVICE_USER="$SERVICE_USER" INSTALL_DIR="$INSTALL_DIR" DATA_DIR="$DATA_DIR" EOS_CONFIG_FIX_ONLY=1 \
+          setsid bash "$INSTALL_DIR/eos-provision.sh" </dev/null >>"$DATA_DIR/eos-provision.log" 2>&1 &
+      fi
+    else
+      systemctl enable eos.service >/dev/null 2>&1 || true
+      systemctl is-active --quiet eos.service || systemctl start eos.service >/dev/null 2>&1 || true
+      echo "  EOS: OK (aktuell: ${EOS_HAVE})"
+    fi
   elif systemctl is-active --quiet dvhub-eos-provision.service 2>/dev/null; then
     echo "  EOS: Hintergrund-Provisionierung läuft bereits"
   else
