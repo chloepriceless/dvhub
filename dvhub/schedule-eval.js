@@ -765,7 +765,7 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
-  async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false, budgeted = false } = {}) {
+  async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false, budgeted = false, budgetHoldExempt = false } = {}) {
     const cfg = getCfg();
     const gate = deviceWriteGate(cfg);
     if (gate) throw new Error(gate);
@@ -774,7 +774,14 @@ export function createScheduleEvaluator(ctx) {
     // eigener Fehler (dvBudgetHold) signalisiert dem Aufrufer die Haltung; er
     // meldet sie leise (Log/Kachel) statt als Schreibfehler. Der Zähler zählt nur
     // schreibende Sequenzen, Normalbetrieb erreicht die Grenze nie (nur Flattern).
-    if (budgeted && dvSeqBudgetExhausted()) {
+    // M14b-Fix (16.11., Fable+Opus verifiziert): Der Hold gilt NUR für die
+    // automatische Wieder-Freigabe. Eine Sperre (feedIn=false: §51/Negativpreis/
+    // DV) und ein ausdrücklicher Befehl (explicit, manuelle API) werden NIE
+    // gehalten (budgetHoldExempt) — genau wie der Backoff (:1098). Sonst speiste
+    // die Anlage nach 20 Sequenzen trotz Negativpreis/DV weiter ein (Compliance-
+    // Loch). Die gehaltene Richtung ist die sichere: bleibt abgeregelt. Schreiben
+    // zählt weiter (auch Sperre/Befehl), nur der Hold selbst entfällt.
+    if (budgeted && !budgetHoldExempt && dvSeqBudgetExhausted()) {
       const err = new Error('dv_seq_budget_exhausted');
       err.dvBudgetHold = true;
       throw err;
@@ -965,13 +972,15 @@ export function createScheduleEvaluator(ctx) {
   // die Solar.web-Werte). Mit Sicherung: genau die gesicherten Punkte
   // zurückschreiben; restore-Schritte ohne Sicherung (Absturz mitten in der
   // Sperre) bekommen keinen Default.
-  async function runFlagSequence(flag, steps, bootRelease) {
+  async function runFlagSequence(flag, steps, bootRelease, budgetHoldExempt = false) {
     // M14b: nur der Einspeise-Sperrpfad (feedExcessDcPv → 13074/13087/13088/31222)
     // zählt gegen das dvControl-Tagesbudget; die AC-Variante (dontFeedExcessAcPv)
     // und die LUOX-Teilgrenze (2706, applyDvFeedInLimit) bleiben außen vor.
+    // budgetHoldExempt (vom Aufrufer): eine Sperre oder ein ausdrücklicher Befehl
+    // wird vom Hold ausgenommen (siehe runDvControlSequence), schreibt aber mit.
     const budgeted = flag === 'feedExcessDcPv';
     if (!bootRelease) {
-      await runDvControlSequence(steps, { requirePersist: true, budgeted });
+      await runDvControlSequence(steps, { requirePersist: true, budgeted, budgetHoldExempt });
       return false;
     }
     const saved = state.ctrl._dvSeqSaved || {};
@@ -980,7 +989,7 @@ export function createScheduleEvaluator(ctx) {
       pushLog('dv_release_skipped_no_own_block', { flag, points: steps.map((st) => st?.point) });
       return true;
     }
-    await runDvControlSequence(steps, { ownOnly: true, budgeted });
+    await runDvControlSequence(steps, { ownOnly: true, budgeted, budgetHoldExempt });
     return false;
   }
 
@@ -1102,7 +1111,9 @@ export function createScheduleEvaluator(ctx) {
       try {
         let skipped = false;
         if (Array.isArray(dc.feedExcessDcPv.sequence?.[String(val)])) {
-          skipped = await runFlagSequence('feedExcessDcPv', dc.feedExcessDcPv.sequence[String(val)], bootRelease);
+          // M14b-Fix: Sperre (feedIn=false) oder ausdrücklicher Befehl (explicit)
+          // nie vom Tagesbudget halten lassen — nur die automatische Freigabe.
+          skipped = await runFlagSequence('feedExcessDcPv', dc.feedExcessDcPv.sequence[String(val)], bootRelease, feedIn !== true || explicit === true);
         } else if (transport.type === 'mqtt') {
           await transport.mqttWrite('feedExcessDcPv', val);
         } else {

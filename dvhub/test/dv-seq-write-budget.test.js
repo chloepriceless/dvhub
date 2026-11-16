@@ -97,30 +97,67 @@ test('Neustart setzt den Tageszähler nicht zurück (lädt aus der Datei)', asyn
   assert.equal(b.state.ctrl.dvSeqBudget.count, 4, 'läuft beim selben Tagesschlüssel weiter');
 });
 
-test('Erschöpfung: Zustand wird GEHALTEN, nicht weiter geschrieben, gemeldet', async () => {
+// M14b-Fix (16.11.): Bei erschöpftem Budget wird NUR die automatische Wieder-
+// Freigabe gehalten. Eine Sperre (§51/Negativpreis/DV, feedIn=false, explicit=false)
+// und ein ausdrücklicher Befehl (explicit) schreiben IMMER — sonst speiste die
+// Anlage nach 20 Sequenzen trotz Negativpreis/DV weiter ein. Der automatische
+// Eval-Pfad läuft über applyDvVictronControl(feedIn, { reason }) (explicit=false);
+// applyControlTarget(...) ist dagegen immer ein ausdrücklicher Befehl (explicit=true).
+
+test('Erschöpfung: automatische Wieder-Freigabe wird GEHALTEN (sichere Richtung: bleibt gesperrt)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvbudget-'));
-  const savedPath = path.join(dir, 'dv_seq_saved.json');
-  const writedayPath = path.join(dir, 'dv_seq_writeday.json');
   const logs = [];
   const device = { 13073: 24200, 13086: 170, 13087: 0xffff };
-  const { evaluator, state, transport } = makeEvaluator({ dvSeqSavedPath: savedPath, dvSeqWritedayPath: writedayPath, device, logs });
+  const { evaluator, state, transport } = makeEvaluator({
+    dvSeqSavedPath: path.join(dir, 'dv_seq_saved.json'),
+    dvSeqWritedayPath: path.join(dir, 'dv_seq_writeday.json'), device, logs });
 
-  // 10 Zyklen = 20 Sequenzen → Budget erschöpft.
-  for (let i = 0; i < 10; i++) await cycle(evaluator);
-  assert.equal(state.ctrl.dvSeqBudget.count, 20);
+  for (let i = 0; i < 10; i++) await cycle(evaluator); // 20 Sequenzen → erschöpft
   assert.equal(state.ctrl.dvSeqBudget.left, 0);
 
-  // 21. schreibende Sequenz (neue Sperre) wird GEHALTEN: kein Geräte-Write,
-  // ok:false, Meldung dv_control_seq_budget, _lastDvFeedIn bleibt unverändert.
-  transport.writes.length = 0;
-  logs.length = 0;
-  const prevFeedIn = state.ctrl._lastDvFeedIn;
-  const held = await evaluator.applyControlTarget('feedExcessDcPv', 0, 'negative_price_protection');
-  assert.equal(held.ok, false, 'gehaltene Sequenz meldet sich als nicht geschrieben');
-  assert.equal(transport.writes.length, 0, 'kein Geräte-Write bei erschöpftem Budget');
-  assert.equal(state.ctrl._lastDvFeedIn, prevFeedIn, 'Zustand gehalten (Change-Cache unverändert)');
+  // Automatische Sperre (ausgenommen) setzt den Zustand auf „gesperrt".
+  await evaluator.applyDvVictronControl(false, { reason: 'negative_price_protection' });
+  assert.equal(state.ctrl._lastDvFeedIn, false, 'Sperre wirkt');
+
+  // Automatische Wieder-Freigabe (explicit=false, feedIn=true) wird gehalten.
+  transport.writes.length = 0; logs.length = 0;
+  await evaluator.applyDvVictronControl(true, { reason: 'price_recovered' });
+  assert.equal(transport.writes.length, 0, 'automatische Freigabe schreibt nicht bei leerem Budget');
+  assert.equal(state.ctrl._lastDvFeedIn, false, 'bleibt gesperrt — Zustand gehalten');
   assert.ok(logs.some((l) => l.type === 'dv_control_seq_budget'), 'Hold wird gemeldet');
-  assert.equal(state.ctrl.dvSeqBudget.count, 20, 'der gehaltene Versuch zählt nicht');
+});
+
+test('Erschöpfung: eine Sperre (§51/Negativpreis) schreibt TROTZDEM — kein Compliance-Loch', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvbudget-'));
+  const device = { 13073: 24200, 13086: 170, 13087: 0xffff };
+  const { evaluator, state, transport } = makeEvaluator({
+    dvSeqSavedPath: path.join(dir, 'dv_seq_saved.json'),
+    dvSeqWritedayPath: path.join(dir, 'dv_seq_writeday.json'), device, logs: [] });
+
+  for (let i = 0; i < 10; i++) await cycle(evaluator); // erschöpft, endet freigegeben (_lastDvFeedIn=true)
+  assert.equal(state.ctrl.dvSeqBudget.left, 0);
+
+  transport.writes.length = 0;
+  await evaluator.applyDvVictronControl(false, { reason: 'negative_price_protection' });
+  assert.ok(transport.writes.some((w) => w.address === 13073 && w.value === 0), 'Sperre schreibt die Einspeisegrenze trotz leerem Budget');
+  assert.equal(state.ctrl._lastDvFeedIn, false, 'Anlage ist gesperrt (speist nicht gegen den Negativpreis)');
+});
+
+test('Erschöpfung: ausdrücklicher Befehl (API) schreibt TROTZDEM', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvbudget-'));
+  const device = { 13073: 24200, 13086: 170, 13087: 0xffff };
+  const { evaluator, state, transport } = makeEvaluator({
+    dvSeqSavedPath: path.join(dir, 'dv_seq_saved.json'),
+    dvSeqWritedayPath: path.join(dir, 'dv_seq_writeday.json'), device, logs: [] });
+
+  for (let i = 0; i < 10; i++) await cycle(evaluator); // erschöpft, _lastDvFeedIn=true
+  assert.equal(state.ctrl.dvSeqBudget.left, 0);
+
+  // Ausdrücklicher Befehl geht über applyControlTarget (explicit=true) → ausgenommen.
+  transport.writes.length = 0;
+  const r = await evaluator.applyControlTarget('feedExcessDcPv', 0, 'api_manual_write');
+  assert.equal(r.ok, true, 'ausdrücklicher Befehl wird nicht gehalten');
+  assert.ok(transport.writes.some((w) => w.address === 13073 && w.value === 0), 'ausdrücklicher Befehl schreibt trotz leerem Budget');
 });
 
 test('Freigabe/Sperre im Budget schreiben normal, bis es erschöpft ist', async () => {
