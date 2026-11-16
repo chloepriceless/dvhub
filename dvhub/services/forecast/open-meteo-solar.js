@@ -124,7 +124,11 @@ export function createOpenMeteoSolar(ctx, { store }) {
         );
       }
 
-      pushLog('open_meteo_solar_ok', { slots: slots.length, kwp, strings: strings.length });
+      // M13 (Feld 16.11.): Im Detail-Modus wird PRO STRING gerechnet (strings[]), der Zweit-WR
+      // ist dort bereits in den Strings enthalten. Der Log muss die WIRKLICH gerechnete Summe
+      // zeigen (Summe der genutzten Strings), nicht die um den Zweit-WR aufgeblähte kWp.
+      const usedKwp = Math.round(strings.reduce((s, x) => s + (Number(x?.kwp) || 0), 0) * 100) / 100;
+      pushLog('open_meteo_solar_ok', { slots: slots.length, kwp: usedKwp, strings: strings.length });
       return slots;
 
     } catch (e) {

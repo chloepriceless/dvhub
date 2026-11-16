@@ -40,12 +40,26 @@ export function createForecastSolar(ctx, { store }) {
     kwp = effectivePvKwp(cfg, kwp);
     if (!kwp) return null;
 
-    // Tilt and azimuth with defaults
-    const dec = pv.tiltDeg ?? 35;
+    // Neigung (dec) und Ausrichtung (dvhubAz) der abgefragten Fläche.
+    // M13 (Feld 16.11.): Im Detail-Modus gibt es keine pv.tiltDeg/azimuthDeg — früher fiel die
+    // Abfrage dann auf 35°/180° (Süd) zurück, obwohl z. B. String 2 nach NNO zeigt. Die
+    // Forecast.Solar-Gratis-API kennt nur EINE Fläche je Abfrage; mehrere Flächen = mehrere
+    // Requests gegen das 12/h-Limit (zu invasiv für einen Ensemble-Member mit Gewicht 0,5).
+    // Wartbarer Ein-Abfrage-Kompromiss: Geometrie des GRÖSSTEN Strings (dominiert den Ertrag)
+    // mit der Gesamt-kWp. Simple/Standard: wie bisher pv.tiltDeg/azimuthDeg bzw. 35°/180°.
+    let dec = pv.tiltDeg ?? 35;
+    let dvhubAz = pv.azimuthDeg ?? 180;
+    const strings = (pv.configLevel === 'detailed' && Array.isArray(pv.strings))
+      ? pv.strings.filter(s => Number(s?.kwp) > 0)
+      : [];
+    if (strings.length > 0) {
+      const largest = strings.reduce((a, b) => (Number(b.kwp) > Number(a.kwp) ? b : a));
+      if (Number.isFinite(Number(largest.tiltDeg))) dec = Number(largest.tiltDeg);
+      if (Number.isFinite(Number(largest.azimuthDeg))) dvhubAz = Number(largest.azimuthDeg);
+    }
     // Forecast.Solar uses different azimuth convention: -180=N, -90=E, 0=S, 90=W
     // DVhub uses: 0=N, 90=E, 180=S, 270=W
     // Conversion: forecastSolarAz = dvhubAz - 180
-    const dvhubAz = pv.azimuthDeg ?? 180;
     const az = dvhubAz - 180;
 
     return { lat, lon, dec, az, kwp };
