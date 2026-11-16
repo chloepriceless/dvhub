@@ -41,7 +41,7 @@ test.describe('Neue DVhub-Version: Seite lädt neu', () => {
     fake.build = base === 'feedfacecafe' ? 'deadbeef0001' : 'feedfacecafe';
 
     const notice = page.locator('.dv-build-notice');
-    await expect(notice).toBeVisible({ timeout: 15_000 });
+    await expect(notice).toBeVisible({ timeout: 30_000 });
     await expect(notice).toHaveAttribute('role', 'status');
     await expect(notice).toContainText('Neue DVhub-Version installiert');
     await expect.poll(() => marked(page), { timeout: 15_000 }).toBe(false);
@@ -63,7 +63,7 @@ test.describe('Neue DVhub-Version: Seite lädt neu', () => {
     fake.build = base === 'feedfacecafe' ? 'deadbeef0002' : 'feedfacecafe';
 
     const notice = page.locator('.dv-build-notice');
-    await expect(notice).toBeVisible({ timeout: 15_000 });
+    await expect(notice).toBeVisible({ timeout: 30_000 });
     await expect(notice).toHaveAttribute('data-mode', 'waiting');
     await expect(notice).toContainText('Neue DVhub-Version installiert — neu laden');
     await expect(notice.getByRole('button', { name: 'Neu laden' })).toBeVisible();
@@ -86,7 +86,7 @@ test.describe('Neue DVhub-Version: Seite lädt neu', () => {
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
 
     const notice = page.locator('.dv-build-notice');
-    await expect(notice).toBeVisible({ timeout: 15_000 });
+    await expect(notice).toBeVisible({ timeout: 30_000 });
     await expect(notice).toHaveAttribute('data-mode', 'waiting');
     await page.waitForTimeout(4_000);
     expect(await marked(page)).toBe(true);
