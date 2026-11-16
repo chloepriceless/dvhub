@@ -511,7 +511,7 @@ export function createScheduleEvaluator(ctx) {
     const now = Date.now();
     const mod = localMinutesOfDay(new Date(now), cfg.schedule.timezone);
 
-    const hit = state.schedule.rules.find((r) => {
+    const ruleMatches = (r) => {
       if (r.target !== target || !scheduleMatch(r, mod)) return false;
 
       // ── Optimizer rule enforcement (EEG-relevant) ───────────────────
@@ -535,7 +535,17 @@ export function createScheduleEvaluator(ctx) {
       }
 
       return ruleSlotOpen(r, now);
-    });
+    };
+    // M15 (Feld 16.11.): Manuelle Regeln haben IMMER Vorrang vor der Automatik (EOS/forecast_optimizer und
+    // Börsenautomatik), unabhängig von der Reihenfolge in state.schedule.rules. Nach einem EOS-Lauf stehen die
+    // Plan-Regeln (opt-…) VOR den manuellen (server.js setzt forecast_optimizer zuerst: Zeilen 697/717) — das
+    // alte .find() (erste passende Regel) ließ dann eine EOS-Regel (z. B. eos_grid_hold −40) eine laufende
+    // manuelle Regel (Netz −2000 W) überstimmen. Fix: unter den passenden Regeln ZUERST eine manuelle wählen,
+    // erst wenn keine passt eine automatische. Innerhalb einer Klasse bleibt die Array-Reihenfolge erhalten
+    // (robuster als die Einfüge-Reihenfolge zu reparieren — gilt für JEDEN Einfügepfad).
+    const isAutomaticRule = (r) => r.source === 'forecast_optimizer' || isSmallMarketAutomationRule(r);
+    const matching = state.schedule.rules.filter(ruleMatches);
+    const hit = matching.find((r) => !isAutomaticRule(r)) || matching.find(isAutomaticRule) || null;
     if (hit) {
       hit._wasActive = true;
       // A scheduled rule ENDS any manual override on this target — including a

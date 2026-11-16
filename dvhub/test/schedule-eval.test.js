@@ -308,6 +308,56 @@ test('T-0118: an EOS-sourced export is STILL blocked at a negative spot price (n
     'negative_price_protection_on must fire regardless of source');
 });
 
+// --- M15: manuelle Regeln behalten den Vorrang vor Automatik/EOS --------------
+// Nach einem EOS-Lauf stehen die Plan-Regeln (opt-…) VOR den manuellen im
+// rules-Array (server.js setzt forecast_optimizer zuerst). effectiveTargetValue
+// muss trotzdem die manuelle Regel wählen.
+
+test('M15: manuelle Regel behält Vorrang, obwohl die EOS-Regel VOR ihr im Array steht', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ cfg, state }) => {
+      cfg.optimizer.enabled = true; // EOS-Regeln sind scharf
+      state.schedule.rules = [
+        // Reihenfolge wie nach einem optimizer_run: EOS zuerst …
+        { id: 'opt-eos-1', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -40, source: 'forecast_optimizer', optimizer: 'eos', autoManaged: true },
+        // … danach die laufende manuelle Regel (Netz −2000 W).
+        { id: 'manual-netz-2000', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -2000, source: 'manual' },
+      ];
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  const w = state.schedule.active.gridSetpointW;
+  assert.ok(w, 'ein gridSetpointW-Write muss anliegen');
+  assert.equal(Number(w.value), -2000, 'die manuelle Regel (−2000) überstimmt die EOS-Regel (−40)');
+  assert.match(String(w.source), /manual-netz-2000/, 'Quelle ist die manuelle Regel');
+});
+
+test('M15: ohne manuelle Regel greift die EOS-Regel weiter (keine Regression)', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ cfg, state }) => {
+      cfg.optimizer.enabled = true;
+      state.schedule.rules = [
+        { id: 'opt-eos-1', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -40, source: 'forecast_optimizer', optimizer: 'eos', autoManaged: true },
+      ];
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -40, 'die EOS-Regel wirkt, wenn keine manuelle Regel passt');
+});
+
+test('M15: auch Börsenautomatik verliert gegen eine manuelle Regel', async () => {
+  const { ctx, state } = makeCtx({
+    mutate: ({ state }) => {
+      state.schedule.rules = [
+        { id: 'sma-1', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -16000, source: 'small_market_automation', autoManaged: true },
+        { id: 'manual-netz-2000', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: -2000, source: 'manual' },
+      ];
+    }
+  });
+  await createScheduleEvaluator(ctx).evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), -2000, 'die manuelle Regel schlägt die Börsenautomatik');
+});
+
 // --- Abregelungs-Puffer (Christin, 2026-07-29) --------------------------------
 // Während der Negativpreis-Abregelung wird der Netz-Sollwert auf den
 // konfigurierten Puffer GEPINNT, nicht nur nach unten gedeckelt. Vorher fiel ein
