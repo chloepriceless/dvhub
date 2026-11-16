@@ -42,16 +42,39 @@ export function createForecastSolar(ctx, { store }) {
 
     // Neigung (dec) und Ausrichtung (dvhubAz) der abgefragten Fläche.
     // M13 (Feld 16.11.): Im Detail-Modus gibt es keine pv.tiltDeg/azimuthDeg — früher fiel die
-    // Abfrage dann auf 35°/180° (Süd) zurück, obwohl z. B. String 2 nach NNO zeigt. Die
-    // Forecast.Solar-Gratis-API kennt nur EINE Fläche je Abfrage; mehrere Flächen = mehrere
-    // Requests gegen das 12/h-Limit (zu invasiv für einen Ensemble-Member mit Gewicht 0,5).
-    // Wartbarer Ein-Abfrage-Kompromiss: Geometrie des GRÖSSTEN Strings (dominiert den Ertrag)
-    // mit der Gesamt-kWp. Simple/Standard: wie bisher pv.tiltDeg/azimuthDeg bzw. 35°/180°.
+    // Abfrage auf 35°/180° (Süd) zurück, obwohl z. B. String 2 nach NNO zeigt.
+    //
+    // M13b: Die Forecast.Solar-GRATIS-API kennt nur EINE Fläche je Abfrage (Pfad
+    // /estimate/{lat}/{lon}/{dec}/{az}/{kwp}); echte Multi-Flächen gibt es erst im
+    // bezahlten JSON-Tarif. Ein einzelner Ebenen-Abruf für eine real GESPREIZTE
+    // Anlage (z. B. String 1 216° SW, String 2 25° NNO) ist systematisch falsch:
+    // Nimmt man die Geometrie des größten Strings mit der GESAMT-kWp, überschätzt
+    // man den abgewandten String kräftig. Da Forecast.Solar nur ein Ensemble-Member
+    // ist, ist der robuste Weg, es bei einer gespreizten Detail-Anlage GANZ aus dem
+    // Ensemble zu nehmen (kein Fetch, kein Store-Write → effektiv Gewicht 0), statt
+    // eine verzerrte Prognose einzuspeisen. Koplanare Detail-Strings (ein Dach) und
+    // Single-String/Simple/Standard laufen wie bisher weiter.
     let dec = pv.tiltDeg ?? 35;
     let dvhubAz = pv.azimuthDeg ?? 180;
     const strings = (pv.configLevel === 'detailed' && Array.isArray(pv.strings))
       ? pv.strings.filter(s => Number(s?.kwp) > 0)
       : [];
+    if (strings.length >= 2) {
+      // Gespreizt? Azimut-Spanne (zyklisch, 0–180°) oder Neigungsspanne prüfen.
+      const azs = strings.map(s => Number(s.azimuthDeg)).filter(Number.isFinite);
+      const tilts = strings.map(s => Number(s.tiltDeg)).filter(Number.isFinite);
+      let azSpread = 0;
+      for (let i = 0; i < azs.length; i++) {
+        for (let j = i + 1; j < azs.length; j++) {
+          const d = Math.abs(azs[i] - azs[j]) % 360;
+          azSpread = Math.max(azSpread, d > 180 ? 360 - d : d);
+        }
+      }
+      const tiltSpread = tilts.length >= 2 ? Math.max(...tilts) - Math.min(...tilts) : 0;
+      if (azSpread > 45 || tiltSpread > 15) {
+        return { skip: 'multi_plane_detailed', azSpread: Math.round(azSpread), tiltSpread };
+      }
+    }
     if (strings.length > 0) {
       const largest = strings.reduce((a, b) => (Number(b.kwp) > Number(a.kwp) ? b : a));
       if (Number.isFinite(Number(largest.tiltDeg))) dec = Number(largest.tiltDeg);
@@ -73,6 +96,13 @@ export function createForecastSolar(ctx, { store }) {
     const params = resolveParams();
     if (!params) {
       pushLog('forecast_solar_skip', { reason: 'missing_params' });
+      return null;
+    }
+    // M13b: gespreizte Detail-Anlage → Forecast.Solar aus dem Ensemble nehmen.
+    if (params.skip) {
+      pushLog('forecast_solar_skip', {
+        reason: params.skip, azSpread: params.azSpread, tiltSpread: params.tiltSpread,
+      });
       return null;
     }
 
@@ -99,16 +129,40 @@ export function createForecastSolar(ctx, { store }) {
       const data = await res.json();
       lastFetchAt = Date.now();
 
-      // Parse watt_hours_period into 15-min power slots
-      const slots = [];
-      const whPeriod = data?.result?.watt_hours_period || {};
+      // M13b: `power_w` ist LEISTUNG (W), also die mittlere Leistung je Slot aus
+      // `result.watts` lesen — NICHT `watt_hours_period` (das ist ENERGIE in Wh je
+      // Intervall). Das alte Mapping power_w = watt_hours_period stimmte nur zufällig
+      // bei exakt stündlichen Intervallen; bei den unregelmäßigen Sonnenauf-/
+      // untergangs-Intervallen (Doc-Beispiel 07:29/18:27) oder anderer `resolution`
+      // war die gespeicherte „Leistung" falsch und der Leitstand re-integrierte sie
+      // (power_w × Δt) ein zweites Mal. `watts` (Durchschnittsleistung je Periode)
+      // ist bei jeder Auflösung korrekt. Fallback: aus watt_hours_period / Intervall.
+      const result = data?.result || {};
+      const watts = result.watts;
+      let entries;
+      if (watts && typeof watts === 'object' && Object.keys(watts).length > 0) {
+        entries = Object.entries(watts).map(([timeStr, w]) => [timeStr, Number(w)]);
+      } else {
+        // Fallback: Energie → Leistung über das echte Intervall zum Vorslot umrechnen.
+        const whPeriod = result.watt_hours_period || {};
+        const keys = Object.keys(whPeriod).sort();
+        entries = keys.map((timeStr, i) => {
+          const wh = Number(whPeriod[timeStr]);
+          let dtH = 1;
+          if (i > 0) {
+            const dt = (new Date(timeStr) - new Date(keys[i - 1])) / 3600000;
+            if (Number.isFinite(dt) && dt > 0) dtH = dt;
+          }
+          return [timeStr, wh / dtH]; // Wh / h = W
+        });
+      }
 
-      for (const [timeStr, wh] of Object.entries(whPeriod)) {
+      const slots = [];
+      for (const [timeStr, powerRaw] of entries) {
         const ts = new Date(timeStr);
         if (isNaN(ts.getTime())) continue;
-        // watt_hours_period gives Wh for the period (typically 1h)
-        // Convert to average power in W for the period
-        const powerW = wh; // Wh per hour ≈ W average
+        const powerW = Number(powerRaw);
+        if (!Number.isFinite(powerW)) continue;
         slots.push({
           ts_utc: ts.toISOString(),
           power_w: Math.round(powerW * 10) / 10

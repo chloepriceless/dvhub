@@ -108,25 +108,52 @@ export function createInspector(ctx, deps = {}) {
     // means the AVERAGE power across that whole hour. Now every hour's value
     // is copied to its 4 child 15-min slots so the UI shows a flat run of
     // identical values per hour — matches the data's actual semantics.
-    // Per-provider, detect the resolution (gap between first two slots) and
-    // skip forward-fill for providers already at 15-min granularity (solcast
-    // 30-min stays as-is because forward-filling only by 2x sub-slots is fine).
+    //
+    // M13b (Feld 16.11.): the native resolution MUST come from the typical
+    // (MEDIAN) gap, not the gap between the first two slots. forecast_solar's
+    // stored rows are daylight-only, so the first gap can be a huge night span
+    // (e.g. a leading 00:00 zero-slot → sunrise ≈ 7 h). The old code then derived
+    // subSlots = round(7h/15min) = 28 and replicated EVERY daytime hour 28× →
+    // the per-provider energy sum the Leitstand integrates (power_w × Δt) blew up
+    // to ~7–18× reality (227,8 kWh at a correct 2,6 kW peak). Median gap is robust
+    // against those leading/trailing outliers, and the subSlots cap (≤ 4 = 1 h)
+    // plus the per-slot bound (never fill past the real next slot) keep a daytime
+    // value from ever smearing across a gap. Skip fill for ≤15-min providers.
     const QUARTER_MS = 15 * 60 * 1000;
     const resolutionByProvider = {};
     for (const m of Object.keys(providers)) {
       const slots = providers[m];
       if (slots.length < 2) continue;
-      const t0 = Date.parse(slots[0].ts_utc);
-      const t1 = Date.parse(slots[1].ts_utc);
-      if (!Number.isFinite(t0) || !Number.isFinite(t1)) continue;
-      const gap = t1 - t0;
-      resolutionByProvider[m] = gap;
-      if (gap <= QUARTER_MS) continue; // already 15-min, no fill needed
+      // Consecutive gaps → median as the native resolution (outlier-robust).
+      const gaps = [];
+      for (let i = 1; i < slots.length; i++) {
+        const a = Date.parse(slots[i - 1].ts_utc);
+        const b = Date.parse(slots[i].ts_utc);
+        if (Number.isFinite(a) && Number.isFinite(b) && b > a) gaps.push(b - a);
+      }
+      if (gaps.length === 0) continue;
+      gaps.sort((x, y) => x - y);
+      const medianGap = gaps[Math.floor(gaps.length / 2)];
+      resolutionByProvider[m] = medianGap;
+      if (medianGap <= QUARTER_MS) continue; // already ≤15-min, no fill needed
+      // 2 for 30-min, 4 for 1h; capped at 4 so a coarse/outlier gap can never
+      // explode the fill (the root of the M13b over-count).
+      const subSlots = Math.min(4, Math.max(1, Math.round(medianGap / QUARTER_MS)));
       const filled = [];
-      const subSlots = Math.round(gap / QUARTER_MS); // 2 for 30-min, 4 for 1h
-      for (const s of slots) {
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i];
         const baseTs = Date.parse(s.ts_utc);
-        for (let q = 0; q < subSlots; q++) {
+        if (!Number.isFinite(baseTs)) { filled.push(s); continue; }
+        // Never fill past the real next slot: bound the per-slot sub-slot count
+        // by the actual gap so a value is never smeared across a large (night) gap.
+        let thisSub = subSlots;
+        if (i < slots.length - 1) {
+          const nextTs = Date.parse(slots[i + 1].ts_utc);
+          if (Number.isFinite(nextTs) && nextTs > baseTs) {
+            thisSub = Math.min(subSlots, Math.max(1, Math.round((nextTs - baseTs) / QUARTER_MS)));
+          }
+        }
+        for (let q = 0; q < thisSub; q++) {
           filled.push({
             ts_utc: new Date(baseTs + q * QUARTER_MS).toISOString(),
             power_w: s.power_w,
