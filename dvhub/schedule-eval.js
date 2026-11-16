@@ -20,7 +20,7 @@ import { safeInterval } from './services/safe-async.js';
 import { encodeSunspecFloat32, decodeSunspecFloat32 } from './services/inverter/sunspec.js';
 import { getPowerLimits } from './services/power-limits.js';
 // Zweite GX am selben Anschluss: EOS-Ziele gelten fuer beide Akkus zusammen.
-import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
+import { planningCfg, planningSocPct, floorSocPct } from './services/multi-gx/planning.js';
 import { createFloorHandoff } from './services/multi-gx/floor-handoff.js';
 import { capLoopStep } from './services/feed-in-cap/index.js';
 import { notHaltAllowsControlSource, notHaltAllowsDvReason, notHaltContinues } from './services/emergency-stop/policy.js';
@@ -1664,9 +1664,11 @@ export function createScheduleEvaluator(ctx) {
     // unknown/stale telemetry => no forced/enabled discharge.
     const safeHold = dischargeFloorHold(target, value);
     if (safeHold !== null) {
-      // Zwei Sungrow-WR: der SoC-Boden nutzt den NIEDRIGEREN der beiden SoC (socFloorPct, polling.js), damit der
-      // schwächere Akku nicht unter den Boden entladen wird; ohne zweiten WR ist das der normale System-SoC.
-      const socRaw = state.victron.socFloorPct ?? state.victron.soc;
+      // Befund 1.4-2 (Christin 16.11.): der Boden vergleicht gegen den REALEN harten Boden — also den ECHTEN SoC
+      // nutzen. floorSocPct rechnet bei Sungrow den gemeldeten FENSTERRELATIVEN SoC je WR in echt um (konsistent zum
+      // schon gemergten Zeitplan-Fix planningSocPct) und nimmt den NIEDRIGEREN der beiden (schützt den schwächeren
+      // Akku); ohne zweiten WR ist das der reale System-SoC, non-Sungrow der unveränderte Wert.
+      const socRaw = floorSocPct(ctx);
       const soc = Number(socRaw);
       const floorPct = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
       const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
@@ -2485,8 +2487,9 @@ export function createScheduleEvaluator(ctx) {
           && eff.source === 'manual_override_persistent'
           && Number(eff.value) < 0) {
         const floorPct = Number(cfg.schedule?.manualOverrideMinSocPct ?? 10);
-        // Zwei Sungrow-WR: niedrigerer der beiden SoC als Boden (socFloorPct, polling.js); sonst System-SoC.
-        const socRaw = state.victron.socFloorPct ?? state.victron.soc;
+        // Befund 1.4-2: echter SoC (floorSocPct rechnet Sungrow fensterrelativ → real, niedrigerer der beiden WR);
+        // sonst der unveränderte System-SoC.
+        const socRaw = floorSocPct(ctx);
         const soc = Number(socRaw);
         const socKnown = socRaw != null && Number.isFinite(soc);
         if (!socKnown || soc <= floorPct) {
