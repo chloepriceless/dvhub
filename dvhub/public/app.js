@@ -54,6 +54,34 @@ function isOptimizerRule(rule) {
   return rule.source === FORECAST_OPTIMIZER_SOURCE
     || (typeof rule.id === 'string' && rule.id.startsWith(OPT_ID_PREFIX));
 }
+// M18 (2026-11-16): EOS/Optimizer rules run a full hour (slotTs … slotEndTs =
+// 4×15-min), yet the Börsenchart used to highlight only the single slotTs slot
+// → a thin stripe at the start of each hour instead of a band over the whole
+// rule. Collect EVERY chart slot whose timestamp falls in [slotTs, slotEndTs).
+// Range-check against the ACTUAL chart slot timestamps (robust against the slot
+// raster) rather than enumerating a fixed 15-min step. The start slot is always
+// marked, so a rule without slotEndTs (old/incomplete) keeps its single slot —
+// no regress. Only Optimizer rules qualify (isOptimizerRule); automation/user
+// slots are collected separately.
+function collectOptimizerSlotTimestamps(rules, slotTimestamps = []) {
+  const slots = (Array.isArray(slotTimestamps) ? slotTimestamps : [])
+    .map(Number)
+    .filter(Number.isFinite);
+  const out = new Set();
+  for (const rule of (Array.isArray(rules) ? rules : [])) {
+    if (!isOptimizerRule(rule)) continue;
+    const slotTs = Number(rule?.slotTs);
+    if (!Number.isFinite(slotTs)) continue;
+    out.add(slotTs); // always mark the start slot (no regress for old rules)
+    const slotEndTs = Number(rule?.slotEndTs);
+    if (Number.isFinite(slotEndTs) && slotEndTs > slotTs) {
+      for (const ts of slots) {
+        if (ts >= slotTs && ts < slotEndTs) out.add(ts);
+      }
+    }
+  }
+  return [...out];
+}
 
 function fmtTs(ts) { return ts ? new Date(ts).toLocaleString('de-DE') : '-'; }
 // Heute nur die Uhrzeit, sonst Tag + Uhrzeit — spart in den schmalen Karten den Umbruch.
@@ -2811,13 +2839,15 @@ function renderDashboardStatus(status) {
     const today = dayStr(nowMs);
     const yesterday = dayStr(nowMs - 24 * 3600 * 1000);
     const activeRules = (status.schedule?.rules || []).filter(r => r.enabled !== false);
-    // Optimizer/EOS rules carry an exact 15-min slotTs → highlight the precise
-    // slot (no time-of-day cross-day false matches). Manual user rules have no
+    // Optimizer/EOS rules carry an exact slotTs…slotEndTs window (1 h = 4×15-min)
+    // → mark every chart slot inside that window so the band spans the whole rule
+    // (M18), not just the opening 15-min slot. Range-checked against the real epex
+    // slot timestamps; no cross-day false matches. Manual user rules have no
     // slotTs, so they keep the HH:MM-vs-epex matching below.
-    const optimizerSlotTimestamps = activeRules
-      .filter(isOptimizerRule)
-      .map(r => Number(r.slotTs))
-      .filter(Number.isFinite);
+    const optimizerSlotTimestamps = collectOptimizerSlotTimestamps(
+      activeRules,
+      (status.epex?.data || []).map(s => Number(s.ts))
+    );
     const userSlotTimestamps = activeRules
       .filter(r => !isSmallMarketAutomationRule(r) && !isOptimizerRule(r))
       .flatMap(r => {
@@ -4578,6 +4608,7 @@ const dashboardApi = {
   formatChartCentValue,
   getDashboardLogUrl,
   getChartHighlightSets,
+  collectOptimizerSlotTimestamps,
   buildPriceForecastRows,
   priceChartMetaText,
   groupScheduleRulesForDashboard,
