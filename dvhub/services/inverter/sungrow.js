@@ -981,8 +981,15 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (claimMode != null) setOwns(claimMode);
     // FC 16 (Write Multiple) für Register, die FC 06 (Write Single) nicht annehmen (manche Sungrow-Holding-
     // Register, u. a. 13080 am SH10RT-20): dasselbe Register, ein Wort.
-    if (fc === 16) await transport.mbWriteMultiple({ ...endpoint(conf), address, values: [value & 0xffff] });
-    else await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
+    try {
+      if (fc === 16) await transport.mbWriteMultiple({ ...endpoint(conf), address, values: [value & 0xffff] });
+      else await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
+    } catch (e) {
+      // Register + Wert an den Fehler hängen (Feld-Wunsch 16.11.): split_aborted/Logs sollen
+      // nennen, welches Register den Write abgelehnt hat (z. B. Leistung 13052 vs. Befehl 13051).
+      if (e && typeof e === 'object') { if (e.emsAddress == null) e.emsAddress = address; if (e.emsValue == null) e.emsValue = value & 0xffff; }
+      throw e;
+    }
     countWrite(address); // Tages-Schreibzähler je Register (Punkt 2)
   }
 
@@ -1390,7 +1397,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // Split (ein Slave-Fehler fuehrt oben nur auf Master-only, Aufgabe 3).
       await neutralizeBoth('split_master_failed');
       st.error = e?.message || String(e);
-      logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error }, 'warn');
+      logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error, register: e?.emsAddress ?? null, value: e?.emsValue ?? null }, 'warn');
       st.decision = { mode: 'self', reason: 'split_master_failed', at: t };
       publish();
       return { ok: false, readError: e?.code === 'heartbeat_mismatch' || e?.code === 'ems_read_error', error: st.error };

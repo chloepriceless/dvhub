@@ -32,7 +32,7 @@ function makeState() {
 // Sungrow-naher Aufbau: feedExcessDcPv als Sequenz über die Einspeisegrenze.
 // writeSingleImpl darf je Register/Wert werfen (Modbus-Ausnahme simulieren).
 // mbRequest liefert den aktuellen Gerätezustand aus `device` (Adresse→RAW-Wort).
-function makeSungrowEvaluator({ dvSeqSavedPath, device = {}, writeSingleImpl, readThrow = {}, logs } = {}) {
+function makeSungrowEvaluator({ dvSeqSavedPath, device = {}, writeSingleImpl, readThrow = {}, readThrowFn = null, logs } = {}) {
   const state = makeState();
   const cfg = {
     controlWrite: {
@@ -69,6 +69,8 @@ function makeSungrowEvaluator({ dvSeqSavedPath, device = {}, writeSingleImpl, re
     async mbWriteMultiple(req) { this.writes.push({ fc: 16, address: req.address, values: req.values }); },
     async mbRequest({ address, quantity }) {
       if (readThrow[address]) throw new Error(readThrow[address]);
+      const cond = readThrowFn && readThrowFn(address, device);
+      if (cond) throw new Error(cond);
       const out = [];
       for (let i = 0; i < (quantity || 1); i++) out.push(device[address + i] ?? 0);
       return out;
@@ -379,4 +381,29 @@ test('M14 Folgefehler: Fix räumt den fälschlich „gesperrt"-Zustand auf → e
   assert.ok(transport.writes.some((w) => w.address === 13073 && w.value === 0),
     'neue Sperre schreibt feedInLimitW:=0 ans Gerät (Abregelung wieder möglich)');
   assert.equal(state.ctrl._lastDvFeedIn, false);
+});
+
+// #820 (Codex-Review, am SH10RT belegt 16.11.): Die Verify-Rücklesung von 13087/13088
+// (Einspeisequote) wirft zeitweise exception 4, während 0 gesetzt ist, OBWOHL der Write
+// angenommen wurde. Vorher brach die Sequenz vor 13073/13086 ab → Anlage unbegrenzt. Jetzt
+// wird die Verify-Ausnahme toleriert und die Sperre vollständig geschrieben.
+test('#820: Verify-Rücklesung der Quote wirft exception 4 → Sequenz bricht NICHT ab, Sperre vollständig', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvm14-'));
+  const savedPath = path.join(dir, 'dv_seq_saved.json');
+  const logs = [];
+  // Quote (13087) vorhanden (1000), Watt-Grenze (13073) auf altem Wert, Enable (13086) 170.
+  const device = { 13087: 1000, 13073: 24200, 13086: 170 };
+  const { evaluator } = makeSungrowEvaluator({
+    dvSeqSavedPath: savedPath, device, logs,
+    writeSingleImpl: (req, dev) => { dev[req.address] = req.value; },
+    // Verify-Lesung von 13087 wirft exception 4, SOBALD 0 gesetzt ist (Sichern-Lesung liest noch 1000).
+    readThrowFn: (address, dev) => (address === 13087 && dev[13087] === 0 ? 'modbus exception 4' : null),
+  });
+  const lock = await evaluator.applyControlTarget('feedExcessDcPv', 0, 'negative_price_protection');
+  assert.equal(lock.ok, true, 'Sperre bricht nicht an der Verify-Ausnahme ab');
+  assert.equal(device[13073], 0, 'Watt-Grenze 13073 trotzdem auf 0 geschrieben');
+  assert.equal(device[13087], 0, 'Quote 13087 auf 0 geschrieben');
+  assert.ok(logs.some((l) => l.type === 'dv_seq_verify_inconclusive' && l.payload?.address === 13087),
+    'die unbestätigte Verifikation wird gemeldet');
+  assert.ok(!logs.some((l) => l.type === 'dv_seq_readback_mismatch'), 'kein Mismatch-Fehler (es war eine Ausnahme, keine Abweichung)');
 });

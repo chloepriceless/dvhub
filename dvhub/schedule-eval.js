@@ -754,10 +754,32 @@ export function createScheduleEvaluator(ctx) {
   // (FC 3) und Wort für Wort vergleichen. Abweichung = Fehler der Sequenz
   // (T-0076: Cache bleibt, nächster Takt schreibt erneut).
   async function verifySequenceWrite(point, pconf, words) {
-    const regs = await transport.mbRequest({
+    const read = () => transport.mbRequest({
       fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
       address: pconf.address, quantity: words.length, timeoutMs: pconf.timeoutMs
     });
+    let regs;
+    try {
+      regs = await read();
+    } catch (e) {
+      // #820 (Codex-Review, am SH10RT belegt 16.11.): Die RÜCKLESUNG mancher Register
+      // (z. B. 13088 Einspeisequote, während 0 gesetzt ist) wirft zeitweise eine
+      // Modbus-Ausnahme (exception 4), OBWOHL der Write angenommen wurde. Bricht die
+      // Verifikation hier ab, bleiben die restlichen Sperr-Schritte (13074/13087)
+      // ungeschrieben und die Anlage unbegrenzt. Deshalb: bei einer Modbus-Ausnahme EINMAL
+      // wiederholen; bleibt es dabei, die Verifikation als UNBESTÄTIGT werten (leise melden,
+      // NICHT abbrechen) — die Wirkung bestätigen die übrigen Register der Sequenz. Nur eine
+      // echte Ausnahme (Gerät hat geantwortet) wird toleriert; ein Timeout/Verbindungsfehler
+      // bricht wie bisher ab (Gerätezustand unbekannt).
+      if (!isModbusException(e)) throw e;
+      try {
+        regs = await read();
+      } catch (e2) {
+        if (!isModbusException(e2)) throw e2;
+        pushLog('dv_seq_verify_inconclusive', { point, address: pconf.address, expected: words, error: e2.message }, 'warn');
+        return;
+      }
+    }
     const ok = Array.isArray(regs) && words.every((w, i) => (Number(regs[i]) & 0xffff) === (Number(w) & 0xffff));
     if (!ok) {
       pushLog('dv_seq_readback_mismatch', { point, address: pconf.address, expected: words, actual: regs }, 'warn');
