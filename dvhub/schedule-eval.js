@@ -83,6 +83,13 @@ export function exportBufferFloorW(cfg) {
 // Netzentladung erkennt. Im Normalbetrieb gilt sie nicht.
 const CURTAILMENT_BUFFER_LIMIT_W = FORCED_EXPORT_THRESHOLD_W;
 
+// M14b: Tagesbudget für den dvControl-Einspeise-Sequenzpfad (feedExcessDcPv:
+// 13074/13087/13088/31222) — eigener Zähler neben dem 13050-EMS-Budget. Analog
+// MODE_WRITES_PER_DAY=20: eine schreibende Sequenz (ein Abregel-Wechsel) = 1. Bei
+// Erschöpfung wird der Zustand GEHALTEN (nicht weiter geschrieben) und gemeldet.
+// Normalbetrieb hat wenige Wechsel/Tag; die Grenze greift nur bei Flattern (Fehler).
+const DV_SEQ_WRITES_PER_DAY = 20;
+
 const VERIFY_DEFAULT_DELAY_MS = 4000;
 const VERIFY_DEFAULT_MIN_INTERVAL_MS = 30000;
 
@@ -650,6 +657,47 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
+  // --- M14b Schreibbudget für den dvControl-Einspeise-Sequenzpfad ------------
+  // Eigener persistierter Tages-Zähler (dv_seq_writeday.json), getrennt vom
+  // 13050-EMS-Budget (das über den Sungrow-EMS-Pfad läuft). Reset zur lokalen
+  // Mitternacht (Datums-String wie writeDayBucket in services/inverter/sungrow.js).
+  // Gezählt wird eine SCHREIBENDE Sequenz (ein Abregel-Wechsel). Bei Erschöpfung:
+  // Zustand halten, nicht weiter schreiben, melden (Log + WR-Kachel).
+  if (ctx.dvSeqWritedayPath && state.ctrl._dvSeqWriteDay === undefined) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(ctx.dvSeqWritedayPath, 'utf8'));
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) state.ctrl._dvSeqWriteDay = raw;
+    } catch { /* keine/korrupte Datei → leerer Zähler (Erstlauf) */ }
+  }
+  function dvSeqWriteDayBucket() {
+    const key = new Date().toDateString(); // lokaler Tag → Reset um Mitternacht
+    const cur = state.ctrl._dvSeqWriteDay;
+    if (!cur || cur.key !== key) state.ctrl._dvSeqWriteDay = { key, count: 0 };
+    return state.ctrl._dvSeqWriteDay;
+  }
+  function dvSeqBudgetLeft() {
+    return DV_SEQ_WRITES_PER_DAY - (dvSeqWriteDayBucket().count || 0);
+  }
+  function dvSeqBudgetExhausted() {
+    return dvSeqBudgetLeft() <= 0;
+  }
+  // Status für die WR-Kachel/Statusendpunkt (neben „Writes heute").
+  function publishDvSeqBudget() {
+    const b = dvSeqWriteDayBucket();
+    state.ctrl.dvSeqBudget = { day: b.key, count: b.count || 0, left: dvSeqBudgetLeft(), max: DV_SEQ_WRITES_PER_DAY };
+  }
+  function dvSeqBudgetCount() {
+    const b = dvSeqWriteDayBucket();
+    b.count = (b.count || 0) + 1;
+    publishDvSeqBudget();
+    if (ctx.dvSeqWritedayPath) {
+      try { atomicWriteControlState(ctx.dvSeqWritedayPath, state.ctrl._dvSeqWriteDay); }
+      catch (e) { pushLog('dv_seq_writeday_persist_error', { error: e?.message || String(e) }, 'warn'); }
+    }
+  }
+  // Einmal beim Init den Status spiegeln (auch wenn heute noch nichts geschrieben wurde).
+  publishDvSeqBudget();
+
   // Gesicherten Wert für den restore kodieren. Rückgabe { value, encoded };
   // encoded null = nichts Schreibbares (Sicherung kaputt, kein restoreDefault).
   function resolveRestoreValue(step, pconf, savedValue) {
@@ -717,10 +765,20 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
-  async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false } = {}) {
+  async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false, budgeted = false } = {}) {
     const cfg = getCfg();
     const gate = deviceWriteGate(cfg);
     if (gate) throw new Error(gate);
+    // M14b Schreibbudget (nur Einspeise-Sequenzpfad, budgeted=true): ist das
+    // Tagesbudget erschöpft, den Zustand HALTEN — nicht weiter schreiben. Ein
+    // eigener Fehler (dvBudgetHold) signalisiert dem Aufrufer die Haltung; er
+    // meldet sie leise (Log/Kachel) statt als Schreibfehler. Der Zähler zählt nur
+    // schreibende Sequenzen, Normalbetrieb erreicht die Grenze nie (nur Flattern).
+    if (budgeted && dvSeqBudgetExhausted()) {
+      const err = new Error('dv_seq_budget_exhausted');
+      err.dvBudgetHold = true;
+      throw err;
+    }
     const saved = (state.ctrl._dvSeqSaved ??= {});
     if (state.ctrl._dvSeqSavedPending) persistDvSeqSaved();
     const skippedOptional = new Set();
@@ -873,8 +931,14 @@ export function createScheduleEvaluator(ctx) {
     }
     } catch (e) {
       if (stepsWritten > 0 && e && typeof e === 'object') e.dvStepsWritten = stepsWritten;
+      // M14b: auch eine mittendrin abgebrochene Sequenz hat Register verbraucht →
+      // als eine Sequenz zählen, sonst zählte ein teilweises Flattern nicht.
+      if (budgeted && stepsWritten > 0) dvSeqBudgetCount();
       throw e;
     }
+    // M14b: eine erfolgreich schreibende Einspeise-Sequenz zählt eine Sequenz
+    // gegen das Tagesbudget (ein No-op ohne Schreibschritt zählt nicht).
+    if (budgeted && stepsWritten > 0) dvSeqBudgetCount();
   }
 
   // LUOX-Teilvorgabe des Direktvermarkters: Einspeisegrenze in W über den
@@ -902,8 +966,12 @@ export function createScheduleEvaluator(ctx) {
   // zurückschreiben; restore-Schritte ohne Sicherung (Absturz mitten in der
   // Sperre) bekommen keinen Default.
   async function runFlagSequence(flag, steps, bootRelease) {
+    // M14b: nur der Einspeise-Sperrpfad (feedExcessDcPv → 13074/13087/13088/31222)
+    // zählt gegen das dvControl-Tagesbudget; die AC-Variante (dontFeedExcessAcPv)
+    // und die LUOX-Teilgrenze (2706, applyDvFeedInLimit) bleiben außen vor.
+    const budgeted = flag === 'feedExcessDcPv';
     if (!bootRelease) {
-      await runDvControlSequence(steps, { requirePersist: true });
+      await runDvControlSequence(steps, { requirePersist: true, budgeted });
       return false;
     }
     const saved = state.ctrl._dvSeqSaved || {};
@@ -912,7 +980,7 @@ export function createScheduleEvaluator(ctx) {
       pushLog('dv_release_skipped_no_own_block', { flag, points: steps.map((st) => st?.point) });
       return true;
     }
-    await runDvControlSequence(steps, { ownOnly: true });
+    await runDvControlSequence(steps, { ownOnly: true, budgeted });
     return false;
   }
 
@@ -1053,24 +1121,39 @@ export function createScheduleEvaluator(ctx) {
         // Erfolg (auch no_own_block): Backoff zurücksetzen.
         bk.fails = 0; bk.nextAt = 0; bk.lastError = null;
       } catch (e) {
-        results.feedExcessDcPv = { ok: false, error: e.message, ...(e?.dvStepsWritten > 0 ? { stepsWritten: e.dvStepsWritten } : {}) };
         allOk = false;
-        if (feedIn === true) {
-          bk.fails += 1;
-          bk.lastError = e.message;
-          bk.nextAt = bk.fails >= DV_RELEASE_BACKOFF_AFTER ? nowMs + DV_RELEASE_BACKOFF_MS : 0;
+        if (e?.dvBudgetHold === true) {
+          // M14b: Tagesbudget erschöpft → Zustand GEHALTEN, nicht geschrieben. Das
+          // ist KEIN Schreibfehler (kein Backoff): leise melden (einmal je Tag),
+          // die WR-Kachel trägt den Hold über state.ctrl.dvSeqBudget.
+          results.feedExcessDcPv = { ok: false, budgetHold: true };
+          const b = state.ctrl.dvSeqBudget || {};
+          if (state.ctrl._dvSeqBudgetHoldDay !== b.day) {
+            state.ctrl._dvSeqBudgetHoldDay = b.day;
+            pushLog('dv_control_seq_budget', {
+              register: 'feedExcessDcPv', feedIn, count: b.count, max: b.max,
+              text: `DVhub: Tagesbudget für die Einspeise-Abregelung (${b.max ?? DV_SEQ_WRITES_PER_DAY} Sequenzen/Tag) erreicht — Zustand wird gehalten, bis Mitternacht wird nicht weiter am Einspeise-Register geschrieben.`,
+            }, 'warn');
+          }
+        } else {
+          results.feedExcessDcPv = { ok: false, error: e.message, ...(e?.dvStepsWritten > 0 ? { stepsWritten: e.dvStepsWritten } : {}) };
+          if (feedIn === true) {
+            bk.fails += 1;
+            bk.lastError = e.message;
+            bk.nextAt = bk.fails >= DV_RELEASE_BACKOFF_AFTER ? nowMs + DV_RELEASE_BACKOFF_MS : 0;
+          }
+          // Log nennt den konkret scheiternden Punkt, sein Register und den Wert
+          // (M14: vorher stand hier nur `feedExcessDcPv`). Aus runDvControlSequence
+          // getragen (e.dvPoint/dvAddress/dvValue); Direktregister-Pfad: Flag-Adresse.
+          pushLog('dv_victron_write_error', {
+            register: 'feedExcessDcPv', feedIn,
+            point: e?.dvPoint ?? 'feedExcessDcPv',
+            address: e?.dvAddress ?? dc.feedExcessDcPv.address ?? null,
+            value: e?.dvValue ?? val,
+            ...(feedIn === true ? { fails: bk.fails, retryAt: bk.nextAt || undefined } : {}),
+            error: e.message
+          });
         }
-        // Log nennt den konkret scheiternden Punkt, sein Register und den Wert
-        // (M14: vorher stand hier nur `feedExcessDcPv`). Aus runDvControlSequence
-        // getragen (e.dvPoint/dvAddress/dvValue); Direktregister-Pfad: Flag-Adresse.
-        pushLog('dv_victron_write_error', {
-          register: 'feedExcessDcPv', feedIn,
-          point: e?.dvPoint ?? 'feedExcessDcPv',
-          address: e?.dvAddress ?? dc.feedExcessDcPv.address ?? null,
-          value: e?.dvValue ?? val,
-          ...(feedIn === true ? { fails: bk.fails, retryAt: bk.nextAt || undefined } : {}),
-          error: e.message
-        });
       }
       }
     }

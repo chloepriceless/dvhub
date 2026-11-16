@@ -1179,6 +1179,10 @@ const CONTROL_STATE_PATH = path.join(DATA_DIR || __dirname, 'control_state.json'
 // StorCtl_Mod/OutWRte) müssen einen Neustart WÄHREND einer aktiven Sperre
 // überleben, sonst schreibt die Freigabe nur die pauschalen restoreDefaults.
 const DV_SEQ_SAVED_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_saved.json');
+// M14b: Tages-Schreibzähler für den dvControl-Einspeise-Sequenzpfad (13074/13087/
+// 13088/31222) — eigener Zähler neben dem 13050-EMS-Budget. Reset zur lokalen
+// Mitternacht; persistiert, damit ein Neustart das Tagesbudget nicht zurücksetzt.
+const DV_SEQ_WRITEDAY_PATH = path.join(DATA_DIR || __dirname, 'dv_seq_writeday.json');
 // Sungrow-EMS (T-0422): Merker, dass DVhub den Zwangs-/External-EMS-Betrieb gesetzt hat (übersteht Neustarts).
 const SUNGROW_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_state.json');
 const SUNGROW_SLAVE_EMS_STATE_PATH = path.join(DATA_DIR || __dirname, 'sungrow_ems_slave_state.json');
@@ -1406,6 +1410,7 @@ setNotHaltProbe(() => state.ctrl.discretionaryWritesPaused === true);
 
 const ctx = {
   dvSeqSavedPath: DV_SEQ_SAVED_PATH,
+  dvSeqWritedayPath: DV_SEQ_WRITEDAY_PATH,
   sungrowEmsStatePath: SUNGROW_EMS_STATE_PATH,
   sungrowSlaveEmsStatePath: SUNGROW_SLAVE_EMS_STATE_PATH,
   sungrowForcedHeartbeatPath: IS_RUNTIME_PROCESS ? SUNGROW_FORCED_HEARTBEAT_PATH : null,

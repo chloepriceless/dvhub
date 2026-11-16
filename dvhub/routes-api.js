@@ -2739,6 +2739,9 @@ export function createApiRoutes(ctx) {
     // Befehl/Leistung, Besitz, Herzschlag (Soll/erkannte FC). Nur In-Memory; im Runtime-Worker-Betrieb hier null.
     payload.sungrowEms = state.ctrl?.sungrowEms ?? null;
     payload.sungrowEmsSlave = state.ctrl?.sungrowEmsSlave ?? null;
+    // M14b: Tagesbudget des dvControl-Einspeise-Sequenzpfads (13074/13087/13088/
+    // 31222) — getrennt vom 13050-EMS-Budget. Für die WR-Kachel neben „Writes heute".
+    payload.dvSeqBudget = state.ctrl?.dvSeqBudget ?? null;
     // M8: EOS-„Halten"/„Netzladen" ausgesetzt, weil der Netzstrom-Anteil im Akku gesperrt ist (erst im Haus
     // verbrauchen). In-Memory wie sungrowEms (im Runtime-Worker-Betrieb hier null).
     payload.eosGridShareSuspend = state.ctrl?.eosGridShareSuspend ?? null;

@@ -180,11 +180,19 @@
     if (h.lastError && num(h.lastError.at)) parts.push(`zuletzt ${errKindText(h.lastError.kind)} ${hhmm(h.lastError.at)}`);
     return parts.length ? parts.join(' · ') : DASH;
   }
-  function writesText(ems) {
+  // M14b: Tagesbudget des Einspeise-Abregelungs-Pfads (13074/13087/13088/31222)
+  // neben „Writes heute". Eigener Zähler, getrennt vom 13050-EMS-Budget.
+  function dvSeqBudgetText(budget) {
+    if (!budget || !Number.isFinite(Number(budget.count))) return '';
+    const left = Number.isFinite(Number(budget.left)) ? Number(budget.left) : null;
+    return ` · Einspeise-Abregelung ${Number(budget.count) || 0}${left != null ? ` (Rest ${left})` : ''}`;
+  }
+  function writesText(ems, dvSeqBudget) {
     const w = ems && ems.writesToday;
-    if (!w) return DASH;
+    const dv = dvSeqBudgetText(dvSeqBudget);
+    if (!w) return dv ? dv.replace(/^ · /, '') : DASH;
     const left = num(ems.modeBudgetLeft) ? Number(ems.modeBudgetLeft) : null;
-    return `13050 ${w.mode13050 || 0}${left != null ? ` (Rest ${left})` : ''} · 13051 ${w.cmd13051 || 0} · 13052 ${w.power13052 || 0} · 13080 ${w.heartbeat13080 || 0}`;
+    return `13050 ${w.mode13050 || 0}${left != null ? ` (Rest ${left})` : ''} · 13051 ${w.cmd13051 || 0} · 13052 ${w.power13052 || 0} · 13080 ${w.heartbeat13080 || 0}${dv}`;
   }
   function fallbackText(ems) {
     if (!ems) return DASH;
@@ -226,7 +234,7 @@
       emergencyCharge: v.emergencyCharge === true,
       split: splitText(ems),
       regulate: regulateText(ems),
-      writes: writesText(ems),
+      writes: writesText(ems, status && status.dvSeqBudget),
       fallback: fallbackText(ems),
       // N5: Modbus-Gesundheit des Master-Steuerpfads.
       health: healthText(ems && ems.health),
