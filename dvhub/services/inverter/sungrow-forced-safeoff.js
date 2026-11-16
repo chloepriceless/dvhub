@@ -72,6 +72,20 @@ export function watchdogShouldRelease({ liveMode, markerOwned, heartbeatAt, nowM
   return { release: true, reason: 'orphaned_forced', ageMs };
 }
 
+/**
+ * Entscheidung des Shutdown-Release (ExecStopPost, Absicherung C), reine Logik. A3-2 (Christin 16.11.2026): auch das
+ * Release-Skript liest erst den LIVE-Modus, bevor es schreibt — nicht blind auf den Merker. Nur zurücknehmen, wenn
+ * DVhub den Modus besitzt (Merker) UND der Master LIVE in Modus 2 (Forced) steht. KEINE Lebenszeichen-Prüfung (der
+ * Dienst wird gerade beendet, die Rücknahme hat Vorrang). liveMode === null (Lesefehler) → NICHT schreiben, damit
+ * kein blinder Write an ein Gerät geht, das nicht (mehr) in DVhubs Forced mode steht; der Box-Watchdog greift sonst.
+ * @returns {{write:boolean, reason:string}}
+ */
+export function releaseShouldWrite({ liveMode, markerOwned }) {
+  if (!markerOwned) return { write: false, reason: 'not_owned' };
+  if (liveMode !== EMS_MODE.FORCED) return { write: false, reason: 'mode_not_forced' };
+  return { write: true, reason: 'owned_forced' };
+}
+
 /** Master- und Slave-Verbindung aus der DVhub-Config (victron + sungrow.secondInverter). */
 export function forcedConnections(cfg) {
   const v = cfg?.victron || {};

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { sungrowForcedSafeOff, readForcedMarker, forcedConnections, watchdogShouldRelease, readForcedHeartbeatAt } from '../services/inverter/sungrow-forced-safeoff.js';
+import { sungrowForcedSafeOff, readForcedMarker, forcedConnections, watchdogShouldRelease, releaseShouldWrite, readForcedHeartbeatAt } from '../services/inverter/sungrow-forced-safeoff.js';
 import { wire, EMS_MODE, EMS_CMD } from '../services/inverter/sungrow.js';
 
 const MODE = wire(13050);
@@ -84,4 +84,25 @@ test('readForcedHeartbeatAt: at aus der Datei, null wenn fehlend/ungültig', () 
   fs.writeFileSync(p, JSON.stringify({ at: 5555 }));
   assert.equal(readForcedHeartbeatAt(p), 5555);
   assert.equal(readForcedHeartbeatAt(path.join(dir, 'fehlt.json')), null);
+});
+
+// A3-2 (Christin 16.11.2026): auch das Release-Skript (ExecStopPost) liest erst den LIVE-Modus, bevor es schreibt —
+// wie der Watchdog. Nur zurücknehmen, wenn DVhub den Modus besitzt UND der Master live in Forced (Modus 2) steht.
+test('releaseShouldWrite: besessen + Master live in Forced (Modus 2) → schreiben', () => {
+  const d = releaseShouldWrite({ liveMode: EMS_MODE.FORCED, markerOwned: true });
+  assert.equal(d.write, true);
+  assert.equal(d.reason, 'owned_forced');
+});
+
+test('releaseShouldWrite: Master live NICHT in Forced (Eigenverbrauch/von Hand geändert) → nichts schreiben', () => {
+  assert.equal(releaseShouldWrite({ liveMode: EMS_MODE.SELF, markerOwned: true }).write, false);
+  assert.equal(releaseShouldWrite({ liveMode: EMS_MODE.EXTERNAL, markerOwned: true }).reason, 'mode_not_forced');
+});
+
+test('releaseShouldWrite: Modus nicht lesbar (null, Lesefehler) → nichts schreiben (kein blinder Write)', () => {
+  assert.equal(releaseShouldWrite({ liveMode: null, markerOwned: true }).write, false);
+});
+
+test('releaseShouldWrite: kein Besitz-Merker → nichts schreiben', () => {
+  assert.equal(releaseShouldWrite({ liveMode: EMS_MODE.FORCED, markerOwned: false }).reason, 'not_owned');
 });
