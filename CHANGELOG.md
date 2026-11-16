@@ -10,8 +10,16 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Test-Knopf „Abregelung testen (X min)“ im Leitstand (Sungrow-Feldtest).** Zwei Auslöser (Negativpreis / Direktvermarkter) fahren die Abregelung über genau den Ernstfall-Pfad (priceNegative bzw. setForcedOff mit selbst-ablaufendem Lease, max. 60 min), optional „Akku nicht laden“. Ein 1-s-Protokoll direkt aus dem Regeltakt macht das Abregel-Verhalten sichtbar — feiner als /api/status.
+
 ### Behoben
 
+- **Sungrow Abregelung im Forced-Betrieb: Slave folgte der Einspeisegrenze nicht (M16, Feldtest).** Bei aktiver Sperre wird der Slave-WR jetzt angehalten (0xCC) ohne eigene Lade-/Entladebefehle — seine PV folgt der Master-Grenze, er kann nicht ins Netz entladen. Der Master regelt allein weiter, kein Moduswechsel, 13050-Budget unberührt; Register 31222 wird konsistent mitgeführt.
+- **Manuelle Zeitplan-Regeln behalten Vorrang vor der Automatik (M15, Feldtest).** Nach einem EOS-Lauf überstimmte eine Plan-Regel eine laufende manuelle Regel; manuelle Regeln schlagen jetzt EOS/Börsenautomatik unabhängig von der Einfüge-Reihenfolge.
+- **Börsenchart markiert EOS-Regeln über die ganze Stunde (M18).** Der violette Balken erscheint jetzt über die gesamte Regeldauer statt nur im ersten 15-min-Slot.
+- **Schreibbudget für die Sungrow-Einspeise-Register (13074/13087/13088/31222, M14b).** Ein Tageszähler begrenzt die Abregel-Sequenzen; bei Erschöpfung wird gehalten und gemeldet, der Zähler steht in der WR-Kachel.
 - **Sungrow Negativpreis-/DV-Abregelung: Freigabe hing in „modbus exception 4“ und blockierte jede weitere Abregelung (M14, Feldtest).** Nahm der Wechselrichter einen Restore-Write an bzw. stellte ihn selbst wieder her, meldete aber trotzdem eine Modbus-Ausnahme, wiederholte DVhub die Freigabe endlos (alle 15 s) und hielt sich fälschlich für gesperrt — eine neue Sperre schrieb dann nichts mehr. DVhub liest den Punkt nach einer Modbus-Ausnahme jetzt zurück; steht der Zielwert schon am Gerät, gilt der Schritt als erledigt (keine Wiederholung, Zustand konsistent). Echte Fehlschläge bekommen Backoff (nach 3× nur alle 5 min, nur die automatische Freigabe) und ein Log mit Punkt/Register/Wert. Die Einspeisequote (Register 13088, Vorrang vor der Watt-Grenze) wird beim Sperren jetzt verpflichtend auf 0 gesetzt statt optional übersprungen.
 
 ## [1.0.11] - 2026-11-16
