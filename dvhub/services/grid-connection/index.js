@@ -1313,12 +1313,29 @@ export function createGridConnectionGuard(ctx, deps = {}) {
       .then((res) => {
         const lw = state().schedule?.lastWrite?.maxDischargeW;
         if (restore) {
-          if (res?.ok && st.assistRestore === wanted) {
+          // Befund 1 (Fable-Review 16.11., Repro belegt): res.ok heißt nur „der
+          // Write lief" — der T-0075-SoC-Boden klemmt die Entladegrenze bei SoC ≤
+          // Boden auf 0, dann steht NICHT der Wert davor am Gerät. Der Merker darf
+          // erst weg, wenn der gewünschte Wert wirklich angekommen ist (lastWrite
+          // == value), sonst bliebe das Gerät bei 0, auch wenn der SoC später wieder
+          // steigt. Kam der Wert wegen des Bodens nicht an: Merker HALTEN und später
+          // erneut versuchen (enforceAssist läuft regelmäßig, ASSIST_RETRY_MS) —
+          // analog floor-handoff.js, das auf SoC über dem Boden wartet.
+          // Gelandet = Write mit passendem lastWrite ODER der Skip 'already_set',
+          // der NUR kommt, wenn die frische Geräte-Rücklesung bereits dem Restore-Wert
+          // entspricht (schedule-eval.js, nicht geklemmt). Ein Skip wegen SoC-Boden
+          // (Wert auf 0 geklemmt, Gerät zufällig schon 0) trägt diesen Grund NICHT.
+          const landed = res?.ok && ((res.skipped === true && res.reason === 'already_set') || (lw && Number(lw.value) === Number(value)));
+          if (landed && st.assistRestore === wanted) {
             st.assistRestore = null;
             log('grid_connection_assist_end', { valueW: value, text: `Netzanschluss: Akku-Hilfe beendet — Entladegrenze zurück auf ${value === -1 ? 'unbegrenzt' : kwText(value)}` });
             protocol('grid_connection_assist_end', { valueW: value }, value);
           } else if (!res?.ok) {
             log('grid_connection_assist_failed', { phase: 'restore', valueW: value, error: res?.error || 'unknown' }, 'warn');
+          } else {
+            // Write lief, aber der Wert kam nicht an (SoC-Boden klemmt) → Merker
+            // halten, beim nächsten Takt mit SoC über dem Boden zieht der Restore nach.
+            log('grid_connection_assist_restore_deferred', { valueW: value, written: lw ? Number(lw.value) : null, text: 'Netzanschluss: Akku-Hilfe-Ende verschoben — Entladegrenze steht wegen SoC-Boden noch nicht zurück, wird nachgezogen.' });
           }
         } else if (!res?.ok || (lw && Number(lw.value) !== Number(value) && !res.skipped)) {
           // Nicht angekommen (Fehler, T-0075-Boden): laut melden; der Wächter

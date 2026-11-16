@@ -697,3 +697,28 @@ test('Codex a83e8bc9 P2: Rücklesung „nicht verfügbar“ (null) gilt nicht al
   for (let k = 0; k < 3; k += 1) { h.guard.tick(); await settle(); }
   assert.deepEqual(h.writes(), [0]);
 });
+
+// Befund 1 (Fable-Review 16.11., Repro belegt): Endet die Akku-Hilfe genau am SoC-Boden,
+// klemmt der T-0075-Boden den Restore des Betreiberwerts auf 0. Der Merker darf dann NICHT
+// weg — sonst bleibt die Entladegrenze auf 0, auch wenn der SoC wieder steigt. Der Restore
+// muss nachgezogen werden, sobald der SoC über dem Boden ist.
+test('Befund 1: Akku-Hilfe-Ende am SoC-Boden verliert den Betreiberwert nicht — Restore zieht nach', async () => {
+  const h = rig('bridge-mqtt', { persisted: { gridConnection: { limitKw: 20, marginW: 1000 }, optimizer: { allowGridCharge: true } } });
+  h.state.victron.maxDischargeW = 2000; // Betreiber-Entladegrenze 2 kW
+  h.state.victron.fieldUpdatedAt.maxDischargeW = h.now();
+  // 1) Bezug 25 kW > Ziel 19 kW → Akku-Hilfe hebt die Entladegrenze an.
+  h.measure({ importW: 25000, dischargeW: 2000, maxDischargeW: 2000 }); h.guard.tick(); await settle();
+  const raised = h.writes().at(-1);
+  assert.ok(raised > 2000, `Akku-Hilfe hat angehoben (${raised})`);
+  // 2) SoC fällt unter den harten Boden, Last zurück auf Ziel → Hilfe endet, Restore 2000 → Boden klemmt auf 0.
+  h.state.victron.soc = 5;
+  h.measure({ importW: 19000, dischargeW: raised, maxDischargeW: raised }); h.guard.tick(); await settle();
+  assert.equal(h.writes().at(-1), 0, 'SoC-Boden klemmt die Entladegrenze auf 0');
+  assert.ok(h.logs.some((l) => l.event === 'grid_connection_assist_restore_deferred'), 'Restore verschoben (Merker gehalten, nicht als erledigt gelöscht)');
+  assert.ok(!h.logs.some((l) => l.event === 'grid_connection_assist_end'), 'noch KEIN Hilfe-Ende gemeldet (Wert steht nicht)');
+  // 3) SoC erholt sich (60 %) → der gehaltene Merker zieht den Betreiberwert 2 kW nach.
+  h.state.victron.soc = 60;
+  for (let k = 0; k < 30; k += 1) { h.measure({ importW: 3000, dischargeW: 0, maxDischargeW: h.writes().at(-1) }); h.guard.tick(); await settle(); }
+  assert.equal(h.writes().at(-1), 2000, 'Betreiberwert 2 kW nachgezogen (Merker war gehalten)');
+  assert.ok(h.logs.some((l) => l.event === 'grid_connection_assist_end'), 'jetzt Hilfe-Ende gemeldet (Wert steht)');
+});
