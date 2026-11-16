@@ -460,6 +460,34 @@ test('Absicherung C3: Start mit Forced-Merker → erster Takt setzt den Akku-Bef
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// A2 (Christin 16.11.2026): das 13050-Tagesbudget (Moduswechsel) überlebt jetzt einen Neustart — in einer EIGENEN
+// Datei neben dem Besitz-Merker, der Watchdog-Schlüssel bleibt unberührt.
+test('A2: 13050-Schreibzähler wird persistiert und überlebt den Neustart (eigene Datei, Merker unberührt)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-writeday-'));
+  const statePath = path.join(dir, 'sungrow_ems_state.json');
+  const writeDayPath = path.join(dir, 'sungrow_ems_writeday.json');
+
+  // Lauf 1: Eintritt in Forced → genau EIN Moduswechsel (13050), Budget 20 → 19, persistiert.
+  const r1 = rig({ controlMode: 'forced', statePath });
+  await r1.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(r1.t.writes.filter((w) => w.address === MODE).length, 1, 'ein Moduswechsel');
+  assert.equal(r1.ems.status().modeBudgetLeft, 19);
+  assert.ok(fs.existsSync(writeDayPath), 'eigene Zähler-Datei geschrieben');
+  const persisted = JSON.parse(fs.readFileSync(writeDayPath, 'utf8'));
+  assert.equal(persisted.regs[String(MODE)], 1, '13050-Zähler auf der Platte');
+  // Watchdog-Merker (Besitz) ist eine ANDERE Datei mit exakt seinen Schlüsseln.
+  const marker = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.equal(marker.ownMode, EMS_MODE.FORCED);
+  assert.equal(typeof marker.endpointKey, 'string');
+  assert.equal(marker.regs, undefined, 'der Zähler verschmutzt den Watchdog-Merker nicht');
+
+  // Lauf 2 (Neustart, selbe Dateien, selber Tag): der Zähler ist wiederhergestellt — das Budget bleibt bei 19.
+  const r2 = rig({ controlMode: 'forced', statePath });
+  assert.equal(r2.ems.status().modeBudgetLeft, 19, 'Budget überlebt den Neustart (nicht wieder 20)');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('BUG1 Forced: Sollwert gelöscht + PV-Überschuss → GELADEN (Standard-Puffer), kein 0xCC-Dauer-Stopp, bleibt Modus 2', async () => {
   const r = rig({ controlMode: 'forced' });
   await r.ems.applySetpoint(-5000, 'rule:abend'); // DVhub besitzt Forced (Modus 2)

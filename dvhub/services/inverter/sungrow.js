@@ -787,6 +787,23 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       }
     } catch { /* kein Merker → nichts in Besitz */ }
   }
+
+  // A2 (Christin 16.11.2026): Tages-Schreibzähler (13050-Budget) auf die Platte, sonst setzt ein Neustart das
+  // Budget zurück und der WR könnte an einem Tag deutlich mehr als 20 Moduswechsel sehen (Flash-Verschleiß). EIGENE
+  // Datei neben dem Besitz-Merker (sungrow_ems_writeday.json) — der Watchdog-Schlüssel (ownMode/endpointKey im
+  // sungrow_ems_state.json) bleibt exakt unberührt. Nur der Master persistiert (statePath gesetzt); der Slave hat
+  // kein Mode-Budget. Geschrieben wird NUR beim Moduswechsel (≤20/Tag) — kein Datei-I/O im 1-s-Regeltakt.
+  const writeDayPath = statePath ? String(statePath).replace(/[^/\\]*$/, 'sungrow_ems_writeday.json') : null;
+  if (writeDayPath) {
+    try {
+      const w = JSON.parse(fs.readFileSync(writeDayPath, 'utf8'));
+      if (w && typeof w.key === 'string' && w.regs && typeof w.regs === 'object') {
+        // writeDayBucket() setzt an einem neuen Tag ohnehin zurück — ein veralteter Stand wird so verworfen.
+        st.writeDay = { key: w.key, regs: { ...w.regs } };
+      }
+    } catch { /* keine/ungültige Datei → frischer Zähler */ }
+  }
+
   function setOwns(mode) {
     const owns = mode != null;
     if (st.owns === owns && st.ownMode === (owns ? mode : null)) return;
@@ -1009,6 +1026,12 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   function countWrite(address) {
     const b = writeDayBucket();
     b.regs[address] = (b.regs[address] || 0) + 1;
+    // A2: nur den budgetrelevanten Moduswechsel (13050) persistieren — hält das 13050-Budget restart-fest und
+    // begrenzt das Datei-I/O auf ≤20/Tag (die häufigen 13052/13080-Writes brauchen keine Persistenz).
+    if (writeDayPath && address === EMS_MODE_ADDR) {
+      try { atomicWriteControlState(writeDayPath, { key: b.key, regs: b.regs }); }
+      catch (e) { logOnce(e?.message || 'x', 'sungrow_ems_writeday_persist_error', { error: e?.message || String(e) }, 'warn'); }
+    }
   }
   // Verbleibendes 13050-Tagesbudget (Moduswechsel). ≤ 0 → nicht mehr wechseln (im Modus bleiben, Punkt 2).
   function modeBudgetLeft() {
