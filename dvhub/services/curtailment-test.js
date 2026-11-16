@@ -82,6 +82,13 @@ export function createCurtailmentTest(ctx) {
     if (existing && existing.active === true && now() < existing.until) {
       return { ok: false, status: 409, error: 'curtailment_test_already_running', test: publicView() };
     }
+    // Blocker 5 (Codex-Review 16.11.): Läuft bereits eine ECHTE DV-Abschaltung (forcedOff mit
+    // fremder Quelle, nicht unser Test), den DV-Test NICHT starten — sonst überschriebe
+    // setForcedOff deren offUntil mit der kürzeren Test-Frist und stop() gäbe die echte Sperre
+    // frei. Der Ernstfall hat Vorrang.
+    if (m === 'dv' && state.ctrl.forcedOff === true && now() < (Number(state.ctrl.offUntil) || 0) && state.ctrl.lastSignal !== 'curtailment_test') {
+      return { ok: false, status: 409, error: 'real_dv_restriction_active', test: publicView() };
+    }
     const startedAt = now();
     const until = startedAt + mins * 60000;
     state.ctrl.curtailmentTest = {
