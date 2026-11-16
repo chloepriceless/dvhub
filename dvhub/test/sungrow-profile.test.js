@@ -108,8 +108,8 @@ test('Profil: Steuerung nur über Holding-Register, Sollwert nachgebildet, kein 
       assert.equal(st.restoreDefault, undefined, 'ohne Sicherung nie eine Grenze abschalten');
     }
   }
-  // Sperren: zuerst Grenze 0, zuletzt einschalten (0xAA = 170).
-  assert.deepEqual(seq['0'].map((s) => [s.point, s.value]), [['feedInLimitRatio', 0], ['feedInLimitW', 0], ['feedInLimitEnable', 170]]);
+  // Sperren: zuerst alle Grenzwerte 0 (Quote 13088, Watt 13074, Wide-Range 31222), zuletzt einschalten (0xAA = 170).
+  assert.deepEqual(seq['0'].map((s) => [s.point, s.value]), [['feedInLimitRatio', 0], ['feedInLimitW', 0], ['feedInLimitWideRange', 0], ['feedInLimitEnable', 170]]);
   assert.equal(cfg.dvControl.dontFeedExcessAcPv.enabled, false);
   // Netzanschluss „Akku zuerst“ erkennt den nachgebildeten Sollwert als Hebel.
   const lever = resolveBatteryLever(cfg);
@@ -320,9 +320,10 @@ test('Abregelung: sichert Quote/Wert/Schalter, schreibt 0 % · 0 W · an, liest 
     { fc: 6, address: wire(13087), value: 0xaa }
   ]);
   assert.deepEqual(state.ctrl._dvSeqSaved, { feedInLimitRatio: 700, feedInLimitW: 5000, feedInLimitEnable: 0xaa });
-  // Je Write ein FC-3-Rücklesen derselben Adresse (nach dem Sichern).
+  // Je Write ein FC-3-Rücklesen derselben Adresse (nach dem Sichern). Das Default-Abbild kennt 31222 nicht, der
+  // Sicherungs-Versuch liest es einmal (Exception 2 → optional übersprungen, kein Verify-Rücklesen).
   const fc3 = t.reads.filter((r) => r.fc === 3).map((r) => r.address);
-  assert.deepEqual(fc3, [wire(13088), wire(13074), wire(13087), wire(13088), wire(13074), wire(13087)]);
+  assert.deepEqual(fc3, [wire(13088), wire(13074), wire(31222), wire(13087), wire(13088), wire(13074), wire(13087)]);
 
   // Freigabe: genau die gesicherten Werte zurück.
   t.writes.length = 0;
@@ -333,6 +334,45 @@ test('Abregelung: sichert Quote/Wert/Schalter, schreibt 0 % · 0 W · an, liest 
     { fc: 6, address: wire(13087), value: 0xaa }
   ]);
   assert.deepEqual(state.ctrl._dvSeqSaved, {});
+});
+
+test('M16 Abregelung: Wide-Range-Grenze 31222 wird mitgesichert und auf 0 mitgeschrieben, die Freigabe stellt sie zurück', async () => {
+  const cfg = loadSungrowConfig();
+  // Installateur-Zustand inkl. Wide-Range-Grenze 31222 (am Gerät: 2420 = 24,2 kW, Feld 16.11.).
+  const img = sungrowImage({ holding: { [wire(31222)]: 2420 } });
+  const t = mockSungrow(img);
+  const { state, evaluator } = evaluatorFor(cfg, t);
+  await evaluator.applyDvVictronControl(false, { reason: 'negative_price_protection' });
+  assert.equal(state.ctrl._lastDvFeedIn, false);
+  // Reihenfolge: Quote 13088, Watt 13074, Wide-Range 31222, Enable 13087 — alle Werte-Register auf 0.
+  assert.deepEqual(t.writes.map((w) => [w.address, w.value]), [
+    [wire(13088), 0], [wire(13074), 0], [wire(31222), 0], [wire(13087), 0xaa]
+  ]);
+  // 31222 ist mitgesichert (für die Freigabe), der alte Gerätewert bleibt erhalten.
+  assert.equal(state.ctrl._dvSeqSaved.feedInLimitWideRange, 2420);
+  // 31222 ist vorhanden → mit Rücklesen (verify): einmal Sichern + einmal nach dem Write.
+  assert.equal(t.reads.filter((r) => r.fc === 3 && r.address === wire(31222)).length, 2, '31222 gesichert und verifiziert');
+
+  // Freigabe: die gesicherte Wide-Range-Grenze wird mit zurückgestellt.
+  t.writes.length = 0;
+  await evaluator.applyDvVictronControl(true);
+  assert.deepEqual(t.writes.map((w) => [w.address, w.value]), [
+    [wire(13088), 700], [wire(13074), 5000], [wire(31222), 2420], [wire(13087), 0xaa]
+  ]);
+  assert.deepEqual(state.ctrl._dvSeqSaved, {});
+});
+
+test('M16 Abregelung: fehlt 31222 (alte Firmware, Modbus-Exception) → optionaler Schritt übersprungen, Sperre läuft durch', async () => {
+  const cfg = loadSungrowConfig();
+  // Default-Abbild kennt 31222 nicht (dropHolding nicht nötig) → Exception 2 beim Sichern/Schreiben.
+  const img = sungrowImage();
+  const t = mockSungrow(img);
+  const { state, evaluator } = evaluatorFor(cfg, t);
+  await evaluator.applyDvVictronControl(false, { reason: 'dv_forced_off' });
+  assert.equal(state.ctrl._lastDvFeedIn, false, 'Sperre trotzdem gesetzt');
+  // Kein Write auf 31222, die übrigen Register wie gehabt.
+  assert.deepEqual(t.writes.map((w) => w.address), [wire(13088), wire(13074), wire(13087)]);
+  assert.equal(state.ctrl._dvSeqSaved.feedInLimitWideRange, undefined, '31222 nicht gesichert');
 });
 
 test('Abregelung: fehlt Register 13088 WIRKLICH (alte Firmware, Modbus-Exception) → optionaler Schritt übersprungen', async () => {

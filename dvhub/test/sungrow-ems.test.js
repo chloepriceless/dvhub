@@ -303,6 +303,44 @@ test('Review-Befund 1: Slave-Telemetrie fällt mitten in der Vorgabe aus → Sla
   assert.equal(r.state.ctrl.sungrowEmsSlave.owns, false, 'Slave-Besitz abgegeben');
 });
 
+test('M16 Forced-Split: Abregelung/Sperre aktiv (_lastDvFeedIn=false) → Slave 0xCC statt Entladebefehl, Master regelt unverändert weiter', async () => {
+  const r = splitRig();
+  await r.ems.applySetpoint(-6000, 'rule:abend'); // Split-Entladen: beide WR entladen
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave entlädt zunächst');
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, true);
+  // Eine Sperre wird aktiv (feedExcessDcPv=0 / dv_forced_off / Negativpreis / Test → _lastDvFeedIn=false).
+  r.state.ctrl._lastDvFeedIn = false;
+  r.slaveT.writes.length = 0; r.masterT.writes.length = 0;
+  r.advance(6000);
+  await r.ems.tick();
+  // Slave: Befehl auf 0xCC angehalten, KEIN Moduswechsel (13050) — er folgt dem Master.
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, 'Slave auf 0xCC angehalten');
+  assert.ok(!r.slaveT.writes.some((w) => w.address === MODE), 'Slave bekommt KEINEN Modus-Write');
+  assert.ok(!r.slaveT.writes.some((w) => w.address === CMD && w.value === EMS_CMD.DISCHARGE), 'kein Entladebefehl mehr an den Slave');
+  // Master: bleibt in Modus 2 und regelt weiter (keine zusätzliche Entladesperre, kein Modus 0).
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'Master bleibt Modus 2');
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Master regelt weiter (Netz-Sollwert wie gehabt)');
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_slave_curtail_hold'), 'Log zum Slave-Stopp bei Sperre');
+  assert.equal(r.state.ctrl.sungrowEms.decision.split.slaveCurtailHold, true, 'Split-Detail markiert den Slave-Stopp');
+
+  // Freigabe (Sperre weg): der Slave kehrt in den Split zurück — nur 13051/13052, KEIN Moduswechsel.
+  r.state.ctrl._lastDvFeedIn = true;
+  r.slaveT.writes.length = 0;
+  r.advance(6000);
+  await r.ems.tick();
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave zurück im Split (entlädt wieder)');
+  assert.ok(!r.slaveT.writes.some((w) => w.address === MODE), 'auch bei der Rückkehr kein Modus-Write am Slave');
+});
+
+test('M16 Forced-Split: Sperre aktiv → Slave wird aktiv auf 0xCC geschrieben, auch wenn er zuvor nicht besessen war (kein stiller No-op)', async () => {
+  const r = splitRig();
+  // Sperre ist von Anfang an aktiv; der Slave stand im Abbild auf einem Entladebefehl (z. B. aus einem früheren Lauf).
+  r.state.ctrl._lastDvFeedIn = false;
+  r.slaveImage.holding.set(CMD, EMS_CMD.DISCHARGE);
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, 'Slave aktiv auf 0xCC gesetzt');
+});
+
 test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf, solange er Forced fährt', async () => {
   const hbPath = path.join(os.tmpdir(), `dvhub-forced-hb-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   try {

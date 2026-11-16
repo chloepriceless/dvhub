@@ -1277,13 +1277,42 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       socDeadbandPct: secondCfg.socBalanceDeadbandPct,
     });
     const mk = (w) => (w >= opts.minPowerW ? { mode: 'forced', command: decision.command, powerW: w, reason: decision.reason } : { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason });
+    // M16 (Feld 16.11., Christin Weg 1): Solange eine Abregelung/Sperre aktiv ist (Einspeisung am Netzpunkt gesperrt —
+    // feedExcessDcPv=0 / dv_forced_off / Negativpreis / Test, alle über applyDvVictronControl → state.ctrl._lastDvFeedIn
+    // === false), darf der Slave KEINE eigenen Lade-/Entladebefehle (13051/13052) bekommen. Steuerfunktionen gehen laut
+    // Sungrow-Protokoll NUR an den Master, der verteilt selbst; DVhub steuert den Slave im Split aber direkt — damit
+    // folgte der Slave der Master-Einspeisegrenze NICHT, seine PV lief weiter und er konnte ins Netz entladen. Lösung:
+    // Slave fest auf 0xCC (Stopp, Modus 2 bleibt — er folgt dem Master), KEINE Leistung. Ohne eigene Befehle folgt seine
+    // PV der Master-Grenze (13074=0 drosselt die System-PV am Netzpunkt), und er kann nicht ins Netz entladen. Der
+    // Master regelt ALLEIN weiter (Netz-Sollwert wie gehabt, KEINE zusätzliche Master-Entladesperre); das 13050-Budget
+    // bleibt unberührt (kein Moduswechsel). Nach der Freigabe (_lastDvFeedIn !== false) kehrt der Slave im nächsten Takt
+    // über den normalen Pfad in den Split zurück (nur 13051/13052, kein Moduswechsel).
+    const feedInBlocked = state.ctrl?._lastDvFeedIn === false;
     // Slave nicht kommandieren bei master-only ODER Notladung (uncontrollable) → nur best effort in Self halten.
     const skipSlave = slaveUncommanded || slaveEmergency;
-    const slaveDecision = skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveW);
+    const slaveDecision = feedInBlocked
+      ? { mode: 'forced', command: 'stop', powerW: 0, reason: 'curtailment_hold' }
+      : (skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveW));
     let masterDecision = mk(masterW);
-    let effMasterW = masterW; let effSlaveW = slaveW; let slaveFellBack = false; let slaveWrote = false;
+    let effMasterW = masterW; let effSlaveW = slaveW; let slaveFellBack = false; let slaveWrote = false; let slaveCurtailHold = false;
     // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst).
-    if (skipSlave) {
+    if (feedInBlocked) {
+      // Sperre aktiv: Slave aktiv auf 0xCC halten (nicht nur neutralize — das wäre ein No-op, wenn der Slave gerade nicht
+      // besessen ist), seinen Anteil dem Master geben. Der Master hält den Netz-Sollwert allein ein; seine Einspeisegrenze
+      // (13074=0) drosselt die System-PV. Scheitert der Slave-Stopp (Lese-/Schreibfehler), best effort neutralisieren —
+      // der Master steuert trotzdem weiter (kein Modus 0 wegen eines Slave-Fehlers).
+      slaveCurtailHold = true;
+      effSlaveW = 0;
+      effMasterW = Math.min(decision.powerW, masterMax);
+      masterDecision = mk(effMasterW);
+      const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
+      slaveWrote = sr.ok === true && sr.unchanged !== true;
+      if (!sr.ok) {
+        try { await slaveActuator.neutralize('curtailment_hold_failed'); } catch { /* best effort */ }
+        slaveFellBack = true;
+      }
+      logOnce('slave-curtail-hold', 'sungrow_ems_slave_curtail_hold', { side: 'slave', masterW: effMasterW, slaveWrote, slaveFellBack, text: 'Sungrow: Abregelung/Sperre aktiv — Slave auf 0xCC angehalten (keine eigenen Befehle), der Master regelt allein weiter (seine Einspeisegrenze 13074=0 drosselt die PV).' });
+    } else if (skipSlave) {
       // master-only/Notladung: Slave in Modus 0 (Self) halten. Scheitert das nicht hart — der Slave liegt dann ohnehin in Self.
       try { await slaveActuator.neutralize('self'); } catch { /* best effort */ }
     } else {
@@ -1314,6 +1343,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       masterLimitPct: charge ? masterCeilPct : masterFloorPct,
       slaveLimitPct: charge ? slaveCeilPct : slaveFloorPct,
       slaveEmergencyCharge: slaveEmergency,
+      slaveCurtailHold, // M16: Abregelung/Sperre aktiv → Slave auf 0xCC angehalten, Master regelt allein weiter
       slaveFellBack, // Aufgabe 3: Slave-Fehler → Anteil auf den Master verlagert, Master steuert weiter
     };
     // Master-Anteil. Scheitert er → beide sicher in Self.
