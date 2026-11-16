@@ -909,6 +909,16 @@ export function createScheduleEvaluator(ctx) {
     return { write: true, feedIn: true, source: 'emergency_stop_release' };
   }
 
+  // A10 (Christin 16.11.2026): aktive PFLICHT-Sperre der Einspeisung — dieselben Klassen, die der Eval-Pfad als
+  // mandatory feedIn=false fährt (§51 negative Preise, DV-forcedOff, §14a-Produktionssperre). Steht eine, darf eine
+  // Handvorgabe sie nicht aufheben. null = keine Pflicht-Sperre aktiv.
+  function feedInMandatoryBlockReason() {
+    if (state.ctrl.forcedOff) return 'dv_forced_off';
+    if (state.ctrl.eebusProductionBlock === true) return 'paragraph14a_production_block';
+    if (state.ctrl.negativePriceActive === true) return 'negative_price_protection';
+    return null;
+  }
+
   async function applyDvVictronControl(feedIn, { explicit = false, reason = null } = {}) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
@@ -1327,40 +1337,50 @@ export function createScheduleEvaluator(ctx) {
     // Victron (Direkt-Register 2707, keine sequence) läuft unverändert durch den
     // generischen Pfad. Sitzt NACH dem NOT-HALT-Gate: manuelle Flag-Writes
     // bleiben im Not-Halt geblockt.
+    // C1/A10 (Christin 16.11.2026): feedExcessDcPv geht IMMER über den EINEN Schreibweg (applyDvVictronControl) —
+    // Sequenz-Dialekt (Fronius M124, Deye Work-Mode) UND Victron-Direktregister (2707). Vorher nahm der Direkt-
+    // Register-Fall den generischen Einzelregister-Pfad unten: ZWEI Schreiber auf dasselbe Flag. Jetzt delegiert
+    // der Chokepoint beide Fälle an den kanonischen Aktuator, damit API-Antwort == Geräteaktion und es nur einen
+    // Schreibweg gibt. Sitzt NACH dem NOT-HALT-Gate: manuelle Flag-Writes bleiben im Not-Halt geblockt.
     if (target === 'feedExcessDcPv') {
       const feedIn = Number(value) === 1;
-      const seq = cfg.dvControl?.feedExcessDcPv?.sequence;
-      if (Array.isArray(seq?.[feedIn ? '1' : '0'])) {
-        if (cfg.dvControl?.enabled !== true && !feedIn) {
-          // #10 (FrodoVDR): deaktivierte Steuerung darf NIE sperren, nur freigeben.
-          pushLog('control_write_rejected', { target, value, source, reason: 'dv_control_disabled' });
-          return { ok: false, error: 'dv_control_disabled' };
-        }
-        if (state.ctrl._lastDvFeedIn === feedIn) {
-          state.schedule.active[target] = { value, source, at: Date.now(), skipped: true, reason: 'unchanged' };
-          return { ok: true, skipped: true, reason: 'unchanged' };
-        }
-        await applyDvVictronControl(feedIn, { explicit: true, reason: source });
-        const seqResult = state.ctrl.dvControl?.feedExcessDcPv;
-        if (!seqResult?.ok) {
-          pushLog('control_write_error', { target, value, source, error: seqResult?.error || 'dv_sequence_failed' });
-          return { ok: false, error: seqResult?.error || 'dv_sequence_failed' };
-        }
-        state.schedule.lastWrite[target] = { value, source, writeType: 'sequence', at: Date.now() };
-        state.schedule.active[target] = { value, source, at: Date.now() };
-        pushLog('control_write', { target, value, source, writeType: 'sequence' });
-        telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
-          eventType: 'control_write',
-          target,
-          valueNum: Number(value),
-          reason: source,
-          source: 'runtime',
-          meta: { writeType: 'sequence' }
-        }));
-        return { ok: true, writeType: 'sequence' };
+      if (cfg.dvControl?.enabled !== true && !feedIn) {
+        // #10 (FrodoVDR): deaktivierte Steuerung darf NIE sperren, nur freigeben.
+        pushLog('control_write_rejected', { target, value, source, reason: 'dv_control_disabled' });
+        return { ok: false, error: 'dv_control_disabled' };
       }
+      // A10: eine Freigabe (feedIn=1) hebt KEINE Pflicht-Sperre auf (§51 negative Preise, DV-forcedOff,
+      // §14a-Produktionssperre). Eine Handvorgabe darf die Pflicht-Abregelung nicht übersteuern.
+      const mandatoryBlock = feedInMandatoryBlockReason();
+      if (feedIn && mandatoryBlock && !isMandatoryControlSource(source)) {
+        pushLog('control_write_rejected', { target, value, source, reason: `feed_in_blocked_${mandatoryBlock}` });
+        return { ok: false, error: `feed_in_blocked_${mandatoryBlock}` };
+      }
+      if (state.ctrl._lastDvFeedIn === feedIn) {
+        state.schedule.active[target] = { value, source, at: Date.now(), skipped: true, reason: 'unchanged' };
+        return { ok: true, skipped: true, reason: 'unchanged' };
+      }
+      const writeType = Array.isArray(cfg.dvControl?.feedExcessDcPv?.sequence?.[feedIn ? '1' : '0']) ? 'sequence' : 'dv_control';
+      await applyDvVictronControl(feedIn, { explicit: true, reason: source });
+      const dvResult = state.ctrl.dvControl?.feedExcessDcPv;
+      if (!dvResult?.ok) {
+        pushLog('control_write_error', { target, value, source, error: dvResult?.error || 'dv_control_failed' });
+        return { ok: false, error: dvResult?.error || 'dv_control_failed' };
+      }
+      state.schedule.lastWrite[target] = { value, source, writeType, at: Date.now() };
+      state.schedule.active[target] = { value, source, at: Date.now() };
+      pushLog('control_write', { target, value, source, writeType });
+      telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+        eventType: 'control_write',
+        target,
+        valueNum: Number(value),
+        reason: source,
+        source: 'runtime',
+        meta: { writeType }
+      }));
+      return { ok: true, writeType };
     }
-    // === end B-1112 Sequenz-Dialekt ==========================================
+    // === end feedExcessDcPv: ein Schreibweg =================================
 
     // === Einspeise-Puffer als Untergrenze (GitHub #12) ========================
     // Steht der gridSetpointW auf 0, regelt die Anlage auf "null am Zähler" —
