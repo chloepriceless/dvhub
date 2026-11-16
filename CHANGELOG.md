@@ -10,6 +10,10 @@ verweist hierher.
 
 ## [Unreleased]
 
+### Behoben
+
+- **Sungrow Negativpreis-/DV-Abregelung: Freigabe hing in „modbus exception 4“ und blockierte jede weitere Abregelung (M14, Feldtest).** Nahm der Wechselrichter einen Restore-Write an bzw. stellte ihn selbst wieder her, meldete aber trotzdem eine Modbus-Ausnahme, wiederholte DVhub die Freigabe endlos (alle 15 s) und hielt sich fälschlich für gesperrt — eine neue Sperre schrieb dann nichts mehr. DVhub liest den Punkt nach einer Modbus-Ausnahme jetzt zurück; steht der Zielwert schon am Gerät, gilt der Schritt als erledigt (keine Wiederholung, Zustand konsistent). Echte Fehlschläge bekommen Backoff (nach 3× nur alle 5 min, nur die automatische Freigabe) und ein Log mit Punkt/Register/Wert. Die Einspeisequote (Register 13088, Vorrang vor der Watt-Grenze) wird beim Sperren jetzt verpflichtend auf 0 gesetzt statt optional übersprungen.
+
 ## [1.0.11] - 2026-11-16
 
 ### Behoben
