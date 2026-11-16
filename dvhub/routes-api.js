@@ -8953,6 +8953,34 @@ export function createApiRoutes(ctx) {
       return json(res, status, payload);
     }
 
+    // --- M14b Feldtest: Abregelung testen (X min) ------------------------
+    // „Negativpreis-" bzw. „Direktvermarkter-Abregelung testen" über GENAU den
+    // echten Ernstfallpfad (priceNegative / setForcedOff) mit selbst-ablaufendem
+    // Lease. Kernlogik in services/curtailment-test.js. GET liefert Status +
+    // 1-s-Protokoll; der STOP-Endpunkt bricht früher ab (das Lease liefe sonst ab).
+    if (url.pathname === '/api/control/curtailment-test' && req.method === 'GET') {
+      if (!ctx.curtailmentTest) return json(res, 503, { ok: false, error: 'curtailment test not available' });
+      const { status, ...payload } = ctx.curtailmentTest.getStatus();
+      return json(res, status, payload);
+    }
+    if (url.pathname === '/api/control/curtailment-test' && req.method === 'POST') {
+      if (!ctx.curtailmentTest) return json(res, 503, { ok: false, error: 'curtailment test not available' });
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const { status, ...payload } = ctx.curtailmentTest.start({
+        mode: String(body.mode || ''),
+        minutes: Number(body.minutes),
+        blockCharge: body.blockCharge === true,
+        actor: actorContext(req),
+      });
+      return json(res, status, payload);
+    }
+    if (url.pathname === '/api/control/curtailment-test/stop' && req.method === 'POST') {
+      if (!ctx.curtailmentTest) return json(res, 503, { ok: false, error: 'curtailment test not available' });
+      const { status, ...payload } = ctx.curtailmentTest.stop({ actor: actorContext(req) });
+      return json(res, status, payload);
+    }
+
     // --- VPN Endpoints ---
     if (url.pathname === '/api/vpn/status' && req.method === 'GET') {
       if (!requirePro(req, res, 'vpn-manager')) return;

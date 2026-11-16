@@ -1181,6 +1181,14 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return null;
   }
 
+  // Feldtest „Akku nicht laden" (M14b): während eines Abregelungs-Tests mit dieser
+  // Option (state.ctrl.curtailmentTest.blockCharge) den Akku anhalten. Selbst-
+  // ablaufend über das Lease (now < until) — endet garantiert mit dem Test.
+  function curtailmentBatteryHold() {
+    const ct = state.ctrl?.curtailmentTest;
+    return !!(ct && ct.active === true && ct.blockCharge === true && now() < ct.until);
+  }
+
   // Regeltakt (Punkt 2): beim aktiven Regeln (DVhub besitzt Forced ODER External EMS) der adaptive Takt 1–5 s aus
   // der gemessenen Antwortzeit (fester sungrow.regulateEveryMs hat Vorrang, wird aber ebenfalls auf 1–5 s geklemmt)
   // — unabhängig vom 5-s-Takt des Aufrufers. Sonst der ruhige Profil-Takt (regulateEveryMs). Wichtig für Forced:
@@ -1461,6 +1469,15 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       logOnce('startup-reset', 'sungrow_ems_startup_reset', { text: 'Sungrow: nach Neustart mit Forced-Merker den Akku-Befehl einmal auf 0xCC zurückgesetzt (Modus 2 bleibt), bevor neu geregelt wird.' });
     } else if (st.startupResetPending && decision.mode === 'self') {
       st.startupResetPending = false; // in Self/Modus 0 ohnehin kein stehengebliebener Befehl mehr
+    }
+    // Feldtest „Akku nicht laden" (services/curtailment-test.js, M14b): während
+    // eines Abregelungs-Tests mit dieser Option den Akku beider WR auf Stopp
+    // (0xCC, Modus 2 bleibt), damit der PV-Überschuss sichtbar abgeregelt wird
+    // (PV deckt nur die Hauslast, der Akku nimmt ihn nicht auf). Nur wenn DVhub
+    // Forced wirklich besitzt — der Split trägt den Stopp an den Slave weiter
+    // (stepSplit: powerW 0 → mk(0) → beide 0xCC). Selbst-ablaufend über das Lease.
+    if (ownsForced && curtailmentBatteryHold()) {
+      decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'curtailment_test_hold' };
     }
     st.decision = { ...decision, at: t, trigger: reason };
     st.selfBridgeSince = 0;

@@ -2230,7 +2230,16 @@ export function createScheduleEvaluator(ctx) {
 
     const npp = cfg.dvControl?.negativePriceProtection;
     const priceNow = ctx.epexNowNext()?.current;
-    const priceNegative = npp?.enabled && priceNow && Number(priceNow.ct_kwh) < 0;
+    // Feldtest „Negativpreis-Abregelung testen (X min)" (services/curtailment-
+    // test.js): ein selbst-ablaufendes Lease macht priceNegative im Regeltakt
+    // wahr — GENAU derselbe Ernstfallpfad wie § 51 bei echt negativem Preis
+    // (Sollwert-Puffer + feedExcessDcPv-Sperre unten). Läuft das Lease ab
+    // (Date.now() >= until), fällt der Test von selbst weg und gibt frei.
+    const curtailTest = state.ctrl.curtailmentTest;
+    const negativePriceTest = curtailTest?.active === true
+      && curtailTest.mode === 'negativePrice'
+      && Date.now() < curtailTest.until;
+    const priceNegative = negativePriceTest || (npp?.enabled && priceNow && Number(priceNow.ct_kwh) < 0);
 
     // --- DC Export Mode: dynamischer Grid Setpoint = -(DC-PV - Puffer) ---
     // Nur fuer DC-gekoppelte PV (MPPT auf DC-Seite). Setzt den Grid Setpoint
@@ -2604,7 +2613,9 @@ export function createScheduleEvaluator(ctx) {
         // steht aber nicht mehr in den Einstellungen und ist kein Vorgabewert.
         // Gedeckelt, weil ein großer Default-Sollwert bei negativem Preis sonst
         // aus dem Ausregeln einen echten Verkauf machen würde.
-        const bufferW = Number(npp.gridSetpointW ?? cfg.schedule?.defaultGridSetpointW ?? -40);
+        // npp?.: der Negativpreis-Test (negativePriceTest) kann priceNegative auch
+        // dann wahr machen, wenn negativePriceProtection in der Config fehlt/aus ist.
+        const bufferW = Number(npp?.gridSetpointW ?? cfg.schedule?.defaultGridSetpointW ?? -40);
         const limit = Number.isFinite(bufferW)
           ? Math.min(0, Math.max(bufferW, CURTAILMENT_BUFFER_LIMIT_W))
           : -40;

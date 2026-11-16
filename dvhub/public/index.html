@@ -330,6 +330,22 @@
           <button id="manualMaxDischargeBtn" class="btn primary sm" type="button">Senden</button>
         </div>
 
+        <!-- M14b Feldtest: Abregelung kontrolliert testen. Laeuft ueber den echten
+             Ernstfallpfad (Negativpreis bzw. Direktvermarkter) mit selbst-ablaufendem
+             Lease (X min) — endet garantiert von selbst. 1-s-Protokoll aus dem Regeltakt. -->
+        <p class="card-title ctrl-section-head" data-leit="adv">Abregelung testen (Feldtest)</p>
+        <div class="ctrl-row" data-leit="adv" title="Dauer des Tests in Minuten. Der Test endet garantiert nach dieser Zeit von selbst (selbst-ablaufendes Lease), auch ohne weitere Aktion.">
+          <label class="ctrl-label">Dauer (min)<input id="curtailTestMinutes" class="input mono" type="number" min="1" max="60" step="1" value="5"></label>
+          <label class="ctrl-label" title="Beide Wechselrichter auf Akku-Stopp (0xCC), damit der PV-Ueberschuss sichtbar abgeregelt wird (PV deckt nur die Hauslast, der Akku nimmt ihn nicht auf)."><input id="curtailTestBlockCharge" type="checkbox"> Akku nicht laden</label>
+        </div>
+        <div class="ctrl-row" data-leit="adv">
+          <button id="curtailTestNegBtn" class="btn primary sm" type="button" title="Negativpreis-Abregelung (&sect;51) ueber den echten Pfad testen: Sollwert-Puffer + Einspeise-Sperre, wie bei echt negativem Preis.">Negativpreis testen</button>
+          <button id="curtailTestDvBtn" class="btn primary sm" type="button" title="Direktvermarkter-Abregelung ueber den echten Pfad testen: forcedOff (DV-Signal), Einspeisung gesperrt.">Direktvermarkter testen</button>
+          <button id="curtailTestStopBtn" class="btn sm" type="button" hidden title="Test sofort beenden (sonst laeuft das Lease nach der eingestellten Zeit von selbst ab).">Test stoppen</button>
+        </div>
+        <div class="meta" id="curtailTestStatus" data-leit="adv" hidden>&mdash;</div>
+        <div class="meta mono" id="curtailTestProtocol" data-leit="adv" hidden></div>
+
         <p class="card-title ctrl-section-head" data-leit="adv">Standards</p>
         <div class="ctrl-defaults" data-leit="adv">
           <label class="ctrl-label">Grid (W)<input id="defaultGridSetpointInput" class="input mono" type="number" value="-40"></label>
@@ -727,7 +743,7 @@
 <script src="/peak-shaving-view.js?v=20261026"></script>
 <script src="/license-banner.js?v=20261105-lizenz-umzug"></script>
 <script src="/grid-connection-view.js?v=20261110-eos-schwelle"></script>
-<script src="/app.js?v=20261110-fable-r2"></script>
+<script src="/app.js?v=20261116-m14b-curtailtest"></script>
 <script src="/leitstand-charts.js?v=20261105-eos-frist"></script>
 <script src="/ev-weekly-editor.js?v=20261111-abfahrtstag3"></script>
 <script src="/ev-once.js?v=20261111-abfahrtstag3"></script>

@@ -3089,6 +3089,133 @@ async function manualWriteMaxDischarge() {
   await requestDashboardRefresh();
 }
 
+/* --- M14b Feldtest: Abregelung testen (X min) --- */
+let curtailTestPollTimer = null;
+let curtailTestLastRaw = null;
+
+function fmtW(v) {
+  if (v == null || !Number.isFinite(Number(v))) return '–';
+  return `${Math.round(Number(v))} W`;
+}
+function fmtSecs(ms) {
+  const s = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  const mm = Math.floor(s / 60); const ss = s % 60;
+  return `${mm}:${String(ss).padStart(2, '0')}`;
+}
+
+async function startCurtailTest(mode) {
+  const minsEl = document.getElementById('curtailTestMinutes');
+  const minutes = Math.round(Number(minsEl?.value));
+  if (!(minutes >= 1 && minutes <= 60)) return setControlMsg('Testdauer 1–60 Minuten.', true);
+  const blockCharge = document.getElementById('curtailTestBlockCharge')?.checked === true;
+  const label = mode === 'negativePrice' ? 'Negativpreis-Abregelung' : 'Direktvermarkter-Abregelung';
+  const go = typeof window !== 'undefined' && typeof window.confirm === 'function'
+    ? window.confirm(`${label} für ${minutes} min testen?\n\nLäuft über den echten Abregel-Pfad${blockCharge ? ' und hält den Akku beider WR an (0xCC)' : ''}. Der Test endet garantiert nach ${minutes} min von selbst (selbst-ablaufendes Lease). Messwerte im 1-Sekunden-Takt werden protokolliert.`)
+    : true;
+  if (!go) return;
+  try {
+    const res = await apiFetch('/api/control/curtailment-test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode, minutes, blockCharge })
+    });
+    const out = await res.json();
+    if (!res.ok || !out.ok) return setControlMsg(`Test fehlgeschlagen: ${out.error || res.status}`, true);
+    setControlMsg(`${label}-Test läuft (${minutes} min)${blockCharge ? ', Akku beider WR auf Stopp' : ''}.`);
+    renderCurtailTest(out.test);
+    startCurtailTestPolling();
+  } catch (e) {
+    setControlMsg(`Test fehlgeschlagen: ${e.message}`, true);
+  }
+}
+
+async function stopCurtailTest() {
+  try {
+    const res = await apiFetch('/api/control/curtailment-test/stop', { method: 'POST' });
+    const out = await res.json();
+    if (!res.ok || !out.ok) return setControlMsg(`Test-Stopp fehlgeschlagen: ${out.error || res.status}`, true);
+    setControlMsg('Abregelungs-Test beendet — Freigabe beim nächsten Takt (~15 s).');
+    renderCurtailTest(out.test);
+  } catch (e) {
+    setControlMsg(`Test-Stopp fehlgeschlagen: ${e.message}`, true);
+  }
+}
+
+function startCurtailTestPolling() {
+  if (curtailTestPollTimer) clearInterval(curtailTestPollTimer);
+  curtailTestPollTimer = setInterval(pollCurtailTest, 1000);
+}
+
+async function pollCurtailTest() {
+  try {
+    const res = await apiFetch('/api/control/curtailment-test');
+    const out = await res.json();
+    if (res.ok && out.ok) renderCurtailTest(out.test);
+    if (!out.test || out.test.active !== true) {
+      if (curtailTestPollTimer) { clearInterval(curtailTestPollTimer); curtailTestPollTimer = null; }
+    }
+  } catch { /* nächster Tick */ }
+}
+
+function renderCurtailTest(test) {
+  curtailTestLastRaw = test;
+  const statusEl = document.getElementById('curtailTestStatus');
+  const protoEl = document.getElementById('curtailTestProtocol');
+  const stopBtn = document.getElementById('curtailTestStopBtn');
+  const negBtn = document.getElementById('curtailTestNegBtn');
+  const dvBtn = document.getElementById('curtailTestDvBtn');
+  if (!statusEl || !protoEl) return;
+  if (!test) {
+    statusEl.hidden = true; protoEl.hidden = true;
+    if (stopBtn) stopBtn.hidden = true;
+    if (negBtn) negBtn.disabled = false;
+    if (dvBtn) dvBtn.disabled = false;
+    return;
+  }
+  const modeLabel = test.mode === 'negativePrice' ? 'Negativpreis' : 'Direktvermarkter';
+  const active = test.active === true;
+  statusEl.hidden = false;
+  if (active) {
+    statusEl.textContent = `Test aktiv: ${modeLabel}${test.blockCharge ? ' · Akku Stopp' : ''} · Restzeit ${fmtSecs(test.remainingMs)} · ${test.sampleCount} Messwerte`;
+  } else {
+    statusEl.textContent = `Test beendet (${modeLabel}${test.stopReason === 'expired' ? ', Zeit abgelaufen' : ', gestoppt'}) · ${test.sampleCount} Messwerte`;
+  }
+  if (stopBtn) stopBtn.hidden = !active;
+  if (negBtn) negBtn.disabled = active;
+  if (dvBtn) dvBtn.disabled = active;
+  // Protokoll: letzter 1-s-Messwert + Abregel-Zustand + Sequenz-Ereignisse.
+  const samples = Array.isArray(test.samples) ? test.samples : [];
+  const last = samples.length ? samples[samples.length - 1] : null;
+  const lines = [];
+  if (last) {
+    lines.push(`Netz ${fmtW(last.gridTotalW)} · PV M ${fmtW(last.pvMasterW)} / S ${fmtW(last.pvSlaveW)} · Akku M ${fmtW(last.battMasterW)} / S ${fmtW(last.battSlaveW)}`);
+    const zust = [];
+    if (last.blocked === true) zust.push('Einspeisung gesperrt');
+    else if (last.blocked === false) zust.push('Einspeisung frei');
+    if (Array.isArray(last.saved) && last.saved.length) zust.push(`gesichert: ${last.saved.join(', ')}`);
+    if (last.forcedOff) zust.push('forcedOff');
+    if (last.negativePriceActive) zust.push('§51 aktiv');
+    if (zust.length) lines.push(zust.join(' · '));
+  }
+  const events = Array.isArray(test.events) ? test.events : [];
+  if (events.length) {
+    const tail = events.slice(-6).map(e => `${(e.ts || '').slice(11, 19)} ${e.event}${e.error ? ` (${e.error})` : ''}`);
+    lines.push('Sequenz: ' + tail.join(' | '));
+  }
+  protoEl.hidden = lines.length === 0;
+  protoEl.textContent = lines.join('\n');
+  protoEl.title = 'Klicken: Rohdaten (JSON) in die Zwischenablage kopieren';
+}
+
+function copyCurtailTestRaw() {
+  if (!curtailTestLastRaw) return;
+  try {
+    const txt = JSON.stringify(curtailTestLastRaw, null, 2);
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(txt);
+    setControlMsg('Test-Protokoll (Rohdaten) in die Zwischenablage kopiert.');
+  } catch { /* ignore */ }
+}
+
 /* --- Schedule --- */
 
 
@@ -4541,6 +4668,13 @@ function initDashboard() {
   document.getElementById('manualGridBtn')?.addEventListener('click', manualWriteGrid);
   document.getElementById('manualChargeBtn')?.addEventListener('click', manualWriteCharge);
   document.getElementById('manualMaxDischargeBtn')?.addEventListener('click', manualWriteMaxDischarge);
+  // M14b Feldtest: Abregelung testen (X min) — echter Pfad, selbst-ablaufendes Lease.
+  document.getElementById('curtailTestNegBtn')?.addEventListener('click', () => startCurtailTest('negativePrice'));
+  document.getElementById('curtailTestDvBtn')?.addEventListener('click', () => startCurtailTest('dv'));
+  document.getElementById('curtailTestStopBtn')?.addEventListener('click', stopCurtailTest);
+  document.getElementById('curtailTestProtocol')?.addEventListener('click', copyCurtailTestRaw);
+  // Laufenden Test nach einem Reload wieder aufgreifen (Status + Protokoll).
+  pollCurtailTest().then(() => { if (curtailTestLastRaw?.active) startCurtailTestPolling(); });
   // T-0118: Max-Discharge readback row -> inline editor (mirrors Min-SOC row).
   document.getElementById('maxDischargeRow')?.addEventListener('click', toggleMaxDischargeEditor);
   document.getElementById('maxDischargeRow')?.addEventListener('keydown', handleMaxDischargeRowKeydown);

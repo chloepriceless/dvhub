@@ -56,6 +56,7 @@ import {
   createMarketAutomationBuilder
 } from './market-automation-builder.js';
 import { createScheduleEvaluator } from './schedule-eval.js';
+import { createCurtailmentTest } from './services/curtailment-test.js';
 import { createEvccIntegration } from './evcc-integration.js';
 import { createPvStringsService } from './services/pv-strings/index.js';
 import {
@@ -1564,6 +1565,17 @@ ctx.sungrowSlaveTransport = (transport.type === 'modbus')
   : null;
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
+// Feldtest-Auslöser „Abregelung testen (X min)" (M14b): über denselben
+// Ernstfallpfad (setForcedOff / priceNegative) mit selbst-ablaufendem Lease.
+// Das 1-s-Protokoll tastet im expireLeaseInterval unten ab (sample()).
+const curtailmentTest = createCurtailmentTest({
+  state,
+  pushLog,
+  getCfg: () => cfg,
+  setForcedOff,
+  clearForcedOff,
+});
+ctx.curtailmentTest = curtailmentTest;
 // Sungrow-EMS (T-0422): Not-Halt nimmt einen von DVhub gesetzten Zwangsbetrieb
 // einmal zurück (services/control-commands.js setEmergencyStop).
 ctx.sungrowEms = scheduler.sungrowEms;
@@ -2886,6 +2898,10 @@ if (IS_RUNTIME_PROCESS) {
   expireLeaseIntervalId = setInterval(() => {
     try { expireLeaseIfNeeded(); }
     catch (err) { pushLog('expire_lease_interval_error', { error: err?.message ?? String(err) }); }
+    // M14b-Feldtest: 1-s-Protokoll aus dem Regeltakt mitschreiben und den Test
+    // bei Lease-Ablauf beenden (selbst-ablaufend, auch ohne weitere Aktion).
+    try { curtailmentTest.sample(); }
+    catch (err) { pushLog('curtailment_test_sample_error', { error: err?.message ?? String(err) }); }
   }, 1000);
   liveTelemetryFlushIntervalId = setInterval(() => {
     try { liveTelemetryBuffer?.flush(); }
