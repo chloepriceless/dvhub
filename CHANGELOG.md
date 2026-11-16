@@ -12,6 +12,18 @@ verweist hierher.
 
 ### Behoben
 
+- **Nativer EOS: PermissionError nach Umstieg auf das Paket-Format (Tester 1.0.10, Pi 4B).** Nach dem
+  Umstieg gehört der EOS-Checkout `/opt/dvhub/eos` root; eine dort liegengebliebene `EOS.config.json`
+  wurde von EOS als Treffer im Arbeitsverzeichnis genommen (weder `EOS_CONFIG_DIR` noch die App-`EOS_DIR`
+  waren gesetzt) und scheiterte beim Autosave/Migrieren jede Minute mit `PermissionError`. Die
+  Provisionierung setzt jetzt immer einen beschreibbaren `EOS_CONFIG_DIR` (XDG `net.akkudoktor.eos`,
+  bzw. `EOS_HOME`) in der eos.service-Unit, legt ihn dem Dienstbenutzer gehörend an und migriert eine
+  liegengebliebene Konfig aus dem Checkout dorthin (sonst defensiv `.bak`). Regressionstest deckt die
+  Fehlerklasse ab.
+- **Update-Seite: Klick bei bereits neuester Version wirkt nicht mehr tot.** Ein Update-Auftrag startete
+  auch dann, wenn schon die neueste Version lief, tat nichts und endete nach ~1 s ohne sichtbare
+  Rückmeldung. DVhub prüft die Zielversion jetzt vor dem Start und meldet „Bereits auf der neuesten
+  Version", ohne einen leeren Auftrag zu starten.
 - **Sungrow zwei WR: PV-Prognose zählte den zweiten WR doppelt (M13, Feldtest).** Sind die PV-Strings im
   Detail-Modus konfiguriert, decken sie bereits beide WR ab — `sungrow.secondInverter.pvKwp` wurde
   trotzdem noch dazugerechnet (z. B. 24,2 + 11,88 = 36,08 statt 24,2 kWp, 50 % zu hoch). DVhub addiert
