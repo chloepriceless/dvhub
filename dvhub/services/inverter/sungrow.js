@@ -1932,6 +1932,17 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     });
   }
 
+  // === Schreibklassen-Matrix im Not-Halt (C3.2, Christin 16.11.2026) ==========================================
+  // Entscheidung festgehalten: Der Not-Halt sperrt DVhubs EIGENE Regel-Writes (writeReg ohne neutralize wirft
+  // emergency_stop_active). AUSDRÜCKLICHE Ausnahme — genau EINE Neutralisierung über den Außen-Pfad:
+  //   • releaseControl (geordnetes Beenden, SIGTERM/Update, ExecStopPost des Not-Stop-Skripts) und
+  //   • neutralize (Box-Watchdog)
+  // dürfen den Forced-WR EINMAL sicher zurücknehmen (Modus 0 / Befehl 0xCC, neutralize:true). Grund: der
+  // Forced-WR hat KEINEN geräteeigenen Rückfall — ohne diese Ausnahme hinge er im Zwangsmodus. „Einmal" ist durch
+  // den Besitz-Merker begrenzt (nach der Rücknahme owns=null → ein zweiter Aufruf ist ein No-op). Abgesichert in
+  // test/sungrow-ems.test.js („P5 Schreibklassen-Matrix …"). KEINE weitere Write-Klasse darf im Not-Halt schreiben.
+  // ===========================================================================================================
+
   /** Slave einmal sicher in Self-consumption (Not-Halt, Split-Abbruch, Rückzug). Schreibt auch im Not-Halt. */
   function neutralize(reason = 'neutralize') {
     return serial(async () => {

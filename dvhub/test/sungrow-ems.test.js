@@ -254,6 +254,49 @@ test('Absicherung C: releaseControl schreibt auch im Not-Halt (sichere Rücknahm
   assert.equal(r.image.holding.get(CMD), EMS_CMD.STOP);
 });
 
+// P5 / C3.2 Schreibklassen-Matrix (Christin 16.11.2026): Der Not-Halt sperrt DVhubs EIGENE Regel-Writes; aber
+// releaseControl (geordnetes Beenden) und der Box-Watchdog (neutralize) dürfen den Forced-WR EINMAL neutralisieren
+// — der Forced-WR hat keinen geräteeigenen Rückfall, sonst hinge er im Zwangsmodus. Das ist eine AUSDRÜCKLICHE,
+// benannte Ausnahme. Dieser Test nagelt beide Seiten der Matrix fest (keine Verhaltensänderung).
+test('P5 Schreibklassen-Matrix: Not-Halt sperrt eigene Writes, erlaubt aber releaseControl — genau EINE Neutralisierung', async () => {
+  const r = rig({ controlMode: 'forced' });
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // Forced, owns
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  r.state.ctrl.discretionaryWritesPaused = true; // Not-Halt aktiv
+  r.t.writes.length = 0;
+
+  // (1) DVhub-eigener Regel-Write ist im Not-Halt gesperrt — keine Modbus-Anfrage.
+  const regel = await r.ems.applySetpoint(-3000, 'rule:abend');
+  assert.notEqual(regel.ok, true, 'eigener Regel-Write muss im Not-Halt scheitern');
+  assert.equal(r.t.writes.length, 0, 'kein eigener Write im Not-Halt');
+
+  // (2) releaseControl (Beenden) DARF neutralisieren — die benannte Ausnahme.
+  const rel = await r.ems.releaseControl('shutdown');
+  assert.equal(rel.ok, true, JSON.stringify(rel));
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.SELF, 'Modus 0 (neutralisiert)');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.STOP, 'Befehl 0xCC');
+  assert.equal(r.state.ctrl.sungrowEms.owns, false, 'Besitz abgegeben');
+  const writesAfterRelease = r.t.writes.length;
+  assert.ok(writesAfterRelease > 0, 'die Neutralisierung schreibt');
+
+  // (3) auf EINEN neutralisierenden Write begrenzt: ein zweites releaseControl schreibt nichts mehr.
+  r.t.writes.length = 0;
+  const again = await r.ems.releaseControl('shutdown');
+  assert.equal(again.skipped, true, 'zweites releaseControl ist ein No-op (Besitz bereits abgegeben)');
+  assert.equal(r.t.writes.length, 0, 'keine zweite Neutralisierung');
+});
+
+test('P5 Schreibklassen-Matrix: der Box-Watchdog (neutralize) darf im Not-Halt ebenfalls einmal neutralisieren', async () => {
+  const r = rig({ controlMode: 'forced' });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  r.state.ctrl.discretionaryWritesPaused = true;
+  r.t.writes.length = 0;
+  const res = await r.ems.neutralize('watchdog');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.SELF, 'auch der Watchdog-Pfad neutralisiert im Not-Halt');
+  assert.ok(r.t.writes.length > 0, 'die Watchdog-Neutralisierung schreibt');
+});
+
 test('Absicherung C: releaseControl nimmt im Split BEIDE WR zurück (Slave 0xCC, Master Modus 0)', async () => {
   const r = splitRig();
   await r.ems.applySetpoint(-6000, 'rule:abend'); // Split-Entladen, beide gefahren
