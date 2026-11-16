@@ -356,9 +356,30 @@ export function createOptimizerService(ctx) {
     // Auch ohne Meldung von EOS (ems.notify_url gibt es nur auf derselben Box).
     onSolution: () => ctx.eosMonitor?.notifySolutionReady?.(),
     eosStatus: () => ctx.eosMonitor?.status?.() || null,
+    // Gürtel A: Scheitert ein Lauf mit einem heilbaren Datenmangel-Fehler
+    // (serve hat seinen RAM-Zustand verloren), fährt der Trigger einmal diesen
+    // vollen Reconcile (config-sync + Prognose + SoC per Bridge-Tick) und danach
+    // GENAU einen Re-Trigger — statt bis zum nächsten Boundary-Tick zu warten.
+    recoverEosState: (reason) => recoverEosState(reason),
     state,
     pushLog,
   });
+
+  // Gürtel A: Voller Reconcile außer der Reihe + genau ein Re-Trigger. Der
+  // Reconcile reist über denselben Bridge-Tick wie der Neustart-Watchdog
+  // (beforePush=config-sync, push, afterPush). Danach ein Re-Trigger per
+  // trigger() (nicht kick()): kick() wäre durch EOS_RUN_KICK_MIN_GAP_MS gegen
+  // den gerade gescheiterten Lauf gesperrt und täte nichts; die Schleifen-
+  // sicherung übernimmt der Cooldown im Trigger. Wirft nie.
+  async function recoverEosState(reason) {
+    const bridge = ctx.eosForecastBridge;
+    if (bridge && typeof bridge.reconcile === 'function') {
+      try { await bridge.reconcile(); }
+      catch (err) { pushLog('eos_run_self_heal', { reason, phase: 'reconcile', error: err?.message || String(err) }); }
+    }
+    try { await eosRunTrigger.trigger('recover:data_gap'); }
+    catch (err) { pushLog('eos_run_self_heal', { reason, phase: 'retrigger', error: err?.message || String(err) }); }
+  }
 
   // Zeitpunkt des ersten erfolgreichen Prognose-Pushs dieses Prozesses. Eine
   // EOS-Loesung, die davor gerechnet wurde, stammt aus EOS' eigener Datenbank
