@@ -10,6 +10,8 @@ verweist hierher.
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-11-16
+
 ### Behoben
 
 - **Nativer EOS: PermissionError nach Umstieg auf das Paket-Format (Tester 1.0.10, Pi 4B).** Nach dem

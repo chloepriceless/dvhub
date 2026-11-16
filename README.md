@@ -36,7 +36,7 @@ Linux-Hardware, ohne Cloud-Zwang. Getestet mit Victron und LUOX Energy (ehem. Lu
 
 | | |
 |---|---|
-| **Status** | Version 1.0.10 „Sushi“ — Änderungen in [`CHANGELOG.md`](CHANGELOG.md) |
+| **Status** | Version 1.0.11 — Änderungen in [`CHANGELOG.md`](CHANGELOG.md) |
 | **Getestet mit** | LUOX Energy · Victron Ekrano-GX / Cerbo-GX · Fronius AC-PV |
 | **Plattform** | Debian, Ubuntu, Raspberry Pi OS (Node.js 22, PostgreSQL) · Docker (amd64/arm64) |
 | **Lizenz** | Energy Community License (ECL-1.0) · Pro per Lizenzschlüssel · [Drittlizenzen](THIRD-PARTY-LICENSES.md) |
