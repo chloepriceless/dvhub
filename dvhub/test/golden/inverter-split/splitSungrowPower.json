@@ -1,0 +1,4031 @@
+{
+  "function": "splitSungrowPower",
+  "schema": "dvhub.golden-split/1",
+  "generator": "test/golden/generate-split-vectors.mjs",
+  "count": 183,
+  "vectors": [
+    {
+      "name": "slave_offline_alles_master",
+      "input": {
+        "args": [
+          {
+            "powerW": 4000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 4000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "ohne_slave_null",
+      "input": {
+        "args": [
+          {
+            "powerW": 4000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          null
+        ]
+      },
+      "output": {
+        "masterW": 4000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "ueberlauf_master_an_grenze",
+      "input": {
+        "args": [
+          {
+            "powerW": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 4000
+      }
+    },
+    {
+      "name": "raster_0",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_1",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_2",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_3",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_4",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_5",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_6",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_7",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_8",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_9",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_10",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_11",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_12",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_13",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_14",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_15",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_16",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_17",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_18",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_19",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_20",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_21",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_22",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_23",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_24",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_25",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_26",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_27",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_28",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_29",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_30",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_31",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_32",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_33",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_34",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_35",
+      "input": {
+        "args": [
+          {
+            "powerW": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_36",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_37",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_38",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_39",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_40",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 500
+      }
+    },
+    {
+      "name": "raster_41",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 500
+      }
+    },
+    {
+      "name": "raster_42",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 500
+      }
+    },
+    {
+      "name": "raster_43",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 500
+      }
+    },
+    {
+      "name": "raster_44",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 500
+      }
+    },
+    {
+      "name": "raster_45",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 500
+      }
+    },
+    {
+      "name": "raster_46",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 500
+      }
+    },
+    {
+      "name": "raster_47",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 500
+      }
+    },
+    {
+      "name": "raster_48",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 500,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_49",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 500,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_50",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 500,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_51",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 500,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_52",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 250,
+        "slaveW": 250
+      }
+    },
+    {
+      "name": "raster_53",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 250,
+        "slaveW": 250
+      }
+    },
+    {
+      "name": "raster_54",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 450,
+        "slaveW": 50
+      }
+    },
+    {
+      "name": "raster_55",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 50,
+        "slaveW": 450
+      }
+    },
+    {
+      "name": "raster_56",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 188,
+        "slaveW": 312
+      }
+    },
+    {
+      "name": "raster_57",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 250,
+        "slaveW": 250
+      }
+    },
+    {
+      "name": "raster_58",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 450,
+        "slaveW": 50
+      }
+    },
+    {
+      "name": "raster_59",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 50,
+        "slaveW": 450
+      }
+    },
+    {
+      "name": "raster_60",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 500,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_61",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 500,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_62",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 500,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_63",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 500,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_64",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 313,
+        "slaveW": 187
+      }
+    },
+    {
+      "name": "raster_65",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 250,
+        "slaveW": 250
+      }
+    },
+    {
+      "name": "raster_66",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 450,
+        "slaveW": 50
+      }
+    },
+    {
+      "name": "raster_67",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 50,
+        "slaveW": 450
+      }
+    },
+    {
+      "name": "raster_68",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 250,
+        "slaveW": 250
+      }
+    },
+    {
+      "name": "raster_69",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 250,
+        "slaveW": 250
+      }
+    },
+    {
+      "name": "raster_70",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 450,
+        "slaveW": 50
+      }
+    },
+    {
+      "name": "raster_71",
+      "input": {
+        "args": [
+          {
+            "powerW": 500
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 50,
+        "slaveW": 450
+      }
+    },
+    {
+      "name": "raster_72",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_73",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_74",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_75",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_76",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_77",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_78",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_79",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_80",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_81",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_82",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_83",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_84",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_85",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_86",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_87",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_88",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 1500,
+        "slaveW": 1500
+      }
+    },
+    {
+      "name": "raster_89",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 1500,
+        "slaveW": 1500
+      }
+    },
+    {
+      "name": "raster_90",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 2700,
+        "slaveW": 300
+      }
+    },
+    {
+      "name": "raster_91",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 300,
+        "slaveW": 2700
+      }
+    },
+    {
+      "name": "raster_92",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 1125,
+        "slaveW": 1875
+      }
+    },
+    {
+      "name": "raster_93",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 1500,
+        "slaveW": 1500
+      }
+    },
+    {
+      "name": "raster_94",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 2700,
+        "slaveW": 300
+      }
+    },
+    {
+      "name": "raster_95",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 300,
+        "slaveW": 2700
+      }
+    },
+    {
+      "name": "raster_96",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_97",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_98",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_99",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_100",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 1875,
+        "slaveW": 1125
+      }
+    },
+    {
+      "name": "raster_101",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 1500,
+        "slaveW": 1500
+      }
+    },
+    {
+      "name": "raster_102",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 2700,
+        "slaveW": 300
+      }
+    },
+    {
+      "name": "raster_103",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 300,
+        "slaveW": 2700
+      }
+    },
+    {
+      "name": "raster_104",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 1500,
+        "slaveW": 1500
+      }
+    },
+    {
+      "name": "raster_105",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 1500,
+        "slaveW": 1500
+      }
+    },
+    {
+      "name": "raster_106",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 2700,
+        "slaveW": 300
+      }
+    },
+    {
+      "name": "raster_107",
+      "input": {
+        "args": [
+          {
+            "powerW": 3000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 300,
+        "slaveW": 2700
+      }
+    },
+    {
+      "name": "raster_108",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_109",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_110",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_111",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_112",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_113",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_114",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_115",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_116",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_117",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_118",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_119",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_120",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_121",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_122",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_123",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_124",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_125",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_126",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_127",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_128",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_129",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_130",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_131",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_132",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_133",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_134",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_135",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_136",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_137",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_138",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_139",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_140",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 4000,
+        "slaveW": 4000
+      }
+    },
+    {
+      "name": "raster_141",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 4000,
+        "slaveW": 4000
+      }
+    },
+    {
+      "name": "raster_142",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_143",
+      "input": {
+        "args": [
+          {
+            "powerW": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_144",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_145",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_146",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_147",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_148",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_149",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_150",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_151",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_152",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_153",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_154",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_155",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 0,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_156",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_157",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_158",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_159",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_160",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_161",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_162",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_163",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_164",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_165",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_166",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_167",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 3000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_168",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 0,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_169",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 0,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_170",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 0,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_171",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 0,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 0
+      }
+    },
+    {
+      "name": "raster_172",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 3000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_173",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 3000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_174",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 3000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_175",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 3000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 3000
+      }
+    },
+    {
+      "name": "raster_176",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          },
+          {
+            "maxW": 5000,
+            "weight": 0
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_177",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          },
+          {
+            "maxW": 5000,
+            "weight": 8000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_178",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 5000
+      }
+    },
+    {
+      "name": "raster_179",
+      "input": {
+        "args": [
+          {
+            "powerW": 11000
+          },
+          {
+            "maxW": 5000,
+            "weight": 1000
+          },
+          {
+            "maxW": 5000,
+            "weight": 9000
+          }
+        ]
+      },
+      "output": {
+        "masterW": 5000,
+        "slaveW": 5000
+      }
+    }
+  ]
+}
