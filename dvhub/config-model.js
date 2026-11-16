@@ -7116,6 +7116,21 @@ export function loadConfigFile(configPath) {
     if (!parseError) parseError = `manufacturer profile error: ${error.message}`;
   }
 
+  // C2 (Christin 16.11.2026): Bei ungültiger Konfiguration (kaputte config.json ODER kaputtes/fehlendes
+  // Herstellerprofil) trägt die WIRKSAME Config Default-Register (z. B. Victron 2716) — ein Schreibpfad würde dann
+  // an ein möglicherweise FREMDES Gerät schreiben. Deshalb die Gültigkeit AN DER wirksamen Config markieren, damit
+  // der zentrale Schreib-Chokepoint (schedule-eval) jeden Hardware-Write hart sperrt und laut meldet. Nur bei
+  // valid:false gesetzt — eine gültige Config bleibt unverändert (rückwärtskompatibel, kein Feld).
+  if (valid !== true && effectiveConfig && typeof effectiveConfig === 'object') {
+    effectiveConfig.writeSafety = {
+      ok: false,
+      reason: broken ? 'config_broken'
+        : manufacturerProfileError ? 'manufacturer_profile_error'
+          : 'config_invalid',
+      manufacturer
+    };
+  }
+
   return {
     path: configPath,
     exists,

@@ -971,6 +971,20 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Not-Halt vor JEDEM Write prüfen: ein Takt, der vor dem Eintritt begann, darf danach nichts mehr setzen.
   // Nur die eine Rücknahme (neutralize) darf im Not-Halt schreiben.
   async function writeReg(conf, address, value, { neutralize = false, claimMode = null, fc = 6 } = {}) {
+    // C2 (Christin 16.11.2026): ungültige Konfiguration (kaputtes/fehlendes Herstellerprofil → cfg.writeSafety.ok
+    // === false) sperrt JEDEN Aktuator-Write — auch neutralize. Die wirksame Config trägt dann Default-Register;
+    // ein Write ginge an ein möglicherweise fremdes Gerät. Lauter Alarm einmal je Grund, dann KEIN Write.
+    const ws = getCfg()?.writeSafety;
+    if (ws && ws.ok === false) {
+      if (st._writeUnsafeAlarm !== (ws.reason || 'config_invalid')) {
+        st._writeUnsafeAlarm = ws.reason || 'config_invalid';
+        pushLog('sungrow_write_blocked_config_unsafe', { reason: ws.reason || 'config_invalid', manufacturer: ws.manufacturer ?? null }, 'error');
+      }
+      const err = new Error(`config_unsafe_${ws.reason || 'config_invalid'}`);
+      err.code = 'config_unsafe';
+      throw err;
+    }
+    if (st._writeUnsafeAlarm) st._writeUnsafeAlarm = null;
     if (state.ctrl?.discretionaryWritesPaused && !neutralize) {
       const err = new Error('emergency_stop_active');
       err.code = 'emergency_stop_active';

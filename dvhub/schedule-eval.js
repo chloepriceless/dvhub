@@ -233,7 +233,31 @@ export function createScheduleEvaluator(ctx) {
   // Geräte-Tor (Profil identify.requiredForWrites): geschrieben wird erst, wenn
   // polling.js das Gerät erkannt hat und es unterstützt ist — ein falsches oder
   // unbekanntes Gerät hinter derselben Adresse bekommt keinen einzigen Write.
+  // === C2 (Christin 16.11.2026): hartes Schreib-Tor bei ungültiger Konfiguration =============================
+  // Kaputte/fehlende Herstellerprofil-Datei (oder kaputte config.json) → die wirksame Config trägt Default-Register
+  // (z. B. Victron 2716); ein Write ginge an ein möglicherweise FREMDES Gerät. loadConfigFile markiert das mit
+  // cfg.writeSafety.ok === false. Dann schreibt KEIN Pfad mehr (Chokepoint, Keepalive/2716, DV-Abregelung,
+  // Nulleinspeisung, Sungrow-Aktuator) — die Anlage bleibt ungeregelt, bis jemand eingreift (gewollt, sicherer).
+  // Dazu ein LAUTER Alarm, einmal je Grund (nicht jede ~15-s-Runde fluten); beim Erholen wird der Alarm neu scharf.
+  function writeConfigUnsafeReason(cfg, source = null) {
+    const ws = cfg?.writeSafety;
+    if (!ws || ws.ok !== false) {
+      if (state.ctrl?._writeUnsafeAlarm) state.ctrl._writeUnsafeAlarm = null;
+      return null;
+    }
+    const reason = ws.reason || 'config_invalid';
+    if (state.ctrl && state.ctrl._writeUnsafeAlarm !== reason) {
+      state.ctrl._writeUnsafeAlarm = reason;
+      pushLog('control_write_blocked_config_unsafe',
+        { reason, manufacturer: ws.manufacturer ?? null, source }, 'error');
+    }
+    return `config_unsafe_${reason}`;
+  }
+
   function deviceWriteGate(cfg) {
+    // C2 zuerst: ungültige Konfiguration sperrt ALLE Gerätewrites, vor jeder herstellerspezifischen Prüfung.
+    const unsafe = writeConfigUnsafeReason(cfg);
+    if (unsafe) return unsafe;
     if (cfg?.identify?.requiredForWrites !== true) return null;
     const d = state.victron?.device;
     // Erkannt gilt nur für die Verbindung, an der erkannt wurde — nach einem
@@ -889,6 +913,8 @@ export function createScheduleEvaluator(ctx) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
     if (!dc) return;
+    // C2: ungültige Konfiguration → kein Abregel-/Freigabe-Write (eigener Schreibweg, umgeht deviceWriteGate).
+    if (writeConfigUnsafeReason(cfg, reason)) return;
     // Not-Halt: nur die eine Freigabe (notHaltDvDecision) und Sperren einer
     // weiterlaufenden Pflicht-Klasse; alles andere schreibt nichts.
     if (state.ctrl.discretionaryWritesPaused) {
@@ -2740,6 +2766,8 @@ export function createScheduleEvaluator(ctx) {
       const rvrtConf = cfg.controlWrite?.wMaxLimPctRvrtTms;
       const outConf = cfg.controlWrite?.outWRte;
       const zfi = zfiState();
+      // C2: ungültige Konfiguration → kein Nulleinspeisungs-Write (eigener Schreibweg, umgeht deviceWriteGate).
+      if (writeConfigUnsafeReason(cfg, 'zero_feed_in')) return;
       // Profil ohne Feature / Punkte (noch) nicht per SunSpec-Scan aufgelöst →
       // still bleiben. Ein am Gerät stehender Deckel verfällt über RvrtTms.
       if (!zc?.enabled || transport.type !== 'modbus') return;
