@@ -12,6 +12,12 @@ verweist hierher.
 
 ### Behoben
 
+- **Sungrow zwei WR: PV-Prognose zählte den zweiten WR doppelt (M13, Feldtest).** Sind die PV-Strings im
+  Detail-Modus konfiguriert, decken sie bereits beide WR ab — `sungrow.secondInverter.pvKwp` wurde
+  trotzdem noch dazugerechnet (z. B. 24,2 + 11,88 = 36,08 statt 24,2 kWp, 50 % zu hoch). DVhub addiert
+  den zweiten WR jetzt nur noch im einfachen/Standard-Modus. Zusätzlich nutzt Forecast.Solar im
+  Detail-Modus die Neigung und Ausrichtung des größten Strings statt pauschal Süd (35°/180°), der
+  Open-Meteo-Log zeigt die wirklich gerechnete Summe, und der Feld-Hilfetext erklärt die Nicht-Addition.
 - **Sungrow zwei WR: Last 0 bei Netzbezug deckelt den Sollwert nicht mehr auf 0.** Eine Hauslast von 0 W
   bei nennenswertem Netzbezug ist unplausibel (sie entsteht kurz, während der Master-Akku umschaltet oder
   ein Slave-Wert fehlt). DVhub behandelt sie jetzt als unbekannt (das Netzlade-Tor lehnt dann ab statt auf
