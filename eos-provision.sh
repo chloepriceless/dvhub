@@ -47,6 +47,17 @@ EOS_PORT="${EOS_PORT:-8503}"
 # (~/.local/share/net.akkudoktor.eos) wie bisher. Eine ZWEITE Instanz braucht
 # ihn zwingend — sonst teilen sich beide Konfiguration und Messreihen.
 EOS_HOME="${EOS_HOME:-}"
+# Beschreibbarer Konfig-Ordner fuer EOS (EOS.config.json; Autosave/Migration).
+# OHNE ihn nimmt EOS beim Start die EOS.config.json aus seinem Arbeitsverzeichnis
+# (= root-eigener Checkout $EOS_DIR) oder faellt bei leerem XDG-Ordner ebenfalls
+# dorthin zurueck und scheitert jede Minute mit PermissionError (Tester-Fund
+# 1.0.10, Umstieg mit Alt-Konfig im Checkout). Darum setzen wir ihn IMMER
+# explizit in der Unit und legen ihn beschreibbar fuer den Dienstbenutzer an.
+# Default = genau der XDG-Pfad, den EOS sonst selbst waehlt (user_config_dir
+# "net.akkudoktor.eos"); mit EOS_HOME liegt die Konfig wie die Daten dort.
+_eos_user_home="$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6 || true)"
+[[ -n "$_eos_user_home" ]] || _eos_user_home="/home/$SERVICE_USER"
+EOS_CONFIG_DIR="${EOS_CONFIG_DIR:-${EOS_HOME:-$_eos_user_home/.config/net.akkudoktor.eos}}"
 # Betreiber-Einstellungen fuer EOS (z.B. EOS_INVERTER_EFF_CURVE). Die Unit wird
 # bei jeder Provisionierung neu geschrieben; was dort von Hand ergaenzt wurde,
 # ging bisher dabei verloren. Diese Datei bleibt stehen.
@@ -560,6 +571,31 @@ if [[ -n "$EOS_HOME" ]]; then
   chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_HOME"
 fi
 
+# Konfig-Ordner beschreibbar fuer den Dienstbenutzer anlegen. Er MUSS existieren,
+# sonst ueberspringt EOS Schritt 1 (EOS_CONFIG_DIR) und faellt auf das
+# Arbeitsverzeichnis (root-eigener Checkout) zurueck → PermissionError.
+mkdir -p "$EOS_CONFIG_DIR"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$EOS_CONFIG_DIR"
+
+# Alte EOS.config.json aus dem Checkout raeumen (Tester-Fund 1.0.10): nach dem
+# Umstieg gehoert $EOS_DIR root, eine dort liegengebliebene Konfig wuerde beim
+# Start als CWD-Treffer genommen und beim Autosave/Migrieren mit PermissionError
+# scheitern. In den beschreibbaren Konfig-Ordner verschieben, falls dort noch
+# keine liegt; sonst beiseite legen (nicht hart loeschen — defensiv).
+_eos_stray_cfg="$EOS_DIR/EOS.config.json"
+if [[ -f "$_eos_stray_cfg" ]]; then
+  if [[ "$(cd "$EOS_DIR" 2>/dev/null && pwd -P)" == "$(cd "$EOS_CONFIG_DIR" 2>/dev/null && pwd -P)" ]]; then
+    : # Konfig-Ordner IST das Checkout-Dir (ungewoehnlich) — nichts zu verschieben
+  elif [[ ! -f "$EOS_CONFIG_DIR/EOS.config.json" ]]; then
+    if mv "$_eos_stray_cfg" "$EOS_CONFIG_DIR/EOS.config.json" 2>/dev/null; then
+      chown "$SERVICE_USER:$SERVICE_USER" "$EOS_CONFIG_DIR/EOS.config.json" 2>/dev/null || true
+      echo "  EOS: alte EOS.config.json aus $EOS_DIR nach $EOS_CONFIG_DIR verschoben"
+    fi
+  elif mv "$_eos_stray_cfg" "$_eos_stray_cfg.pre-$(date +%Y%m%d-%H%M%S).bak" 2>/dev/null; then
+    echo "  EOS: alte EOS.config.json in $EOS_DIR beiseite gelegt (Konfig existiert bereits in $EOS_CONFIG_DIR)"
+  fi
+fi
+
 # ── Rust-Kern (akkudoktoreos-native) ────────────────────────────────────────
 # DVhub liefert DVhub-EOS immer mit aktivem Rust-Kern aus (Christin 11.11.2026).
 # Das Wheel kommt als Release-Asset vom Fork-Tag; eos-version.env pinnt
@@ -731,6 +767,10 @@ EnvironmentFile=-$EOS_ENV_FILE
 Nice=10
 CPUWeight=20
 ${EOS_CPU_QUOTA:+CPUQuota=$EOS_CPU_QUOTA}
+# Beschreibbarer Konfig-Ordner (EOS.config.json). IMMER gesetzt, sonst nimmt EOS
+# die Datei aus dem root-eigenen Arbeitsverzeichnis → PermissionError beim
+# Autosave/Migrieren (Tester-Fund 1.0.10). Hoechste Prioritaet in EOS' Suche.
+Environment=EOS_CONFIG_DIR=$EOS_CONFIG_DIR
 ${EOS_HOME:+Environment=EOS_DIR=$EOS_HOME}
 Restart=on-failure
 RestartSec=5

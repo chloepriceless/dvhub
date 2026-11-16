@@ -16,6 +16,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertWritableConfigDir, assertNoStrayConfigInCheckout, unitEnv } from './helpers/eos-unit.js';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'eos-provision.sh');
 const GIT_ENV = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
@@ -336,5 +337,59 @@ test('zweite Sicherung im selben Lauf überschreibt den Patch nicht', () => {
     const patch = readFileSync(join(s.dir, 'data', 'eos-backups', '20261025-120000', 'local-changes.patch'), 'utf8');
     assert.match(patch, /lokaler Patch/);
     assert.equal(readFileSync(join(s.dir, 'data', 'eos-backups', '20261025-120000', 'files', 'neu.py'), 'utf8'), 'lokal, im Weg\n');
+  } finally { s.cleanup(); }
+});
+
+// ── Fehlerklasse: Native-Install/Umstieg Permission- und Config-Pfad-Fallen ──
+// Tester-Fund 1.0.10 (Pi 4B, Debian 13): nach dem Umstieg gehört der Checkout
+// root, dort lag eine Alt-EOS.config.json. eos.service startet mit
+// WorkingDirectory=<Checkout> als Dienstbenutzer, ohne EOS_CONFIG_DIR → EOS
+// nimmt die CWD-Datei und scheitert jede Minute mit PermissionError.
+// Diese Tests stellen genau das nach und schlagen gegen den Stand VOR dem Fix
+// fehl (kein EOS_CONFIG_DIR in der Unit, Alt-Datei bleibt im Checkout liegen).
+test('Umstieg: Alt-Konfig im root-eigenen Checkout wird migriert, Unit setzt beschreibbaren EOS_CONFIG_DIR', () => {
+  const s = setup();
+  try {
+    // 1. Erstinstallation (Checkout entsteht, gehört via faked chown „root").
+    assert.equal(s.run('v1').status, 0);
+    // 2. Tester-Lage nachstellen: liegengebliebene Alt-Konfig im Checkout (= CWD).
+    const stray = join(s.eosDir, 'EOS.config.json');
+    const strayBody = '{"general":{"version":"0.0.1-alt"}}';
+    writeFileSync(stray, strayBody);
+    // 3. Erneute Provisionierung (gleicher Pin → Checkout bleibt, Datei ist untracked).
+    assert.equal(s.run('v1').status, 0, 'zweiter Lauf fehlerfrei');
+    const unit = readFileSync(join(s.dir, 'eos.service'), 'utf8');
+    // (a) Unit setzt EOS_CONFIG_DIR auf ein beschreibbares Dir, NICHT den Checkout.
+    const cfgDir = assertWritableConfigDir(unit, { notEqualTo: s.eosDir });
+    // (b) Alt-Datei ist aus dem Checkout verschwunden und migriert.
+    assertNoStrayConfigInCheckout(s.eosDir);
+    assert.ok(existsSync(join(cfgDir, 'EOS.config.json')), 'Alt-Konfig wurde in den Config-Ordner migriert');
+    assert.equal(readFileSync(join(cfgDir, 'EOS.config.json'), 'utf8'), strayBody, 'Inhalt unverändert übernommen');
+  } finally { s.cleanup(); }
+});
+
+test('frische Installation ohne Alt-Konfig: Unit setzt trotzdem beschreibbaren EOS_CONFIG_DIR, Ordner existiert', () => {
+  const s = setup();
+  try {
+    assert.equal(s.run('v1').status, 0);
+    const unit = readFileSync(join(s.dir, 'eos.service'), 'utf8');
+    assertWritableConfigDir(unit, { notEqualTo: s.eosDir });
+    assertNoStrayConfigInCheckout(s.eosDir);
+  } finally { s.cleanup(); }
+});
+
+test('Standard-Install ohne EOS_HOME: EOS_CONFIG_DIR gesetzt + angelegt, keine App-EOS_DIR', () => {
+  const s = setup();
+  try {
+    // getent fehlt auf dem Test-Host (macOS) → Default /home/dvhub/.config wäre
+    // nicht anlegbar; darum den beschreibbaren Pfad explizit vorgeben (so wie ihn
+    // ein Betreiber per Env setzen könnte). EOS_HOME leer = Standard-Install.
+    const cfg = join(s.dir, 'xdg-cfg', 'net.akkudoktor.eos');
+    assert.equal(s.run('v1', { EOS_HOME: '', EOS_CONFIG_DIR: cfg }).status, 0);
+    const unit = readFileSync(join(s.dir, 'eos.service'), 'utf8');
+    assert.equal(unitEnv(unit, 'EOS_CONFIG_DIR'), cfg, 'übergebener Config-Dir landet in der Unit');
+    assert.ok(!/^Environment=EOS_DIR=/m.test(unit), 'ohne EOS_HOME keine App-EOS_DIR-Zeile (zweite Instanz unberührt)');
+    assert.ok(existsSync(cfg), 'Config-Dir wurde angelegt');
+    assertWritableConfigDir(unit, { notEqualTo: s.eosDir });
   } finally { s.cleanup(); }
 });

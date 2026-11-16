@@ -147,6 +147,33 @@ describe('Paket-Box: Update über dvhub-release', () => {
     } finally { h.cleanup(); }
   });
 
+  it('apply ohne verfügbares Update (schon neueste Version) startet KEINEN Job, meldet noop', async () => {
+    // Tester-Fund 1.0.10: Klick auf Update obwohl neueste Version läuft → Job
+    // startete, endete nach ~1 s ohne sichtbare Rückmeldung. Jetzt: klare noop.
+    const same = { ...CHECK, current: { version: '1.0.10', git_sha: SHA, channel: 'stable' }, latest: { ...CHECK.latest, version: '1.0.10' }, updateAvailable: false };
+    const h = harness({ channel: 'stable', release: { version: '1.0.10' }, helper: { check: same, install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/apply', {});
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.equal(r.payload.ok, true);
+      assert.equal(r.payload.noop, true, 'noop-Flag muss gesetzt sein');
+      assert.match(r.payload.message, /neuesten Version/i);
+      assert.ok(!h.calls.some((c) => c.includes(' install ')), `kein Install-Job: ${h.calls.join('\n')}`);
+      assert.ok(h.logs.some((l) => l.event === 'update_apply_noop'), 'noop protokolliert');
+    } finally { h.cleanup(); }
+  });
+
+  it('apply mit gezielter, bereits installierter Version meldet ebenfalls noop (kein Job)', async () => {
+    const same = { ...CHECK, current: { version: '1.0.10', git_sha: SHA, channel: 'stable' }, latest: { ...CHECK.latest, version: '1.0.10' } };
+    const h = harness({ channel: 'stable', release: { version: '1.0.10' }, helper: { check: same, install: { ok: true, started: true } } });
+    try {
+      const r = await h.call('POST', '/api/admin/update/apply', { version: '1.0.10' });
+      assert.equal(r.code, 200, JSON.stringify(r.payload));
+      assert.equal(r.payload.noop, true);
+      assert.ok(!h.calls.some((c) => c.includes(' install ')), `kein Install-Job: ${h.calls.join('\n')}`);
+    } finally { h.cleanup(); }
+  });
+
   it('läuft schon ein Auftrag (Exit 4), antwortet apply mit 409', async () => {
     const busy = Object.assign(new Error('Command failed'), { code: 4, stderr: 'dvhub-release: ein anderer Update-Auftrag läuft bereits\n' });
     const h = harness({ helper: { install: busy } });

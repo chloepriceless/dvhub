@@ -842,11 +842,28 @@ export function createAdminRoutes(deps) {
         // Dieselbe Rückschritt-Sperre wie beim Kanalwechsel (Gegenprüfung 1d4ca47d,
         // P2): nach Kanalwechsel + Rückweg meldet check sonst ein „Update“, das
         // zurückstuft.
+        // Versions-Check einmal holen (dev liefert ihn via resolvePackageChannel,
+        // stable nicht → dort nachfragen). Dient Rückschritt- UND noop-Prüfung.
+        let apChk = chk;
+        if (!apChk) {
+          try { apChk = await releaseHelper(['check', channel], 60000); } catch (e) { return releaseError(res, e, 'update_apply_check_error'); }
+        }
         let blocked;
-        try { blocked = await packageDowngrade(channel, target, body?.allowDowngrade === true, chk); } catch (e) { return releaseError(res, e, 'update_apply_check_error'); }
+        try { blocked = await packageDowngrade(channel, target, body?.allowDowngrade === true, apChk); } catch (e) { return releaseError(res, e, 'update_apply_check_error'); }
         if (blocked) {
           pushLog('update_apply_rejected', { reason: 'downgrade_blocked', current: blocked.current, requested: blocked.target, mode: 'package' });
           return json(res, 400, blocked);
+        }
+        // Schon auf der Zielversion? Dann KEINEN Job starten — der Helfer täte
+        // nichts, der Job endete nach ~1 s und die GUI zeigte nichts Klares
+        // (Tester-Fund 1.0.10). Stattdessen eine eigene, klare noop-Antwort.
+        // packageDowngrade lässt gleiche Versionen durch (dort kein Rückschritt),
+        // darum hier gesondert prüfen.
+        const curVer = apChk?.current?.version || null;
+        const toVer = target === 'latest' ? (apChk?.latest?.version || null) : target;
+        if (curVer && toVer && curVer === toVer) {
+          pushLog('update_apply_noop', { current: curVer, target: toVer, channel });
+          return json(res, 200, { ok: true, mode: 'package', noop: true, current: curVer, target: toVer, message: 'Bereits auf der neuesten Version' });
         }
         return startReleaseJob(res, ['install', target, channel], 'update_package_started', { channel, target, ...(notice ? { notice } : {}) });
       }

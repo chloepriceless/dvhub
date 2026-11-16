@@ -943,6 +943,13 @@ async function applyUpdate() {
         return;
       }
     }
+    if (data.ok && data.noop) {
+      // Schon aktuell: kein Job gestartet — klare Rückmeldung statt scheinbar
+      // totem Button (Tester-Fund 1.0.10).
+      setBanner('updateBanner', data.message || 'DVhub ist bereits auf der neuesten Version.', 'success');
+      if (btn) { btn.disabled = false; btn.textContent = 'Update installieren & neu starten'; }
+      return;
+    }
     if (data.ok && data.mode === 'package') {
       document.getElementById('updateActions').style.display = 'none';
       const st = await trackReleaseJob('Update', baseline);
