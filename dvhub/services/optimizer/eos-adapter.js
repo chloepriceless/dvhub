@@ -12,6 +12,7 @@ import { planControlFor, PLAN_MATCH_SLACK_MS, EOS_RUN_TIMEOUT_MS } from './eos-r
 import { createHash } from 'node:crypto';
 import { zoneOffsetMs } from '../../tz-fast.js';
 import { peakShavingThresholdW, detectPlanCapabilities } from './eos-capabilities.js';
+import { deriveTerminalValue } from './terminal-value.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const EOS_DEFAULT_CONFIDENCE = 0.7;
@@ -708,6 +709,12 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
         totalRevenuesAmt: numOrNull(sol.total_revenues_amt),
         totalLossesWh: numOrNull(sol.total_losses_energy_wh),
       },
+      // M17: Wert, mit dem EOS die am Planende noch gespeicherte Akku-Energie
+      // bewertet (ct/kWh) — aus EOS' eigenem terminal_value (Terminal-Wert-Kurve
+      // bzw. Gutschrift), nicht aus einer DVhub-Preisannahme. Beantwortet „warum
+      // hält EOS den Akku?". null/available:false, wenn EOS keinen Terminalwert
+      // liefert (z. B. Lösung ohne Akku).
+      terminalValue: deriveTerminalValue(sol.terminal_value),
       rows: allRows.slice(0, previewLimit),
       truncated: allRows.length > previewLimit,
       totalCount: allRows.length,

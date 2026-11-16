@@ -12,6 +12,7 @@ verweist hierher.
 
 ### Hinzugefügt
 
+- **Leitstand zeigt, womit EOS die Akkuladung am Planende bewertet (M17).** Unter „Laut EOS-Plan“ steht jetzt „EOS bewertet die Akkuladung am Planende mit X ct/kWh“. Der Wert kommt aus EOS’ eigenem Terminal-Wert (`terminal_value`, Grenzwert der Wertkurve bzw. im FIXED-Modus die Gutschrift je kWh) — keine DVhub-Preisannahme, keine Schwelle. Das beantwortet die Kundenfrage „warum tut EOS nichts“: Liegt der Einspeisewert darunter, lohnt Entladen nicht, und bei festem Bezugspreis kostet Halten ohne PV-Überschuss nichts.
 - **Test-Knopf „Abregelung testen (X min)“ im Leitstand (Sungrow-Feldtest).** Zwei Auslöser (Negativpreis / Direktvermarkter) fahren die Abregelung über genau den Ernstfall-Pfad (priceNegative bzw. setForcedOff mit selbst-ablaufendem Lease, max. 60 min), optional „Akku nicht laden“. Ein 1-s-Protokoll direkt aus dem Regeltakt macht das Abregel-Verhalten sichtbar — feiner als /api/status.
 
 ### Behoben

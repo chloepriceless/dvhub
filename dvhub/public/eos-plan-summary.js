@@ -144,7 +144,11 @@
     const forecastPlan = c && c.reason === 'price_forecast' && Number.isFinite(Date.parse(c.estimatedFrom))
       ? { estimatedFrom: Date.parse(c.estimatedFrom) }
       : null;
-    const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis, evDeadline, forecastPlan };
+    // M17: Terminal-Wert aus der EOS-Lösung (output.terminalValue, von
+    // services/optimizer/terminal-value.js). Gilt für den ganzen Plan, nicht je
+    // Tag. null, wenn EOS keinen Wert liefert.
+    const terminal = output && output.terminalValue && output.terminalValue.available ? output.terminalValue : null;
+    const base = { available: false, reason: (p && p.reason) || null, stale: !!(p && p.plan && p.plan.current === false), timeZone, feedInBasis, evDeadline, forecastPlan, terminal };
     const rows = raw
       .map((r) => ({ ...r, ts: Date.parse(r && r.ts_utc) }))
       .filter((r) => Number.isFinite(r.ts))
@@ -244,6 +248,26 @@
     return `${head}: ${pk.slots} ${pk.slots === 1 ? 'Slot' : 'Slots'} darüber (${de(pk.hours, 2)} h, bis ${de(pk.maxKw, 1)} kW)`;
   }
 
+  // M17: „EOS bewertet die Akkuladung am Planende mit X ct/kWh". Der Wert kommt
+  // aus EOS' eigenem Terminal-Wert (terminal-value.js) — keine Schwelle, keine
+  // DVhub-Preisannahme. Liegt der Einspeisewert darunter, lohnt Entladen nicht:
+  // der Akku bleibt geladen, und bei festem Bezugspreis kostet Halten nichts.
+  const TERMINAL_HELP = 'Womit EOS die am Ende des Plans noch im Akku gespeicherte Energie bewertet — '
+    + 'aus der EOS-Lösung, keine Schwelle. Liegt der Einspeisewert darunter, lohnt sich Entladen nicht, '
+    + 'also bleibt der Akku geladen. Bei festem Bezugspreis ist eine gespeicherte kWh heute so viel wert '
+    + 'wie morgen: Halten kostet dann ohne PV-Überschuss nichts. So erklärt sich, dass EOS den Akku hält, '
+    + 'statt ihn zu entladen.';
+  function terminalLine(t) {
+    if (!t || t.ctPerKwh === null || t.ctPerKwh === undefined) return null;
+    const ct = `${de(t.ctPerKwh, 1)} ct/kWh`;
+    // Plant EOS den Akku am Planende (nahezu) leer, ist „Akku halten" nicht das
+    // Thema — dann ehrlich den Wert der (letzten) kWh nennen, ohne Halte-Aussage.
+    if (t.heldCharge === false) {
+      return `EOS bewertet eine am Planende gespeicherte kWh mit ${ct} (Akku am Planende ~leer)`;
+    }
+    return `EOS bewertet die Akkuladung am Planende mit ${ct}`;
+  }
+
   const REASON_TEXT = { eos_off: 'EOS ist aus', eos_not_answering: 'EOS antwortet nicht' };
   const ESTIMATED_HELP = 'Die festen Börsenpreise enden hier. Bis zur Abfahrt des E-Autos rechnet EOS mit der Preisprognose von dvhub.online, '
     + 'damit das Auto nicht schon vor Mitternacht teuer geladen wird. Sobald die festen Preise da sind (gegen 13 Uhr), '
@@ -254,7 +278,7 @@
   function view(s) {
     if (!s || !s.available) {
       const why = s && REASON_TEXT[s.reason];
-      return { note: why ? `Kein EOS-Plan (${why})` : 'Kein EOS-Plan', today: null, tomorrow: null };
+      return { note: why ? `Kein EOS-Plan (${why})` : 'Kein EOS-Plan', terminal: null, terminalTitle: '', today: null, tomorrow: null };
     }
     const time = (ms) => fmtParts(s.timeZone || DEFAULT_TZ).time.format(new Date(ms));
     const day = (d, label, missing) => {
@@ -286,9 +310,12 @@
     } else if (s.forecastPlan) {
       notes.push(`Plan reicht bis in die Preisprognose (ab ${time(s.forecastPlan.estimatedFrom)}) — Vorschau, umgesetzt wird nur mit festen Preisen`);
     }
+    const terminal = terminalLine(s.terminal);
     return {
       note: notes.join(' · '),
       noteTitle: s.evDeadline ? ESTIMATED_HELP : (s.forecastPlan ? FORECAST_HELP : ''),
+      terminal,
+      terminalTitle: terminal ? TERMINAL_HELP : '',
       today: day(s.today, 'Heute ab jetzt', 'Heute: kein Plan mehr ab jetzt'),
       tomorrow: day(s.tomorrow, 'Morgen', 'Morgen: noch nicht im Plan'),
     };
@@ -346,6 +373,9 @@
     }));
     set('eosPlanSummaryNote', v.note);
     setTitle('eosPlanSummaryNote', v.noteTitle);
+    // M17: Terminal-Wert-Zeile (ct/kWh, mit der EOS die Rest-Ladung bewertet).
+    set('eosPlanSummaryTerminal', v.terminal);
+    setTitle('eosPlanSummaryTerminal', v.terminalTitle);
     for (const [key, prefix] of [['today', 'eosPlanSummaryToday'], ['tomorrow', 'eosPlanSummaryTomorrow']]) {
       const dv = v[key] || {};
       const box = d.getElementById(prefix);
