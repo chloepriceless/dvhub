@@ -8,7 +8,7 @@ import {
   createSungrowEms, resolveSecondInverter, secondInverterTelemetry, wire, EMS_CMD, EMS_MODE,
   sungrowSecondView, sungrowSystemTelemetry, sungrowSystemSoc, sungrowSocFloor, sungrowReserveWh, sungrowHeadroomWh, splitSungrowPower,
   splitStrategyShares, SPLIT_STRATEGIES, isSungrowEmergencyCharge, sungrowDischargeFloorPct, sungrowChargeCeilPct,
-  sungrowRealSocPct, sungrowSocFloorBufferPct, sungrowConfiguredRegulateMs
+  sungrowRealSocPct, sungrowSocFloorBufferPct, sungrowConfiguredRegulateMs, resolveSungrowControl
 } from '../services/inverter/sungrow.js';
 import { createSungrowSecond } from '../services/inverter/sungrow-second.js';
 import { createModbusHealth } from '../services/inverter/modbus-health.js';
@@ -1349,4 +1349,39 @@ test('resolveSecondInverter: Strategien + Rückwärtskompatibilität zum alten c
   assert.deepEqual([e.strategyCharge, e.strategyDischarge], ['by-power', 'by-power']);
   const f = resolveSecondInverter({ sungrow: { secondInverter: { host: 'x', strategyCharge: 'by-power', strategyDischarge: 'ratio', ratioMasterPct: 150 } } });
   assert.deepEqual([f.strategyCharge, f.strategyDischarge, f.ratioMasterPct], ['by-power', 'ratio', 100]); // ratioMasterPct geklemmt
+});
+
+// Befund 4 (Fable-Review 16.11.): Der feste Default controlMode='external' hatte die
+// Zwei-WR-Automatik maskiert. 'auto' (neuer Default) lässt resolveSungrowControl entscheiden.
+test('Befund 4: zwei WR ohne ausdrücklichen controlMode → Forced-Split; ein WR → External EMS', () => {
+  assert.equal(resolveSungrowControl({ sungrow: { secondInverter: { host: '203.0.113.83' } } }).mode, 'forced', 'zwei WR, Default → forced');
+  assert.equal(resolveSungrowControl({ sungrow: { controlMode: 'auto', secondInverter: { host: '203.0.113.83' } } }).mode, 'forced', 'zwei WR, auto → forced');
+  assert.equal(resolveSungrowControl({ sungrow: {} }).mode, 'external', 'ein WR → external');
+  assert.equal(resolveSungrowControl({ sungrow: { controlMode: 'auto' } }).mode, 'external', 'ein WR, auto → external');
+  // Ausdrückliche Wahl gewinnt immer.
+  assert.equal(resolveSungrowControl({ sungrow: { controlMode: 'external', secondInverter: { host: 'x' } } }).mode, 'external', 'explizit external gewinnt');
+  assert.equal(resolveSungrowControl({ sungrow: { controlMode: 'forced' } }).mode, 'forced', 'explizit forced gewinnt');
+});
+
+// Befund 2 (Fable-Review 16.11., Repro belegt): Fällt der Slave im Split aus, übernimmt der
+// Master dessen Anteil — darf dabei aber seinen eigenen SoC-Boden NICHT unterschreiten.
+test('Befund 2: Slave-Fehler im Split entlädt den Master NICHT unter seinen SoC-Boden', async () => {
+  const SLAVE_HOST = '192.168.68.83';
+  const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 };
+  // Harter Boden 20 %, Master 15 % (UNTER dem Boden), Slave 60 %. Sollwert 0, Haus zieht 3 kW → Regler will entladen.
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter }, optimizer: { maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000, hardFloorSocPct: 20 } });
+  const masterImage = sungrowImage(); const slaveImage = sungrowImage();
+  const masterT = mockSungrow(masterImage);
+  const slaveT = mockSungrow(slaveImage, { failReadAt: wire(13050) }); // Slave-Lesefehler (modbus exc 4)
+  const clock = 1_000_000; const now = () => clock;
+  const state = { victron: { errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock }, device: sungrowDevice({ bdcRatedW: 10000 }), batteryPowerW: 0, pvPowerW: 0, selfConsumptionW: 3000, soc: 37.5, sungrowMasterSocPct: 15 },
+    meter: { ok: true, updatedAt: clock, grid_total_w: 3000 }, ctrl: {},
+    sungrowSecond: { online: true, updatedAt: clock, host: SLAVE_HOST, aggregate: true, batteryPowerW: 0, pvPowerW: 0, socPct: 60, bdcRatedW: 10000 } };
+  const slaveEms = createSungrowEms({ state, getCfg: () => cfg, transport: slaveT, pushLog: () => {}, now, sleep: async () => {}, statusKey: 'sungrowEmsSlave', isSlave: true, connOverride: () => ({ host: SLAVE_HOST, port: 502, unitId: 1, timeoutMs: 1500 }) });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: masterT, pushLog: () => {}, now, sleep: async () => {}, slaveActuator: slaveEms });
+  const res = await ems.applySetpoint(0, 'rule:eigenverbrauch');
+  assert.equal(res.ok, true);
+  assert.equal(res.slaveFellBack, true, 'Slave-Fehler → Fallback auf Master-only');
+  assert.equal(res.masterW, 0, 'Master unter seinem Boden (15% < 20%) → entlädt NICHT, auch im Fallback');
+  assert.equal(masterImage.holding.get(CMD), 0xcc, 'Master-Befehl = STOPP (0xCC)');
 });

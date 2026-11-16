@@ -1303,6 +1303,16 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       : (skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveW));
     let masterDecision = mk(masterW);
     let effMasterW = masterW; let effSlaveW = slaveW; let slaveFellBack = false; let slaveWrote = false; let slaveCurtailHold = false;
+    // Befund 2 (16.11., Fable-Review, Repro belegt): Übernimmt der Master den Slave-Anteil (Slave-Fehler ODER
+    // Abregelung/Sperre), muss er seinen EIGENEN SoC-Boden/Deckel einhalten — genau wie splitStrategyShares, das
+    // mMax bei erreichter Grenze auf 0 klemmt (atLimit, :523-524). Der Fallback nahm nur die Leistungsgrenze
+    // (masterMax) und ließ den Master unter seinem Min-SoC entladen bzw. über seinen Max-SoC laden (Risiko
+    // Netz-Nachladung). masterTakeoverW = 0, wenn der Master in DIESER Richtung an seiner Grenze ist, sonst masterMax.
+    const masterFin = (v) => v != null && Number.isFinite(Number(v));
+    const masterAtLimit = masterFin(masterSoc) && (charge
+      ? (masterFin(masterCeilPct) && Number(masterSoc) >= Number(masterCeilPct))
+      : (masterFin(masterFloorPct) && Number(masterSoc) <= Number(masterFloorPct)));
+    const masterTakeoverW = masterAtLimit ? 0 : masterMax;
     // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst).
     if (feedInBlocked) {
       // Sperre aktiv: Slave aktiv auf 0xCC halten (nicht nur neutralize — das wäre ein No-op, wenn der Slave gerade nicht
@@ -1311,7 +1321,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // der Master steuert trotzdem weiter (kein Modus 0 wegen eines Slave-Fehlers).
       slaveCurtailHold = true;
       effSlaveW = 0;
-      effMasterW = Math.min(decision.powerW, masterMax);
+      effMasterW = Math.min(decision.powerW, masterTakeoverW); // Befund 2: Master-SoC-Boden/Deckel einhalten
       masterDecision = mk(effMasterW);
       const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
       slaveWrote = sr.ok === true && sr.unchanged !== true;
@@ -1335,7 +1345,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         // (naechster try-Block). Ein fremdes EMS am Slave (sr.foreign) wird ebenfalls nicht angefasst → Master-only.
         try { await slaveActuator.neutralize('split_slave_failed'); } catch { /* best effort */ }
         effSlaveW = 0;
-        effMasterW = Math.min(decision.powerW, masterMax);
+        effMasterW = Math.min(decision.powerW, masterTakeoverW); // Befund 2: Master-SoC-Boden/Deckel einhalten
         masterDecision = mk(effMasterW);
         slaveFellBack = true;
         logOnce(`${sr.error}`, 'sungrow_ems_split_slave_fallback', { side: 'slave', error: sr.error || null, readError: sr.readError === true, masterW: effMasterW, text: 'Sungrow: Slave-Fehler im Split — Anteil auf den Master verlagert, der Master steuert weiter (kein Modus 0).' }, 'warn');

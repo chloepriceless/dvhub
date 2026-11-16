@@ -258,7 +258,12 @@ function buildControlModeInfo(cfg, ctrl, payload, v) {
   let kind; let detail = {};
   if (sungrowEmu || cfg.manufacturer === 'sungrow') {
     kind = 'sungrow-ems';
-    const cfgMode = cfg.sungrow?.controlMode === 'forced' ? 'forced' : 'external';
+    // Befund 4: 'auto' (Default) nach der resolveSungrowControl-Logik auflösen —
+    // zwei WR → forced, ein WR → external; sonst meldete das Portal bei zwei WR
+    // fälschlich 'external', solange noch kein EMS-Status vorliegt.
+    const cm = cfg.sungrow?.controlMode;
+    const twoWr = typeof cfg.sungrow?.secondInverter?.host === 'string' && cfg.sungrow.secondInverter.host.trim().length > 0;
+    const cfgMode = cm === 'forced' ? 'forced' : (cm === 'external' ? 'external' : (twoWr ? 'forced' : 'external'));
     const mode = (ems && (ems.controlMode === 'forced' || ems.controlMode === 'external')) ? ems.controlMode : cfgMode;
     detail = {
       mode,                                 // 'external' (EMS-Modus 3) | 'forced' (Modus 2)

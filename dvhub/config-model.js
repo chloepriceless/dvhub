@@ -1422,12 +1422,13 @@ function buildFieldDefinitions() {
       path: 'sungrow.controlMode',
       label: 'Steuermodus',
       type: 'select',
-      default: 'external',
+      default: 'auto',
       options: [
-        { value: 'external', label: 'External EMS (empfohlen)' },
+        { value: 'auto', label: 'Automatisch (empfohlen)' },
+        { value: 'external', label: 'External EMS' },
         { value: 'forced', label: 'Forced mode' }
       ],
-      help: 'External EMS (empfohlen): mit Herzschlag — fällt DVhub aus, schaltet der Wechselrichter nach der Herzschlag-Frist selbst auf Eigenverbrauch zurück. Braucht eine Firmware, die das Herzschlag-Register (13080) kennt; fehlt es, steuert DVhub den Akku nicht und meldet das im Protokoll. Forced mode: ohne Herzschlag, auch für ältere Firmware; der letzte Befehl läuft bei einem Ausfall von DVhub weiter. Ein Wechsel stellt den Wechselrichter zuerst auf Eigenverbrauch zurück.'
+      help: 'Automatisch (empfohlen): Bei ZWEI Wechselrichtern fährt DVhub Forced-Split (Dauer-Modus 2, beide Akkus geladen/entladen); bei EINEM Wechselrichter External EMS mit Herzschlag (geräteeigener Rückfall, sicherer). External EMS: mit Herzschlag — fällt DVhub aus, schaltet der Wechselrichter nach der Herzschlag-Frist selbst auf Eigenverbrauch zurück. Braucht eine Firmware, die das Herzschlag-Register (13080) kennt; fehlt es, steuert DVhub den Akku nicht und meldet das im Protokoll. Forced mode: ohne Herzschlag, auch für ältere Firmware; der letzte Befehl läuft bei einem Ausfall von DVhub weiter. Ein Wechsel stellt den Wechselrichter zuerst auf Eigenverbrauch zurück.'
     },
     {
       section: 'victron',
@@ -5125,8 +5126,10 @@ export function createDefaultConfig() {
     // Mechanismus selbst wird vom Herstellerprofil freigeschaltet
     // (dvControl.zeroFeedIn.enabled, aktuell Fronius GEN24). Lives in
     // createDefaultConfig → automatisch ALLOWED_CONFIG_ROOTS + Save-Roundtrip.
-    // Sungrow-Steuermodus (T-0422): External EMS mit Herzschlag ist der Standard.
-    sungrow: { controlMode: 'external', heartbeatTimeoutS: 30 },
+    // Sungrow-Steuermodus (T-0422 / Befund 4 16.11.): 'auto' lässt resolveSungrowControl
+    // entscheiden — zwei WR → Forced-Split, ein WR → External EMS. Der feste Default
+    // 'external' hatte zuvor die Zwei-WR-Automatik maskiert (Repro c2.mjs belegt).
+    sungrow: { controlMode: 'auto', heartbeatTimeoutS: 30 },
     zeroFeedIn: {
       socThresholdPct: 95,
       socHysteresisPct: 5,
