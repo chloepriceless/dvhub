@@ -470,6 +470,9 @@
 .eos-plan-summary-day strong { font-size:11px; color:var(--text); font-weight:600; }
 .eos-plan-summary-day span { font-family:var(--f-mono); font-size:11px; color:var(--text-dim); overflow-wrap:anywhere; }
 .eos-plan-summary-day .eos-plan-summary-peak { color:var(--yellow); }
+/* M17: Terminal-Wert — womit EOS die Rest-Ladung am Planende bewertet. */
+.eos-plan-summary-terminal { font-family:var(--f-mono); font-size:11px; color:var(--text); overflow-wrap:anywhere; }
+.eos-plan-summary-terminal[title]:not([title='']) { cursor:help; }
 .eos-plan-summary [hidden] { display:none; }
 
 /* ─── Schedule editor ─── */

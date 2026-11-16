@@ -454,3 +454,30 @@ test('Plan bis in die Preisprognose: Hinweis „Vorschau“ und Kennzeichnung je
   assert.equal(v.tomorrow.head, 'Morgen bis 10:00 · Preisprognose');
   assert.match(v.tomorrow.headTitle, /Vorschau/);
 });
+
+// M17: „EOS bewertet die Akkuladung am Planende mit X ct/kWh". output.terminalValue
+// kommt aus services/optimizer/terminal-value.js (deriveTerminalValue); hier wird
+// nur die Anzeigezeile geprüft.
+test('Terminal-Wert: Zeile zeigt ct/kWh, wenn EOS einen Wert liefert', () => {
+  const { summarize, view } = load();
+  const out = plan15();
+  out.terminalValue = { available: true, ctPerKwh: 10.0, basis: 'curve', mode: 'TAIL', batteryEnergyWh: 4500, heldCharge: true, source: 'eos' };
+  const v = view(summarize({ available: true, output: out }, { now: NOW, epex: EPEX }));
+  assert.equal(v.terminal, 'EOS bewertet die Akkuladung am Planende mit 10 ct/kWh');
+  assert.match(v.terminalTitle, /Halten kostet/);
+});
+
+test('Terminal-Wert: ~leerer Akku am Planende nennt den kWh-Wert ohne Halte-Aussage', () => {
+  const { summarize, view } = load();
+  const out = plan15();
+  out.terminalValue = { available: true, ctPerKwh: 30.0, basis: 'curve', mode: 'TAIL', batteryEnergyWh: 0.1, heldCharge: false, source: 'eos' };
+  const v = view(summarize({ available: true, output: out }, { now: NOW, epex: EPEX }));
+  assert.equal(v.terminal, 'EOS bewertet eine am Planende gespeicherte kWh mit 30 ct/kWh (Akku am Planende ~leer)');
+});
+
+test('Terminal-Wert: ohne terminalValue keine Zeile', () => {
+  const { summarize, view } = load();
+  const v = view(summarize({ available: true, output: plan15() }, { now: NOW, epex: EPEX }));
+  assert.equal(v.terminal, null);
+  assert.equal(v.terminalTitle, '');
+});
