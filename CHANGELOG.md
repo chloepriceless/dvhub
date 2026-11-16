@@ -18,8 +18,11 @@ verweist hierher.
   waren gesetzt) und scheiterte beim Autosave/Migrieren jede Minute mit `PermissionError`. Die
   Provisionierung setzt jetzt immer einen beschreibbaren `EOS_CONFIG_DIR` (XDG `net.akkudoktor.eos`,
   bzw. `EOS_HOME`) in der eos.service-Unit, legt ihn dem Dienstbenutzer gehörend an und migriert eine
-  liegengebliebene Konfig aus dem Checkout dorthin (sonst defensiv `.bak`). Regressionstest deckt die
-  Fehlerklasse ab.
+  liegengebliebene Konfig aus dem Checkout dorthin (sonst defensiv `.bak`). Der Fix greift auch beim
+  **Update** einer Bestandsbox: fehlt der Unit `EOS_CONFIG_DIR`, zieht `post-update.sh` ihn entkoppelt
+  und leichtgewichtig nach (nur Ordner, Migration und Unit — kein git/pip), ohne den vorhandenen
+  Rust-Kern-Schalter oder einen eigenen Datenordner (`EOS_DIR`) zu verlieren. Regressionstests decken
+  die Fehlerklasse ab.
 - **Update-Seite: Klick bei bereits neuester Version wirkt nicht mehr tot.** Ein Update-Auftrag startete
   auch dann, wenn schon die neueste Version lief, tat nichts und endete nach ~1 s ohne sichtbare
   Rückmeldung. DVhub prüft die Zielversion jetzt vor dem Start und meldet „Bereits auf der neuesten
