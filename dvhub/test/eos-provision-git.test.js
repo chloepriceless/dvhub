@@ -445,6 +445,33 @@ test('A1 leicht: EOS_CONFIG_FIX_ONLY zieht Unit+Migration nach, ohne git/pip, BA
   } finally { s.cleanup(); }
 });
 
+// B1 (1.0.11, Folgefall von A2): der leichte fix-only-Lauf wird von post-update.sh
+// OHNE EOS_HOME gestartet. Trägt die bestehende Unit einer Haupt-Instanz ein
+// Environment=EOS_DIR=<pfad> (EOS_HOME- oder handgesetzter Datenordner) und fehlt
+// /etc/dvhub/eos.env, ging die EOS_DIR-Zeile ersatzlos verloren (A2 schließt
+// EOS_DIR aus der eos.env-Übernahme aus) → EOS fiele auf Standard-Ordner zurück,
+// die alten Daten blieben ungelesen liegen. ROT gegen faf3b8a1, grün mit B1-Fix.
+test('B1: fix-only mit leerem EOS_HOME erhält EOS_DIR aus der bestehenden Unit (keine Standard-Ordner)', () => {
+  const s = setup();
+  try {
+    // 1. Haupt-Instanz mit EOS_HOME einrichten → erste Unit trägt EOS_DIR.
+    assert.equal(s.run('v1').status, 0);
+    const unitFile = join(s.dir, 'eos.service');
+    const eosHome = join(s.dir, 'eos-home');
+    assert.equal(unitEnv(readFileSync(unitFile, 'utf8'), 'EOS_DIR'), eosHome, 'erste Unit trägt EOS_DIR');
+    // 2. Unit auf 1.0.10-Stil zurücksetzen: OHNE EOS_CONFIG_DIR, aber MIT EOS_DIR
+    //    (+ BACKEND). eos.env fehlt (Default) — genau die B1-Lage.
+    writeFileSync(unitFile, `[Service]\nWorkingDirectory=${s.eosDir}\nEnvironment=EOS_DIR=${eosHome}\nEnvironment=EOS_OPTIMIZATION__GENETIC__BACKEND=native\n`);
+    // 3. fix-only-Lauf wie der post-update.sh-Trigger: OHNE EOS_HOME.
+    const r = s.run('v1', { EOS_CONFIG_FIX_ONLY: '1', EOS_HOME: '' });
+    assert.equal(r.status, 0, r.stderr);
+    const unit = readFileSync(unitFile, 'utf8');
+    assert.equal(unitEnv(unit, 'EOS_DIR'), eosHome, 'EOS_DIR bleibt in der neu geschriebenen Unit erhalten (B1)');
+    assert.equal(unitEnv(unit, 'EOS_CONFIG_DIR'), eosHome, 'EOS_CONFIG_DIR konsistent = EOS_HOME (nicht Standard-Ordner)');
+    assert.equal(unitEnv(unit, 'EOS_OPTIMIZATION__GENETIC__BACKEND'), 'native', 'BACKEND bleibt erhalten');
+  } finally { s.cleanup(); }
+});
+
 // N1 (1.0.11): scheitert das Wegräumen der Alt-Konfig, darf das NICHT still
 // passieren (Exit 0, keine Meldung) — sonst bliebe die PermissionError-Falle
 // unbemerkt offen. Mindestens eine Warnung nach stderr. ROT gegen den Stand vor N1.

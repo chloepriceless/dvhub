@@ -47,6 +47,22 @@ EOS_PORT="${EOS_PORT:-8503}"
 # (~/.local/share/net.akkudoktor.eos) wie bisher. Eine ZWEITE Instanz braucht
 # ihn zwingend — sonst teilen sich beide Konfiguration und Messreihen.
 EOS_HOME="${EOS_HOME:-}"
+# B1 (1.0.11): Im leichten Konfig-Fix-Lauf (EOS_CONFIG_FIX_ONLY=1, von
+# post-update.sh OHNE EOS_HOME gestartet) wuerde die Unit sonst ohne EOS_DIR neu
+# geschrieben. Eine Haupt-Instanz mit eigenem Daten-/Konfig-Ordner (per EOS_HOME
+# oder handgesetztem EOS_DIR in der Unit) fiele dann auf die Standard-Ordner
+# zurueck — leere Konfig, anderer Datenordner, die alten Messreihen blieben
+# ungelesen liegen. Darum EOS_DIR aus der BESTEHENDEN Unit uebernehmen, BEVOR
+# EOS_CONFIG_DIR daraus abgeleitet wird (so bleibt EOS_CONFIG_DIR konsistent =
+# EOS_HOME und die neue Unit traegt EOS_DIR wieder). Defensiv: nur fix-only, nur
+# bei leerem EOS_HOME, nur wenn die Unit die Zeile wirklich hat.
+if [[ "${EOS_CONFIG_FIX_ONLY:-0}" == 1 && -z "$EOS_HOME" ]]; then
+  _b1_unit="${EOS_UNIT_FILE:-/etc/systemd/system/${EOS_SERVICE_NAME}.service}"
+  if [[ -f "$_b1_unit" ]]; then
+    _b1_eos_dir="$({ grep -E '^Environment=EOS_DIR=' "$_b1_unit" 2>/dev/null || true; } | tail -1 | sed 's/^Environment=EOS_DIR=//')"
+    [[ -n "$_b1_eos_dir" ]] && EOS_HOME="$_b1_eos_dir"
+  fi
+fi
 # Beschreibbarer Konfig-Ordner fuer EOS (EOS.config.json; Autosave/Migration).
 # OHNE ihn nimmt EOS beim Start die EOS.config.json aus seinem Arbeitsverzeichnis
 # (= root-eigener Checkout $EOS_DIR) oder faellt bei leerem XDG-Ordner ebenfalls
