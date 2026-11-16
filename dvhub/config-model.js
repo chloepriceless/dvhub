@@ -1687,7 +1687,7 @@ function buildFieldDefinitions() {
       type: 'number',
       min: 0,
       step: 0.1,
-      help: 'Installierte PV-Leistung am ZWEITEN WR (kWp). Für die Prognose zählt DVhub sie zur PV-Gesamtgröße dazu; den Ist-Ertrag je WR liest DVhub aus Register 5017. Leer/0 = keine eigene PV am zweiten WR.'
+      help: 'Installierte PV-Leistung am ZWEITEN WR (kWp). Für die Prognose zählt DVhub sie zur PV-Gesamtgröße dazu; den Ist-Ertrag je WR liest DVhub aus Register 5017. Wichtig: Sind unter Prognose die PV-Strings im Detail-Modus konfiguriert, decken diese bereits BEIDE WR ab — dann wird dieser Wert NICHT zusätzlich addiert (sonst Doppelzählung). Nur im einfachen/Standard-Modus beschreibt die PV-Gesamtgröße allein den Haupt-WR und dieser Wert kommt obendrauf. Leer/0 = keine eigene PV am zweiten WR.'
     },
 
     // B-1112 Stufe 2 — Nulleinspeisung bei Abregelung (Christin 2026-07-19).
