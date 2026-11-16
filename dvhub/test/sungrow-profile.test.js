@@ -335,19 +335,45 @@ test('Abregelung: sichert Quote/Wert/Schalter, schreibt 0 % · 0 W · an, liest 
   assert.deepEqual(state.ctrl._dvSeqSaved, {});
 });
 
-test('Abregelung: ohne Register 13088 (alte Firmware) wird nur der optionale Schritt übersprungen', async () => {
+test('Abregelung: fehlt Register 13088 WIRKLICH (alte Firmware, Modbus-Exception) → optionaler Schritt übersprungen', async () => {
   const cfg = loadSungrowConfig();
-  for (const img of [sungrowImage({ dropHolding: [wire(13088)] }), sungrowImage({ holding: { [wire(13088)]: 0xffff } })]) {
-    const t = mockSungrow(img);
-    const { state, evaluator } = evaluatorFor(cfg, t);
-    await evaluator.applyDvVictronControl(false, { reason: 'dv_forced_off' });
-    assert.equal(state.ctrl._lastDvFeedIn, false);
-    assert.deepEqual(t.writes.map((w) => w.address), [wire(13074), wire(13087)]);
-    assert.equal(state.ctrl._dvSeqSaved.feedInLimitRatio, undefined);
-    t.writes.length = 0;
-    await evaluator.applyDvVictronControl(true);
-    assert.deepEqual(t.writes.map((w) => [w.address, w.value]), [[wire(13074), 5000], [wire(13087), 0xaa]]);
-  }
+  // Nur der echt fehlende Fall (Register nicht vorhanden → Exception 2 bei Lesen/Schreiben).
+  const img = sungrowImage({ dropHolding: [wire(13088)] });
+  const t = mockSungrow(img);
+  const { state, evaluator } = evaluatorFor(cfg, t);
+  await evaluator.applyDvVictronControl(false, { reason: 'dv_forced_off' });
+  assert.equal(state.ctrl._lastDvFeedIn, false);
+  assert.deepEqual(t.writes.map((w) => w.address), [wire(13074), wire(13087)], 'nur Watt + Enable, kein 13088');
+  assert.equal(state.ctrl._dvSeqSaved.feedInLimitRatio, undefined);
+  t.writes.length = 0;
+  await evaluator.applyDvVictronControl(true);
+  assert.deepEqual(t.writes.map((w) => [w.address, w.value]), [[wire(13074), 5000], [wire(13087), 0xaa]]);
+});
+
+test('NEU1 Abregelung: Begrenzung war AUS (enable 0x55), Quote 13088 liest 0xFFFF → Quote wird zum Sperren VERPFLICHTEND auf 0 gezwungen (Vorrang vor 13074), Freigabe schaltet die Begrenzung wieder aus', async () => {
+  const cfg = loadSungrowConfig();
+  // Installateur hatte KEINE Einspeisebegrenzung: enable=0x55 (aus); ohne aktive
+  // Begrenzung liefert die Quote 13088 keinen gültigen Wert (0xFFFF).
+  const img = sungrowImage({ holding: { [wire(13087)]: 0x55, [wire(13088)]: 0xffff } });
+  const t = mockSungrow(img);
+  const { state, evaluator } = evaluatorFor(cfg, t);
+
+  await evaluator.applyDvVictronControl(false, { reason: 'dv_forced_off' });
+  assert.equal(state.ctrl._lastDvFeedIn, false);
+  // Die Vorrang-Quote 13088 MUSS trotz 0xFFFF-Lesung auf 0 — sonst gäbe 100 %
+  // die Einspeisung trotz Watt=0 frei (Note 2). Reihenfolge: Quote, Watt, Enable.
+  assert.deepEqual(t.writes.map((w) => [w.address, w.value]),
+    [[wire(13088), 0], [wire(13074), 0], [wire(13087), 0xaa]]);
+  assert.equal(state.ctrl._dvSeqSaved.feedInLimitRatio, undefined, '0xFFFF nicht als Ist-Wert gesichert');
+  assert.equal(state.ctrl._dvSeqSaved.feedInLimitEnable, 0x55, 'Kunden-Enable (aus) gesichert');
+
+  // Freigabe: Enable zurück auf 0x55 (aus) → Begrenzung abgeschaltet, Einspeisung
+  // frei; die ungespeicherte Quote wird NICHT angefasst (Prinzip: ohne Sicherung
+  // keine Grenze setzen) und ist bei abgeschalteter Begrenzung ohnehin wirkungslos.
+  t.writes.length = 0;
+  await evaluator.applyDvVictronControl(true);
+  assert.deepEqual(t.writes.map((w) => [w.address, w.value]), [[wire(13074), 5000], [wire(13087), 0x55]]);
+  assert.ok(!t.writes.some((w) => w.address === wire(13088)), 'ungespeicherte Quote bei Freigabe nicht geschrieben');
 });
 
 test('Abregelung: Rücklesen weicht ab → Sperre gilt als gescheitert, nächster Takt versucht erneut', async () => {

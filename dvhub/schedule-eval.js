@@ -680,6 +680,13 @@ export function createScheduleEvaluator(ctx) {
   // beim Sichern), wird der Schritt in diesem Lauf übersprungen statt die ganze
   // Sequenz zu kippen.
   const isMissingRegisterError = (e) => /^modbus exception (1|2)\b/.test(String(e?.message));
+  // Eine Modbus-Ausnahme heißt: das Gerät hat geantwortet, nur mit einem
+  // Fehlercode (Funktionscode | 0x80). Davon abgegrenzt sind Timeout und
+  // Verbindungsfehler (anderer Meldungstext) — dort ist der Gerätezustand
+  // unbekannt. M14 (Feldtest 6a4e10d3, SH10RT-20): ein restore-Write wird vom
+  // Gerät angenommen bzw. vom Gerät selbst wiederhergestellt, trotzdem meldet es
+  // „modbus exception 4“ — deshalb danach zurücklesen statt ewig wiederholen.
+  const isModbusException = (e) => /^modbus exception \d+/.test(String(e?.message));
   const notAvailableWords = (regs, pconf) => {
     const na = Array.isArray(pconf?.notAvailableRaw) ? pconf.notAvailableRaw.map(Number) : [];
     return na.length > 0 && Array.isArray(regs) && regs.length > 0 && na.includes(Number(regs[0]) & 0xffff);
@@ -730,10 +737,19 @@ export function createScheduleEvaluator(ctx) {
           address: pconf.address, quantity: words, timeoutMs: pconf.timeoutMs
         });
       } catch (e) {
+        // Register wirklich nicht vorhanden (Exception 1/2 = illegal function/
+        // address, alte Firmware): sichern UND schreiben überspringen.
         if (step.optional === true && isMissingRegisterError(e)) { skippedOptional.add(step.point); continue; }
         throw e;
       }
-      if (step.optional === true && notAvailableWords(regs, pconf)) { skippedOptional.add(step.point); continue; }
+      // M14/NEU1 (Sungrow 13088, Note 2): Ein optionaler Punkt, der zwar antwortet,
+      // aber keinen gültigen Ist-Wert liefert (z. B. 0xFFFF, weil die Funktion
+      // gerade AUS ist), wird NICHT gesichert (nichts Sinnvolles zum Zurückstellen)
+      // — aber er wird NICHT vom Schreiben ausgenommen. Die Einspeisequote 13088
+      // hat Vorrang vor dem Watt-Wert 13074; zum Sperren MUSS sie auf 0, auch wenn
+      // sie vor dem Aktivieren der Begrenzung „nicht verfügbar" las. Nur ein echt
+      // fehlendes Register (Exception 1/2 oben) wird vom Schreiben ausgenommen.
+      if (step.optional === true && notAvailableWords(regs, pconf)) continue;
       // Rohwert mit Vorzeichen/Sentinels in den Engineering-Wert, damit der
       // restore-Write denselben toRawForWrite-Weg exakt zurück nimmt.
       saved[step.point] = fromRawForSave(regs, pconf);
@@ -782,10 +798,61 @@ export function createScheduleEvaluator(ctx) {
       encoded ??= toRawForWrite(value, pconf);
       const words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
       const fc = Number(pconf.fc || (words.length > 1 ? 16 : 6));
-      if (fc === 16 || words.length > 1) {
-        await transport.mbWriteMultiple({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, values: words, timeoutMs: pconf.timeoutMs });
-      } else {
-        await transport.mbWriteSingle({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, value: words[0], timeoutMs: pconf.timeoutMs });
+      try {
+        if (fc === 16 || words.length > 1) {
+          await transport.mbWriteMultiple({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, values: words, timeoutMs: pconf.timeoutMs });
+        } else {
+          await transport.mbWriteSingle({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, value: words[0], timeoutMs: pconf.timeoutMs });
+        }
+      } catch (e) {
+        // NEU1: Ein optionaler Schritt, dessen Register wirklich fehlt (alte
+        // Firmware → Exception 1/2 erst beim Schreiben), darf die Sequenz nicht
+        // kippen — überspringen (Sichern hat ihn evtl. nicht erfasst, weil die
+        // Funktion vorher aus war und 0xFFFF las).
+        if (step.optional === true && isMissingRegisterError(e)) {
+          pushLog('dv_seq_optional_write_skipped', { point: step.point, address: pconf.address, error: e.message });
+          continue;
+        }
+        // M14 (Feldtest 6a4e10d3, SH10RT-20): Ein restore-Write (Freigabe) kann
+        // mit einer Modbus-Ausnahme scheitern, OBWOHL der Zielwert schon am Gerät
+        // steht — das Gerät nimmt den Wert an bzw. stellt ihn selbst wieder her,
+        // meldet aber trotzdem Exception 4. Ohne Behandlung bliebe die Sicherung
+        // stehen und die Freigabe wiederholte sich endlos alle 15 s. Deshalb den
+        // Punkt zurücklesen (FC 3, derselbe RAW-Wort-Vergleich wie
+        // verifySequenceWrite) und, wenn der Zielwert schon steht, den Schritt als
+        // ERLEDIGT werten: Sicherung löschen, keine Ausnahme weiterwerfen.
+        // Eng begrenzt: NUR restore-Schritte und NUR eine echte Modbus-Ausnahme
+        // (das Gerät hat geantwortet). Bei Timeout/Verbindungsfehler ist der
+        // Gerätezustand unbekannt → unverändert weiterwerfen (nächster Takt).
+        if (step.restore === true && isModbusException(e)) {
+          let regs = null;
+          try {
+            regs = await transport.mbRequest({
+              fc: 3, host: pconf.host, port: pconf.port, unitId: pconf.unitId,
+              address: pconf.address, quantity: words.length, timeoutMs: pconf.timeoutMs
+            });
+          } catch { regs = null; }
+          const alreadySet = Array.isArray(regs)
+            && words.every((w, i) => (Number(regs[i]) & 0xffff) === (Number(w) & 0xffff));
+          if (alreadySet) {
+            pushLog('dv_seq_restore_already_set', {
+              point: step.point, address: pconf.address, value: words, error: e.message
+            }, 'warn');
+            if (saved[step.point] !== undefined) {
+              delete saved[step.point];
+              persistDvSeqSaved();
+            }
+            continue; // Schritt erledigt: kein verify, kein stepsWritten, kein Throw
+          }
+        }
+        // Echter Fehler (Zielwert steht NICHT am Gerät, oder keine Modbus-Ausnahme):
+        // Punkt/Register/Wert an den Fehler hängen, damit das Log sie nennen kann.
+        if (e && typeof e === 'object') {
+          e.dvPoint = step.point;
+          e.dvAddress = pconf.address;
+          e.dvValue = words.length > 1 ? words : words[0];
+        }
+        throw e;
       }
       stepsWritten += 1;
       if (pconf.verify === true) await verifySequenceWrite(step.point, pconf, words);
@@ -885,6 +952,19 @@ export function createScheduleEvaluator(ctx) {
     return { write: true, feedIn: true, source: 'emergency_stop_release' };
   }
 
+  // M14 (Teil 2): Scheitert eine FREIGABE echt (Zielwert steht NICHT am Gerät),
+  // nicht endlos alle 15 s hämmern. Nach DV_RELEASE_BACKOFF_AFTER Fehlschlägen in
+  // Folge nur noch alle DV_RELEASE_BACKOFF_MS versuchen. Gilt NUR für die Freigabe
+  // (feedIn=true): eine Sperre (Negativpreis-Schutz, §51) muss bei echtem Fehler
+  // scharf weiter versuchen und wird NIE gedrosselt. Ein ausdrücklicher Befehl
+  // (explicit, z. B. manuelle API-Freigabe) umgeht den Backoff ebenfalls.
+  const DV_RELEASE_BACKOFF_AFTER = 3;
+  const DV_RELEASE_BACKOFF_MS = 5 * 60_000;
+  function dvReleaseBackoffState(flag) {
+    const m = (state.ctrl._dvReleaseBackoff ??= {});
+    return (m[flag] ??= { fails: 0, nextAt: 0, lastError: null });
+  }
+
   async function applyDvVictronControl(feedIn, { explicit = false, reason = null } = {}) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
@@ -933,6 +1013,14 @@ export function createScheduleEvaluator(ctx) {
     // Feed excess DC-coupled PV into grid: 1 = feed, 0 = block
     if (dc.feedExcessDcPv?.enabled) {
       const val = feedIn ? 1 : 0;
+      const bk = dvReleaseBackoffState('feedExcessDcPv');
+      const nowMs = Date.now();
+      // Backoff-Fenster: nur für eine echt gescheiterte Freigabe, nur im
+      // Automatik-Pfad (nicht explicit). Still halten, später erneut versuchen.
+      if (feedIn === true && !explicit && bk.fails >= DV_RELEASE_BACKOFF_AFTER && nowMs < bk.nextAt) {
+        results.feedExcessDcPv = { ok: false, error: bk.lastError, backoff: true, retryAt: bk.nextAt, fails: bk.fails };
+        allOk = false;
+      } else {
       try {
         let skipped = false;
         if (Array.isArray(dc.feedExcessDcPv.sequence?.[String(val)])) {
@@ -952,10 +1040,28 @@ export function createScheduleEvaluator(ctx) {
           results.feedExcessDcPv = { ok: true, value: val };
           pushLog('dv_victron_write', { register: 'feedExcessDcPv', address: dc.feedExcessDcPv.address, value: val, feedIn });
         }
+        // Erfolg (auch no_own_block): Backoff zurücksetzen.
+        bk.fails = 0; bk.nextAt = 0; bk.lastError = null;
       } catch (e) {
         results.feedExcessDcPv = { ok: false, error: e.message, ...(e?.dvStepsWritten > 0 ? { stepsWritten: e.dvStepsWritten } : {}) };
         allOk = false;
-        pushLog('dv_victron_write_error', { register: 'feedExcessDcPv', error: e.message });
+        if (feedIn === true) {
+          bk.fails += 1;
+          bk.lastError = e.message;
+          bk.nextAt = bk.fails >= DV_RELEASE_BACKOFF_AFTER ? nowMs + DV_RELEASE_BACKOFF_MS : 0;
+        }
+        // Log nennt den konkret scheiternden Punkt, sein Register und den Wert
+        // (M14: vorher stand hier nur `feedExcessDcPv`). Aus runDvControlSequence
+        // getragen (e.dvPoint/dvAddress/dvValue); Direktregister-Pfad: Flag-Adresse.
+        pushLog('dv_victron_write_error', {
+          register: 'feedExcessDcPv', feedIn,
+          point: e?.dvPoint ?? 'feedExcessDcPv',
+          address: e?.dvAddress ?? dc.feedExcessDcPv.address ?? null,
+          value: e?.dvValue ?? val,
+          ...(feedIn === true ? { fails: bk.fails, retryAt: bk.nextAt || undefined } : {}),
+          error: e.message
+        });
+      }
       }
     }
 

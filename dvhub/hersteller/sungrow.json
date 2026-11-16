@@ -163,7 +163,7 @@
     "minSocPct": { "enabled": false },
     "maxDischargeW": { "enabled": false },
     "feedInLimitRatio": {
-      "_comment": "Doku 13088 Feed-in Limitation Ratio, U16, 0,1 % (0–1000). Hat Vorrang vor 13074 — deshalb bei der Abregelung ebenfalls 0. Erst ab Protokoll V1.1.7: ohne das Register (0xFFFF/Exception) wird der Schritt übersprungen.",
+      "_comment": "Doku 13088 Feed-in Limitation Ratio, U16, 0,1 % (0–1000). Note 2: Vorrang vor 13074 — zum Sperren MUSS die Quote deshalb auf 0 (sonst gibt 100 % trotz 13074=0 die Einspeisung frei). Verpflichtend-wenn-vorhanden: liest sie 0xFFFF (Funktion gerade aus), wird sie trotzdem auf 0 geschrieben; NUR ein wirklich fehlendes Register (alte Firmware, Modbus-Exception 1/2) wird übersprungen. Freigabe stellt die gesicherte Quote zurück; ohne Sicherung (war aus) bleibt sie unangetastet — die Kunden-Grenze trägt das Enable-Register 13087, dessen Rückstellung die Begrenzung wieder abschaltet.",
       "enabled": true,
       "fc": 6,
       "address": 13087,
