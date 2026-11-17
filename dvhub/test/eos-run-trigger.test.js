@@ -4,10 +4,12 @@ import assert from 'node:assert/strict';
 import {
   alignStartSolution,
   createEosRunTrigger,
+  isRecoverableDataGap,
   nextBoundaryMs,
   EOS_RUN_BOUNDARY_OFFSET_MS,
   EOS_RUN_KICK_MIN_GAP_MS,
   EOS_RUN_STARTUP_GRACE_MS,
+  EOS_SELF_HEAL_COOLDOWN_MS,
 } from '../services/optimizer/eos-run-trigger.js';
 
 const SLOT_MS = 15 * 60_000;
@@ -64,11 +66,11 @@ test('alignStartSolution: nicht zuordenbar → null (EOS rechnet dann ohne Warms
 });
 
 /** Auslöser mit gestellter Uhr; Timer werden gesammelt, nicht ausgeführt. */
-function harness({ active = true, horizon = 6, soc = { soc: { battery1: 55 } }, status = 'up', startAt = T0 + 60_000, prepareRun } = {}) {
+function harness({ active = true, horizon = 6, soc = { soc: { battery1: 55 } }, status = 'up', startAt = T0 + 60_000, prepareRun, recoverEosState } = {}) {
   const h = {
     nowMs: startAt, active, horizon, soc, status,
     posts: [], logs: [], timers: [], solutionCalls: 0, state: { optimizer: {} },
-    replies: [],
+    replies: [], heals: [],
   };
   h.trigger = createEosRunTrigger({
     isActive: () => h.active,
@@ -86,6 +88,7 @@ function harness({ active = true, horizon = 6, soc = { soc: { battery1: 55 } }, 
     state: h.state,
     pushLog: (type, data) => h.logs.push({ type, data }),
     ...(prepareRun ? { prepareRun: () => prepareRun(h) } : {}),
+    ...(recoverEosState ? { recoverEosState: (reason) => { h.heals.push(reason); return recoverEosState(h, reason); } } : {}),
     now: () => h.nowMs,
     setTimer: (fn, ms) => { const t = { fn, ms }; h.timers.push(t); return t; },
     clearTimer: (t) => { h.timers = h.timers.filter((x) => x !== t); },
@@ -393,4 +396,110 @@ test('stop() während der Vorbereitung: kein POST an EOS (Gegenprüfung 63c034af
   releasePrep({ ok: true, pushed: true });
   assert.equal((await running).skipped, 'stopped');
   assert.equal(h.posts.length, 0);
+});
+
+// ── Gürtel A: Selbstheilung bei verlorenem serve-Zustand ──────────────────────
+// Microtasks durchlaufen lassen, damit die abgekoppelte Heil-Kette (fireSelfHeal
+// → recoverEosState → Re-Trigger) vollständig abläuft.
+const flush = async () => { for (let i = 0; i < 12; i += 1) await new Promise((r) => setImmediate(r)); };
+const DATA_GAP = { ok: false, error: 'EOS returned HTTP 503: no_solution: Missing or invalid PV within the control horizon' };
+
+test('isRecoverableDataGap: die drei Datenmangel-Signaturen sind heilbar', () => {
+  assert.equal(isRecoverableDataGap('no_solution: Missing or invalid PV within the control horizon'), true);
+  assert.equal(isRecoverableDataGap('EOS returned HTTP 503: Missing or invalid PV within the control horizon'), true);
+  assert.equal(isRecoverableDataGap('no_solution: Configure an inverter first'), true);
+  assert.equal(isRecoverableDataGap('Configure an inverter'), true);
+  assert.equal(isRecoverableDataGap('no_solution: missing load forecast in control horizon'), true);
+  assert.equal(isRecoverableDataGap('no_solution: no pv data available'), true);
+});
+
+test('isRecoverableDataGap: Verbindungs-/Zeitfehler und unklare Fehler sind NICHT heilbar', () => {
+  assert.equal(isRecoverableDataGap('EOS timeout'), false);
+  assert.equal(isRecoverableDataGap('connect ECONNREFUSED 127.0.0.1:8503'), false);
+  assert.equal(isRecoverableDataGap('ETIMEDOUT'), false);
+  assert.equal(isRecoverableDataGap('EOS returned HTTP 503'), false, 'generisches 503 ohne Signatur');
+  assert.equal(isRecoverableDataGap('keine Lösung'), false);
+  assert.equal(isRecoverableDataGap('no_solution: infeasible battery bounds'), false, 'no_solution ohne Datenmangel');
+  // Zeitfehler schlägt die Datenmangel-Signatur: serve-Zustand unbekannt.
+  assert.equal(isRecoverableDataGap('timeout while Missing or invalid PV within the control horizon'), false);
+  assert.equal(isRecoverableDataGap(''), false);
+  assert.equal(isRecoverableDataGap(null), false);
+  assert.equal(isRecoverableDataGap(undefined), false);
+  assert.equal(isRecoverableDataGap({ error: 'Missing or invalid PV within the control horizon' }), false, 'nur Strings');
+});
+
+test('Gürtel A: heilbarer Fehler → recoverEosState + genau EIN Re-Trigger', async () => {
+  const h = harness({
+    recoverEosState: async (hh) => {
+      hh.reconciled = (hh.reconciled || 0) + 1; // steht für den vollen Reconcile-Tick
+      await hh.trigger.trigger('recover:data_gap'); // genau ein Re-Trigger (wie index.js)
+    },
+  });
+  h.replies.push(DATA_GAP, solution(new Array(24).fill(1), '2026-10-11T12:15:00Z'));
+  const res = await h.trigger.trigger('boundary');
+  assert.equal(res.ok, false, 'der erste Lauf scheitert');
+  await flush();
+  assert.deepEqual(h.heals, ['boundary'], 'genau eine Heilung mit dem ursprünglichen reason');
+  assert.equal(h.reconciled, 1, 'voller Reconcile genau einmal');
+  assert.equal(h.posts.length, 2, 'ein Re-Trigger-Lauf, nicht mehr');
+  assert.equal(h.posts[1].body.soc.battery1, 55, 'der Re-Trigger holt frischen SoC');
+  const heal = h.logs.filter((l) => l.type === 'eos_run_self_heal');
+  assert.equal(heal.length, 1);
+  assert.equal(heal[0].data.reason, 'boundary');
+  assert.ok(/Missing or invalid PV/.test(heal[0].data.error));
+  assert.equal(h.state.optimizer.eosRun.lastError, null, 'nach dem geheilten Re-Trigger kein Fehler mehr');
+});
+
+test('Gürtel A: zweiter Datenmangel-Fehler im Cooldown wird nur geloggt, nicht erneut geheilt', async () => {
+  // recoverEosState feuert einen Re-Trigger, der WIEDER am Datenmangel scheitert.
+  const h = harness({
+    recoverEosState: async (hh) => { await hh.trigger.trigger('recover:data_gap'); },
+  });
+  h.replies.push(DATA_GAP, DATA_GAP);
+  await h.trigger.trigger('boundary');
+  await flush();
+  assert.equal(h.heals.length, 1, 'nur EIN Heilversuch trotz zweitem Datenmangel (Cooldown)');
+  assert.equal(h.posts.length, 2, 'der Re-Trigger lief einmal, kein dritter Lauf');
+  const skipped = h.logs.filter((l) => l.type === 'eos_run_self_heal' && l.data.skipped === 'cooldown');
+  assert.equal(skipped.length, 1, 'der zweite Datenmangel wird als cooldown geloggt');
+
+  // Nach Ablauf des Cooldowns heilt der nächste Datenmangel wieder.
+  h.nowMs += EOS_SELF_HEAL_COOLDOWN_MS;
+  h.replies.push(DATA_GAP, solution(new Array(24).fill(1), '2026-10-11T12:30:00Z'));
+  await h.trigger.trigger('boundary');
+  await flush();
+  assert.equal(h.heals.length, 2, 'nach dem Cooldown wird wieder geheilt');
+});
+
+test('Gürtel A: nicht-heilbarer Fehler löst keine Heilung aus', async () => {
+  const h = harness({ recoverEosState: async () => { throw new Error('darf nicht laufen'); } });
+  h.replies.push({ ok: false, error: 'EOS returned HTTP 503' }, solution(new Array(24).fill(1), '2026-10-11T12:15:00Z'));
+  const res = await h.trigger.trigger('boundary');
+  assert.equal(res.ok, false);
+  await flush();
+  assert.equal(h.heals.length, 0, 'keine Heilung bei generischem Fehler');
+  assert.equal(h.posts.length, 1, 'kein Re-Trigger');
+  assert.equal(h.logs.some((l) => l.type === 'eos_run_self_heal'), false);
+  // Der nächste reguläre Lauf rechnet unverändert.
+  assert.equal((await h.trigger.trigger('boundary')).ok, true);
+});
+
+test('Gürtel A: ohne recoverEosState-dep bleibt alles beim Alten', async () => {
+  const h = harness(); // keine dep
+  h.replies.push(DATA_GAP, solution(new Array(24).fill(1), '2026-10-11T12:15:00Z'));
+  assert.equal((await h.trigger.trigger('boundary')).ok, false);
+  await flush();
+  assert.equal(h.posts.length, 1, 'kein Re-Trigger ohne dep');
+  assert.equal(h.logs.some((l) => l.type === 'eos_run_self_heal'), false);
+});
+
+test('Gürtel A: wirft recoverEosState, wird der Fehler geschluckt und geloggt', async () => {
+  const h = harness({ recoverEosState: async () => { throw new Error('reconcile kaputt'); } });
+  h.replies.push(DATA_GAP);
+  await h.trigger.trigger('boundary');
+  await flush();
+  assert.equal(h.heals.length, 1);
+  const recoverLog = h.logs.filter((l) => l.type === 'eos_run_self_heal' && l.data.phase === 'recover');
+  assert.equal(recoverLog.length, 1);
+  assert.ok(/reconcile kaputt/.test(recoverLog[0].data.error));
 });

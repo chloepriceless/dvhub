@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 
 import { createEosAdapter, eosTargetKey } from '../services/optimizer/eos-adapter.js';
+import { isRecoverableDataGap } from '../services/optimizer/eos-run-trigger.js';
 import { buildScheduleRules } from '../services/optimizer/schedule-builder.js';
 
 /**
@@ -923,7 +924,41 @@ test('triggerOptimization: kein Plan (HTTP 503) → { ok: false }, wirft nicht',
   });
   try {
     const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
-    assert.deepEqual(await adapter.triggerOptimization({ soc: { battery1: 55 } }, 5_000), { ok: false, error: 'EOS returned HTTP 503' });
+    // Non-2xx hängt den Antwort-Body an (ohne `detail` den rohen Body) und gibt
+    // status/detail strukturiert zurück. Ein echter Genetic-Fehler ist KEIN
+    // heilbarer Datenmangel.
+    const res = await adapter.triggerOptimization({ soc: { battery1: 55 } }, 5_000);
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 503);
+    assert.equal(res.detail, null);
+    assert.equal(res.error, 'EOS returned HTTP 503: {"title":"GENETIC optimization failed"}');
+  } finally {
+    await mock.close();
+  }
+});
+
+// Gürtel A (Selbstheilung): Der native EOS-serve liefert bei verlorenem
+// RAM-Zustand (Prognose/Config nach Neustart weg) 503 MIT JSON-Body
+// {"detail":"no_solution: Missing or invalid PV within the control horizon…"}.
+// Ohne diesen Body im Fehlerstring matcht isRecoverableDataGap nie und die
+// Selbstheilung springt nicht an. Gegen einen ECHTEN lokalen HTTP-Server.
+test('triggerOptimization: 503 + detail-Body liefert die Missing-PV-Signatur, die die Selbstheilung erkennt', async () => {
+  const mock = await createMockEos((req, res) => {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      detail: 'no_solution: Missing or invalid PV within the control horizon. Push a forecast first.',
+    }));
+  });
+  try {
+    const adapter = createEosAdapter(makeCtx(`http://127.0.0.1:${mock.port}`));
+    const res = await adapter.triggerOptimization({ soc: { battery1: 55 } }, 5_000);
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 503);
+    assert.match(res.detail, /Missing or invalid PV within the control horizon/);
+    assert.match(res.error, /EOS returned HTTP 503: /);
+    assert.match(res.error, /Missing or invalid PV within the control horizon/);
+    // Der Kern: genau dieser Fehlerstring triggert die Selbstheilung.
+    assert.equal(isRecoverableDataGap(res.error), true);
   } finally {
     await mock.close();
   }

@@ -266,8 +266,26 @@ export function createEosAdapter(ctx, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
           let chunks = '';
           res.on('data', chunk => chunks += chunk);
           res.on('end', () => {
-            if (res.statusCode < 200 || res.statusCode >= 300) {
-              resolve({ ok: false, error: `EOS returned HTTP ${res.statusCode}` });
+            const status = res.statusCode;
+            if (status < 200 || status >= 300) {
+              // Non-2xx: der native EOS-serve liefert bei Datenmangel 503 MIT
+              // JSON-Body {"detail":"no_solution: Missing or invalid PV within
+              // the control horizon…"}. Genau dieser Text ist das Signal für die
+              // Selbstheilung (isRecoverableDataGap, eos-run-trigger.js) — ohne
+              // ihn springt sie nie an. Deshalb den Body an den Fehler hängen
+              // (Format wie eos-forecast-bridge.js / eos-config-sync.js:
+              // `EOS HTTP <status>: <body>`), detail bevorzugt, sonst roher Body,
+              // auf 300 Zeichen gekürzt. status/detail zusätzlich strukturiert.
+              let detail = null;
+              try {
+                const parsed = JSON.parse(chunks);
+                if (typeof parsed?.detail === 'string') detail = parsed.detail;
+              } catch { /* kein JSON — roher Body als Rückfall */ }
+              const body = (detail ?? chunks).slice(0, 300);
+              const error = body
+                ? `EOS returned HTTP ${status}: ${body}`
+                : `EOS returned HTTP ${status}`;
+              resolve({ ok: false, error, status, detail });
               return;
             }
             // Phase 21 hotfix (2026-05-23): EOS' import endpoints reply

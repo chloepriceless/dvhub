@@ -769,6 +769,68 @@ describe('Optimizer Service: MiSpeL-Zaehler mit echter Laufzeit', () => {
   });
 });
 
+describe('recoverEosState (Selbstheilung)', () => {
+  // FIX 2: recoverEosState muss den config-sync-Cache VOR dem Reconcile leeren.
+  // Sonst überspringt der Reconcile-Sync unveränderte Abschnitte (sentConfig-
+  // Merker) und nach EOS-Verlust der Geräte-Config („Configure an inverter")
+  // wird sie innerhalb der Cache-TTL nicht neu gesendet — der Re-Trigger
+  // scheitert erneut. Der Neustart-Watchdog ruft invalidateSentConfig bereits;
+  // der Recovery-Pfad soll dasselbe tun.
+  test('invalidateSentConfig läuft VOR bridge.reconcile', async (t) => {
+    const now = Date.now();
+    t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now });
+    const order = [];
+    // Erster Lauf scheitert mit heilbarem Datenmangel → Selbstheilung; der
+    // Re-Trigger (recover) gelingt, damit keine Schleife entsteht.
+    const DATA_GAP = 'EOS returned HTTP 503: no_solution: Missing or invalid PV within the control horizon';
+    const replies = [
+      { ok: false, error: DATA_GAP, status: 503, detail: 'no_solution: Missing or invalid PV within the control horizon' },
+      { ok: true, data: { start_solution: [1], start_solution_datetime: new Date(now).toISOString() } },
+    ];
+    const eosAdapter = {
+      pushForecast: async () => ({ ok: true }),
+      pullSchedule: async () => [],
+      pullGridSetpoints: async () => [],
+      getOptimizationSolution: async () => ({ generatedAt: new Date(now).toISOString(), rows: [] }),
+      setEmsIntervalSec: async () => ({ ok: true }),
+      triggerOptimization: async () => replies.shift() || { ok: true, data: { start_solution: [1], start_solution_datetime: new Date(now).toISOString() } },
+    };
+    const eosForecastBridge = {
+      push: async () => ({ ok: true, pushed: [], errors: {} }),
+      prepareRun: async () => { ref.state.optimizer.lastEosPush = { ok: true, error: null, at: Date.now() }; return { ok: true, pushed: true }; },
+      socForRun: async () => ({ soc: { battery1: 50 } }),
+      reconcile: async () => { order.push('reconcile'); return { ok: true }; },
+    };
+    const eosConfigSync = {
+      invalidateSentConfig: () => { order.push('invalidate'); },
+      sync: async () => ({ ok: true }),
+    };
+    const ref = {};
+    const built = buildCtx({
+      optimizerCfg: { primarySource: 'eos', eosProxy: { enabled: true, url: 'http://localhost:8503' } },
+      ctx: { eosAdapter, eosForecastBridge, eosConfigSync, eosMonitor: { status: () => ({ status: 'up' }), onSolution: () => () => {}, ingest: () => {}, notifySolutionReady: async () => {} } },
+    });
+    const state = built.state;
+    ref.state = state;
+    const svc = createOptimizerService(built.ctx);
+    state.optimizer.eos = { supported: true };
+    const flush = async () => { for (let i = 0; i < 40; i++) await new Promise((r) => setImmediate(r)); };
+    await svc.start();
+    await flush();
+    // Bis über die nächste Lauf-Grenze: der Lauf scheitert und löst die
+    // Selbstheilung aus (recoverEosState).
+    for (let minute = 0; minute < 62; minute += 1) {
+      t.mock.timers.tick(60_000);
+      await flush();
+    }
+    await svc.close();
+
+    assert.ok(order.includes('invalidate'), 'invalidateSentConfig wurde im Recovery-Pfad gerufen');
+    assert.ok(order.includes('reconcile'), 'reconcile wurde gerufen');
+    assert.ok(order.indexOf('invalidate') < order.indexOf('reconcile'), `invalidate muss vor reconcile laufen (Reihenfolge: ${order.join(',')})`);
+  });
+});
+
 describe('mispelIntervalWh', () => {
   test('echte Zeit, gedeckelt, ohne Vorlauf 0', async () => {
     const { mispelIntervalWh } = await import('../services/optimizer/index.js');

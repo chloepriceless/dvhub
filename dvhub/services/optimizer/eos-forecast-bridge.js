@@ -760,6 +760,11 @@ export function createEosForecastBridge(ctx) {
     });
   }
   let lastEosPid = null;
+  // Der in start() gebaute Reconcile-Tick (beforePush=config-sync, push,
+  // afterPush), damit ihn der Selbstheil-Pfad (eos-run-trigger.js) außer der
+  // Reihe auslösen kann, wenn ein Lauf an fehlenden Daten im Steuerzeitraum
+  // scheitert (native serve verlor seinen RAM-Zustand).
+  let reconcileTick = null;
 
   /**
    * Gespeicherte echte Day-Ahead-Preise (price_ct_kwh) von drei Stunden vor
@@ -2040,6 +2045,7 @@ export function createEosForecastBridge(ctx) {
         try { await opts.afterPush(); } catch { /* afterPush logs/swallows */ }
       }
     };
+    reconcileTick = tick; // für den außerplanmäßigen Reconcile (reconcile())
     if (opts.fireImmediately !== false) tick();
     tickHandle = setInterval(tick, intervalMs);
     standbyHandle = setInterval(sampleStandby, 60_000);
@@ -2105,7 +2111,20 @@ export function createEosForecastBridge(ctx) {
     }
   }
 
-  return { push, prepareRun, pushFreshSoc, socForRun, start, stop };
+  /**
+   * Voller Reconcile außer der Reihe: genau der Tick, den der Neustart-Watchdog
+   * fährt (config-sync vorweg, Prognose-Push, afterPush). Dient dem
+   * Selbstheil-Pfad, wenn ein EOS-Lauf an fehlenden Daten im Steuerzeitraum
+   * scheitert und der Neustart-Watchdog das Zeitfenster verpasst hat. Vor
+   * start() (reconcileTick == null) weicht er auf einen einfachen push() aus;
+   * wirft nie (der Tick schluckt seine Fehler selbst).
+   */
+  async function reconcile() {
+    if (typeof reconcileTick === 'function') { await reconcileTick(); return; }
+    try { await push(); } catch { /* push() loggt selbst */ }
+  }
+
+  return { push, prepareRun, pushFreshSoc, socForRun, reconcile, start, stop };
 }
 
 // Exported for unit-tests.
