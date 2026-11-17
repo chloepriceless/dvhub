@@ -17,8 +17,10 @@ import path from 'node:path';
 
 import { loadConfigFile } from '../config-model.js';
 import { createModbusTransport } from '../transport-modbus.js';
-import { sungrowForcedSafeOff, readForcedMarker, forcedConnections } from '../services/inverter/sungrow-forced-safeoff.js';
-import { sungrowEmsConf } from '../services/inverter/sungrow.js';
+import { sungrowForcedSafeOff, readForcedMarker, releaseShouldWrite, forcedConnections } from '../services/inverter/sungrow-forced-safeoff.js';
+import { wire, EMS_MODE, sungrowEmsConf } from '../services/inverter/sungrow.js';
+
+const MODE_ADDR = wire(13050);
 
 const HARD_TIMEOUT_MS = Number(process.env.SUNGROW_RELEASE_TIMEOUT_MS) || 8000;
 const log = (msg, extra) => console.log(`[sungrow-forced-release] ${msg}${extra ? ' ' + JSON.stringify(extra) : ''}`);
@@ -48,6 +50,16 @@ async function main() {
 
   const transport = createModbusTransport({ connectTimeoutMs: 1500 });
   try {
+    // A3-2 (Christin 16.11.): wie der Box-Watchdog erst den LIVE-Modus lesen, dann entscheiden — nicht blind auf
+    // den Merker schreiben. Nur zurücknehmen, wenn der Master wirklich in Forced (Modus 2) steht. Lesefehler →
+    // nichts anfassen (der Watchdog greift sonst), um keinen Write an ein nicht-forced/fremdes Gerät zu setzen.
+    let liveMode = null;
+    try {
+      const regs = await transport.mbRequest({ host: master.host, port: master.port, unitId: master.unitId, fc: 3, address: MODE_ADDR, quantity: 1, timeoutMs: master.timeoutMs });
+      liveMode = Array.isArray(regs) ? (Number(regs[0]) & 0xffff) : null;
+    } catch (e) { log('Modus lesen fehlgeschlagen — nichts anfassen', { error: e?.message || String(e) }); return; }
+    const d = releaseShouldWrite({ liveMode, markerOwned: marker.owned });
+    if (!d.write) { log('kein Eingriff', { ...d, liveMode }); return; }
     const out = await sungrowForcedSafeOff({ transport, master, slave });
     log('Forced mode zurückgenommen', out);
   } finally {

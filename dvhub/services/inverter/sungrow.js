@@ -787,6 +787,23 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       }
     } catch { /* kein Merker → nichts in Besitz */ }
   }
+
+  // A2 (Christin 16.11.2026): Tages-Schreibzähler (13050-Budget) auf die Platte, sonst setzt ein Neustart das
+  // Budget zurück und der WR könnte an einem Tag deutlich mehr als 20 Moduswechsel sehen (Flash-Verschleiß). EIGENE
+  // Datei neben dem Besitz-Merker (sungrow_ems_writeday.json) — der Watchdog-Schlüssel (ownMode/endpointKey im
+  // sungrow_ems_state.json) bleibt exakt unberührt. Nur der Master persistiert (statePath gesetzt); der Slave hat
+  // kein Mode-Budget. Geschrieben wird NUR beim Moduswechsel (≤20/Tag) — kein Datei-I/O im 1-s-Regeltakt.
+  const writeDayPath = statePath ? String(statePath).replace(/[^/\\]*$/, 'sungrow_ems_writeday.json') : null;
+  if (writeDayPath) {
+    try {
+      const w = JSON.parse(fs.readFileSync(writeDayPath, 'utf8'));
+      if (w && typeof w.key === 'string' && w.regs && typeof w.regs === 'object') {
+        // writeDayBucket() setzt an einem neuen Tag ohnehin zurück — ein veralteter Stand wird so verworfen.
+        st.writeDay = { key: w.key, regs: { ...w.regs } };
+      }
+    } catch { /* keine/ungültige Datei → frischer Zähler */ }
+  }
+
   function setOwns(mode) {
     const owns = mode != null;
     if (st.owns === owns && st.ownMode === (owns ? mode : null)) return;
@@ -971,6 +988,20 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Not-Halt vor JEDEM Write prüfen: ein Takt, der vor dem Eintritt begann, darf danach nichts mehr setzen.
   // Nur die eine Rücknahme (neutralize) darf im Not-Halt schreiben.
   async function writeReg(conf, address, value, { neutralize = false, claimMode = null, fc = 6 } = {}) {
+    // C2 (Christin 16.11.2026): ungültige Konfiguration (kaputtes/fehlendes Herstellerprofil → cfg.writeSafety.ok
+    // === false) sperrt JEDEN Aktuator-Write — auch neutralize. Die wirksame Config trägt dann Default-Register;
+    // ein Write ginge an ein möglicherweise fremdes Gerät. Lauter Alarm einmal je Grund, dann KEIN Write.
+    const ws = getCfg()?.writeSafety;
+    if (ws && ws.ok === false) {
+      if (st._writeUnsafeAlarm !== (ws.reason || 'config_invalid')) {
+        st._writeUnsafeAlarm = ws.reason || 'config_invalid';
+        pushLog('sungrow_write_blocked_config_unsafe', { reason: ws.reason || 'config_invalid', manufacturer: ws.manufacturer ?? null }, 'error');
+      }
+      const err = new Error(`config_unsafe_${ws.reason || 'config_invalid'}`);
+      err.code = 'config_unsafe';
+      throw err;
+    }
+    if (st._writeUnsafeAlarm) st._writeUnsafeAlarm = null;
     if (state.ctrl?.discretionaryWritesPaused && !neutralize) {
       const err = new Error('emergency_stop_active');
       err.code = 'emergency_stop_active';
@@ -1002,6 +1033,12 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   function countWrite(address) {
     const b = writeDayBucket();
     b.regs[address] = (b.regs[address] || 0) + 1;
+    // A2: nur den budgetrelevanten Moduswechsel (13050) persistieren — hält das 13050-Budget restart-fest und
+    // begrenzt das Datei-I/O auf ≤20/Tag (die häufigen 13052/13080-Writes brauchen keine Persistenz).
+    if (writeDayPath && address === EMS_MODE_ADDR) {
+      try { atomicWriteControlState(writeDayPath, { key: b.key, regs: b.regs }); }
+      catch (e) { logOnce(e?.message || 'x', 'sungrow_ems_writeday_persist_error', { error: e?.message || String(e) }, 'warn'); }
+    }
   }
   // Verbleibendes 13050-Tagesbudget (Moduswechsel). ≤ 0 → nicht mehr wechseln (im Modus bleiben, Punkt 2).
   function modeBudgetLeft() {
@@ -1981,6 +2018,17 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       }
     });
   }
+
+  // === Schreibklassen-Matrix im Not-Halt (C3.2, Christin 16.11.2026) ==========================================
+  // Entscheidung festgehalten: Der Not-Halt sperrt DVhubs EIGENE Regel-Writes (writeReg ohne neutralize wirft
+  // emergency_stop_active). AUSDRÜCKLICHE Ausnahme — genau EINE Neutralisierung über den Außen-Pfad:
+  //   • releaseControl (geordnetes Beenden, SIGTERM/Update, ExecStopPost des Not-Stop-Skripts) und
+  //   • neutralize (Box-Watchdog)
+  // dürfen den Forced-WR EINMAL sicher zurücknehmen (Modus 0 / Befehl 0xCC, neutralize:true). Grund: der
+  // Forced-WR hat KEINEN geräteeigenen Rückfall — ohne diese Ausnahme hinge er im Zwangsmodus. „Einmal" ist durch
+  // den Besitz-Merker begrenzt (nach der Rücknahme owns=null → ein zweiter Aufruf ist ein No-op). Abgesichert in
+  // test/sungrow-ems.test.js („P5 Schreibklassen-Matrix …"). KEINE weitere Write-Klasse darf im Not-Halt schreiben.
+  // ===========================================================================================================
 
   /** Slave einmal sicher in Self-consumption (Not-Halt, Split-Abbruch, Rückzug). Schreibt auch im Not-Halt. */
   function neutralize(reason = 'neutralize') {

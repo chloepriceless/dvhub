@@ -137,7 +137,10 @@ test('#10: deaktivierte Steuerung verweigert Sequenz-SPERREN, erlaubt aber die F
   assert.deepEqual(transport.writes[0], { fc: 6, address: 40358, value: 0 });
 });
 
-test('Victron-Direktregister (keine sequence) nimmt unverändert den generischen Pfad', async () => {
+test('Victron-Direktregister (keine sequence) geht jetzt AUCH über applyDvVictronControl (C1: ein Schreibweg)', async () => {
+  // C1 (Christin 16.11.): feedExcessDcPv hat nur noch EINEN Schreibweg. Der Victron-Direktregister-Fall
+  // delegiert jetzt ebenfalls an applyDvVictronControl (writeType 'dv_control') statt an den generischen Pfad.
+  // Das Gerät sieht denselben Write (Register 2707 := 0), die API-Antwort spiegelt den Aktuator.
   const state = makeState();
   const cfg = {
     controlWrite: {},
@@ -154,8 +157,9 @@ test('Victron-Direktregister (keine sequence) nimmt unverändert den generischen
   });
   const res = await evaluator.applyControlTarget('feedExcessDcPv', 0, 'api_manual_write');
   assert.equal(res.ok, true);
-  assert.equal(res.address, 2707);
-  assert.deepEqual(transport.writes, [{ fc: 6, address: 2707, value: 0 }]);
+  assert.equal(res.writeType, 'dv_control', 'ein Schreibweg: Victron-Direktregister über applyDvVictronControl');
+  assert.deepEqual(transport.writes, [{ fc: 6, address: 2707, value: 0 }], 'Gerät sieht denselben Write');
+  assert.equal(state.ctrl._lastDvFeedIn, false, 'applyDvVictronControl führt den Change-Cache (ein Schreibweg)');
 });
 
 // --- M124 save/restore restart-fest (Christin 2026-07-19, Feldtest 554bbdfd) ---

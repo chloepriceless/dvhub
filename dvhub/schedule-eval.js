@@ -20,7 +20,7 @@ import { safeInterval } from './services/safe-async.js';
 import { encodeSunspecFloat32, decodeSunspecFloat32 } from './services/inverter/sunspec.js';
 import { getPowerLimits } from './services/power-limits.js';
 // Zweite GX am selben Anschluss: EOS-Ziele gelten fuer beide Akkus zusammen.
-import { planningCfg, planningSocPct } from './services/multi-gx/planning.js';
+import { planningCfg, planningSocPct, floorSocPct } from './services/multi-gx/planning.js';
 import { createFloorHandoff } from './services/multi-gx/floor-handoff.js';
 import { capLoopStep } from './services/feed-in-cap/index.js';
 import { notHaltAllowsControlSource, notHaltAllowsDvReason, notHaltContinues } from './services/emergency-stop/policy.js';
@@ -240,7 +240,31 @@ export function createScheduleEvaluator(ctx) {
   // Geräte-Tor (Profil identify.requiredForWrites): geschrieben wird erst, wenn
   // polling.js das Gerät erkannt hat und es unterstützt ist — ein falsches oder
   // unbekanntes Gerät hinter derselben Adresse bekommt keinen einzigen Write.
+  // === C2 (Christin 16.11.2026): hartes Schreib-Tor bei ungültiger Konfiguration =============================
+  // Kaputte/fehlende Herstellerprofil-Datei (oder kaputte config.json) → die wirksame Config trägt Default-Register
+  // (z. B. Victron 2716); ein Write ginge an ein möglicherweise FREMDES Gerät. loadConfigFile markiert das mit
+  // cfg.writeSafety.ok === false. Dann schreibt KEIN Pfad mehr (Chokepoint, Keepalive/2716, DV-Abregelung,
+  // Nulleinspeisung, Sungrow-Aktuator) — die Anlage bleibt ungeregelt, bis jemand eingreift (gewollt, sicherer).
+  // Dazu ein LAUTER Alarm, einmal je Grund (nicht jede ~15-s-Runde fluten); beim Erholen wird der Alarm neu scharf.
+  function writeConfigUnsafeReason(cfg, source = null) {
+    const ws = cfg?.writeSafety;
+    if (!ws || ws.ok !== false) {
+      if (state.ctrl?._writeUnsafeAlarm) state.ctrl._writeUnsafeAlarm = null;
+      return null;
+    }
+    const reason = ws.reason || 'config_invalid';
+    if (state.ctrl && state.ctrl._writeUnsafeAlarm !== reason) {
+      state.ctrl._writeUnsafeAlarm = reason;
+      pushLog('control_write_blocked_config_unsafe',
+        { reason, manufacturer: ws.manufacturer ?? null, source }, 'error');
+    }
+    return `config_unsafe_${reason}`;
+  }
+
   function deviceWriteGate(cfg) {
+    // C2 zuerst: ungültige Konfiguration sperrt ALLE Gerätewrites, vor jeder herstellerspezifischen Prüfung.
+    const unsafe = writeConfigUnsafeReason(cfg);
+    if (unsafe) return unsafe;
     if (cfg?.identify?.requiredForWrites !== true) return null;
     const d = state.victron?.device;
     // Erkannt gilt nur für die Verbindung, an der erkannt wurde — nach einem
@@ -1074,10 +1098,36 @@ export function createScheduleEvaluator(ctx) {
     return (m[flag] ??= { fails: 0, nextAt: 0, lastError: null });
   }
 
+  // A10 (Christin 16.11.2026): aktive PFLICHT-Sperre der Einspeisung — dieselben Klassen, die der Eval-Pfad als
+  // mandatory feedIn=false fährt (§51 negative Preise, DV-forcedOff, §14a-Produktionssperre). Steht eine, darf eine
+  // Handvorgabe sie nicht aufheben. null = keine Pflicht-Sperre aktiv.
+  function feedInMandatoryBlockReason() {
+    if (state.ctrl.forcedOff) return 'dv_forced_off';
+    if (state.ctrl.eebusProductionBlock === true) return 'paragraph14a_production_block';
+    if (state.ctrl.negativePriceActive === true) return 'negative_price_protection';
+    return null;
+  }
+
+  // FIX 1 (A11, Christin 17.11.2026): EIN gemeinsames „unverändert"-Prädikat für
+  // BEIDE feedExcessDcPv-Skip-Stellen — den Chokepoint-Frühskip (applyControlTarget)
+  // UND applyDvVictronControl. Der feedIn-Zustand gilt als unverändert (Write-Skip),
+  // AUSSER es steht eine Teil-Sperre (_dvPartialBlock) und wir wollen freigeben
+  // (feedIn=true) — dann MUSS der Write durch, sonst bleibt 2707 sperrend. Vorher
+  // kannte nur applyDvVictronControl die Teil-Block-Ausnahme; der Chokepoint-Skip
+  // nicht → eine Handfreigabe nach einer teilweise gescheiterten Sperre gab
+  // fälschlich „unchanged" zurück und ließ die PV abgeregelt. Eine Definition,
+  // damit die beiden Stellen nie wieder auseinanderdriften.
+  function dvFeedInUnchanged(feedIn) {
+    return state.ctrl._lastDvFeedIn === feedIn
+      && !(feedIn === true && state.ctrl._dvPartialBlock === true);
+  }
+
   async function applyDvVictronControl(feedIn, { explicit = false, reason = null } = {}) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
     if (!dc) return;
+    // C2: ungültige Konfiguration → kein Abregel-/Freigabe-Write (eigener Schreibweg, umgeht deviceWriteGate).
+    if (writeConfigUnsafeReason(cfg, reason)) return;
     // Not-Halt: nur die eine Freigabe (notHaltDvDecision) und Sperren einer
     // weiterlaufenden Pflicht-Klasse; alles andere schreibt nichts.
     if (state.ctrl.discretionaryWritesPaused) {
@@ -1101,7 +1151,7 @@ export function createScheduleEvaluator(ctx) {
 
     // Only write when feedIn state actually changes (first call: _lastDvFeedIn is undefined → always writes once)
     // Eine Teil-Sperre (state.ctrl._dvPartialBlock) wird trotz gleichem Cache freigegeben.
-    if (state.ctrl._lastDvFeedIn === feedIn && !(feedIn === true && state.ctrl._dvPartialBlock === true)) return;
+    if (dvFeedInUnchanged(feedIn)) return;
 
     const results = {};
     // Erster Aufruf nach dem Start (Change-Cache leer) mit Freigabe: eine
@@ -1118,6 +1168,10 @@ export function createScheduleEvaluator(ctx) {
     // Now any write failure leaves the cache at its previous value so the next
     // call re-attempts. Partial success also re-attempts (idempotent re-write).
     let allOk = true;
+    // FIX 2: welche der beiden Flaggen ein DIREKTER Register-Write war (kein
+    // Sequenz-Dialekt, kein MQTT) — nur für die gehören Rücklese-Verify geplant.
+    let feedDcDirectVal = null;
+    let dontFeedAcDirectVal = null;
 
     // Feed excess DC-coupled PV into grid: 1 = feed, 0 = block
     if (dc.feedExcessDcPv?.enabled) {
@@ -1144,6 +1198,7 @@ export function createScheduleEvaluator(ctx) {
             unitId: dc.feedExcessDcPv.unitId, address: dc.feedExcessDcPv.address,
             value: val, timeoutMs: dc.feedExcessDcPv.timeoutMs
           });
+          feedDcDirectVal = val;
         }
         if (skipped) {
           results.feedExcessDcPv = { ok: true, value: val, skipped: 'no_own_block' };
@@ -1206,6 +1261,7 @@ export function createScheduleEvaluator(ctx) {
             unitId: dc.dontFeedExcessAcPv.unitId, address: dc.dontFeedExcessAcPv.address,
             value: val, timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
           });
+          dontFeedAcDirectVal = val;
         }
         if (skipped) {
           results.dontFeedExcessAcPv = { ok: true, value: val, skipped: 'no_own_block' };
@@ -1238,6 +1294,32 @@ export function createScheduleEvaluator(ctx) {
       // Sequenz nur bis zur Hälfte): die Sperre ist DVhubs eigene und bekommt
       // im Not-Halt ihre Freigabe (Codex 2f215968, P2; Codex 56e41b93, P1).
       state.ctrl._dvPartialBlock = true;
+    }
+
+    // FIX 2 (A11, Christin 17.11.2026): Rücklese-Verify für die DIREKTEN
+    // Victron-Register (2707 feedExcessDcPv, 2708 dontFeedExcessAcPv) wieder
+    // anstoßen. C1 hat den feedExcessDcPv-Direktwrite vom generischen
+    // Einzelregister-Pfad (der maybeScheduleWriteVerify rief) auf diesen
+    // dv_control-Pfad umgelenkt, der kein Verify mehr plante → bei aktivem
+    // controlWriteVerify fehlte die Rücklese-Prüfung. Jetzt pro erfolgreichem
+    // Direkt-Write einen lastWrite-Eintrag mit raw/words setzen und das Verify
+    // planen (runWriteVerify liest auf RAW-Wort-Ebene zurück, verwirft bei
+    // Mismatch den lastWrite → der nächste Assert schreibt neu). Sequenz- und
+    // MQTT-Writes bleiben außen vor (eigener Aktuator, B-1112).
+    // HART hinter dem Flag: ist controlWriteVerify AUS (Standard), passiert hier
+    // NICHTS — kein lastWrite, kein zusätzlicher Read, kein geändertes Verhalten.
+    if (resolveControlWriteVerify(cfg).enabled) {
+      const planDirectVerify = (target, conf, val, ok) => {
+        if (val == null || !ok) return;
+        state.schedule.lastWrite[target] = {
+          value: val, raw: val, words: [val], scaled: val,
+          source: reason || 'dv_control', writeType: 'dv_control',
+          fc: Number(conf.fc) || 6, address: conf.address, at: Date.now()
+        };
+        maybeScheduleWriteVerify(target, conf, cfg, { isKeepalive: false });
+      };
+      planDirectVerify('feedExcessDcPv', dc.feedExcessDcPv || {}, feedDcDirectVal, results.feedExcessDcPv?.ok === true && !results.feedExcessDcPv.skipped);
+      planDirectVerify('dontFeedExcessAcPv', dc.dontFeedExcessAcPv || {}, dontFeedAcDirectVal, results.dontFeedExcessAcPv?.ok === true && !results.dontFeedExcessAcPv.skipped);
     }
   }
 
@@ -1533,40 +1615,59 @@ export function createScheduleEvaluator(ctx) {
     // Victron (Direkt-Register 2707, keine sequence) läuft unverändert durch den
     // generischen Pfad. Sitzt NACH dem NOT-HALT-Gate: manuelle Flag-Writes
     // bleiben im Not-Halt geblockt.
+    // C1/A10 (Christin 16.11.2026): feedExcessDcPv geht IMMER über den EINEN Schreibweg (applyDvVictronControl) —
+    // Sequenz-Dialekt (Fronius M124, Deye Work-Mode) UND Victron-Direktregister (2707). Vorher nahm der Direkt-
+    // Register-Fall den generischen Einzelregister-Pfad unten: ZWEI Schreiber auf dasselbe Flag. Jetzt delegiert
+    // der Chokepoint beide Fälle an den kanonischen Aktuator, damit API-Antwort == Geräteaktion und es nur einen
+    // Schreibweg gibt. Sitzt NACH dem NOT-HALT-Gate: manuelle Flag-Writes bleiben im Not-Halt geblockt.
     if (target === 'feedExcessDcPv') {
       const feedIn = Number(value) === 1;
-      const seq = cfg.dvControl?.feedExcessDcPv?.sequence;
-      if (Array.isArray(seq?.[feedIn ? '1' : '0'])) {
-        if (cfg.dvControl?.enabled !== true && !feedIn) {
-          // #10 (FrodoVDR): deaktivierte Steuerung darf NIE sperren, nur freigeben.
-          pushLog('control_write_rejected', { target, value, source, reason: 'dv_control_disabled' });
-          return { ok: false, error: 'dv_control_disabled' };
-        }
-        if (state.ctrl._lastDvFeedIn === feedIn) {
-          state.schedule.active[target] = { value, source, at: Date.now(), skipped: true, reason: 'unchanged' };
-          return { ok: true, skipped: true, reason: 'unchanged' };
-        }
-        await applyDvVictronControl(feedIn, { explicit: true, reason: source });
-        const seqResult = state.ctrl.dvControl?.feedExcessDcPv;
-        if (!seqResult?.ok) {
-          pushLog('control_write_error', { target, value, source, error: seqResult?.error || 'dv_sequence_failed' });
-          return { ok: false, error: seqResult?.error || 'dv_sequence_failed' };
-        }
-        state.schedule.lastWrite[target] = { value, source, writeType: 'sequence', at: Date.now() };
-        state.schedule.active[target] = { value, source, at: Date.now() };
-        pushLog('control_write', { target, value, source, writeType: 'sequence' });
-        telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
-          eventType: 'control_write',
-          target,
-          valueNum: Number(value),
-          reason: source,
-          source: 'runtime',
-          meta: { writeType: 'sequence' }
-        }));
-        return { ok: true, writeType: 'sequence' };
+      if (cfg.dvControl?.enabled !== true && !feedIn) {
+        // #10 (FrodoVDR): deaktivierte Steuerung darf NIE sperren, nur freigeben.
+        pushLog('control_write_rejected', { target, value, source, reason: 'dv_control_disabled' });
+        return { ok: false, error: 'dv_control_disabled' };
       }
+      // A10: eine Freigabe (feedIn=1) hebt KEINE Pflicht-Sperre auf (§51 negative Preise, DV-forcedOff,
+      // §14a-Produktionssperre). Eine Handvorgabe darf die Pflicht-Abregelung nicht übersteuern.
+      const mandatoryBlock = feedInMandatoryBlockReason();
+      if (feedIn && mandatoryBlock && !isMandatoryControlSource(source)) {
+        pushLog('control_write_rejected', { target, value, source, reason: `feed_in_blocked_${mandatoryBlock}` });
+        return { ok: false, error: `feed_in_blocked_${mandatoryBlock}` };
+      }
+      if (dvFeedInUnchanged(feedIn)) {
+        state.schedule.active[target] = { value, source, at: Date.now(), skipped: true, reason: 'unchanged' };
+        return { ok: true, skipped: true, reason: 'unchanged' };
+      }
+      const writeType = Array.isArray(cfg.dvControl?.feedExcessDcPv?.sequence?.[feedIn ? '1' : '0']) ? 'sequence' : 'dv_control';
+      await applyDvVictronControl(feedIn, { explicit: true, reason: source });
+      const dvResult = state.ctrl.dvControl?.feedExcessDcPv;
+      if (!dvResult?.ok) {
+        pushLog('control_write_error', { target, value, source, error: dvResult?.error || 'dv_control_failed' });
+        return { ok: false, error: dvResult?.error || 'dv_control_failed' };
+      }
+      // FIX 2: Bei aktivem controlWriteVerify hat applyDvVictronControl für den
+      // Direktregister-Write (dv_control) bereits einen vollständigen lastWrite-
+      // Eintrag mit raw/words gesetzt und das Rücklese-Verify geplant — den NICHT
+      // mit der schlanken Variante überschreiben (sonst verlöre das Verify die
+      // Vergleichswörter). Sequenz-Writes und der Normalfall (Verify AUS) setzen
+      // den Eintrag unverändert wie bisher.
+      const verifyOwnsLastWrite = writeType === 'dv_control' && resolveControlWriteVerify(cfg).enabled;
+      if (!verifyOwnsLastWrite) {
+        state.schedule.lastWrite[target] = { value, source, writeType, at: Date.now() };
+      }
+      state.schedule.active[target] = { value, source, at: Date.now() };
+      pushLog('control_write', { target, value, source, writeType });
+      telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
+        eventType: 'control_write',
+        target,
+        valueNum: Number(value),
+        reason: source,
+        source: 'runtime',
+        meta: { writeType }
+      }));
+      return { ok: true, writeType };
     }
-    // === end B-1112 Sequenz-Dialekt ==========================================
+    // === end feedExcessDcPv: ein Schreibweg =================================
 
     // === Einspeise-Puffer als Untergrenze (GitHub #12) ========================
     // Steht der gridSetpointW auf 0, regelt die Anlage auf "null am Zähler" —
@@ -1850,9 +1951,11 @@ export function createScheduleEvaluator(ctx) {
     // unknown/stale telemetry => no forced/enabled discharge.
     const safeHold = dischargeFloorHold(target, value);
     if (safeHold !== null) {
-      // Zwei Sungrow-WR: der SoC-Boden nutzt den NIEDRIGEREN der beiden SoC (socFloorPct, polling.js), damit der
-      // schwächere Akku nicht unter den Boden entladen wird; ohne zweiten WR ist das der normale System-SoC.
-      const socRaw = state.victron.socFloorPct ?? state.victron.soc;
+      // Befund 1.4-2 (Christin 16.11.): der Boden vergleicht gegen den REALEN harten Boden — also den ECHTEN SoC
+      // nutzen. floorSocPct rechnet bei Sungrow den gemeldeten FENSTERRELATIVEN SoC je WR in echt um (konsistent zum
+      // schon gemergten Zeitplan-Fix planningSocPct) und nimmt den NIEDRIGEREN der beiden (schützt den schwächeren
+      // Akku); ohne zweiten WR ist das der reale System-SoC, non-Sungrow der unveränderte Wert.
+      const socRaw = floorSocPct(ctx);
       const soc = Number(socRaw);
       const floorPct = Number(cfg.optimizer?.hardFloorSocPct ?? 5);
       const maxAgeMs = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
@@ -2680,8 +2783,9 @@ export function createScheduleEvaluator(ctx) {
           && eff.source === 'manual_override_persistent'
           && Number(eff.value) < 0) {
         const floorPct = Number(cfg.schedule?.manualOverrideMinSocPct ?? 10);
-        // Zwei Sungrow-WR: niedrigerer der beiden SoC als Boden (socFloorPct, polling.js); sonst System-SoC.
-        const socRaw = state.victron.socFloorPct ?? state.victron.soc;
+        // Befund 1.4-2: echter SoC (floorSocPct rechnet Sungrow fensterrelativ → real, niedrigerer der beiden WR);
+        // sonst der unveränderte System-SoC.
+        const socRaw = floorSocPct(ctx);
         const soc = Number(socRaw);
         const socKnown = socRaw != null && Number.isFinite(soc);
         if (!socKnown || soc <= floorPct) {
@@ -2983,6 +3087,8 @@ export function createScheduleEvaluator(ctx) {
       const rvrtConf = cfg.controlWrite?.wMaxLimPctRvrtTms;
       const outConf = cfg.controlWrite?.outWRte;
       const zfi = zfiState();
+      // C2: ungültige Konfiguration → kein Nulleinspeisungs-Write (eigener Schreibweg, umgeht deviceWriteGate).
+      if (writeConfigUnsafeReason(cfg, 'zero_feed_in')) return;
       // Profil ohne Feature / Punkte (noch) nicht per SunSpec-Scan aufgelöst →
       // still bleiben. Ein am Gerät stehender Deckel verfällt über RvrtTms.
       if (!zc?.enabled || transport.type !== 'modbus') return;

@@ -254,6 +254,49 @@ test('Absicherung C: releaseControl schreibt auch im Not-Halt (sichere Rücknahm
   assert.equal(r.image.holding.get(CMD), EMS_CMD.STOP);
 });
 
+// P5 / C3.2 Schreibklassen-Matrix (Christin 16.11.2026): Der Not-Halt sperrt DVhubs EIGENE Regel-Writes; aber
+// releaseControl (geordnetes Beenden) und der Box-Watchdog (neutralize) dürfen den Forced-WR EINMAL neutralisieren
+// — der Forced-WR hat keinen geräteeigenen Rückfall, sonst hinge er im Zwangsmodus. Das ist eine AUSDRÜCKLICHE,
+// benannte Ausnahme. Dieser Test nagelt beide Seiten der Matrix fest (keine Verhaltensänderung).
+test('P5 Schreibklassen-Matrix: Not-Halt sperrt eigene Writes, erlaubt aber releaseControl — genau EINE Neutralisierung', async () => {
+  const r = rig({ controlMode: 'forced' });
+  await r.ems.applySetpoint(-5000, 'rule:abend'); // Forced, owns
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  r.state.ctrl.discretionaryWritesPaused = true; // Not-Halt aktiv
+  r.t.writes.length = 0;
+
+  // (1) DVhub-eigener Regel-Write ist im Not-Halt gesperrt — keine Modbus-Anfrage.
+  const regel = await r.ems.applySetpoint(-3000, 'rule:abend');
+  assert.notEqual(regel.ok, true, 'eigener Regel-Write muss im Not-Halt scheitern');
+  assert.equal(r.t.writes.length, 0, 'kein eigener Write im Not-Halt');
+
+  // (2) releaseControl (Beenden) DARF neutralisieren — die benannte Ausnahme.
+  const rel = await r.ems.releaseControl('shutdown');
+  assert.equal(rel.ok, true, JSON.stringify(rel));
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.SELF, 'Modus 0 (neutralisiert)');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.STOP, 'Befehl 0xCC');
+  assert.equal(r.state.ctrl.sungrowEms.owns, false, 'Besitz abgegeben');
+  const writesAfterRelease = r.t.writes.length;
+  assert.ok(writesAfterRelease > 0, 'die Neutralisierung schreibt');
+
+  // (3) auf EINEN neutralisierenden Write begrenzt: ein zweites releaseControl schreibt nichts mehr.
+  r.t.writes.length = 0;
+  const again = await r.ems.releaseControl('shutdown');
+  assert.equal(again.skipped, true, 'zweites releaseControl ist ein No-op (Besitz bereits abgegeben)');
+  assert.equal(r.t.writes.length, 0, 'keine zweite Neutralisierung');
+});
+
+test('P5 Schreibklassen-Matrix: der Box-Watchdog (neutralize) darf im Not-Halt ebenfalls einmal neutralisieren', async () => {
+  const r = rig({ controlMode: 'forced' });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  r.state.ctrl.discretionaryWritesPaused = true;
+  r.t.writes.length = 0;
+  const res = await r.ems.neutralize('watchdog');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.image.holding.get(MODE), EMS_MODE.SELF, 'auch der Watchdog-Pfad neutralisiert im Not-Halt');
+  assert.ok(r.t.writes.length > 0, 'die Watchdog-Neutralisierung schreibt');
+});
+
 test('Absicherung C: releaseControl nimmt im Split BEIDE WR zurück (Slave 0xCC, Master Modus 0)', async () => {
   const r = splitRig();
   await r.ems.applySetpoint(-6000, 'rule:abend'); // Split-Entladen, beide gefahren
@@ -452,6 +495,34 @@ test('Absicherung C3: Start mit Forced-Merker → erster Takt setzt den Akku-Bef
   r.telemetry({ gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 });
   await r.ems.applySetpoint(-5000, 'rule:abend');
   assert.equal(r.image.holding.get(CMD), EMS_CMD.DISCHARGE, 'danach regelt es normal (Entladen)');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// A2 (Christin 16.11.2026): das 13050-Tagesbudget (Moduswechsel) überlebt jetzt einen Neustart — in einer EIGENEN
+// Datei neben dem Besitz-Merker, der Watchdog-Schlüssel bleibt unberührt.
+test('A2: 13050-Schreibzähler wird persistiert und überlebt den Neustart (eigene Datei, Merker unberührt)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-writeday-'));
+  const statePath = path.join(dir, 'sungrow_ems_state.json');
+  const writeDayPath = path.join(dir, 'sungrow_ems_writeday.json');
+
+  // Lauf 1: Eintritt in Forced → genau EIN Moduswechsel (13050), Budget 20 → 19, persistiert.
+  const r1 = rig({ controlMode: 'forced', statePath });
+  await r1.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(r1.t.writes.filter((w) => w.address === MODE).length, 1, 'ein Moduswechsel');
+  assert.equal(r1.ems.status().modeBudgetLeft, 19);
+  assert.ok(fs.existsSync(writeDayPath), 'eigene Zähler-Datei geschrieben');
+  const persisted = JSON.parse(fs.readFileSync(writeDayPath, 'utf8'));
+  assert.equal(persisted.regs[String(MODE)], 1, '13050-Zähler auf der Platte');
+  // Watchdog-Merker (Besitz) ist eine ANDERE Datei mit exakt seinen Schlüsseln.
+  const marker = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  assert.equal(marker.ownMode, EMS_MODE.FORCED);
+  assert.equal(typeof marker.endpointKey, 'string');
+  assert.equal(marker.regs, undefined, 'der Zähler verschmutzt den Watchdog-Merker nicht');
+
+  // Lauf 2 (Neustart, selbe Dateien, selber Tag): der Zähler ist wiederhergestellt — das Budget bleibt bei 19.
+  const r2 = rig({ controlMode: 'forced', statePath });
+  assert.equal(r2.ems.status().modeBudgetLeft, 19, 'Budget überlebt den Neustart (nicht wieder 20)');
+
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

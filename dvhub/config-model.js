@@ -1561,7 +1561,7 @@ function buildFieldDefinitions() {
       path: 'sungrow.secondInverter.host',
       label: 'Zweiter Sungrow-WR: Adresse (Master/Slave-Parallelbetrieb)',
       type: 'text',
-      help: 'Nur für zwei Sungrow-Hybrid-WR im Master/Slave-Verbund: IP/Name des ZWEITEN WR (Slave). Der erste WR (der mit dem Smart Meter = Master) bleibt die normale Verbindung oben und regelt weiter; der zweite WR wird nur ausgelesen (nie gesteuert — der Master verteilt die Vorgabe intern). Leer = ein WR wie bisher.'
+      help: 'Nur für zwei Sungrow-Hybrid-WR im Master/Slave-Verbund: IP/Name des ZWEITEN WR (Slave). Der erste WR (der mit dem Smart Meter = Master) bleibt die normale Verbindung oben; der zweite WR wird ausgelesen UND mitgeregelt — DVhub verteilt die Vorgabe selbst auf BEIDE WR und steuert jeden einzeln (der Master verteilt NICHT intern, Feldbefund). Leer = ein WR wie bisher.'
     },
     {
       section: 'victron',
@@ -1583,7 +1583,7 @@ function buildFieldDefinitions() {
         { value: 'priority-slave', label: 'Slave zuerst, Rest Master' },
         { value: 'master-only', label: 'Nur Master (Slave im Eigenverbrauch)' }
       ],
-      help: 'Wie DVhub eine Lade-Vorgabe auf beide WR verteilt (jeder WR wird einzeln gesteuert, weil der Master nach Kundenaussage nicht verteilt). „Ladestand ausgleichen" (Standard) füllt den WR mit mehr freiem Platz stärker; „Nach Akku-Kapazität" im Verhältnis der Kapazitäten; „Nach max. Ladeleistung" im Verhältnis der Leistungsgrenzen; „Festes Verhältnis" nach dem eingestellten Master-Anteil; „Master/Slave zuerst" lastet erst den einen voll aus, der Rest geht an den anderen; „Nur Master" lässt den Slave im Eigenverbrauch (Modus 0). Jeder WR hält seine eigene Grenze; der Überlauf geht an den anderen. Scheitert EINER (Herzschlag, Rücklesen, fremder Modus), gehen BEIDE sicher in den Eigenverbrauch zurück.'
+      help: 'Wie DVhub eine Lade-Vorgabe auf beide WR verteilt (jeder WR wird einzeln gesteuert, weil der Master nach Kundenaussage nicht verteilt). „Ladestand ausgleichen" (Standard) füllt den WR mit mehr freiem Platz stärker; „Nach Akku-Kapazität" im Verhältnis der Kapazitäten; „Nach max. Ladeleistung" im Verhältnis der Leistungsgrenzen; „Festes Verhältnis" nach dem eingestellten Master-Anteil; „Master/Slave zuerst" lastet erst den einen voll aus, der Rest geht an den anderen; „Nur Master" lässt den Slave im Eigenverbrauch (Modus 0). Jeder WR hält seine eigene Grenze; der Überlauf geht an den anderen. Scheitert der SLAVE (Herzschlag, Rücklesen, fremder Modus), geht nur er in den Eigenverbrauch und der Master regelt mit dessen Anteil weiter; scheitert der MASTER (die Führung), gehen BEIDE sicher in den Eigenverbrauch zurück.'
     },
     {
       section: 'victron',
@@ -7117,6 +7117,21 @@ export function loadConfigFile(configPath) {
     manufacturerProfileError = error.message;
     valid = false;
     if (!parseError) parseError = `manufacturer profile error: ${error.message}`;
+  }
+
+  // C2 (Christin 16.11.2026): Bei ungültiger Konfiguration (kaputte config.json ODER kaputtes/fehlendes
+  // Herstellerprofil) trägt die WIRKSAME Config Default-Register (z. B. Victron 2716) — ein Schreibpfad würde dann
+  // an ein möglicherweise FREMDES Gerät schreiben. Deshalb die Gültigkeit AN DER wirksamen Config markieren, damit
+  // der zentrale Schreib-Chokepoint (schedule-eval) jeden Hardware-Write hart sperrt und laut meldet. Nur bei
+  // valid:false gesetzt — eine gültige Config bleibt unverändert (rückwärtskompatibel, kein Feld).
+  if (valid !== true && effectiveConfig && typeof effectiveConfig === 'object') {
+    effectiveConfig.writeSafety = {
+      ok: false,
+      reason: broken ? 'config_broken'
+        : manufacturerProfileError ? 'manufacturer_profile_error'
+          : 'config_invalid',
+      manufacturer
+    };
   }
 
   return {

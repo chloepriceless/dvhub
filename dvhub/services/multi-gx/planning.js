@@ -18,7 +18,7 @@
  */
 import { getPowerLimits } from '../power-limits.js';
 import { betaGateOpen } from '../../beta-features.js';
-import { resolveSecondInverter, secondInverterTelemetry, sungrowEffectivePowerW, sungrowRealSocPct, sungrowSocFloorBufferPct, sungrowSystemSoc } from '../inverter/sungrow.js';
+import { resolveSecondInverter, secondInverterTelemetry, sungrowEffectivePowerW, sungrowRealSocPct, sungrowSocFloor, sungrowSocFloorBufferPct, sungrowSystemSoc } from '../inverter/sungrow.js';
 
 const finite = (v) => v != null && v !== '' && Number.isFinite(Number(v));
 
@@ -210,6 +210,30 @@ export function planningSocPct(ctx) {
   const f = follower(ctx, cfg);
   if (!f || !finite(primary)) return primary;
   return weighted(Number(primary), primaryCapacityWh(cfg), f.socPct, f.capacityWh);
+}
+
+/**
+ * Ladestand für den ENTLADE-BODEN am Chokepoint (Befund 1.4-2, Christin 16.11.): der Wert, der gegen den REALEN
+ * harten Boden (hardFloorSocPct) verglichen wird. Bei Sungrow den gemeldeten FENSTERRELATIVEN SoC je WR in echt
+ * umrechnen (13059/13058) — sonst sperrte der Boden bei gemeldet 1 % (real ~11 %) fälschlich. Der Boden schützt den
+ * schwächeren Akku, darum der NIEDRIGERE der beiden realen SoC (sungrowSocFloor, min), nicht der kapazitätsgewichtete
+ * (das ist planningSocPct für EOS). Non-Sungrow/Multi-GX: unverändert state.victron.socFloorPct ?? state.victron.soc.
+ * null, wenn kein SoC bekannt ist (der Aufrufer behandelt das als „unbekannt" → fail-safe halten).
+ */
+export function floorSocPct(ctx) {
+  const cfg = ctx?.getCfg?.();
+  const victron = ctx?.state?.victron || {};
+  if (isSungrow(ctx, cfg)) {
+    const dev = victron.device || {};
+    // Master: im Zwei-WR-Betrieb steht der gemeldete Master-Wert in sungrowMasterSocPct, sonst in victron.soc.
+    const masterReported = finite(victron.sungrowMasterSocPct) ? Number(victron.sungrowMasterSocPct) : victron.soc;
+    const masterReal = sungrowRealSocPct(masterReported, dev.minSocPctDevice, dev.maxSocPctDevice);
+    const slaveTel = resolveSecondInverter(cfg).aggregateTelemetry === true ? secondInverterTelemetry(ctx?.state, cfg, {}) : null;
+    const slaveReal = slaveTel ? sungrowRealSocPct(slaveTel.socPct, slaveTel.minSocPctDevice, slaveTel.maxSocPctDevice) : null;
+    return sungrowSocFloor(masterReal, slaveReal);
+  }
+  const socRaw = victron.socFloorPct ?? victron.soc;
+  return finite(socRaw) ? Number(socRaw) : null;
 }
 
 /** Mindest-SoC fuer die Planung: Untergrenze der Hauptanlage und der zweiten, gewichtet. */
