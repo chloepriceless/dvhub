@@ -919,6 +919,20 @@ export function createScheduleEvaluator(ctx) {
     return null;
   }
 
+  // FIX 1 (A11, Christin 17.11.2026): EIN gemeinsames „unverändert"-Prädikat für
+  // BEIDE feedExcessDcPv-Skip-Stellen — den Chokepoint-Frühskip (applyControlTarget)
+  // UND applyDvVictronControl. Der feedIn-Zustand gilt als unverändert (Write-Skip),
+  // AUSSER es steht eine Teil-Sperre (_dvPartialBlock) und wir wollen freigeben
+  // (feedIn=true) — dann MUSS der Write durch, sonst bleibt 2707 sperrend. Vorher
+  // kannte nur applyDvVictronControl die Teil-Block-Ausnahme; der Chokepoint-Skip
+  // nicht → eine Handfreigabe nach einer teilweise gescheiterten Sperre gab
+  // fälschlich „unchanged" zurück und ließ die PV abgeregelt. Eine Definition,
+  // damit die beiden Stellen nie wieder auseinanderdriften.
+  function dvFeedInUnchanged(feedIn) {
+    return state.ctrl._lastDvFeedIn === feedIn
+      && !(feedIn === true && state.ctrl._dvPartialBlock === true);
+  }
+
   async function applyDvVictronControl(feedIn, { explicit = false, reason = null } = {}) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
@@ -948,7 +962,7 @@ export function createScheduleEvaluator(ctx) {
 
     // Only write when feedIn state actually changes (first call: _lastDvFeedIn is undefined → always writes once)
     // Eine Teil-Sperre (state.ctrl._dvPartialBlock) wird trotz gleichem Cache freigegeben.
-    if (state.ctrl._lastDvFeedIn === feedIn && !(feedIn === true && state.ctrl._dvPartialBlock === true)) return;
+    if (dvFeedInUnchanged(feedIn)) return;
 
     const results = {};
     // Erster Aufruf nach dem Start (Change-Cache leer) mit Freigabe: eine
@@ -965,6 +979,10 @@ export function createScheduleEvaluator(ctx) {
     // Now any write failure leaves the cache at its previous value so the next
     // call re-attempts. Partial success also re-attempts (idempotent re-write).
     let allOk = true;
+    // FIX 2: welche der beiden Flaggen ein DIREKTER Register-Write war (kein
+    // Sequenz-Dialekt, kein MQTT) — nur für die gehören Rücklese-Verify geplant.
+    let feedDcDirectVal = null;
+    let dontFeedAcDirectVal = null;
 
     // Feed excess DC-coupled PV into grid: 1 = feed, 0 = block
     if (dc.feedExcessDcPv?.enabled) {
@@ -981,6 +999,7 @@ export function createScheduleEvaluator(ctx) {
             unitId: dc.feedExcessDcPv.unitId, address: dc.feedExcessDcPv.address,
             value: val, timeoutMs: dc.feedExcessDcPv.timeoutMs
           });
+          feedDcDirectVal = val;
         }
         if (skipped) {
           results.feedExcessDcPv = { ok: true, value: val, skipped: 'no_own_block' };
@@ -1010,6 +1029,7 @@ export function createScheduleEvaluator(ctx) {
             unitId: dc.dontFeedExcessAcPv.unitId, address: dc.dontFeedExcessAcPv.address,
             value: val, timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
           });
+          dontFeedAcDirectVal = val;
         }
         if (skipped) {
           results.dontFeedExcessAcPv = { ok: true, value: val, skipped: 'no_own_block' };
@@ -1042,6 +1062,32 @@ export function createScheduleEvaluator(ctx) {
       // Sequenz nur bis zur Hälfte): die Sperre ist DVhubs eigene und bekommt
       // im Not-Halt ihre Freigabe (Codex 2f215968, P2; Codex 56e41b93, P1).
       state.ctrl._dvPartialBlock = true;
+    }
+
+    // FIX 2 (A11, Christin 17.11.2026): Rücklese-Verify für die DIREKTEN
+    // Victron-Register (2707 feedExcessDcPv, 2708 dontFeedExcessAcPv) wieder
+    // anstoßen. C1 hat den feedExcessDcPv-Direktwrite vom generischen
+    // Einzelregister-Pfad (der maybeScheduleWriteVerify rief) auf diesen
+    // dv_control-Pfad umgelenkt, der kein Verify mehr plante → bei aktivem
+    // controlWriteVerify fehlte die Rücklese-Prüfung. Jetzt pro erfolgreichem
+    // Direkt-Write einen lastWrite-Eintrag mit raw/words setzen und das Verify
+    // planen (runWriteVerify liest auf RAW-Wort-Ebene zurück, verwirft bei
+    // Mismatch den lastWrite → der nächste Assert schreibt neu). Sequenz- und
+    // MQTT-Writes bleiben außen vor (eigener Aktuator, B-1112).
+    // HART hinter dem Flag: ist controlWriteVerify AUS (Standard), passiert hier
+    // NICHTS — kein lastWrite, kein zusätzlicher Read, kein geändertes Verhalten.
+    if (resolveControlWriteVerify(cfg).enabled) {
+      const planDirectVerify = (target, conf, val, ok) => {
+        if (val == null || !ok) return;
+        state.schedule.lastWrite[target] = {
+          value: val, raw: val, words: [val], scaled: val,
+          source: reason || 'dv_control', writeType: 'dv_control',
+          fc: Number(conf.fc) || 6, address: conf.address, at: Date.now()
+        };
+        maybeScheduleWriteVerify(target, conf, cfg, { isKeepalive: false });
+      };
+      planDirectVerify('feedExcessDcPv', dc.feedExcessDcPv || {}, feedDcDirectVal, results.feedExcessDcPv?.ok === true && !results.feedExcessDcPv.skipped);
+      planDirectVerify('dontFeedExcessAcPv', dc.dontFeedExcessAcPv || {}, dontFeedAcDirectVal, results.dontFeedExcessAcPv?.ok === true && !results.dontFeedExcessAcPv.skipped);
     }
   }
 
@@ -1356,7 +1402,7 @@ export function createScheduleEvaluator(ctx) {
         pushLog('control_write_rejected', { target, value, source, reason: `feed_in_blocked_${mandatoryBlock}` });
         return { ok: false, error: `feed_in_blocked_${mandatoryBlock}` };
       }
-      if (state.ctrl._lastDvFeedIn === feedIn) {
+      if (dvFeedInUnchanged(feedIn)) {
         state.schedule.active[target] = { value, source, at: Date.now(), skipped: true, reason: 'unchanged' };
         return { ok: true, skipped: true, reason: 'unchanged' };
       }
@@ -1367,7 +1413,16 @@ export function createScheduleEvaluator(ctx) {
         pushLog('control_write_error', { target, value, source, error: dvResult?.error || 'dv_control_failed' });
         return { ok: false, error: dvResult?.error || 'dv_control_failed' };
       }
-      state.schedule.lastWrite[target] = { value, source, writeType, at: Date.now() };
+      // FIX 2: Bei aktivem controlWriteVerify hat applyDvVictronControl für den
+      // Direktregister-Write (dv_control) bereits einen vollständigen lastWrite-
+      // Eintrag mit raw/words gesetzt und das Rücklese-Verify geplant — den NICHT
+      // mit der schlanken Variante überschreiben (sonst verlöre das Verify die
+      // Vergleichswörter). Sequenz-Writes und der Normalfall (Verify AUS) setzen
+      // den Eintrag unverändert wie bisher.
+      const verifyOwnsLastWrite = writeType === 'dv_control' && resolveControlWriteVerify(cfg).enabled;
+      if (!verifyOwnsLastWrite) {
+        state.schedule.lastWrite[target] = { value, source, writeType, at: Date.now() };
+      }
       state.schedule.active[target] = { value, source, at: Date.now() };
       pushLog('control_write', { target, value, source, writeType });
       telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
