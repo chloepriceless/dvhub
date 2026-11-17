@@ -372,6 +372,14 @@ export function createOptimizerService(ctx) {
   // den gerade gescheiterten Lauf gesperrt und täte nichts; die Schleifen-
   // sicherung übernimmt der Cooldown im Trigger. Wirft nie.
   async function recoverEosState(reason) {
+    // Vor dem Reconcile den config-sync-Cache leeren: reconcile() fährt den
+    // normalen config-sync, der unveränderte Abschnitte via sentConfig-Merker
+    // ÜBERSPRINGT. Nach einem serve-Neustart (Geräte-Config weg, „Configure an
+    // inverter") würde die Config sonst innerhalb der Cache-TTL nicht neu
+    // gesendet und der Re-Trigger scheiterte erneut. Der Neustart-Watchdog ruft
+    // invalidateSentConfig ebenfalls (server.js onEosRestart) — der Recovery-
+    // Pfad tut dasselbe.
+    ctx.eosConfigSync?.invalidateSentConfig?.();
     const bridge = ctx.eosForecastBridge;
     if (bridge && typeof bridge.reconcile === 'function') {
       try { await bridge.reconcile(); }

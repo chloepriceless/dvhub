@@ -469,10 +469,16 @@ export function createInspector(ctx, deps = {}) {
     // fail with HTTP 404 right after isAvailable returned true, surface this
     // as the more actionable reason 'eos_not_configured' so the UI can render
     // a helpful banner instead of a raw HTTP code.
+    // Seit der Adapter den Antwort-Body an den Fehler hängt (`EOS returned
+    // HTTP <status>: <body>`), darf hier nicht mehr auf ein nacktes '404' im
+    // String geprüft werden: ein fremder Body mit „404" (z. B. 503 + Text)
+    // würde sonst fälschlich als „nicht konfiguriert" gewertet. Nur der echte
+    // HTTP-404-Statuscode zählt.
+    const HTTP_404 = /HTTP 404\b/;
     const looksNotConfigured =
       !pushOk && !pullOk &&
-      typeof pushError === 'string' && pushError.includes('404') &&
-      (pullError === null || (typeof pullError === 'string' && pullError.includes('404')));
+      typeof pushError === 'string' && HTTP_404.test(pushError) &&
+      (pullError === null || (typeof pullError === 'string' && HTTP_404.test(pullError)));
 
     // Phase 21 (2026-05-24): expose the operator-side grid-charge consent so
     // the inspector UI can gate "EOS empfiehlt Netzbezug" recommendations.
