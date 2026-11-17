@@ -39,6 +39,10 @@ services:
     # den Container neu) bleibt unverändert; „EOS neu starten" aus DVhub wirkt
     # weiter. Die Fassade lauscht nur auf 127.0.0.1 (wie EOS, network_mode: host
     # aus compose.yml).
+    # EOS_PORT auch als Container-Env, damit der Healthcheck im Image denselben
+    # Port prüft wie der hier gesetzte --listen (Default 8503).
+    environment:
+      EOS_PORT: ${EOS_PORT:-8503}
     command: ["python", "/dvhub-eos-watch.py", "--",
               "dvhub-optimize", "serve",
               "--listen", "127.0.0.1:${EOS_PORT:-8503}", "--state-dir", "/data"]

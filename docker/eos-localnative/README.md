@@ -37,8 +37,15 @@ BINS_DIR=$BINS_DIR TAGS=bikinibottomcapital/dvhub-eos-localnative:0.1.0-dev26111
 ```
 
 `--allow=fs.read=$BINS_DIR` ist nötig, weil der `bins`-Kontext außerhalb des
-Build-Kontexts liegt. `--load` lädt genau eine Architektur ins lokale Docker,
-`--push` veröffentlicht die Multi-Arch-Liste.
+Build-Kontexts liegt. `--push` veröffentlicht die Multi-Arch-Liste (arm64+amd64).
+`--load` kann hingegen KEINE Multi-Plattform-Liste ins lokale Docker laden — dafür
+muss der Build auf **eine** Architektur eingeschränkt werden, z. B.:
+
+```sh
+  docker buildx bake --allow=fs.read="$BINS_DIR" --load \
+    --set dvhub-eos-localnative.platform=linux/arm64 \
+    -f docker/eos-localnative/docker-bake.hcl dvhub-eos-localnative
+```
 
 ## Umstellung des Stacks auf local-native
 

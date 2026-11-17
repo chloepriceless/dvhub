@@ -69,11 +69,15 @@ LABEL org.opencontainers.image.title="DVhub-EOS (local-native)" \
       org.opencontainers.image.source="https://github.com/chloepriceless/EOS" \
       net.dvhub.eos.engine="dvhub-optimize" \
       net.dvhub.eos.native-bin="${EOS_NATIVE_BIN_VERSION}"
+# EOS_PORT regelt Lauschport, Healthcheck und EXPOSE einheitlich (Default 8503);
+# Compose überlagert command: mit demselben ${EOS_PORT:-8503}.
+ENV EOS_PORT=8503
 VOLUME /data
-EXPOSE 8503
+EXPOSE ${EOS_PORT}
+# Shell-Form, damit $EOS_PORT zur Laufzeit gelesen wird (Exec-Form substituiert nicht).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8503/v1/health',timeout=4).status==200 else 1)"]
+  CMD python -c "import os,urllib.request,sys; p=os.environ.get('EOS_PORT','8503'); sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+p+'/v1/health',timeout=4).status==200 else 1)"
 # Standardlauf OHNE Compose-Wächter (Notbau / direkter `docker run`): die Fassade
 # direkt. Im Stack setzt docker/compose.eos-localnative.yml das command: auf den
 # Python-Wächter davor (dvhub-optimize serve als Kindprozess, 127.0.0.1).
-CMD ["dvhub-optimize", "serve", "--listen", "127.0.0.1:8503", "--state-dir", "/data"]
+CMD exec dvhub-optimize serve --listen 127.0.0.1:${EOS_PORT} --state-dir /data

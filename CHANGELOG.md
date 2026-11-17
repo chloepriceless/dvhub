@@ -12,6 +12,7 @@ verweist hierher.
 
 ### Hinzugefügt
 
+- **EOS-Image im local-native-Modus (Rust-Fassade `dvhub-optimize serve`).** Neues Bau-Rezept `docker/eos-localnative/` fährt den EOS-Dienst mit dem eigenständigen Rust-Binär statt mit Python-EOS (−170…−230 MB RAM; `mem_limit` 160 statt 320 MB). Die DVhub-Seite bleibt unverändert (gleiche URL/Port). Einschalten über die Überlagerung `docker/compose.eos-localnative.yml`, Rückweg = Datei weglassen (Default bleibt Python-EOS). Healthcheck und Lauschport laufen einheitlich über `EOS_PORT` (Default 8503); die README nennt den korrekten Einzel-Architektur-`--load`-Weg. Für den Feldtest freigegeben, noch nicht Prod-bewährt.
 - **Leitstand zeigt, womit EOS die Akkuladung am Planende bewertet (M17).** Unter „Laut EOS-Plan“ steht jetzt „EOS bewertet die Akkuladung am Planende mit X ct/kWh“. Der Wert kommt aus EOS’ eigenem Terminal-Wert (`terminal_value`, Grenzwert der Wertkurve bzw. im FIXED-Modus die Gutschrift je kWh) — keine DVhub-Preisannahme, keine Schwelle. Das beantwortet die Kundenfrage „warum tut EOS nichts“: Liegt der Einspeisewert darunter, lohnt Entladen nicht, und bei festem Bezugspreis kostet Halten ohne PV-Überschuss nichts.
 - **Test-Knopf „Abregelung testen (X min)“ im Leitstand (Sungrow-Feldtest).** Zwei Auslöser (Negativpreis / Direktvermarkter) fahren die Abregelung über genau den Ernstfall-Pfad (priceNegative bzw. setForcedOff mit selbst-ablaufendem Lease, max. 60 min), optional „Akku nicht laden“. Ein 1-s-Protokoll direkt aus dem Regeltakt macht das Abregel-Verhalten sichtbar — feiner als /api/status.
 
