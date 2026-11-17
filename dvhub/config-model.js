@@ -2071,12 +2071,12 @@ function buildFieldDefinitions() {
       options: [
         { value: 'victron', label: 'Victron' },
         { value: 'bridge-mqtt', label: 'Universal (MQTT-Bridge)' },
-        { value: 'dvhub-mqtt', label: 'Universal (DVhub-MQTT-Schema: HA/Loxone) — Beta' },
-        { value: 'fronius', label: 'Fronius GEN24 (SunSpec) — Beta' },
-        { value: 'deye-lv', label: 'Deye SUN-…SG04LP3 (LV, 3-phasig) — Beta' },
-        { value: 'sungrow', label: 'Sungrow SH Hybrid (Modbus TCP) — Beta' }
+        { value: 'dvhub-mqtt', label: 'Universal (DVhub-MQTT-Schema: HA/Loxone)' },
+        { value: 'fronius', label: 'Fronius GEN24 (SunSpec)' },
+        { value: 'deye-lv', label: 'Deye SUN-…SG04LP3 (LV, 3-phasig)' },
+        { value: 'sungrow', label: 'Sungrow SH Hybrid (Modbus TCP)' }
       ],
-      help: 'Victron wird nativ (Modbus) unterstützt. „Universal (MQTT-Bridge)" bindet jeden anderen Wechselrichter über eine kleine MQTT-Bridge an (z. B. Node-RED, siehe Doku DEYE-NODERED-BRIDGE). ⚠️ Fronius GEN24 (SunSpec), Deye LV-3ph (RS485-Gateway) und Sungrow SH Hybrid (Modbus TCP über LAN oder WiNet-S) sind BETA-Profile, deren Test an echter Hardware noch aussteht — Fronius und Deye aktuell nur Telemetrie/Anzeige (Fronius derzeit OHNE aktive Abregelung); Sungrow steuert zusätzlich Akku (EMS-Modus) und Einspeisebegrenzung. Wer testen möchte, bitte melden (info@bikinibottom.capital); in einer Produktivumgebung bitte noch nicht einsetzen. Die technischen Werte kommen aus der Herstellerdatei.'
+      help: 'Victron wird nativ (Modbus) unterstützt. „Universal (MQTT-Bridge)" bindet jeden anderen Wechselrichter über eine kleine MQTT-Bridge an (z. B. Node-RED, siehe Doku DEYE-NODERED-BRIDGE). Fronius GEN24 (SunSpec), Deye LV-3ph (RS485-Gateway) und Sungrow SH Hybrid (Modbus TCP über LAN oder WiNet-S): Fronius und Deye aktuell nur Telemetrie/Anzeige (Fronius derzeit OHNE aktive Abregelung); Sungrow steuert zusätzlich Akku (EMS-Modus) und Einspeisebegrenzung. Wer testen möchte, bitte melden (info@bikinibottom.capital). Die technischen Werte kommen aus der Herstellerdatei.'
     },
     {
       section: 'victron',
