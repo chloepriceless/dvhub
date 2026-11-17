@@ -1,6 +1,5 @@
 {
   "label": "Universal (DVhub-MQTT-Schema: HA/Loxone) — Beta",
-  "beta": true,
   "_doc": "2026-09-14: Für Anlagen, deren Akku/PV/Zähler nur in Home Assistant, Loxone o. ä. existieren. Lesepfade kommen unter <prefix>/input/… herein (nackte Zahlen, periodisch, nicht retained), Steuerbefehle gehen unter <prefix>/control/<ziel>/set hinaus. Schema: docs/MQTT-SCHEMA.md. Kein Venus-Keepalive, keine Victron-Register (feedExcess).",
   "victron": {
     "transport": "mqtt",

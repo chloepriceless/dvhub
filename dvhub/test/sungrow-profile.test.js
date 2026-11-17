@@ -56,11 +56,12 @@ function evaluatorFor(cfg, transport, device = sungrowDevice()) {
 
 // --- Profil ------------------------------------------------------------------
 
-test('Profil: Beta, Modbus, Draht-Adresse = Doku − 1 für jeden Punkt', () => {
+test('Profil: Stable (kein Beta-Flag), Modbus, Draht-Adresse = Doku − 1 für jeden Punkt', () => {
   const raw = JSON.parse(fs.readFileSync(SHIPPED, 'utf8'));
-  assert.equal(raw.beta, true);
+  // 1.0.12: Sungrow (wie alle Hersteller-Treiber) aus der Beta — kein "beta": true
+  // mehr, damit das Profil im Stable-Kanal erscheint (listManufacturerProfiles).
+  assert.equal(raw.beta, undefined);
   assert.match(raw.label, /Sungrow/);
-  assert.match(raw.label, /Beta/);
   const cfg = loadSungrowConfig();
   assert.equal(cfg.victron.transport, 'modbus');
   assert.equal(cfg.victron.port, 502);
@@ -123,18 +124,20 @@ test('identify kommt nur aus dem Profil: config.json kann das Schreib-Tor nicht 
   assert.equal(cfg.identify.requiredForWrites, true);
 });
 
-test('Beta-Gate: Sungrow nur im Bleeding-Edge-Kanal wählbar, aktiv immer sichtbar', () => {
+test('Freischaltung 1.0.12: Sungrow erscheint im Stable-Kanal (kein Beta-Gate mehr)', () => {
   const cfgPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-sg-gate-')), 'config.json');
   const dir = path.join(path.dirname(cfgPath), 'hersteller');
   fs.mkdirSync(dir);
   for (const f of ['victron.json', 'sungrow.json']) fs.copyFileSync(path.join(__dirname, '..', 'hersteller', f), path.join(dir, f));
   const ctx = (updateChannel, manufacturer = 'victron') => ({ getConfigPath: () => cfgPath, getRawCfg: () => ({ updateChannel, manufacturer }) });
   const values = (c) => listManufacturerProfiles(c).map((o) => o.value);
-  assert.ok(!values(ctx('stable')).includes('sungrow'), 'stable: ausgeblendet');
+  // 1.0.12: das Profil trägt kein "beta": true mehr → in JEDEM Kanal wählbar.
+  const stable = listManufacturerProfiles(ctx('stable')).find((o) => o.value === 'sungrow');
+  assert.ok(stable, 'stable: jetzt sichtbar (freigeschaltet)');
+  assert.equal(stable.beta, false);
   const dev = listManufacturerProfiles(ctx('dev')).find((o) => o.value === 'sungrow');
   assert.ok(dev, 'dev: sichtbar');
-  assert.equal(dev.beta, true);
-  assert.match(dev.label, /Beta/);
+  assert.equal(dev.beta, false);
   assert.ok(values(ctx('stable', 'sungrow')).includes('sungrow'), 'aktives Profil fällt nie aus der Liste');
 });
 
