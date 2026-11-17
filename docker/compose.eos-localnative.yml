@@ -1,0 +1,50 @@
+# docker/compose.eos-localnative.yml — EOS-Dienst auf den local-native-Modus
+# umstellen (optimizer.eosProxy.mode=local-native, 1.0.11, PLAN rust-1.1 §6.2 E2).
+#
+# Überlagerung zu compose.yml: statt Python-EOS (bikinibottomcapital/dvhub-eos)
+# fährt der Dienst das eigenständige Binär `dvhub-optimize serve` als EOS
+# v0.4.0rc3-Fassade (Image bikinibottomcapital/dvhub-eos-localnative,
+# docker/eos-localnative). −170..−230 MB RAM, kein Python-EOS.
+#
+# EINSCHALTEN (explizit, zusätzlich zur Basis — Reihenfolge wichtig, compose.yml
+# zuerst, damit configs.dvhub-eos-watch definiert ist):
+#   docker compose -f docker/compose.yml -f docker/compose.eos-localnative.yml \
+#     --profile eos up -d
+#
+# ZURÜCK auf Python-EOS (Rückweg): dieselbe Datei einfach WEGLASSEN —
+#   docker compose -f docker/compose.yml --profile eos up -d
+# Es bleibt beim Standard-Dienst aus compose.yml. Der Zustand (Volume dvhub-eos:
+# /data) ist kompatibel: beide Dienste lesen/schreiben dasselbe --state-dir /data
+# (Fassaden-Zustand: letztes Ergebnis/Plan/Lösung, PUT /v1/config/file). DVhub
+# pusht Config, Messwerte und Prognosen bei jedem Lauf neu über dieselbe
+# EOS-HTTP-Schnittstelle (:8503); es ist DVhub-seitig NICHTS umzustellen, weil
+# resolveEosProxy() bei mode=local-native dieselbe URL/den Port :8503 behält
+# (services/optimizer/eos-adapter.js) — der native/systemd-Opt-in-Marker
+# (eos-provision.sh, /etc/dvhub-release/eos-native-optin) greift im Docker-Stack
+# NICHT; die Umstellung läuft hier allein über Image + command (diese Datei).
+#
+# Das Image baut die CI/der Bau per docker/eos-localnative (bake), nicht über
+# `docker compose build` — der `build:`-Block der Basis ist hier bewusst
+# entfernt (!reset), damit in diesem Modus nicht versehentlich das Python-EOS
+# in den local-native-Tag gebaut wird. Vor dem Hochfahren muss das Image lokal
+# vorliegen (bake --load) oder aus der Registry ziehbar sein.
+services:
+  eos:
+    image: ${EOS_LOCALNATIVE_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos-localnative}:${EOS_LOCALNATIVE_TAG:-0.1.0-dev2611152231}
+    build: !reset null
+    # Derselbe Wächter wie bei Python-EOS (configs: dvhub-eos-watch aus
+    # compose.yml, dort gemountet nach /dvhub-eos-watch.py) — nur der
+    # Kindprozess ist jetzt `dvhub-optimize serve` statt Python-EOS. Der
+    # Neustart-Weg (DVhub fordert an → Wächter beendet das Kind → Docker startet
+    # den Container neu) bleibt unverändert; „EOS neu starten" aus DVhub wirkt
+    # weiter. Die Fassade lauscht nur auf 127.0.0.1 (wie EOS, network_mode: host
+    # aus compose.yml).
+    command: ["python", "/dvhub-eos-watch.py", "--",
+              "dvhub-optimize", "serve",
+              "--listen", "127.0.0.1:${EOS_PORT:-8503}", "--state-dir", "/data"]
+    # Deutlich kleiner als die 320m des Python-EOS. Gemessen (arm64, voller
+    # 24-h-/400-Gen-/300-Individuen-Battery-Lauf): Fassade idle ~2,4 MiB, Peak
+    # inkl. optimize-Kindprozess ~14 MiB (cgroup); dazu der Wächter-Python
+    # ~15–20 MiB. 160m lässt großzügig Luft für längere Steuerzeiträume
+    # (Auto/E-Auto/Geräte, Auto-Modus 24 h+) und Page-Cache.
+    mem_limit: ${EOS_LOCALNATIVE_MEM_LIMIT:-160m}
