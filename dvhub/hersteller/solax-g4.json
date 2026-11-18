@@ -1,0 +1,125 @@
+{
+  "label": "SolaX X1/X3-Hybrid G4 — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (Zähler am Wechselrichter), PV (MPPT 1–2), Akku-Leistung und SoC über Modbus TCP (RS485-Ethernet-Gateway oder PocketWiFi 3.0, Port 502, Unit-ID 1) und rechnet die Hauslast aus der Energiebilanz. DVhub schreibt nichts an den Wechselrichter. Vorzeichen von Netz und Akku stammen aus Community-Quellen und sind am Gerät noch nicht bestätigt. Anleitung: docs/hersteller/solax-g4.md.",
+  "_doc": [
+    "SolaX X1-Hybrid G4 (1-phasig) und X3-Hybrid G4 (3-phasig) mit Triple-Power-Speicher (T-BAT H 5.8, T-BAT-SYS-HV, T58)",
+    "und Zähler am WR-COM (Chint DTSU666 / Eastron SDM). G3 hat laut evcc dieselben Leseregister (ungeprüft); G5,",
+    "X3-Ultra und IES haben abweichende Registerdetails und sind NICHT abgedeckt.",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [SPEC] SolaX „Hybrid-X1X3-G4-ModbusTCP/RTU“ V3.21 (06/2022, public version) ·",
+    "[COMM] evcc templates/definition/meter/solax.yaml (alles input/FC 04: 0x46 int32s mit scale −1, 0x16 int16 mit",
+    "scale −1, PV 0x0A + 0x0B uint16, SoC 0x1C uint16) · [DECOMP] Plexlog (liest 0x16/0x1C/0x46). Zusammenfassung:",
+    ".planning/docs/research/2026-11-15-solax-modbus-control-spec.md §1, §3 und 2026-11-18-hersteller-lesend-luecken.md §3.9.",
+    "",
+    "Transport: Der WR spricht Modbus RTU (RS485, Baudrate je Firmware 9600…115200). DVhub braucht Modbus TCP: ein",
+    "RS485-Ethernet-Gateway im Modus Modbus TCP (nicht transparent) oder PocketWiFi 3.0 ab Firmware V3.004.03 (Port 502).",
+    "Unit-ID meist 1 [COMM]. Telemetrie liegt in Input-Registern (FC 04). 32 bit: Low-Wort zuerst [SPEC]. Nur EINE",
+    "Modbus-Verbindung: eine zweite (Home Assistant, evcc) stört DVhub.",
+    "",
+    "Bewusst NICHT gelesen bzw. nicht abbildbar:",
+    "- Richtungs-Flag BDCStatus 0x19 (0 = Entladen, 1 = Laden): DVhub kann ein Vorzeichen nicht aus einem Statusregister",
+    "  nehmen (E8). Gelesen wird 0x16 als vorzeichenbehafteter Wert (so liest evcc); liefert ein Gerät nur Beträge,",
+    "  zeigt DVhub Entladen als Laden.",
+    "- PV3 0x124 (3-MPPT-Geräte): auf 2-MPPT-Geräten nicht belegt, ein Lesefehler legte die PV lahm; ließe sich per",
+    "  combine nachtragen.",
+    "- Zweiter Akku-Stapel (0x129/0x12D), Netz je Phase: nicht gelesen.",
+    "- Hauslast: kein Lastregister in der Spec → Energiebilanz.",
+    "- Gerätekennung/Generation: DVhub prüft nicht, ob ein G4 antwortet (E10)."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz am Anschlusspunkt, Input-Register 0x46 = 70 „feedin_power“ (int32, 1 W, Low-Wort zuerst) [SPEC: „positiv = Einspeisung“]; evcc liest es als int32s mit scale −1 [COMM]. DVhub erwartet + = Bezug, daher sign −1. Ohne Zähler am WR-COM keine Netzmessung. 0x7FFFFFFF/0x80000000 als „kein Wert“ defensiv [ANN] (als Leistung unmöglich, Spec nennt keinen Sentinel).",
+    "layout": "point",
+    "fc": 4,
+    "address": 70,
+    "quantity": 2,
+    "readType": "int32",
+    "wordOrder": "le",
+    "sign": -1,
+    "notAvailableRaw": [2147483647, 2147483648]
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "SoC Akku 1, Input-Register 0x1C = 28 „Battery Capacity“ (U16, 1 %) [SPEC], [DECOMP]; evcc ebenso [COMM]. 0xFFFF als „kein Wert“ defensiv [ANN].",
+      "enabled": true,
+      "fc": 4,
+      "address": 28,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [65535]
+    },
+    "batteryPowerW": {
+      "_comment": "Akku 1, Input-Register 0x16 = 22 „Batpower_Charge1“ (int16, 1 W) [SPEC], [DECOMP]. UNSICHER (am Gerät prüfen): Vorzeichen; die Spec nennt die Richtung nur über BDCStatus 0x19 (E8 fehlt). Annahme Rohwert + = Laden — evcc liest 0x16 als int16 mit scale −1 bei evcc-Konvention + = Entladen [COMM]; der Name „Charge“ passt dazu. Das ist DVhubs Konvention, daher kein sign. Zeigt DVhub beim Laden einen negativen Wert, gehört sign −1 dazu; zeigt es beim Entladen einen positiven, liefert das Gerät nur Beträge (dann bitte melden). 0x7FFF/0x8000 (±32 767 W) als „kein Wert“ defensiv [ANN].",
+      "enabled": true,
+      "fc": 4,
+      "address": 22,
+      "quantity": 1,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [32767, 32768]
+    },
+    "pvPowerW": {
+      "_comment": "PV = Powerdc1 + Powerdc2, Input-Register 0x0A–0x0B = 10–11 (je U16, 1 W) [SPEC], summiert; evcc ebenso [COMM]. PV3 (0x124, 3-MPPT-Geräte) nicht gelesen, siehe _doc. 0xFFFF je MPPT als „kein Wert“ defensiv [ANN].",
+      "enabled": true,
+      "fc": 4,
+      "address": 10,
+      "quantity": 2,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "sumRegisters": true,
+      "notAvailableRaw": [65535]
+    },
+    "selfConsumptionW": {
+      "_comment": "Kein Lastregister in der Spec. Hauslast = PV + Bezug − Einspeisung − Akku (+ = Laden), jeden Takt neu (E6).",
+      "enabled": false,
+      "derive": "energy_balance"
+    },
+    "deviceMaxChargeA": {
+      "_comment": "Vom BMS vorgegebener maximaler Ladestrom, Input-Register 0x24 = 36 „BMS ChargeMaxCurrent“ (U16, 0,1 A) [SPEC]. Nur Anzeige.",
+      "enabled": true,
+      "fc": 4,
+      "address": 36,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.1,
+      "offset": 0,
+      "notAvailableRaw": [65535],
+      "pollEveryMs": 60000
+    },
+    "deviceMaxDischargeA": {
+      "_comment": "Vom BMS vorgegebener maximaler Entladestrom, Input-Register 0x25 = 37 „BMS DischargeMaxCurrent“ (U16, 0,1 A) [SPEC]. Nur Anzeige.",
+      "enabled": true,
+      "fc": 4,
+      "address": 37,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.1,
+      "offset": 0,
+      "notAvailableRaw": [65535],
+      "pollEveryMs": 60000
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}
