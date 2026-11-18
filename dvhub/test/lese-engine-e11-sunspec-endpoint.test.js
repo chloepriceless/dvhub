@@ -111,3 +111,39 @@ test('E11: Schreibziel mit eigener Unit scannt weiter auf victron.* (Schreibpfad
   assert.equal(cfg.controlWrite.minSocPct.unitId, 9, 'Unit des Schreibziels bleibt unangetastet');
   assert.ok(dev.requests.filter((r) => r.address >= 40000).every((r) => r.unitId === 1));
 });
+
+// Codex d5b3655d (P2): Timeout der Scan-Gruppe und M160-Basis auf victron.*.
+test('E11/Codex: gemeinsame Verbindung von Lesepunkt (1000 ms) und Schreibziel (victron 2000 ms) scannt mit dem längeren Timeout', async () => {
+  const dev = createRegisterDevice();
+  const at = dev.setSunspecChain(40000, [{ id: 1, length: 66 }, { id: 124, length: 24 }]);
+  dev.setWords(900, [0, 0, 0]);
+  const cfg = {
+    victron: { host: '192.0.2.40', port: 502, unitId: 1, timeoutMs: 2000 },
+    meter: { fc: 3, address: 900, quantity: 3, unitId: 1 },
+    points: { soc: { enabled: true, fc: 3, quantity: 1, host: '192.0.2.40', port: 502, unitId: 1, timeoutMs: 1000, sunspec: { model: 124, offset: 6 } } },
+    controlWrite: { minSocPct: { enabled: true, sunspec: { model: 124, offset: 5 } } },
+  };
+  const { poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  assert.equal(cfg.controlWrite.minSocPct.address, at[124][0] + 5);
+  const scanReqs = dev.requests.filter((r) => r.address >= 40000 && r.address < at[124][0]);
+  assert.ok(scanReqs.length > 0 && scanReqs.every((r) => r.timeoutMs === 2000), `Timeouts: ${scanReqs.map((r) => r.timeoutMs)}`);
+});
+
+test('E11/Codex: m160_battery bekommt die M160-Basis von victron.*, auch wenn nur Punkte auf anderer Unit aufzulösen sind', async () => {
+  const dev = createRegisterDevice();
+  const at1 = dev.setSunspecChain(40000, [{ id: 1, length: 66 }, { id: 160, length: 88 }], { unitId: 1 });
+  dev.setSunspecChain(40000, [{ id: 1, length: 66 }, { id: 103, length: 50 }], { unitId: 126 });
+  dev.setWords(900, [0, 0, 0]);
+  const cfg = {
+    victron: { host: '192.0.2.40', port: 502, unitId: 1, timeoutMs: 1000 },
+    meter: { fc: 3, address: 900, quantity: 3, unitId: 1 },
+    points: {
+      batteryPowerW: { enabled: false, derive: 'm160_battery', chargeModule: 3, dischargeModule: 4 },
+      pvPowerW: { enabled: true, fc: 3, quantity: 1, unitId: 126, sunspec: { model: 103, offset: 14 } },
+    },
+  };
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  assert.equal(state.ctrl._sunspecM160?.address, at1[160][0], 'früher: kein Scan auf victron.* → M160 fehlte');
+});

@@ -538,8 +538,18 @@ export function createPoller(ctx) {
     const groups = new Map();
     for (const slot of slots) {
       const key = sunspecEndpointKey(slot.ep);
-      if (!groups.has(key)) groups.set(key, { ep: slot.ep, slots: [] });
-      groups.get(key).slots.push(slot);
+      if (!groups.has(key)) groups.set(key, { ep: { ...slot.ep }, slots: [] });
+      const group = groups.get(key);
+      group.slots.push(slot);
+      // Timeout der Gruppe = der längste ihrer Einträge (Codex d5b3655d): ein Lesepunkt mit kurzem Timeout darf den
+      // Scan für ein Schreibziel mit dem victron-Timeout an derselben Verbindung nicht scheitern lassen.
+      const t = Number(slot.ep.timeoutMs);
+      if (Number.isFinite(t) && t > 0 && !(Number(group.ep.timeoutMs) >= t)) group.ep.timeoutMs = t;
+    }
+    // m160_battery liest die M160-Modellbasis aus dem Scan auf victron.* (Codex d5b3655d). Läuft eine Scan-Runde,
+    // gehört victron.* dazu, auch wenn dort gerade nichts aufzulösen ist — wie vor E11, als jeder Scan dort lief.
+    if (cfg.points?.batteryPowerW?.derive === 'm160_battery' && !groups.has(victronKey)) {
+      groups.set(victronKey, { ep: sunspecEndpointOf(null, v), slots: [] });
     }
     const now = Date.now();
     for (const [key, group] of groups) {

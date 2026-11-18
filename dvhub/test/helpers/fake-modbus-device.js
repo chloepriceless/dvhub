@@ -63,7 +63,7 @@ export function createRegisterDevice({ defaultUnitId = 1 } = {}) {
         throw new TypeError(`ungültige Anfrage (address=${conf.address}, quantity=${conf.quantity})`);
       }
       const unitId = conf.unitId ?? defaultUnitId;
-      requests.push({ unitId, fc, address: conf.address, quantity: conf.quantity, port: conf.port, host: conf.host });
+      requests.push({ unitId, fc, address: conf.address, quantity: conf.quantity, port: conf.port, host: conf.host, timeoutMs: conf.timeoutMs });
       const out = [];
       for (let i = 0; i < conf.quantity; i += 1) {
         const v = regs.get(key(unitId, fc, conf.address + i));
