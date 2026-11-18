@@ -56,7 +56,7 @@
         ]
       },
       {
-        "step": "Freigabe per API (ausdrücklich)",
+        "step": "Freigabe per API (applyControlTarget feedExcessDcPv=1)",
         "ok": true,
         "writeType": "sequence",
         "feedExcessDcPv": "ok",
@@ -68,6 +68,32 @@
         "events": [
           "dv_victron_write",
           "control_write"
+        ]
+      },
+      {
+        "step": "Sperre erneut (2)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 gx/u1 @40191 x1",
+          "R3 gx/u1 @40198 x1",
+          "W6 gx/u1 @40191=2",
+          "W6 gx/u1 @40198=55536"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Freigabe ausdrücklich am DV-Aktuator (explicit)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 gx/u1 @40191=1",
+          "W6 gx/u1 @40198=60536"
+        ],
+        "events": [
+          "dv_victron_write"
         ]
       }
     ],
@@ -213,17 +239,35 @@
         ]
       },
       {
-        "step": "Freigabe per API (ausdrücklich)",
+        "step": "Freigabe per API (applyControlTarget feedExcessDcPv=1)",
         "ok": false,
         "why": "write target not enabled in config",
         "dontFeedExcessAcPv": "ok",
         "lastFeedIn": false,
         "wire": [],
         "events": []
+      },
+      {
+        "step": "Sperre erneut (2)",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [],
+        "events": []
+      },
+      {
+        "step": "Freigabe ausdrücklich am DV-Aktuator (explicit)",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 gx/u1 @142=1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
       }
     ],
     "regs": {
-      "142": 2
+      "142": 1
     }
   },
   "deye-lv_restart": {
@@ -382,7 +426,7 @@
         ]
       },
       {
-        "step": "Freigabe per API (ausdrücklich)",
+        "step": "Freigabe per API (applyControlTarget feedExcessDcPv=1)",
         "ok": true,
         "writeType": "sequence",
         "feedExcessDcPv": "ok",
@@ -400,6 +444,46 @@
         "events": [
           "dv_victron_write",
           "control_write"
+        ]
+      },
+      {
+        "step": "Sperre erneut (2)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 sg/u1 @13087 x1",
+          "R3 sg/u1 @13073 x1",
+          "R3 sg/u1 @31221 x1",
+          "R3 sg/u1 @13086 x1",
+          "W6 sg/u1 @13087=0",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=0",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Freigabe ausdrücklich am DV-Aktuator (explicit)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 sg/u1 @13087=700",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=5000",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
         ]
       }
     ],

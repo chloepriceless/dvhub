@@ -540,7 +540,7 @@
       "ok": true,
       "writeType": "uint16",
       "wire": [
-        "W6 gx/u1 @NaN=1"
+        "W6 gx/u1 @0=1"
       ],
       "events": [
         "control_write"

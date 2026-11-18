@@ -71,6 +71,12 @@ export function recordingModbus({ holding = {}, hosts = {}, failWrite = {}, fail
   const regsOf = (req) => hostRegs.get(req.host) || regs;
   const ops = [];
   const hits = new Map();
+  // Draht-Kodierung wie transport-modbus.js: Adresse/Menge per Buffer.writeUInt16BE (undefined → 0, außerhalb
+  // 0…65535 → RangeError vor dem Senden), Werte als „& 0xffff". So friert das Log ein, was wirklich gesendet würde.
+  const u16 = (v) => { const b = Buffer.alloc(2); b.writeUInt16BE(v); return b.readUInt16BE(0); };
+  const encodeOrRecord = (fn, line) => {
+    try { return fn(); } catch (e) { ops.push(`${line} !${e.message}`); throw e; }
+  };
   const who = (req) => `${hostAlias[req.host] ?? (req.host || '-')}/u${req.unitId}`;
   const fault = (table, kind, addr, req) => {
     // Schlüssel '<host>@<addr>' trifft nur dieses Gerät, '<addr>' jedes.
@@ -94,9 +100,13 @@ export function recordingModbus({ holding = {}, hosts = {}, failWrite = {}, fail
     failRead,
     readOverride,
     async mbRequest(req) {
-      const addr = Number(req.address);
-      const qty = Number(req.quantity) || 1;
-      const line = `R${Number(req.fc) || 3} ${who(req)} @${addr} x${qty}`;
+      const raw = `R${req.fc} ${who(req)} @${req.address} x${req.quantity}`;
+      encodeOrRecord(() => {
+        if (![1, 2, 3, 4].includes(Number(req.fc))) throw new Error(`modbus read: fc ${req.fc} ist keine Lese-Funktion`);
+      }, raw);
+      const addr = encodeOrRecord(() => u16(req.address), raw);
+      const qty = encodeOrRecord(() => u16(req.quantity), raw);
+      const line = `R${req.fc} ${who(req)} @${addr} x${qty}`;
       const f = fault(failRead, 'r', addr, req);
       if (f) { ops.push(`${line} !${f.msg}`); throw new Error(f.msg); }
       ops.push(line);
@@ -105,30 +115,36 @@ export function recordingModbus({ holding = {}, hosts = {}, failWrite = {}, fail
       return Array.from({ length: qty }, (_, i) => img.get(addr + i) ?? 0);
     },
     async mbWriteSingle(req) {
-      const addr = Number(req.address);
-      const line = `W6 ${who(req)} @${addr}=${req.value}`;
+      const addr = encodeOrRecord(() => u16(req.address), `W6 ${who(req)} @${req.address}=${req.value}`);
+      const value = req.value & 0xffff;
+      const line = `W6 ${who(req)} @${addr}=${value}`;
       const f = fault(failWrite, 'w', addr, req);
       if (f) {
-        if (f.apply) regsOf(req).set(addr, req.value & 0xffff);
+        if (f.apply) regsOf(req).set(addr, value);
         ops.push(`${line} !${f.msg}`);
         throw new Error(f.msg);
       }
       ops.push(line);
-      if (!ignoreWrite.includes(addr)) regsOf(req).set(addr, req.value & 0xffff);
-      return { addr, value: req.value };
+      if (!ignoreWrite.includes(addr)) regsOf(req).set(addr, value);
+      return { addr, value };
     },
     async mbWriteMultiple(req) {
-      const addr = Number(req.address);
-      const line = `W16 ${who(req)} @${addr}=[${(req.values || []).join(',')}]`;
+      const words = Array.isArray(req.values) ? req.values.map((v) => Number(v) & 0xffff) : [];
+      const addr = encodeOrRecord(() => {
+        if (!words.length) throw new Error('modbus write multiple: empty values');
+        if (words.length > 123) throw new Error('modbus write multiple: too many values');
+        return u16(req.address);
+      }, `W16 ${who(req)} @${req.address}=[${words.join(',')}]`);
+      const line = `W16 ${who(req)} @${addr}=[${words.join(',')}]`;
       const f = fault(failWrite, 'w', addr, req);
       if (f) {
-        if (f.apply) (req.values || []).forEach((w, i) => regsOf(req).set(addr + i, w & 0xffff));
+        if (f.apply) words.forEach((w, i) => regsOf(req).set(addr + i, w));
         ops.push(`${line} !${f.msg}`);
         throw new Error(f.msg);
       }
       ops.push(line);
-      if (!ignoreWrite.includes(addr)) (req.values || []).forEach((w, i) => regsOf(req).set(addr + i, w & 0xffff));
-      return { addr, quantity: (req.values || []).length };
+      if (!ignoreWrite.includes(addr)) words.forEach((w, i) => regsOf(req).set(addr + i, w));
+      return { addr, quantity: words.length };
     },
   };
 }

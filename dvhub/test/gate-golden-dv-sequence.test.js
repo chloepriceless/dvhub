@@ -66,7 +66,11 @@ for (const profile of ['fronius', 'deye-lv', 'sungrow']) {
     await r.step('Freigabe automatisch', dv(rig, true, RELEASE));
     await r.step('Freigabe gleich', dv(rig, true, RELEASE));
     await r.step('Sperre erneut', dv(rig, false, LOCK));
-    await r.step('Freigabe per API (ausdrücklich)', api(rig, 1));
+    // Chokepoint-Weg der API: delegiert nur feedExcessDcPv (Deye sperrt über dontFeedExcessAcPv → abgelehnt).
+    await r.step('Freigabe per API (applyControlTarget feedExcessDcPv=1)', api(rig, 1));
+    await r.step('Sperre erneut (2)', dv(rig, false, LOCK));
+    // Ausdrücklicher Befehl direkt am DV-Aktuator: Rückstellung auch für Deye (Work-Mode 142).
+    await r.step('Freigabe ausdrücklich am DV-Aktuator (explicit)', dv(rig, true, { explicit: true, reason: 'api_manual_write' }));
     golden.check(`${profile}_cycle`, { steps: r.steps, regs: Object.fromEntries(rig.transport.regs) });
   });
 
