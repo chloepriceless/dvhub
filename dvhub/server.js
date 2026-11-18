@@ -211,6 +211,7 @@ import { createGridSharePollTick } from './services/optimizer/grid-share-poll.js
 import { createMultiGx, createEosResyncOnAvailability } from './services/multi-gx/index.js';
 import { createSungrowSecond } from './services/inverter/sungrow-second.js';
 import { createModbusHealth } from './services/inverter/modbus-health.js';
+import { createLegacyGate } from './services/gate/legacy.js';
 import { createEosForecastBridge } from './services/optimizer/eos-forecast-bridge.js';
 import { createPriceOutlookService } from './services/optimizer/price-outlook.js';
 import { createEosRemoteFacade, eosRemoteActive, readEosPin, EOS_REMOTE_FACADE_PORT } from './services/optimizer/eos-remote.js';
@@ -1568,6 +1569,10 @@ ctx.regenerateSmallMarketAutomationRules = mab.regenerateSmallMarketAutomationRu
 ctx.sungrowSlaveTransport = (transport.type === 'modbus')
   ? createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs })
   : null;
+// Schreibtor (VCL-Vertrag v6 D.1, H-1): EIN Tor je Prozess, angelegt neben Transport und Scheduler. Phase 2: der
+// Sungrow-EMS (Master UND Slave, schedule-eval.js) schreibt im Legacy-Modus darüber; setEmergencyStop meldet den
+// Not-Halt-Eintritt (fence) neben der Modbus-Sperrmarke. Not-Halt-Marke wie die Bestandsprüfungen.
+ctx.gate = createLegacyGate({ isHalted: () => state.ctrl?.discretionaryWritesPaused === true });
 const scheduler = createScheduleEvaluator(ctx);
 ctx.applyDvVictronControl = scheduler.applyDvVictronControl;
 // Feldtest-Auslöser „Abregelung testen (X min)" (M14b): über denselben

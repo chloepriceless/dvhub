@@ -18,6 +18,7 @@ verweist hierher.
 
 ### Geändert
 
+- **Sungrow-Writes laufen über das zentrale Schreibtor (Verhalten unverändert).** Jeder Register-Write des Sungrow-EMS — Master und Slave, Leistung 13052, Befehl 13051, Modus 13050, Herzschlag 13080, die Rücknahmen im Not-Halt und beim Beenden sowie die manuelle Freigabe — geht jetzt im Legacy-Modus über das eine Schreibtor des Prozesses (`services/gate`), das seine Vorprüfungen (Not-Halt, Lese-Modus, Schreibfreigabe, Ziel) davor legt; der Not-Halt meldet sich zusätzlich beim Tor. Auf dem Draht, in den Rückgaben, im Log und in der Statuskachel ändert sich nichts: die bisherigen Prüfungen bleiben vorerst bestehen, und ein Paritätstest fährt Normalbetrieb, Not-Halt (auch mitten in der Schreibfolge), manuelle Freigabe, Lese-Modus, ungültige Konfiguration, nicht erkanntes Gerät, Modbus-Ausnahmen und das Beenden im Forced-Split über alten und neuen Weg mit identischem Ergebnis. Ein Strukturtest verbietet ab jetzt neue direkte Sungrow-Writes am Tor vorbei.
 - **Alle Hersteller-Treiber im Stable-Kanal (Beta entfernt).** Sungrow SH Hybrid, Fronius GEN24, Deye LV-3ph, die Universal-MQTT-Bridge und das DVhub-MQTT-Schema (HA/Loxone) tragen kein `beta`-Flag mehr und erscheinen damit nicht nur im Bleeding-Edge-, sondern im normalen (Stable-)Update-Kanal im Hersteller-Dropdown. Die Funktions-Beta-Gates (Peak-Shaving, Multi-GX, MQTT-Gegenprüfung u. a.) bleiben unberührt.
 
 ### Behoben
