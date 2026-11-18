@@ -20,6 +20,9 @@ import fs from 'node:fs';
 
 import { meterImport } from '../import-limit/core.js';
 import { atomicWriteControlState } from '../../control-state-io.js';
+import { ReadOnlyViolation } from '../../read-only-guard.js';
+import { GateBlockedError } from '../gate/index.js';
+import { createLegacyGate, modbusLegacySink, SUNGROW_GATE_DEVICES } from '../gate/legacy.js';
 import { createModbusHealth } from './modbus-health.js';
 
 /** Doku-Adresse → Draht-Adresse. */
@@ -58,6 +61,10 @@ const EMS_POWER_ADDR = wire(13052);
 // Doku 13080 „External EMS heartbeat“ (U16, 0–1000 s, Standard 20 s): Wert = Frist; ihn innerhalb der Frist
 // erneut schreiben ist der Herzschlag. Bleibt er aus, kehrt der Wechselrichter in Self-consumption zurück.
 export const HEARTBEAT_ADDR = wire(13080);
+
+// Draht-Adresse → Punkt im Schreibtor (VCL-Vertrag v6 C.2 `writes`). Nur diese vier Register schreibt DVhub am
+// Sungrow; für alles andere (u. a. Min-/Max-SoC 13059/13058, H-8) hat das Tor keinen Punkt und sperrt.
+const GATE_POINT = Object.freeze({ [EMS_MODE_ADDR]: 'emsMode', [EMS_CMD_ADDR]: 'emsCmd', [EMS_POWER_ADDR]: 'emsPower', [HEARTBEAT_ADDR]: 'heartbeat' });
 
 /** Betreiber-Einstellung cfg.sungrow: Steuermodus und Herzschlag-Frist (20–300 s, Standard 30 s). */
 export function resolveSungrowControl(cfg) {
@@ -729,14 +736,23 @@ export function sungrowSecondView(state, cfg) {
  * mit Herzschlag — fällt DVhub aus, kehrt der Wechselrichter selbst in Self-consumption zurück) oder Forced mode
  * (Modus 2, ohne Rückfall). Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Modus gesetzt hat
  * (oder gesetzt haben könnte), danach nichts mehr — auch kein Herzschlag.
+ *
+ * Jeder Register-Write geht über das Schreibtor (`gate.submit`, Legacy-Modus, VCL-Vertrag v6 D.1/D.2): die Laufzeit
+ * übergibt das eine Tor des Prozesses (server.js `ctx.gate` → schedule-eval.js), Master und Slave schließen ihren
+ * Transport daran an. Ohne `gate` (Tests, Einzelaufbau) legt der Aktuator ein eigenes mit denselben Richtlinien an.
  */
-export function createSungrowEms({ state, getCfg, transport: baseTransport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false, forcedHeartbeatPath = null, modbusHealth = null }) {
+export function createSungrowEms({ state, getCfg, transport: baseTransport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false, forcedHeartbeatPath = null, modbusHealth = null, gate: injectedGate = null }) {
   // Modbus-Gesundheit dieser Verbindung (N5/M7b): zählt jede Anfrage/jeden Fehler transparent. wrap() legt sich vor
   // den Transport; der Rest des Aktuators nutzt nur noch `transport` (gezählt). snapshot() geht in publish() an die
   // Kachel. Ein von außen übergebener Zähler (Master: ctx.sungrowMasterHealth) wird GETEILT — dann zählen Poll UND
   // EMS in denselben Master-Zähler (M7b). Ohne Übergabe ein eigener (Slave, Tests).
   const modbusHealthInst = modbusHealth || createModbusHealth(now);
   const transport = modbusHealthInst.wrap(baseTransport);
+  // Schreibtor (H-1 Phase 2): die Schreibfunktionen dieses Transports erreicht der Aktuator nur noch über das Tor
+  // (R-T1). Die Not-Halt-Marke des Tors ist dieselbe wie die der Bestandsprüfung in submitReg.
+  const gateDevice = isSlave ? SUNGROW_GATE_DEVICES.slave : SUNGROW_GATE_DEVICES.master;
+  const gate = injectedGate || createLegacyGate({ isHalted: () => state.ctrl?.discretionaryWritesPaused === true });
+  gate.attachSink(gateDevice, modbusLegacySink(transport));
   const st = {
     target: null,        // { setpointW, source, at }
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
@@ -993,13 +1009,27 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return supported;
   }
 
+  // Ein Register schreiben — über das Schreibtor (VCL-Vertrag v6 D.1/D.2, Legacy-Modus, Pfad 6). Der Draht-Aufruf ist
+  // derselbe wie bisher (Argument-Objekt, FC); das Tor prüft davor seine acht Vorprüfungen. Die Bestandsprüfungen
+  // (C2, Not-Halt) bleiben in dieser Phase VOR dem Tor und entscheiden wie heute; das Tor bekommt die passende
+  // Aktionsklasse, damit es nie anders entscheidet:
+  //   neutralize        → haltNeutralize      (Rücknahme 13051=0xCC / 13050=0; der Not-Halt-Durchgang)
+  //   manualRelease     → manualForceRelease  (Knopf/API, H-7 — mit Bestätigungsmarke; auch im Not-Halt)
+  //   keepalive         → keepalive           (Herzschlag 13080, Leistungs-Lebenszeichen 13052)
+  //   sonst             → command
   // Not-Halt vor JEDEM Write prüfen: ein Takt, der vor dem Eintritt begann, darf danach nichts mehr setzen.
   // Nur die eine Rücknahme (neutralize) darf im Not-Halt schreiben.
-  async function writeReg(conf, address, value, { neutralize = false, claimMode = null, fc = 6 } = {}) {
+  let gateSeq = 0;
+  async function submitReg(conf, address, value, { neutralize = false, claimMode = null, fc = 6, keepalive = false, manualRelease = null } = {}) {
     // C2 (Christin 16.11.2026): ungültige Konfiguration (kaputtes/fehlendes Herstellerprofil → cfg.writeSafety.ok
     // === false) sperrt JEDEN Aktuator-Write — auch neutralize. Die wirksame Config trägt dann Default-Register;
     // ein Write ginge an ein möglicherweise fremdes Gerät. Lauter Alarm einmal je Grund, dann KEIN Write.
     const ws = getCfg()?.writeSafety;
+    // Schreibfreigabe des Tors aus DERSELBEN Quelle, vor jeder Einreichung neu gesetzt — Tor und Bestandsprüfung
+    // können so nicht auseinanderlaufen (R-T2/R-T5). Die Geräte-Erkennung bleibt in dieser Phase beim Aufrufer
+    // (deviceGate in step()): als Torzustand `notIdentified` sperrte sie auch die heutigen Rücknahmen, die manuelle
+    // Freigabe und jeden Slave-Write (der Slave wird nicht eigens erkannt) — eine Verhaltensänderung.
+    gate.setRelease(gateDevice, ws && ws.ok === false ? 'profileInvalid' : 'open');
     if (ws && ws.ok === false) {
       if (st._writeUnsafeAlarm !== (ws.reason || 'config_invalid')) {
         st._writeUnsafeAlarm = ws.reason || 'config_invalid';
@@ -1020,9 +1050,29 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (claimMode != null) setOwns(claimMode);
     // FC 16 (Write Multiple) für Register, die FC 06 (Write Single) nicht annehmen (manche Sungrow-Holding-
     // Register, u. a. 13080 am SH10RT-20): dasselbe Register, ein Wort.
+    const word = value & 0xffff;
+    const args = fc === 16
+      ? { ...endpoint(conf), address, values: [word] }
+      : { ...endpoint(conf), address, value: word };
+    const manual = typeof manualRelease === 'string' && manualRelease.length > 0;
+    gateSeq += 1;
+    const op = {
+      device: gateDevice,
+      point: GATE_POINT[address] ?? `reg${address}`,
+      value: word,
+      source: 'sungrow-ems',
+      kind: manual || neutralize ? 'neutralize' : (address === HEARTBEAT_ADDR ? 'heartbeat' : (keepalive ? 'keepalive' : 'write')),
+      action: manual ? 'manualForceRelease' : (neutralize ? 'haltNeutralize' : (keepalive ? 'keepalive' : 'command')),
+      lease: null,
+      constraints: { set: {}, caps: {}, enforcedBy: [] },
+      validUntilMs: null,
+      tick: { loop: manual ? 'event' : 'eval', seq: gateSeq },
+      step: 0,
+      ...(manual ? { confirmedBy: manualRelease } : {}),
+      legacy: { sink: gateDevice, fn: fc === 16 ? 'mbWriteMultiple' : 'mbWriteSingle', args: [args] },
+    };
     try {
-      if (fc === 16) await transport.mbWriteMultiple({ ...endpoint(conf), address, values: [value & 0xffff] });
-      else await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
+      unwrapGate(await gate.submit(op), op, fc);
     } catch (e) {
       // Register + Wert an den Fehler hängen (Feld-Wunsch 16.11.): split_aborted/Logs sollen
       // nennen, welches Register den Write abgelehnt hat (z. B. Leistung 13052 vs. Befehl 13051).
@@ -1030,6 +1080,23 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       throw e;
     }
     countWrite(address); // Tages-Schreibzähler je Register (Punkt 2)
+  }
+
+  // Ergebnis des Tors wie den heutigen Transport-Aufruf behandeln: Rückgabe bzw. derselbe Fehler (gleiche Referenz) —
+  // die Zustellungs-Einordnung des Tors ändert nichts an dem, was der Aktuator sieht. Sperrt das Tor im Lese-Modus,
+  // dann wie transport-modbus.js: gleiche Meldung, gleicher Fehlertyp, ein Fehler in der Modbus-Gesundheit (den Write
+  // zählte bisher der Transport). Jede andere Sperre ist in dieser Phase ein Verdrahtungsfehler: laut als Fehler.
+  function unwrapGate(res, op, fc) {
+    if ('error' in res) throw res.error;
+    if ('result' in res) return res.result;
+    if (res.outcome === 'blocked_readonly') {
+      const msg = `Schreibzugriff im Lese-Modus abgelehnt (Modbus fc=${fc})`;
+      modbusHealthInst.record(false, 0, msg);
+      throw new ReadOnlyViolation(msg);
+    }
+    const err = new GateBlockedError(res, op);
+    err.code = 'gate_blocked';
+    throw err;
   }
 
   // Tages-Schreibzähler je Register, Reset zur lokalen Mitternacht (Verschleißschutz/Transparenz, Punkt 2).
@@ -1094,8 +1161,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Aufrufer heartbeat_mismatch.
   async function neutralizeHeartbeatFailure(conf, hbRead, heartbeatS) {
     try {
-      await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, { neutralize: true });
-      await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, { neutralize: true });
+      await submitReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, { neutralize: true });
+      await submitReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, { neutralize: true });
       st.dev = null;
       await readDevice(conf);
     } catch { /* best effort — der WR fällt sonst nach seiner (langen) Frist selbst zurück */ }
@@ -1122,7 +1189,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       return Array.isArray(hb) ? (Number(hb[0]) & 0xffff) : NaN;
     };
     const tryFc = async (fc) => {
-      await writeReg(conf, HEARTBEAT_ADDR, heartbeatS, { ...opt, fc });
+      await submitReg(conf, HEARTBEAT_ADDR, heartbeatS, { ...opt, fc, keepalive: true });
       const hbRead = await readHb();
       // Übernommen = der Wechselrichter zählt ab unserem Wert herunter: direkt nach dem Schreiben liegt der
       // Rücklesewert in [Soll−3, Soll] (der Countdown tickt schon). 0/65535 (NA) oder weit darunter = NICHT
@@ -1173,20 +1240,20 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const writeStartedAt = now(); // Antwortzeit (Schreiben bis bestätigtes Rücklesen) für den adaptiven Takt (Punkt 2)
     if (decision.mode === 'self') {
       const opt = { neutralize };
-      if (dev.cmd !== EMS_CMD.STOP) await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, opt);
+      if (dev.cmd !== EMS_CMD.STOP) await submitReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, opt);
       // Modus 0 nur am Master schreiben — der Slave verwirft 13050 und folgt dem Master (Feld #5).
-      if (!isSlave && dev.mode !== EMS_MODE.SELF) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, opt);
+      if (!isSlave && dev.mode !== EMS_MODE.SELF) await submitReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, opt);
     } else {
       const opt = { neutralize, claimMode: modeValue };
       const cmd = CMD_BY_NAME[decision.command];
-      if (decision.command !== 'stop' && (forceAll || dev.powerW !== decision.powerW)) await writeReg(conf, EMS_POWER_ADDR, decision.powerW, opt);
-      if (forceAll || dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd, opt);
+      if (decision.command !== 'stop' && (forceAll || dev.powerW !== decision.powerW)) await submitReg(conf, EMS_POWER_ADDR, decision.powerW, opt);
+      if (forceAll || dev.cmd !== cmd) await submitReg(conf, EMS_CMD_ADDR, cmd, opt);
       // Nur am Master: Modus (13050) und — in External EMS — der Herzschlag. Der Slave bekommt NIE einen
       // Modus-Write (Feld #5: wird verworfen, der Slave folgt dem Master-Modus 2).
       const needHeartbeat = !isSlave && modeValue === EMS_MODE.EXTERNAL && (forceAll || dev.mode !== modeValue);
       const hb = async () => applyHeartbeat(conf, heartbeatS, opt, { writeFc: heartbeatWriteFc, acceptDeviceS: acceptDeviceHeartbeatS });
       if (needHeartbeat && !heartbeatAfterMode) await hb();
-      if (!isSlave && (forceAll || dev.mode !== modeValue)) await writeReg(conf, EMS_MODE_ADDR, modeValue, opt);
+      if (!isSlave && (forceAll || dev.mode !== modeValue)) await submitReg(conf, EMS_MODE_ADDR, modeValue, opt);
       if (needHeartbeat && heartbeatAfterMode) await hb();
     }
     st.dev = null;
@@ -1794,7 +1861,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         //     beschreibbar ist (nicht deviceManaged) und als Keepalive-Register gewählt (13080/both, Standard 13080).
         const reg = ctl.keepaliveRegister;
         if ((reg === '13080' || reg === 'both') && !st.hb.deviceManaged) {
-          await writeReg(conf, HEARTBEAT_ADDR, ctl.heartbeatTimeoutS, { fc: st.hb.workingFc || 6 });
+          await submitReg(conf, HEARTBEAT_ADDR, ctl.heartbeatTimeoutS, { fc: st.hb.workingFc || 6, keepalive: true });
           st.sentTimeoutS = ctl.heartbeatTimeoutS;
           st.lastHeartbeatAt = now();
         }
@@ -1806,7 +1873,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
           const fallbackMs = st.lastFallbackAfterS > 0 ? st.lastFallbackAfterS * 1000 : ctl.heartbeatTimeoutS * 1000;
           const kaEvery = Math.min(10000, Math.max(3000, Math.floor(fallbackMs / 3)));
           if (t - (st.lastKeepaliveAt || 0) >= kaEvery - TICK_JITTER_MS) {
-            await writeReg(conf, EMS_POWER_ADDR, dev.powerW, { fc: 6 }); // Leistung neu schreiben = Lebenszeichen
+            await submitReg(conf, EMS_POWER_ADDR, dev.powerW, { fc: 6, keepalive: true }); // Leistung neu schreiben = Lebenszeichen
             st.lastKeepaliveAt = now();
             if (st.hb.deviceManaged) st.lastHeartbeatAt = now();
           }
@@ -2028,7 +2095,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   }
 
   // === Schreibklassen-Matrix im Not-Halt (C3.2, Christin 16.11.2026) ==========================================
-  // Entscheidung festgehalten: Der Not-Halt sperrt DVhubs EIGENE Regel-Writes (writeReg ohne neutralize wirft
+  // Entscheidung festgehalten: Der Not-Halt sperrt DVhubs EIGENE Regel-Writes (submitReg ohne neutralize wirft
   // emergency_stop_active). AUSDRÜCKLICHE Ausnahme — genau EINE Neutralisierung über den Außen-Pfad:
   //   • releaseControl (geordnetes Beenden, SIGTERM/Update, ExecStopPost des Not-Stop-Skripts) und
   //   • neutralize (Box-Watchdog)
@@ -2097,7 +2164,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Modus 2 mit fester Leistung steht (Feld: ~10 min, API-Neustart half nicht, nur sungrowForcedSafeOff löste es).
   // Darum NICHT über writeDecision (das lehnt einen vermeintlich „fremden" Modus 2 ab) — die Register direkt setzen
   // und zurücklesen. Danach Besitz/Ziel/letzten Write zurücksetzen, damit DVhub nicht sofort wieder eintritt.
+  // Schreibtor: Aktionsklasse manualForceRelease (H-7) — die einzige Not-Halt-Ausnahme, nur die festen Literale
+  // 0xCC/0 Richtung Grundzustand. Bestätigt hat der Bediener am Aufrufer (POST /api/sungrow/release verlangt
+  // confirm: true); die Marke nennt den Anlass. Der Master reicht die Freigabe an den Slave weiter (gleiche Klasse).
   function forceRelease(reason = 'manual_release') {
+    const confirmedBy = `operator:${reason || 'manual_release'}`;
     return serial(async () => {
       const cfg = getCfg();
       const conf = sungrowEmsConf(cfg);
@@ -2107,8 +2178,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       if (slaveActuator) { try { await slaveActuator.forceRelease(reason); } catch { /* best effort */ } }
       try {
         st.dev = null;
-        await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, { neutralize: true });
-        if (!isSlave) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, { neutralize: true });
+        await submitReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, { neutralize: true, manualRelease: confirmedBy });
+        if (!isSlave) await submitReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, { neutralize: true, manualRelease: confirmedBy });
         const back = await readDevice(conf);
         out.ok = back.cmd === EMS_CMD.STOP && (isSlave || back.mode === EMS_MODE.SELF);
         out.device = { mode: back.mode, cmd: back.cmd, powerW: back.powerW };

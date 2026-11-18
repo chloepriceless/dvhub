@@ -11,7 +11,9 @@
 //   publish                                         jeder `.publish(`/`.publishAsync(`-Aufruf (Steuer- oder nicht:
 //                                                   statisch nicht trennbar → jede Stelle muss eingeordnet sein)
 //   pickup:<fn>                                     Abholpuffer für Loxone/HA (services/control-snapshot.js)
-//   writeReg                                        Sungrow-Registerschreiber (services/inverter/sungrow.js)
+//   writeReg                                        Sungrow-Registerschreiber am Tor vorbei (bis Phase 2; seither
+//                                                   heißt er submitReg und reicht über gate.submit() ein — ein neuer
+//                                                   writeReg-Aufruf wäre wieder ein Direktweg)
 //   callAction                                      OCPP-Befehl an die Wallbox
 //   und nur in den Geräteadaptern (Wallbox, Schaltgeräte, myPV, EEBUS, evcc):
 //   http | send | stdin.write                       rohe HTTP-Anfrage, WebSocket-Rahmen, EEBUS-Brücke

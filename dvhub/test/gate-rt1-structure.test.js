@@ -20,8 +20,9 @@ import { DVHUB_DIR, scanProduction, scanSource, entryKey } from './helpers/sink-
 // Obergrenzen der Ausnahmeliste: Einträge und Aufrufstellen insgesamt. Dürfen NUR sinken: wer einen Pfad aufs Tor
 // umstellt, löscht den Eintrag (bzw. senkt dessen count) und senkt diese Zahlen. Eine neue Ausnahme ist kein
 // Nachtrag hier, sondern ein Schreibweg am Tor vorbei.
-const MAX_EXCEPTIONS = 55;
-const MAX_EXCEPTION_SITES = 65;
+// Phase 2 (feat/vcl-tor-p2): Sungrow writeReg (D.1 #6) über das Tor → 55/65 auf 48/51.
+const MAX_EXCEPTIONS = 48;
+const MAX_EXCEPTION_SITES = 51;
 
 // Nur diese Bausteine sind mehrdeutig (Steuerbefehl oder nicht); eine Modbus-/MQTT-Schreibfunktion oder writeReg
 // ist immer ein Schreibweg und darf nie als „kein Steuerbefehl“ eingetragen werden.

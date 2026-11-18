@@ -35,6 +35,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
 import { createSungrowEms, endpointKeyOf, sungrowEmsConf, resolveSecondInverter } from './services/inverter/sungrow.js';
+import { createLegacyGate } from './services/gate/legacy.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -223,8 +224,12 @@ export function createScheduleEvaluator(ctx) {
   // Zweiter Sungrow-WR mit eigenem Schreibpfad (Punkt 3, Split-Steuerung): separate EMS-Instanz auf die
   // Slave-Verbindung (eigener Besitz-Merker, eigener Status-Key), vom Master bei Vorgaben angesteuert. Nur aktiv,
   // wenn sungrow.secondInverter.control = 'split'; sonst bleibt der Slave ungenutzt (Standard self-only).
+  // Schreibtor (VCL-Vertrag v6 D.1, H-1 Phase 2): beide Instanzen schreiben über DAS Tor des Prozesses (server.js
+  // ctx.gate) im Legacy-Modus, je mit eigenem Gerätenamen und eigenem Transport. Ohne ctx.gate (Tests, die den
+  // Evaluator allein bauen) ein eigenes Tor mit denselben Richtlinien und derselben Not-Halt-Marke.
+  const writeGate = ctx.gate || createLegacyGate({ isHalted: () => state.ctrl?.discretionaryWritesPaused === true });
   const sungrowSlaveEms = ctx.sungrowSlaveEms || createSungrowEms({
-    state, getCfg, transport: ctx.sungrowSlaveTransport || transport, pushLog,
+    state, getCfg, transport: ctx.sungrowSlaveTransport || transport, pushLog, gate: writeGate,
     statePath: ctx.sungrowSlaveEmsStatePath || null,
     statusKey: 'sungrowEmsSlave',
     // Slave: der zweite WR folgt dem Master-Modus (Feld #5) — der Aktuator schreibt NIE 13050 und prüft seinen
@@ -235,7 +240,7 @@ export function createScheduleEvaluator(ctx) {
       return c.enabled ? { host: c.host, port: c.port, unitId: c.unitId, timeoutMs: c.timeoutMs } : null;
     },
   });
-  const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog, statePath: ctx.sungrowEmsStatePath || null, slaveActuator: sungrowSlaveEms, forcedHeartbeatPath: ctx.sungrowForcedHeartbeatPath || null, modbusHealth: ctx.sungrowMasterHealth || null });
+  const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog, gate: writeGate, statePath: ctx.sungrowEmsStatePath || null, slaveActuator: sungrowSlaveEms, forcedHeartbeatPath: ctx.sungrowForcedHeartbeatPath || null, modbusHealth: ctx.sungrowMasterHealth || null });
 
   // Geräte-Tor (Profil identify.requiredForWrites): geschrieben wird erst, wenn
   // polling.js das Gerät erkannt hat und es unterstützt ist — ein falsches oder

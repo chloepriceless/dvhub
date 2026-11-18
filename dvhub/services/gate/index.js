@@ -1,4 +1,5 @@
-// services/gate/index.js — Node-Schreibtor, Phase 1: Gerüst, an keinen Pfad angeschlossen (VCL-Vertrag v6 D.1, H-1).
+// services/gate/index.js — Node-Schreibtor (VCL-Vertrag v6 D.1, H-1). Phase 1: Gerüst; Phase 2: Pfad 6 (Sungrow
+// `writeReg`, Master und Slave) läuft im Legacy-Modus hierüber (services/gate/legacy.js).
 //
 // Ein Zugang: `submit(GateOp) → Promise<SubmitResult>`. Jede Schreibabsicht — Vertragsroute oder Legacy-Pfad — soll
 // hier enden (R-T1); bis die acht Pfade umgestellt sind, führt test/gate-rt1-structure.test.js die bekannten
@@ -201,7 +202,6 @@ function isNeutralLiteral(pol, value) {
  */
 export function createGate(options = {}) {
   const {
-    sinks = {},
     isHalted = () => false,
     isReadOnly = () => isReadOnlyMode(),
     onReadOnlyBlock = noteBlockedWrite,
@@ -212,8 +212,15 @@ export function createGate(options = {}) {
     licensePro = false,
     opIdTicks = OPID_TICKS,
   } = options;
-  for (const [name, spec] of Object.entries(sinks)) {
+  // Eigene Tabelle (nie das Objekt des Aufrufers verändern); attachSink() ergänzt sie. Ohne Prototyp: auch eine Senke
+  // namens `__proto__` ist ein eigener Eintrag und kein Prototyp-Wechsel (Codex 8ad74e08 P3).
+  const sinks = Object.create(null);
+  const checkSink = (name, spec) => {
     if (!spec || !SINK_KINDS.has(spec.kind)) throw new TypeError(`Senke ${name}: kind muss modbus|mqtt|http|pickup sein`);
+  };
+  for (const [name, spec] of Object.entries(options.sinks || {})) {
+    checkSink(name, spec);
+    sinks[name] = spec;
   }
 
   let policies = normalizePolicies(options.policies);
@@ -320,6 +327,18 @@ export function createGate(options = {}) {
   }
 
   /**
+   * Senke nachträglich anschließen: ein Pfad, der seinen Transport selbst baut (Sungrow-EMS mit eigenem
+   * Gesundheitszähler, Phase 2), bringt ihn hier ans Tor — danach erreicht er ihn nur noch über submit(). Ein Name
+   * genau einmal: zwei Schreiber unter demselben Gerätenamen wären ein Verdrahtungsfehler (R-T4).
+   */
+  function attachSink(name, spec) {
+    if (!isNonEmptyString(name)) throw new TypeError('Senke: Name fehlt');
+    checkSink(name, spec);
+    if (Object.hasOwn(sinks, name)) throw new Error(`Senke ${name} ist schon angeschlossen`);
+    sinks[name] = spec;
+  }
+
+  /**
    * opId je Versuch eindeutig. Gemerkt werden die letzten `opIdTicks` Takte je Schleife (exakt, Grundform plus `~n`
    * bei Wiederholung). Ein Takt, der älter als das Gedächtnis ist, bekommt einen nie wiederkehrenden Zusatz `~u<n>`
    * — so kann eine opId auch nach dem Vergessen nicht doppelt vorkommen (Codex 7a183a18 P2).
@@ -415,7 +434,8 @@ export function createGate(options = {}) {
       unknown = true;
     }
     if (!ro) return null;
-    try { onReadOnlyBlock?.(`Tor ${op.device}/${op.point}`); } catch { /* Zählen darf das Sperren nicht verhindern */ }
+    // Zweites Argument: die Operation — ein Legacy-Anschluss kann daraus dieselbe Meldung wie sein Transport bilden.
+    try { onReadOnlyBlock?.(`Tor ${op.device}/${op.point}`, op); } catch { /* Zählen darf das Sperren nicht verhindern */ }
     return block('blocked_readonly', unknown ? DETAIL.readOnlyStateUnknown : DETAIL.readOnly);
   }
 
@@ -685,6 +705,7 @@ export function createGate(options = {}) {
     advanceLeaseEpoch,
     setPolicies,
     setReleased,
+    attachSink,
     owned: (device, point) => owners.get(device, point),
   };
 }

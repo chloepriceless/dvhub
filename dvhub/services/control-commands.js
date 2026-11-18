@@ -182,6 +182,10 @@ async function setEmergencyStopNow(ctx, opts) {
     // A7 (Paritätsfund dvhub-rs): schon eingereihte Modbus-Writes verwerfen,
     // bevor die eine Rücknahme unten eingereiht wird.
     fenceModbusWrites();
+    // Dasselbe im Schreibtor (VCL-Vertrag v6 A.6 Schritt 1, D.1): vor dem Eintritt zugelassene Operationen gehen
+    // danach nie mehr raus. Legacy-Operationen (Sungrow, Phase 2) werden synchron zugestellt — für sie bleibt die
+    // Modbus-Sperrmarke oben maßgeblich.
+    ctx.gate?.fence?.();
     state.ctrl.pausedAt = Date.now();
     state.ctrl.pausedBy = actor?.actor_ip || 'unknown';
     state.ctrl.pausedReason = 'operator';
