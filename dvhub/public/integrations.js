@@ -3977,7 +3977,11 @@
       var out = d.out || {};
       var ctl = out.control || {};
       var cs = document.getElementById('df-control-source');
-      if (cs) cs.textContent = ctl.source ? '(Quelle: ' + ctl.source + (ctl.rule ? ', Regel ' + ctl.rule : '') + (ctl.paused ? ', Not-Halt aktiv' : '') + ')' : '';
+      // R-T3: bei geschlossenem Tor geht „keine Vorgabe“ hinaus — mit Grund.
+      var suspendedText = { not_halt: 'Not-Halt', read_only: 'Lese-Modus', config_unsafe: 'Konfiguration ungültig' };
+      var suspended = !ctl.suspended ? '' : (ctl.suspended === 'not_halt' && ctl.paused ? ' — keine Vorgabe nach außen'
+        : ', keine Vorgabe nach außen: ' + (suspendedText[ctl.suspended] || ctl.suspended));
+      if (cs) cs.textContent = ctl.source ? '(Quelle: ' + ctl.source + (ctl.rule ? ', Regel ' + ctl.rule : '') + (ctl.paused ? ', Not-Halt aktiv' : '') + suspended + ')' : '';
       var tout = document.getElementById('df-out');
       if (tout) {
         var crow = (ctl.rows || []).map(function (r) {

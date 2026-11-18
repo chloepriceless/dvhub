@@ -50,6 +50,7 @@ dvhub_control_paused=false
 | `dvhub_control_min_soc_pct` | Mindest-SoC-Vorgabe in % |
 | `dvhub_control_max_discharge_w` | maximale Entladeleistung in W (`-1` = keine Begrenzung) |
 | `dvhub_control_paused` | `true`, wenn der Not-Halt aktiv ist |
+| `dvhub_control_suspended` | nur vorhanden, wenn DVhub gerade **keine Vorgabe** herausgibt — mit Grund: `not_halt`, `read_only`, `config_unsafe` (siehe A.4) |
 
 Weitere Zeilen (`costs`, `dvhub_forecast`, …) enthalten JSON und sind für Loxone meist nicht nötig.
 
@@ -79,6 +80,39 @@ Weitere Zeilen (`costs`, `dvhub_forecast`, …) enthalten JSON und sind für Lox
 
 - **`open`** (Standard) und **`restricted`**: Geräte im Heimnetz dürfen lesen, Loxone braucht nichts weiter. (Bei `restricted` muss die Gruppe „integrations“ in den LAN-sicheren Gruppen stehen — Standard.)
 - **`strict`**: nur mit API-Token (`Authorization: Bearer <apiToken>`). Kann der Loxone-Eingang keinen Header setzen, `restricted` wählen.
+
+### A.4 Im Not-Halt: keine Vorgabe
+
+Wer die Sollwerte abholt und umsetzt, steuert mit. Deshalb gibt DVhub sie in drei Lagen **nicht** heraus — wie bei ausgeschaltetem DVhub:
+
+| Lage | `dvhub_control_suspended` | Sollwert-Zeilen | Grenzen-Zeilen (`dvhub_control_grid_limit_*`) |
+|---|---|---|---|
+| Not-Halt aktiv | `not_halt` (dazu `dvhub_control_paused=true`) | keine Vorgabe | keine Grenze (§14a ist im Not-Halt ausgesetzt) |
+| Konfiguration ungültig (kaputtes oder fehlendes Herstellerprofil, kaputte `config.json`) | `config_unsafe` | keine Vorgabe | laufen weiter |
+| Lese-Modus (`DVHUB_READ_ONLY=1`, Zweit-Instanz zum Mitlesen) | `read_only` | keine Vorgabe | keine Grenze |
+
+„Keine Vorgabe“ sieht genauso aus wie bei einem DVhub ohne jeden Sollwert:
+
+```
+dvhub_control_grid_setpoint_w=null
+dvhub_control_charge_current_a=null
+dvhub_control_min_soc_pct=null
+dvhub_control_max_discharge_w=null
+dvhub_control_source=none
+dvhub_control_rule=null
+dvhub_control_updated_at=null
+dvhub_control_paused=true
+dvhub_control_suspended=not_halt
+dvhub_control_grid_limit_active=false
+dvhub_control_grid_limit_source=none
+dvhub_control_grid_limit_consumption_w=null
+dvhub_control_grid_limit_production_w=null
+dvhub_control_grid_limit_production_blocked=false
+```
+
+Auch die JSON-Zeile `scheduleActive` nennt dann je Ziel `null`. **Alle Messwerte laufen weiter** (`gridTotalW`, `soc`, `batteryPowerW`, `pvTotalW`, die Rücklesungen `gridSetpointW`/`minSocPct`, `dvControlValue`, `forcedOff`). Ist der Not-Halt aufgehoben bzw. die Konfiguration wieder gültig, kommen die Sollwerte mit der nächsten Abfrage wieder; die Zeile `dvhub_control_suspended` entfällt dann.
+
+`null` ist keine Zahl. Die Loxone-Logik, die einen Sollwert umsetzt, soll in diesem Fall auf den **eigenen Grundzustand** des Speichers fallen und **nicht den zuletzt gelesenen Wert weiterfahren**. Wie ein Virtueller HTTP Eingang Befehl mit `\v` auf `null` reagiert (alter Wert, Standardwert), hängt von seinen Einstellungen ab — am besten zusätzlich die Zeile `dvhub_control_suspended` bzw. `dvhub_control_paused=true` als Sperre in die Logik nehmen und das mit einem kurzen Not-Halt einmal ausprobieren.
 
 ---
 
@@ -153,7 +187,7 @@ In DVhub dann unter „MQTT-Bridge (Universal)“ die **Broker-URL des LoxBerry*
 
 ### B.6 Sollwerte von DVhub in Loxone umsetzen
 
-Ist die Anlage nur über Loxone steuerbar, liest Loxone die Vorgaben von DVhub wie in **Teil A** (`dvhub_control_grid_setpoint_w`, `dvhub_control_min_soc_pct`, `dvhub_control_max_discharge_w`, `dvhub_control_charge_current_a`) und setzt sie am Speicher/Wechselrichter um. Ohne MQTT-Broker speichert DVhub die Sollwerte nur und stellt sie dort bereit — Loxone muss sie aktiv abholen.
+Ist die Anlage nur über Loxone steuerbar, liest Loxone die Vorgaben von DVhub wie in **Teil A** (`dvhub_control_grid_setpoint_w`, `dvhub_control_min_soc_pct`, `dvhub_control_max_discharge_w`, `dvhub_control_charge_current_a`) und setzt sie am Speicher/Wechselrichter um. Ohne MQTT-Broker speichert DVhub die Sollwerte nur und stellt sie dort bereit — Loxone muss sie aktiv abholen. Im Not-Halt, bei ungültiger Konfiguration und im Lese-Modus steht dort „keine Vorgabe“ (A.4): Die Loxone-Logik muss dann selbst in den Grundzustand gehen.
 
 ---
 

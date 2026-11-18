@@ -188,8 +188,8 @@ function controlRows(snapshot) {
  * @param {object} p.cfg
  * @param {object} p.state
  * @param {object} [p.transport]
- * @param {object} [p.controlSnapshot]   buildControlSnapshot(state)
- * @param {object} [p.gridLimit]         buildGridLimitSnapshot(state)
+ * @param {object} [p.controlSnapshot]   was hinausgeht: services/gate/pickup.js handOut().control
+ * @param {object} [p.gridLimit]         dito handOut().gridLimit
  * @param {Array}  [p.channels]          Ausgangskanäle (von der Route gebaut)
  * @param {number|null} [p.dvControlValue]
  * @param {number} p.now
@@ -215,6 +215,8 @@ export function buildDataflow({ cfg, state, transport, controlSnapshot, gridLimi
         updatedAt: controlSnapshot?.updatedAt || null,
         paused: !!controlSnapshot?.paused,
         rows: controlRows(controlSnapshot),
+        // R-T3: warum gerade „keine Vorgabe“ hinausgeht (not_halt | read_only | config_unsafe | …) — nur dann gesetzt.
+        ...(controlSnapshot?.suspended ? { suspended: controlSnapshot.suspended } : {}),
       },
       dvSignal: { value: dvControlValue, forcedOff: !!state?.ctrl?.forcedOff },
       gridLimit: gridLimit || null,

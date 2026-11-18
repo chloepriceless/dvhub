@@ -75,6 +75,15 @@ export function legacyModbusReadOnlyWhat(op) {
 /** Gerätename im Tor für den allgemeinen WR-Transport der Bewertung (schedule-eval.js), wie Rust (`inverter`). */
 export const INVERTER_GATE_DEVICE = 'inverter';
 
+/**
+ * Schreibfreigabe des Geräts `inverter` aus der wirksamen Config (C2, Christin 16.11.2026): ungültiges
+ * Herstellerprofil bzw. kaputte config.json (`writeSafety.ok === false`) → `profileInvalid`, sonst `open`. Eine Stelle
+ * für die Schreibpfade (schedule-eval.js submitInverter) und den Abholpuffer (services/gate/pickup.js).
+ */
+export function inverterReleaseState(cfg) {
+  return cfg?.writeSafety?.ok === false ? 'profileInvalid' : 'open';
+}
+
 // Freigabe-Literale der Einzelpunkte (Richtung „Einspeisung frei“ bzw. „Deckel aus“): Victron 2707 OvervoltageFeedIn
 // = 1, 2708 PreventFeedback = 0 (Modbus und MQTT-Brücke unter demselben Namen), SunSpec WMaxLim_Ena = 0.
 const PV_RELEASE_LITERALS = Object.freeze({ feedExcessDcPv: [1], dontFeedExcessAcPv: [0], wMaxLimEna: [0] });

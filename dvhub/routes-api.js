@@ -33,7 +33,7 @@ import { requestEosReplanAfterSave } from './services/optimizer/eos-replan-after
 import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
-import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, gridLimitSnapshotFlat } from './services/control-snapshot.js';
+import { createPickupSink } from './services/gate/pickup.js';
 import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
@@ -1026,6 +1026,9 @@ export function createApiRoutes(ctx) {
     configDir: path.dirname(ctx.getConfigPath?.() || '/etc/dvhub/config.json'),
   });
   const { state, getCfg, pushLog, telemetrySafeWrite, licenseService } = ctx;
+  // Abholpuffer hinter dem Schreibtor (VCL-Vertrag v6 D.1 R-T3, services/gate/pickup.js): die Steuerfelder für
+  // Loxone/HA gibt das Tor des Prozesses (ctx.gate) bei jeder Abfrage frei — oder liefert „keine Vorgabe“.
+  const pickup = createPickupSink({ state, getCfg, getGate: () => ctx.gate });
 
   // §51a lifetime extension (T-0004): the since-commissioning price scan is
   // a full-history query — cache it; negative-price slots only accrue every
@@ -2347,7 +2350,23 @@ export function createApiRoutes(ctx) {
   }
 
   async function integrationState() {
+    // Erst warten, dann zusammenstellen (Codex 36f71297 P1): das Tor urteilt über die Steuerfelder NACH dem letzten
+    // await — sonst ginge ein vor einem Not-Halt gelesener Sollwert noch hinaus, wenn der Not-Halt kommt, während die
+    // Antwort auf die Prognose wartet. Ab hier läuft alles ohne Warten bis zur Rückgabe.
+    // Per-section error isolation (Plan 08-07 Task 2): one section failing must
+    // NOT 500 the whole integration endpoint. Failures attach to base.dvhub_errors[].
+    const sectionErrors = [];
+    let forecastResp = null;
+    try {
+      forecastResp = await ctx.forecastService?.buildForecastResponse?.();
+    } catch (err) {
+      sectionErrors.push({ section: 'forecast', error: err?.message ?? String(err) });
+      pushLog('integration_state_forecast_error', { error: err?.message ?? String(err) });
+    }
+
     const cfg = getCfg();
+    // Steuerfelder (dvhub_control_*, scheduleActive) über das Tor: ein Urteil je Gerät für die ganze Antwort (R-T3).
+    const handOut = pickup.handOut();
 
     // === EXISTING FIELDS — DO NOT MODIFY (backward compat for HA/Loxone consumers) ===
     const base = {
@@ -2361,27 +2380,18 @@ export function createApiRoutes(ctx) {
       soc: state.victron.soc,
       batteryPowerW: state.victron.batteryPowerW,
       pvTotalW: state.victron.pvTotalW,
-      scheduleActive: state.schedule.active,
+      scheduleActive: pickup.scheduleActive(handOut),
       costs: costSummary(),
       userEnergyPricing: userEnergyPricingSummary()
     };
     // 2026-09-14: Steuerbefehle als FLACHE Felder (dvhub_control_*) — Loxone
     // Virtual HTTP Input parst key=value je Zeile, der scheduleActive-JSON-Blob
     // oben ist dort unbrauchbar. Gleiche Quelle wie <prefix>/control/* per MQTT.
-    Object.assign(base, controlSnapshotFlat(buildControlSnapshot(state)));
-    Object.assign(base, gridLimitSnapshotFlat(buildGridLimitSnapshot(state)));
+    // Bei geschlossenem Tor (Not-Halt, Lese-Modus, ungültige Konfiguration)
+    // „keine Vorgabe“ plus dvhub_control_suspended; Messwerte oben unverändert.
+    Object.assign(base, pickup.flat(handOut));
 
     // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
-    // Per-section error isolation (Plan 08-07 Task 2): one section failing must
-    // NOT 500 the whole integration endpoint. Failures attach to base.dvhub_errors[].
-    const sectionErrors = [];
-    let forecastResp = null;
-    try {
-      forecastResp = await ctx.forecastService?.buildForecastResponse?.();
-    } catch (err) {
-      sectionErrors.push({ section: 'forecast', error: err?.message ?? String(err) });
-      pushLog('integration_state_forecast_error', { error: err?.message ?? String(err) });
-    }
     if (forecastResp) {
       // Duration-aware energy calculation (review concern: "summing powerW/1000 ignores slot duration")
       const pvSlots = forecastResp.pv?.slots || [];
@@ -5286,10 +5296,12 @@ export function createApiRoutes(ctx) {
           redirect: ctx.vpnManager?.getStatus?.()?.modbusRedirect || null,
         },
       ];
+      // „Raus — Sollwerte“ zeigt, was wirklich hinausgeht: dieselbe Abholsenke wie Loxone/MQTT (R-T3).
+      const out = pickup.handOut();
       return json(res, 200, buildDataflow({
         cfg, state, transport: ctx.transport,
-        controlSnapshot: buildControlSnapshot(state),
-        gridLimit: buildGridLimitSnapshot(state),
+        controlSnapshot: out.control,
+        gridLimit: out.gridLimit,
         channels,
         dvControlValue: typeof ctx.controlValue === 'function' ? ctx.controlValue() : null,
         now: Date.now(),

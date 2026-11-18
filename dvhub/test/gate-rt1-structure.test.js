@@ -24,8 +24,9 @@ import { DVHUB_DIR, scanProduction, scanSource, entryKey } from './helpers/sink-
 // Phase 3 (feat/vcl-tor-p3a): runDvControlSequence (D.1 #2/#4) → 46/49; zfiWrite (D.1 #5) → 45/48;
 // applyDvVictronControl (D.1 #3) → 43/44.
 // Phase 3b (feat/vcl-tor-p3b): applyControlTargetCore (D.1 #1) → 40/41; zweite GX (D.1 #8) → 39/40.
-const MAX_EXCEPTIONS = 39;
-const MAX_EXCEPTION_SITES = 40;
+// R-T3 (feat/vcl-abholung): Abholpuffer und Steuer-Spiegel über services/gate/pickup.js → 33/34.
+const MAX_EXCEPTIONS = 33;
+const MAX_EXCEPTION_SITES = 34;
 
 // Nur diese Bausteine sind mehrdeutig (Steuerbefehl oder nicht); eine Modbus-/MQTT-Schreibfunktion oder writeReg
 // ist immer ein Schreibweg und darf nie als „kein Steuerbefehl“ eingetragen werden.

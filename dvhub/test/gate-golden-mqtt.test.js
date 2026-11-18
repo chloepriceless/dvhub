@@ -4,7 +4,9 @@
 //     Schreib-Prüfung (controlWriteVerify); ohne Echo fordert sie per R/ nach und meldet „kein Beweis".
 //   DVhub-Schema (hersteller/dvhub-mqtt.json) MIT Broker, OHNE Rückmeldung: <prefix>/control/<ziel>/set, nackte Zahl.
 //   DVhub-Schema OHNE Broker (HTTP-Abholung): kein Draht, Ergebnis ok:true/http_pickup, Abholung über
-//     GET /api/integration/loxone (dvhub_control_*), auch im Not-Halt und bei ungültiger Config (heute: letzter Wert).
+//     GET /api/integration/loxone (dvhub_control_*). Im Not-Halt und bei ungültiger Config seit R-T3 (Abholpuffer hinter
+//     dem Tor, services/gate/pickup.js) „keine Vorgabe“ statt des letzten Werts: Sollwerte null, Herkunft none,
+//     dvhub_control_suspended mit Grund; danach wieder der aktuelle Wert (bis 24eabf21: der letzte Wert).
 // Transport wie in server.js gebaut: createMqttTransport(cfg.victron, { onEvent → pushLog }); Broker ist eine
 // Attrappe (connectFn-Naht), die jede Operation in EIN Log schreibt: CONNECT, SUB (Anzahl), PUB topic payload qos.
 //
@@ -148,5 +150,7 @@ test('DVhub-Schema ohne Broker (HTTP-Abholung): kein Draht, ok:true, Loxone-Steu
   rig.cfg.writeSafety = { ok: false, reason: 'manufacturer_profile_error', manufacturer: 'dvhub-mqtt' };
   await r.step('gridSetpointW -1200 bei writeSafety.ok=false', apply(rig, 'gridSetpointW', -1200, 'rule:abend'));
   await r.step('Abholpuffer bei ungültiger Config', () => loxoneControl(rig));
+  delete rig.cfg.writeSafety;
+  await r.step('Abholpuffer bei wieder gültiger Config', () => loxoneControl(rig));
   golden.check('dvhub_schema_http_pickup', r.steps);
 });

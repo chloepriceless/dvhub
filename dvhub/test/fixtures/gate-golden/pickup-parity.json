@@ -1,0 +1,3885 @@
+{
+  "eos_rule_full": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=-3000\ndvhub_control_charge_current_a=30\ndvhub_control_min_soc_pct=15\ndvhub_control_max_discharge_w=-1\ndvhub_control_source=eos\ndvhub_control_rule=abend\ndvhub_control_updated_at=2026-11-18T09:59:30.000Z\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=true\ndvhub_control_grid_limit_source=eebus\ndvhub_control_grid_limit_consumption_w=7560\ndvhub_control_grid_limit_production_w=4200\ndvhub_control_grid_limit_production_blocked=false\ndvControlValue=1\nforcedOff=false\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=-100\nminSocPct=20\nsoc=55\nbatteryPowerW=-300\npvTotalW=900\nscheduleActive={\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":1,\"forcedOff\":false,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"gridSetpointW\":-100,\"minSocPct\":20,\"soc\":55,\"batteryPowerW\":-300,\"pvTotalW\":900,\"scheduleActive\":{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":-3000,\"dvhub_control_charge_current_a\":30,\"dvhub_control_min_soc_pct\":15,\"dvhub_control_max_discharge_w\":-1,\"dvhub_control_source\":\"eos\",\"dvhub_control_rule\":\"abend\",\"dvhub_control_updated_at\":\"2026-11-18T09:59:30.000Z\",\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":true,\"dvhub_control_grid_limit_source\":\"eebus\",\"dvhub_control_grid_limit_consumption_w\":7560,\"dvhub_control_grid_limit_production_w\":4200,\"dvhub_control_grid_limit_production_blocked\":false}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":900,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":-300,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":55,\"unit\":\"%\",\"ageMs\":0},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":0}],\"checks\":[],\"out\":{\"control\":{\"source\":\"eos\",\"rule\":\"abend\",\"updatedAt\":\"2026-11-18T09:59:30.000Z\",\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":-3000,\"source\":\"rule:abend\",\"origin\":\"active\",\"at\":1794995940000},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":30,\"source\":\"default\",\"origin\":\"active\",\"at\":1794995880000},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":15,\"source\":\"rule:opt-1-0\",\"origin\":\"active\",\"at\":1794995970000},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":-1,\"source\":\"api_manual_write\",\"origin\":\"active\",\"at\":1794995910000}]},\"dvSignal\":{\"value\":1,\"forcedOff\":false},\"gridLimit\":{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}},\"lastWrites\":[{\"key\":\"gridSetpointW\",\"value\":-3000,\"writeType\":\"int32\",\"source\":\"rule:abend\",\"at\":1794995940000}],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":2015,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "dvhub/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/soc_pct",
+        "55",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/power_w",
+        "-300",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_total_w",
+        "900",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_dc_w",
+        "600",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/status",
+        "active",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/last_run_at",
+        "1794995700000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/rules_count",
+        "2",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/ranges",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/victron_updated_at",
+        "1794996000000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_setpoint_w",
+        "-3000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/charge_current_a",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/min_soc_pct",
+        "15",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/max_discharge_w",
+        "-1",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/rule",
+        "abend",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/updated_at",
+        "2026-11-18T09:59:30.000Z",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/state",
+        "{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000,\"origin\":\"active\"},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"origin\":\"active\"},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"origin\":\"active\"},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000,\"origin\":\"active\"}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/active",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/source",
+        "eebus",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/consumption_w",
+        "7560",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_w",
+        "4200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_blocked",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/state",
+        "{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  },
+  "eos_rule_full_shared_gate": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=-3000\ndvhub_control_charge_current_a=30\ndvhub_control_min_soc_pct=15\ndvhub_control_max_discharge_w=-1\ndvhub_control_source=eos\ndvhub_control_rule=abend\ndvhub_control_updated_at=2026-11-18T09:59:30.000Z\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=true\ndvhub_control_grid_limit_source=eebus\ndvhub_control_grid_limit_consumption_w=7560\ndvhub_control_grid_limit_production_w=4200\ndvhub_control_grid_limit_production_blocked=false\ndvControlValue=1\nforcedOff=false\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=-100\nminSocPct=20\nsoc=55\nbatteryPowerW=-300\npvTotalW=900\nscheduleActive={\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":1,\"forcedOff\":false,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"gridSetpointW\":-100,\"minSocPct\":20,\"soc\":55,\"batteryPowerW\":-300,\"pvTotalW\":900,\"scheduleActive\":{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":-3000,\"dvhub_control_charge_current_a\":30,\"dvhub_control_min_soc_pct\":15,\"dvhub_control_max_discharge_w\":-1,\"dvhub_control_source\":\"eos\",\"dvhub_control_rule\":\"abend\",\"dvhub_control_updated_at\":\"2026-11-18T09:59:30.000Z\",\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":true,\"dvhub_control_grid_limit_source\":\"eebus\",\"dvhub_control_grid_limit_consumption_w\":7560,\"dvhub_control_grid_limit_production_w\":4200,\"dvhub_control_grid_limit_production_blocked\":false}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":900,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":-300,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":55,\"unit\":\"%\",\"ageMs\":0},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":0}],\"checks\":[],\"out\":{\"control\":{\"source\":\"eos\",\"rule\":\"abend\",\"updatedAt\":\"2026-11-18T09:59:30.000Z\",\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":-3000,\"source\":\"rule:abend\",\"origin\":\"active\",\"at\":1794995940000},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":30,\"source\":\"default\",\"origin\":\"active\",\"at\":1794995880000},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":15,\"source\":\"rule:opt-1-0\",\"origin\":\"active\",\"at\":1794995970000},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":-1,\"source\":\"api_manual_write\",\"origin\":\"active\",\"at\":1794995910000}]},\"dvSignal\":{\"value\":1,\"forcedOff\":false},\"gridLimit\":{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}},\"lastWrites\":[{\"key\":\"gridSetpointW\",\"value\":-3000,\"writeType\":\"int32\",\"source\":\"rule:abend\",\"at\":1794995940000}],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":2015,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "dvhub/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/soc_pct",
+        "55",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/power_w",
+        "-300",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_total_w",
+        "900",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_dc_w",
+        "600",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/status",
+        "active",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/last_run_at",
+        "1794995700000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/rules_count",
+        "2",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/ranges",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/victron_updated_at",
+        "1794996000000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_setpoint_w",
+        "-3000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/charge_current_a",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/min_soc_pct",
+        "15",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/max_discharge_w",
+        "-1",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/rule",
+        "abend",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/updated_at",
+        "2026-11-18T09:59:30.000Z",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/state",
+        "{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000,\"origin\":\"active\"},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"origin\":\"active\"},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"origin\":\"active\"},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000,\"origin\":\"active\"}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/active",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/source",
+        "eebus",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/consumption_w",
+        "7560",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_w",
+        "4200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_blocked",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/state",
+        "{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  },
+  "boot_empty": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=null\ndvhub_control_charge_current_a=null\ndvhub_control_min_soc_pct=null\ndvhub_control_max_discharge_w=null\ndvhub_control_source=none\ndvhub_control_rule=null\ndvhub_control_updated_at=null\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=false\ndvhub_control_grid_limit_source=none\ndvhub_control_grid_limit_consumption_w=null\ndvhub_control_grid_limit_production_w=null\ndvhub_control_grid_limit_production_blocked=false\ndvControlValue=1\nforcedOff=false\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=undefined\nminSocPct=undefined\nsoc=undefined\nbatteryPowerW=undefined\npvTotalW=undefined\nscheduleActive={\"gridSetpointW\":null,\"chargeCurrentA\":null,\"feedExcessDcPv\":null}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":1,\"forcedOff\":false,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"scheduleActive\":{\"gridSetpointW\":null,\"chargeCurrentA\":null,\"feedExcessDcPv\":null},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":null,\"dvhub_control_charge_current_a\":null,\"dvhub_control_min_soc_pct\":null,\"dvhub_control_max_discharge_w\":null,\"dvhub_control_source\":\"none\",\"dvhub_control_rule\":null,\"dvhub_control_updated_at\":null,\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":false,\"dvhub_control_grid_limit_source\":\"none\",\"dvhub_control_grid_limit_consumption_w\":null,\"dvhub_control_grid_limit_production_w\":null,\"dvhub_control_grid_limit_production_blocked\":false}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":null},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":null},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":null,\"unit\":\"W\",\"ageMs\":null},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":null,\"unit\":\"W\",\"ageMs\":null},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":null,\"unit\":\"%\",\"ageMs\":null},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":null}],\"checks\":[],\"out\":{\"control\":{\"source\":\"none\",\"rule\":null,\"updatedAt\":null,\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":null,\"source\":null,\"origin\":null,\"at\":null},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":null,\"source\":null,\"origin\":null,\"at\":null},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":null,\"source\":null,\"origin\":null,\"at\":null},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":null,\"source\":null,\"origin\":null,\"at\":null}]},\"dvSignal\":{\"value\":1,\"forcedOff\":false},\"gridLimit\":{\"active\":false,\"source\":\"none\",\"consumptionW\":null,\"productionW\":null,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":null,\"shares\":{}},\"lastWrites\":[],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":1670,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "dvhub/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/power_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/min_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_total_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_dc_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/status",
+        "disabled",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/source",
+        "none",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/last_run_at",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/rules_count",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan",
+        "{\"source\":\"none\",\"generatedAt\":null,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/ranges",
+        "{\"source\":\"none\",\"generatedAt\":null,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/victron_updated_at",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_setpoint_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/charge_current_a",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/min_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/max_discharge_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/source",
+        "none",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/rule",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/updated_at",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/state",
+        "{\"gridSetpointW\":{\"value\":null,\"source\":null,\"at\":null,\"origin\":null},\"chargeCurrentA\":{\"value\":null,\"source\":null,\"at\":null,\"origin\":null},\"minSocPct\":{\"value\":null,\"source\":null,\"at\":null,\"origin\":null},\"maxDischargeW\":{\"value\":null,\"source\":null,\"at\":null,\"origin\":null}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/active",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/source",
+        "none",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/consumption_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_blocked",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/state",
+        "{\"active\":false,\"source\":\"none\",\"consumptionW\":null,\"productionW\":null,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":null,\"shares\":{}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  },
+  "readback_only": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=-100\ndvhub_control_charge_current_a=70\ndvhub_control_min_soc_pct=20\ndvhub_control_max_discharge_w=-1\ndvhub_control_source=none\ndvhub_control_rule=null\ndvhub_control_updated_at=null\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=false\ndvhub_control_grid_limit_source=none\ndvhub_control_grid_limit_consumption_w=null\ndvhub_control_grid_limit_production_w=null\ndvhub_control_grid_limit_production_blocked=false\ndvControlValue=1\nforcedOff=false\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=-100\nminSocPct=20\nsoc=55\nbatteryPowerW=-300\npvTotalW=900\nscheduleActive={}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":1,\"forcedOff\":false,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"gridSetpointW\":-100,\"minSocPct\":20,\"soc\":55,\"batteryPowerW\":-300,\"pvTotalW\":900,\"scheduleActive\":{},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":-100,\"dvhub_control_charge_current_a\":70,\"dvhub_control_min_soc_pct\":20,\"dvhub_control_max_discharge_w\":-1,\"dvhub_control_source\":\"none\",\"dvhub_control_rule\":null,\"dvhub_control_updated_at\":null,\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":false,\"dvhub_control_grid_limit_source\":\"none\",\"dvhub_control_grid_limit_consumption_w\":null,\"dvhub_control_grid_limit_production_w\":null,\"dvhub_control_grid_limit_production_blocked\":false}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":900,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":-300,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":55,\"unit\":\"%\",\"ageMs\":0},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":0}],\"checks\":[],\"out\":{\"control\":{\"source\":\"none\",\"rule\":null,\"updatedAt\":null,\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":-100,\"source\":null,\"origin\":\"readback\",\"at\":null},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":70,\"source\":null,\"origin\":\"readback\",\"at\":null},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":20,\"source\":null,\"origin\":\"readback\",\"at\":null},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":-1,\"source\":null,\"origin\":\"readback\",\"at\":null}]},\"dvSignal\":{\"value\":1,\"forcedOff\":false},\"gridLimit\":{\"active\":false,\"source\":\"none\",\"consumptionW\":null,\"productionW\":null,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":null,\"shares\":{}},\"lastWrites\":[],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":1570,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "dvhub/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/soc_pct",
+        "55",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/power_w",
+        "-300",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_total_w",
+        "900",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_dc_w",
+        "600",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/status",
+        "active",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/last_run_at",
+        "1794995700000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/rules_count",
+        "2",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/ranges",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/victron_updated_at",
+        "1794996000000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_setpoint_w",
+        "-100",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/charge_current_a",
+        "70",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/max_discharge_w",
+        "-1",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/source",
+        "none",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/rule",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/updated_at",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/state",
+        "{\"gridSetpointW\":{\"value\":-100,\"source\":null,\"at\":null,\"origin\":\"readback\"},\"chargeCurrentA\":{\"value\":70,\"source\":null,\"at\":null,\"origin\":\"readback\"},\"minSocPct\":{\"value\":20,\"source\":null,\"at\":null,\"origin\":\"readback\"},\"maxDischargeW\":{\"value\":-1,\"source\":null,\"at\":null,\"origin\":\"readback\"}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/active",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/source",
+        "none",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/consumption_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_blocked",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/state",
+        "{\"active\":false,\"source\":\"none\",\"consumptionW\":null,\"productionW\":null,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":null,\"shares\":{}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  },
+  "production_blocked_forced_off_relay": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=0\ndvhub_control_charge_current_a=70\ndvhub_control_min_soc_pct=20\ndvhub_control_max_discharge_w=0\ndvhub_control_source=override\ndvhub_control_rule=null\ndvhub_control_updated_at=2026-11-18T09:59:56.000Z\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=true\ndvhub_control_grid_limit_source=relay\ndvhub_control_grid_limit_consumption_w=4200\ndvhub_control_grid_limit_production_w=null\ndvhub_control_grid_limit_production_blocked=true\ndvControlValue=0\nforcedOff=true\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=-100\nminSocPct=20\nsoc=55\nbatteryPowerW=-300\npvTotalW=900\nscheduleActive={\"gridSetpointW\":{\"value\":0,\"source\":\"manual_override\",\"at\":1794995995000},\"maxDischargeW\":{\"value\":0,\"source\":\"peak_shaving_restore\",\"at\":1794995996000}}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":0,\"forcedOff\":true,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"gridSetpointW\":-100,\"minSocPct\":20,\"soc\":55,\"batteryPowerW\":-300,\"pvTotalW\":900,\"scheduleActive\":{\"gridSetpointW\":{\"value\":0,\"source\":\"manual_override\",\"at\":1794995995000},\"maxDischargeW\":{\"value\":0,\"source\":\"peak_shaving_restore\",\"at\":1794995996000}},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":0,\"dvhub_control_charge_current_a\":70,\"dvhub_control_min_soc_pct\":20,\"dvhub_control_max_discharge_w\":0,\"dvhub_control_source\":\"override\",\"dvhub_control_rule\":null,\"dvhub_control_updated_at\":\"2026-11-18T09:59:56.000Z\",\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":true,\"dvhub_control_grid_limit_source\":\"relay\",\"dvhub_control_grid_limit_consumption_w\":4200,\"dvhub_control_grid_limit_production_w\":null,\"dvhub_control_grid_limit_production_blocked\":true}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":900,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":-300,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":55,\"unit\":\"%\",\"ageMs\":0},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":0}],\"checks\":[],\"out\":{\"control\":{\"source\":\"override\",\"rule\":null,\"updatedAt\":\"2026-11-18T09:59:56.000Z\",\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":0,\"source\":\"manual_override\",\"origin\":\"active\",\"at\":1794995995000},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":70,\"source\":null,\"origin\":\"readback\",\"at\":null},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":20,\"source\":null,\"origin\":\"readback\",\"at\":null},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":0,\"source\":\"peak_shaving_restore\",\"origin\":\"active\",\"at\":1794995996000}]},\"dvSignal\":{\"value\":0,\"forcedOff\":true},\"gridLimit\":{\"active\":true,\"source\":\"relay\",\"consumptionW\":4200,\"productionW\":null,\"productionBlocked\":true,\"belowMinimum\":true,\"budgetW\":null,\"shares\":{\"waermepumpe\":4200}},\"lastWrites\":[{\"key\":\"gridSetpointW\",\"value\":-3000,\"writeType\":\"int32\",\"source\":\"rule:abend\",\"at\":1794995940000}],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":1740,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "dvhub/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/soc_pct",
+        "55",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/power_w",
+        "-300",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_total_w",
+        "900",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_dc_w",
+        "600",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/status",
+        "active",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/last_run_at",
+        "1794995700000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/rules_count",
+        "2",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/ranges",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/victron_updated_at",
+        "1794996000000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_setpoint_w",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/charge_current_a",
+        "70",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/max_discharge_w",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/source",
+        "override",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/rule",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/updated_at",
+        "2026-11-18T09:59:56.000Z",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/state",
+        "{\"gridSetpointW\":{\"value\":0,\"source\":\"manual_override\",\"at\":1794995995000,\"origin\":\"active\"},\"chargeCurrentA\":{\"value\":70,\"source\":null,\"at\":null,\"origin\":\"readback\"},\"minSocPct\":{\"value\":20,\"source\":null,\"at\":null,\"origin\":\"readback\"},\"maxDischargeW\":{\"value\":0,\"source\":\"peak_shaving_restore\",\"at\":1794995996000,\"origin\":\"active\"}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/active",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/source",
+        "relay",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/consumption_w",
+        "4200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_blocked",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/state",
+        "{\"active\":true,\"source\":\"relay\",\"consumptionW\":4200,\"productionW\":null,\"productionBlocked\":true,\"belowMinimum\":true,\"budgetW\":null,\"shares\":{\"waermepumpe\":4200}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  },
+  "config_valid_explicit": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=-3000\ndvhub_control_charge_current_a=30\ndvhub_control_min_soc_pct=15\ndvhub_control_max_discharge_w=-1\ndvhub_control_source=eos\ndvhub_control_rule=abend\ndvhub_control_updated_at=2026-11-18T09:59:30.000Z\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=true\ndvhub_control_grid_limit_source=eebus\ndvhub_control_grid_limit_consumption_w=7560\ndvhub_control_grid_limit_production_w=4200\ndvhub_control_grid_limit_production_blocked=false\ndvControlValue=1\nforcedOff=false\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=-100\nminSocPct=20\nsoc=55\nbatteryPowerW=-300\npvTotalW=900\nscheduleActive={\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":1,\"forcedOff\":false,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"gridSetpointW\":-100,\"minSocPct\":20,\"soc\":55,\"batteryPowerW\":-300,\"pvTotalW\":900,\"scheduleActive\":{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":-3000,\"dvhub_control_charge_current_a\":30,\"dvhub_control_min_soc_pct\":15,\"dvhub_control_max_discharge_w\":-1,\"dvhub_control_source\":\"eos\",\"dvhub_control_rule\":\"abend\",\"dvhub_control_updated_at\":\"2026-11-18T09:59:30.000Z\",\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":true,\"dvhub_control_grid_limit_source\":\"eebus\",\"dvhub_control_grid_limit_consumption_w\":7560,\"dvhub_control_grid_limit_production_w\":4200,\"dvhub_control_grid_limit_production_blocked\":false}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":900,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":-300,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":55,\"unit\":\"%\",\"ageMs\":0},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":0}],\"checks\":[],\"out\":{\"control\":{\"source\":\"eos\",\"rule\":\"abend\",\"updatedAt\":\"2026-11-18T09:59:30.000Z\",\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":-3000,\"source\":\"rule:abend\",\"origin\":\"active\",\"at\":1794995940000},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":30,\"source\":\"default\",\"origin\":\"active\",\"at\":1794995880000},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":15,\"source\":\"rule:opt-1-0\",\"origin\":\"active\",\"at\":1794995970000},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":-1,\"source\":\"api_manual_write\",\"origin\":\"active\",\"at\":1794995910000}]},\"dvSignal\":{\"value\":1,\"forcedOff\":false},\"gridLimit\":{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}},\"lastWrites\":[{\"key\":\"gridSetpointW\",\"value\":-3000,\"writeType\":\"int32\",\"source\":\"rule:abend\",\"at\":1794995940000}],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":2015,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "dvhub/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/soc_pct",
+        "55",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/power_w",
+        "-300",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_total_w",
+        "900",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_dc_w",
+        "600",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/status",
+        "active",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/last_run_at",
+        "1794995700000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/rules_count",
+        "2",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/ranges",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/victron_updated_at",
+        "1794996000000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_setpoint_w",
+        "-3000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/charge_current_a",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/min_soc_pct",
+        "15",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/max_discharge_w",
+        "-1",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/rule",
+        "abend",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/updated_at",
+        "2026-11-18T09:59:30.000Z",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/state",
+        "{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000,\"origin\":\"active\"},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"origin\":\"active\"},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"origin\":\"active\"},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000,\"origin\":\"active\"}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/active",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/source",
+        "eebus",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/consumption_w",
+        "7560",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_w",
+        "4200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_blocked",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/state",
+        "{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  },
+  "sources_market_override_floor": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=1500\ndvhub_control_charge_current_a=50\ndvhub_control_min_soc_pct=25\ndvhub_control_max_discharge_w=-1\ndvhub_control_source=market_automation\ndvhub_control_rule=sma-7\ndvhub_control_updated_at=2026-11-18T09:59:59.000Z\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=true\ndvhub_control_grid_limit_source=eebus\ndvhub_control_grid_limit_consumption_w=null\ndvhub_control_grid_limit_production_w=4200\ndvhub_control_grid_limit_production_blocked=false\ndvControlValue=1\nforcedOff=false\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=-100\nminSocPct=20\nsoc=55\nbatteryPowerW=-300\npvTotalW=900\nscheduleActive={\"gridSetpointW\":{\"value\":1500,\"source\":\"rule:sma-7\",\"at\":1794995999000},\"chargeCurrentA\":{\"value\":50,\"source\":\"manual_override_soc_floor\",\"at\":1794995998000},\"minSocPct\":{\"value\":25,\"source\":\"rule:opt-9-9\",\"at\":1794995997000}}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":1,\"forcedOff\":false,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"gridSetpointW\":-100,\"minSocPct\":20,\"soc\":55,\"batteryPowerW\":-300,\"pvTotalW\":900,\"scheduleActive\":{\"gridSetpointW\":{\"value\":1500,\"source\":\"rule:sma-7\",\"at\":1794995999000},\"chargeCurrentA\":{\"value\":50,\"source\":\"manual_override_soc_floor\",\"at\":1794995998000},\"minSocPct\":{\"value\":25,\"source\":\"rule:opt-9-9\",\"at\":1794995997000}},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":1500,\"dvhub_control_charge_current_a\":50,\"dvhub_control_min_soc_pct\":25,\"dvhub_control_max_discharge_w\":-1,\"dvhub_control_source\":\"market_automation\",\"dvhub_control_rule\":\"sma-7\",\"dvhub_control_updated_at\":\"2026-11-18T09:59:59.000Z\",\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":true,\"dvhub_control_grid_limit_source\":\"eebus\",\"dvhub_control_grid_limit_consumption_w\":null,\"dvhub_control_grid_limit_production_w\":4200,\"dvhub_control_grid_limit_production_blocked\":false}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":900,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":-300,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":55,\"unit\":\"%\",\"ageMs\":0},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":0}],\"checks\":[],\"out\":{\"control\":{\"source\":\"market_automation\",\"rule\":\"sma-7\",\"updatedAt\":\"2026-11-18T09:59:59.000Z\",\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":1500,\"source\":\"rule:sma-7\",\"origin\":\"active\",\"at\":1794995999000},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":50,\"source\":\"manual_override_soc_floor\",\"origin\":\"active\",\"at\":1794995998000},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":25,\"source\":\"rule:opt-9-9\",\"origin\":\"active\",\"at\":1794995997000},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":-1,\"source\":null,\"origin\":\"readback\",\"at\":null}]},\"dvSignal\":{\"value\":1,\"forcedOff\":false},\"gridLimit\":{\"active\":true,\"source\":\"eebus\",\"consumptionW\":null,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":null,\"shares\":{}},\"lastWrites\":[{\"key\":\"gridSetpointW\",\"value\":-3000,\"writeType\":\"int32\",\"source\":\"rule:abend\",\"at\":1794995940000}],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":1829,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "dvhub/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/soc_pct",
+        "55",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/power_w",
+        "-300",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_total_w",
+        "900",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_dc_w",
+        "600",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/status",
+        "active",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/last_run_at",
+        "1794995700000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/rules_count",
+        "2",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/ranges",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/victron_updated_at",
+        "1794996000000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_setpoint_w",
+        "1500",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/charge_current_a",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/min_soc_pct",
+        "25",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/max_discharge_w",
+        "-1",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/source",
+        "market_automation",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/rule",
+        "sma-7",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/updated_at",
+        "2026-11-18T09:59:59.000Z",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/state",
+        "{\"gridSetpointW\":{\"value\":1500,\"source\":\"rule:sma-7\",\"at\":1794995999000,\"origin\":\"active\"},\"chargeCurrentA\":{\"value\":50,\"source\":\"manual_override_soc_floor\",\"at\":1794995998000,\"origin\":\"active\"},\"minSocPct\":{\"value\":25,\"source\":\"rule:opt-9-9\",\"at\":1794995997000,\"origin\":\"active\"},\"maxDischargeW\":{\"value\":-1,\"source\":null,\"at\":null,\"origin\":\"readback\"}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/active",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/source",
+        "eebus",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/consumption_w",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_w",
+        "4200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_blocked",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/state",
+        "{\"active\":true,\"source\":\"eebus\",\"consumptionW\":null,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":null,\"shares\":{}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  },
+  "prefix_haus1": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=-3000\ndvhub_control_charge_current_a=30\ndvhub_control_min_soc_pct=15\ndvhub_control_max_discharge_w=-1\ndvhub_control_source=eos\ndvhub_control_rule=abend\ndvhub_control_updated_at=2026-11-18T09:59:30.000Z\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=true\ndvhub_control_grid_limit_source=eebus\ndvhub_control_grid_limit_consumption_w=7560\ndvhub_control_grid_limit_production_w=4200\ndvhub_control_grid_limit_production_blocked=false\ndvControlValue=1\nforcedOff=false\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=-100\nminSocPct=20\nsoc=55\nbatteryPowerW=-300\npvTotalW=900\nscheduleActive={\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":1,\"forcedOff\":false,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"gridSetpointW\":-100,\"minSocPct\":20,\"soc\":55,\"batteryPowerW\":-300,\"pvTotalW\":900,\"scheduleActive\":{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":-3000,\"dvhub_control_charge_current_a\":30,\"dvhub_control_min_soc_pct\":15,\"dvhub_control_max_discharge_w\":-1,\"dvhub_control_source\":\"eos\",\"dvhub_control_rule\":\"abend\",\"dvhub_control_updated_at\":\"2026-11-18T09:59:30.000Z\",\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":true,\"dvhub_control_grid_limit_source\":\"eebus\",\"dvhub_control_grid_limit_consumption_w\":7560,\"dvhub_control_grid_limit_production_w\":4200,\"dvhub_control_grid_limit_production_blocked\":false}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":900,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":-300,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":55,\"unit\":\"%\",\"ageMs\":0},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":0}],\"checks\":[],\"out\":{\"control\":{\"source\":\"eos\",\"rule\":\"abend\",\"updatedAt\":\"2026-11-18T09:59:30.000Z\",\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":-3000,\"source\":\"rule:abend\",\"origin\":\"active\",\"at\":1794995940000},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":30,\"source\":\"default\",\"origin\":\"active\",\"at\":1794995880000},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":15,\"source\":\"rule:opt-1-0\",\"origin\":\"active\",\"at\":1794995970000},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":-1,\"source\":\"api_manual_write\",\"origin\":\"active\",\"at\":1794995910000}]},\"dvSignal\":{\"value\":1,\"forcedOff\":false},\"gridLimit\":{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}},\"lastWrites\":[{\"key\":\"gridSetpointW\",\"value\":-3000,\"writeType\":\"int32\",\"source\":\"rule:abend\",\"at\":1794995940000}],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":2015,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "haus1/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/battery/soc_pct",
+        "55",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/battery/power_w",
+        "-300",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/battery/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/solar/pv_total_w",
+        "900",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/solar/pv_dc_w",
+        "600",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/status",
+        "active",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/last_run_at",
+        "1794995700000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/rules_count",
+        "2",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/plan",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/plan/ranges",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/system/victron_updated_at",
+        "1794996000000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/grid_setpoint_w",
+        "-3000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/charge_current_a",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/min_soc_pct",
+        "15",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/max_discharge_w",
+        "-1",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/rule",
+        "abend",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/updated_at",
+        "2026-11-18T09:59:30.000Z",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/state",
+        "{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000,\"origin\":\"active\"},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"origin\":\"active\"},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"origin\":\"active\"},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000,\"origin\":\"active\"}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/grid_limit/active",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/grid_limit/source",
+        "eebus",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/grid_limit/consumption_w",
+        "7560",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/grid_limit/production_w",
+        "4200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/grid_limit/production_blocked",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/control/grid_limit/state",
+        "{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "haus1/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  },
+  "recovery_after_not_halt": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=-3000\ndvhub_control_charge_current_a=30\ndvhub_control_min_soc_pct=15\ndvhub_control_max_discharge_w=-1\ndvhub_control_source=eos\ndvhub_control_rule=abend\ndvhub_control_updated_at=2026-11-18T09:59:30.000Z\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=true\ndvhub_control_grid_limit_source=eebus\ndvhub_control_grid_limit_consumption_w=7560\ndvhub_control_grid_limit_production_w=4200\ndvhub_control_grid_limit_production_blocked=false\ndvControlValue=1\nforcedOff=false\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=-100\nminSocPct=20\nsoc=55\nbatteryPowerW=-300\npvTotalW=900\nscheduleActive={\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":1,\"forcedOff\":false,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"gridSetpointW\":-100,\"minSocPct\":20,\"soc\":55,\"batteryPowerW\":-300,\"pvTotalW\":900,\"scheduleActive\":{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":-3000,\"dvhub_control_charge_current_a\":30,\"dvhub_control_min_soc_pct\":15,\"dvhub_control_max_discharge_w\":-1,\"dvhub_control_source\":\"eos\",\"dvhub_control_rule\":\"abend\",\"dvhub_control_updated_at\":\"2026-11-18T09:59:30.000Z\",\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":true,\"dvhub_control_grid_limit_source\":\"eebus\",\"dvhub_control_grid_limit_consumption_w\":7560,\"dvhub_control_grid_limit_production_w\":4200,\"dvhub_control_grid_limit_production_blocked\":false}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":900,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":-300,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":55,\"unit\":\"%\",\"ageMs\":0},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":0}],\"checks\":[],\"out\":{\"control\":{\"source\":\"eos\",\"rule\":\"abend\",\"updatedAt\":\"2026-11-18T09:59:30.000Z\",\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":-3000,\"source\":\"rule:abend\",\"origin\":\"active\",\"at\":1794995940000},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":30,\"source\":\"default\",\"origin\":\"active\",\"at\":1794995880000},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":15,\"source\":\"rule:opt-1-0\",\"origin\":\"active\",\"at\":1794995970000},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":-1,\"source\":\"api_manual_write\",\"origin\":\"active\",\"at\":1794995910000}]},\"dvSignal\":{\"value\":1,\"forcedOff\":false},\"gridLimit\":{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}},\"lastWrites\":[{\"key\":\"gridSetpointW\",\"value\":-3000,\"writeType\":\"int32\",\"source\":\"rule:abend\",\"at\":1794995940000}],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":2015,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "dvhub/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/soc_pct",
+        "55",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/power_w",
+        "-300",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_total_w",
+        "900",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_dc_w",
+        "600",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/status",
+        "active",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/last_run_at",
+        "1794995700000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/rules_count",
+        "2",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/ranges",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/victron_updated_at",
+        "1794996000000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_setpoint_w",
+        "-3000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/charge_current_a",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/min_soc_pct",
+        "15",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/max_discharge_w",
+        "-1",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/rule",
+        "abend",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/updated_at",
+        "2026-11-18T09:59:30.000Z",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/state",
+        "{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000,\"origin\":\"active\"},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"origin\":\"active\"},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"origin\":\"active\"},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000,\"origin\":\"active\"}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/active",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/source",
+        "eebus",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/consumption_w",
+        "7560",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_w",
+        "4200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_blocked",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/state",
+        "{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  },
+  "recovery_after_not_halt_shared_gate": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=-3000\ndvhub_control_charge_current_a=30\ndvhub_control_min_soc_pct=15\ndvhub_control_max_discharge_w=-1\ndvhub_control_source=eos\ndvhub_control_rule=abend\ndvhub_control_updated_at=2026-11-18T09:59:30.000Z\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=true\ndvhub_control_grid_limit_source=eebus\ndvhub_control_grid_limit_consumption_w=7560\ndvhub_control_grid_limit_production_w=4200\ndvhub_control_grid_limit_production_blocked=false\ndvControlValue=1\nforcedOff=false\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=-100\nminSocPct=20\nsoc=55\nbatteryPowerW=-300\npvTotalW=900\nscheduleActive={\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":1,\"forcedOff\":false,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"gridSetpointW\":-100,\"minSocPct\":20,\"soc\":55,\"batteryPowerW\":-300,\"pvTotalW\":900,\"scheduleActive\":{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":-3000,\"dvhub_control_charge_current_a\":30,\"dvhub_control_min_soc_pct\":15,\"dvhub_control_max_discharge_w\":-1,\"dvhub_control_source\":\"eos\",\"dvhub_control_rule\":\"abend\",\"dvhub_control_updated_at\":\"2026-11-18T09:59:30.000Z\",\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":true,\"dvhub_control_grid_limit_source\":\"eebus\",\"dvhub_control_grid_limit_consumption_w\":7560,\"dvhub_control_grid_limit_production_w\":4200,\"dvhub_control_grid_limit_production_blocked\":false}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":900,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":-300,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":55,\"unit\":\"%\",\"ageMs\":0},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":0}],\"checks\":[],\"out\":{\"control\":{\"source\":\"eos\",\"rule\":\"abend\",\"updatedAt\":\"2026-11-18T09:59:30.000Z\",\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":-3000,\"source\":\"rule:abend\",\"origin\":\"active\",\"at\":1794995940000},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":30,\"source\":\"default\",\"origin\":\"active\",\"at\":1794995880000},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":15,\"source\":\"rule:opt-1-0\",\"origin\":\"active\",\"at\":1794995970000},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":-1,\"source\":\"api_manual_write\",\"origin\":\"active\",\"at\":1794995910000}]},\"dvSignal\":{\"value\":1,\"forcedOff\":false},\"gridLimit\":{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}},\"lastWrites\":[{\"key\":\"gridSetpointW\",\"value\":-3000,\"writeType\":\"int32\",\"source\":\"rule:abend\",\"at\":1794995940000}],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":2015,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "dvhub/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/soc_pct",
+        "55",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/power_w",
+        "-300",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_total_w",
+        "900",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_dc_w",
+        "600",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/status",
+        "active",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/last_run_at",
+        "1794995700000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/rules_count",
+        "2",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/ranges",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/victron_updated_at",
+        "1794996000000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_setpoint_w",
+        "-3000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/charge_current_a",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/min_soc_pct",
+        "15",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/max_discharge_w",
+        "-1",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/rule",
+        "abend",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/updated_at",
+        "2026-11-18T09:59:30.000Z",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/state",
+        "{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000,\"origin\":\"active\"},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"origin\":\"active\"},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"origin\":\"active\"},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000,\"origin\":\"active\"}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/active",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/source",
+        "eebus",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/consumption_w",
+        "7560",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_w",
+        "4200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_blocked",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/state",
+        "{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  },
+  "recovery_after_config_unsafe": {
+    "loxone": {
+      "status": 200,
+      "body": "timestamp=1794996000000\ndvhub_control_grid_setpoint_w=-3000\ndvhub_control_charge_current_a=30\ndvhub_control_min_soc_pct=15\ndvhub_control_max_discharge_w=-1\ndvhub_control_source=eos\ndvhub_control_rule=abend\ndvhub_control_updated_at=2026-11-18T09:59:30.000Z\ndvhub_control_paused=false\ndvhub_control_grid_limit_active=true\ndvhub_control_grid_limit_source=eebus\ndvhub_control_grid_limit_consumption_w=7560\ndvhub_control_grid_limit_production_w=4200\ndvhub_control_grid_limit_production_blocked=false\ndvControlValue=1\nforcedOff=false\ngridTotalW=120\ngridDirection=grid_import\ngridSetpointW=-100\nminSocPct=20\nsoc=55\nbatteryPowerW=-300\npvTotalW=900\nscheduleActive={\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}}\ncosts={\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3}\nuserEnergyPricing={\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]}"
+    },
+    "homeAssistant": {
+      "status": 200,
+      "body": "{\"timestamp\":1794996000000,\"dvControlValue\":1,\"forcedOff\":false,\"gridTotalW\":120,\"gridDirection\":\"grid_import\",\"gridSetpointW\":-100,\"minSocPct\":20,\"soc\":55,\"batteryPowerW\":-300,\"pvTotalW\":900,\"scheduleActive\":{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"skipped\":true,\"reason\":\"unchanged\",\"heldSinceMs\":5000},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"keepalive\":false},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000},\"feedExcessDcPv\":{\"value\":1,\"source\":\"runtime\",\"at\":1794995990000}},\"costs\":{\"day\":\"2026-11-18\",\"importWh\":1200,\"exportWh\":3400,\"importKwh\":1.2,\"exportKwh\":3.4,\"costEur\":0.4,\"revenueEur\":0.9,\"netEur\":0.5,\"priceNowCtKwh\":12.3,\"userImportPriceNowCtKwh\":12.3},\"userEnergyPricing\":{\"configured\":false,\"mode\":\"fixed\",\"usesParagraph14aModule3\":false,\"dynamicComponents\":{\"energyMarkupCtKwh\":0,\"gridChargesCtKwh\":0,\"leviesAndFeesCtKwh\":0,\"vatPct\":0},\"fixedGrossImportCtKwh\":null,\"module3Windows\":[],\"costs\":{\"pvCtKwh\":null,\"batteryBaseCtKwh\":null,\"batteryLossMarkupPct\":0,\"batteryEffectiveCtKwh\":null,\"mixedCtKwh\":null},\"current\":{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null},\"slots\":[{\"exportPriceCtKwh\":12.3,\"importPriceCtKwh\":12.3,\"spreadToImportCtKwh\":0,\"pvMarginCtKwh\":null,\"batteryMarginCtKwh\":null,\"mixedMarginCtKwh\":null,\"bestSource\":null,\"bestMarginCtKwh\":null}]},\"dvhub_control_grid_setpoint_w\":-3000,\"dvhub_control_charge_current_a\":30,\"dvhub_control_min_soc_pct\":15,\"dvhub_control_max_discharge_w\":-1,\"dvhub_control_source\":\"eos\",\"dvhub_control_rule\":\"abend\",\"dvhub_control_updated_at\":\"2026-11-18T09:59:30.000Z\",\"dvhub_control_paused\":false,\"dvhub_control_grid_limit_active\":true,\"dvhub_control_grid_limit_source\":\"eebus\",\"dvhub_control_grid_limit_consumption_w\":7560,\"dvhub_control_grid_limit_production_w\":4200,\"dvhub_control_grid_limit_production_blocked\":false}"
+    },
+    "dataflow": {
+      "status": 200,
+      "body": "{\"ok\":true,\"generatedAt\":\"2026-11-18T10:00:00.000Z\",\"profile\":\"victron\",\"in\":{\"source\":{\"kind\":\"modbus\",\"label\":\"Modbus TCP (Gerät)\",\"endpoint\":null},\"staleMaxAgeMs\":null,\"inputs\":[{\"key\":\"meter\",\"label\":\"Netzzähler\",\"pushField\":null,\"topic\":null,\"value\":120,\"unit\":\"W\",\"ageMs\":0,\"fresh\":true,\"received\":true,\"error\":null}]},\"seen\":[{\"key\":\"grid\",\"label\":\"Netz\",\"value\":120,\"unit\":\"W\",\"note\":\"Netzbezug (Vorzeichen: + = Bezug)\",\"ageMs\":0},{\"key\":\"gridImportW\",\"label\":\"Netzbezug\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"gridExportW\",\"label\":\"Einspeisung\",\"value\":null,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"pvTotalW\",\"label\":\"PV gesamt\",\"value\":900,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"batteryPowerW\",\"label\":\"Akku (Laden +)\",\"value\":-300,\"unit\":\"W\",\"ageMs\":0},{\"key\":\"soc\",\"label\":\"Ladestand\",\"value\":55,\"unit\":\"%\",\"ageMs\":0},{\"key\":\"selfConsumptionW\",\"label\":\"Hausverbrauch\",\"value\":null,\"unit\":\"W\",\"note\":null,\"ageMs\":0}],\"checks\":[],\"out\":{\"control\":{\"source\":\"eos\",\"rule\":\"abend\",\"updatedAt\":\"2026-11-18T09:59:30.000Z\",\"paused\":false,\"rows\":[{\"key\":\"gridSetpointW\",\"label\":\"Netz-Sollwert\",\"unit\":\"W\",\"value\":-3000,\"source\":\"rule:abend\",\"origin\":\"active\",\"at\":1794995940000},{\"key\":\"chargeCurrentA\",\"label\":\"Ladestrom\",\"unit\":\"A\",\"value\":30,\"source\":\"default\",\"origin\":\"active\",\"at\":1794995880000},{\"key\":\"minSocPct\",\"label\":\"Mindest-Ladestand\",\"unit\":\"%\",\"value\":15,\"source\":\"rule:opt-1-0\",\"origin\":\"active\",\"at\":1794995970000},{\"key\":\"maxDischargeW\",\"label\":\"Max. Entladeleistung\",\"unit\":\"W\",\"value\":-1,\"source\":\"api_manual_write\",\"origin\":\"active\",\"at\":1794995910000}]},\"dvSignal\":{\"value\":1,\"forcedOff\":false},\"gridLimit\":{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}},\"lastWrites\":[{\"key\":\"gridSetpointW\",\"value\":-3000,\"writeType\":\"int32\",\"source\":\"rule:abend\",\"at\":1794995940000}],\"channels\":[{\"kind\":\"loxone_http\",\"label\":\"Loxone (Virtueller HTTP Eingang)\",\"url\":\"/api/integration/loxone\",\"method\":\"GET\",\"lines\":26,\"bytes\":2015,\"controlByteOffset\":24},{\"kind\":\"home_assistant\",\"label\":\"Home Assistant (REST, JSON)\",\"url\":\"/api/integration/home-assistant\",\"method\":\"GET\"},{\"kind\":\"mqtt\",\"label\":\"MQTT\",\"enabled\":false,\"connected\":false,\"topics\":[]},{\"kind\":\"dv_modbus\",\"label\":\"Direktvermarkter (Modbus, plexlog)\",\"port\":null,\"lastQuery\":null,\"listen\":null,\"redirect\":null}]}}"
+    },
+    "mqtt": [
+      [
+        "dvhub/energy/grid_power_w",
+        "120",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l1_w",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l2_w",
+        "40",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/grid_l3_w",
+        "50",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/soc_pct",
+        "55",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/power_w",
+        "-300",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/battery/min_soc_pct",
+        "20",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_total_w",
+        "900",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/solar/pv_dc_w",
+        "600",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/price/epex_current_ct_kwh",
+        "12.3",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/status",
+        "active",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/last_run_at",
+        "1794995700000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/rules_count",
+        "2",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/error",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"slotCount\":0,\"rangeCount\":0,\"slots\":[],\"devices\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/ranges",
+        "{\"source\":\"eos\",\"generatedAt\":1794995700000,\"slotMinutes\":null,\"validFrom\":null,\"validUntil\":null,\"rangeCount\":0,\"ranges\":[]}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/slot_count",
+        "0",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/current",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/optimizer/plan/next_start",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/uptime_sec",
+        "<uptime>",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/meter_ok",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/system/victron_updated_at",
+        "1794996000000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/import_wh",
+        "1200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/export_wh",
+        "3400",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/cost_eur",
+        "0.4",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/energy/revenue_eur",
+        "0.9",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_setpoint_w",
+        "-3000",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/charge_current_a",
+        "30",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/min_soc_pct",
+        "15",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/max_discharge_w",
+        "-1",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/source",
+        "eos",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/rule",
+        "abend",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/updated_at",
+        "2026-11-18T09:59:30.000Z",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/paused",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/state",
+        "{\"gridSetpointW\":{\"value\":-3000,\"source\":\"rule:abend\",\"at\":1794995940000,\"origin\":\"active\"},\"chargeCurrentA\":{\"value\":30,\"source\":\"default\",\"at\":1794995880000,\"origin\":\"active\"},\"minSocPct\":{\"value\":15,\"source\":\"rule:opt-1-0\",\"at\":1794995970000,\"origin\":\"active\"},\"maxDischargeW\":{\"value\":-1,\"source\":\"api_manual_write\",\"at\":1794995910000,\"origin\":\"active\"}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/active",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/source",
+        "eebus",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/consumption_w",
+        "7560",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_w",
+        "4200",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/production_blocked",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/control/grid_limit/state",
+        "{\"active\":true,\"source\":\"eebus\",\"consumptionW\":7560,\"productionW\":4200,\"productionBlocked\":false,\"belowMinimum\":false,\"budgetW\":7000,\"shares\":{\"speicher\":3780,\"wallbox\":3780}}",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/optimize",
+        "false",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/only_when_plugged",
+        "true",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/target_soc_pct",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/mode",
+        "null",
+        {
+          "retain": true
+        }
+      ],
+      [
+        "dvhub/ev/stop",
+        "false",
+        {
+          "retain": true
+        }
+      ]
+    ],
+    "topicCount": 48
+  }
+}
