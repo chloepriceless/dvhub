@@ -332,7 +332,8 @@ export function createGate(options = {}) {
    */
   function setDevicePolicies(device, points) {
     if (!isNonEmptyString(device)) throw new TypeError('device');
-    const next = {};
+    // Ohne Prototyp: auch ein Gerät namens `__proto__` bleibt ein eigener Eintrag (Codex 135fdc22 P3).
+    const next = Object.create(null);
     for (const [d, m] of policies) next[d] = Object.fromEntries(m);
     next[device] = points || {};
     setPolicies(next);

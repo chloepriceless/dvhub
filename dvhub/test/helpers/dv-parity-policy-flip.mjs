@@ -10,20 +10,26 @@
 
 import { mock } from 'node:test';
 
-const real = await import('../../services/emergency-stop/policy.js');
-const FLIPPED = Object.freeze({ ...real.NOT_HALT_CONTINUES, negativePrice: true, dvCurtailment: true, feedInCapLoop: true });
-mock.module('../../services/emergency-stop/policy.js', {
-  namedExports: {
-    ...real,
-    NOT_HALT_CONTINUES: FLIPPED,
-    notHaltSuspendedLabels: (p = FLIPPED) => real.notHaltSuspendedLabels(p),
-    notHaltContinues: (c, p = FLIPPED) => real.notHaltContinues(c, p),
-    notHaltAllowsControlSource: (s, p = FLIPPED) => real.notHaltAllowsControlSource(s, p),
-    notHaltAllowsDvReason: (r, p = FLIPPED) => real.notHaltAllowsDvReason(r, p),
-    notHaltAllowsFeedInSource: (s, p = FLIPPED) => real.notHaltAllowsFeedInSource(s, p),
-  },
-});
+// Ohne --experimental-test-module-mocks (z. B. `npm run test:all`, das jede Datei unter test/ einsammelt) gibt es
+// mock.module nicht: dann still nichts tun — der Nachweis läuft nur im Kind-Prozess des Wrappers (Codex a4949f2a P2).
+if (typeof mock.module === 'function') await runFlipped();
 
-const { registerParityScenarios } = await import('./dv-parity-rig.js');
-const { flipScenarios } = await import('./dv-parity-scenarios.js');
-registerParityScenarios(flipScenarios(), 'Richtlinie umgeschaltet');
+async function runFlipped() {
+  const real = await import('../../services/emergency-stop/policy.js');
+  const FLIPPED = Object.freeze({ ...real.NOT_HALT_CONTINUES, negativePrice: true, dvCurtailment: true, feedInCapLoop: true });
+  mock.module('../../services/emergency-stop/policy.js', {
+    namedExports: {
+      ...real,
+      NOT_HALT_CONTINUES: FLIPPED,
+      notHaltSuspendedLabels: (p = FLIPPED) => real.notHaltSuspendedLabels(p),
+      notHaltContinues: (c, p = FLIPPED) => real.notHaltContinues(c, p),
+      notHaltAllowsControlSource: (s, p = FLIPPED) => real.notHaltAllowsControlSource(s, p),
+      notHaltAllowsDvReason: (r, p = FLIPPED) => real.notHaltAllowsDvReason(r, p),
+      notHaltAllowsFeedInSource: (s, p = FLIPPED) => real.notHaltAllowsFeedInSource(s, p),
+    },
+  });
+
+  const { registerParityScenarios } = await import('./dv-parity-rig.js');
+  const { flipScenarios } = await import('./dv-parity-scenarios.js');
+  registerParityScenarios(flipScenarios(), 'Richtlinie umgeschaltet');
+}

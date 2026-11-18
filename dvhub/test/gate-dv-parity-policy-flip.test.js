@@ -26,3 +26,13 @@ test('Parität alt ↔ Tor mit weiterlaufender Pflicht-Klasse im Not-Halt (Kind-
   assert.match(r.stdout, /^# fail 0$/m, out);
   assert.ok(pass >= 3, `zu wenige Szenarien im Kind-Prozess (${pass})\n${out}`);
 });
+
+test('Hilfsdatei ohne Modul-Attrappen-Schalter (z. B. npm run test:all) läuft still durch (Codex a4949f2a P2)', () => {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', HELPER], {
+    encoding: 'utf8', cwd: path.join(import.meta.dirname, '..'), env,
+  });
+  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /^# fail 0$/m);
+});

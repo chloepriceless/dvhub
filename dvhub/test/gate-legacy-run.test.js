@@ -163,6 +163,24 @@ test('setDevicePolicies: ersetzt nur das eine Gerät, die übrigen (Sungrow) ble
   assert.throws(() => gate.setDevicePolicies('', {}), TypeError);
 });
 
+test('setDevicePolicies: ein Gerät namens __proto__ bleibt ein eigener Eintrag (Codex 135fdc22 P3)', async () => {
+  const pol = { class: 'dv_curtail', resource: 'pvExport', sink: '__proto__', neutral: { kind: 'never' } };
+  const gate = createGate({ policies: { ['__proto__']: { p: pol } }, released: ['dv_curtail'] });
+  gate.attachSink('__proto__', { kind: 'modbus', legacy: { mbWriteSingle: async () => ({}) } });
+  gate.setRelease('__proto__', 'open');
+  const op = {
+    device: '__proto__', point: 'p', value: 1, source: 't', kind: 'write', action: 'command', lease: null,
+    constraints: { set: {}, caps: {}, enforcedBy: [] }, validUntilMs: null, tick: { loop: 'eval', seq: 1 }, step: 0,
+    legacy: { sink: '__proto__', fn: 'mbWriteSingle', args: [{}] },
+  };
+  const gen = gate.releaseGeneration('__proto__');
+  gate.setDevicePolicies(INV, { feedExcessDcPv: inverterLegacyPolicy('feedExcessDcPv') });
+  assert.equal(gate.releaseGeneration('__proto__'), gen, 'ein anderes Gerät ändert __proto__ nicht');
+  assert.equal((await gate.submit(op)).outcome, 'ok', 'Richtlinie von __proto__ steht noch');
+  gate.setDevicePolicies('__proto__', { p: pol, q: pol });
+  assert.equal((await gate.submit({ ...op, point: 'q' })).outcome, 'ok', 'auch über setDevicePolicies anmeldbar');
+});
+
 test('Richtlinie am Gerät inverter: Ressource pvExport, Stufe dv_curtail, Freigabe-Literale nur für die Einzelflaggen', () => {
   assert.deepEqual(inverterLegacyPolicy('feedExcessDcPv', 'mqtt'), {
     class: 'dv_curtail', resource: 'pvExport', sink: INV, targetKind: 'mqtt', neutral: { kind: 'sequence', use: 'release' }, neutralValues: [1],
