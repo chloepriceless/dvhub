@@ -1,0 +1,408 @@
+{
+  "venus_bridge_feedback": [
+    {
+      "step": "init",
+      "wire": [
+        "CONNECT mqtt://192.0.2.11:1883",
+        "SUB 27 q0",
+        "PUB R/dvhub/keepalive \"\""
+      ],
+      "events": [
+        "mqtt_connected"
+      ]
+    },
+    {
+      "step": "gridSetpointW -500",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB W/dvhub/settings/0/Settings/CGwacs/AcPowerSetPoint \"{\\\"value\\\":-500}\" q0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "Prüfung nach 4 s (Echo da)",
+      "wire": [],
+      "events": [
+        "control_write_verified"
+      ]
+    },
+    {
+      "step": "gridSetpointW -500 gleich",
+      "ok": true,
+      "why": "unchanged",
+      "skipped": true,
+      "wire": [],
+      "events": [
+        "control_write_skipped"
+      ]
+    },
+    {
+      "step": "feedExcessDcPv 0 (§51)",
+      "ok": true,
+      "writeType": "dv_control",
+      "wire": [
+        "PUB W/dvhub/settings/0/Settings/CGwacs/OvervoltageFeedIn \"{\\\"value\\\":0}\" q0",
+        "PUB W/dvhub/settings/0/Settings/CGwacs/PreventFeedback \"{\\\"value\\\":1}\" q0"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write",
+        "control_write"
+      ]
+    },
+    {
+      "step": "maxDischargeW -1",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB W/dvhub/settings/0/Settings/CGwacs/MaxDischargePower \"{\\\"value\\\":-1}\" q0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "minSocPct 3 (Klemme)",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB W/dvhub/settings/0/Settings/CGwacs/BatteryLife/MinimumSocLimit \"{\\\"value\\\":5}\" q0"
+      ],
+      "events": [
+        "control_minsoc_clamped",
+        "control_write"
+      ]
+    },
+    {
+      "step": "chargeCurrentA 30",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB W/dvhub/settings/0/Settings/SystemSetup/MaxChargeCurrent \"{\\\"value\\\":30}\" q0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "Prüfungen nach 4 s",
+      "wire": [],
+      "events": [
+        "control_write_verified",
+        "control_write_verified",
+        "control_write_verified"
+      ]
+    },
+    {
+      "step": "gridSetpointW -800 ohne Echo",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB W/dvhub/settings/0/Settings/CGwacs/AcPowerSetPoint \"{\\\"value\\\":-800}\" q0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "Prüfung nach Mindestabstand (kein Nach-Write-Wert → R/), Keepalive-Takt",
+      "wire": [
+        "PUB R/dvhub/keepalive \"\"",
+        "PUB R/dvhub/settings/0/Settings/CGwacs/AcPowerSetPoint \"\""
+      ],
+      "events": []
+    },
+    {
+      "step": "Nachfassen nach 2 s",
+      "wire": [],
+      "events": [
+        "control_write_verify_error"
+      ]
+    },
+    {
+      "step": "gridSetpointW -900, Gegenstelle meldet -100",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB W/dvhub/settings/0/Settings/CGwacs/AcPowerSetPoint \"{\\\"value\\\":-900}\" q0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "Prüfung nach Mindestabstand (abweichend)",
+      "wire": [
+        "PUB R/dvhub/keepalive \"\""
+      ],
+      "events": [
+        "control_write_unconfirmed"
+      ]
+    },
+    {
+      "step": "gridSetpointW -900 erneut (lastWrite verworfen)",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB W/dvhub/settings/0/Settings/CGwacs/AcPowerSetPoint \"{\\\"value\\\":-900}\" q0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "gridSetpointW -1000 im Not-Halt",
+      "ok": false,
+      "why": "emergency_stop_active",
+      "blocked": true,
+      "wire": [],
+      "events": [
+        "control_write_blocked_nothalt"
+      ]
+    },
+    {
+      "step": "gridSetpointW -700 Broker getrennt",
+      "ok": false,
+      "why": "MQTT nicht verbunden",
+      "wire": [],
+      "events": [
+        "control_write_error"
+      ]
+    }
+  ],
+  "dvhub_schema_broker": [
+    {
+      "step": "init",
+      "wire": [
+        "CONNECT mqtt://192.0.2.12:1883",
+        "SUB 19 q0"
+      ],
+      "events": [
+        "mqtt_connected"
+      ]
+    },
+    {
+      "step": "gridSetpointW -500",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB dvhub/control/grid_setpoint_w/set \"-500\" q0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "Prüfung nach 4 s",
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Nachfassen nach 2 s",
+      "wire": [],
+      "events": [
+        "control_write_verify_error"
+      ]
+    },
+    {
+      "step": "maxDischargeW -1",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB dvhub/control/max_discharge_w/set \"-1\" q0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "chargeCurrentA 30",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB dvhub/control/charge_current_a/set \"30\" q0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "minSocPct 20",
+      "ok": true,
+      "writeType": "mqtt",
+      "wire": [
+        "PUB dvhub/control/min_soc_pct/set \"20\" q0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "feedExcessDcPv 0 (§51)",
+      "ok": false,
+      "why": "write target not enabled in config",
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Abholpuffer (Loxone)",
+      "http": 200,
+      "loxone": [
+        "dvhub_control_grid_setpoint_w=-500",
+        "dvhub_control_charge_current_a=30",
+        "dvhub_control_min_soc_pct=20",
+        "dvhub_control_max_discharge_w=-1",
+        "dvhub_control_source=rule",
+        "dvhub_control_rule=abend",
+        "dvhub_control_updated_at=2026-11-18T10:00:06.000Z",
+        "dvhub_control_paused=false",
+        "dvhub_control_grid_limit_active=false",
+        "dvhub_control_grid_limit_source=none",
+        "dvhub_control_grid_limit_consumption_w=null",
+        "dvhub_control_grid_limit_production_w=null",
+        "dvhub_control_grid_limit_production_blocked=false",
+        "gridSetpointW=undefined"
+      ],
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "gridSetpointW -1000 im Not-Halt",
+      "ok": false,
+      "why": "emergency_stop_active",
+      "blocked": true,
+      "wire": [],
+      "events": [
+        "control_write_blocked_nothalt"
+      ]
+    }
+  ],
+  "dvhub_schema_http_pickup": [
+    {
+      "step": "init",
+      "brokerMode": "push-only",
+      "wire": [],
+      "events": [
+        "mqtt_push_only"
+      ]
+    },
+    {
+      "step": "gridSetpointW -500",
+      "ok": true,
+      "writeType": "http_pickup",
+      "wire": [],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "Prüfung nach 4 s",
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Nachfassen nach 2 s",
+      "wire": [],
+      "events": [
+        "control_write_verify_error"
+      ]
+    },
+    {
+      "step": "maxDischargeW 0",
+      "ok": true,
+      "writeType": "http_pickup",
+      "wire": [],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "Abholpuffer nach Writes",
+      "http": 200,
+      "loxone": [
+        "dvhub_control_grid_setpoint_w=-500",
+        "dvhub_control_charge_current_a=null",
+        "dvhub_control_min_soc_pct=null",
+        "dvhub_control_max_discharge_w=0",
+        "dvhub_control_source=rule",
+        "dvhub_control_rule=abend",
+        "dvhub_control_updated_at=2026-11-18T10:00:06.000Z",
+        "dvhub_control_paused=false",
+        "dvhub_control_grid_limit_active=false",
+        "dvhub_control_grid_limit_source=none",
+        "dvhub_control_grid_limit_consumption_w=null",
+        "dvhub_control_grid_limit_production_w=null",
+        "dvhub_control_grid_limit_production_blocked=false",
+        "gridSetpointW=undefined"
+      ],
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "gridSetpointW -1000 im Not-Halt",
+      "ok": false,
+      "why": "emergency_stop_active",
+      "blocked": true,
+      "wire": [],
+      "events": [
+        "control_write_blocked_nothalt"
+      ]
+    },
+    {
+      "step": "Abholpuffer im Not-Halt",
+      "http": 200,
+      "loxone": [
+        "dvhub_control_grid_setpoint_w=-500",
+        "dvhub_control_charge_current_a=null",
+        "dvhub_control_min_soc_pct=null",
+        "dvhub_control_max_discharge_w=0",
+        "dvhub_control_source=rule",
+        "dvhub_control_rule=abend",
+        "dvhub_control_updated_at=2026-11-18T10:00:06.000Z",
+        "dvhub_control_paused=true",
+        "dvhub_control_grid_limit_active=false",
+        "dvhub_control_grid_limit_source=none",
+        "dvhub_control_grid_limit_consumption_w=null",
+        "dvhub_control_grid_limit_production_w=null",
+        "dvhub_control_grid_limit_production_blocked=false",
+        "gridSetpointW=undefined"
+      ],
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "gridSetpointW -1200 bei writeSafety.ok=false",
+      "ok": false,
+      "why": "config_unsafe_manufacturer_profile_error",
+      "wire": [],
+      "events": [
+        "control_write_blocked_config_unsafe"
+      ]
+    },
+    {
+      "step": "Abholpuffer bei ungültiger Config",
+      "http": 200,
+      "loxone": [
+        "dvhub_control_grid_setpoint_w=-500",
+        "dvhub_control_charge_current_a=null",
+        "dvhub_control_min_soc_pct=null",
+        "dvhub_control_max_discharge_w=0",
+        "dvhub_control_source=rule",
+        "dvhub_control_rule=abend",
+        "dvhub_control_updated_at=2026-11-18T10:00:06.000Z",
+        "dvhub_control_paused=false",
+        "dvhub_control_grid_limit_active=false",
+        "dvhub_control_grid_limit_source=none",
+        "dvhub_control_grid_limit_consumption_w=null",
+        "dvhub_control_grid_limit_production_w=null",
+        "dvhub_control_grid_limit_production_blocked=false",
+        "gridSetpointW=undefined"
+      ],
+      "wire": [],
+      "events": []
+    }
+  ]
+}
