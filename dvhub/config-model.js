@@ -479,7 +479,12 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   // Nur-Lese-Profil (`"readOnly": true`, für die neuen Lese-Hersteller): keine Schreibziele und keine
   // DV-Abregelung, egal was Profil oder config.json sonst sagen. dvControl.enabled aus config.json schaltet hier
   // nichts ein; negativePriceProtection ist aus, damit DVhub keine Abregelung meldet, die nicht stattfindet.
-  if (manufacturerProfile?.readOnly === true) {
+  // Sichere Seite (Fable-Review 18.11.2026): jeder gesetzte Wert außer ausdrücklich `false` macht das Profil
+  // zum Nur-Lese-Profil — auch "true", 1 oder "ja". Vorher zählte nur das Boolean true; ein "true" als Text ließ
+  // die eigenen Schreibblöcke des Profils aktiv.
+  const profileReadOnly = manufacturerProfile?.readOnly !== undefined && manufacturerProfile?.readOnly !== null
+    && manufacturerProfile.readOnly !== false;
+  if (profileReadOnly) {
     effectiveConfig.controlWrite = {};
     effectiveConfig.dvControl = { enabled: false, negativePriceProtection: { enabled: false } };
   }

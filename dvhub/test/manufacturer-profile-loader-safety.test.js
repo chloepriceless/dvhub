@@ -208,6 +208,41 @@ test('readOnly: auch ein Profil, das Schreibziele angibt, schreibt mit readOnly 
   assert.equal(cfg.dvControl.enabled, false);
 });
 
+for (const ro of ['true', 1, 'ja', {}]) {
+  test(`readOnly als Nicht-Boolean (${JSON.stringify(ro)}) gilt als Nur-Lese-Profil — sichere Seite (Fable-Review 18.11.)`, () => {
+    const { configPath } = setup({
+      manufacturer: 'acme-ro',
+      profiles: {
+        'acme-ro': {
+          ...READ_PROFILE,
+          readOnly: ro,
+          controlWrite: { gridSetpointW: { enabled: true, fc: 16, address: 40000, writeType: 'int32', scale: 1, offset: 0 } },
+          dvControl: { enabled: true, feedExcessDcPv: { enabled: true, fc: 6, address: 40010, writeType: 'uint16' } },
+        },
+      },
+      config: { dvControl: { enabled: true } },
+    });
+    const cfg = loadConfigFile(configPath).effectiveConfig;
+    assert.deepEqual(writeTargets(cfg), []);
+    assert.equal(cfg.dvControl.enabled, false);
+  });
+}
+
+test('readOnly: false lässt die Schreibblöcke des Profils bestehen', () => {
+  const { configPath } = setup({
+    manufacturer: 'acme-ro',
+    profiles: {
+      'acme-ro': {
+        ...READ_PROFILE,
+        readOnly: false,
+        controlWrite: { gridSetpointW: { enabled: true, fc: 16, address: 40000, writeType: 'int32', scale: 1, offset: 0 } },
+      },
+    },
+  });
+  const cfg = loadConfigFile(configPath).effectiveConfig;
+  assert.deepEqual(writeTargets(cfg), ['controlWrite.gridSetpointW@40000']);
+});
+
 // --- leere Profildatei ----------------------------------------------------------------------------------------
 
 for (const [label, text] of [['leer', ''], ['nur Leerzeichen', ' \n\t\n']]) {
