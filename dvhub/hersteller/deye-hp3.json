@@ -1,0 +1,99 @@
+{
+  "label": "Deye SUN-…SG01HP3 (HV, 3-phasig) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz, PV (MPPT 1–4), Akku-Leistung, SoC und Hauslast über ein RS485-Ethernet-Gateway (Modbus TCP, Slave-ID 1) und schreibt nichts an den Wechselrichter. Vorzeichen und 10-W-Skala sind am Gerät noch nicht bestätigt. Anleitung: docs/DEYE-NUR-ANZEIGE.md.",
+  "_doc": [
+    "Deye-Hochvolt-Hybrid, 3-phasig: SUN-5K…50K-SG01HP3 (Gerätetyp Register 0 = 0x0600 für 6–15 kW, 0x0601 für 20–50 kW).",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [SPEC] Deye „MODBUS RTU 三相储能通信规约“ V105 (2025-01-13, LP3+HP3),",
+    "https://download.axilogi.com/DEYE/Other/MODBUS_RTU.pdf · [COMM] evcc templates/definition/meter/deye-hybrid-3p.yaml ·",
+    "[COMM] kellerza/sunsynk src/sunsynk/definitions/three_phase_common.py + three_phase_hv.py. Zusammenfassung:",
+    ".planning/docs/research/2026-11-15-deye-modbus-control-spec.md §2 und 2026-11-18-hersteller-lesend-luecken.md §3.1.",
+    "",
+    "Transport: RTU 9600 8N1, Slave 1, nur FC 03 lesbar. RS485-Ethernet-Gateway im Modus Modbus TCP (nicht transparent,",
+    "kein Solarman-V5-Stick). Anlagenadresse in DVhub = IP des Gateways.",
+    "",
+    "HV-Skala [SPEC]: PV 672–675 und Akku 590 in 10 W (Spalte „H:10W“). Netz 622–624 und Last 653 bleiben auch bei HV",
+    "1 W. Der evcc-Schalter firmware1098 ändert nur die Energiezähler (kWh), nicht diese Leistungsregister [COMM].",
+    "",
+    "Bewusst NICHT gelesen (fehlt in der Engine):",
+    "- PV5–PV8 727–730 (10 W, HP3 20–50 kW): nicht neben 672–675, die Summe über getrennte Register fehlt (E4).",
+    "  Register 718 „PV总功率“ (PV gesamt) hat in V105 keine Skala → nicht verwendet.",
+    "- Akku 2 (SoC 589, Leistung 595): kein Punkt für einen zweiten Akku, Summe 590+595 bräuchte E4.",
+    "- High-Words 687–689 (Netz) und 659 (Last): geteilte 32-bit-Register fehlen (E9). Netz je Phase bis ±32 767 W",
+    "  reicht für jeden Hausanschluss (DVhub addiert die drei Phasen selbst, die Summe läuft nicht über); die Hauslast",
+    "  ist bei 50-kW-Geräten über 32 767 W falsch.",
+    "- BMS-Grenzen 212/213 (A): kein Lesepunkt für Gerätegrenzen (E13).",
+    "- Gerätetyp-Prüfung Register 0: DVhub prüft nicht, ob wirklich ein HP3 antwortet (E10). Ein falsches Deye-Profil",
+    "  liefert falsche Werte (bei LP3 fehlte z. B. die 10-W-Skala)."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz 622–624 (S16, 1 W je Phase, auch bei HV) [SPEC V105: „The following three registers vary according to the built-in and external Settings“] — der Satz, mit dem der WR selbst regelt; evcc (625) und kellerza („Grid power“ 622–625) lesen ihn ebenso. NICHT 616–618: das ist laut V105 „Out-of-grid power“ (nur externer CT/Zähler) und liefert ohne externen CT 0. NICHT 604–606: nur innere Messung am WR-Netzport. Vorzeichen + = Bezug [COMM: evcc-Netzkonvention, 625 unverändert], am Gerät prüfen.",
+    "fc": 3,
+    "address": 622,
+    "quantity": 3,
+    "timeoutMs": 2000
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "SoC Akku 1, Register 588 (U16, 1 %) [SPEC].",
+      "enabled": true,
+      "fc": 3,
+      "address": 588,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "batteryPowerW": {
+      "_comment": "Akku 1, Register 590 „Battery output power“ (S16, HV 10 W) [SPEC]. UNSICHER (am Gerät prüfen): Vorzeichen. Annahme + = Entladen — Wortlaut „output“, und evcc liest 590 unverändert bei evcc-Konvention + = Entladen [COMM]. DVhub erwartet + = Laden, daher scale -10 (10 W × −1). Zeigt das Gerät beim Laden einen negativen Wert in DVhub, gehört scale auf 10.",
+      "enabled": true,
+      "fc": 3,
+      "address": 590,
+      "quantity": 1,
+      "signed": true,
+      "scale": -10,
+      "offset": 0
+    },
+    "pvPowerW": {
+      "_comment": "PV = PV1 + PV2 + PV3 + PV4, Register 672–675 (U16, HV 10 W) [SPEC], summiert. PV5–PV8 (727–730) fehlen, siehe _doc (E4).",
+      "enabled": true,
+      "fc": 3,
+      "address": 672,
+      "quantity": 4,
+      "signed": false,
+      "scale": 10,
+      "offset": 0,
+      "sumRegisters": true
+    },
+    "selfConsumptionW": {
+      "_comment": "Hauslast gesamt, Register 653 Low-Word (S16, 1 W, auch bei HV) [SPEC]. High-Word 659 nicht gelesen (E9): über 32 767 W falsch.",
+      "enabled": true,
+      "fc": 3,
+      "address": 653,
+      "quantity": 1,
+      "signed": true,
+      "scale": 1,
+      "offset": 0
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}

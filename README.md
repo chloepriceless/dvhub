@@ -982,7 +982,7 @@ Schlüssel strikt ab — jedes neue Feld muss in `ALLOWED_CONFIG_ROOTS`.
 
 | Sektion | Beschreibung |
 |---------|--------------|
-| `manufacturer` / `updateChannel` | Aktives Herstellerprofil (`victron`, `fronius`, `deye-lv`, `sungrow` (Beta, nur Bleeding Edge), `bridge-mqtt` = Universal-MQTT-Bridge, `dvhub-mqtt` = Universal HA/Loxone) und Update-Channel (`stable`/`dev`) |
+| `manufacturer` / `updateChannel` | Aktives Herstellerprofil (`victron`, `fronius`, `deye-lv`, `deye-hp3` und `deye-lp1` (nur Anzeige, Beta, nur Bleeding Edge), `sungrow` (Beta, nur Bleeding Edge), `bridge-mqtt` = Universal-MQTT-Bridge, `dvhub-mqtt` = Universal HA/Loxone) und Update-Channel (`stable`/`dev`) |
 | `httpPort` / `httpsPort` / `tlsCertPath` / `tlsKeyPath` | Webserver-Ports und TLS (Installer: 80 / 443; Code-Default `httpPort` 8080) |
 | `modbusListenHost` / `modbusListenPort` / `modbusAllowedClients` | DV-Modbus-Server-Bind (Default `0.0.0.0:502`) und Client-Allowlist |
 | `victron` | Anlagenadresse, Transport (Modbus/MQTT), Timeouts, `victron.alarms` |
@@ -1018,6 +1018,7 @@ Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
 | `/etc/dvhub/hersteller/bridge-mqtt.json` | Universal (MQTT-Bridge) — bindet jeden anderen Wechselrichter über das Venus-Topic-Schema an ([Anleitung](docs/DEYE-NODERED-BRIDGE.md)) |
 | `/etc/dvhub/hersteller/dvhub-mqtt.json` | Universal (DVhub-MQTT-Schema: HA/Loxone) — Messwerte aus Home Assistant/Loxone per MQTT oder HTTP-Push ([Schema](docs/MQTT-SCHEMA.md), [Loxone](docs/LOXONE.md)) |
 | `/etc/dvhub/hersteller/fronius.json`, `deye-lv.json`, `sungrow.json` | weitere native Profile (Sungrow: [Beta-Anleitung](docs/SUNGROW-BETA.md)) |
+| `/etc/dvhub/hersteller/deye-hp3.json`, `deye-lp1.json` | Deye HP3 (Hochvolt, 3-phasig) und LP1 (1-phasig) — nur Anzeige, keine Steuerung, am Gerät ungeprüft (Beta, nur Bleeding Edge; [Anleitung](docs/DEYE-NUR-ANZEIGE.md)) |
 
 Das aktive Profil wählt `manufacturer` in der Config bzw. das Hersteller-Dropdown
 in den Einstellungen; die Auswahlliste entsteht dynamisch aus den `*.json`-Dateien
