@@ -166,3 +166,25 @@ test('E5: SunSpec-relativ — sfOffset im Modell wird beim Scan zu sfAddress auf
   assert.equal(state.victron.selfConsumptionW, 432.1);
   assert.equal(state.victron.pvPowerW, 5000);
 });
+
+// Codex 3ed66e9b (P2): lückenhafte Karte — Register zwischen Wert und SF fehlen.
+test('E5/Codex: Register zwischen Wert und SF fehlen → einzeln mit SF-Prüfung gelesen, Block nicht wieder versucht', async () => {
+  const { state, poller, dev } = rig({ pvPowerW: p(100, { sfAddress: 103 }) }, (d) => d.set(100, 4321).set(103, -1)); // 101–102 fehlen
+  await poller.requestPoll();
+  assert.equal(state.victron.pvPowerW, 432.1, 'früher: jeder Takt „modbus exception 2“');
+  assert.equal(state.victron.errors.pvPowerW, undefined);
+  await poller.requestPoll();
+  assert.equal(state.victron.pvPowerW, 432.1);
+  const blocks = dev.requests.filter((r) => r.address === 100 && r.quantity === 4);
+  assert.equal(blocks.length, 1, 'der Block wird nach der Ausnahme nicht wieder versucht');
+
+  const meter = await (async () => {
+    const d = createRegisterDevice();
+    d.set(200, -500 & 0xffff).set(203, 1);
+    const r = createPollerRig({ meter: { layout: 'point', fc: 3, address: 200, unitId: 1, signed: true, sfAddress: 203 } }, d);
+    await r.poller.requestPoll();
+    return r.state.meter;
+  })();
+  assert.equal(meter.ok, true, meter.error);
+  assert.equal(meter.grid_total_w, -5000);
+});

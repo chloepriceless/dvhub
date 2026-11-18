@@ -171,6 +171,8 @@ export function createPoller(ctx) {
   const lastPointPollAt = {};
   // E5: SunSpec-Skalenfaktoren je Poll-Takt höchstens einmal je Register lesen (pollMeter legt ihn je Takt neu an).
   let cycleSfCache = new Map();
+  // Bereiche, in denen das Gerät keinen gemeinsamen Wert+SF-Block liefert (lückenhafte Karte) — je Poller gemerkt.
+  const sfBlockUnsupported = new Set();
   // Ergebnis (E6, für die Hauslast-Ableitung): true = in diesem Takt ein Wert gelesen, false = kein Wert in diesem
   // Takt (aus, unaufgelöst, Lesefehler, „nicht verfügbar“), undefined = wegen pollEveryMs nicht abgefragt.
   async function pollPoint(name, conf) {
@@ -202,7 +204,7 @@ export function createPoller(ctx) {
       } else {
         // Lese-Engine (18.11.2026): ein Lesepunkt kann mehrere Register lesen (combine E4, split E9, Skalenfaktor
         // E5). Ohne diese Schlüssel genau ein mbRequest(conf) wie bisher.
-        state.victron[name] = await readPointValue(conf, (c) => transport.mbRequest(c), { sfCache: cycleSfCache });
+        state.victron[name] = await readPointValue(conf, (c) => transport.mbRequest(c), { sfCache: cycleSfCache, sfBlockUnsupported });
       }
       delete state.victron.errors[name];
       const _now = Date.now();
@@ -727,7 +729,7 @@ export function createPoller(ctx) {
   async function readMeterPoint(m) {
     assertReadableAddress(m, 'Zähler');
     const read = (c) => transport.mbRequest(c);
-    const ctxRead = { sfCache: cycleSfCache };
+    const ctxRead = { sfCache: cycleSfCache, sfBlockUnsupported };
     const total = await readPointValue(m, read, ctxRead);
     if (total == null) throw new Error('Zähler meldet keinen Gesamtwert (Register nicht verfügbar)');
     // Codex 56274de8: NaN/±∞ (z. B. ungültige meter.scale) ist ein Zählerfehler, nie 0 W „ok“.

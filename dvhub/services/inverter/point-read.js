@@ -237,8 +237,9 @@ async function readCombined(conf, read, ctx) {
  * conf-Objekt wie bisher (bitgleich für die ausgelieferten Profile); nur ein fehlendes `quantity` wird ergänzt.
  * @param {object} conf - effektive Punkt-Config (host/port/unitId/fc schon aus applyVictronDefaults)
  * @param {(conf: object) => Promise<number[]>} read - transport.mbRequest
- * @param {{ exact?: boolean, sfCache?: Map }} [ctx] - exact: ungerundet (combine-Summanden); sfCache: je Poll-Takt ein
- *   frischer Cache für Skalenfaktoren
+ * @param {{ exact?: boolean, sfCache?: Map, sfBlockUnsupported?: Set }} [ctx] - exact: ungerundet (combine-Summanden);
+ *   sfCache: je Poll-Takt ein frischer Cache für Skalenfaktoren; sfBlockUnsupported: je Poller gemerkte Bereiche, in
+ *   denen das Gerät keinen Wert+SF-Block liefert
  * @returns {Promise<number|null>}
  */
 export async function readPointValue(conf, read, ctx = {}) {
@@ -250,18 +251,29 @@ export async function readPointValue(conf, read, ctx = {}) {
     : read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf));
   if (conf.sfAddress == null) return decodePointRegs(await readValue(), decodeConf, { exact: ctx.exact });
   assertSfAddress(conf);
-  // SF nah beim Wert: ein Block für beide (eine Modbus-Antwort = eine Probe).
+  // SF nah beim Wert: ein Block für beide (eine Modbus-Antwort = eine Probe). Kennt das Gerät Register dazwischen
+  // nicht (Modbus-Ausnahme 1–3, lückenhafte Karte, Codex 3ed66e9b), wird einzeln mit SF-Prüfung gelesen und der Block
+  // für diesen Bereich nicht wieder versucht (ctx.sfBlockUnsupported, je Poller).
   const q = quantityOf(conf);
   if (!conf.split && isAddress(conf.address)) {
     const from = Math.min(conf.address, conf.sfAddress);
     const to = Math.max(conf.address + q, conf.sfAddress + 1);
-    if (to - from <= SF_BLOCK_SPAN) {
-      const block = await read({ ...conf, address: from, quantity: to - from });
-      if (!Array.isArray(block) || block.length < to - from) throw new Error(`Wert/Skalenfaktor-Block @${from}: unvollständige Antwort`);
-      const sf = decodeScaleFactor(block[conf.sfAddress - from], conf.sfAddress);
-      ctx.sfCache?.set(sfKeyOf(conf), Promise.resolve(sf));
-      if (sf === null) return null;
-      return decodePointRegs(block.slice(conf.address - from, conf.address - from + q), conf, { exact: ctx.exact, sf });
+    const blockKey = `${conf.host ?? ''}|${conf.port ?? ''}|${conf.unitId ?? ''}|${conf.fc ?? ''}|${from}|${to - from}`;
+    if (to - from <= SF_BLOCK_SPAN && !ctx.sfBlockUnsupported?.has(blockKey)) {
+      let block = null;
+      try {
+        block = await read({ ...conf, address: from, quantity: to - from });
+      } catch (e) {
+        if (!/^modbus exception [123]\b/.test(String(e?.message))) throw e;
+        ctx.sfBlockUnsupported?.add(blockKey);
+      }
+      if (block) {
+        if (!Array.isArray(block) || block.length < to - from) throw new Error(`Wert/Skalenfaktor-Block @${from}: unvollständige Antwort`);
+        const sf = decodeScaleFactor(block[conf.sfAddress - from], conf.sfAddress);
+        ctx.sfCache?.set(sfKeyOf(conf), Promise.resolve(sf));
+        if (sf === null) return null;
+        return decodePointRegs(block.slice(conf.address - from, conf.address - from + q), conf, { exact: ctx.exact, sf });
+      }
     }
   }
   const { sf, value } = await readWithStableScaleFactor(conf, read, ctx.sfCache, readValue);
