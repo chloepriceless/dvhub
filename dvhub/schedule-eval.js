@@ -1052,15 +1052,24 @@ export function createScheduleEvaluator(ctx) {
   // ersten Begrenzung wird gesichert (persistiert) und bei limitW = null
   // zurückgeschrieben — eine vom Installateur gesetzte Grenze bleibt erhalten.
   // Schreibtor (D.1 #4): der Pfad hat keine eigene Not-Halt-Prüfung — die sitzt im Begrenzer davor
-  // (feed-in-limit-arbiter.js: set/reapply nur für eine weiterlaufende Klasse, emergencyStop() die eine Rücknahme).
-  // So bleibt es: die Lauf-Zulassung nennt den Begrenzer als Regel (inHalt), auch ein Lauf im Not-Halt schreibt.
+  // (feed-in-limit-arbiter.js: set/reapply nur für eine weiterlaufende Klasse, emergencyStop() die eine Rücknahme;
+  // dessen Write läuft auf der Kette des Begrenzers, also womöglich erst nach dem Eintritt). So bleibt es: die
+  // Lauf-Zulassung nennt den Begrenzer als Regel (inHalt), auch ein Lauf im Not-Halt schreibt.
+  // Aktionsklasse (A.5): jede Grenze ist eine Schutz-Begrenzung (DV-Teilvorgabe, EEBUS LPP, feste Grenze — auch die,
+  // die beim Not-Halt-Eintritt stehen bleibt); die Rückstellung auf den Wert vor DVhub ist im Durchgang des
+  // Not-Halts (setEmergencyStop → Begrenzer.emergencyStop, _notHaltNeutralizing) die Rücknahme, sonst autoRestore.
   async function applyDvFeedInLimit(limitW) {
     const steps = limitW == null
       ? [{ point: 'dvFeedInLimitW', restore: true }]
       : [{ point: 'dvFeedInLimitW', value: Math.max(0, Math.round(Number(limitW))), saveBefore: true }];
+    const haltPass = state.ctrl.discretionaryWritesPaused === true && state.ctrl._notHaltNeutralizing === true;
     const run = admitInverterRun('event', 'feed_in_limit_arbiter');
     await runDvControlSequence(steps, {
-      gate: { run, action: limitW == null ? 'autoRestore' : 'protectiveLimit', source: 'feed_in_limit' },
+      gate: {
+        run,
+        action: limitW != null ? 'protectiveLimit' : (haltPass ? 'haltNeutralize' : 'autoRestore'),
+        source: 'feed_in_limit',
+      },
     });
     pushLog('dv_feedin_limit_write', { limitW: limitW == null ? 'restore' : limitW });
   }

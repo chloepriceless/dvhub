@@ -11,13 +11,15 @@
 // Rückgaben/Fehler, Log-Ereignisse samt Daten und Stufe, die Zustandsfelder der Pfade, die Merker-Dateien und im
 // Lese-Modus die abgewehrten Schreibversuche.
 
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import * as current from '../../schedule-eval.js';
-import { createLegacyGate } from '../../services/gate/legacy.js';
+import { createLegacyGate, INVERTER_GATE_DEVICE } from '../../services/gate/legacy.js';
 import { ReadOnlyViolation, blockedWriteCount, isReadOnlyMode, noteBlockedWrite } from '../../read-only-guard.js';
 import { recordingModbus, fixClock } from './gate-golden.js';
 
@@ -44,10 +46,20 @@ export function directGate() {
   };
 }
 
-/** Modbus-Attrappe (gate-golden recordingModbus) plus Lese-Modus wie transport-modbus.js, volle Argumente, Haken. */
+/**
+ * Modbus-Attrappe (gate-golden recordingModbus) plus Lese-Modus wie transport-modbus.js, volle Argumente und ein Haken
+ * nach jeder Draht-Operation (Lesen und Schreiben; bekommt die Protokollzeile — z. B. Not-Halt mitten im Lauf).
+ */
 export function parityModbus(opts = {}, onWrite = null) {
   const t = recordingModbus(opts);
   const calls = [];
+  const read = async (req) => {
+    try {
+      return await t.mbRequest(req);
+    } finally {
+      onWrite?.(t.ops.at(-1));
+    }
+  };
   const wrap = (name, fc) => async (req) => {
     if (isReadOnlyMode()) {
       noteBlockedWrite(`Modbus fc=${fc} an ${req.host}:${req.port}`);
@@ -60,7 +72,7 @@ export function parityModbus(opts = {}, onWrite = null) {
       onWrite?.(t.ops.at(-1));
     }
   };
-  return { ...t, mbWriteSingle: wrap('mbWriteSingle', 6), mbWriteMultiple: wrap('mbWriteMultiple', 16), calls };
+  return { ...t, mbRequest: read, mbWriteSingle: wrap('mbWriteSingle', 6), mbWriteMultiple: wrap('mbWriteMultiple', 16), calls };
 }
 
 /** MQTT-Attrappe (Venus-Schema) wie transport-mqtt.js mqttWrite: Topic-Zuordnung, Lese-Modus, Übergabe. */
@@ -115,7 +127,9 @@ export function buildRig(mode, { cfg, transport, state, ctx = {}, files = {} }) 
   for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), JSON.stringify(content));
   const logs = [];
   const events = [];
-  const rig = { mode, cfg, transport, dir, logs, events, gate: null, ev: null, state: null };
+  // pushLog wie in server.js: (Ereignis, Daten, Stufe | { severity }) — Szenarien reichen es an Begrenzer/Not-Halt weiter.
+  const pushLog = (event, data, level) => logs.push([event, plain(data), typeof level === 'string' ? level : (level?.severity ?? null)]);
+  const rig = { mode, cfg, transport, dir, logs, events, pushLog, gate: null, ev: null, state: null };
   const make = (st) => {
     const gate = mode === 'new'
       ? createLegacyGate({ isHalted: () => st.ctrl?.discretionaryWritesPaused === true, onEvent: (e) => events.push(e) })
@@ -123,7 +137,7 @@ export function buildRig(mode, { cfg, transport, state, ctx = {}, files = {} }) 
     const create = mode === 'old' && BASE ? BASE.createScheduleEvaluator : current.createScheduleEvaluator;
     const ev = create({
       state: st, getCfg: () => rig.cfg, transport,
-      pushLog: (event, data, level) => logs.push([event, plain(data), typeof level === 'string' ? level : (level?.severity ?? null)]),
+      pushLog,
       telemetrySafeWrite: () => {}, persistConfig: async () => {}, telemetryStore: null, epexNowNext: () => null,
       regenerateSmallMarketAutomationRules: async () => {},
       dvSeqSavedPath: path.join(dir, 'dv_seq_saved.json'),
@@ -223,4 +237,34 @@ export async function runSide(t, mode, sc) {
     rig.cleanup();
   });
   return result;
+}
+
+const isWrite = (entry) => /^(W6|W16|MQTT) /.test(entry);
+
+/**
+ * Je Szenario ein Test: alte Seite, neue Seite, Vergleich. Auf der neuen Seite zusätzlich: jeder Draht-Write genau
+ * ein Tor-Ereignis (ok/error), Vertrauensklasse legacy am Gerät inverter, das Tor sperrt nichts (außer im
+ * Lese-Modus, dort jede Sperre mit genau einer Meldung), dann die Soll-Prüfung des Szenarios (`expect`).
+ */
+export function registerParityScenarios(scenarios, label = 'Legacy') {
+  for (const [name, sc] of Object.entries(scenarios)) {
+    test(`Parität alt ↔ Tor (${label}): ${name}`, async (t) => {
+      const before = await runSide(t, 'old', sc);
+      const after = await runSide(t, 'new', sc);
+      assert.deepEqual(after.out, before.out, `${name}: Tor-Pfad weicht vom alten Weg ab`);
+      const writes = after.out.wire.filter(isWrite);
+      const delivered = after.rig.events.filter((e) => e.outcome === 'ok' || e.outcome === 'error');
+      assert.equal(delivered.length, writes.length, `${name}: jeder Draht-Write ein Tor-Ereignis`);
+      assert.ok(after.rig.events.every((e) => e.trust === 'legacy' && e.target.device === INVERTER_GATE_DEVICE), 'legacy, Gerät inverter');
+      const blocked = after.rig.events.filter((e) => !['ok', 'error'].includes(e.outcome));
+      if (sc.readOnly) {
+        assert.ok(blocked.length > 0 && blocked.every((e) => e.outcome === 'blocked_readonly'), 'im Lese-Modus sperrt das Tor');
+        assert.equal(after.out.readOnlyBlocked, blocked.length, 'je Sperre eine Meldung');
+      } else {
+        assert.deepEqual(blocked.map((e) => `${e.point}:${e.outcome}:${e.detail}`), [], 'das Tor sperrt nichts, was heute geschrieben wird');
+      }
+      if (!sc.noWrites) assert.ok(writes.length > 0 || sc.readOnly, `${name}: Szenario ohne Draht-Write`);
+      sc.expect?.(after);
+    });
+  }
 }
