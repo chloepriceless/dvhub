@@ -35,7 +35,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
 import { createSungrowEms, endpointKeyOf, sungrowEmsConf, resolveSecondInverter } from './services/inverter/sungrow.js';
-import { createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, unwrapLegacyWrite } from './services/gate/legacy.js';
+import { createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, inverterReleaseState, unwrapLegacyWrite } from './services/gate/legacy.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -302,7 +302,7 @@ export function createScheduleEvaluator(ctx) {
       writeGate.setDevicePolicies(INVERTER_GATE_DEVICE,
         Object.fromEntries([...invPoints].map((p) => [p, inverterLegacyPolicy(p, invSinkKind)])));
     }
-    writeGate.setRelease(INVERTER_GATE_DEVICE, cfg?.writeSafety?.ok === false ? 'profileInvalid' : 'open');
+    writeGate.setRelease(INVERTER_GATE_DEVICE, inverterReleaseState(cfg));
     const v = Number(value);
     const op = {
       device: INVERTER_GATE_DEVICE, point, value: Number.isFinite(v) ? v : 0, source: source || 'dv_control', kind, action,

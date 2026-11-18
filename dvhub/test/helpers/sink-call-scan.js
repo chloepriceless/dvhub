@@ -10,7 +10,8 @@
 //   mqttWrite                                       MQTT-Schreibfunktion des Transports
 //   publish                                         jeder `.publish(`/`.publishAsync(`-Aufruf (Steuer- oder nicht:
 //                                                   statisch nicht trennbar → jede Stelle muss eingeordnet sein)
-//   pickup:<fn>                                     Abholpuffer für Loxone/HA (services/control-snapshot.js)
+//   pickup:<fn>                                     Abholpuffer für Loxone/HA (services/control-snapshot.js); seit R-T3
+//                                                   nur über die Abholsenke hinter dem Tor (services/gate/pickup.js)
 //   writeReg                                        Sungrow-Registerschreiber am Tor vorbei (bis Phase 2; seither
 //                                                   heißt er submitReg und reicht über gate.submit() ein — ein neuer
 //                                                   writeReg-Aufruf wäre wieder ein Direktweg)

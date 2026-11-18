@@ -28,6 +28,10 @@
 // (`admitLegacyRun`) und reicht sie mit jeder Operation des Laufs ein (`submit(op, { run })`). Vorprüfung 1 urteilt
 // dann mit dem Not-Halt-Stand am Laufeingang (siehe checkHalt) — sonst sperrte das Tor eine vor dem Eintritt
 // begonnene Folge mitten drin, was heute nicht geschieht (D.2 bit-gleich). Ohne Zulassung gilt die Regel unverändert.
+//
+// Abholpuffer (R-T3): Was ein Abnehmer selbst abholt (GET /api/integration/loxone, MQTT-Spiegel control/*), gibt
+// services/gate/pickup.js nur heraus, wenn `pickupVerdict(device)` das Tor für das Gerät offen sieht (Vorprüfungen 1,
+// 3, 4); sonst steht dort „keine Vorgabe“.
 
 import { isReadOnlyMode, noteBlockedWrite, ReadOnlyViolation } from '../../read-only-guard.js';
 import {
@@ -481,15 +485,16 @@ export function createGate(options = {}) {
     return null;
   }
 
-  function checkReadOnly(op) {
-    let ro;
-    let unknown = false;
+  function readOnlyNow() {
     try {
-      ro = isReadOnly() === true;
+      return { ro: isReadOnly() === true, unknown: false };
     } catch {
-      ro = true;
-      unknown = true;
+      return { ro: true, unknown: true }; // Lese-Modus unlesbar → als Lese-Modus behandeln
     }
+  }
+
+  function checkReadOnly(op) {
+    const { ro, unknown } = readOnlyNow();
     if (!ro) return null;
     // Zweites Argument: die Operation — ein Legacy-Anschluss kann daraus dieselbe Meldung wie sein Transport bilden.
     // Eine Legacy-Senke kann ihre Zeile selbst liefern (`readOnlyWhat(op)`, z. B. MQTT mit dem Topic des Transports).
@@ -717,6 +722,32 @@ export function createGate(options = {}) {
     return finalize(op, opId, r2, pol, spec.kind);
   }
 
+  /**
+   * R-T3 (D.1): Darf der Abholpuffer des Geräts JETZT eine Vorgabe herausgeben? Der Abholpfad — GET
+   * /api/integration/loxone, der MQTT-Spiegel <prefix>/control/* — ist ein Schreibpfad: wer abholt, setzt den Wert
+   * um. Es urteilen die Vorprüfungen, die eine Vorgabe (`command`) an das Gerät unabhängig von Wert und Punkt sperren,
+   * in derselben Reihenfolge: 1 Not-Halt (auch unlesbar), 3 Lese-Modus (auch unlesbar), 4 Schreibfreigabe (jeder
+   * Zustand außer `open` — `profileInvalid` sperrt `command`, R-T2.2). Ohne Zustellung, ohne Ereignis und ohne
+   * Lese-Modus-Zählung: Herausgeben ist kein Schreibversuch von DVhub, der Abnehmer fragt alle paar Sekunden.
+   * Den Freigabezustand meldet wie bei submit() der Pfad (services/gate/pickup.js aus derselben Config).
+   * @param {string} device
+   * @returns {{ open: true } | { open: false, outcome: string, detail: string, blockedBy: 'halt'|'readOnly'|'release' }}
+   */
+  function pickupVerdict(device) {
+    if (!isNonEmptyString(device)) throw new TypeError('device');
+    const { halted, unknown } = haltedNow();
+    if (halted) {
+      return { open: false, outcome: 'blocked_nothalt', detail: unknown ? DETAIL.haltStateUnknown : DETAIL.notHalt, blockedBy: 'halt' };
+    }
+    const { ro, unknown: roUnknown } = readOnlyNow();
+    if (ro) {
+      return { open: false, outcome: 'blocked_readonly', detail: roUnknown ? DETAIL.readOnlyStateUnknown : DETAIL.readOnly, blockedBy: 'readOnly' };
+    }
+    const r = rel(device);
+    if (r.state !== 'open') return { open: false, outcome: 'blocked_gate', detail: RELEASE_DETAIL[r.state], blockedBy: 'release' };
+    return { open: true };
+  }
+
   function enqueue(device, task) {
     const prev = chains.get(device) || Promise.resolve();
     const run = prev.then(task, task);
@@ -768,6 +799,7 @@ export function createGate(options = {}) {
   return {
     submit,
     admitLegacyRun,
+    pickupVerdict,
     setRelease,
     fence,
     releaseState: (device) => rel(device).state,
