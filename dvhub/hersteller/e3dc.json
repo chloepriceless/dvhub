@@ -1,0 +1,102 @@
+{
+  "label": "E3/DC S10 (Modbus Simple-Mode) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz, PV, Akku-Leistung, SoC und Hauslast über Modbus TCP (Port 502, Unit-ID 1) im E3/DC Simple-Mode und schreibt nichts an das Hauskraftwerk. Modbus ist ab Werk aus: am Gerät unter Funktionen > Funktion Modbus einschalten, Protokoll „E3/DC Simple-Mode“. Registerbasis und Wortreihenfolge sind am Gerät noch nicht bestätigt. Anleitung: docs/hersteller/e3dc.md.",
+  "_doc": [
+    "E3/DC Hauskraftwerk S10 E / S10 E Compact / S10 E AIO / S10 X / S10 Mini / S10 Pro (gemeinsame EMS-Plattform, gleiche",
+    "Simple-Mode-Karte). NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit",
+    "dvControl.enabled in der config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "Steuern ginge bei E3/DC nur über RSCP (TCP 5033, AES) — das kann DVhub nicht und dieses Profil versucht es nicht.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [SPEC] E3/DC „Kurzanleitung Modbus/TCP-Schnittstelle“ V1.6 (2017-04-10) —",
+    "Registertabelle, Typen, Vorzeichen. [DECOMP] Plexlog E3DC-Treiber (nur gelesen): Register-Offset −1, Wortreihenfolge",
+    "„MixEndian“ = erstes Register ist das LOW-Wort. [COMM] openHAB modbus.e3dc (POWER_REG_START = 67, „documented",
+    "registers subtract 1“, Dekodierung getSInt32Swap). Zusammenfassung: .planning/docs/research/",
+    "2026-11-15-e3dc-modbus-control-spec.md §2 und 2026-11-18-hersteller-lesend-luecken.md §3.4.",
+    "",
+    "Drahtadresse = Dokumentregister − 1 (V1.6 zählt ab 40001 = Magicbyte 0xE3DC; Plexlog sendet 40067 für Dok. 40068,",
+    "Community-Configs lesen den SoC an 40082). Die Spec-Angabe „Big Endian (ABCD)“ stimmt nur für die Bytes im Wort:",
+    "32-bit-Werte liegen Low-Wort zuerst (Plexlog MixEndian, openHAB getSInt32Swap) → wordOrder le.",
+    "",
+    "Bewusst NICHT gelesen:",
+    "- Netz je Phase: Simple-Mode V1.6 hat keine Phasenleistungen am Netzpunkt; L1–L3 bleiben leer (keine fremden",
+    "  Register wie 40076/40078 als Phasen).",
+    "- 40076 „Leistung aller zusätzlichen Einspeiser“ (z. B. weiterer PV-WR): Vorzeichen in der Community uneinheitlich,",
+    "  daher nicht in die PV-Summe genommen. Bei Anlagen mit Zusatz-Einspeiser fehlt dessen Leistung in der PV-Anzeige.",
+    "- Gerätegrenzen: Simple-Mode hat keine Lade-/Entladegrenzen (die liegen nur in RSCP).",
+    "- Kennungsprüfung 40000 = 0xE3DC: DVhub prüft nicht, ob wirklich ein E3/DC im Simple-Mode antwortet (E10 fehlt).",
+    "  Ist am Gerät der SunSpec-Mode gewählt, liest dieses Profil fremde Register."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz, Dok.-Register 40074 „Leistung am Netzübergabepunkt“ (Int32 W) [SPEC], Draht 40073, Low-Wort zuerst. Vorzeichen [SPEC]: negativ = Einspeisung, also + = Bezug wie in DVhub — kein sign. Als Lesepunkt (layout point), damit L1–L3 leer bleiben statt 40076/40078/40080 als Phasen zu lesen.",
+    "layout": "point",
+    "fc": 3,
+    "address": 40073,
+    "quantity": 2,
+    "readType": "int32",
+    "wordOrder": "le",
+    "timeoutMs": 2000
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "Batterie-SoC, Dok.-Register 40083 (UInt16, %) [SPEC], Draht 40082. Vorsicht: Dok. 40082 (Draht 40081) ist Autarkie/Eigenverbrauch je 1 Byte — die in der Spec erwähnte „Vertauschung“ der Community ist dieselbe Registerverschiebung um 1.",
+      "enabled": true,
+      "fc": 3,
+      "address": 40082,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "batteryPowerW": {
+      "_comment": "Batterie-Leistung, Dok.-Register 40070 (Int32 W) [SPEC], Draht 40069, Low-Wort zuerst. Vorzeichen [SPEC]: negativ = Entladung, also + = Laden wie in DVhub — kein sign (Plexlog dreht 40070 nur, weil es intern + = Entladen rechnet).",
+      "enabled": true,
+      "fc": 3,
+      "address": 40069,
+      "quantity": 2,
+      "readType": "int32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0
+    },
+    "pvPowerW": {
+      "_comment": "Photovoltaik-Leistung, Dok.-Register 40068 (Int32 W) [SPEC], Draht 40067, Low-Wort zuerst. Nur die PV am S10 selbst; zusätzliche Einspeiser (40076) siehe _doc.",
+      "enabled": true,
+      "fc": 3,
+      "address": 40067,
+      "quantity": 2,
+      "readType": "int32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0
+    },
+    "selfConsumptionW": {
+      "_comment": "Hausverbrauchs-Leistung, Dok.-Register 40072 (Int32 W) [SPEC], Draht 40071, Low-Wort zuerst. Die E3/DC-Wallbox steht getrennt in 40078 (nicht gelesen); ob 40072 sie enthält, ist am Gerät zu prüfen.",
+      "enabled": true,
+      "fc": 3,
+      "address": 40071,
+      "quantity": 2,
+      "readType": "int32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}
