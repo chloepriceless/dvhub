@@ -193,3 +193,27 @@ test('E3c: SunSpec-Auflösung auch für das float32-Layout (Modell 213: W, WphA�
   assert.equal(state.meter.grid_total_w, 1500);
   assert.equal(state.meter.grid_l3_w, 600);
 });
+
+// Codex 56274de8 (P2): kein „gesunder“ Zähler mit falschem Wert.
+test('E3/Codex: Skalenfaktor (sfAddress/sfOffset) auf einem festen Layout ist ein Zählerfehler — nur layout "point" liest ihn', async () => {
+  const dev = createRegisterDevice();
+  const at = dev.setSunspecChain(40000, [{ id: 1, length: 66 }, { id: 203, length: 105 }]);
+  dev.setWords(at[203][0] + 17, [1000, 2000, 3000, -1 & 0xffff]);
+  const cfg = { victron: V, meter: { fc: 3, quantity: 3, unitId: 1, sunspec: { model: 203, offset: 17, sfOffset: 20 } } };
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  assert.equal(state.meter.ok, false, 'früher ok mit 6000 W statt 600 W');
+  assert.match(state.meter.error, /layout "point"/);
+});
+
+test('E3/Codex: layout point — ungültige Skala macht den Zähler ungültig (kein 0 W „ok“), ungültige Phase bleibt null', async () => {
+  const bad = await poll({ layout: 'point', fc: 3, address: 10, unitId: 1, scale: 'zehn' }, (d) => d.set(10, 5));
+  assert.equal(bad.state.meter.ok, false, 'früher ok mit 0 W');
+  assert.match(bad.state.meter.error, /ungültig/);
+
+  const ph = await poll({ layout: 'point', fc: 3, address: 10, unitId: 1, signed: true, phases: [{ address: 11, scale: 'x' }, { address: 12 }] },
+    (d) => d.set(10, -300).set(11, -100).set(12, -200));
+  assert.equal(ph.state.meter.ok, true, ph.state.meter.error);
+  assert.equal(ph.state.meter.grid_l1_w, null, 'früher 0');
+  assert.equal(ph.state.meter.grid_l2_w, -200);
+});

@@ -730,6 +730,8 @@ export function createPoller(ctx) {
     const ctxRead = { sfCache: cycleSfCache };
     const total = await readPointValue(m, read, ctxRead);
     if (total == null) throw new Error('Zähler meldet keinen Gesamtwert (Register nicht verfügbar)');
+    // Codex 56274de8: NaN/±∞ (z. B. ungültige meter.scale) ist ein Zählerfehler, nie 0 W „ok“.
+    if (!Number.isFinite(total)) throw new Error('Zählerwert ungültig (meter.scale/sign/offset prüfen)');
     const phases = [null, null, null];
     let phaseError = null;
     const list = Array.isArray(m.phases) ? m.phases.slice(0, 3) : [];
@@ -738,7 +740,9 @@ export function createPoller(ctx) {
       if (!pc || awaitsSunspec(pc)) continue;
       try {
         assertReadableAddress(pc, `Zähler-Phase L${i + 1}`);
-        phases[i] = await readPointValue(pc, read, ctxRead);
+        const v = await readPointValue(pc, read, ctxRead);
+        if (v != null && !Number.isFinite(v)) throw new Error('Phasenwert ungültig (scale/sign/offset prüfen)');
+        phases[i] = v;
       } catch (e) {
         phaseError ??= `L${i + 1}: ${e?.message || e}`;
       }
@@ -938,6 +942,10 @@ export function createPoller(ctx) {
           consecutiveErrors: 0,
           nextRetryAt: null
         };
+      } else if (cfg.meter?.sfAddress != null) {
+        // Codex 56274de8: einen Skalenfaktor (sfAddress/sunspec.sfOffset) liest nur layout "point"; die festen Layouts
+        // kennen nur scale/sign. Ohne diese Sperre galt ein SunSpec-Zähler mit SF −1 als gesund mit zehnfachem Wert.
+        throw new Error('meter.sfAddress (SunSpec-Skalenfaktor) braucht meter.layout "point"');
       } else if (String(cfg.meter?.readType || '').toLowerCase() === 'float32') {
         // SunSpec-Float-Meter (B-1112, z. B. Fronius Smart Meter Model 203 @
         // Unit-ID 200): 8 Register = 4×Float32 in der Reihenfolge
