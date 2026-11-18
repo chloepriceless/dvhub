@@ -9,21 +9,36 @@
 // — Grundlage der Kandidatenmengen-Übernahme (VÄ-11) und der Besitzprüfung im Not-Halt-Durchgang.
 //
 // Abweichung von Rust (dort alles unter einer Sperre, also nie zwei Versuche zugleich): Node lässt Legacy-Versuche
-// an denselben Punkt gleichzeitig zu. Jeder Versuch bekommt deshalb eine fortlaufende Nummer; ein `acked` ersetzt
-// nur Versuche, die VOR ihm begonnen haben. Später begonnene bleiben Kandidaten (Codex 7a183a18 P1).
+// an denselben Punkt gleichzeitig zu, und in welcher Reihenfolge überlappende Versuche am Gerät wirken, weiß das Tor
+// nicht. Ein `acked` ersetzt deshalb nur Versuche, die schon ABGESCHLOSSEN waren, als er begann; überlappende bleiben
+// Kandidaten — auch ein vorher bestätigter Wert (Codex 7a183a18 P1, 710d8f36 P1). Nacheinander (wie in Rust) ist das
+// dieselbe Regel wie dort.
+//
+// Ohne Quittung (MQTT QoS 0) endet jeder Versuch `unknown`. Damit die Kandidaten nicht ohne Ende wachsen, steht jeder
+// Wert höchstens einmal in `uncertain[]` (der jüngste Versuch zählt), und mehr als MAX_UNCERTAIN verschiedene Werte
+// werden auf die jüngsten gekürzt — mit `truncated: true`: die Kandidatenmenge ist dann ausdrücklich unvollständig
+// (Codex 710d8f36 P2). Ein später begonnener, quittierter Write hebt die Kürzung wieder auf.
 
 /**
  * @typedef {number|boolean|string} Scalar
- * @typedef {{ confirmed: Scalar|null, uncertain: Scalar[], inflight: Scalar[], sinceMs: number, lastMs: number, source: string }} Owned
+ * @typedef {{ confirmed: Scalar|null, uncertain: Scalar[], inflight: Scalar[], truncated: boolean,
+ *             sinceMs: number, lastMs: number, source: string }} Owned
  */
+
+export const MAX_UNCERTAIN = 32;
 
 const keyOf = (device, point) => `${device}\u0000${point}`;
 
 export function createOwnerRegister() {
-  /** @type {Map<string, { confirmed: { value: Scalar, seq: number }|null, uncertain: { value: Scalar, seq: number }[],
-   *   inflight: Map<number, Scalar>, sinceMs: number, lastMs: number, source: string }>} */
+  /**
+   * Versuch: `begin`/`settle` sind Zeitpunkte einer gemeinsamen Ereignisuhr (Beginn bzw. Ausgang).
+   * @type {Map<string, { confirmed: { value: Scalar, begin: number, settle: number }|null,
+   *   uncertain: { value: Scalar, begin: number, settle: number }[], inflight: Map<number, { value: Scalar, begin: number }>,
+   *   truncatedUpTo: number, sinceMs: number, lastMs: number, source: string }>}
+   */
   const map = new Map();
-  let seq = 0;
+  let clock = 0;
+  let tokens = 0;
 
   /** @returns {Owned|null} Kopie, damit Aufrufer das Register nicht verändern. */
   function get(device, point) {
@@ -32,18 +47,31 @@ export function createOwnerRegister() {
     return {
       confirmed: e.confirmed ? e.confirmed.value : null,
       uncertain: e.uncertain.map((u) => u.value),
-      inflight: [...e.inflight.values()],
+      inflight: [...e.inflight.values()].map((a) => a.value),
+      truncated: e.truncatedUpTo >= 0,
       sinceMs: e.sinceMs,
       lastMs: e.lastMs,
       source: e.source,
     };
   }
 
-  /** Alle Werte, die gerade am Gerät stehen könnten. */
+  /** Alle Werte, die gerade am Gerät stehen könnten (bei `truncated` nicht vollständig). */
   function candidates(device, point) {
     const o = get(device, point);
     if (!o) return [];
     return [...(o.confirmed !== null ? [o.confirmed] : []), ...o.uncertain, ...o.inflight];
+  }
+
+  /** Je Wert nur der jüngste Versuch; höchstens MAX_UNCERTAIN Werte, sonst kürzen und vermerken. */
+  function compact(e, list) {
+    const byValue = new Map();
+    for (const u of list) {
+      const have = byValue.get(u.value);
+      if (!have || u.settle > have.settle) byValue.set(u.value, u);
+    }
+    const sorted = [...byValue.values()].sort((a, b) => b.settle - a.settle);
+    for (const dropped of sorted.slice(MAX_UNCERTAIN)) e.truncatedUpTo = Math.max(e.truncatedUpTo, dropped.settle);
+    e.uncertain = sorted.slice(0, MAX_UNCERTAIN).sort((a, b) => a.settle - b.settle);
   }
 
   /** Vor dem Senden: Versuch eintragen. @returns {number} Kennung des Versuchs für `finish`. */
@@ -51,14 +79,15 @@ export function createOwnerRegister() {
     const k = keyOf(device, point);
     let e = map.get(k);
     if (!e) {
-      e = { confirmed: null, uncertain: [], inflight: new Map(), sinceMs: nowMs, lastMs: nowMs, source };
+      e = { confirmed: null, uncertain: [], inflight: new Map(), truncatedUpTo: -1, sinceMs: nowMs, lastMs: nowMs, source };
       map.set(k, e);
     }
     e.lastMs = nowMs;
     e.source = source;
-    seq += 1;
-    e.inflight.set(seq, value);
-    return seq;
+    clock += 1;
+    tokens += 1;
+    e.inflight.set(tokens, { value, begin: clock });
+    return tokens;
   }
 
   /** Nach dem Senden: Ausgang des Versuchs `token`. */
@@ -66,17 +95,25 @@ export function createOwnerRegister() {
     const k = keyOf(device, point);
     const e = map.get(k);
     if (!e || !e.inflight.has(token)) return;
-    const value = e.inflight.get(token);
+    const a = e.inflight.get(token);
     e.inflight.delete(token);
+    clock += 1;
+    const rec = { value: a.value, begin: a.begin, settle: clock };
     if (delivery === 'acked') {
-      if (!e.confirmed || token > e.confirmed.seq) e.confirmed = { value, seq: token };
-      // Was vor dem bestätigten Write begann, ist überschrieben; später Begonnenes bleibt Kandidat.
-      e.uncertain = e.uncertain.filter((u) => u.seq > e.confirmed.seq);
+      // Überlappt hat, was noch lief, als dieser Write begann (Ausgang danach) — dessen Wert kann danach gewirkt haben.
+      // Ein Kandidat mit demselben Wert wie der bestätigte bringt keine Unsicherheit.
+      const overlapped = (x) => x.settle > rec.begin && x.value !== rec.value;
+      const keep = e.uncertain.filter(overlapped);
+      if (e.confirmed && overlapped(e.confirmed)) keep.push(e.confirmed);
+      e.confirmed = rec;
+      if (e.truncatedUpTo < rec.begin) e.truncatedUpTo = -1; // alles Gekürzte war vorher abgeschlossen → überholt
+      compact(e, keep);
     } else if (delivery === 'unknown') {
-      if (!e.confirmed || token > e.confirmed.seq) e.uncertain.push({ value, seq: token });
+      // Gleicher Wert wie bestätigt: ob er ankam oder nicht, am Gerät steht derselbe Wert — nichts Neues.
+      if (!e.confirmed || e.confirmed.value !== rec.value) compact(e, [...e.uncertain, rec]);
     }
     // 'rejected' / 'notSent': nachweislich nicht angekommen — nur der Versuch fällt raus.
-    if (!e.confirmed && e.uncertain.length === 0 && e.inflight.size === 0) map.delete(k);
+    if (!e.confirmed && e.uncertain.length === 0 && e.inflight.size === 0 && e.truncatedUpTo < 0) map.delete(k);
   }
 
   /** DVhub gibt das Ziel ab (nach bestätigter Rücknahme, Endpunktwechsel, Wegfall der Richtlinie). */

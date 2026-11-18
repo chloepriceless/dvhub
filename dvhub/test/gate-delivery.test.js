@@ -9,6 +9,7 @@ import net from 'node:net';
 
 import {
   classifyModbusError, classifySinkError, classifySinkResult, modbusExceptionCode, MODBUS_EXCEPTION_DELIVERY, createOwnerRegister,
+  MAX_UNCERTAIN,
 } from '../services/gate/index.js';
 import { createModbusTransport } from '../transport-modbus.js';
 import { ReadOnlyViolation } from '../read-only-guard.js';
@@ -166,7 +167,7 @@ test('Einordner der Senke wirft → unknown, submit() wirft nie (der Write ist w
   assert.deepEqual(r.gate.owned(DEVICE, 'emsCmd').uncertain, [170], 'Besitz hält (unknown zählt als angekommen)');
 });
 
-test('Besitzregister: gleichzeitige Versuche — ein ACK ersetzt nur früher begonnene (Codex 7a183a18)', () => {
+test('Besitzregister: überlappende Versuche bleiben Kandidaten — ein ACK ersetzt nur vorher Abgeschlossenes (Codex 7a183a18, 710d8f36)', () => {
   const reg = createOwnerRegister();
   // A, dann B begonnen; A quittiert, B danach unbekannt → B bleibt Kandidat.
   let a = reg.begin('d', 'p', 1, 's', 0);
@@ -175,20 +176,25 @@ test('Besitzregister: gleichzeitige Versuche — ein ACK ersetzt nur früher beg
   assert.deepEqual(reg.candidates('d', 'p'), [1, 2], 'B läuft noch');
   reg.finish('d', 'p', b, 'unknown');
   assert.deepEqual([reg.get('d', 'p').confirmed, reg.get('d', 'p').uncertain], [1, [2]]);
-  // B (später begonnen) quittiert vor A → A ist überholt, auch wenn A danach unbekannt endet.
+  // B quittiert vor A, A endet danach unbekannt: A lief überlappend — er kann NACH B gewirkt haben → Kandidat.
   const reg2 = createOwnerRegister();
   a = reg2.begin('d', 'p', 1, 's', 0);
   b = reg2.begin('d', 'p', 2, 's', 0);
   reg2.finish('d', 'p', b, 'acked');
   reg2.finish('d', 'p', a, 'unknown');
-  assert.deepEqual([reg2.get('d', 'p').confirmed, reg2.get('d', 'p').uncertain], [2, []]);
-  // Späte Quittung des älteren Versuchs überschreibt den neueren bestätigten Wert nicht.
+  assert.deepEqual([reg2.get('d', 'p').confirmed, reg2.get('d', 'p').uncertain], [2, [1]]);
+  // Beide quittiert, in anderer Reihenfolge als begonnen: welcher zuletzt wirkte, weiß das Tor nicht — beide bleiben.
   const reg3 = createOwnerRegister();
   a = reg3.begin('d', 'p', 1, 's', 0);
   b = reg3.begin('d', 'p', 2, 's', 0);
   reg3.finish('d', 'p', b, 'acked');
   reg3.finish('d', 'p', a, 'acked');
-  assert.equal(reg3.get('d', 'p').confirmed, 2);
+  assert.deepEqual(reg3.candidates('d', 'p').sort(), [1, 2]);
+  // Nacheinander (wie in Rust unter der Sperre): der neue ACK ersetzt den alten Wert und alles Unsichere davor.
+  const seq = createOwnerRegister();
+  seq.finish('d', 'p', seq.begin('d', 'p', 1, 's', 0), 'unknown');
+  seq.finish('d', 'p', seq.begin('d', 'p', 2, 's', 0), 'acked');
+  assert.deepEqual([seq.get('d', 'p').confirmed, seq.get('d', 'p').uncertain], [2, []]);
   // Nachweislich nicht angekommen und nichts bestätigt → kein Besitz.
   const reg4 = createOwnerRegister();
   reg4.finish('d', 'p', reg4.begin('d', 'p', 1, 's', 0), 'rejected');
@@ -210,4 +216,39 @@ test('Tor: gleichzeitige Legacy-Writes an einen Punkt — unbekannter späterer 
   assert.deepEqual(r.gate.owned(DEVICE, 'emsCmd').uncertain, [187]);
   const contract = await r.gate.submit(r.op({ value: 170 }));
   assert.equal(contract.outcome, 'ok', '170 muss erneut geschrieben werden — 187 steht womöglich am Gerät');
+});
+
+test('Tor: überlappende Writes in anderer Reihenfolge quittiert — „unverändert“ greift nicht (Codex 710d8f36 P1)', async () => {
+  const holdA = deferred();
+  const holdB = deferred();
+  const holds = [holdA, holdB];
+  const r = rig({ legacy: { mbWriteSingle: () => holds.shift().promise } });
+  const op = (value) => r.op({ value, lease: null, legacy: { sink: 'inv', fn: 'mbWriteSingle', args: [{ address: 13051, value }] } });
+  const a = r.gate.submit(op(170)); // A beginnt zuerst, hängt in der Senke
+  const b = r.gate.submit(op(187));
+  holdB.resolve({});                // B wirkt und wird quittiert …
+  await b;
+  holdA.resolve({});                // … dann wirkt A und wird quittiert: am Gerät steht womöglich 170
+  await a;
+  assert.deepEqual(r.gate.owned(DEVICE, 'emsCmd').uncertain.length, 1);
+  const fix = await r.gate.submit(r.op({ value: 187 }));
+  assert.equal(fix.outcome, 'ok', 'Korrektur auf 187 muss geschrieben werden');
+});
+
+test('Besitzregister: Writes ohne Quittung (MQTT QoS 0) wachsen nicht ohne Ende (Codex 710d8f36 P2)', async () => {
+  const reg = createOwnerRegister();
+  for (let i = 0; i < 10_000; i += 1) reg.finish('d', 'p', reg.begin('d', 'p', 1500, 's', i), 'unknown');
+  assert.deepEqual([reg.get('d', 'p').uncertain, reg.get('d', 'p').truncated], [[1500], false], 'gleicher Wert einmal');
+  for (let i = 0; i < 1000; i += 1) reg.finish('d', 'p', reg.begin('d', 'p', i, 's', i), 'unknown');
+  const o = reg.get('d', 'p');
+  assert.equal(o.uncertain.length, MAX_UNCERTAIN);
+  assert.equal(o.truncated, true, 'gekürzt ist ausdrücklich vermerkt');
+  assert.deepEqual(o.uncertain.slice(-2), [998, 999], 'die jüngsten bleiben');
+  reg.finish('d', 'p', reg.begin('d', 'p', 42, 's', 0), 'acked'); // später begonnen und quittiert
+  assert.deepEqual([reg.get('d', 'p').confirmed, reg.get('d', 'p').uncertain, reg.get('d', 'p').truncated], [42, [], false]);
+  // Über das Tor: MQTT-Senke ohne Quittung, viele gleiche Writes → ein Kandidat, „unverändert“ nie (unbestätigt).
+  const r = rig({ sinks: { mq: { kind: 'mqtt', write: async () => ({ ok: true, topic: 'W/x' }) } },
+    policies: { [DEVICE]: { emsCmd: { class: 'battery_grid', resource: 'batteryControl', sink: 'mq' } } } });
+  for (let i = 0; i < 200; i += 1) assert.equal((await r.gate.submit(r.op())).delivery, 'unknown');
+  assert.deepEqual(r.gate.owned(DEVICE, 'emsCmd').uncertain, [170]);
 });

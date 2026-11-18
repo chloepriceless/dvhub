@@ -39,7 +39,7 @@ import { createOwnerRegister } from './owner.js';
 
 export * from './constants.js';
 export * from './delivery.js';
-export { createOwnerRegister } from './owner.js';
+export { createOwnerRegister, MAX_UNCERTAIN } from './owner.js';
 
 /** @typedef {import('./types.js').GateOp} GateOp */
 /** @typedef {import('./types.js').SubmitResult} SubmitResult */
@@ -146,11 +146,18 @@ function normalizePolicies(input) {
 
 const neutralKind = (pol) => pol?.neutral?.kind ?? 'never';
 
-/** Vergleich von Richtlinien je Gerät (für setPolicies): Reihenfolge der Schlüssel egal. */
+/** JSON mit sortierten Schlüsseln auf jeder Ebene (auch `neutral: { kind, value }`, Codex 710d8f36 P2). */
+function canonicalJson(v) {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  if (v !== null && typeof v === 'object') {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v) ?? 'null';
+}
+
+/** Vergleich von Richtlinien je Gerät (für setPolicies): Reihenfolge der Schlüssel egal, auf jeder Ebene. */
 function policySignature(points) {
-  if (!points) return '';
-  return JSON.stringify([...points.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([p, pol]) => [p, Object.keys(pol).sort().map((k) => [k, pol[k]])]));
+  return points ? canonicalJson(Object.fromEntries(points)) : '';
 }
 
 /** Eigene Eigenschaft — nie über die Prototyp-Kette (`legacy.fn: 'constructor'` ist keine Senke). */
@@ -467,7 +474,7 @@ export function createGate(options = {}) {
     // Lebenszeichen, Schritte und Rücknahmen schreiben immer.
     if (op.legacy || op.kind !== 'write') return null;
     const o = owners.get(op.device, op.point);
-    if (o && o.uncertain.length === 0 && o.inflight.length === 0 && o.confirmed !== null && o.confirmed === op.value) {
+    if (o && !o.truncated && o.uncertain.length === 0 && o.inflight.length === 0 && o.confirmed !== null && o.confirmed === op.value) {
       return block('skipped_unchanged', undefined);
     }
     return null;

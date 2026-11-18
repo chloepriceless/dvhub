@@ -146,12 +146,15 @@ test('setPolicies: geänderte Richtlinie eines Geräts lässt eingereihte und la
   assert.equal(r.gate.leaseEpoch('sungrow-slave', RES), slaveEpoch, 'unverändertes Gerät behält seine Epoche');
 });
 
-test('setPolicies: inhaltsgleiche Richtlinien (andere Schlüsselreihenfolge) erhöhen keine Epoche', () => {
+test('setPolicies: inhaltsgleiche Richtlinien (andere Schlüsselreihenfolge, auch verschachtelt) erhöhen keine Epoche', () => {
   const r = rig();
   const gen = r.gate.releaseGeneration(DEVICE);
   const ep = r.gate.leaseEpoch(DEVICE, RES);
-  const reordered = Object.fromEntries(Object.entries(POLICIES).map(([d, pts]) => [d, Object.fromEntries(Object.entries(pts).reverse()
-    .map(([p, pol]) => [p, Object.fromEntries(Object.entries(pol).reverse())]))]));
+  // Jede Ebene umgedreht, auch `neutral: { kind, value }` → `{ value, kind }` (Codex 710d8f36 P2).
+  const flip = (v) => (v && typeof v === 'object' && !Array.isArray(v)
+    ? Object.fromEntries(Object.entries(v).reverse().map(([k, x]) => [k, flip(x)])) : v);
+  const reordered = flip(POLICIES);
+  assert.deepEqual(Object.keys(reordered[DEVICE].feedLimitPct.neutral), ['value', 'kind']);
   r.gate.setPolicies(reordered);
   assert.equal(r.gate.releaseGeneration(DEVICE), gen);
   assert.equal(r.gate.leaseEpoch(DEVICE, RES), ep);
