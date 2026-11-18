@@ -30,7 +30,7 @@ test('Legacy Modbus: dieselben Argument-Objekte an die Senke, dieselbe Rückgabe
   );
 });
 
-test('Legacy MQTT: Positionsargumente unverändert; ohne Broker (pushOnly) bleibt ok:true, Zusatz pickupPending', async () => {
+test('Legacy MQTT: Positionsargumente unverändert; ohne Quittung unknown, ohne Broker (pushOnly) pickupPending — ok bleibt', async () => {
   const sent = { ok: true, topic: 'W/x/settings/0/Settings/CGwacs/AcPowerSetPoint', value: -500 };
   const pushOnly = { ok: true, topic: null, value: -500, pushOnly: true };
   let next = sent;
@@ -39,7 +39,9 @@ test('Legacy MQTT: Positionsargumente unverändert; ohne Broker (pushOnly) bleib
   const a = await r.gate.submit(op);
   assert.deepEqual(r.calls[0].args, ['gridSetpointW', -500]);
   assert.equal(a.result, sent);
-  assert.deepEqual([a.delivery, a.pickup, a.delivered], ['acked', false, true]);
+  assert.equal(a.result.ok, true);
+  // QoS 0 an den Broker ist keine Quittung der Gegenstelle (D.2: „keine Quittung“) → unknown, womöglich wirksam.
+  assert.deepEqual([a.outcome, a.delivery, a.detail, a.pickup, a.delivered, a.possiblyEffective], ['ok', 'unknown', 'no_ack', false, false, true]);
   next = pushOnly;
   const b = await r.gate.submit(op);
   assert.equal(b.result, pushOnly);
@@ -113,4 +115,19 @@ test('Legacy-Ereignis: dvhub.write/1 mit Vertrauensklasse legacy und Zustellung'
   assert.equal(ev.op_id, res.opId);
   assert.equal(ev.decision_id, 'eval-42-emsMode', 'Rust-Form loop-seq-point');
   assert.equal(ev.target.kind, 'modbus');
+});
+
+test('Legacy: Senke und Funktion nur als eigene Eigenschaft — Prototyp-Namen sind keine Senke', async () => {
+  const r = rig({ legacy: { mbWriteSingle: async () => ({}) } });
+  for (const legacy of [
+    { sink: 'inv', fn: 'constructor', args: [] },
+    { sink: 'inv', fn: 'toString', args: [] },
+    { sink: 'inv', fn: '__proto__', args: [] },
+    { sink: 'constructor', fn: 'mbWriteSingle', args: [] },
+    { sink: '__proto__', fn: 'mbWriteSingle', args: [] },
+  ]) {
+    const res = await r.gate.submit(legacyOp(r, legacy));
+    assert.deepEqual([res.outcome, res.detail, res.delivery], ['blocked_gate', 'no_sink', null], `${legacy.sink}.${legacy.fn}`);
+  }
+  assert.equal(r.calls.length, 0);
 });

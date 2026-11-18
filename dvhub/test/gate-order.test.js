@@ -13,12 +13,14 @@ import { rig, DEVICE } from './helpers/gate-rig.js';
 // Je Prüfung: wie man sie (unabhängig von den anderen) zum Scheitern bringt, und was sie dann meldet.
 const FAIL = {
   halt: { setup: (r) => { r.flags.halt = true; }, expect: ['blocked_nothalt', 'not_halt'] },
-  deadline: { op: (o, r) => ({ ...o, validUntilMs: r.now() - 1 }), expect: ['blocked_gate', 'expired'] },
+  deadline: { field: 'validUntilMs', op: (o, r) => ({ ...o, validUntilMs: r.now() - 1 }), expect: ['blocked_gate', 'expired'] },
   readOnly: { setup: (r) => { r.flags.readOnly = true; }, expect: ['blocked_readonly', 'read_only'] },
   release: { setup: (r) => { r.gate.setRelease(DEVICE, 'profileInvalid'); }, expect: ['blocked_gate', 'profile_invalid'] },
-  target: { op: (o) => ({ ...o, point: 'unbekanntesZiel' }), expect: ['blocked_gate', 'unknown_target'] },
-  lease: { op: (o) => ({ ...o, lease: { ...o.lease, epoch: o.lease.epoch - 1 } }), expect: ['blocked_gate', 'lease_epoch_stale'] },
-  constraint: { op: (o) => ({ ...o, constraints: { ...o.constraints, set: { noGridCharge: true } } }), expect: ['blocked_gate', 'constraint'] },
+  // Freigabestufe statt unbekanntem Punkt: derselbe Punkt, damit Einschränkung und „unverändert“ weiter scheitern
+  // (Codex 21794f28 P2 — ein anderer Punkt hätte die konkurrierenden Befunde still entschärft).
+  target: { setup: (r) => { r.gate.setReleased(['dv_curtail']); }, expect: ['blocked_gate', 'stage_not_released'] },
+  lease: { field: 'lease', op: (o) => ({ ...o, lease: { ...o.lease, epoch: o.lease.epoch - 1 } }), expect: ['blocked_gate', 'lease_epoch_stale'] },
+  constraint: { field: 'constraints', op: (o) => ({ ...o, constraints: { ...o.constraints, set: { noGridCharge: true } } }), expect: ['blocked_gate', 'constraint'] },
   // „unverändert“: derselbe Wert wurde vorher quittiert geschrieben (Besitz bestätigt, nichts unsicher).
   unchanged: { seed: true, expect: ['skipped_unchanged', undefined] },
 };
@@ -32,8 +34,13 @@ async function runWith(names) {
     seeded = 1;
   }
   for (const n of names) FAIL[n].setup?.(r);
-  let op = r.op();
+  const base = r.op();
+  let op = base;
   for (const n of names) if (FAIL[n].op) op = FAIL[n].op(op, r);
+  // Kein Fehlerbild darf ein anderes entschärfen: jedes ändert nur sein eigenes Feld (Punkt, Wert, Gerät bleiben die
+  // Grundlage für Einschränkung und „unverändert“ — Codex 21794f28 P2).
+  const changed = Object.keys(op).filter((k) => JSON.stringify(op[k]) !== JSON.stringify(base[k])).sort();
+  assert.deepEqual(changed, names.map((n) => FAIL[n].field).filter(Boolean).sort(), `Fehlerbilder ${names} überlappen`);
   const res = await r.gate.submit(op);
   return { r, res, seeded };
 }
@@ -79,6 +86,13 @@ for (let i = 0; i < PRE_CHECKS.length; i += 1) {
     });
   }
 }
+
+test('Vorprüfung 5: unbekanntes Ziel → unknown_target (wie Rust), auch vor Lease und Einschränkung', async () => {
+  const r = rig();
+  const res = await r.gate.submit(r.op({ point: 'unbekanntesZiel', lease: { resource: 'x', epoch: 99 }, constraints: { set: { noGridCharge: true }, caps: {}, enforcedBy: [] } }));
+  assert.deepEqual([res.outcome, res.detail, res.blockedBy], ['blocked_gate', 'unknown_target', 'target']);
+  assert.equal(r.calls.length, 0);
+});
 
 test('Vorprüfung 5: Freigabestufe nicht freigegeben → stage_not_released (wie Rust)', async () => {
   const r = rig({ released: ['dv_curtail'] });

@@ -97,11 +97,12 @@
  *   class: string, resource?: string|null, sink?: string, targetKind?: string, unit?: string,
  *   neutral?: { kind: 'never' } | { kind: 'fixed', value: Scalar } | { kind: 'restoreBefore', fallback?: Scalar }
  *           | { kind: 'sequence', use: string },
- *   forceRelease?: Scalar[]
+ *   neutralValues?: Scalar[]
  * }} PointPolicy
  *   Richtlinie je Ziel (Rust `PointPolicy`, Anhang I). `resource` gruppiert Punkte (H-5); `neutral` fehlt = `never`
- *   (H-8: was DVhub nie gesetzt hat, wird nie neutralisiert). `forceRelease` = Literalwerte Richtung Grundzustand, die
- *   eine manuelle Zwangsfreigabe schreiben darf (H-7); bei `neutral.kind === 'fixed'` ist der feste Wert erlaubt.
+ *   (H-8: was DVhub nie gesetzt hat, wird nie neutralisiert). `neutralValues` = Literalwerte Richtung Grundzustand, die
+ *   der Not-Halt-Durchgang und die manuelle Zwangsfreigabe (H-7) schreiben dürfen; dazu der feste Wert bei `fixed`
+ *   und der Ersatzwert bei `restoreBefore`.
  */
 
 export {};

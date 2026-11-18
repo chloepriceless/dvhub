@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ACTIONS } from '../services/gate/index.js';
-import { rig, DEVICE } from './helpers/gate-rig.js';
+import { rig, deferred, DEVICE } from './helpers/gate-rig.js';
 
 const force = (r, over = {}) => r.op({ action: 'manualForceRelease', kind: 'restore', lease: null, confirmedBy: 'christin', value: 204, source: 'manual_release', ...over });
 
@@ -135,7 +135,7 @@ test('Not-Halt-Zustand unlesbar → wie Not-Halt (fail-closed); H-7 bleibt mögl
   const calls = [];
   const broken = createGate({
     sinks: { inv: { kind: 'modbus', write: (w) => { calls.push(w); return {}; } } },
-    policies: { [DEVICE]: { emsCmd: { class: 'battery_grid', resource: 'batteryControl', sink: 'inv', forceRelease: [204], neutral: { kind: 'sequence', use: 'release' } } } },
+    policies: { [DEVICE]: { emsCmd: { class: 'battery_grid', resource: 'batteryControl', sink: 'inv', neutralValues: [204], neutral: { kind: 'sequence', use: 'release' } } } },
     released: ['battery_grid'],
     isHalted: () => { throw new Error('control_state.json unlesbar'); },
     isReadOnly: () => false,
@@ -146,4 +146,54 @@ test('Not-Halt-Zustand unlesbar → wie Not-Halt (fail-closed); H-7 bleibt mögl
   const rel = await broken.submit(force(r));
   assert.equal(rel.outcome, 'ok');
   assert.equal(calls.length, 1);
+});
+
+test('Durchgang: haltNeutralize schreibt nur ein Grundzustands-Literal — nie einen Sollwert unter dem Namen der Rücknahme', async () => {
+  const r = rig();
+  const pvLease = () => ({ resource: 'pvExport', epoch: r.gate.leaseEpoch(DEVICE, 'pvExport') });
+  assert.equal((await r.gate.submit(r.op({ point: 'feedLimitPct', value: 50, lease: pvLease() }))).outcome, 'ok');
+  assert.equal((await r.gate.submit(r.op())).outcome, 'ok'); // emsCmd = 170 im Besitz
+  const before = r.calls.length;
+  r.flags.halt = true;
+  const pass = (over) => r.op({ action: 'haltNeutralize', kind: 'neutralize', lease: null, source: 'emergency_stop', ...over });
+  for (const [point, value] of [['feedLimitPct', 999], ['feedLimitPct', 0], ['emsCmd', 170], ['emsCmd', 187]]) {
+    const res = await r.gate.submit(pass({ point, value }));
+    assert.deepEqual([res.outcome, res.detail], ['blocked_nothalt', 'neutralize_not_neutral'], `${point}=${value}`);
+  }
+  assert.equal(r.calls.length, before, 'kein Sollwert im Not-Halt');
+  assert.equal((await r.gate.submit(pass({ point: 'feedLimitPct', value: 100 }))).outcome, 'ok', 'fester Neutralwert');
+  assert.equal((await r.gate.submit(pass({ point: 'emsCmd', value: 204 }))).outcome, 'ok', 'Literal der Rücknahme-Folge');
+});
+
+test('Sperrmarke: was vor dem Not-Halt eingereiht war, geht auch nach dem Aufheben nie raus (Codex 7a183a18)', async () => {
+  const hold = deferred();
+  let n = 0;
+  const r = rig({ sinkWrite: () => (n++ === 0 ? hold.promise : {}) });
+  const first = r.gate.submit(r.op());                                            // hängt in der Senke
+  const queued = r.gate.submit(r.op({ point: 'emsPower', value: 1500, step: 1 }));  // vor dem Not-Halt eingereiht
+  const release = r.gate.submit(force(r, { step: 2 }));                            // Zwangsfreigabe: bleibt erlaubt
+  await new Promise((res) => setImmediate(res));
+  r.flags.halt = true;
+  const duringHalt = r.gate.submit(r.op({ point: 'emsMode', value: 2, step: 3 }));  // im Not-Halt eingereicht
+  r.flags.halt = false; // aufgehoben, bevor die Warteschlange drankommt
+  hold.resolve({});
+  const [a, b, c, d] = await Promise.all([first, queued, release, duringHalt]);
+  assert.equal(a.outcome, 'ok');
+  assert.deepEqual([b.outcome, b.detail], ['blocked_nothalt', 'fenced']);
+  assert.equal(c.outcome, 'ok', 'Zwangsfreigabe Richtung Grundzustand ist nie veraltet');
+  assert.deepEqual([d.outcome, d.detail], ['blocked_nothalt', 'fenced'], 'im Not-Halt eingereicht → nie');
+  assert.deepEqual(r.calls.map((x) => x.wireOp.point), ['emsCmd', 'emsCmd']);
+  assert.equal((await r.gate.submit(r.op({ point: 'emsPower', value: 1500, step: 4 }))).outcome, 'ok', 'neu nach dem Aufheben: geht');
+});
+
+test('Sperrmarke: gate.fence() greift auch, wenn das Tor den Not-Halt selbst nie gesehen hat; isCurrent() bleibt falsch', async () => {
+  const seen = [];
+  const r = rig({ sinkWrite: (_w, ctx) => { seen.push(ctx.isCurrent()); r.gate.fence(); seen.push(ctx.isCurrent()); return {}; } });
+  await r.gate.submit(r.op());
+  assert.deepEqual(seen, [true, false]);
+  // Kurzer Not-Halt zwischen zwei Abfragen der Senke: danach weiter veraltet.
+  const seen2 = [];
+  const r2 = rig({ sinkWrite: (_w, ctx) => { r2.flags.halt = true; seen2.push(ctx.isCurrent()); r2.flags.halt = false; seen2.push(ctx.isCurrent()); return {}; } });
+  await r2.gate.submit(r2.op());
+  assert.deepEqual(seen2, [false, false]);
 });

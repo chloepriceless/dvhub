@@ -52,8 +52,8 @@ const CONSTRAINT_NUM_KEYS = new Set(['maxChargeW', 'maxDischargeW', 'socFloorPct
 const SINK_KINDS = new Set(['modbus', 'mqtt', 'http', 'pickup']);
 // Ereignis-Zielart wie Rust `TargetKind`; die HTTP-Abholung ist dort `http`.
 const EVENT_TARGET_KIND = { modbus: 'modbus', mqtt: 'mqtt', http: 'http', pickup: 'http' };
-// Wie viele opId-Grundformen sich das Tor für die Eindeutigkeit merkt (je Versuch eindeutig, §0.2).
-const OPID_MEMORY = 10_000;
+// Wie viele Takte je Schleife sich das Tor für die Eindeutigkeit der opId merkt (je Versuch eindeutig, §0.2).
+const OPID_TICKS = 1000;
 
 /** Vom Tor gesperrt oder ausgelassen — für Legacy-Aufrufer, die heute auf einen Fehler warten. */
 export class GateBlockedError extends Error {
@@ -146,11 +146,26 @@ function normalizePolicies(input) {
 
 const neutralKind = (pol) => pol?.neutral?.kind ?? 'never';
 
-/** Darf eine manuelle Zwangsfreigabe diesen Wert schreiben? Nur feste Literale Richtung Grundzustand (H-7). */
+/** Vergleich von Richtlinien je Gerät (für setPolicies): Reihenfolge der Schlüssel egal. */
+function policySignature(points) {
+  if (!points) return '';
+  return JSON.stringify([...points.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([p, pol]) => [p, Object.keys(pol).sort().map((k) => [k, pol[k]])]));
+}
+
+/** Eigene Eigenschaft — nie über die Prototyp-Kette (`legacy.fn: 'constructor'` ist keine Senke). */
+const own = (obj, key) => (obj != null && Object.hasOwn(obj, key) ? obj[key] : undefined);
+
+/**
+ * Ist der Wert ein festes Literal Richtung Grundzustand? Gilt für den Not-Halt-Durchgang (`haltNeutralize`) und die
+ * manuelle Zwangsfreigabe (H-7): `neutralValues` der Richtlinie, der feste Wert bei `fixed`, der Ersatzwert bei
+ * `restoreBefore`. Bei `never` nichts (H-8: nie gesetzt → nie zurückgesetzt).
+ */
 function isNeutralLiteral(pol, value) {
-  if (!pol || neutralKind(pol) === 'never') return false; // H-8: nie gesetzt → nie zurückgesetzt
-  const literals = Array.isArray(pol.forceRelease) ? [...pol.forceRelease] : [];
+  if (!pol || neutralKind(pol) === 'never') return false;
+  const literals = Array.isArray(pol.neutralValues) ? [...pol.neutralValues] : [];
   if (pol.neutral?.kind === 'fixed') literals.push(pol.neutral.value);
+  if (pol.neutral?.kind === 'restoreBefore' && pol.neutral.fallback !== undefined) literals.push(pol.neutral.fallback);
   return literals.some((l) => l === value);
 }
 
@@ -169,6 +184,7 @@ function isNeutralLiteral(pol, value) {
  *   now?: () => number,
  *   configRev?: string|null,
  *   licensePro?: boolean,
+ *   opIdTicks?: number,
  * }} [options]
  */
 export function createGate(options = {}) {
@@ -182,6 +198,7 @@ export function createGate(options = {}) {
     now = Date.now,
     configRev = null,
     licensePro = false,
+    opIdTicks = OPID_TICKS,
   } = options;
   for (const [name, spec] of Object.entries(sinks)) {
     if (!spec || !SINK_KINDS.has(spec.kind)) throw new TypeError(`Senke ${name}: kind muss modbus|mqtt|http|pickup sein`);
@@ -196,8 +213,15 @@ export function createGate(options = {}) {
   const leaseEpochs = new Map();
   /** @type {Map<string, Promise<unknown>>} Warteschlange je Gerät (nur Vertragsoperationen) */
   const chains = new Map();
-  const issuedOpIds = new Map();
+  /** @type {Map<string, { horizon: number, seqs: Map<number, Map<string, number>> }>} opId-Gedächtnis je Schleife */
+  const opIdMemory = new Map();
+  let uniqueCounter = 0;
   let invalidCounter = 0;
+  // Not-Halt-Sperrmarke (wie fenceModbusWrites, nur im Tor): steigt bei jedem Not-Halt-Eintritt — gemeldet über
+  // fence() oder vom Tor selbst beobachtet. Vor dem Eintritt zugelassene Operationen gehen danach nie mehr raus,
+  // auch nicht nach dem Aufheben (Codex 7a183a18 P1).
+  let fenceGen = 0;
+  let lastHalted = false;
 
   const policyOf = (device, point) => policies.get(device)?.get(point) ?? null;
   const epochKey = (device, resource) => `${device}\u0000${resource}`;
@@ -230,6 +254,14 @@ export function createGate(options = {}) {
     return set;
   }
 
+  /** Gerätegeneration und alle Lease-Epochen des Geräts erhöhen: zugelassene Operationen verfallen. */
+  function bumpDevice(device, extraResources = []) {
+    const r = rel(device);
+    r.gen += 1;
+    for (const resource of new Set([...resourcesOf(device), ...extraResources])) advanceLeaseEpoch(device, resource);
+    return r.gen;
+  }
+
   /**
    * Freigabezustand eines Geräts setzen. Jeder WECHSEL erhöht die Epoche (R-T5): die Gerätegeneration und die
    * Lease-Epoche jeder Ressource des Geräts. Eingereihte Operationen mit alter Epoche verfallen in Vorprüfung 6.
@@ -240,13 +272,15 @@ export function createGate(options = {}) {
     const r = rel(device);
     if (r.state === state) return { changed: false, generation: r.gen };
     r.state = state;
-    r.gen += 1;
     r.passDone = new Set(); // neuer Abschnitt: R-T2.3 erlaubt wieder genau einen Rücknahme-Durchgang je Punkt
-    for (const resource of resourcesOf(device)) advanceLeaseEpoch(device, resource);
-    return { changed: true, generation: r.gen };
+    return { changed: true, generation: bumpDevice(device) };
   }
 
-  /** Richtlinien ersetzen. Besitz an Punkten, deren Richtlinie wegfällt oder deren Senke/Ressource wechselt, verfällt. */
+  /**
+   * Richtlinien ersetzen. Ändert sich irgendetwas an den Richtlinien eines Geräts, verfallen dessen eingereihte und
+   * laufende Operationen (neue Generation und Lease-Epochen) — sie wurden gegen das alte Ziel zugelassen (Codex
+   * 7a183a18 P1). Besitz an Punkten, deren Richtlinie wegfällt oder deren Senke/Ressource wechselt, verfällt.
+   */
   function setPolicies(next) {
     const fresh = normalizePolicies(next);
     for (const [device, point] of owners.keys()) {
@@ -254,56 +288,104 @@ export function createGate(options = {}) {
       const b = fresh.get(device)?.get(point) ?? null;
       if (!a || !b || a.sink !== b.sink || a.resource !== b.resource) owners.release(device, point);
     }
+    const changed = [];
+    for (const device of new Set([...policies.keys(), ...fresh.keys()])) {
+      if (policySignature(policies.get(device)) !== policySignature(fresh.get(device))) changed.push(device);
+    }
+    const oldResources = new Map(changed.map((d) => [d, [...resourcesOf(d)]]));
     policies = fresh;
+    for (const device of changed) bumpDevice(device, oldResources.get(device));
+  }
+
+  /** Not-Halt-Eintritt melden (wie fenceModbusWrites): alles vorher Zugelassene verfällt. */
+  function fence() {
+    fenceGen += 1;
+    return fenceGen;
   }
 
   function setReleased(classes) {
     released = new Set(classes || []);
   }
 
+  /**
+   * opId je Versuch eindeutig. Gemerkt werden die letzten `opIdTicks` Takte je Schleife (exakt, Grundform plus `~n`
+   * bei Wiederholung). Ein Takt, der älter als das Gedächtnis ist, bekommt einen nie wiederkehrenden Zusatz `~u<n>`
+   * — so kann eine opId auch nach dem Vergessen nicht doppelt vorkommen (Codex 7a183a18 P2).
+   */
   function nextOpId(op) {
     const base = `${op.tick.loop}-${op.tick.seq}-${op.device}-${op.point}-${op.step}`;
-    const n = (issuedOpIds.get(base) ?? 0) + 1;
-    issuedOpIds.delete(base);
-    issuedOpIds.set(base, n);
-    if (issuedOpIds.size > OPID_MEMORY) issuedOpIds.delete(issuedOpIds.keys().next().value);
+    let mem = opIdMemory.get(op.tick.loop);
+    if (!mem) {
+      mem = { horizon: -1, seqs: new Map() };
+      opIdMemory.set(op.tick.loop, mem);
+    }
+    if (op.tick.seq <= mem.horizon) {
+      uniqueCounter += 1;
+      return `${base}~u${uniqueCounter}`;
+    }
+    let bucket = mem.seqs.get(op.tick.seq);
+    if (!bucket) {
+      bucket = new Map();
+      mem.seqs.set(op.tick.seq, bucket);
+      while (mem.seqs.size > opIdTicks) {
+        const oldest = Math.min(...mem.seqs.keys());
+        mem.seqs.delete(oldest);
+        mem.horizon = Math.max(mem.horizon, oldest);
+      }
+      if (op.tick.seq <= mem.horizon) { // der neue Takt war selbst der älteste
+        uniqueCounter += 1;
+        return `${base}~u${uniqueCounter}`;
+      }
+    }
+    const n = (bucket.get(base) ?? 0) + 1;
+    bucket.set(base, n);
     return n === 1 ? base : `${base}~${n}`;
   }
 
   function haltedNow() {
+    let halted;
+    let unknown = false;
     try {
-      return { halted: isHalted() === true, unknown: false };
+      halted = isHalted() === true;
     } catch {
-      return { halted: true, unknown: true }; // Not-Halt-Zustand unbekannt → als Not-Halt behandeln
+      halted = true; // Not-Halt-Zustand unbekannt → als Not-Halt behandeln
+      unknown = true;
     }
+    if (halted && !lastHalted) fenceGen += 1; // selbst beobachteter Eintritt — fence() ist der verlässliche Weg
+    lastHalted = halted;
+    return { halted, unknown };
   }
+
+  const HALT_EXEMPT = new Set(['haltNeutralize', 'manualForceRelease']);
 
   const block = (outcome, detail, extra = {}) => ({ outcome, detail, ...extra });
 
   // --- die acht Vorprüfungen (je: null = weiter, sonst Ergebnis) -------------------------------------------------
 
-  function checkHalt(op, pol) {
+  function checkHalt(op, pol, adm) {
     const { halted, unknown } = haltedNow();
-    const legacy = Boolean(op.legacy);
+    const stopped = halted ? 'blocked_nothalt' : 'blocked_gate';
     if (op.action === 'manualForceRelease') {
       // H-7: einzige Ausnahme im Not-Halt — ausdrückliche Bedienhandlung, feste Literalfolge Richtung Grundzustand,
       // nie ein Sollwert. Gilt als Klassen-Definition auch außerhalb des Not-Halts.
-      const outcome = halted ? 'blocked_nothalt' : 'blocked_gate';
-      if (!isNonEmptyString(op.confirmedBy)) return block(outcome, DETAIL.forceReleaseUnconfirmed);
-      if (!isNeutralLiteral(pol, op.value)) return block(outcome, DETAIL.forceReleaseNotNeutral);
-      return null;
-    }
-    if (!halted) {
-      // Der Durchgang gehört dem Not-Halt; außerhalb ist die Klasse ein Umweg an Lease und Freigabe vorbei.
-      if (!legacy && op.action === 'haltNeutralize') return block('blocked_gate', DETAIL.neutralizeOutsideHalt);
+      if (!isNonEmptyString(op.confirmedBy)) return block(stopped, DETAIL.forceReleaseUnconfirmed);
+      if (!isNeutralLiteral(pol, op.value)) return block(stopped, DETAIL.forceReleaseNotNeutral);
       return null;
     }
     if (op.action === 'haltNeutralize') {
+      // Der Durchgang gehört dem Not-Halt; außerhalb ist die Klasse ein Umweg an Lease und Freigabe vorbei
+      // (im Legacy-Modus entscheidet der Pfad wie heute, wann er zurücknimmt).
+      if (!halted && !op.legacy) return block('blocked_gate', DETAIL.neutralizeOutsideHalt);
       // H-8: was DVhub nie setzt (Min-SoC, Ladestrom, Netz-Sollwert: `never`), wird im Durchgang nie geschrieben.
       if (pol && neutralKind(pol) === 'never') return block('skipped_not_owned', DETAIL.neverNeutralized);
+      // Nur ein Literal Richtung Grundzustand — nie ein Sollwert unter dem Namen der Rücknahme (Codex 7a183a18 P1).
+      if (pol && !isNeutralLiteral(pol, op.value)) return block(stopped, DETAIL.neutralizeNotNeutral);
       return null;
     }
-    return block('blocked_nothalt', unknown ? DETAIL.haltStateUnknown : DETAIL.notHalt);
+    if (halted) return block('blocked_nothalt', unknown ? DETAIL.haltStateUnknown : DETAIL.notHalt);
+    // Nach dem Aufheben: was vor dem Eintritt oder während des Not-Halts zugelassen wurde, geht nie mehr raus.
+    if (adm.halted || adm.fence !== fenceGen) return block('blocked_nothalt', DETAIL.fenced);
+    return null;
   }
 
   function checkDeadline(op) {
@@ -346,7 +428,7 @@ export function createGate(options = {}) {
     return null;
   }
 
-  function checkLease(op, pol, admittedGen) {
+  function checkLease(op, pol, adm) {
     const legacy = Boolean(op.legacy);
     if (op.action !== 'manualForceRelease') {
       if (op.lease) {
@@ -357,7 +439,7 @@ export function createGate(options = {}) {
       }
     }
     // R-T5: zwischen Einreichen und Ausführen hat sich der Freigabezustand geändert → verfallen.
-    if (rel(op.device).gen !== admittedGen) return block('blocked_gate', DETAIL.epochStale);
+    if (rel(op.device).gen !== adm.gen) return block('blocked_gate', DETAIL.epochStale);
     // A.5: der Not-Halt-Durchgang braucht einen Eigentumsbeleg (im Legacy-Modus entscheidet der Pfad wie heute).
     if (!legacy && op.action === 'haltNeutralize' && owners.candidates(op.device, op.point).length === 0) {
       return block('skipped_not_owned', DETAIL.notControlled);
@@ -368,7 +450,7 @@ export function createGate(options = {}) {
   function checkConstraint(op, pol) {
     // Not-Halt-Durchgang und Zwangsfreigabe schreiben nur Grundzustand (Vorprüfung 1) — eine Einschränkung hält
     // eine Rücknahme nie auf.
-    if (op.action === 'haltNeutralize' || op.action === 'manualForceRelease') return null;
+    if (HALT_EXEMPT.has(op.action)) return null; // Wert ist in Vorprüfung 1 als Grundzustands-Literal geprüft
     let verdict;
     try {
       verdict = checkConstraints(op, pol);
@@ -385,7 +467,7 @@ export function createGate(options = {}) {
     // Lebenszeichen, Schritte und Rücknahmen schreiben immer.
     if (op.legacy || op.kind !== 'write') return null;
     const o = owners.get(op.device, op.point);
-    if (o && o.uncertain.length === 0 && o.confirmed !== null && o.confirmed === op.value) {
+    if (o && o.uncertain.length === 0 && o.inflight.length === 0 && o.confirmed !== null && o.confirmed === op.value) {
       return block('skipped_unchanged', undefined);
     }
     return null;
@@ -455,18 +537,18 @@ export function createGate(options = {}) {
 
   // --- Bewertung einer Operation ------------------------------------------------------------------------------------
 
-  async function evaluate(op, opId, admittedGen) {
+  async function evaluate(op, opId, adm) {
     let pol = null;
     let decided = null;
     try {
       pol = policyOf(op.device, op.point);
       const checks = {
-        halt: () => checkHalt(op, pol),
+        halt: () => checkHalt(op, pol, adm),
         deadline: () => checkDeadline(op),
         readOnly: () => checkReadOnly(op),
         release: () => checkRelease(op),
         target: () => checkTarget(op, pol),
-        lease: () => checkLease(op, pol, admittedGen),
+        lease: () => checkLease(op, pol, adm),
         constraint: () => checkConstraint(op, pol),
         unchanged: () => checkUnchanged(op),
       };
@@ -481,18 +563,18 @@ export function createGate(options = {}) {
     } catch {
       decided = { outcome: 'blocked_gate', detail: DETAIL.gateError, blockedBy: 'shape' }; // fail-closed
     }
-    if (decided) return finalize(op, opId, decided, pol, op.legacy ? sinks[op.legacy.sink]?.kind : sinks[pol?.sink]?.kind);
+    if (decided) return finalize(op, opId, decided, pol, (op.legacy ? own(sinks, op.legacy.sink) : own(sinks, pol?.sink))?.kind);
 
     // Zustellung: Senke wählen.
-    const spec = op.legacy ? sinks[op.legacy.sink] : sinks[pol.sink];
-    const fn = op.legacy ? spec?.legacy?.[op.legacy.fn] : spec?.write;
+    const spec = op.legacy ? own(sinks, op.legacy.sink) : own(sinks, pol.sink);
+    const fn = op.legacy ? own(spec?.legacy, op.legacy.fn) : own(spec, 'write');
     if (typeof fn !== 'function') {
       return finalize(op, opId, { outcome: 'blocked_gate', detail: DETAIL.noSink, blockedBy: 'dispatch' }, pol, spec?.kind);
     }
     const r = rel(op.device);
     if (r.state === 'profileInvalid' && op.action === 'safetyRelease') r.passDone.add(op.point); // auch ein Abbruch zählt
     // Besitz beginnt VOR dem Senden (A.3).
-    owners.begin(op.device, op.point, op.value, op.source, now());
+    const attempt = owners.begin(op.device, op.point, op.value, op.source, now());
 
     let out;
     let err;
@@ -508,9 +590,9 @@ export function createGate(options = {}) {
         };
         // Sperrmarke für alle Senken (R-L6): eine Senke mit eigener Warteschlange fragt direkt vor dem Draht.
         const ctx = {
-          isCurrent: () => rel(op.device).gen === admittedGen
+          isCurrent: () => rel(op.device).gen === adm.gen
             && (!op.lease || op.lease.epoch === leaseEpoch(op.device, op.lease.resource))
-            && (op.action === 'haltNeutralize' || op.action === 'manualForceRelease' || !haltedNow().halted),
+            && (HALT_EXEMPT.has(op.action) || (!haltedNow().halted && !adm.halted && adm.fence === fenceGen)),
         };
         out = await fn(wireOp, ctx);
       }
@@ -528,7 +610,7 @@ export function createGate(options = {}) {
       classified = { delivery: 'unknown' }; // Einordnung kaputt: im Zweifel womöglich angekommen (IOP-5)
     }
     const delivery = DELIVERIES.includes(classified?.delivery) ? classified.delivery : 'unknown';
-    owners.finish(op.device, op.point, op.value, delivery);
+    owners.finish(op.device, op.point, attempt, delivery);
     const r2 = {
       outcome: threw ? 'error' : 'ok',
       delivery,
@@ -574,14 +656,17 @@ export function createGate(options = {}) {
       };
     }
     const opId = nextOpId(op);
-    const admittedGen = rel(op.device).gen; // Zulassung: Epoche jetzt festhalten (R-T5)
-    if (op.legacy) return evaluate(op, opId, admittedGen);
-    return enqueue(op.device, () => evaluate(op, opId, admittedGen));
+    // Zulassung: Epoche, Not-Halt-Sperrmarke und Not-Halt jetzt festhalten (R-T5, R-L6).
+    const { halted } = haltedNow();
+    const adm = { gen: rel(op.device).gen, fence: fenceGen, halted };
+    if (op.legacy) return evaluate(op, opId, adm);
+    return enqueue(op.device, () => evaluate(op, opId, adm));
   }
 
   return {
     submit,
     setRelease,
+    fence,
     releaseState: (device) => rel(device).state,
     releaseGeneration: (device) => rel(device).gen,
     leaseEpoch,

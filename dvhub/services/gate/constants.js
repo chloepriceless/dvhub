@@ -76,7 +76,9 @@ export const DETAIL = Object.freeze({
   invalidOp: 'invalid_op',
   notHalt: 'not_halt',
   haltStateUnknown: 'halt_state_unknown',
+  fenced: 'fenced',
   neverNeutralized: 'never_neutralized',
+  neutralizeNotNeutral: 'neutralize_not_neutral',
   forceReleaseUnconfirmed: 'force_release_unconfirmed',
   forceReleaseNotNeutral: 'force_release_not_neutral',
   neutralizeOutsideHalt: 'neutralize_outside_halt',
@@ -99,6 +101,7 @@ export const DETAIL = Object.freeze({
   noSink: 'no_sink',
   gateError: 'gate_error',
   pickupPending: 'pickupPending',
+  noAck: 'no_ack',
 });
 
 /** `detail` je Freigabezustand (Vorprüfung 4). */

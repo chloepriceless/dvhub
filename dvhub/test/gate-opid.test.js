@@ -56,3 +56,18 @@ test('ungültige Operation bekommt eine eigene, eindeutige Kennung', async () =>
   assert.match(a.opId, /^invalid-\d+$/);
   assert.notEqual(a.opId, b.opId);
 });
+
+test('opId: auch nach dem Vergessen alter Takte nie doppelt (Codex 7a183a18)', async () => {
+  const r = rig({ gateOptions: { opIdTicks: 2 } });
+  const at = (seq) => r.op({ tick: { loop: 'eval', seq }, kind: 'sequenceStep' });
+  const ids = [];
+  for (const seq of [1, 2, 3, 4]) ids.push((await r.gate.submit(at(seq))).opId); // Takt 1 und 2 fallen aus dem Gedächtnis
+  ids.push((await r.gate.submit(at(1))).opId);
+  ids.push((await r.gate.submit(at(1))).opId);
+  ids.push((await r.gate.submit(at(2))).opId);
+  assert.equal(new Set(ids).size, ids.length, ids.join(', '));
+  assert.equal(ids[0], `eval-1-${DEVICE}-emsCmd-0`);
+  assert.match(ids[4], new RegExp(`^eval-1-${DEVICE}-emsCmd-0~u\\d+$`));
+  // Ein anderer Takt-Name hat sein eigenes Gedächtnis.
+  assert.equal((await r.gate.submit(r.op({ tick: { loop: 'poll', seq: 1 }, kind: 'sequenceStep' }))).opId, `poll-1-${DEVICE}-emsCmd-0`);
+});

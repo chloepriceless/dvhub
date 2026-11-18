@@ -8,11 +8,11 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 
 import {
-  classifyModbusError, classifySinkError, classifySinkResult, modbusExceptionCode, MODBUS_EXCEPTION_DELIVERY,
+  classifyModbusError, classifySinkError, classifySinkResult, modbusExceptionCode, MODBUS_EXCEPTION_DELIVERY, createOwnerRegister,
 } from '../services/gate/index.js';
 import { createModbusTransport } from '../transport-modbus.js';
 import { ReadOnlyViolation } from '../read-only-guard.js';
-import { rig, DEVICE } from './helpers/gate-rig.js';
+import { rig, deferred, DEVICE } from './helpers/gate-rig.js';
 
 // Die Tabelle aus §0.2 / H-6, ausgeschrieben.
 const H6 = [
@@ -66,7 +66,9 @@ test('andere Senken: Fehler nur über err.delivery oder Lese-Modus eingeordnet, 
   assert.equal(classifySinkError(new Error('MQTT nicht verbunden')).delivery, 'unknown', 'kein Raten aus Meldungstexten');
   assert.deepEqual(classifySinkResult('mqtt', { ok: true, pushOnly: true }), { delivery: 'unknown', detail: 'pickupPending' });
   assert.deepEqual(classifySinkResult('pickup', undefined), { delivery: 'unknown', detail: 'pickupPending' });
-  assert.deepEqual(classifySinkResult('mqtt', { ok: true, topic: 'W/x' }), { delivery: 'acked' });
+  // Broker mit QoS 0: mqttWrite wartet auf keine Quittung → keine Quittung der Gegenstelle (Codex 7a183a18 P2).
+  assert.deepEqual(classifySinkResult('mqtt', { ok: true, topic: 'W/x' }), { delivery: 'unknown', detail: 'no_ack' });
+  assert.deepEqual(classifySinkResult('mqtt', { ok: true, topic: 'W/x', acked: true }), { delivery: 'acked' });
   assert.deepEqual(classifySinkResult('modbus', undefined), { delivery: 'acked' });
 });
 
@@ -162,4 +164,50 @@ test('Einordner der Senke wirft → unknown, submit() wirft nie (der Write ist w
   const res = await r.gate.submit(r.op());
   assert.deepEqual([res.outcome, res.delivery], ['error', 'unknown']);
   assert.deepEqual(r.gate.owned(DEVICE, 'emsCmd').uncertain, [170], 'Besitz hält (unknown zählt als angekommen)');
+});
+
+test('Besitzregister: gleichzeitige Versuche — ein ACK ersetzt nur früher begonnene (Codex 7a183a18)', () => {
+  const reg = createOwnerRegister();
+  // A, dann B begonnen; A quittiert, B danach unbekannt → B bleibt Kandidat.
+  let a = reg.begin('d', 'p', 1, 's', 0);
+  let b = reg.begin('d', 'p', 2, 's', 0);
+  reg.finish('d', 'p', a, 'acked');
+  assert.deepEqual(reg.candidates('d', 'p'), [1, 2], 'B läuft noch');
+  reg.finish('d', 'p', b, 'unknown');
+  assert.deepEqual([reg.get('d', 'p').confirmed, reg.get('d', 'p').uncertain], [1, [2]]);
+  // B (später begonnen) quittiert vor A → A ist überholt, auch wenn A danach unbekannt endet.
+  const reg2 = createOwnerRegister();
+  a = reg2.begin('d', 'p', 1, 's', 0);
+  b = reg2.begin('d', 'p', 2, 's', 0);
+  reg2.finish('d', 'p', b, 'acked');
+  reg2.finish('d', 'p', a, 'unknown');
+  assert.deepEqual([reg2.get('d', 'p').confirmed, reg2.get('d', 'p').uncertain], [2, []]);
+  // Späte Quittung des älteren Versuchs überschreibt den neueren bestätigten Wert nicht.
+  const reg3 = createOwnerRegister();
+  a = reg3.begin('d', 'p', 1, 's', 0);
+  b = reg3.begin('d', 'p', 2, 's', 0);
+  reg3.finish('d', 'p', b, 'acked');
+  reg3.finish('d', 'p', a, 'acked');
+  assert.equal(reg3.get('d', 'p').confirmed, 2);
+  // Nachweislich nicht angekommen und nichts bestätigt → kein Besitz.
+  const reg4 = createOwnerRegister();
+  reg4.finish('d', 'p', reg4.begin('d', 'p', 1, 's', 0), 'rejected');
+  assert.equal(reg4.get('d', 'p'), null);
+});
+
+test('Tor: gleichzeitige Legacy-Writes an einen Punkt — unbekannter späterer Versuch verhindert „unverändert“', async () => {
+  const holdA = deferred();
+  const holdB = deferred();
+  const holds = [holdA, holdB];
+  const r = rig({ legacy: { mbWriteSingle: () => holds.shift().promise } });
+  const op = (value) => r.op({ value, lease: null, legacy: { sink: 'inv', fn: 'mbWriteSingle', args: [{ address: 13051, value }] } });
+  const a = r.gate.submit(op(170));
+  const b = r.gate.submit(op(187));
+  holdA.resolve({});
+  assert.equal((await a).delivery, 'acked');
+  holdB.reject(new Error('modbus timeout'));
+  assert.equal((await b).delivery, 'unknown');
+  assert.deepEqual(r.gate.owned(DEVICE, 'emsCmd').uncertain, [187]);
+  const contract = await r.gate.submit(r.op({ value: 170 }));
+  assert.equal(contract.outcome, 'ok', '170 muss erneut geschrieben werden — 187 steht womöglich am Gerät');
 });

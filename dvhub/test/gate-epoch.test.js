@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { rig, deferred, DEVICE, RES } from './helpers/gate-rig.js';
+import { rig, deferred, DEVICE, RES, POLICIES } from './helpers/gate-rig.js';
 
 test('Epoche steigt nur bei einem WECHSEL des Freigabezustands — Gerätegeneration und jede Ressource des Geräts', () => {
   const r = rig();
@@ -120,4 +120,39 @@ test('setupIncomplete, notIdentified, identityMismatch: kein Write — auch kein
     }
   }
   assert.equal(r.calls.length, 0);
+});
+
+test('setPolicies: geänderte Richtlinie eines Geräts lässt eingereihte und laufende Operationen verfallen (Codex 7a183a18)', async () => {
+  const hold = deferred();
+  const seen = [];
+  let n = 0;
+  const r = rig({
+    sinkWrite: (_w, ctx) => { seen.push(ctx.isCurrent()); return n++ === 0 ? hold.promise.then(() => { seen.push(ctx.isCurrent()); return {}; }) : {}; },
+    sinks: { other: { kind: 'modbus', write: async () => ({}) } },
+  });
+  const first = r.gate.submit(r.op());
+  const queued = r.gate.submit(r.op({ point: 'emsPower', value: 1500, step: 1 }));
+  await new Promise((res) => setImmediate(res));
+  const slaveEpoch = r.gate.leaseEpoch('sungrow-slave', RES);
+  // Gleiche Ressource und Klasse, aber andere Senke für emsPower.
+  const next = structuredClone(POLICIES);
+  next[DEVICE].emsPower = { ...next[DEVICE].emsPower, sink: 'other' };
+  r.gate.setPolicies(next);
+  hold.resolve();
+  const [a, b] = await Promise.all([first, queued]);
+  assert.equal(a.outcome, 'ok');
+  assert.deepEqual(seen, [true, false], 'laufende Operation: Sperrmarke kippt');
+  assert.deepEqual([b.outcome, b.blockedBy], ['blocked_gate', 'lease'], 'eingereihte Operation verfällt');
+  assert.equal(r.gate.leaseEpoch('sungrow-slave', RES), slaveEpoch, 'unverändertes Gerät behält seine Epoche');
+});
+
+test('setPolicies: inhaltsgleiche Richtlinien (andere Schlüsselreihenfolge) erhöhen keine Epoche', () => {
+  const r = rig();
+  const gen = r.gate.releaseGeneration(DEVICE);
+  const ep = r.gate.leaseEpoch(DEVICE, RES);
+  const reordered = Object.fromEntries(Object.entries(POLICIES).map(([d, pts]) => [d, Object.fromEntries(Object.entries(pts).reverse()
+    .map(([p, pol]) => [p, Object.fromEntries(Object.entries(pol).reverse())]))]));
+  r.gate.setPolicies(reordered);
+  assert.equal(r.gate.releaseGeneration(DEVICE), gen);
+  assert.equal(r.gate.leaseEpoch(DEVICE, RES), ep);
 });

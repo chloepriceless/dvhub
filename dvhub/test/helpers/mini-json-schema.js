@@ -28,7 +28,7 @@ export function validate(root, schema, value, at = '$') {
   for (const k of Object.keys(schema)) if (!KNOWN.has(k)) throw new Error(`Schlüsselwort ${k} nicht unterstützt (${at})`);
   if (schema.$ref) {
     const m = /^#\/\$defs\/(.+)$/.exec(schema.$ref);
-    if (!m || !root.$defs?.[m[1]]) throw new Error(`$ref ${schema.$ref} unauflösbar`);
+    if (!m || !root.$defs || !Object.hasOwn(root.$defs, m[1])) throw new Error(`$ref ${schema.$ref} unauflösbar`);
     errors.push(...validate(root, root.$defs[m[1]], value, at));
   }
   if (schema.type !== undefined) {
@@ -44,7 +44,8 @@ export function validate(root, schema, value, at = '$') {
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
     for (const r of schema.required || []) if (!(r in value)) errors.push(`${at}: ${r} fehlt`);
     for (const [k, v] of Object.entries(value)) {
-      if (schema.properties && k in schema.properties) {
+      // Nur eigene Schlüssel — `constructor`/`toString` stehen sonst über den Prototyp „im Schema“ (Codex 81133b2e P2).
+      if (schema.properties && Object.hasOwn(schema.properties, k)) {
         errors.push(...validate(root, schema.properties[k], v, `${at}.${k}`));
         continue;
       }

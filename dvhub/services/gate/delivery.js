@@ -88,10 +88,17 @@ export function classifySinkError(err) {
  * Erfolgreiche Rückgabe einer Senke → Zustellung. MQTT ohne Broker (`pushOnly`, transport-mqtt.js mqttWrite) und die
  * HTTP-Abholung senden nichts: der Wert liegt abholbereit und kann jederzeit wirken → `unknown` + `pickupPending`
  * (B.5 „HTTP-Abholung“).
+ * MQTT mit Broker: `mqttWrite` übergibt mit QoS 0 an `client.publish()` und wartet auf keine Quittung — das ist keine
+ * Quittung der Gegenstelle (§0.2, D.2) → `unknown` + `no_ack`, außer der Adapter belegt sie (`result.acked === true`,
+ * Codex 7a183a18 P2).
  */
 export function classifySinkResult(kind, result) {
   if (kind === 'pickup') return { delivery: 'unknown', detail: 'pickupPending' };
-  if (kind === 'mqtt' && result && result.pushOnly === true) return { delivery: 'unknown', detail: 'pickupPending' };
+  if (kind === 'mqtt') {
+    if (result && result.pushOnly === true) return { delivery: 'unknown', detail: 'pickupPending' };
+    if (result && result.acked === true) return { delivery: 'acked' };
+    return { delivery: 'unknown', detail: 'no_ack' };
+  }
   return { delivery: 'acked' };
 }
 

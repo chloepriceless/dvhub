@@ -66,6 +66,9 @@ test('Tor-Schema: Beispiel-Operationen — Schema und Torprüfung urteilen gleic
     { ...r.op(), tick: { loop: 'eval' } },
     { ...r.op(), constraints: { set: { foo: true }, caps: {}, enforcedBy: [] } },
     { ...r.op(), value: { obj: 1 } },
+    { ...r.op(), constructor: 1 },                  // Prototyp-Namen sind keine erlaubten Schlüssel
+    { ...r.op(), toString: 1 },
+    { ...r.op(), hasOwnProperty: 1 },
   ];
   for (const op of good) {
     assert.deepEqual(check('GateOp', op), [], JSON.stringify(op));
@@ -79,17 +82,26 @@ test('Tor-Schema: Beispiel-Operationen — Schema und Torprüfung urteilen gleic
 
 test('Tor-Schema: echte SubmitResults und Ereignisse aus allen Ausgängen passen zum Schema', async () => {
   let fail = null;
+  let mqttResult = { ok: true, topic: null, value: 1, pushOnly: true };
   const r = rig({
     sinkWrite: async () => { if (fail) throw fail; return { ok: true }; },
-    legacy: { mqttWrite: async () => ({ ok: true, topic: null, value: 1, pushOnly: true }) },
+    // Eigene MQTT-Senke: nur dort gilt die MQTT-Einordnung (pushOnly → pickupPending, ohne Quittung → no_ack).
+    sinks: { mq: { kind: 'mqtt', legacy: { mqttWrite: async () => mqttResult } } },
   });
+  const mqttOp = () => r.op({ point: 'gridSetpointW', value: 1, lease: null, legacy: { sink: 'mq', fn: 'mqttWrite', args: ['gridSetpointW', 1] } });
   const results = [];
   results.push(await r.gate.submit(r.op()));                                   // ok / acked
   results.push(await r.gate.submit(r.op()));                                   // skipped_unchanged
   fail = new Error('modbus exception 2');
   results.push(await r.gate.submit(r.op({ value: 187 })));                     // error / rejected + exceptionCode
   fail = null;
-  results.push(await r.gate.submit(r.op({ lease: null, legacy: { sink: 'inv', fn: 'mqttWrite', args: ['gridSetpointW', 1] } }))); // pickupPending
+  const pickup = await r.gate.submit(mqttOp());                                // HTTP-Abholung (kein Broker)
+  assert.deepEqual([pickup.outcome, pickup.delivery, pickup.detail, pickup.pickup, pickup.delivered], ['ok', 'unknown', 'pickupPending', true, false]);
+  results.push(pickup);
+  mqttResult = { ok: true, topic: 'W/x', value: 1 };
+  const noAck = await r.gate.submit(mqttOp());                                 // Broker, QoS 0, keine Quittung
+  assert.deepEqual([noAck.delivery, noAck.detail, noAck.pickup], ['unknown', 'no_ack', false]);
+  results.push(noAck);
   results.push(await r.gate.submit(r.op({ constraints: { set: { noGridCharge: true }, caps: {}, enforcedBy: [] } }))); // constraint + reason
   results.push(await r.gate.submit({ device: DEVICE }));                       // invalid_op (kein Ereignis)
   r.flags.halt = true;
@@ -104,4 +116,5 @@ test('Tor-Schema: echte SubmitResults und Ereignisse aus allen Ausgängen passen
   for (const res of results) assert.deepEqual(check('SubmitResult', res), [], JSON.stringify(res));
   assert.equal(r.events.length, results.length - 1, 'ein Ereignis je gültiger Operation');
   for (const ev of r.events) assert.deepEqual(check('WriteEvent', JSON.parse(JSON.stringify(ev))), [], JSON.stringify(ev));
+  assert.ok(r.events.some((ev) => ev.detail === 'pickupPending' && ev.target.kind === 'mqtt'), 'Abhol-Ereignis geprüft');
 });

@@ -8,8 +8,8 @@ export const RES = 'batteryControl';
 /** Richtlinien wie für den Sungrow-EMS-Pfad gedacht (Phase 2), plus H-8-Punkte und ein fester Neutralwert. */
 export const POLICIES = Object.freeze({
   [DEVICE]: {
-    emsCmd: { class: 'battery_grid', resource: RES, sink: 'inv', unit: '', neutral: { kind: 'sequence', use: 'release' }, forceRelease: [204] },
-    emsMode: { class: 'battery_grid', resource: RES, sink: 'inv', neutral: { kind: 'sequence', use: 'release' }, forceRelease: [0] },
+    emsCmd: { class: 'battery_grid', resource: RES, sink: 'inv', unit: '', neutral: { kind: 'sequence', use: 'release' }, neutralValues: [204] },
+    emsMode: { class: 'battery_grid', resource: RES, sink: 'inv', neutral: { kind: 'sequence', use: 'release' }, neutralValues: [0] },
     emsPower: { class: 'battery_grid', resource: RES, sink: 'inv', unit: 'W', neutral: { kind: 'sequence', use: 'release' } },
     heartbeat: { class: 'battery_grid', resource: RES, sink: 'inv', unit: 's', neutral: { kind: 'never' } },
     minSocPct: { class: 'battery_grid', resource: RES, sink: 'inv', unit: '%', neutral: { kind: 'never' } },
@@ -18,7 +18,7 @@ export const POLICIES = Object.freeze({
     feedLimitPct: { class: 'dv_curtail', resource: 'pvExport', sink: 'inv', unit: '%', neutral: { kind: 'fixed', value: 100 } },
   },
   'sungrow-slave': {
-    emsCmd: { class: 'battery_grid', resource: RES, sink: 'inv', neutral: { kind: 'sequence', use: 'release' }, forceRelease: [204] },
+    emsCmd: { class: 'battery_grid', resource: RES, sink: 'inv', neutral: { kind: 'sequence', use: 'release' }, neutralValues: [204] },
   },
 });
 
@@ -40,7 +40,7 @@ export function deferred() {
  * Tor mit Fake-Senke. `sinkWrite(wireOp, ctx)` und `legacy` (Name → Funktion) sind austauschbar.
  * Jeder Senken-Aufruf landet in `calls`, jedes Ereignis in `events`.
  */
-export function rig({ release = 'open', released = ['battery_grid', 'dv_curtail'], sinkWrite, legacy, sinkKind = 'modbus', checker = toyConstraintChecker, policies = POLICIES, sinks: extraSinks = {} } = {}) {
+export function rig({ release = 'open', released = ['battery_grid', 'dv_curtail'], sinkWrite, legacy, sinkKind = 'modbus', checker = toyConstraintChecker, policies = POLICIES, sinks: extraSinks = {}, gateOptions = {} } = {}) {
   const flags = { halt: false, readOnly: false };
   const calls = [];
   const events = [];
@@ -67,6 +67,7 @@ export function rig({ release = 'open', released = ['battery_grid', 'dv_curtail'
     checkConstraints: checker,
     onEvent: (ev) => events.push(ev),
     now: () => clock,
+    ...gateOptions,
   });
   if (release) {
     gate.setRelease(DEVICE, release);
