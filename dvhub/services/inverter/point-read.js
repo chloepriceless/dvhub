@@ -3,6 +3,7 @@
 // Ein Decoder für die Lesepunkte: Datentyp, Wortreihenfolge, Skala, Vorzeichen, Sentinels — und die
 // Lese-Erweiterungen für die neuen Hersteller (Lese-Engine, 18.11.2026):
 //   E4  combine   Summe/Differenz über beliebige Register, je eigener Typ/Skala/Vorzeichen (`sign`)
+//   E5  sfAddress SunSpec-Skalenfaktor (sunssf) zur Laufzeit, im selben Takt gelesen
 //   E9  split     32-bit-Wert aus zwei nicht benachbarten Registern (Low-/High-Wort)
 //   E14 wordOrder dieselben Schreibweisen wie der Schreibpfad (swap/swapped = Low-Wort zuerst)
 // Nur Lesen: das Modul bekommt eine read(conf)-Funktion (transport.mbRequest) und schreibt nie.
@@ -23,10 +24,13 @@ export function isLowWordFirst(wordOrder) {
 const WIDE_TYPES = new Set(['int32', 'uint32', 'float32']);
 const readTypeOf = (conf) => String(conf?.readType || '').toLowerCase();
 
-// Faktor aus scale × sign (`sign` < 0 dreht das Vorzeichen). Ohne sign genau `scale` (bitgleich zum früheren Decoder).
-function factorOf(conf) {
-  const k = Number(conf.scale ?? 1);
-  return conf.sign != null && Number(conf.sign) < 0 ? -k : k;
+// Faktor aus scale × sign × 10^sf (`sign` < 0 dreht das Vorzeichen, sf = SunSpec-Skalenfaktor). Ohne sign/sf genau
+// `scale` (bitgleich zum früheren Decoder).
+function factorOf(conf, sf) {
+  let k = Number(conf.scale ?? 1);
+  if (conf.sign != null && Number(conf.sign) < 0) k = -k;
+  if (sf != null) k *= 10 ** sf;
+  return k;
 }
 
 // Ergebnis auf drei Nachkommastellen wie bisher. `exact` (Summanden von combine) rundet nicht: gerundet wird erst die
@@ -38,13 +42,14 @@ const finish = (v, exact) => (exact ? v : Number(v.toFixed(3)));
  * Rohregister → Engineering-Wert (null = kein Wert).
  * @param {number[]} regs
  * @param {object} conf - Punkt-Config (readType, wordOrder, signed, scale, sign, offset, sumRegisters, Sentinels)
- * @param {{ exact?: boolean }} [opts] - exact: ungerundet (nur für combine-Summanden)
+ * @param {{ exact?: boolean, sf?: number }} [opts] - exact: ungerundet (nur für combine-Summanden); sf: zur Laufzeit
+ *   gelesener SunSpec-Skalenfaktor
  * @returns {number|null}
  */
 export function decodePointRegs(regs, conf, opts = {}) {
   if (!regs || !regs.length) return null;
   const exact = opts.exact === true;
-  const scale = factorOf(conf);
+  const scale = factorOf(conf, opts.sf);
   const offset = Number(conf.offset ?? 0);
   const readType = readTypeOf(conf);
   // SunSpec Float-Modus (B-1112 Fronius/SolarEdge/Kostal): zwei Register = IEEE-754-Float32. Der Codec liefert null
@@ -103,6 +108,24 @@ function quantityOf(conf) {
   return WIDE_TYPES.has(readTypeOf(conf)) ? 2 : 1;
 }
 
+// E5: SunSpec-Skalenfaktor (sunssf, int16, −10…10; 0x8000 = nicht implementiert → Wert unbekannt). Gleiche
+// Verbindung, Unit-ID und Funktionscode wie der Wert. Je Takt höchstens einmal je Register gelesen (cache).
+async function readScaleFactor(conf, read, cache) {
+  if (!isAddress(conf.sfAddress)) throw new Error(`sfAddress ${conf.sfAddress} ist keine Registeradresse`);
+  const address = conf.sfAddress;
+  const key = `${conf.host ?? ''}|${conf.port ?? ''}|${conf.unitId ?? ''}|${conf.fc ?? ''}|${address}`;
+  if (cache?.has(key)) return cache.get(key);
+  const pending = read({ ...conf, address, quantity: 1 }).then((regs) => {
+    if (!Array.isArray(regs) || regs.length < 1) throw new Error(`Skalenfaktor @${address}: keine Antwort`);
+    const sf = s16(regs[0]);
+    if (sf === -32768) return null;
+    if (sf < -10 || sf > 10) throw new Error(`Skalenfaktor @${address} = ${sf} liegt außerhalb −10…10`);
+    return sf;
+  });
+  cache?.set(key, pending);
+  return pending;
+}
+
 // E9: 32-bit-Wert aus zwei getrennten Registern, `split: { low, high }` (je ein Wort, gleiche Verbindung/FC).
 // Konsistenz (Codex 0f900d3c): zwischen zwei Einzel-Lesungen kann das Gerät den Wert erneuern — Low-Wort des alten
 // und High-Wort des neuen Werts ergäben Unsinn (−1 W → 0 W als 65535 W). Darum High, Low, High: nur wenn das
@@ -129,8 +152,8 @@ async function readSplitWords(conf, read) {
   throw new Error(`split: High-Wort ${high} änderte sich bei jeder Lesung (${SPLIT_MAX_ATTEMPTS} Versuche) — kein konsistenter Wert`);
 }
 
-// E4: Felder, die ein combine-Eintrag vom umgebenden Punkt erbt. Skala, Vorzeichen und Offset des Punkts gelten für
-// die SUMME und werden nicht vererbt; Adresse, Typ und Wortreihenfolge setzt jeder Eintrag selbst
+// E4: Felder, die ein combine-Eintrag vom umgebenden Punkt erbt. Skala, Vorzeichen, Offset und Skalenfaktor des
+// Punkts gelten für die SUMME und werden nicht vererbt; Adresse, Typ und Wortreihenfolge setzt jeder Eintrag selbst
 // (Typ/Wortreihenfolge/Vorzeichenbehaftung/Sentinels fallen auf den Punkt zurück, wenn der Eintrag sie nicht nennt).
 const COMBINE_INHERIT = ['fc', 'host', 'port', 'unitId', 'timeoutMs', 'readType', 'wordOrder', 'signed', 'notAvailableRaw'];
 const MAX_COMBINE_TERMS = 16;
@@ -158,24 +181,29 @@ async function readCombined(conf, read, ctx) {
     if (v == null) return null;
     sum += v;
   }
-  return Number((sum * factorOf(conf) + Number(conf.offset ?? 0)).toFixed(3));
+  const sf = conf.sfAddress != null ? await readScaleFactor(conf, read, ctx.sfCache) : undefined;
+  if (sf === null) return null;
+  return Number((sum * factorOf(conf, sf) + Number(conf.offset ?? 0)).toFixed(3));
 }
 
 /**
- * Liest einen Lesepunkt und dekodiert ihn. Ohne combine/split genau ein read(conf) mit demselben conf-Objekt wie
- * bisher (bitgleich für die ausgelieferten Profile); nur ein fehlendes `quantity` wird ergänzt.
+ * Liest einen Lesepunkt und dekodiert ihn. Ohne combine/split/sfAddress genau ein read(conf) mit demselben
+ * conf-Objekt wie bisher (bitgleich für die ausgelieferten Profile); nur ein fehlendes `quantity` wird ergänzt.
  * @param {object} conf - effektive Punkt-Config (host/port/unitId/fc schon aus applyVictronDefaults)
  * @param {(conf: object) => Promise<number[]>} read - transport.mbRequest
- * @param {{ exact?: boolean }} [ctx] - exact: ungerundet (combine-Summanden)
+ * @param {{ exact?: boolean, sfCache?: Map }} [ctx] - exact: ungerundet (combine-Summanden); sfCache: je Poll-Takt ein
+ *   frischer Cache für Skalenfaktoren
  * @returns {Promise<number|null>}
  */
 export async function readPointValue(conf, read, ctx = {}) {
   if (Array.isArray(conf.combine)) return readCombined(conf, read, ctx);
   if (conf.combine != null) throw new Error('combine muss eine Liste sein');
+  const sf = conf.sfAddress != null ? await readScaleFactor(conf, read, ctx.sfCache) : undefined;
+  if (sf === null) return null;
   if (conf.split) {
     const regs = await readSplitWords(conf, read);
-    return decodePointRegs(regs, { ...conf, wordOrder: 'be' }, { exact: ctx.exact });
+    return decodePointRegs(regs, { ...conf, wordOrder: 'be' }, { exact: ctx.exact, sf });
   }
   const regs = await read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf);
-  return decodePointRegs(regs, conf, { exact: ctx.exact });
+  return decodePointRegs(regs, conf, { exact: ctx.exact, sf });
 }

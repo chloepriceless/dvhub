@@ -169,6 +169,8 @@ export function createPoller(ctx) {
   }
   // Punkte mit pollEveryMs (z. B. Netzanschluss-Grenze 2714) nur so oft lesen.
   const lastPointPollAt = {};
+  // E5: SunSpec-Skalenfaktoren je Poll-Takt höchstens einmal je Register lesen (pollMeter legt ihn je Takt neu an).
+  let cycleSfCache = new Map();
   // Ergebnis (E6, für die Hauslast-Ableitung): true = in diesem Takt ein Wert gelesen, false = kein Wert in diesem
   // Takt (aus, unaufgelöst, Lesefehler, „nicht verfügbar“), undefined = wegen pollEveryMs nicht abgefragt.
   async function pollPoint(name, conf) {
@@ -198,9 +200,9 @@ export function createPoller(ctx) {
         state.victron[name] = result.mqttValue;
         sourceAt = Number(result?.ts);
       } else {
-        // Lese-Engine (18.11.2026): ein Lesepunkt kann mehrere Register lesen (combine E4, split E9). Ohne diese
-        // Schlüssel genau ein mbRequest(conf) wie bisher.
-        state.victron[name] = await readPointValue(conf, (c) => transport.mbRequest(c));
+        // Lese-Engine (18.11.2026): ein Lesepunkt kann mehrere Register lesen (combine E4, split E9, Skalenfaktor
+        // E5). Ohne diese Schlüssel genau ein mbRequest(conf) wie bisher.
+        state.victron[name] = await readPointValue(conf, (c) => transport.mbRequest(c), { sfCache: cycleSfCache });
       }
       delete state.victron.errors[name];
       const _now = Date.now();
@@ -477,6 +479,17 @@ export function createPoller(ctx) {
   let sunspecRetryAt = 0;
   // Drossel für m160_battery-Derive-Diagnose (1×/5 min statt jeden Zyklus).
   let m160DeriveLogAt = 0;
+  // E5: SunSpec-relativer Skalenfaktor `sunspec.sfOffset` → absolute `sfAddress` im selben Modell (address − offset
+  // + sfOffset). Nur Lesepunkte; Schreibziele bleiben unverändert. Ein ungültiger sfOffset wird zum Lesefehler
+  // (readScaleFactor), nie zu einem Wert ohne Skalenfaktor.
+  function withSunspecScaleFactor(conf) {
+    const sfOffset = conf?.sunspec?.sfOffset;
+    if (conf?.address == null || sfOffset == null) return conf;
+    const base = Number(conf.address) - Number(conf.sunspec.offset);
+    const sfAddress = typeof sfOffset === 'number' && Number.isInteger(sfOffset) && Number.isInteger(base)
+      ? base + sfOffset : `sunspec.sfOffset ${sfOffset}`;
+    return { ...conf, sfAddress };
+  }
   async function ensureSunspecResolved(cfg) {
     const blocks = [cfg.points, cfg.controlWrite];
     const needs = blocks.some((block) => Object.values(block || {})
@@ -494,7 +507,7 @@ export function createPoller(ctx) {
       for (const block of blocks) {
         if (!block) continue;
         const { resolved, missing } = resolveSunspecAddresses(block, scan);
-        for (const [name, conf] of Object.entries(resolved)) block[name] = conf;
+        for (const [name, conf] of Object.entries(resolved)) block[name] = block === cfg.points ? withSunspecScaleFactor(conf) : conf;
         allMissing.push(...missing);
       }
       // M160-Modellbasis für den m160_battery-Derive merken: der liest den
@@ -702,6 +715,7 @@ export function createPoller(ctx) {
   // --- pollMeter: main polling function (meter + all Victron points) ---
   async function pollMeter() {
     const cfg = getCfg();
+    cycleSfCache = new Map();
     await ensureSunspecResolved(cfg);
     await ensureDeviceIdentified(cfg);
     await readMasterRunningState(cfg);
