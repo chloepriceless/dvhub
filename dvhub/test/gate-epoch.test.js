@@ -159,3 +159,16 @@ test('setPolicies: inhaltsgleiche Richtlinien (andere Schlüsselreihenfolge, auc
   assert.equal(r.gate.releaseGeneration(DEVICE), gen);
   assert.equal(r.gate.leaseEpoch(DEVICE, RES), ep);
 });
+
+test('setPolicies: weggelassenes optionales Feld = undefined — keine neue Epoche (Codex 5dda7ee7 P2)', () => {
+  const withUndef = structuredClone(POLICIES);
+  withUndef[DEVICE].emsPower = { ...withUndef[DEVICE].emsPower, neutral: { kind: 'restoreBefore', fallback: undefined }, unit: undefined };
+  const omitted = structuredClone(POLICIES);
+  omitted[DEVICE].emsPower = { ...omitted[DEVICE].emsPower, neutral: { kind: 'restoreBefore' } };
+  delete omitted[DEVICE].emsPower.unit;
+  const r = rig({ policies: withUndef });
+  const gen = r.gate.releaseGeneration(DEVICE);
+  r.gate.setPolicies(JSON.parse(JSON.stringify(withUndef))); // JSON-Rundlauf lässt undefined weg
+  r.gate.setPolicies(omitted);
+  assert.equal(r.gate.releaseGeneration(DEVICE), gen);
+});

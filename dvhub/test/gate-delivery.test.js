@@ -252,3 +252,27 @@ test('Besitzregister: Writes ohne Quittung (MQTT QoS 0) wachsen nicht ohne Ende 
   for (let i = 0; i < 200; i += 1) assert.equal((await r.gate.submit(r.op())).delivery, 'unknown');
   assert.deepEqual(r.gate.owned(DEVICE, 'emsCmd').uncertain, [170]);
 });
+
+test('Besitzregister: unbekannter Retry des bestätigten Werts behält seinen Zeitpunkt (Codex 5dda7ee7 P1)', async () => {
+  const reg = createOwnerRegister();
+  reg.finish('d', 'p', reg.begin('d', 'p', 170, 's', 0), 'acked'); // bestätigt 170
+  const a = reg.begin('d', 'p', 187, 's', 0);                        // A = 187 beginnt
+  const b = reg.begin('d', 'p', 170, 's', 0);                        // B = 170 beginnt (überlappend)
+  reg.finish('d', 'p', b, 'unknown');
+  reg.finish('d', 'p', a, 'acked');
+  assert.deepEqual(reg.candidates('d', 'p').sort((x, y) => x - y), [170, 187], 'B kann nach A gewirkt haben');
+  // Über das Tor: die Korrektur auf 187 wird nicht als „unverändert“ verschluckt.
+  const holdA = deferred();
+  const holdB = deferred();
+  const holds = [holdA, holdB];
+  const r = rig({ legacy: { mbWriteSingle: (x) => (x.first ? {} : holds.shift().promise) } });
+  const op = (value, first = false) => r.op({ value, lease: null, legacy: { sink: 'inv', fn: 'mbWriteSingle', args: [{ address: 13051, value, first }] } });
+  assert.equal((await r.gate.submit(op(170, true))).delivery, 'acked');
+  const pa = r.gate.submit(op(187));
+  const pb = r.gate.submit(op(170));
+  holdB.reject(new Error('modbus timeout'));
+  await pb;
+  holdA.resolve({});
+  await pa;
+  assert.equal((await r.gate.submit(r.op({ value: 187 }))).outcome, 'ok');
+});

@@ -109,8 +109,9 @@ export function createOwnerRegister() {
       if (e.truncatedUpTo < rec.begin) e.truncatedUpTo = -1; // alles Gekürzte war vorher abgeschlossen → überholt
       compact(e, keep);
     } else if (delivery === 'unknown') {
-      // Gleicher Wert wie bestätigt: ob er ankam oder nicht, am Gerät steht derselbe Wert — nichts Neues.
-      if (!e.confirmed || e.confirmed.value !== rec.value) compact(e, [...e.uncertain, rec]);
+      // Immer festhalten, auch beim bestätigten Wert: überholt ein überlappender ACK später den bestätigten Wert,
+      // kann dieser Versuch danach gewirkt haben — sein Zeitpunkt zählt (Codex 5dda7ee7 P1).
+      compact(e, [...e.uncertain, rec]);
     }
     // 'rejected' / 'notSent': nachweislich nicht angekommen — nur der Versuch fällt raus.
     if (!e.confirmed && e.uncertain.length === 0 && e.inflight.size === 0 && e.truncatedUpTo < 0) map.delete(k);

@@ -146,11 +146,16 @@ function normalizePolicies(input) {
 
 const neutralKind = (pol) => pol?.neutral?.kind ?? 'never';
 
-/** JSON mit sortierten Schlüsseln auf jeder Ebene (auch `neutral: { kind, value }`, Codex 710d8f36 P2). */
+/**
+ * JSON mit sortierten Schlüsseln auf jeder Ebene (auch `neutral: { kind, value }`, Codex 710d8f36 P2). Wie
+ * JSON.stringify: Felder mit `undefined` fehlen (ein weggelassenes optionales Feld ist dasselbe, Codex 5dda7ee7 P2),
+ * in Listen wird `undefined` zu `null`.
+ */
 function canonicalJson(v) {
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  if (Array.isArray(v)) return `[${v.map((x) => (x === undefined ? 'null' : canonicalJson(x))).join(',')}]`;
   if (v !== null && typeof v === 'object') {
-    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
+    const keys = Object.keys(v).filter((k) => v[k] !== undefined).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(',')}}`;
   }
   return JSON.stringify(v) ?? 'null';
 }
