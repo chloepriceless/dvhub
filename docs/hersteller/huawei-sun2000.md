@@ -46,6 +46,10 @@ Alle Register FC 03 (Holding), 32-bit-Werte High-Wort zuerst.
 
 Vorzeichen in DVhub: Netz + = Bezug, Akku + = Laden.
 
+**„Kein Wert“:** Huawei meldet einen fehlenden Messwert mit dem Höchstwert des Typs (I32 0x7FFFFFFF, U16 0xFFFF,
+U32 0xFFFFFFFF; wlcrs). evcc behandelt bei I32 zusätzlich 0x80000000 so. DVhub zeigt dann keinen Wert statt
+−2 147 483 647 W oder 6553,5 %. Beim Netz gilt das als Zählerfehler; die Hauslast wird dann nicht gerechnet.
+
 Quellen (abgerufen 18.11.2026): Huawei „Solar Inverter Modbus Interface Definitions“ über die Registerkarte
 [wlcrs/huawei-solar-lib](https://github.com/wlcrs/huawei-solar-lib), evcc
 [huawei-sun2000-hybrid.yaml](https://github.com/evcc-io/evcc/blob/master/templates/definition/meter/huawei-sun2000-hybrid.yaml),

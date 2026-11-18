@@ -19,6 +19,10 @@
     "zuerst. Modbus TCP muss am Gerät freigegeben sein (Installateur-Zugang). Nur EIN Modbus-Client: eine zweite",
     "Verbindung (Home Assistant, evcc, zweites DVhub) kappt die Sitzung. Zeitlimit 5 s wie evcc.",
     "",
+    "„Kein Wert“: Huawei meldet ihn mit dem Höchstwert des Typs — I32 0x7FFFFFFF, U16 0xFFFF, U32 0xFFFFFFFF",
+    "(wlcrs register_definitions/number.py); evcc int32nan nimmt zusätzlich 0x80000000. notAvailableRaw macht daraus",
+    "einen leeren Wert (Zähler: Lesefehler) statt −2 147 483 647 W oder 6553,5 %.",
+    "",
     "Bewusst NICHT gelesen bzw. nicht abbildbar:",
     "- Pause nach dem Verbindungsaufbau: Plexlog wartet 500 ms, evcc 1 s (connectdelay), bevor es liest. DVhub fragt",
     "  sofort (E7 fehlt). Schlägt die erste Lesung nach jedem Verbindungsaufbau fehl, ist das die Ursache.",
@@ -42,7 +46,8 @@
     "address": 37113,
     "quantity": 2,
     "readType": "int32",
-    "sign": -1
+    "sign": -1,
+    "notAvailableRaw": [2147483647, 2147483648]
   },
 
   "points": {
@@ -54,7 +59,8 @@
       "quantity": 1,
       "signed": false,
       "scale": 0.1,
-      "offset": 0
+      "offset": 0,
+      "notAvailableRaw": [65535]
     },
     "batteryPowerW": {
       "_comment": "Akku Lade-/Entladeleistung gesamt, Register 37765 (I32, 1 W) [SPEC]. UNSICHER (am Gerät prüfen): Vorzeichen. Annahme Rohwert + = Laden — evcc liest 37765 mit scale −1 bei evcc-Konvention + = Entladen [COMM], Plexlog invertiert auf + = Entladen [DECOMP]. Das ist bereits DVhubs Konvention (+ = Laden), daher kein sign. Zeigt DVhub beim Laden einen negativen Wert, gehört sign −1 dazu.",
@@ -64,7 +70,8 @@
       "quantity": 2,
       "readType": "int32",
       "scale": 1,
-      "offset": 0
+      "offset": 0,
+      "notAvailableRaw": [2147483647, 2147483648]
     },
     "pvPowerW": {
       "_comment": "PV-Eingangsleistung gesamt (DC), Register 32064 „Input power“ (I32, 1 W) [SPEC]; evcc liest es als PV [COMM].",
@@ -74,7 +81,8 @@
       "quantity": 2,
       "readType": "int32",
       "scale": 1,
-      "offset": 0
+      "offset": 0,
+      "notAvailableRaw": [2147483647, 2147483648]
     },
     "selfConsumptionW": {
       "_comment": "Kein Lastregister in der Spec. Hauslast = PV + Bezug − Einspeisung − Akku (+ = Laden), jeden Takt neu (E6).",
@@ -90,6 +98,7 @@
       "readType": "uint32",
       "scale": 1,
       "offset": 0,
+      "notAvailableRaw": [4294967295],
       "pollEveryMs": 60000
     },
     "deviceMaxDischargeW": {
@@ -101,6 +110,7 @@
       "readType": "uint32",
       "scale": 1,
       "offset": 0,
+      "notAvailableRaw": [4294967295],
       "pollEveryMs": 60000
     }
   },

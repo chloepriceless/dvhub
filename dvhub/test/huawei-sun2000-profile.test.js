@@ -150,6 +150,30 @@ test('Poller: Akku ohne Antwort → keine erfundene Hauslast', async () => {
   assert.equal(state.victron.selfConsumptionW ?? null, null, 'konfigurierter Akku muss gelesen sein, sonst keine Bilanz');
 });
 
+// Codex e29df149: Huawei meldet „kein Wert“ mit dem Höchstwert des Typs (wlcrs number.py: I32 0x7FFFFFFF,
+// U16 0xFFFF, U32 0xFFFFFFFF; evcc int32nan zusätzlich 0x80000000). Ohne notAvailableRaw wurde daraus ein gesunder
+// Zähler mit −2 147 483 647 W, ein SoC von 6553,5 % und eine erfundene Hauslast.
+test('Poller: „kein Wert“-Sentinels → Zählerfehler bzw. leere Werte, keine erfundene Hauslast', async () => {
+  const cfg = effective();
+  const dev = createRegisterDevice({ defaultUnitId: 1 })
+    .set(37760, 0xffff)
+    .setWords(37765, [0x7fff, 0xffff])
+    .setWords(32064, [0x8000, 0x0000])
+    .setWords(37113, [0x7fff, 0xffff])
+    .setWords(47075, [0xffff, 0xffff])
+    .setWords(47077, [0xffff, 0xffff]);
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  assert.equal(state.meter.ok, false, 'Netz ohne Wert ist ein Zählerfehler, nie ein gesunder Extremwert');
+  assert.match(state.meter.error, /keinen Gesamtwert/);
+  assert.equal(state.victron.soc, null);
+  assert.equal(state.victron.batteryPowerW, null);
+  assert.equal(state.victron.pvPowerW, null, '0x80000000 (evcc int32nan) ebenso');
+  assert.equal(state.victron.deviceMaxChargeW, null);
+  assert.equal(state.victron.deviceMaxDischargeW, null);
+  assert.equal(state.victron.selfConsumptionW ?? null, null);
+});
+
 // --- Beta-Gate -------------------------------------------------------------------------------------------------
 
 test('Dropdown: im Stable-Kanal ausgeblendet, im Bleeding-Edge-Kanal sichtbar, aktiv immer sichtbar', () => {
