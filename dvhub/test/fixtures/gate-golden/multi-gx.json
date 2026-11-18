@@ -1,0 +1,425 @@
+{
+  "normal_block_stop_off": [
+    {
+      "step": "Takt 1",
+      "why": "ok",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[0,0]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 2",
+      "why": "follow",
+      "online": true,
+      "setpointW": -947,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64589]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 3",
+      "why": "follow",
+      "online": true,
+      "setpointW": -1000,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64536]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 4",
+      "why": "follow",
+      "online": true,
+      "setpointW": -1000,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64536]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 5",
+      "why": "follow",
+      "online": true,
+      "setpointW": -1000,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64536]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt §51-Sperre 1",
+      "why": "export_blocked",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[0,0]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt §51-Sperre 2",
+      "why": "export_blocked",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[0,0]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt §51-Sperre 3",
+      "why": "export_blocked",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[0,0]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt Not-Halt 1",
+      "why": "stop",
+      "online": true,
+      "setpointW": null,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt Not-Halt 2",
+      "why": "stop",
+      "online": true,
+      "setpointW": null,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt nach Not-Halt",
+      "why": "follow",
+      "online": true,
+      "setpointW": -947,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64589]"
+      ],
+      "events": []
+    },
+    {
+      "step": "abgeschaltet → einmal 0",
+      "why": "disabled",
+      "online": null,
+      "setpointW": 0,
+      "wire": [
+        "W16 gx2/u100 @2716=[0,0]"
+      ],
+      "events": []
+    },
+    {
+      "step": "abgeschaltet, Ruhe",
+      "why": "disabled",
+      "online": null,
+      "setpointW": 0,
+      "wire": [],
+      "events": []
+    }
+  ],
+  "read_errors": [
+    {
+      "step": "Takt 1",
+      "why": "ok",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[0,0]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 2",
+      "why": "follow",
+      "online": true,
+      "setpointW": -947,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64589]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 3",
+      "why": "no_data",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1 !timeout"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 4",
+      "why": "no_data",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1 !timeout"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 5",
+      "why": "follower_offline",
+      "online": false,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1 !timeout"
+      ],
+      "events": [
+        "multi_gx_offline"
+      ]
+    },
+    {
+      "step": "Takt 6",
+      "why": "follower_offline",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[0,0]"
+      ],
+      "events": [
+        "multi_gx_online"
+      ]
+    },
+    {
+      "step": "Takt 7",
+      "why": "follow",
+      "online": true,
+      "setpointW": -947,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64589]"
+      ],
+      "events": []
+    }
+  ],
+  "write_errors": [
+    {
+      "step": "Takt 1",
+      "why": "ok",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[0,0]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 2",
+      "why": "follow",
+      "online": true,
+      "setpointW": -947,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64589] !timeout"
+      ],
+      "events": [
+        "multi_gx_write_error"
+      ]
+    },
+    {
+      "step": "Takt 3",
+      "why": "follow",
+      "online": true,
+      "setpointW": -1000,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64536] !timeout"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 4",
+      "why": "follower_offline",
+      "online": false,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64536] !timeout"
+      ],
+      "events": [
+        "multi_gx_offline"
+      ]
+    },
+    {
+      "step": "Takt 5",
+      "why": "follower_offline",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[0,0]"
+      ],
+      "events": [
+        "multi_gx_online"
+      ]
+    },
+    {
+      "step": "Takt 6",
+      "why": "follow",
+      "online": true,
+      "setpointW": -947,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64589]"
+      ],
+      "events": []
+    }
+  ],
+  "shared_log_main_and_second": [
+    {
+      "step": "Haupt -2000, Takt 1",
+      "ok": true,
+      "why": "ok",
+      "main": "write",
+      "online": true,
+      "setpointW": 0,
+      "wire": [
+        "W16 gx/u100 @2716=[65535,63536]",
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[0,0]"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "Haupt -2000 nach 5 s (Keepalive fällig)",
+      "ok": true,
+      "main": "keepalive",
+      "wire": [
+        "W16 gx/u100 @2716=[65535,63536]"
+      ],
+      "events": []
+    },
+    {
+      "step": "Haupt -2000 sofort erneut (unverändert), Takt 2",
+      "ok": true,
+      "why": "follow",
+      "main": "skipped",
+      "online": true,
+      "setpointW": -947,
+      "wire": [
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64589]"
+      ],
+      "events": [
+        "control_write_skipped"
+      ]
+    },
+    {
+      "step": "Haupt -3000, Takt 3",
+      "ok": true,
+      "why": "follow",
+      "main": "write",
+      "online": true,
+      "setpointW": -1000,
+      "wire": [
+        "W16 gx/u100 @2716=[65535,62536]",
+        "R4 gx2/u100 @843 x1",
+        "R4 gx2/u100 @842 x1",
+        "R4 gx2/u100 @2901 x1",
+        "R4 gx2/u100 @820 x3",
+        "W16 gx2/u100 @2716=[65535,64536]"
+      ],
+      "events": [
+        "control_write"
+      ]
+    }
+  ]
+}
