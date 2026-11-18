@@ -101,3 +101,15 @@ test('E4: Einträge erben Verbindung/FC/Unit vom Punkt, eigene unitId gewinnt', 
   const reqs = dev.requests.filter((r) => r.address === 50 || r.address === 60);
   assert.deepEqual(reqs.map((r) => [r.address, r.unitId, r.fc, r.port, r.host]), [[50, 7, 4, 1502, '192.0.2.9'], [60, 8, 3, 1502, '192.0.2.9']]);
 });
+
+// Codex 9c17a409 (P2): Summanden nicht vor der Skala des Punkts runden.
+test('E4/Codex: Summanden behalten volle Genauigkeit bis zur Skala des Punkts (0,001234 + 0,002345 × 1e6)', async () => {
+  const { state, poller } = rig({
+    pvPowerW: { enabled: true, fc: 3, unitId: 1, scale: 1e6, combine: [{ address: 10, readType: 'float32' }, { address: 12, readType: 'float32' }] },
+    selfConsumptionW: { enabled: true, fc: 3, unitId: 1, quantity: 2, readType: 'float32', scale: 1e6, address: 10 },
+  }, (d) => d.setFloat32(10, 0.001234).setFloat32(12, 0.002345));
+  await poller.requestPoll();
+  assert.equal(Math.round(state.victron.pvPowerW), 3579, 'früher 3000 (Summanden auf 0,001 gerundet)');
+  assert.equal(Math.round(state.victron.selfConsumptionW), 1234, 'Einzelpunkt: Skala vor dem Runden wie bisher');
+  assert.equal(state.victron.pvPowerW, Number(state.victron.pvPowerW.toFixed(3)), 'Ergebnis weiter auf 3 Stellen');
+});

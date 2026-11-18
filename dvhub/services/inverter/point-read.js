@@ -29,14 +29,21 @@ function factorOf(conf) {
   return conf.sign != null && Number(conf.sign) < 0 ? -k : k;
 }
 
+// Ergebnis auf drei Nachkommastellen wie bisher. `exact` (Summanden von combine) rundet nicht: gerundet wird erst die
+// Summe nach Skala, Vorzeichen und Offset des Punkts (Codex 9c17a409: 0,001234 + 0,002345 mit scale 1e6 ergab
+// 3000 statt 3579).
+const finish = (v, exact) => (exact ? v : Number(v.toFixed(3)));
+
 /**
  * Rohregister → Engineering-Wert (null = kein Wert).
  * @param {number[]} regs
  * @param {object} conf - Punkt-Config (readType, wordOrder, signed, scale, sign, offset, sumRegisters, Sentinels)
+ * @param {{ exact?: boolean }} [opts] - exact: ungerundet (nur für combine-Summanden)
  * @returns {number|null}
  */
-export function decodePointRegs(regs, conf) {
+export function decodePointRegs(regs, conf, opts = {}) {
   if (!regs || !regs.length) return null;
+  const exact = opts.exact === true;
   const scale = factorOf(conf);
   const offset = Number(conf.offset ?? 0);
   const readType = readTypeOf(conf);
@@ -45,7 +52,7 @@ export function decodePointRegs(regs, conf) {
   if (readType === 'float32') {
     const value = decodeSunspecFloat32(regs, isLowWordFirst(conf.wordOrder) ? 'le' : 'be');
     if (value === null) return null;
-    return Number((value * scale + offset).toFixed(3));
+    return finish(value * scale + offset, exact);
   }
   // notAvailableRaw (Sungrow, T-0422): Rohwerte, mit denen das Gerät „Register nicht vorhanden/kein Wert“ meldet
   // (U16 0xFFFF, S32 0x7FFFFFFF …) — vorzeichenlos gegen das rohe Wort bzw. Doppelwort verglichen, VOR Vorzeichen
@@ -61,14 +68,14 @@ export function decodePointRegs(regs, conf) {
     if (notAvailable.includes(raw)) return null;
     if (readType === 'int32' && raw > 0x7fffffff) raw -= 0x100000000;
     const v = raw * scale + offset;
-    return Number(v.toFixed(3));
+    return finish(v, exact);
   }
   if (notAvailable.length && regs.some((r) => notAvailable.includes(Number(r) & 0xffff))) return null;
   if (conf.quantity > 1 && conf.sumRegisters) {
     let sum = 0;
     for (const r of regs) sum += conf.signed ? s16(r) : r;
     const v = sum * scale + offset;
-    return Number(v.toFixed(3));
+    return finish(v, exact);
   }
   let v = regs[0];
   if (conf.signed) v = s16(v);
@@ -82,7 +89,7 @@ export function decodePointRegs(regs, conf) {
     if (hit) return Number(hit[0]);
   }
   v = Number(v) * scale + offset;
-  return Number(v.toFixed(3));
+  return finish(v, exact);
 }
 
 // Nur echte Zahlen: der Transport baut den Rahmen mit writeUInt16BE und wirft bei Text/undefined.
@@ -136,7 +143,7 @@ function combineTermConf(parent, term) {
   return out;
 }
 
-async function readCombined(conf, read) {
+async function readCombined(conf, read, ctx) {
   const terms = conf.combine;
   if (!terms.length) throw new Error('combine braucht mindestens einen Eintrag');
   if (terms.length > MAX_COMBINE_TERMS) throw new Error(`combine: höchstens ${MAX_COMBINE_TERMS} Einträge`);
@@ -146,7 +153,7 @@ async function readCombined(conf, read) {
       throw new Error('combine: Eintrag muss ein Register-Objekt sein (ohne verschachteltes combine)');
     }
     if (!term.split && !isAddress(term.address)) throw new Error(`combine: Registeradresse fehlt oder ist ungültig (${term.address})`);
-    const v = await readPointValue(combineTermConf(conf, term), read);
+    const v = await readPointValue(combineTermConf(conf, term), read, { ...ctx, exact: true });
     // Ein Summand ohne Wert (Sentinel/NaN) macht die Summe unbekannt — nie mit einem stillen 0-W-Teil rechnen.
     if (v == null) return null;
     sum += v;
@@ -159,15 +166,16 @@ async function readCombined(conf, read) {
  * bisher (bitgleich für die ausgelieferten Profile); nur ein fehlendes `quantity` wird ergänzt.
  * @param {object} conf - effektive Punkt-Config (host/port/unitId/fc schon aus applyVictronDefaults)
  * @param {(conf: object) => Promise<number[]>} read - transport.mbRequest
+ * @param {{ exact?: boolean }} [ctx] - exact: ungerundet (combine-Summanden)
  * @returns {Promise<number|null>}
  */
-export async function readPointValue(conf, read) {
-  if (Array.isArray(conf.combine)) return readCombined(conf, read);
+export async function readPointValue(conf, read, ctx = {}) {
+  if (Array.isArray(conf.combine)) return readCombined(conf, read, ctx);
   if (conf.combine != null) throw new Error('combine muss eine Liste sein');
   if (conf.split) {
     const regs = await readSplitWords(conf, read);
-    return decodePointRegs(regs, { ...conf, wordOrder: 'be' });
+    return decodePointRegs(regs, { ...conf, wordOrder: 'be' }, { exact: ctx.exact });
   }
   const regs = await read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf);
-  return decodePointRegs(regs, conf);
+  return decodePointRegs(regs, conf, { exact: ctx.exact });
 }
