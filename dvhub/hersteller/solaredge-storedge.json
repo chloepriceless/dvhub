@@ -1,0 +1,133 @@
+{
+  "label": "SolarEdge StorEdge (SunSpec + Akku) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (SolarEdge-Zähler am Netzanschluss, SunSpec), PV, Akku-Leistung und Ladestand (State of Energy) über Modbus TCP (Port 1502, Unit-ID 1) und rechnet die Hauslast aus der Energiebilanz. DVhub schreibt nichts an den Wechselrichter. Vorzeichen von Netz und Akku stammen aus Community-Quellen und sind am Gerät noch nicht bestätigt. Anleitung: docs/hersteller/solaredge-storedge.md.",
+  "_doc": [
+    "SolarEdge-Wechselrichter mit StorEdge-Akku (DC-gekoppelt; SE…-RWS 3-phasig, HD-Wave StorEdge 1-phasig, BYD/LG RESU",
+    "oder SolarEdge Home Battery) und SolarEdge-Zähler (Export+Import) am Netzanschluss. NICHT für Wechselrichter ohne",
+    "Akku: die Akku-Bank 0xE100 fehlt dort, und neuere Firmware antwortet auf unbekannte Register nicht, sondern hängt.",
+    "Home Hub / 48-V-Home-Battery: ob die Akkudaten per Modbus kommen, ist unbelegt.",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [SPEC] SolarEdge „SunSpec Implementation Technical Note“ v2.4 (Wechselrichterblock ab",
+    "40069, Zähler 1 ab 40121) und „Power Control Protocol for SolarEdge Inverters“ v1.3 (Akku-Bank 0xE100, Float32",
+    "Low-Wort zuerst) · [COMM] evcc templates/definition/meter/solaredge-hybrid.yaml (Netz sunspec 203:W scale −1;",
+    "PV = 101/103:DCW + 0xE174; Akku 0xE174 float32 scale −1; SoC 0xE184) · [DECOMP] Plexlog (F574 × −1, F584 als",
+    "Ladestand). Zusammenfassung: .planning/docs/research/2026-11-15-solaredge-modbus-control-spec.md §1–2 und",
+    "2026-11-18-hersteller-lesend-luecken.md §3.13.",
+    "",
+    "Transport: Modbus TCP Port 1502 (SetApp → Kommunikation → LAN → Modbus/TCP), Unit-ID 1, FC 03. Nur EINE",
+    "Modbus-Verbindung: eine zweite (Home Assistant, evcc) wird abgewiesen. SunSpec-Register High-Wort zuerst, die",
+    "Akku-Bank Float32 Low-Wort zuerst. Skalenfaktoren (W_SF, DCW_SF) liest DVhub in jedem Takt zusammen mit dem Wert.",
+    "",
+    "Netzzähler per SunSpec-Scan (Modell 203, 3-phasig Stern — der übliche Zähler am deutschen Hausanschluss; evcc liest",
+    "ebenfalls 203): bei Synergy-WR verschiebt sich die Zählerbasis, der Scan findet ihn trotzdem. DVhub kann nur EIN",
+    "Modell je Punkt suchen. Ein 1-phasiger Zähler (201) oder Dreieck (204) bleibt unaufgelöst (Zählerfehler, nie ein",
+    "falscher Wert); dann im Profil model 203 durch 201 bzw. 204 ersetzen (gleiche Feldlage) und melden.",
+    "",
+    "PV: Die DC-Leistung des Wechselrichters (40100) enthält bei StorEdge den Akku (Laden mindert, Entladen erhöht sie).",
+    "PV = DCW + Akku-Leistung (+ = Laden), wie evcc. Folge: Ohne lesbare Akkudaten (nicht freigeschaltet) ist auch PV",
+    "unbekannt und die Hauslast fehlt. Die Hauslast PV + Bezug − Einspeisung − Akku ist damit DCW + Netz und hängt",
+    "nicht vom Akku-Vorzeichen ab.",
+    "",
+    "Bewusst NICHT gelesen bzw. nicht abbildbar:",
+    "- Netz je Phase (Modell 203 WphA–C, Offset 17–19): je eine Anfrage mehr am Ein-Client-Gerät; ließen sich als",
+    "  meter.phases mit sunspec nachtragen.",
+    "- AC-Leistung 40083 (WR-Ausgang): nicht nötig für die Bilanz; Status 40107 (5 = abgeregelt): kein Anzeigepunkt.",
+    "- Akku 2/3 (0xE200/0xE300): kein zweiter Akku-Punkt.",
+    "- Mehrere Modelle je Punkt (201/203/204 bzw. 101/103): Engine sucht nur ein Modell; PV darum fest 40100/40101 (der",
+    "  Wechselrichterblock liegt laut SolarEdge immer ab 40069)."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 1502,
+    "unitId": 1,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz gesamt, SolarEdge-Zähler 1, SunSpec-Modell 203 W (Offset 16, I16) mit W_SF (Offset 20) zur Laufzeit [SPEC]; per Scan aufgelöst (Basis 40121 bzw. bei Synergy verschoben, Wert dann 40206 mit SF 40210). UNSICHER (am Gerät prüfen): Vorzeichen. Annahme Rohwert + = Einspeisung — evcc liest 203:W mit scale −1 bei evcc-Konvention + = Bezug [COMM]; die Spec nennt die Richtung nicht. DVhub erwartet + = Bezug, daher sign −1. Zeigt DVhub bei Netzbezug Einspeisung, gehört sign weg. 0x8000 = SunSpec „nicht implementiert“ → kein Wert.",
+    "layout": "point",
+    "fc": 3,
+    "quantity": 1,
+    "signed": true,
+    "sign": -1,
+    "notAvailableRaw": [32768],
+    "sunspec": { "model": 203, "offset": 16, "sfOffset": 20 }
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "Ladestand Akku 1, 0xE184 = 57732 „State of Energy“ (Float32, %, Low-Wort zuerst) [SPEC]; evcc und Plexlog lesen ihn als SoC [COMM]/[DECOMP]. SoE = verfügbare Energie / maximale Energie, nicht der BMS-SoC. NaN (0xFFFFFFFF, „nicht implementiert“) → kein Wert.",
+      "enabled": true,
+      "fc": 3,
+      "address": 57732,
+      "quantity": 2,
+      "readType": "float32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0
+    },
+    "batteryPowerW": {
+      "_comment": "Akku 1, 0xE174 = 57716 „Instantaneous Power“ (Float32, W, Low-Wort zuerst) [SPEC]. UNSICHER (am Gerät prüfen): Vorzeichen steht nicht in der Spec. Annahme Rohwert + = Laden — evcc liest 0xE174 mit scale −1 bei evcc-Konvention + = Entladen [COMM], Plexlog multipliziert mit −1 auf + = Entladen [DECOMP]. Das ist DVhubs Konvention, daher kein sign. Zeigt DVhub beim Laden einen negativen Wert, gehört sign −1 dazu. NaN → kein Wert.",
+      "enabled": true,
+      "fc": 3,
+      "address": 57716,
+      "quantity": 2,
+      "readType": "float32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0
+    },
+    "pvPowerW": {
+      "_comment": "PV = DC-Leistung des WR + Akku-Leistung (+ = Laden), wie evcc (101/103:DCW + 0xE174) [COMM]. DCW 40100 (I16, SunSpec 101/103 Offset 29) mit DCW_SF 40101 zur Laufzeit [SPEC]; die DC-Leistung enthält bei StorEdge den Akku [SPEC]. Rechenweg am Gerät ungeprüft. Ein Summand ohne Wert (DCW 0x8000, Akku NaN) macht PV unbekannt.",
+      "enabled": true,
+      "fc": 3,
+      "scale": 1,
+      "offset": 0,
+      "combine": [
+        { "address": 40100, "quantity": 1, "signed": true, "sfAddress": 40101, "notAvailableRaw": [32768] },
+        { "address": 57716, "quantity": 2, "readType": "float32", "wordOrder": "le" }
+      ]
+    },
+    "selfConsumptionW": {
+      "_comment": "Kein Lastregister. Hauslast = PV + Bezug − Einspeisung − Akku (+ = Laden), jeden Takt neu (E6); mit PV = DCW + Akku gleich DCW + Netz.",
+      "enabled": false,
+      "derive": "energy_balance"
+    },
+    "deviceMaxChargeW": {
+      "_comment": "Max. Ladeleistung dauerhaft, Akku 1, 0xE144 = 57668 (Float32, W, Low-Wort zuerst) [SPEC]. Nur Anzeige.",
+      "enabled": true,
+      "fc": 3,
+      "address": 57668,
+      "quantity": 2,
+      "readType": "float32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0,
+      "pollEveryMs": 60000
+    },
+    "deviceMaxDischargeW": {
+      "_comment": "Max. Entladeleistung dauerhaft, Akku 1, 0xE146 = 57670 (Float32, W, Low-Wort zuerst) [SPEC]. Nur Anzeige.",
+      "enabled": true,
+      "fc": 3,
+      "address": 57670,
+      "quantity": 2,
+      "readType": "float32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0,
+      "pollEveryMs": 60000
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}
