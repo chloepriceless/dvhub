@@ -1,0 +1,185 @@
+{
+  "victron_cycle": {
+    "steps": [
+      {
+        "step": "Grenze 3000 W (sichert -1)",
+        "saved": -1,
+        "wire": [
+          "R3 gx/u100 @2706 x1",
+          "W6 gx/u100 @2706=30"
+        ],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      },
+      {
+        "step": "Grenze 2500 W",
+        "saved": -1,
+        "wire": [
+          "W6 gx/u100 @2706=25"
+        ],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      },
+      {
+        "step": "Grenze 2549 W (abwärts auf 100 W)",
+        "saved": -1,
+        "wire": [
+          "W6 gx/u100 @2706=25"
+        ],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      },
+      {
+        "step": "Grenze 0 W",
+        "saved": -1,
+        "wire": [
+          "W6 gx/u100 @2706=0"
+        ],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      },
+      {
+        "step": "Grenze -500 W (auf 0 geklemmt)",
+        "saved": -1,
+        "wire": [
+          "W6 gx/u100 @2706=0"
+        ],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      },
+      {
+        "step": "Rücknahme (null)",
+        "saved": null,
+        "wire": [
+          "W6 gx/u100 @2706=65535"
+        ],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      },
+      {
+        "step": "Rücknahme ohne Sicherung",
+        "saved": null,
+        "wire": [],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      }
+    ],
+    "reg2706": 65535
+  },
+  "victron_installer_value": {
+    "steps": [
+      {
+        "step": "Grenze 3000 W (Installateur 4600 W)",
+        "saved": 4600,
+        "wire": [
+          "R3 gx/u100 @2706 x1",
+          "W6 gx/u100 @2706=30"
+        ],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      },
+      {
+        "step": "Rücknahme",
+        "saved": null,
+        "wire": [
+          "W6 gx/u100 @2706=46"
+        ],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      }
+    ],
+    "reg2706": 46
+  },
+  "victron_read_error": [
+    {
+      "step": "Grenze 3000 W, Lesefehler",
+      "threw": "timeout",
+      "wire": [
+        "R3 gx/u100 @2706 x1 !timeout"
+      ],
+      "events": []
+    },
+    {
+      "step": "Grenze 3000 W, nächster Takt",
+      "saved": -1,
+      "wire": [
+        "R3 gx/u100 @2706 x1",
+        "W6 gx/u100 @2706=30"
+      ],
+      "events": [
+        "dv_feedin_limit_write"
+      ]
+    }
+  ],
+  "victron_nothalt": [
+    {
+      "step": "Grenze 3000 W im Not-Halt (Pfad ohne eigene Prüfung)",
+      "saved": -1,
+      "wire": [
+        "R3 gx/u100 @2706 x1",
+        "W6 gx/u100 @2706=30"
+      ],
+      "events": [
+        "dv_feedin_limit_write"
+      ]
+    }
+  ],
+  "victron_write_safety": [
+    {
+      "step": "Grenze 3000 W bei writeSafety.ok=false",
+      "threw": "config_unsafe_manufacturer_profile_error",
+      "wire": [],
+      "events": [
+        "control_write_blocked_config_unsafe"
+      ]
+    }
+  ],
+  "fronius_no_point": [
+    {
+      "step": "Fronius Grenze 3000 W (kein 2706)",
+      "threw": "sequence point not enabled: dvFeedInLimitW",
+      "wire": [],
+      "events": []
+    }
+  ],
+  "victron_restart": {
+    "before": [
+      {
+        "step": "Grenze 3000 W",
+        "saved": 4600,
+        "wire": [
+          "R3 gx/u100 @2706 x1",
+          "W6 gx/u100 @2706=30"
+        ],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      }
+    ],
+    "saved": {
+      "dvFeedInLimitW": 4600
+    },
+    "after": [
+      {
+        "step": "nach Neustart: Rücknahme",
+        "saved": null,
+        "wire": [
+          "W6 gx/u100 @2706=46"
+        ],
+        "events": [
+          "dv_feedin_limit_write"
+        ]
+      }
+    ],
+    "savedAfter": {}
+  }
+}
