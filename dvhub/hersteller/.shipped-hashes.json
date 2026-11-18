@@ -49,8 +49,21 @@
       "1471d1801c4b6a57554caee55945779d56ed07045abaa3a33ff04264ccc3da92",
       "38cbc1d20f6bef04522a02f80f8565a99ec1591eb636ed515401c6b0db3e79ef"
     ],
+    "goodwe-et.json": [
+      "4368904258c53cc0d6d2e9561cd6fcaa02ed559a73968fbe5dff2360e0072a58"
+    ],
+    "huawei-sun2000.json": [
+      "c6f4e18653c41758b772dacc80c9ae57f8a27c61d63dc661e1b74d4a2f851183",
+      "c776e5821d06021c66799434aae30e013c6f01012842a41c1500e98e401cf471"
+    ],
+    "kostal-plenticore.json": [
+      "445b5a6620ddf816974c1fd952fd6df56fdee2e4f1564d6eea36a478e1319c9a"
+    ],
     "sofar.json": [
       "375f1004992136c6537bdea7b8d87a7ea0198a4257072fc756f70d36c4b3c005"
+    ],
+    "solax-g4.json": [
+      "509a7ab2ac4980d561b2ae85c3adb385eec6fa7d0ddbd4000edd878f0759f3ca"
     ],
     "solis.json": [
       "4fc5c08cce3316601491238ec3a9e1cb60361ec359811c8726729218bce2a879"
