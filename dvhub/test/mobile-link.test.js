@@ -480,7 +480,8 @@ describe('mobile-link relay-core', () => {
     await until(() => d2.state.closed);
     assert.equal(d2.state.closed.reason, 'rate_limited');
     const idle = memClient(relay);
-    await until(() => idle.state.closed, 1000);
+    // Anmeldefrist 50 ms; until() kehrt zurück, sobald getrennt ist. 1 s reichte unter Last (parallele Testläufe) nicht.
+    await until(() => idle.state.closed, 5000);
     assert.equal(idle.state.closed.code, CLOSE.authTimeout);
     relay.close();
   });
