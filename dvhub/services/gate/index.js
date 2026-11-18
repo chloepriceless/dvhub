@@ -212,8 +212,9 @@ export function createGate(options = {}) {
     licensePro = false,
     opIdTicks = OPID_TICKS,
   } = options;
-  // Eigene Tabelle (nie das Objekt des Aufrufers verändern); attachSink() ergänzt sie.
-  const sinks = {};
+  // Eigene Tabelle (nie das Objekt des Aufrufers verändern); attachSink() ergänzt sie. Ohne Prototyp: auch eine Senke
+  // namens `__proto__` ist ein eigener Eintrag und kein Prototyp-Wechsel (Codex 8ad74e08 P3).
+  const sinks = Object.create(null);
   const checkSink = (name, spec) => {
     if (!spec || !SINK_KINDS.has(spec.kind)) throw new TypeError(`Senke ${name}: kind muss modbus|mqtt|http|pickup sein`);
   };

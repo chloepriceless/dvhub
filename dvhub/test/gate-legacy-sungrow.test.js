@@ -167,3 +167,27 @@ test('Lese-Modus: das Legacy-Tor meldet dieselbe Zeile wie transport-modbus.js (
   assert.equal(seen.length, 1);
   assert.match(seen[0], /^\[READ-ONLY\] Schreibzugriff blockiert: Modbus fc=6 an 192\.0\.2\.50:502 \(bisher \d+\)$/);
 });
+
+test('Senkentabelle ohne Prototyp: auch „__proto__“ ist eine eigene Senke, doppelt angeschlossen wird abgelehnt (Codex 8ad74e08 P3)', async () => {
+  const mk = (tag) => ({ kind: 'modbus', legacy: { mbWriteSingle: async () => tag } });
+  const policies = { [M]: sungrowLegacyPolicies()[M] };
+  const op = (sink, seq) => ({
+    device: M, point: 'emsCmd', value: 204, source: 't', kind: 'write', action: 'command', lease: null,
+    constraints: { set: {}, caps: {}, enforcedBy: [] }, validUntilMs: null, tick: { loop: 'eval', seq }, step: 0,
+    legacy: { sink, fn: 'mbWriteSingle', args: [{}] },
+  });
+  // eigene Eigenschaft „__proto__“ (z. B. aus JSON.parse) beim Anlegen
+  const given = {};
+  Object.defineProperty(given, '__proto__', { value: mk('init'), enumerable: true, writable: true, configurable: true });
+  const a = createGate({ sinks: given, policies, released: ['battery_grid'] });
+  a.setRelease(M, 'open');
+  assert.equal((await a.submit(op('__proto__', 1))).result, 'init');
+  // nachträglich angeschlossen
+  const b = createGate({ policies, released: ['battery_grid'] });
+  b.setRelease(M, 'open');
+  b.attachSink('__proto__', mk('attached'));
+  assert.throws(() => b.attachSink('__proto__', mk('again')), /schon angeschlossen/);
+  assert.equal((await b.submit(op('__proto__', 2))).result, 'attached');
+  // ein Prototyp-Name ohne Anschluss bleibt keine Senke
+  assert.equal((await b.submit(op('toString', 3))).detail, 'no_sink');
+});
