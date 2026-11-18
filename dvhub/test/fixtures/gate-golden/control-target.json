@@ -1,0 +1,550 @@
+{
+  "victron_setpoint": [
+    {
+      "step": "setpoint -500",
+      "ok": true,
+      "writeType": "int32",
+      "wire": [
+        "W16 gx/u100 @2716=[65535,65036]"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "setpoint -500 gleich",
+      "ok": true,
+      "why": "unchanged",
+      "skipped": true,
+      "wire": [],
+      "events": [
+        "control_write_skipped"
+      ]
+    },
+    {
+      "step": "setpoint -500 nach 4999 ms",
+      "ok": true,
+      "why": "unchanged",
+      "skipped": true,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "setpoint -500 Keepalive fällig (5000 ms)",
+      "ok": true,
+      "writeType": "int32",
+      "keepalive": true,
+      "wire": [
+        "W16 gx/u100 @2716=[65535,65036]"
+      ],
+      "events": []
+    },
+    {
+      "step": "setpoint -1500 Wechsel",
+      "ok": true,
+      "writeType": "int32",
+      "wire": [
+        "W16 gx/u100 @2716=[65535,64036]"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "setpoint +800 ohne Netzladen",
+      "ok": false,
+      "why": "grid_charge_not_allowed",
+      "wire": [],
+      "events": [
+        "control_write_rejected"
+      ]
+    },
+    {
+      "step": "setpoint 0",
+      "ok": true,
+      "writeType": "int32",
+      "wire": [
+        "W16 gx/u100 @2716=[0,0]"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "setpoint -3000 Pflicht-Quelle",
+      "ok": true,
+      "writeType": "int32",
+      "wire": [
+        "W16 gx/u100 @2716=[65535,62536]"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "setpoint 999999 außerhalb Grenzen",
+      "ok": false,
+      "why": "value_out_of_range",
+      "wire": [],
+      "events": [
+        "control_write_rejected"
+      ]
+    }
+  ],
+  "victron_eeg_gate": [
+    {
+      "step": "setpoint -2000 diskretionär",
+      "ok": false,
+      "why": "grid_discharge_not_allowed",
+      "wire": [],
+      "events": [
+        "control_write_rejected"
+      ]
+    },
+    {
+      "step": "setpoint -2000 Pflicht-Quelle",
+      "ok": true,
+      "writeType": "int32",
+      "wire": [
+        "W16 gx/u100 @2716=[65535,63536]"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "setpoint -900 unter Schwelle",
+      "ok": true,
+      "writeType": "int32",
+      "wire": [
+        "W16 gx/u100 @2716=[65535,64636]"
+      ],
+      "events": [
+        "control_write"
+      ]
+    }
+  ],
+  "victron_volatile_guard": [
+    {
+      "step": "setpoint -500 ohne Keepalive",
+      "ok": false,
+      "why": "reg 2716 (volatile ESS setpoint) requires schedule.controlKeepaliveMs in (0,60000]; refusing write to avoid Multi Passthru (keepaliveMs=0)",
+      "wire": [],
+      "events": [
+        "control_write_blocked"
+      ]
+    }
+  ],
+  "victron_targets": [
+    {
+      "step": "chargeCurrentA 30",
+      "ok": true,
+      "writeType": "int16",
+      "wire": [
+        "W6 gx/u100 @2705=30"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "chargeCurrentA 30 gleich",
+      "ok": true,
+      "why": "unchanged",
+      "skipped": true,
+      "wire": [],
+      "events": [
+        "control_write_skipped"
+      ]
+    },
+    {
+      "step": "chargeCurrentA -1",
+      "ok": true,
+      "writeType": "int16",
+      "wire": [
+        "W6 gx/u100 @2705=65535"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "minSocPct 20",
+      "ok": true,
+      "writeType": "uint16",
+      "wire": [
+        "W6 gx/u100 @2901=200"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "minSocPct 3 → Klemme auf hardFloor",
+      "ok": true,
+      "writeType": "uint16",
+      "wire": [
+        "W6 gx/u100 @2901=50"
+      ],
+      "events": [
+        "control_minsoc_clamped",
+        "control_write"
+      ]
+    },
+    {
+      "step": "maxDischargeW -1 (unbegrenzt)",
+      "ok": true,
+      "writeType": "int16",
+      "wire": [
+        "W6 gx/u100 @2704=32767"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "maxDischargeW 0 (Sperre)",
+      "ok": true,
+      "writeType": "int16",
+      "wire": [
+        "W6 gx/u100 @2704=0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "maxDischargeW 4000",
+      "ok": true,
+      "writeType": "int16",
+      "wire": [
+        "W6 gx/u100 @2704=400"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "maxDischargeW 4004 (Raster 10 W)",
+      "ok": true,
+      "writeType": "int16",
+      "wire": [
+        "W6 gx/u100 @2704=400"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "dvFeedInLimitW 3049 (abwärts runden)",
+      "ok": true,
+      "writeType": "int16",
+      "wire": [
+        "W6 gx/u100 @2706=30"
+      ],
+      "events": [
+        "control_write"
+      ]
+    }
+  ],
+  "victron_floor_stale": [
+    {
+      "step": "setpoint -1500 SoC veraltet",
+      "ok": true,
+      "writeType": "int32",
+      "wire": [
+        "W16 gx/u100 @2716=[0,0]"
+      ],
+      "events": [
+        "control_discharge_floor",
+        "control_write"
+      ]
+    },
+    {
+      "step": "maxDischargeW 4000 SoC veraltet",
+      "ok": true,
+      "writeType": "int16",
+      "wire": [
+        "W6 gx/u100 @2704=0"
+      ],
+      "events": [
+        "control_discharge_floor",
+        "control_write"
+      ]
+    },
+    {
+      "step": "chargeCurrentA 20 SoC veraltet (kein Entladen)",
+      "ok": true,
+      "writeType": "int16",
+      "wire": [
+        "W6 gx/u100 @2705=20"
+      ],
+      "events": [
+        "control_write"
+      ]
+    }
+  ],
+  "victron_floor_hard": [
+    {
+      "step": "setpoint -1500 SoC 9 % ≤ Boden 10 %",
+      "ok": true,
+      "writeType": "int32",
+      "wire": [
+        "W16 gx/u100 @2716=[0,0]"
+      ],
+      "events": [
+        "control_discharge_floor",
+        "control_write"
+      ]
+    },
+    {
+      "step": "setpoint +0 SoC 9 %",
+      "ok": true,
+      "why": "unchanged",
+      "skipped": true,
+      "wire": [],
+      "events": [
+        "control_write_skipped"
+      ]
+    }
+  ],
+  "victron_nothalt": [
+    {
+      "step": "setpoint -500 im Not-Halt",
+      "ok": false,
+      "why": "emergency_stop_active",
+      "blocked": true,
+      "wire": [],
+      "events": [
+        "control_write_blocked_nothalt"
+      ]
+    },
+    {
+      "step": "setpoint -500 Pflicht im Not-Halt",
+      "ok": false,
+      "why": "emergency_stop_active",
+      "blocked": true,
+      "wire": [],
+      "events": [
+        "control_write_blocked_nothalt"
+      ]
+    },
+    {
+      "step": "maxDischargeW 0 Peak-Shaving-Rücknahme (einmal)",
+      "ok": true,
+      "writeType": "int16",
+      "wire": [
+        "W6 gx/u100 @2704=0"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "maxDischargeW 0 Peak-Shaving-Rücknahme (zweites Mal)",
+      "ok": false,
+      "why": "emergency_stop_active",
+      "blocked": true,
+      "wire": [],
+      "events": [
+        "control_write_blocked_nothalt"
+      ]
+    }
+  ],
+  "victron_write_safety": [
+    {
+      "step": "setpoint -500 bei writeSafety.ok=false",
+      "ok": false,
+      "why": "config_unsafe_manufacturer_profile_error",
+      "wire": [],
+      "events": [
+        "control_write_blocked_config_unsafe"
+      ]
+    },
+    {
+      "step": "feedExcessDcPv 0 bei writeSafety.ok=false",
+      "ok": false,
+      "why": "config_unsafe_manufacturer_profile_error",
+      "wire": [],
+      "events": []
+    }
+  ],
+  "victron_write_error": [
+    {
+      "step": "setpoint -700 Zeitüberschreitung",
+      "ok": false,
+      "why": "timeout",
+      "wire": [
+        "W16 gx/u100 @2716=[65535,64836] !timeout"
+      ],
+      "events": [
+        "control_write_error"
+      ]
+    },
+    {
+      "step": "setpoint -700 erneut (kein Unverändert-Skip nach Fehler)",
+      "ok": true,
+      "writeType": "int32",
+      "wire": [
+        "W16 gx/u100 @2716=[65535,64836]"
+      ],
+      "events": [
+        "control_write"
+      ]
+    }
+  ],
+  "victron_feed_flag": [
+    {
+      "step": "feedExcessDcPv 0 (§51)",
+      "ok": true,
+      "writeType": "dv_control",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=0",
+        "W6 gx/u100 @2708=1"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write",
+        "control_write"
+      ]
+    },
+    {
+      "step": "feedExcessDcPv 0 gleich",
+      "ok": true,
+      "why": "unchanged",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "skipped": true,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "feedExcessDcPv 1 Hand bei aktiver §51-Sperre",
+      "ok": false,
+      "why": "feed_in_blocked_negative_price_protection",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [],
+      "events": [
+        "control_write_rejected"
+      ]
+    },
+    {
+      "step": "feedExcessDcPv 1 Hand",
+      "ok": true,
+      "writeType": "dv_control",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": true,
+      "wire": [
+        "W6 gx/u100 @2707=1",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write",
+        "control_write"
+      ]
+    }
+  ],
+  "fronius_reachable": [
+    {
+      "step": "fronius setpoint -500",
+      "ok": false,
+      "why": "write target not enabled in config",
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "fronius maxDischargeW 0",
+      "ok": false,
+      "why": "write target not enabled in config",
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "fronius feedExcessDcPv 0 (§51)",
+      "ok": true,
+      "writeType": "sequence",
+      "feedExcessDcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "R3 gx/u1 @40191 x1",
+        "R3 gx/u1 @40198 x1",
+        "W6 gx/u1 @40191=2",
+        "W6 gx/u1 @40198=55536"
+      ],
+      "events": [
+        "dv_victron_write",
+        "control_write"
+      ]
+    },
+    {
+      "step": "fronius feedExcessDcPv 1 Hand",
+      "ok": true,
+      "writeType": "sequence",
+      "feedExcessDcPv": "ok",
+      "lastFeedIn": true,
+      "wire": [
+        "W6 gx/u1 @40191=1",
+        "W6 gx/u1 @40198=60536"
+      ],
+      "events": [
+        "dv_victron_write",
+        "control_write"
+      ]
+    }
+  ],
+  "fronius_unresolved": [
+    {
+      "step": "fronius wMaxLimPct ohne SunSpec-Scan",
+      "ok": false,
+      "why": "sunspec address not resolved yet (device scan pending)",
+      "wire": [],
+      "events": []
+    }
+  ],
+  "deye_reachable": [
+    {
+      "step": "deye setpoint -500",
+      "ok": false,
+      "why": "write target not enabled in config",
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "deye feedExcessDcPv 0",
+      "ok": false,
+      "why": "write target not enabled in config",
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "deye workMode 2 direkt",
+      "ok": true,
+      "writeType": "uint16",
+      "wire": [
+        "W6 gx/u1 @142=2"
+      ],
+      "events": [
+        "control_write"
+      ]
+    },
+    {
+      "step": "deye dontFeedExcessAcPv 1 direkt",
+      "ok": true,
+      "writeType": "uint16",
+      "wire": [
+        "W6 gx/u1 @NaN=1"
+      ],
+      "events": [
+        "control_write"
+      ]
+    }
+  ]
+}
