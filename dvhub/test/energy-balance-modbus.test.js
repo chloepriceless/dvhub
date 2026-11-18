@@ -174,6 +174,36 @@ test('E6/Codex: AC-PV-Lesefehler mit gehaltenem Wert blockiert die Ableitung (ke
   assert.equal(state.victron.fieldUpdatedAt.selfConsumptionW, stamp, 'kein frischer Stempel');
 });
 
+// Codex 1bce7fc9 (P2): fällt die Ableitung aus (Eingang fehlerhaft), darf die gehaltene, abgeleitete Last nicht als
+// gemessen gelten — sonst rechnet eine pollEveryMs-Pause des Lastpunkts nach der Erholung nicht neu.
+test('E6/Codex: Lastpunkt mit pollEveryMs — nach AC-PV-Ausfall und Erholung wird innerhalb der Pause neu abgeleitet', async () => {
+  const dev = createRegisterDevice();
+  const cfg = baseCfg({ load: point(103, { derive: 'energy_balance', pollEveryMs: 60000 }) });
+  cfg.points.acPvL1W = point(104);
+  const { state, poller } = createPollerRig(cfg, dev);
+  let failAcPv = false;
+  dev.mbRequest = ((orig) => async (conf) => {
+    if (conf.address === 103) throw new Error('modbus exception 2'); // Lastregister liefert nie
+    if (conf.address === 104 && failAcPv) throw new Error('timeout');
+    return orig(conf);
+  })(dev.mbRequest);
+
+  setValues(dev, { pv: 3000, battery: 500 });
+  dev.set(104, 700);
+  await poller.requestPoll();
+  assert.equal(state.victron.selfConsumptionW, 3200, 'Takt 1: Rückfall auf die Bilanz');
+
+  failAcPv = true; // Takt 2: Lastpunkt pausiert (pollEveryMs), AC-PV fällt aus → keine Ableitung
+  await poller.requestPoll();
+  assert.equal(state.victron.selfConsumptionW, 3200);
+  assert.equal(state.victron.selfConsumptionDerived, true, 'gehaltener Wert bleibt als abgeleitet markiert');
+
+  failAcPv = false; // Takt 3: AC-PV erholt, neue Werte, Lastpunkt weiter in der Pause
+  setValues(dev, { pv: 1000, battery: 200 });
+  await poller.requestPoll();
+  assert.equal(state.victron.selfConsumptionW, 1500, '1000 + 700 − 200 — nicht die gehaltenen 3200');
+});
+
 test('dvhub-mqtt (ausgeliefert): energy_balance auf MQTT folgt jedem Takt — war vom Modbus-Befund nicht betroffen', async () => {
   const t = createMqttTransport({ host: '', mqtt: { schema: 'dvhub', topicPrefix: 'dvhub', staleMaxAgeMs: 90000 } });
   const cfg = {

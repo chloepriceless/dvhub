@@ -1131,7 +1131,10 @@ export function createPoller(ctx) {
         .filter((t) => t > 0);
       if (inputAt.length) (state.victron.fieldSourceAt ??= {}).selfConsumptionW = Math.min(...inputAt);
       else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt.selfConsumptionW;
-    } else if (state.victron.selfConsumptionDerived && !state.victron.errors?.selfConsumptionW) {
+    } else if (state.victron.selfConsumptionDerived && loadPolled === true) {
+      // Herkunft (Codex 1bce7fc9): nur ein in diesem Takt GEMESSENER Wert ersetzt die abgeleitete Last. Fällt die
+      // Ableitung aus (Eingang fehlerhaft), bleibt der gehaltene Wert als abgeleitet markiert — sonst hielte eine
+      // pollEveryMs-Pause des Lastpunkts ihn für gemessen und rechnete nach der Erholung nicht neu.
       state.victron.selfConsumptionDerived = false;
     }
 
