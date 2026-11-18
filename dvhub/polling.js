@@ -1084,6 +1084,12 @@ export function createPoller(ctx) {
       pollPoint('maxDischargeW', cfg.points.maxDischargeW),
       pollPoint('acInputLimitA', cfg.points.acInputLimitA),
       pollPoint('selfConsumptionW', cfg.points.selfConsumptionW).then((r) => { loadPolled = r; }),
+      // E13 (Lese-Engine, 18.11.2026): Gerätegrenzen (BMS/WR, Laden/Entladen in W oder A) — nur lesen und anzeigen,
+      // keine Begrenzung im Steuerpfad. Kein ausgeliefertes Profil setzt sie; ohne Punkt wird nichts gelesen.
+      pollPoint('deviceMaxChargeW', cfg.points.deviceMaxChargeW),
+      pollPoint('deviceMaxDischargeW', cfg.points.deviceMaxDischargeW),
+      pollPoint('deviceMaxChargeA', cfg.points.deviceMaxChargeA),
+      pollPoint('deviceMaxDischargeA', cfg.points.deviceMaxDischargeA),
       ...buildDvControlReadbackPolls(cfg).map(([name, conf]) => pollDvControlReadback(name, conf))
     ]);
 
