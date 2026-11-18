@@ -267,9 +267,12 @@ export function createMultiGx(ctx, deps = {}) {
       // Im Not-Halt auch hier nichts schreiben (Christin 10.11.2026).
       const stopNow = ctx.state.ctrl?.discretionaryWritesPaused === true;
       // Ebenso bei ungültiger Config (C2): auch die eine 0 geht dann nicht raus.
+      // Die Prüfung läuft in jedem abgeschalteten Takt (nicht nur vor der 0): eine dort beobachtete Erholung macht den
+      // Alarm neu scharf (Codex 8cd2f706 P2); melden nur, wo sonst die 0 rausginge.
       const cfgNow = ctx.getCfg();
       syncRelease(cfgNow);
-      if (active && c.host && !stopNow && !configUnsafe(cfgNow, { alarm: true })) {
+      const unsafeNow = configUnsafe(cfgNow, { alarm: active && Boolean(c.host) && !stopNow });
+      if (active && c.host && !stopNow && !unsafeNow) {
         // Einmal neutral hinterlassen; das Register faellt ohnehin von selbst zurueck.
         try { await write(c, 0, 'autoRestore'); } catch { /* best effort */ }
       }
@@ -315,10 +318,15 @@ export function createMultiGx(ctx, deps = {}) {
     const ctrl = ctx.state.ctrl || {};
     const pB = primaryBattery(v);
     const mainBlocked = ctx.state.multiGxHandoff?.mainDischargeBlocked === true;
+    const stopNow = ctrl.discretionaryWritesPaused === true;
+    // C2: bei ungueltiger Config ebenso kein Write (Alarm einmal je Grund, nur wo sonst geschrieben wuerde) — und wie
+    // im Not-Halt steht der Regler: er darf nicht weiter aufintegrieren, was nie geschrieben wird, sonst ginge nach
+    // der Erholung sofort der aufgelaufene Wert raus, an der Rampe vorbei (Codex 8cd2f706 P2).
+    const unsafe = configUnsafe(cfg, { alarm: readOk && !stopNow });
     const out = controller.tick({
       nowMs: now(),
       online: online !== false,
-      stop: ctrl.discretionaryWritesPaused === true,
+      stop: stopNow || unsafe,
       exportBlocked: ctrl.forcedOff === true || ctrl.negativePriceActive === true,
       primaryBatteryW: pB,
       followerBatteryW: readOk ? side.batteryPowerW : null,
@@ -339,9 +347,6 @@ export function createMultiGx(ctx, deps = {}) {
     // bd18f099 ging hier einmal 0 raus). Nur noch lesen; der fluechtige 2716
     // wird nicht nachgefuehrt und laeuft an der zweiten GX ab (T-0107), wie bei
     // DVhub aus.
-    const stopNow = ctrl.discretionaryWritesPaused === true;
-    // C2: bei ungueltiger Config ebenso kein Write (Alarm einmal je Grund, nur wo sonst geschrieben wuerde).
-    const unsafe = configUnsafe(cfg, { alarm: readOk && !stopNow });
     syncRelease(cfg);
     if (stopNow || unsafe) {
       if (readOk) setAvailable(true, c.host);
@@ -365,7 +370,8 @@ export function createMultiGx(ctx, deps = {}) {
       minSocPct: side.minSocPct ?? c.minSocPct,
       // Im Not-Halt und bei ungueltiger Config schreibt DVhub keinen Sollwert → keinen anzeigen.
       setpointW: stopNow || unsafe ? null : (ok ? out.setpointW : 0), desiredBatteryW: out.desiredFollowerBatteryW, sharePct: out.followerWeightPct,
-      totalBatteryW: out.totalBatteryW, reason: ok || online === null ? out.reason : 'follower_offline',
+      totalBatteryW: out.totalBatteryW,
+      reason: ok || online === null ? (unsafe && !stopNow ? 'config_unsafe' : out.reason) : 'follower_offline',
       handoff: ctx.state.multiGxHandoff?.phase || 'off', mainDischargeBlocked: mainBlocked,
     });
   }

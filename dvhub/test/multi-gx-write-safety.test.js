@@ -91,3 +91,48 @@ test('C2 zweite GX: Schreibfreigabe des Tors folgt der Config (profileInvalid sp
   await tick();
   assert.equal(s.gate.releaseState(MULTI_GX_GATE_DEVICE), 'open');
 });
+
+// Codex 8cd2f706 P2: Während die Config ungültig ist, darf der Regler nicht weiter aufintegrieren — sonst ginge nach
+// der Erholung sofort der aufgelaufene Grenzwert raus (Rampe umgangen). Wie im Not-Halt: Regler auf Stopp, nach der
+// Erholung startet er bei 0 und rampt.
+test('C2 zweite GX: kein Aufintegrieren während der Sperre — nach der Erholung höchstens ein Rampenschritt', async (t) => {
+  const advance = fixClock(t);
+  const s = setup();
+  // AC-IN unlesbar (keine Leine am gemessenen AC-IN), Hauptakku entlädt 4 kW, die zweite GX folgt nicht (sie bekommt
+  // ja keinen Sollwert) — ohne Stopp läuft der Regler bis an seine Grenze.
+  s.transport.failRead[`${GX2}@820`] = 'timeout';
+  const tick = async () => { await advance(5000); s.state.victron.fieldUpdatedAt.batteryPowerW = Date.now(); await s.mgx.tick(); };
+  await tick();
+  s.cfg.writeSafety = { ...UNSAFE };
+  for (let i = 0; i < 15; i += 1) await tick();
+  const reasonDuring = s.state.multiGx.reason;
+  delete s.cfg.writeSafety;
+  await tick();
+  const last = writes(s).at(-1);
+  const m = /@2716=\[(\d+),(\d+)\]/.exec(last);
+  const v = (((Number(m[1]) << 16) | Number(m[2])) | 0);
+  assert.ok(Math.abs(v) <= 1000, `erster Write nach der Erholung ${v} W — mehr als ein Rampenschritt (200 W/s × 5 s)`);
+  assert.equal(reasonDuring, 'config_unsafe', 'Status nennt den Grund (nicht „Not-Halt“)');
+});
+
+// Codex 8cd2f706 P2: Erholt sich die Config, während die zweite GX abgeschaltet ist, muss der Alarm neu scharf werden.
+test('C2 zweite GX: Erholung im abgeschalteten Zustand macht den Alarm neu scharf', async (t) => {
+  const advance = fixClock(t);
+  const s = setup();
+  const tick = async () => { await advance(5000); s.state.victron.fieldUpdatedAt.batteryPowerW = Date.now(); await s.mgx.tick(); };
+  await tick();
+  s.cfg.writeSafety = { ...UNSAFE };
+  await tick();
+  assert.equal(alarms(s).length, 1);
+  s.cfg.multiGx.enabled = false;
+  await tick();
+  await tick();
+  delete s.cfg.writeSafety;        // erholt, während abgeschaltet
+  await tick();
+  s.cfg.writeSafety = { ...UNSAFE };  // derselbe Grund wieder
+  await tick();
+  s.cfg.multiGx.enabled = true;
+  await tick();
+  assert.equal(alarms(s).length, 2, 'derselbe Grund nach einer beobachteten Erholung meldet wieder');
+  assert.equal(writes(s).length, 1);
+});
