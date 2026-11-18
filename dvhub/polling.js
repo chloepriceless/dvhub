@@ -148,7 +148,7 @@ export function createPoller(ctx) {
   // --- pointFromRegs: Rohregister → Engineering-Wert ---
   // Seit der Lese-Engine (18.11.2026) in services/inverter/point-read.js (decodePointRegs), bitgleich zum früheren
   // Code hier (float32/int32/uint32, notAvailableRaw, sumRegisters, rawSentinels); neu nur die wordOrder-Aliase
-  // swap/swapped (E14), die kein ausgeliefertes Profil setzt.
+  // swap/swapped (E14) und `sign` (E4), die kein ausgeliefertes Profil setzt.
   const pointFromRegs = decodePointRegs;
 
   // --- pollPoint: read a single Victron data point ---
@@ -198,8 +198,8 @@ export function createPoller(ctx) {
         state.victron[name] = result.mqttValue;
         sourceAt = Number(result?.ts);
       } else {
-        // Lese-Engine (18.11.2026): ein Lesepunkt kann mehrere Register lesen (split E9). Ohne diese Schlüssel genau
-        // ein mbRequest(conf) wie bisher.
+        // Lese-Engine (18.11.2026): ein Lesepunkt kann mehrere Register lesen (combine E4, split E9). Ohne diese
+        // Schlüssel genau ein mbRequest(conf) wie bisher.
         state.victron[name] = await readPointValue(conf, (c) => transport.mbRequest(c));
       }
       delete state.victron.errors[name];

@@ -1,13 +1,14 @@
 // Lesepfad der Herstellerprofile: ein Lesepunkt (oder der Netzzähler als Punkt) aus Modbus-Registern.
 //
-// Ein Decoder für die Lesepunkte: Datentyp, Wortreihenfolge, Skala, Sentinels — und die Lese-Erweiterungen für die
-// neuen Hersteller (Lese-Engine, 18.11.2026):
+// Ein Decoder für die Lesepunkte: Datentyp, Wortreihenfolge, Skala, Vorzeichen, Sentinels — und die
+// Lese-Erweiterungen für die neuen Hersteller (Lese-Engine, 18.11.2026):
+//   E4  combine   Summe/Differenz über beliebige Register, je eigener Typ/Skala/Vorzeichen (`sign`)
 //   E9  split     32-bit-Wert aus zwei nicht benachbarten Registern (Low-/High-Wort)
 //   E14 wordOrder dieselben Schreibweisen wie der Schreibpfad (swap/swapped = Low-Wort zuerst)
 // Nur Lesen: das Modul bekommt eine read(conf)-Funktion (transport.mbRequest) und schreibt nie.
 //
 // decodePointRegs ist bitgenau die frühere polling.js pointFromRegs (Golden-Netz der ausgelieferten Profile); die
-// neuen Schreibweisen greifen nur, wenn ein Profil sie setzt.
+// neuen Schlüssel greifen nur, wenn ein Profil sie setzt.
 
 import { s16 } from '../../server-utils.js';
 import { decodeSunspecFloat32 } from './sunspec.js';
@@ -22,15 +23,21 @@ export function isLowWordFirst(wordOrder) {
 const WIDE_TYPES = new Set(['int32', 'uint32', 'float32']);
 const readTypeOf = (conf) => String(conf?.readType || '').toLowerCase();
 
+// Faktor aus scale × sign (`sign` < 0 dreht das Vorzeichen). Ohne sign genau `scale` (bitgleich zum früheren Decoder).
+function factorOf(conf) {
+  const k = Number(conf.scale ?? 1);
+  return conf.sign != null && Number(conf.sign) < 0 ? -k : k;
+}
+
 /**
  * Rohregister → Engineering-Wert (null = kein Wert).
  * @param {number[]} regs
- * @param {object} conf - Punkt-Config (readType, wordOrder, signed, scale, offset, sumRegisters, Sentinels)
+ * @param {object} conf - Punkt-Config (readType, wordOrder, signed, scale, sign, offset, sumRegisters, Sentinels)
  * @returns {number|null}
  */
 export function decodePointRegs(regs, conf) {
   if (!regs || !regs.length) return null;
-  const scale = Number(conf.scale ?? 1);
+  const scale = factorOf(conf);
   const offset = Number(conf.offset ?? 0);
   const readType = readTypeOf(conf);
   // SunSpec Float-Modus (B-1112 Fronius/SolarEdge/Kostal): zwei Register = IEEE-754-Float32. Der Codec liefert null
@@ -101,14 +108,48 @@ async function readSplitWords(conf, read) {
   return [hi[0], lo[0]];
 }
 
+// E4: Felder, die ein combine-Eintrag vom umgebenden Punkt erbt. Skala, Vorzeichen und Offset des Punkts gelten für
+// die SUMME und werden nicht vererbt; Adresse, Typ und Wortreihenfolge setzt jeder Eintrag selbst
+// (Typ/Wortreihenfolge/Vorzeichenbehaftung/Sentinels fallen auf den Punkt zurück, wenn der Eintrag sie nicht nennt).
+const COMBINE_INHERIT = ['fc', 'host', 'port', 'unitId', 'timeoutMs', 'readType', 'wordOrder', 'signed', 'notAvailableRaw'];
+const MAX_COMBINE_TERMS = 16;
+
+function combineTermConf(parent, term) {
+  const out = {};
+  for (const k of COMBINE_INHERIT) if (parent[k] !== undefined) out[k] = parent[k];
+  Object.assign(out, term);
+  delete out.combine;
+  return out;
+}
+
+async function readCombined(conf, read) {
+  const terms = conf.combine;
+  if (!terms.length) throw new Error('combine braucht mindestens einen Eintrag');
+  if (terms.length > MAX_COMBINE_TERMS) throw new Error(`combine: höchstens ${MAX_COMBINE_TERMS} Einträge`);
+  let sum = 0;
+  for (const term of terms) {
+    if (!term || typeof term !== 'object' || Array.isArray(term) || term.combine != null) {
+      throw new Error('combine: Eintrag muss ein Register-Objekt sein (ohne verschachteltes combine)');
+    }
+    if (!term.split && !isAddress(term.address)) throw new Error(`combine: Registeradresse fehlt oder ist ungültig (${term.address})`);
+    const v = await readPointValue(combineTermConf(conf, term), read);
+    // Ein Summand ohne Wert (Sentinel/NaN) macht die Summe unbekannt — nie mit einem stillen 0-W-Teil rechnen.
+    if (v == null) return null;
+    sum += v;
+  }
+  return Number((sum * factorOf(conf) + Number(conf.offset ?? 0)).toFixed(3));
+}
+
 /**
- * Liest einen Lesepunkt und dekodiert ihn. Ohne split genau ein read(conf) mit demselben conf-Objekt wie bisher
- * (bitgleich für die ausgelieferten Profile); nur ein fehlendes `quantity` wird ergänzt.
+ * Liest einen Lesepunkt und dekodiert ihn. Ohne combine/split genau ein read(conf) mit demselben conf-Objekt wie
+ * bisher (bitgleich für die ausgelieferten Profile); nur ein fehlendes `quantity` wird ergänzt.
  * @param {object} conf - effektive Punkt-Config (host/port/unitId/fc schon aus applyVictronDefaults)
  * @param {(conf: object) => Promise<number[]>} read - transport.mbRequest
  * @returns {Promise<number|null>}
  */
 export async function readPointValue(conf, read) {
+  if (Array.isArray(conf.combine)) return readCombined(conf, read);
+  if (conf.combine != null) throw new Error('combine muss eine Liste sein');
   if (conf.split) {
     const regs = await readSplitWords(conf, read);
     return decodePointRegs(regs, { ...conf, wordOrder: 'be' });
