@@ -130,6 +130,50 @@ test('E6: Lastpunkt mit pollEveryMs — übersprungener Takt behält den gemesse
   assert.equal(state.victron.selfConsumptionW, 1234, 'Register erst nach 60 s wieder gelesen, Messwert bleibt');
 });
 
+// Codex 09829a9f (P2): seit die Ableitung jeden Takt läuft, darf sie keinen veralteten Eingang als frische Last
+// stempeln. Ein Eingang mit Lesefehler (gehaltener Wert) blockiert die Ableitung; der Stempel der Last ist der des
+// ältesten Eingangs (Akku per pollEveryMs gedrosselt), nicht „jetzt“.
+test('E6/Codex: abgeleitete Last trägt das Alter des ältesten Eingangs (Akku per pollEveryMs gedrosselt)', async () => {
+  const dev = createRegisterDevice();
+  const cfg = baseCfg();
+  cfg.points.batteryPowerW.pollEveryMs = 60000;
+  const { state, poller } = createPollerRig(cfg, dev);
+  setValues(dev, { pv: 3000, battery: 500 });
+  await poller.requestPoll();
+  const batteryAt = state.victron.fieldUpdatedAt.batteryPowerW;
+  assert.ok(batteryAt > 0);
+  await new Promise((r) => setTimeout(r, 15));
+  setValues(dev, { pv: 1000, battery: 200 });
+  await poller.requestPoll();
+  assert.equal(state.victron.fieldUpdatedAt.batteryPowerW, batteryAt, 'Akku in Takt 2 nicht gelesen');
+  assert.equal(state.victron.selfConsumptionW, 500, '1000 − gehaltene 500');
+  assert.equal(state.victron.fieldUpdatedAt.selfConsumptionW, batteryAt, 'Last so alt wie der Akkuwert, nicht frisch');
+});
+
+test('E6/Codex: AC-PV-Lesefehler mit gehaltenem Wert blockiert die Ableitung (kein frischer Verbrauch aus Altwert)', async () => {
+  const dev = createRegisterDevice();
+  const cfg = baseCfg();
+  cfg.points.acPvL1W = point(104);
+  const { state, poller } = createPollerRig(cfg, dev);
+  setValues(dev, { pv: 3000, battery: 500 });
+  dev.set(104, 700);
+  await poller.requestPoll();
+  assert.equal(state.victron.selfConsumptionW, 3200, '3000 + 700 − 500');
+  const stamp = state.victron.fieldUpdatedAt.selfConsumptionW;
+
+  await new Promise((r) => setTimeout(r, 15));
+  dev.mbRequest = ((orig) => async (conf) => {
+    if (conf.address === 104) throw new Error('timeout');
+    return orig(conf);
+  })(dev.mbRequest);
+  setValues(dev, { pv: 1000, battery: 200 });
+  await poller.requestPoll();
+  assert.ok(state.victron.errors.acPvL1W);
+  assert.equal(state.victron.acPvL1W, 700, 'pollPoint hält den alten AC-PV-Wert');
+  assert.equal(state.victron.selfConsumptionW, 3200, 'keine Ableitung mit dem gehaltenen AC-PV-Wert');
+  assert.equal(state.victron.fieldUpdatedAt.selfConsumptionW, stamp, 'kein frischer Stempel');
+});
+
 test('dvhub-mqtt (ausgeliefert): energy_balance auf MQTT folgt jedem Takt — war vom Modbus-Befund nicht betroffen', async () => {
   const t = createMqttTransport({ host: '', mqtt: { schema: 'dvhub', topicPrefix: 'dvhub', staleMaxAgeMs: 90000 } });
   const cfg = {

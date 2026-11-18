@@ -1093,14 +1093,21 @@ export function createPoller(ctx) {
       // pollEveryMs-Pause: der gehaltene Wert zählt, wenn er gemessen (nicht abgeleitet) und fehlerfrei ist.
       ? (state.victron.selfConsumptionW != null && !state.victron.errors?.selfConsumptionW && !state.victron.selfConsumptionDerived)
       : loadPolled === true;
+    // Eingänge der Bilanz (Codex 09829a9f, P2): seit die Ableitung jeden Takt läuft, darf kein veralteter Eingang
+    // als frische Last durchgehen. pvTotalW summiert JEDEN PV-Punkt mit Wert (DC und AC), auch gehaltene Werte nach
+    // einem Lesefehler — jeder davon und der Akku müssen fehlerfrei sein. Die Last bekommt den Stempel des ÄLTESTEN
+    // Eingangs (Akku per pollEveryMs gedrosselt, Zähler), nicht „jetzt“; so altert sie wie ihre Eingänge.
+    const balanceInputs = [...PV_POINT_FIELDS].filter((f) => state.victron[f] != null)
+      .concat(batteryInBalance ? ['batteryPowerW'] : []);
     if (cfg.points?.selfConsumptionW?.derive === 'energy_balance'
       && !loadMeasured
       // PV muss in DIESEM Durchlauf gültig gelesen sein: pvTotalW ist immer eine
       // Zahl (0 bei fehlender PV) und pollPoint behält bei Fehlern den alten
       // Wert — ohne diese Prüfung würde eine ausgefallene PV als frischer
       // Verbrauch weiterlaufen (Codex-Review 2026-09-29).
-      && state.meter.ok && state.victron.pvPowerW != null && !state.victron.errors?.pvPowerW
-      && (!batteryInBalance || (state.victron.batteryPowerW != null && !state.victron.errors?.batteryPowerW))) {
+      && state.meter.ok && state.victron.pvPowerW != null
+      && (!batteryInBalance || state.victron.batteryPowerW != null)
+      && balanceInputs.every((f) => !state.victron.errors?.[f])) {
       const derived = Number(state.victron.pvTotalW || 0)
         + Number(state.victron.gridImportW || 0)
         - Number(state.victron.gridExportW || 0)
@@ -1108,7 +1115,12 @@ export function createPoller(ctx) {
       state.victron.selfConsumptionW = Number(Math.max(0, derived).toFixed(3));
       state.victron.selfConsumptionDerived = true;
       if (state.victron.errors) delete state.victron.errors.selfConsumptionW;
-      if (state.victron.fieldUpdatedAt) state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
+      if (state.victron.fieldUpdatedAt) {
+        const nowStamp = Date.now();
+        const inputStamps = balanceInputs.map((f) => Number(state.victron.fieldUpdatedAt[f])).filter((t) => t > 0);
+        const meterAt = Number(state.meter.updatedAt) > 0 ? Number(state.meter.updatedAt) : nowStamp;
+        state.victron.fieldUpdatedAt.selfConsumptionW = Math.min(nowStamp, meterAt, ...inputStamps);
+      }
       // Empfangsalter = das des ältesten Eingangs (MQTT-Cache), sonst keins. Ein
       // alter Eintrag aus der Zeit mit Verbrauchs-Topic darf nicht stehen
       // bleiben, und ein alter Akkuwert macht die Last alt (Gegenprüfung
