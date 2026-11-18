@@ -207,3 +207,8 @@ export async function readPointValue(conf, read, ctx = {}) {
   const regs = await read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf);
   return decodePointRegs(regs, conf, { exact: ctx.exact, sf });
 }
+
+// Wartet ein Eintrag (Punkt, Zähler, Phase) noch auf die SunSpec-Auflösung?
+export function awaitsSunspec(conf) {
+  return !!(conf && typeof conf === 'object' && conf.sunspec && conf.address == null);
+}

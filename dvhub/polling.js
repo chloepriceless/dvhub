@@ -8,7 +8,7 @@ import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-perfo
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
 // Lesepunkt-Decoder der Herstellerprofile (Lese-Engine E4/E5/E9/E14, 18.11.2026).
-import { decodePointRegs, isLowWordFirst, readPointValue } from './services/inverter/point-read.js';
+import { decodePointRegs, isLowWordFirst, readPointValue, awaitsSunspec } from './services/inverter/point-read.js';
 import {
   identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
   resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry,
@@ -476,7 +476,12 @@ export function createPoller(ctx) {
   // Erfolg mutiert die EFFEKTIVE Config in-place; Schreibpfad (schedule-eval)
   // sieht dieselbe Referenz. Fehler → Backoff, Punkte bleiben schlafend
   // (pollPoint/applyControlTarget überspringen unaufgelöste sunspec-Punkte).
-  let sunspecRetryAt = 0;
+  // E11 (18.11.2026): gescannt wird je Verbindung (host/port/unitId). Ein SunSpec-LESEpunkt wird auf genau der
+  // Verbindung gescannt, von der er gelesen wird — seine effektive host/port/unitId, Standard victron.*
+  // (applyVictronDefaults). SMA: SunSpec auf Unit 126 neben den eigenen Registern auf Unit 3; LG: Port 6502.
+  // Schreibziele (controlWrite) scannen wie bisher auf victron.* — der Schreibpfad bleibt unverändert. Neuversuch
+  // je Verbindung frühestens nach 60 s; eine Verbindung ohne SunSpec hält die anderen nicht auf.
+  const sunspecRetryAt = new Map();
   // Drossel für m160_battery-Derive-Diagnose (1×/5 min statt jeden Zyklus).
   let m160DeriveLogAt = 0;
   // E5: SunSpec-relativer Skalenfaktor `sunspec.sfOffset` → absolute `sfAddress` im selben Modell (address − offset
@@ -490,37 +495,67 @@ export function createPoller(ctx) {
       ? base + sfOffset : `sunspec.sfOffset ${sfOffset}`;
     return { ...conf, sfAddress };
   }
-  async function ensureSunspecResolved(cfg) {
-    const blocks = [cfg.points, cfg.controlWrite];
-    const needs = blocks.some((block) => Object.values(block || {})
-      .some((conf) => conf && typeof conf === 'object' && conf.sunspec && conf.address == null));
-    if (!needs) return;
-    const now = Date.now();
-    if (now < sunspecRetryAt) return;
-    sunspecRetryAt = now + 60000;
+  const sunspecEndpointOf = (conf, v) => ({
+    host: conf?.host ?? v.host,
+    port: conf?.port ?? v.port,
+    unitId: conf?.unitId ?? v.unitId,
+    timeoutMs: conf?.timeoutMs ?? v.timeoutMs,
+  });
+  const sunspecEndpointKey = (e) => `${e.host ?? ''}|${e.port ?? ''}|${e.unitId ?? ''}`;
+  // Einträge, die noch auf die Auflösung warten: { holder, key, label, ep, read }.
+  function collectSunspecSlots(cfg) {
     const v = cfg.victron || {};
-    try {
-      const scan = await scanSunspecModels((address, quantity) => transport.mbRequest({
-        fc: 3, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, address, quantity
-      }));
-      const allMissing = [];
-      for (const block of blocks) {
-        if (!block) continue;
-        const { resolved, missing } = resolveSunspecAddresses(block, scan);
-        for (const [name, conf] of Object.entries(resolved)) block[name] = block === cfg.points ? withSunspecScaleFactor(conf) : conf;
-        allMissing.push(...missing);
+    const slots = [];
+    for (const [name, conf] of Object.entries(cfg.points || {})) {
+      if (awaitsSunspec(conf)) slots.push({ holder: cfg.points, key: name, label: name, ep: sunspecEndpointOf(conf, v), read: true });
+    }
+    for (const [name, conf] of Object.entries(cfg.controlWrite || {})) {
+      if (awaitsSunspec(conf)) slots.push({ holder: cfg.controlWrite, key: name, label: name, ep: sunspecEndpointOf(null, v), read: false });
+    }
+    return slots;
+  }
+  async function ensureSunspecResolved(cfg) {
+    const slots = collectSunspecSlots(cfg);
+    if (!slots.length) return;
+    const v = cfg.victron || {};
+    const victronKey = sunspecEndpointKey(sunspecEndpointOf(null, v));
+    const groups = new Map();
+    for (const slot of slots) {
+      const key = sunspecEndpointKey(slot.ep);
+      if (!groups.has(key)) groups.set(key, { ep: slot.ep, slots: [] });
+      groups.get(key).slots.push(slot);
+    }
+    const now = Date.now();
+    for (const [key, group] of groups) {
+      if (now < (sunspecRetryAt.get(key) || 0)) continue;
+      sunspecRetryAt.set(key, now + 60000);
+      const { ep } = group;
+      // Der Standardfall (victron.*) loggt wie bisher; eine abweichende Verbindung nennt Unit und Port.
+      const where = key === victronKey ? {} : { unitId: ep.unitId, port: ep.port };
+      try {
+        const scan = await scanSunspecModels((address, quantity) => transport.mbRequest({
+          fc: 3, host: ep.host, port: ep.port, unitId: ep.unitId, timeoutMs: ep.timeoutMs, address, quantity
+        }));
+        const allMissing = [];
+        for (const slot of group.slots) {
+          const { resolved, missing } = resolveSunspecAddresses({ [slot.label]: slot.holder[slot.key] }, scan);
+          const conf = resolved[slot.label];
+          slot.holder[slot.key] = slot.read ? withSunspecScaleFactor(conf) : conf;
+          allMissing.push(...missing);
+        }
+        // M160-Modellbasis für den m160_battery-Derive merken: der liest den
+        // Block zur LAUFZEIT inkl. DCW_SF auf victron.* — eine statisch aufgelöste
+        // Punkt-Adresse allein reicht dafür nicht.
+        if (key === victronKey) (state.ctrl ??= {})._sunspecM160 = scan.byId.get(160)?.[0] || null;
+        pushLog('sunspec_scan_ok', {
+          ...where,
+          base: scan.base,
+          models: scan.models.map((m) => m.id),
+          missing: allMissing
+        });
+      } catch (e) {
+        pushLog('sunspec_scan_error', { ...where, error: e.message }, 'warn');
       }
-      // M160-Modellbasis für den m160_battery-Derive merken: der liest den
-      // Block zur LAUFZEIT inkl. DCW_SF — eine statisch aufgelöste Punkt-
-      // Adresse allein reicht dafür nicht.
-      (state.ctrl ??= {})._sunspecM160 = scan.byId.get(160)?.[0] || null;
-      pushLog('sunspec_scan_ok', {
-        base: scan.base,
-        models: scan.models.map((m) => m.id),
-        missing: allMissing
-      });
-    } catch (e) {
-      pushLog('sunspec_scan_error', { error: e.message }, 'warn');
     }
   }
 
