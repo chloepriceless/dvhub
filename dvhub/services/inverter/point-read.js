@@ -2,8 +2,9 @@
 //
 // Ein Decoder für die Lesepunkte: Datentyp, Wortreihenfolge, Skala, Sentinels — und die Lese-Erweiterungen für die
 // neuen Hersteller (Lese-Engine, 18.11.2026):
+//   E9  split     32-bit-Wert aus zwei nicht benachbarten Registern (Low-/High-Wort)
 //   E14 wordOrder dieselben Schreibweisen wie der Schreibpfad (swap/swapped = Low-Wort zuerst)
-// Nur Lesen: das Modul dekodiert Register und schreibt nie.
+// Nur Lesen: das Modul bekommt eine read(conf)-Funktion (transport.mbRequest) und schreibt nie.
 //
 // decodePointRegs ist bitgenau die frühere polling.js pointFromRegs (Golden-Netz der ausgelieferten Profile); die
 // neuen Schreibweisen greifen nur, wenn ein Profil sie setzt.
@@ -18,6 +19,7 @@ export function isLowWordFirst(wordOrder) {
   return w.startsWith('l') || w === 'swap' || w === 'swapped';
 }
 
+const WIDE_TYPES = new Set(['int32', 'uint32', 'float32']);
 const readTypeOf = (conf) => String(conf?.readType || '').toLowerCase();
 
 /**
@@ -74,4 +76,43 @@ export function decodePointRegs(regs, conf) {
   }
   v = Number(v) * scale + offset;
   return Number(v.toFixed(3));
+}
+
+// Nur echte Zahlen: der Transport baut den Rahmen mit writeUInt16BE und wirft bei Text/undefined.
+const isAddress = (a) => typeof a === 'number' && Number.isInteger(a) && a >= 0 && a <= 0xffff;
+
+// Registerzahl eines Lesepunkts: ausdrücklich `quantity`, sonst 2 für 32-bit-Typen, sonst 1. (Ohne quantity warf der
+// Transport bisher beim Rahmenbau; ein int32 ohne quantity hätte nur ein Wort gelesen.)
+function quantityOf(conf) {
+  const q = Number(conf.quantity);
+  if (Number.isInteger(q) && q > 0) return q;
+  return WIDE_TYPES.has(readTypeOf(conf)) ? 2 : 1;
+}
+
+// E9: 32-bit-Wert aus zwei getrennten Registern, `split: { low, high }` (je ein Wort, gleiche Verbindung/FC).
+async function readSplitWords(conf, read) {
+  const { low, high } = conf.split || {};
+  const rt = readTypeOf(conf);
+  if (rt !== 'int32' && rt !== 'uint32') throw new Error(`split braucht readType int32 oder uint32 (ist ${conf.readType ?? 'leer'})`);
+  if (!isAddress(low) || !isAddress(high)) throw new Error('split braucht die Registeradressen low und high');
+  const lo = await read({ ...conf, address: low, quantity: 1 });
+  const hi = await read({ ...conf, address: high, quantity: 1 });
+  if (!Array.isArray(lo) || !lo.length || !Array.isArray(hi) || !hi.length) throw new Error('split: Register ohne Antwort');
+  return [hi[0], lo[0]];
+}
+
+/**
+ * Liest einen Lesepunkt und dekodiert ihn. Ohne split genau ein read(conf) mit demselben conf-Objekt wie bisher
+ * (bitgleich für die ausgelieferten Profile); nur ein fehlendes `quantity` wird ergänzt.
+ * @param {object} conf - effektive Punkt-Config (host/port/unitId/fc schon aus applyVictronDefaults)
+ * @param {(conf: object) => Promise<number[]>} read - transport.mbRequest
+ * @returns {Promise<number|null>}
+ */
+export async function readPointValue(conf, read) {
+  if (conf.split) {
+    const regs = await readSplitWords(conf, read);
+    return decodePointRegs(regs, { ...conf, wordOrder: 'be' });
+  }
+  const regs = await read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf);
+  return decodePointRegs(regs, conf);
 }

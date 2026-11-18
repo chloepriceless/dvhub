@@ -8,7 +8,7 @@ import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-perfo
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
 // Lesepunkt-Decoder der Herstellerprofile (Lese-Engine E4/E5/E9/E14, 18.11.2026).
-import { decodePointRegs, isLowWordFirst } from './services/inverter/point-read.js';
+import { decodePointRegs, isLowWordFirst, readPointValue } from './services/inverter/point-read.js';
 import {
   identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
   resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry,
@@ -198,8 +198,9 @@ export function createPoller(ctx) {
         state.victron[name] = result.mqttValue;
         sourceAt = Number(result?.ts);
       } else {
-        const regs = await transport.mbRequest(conf);
-        state.victron[name] = pointFromRegs(regs, conf);
+        // Lese-Engine (18.11.2026): ein Lesepunkt kann mehrere Register lesen (split E9). Ohne diese Schlüssel genau
+        // ein mbRequest(conf) wie bisher.
+        state.victron[name] = await readPointValue(conf, (c) => transport.mbRequest(c));
       }
       delete state.victron.errors[name];
       const _now = Date.now();
