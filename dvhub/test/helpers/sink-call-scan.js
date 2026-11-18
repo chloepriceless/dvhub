@@ -1,8 +1,9 @@
 // test/helpers/sink-call-scan.js — findet Schreibaufrufe an Senken im Produktivcode (VCL-Vertrag v6 D.1 R-T1).
 //
-// Ein Fund ist (Datei, Funktion, Senke) — ohne Zeilennummer, damit die Ausnahmeliste stabil bleibt. „Funktion“ ist
-// die Kette der benannten umschließenden Funktionen (`createSungrowEms>writeReg`), anonyme Rückrufe zählen zur
-// nächsten benannten Funktion; auf Modulebene `<module>`.
+// Ein Fund ist (Datei, Funktion, Senke) plus die Zahl der Aufrufstellen darin — ohne Zeilennummer, damit die
+// Ausnahmeliste stabil bleibt, aber ein zweiter Direktaufruf in einer schon gelisteten Funktion auffällt (Codex
+// 39b19e4a P2). „Funktion“ ist die Kette der benannten umschließenden Funktionen (`createSungrowEms>writeReg`),
+// anonyme Rückrufe zählen zur nächsten benannten Funktion; auf Modulebene `<module>`.
 //
 // Erkannt werden (AST, acorn — der Parser unter ESLint):
 //   mbWriteSingle | mbWriteMultiple | mbWriteCoil   Modbus-Schreibfunktionen (Aufruf, Weitergabe, Destrukturierung)
@@ -147,7 +148,7 @@ export function parseModule(src) {
   return acorn.parse(src, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true, allowReturnOutsideFunction: false });
 }
 
-/** Funde in einem Quelltext: [{ fn, sink }] (eindeutig). */
+/** Funde in einem Quelltext: [{ fn, sink, count }] (eindeutig je fn + sink, count = Aufrufstellen). */
 export function scanSource(src, { deviceScope = false } = {}) {
   const ast = parseModule(src);
   const found = new Map();
@@ -155,12 +156,15 @@ export function scanSource(src, { deviceScope = false } = {}) {
     const sink = sinkAt(node, ancestors[ancestors.length - 1], deviceScope);
     if (!sink) return;
     const fn = chainOf(ancestors);
-    found.set(`${fn} :: ${sink}`, { fn, sink });
+    const key = `${fn} :: ${sink}`;
+    const hit = found.get(key);
+    if (hit) hit.count += 1;
+    else found.set(key, { fn, sink, count: 1 });
   });
   return [...found.values()];
 }
 
-/** Alle Funde im Produktivcode, sortiert: [{ file, fn, sink }]. Dateipfade mit `/`. */
+/** Alle Funde im Produktivcode, sortiert: [{ file, fn, sink, count }]. Dateipfade mit `/`. */
 export function scanProduction(dir = DVHUB_DIR) {
   const out = [];
   for (const rel of productionFiles(dir)) {
@@ -175,5 +179,5 @@ export function scanProduction(dir = DVHUB_DIR) {
 export const entryKey = (e) => `${e.file} :: ${e.fn} :: ${e.sink}`;
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
-  for (const e of scanProduction()) console.log(entryKey(e));
+  for (const e of scanProduction()) console.log(`${entryKey(e)} ×${e.count}`);
 }
