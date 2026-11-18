@@ -46,6 +46,22 @@ export function sungrowLegacyPolicies() {
 }
 
 /**
+ * Eine Modbus-Schreibadresse muss eine ganze Zahl sein (Zahl oder Ziffern-Text). Fehlt sie oder ist sie kaputt
+ * (undefined, null, Text, Bruch), kodierte der Transport sie still als Register 0 und der Pfad meldete Erfolg —
+ * z. B. eine Abregelung, die nie an 2707 ankam (Fable-Review 18.11.2026). Eine ganze Zahl außerhalb 0…65535 lehnt
+ * der Transport schon heute vor dem Senden ab; die bleibt bei ihm (gleiche Meldung wie bisher). Gilt für alle
+ * Modbus-Pfade hinter dem Tor; die eigene Prüfung von Pfad 1 (allowAddressZero) bleibt davor bestehen.
+ * @throws {Error} bei fehlender oder nicht ganzzahliger Adresse — der Pfad behandelt das wie einen Modbus-Fehler.
+ */
+export function assertWireAddress(args) {
+  const raw = args?.address;
+  const n = typeof raw === 'number' ? raw : (typeof raw === 'string' && /^-?\d+$/.test(raw.trim()) ? Number(raw.trim()) : NaN);
+  if (!Number.isInteger(n)) {
+    throw new Error(`unsafe modbus write address blocked: ${raw === undefined ? 'undefined' : JSON.stringify(raw)}`);
+  }
+}
+
+/**
  * Modbus-Senke für den Legacy-Modus: genau die heutigen Transport-Aufrufe, Argument-Objekt und Rückgabe unverändert
  * (gleiche Referenz). `transport` ist der Transport des Pfads (bei Sungrow samt Gesundheitszähler).
  */
@@ -53,8 +69,8 @@ export function modbusLegacySink(transport) {
   return {
     kind: 'modbus',
     legacy: {
-      mbWriteSingle: (args) => transport.mbWriteSingle(args),
-      mbWriteMultiple: (args) => transport.mbWriteMultiple(args),
+      mbWriteSingle: (args) => { assertWireAddress(args); return transport.mbWriteSingle(args); },
+      mbWriteMultiple: (args) => { assertWireAddress(args); return transport.mbWriteMultiple(args); },
     },
   };
 }
@@ -140,8 +156,8 @@ export function inverterLegacySink(transport) {
   return {
     kind: transport?.type === 'mqtt' ? 'mqtt' : 'modbus',
     legacy: {
-      mbWriteSingle: (args) => transport.mbWriteSingle(args),
-      mbWriteMultiple: (args) => transport.mbWriteMultiple(args),
+      mbWriteSingle: (args) => { assertWireAddress(args); return transport.mbWriteSingle(args); },
+      mbWriteMultiple: (args) => { assertWireAddress(args); return transport.mbWriteMultiple(args); },
       mqttWrite: (name, value) => transport.mqttWrite(name, value),
     },
     readOnlyWhat: (op) => {
