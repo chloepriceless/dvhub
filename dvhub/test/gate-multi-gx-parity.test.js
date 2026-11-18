@@ -201,7 +201,8 @@ SCENARIOS.read_only = {
   },
 };
 
-// Ungültige Config (writeSafety.ok=false): heute schreibt die zweite GX weiter (Befund, eigener Commit C2).
+// Ungültige Config (writeSafety.ok=false). Ausgewiesene Verhaltensänderung nach der Basis (fix(multi-gx) C2,
+// test/multi-gx-write-safety.test.js): bis dahin schrieb die zweite GX weiter, seither schreibt sie nichts mehr.
 SCENARIOS.write_safety_invalid = {
   run: async (r, { tick }) => {
     await tick('Takt 1');
@@ -213,6 +214,14 @@ SCENARIOS.write_safety_invalid = {
     delete r.cfg.writeSafety;
     await tick('Config wieder gültig');
   },
+  baseDiffers: (before, after) => {
+    const w = (o) => o.out.wire.filter((e) => e.startsWith('W16 gx2/'));
+    assert.equal(w(before).length, 5, 'Basis: schreibt auch bei ungültiger Config (2 Takte + die 0)');
+    assert.equal(w(after).length, 2, 'heute: nur Takt 1 und nach der Erholung');
+    assert.deepEqual(w(after), [w(before)[0], w(before)[4]]);
+    assert.deepEqual(after.out.logs.map((l) => l[0]), ['multi_gx_write_blocked_config_unsafe']);
+  },
+  expect: (n) => assert.equal(n.out.wire.filter((e) => e.startsWith('W16 gx2/')).length, 2),
 };
 
 // Hauptanlage (Pfad 1) und zweite GX (Pfad 8) am selben Tor, ein gemeinsames Protokoll.

@@ -15,7 +15,8 @@
  * Schutz: Not-Halt → kein Write mehr, auch keine 0 (Christin 10.11.2026:
  * „Netz-Sollwert – das was in Victron drinsteht – nichts ändern.“; der
  * flüchtige 2716 läuft dann ab wie bei DVhub aus). Direktvermarkter-Abregelung oder negativer Preis
- * → die zweite Anlage schiebt nichts ins Hausnetz (Sollwert >= 0). Drei
+ * → die zweite Anlage schiebt nichts ins Hausnetz (Sollwert >= 0). Ungültige
+ * Config (writeSafety.ok=false, C2) → kein Write, nur Lesen, Alarm. Drei
  * Fehlversuche → offline, Sollwert 0, EOS rechnet ohne ihren Akku.
  * Eigener Modbus-Pool (server.js), damit eine haengende zweite GX die
  * Hauptanlage nie ausbremst.
@@ -91,6 +92,7 @@ export function createMultiGx(ctx, deps = {}) {
   gate.setDevicePolicies(MULTI_GX_GATE_DEVICE, multiGxLegacyPolicies());
   let gateSeq = 0;
   let lastWrittenW = null;
+  let unsafeAlarm = null;
   let controller = null;
   let controllerKey = '';
   let readErrors = 0;
@@ -139,9 +141,29 @@ export function createMultiGx(ctx, deps = {}) {
     return regs.slice(0, 3).reduce((sum, raw) => sum + int16(Number(raw)), 0);
   }
 
+  // C2 (Christin 16.11.2026) auch hier: ist die wirksame Config ungültig (cfg.writeSafety.ok === false — kaputtes/
+  // fehlendes Herstellerprofil oder kaputte config.json), schreibt KEIN Pfad mehr — auch nicht die zweite GX, die bis
+  // 18.11.2026 nur ihren Schalter, das Beta-Tor und den Not-Halt prüfte. Wie die übrigen Pfade: kein Write, lauter
+  // Alarm einmal je Grund, beim Erholen neu scharf. `alarm`: nur melden, wo sonst wirklich ein Write rausginge.
+  function configUnsafe(cfg, { alarm = false } = {}) {
+    const ws = cfg?.writeSafety;
+    if (!ws || ws.ok !== false) {
+      unsafeAlarm = null;
+      return false;
+    }
+    const reason = ws.reason || 'config_invalid';
+    if (alarm && unsafeAlarm !== reason) {
+      unsafeAlarm = reason;
+      ctx.pushLog?.('multi_gx_write_blocked_config_unsafe', { reason, manufacturer: ws.manufacturer ?? null }, 'error');
+    }
+    return true;
+  }
+
+  const syncRelease = (cfg) => gate.setRelease(MULTI_GX_GATE_DEVICE, cfg?.writeSafety?.ok === false ? 'profileInvalid' : 'open');
+
   // Schreibtor (D.1 #8): derselbe FC-16-Aufruf wie bisher über gate.submit() am Gerät gx2. Die Prüfungen des Takts
-  // (Schalter, Beta-Tor, Not-Halt) sitzen direkt davor, ohne await dazwischen — das Tor urteilt im selben Augenblick
-  // gleich. Die Schreibfreigabe ist offen: dieser Pfad prüft die Config-Gültigkeit heute nicht (Befund, C2).
+  // (Schalter, Beta-Tor, Not-Halt, C2) sitzen direkt davor, ohne await dazwischen — das Tor urteilt im selben
+  // Augenblick gleich. Schreibfreigabe aus DERSELBEN Config wie die C2-Prüfung (R-T2: profileInvalid).
   // Aktionsklasse (A.5): neuer Sollwert = command, derselbe Wert erneut (flüchtiges Register, jeden Takt nachgeführt)
   // = keepalive, die eine 0 beim Abschalten = autoRestore.
   async function write(c, value, action = null) {
@@ -149,7 +171,7 @@ export function createMultiGx(ctx, deps = {}) {
     const v = Number(value);
     const eng = Number.isFinite(v) ? Math.round(v) : 0;
     const cls = action || (lastWrittenW === eng ? 'keepalive' : 'command');
-    gate.setRelease(MULTI_GX_GATE_DEVICE, 'open');
+    syncRelease(ctx.getCfg());
     gateSeq += 1;
     const op = {
       device: MULTI_GX_GATE_DEVICE, point: 'gridSetpointW', value: eng, source: 'multi_gx',
@@ -244,7 +266,10 @@ export function createMultiGx(ctx, deps = {}) {
     if (!c.enabled || !c.host) {
       // Im Not-Halt auch hier nichts schreiben (Christin 10.11.2026).
       const stopNow = ctx.state.ctrl?.discretionaryWritesPaused === true;
-      if (active && c.host && !stopNow) {
+      // Ebenso bei ungültiger Config (C2): auch die eine 0 geht dann nicht raus.
+      const cfgNow = ctx.getCfg();
+      syncRelease(cfgNow);
+      if (active && c.host && !stopNow && !configUnsafe(cfgNow, { alarm: true })) {
         // Einmal neutral hinterlassen; das Register faellt ohnehin von selbst zurueck.
         try { await write(c, 0, 'autoRestore'); } catch { /* best effort */ }
       }
@@ -281,7 +306,8 @@ export function createMultiGx(ctx, deps = {}) {
     // geschrieben, dann zaehlt nur das Lesen: alte Schreibfehler von vor dem
     // Not-Halt vergessen, sonst flattert die Anlage alle 5 s offline/online
     // (Codex 9bb263e9, P2). Nach dem Not-Halt zaehlt wieder der erste Write.
-    if (ctx.state.ctrl?.discretionaryWritesPaused === true) writeErrors = 0;
+    // Ebenso bei ungueltiger Config (C2): kein Write, nur das Lesen zaehlt.
+    if (ctx.state.ctrl?.discretionaryWritesPaused === true || configUnsafe(ctx.getCfg())) writeErrors = 0;
     if (readErrors >= OFFLINE_AFTER_ERRORS || writeErrors >= OFFLINE_AFTER_ERRORS) setAvailable(false, c.host, lastError || 'write_failed');
 
     const cfg = ctx.getCfg() || {};
@@ -314,7 +340,10 @@ export function createMultiGx(ctx, deps = {}) {
     // wird nicht nachgefuehrt und laeuft an der zweiten GX ab (T-0107), wie bei
     // DVhub aus.
     const stopNow = ctrl.discretionaryWritesPaused === true;
-    if (stopNow) {
+    // C2: bei ungueltiger Config ebenso kein Write (Alarm einmal je Grund, nur wo sonst geschrieben wuerde).
+    const unsafe = configUnsafe(cfg, { alarm: readOk && !stopNow });
+    syncRelease(cfg);
+    if (stopNow || unsafe) {
       if (readOk) setAvailable(true, c.host);
     } else if (readOk) {
       try {
@@ -334,8 +363,8 @@ export function createMultiGx(ctx, deps = {}) {
       batteryPowerW: ok ? side.batteryPowerW : null,
       acInW: ok ? side.acInW : null,
       minSocPct: side.minSocPct ?? c.minSocPct,
-      // Im Not-Halt schreibt DVhub keinen Sollwert → keinen anzeigen.
-      setpointW: stopNow ? null : (ok ? out.setpointW : 0), desiredBatteryW: out.desiredFollowerBatteryW, sharePct: out.followerWeightPct,
+      // Im Not-Halt und bei ungueltiger Config schreibt DVhub keinen Sollwert → keinen anzeigen.
+      setpointW: stopNow || unsafe ? null : (ok ? out.setpointW : 0), desiredBatteryW: out.desiredFollowerBatteryW, sharePct: out.followerWeightPct,
       totalBatteryW: out.totalBatteryW, reason: ok || online === null ? out.reason : 'follower_offline',
       handoff: ctx.state.multiGxHandoff?.phase || 'off', mainDischargeBlocked: mainBlocked,
     });
