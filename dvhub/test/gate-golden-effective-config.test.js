@@ -15,9 +15,10 @@
 //   Weggelassen: Override- und Varianten-Kreuzungen mit „geändert"/„kaputt"/„leer" — applyVictronDefaults läuft
 //   in allen Ständen auf derselben Funktion; die Kombinationen bringen keinen neuen Codepfad.
 //
-// Die Zellen „kaputt" und „fehlend" frieren das HEUTIGE Verhalten ein (Victron-Werkswerte bleiben stehen,
-// writeSafety.ok=false). Das neue Soll R-T2 (D.1: kein Victron-Rückgriff, Schreibziele leer) steht als
-// eigener todo-Test darunter und wird mit Phase (b) des Umbaus grün.
+// Die Zellen „kaputt", „fehlend" und „leer" frieren den Fehlerzustand ein (writeSafety.ok=false). Seit E1/E2
+// (18.11.2026) gilt dort R-T2.1 (Vertrag v6): für einen anderen Hersteller als victron bleibt keine Victron-
+// Werkskarte stehen (meter/points/controlWrite/dvControl-Ziele leer); victron selbst behält sie, das Schreiben
+// sperrt writeSafety. Eine leere Profildatei ist seitdem ungültig statt ein {}-Profil.
 //
 // Frieren/aktualisieren: GOLDEN_FREEZE=1 node --test dvhub/test/gate-golden-effective-config.test.js
 // (schreibt test/fixtures/gate-golden/effective-config.json neu). NUR mit belegtem Grund.
@@ -173,7 +174,7 @@ const STATES = {
   modified: (text) => JSON.stringify(modifyProfile(JSON.parse(text)), null, 2),
   broken: (text) => text.slice(0, Math.floor(text.length / 2)),   // syntaktisch kaputt (abgeschnitten)
   missing: () => null,                                            // Datei fehlt
-  empty: () => '',                                                // leere Datei (heute: gültiges {}-Profil)
+  empty: () => '',                                                // leere Datei (ungültig wie kaputt, seit E2)
 };
 
 // Betreiber-Overrides. „enforced" = alle Felder, die config.json laut config-model.js:375-431 noch durchsetzt
@@ -243,9 +244,10 @@ for (const profile of PROFILES) {
 }
 const cellKey = (c) => `${c.profile}|${c.state}|${c.override}|${c.variant}`;
 // Referenz für die Differenz-Ablage: mitgeliefertes/geändertes Profil → das mitgelieferte Profil; kaputt, fehlend
-// oder leer → der Victron-Werksstand (heutiges Verhalten: es bleiben die Vorgaben aus createDefaultConfig stehen).
+// oder leer → der Fehlerzustand „fehlend" desselben Herstellers (victron: Werksstand; andere: ohne Victron-Karte).
+// Nur die Ablage — verglichen wird immer das vollständig expandierte Abbild je Zelle.
 const refKey = (c) => (['broken', 'missing', 'empty'].includes(c.state)
-  ? 'victron|missing|none|default' : `${c.profile}|shipped|none|default`);
+  ? `${c.profile}|missing|none|default` : `${c.profile}|shipped|none|default`);
 
 function runCell(c, tmpRoot) {
   const dir = fs.mkdtempSync(path.join(tmpRoot, 'cell-'));
@@ -354,31 +356,34 @@ test('H-1 D.4(1): effektive Konfiguration je Zelle unverändert (186 Zellen)', (
 });
 
 // Plausibilitätsanker: die Kernaussagen des Vertrags am eingefrorenen Stand, lesbar ohne Fixture-Diff.
-test('H-1 D.4(1): heutiges Verhalten bei kaputtem/fehlendem Profil = Victron-Werkswerte + writeSafety gesperrt', () => {
+test('H-1 D.4(1): kaputtes/fehlendes/leeres Profil = writeSafety gesperrt; victron behält seine Werkskarte', () => {
   for (const profile of PROFILES) {
-    for (const state of ['broken', 'missing']) {
+    for (const state of ['broken', 'missing', 'empty']) {
       const s = captured.snaps[`${profile}|${state}|none|default`];
       assert.equal(s['$.valid'], false, `${profile}/${state}: valid`);
       assert.equal(s['writeSafety.ok'], false, `${profile}/${state}: writeSafety.ok`);
       assert.equal(s['writeSafety.reason'], 'manufacturer_profile_error');
       assert.equal(s['writeSafety.manufacturer'], profile);
-      assert.equal(s['controlWrite.gridSetpointW.address'], 2716, `${profile}/${state}: Victron-Werks-Sollwertregister bleibt stehen`);
     }
+  }
+  for (const state of ['broken', 'missing', 'empty']) {
+    const s = captured.snaps[`victron|${state}|none|default`];
+    assert.equal(s['controlWrite.gridSetpointW.address'], 2716, `victron/${state}: Victron-Werks-Sollwertregister bleibt stehen`);
   }
 });
 
-// Neues Soll R-T2 (D.1): ungültiges Profil → kein Rückgriff auf Victron-Werkswerte, Schreibziele leer.
-// Heute rot (siehe Test oben); wird mit Phase (b) „Fehlerpfad Profil ungültig" grün.
-test('H-1 R-T2: ungültiges/fehlendes Profil → keine Victron-Werkswerte, controlWrite/dvControl/Lesepunkte leer', {
-  todo: 'R-T2 (VCL D.1) — Ziel nach Umbau Phase (b); heute bleiben die Victron-Werkswerte stehen',
-}, () => {
-  for (const profile of PROFILES) {
-    for (const state of ['broken', 'missing']) {
-      const s = captured.snaps[`${profile}|${state}|none|default`];
-      const writeTargets = Object.keys(s).filter((p) => /^(controlWrite|dvControl\.(feedExcessDcPv|dontFeedExcessAcPv|zeroFeedIn))\./.test(p));
-      const readPoints = Object.keys(s).filter((p) => /^(points|meter)\./.test(p));
-      assert.deepEqual(writeTargets, [], `${profile}/${state}: Schreibziele müssen leer sein`);
-      assert.deepEqual(readPoints, [], `${profile}/${state}: herstellerspezifische Lesepunkte müssen leer sein`);
+// R-T2.1 (Vertrag v6 D.1): ungültiges Profil → für einen ANDEREN Hersteller kein Rückgriff auf Victron-Werkswerte;
+// controlWrite, dvControl-Ziele und Profil-Lesepunkte leer. R-T2.2–4 (Lease/safetyRelease) gehören zum Tor.
+test('H-1 R-T2.1: ungültiges/fehlendes/leeres Profil eines anderen Herstellers → keine Victron-Werkswerte, Ziele/Lesepunkte leer', () => {
+  for (const profile of PROFILES.filter((p) => p !== 'victron')) {
+    for (const state of ['broken', 'missing', 'empty']) {
+      for (const override of Object.keys(OVERRIDES)) {
+        const s = captured.snaps[`${profile}|${state}|${override}|default`];
+        const writeTargets = Object.keys(s).filter((p) => /^(controlWrite|dvControl\.(feedExcessDcPv|dontFeedExcessAcPv|zeroFeedIn))\./.test(p));
+        const readPoints = Object.keys(s).filter((p) => /^(points|meter)\./.test(p));
+        assert.deepEqual(writeTargets, [], `${profile}/${state}/${override}: Schreibziele müssen leer sein`);
+        assert.deepEqual(readPoints, [], `${profile}/${state}/${override}: herstellerspezifische Lesepunkte müssen leer sein`);
+      }
     }
   }
 });
