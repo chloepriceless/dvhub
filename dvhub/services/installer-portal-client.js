@@ -215,6 +215,7 @@ const MANUFACTURER_LABELS = {
   'goodwe-et': 'GoodWe ET/EH/BT/BH — nur Anzeige',
   'kostal-plenticore': 'Kostal PLENTICORE / PIKO IQ — nur Anzeige',
   'solax-g4': 'SolaX X1/X3-Hybrid G4 — nur Anzeige',
+  'sma-speedwire': 'SMA Speedwire (STP Smart Energy, SBS, SB/STP) — nur Anzeige',
 };
 
 // Ausgewählter Provider/Hersteller (menschenlesbar) — nur Auswahl, kein Host.
