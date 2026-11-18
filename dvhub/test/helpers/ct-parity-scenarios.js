@@ -638,14 +638,22 @@ export function controlTargetScenarios() {
     },
   };
 
-  // Deye: Sequenz-Flagge ohne eigenes Register über den generischen Einzelregister-Zweig (heute: Register 0, Befund
-  // eingefroren); Work-Mode direkt.
+  // Deye: Work-Mode direkt; die Sequenz-Flagge ohne eigenes Register ging bis 18.11.2026 über den generischen
+  // Einzelregister-Zweig auf Register 0. Ausgewiesene Verhaltensänderung nach der Basis (fix(control), kein Write ohne
+  // gültige Adresse, test/control-target-address-guard.test.js): gegen die Basis-Kopie prüft das Szenario genau diesen
+  // Unterschied, gegen den heutigen Code die volle Gleichheit.
   S.p1_deye_direct = {
     setup: profileSetup('deye-lv', { holding: { 142: 1 } }),
     run: async (r, step) => {
       await step('gridSetpointW nicht freigegeben', set(r, 'gridSetpointW', -500, 'rule:abend'));
       await step('workMode 2 direkt', set(r, 'workMode', 2, 'api_manual_write'));
       await step('dontFeedExcessAcPv 1 direkt', set(r, 'dontFeedExcessAcPv', 1, 'api_manual_write'));
+    },
+    baseDiffers: (before, after) => {
+      assert.deepEqual(before.out.wire, ['W6 gx/u1 @142=2', 'W6 gx/u1 @0=1'], 'Basis: schreibt Register 0');
+      assert.deepEqual(after.out.wire, ['W6 gx/u1 @142=2'], 'heute: kein Write ohne Adresse');
+      assert.deepEqual(after.out.steps.slice(0, 2), before.out.steps.slice(0, 2));
+      assert.match(after.out.steps[2].value.error, /^no valid register address for dontFeedExcessAcPv/);
     },
   };
 

@@ -110,6 +110,15 @@ export function resolveControlWriteVerify(cfg = {}) {
   };
 }
 
+// Register-Adresse eines Modbus-Ziels: endliche ganze Zahl ≥ 0, als Zahl oder Zahlentext (Config-Werte kommen auch
+// als Text). Alles andere (fehlt, null, '', Text, negativ, gebrochen) kodierte der Transport still als Register 0
+// bzw. auf ein anderes Register.
+function isRegisterAddress(a) {
+  if (typeof a === 'number') return Number.isInteger(a) && a >= 0;
+  if (typeof a === 'string' && a.trim() !== '') { const n = Number(a); return Number.isInteger(n) && n >= 0; }
+  return false;
+}
+
 function dischargeFloorHold(target, value) {
   const v = Number(value);
   if (!Number.isFinite(v)) return null;
@@ -1633,6 +1642,14 @@ export function createScheduleEvaluator(ctx) {
     // Number(null)===0 zwar auch blocken, aber mit irreführender Meldung).
     if (conf.sunspec && conf.address == null) return { ok: false, error: 'sunspec address not resolved yet (device scan pending)' };
     if (Number(conf.address) === 0 && conf.allowAddressZero !== true) return { ok: false, error: 'unsafe address 0 blocked (set allowAddressZero=true to override)' };
+    // Kein Register-Write ohne gültige Adresse (Befund 18.11.2026): ein Ziel ohne eigene Adresse — z. B. Deyes
+    // dontFeedExcessAcPv, ein Sequenz-Punkt — fiel sonst in den Einzelregister-Write unten mit address undefined, den
+    // der Transport als Register 0 kodiert (Buffer.writeUInt16BE; ebenso null, Text, gebrochene Zahl). Gilt nur für
+    // diesen generischen Modbus-Write: MQTT, der Sungrow-EMS (emulate) und die feedExcessDcPv-Delegation tragen keine
+    // eigene Adresse. Eine echte 0 erlaubt weiter allowAddressZero (Prüfung darüber).
+    if (target !== 'feedExcessDcPv' && conf.emulate == null && transport.type !== 'mqtt' && !isRegisterAddress(conf.address)) {
+      return { ok: false, error: `no valid register address for ${target} (address=${conf.address === undefined ? 'undefined' : JSON.stringify(conf.address)}), write blocked` };
+    }
 
     // === T-0099 NOT-HALT selective gate =======================================
     // While the operator's emergency stop is active, ONLY whitelisted mandatory
