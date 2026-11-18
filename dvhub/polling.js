@@ -218,6 +218,8 @@ export function createPoller(ctx) {
   }
   // Punkte mit pollEveryMs (z. B. Netzanschluss-Grenze 2714) nur so oft lesen.
   const lastPointPollAt = {};
+  // Ergebnis (E6, für die Hauslast-Ableitung): true = in diesem Takt ein Wert gelesen, false = kein Wert in diesem
+  // Takt (aus, unaufgelöst, Lesefehler, „nicht verfügbar“), undefined = wegen pollEveryMs nicht abgefragt.
   async function pollPoint(name, conf) {
     if (!conf?.enabled) {
       // Abgeschaltet ohne gehaltenen Wert: ein alter Lesefehler gilt nicht mehr —
@@ -227,17 +229,17 @@ export function createPoller(ctx) {
       // räumt dropDisabledPvPoint samt Fehler ab.
       if (state.victron.errors && state.victron[name] == null) delete state.victron.errors[name];
       dropDisabledPvPoint(name, conf);
-      return;
+      return false;
     }
     const every = Number(conf.pollEveryMs);
     if (every > 0) {
       const t = Date.now();
-      if (lastPointPollAt[name] && t - lastPointPollAt[name] < every) return;
+      if (lastPointPollAt[name] && t - lastPointPollAt[name] < every) return undefined;
       lastPointPollAt[name] = t;
     }
     // SunSpec-deklarierte Punkte warten auf den Geräte-Scan (ensureSunspecResolved)
     // — vor der Auflösung wäre die Adresse null (Lesen von Register-Müll).
-    if (conf.sunspec && conf.address == null) return;
+    if (conf.sunspec && conf.address == null) return false;
     try {
       let sourceAt = null;
       if (transport.type === 'mqtt') {
@@ -264,9 +266,11 @@ export function createPoller(ctx) {
       // (multi-gx/floor-handoff.js) nimmt die Empfangszeit, sonst den Poll.
       if (sourceAt > 0) (state.victron.fieldSourceAt ??= {})[name] = sourceAt;
       else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt[name];
+      return state.victron[name] != null;
     } catch (e) {
       state.victron.errors[name] = e.message;
       state.victron.updatedAt = Date.now();
+      return false;
     }
   }
 
@@ -965,6 +969,7 @@ export function createPoller(ctx) {
       } catch { /* metrics must never break the poll cycle */ }
     }
 
+    let loadPolled;
     await Promise.all([
       pollPoint('soc', cfg.points.soc),
       pollPoint('batteryPowerW', cfg.points.batteryPowerW),
@@ -982,7 +987,7 @@ export function createPoller(ctx) {
       pollPoint('activeSocLimitPct', cfg.points.activeSocLimitPct),
       pollPoint('maxDischargeW', cfg.points.maxDischargeW),
       pollPoint('acInputLimitA', cfg.points.acInputLimitA),
-      pollPoint('selfConsumptionW', cfg.points.selfConsumptionW),
+      pollPoint('selfConsumptionW', cfg.points.selfConsumptionW).then((r) => { loadPolled = r; }),
       ...buildDvControlReadbackPolls(cfg).map(([name, conf]) => pollDvControlReadback(name, conf))
     ]);
 
@@ -1117,22 +1122,36 @@ export function createPoller(ctx) {
       state.victron.selfConsumptionW = Number(Math.max(0, derived).toFixed(3));
     }
 
-    // Hauslast aus der Energiebilanz (Profil-opt-in derive = 'energy_balance',
-    // DVhub-MQTT-Schema): nur als RÜCKFALL, wenn die Quelle (HA/Loxone) keinen
-    // Verbrauch liefert. Last = PV + Bezug − Einspeisung − Batterie (Laden +).
-    // Gilt, wenn PV, Netz und Batterie am selben AC-Knoten gemessen werden.
+    // Hauslast aus der Energiebilanz (Profil-opt-in derive = 'energy_balance'):
+    // Last = PV + Bezug − Einspeisung − Batterie (Laden +). Gilt, wenn PV, Netz
+    // und Batterie am selben AC-Knoten gemessen werden. Läuft in jedem Takt, in dem
+    // der Lastpunkt KEINEN Messwert geliefert hat — als Rückfall (DVhub-MQTT-Schema:
+    // HA/Loxone liefert keinen Verbrauch; Lastregister mit Lesefehler) und als
+    // Primärableitung bei Profilen ohne Lastregister (`enabled: false`).
+    // E6 (18.11.2026): früher hieß die Bedingung „selfConsumptionW == null“. Auf
+    // Modbus setzt bei abgeschaltetem Lastpunkt niemand den Wert zurück — nach dem
+    // ersten Takt blieb die Last stehen (2500 W statt 800 W). Auf MQTT liefert
+    // readPoint je Takt neu (null ohne Verbrauch), dort lief es schon.
+    // Ohne Akku-Punkt im Profil (PV-Anlage ohne Speicher) zählt der Akku als 0 W;
+    // ein konfigurierter Akku muss dagegen in diesem Takt gültig gelesen sein.
+    const bpForBalance = cfg.points?.batteryPowerW;
+    const batteryInBalance = !!(bpForBalance && (bpForBalance.enabled || bpForBalance.derive));
+    const loadMeasured = loadPolled === undefined
+      // pollEveryMs-Pause: der gehaltene Wert zählt, wenn er gemessen (nicht abgeleitet) und fehlerfrei ist.
+      ? (state.victron.selfConsumptionW != null && !state.victron.errors?.selfConsumptionW && !state.victron.selfConsumptionDerived)
+      : loadPolled === true;
     if (cfg.points?.selfConsumptionW?.derive === 'energy_balance'
-      && (state.victron.selfConsumptionW == null || state.victron.errors?.selfConsumptionW)
+      && !loadMeasured
       // PV muss in DIESEM Durchlauf gültig gelesen sein: pvTotalW ist immer eine
       // Zahl (0 bei fehlender PV) und pollPoint behält bei Fehlern den alten
       // Wert — ohne diese Prüfung würde eine ausgefallene PV als frischer
       // Verbrauch weiterlaufen (Codex-Review 2026-09-29).
       && state.meter.ok && state.victron.pvPowerW != null && !state.victron.errors?.pvPowerW
-      && state.victron.batteryPowerW != null && !state.victron.errors?.batteryPowerW) {
+      && (!batteryInBalance || (state.victron.batteryPowerW != null && !state.victron.errors?.batteryPowerW))) {
       const derived = Number(state.victron.pvTotalW || 0)
         + Number(state.victron.gridImportW || 0)
         - Number(state.victron.gridExportW || 0)
-        - Number(state.victron.batteryPowerW || 0);
+        - (batteryInBalance ? Number(state.victron.batteryPowerW || 0) : 0);
       state.victron.selfConsumptionW = Number(Math.max(0, derived).toFixed(3));
       state.victron.selfConsumptionDerived = true;
       if (state.victron.errors) delete state.victron.errors.selfConsumptionW;
