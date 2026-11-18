@@ -35,7 +35,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
 import { createSungrowEms, endpointKeyOf, sungrowEmsConf, resolveSecondInverter } from './services/inverter/sungrow.js';
-import { createLegacyGate } from './services/gate/legacy.js';
+import { createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, unwrapLegacyWrite } from './services/gate/legacy.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -157,6 +157,11 @@ export function isMandatoryControlSource(source) {
   return MANDATORY_CONTROL_SOURCES.has(String(source));
 }
 
+// Schreibtor (VCL-Vertrag v6 A.5): Gründe einer PV-Sperre aus einer Pflichtquelle — dieselben drei wie
+// feedInMandatoryBlockReason() und policy.js DV_REASON_CLASS (§ 51 negativer Preis, Direktvermarkter-Abregelung,
+// §-14a-Produktionssperre). Eine solche Sperre ist `protectiveLimit`, jede andere (Regel, Handvorgabe) `command`.
+const DV_PROTECTIVE_REASONS = new Set(['negative_price_protection', 'dv_forced_off', 'paragraph14a_production_block']);
+
 /**
  * EOS "Akku halten" (closedLoopHold): positiver Sollwert, aber KEIN Netzladen.
  * Der Bezug deckt nur die Last und wird jeden Takt aus Live-Werten begrenzt
@@ -241,6 +246,41 @@ export function createScheduleEvaluator(ctx) {
     },
   });
   const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog, gate: writeGate, statePath: ctx.sungrowEmsStatePath || null, slaveActuator: sungrowSlaveEms, forcedHeartbeatPath: ctx.sungrowForcedHeartbeatPath || null, modbusHealth: ctx.sungrowMasterHealth || null });
+
+  // === Schreibtor für die Abregel-Pfade (VCL-Vertrag v6 D.1 #2–#5, H-1 Phase 3, Legacy-Modus) ====================
+  // Die Abregel-Sequenzen (runDvControlSequence), die Einspeisegrenze 2706 (applyDvFeedInLimit), die Nulleinspeisung/
+  // der feste Deckel (zfiWrite) und die Victron-Direktregister/MQTT (applyDvVictronControl) schreiben über DAS Tor am
+  // Gerät `inverter` — dem Transport dieser Bewertung. Die Bestandsprüfungen (C2, Not-Halt, Geräte-Tor) bleiben VOR dem
+  // Tor und entscheiden wie heute. Je Lauf holt der Pfad direkt nach seiner Not-Halt-Prüfung eine Zulassung
+  // (admitLegacyRun): das Tor urteilt dann mit dem Not-Halt-Stand am Laufeingang — heute schreibt eine vor dem
+  // Eintritt begonnene Folge zu Ende. `inHalt` nennt die Regel, nach der die Prüfung des Pfads einen Lauf IM Not-Halt
+  // zulässt (die eine Freigabe einer eigenen Sperre, eine weiterlaufende Pflicht-Klasse, der Begrenzer davor).
+  // Schreibfreigabe des Tors aus derselben Config wie die C2-Prüfung des Laufs. Die Punkte des Geräts kommen aus dem
+  // Herstellerprofil: jeder wird vor seinem ersten Write angemeldet (D.0 — das Profil bestimmt im Legacy-Modus).
+  const invSinkKind = transport?.type === 'mqtt' ? 'mqtt' : 'modbus';
+  writeGate.attachSink(INVERTER_GATE_DEVICE, inverterLegacySink(transport));
+  const invPoints = new Set();
+  let invRunSeq = 0;
+  function admitInverterRun(loop, inHalt = null) {
+    invRunSeq += 1;
+    return { loop, seq: invRunSeq, step: 0, token: writeGate.admitLegacyRun(INVERTER_GATE_DEVICE, { inHalt }) };
+  }
+  async function submitInverter(run, cfg, { point, value, source, kind, action, fn, args }) {
+    if (!invPoints.has(point)) {
+      invPoints.add(point);
+      writeGate.setDevicePolicies(INVERTER_GATE_DEVICE,
+        Object.fromEntries([...invPoints].map((p) => [p, inverterLegacyPolicy(p, invSinkKind)])));
+    }
+    writeGate.setRelease(INVERTER_GATE_DEVICE, cfg?.writeSafety?.ok === false ? 'profileInvalid' : 'open');
+    const v = Number(value);
+    const op = {
+      device: INVERTER_GATE_DEVICE, point, value: Number.isFinite(v) ? v : 0, source: source || 'dv_control', kind, action,
+      lease: null, constraints: { set: {}, caps: {}, enforcedBy: [] }, validUntilMs: null,
+      tick: { loop: run.loop, seq: run.seq }, step: run.step++,
+      legacy: { sink: INVERTER_GATE_DEVICE, fn, args },
+    };
+    return unwrapLegacyWrite(await writeGate.submit(op, { run: run.token }), op);
+  }
 
   // Geräte-Tor (Profil identify.requiredForWrites): geschrieben wird erst, wenn
   // polling.js das Gerät erkannt hat und es unterstützt ist — ein falsches oder
@@ -816,8 +856,12 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
-  async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false, budgeted = false, budgetHoldExempt = false } = {}) {
+  // Schreibtor (D.1 #2): jeder Sequenz-Write geht über submitInverter. `gate` bringt der Aufrufer mit — die
+  // Lauf-Zulassung von SEINEM Eingang (hier gibt es keine eigene Not-Halt-Prüfung, die sitzt beim Aufrufer:
+  // applyDvVictronControl bzw. der Begrenzer vor applyDvFeedInLimit), die Aktionsklasse der ganzen Folge und die Quelle.
+  async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false, budgeted = false, budgetHoldExempt = false, gate: seqGate } = {}) {
     const cfg = getCfg();
+    if (!seqGate?.run) throw new Error('runDvControlSequence ohne Schreibtor-Lauf (Verdrahtungsfehler)');
     const gate = deviceWriteGate(cfg);
     if (gate) throw new Error(gate);
     // M14b Schreibbudget (nur Einspeise-Sequenzpfad, budgeted=true): ist das
@@ -925,11 +969,15 @@ export function createScheduleEvaluator(ctx) {
       const words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
       const fc = Number(pconf.fc || (words.length > 1 ? 16 : 6));
       try {
-        if (fc === 16 || words.length > 1) {
-          await transport.mbWriteMultiple({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, values: words, timeoutMs: pconf.timeoutMs });
-        } else {
-          await transport.mbWriteSingle({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, value: words[0], timeoutMs: pconf.timeoutMs });
-        }
+        const multiple = fc === 16 || words.length > 1;
+        await submitInverter(seqGate.run, cfg, {
+          point: step.point, value, source: seqGate.source,
+          kind: step.restore === true ? 'restore' : 'sequenceStep', action: seqGate.action,
+          fn: multiple ? 'mbWriteMultiple' : 'mbWriteSingle',
+          args: [multiple
+            ? { host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, values: words, timeoutMs: pconf.timeoutMs }
+            : { host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, value: words[0], timeoutMs: pconf.timeoutMs }],
+        });
       } catch (e) {
         // NEU1: Ein optionaler Schritt, dessen Register wirklich fehlt (alte
         // Firmware → Exception 1/2 erst beim Schreiben), darf die Sequenz nicht
@@ -1003,11 +1051,26 @@ export function createScheduleEvaluator(ctx) {
   // Steuerpunkt dvFeedInLimitW (Victron 2706 MaxFeedInPower). Der Wert vor der
   // ersten Begrenzung wird gesichert (persistiert) und bei limitW = null
   // zurückgeschrieben — eine vom Installateur gesetzte Grenze bleibt erhalten.
+  // Schreibtor (D.1 #4): der Pfad hat keine eigene Not-Halt-Prüfung — die sitzt im Begrenzer davor
+  // (feed-in-limit-arbiter.js: set/reapply nur für eine weiterlaufende Klasse, emergencyStop() die eine Rücknahme;
+  // dessen Write läuft auf der Kette des Begrenzers, also womöglich erst nach dem Eintritt). So bleibt es: die
+  // Lauf-Zulassung nennt den Begrenzer als Regel (inHalt), auch ein Lauf im Not-Halt schreibt.
+  // Aktionsklasse (A.5): jede Grenze ist eine Schutz-Begrenzung (DV-Teilvorgabe, EEBUS LPP, feste Grenze — auch die,
+  // die beim Not-Halt-Eintritt stehen bleibt); die Rückstellung auf den Wert vor DVhub ist im Durchgang des
+  // Not-Halts (setEmergencyStop → Begrenzer.emergencyStop, _notHaltNeutralizing) die Rücknahme, sonst autoRestore.
   async function applyDvFeedInLimit(limitW) {
     const steps = limitW == null
       ? [{ point: 'dvFeedInLimitW', restore: true }]
       : [{ point: 'dvFeedInLimitW', value: Math.max(0, Math.round(Number(limitW))), saveBefore: true }];
-    await runDvControlSequence(steps);
+    const haltPass = state.ctrl.discretionaryWritesPaused === true && state.ctrl._notHaltNeutralizing === true;
+    const run = admitInverterRun('event', 'feed_in_limit_arbiter');
+    await runDvControlSequence(steps, {
+      gate: {
+        run,
+        action: limitW != null ? 'protectiveLimit' : (haltPass ? 'haltNeutralize' : 'autoRestore'),
+        source: 'feed_in_limit',
+      },
+    });
     pushLog('dv_feedin_limit_write', { limitW: limitW == null ? 'restore' : limitW });
   }
 
@@ -1023,15 +1086,16 @@ export function createScheduleEvaluator(ctx) {
   // die Solar.web-Werte). Mit Sicherung: genau die gesicherten Punkte
   // zurückschreiben; restore-Schritte ohne Sicherung (Absturz mitten in der
   // Sperre) bekommen keinen Default.
-  async function runFlagSequence(flag, steps, bootRelease, budgetHoldExempt = false) {
+  async function runFlagSequence(flag, steps, bootRelease, budgetHoldExempt = false, gate = undefined) {
     // M14b: nur der Einspeise-Sperrpfad (feedExcessDcPv → 13074/13087/13088/31222)
     // zählt gegen das dvControl-Tagesbudget; die AC-Variante (dontFeedExcessAcPv)
     // und die LUOX-Teilgrenze (2706, applyDvFeedInLimit) bleiben außen vor.
     // budgetHoldExempt (vom Aufrufer): eine Sperre oder ein ausdrücklicher Befehl
     // wird vom Hold ausgenommen (siehe runDvControlSequence), schreibt aber mit.
+    // gate: Schreibtor-Lauf von applyDvVictronControl (Zulassung, Aktionsklasse, Quelle).
     const budgeted = flag === 'feedExcessDcPv';
     if (!bootRelease) {
-      await runDvControlSequence(steps, { requirePersist: true, budgeted, budgetHoldExempt });
+      await runDvControlSequence(steps, { requirePersist: true, budgeted, budgetHoldExempt, gate });
       return false;
     }
     const saved = state.ctrl._dvSeqSaved || {};
@@ -1040,7 +1104,7 @@ export function createScheduleEvaluator(ctx) {
       pushLog('dv_release_skipped_no_own_block', { flag, points: steps.map((st) => st?.point) });
       return true;
     }
-    await runDvControlSequence(steps, { ownOnly: true, budgeted, budgetHoldExempt });
+    await runDvControlSequence(steps, { ownOnly: true, budgeted, budgetHoldExempt, gate });
     return false;
   }
 
@@ -1158,6 +1222,25 @@ export function createScheduleEvaluator(ctx) {
     // Eine Teil-Sperre (state.ctrl._dvPartialBlock) wird trotz gleichem Cache freigegeben.
     if (dvFeedInUnchanged(feedIn)) return;
 
+    // Schreibtor (D.1 #3 und die Sequenzen #2): Lauf-Zulassung direkt nach der Not-Halt-Prüfung oben — beide Flaggen
+    // samt ihren Sequenzen sind EIN Lauf (heute: keine Prüfung je Write). Im Not-Halt hat die Prüfung oben nur die eine
+    // Freigabe (emergency_stop_release) oder eine weiterlaufende Pflicht-Klasse zugelassen; der Grund ist die Regel.
+    // Aktionsklasse (A.5): Freigabe im Not-Halt = der Durchgang (haltNeutralize), ausdrücklicher Befehl = command,
+    // sonst die bequeme Wiederfreigabe (autoRestore); Sperre aus einer Pflichtquelle = protectiveLimit, sonst command.
+    const dvPaused = state.ctrl.discretionaryWritesPaused === true;
+    const dvGate = {
+      run: admitInverterRun('eval', dvPaused ? reason : null),
+      action: feedIn === true
+        ? (dvPaused && reason === 'emergency_stop_release' ? 'haltNeutralize' : (explicit ? 'command' : 'autoRestore'))
+        : (DV_PROTECTIVE_REASONS.has(String(reason)) ? 'protectiveLimit' : 'command'),
+      source: reason || 'dv_control',
+    };
+    // Victron-Direktregister 2707/2708 bzw. MQTT-Brücke (D.1 #3): derselbe Aufruf wie bisher, über das Tor.
+    const submitDvFlag = (point, val, fn, args) => submitInverter(dvGate.run, cfg, {
+      point, value: val, source: dvGate.source, kind: dvGate.action === 'haltNeutralize' ? 'neutralize' : 'write',
+      action: dvGate.action, fn, args,
+    });
+
     const results = {};
     // Erster Aufruf nach dem Start (Change-Cache leer) mit Freigabe: eine
     // Sequenz-Freigabe darf nur eine EIGENE Sperre aufheben (Entscheidung
@@ -1194,15 +1277,15 @@ export function createScheduleEvaluator(ctx) {
         if (Array.isArray(dc.feedExcessDcPv.sequence?.[String(val)])) {
           // M14b-Fix: Sperre (feedIn=false) oder ausdrücklicher Befehl (explicit)
           // nie vom Tagesbudget halten lassen — nur die automatische Freigabe.
-          skipped = await runFlagSequence('feedExcessDcPv', dc.feedExcessDcPv.sequence[String(val)], bootRelease, feedIn !== true || explicit === true);
+          skipped = await runFlagSequence('feedExcessDcPv', dc.feedExcessDcPv.sequence[String(val)], bootRelease, feedIn !== true || explicit === true, dvGate);
         } else if (transport.type === 'mqtt') {
-          await transport.mqttWrite('feedExcessDcPv', val);
+          await submitDvFlag('feedExcessDcPv', val, 'mqttWrite', ['feedExcessDcPv', val]);
         } else {
-          await transport.mbWriteSingle({
+          await submitDvFlag('feedExcessDcPv', val, 'mbWriteSingle', [{
             host: dc.feedExcessDcPv.host, port: dc.feedExcessDcPv.port,
             unitId: dc.feedExcessDcPv.unitId, address: dc.feedExcessDcPv.address,
             value: val, timeoutMs: dc.feedExcessDcPv.timeoutMs
-          });
+          }]);
           feedDcDirectVal = val;
         }
         if (skipped) {
@@ -1257,15 +1340,15 @@ export function createScheduleEvaluator(ctx) {
       try {
         let skipped = false;
         if (Array.isArray(dc.dontFeedExcessAcPv.sequence?.[String(val)])) {
-          skipped = await runFlagSequence('dontFeedExcessAcPv', dc.dontFeedExcessAcPv.sequence[String(val)], bootRelease);
+          skipped = await runFlagSequence('dontFeedExcessAcPv', dc.dontFeedExcessAcPv.sequence[String(val)], bootRelease, false, dvGate);
         } else if (transport.type === 'mqtt') {
-          await transport.mqttWrite('dontFeedExcessAcPv', val);
+          await submitDvFlag('dontFeedExcessAcPv', val, 'mqttWrite', ['dontFeedExcessAcPv', val]);
         } else {
-          await transport.mbWriteSingle({
+          await submitDvFlag('dontFeedExcessAcPv', val, 'mbWriteSingle', [{
             host: dc.dontFeedExcessAcPv.host, port: dc.dontFeedExcessAcPv.port,
             unitId: dc.dontFeedExcessAcPv.unitId, address: dc.dontFeedExcessAcPv.address,
             value: val, timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
-          });
+          }]);
           dontFeedAcDirectVal = val;
         }
         if (skipped) {
@@ -3073,11 +3156,22 @@ export function createScheduleEvaluator(ctx) {
     });
   }
 
-  async function zfiWrite(pconf, value) {
+  // Schreibtor (D.1 #5): jeder Write des Nulleinspeise-Deckels und der festen Einspeisegrenze geht über submitInverter
+  // — derselbe FC-6-Aufruf wie bisher. Eine Geräte-Erkennung hat dieser Pfad heute nicht; so bleibt es (die
+  // Schreibfreigabe des Tors folgt nur der C2-Prüfung des Takts). `w` bringt der Takt mit: Lauf-Zulassung (direkt
+  // nach seiner Not-Halt-Prüfung), Config, Quelle.
+  // Aktionsklassen (A.5): der Deckel unter einer Sperre bzw. die feste Grenze regelt eine Schutz-Begrenzung
+  // (protectiveLimit, auch sein Abschalten bei SoC-Erholung, das die Force-Charge-Sperre wieder scharf macht); das
+  // Abräumen, wenn die Sperre/Grenze entfällt, ist autoRestore; das eine Abräumen im Not-Halt haltNeutralize (Ena = 0).
+  async function zfiWrite(w, point, pconf, value, action = 'protectiveLimit') {
     const encoded = toRawForWrite(value, pconf);
-    await transport.mbWriteSingle({
-      host: pconf.host, port: pconf.port, unitId: pconf.unitId,
-      address: pconf.address, value: encoded.raw, timeoutMs: pconf.timeoutMs
+    await submitInverter(w.run, w.cfg, {
+      point, value, source: w.source, kind: action === 'haltNeutralize' ? 'neutralize' : 'write', action,
+      fn: 'mbWriteSingle',
+      args: [{
+        host: pconf.host, port: pconf.port, unitId: pconf.unitId,
+        address: pconf.address, value: encoded.raw, timeoutMs: pconf.timeoutMs
+      }],
     });
   }
 
@@ -3112,20 +3206,27 @@ export function createScheduleEvaluator(ctx) {
           zfi.limitPct = null;
           zfi.exportStreak = 0;
           zfi.blockedStreak = 0;
-          try { await zfiWrite(enaConf, 0); } catch (e) {
+          const halt = { run: admitInverterRun('zfi', 'emergency_stop_release'), cfg, source: 'zero_feed_in' };
+          try { await zfiWrite(halt, 'wMaxLimEna', enaConf, 0, 'haltNeutralize'); } catch (e) {
             pushLog('zero_feedin_error', { error: e?.message || String(e), phase: 'nothalt_release' }, 'warn');
           }
           pushLog('zero_feedin_cap_exit', { reason: 'emergency_stop' });
         }
         return;
       }
+      // Lauf-Zulassung direkt nach der Not-Halt-Prüfung: im Not-Halt läuft der Takt nur für eine weiterlaufende
+      // Pflicht-Sperre — ihr Grund ist die Regel.
+      const w = {
+        run: admitInverterRun('zfi', state.ctrl.discretionaryWritesPaused ? (state.ctrl._dvBlockReason || 'zero_feed_in') : null),
+        cfg, source: 'zero_feed_in',
+      };
       if (!blocked) {
         zfi.exportStreak = 0;
         zfi.blockedStreak = 0;
         if (zfi.capActive) {
           // Freigabe (Preis positiv / Not-Halt-Release / DV-Ende): nur den
           // Deckel abräumen — OutWRte hat die restore-Sequenz schon gesetzt.
-          await zfiWrite(enaConf, 0);
+          await zfiWrite(w, 'wMaxLimEna', enaConf, 0, 'autoRestore');
           zfi.capActive = false;
           zfi.limitPct = null;
           zfi.trigger = null;
@@ -3194,10 +3295,10 @@ export function createScheduleEvaluator(ctx) {
           zfi.limitPct = loadKnown
             ? clampPct((100 * Math.max(0, loadW - targetImportW)) / refW)
             : ZFI_MIN_PCT;
-          if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, 100);
-          if (rvrtConf?.enabled && rvrtConf.address != null) await zfiWrite(rvrtConf, revertTimeoutS);
-          await zfiWrite(pctConf, zfi.limitPct);
-          await zfiWrite(enaConf, 1);
+          if (outConf?.enabled && outConf.address != null) await zfiWrite(w, 'outWRte', outConf, 100);
+          if (rvrtConf?.enabled && rvrtConf.address != null) await zfiWrite(w, 'wMaxLimPctRvrtTms', rvrtConf, revertTimeoutS);
+          await zfiWrite(w, 'wMaxLimPct', pctConf, zfi.limitPct);
+          await zfiWrite(w, 'wMaxLimEna', enaConf, 1);
           zfi.capActive = true;
           zfi.exportStreak = 0;
           zfi.trigger = trigger;
@@ -3221,8 +3322,8 @@ export function createScheduleEvaluator(ctx) {
       // Reihenfolge beim Exit: erst Force-Charge wieder scharf, dann Deckel
       // aus — so gibt es kein Fenster, in dem weder Akku-Zwang noch Deckel steht.
       const capOff = async (reason, meta) => {
-        if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, -100);
-        await zfiWrite(enaConf, 0);
+        if (outConf?.enabled && outConf.address != null) await zfiWrite(w, 'outWRte', outConf, -100);
+        await zfiWrite(w, 'wMaxLimEna', enaConf, 0);
         zfi.capActive = false;
         zfi.limitPct = null;
         zfi.trigger = null;
@@ -3284,8 +3385,8 @@ export function createScheduleEvaluator(ctx) {
       // refresht das RvrtTms-Fenster (sonst verfiele der Deckel mitten in der
       // Abregelung); Ena wird re-asserted (Gerät könnte nach eigenem Revert
       // oder Neustart auf Normalbetrieb zurückgefallen sein).
-      await zfiWrite(pctConf, zfi.limitPct);
-      await zfiWrite(enaConf, 1);
+      await zfiWrite(w, 'wMaxLimPct', pctConf, zfi.limitPct);
+      await zfiWrite(w, 'wMaxLimEna', enaConf, 1);
 
       // Readback-Drift-Check (throttled): Steuerprioritäten am WR (IO-Steuerung >
       // dyn. Leistungsreduzierung > Modbus) können Writes still ignorieren.
@@ -3343,7 +3444,8 @@ export function createScheduleEvaluator(ctx) {
         if (fic.capActive) {
           fic.capActive = false; fic.limitPct = null; fic.below = 0;
           if (!blocked && enaConf?.address != null) {
-            try { await zfiWrite(enaConf, 0); } catch (e) {
+            const halt = { run: admitInverterRun('zfi', 'emergency_stop_release'), cfg, source: 'feed_in_cap' };
+            try { await zfiWrite(halt, 'wMaxLimEna', enaConf, 0, 'haltNeutralize'); } catch (e) {
               pushLog('feed_in_cap_loop_error', { error: e?.message || String(e), phase: 'nothalt_release' }, 'warn');
             }
           }
@@ -3351,10 +3453,15 @@ export function createScheduleEvaluator(ctx) {
         }
         return;
       }
+      // Lauf-Zulassung direkt nach der Not-Halt-Prüfung (im Not-Halt nur, wenn die Klasse feedInCapLoop weiterläuft).
+      const w = {
+        run: admitInverterRun('zfi', state.ctrl.discretionaryWritesPaused ? 'feedInCapLoop' : null),
+        cfg, source: 'feed_in_cap',
+      };
       if (limitW == null || blocked || transport.type !== 'modbus') {
         // Keine Grenze mehr: eigene Drosselung abräumen. Bei Sperre übernimmt
         // zeroFeedInTick die Register — hier nur den eigenen Zustand vergessen.
-        if (fic.capActive && limitW == null && !blocked && enaConf?.address != null) await zfiWrite(enaConf, 0);
+        if (fic.capActive && limitW == null && !blocked && enaConf?.address != null) await zfiWrite(w, 'wMaxLimEna', enaConf, 0, 'autoRestore');
         if (fic.capActive) pushLog('feed_in_cap_loop_off', { reason: blocked ? 'blocked' : 'no_limit' });
         fic.capActive = false; fic.limitPct = null; fic.below = 0;
         return;
@@ -3366,7 +3473,7 @@ export function createScheduleEvaluator(ctx) {
       });
       if (!act.write) return;
       if (act.ena === 0) {
-        await zfiWrite(enaConf, 0);
+        await zfiWrite(w, 'wMaxLimEna', enaConf, 0, 'autoRestore');
         pushLog('feed_in_cap_loop_off', { reason: 'below_limit', limitW });
         return;
       }
@@ -3374,10 +3481,10 @@ export function createScheduleEvaluator(ctx) {
         // Rückfallzeit zuerst: ohne sie bliebe die Drosselung nach einem
         // DVhub-Ausfall unbegrenzt stehen.
         if (act.enter && rvrtConf?.enabled && rvrtConf.address != null) {
-          await zfiWrite(rvrtConf, Number(cfg.zeroFeedIn?.revertTimeoutS ?? 300));
+          await zfiWrite(w, 'wMaxLimPctRvrtTms', rvrtConf, Number(cfg.zeroFeedIn?.revertTimeoutS ?? 300));
         }
-        await zfiWrite(pctConf, act.limitPct);
-        await zfiWrite(enaConf, 1);
+        await zfiWrite(w, 'wMaxLimPct', pctConf, act.limitPct);
+        await zfiWrite(w, 'wMaxLimEna', enaConf, 1);
       } catch (e) {
         // Einstieg nicht vollständig geschrieben → beim nächsten Takt neu einsteigen
         // (mit Rückfallzeit), statt ohne sie weiterzuregeln.

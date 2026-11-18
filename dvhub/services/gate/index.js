@@ -1,5 +1,6 @@
 // services/gate/index.js — Node-Schreibtor (VCL-Vertrag v6 D.1, H-1). Phase 1: Gerüst; Phase 2: Pfad 6 (Sungrow
-// `writeReg`, Master und Slave) läuft im Legacy-Modus hierüber (services/gate/legacy.js).
+// `writeReg`, Master und Slave) läuft im Legacy-Modus hierüber (services/gate/legacy.js); Phase 3: die Abregel-Pfade
+// 2–5 (schedule-eval.js) mit Lauf-Zulassung.
 //
 // Ein Zugang: `submit(GateOp) → Promise<SubmitResult>`. Jede Schreibabsicht — Vertragsroute oder Legacy-Pfad — soll
 // hier enden (R-T1); bis die acht Pfade umgestellt sind, führt test/gate-rt1-structure.test.js die bekannten
@@ -20,6 +21,13 @@
 // Senke, die Rückgabe kommt unverändert zurück (gleiche Referenz) plus Zusatzfelder — damit ein Pfad später bit-gleich
 // verdrahtet werden kann. Im Legacy-Modus behält der Pfad Besitz-, Budget- und Unverändert-Logik wie heute (D.2):
 // Vorprüfung 8 und die Lease-Pflicht gelten nur für Vertragsoperationen.
+//
+// Legacy-Lauf (Phase 3, Pfade 2–5): Die Abregel-Pfade entscheiden den Not-Halt heute EINMAL am Eingang eines Laufs
+// (applyDvVictronControl, der Begrenzer vor applyDvFeedInLimit, der Anfang des Nulleinspeise-/Deckel-Takts) und
+// schreiben die Folge danach zu Ende. Ein solcher Pfad holt sich direkt nach seiner Prüfung eine Lauf-Zulassung
+// (`admitLegacyRun`) und reicht sie mit jeder Operation des Laufs ein (`submit(op, { run })`). Vorprüfung 1 urteilt
+// dann mit dem Not-Halt-Stand am Laufeingang (siehe checkHalt) — sonst sperrte das Tor eine vor dem Eintritt
+// begonnene Folge mitten drin, was heute nicht geschieht (D.2 bit-gleich). Ohne Zulassung gilt die Regel unverändert.
 
 import { isReadOnlyMode, noteBlockedWrite, ReadOnlyViolation } from '../../read-only-guard.js';
 import {
@@ -241,6 +249,8 @@ export function createGate(options = {}) {
   // auch nicht nach dem Aufheben (Codex 7a183a18 P1).
   let fenceGen = 0;
   let lastHalted = false;
+  // Vom Tor ausgegebene Lauf-Zulassungen (admitLegacyRun). Nur diese gelten — ein nachgebautes Objekt nicht.
+  const issuedRuns = new WeakSet();
 
   const policyOf = (device, point) => policies.get(device)?.get(point) ?? null;
   const epochKey = (device, resource) => `${device}\u0000${resource}`;
@@ -316,6 +326,19 @@ export function createGate(options = {}) {
     for (const device of changed) bumpDevice(device, oldResources.get(device));
   }
 
+  /**
+   * Richtlinien EINES Geräts ersetzen, die übrigen bleiben (Phase 3: die Abregel-Pfade pflegen die Punkte des
+   * Geräts `inverter` aus dem Herstellerprofil, ohne die Sungrow-Tabelle zu kennen). Sonst wie setPolicies.
+   */
+  function setDevicePolicies(device, points) {
+    if (!isNonEmptyString(device)) throw new TypeError('device');
+    // Ohne Prototyp: auch ein Gerät namens `__proto__` bleibt ein eigener Eintrag (Codex 135fdc22 P3).
+    const next = Object.create(null);
+    for (const [d, m] of policies) next[d] = Object.fromEntries(m);
+    next[device] = points || {};
+    setPolicies(next);
+  }
+
   /** Not-Halt-Eintritt melden (wie fenceModbusWrites): alles vorher Zugelassene verfällt. */
   function fence() {
     fenceGen += 1;
@@ -336,6 +359,26 @@ export function createGate(options = {}) {
     checkSink(name, spec);
     if (Object.hasOwn(sinks, name)) throw new Error(`Senke ${name} ist schon angeschlossen`);
     sinks[name] = spec;
+  }
+
+  /**
+   * Lauf-Zulassung für einen Legacy-Pfad (D.2), direkt nach SEINER Not-Halt-Prüfung am Laufeingang geholt. Hält den
+   * Not-Halt-Stand dieses Augenblicks fest; Vorprüfung 1 urteilt für jede Operation des Laufs damit:
+   *   • Eingang außerhalb des Not-Halts → der Lauf schreibt zu Ende, auch wenn der Not-Halt währenddessen beginnt
+   *     (heute: keine Prüfung je Write; die Modbus-Sperrmarke verwirft weiter nur, was beim Eintritt eingereiht war).
+   *   • Eingang im Not-Halt mit `inHalt` (der Pfad nennt die Regel, nach der SEINE Prüfung den Lauf im Not-Halt
+   *     zulässt: die eine Freigabe einer eigenen Sperre, eine nach policy.js weiterlaufende Pflicht-Klasse, ein
+   *     Begrenzer davor) → alles außer `command` und `keepalive`; ein Befehl oder Lebenszeichen bleibt gesperrt.
+   *   • Eingang im Not-Halt ohne `inHalt`, oder Not-Halt-Zustand unlesbar → wie ohne Zulassung im Not-Halt.
+   * @param {string} device
+   * @param {{ inHalt?: string|null }} [opts]
+   */
+  function admitLegacyRun(device, { inHalt = null } = {}) {
+    if (!isNonEmptyString(device)) throw new TypeError('device');
+    const { halted, unknown } = haltedNow();
+    const run = Object.freeze({ device, halted, unknown, inHalt: isNonEmptyString(inHalt) ? inHalt : null });
+    issuedRuns.add(run);
+    return run;
   }
 
   /**
@@ -388,14 +431,26 @@ export function createGate(options = {}) {
   }
 
   const HALT_EXEMPT = new Set(['haltNeutralize', 'manualForceRelease']);
+  // Auch in einem im Not-Halt zugelassenen Legacy-Lauf gesperrt: ein Befehl und ein Lebenszeichen sind nie Teil der
+  // Not-Halt-Regel eines Pfads (A.5: nur Rücknahme bzw. eine weiterlaufende Schutz-Begrenzung).
+  const RUN_HALT_BLOCKED = new Set(['command', 'keepalive']);
 
   const block = (outcome, detail, extra = {}) => ({ outcome, detail, ...extra });
 
   // --- die acht Vorprüfungen (je: null = weiter, sonst Ergebnis) -------------------------------------------------
 
-  function checkHalt(op, pol, adm) {
-    const { halted, unknown } = haltedNow();
+  function checkHalt(op, pol, adm, run) {
+    // Legacy-Lauf: Not-Halt-Stand am Laufeingang (admitLegacyRun), sonst der jetzige.
+    const { halted, unknown } = run ? { halted: run.halted, unknown: run.unknown } : haltedNow();
     const stopped = halted ? 'blocked_nothalt' : 'blocked_gate';
+    // Im Not-Halt zugelassener Lauf: der Pfad hat nach seiner Not-Halt-Regel entschieden (heutiges Verhalten). Ein
+    // Befehl/Lebenszeichen bleibt gesperrt; H-8 gilt weiter (`never` wird auch im Durchgang nie geschrieben). Den
+    // Rücknahme-Wert hält im Legacy-Modus der Pfad (Sicherung dv_seq_saved.json, D.2) — kein Literal-Abgleich.
+    if (run && halted && !unknown && run.inHalt && op.action !== 'manualForceRelease') {
+      if (RUN_HALT_BLOCKED.has(op.action)) return block('blocked_nothalt', DETAIL.notHalt);
+      if (op.action === 'haltNeutralize' && pol && neutralKind(pol) === 'never') return block('skipped_not_owned', DETAIL.neverNeutralized);
+      return null;
+    }
     if (op.action === 'manualForceRelease') {
       // H-7: einzige Ausnahme im Not-Halt — ausdrückliche Bedienhandlung, feste Literalfolge Richtung Grundzustand,
       // nie ein Sollwert. Gilt als Klassen-Definition auch außerhalb des Not-Halts.
@@ -414,6 +469,8 @@ export function createGate(options = {}) {
       return null;
     }
     if (halted) return block('blocked_nothalt', unknown ? DETAIL.haltStateUnknown : DETAIL.notHalt);
+    // Legacy-Lauf außerhalb des Not-Halts zugelassen: er schreibt zu Ende wie heute (keine Sperrmarke im Tor).
+    if (run) return null;
     // Nach dem Aufheben: was vor dem Eintritt oder während des Not-Halts zugelassen wurde, geht nie mehr raus.
     if (adm.halted || adm.fence !== fenceGen) return block('blocked_nothalt', DETAIL.fenced);
     return null;
@@ -435,7 +492,13 @@ export function createGate(options = {}) {
     }
     if (!ro) return null;
     // Zweites Argument: die Operation — ein Legacy-Anschluss kann daraus dieselbe Meldung wie sein Transport bilden.
-    try { onReadOnlyBlock?.(`Tor ${op.device}/${op.point}`, op); } catch { /* Zählen darf das Sperren nicht verhindern */ }
+    // Eine Legacy-Senke kann ihre Zeile selbst liefern (`readOnlyWhat(op)`, z. B. MQTT mit dem Topic des Transports).
+    let what = `Tor ${op.device}/${op.point}`;
+    try {
+      const own2 = op.legacy ? own(sinks, op.legacy.sink)?.readOnlyWhat?.(op) : null;
+      if (isNonEmptyString(own2)) what = own2;
+    } catch { /* die Zeile ist Diagnose */ }
+    try { onReadOnlyBlock?.(what, op); } catch { /* Zählen darf das Sperren nicht verhindern */ }
     return block('blocked_readonly', unknown ? DETAIL.readOnlyStateUnknown : DETAIL.readOnly);
   }
 
@@ -569,13 +632,13 @@ export function createGate(options = {}) {
 
   // --- Bewertung einer Operation ------------------------------------------------------------------------------------
 
-  async function evaluate(op, opId, adm) {
+  async function evaluate(op, opId, adm, run = null) {
     let pol = null;
     let decided = null;
     try {
       pol = policyOf(op.device, op.point);
       const checks = {
-        halt: () => checkHalt(op, pol, adm),
+        halt: () => checkHalt(op, pol, adm, run),
         deadline: () => checkDeadline(op),
         readOnly: () => checkReadOnly(op),
         release: () => checkRelease(op),
@@ -667,10 +730,13 @@ export function createGate(options = {}) {
    * Eine Schreibabsicht prüfen und ggf. zustellen. Vertragsoperationen laufen je Gerät nacheinander (wie das Rust-Tor
    * unter seiner Sperre); die Vorprüfungen laufen direkt vor der Zustellung. Legacy-Operationen werden nicht
    * eingereiht — der Pfad ruft heute direkt, und die Reihenfolge auf dem Draht soll gleich bleiben.
+   * `opts.run`: Lauf-Zulassung (admitLegacyRun) — gilt nur für eine Legacy-Operation an genau dieses Gerät und nur,
+   * wenn dieses Tor sie ausgegeben hat; sonst wird sie übergangen (Regel ohne Zulassung).
    * @param {GateOp} op
+   * @param {{ run?: object }} [opts]
    * @returns {Promise<SubmitResult>}
    */
-  async function submit(op) {
+  async function submit(op, opts = undefined) {
     const invalid = validateOp(op);
     if (invalid) {
       invalidCounter += 1;
@@ -691,12 +757,17 @@ export function createGate(options = {}) {
     // Zulassung: Epoche, Not-Halt-Sperrmarke und Not-Halt jetzt festhalten (R-T5, R-L6).
     const { halted } = haltedNow();
     const adm = { gen: rel(op.device).gen, fence: fenceGen, halted };
-    if (op.legacy) return evaluate(op, opId, adm);
+    if (op.legacy) {
+      const r = opts?.run;
+      const run = r && issuedRuns.has(r) && r.device === op.device ? r : null;
+      return evaluate(op, opId, adm, run);
+    }
     return enqueue(op.device, () => evaluate(op, opId, adm));
   }
 
   return {
     submit,
+    admitLegacyRun,
     setRelease,
     fence,
     releaseState: (device) => rel(device).state,
@@ -704,6 +775,7 @@ export function createGate(options = {}) {
     leaseEpoch,
     advanceLeaseEpoch,
     setPolicies,
+    setDevicePolicies,
     setReleased,
     attachSink,
     owned: (device, point) => owners.get(device, point),
