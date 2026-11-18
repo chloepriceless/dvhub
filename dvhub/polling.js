@@ -484,15 +484,19 @@ export function createPoller(ctx) {
   const sunspecRetryAt = new Map();
   // Drossel für m160_battery-Derive-Diagnose (1×/5 min statt jeden Zyklus).
   let m160DeriveLogAt = 0;
-  // E5: SunSpec-relativer Skalenfaktor `sunspec.sfOffset` → absolute `sfAddress` im selben Modell (address − offset
-  // + sfOffset). Nur Lesepunkte; Schreibziele bleiben unverändert. Ein ungültiger sfOffset wird zum Lesefehler
-  // (readScaleFactor), nie zu einem Wert ohne Skalenfaktor.
-  function withSunspecScaleFactor(conf) {
+  // E5: SunSpec-relativer Skalenfaktor `sunspec.sfOffset` → absolute `sfAddress` im selben Modell (Modellbasis +
+  // sfOffset). Nur Lesepunkte; Schreibziele bleiben unverändert. Ein sfOffset außerhalb des gescannten Modells
+  // (0 ≤ sfOffset < Modelllänge, Codex 2d7097cd: sonst las er z. B. die Endmarke 0xFFFF als SF −1) oder ein
+  // ungültiger wird zum Lesefehler des Punkts, nie zu einem Wert mit falschem Skalenfaktor.
+  function withSunspecScaleFactor(conf, scan) {
     const sfOffset = conf?.sunspec?.sfOffset;
     if (conf?.address == null || sfOffset == null) return conf;
-    const base = Number(conf.address) - Number(conf.sunspec.offset);
-    const sfAddress = typeof sfOffset === 'number' && Number.isInteger(sfOffset) && Number.isInteger(base)
-      ? base + sfOffset : `sunspec.sfOffset ${sfOffset}`;
+    const { model, instance } = conf.sunspec;
+    const entry = scan?.byId?.get(Number(model))?.[Number(instance) || 0];
+    const inModel = typeof sfOffset === 'number' && Number.isInteger(sfOffset) && entry
+      && sfOffset >= 0 && sfOffset < Number(entry.length);
+    const sfAddress = inModel ? entry.address + sfOffset
+      : `sunspec.sfOffset ${sfOffset} (außerhalb von Modell ${model}, Länge ${entry?.length ?? '?'})`;
     return { ...conf, sfAddress };
   }
   const sunspecEndpointOf = (conf, v) => ({
@@ -552,7 +556,7 @@ export function createPoller(ctx) {
         for (const slot of group.slots) {
           const { resolved, missing } = resolveSunspecAddresses({ [slot.label]: slot.holder[slot.key] }, scan);
           const conf = resolved[slot.label];
-          slot.holder[slot.key] = slot.read ? withSunspecScaleFactor(conf) : conf;
+          slot.holder[slot.key] = slot.read ? withSunspecScaleFactor(conf, scan) : conf;
           allMissing.push(...missing);
         }
         // M160-Modellbasis für den m160_battery-Derive merken: der liest den

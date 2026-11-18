@@ -109,21 +109,54 @@ function quantityOf(conf) {
 }
 
 // E5: SunSpec-Skalenfaktor (sunssf, int16, −10…10; 0x8000 = nicht implementiert → Wert unbekannt). Gleiche
-// Verbindung, Unit-ID und Funktionscode wie der Wert. Je Takt höchstens einmal je Register gelesen (cache).
-async function readScaleFactor(conf, read, cache) {
+// Verbindung, Unit-ID und Funktionscode wie der Wert.
+// Konsistenz (Codex 2d7097cd): SF und Wert müssen zur selben Probe gehören — SolarEdge ändert W_SF je nach
+// Leistungsbereich; (Rohwert 1000, SF 0) → (10000, SF −1) zwischen zwei Lesungen ergab 10000 W statt 1000 W.
+//   • SF nah beim Wert (Spanne ≤ SF_BLOCK_SPAN Register, der übliche SunSpec-Aufbau): ein Block-Read für beide.
+//   • sonst SF vorher, Wert, SF nachher: nur wenn der SF gleich bleibt, gehört das Paar zusammen; bis zu drei
+//     Versuche, sonst Lesefehler. Der Takt-Cache (sfCache) liefert nur den „vorher“-Wert und hält den jüngsten SF.
+const SF_BLOCK_SPAN = 8;
+const SF_MAX_ATTEMPTS = 3;
+const sfKeyOf = (conf) => `${conf.host ?? ''}|${conf.port ?? ''}|${conf.unitId ?? ''}|${conf.fc ?? ''}|${conf.sfAddress}`;
+
+function decodeScaleFactor(word, address) {
+  const sf = s16(word);
+  if (sf === -32768) return null;
+  if (sf < -10 || sf > 10) throw new Error(`Skalenfaktor @${address} = ${sf} liegt außerhalb −10…10`);
+  return sf;
+}
+
+function assertSfAddress(conf) {
   if (!isAddress(conf.sfAddress)) throw new Error(`sfAddress ${conf.sfAddress} ist keine Registeradresse`);
+}
+
+function readScaleFactorFresh(conf, read, cache) {
   const address = conf.sfAddress;
-  const key = `${conf.host ?? ''}|${conf.port ?? ''}|${conf.unitId ?? ''}|${conf.fc ?? ''}|${address}`;
-  if (cache?.has(key)) return cache.get(key);
   const pending = read({ ...conf, address, quantity: 1 }).then((regs) => {
     if (!Array.isArray(regs) || regs.length < 1) throw new Error(`Skalenfaktor @${address}: keine Antwort`);
-    const sf = s16(regs[0]);
-    if (sf === -32768) return null;
-    if (sf < -10 || sf > 10) throw new Error(`Skalenfaktor @${address} = ${sf} liegt außerhalb −10…10`);
-    return sf;
+    return decodeScaleFactor(regs[0], address);
   });
-  cache?.set(key, pending);
+  cache?.set(sfKeyOf(conf), pending);
   return pending;
+}
+
+function readScaleFactorBefore(conf, read, cache) {
+  const key = sfKeyOf(conf);
+  if (cache?.has(key)) return cache.get(key);
+  return readScaleFactorFresh(conf, read, cache);
+}
+
+// SF vorher, Wert (readValue), SF nachher — Ergebnis { sf, value } nur bei unverändertem SF. sf null = unbekannt.
+async function readWithStableScaleFactor(conf, read, cache, readValue) {
+  let sf = await readScaleFactorBefore(conf, read, cache);
+  for (let attempt = 0; attempt < SF_MAX_ATTEMPTS; attempt += 1) {
+    if (sf === null) return { sf: null, value: null };
+    const value = await readValue();
+    const after = await readScaleFactorFresh(conf, read, cache);
+    if (after === sf) return { sf, value };
+    sf = after;
+  }
+  throw new Error(`Skalenfaktor @${conf.sfAddress} änderte sich bei jeder Lesung (${SF_MAX_ATTEMPTS} Versuche) — kein konsistenter Wert`);
 }
 
 // E9: 32-bit-Wert aus zwei getrennten Registern, `split: { low, high }` (je ein Wort, gleiche Verbindung/FC).
@@ -170,19 +203,32 @@ async function readCombined(conf, read, ctx) {
   const terms = conf.combine;
   if (!terms.length) throw new Error('combine braucht mindestens einen Eintrag');
   if (terms.length > MAX_COMBINE_TERMS) throw new Error(`combine: höchstens ${MAX_COMBINE_TERMS} Einträge`);
-  let sum = 0;
   for (const term of terms) {
     if (!term || typeof term !== 'object' || Array.isArray(term) || term.combine != null) {
       throw new Error('combine: Eintrag muss ein Register-Objekt sein (ohne verschachteltes combine)');
     }
     if (!term.split && !isAddress(term.address)) throw new Error(`combine: Registeradresse fehlt oder ist ungültig (${term.address})`);
-    const v = await readPointValue(combineTermConf(conf, term), read, { ...ctx, exact: true });
-    // Ein Summand ohne Wert (Sentinel/NaN) macht die Summe unbekannt — nie mit einem stillen 0-W-Teil rechnen.
-    if (v == null) return null;
-    sum += v;
   }
-  const sf = conf.sfAddress != null ? await readScaleFactor(conf, read, ctx.sfCache) : undefined;
-  if (sf === null) return null;
+  const sumTerms = async () => {
+    let sum = 0;
+    for (const term of terms) {
+      const v = await readPointValue(combineTermConf(conf, term), read, { ...ctx, exact: true });
+      // Ein Summand ohne Wert (Sentinel/NaN) macht die Summe unbekannt — nie mit einem stillen 0-W-Teil rechnen.
+      if (v == null) return null;
+      sum += v;
+    }
+    return sum;
+  };
+  let sf;
+  let sum;
+  if (conf.sfAddress != null) {
+    assertSfAddress(conf);
+    ({ sf, value: sum } = await readWithStableScaleFactor(conf, read, ctx.sfCache, sumTerms));
+    if (sf === null) return null;
+  } else {
+    sum = await sumTerms();
+  }
+  if (sum == null) return null;
   return Number((sum * factorOf(conf, sf) + Number(conf.offset ?? 0)).toFixed(3));
 }
 
@@ -198,14 +244,29 @@ async function readCombined(conf, read, ctx) {
 export async function readPointValue(conf, read, ctx = {}) {
   if (Array.isArray(conf.combine)) return readCombined(conf, read, ctx);
   if (conf.combine != null) throw new Error('combine muss eine Liste sein');
-  const sf = conf.sfAddress != null ? await readScaleFactor(conf, read, ctx.sfCache) : undefined;
-  if (sf === null) return null;
-  if (conf.split) {
-    const regs = await readSplitWords(conf, read);
-    return decodePointRegs(regs, { ...conf, wordOrder: 'be' }, { exact: ctx.exact, sf });
+  const decodeConf = conf.split ? { ...conf, wordOrder: 'be' } : conf;
+  const readValue = () => (conf.split
+    ? readSplitWords(conf, read)
+    : read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf));
+  if (conf.sfAddress == null) return decodePointRegs(await readValue(), decodeConf, { exact: ctx.exact });
+  assertSfAddress(conf);
+  // SF nah beim Wert: ein Block für beide (eine Modbus-Antwort = eine Probe).
+  const q = quantityOf(conf);
+  if (!conf.split && isAddress(conf.address)) {
+    const from = Math.min(conf.address, conf.sfAddress);
+    const to = Math.max(conf.address + q, conf.sfAddress + 1);
+    if (to - from <= SF_BLOCK_SPAN) {
+      const block = await read({ ...conf, address: from, quantity: to - from });
+      if (!Array.isArray(block) || block.length < to - from) throw new Error(`Wert/Skalenfaktor-Block @${from}: unvollständige Antwort`);
+      const sf = decodeScaleFactor(block[conf.sfAddress - from], conf.sfAddress);
+      ctx.sfCache?.set(sfKeyOf(conf), Promise.resolve(sf));
+      if (sf === null) return null;
+      return decodePointRegs(block.slice(conf.address - from, conf.address - from + q), conf, { exact: ctx.exact, sf });
+    }
   }
-  const regs = await read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf);
-  return decodePointRegs(regs, conf, { exact: ctx.exact, sf });
+  const { sf, value } = await readWithStableScaleFactor(conf, read, ctx.sfCache, readValue);
+  if (sf === null) return null;
+  return decodePointRegs(value, decodeConf, { exact: ctx.exact, sf });
 }
 
 // Wartet ein Eintrag (Punkt, Zähler, Phase) noch auf die SunSpec-Auflösung?
