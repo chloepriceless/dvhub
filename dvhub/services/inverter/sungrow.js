@@ -302,31 +302,35 @@ export function decideEmsCommand({
   // Entlade-Boden (SoC < hardFloorSocPct): nur das ENTLADEN sperren. Das Laden aus PV-Überschuss bleibt
   // erlaubt (Sollwert 0 + Einspeisung → p > 0 → Laden bis Netz ≈ 0). Gilt nur im Forced-Pfad.
   const belowFloor = forced && fin(socPct) && fin(floorSocPct) && Number(socPct) < Number(floorSocPct);
-  let capped = false; // an einer harten Grenze geklemmt? → sichere Quantisierung (VÄ-12/I-SafeQuant)
+  // Harte Obergrenze für |p| in der gewählten Richtung (I-SafeQuant/VÄ-12): maxCharge bzw. PV-Überschuss bei
+  // Netzlade-Verbot, maxDischarge bzw. Netto-Last bei „keine Einspeisung". Geprüft wird NACH der Quantisierung.
+  let bound = null;
   if (p > 0) {
-    if (p > Number(maxChargeW)) capped = true;
-    p = Math.min(p, Number(maxChargeW));
+    bound = Number(maxChargeW);
     if (s <= 0 || noGridCharge === true) {
       const surplus = fin(pvW) && fin(loadW) ? Math.max(0, Number(pvW) - Number(loadW)) : 0;
-      if (p > surplus) { p = surplus; reason = 'charge_pv_only'; capped = true; }
+      bound = Math.min(bound, surplus);
+      if (Math.min(p, Number(maxChargeW)) > surplus) reason = 'charge_pv_only'; // wie bisher: nach der maxCharge-Klemmung
     }
+    p = Math.min(p, bound);
   } else if (p < 0) {
     if (belowFloor) { p = 0; reason = 'discharge_floor'; } // SoC am Boden → kein Entladen (nur dieser Takt)
     else {
-      if (-p > Number(maxDischargeW)) capped = true;
-      p = Math.max(p, -Number(maxDischargeW));
+      bound = Number(maxDischargeW);
       if (s >= 0) {
         const netLoad = fin(pvW) && fin(loadW) ? Math.max(0, Number(loadW) - Number(pvW)) : 0;
-        if (-p > netLoad) { p = -netLoad; reason = 'discharge_load_only'; capped = true; }
+        bound = Math.min(bound, netLoad);
+        if (Math.min(-p, Number(maxDischargeW)) > netLoad) reason = 'discharge_load_only'; // wie bisher: nach der maxDischarge-Klemmung
       }
+      p = Math.max(p, -bound);
     }
   }
-  // I-SafeQuant / VÄ-12 (VCL-Vertrag): Wurde |p| an eine harte Grenze geklemmt (PV-Überschuss bei
-  // noGridCharge, maxCharge, netLoad, maxDischarge), zur SICHEREN Seite ABrunden — sonst reißt die
-  // 10-W-Quantisierung die Grenze wieder (156 W Überschuss → sonst 160 W Netzladen; Codex Runde 6/7, am
-  // Gerät belegt). Freie Regelwerte runden weiter normal (nearest).
+  // I-SafeQuant / VÄ-12 (VCL-Vertrag): normal auf das 10-W-Raster runden; reißt der gerundete Wert die harte
+  // Grenze, zur SICHEREN Seite abrunden. Sonst machen 156 W Überschuss 160 W (4 W Netzladen) bzw. 156 W Netto-Last
+  // 160 W Entladen (4 W Akku-Einspeisung) — auch wenn |p| die Grenze vorher nicht überschritt (Fable-Review 18.11.).
   const q = Math.abs(p) / 10;
-  const powerW = (capped ? Math.floor(q) : Math.round(q)) * 10;
+  let powerW = Math.round(q) * 10;
+  if (bound != null && powerW > bound) powerW = Math.floor(q) * 10;
   if (powerW < Math.max(0, Number(minPowerW) || 0)) return { mode: 'forced', command: 'stop', powerW: 0, reason };
   return { mode: 'forced', command: p > 0 ? 'charge' : 'discharge', powerW, reason };
 }

@@ -82,6 +82,18 @@ test('VÄ-12/I-SafeQuant: kein Netzladen, Überschuss 156 W → 150 W abgerundet
   assert.equal(decideEmsCommand({ ...base, setpointW: 4000, gridImportW: 2800, batteryW: 2300, pvW: 0, loadW: 500 }).powerW, 3140);
 });
 
+test('VÄ-12/I-SafeQuant: Regelwert genau an der Grenze rundet nicht darüber (Fable-Review 18.11.)', () => {
+  // p = 100 + 0,7 · 80 = 156 W, PV-Überschuss 656 − 500 = 156 W, Netzladen verboten: NICHT geklemmt (p ≤ Grenze),
+  // aber round() machte 160 W = 4 W Netzladen. Jetzt 150 W.
+  const c = decideEmsCommand({ ...base, forced: true, noGridCharge: true, setpointW: 0, gridImportW: -80, batteryW: 100, pvW: 656, loadW: 500 });
+  assert.deepEqual([c.command, c.powerW], ['charge', 150]);
+  // Spiegelfall Entladen bei „keine Einspeisung" (Sollwert ≥ 0): Netto-Last 656 − 500 = 156 W → 150 W, nicht 160 W.
+  const d = decideEmsCommand({ ...base, forced: true, setpointW: 0, gridImportW: 80, batteryW: -100, pvW: 500, loadW: 656 });
+  assert.deepEqual([d.command, d.powerW], ['discharge', 150]);
+  // Ohne Grenze in Reichweite rundet der Regler weiter normal: 3136 W → 3140 W.
+  assert.equal(decideEmsCommand({ ...base, setpointW: 4000, gridImportW: 2800, batteryW: 2300, pvW: 0, loadW: 500 }).powerW, 3140);
+});
+
 test('Regler: keine Einspeisung gewünscht → Entladen höchstens die Netto-Last', () => {
   // S = +400, Netz −1600, Akku −2000, PV 0, Last 400: P = −2000 + 0,7 · 2000 = −600 → Netto-Last 400 → 400 W
   assert.deepEqual(decideEmsCommand({ ...base, setpointW: 400 + 1, gridImportW: -1600, batteryW: -2000, pvW: 0, loadW: 400 }),
