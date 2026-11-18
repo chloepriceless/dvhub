@@ -102,7 +102,7 @@ import { createConfigRoutes } from './routes/config-routes.js';
 import { createAdminRoutes } from './routes/admin-routes.js';
 import { createNotificationRoutes } from './routes/notification-routes.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
-import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collectChangedPaths } from './config-model.js';
+import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collectChangedPaths, isManufacturerId } from './config-model.js';
 import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
 import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
 import { isSupportTunnelConsentAction, isSupportTunnelWrite, bodyKeyNames, supportTunnelActionKind, SUPPORT_TUNNEL_KIND_LABELS } from './services/support-tunnel-policy.js';
@@ -848,7 +848,9 @@ export function listManufacturerProfiles(ctx) {
       .filter((f) => !f.startsWith('.') && f.toLowerCase().endsWith('.json'))
       .map((f) => {
         const id = f.replace(/\.json$/i, '');
-        if (!id) return null;
+        // E1: nur IDs, die loadConfigFile auch lädt (a-z, 0-9, - und _) — sonst böte das Feld eine Datei an, die
+        // nach dem Speichern im Zustand „Profil fehlt" endet.
+        if (!isManufacturerId(id)) return null;
         let label = id.charAt(0).toUpperCase() + id.slice(1);
         let beta = false;
         try {

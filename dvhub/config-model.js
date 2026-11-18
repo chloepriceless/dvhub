@@ -350,6 +350,15 @@ function stripManufacturerManagedFields(raw, warnings) {
   }
 }
 
+// E1 (S1, 18.11.2026): Hersteller-ID = Dateiname eines Profils in hersteller/ ohne .json — dieselbe Quelle wie das
+// Auswahlfeld (routes-api.js listManufacturerProfiles). Es gibt keine feste Liste mehr: ein vorhandenes Profil lädt
+// als es selbst, eine ID ohne Datei endet in „Profil fehlt" (valid:false, writeSafety gesperrt) — nie still als
+// victron. Das Muster hält Pfadtrenner, Großbuchstaben und Punktdateien (.shipped-hashes.json) draußen.
+const MANUFACTURER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export function isManufacturerId(value) {
+  return typeof value === 'string' && MANUFACTURER_ID_PATTERN.test(value);
+}
+
 function resolveManufacturerProfilePath(configPath, manufacturer) {
   return path.join(path.dirname(configPath), 'hersteller', `${manufacturer}.json`);
 }
@@ -2065,9 +2074,11 @@ function buildFieldDefinitions() {
       path: 'manufacturer',
       label: 'Hersteller',
       type: 'select',
-      // Statische Fallback-Liste — die API liefert die echten Optionen dynamisch
-      // aus dem hersteller/-Ordner (routes-api.js configMetaPayload), damit ein
-      // neu abgelegtes Profil ohne Code-Änderung auswählbar ist (D-27).
+      // Statische Fallback-Liste NUR für die Anzeige — die API liefert die echten
+      // Optionen dynamisch aus dem hersteller/-Ordner (routes-api.js
+      // configMetaPayload), damit ein neu abgelegtes Profil ohne Code-Änderung
+      // auswählbar ist (D-27). Geprüft wird gegen den Ordner, nicht gegen diese
+      // Liste (E1: sanitizeManufacturerId + loadConfigFile).
       options: [
         { value: 'victron', label: 'Victron' },
         { value: 'bridge-mqtt', label: 'Universal (MQTT-Bridge)' },
@@ -6579,6 +6590,23 @@ function migratePvTotalKwp(raw) {
   if (sum > 0 && Math.abs(sum - (Number(pv.totalKwp) || 0)) > 1e-6) pv.totalKwp = Math.round(sum * 100) / 100;
 }
 
+// E1 (S1): `manufacturer` wird NICHT gegen die feste Optionsliste geprüft. Früher setzte der select-Zweig jede
+// unbekannte ID still auf victron zurück — die Victron-Schreibkarte zielte dann auf das fremde Gerät, und die
+// Config galt als gültig. Jetzt bleibt die ID stehen; ob es das Profil gibt, entscheidet loadConfigFile am
+// hersteller/-Ordner (fehlt es: valid:false, writeSafety gesperrt). Nur „leer" heißt Standard victron.
+function sanitizeManufacturerId(raw, value, warnings) {
+  const id = String(value ?? '').trim().toLowerCase();
+  if (!id) {
+    warnings.push('manufacturer: invalid option, field was reset to default');
+    deletePath(raw, 'manufacturer');
+    return;
+  }
+  if (!isManufacturerId(id)) {
+    warnings.push('manufacturer: not a valid profile id (a-z, 0-9, - and _) — no manufacturer profile is loaded, device writes stay blocked');
+  }
+  setPath(raw, 'manufacturer', id);
+}
+
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
@@ -6630,6 +6658,11 @@ function sanitizeRawConfig(rawInput) {
       } else {
         setPath(raw, field.path, num);
       }
+      continue;
+    }
+
+    if (field.path === 'manufacturer') {
+      sanitizeManufacturerId(raw, currentValue, warnings);
       continue;
     }
 
@@ -7107,10 +7140,13 @@ export function loadConfigFile(configPath) {
   scrubStoredPlaceholders(parsed);
   const normalized = normalizeConfigInput(parsed);
   const manufacturer = normalized.persistedConfig.manufacturer || 'victron';
-  const manufacturerProfilePath = resolveManufacturerProfilePath(configPath, manufacturer);
+  // Keine gültige ID (Pfadtrenner o. Ä.): kein Dateizugriff außerhalb von hersteller/, Zustand „Profil fehlt".
+  const manufacturerProfilePath = isManufacturerId(manufacturer)
+    ? resolveManufacturerProfilePath(configPath, manufacturer) : null;
   let effectiveConfig = normalized.effectiveConfig;
 
   try {
+    if (!manufacturerProfilePath) throw new Error('manufacturer is not a valid profile id');
     manufacturerProfile = loadManufacturerProfile(manufacturerProfilePath);
     effectiveConfig = applyManufacturerProfile(normalized.persistedConfig, manufacturerProfile);
   } catch (error) {
