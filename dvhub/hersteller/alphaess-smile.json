@@ -1,0 +1,136 @@
+{
+  "label": "AlphaESS SMILE (SMILE5/B3/G3) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (AlphaESS-Netzzähler), PV (MPPT 1–3), Akku-Leistung und SoC am EMS (Modbus TCP, Port 502, Unit-ID 85) und rechnet die Hauslast aus der Energiebilanz. DVhub schreibt nichts an das Gerät. AlphaESS verlangt über 300 ms Abstand zwischen zwei Anfragen; DVhub fragt die Werte noch direkt nacheinander ab, einzelne Lesefehler sind deshalb möglich. Anleitung: docs/hersteller/alphaess-smile.md.",
+  "_doc": [
+    "AlphaESS SMILE-Reihe am EMS mit Modbus TCP: SMILE5, SMILE-B3/-B3-Plus, SMILE-Hi, SMILE-G3 (einphasig und T-Serie),",
+    "Storion-SMILE. Die Leseregister sind auf beiden Plattformen gleich (evcc nutzt ein Profil für alle; die G3-",
+    "Integration liest dieselben Adressen). NICHT für EMS mit Seriennummer AL200… (nur RS485, E12) und nicht für die",
+    "C&I-Reihe Storion-T30/T50 (ungeprüft).",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [SPEC] AlphaESS „Modbus_RTU/TCP Protocol“ V1.17 (11.08.2020) · [SPEC-neu]",
+    "AlphaESS-Registerliste der SMILE-G3-Generation (im Repo ramonvanraaij/ha-alphaess-modbus) · [COMM] evcc",
+    "templates/definition/meter/alpha-ess-smile.yaml (Netz 0x21 int32 unverändert, PV 0x41F/0x423/0x427/… uint32, Akku",
+    "0x126 int16 unverändert bei evcc-Konvention + = Entladen, SoC 0x102 × 0,1) und ha-alphaess-modbus (gleiche",
+    "Adressen) · [DECOMP] Plexlog (liest 0x102 und 0x126). Zusammenfassung:",
+    ".planning/docs/research/2026-11-15-alphaess-modbus-control-spec.md §2–3 und 2026-11-18-hersteller-lesend-luecken.md §3.10.",
+    "",
+    "Netzregister — Abweichung von der Spec: V1.17 legt den Netzzähler ab 0x0000 an (Summe 0x0006). Die neuere",
+    "Registerliste hat den Block umgebaut (Einspeise-/Bezugsenergie 0x10/0x12, Ströme 0x17–0x19, Phasenleistung",
+    "0x1B–0x1F, Summe 0x21); evcc und ha-alphaess-modbus lesen 0x21 im Feld. Im V1.17-Bild ist 0x16/0x17 „CT Enable/",
+    "CT Rate“ (schreibbar), dort lägen jetzt Ströme — die Belegung hat sich also wirklich geändert. Das Profil folgt der",
+    "neueren Liste (0x21). Ein Gerät mit V1.17-Firmware kennt 0x21 vermutlich nicht → Zählerfehler statt falscher Zahl.",
+    "",
+    "Transport: Modbus TCP Port 502 (die Doku schreibt „0x502“, gemeint ist 502), Unit-ID 85 (0x55), FC 03, High-Wort",
+    "zuerst. TCP nur bei EMS mit Seriennummer AL701…. „Instruction interval > 300 ms“ [SPEC]: DVhub hat keinen",
+    "Mindestabstand zwischen Anfragen (E7) und fragt je Takt 6 Register direkt nacheinander ab. Folge: einzelne",
+    "Lesefehler oder Zeitüberschreitungen möglich, bis E7 existiert. Ein längeres Poll-Intervall verringert die Zahl der",
+    "Takte, nicht den Abstand innerhalb eines Takts.",
+    "",
+    "Bewusst NICHT gelesen bzw. nicht abbildbar:",
+    "- PV4–PV6 (neuere Liste 0x42B/0x42F/0x433): in V1.17 ist 0x42A–0x42B „Inverter warning“ — auf älterer Firmware",
+    "  läse DVhub ein Warn-Bitfeld als PV. Nur PV1–PV3 liegen in beiden Fassungen gleich.",
+    "- AC-gekoppelte PV am PV-Zähler (neuere Liste 0xA1, V1.17 0x12): Adresse je Fassung verschieden → nicht gelesen;",
+    "  bei AC-gekoppelter PV fehlt deren Leistung in PV und Hauslast.",
+    "- Netz je Phase (0x1B/0x1D/0x1F): je eine Anfrage mehr, bei E7-Mangel ungünstig; ließen sich als meter.phases",
+    "  nachtragen.",
+    "- Hauslast: kein Lastregister in der Spec → Energiebilanz.",
+    "- Plattform (Dispatch 0x0722 vs. 0x0880) und Seriennummer: DVhub prüft sie nicht (E10); fürs Lesen egal."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 85,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz gesamt, Register 0x21 = 33 „Total Active power (Grid Meter)“ (S32, 1 W) [SPEC-neu]; evcc und ha-alphaess-modbus lesen 0x21 int32 [COMM]. V1.17 nennt dafür noch 0x0006 (alte Belegung, siehe _doc). Vorzeichen: evcc liest 0x21 unverändert bei evcc-Konvention + = Bezug [COMM]; V1.17 sagt nur „konventionsabhängig“. DVhubs Konvention, daher kein sign; zeigt DVhub bei Netzbezug Einspeisung, gehört \"sign\": -1 dazu. 0x7FFFFFFF/0x80000000 als „kein Wert“ defensiv [ANN].",
+    "layout": "point",
+    "fc": 3,
+    "address": 33,
+    "quantity": 2,
+    "readType": "int32",
+    "notAvailableRaw": [2147483647, 2147483648]
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "SoC, Register 0x102 = 258 „Battery SOC“ (U16, 0,1 %) [SPEC]; evcc ebenso (scale 0.1) [COMM], Plexlog liest 258 [DECOMP]. 0xFFFF als „kein Wert“ defensiv [ANN].",
+      "enabled": true,
+      "fc": 3,
+      "address": 258,
+      "quantity": 1,
+      "signed": false,
+      "scale": 0.1,
+      "offset": 0,
+      "notAvailableRaw": [65535]
+    },
+    "batteryPowerW": {
+      "_comment": "Akku, Register 0x126 = 294 „Battery Power“ (S16, 1 W, „−: Charge, +: Discharge“) [SPEC]; evcc liest 0x126 unverändert bei evcc-Konvention + = Entladen [COMM], Plexlog liest 294 [DECOMP]. DVhub erwartet + = Laden, daher sign −1. 0x7FFF/0x8000 (±32 767 W) als „kein Wert“ defensiv [ANN].",
+      "enabled": true,
+      "fc": 3,
+      "address": 294,
+      "quantity": 1,
+      "signed": true,
+      "sign": -1,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [32767, 32768]
+    },
+    "pvPowerW": {
+      "_comment": "PV = PV1 + PV2 + PV3, Register 0x41F/0x423/0x427 = 1055/1059/1063 (je U32, 1 W) [SPEC], summiert (combine); evcc liest dieselben (plus PV4–6 und PV-Zähler, hier bewusst nicht, siehe _doc) [COMM]. Unbelegte MPPT melden vermutlich 0 W. 0xFFFFFFFF als „kein Wert“ defensiv [ANN]: dann ist die Summe unbekannt.",
+      "enabled": true,
+      "fc": 3,
+      "readType": "uint32",
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [4294967295],
+      "combine": [
+        { "address": 1055 },
+        { "address": 1059 },
+        { "address": 1063 }
+      ]
+    },
+    "selfConsumptionW": {
+      "_comment": "Kein Lastregister in der Spec. Hauslast = PV + Bezug − Einspeisung − Akku (+ = Laden), jeden Takt neu (E6).",
+      "enabled": false,
+      "derive": "energy_balance"
+    },
+    "deviceMaxChargeW": {
+      "_comment": "Vom Akku gemeldete maximale Ladeleistung, Register 0x12C = 300 „Battery Max charge power“ (U16, 1 W) [SPEC]; ha-alphaess-modbus liest es ebenso [COMM]. Nur Anzeige.",
+      "enabled": true,
+      "fc": 3,
+      "address": 300,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [65535],
+      "pollEveryMs": 60000
+    },
+    "deviceMaxDischargeW": {
+      "_comment": "Vom Akku gemeldete maximale Entladeleistung, Register 0x12D = 301 „Battery Max Discharge power“ (U16, 1 W) [SPEC]. Nur Anzeige.",
+      "enabled": true,
+      "fc": 3,
+      "address": 301,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [65535],
+      "pollEveryMs": 60000
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}

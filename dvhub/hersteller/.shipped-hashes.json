@@ -1,6 +1,9 @@
 {
   "_doc": "sha256 aller je ausgelieferten Versionen jedes Herstellerprofils. Genutzt von scripts/reconcile-vendor-profiles.mjs: aktives Profil mit bekanntem Hash = unverändert → beim Update überschrieben; unbekannter Hash = Operator-Edit → neue Version als .dist. Regenerieren mit scripts/gen-vendor-profile-hashes.mjs.",
   "profiles": {
+    "alphaess-smile.json": [
+      "7837ca260171f8965d31ccaac164204466931b2bb647e295ce9812a7a8eddfaf"
+    ],
     "bridge-mqtt.json": [
       "078d400de35611006542e5b39f6266d99ec61a98fc895d93e9b1d88f8a945fdb",
       "90ece226a67c6978eec7f192dbea3c93c7856c35486a0da00b73b7d089abedff",
