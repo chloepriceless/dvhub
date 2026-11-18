@@ -5934,6 +5934,25 @@ function applyVictronDefaults(config) {
   for (const [key, item] of Object.entries(next.dvControl || {})) {
     if (key !== 'enabled' && key !== 'negativePriceProtection') apply(item);
   }
+  // E14 (Lese-Engine, 18.11.2026): acPv*-Adressen, acPvSource2 und pvCoupling beschreiben das VICTRON-System
+  // (GX-Registerblöcke 808–816, „PV-Anbindung am Victron-System“). Sie gelten nur für das Victron-Datenmodell:
+  // Profil victron oder ein MQTT-Transport (Venus/DVhub-Schema mit denselben Punktnamen; die Adresse adressiert dort
+  // nichts). Bei jedem anderen Modbus-Profil hätte die Zwangsadresse Register 808 am fremden Gerät gelesen, und
+  // pvCoupling „Nur AC“ schaltete dessen PV-Register ab (Fronius/Sungrow/Deye: PV = 0).
+  const victronPointModel = (next.manufacturer || 'victron') === 'victron' || next.victron?.transport === 'mqtt';
+  if (victronPointModel) applyVictronPointModel(next);
+
+  // Akku-Ausbaustufen (Christin 2026-08-07): die heute gültige Stufe IST die
+  // aktuelle Kapazität. Damit lesen EOS-Sync, Optimizer, Freeze-Watchdog und
+  // Leitstand automatisch den richtigen Wert — es gibt weiterhin genau ein
+  // Feld, das sie abfragen. Die persistierte Config bleibt unangetastet; nur
+  // die EFFEKTIVE bekommt den abgeleiteten Wert (applyVictronDefaults läuft auf
+  // einem clone()). Leere Liste ⇒ der manuelle Wert bleibt stehen.
+  applyBatteryStages(next);
+  return next;
+}
+
+function applyVictronPointModel(next) {
   // Issue #5: AC-PV-Register-Basisadresse nach Verdrahtungsposition (GX unit-id 100).
   // on-output 808-810 (Default) / on-grid(input) 811-813 / on-genset 814-816.
   // Deterministisch aus victron.acPvSource abgeleitet, damit ein Kunde den
@@ -5975,13 +5994,9 @@ function applyVictronDefaults(config) {
   if (coupling === 'ac' && next.points) {
     if (next.points.pvPowerW) next.points.pvPowerW.enabled = false;
   }
+}
 
-  // Akku-Ausbaustufen (Christin 2026-08-07): die heute gültige Stufe IST die
-  // aktuelle Kapazität. Damit lesen EOS-Sync, Optimizer, Freeze-Watchdog und
-  // Leitstand automatisch den richtigen Wert — es gibt weiterhin genau ein
-  // Feld, das sie abfragen. Die persistierte Config bleibt unangetastet; nur
-  // die EFFEKTIVE bekommt den abgeleiteten Wert (applyVictronDefaults läuft auf
-  // einem clone()). Leere Liste ⇒ der manuelle Wert bleibt stehen.
+function applyBatteryStages(next) {
   if (isPlainObject(next.optimizer) && Array.isArray(next.optimizer.batteryStages)
       && next.optimizer.batteryStages.length) {
     const derived = resolveCurrentBatteryCapacityWh(
@@ -5990,8 +6005,6 @@ function applyVictronDefaults(config) {
     );
     if (Number.isFinite(derived) && derived > 0) next.optimizer.batteryCapacityWh = derived;
   }
-
-  return next;
 }
 
 function coerceBoolean(value) {

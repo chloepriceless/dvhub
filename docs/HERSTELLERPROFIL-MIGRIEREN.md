@@ -71,5 +71,101 @@ Beim nächsten Update, das das Profil erneut ändert, wird sie bei Bedarf neu er
 
 ---
 
+## 6. Lese-Schlüssel für neue Hersteller (Profil-Referenz)
+
+Seit der Lese-Engine (November 2026) kann ein Profil Netz, PV, Akku, SoC, Hauslast und Gerätegrenzen auch dann
+lesen, wenn das Gerät sie nicht so ablegt wie Victron. Die Schlüssel stehen in `meter` und in `points.<name>`. Die
+mitgelieferten Profile nutzen sie nicht; sie verhalten sich unverändert. Für ein reines Lese-Profil gehört zusätzlich
+`"readOnly": true` auf die oberste Ebene (keine Schreibziele, keine Abregelung).
+
+Vorzeichen in DVhub: **Netz + = Bezug**, **Akku + = Laden**. Meldet ein Gerät es andersherum, dreht `sign: -1` den
+Wert (`gridPositiveMeans` in der config.json ändert nur die Ausgabe, nicht die Lesart des Geräts).
+
+**`sign` — Vorzeichen drehen** (Punkte, Zähler, `combine`-Einträge). Wert = Rohwert × `scale` × `sign` + `offset`.
+
+```json
+"batteryPowerW": { "enabled": true, "fc": 3, "address": 294, "quantity": 1, "signed": true, "sign": -1 }
+```
+
+**`meter.scale` / `meter.sign`** — Skala und Vorzeichen auf jedem Modbus-Zählerweg (3×s16, `float32`, `int32`). Das
+Ersatzregister `meter.fallback` hat eigene `scale`/`sign`. Gerät meldet 0,01 kW, Einspeisung positiv:
+
+```json
+"meter": { "fc": 3, "address": 1160, "quantity": 1, "scale": 10, "sign": -1 }
+```
+
+**`meter.layout: "point"`** — der Zähler ist ein gewöhnlicher Lesepunkt (gleiche Typen und Schlüssel wie `points`).
+Ohne `phases` bleiben L1–L3 leer statt fremde Register zu lesen. `phases` erben Verbindung, Typ, Skala, `sign` und
+`sfAddress` vom Zähler:
+
+```json
+"meter": {
+  "layout": "point", "fc": 3, "address": 37113, "readType": "int32", "sign": -1,
+  "phases": [{ "address": 37132 }, { "address": 37134 }, { "address": 37136 }]
+}
+```
+
+**`combine` — Summe oder Differenz beliebiger Register** (Punkte und Zähler mit `layout: "point"`). Jeder Eintrag hat
+eigene Adresse und optional eigenen `readType`, `wordOrder`, `scale`, `sign`; Verbindung, Funktionscode und fehlende
+Typangaben erbt er vom Punkt. `scale`/`sign`/`offset` des Punkts gelten für die Summe. Meldet ein Eintrag „kein
+Wert“, ist die Summe unbekannt. Akku = Laden − Entladen:
+
+```json
+"batteryPowerW": { "enabled": true, "fc": 3, "unitId": 3, "readType": "uint32",
+  "combine": [{ "address": 31393 }, { "address": 31395, "sign": -1 }] }
+```
+
+**`split` — 32-bit-Wert aus zwei getrennten Registern** (Low- und High-Wort nicht benachbart). Braucht `readType`
+`int32` oder `uint32`. DVhub liest High, Low, High und nimmt nur ein Paar, bei dem sich das High-Wort dazwischen
+nicht geändert hat:
+
+```json
+"selfConsumptionW": { "enabled": true, "fc": 3, "readType": "uint32", "split": { "low": 653, "high": 659 } }
+```
+
+**`sfAddress` / `sunspec.sfOffset` — SunSpec-Skalenfaktor zur Laufzeit.** Der Faktor (−10…10) wird im selben Takt
+gelesen; „nicht implementiert“ (0x8000) macht den Wert unbekannt. Liegt er höchstens 8 Register vom Wert entfernt,
+kommen beide aus einer Anfrage, sonst (oder wenn das Gerät die Register dazwischen nicht kennt) prüft DVhub ihn vor
+und nach dem Wert. `sfOffset` muss im Modell liegen; beim Zähler gilt der Faktor nur mit `layout: "point"`. Absolut
+oder relativ zum SunSpec-Modell:
+
+```json
+"pvPowerW": { "enabled": true, "fc": 3, "address": 40083, "quantity": 1, "signed": true, "sfAddress": 40084 }
+"pvPowerW": { "enabled": true, "fc": 3, "quantity": 1, "signed": true, "sunspec": { "model": 103, "offset": 14, "sfOffset": 15 } }
+```
+
+**SunSpec auch für den Zähler und auf eigener Unit/Port.** `meter` (und `meter.phases`) dürfen `sunspec` tragen. Ein
+SunSpec-Punkt wird auf genau der Verbindung gescannt, von der er gelesen wird: setzt der Punkt `unitId`/`port`, gilt
+diese, sonst `victron.unitId`/`victron.port`. SunSpec-Zähler auf Unit 126:
+
+```json
+"meter": { "layout": "point", "fc": 3, "unitId": 126, "signed": true,
+  "sunspec": { "model": 203, "offset": 16, "sfOffset": 20 } }
+```
+
+**`wordOrder`** — `be` (Standard, High-Wort zuerst) oder `le`/`little`/`swap`/`swapped` (Low-Wort zuerst), gleich
+im Lese- und Schreibpfad.
+
+**Hauslast ohne Lastregister.** `derive: "energy_balance"` rechnet Last = PV + Bezug − Einspeisung − Akku in jedem
+Takt, in dem der Lastpunkt keinen Wert liefert — auch als einzige Quelle. Ohne Akku-Punkt zählt der Akku als 0 W:
+
+```json
+"selfConsumptionW": { "enabled": false, "derive": "energy_balance" }
+```
+
+**Gerätegrenzen (nur Anzeige)** — `deviceMaxChargeW`, `deviceMaxDischargeW`, `deviceMaxChargeA`,
+`deviceMaxDischargeA` sind gewöhnliche Lesepunkte; DVhub zeigt sie an und begrenzt damit nichts. `pollEveryMs` liest
+selten änderliche Grenzen seltener:
+
+```json
+"deviceMaxChargeA": { "enabled": true, "fc": 3, "address": 212, "quantity": 1, "pollEveryMs": 60000 }
+```
+
+**Victron-Schlüssel.** `acPvSource`, `acPvSource2` (AC-PV-Register 808–816) und „PV-Anbindung“ (`pvCoupling`)
+beschreiben ein Victron-System. Sie wirken nur beim Profil `victron` und bei MQTT-Profilen; ein anderes Modbus-Profil
+behält seine eigenen `acPv*`-Adressen und seine PV-Punkte.
+
+---
+
 *Kein Zugriff auf die Kommandozeile? Dann ignoriere die `.dist`-Datei einfach — dein aktives
 Profil funktioniert unverändert weiter; du verpasst nur die neuen optionalen Felder.*
