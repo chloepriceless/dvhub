@@ -327,10 +327,13 @@ const SCENARIOS = {
       assert.deepEqual(rel, [`${SUNGROW_GATE_DEVICES.slave}:emsCmd=204`, `${SUNGROW_GATE_DEVICES.master}:emsCmd=204`, `${SUNGROW_GATE_DEVICES.master}:emsMode=0`]);
     },
   },
-  // Neustart mit Forced-Merker (C3): erster Takt setzt den Befehl einmal auf 0xCC
+  // Neustart mit Forced-Merker (C3): der WR hält noch DVhubs alten Entladebefehl (Modus 2, 0xBB, 3000 W); der erste
+  // Takt setzt den Befehl einmal auf 0xCC, bevor neu geregelt wird.
   startup_reset_with_merker: {
-    rig: { statePath: 'merker' },
+    rig: { statePath: 'merker', masterHolding: { [MODE]: 2, [CMD]: 0xbb, [POWER]: 3000 } },
     run: async (r) => [await r.ems.applySetpoint(-6000, 'rule:abend'), await r.ems.applySetpoint(-5000, 'rule:abend')],
+    // erst der Rücksetz-Stopp 0xCC (Modus 2 bleibt), dann wieder Entladen (Codex 44637c3e P2)
+    wire: ['M:13050=204', 'M:13050=187'],
   },
 };
 
