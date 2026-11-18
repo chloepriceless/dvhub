@@ -197,3 +197,23 @@ test('Sperrmarke: gate.fence() greift auch, wenn das Tor den Not-Halt selbst nie
   await r2.gate.submit(r2.op());
   assert.deepEqual(seen2, [false, false]);
 });
+
+test('Not-Halt-Abfrage liefert kein Boolean (Promise, 1, "1", undefined) → gesperrt, nicht offen (Fable-Review 18.11.)', async () => {
+  for (const odd of [Promise.resolve(false), 1, '1', undefined, null, 'false']) {
+    const r = rig();
+    r.flags.halt = odd;
+    const res = await r.gate.submit(r.op({ action: 'command', value: 204 }));
+    assert.equal(res.outcome, 'blocked_nothalt', String(odd));
+    assert.equal(r.calls.length, 0, String(odd));
+  }
+});
+
+test('Lese-Modus-Abfrage liefert kein Boolean → als Lese-Modus behandelt (Fable-Review 18.11.)', async () => {
+  for (const odd of [Promise.resolve(false), 0, '0', undefined, null]) {
+    const r = rig();
+    r.flags.readOnly = odd;
+    const res = await r.gate.submit(r.op({ action: 'command', value: 204 }));
+    assert.equal(res.outcome, 'blocked_readonly', String(odd));
+    assert.equal(r.calls.length, 0, String(odd));
+  }
+});

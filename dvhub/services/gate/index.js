@@ -424,7 +424,11 @@ export function createGate(options = {}) {
     let halted;
     let unknown = false;
     try {
-      halted = isHalted() === true;
+      const v = isHalted();
+      // Nur ein echtes Boolean zählt. Alles andere (Promise, 1, '1', undefined) ist ein unklarer Zustand → als
+      // Not-Halt behandeln statt durchzulassen (Fable-Review 18.11.: vorher ließ ein Nicht-Boolean Befehle durch).
+      if (typeof v === 'boolean') halted = v;
+      else { halted = true; unknown = true; }
     } catch {
       halted = true; // Not-Halt-Zustand unbekannt → als Not-Halt behandeln
       unknown = true;
@@ -487,7 +491,9 @@ export function createGate(options = {}) {
 
   function readOnlyNow() {
     try {
-      return { ro: isReadOnly() === true, unknown: false };
+      const v = isReadOnly();
+      // Wie beim Not-Halt: nur ein echtes Boolean; alles andere gilt als Lese-Modus (sperrt, statt durchzulassen).
+      return typeof v === 'boolean' ? { ro: v, unknown: false } : { ro: true, unknown: true };
     } catch {
       return { ro: true, unknown: true }; // Lese-Modus unlesbar → als Lese-Modus behandeln
     }
@@ -577,7 +583,7 @@ export function createGate(options = {}) {
 
   function emit(op, opId, res, pol, sinkKind) {
     if (typeof onEvent !== 'function') return;
-    const ro = (() => { try { return isReadOnly() === true; } catch { return true; } })();
+    const ro = (() => { try { const v = isReadOnly(); return typeof v === 'boolean' ? v : true; } catch { return true; } })();
     /** @type {WriteEvent} */
     const ev = {
       schema: 'dvhub.write/1',
