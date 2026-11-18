@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 import { HOST, loadProfileConfig, baseState } from './gate-golden.js';
 import { sungrowDevice } from './sungrow-fixture.js';
-import { parityModbus } from './dv-parity-rig.js';
+import { parityModbus, parityMqtt } from './dv-parity-rig.js';
 import { createFeedInLimitArbiter } from '../../services/feed-in-limit-arbiter.js';
 import { setEmergencyStop } from '../../services/control-commands.js';
 
@@ -29,11 +29,20 @@ function froniusCfg(persisted = {}) {
 }
 
 /** Rig-Optionen je Profil; transport-Optionen wie recordingModbus. */
-function profileSetup(profile, { transport = {}, ctrl = {}, victron = {}, files = {}, persisted = {}, holding: regs = null } = {}) {
+function profileSetup(profile, { transport = {}, ctrl = {}, victron = {}, files = {}, persisted = {}, holding: regs = null, ctx = {} } = {}) {
   return (onWrite) => {
     let cfg;
     let holding;
     let device = null;
+    if (profile === 'bridge-mqtt' || profile === 'dvhub-mqtt') {
+      return {
+        cfg: loadProfileConfig(profile, { victron: { host: HOST }, ...persisted }),
+        transport: parityMqtt(structuredClone(transport), onWrite),
+        state: () => baseState({ ctrl, victron }),
+        files: structuredClone(files),
+        ctx,
+      };
+    }
     if (profile === 'victron') { cfg = loadProfileConfig('victron', { victron: { host: HOST }, ...persisted }); holding = VICTRON_REGS; }
     if (profile === 'fronius') { cfg = froniusCfg(persisted); holding = FRONIUS_REGS; }
     if (profile === 'deye-lv') { cfg = loadProfileConfig('deye-lv', { victron: { host: HOST }, ...persisted }); holding = DEYE_REGS; }
@@ -49,6 +58,7 @@ function profileSetup(profile, { transport = {}, ctrl = {}, victron = {}, files 
       transport: parityModbus({ holding, hostAlias: ALIAS, ...structuredClone(transport) }, onWrite),
       state: () => baseState({ ctrl, victron: { ...(device ? { device } : {}), ...victron } }),
       files: structuredClone(files),
+      ctx,
     };
   };
 }
@@ -607,6 +617,201 @@ SCENARIOS.p5_fic_nothalt = {
   expect: (n) => assert.deepEqual(n.rig.events.filter((e) => e.state_flags.not_halt).map((e) => `${e.point}=${e.value.eng}:${e.action}`), ['wMaxLimEna=0:haltNeutralize']),
 };
 
+// --- Pfad 3: applyDvVictronControl — Victron 2707 (OvervoltageFeedIn, 1 = einspeisen) / 2708 (PreventFeedback,
+// 1 = sperren) direkt und über die MQTT-Brücke (Venus) ----------------------------------------------------------
+
+SCENARIOS.p3_victron_cycle = {
+  setup: profileSetup('victron'),
+  run: async (r, step) => {
+    await step('Start-Freigabe (Cache leer)', dv(r, true, RELEASE));
+    await step('Sperre (§51)', dv(r, false, LOCK));
+    await step('Sperre gleich', dv(r, false, LOCK));
+    await step('Sperre DV (forcedOff)', dv(r, false, { reason: 'dv_forced_off' }));
+    await step('Freigabe', dv(r, true, RELEASE));
+    await step('Sperre per API (C1)', api(r, 0));
+    await step('Freigabe per API', api(r, 1));
+    await step('Sperre §14a', dv(r, false, { reason: 'paragraph14a_production_block' }));
+    r.state.ctrl.negativePriceActive = true;
+    await step('Freigabe per API bei aktiver Pflicht-Sperre (A10)', api(r, 1));
+    r.state.ctrl.negativePriceActive = false;
+    await step('Freigabe ausdrücklich', dv(r, true, { explicit: true, reason: 'api_manual_write' }));
+  },
+  expect: (n) => assert.deepEqual(actionsOf(n.rig), [
+    'feedExcessDcPv:autoRestore', 'dontFeedExcessAcPv:autoRestore',
+    'feedExcessDcPv:protectiveLimit', 'dontFeedExcessAcPv:protectiveLimit',
+    'feedExcessDcPv:autoRestore', 'dontFeedExcessAcPv:autoRestore',
+    'feedExcessDcPv:command', 'dontFeedExcessAcPv:command',
+    'feedExcessDcPv:command', 'dontFeedExcessAcPv:command',
+    'feedExcessDcPv:protectiveLimit', 'dontFeedExcessAcPv:protectiveLimit',
+    'feedExcessDcPv:command', 'dontFeedExcessAcPv:command',
+  ]),
+};
+
+SCENARIOS.p3_victron_control_disabled = {
+  setup: profileSetup('victron', { persisted: { dvControl: { enabled: false } } }),
+  run: async (r, step) => {
+    await step('Sperre bei dvControl.enabled=false', dv(r, false, LOCK));
+    await step('Freigabe bei dvControl.enabled=false', dv(r, true, { reason: 'control_disabled_release' }));
+    await step('Freigabe gleich', dv(r, true, { reason: 'control_disabled_release' }));
+  },
+};
+
+// A11 + Not-Halt: Teil-Sperre (2708 scheitert), Freigabe per API, erneute Teil-Sperre, die eine Freigabe im Not-Halt.
+SCENARIOS.p3_victron_partial_a11_nothalt = {
+  setup: profileSetup('victron', { transport: { failWrite: { 2708: { msg: 'timeout', times: 1 } } } }),
+  run: async (r, step) => {
+    await step('Start-Freigabe', dv(r, true, RELEASE));
+    await step('Sperre, 2708 Zeitüberschreitung', dv(r, false, LOCK));
+    await step('Freigabe der Teil-Sperre per API (A11)', api(r, 1));
+    r.transport.failWrite[2708] = { msg: 'modbus write verworfen (Not-Halt seit dem Einreihen)', times: 1 };
+    await step('Sperre, 2708 verworfen', dv(r, false, LOCK));
+    r.halt();
+    await step('Sperre im Not-Halt', dv(r, false, LOCK));
+    await step('Freigabe im Not-Halt (emergency_stop_release)', dv(r, true, { reason: 'emergency_stop_release' }));
+    await step('Freigabe erneut', dv(r, true, { reason: 'emergency_stop_release' }));
+  },
+  expect: (n) => assert.deepEqual(n.rig.events.filter((e) => e.state_flags.not_halt).map((e) => `${e.point}=${e.value.eng}:${e.action}`), [
+    'feedExcessDcPv=1:haltNeutralize', 'dontFeedExcessAcPv=0:haltNeutralize',
+  ]),
+};
+
+// Not-Halt beginnt zwischen 2707 und 2708: heute wird 2708 noch geschrieben (keine Prüfung je Write).
+SCENARIOS.p3_victron_halt_mid_run = {
+  setup: profileSetup('victron'),
+  run: async (r, step) => {
+    await step('Start-Freigabe', dv(r, true, RELEASE));
+    r.onWrite((entry) => { if (entry === 'W6 gx/u100 @2707=0') r.halt(); });
+    await step('Sperre, Not-Halt nach 2707', dv(r, false, LOCK));
+    r.onWrite(null);
+    await step('Freigabe im Not-Halt', dv(r, true, { reason: 'emergency_stop_release' }));
+  },
+};
+
+SCENARIOS.p3_victron_write_safety = {
+  setup: profileSetup('victron'),
+  run: async (r, step) => {
+    await step('Sperre', dv(r, false, LOCK));
+    r.cfg.writeSafety = { ok: false, reason: 'manufacturer_profile_error', manufacturer: 'victron' };
+    await step('Freigabe bei writeSafety.ok=false', dv(r, true, RELEASE));
+    await step('Freigabe per API bei writeSafety.ok=false', api(r, 1));
+  },
+};
+
+SCENARIOS.p3_victron_backoff = {
+  setup: profileSetup('victron', { transport: { failWrite: { 2707: { msg: 'timeout', skip: 1, times: 3 } } } }),
+  run: async (r, step) => {
+    await step('Sperre', dv(r, false, LOCK));
+    for (let i = 1; i <= 4; i += 1) await step(`Freigabe Versuch ${i}`, dv(r, true, RELEASE));
+    await step('Freigabe ausdrücklich im Backoff', dv(r, true, { explicit: true, reason: 'api_manual_write' }));
+    await r.advance(5 * 60_000);
+    await step('Freigabe nach dem Fenster', dv(r, true, RELEASE));
+  },
+};
+
+SCENARIOS.p3_victron_modbus_exception = {
+  setup: profileSetup('victron', { transport: { failWrite: { 2707: { msg: 'modbus exception 2', times: 1 } } } }),
+  run: async (r, step) => {
+    await step('Sperre, 2707 Ausnahme 2', dv(r, false, LOCK));
+    await step('Sperre erneut', dv(r, false, LOCK));
+  },
+  expect: (n) => assert.equal(n.rig.events[0].delivery, 'rejected'),
+};
+
+SCENARIOS.p3_victron_read_only = {
+  setup: profileSetup('victron'), readOnly: true,
+  run: async (r, step) => {
+    await step('Sperre im Lese-Modus', dv(r, false, LOCK));
+    await step('Freigabe per API im Lese-Modus', api(r, 1));
+  },
+};
+
+// Rücklese-Prüfung (controlWriteVerify) der Direktregister: bestätigt und abweichend (Gerät verwirft 2708).
+for (const [name, transport] of [['match', {}], ['mismatch', { ignoreWrite: [2708] }]]) {
+  SCENARIOS[`p3_victron_verify_${name}`] = {
+    setup: profileSetup('victron', { transport, persisted: { schedule: { controlWriteVerify: { enabled: true, delayMs: 1000, minIntervalMs: 1000 } } } }),
+    clock: ['Date', 'setTimeout'],
+    run: async (r, step) => {
+      await step('Sperre', dv(r, false, LOCK));
+      await step('Prüfung nach 1 s', async () => { await r.advance(1000); return null; });
+      await step('Freigabe', dv(r, true, RELEASE));
+      await step('Prüfung nach 1 s', async () => { await r.advance(1000); return null; });
+    },
+  };
+}
+
+SCENARIOS.p3_mqtt_cycle = {
+  setup: profileSetup('bridge-mqtt'),
+  run: async (r, step) => {
+    await step('Start-Freigabe', dv(r, true, RELEASE));
+    await step('Sperre (§51)', dv(r, false, LOCK));
+    await step('Freigabe', dv(r, true, RELEASE));
+    await step('Sperre per API', api(r, 0));
+    await step('Freigabe per API', api(r, 1));
+    r.halt();
+    await step('Sperre im Not-Halt', dv(r, false, LOCK));
+  },
+};
+
+SCENARIOS.p3_mqtt_partial_nothalt = {
+  setup: profileSetup('bridge-mqtt', { transport: { fail: { dontFeedExcessAcPv: { msg: 'MQTT nicht verbunden', skip: 1, times: 1 } } } }),
+  run: async (r, step) => {
+    await step('Start-Freigabe', dv(r, true, RELEASE));
+    await step('Sperre, PreventFeedback nicht verbunden', dv(r, false, { reason: 'default' }));
+    r.halt();
+    await step('Freigabe der Teil-Sperre im Not-Halt', dv(r, true, { reason: 'emergency_stop_release' }));
+    await step('Freigabe erneut', dv(r, true, { reason: 'emergency_stop_release' }));
+  },
+};
+
+// Codex 2f215968 P1 (nothalt-als-ob-aus.test.js): vor dem Eintritt begonnene, danach fertige Sperre.
+SCENARIOS.p3_mqtt_halt_mid_run = {
+  setup: profileSetup('bridge-mqtt'),
+  run: async (r, step) => {
+    r.onWrite((entry) => { if (entry.startsWith('MQTT W/c0619ab00000/settings/0/Settings/CGwacs/OvervoltageFeedIn=0')) r.halt(); });
+    await step('Sperre, Not-Halt nach der ersten Flagge', dv(r, false, LOCK));
+    r.onWrite(null);
+    await step('Freigabe im Not-Halt', dv(r, true, { reason: 'emergency_stop_release' }));
+  },
+  expect: (n) => assert.deepEqual(n.rig.events.map((e) => `${e.point}:${e.action}:${e.state_flags.not_halt}`), [
+    'feedExcessDcPv:protectiveLimit:true', 'dontFeedExcessAcPv:protectiveLimit:true',
+    'feedExcessDcPv:haltNeutralize:true', 'dontFeedExcessAcPv:haltNeutralize:true', // die eine Freigabe der eigenen Sperre
+  ]),
+};
+
+SCENARIOS.p3_mqtt_read_only = {
+  setup: profileSetup('bridge-mqtt'), readOnly: true,
+  run: async (r, step) => {
+    await step('Sperre im Lese-Modus', dv(r, false, LOCK));
+    await step('Freigabe ausdrücklich im Lese-Modus', dv(r, true, { explicit: true, reason: 'api_manual_write' }));
+  },
+  expect: (n) => assert.deepEqual(n.out.readOnlyLines.slice(0, 2), [
+    '[READ-ONLY] Schreibzugriff blockiert: MQTT W/c0619ab00000/settings/0/Settings/CGwacs/OvervoltageFeedIn',
+    '[READ-ONLY] Schreibzugriff blockiert: MQTT W/c0619ab00000/settings/0/Settings/CGwacs/PreventFeedback',
+  ]),
+};
+
+// Befund S4 (eingefroren): Abregelung ohne Sperr-Ziel meldet Erfolg — kein Write, Cache gesetzt.
+SCENARIOS.p3_dvhub_mqtt_no_flags = {
+  setup: profileSetup('dvhub-mqtt'), noWrites: true,
+  run: async (r, step) => {
+    await step('Sperre ohne Sperr-Ziel', dv(r, false, LOCK));
+    await step('Freigabe ohne Sperr-Ziel', dv(r, true, RELEASE));
+  },
+};
+
+// Ganzer Takt (evaluateSchedule) bei negativem Preis: §51-Sperre, im Not-Halt die eine Freigabe, danach Ruhe.
+SCENARIOS.p3_victron_eval_negative_price = {
+  setup: profileSetup('victron', { ctx: { epexNowNext: () => ({ current: { ct_kwh: -3, eur_mwh: -30 }, next: null }) } }),
+  gateWrites: (entry) => / @(2707|2708)=/.test(entry),
+  run: async (r, step) => {
+    await step('Takt 1 (negativer Preis)', async () => { await r.ev.evaluateSchedule(); return dvState(r); });
+    await step('Takt 2', async () => { await r.ev.evaluateSchedule(); return dvState(r); });
+    r.halt();
+    await step('Takt im Not-Halt → eine Freigabe', async () => { await r.ev.evaluateSchedule(); return dvState(r); });
+    await step('Takt im Not-Halt → nichts', async () => { await r.ev.evaluateSchedule(); return dvState(r); });
+  },
+};
+
 return SCENARIOS;
 }
 
@@ -661,6 +866,37 @@ export function flipScenarios() {
     expect: (n) => assert.deepEqual(n.rig.events.map((e) => `${e.value.eng}:${e.action}:${e.state_flags.not_halt}`), [
       '6000:protectiveLimit:false', '3000:protectiveLimit:false', '2000:protectiveLimit:true', '6000:protectiveLimit:true',
     ]),
+  };
+
+  for (const profile of ['victron', 'bridge-mqtt']) {
+    SCENARIOS[`flip_${profile}_lock_in_halt`] = {
+      setup: profileSetup(profile),
+      run: async (r, step) => {
+        await step('Start-Freigabe', dv(r, true, RELEASE));
+        r.halt();
+        await step('§51-Sperre im Not-Halt', dv(r, false, LOCK));
+        await step('Freigabe im Not-Halt (Pflicht-Sperre beendet)', dv(r, true, { reason: 'emergency_stop_release' }));
+        await step('Sperre per API im Not-Halt', api(r, 0));
+        await step('DV-Sperre im Not-Halt', dv(r, false, { reason: 'dv_forced_off' }));
+      },
+      expect: (n) => assert.deepEqual(haltedEvents(n), [
+        'feedExcessDcPv:protectiveLimit:ok', 'dontFeedExcessAcPv:protectiveLimit:ok',
+        'feedExcessDcPv:haltNeutralize:ok', 'dontFeedExcessAcPv:haltNeutralize:ok',
+        'feedExcessDcPv:protectiveLimit:ok', 'dontFeedExcessAcPv:protectiveLimit:ok',
+      ]),
+    };
+  }
+
+  // Ganzer Takt: bei negativem Preis sperrt §51 auch im Not-Halt (notHaltDvDecision → weiterlaufende Klasse).
+  SCENARIOS.flip_victron_eval_negative_price = {
+    setup: profileSetup('victron', { ctx: { epexNowNext: () => ({ current: { ct_kwh: -3, eur_mwh: -30 }, next: null }) } }),
+    gateWrites: (entry) => / @(2707|2708)=/.test(entry),
+    run: async (r, step) => {
+      r.halt();
+      await step('Takt im Not-Halt (negativer Preis)', async () => { await r.ev.evaluateSchedule(); return dvState(r); });
+      await step('Takt im Not-Halt', async () => { await r.ev.evaluateSchedule(); return dvState(r); });
+    },
+    expect: (n) => assert.deepEqual(haltedEvents(n), ['feedExcessDcPv:protectiveLimit:ok', 'dontFeedExcessAcPv:protectiveLimit:ok']),
   };
 
   // Nulleinspeise-Deckel unter einer §-51-Sperre läuft im Not-Halt weiter (Klasse negativePrice).

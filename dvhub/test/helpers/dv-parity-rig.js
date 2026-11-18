@@ -252,7 +252,8 @@ export function registerParityScenarios(scenarios, label = 'Legacy') {
       const before = await runSide(t, 'old', sc);
       const after = await runSide(t, 'new', sc);
       assert.deepEqual(after.out, before.out, `${name}: Tor-Pfad weicht vom alten Weg ab`);
-      const writes = after.out.wire.filter(isWrite);
+      // gateWrites: nur diese Draht-Writes gehören zu den Pfaden 2–5 (ein ganzer Takt schreibt auch Pfad 1 direkt).
+      const writes = after.out.wire.filter((e) => isWrite(e) && (!sc.gateWrites || sc.gateWrites(e)));
       const delivered = after.rig.events.filter((e) => e.outcome === 'ok' || e.outcome === 'error');
       assert.equal(delivered.length, writes.length, `${name}: jeder Draht-Write ein Tor-Ereignis`);
       assert.ok(after.rig.events.every((e) => e.trust === 'legacy' && e.target.device === INVERTER_GATE_DEVICE), 'legacy, Gerät inverter');

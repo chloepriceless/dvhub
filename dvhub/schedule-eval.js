@@ -1235,6 +1235,11 @@ export function createScheduleEvaluator(ctx) {
         : (DV_PROTECTIVE_REASONS.has(String(reason)) ? 'protectiveLimit' : 'command'),
       source: reason || 'dv_control',
     };
+    // Victron-Direktregister 2707/2708 bzw. MQTT-Brücke (D.1 #3): derselbe Aufruf wie bisher, über das Tor.
+    const submitDvFlag = (point, val, fn, args) => submitInverter(dvGate.run, cfg, {
+      point, value: val, source: dvGate.source, kind: dvGate.action === 'haltNeutralize' ? 'neutralize' : 'write',
+      action: dvGate.action, fn, args,
+    });
 
     const results = {};
     // Erster Aufruf nach dem Start (Change-Cache leer) mit Freigabe: eine
@@ -1274,13 +1279,13 @@ export function createScheduleEvaluator(ctx) {
           // nie vom Tagesbudget halten lassen — nur die automatische Freigabe.
           skipped = await runFlagSequence('feedExcessDcPv', dc.feedExcessDcPv.sequence[String(val)], bootRelease, feedIn !== true || explicit === true, dvGate);
         } else if (transport.type === 'mqtt') {
-          await transport.mqttWrite('feedExcessDcPv', val);
+          await submitDvFlag('feedExcessDcPv', val, 'mqttWrite', ['feedExcessDcPv', val]);
         } else {
-          await transport.mbWriteSingle({
+          await submitDvFlag('feedExcessDcPv', val, 'mbWriteSingle', [{
             host: dc.feedExcessDcPv.host, port: dc.feedExcessDcPv.port,
             unitId: dc.feedExcessDcPv.unitId, address: dc.feedExcessDcPv.address,
             value: val, timeoutMs: dc.feedExcessDcPv.timeoutMs
-          });
+          }]);
           feedDcDirectVal = val;
         }
         if (skipped) {
@@ -1337,13 +1342,13 @@ export function createScheduleEvaluator(ctx) {
         if (Array.isArray(dc.dontFeedExcessAcPv.sequence?.[String(val)])) {
           skipped = await runFlagSequence('dontFeedExcessAcPv', dc.dontFeedExcessAcPv.sequence[String(val)], bootRelease, false, dvGate);
         } else if (transport.type === 'mqtt') {
-          await transport.mqttWrite('dontFeedExcessAcPv', val);
+          await submitDvFlag('dontFeedExcessAcPv', val, 'mqttWrite', ['dontFeedExcessAcPv', val]);
         } else {
-          await transport.mbWriteSingle({
+          await submitDvFlag('dontFeedExcessAcPv', val, 'mbWriteSingle', [{
             host: dc.dontFeedExcessAcPv.host, port: dc.dontFeedExcessAcPv.port,
             unitId: dc.dontFeedExcessAcPv.unitId, address: dc.dontFeedExcessAcPv.address,
             value: val, timeoutMs: dc.dontFeedExcessAcPv.timeoutMs
-          });
+          }]);
           dontFeedAcDirectVal = val;
         }
         if (skipped) {

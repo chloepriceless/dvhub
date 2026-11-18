@@ -12,6 +12,8 @@
 //   Pfad 4  applyDvFeedInLimit — Victron 2706 direkt, über den echten Begrenzer (feed-in-limit-arbiter) und den
 //           echten Not-Halt-Eintritt (setEmergencyStop)
 //   Pfad 5  zfiWrite — Nulleinspeise-Deckel (zeroFeedInTick) und feste Einspeisegrenze (feedInCapTick), Fronius
+//   Pfad 3  applyDvVictronControl — Victron 2707/2708 direkt und über die MQTT-Brücke (Venus), Rücklese-Prüfung,
+//           Freigabe-Backoff, Teil-Sperre (A11), ganzer Takt (evaluateSchedule) bei negativem Preis
 //
 // Die Szenarien stehen in test/helpers/dv-parity-scenarios.js; dieselben Pfade mit umgeschalteter
 // Not-Halt-Richtlinie (eine Pflicht-Klasse läuft im Not-Halt weiter) prüft test/gate-dv-parity-policy-flip.test.js.
