@@ -1,0 +1,107 @@
+{
+  "label": "FoxESS H1/AC1 (1-phasig, Block 31000) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz, PV (MPPT 1+2), Akku-Leistung, SoC und Hauslast aus dem Holding-Block 31000 (Modbus TCP Port 502, Slave-ID 247, FC 03) und schreibt nichts an den Wechselrichter. Nur FoxESS H1/AIO-H1/AC1 der ersten Generation bzw. mit LAN-Anschluss; nicht für H1 G2, KH oder H3. Anleitung: docs/hersteller/foxess-h1.md.",
+  "_doc": [
+    "FoxESS 1-phasige Hybride H1 / AIO-H1 / AC1 mit der Registerkarte „H1_G1 / H1_LAN“ (Holding-Block 31000, FC 03).",
+    "Die FoxESS-Karte hängt von Modell UND Firmware ab, daher der Familienname im Profil:",
+    "- H1 G2 (H1_G2_SET): Netz/Last/Akku/SoC gleich, PV aber an 39280/39282 → dieses Profil zeigt dort keine/falsche PV.",
+    "- KH: Netz-CT mit umgekehrtem Vorzeichen, mehr PV-Register → eigenes Profil nötig.",
+    "- H3 / AIO-H3 / H3 Pro/Smart (3-phasig): andere Register (31036/31038, 39xxx) → eigenes Profil nötig.",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [COMM] nathanmarlor/foxess_modbus entities/entity_descriptions.py (grid_ct 31014",
+    "„Negative = import“, feed_in = positiver Teil; invbatpower 31022, battery_discharge = positiver Teil; load_power 31016;",
+    "pv1/pv2_power 31002/31005; battery_soc 31024; Modelle H1_G1 | H1_LAN). [DECOMP] Plexlog FoxESS-Treiber (nur gelesen,",
+    "Protokollversion 2 = Block 31000 mit 40 Registern): Netz = 31014 × −1 in Plexlog-Konvention + = Bezug, Akku 31022",
+    "unverändert in Plexlog-Konvention + = Entladen, PV 31002/31005. Die offizielle FoxESS „Modbus definition“ V1.05 ist nur",
+    "über das Forum verteilt und nicht gegengelesen. Zusammenfassung: .planning/docs/research/",
+    "2026-11-15-foxess-modbus-control-spec.md §1–2 und 2026-11-18-hersteller-lesend-luecken.md §3.2.",
+    "",
+    "Befund gegen die Spec: Spec §2 und Lücken-Analyse §3.2 nennen für 31014 „+ = Bezug“. foxess_modbus und Plexlog",
+    "lesen 31014 beide als „+ = Einspeisung“ (nur KH umgekehrt) → dieses Profil dreht das Netz (sign −1).",
+    "",
+    "Transport: RS485 9600 8N1, Slave-ID 247 (evcc/foxess_modbus-Standard; manche Installationen 1). Modbus TCP Port 502",
+    "nativ über den LAN-Anschluss bzw. neuere Dongles, sonst RS485-Ethernet-Gateway im Modus Modbus TCP. Der",
+    "Cloud-Dongle belegt den COM-Port. Leistungen „0,001 kW“ = 1 W.",
+    "",
+    "Bewusst NICHT gelesen:",
+    "- H1_G1 über RS485 mit Input-Block 11000 (FC 04): andere Adressen (Netz 11021, Akku 11008, SoC 11036) → eigenes",
+    "  Profil, falls das Gerät den Holding-Block 31000 am RS485 nicht beantwortet.",
+    "- Gerätegrenzen: max. Lade-/Entladestrom 41007/41008 (0,1 A) stehen nur in foxess_modbus, nicht in der Spec.",
+    "- Modell-/Firmware-Erkennung (30000 ff.): DVhub prüft nicht, welche Karte antwortet (E10 fehlt)."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 247,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz, Register 31014 „Grid CT“ (I16, 0,001 kW = 1 W) [COMM foxess_modbus: „Negative = import“, feed_in = positiver Teil; DECOMP Plexlog 31014 × −1]. Gerät meldet + = Einspeisung → sign −1. STRITTIG: die Spec (§2) nennt + = Bezug; foxess_modbus und Plexlog widersprechen ihr übereinstimmend. KH-Geräte haben das umgekehrte Vorzeichen (nicht dieses Profil). 1-phasig: keine Phasen.",
+    "layout": "point",
+    "fc": 3,
+    "address": 31014,
+    "quantity": 1,
+    "signed": true,
+    "sign": -1,
+    "timeoutMs": 2000
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "Batterie-SoC, Register 31024 (U16, %) [COMM foxess_modbus H1_G1/H1_LAN/H1_G2_SET; Spec §2.1; Plexlog].",
+      "enabled": true,
+      "fc": 3,
+      "address": 31024,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "batteryPowerW": {
+      "_comment": "Batterieleistung, Register 31022 (I16, 0,001 kW = 1 W) [Spec §2.1; COMM foxess_modbus „invbatpower“: battery_discharge = positiver Teil; DECOMP Plexlog]. Gerät meldet + = Entladen → sign −1 (DVhub: + = Laden).",
+      "enabled": true,
+      "fc": 3,
+      "address": 31022,
+      "quantity": 1,
+      "signed": true,
+      "scale": 1,
+      "sign": -1,
+      "offset": 0
+    },
+    "pvPowerW": {
+      "_comment": "PV = PV1 31002 + PV2 31005 (je I16, 0,001 kW = 1 W) [Spec §2.1; COMM foxess_modbus H1_G1/H1_LAN; DECOMP Plexlog]. Kein Summenregister → combine. Vorzeichenbehaftet gelesen: foxess_modbus und Plexlog klemmen kleine negative Werte auf 0, DVhub zeigt sie ungeklemmt. AC1 hat keine PV-Eingänge (0 W). H1 G2: PV liegt an 39280/39282 — dieses Profil passt dort nicht.",
+      "enabled": true,
+      "fc": 3,
+      "signed": true,
+      "scale": 1,
+      "offset": 0,
+      "combine": [
+        { "address": 31002 },
+        { "address": 31005 }
+      ]
+    },
+    "selfConsumptionW": {
+      "_comment": "Hauslast, Register 31016 „Load power“ (I16, 0,001 kW = 1 W) [Spec §2.1; COMM foxess_modbus load_power].",
+      "enabled": true,
+      "fc": 3,
+      "address": 31016,
+      "quantity": 1,
+      "signed": true,
+      "scale": 1,
+      "offset": 0
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}
