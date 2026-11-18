@@ -8,7 +8,7 @@ import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-perfo
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
 // Lesepunkt-Decoder der Herstellerprofile (Lese-Engine E4/E5/E9/E14, 18.11.2026).
-import { decodePointRegs, isLowWordFirst, readPointValue, awaitsSunspec } from './services/inverter/point-read.js';
+import { decodePointRegs, isLowWordFirst, readPointValue, awaitsSunspec, assertReadableAddress } from './services/inverter/point-read.js';
 import {
   identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
   resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry,
@@ -512,6 +512,18 @@ export function createPoller(ctx) {
     for (const [name, conf] of Object.entries(cfg.controlWrite || {})) {
       if (awaitsSunspec(conf)) slots.push({ holder: cfg.controlWrite, key: name, label: name, ep: sunspecEndpointOf(null, v), read: false });
     }
+    // E3c: SunSpec-Zähler (meter.sunspec) und seine Phasen — gescannt auf der Verbindung des Zählers bzw. der Phase.
+    const m = cfg.meter;
+    if (m && typeof m === 'object' && !Array.isArray(m)) {
+      if (awaitsSunspec(m)) slots.push({ holder: cfg, key: 'meter', label: 'meter', ep: sunspecEndpointOf(m, v), read: true });
+      if (Array.isArray(m.phases)) {
+        m.phases.forEach((ph, i) => {
+          if (awaitsSunspec(ph)) {
+            slots.push({ holder: m.phases, key: i, label: `meter.phases.${i}`, ep: sunspecEndpointOf(meterPhaseConf(m, ph), v), read: true });
+          }
+        });
+      }
+    }
     return slots;
   }
   async function ensureSunspecResolved(cfg) {
@@ -674,6 +686,56 @@ export function createPoller(ctx) {
     state.victron.device = { ...state.victron.device, maxChargeWDevice, maxDischargeWDevice, batteryCapacityLimitWh, maxSocPctDevice, minSocPctDevice, limitsAt: now };
   }
 
+  // --- Zähler: Skala/Vorzeichen (E3a) und Zähler als Lesepunkt (E3b) ------
+  // Faktor eines Zähler-Registersatzes: scale × sign (sign < 0: das Gerät meldet Einspeisung positiv). Ohne beide
+  // genau 1 — die Layouts rechnen dann mit ihrem bisherigen Ausdruck (bitgleich für die ausgelieferten Profile).
+  function meterFactor(m, label) {
+    const k = Number(m?.scale ?? 1) * (m?.sign != null && Number(m.sign) < 0 ? -1 : 1);
+    if (!Number.isFinite(k)) throw new Error(`${label}.scale ungültig (${m?.scale})`);
+    return k;
+  }
+  // Rohwert × k → ganze Watt in der Ausgabe-Konvention (gridPositiveMeans). Mit Skala/Vorzeichen erst runden, dann
+  // die Konvention: Bezug und Einspeisung sind in beiden Konventionen gleich groß.
+  const scaledGridW = (x, k, sign) => (Math.round(x * k) * sign) || 0;
+  // Phasen (`meter.phases`, je ein Lesepunkt) erben Verbindung, Typ, Skala, Vorzeichen und Skalenfaktor vom Zähler;
+  // Adresse, sunspec, combine und split setzt jede Phase selbst.
+  const METER_PHASE_INHERIT = ['fc', 'host', 'port', 'unitId', 'timeoutMs', 'readType', 'wordOrder', 'signed', 'notAvailableRaw', 'scale', 'sign', 'sfAddress'];
+  function meterPhaseConf(m, phase) {
+    if (!phase || typeof phase !== 'object' || Array.isArray(phase)) return null;
+    const out = {};
+    for (const k of METER_PHASE_INHERIT) if (m[k] !== undefined) out[k] = m[k];
+    return Object.assign(out, phase);
+  }
+  // layout "point": Summe über denselben Decoder wie points.* (u16/s16/int32/uint32/float32, combine, split,
+  // sfAddress). Phasen fehlen (null) oder stehen einzeln in `phases`. Eine Summe ohne Wert ist ein Lesefehler
+  // (wie float32/int32); eine nicht lesbare Phase bleibt null, die Summe gilt.
+  let meterPhaseErrorLogged = false;
+  async function readMeterPoint(m) {
+    assertReadableAddress(m, 'Zähler');
+    const read = (c) => transport.mbRequest(c);
+    const ctxRead = { sfCache: cycleSfCache };
+    const total = await readPointValue(m, read, ctxRead);
+    if (total == null) throw new Error('Zähler meldet keinen Gesamtwert (Register nicht verfügbar)');
+    const phases = [null, null, null];
+    let phaseError = null;
+    const list = Array.isArray(m.phases) ? m.phases.slice(0, 3) : [];
+    for (let i = 0; i < list.length; i += 1) {
+      const pc = meterPhaseConf(m, list[i]);
+      if (!pc || awaitsSunspec(pc)) continue;
+      try {
+        assertReadableAddress(pc, `Zähler-Phase L${i + 1}`);
+        phases[i] = await readPointValue(pc, read, ctxRead);
+      } catch (e) {
+        phaseError ??= `L${i + 1}: ${e?.message || e}`;
+      }
+    }
+    if (phaseError && !meterPhaseErrorLogged) {
+      pushLog('meter_phase_read_error', { error: phaseError, text: 'Zähler-Phase nicht lesbar — Phasenwert bleibt leer, die Summe gilt' }, 'warn');
+    }
+    meterPhaseErrorLogged = !!phaseError;
+    return { total, l1: phases[0], l2: phases[1], l3: phases[2] };
+  }
+
   // --- 32-bit-Zähler (meter.readType 'int32') ------------------------------
   const METER_PRIMARY_RETRY_MS = 3600_000;
   let meterFallbackSince = 0;
@@ -687,6 +749,7 @@ export function createPoller(ctx) {
   }
   async function readInt32Meter(m) {
     const le = isLowWordFirst(m.wordOrder);
+    const factor = meterFactor(m, 'meter');
     const notAvailable = Array.isArray(m.notAvailableRaw) ? m.notAvailableRaw.map(Number) : [];
     const fb = m.fallback && typeof m.fallback === 'object' ? m.fallback : null;
     const usePrimary = !fb || !meterFallbackSince || Date.now() - meterFallbackSince >= METER_PRIMARY_RETRY_MS;
@@ -708,7 +771,7 @@ export function createPoller(ctx) {
         if (total != null) {
           if (meterFallbackSince) pushLog('meter_fallback_cleared', { address: m.address });
           meterFallbackSince = 0;
-          return { total, l1: a, l2: b, l3: c, raw: regs, fallback: false };
+          return { total, l1: a, l2: b, l3: c, raw: regs, fallback: false, factor };
         }
         if (!fb) throw new Error('Zähler meldet keinen Gesamtwert (Register nicht verfügbar)');
       }
@@ -727,8 +790,9 @@ export function createPoller(ctx) {
     const fle = isLowWordFirst(fb.wordOrder || m.wordOrder);
     const raw = decodeInt32Words(fregs, fle, notAvailable);
     if (raw == null) throw new Error('Zähler-Ersatzregister meldet keinen Wert');
-    const total = raw * Number(fb.scale ?? 1);
-    return { total, l1: null, l2: null, l3: null, raw: fregs, fallback: true };
+    // Das Ersatzregister ist eine andere Größe mit eigener Umrechnung: fallback.scale/fallback.sign, nicht die des
+    // Blocks (Sungrow 13009 Einspeiseleistung: scale −1).
+    return { total: raw, l1: null, l2: null, l3: null, raw: fregs, fallback: true, factor: meterFactor(fb, 'meter.fallback') };
   }
 
   // Live-Betriebszustand des Masters (Aufgabe 2): der Info-Block (13000) wird nur alle 5 min gelesen — zu langsam,
@@ -840,6 +904,26 @@ export function createPoller(ctx) {
           consecutiveErrors: 0,
           nextRetryAt: null
         };
+      } else if (awaitsSunspec(cfg.meter)) {
+        // E3c: SunSpec-Zähler vor der Auflösung (Scan ausstehend/fehlgeschlagen, Modell fehlt) — nie mit Adresse null
+        // lesen. Lesefehler-Pfad wie jeder Zählerausfall (meter.ok=false, Backoff); der Scan läuft je 60 s neu.
+        throw new Error('SunSpec-Zähler nicht aufgelöst (Scan ausstehend oder Modell am Gerät nicht gefunden)');
+      } else if (String(cfg.meter?.layout || '').toLowerCase() === 'point') {
+        // E3b: Zähler als Lesepunkt (Huawei 37113, E3/DC 40074, Kostal 0xFC, SolaX 0x46, SMA Bezug − Einspeisung …).
+        const r = await readMeterPoint(cfg.meter);
+        const sign = cfg.gridPositiveMeans === 'grid_import' ? 1 : -1;
+        const ph = (x) => (x == null ? null : scaledGridW(x, 1, sign));
+        l1 = ph(r.l1);
+        l2 = ph(r.l2);
+        l3 = ph(r.l3);
+        total = scaledGridW(r.total, 1, sign);
+        state.meter = {
+          ok: true, updatedAt: Date.now(), raw: [r.total, r.l1, r.l2, r.l3],
+          grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
+          error: null,
+          consecutiveErrors: 0,
+          nextRetryAt: null
+        };
       } else if (String(cfg.meter?.readType || '').toLowerCase() === 'float32') {
         // SunSpec-Float-Meter (B-1112, z. B. Fronius Smart Meter Model 203 @
         // Unit-ID 200): 8 Register = 4×Float32 in der Reihenfolge
@@ -859,12 +943,15 @@ export function createPoller(ctx) {
 
         const posImport = cfg.gridPositiveMeans === 'grid_import';
         const sign = posImport ? 1 : -1;
+        // E3a: meter.scale/meter.sign; ohne beide (k = 1) der bisherige Ausdruck.
+        const k = meterFactor(cfg.meter, 'meter');
         // Auf ganze Watt runden: state.dvRegs[0] = u16(total) unten erwartet
         // Integer-Registersemantik; Sub-Watt-Auflösung trägt keine Information.
-        l1 = Math.round(fL1 * sign);
-        l2 = Math.round(fL2 * sign);
-        l3 = Math.round(fL3 * sign);
-        total = Math.round(fTotal * sign);
+        const f = (x) => (k === 1 ? Math.round(x * sign) : scaledGridW(x, k, sign));
+        l1 = f(fL1);
+        l2 = f(fL2);
+        l3 = f(fL3);
+        total = f(fTotal);
         state.meter = {
           ok: true, updatedAt: Date.now(), raw: [fTotal, fL1, fL2, fL3],
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
@@ -884,11 +971,14 @@ export function createPoller(ctx) {
         const r = await readInt32Meter(cfg.meter);
         const posImport = cfg.gridPositiveMeans === 'grid_import';
         const sign = posImport ? 1 : -1;
-        const ph = (x) => (x == null ? null : (Math.round(x * sign) || 0));
+        // E3a: r.factor = scale × sign des Blocks bzw. des Ersatzregisters; k = 1 → bisheriger Ausdruck.
+        const k = r.factor;
+        const conv = (x) => (k === 1 ? (Math.round(x * sign) || 0) : scaledGridW(x, k, sign));
+        const ph = (x) => (x == null ? null : conv(x));
         l1 = ph(r.l1);
         l2 = ph(r.l2);
         l3 = ph(r.l3);
-        total = Math.round(r.total * sign) || 0;
+        total = conv(r.total);
         state.meter = {
           ok: true, updatedAt: Date.now(), raw: r.raw,
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
@@ -913,10 +1003,14 @@ export function createPoller(ctx) {
 
         const posImport = cfg.gridPositiveMeans === 'grid_import';
         const sign = posImport ? 1 : -1;
-        l1 = rawL1 * sign;
-        l2 = rawL2 * sign;
-        l3 = rawL3 * sign;
-        total = rawTotal * sign;
+        // E3a: meter.scale/meter.sign (SOFAR 0x0488: 0,01 kW, + = Einspeisung → scale 10, sign −1). Ohne beide
+        // (k = 1) die ganzen Rohwerte wie bisher.
+        const k = meterFactor(cfg.meter, 'meter');
+        const conv = (x) => (k === 1 ? x * sign : scaledGridW(x, k, sign));
+        l1 = conv(rawL1);
+        l2 = conv(rawL2);
+        l3 = conv(rawL3);
+        total = conv(rawTotal);
         state.meter = {
           ok: true, updatedAt: Date.now(), raw: regs,
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,

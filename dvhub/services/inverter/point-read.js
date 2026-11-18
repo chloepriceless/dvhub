@@ -212,3 +212,9 @@ export async function readPointValue(conf, read, ctx = {}) {
 export function awaitsSunspec(conf) {
   return !!(conf && typeof conf === 'object' && conf.sunspec && conf.address == null);
 }
+
+// Registeradresse für die neuen Lesewege (Zähler-Layout "point", Phasen) prüfen — nie mit Müll-Adresse lesen.
+export function assertReadableAddress(conf, label) {
+  if (Array.isArray(conf?.combine) || conf?.split) return;
+  if (!isAddress(conf?.address)) throw new Error(`${label}: Registeradresse fehlt oder ist ungültig (${conf?.address})`);
+}
