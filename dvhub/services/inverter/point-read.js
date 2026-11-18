@@ -97,15 +97,29 @@ function quantityOf(conf) {
 }
 
 // E9: 32-bit-Wert aus zwei getrennten Registern, `split: { low, high }` (je ein Wort, gleiche Verbindung/FC).
+// Konsistenz (Codex 0f900d3c): zwischen zwei Einzel-Lesungen kann das Gerät den Wert erneuern — Low-Wort des alten
+// und High-Wort des neuen Werts ergäben Unsinn (−1 W → 0 W als 65535 W). Darum High, Low, High: nur wenn das
+// High-Wort um die Low-Lesung herum gleich bleibt, gehört das Paar zu einem Messwert. Bis zu drei Versuche, sonst
+// Lesefehler statt eines erfundenen Werts.
+const SPLIT_MAX_ATTEMPTS = 3;
 async function readSplitWords(conf, read) {
   const { low, high } = conf.split || {};
   const rt = readTypeOf(conf);
   if (rt !== 'int32' && rt !== 'uint32') throw new Error(`split braucht readType int32 oder uint32 (ist ${conf.readType ?? 'leer'})`);
   if (!isAddress(low) || !isAddress(high)) throw new Error('split braucht die Registeradressen low und high');
-  const lo = await read({ ...conf, address: low, quantity: 1 });
-  const hi = await read({ ...conf, address: high, quantity: 1 });
-  if (!Array.isArray(lo) || !lo.length || !Array.isArray(hi) || !hi.length) throw new Error('split: Register ohne Antwort');
-  return [hi[0], lo[0]];
+  const word = async (address) => {
+    const regs = await read({ ...conf, address, quantity: 1 });
+    if (!Array.isArray(regs) || !regs.length) throw new Error(`split: Register ${address} ohne Antwort`);
+    return Number(regs[0]) & 0xffff;
+  };
+  let hi = await word(high);
+  for (let attempt = 0; attempt < SPLIT_MAX_ATTEMPTS; attempt += 1) {
+    const lo = await word(low);
+    const hiAfter = await word(high);
+    if (hiAfter === hi) return [hi, lo];
+    hi = hiAfter;
+  }
+  throw new Error(`split: High-Wort ${high} änderte sich bei jeder Lesung (${SPLIT_MAX_ATTEMPTS} Versuche) — kein konsistenter Wert`);
 }
 
 // E4: Felder, die ein combine-Eintrag vom umgebenden Punkt erbt. Skala, Vorzeichen und Offset des Punkts gelten für

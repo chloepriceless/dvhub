@@ -25,7 +25,8 @@ test('E9: uint32 aus Low-Wort 653 und High-Wort 659 (Last über 65 kW)', async (
   await poller.requestPoll();
   assert.equal(state.victron.selfConsumptionW, 70123);
   const reads = dev.requests.filter((r) => r.address === 653 || r.address === 659);
-  assert.deepEqual(reads.map((r) => [r.address, r.quantity]), [[653, 1], [659, 1]], 'je ein Wort, kein Block über die Lücke');
+  assert.deepEqual(reads.map((r) => [r.address, r.quantity]), [[659, 1], [653, 1], [659, 1]],
+    'je ein Wort, kein Block über die Lücke; High/Low/High für ein konsistentes Paar');
 });
 
 test('E9: int32 mit Vorzeichen und Skala (HV ×10, Einspeisung negativ), notAvailableRaw auf dem Doppelwort', async () => {
@@ -48,4 +49,31 @@ test('E9: split ohne 32-bit-Typ oder ohne Adressen ist ein Lesefehler (kein Mül
   assert.match(state.victron.errors.pvPowerW, /split braucht readType int32 oder uint32/);
   assert.match(state.victron.errors.selfConsumptionW, /split braucht die Registeradressen/);
   assert.equal(state.victron.pvPowerW, undefined);
+});
+
+// Codex 0f900d3c (P2): das Gerät kann den Wert zwischen zwei Einzel-Lesungen erneuern.
+test('E9/Codex: Wert ändert sich zwischen den Lesungen (−1 W → 0 W) — kein 65535 W, sondern ein konsistentes Paar', async () => {
+  const { state, poller, dev } = rig({ batteryPowerW: split(590, 700, { readType: 'int32' }) }, (d) => d.set(590, 0xffff).set(700, 0xffff));
+  let lowReads = 0;
+  dev.mbRequest = ((orig) => async (conf) => {
+    const out = await orig(conf);
+    if (conf.address === 590 && ++lowReads === 1) dev.set(590, 0).set(700, 0); // Update direkt nach der Low-Lesung
+    return out;
+  })(dev.mbRequest);
+  await poller.requestPoll();
+  assert.equal(state.victron.batteryPowerW, 0, 'früher 65535 (Low alt, High neu)');
+  assert.equal(state.victron.errors.batteryPowerW, undefined);
+});
+
+test('E9/Codex: High-Wort ändert sich bei jeder Lesung → Lesefehler nach drei Versuchen (kein erfundener Wert)', async () => {
+  const { state, poller, dev } = rig({ selfConsumptionW: split(653, 659, { readType: 'uint32' }) }, (d) => d.set(653, 1).set(659, 0));
+  let hiReads = 0;
+  dev.mbRequest = ((orig) => async (conf) => {
+    const out = await orig(conf);
+    if (conf.address === 659) dev.set(659, ++hiReads);
+    return out;
+  })(dev.mbRequest);
+  await poller.requestPoll();
+  assert.match(state.victron.errors.selfConsumptionW, /änderte sich bei jeder Lesung/);
+  assert.equal(state.victron.selfConsumptionW, undefined);
 });
