@@ -27,6 +27,7 @@ import { safeInterval } from '../safe-async.js';
 import { betaGateOpen } from '../../beta-features.js';
 import { gridImportW } from '../optimizer/grid-storage.js';
 import { getPowerLimits } from '../power-limits.js';
+import { createLegacyGate, modbusLegacySink, MULTI_GX_GATE_DEVICE, multiGxLegacyPolicies, unwrapLegacyWrite } from '../gate/legacy.js';
 
 export const MULTI_GX_TICK_MS = 5000;
 // 820–822: Netz L1–L3 des Systems; ohne eigenen Zaehler meldet die GX dort den
@@ -82,6 +83,14 @@ export function createEosResyncOnAvailability({ sync, replan, pushLog = () => {}
 export function createMultiGx(ctx, deps = {}) {
   const transport = deps.transport;
   const now = deps.now || Date.now;
+  // Schreibtor (VCL-Vertrag v6 D.1 #8, H-1 Phase 3b, Legacy-Modus): der 2716-Write geht über DAS Tor des Prozesses
+  // (server.js ctx.gate) am Gerät gx2 mit dem eigenen Modbus-Pool dieser Anlage als Senke. Ohne ctx.gate (Tests, die
+  // den Dienst allein bauen) ein eigenes Tor mit derselben Not-Halt-Marke.
+  const gate = deps.gate || ctx.gate || createLegacyGate({ isHalted: () => ctx.state?.ctrl?.discretionaryWritesPaused === true });
+  gate.attachSink(MULTI_GX_GATE_DEVICE, modbusLegacySink(transport));
+  gate.setDevicePolicies(MULTI_GX_GATE_DEVICE, multiGxLegacyPolicies());
+  let gateSeq = 0;
+  let lastWrittenW = null;
   let controller = null;
   let controllerKey = '';
   let readErrors = 0;
@@ -130,8 +139,28 @@ export function createMultiGx(ctx, deps = {}) {
     return regs.slice(0, 3).reduce((sum, raw) => sum + int16(Number(raw)), 0);
   }
 
-  async function write(c, value) {
-    await transport.mbWriteMultiple({ host: c.host, port: c.port, unitId: c.unitId, address: REG.setpoint, values: int32Words(value), timeoutMs: TIMEOUT_MS });
+  // Schreibtor (D.1 #8): derselbe FC-16-Aufruf wie bisher über gate.submit() am Gerät gx2. Die Prüfungen des Takts
+  // (Schalter, Beta-Tor, Not-Halt) sitzen direkt davor, ohne await dazwischen — das Tor urteilt im selben Augenblick
+  // gleich. Die Schreibfreigabe ist offen: dieser Pfad prüft die Config-Gültigkeit heute nicht (Befund, C2).
+  // Aktionsklasse (A.5): neuer Sollwert = command, derselbe Wert erneut (flüchtiges Register, jeden Takt nachgeführt)
+  // = keepalive, die eine 0 beim Abschalten = autoRestore.
+  async function write(c, value, action = null) {
+    const args = { host: c.host, port: c.port, unitId: c.unitId, address: REG.setpoint, values: int32Words(value), timeoutMs: TIMEOUT_MS };
+    const v = Number(value);
+    const eng = Number.isFinite(v) ? Math.round(v) : 0;
+    const cls = action || (lastWrittenW === eng ? 'keepalive' : 'command');
+    gate.setRelease(MULTI_GX_GATE_DEVICE, 'open');
+    gateSeq += 1;
+    const op = {
+      device: MULTI_GX_GATE_DEVICE, point: 'gridSetpointW', value: eng, source: 'multi_gx',
+      kind: cls === 'keepalive' ? 'keepalive' : (cls === 'autoRestore' ? 'restore' : 'write'), action: cls,
+      lease: null, constraints: { set: {}, caps: {}, enforcedBy: [] }, validUntilMs: null,
+      tick: { loop: 'multigx', seq: gateSeq }, step: 0,
+      legacy: { sink: MULTI_GX_GATE_DEVICE, fn: 'mbWriteMultiple', args: [args] },
+    };
+    lastWrittenW = null;
+    unwrapLegacyWrite(await gate.submit(op), op);
+    lastWrittenW = eng;
   }
 
   // Ungedeckter Bedarf: Netzbezug ueber dem Sollwert der Hauptanlage, aber nur,
@@ -217,8 +246,9 @@ export function createMultiGx(ctx, deps = {}) {
       const stopNow = ctx.state.ctrl?.discretionaryWritesPaused === true;
       if (active && c.host && !stopNow) {
         // Einmal neutral hinterlassen; das Register faellt ohnehin von selbst zurueck.
-        try { await write(c, 0); } catch { /* best effort */ }
+        try { await write(c, 0, 'autoRestore'); } catch { /* best effort */ }
       }
+      lastWrittenW = null;
       if (online === true) setAvailable(null);
       active = false; controller = null; controllerKey = ''; readErrors = 0; writeErrors = 0; online = null;
       publish({ enabled: c.enabled, reason: c.enabled ? 'not_configured' : 'disabled' });

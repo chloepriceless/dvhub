@@ -2,7 +2,8 @@
 // Phase 2: Pfad 6 (Sungrow-EMS, Master UND Slave, services/inverter/sungrow.js `submitReg`).
 // Phase 3: Pfade 2–5 (schedule-eval.js: Abregel-Sequenzen, Victron 2707/2708 und MQTT, Einspeisegrenze 2706,
 // Nulleinspeisung/fester Deckel) über das Gerät `inverter` (allgemeiner WR-Transport, wie Rust `Policies::from_config`);
-// Pfad 1 (applyControlTargetCore: Modbus, MQTT-Brücke, HTTP-Abholung) über dasselbe Gerät.
+// Pfad 1 (applyControlTargetCore: Modbus, MQTT-Brücke, HTTP-Abholung) über dasselbe Gerät; Pfad 8 (zweite GX,
+// services/multi-gx) über das Gerät `gx2`.
 //
 // Nur hier — im Tor-Verzeichnis — stehen die Schreibfunktionen der Senken (R-T1: „Die Senken sind nur noch aus dem
 // Tor erreichbar“). Die Pfade reichen ihren schon kodierten Aufruf als `legacy: { sink, fn, args }` ein; das Tor
@@ -138,6 +139,25 @@ export function inverterLegacySink(transport) {
       if (op?.legacy?.fn !== 'mqttWrite' || typeof transport?._writeTopics !== 'function') return null;
       const topic = transport._writeTopics()?.[op.legacy.args?.[0]];
       return typeof topic === 'string' && topic ? `MQTT ${topic}` : null;
+    },
+  };
+}
+
+// --- Phase 3b: zweite Victron-GX (services/multi-gx, Pfad 8) ------------------------------------------------------
+
+/** Gerätename im Tor für die zweite GX am selben Netzanschluss (Geräteschlüssel `gx2` wie im Rust-Ereignis). */
+export const MULTI_GX_GATE_DEVICE = 'gx2';
+
+/**
+ * Richtlinie des einen Punkts der zweiten GX: Netz-Sollwert 2716/2717 (int32, FC16, flüchtig) — Ressource
+ * batteryControl, Stufe battery_grid, Rücknahme `never` (Christin 10.11.2026: auch an der zweiten GX schreibt der
+ * Not-Halt nichts, der Sollwert läuft dort ab).
+ */
+export function multiGxLegacyPolicies() {
+  return {
+    gridSetpointW: {
+      class: 'battery_grid', resource: 'batteryControl', sink: MULTI_GX_GATE_DEVICE, targetKind: 'modbus', unit: 'W',
+      neutral: { kind: 'never' },
     },
   };
 }
