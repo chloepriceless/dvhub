@@ -1,6 +1,9 @@
 // Profil-Loader ohne Victron-Rückfall (E1/E2, Bericht 2026-11-18-hersteller-lesend-luecken.md §2 S1–S3):
 //   E1 — die gültigen `manufacturer`-Werte sind die Profile in hersteller/. Ein vorhandenes Profil lädt als es
 //        selbst; eine ID ohne Datei endet in „Profil fehlt" (writeSafety gesperrt), nie still als victron.
+//   E2 — ein Nicht-Victron-Profil erbt keine Victron-Register für Blöcke, die es nicht angibt. `readOnly: true`
+//        schaltet alle Schreibziele und die DV-Abregelung ab, auch gegen dvControl.enabled aus config.json.
+//   Leere Profildatei = ungültig (C2 sperrt), nicht ein {}-Profil.
 // Echter Ladeweg (loadConfigFile) gegen ein temporäres Verzeichnis; der Evaluator-Teil zählt echte Draht-Writes.
 
 import test from 'node:test';
@@ -15,6 +18,7 @@ import { listManufacturerProfiles } from '../routes-api.js';
 import { createScheduleEvaluator } from '../schedule-eval.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const VICTRON_WRITE_REGS = [2716, 2705, 2901, 2704, 2706, 2707, 2708];
 const SHIPPED_VICTRON = fs.readFileSync(path.join(HERE, '..', 'hersteller', 'victron.json'), 'utf8');
 
 // Wie auf einer echten Box liegt die mitgelieferte victron.json immer daneben — genau dann wurde eine unbekannte
@@ -29,6 +33,24 @@ function setup({ manufacturer, profiles = {}, config = {} }) {
   const configPath = path.join(dir, 'config.json');
   fs.writeFileSync(configPath, JSON.stringify({ manufacturer, victron: { host: '192.0.2.40' }, ...config }, null, 2));
   return { dir, configPath };
+}
+
+// Alle Schreibziele, die ein Write-Pfad finden könnte: aktive controlWrite-Einträge und jedes dvControl-Ziel.
+function writeTargets(cfg) {
+  const out = [];
+  for (const [k, v] of Object.entries(cfg.controlWrite || {})) if (v?.enabled) out.push(`controlWrite.${k}@${v.address}`);
+  for (const k of ['feedExcessDcPv', 'dontFeedExcessAcPv', 'zeroFeedIn']) {
+    if (cfg.dvControl?.[k] !== undefined) out.push(`dvControl.${k}@${cfg.dvControl[k]?.address}`);
+  }
+  return out;
+}
+
+function victronRegistersIn(cfg) {
+  const regs = [];
+  for (const group of [cfg.controlWrite, cfg.dvControl]) {
+    for (const v of Object.values(group || {})) if (VICTRON_WRITE_REGS.includes(v?.address)) regs.push(v.address);
+  }
+  return regs;
 }
 
 // Kleines Lese-Profil eines fremden Modbus-Geräts — nur meter/points.
@@ -68,13 +90,18 @@ test('E1: Speichern behält eine vorhandene Profil-ID in config.json (wird nicht
   assert.equal(saved.valid, true);
 });
 
-test('E1: ID ohne Profildatei → Zustand „Profil fehlt": writeSafety.ok=false, ID bleibt stehen', () => {
+test('E1: ID ohne Profildatei → Zustand „Profil fehlt": writeSafety.ok=false, kein Victron-Schreibziel', () => {
   const { configPath } = setup({ manufacturer: 'acme-missing' });
   const loaded = loadConfigFile(configPath);
   const cfg = loaded.effectiveConfig;
   assert.equal(loaded.persistedConfig.manufacturer, 'acme-missing', 'bleibt die gewählte ID, nicht victron');
   assert.equal(loaded.valid, false);
   assert.deepEqual(cfg.writeSafety, { ok: false, reason: 'manufacturer_profile_error', manufacturer: 'acme-missing' });
+  assert.deepEqual(writeTargets(cfg), []);
+  assert.deepEqual(victronRegistersIn(cfg), []);
+  assert.deepEqual(cfg.controlWrite, {});
+  assert.deepEqual(cfg.points, {}, 'keine Victron-Lesepunkte (843/842 …) am fremden Gerät');
+  assert.deepEqual(cfg.meter, {}, 'kein Victron-Zähler 820 am fremden Gerät');
 });
 
 test('E1: eine ID mit Pfadtrenner lädt keine Datei außerhalb von hersteller/ und sperrt die Writes', () => {
@@ -86,6 +113,7 @@ test('E1: eine ID mit Pfadtrenner lädt keine Datei außerhalb von hersteller/ u
   assert.equal(loaded.manufacturerProfile, null);
   assert.equal(loaded.manufacturerProfilePath, null);
   assert.equal(loaded.effectiveConfig.writeSafety.ok, false);
+  assert.deepEqual(writeTargets(loaded.effectiveConfig), []);
   assert.ok(loaded.warnings.some((w) => /^manufacturer: not a valid profile id/.test(w)));
 });
 
@@ -104,6 +132,101 @@ test('E1: das Auswahlfeld bietet nur IDs an, die der Loader lädt', () => {
   const ids = listManufacturerProfiles({ getConfigPath: () => configPath, getRawCfg: () => ({ manufacturer: 'victron' }) })
     .map((o) => o.value).sort();
   assert.deepEqual(ids, ['acme-hybrid', 'victron']);
+});
+
+// --- E2: keine geerbten Victron-Blöcke für fremde Profile ----------------------------------------------------
+
+test('E2: Nicht-Victron-Profil ohne controlWrite/dvControl erbt keine Victron-Schreibregister', () => {
+  const { configPath } = setup({ manufacturer: 'acme-hybrid', profiles: { 'acme-hybrid': READ_PROFILE } });
+  const loaded = loadConfigFile(configPath);
+  const cfg = loaded.effectiveConfig;
+  assert.equal(loaded.valid, true);
+  assert.deepEqual(cfg.controlWrite, {});
+  assert.deepEqual(writeTargets(cfg), []);
+  assert.deepEqual(victronRegistersIn(cfg), []);
+  assert.equal(cfg.dvControl.enabled, true, 'Betreiber-Entscheidung bleibt stehen, schaltet aber nichts');
+  assert.deepEqual(Object.keys(cfg.points).sort(), ['batteryPowerW', 'soc'], 'nur die Punkte des Profils');
+});
+
+test('E2: Nicht-Victron-Modbus-Profil ohne meter/points liest keine Victron-Register (820/843 …)', () => {
+  const { configPath } = setup({
+    manufacturer: 'acme-hybrid',
+    profiles: { 'acme-hybrid': { victron: READ_PROFILE.victron, controlWrite: {}, dvControl: {} } },
+  });
+  const cfg = loadConfigFile(configPath).effectiveConfig;
+  // applyVictronDefaults trägt nur die Verbindung ein; ohne fc/address weist mbRequest die Lesung ab (kein Draht).
+  assert.equal(cfg.meter.address, undefined, 'kein Victron-Zähler 820');
+  assert.equal(cfg.meter.fc, undefined);
+  assert.deepEqual(cfg.points, {});
+});
+
+test('E2: das Victron-Profil behält seine eingebaute Werkskarte für nicht angegebene Blöcke', () => {
+  const { configPath } = setup({
+    manufacturer: 'victron',
+    profiles: { victron: { victron: { transport: 'modbus', port: 502, unitId: 100, timeoutMs: 1000 } } },
+  });
+  const cfg = loadConfigFile(configPath).effectiveConfig;
+  assert.equal(cfg.controlWrite.gridSetpointW.address, 2716);
+  assert.equal(cfg.dvControl.feedExcessDcPv.address, 2707);
+  assert.equal(cfg.meter.address, 820);
+});
+
+// --- readOnly ---------------------------------------------------------------------------------------------
+
+test('readOnly: minimales Lese-Profil hat null Schreibziele und null DV-Ziele, auch mit dvControl.enabled:true', () => {
+  const { configPath } = setup({
+    manufacturer: 'acme-ro',
+    profiles: { 'acme-ro': { ...READ_PROFILE, readOnly: true } },
+    config: { dvControl: { enabled: true, negativePriceProtection: { enabled: true } } },
+  });
+  const loaded = loadConfigFile(configPath);
+  const cfg = loaded.effectiveConfig;
+  assert.equal(loaded.valid, true);
+  assert.deepEqual(writeTargets(cfg), []);
+  assert.deepEqual(cfg.controlWrite, {});
+  assert.equal(cfg.dvControl.enabled, false, 'config.json schaltet die Abregelung nicht ein');
+  assert.equal(cfg.dvControl.negativePriceProtection.enabled, false);
+  assert.equal(cfg.meter.address, 30000, 'Lesen bleibt');
+  assert.equal(cfg.points.soc.address, 31000);
+});
+
+test('readOnly: auch ein Profil, das Schreibziele angibt, schreibt mit readOnly nichts', () => {
+  const { configPath } = setup({
+    manufacturer: 'acme-ro',
+    profiles: {
+      'acme-ro': {
+        ...READ_PROFILE,
+        readOnly: true,
+        controlWrite: { gridSetpointW: { enabled: true, fc: 16, address: 40000, writeType: 'int32', scale: 1, offset: 0 } },
+        dvControl: { enabled: true, feedExcessDcPv: { enabled: true, fc: 6, address: 40010, writeType: 'uint16' } },
+      },
+    },
+    config: { dvControl: { enabled: true } },
+  });
+  const cfg = loadConfigFile(configPath).effectiveConfig;
+  assert.deepEqual(writeTargets(cfg), []);
+  assert.equal(cfg.dvControl.enabled, false);
+});
+
+// --- leere Profildatei ----------------------------------------------------------------------------------------
+
+for (const [label, text] of [['leer', ''], ['nur Leerzeichen', ' \n\t\n']]) {
+  test(`Leere Profildatei (${label}) ist ungültig: writeSafety.ok=false, kein Victron-Schreibziel`, () => {
+    const { configPath } = setup({ manufacturer: 'acme-hybrid', profiles: { 'acme-hybrid': text } });
+    const loaded = loadConfigFile(configPath);
+    assert.equal(loaded.valid, false);
+    assert.match(loaded.manufacturerProfileError, /empty/);
+    assert.deepEqual(loaded.effectiveConfig.writeSafety, { ok: false, reason: 'manufacturer_profile_error', manufacturer: 'acme-hybrid' });
+    assert.deepEqual(writeTargets(loaded.effectiveConfig), []);
+  });
+}
+
+test('Leere victron.json ist ungültig: Werkskarte bleibt, writeSafety sperrt', () => {
+  const { configPath } = setup({ manufacturer: 'victron', profiles: { victron: '' } });
+  const loaded = loadConfigFile(configPath);
+  assert.equal(loaded.valid, false);
+  assert.equal(loaded.effectiveConfig.writeSafety.ok, false);
+  assert.equal(loaded.effectiveConfig.controlWrite.gridSetpointW.address, 2716);
 });
 
 // --- Draht: der echte Evaluator schreibt mit diesen Configs keinen einzigen Modbus-Write -------------------
@@ -141,6 +264,24 @@ async function driveAllWritePaths(ev) {
   await ev.evaluateSchedule();
   await ev.evaluateSchedule();
 }
+
+test('Draht: Lese-Profil (readOnly, dvControl.enabled:true, Negativpreis) → kein einziger Modbus-Write', async () => {
+  const { configPath } = setup({
+    manufacturer: 'acme-ro',
+    profiles: { 'acme-ro': { ...READ_PROFILE, readOnly: true } },
+    config: { dvControl: { enabled: true, negativePriceProtection: { enabled: true } } },
+  });
+  const { ev, writes } = bootEvaluator(loadConfigFile(configPath).effectiveConfig);
+  await driveAllWritePaths(ev);
+  assert.deepEqual(writes, []);
+});
+
+test('Draht: Profil ohne Schreibblöcke (ohne readOnly) → kein Victron-Register auf dem Draht', async () => {
+  const { configPath } = setup({ manufacturer: 'acme-hybrid', profiles: { 'acme-hybrid': READ_PROFILE } });
+  const { ev, writes } = bootEvaluator(loadConfigFile(configPath).effectiveConfig);
+  await driveAllWritePaths(ev);
+  assert.deepEqual(writes, []);
+});
 
 test('Draht: ID ohne Profildatei → kein einziger Modbus-Write', async () => {
   const { configPath } = setup({ manufacturer: 'acme-missing' });

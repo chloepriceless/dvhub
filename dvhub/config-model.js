@@ -350,6 +350,11 @@ function stripManufacturerManagedFields(raw, warnings) {
   }
 }
 
+// Register-Ziele der DV-Abregelung unter dvControl (die gemanagten dvControl.*-Pfade oben).
+const DV_CONTROL_TARGET_KEYS = MANUFACTURER_MANAGED_PATHS
+  .filter((p) => p.startsWith('dvControl.'))
+  .map((p) => p.slice('dvControl.'.length));
+
 // E1 (S1, 18.11.2026): Hersteller-ID = Dateiname eines Profils in hersteller/ ohne .json — dieselbe Quelle wie das
 // Auswahlfeld (routes-api.js listManufacturerProfiles). Es gibt keine feste Liste mehr: ein vorhandenes Profil lädt
 // als es selbst, eine ID ohne Datei endet in „Profil fehlt" (valid:false, writeSafety gesperrt) — nie still als
@@ -365,11 +370,27 @@ function resolveManufacturerProfilePath(configPath, manufacturer) {
 
 function loadManufacturerProfile(profilePath) {
   const text = fs.readFileSync(profilePath, 'utf8');
-  const parsed = text.trim() ? JSON.parse(text) : {};
+  // Eine leere Datei ist kein Profil (abgebrochene Kopie, volle Platte). Früher galt sie als gültiges {}-Profil:
+  // writeSafety blieb aus, und die Victron-Werkskarte blieb am fremden Gerät wirksam.
+  if (!text.trim()) throw new Error('manufacturer profile is empty');
+  const parsed = JSON.parse(text);
   if (!isPlainObject(parsed)) {
     throw new Error('manufacturer profile root must be an object');
   }
   return parsed;
+}
+
+// R-T2.1 (VCL-Vertrag v6) / E2: Profil fehlt, ist kaputt oder leer, und der Hersteller ist NICHT victron → keine
+// Victron-Werkskarte. Lese- und Schreibblöcke leer, keine DV-Ziele, keine Geräteerkennung. Die Betreiberwerte
+// (dvControl.enabled, negativePriceProtection, victron.host …) bleiben stehen.
+function withoutVictronRegisterMap(config) {
+  const next = clone(config);
+  next.meter = {};
+  next.points = {};
+  next.controlWrite = {};
+  if (isPlainObject(next.dvControl)) for (const key of DV_CONTROL_TARGET_KEYS) delete next.dvControl[key];
+  delete next.identify;
+  return next;
 }
 
 function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
@@ -417,9 +438,24 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   }
   effectiveConfig.victron = deepMerge(profileVictron, victronOverride);
 
-  if (isPlainObject(manufacturerProfile?.meter)) effectiveConfig.meter = clone(manufacturerProfile.meter);
-  if (isPlainObject(manufacturerProfile?.points)) effectiveConfig.points = clone(manufacturerProfile.points);
-  if (isPlainObject(manufacturerProfile?.controlWrite)) effectiveConfig.controlWrite = clone(manufacturerProfile.controlWrite);
+  // E2 (S2, 18.11.2026): Die Werkskarte aus createDefaultConfig ist die VICTRON-Karte (meter 820, controlWrite 2716/
+  // 2705/2901/2704/2706, dvControl 2707/2708). Nur das Victron-Profil erbt sie für Blöcke, die es nicht angibt. Für
+  // jedes andere Profil gilt ein fehlender Block als leerer Block — sonst richtete applyVictronDefaults die Victron-
+  // Register auf Host und Unit-ID des fremden Geräts aus. Ausnahme `meter` bei transport=mqtt: dort liest polling.js
+  // das Netz aus dem MQTT-Cache (transport.readGrid), der Block adressiert nichts (bridge-mqtt/dvhub-mqtt haben
+  // keinen und bleiben unverändert).
+  const inheritsVictronMap = (persistedConfig?.manufacturer || 'victron') === 'victron';
+  const profileBlock = (key) => {
+    if (isPlainObject(manufacturerProfile?.[key])) return manufacturerProfile[key];
+    return inheritsVictronMap ? null : {};
+  };
+  const meterBlock = (!isPlainObject(manufacturerProfile?.meter) && effectiveConfig.victron?.transport === 'mqtt')
+    ? null : profileBlock('meter');
+  if (meterBlock) effectiveConfig.meter = clone(meterBlock);
+  const pointsBlock = profileBlock('points');
+  if (pointsBlock) effectiveConfig.points = clone(pointsBlock);
+  const controlWriteBlock = profileBlock('controlWrite');
+  if (controlWriteBlock) effectiveConfig.controlWrite = clone(controlWriteBlock);
   // identify (Sungrow, T-0422): Geräteerkennung und Schreib-Tor gehören zum
   // Profil — ein Profil ohne den Block hat auch keinen (kein Rest aus config.json).
   if (isPlainObject(manufacturerProfile?.identify)) effectiveConfig.identify = clone(manufacturerProfile.identify);
@@ -429,14 +465,23 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   // Werte überschreiben — ein fehlender Schlüssel heißt „Profil-Default gilt",
   // sonst würde ein frisch angelegtes config.json die Abregelung stumm
   // umkonfigurieren. Gleiches Muster wie victron oben (D-27).
-  if (isPlainObject(manufacturerProfile?.dvControl)) {
+  const dvControlBlock = profileBlock('dvControl');
+  if (dvControlBlock) {
     const persistedDv = isPlainObject(persistedConfig?.dvControl) ? persistedConfig.dvControl : {};
     const dvOverride = {};
     if (typeof persistedDv.enabled === 'boolean') dvOverride.enabled = persistedDv.enabled;
     if (isPlainObject(persistedDv.negativePriceProtection)) {
       dvOverride.negativePriceProtection = clone(persistedDv.negativePriceProtection);
     }
-    effectiveConfig.dvControl = deepMerge(clone(manufacturerProfile.dvControl), dvOverride);
+    effectiveConfig.dvControl = deepMerge(clone(dvControlBlock), dvOverride);
+  }
+
+  // Nur-Lese-Profil (`"readOnly": true`, für die neuen Lese-Hersteller): keine Schreibziele und keine
+  // DV-Abregelung, egal was Profil oder config.json sonst sagen. dvControl.enabled aus config.json schaltet hier
+  // nichts ein; negativePriceProtection ist aus, damit DVhub keine Abregelung meldet, die nicht stattfindet.
+  if (manufacturerProfile?.readOnly === true) {
+    effectiveConfig.controlWrite = {};
+    effectiveConfig.dvControl = { enabled: false, negativePriceProtection: { enabled: false } };
   }
 
   return applyVictronDefaults(effectiveConfig);
@@ -7153,6 +7198,9 @@ export function loadConfigFile(configPath) {
     manufacturerProfileError = error.message;
     valid = false;
     if (!parseError) parseError = `manufacturer profile error: ${error.message}`;
+    // R-T2.1: für einen anderen Hersteller bleibt die Victron-Werkskarte nicht stehen (Lese- und Schreibblöcke
+    // leer). Victron selbst behält sie: Lesen geht weiter, Schreiben sperrt writeSafety unten.
+    if (manufacturer !== 'victron') effectiveConfig = withoutVictronRegisterMap(effectiveConfig);
   }
 
   // C2 (Christin 16.11.2026): Bei ungültiger Konfiguration (kaputte config.json ODER kaputtes/fehlendes
