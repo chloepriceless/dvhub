@@ -127,9 +127,10 @@ export function buildRig(mode, { cfg, transport, state, ctx = {}, files = {}, da
   for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), JSON.stringify(content));
   const logs = [];
   const events = [];
+  const telemetry = [];
   // pushLog wie in server.js: (Ereignis, Daten, Stufe | { severity }) — Szenarien reichen es an Begrenzer/Not-Halt weiter.
   const pushLog = (event, data, level) => logs.push([event, plain(data), typeof level === 'string' ? level : (level?.severity ?? null)]);
-  const rig = { mode, cfg, transport, dir, logs, events, pushLog, data, gate: null, ev: null, state: null };
+  const rig = { mode, cfg, transport, dir, logs, events, telemetry, pushLog, data, gate: null, ev: null, state: null };
   const make = (st) => {
     const gate = mode === 'new'
       ? createLegacyGate({ isHalted: () => st.ctrl?.discretionaryWritesPaused === true, onEvent: (e) => events.push(e) })
@@ -138,7 +139,10 @@ export function buildRig(mode, { cfg, transport, state, ctx = {}, files = {}, da
     const ev = create({
       state: st, getCfg: () => rig.cfg, transport,
       pushLog,
-      telemetrySafeWrite: () => {}, persistConfig: async () => {}, telemetryStore: null, epexNowNext: () => null,
+      // Telemetrie-Ereignisse (control_write samt Rohwörtern …) wie server.js telemetrySafeWrite: Fehler geschluckt.
+      telemetrySafeWrite: async (fn) => { try { await fn(); } catch { /* wie server.js */ } },
+      telemetryStore: { writeControlEvent: (e) => { telemetry.push(plain(e)); } },
+      persistConfig: async () => {}, epexNowNext: () => null,
       regenerateSmallMarketAutomationRules: async () => {},
       dvSeqSavedPath: path.join(dir, 'dv_seq_saved.json'),
       dvSeqWritedayPath: path.join(dir, 'dv_seq_writeday.json'),
@@ -210,6 +214,7 @@ export async function runSide(t, mode, sc) {
     } finally {
       console.warn = prevWarn;
       if (prevRo === undefined) delete process.env.DVHUB_READ_ONLY; else process.env.DVHUB_READ_ONLY = prevRo;
+      await rig.transport.destroy?.(); // echter MQTT-Transport: Zeitgeber und Verbindung schließen
     }
     const s = rig.state;
     result = {
@@ -219,12 +224,9 @@ export async function runSide(t, mode, sc) {
         calls: [...rig.transport.calls],
         steps,
         logs: rig.logs,
-        state: plain({
-          ctrl: s.ctrl,
-          lastWrite: s.schedule?.lastWrite,
-          verify: s.schedule?._verify,
-          active: s.schedule?.active,
-        }),
+        telemetry: rig.telemetry,
+        // Ganzer Zeitplan-Zustand (lastWrite, active, _verify, Keepalive-Sammler, Skip-Drossel …) und ctrl.
+        state: plain({ ctrl: s.ctrl, schedule: s.schedule, multiGxHandoff: s.multiGxHandoff }),
         regs: Object.fromEntries(rig.transport.regs ?? []),
         files: {
           saved: readJson(path.join(rig.dir, 'dv_seq_saved.json')),
@@ -251,9 +253,15 @@ export function registerParityScenarios(scenarios, label = 'Legacy') {
     test(`Parität alt ↔ Tor (${label}): ${name}`, async (t) => {
       const before = await runSide(t, 'old', sc);
       const after = await runSide(t, 'new', sc);
-      assert.deepEqual(after.out, before.out, `${name}: Tor-Pfad weicht vom alten Weg ab`);
-      // gateWrites: nur diese Draht-Writes gehören zu den Pfaden 2–5 (ein ganzer Takt schreibt auch Pfad 1 direkt).
-      const writes = after.out.wire.filter((e) => isWrite(e) && (!sc.gateWrites || sc.gateWrites(e)));
+      // baseDiffers: ausgewiesene Verhaltensänderung NACH der Basis (eigener Commit, eigener Test) — gegen die
+      // Basis-Kopie prüft das Szenario den belegten Unterschied, gegen den heutigen Code weiter die volle Gleichheit.
+      if (BASE && sc.baseDiffers) sc.baseDiffers(before, after);
+      else assert.deepEqual(after.out, before.out, `${name}: Tor-Pfad weicht vom alten Weg ab`);
+      // gateWrites: nur diese Draht-Writes zählen. countBy 'calls': jeder Aufruf der Senke, der die Lese-Modus-Prüfung
+      // passiert hat (echter MQTT-Transport: Broker-Protokoll statt Write-Zeilen; HTTP-Abholung: kein Draht).
+      const writes = sc.countBy === 'calls'
+        ? after.out.calls
+        : after.out.wire.filter((e) => isWrite(e) && (!sc.gateWrites || sc.gateWrites(e)));
       const delivered = after.rig.events.filter((e) => e.outcome === 'ok' || e.outcome === 'error');
       assert.equal(delivered.length, writes.length, `${name}: jeder Draht-Write ein Tor-Ereignis`);
       assert.ok(after.rig.events.every((e) => e.trust === 'legacy' && e.target.device === INVERTER_GATE_DEVICE), 'legacy, Gerät inverter');

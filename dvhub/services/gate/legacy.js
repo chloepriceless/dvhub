@@ -1,7 +1,8 @@
 // services/gate/legacy.js — Bestandspfade im Legacy-Modus ans Schreibtor anschließen (VCL-Vertrag v6 D.1, D.2).
 // Phase 2: Pfad 6 (Sungrow-EMS, Master UND Slave, services/inverter/sungrow.js `submitReg`).
 // Phase 3: Pfade 2–5 (schedule-eval.js: Abregel-Sequenzen, Victron 2707/2708 und MQTT, Einspeisegrenze 2706,
-// Nulleinspeisung/fester Deckel) über das Gerät `inverter` (allgemeiner WR-Transport, wie Rust `Policies::from_config`).
+// Nulleinspeisung/fester Deckel) über das Gerät `inverter` (allgemeiner WR-Transport, wie Rust `Policies::from_config`);
+// Pfad 1 (applyControlTargetCore: Modbus, MQTT-Brücke, HTTP-Abholung) über dasselbe Gerät.
 //
 // Nur hier — im Tor-Verzeichnis — stehen die Schreibfunktionen der Senken (R-T1: „Die Senken sind nur noch aus dem
 // Tor erreichbar“). Die Pfade reichen ihren schon kodierten Aufruf als `legacy: { sink, fn, args }` ein; das Tor
@@ -78,9 +79,21 @@ export const INVERTER_GATE_DEVICE = 'inverter';
 const PV_RELEASE_LITERALS = Object.freeze({ feedExcessDcPv: [1], dontFeedExcessAcPv: [0], wMaxLimEna: [0] });
 const PV_UNITS = Object.freeze({ dvFeedInLimitW: 'W', wMaxLimPct: '%', wMaxLimPctRvrtTms: 's' });
 
+// Akku-Punkte des Steuerziel-Pfads (D.1 #1, applyControlTargetCore) am selben Gerät: Ressource `batteryControl`
+// (D.1 R-T4), Stufe `battery_grid` wie Rust `TargetClass::BatteryGrid`. Rücknahme laut A.6: Netz-Sollwert `never`
+// (Christin 10.11.2026), Min-SoC und Ladestrom `never` (H-8); die Entladegrenze 2704 einmal zurück (`restoreBefore`
+// — den Rückkehrwert hält im Legacy-Modus der Pfad: Peak Shaving, Netzanschluss, Akku-Übergabe; D.2).
+const BATTERY_POINTS = Object.freeze({
+  gridSetpointW: Object.freeze({ unit: 'W', neutral: Object.freeze({ kind: 'never' }) }),
+  maxDischargeW: Object.freeze({ unit: 'W', neutral: Object.freeze({ kind: 'restoreBefore' }) }),
+  chargeCurrentA: Object.freeze({ unit: 'A', neutral: Object.freeze({ kind: 'never' }) }),
+  minSocPct: Object.freeze({ unit: '%', neutral: Object.freeze({ kind: 'never' }) }),
+});
+
 /**
- * Richtlinie eines Punkts am Gerät `inverter` (Ressource `pvExport`, D.1 R-T4; Stufe `dv_curtail` wie Rust
- * `TargetClass::DvCurtail`). Rücknahme laut A.6: PV-Sperre/DV-Sequenz `sequence: release` (die Einzelflaggen mit
+ * Richtlinie eines Punkts am Gerät `inverter`. Akku-Punkte (gridSetpointW, maxDischargeW, chargeCurrentA, minSocPct)
+ * siehe BATTERY_POINTS. Alle übrigen: Ressource `pvExport` (D.1 R-T4), Stufe `dv_curtail` wie Rust
+ * `TargetClass::DvCurtail`; Rücknahme laut A.6: PV-Sperre/DV-Sequenz `sequence: release` (die Einzelflaggen mit
  * ihrem Freigabe-Literal), alle übrigen Punkte — Sequenz-Schritte, Einspeisegrenze 2706 — `restoreBefore`: der Wert
  * vor DVhub, den im Legacy-Modus der Pfad sichert (dv_seq_saved.json, D.2). Welche Punkte es gibt, bestimmt im
  * Legacy-Modus das Herstellerprofil (D.0): die Pfade melden jeden Punkt vor seinem ersten Write an.
@@ -88,6 +101,13 @@ const PV_UNITS = Object.freeze({ dvFeedInLimitW: 'W', wMaxLimPct: '%', wMaxLimPc
  * @param {'modbus'|'mqtt'} [targetKind]
  */
 export function inverterLegacyPolicy(point, targetKind = 'modbus') {
+  if (Object.hasOwn(BATTERY_POINTS, point)) {
+    const b = BATTERY_POINTS[point];
+    return {
+      class: 'battery_grid', resource: 'batteryControl', sink: INVERTER_GATE_DEVICE, targetKind, unit: b.unit,
+      neutral: { ...b.neutral },
+    };
+  }
   const literals = Object.hasOwn(PV_RELEASE_LITERALS, point) ? PV_RELEASE_LITERALS[point] : null;
   return {
     class: 'dv_curtail',

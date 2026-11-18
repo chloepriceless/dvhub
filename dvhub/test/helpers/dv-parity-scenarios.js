@@ -802,7 +802,6 @@ SCENARIOS.p3_dvhub_mqtt_no_flags = {
 // Ganzer Takt (evaluateSchedule) bei negativem Preis: §51-Sperre, im Not-Halt die eine Freigabe, danach Ruhe.
 SCENARIOS.p3_victron_eval_negative_price = {
   setup: profileSetup('victron', { ctx: { epexNowNext: () => ({ current: { ct_kwh: -3, eur_mwh: -30 }, next: null }) } }),
-  gateWrites: (entry) => / @(2707|2708)=/.test(entry),
   run: async (r, step) => {
     await step('Takt 1 (negativer Preis)', async () => { await r.ev.evaluateSchedule(); return dvState(r); });
     await step('Takt 2', async () => { await r.ev.evaluateSchedule(); return dvState(r); });
@@ -890,7 +889,6 @@ export function flipScenarios() {
   // Ganzer Takt: bei negativem Preis sperrt §51 auch im Not-Halt (notHaltDvDecision → weiterlaufende Klasse).
   SCENARIOS.flip_victron_eval_negative_price = {
     setup: profileSetup('victron', { ctx: { epexNowNext: () => ({ current: { ct_kwh: -3, eur_mwh: -30 }, next: null }) } }),
-    gateWrites: (entry) => / @(2707|2708)=/.test(entry),
     run: async (r, step) => {
       r.halt();
       await step('Takt im Not-Halt (negativer Preis)', async () => { await r.ev.evaluateSchedule(); return dvState(r); });

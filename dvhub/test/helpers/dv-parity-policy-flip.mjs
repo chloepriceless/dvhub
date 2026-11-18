@@ -4,8 +4,9 @@
 // services/emergency-stop/policy.js lässt jede Pflicht-Klasse einzeln wieder im Not-Halt weiterschreiben
 // (NOT_HALT_CONTINUES, „true = schreibt im Not-Halt weiter wie bis 1.0.9“). Ab Werk ist keine eingeschaltet —
 // dann schreibt eine Pflicht-Abregelung im Not-Halt gar nicht (das zeigen die Szenarien in gate-dv-parity.test.js).
-// Hier sind negativePrice, dvCurtailment und feedInCapLoop eingeschaltet: die §-51-Sperre, die DV-Teilvorgabe am
-// Begrenzer 2706, der Nulleinspeise-Deckel unter einer §-51-Sperre und die Regelschleife der festen Grenze laufen
+// Hier sind negativePrice, dvCurtailment, feedInCapLoop und socFloor eingeschaltet: die §-51-Sperre, die
+// DV-Teilvorgabe am Begrenzer 2706, der Nulleinspeise-Deckel unter einer §-51-Sperre, die Regelschleife der festen
+// Grenze und (Pfad 1) der Netz-Sollwert aus § 51 bzw. der Sicherheits-Nullung am SoC-Boden samt Lebenszeichen laufen
 // im Not-Halt weiter. Über das Tor muss das genauso durchgehen (Lauf-Zulassung mit inHalt), ein Befehl nicht.
 
 import { mock } from 'node:test';
@@ -16,7 +17,7 @@ if (typeof mock.module === 'function') await runFlipped();
 
 async function runFlipped() {
   const real = await import('../../services/emergency-stop/policy.js');
-  const FLIPPED = Object.freeze({ ...real.NOT_HALT_CONTINUES, negativePrice: true, dvCurtailment: true, feedInCapLoop: true });
+  const FLIPPED = Object.freeze({ ...real.NOT_HALT_CONTINUES, negativePrice: true, dvCurtailment: true, feedInCapLoop: true, socFloor: true });
   mock.module('../../services/emergency-stop/policy.js', {
     namedExports: {
       ...real,
@@ -31,5 +32,7 @@ async function runFlipped() {
 
   const { registerParityScenarios } = await import('./dv-parity-rig.js');
   const { flipScenarios } = await import('./dv-parity-scenarios.js');
+  const { controlTargetFlipScenarios } = await import('./ct-parity-scenarios.js');
   registerParityScenarios(flipScenarios(), 'Richtlinie umgeschaltet');
+  registerParityScenarios(controlTargetFlipScenarios(), 'Pfad 1, Richtlinie umgeschaltet');
 }
