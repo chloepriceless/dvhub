@@ -72,10 +72,10 @@ export function createModbusHealth(now = Date.now) {
 
   function wrap(transport) {
     if (!transport) return transport;
-    const call = async (method, arg) => {
+    const call = async (method, ...args) => {
       const start = now();
       try {
-        const r = await transport[method](arg);
+        const r = await transport[method](...args);
         record(true, now() - start);
         return r;
       } catch (e) {
@@ -85,7 +85,8 @@ export function createModbusHealth(now = Date.now) {
     };
     return {
       get type() { return transport.type; },
-      mbRequest: (arg) => call('mbRequest', arg),
+      // Zweites Argument (opts.atomic der Lese-Engine, E7) unverändert durchreichen.
+      mbRequest: (...args) => call('mbRequest', ...args),
       mbWriteSingle: (arg) => call('mbWriteSingle', arg),
       mbWriteMultiple: (arg) => call('mbWriteMultiple', arg),
     };

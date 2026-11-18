@@ -171,7 +171,7 @@ bisher; ungültige oder fehlende Werte gelten als „aus“.
 |---|---|
 | `minRequestGapMs` | Mindestabstand vom **Ende** einer Anfrage (Antwort, Fehler, Zeitüberschreitung) bis zur nächsten auf derselben Verbindung, auch über einen Neuaufbau der Verbindung hinweg. Höchstens 600 000. Die Wartezeit zählt nicht gegen `timeoutMs` |
 | `connectDelayMs` | Pause nach jedem (Neu-)Aufbau der TCP-Verbindung vor der ersten Anfrage. Höchstens 60 000 |
-| `maxRegistersPerRequest` | höchstens so viele Register je Lese-Anfrage (FC 3/4, 1–124). Längere Blöcke werden in Teil-Anfragen zerlegt, direkt hintereinander gelesen und wieder zusammengesetzt. Bei 32-bit-Werten eine gerade Zahl wählen |
+| `maxRegistersPerRequest` | höchstens so viele Register je Lese-Anfrage (FC 3/4, 1–124). Blöcke aus unabhängigen Werten (etwa ein Zählerblock Summe + Phasen) werden in Teil-Anfragen zerlegt, direkt hintereinander gelesen und wieder zusammengesetzt. Ein Lesepunkt (ein Wert, Wert + Skalenfaktor, `combineBlock`) ist ein Messzeitpunkt und wird nie zerlegt: liegt er über dem Deckel, meldet DVhub einen Lesefehler statt Teile verschiedener Proben zu mischen |
 | `minPollIntervalMs` | Mindestabstand der Poll-Takte. Hebt einen kürzeren „Poll Intervall (ms)“ an, senkt ihn nie. Höchstens 30 000 |
 
 Die Not-Halt-Sperre wirkt wie bisher: ein Write, der auf seinen Abstand wartet und vor dem Not-Halt eingereiht wurde,

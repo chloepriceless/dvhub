@@ -214,7 +214,7 @@ export function createPoller(ctx) {
       } else {
         // Lese-Engine (18.11.2026): ein Lesepunkt kann mehrere Register lesen (combine E4, split E9, Skalenfaktor
         // E5). Ohne diese Schlüssel genau ein mbRequest(conf) wie bisher.
-        state.victron[name] = await readPointValue(conf, (c) => transport.mbRequest(c), { sfCache: cycleSfCache, sfBlockUnsupported });
+        state.victron[name] = await readPointValue(conf, (c, o) => transport.mbRequest(c, o), { sfCache: cycleSfCache, sfBlockUnsupported });
       }
       delete state.victron.errors[name];
       const _now = Date.now();
@@ -738,7 +738,7 @@ export function createPoller(ctx) {
   let meterPhaseErrorLogged = false;
   async function readMeterPoint(m) {
     assertReadableAddress(m, 'Zähler');
-    const read = (c) => transport.mbRequest(c);
+    const read = (c, o) => transport.mbRequest(c, o);
     const ctxRead = { sfCache: cycleSfCache, sfBlockUnsupported };
     const total = await readPointValue(m, read, ctxRead);
     if (total == null) throw new Error('Zähler meldet keinen Gesamtwert (Register nicht verfügbar)');

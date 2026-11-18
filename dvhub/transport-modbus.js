@@ -45,6 +45,8 @@ export function modbusWriteFenceGeneration() {
 //   maxRegistersPerRequest höchstens so viele Register je Lese-Anfrage (FC 3/4); längere Blöcke werden in
 //                          Teil-Anfragen zerlegt (gleich hintereinander eingereiht) und wieder zusammengesetzt. Bei
 //                          32-bit-Werten eine gerade Zahl wählen, sonst landen die Hälften eines Werts in zwei Anfragen.
+//                          Lesungen der Lese-Engine (ein Wert, Wert + Skalenfaktor, combineBlock) zerlegt der Transport
+//                          nie (opts.atomic): über dem Deckel sind sie ein Lesefehler statt einer Mischung zweier Proben.
 // minPollIntervalMs (Mindestabstand der Poll-Takte) liest polling.js aus demselben Block.
 // Ungültige oder fehlende Werte gelten als „aus“ (0).
 const PACING_MAX_GAP_MS = 600_000;
@@ -379,7 +381,9 @@ export function createModbusTransport(opts = {}) {
     return c;
   }
 
-  function mbRequest(args) {
+  // opts.atomic (Lese-Engine, Codex 742c52c9): diese Lesung ist EIN Messzeitpunkt (ein Wert, Wert + Skalenfaktor,
+  // combineBlock) und darf nie in Teil-Anfragen zerlegt werden — über dem Deckel ein Lesefehler statt einer Mischung.
+  function mbRequest(args, opts = {}) {
     const { host, port, fc, address, quantity } = args;
     // A6 (Paritätsfund dvhub-rs, Codex adc3a82): nur Lese-Funktionen 1–4. Mit
     // FC 6 wäre die „Lese“-Anfrage ein gültiger Write gewesen (quantity = Wert).
@@ -391,6 +395,9 @@ export function createModbusTransport(opts = {}) {
     const cap = (Number(fc) === 3 || Number(fc) === 4) ? pacingOf(host, port)?.maxRegistersPerRequest : 0;
     const total = Number(quantity);
     if (cap && Number.isInteger(total) && total > cap && Number.isInteger(address) && address >= 0 && address + total - 1 <= 0xffff) {
+      if (opts?.atomic) {
+        return Promise.reject(new Error(`modbus read: ${total} Register ab ${address} müssen in einer Anfrage gelesen werden, die Verbindung erlaubt höchstens ${cap} (maxRegistersPerRequest)`));
+      }
       const parts = [];
       for (let off = 0; off < total; off += cap) {
         parts.push(mbRequestOnce({ ...args, address: address + off, quantity: Math.min(cap, total - off) }));

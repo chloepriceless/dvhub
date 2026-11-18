@@ -310,6 +310,58 @@ test('maxRegistersPerRequest: Blöcke bis zum Deckel und FC 1/2 (Bits) bleiben e
   }
 });
 
+// Codex 742c52c9 (P2): der Deckel darf eine Lesung, die EIN Messzeitpunkt sein muss, nicht zerlegen — sonst stammen
+// die Teile aus verschiedenen Proben (Richtungswechsel zwischen den Teil-Anfragen → erfundener Wert). Die Lese-Engine
+// markiert ihre Lesungen als atomar; was über dem Deckel liegt, ist ein Lesefehler mit klarer Meldung statt einer
+// Mischung. Blöcke ohne Markierung (z. B. Zählerblock Summe + Phasen) zerlegt der Transport weiter.
+test('Codex 742c52c9: atomare Lesungen der Lese-Engine werden nie zerlegt — Lesefehler statt Mischwert', async () => {
+  const { readPointValue } = await import('../services/inverter/point-read.js');
+  const r = rig(() => ({ minRequestGapMs: 1000, maxRegistersPerRequest: 4 }));
+  const read = (c, o) => r.transport.mbRequest(c, o);
+  try {
+    // combineBlock über 7 Register (int32 bei 100 und 105): 2000 W Bezug, nach der ersten Anfrage 500 W Einspeisung.
+    r.sockets.set32(1, 100, 2000).set32(1, 105, 0);
+    const grid = { ...base({ fc: 3 }), readType: 'int32', combineBlock: true, combine: [{ address: 100 }, { address: 105, sign: -1 }] };
+    const p = readPointValue(grid, read).then((v) => v, (e) => e);
+    await advance(500);
+    r.sockets.set32(1, 100, 0).set32(1, 105, 500);
+    await advance(3000);
+    const got = await p;
+    assert.ok(got instanceof Error, `kein Mischwert (bekam ${got})`);
+    assert.match(got.message, /7 Register .*in einer Anfrage.*höchstens 4/);
+    // Wert + Skalenfaktor im Block (Spanne 6) ebenso; ein 32-bit-Wert bei Deckel 1 ebenso.
+    const sf = { ...base({ fc: 3 }), address: 200, quantity: 1, signed: true, sfAddress: 205 };
+    await assert.rejects(() => readPointValue(sf, (c, o) => r.transport.mbRequest(c, o)), /höchstens 4/);
+    const wire = r.sockets.wire.length;
+    // Ein gewöhnlicher Punkt bis zum Deckel geht wie bisher in einer Anfrage.
+    r.sockets.set32(1, 300, 1234);
+    const one = readPointValue({ ...base({ fc: 3 }), address: 300, quantity: 2, readType: 'int32' }, read);
+    await advance(3000);
+    assert.equal(await one, 1234);
+    assert.deepEqual(r.sockets.wire.slice(wire).map((f) => `${f.address}x${f.quantity}`), ['300x2']);
+    assert.ok(!r.sockets.wire.some((f) => f.address === 104), 'kein Teil-Block auf dem Draht');
+  } finally {
+    await r.done();
+  }
+});
+
+test('Codex 742c52c9: ein 32-bit-Punkt bei ungeradem Deckel 1 wird nicht in zwei Hälften gelesen', async () => {
+  const { readPointValue } = await import('../services/inverter/point-read.js');
+  const r = rig(() => ({ maxRegistersPerRequest: 1 }));
+  try {
+    r.sockets.set32(1, 10, 70000);
+    const p = readPointValue({ ...base({ fc: 3 }), address: 10, quantity: 2, readType: 'uint32' }, (c, o) => r.transport.mbRequest(c, o))
+      .then((v) => v, (e) => e);
+    await advance(100);
+    const got = await p;
+    assert.ok(got instanceof Error, `keine zusammengesetzten Hälften (bekam ${got})`);
+    assert.match(got.message, /2 Register .*höchstens 1/);
+    assert.equal(r.sockets.wire.length, 0);
+  } finally {
+    await r.done();
+  }
+});
+
 // --- Einstellungen ---------------------------------------------------------------------------------------------------
 
 test('normalizeModbusPacing: nur gültige positive Werte zählen, sonst „aus“', () => {

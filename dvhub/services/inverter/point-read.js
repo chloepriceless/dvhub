@@ -97,6 +97,10 @@ export function decodePointRegs(regs, conf, opts = {}) {
   return finish(v, exact);
 }
 
+// Jede Lesung dieses Moduls ist EIN Messzeitpunkt (ein Wert, Wert + Skalenfaktor, combineBlock): der Transport darf sie
+// nicht nach maxRegistersPerRequest zerlegen (E7, Codex 742c52c9). Zweites Argument von read(); conf bleibt unberührt.
+const ATOMIC = Object.freeze({ atomic: true });
+
 // Nur echte Zahlen: der Transport baut den Rahmen mit writeUInt16BE und wirft bei Text/undefined.
 const isAddress = (a) => typeof a === 'number' && Number.isInteger(a) && a >= 0 && a <= 0xffff;
 
@@ -132,7 +136,7 @@ function assertSfAddress(conf) {
 
 function readScaleFactorFresh(conf, read, cache) {
   const address = conf.sfAddress;
-  const pending = read({ ...conf, address, quantity: 1 }).then((regs) => {
+  const pending = read({ ...conf, address, quantity: 1 }, ATOMIC).then((regs) => {
     if (!Array.isArray(regs) || regs.length < 1) throw new Error(`Skalenfaktor @${address}: keine Antwort`);
     return decodeScaleFactor(regs[0], address);
   });
@@ -171,7 +175,7 @@ async function readSplitWords(conf, read) {
   if (rt !== 'int32' && rt !== 'uint32') throw new Error(`split braucht readType int32 oder uint32 (ist ${conf.readType ?? 'leer'})`);
   if (!isAddress(low) || !isAddress(high)) throw new Error('split braucht die Registeradressen low und high');
   const word = async (address) => {
-    const regs = await read({ ...conf, address, quantity: 1 });
+    const regs = await read({ ...conf, address, quantity: 1 }, ATOMIC);
     if (!Array.isArray(regs) || !regs.length) throw new Error(`split: Register ${address} ohne Antwort`);
     return Number(regs[0]) & 0xffff;
   };
@@ -220,7 +224,7 @@ async function readCombinedBlockTerms(conf, terms, read, ctx) {
   const to = Math.max(...termConfs.map((t) => t.address + quantityOf(t)));
   if (to - from > MAX_BLOCK_REGISTERS) throw new Error(`combineBlock: Spanne ${to - from} Register (höchstens ${MAX_BLOCK_REGISTERS})`);
   const blockConf = combineTermConf(conf, {});
-  const regs = await read({ ...blockConf, address: from, quantity: to - from });
+  const regs = await read({ ...blockConf, address: from, quantity: to - from }, ATOMIC);
   if (!Array.isArray(regs) || regs.length < to - from) throw new Error(`combineBlock @${from}: unvollständige Antwort`);
   let sum = 0;
   for (const t of termConfs) {
@@ -280,7 +284,7 @@ export async function readPointValue(conf, read, ctx = {}) {
   const decodeConf = conf.split ? { ...conf, wordOrder: 'be' } : conf;
   const readValue = () => (conf.split
     ? readSplitWords(conf, read)
-    : read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf));
+    : read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf, ATOMIC));
   if (conf.sfAddress == null) return decodePointRegs(await readValue(), decodeConf, { exact: ctx.exact });
   assertSfAddress(conf);
   // SF nah beim Wert: ein Block für beide (eine Modbus-Antwort = eine Probe). Kennt das Gerät Register dazwischen
@@ -294,7 +298,7 @@ export async function readPointValue(conf, read, ctx = {}) {
     if (to - from <= SF_BLOCK_SPAN && !ctx.sfBlockUnsupported?.has(blockKey)) {
       let block = null;
       try {
-        block = await read({ ...conf, address: from, quantity: to - from });
+        block = await read({ ...conf, address: from, quantity: to - from }, ATOMIC);
       } catch (e) {
         if (!/^modbus exception [123]\b/.test(String(e?.message))) throw e;
         ctx.sfBlockUnsupported?.add(blockKey);
