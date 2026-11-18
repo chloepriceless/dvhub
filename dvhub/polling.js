@@ -7,6 +7,8 @@ import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
+// Lesepunkt-Decoder der Herstellerprofile (Lese-Engine E4/E5/E9/E14, 18.11.2026).
+import { decodePointRegs, isLowWordFirst } from './services/inverter/point-read.js';
 import {
   identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
   resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry,
@@ -143,62 +145,11 @@ export function createPoller(ctx) {
     }
   }
 
-  // --- pointFromRegs: convert raw register values to engineering value ---
-  function pointFromRegs(regs, conf) {
-    if (!regs || !regs.length) return null;
-    const scale = Number(conf.scale ?? 1);
-    const offset = Number(conf.offset ?? 0);
-    // SunSpec Float-Modus (B-1112 Fronius/SolarEdge/Kostal): zwei Register =
-    // IEEE-754-Float32. Der Codec liefert null für das SunSpec-NaN-Sentinel
-    // ("not implemented") und ±Inf — null hält die T-0075-Unknown-Semantik
-    // aufrecht (pollPoint stempelt fieldUpdatedAt nur bei echtem Wert nicht,
-    // sondern der Punkt bleibt sichtbar unbelegt statt giftig NaN im State).
-    if (String(conf.readType || '').toLowerCase() === 'float32') {
-      const value = decodeSunspecFloat32(regs, conf.wordOrder);
-      if (value === null) return null;
-      return Number((value * scale + offset).toFixed(3));
-    }
-    // T-0107: 32-bit value across two registers (Victron volatile setpoint
-    // 2716/2717). wordOrder 'be' (default) = high word first (regs[0]); 'le' =
-    // low word first. `* 0x10000` (not <<16) avoids JS 32-bit signed overflow.
-    const readType = String(conf.readType || '').toLowerCase();
-    // notAvailableRaw (Sungrow, T-0422): Rohwerte, mit denen das Gerät „Register
-    // nicht vorhanden/kein Wert“ meldet (U16 0xFFFF, S32 0x7FFFFFFF …) — vorzeichenlos
-    // gegen das rohe Wort bzw. Doppelwort verglichen, VOR Vorzeichen und Skala.
-    // Ergebnis null (unbelegt) statt einer erfundenen Zahl.
-    const notAvailable = Array.isArray(conf.notAvailableRaw) ? conf.notAvailableRaw.map(Number) : [];
-    if (regs.length >= 2 && (readType === 'int32' || readType === 'uint32')) {
-      const le = String(conf.wordOrder || 'be').toLowerCase().startsWith('l');
-      const hi = le ? regs[1] : regs[0];
-      const lo = le ? regs[0] : regs[1];
-      let raw = ((hi & 0xffff) * 0x10000) + (lo & 0xffff);
-      if (notAvailable.includes(raw)) return null;
-      if (readType === 'int32' && raw > 0x7fffffff) raw -= 0x100000000;
-      const v = raw * scale + offset;
-      return Number(v.toFixed(3));
-    }
-    if (notAvailable.length && regs.some((r) => notAvailable.includes(Number(r) & 0xffff))) return null;
-    if (conf.quantity > 1 && conf.sumRegisters) {
-      let sum = 0;
-      for (const r of regs) sum += conf.signed ? s16(r) : r;
-      const v = sum * scale + offset;
-      return Number(v.toFixed(3));
-    }
-    let v = regs[0];
-    if (conf.signed) v = s16(v);
-    // rawSentinels (2026-07-12, reg-2704-Scale-Fix): Sentinel-Rohwerte sind
-    // MODES (Victron 2704: -1 = unbegrenzt, 0 = gesperrt) und werden NICHT
-    // skaliert — sonst würde -1 mit scale 10 als „-10 W" angezeigt.
-    const rawSentinels = Array.isArray(conf.rawSentinels) ? conf.rawSentinels.map(Number) : [];
-    if (rawSentinels.includes(Number(v))) return Number(v);
-    // rawSentinelMap: Rohwert, der für einen Mode-Wert steht (2704: 32767 = -1).
-    if (conf.rawSentinelMap && typeof conf.rawSentinelMap === 'object') {
-      const hit = Object.entries(conf.rawSentinelMap).find(([, raw]) => Number(raw) === Number(v));
-      if (hit) return Number(hit[0]);
-    }
-    v = Number(v) * scale + offset;
-    return Number(v.toFixed(3));
-  }
+  // --- pointFromRegs: Rohregister → Engineering-Wert ---
+  // Seit der Lese-Engine (18.11.2026) in services/inverter/point-read.js (decodePointRegs), bitgleich zum früheren
+  // Code hier (float32/int32/uint32, notAvailableRaw, sumRegisters, rawSentinels); neu nur die wordOrder-Aliase
+  // swap/swapped (E14), die kein ausgeliefertes Profil setzt.
+  const pointFromRegs = decodePointRegs;
 
   // --- pollPoint: read a single Victron data point ---
   // Abgeschaltete PV-Punkte (Gesamtprüfung Release 1.0.9): ihr letzter Wert
@@ -686,7 +637,7 @@ export function createPoller(ctx) {
     return raw;
   }
   async function readInt32Meter(m) {
-    const le = String(m.wordOrder || 'be').toLowerCase().startsWith('l');
+    const le = isLowWordFirst(m.wordOrder);
     const notAvailable = Array.isArray(m.notAvailableRaw) ? m.notAvailableRaw.map(Number) : [];
     const fb = m.fallback && typeof m.fallback === 'object' ? m.fallback : null;
     const usePrimary = !fb || !meterFallbackSince || Date.now() - meterFallbackSince >= METER_PRIMARY_RETRY_MS;
@@ -724,7 +675,7 @@ export function createPoller(ctx) {
     if (!Array.isArray(fregs) || fregs.length < 2) {
       throw new Error(`modbus short response (${Array.isArray(fregs) ? fregs.length : 0} von 2 Registern)`);
     }
-    const fle = String(fb.wordOrder || m.wordOrder || 'be').toLowerCase().startsWith('l');
+    const fle = isLowWordFirst(fb.wordOrder || m.wordOrder);
     const raw = decodeInt32Words(fregs, fle, notAvailable);
     if (raw == null) throw new Error('Zähler-Ersatzregister meldet keinen Wert');
     const total = raw * Number(fb.scale ?? 1);
@@ -849,11 +800,12 @@ export function createPoller(ctx) {
         if (!Array.isArray(regs) || regs.length < 8) {
           throw new Error(`modbus short response (${Array.isArray(regs) ? regs.length : 0} von 8 Registern)`);
         }
-        const fTotal = decodeSunspecFloat32([regs[0], regs[1]], cfg.meter.wordOrder);
+        const wo = isLowWordFirst(cfg.meter.wordOrder) ? 'le' : 'be';
+        const fTotal = decodeSunspecFloat32([regs[0], regs[1]], wo);
         if (fTotal === null) throw new Error('sunspec float meter: total power not implemented/NaN');
-        const fL1 = decodeSunspecFloat32([regs[2], regs[3]], cfg.meter.wordOrder) ?? 0;
-        const fL2 = decodeSunspecFloat32([regs[4], regs[5]], cfg.meter.wordOrder) ?? 0;
-        const fL3 = decodeSunspecFloat32([regs[6], regs[7]], cfg.meter.wordOrder) ?? 0;
+        const fL1 = decodeSunspecFloat32([regs[2], regs[3]], wo) ?? 0;
+        const fL2 = decodeSunspecFloat32([regs[4], regs[5]], wo) ?? 0;
+        const fL3 = decodeSunspecFloat32([regs[6], regs[7]], wo) ?? 0;
 
         const posImport = cfg.gridPositiveMeans === 'grid_import';
         const sign = posImport ? 1 : -1;

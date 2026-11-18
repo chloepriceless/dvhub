@@ -727,19 +727,16 @@
       "meter.readType": "float32",
       "meter.timeoutMs": 2000,
       "meter.unitId": 200,
-      "points.acPvL1W.address": 808,
       "points.acPvL1W.enabled": false,
       "points.acPvL1W.host": "",
       "points.acPvL1W.port": 502,
       "points.acPvL1W.timeoutMs": 2000,
       "points.acPvL1W.unitId": 1,
-      "points.acPvL2W.address": 809,
       "points.acPvL2W.enabled": false,
       "points.acPvL2W.host": "",
       "points.acPvL2W.port": 502,
       "points.acPvL2W.timeoutMs": 2000,
       "points.acPvL2W.unitId": 1,
-      "points.acPvL3W.address": 810,
       "points.acPvL3W.enabled": false,
       "points.acPvL3W.host": "",
       "points.acPvL3W.port": 502,
@@ -980,19 +977,16 @@
       "meter.timeoutMs": 3000,
       "meter.unitId": 1,
       "meter.wordOrder": "le",
-      "points.acPvL1W.address": 808,
       "points.acPvL1W.enabled": false,
       "points.acPvL1W.host": "",
       "points.acPvL1W.port": 502,
       "points.acPvL1W.timeoutMs": 3000,
       "points.acPvL1W.unitId": 1,
-      "points.acPvL2W.address": 809,
       "points.acPvL2W.enabled": false,
       "points.acPvL2W.host": "",
       "points.acPvL2W.port": 502,
       "points.acPvL2W.timeoutMs": 3000,
       "points.acPvL2W.unitId": 1,
-      "points.acPvL3W.address": 810,
       "points.acPvL3W.enabled": false,
       "points.acPvL3W.host": "",
       "points.acPvL3W.port": 502,
@@ -1201,19 +1195,16 @@
       "meter.quantity": 3,
       "meter.timeoutMs": 2000,
       "meter.unitId": 1,
-      "points.acPvL1W.address": 808,
       "points.acPvL1W.enabled": false,
       "points.acPvL1W.host": "",
       "points.acPvL1W.port": 502,
       "points.acPvL1W.timeoutMs": 2000,
       "points.acPvL1W.unitId": 1,
-      "points.acPvL2W.address": 809,
       "points.acPvL2W.enabled": false,
       "points.acPvL2W.host": "",
       "points.acPvL2W.port": 502,
       "points.acPvL2W.timeoutMs": 2000,
       "points.acPvL2W.unitId": 1,
-      "points.acPvL3W.address": 810,
       "points.acPvL3W.enabled": false,
       "points.acPvL3W.host": "",
       "points.acPvL3W.port": 502,
@@ -2402,7 +2393,6 @@
     "fronius|shipped|none|coupling_ac": {
       "ref": "fronius|shipped|none|default",
       "set": {
-        "points.pvPowerW.enabled": false,
         "pvCoupling": "ac"
       }
     },
@@ -2415,18 +2405,12 @@
     "fronius|shipped|none|acpv_grid": {
       "ref": "fronius|shipped|none|default",
       "set": {
-        "points.acPvL1W.address": 811,
-        "points.acPvL2W.address": 812,
-        "points.acPvL3W.address": 813,
         "victron.acPvSource": "grid"
       }
     },
     "fronius|shipped|none|acpv_genset": {
       "ref": "fronius|shipped|none|default",
       "set": {
-        "points.acPvL1W.address": 814,
-        "points.acPvL2W.address": 815,
-        "points.acPvL3W.address": 816,
         "victron.acPvSource": "genset"
       }
     },
@@ -2439,9 +2423,6 @@
     "fronius|shipped|none|acpv2_same": {
       "ref": "fronius|shipped|none|default",
       "set": {
-        "points.acPvL1W.address": 811,
-        "points.acPvL2W.address": 812,
-        "points.acPvL3W.address": 813,
         "victron.acPvSource": "grid",
         "victron.acPvSource2": "grid"
       }
@@ -2792,7 +2773,6 @@
     "sungrow|shipped|none|coupling_ac": {
       "ref": "sungrow|shipped|none|default",
       "set": {
-        "points.pvPowerW.enabled": false,
         "pvCoupling": "ac"
       }
     },
@@ -2805,18 +2785,12 @@
     "sungrow|shipped|none|acpv_grid": {
       "ref": "sungrow|shipped|none|default",
       "set": {
-        "points.acPvL1W.address": 811,
-        "points.acPvL2W.address": 812,
-        "points.acPvL3W.address": 813,
         "victron.acPvSource": "grid"
       }
     },
     "sungrow|shipped|none|acpv_genset": {
       "ref": "sungrow|shipped|none|default",
       "set": {
-        "points.acPvL1W.address": 814,
-        "points.acPvL2W.address": 815,
-        "points.acPvL3W.address": 816,
         "victron.acPvSource": "genset"
       }
     },
@@ -2829,9 +2803,6 @@
     "sungrow|shipped|none|acpv2_same": {
       "ref": "sungrow|shipped|none|default",
       "set": {
-        "points.acPvL1W.address": 811,
-        "points.acPvL2W.address": 812,
-        "points.acPvL3W.address": 813,
         "victron.acPvSource": "grid",
         "victron.acPvSource2": "grid"
       }
@@ -3159,7 +3130,6 @@
     "deye-lv|shipped|none|coupling_ac": {
       "ref": "deye-lv|shipped|none|default",
       "set": {
-        "points.pvPowerW.enabled": false,
         "pvCoupling": "ac"
       }
     },
@@ -3172,18 +3142,12 @@
     "deye-lv|shipped|none|acpv_grid": {
       "ref": "deye-lv|shipped|none|default",
       "set": {
-        "points.acPvL1W.address": 811,
-        "points.acPvL2W.address": 812,
-        "points.acPvL3W.address": 813,
         "victron.acPvSource": "grid"
       }
     },
     "deye-lv|shipped|none|acpv_genset": {
       "ref": "deye-lv|shipped|none|default",
       "set": {
-        "points.acPvL1W.address": 814,
-        "points.acPvL2W.address": 815,
-        "points.acPvL3W.address": 816,
         "victron.acPvSource": "genset"
       }
     },
@@ -3196,9 +3160,6 @@
     "deye-lv|shipped|none|acpv2_same": {
       "ref": "deye-lv|shipped|none|default",
       "set": {
-        "points.acPvL1W.address": 811,
-        "points.acPvL2W.address": 812,
-        "points.acPvL3W.address": 813,
         "victron.acPvSource": "grid",
         "victron.acPvSource2": "grid"
       }
