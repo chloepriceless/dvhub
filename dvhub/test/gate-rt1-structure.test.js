@@ -21,9 +21,9 @@ import { DVHUB_DIR, scanProduction, scanSource, entryKey } from './helpers/sink-
 // umstellt, löscht den Eintrag (bzw. senkt dessen count) und senkt diese Zahlen. Eine neue Ausnahme ist kein
 // Nachtrag hier, sondern ein Schreibweg am Tor vorbei.
 // Phase 2 (feat/vcl-tor-p2): Sungrow writeReg (D.1 #6) über das Tor → 55/65 auf 48/51.
-// Phase 3 (feat/vcl-tor-p3a): runDvControlSequence (D.1 #2/#4) → 46/49.
-const MAX_EXCEPTIONS = 46;
-const MAX_EXCEPTION_SITES = 49;
+// Phase 3 (feat/vcl-tor-p3a): runDvControlSequence (D.1 #2/#4) → 46/49; zfiWrite (D.1 #5) → 45/48.
+const MAX_EXCEPTIONS = 45;
+const MAX_EXCEPTION_SITES = 48;
 
 // Nur diese Bausteine sind mehrdeutig (Steuerbefehl oder nicht); eine Modbus-/MQTT-Schreibfunktion oder writeReg
 // ist immer ein Schreibweg und darf nie als „kein Steuerbefehl“ eingetragen werden.

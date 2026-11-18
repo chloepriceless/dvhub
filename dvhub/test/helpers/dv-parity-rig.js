@@ -122,14 +122,14 @@ const plain = (v) => JSON.parse(JSON.stringify(v ?? null));
  * demselben Anfangsinhalt (`files`). `restart()` baut eine frische Bewertung (neuer Zustand, neues Tor) auf denselben
  * Dateien und demselben Gerät — wie ein Neustart von DVhub.
  */
-export function buildRig(mode, { cfg, transport, state, ctx = {}, files = {} }) {
+export function buildRig(mode, { cfg, transport, state, ctx = {}, files = {}, data = null }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `dvhub-dv-parity-${mode}-`));
   for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), JSON.stringify(content));
   const logs = [];
   const events = [];
   // pushLog wie in server.js: (Ereignis, Daten, Stufe | { severity }) — Szenarien reichen es an Begrenzer/Not-Halt weiter.
   const pushLog = (event, data, level) => logs.push([event, plain(data), typeof level === 'string' ? level : (level?.severity ?? null)]);
-  const rig = { mode, cfg, transport, dir, logs, events, pushLog, gate: null, ev: null, state: null };
+  const rig = { mode, cfg, transport, dir, logs, events, pushLog, data, gate: null, ev: null, state: null };
   const make = (st) => {
     const gate = mode === 'new'
       ? createLegacyGate({ isHalted: () => st.ctrl?.discretionaryWritesPaused === true, onEvent: (e) => events.push(e) })

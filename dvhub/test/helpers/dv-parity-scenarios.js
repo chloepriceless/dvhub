@@ -65,6 +65,35 @@ const arbiterOf = (r) => createFeedInLimitArbiter({
 const stopCtx = (r, arb) => ({ state: r.state, pushLog: r.pushLog, feedInLimit: arb, ...(r.gate ? { gate: r.gate } : {}) });
 const emergency = (r, arb, on) => () => setEmergencyStop(stopCtx(r, arb), { on });
 
+// Pfad 5: Nulleinspeise-Deckel (zeroFeedInTick) und feste Einspeisegrenze (feedInCapTick), Fronius SunSpec.
+const ZFI_ADDR = { storCtlMod: 40191, outWRte: 40198, wMaxLimPct: 40242, wMaxLimPctRvrtTms: 40244, wMaxLimEna: 40246 };
+function zfiSetup({ blocked = true, reason = 'negative_price_protection', resolved = true, profile = 'fronius', transport = {}, capLimitW = null } = {}) {
+  return (onWrite) => {
+    const cfg = loadProfileConfig(profile, { victron: { host: HOST } });
+    if (resolved && profile === 'fronius') for (const [k, a] of Object.entries(ZFI_ADDR)) cfg.controlWrite[k].address = a;
+    const box = { limitW: capLimitW };
+    return {
+      cfg,
+      transport: parityModbus({ holding: { [ZFI_ADDR.wMaxLimPct]: 10000 }, hostAlias: ALIAS, ...structuredClone(transport) }, onWrite),
+      state: () => baseState({ ctrl: { _lastDvFeedIn: blocked ? false : true, _dvBlockReason: blocked ? reason : null } }),
+      ctx: { feedInCap: { limitForLoop: () => box.limitW } },
+      data: box,
+    };
+  };
+}
+// Messwerte wie vom Poller frisch gestempelt (feste Uhr).
+function feed(r, { soc = 96, importW = 0, exportW = 0, loadW = 1000, pvW = 3000 } = {}) {
+  const now = Date.now();
+  Object.assign(r.state.victron, {
+    soc, gridImportW: importW, gridExportW: exportW, selfConsumptionW: loadW, pvTotalW: pvW, pvPowerW: pvW,
+    fieldUpdatedAt: { soc: now, selfConsumptionW: now, pvPowerW: now },
+  });
+  Object.assign(r.state.meter, { ok: true, updatedAt: now, grid_total_w: importW - exportW });
+}
+const capOf = (st) => ({ cap: st?.capActive === true, pct: st?.limitPct == null ? null : Number(st.limitPct.toFixed(4)) });
+const zfiTick = (r, values) => async () => { await r.advance(5000); if (values) feed(r, values); await r.ev.zeroFeedInTick(); return capOf(r.state.ctrl._zfi); };
+const ficTick = (r, values) => async () => { await r.advance(5000); if (values) feed(r, values); await r.ev.feedInCapTick(); return capOf(r.state.ctrl._fic); };
+
 const actionsOf = (r) => r.events.filter((e) => e.outcome === 'ok' || e.outcome === 'error').map((e) => `${e.point}:${e.action}`);
 
 // --- Szenarien -----------------------------------------------------------------------------------------------------
@@ -433,6 +462,151 @@ SCENARIOS.p4_victron_read_only = {
   },
 };
 
+// --- Pfad 5: zfiWrite (Nulleinspeise-Deckel, feste Einspeisegrenze; heute ohne Geräte-Tor — so bleibt es) ---------
+
+SCENARIOS.p5_zfi_soc_cycle = {
+  setup: zfiSetup(),
+  run: async (r, step) => {
+    await step('Takt 1 gesperrt, SoC 96 %', zfiTick(r, { soc: 96 }));
+    await step('Takt 2 → Deckel an', zfiTick(r, { soc: 96 }));
+    await step('Export 300 W → Limit runter', zfiTick(r, { soc: 96, exportW: 300 }));
+    await step('Bezug 400 W → Limit hoch', zfiTick(r, { soc: 96, importW: 400 }));
+    await step('Zähler veraltet → gehalten', async () => { await r.advance(5000); r.state.meter.updatedAt = Date.now() - 20_000; await r.ev.zeroFeedInTick(); return capOf(r.state.ctrl._zfi); });
+    for (let i = 0; i < 12; i += 1) await step(`Regeln ${i}`, zfiTick(r, { soc: 96, exportW: i % 2 ? 200 : 0, importW: i % 2 ? 0 : 120 }));
+    await step('SoC 89 % → Deckel aus', zfiTick(r, { soc: 89 }));
+  },
+  expect: (n) => {
+    const a = actionsOf(n.rig);
+    assert.deepEqual(a.slice(0, 4), ['outWRte:protectiveLimit', 'wMaxLimPctRvrtTms:protectiveLimit', 'wMaxLimPct:protectiveLimit', 'wMaxLimEna:protectiveLimit']);
+    assert.deepEqual(a.slice(-2), ['outWRte:protectiveLimit', 'wMaxLimEna:protectiveLimit'], 'Deckel aus unter der Sperre: Schutz-Begrenzung');
+    assert.ok(n.out.wire.some((e) => e.startsWith('R3 gx/u1 @40242')), 'Rücklese-Drift-Prüfung lief');
+  },
+};
+
+SCENARIOS.p5_zfi_release = {
+  setup: zfiSetup(),
+  run: async (r, step) => {
+    await step('Takt 1', zfiTick(r, {}));
+    await step('Takt 2 → an', zfiTick(r, {}));
+    r.state.ctrl._lastDvFeedIn = true;
+    await step('Freigabe → Ena 0', zfiTick(r, {}));
+    await step('Freigabe, nächster Takt', zfiTick(r, {}));
+  },
+  expect: (n) => assert.equal(actionsOf(n.rig).at(-1), 'wMaxLimEna:autoRestore'),
+};
+
+SCENARIOS.p5_zfi_nothalt = {
+  setup: zfiSetup(),
+  run: async (r, step) => {
+    await step('Takt 1', zfiTick(r, {}));
+    await step('Takt 2 → an', zfiTick(r, {}));
+    r.halt();
+    await step('Not-Halt → einmal Ena 0', zfiTick(r, {}));
+    await step('Not-Halt, nächster Takt', zfiTick(r, {}));
+    r.resume();
+    await step('nach dem Aufheben', zfiTick(r, {}));
+    await step('nach dem Aufheben (2)', zfiTick(r, {}));
+  },
+  expect: (n) => assert.deepEqual(n.rig.events.filter((e) => e.state_flags.not_halt).map((e) => `${e.point}=${e.value.eng}:${e.action}`), ['wMaxLimEna=0:haltNeutralize']),
+};
+
+// Not-Halt mitten im Enter-Takt (nach OutWRte = +100 %): heute schreibt der Takt zu Ende.
+SCENARIOS.p5_zfi_halt_mid_tick = {
+  setup: zfiSetup(),
+  run: async (r, step) => {
+    await step('Takt 1', zfiTick(r, {}));
+    r.onWrite((entry) => { if (entry === 'W6 gx/u1 @40198=10000') r.halt(); });
+    await step('Takt 2 → an, Not-Halt nach OutWRte', zfiTick(r, {}));
+    r.onWrite(null);
+    await step('Not-Halt → einmal Ena 0', zfiTick(r, {}));
+  },
+};
+
+SCENARIOS.p5_zfi_export_trigger = {
+  setup: zfiSetup(),
+  run: async (r, step) => {
+    for (let i = 1; i <= 4; i += 1) await step(`Takt ${i} SoC 50 %, Export 500 W`, zfiTick(r, { soc: 50, exportW: 500 }));
+    for (let i = 1; i <= 4; i += 1) await step(`SoC fällt auf ${50 - i * 2} %`, zfiTick(r, { soc: 50 - i * 2, importW: 50 }));
+    for (let i = 1; i <= 4; i += 1) await step(`Takt ${i} Export 500 W`, zfiTick(r, { soc: 40, exportW: 500 }));
+    for (let i = 1; i <= 8; i += 1) await step(`kein Export ${i}`, zfiTick(r, { soc: 41, importW: 3000, loadW: 4000 }));
+  },
+};
+
+SCENARIOS.p5_zfi_write_error = {
+  setup: zfiSetup({ transport: { failWrite: { [ZFI_ADDR.wMaxLimPct]: { msg: 'timeout', times: 1 } } } }),
+  run: async (r, step) => {
+    await step('Takt 1', zfiTick(r, {}));
+    await step('Takt 2 → Enter, WMaxLimPct scheitert', zfiTick(r, {}));
+    await step('Takt 3 → Enter erneut', zfiTick(r, {}));
+    r.transport.failWrite[ZFI_ADDR.wMaxLimEna] = { msg: 'modbus exception 4', times: 1 };
+    await step('Takt 4 Regeln, Ena Ausnahme 4', zfiTick(r, {}));
+    await step('Takt 5 Regeln', zfiTick(r, {}));
+  },
+};
+
+SCENARIOS.p5_zfi_write_safety = {
+  setup: zfiSetup(),
+  run: async (r, step) => {
+    await step('Takt 1', zfiTick(r, {}));
+    await step('Takt 2 → an', zfiTick(r, {}));
+    r.cfg.writeSafety = { ok: false, reason: 'manufacturer_profile_error', manufacturer: 'fronius' };
+    await step('Takt 3 bei writeSafety.ok=false', zfiTick(r, {}));
+    r.state.ctrl._lastDvFeedIn = true;
+    await step('Freigabe bei writeSafety.ok=false', zfiTick(r, {}));
+  },
+};
+
+SCENARIOS.p5_zfi_unresolved_and_victron = {
+  setup: zfiSetup({ resolved: false }), noWrites: true,
+  run: async (r, step) => {
+    await step('Takt 1 unaufgelöst', zfiTick(r, {}));
+    await step('Takt 2 unaufgelöst', zfiTick(r, {}));
+  },
+};
+
+SCENARIOS.p5_zfi_read_only = {
+  setup: zfiSetup(), readOnly: true,
+  run: async (r, step) => {
+    await step('Takt 1', zfiTick(r, {}));
+    await step('Takt 2 → Enter im Lese-Modus', zfiTick(r, {}));
+    await step('Takt 3', zfiTick(r, {}));
+  },
+};
+
+SCENARIOS.p5_fic_cycle = {
+  setup: zfiSetup({ blocked: false, capLimitW: 6000 }),
+  run: async (r, step) => {
+    await step('Export 5000 W < Grenze', ficTick(r, { soc: 50, exportW: 5000, pvW: 8000 }));
+    await step('Export 7000 W > Grenze → Enter', ficTick(r, { soc: 50, exportW: 7000, pvW: 9000 }));
+    await step('Export 6200 W → runter', ficTick(r, { soc: 50, exportW: 6200, pvW: 8000 }));
+    await step('Export 4000 W → hoch', ficTick(r, { soc: 50, exportW: 4000, pvW: 6000 }));
+    for (let i = 1; i <= 10; i += 1) await step(`Bezug ${i} → unter der Grenze`, ficTick(r, { soc: 50, importW: 3000, pvW: 2000 }));
+    await step('Export 7000 W → Enter', ficTick(r, { soc: 50, exportW: 7000, pvW: 9000 }));
+    r.state.ctrl._lastDvFeedIn = false;
+    await step('Sperre aktiv → eigener Zustand weg', ficTick(r, { soc: 50, exportW: 0, pvW: 6000 }));
+    r.state.ctrl._lastDvFeedIn = true;
+    await step('wieder frei → Enter', ficTick(r, { soc: 50, exportW: 7000, pvW: 9000 }));
+    r.data.limitW = null;
+    await step('Grenze entfällt → Ena 0', ficTick(r, { soc: 50, exportW: 7000, pvW: 9000 }));
+  },
+  expect: (n) => {
+    const a = actionsOf(n.rig);
+    assert.ok(a.includes('wMaxLimEna:autoRestore'), 'Abräumen ohne Grenze bzw. unter der Grenze = autoRestore');
+    assert.deepEqual(a.slice(0, 3), ['wMaxLimPctRvrtTms:protectiveLimit', 'wMaxLimPct:protectiveLimit', 'wMaxLimEna:protectiveLimit']);
+  },
+};
+
+SCENARIOS.p5_fic_nothalt = {
+  setup: zfiSetup({ blocked: false, capLimitW: 6000 }),
+  run: async (r, step) => {
+    await step('Enter', ficTick(r, { soc: 50, exportW: 7000, pvW: 9000 }));
+    r.halt();
+    await step('Not-Halt → einmal Ena 0', ficTick(r, { soc: 50, exportW: 7000, pvW: 9000 }));
+    await step('Not-Halt, nächster Takt', ficTick(r, { soc: 50, exportW: 7000, pvW: 9000 }));
+  },
+  expect: (n) => assert.deepEqual(n.rig.events.filter((e) => e.state_flags.not_halt).map((e) => `${e.point}=${e.value.eng}:${e.action}`), ['wMaxLimEna=0:haltNeutralize']),
+};
+
 return SCENARIOS;
 }
 
@@ -487,6 +661,46 @@ export function flipScenarios() {
     expect: (n) => assert.deepEqual(n.rig.events.map((e) => `${e.value.eng}:${e.action}:${e.state_flags.not_halt}`), [
       '6000:protectiveLimit:false', '3000:protectiveLimit:false', '2000:protectiveLimit:true', '6000:protectiveLimit:true',
     ]),
+  };
+
+  // Nulleinspeise-Deckel unter einer §-51-Sperre läuft im Not-Halt weiter (Klasse negativePrice).
+  SCENARIOS.flip_zfi_continues = {
+    setup: zfiSetup(),
+    run: async (r, step) => {
+      await step('Takt 1', zfiTick(r, {}));
+      await step('Takt 2 → an', zfiTick(r, {}));
+      r.halt();
+      await step('Not-Halt: Deckel regelt weiter', zfiTick(r, { exportW: 300 }));
+      await step('Not-Halt: SoC 89 % → Deckel aus', zfiTick(r, { soc: 89 }));
+    },
+    expect: (n) => assert.deepEqual(haltedEvents(n), [
+      'wMaxLimPct:protectiveLimit:ok', 'wMaxLimEna:protectiveLimit:ok', 'outWRte:protectiveLimit:ok', 'wMaxLimEna:protectiveLimit:ok',
+    ]),
+  };
+
+  // Deckel unter einer Regel-Sperre (keine Pflicht-Klasse): im Not-Halt einmal abräumen.
+  SCENARIOS.flip_zfi_rule_block_released = {
+    setup: zfiSetup({ reason: 'rule:abend' }),
+    run: async (r, step) => {
+      await step('Takt 1', zfiTick(r, {}));
+      await step('Takt 2 → an', zfiTick(r, {}));
+      r.halt();
+      await step('Not-Halt → einmal Ena 0', zfiTick(r, {}));
+    },
+    expect: (n) => assert.deepEqual(haltedEvents(n), ['wMaxLimEna:haltNeutralize:ok']),
+  };
+
+  // Regelschleife der festen Grenze läuft im Not-Halt weiter (feedInCapLoop) — samt Abräumen, wenn die Grenze entfällt.
+  SCENARIOS.flip_fic_continues = {
+    setup: zfiSetup({ blocked: false, capLimitW: 6000 }),
+    run: async (r, step) => {
+      await step('Enter', ficTick(r, { soc: 50, exportW: 7000, pvW: 9000 }));
+      r.halt();
+      await step('Not-Halt: regelt weiter', ficTick(r, { soc: 50, exportW: 6500, pvW: 9000 }));
+      r.data.limitW = null;
+      await step('Not-Halt: Grenze entfällt → Ena 0', ficTick(r, { soc: 50, exportW: 6500, pvW: 9000 }));
+    },
+    expect: (n) => assert.deepEqual(haltedEvents(n), ['wMaxLimPct:protectiveLimit:ok', 'wMaxLimEna:protectiveLimit:ok', 'wMaxLimEna:autoRestore:ok']),
   };
 
   return SCENARIOS;

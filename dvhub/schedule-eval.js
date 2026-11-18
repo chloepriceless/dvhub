@@ -3151,11 +3151,22 @@ export function createScheduleEvaluator(ctx) {
     });
   }
 
-  async function zfiWrite(pconf, value) {
+  // Schreibtor (D.1 #5): jeder Write des Nulleinspeise-Deckels und der festen Einspeisegrenze geht über submitInverter
+  // — derselbe FC-6-Aufruf wie bisher. Eine Geräte-Erkennung hat dieser Pfad heute nicht; so bleibt es (die
+  // Schreibfreigabe des Tors folgt nur der C2-Prüfung des Takts). `w` bringt der Takt mit: Lauf-Zulassung (direkt
+  // nach seiner Not-Halt-Prüfung), Config, Quelle.
+  // Aktionsklassen (A.5): der Deckel unter einer Sperre bzw. die feste Grenze regelt eine Schutz-Begrenzung
+  // (protectiveLimit, auch sein Abschalten bei SoC-Erholung, das die Force-Charge-Sperre wieder scharf macht); das
+  // Abräumen, wenn die Sperre/Grenze entfällt, ist autoRestore; das eine Abräumen im Not-Halt haltNeutralize (Ena = 0).
+  async function zfiWrite(w, point, pconf, value, action = 'protectiveLimit') {
     const encoded = toRawForWrite(value, pconf);
-    await transport.mbWriteSingle({
-      host: pconf.host, port: pconf.port, unitId: pconf.unitId,
-      address: pconf.address, value: encoded.raw, timeoutMs: pconf.timeoutMs
+    await submitInverter(w.run, w.cfg, {
+      point, value, source: w.source, kind: action === 'haltNeutralize' ? 'neutralize' : 'write', action,
+      fn: 'mbWriteSingle',
+      args: [{
+        host: pconf.host, port: pconf.port, unitId: pconf.unitId,
+        address: pconf.address, value: encoded.raw, timeoutMs: pconf.timeoutMs
+      }],
     });
   }
 
@@ -3190,20 +3201,27 @@ export function createScheduleEvaluator(ctx) {
           zfi.limitPct = null;
           zfi.exportStreak = 0;
           zfi.blockedStreak = 0;
-          try { await zfiWrite(enaConf, 0); } catch (e) {
+          const halt = { run: admitInverterRun('zfi', 'emergency_stop_release'), cfg, source: 'zero_feed_in' };
+          try { await zfiWrite(halt, 'wMaxLimEna', enaConf, 0, 'haltNeutralize'); } catch (e) {
             pushLog('zero_feedin_error', { error: e?.message || String(e), phase: 'nothalt_release' }, 'warn');
           }
           pushLog('zero_feedin_cap_exit', { reason: 'emergency_stop' });
         }
         return;
       }
+      // Lauf-Zulassung direkt nach der Not-Halt-Prüfung: im Not-Halt läuft der Takt nur für eine weiterlaufende
+      // Pflicht-Sperre — ihr Grund ist die Regel.
+      const w = {
+        run: admitInverterRun('zfi', state.ctrl.discretionaryWritesPaused ? (state.ctrl._dvBlockReason || 'zero_feed_in') : null),
+        cfg, source: 'zero_feed_in',
+      };
       if (!blocked) {
         zfi.exportStreak = 0;
         zfi.blockedStreak = 0;
         if (zfi.capActive) {
           // Freigabe (Preis positiv / Not-Halt-Release / DV-Ende): nur den
           // Deckel abräumen — OutWRte hat die restore-Sequenz schon gesetzt.
-          await zfiWrite(enaConf, 0);
+          await zfiWrite(w, 'wMaxLimEna', enaConf, 0, 'autoRestore');
           zfi.capActive = false;
           zfi.limitPct = null;
           zfi.trigger = null;
@@ -3272,10 +3290,10 @@ export function createScheduleEvaluator(ctx) {
           zfi.limitPct = loadKnown
             ? clampPct((100 * Math.max(0, loadW - targetImportW)) / refW)
             : ZFI_MIN_PCT;
-          if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, 100);
-          if (rvrtConf?.enabled && rvrtConf.address != null) await zfiWrite(rvrtConf, revertTimeoutS);
-          await zfiWrite(pctConf, zfi.limitPct);
-          await zfiWrite(enaConf, 1);
+          if (outConf?.enabled && outConf.address != null) await zfiWrite(w, 'outWRte', outConf, 100);
+          if (rvrtConf?.enabled && rvrtConf.address != null) await zfiWrite(w, 'wMaxLimPctRvrtTms', rvrtConf, revertTimeoutS);
+          await zfiWrite(w, 'wMaxLimPct', pctConf, zfi.limitPct);
+          await zfiWrite(w, 'wMaxLimEna', enaConf, 1);
           zfi.capActive = true;
           zfi.exportStreak = 0;
           zfi.trigger = trigger;
@@ -3299,8 +3317,8 @@ export function createScheduleEvaluator(ctx) {
       // Reihenfolge beim Exit: erst Force-Charge wieder scharf, dann Deckel
       // aus — so gibt es kein Fenster, in dem weder Akku-Zwang noch Deckel steht.
       const capOff = async (reason, meta) => {
-        if (outConf?.enabled && outConf.address != null) await zfiWrite(outConf, -100);
-        await zfiWrite(enaConf, 0);
+        if (outConf?.enabled && outConf.address != null) await zfiWrite(w, 'outWRte', outConf, -100);
+        await zfiWrite(w, 'wMaxLimEna', enaConf, 0);
         zfi.capActive = false;
         zfi.limitPct = null;
         zfi.trigger = null;
@@ -3362,8 +3380,8 @@ export function createScheduleEvaluator(ctx) {
       // refresht das RvrtTms-Fenster (sonst verfiele der Deckel mitten in der
       // Abregelung); Ena wird re-asserted (Gerät könnte nach eigenem Revert
       // oder Neustart auf Normalbetrieb zurückgefallen sein).
-      await zfiWrite(pctConf, zfi.limitPct);
-      await zfiWrite(enaConf, 1);
+      await zfiWrite(w, 'wMaxLimPct', pctConf, zfi.limitPct);
+      await zfiWrite(w, 'wMaxLimEna', enaConf, 1);
 
       // Readback-Drift-Check (throttled): Steuerprioritäten am WR (IO-Steuerung >
       // dyn. Leistungsreduzierung > Modbus) können Writes still ignorieren.
@@ -3421,7 +3439,8 @@ export function createScheduleEvaluator(ctx) {
         if (fic.capActive) {
           fic.capActive = false; fic.limitPct = null; fic.below = 0;
           if (!blocked && enaConf?.address != null) {
-            try { await zfiWrite(enaConf, 0); } catch (e) {
+            const halt = { run: admitInverterRun('zfi', 'emergency_stop_release'), cfg, source: 'feed_in_cap' };
+            try { await zfiWrite(halt, 'wMaxLimEna', enaConf, 0, 'haltNeutralize'); } catch (e) {
               pushLog('feed_in_cap_loop_error', { error: e?.message || String(e), phase: 'nothalt_release' }, 'warn');
             }
           }
@@ -3429,10 +3448,15 @@ export function createScheduleEvaluator(ctx) {
         }
         return;
       }
+      // Lauf-Zulassung direkt nach der Not-Halt-Prüfung (im Not-Halt nur, wenn die Klasse feedInCapLoop weiterläuft).
+      const w = {
+        run: admitInverterRun('zfi', state.ctrl.discretionaryWritesPaused ? 'feedInCapLoop' : null),
+        cfg, source: 'feed_in_cap',
+      };
       if (limitW == null || blocked || transport.type !== 'modbus') {
         // Keine Grenze mehr: eigene Drosselung abräumen. Bei Sperre übernimmt
         // zeroFeedInTick die Register — hier nur den eigenen Zustand vergessen.
-        if (fic.capActive && limitW == null && !blocked && enaConf?.address != null) await zfiWrite(enaConf, 0);
+        if (fic.capActive && limitW == null && !blocked && enaConf?.address != null) await zfiWrite(w, 'wMaxLimEna', enaConf, 0, 'autoRestore');
         if (fic.capActive) pushLog('feed_in_cap_loop_off', { reason: blocked ? 'blocked' : 'no_limit' });
         fic.capActive = false; fic.limitPct = null; fic.below = 0;
         return;
@@ -3444,7 +3468,7 @@ export function createScheduleEvaluator(ctx) {
       });
       if (!act.write) return;
       if (act.ena === 0) {
-        await zfiWrite(enaConf, 0);
+        await zfiWrite(w, 'wMaxLimEna', enaConf, 0, 'autoRestore');
         pushLog('feed_in_cap_loop_off', { reason: 'below_limit', limitW });
         return;
       }
@@ -3452,10 +3476,10 @@ export function createScheduleEvaluator(ctx) {
         // Rückfallzeit zuerst: ohne sie bliebe die Drosselung nach einem
         // DVhub-Ausfall unbegrenzt stehen.
         if (act.enter && rvrtConf?.enabled && rvrtConf.address != null) {
-          await zfiWrite(rvrtConf, Number(cfg.zeroFeedIn?.revertTimeoutS ?? 300));
+          await zfiWrite(w, 'wMaxLimPctRvrtTms', rvrtConf, Number(cfg.zeroFeedIn?.revertTimeoutS ?? 300));
         }
-        await zfiWrite(pctConf, act.limitPct);
-        await zfiWrite(enaConf, 1);
+        await zfiWrite(w, 'wMaxLimPct', pctConf, act.limitPct);
+        await zfiWrite(w, 'wMaxLimEna', enaConf, 1);
       } catch (e) {
         // Einstieg nicht vollständig geschrieben → beim nächsten Takt neu einsteigen
         // (mit Rückfallzeit), statt ohne sie weiterzuregeln.
