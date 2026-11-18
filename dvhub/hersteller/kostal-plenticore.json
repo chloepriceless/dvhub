@@ -1,0 +1,122 @@
+{
+  "label": "Kostal PLENTICORE / PIKO IQ — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (KOSTAL-Zähler, Position Netzanschluss), PV, Akku-Leistung und SoC über Modbus TCP (Port 1502, Unit-ID 71, Byte-Reihenfolge CDAB = Werkseinstellung) und rechnet die Hauslast aus der Energiebilanz. DVhub schreibt nichts an den Wechselrichter. Modbus muss am Gerät freigeschaltet sein. Das Akku-Vorzeichen ist eine Annahme und am Gerät noch nicht bestätigt. Anleitung: docs/hersteller/kostal-plenticore.md.",
+  "_doc": [
+    "KOSTAL PLENTICORE plus / G2 / G3 (Hybrid), PLENTICORE MP/BI G3 und PIKO IQ (ohne Akku) — die Geräte der",
+    "„Hybrid-Doc“-Registerkarte, mit KOSTAL-Zähler (KSEM, KEM) am Netzanschluss. NICHT für PIKO CI (eigene Karte",
+    "0x3000ff., kein Akku) und PIKO MP plus (in keinem Register-Dokument).",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [SPEC] KOSTAL „Interface description MODBUS (TCP) & SunSpec — PIKO IQ / PLENTICORE",
+    "(hybrid), with control information“ Rev. 2.9 (17.07.2026) · [COMM] evcc kostal-plenticore-gen2.yaml (Port 1502,",
+    "Unit 71, Float „little“ = CDAB als Standard), Schneider Wiser KNX und TapHome (PV aus 1066, Akku aus 582).",
+    "Zusammenfassung: .planning/docs/research/2026-11-15-kostal-modbus-control-spec.md §1–2, §4 und",
+    "2026-11-18-hersteller-lesend-luecken.md §3.8.",
+    "",
+    "Transport: Modbus TCP Port 1502 (nicht 502), Unit-ID 71, FC 03. Float = 2 Register in der Byte-Reihenfolge aus",
+    "Register 0x05: 0 = CDAB (Low-Wort zuerst, Werkseinstellung) → wordOrder le. Steht 0x05 auf 1 (ABCD), sind alle",
+    "Float-Werte falsch. Modbus muss am Gerät freigeschaltet sein (Register 0x02 = 1, Einstellung im Web-UI); DVhub",
+    "schreibt 0x02 nicht. KOSTAL empfiehlt eine Zykluszeit über 1 s; DVhub fragt je Takt (Standard 2 s, mindestens 1 s) alle Werte nacheinander.",
+    "",
+    "Bewusst NICHT gelesen bzw. nicht abbildbar:",
+    "- Byte-Reihenfolge-Prüfung (Register 0x05 muss 0 sein): DVhub kann ein Register nicht gegen einen Sollwert prüfen",
+    "  (E10). Falsche Einstellung = sichtbar unsinnige Werte, kein Lesefehler.",
+    "- Hauslast: die Spec nennt nur den Teilwert „Home consumption from grid“ (0x6C) → Energiebilanz.",
+    "- Netz je Phase: in der Spec nicht aufgeführt.",
+    "- PV 0x64 „Total DC power“: nicht verwendet, weil unklar ist, ob der Akku-Eingang (DC3) mitzählt. 0x42A ist",
+    "  ausdrücklich die Summe der PV-Eingänge."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 1502,
+    "unitId": 71,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz gesamt, Register 0xFC = 252 „Total active power (powermeter)“ (Float, W, CDAB) [SPEC]: bei Zählerposition 2 (Netzanschluss) + = Bezug, − = Einspeisung — DVhubs Konvention, daher kein sign. Steht der Zähler auf Position 1 (Hausverbrauch), misst 252 den Verbrauch, nicht das Netz (am Gerät prüfen). Phasenwerte nicht in der Spec → leer.",
+    "layout": "point",
+    "fc": 3,
+    "address": 252,
+    "quantity": 2,
+    "readType": "float32",
+    "wordOrder": "le"
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "SoC, Register 0x202 = 514 „Battery actual SOC“ (U16, 1 %) [SPEC] — unabhängig von der Byte-Reihenfolge. Gegenprobe am Gerät: 0xD2 = 210 (Float, %). 0xFFFF als „kein Wert“ defensiv [ANN]: als SoC unmöglich, die Spec nennt keinen Sentinel.",
+      "enabled": true,
+      "fc": 3,
+      "address": 514,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [65535]
+    },
+    "batteryPowerW": {
+      "_comment": "Akku, Register 0x246 = 582 „Actual battery charge/discharge power“ (S16, W) [SPEC]. UNSICHER (am Gerät prüfen): Vorzeichen steht nicht in der Spec. Annahme + = Entladen, − = Laden — so zählt KOSTAL überall sonst (Akkustrom 0xC8 „Lade(−)/Entlade(+)“, Anlagen-Akkuleistung 0x60D, alle Akku-Sollwerte) [ANN]. DVhub erwartet + = Laden, daher sign −1. Zeigt DVhub beim Laden einen negativen Wert, gehört sign weg. 0x7FFF/0x8000 als „kein Wert“ defensiv [ANN]: ±32 767 W gibt es bei PLENTICORE nicht, die Spec nennt keinen Sentinel.",
+      "enabled": true,
+      "fc": 3,
+      "address": 582,
+      "quantity": 1,
+      "signed": true,
+      "sign": -1,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [32767, 32768]
+    },
+    "pvPowerW": {
+      "_comment": "PV gesamt, Register 0x42A = 1066 „Total DC power (Summe aller PV-Eingänge)“ (Float, W, CDAB) [SPEC]; Schneider Wiser KNX und TapHome lesen PV ebenso aus 1066 [COMM]. Nicht 0x64 = 100 „Total DC power“ (ob der Akku-Eingang mitzählt, ist unbelegt). Alte Firmware ohne 1066: Lesefehler → am Gerät melden.",
+      "enabled": true,
+      "fc": 3,
+      "address": 1066,
+      "quantity": 2,
+      "readType": "float32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0
+    },
+    "selfConsumptionW": {
+      "_comment": "Kein Gesamt-Lastregister in der Spec (0x6C ist nur der Anteil aus dem Netz). Hauslast = PV + Bezug − Einspeisung − Akku (+ = Laden), jeden Takt neu (E6).",
+      "enabled": false,
+      "derive": "energy_balance"
+    },
+    "deviceMaxChargeW": {
+      "_comment": "Max. Ladeleistung, vom Akku gemeldet: Register 0x434 = 1076 (Float, W, CDAB, RO) [SPEC]. Nur Anzeige. NaN (kein Akku) → kein Wert.",
+      "enabled": true,
+      "fc": 3,
+      "address": 1076,
+      "quantity": 2,
+      "readType": "float32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0,
+      "pollEveryMs": 60000
+    },
+    "deviceMaxDischargeW": {
+      "_comment": "Max. Entladeleistung, vom Akku gemeldet: Register 0x436 = 1078 (Float, W, CDAB, RO) [SPEC]. Nur Anzeige.",
+      "enabled": true,
+      "fc": 3,
+      "address": 1078,
+      "quantity": 2,
+      "readType": "float32",
+      "wordOrder": "le",
+      "scale": 1,
+      "offset": 0,
+      "pollEveryMs": 60000
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}
