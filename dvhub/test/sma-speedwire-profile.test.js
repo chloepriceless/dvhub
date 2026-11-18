@@ -223,6 +223,39 @@ test('E7 am Draht (falsche Uhr): echter Transport mit Taktung aus der Config —
   }
 });
 
+// Codex 6ab2b78e (P2): mit Taktung liegen ~40 s zwischen der Zählerlesung (Takt-Anfang) und den Punkten. Bezug und
+// Einspeisung (victron.gridImportW/gridExportW) müssen zum neuen meter.updatedAt passen, sobald der stempelt — der
+// my-PV-Heizstab prüft die Frische am Zählerstempel und regelte sonst 40 s lang auf alter Einspeisung bei Netzbezug.
+test('Codex 6ab2b78e: Bezug/Einspeisung passen sofort zum neuen Zählerstempel, nicht erst nach den Punkten', async () => {
+  const cfg = effective();
+  enableFakeClock();
+  const t0 = Date.now();
+  const sockets = installFakeModbusSockets();
+  const transport = createModbusTransport({ pacingFor: modbusPacingFromConfig(() => cfg) });
+  const { state, poller } = createPollerRig(cfg, transport);
+  delete cfg.pollMs;
+  try {
+    for (const [a, v] of [[30865, 0], [30867, 3000], [31393, 0], [31395, 0], [30773, 3500], [30961, 0], [30845, 50]]) sockets.set32(UNIT, a, v);
+    poller.start();
+    await advance(45000);
+    assert.deepEqual([state.victron.gridExportW, state.victron.gridImportW], [3000, 0]);
+    // Wolke: aus 3000 W Einspeisung werden 2000 W Bezug. Der zweite Takt liest den Zähler bei 50 s.
+    sockets.set32(UNIT, 30865, 2000).set32(UNIT, 30867, 0);
+    await advance(6000);
+    assert.equal(sockets.wire.at(-1).address, 30865, 'zweiter Takt: Zähler gelesen, Punkte stehen noch aus');
+    assert.equal(state.meter.updatedAt - t0, 50000);
+    assert.equal(state.meter.grid_total_w, 2000, 'Zähler: 2000 W Bezug (+ = Bezug)');
+    assert.deepEqual([state.victron.gridImportW, state.victron.gridExportW], [2000, 0],
+      'abgeleitete Werte gehören zur selben Zählerlesung wie meter.updatedAt');
+  } finally {
+    poller.stop();
+    await transport.destroy();
+    await flush();
+    sockets.restore();
+    disableFakeClock();
+  }
+});
+
 test('E7: die Taktung gilt nur für die Anlagen-Verbindung — eine andere Adresse am selben Transport wartet nicht', () => {
   const cfg = effective();
   const pacingFor = modbusPacingFromConfig(() => cfg);

@@ -841,6 +841,14 @@ export function createPoller(ctx) {
     } catch { /* letzten Wert stehen lassen — nächster Takt */ }
   }
 
+  // Bezug/Einspeisung (immer ≥ 0) aus dem Zählerstand in der Ausgabe-Konvention.
+  function deriveGridFlows(cfg) {
+    const gridW = state.meter.grid_total_w || 0;
+    const posImport = cfg.gridPositiveMeans === 'grid_import';
+    state.victron.gridImportW = Math.max(0, posImport ? gridW : -gridW);
+    state.victron.gridExportW = Math.max(0, posImport ? -gridW : gridW);
+  }
+
   // --- pollMeter: main polling function (meter + all Victron points) ---
   async function pollMeter() {
     const cfg = getCfg();
@@ -1062,6 +1070,11 @@ export function createPoller(ctx) {
       state.dvRegs[4] = 0;
 
       updateEnergyIntegrals(state.meter.updatedAt, total);
+      // Codex 6ab2b78e: Bezug/Einspeisung zusammen mit dem Zählerstand ableiten. Mit Anfrage-Taktung (E7, SMA ≥ 10 s)
+      // liegen bis zu ~40 s zwischen dieser Lesung und den Punkten; so lange trugen die abgeleiteten Werte den alten
+      // Stand unter dem neuen meter.updatedAt (my-PV prüft die Frische am Zählerstempel). Unten nach den Punkten
+      // derselbe Ausdruck mit demselben Zählerstand — das Ergebnis am Takt-Ende ist unverändert.
+      deriveGridFlows(cfg);
       // Plan 09-06 (D-06): success — record poll duration into the gauge.
       try {
         const durationSec = Number(process.hrtime.bigint() - __pollStart) / 1e9;
@@ -1137,10 +1150,7 @@ export function createPoller(ctx) {
     state.victron.pvAcW = Number(pvAc.toFixed(3));
     state.victron.pvTotalW = Number((pvDc + pvAc).toFixed(3));
 
-    const gridW = state.meter.grid_total_w || 0;
-    const posImport = cfg.gridPositiveMeans === 'grid_import';
-    state.victron.gridImportW = Math.max(0, posImport ? gridW : -gridW);
-    state.victron.gridExportW = Math.max(0, posImport ? -gridW : gridW);
+    deriveGridFlows(cfg);
 
     // Echte DC-Akku-Leistung via SunSpec Model 160 (Profil-opt-in:
     // points.batteryPowerW.derive = 'm160_battery'; GEN24: MPPT-Eingang 3 =
