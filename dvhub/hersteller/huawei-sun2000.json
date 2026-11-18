@@ -24,8 +24,8 @@
     "einen leeren Wert (Zähler: Lesefehler) statt −2 147 483 647 W oder 6553,5 %.",
     "",
     "Bewusst NICHT gelesen bzw. nicht abbildbar:",
-    "- Pause nach dem Verbindungsaufbau: Plexlog wartet 500 ms, evcc 1 s (connectdelay), bevor es liest. DVhub fragt",
-    "  sofort (E7 fehlt). Schlägt die erste Lesung nach jedem Verbindungsaufbau fehl, ist das die Ursache.",
+    "- Pause nach dem Verbindungsaufbau: Plexlog wartet 500 ms, evcc 1 s (connectdelay), bevor es liest. Seit E7",
+    "  wartet DVhub 1 s (victron.requestPacing.connectDelayMs).",
     "- Phasen 37132/37134/37136: nur bei dreiphasigem Zähler belegt und je eine Anfrage mehr am Ein-Client-Gerät;",
     "  bleiben leer, bis der Gerätetest die Grundwerte bestätigt (ließen sich als meter.phases nachtragen).",
     "- Hauslast: kein Lastregister in der Spec → Energiebilanz (Last = PV + Bezug − Einspeisung − Akku).",
@@ -36,7 +36,11 @@
     "transport": "modbus",
     "port": 502,
     "unitId": 1,
-    "timeoutMs": 5000
+    "timeoutMs": 5000,
+    "requestPacing": {
+      "_comment": "E7: Pause nach jedem (Neu-)Aufbau der Verbindung vor der ersten Lesung. evcc huawei-sun2000-hybrid.yaml wartet 1 s (connectdelay) [COMM], Plexlog 500 ms (DelayAfterConnect) [DECOMP]; DVhub nimmt den längeren Wert. Ein Abstand zwischen Lesungen ist nicht belegt (Plexlogs ~500 ms gelten Writes).",
+      "connectDelayMs": 1000
+    }
   },
 
   "meter": {

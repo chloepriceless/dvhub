@@ -7,6 +7,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createRegisterDevice, createPollerRig } from './helpers/fake-modbus-device.js';
+import { createModbusTransport, modbusPacingFromConfig, normalizeModbusPacing } from '../transport-modbus.js';
+import { installFakeModbusSockets, advance, flush, enableFakeClock, disableFakeClock } from './helpers/fake-modbus-socket.js';
 import {
   TEST_HOST, readShippedProfile, setupProfile, loadProfile, writeTargets, evaluatorWrites, writableVariant, dropdown, readSet,
 } from './helpers/read-only-profile-rig.js';
@@ -185,4 +187,30 @@ test('Dropdown: im Stable-Kanal ausgeblendet, im Bleeding-Edge-Kanal sichtbar, a
   assert.equal(dev.beta, true);
   assert.match(dev.label, /Huawei SUN2000.*nur Anzeige/);
   assert.ok(values(dropdown(configPath, 'stable', ID)).includes(ID), 'aktives Profil fällt nie aus der Liste');
+});
+
+// --- E7: Pause nach dem Verbindungsaufbau ---------------------------------------------------------------------------
+
+// evcc huawei-sun2000-hybrid.yaml wartet 1 s nach dem Verbindungsaufbau (connectdelay), Plexlog 500 ms. Danach liest
+// DVhub ohne Abstand weiter. Echter Transport mit Taktung aus der Config, falsche Uhr.
+test('E7: erste Lesung 1 s nach dem Verbindungsaufbau, danach ohne Abstand', async () => {
+  const cfg = effective();
+  assert.deepEqual(normalizeModbusPacing(cfg.victron.requestPacing), { minRequestGapMs: 0, connectDelayMs: 1000, maxRegistersPerRequest: 0 });
+  enableFakeClock();
+  const sockets = installFakeModbusSockets();
+  const transport = createModbusTransport({ pacingFor: modbusPacingFromConfig(() => cfg) });
+  const { poller } = createPollerRig(cfg, transport);
+  try {
+    const p = poller.requestPoll();
+    await advance(3000, 10);
+    await p;
+    assert.deepEqual(sockets.events.map((e) => `${e.ev}@${e.t}`), ['connect@0']);
+    assert.ok(sockets.wire.length >= 5, `ein ganzer Takt (${sockets.wire.length} Anfragen)`);
+    assert.ok(sockets.wire.every((f) => f.t === 1000), sockets.wire.map((f) => `${f.address}@${f.t}`).join(' '));
+  } finally {
+    await transport.destroy();
+    await flush();
+    sockets.restore();
+    disableFakeClock();
+  }
 });

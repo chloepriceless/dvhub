@@ -8,7 +8,9 @@ import assert from 'node:assert/strict';
 
 import { loadConfigFile } from '../config-model.js';
 import { listManufacturerProfiles } from '../routes-api.js';
-import { createRegisterDevice } from './helpers/fake-modbus-device.js';
+import { createRegisterDevice, createPollerRig } from './helpers/fake-modbus-device.js';
+import { createModbusTransport, modbusPacingFromConfig, normalizeModbusPacing } from '../transport-modbus.js';
+import { installFakeModbusSockets, advance, flush, enableFakeClock, disableFakeClock } from './helpers/fake-modbus-socket.js';
 import {
   setupProfile, shippedProfile, writeTargets, wireWrites, withWriteTargets, pollProfile, readAddresses,
 } from './helpers/readonly-profile-rig.js';
@@ -164,4 +166,32 @@ test('Dropdown: im Stable-Kanal ausgeblendet, im Bleeding-Edge-Kanal sichtbar, a
   assert.equal(dev.beta, true);
   assert.match(dev.label, /Solis.*nur Anzeige/);
   assert.ok(values(ctx('stable', ID)).includes(ID), 'aktives Profil fällt nie aus der Liste');
+});
+
+// --- E7: Abstand zwischen den Anfragen ------------------------------------------------------------------------------
+
+// Solis verlangt laut Community > 300 ms zwischen zwei Frames, das Add-on Solis-Local nutzt 400 ms; höchstens 50
+// Register je Lesung (Spec §1). Echter Transport mit Taktung aus der Config, falsche Uhr.
+test('E7: 400 ms ab Antwortende zwischen zwei Anfragen, höchstens 50 Register je Lesung, Poll-Takt bleibt beim Betreiber', async () => {
+  const cfg = load();
+  assert.deepEqual(normalizeModbusPacing(cfg.victron.requestPacing), { minRequestGapMs: 400, connectDelayMs: 0, maxRegistersPerRequest: 50 });
+  assert.equal(cfg.victron.requestPacing.minPollIntervalMs, undefined);
+  enableFakeClock();
+  const sockets = installFakeModbusSockets();
+  const transport = createModbusTransport({ pacingFor: modbusPacingFromConfig(() => cfg) });
+  const { poller } = createPollerRig(cfg, transport);
+  try {
+    const p = poller.requestPoll();
+    await advance(10000, 10);
+    await p;
+    const gaps = sockets.wire.slice(1).map((f, i) => f.t - sockets.wire[i].t);
+    assert.ok(sockets.wire.length >= 7, `ein ganzer Takt (${sockets.wire.length} Anfragen)`);
+    assert.ok(gaps.every((g) => g >= 400), `nie unter 400 ms: ${gaps}`);
+    assert.ok(sockets.wire.every((f) => f.fc === 4 && f.quantity <= 50));
+  } finally {
+    await transport.destroy();
+    await flush();
+    sockets.restore();
+    disableFakeClock();
+  }
 });
