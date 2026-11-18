@@ -38,7 +38,9 @@ export default async function* completeReporter(source) {
       open.set(keyOf(d), (open.get(keyOf(d)) || 0) + 1);
       total++;
     } else if (ev.type === 'test:pass' || ev.type === 'test:fail') {
-      if (ev.type === 'test:fail') failed++;
+      // todo-Tests dürfen scheitern (gewolltes, noch offenes Soll) — wie bei node --test kein Fehler,
+      // sonst sperrte ein offenes todo den zweiten Anlauf in run-node-tests.mjs.
+      if (ev.type === 'test:fail' && !d.todo) failed++;
       const k = keyOf(d);
       const n = open.get(k) || 0;
       if (n <= 1) open.delete(k); else open.set(k, n - 1);
