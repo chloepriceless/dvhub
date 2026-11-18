@@ -161,6 +161,39 @@ selten änderliche Grenzen seltener:
 "deviceMaxChargeA": { "enabled": true, "fc": 3, "address": 212, "quantity": 1, "pollEveryMs": 60000 }
 ```
 
+**`victron.requestPacing` — Anfrage-Taktung je Verbindung (E7).** Für Geräte, die keine Anfragen direkt
+hintereinander vertragen. Gilt für die Anlagen-Verbindung `victron.host:victron.port` und dort für **jede** Anfrage,
+Lesen und Schreiben, in der Reihenfolge der Warteschlange (Writes werden nie vertauscht). Wallboxen, Zähler an einer
+anderen Adresse und der Register-Scan (eigene Verbindung) sind nicht betroffen. Fehlt der Block, ist alles wie
+bisher; ungültige oder fehlende Werte gelten als „aus“.
+
+| Schlüssel | Bedeutung |
+|---|---|
+| `minRequestGapMs` | Mindestabstand vom **Ende** einer Anfrage (Antwort, Fehler, Zeitüberschreitung) bis zur nächsten auf derselben Verbindung, auch über einen Neuaufbau der Verbindung hinweg. Höchstens 600 000. Die Wartezeit zählt nicht gegen `timeoutMs` |
+| `connectDelayMs` | Pause nach jedem (Neu-)Aufbau der TCP-Verbindung vor der ersten Anfrage. Höchstens 60 000 |
+| `maxRegistersPerRequest` | höchstens so viele Register je Lese-Anfrage (FC 3/4, 1–124). Längere Blöcke werden in Teil-Anfragen zerlegt, direkt hintereinander gelesen und wieder zusammengesetzt. Bei 32-bit-Werten eine gerade Zahl wählen |
+| `minPollIntervalMs` | Mindestabstand der Poll-Takte. Hebt einen kürzeren „Poll Intervall (ms)“ an, senkt ihn nie. Höchstens 30 000 |
+
+Die Not-Halt-Sperre wirkt wie bisher: ein Write, der auf seinen Abstand wartet und vor dem Not-Halt eingereiht wurde,
+geht nicht mehr raus; die Rücknahme danach wartet ihren Abstand ab. Der Lese-Modus (`DVHUB_READ_ONLY=1`) lehnt Writes
+sofort ab, ohne Wartezeit. SMA (höchstens eine Anfrage je 10 s, höchstens 5 Werte je Anfrage):
+
+```json
+"victron": { "transport": "modbus", "port": 502, "unitId": 3,
+  "requestPacing": { "minRequestGapMs": 10000, "maxRegistersPerRequest": 10, "minPollIntervalMs": 10000 } }
+```
+
+**`combineBlock: true` — `combine` aus einer Anfrage.** Liest alle Einträge mit einer Anfrage über ihre Spanne
+(höchstens 125 Register, Register dazwischen werden mitgelesen) statt einer je Eintrag. Wichtig mit
+`minRequestGapMs`: eine Differenz wie Bezug − Einspeisung aus zwei Lesungen 10 s auseinander ergäbe bei einem
+Richtungswechsel einen erfundenen Wert. Alle Einträge teilen Verbindung und Funktionscode des Punkts; `split`, eigene
+Skalenfaktoren und `sunspec` gibt es im Block nicht:
+
+```json
+"meter": { "layout": "point", "fc": 3, "readType": "int32", "combineBlock": true,
+  "combine": [{ "address": 30865 }, { "address": 30867, "sign": -1 }] }
+```
+
 **Victron-Schlüssel.** `acPvSource`, `acPvSource2` (AC-PV-Register 808–816) und „PV-Anbindung“ (`pvCoupling`)
 beschreiben ein Victron-System. Sie wirken nur beim Profil `victron` und bei MQTT-Profilen; ein anderes Modbus-Profil
 behält seine eigenen `acPv*`-Adressen und seine PV-Punkte.

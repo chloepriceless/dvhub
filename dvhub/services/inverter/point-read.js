@@ -199,6 +199,38 @@ function combineTermConf(parent, term) {
   return out;
 }
 
+// E7 (18.11.2026): `combineBlock: true` liest alle combine-Einträge mit EINER Anfrage über ihre Spanne (ein Messzeitpunkt)
+// statt je Eintrag einzeln. Nötig, wo Anfragen weit auseinander liegen müssen (SMA ≥ 10 s): Bezug − Einspeisung aus
+// zwei Lesungen im Abstand von 10 s ergäbe bei einem Richtungswechsel einen erfundenen Wert. Alle Einträge teilen
+// Verbindung und Funktionscode des Punkts; split und eigene Skalenfaktoren gibt es im Block nicht.
+const COMBINE_BLOCK_CONNECTION = ['fc', 'host', 'port', 'unitId'];
+const MAX_BLOCK_REGISTERS = 125;
+
+async function readCombinedBlockTerms(conf, terms, read, ctx) {
+  const termConfs = terms.map((term) => {
+    if (term.split || term.sfAddress != null || term.sunspec != null) {
+      throw new Error('combineBlock: Einträge ohne split, sfAddress und sunspec');
+    }
+    for (const k of COMBINE_BLOCK_CONNECTION) {
+      if (term[k] !== undefined && term[k] !== conf[k]) throw new Error(`combineBlock: Eintrag mit eigenem ${k} — alle Einträge lesen über dieselbe Anfrage`);
+    }
+    return combineTermConf(conf, term);
+  });
+  const from = Math.min(...termConfs.map((t) => t.address));
+  const to = Math.max(...termConfs.map((t) => t.address + quantityOf(t)));
+  if (to - from > MAX_BLOCK_REGISTERS) throw new Error(`combineBlock: Spanne ${to - from} Register (höchstens ${MAX_BLOCK_REGISTERS})`);
+  const blockConf = combineTermConf(conf, {});
+  const regs = await read({ ...blockConf, address: from, quantity: to - from });
+  if (!Array.isArray(regs) || regs.length < to - from) throw new Error(`combineBlock @${from}: unvollständige Antwort`);
+  let sum = 0;
+  for (const t of termConfs) {
+    const v = decodePointRegs(regs.slice(t.address - from, t.address - from + quantityOf(t)), t, { exact: true });
+    if (v == null) return null;
+    sum += v;
+  }
+  return sum;
+}
+
 async function readCombined(conf, read, ctx) {
   const terms = conf.combine;
   if (!terms.length) throw new Error('combine braucht mindestens einen Eintrag');
@@ -209,7 +241,7 @@ async function readCombined(conf, read, ctx) {
     }
     if (!term.split && !isAddress(term.address)) throw new Error(`combine: Registeradresse fehlt oder ist ungültig (${term.address})`);
   }
-  const sumTerms = async () => {
+  const sumTerms = conf.combineBlock === true ? () => readCombinedBlockTerms(conf, terms, read, ctx) : async () => {
     let sum = 0;
     for (const term of terms) {
       const v = await readPointValue(combineTermConf(conf, term), read, { ...ctx, exact: true });

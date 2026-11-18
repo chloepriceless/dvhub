@@ -104,15 +104,25 @@ export function createPoller(ctx) {
   // Letzte EM.GetStatus-Antwort des SPiNE-Zählers (enthält die Spannungen).
   let spineEm = null;
 
+  // E7 (18.11.2026): Mindestabstand der Poll-Takte aus dem Herstellerprofil (`victron.requestPacing.minPollIntervalMs`,
+  // z. B. SMA ≥ 10 s). Hebt einen kürzeren Takt aus meterPollMs/pollMs an, senkt nie. Ohne Angabe 0 = wie bisher.
+  const profileMinPollIntervalMs = (cfg) => {
+    const n = Number(cfg?.victron?.requestPacing?.minPollIntervalMs);
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), MAX_BACKOFF_MS) : 0;
+  };
+
   // --- effectivePollIntervalMs ---
-  const effectivePollIntervalMs = () => normalizePollIntervalMs(getCfg().meterPollMs, MIN_POLL_INTERVAL_MS);
+  const effectivePollIntervalMs = () => {
+    const cfg = getCfg();
+    return Math.max(normalizePollIntervalMs(cfg.meterPollMs, MIN_POLL_INTERVAL_MS), profileMinPollIntervalMs(cfg));
+  };
 
   // Plan 09-08 Task 3 — resolve BASE_POLL_MS at every tick so config changes
   // (and test injection of cfg.pollMs) take effect without reboot.
   const getBasePollMs = () => {
     const cfg = getCfg() || {};
     const fromPollMs = Number(cfg.pollMs);
-    if (Number.isFinite(fromPollMs) && fromPollMs > 0) return fromPollMs;
+    if (Number.isFinite(fromPollMs) && fromPollMs > 0) return Math.max(fromPollMs, profileMinPollIntervalMs(cfg));
     return effectivePollIntervalMs();
   };
 
