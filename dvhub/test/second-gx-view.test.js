@@ -35,11 +35,12 @@ test('online: Ladestand, Akkuleistung, Anteil, Sollwert, Zustand', () => {
   assert.deepEqual([v.state, v.tone], ['Entlädt', 'ok']);
 });
 
-test('Zustände: laden, ruhig, Not-Halt, Einspeisung gesperrt, offline, keine Messwerte', () => {
+test('Zustände: laden, ruhig, Not-Halt, Config ungültig, Einspeisung gesperrt, offline, keine Messwerte', () => {
   const { view } = load();
   assert.deepEqual(pick(view({ ...base, batteryPowerW: 2100 })), ['Lädt', 'info']);
   assert.deepEqual(pick(view({ ...base, batteryPowerW: 20 })), ['Ruht', '']);
   assert.deepEqual(pick(view({ ...base, reason: 'stop' })), ['Not-Halt', 'danger']);
+  assert.deepEqual(pick(view({ ...base, reason: 'config_unsafe' })), ['Gesperrt: Konfiguration ungültig', 'danger']);
   assert.deepEqual(pick(view({ ...base, reason: 'export_blocked', batteryPowerW: 0 })), ['Einspeisung gesperrt', 'warn']);
   assert.deepEqual(pick(view({ ...base, online: false, socPct: null, batteryPowerW: null, reason: 'follower_offline' })), ['Nicht erreichbar', 'danger']);
   assert.deepEqual(pick(view({ ...base, reason: 'no_data' })), ['Keine Messwerte', 'warn']);

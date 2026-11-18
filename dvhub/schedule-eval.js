@@ -110,6 +110,15 @@ export function resolveControlWriteVerify(cfg = {}) {
   };
 }
 
+// Register-Adresse eines Modbus-Ziels: endliche ganze Zahl ≥ 0, als Zahl oder Zahlentext (Config-Werte kommen auch
+// als Text). Alles andere (fehlt, null, '', Text, negativ, gebrochen) kodierte der Transport still als Register 0
+// bzw. auf ein anderes Register.
+function isRegisterAddress(a) {
+  if (typeof a === 'number') return Number.isInteger(a) && a >= 0;
+  if (typeof a === 'string' && a.trim() !== '') { const n = Number(a); return Number.isInteger(n) && n >= 0; }
+  return false;
+}
+
 function dischargeFloorHold(target, value) {
   const v = Number(value);
   if (!Number.isFinite(v)) return null;
@@ -161,6 +170,28 @@ export function isMandatoryControlSource(source) {
 // feedInMandatoryBlockReason() und policy.js DV_REASON_CLASS (§ 51 negativer Preis, Direktvermarkter-Abregelung,
 // §-14a-Produktionssperre). Eine solche Sperre ist `protectiveLimit`, jede andere (Regel, Handvorgabe) `command`.
 const DV_PROTECTIVE_REASONS = new Set(['negative_price_protection', 'dv_forced_off', 'paragraph14a_production_block']);
+
+// Schreibtor, Pfad 1 (applyControlTargetCore, A.5): Quellen einer Schutz-Begrenzung — die Pflicht-Quellen
+// (MANDATORY_CONTROL_SOURCES: § 51, Sicherheits-Nullung am SoC-Boden, Not-Halt), die § 14a-Bezugsgrenze der Steuerbox
+// und die Akku-Hilfe des Netzanschlusses (A.5 nennt „Netzanschluss“ ausdrücklich). Auch ihr Lebenszeichen ist
+// protectiveLimit (Art keepalive): es führt dieselbe Schutz-Begrenzung nach, wie der 5-s-Takt des Deckels (Pfad 5).
+const CONTROL_PROTECTIVE_SOURCES = new Set([...MANDATORY_CONTROL_SOURCES, 'paragraph14a_limit', 'grid_connection_assist']);
+// Rücknahmen einer eigenen Vorgabe auf den Wert davor (Entladegrenze 2704): außerhalb des Not-Halts autoRestore, im
+// Not-Halt der eine Durchgang (haltNeutralize, NOT_HALT_ONE_SHOT_SOURCES — die Wertprüfung macht der Pfad).
+const CONTROL_RESTORE_SOURCES = new Set(['peak_shaving_restore', 'grid_connection_restore', 'multi_gx_handoff_stop', 'multi_gx_handoff_restore']);
+
+/**
+ * Aktionsklasse und Art eines Chokepoint-Writes (A.5) — nur Beschriftung im Legacy-Modus; entscheidend im Not-Halt:
+ * dort lässt die Bestandsprüfung (T-0099) nur die eine Rücknahme (→ haltNeutralize) und eine weiterlaufende
+ * Pflicht-Klasse (→ protectiveLimit, auch als Lebenszeichen) durch, und genau diese beiden lässt das Tor im Lauf zu.
+ */
+export function controlTargetAction(source, { paused = false, oneShot = false, keepalive = false } = {}) {
+  const s = String(source);
+  if (paused && oneShot) return { action: 'haltNeutralize', kind: 'neutralize' };
+  if (CONTROL_PROTECTIVE_SOURCES.has(s)) return { action: 'protectiveLimit', kind: keepalive ? 'keepalive' : 'write' };
+  if (CONTROL_RESTORE_SOURCES.has(s)) return { action: 'autoRestore', kind: keepalive ? 'keepalive' : 'restore' };
+  return keepalive ? { action: 'keepalive', kind: 'keepalive' } : { action: 'command', kind: 'write' };
+}
 
 /**
  * EOS "Akku halten" (closedLoopHold): positiver Sollwert, aber KEIN Netzladen.
@@ -1611,6 +1642,14 @@ export function createScheduleEvaluator(ctx) {
     // Number(null)===0 zwar auch blocken, aber mit irreführender Meldung).
     if (conf.sunspec && conf.address == null) return { ok: false, error: 'sunspec address not resolved yet (device scan pending)' };
     if (Number(conf.address) === 0 && conf.allowAddressZero !== true) return { ok: false, error: 'unsafe address 0 blocked (set allowAddressZero=true to override)' };
+    // Kein Register-Write ohne gültige Adresse (Befund 18.11.2026): ein Ziel ohne eigene Adresse — z. B. Deyes
+    // dontFeedExcessAcPv, ein Sequenz-Punkt — fiel sonst in den Einzelregister-Write unten mit address undefined, den
+    // der Transport als Register 0 kodiert (Buffer.writeUInt16BE; ebenso null, Text, gebrochene Zahl). Gilt nur für
+    // diesen generischen Modbus-Write: MQTT, der Sungrow-EMS (emulate) und die feedExcessDcPv-Delegation tragen keine
+    // eigene Adresse. Eine echte 0 erlaubt weiter allowAddressZero (Prüfung darüber).
+    if (target !== 'feedExcessDcPv' && conf.emulate == null && transport.type !== 'mqtt' && !isRegisterAddress(conf.address)) {
+      return { ok: false, error: `no valid register address for ${target} (address=${conf.address === undefined ? 'undefined' : JSON.stringify(conf.address)}), write blocked` };
+    }
 
     // === T-0099 NOT-HALT selective gate =======================================
     // While the operator's emergency stop is active, ONLY whitelisted mandatory
@@ -1665,6 +1704,11 @@ export function createScheduleEvaluator(ctx) {
       return { ok: false, blocked: true, error: 'emergency_stop_active' };
     }
     if (oneShot && state.ctrl.discretionaryWritesPaused) markNotHaltOneShot(source);
+    // Schreibtor (D.1 #1): Lauf-Zulassung direkt nach der Not-Halt-Prüfung oben — sie entscheidet den Not-Halt für
+    // diesen Aufruf wie heute (bis zum Write keine zweite Prüfung). Im Not-Halt hat sie nur die eine Rücknahme
+    // (oneShot) oder eine weiterlaufende Pflicht-Klasse zugelassen; die Quelle ist die Regel (inHalt).
+    const ctlPaused = state.ctrl.discretionaryWritesPaused === true;
+    const ctlRun = admitInverterRun('eval', ctlPaused ? String(source || 'control_target') : null);
     // === end T-0099 NOT-HALT gate =============================================
 
     // === T-0080 write-layer bounds (defense-in-depth at the chokepoint) =======
@@ -2159,6 +2203,13 @@ export function createScheduleEvaluator(ctx) {
     if (state.schedule._lastSkipKey) delete state.schedule._lastSkipKey[target];
     // === end T-0002 keepalive ===============================================
 
+    // Schreibtor (D.1 #1): der Modbus-, MQTT- bzw. HTTP-Abhol-Write geht über submitInverter am Gerät `inverter` —
+    // derselbe Transport-Aufruf (Argumente, Rückgabe, Fehler) wie bisher, alle Prüfungen oben laufen vorher und
+    // entscheiden wie heute. Der Sungrow-EMS (emulate) schreibt über seinen eigenen Torweg (Pfad 6).
+    const ctlClass = controlTargetAction(source, { paused: ctlPaused, oneShot, keepalive: isKeepalive });
+    const submitControlWrite = (fn, args) => submitInverter(ctlRun, cfg, {
+      point: target, value, source, kind: ctlClass.kind, action: ctlClass.action, fn, args,
+    });
     let emsFailure = false;
     let emsReadError = false;
     try {
@@ -2181,7 +2232,7 @@ export function createScheduleEvaluator(ctx) {
         fc = 0;
       } else if (transport.type === 'mqtt') {
         // MQTT: Engineering-Wert direkt schreiben (kein Register-Encoding)
-        const mqttRes = await transport.mqttWrite(target, value);
+        const mqttRes = await submitControlWrite('mqttWrite', [target, value]);
         // Ohne Broker (HTTP-Push-Eingang, z. B. Loxone) geht nichts über MQTT:
         // der Sollwert liegt im Zustand und wird per GET /api/integration/loxone
         // abgeholt. Das Steuer-Log nannte trotzdem „mqtt“ (Feldfall BIGGE 2026-10-16).
@@ -2196,9 +2247,9 @@ export function createScheduleEvaluator(ctx) {
 
         if (fc === 6) {
           if (words.length !== 1) throw new Error(`fc6 only supports one register, got ${words.length}`);
-          await transport.mbWriteSingle({ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, value: words[0], timeoutMs: conf.timeoutMs });
+          await submitControlWrite('mbWriteSingle', [{ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, value: words[0], timeoutMs: conf.timeoutMs }]);
         } else if (fc === 16) {
-          await transport.mbWriteMultiple({ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, values: words, timeoutMs: conf.timeoutMs });
+          await submitControlWrite('mbWriteMultiple', [{ host: conf.host, port: conf.port, unitId: conf.unitId, address: conf.address, values: words, timeoutMs: conf.timeoutMs }]);
         } else {
           throw new Error(`unsupported write fc: ${fc}`);
         }

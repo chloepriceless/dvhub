@@ -154,7 +154,9 @@ test('Pfad 1 Fronius/Deye: Netz-Sollwert nicht schreibbar, Flagge delegiert an d
   await r3.step('deye setpoint -500', () => de.ev.applyControlTarget('gridSetpointW', -500, 'rule:abend'));
   await r3.step('deye feedExcessDcPv 0', () => de.ev.applyControlTarget('feedExcessDcPv', 0, 'negative_price_protection'));
   await r3.step('deye workMode 2 direkt', () => de.ev.applyControlTarget('workMode', 2, 'api_manual_write'));
-  // Sequenz-Flagge ohne eigenes Register über den generischen Einzelregister-Zweig (nur feedExcessDcPv delegiert).
+  // Sequenz-Flagge ohne eigenes Register (nur feedExcessDcPv delegiert): bis 18.11.2026 ging sie über den generischen
+  // Einzelregister-Zweig auf Register 0 (W6 @0=1); seither abgelehnt (fix(control), kein Write ohne gültige Adresse,
+  // test/control-target-address-guard.test.js) — der einzige neu eingefrorene Schritt dieser Datei.
   await r3.step('deye dontFeedExcessAcPv 1 direkt', () => de.ev.applyControlTarget('dontFeedExcessAcPv', 1, 'api_manual_write'));
   golden.check('deye_reachable', r3.steps);
 });

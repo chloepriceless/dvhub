@@ -537,14 +537,10 @@
     },
     {
       "step": "deye dontFeedExcessAcPv 1 direkt",
-      "ok": true,
-      "writeType": "uint16",
-      "wire": [
-        "W6 gx/u1 @0=1"
-      ],
-      "events": [
-        "control_write"
-      ]
+      "ok": false,
+      "why": "no valid register address for dontFeedExcessAcPv (address=undefined), write blocked",
+      "wire": [],
+      "events": []
     }
   ]
 }
