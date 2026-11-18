@@ -198,6 +198,42 @@ describe('R-T3 GET /api/integration/loxone — ungültige Konfiguration (C2) und
   });
 });
 
+describe('R-T3 Urteil nach dem letzten Warten (Codex 36f71297 P1)', () => {
+  // integrationState wartet auf die Prognose; kommt der Not-Halt (oder wird die Config ungültig), während die Antwort
+  // noch auf sie wartet, darf sie nicht mit dem vorher gelesenen Sollwert hinausgehen.
+  for (const [label, change, reason, paused] of [
+    ['Not-Halt', (r) => { r.state.ctrl.discretionaryWritesPaused = true; }, 'not_halt', true],
+    ['ungültige Config', (r) => { r.cfg.writeSafety = UNSAFE; }, 'config_unsafe', false],
+  ]) {
+    for (const pathname of ['/api/integration/loxone', '/api/integration/home-assistant']) {
+      it(`${label} während des Wartens auf die Prognose: ${pathname} gibt keine Vorgabe heraus`, async () => {
+        const r = makeRig();
+        let release;
+        const gate = new Promise((resolve) => { release = resolve; });
+        let asked = 0;
+        r.ctx.forecastService = { buildForecastResponse: async () => { asked += 1; await gate; return null; } };
+        const pending = get(r, pathname);
+        for (let i = 0; i < 20 && asked === 0; i += 1) await new Promise((res) => setImmediate(res));
+        assert.equal(asked, 1, 'Antwort wartet auf die Prognose');
+        change(r);
+        release();
+        const body = await pending;
+        if (pathname.endsWith('loxone')) {
+          const lines = Object.fromEntries(body.split('\n').filter(Boolean).map((l) => { const i = l.indexOf('='); return [l.slice(0, i), l.slice(i + 1)]; }));
+          assertNoSetpoint(lines, reason, paused);
+          assert.equal(JSON.parse(lines.scheduleActive).gridSetpointW, null);
+        } else {
+          const s = JSON.parse(body);
+          assert.equal(s.dvhub_control_grid_setpoint_w, null);
+          assert.equal(s.dvhub_control_suspended, reason);
+          assert.equal(s.dvhub_control_paused, paused);
+          assert.equal(s.scheduleActive.gridSetpointW, null);
+        }
+      });
+    }
+  }
+});
+
 describe('R-T3 GET /api/integration/home-assistant', () => {
   it('Not-Halt: dieselben Steuerfelder und scheduleActive je Ziel null, Messwerte unverändert', async () => {
     const r = makeRig();

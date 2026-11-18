@@ -2350,6 +2350,20 @@ export function createApiRoutes(ctx) {
   }
 
   async function integrationState() {
+    // Erst warten, dann zusammenstellen (Codex 36f71297 P1): das Tor urteilt über die Steuerfelder NACH dem letzten
+    // await — sonst ginge ein vor einem Not-Halt gelesener Sollwert noch hinaus, wenn der Not-Halt kommt, während die
+    // Antwort auf die Prognose wartet. Ab hier läuft alles ohne Warten bis zur Rückgabe.
+    // Per-section error isolation (Plan 08-07 Task 2): one section failing must
+    // NOT 500 the whole integration endpoint. Failures attach to base.dvhub_errors[].
+    const sectionErrors = [];
+    let forecastResp = null;
+    try {
+      forecastResp = await ctx.forecastService?.buildForecastResponse?.();
+    } catch (err) {
+      sectionErrors.push({ section: 'forecast', error: err?.message ?? String(err) });
+      pushLog('integration_state_forecast_error', { error: err?.message ?? String(err) });
+    }
+
     const cfg = getCfg();
     // Steuerfelder (dvhub_control_*, scheduleActive) über das Tor: ein Urteil je Gerät für die ganze Antwort (R-T3).
     const handOut = pickup.handOut();
@@ -2378,16 +2392,6 @@ export function createApiRoutes(ctx) {
     Object.assign(base, pickup.flat(handOut));
 
     // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
-    // Per-section error isolation (Plan 08-07 Task 2): one section failing must
-    // NOT 500 the whole integration endpoint. Failures attach to base.dvhub_errors[].
-    const sectionErrors = [];
-    let forecastResp = null;
-    try {
-      forecastResp = await ctx.forecastService?.buildForecastResponse?.();
-    } catch (err) {
-      sectionErrors.push({ section: 'forecast', error: err?.message ?? String(err) });
-      pushLog('integration_state_forecast_error', { error: err?.message ?? String(err) });
-    }
     if (forecastResp) {
       // Duration-aware energy calculation (review concern: "summing powerW/1000 ignores slot duration")
       const pvSlots = forecastResp.pv?.slots || [];
