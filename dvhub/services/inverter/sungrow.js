@@ -295,23 +295,31 @@ export function decideEmsCommand({
   // Entlade-Boden (SoC < hardFloorSocPct): nur das ENTLADEN sperren. Das Laden aus PV-Überschuss bleibt
   // erlaubt (Sollwert 0 + Einspeisung → p > 0 → Laden bis Netz ≈ 0). Gilt nur im Forced-Pfad.
   const belowFloor = forced && fin(socPct) && fin(floorSocPct) && Number(socPct) < Number(floorSocPct);
+  let capped = false; // an einer harten Grenze geklemmt? → sichere Quantisierung (VÄ-12/I-SafeQuant)
   if (p > 0) {
+    if (p > Number(maxChargeW)) capped = true;
     p = Math.min(p, Number(maxChargeW));
     if (s <= 0 || noGridCharge === true) {
       const surplus = fin(pvW) && fin(loadW) ? Math.max(0, Number(pvW) - Number(loadW)) : 0;
-      if (p > surplus) { p = surplus; reason = 'charge_pv_only'; }
+      if (p > surplus) { p = surplus; reason = 'charge_pv_only'; capped = true; }
     }
   } else if (p < 0) {
     if (belowFloor) { p = 0; reason = 'discharge_floor'; } // SoC am Boden → kein Entladen (nur dieser Takt)
     else {
+      if (-p > Number(maxDischargeW)) capped = true;
       p = Math.max(p, -Number(maxDischargeW));
       if (s >= 0) {
         const netLoad = fin(pvW) && fin(loadW) ? Math.max(0, Number(loadW) - Number(pvW)) : 0;
-        if (-p > netLoad) { p = -netLoad; reason = 'discharge_load_only'; }
+        if (-p > netLoad) { p = -netLoad; reason = 'discharge_load_only'; capped = true; }
       }
     }
   }
-  const powerW = Math.round(Math.abs(p) / 10) * 10;
+  // I-SafeQuant / VÄ-12 (VCL-Vertrag): Wurde |p| an eine harte Grenze geklemmt (PV-Überschuss bei
+  // noGridCharge, maxCharge, netLoad, maxDischarge), zur SICHEREN Seite ABrunden — sonst reißt die
+  // 10-W-Quantisierung die Grenze wieder (156 W Überschuss → sonst 160 W Netzladen; Codex Runde 6/7, am
+  // Gerät belegt). Freie Regelwerte runden weiter normal (nearest).
+  const q = Math.abs(p) / 10;
+  const powerW = (capped ? Math.floor(q) : Math.round(q)) * 10;
   if (powerW < Math.max(0, Number(minPowerW) || 0)) return { mode: 'forced', command: 'stop', powerW: 0, reason };
   return { mode: 'forced', command: p > 0 ? 'charge' : 'discharge', powerW, reason };
 }

@@ -73,6 +73,15 @@ test('Regler: kein Netzbezug gewünscht → Laden nur aus dem PV-Überschuss', (
     { mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_pv_only' });
 });
 
+test('VÄ-12/I-SafeQuant: kein Netzladen, Überschuss 156 W → 150 W abgerundet (nie 160 = Netzladen)', () => {
+  // Codex Runde 6/7, am Gerät belegt: an einer harten Grenze (PV-Überschuss 656−500=156 W) muss die
+  // 10-W-Quantisierung ABrunden. round() machte 160 → 4 W Netzladen trotz noGridCharge; floor() macht 150.
+  const d = decideEmsCommand({ ...base, noGridCharge: true, setpointW: 4000, gridImportW: 0, batteryW: -500, pvW: 656, loadW: 500 });
+  assert.deepEqual([d.command, d.powerW, d.reason], ['charge', 150, 'charge_pv_only']);
+  // Gegenprobe: ein FREIER Regelwert (keine Grenze geklemmt) rundet weiter normal (nearest), nicht ab.
+  assert.equal(decideEmsCommand({ ...base, setpointW: 4000, gridImportW: 2800, batteryW: 2300, pvW: 0, loadW: 500 }).powerW, 3140);
+});
+
 test('Regler: keine Einspeisung gewünscht → Entladen höchstens die Netto-Last', () => {
   // S = +400, Netz −1600, Akku −2000, PV 0, Last 400: P = −2000 + 0,7 · 2000 = −600 → Netto-Last 400 → 400 W
   assert.deepEqual(decideEmsCommand({ ...base, setpointW: 400 + 1, gridImportW: -1600, batteryW: -2000, pvW: 0, loadW: 400 }),
