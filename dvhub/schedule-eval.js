@@ -35,7 +35,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
 import { createSungrowEms, endpointKeyOf, sungrowEmsConf, resolveSecondInverter } from './services/inverter/sungrow.js';
-import { createLegacyGate } from './services/gate/legacy.js';
+import { createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, unwrapLegacyWrite } from './services/gate/legacy.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -157,6 +157,11 @@ export function isMandatoryControlSource(source) {
   return MANDATORY_CONTROL_SOURCES.has(String(source));
 }
 
+// Schreibtor (VCL-Vertrag v6 A.5): Gründe einer PV-Sperre aus einer Pflichtquelle — dieselben drei wie
+// feedInMandatoryBlockReason() und policy.js DV_REASON_CLASS (§ 51 negativer Preis, Direktvermarkter-Abregelung,
+// §-14a-Produktionssperre). Eine solche Sperre ist `protectiveLimit`, jede andere (Regel, Handvorgabe) `command`.
+const DV_PROTECTIVE_REASONS = new Set(['negative_price_protection', 'dv_forced_off', 'paragraph14a_production_block']);
+
 /**
  * EOS "Akku halten" (closedLoopHold): positiver Sollwert, aber KEIN Netzladen.
  * Der Bezug deckt nur die Last und wird jeden Takt aus Live-Werten begrenzt
@@ -241,6 +246,41 @@ export function createScheduleEvaluator(ctx) {
     },
   });
   const sungrowEms = ctx.sungrowEms || createSungrowEms({ state, getCfg, transport, pushLog, gate: writeGate, statePath: ctx.sungrowEmsStatePath || null, slaveActuator: sungrowSlaveEms, forcedHeartbeatPath: ctx.sungrowForcedHeartbeatPath || null, modbusHealth: ctx.sungrowMasterHealth || null });
+
+  // === Schreibtor für die Abregel-Pfade (VCL-Vertrag v6 D.1 #2–#5, H-1 Phase 3, Legacy-Modus) ====================
+  // Die Abregel-Sequenzen (runDvControlSequence), die Einspeisegrenze 2706 (applyDvFeedInLimit), die Nulleinspeisung/
+  // der feste Deckel (zfiWrite) und die Victron-Direktregister/MQTT (applyDvVictronControl) schreiben über DAS Tor am
+  // Gerät `inverter` — dem Transport dieser Bewertung. Die Bestandsprüfungen (C2, Not-Halt, Geräte-Tor) bleiben VOR dem
+  // Tor und entscheiden wie heute. Je Lauf holt der Pfad direkt nach seiner Not-Halt-Prüfung eine Zulassung
+  // (admitLegacyRun): das Tor urteilt dann mit dem Not-Halt-Stand am Laufeingang — heute schreibt eine vor dem
+  // Eintritt begonnene Folge zu Ende. `inHalt` nennt die Regel, nach der die Prüfung des Pfads einen Lauf IM Not-Halt
+  // zulässt (die eine Freigabe einer eigenen Sperre, eine weiterlaufende Pflicht-Klasse, der Begrenzer davor).
+  // Schreibfreigabe des Tors aus derselben Config wie die C2-Prüfung des Laufs. Die Punkte des Geräts kommen aus dem
+  // Herstellerprofil: jeder wird vor seinem ersten Write angemeldet (D.0 — das Profil bestimmt im Legacy-Modus).
+  const invSinkKind = transport?.type === 'mqtt' ? 'mqtt' : 'modbus';
+  writeGate.attachSink(INVERTER_GATE_DEVICE, inverterLegacySink(transport));
+  const invPoints = new Set();
+  let invRunSeq = 0;
+  function admitInverterRun(loop, inHalt = null) {
+    invRunSeq += 1;
+    return { loop, seq: invRunSeq, step: 0, token: writeGate.admitLegacyRun(INVERTER_GATE_DEVICE, { inHalt }) };
+  }
+  async function submitInverter(run, cfg, { point, value, source, kind, action, fn, args }) {
+    if (!invPoints.has(point)) {
+      invPoints.add(point);
+      writeGate.setDevicePolicies(INVERTER_GATE_DEVICE,
+        Object.fromEntries([...invPoints].map((p) => [p, inverterLegacyPolicy(p, invSinkKind)])));
+    }
+    writeGate.setRelease(INVERTER_GATE_DEVICE, cfg?.writeSafety?.ok === false ? 'profileInvalid' : 'open');
+    const v = Number(value);
+    const op = {
+      device: INVERTER_GATE_DEVICE, point, value: Number.isFinite(v) ? v : 0, source: source || 'dv_control', kind, action,
+      lease: null, constraints: { set: {}, caps: {}, enforcedBy: [] }, validUntilMs: null,
+      tick: { loop: run.loop, seq: run.seq }, step: run.step++,
+      legacy: { sink: INVERTER_GATE_DEVICE, fn, args },
+    };
+    return unwrapLegacyWrite(await writeGate.submit(op, { run: run.token }), op);
+  }
 
   // Geräte-Tor (Profil identify.requiredForWrites): geschrieben wird erst, wenn
   // polling.js das Gerät erkannt hat und es unterstützt ist — ein falsches oder
@@ -816,8 +856,12 @@ export function createScheduleEvaluator(ctx) {
     }
   }
 
-  async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false, budgeted = false, budgetHoldExempt = false } = {}) {
+  // Schreibtor (D.1 #2): jeder Sequenz-Write geht über submitInverter. `gate` bringt der Aufrufer mit — die
+  // Lauf-Zulassung von SEINEM Eingang (hier gibt es keine eigene Not-Halt-Prüfung, die sitzt beim Aufrufer:
+  // applyDvVictronControl bzw. der Begrenzer vor applyDvFeedInLimit), die Aktionsklasse der ganzen Folge und die Quelle.
+  async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false, budgeted = false, budgetHoldExempt = false, gate: seqGate } = {}) {
     const cfg = getCfg();
+    if (!seqGate?.run) throw new Error('runDvControlSequence ohne Schreibtor-Lauf (Verdrahtungsfehler)');
     const gate = deviceWriteGate(cfg);
     if (gate) throw new Error(gate);
     // M14b Schreibbudget (nur Einspeise-Sequenzpfad, budgeted=true): ist das
@@ -925,11 +969,15 @@ export function createScheduleEvaluator(ctx) {
       const words = Array.isArray(encoded.words) && encoded.words.length ? encoded.words : [encoded.raw];
       const fc = Number(pconf.fc || (words.length > 1 ? 16 : 6));
       try {
-        if (fc === 16 || words.length > 1) {
-          await transport.mbWriteMultiple({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, values: words, timeoutMs: pconf.timeoutMs });
-        } else {
-          await transport.mbWriteSingle({ host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, value: words[0], timeoutMs: pconf.timeoutMs });
-        }
+        const multiple = fc === 16 || words.length > 1;
+        await submitInverter(seqGate.run, cfg, {
+          point: step.point, value, source: seqGate.source,
+          kind: step.restore === true ? 'restore' : 'sequenceStep', action: seqGate.action,
+          fn: multiple ? 'mbWriteMultiple' : 'mbWriteSingle',
+          args: [multiple
+            ? { host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, values: words, timeoutMs: pconf.timeoutMs }
+            : { host: pconf.host, port: pconf.port, unitId: pconf.unitId, address: pconf.address, value: words[0], timeoutMs: pconf.timeoutMs }],
+        });
       } catch (e) {
         // NEU1: Ein optionaler Schritt, dessen Register wirklich fehlt (alte
         // Firmware → Exception 1/2 erst beim Schreiben), darf die Sequenz nicht
@@ -1003,11 +1051,17 @@ export function createScheduleEvaluator(ctx) {
   // Steuerpunkt dvFeedInLimitW (Victron 2706 MaxFeedInPower). Der Wert vor der
   // ersten Begrenzung wird gesichert (persistiert) und bei limitW = null
   // zurückgeschrieben — eine vom Installateur gesetzte Grenze bleibt erhalten.
+  // Schreibtor (D.1 #4): der Pfad hat keine eigene Not-Halt-Prüfung — die sitzt im Begrenzer davor
+  // (feed-in-limit-arbiter.js: set/reapply nur für eine weiterlaufende Klasse, emergencyStop() die eine Rücknahme).
+  // So bleibt es: die Lauf-Zulassung nennt den Begrenzer als Regel (inHalt), auch ein Lauf im Not-Halt schreibt.
   async function applyDvFeedInLimit(limitW) {
     const steps = limitW == null
       ? [{ point: 'dvFeedInLimitW', restore: true }]
       : [{ point: 'dvFeedInLimitW', value: Math.max(0, Math.round(Number(limitW))), saveBefore: true }];
-    await runDvControlSequence(steps);
+    const run = admitInverterRun('event', 'feed_in_limit_arbiter');
+    await runDvControlSequence(steps, {
+      gate: { run, action: limitW == null ? 'autoRestore' : 'protectiveLimit', source: 'feed_in_limit' },
+    });
     pushLog('dv_feedin_limit_write', { limitW: limitW == null ? 'restore' : limitW });
   }
 
@@ -1023,15 +1077,16 @@ export function createScheduleEvaluator(ctx) {
   // die Solar.web-Werte). Mit Sicherung: genau die gesicherten Punkte
   // zurückschreiben; restore-Schritte ohne Sicherung (Absturz mitten in der
   // Sperre) bekommen keinen Default.
-  async function runFlagSequence(flag, steps, bootRelease, budgetHoldExempt = false) {
+  async function runFlagSequence(flag, steps, bootRelease, budgetHoldExempt = false, gate = undefined) {
     // M14b: nur der Einspeise-Sperrpfad (feedExcessDcPv → 13074/13087/13088/31222)
     // zählt gegen das dvControl-Tagesbudget; die AC-Variante (dontFeedExcessAcPv)
     // und die LUOX-Teilgrenze (2706, applyDvFeedInLimit) bleiben außen vor.
     // budgetHoldExempt (vom Aufrufer): eine Sperre oder ein ausdrücklicher Befehl
     // wird vom Hold ausgenommen (siehe runDvControlSequence), schreibt aber mit.
+    // gate: Schreibtor-Lauf von applyDvVictronControl (Zulassung, Aktionsklasse, Quelle).
     const budgeted = flag === 'feedExcessDcPv';
     if (!bootRelease) {
-      await runDvControlSequence(steps, { requirePersist: true, budgeted, budgetHoldExempt });
+      await runDvControlSequence(steps, { requirePersist: true, budgeted, budgetHoldExempt, gate });
       return false;
     }
     const saved = state.ctrl._dvSeqSaved || {};
@@ -1040,7 +1095,7 @@ export function createScheduleEvaluator(ctx) {
       pushLog('dv_release_skipped_no_own_block', { flag, points: steps.map((st) => st?.point) });
       return true;
     }
-    await runDvControlSequence(steps, { ownOnly: true, budgeted, budgetHoldExempt });
+    await runDvControlSequence(steps, { ownOnly: true, budgeted, budgetHoldExempt, gate });
     return false;
   }
 
@@ -1158,6 +1213,20 @@ export function createScheduleEvaluator(ctx) {
     // Eine Teil-Sperre (state.ctrl._dvPartialBlock) wird trotz gleichem Cache freigegeben.
     if (dvFeedInUnchanged(feedIn)) return;
 
+    // Schreibtor (D.1 #3 und die Sequenzen #2): Lauf-Zulassung direkt nach der Not-Halt-Prüfung oben — beide Flaggen
+    // samt ihren Sequenzen sind EIN Lauf (heute: keine Prüfung je Write). Im Not-Halt hat die Prüfung oben nur die eine
+    // Freigabe (emergency_stop_release) oder eine weiterlaufende Pflicht-Klasse zugelassen; der Grund ist die Regel.
+    // Aktionsklasse (A.5): Freigabe im Not-Halt = der Durchgang (haltNeutralize), ausdrücklicher Befehl = command,
+    // sonst die bequeme Wiederfreigabe (autoRestore); Sperre aus einer Pflichtquelle = protectiveLimit, sonst command.
+    const dvPaused = state.ctrl.discretionaryWritesPaused === true;
+    const dvGate = {
+      run: admitInverterRun('eval', dvPaused ? reason : null),
+      action: feedIn === true
+        ? (dvPaused && reason === 'emergency_stop_release' ? 'haltNeutralize' : (explicit ? 'command' : 'autoRestore'))
+        : (DV_PROTECTIVE_REASONS.has(String(reason)) ? 'protectiveLimit' : 'command'),
+      source: reason || 'dv_control',
+    };
+
     const results = {};
     // Erster Aufruf nach dem Start (Change-Cache leer) mit Freigabe: eine
     // Sequenz-Freigabe darf nur eine EIGENE Sperre aufheben (Entscheidung
@@ -1194,7 +1263,7 @@ export function createScheduleEvaluator(ctx) {
         if (Array.isArray(dc.feedExcessDcPv.sequence?.[String(val)])) {
           // M14b-Fix: Sperre (feedIn=false) oder ausdrücklicher Befehl (explicit)
           // nie vom Tagesbudget halten lassen — nur die automatische Freigabe.
-          skipped = await runFlagSequence('feedExcessDcPv', dc.feedExcessDcPv.sequence[String(val)], bootRelease, feedIn !== true || explicit === true);
+          skipped = await runFlagSequence('feedExcessDcPv', dc.feedExcessDcPv.sequence[String(val)], bootRelease, feedIn !== true || explicit === true, dvGate);
         } else if (transport.type === 'mqtt') {
           await transport.mqttWrite('feedExcessDcPv', val);
         } else {
@@ -1257,7 +1326,7 @@ export function createScheduleEvaluator(ctx) {
       try {
         let skipped = false;
         if (Array.isArray(dc.dontFeedExcessAcPv.sequence?.[String(val)])) {
-          skipped = await runFlagSequence('dontFeedExcessAcPv', dc.dontFeedExcessAcPv.sequence[String(val)], bootRelease);
+          skipped = await runFlagSequence('dontFeedExcessAcPv', dc.dontFeedExcessAcPv.sequence[String(val)], bootRelease, false, dvGate);
         } else if (transport.type === 'mqtt') {
           await transport.mqttWrite('dontFeedExcessAcPv', val);
         } else {
