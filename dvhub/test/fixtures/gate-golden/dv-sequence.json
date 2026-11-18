@@ -1,0 +1,814 @@
+{
+  "fronius_cycle": {
+    "steps": [
+      {
+        "step": "Sperre (§51)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 gx/u1 @40191 x1",
+          "R3 gx/u1 @40198 x1",
+          "W6 gx/u1 @40191=2",
+          "W6 gx/u1 @40198=55536"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Sperre gleich",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [],
+        "events": []
+      },
+      {
+        "step": "Freigabe automatisch",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 gx/u1 @40191=1",
+          "W6 gx/u1 @40198=60536"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Freigabe gleich",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [],
+        "events": []
+      },
+      {
+        "step": "Sperre erneut",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 gx/u1 @40191 x1",
+          "R3 gx/u1 @40198 x1",
+          "W6 gx/u1 @40191=2",
+          "W6 gx/u1 @40198=55536"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Freigabe per API (ausdrücklich)",
+        "ok": true,
+        "writeType": "sequence",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 gx/u1 @40191=1",
+          "W6 gx/u1 @40198=60536"
+        ],
+        "events": [
+          "dv_victron_write",
+          "control_write"
+        ]
+      }
+    ],
+    "regs": {
+      "40191": 1,
+      "40198": 60536
+    }
+  },
+  "fronius_restart": {
+    "before": [
+      {
+        "step": "Start-Freigabe ohne Sicherung",
+        "feedExcessDcPv": "ok:no_own_block",
+        "lastFeedIn": true,
+        "wire": [],
+        "events": [
+          "dv_release_skipped_no_own_block"
+        ]
+      },
+      {
+        "step": "Sperre (legt Sicherung an)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 gx/u1 @40191 x1",
+          "R3 gx/u1 @40198 x1",
+          "W6 gx/u1 @40191=2",
+          "W6 gx/u1 @40198=55536"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "saved": {
+      "storCtlMod": 1,
+      "outWRte": -50
+    },
+    "after": [
+      {
+        "step": "Start-Freigabe mit eigener Sicherung",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 gx/u1 @40191=1",
+          "W6 gx/u1 @40198=60536"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "savedAfter": {}
+  },
+  "fronius_errors": {
+    "readError": [
+      {
+        "step": "Sperre mit Lese-Zeitüberschreitung",
+        "feedExcessDcPv": "err:timeout",
+        "lastFeedIn": null,
+        "wire": [
+          "R3 gx/u1 @40191 x1 !timeout"
+        ],
+        "events": [
+          "dv_victron_write_error"
+        ]
+      },
+      {
+        "step": "Sperre erneut (nächster Takt)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 gx/u1 @40191 x1",
+          "R3 gx/u1 @40198 x1",
+          "W6 gx/u1 @40191=2",
+          "W6 gx/u1 @40198=55536"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "writeSafety": [
+      {
+        "step": "Sperre bei writeSafety.ok=false",
+        "dv": "none",
+        "wire": [],
+        "events": [
+          "control_write_blocked_config_unsafe"
+        ]
+      }
+    ]
+  },
+  "deye-lv_cycle": {
+    "steps": [
+      {
+        "step": "Sperre (§51)",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 gx/u1 @142 x1",
+          "W6 gx/u1 @142=2"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Sperre gleich",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [],
+        "events": []
+      },
+      {
+        "step": "Freigabe automatisch",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 gx/u1 @142=1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Freigabe gleich",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [],
+        "events": []
+      },
+      {
+        "step": "Sperre erneut",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 gx/u1 @142 x1",
+          "W6 gx/u1 @142=2"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Freigabe per API (ausdrücklich)",
+        "ok": false,
+        "why": "write target not enabled in config",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [],
+        "events": []
+      }
+    ],
+    "regs": {
+      "142": 2
+    }
+  },
+  "deye-lv_restart": {
+    "before": [
+      {
+        "step": "Start-Freigabe ohne Sicherung",
+        "dontFeedExcessAcPv": "ok:no_own_block",
+        "lastFeedIn": true,
+        "wire": [],
+        "events": [
+          "dv_release_skipped_no_own_block"
+        ]
+      },
+      {
+        "step": "Sperre (legt Sicherung an)",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 gx/u1 @142 x1",
+          "W6 gx/u1 @142=2"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "saved": {
+      "workMode": 1
+    },
+    "after": [
+      {
+        "step": "Start-Freigabe mit eigener Sicherung",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 gx/u1 @142=1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "savedAfter": {}
+  },
+  "deye-lv_errors": {
+    "readError": [
+      {
+        "step": "Sperre mit Lese-Zeitüberschreitung",
+        "dontFeedExcessAcPv": "err:timeout",
+        "lastFeedIn": null,
+        "wire": [
+          "R3 gx/u1 @142 x1 !timeout"
+        ],
+        "events": [
+          "dv_victron_write_error"
+        ]
+      },
+      {
+        "step": "Sperre erneut (nächster Takt)",
+        "dontFeedExcessAcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 gx/u1 @142 x1",
+          "W6 gx/u1 @142=2"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "writeSafety": [
+      {
+        "step": "Sperre bei writeSafety.ok=false",
+        "dv": "none",
+        "wire": [],
+        "events": [
+          "control_write_blocked_config_unsafe"
+        ]
+      }
+    ]
+  },
+  "sungrow_cycle": {
+    "steps": [
+      {
+        "step": "Sperre (§51)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 sg/u1 @13087 x1",
+          "R3 sg/u1 @13073 x1",
+          "R3 sg/u1 @31221 x1",
+          "R3 sg/u1 @13086 x1",
+          "W6 sg/u1 @13087=0",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=0",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Sperre gleich",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [],
+        "events": []
+      },
+      {
+        "step": "Freigabe automatisch",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 sg/u1 @13087=700",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=5000",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Freigabe gleich",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [],
+        "events": []
+      },
+      {
+        "step": "Sperre erneut",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 sg/u1 @13087 x1",
+          "R3 sg/u1 @13073 x1",
+          "R3 sg/u1 @31221 x1",
+          "R3 sg/u1 @13086 x1",
+          "W6 sg/u1 @13087=0",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=0",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Freigabe per API (ausdrücklich)",
+        "ok": true,
+        "writeType": "sequence",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 sg/u1 @13087=700",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=5000",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write",
+          "control_write"
+        ]
+      }
+    ],
+    "regs": {
+      "13073": 5000,
+      "13086": 170,
+      "13087": 700,
+      "31221": 0
+    }
+  },
+  "sungrow_restart": {
+    "before": [
+      {
+        "step": "Start-Freigabe ohne Sicherung",
+        "feedExcessDcPv": "ok:no_own_block",
+        "lastFeedIn": true,
+        "wire": [],
+        "events": [
+          "dv_release_skipped_no_own_block"
+        ]
+      },
+      {
+        "step": "Sperre (legt Sicherung an)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 sg/u1 @13087 x1",
+          "R3 sg/u1 @13073 x1",
+          "R3 sg/u1 @31221 x1",
+          "R3 sg/u1 @13086 x1",
+          "W6 sg/u1 @13087=0",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=0",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "saved": {
+      "feedInLimitRatio": 700,
+      "feedInLimitW": 5000,
+      "feedInLimitEnable": 170
+    },
+    "after": [
+      {
+        "step": "Start-Freigabe mit eigener Sicherung",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 sg/u1 @13087=700",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=5000",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "savedAfter": {}
+  },
+  "sungrow_errors": {
+    "readError": [
+      {
+        "step": "Sperre mit Lese-Zeitüberschreitung",
+        "feedExcessDcPv": "err:timeout",
+        "lastFeedIn": null,
+        "wire": [
+          "R3 sg/u1 @13087 x1",
+          "R3 sg/u1 @13073 x1 !timeout"
+        ],
+        "events": [
+          "dv_victron_write_error"
+        ]
+      },
+      {
+        "step": "Sperre erneut (nächster Takt)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 sg/u1 @13087 x1",
+          "R3 sg/u1 @13073 x1",
+          "R3 sg/u1 @31221 x1",
+          "R3 sg/u1 @13086 x1",
+          "W6 sg/u1 @13087=0",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=0",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "writeSafety": [
+      {
+        "step": "Sperre bei writeSafety.ok=false",
+        "dv": "none",
+        "wire": [],
+        "events": [
+          "control_write_blocked_config_unsafe"
+        ]
+      }
+    ]
+  },
+  "fronius_nothalt_mid_sequence": {
+    "steps": [
+      {
+        "step": "Sperre, Schritt 2 verworfen",
+        "feedExcessDcPv": "err:modbus write verworfen (Not-Halt seit dem Einreihen)@1",
+        "lastFeedIn": null,
+        "partial": true,
+        "wire": [
+          "R3 gx/u1 @40191 x1",
+          "R3 gx/u1 @40198 x1",
+          "W6 gx/u1 @40191=2",
+          "W6 gx/u1 @40198=55536 !modbus write verworfen (Not-Halt seit dem Einreihen)"
+        ],
+        "events": [
+          "dv_victron_write_error"
+        ]
+      },
+      {
+        "step": "Sperre im Not-Halt",
+        "feedExcessDcPv": "err:modbus write verworfen (Not-Halt seit dem Einreihen)@1",
+        "lastFeedIn": null,
+        "partial": true,
+        "wire": [],
+        "events": [
+          "dv_write_blocked_nothalt"
+        ]
+      },
+      {
+        "step": "Freigabe im Not-Halt ohne Not-Halt-Grund",
+        "feedExcessDcPv": "err:modbus write verworfen (Not-Halt seit dem Einreihen)@1",
+        "lastFeedIn": null,
+        "partial": true,
+        "wire": [],
+        "events": []
+      },
+      {
+        "step": "Freigabe im Not-Halt (emergency_stop_release)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 gx/u1 @40191=1",
+          "W6 gx/u1 @40198=60536"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "zweite Freigabe im Not-Halt",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [],
+        "events": []
+      }
+    ],
+    "regs": {
+      "40191": 1,
+      "40198": 60536
+    }
+  },
+  "sungrow_budget_exhausted": {
+    "steps": [
+      {
+        "step": "Sperre bei leerem Budget",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 sg/u1 @13087 x1",
+          "R3 sg/u1 @13073 x1",
+          "R3 sg/u1 @31221 x1",
+          "R3 sg/u1 @13086 x1",
+          "W6 sg/u1 @13087=0",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=0",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Automatik-Freigabe bei leerem Budget",
+        "feedExcessDcPv": "budgetHold",
+        "lastFeedIn": false,
+        "wire": [],
+        "events": [
+          "dv_control_seq_budget"
+        ]
+      },
+      {
+        "step": "Freigabe per API bei leerem Budget",
+        "ok": true,
+        "writeType": "sequence",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 sg/u1 @13087=700",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=5000",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write",
+          "control_write"
+        ]
+      }
+    ],
+    "budget": 22
+  },
+  "fronius_budget_exhausted": [
+    {
+      "step": "Sperre (letzte Sequenz im Budget)",
+      "feedExcessDcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "R3 gx/u1 @40191 x1",
+        "R3 gx/u1 @40198 x1",
+        "W6 gx/u1 @40191=2",
+        "W6 gx/u1 @40198=55536"
+      ],
+      "events": [
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Automatik-Freigabe bei leerem Budget",
+      "feedExcessDcPv": "budgetHold",
+      "lastFeedIn": false,
+      "wire": [],
+      "events": [
+        "dv_control_seq_budget"
+      ]
+    }
+  ],
+  "sungrow_device_faults": {
+    "readbackMismatch": [
+      {
+        "step": "Sperre, 13073 wird verworfen",
+        "feedExcessDcPv": "err:Rücklesung feedInLimitW weicht ab (Soll 0, Ist 5000)@2",
+        "lastFeedIn": null,
+        "partial": true,
+        "wire": [
+          "R3 sg/u1 @13087 x1",
+          "R3 sg/u1 @13073 x1",
+          "R3 sg/u1 @31221 x1",
+          "R3 sg/u1 @13086 x1",
+          "W6 sg/u1 @13087=0",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=0",
+          "R3 sg/u1 @13073 x1"
+        ],
+        "events": [
+          "dv_seq_readback_mismatch",
+          "dv_victron_write_error"
+        ]
+      },
+      {
+        "step": "Freigabe der Teil-Sperre",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 sg/u1 @13087=700",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=5000",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "restoreAlreadySet": [
+      {
+        "step": "Sperre",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 sg/u1 @13087 x1",
+          "R3 sg/u1 @13073 x1",
+          "R3 sg/u1 @31221 x1",
+          "R3 sg/u1 @13086 x1",
+          "W6 sg/u1 @13087=0",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=0",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Freigabe, 13086 mit Ausnahme 4 (Wert übernommen)",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 sg/u1 @13087=700",
+          "R3 sg/u1 @13087 x1",
+          "W6 sg/u1 @13073=5000",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @13086=170 !modbus exception 4",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_seq_restore_already_set",
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "verifyInconclusive": [
+      {
+        "step": "Sperre, Rücklesung 13087 unklar",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 sg/u1 @13087 x1",
+          "R3 sg/u1 @13073 x1",
+          "R3 sg/u1 @31221 x1",
+          "R3 sg/u1 @13086 x1",
+          "W6 sg/u1 @13087=0",
+          "R3 sg/u1 @13087 x1 !modbus exception 4",
+          "R3 sg/u1 @13087 x1 !modbus exception 4",
+          "W6 sg/u1 @13073=0",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_seq_verify_inconclusive",
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "oldFirmware": [
+      {
+        "step": "Sperre ohne 13087",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": false,
+        "wire": [
+          "R3 sg/u1 @13087 x1 !modbus exception 2",
+          "R3 sg/u1 @13073 x1",
+          "R3 sg/u1 @31221 x1",
+          "R3 sg/u1 @13086 x1",
+          "W6 sg/u1 @13073=0",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @31221=0",
+          "R3 sg/u1 @31221 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      },
+      {
+        "step": "Freigabe ohne 13087",
+        "feedExcessDcPv": "ok",
+        "lastFeedIn": true,
+        "wire": [
+          "W6 sg/u1 @13073=5000",
+          "R3 sg/u1 @13073 x1",
+          "W6 sg/u1 @13086=170",
+          "R3 sg/u1 @13086 x1"
+        ],
+        "events": [
+          "dv_victron_write"
+        ]
+      }
+    ],
+    "endpointChanged": [
+      {
+        "step": "Sperre nach Endpunktwechsel",
+        "feedExcessDcPv": "err:device_not_identified",
+        "lastFeedIn": null,
+        "wire": [],
+        "events": [
+          "dv_victron_write_error"
+        ]
+      }
+    ]
+  }
+}
