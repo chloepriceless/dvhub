@@ -1,0 +1,114 @@
+{
+  "label": "Growatt SPH (Speicher-Block 1000+) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (Bezug und Einspeisung am Growatt-Zähler), PV, Akku-Leistung, SoC und Hauslast aus den Input-Registern eines Growatt SPH (Modbus TCP über ein RS485-Gateway, Port 502, Unit-ID 1). DVhub schreibt nichts an den Wechselrichter. Alle Register stammen aus Community-Quellen und einer Referenzimplementierung, nicht aus einer Herstellerdoku. Anleitung: docs/hersteller/growatt-sph.md.",
+  "_doc": [
+    "Growatt SPH (SPH 3000–6000TL BL-UP 1-phasig, SPH 4000–10000TL3 BH-UP 3-phasig) mit Speicher-Registerblock 1000+",
+    "und Growatt-Zähler/CT am Netzanschluss. SPA (AC-gekoppelt) nutzt laut Community denselben Block, ungeprüft (PV-",
+    "Register dort 0). NICHT für MIN TL-XH, MOD/MID TL3-XH (Block 3000+) und MIN TL-XH2/WIT (Block 30000+): Growatt hat",
+    "drei Adressfamilien, die nicht vermischt werden dürfen — daher das Familien-Suffix in der ID.",
+    "NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit dvControl.enabled in der",
+    "config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): Keine Herstellerdoku für den Speicher-Block (das öffentliche „Modbus RTU Protocol",
+    "II“ V1.24 lag nur für Register 0–93 vor). [DECOMP] Plexlog GrowattProtocollA (1009/1011 Akku, 1014 SoC, 1021/",
+    "1029 Netz, alles FC 04, Leistungen 0,1 W, 32 bit High-Wort zuerst) · [COMM] evcc templates/definition/meter/",
+    "growatt-hybrid.yaml (Netz = 1021 × 0,1 − 1029 × 0,1; Akku = 1009 × 0,1 − 1011 × 0,1 bei evcc-Konvention",
+    "+ = Entladen; PV = Input 1 × 0,1; SoC 1014; alles input, uint32) · [COMM] 8none1/growatt_sph_nodered (1037–1038",
+    "„Total power to load“). Zusammenfassung: .planning/docs/research/2026-11-15-growatt-modbus-control-spec.md §1–2",
+    "und 2026-11-18-hersteller-lesend-luecken.md §3.12.",
+    "",
+    "Transport: Der WR spricht Modbus RTU (RS485, 9600 8N1). DVhub braucht Modbus TCP: ein RS485-Ethernet-Gateway im",
+    "Modus Modbus TCP (nicht transparent), Port 502, Unit-ID = Modbus-Adresse des WR (Werkseinstellung 1). Shine-",
+    "Sticks sprechen mit der Growatt-Cloud, nicht lokal Modbus TCP (je Modell/Firmware verschieden, ungeprüft).",
+    "Telemetrie liegt in Input-Registern (FC 04). Achtung: Holding 1037 (FC 03) ist der CT-Modus, nicht die Last.",
+    "",
+    "Netz und Akku liefert das Gerät als zwei vorzeichenlose Beträge; DVhub bildet die Differenz (combine), wie evcc",
+    "und Plexlog. Ist einer der beiden Summanden ohne Wert, ist die Differenz unbekannt.",
+    "",
+    "Bewusst NICHT gelesen bzw. nicht abbildbar:",
+    "- Familienwahl über Holding 88 (Protokollversion) bzw. 30099 (VPP-Version): DVhub prüft nicht, welche Familie",
+    "  antwortet (E10). Ein MIN/MOD-Gerät liefert in 1000+ vermutlich Fehler oder Unsinn.",
+    "- PV je MPPT (Input 5–6, 9–10, …): nicht nötig, Input 1 ist die PV-Summe (evcc); als combine nachtragbar.",
+    "- Netz je Phase: Phasenregister des Blocks in keiner gelesenen Quelle belegt; Phasenwerte bleiben leer.",
+    "- Gerätegrenzen: in den Quellen keine Lade-/Entladeleistungs-Register für den Speicher-Block."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz = Bezug − Einspeisung: Input 1021–1022 „AC power to user total“ minus Input 1029–1030 „AC power to grid total“ (je U32, 0,1 W) [DECOMP] Plexlog, [COMM] evcc (1021 × 0,1 und 1029 × −0,1). + = Bezug, DVhubs Konvention. Beide Werte sind Beträge; das Vorzeichen entsteht aus der Differenz, nicht aus dem Gerät. Ohne Zähler/CT sind beide 0. 0xFFFFFFFF als „kein Wert“ defensiv [ANN].",
+    "layout": "point",
+    "fc": 4,
+    "readType": "uint32",
+    "scale": 0.1,
+    "notAvailableRaw": [4294967295],
+    "combine": [
+      { "address": 1021 },
+      { "address": 1029, "sign": -1 }
+    ]
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "SoC, Input 1014 (U16, 1 %) [DECOMP] Plexlog, [COMM] evcc (uint16 ohne Skala). 0xFFFF als „kein Wert“ defensiv [ANN].",
+      "enabled": true,
+      "fc": 4,
+      "address": 1014,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [65535]
+    },
+    "batteryPowerW": {
+      "_comment": "Akku = Laden − Entladen: Input 1011–1012 „Charge power“ minus Input 1009–1010 „Discharge power“ (je U32, 0,1 W) [DECOMP]/[COMM] evcc (1009 × 0,1 − 1011 × 0,1 bei evcc-Konvention + = Entladen). + = Laden, DVhubs Konvention. 0xFFFFFFFF als „kein Wert“ defensiv [ANN].",
+      "enabled": true,
+      "fc": 4,
+      "readType": "uint32",
+      "scale": 0.1,
+      "offset": 0,
+      "notAvailableRaw": [4294967295],
+      "combine": [
+        { "address": 1011 },
+        { "address": 1009, "sign": -1 }
+      ]
+    },
+    "pvPowerW": {
+      "_comment": "PV gesamt, Input 1–2 „Ppv“ (U32, 0,1 W) [COMM] evcc (input 1, uint32, scale 0.1); laut Growatt-Protokoll V1.24 die PV-Eingangsleistung [SPEC, Auszug]. Plexlog summiert stattdessen die MPPT-Register (Input 5–6, 9–10, …) [DECOMP]. 0xFFFFFFFF als „kein Wert“ defensiv [ANN].",
+      "enabled": true,
+      "fc": 4,
+      "address": 1,
+      "quantity": 2,
+      "readType": "uint32",
+      "scale": 0.1,
+      "offset": 0,
+      "notAvailableRaw": [4294967295]
+    },
+    "selfConsumptionW": {
+      "_comment": "Hauslast, Input 1037–1038 „Total power to load“ (U32) [COMM] 8none1 — nicht in Plexlog, nicht in evcc. UNSICHER (am Gerät prüfen): Skala 0,1 W angenommen wie alle übrigen Leistungen des Blocks [ANN]; eine ESPHome-Konfiguration liest es ohne Faktor. Liefert das Register keinen Wert oder einen Fehler, rechnet DVhub die Last aus der Energiebilanz (PV + Bezug − Einspeisung − Akku). Holding 1037 (FC 03) ist der CT-Modus — hier FC 04.",
+      "enabled": true,
+      "fc": 4,
+      "address": 1037,
+      "quantity": 2,
+      "readType": "uint32",
+      "scale": 0.1,
+      "offset": 0,
+      "notAvailableRaw": [4294967295],
+      "derive": "energy_balance"
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}

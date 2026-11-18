@@ -1,6 +1,9 @@
 {
   "_doc": "sha256 aller je ausgelieferten Versionen jedes Herstellerprofils. Genutzt von scripts/reconcile-vendor-profiles.mjs: aktives Profil mit bekanntem Hash = unverändert → beim Update überschrieben; unbekannter Hash = Operator-Edit → neue Version als .dist. Regenerieren mit scripts/gen-vendor-profile-hashes.mjs.",
   "profiles": {
+    "alphaess-smile.json": [
+      "7837ca260171f8965d31ccaac164204466931b2bb647e295ce9812a7a8eddfaf"
+    ],
     "bridge-mqtt.json": [
       "078d400de35611006542e5b39f6266d99ec61a98fc895d93e9b1d88f8a945fdb",
       "90ece226a67c6978eec7f192dbea3c93c7856c35486a0da00b73b7d089abedff",
@@ -52,6 +55,9 @@
     "goodwe-et.json": [
       "4368904258c53cc0d6d2e9561cd6fcaa02ed559a73968fbe5dff2360e0072a58"
     ],
+    "growatt-sph.json": [
+      "ab4ac3b836fe727946592922755197051491c7cfb37313ca77c74f7004dddb17"
+    ],
     "huawei-sun2000.json": [
       "c6f4e18653c41758b772dacc80c9ae57f8a27c61d63dc661e1b74d4a2f851183",
       "c776e5821d06021c66799434aae30e013c6f01012842a41c1500e98e401cf471"
@@ -59,8 +65,14 @@
     "kostal-plenticore.json": [
       "445b5a6620ddf816974c1fd952fd6df56fdee2e4f1564d6eea36a478e1319c9a"
     ],
+    "lg-ess-home.json": [
+      "8443e66bc47af3c4b9c973f027b0fa1d7de4a08291c69c46a2a40a7904282d34"
+    ],
     "sofar.json": [
       "375f1004992136c6537bdea7b8d87a7ea0198a4257072fc756f70d36c4b3c005"
+    ],
+    "solaredge-storedge.json": [
+      "232998e585456bb786a04d5ba0d4e1aae4cab465768e2d75b264a8c8fcbe842b"
     ],
     "solax-g4.json": [
       "509a7ab2ac4980d561b2ae85c3adb385eec6fa7d0ddbd4000edd878f0759f3ca"

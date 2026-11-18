@@ -215,6 +215,10 @@ const MANUFACTURER_LABELS = {
   'goodwe-et': 'GoodWe ET/EH/BT/BH — nur Anzeige',
   'kostal-plenticore': 'Kostal PLENTICORE / PIKO IQ — nur Anzeige',
   'solax-g4': 'SolaX X1/X3-Hybrid G4 — nur Anzeige',
+  'lg-ess-home': 'LG ESS Home 8/10 — nur Anzeige',
+  'solaredge-storedge': 'SolarEdge StorEdge — nur Anzeige',
+  'alphaess-smile': 'AlphaESS SMILE — nur Anzeige',
+  'growatt-sph': 'Growatt SPH — nur Anzeige',
 };
 
 // Ausgewählter Provider/Hersteller (menschenlesbar) — nur Auswahl, kein Host.
