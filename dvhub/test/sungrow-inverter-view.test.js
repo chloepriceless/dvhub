@@ -103,16 +103,16 @@ test('N3: Slave-Takt = Regelzyklus des Masters + eigener Lesetakt, beide benannt
     sungrowEmsSlave: { controlMode: 'forced', owns: true, regulateEveryMs: 5000, decision: { mode: 'forced', command: 'discharge', powerW: 300 } },
   };
   const vw = V.view(status);
-  assert.equal(vw.slave.regulate, 'Regelzyklus 1000 ms (Master-Takt) · Lesetakt 5000 ms');
+  assert.equal(vw.slave.regulate, 'Regelzyklus 1000 ms (gleicher Takt wie Master) · Lesetakt 5000 ms');
   assert.equal(vw.master.regulate, 'Regelzyklus 1000 ms', 'Master unverändert');
   // Ohne Lesetakt nur der Regelzyklus; ohne beides ein Strich.
-  assert.equal(V.view({ ...status, sungrowSecond: { ...status.sungrowSecond, tickMs: null } }).slave.regulate, 'Regelzyklus 1000 ms (Master-Takt)');
+  assert.equal(V.view({ ...status, sungrowSecond: { ...status.sungrowSecond, tickMs: null } }).slave.regulate, 'Regelzyklus 1000 ms (gleicher Takt wie Master)');
   assert.equal(V.view({ ...status, sungrowSecond: { ...status.sungrowSecond, tickMs: null }, sungrowEms: { ...status.sungrowEms, regulateEveryMs: null } }).slave.regulate, '–');
   // render: die Slave-EMS-Zeile trägt beide Werte.
   const els = {};
   const doc = { getElementById: (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false })) };
   V.render(status, doc);
-  assert.match(els.sungrowWrSlaveEms.textContent, /Takt Regelzyklus 1000 ms \(Master-Takt\) · Lesetakt 5000 ms$/);
+  assert.match(els.sungrowWrSlaveEms.textContent, /Takt Regelzyklus 1000 ms \(gleicher Takt wie Master\) · Lesetakt 5000 ms$/);
 });
 
 test('External-Split: je WR EIGENER Anteil (nicht Summe), Akku mit Richtung, wirksame Grenze, Countdown in Modus 3', () => {
