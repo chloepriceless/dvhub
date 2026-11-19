@@ -2,7 +2,7 @@
   "label": "AlphaESS SMILE (SMILE5/B3/G3) — nur Anzeige",
   "beta": true,
   "readOnly": true,
-  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (AlphaESS-Netzzähler), PV (MPPT 1–3), Akku-Leistung und SoC am EMS (Modbus TCP, Port 502, Unit-ID 85) und rechnet die Hauslast aus der Energiebilanz. DVhub schreibt nichts an das Gerät. AlphaESS verlangt über 300 ms Abstand zwischen zwei Anfragen; DVhub fragt die Werte noch direkt nacheinander ab, einzelne Lesefehler sind deshalb möglich. Anleitung: docs/hersteller/alphaess-smile.md.",
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (AlphaESS-Netzzähler), PV (MPPT 1–3), Akku-Leistung und SoC am EMS (Modbus TCP, Port 502, Unit-ID 85) und rechnet die Hauslast aus der Energiebilanz. DVhub schreibt nichts an das Gerät. AlphaESS verlangt über 300 ms Abstand zwischen zwei Anfragen; DVhub hält 400 ms ein. Anleitung: docs/hersteller/alphaess-smile.md.",
   "_doc": [
     "AlphaESS SMILE-Reihe am EMS mit Modbus TCP: SMILE5, SMILE-B3/-B3-Plus, SMILE-Hi, SMILE-G3 (einphasig und T-Serie),",
     "Storion-SMILE. Die Leseregister sind auf beiden Plattformen gleich (evcc nutzt ein Profil für alle; die G3-",
@@ -25,17 +25,16 @@
     "neueren Liste (0x21). Ein Gerät mit V1.17-Firmware kennt 0x21 vermutlich nicht → Zählerfehler statt falscher Zahl.",
     "",
     "Transport: Modbus TCP Port 502 (die Doku schreibt „0x502“, gemeint ist 502), Unit-ID 85 (0x55), FC 03, High-Wort",
-    "zuerst. TCP nur bei EMS mit Seriennummer AL701…. „Instruction interval > 300 ms“ [SPEC]: DVhub hat keinen",
-    "Mindestabstand zwischen Anfragen (E7) und fragt je Takt 6 Register direkt nacheinander ab. Folge: einzelne",
-    "Lesefehler oder Zeitüberschreitungen möglich, bis E7 existiert. Ein längeres Poll-Intervall verringert die Zahl der",
-    "Takte, nicht den Abstand innerhalb eines Takts.",
+    "zuerst. TCP nur bei EMS mit Seriennummer AL701…. „Instruction interval > 300 ms“ [SPEC]: seit E7 hält DVhub 400 ms",
+    "zwischen zwei Anfragen (victron.requestPacing, ab dem Ende der Antwort, wie Solis); ein Takt mit 6 Lesungen dauert",
+    "damit gut 2 s. Am Gerät prüfen, ob Lesefehler bleiben.",
     "",
     "Bewusst NICHT gelesen bzw. nicht abbildbar:",
     "- PV4–PV6 (neuere Liste 0x42B/0x42F/0x433): in V1.17 ist 0x42A–0x42B „Inverter warning“ — auf älterer Firmware",
     "  läse DVhub ein Warn-Bitfeld als PV. Nur PV1–PV3 liegen in beiden Fassungen gleich.",
     "- AC-gekoppelte PV am PV-Zähler (neuere Liste 0xA1, V1.17 0x12): Adresse je Fassung verschieden → nicht gelesen;",
     "  bei AC-gekoppelter PV fehlt deren Leistung in PV und Hauslast.",
-    "- Netz je Phase (0x1B/0x1D/0x1F): je eine Anfrage mehr, bei E7-Mangel ungünstig; ließen sich als meter.phases",
+    "- Netz je Phase (0x1B/0x1D/0x1F): je eine Anfrage mehr (mit Abstand je gut 0,4 s); ließen sich als meter.phases",
     "  nachtragen.",
     "- Hauslast: kein Lastregister in der Spec → Energiebilanz.",
     "- Plattform (Dispatch 0x0722 vs. 0x0880) und Seriennummer: DVhub prüft sie nicht (E10); fürs Lesen egal."
@@ -45,7 +44,11 @@
     "transport": "modbus",
     "port": 502,
     "unitId": 85,
-    "timeoutMs": 2000
+    "timeoutMs": 2000,
+    "requestPacing": {
+      "_comment": "E7: „Instruction interval > 300 ms“ [SPEC V1.17]. DVhub hält wie bei Solis 400 ms, gemessen vom Ende der Antwort bis zur nächsten Anfrage. Ein Registerdeckel ist nicht belegt; das Profil liest höchstens 2 Register je Anfrage.",
+      "minRequestGapMs": 400
+    }
   },
 
   "meter": {

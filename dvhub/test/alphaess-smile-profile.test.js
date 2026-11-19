@@ -7,6 +7,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createRegisterDevice, createPollerRig } from './helpers/fake-modbus-device.js';
+import { createModbusTransport, modbusPacingFromConfig, normalizeModbusPacing } from '../transport-modbus.js';
+import { installFakeModbusSockets, advance, flush, enableFakeClock, disableFakeClock } from './helpers/fake-modbus-socket.js';
 import {
   TEST_HOST, readShippedProfile, setupProfile, loadProfile, writeTargets, evaluatorWrites, writableVariant, dropdown, readSet,
 } from './helpers/read-only-profile-rig.js';
@@ -33,7 +35,7 @@ function effective() {
 
 // --- Profil -----------------------------------------------------------------------------------------------------
 
-test('alphaess-smile.json: Nur-Lese-Profil, Beta, Label und Hilfetext sagen es offen (auch die fehlende Taktung)', () => {
+test('alphaess-smile.json: Nur-Lese-Profil, Beta, Label und Hilfetext sagen es offen (auch den Anfrage-Abstand)', () => {
   const raw = readShippedProfile(ID);
   assert.equal(raw.readOnly, true);
   assert.equal(raw.beta, true);
@@ -41,7 +43,7 @@ test('alphaess-smile.json: Nur-Lese-Profil, Beta, Label und Hilfetext sagen es o
   assert.match(raw.label, /— nur Anzeige$/);
   assert.ok(raw.label.length <= 64, 'Dropdown kürzt Labels auf 64 Zeichen');
   assert.match(raw.help, /^Nur Anzeige, keine Steuerung, am Gerät ungeprüft\./);
-  assert.match(raw.help, /300 ms/, 'Hilfetext nennt die fehlende Anfrage-Taktung (E7)');
+  assert.match(raw.help, /300 ms.*400 ms/, 'Hilfetext nennt Herstellerregel und gehaltenen Abstand (E7)');
   assert.match(raw.help, /docs\/hersteller\/alphaess-smile\.md/);
   assert.equal(raw.identify, undefined, 'keine Geräteerkennung (E10 fehlt) — nichts vortäuschen');
 });
@@ -192,4 +194,32 @@ test('Dropdown: im Stable-Kanal ausgeblendet, im Bleeding-Edge-Kanal sichtbar, a
   assert.equal(dev.beta, true);
   assert.match(dev.label, /AlphaESS SMILE.*nur Anzeige/);
   assert.ok(values(dropdown(configPath, 'stable', ID)).includes(ID), 'aktives Profil fällt nie aus der Liste');
+});
+
+// --- E7: Abstand zwischen den Anfragen ------------------------------------------------------------------------------
+
+// AlphaESS „Instruction interval > 300 ms“ [SPEC V1.17]; DVhub hält wie bei Solis 400 ms ab Antwortende. Echter
+// Transport mit Taktung aus der wirksamen Config, falsche Uhr.
+test('E7: 400 ms ab Antwortende zwischen zwei Anfragen, kein Registerdeckel, Poll-Takt bleibt beim Betreiber', async () => {
+  const cfg = effective();
+  assert.deepEqual(normalizeModbusPacing(cfg.victron.requestPacing), { minRequestGapMs: 400, connectDelayMs: 0, maxRegistersPerRequest: 0 });
+  assert.equal(cfg.victron.requestPacing.minPollIntervalMs, undefined);
+  enableFakeClock();
+  const sockets = installFakeModbusSockets();
+  const transport = createModbusTransport({ pacingFor: modbusPacingFromConfig(() => cfg) });
+  const { poller } = createPollerRig(cfg, transport);
+  try {
+    const p = poller.requestPoll();
+    await advance(10000, 10);
+    await p;
+    const gaps = sockets.wire.slice(1).map((f, i) => f.t - sockets.wire[i].t);
+    assert.ok(sockets.wire.length >= 6, `ein ganzer Takt (${sockets.wire.length} Anfragen)`);
+    assert.ok(gaps.every((g) => g >= 400), `nie unter 400 ms: ${gaps}`);
+    assert.ok(sockets.wire.every((f) => f.fc === 3 && f.quantity <= 2), JSON.stringify(sockets.wire));
+  } finally {
+    await transport.destroy();
+    await flush();
+    sockets.restore();
+    disableFakeClock();
+  }
 });

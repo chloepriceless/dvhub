@@ -6,11 +6,9 @@ Stand 18.11.2026. Profil `alphaess-smile` (`dvhub/hersteller/alphaess-smile.json
 das Gerät. Die Abregelung bleibt aus, auch wenn „Aktive Anlagensteuerung“ eingeschaltet ist. Es ist `"beta": true`
 und erscheint nur im Bleeding-Edge-Kanal (`updateChannel: dev`), weil es an keinem Gerät getestet ist.
 
-> **Lesefehler sind möglich, bis DVhub Anfragen takten kann.** AlphaESS verlangt mehr als 300 ms Abstand zwischen zwei
-> Anfragen. DVhub fragt je Takt sechs Register direkt nacheinander ab (Netz, SoC, Akku, PV1–PV3), einmal je Minute
-> zwei mehr (Grenzen). Ein Mindestabstand zwischen Anfragen fehlt der Engine noch (E7). Einzelne Lesefehler oder
-> Zeitüberschreitungen sind deshalb zu erwarten. Ein längeres Poll-Intervall senkt die Zahl der Takte, nicht den
-> Abstand innerhalb eines Takts.
+> **Abstand zwischen Anfragen.** AlphaESS verlangt mehr als 300 ms Abstand zwischen zwei Anfragen. DVhub hält 400 ms
+> ein (`victron.requestPacing.minRequestGapMs`, gemessen ab dem Ende der Antwort). Ein Takt mit sechs Lesungen (Netz,
+> SoC, Akku, PV1–PV3) dauert damit gut 2 s, einmal je Minute kommen zwei dazu (Grenzen).
 
 ## Geräte
 
@@ -72,10 +70,9 @@ Zusammenfassung in `.planning/docs/research/2026-11-15-alphaess-modbus-control-s
 
 | Lücke | Folge | Braucht |
 |---|---|---|
-| Abstand > 300 ms zwischen Anfragen | einzelne Lesefehler oder Zeitüberschreitungen möglich | Anfrage-Taktung (E7) |
 | PV4–PV6 | Geräte mit mehr als drei MPPT zeigen zu wenig PV | Fassungsprüfung (E10), dann per `combine` nachtragen |
 | AC-gekoppelte PV am PV-Zähler (neu 0xA1, alt 0x12) | fehlt in PV und Hauslast | Fassungsprüfung (E10) |
-| Netz je Phase (0x1B/0x1D/0x1F) | Phasenwerte bleiben leer | ginge heute als `meter.phases`; drei Anfragen mehr, erst mit E7 sinnvoll |
+| Netz je Phase (0x1B/0x1D/0x1F) | Phasenwerte bleiben leer | ginge heute als `meter.phases`; drei Anfragen mehr (je gut 0,4 s) |
 | Fassung/Plattform (V1.17 oder neu, Dispatch 0x0722 oder 0x0880) | DVhub prüft nicht, welche Belegung antwortet | Kennungsprobe (E10) |
 | RS485-EMS (AL200…) direkt | nicht erreichbar | Gateway im Modus Modbus TCP oder RTU-over-TCP (E12) |
 
@@ -84,9 +81,9 @@ Zusammenfassung in `.planning/docs/research/2026-11-15-alphaess-modbus-control-s
 Für den ersten Test zusätzlich `DVHUB_READ_ONLY=1` setzen. Das sperrt jeden Modbus-Write im Prozess, unabhängig vom
 Profil.
 
-1. **Verbindung und Taktung:** Laufen Netz, PV und SoC durch? Häufen sich Fehler oder Zeitüberschreitungen in der
-   Diagnose, „Poll Intervall (ms)“ (Einstellungen → Grundsystem, `meterPollMs`) auf 5000 stellen und melden, wie oft
-   sie noch auftreten. Das hilft, E7 richtig zu bemessen.
+1. **Verbindung und Taktung:** Laufen Netz, PV und SoC durch? Häufen sich trotz 400 ms Abstand Fehler oder
+   Zeitüberschreitungen in der Diagnose, `victron.requestPacing.minRequestGapMs` in
+   `/etc/dvhub/hersteller/alphaess-smile.json` testweise auf 1000 stellen und melden, ob sie verschwinden.
 2. **Netzregister:** Meldet DVhub einen Zählerfehler („exception 2“), hat das Gerät die alte V1.17-Belegung. Dann
    bitte melden (mit EMS-Firmware); die Summe läge dort an 0x06.
 3. **Netz-Vorzeichen:** Bei Netzbezug (abends, Akku leer) muss DVhub Bezug zeigen. Zeigt es Einspeisung, in
