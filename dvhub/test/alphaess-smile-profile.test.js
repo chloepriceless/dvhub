@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createRegisterDevice, createPollerRig } from './helpers/fake-modbus-device.js';
-import { createModbusTransport, modbusPacingFromConfig, normalizeModbusPacing } from '../transport-modbus.js';
+import { createModbusTransport, modbusPacingFromConfig, modbusFramingFromConfig, normalizeModbusPacing } from '../transport-modbus.js';
 import { installFakeModbusSockets, advance, flush, enableFakeClock, disableFakeClock } from './helpers/fake-modbus-socket.js';
 import {
   TEST_HOST, readShippedProfile, setupProfile, loadProfile, writeTargets, evaluatorWrites, writableVariant, dropdown, readSet,
@@ -216,6 +216,53 @@ test('E7: 400 ms ab Antwortende zwischen zwei Anfragen, kein Registerdeckel, Pol
     assert.ok(sockets.wire.length >= 6, `ein ganzer Takt (${sockets.wire.length} Anfragen)`);
     assert.ok(gaps.every((g) => g >= 400), `nie unter 400 ms: ${gaps}`);
     assert.ok(sockets.wire.every((f) => f.fc === 3 && f.quantity <= 2), JSON.stringify(sockets.wire));
+  } finally {
+    await transport.destroy();
+    await flush();
+    sockets.restore();
+    disableFakeClock();
+  }
+});
+
+// --- E12: EMS AL200… (nur RS485) über ein transparentes Gateway ----------------------------------------------------
+
+// Das ausgelieferte Profil bleibt Modbus TCP (AL701…). Wer ein AL200… über einen RS485-Wandler im Durchreiche-Modus
+// anbindet, trägt im Profil `victron.framing: "rtu-over-tcp"` und den Port des Wandlers ein (so steht es im _doc und in
+// der Anleitung). Echter Ladeweg mit dieser Änderung, echter Poller, echter Transport gegen ein Schein-Gateway mit
+// RTU-Rahmen, falsche Uhr: dieselben Werte wie über Modbus TCP, jede Anfrage ein RTU-Rahmen an Unit 85, 400 ms Abstand.
+test('E12: AL200… über transparentes Gateway — mit victron.framing liest der echte Poller über RTU-Rahmen dieselben Werte', async () => {
+  const raw = readShippedProfile(ID);
+  assert.equal(raw.victron.framing, undefined, 'das ausgelieferte Profil bleibt Modbus TCP');
+  const doc = raw._doc.join('\n');
+  assert.match(doc, /AL200/);
+  assert.match(doc, /"framing": "rtu-over-tcp"/, '_doc zeigt die Einstellung');
+  const GATEWAY_PORT = 4196;
+  const cfg = loadProfile(ID, { editProfile: (p) => { p.victron.framing = 'rtu-over-tcp'; p.victron.port = GATEWAY_PORT; } }).effectiveConfig;
+  assert.deepEqual([cfg.victron.framing, cfg.victron.port, cfg.victron.unitId], ['rtu-over-tcp', GATEWAY_PORT, UNIT]);
+  enableFakeClock();
+  const sockets = installFakeModbusSockets({ framing: 'rtu' });
+  sockets.set32(UNIT, 0x21, -900).set(UNIT, 0x102, 655).set(UNIT, 0x126, -1800).set(UNIT, 0x12c, 5000).set(UNIT, 0x12d, 4600);
+  PV.forEach((a, i) => sockets.set32(UNIT, a, [2500, 2000, 0][i]));
+  const transport = createModbusTransport({ pacingFor: modbusPacingFromConfig(() => cfg), framingFor: modbusFramingFromConfig(() => cfg) });
+  const { state, poller } = createPollerRig(cfg, transport);
+  try {
+    const p = poller.requestPoll();
+    await advance(10000, 10);
+    await p;
+    assert.deepEqual(state.victron.errors, {});
+    assert.equal(state.meter.ok, true, state.meter.error);
+    assert.equal(state.meter.grid_total_w, -900);
+    assert.equal(state.victron.soc, 65.5);
+    assert.equal(state.victron.batteryPowerW, 1800);
+    assert.equal(state.victron.pvPowerW, 4500);
+    assert.equal(state.victron.selfConsumptionW, 1800);
+    assert.equal(state.victron.deviceMaxChargeW, 5000);
+    assert.equal(sockets.wire.length, 8, 'ein ganzer Takt');
+    assert.ok(sockets.wire.every((f) => f.unitId === UNIT && f.fc === 3 && !f.badCrc), JSON.stringify(sockets.wire));
+    assert.ok(sockets.bytes.every((b) => b.port === GATEWAY_PORT && b.host === TEST_HOST && b.hex.length === 16 && b.hex.startsWith('5503')),
+      'jede Anfrage ein 8-Byte-RTU-Rahmen an Unit 85 (0x55), kein MBAP-Kopf');
+    const gaps = sockets.wire.slice(1).map((f, i) => f.t - sockets.wire[i].t);
+    assert.ok(gaps.every((g) => g >= 400), `E7-Abstand gilt auch über RTU: ${gaps}`);
   } finally {
     await transport.destroy();
     await flush();

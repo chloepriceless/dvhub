@@ -17,7 +17,7 @@ und erscheint nur im Bleeding-Edge-Kanal (`updateChannel: dev`), weil es an kein
 | SMILE5, SMILE-B3 / B3-Plus, SMILE-Hi, Storion-SMILE (einphasige Plattform) | ja |
 | SMILE-G3 (einphasig und T-Serie, z. B. SMILE-G3-T10) | ja (gleiche Leseregister) |
 | EMS mit Seriennummer **AL701…** | Modbus TCP vorhanden |
-| EMS mit Seriennummer **AL200…** | **nein**: nur RS485 (Modbus RTU); bräuchte ein Gateway im Modus Modbus TCP |
+| EMS mit Seriennummer **AL200…** | nur RS485 (Modbus RTU): über ein RS485-Gateway, siehe „AL200… über ein RS485-Gateway“ (ungeprüft) |
 | Storion-T30/T50 (C&I) | ungeprüft |
 | AC-gekoppelte PV am AlphaESS-PV-Zähler | PV und Hauslast ohne diesen Anteil (siehe „Was fehlt“) |
 
@@ -28,6 +28,38 @@ und erscheint nur im Bleeding-Edge-Kanal (`updateChannel: dev`), weil es an kein
 - Anlagenadresse in DVhub = IP des EMS.
 - Zum Lesen ist keine Freigabe im AlphaESS-Portal nötig; die Dispatch-Freigabe betrifft nur das Steuern.
 - Zeitlimit je Anfrage 2 s. AlphaESS antwortet laut Doku in unter 300 ms.
+
+### AL200… über ein RS485-Gateway
+
+EMS mit Seriennummer AL200… sprechen nur Modbus RTU (RS485, 9600 8N1, Unit-ID 85). DVhub erreicht sie über ein
+RS485-Ethernet-Gateway (z. B. Waveshare RS485 TO ETH, Elfin EW11, USR-TCP232). Serielle Einstellungen (9600 8N1) nur
+am Gateway. Zwei Betriebsarten:
+
+- **Gateway im Modus „Modbus TCP“** (übersetzt selbst): das Profil bleibt, wie es ist. Nur wenn das Gateway nicht auf
+  Port 502 lauscht, in `/etc/dvhub/hersteller/alphaess-smile.json` unter `victron` den `"port"` anpassen.
+- **Gateway im Durchreiche-Modus** (transparent, „RTU over TCP“, oft „TCP Server“ ohne Modbus-Umsetzung): im selben
+  Profil unter `victron` den Port des Gateways und den Rahmen eintragen:
+
+  ```json
+  "victron": { "transport": "modbus", "port": 4196, "unitId": 85, "timeoutMs": 2000,
+    "framing": "rtu-over-tcp",
+    "requestPacing": { "minRequestGapMs": 400 } }
+  ```
+
+  4196 steht nur als Beispiel; es gilt der Port, den das Gateway nennt. DVhub schickt dann RTU-Rahmen (Unit-ID + Daten +
+  CRC) statt Modbus TCP, die 400 ms Abstand gelten weiter. Danach `sudo systemctl restart dvhub`.
+
+Wichtig im Durchreiche-Modus:
+
+- **Nur DVhub fragt das Gateway.** Keine zweite Verbindung (Home Assistant, evcc, ein zweites DVhub, der Register-Scan
+  der Diagnose-Seite) und kein zweiter Master am RS485-Bus. RTU hat keine Transaktions-ID, und viele Gateways geben die
+  Antworten an jede verbundene Verbindung weiter; eine fremde Antwort gleicher Form wäre von der eigenen nicht zu
+  unterscheiden.
+- „Heartbeat“- oder „Registrierungs“-Pakete des Gateways ausschalten: sie landen sonst zwischen den Antworten und
+  erscheinen in der Diagnose als `modbus rtu: …`-Fehler.
+- Der Register-Scan der Diagnose-Seite spricht nur Modbus TCP und geht über ein Gateway im Durchreiche-Modus nicht.
+- Ein selbst geändertes Profil ersetzt ein Update nicht mehr automatisch, es legt die neue Fassung als `.dist` daneben
+  (`docs/HERSTELLERPROFIL-MIGRIEREN.md`).
 
 ## Was gelesen wird
 
@@ -74,7 +106,7 @@ Zusammenfassung in `.planning/docs/research/2026-11-15-alphaess-modbus-control-s
 | AC-gekoppelte PV am PV-Zähler (neu 0xA1, alt 0x12) | fehlt in PV und Hauslast | Fassungsprüfung (E10) |
 | Netz je Phase (0x1B/0x1D/0x1F) | Phasenwerte bleiben leer | ginge heute als `meter.phases`; drei Anfragen mehr (je gut 0,4 s) |
 | Fassung/Plattform (V1.17 oder neu, Dispatch 0x0722 oder 0x0880) | DVhub prüft nicht, welche Belegung antwortet | Kennungsprobe (E10) |
-| RS485-EMS (AL200…) direkt | nicht erreichbar | Gateway im Modus Modbus TCP oder RTU-over-TCP (E12) |
+| RS485-EMS (AL200…) über ein Gateway im Durchreiche-Modus | geht mit `victron.framing` (oben), am Gerät ungeprüft | Feldtest |
 
 ## Am Gerät prüfen (Feldtest)
 

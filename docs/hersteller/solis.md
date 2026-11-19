@@ -14,11 +14,15 @@ Reine String-Wechselrichter (S5-GR, Mini) nutzen eine andere Karte (3000 ff.) un
 ## Anschluss
 
 - Am Wechselrichter: RS485 (COM-Port), 9600 8N1, Slave-ID 1 (am Gerät 1–99 einstellbar).
-- DVhub spricht nur Modbus TCP. Zwei Wege:
+- Empfohlen sind zwei Wege mit Modbus TCP:
   - **RS485-Ethernet-Gateway** (z. B. Waveshare RS485 TO ETH) im Modus **Modbus TCP**, Port 502. Empfohlen.
   - **Solis-Datenlogger**, der Modbus TCP spricht: laut Community der S2-WL-ST auf Port 502. Ob der DLS-LAN-Stick auf
     Port 8899 rohes Modbus TCP spricht, ist ungeprüft. Der S3-WIFI-ST geht laut Community nicht.
-- Ein Solarman-WLAN-Stick (V5-Protokoll) und ein transparentes RTU-Gateway gehen nicht.
+- Ein Solarman-WLAN-Stick (V5-Protokoll) geht nicht.
+- Ein RS485-Gateway im **Durchreiche-Modus** (transparent, „RTU over TCP“) geht seit E12: im Profil
+  (`/etc/dvhub/hersteller/solis.json`) unter `victron` `"framing": "rtu-over-tcp"` und `"port"` = Port des Gateways
+  ergänzen. Dann darf nur DVhub am Gateway fragen (keine zweite Verbindung, kein zweiter Master am Bus). Am Gerät
+  ungeprüft; Einzelheiten in `docs/HERSTELLERPROFIL-MIGRIEREN.md` §6.
 - In DVhub ist die Anlagenadresse die IP des Gateways bzw. Datenloggers.
 - Alle Werte sind Input-Register (Funktionscode 4). 32-bit-Werte liegen mit dem High-Wort zuerst.
 
@@ -56,7 +60,7 @@ DVhub das Entladen als Laden.
 | Vorzeichen aus 33135 | falls 33149 nur der Betrag ist, falsches Akku-Vorzeichen beim Entladen | Richtungsregister (E8) |
 | Modelltyp 33000 | DVhub prüft nicht, ob ein Solis-Hybrid antwortet | Kennungsprobe (E10) |
 | Backup-Last 33148 | nicht gelesen | — |
-| Solarman-V5 / transparentes Gateway | geht nicht | Transport (E12) |
+| Solarman-V5 | geht nicht | eigener Transport (Solarman V5) |
 
 ## Am Gerät prüfen (Feldtest)
 
