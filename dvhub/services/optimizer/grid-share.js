@@ -614,9 +614,12 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       }
       // Feld Nebeling 19.11.: 575 min ohne Abbuchung, die Sperre fiel nie — und niemand sah, warum. Im Zustand
       // ablegen (nicht nur im Speicher), damit auch der Web-Prozess neben dem Runtime-Worker es anzeigt.
+      // Beginn UND Gründe vergleichen: nach einem Neustart kann die neue Episode andere Gründe in gleicher Anzahl
+      // haben (Codex cbd4195e P2).
       const shown = st.uncertain;
-      if (!shown || shown.reasons?.length !== uncertainEpisode.reasons.size) {
-        st.uncertain = { since: new Date(uncertainEpisode.sinceMs).toISOString(), reasons: [...uncertainEpisode.reasons] };
+      const want = { since: new Date(uncertainEpisode.sinceMs).toISOString(), reasons: [...uncertainEpisode.reasons] };
+      if (!shown || shown.since !== want.since || (shown.reasons || []).join('|') !== want.reasons.join('|')) {
+        st.uncertain = want;
         dirty = true;
       }
       return;

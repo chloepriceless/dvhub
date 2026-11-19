@@ -503,6 +503,22 @@ test('Neustart: eine alte Unsicherheit aus der Datei verschwindet mit dem ersten
   }
 });
 
+// Codex cbd4195e P2: nach einem Neustart kann die neue Episode andere Gründe in gleicher Anzahl haben.
+test('Neustart mit anderer Ursache: neue Episode ersetzt die alten Gründe', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    t.tick({ nowMs: t0 + 30_000, socPct: 6, capacityWh: 10_000, victron: { errors: { soc: 'x' }, fieldUpdatedAt: { batteryPowerW: t0 + 30_000, soc: t0 + 30_000 } } });
+    t.persist();
+    const t2 = createGridShareTracker({ getCfg: () => ({}), dataDir: dir });
+    t2.tick({ nowMs: t0 + 40_000, socPct: 6, capacityWh: 10_000, victron: { errors: { batteryPowerW: 'y' }, fieldUpdatedAt: { batteryPowerW: t0 + 40_000, soc: t0 + 40_000 } } });
+    assert.deepEqual(t2.summary().uncertain?.reasons, ['battery_power_error']);
+    assert.equal(t2.summary().uncertain.since, new Date(t0 + 40_000).toISOString());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Episode: Ende erst nach 60 s sicherer Werte im Log, Tageszeile und CSV nennen die Minuten ohne Abbuchung', () => {
   const dir = mkDir();
   try {
