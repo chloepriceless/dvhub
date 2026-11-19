@@ -386,3 +386,19 @@ test('Codex 50deb8d3 + 4fc6e8da P2: Sungrow — energyBalance.battery nennt Ger�
   assert.equal(stale.minSocPct, 10);
   assert.equal(stale.deviceMinSocPct, 10, 'veralteter Slave zählt nicht — wie der Boden');
 });
+
+test('Codex f0646578 P2: auch ohne eingestellte Kapazität nennt energyBalance.battery die Geräte-Untergrenze des Bodens (Sungrow)', async () => {
+  const { energyBalanceBattery } = await import('../services/energy-balance-battery.js');
+  const cfg = {
+    manufacturer: 'sungrow', optimizer: { hardFloorSocPct: 5 },
+    sungrow: { socFloorBufferPct: 0, secondInverter: { host: '192.168.68.83', aggregateTelemetry: true } },
+  };
+  const state = {
+    victron: { soc: 30, sungrowMasterSocPct: 30, device: { vendor: 'sungrow', minSocPctDevice: 10, maxSocPctDevice: 100 } },
+    sungrowSecond: { online: true, updatedAt: Date.now() - 30000, socPct: 20, batteryPowerW: 0, pvPowerW: 0, minSocPctDevice: 12, maxSocPctDevice: 100 },
+  };
+  const b = energyBalanceBattery({ getCfg: () => cfg, state });
+  assert.equal(b.capacityWh, null);
+  assert.equal(b.deviceMinSocPct, 10, 'veralteter Slave zählt nicht');
+  assert.equal(b.floorBufferPct, 0);
+});

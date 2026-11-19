@@ -26,17 +26,19 @@ export function energyBalanceBattery(ctx) {
     // Gegenprüfung e07271be).
     const main = finiteOrNull(cfg?.optimizer?.batteryCapacityWh);
     const primaryMin = resolveEosMinSocPct(ctx?.state?.victron?.minSocPct, cfg?.optimizer?.hardFloorSocPct);
+    // Sungrow (Codex 50deb8d3/4fc6e8da/f0646578): woraus der Boden besteht — je Status frisch, dieselben Eingänge wie
+    // planningMinSocPct; unabhängig davon, ob eine Kapazität eingestellt ist.
+    const parts = planningSocFloorParts(ctx);
+    const provenance = parts ? { deviceMinSocPct: finiteOrNull(parts.deviceMinSocPct), floorBufferPct: finiteOrNull(parts.bufferPct) } : {};
     if (main === null || main <= 0) {
-      return { capacityWh: null, socPct: finiteOrNull(ctx?.state?.victron?.soc), minSocPct: finiteOrNull(primaryMin) };
+      return { capacityWh: null, socPct: finiteOrNull(ctx?.state?.victron?.soc), minSocPct: finiteOrNull(primaryMin), ...provenance };
     }
     const cap = finiteOrNull(planningCfg(ctx, cfg)?.optimizer?.batteryCapacityWh);
-    // Sungrow (Codex 50deb8d3/4fc6e8da): woraus der Boden besteht — je Status frisch, dieselben Eingänge wie minSocPct.
-    const parts = planningSocFloorParts(ctx);
     return {
       capacityWh: cap !== null && cap > 0 ? cap : null,
       socPct: finiteOrNull(planningSocPct(ctx)),
       minSocPct: finiteOrNull(planningMinSocPct(ctx, primaryMin)),
-      ...(parts ? { deviceMinSocPct: finiteOrNull(parts.deviceMinSocPct), floorBufferPct: finiteOrNull(parts.bufferPct) } : {}),
+      ...provenance,
     };
   } catch {
     return null;
