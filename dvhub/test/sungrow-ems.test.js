@@ -515,6 +515,26 @@ test('M25 Test-Knopf Einzel-WR: Laden gesperrt, Entladen fürs Haus', async () =
   assert.notEqual(r.image.holding.get(CMD), EMS_CMD.CHARGE, 'kein Laden');
 });
 
+test('Codex cd9b71c6 P2: Test-Knopf „Akku nicht laden" + Absicherungsfall (Messwerte veraltet / Sollwert abgelaufen) → Modus 2 + Stopp, kein Modus 0', async () => {
+  for (const variant of ['telemetry_stale', 'target_expired']) {
+    const r = splitRig();
+    await ownedThenHold(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+    if (variant === 'telemetry_stale') {
+      r.advance(30000); // > telemetryMaxAgeMs: Messwerte veraltet, Sollwert noch frisch
+      await r.ems.applySetpoint(-40, 'negative_price_protection');
+    } else {
+      r.advance(130000); // > targetMaxAgeMs: Sollwert abgelaufen
+      m27Telemetry(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+      r.state.ctrl.curtailmentTest.until = r.now() + 600000;
+      await r.ems.tick();
+    }
+    // Mit Modus 0 würde der WR den PV-Überschuss selbst laden, obwohl der Test „Laden gesperrt" meldet.
+    assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, `${variant}: Modus 2 bleibt`);
+    assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.STOP, `${variant}: Master Stopp`);
+    assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, `${variant}: Slave Stopp`);
+  }
+});
+
 test('M25 echter Negativpreis, Akkus voll: Laden aus (an der Decke), Entladen fürs Haus an', async () => {
   const r = splitRig();
   r.state.ctrl.negativePriceActive = true; r.state.ctrl._lastDvFeedIn = false; // ohne Test-Knopf

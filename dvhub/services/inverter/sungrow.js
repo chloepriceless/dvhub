@@ -1752,6 +1752,12 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (st.owns && st.ownMode !== EMS_MODE.FORCED) {
       decision = { mode: 'self', reason: 'mode_switch' };
     }
+    // Codex cd9b71c6 (P2): Test-Knopf „Akku nicht laden" + Absicherungsfall (Messwerte/Sollwert veraltet, SoC unbekannt
+    // → 'self'): Modus 0 ließe den WR den PV-Überschuss selbst laden, obwohl der Test „Laden gesperrt" meldet. Solange
+    // der Test läuft (selbst-ablaufendes Lease), bleibt Modus 2 mit Stopp — wie vor M25. Ein Moduswechsel geht vor.
+    if (chargeBlocked && ownsForced && decision.mode === 'self') {
+      decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' };
+    }
     // KEIN Dauer-Stopp mehr bei band/no_setpoint/revoked (Christin 15.11.): alle verbliebenen 'self'-Gründe
     // (telemetry_missing, power_limit_unknown, target_expired, mode_switch) sind Absicherungsfälle → Rückgabe an
     // den WR (Modus 0, Absicherung C) über den Self-Pfad unten. Das 0xCC bei |p| < minPowerW bleibt mode:'forced'
