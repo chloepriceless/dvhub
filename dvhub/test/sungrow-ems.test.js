@@ -670,6 +670,48 @@ test('M28 Grundsatz 0: liefert ein WR unter 50 % und kann der andere den Rest ni
   assert.ok(tail.every((x) => x === 1140), `beide liefern ihr Mögliches: ${tail.join(',')}`);
 });
 
+test('Codex 07041019 P2: die Probe über der gemessenen Grenze geht wirklich ans Gerät (größer als die Schreibschwelle)', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  // Gleicher SoC → 600/600 bei 1200 W. Lage: der Slave war bei 600 W begrenzt und steht am Gerät auf 600 W, der Master
+  // liefert nur 200 W. Das Fehlende des Masters darf der Slave bis zu seiner Grenze + Probe bekommen.
+  // Akku −800 W, Netz +531 W → P = −800 + 0,7·(−40 − 531) = −1200 → 600/600.
+  m28Telemetry(r, { masterBattW: -200, slaveBattW: -600, gridW: 531 });
+  await r.ems.applySetpoint(-40, 'default');
+  const t = r.now();
+  r.ems._st.limit['master:discharge'] = { limited: true, limitW: 200, underSince: 0, cmdW: 600, cmdRaisedAt: 0, lastSampleAt: t, judgedAt: t };
+  r.ems._st.limit['slave:discharge'] = { limited: true, limitW: 600, underSince: 0, cmdW: 600, cmdRaisedAt: 0, lastSampleAt: t, judgedAt: t };
+  r.slaveImage.holding.set(POWER, 600); r.slaveImage.holding.set(CMD, EMS_CMD.DISCHARGE);
+  r.advance(1000);
+  m28Telemetry(r, { masterBattW: -200, slaveBattW: -600, gridW: 531 });
+  await r.ems.tick();
+  const sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.deepEqual([sp.masterBaseW, sp.slaveBaseW], [600, 600]);
+  assert.ok(sp.transferW > 100, `Probe größer als die Schreibschwelle 100 W: ${sp.transferW}`);
+  assert.ok(r.slaveImage.holding.get(POWER) > 700, `Probe am Gerät angekommen: ${r.slaveImage.holding.get(POWER)}`);
+});
+
+test('Codex 07041019 P2: eine Lücke kurz vor einer Befehlserhöhung bestätigt beim Hochfahren keine falsche Grenze', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  m28Telemetry(r, { masterBattW: -600, slaveBattW: -600, gridW: -40, loadW: 1160 });
+  await r.ems.applySetpoint(-40, 'default');
+  // Master-Messung je Takt; der Slave liefert, was am Gerät steht. In Takt 2 zeigt der Master kurz eine Lücke
+  // (400 von 600 W), zugleich springt die Hauslast auf 2000 W (Befehl ~1000 W). Danach fährt er normal hoch.
+  const masterSeen = [600, 400, 600, 800, 1000, 1000, 1000, 1000];
+  for (let i = 1; i <= masterSeen.length; i += 1) {
+    r.advance(1000);
+    const loadW = i >= 2 ? 2000 : 1160;
+    const s = r.slaveImage.holding.get(CMD) === EMS_CMD.DISCHARGE ? r.slaveImage.holding.get(POWER) : 0;
+    const m = masterSeen[i - 1];
+    m28Telemetry(r, { masterBattW: -m, slaveBattW: -s, gridW: loadW - m - s, loadW });
+    await r.ems.tick();
+    const sp = r.state.ctrl.sungrowEms.decision.split;
+    assert.equal(sp.transferW, 0, `Takt ${i}: keine Übernahme beim normalen Hochfahren`);
+    assert.equal(sp.masterLimitW, null, `Takt ${i}: keine falsche Grenze`);
+  }
+});
+
 test('M28 Grundsatz 0: Sprung im Bedarf, beide WR fahren gleichzeitig hoch → keine Verschiebung, kein Überschwingen', async () => {
   const r = splitRig();
   r.cfg.sungrow.regulateEveryMs = 1000;

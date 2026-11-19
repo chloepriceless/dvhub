@@ -1345,9 +1345,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (!st.limit[k]) st.limit[k] = { limited: false, limitW: null, underSince: 0, cmdW: 0, cmdRaisedAt: 0, lastSampleAt: 0, judgedAt: 0 };
     return st.limit[k];
   }
-  function judgeLimit(wr, direction, cmdW, sample, commandedAt) {
+  function judgeLimit(wr, direction, cmdW, sample, commandedAt, probeW = LIMIT_PROBE_W) {
     const L = limitEntry(wr, direction);
-    if (cmdW > L.cmdW + enterTolW(cmdW)) L.cmdRaisedAt = commandedAt;
+    // Codex 07041019 (P2): eine deutliche Befehlserhöhung beginnt die Bestätigung neu — eine Lücke kurz davor darf beim
+    // normalen Hochfahren keine Grenze bestätigen.
+    if (cmdW > L.cmdW + enterTolW(cmdW)) { L.cmdRaisedAt = commandedAt; L.underSince = 0; }
     L.cmdW = cmdW;
     const at = Number(sample?.at) || 0;
     const w = sample?.w;
@@ -1362,7 +1364,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (L.limited) {
       const prev = Number(L.limitW) || 0;
       // Liefert wieder, was befohlen ist — und verlangt war klar mehr als die alte Grenze → Begrenzung aufgehoben.
-      if (deficit <= exitTolW(cmdW) && cmdW >= prev + LIMIT_PROBE_W / 2) { L.limited = false; L.limitW = null; L.underSince = 0; return; }
+      if (deficit <= exitTolW(cmdW) && cmdW >= prev + probeW / 2) { L.limited = false; L.limitW = null; L.underSince = 0; return; }
       // Echte Lücke → die Messung ist die Lieferfähigkeit; sonst (liefert den Befehl) nur nach oben nachführen.
       L.limitW = deficit > exitTolW(cmdW) ? rounded : Math.max(prev, rounded);
       return;
@@ -1379,7 +1381,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return { limited: true, limitW: Math.max(0, Number(L.limitW) || 0) };
   }
 
-  function trackDelivery(t, measured) {
+  function trackDelivery(t, measured, probeW = LIMIT_PROBE_W) {
     const last = st.splitLast;
     if (!last || t - last.at > STALL_TRACK_MAX_GAP_MS) {
       for (const e of Object.values(st.deliver)) e.underSince = 0;
@@ -1393,10 +1395,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     for (const wr of ['master', 'slave']) {
       const e = deliverEntry(wr, last.direction);
       const shareW = Math.max(0, Number(last[`${wr}W`]) || 0);
-      judgeLimit(wr, last.direction, shareW, measured[wr], last.at);
+      judgeLimit(wr, last.direction, shareW, measured[wr], last.at, probeW);
       // Codex 402a3df9 (P2): nur eine NEUE Messung zählt, gemessen nach dem Einschwingen auf den Befehl, und die Frist
       // läuft in Messzeit — eine stehende (alte) Messung ist kein neuer Beleg, egal wie viele Takte vergehen.
-      if (shareW > (e.cmdW || 0) + enterTolW(shareW)) e.cmdRaisedAt = last.at;
+      if (shareW > (e.cmdW || 0) + enterTolW(shareW)) { e.cmdRaisedAt = last.at; e.underSince = 0; }
       e.cmdW = shareW;
       const m = measured[wr]?.w;
       const at = Number(measured[wr]?.at) || 0;
@@ -1499,7 +1501,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Messzeitpunkt je WR (Grundsatz 0 beurteilt nur neue Messungen): Master = Poll-Stempel der Akku-Leistung, Slave =
     // Lesetakt des Begleitdienstes (state.sungrowSecond.updatedAt, alle 5 s).
     const slaveSampleAt = Number(state.sungrowSecond?.updatedAt) || 0;
-    trackDelivery(t, { master: { w: masterMeasW, at: masterMeasW == null ? 0 : masterBattAt }, slave: { w: second.batteryPowerW, at: slaveSampleAt } });
+    // Codex 07041019 (P2): die Probe über der gemessenen Grenze muss größer sein als die Schreibschwelle (stepW), sonst
+    // geht sie nie ans Gerät.
+    const probeW = Math.max(LIMIT_PROBE_W, (Number(opts.stepW) || 0) + 10);
+    trackDelivery(t, { master: { w: masterMeasW, at: masterMeasW == null ? 0 : masterBattAt }, slave: { w: second.batteryPowerW, at: slaveSampleAt } }, probeW);
     const mLim = limitInfo('master', direction, t);
     const sLim = limitInfo('slave', direction, t);
     // „Liefert nicht" nimmt einen WR nur heraus, wenn der andere selbst nicht begrenzt ist — oder wenn der hängende WR
@@ -1532,7 +1537,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // bleibt — so schiebt DVhub nichts hin und her. Der begrenzte WR behält seinen Befehl (er trägt seinen Ist-Anteil und
     // zeigt so, wenn er wieder mehr kann). Netzbezug bleibt erst, wenn beide nicht mehr können.
     const shortOf = (lim, baseW) => (lim.limited ? Math.max(0, baseW - lim.limitW) : 0);
-    const roomOf = (lim, maxW, baseW) => Math.max(0, (lim.limited ? Math.min(maxW, lim.limitW + LIMIT_PROBE_W) : maxW) - baseW);
+    const roomOf = (lim, maxW, baseW) => Math.max(0, (lim.limited ? Math.min(maxW, lim.limitW + probeW) : maxW) - baseW);
     const masterShortW = shortOf(mLim, masterW);
     const slaveShortW = shortOf(sLim, slaveW);
     let masterCmdW = masterW; let slaveCmdW = slaveW; let transferW = 0; let transferTo = null;
@@ -1546,6 +1551,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const slaveDecision = skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveCmdW);
     let masterDecision = mk(masterCmdW);
     let effMasterW = masterCmdW; let effSlaveW = slaveCmdW; let slaveFellBack = false; let slaveWrote = false;
+    let slaveReadback = null; // Gerätezustand des Slave nach dem Befehl (Codex 07041019: beurteilt wird, was AM GERÄT steht)
     // Befund 2 (16.11., Fable-Review, Repro belegt): Übernimmt der Master den Slave-Anteil (Slave-Fehler), muss er seinen
     // EIGENEN SoC-Boden/Deckel einhalten — genau wie splitStrategyShares, das mMax bei erreichter Grenze auf 0 klemmt
     // (atLimit). Der Fallback nahm nur die Leistungsgrenze (masterMax) und ließ den Master unter seinem Min-SoC entladen
@@ -1559,6 +1565,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       try { await slaveActuator.neutralize('self'); } catch { /* best effort */ }
     } else {
       const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
+      if (sr.ok) slaveReadback = sr.readback || null;
       slaveWrote = sr.ok === true && sr.unchanged !== true; // echter Slave-Write (N4: Log/Status nur bei Änderung)
       if (!sr.ok) {
         // Absicherung C6 (Aufgabe 3): EIN Slave-Fehler (z. B. „EMS-Register lesen fehlgeschlagen: modbus exception 4",
@@ -1602,8 +1609,20 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       })(),
     };
     // M28: die jetzt kommandierten Anteile für die Liefert-nicht-Erkennung im nächsten Takt (nach bestätigtem Write
-    // unten gültig; scheitert der Master, verworfen).
-    const commanded = { direction, masterW: effMasterW, slaveW: skipSlave ? 0 : effSlaveW, at: t };
+    // unten gültig; scheitert der Master, verworfen). Codex 07041019 (P2): beurteilt wird der Wert, der AM GERÄT steht
+    // (Rücklesung bzw. unveränderter Zustand) — eine Änderung innerhalb der Schreibschwelle (stepW) geht nicht raus,
+    // sonst verglich DVhub einen nie geschriebenen Befehl mit der Messung und frischte eine falsche Grenze immer neu auf.
+    const devShareW = (dev, fallbackW) => {
+      if (decision.command !== 'charge' && decision.command !== 'discharge') return 0;
+      if (!dev) return fallbackW;
+      return (Number(dev.cmd) & 0xffff) === CMD_BY_NAME[decision.command] ? Math.max(0, Number(dev.powerW) || 0) : 0;
+    };
+    const commandedWith = (masterDev) => ({
+      direction,
+      masterW: devShareW(masterDev, effMasterW),
+      slaveW: skipSlave || slaveFellBack ? 0 : devShareW(slaveReadback, effSlaveW),
+      at: t,
+    });
     // Master-Anteil. Scheitert er → beide sicher in Self.
     try {
       const mdev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
@@ -1613,7 +1632,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // Bei gap (Herzschlag-Lücke/Wiederaufnahme) immer voll schreiben.
       if (!gap && emsMatches(mdev, masterDecision, opts.stepW, ctl.modeValue)) {
         st.error = null;
-        st.splitLast = commanded;
+        st.splitLast = commandedWith(mdev);
         st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
         // Hat der Slave in diesem Takt geschrieben, ist es ein echter Write → protokollieren; sonst stiller Takt.
         if (slaveWrote) pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, strategy, slaveFellBack, side: 'slave', reason: decision.reason, trigger: reason, readback: { mode: mdev.mode, cmd: mdev.cmd, powerW: mdev.powerW } });
@@ -1622,7 +1641,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       }
       const back = await writeDecision(conf, masterDecision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
       st.error = null; st.logKeys = {};
-      st.splitLast = commanded;
+      st.splitLast = commandedWith(back);
       st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
       pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, transferW: splitDetail.transferW, strategy, slaveFellBack, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
       publish();

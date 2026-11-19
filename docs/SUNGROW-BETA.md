@@ -177,7 +177,8 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   gemessenen Akku-Leistung (Master im Poll-Takt, Slave alle 5 s). Liefert einer bestätigt weniger (mehr als 100 W bzw.
   10 % daneben, 2 s lang, gemessen frühestens 1,5 s nach einer Befehlserhöhung), gilt die Messung als seine
   Lieferfähigkeit. Das Fehlende bekommt der andere dazu, bis zu seiner Leistungs- und SoC-Grenze. Ist der andere selbst
-  begrenzt, bekommt er höchstens seine gemessene Lieferfähigkeit plus 100 W. Es wird je Takt nur in eine Richtung
+  begrenzt, bekommt er höchstens seine gemessene Lieferfähigkeit plus eine kleine Probe (110 W, knapp über der
+  Schreibschwelle von 100 W, damit sie wirklich ans Gerät geht). Es wird je Takt nur in eine Richtung
   verschoben, und nur, wenn der Empfänger selbst nichts schuldig bleibt — so schaukelt sich nichts auf. Wer teilweise
   liefert, behält seinen Befehl und trägt, was er schafft. Netzbezug bleibt erst, wenn beide nicht mehr können.
 - **Ein Wechselrichter an der Grenze:** Steht ein Akku weniger als 1 Prozentpunkt (echter SoC) über seiner
