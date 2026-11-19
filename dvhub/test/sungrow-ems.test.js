@@ -535,6 +535,18 @@ test('Codex cd9b71c6 P2: Test-Knopf „Akku nicht laden" + Absicherungsfall (Mes
   }
 });
 
+test('Codex f0967031 P2: Test-Knopf + Absicherungsfall, Slave nicht erreichbar → Modus 0 (gibt auch den Slave frei), kein Modus 2', async () => {
+  const r = splitRig();
+  await ownedThenHold(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave entlädt vor dem Ausfall');
+  // Slave-Verbindung weg, Messwerte veraltet: ein Stopp am Slave ist nicht bestätigbar.
+  const down = async () => { throw Object.assign(new Error('connect ECONNREFUSED 192.168.68.83:502'), { code: 'ECONNREFUSED' }); };
+  r.slaveT.mbRequest = down; r.slaveT.mbWriteSingle = down;
+  r.advance(30000);
+  await r.ems.applySetpoint(-40, 'negative_price_protection');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF, 'Master Modus 0 — der Slave folgt und lässt seinen alten Befehl fallen');
+});
+
 test('M25 echter Negativpreis, Akkus voll: Laden aus (an der Decke), Entladen fürs Haus an', async () => {
   const r = splitRig();
   r.state.ctrl.negativePriceActive = true; r.state.ctrl._lastDvFeedIn = false; // ohne Test-Knopf

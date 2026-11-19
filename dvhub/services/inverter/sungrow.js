@@ -1755,8 +1755,19 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Codex cd9b71c6 (P2): Test-Knopf „Akku nicht laden" + Absicherungsfall (Messwerte/Sollwert veraltet, SoC unbekannt
     // → 'self'): Modus 0 ließe den WR den PV-Überschuss selbst laden, obwohl der Test „Laden gesperrt" meldet. Solange
     // der Test läuft (selbst-ablaufendes Lease), bleibt Modus 2 mit Stopp — wie vor M25. Ein Moduswechsel geht vor.
+    // Codex f0967031 (P2): Modus 2 nur halten, wenn der Slave (falls angebunden) den Stopp BESTÄTIGT — sonst bliebe ein
+    // unerreichbarer Slave auf seinem alten Befehl, während der Master in Modus 2 steht. Dann lieber der Rückfall in
+    // Modus 0 (der Slave folgt dem Master und lässt den Befehl fallen).
     if (chargeBlocked && ownsForced && decision.mode === 'self') {
-      decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' };
+      let slaveStopped = true;
+      if (slaveActuator && resolveSecondInverter(cfg).enabled) {
+        try {
+          const sr = await slaveActuator.applyDirectCommand({ mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' }, ctl);
+          slaveStopped = sr?.ok === true;
+        } catch { slaveStopped = false; }
+      }
+      if (slaveStopped) decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' };
+      else logOnce('hold-slave', 'sungrow_ems_charge_hold_slave_unconfirmed', { reason: decision.reason, text: 'Sungrow: „Akku nicht laden" — der Slave bestätigt den Stopp nicht, deshalb Rückfall in Modus 0 statt Halten in Modus 2.' }, 'warn');
     }
     // KEIN Dauer-Stopp mehr bei band/no_setpoint/revoked (Christin 15.11.): alle verbliebenen 'self'-Gründe
     // (telemetry_missing, power_limit_unknown, target_expired, mode_switch) sind Absicherungsfälle → Rückgabe an
