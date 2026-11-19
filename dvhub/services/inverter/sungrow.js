@@ -936,7 +936,15 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   function releaseStatus() {
     const r = st.release;
     if (r) {
-      return { release: { pending: true, requestedAt: r.requestedAt ?? null, since: r.since, attempts: r.attempts, retryAt: r.nextAt || null, lastError: r.lastError, text: 'Freigabe gescheitert, wird wiederholt' } };
+      // Codex 6f356cb8: fällt der Schreibweg weg (Profil ungültig, kein Sungrow-EMS), kann der Takt nicht wiederholen —
+      // dann nicht „wird wiederholt" melden, sondern „nicht gesendet" mit Grund; die Freigabe bleibt als Auftrag stehen.
+      const cfg = getCfg();
+      const noPath = !sungrowEmsConf(cfg) || transport?.type !== 'modbus';
+      return { release: {
+        pending: true, requestedAt: r.requestedAt ?? null, since: r.since, attempts: r.attempts, retryAt: r.nextAt || null, lastError: r.lastError,
+        ...(noPath ? { sent: false, error: noWritePathError(cfg) } : {}),
+        text: noPath ? 'Freigabe steht aus, nicht gesendet — kein Schreibweg' : 'Freigabe gescheitert, wird wiederholt',
+      } };
     }
     const i = st.releaseInfo;
     if (!i) return {};
@@ -2046,6 +2054,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       const conf = sungrowEmsConf(cfg);
       // Option A: ausstehende Freigabe wiederholen — im selben Takt wie das Regeln, auch im Not-Halt (H-7). Sonst nichts.
       if (conf && releasePendingAny()) return await retryPendingRelease();
+      // Codex 6f356cb8: ohne Schreibweg steht die Freigabe weiter aus — Status auffrischen (Master und Slave), damit
+      // Kachel und API „nicht gesendet" statt „wird wiederholt" zeigen.
+      if (!conf && releasePendingAny()) { publish(); slaveActuator?.status?.(); return { ...releasePendingResult(), idle: true }; }
       if (!conf || state.ctrl?.discretionaryWritesPaused) return { ok: true, idle: true };
       const opts = resolveSungrowEmsOptions(conf);
       if (!st.target && !st.owns) return { ok: true, idle: true };
@@ -2431,14 +2442,16 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         let slaveOut = null;
         if (slaveActuator) { try { slaveOut = await slaveActuator.forceRelease(reason, { requestedAt: reqAt }); } catch { /* nichts gesendet */ } }
         st.releaseInfo = { state: 'failed', requestedAt: reqAt, at: now(), sent: false, error };
+        // Steht eine Freigabe aus, bleibt sie als Auftrag stehen (Codex 6f356cb8) — die Antwort sagt beides.
+        const pending = st.release != null || slaveOut?.pending === true;
         if (!isSlave) {
           pushLog('sungrow_ems_manual_release', {
-            reason, ok: false, sent: false, error, slave: slaveOut ? { ok: slaveOut.ok === true, sent: slaveOut.sent !== false } : null,
-            text: `Sungrow-Freigabe NICHT gesendet — kein Schreibweg (${error}).`,
+            reason, ok: false, sent: false, pending, error, slave: slaveOut ? { ok: slaveOut.ok === true, sent: slaveOut.sent !== false } : null,
+            text: `Sungrow-Freigabe NICHT gesendet — kein Schreibweg (${error})${pending ? '; die ausstehende Freigabe bleibt stehen' : ''}.`,
           }, 'warn');
         }
         publish();
-        return { ok: false, sent: false, skipped: true, reason: 'no_write_path', error, requestedAt: reqAt };
+        return { ok: false, sent: false, skipped: true, reason: 'no_write_path', error, requestedAt: reqAt, ...(pending ? { pending: true } : {}) };
       }
       syncEndpoint(cfg);
       let slaveOut = null;

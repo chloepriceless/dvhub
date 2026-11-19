@@ -117,7 +117,8 @@ wird die Freigabe verworfen („Freigabe verworfen“, `sungrow_ems_release_aban
 Not-Halt nicht. Nicht lesbar → kein Write, zählt als Fehlschlag. Steht der Wechselrichter schon in Modus 0 mit Stopp,
 ist die Freigabe ohne Write erledigt. Der Hinweis in der Kachel gehört zur letzten Anfrage (`requestedAt` in Status und
 API-Antwort). Ohne Schreibweg (Herstellerprofil ungültig, keine Sungrow-Steuerung) antwortet die API mit HTTP 409,
-`ok: false`, `sent: false` und dem Grund — die Kachel zeigt „Nicht gesendet“.
+`ok: false`, `sent: false` und dem Grund — die Kachel zeigt „Nicht gesendet“. Eine ausstehende Freigabe bleibt dabei
+stehen; solange der Schreibweg fehlt, meldet der Status sie mit `sent: false` und Grund statt „wird wiederholt“.
 
 ## Eigenverbrauch und Regelgüte
 

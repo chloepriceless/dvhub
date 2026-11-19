@@ -290,11 +290,12 @@
   // (eine ausstehende Wiederholung immer) — ein „erledigt" von früher verdeckt keinen neuen Fehlschlag.
   const RELEASE_PENDING_TEXT = 'Freigabe gescheitert, wird wiederholt';
   // Restpunkt 1: kein Schreibweg → klar „nicht gesendet" mit Grund (statt „freigegeben" oder eines Fehlercodes).
-  function releaseNotSentText(error) {
+  function releaseNotSentText(error, pending) {
     const e = String(error || '');
-    if (e.indexOf('config_unsafe') === 0) return 'Nicht gesendet: Herstellerprofil/Konfiguration ungültig — kein Schreibweg';
-    if (e === 'sungrow_ems_not_configured' || e === 'sungrow_not_active') return 'Nicht gesendet: Sungrow-Steuerung nicht eingerichtet';
-    return 'Nicht gesendet' + (e ? ': ' + e : '');
+    const base = e.indexOf('config_unsafe') === 0 ? 'Nicht gesendet: Herstellerprofil/Konfiguration ungültig — kein Schreibweg'
+      : (e === 'sungrow_ems_not_configured' || e === 'sungrow_not_active') ? 'Nicht gesendet: Sungrow-Steuerung nicht eingerichtet'
+        : 'Nicht gesendet' + (e ? ': ' + e : '');
+    return pending ? base + ' (Freigabe steht aus)' : base;
   }
   function releaseProblemText(r, side) {
     if (r.abandoned === true) {
@@ -311,8 +312,11 @@
     if (pending.length) {
       const n = Math.max(...pending.map((x) => Number(x[1].attempts) || 0));
       const ats = pending.map((x) => reqAtOf(x[1])).filter((v) => v != null);
+      // Codex 6f356cb8: ohne Schreibweg wird nicht wiederholt — „nicht gesendet" mit Grund, der Auftrag steht aus.
+      const blocked = pending.find((x) => x[1].sent === false);
       return {
-        text: `${RELEASE_PENDING_TEXT}${pending.length === 1 ? pending[0][0] : ''}${n ? ` · Versuch ${n}` : ''}`,
+        text: blocked ? releaseNotSentText(blocked[1].error, true)
+          : `${RELEASE_PENDING_TEXT}${pending.length === 1 ? pending[0][0] : ''}${n ? ` · Versuch ${n}` : ''}`,
         at: ats.length ? Math.max(...ats) : null,
       };
     }
@@ -328,6 +332,9 @@
   // Zeitpunkt der zuletzt per Knopf gestellten Anfrage (aus der API-Antwort): ein älterer Status überschreibt ihr
   // Ergebnis nicht (verspätete Status-Antwort, P2).
   let lastReleaseRequestAt = null;
+  // Stammt der angezeigte Hinweis aus dem Status (nicht aus dem eigenen Klick)? Dann verschwindet er, sobald der Status
+  // ihn nicht mehr trägt — etwa nach einer erfolgreichen Freigabe aus einem anderen Tab (Codex 6f356cb8).
+  let releaseTextFromStatus = false;
 
   function view(status) {
     const s = status || {};
@@ -415,7 +422,8 @@
     // Option A: Freigabe wird wiederholt / erledigt / verworfen / gescheitert — nur, wenn der Hinweis nicht zu einer
     // älteren Anfrage gehört als der letzte Knopfdruck (P2).
     const stale = lastReleaseRequestAt != null && vw.releaseAt != null && vw.releaseAt < lastReleaseRequestAt;
-    if (vw.release && !stale) set('sungrowWrReleaseStatus', vw.release);
+    if (vw.release && !stale) { set('sungrowWrReleaseStatus', vw.release); releaseTextFromStatus = true; }
+    else if (!vw.release && releaseTextFromStatus) { set('sungrowWrReleaseStatus', ''); releaseTextFromStatus = false; }
     wireReleaseButton(d);
   }
 
@@ -430,6 +438,7 @@
     btn.addEventListener('click', async () => {
       if (typeof window !== 'undefined' && window.confirm && !window.confirm('Sungrow freigeben: Master auf Eigenverbrauch (Modus 0), beide Wechselrichter auf Stopp (0xCC). Fortfahren?')) return;
       btn.disabled = true;
+      releaseTextFromStatus = false; // ab jetzt zeigt die Zeile das Ergebnis dieses Klicks
       if (statusEl) statusEl.textContent = 'läuft…';
       try {
         const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) };
@@ -438,9 +447,9 @@
         try { j = await res.json(); } catch { j = {}; }
         if (j && Number.isFinite(Number(j.requestedAt)) && j.requestedAt !== null) lastReleaseRequestAt = Number(j.requestedAt);
         if (statusEl) {
-          statusEl.textContent = j.pending === true ? RELEASE_PENDING_TEXT + (j.error ? ' (' + j.error + ')' : '')
-            : (res.ok && j.ok) ? 'freigegeben (Modus 0)'
-              : j.sent === false ? releaseNotSentText(j.error)
+          statusEl.textContent = j.sent === false ? releaseNotSentText(j.error, j.pending === true)
+            : j.pending === true ? RELEASE_PENDING_TEXT + (j.error ? ' (' + j.error + ')' : '')
+              : (res.ok && j.ok) ? 'freigegeben (Modus 0)'
                 : ('Freigabe gescheitert' + (j.error ? ': ' + j.error : ''));
         }
       } catch (e) {

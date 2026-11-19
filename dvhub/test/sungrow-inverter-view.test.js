@@ -294,3 +294,50 @@ test('Codex P2 + Restpunkt 1: Klick-Ergebnis wird von einem älteren Status nich
   await onClick();
   assert.equal(els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)');
 });
+
+test('Codex 6f356cb8: ausstehende Freigabe ohne Schreibweg → „Nicht gesendet … (Freigabe steht aus)“ in Status und Klick', async () => {
+  const base = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+  const NOT_SENT = 'Nicht gesendet: Herstellerprofil/Konfiguration ungültig — kein Schreibweg (Freigabe steht aus)';
+  assert.equal(V.view({ ...base, sungrowEms: { release: { pending: true, attempts: 2, sent: false, error: 'config_unsafe_manufacturer_profile_error', requestedAt: 7 } } }).release, NOT_SENT);
+  const file = fileURLToPath(new URL('../public/sungrow-inverter-view.js', import.meta.url));
+  const responses = [];
+  const apiFetch = async () => { const r = responses.shift(); return { ok: r.status === 200, status: r.status, json: async () => r.body }; };
+  const sandbox = { window: { confirm: () => true, DVhubCommon: { apiFetch } }, document: undefined };
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: 'sungrow-inverter-view.js' });
+  const W = sandbox.window.DVhubSungrowInverters;
+  const els = {};
+  let onClick = null;
+  const el = (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false, disabled: false,
+    ...(id === 'sungrowWrReleaseBtn' ? { addEventListener: (ev, fn) => { if (ev === 'click') onClick = fn; } } : {}) }));
+  W.render(base, { getElementById: (id) => el(id) });
+  responses.push({ status: 409, body: { ok: false, pending: true, sent: false, error: 'config_unsafe_manufacturer_profile_error', requestedAt: 9 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, NOT_SENT);
+});
+
+test('Codex 6f356cb8: ein vom Server gemeldeter Hinweis verschwindet, wenn der Status ihn nicht mehr trägt (Erfolg aus einem anderen Tab); das eigene Klick-Ergebnis bleibt', async () => {
+  const file = fileURLToPath(new URL('../public/sungrow-inverter-view.js', import.meta.url));
+  const responses = [];
+  const apiFetch = async () => { const r = responses.shift(); return { ok: r.status === 200, status: r.status, json: async () => r.body }; };
+  const sandbox = { window: { confirm: () => true, DVhubCommon: { apiFetch } }, document: undefined };
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: 'sungrow-inverter-view.js' });
+  const W = sandbox.window.DVhubSungrowInverters;
+  const els = {};
+  let onClick = null;
+  const el = (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false, disabled: false,
+    ...(id === 'sungrowWrReleaseBtn' ? { addEventListener: (ev, fn) => { if (ev === 'click') onClick = fn; } } : {}) }));
+  const doc = { getElementById: (id) => el(id) };
+  const base = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+  // Dieser Tab sieht den Fehlschlag einer Anfrage (vom Server gemeldet).
+  W.render({ ...base, sungrowEms: { release: { pending: false, failed: true, error: 'modbus timeout', requestedAt: 1000 } } }, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert: modbus timeout');
+  // Ein anderer Tab/API-Client gibt erfolgreich frei → der Status trägt keinen Hinweis mehr.
+  W.render(base, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, '', 'veralteter Fehlschlag verschwindet');
+  // Eigener Klick: sein Ergebnis bleibt stehen, auch wenn der Status keinen Hinweis trägt.
+  responses.push({ status: 200, body: { ok: true, pending: false, requestedAt: 2000 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)');
+  W.render(base, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)');
+});

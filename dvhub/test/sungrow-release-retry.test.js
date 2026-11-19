@@ -657,3 +657,43 @@ test('Restpunkt 1, gleiches Muster im Not-Halt: Merker steht, aber kein Schreibw
   assert.ok(r.logs.some((l) => l.event === 'emergency_stop_neutralize_failed' && l.data.target === 'batteryEms'), 'laut gemeldet');
   assert.deepEqual(r.writes, []);
 });
+
+// --- Codex 6f356cb8 P2: steht eine Freigabe aus und fällt der Schreibweg weg, sagen Status und API das -----------------
+
+test('Codex 6f356cb8: Freigabe steht aus, Profil wird ungültig → Status/API „nicht gesendet, steht aus“ statt „wird wiederholt“; danach geht es weiter', async () => {
+  const r = rig();
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  r.fail.set(`M:${CMD}`, 'timeout');
+  assert.equal((await r.ems.forceRelease('manual_release')).pending, true);
+  r.fail.clear();
+  // Profil kaputt (wie loadConfigFile: writeSafety.ok=false, R-T2.1 räumt controlWrite ab).
+  const savedControlWrite = r.cfg.controlWrite;
+  r.cfg.controlWrite = {};
+  r.cfg.writeSafety = { ok: false, reason: 'manufacturer_profile_error', manufacturer: 'sungrow' };
+  const n = r.writes.length;
+  // Ohne neuen Knopfdruck: der Takt kann nicht wiederholen — der Status sagt warum.
+  r.advance(5000); await r.ems.tick();
+  let rel = r.state.ctrl.sungrowEms.release;
+  assert.equal(rel?.pending, true, 'die Freigabe bleibt als Auftrag stehen');
+  assert.equal(rel?.sent, false, 'Status: nichts gesendet');
+  assert.equal(rel?.error, 'config_unsafe_manufacturer_profile_error');
+  // Erneuter Knopfdruck: API ehrlich (nichts gesendet, steht aus).
+  const out = await r.ems.forceRelease('manual_release');
+  assert.equal(out.ok, false);
+  assert.equal(out.sent, false);
+  assert.equal(out.pending, true);
+  assert.equal(out.error, 'config_unsafe_manufacturer_profile_error');
+  rel = r.ems.status().release;
+  assert.equal(rel?.pending, true);
+  assert.equal(rel?.sent, false);
+  assert.equal(rel?.requestedAt, out.requestedAt);
+  assert.deepEqual(r.wireSince(n), []);
+  // Profil wieder gültig → die Wiederholung läuft weiter und bestätigt.
+  r.cfg.controlWrite = savedControlWrite;
+  delete r.cfg.writeSafety;
+  r.advance(5000); await r.ems.tick();
+  assert.deepEqual(r.wireSince(n), REL);
+  rel = r.ems.status().release;
+  assert.equal(rel?.done, true);
+  assert.equal(rel?.sent, undefined);
+});
