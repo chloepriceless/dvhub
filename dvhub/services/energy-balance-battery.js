@@ -10,7 +10,7 @@
 //   minSocPct  — Untergrenze wie für EOS: der höhere aus Live-BMS-Wert und
 //                optimizer.hardFloorSocPct (resolveEosMinSocPct), gewichtet.
 // Wirft nie (Status-Payload); bei kaputtem Kontext null.
-import { planningCfg, planningSocPct, planningMinSocPct } from './multi-gx/planning.js';
+import { planningCfg, planningSocPct, planningMinSocPct, planningSocFloorParts } from './multi-gx/planning.js';
 import { resolveEosMinSocPct } from './optimizer/eos-config-sync.js';
 
 const finiteOrNull = (v) => (v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
@@ -30,10 +30,13 @@ export function energyBalanceBattery(ctx) {
       return { capacityWh: null, socPct: finiteOrNull(ctx?.state?.victron?.soc), minSocPct: finiteOrNull(primaryMin) };
     }
     const cap = finiteOrNull(planningCfg(ctx, cfg)?.optimizer?.batteryCapacityWh);
+    // Sungrow (Codex 50deb8d3/4fc6e8da): woraus der Boden besteht — je Status frisch, dieselben Eingänge wie minSocPct.
+    const parts = planningSocFloorParts(ctx);
     return {
       capacityWh: cap !== null && cap > 0 ? cap : null,
       socPct: finiteOrNull(planningSocPct(ctx)),
       minSocPct: finiteOrNull(planningMinSocPct(ctx, primaryMin)),
+      ...(parts ? { deviceMinSocPct: finiteOrNull(parts.deviceMinSocPct), floorBufferPct: finiteOrNull(parts.bufferPct) } : {}),
     };
   } catch {
     return null;

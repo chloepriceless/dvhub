@@ -367,3 +367,22 @@ test('Verbrauchs-Warnung folgt der Abdeckungsprüfung der Bilanz', () => {
   assert.match(body, /\} else if \(!loadKnown && !hasTotalsLoad\) \{/);
   assert.match(body, /⚠ Load-Forecast reicht nicht bis Mitternacht/);
 });
+
+test('Codex 50deb8d3 + 4fc6e8da P2: Sungrow — energyBalance.battery nennt Geräte-Untergrenze und Puffer des Bodens (Slave nur frisch)', async () => {
+  const { energyBalanceBattery } = await import('../services/energy-balance-battery.js');
+  const cfg = {
+    manufacturer: 'sungrow', optimizer: { batteryCapacityWh: 9600, hardFloorSocPct: 5 },
+    sungrow: { socFloorBufferPct: 0, secondInverter: { host: '192.168.68.83', aggregateTelemetry: true, batteryCapacityWh: 9690 } },
+  };
+  const state = (slaveAgeMs) => ({
+    victron: { soc: 30, sungrowMasterSocPct: 30, device: { vendor: 'sungrow', minSocPctDevice: 10, maxSocPctDevice: 100 } },
+    sungrowSecond: { online: true, updatedAt: Date.now() - slaveAgeMs, socPct: 20, batteryPowerW: 0, pvPowerW: 0, minSocPctDevice: 12, maxSocPctDevice: 100 },
+  });
+  const fresh = energyBalanceBattery({ getCfg: () => cfg, state: state(1000) });
+  assert.equal(fresh.minSocPct, 12);
+  assert.equal(fresh.deviceMinSocPct, 12, 'frischer Slave zählt mit');
+  assert.equal(fresh.floorBufferPct, 0);
+  const stale = energyBalanceBattery({ getCfg: () => cfg, state: state(30000) });
+  assert.equal(stale.minSocPct, 10);
+  assert.equal(stale.deviceMinSocPct, 10, 'veralteter Slave zählt nicht — wie der Boden');
+});

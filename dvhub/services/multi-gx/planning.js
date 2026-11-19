@@ -236,6 +236,20 @@ export function floorSocPct(ctx) {
   return finite(socRaw) ? Number(socRaw) : null;
 }
 
+/**
+ * Sungrow: aus welchen Geräte-Werten der Entlade-Boden (planningMinSocPct) gerade besteht — die höhere Geräte-Untergrenze
+ * (Master, dazu der Slave nur mit frischer, aggregierter Messung) und der Puffer. Für die Herkunftsangabe der Leitstand-
+ * Kachel (Codex 50deb8d3/4fc6e8da), dieselben Eingänge wie planningMinSocPct. Nicht Sungrow → null.
+ */
+export function planningSocFloorParts(ctx) {
+  const cfg = ctx?.getCfg?.();
+  if (!isSungrow(ctx, cfg)) return null;
+  const dev = ctx?.state?.victron?.device || {};
+  const slaveTel = resolveSecondInverter(cfg).aggregateTelemetry === true ? secondInverterTelemetry(ctx?.state, cfg, {}) : null;
+  const mins = [dev.minSocPctDevice, slaveTel?.minSocPctDevice].filter((v) => finite(v)).map(Number);
+  return { deviceMinSocPct: mins.length ? Math.max(...mins) : null, bufferPct: sungrowSocFloorBufferPct(cfg) };
+}
+
 /** Mindest-SoC fuer die Planung: Untergrenze der Hauptanlage und der zweiten, gewichtet. */
 export function planningMinSocPct(ctx, primaryMinSocPct) {
   const cfg = ctx?.getCfg?.();

@@ -924,16 +924,6 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return false;
   };
 
-  // Codex 50deb8d3 (P2): Geräte-Untergrenze, die der Entlade-Boden (und die EOS-Planung, planningMinSocPct) wirklich
-  // nutzt — Master, dazu der Slave nur mit frischer, aggregierter Messung (secondInverterTelemetry, gleiche Frische wie
-  // die Planung). So beschreibt die Kachel-Herkunft „(Gerät …)" dieselben Eingänge wie der angezeigte Boden.
-  function floorDeviceMinPct() {
-    const fin = (v) => v != null && v !== '' && Number.isFinite(Number(v));
-    const sTel = secondInverterTelemetry(state, getCfg(), { nowMs: now() });
-    const vals = [state.victron?.device?.minSocPctDevice, sTel?.minSocPctDevice].filter(fin).map(Number);
-    return vals.length ? Math.max(...vals) : null;
-  }
-
   function publish() {
     if (!state.ctrl) return;
     const ctl = resolveSungrowControl(getCfg());
@@ -960,8 +950,6 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       modeBudgetLeft: modeBudgetLeft(),
       // M24: wirksamer Puffer über der Geräte-Untergrenze (Leitstand: „Minimum-SoC 10 % (Gerät)" bei 0).
       socFloorBufferPct: sungrowSocFloorBufferPct(getCfg()),
-      // Codex 50deb8d3: die Geräte-Untergrenze, die der Entlade-Boden und die EOS-Planung wirklich nutzen (Kachel-Herkunft).
-      socFloorDeviceMinPct: floorDeviceMinPct(),
       target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at, noGridCharge: st.target.noGridCharge === true } : null,
       device: st.dev ? { ...st.dev } : null,
       decision: st.decision,
