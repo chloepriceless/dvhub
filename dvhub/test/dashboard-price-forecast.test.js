@@ -149,7 +149,8 @@ test('Zeile unter der Preiskurve nennt die Bezugspreis-Prognose, wenn es sie gib
 // Codex ff257d67 (P2): Fehlt mitten in der Prognose der Bezugspreis (z. B.
 // fester Tarif ohne Betrag, nur §14a-Fenster), darf die Linie die Lücke nicht
 // überbrücken — sonst zeigt sie einen erfundenen Preis. Prüfung am echten
-// drawPriceChart mit einem Chart-Stub (Datensatz-Konfiguration und Segment-Stil).
+// drawPriceChart mit einem Chart-Stub (Datensatz-Konfiguration), Abschnitte mit
+// dem gebündelten Chart.js berechnet.
 function renderPriceChart(args) {
   const appPath = fileURLToPath(new URL('../public/app.js', import.meta.url));
   const source = fs.readFileSync(appPath, 'utf8');
@@ -173,6 +174,26 @@ function renderPriceChart(args) {
   return config;
 }
 
+/** Abschnitte einer Linie wie Chart.js 4.4.7 (gebündelt) sie bildet — _computeSegments mit dem Segment-Stil des Datensatzes. */
+function chartJsSegments(ds) {
+  const src = fs.readFileSync(fileURLToPath(new URL('../public/chart.min.js', import.meta.url)), 'utf8');
+  const sb = { window: {}, console };
+  sb.globalThis = sb; sb.self = sb;
+  vm.runInNewContext(src, sb);
+  const { _computeSegments } = (sb.Chart || sb.window.Chart).helpers;
+  const base = { borderColor: ds.borderColor, borderDash: ds.borderDash, borderWidth: ds.borderWidth, borderDashOffset: 0, borderCapStyle: 'butt', borderJoinStyle: 'miter' };
+  const points = ds.data.map((v, i) => ({ x: i, y: v, skip: v === null }));
+  const line = { points, options: { ...base, spanGaps: ds.spanGaps }, _loop: false, _chart: { getContext: () => ({}) }, _datasetIndex: 0 };
+  const segmentOptions = {
+    setContext: (ctx) => ({
+      ...base,
+      borderColor: ds.segment?.borderColor?.(ctx) ?? base.borderColor,
+      borderDash: ds.segment?.borderDash?.(ctx) ?? base.borderDash,
+    }),
+  };
+  return _computeSegments(line, segmentOptions);
+}
+
 test('Preiskurve: Bezugspreis-Linie überbrückt keine Prognose-Lücke ohne Bezugspreis, schließt aber an die festen Preise an', () => {
   const now = Date.parse('2026-11-12T09:07:00Z');
   const real = realRows();
@@ -194,15 +215,26 @@ test('Preiskurve: Bezugspreis-Linie überbrückt keine Prognose-Lücke ohne Bezu
   assert.equal(ds.data[f - 1], 30);
   assert.equal(ds.data[f + 2], null);
   assert.equal(ds.data[f + 8], 24.6);
-  const seg = (p0, p1) => ({ type: 'segment', p0DataIndex: p0, p1DataIndex: p1 });
-  const color = (p0, p1) => ds.segment?.borderColor?.(seg(p0, p1));
-  // Über die Lücke (f+1 → f+8) wird nichts gezeichnet.
-  assert.ok(ds.spanGaps === false || color(f + 1, f + 8) === 'transparent', 'Lücke im Prognosebereich bleibt leer');
+  // Abschnitte so, wie Chart.js 4.4.7 sie zeichnet (Codex 82843151: Chart.js
+  // ruft den Segment-Stil für jedes benachbarte Paar auf, auch über
+  // übersprungene Punkte — Lücken erkennt man an p0/p1.skip, nicht am Index).
+  const segs = chartJsSegments(ds);
+  const styleOf = (s) => ({ color: s.style ? s.style.borderColor : ds.borderColor, dash: Array.from((s.style ? s.style.borderDash : ds.borderDash) || []) });
+  const drawn = segs.filter((s) => styleOf(s).color !== 'transparent');
+  // Kein gezeichneter Abschnitt läuft über eine Zeile ohne Bezugspreis.
+  for (const s of drawn) {
+    for (let k = s.start; k <= s.end; k += 1) assert.notEqual(ds.data[k], null, `gezeichnet über Lücke bei ${k} (Abschnitt ${s.start}–${s.end})`);
+  }
+  const pairStyle = (a) => {
+    const s = segs.find((x) => x.start <= a && a + 1 <= x.end);
+    assert.ok(s, `Abschnitt für ${a}→${a + 1}`);
+    return styleOf(s);
+  };
   // Anschluss an die festen Preise und Prognose-Abschnitte: gezeichnet, feiner gestrichelt.
-  assert.notEqual(color(f - 1, f), 'transparent');
-  assert.deepEqual(Array.from(ds.segment.borderDash(seg(f - 1, f))), [3, 4]);
-  assert.deepEqual(Array.from(ds.segment.borderDash(seg(f + 8, f + 9))), [3, 4]);
+  assert.notEqual(pairStyle(f - 1).color, 'transparent');
+  assert.deepEqual(pairStyle(f - 1).dash, [3, 4]);
+  assert.notEqual(pairStyle(f + 8).color, 'transparent');
+  assert.deepEqual(pairStyle(f + 8).dash, [3, 4]);
   // Feste Preise: Stil der Linie unverändert.
-  assert.equal(ds.segment.borderDash(seg(f - 3, f - 2)), undefined);
-  assert.equal(color(f - 3, f - 2), undefined);
+  assert.deepEqual(pairStyle(f - 3), { color: ds.borderColor, dash: [6, 4] });
 });

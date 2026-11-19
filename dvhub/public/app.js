@@ -834,16 +834,20 @@ function priceChartImportSeries(data, comparisons) {
 }
 
 /**
- * Art eines Abschnitts der Bezugspreis-Linie (Chart.js-Segment p0 → p1):
+ * Art eines Abschnitts der Bezugspreis-Linie (Chart.js-Segment-Kontext):
  *   'real'     endet in einer festen Zeile — Stil der Linie wie bisher;
- *   'forecast' endet in einer Prognose-Zeile, Nachbarn — feiner gestrichelt;
- *   'gap'      endet in einer Prognose-Zeile und überspringt Zeilen ohne
- *              Bezugspreis (spanGaps) — nicht zeichnen, sonst stünde dort ein
- *              erfundener Preis (Codex ff257d67).
+ *   'forecast' endet in einer Prognose-Zeile — feiner gestrichelt;
+ *   'gap'      endet in einer Prognose-Zeile, und einer der beiden Punkte hat
+ *              keinen Bezugspreis — nicht zeichnen, sonst überbrückt die Linie
+ *              (spanGaps) die Lücke mit einem erfundenen Preis (Codex ff257d67).
+ * Chart.js 4 ruft den Segment-Stil für jedes benachbarte Paar auf, auch über
+ * übersprungene Punkte; die Lücke steckt in p0.skip/p1.skip, nicht im
+ * Index-Abstand (Codex 82843151). Der Abschnitt über die Lücke wird damit
+ * insgesamt unsichtbar.
  */
-function priceChartImportSegmentKind(data, p0DataIndex, p1DataIndex) {
-  if (!data?.[p1DataIndex]?.forecast) return 'real';
-  return p1DataIndex - p0DataIndex > 1 ? 'gap' : 'forecast';
+function priceChartImportSegmentKind(data, segCtx) {
+  if (!data?.[segCtx?.p1DataIndex]?.forecast) return 'real';
+  return segCtx?.p0?.skip || segCtx?.p1?.skip ? 'gap' : 'forecast';
 }
 
 /**
@@ -1145,7 +1149,7 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
     // blasser. Eine Linie, ein Legenden-Eintrag: Ausblenden wirkt auf beides.
     // Prognose-Zeilen ohne Bezugspreis bleiben leer (keine Überbrückung).
     const importForecastColor = hexToRgba(chartImport, 0.5);
-    const importSegKind = (segCtx) => priceChartImportSegmentKind(data, segCtx?.p0DataIndex, segCtx?.p1DataIndex);
+    const importSegKind = (segCtx) => priceChartImportSegmentKind(data, segCtx);
     datasets.push({
       label: 'Bezugspreis',
       type: 'line',
