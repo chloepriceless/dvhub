@@ -2697,10 +2697,11 @@ function renderDashboardStatus(status) {
         // Ohne eingestellte Akkukapazität bucht der Zähler nicht ab (die Sperre
         // bleibt) — das muss sichtbar sein (Gesamtprüfung Release 1.0.9, Befund 3).
         const capHint = gs.capacityMissing ? ' · Akkukapazität fehlt (Einstellungen)' : '';
-        // M8: zeigt, wenn EOS-„Halten"/„Netzladen" ausgesetzt ist, weil der Netzanteil zuerst im Haus verbraucht wird.
+        // M8: zeigt, wenn EOS-„Halten" ausgesetzt ist, weil der Netzanteil zuerst im Haus verbraucht wird
+        // (Netzladen wird seit Feld Nebeling 19.11. nie mehr ausgesetzt).
         const susp = status.eosGridShareSuspend;
         const suspHint = (gs.locked && susp)
-          ? ` · ${susp.kind === 'charge' ? 'Netzladen' : 'Halten'} ausgesetzt (wird zuerst verbraucht)`
+          ? ' · EOS-Halten ausgesetzt (Netzstrom wird zuerst im Haus verbraucht)'
           : '';
         // M10: nach dem Boden-Reset kurz anzeigen, dass der Netzanteil verbraucht/als Verlust gebucht wurde.
         const resetHint = (resetRecent && !gs.locked) ? ' · Netzanteil verbraucht, Rest als Verlust gebucht' : '';
