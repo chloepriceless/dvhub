@@ -282,6 +282,43 @@ apt_dl() { mkdir -p "$DEB_DIR/partial" && DEBIAN_FRONTEND=noninteractive apt-get
 apt_inst() { mkdir -p "$DEB_DIR/partial" && DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dir::Cache::archives="$DEB_DIR" "$@" >>"$LOG_FILE" 2>&1; }
 APACHE_REMOVED=0
 
+# Timescale liefert je Version einen Bau pro PostgreSQL-Minor: …-1806 verlangt
+# postgresql-18 (>= 18.6), …-1807 (>= 18.7). apt nimmt den hoechsten Bau. Hat die
+# Distribution erst 18.6, ist der nicht installierbar („Unable to satisfy
+# dependencies“) und DVhub fiele ohne Not auf das Apache-Paket zurueck (CI rot
+# 19.11.2026, Ubuntu 26.04 mit 18.6, packagecloud 2.32.1~ubuntu26.04-1807).
+# Darum die neueste Version waehlen, deren PostgreSQL-Abhaengigkeit die
+# INSTALLIERTE PostgreSQL-Version erfuellt. Gesucht wird die eigenstaendige
+# Abhaengigkeit „postgresql-N (>= …)“, nicht das Ende von „…-loader-postgresql-N (>= …)“. Ausgabe: "<paket>=<version>", oder nur
+# "<paket>" (apt entscheidet wie bisher), wenn sich nichts bestimmen laesst.
+# Gleiche Funktion in pkg-maintain.sh und scripts/ci/timescale-native-e2e.sh.
+ts_pkg_spec() {
+  local pkg="$1" pg_pkg="postgresql-${PG_VER}" have ver deps need re
+  have="$(dpkg-query -W -f='${Version}' "$pg_pkg" 2>/dev/null || true)"
+  if [[ -z "$have" ]]; then printf '%s\n' "$pkg"; return 0; fi
+  re="(^|, )${pg_pkg} \\(>= ([^)]+)\\)"
+  while IFS= read -r ver; do
+    [[ -n "$ver" ]] || continue
+    deps="$(apt-cache show "${pkg}=${ver}" 2>/dev/null | sed -n 's/^Depends: //p' | head -n1 || true)"
+    need=""
+    if [[ "$deps" =~ $re ]]; then need="${BASH_REMATCH[2]}"; fi
+    if [[ -z "$need" ]] || dpkg --compare-versions "$have" ge "$need"; then
+      printf '%s=%s\n' "$pkg" "$ver"
+      return 0
+    fi
+  done < <(apt-cache madison "$pkg" 2>/dev/null | awk -F'|' '{gsub(/[ \t]/,"",$2); if ($2!="") print $2}' | sort -rV | uniq || true)
+  printf '%s\n' "$pkg"
+}
+TSL_LOADER_SPEC="$TSL_LOADER"
+TSL_PKG_SPEC="$TSL_PKG"
+if [[ "$USE_TSL" -eq 1 ]] && ! dpkg -s "$TSL_PKG" >/dev/null 2>&1; then
+  TSL_LOADER_SPEC="$(ts_pkg_spec "$TSL_LOADER")"
+  TSL_PKG_SPEC="$(ts_pkg_spec "$TSL_PKG")"
+  if [[ "$TSL_PKG_SPEC" == *=* ]]; then
+    echo "  TimescaleDB: Community-Paket passend zur installierten PostgreSQL-Version: ${TSL_PKG_SPEC#*=}"
+  fi
+fi
+
 if [[ "$USE_TSL" -eq 1 ]]; then
   # The Debian Apache package ships the same `timescaledb` .so and conflicts with
   # the Community package (retrofit Apache→Community). Review 25.10.2026: früher
@@ -293,7 +330,7 @@ if [[ "$USE_TSL" -eq 1 ]]; then
   # einem einzigen apt-Lauf: der hinge an Conflicts/Replaces der Fremdpakete.
   if dpkg -s "$TSL_PKG" >/dev/null 2>&1; then
     echo "  TimescaleDB: Community-Paket ${TSL_PKG} bereits installiert."
-  elif ! apt_dl "$TSL_LOADER" "$TSL_PKG"; then
+  elif ! apt_dl "$TSL_LOADER_SPEC" "$TSL_PKG_SPEC"; then
     echo "  WARN: Community-Paket nicht herunterladbar — Fallback auf Apache-Paket." >&2
     USE_TSL=0
   else
@@ -311,7 +348,7 @@ if [[ "$USE_TSL" -eq 1 ]]; then
       fi
     fi
     if [[ "$APACHE_READY" -eq 1 ]]; then
-      if apt_inst "$TSL_LOADER" "$TSL_PKG"; then
+      if apt_inst "$TSL_LOADER_SPEC" "$TSL_PKG_SPEC"; then
         echo "  TimescaleDB: Community-Paket ${TSL_PKG} installiert."
         PKG_CHANGED=1
       else

@@ -18,7 +18,7 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'timesc
 // Was packagecloud.io/timescale/timescaledb anbietet (Stand 21.10.2026, per curl geprueft).
 const SERVED = ['debian/ bookworm', 'debian/ trixie', 'ubuntu/ noble', 'ubuntu/ resolute'];
 
-function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false, tslPartial = false, apacheReinstallFails = false, offlineAfterDownload = false, staleDeb = false, leftoverApacheDeb = false } = {}) {
+function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false, tslPartial = false, apacheReinstallFails = false, offlineAfterDownload = false, staleDeb = false, leftoverApacheDeb = false, pgBuilds = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsp-'));
   const bin = join(dir, 'bin');
   execFileSync('mkdir', ['-p', bin]);
@@ -77,7 +77,7 @@ fi
 # -o Dir::Cache::archives=<ordner> → Paketordner dieses Aufrufs.
 arch=/var/cache/apt/archives; prev=
 for a in "$@"; do [[ "$prev" == -o && "$a" == Dir::Cache::archives=* ]] && arch="\${a#*=}"; prev="$a"; done
-pkgs_of() { local p= a; for a in "$@"; do if [[ "$p" == -o ]]; then p=; continue; fi; p="$a"; case "$a" in install|-y|-qq|-o|--*) ;; *) echo "$a" ;; esac; done; }
+pkgs_of() { local p= a; for a in "$@"; do if [[ "$p" == -o ]]; then p=; continue; fi; p="$a"; case "$a" in install|-y|-qq|-o|--*) ;; *) echo "\${a%%=*}" ;; esac; done; }
 if [[ "$1" == install && " $* " == *" --download-only "* ]]; then
   ls "$arch" 2>/dev/null | grep '[.]deb$' | sed 's/^/vorher-im-ordner /' >> "${log}"
 fi
@@ -85,6 +85,7 @@ if [[ "$1" == install && " $* " == *" --download-only "* && " $* " != *" timesca
   for p in $(pkgs_of "$@"); do : > "$arch/\${p}_2.31.0_arm64.deb"; done
 fi
 if [[ "$1" == install && " $* " == *" timescaledb-2-postgresql-"* ]]; then
+  ${pgBuilds ? `if [[ " $* " != *" timescaledb-2-postgresql-18=${pgBuilds.ok} "* ]]; then echo "E: Unable to satisfy dependencies. Reached two conflicting assignments:"; exit 100; fi` : ''}
   if [[ " $* " == *" --download-only "* ]]; then
     ${downloadFails ? 'exit 100' : ''}
     # apt legt alles ab, was es auflöst — auch Abhängigkeiten (timescaledb-tools).
@@ -111,8 +112,21 @@ exit 0`);
 if [[ "$1" == policy && "$2" == timescaledb-2-* && -f "${repoList}" ]]; then
   line="$(cat "${repoList}")"
   case "$line" in ${served}) echo "  Candidate: 2.31.0~ubuntu26.04" ;; *) echo "  Candidate: (none)" ;; esac
-fi`);
-  fake('dpkg', `[[ "$1" == -s ]] && grep -qx "$2" "${pkgDb}" && exit 0\nexit 1`);
+fi
+${pgBuilds ? `
+if [[ "$1" == madison ]]; then
+${pgBuilds.versions.map(([v]) => `  echo " $2 | ${v} | https://packagecloud.io/timescale/timescaledb/ubuntu resolute/main arm64 Packages"`).join('\n')}
+fi
+if [[ "$1" == show ]]; then
+  case "$2" in
+${pgBuilds.versions.map(([v, pg]) => `    *=${v}) echo "Package: \${2%%=*}"; echo "Version: ${v}"; if [[ "$2" == timescaledb-2-postgresql-* ]]; then echo "Depends: timescaledb-2-loader-postgresql-18 (>= ${v.split('~')[0]}~), postgresql-18 (>= ${pg}), libc6 (>= 2.38)"; else echo "Depends: postgresql-18 (>= ${pg}), libc6 (>= 2.38)"; fi ;;`).join('\n')}
+  esac
+fi` : ''}`);
+  // Installierte PostgreSQL-Version (dpkg-query) und Versionsvergleich (dpkg --compare-versions).
+  fake('dpkg-query', pgBuilds ? `[[ " $* " == *" postgresql-18 "* ]] && { echo -n "${pgBuilds.pgVersion}"; exit 0; }\nexit 1` : 'exit 1');
+  fake('dpkg', `[[ "$1" == -s ]] && grep -qx "$2" "${pkgDb}" && exit 0
+if [[ "$1" == --compare-versions && "$3" == ge ]]; then [[ "$(printf '%s\\n%s\\n' "$2" "$4" | sort -V | tail -n1)" == "$2" ]] && exit 0; exit 1; fi
+exit 1`);
   fake('psql');
   // su: Katalog/Lade-Proben beantworten. extHave = Version im Katalog vor dem
   // Lauf ('' = Erweiterung fehlt); CREATE/ALTER setzen sie auf 2.31.0.
@@ -382,5 +396,36 @@ test('Attrappe: Lizenzprobe sieht die Community-Installation (mit Paketordner-Op
     s.run();
     assert.match(s.sql(), /timescaledb\.license/);
     assert.ok(s.calls().some((l) => /^apt-get install -y -o Dir::Cache::archives=\S+ timescaledb-2/.test(l)));
+  } finally { s.cleanup(); }
+});
+
+// CI rot 19.11.2026: packagecloud liefert je Version einen Bau pro PostgreSQL-Minor. apt nimmt den höchsten
+// (…-1807, verlangt postgresql-18 >= 18.7); Ubuntu 26.04 hatte 18.6 → nicht installierbar → DVhub fiel ohne Not
+// auf Apache zurück. Jetzt wählt das Skript den neuesten Bau, den die installierte PostgreSQL-Version erfüllt.
+const PG_BUILDS = [['2.32.1~ubuntu26.04-1807', '18.7'], ['2.32.1~ubuntu26.04-1806', '18.6'], ['2.31.2~ubuntu26.04-1807', '18.7'], ['2.31.2~ubuntu26.04-1806', '18.6']];
+
+test('PostgreSQL 18.6 installiert: nimmt den Bau für 18.6 (…-1806), kein Apache-Rückfall', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.6-0ubuntu0.26.04.1', ok: '2.32.1~ubuntu26.04-1806', versions: PG_BUILDS } });
+  try {
+    const out = s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18=2.32.1~ubuntu26.04-1806 timescaledb-2-postgresql-18=2.32.1~ubuntu26.04-1806']);
+    assert.deepEqual(s.pkgs().sort(), ['timescaledb-2-loader-postgresql-18', 'timescaledb-2-postgresql-18']);
+    assert.match(out, /passend zur installierten PostgreSQL-Version: 2\.32\.1~ubuntu26\.04-1806/);
+  } finally { s.cleanup(); }
+});
+
+test('PostgreSQL 18.7 installiert: nimmt den höchsten Bau (…-1807)', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.7-0ubuntu0.26.04.1', ok: '2.32.1~ubuntu26.04-1807', versions: PG_BUILDS } });
+  try {
+    s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18=2.32.1~ubuntu26.04-1807 timescaledb-2-postgresql-18=2.32.1~ubuntu26.04-1807']);
+  } finally { s.cleanup(); }
+});
+
+test('Kein Bau passt (PostgreSQL 18.5): wie bisher Paketname ohne Version, danach Apache-Rückfall', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.5-0ubuntu0.26.04.1', ok: 'keiner', versions: PG_BUILDS } });
+  try {
+    s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y postgresql-18-timescaledb']);
   } finally { s.cleanup(); }
 });
