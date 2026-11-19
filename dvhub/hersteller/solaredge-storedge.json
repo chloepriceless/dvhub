@@ -32,6 +32,10 @@
     "unbekannt und die Hauslast fehlt. Die Hauslast PV + Bezug − Einspeisung − Akku ist damit DCW + Netz und hängt",
     "nicht vom Akku-Vorzeichen ab.",
     "",
+    "Kennungsprobe (E10): DVhub liest vor dem ersten Wert und danach alle 10 min den Hersteller im SunSpec-Common-Modell",
+    "(40004, 16 Register, „SolarEdge“ [SPEC Tech Note v2.4]). Antwortet kein SolarEdge, zeigt DVhub keinen Wert an (Akku-Bank,",
+    "PV-Rechenweg und Zähler-Vorzeichen sind SolarEdge-eigen) und nennt den Grund im Leitstand.",
+    "",
     "Bewusst NICHT gelesen bzw. nicht abbildbar:",
     "- Netz je Phase (Modell 203 WphA–C, Offset 17–19): je eine Anfrage mehr am Ein-Client-Gerät; ließen sich als",
     "  meter.phases mit sunspec nachtragen.",
@@ -45,7 +49,14 @@
     "transport": "modbus",
     "port": 1502,
     "unitId": 1,
-    "timeoutMs": 2000
+    "timeoutMs": 2000,
+    "identityProbe": {
+      "_comment": "E10: SunSpec-Common-Modell ab 40002 (Modell 1), Hersteller C_Manufacturer 40004–40019 (String, 16 Register) = „SolarEdge “ [SPEC SunSpec Implementation Technical Note v2.4; .planning/docs/research/2026-11-15-solaredge-modbus-control-spec.md §2.1]. Bekanntes Register — neuere Firmware hängt nur bei unbekannten. Alle Werte hängen am Gerät: Akku-Bank 0xE100, PV = DCW + Akku, Zähler-Vorzeichen.",
+      "checks": [
+        { "label": "Hersteller (SunSpec Common 40004)", "fc": 3, "address": 40004, "quantity": 16, "prefix": "SolarEdge" }
+      ],
+      "hideOnMismatch": ["meter", "pvPowerW", "batteryPowerW", "soc", "selfConsumptionW", "deviceMaxChargeW", "deviceMaxDischargeW"]
+    }
   },
 
   "meter": {

@@ -23,13 +23,17 @@ Growatt hat drei Registerfamilien, die nicht vermischt werden dürfen. Darum tr�
 
 ## Anschluss
 
-- Der Wechselrichter spricht Modbus RTU (RS485, 9600 Baud, 8N1). DVhub braucht Modbus TCP: ein **RS485-Ethernet-Gateway
-  im Modus „Modbus TCP“** (nicht transparent), Port **502**, Unit-ID = Modbus-Adresse des Wechselrichters
+- Der Wechselrichter spricht Modbus RTU (RS485, 9600 Baud, 8N1). Empfohlen: ein **RS485-Ethernet-Gateway
+  im Modus „Modbus TCP“**, Port **502**, Unit-ID = Modbus-Adresse des Wechselrichters
   (Werkseinstellung **1**).
 - Anlagenadresse in DVhub = IP des Gateways.
 - Shine-Sticks (ShineWiFi, ShineLAN) senden an die Growatt-Cloud und bieten in der Regel kein lokales Modbus TCP (je
   Modell und Firmware verschieden, ungeprüft). Ein Stick mit fremder Firmware, die Modbus TCP spricht, geht ebenso.
 - Teilt sich das Gateway den RS485-Bus mit einem anderen Master (z. B. Datenlogger), kann es Kollisionen geben.
+- Ein RS485-Gateway im **Durchreiche-Modus** (transparent, „RTU over TCP“) geht seit E12: im Profil
+  (`/etc/dvhub/hersteller/growatt-sph.json`) unter `victron` `"framing": "rtu-over-tcp"` und `"port"` = Port des
+  Gateways ergänzen. Dann darf nur DVhub am Gateway fragen (keine zweite Verbindung, kein zweiter Master am Bus). Am
+  Gerät ungeprüft; Einzelheiten in `docs/HERSTELLERPROFIL-MIGRIEREN.md` §6.
 
 ## Was gelesen wird
 
@@ -66,7 +70,7 @@ Plexlog-Treiber `GrowattProtocollA` als Strukturhinweis (nur gelesen, kein Code 
 | Lücke | Folge | Braucht |
 |---|---|---|
 | Familienwahl (Holding 88 Protokollversion, 30099 VPP-Version) | DVhub prüft nicht, ob ein SPH antwortet; ein MIN/MOD liefert im Block 1000+ Fehler oder Unsinn | Kennungsprobe mit Familienwahl (E10) |
-| RS485 direkt, RTU-over-TCP, Solarman-Stick | nicht erreichbar | RTU-Rahmen bzw. Solarman V5 (E12); bis dahin Gateway im Modus Modbus TCP |
+| RS485 direkt, Solarman-Stick | nicht erreichbar | Gateway (Modus Modbus TCP oder Durchreiche-Modus mit `framing`); Solarman V5 fehlt |
 | Netz je Phase | Phasenwerte bleiben leer | Phasenregister in einer belastbaren Quelle |
 | PV je MPPT (Input 5–6, 9–10, …) | nur die Summe | ginge heute per `combine` |
 | Gerätegrenzen (max. Lade-/Entladeleistung) | nicht angezeigt | Register in einer Quelle |

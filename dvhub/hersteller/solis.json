@@ -2,7 +2,7 @@
   "label": "Solis Hybrid (S5/S6-EH, RHI) — nur Anzeige",
   "beta": true,
   "readOnly": true,
-  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz, PV, Akku-Leistung, SoC, Hauslast und die BMS-Stromgrenzen über ein RS485-Ethernet-Gateway oder einen Solis-Datenlogger mit Modbus TCP (Port 502, Slave-ID 1, Input-Register FC 04) und schreibt nichts an den Wechselrichter. Das Vorzeichen der Akku-Leistung ist in den Quellen strittig und am Gerät zu prüfen. Anleitung: docs/hersteller/solis.md.",
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz, PV, Akku-Leistung, SoC, Hauslast und die BMS-Stromgrenzen über ein RS485-Ethernet-Gateway oder einen Solis-Datenlogger mit Modbus TCP (Port 502, Slave-ID 1, Input-Register FC 04) und schreibt nichts an den Wechselrichter. Das Vorzeichen der Akku-Leistung nimmt DVhub aus dem Richtungsregister des Wechselrichters; am Gerät zu prüfen. Anleitung: docs/hersteller/solis.md.",
   "_doc": [
     "Solis-Hybrid (Ginlong): S5-EH1P, S6-EH1P, S6-EH3P, RHI-Serie (ESINV-Karte 33000 ff.). Reine String-WR (S5-GR, Mini, 3000er",
     "Karte) sind NICHT abgedeckt. NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit",
@@ -18,16 +18,23 @@
     "Transport: RTU 9600 8N1, Slave 1–99 (Standard 1), alles Input-Register FC 04, 32 bit High-Wort zuerst [SPEC].",
     "Modbus TCP über RS485-Ethernet-Gateway im Modus Modbus TCP oder über einen Datenlogger, der Modbus TCP spricht",
     "(S2-WL-ST Port 502 [COMM]). Ob der DLS-LAN-Stick auf Port 8899 rohes Modbus TCP spricht, ist ungeprüft; der S3-WIFI-ST",
-    "geht laut Community nicht. Solarman-V5 und transparente RTU-Gateways gehen nicht (E12 fehlt).",
+    "geht laut Community nicht. Solarman-V5 geht nicht. Ein Gateway im Durchreiche-Modus (transparent, „RTU over TCP“)",
+    "geht seit E12: unter victron \"framing\": \"rtu-over-tcp\" und \"port\": <Port des Gateways> ergänzen; dann darf",
+    "nur DVhub am Gateway fragen (RTU hat keine Transaktions-ID). Am Gerät ungeprüft.",
+    "",
+    "Akku-Vorzeichen (E8): DVhub nimmt den Betrag von 33149 und das Vorzeichen aus dem Richtungsregister 33135",
+    "(0 = Laden, 1 = Entladen) [SPEC; Plexlog rechnet ebenso mit 33135]. Das stimmt, ob 33149 ein Betrag ist",
+    "(solis-modbus, Plexlog) oder schon ein Vorzeichen trägt (evcc). Beide Register kommen aus EINER Anfrage",
+    "(33135–33150, 16 Register, ein Messzeitpunkt). Meldet 33135 etwas anderes als 0 oder 1, bleibt die Akku-Leistung",
+    "leer (Grund im Lesefehler) statt ein Vorzeichen zu raten.",
     "",
     "Bewusst NICHT gelesen bzw. nicht einstellbar (fehlt in der Engine):",
     "- Abstand zwischen Anfragen: Solis verlangt laut Community > 300 ms zwischen Frames. Seit E7 hält DVhub 400 ms",
     "  (victron.requestPacing); ein Takt mit 8 Lesungen dauert damit gut 3 s. Am Gerät prüfen, ob Lesefehler bleiben.",
-    "- Akku-Vorzeichen aus Richtungsregister 33135 (0 = Laden, 1 = Entladen): kann DVhub nicht anwenden (E8 fehlt). Das",
-    "  Profil liest 33149 als vorzeichenbehafteten Int32 wie evcc. Liefert das Gerät nur den Betrag, ist das Vorzeichen",
-    "  beim Entladen falsch (siehe batteryPowerW._comment).",
     "- Backup-Last 33148: nicht gelesen; ob 33147 sie enthält, ist offen.",
-    "- Gerätekennung 33000 (Modelltyp): DVhub prüft nicht, ob ein Solis-Hybrid antwortet (E10 fehlt)."
+    "- Gerätekennung 33000 (Modelltyp): DVhub prüft nicht, ob ein Solis-Hybrid antwortet. Die Kennungsprobe (E10) gibt",
+    "  es, aber keine Quelle nennt die Werte von 33000 (Plexlog prüft nur die Antwortlänge) — eine geratene Liste",
+    "  könnte ein echtes Gerät ausblenden."
   ],
 
   "victron": {
@@ -36,7 +43,7 @@
     "unitId": 1,
     "timeoutMs": 2000,
     "requestPacing": {
-      "_comment": "E7: Solis verlangt > 300 ms zwischen zwei Frames [COMM, .planning/docs/research/2026-11-15-solis-modbus-control-spec.md §1]; das Add-on Solis-Local nutzt 400 ms, DVhub ebenso (gemessen vom Ende der Antwort bis zur nächsten Anfrage). Höchstens 50 Register je Lesung [COMM] — das Profil liest höchstens 2.",
+      "_comment": "E7: Solis verlangt > 300 ms zwischen zwei Frames [COMM, .planning/docs/research/2026-11-15-solis-modbus-control-spec.md §1]; das Add-on Solis-Local nutzt 400 ms, DVhub ebenso (gemessen vom Ende der Antwort bis zur nächsten Anfrage). Höchstens 50 Register je Lesung [COMM] — das Profil liest höchstens 16 (Akku mit Richtung, 33135–33150).",
       "minRequestGapMs": 400,
       "maxRegistersPerRequest": 50
     }
@@ -70,14 +77,15 @@
       "offset": 0
     },
     "batteryPowerW": {
-      "_comment": "Akku-Leistung, Register 33149–33150 (S32, 1 W) [SPEC: „Vorzeichen mit 33135“]. STRITTIG (am Gerät prüfen): evcc liest 33149 als int32 mit scale −1 bei evcc-Konvention + = Entladen, also liefert das Gerät + = Laden wie DVhub → kein sign. solis-modbus bildet die Netto-Leistung dagegen über die Richtung 33135, Plexlog rechnet U × I mit 33135 — das spräche für einen Betrag ohne Vorzeichen; dann bräuchte es E8. Zeigt DVhub beim Entladen eine positive Akku-Leistung, ist 33149 ein Betrag und dieser Punkt falsch.",
+      "_comment": "Akku-Leistung, Register 33149–33150 (S32, 1 W) [SPEC: „Vorzeichen mit 33135“]. Ob 33149 selbst ein Vorzeichen trägt, ist strittig: evcc liest es als int32 mit Laden positiv, solis-modbus und Plexlog nehmen die Richtung aus 33135. Darum direction (E8): Betrag von 33149, Vorzeichen aus 33135 (U16, 0 = Laden → +, 1 = Entladen → −) [SPEC; Plexlog]. Beides aus einer Anfrage 33135–33150. Am Gerät prüfen: Laden positiv, Entladen negativ; ein anderer Wert in 33135 lässt den Punkt leer.",
       "enabled": true,
       "fc": 4,
       "address": 33149,
       "quantity": 2,
       "readType": "int32",
       "scale": 1,
-      "offset": 0
+      "offset": 0,
+      "direction": { "address": 33135, "values": { "0": 1, "1": -1 } }
     },
     "pvPowerW": {
       "_comment": "PV gesamt, Register 33057–33058 „Total DC output power“ (U32, 1 W) [SPEC; evcc]. DC-Leistung aller MPPT.",

@@ -45,11 +45,16 @@ Belege:
 
 Die Netzphasen L1–L3 bleiben leer: Der Simple-Mode hat keine Phasenleistungen am Netzpunkt.
 
+**Kennungsprobe:** DVhub liest vor dem ersten Wert und danach alle 10 Minuten Draht 40000 (Dok. 40001, laut
+Herstellerdoku „immer 0xE3DC“). Steht dort etwas anderes — etwa „SunS“, wenn am Gerät der SunSpec-Mode gewählt ist,
+oder ein Nachbarregister bei anderer Registerbasis —, zeigt DVhub Netz, PV, Akku, Ladestand und Hauslast nicht an und
+nennt den Grund als Hinweis im Leitstand (Log `identity_probe_mismatch`). Ist 40000 nicht lesbar, zeigt DVhub die
+Werte ungeprüft an und sagt das ebenfalls.
+
 ## Was fehlt
 
 | Lücke | Folge | Braucht |
 |---|---|---|
-| Kennung Dok. 40001 = 0xE3DC | DVhub prüft nicht, ob wirklich ein E3/DC im Simple-Mode antwortet | Kennungsprobe (E10) |
 | Zusätzliche Einspeiser (Dok. 40076) | Leistung eines weiteren PV-Wechselrichters am E3/DC fehlt in der PV-Anzeige; Vorzeichen in der Community uneinheitlich | Gerätetest, dann `combine` |
 | Wallbox (Dok. 40078/40080) | nicht gelesen | — |
 | Lade-/Entladegrenzen | nur über RSCP verfügbar | neuer Transport |
@@ -59,7 +64,8 @@ Die Netzphasen L1–L3 bleiben leer: Der Simple-Mode hat keine Phasenleistungen 
 Für den ersten Test zusätzlich `DVHUB_READ_ONLY=1` setzen. Das sperrt jeden Modbus-Write im Prozess, unabhängig vom
 Profil.
 
-1. **Kennung und Registerbasis:** Mit dem Register-Scan der Diagnose-Seite (oder `POST /api/meter/scan`) lesen: Host =
+1. **Kennung und Registerbasis:** Zeigt der Leitstand den Hinweis „Kennungsprobe passt nicht“ oder „nicht lesbar“,
+   mit dem Register-Scan der Diagnose-Seite (oder `POST /api/meter/scan`) lesen: Host =
    IP des Hauskraftwerks, Unit-ID 1, FC 3, Start = Ende = 40000, Menge 1. Erwartet: `58332` (= 0xE3DC).
    - Steht der Wert bei 40001 statt 40000, sind alle Adressen im Profil um 1 zu klein.
    - Kommt bei 40000 und 40001 ein Fehler, aber bei Adresse 0 der Wert 58332, zählt dieses Gerät ab 0. Dann gehören

@@ -16,10 +16,12 @@ const PORT = 1502;
 const sf = (n) => n & 0xffff; // SunSpec-Skalenfaktor als Registerwort (int16)
 
 // SolarEdge-Kette ab 40000: Common, Wechselrichter 103, (Synergy: 160), Zähler-Common, Zähler 203. Gibt die
-// Datenadressen zurück. Ohne Synergy liegt der Zähler-Wert wie in der Tech-Note an 40206 (SF 40210).
-function device({ meterModel = 203, synergy = false } = {}) {
+// Datenadressen zurück. Ohne Synergy liegt der Zähler-Wert wie in der Tech-Note an 40206 (SF 40210). Hersteller im
+// Common-Modell (40004, 16 Register, Kennungsprobe E10) laut Tech Note „SolarEdge “.
+const textWords = (text, n) => Array.from({ length: n }, (_, i) => ((text.charCodeAt(2 * i) || 0) << 8) | (text.charCodeAt(2 * i + 1) || 0));
+function device({ meterModel = 203, synergy = false, manufacturer = 'SolarEdge ' } = {}) {
   const dev = createRegisterDevice({ defaultUnitId: 1 });
-  const models = [{ id: 1, length: 65 }, { id: 103, length: 50 }];
+  const models = [{ id: 1, length: 65, data: textWords(manufacturer, 16) }, { id: 103, length: 50 }];
   if (synergy) models.push({ id: 160, length: 48 });
   models.push({ id: 1, length: 65 }, { id: meterModel, length: 105 });
   const at = dev.setSunspecChain(40000, models);
@@ -135,7 +137,7 @@ test('Poller (Tag): Scan löst 203 auf 40206/SF 40210 auf; Einspeisung mit W_SF 
 
   // Scan (Marke + Modellköpfe), dann genau die Profilregister — Wert und SF je in EINER Anfrage.
   assert.deepEqual(readSet(dev.requests), [
-    '3:1:40000x2', '3:1:40002x2', '3:1:40069x2', '3:1:40100x2', '3:1:40121x2', '3:1:40188x2', '3:1:40206x5',
+    '3:1:40000x2', '3:1:40002x2', '3:1:40004x16', '3:1:40069x2', '3:1:40100x2', '3:1:40121x2', '3:1:40188x2', '3:1:40206x5',
     '3:1:40295x2', '3:1:57668x2', '3:1:57670x2', '3:1:57716x2', '3:1:57732x2',
   ]);
   assert.ok(dev.requests.every((r) => r.host === TEST_HOST && r.port === PORT));
@@ -229,6 +231,30 @@ test('Poller: SunSpec „nicht implementiert“ (W_SF 0x8000, DCW 0x8000) → Z�
   await r2.poller.requestPoll();
   assert.equal(r2.state.meter.ok, false, 'W 0x8000 ist „nicht implementiert“, kein −32768 × 10^−1');
   assert.match(r2.state.meter.error, /keinen Gesamtwert/);
+});
+
+// --- E10: Kennungsprobe „SolarEdge“ im Common-Modell ------------------------------------------------------------
+
+test('E10: Profil prüft den Hersteller im SunSpec-Common-Modell (40004, 16 Register, „SolarEdge“)', () => {
+  const raw = readShippedProfile(ID);
+  assert.deepEqual(raw.victron.identityProbe.checks.map((c) => [c.fc, c.address, c.quantity, c.prefix]), [[3, 40004, 16, 'SolarEdge']]);
+  assert.deepEqual(effective().victron.identityProbe.hideOnMismatch,
+    ['meter', 'pvPowerW', 'batteryPowerW', 'soc', 'selfConsumptionW', 'deviceMaxChargeW', 'deviceMaxDischargeW']);
+});
+
+test('E10: anderer Hersteller im Common-Modell → keine Werte (Akku-Bank, PV-Rechenweg sind SolarEdge-eigen), Hinweis', async () => {
+  const cfg = effective();
+  const { dev, ...at } = device({ manufacturer: 'Fronius' });
+  setValues(dev, at, DAY);
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  const id = state.victron.identityProbe;
+  assert.equal(id.status, 'mismatch');
+  assert.match(id.text, /Hersteller \(SunSpec Common 40004\): Register 40004 = „Fronius“, erwartet beginnt mit „SolarEdge“/);
+  assert.equal(state.meter.ok, false);
+  for (const k of ['pvPowerW', 'batteryPowerW', 'soc', 'deviceMaxChargeW', 'deviceMaxDischargeW']) assert.equal(state.victron[k], null, k);
+  assert.ok(!dev.requests.some((r) => r.address >= 57600), 'Akku-Bank 0xE100 am fremden Gerät nie gelesen (neuere Firmware hängt dort)');
+  assert.deepEqual(dev.writes, []);
 });
 
 // --- Beta-Gate -------------------------------------------------------------------------------------------------

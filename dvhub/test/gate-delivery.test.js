@@ -45,6 +45,8 @@ test('Modbus ohne Ausnahme: nur nachweislich nie gesendet ist notSent, alles nac
     new Error('modbus write multiple: too many values'),
     new Error('modbus connect timeout'),
     Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:502'), { code: 'ECONNREFUSED' }),
+    // E12 (Codex 1e08996c P2): Unit-ID 0 über RTU wird vor dem Draht abgewiesen (Broadcast an jedes Gerät am Bus).
+    new Error('modbus rtu: Unit-ID 0 wäre am RS485-Bus ein Broadcast an jedes Gerät — nicht gesendet'),
   ];
   for (const e of notSent) assert.equal(classifyModbusError(e).delivery, 'notSent', e.message);
   const unknown = [
@@ -55,6 +57,12 @@ test('Modbus ohne Ausnahme: nur nachweislich nie gesendet ist notSent, alles nac
     new Error('pool cleanup'),
     Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
     new Error('irgendwas'),
+    // E12: jede Antwort-Unstimmigkeit über RTU kommt NACH dem Senden — womöglich angekommen.
+    new Error('modbus rtu: CRC falsch'),
+    new Error('modbus rtu: Antwort von Unit-ID 0, erwartet 1'),
+    new Error('modbus rtu: Funktionscode 131 in der Antwort, erwartet 6'),
+    new Error('modbus rtu: Bestätigung für Register 2717, erwartet 2716'),
+    new Error('modbus rtu: 1 Byte nach dem Ende der Antwort'),
   ];
   for (const e of unknown) assert.equal(classifyModbusError(e).delivery, 'unknown', e.message);
   assert.equal(modbusExceptionCode(new Error('modbus timeout')), null);

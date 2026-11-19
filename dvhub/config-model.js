@@ -5359,10 +5359,10 @@ export function createDefaultConfig() {
       // 2903 = 10 %). Nur der Entlade-Wächter liest sie (setpoint-follow-watchdog).
       activeSocLimitPct: { enabled: true, fc: 4, address: 2903, quantity: 1, signed: false, scale: 0.1, offset: 0 },
       // T-0118: live readback of Cerbo reg 2704 (com.victronenergy.settings
-      // /Settings/CGwacs/MaxDischargePower). signed int16 so the -1 "unlimited"
-      // sentinel decodes correctly (0xFFFF -> -1, not 65535). 0 = hold, positive
-      // = AC discharge cap in W. Same register controlWrite.maxDischargeW writes.
-      maxDischargeW: { enabled: true, fc: 4, address: 2704, quantity: 1, signed: true, scale: 1, offset: 0 },
+      // /Settings/CGwacs/MaxDischargePower). Wie hersteller/victron.json: 10-W-Schritte (scale 10), 0 = Entladung
+      // gesperrt und raw 0xFFFF/32767 = unbegrenzt (−1) unskaliert. Same register controlWrite.maxDischargeW writes.
+      // Abgleich mit dem Profil: test/victron-vorgaben-abgleich.test.js (vorher scale 1, Codex a5803519 P1).
+      maxDischargeW: { enabled: true, fc: 4, address: 2704, quantity: 1, signed: true, scale: 10, offset: 0, rawSentinels: [-1, 0], rawSentinelMap: { '-1': 32767 } },
       selfConsumptionW: { enabled: true, fc: 4, address: 817, quantity: 3, signed: false, scale: 1, offset: 0, sumRegisters: true }
     },
     controlWrite: {
@@ -5373,10 +5373,10 @@ export function createDefaultConfig() {
       gridSetpointW: { enabled: true, fc: 16, address: 2716, writeType: 'int32', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
       chargeCurrentA: { enabled: true, fc: 6, address: 2705, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
       minSocPct: { enabled: true, fc: 6, address: 2901, writeType: 'uint16', signed: false, scale: 0.1, offset: 0, wordOrder: 'be' },
-      // Cerbo reg 2704 — AC-side discharge cap (com.victronenergy.settings).
-      // 0 = no discharge (hold), positive int = cap in W, -1 (0xFFFF) = unlimited.
-      // Same register evcc batteryDischargeControl writes; see docs/research/inverter-control-landscape-eu.csv.
-      maxDischargeW: { enabled: true, fc: 6, address: 2704, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
+      // Cerbo reg 2704 — AC-side discharge cap (com.victronenergy.settings). Wie hersteller/victron.json: Register
+      // zählt 10-W-Schritte (scale 10); 0 = Entladung sperren geht unskaliert, −1 = unbegrenzt geht als raw 32767
+      // (Victron verwirft raw −1). Same register evcc batteryDischargeControl writes.
+      maxDischargeW: { enabled: true, fc: 6, address: 2704, writeType: 'int16', signed: true, scale: 10, offset: 0, wordOrder: 'be', rawSentinels: [0], rawSentinelMap: { '-1': 32767 } },
       // Cerbo reg 2706 — /Settings/CGwacs/MaxFeedInPower, Einspeisegrenze, zählt
       // in 100-W-Schritten (Victron-Skala 0.01), -1 = unbegrenzt. Nur für die
       // LUOX-Teilvorgabe des Direktvermarkters (dv-interface-luox.js); der Wert

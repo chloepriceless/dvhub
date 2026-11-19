@@ -21,12 +21,12 @@
     "0x0586 = 1414, 0x0589 = 1417, 0x0606 = 1542, 0x0608 = 1544, 0x104B = 4171, 0x104C = 4172.",
     "",
     "Bewusst NICHT gelesen:",
-    "- PV3 und folgende (0x058C ff.): ob ein String-Register existiert, sagt nur die Adressmaske des Blocks (E10 fehlt).",
+    "- PV3 und folgende (0x058C ff.): ob ein String-Register existiert, sagt nur die Adressmaske des Blocks (Bitmasken prüft die Kennungsprobe E10 nicht).",
     "  Ein fehlendes Register ließe die ganze PV-Summe ausfallen. Die Zielgeräte haben 2 MPPT.",
     "- PV gesamt 0x05C4 (0,1 kW [COMM], in der Herstellerkarte nicht bestätigt): gröber als PV1 + PV2.",
     "- Akku 2 ff. (0x060D ff.) und Akku gesamt 0x0667/0x0668 (0,1 kW, [DECOMP]/[COMM], nicht in der Herstellerkarte):",
     "  das Profil liest Akku 1. Bei mehreren Akku-Eingängen fehlen die weiteren — am Gerät prüfen.",
-    "- Gerätekennung/Adressmasken: DVhub prüft nicht, ob die Karte „General“ antwortet (E10 fehlt)."
+    "- Gerätekennung/Adressmasken: DVhub prüft nicht, ob die Karte „General“ antwortet (Kennungsprobe E10 vorhanden, aber kein Register mit belegten Werten)."
   ],
 
   "victron": {

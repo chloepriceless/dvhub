@@ -466,6 +466,59 @@ test('zweite Anlage einbezogen, aber ihre Werte veraltet: nichts abbuchen', () =
   }
 });
 
+// Feld Nebeling 19.11.: 575 min unsichere Akkuwerte, die Sperre fiel nie — im Leitstand nicht zu sehen.
+test('Episode im Zustand: summary().uncertain zeigt Gründe, auch im lesenden Web-Prozess; weg nach dem Ende', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    const bad = (n) => ({ errors: { soc: 'MQTT-Wert nicht verfügbar oder veraltet für: soc' }, fieldUpdatedAt: { batteryPowerW: n, soc: n } });
+    const good = (n) => ({ errors: {}, fieldUpdatedAt: { batteryPowerW: n, soc: n } });
+    assert.equal(t.summary().uncertain, null, 'vorher nichts');
+    t.tick({ nowMs: t0 + 30_000, socPct: 6, capacityWh: 10_000, victron: bad(t0 + 30_000) });
+    const u = t.summary().uncertain;
+    assert.deepEqual(u?.reasons, ['soc_error']);
+    assert.equal(u.since, new Date(t0 + 30_000).toISOString());
+    t.persist();
+    const web = createGridShareTracker({ getCfg: () => ({}), dataDir: dir, readOnly: true });
+    assert.deepEqual(web.summary().uncertain?.reasons, ['soc_error'], 'Web-Prozess sieht es aus der Datei');
+    for (let i = 1; i <= 7; i += 1) t.tick({ nowMs: t0 + 30_000 + i * 10_000, socPct: 6, capacityWh: 10_000, victron: good(t0 + 30_000 + i * 10_000) });
+    assert.equal(t.summary().uncertain, null, 'nach 60 s sicherer Werte weg');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Neustart: eine alte Unsicherheit aus der Datei verschwindet mit dem ersten sicheren Wert', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    t.tick({ nowMs: t0 + 30_000, socPct: 6, capacityWh: 10_000, victron: { errors: { soc: 'x' }, fieldUpdatedAt: { batteryPowerW: t0 + 30_000, soc: t0 + 30_000 } } });
+    t.persist();
+    const t2 = createGridShareTracker({ getCfg: () => ({}), dataDir: dir });
+    assert.ok(t2.summary().uncertain, 'aus der Datei geladen');
+    t2.tick({ nowMs: t0 + 40_000, socPct: 6, capacityWh: 10_000, victron: { errors: {}, fieldUpdatedAt: { batteryPowerW: t0 + 40_000, soc: t0 + 40_000 } } });
+    assert.equal(t2.summary().uncertain, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Codex cbd4195e P2: nach einem Neustart kann die neue Episode andere Gründe in gleicher Anzahl haben.
+test('Neustart mit anderer Ursache: neue Episode ersetzt die alten Gründe', () => {
+  const dir = mkDir();
+  try {
+    const { t, t0 } = charged200(dir);
+    t.tick({ nowMs: t0 + 30_000, socPct: 6, capacityWh: 10_000, victron: { errors: { soc: 'x' }, fieldUpdatedAt: { batteryPowerW: t0 + 30_000, soc: t0 + 30_000 } } });
+    t.persist();
+    const t2 = createGridShareTracker({ getCfg: () => ({}), dataDir: dir });
+    t2.tick({ nowMs: t0 + 40_000, socPct: 6, capacityWh: 10_000, victron: { errors: { batteryPowerW: 'y' }, fieldUpdatedAt: { batteryPowerW: t0 + 40_000, soc: t0 + 40_000 } } });
+    assert.deepEqual(t2.summary().uncertain?.reasons, ['battery_power_error']);
+    assert.equal(t2.summary().uncertain.since, new Date(t0 + 40_000).toISOString());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Episode: Ende erst nach 60 s sicherer Werte im Log, Tageszeile und CSV nennen die Minuten ohne Abbuchung', () => {
   const dir = mkDir();
   try {

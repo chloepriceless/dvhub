@@ -19,12 +19,16 @@ den Wechselrichter. Die Abregelung bleibt aus, auch wenn „Aktive Anlagensteuer
 
 ## Anschluss
 
-- Der Wechselrichter spricht Modbus RTU (RS485 am COM-Port). DVhub braucht Modbus TCP, dafür gibt es zwei Wege:
+- Der Wechselrichter spricht Modbus RTU (RS485 am COM-Port). Empfohlen sind zwei Wege mit Modbus TCP:
   - **RS485-Ethernet-Gateway** (z. B. Waveshare) im Modus **Modbus TCP**, nicht transparent. Baudrate am Gateway
     wie am Wechselrichter (je Firmware 9600 bis 115200, oft 19200 bei G4), 8N1. Bei X3-Hybrid G4 laut Community
     Pin 4 = A, Pin 5 = B.
   - **PocketWiFi 3.0 ab Firmware V3.004.03**, Port 502. Ältere PocketWiFi/PocketLAN können es nicht; neuere
     Dongle-Firmware sperrt den lokalen Zugang teils wieder.
+- Ein RS485-Gateway im **Durchreiche-Modus** (transparent, „RTU over TCP“) geht seit E12: im Profil
+  (`/etc/dvhub/hersteller/solax-g4.json`) unter `victron` `"framing": "rtu-over-tcp"` und `"port"` = Port des Gateways
+  ergänzen. Dann darf nur DVhub am Gateway fragen (keine zweite Verbindung, kein zweiter Master am Bus). Am Gerät
+  ungeprüft; Einzelheiten in `docs/HERSTELLERPROFIL-MIGRIEREN.md` §6.
 - Unit-ID **1** (Feldberichte nennen auch 15). Anlagenadresse in DVhub = IP des Gateways bzw. des PocketWiFi.
 - Modbus muss am Wechselrichter eingeschaltet sein (Installateur-Menü). Zum Lesen ist das Entsperren über Register
   0x00 nicht nötig; DVhub schreibt es nicht.
@@ -57,12 +61,12 @@ evcc [solax.yaml](https://github.com/evcc-io/evcc/blob/master/templates/definiti
 
 | Lücke | Folge | Braucht |
 |---|---|---|
-| Richtungs-Flag 0x19 `BDCStatus` (0 = Entladen, 1 = Laden) | DVhub liest 0x16 als vorzeichenbehafteten Wert (wie evcc). Liefert ein Gerät nur Beträge, erscheint Entladen als Laden | Vorzeichen aus Statusregister (E8) |
+| Richtungs-Flag 0x19 `BDCStatus` (0 = Entladen, 1 = Laden) | DVhub liest 0x16 als vorzeichenbehafteten Wert (wie evcc). Liefert ein Gerät nur Beträge, erscheint Entladen als Laden | E8 (`direction`) gibt es; bewusst nicht eingeschaltet, weil keine Integration 0x19 nutzt und unbelegt ist, ob es im Ruhezustand weitere Werte meldet (dann wären Akku und Hauslast leer). Nach dem Gerätetest einschalten |
 | PV3 0x124 (3 MPPT) | PV zu niedrig auf 3-MPPT-Geräten. Ins Profil genommen, legte ein fehlendes Register auf 2-MPPT-Geräten die ganze PV lahm | ginge heute per `combine`, je Gerät nach Test |
 | Zweiter Akku-Stapel (0x129/0x12D) | zweiter Akku fehlt | eigener Punkt bzw. `combine` |
 | Netz je Phase | Phasenwerte bleiben leer; 0x70–0x75 sind WR-Werte, nicht der Zähler | — |
 | Gerätekennung/Generation | DVhub prüft nicht, ob ein G4 antwortet | Kennungsprobe (E10) |
-| RS485 direkt / transparentes Gateway | geht nicht, nur Modbus TCP | RTU-over-TCP (E12) |
+| RS485 direkt (serielle Schnittstelle am DVhub-Gerät) | geht nicht, nur über ein Gateway | — |
 
 ## Am Gerät prüfen (Feldtest)
 
@@ -75,7 +79,9 @@ Profil.
    Zeigt DVhub Einspeisung, bei `meter` die Zeile `"sign": -1` entfernen und melden.
 3. **Akku-Vorzeichen:** Akku sichtbar laden lassen, dann entladen lassen. Laden muss **positiv**, Entladen
    **negativ** erscheinen. Laden negativ: bei `batteryPowerW` `"sign": -1` ergänzen. Beide positiv: das Gerät
-   liefert nur Beträge (E8) — bitte melden.
+   liefert nur Beträge — bei `batteryPowerW` `"direction": { "address": 25, "values": { "0": -1, "1": 1 } }`
+   ergänzen (Vorzeichen aus BDCStatus 0x19) und melden. Vorher 0x19 per Register-Scan beim Laden, Entladen und im
+   Ruhezustand lesen: nur 0 und 1 dürfen vorkommen.
 4. **PV:** Summe mit der App vergleichen. Bei 3 MPPT fehlt PV3.
 5. **Hauslast:** Die abgeleitete Last mit der App vergleichen. Abweichungen um die Wandlerverluste (einige
    Prozent) sind erwartet.

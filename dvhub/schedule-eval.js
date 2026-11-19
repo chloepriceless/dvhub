@@ -36,7 +36,7 @@ import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
 import { createSungrowEms, endpointKeyOf, sungrowEmsConf, resolveSecondInverter } from './services/inverter/sungrow.js';
 import { RELEASE_BACKOFF_AFTER, RELEASE_BACKOFF_MS } from './services/release-backoff.js';
-import { createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, inverterReleaseState, unwrapLegacyWrite } from './services/gate/legacy.js';
+import { c2AllowsRelease, createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, inverterReleaseState, unwrapLegacyWrite } from './services/gate/legacy.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -323,12 +323,23 @@ export function createScheduleEvaluator(ctx) {
   // cfg.writeSafety.ok === false. Dann schreibt KEIN Pfad mehr (Chokepoint, Keepalive/2716, DV-Abregelung,
   // Nulleinspeisung, Sungrow-Aktuator) — die Anlage bleibt ungeregelt, bis jemand eingreift (gewollt, sicherer).
   // Dazu ein LAUTER Alarm, einmal je Grund (nicht jede ~15-s-Runde fluten); beim Erholen wird der Alarm neu scharf.
-  function writeConfigUnsafeReason(cfg, source = null) {
+  // Ausnahme (Christin 19.11.2026, „denke schon“): die EINE Rücknahme beim Not-Halt (`haltRelease`, Aktionsklasse
+  // haltNeutralize) darf durch, wenn nur das Herstellerprofil ungültig ist (Torzustand profileInvalid) UND sie ein
+  // festes Literal Richtung Grundzustand schreibt: die Freigabe einer eigenen Sperre über die Direktregister/MQTT-Flaggen
+  // (feedExcessDcPv = 1, dontFeedExcessAcPv = 0; applyDvVictronControl) und das Abräumen des Deckels (wMaxLimEna = 0;
+  // zeroFeedInTick). Die Verbindung ist dann die des Betreibers; Adressen gibt es nur bei victron (Code-Vorgaben, für
+  // 2707/2708 gleich dem Profil — test/c2-nothalt-release.test.js), sonst keine (R-T2.1). NICHT ausgenommen: Rücknahmen
+  // auf einen gesicherten Wert (2704, 2706, Sequenzschritte) — deren Kodierung käme aus dem ungültigen Profil, bei
+  // victron aus den Code-Vorgaben (wichen bei 2704 ab, Codex a5803519 P1; angeglichen 679625e4 — gesperrt bleibt es trotzdem). Das Tor prüft dasselbe
+  // (services/gate/index.js checkRelease). Eine kaputte config.json sperrt weiter alles (Vorgaben mit leerem Host →
+  // localhost; services/gate/legacy.js inverterReleaseState). Not-Halt-Regel und Adresse des Pfads gelten weiter.
+  function writeConfigUnsafeReason(cfg, source = null, { haltRelease = false } = {}) {
     const ws = cfg?.writeSafety;
     if (!ws || ws.ok !== false) {
       if (state.ctrl?._writeUnsafeAlarm) state.ctrl._writeUnsafeAlarm = null;
       return null;
     }
+    if (haltRelease === true && state.ctrl?.discretionaryWritesPaused === true && c2AllowsRelease(cfg)) return null;
     const reason = ws.reason || 'config_invalid';
     if (state.ctrl && state.ctrl._writeUnsafeAlarm !== reason) {
       state.ctrl._writeUnsafeAlarm = reason;
@@ -339,7 +350,9 @@ export function createScheduleEvaluator(ctx) {
   }
 
   function deviceWriteGate(cfg) {
-    // C2 zuerst: ungültige Konfiguration sperrt ALLE Gerätewrites, vor jeder herstellerspezifischen Prüfung.
+    // C2 zuerst: ungültige Konfiguration sperrt ALLE Gerätewrites, vor jeder herstellerspezifischen Prüfung. Auch die
+    // Rücknahmen auf einen gesicherten Wert (Entladegrenze 2704, Sequenzen, 2706) — ihre Kodierung käme aus dem jetzt
+    // ungültigen Profil (Codex a5803519 P1); die Literal-Ausnahme steht nur in den beiden Wegen darunter.
     const unsafe = writeConfigUnsafeReason(cfg);
     if (unsafe) return unsafe;
     if (cfg?.identify?.requiredForWrites !== true) return null;
@@ -894,6 +907,9 @@ export function createScheduleEvaluator(ctx) {
   async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false, budgeted = false, budgetHoldExempt = false, gate: seqGate } = {}) {
     const cfg = getCfg();
     if (!seqGate?.run) throw new Error('runDvControlSequence ohne Schreibtor-Lauf (Verdrahtungsfehler)');
+    // C2 ohne Ausnahme, auch für die Rücknahme im Not-Halt: Sequenzschritte und die Einspeisegrenze 2706 schreiben einen
+    // GESICHERTEN Wert (restoreBefore) mit der Kodierung des Profils — das ist gerade ungültig (R-T2.3; bei victron gälten
+    // die Code-Vorgaben, Codex a5803519 P1). Nur feste Literale dürfen trotz C2 zurück (writeConfigUnsafeReason).
     const gate = deviceWriteGate(cfg);
     if (gate) throw new Error(gate);
     // M14b Schreibbudget (nur Einspeise-Sequenzpfad, budgeted=true): ist das
@@ -1228,8 +1244,10 @@ export function createScheduleEvaluator(ctx) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
     if (!dc) return;
-    // C2: ungültige Konfiguration → kein Abregel-/Freigabe-Write (eigener Schreibweg, umgeht deviceWriteGate).
-    if (writeConfigUnsafeReason(cfg, reason)) return;
+    // C2: ungültige Konfiguration → kein Abregel-/Freigabe-Write (eigener Schreibweg, umgeht deviceWriteGate) — außer
+    // der einen Freigabe einer eigenen Sperre im Not-Halt (haltNeutralize) bei ungültigem Herstellerprofil.
+    const c2HaltRelease = feedIn === true && reason === 'emergency_stop_release';
+    if (writeConfigUnsafeReason(cfg, reason, { haltRelease: c2HaltRelease })) return;
     // Not-Halt: nur die eine Freigabe (notHaltDvDecision) und Sperren einer
     // weiterlaufenden Pflicht-Klasse; alles andere schreibt nichts.
     if (state.ctrl.discretionaryWritesPaused) {
@@ -2804,7 +2822,11 @@ export function createScheduleEvaluator(ctx) {
       }
       // §14a nach Bedarf: ohne Ziel schreibt DVhub nichts — der GX kann einen
       // älteren Sollwert halten, der Bedarf ist also unbekannt (nicht 0).
-      if (target === 'gridSetpointW' && eff.value == null) state.ctrl.p14aBatteryWantW = null;
+      if (target === 'gridSetpointW' && eff.value == null) {
+        state.ctrl.p14aBatteryWantW = null;
+        // Kein Netz-Sollwert mehr → auch kein „EOS-Halten ausgesetzt"-Hinweis (M8).
+        if (state.ctrl.eosGridShareSuspend) { state.ctrl.eosGridShareSuspend = null; state.ctrl._eosSuspendKey = null; }
+      }
       if (eff.value == null) continue;
 
       // === T-0121/T-0122 EOS closed-loop export: live-PV recompute ============
@@ -2867,30 +2889,32 @@ export function createScheduleEvaluator(ctx) {
       // duerfen dann nicht in den Akku laden. Fehlen Live-Werte oder sind sie
       // alt → 0 (Eigenverbrauch wie ohne Regel).
       // M8 (Feld 16.11., Muss): solange der Netzstrom-Anteil im Akku GESPERRT ist (gridShare.locked:
-      // battery_grid_export_blocked an EOS), EOS-„Halten" NICHT ausführen — und EOS-Netzladen ebenfalls nicht.
+      // battery_grid_export_blocked an EOS), EOS-„Halten" NICHT ausführen.
       // Die Sperre löst sich NUR durch Entladen ins Haus (Netzanteil < releaseKwh). „Halten" verhindert genau das,
       // und das „Entladen" im Plan ist nur das Ende des rollenden Regel-Horizonts (ruleHorizonHours) → die Sperre
       // könnte sich sonst NIE lösen (PV bleibt in teuren Stunden ausgesperrt). Stattdessen Eigenverbrauch
       // (Standard-Sollwert): der Akku deckt die Last, der Netzanteil wird im Haus verbraucht; fällt die Sperre
-      // (< releaseKwh), greift „Halten"/„Netzladen" wieder nach Plan. (Netzladen während der Sperre erzeugte den
-      // Anteil neu — es bleibt daher ebenfalls ausgesetzt, bis die Sperre fällt.)
+      // (< releaseKwh), greift „Halten" wieder nach Plan.
+      // EOS-Netzladen läuft dagegen IMMER nach Plan (Feld Nebeling 18./19.11.): die Sperre verbietet nur, Netzstrom
+      // aus dem Akku ins Netz zu geben — Laden aus dem Netz ist gewollt, der Strom wird danach im Haus verbraucht.
+      // Netzladen auszusetzen hielt einen fast leeren Akku leer, die Sperre fiel nie (~11 h kein Laden).
       const m8ShareLocked = ctx.gridShare?.isLocked?.() === true;
       const m8IsHold = target === 'gridSetpointW' && eff.rule?.optimizer === 'eos' && eff.rule?.closedLoopHold === true;
-      const m8IsGridCharge = target === 'gridSetpointW' && eff.rule?.optimizer === 'eos'
-        && !eff.rule?.closedLoopHold && !eff.rule?.closedLoopExport && Number(eff.value) > 0;
-      if (m8ShareLocked && (m8IsHold || m8IsGridCharge)) {
+      if (m8ShareLocked && m8IsHold) {
         const selfW = Number(cfg.schedule?.defaultGridSetpointW);
         eff.value = Number.isFinite(selfW) ? selfW : 0; // Eigenverbrauch (Netzanteil im Haus verbrauchen)
-        eff.source = m8IsHold ? 'eos_grid_hold_suspended' : 'eos_grid_charge_suspended';
+        eff.source = 'eos_grid_hold_suspended';
         let gridKwh = null; try { gridKwh = ctx.gridShare?.summary?.()?.gridKwh ?? null; } catch { /* best effort */ }
-        state.ctrl.eosGridShareSuspend = { at: Date.now(), kind: m8IsHold ? 'hold' : 'charge', gridKwh, ruleId: eff.rule?.id ?? null };
+        state.ctrl.eosGridShareSuspend = { at: Date.now(), kind: 'hold', gridKwh, ruleId: eff.rule?.id ?? null };
         const key = `${eff.source}:${eff.rule?.id ?? ''}`;
         if (state.ctrl._eosSuspendKey !== key) {
-          pushLog(eff.source, { gridKwh, text: `EOS-${m8IsHold ? 'Halten' : 'Netzladen'} ausgesetzt: Netzstrom im Akku (${gridKwh != null ? gridKwh.toFixed(2) : '?'} kWh) wird zuerst im Haus verbraucht.` });
+          pushLog(eff.source, { gridKwh, text: `EOS-Halten ausgesetzt: Netzstrom im Akku (${gridKwh != null ? gridKwh.toFixed(2) : '?'} kWh) wird zuerst im Haus verbraucht.` });
           state.ctrl._eosSuspendKey = key;
         }
       } else {
-        if (state.ctrl.eosGridShareSuspend) { state.ctrl.eosGridShareSuspend = null; state.ctrl._eosSuspendKey = null; }
+        // Nur der Netz-Sollwert-Durchlauf hebt den Hinweis auf — der Ladestrom-Durchlauf danach löschte ihn sonst jeden
+        // Takt (Leitstand ohne Hinweis, Log-Zeile alle 5 s; Prod 19.11.).
+        if (target === 'gridSetpointW' && state.ctrl.eosGridShareSuspend) { state.ctrl.eosGridShareSuspend = null; state.ctrl._eosSuspendKey = null; }
         if (m8IsHold) {
           const marginW = eff.rule.evPlanned
             ? Math.max(0, Number(cfg.optimizer?.eosGridHoldEvMarginW ?? 1000))
@@ -3243,8 +3267,11 @@ export function createScheduleEvaluator(ctx) {
       const rvrtConf = cfg.controlWrite?.wMaxLimPctRvrtTms;
       const outConf = cfg.controlWrite?.outWRte;
       const zfi = zfiState();
-      // C2: ungültige Konfiguration → kein Nulleinspeisungs-Write (eigener Schreibweg, umgeht deviceWriteGate).
-      if (writeConfigUnsafeReason(cfg, 'zero_feed_in')) return;
+      // C2: ungültige Konfiguration → kein Nulleinspeisungs-Write (eigener Schreibweg, umgeht deviceWriteGate) — außer
+      // dem einen Abräumen des Deckels im Not-Halt (haltNeutralize, Zweig unten) bei ungültigem Herstellerprofil.
+      const zfiHaltRelease = zfi.capActive === true
+        && !(state.ctrl._lastDvFeedIn === false && notHaltAllowsDvReason(state.ctrl._dvBlockReason));
+      if (writeConfigUnsafeReason(cfg, 'zero_feed_in', { haltRelease: zfiHaltRelease })) return;
       // Profil ohne Feature / Punkte (noch) nicht per SunSpec-Scan aufgelöst →
       // still bleiben. Ein am Gerät stehender Deckel verfällt über RvrtTms.
       if (!zc?.enabled || transport.type !== 'modbus') return;

@@ -90,3 +90,72 @@ describe('createMqttTransport mit schema dvhub', () => {
     await t.destroy();
   });
 });
+
+// Feld Nebeling 19.11.: der Lieferant (HA/Loxone) schickte einen Eingang nicht mehr — DVhub verband sich deshalb alle
+// ~92 s neu (mqtt_disconnected → mqtt_connected in 18 ms, 57× in 1,5 h, Log voll). Im DVhub-Schema bringt das nichts:
+// kein R/-Nachfordern, retained Replays werden verworfen. Neu verbinden nur, wenn GAR NICHTS Frisches mehr ankommt
+// (dann kann das Abo hängen); kommen andere Eingänge frisch, steht das Abo — der eine Wert fehlt beim Lieferanten.
+describe('DVhub-Schema: Neuverbinden bei veraltetem Eingang', () => {
+  async function dvhubTransport() {
+    const { EventEmitter } = await import('node:events');
+    let fake;
+    let reconnects = 0;
+    const connectFn = () => {
+      fake = new EventEmitter();
+      fake.connected = true;
+      fake.subscribe = (topics, opts, cb) => { (typeof opts === 'function' ? opts : cb)?.(null); };
+      fake.publish = () => {};
+      fake.end = () => {};
+      fake.reconnect = () => { reconnects += 1; };
+      setImmediate(() => fake.emit('connect'));
+      return fake;
+    };
+    const t = createMqttTransport(
+      { host: '127.0.0.1', mqtt: { schema: 'dvhub', topicPrefix: 'dvhub', broker: 'mqtt://127.0.0.1:1883', staleMaxAgeMs: 90000 } },
+      { connectFn }
+    );
+    await t.init();
+    return { t, reconnects: () => reconnects };
+  }
+
+  it('ein Eingang veraltet, andere frisch → kein Neuverbinden, Wert bleibt unbekannt', async () => {
+    const { t, reconnects } = await dvhubTransport();
+    try {
+      const now = Date.now();
+      t.ingest('battery_soc', 6, now - 200_000);      // SoC seit 200 s nicht mehr geschickt
+      t._onMessage('dvhub/input/grid/total_w', Buffer.from('120'), { retain: false }); // Netz kommt frisch per MQTT
+      await assert.rejects(() => t.readPoint('soc'), /veraltet/);
+      assert.equal(reconnects(), 0, 'Abo steht (andere Eingänge frisch) — Neuverbinden hilft nicht');
+    } finally {
+      await t.destroy();
+    }
+  });
+
+  // Codex ac04827a P2: per HTTP gepushte Werte (/api/input/push) landen im selben Zwischenspeicher — sie beweisen
+  // nicht, dass das MQTT-Abo lebt. Gemischte Anlage: MQTT steht still, HTTP frisch → trotzdem neu verbinden.
+  it('nur HTTP-Push frisch, MQTT-Eingang veraltet → neu verbinden (HTTP beweist kein lebendes Abo)', async () => {
+    const { t, reconnects } = await dvhubTransport();
+    try {
+      const now = Date.now();
+      t.ingest('battery_soc', 6, now - 200_000);
+      t.ingest('grid_total', 120, now);              // frisch, aber per HTTP
+      await assert.rejects(() => t.readPoint('soc'), /veraltet/);
+      assert.equal(reconnects(), 1);
+    } finally {
+      await t.destroy();
+    }
+  });
+
+  it('alle Eingänge veraltet → einmal neu verbinden (Abo könnte hängen)', async () => {
+    const { t, reconnects } = await dvhubTransport();
+    try {
+      const old = Date.now() - 200_000;
+      t.ingest('battery_soc', 6, old);
+      t.ingest('grid_total', 120, old);
+      await assert.rejects(() => t.readPoint('soc'), /veraltet/);
+      assert.equal(reconnects(), 1);
+    } finally {
+      await t.destroy();
+    }
+  });
+});

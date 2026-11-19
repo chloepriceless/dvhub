@@ -68,6 +68,12 @@ evcc [solaredge-hybrid.yaml](https://github.com/evcc-io/evcc/blob/master/templat
 [WillCodeForCats/solaredge-modbus-multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) (Known Issues),
 Zusammenfassung in `.planning/docs/research/2026-11-15-solaredge-modbus-control-spec.md` §1–2.
 
+**Kennungsprobe:** DVhub liest vor dem ersten Wert und danach alle 10 Minuten den Hersteller im SunSpec-Common-Modell
+(40004, 16 Register). Beginnt er nicht mit „SolarEdge“, zeigt DVhub keinen Wert an — Akku-Bank, PV-Rechenweg und
+Zähler-Vorzeichen gelten nur für SolarEdge — und nennt den Grund als Hinweis im Leitstand. Die Akku-Bank liest DVhub
+an einem fremden Gerät dann gar nicht erst (neuere SolarEdge-Firmware hängt an unbekannten Registern, andere Geräte
+womöglich auch).
+
 ## Was fehlt
 
 | Lücke | Folge | Braucht |
@@ -77,7 +83,6 @@ Zusammenfassung in `.planning/docs/research/2026-11-15-solaredge-modbus-control-
 | Akku ohne Modbus-Freigabe | Akku, SoC, PV und Hauslast leer | Freischaltung durch SolarEdge; ein „PV ohne Akku“-Rückfall fehlt in der Engine |
 | Akku 2 und 3 (0xE200, 0xE300) | nicht gelesen | weitere Punkte |
 | Status 40107 (5 = abgeregelt) | nicht angezeigt | Statuspunkt |
-| Gerätekennung („SolarEdge“ im Common-Modell) | DVhub prüft nicht, ob ein SolarEdge antwortet | Kennungsprobe (E10) |
 
 ## Am Gerät prüfen (Feldtest)
 

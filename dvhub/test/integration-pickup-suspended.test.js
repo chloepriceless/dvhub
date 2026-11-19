@@ -8,7 +8,10 @@
 //     null) und nennen den Grund (dvhub_control_suspended; im MQTT-Spiegel kein eigenes Topic).
 //   • §14a-/EEBUS-Grenzen zum Nachfolgen: im Not-Halt und Lese-Modus „keine Grenze“; bei ungültigem Herstellerprofil
 //     laufen sie weiter (betrifft nur den Wechselrichter).
-//   • Messwerte und Status (Netz, SoC, Rücklesungen, paused, forcedOff, DV-Signal) laufen unverändert weiter.
+//   • Direktvermarkter-Signal (dvControlValue, forcedOff): im Not-Halt und Lese-Modus „kein Signal“ (null) — Christin
+//     19.11.2026: „im Not-Halt sollte das eigentlich auch stoppen, das DV-Signal“. Bei ungültiger Konfiguration läuft
+//     es weiter: DVhub kann dann selbst nicht abregeln, die Weitergabe ist der einzige Weg, der Abregelung zu folgen.
+//   • Messwerte und Status (Netz, SoC, Rücklesungen, paused) laufen unverändert weiter.
 //   • Nach dem Aufheben bzw. mit wieder gültiger Config geht der aktuelle Sollwert wieder hinaus.
 // Nur über die öffentlichen Wege (Routen-Handler, Publisher, Tor) — läuft so auch gegen 24eabf21 (dort rot).
 
@@ -109,15 +112,24 @@ function assertNoSetpoint(lines, reason, paused) {
 }
 
 function assertMeasuredUnchanged(lines) {
-  // Werte laufen weiter: Netz, SoC, Akku, PV, Rücklesungen der Anlage, DV-Signal.
+  // Werte laufen weiter: Netz, SoC, Akku, PV, Rücklesungen der Anlage.
   assert.equal(lines.gridTotalW, '120');
   assert.equal(lines.soc, '55');
   assert.equal(lines.batteryPowerW, '-300');
   assert.equal(lines.pvTotalW, '900');
   assert.equal(lines.gridSetpointW, '-100', 'Rücklesung bleibt');
   assert.equal(lines.minSocPct, '20', 'Rücklesung bleibt');
-  assert.equal(lines.dvControlValue, '1');
-  assert.equal(lines.forcedOff, 'false');
+}
+
+// Direktvermarkter-Signal: weitergereicht (Normalbetrieb, ungültige Config) bzw. ausgesetzt (Not-Halt, Lese-Modus).
+function assertDvPassed(lines, { value = '1', forcedOff = 'false' } = {}) {
+  assert.equal(lines.dvControlValue, value, 'DV-Signal läuft weiter');
+  assert.equal(lines.forcedOff, forcedOff, 'DV-Abregelung läuft weiter');
+}
+function assertDvSuspended(lines) {
+  // Christin 19.11.2026: kein DV-Signal nach außen — wer es abholt, regelte sonst die PV ab, obwohl DVhub steht.
+  assert.equal(lines.dvControlValue, 'null', 'kein DV-Signal statt des aktuellen');
+  assert.equal(lines.forcedOff, 'null', 'keine DV-Abregelung nach außen');
 }
 
 function assertCurrentSetpoint(lines) {
@@ -144,14 +156,37 @@ describe('R-T3 GET /api/integration/loxone — Not-Halt', () => {
       assertNoSetpoint(halted, 'not_halt', true);
       for (const [k, v] of Object.entries(LIMIT_LINES)) assert.equal(halted[k], v, `${k}: §14a im Not-Halt ausgesetzt`);
       assertMeasuredUnchanged(halted);
+      // Christin 19.11.2026: bis dahin lief hier das DV-Signal weiter (dvControlValue=1, forcedOff=false).
+      assertDvSuspended(halted);
       assert.deepEqual(JSON.parse(halted.scheduleActive), { gridSetpointW: null, chargeCurrentA: null, maxDischargeW: null, feedExcessDcPv: null });
       // Der Puffer selbst bleibt (DVhub hält seinen Zustand), nur hinaus geht er nicht.
       assert.equal(r.state.schedule.active.gridSetpointW.value, -3000);
       await setEmergencyStop(r.ctx, { on: false });
       const back = await loxone(r);
       assertCurrentSetpoint(back);
+      assertDvPassed(back);
       assert.equal(back.dvhub_control_grid_limit_consumption_w, '7560');
       assert.equal(back.dvhub_control_paused, 'false');
+    });
+  }
+
+  for (const gate of [undefined, 'shared']) {
+    it(`DV-Abregelung (forcedOff) im Not-Halt: kein Signal nach außen, danach wieder das aktuelle (${gate ? 'Tor des Prozesses' : 'eigenes Tor'})`, async () => {
+      // Christin 19.11.2026: „im Not-Halt sollte das eigentlich auch stoppen, das DV-Signal“ — eine Loxone-Logik, die
+      // dvControlValue=0 abholt und die PV selbst abregelt, steuert sonst weiter, obwohl DVhub „aus“ ist.
+      const r = makeRig({ gate });
+      r.state.ctrl.forcedOff = true;
+      r.state.ctrl.offUntil = Date.now() + 600_000;
+      assertDvPassed(await loxone(r), { value: '0', forcedOff: 'true' });
+      await setEmergencyStop(r.ctx, { on: true });
+      const halted = await loxone(r);
+      assertDvSuspended(halted);
+      const ha = await homeAssistant(r);
+      assert.equal(ha.dvControlValue, null);
+      assert.equal(ha.forcedOff, null);
+      assert.equal(r.state.ctrl.forcedOff, true, 'DVhub hält den DV-Zustand selbst weiter, nur hinaus geht er nicht');
+      await setEmergencyStop(r.ctx, { on: false });
+      assertDvPassed(await loxone(r), { value: '0', forcedOff: 'true' });
     });
   }
 
@@ -175,6 +210,7 @@ describe('R-T3 GET /api/integration/loxone — ungültige Konfiguration (C2) und
     const lines = await loxone(r);
     assertNoSetpoint(lines, 'config_unsafe', false);
     assertMeasuredUnchanged(lines);
+    assertDvPassed(lines);
     assert.equal(lines.dvhub_control_grid_limit_active, 'true', 'Herstellerprofil betrifft nur den Wechselrichter');
     assert.equal(lines.dvhub_control_grid_limit_consumption_w, '7560');
     assert.equal(lines.dvhub_control_grid_limit_production_w, '4200');
@@ -192,9 +228,27 @@ describe('R-T3 GET /api/integration/loxone — ungültige Konfiguration (C2) und
     assertNoSetpoint(lines, 'read_only', false);
     for (const [k, v] of Object.entries(LIMIT_LINES)) assert.equal(lines[k], v, k);
     assertMeasuredUnchanged(lines);
+    // Christin 19.11.2026: wie beim Not-Halt kein DV-Signal (bis dahin lief es im Lese-Modus weiter).
+    assertDvSuspended(lines);
     assert.equal(blockedWriteCount(), before, 'Abholen ist kein Schreibversuch von DVhub');
     delete process.env.DVHUB_READ_ONLY;
-    assertCurrentSetpoint(await loxone(r));
+    const back = await loxone(r);
+    assertCurrentSetpoint(back);
+    assertDvPassed(back);
+  });
+
+  it('ungültige Config bei laufender DV-Abregelung: das DV-Signal geht weiter hinaus (C2 setzt es NICHT aus)', async () => {
+    // Bei ungültiger Konfiguration schreibt DVhub selbst nichts an die Anlage (C2) — kann also auch nicht abregeln. Die
+    // Weitergabe an Loxone/HA ist dann der einzige Weg, der Abregelung des Direktvermarkters zu folgen.
+    const r = makeRig({ cfgExtra: { writeSafety: UNSAFE }, gate: 'shared' });
+    r.state.ctrl.forcedOff = true;
+    r.state.ctrl.offUntil = Date.now() + 600_000;
+    const lines = await loxone(r);
+    assertNoSetpoint(lines, 'config_unsafe', false);
+    assertDvPassed(lines, { value: '0', forcedOff: 'true' });
+    const ha = await homeAssistant(r);
+    assert.equal(ha.dvControlValue, 0);
+    assert.equal(ha.forcedOff, true);
   });
 });
 
@@ -248,11 +302,16 @@ describe('R-T3 GET /api/integration/home-assistant', () => {
     assert.deepEqual(s.scheduleActive, { gridSetpointW: null, chargeCurrentA: null, maxDischargeW: null, feedExcessDcPv: null });
     assert.equal(s.gridSetpointW, -100);
     assert.equal(s.soc, 55);
+    // Christin 19.11.2026: auch das DV-Signal nicht (bis dahin 1/false).
+    assert.equal(s.dvControlValue, null);
+    assert.equal(s.forcedOff, null);
     r.state.ctrl.discretionaryWritesPaused = false;
     const back = await homeAssistant(r);
     assert.equal(back.dvhub_control_grid_setpoint_w, -3000);
     assert.equal('dvhub_control_suspended' in back, false);
     assert.deepEqual(back.scheduleActive, r.state.schedule.active);
+    assert.equal(back.dvControlValue, 1);
+    assert.equal(back.forcedOff, false);
   });
 });
 
@@ -312,9 +371,26 @@ describe('R-T3 Datenfluss-Übersicht (Oberfläche „Raus — Sollwerte“)', ()
     assert.equal(df.out.control.suspended, 'config_unsafe');
     assert.equal(df.out.control.rows.find((x) => x.key === 'gridSetpointW').value, null);
     assert.equal(df.out.gridLimit.consumptionW, 7560);
+    assert.deepEqual(df.out.dvSignal, { value: 1, forcedOff: false }, 'C2: DV-Signal geht weiter hinaus');
     delete r.cfg.writeSafety;
     const ok = JSON.parse(await get(r, '/api/integrations/dataflow'));
     assert.equal('suspended' in ok.out.control, false);
     assert.equal(ok.out.control.rows.find((x) => x.key === 'gridSetpointW').value, -3000);
+  });
+
+  it('Not-Halt und Lese-Modus: das DV-Signal geht nicht hinaus — die Übersicht sagt es (Christin 19.11.2026)', async () => {
+    const r = makeRig();
+    r.state.ctrl.forcedOff = true;
+    r.state.ctrl.offUntil = Date.now() + 600_000;
+    r.state.ctrl.discretionaryWritesPaused = true;
+    const halted = JSON.parse(await get(r, '/api/integrations/dataflow'));
+    assert.deepEqual(halted.out.dvSignal, { value: null, forcedOff: null, suspended: 'not_halt' });
+    r.state.ctrl.discretionaryWritesPaused = false;
+    process.env.DVHUB_READ_ONLY = '1';
+    const ro = JSON.parse(await get(r, '/api/integrations/dataflow'));
+    assert.deepEqual(ro.out.dvSignal, { value: null, forcedOff: null, suspended: 'read_only' });
+    delete process.env.DVHUB_READ_ONLY;
+    const ok = JSON.parse(await get(r, '/api/integrations/dataflow'));
+    assert.deepEqual(ok.out.dvSignal, { value: 0, forcedOff: true }, 'danach wieder genau wie bisher');
   });
 });

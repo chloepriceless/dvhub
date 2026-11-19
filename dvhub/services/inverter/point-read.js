@@ -4,6 +4,7 @@
 // Lese-Erweiterungen für die neuen Hersteller (Lese-Engine, 18.11.2026):
 //   E4  combine   Summe/Differenz über beliebige Register, je eigener Typ/Skala/Vorzeichen (`sign`)
 //   E5  sfAddress SunSpec-Skalenfaktor (sunssf) zur Laufzeit, im selben Takt gelesen
+//   E8  direction Vorzeichen aus einem Richtungsregister (Betrag × ±1 je gemeldetem Rohwert, 19.11.2026)
 //   E9  split     32-bit-Wert aus zwei nicht benachbarten Registern (Low-/High-Wort)
 //   E14 wordOrder dieselben Schreibweisen wie der Schreibpfad (swap/swapped = Low-Wort zuerst)
 // Nur Lesen: das Modul bekommt eine read(conf)-Funktion (transport.mbRequest) und schreibt nie.
@@ -212,8 +213,8 @@ const MAX_BLOCK_REGISTERS = 125;
 
 async function readCombinedBlockTerms(conf, terms, read, ctx) {
   const termConfs = terms.map((term) => {
-    if (term.split || term.sfAddress != null || term.sunspec != null) {
-      throw new Error('combineBlock: Einträge ohne split, sfAddress und sunspec');
+    if (term.split || term.sfAddress != null || term.sunspec != null || term.direction != null) {
+      throw new Error('combineBlock: Einträge ohne split, sfAddress, sunspec und direction');
     }
     for (const k of COMBINE_BLOCK_CONNECTION) {
       if (term[k] !== undefined && term[k] !== conf[k]) throw new Error(`combineBlock: Eintrag mit eigenem ${k} — alle Einträge lesen über dieselbe Anfrage`);
@@ -268,17 +269,112 @@ async function readCombined(conf, read, ctx) {
   return Number((sum * factorOf(conf, sf) + Number(conf.offset ?? 0)).toFixed(3));
 }
 
+// E8 (19.11.2026): Vorzeichen aus einem Richtungsregister, `direction: { address, values: { "<Rohwert>": 1 | -1 } }`.
+// Anlass Solis (Akku 33149 „Vorzeichen mit 33135“, 0 = Laden / 1 = Entladen [SPEC]) und SolaX (0x16 mit BDCStatus
+// 0x19, 0 = Entladen / 1 = Laden [SPEC]); ob das Leistungsregister selbst ein Vorzeichen trägt, ist in den Quellen
+// strittig. Darum zählt nur der BETRAG des fertig dekodierten Werts (Skala, Skalenfaktor, Offset), das Vorzeichen
+// kommt allein aus dem Richtungsregister — richtig für Betrag wie für vorzeichenbehafteten Wert. `sign` daneben wäre
+// widersprüchlich und wird abgewiesen. Ein Rohwert, der nicht in `values` steht, macht den Punkt leer (Lesefehler mit
+// Grund, kein gehaltener Altwert): nie raten. Das Richtungsregister ist ein U16 auf Verbindung und Funktionscode des
+// Punkts.
+// Ein Messzeitpunkt (wie E5): liegen Wert und Richtung höchstens DIRECTION_BLOCK_SPAN Register auseinander, kommen
+// beide aus EINER atomaren Anfrage. Sonst — oder wenn das Gerät den Block abweist (Modbus-Ausnahme 1–3, lückenhafte
+// Karte; der Bereich wird je Poller in derselben Merkliste wie E5 vermerkt) oder er über maxRegistersPerRequest der
+// Verbindung liegt (E7) — Richtung vorher, Wert, Richtung nachher: nur bei gleicher Richtung gehört das Paar
+// zusammen, bis zu drei Versuche, sonst Lesefehler. Andere Fehler des Blocks (Zeitüberschreitung) bleiben Lesefehler.
+const DIRECTION_BLOCK_SPAN = 16;
+const DIRECTION_MAX_ATTEMPTS = 3;
+const CONNECTION_KEYS = ['fc', 'host', 'port', 'unitId', 'timeoutMs'];
+
+function parseDirection(conf) {
+  const d = conf.direction;
+  if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('direction muss ein Objekt { address, values } sein');
+  if (!isAddress(d.address)) throw new Error(`direction.address ${d.address} ist keine Registeradresse`);
+  const values = d.values;
+  if (!values || typeof values !== 'object' || Array.isArray(values) || !Object.keys(values).length) {
+    throw new Error('direction.values braucht mindestens einen Rohwert mit Faktor 1 oder -1');
+  }
+  const factors = new Map();
+  for (const [raw, factor] of Object.entries(values)) {
+    if (!/^\d+$/.test(raw) || Number(raw) > 0xffff) throw new Error(`direction.values: Rohwert „${raw}“ ist kein Registerwert 0…65535`);
+    if (factor !== 1 && factor !== -1) throw new Error(`direction.values[${raw}] muss 1 oder -1 sein (ist ${JSON.stringify(factor)})`);
+    factors.set(Number(raw), factor);
+  }
+  if (conf.sign != null) throw new Error('direction und sign schließen sich aus — das Vorzeichen kommt aus dem Richtungsregister');
+  return { address: d.address, factors };
+}
+
+function applyDirection(value, raw, dir) {
+  if (value == null) return null;
+  const factor = dir.factors.get(raw);
+  if (factor === undefined) {
+    // valueUnknown: pollPoint leert den Punkt (statt den Altwert zu halten) und nennt den Grund.
+    throw Object.assign(new Error(`Richtungsregister @${dir.address} meldet ${raw} — keine bekannte Richtung (bekannt: ${[...dir.factors.keys()].join(', ')}), Wert bleibt leer`), { valueUnknown: true });
+  }
+  // −0 wird 0; NaN (etwa nicht-numerische Skala) bleibt NaN, damit die Prüfungen der Aufrufer einen Lesefehler daraus
+  // machen statt eines gesunden 0-W-Werts (Codex e7a80f44).
+  const signed = Math.abs(value) * factor;
+  return signed === 0 ? 0 : signed;
+}
+
+// Block abgewiesen, aber einzeln lesbar: Modbus-Ausnahme 1–3 (Gerät kennt Register dazwischen nicht) oder die
+// Verbindung erlaubt keine so große atomare Anfrage (E7 maxRegistersPerRequest).
+const blockNotReadable = (e) => /^modbus exception [123]\b/.test(String(e?.message)) || e?.code === 'MODBUS_ATOMIC_OVER_CAP';
+
+async function readWithDirection(conf, read, ctx) {
+  const dir = parseDirection(conf);
+  const inner = { ...conf };
+  delete inner.direction;
+  const plain = conf.combine == null && !conf.split && conf.sfAddress == null && isAddress(conf.address);
+  if (plain) {
+    const q = quantityOf(conf);
+    const from = Math.min(conf.address, dir.address);
+    const to = Math.max(conf.address + q, dir.address + 1);
+    const blockKey = `${conf.host ?? ''}|${conf.port ?? ''}|${conf.unitId ?? ''}|${conf.fc ?? ''}|${from}|${to - from}`;
+    if (to - from <= DIRECTION_BLOCK_SPAN && !ctx.sfBlockUnsupported?.has(blockKey)) {
+      let block = null;
+      try {
+        block = await read({ ...inner, address: from, quantity: to - from }, ATOMIC);
+      } catch (e) {
+        if (!blockNotReadable(e)) throw e;
+        ctx.sfBlockUnsupported?.add(blockKey);
+      }
+      if (block) {
+        if (!Array.isArray(block) || block.length < to - from) throw new Error(`Wert/Richtung-Block @${from}: unvollständige Antwort`);
+        const value = decodePointRegs(block.slice(conf.address - from, conf.address - from + q), inner, { exact: ctx.exact });
+        return applyDirection(value, Number(block[dir.address - from]) & 0xffff, dir);
+      }
+    }
+  }
+  const connection = {};
+  for (const k of CONNECTION_KEYS) if (conf[k] !== undefined) connection[k] = conf[k];
+  const readDirection = async () => {
+    const regs = await read({ ...connection, address: dir.address, quantity: 1 }, ATOMIC);
+    if (!Array.isArray(regs) || regs.length < 1) throw new Error(`Richtung @${dir.address}: keine Antwort`);
+    return Number(regs[0]) & 0xffff;
+  };
+  let before = await readDirection();
+  for (let attempt = 0; attempt < DIRECTION_MAX_ATTEMPTS; attempt += 1) {
+    const value = await readPointValue(inner, read, ctx);
+    const after = await readDirection();
+    if (after === before) return applyDirection(value, before, dir);
+    before = after;
+  }
+  throw new Error(`Richtung @${dir.address} änderte sich bei jeder Lesung (${DIRECTION_MAX_ATTEMPTS} Versuche) — kein konsistenter Wert`);
+}
+
 /**
- * Liest einen Lesepunkt und dekodiert ihn. Ohne combine/split/sfAddress genau ein read(conf) mit demselben
+ * Liest einen Lesepunkt und dekodiert ihn. Ohne combine/split/sfAddress/direction genau ein read(conf) mit demselben
  * conf-Objekt wie bisher (bitgleich für die ausgelieferten Profile); nur ein fehlendes `quantity` wird ergänzt.
  * @param {object} conf - effektive Punkt-Config (host/port/unitId/fc schon aus applyVictronDefaults)
  * @param {(conf: object) => Promise<number[]>} read - transport.mbRequest
  * @param {{ exact?: boolean, sfCache?: Map, sfBlockUnsupported?: Set }} [ctx] - exact: ungerundet (combine-Summanden);
  *   sfCache: je Poll-Takt ein frischer Cache für Skalenfaktoren; sfBlockUnsupported: je Poller gemerkte Bereiche, in
- *   denen das Gerät keinen Wert+SF-Block liefert
+ *   denen das Gerät keinen Wert+SF- bzw. Wert+Richtung-Block liefert (E5/E8)
  * @returns {Promise<number|null>}
  */
 export async function readPointValue(conf, read, ctx = {}) {
+  if (conf.direction != null) return readWithDirection(conf, read, ctx);
   if (Array.isArray(conf.combine)) return readCombined(conf, read, ctx);
   if (conf.combine != null) throw new Error('combine muss eine Liste sein');
   const decodeConf = conf.split ? { ...conf, wordOrder: 'be' } : conf;

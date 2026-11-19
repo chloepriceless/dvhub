@@ -18,12 +18,12 @@
     "",
     "Transport: Modbus TCP Port 1502 (nicht 502), Unit-ID 71, FC 03. Float = 2 Register in der Byte-Reihenfolge aus",
     "Register 0x05: 0 = CDAB (Low-Wort zuerst, Werkseinstellung) → wordOrder le. Steht 0x05 auf 1 (ABCD), sind alle",
-    "Float-Werte falsch. Modbus muss am Gerät freigeschaltet sein (Register 0x02 = 1, Einstellung im Web-UI); DVhub",
+    "Float-Werte falsch: Die Kennungsprobe (E10) liest Register 0x05 vor dem ersten Wert und alle 10 min; steht es nicht",
+    "auf 0, zeigt DVhub Netz, PV, die beiden Leistungsgrenzen und die daraus gerechnete Hauslast nicht an und nennt den",
+    "Grund im Leitstand. Akku-Leistung (582) und SoC (514) sind 16 bit und davon unberührt. Modbus muss am Gerät freigeschaltet sein (Register 0x02 = 1, Einstellung im Web-UI); DVhub",
     "schreibt 0x02 nicht. KOSTAL empfiehlt eine Zykluszeit über 1 s; DVhub fragt je Takt (Standard 2 s, mindestens 1 s) alle Werte nacheinander.",
     "",
     "Bewusst NICHT gelesen bzw. nicht abbildbar:",
-    "- Byte-Reihenfolge-Prüfung (Register 0x05 muss 0 sein): DVhub kann ein Register nicht gegen einen Sollwert prüfen",
-    "  (E10). Falsche Einstellung = sichtbar unsinnige Werte, kein Lesefehler.",
     "- Hauslast: die Spec nennt nur den Teilwert „Home consumption from grid“ (0x6C) → Energiebilanz.",
     "- Netz je Phase: in der Spec nicht aufgeführt.",
     "- PV 0x64 „Total DC power“: nicht verwendet, weil unklar ist, ob der Akku-Eingang (DC3) mitzählt. 0x42A ist",
@@ -34,7 +34,14 @@
     "transport": "modbus",
     "port": 1502,
     "unitId": 71,
-    "timeoutMs": 2000
+    "timeoutMs": 2000,
+    "identityProbe": {
+      "_comment": "E10: Register 0x05 „Byte-Order“ U16: 0 = little-endian CDAB (Werkseinstellung), 1 = big-endian ABCD [SPEC Hybrid §2.1.2 / Note 7; .planning/docs/research/2026-11-15-kostal-modbus-control-spec.md §1]. Das Profil liest Float32 mit wordOrder le (CDAB); bei 1 wären alle Float-Werte falsch. 16-bit-Werte (Akku 582, SoC 514) hängen nicht daran.",
+      "checks": [
+        { "label": "Byte-Reihenfolge (Register 0x05, 0 = CDAB)", "fc": 3, "address": 5, "equals": [0] }
+      ],
+      "hideOnMismatch": ["meter", "pvPowerW", "deviceMaxChargeW", "deviceMaxDischargeW", "selfConsumptionW"]
+    }
   },
 
   "meter": {

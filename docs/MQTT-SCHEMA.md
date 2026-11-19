@@ -64,6 +64,10 @@ Wer diese Topics abholt und umsetzt, steuert mit. Deshalb gibt DVhub sie in drei
 
 Den Grund gibt es per MQTT **nicht** als eigenes Topic: ein nur zeitweise gesetztes retained Topic bliebe nach dem Aufheben stehen, ein ständiges wäre im Normalbetrieb neu. Im Not-Halt zeigt ihn `control/paused`; für ungültige Konfiguration und Lese-Modus steht er in `GET /api/integration/loxone` bzw. `/api/integration/home-assistant` (`dvhub_control_suspended`: `not_halt`, `read_only`, `config_unsafe`) und in der Datenfluss-Übersicht. Eine Automation, die einen Akku nachführt, muss bei `null` in den eigenen Grundzustand gehen — die Beispiel-Automation unten tut bei `null` nichts, der Wechselrichter behält dann seinen letzten Wert; wer das nicht will, ergänzt einen Zweig für `null`.
 
+**Direktvermarkter-Signal:** Per MQTT gibt DVhub das Signal des Direktvermarkters nicht heraus. In `GET /api/integration/loxone` bzw. `/api/integration/home-assistant` (`dvControlValue`, `forcedOff`) steht es im Not-Halt und im Lese-Modus auf `null`; bei ungültiger Konfiguration läuft es dort weiter, weil DVhub dann selbst nicht abregeln kann und die Weitergabe der einzige Weg ist, der Abregelung zu folgen ([LOXONE.md](LOXONE.md) A.4).
+
+**Plan-Topics sind kein Steuerbefehl:** `optimizer/plan`, `optimizer/plan/ranges`, `optimizer/plan/current`, `optimizer/plan/next`, `optimizer/plan/next_start` und `optimizer/plan/slot_count` (Abschnitt 3) laufen im Not-Halt, bei ungültiger Konfiguration und im Lese-Modus **unverändert weiter** — mit den Slot-Werten, die der Optimizer geplant hat. Sie tragen nur Information; DVhub führt im Not-Halt nichts davon aus. Eine Automation darf sie deshalb **nicht als Steuerbefehl** benutzen (etwa den Wert von `plan/current` an einen Akku weiterreichen) — wer nachführen will, nimmt die `control/*`-Topics oben, die im Not-Halt „keine Vorgabe“ tragen.
+
 ### Home Assistant
 
 Mit aktivierter Auto-Discovery (Integrationen → Home Assistant) erscheinen die Sollwerte automatisch als Sensoren `sensor.dvhub_control_grid_setpoint_w`, `…_charge_current_a`, `…_min_soc_pct`, `…_max_discharge_w`, `…_source`, `…_updated_at`. Beispiel-Automation, die einen fremden Akku (hier eine `number`-Entität des Wechselrichters) nachführt:
@@ -291,6 +295,8 @@ Kodierung: Zeichenketten werden **roh** gesendet (`eos`, nicht `"eos"`), Zahlen,
 ### Der Plan: `dvhub/optimizer/plan`
 
 Der Plan ist die Liste der vom Optimizer (EOS, interner Optimizer, Kleinmarkt-Automation) erzeugten Zeitplan-Slots, also das, was DVhub ausführen wird: „von … bis … → Befehl". Abgelaufene Slots fallen heraus, der laufende bleibt drin. Retained, alle `publishIntervalMs`.
+
+Die Plan-Topics sind **Information, kein Steuerbefehl**: Sie laufen auch im Not-Halt, bei ungültiger Konfiguration und im Lese-Modus unverändert weiter, obwohl DVhub dann nichts davon ausführt. Eine Automation, die einen Akku nachführt, nimmt die `control/*`-Topics (Abschnitt 1), nicht den Plan.
 
 | Topic | Inhalt |
 |---|---|

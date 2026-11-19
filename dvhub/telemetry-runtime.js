@@ -81,6 +81,10 @@ export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
   // reiner PV-Summe, docs/MQTT-SCHEMA.md) sind kein Messausfall (Codex 22b1fb66).
   const errors = victron?.errors || {};
   if (LIVE_ENERGY_FIELDS.some((field) => errors[field] && (victron?.[field] != null || !OPTIONAL_AC_PV_FIELDS.has(field)))) return true;
+  // Bewusst geleerte Werte (polling.js unknownFields: unbekannte Richtung E8, ausgeblendet E10) sind ein Messausfall,
+  // auch bei einem optionalen AC-PV-Kanal — leer heißt dort nicht „nie belegt“ (Codex e7a80f44).
+  const unknown = Array.isArray(victron?.unknownFields) ? victron.unknownFields : [];
+  if (LIVE_ENERGY_FIELDS.some((field) => unknown.includes(field))) return true;
   const tsMs = Date.parse(ts);
   if (!Number.isFinite(tsMs)) return false;
   const tooOld = (at) => Number(at) > 0 && tsMs - Number(at) > LIVE_FIELD_MAX_AGE_MS;

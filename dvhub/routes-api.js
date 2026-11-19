@@ -2367,12 +2367,15 @@ export function createApiRoutes(ctx) {
     const cfg = getCfg();
     // Steuerfelder (dvhub_control_*, scheduleActive) über das Tor: ein Urteil je Gerät für die ganze Antwort (R-T3).
     const handOut = pickup.handOut();
+    // Direktvermarkter-Signal aus demselben Urteil: im Not-Halt und Lese-Modus null (Christin 19.11.2026), bei
+    // ungültiger Konfiguration weiter (DVhub kann dann selbst nicht abregeln) — services/gate/pickup.js.
+    const dv = pickup.dvSignal(handOut, () => ctx.controlValue());
 
     // === EXISTING FIELDS — DO NOT MODIFY (backward compat for HA/Loxone consumers) ===
     const base = {
       timestamp: Date.now(),
-      dvControlValue: ctx.controlValue(),
-      forcedOff: state.ctrl.forcedOff,
+      dvControlValue: dv.dvControlValue,
+      forcedOff: dv.forcedOff,
       gridTotalW: state.meter.grid_total_w,
       gridDirection: gridDirection(state.meter.grid_total_w, cfg.gridPositiveMeans).mode,
       gridSetpointW: state.victron.gridSetpointW,
@@ -2754,7 +2757,7 @@ export function createApiRoutes(ctx) {
     // M14b: Tagesbudget des dvControl-Einspeise-Sequenzpfads (13074/13087/13088/
     // 31222) — getrennt vom 13050-EMS-Budget. Für die WR-Kachel neben „Writes heute".
     payload.dvSeqBudget = state.ctrl?.dvSeqBudget ?? null;
-    // M8: EOS-„Halten"/„Netzladen" ausgesetzt, weil der Netzstrom-Anteil im Akku gesperrt ist (erst im Haus
+    // M8: EOS-„Halten" ausgesetzt, weil der Netzstrom-Anteil im Akku gesperrt ist (erst im Haus
     // verbrauchen). In-Memory wie sungrowEms (im Runtime-Worker-Betrieb hier null).
     payload.eosGridShareSuspend = state.ctrl?.eosGridShareSuspend ?? null;
     // Victron device alarms (read-only display). Source is payload.victron.alarms,
@@ -2780,6 +2783,12 @@ export function createApiRoutes(ctx) {
     payload.systemWarnings = Array.isArray(state.systemWarnings)
       ? state.systemWarnings.map((w) => ({ id: String(w.id || ''), message: String(w.message || '') }))
       : [];
+    // Kennungsprobe des Herstellerprofils (E10): Ergebnis aus dem POLLER-Snapshot (wie telemetryFreeze), und jedes
+    // Ergebnis außer „bestanden“ als Hinweis in der Leiste — dort steht, was ausgeblendet bzw. ungeprüft ist.
+    payload.identityProbe = payload.victron?.identityProbe || null;
+    if (payload.identityProbe && payload.identityProbe.status !== 'ok' && payload.identityProbe.text) {
+      payload.systemWarnings.push({ id: 'identity_probe', message: String(payload.identityProbe.text) });
+    }
     // T-CROSSCHECK (2026-07-25): Widerspruch der beiden Datenwege — gleiche
     // Snapshot-Quelle wie oben (Poller-Prozess), nicht das Web-state.
     payload.telemetrySourceMismatch = payload.victron?.sourceMismatch || null;
@@ -5304,12 +5313,14 @@ export function createApiRoutes(ctx) {
       ];
       // „Raus — Sollwerte“ zeigt, was wirklich hinausgeht: dieselbe Abholsenke wie Loxone/MQTT (R-T3).
       const out = pickup.handOut();
+      const dv = pickup.dvSignal(out, () => (typeof ctx.controlValue === 'function' ? ctx.controlValue() : null));
       return json(res, 200, buildDataflow({
         cfg, state, transport: ctx.transport,
         controlSnapshot: out.control,
         gridLimit: out.gridLimit,
         channels,
-        dvControlValue: typeof ctx.controlValue === 'function' ? ctx.controlValue() : null,
+        dvControlValue: dv.dvControlValue,
+        dvSignalSuspended: dv.suspended ?? null,
         now: Date.now(),
       }));
     }

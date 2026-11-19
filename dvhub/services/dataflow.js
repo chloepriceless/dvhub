@@ -192,9 +192,11 @@ function controlRows(snapshot) {
  * @param {object} [p.gridLimit]         dito handOut().gridLimit
  * @param {Array}  [p.channels]          Ausgangskanäle (von der Route gebaut)
  * @param {number|null} [p.dvControlValue]
+ * @param {string|null} [p.dvSignalSuspended]  services/gate/pickup.js dvSignal(): warum das DV-Signal gerade nicht
+ *                                             hinausgeht (not_halt | read_only | gate_error), sonst null
  * @param {number} p.now
  */
-export function buildDataflow({ cfg, state, transport, controlSnapshot, gridLimit, channels = [], dvControlValue = null, now }) {
+export function buildDataflow({ cfg, state, transport, controlSnapshot, gridLimit, channels = [], dvControlValue = null, dvSignalSuspended = null, now }) {
   const inputs = inputRows({ cfg, state, transport, now });
   const lastWrite = state?.schedule?.lastWrite || {};
   return {
@@ -218,7 +220,10 @@ export function buildDataflow({ cfg, state, transport, controlSnapshot, gridLimi
         // R-T3: warum gerade „keine Vorgabe“ hinausgeht (not_halt | read_only | config_unsafe | …) — nur dann gesetzt.
         ...(controlSnapshot?.suspended ? { suspended: controlSnapshot.suspended } : {}),
       },
-      dvSignal: { value: dvControlValue, forcedOff: !!state?.ctrl?.forcedOff },
+      // Christin 19.11.2026: im Not-Halt und Lese-Modus geht das DV-Signal nicht hinaus — dann „kein Signal“ mit Grund.
+      dvSignal: dvSignalSuspended
+        ? { value: null, forcedOff: null, suspended: dvSignalSuspended }
+        : { value: dvControlValue, forcedOff: !!state?.ctrl?.forcedOff },
       gridLimit: gridLimit || null,
       lastWrites: Object.entries(lastWrite)
         .filter(([, w]) => w)

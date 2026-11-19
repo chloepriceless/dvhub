@@ -141,7 +141,23 @@ describe('services/gate/pickup.js', () => {
     assert.equal(inverterReleaseState({}), 'open');
     assert.equal(inverterReleaseState({ writeSafety: { ok: true } }), 'open');
     assert.equal(inverterReleaseState({ writeSafety: {} }), 'open');
-    assert.equal(inverterReleaseState({ writeSafety: { ok: false } }), 'profileInvalid');
+    // Christin 19.11.2026: bei ungültigem Herstellerprofil dürfen Not-Halt-Rücknahme und Zwangsfreigabe durch
+    // (profileInvalid); ohne belegten Grund — wie bei kaputter config.json — sperrt das Tor alles (setupIncomplete,
+    // test/c2-nothalt-release.test.js). Bis dahin hieß auch das profileInvalid.
+    assert.equal(inverterReleaseState({ writeSafety: { ok: false } }), 'setupIncomplete');
+    assert.equal(inverterReleaseState({ writeSafety: { ok: false, reason: 'manufacturer_profile_error' } }), 'profileInvalid');
+  });
+
+  it('kaputte config.json (Tor setupIncomplete) heißt nach außen weiter config_unsafe', () => {
+    const state = makeState();
+    const gate = createLegacyGate({ isHalted: () => false });
+    const sink = createPickupSink({ state, getCfg: () => ({ writeSafety: { ok: false, reason: 'config_broken' } }), getGate: () => gate });
+    const h = sink.handOut(T0);
+    assert.equal(gate.releaseState(INVERTER_GATE_DEVICE), 'setupIncomplete');
+    assert.equal(h.suspended, 'config_unsafe');
+    assert.equal(sink.flat(h).dvhub_control_suspended, 'config_unsafe');
+    assert.equal(h.gridLimitSuspended, null);
+    assert.equal(h.dvSignalSuspended, null);
   });
 
   it('Tor nicht befragbar: nichts herausgeben (gate_error)', () => {
@@ -150,8 +166,57 @@ describe('services/gate/pickup.js', () => {
     const h = sink.handOut(T0);
     assert.equal(h.suspended, 'gate_error');
     assert.equal(h.gridLimitSuspended, 'gate_error');
+    assert.equal(h.dvSignalSuspended, 'gate_error');
+    assert.deepEqual(sink.dvSignal(h, () => 0), { dvControlValue: null, forcedOff: null, suspended: 'gate_error' });
     assert.equal(h.control.values.gridSetpointW.value, null);
     assert.equal(h.gridLimit.active, false);
+  });
+
+  // Direktvermarkter-Signal (dvControlValue, forcedOff) für Loxone/HA und die Datenfluss-Übersicht. Christin 19.11.2026:
+  // „im Not-Halt sollte das eigentlich auch stoppen, das DV-Signal“ — im Not-Halt und Lese-Modus „kein Signal“ (wie beim
+  // Gerät gridLimit/§14a), bei ungültiger Konfiguration läuft es weiter (DVhub kann dann selbst nicht abregeln).
+  describe('DV-Signal', () => {
+    it('offen: genau die bisherigen Werte (controlValue(), state.ctrl.forcedOff roh), kein Grund', () => {
+      const state = makeState();
+      const sink = createPickupSink({ state, getCfg: () => ({}) });
+      const h = sink.handOut(T0);
+      assert.equal(h.dvSignalSuspended, null);
+      assert.deepEqual(sink.dvSignal(h, () => 0), { dvControlValue: 0, forcedOff: true });
+      state.ctrl.forcedOff = undefined;
+      assert.deepEqual(sink.dvSignal(h, () => 1), { dvControlValue: 1, forcedOff: undefined }, 'roh wie bisher');
+    });
+
+    it('Not-Halt: kein Signal (null) mit Grund not_halt; der Lease-Ablauf läuft weiter (controlValue wird gefragt)', () => {
+      const state = makeState();
+      state.ctrl.discretionaryWritesPaused = true;
+      const sink = createPickupSink({ state, getCfg: () => ({}) });
+      const h = sink.handOut(T0);
+      assert.equal(h.dvSignalSuspended, 'not_halt');
+      let asked = 0;
+      assert.deepEqual(sink.dvSignal(h, () => { asked += 1; return 0; }), { dvControlValue: null, forcedOff: null, suspended: 'not_halt' });
+      assert.equal(asked, 1, 'controlValue() läuft weiter (Lease-Ablauf in server.js)');
+      assert.equal(state.ctrl.forcedOff, true, 'der Zustand selbst bleibt');
+    });
+
+    it('Lese-Modus: kein Signal (read_only)', () => {
+      const state = makeState();
+      const gate = createLegacyGate({ isHalted: () => false, isReadOnly: () => true });
+      const sink = createPickupSink({ state, getCfg: () => ({}), getGate: () => gate });
+      const h = sink.handOut(T0);
+      assert.equal(h.dvSignalSuspended, 'read_only');
+      assert.deepEqual(sink.dvSignal(h, () => 0), { dvControlValue: null, forcedOff: null, suspended: 'read_only' });
+    });
+
+    it('ungültige Config (C2): das Signal läuft weiter, nur die Sollwerte sind zu', () => {
+      const state = makeState();
+      const gate = createLegacyGate({ isHalted: () => false });
+      const sink = createPickupSink({ state, getCfg: () => ({ writeSafety: { ok: false, reason: 'manufacturer_profile_error' } }), getGate: () => gate });
+      const h = sink.handOut(T0);
+      assert.equal(h.suspended, 'config_unsafe');
+      assert.equal(h.dvSignalSuspended, null);
+      assert.deepEqual(sink.dvSignal(h, () => 0), { dvControlValue: 0, forcedOff: true });
+      assert.equal(gate.releaseState(PICKUP_GATE_DEVICES.dvSignal), 'open');
+    });
   });
 
   it('publishMirror: 15 Steuer-Topics retained in fester Reihenfolge, Text roh, sonst JSON', () => {
