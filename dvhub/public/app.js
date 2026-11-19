@@ -3269,7 +3269,7 @@ async function startCurtailTest(mode) {
   const blockCharge = document.getElementById('curtailTestBlockCharge')?.checked === true;
   const label = mode === 'negativePrice' ? 'Negativpreis-Abregelung' : 'Direktvermarkter-Abregelung';
   const go = typeof window !== 'undefined' && typeof window.confirm === 'function'
-    ? window.confirm(`${label} für ${minutes} min testen?\n\nLäuft über den echten Abregel-Pfad${blockCharge ? ' und hält den Akku beider WR an (0xCC)' : ''}. Der Test endet garantiert nach ${minutes} min von selbst (selbst-ablaufendes Lease). Messwerte im 1-Sekunden-Takt werden protokolliert.`)
+    ? window.confirm(`${label} für ${minutes} min testen?\n\nLäuft über den echten Abregel-Pfad${blockCharge ? ' und sperrt das Laden beider WR (Entladen fürs Haus bleibt)' : ''}. Der Test endet garantiert nach ${minutes} min von selbst (selbst-ablaufendes Lease). Messwerte im 1-Sekunden-Takt werden protokolliert.`)
     : true;
   if (!go) return;
   try {
@@ -3280,7 +3280,7 @@ async function startCurtailTest(mode) {
     });
     const out = await res.json();
     if (!res.ok || !out.ok) return setControlMsg(`Test fehlgeschlagen: ${out.error || res.status}`, true);
-    setControlMsg(`${label}-Test läuft (${minutes} min)${blockCharge ? ', Akku beider WR auf Stopp' : ''}.`);
+    setControlMsg(`${label}-Test läuft (${minutes} min)${blockCharge ? ', Laden beider WR gesperrt' : ''}.`);
     renderCurtailTest(out.test);
     startCurtailTestPolling();
   } catch (e) {
@@ -3335,7 +3335,7 @@ function renderCurtailTest(test) {
   const active = test.active === true;
   statusEl.hidden = false;
   if (active) {
-    statusEl.textContent = `Test aktiv: ${modeLabel}${test.blockCharge ? ' · Akku Stopp' : ''} · Restzeit ${fmtSecs(test.remainingMs)} · ${test.sampleCount} Messwerte`;
+    statusEl.textContent = `Test aktiv: ${modeLabel}${test.blockCharge ? ' · Laden gesperrt' : ''} · Restzeit ${fmtSecs(test.remainingMs)} · ${test.sampleCount} Messwerte`;
   } else {
     statusEl.textContent = `Test beendet (${modeLabel}${test.stopReason === 'expired' ? ', Zeit abgelaufen' : ', gestoppt'}) · ${test.sampleCount} Messwerte`;
   }

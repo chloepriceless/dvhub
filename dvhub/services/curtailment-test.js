@@ -53,7 +53,7 @@ export function createCurtailmentTest(ctx) {
     return !!(t && t.active === true && now() < t.until);
   }
 
-  /** „Akku nicht laden" aktiv? Von services/inverter/sungrow.js (stepForced) gelesen. */
+  /** „Akku nicht laden" aktiv? Von services/inverter/sungrow.js (stepForced) gelesen: sperrt nur das Laden (M25). */
   function batteryHoldActive() {
     const t = current();
     return !!(t && t.active === true && t.blockCharge === true && now() < t.until);

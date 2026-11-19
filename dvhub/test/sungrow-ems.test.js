@@ -400,6 +400,138 @@ test('M27 Forced-Split: Sperre aktiv → ein zuvor stehender Slave-Befehl wird n
   assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave folgt dem Split (Entladen), kein 0xCC');
 });
 
+// M25 / Codex 4c624dcd (P1): Während einer Sperre (Einspeisung gesperrt) entlädt DVhub nur fürs Haus — höchstens die
+// Netto-Last (Last − PV). Unter der Einspeisegrenze lehnt der Master zu große Entladebefehle mit exception 4 ab, und
+// ohne Slave-Stopp (M27) würde ein Export-Sollwert (EOS/Regel) sonst den Slave ins Netz entladen lassen.
+test('M25 Regler: dischargeLoadOnly deckelt das Entladen auch bei Einspeise-Sollwert auf die Netto-Last', () => {
+  // S = −6000 (Export), Haus 500 W, PV 0: ohne Sperre Entladen 4700 W; mit Sperre höchstens 500 W.
+  const args = { ...base, setpointW: -6000, gridImportW: 0, batteryW: -500, pvW: 0, loadW: 500 };
+  assert.equal(decideEmsCommand(args).powerW, 4700);
+  assert.deepEqual(decideEmsCommand({ ...args, dischargeLoadOnly: true }), { mode: 'forced', command: 'discharge', powerW: 500, reason: 'discharge_load_only' });
+  // PV deckt die Last schon → kein Entladen (Netto-Last 0).
+  assert.equal(decideEmsCommand({ ...args, pvW: 800, dischargeLoadOnly: true }).command, 'stop');
+});
+
+test('Codex 4c624dcd P1: DV-Sperre während einer Export-Vorgabe → beide WR zusammen höchstens die Hauslast (kein Slave-Export)', async () => {
+  const r = splitRig(); // Haus 500 W, PV 0
+  r.state.ctrl._lastDvFeedIn = false; // DV-Abregelung aktiv (Einspeisegrenze nur am Master)
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  const sum = (r.masterImage.holding.get(CMD) === EMS_CMD.DISCHARGE ? r.masterImage.holding.get(POWER) : 0)
+    + (r.slaveImage.holding.get(CMD) === EMS_CMD.DISCHARGE ? r.slaveImage.holding.get(POWER) : 0);
+  assert.ok(sum <= 500, `Entladen nur fürs Haus: ${sum} W`);
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'discharge_load_only');
+});
+
+test('M25: auch ohne geschriebene Sperre (DV-Abschaltung forcedOff / Negativpreis) wird nur fürs Haus entladen', async () => {
+  for (const flag of [{ forcedOff: true }, { negativePriceActive: true }, { _dvPartialBlock: true }]) {
+    const r = splitRig();
+    Object.assign(r.state.ctrl, flag);
+    await r.ems.applySetpoint(-6000, 'rule:abend');
+    assert.equal(r.state.ctrl.sungrowEms.decision.powerW <= 500, true, `${JSON.stringify(flag)}: ${r.state.ctrl.sungrowEms.decision.powerW}`);
+  }
+});
+
+test('M25: Einzel-WR unter Sperre — Entladen höchstens die Netto-Last', async () => {
+  const r = rig({ controlMode: 'forced' });
+  r.state.ctrl._lastDvFeedIn = false;
+  r.telemetry({ gridW: 0, batteryW: -500, pvW: 0, loadW: 500 });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.DISCHARGE);
+  assert.ok(r.image.holding.get(POWER) <= 500, `Einzel-WR: ${r.image.holding.get(POWER)}`);
+});
+
+test('M25: ohne Sperre bleibt die Export-Vorgabe wirksam (keine Deckelung)', async () => {
+  const r = splitRig();
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.ok(r.state.ctrl.sungrowEms.decision.powerW > 4000);
+});
+
+// M25 (MUSS): „Akku nicht laden" am Test-Knopf sperrt NUR das Laden. Feld: beide WR standen auf 0xCC, die Hauslast kam
+// aus dem Netz, obwohl der Sollwert −40 W war und die Akkus 13–15 % hatten. Jetzt: Laden 0, Entladen fürs Haus bleibt
+// (höchstens die Netto-Last), beide WR nach soc-balance; wäre Laden nötig → Stopp (Modus 2 bleibt).
+function chargeHoldTest(r) {
+  // Negativpreis-Test mit „Akku nicht laden": Lease läuft, Sperre geschrieben (wie der echte Pfad).
+  r.state.ctrl.curtailmentTest = { active: true, mode: 'negativePrice', blockCharge: true, until: r.now() + 600000 };
+  r.state.ctrl.negativePriceActive = true;
+  r.state.ctrl._lastDvFeedIn = false;
+}
+// Wie auf der Feldbox: DVhub fährt schon Dauer-Forced (besitzt Modus 2), dann startet der Test-Knopf.
+async function ownedThenHold(r, telemetry) {
+  m27Telemetry(r, { gridW: 0, systemBattW: -1000, loadW: 1000 });
+  await r.ems.applySetpoint(-40, 'default');
+  assert.equal(r.state.ctrl.sungrowEms.owns, true, 'DVhub besitzt Forced');
+  chargeHoldTest(r);
+  r.advance(6000);
+  m27Telemetry(r, telemetry);
+  await r.ems.applySetpoint(-40, 'negative_price_protection');
+}
+
+test('M25 Test-Knopf „Akku nicht laden": die Hauslast kommt aus beiden Akkus (soc-balance), nicht aus dem Netz', async () => {
+  const r = splitRig();
+  // Haus 1500 W, PV 0, Netz +1000, Akku −500: P = −500 + 0,7·(−1040) = −1228 → 1230 W ≤ Netto-Last 1500 → je 615 W.
+  await ownedThenHold(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Master entlädt fürs Haus');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave entlädt fürs Haus');
+  // Summe der Anteile = Reglerleistung (am Gerät kann je WR bis zur Schreibschwelle 100 W abweichen).
+  const sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(sp.masterW + sp.slaveW, 1230);
+  assert.ok(sp.masterW > 0 && sp.slaveW > 0, 'beide tragen');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'Modus 2 bleibt');
+});
+
+test('M25 Test-Knopf: Entladen höchstens die Hauslast (Netto-Last)', async () => {
+  const r = splitRig();
+  // Haus 600 W, PV 0, Netz +1500 (Lastsprung), Akku 0: P = 0,7·(−1540) = −1078 → gedeckelt auf 600 W.
+  await ownedThenHold(r, { gridW: 1500, systemBattW: 0, loadW: 600 });
+  assert.equal(r.masterImage.holding.get(POWER) + r.slaveImage.holding.get(POWER), 600);
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'discharge_load_only');
+});
+
+test('M25 Test-Knopf: wäre Laden nötig (PV-Überschuss), stehen beide auf Stopp — kein Laden, Modus 2 bleibt', async () => {
+  const r = splitRig();
+  // PV 3000, Haus 1000, Netz −2000 (Einspeisung) → der Regler wollte laden → gesperrt → Stopp.
+  await ownedThenHold(r, { gridW: -2000, systemBattW: 0, loadW: 1000, pvW: 3000 });
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'charge_blocked');
+  assert.notEqual(r.masterImage.holding.get(CMD), EMS_CMD.CHARGE, 'Master lädt nicht');
+  assert.notEqual(r.slaveImage.holding.get(CMD), EMS_CMD.CHARGE, 'Slave lädt nicht');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'Modus 2 bleibt (kein Moduswechsel)');
+});
+
+test('M25 Test-Knopf Einzel-WR: Laden gesperrt, Entladen fürs Haus', async () => {
+  const r = rig({ controlMode: 'forced' });
+  r.telemetry({ gridW: 0, batteryW: -1000, pvW: 0, loadW: 1000 });
+  await r.ems.applySetpoint(-40, 'default'); // DVhub fährt Dauer-Forced
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  r.state.ctrl.curtailmentTest = { active: true, mode: 'dv', blockCharge: true, until: r.now() + 600000 };
+  r.state.ctrl.forcedOff = true; r.state.ctrl._lastDvFeedIn = false;
+  r.advance(6000);
+  r.telemetry({ gridW: 1000, batteryW: -500, pvW: 0, loadW: 1500 });
+  await r.ems.applySetpoint(-40, 'dv');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.DISCHARGE);
+  assert.equal(r.image.holding.get(POWER), 1230);
+  r.advance(6000);
+  r.telemetry({ gridW: -2000, batteryW: 0, pvW: 3000, loadW: 1000 });
+  await r.ems.tick();
+  assert.notEqual(r.image.holding.get(CMD), EMS_CMD.CHARGE, 'kein Laden');
+});
+
+test('M25 echter Negativpreis, Akkus voll: Laden aus (an der Decke), Entladen fürs Haus an', async () => {
+  const r = splitRig();
+  r.state.ctrl.negativePriceActive = true; r.state.ctrl._lastDvFeedIn = false; // ohne Test-Knopf
+  r.state.victron.sungrowMasterSocPct = 100; r.state.sungrowSecond.socPct = 100;
+  m27Telemetry(r, { gridW: -2000, systemBattW: 0, loadW: 1000, pvW: 3000 });
+  await r.ems.applySetpoint(-40, 'negative_price_protection');
+  assert.notEqual(r.masterImage.holding.get(CMD), EMS_CMD.CHARGE);
+  assert.notEqual(r.slaveImage.holding.get(CMD), EMS_CMD.CHARGE);
+  // Abends: PV 200, Haus 1500 → Entladen fürs Haus (höchstens 1300 W Netto-Last).
+  r.advance(6000);
+  m27Telemetry(r, { gridW: 1300, systemBattW: 0, loadW: 1500, pvW: 200 });
+  await r.ems.tick();
+  const sum = r.masterImage.holding.get(POWER) + r.slaveImage.holding.get(POWER);
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE);
+  assert.ok(sum > 0 && sum <= 1300, `Entladen fürs Haus: ${sum}`);
+});
+
 // M28 (MUSS): ein WR, der seinen Anteil nicht liefert, gibt ihn ab — der andere übernimmt. Feldbeleg 12:28:
 // Entladen 1200 W, Master 416 / Slave 784, Master lieferte 0 W, Slave 790 W, Netz +552 W statt −40 W (15 s stabil).
 function m28Telemetry(r, { masterBattW, slaveBattW, gridW, loadW = 1342, pvW = 0 }) {

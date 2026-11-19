@@ -269,8 +269,9 @@ export async function identifySungrow(read) {
  *   • Sollwert ≤ 0 (kein Netzbezug gewollt) oder noGridCharge (Netzbezug nur für die Last, z. B. EOS „Akku
  *     halten“): Laden höchstens aus dem PV-Überschuss (PV − Last), damit DVhub nie aus dem Netz lädt, wenn es
  *     das Netzladen nicht angefordert hat.
- *   • Sollwert ≥ 0 (keine Einspeisung gewollt): Entladen höchstens die Netto-Last (Last − PV), damit kein
- *     Akkustrom ins Netz geht, wenn keine Einspeisung angefordert ist.
+ *   • Sollwert ≥ 0 (keine Einspeisung gewollt) oder dischargeLoadOnly (Einspeisung gesperrt, M25): Entladen
+ *     höchstens die Netto-Last (Last − PV), damit kein Akkustrom ins Netz geht.
+ *   • noCharge (Test-Knopf „Akku nicht laden", M25): kein Laden — wäre Laden nötig, Stopp; Entladen bleibt.
  * Fehlen Netz- oder Akku-Messung (oder PV/Last für die Begrenzung), gibt es keine Zwangsvorgabe.
  *
  * @returns {{ mode: 'self'|'forced', command?: 'charge'|'discharge'|'stop', powerW?: number, reason: string }}
@@ -278,7 +279,7 @@ export async function identifySungrow(read) {
 export function decideEmsCommand({
   setpointW, gridImportW, batteryW, pvW = null, loadW = null,
   maxChargeW, maxDischargeW, bandW = 300, gain = 0.7, minPowerW = 50, noGridCharge = false,
-  forced = false, socPct = null, floorSocPct = null
+  forced = false, socPct = null, floorSocPct = null, noCharge = false, dischargeLoadOnly = false
 } = {}) {
   const fin = (v) => v != null && Number.isFinite(Number(v));
   if (!fin(setpointW)) return { mode: 'self', reason: 'no_setpoint' };
@@ -295,7 +296,8 @@ export function decideEmsCommand({
   // Entlade-Boden (SoC < hardFloorSocPct): nur das ENTLADEN sperren. Das Laden aus PV-Überschuss bleibt
   // erlaubt (Sollwert 0 + Einspeisung → p > 0 → Laden bis Netz ≈ 0). Gilt nur im Forced-Pfad.
   const belowFloor = forced && fin(socPct) && fin(floorSocPct) && Number(socPct) < Number(floorSocPct);
-  if (p > 0) {
+  if (p > 0 && noCharge === true) { p = 0; reason = 'charge_blocked'; } // M25: Laden gesperrt → Stopp
+  else if (p > 0) {
     p = Math.min(p, Number(maxChargeW));
     if (s <= 0 || noGridCharge === true) {
       const surplus = fin(pvW) && fin(loadW) ? Math.max(0, Number(pvW) - Number(loadW)) : 0;
@@ -305,7 +307,7 @@ export function decideEmsCommand({
     if (belowFloor) { p = 0; reason = 'discharge_floor'; } // SoC am Boden → kein Entladen (nur dieser Takt)
     else {
       p = Math.max(p, -Number(maxDischargeW));
-      if (s >= 0) {
+      if (s >= 0 || dischargeLoadOnly === true) {
         const netLoad = fin(pvW) && fin(loadW) ? Math.max(0, Number(loadW) - Number(pvW)) : 0;
         if (-p > netLoad) { p = -netLoad; reason = 'discharge_load_only'; }
       }
@@ -1282,12 +1284,23 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return null;
   }
 
-  // Feldtest „Akku nicht laden" (M14b): während eines Abregelungs-Tests mit dieser
-  // Option (state.ctrl.curtailmentTest.blockCharge) den Akku anhalten. Selbst-
-  // ablaufend über das Lease (now < until) — endet garantiert mit dem Test.
+  // Feldtest „Akku nicht laden" (M14b/M25): während eines Abregelungs-Tests mit dieser
+  // Option (state.ctrl.curtailmentTest.blockCharge) das LADEN sperren (Entladen fürs Haus
+  // bleibt). Selbst-ablaufend über das Lease (now < until) — endet garantiert mit dem Test.
   function curtailmentBatteryHold() {
     const ct = state.ctrl?.curtailmentTest;
     return !!(ct && ct.active === true && ct.blockCharge === true && now() < ct.until);
+  }
+
+  // M25 + Codex 4c624dcd (P1): Ist die Einspeisung gerade gesperrt? Dann entlädt DVhub nur fürs Haus (höchstens die
+  // Netto-Last). Grund: Unter der Einspeisegrenze lehnt der Master zu große Entladebefehle mit „modbus exception 4" ab
+  // (→ Split-Abbruch, Modus 0), und seit M27 läuft auch der Slave weiter — eine Export-Vorgabe (EOS/Regel) entlüde ihn
+  // sonst ins Netz, an der Master-Grenze vorbei. Gesperrt = eigene Sperre geschrieben (_lastDvFeedIn=false), teilweise
+  // geschrieben (_dvPartialBlock) oder die Pflicht-Abregelung liegt an, auch wenn ihr Write fehlschlug (DV-Abschaltung
+  // forcedOff, Negativpreis) — wie multi-gx „export_blocked".
+  function feedInBlocked() {
+    const c = state.ctrl || {};
+    return c._lastDvFeedIn === false || c._dvPartialBlock === true || c.forcedOff === true || c.negativePriceActive === true;
   }
 
   // Regeltakt (Punkt 2): beim aktiven Regeln (DVhub besitzt Forced ODER External EMS) der adaptive Takt 1–5 s aus
@@ -1700,6 +1713,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Boden, sperrt das Gate beide → Stopp. Einzel-WR (kein Split): weiter der Master-Boden. Unbekannter/veralteter
     // SoC bleibt über releaseForFloor (Modus 0) abgesichert.
     const isSplit = !!(slaveActuator && second != null);
+    const exportBlocked = feedInBlocked(); // M25: während einer Sperre nur fürs Haus entladen
+    // M25 (Christin 19.11.): Test-Knopf „Akku nicht laden" sperrt NUR das Laden: Laden 0 (wäre Laden nötig → Stopp,
+    // Modus 2 bleibt), Entladen fürs Haus bleibt erlaubt (höchstens die Netto-Last), beide WR nach der Aufteilung.
+    // Selbst-ablaufend über das Lease des Tests.
+    const chargeBlocked = curtailmentBatteryHold();
     // 4b: positiven Sollwert zusätzlich hart auf die Anschlussgrenze deckeln (Netzladen ≤ limitKw).
     const gridLimitW = Number(cfg?.gridConnection?.limitKw) > 0 ? Number(cfg.gridConnection.limitKw) * 1000 : null;
     const clampGrid = (s) => (gridLimitW != null && Number.isFinite(Number(s)) && Number(s) > gridLimitW ? gridLimitW : s);
@@ -1707,6 +1725,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       setpointW: clampGrid(setpointW), ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
       bandW: 0, gain: opts.gain, minPowerW: opts.minPowerW, noGridCharge: noGridChargeNow,
       forced: true, socPct: isSplit ? null : socPct, floorSocPct: isSplit ? null : floorSocPct,
+      dischargeLoadOnly: exportBlocked || chargeBlocked, noCharge: chargeBlocked,
     });
     let decision;
     if (targetFresh && st.target.releaseForFloor) {
@@ -1744,15 +1763,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     } else if (st.startupResetPending && decision.mode === 'self') {
       st.startupResetPending = false; // in Self/Modus 0 ohnehin kein stehengebliebener Befehl mehr
     }
-    // Feldtest „Akku nicht laden" (services/curtailment-test.js, M14b): während
-    // eines Abregelungs-Tests mit dieser Option den Akku beider WR auf Stopp
-    // (0xCC, Modus 2 bleibt), damit der PV-Überschuss sichtbar abgeregelt wird
-    // (PV deckt nur die Hauslast, der Akku nimmt ihn nicht auf). Nur wenn DVhub
-    // Forced wirklich besitzt — der Split trägt den Stopp an den Slave weiter
-    // (stepSplit: powerW 0 → mk(0) → beide 0xCC). Selbst-ablaufend über das Lease.
-    if (ownsForced && curtailmentBatteryHold()) {
-      decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'curtailment_test_hold' };
-    }
+    // Feldtest „Akku nicht laden" (services/curtailment-test.js, M14b/M25): sperrt nur noch das LADEN (im Regler oben,
+    // noCharge) — kein Dauer-0xCC beider WR mehr. Feld 19.11.: mit beiden WR auf 0xCC kam die Hauslast aus dem Netz,
+    // obwohl der Sollwert −40 W war und die Akkus 13–15 % hatten.
     st.decision = { ...decision, at: t, trigger: reason };
     st.selfBridgeSince = 0;
     st.externalEnteredAt = 0;
@@ -1896,7 +1909,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       ? decideEmsCommand({
         setpointW: st.target.setpointW, ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
         bandW: opts.bandW, gain: opts.gain, minPowerW: opts.minPowerW,
-        noGridCharge: noGridChargeForce()
+        noGridCharge: noGridChargeForce(), dischargeLoadOnly: feedInBlocked()
       })
       : { mode: 'self', reason: st.target ? 'target_expired' : (st.revokedReason ? 'revoked' : 'no_setpoint') };
     try {

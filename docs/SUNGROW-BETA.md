@@ -170,9 +170,13 @@ Entladen bekommt der Akku mit dem höheren Ladestand mehr, beim Laden der mit de
 gehen an beide (13051/13052), der Modus 13050 nur an den Master.
 
 - **Abregelung (Negativpreis, Direktvermarkter, Test-Knopf):** Beide Wechselrichter laden und entladen weiter nach
-  ihrem Anteil. DVhub regelt die Summe auf den Sollwert, bei Negativpreis auf −40 W. Die Einspeisegrenze
+  ihrem Anteil. DVhub regelt die Summe auf den Sollwert, bei Negativpreis auf −40 W. Entladen wird dabei höchstens die
+  Hauslast (Last − PV), auch wenn eine Vorgabe einspeisen möchte: unter der Einspeisegrenze lehnt der Master größere
+  Entladebefehle mit Modbus-Ausnahme 4 ab, und der Slave soll nicht an der Grenze vorbei einspeisen. Die Einspeisegrenze
   (13074/13087/13088/31222) steht nur am Master. Kurze Netzspitzen bei Lastsprüngen sind möglich. Bekannte Lücke:
   Die PV des Slave folgt der Master-Grenze nicht (eine Drosselung über 13090 ist nicht gebaut).
+- **Test-Knopf „Akku nicht laden“:** sperrt nur das Laden. Entladen für das Haus bleibt erlaubt (höchstens die
+  Hauslast, auf beide Wechselrichter verteilt); wäre Laden nötig, steht der Befehl auf Stopp (0xCC), Modus 2 bleibt.
 - **Grundsatz: gerechnet wird mit dem, was geliefert wird.** DVhub vergleicht je Wechselrichter den Befehl mit der
   gemessenen Akku-Leistung (Master im Poll-Takt, Slave alle 5 s). Liefert einer bestätigt weniger (mehr als 100 W bzw.
   10 % daneben, 2 s lang, gemessen frühestens 1,5 s nach einer Befehlserhöhung), gilt die Messung als seine
