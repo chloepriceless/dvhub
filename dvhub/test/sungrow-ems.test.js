@@ -2069,3 +2069,22 @@ test('Punkt 2: 13050-Tagesbudget erschöpft → kein neuer Moduswechsel (bleibt 
   assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'mode_budget');
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_mode_budget'));
 });
+
+test('M28/Codex 28a9c637: Master liefert nur 1 kW, Slave schon an seiner Leistungsgrenze (2 kW) → der Master bleibt drin (sonst +1 kW Netzbezug)', async () => {
+  const r = splitRig({ maxDischargeW: 2000 }); // Slave-Grenze 2 kW (Feldeinstellung), Master 5 kW
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 50; r.state.sungrowSecond.socPct = 50;
+  // Haus 6 kW, PV 0: Master liefert 1000 W (BMS-Grenze), Slave 2000 W (seine Grenze), Netz +3000 W.
+  m28Telemetry(r, { masterBattW: -1000, slaveBattW: -2000, gridW: 3000, loadW: 6000 });
+  await r.ems.applySetpoint(-40, 'default');
+  for (let i = 0; i < 20; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: -1000, slaveBattW: -2000, gridW: 3000, loadW: 6000 });
+    await r.ems.tick();
+  }
+  const split = r.state.ctrl.sungrowEms.decision.split;
+  assert.notEqual(split.masterOut, 'stalled', 'der Slave kann nichts übernehmen — den Master herauszunehmen kostete seine 1 kW');
+  assert.ok(split.masterW >= 1000, `Master behält mindestens seine Lieferung (${split.masterW} W)`);
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Master entlädt weiter');
+  assert.equal(r.slaveImage.holding.get(POWER), 2000, 'Slave an seiner Grenze');
+});

@@ -1669,16 +1669,31 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // „Liefert nicht" nimmt einen WR nur heraus, wenn der andere selbst nicht begrenzt ist — oder wenn der hängende WR
     // praktisch nichts liefert. Sonst trägt er weiter seinen Ist-Anteil (Grundsatz 0): ihn herauszunehmen kostete genau
     // das, was er noch liefert, wenn der andere den Rest nicht tragen kann.
-    const stalledOut = (wr, other) => isStalled(wr, direction, t)
-      && (!other.limited || (Number(deliverEntry(wr, direction).stallDeliveredW) || 0) < LIMIT_MIN_CMD_W);
-    const { masterW, slaveW, slaveUncommanded, masterOut, slaveOut } = splitStrategyShares(strategy, {
+    const shareArgs = {
       powerW: decision.powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
       masterCapacityWh: optMaster.batteryCapacityWh, slaveCapacityWh: si.batteryCapacityWh,
       floorSocPct: floor, maxSocPct: maxSoc, masterFloorPct, slaveFloorPct, masterCeilPct, slaveCeilPct,
       ratioMasterPct: secondCfg.ratioMasterPct, minPowerW: opts.minPowerW,
       socDeadbandPct: secondCfg.socBalanceDeadbandPct,
       dischargeMarginPct: SUNGROW_SPLIT_DISCHARGE_MARGIN_PCT,
-      masterStalled: stalledOut('master', sLim), slaveStalled: stalledOut('slave', mLim),
+    };
+    // Codex 28a9c637 (P2): herausnehmen nur, wenn der andere das, was der hängende WR noch liefert, auch übernehmen kann.
+    // Ein WR an seiner Leistungsgrenze (z. B. Feldeinstellung 2 kW, liefert sie voll) gilt nicht als „begrenzt", hat aber
+    // keinen Spielraum — ohne diese Prüfung kostete die Herausnahme genau die Restlieferung (Netzbezug +1 kW, nachgestellt).
+    // Spielraum = wirksame Grenze (bei eigener Begrenzung limitW + Probe) minus Anteil ohne Herausnahme; 0 an der SoC-Grenze
+    // bzw. Marge, in master-only/Notladung und wenn er selbst „liefert nicht".
+    const roomOf = (lim, maxW, baseW) => Math.max(0, (lim.limited ? Math.min(maxW, lim.limitW + probeW) : maxW) - baseW);
+    const base = splitStrategyShares(strategy, { ...shareArgs, masterStalled: false, slaveStalled: false });
+    const slaveRoomW = base.slaveUncommanded || slaveEmergency || base.slaveOut || isStalled('slave', direction, t) ? 0 : roomOf(sLim, slaveMax, base.slaveW);
+    const masterRoomW = base.masterOut || isStalled('master', direction, t) ? 0 : roomOf(mLim, masterMax, base.masterW);
+    const stalledOut = (wr, other, otherRoomW) => {
+      if (!isStalled(wr, direction, t)) return false;
+      const deliveredW = Number(deliverEntry(wr, direction).stallDeliveredW) || 0;
+      return deliveredW < LIMIT_MIN_CMD_W || (!other.limited && otherRoomW >= deliveredW);
+    };
+    const { masterW, slaveW, slaveUncommanded, masterOut, slaveOut } = splitStrategyShares(strategy, {
+      ...shareArgs,
+      masterStalled: stalledOut('master', sLim, slaveRoomW), slaveStalled: stalledOut('slave', mLim, masterRoomW),
     });
     const mk = (w) => (w >= opts.minPowerW ? { mode: 'forced', command: decision.command, powerW: w, reason: decision.reason } : { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason });
     // M27 (Christin 19.11., ersetzt den Slave-Stopp aus M16): Auch während einer Sperre (Negativpreis, Direktvermarkter,
@@ -1696,7 +1711,6 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // bleibt — so schiebt DVhub nichts hin und her. Der begrenzte WR behält seinen Befehl (er trägt seinen Ist-Anteil und
     // zeigt so, wenn er wieder mehr kann). Netzbezug bleibt erst, wenn beide nicht mehr können.
     const shortOf = (lim, baseW) => (lim.limited ? Math.max(0, baseW - lim.limitW) : 0);
-    const roomOf = (lim, maxW, baseW) => Math.max(0, (lim.limited ? Math.min(maxW, lim.limitW + probeW) : maxW) - baseW);
     const masterShortW = shortOf(mLim, masterW);
     const slaveShortW = shortOf(sLim, slaveW);
     let masterCmdW = masterW; let slaveCmdW = slaveW; let transferW = 0; let transferTo = null;
