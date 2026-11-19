@@ -164,9 +164,13 @@
     try { const d = new Date(Number(ms)); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
     catch { return ''; }
   }
+  // M22: Fehlerart wie im Protokoll (ECONNREFUSED ist „abgelehnt", nicht „Timeout").
   function errKindText(kind) {
     if (kind === 'timeout') return 'Timeout';
     if (kind === 'exception') return 'Ausnahme';
+    if (kind === 'refused') return 'abgelehnt';
+    if (kind === 'reset') return 'getrennt';
+    if (kind === 'unreachable') return 'nicht erreichbar';
     return 'Fehler';
   }
   // Modbus-Gesundheit einer Verbindung (N5/M7b): Anfragen/s · Antwortzeit (EIN Median-Wert) · Fehler 24 h · letzter
@@ -194,6 +198,25 @@
     const left = num(ems.modeBudgetLeft) ? Number(ems.modeBudgetLeft) : null;
     return `13050 ${w.mode13050 || 0}${left != null ? ` (Rest ${left})` : ''} · 13051 ${w.cmd13051 || 0} · 13052 ${w.power13052 || 0} · 13080 ${w.heartbeat13080 || 0}${dv}`;
   }
+  // M28 (+ Grundsatz 0): Hinweis je WR, wenn er seinen Anteil nicht liefert. An der Grenze (SoC/Marge oder „liefert
+  // nicht") → „Master an der Grenze, Slave übernimmt"; teilweise → „Master liefert nur 300 von 600 W, Slave übernimmt den
+  // Rest"; kann der andere nichts übernehmen → „Slave liefert nur 600 von 1120 W". Sonst null.
+  function takeoverText(wr, sp) {
+    if (!sp) return null;
+    const me = wr === 'master' ? 'Master' : 'Slave';
+    const otherKey = wr === 'master' ? 'slave' : 'master';
+    const other = wr === 'master' ? 'Slave' : 'Master';
+    const limitW = sp[`${wr}LimitW`];
+    const cmdW = sp[`${wr}W`];
+    const baseW = num(sp[`${wr}BaseW`]) ? sp[`${wr}BaseW`] : cmdW;
+    if (sp.takeover === otherKey) {
+      if (sp.takeoverReason === 'partial' && num(limitW) && num(baseW)) return `${me} liefert nur ${Math.round(Number(limitW))} von ${Math.round(Number(baseW))} W, ${other} übernimmt den Rest`;
+      return `${me} an der Grenze, ${other} übernimmt`;
+    }
+    if (num(limitW) && num(cmdW) && Number(cmdW) > Number(limitW)) return `${me} liefert nur ${Math.round(Number(limitW))} von ${Math.round(Number(cmdW))} W`;
+    return null;
+  }
+
   function fallbackText(ems) {
     if (!ems) return DASH;
     if (!num(ems.deviceFallbackAfterS)) return 'keiner';
@@ -232,6 +255,8 @@
       limitDevice: limitDeviceHint({ chargeDeviceW: dev.maxChargeWDevice, dischargeDeviceW: dev.maxDischargeWDevice, bdcRatedW: dev.bdcRatedW }),
       // Notladung (runningState 16385): der WR lädt eigenmächtig unter seinem Min-SoC aus dem Netz.
       emergencyCharge: v.emergencyCharge === true,
+      // M28: Master an seiner Grenze bzw. liefert nur teilweise, der Slave übernimmt (takeoverText).
+      takeover: takeoverText('master', sp),
       split: splitText(ems),
       regulate: regulateText(ems),
       writes: writesText(ems, status && status.dvSeqBudget),
@@ -277,6 +302,8 @@
       emergencyCharge,
       // Aufgabe 3: Slave-Fehler im Split → sein Anteil ging an den Master; Hinweis „Slave-Anteil am Master".
       fellBack: sp ? sp.slaveFellBack === true : false,
+      // M28: Slave an seiner Grenze bzw. liefert nur teilweise, der Master übernimmt (takeoverText).
+      takeover: takeoverText('slave', sp),
       regulate: controlled ? regulateText(emsSlave) : DASH,
       writes: controlled ? writesText(emsSlave) : DASH,
       // N5: Modbus-Gesundheit des Slave-Lesepfads (Poller) — auch ohne Steuerung aussagekräftig.
@@ -343,7 +370,7 @@
     // Kopf: Modus auf EIGENER Zeile unter dem Titel (nicht daneben).
     set('sungrowWrMode', `Modus: ${vw.mode}`);
     set('sungrowWrMasterRole', vw.master.role);
-    setBadges('sungrowWrMasterBadges', [vw.master.emergencyCharge ? 'Notladung' : null]);
+    setBadges('sungrowWrMasterBadges', [vw.master.emergencyCharge ? 'Notladung' : null, vw.master.takeover]);
     set('sungrowWrMasterMeta', `${vw.master.model} · ${vw.master.serial} · BDC ${vw.master.bdc}`);
     fillGroup('sungrowWrMaster', vw.master);
     setT('sungrowWrMasterEms', `${vw.master.decision} · Besitz ${vw.master.owns ? 'ja' : 'nein'} · Herzschlag ${vw.master.heartbeat}`);
@@ -354,6 +381,7 @@
     setBadges('sungrowWrSlaveBadges', [
       vw.slave.emergencyCharge ? 'Notladung' : null,
       vw.slave.fellBack ? 'Slave-Anteil am Master' : null,
+      vw.slave.takeover,
     ]);
     // Slave online → Grid füllen; offline → nur die Statuszeile (Nicht erreichbar), Grid aus.
     if (vw.slave.online) { setHidden('sungrowWrSlaveStatus', true); setHidden('sungrowWrSlaveGrid', false); fillGroup('sungrowWrSlave', vw.slave); }

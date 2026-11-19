@@ -20,7 +20,7 @@ import fs from 'node:fs';
 
 import { meterImport } from '../import-limit/core.js';
 import { atomicWriteControlState } from '../../control-state-io.js';
-import { createModbusHealth } from './modbus-health.js';
+import { createModbusHealth, classifyModbusError } from './modbus-health.js';
 
 /** Doku-Adresse → Draht-Adresse. */
 export const wire = (docAddress) => Number(docAddress) - 1;
@@ -92,10 +92,11 @@ export function resolveSungrowControl(cfg) {
   return { mode, modeValue: mode === 'forced' ? EMS_MODE.FORCED : EMS_MODE.EXTERNAL, heartbeatTimeoutS, heartbeatAfterMode, heartbeatWriteFc, acceptDeviceHeartbeatS, keepaliveRegister };
 }
 
-// Notladungs-Puffer über Sungrows Geräte-Untergrenze (M1, Christin 16.11.): kundeneinstellbar je Anlage,
-// Standard 1 Prozentpunkt (real). Der effektive Entlade-Boden ist max(hardFloorSocPct, geräteMinReal + Puffer).
-// 0 = kein Puffer (DVhub entlädt bis exakt zur Geräte-Untergrenze). Geklemmt auf [0, 50].
-export const SUNGROW_DEFAULT_SOC_FLOOR_BUFFER_PCT = 1;
+// Notladungs-Puffer über Sungrows Geräte-Untergrenze (M1, Christin 16.11.): kundeneinstellbar je Anlage. Der effektive
+// Entlade-Boden ist max(hardFloorSocPct, geräteMinReal + Puffer). Geklemmt auf [0, 50]. M24 (Christin 19.11.): Standard
+// 0 — der Puffer hält nur beim Entladen; im Stillstand sinkt der SoC trotzdem bis zur Geräte-Untergrenze (Eigenverbrauch
+// des WR), dort lädt der WR selbst nach. Eine Erhaltungsladung baut DVhub bewusst nicht.
+export const SUNGROW_DEFAULT_SOC_FLOOR_BUFFER_PCT = 0;
 export function sungrowSocFloorBufferPct(cfg) {
   const v = Number(cfg?.sungrow?.socFloorBufferPct);
   return Number.isFinite(v) && v >= 0 ? Math.min(50, v) : SUNGROW_DEFAULT_SOC_FLOOR_BUFFER_PCT;
@@ -194,7 +195,7 @@ export function sungrowRealSocPct(reportedPct, minSocPctDevice, maxSocPctDevice)
 
 // Wirksame Entlade-Grenze eines WR (Aufgabe 1 + M1): der höhere aus hartem Boden und dem geräteeigenen Min-SoC
 // (13059, real) PLUS Notladungs-Puffer. Unter DIESE Grenze (real %) darf DVhub den WR nicht entladen. Der Puffer
-// (Christin 16.11., kundeneinstellbar, Default 1 pp) hält DVhub knapp ÜBER Sungrows eigener Untergrenze (real =
+// (Christin 16.11., kundeneinstellbar, Standard 0 seit M24) hält DVhub knapp ÜBER Sungrows eigener Untergrenze (real =
 // 13059), damit der WR nicht selbst in die Notladung (runningState 0x4001) fällt, die im Feld bei gemeldet 0 %
 // (= real = Gerätemin) kam. Fehlt der Gerätewert, zählt nur der harte Boden (ohne Puffer — kein bekanntes Gerätemin).
 export function sungrowDischargeFloorPct(hardFloorPct, deviceMinSocPct, bufferPct = 0) {
@@ -269,8 +270,9 @@ export async function identifySungrow(read) {
  *   • Sollwert ≤ 0 (kein Netzbezug gewollt) oder noGridCharge (Netzbezug nur für die Last, z. B. EOS „Akku
  *     halten“): Laden höchstens aus dem PV-Überschuss (PV − Last), damit DVhub nie aus dem Netz lädt, wenn es
  *     das Netzladen nicht angefordert hat.
- *   • Sollwert ≥ 0 (keine Einspeisung gewollt): Entladen höchstens die Netto-Last (Last − PV), damit kein
- *     Akkustrom ins Netz geht, wenn keine Einspeisung angefordert ist.
+ *   • Sollwert ≥ 0 (keine Einspeisung gewollt) oder dischargeLoadOnly (Einspeisung gesperrt, M25): Entladen
+ *     höchstens die Netto-Last (Last − PV), damit kein Akkustrom ins Netz geht.
+ *   • noCharge (Test-Knopf „Akku nicht laden", M25): kein Laden — wäre Laden nötig, Stopp; Entladen bleibt.
  * Fehlen Netz- oder Akku-Messung (oder PV/Last für die Begrenzung), gibt es keine Zwangsvorgabe.
  *
  * @returns {{ mode: 'self'|'forced', command?: 'charge'|'discharge'|'stop', powerW?: number, reason: string }}
@@ -278,7 +280,7 @@ export async function identifySungrow(read) {
 export function decideEmsCommand({
   setpointW, gridImportW, batteryW, pvW = null, loadW = null,
   maxChargeW, maxDischargeW, bandW = 300, gain = 0.7, minPowerW = 50, noGridCharge = false,
-  forced = false, socPct = null, floorSocPct = null
+  forced = false, socPct = null, floorSocPct = null, noCharge = false, dischargeLoadOnly = false
 } = {}) {
   const fin = (v) => v != null && Number.isFinite(Number(v));
   if (!fin(setpointW)) return { mode: 'self', reason: 'no_setpoint' };
@@ -295,7 +297,8 @@ export function decideEmsCommand({
   // Entlade-Boden (SoC < hardFloorSocPct): nur das ENTLADEN sperren. Das Laden aus PV-Überschuss bleibt
   // erlaubt (Sollwert 0 + Einspeisung → p > 0 → Laden bis Netz ≈ 0). Gilt nur im Forced-Pfad.
   const belowFloor = forced && fin(socPct) && fin(floorSocPct) && Number(socPct) < Number(floorSocPct);
-  if (p > 0) {
+  if (p > 0 && noCharge === true) { p = 0; reason = 'charge_blocked'; } // M25: Laden gesperrt → Stopp
+  else if (p > 0) {
     p = Math.min(p, Number(maxChargeW));
     if (s <= 0 || noGridCharge === true) {
       const surplus = fin(pvW) && fin(loadW) ? Math.max(0, Number(pvW) - Number(loadW)) : 0;
@@ -305,7 +308,7 @@ export function decideEmsCommand({
     if (belowFloor) { p = 0; reason = 'discharge_floor'; } // SoC am Boden → kein Entladen (nur dieser Takt)
     else {
       p = Math.max(p, -Number(maxDischargeW));
-      if (s >= 0) {
+      if (s >= 0 || dischargeLoadOnly === true) {
         const netLoad = fin(pvW) && fin(loadW) ? Math.max(0, Number(loadW) - Number(pvW)) : 0;
         if (-p > netLoad) { p = -netLoad; reason = 'discharge_load_only'; }
       }
@@ -453,6 +456,52 @@ export const SOC_BALANCE_DEADBAND_PCT = 10;
 // nahe leer unterschied sie beim Laden kaum → Feld 9,2/14,4 blieb ≈50/50).
 const SOC_BALANCE_MARGIN_PCT = 5;
 
+// M28 (Christin 19.11., Feldbeleg 12:28): Entlade-Marge im Split. Ein WR, der weniger als diese Marge (Prozentpunkte,
+// ECHTER SoC) über seiner Entladegrenze steht, bekommt KEINEN Entlade-Anteil — sein Anteil geht an den anderen. Im
+// Feld galt der Master mit real 10,6 % bei Grenze 10 % noch als lieferfähig, lieferte aber 0 W (Netz +552 W statt
+// −40 W). Laden bleibt erlaubt (die Marge gilt nur beim Entladen).
+export const SUNGROW_SPLIT_DISCHARGE_MARGIN_PCT = 1;
+// M28 Liefert-nicht-Erkennung (Christin 19.11.): liefert ein WR über STALL_DETECT_MS weniger als STALL_DELIVER_RATIO
+// seines Anteils (nur bei Anteil > STALL_MIN_SHARE_W), gilt er in dieser Richtung als „an der Grenze" — sein Anteil
+// geht an den anderen. Etwa alle STALL_PROBE_MS bekommt er ihn probeweise zurück. Liegen zwei Messungen weiter als
+// STALL_TRACK_MAX_GAP_MS auseinander (Takt stand), beginnt die Messung neu.
+const STALL_MIN_SHARE_W = 200;
+const STALL_DELIVER_RATIO = 0.5;
+const STALL_DETECT_MS = 10000;
+const STALL_PROBE_MS = 60000;
+const STALL_TRACK_MAX_GAP_MS = 15000;
+// M28 Grundsatz 0 (Christin 19.11., Nachtrag 12:45): die Aufteilung rechnet mit dem, was jeder WR TATSÄCHLICH liefert.
+// Liefert ein WR bestätigt weniger als befohlen (Abweichung > max(LIMIT_ENTER_MIN_W, LIMIT_ENTER_RATIO·Befehl), über
+// LIMIT_CONFIRM_MS, gemessen erst LIMIT_SETTLE_MS nach einer Befehlserhöhung — der Slave wird nur alle 5 s gelesen), gilt
+// seine gemessene Leistung als seine Lieferfähigkeit (limitW). Das Fehlende (Anteil − limitW) geht an den anderen, bis
+// zu dessen Leistungs-/SoC-Grenze; ein selbst begrenzter Empfänger bekommt höchstens limitW + LIMIT_PROBE_W (so zeigt
+// er, ob er mehr kann, ohne hin und her zu springen). Aufgehoben wird die Begrenzung erst, wenn der WR wieder liefert,
+// was befohlen ist (Abweichung ≤ max(LIMIT_EXIT_MIN_W, LIMIT_EXIT_RATIO·Befehl)), und mehr verlangt war als seine alte
+// Grenze (Hysterese gegen Ping-Pong). Ohne neue Messung über LIMIT_STALE_MS verfällt sie.
+const LIMIT_MIN_CMD_W = 100;
+const LIMIT_ENTER_MIN_W = 100;
+const LIMIT_ENTER_RATIO = 0.1;
+const LIMIT_EXIT_MIN_W = 30;
+const LIMIT_EXIT_RATIO = 0.05;
+const LIMIT_SETTLE_MS = 1500;
+const LIMIT_CONFIRM_MS = 2000;
+const LIMIT_PROBE_W = 100;
+const LIMIT_STALE_MS = 15000;
+
+/**
+ * Steht ein WR in DIESER Richtung an seiner SoC-Grenze? Entladen: SoC ≤ Boden, mit Marge > 0 schon SoC < Boden +
+ * Marge (M28). Laden: SoC ≥ Decke. SoC oder Grenze unbekannt → false (nicht sperren). Rein.
+ */
+export function sungrowWrAtLimit({ charge, socPct, floorPct, ceilPct, dischargeMarginPct = 0 } = {}) {
+  const fin = (v) => v != null && v !== '' && Number.isFinite(Number(v));
+  if (!fin(socPct)) return false;
+  const soc = Number(socPct);
+  if (charge) return fin(ceilPct) && soc >= Number(ceilPct);
+  if (!fin(floorPct)) return false;
+  const margin = fin(dischargeMarginPct) ? Math.max(0, Number(dischargeMarginPct)) : 0;
+  return margin > 0 ? soc < Number(floorPct) + margin : soc <= Number(floorPct);
+}
+
 /**
  * Angleich-Gewichte der soc-balance (Aufgabe 6). Grundgewicht = Kapazität (ohne Kapazität die Leistungsgrenze als
  * Proxy); multipliziert mit dem Abstand des WR zur gemeinsamen Angleich-Referenz IN DER RICHTUNG. Entladen: Referenz
@@ -504,31 +553,39 @@ function clampRatioPct(v) {
  * Per-WR-Grenzen ein, der Überlauf geht an den anderen WR, und ein Anteil < minPowerW wird dem anderen WR
  * zugeschlagen (die Summe bleibt die Reglerleistung, ≤ maxPowerW). 'master-only' lässt den Slave in Modus 0
  * (slaveUncommanded=true). Ohne verfügbaren Slave (slaveMax ≤ 0) bekommt der Master alles.
- * @returns {{masterW:number, slaveW:number, slaveUncommanded:boolean}}
+ * M28: dischargeMarginPct (Entlade-Marge über der Grenze) und masterStalled/slaveStalled (liefert seinen Anteil nicht)
+ * nehmen einen WR aus der Aufteilung; masterOut/slaveOut sagen, warum ('soc' | 'stalled' | null).
+ * @returns {{masterW:number, slaveW:number, slaveUncommanded:boolean, masterOut:string|null, slaveOut:string|null}}
  */
 export function splitStrategyShares(strategy, {
   powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
   masterCapacityWh, slaveCapacityWh, floorSocPct = 0, maxSocPct = 100, ratioMasterPct = 50, minPowerW = 50,
   masterFloorPct = floorSocPct, slaveFloorPct = floorSocPct, masterCeilPct = maxSocPct, slaveCeilPct = maxSocPct,
-  socDeadbandPct = SOC_BALANCE_DEADBAND_PCT,
+  socDeadbandPct = SOC_BALANCE_DEADBAND_PCT, dischargeMarginPct = 0, masterStalled = false, slaveStalled = false,
 } = {}) {
-  const fin = (v) => v != null && Number.isFinite(Number(v));
   const p = Math.max(0, Math.round(Number(powerW) || 0));
   let mMax = Math.max(0, Number(masterMax) || 0);
   let sMax = Math.max(0, Number(slaveMax) || 0);
   // Per-WR-SoC-Grenze (Aufgabe 1): ein WR, der seine Grenze in DIESER Richtung erreicht hat — beim Entladen den
   // eigenen Min-SoC (max aus hardFloor und 13059), beim Laden den eigenen Max-SoC (min aus maxSoc und 13058) —
   // bekommt 0 W; sein Anteil geht über splitSungrowPower an den anderen WR (bis zu DESSEN Grenze). SoC unbekannt →
-  // nicht sperren (die System-Grenze im Regler schützt weiter). Symmetrisch für Laden/Entladen.
-  const atLimit = (soc, floor, ceil) => fin(soc) && (charge ? (fin(ceil) && Number(soc) >= Number(ceil)) : (fin(floor) && Number(soc) <= Number(floor)));
-  if (atLimit(masterSoc, masterFloorPct, masterCeilPct)) mMax = 0;
-  if (atLimit(slaveSoc, slaveFloorPct, slaveCeilPct)) sMax = 0;
+  // nicht sperren (die System-Grenze im Regler schützt weiter). Symmetrisch für Laden/Entladen. M28: beim Entladen
+  // zählt schon „weniger als dischargeMarginPct über dem Boden" als an der Grenze.
+  const atLimit = (soc, floor, ceil) => sungrowWrAtLimit({ charge, socPct: soc, floorPct: floor, ceilPct: ceil, dischargeMarginPct });
+  let masterOut = null; let slaveOut = null;
+  if (atLimit(masterSoc, masterFloorPct, masterCeilPct) && mMax > 0) { mMax = 0; masterOut = 'soc'; }
+  if (atLimit(slaveSoc, slaveFloorPct, slaveCeilPct) && sMax > 0) { sMax = 0; slaveOut = 'soc'; }
   const strat = SPLIT_STRATEGIES.includes(String(strategy)) ? String(strategy) : 'soc-balance';
-  if (p <= 0) return { masterW: 0, slaveW: 0, slaveUncommanded: strat === 'master-only' };
+  if (p <= 0) return { masterW: 0, slaveW: 0, slaveUncommanded: strat === 'master-only', masterOut, slaveOut };
   // master-only: Slave bleibt in Modus 0, Master bekommt alles (an seine Grenze geklemmt).
-  if (strat === 'master-only') return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: true };
-  if (sMax <= 0) return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: false }; // Slave offline/an Grenze → alles Master
-  if (mMax <= 0) return { masterW: 0, slaveW: Math.min(p, sMax), slaveUncommanded: false }; // Master an Grenze → alles Slave
+  if (strat === 'master-only') return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: true, masterOut, slaveOut: null };
+  // M28 liefert nicht: ein WR, der seinen Anteil nicht liefert (Erkennung im Aktuator), gibt ihn an den anderen ab —
+  // aber nur, wenn der andere selbst liefert und noch Platz hat. Hängen beide, bringt Umverteilen nichts (normale
+  // Aufteilung); kann der andere nicht, behält der hängende WR seinen Anteil (sonst bekäme keiner etwas).
+  if (masterStalled && !slaveStalled && sMax > 0 && mMax > 0) { mMax = 0; masterOut = 'stalled'; }
+  else if (slaveStalled && !masterStalled && mMax > 0 && sMax > 0) { sMax = 0; slaveOut = 'stalled'; }
+  if (sMax <= 0) return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: false, masterOut, slaveOut }; // Slave offline/an Grenze → alles Master
+  if (mMax <= 0) return { masterW: 0, slaveW: Math.min(p, sMax), slaveUncommanded: false, masterOut, slaveOut }; // Master an Grenze → alles Slave
   // Gewichte je Strategie; splitSungrowPower verteilt danach und klemmt an die Grenzen (Überlauf an den anderen).
   let mW; let sW;
   if (strat === 'ratio') { mW = clampRatioPct(ratioMasterPct); sW = 100 - mW; }
@@ -544,7 +601,7 @@ export function splitStrategyShares(strategy, {
   const min = Math.max(0, Number(minPowerW) || 0);
   if (masterW > 0 && masterW < min && slaveW + masterW <= sMax) { slaveW += masterW; masterW = 0; }
   else if (slaveW > 0 && slaveW < min && masterW + slaveW <= mMax) { masterW += slaveW; slaveW = 0; }
-  return { masterW, slaveW, slaveUncommanded: false };
+  return { masterW, slaveW, slaveUncommanded: false, masterOut, slaveOut };
 }
 
 /**
@@ -727,7 +784,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // den Transport; der Rest des Aktuators nutzt nur noch `transport` (gezählt). snapshot() geht in publish() an die
   // Kachel. Ein von außen übergebener Zähler (Master: ctx.sungrowMasterHealth) wird GETEILT — dann zählen Poll UND
   // EMS in denselben Master-Zähler (M7b). Ohne Übergabe ein eigener (Slave, Tests).
-  const modbusHealthInst = modbusHealth || createModbusHealth(now);
+  // M22: ohne geteilten Zähler loggt diese Instanz ihre Modbus-Fehler selbst (wr = Master/Slave, source = ems).
+  const modbusHealthInst = modbusHealth || createModbusHealth(now, { pushLog, wr: isSlave ? 'slave' : 'master', source: 'ems' });
   const transport = modbusHealthInst.wrap(baseTransport);
   const st = {
     target: null,        // { setpointW, source, at }
@@ -756,6 +814,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     neutralizedAt: null,  // pausedAt des Not-Halts, für den die eine Rücknahme schon lief
     revokedReason: null,  // ein Tor hat den letzten Sollwert abgelehnt
     acceptSeq: 0,         // zählt angenommene Sollwerte (Aufrufzeitpunkt) — eine ältere Ablehnung widerruft keinen neueren
+    deliver: {},          // M28: Liefert-nicht-Erkennung je WR und Richtung ('master:discharge' → { underSince, stalledUntil, episode })
+    limit: {},            // M28 Grundsatz 0: gemessene Lieferfähigkeit je WR und Richtung ('slave:discharge' → { limited, limitW, … })
+    splitLast: null,      // M28: zuletzt erfolgreich kommandierte Anteile im Split { direction, masterW, slaveW, at }
     logKeys: {}
   };
   let chain = Promise.resolve();
@@ -888,6 +949,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       responseMs: modbusHealthInst.responseMs() ?? st.responseMs,
       writesToday: { mode13050: writeDayBucket().regs[EMS_MODE_ADDR] || 0, cmd13051: st.writeDay.regs[EMS_CMD_ADDR] || 0, power13052: st.writeDay.regs[EMS_POWER_ADDR] || 0, heartbeat13080: st.writeDay.regs[HEARTBEAT_ADDR] || 0 },
       modeBudgetLeft: modeBudgetLeft(),
+      // M24: wirksamer Puffer über der Geräte-Untergrenze (Leitstand: „Minimum-SoC 10 % (Gerät)" bei 0).
+      socFloorBufferPct: sungrowSocFloorBufferPct(getCfg()),
       target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at, noGridCharge: st.target.noGridCharge === true } : null,
       device: st.dev ? { ...st.dev } : null,
       decision: st.decision,
@@ -1071,6 +1134,14 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return REGULATE_MAX_MS;
   }
 
+  // M22: Register (Doku), Draht-Adresse, Wert und Fehlerart eines abgelehnten Writes für die Logs (split_aborted,
+  // Slave-Fallback). writeReg hängt emsAddress (Draht) und emsValue an den Fehler; Doku = Draht + 1.
+  function writeErrorInfo(e) {
+    const wireAddress = e?.emsAddress ?? null;
+    const { kind, code } = classifyModbusError(e?.cause?.message || e?.message, e?.code);
+    return { register: wireAddress == null ? null : wireAddress + 1, wireAddress, value: e?.emsValue ?? null, kind, code };
+  }
+
   function foreignModeError(mode) {
     setOwns(null);
     const err = new Error('sungrow_foreign_ems_mode');
@@ -1225,12 +1296,23 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return null;
   }
 
-  // Feldtest „Akku nicht laden" (M14b): während eines Abregelungs-Tests mit dieser
-  // Option (state.ctrl.curtailmentTest.blockCharge) den Akku anhalten. Selbst-
-  // ablaufend über das Lease (now < until) — endet garantiert mit dem Test.
+  // Feldtest „Akku nicht laden" (M14b/M25): während eines Abregelungs-Tests mit dieser
+  // Option (state.ctrl.curtailmentTest.blockCharge) das LADEN sperren (Entladen fürs Haus
+  // bleibt). Selbst-ablaufend über das Lease (now < until) — endet garantiert mit dem Test.
   function curtailmentBatteryHold() {
     const ct = state.ctrl?.curtailmentTest;
     return !!(ct && ct.active === true && ct.blockCharge === true && now() < ct.until);
+  }
+
+  // M25 + Codex 4c624dcd (P1): Ist die Einspeisung gerade gesperrt? Dann entlädt DVhub nur fürs Haus (höchstens die
+  // Netto-Last). Grund: Unter der Einspeisegrenze lehnt der Master zu große Entladebefehle mit „modbus exception 4" ab
+  // (→ Split-Abbruch, Modus 0), und seit M27 läuft auch der Slave weiter — eine Export-Vorgabe (EOS/Regel) entlüde ihn
+  // sonst ins Netz, an der Master-Grenze vorbei. Gesperrt = eigene Sperre geschrieben (_lastDvFeedIn=false), teilweise
+  // geschrieben (_dvPartialBlock) oder die Pflicht-Abregelung liegt an, auch wenn ihr Write fehlschlug (DV-Abschaltung
+  // forcedOff, Negativpreis) — wie multi-gx „export_blocked".
+  function feedInBlocked() {
+    const c = state.ctrl || {};
+    return c._lastDvFeedIn === false || c._dvPartialBlock === true || c.forcedOff === true || c.negativePriceActive === true;
   }
 
   // Regeltakt (Punkt 2): beim aktiven Regeln (DVhub besitzt Forced ODER External EMS) der adaptive Takt 1–5 s aus
@@ -1264,6 +1346,119 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (masterSafe) { setOwns(null); st.target = null; }
   }
 
+  // M28 (Christin 19.11., Feldbeleg 12:28): Liefert-nicht-Erkennung je WR und Richtung. Liefert ein WR über
+  // STALL_DETECT_MS weniger als STALL_DELIVER_RATIO seines Anteils (bei Anteil > STALL_MIN_SHARE_W), gilt er als
+  // „an der Grenze": für STALL_PROBE_MS bekommt er in dieser Richtung keinen Anteil, der andere übernimmt
+  // (splitStrategyShares). Danach bekommt er seinen Anteil probeweise zurück; liefert er wieder, ist die Lage aufgehoben,
+  // sonst greift die Erkennung nach STALL_DETECT_MS erneut. Ein Log je Lage (Erkennen + Erholung), nicht je Probe.
+  // Gemessen wird gegen den im VORIGEN Takt kommandierten Anteil (die Messung zeigt dessen Wirkung).
+  const wrLabel = (wr) => (wr === 'master' ? 'Master' : 'Slave');
+  function deliverEntry(wr, direction) {
+    const k = `${wr}:${direction}`;
+    if (!st.deliver[k]) st.deliver[k] = { underSince: 0, stalledUntil: 0, episode: false };
+    return st.deliver[k];
+  }
+  function isStalled(wr, direction, t) { return deliverEntry(wr, direction).stalledUntil > t; }
+
+  // M28 Grundsatz 0: gemessene Lieferfähigkeit je WR und Richtung (siehe LIMIT_*). Beurteilt wird nur eine NEUE Messung
+  // (Zeitstempel), und erst LIMIT_SETTLE_MS nach einer Befehlserhöhung — sonst hielte DVhub die alte, 5 s alte
+  // Slave-Messung für eine Begrenzung. Rein zustandsbehaftet, kein I/O.
+  const enterTolW = (cmdW) => Math.max(LIMIT_ENTER_MIN_W, LIMIT_ENTER_RATIO * cmdW);
+  const exitTolW = (cmdW) => Math.max(LIMIT_EXIT_MIN_W, LIMIT_EXIT_RATIO * cmdW);
+  function limitEntry(wr, direction) {
+    const k = `${wr}:${direction}`;
+    if (!st.limit[k]) st.limit[k] = { limited: false, limitW: null, underSince: 0, cmdW: 0, cmdRaisedAt: 0, lastSampleAt: 0, judgedAt: 0 };
+    return st.limit[k];
+  }
+  function judgeLimit(wr, direction, cmdW, sample, commandedAt, probeW = LIMIT_PROBE_W) {
+    const L = limitEntry(wr, direction);
+    // Codex 07041019 (P2): eine deutliche Befehlserhöhung beginnt die Bestätigung neu — eine Lücke kurz davor darf beim
+    // normalen Hochfahren keine Grenze bestätigen.
+    if (cmdW > L.cmdW + enterTolW(cmdW)) { L.cmdRaisedAt = commandedAt; L.underSince = 0; }
+    L.cmdW = cmdW;
+    const at = Number(sample?.at) || 0;
+    const w = sample?.w;
+    if (!at || at === L.lastSampleAt || w == null || !Number.isFinite(Number(w))) return;
+    L.lastSampleAt = at;
+    if (at < L.cmdRaisedAt + LIMIT_SETTLE_MS) return;
+    if (!(cmdW >= LIMIT_MIN_CMD_W)) { L.underSince = 0; return; }
+    L.judgedAt = at;
+    const delivered = direction === 'charge' ? Math.max(0, Number(w)) : Math.max(0, -Number(w));
+    const deficit = cmdW - delivered;
+    const rounded = Math.round(delivered / 10) * 10;
+    if (L.limited) {
+      const prev = Number(L.limitW) || 0;
+      // Liefert wieder, was befohlen ist — und verlangt war klar mehr als die alte Grenze → Begrenzung aufgehoben.
+      if (deficit <= exitTolW(cmdW) && cmdW >= prev + probeW / 2) { L.limited = false; L.limitW = null; L.underSince = 0; return; }
+      // Echte Lücke → die Messung ist die Lieferfähigkeit; sonst (liefert den Befehl) nur nach oben nachführen.
+      L.limitW = deficit > exitTolW(cmdW) ? rounded : Math.max(prev, rounded);
+      return;
+    }
+    if (deficit > enterTolW(cmdW)) {
+      if (!L.underSince) L.underSince = at;
+      if (at - L.underSince >= LIMIT_CONFIRM_MS) { L.limited = true; L.limitW = rounded; L.underSince = 0; }
+    } else L.underSince = 0;
+  }
+  function limitInfo(wr, direction, t) {
+    const L = st.limit[`${wr}:${direction}`];
+    if (!L || !L.limited) return { limited: false, limitW: null };
+    if (t - L.judgedAt > LIMIT_STALE_MS) { L.limited = false; L.limitW = null; return { limited: false, limitW: null }; }
+    return { limited: true, limitW: Math.max(0, Number(L.limitW) || 0) };
+  }
+
+  function trackDelivery(t, measured, probeW = LIMIT_PROBE_W) {
+    const last = st.splitLast;
+    if (!last || t - last.at > STALL_TRACK_MAX_GAP_MS) {
+      for (const e of Object.values(st.deliver)) e.underSince = 0;
+      for (const L of Object.values(st.limit)) L.underSince = 0;
+      return;
+    }
+    // Codex 402a3df9 (P2): eine Messung in der GEGENRICHTUNG unterbricht die laufende Messung — sonst zählten Sekunden
+    // aus einem früheren Entlade-Abschnitt nach einer Ladephase weiter und der WR flöge nach 1 s heraus. Codex e5b5fffe
+    // (P2): auch der Befehl der anderen Richtung gilt als 0 — die Rückkehr ist dann eine Befehlserhöhung mit
+    // Einschwingzeit, und ein Messwert von VOR dem Wiederbeginn (z. B. ein stehender Lade-Messwert) zählt nicht.
+    for (const [k, e] of Object.entries(st.deliver)) if (!k.endsWith(`:${last.direction}`)) { e.underSince = 0; e.cmdW = 0; }
+    for (const [k, L] of Object.entries(st.limit)) if (!k.endsWith(`:${last.direction}`)) { L.underSince = 0; L.cmdW = 0; }
+    for (const wr of ['master', 'slave']) {
+      const e = deliverEntry(wr, last.direction);
+      const shareW = Math.max(0, Number(last[`${wr}W`]) || 0);
+      judgeLimit(wr, last.direction, shareW, measured[wr], last.at, probeW);
+      // Codex 402a3df9 (P2): nur eine NEUE Messung zählt, gemessen nach dem Einschwingen auf den Befehl, und die Frist
+      // läuft in Messzeit — eine stehende (alte) Messung ist kein neuer Beleg, egal wie viele Takte vergehen.
+      if (shareW > (e.cmdW || 0) + enterTolW(shareW)) { e.cmdRaisedAt = last.at; e.underSince = 0; }
+      e.cmdW = shareW;
+      const m = measured[wr]?.w;
+      const at = Number(measured[wr]?.at) || 0;
+      if (!(shareW > STALL_MIN_SHARE_W) || m == null || !Number.isFinite(Number(m)) || !at) { e.underSince = 0; continue; }
+      if (at === e.lastSampleAt) continue;
+      e.lastSampleAt = at;
+      if (at < (e.cmdRaisedAt || 0) + LIMIT_SETTLE_MS) continue;
+      const deliveredW = last.direction === 'charge' ? Math.max(0, Number(m)) : Math.max(0, -Number(m));
+      const dirText = last.direction === 'charge' ? 'Lade' : 'Entlade';
+      if (deliveredW >= STALL_DELIVER_RATIO * shareW) {
+        e.underSince = 0;
+        if (e.episode) {
+          e.episode = false; e.stalledUntil = 0;
+          pushLog('sungrow_ems_share_recovered', { wr, direction: last.direction, shareW, deliveredW: Math.round(deliveredW), text: `Sungrow: ${wrLabel(wr)} liefert seinen ${dirText}-Anteil wieder (${Math.round(deliveredW)} von ${shareW} W).` });
+        }
+        continue;
+      }
+      if (!e.underSince) e.underSince = at;
+      if (at - e.underSince < STALL_DETECT_MS) continue;
+      e.underSince = 0;
+      e.stalledUntil = t + STALL_PROBE_MS;
+      e.stallDeliveredW = Math.round(deliveredW); // was er beim Erkennen noch lieferte (Grundsatz 0, stalledOut)
+      if (!e.episode) {
+        e.episode = true;
+        const other = wr === 'master' ? 'slave' : 'master';
+        pushLog('sungrow_ems_share_stalled', {
+          wr, direction: last.direction, shareW, deliveredW: Math.round(deliveredW), takeover: other, probeAfterS: STALL_PROBE_MS / 1000,
+          text: `Sungrow: ${wrLabel(wr)} liefert seinen ${dirText}-Anteil nicht (${Math.round(deliveredW)} von ${shareW} W) — an der Grenze, der ${wrLabel(other)} übernimmt. Probe etwa alle ${STALL_PROBE_MS / 1000} s.`,
+        });
+      }
+    }
+  }
+
   // Split-Steuerung: die Reglerentscheidung auf beide WR schreiben. Self → Master Self + Slave zurückziehen.
   // Forced → Leistung nach Punkt-2-Grenzen und SoC-Reserve/Headroom aufteilen, Slave zuerst, dann Master;
   // scheitert EINER (Herzschlag, Rücklesen, fremder Modus, …) → BEIDE sicher in Self-consumption.
@@ -1272,6 +1467,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const optMaster = cfg.optimizer || {};
     const si = cfg.sungrow?.secondInverter || {};
     if (decision.mode === 'self') {
+      st.splitLast = null; // M28: keine kommandierten Anteile mehr, die Erkennung ruht
       try {
         if (!emsMatches(st.dev, decision, 0, ctl.modeValue) || gap) {
           const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
@@ -1307,7 +1503,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const masterSoc = sungrowRealSocPct(state.victron.sungrowMasterSocPct ?? state.victron.soc, masterDev.minSocPctDevice, masterDev.maxSocPctDevice);
     const slaveSoc = sungrowRealSocPct(second.socPct, slaveDev.minSocPctDevice, slaveDev.maxSocPctDevice);
     // Je-WR-SoC-Grenze (Aufgabe 1 + M1): Entlade-Boden = max(hardFloor, 13059 + Puffer), Lade-Decke = min(maxSoc,
-    // 13058) — alles real %. Der Puffer (kundeneinstellbar, Default 1) hält DVhub knapp über Sungrows Untergrenze
+    // 13058) — alles real %. Der Puffer (kundeneinstellbar, Standard 0 seit M24) hält DVhub knapp über Sungrows Untergrenze
     // (verhindert die Notladung). Fehlt der Gerätewert, zählt nur die Konfig-Grenze. splitStrategyShares sperrt damit
     // je WR und leitet den Anteil an den anderen (bis zu DESSEN Grenze) um.
     const socFloorBuffer = sungrowSocFloorBufferPct(cfg);
@@ -1321,64 +1517,82 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const slaveEmergency = second.emergencyCharge === true;
     const slaveMax = slaveEmergency ? 0 : perWrMax(charge ? si.maxChargeW : si.maxDischargeW, charge ? slaveDev.maxChargeWDevice : slaveDev.maxDischargeWDevice, second.bdcRatedW);
     const strategy = charge ? secondCfg.strategyCharge : secondCfg.strategyDischarge;
-    const { masterW, slaveW, slaveUncommanded } = splitStrategyShares(strategy, {
+    // M28: gemessene Akku-Leistung je WR (+ = Laden) gegen den zuletzt kommandierten Anteil prüfen. Master-Rohwert
+    // (sungrowMasterBatteryW, vom Poller bei aggregateTelemetry) nur frisch; Slave aus der frischen Slave-Telemetrie
+    // (null in Notladung).
+    const direction = charge ? 'charge' : 'discharge';
+    const vic = state.victron || {};
+    const masterBattAt = Number(vic.fieldUpdatedAt?.batteryPowerW) || 0;
+    const masterMeasW = vic.sungrowMasterBatteryW != null && Number.isFinite(Number(vic.sungrowMasterBatteryW))
+      && masterBattAt > 0 && t - masterBattAt <= opts.telemetryMaxAgeMs ? Number(vic.sungrowMasterBatteryW) : null;
+    // Messzeitpunkt je WR (Grundsatz 0 beurteilt nur neue Messungen): Master = Poll-Stempel der Akku-Leistung, Slave =
+    // Lesetakt des Begleitdienstes (state.sungrowSecond.updatedAt, alle 5 s).
+    const slaveSampleAt = Number(state.sungrowSecond?.updatedAt) || 0;
+    // Codex 07041019 (P2): die Probe über der gemessenen Grenze muss größer sein als die Schreibschwelle (stepW), sonst
+    // geht sie nie ans Gerät.
+    const probeW = Math.max(LIMIT_PROBE_W, (Number(opts.stepW) || 0) + 10);
+    trackDelivery(t, { master: { w: masterMeasW, at: masterMeasW == null ? 0 : masterBattAt }, slave: { w: second.batteryPowerW, at: slaveSampleAt } }, probeW);
+    const mLim = limitInfo('master', direction, t);
+    const sLim = limitInfo('slave', direction, t);
+    // „Liefert nicht" nimmt einen WR nur heraus, wenn der andere selbst nicht begrenzt ist — oder wenn der hängende WR
+    // praktisch nichts liefert. Sonst trägt er weiter seinen Ist-Anteil (Grundsatz 0): ihn herauszunehmen kostete genau
+    // das, was er noch liefert, wenn der andere den Rest nicht tragen kann.
+    const stalledOut = (wr, other) => isStalled(wr, direction, t)
+      && (!other.limited || (Number(deliverEntry(wr, direction).stallDeliveredW) || 0) < LIMIT_MIN_CMD_W);
+    const { masterW, slaveW, slaveUncommanded, masterOut, slaveOut } = splitStrategyShares(strategy, {
       powerW: decision.powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
       masterCapacityWh: optMaster.batteryCapacityWh, slaveCapacityWh: si.batteryCapacityWh,
       floorSocPct: floor, maxSocPct: maxSoc, masterFloorPct, slaveFloorPct, masterCeilPct, slaveCeilPct,
       ratioMasterPct: secondCfg.ratioMasterPct, minPowerW: opts.minPowerW,
       socDeadbandPct: secondCfg.socBalanceDeadbandPct,
+      dischargeMarginPct: SUNGROW_SPLIT_DISCHARGE_MARGIN_PCT,
+      masterStalled: stalledOut('master', sLim), slaveStalled: stalledOut('slave', mLim),
     });
     const mk = (w) => (w >= opts.minPowerW ? { mode: 'forced', command: decision.command, powerW: w, reason: decision.reason } : { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason });
-    // M16 (Feld 16.11., Christin Weg 1): Solange eine Abregelung/Sperre aktiv ist (Einspeisung am Netzpunkt gesperrt —
-    // feedExcessDcPv=0 / dv_forced_off / Negativpreis / Test, alle über applyDvVictronControl → state.ctrl._lastDvFeedIn
-    // === false), darf der Slave KEINE eigenen Lade-/Entladebefehle (13051/13052) bekommen. Steuerfunktionen gehen laut
-    // Sungrow-Protokoll NUR an den Master, der verteilt selbst; DVhub steuert den Slave im Split aber direkt — damit
-    // folgte der Slave der Master-Einspeisegrenze NICHT, seine PV lief weiter und er konnte ins Netz entladen. Lösung:
-    // Slave fest auf 0xCC (Stopp, Modus 2 bleibt — er folgt dem Master), KEINE Leistung. Ohne eigene Befehle folgt seine
-    // PV der Master-Grenze (13074=0 drosselt die System-PV am Netzpunkt), und er kann nicht ins Netz entladen. Der
-    // Master regelt ALLEIN weiter (Netz-Sollwert wie gehabt, KEINE zusätzliche Master-Entladesperre); das 13050-Budget
-    // bleibt unberührt (kein Moduswechsel). Nach der Freigabe (_lastDvFeedIn !== false) kehrt der Slave im nächsten Takt
-    // über den normalen Pfad in den Split zurück (nur 13051/13052, kein Moduswechsel).
-    const feedInBlocked = state.ctrl?._lastDvFeedIn === false;
+    // M27 (Christin 19.11., ersetzt den Slave-Stopp aus M16): Auch während einer Sperre (Negativpreis, Direktvermarkter,
+    // Test-Knopf → state.ctrl._lastDvFeedIn === false) bekommt der Slave seinen normalen Anteil nach der Strategie —
+    // KEIN 0xCC mehr. Feldbeleg: mit dem Slave-Stopp kam die Hauslast aus dem Netz, sobald der Master leer war. Beide WR
+    // laden/entladen weiter, DVhub regelt die Summe auf den Sollwert (bei Negativpreis den Puffer −40 W). Die
+    // Einspeisegrenze bleibt nur am Master (DV-Sequenz 13074/13087/13088/31222). Kurze Netzspitzen bei Lastsprüngen sind
+    // hingenommen. Bekannte Lücke (bewusst nicht gebaut): die Slave-PV folgt der Master-Grenze nicht (13090).
     // Slave nicht kommandieren bei master-only ODER Notladung (uncontrollable) → nur best effort in Self halten.
     const skipSlave = slaveUncommanded || slaveEmergency;
-    const slaveDecision = feedInBlocked
-      ? { mode: 'forced', command: 'stop', powerW: 0, reason: 'curtailment_hold' }
-      : (skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveW));
-    let masterDecision = mk(masterW);
-    let effMasterW = masterW; let effSlaveW = slaveW; let slaveFellBack = false; let slaveWrote = false; let slaveCurtailHold = false;
-    // Befund 2 (16.11., Fable-Review, Repro belegt): Übernimmt der Master den Slave-Anteil (Slave-Fehler ODER
-    // Abregelung/Sperre), muss er seinen EIGENEN SoC-Boden/Deckel einhalten — genau wie splitStrategyShares, das
-    // mMax bei erreichter Grenze auf 0 klemmt (atLimit, :523-524). Der Fallback nahm nur die Leistungsgrenze
-    // (masterMax) und ließ den Master unter seinem Min-SoC entladen bzw. über seinen Max-SoC laden (Risiko
-    // Netz-Nachladung). masterTakeoverW = 0, wenn der Master in DIESER Richtung an seiner Grenze ist, sonst masterMax.
-    const masterFin = (v) => v != null && Number.isFinite(Number(v));
-    const masterAtLimit = masterFin(masterSoc) && (charge
-      ? (masterFin(masterCeilPct) && Number(masterSoc) >= Number(masterCeilPct))
-      : (masterFin(masterFloorPct) && Number(masterSoc) <= Number(masterFloorPct)));
+    // M28 Grundsatz 0 (Christin 19.11.): das Fehlende eines WR, der bestätigt weniger liefert als befohlen (Anteil −
+    // gemessene Lieferfähigkeit), geht an den anderen — bis zu dessen Leistungsgrenze (ein selbst begrenzter Empfänger:
+    // seine Lieferfähigkeit + LIMIT_PROBE_W). Kein Empfänger an der SoC-Grenze/Marge, keiner, der „liefert nicht" hängt,
+    // kein Slave in master-only/Notladung. Nur EINE Richtung je Takt und nur, wenn der Empfänger selbst nichts schuldig
+    // bleibt — so schiebt DVhub nichts hin und her. Der begrenzte WR behält seinen Befehl (er trägt seinen Ist-Anteil und
+    // zeigt so, wenn er wieder mehr kann). Netzbezug bleibt erst, wenn beide nicht mehr können.
+    const shortOf = (lim, baseW) => (lim.limited ? Math.max(0, baseW - lim.limitW) : 0);
+    const roomOf = (lim, maxW, baseW) => Math.max(0, (lim.limited ? Math.min(maxW, lim.limitW + probeW) : maxW) - baseW);
+    const masterShortW = shortOf(mLim, masterW);
+    const slaveShortW = shortOf(sLim, slaveW);
+    let masterCmdW = masterW; let slaveCmdW = slaveW; let transferW = 0; let transferTo = null;
+    if (masterShortW > 0 && slaveShortW === 0 && !skipSlave && !slaveOut && !isStalled('slave', direction, t)) {
+      transferW = Math.min(masterShortW, roomOf(sLim, slaveMax, slaveW));
+      if (transferW > 0) { slaveCmdW = slaveW + transferW; transferTo = 'slave'; }
+    } else if (slaveShortW > 0 && masterShortW === 0 && !masterOut && !isStalled('master', direction, t)) {
+      transferW = Math.min(slaveShortW, roomOf(mLim, masterMax, masterW));
+      if (transferW > 0) { masterCmdW = masterW + transferW; transferTo = 'master'; }
+    }
+    const slaveDecision = skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveCmdW);
+    let masterDecision = mk(masterCmdW);
+    let effMasterW = masterCmdW; let effSlaveW = slaveCmdW; let slaveFellBack = false; let slaveWrote = false;
+    let slaveReadback = null; // Gerätezustand des Slave nach dem Befehl (Codex 07041019: beurteilt wird, was AM GERÄT steht)
+    // Befund 2 (16.11., Fable-Review, Repro belegt): Übernimmt der Master den Slave-Anteil (Slave-Fehler), muss er seinen
+    // EIGENEN SoC-Boden/Deckel einhalten — genau wie splitStrategyShares, das mMax bei erreichter Grenze auf 0 klemmt
+    // (atLimit). Der Fallback nahm nur die Leistungsgrenze (masterMax) und ließ den Master unter seinem Min-SoC entladen
+    // bzw. über seinen Max-SoC laden (Risiko Netz-Nachladung). masterTakeoverW = 0, wenn der Master in DIESER Richtung
+    // an seiner Grenze ist (M28: beim Entladen inkl. Marge), sonst masterMax.
+    const masterAtLimit = sungrowWrAtLimit({ charge, socPct: masterSoc, floorPct: masterFloorPct, ceilPct: masterCeilPct, dischargeMarginPct: SUNGROW_SPLIT_DISCHARGE_MARGIN_PCT });
     const masterTakeoverW = masterAtLimit ? 0 : masterMax;
     // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst).
-    if (feedInBlocked) {
-      // Sperre aktiv: Slave aktiv auf 0xCC halten (nicht nur neutralize — das wäre ein No-op, wenn der Slave gerade nicht
-      // besessen ist), seinen Anteil dem Master geben. Der Master hält den Netz-Sollwert allein ein; seine Einspeisegrenze
-      // (13074=0) drosselt die System-PV. Scheitert der Slave-Stopp (Lese-/Schreibfehler), best effort neutralisieren —
-      // der Master steuert trotzdem weiter (kein Modus 0 wegen eines Slave-Fehlers).
-      slaveCurtailHold = true;
-      effSlaveW = 0;
-      effMasterW = Math.min(decision.powerW, masterTakeoverW); // Befund 2: Master-SoC-Boden/Deckel einhalten
-      masterDecision = mk(effMasterW);
-      const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
-      slaveWrote = sr.ok === true && sr.unchanged !== true;
-      if (!sr.ok) {
-        try { await slaveActuator.neutralize('curtailment_hold_failed'); } catch { /* best effort */ }
-        slaveFellBack = true;
-      }
-      logOnce('slave-curtail-hold', 'sungrow_ems_slave_curtail_hold', { side: 'slave', masterW: effMasterW, slaveWrote, slaveFellBack, text: 'Sungrow: Abregelung/Sperre aktiv — Slave auf 0xCC angehalten (keine eigenen Befehle), der Master regelt allein weiter (seine Einspeisegrenze 13074=0 drosselt die PV).' });
-    } else if (skipSlave) {
+    if (skipSlave) {
       // master-only/Notladung: Slave in Modus 0 (Self) halten. Scheitert das nicht hart — der Slave liegt dann ohnehin in Self.
       try { await slaveActuator.neutralize('self'); } catch { /* best effort */ }
     } else {
       const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
+      if (sr.ok) slaveReadback = sr.readback || null;
       slaveWrote = sr.ok === true && sr.unchanged !== true; // echter Slave-Write (N4: Log/Status nur bei Änderung)
       if (!sr.ok) {
         // Absicherung C6 (Aufgabe 3): EIN Slave-Fehler (z. B. „EMS-Register lesen fehlgeschlagen: modbus exception 4",
@@ -1392,7 +1606,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         effMasterW = Math.min(decision.powerW, masterTakeoverW); // Befund 2: Master-SoC-Boden/Deckel einhalten
         masterDecision = mk(effMasterW);
         slaveFellBack = true;
-        logOnce(`${sr.error}`, 'sungrow_ems_split_slave_fallback', { side: 'slave', error: sr.error || null, readError: sr.readError === true, masterW: effMasterW, text: 'Sungrow: Slave-Fehler im Split — Anteil auf den Master verlagert, der Master steuert weiter (kein Modus 0).' }, 'warn');
+        logOnce(`${sr.error}`, 'sungrow_ems_split_slave_fallback', { side: 'slave', error: sr.error || null, readError: sr.readError === true, register: sr.register ?? null, wireAddress: sr.wireAddress ?? null, value: sr.value ?? null, kind: sr.kind ?? null, code: sr.code ?? null, masterW: effMasterW, text: 'Sungrow: Slave-Fehler im Split — Anteil auf den Master verlagert, der Master steuert weiter (kein Modus 0).' }, 'warn');
       }
     }
     // Split-Detail für GUI/Leitstand (Aufgabe 1/2/6): Anteil, wirksame Leistungsgrenze und wirksame SoC-Grenze je
@@ -1405,9 +1619,37 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       masterLimitPct: charge ? masterCeilPct : masterFloorPct,
       slaveLimitPct: charge ? slaveCeilPct : slaveFloorPct,
       slaveEmergencyCharge: slaveEmergency,
-      slaveCurtailHold, // M16: Abregelung/Sperre aktiv → Slave auf 0xCC angehalten, Master regelt allein weiter
       slaveFellBack, // Aufgabe 3: Slave-Fehler → Anteil auf den Master verlagert, Master steuert weiter
+      // M28: warum ein WR keinen Anteil bekommt ('soc' = an der SoC-Grenze inkl. Entlade-Marge, 'stalled' = liefert
+      // seinen Anteil nicht) und wer übernimmt (Kachel: „Master an der Grenze, Slave übernimmt").
+      masterOut: masterOut || null, slaveOut: slaveOut || null,
+      // M28 Grundsatz 0: Anteil nach Strategie (Base), gemessene Lieferfähigkeit (nur wenn begrenzt) und das an den
+      // anderen verschobene Fehlende. masterW/slaveW oben = tatsächlicher Befehl (Base + Übernahme).
+      masterBaseW: masterW, slaveBaseW: slaveW,
+      masterLimitW: mLim.limited ? mLim.limitW : null, slaveLimitW: sLim.limited ? sLim.limitW : null,
+      transferW: transferTo && !slaveFellBack ? transferW : 0,
+      ...(() => {
+        if (masterOut && effSlaveW > 0) return { takeover: 'slave', takeoverReason: masterOut };
+        if (slaveOut && effMasterW > 0) return { takeover: 'master', takeoverReason: slaveOut };
+        if (transferTo && !slaveFellBack) return { takeover: transferTo, takeoverReason: 'partial' };
+        return { takeover: null, takeoverReason: null };
+      })(),
     };
+    // M28: die jetzt kommandierten Anteile für die Liefert-nicht-Erkennung im nächsten Takt (nach bestätigtem Write
+    // unten gültig; scheitert der Master, verworfen). Codex 07041019 (P2): beurteilt wird der Wert, der AM GERÄT steht
+    // (Rücklesung bzw. unveränderter Zustand) — eine Änderung innerhalb der Schreibschwelle (stepW) geht nicht raus,
+    // sonst verglich DVhub einen nie geschriebenen Befehl mit der Messung und frischte eine falsche Grenze immer neu auf.
+    const devShareW = (dev, fallbackW) => {
+      if (decision.command !== 'charge' && decision.command !== 'discharge') return 0;
+      if (!dev) return fallbackW;
+      return (Number(dev.cmd) & 0xffff) === CMD_BY_NAME[decision.command] ? Math.max(0, Number(dev.powerW) || 0) : 0;
+    };
+    const commandedWith = (masterDev) => ({
+      direction,
+      masterW: devShareW(masterDev, effMasterW),
+      slaveW: skipSlave || slaveFellBack ? 0 : devShareW(slaveReadback, effSlaveW),
+      at: t,
+    });
     // Master-Anteil. Scheitert er → beide sicher in Self.
     try {
       const mdev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
@@ -1417,6 +1659,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // Bei gap (Herzschlag-Lücke/Wiederaufnahme) immer voll schreiben.
       if (!gap && emsMatches(mdev, masterDecision, opts.stepW, ctl.modeValue)) {
         st.error = null;
+        st.splitLast = commandedWith(mdev);
         st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
         // Hat der Slave in diesem Takt geschrieben, ist es ein echter Write → protokollieren; sonst stiller Takt.
         if (slaveWrote) pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, strategy, slaveFellBack, side: 'slave', reason: decision.reason, trigger: reason, readback: { mode: mdev.mode, cmd: mdev.cmd, powerW: mdev.powerW } });
@@ -1425,16 +1668,18 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       }
       const back = await writeDecision(conf, masterDecision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
       st.error = null; st.logKeys = {};
+      st.splitLast = commandedWith(back);
       st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
-      pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, strategy, slaveFellBack, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
+      pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, transferW: splitDetail.transferW, strategy, slaveFellBack, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
       publish();
       return { ok: true, split: true, decision, masterW: effMasterW, slaveW: effSlaveW, slaveFellBack };
     } catch (e) {
       // Der MASTER ist nicht sicher steuerbar → beide sicher in Self (Modus 0). Das ist der EINZIGE Weg zu Modus 0 im
       // Split (ein Slave-Fehler fuehrt oben nur auf Master-only, Aufgabe 3).
+      st.splitLast = null; // M28: nichts kommandiert, die Erkennung ruht
       await neutralizeBoth('split_master_failed');
       st.error = e?.message || String(e);
-      logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error, register: e?.emsAddress ?? null, value: e?.emsValue ?? null }, 'warn');
+      logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error, ...writeErrorInfo(e) }, 'warn');
       st.decision = { mode: 'self', reason: 'split_master_failed', at: t };
       publish();
       return { ok: false, readError: e?.code === 'heartbeat_mismatch' || e?.code === 'ems_read_error', error: st.error };
@@ -1480,6 +1725,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Boden, sperrt das Gate beide → Stopp. Einzel-WR (kein Split): weiter der Master-Boden. Unbekannter/veralteter
     // SoC bleibt über releaseForFloor (Modus 0) abgesichert.
     const isSplit = !!(slaveActuator && second != null);
+    const exportBlocked = feedInBlocked(); // M25: während einer Sperre nur fürs Haus entladen
+    // M25 (Christin 19.11.): Test-Knopf „Akku nicht laden" sperrt NUR das Laden: Laden 0 (wäre Laden nötig → Stopp,
+    // Modus 2 bleibt), Entladen fürs Haus bleibt erlaubt (höchstens die Netto-Last), beide WR nach der Aufteilung.
+    // Selbst-ablaufend über das Lease des Tests.
+    const chargeBlocked = curtailmentBatteryHold();
     // 4b: positiven Sollwert zusätzlich hart auf die Anschlussgrenze deckeln (Netzladen ≤ limitKw).
     const gridLimitW = Number(cfg?.gridConnection?.limitKw) > 0 ? Number(cfg.gridConnection.limitKw) * 1000 : null;
     const clampGrid = (s) => (gridLimitW != null && Number.isFinite(Number(s)) && Number(s) > gridLimitW ? gridLimitW : s);
@@ -1487,6 +1737,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       setpointW: clampGrid(setpointW), ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
       bandW: 0, gain: opts.gain, minPowerW: opts.minPowerW, noGridCharge: noGridChargeNow,
       forced: true, socPct: isSplit ? null : socPct, floorSocPct: isSplit ? null : floorSocPct,
+      dischargeLoadOnly: exportBlocked || chargeBlocked, noCharge: chargeBlocked,
     });
     let decision;
     if (targetFresh && st.target.releaseForFloor) {
@@ -1510,6 +1761,18 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (st.owns && st.ownMode !== EMS_MODE.FORCED) {
       decision = { mode: 'self', reason: 'mode_switch' };
     }
+    // Codex cd9b71c6 (P2): Test-Knopf „Akku nicht laden" + Absicherungsfall (Messwerte/Sollwert veraltet, SoC unbekannt
+    // → 'self'): Modus 0 ließe den WR den PV-Überschuss selbst laden, obwohl der Test „Laden gesperrt" meldet. Solange
+    // der Test läuft (selbst-ablaufendes Lease), bleibt Modus 2 mit Stopp — wie vor M25. Ein Moduswechsel geht vor.
+    // Codex f0967031 (P2): Modus 2 nur halten, wenn der Slave (falls angebunden) den Stopp BESTÄTIGT — sonst bliebe ein
+    // unerreichbarer Slave auf seinem alten Befehl, während der Master in Modus 2 steht. Dann lieber der Rückfall in
+    // Modus 0 (der Slave folgt dem Master und lässt den Befehl fallen). Codex 85c8309c (P2): bestätigt wird erst NACH
+    // der Fremd-EMS-Prüfung am Master (unten im try) — ein fremd gesteuerter Slave bekommt keinen Write.
+    let holdFallback = null;
+    if (chargeBlocked && ownsForced && decision.mode === 'self') {
+      holdFallback = decision;
+      decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' };
+    }
     // KEIN Dauer-Stopp mehr bei band/no_setpoint/revoked (Christin 15.11.): alle verbliebenen 'self'-Gründe
     // (telemetry_missing, power_limit_unknown, target_expired, mode_switch) sind Absicherungsfälle → Rückgabe an
     // den WR (Modus 0, Absicherung C) über den Self-Pfad unten. Das 0xCC bei |p| < minPowerW bleibt mode:'forced'
@@ -1524,15 +1787,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     } else if (st.startupResetPending && decision.mode === 'self') {
       st.startupResetPending = false; // in Self/Modus 0 ohnehin kein stehengebliebener Befehl mehr
     }
-    // Feldtest „Akku nicht laden" (services/curtailment-test.js, M14b): während
-    // eines Abregelungs-Tests mit dieser Option den Akku beider WR auf Stopp
-    // (0xCC, Modus 2 bleibt), damit der PV-Überschuss sichtbar abgeregelt wird
-    // (PV deckt nur die Hauslast, der Akku nimmt ihn nicht auf). Nur wenn DVhub
-    // Forced wirklich besitzt — der Split trägt den Stopp an den Slave weiter
-    // (stepSplit: powerW 0 → mk(0) → beide 0xCC). Selbst-ablaufend über das Lease.
-    if (ownsForced && curtailmentBatteryHold()) {
-      decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'curtailment_test_hold' };
-    }
+    // Feldtest „Akku nicht laden" (services/curtailment-test.js, M14b/M25): sperrt nur noch das LADEN (im Regler oben,
+    // noCharge) — kein Dauer-0xCC beider WR mehr. Feld 19.11.: mit beiden WR auf 0xCC kam die Hauslast aus dem Netz,
+    // obwohl der Sollwert −40 W war und die Akkus 13–15 % hatten.
     st.decision = { ...decision, at: t, trigger: reason };
     st.selfBridgeSince = 0;
     st.externalEnteredAt = 0;
@@ -1543,6 +1800,20 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
       // Fremder Modus (VPP, oder Modus 2/3 ohne DVhub-Besitz) → nicht übersteuern (B4).
       if (isForeignMode(dev.mode, dev)) throw foreignModeError(dev.mode);
+      if (holdFallback) {
+        let slaveStopped = true;
+        if (slaveActuator && resolveSecondInverter(cfg).enabled) {
+          try {
+            const sr = await slaveActuator.applyDirectCommand({ mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' }, ctl);
+            slaveStopped = sr?.ok === true;
+          } catch { slaveStopped = false; }
+        }
+        if (!slaveStopped) {
+          logOnce('hold-slave', 'sungrow_ems_charge_hold_slave_unconfirmed', { reason: holdFallback.reason, text: 'Sungrow: „Akku nicht laden" — der Slave bestätigt den Stopp nicht, deshalb Rückfall in Modus 0 statt Halten in Modus 2.' }, 'warn');
+          decision = holdFallback;
+          st.decision = { ...decision, at: t, trigger: reason };
+        }
+      }
       // Wiedereintritt (B3): DVhub besitzt Forced, der Master steht aber von selbst in Modus 0 → er ist von selbst
       // zurückgefallen (WR-Neustart/Firmware/Netzfehler). EINMAL neu eintreten (die Writes unten setzen 13050=2
       // neu). Bei zu vielen Wiedereintritten/Stunde das Mode-Register (13050) schonen: nicht mehr eintreten, Modus 0
@@ -1676,7 +1947,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       ? decideEmsCommand({
         setpointW: st.target.setpointW, ...tel, maxChargeW: maxChargeCap, maxDischargeW: maxDischargeCap,
         bandW: opts.bandW, gain: opts.gain, minPowerW: opts.minPowerW,
-        noGridCharge: noGridChargeForce()
+        noGridCharge: noGridChargeForce(), dischargeLoadOnly: feedInBlocked()
       })
       : { mode: 'self', reason: st.target ? 'target_expired' : (st.revokedReason ? 'revoked' : 'no_setpoint') };
     try {
@@ -2013,8 +2284,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         if (e?.code === 'emergency_stop_active') return { ok: false, blocked: true, error: st.error };
         // Reines Lesen der Slave-Register fehlgeschlagen (modbus exception 4 o. Ä.) — es wurde NICHTS geschrieben.
         // Der Aufrufer (stepSplit, Aufgabe 3) faellt dann auf Master-only zurueck statt beide auf Modus 0 zu werfen.
-        if (e?.code === 'ems_read_error') return { ok: false, readError: true, error: st.error };
-        return { ok: false, error: st.error };
+        if (e?.code === 'ems_read_error') return { ok: false, readError: true, error: st.error, ...writeErrorInfo(e) };
+        return { ok: false, error: st.error, ...writeErrorInfo(e) };
       }
     });
   }

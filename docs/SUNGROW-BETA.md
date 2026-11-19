@@ -163,6 +163,55 @@ SoC-Boden); erst dieser Wert geht an den Sungrow-Aktuator, der daraus Akku-Leist
 | Not-Halt | einmal Stopp + Modus 0, dann nichts (auch kein Herzschlag) | eigener Betrieb nur; fremdes EMS nie | exakt |
 | E-Auto / Geräte | eigene Stellglieder, Sungrow nicht berührt | ihre Last zieht der Regler im nächsten Takt mit | näherungsweise |
 
+## Protokoll: Modbus-Fehler
+
+Jeder Modbus-Fehler wird eine Zeile `sungrow_modbus_error` mit `wr` (master/slave), `source` (poll/ems, beim Master
+beides gemeinsam), `kind` (exception, refused, timeout, reset, unreachable, other), `code` (z. B. 4 oder
+ECONNREFUSED), `fc`, `address` (Draht), `register` (Doku = Draht + 1), Menge/Wert und Meldung — ohne LAN-Adresse.
+Im 60-s-Fenster steht nur der erste Fehler einzeln da, der Rest als `sungrow_modbus_error_summary` („12 Fehler in
+60 s, Master, ECONNREFUSED“). Hält die Störung an, verdoppelt sich das Fenster bis 15 min. Die Kachel zeigt nur
+Zähler und letzten Fehler. `sungrow_ems_split_aborted` und `sungrow_ems_split_slave_fallback` nennen `register`
+(Doku), `wireAddress` und `value` des abgelehnten Writes.
+
+## Zwei Wechselrichter (Master/Slave)
+
+Im Forced mode mit zwei Wechselrichtern teilt DVhub jede Vorgabe auf beide auf (Standard `soc-balance`: beim
+Entladen bekommt der Akku mit dem höheren Ladestand mehr, beim Laden der mit dem niedrigeren). Lade-/Entladebefehle
+gehen an beide (13051/13052), der Modus 13050 nur an den Master.
+
+- **Abregelung (Negativpreis, Direktvermarkter, Test-Knopf):** Beide Wechselrichter laden und entladen weiter nach
+  ihrem Anteil. DVhub regelt die Summe auf den Sollwert, bei Negativpreis auf −40 W. Entladen wird dabei höchstens die
+  Hauslast (Last − PV), auch wenn eine Vorgabe einspeisen möchte: unter der Einspeisegrenze lehnt der Master größere
+  Entladebefehle mit Modbus-Ausnahme 4 ab, und der Slave soll nicht an der Grenze vorbei einspeisen. Die Einspeisegrenze
+  (13074/13087/13088/31222) steht nur am Master. Kurze Netzspitzen bei Lastsprüngen sind möglich. Bekannte Lücke:
+  Die PV des Slave folgt der Master-Grenze nicht (eine Drosselung über 13090 ist nicht gebaut).
+- **Ladestand je Wechselrichter:** Beide werden aus demselben Register gelesen: Doku 13023 „Battery level“, U16,
+  0,1 %, FC 4 (auf dem Draht 13022). Der Master im Poll-Takt als Einzelregister, der Slave alle 5 s im Zustandsblock
+  13000–13045 (Stelle 23). Skalierung (÷ 10) und Umrechnung auf den echten SoC (Fenster 13059…13058 je Wechselrichter)
+  sind gleich. Kommt der Slave nur in ganzen Prozentschritten (im Fenster 10–100 % sind das 0,9 % echt), liegt das am
+  Gerät, nicht an DVhub. Ein feineres SoC-Register ist im Profil und in der hier genutzten Protokoll-Doku nicht
+  bekannt (am Gerät ungeprüft). Durch die 5-s-Abfrage kann der Slave-Wert bis zu 5 s älter sein als der des Masters.
+- **Puffer über der Geräte-Untergrenze** (`sungrow.socFloorBufferPct`, Standard 0): DVhub entlädt nicht tiefer als
+  Geräte-Untergrenze (13059) + Puffer. Der Puffer hält nur beim Entladen; im Stillstand sinkt der Ladestand durch den
+  Eigenverbrauch des Wechselrichters trotzdem bis zur Geräte-Untergrenze, dort lädt der Wechselrichter selbst nach.
+  Eine Erhaltungsladung baut DVhub nicht.
+- **Test-Knopf „Akku nicht laden“:** sperrt nur das Laden. Entladen für das Haus bleibt erlaubt (höchstens die
+  Hauslast, auf beide Wechselrichter verteilt); wäre Laden nötig, steht der Befehl auf Stopp (0xCC), Modus 2 bleibt.
+- **Grundsatz: gerechnet wird mit dem, was geliefert wird.** DVhub vergleicht je Wechselrichter den Befehl mit der
+  gemessenen Akku-Leistung (Master im Poll-Takt, Slave alle 5 s). Liefert einer bestätigt weniger (mehr als 100 W bzw.
+  10 % daneben, 2 s lang, gemessen frühestens 1,5 s nach einer Befehlserhöhung), gilt die Messung als seine
+  Lieferfähigkeit. Das Fehlende bekommt der andere dazu, bis zu seiner Leistungs- und SoC-Grenze. Ist der andere selbst
+  begrenzt, bekommt er höchstens seine gemessene Lieferfähigkeit plus eine kleine Probe (110 W, knapp über der
+  Schreibschwelle von 100 W, damit sie wirklich ans Gerät geht). Es wird je Takt nur in eine Richtung
+  verschoben, und nur, wenn der Empfänger selbst nichts schuldig bleibt — so schaukelt sich nichts auf. Wer teilweise
+  liefert, behält seinen Befehl und trägt, was er schafft. Netzbezug bleibt erst, wenn beide nicht mehr können.
+- **Ein Wechselrichter an der Grenze:** Steht ein Akku weniger als 1 Prozentpunkt (echter SoC) über seiner
+  Entladegrenze, bekommt er keinen Entlade-Anteil; Laden bleibt erlaubt. Liefert ein Wechselrichter etwa 10 s lang
+  weniger als die Hälfte seines Anteils (bei Anteil über 200 W), bekommt der andere den Anteil — außer der andere ist
+  selbst begrenzt und der erste liefert noch spürbar (ab 100 W); dann trägt er weiter seinen Ist-Anteil. Etwa alle 60 s
+  bekommt er ihn probeweise zurück. Die Kachel zeigt „Master an der Grenze, Slave übernimmt“ (bzw. umgekehrt), das Protokoll
+  `sungrow_ems_share_stalled` beim Erkennen und `sungrow_ems_share_recovered`, wenn er wieder liefert.
+
 ## Quellen
 
 - Sungrow „Communication Protocol of Residential Hybrid Inverter“ V1.1.9 (2025-06-20): Tabelle 4 (13050, 13051,

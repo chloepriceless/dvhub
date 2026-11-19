@@ -336,7 +336,7 @@
         <p class="card-title ctrl-section-head" data-leit="adv">Abregelung testen (Feldtest)</p>
         <div class="ctrl-row" data-leit="adv" title="Dauer des Tests in Minuten. Der Test endet garantiert nach dieser Zeit von selbst (selbst-ablaufendes Lease), auch ohne weitere Aktion.">
           <label class="ctrl-label">Dauer (min)<input id="curtailTestMinutes" class="input mono" type="number" min="1" max="60" step="1" value="5"></label>
-          <label class="ctrl-label" title="Beide Wechselrichter auf Akku-Stopp (0xCC), damit der PV-Ueberschuss sichtbar abgeregelt wird (PV deckt nur die Hauslast, der Akku nimmt ihn nicht auf)."><input id="curtailTestBlockCharge" type="checkbox"> Akku nicht laden</label>
+          <label class="ctrl-label" title="Die Akkus beider Wechselrichter laden nicht, damit der PV-Ueberschuss sichtbar abgeregelt wird. Entladen fuer das Haus bleibt erlaubt, die Hauslast kommt weiter aus dem Akku."><input id="curtailTestBlockCharge" type="checkbox"> Akku nicht laden</label>
         </div>
         <div class="ctrl-row" data-leit="adv">
           <button id="curtailTestNegBtn" class="btn primary sm" type="button" title="Negativpreis-Abregelung (&sect;51) ueber den echten Pfad testen: Sollwert-Puffer + Einspeise-Sperre, wie bei echt negativem Preis.">Negativpreis testen</button>

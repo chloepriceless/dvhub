@@ -2068,7 +2068,24 @@ function computeSungrowBatteryView(status) {
     return parts.join(' · ');
   };
   const effW = (d, b) => { const c = [Number(d), Number(b)].filter((x) => Number.isFinite(x) && x > 0); return c.length ? Math.min(...c) : null; };
+  // M24: woher der Minimum-SoC kommt. Puffer 0 → „(Gerät)"; Gerät + Puffer → „(Gerät 10 % + Puffer 1 %)"; liegt der
+  // harte Boden höher → „(DVhub-Boden, Gerät 10 %)". Ohne Pufferangabe (älterer Stand) wie bisher „(Gerät … + Puffer)".
+  const minSocSourceText = (fl, dm, buf) => {
+    if (dm == null) return '';
+    const same = (a, b) => Math.abs(Number(a) - Number(b)) < 0.05;
+    if (!fin(buf)) return same(fl, dm) ? ' (Gerät)' : ` (Gerät ${deNum(dm, 0)} % + Puffer)`;
+    if (same(fl, dm + Number(buf))) return Number(buf) > 0 ? ` (Gerät ${deNum(dm, 0)} % + Puffer ${deNum(buf)} %)` : ' (Gerät)';
+    return ` (DVhub-Boden, Gerät ${deNum(dm, 0)} %)`;
+  };
   const sOnline = sec.online === true;
+  // Codex 2c6c70d0 (P2): der Boden nimmt wie die EOS-Planung die HÖHERE Geräte-Untergrenze beider WR (Slave nur, wenn
+  // erreichbar und aggregiert) — die Herkunft „(Gerät …)" muss dieselbe Grenze vergleichen.
+  const slaveDevMin = sOnline && sec.aggregate !== false && fin(sec.minSocPctDevice) ? Number(sec.minSocPctDevice) : null;
+  // Codex 50deb8d3/4fc6e8da (P2): bevorzugt die Angabe aus energyBalance.battery — je Status frisch, dieselben Eingänge
+  // wie der angezeigte Boden (der EMS-Status kann bei ruhender Steuerung veraltet sein); sonst lokal geschätzt.
+  const devMinEff = eb && fin(eb.deviceMinSocPct) ? Number(eb.deviceMinSocPct)
+    : (devMin != null && slaveDevMin != null ? Math.max(devMin, slaveDevMin) : (devMin != null ? devMin : slaveDevMin));
+  const floorBuffer = eb && fin(eb.floorBufferPct) ? Number(eb.floorBufferPct) : (ems ? ems.socFloorBufferPct : null);
   const mReal = realSoc(vic.sungrowMasterSocPct != null ? vic.sungrowMasterSocPct : vic.soc, dev.minSocPctDevice, dev.maxSocPctDevice);
   const sReal = sOnline ? realSoc(sec.socPct, sec.minSocPctDevice, sec.maxSocPctDevice) : null;
   const mDis = effW(dev.maxDischargeWDevice, dev.bdcRatedW);
@@ -2082,7 +2099,7 @@ function computeSungrowBatteryView(status) {
     socMid: realSys != null ? `SoC ${deNum(realSys)} %` : null,
     marks: marks.join(' · '),
     gridSetpoint: spW == null ? '–' : `${Math.round(spW)} W${spSrc ? ` (${srcDe[spSrc] || spSrc})` : ''}`,
-    minSoc: floor != null ? `${deNum(floor)} %${devMin != null ? ` (Gerät ${deNum(devMin, 0)} % + Puffer)` : ''}` : null,
+    minSoc: floor != null ? `${deNum(floor)} %${minSocSourceText(floor, devMinEff, floorBuffer)}` : null,
     master: wrLine(mReal, vic.sungrowMasterBatteryW != null ? vic.sungrowMasterBatteryW : vic.batteryPowerW, split ? split.masterW : null, vic.emergencyCharge === true),
     slave: sOnline ? wrLine(sReal, sec.batteryPowerW, split ? split.slaveW : null, sec.emergencyCharge === true) : 'Nicht erreichbar',
     maxDischarge,
@@ -3269,7 +3286,7 @@ async function startCurtailTest(mode) {
   const blockCharge = document.getElementById('curtailTestBlockCharge')?.checked === true;
   const label = mode === 'negativePrice' ? 'Negativpreis-Abregelung' : 'Direktvermarkter-Abregelung';
   const go = typeof window !== 'undefined' && typeof window.confirm === 'function'
-    ? window.confirm(`${label} für ${minutes} min testen?\n\nLäuft über den echten Abregel-Pfad${blockCharge ? ' und hält den Akku beider WR an (0xCC)' : ''}. Der Test endet garantiert nach ${minutes} min von selbst (selbst-ablaufendes Lease). Messwerte im 1-Sekunden-Takt werden protokolliert.`)
+    ? window.confirm(`${label} für ${minutes} min testen?\n\nLäuft über den echten Abregel-Pfad${blockCharge ? ' und sperrt das Laden beider WR (Entladen fürs Haus bleibt)' : ''}. Der Test endet garantiert nach ${minutes} min von selbst (selbst-ablaufendes Lease). Messwerte im 1-Sekunden-Takt werden protokolliert.`)
     : true;
   if (!go) return;
   try {
@@ -3280,7 +3297,7 @@ async function startCurtailTest(mode) {
     });
     const out = await res.json();
     if (!res.ok || !out.ok) return setControlMsg(`Test fehlgeschlagen: ${out.error || res.status}`, true);
-    setControlMsg(`${label}-Test läuft (${minutes} min)${blockCharge ? ', Akku beider WR auf Stopp' : ''}.`);
+    setControlMsg(`${label}-Test läuft (${minutes} min)${blockCharge ? ', Laden beider WR gesperrt' : ''}.`);
     renderCurtailTest(out.test);
     startCurtailTestPolling();
   } catch (e) {
@@ -3335,7 +3352,7 @@ function renderCurtailTest(test) {
   const active = test.active === true;
   statusEl.hidden = false;
   if (active) {
-    statusEl.textContent = `Test aktiv: ${modeLabel}${test.blockCharge ? ' · Akku Stopp' : ''} · Restzeit ${fmtSecs(test.remainingMs)} · ${test.sampleCount} Messwerte`;
+    statusEl.textContent = `Test aktiv: ${modeLabel}${test.blockCharge ? ' · Laden gesperrt' : ''} · Restzeit ${fmtSecs(test.remainingMs)} · ${test.sampleCount} Messwerte`;
   } else {
     statusEl.textContent = `Test beendet (${modeLabel}${test.stopReason === 'expired' ? ', Zeit abgelaufen' : ', gestoppt'}) · ${test.sampleCount} Messwerte`;
   }

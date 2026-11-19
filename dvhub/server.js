@@ -1539,7 +1539,8 @@ ctx.batteryAssist = ctx.gridConnection.batteryAssist;
 // M7b: gemeinsamer Modbus-Gesundheitszähler des Master-WR — Poll UND EMS zählen hinein (wie beim Slave der Poller).
 // Nur für Sungrow über Modbus; der Poller (createPoller) und der Master-EMS (schedule-eval) legen sich damit über
 // dieselbe Verbindung, sodass die Kachel den vollen Master-Modbus-Verkehr zeigt, nicht nur die wenigen EMS-Writes.
-if (cfg.manufacturer === 'sungrow' && transport.type === 'modbus') ctx.sungrowMasterHealth = createModbusHealth();
+// M22: Modbus-Fehler des Masters (Poll + EMS) als sungrow_modbus_error ins Protokoll, Häufungen zusammengefasst.
+if (cfg.manufacturer === 'sungrow' && transport.type === 'modbus') ctx.sungrowMasterHealth = createModbusHealth(Date.now, { pushLog, wr: 'master' });
 const poller = createPoller(ctx);
 ctx.requestPoll = poller.requestPoll;
 ctx.getSunTimesCacheForPlanning = getSunTimesCacheForPlanning;

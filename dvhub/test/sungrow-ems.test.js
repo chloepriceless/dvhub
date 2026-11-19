@@ -346,42 +346,665 @@ test('Review-Befund 1: Slave-Telemetrie fällt mitten in der Vorgabe aus → Sla
   assert.equal(r.state.ctrl.sungrowEmsSlave.owns, false, 'Slave-Besitz abgegeben');
 });
 
-test('M16 Forced-Split: Abregelung/Sperre aktiv (_lastDvFeedIn=false) → Slave 0xCC statt Entladebefehl, Master regelt unverändert weiter', async () => {
-  const r = splitRig();
-  await r.ems.applySetpoint(-6000, 'rule:abend'); // Split-Entladen: beide WR entladen
-  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave entlädt zunächst');
-  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, true);
-  // Eine Sperre wird aktiv (feedExcessDcPv=0 / dv_forced_off / Negativpreis / Test → _lastDvFeedIn=false).
-  r.state.ctrl._lastDvFeedIn = false;
-  r.slaveT.writes.length = 0; r.masterT.writes.length = 0;
-  r.advance(6000);
-  await r.ems.tick();
-  // Slave: Befehl auf 0xCC angehalten, KEIN Moduswechsel (13050) — er folgt dem Master.
-  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, 'Slave auf 0xCC angehalten');
-  assert.ok(!r.slaveT.writes.some((w) => w.address === MODE), 'Slave bekommt KEINEN Modus-Write');
-  assert.ok(!r.slaveT.writes.some((w) => w.address === CMD && w.value === EMS_CMD.DISCHARGE), 'kein Entladebefehl mehr an den Slave');
-  // Master: bleibt in Modus 2 und regelt weiter (keine zusätzliche Entladesperre, kein Modus 0).
-  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'Master bleibt Modus 2');
-  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Master regelt weiter (Netz-Sollwert wie gehabt)');
-  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_slave_curtail_hold'), 'Log zum Slave-Stopp bei Sperre');
-  assert.equal(r.state.ctrl.sungrowEms.decision.split.slaveCurtailHold, true, 'Split-Detail markiert den Slave-Stopp');
+// M27 (Christin 19.11., ersetzt den Slave-Stopp aus M16): Bei einer Sperre (Negativpreis, Direktvermarkter, Test-Knopf →
+// _lastDvFeedIn=false) läuft der Slave NICHT mehr auf 0xCC. Feldbeleg: mit Slave-Stopp kam die Hauslast aus dem Netz,
+// als der Master leer war. Beide WR laden/entladen weiter nach soc-balance, DVhub regelt die Summe auf den Sollwert
+// (Negativpreis −40 W). Die Einspeisegrenze bleibt nur am Master (13074/13087/13088/31222, DV-Sequenz).
+function m27Telemetry(r, { gridW, systemBattW, loadW, pvW = 0 }) {
+  r.state.meter = { ok: true, updatedAt: r.now(), grid_total_w: gridW };
+  Object.assign(r.state.victron, { batteryPowerW: systemBattW, pvPowerW: pvW, selfConsumptionW: loadW });
+  for (const f of ['batteryPowerW', 'pvPowerW', 'selfConsumptionW']) r.state.victron.fieldUpdatedAt[f] = r.now();
+  r.state.sungrowSecond.updatedAt = r.now();
+}
 
-  // Freigabe (Sperre weg): der Slave kehrt in den Split zurück — nur 13051/13052, KEIN Moduswechsel.
-  r.state.ctrl._lastDvFeedIn = true;
-  r.slaveT.writes.length = 0;
-  r.advance(6000);
-  await r.ems.tick();
-  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave zurück im Split (entlädt wieder)');
-  assert.ok(!r.slaveT.writes.some((w) => w.address === MODE), 'auch bei der Rückkehr kein Modus-Write am Slave');
+test('M27 Forced-Split: Sperre aktiv (_lastDvFeedIn=false) → BEIDE WR entladen weiter nach soc-balance (kein Slave-Stopp)', async () => {
+  const r = splitRig();
+  r.state.ctrl._lastDvFeedIn = false; // Negativpreis-/DV-Sperre aktiv (Einspeisegrenze am Master)
+  // Haus 1500 W, PV 0, Netz +1000 W Bezug, Akku-System −500 W. Sollwert −40 (Negativpreis-Puffer):
+  // P = −500 + 0,7·(−40 − 1000) = −1228 → Entladen 1230 W, gleicher SoC (50/50) → je ~615 W.
+  m27Telemetry(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+  const res = await r.ems.applySetpoint(-40, 'negative_price_protection');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave entlädt mit (kein 0xCC wegen Sperre)');
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Master entlädt');
+  const mp = r.masterImage.holding.get(POWER); const sp = r.slaveImage.holding.get(POWER);
+  assert.ok(Math.abs(mp - 615) <= 20 && Math.abs(sp - 615) <= 20, `soc-balance 50/50: Master ${mp} Slave ${sp}`);
+  assert.ok(!r.slaveT.writes.some((w) => w.address === MODE), 'Slave bekommt KEINEN Modus-Write');
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_slave_curtail_hold'), 'kein Slave-Stopp-Log mehr');
+  const split = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(split.slaveCurtailHold, undefined, 'Split-Detail kennt keinen Slave-Stopp mehr');
+  assert.equal(split.masterW + split.slaveW, 1230, 'Summe = Reglerleistung');
 });
 
-test('M16 Forced-Split: Sperre aktiv → Slave wird aktiv auf 0xCC geschrieben, auch wenn er zuvor nicht besessen war (kein stiller No-op)', async () => {
+test('M27 Forced-Split: Sperre aktiv und Master leer → der Slave deckt die Hauslast (Feldbeleg: sonst Netzbezug)', async () => {
+  // Master an seiner Grenze (real 10 % = Gerätemin 10 %, Puffer 0), Slave 50 %. Mit dem alten Slave-Stopp bekam
+  // KEINER etwas (Master leer, Slave 0xCC) → Hauslast aus dem Netz. Jetzt übernimmt der Slave.
   const r = splitRig();
-  // Sperre ist von Anfang an aktiv; der Slave stand im Abbild auf einem Entladebefehl (z. B. aus einem früheren Lauf).
+  r.cfg.sungrow.socFloorBufferPct = 0;
+  r.state.victron.device.minSocPctDevice = 10; r.state.victron.device.maxSocPctDevice = 100;
+  r.state.victron.sungrowMasterSocPct = 0; // gemeldet 0 % = real 10 % (Fenster 10…100)
   r.state.ctrl._lastDvFeedIn = false;
-  r.slaveImage.holding.set(CMD, EMS_CMD.DISCHARGE);
+  m27Telemetry(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+  await r.ems.applySetpoint(-40, 'negative_price_protection');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave entlädt');
+  assert.equal(r.slaveImage.holding.get(POWER), 1230, 'Slave übernimmt den ganzen Bedarf');
+  assert.notEqual(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Master (leer) entlädt nicht');
+});
+
+test('M27 Forced-Split: Sperre aktiv → ein zuvor stehender Slave-Befehl wird nach soc-balance nachgeführt, nicht auf 0xCC gesetzt', async () => {
+  const r = splitRig();
+  r.state.ctrl._lastDvFeedIn = false;
+  r.slaveImage.holding.set(CMD, EMS_CMD.CHARGE); // z. B. aus einem früheren Lauf
+  m27Telemetry(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+  await r.ems.applySetpoint(-40, 'negative_price_protection');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave folgt dem Split (Entladen), kein 0xCC');
+});
+
+// M25 / Codex 4c624dcd (P1): Während einer Sperre (Einspeisung gesperrt) entlädt DVhub nur fürs Haus — höchstens die
+// Netto-Last (Last − PV). Unter der Einspeisegrenze lehnt der Master zu große Entladebefehle mit exception 4 ab, und
+// ohne Slave-Stopp (M27) würde ein Export-Sollwert (EOS/Regel) sonst den Slave ins Netz entladen lassen.
+test('M25 Regler: dischargeLoadOnly deckelt das Entladen auch bei Einspeise-Sollwert auf die Netto-Last', () => {
+  // S = −6000 (Export), Haus 500 W, PV 0: ohne Sperre Entladen 4700 W; mit Sperre höchstens 500 W.
+  const args = { ...base, setpointW: -6000, gridImportW: 0, batteryW: -500, pvW: 0, loadW: 500 };
+  assert.equal(decideEmsCommand(args).powerW, 4700);
+  assert.deepEqual(decideEmsCommand({ ...args, dischargeLoadOnly: true }), { mode: 'forced', command: 'discharge', powerW: 500, reason: 'discharge_load_only' });
+  // PV deckt die Last schon → kein Entladen (Netto-Last 0).
+  assert.equal(decideEmsCommand({ ...args, pvW: 800, dischargeLoadOnly: true }).command, 'stop');
+});
+
+test('Codex 4c624dcd P1: DV-Sperre während einer Export-Vorgabe → beide WR zusammen höchstens die Hauslast (kein Slave-Export)', async () => {
+  const r = splitRig(); // Haus 500 W, PV 0
+  r.state.ctrl._lastDvFeedIn = false; // DV-Abregelung aktiv (Einspeisegrenze nur am Master)
   await r.ems.applySetpoint(-6000, 'rule:abend');
-  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, 'Slave aktiv auf 0xCC gesetzt');
+  const sum = (r.masterImage.holding.get(CMD) === EMS_CMD.DISCHARGE ? r.masterImage.holding.get(POWER) : 0)
+    + (r.slaveImage.holding.get(CMD) === EMS_CMD.DISCHARGE ? r.slaveImage.holding.get(POWER) : 0);
+  assert.ok(sum <= 500, `Entladen nur fürs Haus: ${sum} W`);
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'discharge_load_only');
+});
+
+test('M25: auch ohne geschriebene Sperre (DV-Abschaltung forcedOff / Negativpreis) wird nur fürs Haus entladen', async () => {
+  for (const flag of [{ forcedOff: true }, { negativePriceActive: true }, { _dvPartialBlock: true }]) {
+    const r = splitRig();
+    Object.assign(r.state.ctrl, flag);
+    await r.ems.applySetpoint(-6000, 'rule:abend');
+    assert.equal(r.state.ctrl.sungrowEms.decision.powerW <= 500, true, `${JSON.stringify(flag)}: ${r.state.ctrl.sungrowEms.decision.powerW}`);
+  }
+});
+
+test('M25: Einzel-WR unter Sperre — Entladen höchstens die Netto-Last', async () => {
+  const r = rig({ controlMode: 'forced' });
+  r.state.ctrl._lastDvFeedIn = false;
+  r.telemetry({ gridW: 0, batteryW: -500, pvW: 0, loadW: 500 });
+  await r.ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.DISCHARGE);
+  assert.ok(r.image.holding.get(POWER) <= 500, `Einzel-WR: ${r.image.holding.get(POWER)}`);
+});
+
+test('M25: ohne Sperre bleibt die Export-Vorgabe wirksam (keine Deckelung)', async () => {
+  const r = splitRig();
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.ok(r.state.ctrl.sungrowEms.decision.powerW > 4000);
+});
+
+// M25 (MUSS): „Akku nicht laden" am Test-Knopf sperrt NUR das Laden. Feld: beide WR standen auf 0xCC, die Hauslast kam
+// aus dem Netz, obwohl der Sollwert −40 W war und die Akkus 13–15 % hatten. Jetzt: Laden 0, Entladen fürs Haus bleibt
+// (höchstens die Netto-Last), beide WR nach soc-balance; wäre Laden nötig → Stopp (Modus 2 bleibt).
+function chargeHoldTest(r) {
+  // Negativpreis-Test mit „Akku nicht laden": Lease läuft, Sperre geschrieben (wie der echte Pfad).
+  r.state.ctrl.curtailmentTest = { active: true, mode: 'negativePrice', blockCharge: true, until: r.now() + 600000 };
+  r.state.ctrl.negativePriceActive = true;
+  r.state.ctrl._lastDvFeedIn = false;
+}
+// Wie auf der Feldbox: DVhub fährt schon Dauer-Forced (besitzt Modus 2), dann startet der Test-Knopf.
+async function ownedThenHold(r, telemetry) {
+  m27Telemetry(r, { gridW: 0, systemBattW: -1000, loadW: 1000 });
+  await r.ems.applySetpoint(-40, 'default');
+  assert.equal(r.state.ctrl.sungrowEms.owns, true, 'DVhub besitzt Forced');
+  chargeHoldTest(r);
+  r.advance(6000);
+  m27Telemetry(r, telemetry);
+  await r.ems.applySetpoint(-40, 'negative_price_protection');
+}
+
+test('M25 Test-Knopf „Akku nicht laden": die Hauslast kommt aus beiden Akkus (soc-balance), nicht aus dem Netz', async () => {
+  const r = splitRig();
+  // Haus 1500 W, PV 0, Netz +1000, Akku −500: P = −500 + 0,7·(−1040) = −1228 → 1230 W ≤ Netto-Last 1500 → je 615 W.
+  await ownedThenHold(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Master entlädt fürs Haus');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave entlädt fürs Haus');
+  // Summe der Anteile = Reglerleistung (am Gerät kann je WR bis zur Schreibschwelle 100 W abweichen).
+  const sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(sp.masterW + sp.slaveW, 1230);
+  assert.ok(sp.masterW > 0 && sp.slaveW > 0, 'beide tragen');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'Modus 2 bleibt');
+});
+
+test('M25 Test-Knopf: Entladen höchstens die Hauslast (Netto-Last)', async () => {
+  const r = splitRig();
+  // Haus 600 W, PV 0, Netz +1500 (Lastsprung), Akku 0: P = 0,7·(−1540) = −1078 → gedeckelt auf 600 W.
+  await ownedThenHold(r, { gridW: 1500, systemBattW: 0, loadW: 600 });
+  assert.equal(r.masterImage.holding.get(POWER) + r.slaveImage.holding.get(POWER), 600);
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'discharge_load_only');
+});
+
+test('M25 Test-Knopf: wäre Laden nötig (PV-Überschuss), stehen beide auf Stopp — kein Laden, Modus 2 bleibt', async () => {
+  const r = splitRig();
+  // PV 3000, Haus 1000, Netz −2000 (Einspeisung) → der Regler wollte laden → gesperrt → Stopp.
+  await ownedThenHold(r, { gridW: -2000, systemBattW: 0, loadW: 1000, pvW: 3000 });
+  assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'charge_blocked');
+  assert.notEqual(r.masterImage.holding.get(CMD), EMS_CMD.CHARGE, 'Master lädt nicht');
+  assert.notEqual(r.slaveImage.holding.get(CMD), EMS_CMD.CHARGE, 'Slave lädt nicht');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'Modus 2 bleibt (kein Moduswechsel)');
+});
+
+test('M25 Test-Knopf Einzel-WR: Laden gesperrt, Entladen fürs Haus', async () => {
+  const r = rig({ controlMode: 'forced' });
+  r.telemetry({ gridW: 0, batteryW: -1000, pvW: 0, loadW: 1000 });
+  await r.ems.applySetpoint(-40, 'default'); // DVhub fährt Dauer-Forced
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  r.state.ctrl.curtailmentTest = { active: true, mode: 'dv', blockCharge: true, until: r.now() + 600000 };
+  r.state.ctrl.forcedOff = true; r.state.ctrl._lastDvFeedIn = false;
+  r.advance(6000);
+  r.telemetry({ gridW: 1000, batteryW: -500, pvW: 0, loadW: 1500 });
+  await r.ems.applySetpoint(-40, 'dv');
+  assert.equal(r.image.holding.get(CMD), EMS_CMD.DISCHARGE);
+  assert.equal(r.image.holding.get(POWER), 1230);
+  r.advance(6000);
+  r.telemetry({ gridW: -2000, batteryW: 0, pvW: 3000, loadW: 1000 });
+  await r.ems.tick();
+  assert.notEqual(r.image.holding.get(CMD), EMS_CMD.CHARGE, 'kein Laden');
+});
+
+test('Codex cd9b71c6 P2: Test-Knopf „Akku nicht laden" + Absicherungsfall (Messwerte veraltet / Sollwert abgelaufen) → Modus 2 + Stopp, kein Modus 0', async () => {
+  for (const variant of ['telemetry_stale', 'target_expired']) {
+    const r = splitRig();
+    await ownedThenHold(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+    if (variant === 'telemetry_stale') {
+      r.advance(30000); // > telemetryMaxAgeMs: Messwerte veraltet, Sollwert noch frisch
+      await r.ems.applySetpoint(-40, 'negative_price_protection');
+    } else {
+      r.advance(130000); // > targetMaxAgeMs: Sollwert abgelaufen
+      m27Telemetry(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+      r.state.ctrl.curtailmentTest.until = r.now() + 600000;
+      await r.ems.tick();
+    }
+    // Mit Modus 0 würde der WR den PV-Überschuss selbst laden, obwohl der Test „Laden gesperrt" meldet.
+    assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, `${variant}: Modus 2 bleibt`);
+    assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.STOP, `${variant}: Master Stopp`);
+    assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, `${variant}: Slave Stopp`);
+  }
+});
+
+test('Codex f0967031 P2: Test-Knopf + Absicherungsfall, Slave nicht erreichbar → Modus 0 (gibt auch den Slave frei), kein Modus 2', async () => {
+  const r = splitRig();
+  await ownedThenHold(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave entlädt vor dem Ausfall');
+  // Slave-Verbindung weg, Messwerte veraltet: ein Stopp am Slave ist nicht bestätigbar.
+  const down = async () => { throw Object.assign(new Error('connect ECONNREFUSED 192.168.68.83:502'), { code: 'ECONNREFUSED' }); };
+  r.slaveT.mbRequest = down; r.slaveT.mbWriteSingle = down;
+  r.advance(30000);
+  await r.ems.applySetpoint(-40, 'negative_price_protection');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF, 'Master Modus 0 — der Slave folgt und lässt seinen alten Befehl fallen');
+});
+
+test('Codex 85c8309c P2: Test-Knopf + Absicherungsfall, fremdes EMS hat übernommen (Modus 3) → kein Write an den Slave', async () => {
+  const r = splitRig();
+  await ownedThenHold(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+  // Ein anderes EMS schaltet beide WR auf Modus 3; Messwerte veralten, der Gerätezustand wird neu gelesen (> 60 s).
+  r.masterImage.holding.set(MODE, EMS_MODE.EXTERNAL); r.slaveImage.holding.set(MODE, EMS_MODE.EXTERNAL);
+  r.masterT.writes.length = 0; r.slaveT.writes.length = 0;
+  r.advance(61000);
+  const res = await r.ems.applySetpoint(-40, 'negative_price_protection');
+  assert.match(String(res.error || ''), /foreign/, JSON.stringify(res));
+  assert.deepEqual(r.slaveT.writes, [], 'kein Write an einen fremd gesteuerten Slave');
+  assert.deepEqual(r.masterT.writes, [], 'kein Write an den fremd gesteuerten Master');
+});
+
+test('M25 echter Negativpreis, Akkus voll: Laden aus (an der Decke), Entladen fürs Haus an', async () => {
+  const r = splitRig();
+  r.state.ctrl.negativePriceActive = true; r.state.ctrl._lastDvFeedIn = false; // ohne Test-Knopf
+  r.state.victron.sungrowMasterSocPct = 100; r.state.sungrowSecond.socPct = 100;
+  m27Telemetry(r, { gridW: -2000, systemBattW: 0, loadW: 1000, pvW: 3000 });
+  await r.ems.applySetpoint(-40, 'negative_price_protection');
+  assert.notEqual(r.masterImage.holding.get(CMD), EMS_CMD.CHARGE);
+  assert.notEqual(r.slaveImage.holding.get(CMD), EMS_CMD.CHARGE);
+  // Abends: PV 200, Haus 1500 → Entladen fürs Haus (höchstens 1300 W Netto-Last).
+  r.advance(6000);
+  m27Telemetry(r, { gridW: 1300, systemBattW: 0, loadW: 1500, pvW: 200 });
+  await r.ems.tick();
+  const sum = r.masterImage.holding.get(POWER) + r.slaveImage.holding.get(POWER);
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE);
+  assert.ok(sum > 0 && sum <= 1300, `Entladen fürs Haus: ${sum}`);
+});
+
+// M28 (MUSS): ein WR, der seinen Anteil nicht liefert, gibt ihn ab — der andere übernimmt. Feldbeleg 12:28:
+// Entladen 1200 W, Master 416 / Slave 784, Master lieferte 0 W, Slave 790 W, Netz +552 W statt −40 W (15 s stabil).
+function m28Telemetry(r, { masterBattW, slaveBattW, gridW, loadW = 1342, pvW = 0 }) {
+  const t = r.now();
+  r.state.meter = { ok: true, updatedAt: t, grid_total_w: gridW };
+  Object.assign(r.state.victron, { sungrowMasterBatteryW: masterBattW, batteryPowerW: masterBattW + slaveBattW, pvPowerW: pvW, selfConsumptionW: loadW });
+  for (const f of ['batteryPowerW', 'pvPowerW', 'selfConsumptionW']) r.state.victron.fieldUpdatedAt[f] = t;
+  Object.assign(r.state.sungrowSecond, { batteryPowerW: slaveBattW, updatedAt: t });
+}
+
+test('M28 liefert nicht: Master liefert ~10 s keine 50 % seines Anteils → Slave übernimmt den vollen Bedarf, Probe nach 60 s', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000; // Takt 1 s wie auf der Feldbox
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 40; // kein Fenster → real = gemeldet
+  // P = −790 + 0,7·(−40 − 552) = −1204 → Entladen 1200 W; soc-balance 30/40 → Master 300, Slave 900.
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+  await r.ems.applySetpoint(-40, 'default');
+  assert.equal(r.masterImage.holding.get(POWER), 300, 'Master-Anteil 300 W');
+  assert.equal(r.slaveImage.holding.get(POWER), 900, 'Slave-Anteil 900 W');
+  // Der Master liefert 0 W (an der Grenze), der Zustand bleibt stehen.
+  let stalledAtTick = null;
+  for (let i = 1; i <= 12; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+    await r.ems.tick();
+    if (stalledAtTick == null && r.state.ctrl.sungrowEms.decision?.split?.masterOut === 'stalled') stalledAtTick = i;
+  }
+  // ~10 s Messzeit ab der ersten Messung nach dem Einschwingen (1,5 s nach dem Befehl, Codex 402a3df9) → Takt 12.
+  assert.ok(stalledAtTick != null && stalledAtTick >= 10 && stalledAtTick <= 12, `erkannt nach ~10 s (Takt ${stalledAtTick})`);
+  const split = r.state.ctrl.sungrowEms.decision.split;
+  assert.deepEqual([split.masterW, split.slaveW], [0, 1200], 'Slave übernimmt den vollen Bedarf');
+  assert.equal(split.takeover, 'slave');
+  assert.equal(r.slaveImage.holding.get(POWER), 1200);
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE);
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.STOP, 'Master auf Stopp (Modus 2 bleibt)');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+  const stalledLogs = r.logs.filter((l) => l.event === 'sungrow_ems_share_stalled');
+  assert.equal(stalledLogs.length, 1, 'genau ein Log beim Erkennen');
+  assert.deepEqual([stalledLogs[0].data.wr, stalledLogs[0].data.direction, stalledLogs[0].data.takeover], ['master', 'discharge', 'slave']);
+
+  // Probe: bis 60 s nach dem Erkennen bleibt der Master draußen, danach bekommt er seinen Anteil wieder.
+  for (let i = 0; i < 58; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: 0, slaveBattW: -1200, gridW: -40 });
+    await r.ems.tick();
+    assert.equal(r.state.ctrl.sungrowEms.decision.split.masterW, 0, `Master bleibt draußen (Sekunde ${i + 1})`);
+  }
+  let probed = false;
+  for (let i = 0; i < 4 && !probed; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: 0, slaveBattW: -1200, gridW: -40 });
+    await r.ems.tick();
+    probed = r.state.ctrl.sungrowEms.decision.split.masterW > 0;
+  }
+  assert.ok(probed, 'Probe: nach ~60 s bekommt der Master wieder einen Anteil');
+  // Liefert der Master jetzt, ist die Lage aufgehoben (ein Log), kein erneutes Stall-Log. Beurteilt wird erst eine
+  // Messung ≥ 1,5 s nach dem neuen Befehl (Einschwingen) → zwei Takte.
+  const share = r.state.ctrl.sungrowEms.decision.split.masterW;
+  for (let i = 0; i < 2; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: -share, slaveBattW: -(1200 - share), gridW: -40 });
+    await r.ems.tick();
+  }
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_share_recovered' && l.data.wr === 'master'), 'Erholung geloggt');
+  assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_share_stalled').length, 1, 'kein zweites Stall-Log');
+  assert.equal(r.state.ctrl.sungrowEms.decision.split.takeover, null);
+});
+
+test('M28 liefert nicht: scheitert die Probe, bleibt der Master erneut 60 s draußen (ohne neues Log)', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 40;
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+  await r.ems.applySetpoint(-40, 'default');
+  const outTicks = [];
+  for (let i = 1; i <= 100; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 }); // Master liefert nie
+    await r.ems.tick();
+    outTicks.push(r.state.ctrl.sungrowEms.decision.split.masterOut === 'stalled');
+  }
+  // Erkannt nach ~10 s, 60 s draußen, Probe ~10 s, wieder draußen.
+  const firstOut = outTicks.indexOf(true);
+  const backIn = outTicks.indexOf(false, firstOut);
+  const outAgain = outTicks.indexOf(true, backIn);
+  // Fristen in Messzeit, erste Messung 1,5 s nach dem (neuen) Befehl (Codex 402a3df9).
+  assert.ok(firstOut >= 9 && firstOut <= 12, `erstes Erkennen ${firstOut}`);
+  assert.ok(backIn - firstOut >= 59 && backIn - firstOut <= 61, `Probe nach ~60 s (${backIn - firstOut})`);
+  assert.ok(outAgain - backIn >= 9 && outAgain - backIn <= 13, `Probe scheitert nach ~10 s (${outAgain - backIn})`);
+  assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_share_stalled').length, 1, 'eine Lage = ein Log');
+});
+
+test('M28 Marge im Split (Feldzahlen): Master real 10,6 % bei Grenze 10 % → kein Entlade-Anteil, Slave liefert alles', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.socFloorBufferPct = 0;
+  Object.assign(r.state.victron.device, { minSocPctDevice: 10, maxSocPctDevice: 100 });
+  Object.assign(r.state.sungrowSecond, { minSocPctDevice: 10, maxSocPctDevice: 100 });
+  r.state.victron.sungrowMasterSocPct = (10.6 - 10) / 0.9; // gemeldet → real 10,6 %
+  r.state.sungrowSecond.socPct = (14.9 - 10) / 0.9;        // gemeldet → real 14,9 %
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+  await r.ems.applySetpoint(-40, 'default');
+  const split = r.state.ctrl.sungrowEms.decision.split;
+  assert.deepEqual([split.masterW, split.slaveW], [0, 1200], `Master 0, Slave voll (war 416/784): ${split.masterW}/${split.slaveW}`);
+  assert.equal(split.masterOut, 'soc');
+  assert.equal(split.takeover, 'slave');
+  assert.equal(r.slaveImage.holding.get(POWER), 1200);
+});
+
+// M28 Grundsatz 0 (Christin 19.11., Nachtrag 12:45): „Der andere Akku muss auf jeden Fall mehr entladen … man merkt,
+// der eine liefert nichts mehr, und der andere zieht nach." Die Aufteilung rechnet mit der GEMESSENEN Leistung je WR:
+// das Fehlende eines WR (Anteil − Ist) geht an den anderen, bis dieser an seiner Grenze ist (SoC, Leistung, liefert
+// nicht). Ein WR, der teilweise liefert, trägt weiter seinen Ist-Anteil. Kein Ping-Pong, Netzbezug erst, wenn beide
+// nicht mehr können.
+async function g0Ticks(r, n, telemetryFn, onTick = () => {}) {
+  for (let i = 1; i <= n; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, telemetryFn(i));
+    await r.ems.tick();
+    onTick(i, r.state.ctrl.sungrowEms.decision.split);
+  }
+}
+
+// Codex 402a3df9 (P2): Laden zwischendurch darf die laufende Entlade-Messung nicht „mitzählen" — und eine stehende
+// (alte) Messung darf nicht Takt für Takt als neuer Beleg gelten.
+function followTelemetry(r, { loadW, pvW = 0, masterDischargeCap = Infinity }) {
+  // Jeder WR liefert seinen Befehl; der Master beim Entladen höchstens masterDischargeCap.
+  const act = (img, dischargeCapW) => {
+    const cmd = img.holding.get(CMD); const p = img.holding.get(POWER);
+    return cmd === EMS_CMD.CHARGE ? p : (cmd === EMS_CMD.DISCHARGE ? -Math.min(p, dischargeCapW) : 0);
+  };
+  const m = act(r.masterImage, masterDischargeCap); const s = act(r.slaveImage, Infinity);
+  m28Telemetry(r, { masterBattW: m, slaveBattW: s, gridW: loadW - pvW + m + s, loadW, pvW });
+}
+
+test('Codex 402a3df9 P2: Richtungswechsel setzt die Liefert-nicht-Messung zurück (Entladen → Laden → Entladen)', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 40;
+  followTelemetry(r, { loadW: 1342, masterDischargeCap: 0 });
+  await r.ems.applySetpoint(-40, 'default');
+  const tick = async (opts) => { r.advance(1000); followTelemetry(r, opts); await r.ems.tick(); return r.state.ctrl.sungrowEms.decision.split; };
+  for (let i = 0; i < 5; i += 1) await tick({ loadW: 1342, masterDischargeCap: 0 }); // 5 s: Master liefert beim Entladen nichts
+  for (let i = 0; i < 15; i += 1) {                                                 // 15 s: PV-Überschuss, beide laden wie befohlen
+    const sp = await tick({ loadW: 1000, pvW: 3000, masterDischargeCap: 0 });
+    if (i >= 2) assert.equal(sp.charge, true, 'Laden-Phase');
+  }
+  // Wieder Entladen (Haus 3000 W → Master-Anteil sofort > 200 W), der Master liefert wieder nichts: neu messen, nicht
+  // nach 1 s herausnehmen.
+  let outAt = null;
+  for (let i = 1; i <= 14 && outAt == null; i += 1) {
+    const sp = await tick({ loadW: 3000, masterDischargeCap: 0 });
+    if (sp.charge === false && sp.masterOut === 'stalled') outAt = i;
+  }
+  assert.ok(outAt == null || outAt >= 10, `frühestens nach ~10 s neuer Messung (Takt ${outAt})`);
+});
+
+test('Codex 402a3df9 P2: eine stehende Master-Messung (kein neuer Poll) zählt nicht als Liefert-nicht-Beleg', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 40;
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+  const frozenAt = r.now();
+  await r.ems.applySetpoint(-40, 'default');
+  for (let i = 1; i <= 15; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+    r.state.victron.fieldUpdatedAt.batteryPowerW = frozenAt; // Master-Akku-Wert kommt nicht neu (noch < 20 s alt)
+    await r.ems.tick();
+    const sp = r.state.ctrl.sungrowEms.decision.split;
+    assert.notEqual(sp?.masterOut, 'stalled', `Takt ${i}: ohne neue Messung kein „liefert nicht"`);
+    assert.equal(sp?.masterLimitW ?? null, null, `Takt ${i}: ohne neue Messung keine Begrenzung`);
+  }
+});
+
+// Codex e5b5fffe (P2): zwei weitere Zeitfehler der Liefert-nicht-Messung.
+async function stallTimeline(r, steps) {
+  const outTicks = [];
+  for (let i = 0; i < steps.length; i += 1) {
+    const s = steps[i];
+    r.advance(1000);
+    m28Telemetry(r, s);
+    if (s.masterStampAt != null) r.state.victron.fieldUpdatedAt.batteryPowerW = s.masterStampAt; // Master-Poll steht
+    await r.ems.tick();
+    if (r.state.ctrl.sungrowEms.decision?.split?.masterOut === 'stalled') outTicks.push(i + 1);
+  }
+  return outTicks;
+}
+
+test('Codex e5b5fffe P2: Befehlserhöhung + volle Lieferung beendet eine laufende Messung (kein Zusammenrechnen zweier Lücken)', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  // Gleicher SoC → je Hälfte. Takt 1–7: Bedarf 1000 W, Master liefert 0 von 500. Takt 8: Bedarf 2000 W (Master 1000).
+  // Takt 9: Master liefert voll. Ab Takt 10 wieder 0 → frühestens ~10 s danach „liefert nicht", nicht in Takt 12.
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: -500, gridW: 674 });
+  await r.ems.applySetpoint(-40, 'default');
+  const steps = [];
+  for (let i = 1; i <= 7; i += 1) steps.push({ masterBattW: 0, slaveBattW: -500, gridW: 674 });
+  steps.push({ masterBattW: 0, slaveBattW: -500, gridW: 2103 });
+  steps.push({ masterBattW: -1000, slaveBattW: -1000, gridW: -40 });
+  for (let i = 10; i <= 19; i += 1) steps.push({ masterBattW: 0, slaveBattW: -1000, gridW: 960 });
+  const out = await stallTimeline(r, steps);
+  assert.ok(!out.some((i) => i <= 19), `nicht vor ~10 s neuer Lücke herausgenommen: ${out.join(',')}`);
+});
+
+test('Codex e5b5fffe P2: Rückkehr in eine Richtung beginnt neu — ein alter Lade-Messwert zählt nicht als Entlade-Lücke', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 40; // → 300/900 bei 1200 W
+  // Akku-System −1200, Netz −40 → P = −1200 (Gleichstand).
+  m28Telemetry(r, { masterBattW: -300, slaveBattW: -900, gridW: -40 });
+  await r.ems.applySetpoint(-40, 'default');
+  const steps = [];
+  for (let i = 1; i <= 2; i += 1) steps.push({ masterBattW: -300, slaveBattW: -900, gridW: -40 });          // Entladen, alles gut
+  const lastDischargePoll = r.now() + 2000;                                                                 // Master-Poll Takt 2
+  const chargeAt = r.now() + 4000;                                                                          // nächster Master-Poll: Takt 4 (Laden)
+  // Takt 3–5: Laden. Der Master-Poll von Takt 3 fällt aus, der von Takt 4 zeigt das Laden und bleibt dann stehen.
+  steps.push({ masterBattW: 500, slaveBattW: 500, gridW: -1000, pvW: 3000, loadW: 1000, masterStampAt: lastDischargePoll });
+  steps.push({ masterBattW: 500, slaveBattW: 500, gridW: -1000, pvW: 3000, loadW: 1000 });
+  steps.push({ masterBattW: 500, slaveBattW: 500, gridW: -1000, pvW: 3000, loadW: 1000, masterStampAt: chargeAt });
+  // Takt 6–7: wieder Entladen mit demselben Master-Anteil (300 W), der Master-Poll steht noch auf dem Lade-Wert.
+  // Akku-System (+500 − 900), Netz +1103 → P = −400 + 0,7·(−1143) = −1200.
+  steps.push({ masterBattW: 500, slaveBattW: -900, gridW: 1103, masterStampAt: chargeAt });
+  steps.push({ masterBattW: 500, slaveBattW: -900, gridW: 1103, masterStampAt: chargeAt });
+  // Ab Takt 8 neue Master-Messungen: 0 W (Akku-System −900, Netz +389 → P = −1200).
+  for (let i = 8; i <= 17; i += 1) steps.push({ masterBattW: 0, slaveBattW: -900, gridW: 389 });
+  const out = await stallTimeline(r, steps);
+  assert.ok(!out.some((i) => i <= 17), `frühestens ~10 s nach dem Wiederbeginn: ${out.join(',')}`);
+});
+
+test('M28 Grundsatz 0 (Feldbeleg 12:28): Master liefert 0 von 417 W → sein Anteil geht nach wenigen Sekunden an den Slave', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 34.4; // soc-balance → 417/783 wie im Feld
+  // Feld: Bedarf 1200 W, Master 0 W, Slave 790 W, Netz +552 W.
+  const field = () => ({ masterBattW: 0, slaveBattW: -790, gridW: 552 });
+  m28Telemetry(r, field());
+  await r.ems.applySetpoint(-40, 'default');
+  assert.deepEqual([r.masterImage.holding.get(POWER), r.slaveImage.holding.get(POWER)], [417, 783]);
+  let movedAt = null;
+  await g0Ticks(r, 5, field, (i, sp) => { if (movedAt == null && sp.slaveW === 1200) movedAt = i; });
+  assert.ok(movedAt != null && movedAt <= 5, `Slave zieht nach (Takt ${movedAt})`);
+  let sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(sp.transferW, 417, 'das Fehlende des Masters geht an den Slave');
+  assert.equal(sp.masterW, 417, 'der Master behält seinen Anteil (Befehl), liefert aber nichts');
+  assert.deepEqual([sp.takeover, sp.takeoverReason], ['slave', 'partial']);
+  assert.equal(r.slaveImage.holding.get(POWER), 1200);
+  // Der Slave liefert jetzt 1200 W, das Netz steht auf −40 W: der Zustand bleibt ruhig (kein Ping-Pong).
+  const slaveCmds = [];
+  await g0Ticks(r, 4, () => ({ masterBattW: 0, slaveBattW: -1200, gridW: -40 }), (i, s) => slaveCmds.push(s.slaveW));
+  assert.deepEqual(slaveCmds, [1200, 1200, 1200, 1200], 'Slave-Befehl bleibt stehen');
+  sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(sp.masterW + sp.slaveW - sp.transferW, 1200, 'Summe der Anteile = Reglerleistung');
+});
+
+test('M28 Grundsatz 0 (Feldbeleg 12:31): Master 0 von 389 W, Slave 602 von 731 W → nichts zu verschieben, kein Ping-Pong; nach der Erkennung bekommt der Slave alles', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 34.4; // → 389/731 bei 1120 W
+  // Feld: Bedarf 1120 W, Master 0 W, Slave 602 W (BMS-Strombegrenzung), Netz +700 W.
+  const field = () => ({ masterBattW: 0, slaveBattW: -602, gridW: 700 });
+  m28Telemetry(r, field());
+  await r.ems.applySetpoint(-40, 'default');
+  assert.deepEqual([r.masterImage.holding.get(POWER), r.slaveImage.holding.get(POWER)], [389, 731]);
+  const trace = [];
+  await g0Ticks(r, 60, field, (i, sp) => trace.push({ i, m: sp.masterW, s: sp.slaveW, tr: sp.transferW, out: sp.masterOut }));
+  // Beide liefern weniger als befohlen → keiner kann das Fehlende des anderen tragen (kein Hin- und Herschieben).
+  for (const x of trace.filter((x) => x.out !== 'stalled')) assert.equal(x.tr, 0, `Takt ${x.i}: keine Verschiebung zwischen zwei begrenzten WR`);
+  // Liefert-nicht-Erkennung (~10 s): Master raus, der Slave bekommt den ganzen Bedarf (er zieht nach, so weit er kann).
+  const firstOut = trace.find((x) => x.out === 'stalled');
+  assert.ok(firstOut && firstOut.i <= 12, `Master raus nach ~10 s Messzeit (Takt ${firstOut && firstOut.i})`);
+  const after = trace.filter((x) => x.i > firstOut.i && x.i <= 60);
+  assert.ok(after.every((x) => x.m === 0 && x.s === 1120), `danach ruhig: Master 0, Slave 1120 (${JSON.stringify(after.slice(0, 3))})`);
+  const sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(sp.slaveLimitW, 600, 'gemessene Lieferfähigkeit des Slave (602 W, auf 10 W)');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE);
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.STOP);
+});
+
+test('M28 Grundsatz 0: Teil-Lieferung — Master 300 von 600 W, der Slave trägt das Fehlende; stabil, und zurück, wenn der Master wieder liefert', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  // Gleicher SoC → 600/600 bei 1200 W. Master liefert nur 300 W (BMS), Slave liefert, was er soll.
+  m28Telemetry(r, { masterBattW: -300, slaveBattW: -600, gridW: 389 });
+  await r.ems.applySetpoint(-40, 'default');
+  assert.deepEqual([r.masterImage.holding.get(POWER), r.slaveImage.holding.get(POWER)], [600, 600]);
+  await g0Ticks(r, 5, () => ({ masterBattW: -300, slaveBattW: -600, gridW: 389 }));
+  let sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.deepEqual([sp.masterW, sp.slaveW, sp.transferW], [600, 900, 300], 'Slave trägt die fehlenden 300 W');
+  assert.equal(sp.masterLimitW, 300);
+  // 30 s Gleichlauf: Slave liefert 900, Netz −40 → kein Aufschaukeln, Befehle stehen.
+  const cmds = [];
+  await g0Ticks(r, 30, () => ({ masterBattW: -300, slaveBattW: -900, gridW: -40 }), (i, s) => cmds.push(`${s.masterW}/${s.slaveW}`));
+  assert.deepEqual([...new Set(cmds)], ['600/900'], `stabil: ${[...new Set(cmds)].join(', ')}`);
+  // Master liefert wieder voll → die Verschiebung fällt weg.
+  await g0Ticks(r, 3, () => ({ masterBattW: -600, slaveBattW: -600, gridW: -40 }));
+  sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(sp.transferW, 0, 'Master liefert wieder → nichts mehr zu verschieben');
+  assert.equal(sp.masterLimitW, null);
+});
+
+test('M28 Grundsatz 0: liefert ein WR unter 50 % und kann der andere den Rest nicht tragen, bleibt er drin (sein Ist-Anteil zählt)', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  // Gleicher SoC. Master kann nur 240 W (BMS), Slave nur 900 W. Haus 1240 W, PV 0 → geschlossener Regelkreis.
+  const cap = { m: 240, s: 900 };
+  const loadW = 1240;
+  let act = { m: 0, s: 0 };
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: 0, gridW: loadW, loadW });
+  await r.ems.applySetpoint(-40, 'default');
+  const totals = [];
+  for (let i = 1; i <= 90; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: -act.m, slaveBattW: -act.s, gridW: loadW - act.m - act.s, loadW });
+    await r.ems.tick();
+    // Gerät folgt dem Befehl im nächsten Takt bis zu seiner Grenze.
+    const mCmd = r.masterImage.holding.get(CMD) === EMS_CMD.DISCHARGE ? r.masterImage.holding.get(POWER) : 0;
+    const sCmd = r.slaveImage.holding.get(CMD) === EMS_CMD.DISCHARGE ? r.slaveImage.holding.get(POWER) : 0;
+    act = { m: Math.min(mCmd, cap.m), s: Math.min(sCmd, cap.s) };
+    totals.push(act.m + act.s);
+  }
+  // Am Ende liefern beide, was sie können (240 + 900): der Master wird nicht dauerhaft herausgenommen.
+  const tail = totals.slice(-20);
+  assert.ok(tail.every((x) => x === 1140), `beide liefern ihr Mögliches: ${tail.join(',')}`);
+});
+
+test('Codex 07041019 P2: die Probe über der gemessenen Grenze geht wirklich ans Gerät (größer als die Schreibschwelle)', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  // Gleicher SoC → 600/600 bei 1200 W. Lage: der Slave war bei 600 W begrenzt und steht am Gerät auf 600 W, der Master
+  // liefert nur 200 W. Das Fehlende des Masters darf der Slave bis zu seiner Grenze + Probe bekommen.
+  // Akku −800 W, Netz +531 W → P = −800 + 0,7·(−40 − 531) = −1200 → 600/600.
+  m28Telemetry(r, { masterBattW: -200, slaveBattW: -600, gridW: 531 });
+  await r.ems.applySetpoint(-40, 'default');
+  const t = r.now();
+  r.ems._st.limit['master:discharge'] = { limited: true, limitW: 200, underSince: 0, cmdW: 600, cmdRaisedAt: 0, lastSampleAt: t, judgedAt: t };
+  r.ems._st.limit['slave:discharge'] = { limited: true, limitW: 600, underSince: 0, cmdW: 600, cmdRaisedAt: 0, lastSampleAt: t, judgedAt: t };
+  r.slaveImage.holding.set(POWER, 600); r.slaveImage.holding.set(CMD, EMS_CMD.DISCHARGE);
+  r.advance(1000);
+  m28Telemetry(r, { masterBattW: -200, slaveBattW: -600, gridW: 531 });
+  await r.ems.tick();
+  const sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.deepEqual([sp.masterBaseW, sp.slaveBaseW], [600, 600]);
+  assert.ok(sp.transferW > 100, `Probe größer als die Schreibschwelle 100 W: ${sp.transferW}`);
+  assert.ok(r.slaveImage.holding.get(POWER) > 700, `Probe am Gerät angekommen: ${r.slaveImage.holding.get(POWER)}`);
+});
+
+test('Codex 07041019 P2: eine Lücke kurz vor einer Befehlserhöhung bestätigt beim Hochfahren keine falsche Grenze', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  m28Telemetry(r, { masterBattW: -600, slaveBattW: -600, gridW: -40, loadW: 1160 });
+  await r.ems.applySetpoint(-40, 'default');
+  // Master-Messung je Takt; der Slave liefert, was am Gerät steht. In Takt 2 zeigt der Master kurz eine Lücke
+  // (400 von 600 W), zugleich springt die Hauslast auf 2000 W (Befehl ~1000 W). Danach fährt er normal hoch.
+  const masterSeen = [600, 400, 600, 800, 1000, 1000, 1000, 1000];
+  for (let i = 1; i <= masterSeen.length; i += 1) {
+    r.advance(1000);
+    const loadW = i >= 2 ? 2000 : 1160;
+    const s = r.slaveImage.holding.get(CMD) === EMS_CMD.DISCHARGE ? r.slaveImage.holding.get(POWER) : 0;
+    const m = masterSeen[i - 1];
+    m28Telemetry(r, { masterBattW: -m, slaveBattW: -s, gridW: loadW - m - s, loadW });
+    await r.ems.tick();
+    const sp = r.state.ctrl.sungrowEms.decision.split;
+    assert.equal(sp.transferW, 0, `Takt ${i}: keine Übernahme beim normalen Hochfahren`);
+    assert.equal(sp.masterLimitW, null, `Takt ${i}: keine falsche Grenze`);
+  }
+});
+
+test('M28 Grundsatz 0: Sprung im Bedarf, beide WR fahren gleichzeitig hoch → keine Verschiebung, kein Überschwingen', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: 0, gridW: 0, loadW: 0 });
+  await r.ems.applySetpoint(-40, 'default');
+  // Last springt auf 2000 W; beide WR folgen ihrem Befehl erst nach 2 s (Rampe), dann voll.
+  const shares = [];
+  const cmdAt = [];
+  for (let i = 1; i <= 15; i += 1) {
+    r.advance(1000);
+    const m = cmdAt[i - 3]?.m ?? 0; const s = cmdAt[i - 3]?.s ?? 0; // 2 Takte Verzug
+    m28Telemetry(r, { masterBattW: -m, slaveBattW: -s, gridW: 2000 - m - s, loadW: 2000 });
+    await r.ems.tick();
+    const sp = r.state.ctrl.sungrowEms.decision.split;
+    if (sp) { shares.push(sp.transferW); cmdAt[i - 1] = { m: sp.masterW, s: sp.slaveW }; } else cmdAt[i - 1] = { m: 0, s: 0 };
+  }
+  assert.ok(shares.every((x) => x === 0), `keine Verschiebung beim gemeinsamen Hochfahren: ${shares.join(',')}`);
+});
+
+test('M24: Status nennt den wirksamen Puffer über der Geräte-Untergrenze (Standard 0)', async () => {
+  const r = rig({ controlMode: 'forced' });
+  assert.equal(r.ems.status().socFloorBufferPct, 0);
+  r.cfg.sungrow.socFloorBufferPct = 2;
+  assert.equal(r.ems.status().socFloorBufferPct, 2);
+});
+
+// M22 (Christin 19.11.): Modbus-Fehler je WR ins Log; split_aborted / Slave-Fallback mit Register (Doku) und Wert.
+function rejectWrite(t, wireAddr, msg = 'modbus exception 4') {
+  const orig = t.mbWriteSingle.bind(t);
+  t.mbWriteSingle = async (a) => { if (a.address === wireAddr) { t.writes.push({ fc: 6, address: a.address, value: a.value, rejected: true }); throw new Error(msg); } return orig(a); };
+}
+
+test('M22: Master lehnt die Leistung ab (exception 4) → sungrow_ems_split_aborted nennt Register 13052 (Doku), Draht 13051 und Wert', async () => {
+  const r = splitRig();
+  rejectWrite(r.masterT, POWER);
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  const ab = r.logs.find((l) => l.event === 'sungrow_ems_split_aborted');
+  assert.ok(ab, 'split_aborted geloggt');
+  assert.equal(ab.data.register, 13052, 'Doku-Register (Leistung)');
+  assert.equal(ab.data.wireAddress, 13051, 'Draht-Adresse');
+  assert.ok(Number(ab.data.value) > 0, `Wert: ${ab.data.value}`);
+  assert.equal(ab.data.kind, 'exception');
+  assert.equal(ab.data.code, 4);
+  // Und der Modbus-Fehler selbst steht je WR im Log.
+  const me = r.logs.find((l) => l.event === 'sungrow_modbus_error' && l.data.wr === 'master');
+  assert.ok(me, 'sungrow_modbus_error (Master) geloggt');
+  assert.deepEqual([me.data.kind, me.data.code, me.data.fc, me.data.register], ['exception', 4, 6, 13052]);
+});
+
+test('M22: Slave lehnt die Leistung ab → Fallback-Log mit Register und Wert, Modbus-Fehler mit wr=slave', async () => {
+  const r = splitRig();
+  rejectWrite(r.slaveT, POWER);
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  const fb = r.logs.find((l) => l.event === 'sungrow_ems_split_slave_fallback');
+  assert.ok(fb, 'Slave-Fallback geloggt');
+  assert.equal(fb.data.register, 13052);
+  assert.equal(fb.data.wireAddress, 13051);
+  assert.ok(Number(fb.data.value) > 0);
+  const me = r.logs.find((l) => l.event === 'sungrow_modbus_error' && l.data.wr === 'slave');
+  assert.ok(me, 'sungrow_modbus_error (Slave) geloggt');
+  assert.equal(me.data.source, 'ems');
 });
 
 test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf, solange er Forced fährt', async () => {
