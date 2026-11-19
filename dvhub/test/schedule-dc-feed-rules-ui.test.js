@@ -53,6 +53,12 @@ function loadDashboard(rules) {
 
 const dcRulesOf = (body) => body.rules.filter((r) => r.target === 'feedExcessDcPv');
 
+/** Aktiv-Schalter einer Zeile wie im Leitstand umschalten (handleRowEnabledToggle, Zeile ohne DOM). */
+const toggleRow = (rowsEval, start, checked) => rowsEval(`(async () => {
+  const s = scheduleRowsState.find((x) => x.start === ${JSON.stringify(start)});
+  await handleRowEnabledToggle(s, { checked: ${checked} }, { querySelector: () => null, dataset: {}, classList: { toggle() {} }, style: {} });
+})()`);
+
 test('M20 Leitstand: Speichern ohne Änderung schickt die DC-Regel unverändert mit und ersetzt ausdrücklich', async () => {
   const { sandbox, posted } = loadDashboard([GRID_RULE, DC_RULE, OPT_RULE]);
   await sandbox.loadScheduleDash();
@@ -86,11 +92,8 @@ test('M20 Leitstand: gelöschte Zeile löscht ihre DC-Regel (auch die letzte)', 
 test('M20 Leitstand: Aktiv-Schalter und Zeitfenster der Zeile gelten für ihre DC-Regel', async () => {
   const { sandbox, rowsEval, posted } = loadDashboard([DC_RULE]);
   await sandbox.loadScheduleDash();
-  rowsEval(`(() => {
-    const s = scheduleRowsState.find((x) => x.start === '10:00');
-    s.enabled = true;
-    s.start = '11:00';
-  })()`);
+  await toggleRow(rowsEval, '10:00', true);
+  rowsEval(`scheduleRowsState.find((x) => x.start === '10:00').start = '11:00'`);
   await sandbox.saveScheduleDash();
   const [dc] = dcRulesOf(posted()[0]);
   assert.equal(dc.enabled, true);
@@ -111,7 +114,7 @@ test('M20 Leitstand: gemeinsame Zeile mit ausgeschalteter Netz-Regel schaltet di
   const [dc] = dcRulesOf(posted()[0]);
   assert.equal(dc.enabled, true, 'unveränderte Zeile: DC-Regel behält ihren Schalter');
   // Operator schaltet die Zeile ein → gilt für alle Regeln der Zeile.
-  rowsEval(`scheduleRowsState.find((s) => s.start === '06:00').enabled = true`);
+  await toggleRow(rowsEval, '06:00', true);
   await sandbox.saveScheduleDash();
   const body = posted()[1];
   assert.equal(dcRulesOf(body)[0].enabled, true);
@@ -119,9 +122,22 @@ test('M20 Leitstand: gemeinsame Zeile mit ausgeschalteter Netz-Regel schaltet di
   // Zeile mit beiden Regeln an, Operator schaltet sie aus → auch die DC-Regel aus.
   const second = loadDashboard([GRID_RULE, dcOn]);
   await second.sandbox.loadScheduleDash();
-  second.rowsEval(`scheduleRowsState.find((s) => s.start === '06:00').enabled = false`);
+  await toggleRow(second.rowsEval, '06:00', false);
   await second.sandbox.saveScheduleDash();
   assert.equal(dcRulesOf(second.posted()[0])[0].enabled, false);
+});
+
+// Codex e245fe0a P2: zählt, DASS der Operator die Zeile umgeschaltet hat — nicht nur der Endstand. Aus (Anzeige,
+// weil die Netz-Regel aus ist) → an → aus heißt ausdrücklich „aus“, auch für die DC-Regel.
+test('M20 Leitstand: Umschalten an→aus vor dem Speichern schaltet die DC-Regel aus (Codex e245fe0a)', async () => {
+  const dcOn = { ...DC_RULE, enabled: true, start: '06:00', end: '07:00' };
+  const gridOff = { ...GRID_RULE, enabled: false };
+  const { sandbox, rowsEval, posted } = loadDashboard([gridOff, dcOn]);
+  await sandbox.loadScheduleDash();
+  await toggleRow(rowsEval, '06:00', true);
+  await toggleRow(rowsEval, '06:00', false);
+  await sandbox.saveScheduleDash();
+  assert.equal(dcRulesOf(posted()[0])[0].enabled, false);
 });
 
 test('M20 Leitstand: die DC-Zeile sagt, was sie tut (statt „—“)', async () => {

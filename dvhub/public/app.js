@@ -3451,8 +3451,11 @@ function collectScheduleRulesFromRowState(rows) {
     // unverändert mit — nur Zeitfenster und Aktiv-Schalter der Zeile gelten auch für
     // sie. Vorher fielen sie hier weg, der Server behielt sie, und eine im Leitstand
     // gelöschte Zeile („abregel-sperre“) blieb stehen.
-    // Den Aktiv-Schalter der Zeile bekommt sie nur, wenn er seit dem Laden umgeschaltet wurde.
-    const keepOwnEnabled = typeof row?.dcFeedEnabledAtLoad === 'boolean' && rowEnabled === row.dcFeedEnabledAtLoad;
+    // Den Aktiv-Schalter der Zeile bekommt sie nur, wenn der Operator ihn umgeschaltet hat (Codex c49d6e82 und
+    // e245fe0a P2): eine Zeile ist „aus“, sobald eine ihrer Regeln aus ist — ohne Umschalten behält jede DC-Regel
+    // ihren eigenen Schalter (sonst schaltete eine ausgeschaltete Netz-Regel im selben Fenster sie still aus);
+    // umgeschaltet gilt der Endstand, auch nach an → aus.
+    const keepOwnEnabled = row?.dcFeedRowToggled !== true;
     for (const dcRule of Array.isArray(row?.dcFeedRules) ? row.dcFeedRules : []) {
       if (!dcRule || typeof dcRule !== 'object') continue;
       const enabled = keepOwnEnabled ? dcRule.enabled !== false : rowEnabled;
@@ -3670,12 +3673,6 @@ function groupScheduleRulesForDashboard(rules) {
     }
   }
 
-  // M20 (Codex c49d6e82 P2): Aktiv-Stand der Zeile beim Laden merken. Eine Zeile ist „aus“, sobald eine ihrer
-  // Regeln aus ist — beim Speichern ohne Umschalten behält jede DC-Regel ihren eigenen Schalter (sonst schaltete
-  // eine ausgeschaltete Netz-Regel im selben Fenster die DC-Regel still aus).
-  for (const slot of timeSlots.values()) {
-    if (Array.isArray(slot.dcFeedRules)) slot.dcFeedEnabledAtLoad = slot.enabled;
-  }
   return coalesceScheduleSlots(Array.from(timeSlots.values()));
 }
 
@@ -3861,6 +3858,7 @@ function updateScheduleEconomicsCells(nowTs = lastStatusNow || Date.now()) {
 async function handleRowEnabledToggle(slot, cb, tr) {
   if (!isOptimizerSlot(slot)) {
     slot.enabled = cb.checked;
+    slot.enabledTouched = true; // M20: ausdrücklich umgeschaltet → gilt auch für die DC-Regeln der Zeile
     updateScheduleRowVisualState(tr);
     updateScheduleEconomicsCells();
     setControlMsg('Aktiv-Status geändert — mit „Speichern“ übernehmen.');
@@ -4217,7 +4215,7 @@ function openSlotEditor(idx = null) {
       dcExport: dcExportEn.checked,
       // M20: DC-Einspeise-Regeln der Zeile bleiben beim Bearbeiten erhalten.
       dcFeedRules: Array.isArray(slot?.dcFeedRules) ? slot.dcFeedRules : undefined,
-      dcFeedEnabledAtLoad: slot?.dcFeedEnabledAtLoad,
+      enabledTouched: slot?.enabledTouched === true,
       enabled: slot ? slot.enabled !== false : true,
       ruleId: slot?.ruleId || '',
       ruleIds: slot?.ruleIds,
@@ -4303,7 +4301,7 @@ function collectScheduleRows() {
       stopSocVal: slot.stopSocPct,
       dcExportEnabled: slot.dcExport === true,
       dcFeedRules: Array.isArray(slot.dcFeedRules) ? slot.dcFeedRules : [],
-      dcFeedEnabledAtLoad: slot.dcFeedEnabledAtLoad,
+      dcFeedRowToggled: slot.enabledTouched === true,
       source: slot.source || '',
       displayTone: slot.displayTone || '',
       autoManaged: slot.autoManaged === true,

@@ -256,6 +256,19 @@ describe('M20: DC-Einspeise-Regeln (feedExcessDcPv) lassen sich löschen', () =>
     assert.equal(byId['dc-2']._wasActive, true, 'unveränderte laufende Regel bleibt markiert');
   });
 
+  // Codex e245fe0a P2: fehlendes enabled heißt „an“ — der Leitstand ergänzt enabled:true; die Regel ist unverändert
+  // und muss ihre Markierung behalten (sonst schaltet sie nach dem Fenster nicht ab und läuft am Folgetag wieder).
+  it('_wasActive: Regel ohne enabled-Feld bleibt markiert, wenn sie mit enabled:true unverändert zurückkommt', async () => {
+    const running = { id: 'dc-3', target: 'feedExcessDcPv', start: '10:00', end: '16:00', value: 1, _wasActive: true };
+    const ctx = mockCtx([running]);
+    const out = await call(ctx, 'POST', '/api/schedule/rules', {
+      rules: [{ id: 'dc-3', target: 'feedExcessDcPv', start: '10:00', end: '16:00', value: 1, enabled: true }],
+      replaceDcFeedRules: true,
+    });
+    assert.equal(out.status, 200);
+    assert.equal(ctx.state.schedule.rules.find((r) => r.id === 'dc-3')._wasActive, true);
+  });
+
   it('replaceDcFeedRules muss ein Wahrheitswert sein — sonst 400 und nichts geändert', async () => {
     const ctx = mockCtx([dcRule()]);
     const out = await call(ctx, 'POST', '/api/schedule/rules', { rules: [], replaceDcFeedRules: 'ja' });

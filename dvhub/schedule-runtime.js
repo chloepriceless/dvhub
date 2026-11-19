@@ -34,7 +34,12 @@ export function scheduleMatch(rule, nowMin) {
  * als neu.
  */
 // Inhalt einer Regel ohne Laufzeit-Felder (_…) und ohne days/oneTime — „unverändert“ heißt: gleicher Inhalt.
-const ruleContentKey = (r) => JSON.stringify(Object.keys(r).filter((k) => !k.startsWith('_') && k !== 'days' && k !== 'oneTime').sort().map((k) => [k, r[k]]));
+// Fehlendes enabled heißt „an“ (scheduleMatch prüft nur === false): der Leitstand ergänzt enabled:true, die Regel
+// bleibt dieselbe (Codex e245fe0a P2).
+const ruleContentKey = (r) => {
+  const n = r.enabled === undefined ? { ...r, enabled: true } : r;
+  return JSON.stringify(Object.keys(n).filter((k) => !k.startsWith('_') && k !== 'days' && k !== 'oneTime').sort().map((k) => [k, n[k]]));
+};
 
 /**
  * POST /api/schedule/rules (M20, Codex c49d6e82 P2): Die Laufzeit-Markierung _wasActive bestimmt nur der Server.
