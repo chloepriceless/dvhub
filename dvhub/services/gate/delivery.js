@@ -31,11 +31,14 @@ export const MODBUS_EXCEPTION_DELIVERY = Object.freeze({
 //   'modbus write multiple: too many values'   — dito
 //   'modbus connect timeout'                  — Verbindung nie aufgebaut, gepufferte Bytes nie gesendet
 // Wie Rust `ModbusError::not_sent()` (dvhub-io/src/modbus.rs: QueueFull, Fenced, BadWrite, ConnectTimeout, ReadOnly).
+// Dazu die Adressprüfung der Tor-Senke (services/gate/legacy.js assertWireAddress): wirft vor jedem Transport-Aufruf
+// (Codex 94e9761c P2 — sonst `unknown`, „womöglich angekommen“ und unsicherer Besitz für einen nie gesendeten Wert).
 const MODBUS_NOT_SENT_MESSAGES = [
   /^modbus queue full$/,
   /^modbus write verworfen\b/,
   /^modbus write multiple: (empty|too many) values$/,
   /^modbus connect timeout$/,
+  /^unsafe modbus write address blocked: /,
 ];
 
 // Socket-Fehler, die nur beim Verbindungsaufbau auftreten (nie gesendet). Alles andere nach dem Senden — Zeitüberschreitung,

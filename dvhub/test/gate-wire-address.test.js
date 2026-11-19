@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertWireAddress, modbusLegacySink, inverterLegacySink } from '../services/gate/legacy.js';
+import { assertWireAddress, createLegacyGate, modbusLegacySink, inverterLegacySink, SUNGROW_GATE_DEVICES } from '../services/gate/legacy.js';
 import { HOST, fixClock, loadProfileConfig, recordingModbus, baseState, evaluatorRig } from './helpers/gate-golden.js';
 
 const writes = (rig) => rig.transport.ops.filter((o) => /^W(6|16) /.test(o));
@@ -59,4 +59,27 @@ test('Pfad 5: Nulleinspeisung (Fronius) mit Text-Adressen schreibt nicht an Regi
   const rig = evaluatorRig({ cfg, transport: recordingModbus(), state: baseState({ ctrl: { _lastDvFeedIn: false, _dvBlockReason: 'negative_price_protection' }, victron: { gridExportW: 3000, gridImportW: 0, pvTotalW: 5000, selfConsumptionW: 500 }, meter: { ok: true, updatedAt: Date.now(), grid_total_w: 3000 } }) });
   for (let i = 0; i < 6; i++) await rig.ev.zeroFeedInTick();
   assert.ok(!writes(rig).some((w) => / @0=/.test(w)), JSON.stringify(writes(rig)));
+});
+
+test('Tor: abgelehnte Adresse zählt als nicht gesendet — kein „womöglich angekommen“, kein Besitz (Codex 94e9761c P2)', async () => {
+  const M = SUNGROW_GATE_DEVICES.master;
+  const calls = [];
+  const transport = { mbWriteSingle: async (a) => { calls.push(a); return {}; }, mbWriteMultiple: async (a) => { calls.push(a); return {}; } };
+  const gate = createLegacyGate({ isHalted: () => false, isReadOnly: () => false, onReadOnlyBlock: () => {} });
+  gate.attachSink(M, modbusLegacySink(transport));
+  gate.setRelease(M, 'open');
+  let seq = 0;
+  for (const [fn, args] of [['mbWriteSingle', { host: 'h', port: 502, unitId: 1, value: 2 }], ['mbWriteMultiple', { host: 'h', port: 502, unitId: 1, address: 'abc', values: [2] }]]) {
+    seq += 1;
+    const res = await gate.submit({
+      device: M, point: 'emsMode', value: 2, source: 't', kind: 'write', action: 'command', lease: null,
+      constraints: { set: {}, caps: {}, enforcedBy: [] }, validUntilMs: null, tick: { loop: 'eval', seq }, step: 0,
+      legacy: { sink: M, fn, args: [args] },
+    });
+    assert.equal(res.outcome, 'error', fn);
+    assert.equal(res.delivery, 'notSent', `${fn}: ${JSON.stringify(res)}`);
+    assert.equal(res.possiblyEffective, false, fn);
+    assert.equal(gate.owned(M, 'emsMode'), null, `${fn}: kein (unsicherer) Besitz für einen nie gesendeten Wert`);
+  }
+  assert.deepEqual(calls, []);
 });
