@@ -547,6 +547,19 @@ test('Codex f0967031 P2: Test-Knopf + Absicherungsfall, Slave nicht erreichbar �
   assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF, 'Master Modus 0 — der Slave folgt und lässt seinen alten Befehl fallen');
 });
 
+test('Codex 85c8309c P2: Test-Knopf + Absicherungsfall, fremdes EMS hat übernommen (Modus 3) → kein Write an den Slave', async () => {
+  const r = splitRig();
+  await ownedThenHold(r, { gridW: 1000, systemBattW: -500, loadW: 1500 });
+  // Ein anderes EMS schaltet beide WR auf Modus 3; Messwerte veralten, der Gerätezustand wird neu gelesen (> 60 s).
+  r.masterImage.holding.set(MODE, EMS_MODE.EXTERNAL); r.slaveImage.holding.set(MODE, EMS_MODE.EXTERNAL);
+  r.masterT.writes.length = 0; r.slaveT.writes.length = 0;
+  r.advance(61000);
+  const res = await r.ems.applySetpoint(-40, 'negative_price_protection');
+  assert.match(String(res.error || ''), /foreign/, JSON.stringify(res));
+  assert.deepEqual(r.slaveT.writes, [], 'kein Write an einen fremd gesteuerten Slave');
+  assert.deepEqual(r.masterT.writes, [], 'kein Write an den fremd gesteuerten Master');
+});
+
 test('M25 echter Negativpreis, Akkus voll: Laden aus (an der Decke), Entladen fürs Haus an', async () => {
   const r = splitRig();
   r.state.ctrl.negativePriceActive = true; r.state.ctrl._lastDvFeedIn = false; // ohne Test-Knopf

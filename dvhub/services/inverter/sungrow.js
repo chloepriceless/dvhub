@@ -1769,17 +1769,12 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // der Test läuft (selbst-ablaufendes Lease), bleibt Modus 2 mit Stopp — wie vor M25. Ein Moduswechsel geht vor.
     // Codex f0967031 (P2): Modus 2 nur halten, wenn der Slave (falls angebunden) den Stopp BESTÄTIGT — sonst bliebe ein
     // unerreichbarer Slave auf seinem alten Befehl, während der Master in Modus 2 steht. Dann lieber der Rückfall in
-    // Modus 0 (der Slave folgt dem Master und lässt den Befehl fallen).
+    // Modus 0 (der Slave folgt dem Master und lässt den Befehl fallen). Codex 85c8309c (P2): bestätigt wird erst NACH
+    // der Fremd-EMS-Prüfung am Master (unten im try) — ein fremd gesteuerter Slave bekommt keinen Write.
+    let holdFallback = null;
     if (chargeBlocked && ownsForced && decision.mode === 'self') {
-      let slaveStopped = true;
-      if (slaveActuator && resolveSecondInverter(cfg).enabled) {
-        try {
-          const sr = await slaveActuator.applyDirectCommand({ mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' }, ctl);
-          slaveStopped = sr?.ok === true;
-        } catch { slaveStopped = false; }
-      }
-      if (slaveStopped) decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' };
-      else logOnce('hold-slave', 'sungrow_ems_charge_hold_slave_unconfirmed', { reason: decision.reason, text: 'Sungrow: „Akku nicht laden" — der Slave bestätigt den Stopp nicht, deshalb Rückfall in Modus 0 statt Halten in Modus 2.' }, 'warn');
+      holdFallback = decision;
+      decision = { mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' };
     }
     // KEIN Dauer-Stopp mehr bei band/no_setpoint/revoked (Christin 15.11.): alle verbliebenen 'self'-Gründe
     // (telemetry_missing, power_limit_unknown, target_expired, mode_switch) sind Absicherungsfälle → Rückgabe an
@@ -1808,6 +1803,20 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
       // Fremder Modus (VPP, oder Modus 2/3 ohne DVhub-Besitz) → nicht übersteuern (B4).
       if (isForeignMode(dev.mode, dev)) throw foreignModeError(dev.mode);
+      if (holdFallback) {
+        let slaveStopped = true;
+        if (slaveActuator && resolveSecondInverter(cfg).enabled) {
+          try {
+            const sr = await slaveActuator.applyDirectCommand({ mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' }, ctl);
+            slaveStopped = sr?.ok === true;
+          } catch { slaveStopped = false; }
+        }
+        if (!slaveStopped) {
+          logOnce('hold-slave', 'sungrow_ems_charge_hold_slave_unconfirmed', { reason: holdFallback.reason, text: 'Sungrow: „Akku nicht laden" — der Slave bestätigt den Stopp nicht, deshalb Rückfall in Modus 0 statt Halten in Modus 2.' }, 'warn');
+          decision = holdFallback;
+          st.decision = { ...decision, at: t, trigger: reason };
+        }
+      }
       // Wiedereintritt (B3): DVhub besitzt Forced, der Master steht aber von selbst in Modus 0 → er ist von selbst
       // zurückgefallen (WR-Neustart/Firmware/Netzfehler). EINMAL neu eintreten (die Writes unten setzen 13050=2
       // neu). Bei zu vielen Wiedereintritten/Stunde das Mode-Register (13050) schonen: nicht mehr eintreten, Modus 0
