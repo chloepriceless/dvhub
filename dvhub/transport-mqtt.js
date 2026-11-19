@@ -707,7 +707,13 @@ export function createMqttTransport(victronConfig, options = {}) {
       const wasStale = !!cache[topic];
       if (client?.connected) {
         requestRead(topic);
-        if (wasStale && typeof client.reconnect === 'function') {
+        // DVhub-Schema (Feld Nebeling 19.11.): kommen andere Eingänge frisch an, steht das Abo — der Lieferant schickt
+        // nur diesen einen Wert nicht. Ohne R/-Nachfordern und mit verworfenen retained Replays bringt Neuverbinden
+        // dann nichts, flutete aber alle ~92 s das Log (mqtt_disconnected/mqtt_connected). Nur neu verbinden, wenn
+        // gar nichts Frisches mehr ankommt.
+        const subscriptionAlive = schema === 'dvhub'
+          && Object.values(READ_TOPICS).some((t) => mqttCacheEntryFresh(cache[t], staleMaxAgeMs));
+        if (wasStale && !subscriptionAlive && typeof client.reconnect === 'function') {
           const now = Date.now();
           if (now - lastStaleReconnectAt > staleMaxAgeMs) {
             lastStaleReconnectAt = now;
