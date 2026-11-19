@@ -9,6 +9,8 @@ import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
 // Lesepunkt-Decoder der Herstellerprofile (Lese-Engine E4/E5/E9/E14, 18.11.2026).
 import { decodePointRegs, isLowWordFirst, readPointValue, awaitsSunspec, assertReadableAddress } from './services/inverter/point-read.js';
+// Kennungsprobe der Herstellerprofile (Lese-Engine E10, 19.11.2026) — nur Lesen/Anzeigen, kein Schreibtor.
+import { normalizeIdentityProbe, runIdentityProbe, IDENTITY_PROBE_RETRY_MS } from './services/inverter/identity-probe.js';
 import {
   identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
   resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry,
@@ -186,6 +188,19 @@ export function createPoller(ctx) {
   // Ergebnis (E6, für die Hauslast-Ableitung): true = in diesem Takt ein Wert gelesen, false = kein Wert in diesem
   // Takt (aus, unaufgelöst, Lesefehler, „nicht verfügbar“), undefined = wegen pollEveryMs nicht abgefragt.
   async function pollPoint(name, conf) {
+    // E10: Kennungsprobe passt nicht und das Profil nennt diesen Wert → leer statt womöglich falsch, und am fremden
+    // Gerät nicht lesen. Gilt für gelesene und abgeleitete Punkte (z. B. Hauslast aus der Energiebilanz, deren
+    // Ableitung unten dann ebenfalls aussetzt). Der Grund steht im Lesefehler, die volle Meldung in
+    // state.victron.identityProbe.
+    const hiddenBy = conf?.enabled || conf?.derive ? identityHiddenReason(name) : null;
+    if (hiddenBy) {
+      const v = state.victron;
+      v[name] = null;
+      (v.errors ??= {})[name] = hiddenBy;
+      if (v.fieldUpdatedAt) delete v.fieldUpdatedAt[name];
+      if (v.fieldSourceAt) delete v.fieldSourceAt[name];
+      return false;
+    }
     if (!conf?.enabled) {
       // Abgeschaltet ohne gehaltenen Wert: ein alter Lesefehler gilt nicht mehr —
       // er machte sonst jede Live-Probe veraltet (telemetry-runtime
@@ -600,6 +615,71 @@ export function createPoller(ctx) {
     }
   }
 
+  // --- Kennungsprobe (E10, 19.11.2026) ---------------------------------------
+  // Profil `victron.identityProbe` (services/inverter/identity-probe.js): antwortet an der Anlagen-Verbindung das
+  // Gerät, für das die Registerkarte gilt? Läuft vor den Werten eines Takts, sonst nur je everyMs (Standard 10 min)
+  // bzw. nach „passt nicht“/„nicht lesbar“ alle 60 s; nach einem Wechsel von Adresse oder Probe-Block sofort.
+  // Ergebnis in state.victron.identityProbe (Status/Hinweisleiste, IPC-Schnappschuss), ein Log je Statuswechsel.
+  // „passt nicht“ blendet die Werte aus hideOnMismatch aus (identityHiddenReason). Ein nicht lesbarer Nachtest ändert
+  // ein festgestelltes Ergebnis nicht (eine Zeitüberschreitung macht ein fremdes Gerät nicht zum richtigen und
+  // umgekehrt). Nur Lesen: das Schreibtor (schedule-eval deviceWriteGate) sieht diesen Zustand nicht.
+  let identityKey = null;
+  let identityNextAt = 0;
+  async function ensureIdentityProbed(cfg) {
+    try {
+      const raw = cfg?.victron?.identityProbe;
+      if (raw == null || transport.type !== 'modbus') {
+        if (state.victron.identityProbe) delete state.victron.identityProbe;
+        identityKey = null;
+        return;
+      }
+      const v = cfg.victron;
+      const key = JSON.stringify([v.host ?? null, v.port ?? null, v.unitId ?? null, raw]);
+      if (key !== identityKey) {
+        identityKey = key;
+        identityNextAt = 0;
+        delete state.victron.identityProbe;
+      }
+      const now = Date.now();
+      if (now < identityNextAt) return;
+      const prev = state.victron.identityProbe;
+      let result;
+      try {
+        const probe = normalizeIdentityProbe(raw);
+        result = await runIdentityProbe(probe, (req) => transport.mbRequest({
+          host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, ...req,
+        }));
+        identityNextAt = now + (result.status === 'ok' ? probe.everyMs : IDENTITY_PROBE_RETRY_MS);
+      } catch (e) {
+        result = {
+          status: 'invalid', hidden: [], checks: [],
+          text: `Kennungsprobe im Herstellerprofil ungültig: ${e?.message || e} — Werte werden ungeprüft angezeigt.`,
+        };
+        identityNextAt = now + IDENTITY_PROBE_RETRY_MS;
+      }
+      if (result.status === 'unreadable' && (prev?.status === 'ok' || prev?.status === 'mismatch')) {
+        state.victron.identityProbe = { ...prev, recheckError: result.text, recheckFailedAt: now };
+        return;
+      }
+      state.victron.identityProbe = { ...result, checkedAt: now };
+      if (prev?.status !== result.status) {
+        pushLog(`identity_probe_${result.status}`, {
+          text: result.text,
+          hidden: result.hidden,
+          checks: result.checks.map((c) => ({ label: c.label, address: c.address, value: c.value, ok: c.ok, ...(c.error ? { error: c.error } : {}) })),
+        }, result.status === 'ok' ? undefined : 'warn');
+      }
+    } catch (e) {
+      // Die Probe darf den Poll-Takt nie abbrechen.
+      try { pushLog('identity_probe_error', { error: e?.message || String(e) }, 'warn'); } catch { /* nie werfen */ }
+    }
+  }
+  function identityHiddenReason(name) {
+    const p = state.victron?.identityProbe;
+    if (p?.status !== 'mismatch' || !Array.isArray(p.hidden) || !p.hidden.includes(name)) return null;
+    return 'Kennungsprobe passt nicht — Wert ausgeblendet statt womöglich falsch (Hinweis im Status)';
+  }
+
   // --- Geräteerkennung (Sungrow, T-0422) -----------------------------------
   // Profil mit identify.kind 'sungrow': Typcode, Seriennummer, BDC-Nennleistung
   // einmal lesen (state.victron.device), bei Fehlschlag alle 60 s neu; die
@@ -857,6 +937,8 @@ export function createPoller(ctx) {
   async function pollMeter() {
     const cfg = getCfg();
     cycleSfCache = new Map();
+    // E10: Kennungsprobe vor dem ersten Wert des Takts (ohne Profilblock ein No-op, keine Anfrage).
+    await ensureIdentityProbed(cfg);
     await ensureSunspecResolved(cfg);
     await ensureDeviceIdentified(cfg);
     await readMasterRunningState(cfg);
@@ -865,7 +947,10 @@ export function createPoller(ctx) {
     // counter on catch. Tracked in seconds (Prometheus convention).
     const __pollStart = process.hrtime.bigint();
     spineEm = null;
+    const meterHiddenBy = identityHiddenReason('meter');
     try {
+      // E10: Zähler ausgeblendet (Kennungsprobe passt nicht) — nicht lesen, Fehlerzweig unten ohne Backoff.
+      if (meterHiddenBy) throw Object.assign(new Error(meterHiddenBy), { identityHidden: true });
       let l1, l2, l3, total;
       if (String(cfg.meter?.readType || '').toLowerCase() === 'spine-http') {
         // SPiNE EnergyLink One als Netzzähler-Quelle: der eingebaute
@@ -1101,23 +1186,31 @@ export function createPoller(ctx) {
       state.meter.ok = false;
       state.meter.error = e.message;
       state.meter.updatedAt = Date.now();
-      // Plan 09-08 Task 3: increment consecutiveErrors here, BEFORE
-      // pollMeterWithBackoff schedules the next tick. The delay formula
-      // (power = max(0, cE - BACKOFF_THRESHOLD); delay = BASE * 1.5^power)
-      // then uses the post-increment value — matches the locked delay table
-      // in the plan's must_haves.truths block.
-      state.meter.consecutiveErrors = (state.meter.consecutiveErrors || 0) + 1;
-      // Plan 09-06 (D-06): error — increment the counter.
-      try {
-        meterPollErrorsTotal.inc();
-        // Phase 09.2 D-04: record a failed Victron poll sample. Latency is
-        // captured from the same __pollStart so error-path timing is honest
-        // (a slow timeout shows up as elevated latency, not zero).
-        ctx.healthTracker?.recordSample('victron', {
-          latencyMs: Number(process.hrtime.bigint() - __pollStart) / 1e6,
-          success: false
-        });
-      } catch { /* metrics must never break the poll cycle */ }
+      if (e?.identityHidden === true) {
+        // E10: kein Verbindungsfehler (die Probe hat eine Antwort bekommen) — kein Backoff, keine Fehlermetrik. Die
+        // Netzwerte leer statt der alten oder womöglich falschen (Leitstand zeigt „-“, Telemetrie schreibt nichts).
+        Object.assign(state.meter, { raw: [], grid_l1_w: null, grid_l2_w: null, grid_l3_w: null, grid_total_w: null, consecutiveErrors: 0 });
+        delete state.meter.source;
+        delete state.meter.sourceAt;
+      } else {
+        // Plan 09-08 Task 3: increment consecutiveErrors here, BEFORE
+        // pollMeterWithBackoff schedules the next tick. The delay formula
+        // (power = max(0, cE - BACKOFF_THRESHOLD); delay = BASE * 1.5^power)
+        // then uses the post-increment value — matches the locked delay table
+        // in the plan's must_haves.truths block.
+        state.meter.consecutiveErrors = (state.meter.consecutiveErrors || 0) + 1;
+        // Plan 09-06 (D-06): error — increment the counter.
+        try {
+          meterPollErrorsTotal.inc();
+          // Phase 09.2 D-04: record a failed Victron poll sample. Latency is
+          // captured from the same __pollStart so error-path timing is honest
+          // (a slow timeout shows up as elevated latency, not zero).
+          ctx.healthTracker?.recordSample('victron', {
+            latencyMs: Number(process.hrtime.bigint() - __pollStart) / 1e6,
+            success: false
+          });
+        } catch { /* metrics must never break the poll cycle */ }
+      }
     }
 
     let loadPolled;
@@ -1175,7 +1268,8 @@ export function createPoller(ctx) {
     const m160Failed = (msg) => {
       if (Number(state.victron.fieldUpdatedAt?.batteryPowerW) > 0) (state.victron.errors ??= {}).batteryPowerW = `M160: ${msg}`;
     };
-    if (bpConf?.derive === 'm160_battery' && state.ctrl?._sunspecM160 && transport.type !== 'mqtt') {
+    // E10: ein ausgeblendeter Akku (Kennungsprobe passt nicht) wird auch nicht über M160 nachgefüllt.
+    if (bpConf?.derive === 'm160_battery' && state.ctrl?._sunspecM160 && transport.type !== 'mqtt' && !identityHiddenReason('batteryPowerW')) {
       try {
         const m160 = state.ctrl._sunspecM160;
         const chargeModule = Number(bpConf.chargeModule ?? 3);
@@ -1267,7 +1361,9 @@ export function createPoller(ctx) {
     // Bilanz stimmt dadurch auch bei Laden/Entladen/Netz-Ladung). Kein eigener
     // Register-Punkt nötig; verifiziert am GEN24 Symo 2026-07-18 gegen die
     // Solar API (P_Load 1332,9 W vs. abgeleitet 1332 W).
-    if (cfg.points?.selfConsumptionW?.derive === 'pv_plus_grid'
+    // E10: eine ausgeblendete Hauslast (Kennungsprobe passt nicht) wird auch nicht abgeleitet.
+    const loadHidden = !!identityHiddenReason('selfConsumptionW');
+    if (cfg.points?.selfConsumptionW?.derive === 'pv_plus_grid' && !loadHidden
       && state.meter.ok && state.victron.pvPowerW != null) {
       const inverterAcW = Number(state.victron.pvTotalW || 0);
       const derived = inverterAcW
@@ -1300,7 +1396,7 @@ export function createPoller(ctx) {
     // Eingangs (Akku per pollEveryMs gedrosselt, Zähler), nicht „jetzt“; so altert sie wie ihre Eingänge.
     const balanceInputs = [...PV_POINT_FIELDS].filter((f) => state.victron[f] != null)
       .concat(batteryInBalance ? ['batteryPowerW'] : []);
-    if (cfg.points?.selfConsumptionW?.derive === 'energy_balance'
+    if (cfg.points?.selfConsumptionW?.derive === 'energy_balance' && !loadHidden
       && !loadMeasured
       // PV muss in DIESEM Durchlauf gültig gelesen sein: pvTotalW ist immer eine
       // Zahl (0 bei fehlender PV) und pollPoint behält bei Fehlern den alten

@@ -381,5 +381,25 @@ describe('/api/status: Systemhinweise', () => {
   it('ohne Hinweise: leere Liste', async () => {
     const out = await call(mockRouteCtx(), 'GET', '/api/status');
     assert.deepEqual(out.body.systemWarnings, []);
+    assert.equal(out.body.identityProbe, null);
+  });
+  // Kennungsprobe des Herstellerprofils (Lese-Engine E10): Quelle ist der Poller-Snapshot (payload.victron).
+  it('Kennungsprobe: Ergebnis im Status, jedes Ergebnis außer „bestanden“ als Hinweis', async () => {
+    const ctx = mockRouteCtx();
+    ctx.state.systemWarnings = [{ id: 'feed_in_cap_unset', message: 'Einspeisegrenze nicht angegeben' }];
+    const probe = { status: 'mismatch', text: 'Kennungsprobe passt nicht (…) — nicht angezeigt: Netz.', hidden: ['meter'], checks: [] };
+    ctx.buildFallbackStatusPayload = (now) => ({ ok: true, now, victron: { identityProbe: probe } });
+    const out = await call(ctx, 'GET', '/api/status');
+    assert.equal(out.body.identityProbe.status, 'mismatch');
+    assert.deepEqual(out.body.identityProbe.hidden, ['meter']);
+    assert.deepEqual(out.body.systemWarnings, [
+      { id: 'feed_in_cap_unset', message: 'Einspeisegrenze nicht angegeben' },
+      { id: 'identity_probe', message: probe.text },
+    ]);
+    ctx.buildFallbackStatusPayload = (now) => ({ ok: true, now, victron: { identityProbe: { ...probe, status: 'ok', text: 'Kennungsprobe bestanden (x).' } } });
+    const ok = await call(ctx, 'GET', '/api/status');
+    assert.equal(ok.body.identityProbe.status, 'ok');
+    assert.deepEqual(ok.body.systemWarnings.map((w) => w.id), ['feed_in_cap_unset'], '„bestanden“ ist kein Hinweis');
+    assert.deepEqual(ctx.state.systemWarnings.map((w) => w.id), ['feed_in_cap_unset'], 'state.systemWarnings bleibt unberührt');
   });
 });

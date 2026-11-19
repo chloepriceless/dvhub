@@ -2780,6 +2780,12 @@ export function createApiRoutes(ctx) {
     payload.systemWarnings = Array.isArray(state.systemWarnings)
       ? state.systemWarnings.map((w) => ({ id: String(w.id || ''), message: String(w.message || '') }))
       : [];
+    // Kennungsprobe des Herstellerprofils (E10): Ergebnis aus dem POLLER-Snapshot (wie telemetryFreeze), und jedes
+    // Ergebnis außer „bestanden“ als Hinweis in der Leiste — dort steht, was ausgeblendet bzw. ungeprüft ist.
+    payload.identityProbe = payload.victron?.identityProbe || null;
+    if (payload.identityProbe && payload.identityProbe.status !== 'ok' && payload.identityProbe.text) {
+      payload.systemWarnings.push({ id: 'identity_probe', message: String(payload.identityProbe.text) });
+    }
     // T-CROSSCHECK (2026-07-25): Widerspruch der beiden Datenwege — gleiche
     // Snapshot-Quelle wie oben (Poller-Prozess), nicht das Web-state.
     payload.telemetrySourceMismatch = payload.victron?.sourceMismatch || null;

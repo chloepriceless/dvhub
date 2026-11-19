@@ -210,6 +210,30 @@ Skalenfaktoren und `sunspec` gibt es im Block nicht:
   "combine": [{ "address": 30865 }, { "address": 30867, "sign": -1 }] }
 ```
 
+**`victron.identityProbe` — Kennungsprobe (E10).** Prüft, ob an der Anlagen-Verbindung das Gerät antwortet, für das
+die Registerkarte gilt (richtiges Gerät, richtige Betriebsart oder Einstellung). Nur Lesen und Anzeigen: Schreibwege
+und Schreibtor sehen das Ergebnis nicht. DVhub liest die Prüfungen vor dem ersten Wert und danach alle `everyMs`
+(Standard 600 000 = 10 min, 60 000…86 400 000), nach „passt nicht“ oder „nicht lesbar“ alle 60 s, nach einer Änderung
+von Adresse oder Block sofort.
+
+| Schlüssel | Bedeutung |
+|---|---|
+| `checks` | 1–8 Prüfungen, jede mit `fc` (3 oder 4), `address`, optional `unitId` (sonst die der Anlage) und `label`, und genau einer Bedingung: `equals` (Liste erlaubter Werte), `range` (`[min, max]`, einschließlich) oder `prefix` (Text am Anfang; `quantity` = Register des Texts, 2 Zeichen je Register). Zahlen: u16, mit `signed` s16, mit `readType` `uint32`/`int32` (+ `wordOrder`) |
+| `hideOnMismatch` | Werte, deren Registerlage oder Kodierung von Gerät oder Einstellung abhängt: Punktnamen und `"meter"`. Passt die Kennung nicht, liest DVhub sie nicht und zeigt sie leer statt falsch (Grund im Lesefehler, beim Zähler `meter.ok=false` ohne Backoff). Fehlt die Liste, gibt es nur den Hinweis |
+| `everyMs` | Abstand der Nachprüfung, solange die Kennung passt |
+
+Ergebnis: `ok` (bestanden), `mismatch` (passt nicht), `unreadable` (nicht lesbar, Werte ungeprüft angezeigt) oder
+`invalid` (Block im Profil fehlerhaft, Werte ungeprüft angezeigt). Es steht im Status (`identityProbe`), jedes
+Ergebnis außer `ok` zusätzlich als Hinweis im Leitstand und einmal je Wechsel im Log (`identity_probe_<status>`).
+Ein nicht lesbarer Nachtest ändert ein festgestelltes `ok` oder `mismatch` nicht. E3/DC im Simple-Mode:
+
+```json
+"victron": { "transport": "modbus", "port": 502, "unitId": 1,
+  "identityProbe": {
+    "checks": [{ "label": "E3/DC-Kennung", "fc": 3, "address": 40000, "equals": [58332] }],
+    "hideOnMismatch": ["meter", "pvPowerW", "batteryPowerW", "soc"] } }
+```
+
 **Victron-Schlüssel.** `acPvSource`, `acPvSource2` (AC-PV-Register 808–816) und „PV-Anbindung“ (`pvCoupling`)
 beschreiben ein Victron-System. Sie wirken nur beim Profil `victron` und bei MQTT-Profilen; ein anderes Modbus-Profil
 behält seine eigenen `acPv*`-Adressen und seine PV-Punkte.
