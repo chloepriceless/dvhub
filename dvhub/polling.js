@@ -1201,9 +1201,12 @@ export function createPoller(ctx) {
       state.meter.ok = false;
       state.meter.error = e.message;
       state.meter.updatedAt = Date.now();
-      if (e?.identityHidden === true) {
+      if (e?.identityHidden === true || e?.valueUnknown === true) {
         // E10: kein Verbindungsfehler (die Probe hat eine Antwort bekommen) — kein Backoff, keine Fehlermetrik. Die
         // Netzwerte leer statt der alten oder womöglich falschen (Leitstand zeigt „-“, Telemetrie schreibt nichts).
+        // E8 (Codex ae3d2ead): ebenso, wenn das Richtungsregister des Zählers (layout "point") einen unbekannten Wert
+        // meldet — das Gerät hat geantwortet, aber das Vorzeichen ist nicht deutbar; der gehaltene Altwert hätte
+        // womöglich das falsche (wie pollPoint für die übrigen Punkte).
         Object.assign(state.meter, { raw: [], grid_l1_w: null, grid_l2_w: null, grid_l3_w: null, grid_total_w: null, consecutiveErrors: 0 });
         delete state.meter.source;
         delete state.meter.sourceAt;

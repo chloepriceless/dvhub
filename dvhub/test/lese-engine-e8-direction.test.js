@@ -302,3 +302,29 @@ test('E8/Codex e7a80f44: nicht-numerische Skala bleibt NaN → Zählerfehler sta
   assert.equal(state.meter.ok, false);
   assert.match(state.meter.error, /ungültig/);
 });
+
+test('E8/Codex ae3d2ead: Zähler (layout "point") mit unbekannter Richtung → Netzwerte leer statt des alten Vorzeichens, kein Backoff', async () => {
+  const dev = createRegisterDevice().setWords(70, [1800, 0, 1], FC4).setWords(80, [600, 600, 600], FC4);
+  const cfg = {
+    gridPositiveMeans: 'grid_import',
+    meter: {
+      layout: 'point', fc: 4, unitId: 1, address: 70, quantity: 1, direction: { address: 72, values: { 0: 1, 1: -1 } },
+      phases: [{ address: 80 }, { address: 81 }, { address: 82 }],
+    },
+  };
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  assert.equal(state.meter.ok, true, state.meter.error);
+  assert.equal(state.meter.grid_total_w, -1800);
+  dev.set(72, 7, FC4); // Richtung unbekannt
+  await poller.requestPoll();
+  assert.equal(state.meter.ok, false);
+  assert.match(state.meter.error, /Richtung.*72.*7/);
+  assert.equal(state.meter.grid_total_w, null, 'kein gehaltener Altwert mit womöglich falschem Vorzeichen');
+  assert.deepEqual([state.meter.grid_l1_w, state.meter.grid_l2_w, state.meter.grid_l3_w], [null, null, null]);
+  assert.equal(state.meter.consecutiveErrors, 0, 'das Gerät hat geantwortet — kein Backoff (wie die Kennungsprobe E10)');
+  dev.set(72, 0, FC4); // Richtung wieder bekannt
+  await poller.requestPoll();
+  assert.equal(state.meter.ok, true, state.meter.error);
+  assert.equal(state.meter.grid_total_w, 1800);
+});
