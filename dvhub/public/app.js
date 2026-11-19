@@ -2078,6 +2078,10 @@ function computeSungrowBatteryView(status) {
     return ` (DVhub-Boden, Gerät ${deNum(dm, 0)} %)`;
   };
   const sOnline = sec.online === true;
+  // Codex 2c6c70d0 (P2): der Boden nimmt wie die EOS-Planung die HÖHERE Geräte-Untergrenze beider WR (Slave nur, wenn
+  // erreichbar und aggregiert) — die Herkunft „(Gerät …)" muss dieselbe Grenze vergleichen.
+  const slaveDevMin = sOnline && sec.aggregate !== false && fin(sec.minSocPctDevice) ? Number(sec.minSocPctDevice) : null;
+  const devMinEff = devMin != null && slaveDevMin != null ? Math.max(devMin, slaveDevMin) : (devMin != null ? devMin : slaveDevMin);
   const mReal = realSoc(vic.sungrowMasterSocPct != null ? vic.sungrowMasterSocPct : vic.soc, dev.minSocPctDevice, dev.maxSocPctDevice);
   const sReal = sOnline ? realSoc(sec.socPct, sec.minSocPctDevice, sec.maxSocPctDevice) : null;
   const mDis = effW(dev.maxDischargeWDevice, dev.bdcRatedW);
@@ -2091,7 +2095,7 @@ function computeSungrowBatteryView(status) {
     socMid: realSys != null ? `SoC ${deNum(realSys)} %` : null,
     marks: marks.join(' · '),
     gridSetpoint: spW == null ? '–' : `${Math.round(spW)} W${spSrc ? ` (${srcDe[spSrc] || spSrc})` : ''}`,
-    minSoc: floor != null ? `${deNum(floor)} %${minSocSourceText(floor, devMin, ems && ems.socFloorBufferPct)}` : null,
+    minSoc: floor != null ? `${deNum(floor)} %${minSocSourceText(floor, devMinEff, ems && ems.socFloorBufferPct)}` : null,
     master: wrLine(mReal, vic.sungrowMasterBatteryW != null ? vic.sungrowMasterBatteryW : vic.batteryPowerW, split ? split.masterW : null, vic.emergencyCharge === true),
     slave: sOnline ? wrLine(sReal, sec.batteryPowerW, split ? split.slaveW : null, sec.emergencyCharge === true) : 'Nicht erreichbar',
     maxDischarge,
