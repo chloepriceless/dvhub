@@ -522,8 +522,14 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     st.gridWh = r.gridWh;
     if (r.storedWh != null) { st.storedWh = r.storedWh; st.share = r.share; }
     else if (st.storedWh > 0) st.share = Math.min(1, st.gridWh / st.storedWh);
-    // M21: spürbare Kappungen (ab GRID_SHARE_RELEASE_WH) als Nachweis ins Log. Am/unter dem Entlade-Boden (Inhalt 0,
-    // M10) heißt es wie bisher Boden-Reset — der Leitstand zeigt dann kurz „Netzanteil verbraucht“ (floorResetAt).
+    // M10: Netzanteil am/unter dem Entlade-Boden (Inhalt 0) gelöscht → Kachel-Hinweis „Netzanteil verbraucht“
+    // (floorResetAt), bei jedem Rest > 0 (Codex e7a3d914 P3). Eine laufende Netzladung bei noch nicht gestiegener
+    // Lesung (Stand vorher 0) setzt ihn nicht je Takt neu.
+    if (r.storedWh != null && r.storedWh <= 0 && gridBefore > 0 && r.gridWh <= 0) {
+      st.floorResetAt = new Date(nowMs).toISOString();
+      dirty = true;
+    }
+    // M21: spürbare Kappungen (ab GRID_SHARE_RELEASE_WH) als Nachweis ins Log; am Boden wie bisher als Boden-Reset.
     if (r.capLossWh >= GRID_SHARE_RELEASE_WH) {
       const data = {
         lostKwh: r3(r.capLossWh / 1000),
@@ -535,7 +541,6 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       };
       if (r.storedWh <= 0) {
         log('grid_share_floor_reset', { ...data, note: 'Akku am Entlade-Boden — Netzanteil verbraucht/verloren, Sperre fällt' });
-        st.floorResetAt = new Date(nowMs).toISOString();
       } else {
         log('grid_share_capped', { ...data, note: 'Netzstrom auf den Akku-Inhalt über dem Boden gekappt (Ladestand), Rest als Verlust' });
       }

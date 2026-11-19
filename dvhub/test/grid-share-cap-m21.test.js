@@ -137,6 +137,25 @@ test('M21 Ladestand auf den Boden: Netzanteil sofort 0, Sperre fällt, Kachel-Hi
   }
 });
 
+// Codex e7a3d914 P3: auch ein kleiner Rest (unter der Log-Schwelle 50 Wh) setzt den Kachel-Hinweis — wie vor M21.
+test('M21 kleiner Rest am Boden (40 Wh): floorResetAt gesetzt, aber kein Log-Eintrag', () => {
+  const dir = mkDir();
+  try {
+    const logs = [];
+    const t = trackerWith(dir, 40, logs);
+    const n = Date.parse('2026-11-19T22:00:00Z');
+    t.tick({ nowMs: n, victron: {}, ...SUNGROW, socPct: 11 });
+    near(t.summary().gridWh, 0);
+    assert.equal(t.summary().floorResetAt, new Date(n).toISOString());
+    assert.equal(logs.filter((l) => l.e === 'grid_share_floor_reset' || l.e === 'grid_share_capped').length, 0);
+    // Laufende Netzladung am Boden (Lesung noch am Boden): kein neuer Hinweis je Takt.
+    t.tick({ nowMs: n + 1_000, victron: { gridToBatteryW: 3_000, gridImportW: 3_000 }, ...SUNGROW, socPct: 11 });
+    assert.equal(t.summary().floorResetAt, new Date(n).toISOString());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('M21 ohne Akkukapazität: keine Kappung am Inhalt', () => {
   const dir = mkDir();
   try {
