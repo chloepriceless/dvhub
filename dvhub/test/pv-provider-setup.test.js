@@ -344,3 +344,40 @@ test('Integrationen-Fenster schreibt beim Speichern kein stilles enabled:false m
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '../routes-api.js'), 'utf8');
   assert.match(src, /next\.forecast\.solcast\.enabled = \(body\.enabled === undefined\) \? \(prev\.enabled !== false\) : !!body\.enabled;/);
 });
+
+// ── Codex 78f50e77 ──────────────────────────────────────────────────────────
+
+test('Codex 78f50e77 (P2): ist kein Dienst mehr eingerichtet, gilt die alte Prognose nicht weiter', async () => {
+  const cfgRef = { cfg: prodLikeCfg() };
+  let bumps = 0;
+  const ctx = { ...makeCtx(cfgRef), bumpForecastVersion: () => { bumps++; } };
+  const pv = createPvForecast(ctx, makeDeps({}));
+  await pv.runForecast();
+  assert.equal(ctx.state.forecast.pv.model, 'combined');
+  // Alle Dienste ausgetragen: kein Standort, keine kWp, keine Keys, kein VRM.
+  cfgRef.cfg = { forecast: { pv: { model: 'both' } } };
+  const before = bumps;
+  await pv.runForecast();
+  assert.equal(ctx.state.forecast.pv.data, null, 'keine Werte nicht eingerichteter Dienste mehr an EOS');
+  assert.equal(ctx.state.forecast.pv.model, null);
+  assert.equal(ctx.state.forecast.pv.ensembleWeights ?? null, null);
+  assert.equal(bumps, before + 1, 'Optimierer erfährt es (Versionssprung)');
+  await pv.runForecast();
+  assert.equal(bumps, before + 1, 'nur beim Wechsel, nicht jeden Lauf');
+  pv.close();
+});
+
+test('Codex 78f50e77 (P2): „Nur Solcast“ speichert die echten Solcast-Werte (powerW), nicht 0', async () => {
+  const cfg = prodLikeCfg();
+  cfg.forecast.pv.model = 'solcast';
+  const ctx = makeCtx({ cfg });
+  const deps = makeDeps({}, {
+    // Form des echten Clients (solcast-client.js parseSolcastResponse): { ts, powerW, confidence }.
+    solcastClient: { fetchPvForecast: async () => [{ ts: T0, powerW: 4000, confidence: 0.6 }, { ts: T1, powerW: 4100, confidence: 0.6 }] },
+  });
+  const pv = createPvForecast(ctx, deps);
+  await pv.runForecast();
+  const stored = deps.store.stored.filter((r) => r.model === 'solcast');
+  assert.deepEqual(stored.map((r) => r.power_w), [4000, 4100]);
+  pv.close();
+});

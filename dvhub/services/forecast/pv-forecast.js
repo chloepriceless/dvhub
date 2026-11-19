@@ -375,9 +375,17 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
     let forecastSolarResult = [];
     let vrmResult = [];
 
-    // Kein Dienst eingerichtet: kein Ensemble mehr anzeigen (die Gewichte stammten aus einem
-    // früheren Lauf mit Diensten, die es so nicht mehr gibt).
-    if (want.size === 0 && state.forecast?.pv?.ensembleWeights) state.forecast.pv.ensembleWeights = null;
+    // Kein Dienst eingerichtet (Codex 78f50e77): die letzte Prognose stammt dann nur noch von
+    // Diensten, die es so nicht mehr gibt — sie darf nicht weiter an EOS gehen. Zurück auf den
+    // Stand einer Anlage ohne PV-Prognosedienst (wie beim Start, index.js) und den Optimierer
+    // einmal benachrichtigen; danach bleibt es still, bis wieder ein Dienst eingerichtet ist.
+    if (want.size === 0) {
+      const pvState = state.forecast?.pv;
+      if (pvState && (pvState.data != null || pvState.model != null || pvState.ensembleWeights != null)) {
+        state.forecast.pv = { lastFetchAt: null, model: null, data: null, confidence: 0.3, ensembleWeights: null };
+        ctx.bumpForecastVersion?.();
+      }
+    }
 
     // --- VRM Forecast (free, already fetched by epex-fetch — needs the VRM connection set up) ---
     if (want.has('vrm') && vrmForecast) {
@@ -549,11 +557,14 @@ export function createPvForecast(ctx, { store, pythonBridge, solcastClient, fore
     } else if (!stateUpdated && solcastResult.length > 0) {
       // Solcast-only results
       // Plan 09-08 Task 2: single batched INSERT replaces per-slot await loop.
+      // Codex 78f50e77: der echte Client liefert { ts, powerW } (solcast-client.js
+      // parseSolcastResponse) — row.power_w allein war undefined, die NaN-Sperre im Store
+      // machte daraus 0 und überschrieb die richtig gespeicherten Solcast-Werte.
       await store.insertPvForecastBatch(
         solcastResult.map((row) => ({
           model: 'solcast',
-          ts_utc: row.ts,
-          power_w: row.power_w,
+          ts_utc: row.ts ?? row.ts_utc,
+          power_w: row.power_w ?? row.powerW,
           confidence: 0.6
         }))
       );
