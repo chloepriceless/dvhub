@@ -503,6 +503,135 @@ test('M28 Marge im Split (Feldzahlen): Master real 10,6 % bei Grenze 10 % → ke
   assert.equal(r.slaveImage.holding.get(POWER), 1200);
 });
 
+// M28 Grundsatz 0 (Christin 19.11., Nachtrag 12:45): „Der andere Akku muss auf jeden Fall mehr entladen … man merkt,
+// der eine liefert nichts mehr, und der andere zieht nach." Die Aufteilung rechnet mit der GEMESSENEN Leistung je WR:
+// das Fehlende eines WR (Anteil − Ist) geht an den anderen, bis dieser an seiner Grenze ist (SoC, Leistung, liefert
+// nicht). Ein WR, der teilweise liefert, trägt weiter seinen Ist-Anteil. Kein Ping-Pong, Netzbezug erst, wenn beide
+// nicht mehr können.
+async function g0Ticks(r, n, telemetryFn, onTick = () => {}) {
+  for (let i = 1; i <= n; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, telemetryFn(i));
+    await r.ems.tick();
+    onTick(i, r.state.ctrl.sungrowEms.decision.split);
+  }
+}
+
+test('M28 Grundsatz 0 (Feldbeleg 12:28): Master liefert 0 von 417 W → sein Anteil geht nach wenigen Sekunden an den Slave', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 34.4; // soc-balance → 417/783 wie im Feld
+  // Feld: Bedarf 1200 W, Master 0 W, Slave 790 W, Netz +552 W.
+  const field = () => ({ masterBattW: 0, slaveBattW: -790, gridW: 552 });
+  m28Telemetry(r, field());
+  await r.ems.applySetpoint(-40, 'default');
+  assert.deepEqual([r.masterImage.holding.get(POWER), r.slaveImage.holding.get(POWER)], [417, 783]);
+  let movedAt = null;
+  await g0Ticks(r, 5, field, (i, sp) => { if (movedAt == null && sp.slaveW === 1200) movedAt = i; });
+  assert.ok(movedAt != null && movedAt <= 5, `Slave zieht nach (Takt ${movedAt})`);
+  let sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(sp.transferW, 417, 'das Fehlende des Masters geht an den Slave');
+  assert.equal(sp.masterW, 417, 'der Master behält seinen Anteil (Befehl), liefert aber nichts');
+  assert.deepEqual([sp.takeover, sp.takeoverReason], ['slave', 'partial']);
+  assert.equal(r.slaveImage.holding.get(POWER), 1200);
+  // Der Slave liefert jetzt 1200 W, das Netz steht auf −40 W: der Zustand bleibt ruhig (kein Ping-Pong).
+  const slaveCmds = [];
+  await g0Ticks(r, 4, () => ({ masterBattW: 0, slaveBattW: -1200, gridW: -40 }), (i, s) => slaveCmds.push(s.slaveW));
+  assert.deepEqual(slaveCmds, [1200, 1200, 1200, 1200], 'Slave-Befehl bleibt stehen');
+  sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(sp.masterW + sp.slaveW - sp.transferW, 1200, 'Summe der Anteile = Reglerleistung');
+});
+
+test('M28 Grundsatz 0 (Feldbeleg 12:31): Master 0 von 389 W, Slave 602 von 731 W → nichts zu verschieben, kein Ping-Pong; nach der Erkennung bekommt der Slave alles', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 34.4; // → 389/731 bei 1120 W
+  // Feld: Bedarf 1120 W, Master 0 W, Slave 602 W (BMS-Strombegrenzung), Netz +700 W.
+  const field = () => ({ masterBattW: 0, slaveBattW: -602, gridW: 700 });
+  m28Telemetry(r, field());
+  await r.ems.applySetpoint(-40, 'default');
+  assert.deepEqual([r.masterImage.holding.get(POWER), r.slaveImage.holding.get(POWER)], [389, 731]);
+  const trace = [];
+  await g0Ticks(r, 60, field, (i, sp) => trace.push({ i, m: sp.masterW, s: sp.slaveW, tr: sp.transferW, out: sp.masterOut }));
+  // Beide liefern weniger als befohlen → keiner kann das Fehlende des anderen tragen (kein Hin- und Herschieben).
+  for (const x of trace.filter((x) => x.out !== 'stalled')) assert.equal(x.tr, 0, `Takt ${x.i}: keine Verschiebung zwischen zwei begrenzten WR`);
+  // Liefert-nicht-Erkennung (~10 s): Master raus, der Slave bekommt den ganzen Bedarf (er zieht nach, so weit er kann).
+  const firstOut = trace.find((x) => x.out === 'stalled');
+  assert.ok(firstOut && firstOut.i <= 11, `Master raus nach ~10 s (Takt ${firstOut && firstOut.i})`);
+  const after = trace.filter((x) => x.i > firstOut.i && x.i <= 60);
+  assert.ok(after.every((x) => x.m === 0 && x.s === 1120), `danach ruhig: Master 0, Slave 1120 (${JSON.stringify(after.slice(0, 3))})`);
+  const sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(sp.slaveLimitW, 600, 'gemessene Lieferfähigkeit des Slave (602 W, auf 10 W)');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE);
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.STOP);
+});
+
+test('M28 Grundsatz 0: Teil-Lieferung — Master 300 von 600 W, der Slave trägt das Fehlende; stabil, und zurück, wenn der Master wieder liefert', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  // Gleicher SoC → 600/600 bei 1200 W. Master liefert nur 300 W (BMS), Slave liefert, was er soll.
+  m28Telemetry(r, { masterBattW: -300, slaveBattW: -600, gridW: 389 });
+  await r.ems.applySetpoint(-40, 'default');
+  assert.deepEqual([r.masterImage.holding.get(POWER), r.slaveImage.holding.get(POWER)], [600, 600]);
+  await g0Ticks(r, 5, () => ({ masterBattW: -300, slaveBattW: -600, gridW: 389 }));
+  let sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.deepEqual([sp.masterW, sp.slaveW, sp.transferW], [600, 900, 300], 'Slave trägt die fehlenden 300 W');
+  assert.equal(sp.masterLimitW, 300);
+  // 30 s Gleichlauf: Slave liefert 900, Netz −40 → kein Aufschaukeln, Befehle stehen.
+  const cmds = [];
+  await g0Ticks(r, 30, () => ({ masterBattW: -300, slaveBattW: -900, gridW: -40 }), (i, s) => cmds.push(`${s.masterW}/${s.slaveW}`));
+  assert.deepEqual([...new Set(cmds)], ['600/900'], `stabil: ${[...new Set(cmds)].join(', ')}`);
+  // Master liefert wieder voll → die Verschiebung fällt weg.
+  await g0Ticks(r, 3, () => ({ masterBattW: -600, slaveBattW: -600, gridW: -40 }));
+  sp = r.state.ctrl.sungrowEms.decision.split;
+  assert.equal(sp.transferW, 0, 'Master liefert wieder → nichts mehr zu verschieben');
+  assert.equal(sp.masterLimitW, null);
+});
+
+test('M28 Grundsatz 0: liefert ein WR unter 50 % und kann der andere den Rest nicht tragen, bleibt er drin (sein Ist-Anteil zählt)', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  // Gleicher SoC. Master kann nur 240 W (BMS), Slave nur 900 W. Haus 1240 W, PV 0 → geschlossener Regelkreis.
+  const cap = { m: 240, s: 900 };
+  const loadW = 1240;
+  let act = { m: 0, s: 0 };
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: 0, gridW: loadW, loadW });
+  await r.ems.applySetpoint(-40, 'default');
+  const totals = [];
+  for (let i = 1; i <= 90; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: -act.m, slaveBattW: -act.s, gridW: loadW - act.m - act.s, loadW });
+    await r.ems.tick();
+    // Gerät folgt dem Befehl im nächsten Takt bis zu seiner Grenze.
+    const mCmd = r.masterImage.holding.get(CMD) === EMS_CMD.DISCHARGE ? r.masterImage.holding.get(POWER) : 0;
+    const sCmd = r.slaveImage.holding.get(CMD) === EMS_CMD.DISCHARGE ? r.slaveImage.holding.get(POWER) : 0;
+    act = { m: Math.min(mCmd, cap.m), s: Math.min(sCmd, cap.s) };
+    totals.push(act.m + act.s);
+  }
+  // Am Ende liefern beide, was sie können (240 + 900): der Master wird nicht dauerhaft herausgenommen.
+  const tail = totals.slice(-20);
+  assert.ok(tail.every((x) => x === 1140), `beide liefern ihr Mögliches: ${tail.join(',')}`);
+});
+
+test('M28 Grundsatz 0: Sprung im Bedarf, beide WR fahren gleichzeitig hoch → keine Verschiebung, kein Überschwingen', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: 0, gridW: 0, loadW: 0 });
+  await r.ems.applySetpoint(-40, 'default');
+  // Last springt auf 2000 W; beide WR folgen ihrem Befehl erst nach 2 s (Rampe), dann voll.
+  const shares = [];
+  const cmdAt = [];
+  for (let i = 1; i <= 15; i += 1) {
+    r.advance(1000);
+    const m = cmdAt[i - 3]?.m ?? 0; const s = cmdAt[i - 3]?.s ?? 0; // 2 Takte Verzug
+    m28Telemetry(r, { masterBattW: -m, slaveBattW: -s, gridW: 2000 - m - s, loadW: 2000 });
+    await r.ems.tick();
+    const sp = r.state.ctrl.sungrowEms.decision.split;
+    if (sp) { shares.push(sp.transferW); cmdAt[i - 1] = { m: sp.masterW, s: sp.slaveW }; } else cmdAt[i - 1] = { m: 0, s: 0 };
+  }
+  assert.ok(shares.every((x) => x === 0), `keine Verschiebung beim gemeinsamen Hochfahren: ${shares.join(',')}`);
+});
+
 test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf, solange er Forced fährt', async () => {
   const hbPath = path.join(os.tmpdir(), `dvhub-forced-hb-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   try {

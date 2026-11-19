@@ -52,6 +52,22 @@ test('M28: Kachel zeigt „Master an der Grenze, Slave übernimmt" (und umgekehr
   assert.equal(V.view(mk(null)).master.takeover, null);
 });
 
+test('M28 Grundsatz 0: Kachel zeigt Teil-Lieferung („liefert nur X von Y W") — mit und ohne Übernahme', () => {
+  const st = (split) => ({
+    victron: { soc: 30, sungrowMasterSocPct: 30, device: { model: 'SH10RT', bdcRatedW: 10000 } },
+    sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 34, batteryPowerW: -900, pvPowerW: 0, bdcRatedW: 10000 },
+    sungrowEms: { controlMode: 'forced', owns: true, decision: { mode: 'forced', command: 'discharge', powerW: 1200, split: { strategy: 'soc-balance', charge: false, ...split } } },
+  });
+  // Master liefert 300 von 600 W, der Slave trägt die fehlenden 300 W.
+  const a = V.view(st({ masterW: 600, slaveW: 900, masterBaseW: 600, slaveBaseW: 600, masterLimitW: 300, slaveLimitW: null, transferW: 300, takeover: 'slave', takeoverReason: 'partial' }));
+  assert.equal(a.master.takeover, 'Master liefert nur 300 von 600 W, Slave übernimmt den Rest');
+  assert.equal(a.slave.takeover, null);
+  // Feldbeleg 12:31 nach der Erkennung: Master an der Grenze, Slave bekommt 1120 W, liefert aber nur 600 W.
+  const b = V.view(st({ masterW: 0, slaveW: 1120, masterBaseW: 0, slaveBaseW: 1120, masterLimitW: null, slaveLimitW: 600, transferW: 0, masterOut: 'stalled', takeover: 'slave', takeoverReason: 'stalled' }));
+  assert.equal(b.master.takeover, 'Master an der Grenze, Slave übernimmt');
+  assert.equal(b.slave.takeover, 'Slave liefert nur 600 von 1120 W');
+});
+
 test('N5: Modbus-Gesundheit je WR — Takt, Anfragen/s, Antwortzeit, Fehler 24 h, letzter Fehler', () => {
   const status = {
     victron: { soc: 50, sungrowMasterSocPct: 50, device: { model: 'SH10RT', bdcRatedW: 10000 } },

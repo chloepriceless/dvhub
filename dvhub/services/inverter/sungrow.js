@@ -467,6 +467,23 @@ const STALL_DELIVER_RATIO = 0.5;
 const STALL_DETECT_MS = 10000;
 const STALL_PROBE_MS = 60000;
 const STALL_TRACK_MAX_GAP_MS = 15000;
+// M28 Grundsatz 0 (Christin 19.11., Nachtrag 12:45): die Aufteilung rechnet mit dem, was jeder WR TATSÄCHLICH liefert.
+// Liefert ein WR bestätigt weniger als befohlen (Abweichung > max(LIMIT_ENTER_MIN_W, LIMIT_ENTER_RATIO·Befehl), über
+// LIMIT_CONFIRM_MS, gemessen erst LIMIT_SETTLE_MS nach einer Befehlserhöhung — der Slave wird nur alle 5 s gelesen), gilt
+// seine gemessene Leistung als seine Lieferfähigkeit (limitW). Das Fehlende (Anteil − limitW) geht an den anderen, bis
+// zu dessen Leistungs-/SoC-Grenze; ein selbst begrenzter Empfänger bekommt höchstens limitW + LIMIT_PROBE_W (so zeigt
+// er, ob er mehr kann, ohne hin und her zu springen). Aufgehoben wird die Begrenzung erst, wenn der WR wieder liefert,
+// was befohlen ist (Abweichung ≤ max(LIMIT_EXIT_MIN_W, LIMIT_EXIT_RATIO·Befehl)), und mehr verlangt war als seine alte
+// Grenze (Hysterese gegen Ping-Pong). Ohne neue Messung über LIMIT_STALE_MS verfällt sie.
+const LIMIT_MIN_CMD_W = 100;
+const LIMIT_ENTER_MIN_W = 100;
+const LIMIT_ENTER_RATIO = 0.1;
+const LIMIT_EXIT_MIN_W = 30;
+const LIMIT_EXIT_RATIO = 0.05;
+const LIMIT_SETTLE_MS = 1500;
+const LIMIT_CONFIRM_MS = 2000;
+const LIMIT_PROBE_W = 100;
+const LIMIT_STALE_MS = 15000;
 
 /**
  * Steht ein WR in DIESER Richtung an seiner SoC-Grenze? Entladen: SoC ≤ Boden, mit Marge > 0 schon SoC < Boden +
@@ -794,6 +811,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     revokedReason: null,  // ein Tor hat den letzten Sollwert abgelehnt
     acceptSeq: 0,         // zählt angenommene Sollwerte (Aufrufzeitpunkt) — eine ältere Ablehnung widerruft keinen neueren
     deliver: {},          // M28: Liefert-nicht-Erkennung je WR und Richtung ('master:discharge' → { underSince, stalledUntil, episode })
+    limit: {},            // M28 Grundsatz 0: gemessene Lieferfähigkeit je WR und Richtung ('slave:discharge' → { limited, limitW, … })
     splitLast: null,      // M28: zuletzt erfolgreich kommandierte Anteile im Split { direction, masterW, slaveW, at }
     logKeys: {}
   };
@@ -1316,16 +1334,63 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return st.deliver[k];
   }
   function isStalled(wr, direction, t) { return deliverEntry(wr, direction).stalledUntil > t; }
+
+  // M28 Grundsatz 0: gemessene Lieferfähigkeit je WR und Richtung (siehe LIMIT_*). Beurteilt wird nur eine NEUE Messung
+  // (Zeitstempel), und erst LIMIT_SETTLE_MS nach einer Befehlserhöhung — sonst hielte DVhub die alte, 5 s alte
+  // Slave-Messung für eine Begrenzung. Rein zustandsbehaftet, kein I/O.
+  const enterTolW = (cmdW) => Math.max(LIMIT_ENTER_MIN_W, LIMIT_ENTER_RATIO * cmdW);
+  const exitTolW = (cmdW) => Math.max(LIMIT_EXIT_MIN_W, LIMIT_EXIT_RATIO * cmdW);
+  function limitEntry(wr, direction) {
+    const k = `${wr}:${direction}`;
+    if (!st.limit[k]) st.limit[k] = { limited: false, limitW: null, underSince: 0, cmdW: 0, cmdRaisedAt: 0, lastSampleAt: 0, judgedAt: 0 };
+    return st.limit[k];
+  }
+  function judgeLimit(wr, direction, cmdW, sample, commandedAt) {
+    const L = limitEntry(wr, direction);
+    if (cmdW > L.cmdW + enterTolW(cmdW)) L.cmdRaisedAt = commandedAt;
+    L.cmdW = cmdW;
+    const at = Number(sample?.at) || 0;
+    const w = sample?.w;
+    if (!at || at === L.lastSampleAt || w == null || !Number.isFinite(Number(w))) return;
+    L.lastSampleAt = at;
+    if (at < L.cmdRaisedAt + LIMIT_SETTLE_MS) return;
+    if (!(cmdW >= LIMIT_MIN_CMD_W)) { L.underSince = 0; return; }
+    L.judgedAt = at;
+    const delivered = direction === 'charge' ? Math.max(0, Number(w)) : Math.max(0, -Number(w));
+    const deficit = cmdW - delivered;
+    const rounded = Math.round(delivered / 10) * 10;
+    if (L.limited) {
+      const prev = Number(L.limitW) || 0;
+      // Liefert wieder, was befohlen ist — und verlangt war klar mehr als die alte Grenze → Begrenzung aufgehoben.
+      if (deficit <= exitTolW(cmdW) && cmdW >= prev + LIMIT_PROBE_W / 2) { L.limited = false; L.limitW = null; L.underSince = 0; return; }
+      // Echte Lücke → die Messung ist die Lieferfähigkeit; sonst (liefert den Befehl) nur nach oben nachführen.
+      L.limitW = deficit > exitTolW(cmdW) ? rounded : Math.max(prev, rounded);
+      return;
+    }
+    if (deficit > enterTolW(cmdW)) {
+      if (!L.underSince) L.underSince = at;
+      if (at - L.underSince >= LIMIT_CONFIRM_MS) { L.limited = true; L.limitW = rounded; L.underSince = 0; }
+    } else L.underSince = 0;
+  }
+  function limitInfo(wr, direction, t) {
+    const L = st.limit[`${wr}:${direction}`];
+    if (!L || !L.limited) return { limited: false, limitW: null };
+    if (t - L.judgedAt > LIMIT_STALE_MS) { L.limited = false; L.limitW = null; return { limited: false, limitW: null }; }
+    return { limited: true, limitW: Math.max(0, Number(L.limitW) || 0) };
+  }
+
   function trackDelivery(t, measured) {
     const last = st.splitLast;
     if (!last || t - last.at > STALL_TRACK_MAX_GAP_MS) {
       for (const e of Object.values(st.deliver)) e.underSince = 0;
+      for (const L of Object.values(st.limit)) L.underSince = 0;
       return;
     }
     for (const wr of ['master', 'slave']) {
       const e = deliverEntry(wr, last.direction);
       const shareW = Math.max(0, Number(last[`${wr}W`]) || 0);
-      const m = measured[wr];
+      judgeLimit(wr, last.direction, shareW, measured[wr], last.at);
+      const m = measured[wr]?.w;
       if (!(shareW > STALL_MIN_SHARE_W) || m == null || !Number.isFinite(Number(m))) { e.underSince = 0; continue; }
       const deliveredW = last.direction === 'charge' ? Math.max(0, Number(m)) : Math.max(0, -Number(m));
       const dirText = last.direction === 'charge' ? 'Lade' : 'Entlade';
@@ -1341,6 +1406,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       if (t - e.underSince < STALL_DETECT_MS) continue;
       e.underSince = 0;
       e.stalledUntil = t + STALL_PROBE_MS;
+      e.stallDeliveredW = Math.round(deliveredW); // was er beim Erkennen noch lieferte (Grundsatz 0, stalledOut)
       if (!e.episode) {
         e.episode = true;
         const other = wr === 'master' ? 'slave' : 'master';
@@ -1418,7 +1484,17 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const masterBattAt = Number(vic.fieldUpdatedAt?.batteryPowerW) || 0;
     const masterMeasW = vic.sungrowMasterBatteryW != null && Number.isFinite(Number(vic.sungrowMasterBatteryW))
       && masterBattAt > 0 && t - masterBattAt <= opts.telemetryMaxAgeMs ? Number(vic.sungrowMasterBatteryW) : null;
-    trackDelivery(t, { master: masterMeasW, slave: second.batteryPowerW });
+    // Messzeitpunkt je WR (Grundsatz 0 beurteilt nur neue Messungen): Master = Poll-Stempel der Akku-Leistung, Slave =
+    // Lesetakt des Begleitdienstes (state.sungrowSecond.updatedAt, alle 5 s).
+    const slaveSampleAt = Number(state.sungrowSecond?.updatedAt) || 0;
+    trackDelivery(t, { master: { w: masterMeasW, at: masterMeasW == null ? 0 : masterBattAt }, slave: { w: second.batteryPowerW, at: slaveSampleAt } });
+    const mLim = limitInfo('master', direction, t);
+    const sLim = limitInfo('slave', direction, t);
+    // „Liefert nicht" nimmt einen WR nur heraus, wenn der andere selbst nicht begrenzt ist — oder wenn der hängende WR
+    // praktisch nichts liefert. Sonst trägt er weiter seinen Ist-Anteil (Grundsatz 0): ihn herauszunehmen kostete genau
+    // das, was er noch liefert, wenn der andere den Rest nicht tragen kann.
+    const stalledOut = (wr, other) => isStalled(wr, direction, t)
+      && (!other.limited || (Number(deliverEntry(wr, direction).stallDeliveredW) || 0) < LIMIT_MIN_CMD_W);
     const { masterW, slaveW, slaveUncommanded, masterOut, slaveOut } = splitStrategyShares(strategy, {
       powerW: decision.powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
       masterCapacityWh: optMaster.batteryCapacityWh, slaveCapacityWh: si.batteryCapacityWh,
@@ -1426,7 +1502,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       ratioMasterPct: secondCfg.ratioMasterPct, minPowerW: opts.minPowerW,
       socDeadbandPct: secondCfg.socBalanceDeadbandPct,
       dischargeMarginPct: SUNGROW_SPLIT_DISCHARGE_MARGIN_PCT,
-      masterStalled: isStalled('master', direction, t), slaveStalled: isStalled('slave', direction, t),
+      masterStalled: stalledOut('master', sLim), slaveStalled: stalledOut('slave', mLim),
     });
     const mk = (w) => (w >= opts.minPowerW ? { mode: 'forced', command: decision.command, powerW: w, reason: decision.reason } : { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason });
     // M27 (Christin 19.11., ersetzt den Slave-Stopp aus M16): Auch während einer Sperre (Negativpreis, Direktvermarkter,
@@ -1437,9 +1513,27 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // hingenommen. Bekannte Lücke (bewusst nicht gebaut): die Slave-PV folgt der Master-Grenze nicht (13090).
     // Slave nicht kommandieren bei master-only ODER Notladung (uncontrollable) → nur best effort in Self halten.
     const skipSlave = slaveUncommanded || slaveEmergency;
-    const slaveDecision = skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveW);
-    let masterDecision = mk(masterW);
-    let effMasterW = masterW; let effSlaveW = slaveW; let slaveFellBack = false; let slaveWrote = false;
+    // M28 Grundsatz 0 (Christin 19.11.): das Fehlende eines WR, der bestätigt weniger liefert als befohlen (Anteil −
+    // gemessene Lieferfähigkeit), geht an den anderen — bis zu dessen Leistungsgrenze (ein selbst begrenzter Empfänger:
+    // seine Lieferfähigkeit + LIMIT_PROBE_W). Kein Empfänger an der SoC-Grenze/Marge, keiner, der „liefert nicht" hängt,
+    // kein Slave in master-only/Notladung. Nur EINE Richtung je Takt und nur, wenn der Empfänger selbst nichts schuldig
+    // bleibt — so schiebt DVhub nichts hin und her. Der begrenzte WR behält seinen Befehl (er trägt seinen Ist-Anteil und
+    // zeigt so, wenn er wieder mehr kann). Netzbezug bleibt erst, wenn beide nicht mehr können.
+    const shortOf = (lim, baseW) => (lim.limited ? Math.max(0, baseW - lim.limitW) : 0);
+    const roomOf = (lim, maxW, baseW) => Math.max(0, (lim.limited ? Math.min(maxW, lim.limitW + LIMIT_PROBE_W) : maxW) - baseW);
+    const masterShortW = shortOf(mLim, masterW);
+    const slaveShortW = shortOf(sLim, slaveW);
+    let masterCmdW = masterW; let slaveCmdW = slaveW; let transferW = 0; let transferTo = null;
+    if (masterShortW > 0 && slaveShortW === 0 && !skipSlave && !slaveOut && !isStalled('slave', direction, t)) {
+      transferW = Math.min(masterShortW, roomOf(sLim, slaveMax, slaveW));
+      if (transferW > 0) { slaveCmdW = slaveW + transferW; transferTo = 'slave'; }
+    } else if (slaveShortW > 0 && masterShortW === 0 && !masterOut && !isStalled('master', direction, t)) {
+      transferW = Math.min(slaveShortW, roomOf(mLim, masterMax, masterW));
+      if (transferW > 0) { masterCmdW = masterW + transferW; transferTo = 'master'; }
+    }
+    const slaveDecision = skipSlave ? { mode: 'self', command: 'stop', powerW: 0, reason: decision.reason } : mk(slaveCmdW);
+    let masterDecision = mk(masterCmdW);
+    let effMasterW = masterCmdW; let effSlaveW = slaveCmdW; let slaveFellBack = false; let slaveWrote = false;
     // Befund 2 (16.11., Fable-Review, Repro belegt): Übernimmt der Master den Slave-Anteil (Slave-Fehler), muss er seinen
     // EIGENEN SoC-Boden/Deckel einhalten — genau wie splitStrategyShares, das mMax bei erreichter Grenze auf 0 klemmt
     // (atLimit). Der Fallback nahm nur die Leistungsgrenze (masterMax) und ließ den Master unter seinem Min-SoC entladen
@@ -1483,7 +1577,17 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // M28: warum ein WR keinen Anteil bekommt ('soc' = an der SoC-Grenze inkl. Entlade-Marge, 'stalled' = liefert
       // seinen Anteil nicht) und wer übernimmt (Kachel: „Master an der Grenze, Slave übernimmt").
       masterOut: masterOut || null, slaveOut: slaveOut || null,
-      takeover: masterOut && effSlaveW > 0 ? 'slave' : (slaveOut && effMasterW > 0 ? 'master' : null),
+      // M28 Grundsatz 0: Anteil nach Strategie (Base), gemessene Lieferfähigkeit (nur wenn begrenzt) und das an den
+      // anderen verschobene Fehlende. masterW/slaveW oben = tatsächlicher Befehl (Base + Übernahme).
+      masterBaseW: masterW, slaveBaseW: slaveW,
+      masterLimitW: mLim.limited ? mLim.limitW : null, slaveLimitW: sLim.limited ? sLim.limitW : null,
+      transferW: transferTo && !slaveFellBack ? transferW : 0,
+      ...(() => {
+        if (masterOut && effSlaveW > 0) return { takeover: 'slave', takeoverReason: masterOut };
+        if (slaveOut && effMasterW > 0) return { takeover: 'master', takeoverReason: slaveOut };
+        if (transferTo && !slaveFellBack) return { takeover: transferTo, takeoverReason: 'partial' };
+        return { takeover: null, takeoverReason: null };
+      })(),
     };
     // M28: die jetzt kommandierten Anteile für die Liefert-nicht-Erkennung im nächsten Takt (nach bestätigtem Write
     // unten gültig; scheitert der Master, verworfen).
@@ -1508,7 +1612,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       st.error = null; st.logKeys = {};
       st.splitLast = commanded;
       st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
-      pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, strategy, slaveFellBack, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
+      pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, transferW: splitDetail.transferW, strategy, slaveFellBack, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
       publish();
       return { ok: true, split: true, decision, masterW: effMasterW, slaveW: effSlaveW, slaveFellBack };
     } catch (e) {
