@@ -184,7 +184,8 @@ könnte und wie lange ein Lauf dann **auf genau diesem Gerät** etwa dauert.
 ## Nachvollziehbarkeit je Slot
 
 - `GET /api/price/outlook`: Prognose-Stunden hinter den festen Preisen (P10/P50/P90 in ct/kWh), Zustand, Stand,
-  „nicht verfügbar seit“, dazu der Preisschwanz des letzten EOS-Pushs.
+  „nicht verfügbar seit“, dazu der Preisschwanz des letzten EOS-Pushs. Dazu `importSlots`: die Bezugspreis-Prognose
+  (siehe unten).
 - `GET /api/eos/plan`: `priceTail` (Quelle, Stand, ab wann, Vorausschau, Begrenzung). Plan-Zeilen ab dem ersten
   Prognose-Slot tragen `priceSource: 'residual_load'`.
 - Log `eos_forecast_bridge`:
@@ -200,10 +201,35 @@ könnte und wie lange ein Lauf dann **auf genau diesem Gerät** etwa dauert.
   Linie, mit einem hellen Band P10–P90 und dem Bereich „Prognose“. Der Tooltip zeigt ganze Cent mit Spanne und
   „Börsenpreis noch nicht fest“. Prognose-Slots lassen sich nicht für Zeitpläne auswählen. Darunter steht, bis wann
   die Prognose reicht und von wann sie ist, oder seit wann sie fehlt.
+- **Bezugspreis-Prognose (19.11.2026):** Die Bezugspreis-Linie läuft im Prognosebereich weiter, in derselben Farbe,
+  feiner gestrichelt. Der Tooltip nennt „Bezug (Prognose)“ in ganzen Cent mit Spanne. Hängt der Bezugspreis nicht von
+  der Börse ab (fester Preis, schon bekannter Anbieterpreis), steht der genaue Preis da, ohne Spanne. Die Zeile unter
+  der Kurve endet dann mit „Bezugspreis-Prognose nach deinem Tarif“. Ein Band gibt es nur für die Börse; zwei
+  Bänder übereinander wären schlecht lesbar.
 - **EOS-Fahrplan:** Unter dem Diagramm stehen Vorausschau und Quelle bzw. die Warnung. Ein Plan, der in
   Prognosepreise reicht, ist als „Preisprognose“ hinterlegt. „Laut EOS-Plan“ nennt den Bereich ebenfalls
   „Preisprognose“.
 - **Integrationen → DV-EOS:** Zeile „Preisprognose“ (aktuell, gespeichert, nicht verfügbar seit …, nur für DE-LU).
+
+## Bezugspreis-Prognose
+
+Auf die Börsenpreis-Prognose setzt DVhub den Bezugspreis auf: Was kostet der Strom aus dem Netz in den
+Prognose-Stunden? (`importPriceOutlookSlots` in `services/optimizer/price-outlook.js`)
+
+- **Rechnung wie für EOS:** `resolveUserImportPriceCtKwhForSlot` mit `userEnergyPricing` und der Zeitzone
+  `optimizer.timezone` (dieselbe Quelle wie `importCtOf` in `eos-forecast-bridge.js`). Das deckt fest, dynamisch
+  (Börse + Bestandteile, Modul 3 ersetzt im Fenster das Netzentgelt), Anbieter (gespeicherter Preis, sonst die
+  angelernte Gerade aus dem Börsenpreis) und Preis-Zeiträume ab. P50 des Bezugs ist genau der Bezugspreis, den EOS
+  für denselben Slot im Schwanz bekommt.
+- **Je Viertelstunde:** Modul-3-Fenster und Zeitraumgrenzen (Ortsdatum) liegen nicht auf vollen Stunden.
+- **Band:** P10/P90 des Bezugs kommen aus P10/P90 der Börse. Bei festem Preis fällt das Band auf den Preis zusammen.
+  Das ist richtig und wird nicht versteckt. Ohne Börsen-Band gibt es kein Bezugs-Band. Fällt der Bezugspreis mit
+  steigender Börse (Anbieter-Gerade mit negativer Steigung), tauschen die Enden, unten bleibt ≤ oben.
+- **Kein Bezugspreis auflösbar** (z. B. fester Tarif ohne Betrag): `null`. Anders als EOS fällt die Anzeige nicht
+  auf den Börsenpreis zurück, denn der wäre als Bezugspreis falsch.
+- **Zwischenspeicher:** Der Leitstand fragt alle 3 s. Das Ergebnis gilt für dieselbe Prognose, dasselbe Ende der
+  festen Preise, dieselbe Viertelstunde, Zeitzone, Preis-Einstellungen und Anbieter-Gerade, höchstens 60 s. Neu
+  geholte Anbieterpreise erscheinen also spätestens nach einer Minute.
 
 ## Wertgrundlage des E-Autos („Max-Ladestand wenn günstig“)
 

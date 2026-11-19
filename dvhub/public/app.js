@@ -765,6 +765,9 @@ function priceChartMetaText(status, outlook) {
   if (o && (o.status === 'live' || o.status === 'cached') && Array.isArray(o.hours) && o.hours.length) {
     const last = o.hours[o.hours.length - 1];
     text += ` | Preisprognose (gestrichelt) liegt vor bis ${dm(Number(last.ts) + 3600000)}, Stand ${dm(o.issuedAt)}${o.status === 'cached' ? ' (gespeichert, neue nicht abrufbar)' : ''}`;
+    // Bezugspreis-Prognose (19.11.2026): nur nennen, wenn sich ein Bezugspreis ergibt.
+    const hasImport = Array.isArray(o.importSlots) && o.importSlots.some((s) => s && s.p50 !== null && Number.isFinite(Number(s.p50)));
+    if (hasImport) text += ' · Bezugspreis-Prognose nach deinem Tarif';
   } else if (o && o.status === 'unavailable' && o.unavailableSince) {
     text += ` | Preisprognose nicht verfügbar seit ${dm(o.unavailableSince)}`;
   }
@@ -775,7 +778,11 @@ function priceChartMetaText(status, outlook) {
  * Prognose-Zeilen für die Preiskurve (1.0.11): Stunden aus /api/price/outlook
  * hinter dem letzten festen Preis, im Raster der festen Preise (15 oder 60 min),
  * bis jetzt + 36 h. Preise in ct/kWh (Börse).
- * @returns {Array<{ts:number, ct_kwh:null, forecast:true, p50:number, p10:number|null, p90:number|null}>}
+ * Seit 19.11.2026 mit Bezugspreis-Prognose (importP50/P10/P90, ct/kWh brutto)
+ * aus `importSlots` je Viertelstunde — Wert der Viertelstunde am Zeilenbeginn,
+ * wie der feste Bezugspreis je Slot; fehlt er, null.
+ * @returns {Array<{ts:number, ct_kwh:null, forecast:true, p50:number, p10:number|null, p90:number|null,
+ *   importP50:number|null, importP10:number|null, importP90:number|null}>}
  */
 function buildPriceForecastRows(realData, outlook, nowTs) {
   const hours = Array.isArray(outlook?.hours) ? outlook.hours : [];
@@ -788,20 +795,68 @@ function buildPriceForecastRows(realData, outlook, nowTs) {
   const realEnd = ts[ts.length - 1] + stepMs;
   const winTo = Number(nowTs) + 36 * 3600000;
   const byHour = new Map(hours.map((h) => [Number(h.ts), h]));
+  const importByTs = new Map((Array.isArray(outlook?.importSlots) ? outlook.importSlots : [])
+    .filter((s) => s && Number.isFinite(Number(s.ts)))
+    .map((s) => [Number(s.ts), s]));
+  const num = (v) => (v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null);
   const out = [];
   for (let t = realEnd; t < winTo; t += stepMs) {
     const h = byHour.get(t - (t % 3600000));
     if (!h || !Number.isFinite(Number(h.p50))) break; // Lücke: Prognose endet
+    const imp = importByTs.get(t);
+    const importP50 = num(imp?.p50);
     out.push({
       ts: t,
       ct_kwh: null,
       forecast: true,
       p50: Number(h.p50),
       p10: Number.isFinite(Number(h.p10)) && h.p10 !== null ? Number(h.p10) : null,
-      p90: Number.isFinite(Number(h.p90)) && h.p90 !== null ? Number(h.p90) : null
+      p90: Number.isFinite(Number(h.p90)) && h.p90 !== null ? Number(h.p90) : null,
+      importP50,
+      importP10: importP50 === null ? null : num(imp?.p10),
+      importP90: importP50 === null ? null : num(imp?.p90)
     });
   }
   return out;
+}
+
+/**
+ * Bezugspreis-Reihe der Preiskurve: feste Slots aus dem Preisvergleich
+ * (/api/status userEnergyPricing.slots), Prognose-Zeilen aus der
+ * Bezugspreis-Prognose (importP50). Fehlt ein Wert: null (Lücke).
+ */
+function priceChartImportSeries(data, comparisons) {
+  const byTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
+  return (Array.isArray(data) ? data : []).map((d) => {
+    const v = d?.forecast ? d.importP50 : byTs.get(Number(d?.ts))?.importPriceCtKwh;
+    return v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null;
+  });
+}
+
+/**
+ * Tooltip-Zeilen für eine Prognose-Zeile der Preiskurve: Börse und — seit
+ * 19.11.2026 — Bezug, je ganze Cent mit Spanne (keine Scheingenauigkeit).
+ * Hängt der Bezugspreis nicht von der Börse ab (fester Preis, bekannter
+ * Anbieterpreis: Spanne fällt zusammen), steht er genau da, ohne Spanne.
+ */
+function priceForecastTooltipLines(row) {
+  const r0 = (v) => Math.round(Number(v));
+  const has = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+  const lines = [`Börse (Prognose): ≈ ${r0(row.p50)} ct/kWh`];
+  if (has(row.p10) && has(row.p90)) lines.push(`Spanne: ${r0(row.p10)}–${r0(row.p90)} ct/kWh`);
+  if (has(row.importP50)) {
+    if (has(row.importP10) && has(row.importP90)) {
+      if (Math.abs(Number(row.importP90) - Number(row.importP10)) < 0.005) {
+        lines.push(`Bezug (Prognose): ${fmtCt(row.importP50, 2)} (unabhängig von der Börse)`);
+      } else {
+        lines.push(`Bezug (Prognose): ≈ ${r0(row.importP50)} ct/kWh (${r0(row.importP10)}–${r0(row.importP90)})`);
+      }
+    } else {
+      lines.push(`Bezug (Prognose): ≈ ${r0(row.importP50)} ct/kWh`);
+    }
+  }
+  lines.push('Börsenpreis noch nicht fest');
+  return lines;
 }
 
 function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = [], sunTimes = null, optimizerSlotTimestamps = [], priceOutlook = null) {
@@ -924,11 +979,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
 
   const labels = data.map(d => new Date(d.ts));
   const prices = data.map(d => (d.forecast ? null : Number(d.ct_kwh)));
-  const importPrices = data.map(d => {
-    const c = comparisonByTs.get(Number(d.ts));
-    const v = Number(c?.importPriceCtKwh);
-    return Number.isFinite(v) ? v : null;
-  });
+  // Bezugspreis: feste Slots aus dem Preisvergleich, im Prognosebereich die
+  // Bezugspreis-Prognose (19.11.2026) — dieselbe Linie läuft weiter.
+  const importPrices = priceChartImportSeries(data, comparisons);
 
   // Build forecast series (interpolation from hourly to 15-min)
   let solarFc = data.map(() => null);
@@ -1074,6 +1127,10 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   }
 
   if (hasImport) {
+    // Im Prognosebereich (Segmente, die in einer Prognose-Zeile enden) läuft
+    // die Linie in derselben Farbe weiter, feiner gestrichelt und etwas
+    // blasser. Eine Linie, ein Legenden-Eintrag: Ausblenden wirkt auf beides.
+    const importForecastColor = hexToRgba(chartImport, 0.5);
     datasets.push({
       label: 'Bezugspreis',
       type: 'line',
@@ -1085,6 +1142,10 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       pointHoverRadius: 3,
       fill: false,
       spanGaps: true,
+      segment: {
+        borderDash: (segCtx) => (data[segCtx?.p1DataIndex]?.forecast ? [3, 4] : undefined),
+        borderColor: (segCtx) => (data[segCtx?.p1DataIndex]?.forecast ? importForecastColor : undefined)
+      },
       yAxisID: 'y',
       order: 1
     });
@@ -1434,11 +1495,8 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             if (!row) { tt.style.display = 'none'; return; }
             const parts = [fmtDmHm(row.ts)];
             if (row.forecast) {
-              // Prognose: ganze Cent, mit Spanne — keine Scheingenauigkeit.
-              const r0 = (v) => Math.round(Number(v));
-              parts.push(`Prognose: ≈ ${r0(row.p50)} ct/kWh`);
-              if (row.p10 != null && row.p90 != null) parts.push(`Spanne: ${r0(row.p10)}–${r0(row.p90)} ct/kWh`);
-              parts.push('Börsenpreis noch nicht fest');
+              // Prognose: Börse und Bezug in ganzen Cent, mit Spanne — keine Scheingenauigkeit.
+              parts.push(...priceForecastTooltipLines(row));
             } else {
               parts.push(`Börse: ${fmtCt(row.ct_kwh, 2)}`);
             }
@@ -1457,7 +1515,13 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 parts.push(`${dp.dataset.label}: ${Math.abs(Number(dp.raw)).toFixed(1)} kW`);
               }
             }
-            tt.innerHTML = parts.map(p => `<div class="tooltip-row">${escapeHtml(p)}</div>`).join('');
+            // Zeilen als Text-Knoten (textContent), kein HTML aus Daten.
+            tt.replaceChildren(...parts.map((p) => {
+              const line = document.createElement('div');
+              line.className = 'tooltip-row';
+              line.textContent = p;
+              return line;
+            }));
             tt.style.display = 'block';
             // 20px-Offset zur ECHTEN Maus (Operator-Wunsch). Fällt auf das
             // Chart-Caret zurück, falls noch keine Cursor-Position bekannt ist.
@@ -4751,6 +4815,8 @@ const dashboardApi = {
   getChartHighlightSets,
   collectOptimizerSlotTimestamps,
   buildPriceForecastRows,
+  priceChartImportSeries,
+  priceForecastTooltipLines,
   priceChartMetaText,
   groupScheduleRulesForDashboard,
   inferChartSlotMs,
