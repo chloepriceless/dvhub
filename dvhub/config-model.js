@@ -4196,6 +4196,24 @@ function buildFieldDefinitions() {
       help: 'Legt global fest, ob DVhub die Marktprämie mit Jahres- oder Monatsmarktwerten berechnet.'
     },
     {
+      // 19.11.2026 (Christin): anzulegende Werte zentral von dvhub.online, wie die
+      // Börsenpreise wählbar. Ohne eigene Wahl folgt die Quelle einer öffentlichen
+      // Preisquelle (migrateApplicableValueSource) — wer dvhub.online meidet, bleibt dabei.
+      section: 'pricing',
+      group: 'marketPremium',
+      groupLabel: 'PV-Anlagen für Marktprämie',
+      groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung für den gewichteten anzulegenden Wert.',
+      path: 'referenceData.applicableValueSource',
+      label: 'Quelle der anzulegenden Werte',
+      type: 'select',
+      default: 'dvhub',
+      options: [
+        { value: 'dvhub', label: 'DVhub (dvhub.online)' },
+        { value: 'public', label: 'Direkt von der Bundesnetzagentur' }
+      ],
+      help: 'Woher DVhub die anzulegenden Werte der Bundesnetzagentur (je Inbetriebnahmemonat und Leistungsstufe) für Marktprämie und Einspeisevergütung holt. DVhub: fertig geprüft von dvhub.online (eine kleine Anfrage pro Woche); ist dvhub.online nicht erreichbar, holt DVhub sie automatisch direkt bei der Bundesnetzagentur. Direkt: ohne dvhub.online, DVhub lädt dann die Archivseite und die Veröffentlichungen mit den Werten (heute 7 Dateien) selbst. Geholt wird nur, wenn unten eine PV-Anlage mit Leistung und Inbetriebnahme eingetragen ist, danach wöchentlich.'
+    },
+    {
       section: 'pricing',
       group: 'marketPremium',
       groupLabel: 'PV-Anlagen f\u00fcr Marktpr\u00e4mie',
@@ -5555,6 +5573,11 @@ export function createDefaultConfig() {
       priceOutlook: 'auto',
       priceApiUrl: 'https://dvhub.online'
     },
+    // Referenzdaten (19.11.2026): Quelle der anzulegenden Werte der BNetzA —
+    // 'dvhub' (dvhub.online, Rückfall direkt) | 'public' (direkt).
+    referenceData: {
+      applicableValueSource: 'dvhub'
+    },
     // Nur noch die StatsForecast-Lastprognose (services/forecast/load-forecast.js).
     // Der Name 'ml' bleibt, damit bestehende Configs unverändert weiter gelten;
     // die früheren ML-Schlüssel (mlEnabled, mlModelDir, mlTraining*) sind entfallen
@@ -6605,6 +6628,18 @@ function migrateLegacyPriceApiUrl(raw) {
   }
 }
 
+// Anzulegende Werte (19.11.2026): Ohne eigene Wahl gilt 'dvhub'. Wer seine
+// Börsenpreise bewusst „Öffentlich (ohne dvhub.online)“ holt, soll nach dem
+// Update nicht plötzlich dvhub.online fragen — er bekommt 'public' (sichtbar in
+// den Einstellungen, gespeichert beim nächsten Speichern). Eine eigene Wahl
+// bleibt unberührt; andere Configs bekommen keinen neuen Schlüssel.
+function migrateApplicableValueSource(raw) {
+  if (raw?.epex?.priceSource !== 'public') return;
+  if (raw.referenceData != null && !isPlainObject(raw.referenceData)) return;
+  if (raw.referenceData?.applicableValueSource != null && raw.referenceData.applicableValueSource !== '') return;
+  raw.referenceData = { ...(raw.referenceData || {}), applicableValueSource: 'public' };
+}
+
 // E-Auto-Wochenplan (ev-departure.js migrateWeeklyConfig): seit T-0427 ist die
 // Zeile der Tag der ABFAHRT (evWeeklyDepartures). Ein alter Plan (evWeeklyPlan,
 // Zeile = Tag der Ankunft; auch noch mit Ziel targetValue in der Einheit von
@@ -6697,6 +6732,7 @@ function sanitizeRawConfig(rawInput) {
   migrateSetpointWatchdog(raw);
   migrateDatenspendeClientType(raw);
   migrateLegacyPriceApiUrl(raw);
+  migrateApplicableValueSource(raw);
   migrateEvWeeklyPlan(raw);
   migratePvTotalKwp(raw);
   migrateSolcastEnabled(raw);

@@ -91,6 +91,30 @@ test('N5: Modbus-Gesundheit je WR — Takt, Anfragen/s, Antwortzeit, Fehler 24 h
   assert.match(vw.slave.health, /Fehler 24 h 0/);
 });
 
+// N3 (Feld 19.11.): Der Slave hat keinen eigenen Regeltakt. DVhub schreibt ihn in jedem Master-Schritt mit (stepSplit →
+// applyDirectCommand); seine Messwerte (SoC, Akku, PV) liest der Begleitdienst nur alle tickMs. Die Kachel zeigt den
+// Master-Takt als Regelzyklus UND den Lesetakt — nicht den eigenen (ungenutzten) Rechenwert des Slave-Aktuators.
+test('N3: Slave-Takt = Regelzyklus des Masters + eigener Lesetakt, beide benannt', () => {
+  const status = {
+    victron: { soc: 50, sungrowMasterSocPct: 50, device: { model: 'SH10RT', bdcRatedW: 10000 } },
+    sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 40, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 10000, tickMs: 5000 },
+    sungrowEms: { controlMode: 'forced', owns: true, regulateEveryMs: 1000, decision: { mode: 'forced', command: 'discharge', powerW: 600, split: { masterW: 300, slaveW: 300, strategy: 'soc-balance' } } },
+    // Feldstand vor N3: der Slave-Aktuator meldete seinen eigenen Rechenwert (5000), der nichts taktet.
+    sungrowEmsSlave: { controlMode: 'forced', owns: true, regulateEveryMs: 5000, decision: { mode: 'forced', command: 'discharge', powerW: 300 } },
+  };
+  const vw = V.view(status);
+  assert.equal(vw.slave.regulate, 'Regelzyklus 1000 ms (gleicher Takt wie Master) · Lesetakt 5000 ms');
+  assert.equal(vw.master.regulate, 'Regelzyklus 1000 ms', 'Master unverändert');
+  // Ohne Lesetakt nur der Regelzyklus; ohne beides ein Strich.
+  assert.equal(V.view({ ...status, sungrowSecond: { ...status.sungrowSecond, tickMs: null } }).slave.regulate, 'Regelzyklus 1000 ms (gleicher Takt wie Master)');
+  assert.equal(V.view({ ...status, sungrowSecond: { ...status.sungrowSecond, tickMs: null }, sungrowEms: { ...status.sungrowEms, regulateEveryMs: null } }).slave.regulate, '–');
+  // render: die Slave-EMS-Zeile trägt beide Werte.
+  const els = {};
+  const doc = { getElementById: (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false })) };
+  V.render(status, doc);
+  assert.match(els.sungrowWrSlaveEms.textContent, /Takt Regelzyklus 1000 ms \(gleicher Takt wie Master\) · Lesetakt 5000 ms$/);
+});
+
 test('External-Split: je WR EIGENER Anteil (nicht Summe), Akku mit Richtung, wirksame Grenze, Countdown in Modus 3', () => {
   const status = {
     victron: {

@@ -252,6 +252,31 @@ test('Forced-Split B2: Slave-Rücklesung prüft NUR Befehl/Leistung (Modus folgt
   assert.equal(r.state.ctrl.sungrowEmsSlave?.owns, true, 'DVhub merkt sich den Slave-Besitz (für Not-Halt)');
 });
 
+// N3 (Feld 19.11.): Der Slave hat keinen eigenen Regeltakt. tick()/applySetpoint laufen nur am Master; der Slave wird in
+// JEDER Master-Runde gelesen und kommandiert (stepSplit → applyDirectCommand). Sein Status meldet darum den Takt des
+// Masters, nicht den eigenen Rechenwert aus sungrow.secondInverter.regulateEveryMs (der taktet nichts).
+test('N3: Slave-Status meldet den Regeltakt des Masters — der Slave wird in jeder Master-Runde geführt', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.cfg.sungrow.secondInverter.regulateEveryMs = 5000; // eigener Slave-Wert: wirkt nicht auf den Takt
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.ems.status().regulateEveryMs, 1000, 'Master-Takt 1 s');
+  const slave = r.slaveEms.status();
+  assert.equal(slave.regulateEveryMs, 1000, 'Slave meldet den Master-Takt, nicht 5000');
+  assert.equal(slave.regulateFollowsMaster, true);
+  assert.equal(r.ems.status().regulateFollowsMaster, false, 'der Master hat seinen eigenen Takt');
+  // Beleg für den Takt: in jeder 1-s-Runde des Masters werden die Slave-Steuerregister (13050–13052) gelesen.
+  const slaveReads = () => r.slaveT.reads.filter((x) => x.fc === 3 && x.address === MODE).length;
+  for (let i = 1; i <= 3; i += 1) {
+    const before = slaveReads();
+    r.advance(1000);
+    const t = await r.ems.tick();
+    assert.equal(t.idle, undefined, `Runde ${i}: Master regelt (kein Leerlauf)`);
+    assert.ok(slaveReads() > before, `Runde ${i}: Slave in der Master-Runde geführt`);
+  }
+});
+
 test('Absicherung C: releaseControl (Shutdown) nimmt den Einzel-WR sicher zurück — Modus 0 + Befehl 0xCC', async () => {
   const r = rig({ controlMode: 'forced' });
   await r.ems.applySetpoint(-5000, 'rule:abend'); // Entladen, Modus 2, owns

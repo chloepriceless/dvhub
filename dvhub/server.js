@@ -47,7 +47,11 @@ import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
 import { createStorageGuard } from './services/storage-guard.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
-import { createBundesnetzagenturApplicableValueService } from './bundesnetzagentur-applicable-values.js';
+import {
+  APPLICABLE_VALUE_TICK_MS,
+  applicableValuesNeeded,
+  createBundesnetzagenturApplicableValueService
+} from './bundesnetzagentur-applicable-values.js';
 import { createPvgisExpectedProductionService } from './pvgis-expected-production.js';
 import { restoreRedacted, redactUrlCreds } from './config-redaction.js';
 import { readAppVersionInfo } from './app-version.js';
@@ -487,8 +491,18 @@ let historyImportManager = null;
 let historyRuntime = null;
 let historyApi = null;
 let energyChartsMarketValueService = null;
+// Anzulegende Werte (BNetzA): Quelle wählbar (Standard dvhub.online mit Rückfall
+// direkt), nur mit eingetragener PV-Anlage, wöchentlich ohne Neustart (Takt
+// unten beim Start). Holen darf nur der Laufzeit-Prozess; der Web-Prozess liest
+// den Cache nach (getrennter Betrieb).
 const applicableValueService = createBundesnetzagenturApplicableValueService({
-  cachePath: APPLICABLE_VALUES_CACHE_PATH
+  cachePath: APPLICABLE_VALUES_CACHE_PATH,
+  getSource: () => cfg.referenceData?.applicableValueSource,
+  getCentralBaseUrl: () => cfg.epex?.priceApiUrl || 'https://dvhub.online',
+  isNeeded: () => applicableValuesNeeded(cfg),
+  getPvPlants: () => cfg.userEnergyPricing?.pvPlants,
+  ownsRefresh: IS_RUNTIME_PROCESS,
+  pushLog: (event, details, level) => pushLog(event, details, level)
 });
 // WS3 (2026-05-30): PVGIS expected-production cache for the curtailment KPI.
 const PVGIS_EXPECTED_CACHE_PATH = path.join(
@@ -644,6 +658,12 @@ function saveAndApplyConfig(nextRawConfig, opts = {}) {
   // sofort folgen lassen, nicht erst beim nächsten Lizenz-Revalidate. Beim
   // allerersten Speichern während des Boots gibt es den Dienst noch nicht.
   try { licenseService.syncProActive(); } catch { /* Dienst noch nicht da */ }
+  // Anzulegende Werte: Quelle umgestellt oder erste PV-Anlage eingetragen →
+  // gleich prüfen, nicht erst beim nächsten 15-min-Takt (der Dienst holt nur,
+  // wenn fällig; im Web-Prozess des getrennten Betriebs ohne Wirkung).
+  setTimeout(() => {
+    try { void applicableValueService.tick(); } catch { /* Dienst noch nicht da (Speichern beim Boot) */ }
+  }, 0).unref?.();
   const changedPaths = collectChangedPaths(previousRaw, rawCfg);
   const restart = detectRestartRequired(changedPaths);
   return {
@@ -2109,6 +2129,8 @@ ctx.getSolarMarketValueSummary = ({ year }) =>
   energyChartsMarketValueService?.getSolarMarketValueSummary?.({ year });
 ctx.getApplicableValueSummary = ({ year, pvPlants }) =>
   applicableValueService?.getApplicableValueSummary?.({ year, pvPlants });
+// Quelle und Stand der anzulegenden Werte für die Einstellungen (GET /api/config).
+ctx.getApplicableValueStatus = () => applicableValueService?.getStatus?.() ?? null;
 // Preisschwanz für EOS (1.0.11): Residuallast-Prognose von dvhub.online,
 // letzte gültige auf der Platte (übersteht Neustarts, höchstens 48 h alt).
 // Kennung ohne persönliche Daten: nur Programm und Version.
@@ -2650,9 +2672,11 @@ const telemetryReady = (async () => {
   if (IS_WEB_PROCESS) ctx.dbBackupScheduler.start();
   await refreshTelemetryStatus();
   if (IS_RUNTIME_PROCESS) {
-    applicableValueService.refresh().catch((error) => {
-      pushLog('applicable_value_refresh_error', { error: error.message });
-    });
+    // Anzulegende Werte: beim Start nur, wenn fällig (kein Stand, älter als eine
+    // Woche, Quelle umgestellt …), dann alle 15 min prüfen. Fehler loggt der
+    // Dienst selbst (warn mit gültigem Stand, error ohne Stand bei PV-Anlage).
+    void applicableValueService.tick();
+    safeInterval('applicable-values.refresh', () => applicableValueService.tick(), APPLICABLE_VALUE_TICK_MS);
     pvgisExpectedProductionService.refresh()
       .then((r) => { if (r && r.ok === false && r.error) pushLog('pvgis_expected_refresh_skip', r); })
       .catch((error) => { pushLog('pvgis_expected_refresh_error', { error: error.message }); });

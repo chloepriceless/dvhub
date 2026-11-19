@@ -2605,8 +2605,15 @@ export function createApiRoutes(ctx) {
       meta: configMetaPayload(),
       config: redactConfig(ctx.getRawCfg()),
       effectiveConfig: redactConfig(cfg),
-      definition: definitionWithManufacturerOptions()
+      definition: definitionWithManufacturerOptions(),
+      // Quelle und Stand der anzulegenden Werte (Einstellungen → Strompreise →
+      // Marktprämie). Öffentliche Daten, keine Geheimnisse.
+      referenceData: { applicableValues: applicableValueStatusPayload() }
     };
+  }
+
+  function applicableValueStatusPayload() {
+    try { return ctx.getApplicableValueStatus?.() ?? null; } catch { return null; }
   }
 
   // ── First-run onboarding (Aurora setup wizard) ───────────────────────
