@@ -3447,6 +3447,15 @@ function collectScheduleRulesFromRowState(rows) {
       });
     }
 
+    // M20 (Feld 19.11.2026): DC-Einspeise-Regeln (feedExcessDcPv) der Zeile gehen
+    // unverändert mit — nur Zeitfenster und Aktiv-Schalter der Zeile gelten auch für
+    // sie. Vorher fielen sie hier weg, der Server behielt sie, und eine im Leitstand
+    // gelöschte Zeile („abregel-sperre“) blieb stehen.
+    for (const dcRule of Array.isArray(row?.dcFeedRules) ? row.dcFeedRules : []) {
+      if (!dcRule || typeof dcRule !== 'object') continue;
+      rules.push({ ...dcRule, target: 'feedExcessDcPv', start, end, enabled: rowEnabled });
+    }
+
     idx++;
   }
 
@@ -3628,6 +3637,11 @@ function groupScheduleRulesForDashboard(rules) {
       const reserve = Number(rule.chargeReserveW);
       if (Number.isFinite(reserve) && reserve > 0) slot.chargeReserveW = reserve;
     }
+    // M20: DC-Einspeise-Regeln reisen mit ihrer Zeile (collectScheduleRows).
+    if (rule.target === 'feedExcessDcPv') {
+      if (!Array.isArray(slot.dcFeedRules)) slot.dcFeedRules = [];
+      slot.dcFeedRules.push({ ...rule });
+    }
     if (rule.enabled === false) slot.enabled = false;
     if (!slot.ruleId && rule.id) slot.ruleId = rule.id;
     // All rule ids of the window — the optimizer slot-disable toggle must flip
@@ -3717,6 +3731,11 @@ function describeSlotControl(slot) {
   }
   if (slot?.stopSocPct != null && Number.isFinite(Number(slot.stopSocPct))) {
     parts.push(`Stop-SoC ${Number(slot.stopSocPct)}%`);
+  }
+  // M20: DC-Einspeise-Regeln (feedExcessDcPv) — vorher zeigte die Zeile nur „—“.
+  for (const r of Array.isArray(slot?.dcFeedRules) ? slot.dcFeedRules : []) {
+    const text = Number(r?.value) === 1 ? 'DC-Einspeisung erlaubt' : 'DC-Einspeisung aus';
+    if (!parts.includes(text)) parts.push(text);
   }
   // dcExport (Voll-/Teileinspeisung) wird in renderScheduleTable als eigenes
   // Badge gerendert (sched-feedin-badge), nicht mehr als Inline-Text.
@@ -4184,6 +4203,8 @@ function openSlotEditor(idx = null) {
       charge: chargeEn.checked ? num(chargeVal) : null,
       stopSocPct: stopSocEn.checked ? num(stopSocVal) : null,
       dcExport: dcExportEn.checked,
+      // M20: DC-Einspeise-Regeln der Zeile bleiben beim Bearbeiten erhalten.
+      dcFeedRules: Array.isArray(slot?.dcFeedRules) ? slot.dcFeedRules : undefined,
       enabled: slot ? slot.enabled !== false : true,
       ruleId: slot?.ruleId || '',
       ruleIds: slot?.ruleIds,
@@ -4268,6 +4289,7 @@ function collectScheduleRows() {
       stopSocEnabled: slot.stopSocPct != null,
       stopSocVal: slot.stopSocPct,
       dcExportEnabled: slot.dcExport === true,
+      dcFeedRules: Array.isArray(slot.dcFeedRules) ? slot.dcFeedRules : [],
       source: slot.source || '',
       displayTone: slot.displayTone || '',
       autoManaged: slot.autoManaged === true,
@@ -4365,10 +4387,12 @@ async function saveScheduleDefaults() {
 async function saveScheduleDash() {
   const rules = collectScheduleRows();
 
+  // M20: der Leitstand schickt die vollständige DC-Einspeise-Liste — eine
+  // gelöschte Zeile löscht ihre DC-Regel (auch die letzte).
   const r1 = await apiFetch('/api/schedule/rules', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ rules })
+    body: JSON.stringify({ rules, replaceDcFeedRules: true })
   });
   const out1 = await r1.json();
   if (!r1.ok || !out1.ok) return setControlMsg(`Fehler Rules: ${out1.error || r1.status}`, true);
@@ -4388,7 +4412,8 @@ async function saveScheduleDash() {
   const gridCount = rules.filter((r) => r.target === 'gridSetpointW').length;
   const chargeCount = rules.filter((r) => r.target === 'chargeCurrentA').length;
   const dcExportCount = rules.filter((r) => r.target === 'dcExportMode').length;
-  const dcPart = dcExportCount ? ` + ${dcExportCount} DC-Export` : '';
+  const dcFeedCount = rules.filter((r) => r.target === 'feedExcessDcPv').length;
+  const dcPart = `${dcExportCount ? ` + ${dcExportCount} DC-Export` : ''}${dcFeedCount ? ` + ${dcFeedCount} DC-Einspeisung` : ''}`;
   setControlMsg(`Gespeichert: ${gridCount} Grid + ${chargeCount} Charge${dcPart} Regeln`);
   await loadScheduleDash();
 }
