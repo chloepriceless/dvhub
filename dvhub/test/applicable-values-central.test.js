@@ -98,6 +98,7 @@ function rig({ source = 'dvhub', plants = PLANTS, central = fakeCentral(), direc
     getSource: () => state.source,
     getCentralBaseUrl: () => BASE,
     isNeeded: () => applicableValuesNeeded({ userEnergyPricing: { pvPlants: state.plants } }),
+    getPvPlants: () => state.plants,
     centralFetchImpl: central.fetchImpl,
     fetchReferenceData: async () => { state.directCalls += 1; return direct(); },
     pushLog: (event, details, level) => state.logs.push({ event, details, level }),
@@ -216,20 +217,38 @@ test('Prüfsumme falsch → Stand verworfen, Rückfall; scheitert auch die BNetz
   assert.deepEqual(events(r2), ['applicable_value_central_fallback:warn', 'applicable_value_refresh_stale:warn']);
 });
 
-test('Monate verloren gegenüber dem Cache → neuer Stand verworfen, Cache bleibt', async () => {
+function shorterCentral() {
   const shorter = centralBody();
   delete shorter.applicableValueTiersByMonth['2026-12'];
   delete shorter.fullFeedApplicableValueTiersByMonth['2026-12'];
   shorter.checksum = applicableValueChecksum(shorter);
-  const r = rig({ central: fakeCentral({ body: shorter }), cache: legacyCache('2026-11-01T08:00:00.000Z') });
+  return fakeCentral({ body: shorter });
+}
+
+test('Monate verloren gegenüber dem Cache, Cache fällig → zentraler Stand verworfen, Rückfall direkt', async () => {
+  const r = rig({ central: shorterCentral(), cache: legacyCache('2026-11-01T08:00:00.000Z') });
   await r.service.tick();
+  assert.equal(r.state.directCalls, 1);
   assert.equal(r.service.getStatus().months.last, '2026-12');
   assert.equal(r.service.getStatus().via, 'bundesnetzagentur');
-  assert.deepEqual(events(r), ['applicable_value_refresh_rejected:warn']);
-  // gilt als erledigt: kein neuer Versuch beim nächsten Takt
-  r.advance(15 * 60_000);
+  assert.equal(r.service.getStatus().lastSuccessAt, '2026-11-19T12:00:00.000Z');
+  assert.deepEqual(events(r), ['applicable_value_central_fallback:warn', 'applicable_value_refresh_ok:info']);
+  assert.match(r.state.logs[0].details.error, /älterer Stand.*2026-12/);
+});
+
+test('Monate verloren, Cache frisch → Cache bleibt; der Wochenabruf wird dadurch nicht verschoben (Codex ead6ef31)', async () => {
+  // Cache direkt geholt, 2 Tage alt; dvhub.online ist einen Monat hinterher.
+  const r = rig({ central: shorterCentral(), cache: legacyCache('2026-11-17T12:00:00.000Z') });
   await r.service.tick();
-  assert.equal(r.central.calls.length, 1);
+  assert.equal(r.state.directCalls, 0);
+  assert.equal(r.service.getStatus().months.last, '2026-12');
+  assert.equal(r.service.getStatus().lastSuccessAt, '2026-11-17T12:00:00.000Z');
+  assert.deepEqual(events(r), ['applicable_value_refresh_stale:warn']);
+  // alle 6 h dvhub.online, Erfolgszeit bleibt → spätestens nach einer Woche direkt
+  for (let i = 0; i < 24; i++) { r.advance(6 * 3600_000); await r.service.tick(); }
+  assert.ok(r.state.directCalls >= 1, 'Wochenabruf direkt bei der BNetzA');
+  assert.equal(r.service.getStatus().via, 'bundesnetzagentur');
+  assert.ok(Date.parse(r.service.getStatus().lastSuccessAt) > Date.parse('2026-11-24T00:00:00.000Z'));
 });
 
 // ── Bedarf ───────────────────────────────────────────────────────────────────
@@ -334,6 +353,26 @@ test('Neue Inbetriebnahme nach dem letzten Monat → einmal nachfragen, höchste
   r.advance(7 * 3600_000);
   r.service.getApplicableValueSummary({ year: 2021, pvPlants: [{ kwp: 5, commissionedAt: '2021-04-01' }, ...PLANTS] });
   await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(r.central.calls.length, 2);
+});
+
+test('Neue Inbetriebnahme, dvhub.online nicht erreichbar → Rückfall direkt, obwohl der Cache frisch ist (Codex ead6ef31)', async () => {
+  const r = rig({ central: fakeCentral({ status: 503 }), cache: legacyCache('2026-11-19T00:00:00.000Z') });
+  // Cache von heute (direkt), also nur die Bevorzugung von dvhub.online offen → kein Rückfall.
+  await r.service.tick();
+  assert.equal(r.state.directCalls, 0);
+  r.advance(6 * 3600_000);
+  r.service.getApplicableValueSummary({ year: 2027, pvPlants: [{ kwp: 8, commissionedAt: '2027-02-10' }] });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(r.state.directCalls, 1);
+});
+
+test('Takt ohne Historie-Aufruf erkennt eine neue Inbetriebnahme aus der Config (getPvPlants, Codex ead6ef31)', async () => {
+  const r = rig();
+  await r.service.tick();
+  r.state.plants = [...PLANTS, { kwp: 8, commissionedAt: '2027-02-10' }];
+  r.advance(6 * 3600_000);
+  await r.service.tick();
   assert.equal(r.central.calls.length, 2);
 });
 

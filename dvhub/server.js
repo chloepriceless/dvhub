@@ -494,6 +494,7 @@ const applicableValueService = createBundesnetzagenturApplicableValueService({
   getSource: () => cfg.referenceData?.applicableValueSource,
   getCentralBaseUrl: () => cfg.epex?.priceApiUrl || 'https://dvhub.online',
   isNeeded: () => applicableValuesNeeded(cfg),
+  getPvPlants: () => cfg.userEnergyPricing?.pvPlants,
   ownsRefresh: IS_RUNTIME_PROCESS,
   pushLog: (event, details, level) => pushLog(event, details, level)
 });
@@ -651,6 +652,12 @@ function saveAndApplyConfig(nextRawConfig, opts = {}) {
   // sofort folgen lassen, nicht erst beim nächsten Lizenz-Revalidate. Beim
   // allerersten Speichern während des Boots gibt es den Dienst noch nicht.
   try { licenseService.syncProActive(); } catch { /* Dienst noch nicht da */ }
+  // Anzulegende Werte: Quelle umgestellt oder erste PV-Anlage eingetragen →
+  // gleich prüfen, nicht erst beim nächsten 15-min-Takt (der Dienst holt nur,
+  // wenn fällig; im Web-Prozess des getrennten Betriebs ohne Wirkung).
+  setTimeout(() => {
+    try { void applicableValueService.tick(); } catch { /* Dienst noch nicht da (Speichern beim Boot) */ }
+  }, 0).unref?.();
   const changedPaths = collectChangedPaths(previousRaw, rawCfg);
   const restart = detectRestartRequired(changedPaths);
   return {

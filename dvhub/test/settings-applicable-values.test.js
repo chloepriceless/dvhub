@@ -46,6 +46,28 @@ test('Rückfall und Direkt-Quelle werden benannt; Fehlschlag mit Stand warnt', (
   assert.equal(failed.warn, true);
 });
 
+test('Hinweis bleibt nach dem Speichern stehen; die Speicher-Antwort bringt den neuen Stand mit (Codex ead6ef31)', async () => {
+  const { loadSettingsPage } = await import('./helpers/settings-page.js');
+  const { getConfigDefinition } = await import('../config-model.js');
+  const { context } = loadSettingsPage();
+  const status = { needed: true, source: 'dvhub', via: 'dvhub_online', updatedAt: '2026-11-19T05:40:00.000Z', months, lastAttemptOk: true };
+  context.__load = { config: {}, effectiveConfig: {}, definition: getConfigDefinition(), meta: {}, referenceData: { applicableValues: status } };
+  vm.runInContext('loadConfigPayloadState(__load)', context);
+  const note = () => vm.runInContext("fieldInfoNote('referenceData.applicableValueSource')", context)?.text;
+  assert.match(note(), /^Anzulegende Werte: dvhub\.online, Stand 19\.11\.2026/);
+  // saveConfig → applyConfigPayload mit den Feldern der POST-Antwort, ohne referenceData
+  context.__saved = { config: {}, effectiveConfig: {}, definition: getConfigDefinition(), meta: {} };
+  vm.runInContext('loadConfigPayloadState(__saved)', context);
+  assert.match(note() || '', /^Anzulegende Werte: dvhub\.online/);
+  // mit referenceData (neue POST-Antwort): neuer Stand
+  context.__saved2 = { ...context.__saved, referenceData: { applicableValues: { ...status, source: 'public' } } };
+  vm.runInContext('loadConfigPayloadState(__saved2)', context);
+  assert.match(note(), /Umstellung auf die Bundesnetzagentur folgt/);
+  const source = fs.readFileSync(fileURLToPath(new URL('../public/settings.js', import.meta.url)), 'utf8');
+  const save = source.slice(source.indexOf('async function saveConfig('));
+  assert.match(save.slice(0, save.indexOf('\n}\n')), /referenceData: payload\.referenceData/);
+});
+
 test('Ohne Stand: ohne PV-Anlage kein Abruf; mit Anlage und Fehlschlag eine Warnung', () => {
   const empty = { first: null, last: null, count: 0, fullFeedCount: 0 };
   assert.match(applicableValueStatusText({ needed: false, source: 'dvhub', months: empty }).text, /sobald unten eine PV-Anlage/);

@@ -568,6 +568,9 @@ export function createBundesnetzagenturApplicableValueService({
   getSource = () => 'dvhub',
   getCentralBaseUrl = () => null,
   isNeeded = () => true,
+  // Eingetragene PV-Anlagen (Config) — der Takt erkennt damit eine neue
+  // Inbetriebnahme auch ohne Historie- oder EOS-Aufruf.
+  getPvPlants = () => null,
   // Nur der Laufzeit-Prozess holt (getrennter Betrieb); der Web-Prozess liest die Datei nach.
   ownsRefresh = true,
   pushLog = null,
@@ -626,11 +629,23 @@ export function createBundesnetzagenturApplicableValueService({
     return Number.isFinite(t) ? now - t : Infinity;
   };
 
+  // Anlagen mit Inbetriebnahme nach dem letzten bekannten Monat (Aufruf und Config).
+  function plantBeyondCache(pvPlants, months) {
+    const lastMonth = months[months.length - 1];
+    if (!lastMonth) return false;
+    const configured = getPvPlants?.();
+    const plants = [...(Array.isArray(pvPlants) ? pvPlants : []), ...(Array.isArray(configured) ? configured : [])];
+    return plants.some((plant) => {
+      const key = typeof plant?.commissionedAt === 'string' ? plant.commissionedAt.slice(0, 7) : '';
+      return /^\d{4}-\d{2}$/.test(key) && key > lastMonth;
+    });
+  }
+
   /**
    * Ist ein Abruf fällig? null = nein, sonst der Grund. Reihenfolge:
    * Quelle umgestellt (sofort) → Pause nach Fehlschlag → kein Stand →
-   * wöchentlich → nach Rückfall/Umstieg wieder die gewählte Quelle (alle 6 h) →
-   * eine Anlage mit Inbetriebnahme nach dem letzten bekannten Monat (alle 6 h).
+   * wöchentlich → eine Anlage mit Inbetriebnahme nach dem letzten bekannten
+   * Monat (alle 6 h) → nach Rückfall/Umstieg wieder die gewählte Quelle (alle 6 h).
    */
   function dueReason({ pvPlants = null } = {}) {
     if (!ownsRefresh || refreshPromise || !isNeeded()) return null;
@@ -643,13 +658,9 @@ export function createBundesnetzagenturApplicableValueService({
     if (!months.length) return 'empty';
     if (!(sinceMs(refreshState.lastSuccessAt, now) < refreshIntervalMs)) return 'weekly';
     if (sinceAttempt < retryIntervalMs) return null;
+    if (plantBeyondCache(pvPlants, months)) return 'new_month';
     if (referenceData.via !== (source === 'dvhub' ? VIA_CENTRAL : VIA_DIRECT)) return 'preferred_source';
-    const lastMonth = months[months.length - 1];
-    const plantBeyond = (Array.isArray(pvPlants) ? pvPlants : []).some((plant) => {
-      const key = typeof plant?.commissionedAt === 'string' ? plant.commissionedAt.slice(0, 7) : '';
-      return /^\d{4}-\d{2}$/.test(key) && key > lastMonth;
-    });
-    return plantBeyond ? 'new_month' : null;
+    return null;
   }
 
   function cacheSummary() {
@@ -657,67 +668,72 @@ export function createBundesnetzagenturApplicableValueService({
     return { cacheMonths: months.length, cacheLastMonth: months[months.length - 1] || null, cacheUpdatedAt: referenceData.updatedAt || null, cacheVia: months.length ? referenceData.via : null };
   }
 
+  // Normalisieren und prüfen: Werte da und kein Monat weniger als der eigene
+  // Stand (z. B. dvhub.online einen Tag hinter einer neuen Veröffentlichung,
+  // die die Box schon direkt hat, oder eine Datei fehlte auf der Archivseite).
+  // Sonst wirft es — der Aufrufer behandelt das wie einen Fehlschlag der Quelle.
+  function acceptFetched(fetched, via, attemptAt) {
+    const label = via === VIA_CENTRAL ? 'dvhub.online' : 'Bundesnetzagentur';
+    const next = normalizeReferenceData({
+      ...fetched,
+      via,
+      // Direkt: Zeit des Abrufs. dvhub.online: zuletzt vom Server bestätigt.
+      updatedAt: via === VIA_CENTRAL && fetched?.updatedAt ? fetched.updatedAt : attemptAt
+    });
+    if (!next.checksum) next.checksum = applicableValueChecksum(next);
+    const nextMonths = new Set(monthKeys(next));
+    if (!nextMonths.size) throw new Error(`${label}: keine Werte`);
+    const nextFull = new Set(Object.keys(next.fullFeedApplicableValueTiersByMonth));
+    const lost = monthKeys(referenceData).filter((key) => !nextMonths.has(key))
+      .concat(Object.keys(referenceData.fullFeedApplicableValueTiersByMonth).filter((key) => !nextFull.has(key)))
+      .sort();
+    if (lost.length) throw new Error(`${label}: älterer Stand als der gespeicherte, ${lost.length} Monat(e) fehlen (z. B. ${lost[0]})`);
+    return next;
+  }
+
   async function runRefresh({ reason = 'manual' } = {}) {
     const source = effectiveSource();
     const attemptAt = nowIso();
     const months = monthKeys(referenceData);
-    // Rückfall auf die BNetzA nur, wenn der Stand fehlt oder fällig ist — nicht,
-    // um nach einem Rückfall alle 6 h zu prüfen, ob dvhub.online wieder da ist.
-    const allowFallback = !months.length || !(sinceMs(refreshState.lastSuccessAt, Date.parse(attemptAt)) < refreshIntervalMs);
-    let fetched = null;
+    // Rückfall auf die BNetzA nur, wenn der Stand fehlt, fällig ist oder eine
+    // Anlage einen Monat braucht, den er nicht hat — nicht, um nach einem
+    // Rückfall alle 6 h zu prüfen, ob dvhub.online wieder da ist.
+    const allowFallback = !months.length || reason === 'new_month'
+      || !(sinceMs(refreshState.lastSuccessAt, Date.parse(attemptAt)) < refreshIntervalMs);
+    let next = null;
     let via = null;
     let error = null;
     if (source === 'dvhub') {
       try {
-        fetched = await fetchCentralReferenceData({ baseUrl: getCentralBaseUrl() });
+        next = acceptFetched(await fetchCentralReferenceData({ baseUrl: getCentralBaseUrl() }), VIA_CENTRAL, attemptAt);
         via = VIA_CENTRAL;
       } catch (centralError) {
         error = centralError;
         if (allowFallback) log('applicable_value_central_fallback', { error: scrubError(centralError), reason }, 'warn');
       }
     }
-    if (!fetched && (source === 'public' || allowFallback)) {
+    if (!next && (source === 'public' || allowFallback)) {
       try {
-        fetched = await fetchReferenceData({});
+        next = acceptFetched(await fetchReferenceData({}), VIA_DIRECT, attemptAt);
         via = VIA_DIRECT;
       } catch (directError) {
         error = directError;
       }
     }
-    if (fetched) {
-      const next = normalizeReferenceData({
-        ...fetched,
-        via,
-        // Direkt: Zeit des Abrufs. dvhub.online: zuletzt vom Server bestätigt.
-        updatedAt: via === VIA_CENTRAL && fetched.updatedAt ? fetched.updatedAt : attemptAt
-      });
-      if (!next.checksum) next.checksum = applicableValueChecksum(next);
-      const nextMonths = new Set(monthKeys(next));
-      const nextFull = new Set(Object.keys(next.fullFeedApplicableValueTiersByMonth));
-      const lost = months.filter((key) => !nextMonths.has(key))
-        .concat(Object.keys(referenceData.fullFeedApplicableValueTiersByMonth).filter((key) => !nextFull.has(key)));
-      if (!nextMonths.size) {
-        error = new Error(`${via}: keine Werte`);
-      } else if (lost.length) {
-        // Älterer Stand als der eigene (z. B. Server einen Tag hinter einer neuen
-        // Veröffentlichung): eigenen behalten, Abruf gilt als erledigt.
-        refreshState = { lastAttemptAt: attemptAt, lastAttemptOk: true, lastAttemptSource: source, lastSuccessAt: attemptAt, lastError: null };
-        persist();
-        log('applicable_value_refresh_rejected', { via, reason, lostMonths: lost.length, firstLostMonth: lost.sort()[0], ...cacheSummary() }, 'warn');
-        return referenceData;
-      } else {
-        referenceData = next;
-        refreshState = { lastAttemptAt: attemptAt, lastAttemptOk: true, lastAttemptSource: source, lastSuccessAt: attemptAt, lastError: null };
-        persist();
-        const keys = monthKeys(referenceData);
-        log('applicable_value_refresh_ok', {
-          via, reason, months: keys.length, firstMonth: keys[0], lastMonth: keys[keys.length - 1],
-          updatedAt: referenceData.updatedAt, checksum: referenceData.checksum
-        }, 'info');
-        return referenceData;
-      }
+    if (next) {
+      referenceData = next;
+      refreshState = { lastAttemptAt: attemptAt, lastAttemptOk: true, lastAttemptSource: source, lastSuccessAt: attemptAt, lastError: null };
+      persist();
+      const keys = monthKeys(referenceData);
+      log('applicable_value_refresh_ok', {
+        via, reason, months: keys.length, firstMonth: keys[0], lastMonth: keys[keys.length - 1],
+        updatedAt: referenceData.updatedAt, checksum: referenceData.checksum
+      }, 'info');
+      return referenceData;
     }
     // Zugangsdaten in einer eigenen priceApiUrl (https://user:pass@…) nie ablegen.
+    // lastSuccessAt bleibt: ein abgelehnter oder gescheiterter Abruf verschiebt
+    // den Wochenabruf nicht.
     const message = scrubError(error);
     refreshState = { ...refreshState, lastAttemptAt: attemptAt, lastAttemptOk: false, lastAttemptSource: source, lastError: message };
     persist();

@@ -38,6 +38,10 @@ export function createConfigRoutes(deps) {
     actorContext, deriveClientIp, validateApiTokenStrength, configChangeNeedsEosReplan, requestEosReplanAfterSave, ALLOWED_CONFIG_ROOTS,
   } = deps;
 
+  const applicableValueStatusAfterSave = () => {
+    try { return ctx.getApplicableValueStatus?.() ?? null; } catch { return null; }
+  };
+
   return async function handleConfigRoute(req, res, url) {
     if (url.pathname === '/api/config' && req.method === 'GET') return json(res, 200, configApiPayload());
 
@@ -499,7 +503,10 @@ export function createConfigRoutes(deps) {
         restartRequired: result.restartRequired || !!(migration && migration.files && migration.files.length),
         restartRequiredPaths: result.restartRequiredPaths,
         licenseCapWarning,
-        migration
+        migration,
+        // Quelle und Stand der anzulegenden Werte — die Einstellungsseite zeigt
+        // den Hinweis nach dem Speichern weiter (Quelle evtl. gerade umgestellt).
+        referenceData: { applicableValues: applicableValueStatusAfterSave() }
       });
     }
 

@@ -3660,7 +3660,11 @@ function loadConfigPayloadState(payload) {
   currentDraftConfig = clone(currentRawConfig);
   currentEffectiveConfig = payload.effectiveConfig || {};
   currentMeta = payload.meta || {};
-  applicableValueStatus = payload.referenceData?.applicableValues || null;
+  // Nur ersetzen, wenn die Antwort den Stand mitbringt (GET /api/config und
+  // POST-Antwort ab 19.11.2026) — sonst bliebe der Hinweis nach dem Speichern leer.
+  if (payload.referenceData && 'applicableValues' in payload.referenceData) {
+    applicableValueStatus = payload.referenceData.applicableValues || null;
+  }
   settingsDiscoveryStates = {};
   pricingPeriodsDraft = clone(currentRawConfig?.userEnergyPricing?.periods || []);
   marketValueModeDraft = getDraftMarketValueMode(currentRawConfig);
@@ -3815,7 +3819,8 @@ async function saveConfig(config, source = 'settings', opts = {}) {
     definition,
     config: payload.config,
     effectiveConfig: payload.effectiveConfig,
-    meta: payload.meta
+    meta: payload.meta,
+    referenceData: payload.referenceData
   });
 
   if (payload.restartRequired) {
