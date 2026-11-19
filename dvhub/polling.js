@@ -104,15 +104,25 @@ export function createPoller(ctx) {
   // Letzte EM.GetStatus-Antwort des SPiNE-Zählers (enthält die Spannungen).
   let spineEm = null;
 
+  // E7 (18.11.2026): Mindestabstand der Poll-Takte aus dem Herstellerprofil (`victron.requestPacing.minPollIntervalMs`,
+  // z. B. SMA ≥ 10 s). Hebt einen kürzeren Takt aus meterPollMs/pollMs an, senkt nie. Ohne Angabe 0 = wie bisher.
+  const profileMinPollIntervalMs = (cfg) => {
+    const n = Number(cfg?.victron?.requestPacing?.minPollIntervalMs);
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), MAX_BACKOFF_MS) : 0;
+  };
+
   // --- effectivePollIntervalMs ---
-  const effectivePollIntervalMs = () => normalizePollIntervalMs(getCfg().meterPollMs, MIN_POLL_INTERVAL_MS);
+  const effectivePollIntervalMs = () => {
+    const cfg = getCfg();
+    return Math.max(normalizePollIntervalMs(cfg.meterPollMs, MIN_POLL_INTERVAL_MS), profileMinPollIntervalMs(cfg));
+  };
 
   // Plan 09-08 Task 3 — resolve BASE_POLL_MS at every tick so config changes
   // (and test injection of cfg.pollMs) take effect without reboot.
   const getBasePollMs = () => {
     const cfg = getCfg() || {};
     const fromPollMs = Number(cfg.pollMs);
-    if (Number.isFinite(fromPollMs) && fromPollMs > 0) return fromPollMs;
+    if (Number.isFinite(fromPollMs) && fromPollMs > 0) return Math.max(fromPollMs, profileMinPollIntervalMs(cfg));
     return effectivePollIntervalMs();
   };
 
@@ -204,7 +214,7 @@ export function createPoller(ctx) {
       } else {
         // Lese-Engine (18.11.2026): ein Lesepunkt kann mehrere Register lesen (combine E4, split E9, Skalenfaktor
         // E5). Ohne diese Schlüssel genau ein mbRequest(conf) wie bisher.
-        state.victron[name] = await readPointValue(conf, (c) => transport.mbRequest(c), { sfCache: cycleSfCache, sfBlockUnsupported });
+        state.victron[name] = await readPointValue(conf, (c, o) => transport.mbRequest(c, o), { sfCache: cycleSfCache, sfBlockUnsupported });
       }
       delete state.victron.errors[name];
       const _now = Date.now();
@@ -728,7 +738,7 @@ export function createPoller(ctx) {
   let meterPhaseErrorLogged = false;
   async function readMeterPoint(m) {
     assertReadableAddress(m, 'Zähler');
-    const read = (c) => transport.mbRequest(c);
+    const read = (c, o) => transport.mbRequest(c, o);
     const ctxRead = { sfCache: cycleSfCache, sfBlockUnsupported };
     const total = await readPointValue(m, read, ctxRead);
     if (total == null) throw new Error('Zähler meldet keinen Gesamtwert (Register nicht verfügbar)');
@@ -829,6 +839,14 @@ export function createPoller(ctx) {
       state.victron.runningStateText = runningStateText(rs);
       state.victron.emergencyCharge = isSungrowEmergencyCharge(rs);
     } catch { /* letzten Wert stehen lassen — nächster Takt */ }
+  }
+
+  // Bezug/Einspeisung (immer ≥ 0) aus dem Zählerstand in der Ausgabe-Konvention.
+  function deriveGridFlows(cfg) {
+    const gridW = state.meter.grid_total_w || 0;
+    const posImport = cfg.gridPositiveMeans === 'grid_import';
+    state.victron.gridImportW = Math.max(0, posImport ? gridW : -gridW);
+    state.victron.gridExportW = Math.max(0, posImport ? -gridW : gridW);
   }
 
   // --- pollMeter: main polling function (meter + all Victron points) ---
@@ -1052,6 +1070,11 @@ export function createPoller(ctx) {
       state.dvRegs[4] = 0;
 
       updateEnergyIntegrals(state.meter.updatedAt, total);
+      // Codex 6ab2b78e: Bezug/Einspeisung zusammen mit dem Zählerstand ableiten. Mit Anfrage-Taktung (E7, SMA ≥ 10 s)
+      // liegen bis zu ~40 s zwischen dieser Lesung und den Punkten; so lange trugen die abgeleiteten Werte den alten
+      // Stand unter dem neuen meter.updatedAt (my-PV prüft die Frische am Zählerstempel). Unten nach den Punkten
+      // derselbe Ausdruck mit demselben Zählerstand — das Ergebnis am Takt-Ende ist unverändert.
+      deriveGridFlows(cfg);
       // Plan 09-06 (D-06): success — record poll duration into the gauge.
       try {
         const durationSec = Number(process.hrtime.bigint() - __pollStart) / 1e9;
@@ -1127,10 +1150,7 @@ export function createPoller(ctx) {
     state.victron.pvAcW = Number(pvAc.toFixed(3));
     state.victron.pvTotalW = Number((pvDc + pvAc).toFixed(3));
 
-    const gridW = state.meter.grid_total_w || 0;
-    const posImport = cfg.gridPositiveMeans === 'grid_import';
-    state.victron.gridImportW = Math.max(0, posImport ? gridW : -gridW);
-    state.victron.gridExportW = Math.max(0, posImport ? -gridW : gridW);
+    deriveGridFlows(cfg);
 
     // Echte DC-Akku-Leistung via SunSpec Model 160 (Profil-opt-in:
     // points.batteryPowerW.derive = 'm160_battery'; GEN24: MPPT-Eingang 3 =

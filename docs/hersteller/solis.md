@@ -53,7 +53,6 @@ DVhub das Entladen als Laden.
 
 | Lücke | Folge | Braucht |
 |---|---|---|
-| Abstand > 300 ms zwischen Anfragen (Community) | DVhub schickt die Lesungen eines Takts direkt hintereinander; mögliche Lesefehler | Anfrage-Taktung (E7) |
 | Vorzeichen aus 33135 | falls 33149 nur der Betrag ist, falsches Akku-Vorzeichen beim Entladen | Richtungsregister (E8) |
 | Modelltyp 33000 | DVhub prüft nicht, ob ein Solis-Hybrid antwortet | Kennungsprobe (E10) |
 | Backup-Last 33148 | nicht gelesen | — |
@@ -71,9 +70,9 @@ Profil.
 2. **Netz:** Bezug muss positiv erscheinen. Mit dem Netzzähler vergleichen. Per Scan 33130 und 33263 (je Menge 2)
    lesen und notieren, ob beide gleich sind.
 3. **Phasen:** Erscheinen L1–L3 leer, kennt die Firmware den Block 33250 ff. nicht (Log `meter_phase_read_error`).
-4. **Lesefehler:** Kommen im Log regelmäßig Zeitüberschreitungen, braucht das Gerät mehr Abstand zwischen den
-   Anfragen (E7). Testweise „Poll Intervall (ms)“ (`meterPollMs`) erhöhen; das verlängert nur die Pause zwischen
-   zwei Takten, nicht den Abstand der Anfragen innerhalb eines Takts.
+4. **Lesefehler:** DVhub hält 400 ms zwischen zwei Anfragen (Solis verlangt laut Community > 300 ms;
+   `victron.requestPacing.minRequestGapMs`). Kommen im Log trotzdem regelmäßig Zeitüberschreitungen, den Wert in
+   `/etc/dvhub/hersteller/solis.json` testweise auf 1000 stellen und melden.
 5. **Hauslast:** mit der Solis-App vergleichen, dabei Backup-Verbraucher an- und abschalten.
 6. **BMS-Grenzen:** mit dem Display vergleichen (bei Hochvolt-Akkus S6-EH3P besonders).
 

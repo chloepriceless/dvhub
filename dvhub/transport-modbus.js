@@ -33,12 +33,71 @@ export function modbusWriteFenceGeneration() {
   return writeFenceGeneration;
 }
 
+// E7 (18.11.2026): Anfrage-Taktung je Verbindung (host:port). Manche Geräte vertragen keine Anfragen direkt
+// hintereinander: SMA verlangt ≥ 10 s zwischen Modbus-Transfers und höchstens fünf Werte je Transfer
+// (SMA-Modbus-general-TI-en-10 §3.7), Solis > 300 ms zwischen Frames, Huawei eine Pause nach dem Verbindungsaufbau.
+// Die Werte kommen aus dem Herstellerprofil (`victron.requestPacing`) und gelten für JEDE Anfrage auf dieser
+// Verbindung — Lesen und Schreiben, in der Reihenfolge der Warteschlange. Ohne Einstellung (alle mitgelieferten
+// Stable-Profile) läuft der Transport wie bisher: kein Zeitgeber, keine Wartezeit, dieselbe Reihenfolge.
+//   minRequestGapMs        Mindestabstand vom Ende einer Anfrage (Antwort, Fehler, Zeitüberschreitung) bis zur
+//                          nächsten auf derselben Verbindung
+//   connectDelayMs         Pause nach jedem (Neu-)Aufbau der TCP-Verbindung vor der ersten Anfrage
+//   maxRegistersPerRequest höchstens so viele Register je Lese-Anfrage (FC 3/4); längere Blöcke werden in
+//                          Teil-Anfragen zerlegt (gleich hintereinander eingereiht) und wieder zusammengesetzt. Bei
+//                          32-bit-Werten eine gerade Zahl wählen, sonst landen die Hälften eines Werts in zwei Anfragen.
+//                          Lesungen der Lese-Engine (ein Wert, Wert + Skalenfaktor, combineBlock) zerlegt der Transport
+//                          nie (opts.atomic): über dem Deckel sind sie ein Lesefehler statt einer Mischung zweier Proben.
+// minPollIntervalMs (Mindestabstand der Poll-Takte) liest polling.js aus demselben Block.
+// Ungültige oder fehlende Werte gelten als „aus“ (0).
+const PACING_MAX_GAP_MS = 600_000;
+const PACING_MAX_CONNECT_DELAY_MS = 60_000;
+export function normalizeModbusPacing(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const ms = (v, max) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), max) : 0;
+  };
+  const minRequestGapMs = ms(raw.minRequestGapMs, PACING_MAX_GAP_MS);
+  const connectDelayMs = ms(raw.connectDelayMs, PACING_MAX_CONNECT_DELAY_MS);
+  const cap = Number(raw.maxRegistersPerRequest);
+  // 125 = Grenze des Modbus-Lesebefehls; darüber gibt es nichts zu begrenzen.
+  const maxRegistersPerRequest = Number.isInteger(cap) && cap >= 1 && cap < 125 ? cap : 0;
+  if (!minRequestGapMs && !connectDelayMs && !maxRegistersPerRequest) return null;
+  return { minRequestGapMs, connectDelayMs, maxRegistersPerRequest };
+}
+
+// Resolver für createModbusTransport({ pacingFor }) aus der wirksamen Config: die Taktung des Profils
+// (`victron.requestPacing`) gilt nur für die Anlagen-Verbindung victron.host:victron.port — nicht für Wallboxen,
+// Zähler auf anderen Adressen oder andere Ports. Liest die Config bei jedem Aufruf (Änderungen ohne Neustart).
+export function modbusPacingFromConfig(getCfg) {
+  return (host, port) => {
+    const v = getCfg?.()?.victron;
+    if (!v || v.transport === 'mqtt' || !v.requestPacing) return null;
+    if (String(host ?? '') !== String(v.host ?? '') || Number(port) !== Number(v.port)) return null;
+    return v.requestPacing;
+  };
+}
+
 /**
  * Modbus TCP Transport für Victron-Kommunikation.
  * Extrahiert aus server.js — reiner Modbus-Client (kein Server).
+ * opts.pacingFor(host, port) → Taktung dieser Verbindung (E7, siehe normalizeModbusPacing) oder null.
  */
 export function createModbusTransport(opts = {}) {
   const mbPool = new Map();
+  // E7: Taktung je Verbindung, bei jeder Anfrage neu aufgelöst. Ohne Resolver (oder bei einem Fehler darin): keine.
+  const pacingFor = typeof opts.pacingFor === 'function' ? opts.pacingFor : null;
+  function pacingOf(host, port) {
+    if (!pacingFor) return null;
+    try {
+      return normalizeModbusPacing(pacingFor(host, port));
+    } catch {
+      return null;
+    }
+  }
+  // E7: Ende der letzten Anfrage je host:port. Auf Pool-Ebene, damit der Abstand auch über einen Neuaufbau der
+  // Verbindung (Leerlauf-Abbau, dropConnections, Zeitüberschreitung) hinweg gilt.
+  const lastTransferEndAt = new Map();
   // Leerlauf bis zum Abbau einer Verbindung (opts.idleMs nur für Tests).
   const MB_IDLE_MS = Number(opts.idleMs) > 0 ? Number(opts.idleMs) : 30000;
   const MB_QUEUE_MAX = 256;
@@ -62,6 +121,20 @@ export function createModbusTransport(opts = {}) {
       queue: [],
       idleTimer: null,
       connectTimer: null,
+      // E7: Zeitgeber, solange die nächste Anfrage auf ihren Abstand bzw. die Pause nach dem Verbindungsaufbau
+      // wartet (nur mit Taktung gesetzt), und der Zeitpunkt des 'connect' des aktuellen Sockets (0 = noch nicht).
+      gapTimer: null,
+      connectedAt: 0,
+      // E7: eine Anfrage ist zu Ende (Antwort, Fehler, Zeitüberschreitung) — Bezugspunkt für minRequestGapMs.
+      _markTransferEnd() {
+        lastTransferEndAt.set(this.key, Date.now());
+      },
+      _clearGapTimer() {
+        if (this.gapTimer) {
+          clearTimeout(this.gapTimer);
+          this.gapTimer = null;
+        }
+      },
       connect() {
         if (this.sock && !this.sock.destroyed) return;
         // Paritätsfund A4 (dvhub-rs ABWEICHUNGEN): jedes Ereignis gilt nur für
@@ -71,6 +144,7 @@ export function createModbusTransport(opts = {}) {
         // „connection closed“.
         const sock = new net.Socket();
         this.sock = sock;
+        this.connectedAt = 0;
         const current = () => this.sock === sock;
         sock.setKeepAlive(true, 10000);
         sock.connect(port, host);
@@ -91,6 +165,7 @@ export function createModbusTransport(opts = {}) {
           if (!current()) return;
           clearTimeout(this.connectTimer);
           this.connectTimer = null;
+          this.connectedAt = Date.now();
         });
         sock.on('data', (chunk) => {
           if (!current()) return;
@@ -123,6 +198,7 @@ export function createModbusTransport(opts = {}) {
           const p = this.pending;
           this.pending = null;
           if (p.timer) clearTimeout(p.timer);
+          this._markTransferEnd();
           p.resolve(frame);
           this._resetIdle();
           this._next();
@@ -139,10 +215,13 @@ export function createModbusTransport(opts = {}) {
           clearTimeout(this.connectTimer);
           this.connectTimer = null;
         }
+        // E7: wartende Anfragen werden unten abgewiesen — kein Zeitgeber, der danach noch sendet.
+        this._clearGapTimer();
         const p = this.pending;
         if (p) {
           this.pending = null;
           if (p.timer) clearTimeout(p.timer);
+          this._markTransferEnd();
           p.reject(err);
         }
         for (const q of this.queue) {
@@ -165,11 +244,13 @@ export function createModbusTransport(opts = {}) {
           clearTimeout(this.connectTimer);
           this.connectTimer = null;
         }
+        this._clearGapTimer();
         // Reject pending/queued requests without killing the socket yet
         const p = this.pending;
         if (p) {
           this.pending = null;
           if (p.timer) clearTimeout(p.timer);
+          this._markTransferEnd();
           p.reject(new Error('pool cleanup'));
         }
         for (const q of this.queue) {
@@ -215,6 +296,8 @@ export function createModbusTransport(opts = {}) {
       },
       _next() {
         if (this.pending || !this.queue.length) return;
+        // E7: die nächste Anfrage wartet schon auf ihren Abstand — der Zeitgeber sendet sie (nur mit Taktung).
+        if (this.gapTimer) return;
         if (!this.sock || this.sock.destroyed) {
           this.connect();
           this.sock.once('connect', () => this._next());
@@ -224,6 +307,32 @@ export function createModbusTransport(opts = {}) {
           this.connect();
           this.sock.once('connect', () => this._next());
           return;
+        }
+        const pace = pacingOf(host, port);
+        if (pace) {
+          // E7: nie in einen noch nicht verbundenen Socket schreiben — der 'connect'-Listener aus dem
+          // Verbindungsaufbau oben ruft _next erneut, dann zählt die Pause ab connectedAt.
+          if (!this.connectedAt) return;
+          const lastEnd = lastTransferEndAt.get(this.key);
+          const readyAt = Math.max(
+            this.connectedAt + pace.connectDelayMs,
+            lastEnd != null ? lastEnd + pace.minRequestGapMs : 0
+          );
+          const wait = readyAt - Date.now();
+          if (wait > 0) {
+            // Die Verbindung ist nicht im Leerlauf, sie wartet auf ihren Takt: kein Leerlauf-Abbau, der die
+            // wartenden Anfragen mit „pool cleanup“ abbräche. Die Schreib-Sperre (A7) prüft der Durchlauf nach dem
+            // Warten — ein in der Wartezeit überholter Write geht nicht mehr raus.
+            if (this.idleTimer) {
+              clearTimeout(this.idleTimer);
+              this.idleTimer = null;
+            }
+            this.gapTimer = setTimeout(() => {
+              this.gapTimer = null;
+              this._next();
+            }, wait);
+            return;
+          }
         }
         let entry = this.queue.shift();
         // A7: vor der Schreib-Sperre eingereihte Writes verwerfen (nie auf den Draht).
@@ -248,6 +357,7 @@ export function createModbusTransport(opts = {}) {
         entry.timer = setTimeout(() => {
           if (this.pending === entry) {
             this.pending = null;
+            this._markTransferEnd();
             entry.reject(new Error('modbus timeout'));
             // Socket verwerfen (eine späte Antwort darf keiner Folgeanfrage
             // zugeordnet werden) und angefangene Bytes vergessen. Erst
@@ -271,12 +381,33 @@ export function createModbusTransport(opts = {}) {
     return c;
   }
 
-  function mbRequest({ host, port, unitId, fc, address, quantity, timeoutMs }) {
+  // opts.atomic (Lese-Engine, Codex 742c52c9): diese Lesung ist EIN Messzeitpunkt (ein Wert, Wert + Skalenfaktor,
+  // combineBlock) und darf nie in Teil-Anfragen zerlegt werden — über dem Deckel ein Lesefehler statt einer Mischung.
+  function mbRequest(args, opts = {}) {
+    const { host, port, fc, address, quantity } = args;
     // A6 (Paritätsfund dvhub-rs, Codex adc3a82): nur Lese-Funktionen 1–4. Mit
     // FC 6 wäre die „Lese“-Anfrage ein gültiger Write gewesen (quantity = Wert).
     if (![1, 2, 3, 4].includes(Number(fc))) {
       return Promise.reject(new Error(`modbus read: fc ${fc} ist keine Lese-Funktion`));
     }
+    // E7: höchstens maxRegistersPerRequest Register je Anfrage (nur Register-Lesen FC 3/4; FC 1/2 zählen Bits).
+    // Die Teil-Anfragen werden in einem Zug eingereiht, stehen also direkt hintereinander in der Warteschlange.
+    const cap = (Number(fc) === 3 || Number(fc) === 4) ? pacingOf(host, port)?.maxRegistersPerRequest : 0;
+    const total = Number(quantity);
+    if (cap && Number.isInteger(total) && total > cap && Number.isInteger(address) && address >= 0 && address + total - 1 <= 0xffff) {
+      if (opts?.atomic) {
+        return Promise.reject(new Error(`modbus read: ${total} Register ab ${address} müssen in einer Anfrage gelesen werden, die Verbindung erlaubt höchstens ${cap} (maxRegistersPerRequest)`));
+      }
+      const parts = [];
+      for (let off = 0; off < total; off += cap) {
+        parts.push(mbRequestOnce({ ...args, address: address + off, quantity: Math.min(cap, total - off) }));
+      }
+      return Promise.all(parts).then((chunks) => chunks.flat());
+    }
+    return mbRequestOnce(args);
+  }
+
+  function mbRequestOnce({ host, port, unitId, fc, address, quantity, timeoutMs }) {
     const tid = (tidCounter++ & 0xffff) || 1;
     const req = Buffer.alloc(12);
     req.writeUInt16BE(tid, 0);

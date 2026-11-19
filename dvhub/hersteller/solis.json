@@ -21,8 +21,8 @@
     "geht laut Community nicht. Solarman-V5 und transparente RTU-Gateways gehen nicht (E12 fehlt).",
     "",
     "Bewusst NICHT gelesen bzw. nicht einstellbar (fehlt in der Engine):",
-    "- Abstand zwischen Anfragen: Solis verlangt laut Community > 300 ms zwischen Frames. DVhub schickt die Lesungen eines",
-    "  Takts direkt nacheinander (E7 fehlt). Am Gerät prüfen, ob Lesefehler auftreten.",
+    "- Abstand zwischen Anfragen: Solis verlangt laut Community > 300 ms zwischen Frames. Seit E7 hält DVhub 400 ms",
+    "  (victron.requestPacing); ein Takt mit 8 Lesungen dauert damit gut 3 s. Am Gerät prüfen, ob Lesefehler bleiben.",
     "- Akku-Vorzeichen aus Richtungsregister 33135 (0 = Laden, 1 = Entladen): kann DVhub nicht anwenden (E8 fehlt). Das",
     "  Profil liest 33149 als vorzeichenbehafteten Int32 wie evcc. Liefert das Gerät nur den Betrag, ist das Vorzeichen",
     "  beim Entladen falsch (siehe batteryPowerW._comment).",
@@ -34,7 +34,12 @@
     "transport": "modbus",
     "port": 502,
     "unitId": 1,
-    "timeoutMs": 2000
+    "timeoutMs": 2000,
+    "requestPacing": {
+      "_comment": "E7: Solis verlangt > 300 ms zwischen zwei Frames [COMM, .planning/docs/research/2026-11-15-solis-modbus-control-spec.md §1]; das Add-on Solis-Local nutzt 400 ms, DVhub ebenso (gemessen vom Ende der Antwort bis zur nächsten Anfrage). Höchstens 50 Register je Lesung [COMM] — das Profil liest höchstens 2.",
+      "minRequestGapMs": 400,
+      "maxRegistersPerRequest": 50
+    }
   },
 
   "meter": {

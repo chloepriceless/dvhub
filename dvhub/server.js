@@ -71,7 +71,7 @@ import {
   mergeLoadedScheduleRules
 } from './schedule-runtime.js';
 import { createHistoryImportManager, sleepMs } from './history-import.js';
-import { createModbusTransport } from './transport-modbus.js';
+import { createModbusTransport, modbusPacingFromConfig } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
 import { discoverSystems as discoverConfiguredSystems } from './system-discovery.js';
 import {
@@ -470,7 +470,9 @@ const transport = cfg.victron?.transport === 'mqtt'
       // sichtbar, die Ursache aber nie (Kundenfall 2026-09-29).
       onEvent: (event, details, level) => pushLog(event, details, level)
     })
-  : createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs });
+  // E7: Anfrage-Taktung des Herstellerprofils (victron.requestPacing) nur für die Anlagen-Verbindung
+  // victron.host:victron.port; ohne Angabe im Profil (alle Stable-Profile) keine Taktung.
+  : createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs, pacingFor: modbusPacingFromConfig(() => cfg) });
 
 // Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
 const scanTransport = createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs });

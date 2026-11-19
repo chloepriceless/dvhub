@@ -97,6 +97,10 @@ export function decodePointRegs(regs, conf, opts = {}) {
   return finish(v, exact);
 }
 
+// Jede Lesung dieses Moduls ist EIN Messzeitpunkt (ein Wert, Wert + Skalenfaktor, combineBlock): der Transport darf sie
+// nicht nach maxRegistersPerRequest zerlegen (E7, Codex 742c52c9). Zweites Argument von read(); conf bleibt unberührt.
+const ATOMIC = Object.freeze({ atomic: true });
+
 // Nur echte Zahlen: der Transport baut den Rahmen mit writeUInt16BE und wirft bei Text/undefined.
 const isAddress = (a) => typeof a === 'number' && Number.isInteger(a) && a >= 0 && a <= 0xffff;
 
@@ -132,7 +136,7 @@ function assertSfAddress(conf) {
 
 function readScaleFactorFresh(conf, read, cache) {
   const address = conf.sfAddress;
-  const pending = read({ ...conf, address, quantity: 1 }).then((regs) => {
+  const pending = read({ ...conf, address, quantity: 1 }, ATOMIC).then((regs) => {
     if (!Array.isArray(regs) || regs.length < 1) throw new Error(`Skalenfaktor @${address}: keine Antwort`);
     return decodeScaleFactor(regs[0], address);
   });
@@ -171,7 +175,7 @@ async function readSplitWords(conf, read) {
   if (rt !== 'int32' && rt !== 'uint32') throw new Error(`split braucht readType int32 oder uint32 (ist ${conf.readType ?? 'leer'})`);
   if (!isAddress(low) || !isAddress(high)) throw new Error('split braucht die Registeradressen low und high');
   const word = async (address) => {
-    const regs = await read({ ...conf, address, quantity: 1 });
+    const regs = await read({ ...conf, address, quantity: 1 }, ATOMIC);
     if (!Array.isArray(regs) || !regs.length) throw new Error(`split: Register ${address} ohne Antwort`);
     return Number(regs[0]) & 0xffff;
   };
@@ -199,6 +203,38 @@ function combineTermConf(parent, term) {
   return out;
 }
 
+// E7 (18.11.2026): `combineBlock: true` liest alle combine-Einträge mit EINER Anfrage über ihre Spanne (ein Messzeitpunkt)
+// statt je Eintrag einzeln. Nötig, wo Anfragen weit auseinander liegen müssen (SMA ≥ 10 s): Bezug − Einspeisung aus
+// zwei Lesungen im Abstand von 10 s ergäbe bei einem Richtungswechsel einen erfundenen Wert. Alle Einträge teilen
+// Verbindung und Funktionscode des Punkts; split und eigene Skalenfaktoren gibt es im Block nicht.
+const COMBINE_BLOCK_CONNECTION = ['fc', 'host', 'port', 'unitId'];
+const MAX_BLOCK_REGISTERS = 125;
+
+async function readCombinedBlockTerms(conf, terms, read, ctx) {
+  const termConfs = terms.map((term) => {
+    if (term.split || term.sfAddress != null || term.sunspec != null) {
+      throw new Error('combineBlock: Einträge ohne split, sfAddress und sunspec');
+    }
+    for (const k of COMBINE_BLOCK_CONNECTION) {
+      if (term[k] !== undefined && term[k] !== conf[k]) throw new Error(`combineBlock: Eintrag mit eigenem ${k} — alle Einträge lesen über dieselbe Anfrage`);
+    }
+    return combineTermConf(conf, term);
+  });
+  const from = Math.min(...termConfs.map((t) => t.address));
+  const to = Math.max(...termConfs.map((t) => t.address + quantityOf(t)));
+  if (to - from > MAX_BLOCK_REGISTERS) throw new Error(`combineBlock: Spanne ${to - from} Register (höchstens ${MAX_BLOCK_REGISTERS})`);
+  const blockConf = combineTermConf(conf, {});
+  const regs = await read({ ...blockConf, address: from, quantity: to - from }, ATOMIC);
+  if (!Array.isArray(regs) || regs.length < to - from) throw new Error(`combineBlock @${from}: unvollständige Antwort`);
+  let sum = 0;
+  for (const t of termConfs) {
+    const v = decodePointRegs(regs.slice(t.address - from, t.address - from + quantityOf(t)), t, { exact: true });
+    if (v == null) return null;
+    sum += v;
+  }
+  return sum;
+}
+
 async function readCombined(conf, read, ctx) {
   const terms = conf.combine;
   if (!terms.length) throw new Error('combine braucht mindestens einen Eintrag');
@@ -209,7 +245,7 @@ async function readCombined(conf, read, ctx) {
     }
     if (!term.split && !isAddress(term.address)) throw new Error(`combine: Registeradresse fehlt oder ist ungültig (${term.address})`);
   }
-  const sumTerms = async () => {
+  const sumTerms = conf.combineBlock === true ? () => readCombinedBlockTerms(conf, terms, read, ctx) : async () => {
     let sum = 0;
     for (const term of terms) {
       const v = await readPointValue(combineTermConf(conf, term), read, { ...ctx, exact: true });
@@ -248,7 +284,7 @@ export async function readPointValue(conf, read, ctx = {}) {
   const decodeConf = conf.split ? { ...conf, wordOrder: 'be' } : conf;
   const readValue = () => (conf.split
     ? readSplitWords(conf, read)
-    : read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf));
+    : read(conf.quantity == null ? { ...conf, quantity: quantityOf(conf) } : conf, ATOMIC));
   if (conf.sfAddress == null) return decodePointRegs(await readValue(), decodeConf, { exact: ctx.exact });
   assertSfAddress(conf);
   // SF nah beim Wert: ein Block für beide (eine Modbus-Antwort = eine Probe). Kennt das Gerät Register dazwischen
@@ -262,7 +298,7 @@ export async function readPointValue(conf, read, ctx = {}) {
     if (to - from <= SF_BLOCK_SPAN && !ctx.sfBlockUnsupported?.has(blockKey)) {
       let block = null;
       try {
-        block = await read({ ...conf, address: from, quantity: to - from });
+        block = await read({ ...conf, address: from, quantity: to - from }, ATOMIC);
       } catch (e) {
         if (!/^modbus exception [123]\b/.test(String(e?.message))) throw e;
         ctx.sfBlockUnsupported?.add(blockKey);

@@ -1,0 +1,116 @@
+{
+  "label": "SMA Speedwire (STP Smart Energy, SBS, SB/STP) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz (Energy Meter bzw. Sunny Home Manager über das Gerät), PV, Akku-Leistung und SoC über das SMA-Modbus-Profil (Modbus TCP, Port 502, Unit-ID 3) und rechnet die Hauslast aus der Energiebilanz. SMA erlaubt nur eine Modbus-Anfrage je 10 Sekunden, darum erneuern sich die Werte etwa alle 50 Sekunden. DVhub schreibt nichts an das Gerät. Anleitung: docs/hersteller/sma-speedwire.md.",
+  "_doc": [
+    "SMA Speedwire-Plattform, SMA-Modbus-Profil auf Unit-ID 3: Sunny Tripower Smart Energy (Hybrid, alle Werte), Sunny Boy",
+    "Storage (Netz, Akku, SoC; keine PV) und Sunny Boy / Sunny Tripower mit Energy Meter (Netz, PV; kein Akku). DVhub liest EIN",
+    "Gerät. NICHT für die ennexOS-Plattform (Sunny Tripower X, Sunny Tripower Storage X, Data Manager M): eigene Karte, die die",
+    "Spec nicht belegt. NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab, auch mit",
+    "dvControl.enabled in der config.json. Beta: erscheint nur im Bleeding-Edge-Kanal, weil es an keinem Gerät getestet ist.",
+    "",
+    "Quellen (abgerufen 18.11.2026): [SPEC] SMA „SMA-Modbus-general-TI-en-10“ (Unit-ID 3 bzw. 126, Big Endian, FC 03/04 je",
+    "1–125 Register, NaN je Typ §3.5.6/3.5.7, Zeitverhalten §3.7) · [COMM] evcc templates/definition/meter sma-hybrid.yaml",
+    "(Netz 30865 − 30867, PV 30773 + 30961, SoC 30845, Unit 3), sma-datamanager.yaml (Akku −31393 + 31395) · [DECOMP]",
+    "Plexlog SMAInverterStorage (liest 30865 mit 4 Registern in einer Anfrage, FC 03, Unit 3: Bezug − Einspeisung) und SMA",
+    "(30845, 30865). Zusammenfassung: .planning/docs/research/2026-11-15-sma-modbus-control-spec.md §2–3 und",
+    "2026-11-18-hersteller-lesend-luecken.md §3.11. Die Registernummer ist die Drahtadresse (der Abzug von 1 gilt laut SMA nur",
+    "im SunSpec-Profil; Plexlog liest 30865 ohne Abzug).",
+    "",
+    "Zeitverhalten [SPEC §3.7]: „the time period between data transfers via the Modbus protocol must be at least ten",
+    "seconds. No more than five parameters and measured values should be transmitted per SMA inverter.“ DVhub liest darum",
+    "jede Anfrage ≥ 10 s nach dem Ende der vorigen (victron.requestPacing) und höchstens 2 Werte je Anfrage. Ein Takt hat 5",
+    "Anfragen (Netz, SoC, Akku, PV A, PV B), also erneuern sich die Werte etwa alle 50 s. Plexlog liest schneller (200 ms",
+    "Abstand) — DVhub hält sich an die Herstellerregel.",
+    "",
+    "Bewusst NICHT gelesen bzw. nicht abgebildet:",
+    "- SunSpec-Profil (Unit 126, Model 160/714): der Modell-Scan kostet je Modell eine Anfrage, bei ≥ 10 s Abstand Minuten. Die",
+    "  SMA-eigenen Register reichen für die Anzeige.",
+    "- Netz je Phase (31259–31269): sechs Werte, je eine Anfrage mehr; bleiben leer.",
+    "- PV-Eingang C (30967, evcc): fehlt er am Gerät, meldet SMA NaN und die PV-Summe wäre immer leer.",
+    "- Hauslast: kein Lastregister in der Spec → Energiebilanz (Last = PV + Bezug − Einspeisung − Akku).",
+    "- Gerätekennung 30051 (Geräteklasse, 8009 = Batterie-WR laut Plexlog): DVhub prüft nicht, was antwortet (E10).",
+    "- Flash: SMA warnt, dass zyklisches Schreiben normaler RW-Parameter den Flash zerstört [SPEC §2]. Für dieses Profil ohne",
+    "  Bedeutung (kein Write) — wichtig, sobald ein SMA-Profil steuern soll."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 3,
+    "timeoutMs": 5000,
+    "requestPacing": {
+      "_comment": "E7, SMA-Regel [SPEC §3.7]: ≥ 10 s zwischen zwei Modbus-Transfers (vom Ende der Antwort bis zur nächsten Anfrage, auch über einen Verbindungsneuaufbau), höchstens 5 Werte je Transfer (alle Werte hier sind 32 bit → 10 Register; gelesen werden höchstens 4). Poll-Takte frühestens alle 10 s. Eine Pause nach dem Verbindungsaufbau nennt SMA nicht.",
+      "minRequestGapMs": 10000,
+      "maxRegistersPerRequest": 10,
+      "minPollIntervalMs": 10000
+    }
+  },
+
+  "meter": {
+    "_comment": "Netz = 30865 „Leistung Bezug“ − 30867 „Leistung Einspeisung“ (je S32 FIX0, 1 W, beide ≥ 0) [COMM evcc sma-hybrid; DECOMP Plexlog getGrid] → + = Bezug wie DVhub. combineBlock: beide in EINER Anfrage (30865, 4 Register), sonst lägen 10 s zwischen Bezug und Einspeisung. „Kein Wert“ = S32-NaN 0x80000000 [SPEC §3.5.7] → Zählerfehler. Braucht einen SMA Energy Meter bzw. Sunny Home Manager im Speedwire-Netz.",
+    "layout": "point",
+    "fc": 3,
+    "readType": "int32",
+    "combineBlock": true,
+    "notAvailableRaw": [2147483648],
+    "combine": [
+      { "address": 30865 },
+      { "address": 30867, "sign": -1 }
+    ]
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "Akku-Ladezustand, Register 30845 „Bat.ChaStt“ (U32 FIX0, %) [COMM evcc sma-hybrid/sma-sbs-modbus; DECOMP Plexlog]. „Kein Wert“ = U32-NaN 0xFFFFFFFF [SPEC §3.5.7]. Ohne Akku (SB/STP) liefert das Gerät NaN oder einen Fehler.",
+      "enabled": true,
+      "fc": 3,
+      "address": 30845,
+      "quantity": 2,
+      "readType": "uint32",
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [4294967295]
+    },
+    "batteryPowerW": {
+      "_comment": "Akku = 31393 „momentane Batterieladung“ − 31395 „momentane Batterieentladung“ (je U32 FIX0, 1 W, beide ≥ 0) [COMM: Spec §3.2, evcc sma-datamanager (−31393 + 31395 bei + = Entladen)] → + = Laden wie DVhub. combineBlock: beide in EINER Anfrage (31393, 4 Register). „Kein Wert“ = U32-NaN 0xFFFFFFFF [SPEC]. evcc liest am Smart-Energy-Hybrid stattdessen Strom × Spannung (30843 × 30851) — liefert 31393/31395 am Gerät nichts, ist das der Ausweg (braucht ein Produkt, das die Engine nicht kann).",
+      "enabled": true,
+      "fc": 3,
+      "readType": "uint32",
+      "scale": 1,
+      "offset": 0,
+      "combineBlock": true,
+      "notAvailableRaw": [4294967295],
+      "combine": [
+        { "address": 31393 },
+        { "address": 31395, "sign": -1 }
+      ]
+    },
+    "pvPowerW": {
+      "_comment": "PV (DC) = 30773 „DC-Leistung Eingang A“ + 30961 „DC-Leistung Eingang B“ (je S32 FIX0, 1 W) [COMM evcc sma-hybrid; Spec §3.2]. Nicht benachbart (188 Register Abstand) → zwei Anfragen, bis zu 10 s auseinander (eine Summe zweier positiver Werte, kein Vorzeichenproblem). „Kein Wert“ = S32-NaN 0x80000000 [SPEC]: hat das Gerät nur einen Eingang, ist B NaN und die Summe leer — dann den zweiten Eintrag entfernen. Sunny Boy Storage hat keine PV-Eingänge.",
+      "enabled": true,
+      "fc": 3,
+      "readType": "int32",
+      "scale": 1,
+      "offset": 0,
+      "notAvailableRaw": [2147483648],
+      "combine": [
+        { "address": 30773 },
+        { "address": 30961 }
+      ]
+    },
+    "selfConsumptionW": {
+      "_comment": "Kein Lastregister in der Spec. Hauslast = PV + Bezug − Einspeisung − Akku (+ = Laden), jeden Takt neu (E6).",
+      "enabled": false,
+      "derive": "energy_balance"
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}

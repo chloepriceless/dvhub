@@ -219,6 +219,7 @@ const MANUFACTURER_LABELS = {
   'solaredge-storedge': 'SolarEdge StorEdge — nur Anzeige',
   'alphaess-smile': 'AlphaESS SMILE — nur Anzeige',
   'growatt-sph': 'Growatt SPH — nur Anzeige',
+  'sma-speedwire': 'SMA Speedwire (STP Smart Energy, SBS, SB/STP) — nur Anzeige',
 };
 
 // Ausgewählter Provider/Hersteller (menschenlesbar) — nur Auswahl, kein Host.

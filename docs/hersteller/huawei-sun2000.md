@@ -59,7 +59,6 @@ Zusammenfassung in `.planning/docs/research/2026-11-15-huawei-modbus-control-spe
 
 | Lücke | Folge | Braucht |
 |---|---|---|
-| Pause nach dem Verbindungsaufbau | Plexlog wartet 500 ms, evcc 1 s, bevor es liest. DVhub fragt sofort. Mögliche Folge: die erste Lesung nach jedem Verbindungsaufbau scheitert | Anfrage-Taktung (E7) |
 | Netz je Phase (37132/37134/37136) | Phasenwerte bleiben leer. Die Register sind nur bei dreiphasigem Zähler belegt und kosten je eine Anfrage mehr am Ein-Client-Gerät | ginge heute als `meter.phases`, erst nach dem Gerätetest |
 | Gerätekennung (Modell 30000) | DVhub prüft nicht, ob wirklich ein SUN2000 antwortet | Kennungsprobe (E10) |
 | Zweiter Wechselrichter / SmartLogger | nicht abgebildet | eigenes Profil |
@@ -69,8 +68,9 @@ Zusammenfassung in `.planning/docs/research/2026-11-15-huawei-modbus-control-spe
 Für den ersten Test zusätzlich `DVHUB_READ_ONLY=1` setzen. Das sperrt jeden Modbus-Write im Prozess, unabhängig vom
 Profil.
 
-1. **Verbindung:** Laufen Netz, PV und SoC durch? Fehler nur direkt nach dem Verbindungsaufbau (Start, nach einem
-   Abbruch) deuten auf die fehlende Pause (E7) — bitte melden. Häufen sich Zeitüberschreitungen im laufenden
+1. **Verbindung:** Laufen Netz, PV und SoC durch? DVhub wartet nach jedem Verbindungsaufbau 1 s, bevor es liest
+   (wie evcc; `victron.requestPacing.connectDelayMs`). Fehler direkt nach dem Verbindungsaufbau (Start, nach einem
+   Abbruch) trotzdem bitte melden. Häufen sich Zeitüberschreitungen im laufenden
    Betrieb, „Poll Intervall (ms)“ (Einstellungen → Grundsystem, `meterPollMs`) auf 5000 stellen und melden.
 2. **Netz-Vorzeichen:** Bei Netzbezug (abends, Akku leer oder nicht entladend) muss DVhub Bezug zeigen. Zeigt es
    Einspeisung, in `/etc/dvhub/hersteller/huawei-sun2000.json` bei `meter` die Zeile `"sign": -1` entfernen und
