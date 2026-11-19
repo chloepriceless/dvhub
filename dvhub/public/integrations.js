@@ -3989,8 +3989,11 @@
             '</td><td class="num">' + dfSince(r.at) + '</td></tr>';
         });
         var dv = out.dvSignal || {};
+        // Not-Halt/Lese-Modus: das DV-Signal geht nicht hinaus (Christin 19.11.2026) — mit Grund statt „erlaubt“.
+        var dvText = dv.suspended ? 'nicht weitergereicht: ' + (suspendedText[dv.suspended] || dv.suspended)
+          : (dv.forcedOff ? 'Abregelung aktiv' : 'Einspeisung erlaubt');
         crow.push('<tr><td>Direktvermarkter-Signal</td><td class="num">' + (dv.value === null || dv.value === undefined ? '—' : esc(String(dv.value))) +
-          '</td><td>' + (dv.forcedOff ? 'Abregelung aktiv' : 'Einspeisung erlaubt') + '</td><td class="num">—</td></tr>');
+          '</td><td>' + esc(dvText) + '</td><td class="num">—</td></tr>');
         tout.innerHTML = crow.join('');
       }
       var ch = document.getElementById('df-channels');

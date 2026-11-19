@@ -16,13 +16,23 @@
 //   `gridLimit`  die §14a-/EEBUS-Grenzen zum Nachfolgen. Zu bei Not-Halt (§14a ist dann ausgesetzt,
 //                services/emergency-stop/policy.js) und Lese-Modus; NICHT bei ungültigem Herstellerprofil — das betrifft
 //                nur den Wechselrichter, die EEBUS-Grenzen an Wallbox/Wärmepumpe laufen dann auch weiter.
+//   `dvSignal`   das Direktvermarkter-Signal in integrationState (dvControlValue 0/1 und forcedOff) und in der
+//                Datenfluss-Übersicht. Christin 19.11.2026: „im Not-Halt sollte das eigentlich auch stoppen, das
+//                DV-Signal“ — eine Loxone-/HA-Logik, die es abholt und die PV selbst abregelt, steuert sonst weiter,
+//                obwohl DVhub „aus“ ist. Zu bei Not-Halt und Lese-Modus wie `gridLimit`; NICHT bei ungültiger
+//                Konfiguration (C2): dann schreibt DVhub selbst nichts an die Anlage, kann also auch nicht abregeln —
+//                die Weitergabe an Loxone/HA ist der einzige Weg, der gesetzlichen Abregelung zu folgen. Per MQTT gibt
+//                es das DV-Signal nicht. Die Plan-Topics (optimizer/plan, …/current, …/next) sind keine Abholung: sie
+//                tragen nur Information, DVhub führt nichts davon aus (Christin 19.11.2026) — sie bleiben unverändert.
 // Ist das Tor zu, steht dort „keine Vorgabe“ in der Form, die die Abnehmer schon kennen: derselbe Inhalt wie ohne
 // jeden Sollwert (frisch gestartet, nichts zurückgelesen) — Sollwerte null, Herkunft none, Regel und Zeitpunkt null;
-// Grenzen aktiv false, Quelle none, Werte null; scheduleActive je Ziel null. Dazu der Grund (`suspended`, flach
-// `dvhub_control_suspended`: not_halt | read_only | config_unsafe | not_released | gate_error) — NUR solange das Tor
-// zu ist. Offen ist die Herausgabe bit-gleich zu vorher (Nachweis test/gate-pickup-parity.test.js gegen 24eabf21).
-// Messwerte und Status — paused, forcedOff, die Rücklesungen gridSetpointW/minSocPct, dvControlValue — laufen in
-// integrationState und im Publisher unverändert weiter („Werte laufen weiter“).
+// Grenzen aktiv false, Quelle none, Werte null; scheduleActive je Ziel null; DV-Signal null. Dazu der Grund
+// (`suspended`, flach `dvhub_control_suspended`: not_halt | read_only | config_unsafe | not_released | gate_error) — NUR
+// solange das Tor zu ist. Offen ist die Herausgabe bit-gleich zu vorher (Nachweis test/gate-pickup-parity.test.js gegen
+// 24eabf21). Messwerte und Status — paused, die Rücklesungen gridSetpointW/minSocPct — laufen in integrationState und
+// im Publisher unverändert weiter („Werte laufen weiter“); ebenso DVhubs eigener DV-Zustand (state.ctrl, Lease-Ablauf).
+// Nicht hier: die Direktvermarkter-Schnittstelle selbst (Modbus-Server, GET /dv/control-value) — dort liest der
+// Direktvermarkter sein eigenes Signal zurück.
 //
 // Die Bausteine aus services/control-snapshot.js (buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot,
 // gridLimitSnapshotFlat) und das Publizieren der Steuer-Topics stehen außerhalb des Tor-Verzeichnisses nirgends mehr
@@ -35,8 +45,11 @@ import {
 import { DETAIL } from './constants.js';
 import { createLegacyGate, INVERTER_GATE_DEVICE, inverterReleaseState } from './legacy.js';
 
-/** Geräte des Abholpuffers im Tor: Akku-Sollwerte am Wechselrichter, Netzbetreiber-Grenzen zum Nachfolgen. */
-export const PICKUP_GATE_DEVICES = Object.freeze({ control: INVERTER_GATE_DEVICE, gridLimit: 'gridLimit' });
+/**
+ * Geräte des Abholpuffers im Tor: Akku-Sollwerte am Wechselrichter, Netzbetreiber-Grenzen zum Nachfolgen,
+ * Direktvermarkter-Signal.
+ */
+export const PICKUP_GATE_DEVICES = Object.freeze({ control: INVERTER_GATE_DEVICE, gridLimit: 'gridLimit', dvSignal: 'dvSignal' });
 
 /** Gründe für „keine Vorgabe“ (Feld `suspended` bzw. `dvhub_control_suspended`). */
 export const PICKUP_SUSPENDED = Object.freeze(['not_halt', 'read_only', 'config_unsafe', 'not_released', 'gate_error']);
@@ -71,18 +84,22 @@ export function createPickupSink({ state, getCfg, getGate = () => null }) {
       const g = gate();
       g.setRelease(PICKUP_GATE_DEVICES.control, inverterReleaseState(getCfg?.()));
       g.setRelease(PICKUP_GATE_DEVICES.gridLimit, 'open');
+      // DV-Signal: Schreibfreigabe immer offen — die Config entscheidet hier nicht (C2 setzt es nicht aus, s. o.).
+      g.setRelease(PICKUP_GATE_DEVICES.dvSignal, 'open');
       return {
         control: suspensionOf(g.pickupVerdict(PICKUP_GATE_DEVICES.control)),
         gridLimit: suspensionOf(g.pickupVerdict(PICKUP_GATE_DEVICES.gridLimit)),
+        dvSignal: suspensionOf(g.pickupVerdict(PICKUP_GATE_DEVICES.dvSignal)),
       };
     } catch {
-      return { control: 'gate_error', gridLimit: 'gate_error' }; // Tor nicht befragbar → nichts herausgeben
+      return { control: 'gate_error', gridLimit: 'gate_error', dvSignal: 'gate_error' }; // Tor nicht befragbar → nichts herausgeben
     }
   }
 
   /**
-   * Eine Herausgabe: Steuer- und Grenzen-Sicht mit je einem Urteil. Offen genau buildControlSnapshot(state, nowMs)
-   * bzw. buildGridLimitSnapshot(state); zu die „keine Vorgabe“-Form samt `suspended` (nur dann vorhanden).
+   * Eine Herausgabe: Steuer- und Grenzen-Sicht mit je einem Urteil, dazu das Urteil über das DV-Signal. Offen genau
+   * buildControlSnapshot(state, nowMs) bzw. buildGridLimitSnapshot(state); zu die „keine Vorgabe“-Form samt
+   * `suspended` (nur dann vorhanden). Die Werte des DV-Signals liefert dvSignal(h, …) mit diesem Urteil.
    * @param {number} [nowMs]
    */
   function handOut(nowMs = Date.now()) {
@@ -91,7 +108,23 @@ export function createPickupSink({ state, getCfg, getGate = () => null }) {
       ? { ...buildControlSnapshot({ ctrl: state?.ctrl }, nowMs), suspended: s.control }
       : buildControlSnapshot(state, nowMs);
     const gridLimit = s.gridLimit ? buildGridLimitSnapshot({}) : buildGridLimitSnapshot(state);
-    return { suspended: s.control, gridLimitSuspended: s.gridLimit, control, gridLimit };
+    return { suspended: s.control, gridLimitSuspended: s.gridLimit, dvSignalSuspended: s.dvSignal, control, gridLimit };
+  }
+
+  /**
+   * Direktvermarkter-Signal einer Herausgabe (integrationState: dvControlValue, forcedOff; Datenfluss-Übersicht).
+   * `readControlValue` ist server.js ctx.controlValue — es lässt nebenbei eine abgelaufene DV-Lease verfallen und wird
+   * deshalb auch bei geschlossenem Tor gefragt (DVhubs eigener Zustand läuft weiter). Offen: genau die bisherigen Werte
+   * (controlValue(), state.ctrl.forcedOff roh); zu: „kein Signal“ (null) samt Grund.
+   * @param {{ dvSignalSuspended: string|null }} h  Ergebnis von handOut()
+   * @param {() => (number|null)} [readControlValue]
+   */
+  function dvSignal(h, readControlValue) {
+    const value = typeof readControlValue === 'function' ? readControlValue() : null;
+    if (h?.dvSignalSuspended !== null) {
+      return { dvControlValue: null, forcedOff: null, suspended: h?.dvSignalSuspended ?? 'gate_error' };
+    }
+    return { dvControlValue: value, forcedOff: state?.ctrl?.forcedOff };
   }
 
   /** scheduleActive für integrationState (offen: dieselbe Referenz wie bisher). */
@@ -137,5 +170,5 @@ export function createPickupSink({ state, getCfg, getGate = () => null }) {
     return h;
   }
 
-  return { handOut, scheduleActive, flat, publishMirror };
+  return { handOut, scheduleActive, flat, publishMirror, dvSignal };
 }
