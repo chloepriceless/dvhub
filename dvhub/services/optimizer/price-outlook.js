@@ -34,6 +34,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { outboundFetch } from '../outbound-fetch.js';
+import { resolveUserImportPriceCtKwhForSlot } from '../../config-model.js';
+import { getProviderEstimate } from '../tariff-provider/price-store.js';
 
 export const SLOT_MS = 15 * 60 * 1000;
 const HOUR_MS = 3_600_000;
@@ -508,10 +510,92 @@ export function createPriceOutlookService({
 }
 
 /**
+ * Bezugspreis-Prognose (Christin 19.11.2026): Was der Strom aus dem Netz in
+ * den Prognose-Stunden kostet — der Bezugspreis, aufgesetzt auf die
+ * Börsenpreis-Prognose.
+ *
+ * Je Viertelstunde, nicht je Stunde: §14a-Modul-3-Fenster und Grenzen der
+ * Preis-Zeiträume (Ortsdatum) liegen nicht auf vollen Stunden. Gerechnet wie
+ * der Bezugspreis, den EOS für seinen Schwanz bekommt (eos-forecast-bridge.js,
+ * importCtOf): resolveUserImportPriceCtKwhForSlot mit cfg.userEnergyPricing und
+ * der Zeitzone cfg.optimizer.timezone — fest, dynamisch (Börse + Bestandteile,
+ * Modul 3 ersetzt das Netzentgelt), Anbieter (gespeicherter Anbieterpreis, sonst
+ * die angelernte Gerade aus dem Börsenpreis) und Zeiträume.
+ *
+ * - P10/P90 entstehen aus P10/P90 der Börse. Hängt der Bezugspreis nicht von
+ *   der Börse ab (fester Preis, bekannter Anbieterpreis), fällt das Band auf
+ *   den Preis zusammen — das ist richtig so. Fehlt das Band der Börse, gibt es
+ *   auch keins für den Bezug. Fällt der Bezugspreis mit steigender Börse
+ *   (Anbieter-Gerade mit negativer Steigung), tauschen die Enden: unten ≤ oben.
+ * - Ist kein Bezugspreis auflösbar (z. B. fester Tarif ohne Betrag): null. Anders
+ *   als EOS (braucht immer eine Reihe) fällt die Anzeige nicht auf den
+ *   Börsenpreis zurück — der wäre als Bezugspreis falsch.
+ *
+ * @param {Array<{ts:number, p50:number, p10:number|null, p90:number|null}>} hours
+ *   Börsen-Stunden in ct/kWh (wie in buildPriceOutlookPayload)
+ * @returns {Array<{ts:number, p50:number|null, p10:number|null, p90:number|null}>}
+ *   ct/kWh brutto, nur Viertelstunden, die noch nicht vorbei sind
+ */
+export function importPriceOutlookSlots(hours, { pricing = {}, timeZone = 'Europe/Berlin', nowMs = Date.now() } = {}) {
+  const importOf = (ts, marketCt) => {
+    if (!Number.isFinite(marketCt)) return null;
+    const ct = resolveUserImportPriceCtKwhForSlot({ ts, ct_kwh: marketCt }, pricing, { timeZone });
+    return Number.isFinite(ct) ? round2(ct) : null;
+  };
+  const out = [];
+  for (const h of Array.isArray(hours) ? hours : []) {
+    for (let ts = h.ts; ts < h.ts + HOUR_MS; ts += SLOT_MS) {
+      if (ts + SLOT_MS <= nowMs) continue;
+      const p50 = importOf(ts, h.p50);
+      let p10 = null;
+      let p90 = null;
+      if (p50 !== null && h.p10 !== null && h.p90 !== null) {
+        const lo = importOf(ts, h.p10);
+        const hi = importOf(ts, h.p90);
+        if (lo !== null && hi !== null) { p10 = Math.min(lo, hi); p90 = Math.max(lo, hi); }
+      }
+      out.push({ ts, p50, p10, p90 });
+    }
+  }
+  return out;
+}
+
+/**
+ * Zwischenspeicher für importPriceOutlookSlots: Der Leitstand fragt
+ * /api/price/outlook alle 3 s, und ~480 Viertelstunden × 3 Bezugspreise kosten
+ * auf kleinen Boards spürbar Rechenzeit (Mac ~10 ms je Antwort). Gültig nur für
+ * dieselbe Prognose (Objekt), dasselbe Ende der echten Preise, dieselbe
+ * Viertelstunde, Zeitzone, Preis-Einstellungen (Inhalt, nicht nur das Objekt)
+ * und Anbieter-Gerade — und höchstens IMPORT_MEMO_TTL_MS, damit neu geholte
+ * Anbieterpreise spätestens nach einer Minute erscheinen.
+ */
+const IMPORT_MEMO_TTL_MS = 60_000;
+let importMemo = null;
+
+function memoImportPriceOutlookSlots(hours, { outlook, realEnd, pricing, timeZone, nowMs }) {
+  let key;
+  try {
+    key = `${realEnd}|${timeZone}|${Math.floor(nowMs / SLOT_MS)}|${JSON.stringify(pricing)}`;
+  } catch { key = null; }
+  const estimate = getProviderEstimate();
+  const m = importMemo;
+  if (key !== null && m && m.outlook === outlook && m.key === key && m.estimate === estimate
+    && nowMs >= m.at && nowMs - m.at < IMPORT_MEMO_TTL_MS) {
+    return m.slots;
+  }
+  importMemo = null;
+  const slots = importPriceOutlookSlots(hours, { pricing, timeZone, nowMs });
+  if (key !== null && outlook) importMemo = { outlook, key, estimate, at: nowMs, slots };
+  return slots;
+}
+
+/**
  * Antwort für GET /api/price/outlook (Leitstand-Preiskurve, EOS-Karte).
  * Stunden nur hinter dem Ende der echten Preise (state.epex.data): echte
  * Preise haben Vorrang, die Anzeige zeigt nie beides für dieselbe Stunde.
- * Preise in ct/kWh (Börse, ohne Tarif-Bestandteile).
+ * `hours`: Preise in ct/kWh (Börse, ohne Tarif-Bestandteile).
+ * `importSlots`: Bezugspreis-Prognose je Viertelstunde für dieselben Stunden
+ * (importPriceOutlookSlots), ct/kWh brutto.
  */
 export function buildPriceOutlookPayload({ state, cfg, priceOutlook, nowMs = Date.now() } = {}) {
   const rows = Array.isArray(state?.epex?.data) ? state.epex.data : [];
@@ -536,6 +620,19 @@ export function buildPriceOutlookPayload({ state, cfg, priceOutlook, nowMs = Dat
       });
     }
   }
+  // Kaputte Preis-Einstellungen dürfen die Börsen-Prognose nicht mitreißen.
+  let importSlots;
+  try {
+    importSlots = memoImportPriceOutlookSlots(hours, {
+      outlook: cur?.outlook || null,
+      realEnd,
+      pricing: cfg?.userEnergyPricing || {},
+      timeZone: cfg?.optimizer?.timezone || 'Europe/Berlin',
+      nowMs,
+    });
+  } catch {
+    importSlots = [];
+  }
   const tail = state?.optimizer?.eosPriceTail || null;
   return {
     ok: true,
@@ -551,6 +648,7 @@ export function buildPriceOutlookPayload({ state, cfg, priceOutlook, nowMs = Dat
     modelVersion: cur?.outlook?.modelVersion ?? null,
     realUntil: Number.isFinite(realEnd) ? new Date(realEnd).toISOString() : null,
     hours,
+    importSlots,
     eosTail: tail ? {
       used: tail.used === true,
       why: tail.why ?? null,

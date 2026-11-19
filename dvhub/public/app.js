@@ -765,6 +765,9 @@ function priceChartMetaText(status, outlook) {
   if (o && (o.status === 'live' || o.status === 'cached') && Array.isArray(o.hours) && o.hours.length) {
     const last = o.hours[o.hours.length - 1];
     text += ` | Preisprognose (gestrichelt) liegt vor bis ${dm(Number(last.ts) + 3600000)}, Stand ${dm(o.issuedAt)}${o.status === 'cached' ? ' (gespeichert, neue nicht abrufbar)' : ''}`;
+    // Bezugspreis-Prognose (19.11.2026): nur nennen, wenn sich ein Bezugspreis ergibt.
+    const hasImport = Array.isArray(o.importSlots) && o.importSlots.some((s) => s && s.p50 !== null && Number.isFinite(Number(s.p50)));
+    if (hasImport) text += ' · Bezugspreis-Prognose nach deinem Tarif';
   } else if (o && o.status === 'unavailable' && o.unavailableSince) {
     text += ` | Preisprognose nicht verfügbar seit ${dm(o.unavailableSince)}`;
   }
@@ -775,7 +778,11 @@ function priceChartMetaText(status, outlook) {
  * Prognose-Zeilen für die Preiskurve (1.0.11): Stunden aus /api/price/outlook
  * hinter dem letzten festen Preis, im Raster der festen Preise (15 oder 60 min),
  * bis jetzt + 36 h. Preise in ct/kWh (Börse).
- * @returns {Array<{ts:number, ct_kwh:null, forecast:true, p50:number, p10:number|null, p90:number|null}>}
+ * Seit 19.11.2026 mit Bezugspreis-Prognose (importP50/P10/P90, ct/kWh brutto)
+ * aus `importSlots` je Viertelstunde — Wert der Viertelstunde am Zeilenbeginn,
+ * wie der feste Bezugspreis je Slot; fehlt er, null.
+ * @returns {Array<{ts:number, ct_kwh:null, forecast:true, p50:number, p10:number|null, p90:number|null,
+ *   importP50:number|null, importP10:number|null, importP90:number|null}>}
  */
 function buildPriceForecastRows(realData, outlook, nowTs) {
   const hours = Array.isArray(outlook?.hours) ? outlook.hours : [];
@@ -788,20 +795,120 @@ function buildPriceForecastRows(realData, outlook, nowTs) {
   const realEnd = ts[ts.length - 1] + stepMs;
   const winTo = Number(nowTs) + 36 * 3600000;
   const byHour = new Map(hours.map((h) => [Number(h.ts), h]));
+  const importByTs = new Map((Array.isArray(outlook?.importSlots) ? outlook.importSlots : [])
+    .filter((s) => s && Number.isFinite(Number(s.ts)))
+    .map((s) => [Number(s.ts), s]));
+  const num = (v) => (v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null);
   const out = [];
   for (let t = realEnd; t < winTo; t += stepMs) {
     const h = byHour.get(t - (t % 3600000));
     if (!h || !Number.isFinite(Number(h.p50))) break; // Lücke: Prognose endet
+    const imp = importByTs.get(t);
+    const importP50 = num(imp?.p50);
     out.push({
       ts: t,
       ct_kwh: null,
       forecast: true,
       p50: Number(h.p50),
       p10: Number.isFinite(Number(h.p10)) && h.p10 !== null ? Number(h.p10) : null,
-      p90: Number.isFinite(Number(h.p90)) && h.p90 !== null ? Number(h.p90) : null
+      p90: Number.isFinite(Number(h.p90)) && h.p90 !== null ? Number(h.p90) : null,
+      importP50,
+      importP10: importP50 === null ? null : num(imp?.p10),
+      importP90: importP50 === null ? null : num(imp?.p90)
     });
   }
   return out;
+}
+
+/**
+ * Bezugspreis-Reihe der Preiskurve: feste Slots aus dem Preisvergleich
+ * (/api/status userEnergyPricing.slots), Prognose-Zeilen aus der
+ * Bezugspreis-Prognose (importP50). Fehlt ein Wert: null (Lücke).
+ */
+function priceChartImportSeries(data, comparisons) {
+  const byTs = new Map((comparisons || []).filter(Boolean).map((row) => [Number(row.ts), row]));
+  return (Array.isArray(data) ? data : []).map((d) => {
+    const v = d?.forecast ? d.importP50 : byTs.get(Number(d?.ts))?.importPriceCtKwh;
+    return v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : null;
+  });
+}
+
+/**
+ * Spanne der Bezugspreis-Prognose als zwei Reihen (Christin 19.11.2026: „zweite
+ * blasse Linie“): P10 (lo) und P90 (hi) nur in Prognose-Zeilen mit echter
+ * Spanne. Fällt sie zusammen (fester Preis, bekannter Anbieterpreis) oder fehlt
+ * sie, null — die Linien lägen sonst genau auf P50.
+ */
+function priceChartImportBandSeries(data) {
+  const has = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+  const lo = [];
+  const hi = [];
+  for (const d of Array.isArray(data) ? data : []) {
+    const ok = d?.forecast && has(d.importP50) && has(d.importP10) && has(d.importP90)
+      && Math.abs(Number(d.importP90) - Number(d.importP10)) >= 0.005;
+    lo.push(ok ? Number(d.importP10) : null);
+    hi.push(ok ? Number(d.importP90) : null);
+  }
+  return { lo, hi };
+}
+
+/**
+ * Legenden-Klick der Preiskurve: wie Chart.js (Datensatz ein/aus), dazu alle
+ * Datensätze mit `legendGroup` = Bezeichnung des Eintrags — die Spannen-Linien
+ * des Bezugspreises haben keinen eigenen Eintrag und folgen „Bezugspreis“.
+ */
+function togglePriceChartLegend(chart, datasetIndex) {
+  const sets = chart?.data?.datasets || [];
+  const main = sets[datasetIndex];
+  if (!main) return;
+  const hide = chart.isDatasetVisible(datasetIndex);
+  sets.forEach((ds, k) => {
+    if (k === datasetIndex || (main.label && ds.legendGroup === main.label)) chart.getDatasetMeta(k).hidden = hide;
+  });
+  chart.update();
+}
+
+/**
+ * Art eines Abschnitts der Bezugspreis-Linie (Chart.js-Segment-Kontext):
+ *   'real'     endet in einer festen Zeile — Stil der Linie wie bisher;
+ *   'forecast' endet in einer Prognose-Zeile — feiner gestrichelt;
+ *   'gap'      endet in einer Prognose-Zeile, und einer der beiden Punkte hat
+ *              keinen Bezugspreis — nicht zeichnen, sonst überbrückt die Linie
+ *              (spanGaps) die Lücke mit einem erfundenen Preis (Codex ff257d67).
+ * Chart.js 4 ruft den Segment-Stil für jedes benachbarte Paar auf, auch über
+ * übersprungene Punkte; die Lücke steckt in p0.skip/p1.skip, nicht im
+ * Index-Abstand (Codex 82843151). Der Abschnitt über die Lücke wird damit
+ * insgesamt unsichtbar.
+ */
+function priceChartImportSegmentKind(data, segCtx) {
+  if (!data?.[segCtx?.p1DataIndex]?.forecast) return 'real';
+  return segCtx?.p0?.skip || segCtx?.p1?.skip ? 'gap' : 'forecast';
+}
+
+/**
+ * Tooltip-Zeilen für eine Prognose-Zeile der Preiskurve: Börse und — seit
+ * 19.11.2026 — Bezug, je ganze Cent mit Spanne (keine Scheingenauigkeit).
+ * Hängt der Bezugspreis nicht von der Börse ab (fester Preis, bekannter
+ * Anbieterpreis: Spanne fällt zusammen), steht er genau da, ohne Spanne.
+ */
+function priceForecastTooltipLines(row) {
+  const r0 = (v) => Math.round(Number(v));
+  const has = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+  const lines = [`Börse (Prognose): ≈ ${r0(row.p50)} ct/kWh`];
+  if (has(row.p10) && has(row.p90)) lines.push(`Spanne: ${r0(row.p10)}–${r0(row.p90)} ct/kWh`);
+  if (has(row.importP50)) {
+    if (has(row.importP10) && has(row.importP90)) {
+      if (Math.abs(Number(row.importP90) - Number(row.importP10)) < 0.005) {
+        lines.push(`Bezug (Prognose): ${fmtCt(row.importP50, 2)} (unabhängig von der Börse)`);
+      } else {
+        lines.push(`Bezug (Prognose): ≈ ${r0(row.importP50)} ct/kWh (${r0(row.importP10)}–${r0(row.importP90)})`);
+      }
+    } else {
+      lines.push(`Bezug (Prognose): ≈ ${r0(row.importP50)} ct/kWh`);
+    }
+  }
+  lines.push('Börsenpreis noch nicht fest');
+  return lines;
 }
 
 function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps = [], forecast = null, historySlots = [], userSlotTimestamps = [], sunTimes = null, optimizerSlotTimestamps = [], priceOutlook = null) {
@@ -924,11 +1031,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
 
   const labels = data.map(d => new Date(d.ts));
   const prices = data.map(d => (d.forecast ? null : Number(d.ct_kwh)));
-  const importPrices = data.map(d => {
-    const c = comparisonByTs.get(Number(d.ts));
-    const v = Number(c?.importPriceCtKwh);
-    return Number.isFinite(v) ? v : null;
-  });
+  // Bezugspreis: feste Slots aus dem Preisvergleich, im Prognosebereich die
+  // Bezugspreis-Prognose (19.11.2026) — dieselbe Linie läuft weiter.
+  const importPrices = priceChartImportSeries(data, comparisons);
 
   // Build forecast series (interpolation from hourly to 15-min)
   let solarFc = data.map(() => null);
@@ -1074,6 +1179,12 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   }
 
   if (hasImport) {
+    // Im Prognosebereich (Segmente, die in einer Prognose-Zeile enden) läuft
+    // die Linie in derselben Farbe weiter, feiner gestrichelt und etwas
+    // blasser. Eine Linie, ein Legenden-Eintrag: Ausblenden wirkt auf beides.
+    // Prognose-Zeilen ohne Bezugspreis bleiben leer (keine Überbrückung).
+    const importForecastColor = hexToRgba(chartImport, 0.5);
+    const importSegKind = (segCtx) => priceChartImportSegmentKind(data, segCtx);
     datasets.push({
       label: 'Bezugspreis',
       type: 'line',
@@ -1085,9 +1196,43 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       pointHoverRadius: 3,
       fill: false,
       spanGaps: true,
+      segment: {
+        borderDash: (segCtx) => (importSegKind(segCtx) === 'real' ? undefined : [3, 4]),
+        borderColor: (segCtx) => {
+          const kind = importSegKind(segCtx);
+          if (kind === 'gap') return 'transparent';
+          return kind === 'forecast' ? importForecastColor : undefined;
+        }
+      },
       yAxisID: 'y',
       order: 1
     });
+    // Spanne P10/P90 der Bezugspreis-Prognose: zwei dünne, blassere Linien ohne
+    // Füllung (das Börsen-Band bleibt die einzige Fläche). Keine Überbrückung
+    // von Lücken (spanGaps: false); bei festem Preis gibt es keine Werte, also
+    // keine Linien. Kein eigener Legenden-Eintrag: sie folgen „Bezugspreis“.
+    const importBand = priceChartImportBandSeries(data);
+    if (importBand.hi.some((v) => v !== null)) {
+      const bandColor = hexToRgba(chartImport, 0.28);
+      for (const [label, values] of [['Bezugspreis-Spanne unten', importBand.lo], ['Bezugspreis-Spanne oben', importBand.hi]]) {
+        datasets.push({
+          label,
+          legendGroup: 'Bezugspreis',
+          type: 'line',
+          data: values,
+          borderColor: bandColor,
+          backgroundColor: 'transparent',
+          borderWidth: 1,
+          borderDash: [2, 3],
+          pointRadius: 0,
+          pointHoverRadius: 0,
+          fill: false,
+          spanGaps: false,
+          yAxisID: 'y',
+          order: 1
+        });
+      }
+    }
   }
 
   if (hasSolarFc) {
@@ -1417,9 +1562,11 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             font: { size: 11 },
             usePointStyle: true,
             padding: 16,
-            // Untere Kante des Prognose-Bands hat keinen eigenen Eintrag.
-            filter: (item) => !!item.text
-          }
+            // Untere Kante des Prognose-Bands hat keinen eigenen Eintrag, die
+            // Spannen-Linien des Bezugspreises (legendGroup) auch nicht.
+            filter: (item, chartData) => !!item.text && !chartData?.datasets?.[item.datasetIndex]?.legendGroup
+          },
+          onClick: (_e, item, legend) => togglePriceChartLegend(legend.chart, item.datasetIndex)
         },
         tooltip: {
           enabled: false,
@@ -1434,11 +1581,8 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             if (!row) { tt.style.display = 'none'; return; }
             const parts = [fmtDmHm(row.ts)];
             if (row.forecast) {
-              // Prognose: ganze Cent, mit Spanne — keine Scheingenauigkeit.
-              const r0 = (v) => Math.round(Number(v));
-              parts.push(`Prognose: ≈ ${r0(row.p50)} ct/kWh`);
-              if (row.p10 != null && row.p90 != null) parts.push(`Spanne: ${r0(row.p10)}–${r0(row.p90)} ct/kWh`);
-              parts.push('Börsenpreis noch nicht fest');
+              // Prognose: Börse und Bezug in ganzen Cent, mit Spanne — keine Scheingenauigkeit.
+              parts.push(...priceForecastTooltipLines(row));
             } else {
               parts.push(`Börse: ${fmtCt(row.ct_kwh, 2)}`);
             }
@@ -1457,7 +1601,13 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
                 parts.push(`${dp.dataset.label}: ${Math.abs(Number(dp.raw)).toFixed(1)} kW`);
               }
             }
-            tt.innerHTML = parts.map(p => `<div class="tooltip-row">${escapeHtml(p)}</div>`).join('');
+            // Zeilen als Text-Knoten (textContent), kein HTML aus Daten.
+            tt.replaceChildren(...parts.map((p) => {
+              const line = document.createElement('div');
+              line.className = 'tooltip-row';
+              line.textContent = p;
+              return line;
+            }));
             tt.style.display = 'block';
             // 20px-Offset zur ECHTEN Maus (Operator-Wunsch). Fällt auf das
             // Chart-Caret zurück, falls noch keine Cursor-Position bekannt ist.
@@ -1737,7 +1887,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   // Restore legend hidden state from previous chart instance
   if (prevHiddenDatasets.size) {
     priceChartInstance.data.datasets.forEach((ds, i) => {
-      if (prevHiddenDatasets.has(ds.label)) {
+      // Gruppen-Datensätze (Spannen-Linien) folgen ihrem Eintrag — auch wenn
+      // sie beim letzten Zeichnen noch nicht da waren.
+      if (prevHiddenDatasets.has(ds.label) || (ds.legendGroup && prevHiddenDatasets.has(ds.legendGroup))) {
         priceChartInstance.getDatasetMeta(i).hidden = true;
       }
     });
@@ -4751,6 +4903,10 @@ const dashboardApi = {
   getChartHighlightSets,
   collectOptimizerSlotTimestamps,
   buildPriceForecastRows,
+  priceChartImportSeries,
+  priceChartImportBandSeries,
+  togglePriceChartLegend,
+  priceForecastTooltipLines,
   priceChartMetaText,
   groupScheduleRulesForDashboard,
   inferChartSlotMs,
