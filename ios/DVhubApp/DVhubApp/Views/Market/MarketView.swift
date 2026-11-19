@@ -25,12 +25,14 @@ struct MarketView: View {
     @Environment(MarketStore.self) private var market
     @Environment(Chrome.self) private var chrome
     @State private var selectedKey: String
-    @State private var boxPrices: [PricePoint] = []
-    @State private var boxLoaded = false
-    /// Anlage, von der `boxPrices` stammen.
-    @State private var boxSystem: String?
+    /// Was von der Box kommt, liegt je Anlage: Jede Anfrage schreibt nur in das
+    /// Fach ihrer Anlage. So zeigt die Seite nach einem Wechsel nie die Werte
+    /// der vorigen, und eine verspätete Antwort (auch aus einem noch laufenden
+    /// „Aktualisieren“ der alten Ansicht) kann die der neuen nicht überschreiben.
+    /// Bezugstarif je Viertelstunde; ein Eintrag heißt: geladen.
+    @State private var boxPricesBySystem: [String: [PricePoint]] = [:]
     /// Energiemengen je Viertelstunde von heute (Tages-Historie der Box).
-    @State private var energy = MarketEnergy()
+    @State private var energyBySystem: [String: MarketEnergy] = [:]
     @State private var debugDayApplied = false
 
     /// Der gewählte Tag beginnt dort, wo man zuletzt war (`Chrome`) — auch wenn
@@ -47,7 +49,7 @@ struct MarketView: View {
             if !days.isEmpty {
                 DayStrip(days: days, selected: $selectedKey, outlook: market.outlook, width: width)
                 ExchangeCard(days: days.filter { !$0.slots.isEmpty }, box: boxPrices, now: currentPoint, tariffState: tariffState,
-                             energy: shownEnergy, energyState: energyState, selectedKey: $selectedKey)
+                             energy: energy, energyState: energyState, selectedKey: $selectedKey)
                 if let o = market.outlook, days.contains(where: { !$0.isFixed }) {
                     ForecastCard(days: days.filter { !$0.isFixed }, hours: o.hours, selectedKey: $selectedKey, wide: Layout.isWide(width))
                 }
@@ -99,6 +101,11 @@ struct MarketView: View {
     private struct BoxKey: Equatable { let system: String?; let online: Bool? }
 
     private var systemID: String? { controller?.credentials.id }
+    /// Fach der gewählten Anlage („“ = keine gekoppelt).
+    private var systemKey: String { systemID ?? "" }
+    private var boxPrices: [PricePoint] { boxPricesBySystem[systemKey] ?? [] }
+    private var boxLoaded: Bool { boxPricesBySystem[systemKey] != nil }
+    private var energy: MarketEnergy { energyBySystem[systemKey] ?? MarketEnergy() }
 
     /// Beide Wege zum Aktualisieren (Knopf und Herunterziehen) laden alles neu.
     private func refreshAll() async {
@@ -123,7 +130,6 @@ struct MarketView: View {
 
     /// Warum (noch) keine Energiemengen im Diagramm stehen — nil, wenn sie da sind oder noch laden.
     private var energyState: String? {
-        let energy = shownEnergy
         if energy.key == MarketTime.key(Date()), EnergyDay.hasFlows(energy.slots) { return nil }
         guard let controller else { return String(localized: "Die Energiemengen zeigt das Diagramm, sobald eine Anlage gekoppelt ist.") }
         if !controller.isOnline { return String(localized: "Die Energiemengen kommen von der Anlage – sie ist gerade nicht verbunden.") }
@@ -131,55 +137,44 @@ struct MarketView: View {
         return energy.key == MarketTime.key(Date()) ? String(localized: "Für heute liegen noch keine Energiemengen vor.") : nil
     }
 
-    /// Nur die Werte der gewählten Anlage — nach einem Wechsel nie die der vorigen.
-    private var shownEnergy: MarketEnergy { energy.system == systemID ? energy : MarketEnergy() }
-
     /// Energiemengen von heute (deutscher Börsentag) aus der Tages-Historie der Box.
     private func loadEnergy() async {
         #if DEBUG
         // Nur für Bildschirmfotos: -DVHUB_MARKET_ENERGY_DEMO 1 zeichnet einen Beispieltag.
         if UserDefaults.standard.bool(forKey: "DVHUB_MARKET_ENERGY_DEMO") {
-            energy = MarketEnergy.demo(system: systemID)
+            energyBySystem[systemKey] = MarketEnergy.demo()
             return
         }
         #endif
-        // Andere Anlage gewählt: deren Vorgänger-Werte sofort weg, auch wenn sie nicht erreichbar ist.
-        if energy.system != systemID { energy = MarketEnergy(system: systemID) }
         guard let controller, controller.isOnline else { return }
         let system = controller.credentials.id
         let key = MarketTime.key(Date())
         guard let from = MarketTime.day(key) else { return }
         let result = await BoxData.history(controller, view: .day, date: from, day: key)
-        // Inzwischen andere Anlage gewählt: Antwort verwerfen.
-        guard !Task.isCancelled, system == systemID else { return }
+        guard !Task.isCancelled else { return }
         switch result {
         case .ok(let s):
-            energy = MarketEnergy(system: system, key: key, slots: EnergyDay.slots(s, from: from, to: MarketTime.dayEnd(from)), error: nil)
+            energyBySystem[system] = MarketEnergy(key: key, slots: EnergyDay.slots(s, from: from, to: MarketTime.dayEnd(from)), error: nil)
         case .proRequired:
-            energy = MarketEnergy(system: system, key: nil, slots: [], error: String(localized: "Die Energiemengen des Tages gibt diese Anlage nicht frei."))
+            energyBySystem[system] = MarketEnergy(key: nil, slots: [], error: String(localized: "Die Energiemengen des Tages gibt diese Anlage nicht frei."))
         case .failed(let m):
             // Werte desselben Tages bleiben stehen; ein alter Tag nicht.
-            energy = energy.key == key ? MarketEnergy(system: system, key: key, slots: energy.slots, error: m)
-                                       : MarketEnergy(system: system, key: nil, slots: [], error: m)
+            let old = energyBySystem[system]
+            energyBySystem[system] = old?.key == key ? MarketEnergy(key: key, slots: old?.slots ?? [], error: m) : MarketEnergy(key: nil, slots: [], error: m)
         }
     }
 
     /// Eigener Bezugspreis je Viertelstunde aus der Box (Tarif aus DVhub).
     private func loadBoxPrices() async {
-        // Der Tarif einer anderen Anlage bleibt nicht stehen.
-        if boxSystem != systemID { boxPrices = []; boxLoaded = false; boxSystem = systemID }
         guard let controller, controller.isOnline else { return }
         let system = controller.credentials.id
-        guard let r = try? await controller.request("GET", "/api/status"), r.status == 200, system == systemID else { return }
-        boxPrices = PriceSeries.from(status: r.body)
-        boxLoaded = true
+        guard let r = try? await controller.request("GET", "/api/status"), r.status == 200 else { return }
+        boxPricesBySystem[system] = PriceSeries.from(status: r.body)
     }
 }
 
 /// Energiemengen eines Börsentags, wie sie zuletzt von der Box kamen.
 struct MarketEnergy: Equatable {
-    /// Anlage, von der die Werte stammen.
-    var system: String?
     /// Tag (YYYY-MM-DD, deutsche Zeit), zu dem `slots` gehören; nil = noch nichts geladen.
     var key: String?
     var slots: [EnergySlot] = []
@@ -187,7 +182,7 @@ struct MarketEnergy: Equatable {
 
     #if DEBUG
     /// Beispieltag bis „jetzt“: Sonne mittags, Akku lädt daraus und trägt den Abend, nachts Netz.
-    static func demo(system: String?, now: Date = Date()) -> MarketEnergy {
+    static func demo(now: Date = Date()) -> MarketEnergy {
         let from = MarketTime.startOfDay(now)
         var slots: [EnergySlot] = []
         var t = from
@@ -206,7 +201,7 @@ struct MarketEnergy: Equatable {
                                     gridToHomeKwh: need - fromBattery, gridToBatteryKwh: h > 2 && h < 4 ? 0.8 : 0))
             t = t.addingTimeInterval(900)
         }
-        return MarketEnergy(system: system, key: MarketTime.key(now), slots: slots, error: nil)
+        return MarketEnergy(key: MarketTime.key(now), slots: slots, error: nil)
     }
     #endif
 }
