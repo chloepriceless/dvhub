@@ -9,8 +9,10 @@
   font-family:var(--f-mono); font-size:10.5px; letter-spacing:.18em;
   text-transform:uppercase; color:var(--text-2);
   display:inline-flex; align-items:center; gap:8px;
+  min-width:0; white-space:normal; /* M19: langer Autoname bricht um, der Schalter bleibt in der Kachel */
 }
-.ev-tile .rail-card-head .ttl .dot { width:6px; height:6px; border-radius:50%; box-shadow:0 0 6px currentColor; }
+.ev-tile .rail-card-head .ttl .dot { flex:0 0 auto; width:6px; height:6px; border-radius:50%; box-shadow:0 0 6px currentColor; }
+.ev-tile .rail-card-head > .ev-plan-toggle { flex:0 0 auto; white-space:nowrap; }
 .ev-tile .rail-card-head .dot-ev { background:var(--violet); color:var(--violet); }
 .ev-tile .rail-big {
   font-family:var(--f-brand); font-weight:600;
