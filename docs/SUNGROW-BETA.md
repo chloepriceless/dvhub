@@ -175,6 +175,12 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   Entladebefehle mit Modbus-Ausnahme 4 ab, und der Slave soll nicht an der Grenze vorbei einspeisen. Die Einspeisegrenze
   (13074/13087/13088/31222) steht nur am Master. Kurze Netzspitzen bei Lastsprüngen sind möglich. Bekannte Lücke:
   Die PV des Slave folgt der Master-Grenze nicht (eine Drosselung über 13090 ist nicht gebaut).
+- **Ladestand je Wechselrichter:** Beide werden aus demselben Register gelesen: Doku 13023 „Battery level“, U16,
+  0,1 %, FC 4 (auf dem Draht 13022). Der Master im Poll-Takt als Einzelregister, der Slave alle 5 s im Zustandsblock
+  13000–13045 (Stelle 23). Skalierung (÷ 10) und Umrechnung auf den echten SoC (Fenster 13059…13058 je Wechselrichter)
+  sind gleich. Kommt der Slave nur in ganzen Prozentschritten (im Fenster 10–100 % sind das 0,9 % echt), liegt das am
+  Gerät, nicht an DVhub. Ein feineres SoC-Register ist im Profil und in der hier genutzten Protokoll-Doku nicht
+  bekannt (am Gerät ungeprüft). Durch die 5-s-Abfrage kann der Slave-Wert bis zu 5 s älter sein als der des Masters.
 - **Puffer über der Geräte-Untergrenze** (`sungrow.socFloorBufferPct`, Standard 0): DVhub entlädt nicht tiefer als
   Geräte-Untergrenze (13059) + Puffer. Der Puffer hält nur beim Entladen; im Stillstand sinkt der Ladestand durch den
   Eigenverbrauch des Wechselrichters trotzdem bis zur Geräte-Untergrenze, dort lädt der Wechselrichter selbst nach.
