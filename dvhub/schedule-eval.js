@@ -35,6 +35,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
 import { createSungrowEms, endpointKeyOf, sungrowEmsConf, resolveSecondInverter } from './services/inverter/sungrow.js';
+import { RELEASE_BACKOFF_AFTER, RELEASE_BACKOFF_MS } from './services/release-backoff.js';
 import { createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, inverterReleaseState, unwrapLegacyWrite } from './services/gate/legacy.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
@@ -1191,8 +1192,9 @@ export function createScheduleEvaluator(ctx) {
   // (feedIn=true): eine Sperre (Negativpreis-Schutz, §51) muss bei echtem Fehler
   // scharf weiter versuchen und wird NIE gedrosselt. Ein ausdrücklicher Befehl
   // (explicit, z. B. manuelle API-Freigabe) umgeht den Backoff ebenfalls.
-  const DV_RELEASE_BACKOFF_AFTER = 3;
-  const DV_RELEASE_BACKOFF_MS = 5 * 60_000;
+  // Werte gemeinsam mit der manuellen Sungrow-Freigabe (services/release-backoff.js, Option A 19.11.2026).
+  const DV_RELEASE_BACKOFF_AFTER = RELEASE_BACKOFF_AFTER;
+  const DV_RELEASE_BACKOFF_MS = RELEASE_BACKOFF_MS;
   function dvReleaseBackoffState(flag) {
     const m = (state.ctrl._dvReleaseBackoff ??= {});
     return (m[flag] ??= { fails: 0, nextAt: 0, lastError: null });
@@ -2212,6 +2214,7 @@ export function createScheduleEvaluator(ctx) {
     });
     let emsFailure = false;
     let emsReadError = false;
+    let emsReleasePending = false;
     try {
       let encoded, words, fc;
       if (conf.emulate != null) {
@@ -2225,6 +2228,9 @@ export function createScheduleEvaluator(ctx) {
           // Reiner Kontroll-Lesefehler (nichts geschrieben): der Aktuator hat schon sungrow_ems_read_error
           // gemeldet — kein (irreführendes) control_write_error.
           emsReadError = r?.readError === true;
+          // Option A (19.11.2026): manuelle Sungrow-Freigabe steht aus — nichts geschrieben, der Aktuator meldet
+          // selbst (sungrow_ems_release_retry); ebenso kein control_write_error. Der Sollwert bleibt (emsFailure).
+          emsReleasePending = r?.releasePending === true;
           throw new Error(r?.error || 'sungrow_ems_failed');
         }
         encoded = { raw: value, scaled: value, writeType: 'sungrow-ems', wordOrder: 'n/a' };
@@ -2318,7 +2324,7 @@ export function createScheduleEvaluator(ctx) {
     } catch (e) {
       // Reiner Sungrow-Kontroll-Lesefehler: schon als sungrow_ems_read_error gemeldet, nichts geschrieben →
       // kein control_write_error (wäre irreführend).
-      if (!emsReadError) {
+      if (!emsReadError && !emsReleasePending) {
         pushLog('control_write_error', { target, value, source, error: e.message });
         telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
           eventType: 'control_write_error',

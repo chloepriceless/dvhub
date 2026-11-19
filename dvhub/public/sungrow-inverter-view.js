@@ -284,12 +284,27 @@
     };
   }
 
+  // Option A (Christin 19.11.2026): ausstehende/erledigte manuelle Freigabe (Master oder Slave) aus dem EMS-Status.
+  // null = nichts zu melden (der Knopf-Status bleibt dann, wie ihn der Klick gesetzt hat).
+  const RELEASE_PENDING_TEXT = 'Freigabe gescheitert, wird wiederholt';
+  function releaseText(s) {
+    const rels = [['', s.sungrowEms && s.sungrowEms.release], [' (Slave)', s.sungrowEmsSlave && s.sungrowEmsSlave.release]]
+      .filter((x) => x[1]);
+    const pending = rels.filter((x) => x[1].pending === true);
+    if (pending.length) {
+      const n = Math.max(...pending.map((x) => Number(x[1].attempts) || 0));
+      return `${RELEASE_PENDING_TEXT}${pending.length === 1 ? pending[0][0] : ''}${n ? ` · Versuch ${n}` : ''}`;
+    }
+    return rels.length ? 'Freigabe erledigt' : null;
+  }
+
   function view(status) {
     const s = status || {};
     if (!s.sungrowSecond) return { hidden: true };
     const v = s.victron || {};
     return {
       hidden: false,
+      release: releaseText(s),
       mode: modeText(s),
       showCountdown: s.sungrowEms ? isExternalActive(s.sungrowEms) : false,
       master: masterRow(s),
@@ -364,6 +379,7 @@
     // Summe einzeilig im Kopfbereich (M5b): echter System-SoC, sonst gemeldeter als Rückfall.
     const sumSoc = vw.sum.socReal !== DASH ? `real ${vw.sum.socReal}` : `${vw.sum.soc} (gemeldet)`;
     set('sungrowWrSum', `Summe: SoC ${sumSoc} · Akku ${vw.sum.battery} · PV ${vw.sum.pv}`);
+    if (vw.release) set('sungrowWrReleaseStatus', vw.release); // Option A: Freigabe wird wiederholt / erledigt
     wireReleaseButton(d);
   }
 
@@ -384,7 +400,10 @@
         const res = apiFetch ? await apiFetch('/api/sungrow/release', opts) : await fetch('/api/sungrow/release', opts);
         let j = {};
         try { j = await res.json(); } catch { j = {}; }
-        if (statusEl) statusEl.textContent = (res.ok && j.ok) ? 'freigegeben (Modus 0)' : ('Fehler' + (j.error ? ': ' + j.error : ''));
+        if (statusEl) {
+          statusEl.textContent = j.pending === true ? RELEASE_PENDING_TEXT + (j.error ? ' (' + j.error + ')' : '')
+            : (res.ok && j.ok) ? 'freigegeben (Modus 0)' : ('Fehler' + (j.error ? ': ' + j.error : ''));
+        }
       } catch (e) {
         if (statusEl) statusEl.textContent = 'Fehler: ' + (e && e.message ? e.message : 'Netzwerk');
       } finally {

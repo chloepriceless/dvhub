@@ -24,6 +24,7 @@ import { ReadOnlyViolation } from '../../read-only-guard.js';
 import { GateBlockedError } from '../gate/index.js';
 import { createLegacyGate, modbusLegacySink, SUNGROW_GATE_DEVICES } from '../gate/legacy.js';
 import { createModbusHealth } from './modbus-health.js';
+import { releaseBackoffNextAt } from '../release-backoff.js';
 
 /** Doku-Adresse → Draht-Adresse. */
 export const wire = (docAddress) => Number(docAddress) - 1;
@@ -784,6 +785,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     neutralizedAt: null,  // pausedAt des Not-Halts, für den die eine Rücknahme schon lief
     revokedReason: null,  // ein Tor hat den letzten Sollwert abgelehnt
     acceptSeq: 0,         // zählt angenommene Sollwerte (Aufrufzeitpunkt) — eine ältere Ablehnung widerruft keinen neueren
+    release: null,        // ausstehende manuelle Freigabe (Option A): { reason, confirmedBy, since, attempts, nextAt, lastError }
+    releaseDone: null,    // zuletzt nach Wiederholung bestätigte Freigabe { at, attempts, via } (Status-Hinweis „erledigt")
     logKeys: {}
   };
   let chain = Promise.resolve();
@@ -921,8 +924,17 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       decision: st.decision,
       owns: st.owns,
       ownMode: st.ownMode,
-      error: st.error
+      error: st.error,
+      // Option A: nur, wenn eine Freigabe aussteht bzw. nach Wiederholung erledigt ist (sonst fehlt das Feld).
+      ...releaseStatus()
     };
+  }
+  function releaseStatus() {
+    if (st.release) {
+      return { release: { pending: true, since: st.release.since, attempts: st.release.attempts, retryAt: st.release.nextAt || null, lastError: st.release.lastError, text: 'Freigabe gescheitert, wird wiederholt' } };
+    }
+    if (st.releaseDone) return { release: { pending: false, doneAt: st.releaseDone.at, attempts: st.releaseDone.attempts, text: 'Freigabe erledigt' } };
+    return {};
   }
 
   // connOverride: zweite (Slave-)Instanz schreibt an eine andere Verbindung als die victron.*-Hauptverbindung;
@@ -948,6 +960,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     st.target = null;
     st.dev = null;
     st.hb = { key: null, supported: null };
+    st.release = null; // eine ausstehende Freigabe galt dem alten Gerät
     setOwns(null);
   }
 
@@ -1273,7 +1286,12 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // geht. Auch ein bestätigtes Self (Modus 0) wird gemerkt — danach gilt Modus 2 nicht mehr als „eigener".
     if (!isSlave) st.lastMasterWrite = { mode: back.mode, cmd: back.cmd, powerW: back.powerW, at: now() };
     // Erst ein bestätigtes Self-consumption gibt den Besitz ab.
-    if (decision.mode === 'self') setOwns(null);
+    if (decision.mode === 'self') {
+      setOwns(null);
+      // Option A: eine ausstehende manuelle Freigabe ist damit am Gerät erreicht (0xCC + Modus 0 bzw. am Slave 0xCC
+      // bestätigt) — etwa durch die einmalige Not-Halt-Rücknahme oder das Beenden. Nicht noch einmal schreiben.
+      if (st.release) releaseCompleted(decision.reason || 'return');
+    }
     return back;
   }
 
@@ -1696,6 +1714,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (!conf || transport?.type !== 'modbus') return { ok: false, error: 'sungrow_ems_not_configured' };
     syncEndpoint(cfg);
     if (state.ctrl?.discretionaryWritesPaused) return { ok: false, blocked: true, error: 'emergency_stop_active' };
+    // Option A: steht eine manuelle Freigabe aus (Master oder Slave), regelt DVhub nicht — kein Befehl, keine
+    // Leistung, kein Herzschlag. Die Wiederholung läuft in tick(); DVhubs Modus bleibt DVhubs (nicht „fremd").
+    if (releasePendingAny()) { publish(); return releasePendingResult(); }
     const gate = deviceGate(cfg);
     if (gate) {
       st.error = gate;
@@ -1954,6 +1975,13 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     st.acceptSeq += 1;
     return serial(async () => {
       syncEndpoint(getCfg());
+      // Option A: während eine Freigabe aussteht, nimmt der Aktuator keine Vorgabe an (nichts geschrieben; der
+      // Aufrufer behält den Sollwert wie bei jedem Aktuator-Fehler, emsFailure). Nach der Bestätigung wie bisher.
+      // Not-Halt hat Vorrang in der Rückgabe (wie step()).
+      if (releasePendingAny()) {
+        publish();
+        return state.ctrl?.discretionaryWritesPaused ? { ok: false, blocked: true, error: 'emergency_stop_active' } : releasePendingResult();
+      }
       const changed = !st.target || Number(st.target.setpointW) !== Number(setpointW);
       // noGridCharge trägt das Netzlade-Tor (schedule-eval) mit: dieser positive Sollwert darf nur die Last aus
       // dem Netz decken, nie den Akku laden → der Regler begrenzt das Laden auf den PV-Überschuss.
@@ -2000,6 +2028,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return serial(async () => {
       const cfg = getCfg();
       const conf = sungrowEmsConf(cfg);
+      // Option A: ausstehende Freigabe wiederholen — im selben Takt wie das Regeln, auch im Not-Halt (H-7). Sonst nichts.
+      if (conf && releasePendingAny()) return await retryPendingRelease();
       if (!conf || state.ctrl?.discretionaryWritesPaused) return { ok: true, idle: true };
       const opts = resolveSungrowEmsOptions(conf);
       if (!st.target && !st.owns) return { ok: true, idle: true };
@@ -2167,10 +2197,133 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Besitz-Merker. Der Merker kann nach einem Neustart/Lesefehler fehlen, während der Master real noch in DVhubs
   // Modus 2 mit fester Leistung steht (Feld: ~10 min, API-Neustart half nicht, nur sungrowForcedSafeOff löste es).
   // Darum NICHT über writeDecision (das lehnt einen vermeintlich „fremden" Modus 2 ab) — die Register direkt setzen
-  // und zurücklesen. Danach Besitz/Ziel/letzten Write zurücksetzen, damit DVhub nicht sofort wieder eintritt.
-  // Schreibtor: Aktionsklasse manualForceRelease (H-7) — die einzige Not-Halt-Ausnahme, nur die festen Literale
-  // 0xCC/0 Richtung Grundzustand. Bestätigt hat der Bediener am Aufrufer (POST /api/sungrow/release verlangt
+  // und zurücklesen. Nach BESTÄTIGTER Freigabe Besitz/Ziel/letzten Write zurücksetzen, damit DVhub nicht sofort wieder
+  // eintritt. Schreibtor: Aktionsklasse manualForceRelease (H-7) — die einzige Not-Halt-Ausnahme, nur die festen
+  // Literale 0xCC/0 Richtung Grundzustand. Bestätigt hat der Bediener am Aufrufer (POST /api/sungrow/release verlangt
   // confirm: true); die Marke nennt den Anlass. Der Master reicht die Freigabe an den Slave weiter (gleiche Klasse).
+  //
+  // Option A (Christin 19.11.2026, Punkt 7 — „das Verhalten aus dem Feldtest hat Vorrang, Option A ist eigentlich das
+  // natürliche, was man erwarten würde"): Scheitert die Freigabe (Zeitüberschreitung, halb angekommen, nicht
+  // bestätigt), bleibt sie als Absicht stehen und wird wiederholt, bis sie bestätigt ist. Vorher löschte sie Besitz,
+  // Ziel und letzten Write trotzdem — der WR stand weiter in DVhubs Modus 2 mit dem alten Befehl, DVhub hielt ihn für
+  // fremd und schrieb nie wieder; Not-Halt-/Shutdown-Rücknahme, ExecStopPost und Box-Watchdog übersprangen ihn.
+  //   • DVhubs Modus bleibt DVhubs (Besitz-Merker bleibt, auch auf der Platte), solange die Freigabe aussteht.
+  //   • Zwischen zwei Versuchen regelt DVhub nicht (step/applySetpoint: kein Befehl, keine Leistung, kein Herzschlag).
+  //   • Wiederholung = dieselbe Abfolge (Slave 0xCC, Master 0xCC, Master Modus 0, Rücklesen) im vorhandenen Regeltakt
+  //     (tick → due/stepEveryMs) mit dem vorhandenen Freigabe-Backoff aus dem Feldtest (M14, services/release-
+  //     backoff.js: nach 3 Fehlschlägen in Folge alle 5 min, ohne Obergrenze; ein Knopfdruck umgeht das Fenster).
+  //   • M14-Muster: Modbus-Ausnahme, Wert aber übernommen → Schritt erledigt (releaseWrite).
+  //   • Im Not-Halt läuft nur die Wiederholung (manualForceRelease, H-7). Eine bestätigte Not-Halt-/Shutdown-Rücknahme
+  //     erledigt die Freigabe mit (writeDecision self).
+  //   • Kein eigener Betrieb (fremdes EMS/VPP oder nichts gesetzt): einmaliger Versuch wie bisher, keine Wiederholung.
+  const releaseSide = isSlave ? 'slave' : 'master';
+  const isModbusException = (e) => /^modbus exception \d+/.test(String(e?.message));
+
+  // Ein Freigabe-Register schreiben. M14 (Feldtest 6a4e10d3, SH10RT-20; wie schedule-eval runDvControlSequence):
+  // antwortet der WR mit einer Modbus-Ausnahme, hat den Wert aber übernommen, gilt der Schritt als erledigt —
+  // zurücklesen statt ewig wiederholen. Nur bei einer echten Ausnahme (Gerät hat geantwortet); bei Zeitüberschreitung
+  // oder Verbindungsfehler ist der Gerätezustand unbekannt → Fehlschlag.
+  async function releaseWrite(conf, address, value, confirmedBy) {
+    try {
+      await submitReg(conf, address, value, { neutralize: true, manualRelease: confirmedBy });
+    } catch (e) {
+      if (!isModbusException(e)) throw e;
+      let dev;
+      try { dev = await readDevice(conf); } catch { dev = null; }
+      const got = dev ? (address === EMS_MODE_ADDR ? dev.mode : dev.cmd) : null;
+      if (got !== (value & 0xffff)) throw e;
+      pushLog('sungrow_ems_release_already_set', { side: releaseSide, address, value: value & 0xffff, error: e?.message || String(e) }, 'warn');
+    }
+  }
+
+  // Die Freigabe-Abfolge dieses WR (seit M2 unverändert): 0xCC, am Master dann Modus 0, zurücklesen.
+  async function releaseAttempt(conf, confirmedBy) {
+    const out = { ok: false };
+    try {
+      st.dev = null;
+      await releaseWrite(conf, EMS_CMD_ADDR, EMS_CMD.STOP, confirmedBy);
+      if (!isSlave) await releaseWrite(conf, EMS_MODE_ADDR, EMS_MODE.SELF, confirmedBy);
+      const back = await readDevice(conf);
+      out.ok = back.cmd === EMS_CMD.STOP && (isSlave || back.mode === EMS_MODE.SELF);
+      out.device = { mode: back.mode, cmd: back.cmd, powerW: back.powerW };
+      if (!out.ok) out.error = 'release_not_confirmed';
+    } catch (e) { out.error = e?.message || String(e); }
+    return out;
+  }
+
+  function releasePending() { return st.release != null; }
+  function releasePendingAny() { return st.release != null || slaveActuator?.releasePending?.() === true; }
+  function releasePendingResult() { return { ok: false, error: 'sungrow_release_pending', releasePending: true }; }
+
+  function releaseFailed(reason, confirmedBy, error) {
+    const t = now();
+    const r = st.release || { reason, confirmedBy, since: t, attempts: 0, nextAt: 0, lastError: null };
+    r.attempts += 1;
+    r.lastError = error || null;
+    r.nextAt = releaseBackoffNextAt(r.attempts, t);
+    st.release = r;
+    st.releaseDone = null;
+  }
+
+  // Freigabe am Gerät erreicht, nachdem sie ausstand: Hinweis „erledigt" (Log + Status). via = 'release' (eigene
+  // Wiederholung/Knopf) oder der Anlass einer bestätigten Rücknahme (emergency_stop, shutdown, …).
+  function releaseCompleted(via) {
+    const attempts = st.release.attempts + (via === 'release' ? 1 : 0);
+    st.release = null;
+    st.releaseDone = { at: now(), attempts, via };
+    pushLog('sungrow_ems_release_done', {
+      side: releaseSide, attempts, via,
+      text: `Sungrow-Freigabe erledigt (${isSlave ? 'Slave 0xCC' : 'Master Modus 0 + 0xCC'} bestätigt, ${attempts} Versuch${attempts === 1 ? '' : 'e'}).`,
+    });
+  }
+
+  function releaseConfirmed(reason) {
+    setOwns(null); st.target = null; st.revokedReason = reason; st.lastMasterWrite = null;
+    if (st.release) releaseCompleted('release');
+  }
+
+  // Eigene ausstehende Freigabe einmal versuchen (Backoff-Fenster beachten). Aufrufer serialisiert.
+  async function retryOwnRelease() {
+    const r = st.release;
+    if (!r || now() < r.nextAt) return;
+    const conf = sungrowEmsConf(getCfg());
+    const out = await releaseAttempt(conf, r.confirmedBy);
+    if (out.ok) { releaseConfirmed(r.reason); return; }
+    releaseFailed(r.reason, r.confirmedBy, out.error);
+    pushLog('sungrow_ems_release_retry', {
+      side: releaseSide, attempts: st.release.attempts, retryAt: st.release.nextAt || null, error: out.error || null,
+      text: 'Sungrow-Freigabe gescheitert, wird wiederholt.',
+    }, 'warn');
+  }
+
+  // Wiederholung aus tick() (Master): im Regeltakt (due/stepEveryMs), Slave zuerst, dann Master. Auch im Not-Halt —
+  // es läuft ausschließlich die Freigabe-Abfolge (manualForceRelease, H-7).
+  async function retryPendingRelease() {
+    const cfg = getCfg();
+    const conf = sungrowEmsConf(cfg);
+    if (!conf || transport?.type !== 'modbus') return { ok: true, idle: true };
+    syncEndpoint(cfg);
+    if (!releasePendingAny()) { publish(); return { ok: true, idle: true }; }
+    if (!due(stepEveryMs(resolveSungrowEmsOptions(conf)))) return { ...releasePendingResult(), idle: true };
+    st.lastStepAt = now();
+    if (slaveActuator?.releasePending?.() === true) { try { await slaveActuator.retryRelease(); } catch { /* bleibt ausstehend */ } }
+    if (st.release) await retryOwnRelease();
+    publish();
+    return releasePendingAny() ? releasePendingResult() : { ok: true, released: true };
+  }
+
+  // Slave: Wiederholung auf Anstoß des Masters (eigene Serialisierung, eigener Backoff).
+  function retryRelease() {
+    return serial(async () => {
+      const cfg = getCfg();
+      if (!sungrowEmsConf(cfg) || transport?.type !== 'modbus') return { ok: true, idle: true };
+      syncEndpoint(cfg);
+      await retryOwnRelease();
+      publish();
+      return { ok: st.release == null, pending: st.release != null };
+    });
+  }
+
   function forceRelease(reason = 'manual_release') {
     const confirmedBy = `operator:${reason || 'manual_release'}`;
     return serial(async () => {
@@ -2178,24 +2331,46 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       const conf = sungrowEmsConf(cfg);
       if (!conf || transport?.type !== 'modbus') return { ok: true, skipped: true, reason: 'no_modbus' };
       syncEndpoint(cfg);
-      const out = { ok: false };
-      if (slaveActuator) { try { await slaveActuator.forceRelease(reason); } catch { /* best effort */ } }
-      try {
-        st.dev = null;
-        await submitReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, { neutralize: true, manualRelease: confirmedBy });
-        if (!isSlave) await submitReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, { neutralize: true, manualRelease: confirmedBy });
-        const back = await readDevice(conf);
-        out.ok = back.cmd === EMS_CMD.STOP && (isSlave || back.mode === EMS_MODE.SELF);
-        out.device = { mode: back.mode, cmd: back.cmd, powerW: back.powerW };
-      } catch (e) { out.error = e?.message || String(e); }
-      setOwns(null); st.target = null; st.revokedReason = reason; st.lastMasterWrite = null;
-      if (!isSlave) pushLog('sungrow_ems_manual_release', { reason, ok: out.ok, error: out.error || null, text: 'Sungrow manuell freigegeben (Modus 0, beide 0xCC).' }, out.ok ? undefined : 'warn');
+      let slaveOut = null;
+      if (slaveActuator) { try { slaveOut = await slaveActuator.forceRelease(reason); } catch (e) { slaveOut = { ok: false, error: e?.message || String(e) }; } }
+      // Wessen Betrieb wird freigegeben? Vor dem ersten Write festhalten (eine halb angekommene Freigabe ändert den
+      // Gerätezustand). Merker — oder am Master (M2) der zuletzt gelesene Zustand spiegelt DVhubs letzten bestätigten
+      // Write. Nur ein eigener Betrieb wird nach einem Fehlschlag gehalten und wiederholt.
+      const ownBefore = st.owns ? st.ownMode
+        : ((st.dev && (st.dev.mode === EMS_MODE.FORCED || st.dev.mode === EMS_MODE.EXTERNAL) && ownWroteMode(st.dev.mode, st.dev)) ? st.dev.mode : null);
+      const out = await releaseAttempt(conf, confirmedBy); // Knopfdruck: sofort, ohne Backoff-Fenster
+      if (out.ok) {
+        releaseConfirmed(reason);
+      } else if (st.release || ownBefore != null) {
+        if (ownBefore != null) setOwns(ownBefore); // eigener Betrieb bleibt eigener (Merker für Watchdog/ExecStopPost)
+        releaseFailed(reason, confirmedBy, out.error);
+      } else {
+        // Kein eigener Betrieb (fremdes EMS/VPP oder nichts gesetzt): einmaliger Versuch wie bisher.
+        setOwns(null); st.target = null; st.revokedReason = reason; st.lastMasterWrite = null;
+      }
+      // Nur wenn etwas aussteht (sonst bleibt die Rückgabe wie bisher).
+      if (st.release != null || slaveOut?.pending === true) out.pending = true;
+      if (st.release) { out.attempts = st.release.attempts; out.retryAt = st.release.nextAt || null; }
+      if (!isSlave) {
+        const slaveFailed = slaveOut != null && slaveOut.ok !== true && slaveOut.skipped !== true;
+        const text = out.pending
+          ? 'Sungrow-Freigabe gescheitert, wird wiederholt — DVhub regelt bis zur Bestätigung nicht.'
+          : (out.ok
+            ? (slaveFailed ? 'Sungrow-Master freigegeben (Modus 0), Slave-Freigabe gescheitert.' : 'Sungrow manuell freigegeben (Modus 0, beide 0xCC).')
+            : 'Sungrow-Freigabe gescheitert — kein von DVhub gesetzter Betrieb, keine Wiederholung.');
+        pushLog('sungrow_ems_manual_release', {
+          reason, ok: out.ok, pending: out.pending === true, error: out.error || null,
+          ...(st.release ? { attempts: st.release.attempts, retryAt: st.release.nextAt || null } : {}),
+          slave: slaveOut ? { ok: slaveOut.ok === true, pending: slaveOut.pending === true, error: slaveOut.error || null } : null,
+          text,
+        }, out.ok && !slaveFailed ? undefined : 'warn');
+      }
       publish();
       return out;
     });
   }
 
-  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, neutralize, releaseControl, forceRelease, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
+  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, neutralize, releaseControl, forceRelease, releasePending, retryRelease, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
 }
 
 function describe(d, modeValue = EMS_MODE.FORCED) {

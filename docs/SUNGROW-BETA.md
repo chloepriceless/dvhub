@@ -100,6 +100,17 @@ Betreiber die Frist, gilt für die Erkennung eines Hängers die im Gerät zuletz
 das merkt sich DVhub in `sungrow_ems_state.json` im Datenordner (übersteht Neustarts). Fremdes Modus 3/4 wird nie
 überschrieben, auch nicht im Not-Halt.
 
+**Knopf „Sungrow freigeben“** (WR-Kachel, `POST /api/sungrow/release`, auch im Not-Halt): Stopp (0xCC) erst an den
+Slave, dann an den Master, danach Master in Modus 0, zurücklesen. Die Steuerung gibt DVhub erst ab, wenn es Stopp und
+Modus 0 zurückliest. Scheitert das (Zeitüberschreitung, nur halb angekommen), bleibt die Freigabe als Auftrag stehen:
+der Betrieb bleibt DVhubs (Merker, Not-Halt, Beenden, Stopp-Skript und Box-Watchdog greifen weiter), DVhub regelt bis
+zur Bestätigung nicht und wiederholt dieselbe Abfolge im Regeltakt — nach drei Fehlschlägen in Folge alle 5 Minuten,
+wie die Freigabe nach einer Abregelung; ein erneuter Knopfdruck versucht es sofort. Antwortet der Wechselrichter mit
+einer Modbus-Ausnahme, steht der Wert aber, zählt der Schritt als erledigt. Kachel und Protokoll
+(`sungrow_ems_manual_release`, `sungrow_ems_release_retry`, `sungrow_ems_release_done`) zeigen „Freigabe gescheitert,
+wird wiederholt“ bzw. „Freigabe erledigt“. Einen Modus, den nicht DVhub gesetzt hat, gibt der Knopf einmal frei,
+wiederholt wird dann nicht.
+
 ## Eigenverbrauch und Regelgüte
 
 Im External EMS regelt der Wechselrichter den Eigenverbrauch nicht mehr selbst, und eine Netz-Zielleistung, die er

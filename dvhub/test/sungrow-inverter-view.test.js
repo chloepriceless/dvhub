@@ -221,3 +221,15 @@ test('render: Modus 3 blendet die Countdown-Zeile ein', () => {
   assert.equal(els.sungrowWrMasterCountdown.textContent, '28 s');
   assert.equal(els.sungrowWrSlaveCountdownRow.hidden, false);
 });
+
+test('Option A (Christin 19.11.): Freigabe-Hinweis — „wird wiederholt" (Master/Slave), danach „erledigt", sonst nichts', () => {
+  const base = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+  assert.equal(V.view({ ...base, sungrowEms: { owns: true } }).release, null, 'ohne Freigabe-Status kein Hinweis');
+  assert.equal(V.view({ ...base, sungrowEms: { owns: true, release: { pending: true, attempts: 2 } } }).release,
+    'Freigabe gescheitert, wird wiederholt · Versuch 2');
+  assert.equal(V.view({ ...base, sungrowEms: { owns: false }, sungrowEmsSlave: { owns: true, release: { pending: true, attempts: 1 } } }).release,
+    'Freigabe gescheitert, wird wiederholt (Slave) · Versuch 1');
+  assert.equal(V.view({ ...base, sungrowEms: { release: { pending: true, attempts: 4 } }, sungrowEmsSlave: { release: { pending: true, attempts: 1 } } }).release,
+    'Freigabe gescheitert, wird wiederholt · Versuch 4');
+  assert.equal(V.view({ ...base, sungrowEms: { owns: false, release: { pending: false, attempts: 3 } } }).release, 'Freigabe erledigt');
+});

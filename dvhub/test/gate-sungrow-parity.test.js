@@ -144,6 +144,16 @@ const resume = (r) => setEmergencyStop(r.ctx, { on: false });
 // Rückgaben vergleichbar machen: Zeitstempel kommen aus der festen Uhr; pausedAt aus Date.now() wird geglättet.
 const plain = (v) => JSON.parse(JSON.stringify(v ?? null, (k, x) => (k === 'pausedAt' ? '<t>' : x)));
 
+// Gewollte Verhaltensänderung (Christin 19.11., Option A): eine gescheiterte manuelle Freigabe bleibt als Absicht
+// stehen und wird wiederholt (test/sungrow-release-retry.test.js); antwortet der WR mit einer Modbus-Ausnahme, hat den
+// Wert aber übernommen, gilt der Schritt als erledigt (M14-Muster). Gegen einen Stand VOR dem 19.11.
+// (SUNGROW_PARITY_BASE) vergleichen markierte Szenarien nur noch den Draht (Writes + volle Argumente) — der bleibt
+// gleich; Rückgaben, Lesefolge, Log und Kachel ändern sich gewollt. Ohne Base (Standard) gilt weiter alles bit-gleich.
+const OPTION_A = Object.freeze({ since: 'Christin 19.11., Option A', compare: ['wire', 'calls'] });
+const forBase = (out, sc) => (base && sc.intendedSinceBase
+  ? Object.fromEntries(sc.intendedSinceBase.compare.map((k) => [k, out[k]]))
+  : out);
+
 // --- Szenarien ---------------------------------------------------------------------------------------------------
 // je: rig-Optionen, Ablauf (gibt die Rückgaben zurück), optional Soll für die neue Seite (gegen leere Gleichheit).
 const SCENARIOS = {
@@ -284,7 +294,15 @@ const SCENARIOS = {
     },
     // Der Torzustand folgt writeSafety in beide Richtungen (dieselbe Quelle wie die C2-Sperre), gesetzt bei jeder
     // Einreichung — dem einzigen Zeitpunkt, an dem das Tor entscheidet.
-    newSide: (r) => assert.deepEqual(r.notes, ['open', 'profileInvalid', 'profileInvalid', 'open', 'profileInvalid']),
+    newSide: (r) => {
+      assert.deepEqual(r.notes, ['open', 'profileInvalid', 'profileInvalid', 'open', 'profileInvalid']);
+      // Christin 19.11., Option A: die von C2 gesperrte Freigabe bleibt als Absicht stehen, DVhubs Modus 2 bleibt DVhubs.
+      const s = r.ems.status();
+      assert.equal(s.release?.pending, true);
+      assert.equal(s.owns, true);
+      assert.equal(s.ownMode, 2);
+    },
+    intendedSinceBase: OPTION_A,
   },
 
   // Gerät nicht erkannt/nicht unterstützt: der Regler schreibt nicht; Not-Halt-Rücknahme (Merker nach Neustart) und
@@ -311,7 +329,16 @@ const SCENARIOS = {
   modbus_exception_4_mode: {
     rig: { wireOpts: { failWrite: { [`M:${MODE}`]: () => new Error('modbus exception 4') } } },
     run: async (r) => [await r.ems.applySetpoint(-6000, 'rule:abend'), await r.ems.forceRelease('manual_release')],
-    newSide: (r) => assert.ok(r.events.some((e) => e.outcome === 'error' && e.delivery === 'unknown'), 'Ausnahme 4 → unknown'),
+    newSide: (r) => {
+      assert.ok(r.events.some((e) => e.outcome === 'error' && e.delivery === 'unknown'), 'Ausnahme 4 → unknown');
+      // Christin 19.11., Option A (M14-Muster): 13050 meldet Ausnahme 4, der Master steht aber in Modus 0 + 0xCC →
+      // die Freigabe gilt als bestätigt (vorher: Fehlschlag), nichts steht aus.
+      assert.ok(r.logs.includes('sungrow_ems_release_already_set:warn'));
+      assert.ok(r.logs.includes('sungrow_ems_manual_release'), 'Freigabe ohne Warnung gemeldet');
+      assert.equal(r.ems.status().release, undefined);
+      assert.equal(r.ems.status().owns, false);
+    },
+    intendedSinceBase: OPTION_A,
   },
   modbus_timeout_split_slave: {
     rig: { split: true, wireOpts: { failWrite: { [`S:${POWER}`]: () => new Error('modbus timeout') } } },
@@ -380,7 +407,7 @@ for (const name of Object.keys(SCENARIOS)) {
     const sc = SCENARIOS[name];
     const before = await runScenario(name, 'old');
     const after = await runScenario(name, 'new');
-    assert.deepEqual(after.out, before.out, `${name}: Tor-Pfad weicht vom alten Weg ab`);
+    assert.deepEqual(forBase(after.out, sc), forBase(before.out, sc), `${name}: Tor-Pfad weicht vom alten Weg ab`);
     if (sc.wire) assert.deepEqual(after.out.wire, sc.wire, `${name}: Draht-Folge`);
     // Jeder Draht-Write der neuen Seite lief durch das Tor (ein ok/error-Ereignis je Write, Vertrauensklasse legacy).
     const delivered = after.r.events.filter((e) => e.outcome === 'ok' || e.outcome === 'error');

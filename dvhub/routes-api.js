@@ -4293,8 +4293,9 @@ export function createApiRoutes(ctx) {
       let result;
       try { result = await ctx.sungrowEms.forceRelease('manual_release'); }
       catch (e) { pushLog('sungrow_manual_release_error', { error: e?.message || String(e) }, 'warn'); return json(res, 500, { ok: false, error: 'release_failed' }); }
-      pushLog('sungrow_manual_release', { ok: result?.ok === true, device: result?.device || null }, actorContext(req));
-      return json(res, 200, { ok: result?.ok === true, device: result?.device || null, error: result?.error || null });
+      pushLog('sungrow_manual_release', { ok: result?.ok === true, pending: result?.pending === true, device: result?.device || null }, actorContext(req));
+      // Option A (Christin 19.11.2026): pending = Freigabe gescheitert, DVhub wiederholt sie bis zur Bestätigung.
+      return json(res, 200, { ok: result?.ok === true, pending: result?.pending === true, retryAt: result?.retryAt ?? null, device: result?.device || null, error: result?.error || null });
     }
 
     // POST: ein planbares Gerät anlegen/aktualisieren (Upsert nach id).
