@@ -616,8 +616,12 @@ function renderCard(list, tpl, pr, openErrors) {
         refreshSoon();
       });
       const pre = $('.ap-detail', card);
-      const done = Object.values(pr.results || {});
+      // Ergebnisse der Befehle — eigene Überschrift, neueste zuerst: ohne sie las sich die Liste unter dem
+      // Knopf „Fehlerprotokoll (N)“ wie dessen Inhalt (Portal 19.11.).
+      const done = Object.values(pr.results || {}).slice().reverse();
       if (done.length) {
+        const head = $('.ap-detail-head', card);
+        if (head) head.hidden = false;
         pre.hidden = false;
         pre.textContent = done.map((r) => `${r.at} · ${r.ok ? 'OK' : 'FEHLER'}:\n${JSON.stringify(r.result, null, 2)}`).join('\n\n');
       }

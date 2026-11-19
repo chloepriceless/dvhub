@@ -507,6 +507,18 @@ export function buildControlsSummary(ctx, payload = {}) {
   };
 }
 
+/**
+ * Befehls-Ergebnis fürs Portal ohne `uiToken` (Formular-Schutz der Box-Oberfläche — gehört nicht ins Portal;
+ * Portal 19.11.: der Fern-Support-Status trug ihn mit). Verschachtelt, Arrays eingeschlossen; sonst unverändert.
+ */
+export function redactPortalResult(value) {
+  if (Array.isArray(value)) return value.map(redactPortalResult);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [k, v] of Object.entries(value)) if (k !== 'uiToken') out[k] = redactPortalResult(v);
+  return out;
+}
+
 export function buildCompactStatus(ctx, now = Date.now()) {
   const payload = (ctx.getCachedRuntimeStatusPayload && ctx.getCachedRuntimeStatusPayload())
     || (ctx.buildFallbackStatusPayload && ctx.buildFallbackStatusPayload(now))
@@ -853,7 +865,7 @@ export function createInstallerPortalClient(ctx = {}, deps = {}) {
           id: cmd.id,
           ok: !!(out.json && out.json.ok),
           status: out.status,
-          result: out.json ?? null,
+          result: redactPortalResult(out.json ?? null),
         };
         results.push(result);
         pushLog('installer_portal_command_executed', { type: cmd.type, ok: result.ok });

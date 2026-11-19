@@ -43,8 +43,11 @@ export const PORTAL_ERROR_BUCKET_DAYS = 7;
 const TIME_BUDGET_MS = 5 * 60_000;
 
 // Fehler → nach 60 Tagen Episoden.
+// [MQTT]-Meldungen (services/mqtt/index.js logEvent) nur ab Warnung: „[MQTT] Connected to …“ ist Stufe info und
+// lief sonst als Fehler ins Installateurs-Portal (Portal 19.11.).
 export const AUDIT_ERROR_SQL = `(
-  event_type LIKE '%\\_error' OR event_type LIKE '%\\_failed' OR event_type LIKE '[MQTT]%'
+  event_type LIKE '%\\_error' OR event_type LIKE '%\\_failed'
+  OR (event_type LIKE '[MQTT]%' AND severity IN ('warn', 'error', 'critical'))
 )`;
 // Rauschen ohne Fehler → nach 60 Tagen nur noch Tageszähler.
 export const AUDIT_NOISE_SQL = `(

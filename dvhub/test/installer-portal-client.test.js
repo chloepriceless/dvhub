@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, buildControlsSummary, SIDECAR_NAME, RELEASE_PENDING_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
+import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, redactPortalResult, buildControlsSummary, SIDECAR_NAME, RELEASE_PENDING_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
 
 function tmpDir(withApplianceId = true) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-ipc-'));
@@ -267,6 +267,14 @@ test('buildCompactStatus: Rückmeldung vom Gerät hat Vorrang; ohne beides bleib
   assert.equal(s.gridSetpointSource, null);
   assert.equal(s.minSocPct, null);
   assert.equal(s.minSocSource, null);
+});
+
+// Portal 19.11.: Befehls-Ergebnisse (Fern-Support-Status) trugen das UI-Token der Box ins Portal.
+test('redactPortalResult entfernt uiToken (auch verschachtelt), sonst unverändert', () => {
+  const r = redactPortalResult({ ok: true, uiToken: 'a', status: { open: true, uiToken: 'b', list: [{ uiToken: 'c', x: 1 }] } });
+  assert.deepEqual(r, { ok: true, status: { open: true, list: [{ x: 1 }] } });
+  assert.equal(redactPortalResult(null), null);
+  assert.equal(redactPortalResult('text'), 'text');
 });
 
 test('Steuerungen fürs Portal: DV, §51, Einspeisegrenze, §14a, EEBUS', () => {
