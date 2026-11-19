@@ -78,15 +78,22 @@ test.describe('Neue DVhub-Version: Seite lädt neu', () => {
   test('Einstellungen mit ungespeicherter Änderung: Hinweis; Knopf „Neu laden“ lädt', async ({ page }) => {
     const fake = await fakeBuild(page);
     await page.goto('/settings.html');
+    // Erst fertig laden lassen: settings.js updateSaveBar() setzt has-changes nach dem Laden der Konfiguration
+    // neu (Entwurf = gespeichert → weg). Die künstliche Markierung davor ging dabei verloren → Neuladen trotz
+    // „ungespeicherter Änderung“ (lokal 1 von 5 Läufen).
+    await page.waitForLoadState('networkidle');
     const base = await baselineOf(page);
     await page.evaluate(() => { window.__vorReload = 1; document.body.classList.add('has-changes'); });
     fake.build = base === 'feedfacecafe' ? 'deadbeef0003' : 'feedfacecafe';
-    // Einstellungen haben keinen Status-Poll: Rückkehr in die Seite prüft (/health)
-    await page.waitForTimeout(5_500);
-    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-
+    // Einstellungen haben keinen Status-Poll: Rückkehr in die Seite prüft (/health). Diese Abfrage läuft
+    // höchstens alle 5 s (build-watch.js checkMinIntervalMs). Fiel ein anderer Anlass (z. B. focus beim Laden)
+    // in dieses Fenster, verschluckte die EINE feste Rückkehr nach 5,5 s die Abfrage und der Hinweis kam nie
+    // (CI rot 16.11. 25726ad2 und 19.11. 472ca3ec, beide Versuche). Darum die Rückkehr wiederholen, bis er steht.
     const notice = page.locator('.dv-build-notice');
-    await expect(notice).toBeVisible({ timeout: 30_000 });
+    await expect.poll(async () => {
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      return notice.isVisible();
+    }, { timeout: 30_000, intervals: [1_000] }).toBe(true);
     await expect(notice).toHaveAttribute('data-mode', 'waiting');
     await page.waitForTimeout(4_000);
     expect(await marked(page)).toBe(true);
