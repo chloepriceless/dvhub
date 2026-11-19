@@ -1474,8 +1474,8 @@ function buildFieldDefinitions() {
       min: 0,
       max: 50,
       step: 1,
-      default: 1,
-      help: 'Abstand, den DVhub beim Entladen über der geräteeigenen SoC-Untergrenze des Wechselrichters hält. Sungrow meldet den Ladestand fensterrelativ (gemeldet 0 % = die eigene Untergrenze, z. B. 10 %). Entlädt DVhub bis genau dorthin, lädt der Wechselrichter von selbst aus dem Netz nach (Notladung). Mit dem Standard 1 % hält DVhub einen Prozentpunkt darüber (effektiver Entlade-Boden = max(harter Boden, Geräte-Untergrenze + Puffer)). 0 = kein Puffer. Gilt für beide Wechselrichter und auch für die EOS-Planung.'
+      default: 0,
+      help: 'Abstand, den DVhub beim Entladen über der geräteeigenen SoC-Untergrenze des Wechselrichters hält (effektiver Entlade-Boden = max(harter Boden, Geräte-Untergrenze + Puffer)). Der Puffer hält nur beim Entladen: Im Stillstand sinkt der Ladestand durch den Eigenverbrauch des Wechselrichters trotzdem bis zur Geräte-Untergrenze. Dort lädt der Wechselrichter von selbst aus dem Netz nach (Notladung). Standard 0 = DVhub entlädt bis zur Geräte-Untergrenze. Gilt für beide Wechselrichter und auch für die EOS-Planung.'
     },
     {
       section: 'victron',

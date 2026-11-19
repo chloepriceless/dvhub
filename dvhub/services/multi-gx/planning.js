@@ -241,7 +241,7 @@ export function planningMinSocPct(ctx, primaryMinSocPct) {
   const cfg = ctx?.getCfg?.();
   // Zwei Sungrow-WR (Aufgabe 4 + M1, Christin 16.11.): Min-SoC an EOS = der EFFEKTIVE Entlade-Boden, den der Aktuator
   // einhält — max(hartem Boden/Live, 13059 je WR + Puffer), alles real %. KEINE Gewichtung (der Boden schützt den
-  // schwächeren Akku → der HÖHERE Wert, konservativ). Puffer kundeneinstellbar (Default 1). Gleicher Boden wie im
+  // schwächeren Akku → der HÖHERE Wert, konservativ). Puffer kundeneinstellbar (Standard 0 seit M24). Gleicher Boden wie im
   // Aktuator, sonst plant EOS Entladung bis 10 %, die DVhub bei 11 % abbricht (Mismatch).
   if (isSungrow(ctx, cfg)) {
     const dev = ctx?.state?.victron?.device || {};

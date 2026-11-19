@@ -29,3 +29,12 @@ test('1.4-3: strategyCharge-Hilfe beschreibt die ECHTE Fehlerpolitik (Slave-Fehl
   assert.match(help, /Master regelt mit dessen Anteil weiter/);
   assert.match(help, /scheitert der MASTER[^.]*gehen BEIDE/);
 });
+
+test('M24: Puffer über der Geräte-Untergrenze — Standard 0, Hilfetext ehrlich (hält nur beim Entladen)', () => {
+  const f = field('sungrow.socFloorBufferPct');
+  assert.equal(f.default, 0, 'Standard 0 (Christin 19.11.)');
+  assert.match(f.help, /nur beim Entladen/);
+  assert.match(f.help, /Stillstand/);
+  assert.match(f.help, /bis zur Geräte-Untergrenze/);
+  assert.doesNotMatch(f.help, /Standard 1 %/);
+});

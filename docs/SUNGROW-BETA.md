@@ -175,6 +175,10 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   Entladebefehle mit Modbus-Ausnahme 4 ab, und der Slave soll nicht an der Grenze vorbei einspeisen. Die Einspeisegrenze
   (13074/13087/13088/31222) steht nur am Master. Kurze Netzspitzen bei Lastsprüngen sind möglich. Bekannte Lücke:
   Die PV des Slave folgt der Master-Grenze nicht (eine Drosselung über 13090 ist nicht gebaut).
+- **Puffer über der Geräte-Untergrenze** (`sungrow.socFloorBufferPct`, Standard 0): DVhub entlädt nicht tiefer als
+  Geräte-Untergrenze (13059) + Puffer. Der Puffer hält nur beim Entladen; im Stillstand sinkt der Ladestand durch den
+  Eigenverbrauch des Wechselrichters trotzdem bis zur Geräte-Untergrenze, dort lädt der Wechselrichter selbst nach.
+  Eine Erhaltungsladung baut DVhub nicht.
 - **Test-Knopf „Akku nicht laden“:** sperrt nur das Laden. Entladen für das Haus bleibt erlaubt (höchstens die
   Hauslast, auf beide Wechselrichter verteilt); wäre Laden nötig, steht der Befehl auf Stopp (0xCC), Modus 2 bleibt.
 - **Grundsatz: gerechnet wird mit dem, was geliefert wird.** DVhub vergleicht je Wechselrichter den Befehl mit der

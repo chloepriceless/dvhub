@@ -19,6 +19,7 @@ verweist hierher.
 
 ### Geändert
 
+- **Sungrow: Puffer über der Geräte-Untergrenze steht standardmäßig auf 0 (M24).** Der Puffer hält nur beim Entladen. Steht der Akku still, sinkt der Ladestand durch den Eigenverbrauch des Wechselrichters trotzdem bis zur Geräte-Untergrenze; das sagt jetzt auch der Hilfetext. Wer einen eigenen Wert eingetragen hat, behält ihn. Der Leitstand zeigt bei Puffer 0 „Minimum-SoC 10 % (Gerät)“, mit Puffer „(Gerät 10 % + Puffer 1 %)“.
 - **Alle Hersteller-Treiber im Stable-Kanal (Beta entfernt).** Sungrow SH Hybrid, Fronius GEN24, Deye LV-3ph, die Universal-MQTT-Bridge und das DVhub-MQTT-Schema (HA/Loxone) tragen kein `beta`-Flag mehr und erscheinen damit nicht nur im Bleeding-Edge-, sondern im normalen (Stable-)Update-Kanal im Hersteller-Dropdown. Die Funktions-Beta-Gates (Peak-Shaving, Multi-GX, MQTT-Gegenprüfung u. a.) bleiben unberührt.
 
 ### Behoben

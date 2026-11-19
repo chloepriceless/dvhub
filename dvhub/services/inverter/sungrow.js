@@ -92,10 +92,11 @@ export function resolveSungrowControl(cfg) {
   return { mode, modeValue: mode === 'forced' ? EMS_MODE.FORCED : EMS_MODE.EXTERNAL, heartbeatTimeoutS, heartbeatAfterMode, heartbeatWriteFc, acceptDeviceHeartbeatS, keepaliveRegister };
 }
 
-// Notladungs-Puffer über Sungrows Geräte-Untergrenze (M1, Christin 16.11.): kundeneinstellbar je Anlage,
-// Standard 1 Prozentpunkt (real). Der effektive Entlade-Boden ist max(hardFloorSocPct, geräteMinReal + Puffer).
-// 0 = kein Puffer (DVhub entlädt bis exakt zur Geräte-Untergrenze). Geklemmt auf [0, 50].
-export const SUNGROW_DEFAULT_SOC_FLOOR_BUFFER_PCT = 1;
+// Notladungs-Puffer über Sungrows Geräte-Untergrenze (M1, Christin 16.11.): kundeneinstellbar je Anlage. Der effektive
+// Entlade-Boden ist max(hardFloorSocPct, geräteMinReal + Puffer). Geklemmt auf [0, 50]. M24 (Christin 19.11.): Standard
+// 0 — der Puffer hält nur beim Entladen; im Stillstand sinkt der SoC trotzdem bis zur Geräte-Untergrenze (Eigenverbrauch
+// des WR), dort lädt der WR selbst nach. Eine Erhaltungsladung baut DVhub bewusst nicht.
+export const SUNGROW_DEFAULT_SOC_FLOOR_BUFFER_PCT = 0;
 export function sungrowSocFloorBufferPct(cfg) {
   const v = Number(cfg?.sungrow?.socFloorBufferPct);
   return Number.isFinite(v) && v >= 0 ? Math.min(50, v) : SUNGROW_DEFAULT_SOC_FLOOR_BUFFER_PCT;
@@ -194,7 +195,7 @@ export function sungrowRealSocPct(reportedPct, minSocPctDevice, maxSocPctDevice)
 
 // Wirksame Entlade-Grenze eines WR (Aufgabe 1 + M1): der höhere aus hartem Boden und dem geräteeigenen Min-SoC
 // (13059, real) PLUS Notladungs-Puffer. Unter DIESE Grenze (real %) darf DVhub den WR nicht entladen. Der Puffer
-// (Christin 16.11., kundeneinstellbar, Default 1 pp) hält DVhub knapp ÜBER Sungrows eigener Untergrenze (real =
+// (Christin 16.11., kundeneinstellbar, Standard 0 seit M24) hält DVhub knapp ÜBER Sungrows eigener Untergrenze (real =
 // 13059), damit der WR nicht selbst in die Notladung (runningState 0x4001) fällt, die im Feld bei gemeldet 0 %
 // (= real = Gerätemin) kam. Fehlt der Gerätewert, zählt nur der harte Boden (ohne Puffer — kein bekanntes Gerätemin).
 export function sungrowDischargeFloorPct(hardFloorPct, deviceMinSocPct, bufferPct = 0) {
@@ -947,6 +948,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       responseMs: modbusHealthInst.responseMs() ?? st.responseMs,
       writesToday: { mode13050: writeDayBucket().regs[EMS_MODE_ADDR] || 0, cmd13051: st.writeDay.regs[EMS_CMD_ADDR] || 0, power13052: st.writeDay.regs[EMS_POWER_ADDR] || 0, heartbeat13080: st.writeDay.regs[HEARTBEAT_ADDR] || 0 },
       modeBudgetLeft: modeBudgetLeft(),
+      // M24: wirksamer Puffer über der Geräte-Untergrenze (Leitstand: „Minimum-SoC 10 % (Gerät)" bei 0).
+      socFloorBufferPct: sungrowSocFloorBufferPct(getCfg()),
       target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at, noGridCharge: st.target.noGridCharge === true } : null,
       device: st.dev ? { ...st.dev } : null,
       decision: st.decision,
@@ -1491,7 +1494,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const masterSoc = sungrowRealSocPct(state.victron.sungrowMasterSocPct ?? state.victron.soc, masterDev.minSocPctDevice, masterDev.maxSocPctDevice);
     const slaveSoc = sungrowRealSocPct(second.socPct, slaveDev.minSocPctDevice, slaveDev.maxSocPctDevice);
     // Je-WR-SoC-Grenze (Aufgabe 1 + M1): Entlade-Boden = max(hardFloor, 13059 + Puffer), Lade-Decke = min(maxSoc,
-    // 13058) — alles real %. Der Puffer (kundeneinstellbar, Default 1) hält DVhub knapp über Sungrows Untergrenze
+    // 13058) — alles real %. Der Puffer (kundeneinstellbar, Standard 0 seit M24) hält DVhub knapp über Sungrows Untergrenze
     // (verhindert die Notladung). Fehlt der Gerätewert, zählt nur die Konfig-Grenze. splitStrategyShares sperrt damit
     // je WR und leitet den Anteil an den anderen (bis zu DESSEN Grenze) um.
     const socFloorBuffer = sungrowSocFloorBufferPct(cfg);

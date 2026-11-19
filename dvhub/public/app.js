@@ -2068,6 +2068,15 @@ function computeSungrowBatteryView(status) {
     return parts.join(' · ');
   };
   const effW = (d, b) => { const c = [Number(d), Number(b)].filter((x) => Number.isFinite(x) && x > 0); return c.length ? Math.min(...c) : null; };
+  // M24: woher der Minimum-SoC kommt. Puffer 0 → „(Gerät)"; Gerät + Puffer → „(Gerät 10 % + Puffer 1 %)"; liegt der
+  // harte Boden höher → „(DVhub-Boden, Gerät 10 %)". Ohne Pufferangabe (älterer Stand) wie bisher „(Gerät … + Puffer)".
+  const minSocSourceText = (fl, dm, buf) => {
+    if (dm == null) return '';
+    const same = (a, b) => Math.abs(Number(a) - Number(b)) < 0.05;
+    if (!fin(buf)) return same(fl, dm) ? ' (Gerät)' : ` (Gerät ${deNum(dm, 0)} % + Puffer)`;
+    if (same(fl, dm + Number(buf))) return Number(buf) > 0 ? ` (Gerät ${deNum(dm, 0)} % + Puffer ${deNum(buf)} %)` : ' (Gerät)';
+    return ` (DVhub-Boden, Gerät ${deNum(dm, 0)} %)`;
+  };
   const sOnline = sec.online === true;
   const mReal = realSoc(vic.sungrowMasterSocPct != null ? vic.sungrowMasterSocPct : vic.soc, dev.minSocPctDevice, dev.maxSocPctDevice);
   const sReal = sOnline ? realSoc(sec.socPct, sec.minSocPctDevice, sec.maxSocPctDevice) : null;
@@ -2082,7 +2091,7 @@ function computeSungrowBatteryView(status) {
     socMid: realSys != null ? `SoC ${deNum(realSys)} %` : null,
     marks: marks.join(' · '),
     gridSetpoint: spW == null ? '–' : `${Math.round(spW)} W${spSrc ? ` (${srcDe[spSrc] || spSrc})` : ''}`,
-    minSoc: floor != null ? `${deNum(floor)} %${devMin != null ? ` (Gerät ${deNum(devMin, 0)} % + Puffer)` : ''}` : null,
+    minSoc: floor != null ? `${deNum(floor)} %${minSocSourceText(floor, devMin, ems && ems.socFloorBufferPct)}` : null,
     master: wrLine(mReal, vic.sungrowMasterBatteryW != null ? vic.sungrowMasterBatteryW : vic.batteryPowerW, split ? split.masterW : null, vic.emergencyCharge === true),
     slave: sOnline ? wrLine(sReal, sec.batteryPowerW, split ? split.slaveW : null, sec.emergencyCharge === true) : 'Nicht erreichbar',
     maxDischarge,

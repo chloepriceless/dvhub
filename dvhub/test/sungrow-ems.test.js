@@ -918,6 +918,13 @@ test('M28 Grundsatz 0: Sprung im Bedarf, beide WR fahren gleichzeitig hoch → k
   assert.ok(shares.every((x) => x === 0), `keine Verschiebung beim gemeinsamen Hochfahren: ${shares.join(',')}`);
 });
 
+test('M24: Status nennt den wirksamen Puffer über der Geräte-Untergrenze (Standard 0)', async () => {
+  const r = rig({ controlMode: 'forced' });
+  assert.equal(r.ems.status().socFloorBufferPct, 0);
+  r.cfg.sungrow.socFloorBufferPct = 2;
+  assert.equal(r.ems.status().socFloorBufferPct, 2);
+});
+
 test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf, solange er Forced fährt', async () => {
   const hbPath = path.join(os.tmpdir(), `dvhub-forced-hb-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   try {

@@ -60,6 +60,19 @@ test('M9: echter System-SoC groß + gemeldeter klein, Grid-Setpoint aus EMS-Targ
   assert.match(v.maxDischarge, /20 kW/);
 });
 
+test('M24: Minimum-SoC „10 % (Gerät)", wenn der Puffer 0 ist; mit Puffer „(Gerät 10 % + Puffer 1 %)"', () => {
+  const st = (minSocPct, socFloorBufferPct) => ({
+    victron: { soc: 30, device: { minSocPctDevice: 10, maxSocPctDevice: 100 } },
+    sungrowSecond: { online: false },
+    energyBalance: { battery: { socPct: 37, minSocPct } },
+    sungrowEms: { socFloorBufferPct, decision: {} },
+  });
+  assert.equal(D.computeSungrowBatteryView(st(10, 0)).minSoc, '10 % (Gerät)');
+  assert.equal(D.computeSungrowBatteryView(st(11, 1)).minSoc, '11 % (Gerät 10 % + Puffer 1 %)');
+  // Harter Boden höher als Gerät + Puffer → das ist DVhubs Boden, nicht „Gerät + Puffer".
+  assert.equal(D.computeSungrowBatteryView(st(15, 0)).minSoc, '15 % (DVhub-Boden, Gerät 10 %)');
+});
+
 test('M9: Grid-Setpoint fällt auf schedule.active, wenn kein EMS-Target; Slave offline → „Nicht erreichbar"', () => {
   const status = {
     victron: { soc: 50, device: { minSocPctDevice: 10, maxSocPctDevice: 100 } },

@@ -765,9 +765,9 @@ test('Aufgabe 4 + M1: Min-SoC an EOS = effektiver Entlade-Boden inkl. Puffer = m
     victron: { soc: 60, device: { vendor: 'sungrow', minSocPctDevice: 10 } },
     sungrowSecond: { online: true, updatedAt: Date.now(), socPct: 40, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 11000, minSocPctDevice: 12 },
   } };
-  // M1 (Christin 16.11.): EOS bekommt denselben Boden wie der Aktuator — geräteMin real + Puffer (Default 1).
-  // max(5, 10+1, 12+1) = 13.
-  assert.equal(planningMinSocPct(ctx, 5), 13);
+  // M1 (Christin 16.11.): EOS bekommt denselben Boden wie der Aktuator — geräteMin real + Puffer. M24 (19.11.):
+  // Standard-Puffer 0 → max(5, 10, 12) = 12.
+  assert.equal(planningMinSocPct(ctx, 5), 12);
   // Puffer kundeneinstellbar: 0 → roher Geräte-Boden max(5,10,12)=12; 3 → max(5,13,15)=15.
   assert.equal(planningMinSocPct({ ...ctx, getCfg: () => ({ ...cfg, sungrow: { ...cfg.sungrow, socFloorBufferPct: 0 } }) }, 5), 12);
   assert.equal(planningMinSocPct({ ...ctx, getCfg: () => ({ ...cfg, sungrow: { ...cfg.sungrow, socFloorBufferPct: 3 } }) }, 5), 15);
@@ -804,12 +804,12 @@ test('M1: sungrowDischargeFloorPct — effektiver Boden = max(hardFloor, geräte
   assert.equal(sungrowDischargeFloorPct(null, null, 1), 0); // nichts bekannt → 0
 });
 
-test('M1: sungrowSocFloorBufferPct — Default 1, kundeneinstellbar, geklemmt [0,50]', () => {
-  assert.equal(sungrowSocFloorBufferPct({}), 1);
+test('M1 + M24: sungrowSocFloorBufferPct — Default 0 (Christin 19.11.), kundeneinstellbar, geklemmt [0,50]', () => {
+  assert.equal(sungrowSocFloorBufferPct({}), 0);
   assert.equal(sungrowSocFloorBufferPct({ sungrow: { socFloorBufferPct: 0 } }), 0);
   assert.equal(sungrowSocFloorBufferPct({ sungrow: { socFloorBufferPct: 3 } }), 3);
   assert.equal(sungrowSocFloorBufferPct({ sungrow: { socFloorBufferPct: 99 } }), 50);
-  assert.equal(sungrowSocFloorBufferPct({ sungrow: { socFloorBufferPct: -2 } }), 1); // ungültig → Default
+  assert.equal(sungrowSocFloorBufferPct({ sungrow: { socFloorBufferPct: -2 } }), 0); // ungültig → Default
 });
 
 test('Punkt 2: SoC-Reserve/Headroom je WR (SoC 80/20, Kapazität 10/5 kWh, Boden 10 %)', () => {
