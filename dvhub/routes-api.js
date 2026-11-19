@@ -23,6 +23,7 @@ import { parseBody, fmtTs, resolveLogLimit, s16, roundCtKwh, gridDirection, MAX_
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, configuredModule3Windows } from './user-energy-pricing.js';
 import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT, resolvePlantBattery } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
+import { adoptWasActiveMarkers } from './schedule-runtime.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { resolveEosMinSocPct } from './services/optimizer/eos-config-sync.js';
 import { eosPlanFeedInBasis, controlHorizonMode } from './services/optimizer/eos-forecast-bridge.js';
@@ -8782,20 +8783,39 @@ export function createApiRoutes(ctx) {
         return true;
       });
       if (validRules.length !== body.rules.length) return json(res, 400, { ok: false, error: 'invalid rule structure' });
+      if (body.replaceDcFeedRules !== undefined && typeof body.replaceDcFeedRules !== 'boolean') {
+        return json(res, 400, { ok: false, error: 'replaceDcFeedRules must be boolean' });
+      }
       // 2026-06-12: optimizer rules are server-managed like SMA rules. Before
       // this, a manual save round-tripped them through the frontend table and
       // re-imported them WITHOUT slotTs/slotEndTs/closedLoopExport — they then
       // matched daily (no date binding) and lost the closed-loop semantics
       // until the next replan. Keep both automation families server-side.
       const isAutomationRule = (r) => isSmallMarketAutomationRule(r) || isForecastOptimizerRule(r);
-      const incomingManualRules = validRules.filter((r) => !isAutomationRule(r));
+      // _wasActive bestimmt nur der Server: unverändert → behalten, geändert → neu (Codex c49d6e82 P2).
+      const incomingManualRules = adoptWasActiveMarkers(state.schedule.rules, validRules.filter((r) => !isAutomationRule(r)));
       const existingAutomationRules = state.schedule.rules.filter((r) => isAutomationRule(r));
       const existingDcFeedRules = state.schedule.rules.filter((r) => r.target === 'feedExcessDcPv' && !isAutomationRule(r));
       const incomingDcFeedRules = incomingManualRules.filter((r) => r.target === 'feedExcessDcPv');
       const incomingOtherRules = incomingManualRules.filter((r) => r.target !== 'feedExcessDcPv');
-      const dcFeedRules = incomingDcFeedRules.length ? incomingDcFeedRules : existingDcFeedRules;
+      // DC-Einspeise-Regeln (feedExcessDcPv): seit 5a5f458e (März 2026) behält der
+      // Server sie, wenn keine mitkommt — der Leitstand verwaltete sie damals nicht
+      // und hätte sie sonst bei jedem Speichern gelöscht. Damit ließ sich die letzte
+      // aber nie löschen (M20, Feld 19.11.2026: „abregel-sperre“ blieb stehen).
+      // replaceDcFeedRules: true heißt „rules ist die vollständige DC-Liste“ (auch
+      // leer) — Leitstand und JSON-Editor schicken es. Ohne das Kennzeichen bleibt
+      // das alte Verhalten: andere Aufrufer (Skripte, ältere Oberflächen) verlieren
+      // DC-Regeln nicht versehentlich.
+      const replaceDcFeedRules = body.replaceDcFeedRules === true;
+      const dcFeedRules = (replaceDcFeedRules || incomingDcFeedRules.length) ? incomingDcFeedRules : existingDcFeedRules;
       state.schedule.rules = [...incomingOtherRules, ...dcFeedRules, ...existingAutomationRules];
-      pushLog('schedule_rules_updated', { manual: incomingOtherRules.length, dcFeed: dcFeedRules.length, automation: existingAutomationRules.length });
+      pushLog('schedule_rules_updated', {
+        manual: incomingOtherRules.length,
+        dcFeed: dcFeedRules.length,
+        dcFeedRemoved: existingDcFeedRules.filter((r) => !dcFeedRules.includes(r) && !dcFeedRules.some((d) => d.id != null && d.id === r.id)).length,
+        replaceDcFeedRules,
+        automation: existingAutomationRules.length,
+      });
       // Phase 19.1-03: tag this snapshot as operator_manual so Stage-2 Backtest
       // can distinguish operator-initiated rule edits from automation writes.
       ctx.persistConfig('operator_manual');

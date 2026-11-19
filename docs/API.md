@@ -207,7 +207,7 @@ Spalte **Zugang** in den Tabellen:
 | Methode | Pfad | Zugang | Beschreibung |
 |---|---|---|---|
 | GET | `/api/schedule` | LAN·integrations | Zeitplan, Regeln, aktive Werte |
-| POST | `/api/schedule/rules` | Token | Regeln setzen |
+| POST | `/api/schedule/rules` | Token | Manuelle Regeln setzen: `{ rules, replaceDcFeedRules? }`; automatische Regeln bleiben. DC-Einspeise-Regeln (`feedExcessDcPv`) bleiben stehen, wenn keine mitkommt — mit `replaceDcFeedRules: true` ist `rules` auch für sie die vollständige Liste (leer = löschen) |
 | POST | `/api/schedule/rules/toggle` | Token | Regeln per ID ein-/ausschalten |
 | POST | `/api/schedule/config` | Token | Standardwerte setzen |
 | GET | `/api/schedule/automation/config` | LAN·integrations | Kleine Börsenautomatik lesen |
