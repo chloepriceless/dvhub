@@ -183,3 +183,49 @@ test('M22: ohne pushLog keine Log-Zeilen (nur Zähler wie bisher)', async () => 
   await assert.rejects(() => tx.mbRequest({ fc: 4, address: 1, quantity: 1 }));
   assert.equal(h.snapshot().errors24h, 1);
 });
+
+// --- Codex 7dd3cd43 (P2): Ruhe nach dem letzten Fehler, keine LAN-Adresse, FC16-Wert ----------------------------
+test('Codex 7dd3cd43 P2: nach einer fehlerfreien Minute ist ein einzelner Fehler wieder sofort einzeln im Log', async () => {
+  const c = clockFrom(1_000_000);
+  const logs = [];
+  const h = createModbusHealth(c.now, { pushLog: (event, data, level) => logs.push({ event, data, level }), wr: 'master' });
+  let fail = true;
+  const tx = h.wrap({ type: 'modbus', async mbRequest() { if (fail) throw new Error('modbus timeout'); return [1]; }, async mbWriteSingle() {}, async mbWriteMultiple() {} });
+  await assert.rejects(() => tx.mbRequest({ fc: 4, address: 1, quantity: 1 }));  // 0 s
+  c.advance(5000);
+  await assert.rejects(() => tx.mbRequest({ fc: 4, address: 1, quantity: 1 }));  // 5 s
+  fail = false;
+  for (let i = 0; i < 12; i += 1) { c.advance(5000); await tx.mbRequest({ fc: 4, address: 1, quantity: 1 }); } // bis 65 s fehlerfrei
+  c.advance(10000);                                                               // 75 s: 70 s nach dem letzten Fehler
+  fail = true;
+  const before = logs.length;
+  await assert.rejects(() => tx.mbRequest({ fc: 4, address: 5213, quantity: 2 }));
+  assert.equal(logs.length, before + 1, 'sofort eine Zeile');
+  assert.equal(logs.at(-1).event, 'sungrow_modbus_error');
+  assert.equal(logs.at(-1).data.register, 5214);
+});
+
+test('Codex 7dd3cd43 P2: keine LAN-Adresse in Meldung und letztem Fehler (ECONNREFUSED nennt sonst IP:Port)', async () => {
+  const c = clockFrom(1_000_000);
+  const logs = [];
+  const h = createModbusHealth(c.now, { pushLog: (event, data, level) => logs.push({ event, data, level }), wr: 'slave', source: 'poll' });
+  const tx = h.wrap(failingTx(refused));
+  await assert.rejects(() => tx.mbRequest({ host: '192.168.68.83', port: 502, fc: 4, address: 12999, quantity: 46 }));
+  const all = JSON.stringify(logs) + JSON.stringify(h.snapshot());
+  assert.doesNotMatch(all, /192\.168\.68\.83/, 'keine IP im Log oder in der Kachel');
+  assert.doesNotMatch(all, /:502\b/, 'kein Port');
+  assert.match(logs[0].data.message, /ECONNREFUSED/);
+  assert.equal(logs[0].data.kind, 'refused');
+});
+
+test('Codex 7dd3cd43 P2: FC16-Write behält den geschriebenen Wert (Herzschlag 13080 = 30)', async () => {
+  const c = clockFrom(1_000_000);
+  const logs = [];
+  const h = createModbusHealth(c.now, { pushLog: (event, data, level) => logs.push({ event, data, level }), wr: 'master' });
+  const tx = h.wrap(failingTx(() => new Error('modbus exception 3')));
+  await assert.rejects(() => tx.mbWriteMultiple({ address: 13079, values: [30] }));
+  const d = logs[0].data;
+  assert.deepEqual([d.fc, d.address, d.register, d.value, d.quantity], [16, 13079, 13080, 30, 1]);
+  await assert.rejects(() => tx.mbWriteMultiple({ address: 13049, values: [2, 0xbb, 1200] }));
+  c.advance(61_000); h.snapshot();
+});

@@ -60,6 +60,14 @@ export function classifyModbusError(message, errCode = null) {
 }
 
 const WR_LABEL = { master: 'Master', slave: 'Slave' };
+
+// Codex 7dd3cd43 (P2): keine LAN-Adresse ins Protokoll/in die Kachel. Node schreibt sie in Verbindungsfehler
+// („connect ECONNREFUSED 192.168.68.83:502", „getaddrinfo ENOTFOUND wr.local") — Adresse und Port herausnehmen.
+export function sanitizeModbusMessage(message) {
+  return String(message || '')
+    .replace(/\b(connect|getaddrinfo|read|write)\s+(E[A-Z]+)\s+\S+/g, '$1 $2')
+    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/g, '<adresse>');
+}
 // Kurzname eines Fehlercodes für die Zusammenfassung („ECONNREFUSED", „Ausnahme 4", „Timeout").
 function codeLabel(kind, code) {
   if (kind === 'exception') return `Ausnahme ${code}`;
@@ -77,7 +85,7 @@ export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, 
   // M22: Sammelfenster für das Fehler-Protokoll.
   let win = null;           // { start, lenMs, count, logged, kinds, codes }
   let stormLenMs = 0;       // > 0: die letzte Häufung lief noch — nächstes Fenster so lang
-  let lastCloseAt = 0;
+  let lastErrorAt = 0;      // Codex 7dd3cd43: Ruhe zählt ab dem letzten FEHLER, nicht ab dem Fensterende
 
   function closeWindow(t) {
     if (!win) return;
@@ -91,7 +99,6 @@ export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, 
       }, 'warn');
     }
     stormLenMs = win.count > 1 ? Math.min(ERROR_WINDOW_MAX_MS, win.lenMs * 2) : 0;
-    lastCloseAt = t;
     win = null;
   }
   function closeIfDue(t) { if (win && t - win.start >= win.lenMs) closeWindow(t); }
@@ -99,12 +106,14 @@ export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, 
     if (typeof pushLog !== 'function') return;
     closeIfDue(t);
     if (!win) {
-      // Folgt der Fehler direkt auf eine Häufung, bleibt er im (längeren) Sammelfenster; sonst einzeln ins Log.
-      const inStorm = stormLenMs > 0 && t - lastCloseAt < ERROR_WINDOW_MS;
+      // Folgt der Fehler direkt auf eine Häufung (letzter Fehler < 60 s her), bleibt er im (längeren) Sammelfenster;
+      // nach einer fehlerfreien Minute steht er wieder einzeln im Log.
+      const inStorm = stormLenMs > 0 && t - lastErrorAt < ERROR_WINDOW_MS;
       win = { start: t, lenMs: inStorm ? stormLenMs : ERROR_WINDOW_MS, count: 0, logged: !inStorm, kinds: {}, codes: {} };
       if (!inStorm) { stormLenMs = 0; pushLog('sungrow_modbus_error', entry, 'warn'); }
     }
     win.count += 1;
+    lastErrorAt = t;
     win.kinds[entry.kind] = (win.kinds[entry.kind] || 0) + 1;
     const cl = codeLabel(entry.kind, entry.code);
     win.codes[cl] = (win.codes[cl] || 0) + 1;
@@ -136,7 +145,7 @@ export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, 
       const day = t - DAY_MS;
       while (errTimes.length && errTimes[0] < day) errTimes.shift();
       const { kind, code } = classifyModbusError(errMsg, info?.errCode);
-      const message = String(errMsg || '').slice(0, 200);
+      const message = sanitizeModbusMessage(errMsg).slice(0, 200);
       lastError = { message, kind, code, at: t };
       const address = Number.isFinite(Number(info?.address)) ? Number(info.address) : null;
       reportError({
@@ -163,7 +172,9 @@ export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, 
           fc: FC_OF[method] ?? (arg?.fc ?? null),
           address: arg?.address,
           quantity: method === 'mbRequest' ? (arg?.quantity ?? null) : (method === 'mbWriteMultiple' ? (arg?.values?.length ?? null) : 1),
-          value: method === 'mbWriteSingle' ? (arg?.value ?? null) : null,
+          // Codex 7dd3cd43 (P2): auch bei FC 16 den geschriebenen Wert (ein Wort → Zahl, mehrere → Liste).
+          value: method === 'mbWriteSingle' ? (arg?.value ?? null)
+            : (method === 'mbWriteMultiple' && Array.isArray(arg?.values) ? (arg.values.length === 1 ? arg.values[0] : [...arg.values]) : null),
         });
         throw e;
       }
