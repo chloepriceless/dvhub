@@ -265,7 +265,10 @@ const SCENARIOS = {
     newSide: (r) => assert.ok(r.events.length > 0 && r.events.every((e) => e.outcome === 'blocked_readonly'), 'das Tor sperrt im Lese-Modus'),
   },
 
-  // ungültige Konfiguration (C2, writeSafety.ok=false): auch Rücknahme und Zwangsfreigabe schreiben nicht
+  // ungültige Konfiguration (C2, writeSafety.ok=false, Herstellerprofil-Fehler): Sollwert und das Beenden außerhalb
+  // des Not-Halts schreiben nicht. Gewollt geändert (Christin 19.11.2026, „denke schon“): die manuelle Zwangsfreigabe
+  // (H-7) schreibt seither trotz C2 ihre festen Literale 0xCC/0 — bis dahin schrieb sie hier nichts. Die Not-Halt-
+  // Rücknahme unter C2 und die kaputte config.json (nichts) stehen in test/c2-nothalt-release.test.js.
   config_unsafe: {
     rig: {},
     run: async (r) => {
@@ -279,12 +282,19 @@ const SCENARIOS = {
       r.cfg.writeSafety = { ok: true };
       out.push(await r.ems.applySetpoint(-2000, 'rule:abend')); note(); // neuer Sollwert (1900 W) → schreibt wieder
       r.cfg.writeSafety = unsafe;
-      out.push(await r.ems.forceRelease('manual_release')); note(); // auch die Zwangsfreigabe schreibt nicht (C2)
+      out.push(await r.ems.forceRelease('manual_release')); note(); // Zwangsfreigabe trotz C2 (Christin 19.11.2026)
       return out;
     },
+    // Bis 19.11.2026 endete die Folge nach 'M:13051=1900'; die letzten beiden Writes sind die Zwangsfreigabe unter C2.
+    wire: ['M:13051=3000', 'M:13050=187', 'M:13049=2', 'M:13051=1900', 'M:13050=204', 'M:13049=0'],
     // Der Torzustand folgt writeSafety in beide Richtungen (dieselbe Quelle wie die C2-Sperre), gesetzt bei jeder
-    // Einreichung — dem einzigen Zeitpunkt, an dem das Tor entscheidet.
-    newSide: (r) => assert.deepEqual(r.notes, ['open', 'profileInvalid', 'profileInvalid', 'open', 'profileInvalid']),
+    // Einreichung — dem einzigen Zeitpunkt, an dem das Tor entscheidet. Die Zwangsfreigabe lässt es bei profileInvalid
+    // durch (manualForceRelease, Christin 19.11.2026).
+    newSide: (r) => {
+      assert.deepEqual(r.notes, ['open', 'profileInvalid', 'profileInvalid', 'open', 'profileInvalid']);
+      const manual = r.events.filter((e) => e.action === 'manualForceRelease').map((e) => `${e.point}=${e.value.eng}:${e.outcome}`);
+      assert.deepEqual(manual, ['emsCmd=204:ok', 'emsMode=0:ok']);
+    },
   },
 
   // Gerät nicht erkannt/nicht unterstützt: der Regler schreibt nicht; Not-Halt-Rücknahme (Merker nach Neustart) und

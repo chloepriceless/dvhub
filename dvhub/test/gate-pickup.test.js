@@ -141,7 +141,23 @@ describe('services/gate/pickup.js', () => {
     assert.equal(inverterReleaseState({}), 'open');
     assert.equal(inverterReleaseState({ writeSafety: { ok: true } }), 'open');
     assert.equal(inverterReleaseState({ writeSafety: {} }), 'open');
-    assert.equal(inverterReleaseState({ writeSafety: { ok: false } }), 'profileInvalid');
+    // Christin 19.11.2026: bei ungültigem Herstellerprofil dürfen Not-Halt-Rücknahme und Zwangsfreigabe durch
+    // (profileInvalid); ohne belegten Grund — wie bei kaputter config.json — sperrt das Tor alles (setupIncomplete,
+    // test/c2-nothalt-release.test.js). Bis dahin hieß auch das profileInvalid.
+    assert.equal(inverterReleaseState({ writeSafety: { ok: false } }), 'setupIncomplete');
+    assert.equal(inverterReleaseState({ writeSafety: { ok: false, reason: 'manufacturer_profile_error' } }), 'profileInvalid');
+  });
+
+  it('kaputte config.json (Tor setupIncomplete) heißt nach außen weiter config_unsafe', () => {
+    const state = makeState();
+    const gate = createLegacyGate({ isHalted: () => false });
+    const sink = createPickupSink({ state, getCfg: () => ({ writeSafety: { ok: false, reason: 'config_broken' } }), getGate: () => gate });
+    const h = sink.handOut(T0);
+    assert.equal(gate.releaseState(INVERTER_GATE_DEVICE), 'setupIncomplete');
+    assert.equal(h.suspended, 'config_unsafe');
+    assert.equal(sink.flat(h).dvhub_control_suspended, 'config_unsafe');
+    assert.equal(h.gridLimitSuspended, null);
+    assert.equal(h.dvSignalSuspended, null);
   });
 
   it('Tor nicht befragbar: nichts herausgeben (gate_error)', () => {

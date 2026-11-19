@@ -82,12 +82,16 @@ export function createPickupSink({ state, getCfg, getGate = () => null }) {
   function suspensions() {
     try {
       const g = gate();
-      g.setRelease(PICKUP_GATE_DEVICES.control, inverterReleaseState(getCfg?.()));
+      const cfg = getCfg?.();
+      g.setRelease(PICKUP_GATE_DEVICES.control, inverterReleaseState(cfg));
       g.setRelease(PICKUP_GATE_DEVICES.gridLimit, 'open');
       // DV-Signal: Schreibfreigabe immer offen — die Config entscheidet hier nicht (C2 setzt es nicht aus, s. o.).
       g.setRelease(PICKUP_GATE_DEVICES.dvSignal, 'open');
+      const control = g.pickupVerdict(PICKUP_GATE_DEVICES.control);
       return {
-        control: suspensionOf(g.pickupVerdict(PICKUP_GATE_DEVICES.control)),
+        // Ungültige Config heißt nach außen immer `config_unsafe` — ob das Tor sie als profileInvalid (Herstellerprofil)
+        // oder setupIncomplete (kaputte config.json, inverterReleaseState) führt, ändert für den Abholer nichts.
+        control: control.blockedBy === 'release' && cfg?.writeSafety?.ok === false ? 'config_unsafe' : suspensionOf(control),
         gridLimit: suspensionOf(g.pickupVerdict(PICKUP_GATE_DEVICES.gridLimit)),
         dvSignal: suspensionOf(g.pickupVerdict(PICKUP_GATE_DEVICES.dvSignal)),
       };

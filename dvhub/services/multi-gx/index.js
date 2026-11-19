@@ -28,7 +28,7 @@ import { safeInterval } from '../safe-async.js';
 import { betaGateOpen } from '../../beta-features.js';
 import { gridImportW } from '../optimizer/grid-storage.js';
 import { getPowerLimits } from '../power-limits.js';
-import { createLegacyGate, modbusLegacySink, MULTI_GX_GATE_DEVICE, multiGxLegacyPolicies, unwrapLegacyWrite } from '../gate/legacy.js';
+import { createLegacyGate, inverterReleaseState, modbusLegacySink, MULTI_GX_GATE_DEVICE, multiGxLegacyPolicies, unwrapLegacyWrite } from '../gate/legacy.js';
 
 export const MULTI_GX_TICK_MS = 5000;
 // 820–822: Netz L1–L3 des Systems; ohne eigenen Zaehler meldet die GX dort den
@@ -159,7 +159,10 @@ export function createMultiGx(ctx, deps = {}) {
     return true;
   }
 
-  const syncRelease = (cfg) => gate.setRelease(MULTI_GX_GATE_DEVICE, cfg?.writeSafety?.ok === false ? 'profileInvalid' : 'open');
+  // Schreibfreigabe aus derselben Abbildung wie Wechselrichter und Sungrow (Herstellerprofil-Fehler → profileInvalid,
+  // kaputte config.json → setupIncomplete). Die zweite GX hat ohnehin keine Rücknahme-Klasse (nur command, keepalive,
+  // autoRestore) — beide Zustände sperren hier alles.
+  const syncRelease = (cfg) => gate.setRelease(MULTI_GX_GATE_DEVICE, inverterReleaseState(cfg));
 
   // Schreibtor (D.1 #8): derselbe FC-16-Aufruf wie bisher über gate.submit() am Gerät gx2. Die Prüfungen des Takts
   // (Schalter, Beta-Tor, Not-Halt, C2) sitzen direkt davor, ohne await dazwischen — das Tor urteilt im selben
