@@ -335,6 +335,9 @@
   // Stammt der angezeigte Hinweis aus dem Status (nicht aus dem eigenen Klick)? Dann verschwindet er, sobald der Status
   // ihn nicht mehr trägt — etwa nach einer erfolgreichen Freigabe aus einem anderen Tab (Codex 6f356cb8).
   let releaseTextFromStatus = false;
+  // Läuft gerade eine eigene Freigabe-Anfrage? Dann fasst render() die Zeile nicht an (Codex 04cd3f9f): ein Status-Takt
+  // dazwischen kennt die neue Anfrage noch nicht und würde „läuft…" bzw. danach das Klick-Ergebnis verdrängen.
+  let releaseRequestInFlight = false;
 
   function view(status) {
     const s = status || {};
@@ -422,7 +425,8 @@
     // Option A: Freigabe wird wiederholt / erledigt / verworfen / gescheitert — nur, wenn der Hinweis nicht zu einer
     // älteren Anfrage gehört als der letzte Knopfdruck (P2).
     const stale = lastReleaseRequestAt != null && vw.releaseAt != null && vw.releaseAt < lastReleaseRequestAt;
-    if (vw.release && !stale) { set('sungrowWrReleaseStatus', vw.release); releaseTextFromStatus = true; }
+    if (releaseRequestInFlight) { /* eigene Anfrage läuft — ihr Ergebnis setzt der Klick */ }
+    else if (vw.release && !stale) { set('sungrowWrReleaseStatus', vw.release); releaseTextFromStatus = true; }
     else if (!vw.release && releaseTextFromStatus) { set('sungrowWrReleaseStatus', ''); releaseTextFromStatus = false; }
     wireReleaseButton(d);
   }
@@ -438,6 +442,7 @@
     btn.addEventListener('click', async () => {
       if (typeof window !== 'undefined' && window.confirm && !window.confirm('Sungrow freigeben: Master auf Eigenverbrauch (Modus 0), beide Wechselrichter auf Stopp (0xCC). Fortfahren?')) return;
       btn.disabled = true;
+      releaseRequestInFlight = true; // bis zur Antwort fasst render() die Zeile nicht an
       releaseTextFromStatus = false; // ab jetzt zeigt die Zeile das Ergebnis dieses Klicks
       if (statusEl) statusEl.textContent = 'läuft…';
       try {
@@ -452,9 +457,12 @@
               : (res.ok && j.ok) ? 'freigegeben (Modus 0)'
                 : ('Freigabe gescheitert' + (j.error ? ': ' + j.error : ''));
         }
+        releaseTextFromStatus = false; // die Zeile zeigt das Klick-Ergebnis (Codex 04cd3f9f), nicht einen Status-Hinweis
       } catch (e) {
         if (statusEl) statusEl.textContent = 'Fehler: ' + (e && e.message ? e.message : 'Netzwerk');
+        releaseTextFromStatus = false;
       } finally {
+        releaseRequestInFlight = false;
         btn.disabled = false;
       }
     });

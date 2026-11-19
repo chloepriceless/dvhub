@@ -341,3 +341,63 @@ test('Codex 6f356cb8: ein vom Server gemeldeter Hinweis verschwindet, wenn der S
   W.render(base, doc);
   assert.equal(els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)');
 });
+
+// Kachel mit zurückgehaltener API-Antwort (die Anfrage „läuft", bis der Test sie auflöst oder scheitern lässt).
+function deferredTile() {
+  const file = fileURLToPath(new URL('../public/sungrow-inverter-view.js', import.meta.url));
+  const pending = [];
+  const apiFetch = () => new Promise((resolve, reject) => pending.push({
+    respond: (status, body) => resolve({ ok: status === 200, status, json: async () => body }),
+    fail: (msg) => reject(new Error(msg)),
+  }));
+  const sandbox = { window: { confirm: () => true, DVhubCommon: { apiFetch } }, document: undefined };
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: 'sungrow-inverter-view.js' });
+  const W = sandbox.window.DVhubSungrowInverters;
+  const els = {};
+  let onClick = null;
+  const el = (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false, disabled: false,
+    ...(id === 'sungrowWrReleaseBtn' ? { addEventListener: (ev, fn) => { if (ev === 'click') onClick = fn; } } : {}) }));
+  const doc = { getElementById: (id) => el(id) };
+  return { W, els, doc, pending, click: () => onClick() };
+}
+const TILE_BASE = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+const OLD_FAILURE = { ...TILE_BASE, sungrowEms: { release: { pending: false, failed: true, error: 'modbus timeout', requestedAt: 1000 } } };
+
+test('Codex 04cd3f9f: Status-Takt während die Freigabe-Anfrage läuft → das Klick-Ergebnis wird danach nicht gelöscht', async () => {
+  const t = deferredTile();
+  t.W.render(OLD_FAILURE, t.doc);
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert: modbus timeout');
+  const click = t.click();                          // Anfrage läuft (Antwort zurückgehalten)
+  t.W.render(OLD_FAILURE, t.doc);                   // Status-Takt mitten in der Anfrage
+  t.pending.shift().respond(200, { ok: true, pending: false, requestedAt: 2000 });
+  await click;
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)');
+  t.W.render(TILE_BASE, t.doc);                     // nächster Status ohne Hinweis
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)', 'das eigene Klick-Ergebnis bleibt');
+  // Gleiches nach einem Netzwerkfehler: die eigene Fehlermeldung bleibt.
+  t.W.render(OLD_FAILURE, t.doc);
+  const click2 = t.click();
+  t.W.render(OLD_FAILURE, t.doc);
+  t.pending.shift().fail('Netzwerk weg');
+  await click2;
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Fehler: Netzwerk weg');
+  t.W.render(TILE_BASE, t.doc);
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Fehler: Netzwerk weg');
+});
+
+test('Codex 04cd3f9f: solange die Freigabe-Anfrage läuft, überschreibt ein Status-Hinweis „läuft…“ nicht', async () => {
+  const t = deferredTile();
+  t.W.render(OLD_FAILURE, t.doc);
+  const click = t.click();
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'läuft…');
+  t.W.render(OLD_FAILURE, t.doc);
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'läuft…');
+  t.W.render(TILE_BASE, t.doc);
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'läuft…');
+  t.pending.shift().respond(200, { ok: false, pending: true, error: 'modbus timeout', requestedAt: 2000 });
+  await click;
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert, wird wiederholt (modbus timeout)');
+  // Danach gilt wieder der Status dieser Anfrage.
+  t.W.render({ ...TILE_BASE, sungrowEms: { release: { pending: true, attempts: 2, requestedAt: 2000 } } }, t.doc);
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert, wird wiederholt · Versuch 2');
+});
