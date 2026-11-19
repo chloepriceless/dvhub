@@ -367,6 +367,169 @@ public struct HistorySummary: Equatable, Sendable {
     }
 }
 
+// MARK: - Energiemengen je Viertelstunde (Markt: Verlauf unter dem Börsenpreis)
+
+/// Wer im Verlauf vorkommt. Über der Nulllinie als Quelle, darunter als Ziel.
+public enum EnergyParty: String, CaseIterable, Sendable {
+    case solar, battery, grid, home
+}
+
+/// Ein Abschnitt eines gestapelten Balkens in kW (Mittel des Slots):
+/// Quellen wachsen von null nach oben, Ziele von null nach unten.
+public struct EnergyBar: Equatable, Sendable, Identifiable {
+    public let start: Date
+    public let end: Date
+    public let party: EnergyParty
+    public let isSource: Bool
+    public let fromKw: Double
+    public let toKw: Double
+    public var id: String { "\(start.timeIntervalSince1970)-\(party.rawValue)-\(isSource)" }
+}
+
+/// Die sieben Energieflüsse eines Slots der Tages-Historie (kWh), dieselben wie
+/// im Leitstand (app.js, „Realised energy as stacked bars“). Fürs Handy nach
+/// Quelle und Ziel zusammengefasst: Was oben hineingeht, kommt unten heraus.
+public struct EnergySlot: Equatable, Sendable, Identifiable {
+    public let start: Date
+    public let end: Date
+    public let solarToHomeKwh: Double
+    public let solarToBatteryKwh: Double
+    public let solarToGridKwh: Double
+    public let batteryToHomeKwh: Double
+    public let batteryToGridKwh: Double
+    public let gridToHomeKwh: Double
+    public let gridToBatteryKwh: Double
+    public var id: Date { start }
+
+    public init(start: Date, end: Date, solarToHomeKwh: Double = 0, solarToBatteryKwh: Double = 0, solarToGridKwh: Double = 0,
+                batteryToHomeKwh: Double = 0, batteryToGridKwh: Double = 0, gridToHomeKwh: Double = 0, gridToBatteryKwh: Double = 0) {
+        self.start = start
+        self.end = end
+        self.solarToHomeKwh = solarToHomeKwh
+        self.solarToBatteryKwh = solarToBatteryKwh
+        self.solarToGridKwh = solarToGridKwh
+        self.batteryToHomeKwh = batteryToHomeKwh
+        self.batteryToGridKwh = batteryToGridKwh
+        self.gridToHomeKwh = gridToHomeKwh
+        self.gridToBatteryKwh = gridToBatteryKwh
+    }
+
+    public func contains(_ d: Date) -> Bool { d >= start && d < end }
+
+    /// Energie, die eine Seite als Quelle abgegeben hat (das Haus gibt nichts ab).
+    public func sourceKwh(_ p: EnergyParty) -> Double {
+        switch p {
+        case .solar: solarToHomeKwh + solarToBatteryKwh + solarToGridKwh
+        case .battery: batteryToHomeKwh + batteryToGridKwh
+        case .grid: gridToHomeKwh + gridToBatteryKwh
+        case .home: 0
+        }
+    }
+
+    /// Energie, die bei einer Seite angekommen ist (in die PV fließt nichts).
+    public func sinkKwh(_ p: EnergyParty) -> Double {
+        switch p {
+        case .solar: 0
+        case .battery: solarToBatteryKwh + gridToBatteryKwh
+        case .grid: solarToGridKwh + batteryToGridKwh
+        case .home: solarToHomeKwh + batteryToHomeKwh + gridToHomeKwh
+        }
+    }
+
+    /// kWh im Slot → mittlere Leistung in kW (wie der Leitstand: Viertelstunde × 4).
+    public func kw(_ kwh: Double) -> Double {
+        let h = end.timeIntervalSince(start) / 3600
+        return h > 0 ? kwh / h : 0
+    }
+
+    /// Akku netto in kW: + lädt, − entlädt.
+    public var batteryNetKw: Double { kw(sinkKwh(.battery) - sourceKwh(.battery)) }
+    /// Netz netto in kW: + Bezug, − Einspeisung.
+    public var gridNetKw: Double { kw(sourceKwh(.grid) - sinkKwh(.grid)) }
+
+    /// Feste Reihenfolge der Stapel (von der Nulllinie weg).
+    public static let sourceOrder: [EnergyParty] = [.solar, .battery, .grid]
+    public static let sinkOrder: [EnergyParty] = [.home, .battery, .grid]
+
+    /// Gestapelte Abschnitte dieses Slots; leere Anteile fehlen.
+    public var bars: [EnergyBar] {
+        var out: [EnergyBar] = []
+        var top = 0.0
+        for p in Self.sourceOrder {
+            let v = kw(sourceKwh(p))
+            guard v > 0 else { continue }
+            out.append(EnergyBar(start: start, end: end, party: p, isSource: true, fromKw: top, toKw: top + v))
+            top += v
+        }
+        var bottom = 0.0
+        for p in Self.sinkOrder {
+            let v = kw(sinkKwh(p))
+            guard v > 0 else { continue }
+            out.append(EnergyBar(start: start, end: end, party: p, isSource: false, fromKw: bottom, toKw: bottom - v))
+            bottom -= v
+        }
+        return out
+    }
+}
+
+/// Summen über die gezeigten Slots in kWh.
+public struct EnergyTotals: Equatable, Sendable {
+    public let solarKwh: Double
+    public let homeKwh: Double
+    public let importKwh: Double
+    public let exportKwh: Double
+    public let batteryChargeKwh: Double
+    public let batteryDischargeKwh: Double
+}
+
+public enum EnergyDay {
+    /// Slots eines Tages aus der Tages-Historie. Nur Vergangenes (Beginn vor
+    /// `now`) und nur der Bereich `from ..< to`; ohne Zeitstempel fällt die
+    /// Zeile weg. Die Slot-Länge folgt dem üblichen Abstand der Zeilen
+    /// (Standard 15 min). Negative oder unlesbare Anteile zählen als null.
+    public static func slots(_ s: HistorySummary, from: Date, to: Date, now: Date = Date()) -> [EnergySlot] {
+        guard s.view == .day else { return [] }
+        let dated = s.rows.compactMap { r in r.date.map { ($0, r) } }.sorted { $0.0 < $1.0 }
+        let stepMs = PriceSeries.typicalStepMs(dated.map { Int64(($0.0.timeIntervalSince1970 * 1000).rounded()) })
+        let step = stepMs > 0 ? Double(stepMs) / 1000 : 900
+        var out: [EnergySlot] = []
+        for (d, r) in dated where d >= from && d < to && d < now {
+            if let last = out.last, last.start == d { continue }
+            func f(_ k: String) -> Double {
+                let v = r.values[k] ?? 0
+                return v.isFinite && v > 0 ? v : 0
+            }
+            out.append(EnergySlot(start: d, end: d.addingTimeInterval(step),
+                                  solarToHomeKwh: f("solarDirectUseKwh"), solarToBatteryKwh: f("solarToBatteryKwh"), solarToGridKwh: f("solarToGridKwh"),
+                                  batteryToHomeKwh: f("batteryDirectUseKwh"), batteryToGridKwh: f("batteryToGridKwh"),
+                                  gridToHomeKwh: f("gridDirectUseKwh"), gridToBatteryKwh: f("gridToBatteryKwh")))
+        }
+        return out
+    }
+
+    /// Hat überhaupt ein Slot einen Fluss? (Leere Historie: nichts zeichnen.)
+    public static func hasFlows(_ slots: [EnergySlot]) -> Bool {
+        slots.contains { !$0.bars.isEmpty }
+    }
+
+    public static func totals(_ slots: [EnergySlot]) -> EnergyTotals {
+        func sum(_ f: (EnergySlot) -> Double) -> Double { slots.reduce(0) { $0 + f($1) } }
+        return EnergyTotals(solarKwh: sum { $0.sourceKwh(.solar) }, homeKwh: sum { $0.sinkKwh(.home) },
+                            importKwh: sum { $0.sourceKwh(.grid) }, exportKwh: sum { $0.sinkKwh(.grid) },
+                            batteryChargeKwh: sum { $0.sinkKwh(.battery) }, batteryDischargeKwh: sum { $0.sourceKwh(.battery) })
+    }
+
+    /// Größter Ausschlag nach oben und unten in kW — für eine ruhige, feste Achse.
+    public static func extentKw(_ slots: [EnergySlot]) -> (down: Double, up: Double) {
+        var up = 0.0, down = 0.0
+        for s in slots {
+            up = max(up, s.kw(EnergySlot.sourceOrder.reduce(0) { $0 + s.sourceKwh($1) }))
+            down = max(down, s.kw(EnergySlot.sinkOrder.reduce(0) { $0 + s.sinkKwh($1) }))
+        }
+        return (down, up)
+    }
+}
+
 // MARK: - Energiefluss
 
 /// Ein Fluss zwischen zwei Knoten des Energiefluss-Diagramms. Alles läuft über

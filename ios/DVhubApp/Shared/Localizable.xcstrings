@@ -1032,12 +1032,32 @@
         }
       }
     },
+    "Akku (plus lädt, minus entlädt)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Battery (plus charging, minus discharging)"
+          }
+        }
+      }
+    },
     "Akku entladen" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Battery discharged"
+          }
+        }
+      }
+    },
+    "Akku entlädt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Battery discharging"
           }
         }
       }
@@ -1058,6 +1078,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Battery to grid"
+          }
+        }
+      }
+    },
+    "Akku lädt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Battery charging"
           }
         }
       }
@@ -1418,6 +1448,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cumulative net result in euros over the day"
+          }
+        }
+      }
+    },
+    "Aus dem Netz bezogen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imported from the grid"
           }
         }
       }
@@ -2520,6 +2560,36 @@
         }
       }
     },
+    "Die Energiemengen des Tages gibt diese Anlage nicht frei." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This system does not release the day's energy figures."
+          }
+        }
+      }
+    },
+    "Die Energiemengen kommen von der Anlage – sie ist gerade nicht verbunden." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The energy figures come from the system – it is not connected right now."
+          }
+        }
+      }
+    },
+    "Die Energiemengen zeigt das Diagramm, sobald eine Anlage gekoppelt ist." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The chart shows the energy figures once a system is paired."
+          }
+        }
+      }
+    },
     "Die Fahrt braucht" : {
       "localizations" : {
         "en" : {
@@ -3192,12 +3262,42 @@
         }
       }
     },
+    "Energie im Tagesverlauf" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Energy over the day"
+          }
+        }
+      }
+    },
+    "Energie im Tagesverlauf %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Energy over the day %@"
+          }
+        }
+      }
+    },
     "Energiefluss" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Energy flow"
+          }
+        }
+      }
+    },
+    "Energiemengen werden gemessen, nicht vorhergesagt – für diesen Tag gibt es noch keine." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Energy figures are measured, not forecast – there are none for this day yet."
           }
         }
       }
@@ -3568,6 +3668,16 @@
         }
       }
     },
+    "Für diese Zeit gibt es noch keine Messwerte." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No measurements for this time yet."
+          }
+        }
+      }
+    },
     "Für diesen Tag liegen noch nicht alle Stunden vor." : {
       "localizations" : {
         "en" : {
@@ -3594,6 +3704,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "For an out-of-the-ordinary trip: charge once to a given level by a given time."
+          }
+        }
+      }
+    },
+    "Für heute liegen noch keine Energiemengen vor." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No energy figures for today yet."
           }
         }
       }
@@ -3970,6 +4090,16 @@
         }
       }
     },
+    "Haus verbraucht" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Home consumed"
+          }
+        }
+      }
+    },
     "Hausverbrauch %@" : {
       "localizations" : {
         "en" : {
@@ -4246,6 +4376,16 @@
         }
       }
     },
+    "Ins Netz eingespeist" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fed into the grid"
+          }
+        }
+      }
+    },
     "Integrationen" : {
       "localizations" : {
         "en" : {
@@ -4459,6 +4599,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Key figures"
+          }
+        }
+      }
+    },
+    "Kilowatt im Mittel der Viertelstunde" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kilowatts averaged over the quarter hour"
           }
         }
       }
@@ -5179,6 +5329,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Grid"
+          }
+        }
+      }
+    },
+    "Netz (plus Bezug, minus Einspeisung)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grid (plus import, minus feed-in)"
           }
         }
       }
@@ -6357,6 +6517,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Solar"
+          }
+        }
+      }
+    },
+    "Solar erzeugt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solar generated"
           }
         }
       }
@@ -8296,6 +8466,16 @@
         }
       }
     },
+    "kW je Viertelstunde" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "kW per quarter hour"
+          }
+        }
+      }
+    },
     "kein Zähler" : {
       "localizations" : {
         "en" : {
@@ -8752,6 +8932,16 @@
         }
       }
     },
+    "von" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "from"
+          }
+        }
+      }
+    },
     "von Hand gesetzt" : {
       "localizations" : {
         "en" : {
@@ -8958,6 +9148,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Above the minimum charge level EOS only charges when it pays off. At this level DVhub ends charging."
+          }
+        }
+      }
+    },
+    "Über der Nulllinie: woher der Strom kam. Darunter: wohin er ging." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Above the zero line: where the power came from. Below: where it went."
           }
         }
       }

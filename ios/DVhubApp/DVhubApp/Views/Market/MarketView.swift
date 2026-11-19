@@ -7,10 +7,14 @@
 //   2. Einspeisung und Bezug in EINEM Diagramm: Balken = was die Einspeisung
 //      bringt (Börsenpreis je Viertelstunde von heute bzw. morgen), Linie = was
 //      der Bezug kostet (eigener Tarif aus DVhub). Der Abstand ist die Spanne.
-//      Was gerade gilt, steht klein darüber,
+//      Was gerade gilt, steht klein darüber. Direkt darunter, auf derselben
+//      Zeitachse, die Energiemengen des Tages wie im Leitstand: woher der Strom
+//      kam (oben) und wohin er ging (unten). Zwei Diagramme, weil ct/kWh und kW
+//      nicht auf eine Achse gehören — eine Auswahl gilt für beide,
 //   3. getrennt davon die Preisprognose der nächsten Tage mit Band.
 // Daten: dvhub.online (öffentlich), eigener Bezugspreis aus der Box
-// (/api/status → userEnergyPricing.slots).
+// (/api/status → userEnergyPricing.slots), Energiemengen aus der Tages-Historie
+// der Box (/api/history/summary?view=day).
 
 import SwiftUI
 import Charts
@@ -23,6 +27,8 @@ struct MarketView: View {
     @State private var selectedKey: String
     @State private var boxPrices: [PricePoint] = []
     @State private var boxLoaded = false
+    /// Energiemengen je Viertelstunde von heute (Tages-Historie der Box).
+    @State private var energy = MarketEnergy()
     @State private var debugDayApplied = false
 
     /// Der gewählte Tag beginnt dort, wo man zuletzt war (`Chrome`) — auch wenn
@@ -38,7 +44,8 @@ struct MarketView: View {
             if let err = market.priceError, market.prices.isEmpty { NoticeBanner(text: err, icon: "wifi.slash") }
             if !days.isEmpty {
                 DayStrip(days: days, selected: $selectedKey, outlook: market.outlook, width: width)
-                ExchangeCard(days: days.filter { !$0.slots.isEmpty }, box: boxPrices, now: currentPoint, tariffState: tariffState, selectedKey: $selectedKey)
+                ExchangeCard(days: days.filter { !$0.slots.isEmpty }, box: boxPrices, now: currentPoint, tariffState: tariffState,
+                             energy: energy, energyState: energyState, selectedKey: $selectedKey)
                 if let o = market.outlook, days.contains(where: { !$0.isFixed }) {
                     ForecastCard(days: days.filter { !$0.isFixed }, hours: o.hours, selectedKey: $selectedKey, wide: Layout.isWide(width))
                 }
@@ -60,9 +67,19 @@ struct MarketView: View {
                 Task { await market.refresh(force: true) }
             },
         ])
-        .refreshable { await market.refresh(force: true) }
+        .refreshable {
+            await market.refresh(force: true)
+            await loadEnergy()
+        }
         .task { await market.refresh() }
         .task(id: controller?.isOnline) { await loadBoxPrices() }
+        .task(id: controller?.isOnline) {
+            // Die Historie wächst alle Viertelstunde um einen Slot — solange die Seite offen ist, nachladen.
+            while !Task.isCancelled {
+                await loadEnergy()
+                try? await Task.sleep(for: .seconds(300))
+            }
+        }
         .onChange(of: selectedKey) { _, k in chrome.marketDay = k }
         .onChange(of: days.map(\.key), initial: true) { _, keys in
             #if DEBUG
@@ -94,6 +111,40 @@ struct MarketView: View {
         return boxLoaded ? String(localized: "In DVhub ist kein Bezugstarif eingerichtet (Einstellungen → Strompreise).") : nil
     }
 
+    /// Warum (noch) keine Energiemengen im Diagramm stehen — nil, wenn sie da sind oder noch laden.
+    private var energyState: String? {
+        if energy.key == MarketTime.key(Date()), EnergyDay.hasFlows(energy.slots) { return nil }
+        guard let controller else { return String(localized: "Die Energiemengen zeigt das Diagramm, sobald eine Anlage gekoppelt ist.") }
+        if !controller.isOnline { return String(localized: "Die Energiemengen kommen von der Anlage – sie ist gerade nicht verbunden.") }
+        if let e = energy.error { return e }
+        return energy.key == MarketTime.key(Date()) ? String(localized: "Für heute liegen noch keine Energiemengen vor.") : nil
+    }
+
+    /// Energiemengen von heute (deutscher Börsentag) aus der Tages-Historie der Box.
+    private func loadEnergy() async {
+        #if DEBUG
+        // Nur für Bildschirmfotos: -DVHUB_MARKET_ENERGY_DEMO 1 zeichnet einen Beispieltag.
+        if UserDefaults.standard.bool(forKey: "DVHUB_MARKET_ENERGY_DEMO") {
+            energy = MarketEnergy.demo()
+            return
+        }
+        #endif
+        guard let controller, controller.isOnline else { return }
+        let key = MarketTime.key(Date())
+        guard let from = MarketTime.day(key) else { return }
+        let result = await BoxData.history(controller, view: .day, date: from, day: key)
+        guard !Task.isCancelled else { return }
+        switch result {
+        case .ok(let s):
+            energy = MarketEnergy(key: key, slots: EnergyDay.slots(s, from: from, to: MarketTime.dayEnd(from)), error: nil)
+        case .proRequired:
+            energy = MarketEnergy(key: nil, slots: [], error: String(localized: "Die Energiemengen des Tages gibt diese Anlage nicht frei."))
+        case .failed(let m):
+            // Werte desselben Tages bleiben stehen; ein alter Tag nicht.
+            energy = energy.key == key ? MarketEnergy(key: key, slots: energy.slots, error: m) : MarketEnergy(key: nil, slots: [], error: m)
+        }
+    }
+
     /// Eigener Bezugspreis je Viertelstunde aus der Box (Tarif aus DVhub).
     private func loadBoxPrices() async {
         guard let controller, controller.isOnline else { return }
@@ -101,6 +152,39 @@ struct MarketView: View {
         boxPrices = PriceSeries.from(status: r.body)
         boxLoaded = true
     }
+}
+
+/// Energiemengen eines Börsentags, wie sie zuletzt von der Box kamen.
+struct MarketEnergy: Equatable {
+    /// Tag (YYYY-MM-DD, deutsche Zeit), zu dem `slots` gehören; nil = noch nichts geladen.
+    var key: String?
+    var slots: [EnergySlot] = []
+    var error: String?
+
+    #if DEBUG
+    /// Beispieltag bis „jetzt“: Sonne mittags, Akku lädt daraus und trägt den Abend, nachts Netz.
+    static func demo(now: Date = Date()) -> MarketEnergy {
+        let from = MarketTime.startOfDay(now)
+        var slots: [EnergySlot] = []
+        var t = from
+        while t < now {
+            let h = t.timeIntervalSince(from) / 3600
+            let sun = max(0, 2.2 * sin((h - 7.5) / 9 * .pi)) * (h > 7.5 && h < 16.5 ? 1 : 0)
+            let home = 0.12 + 0.1 * abs(sin(h * 1.7)) + (h > 17 ? 0.15 : 0)
+            let direct = min(sun, home)
+            let spare = sun - direct
+            let toBattery = h < 13 ? min(spare, 0.6) : 0
+            let need = home - direct
+            let fromBattery = h > 15.5 ? min(need, 0.2) : 0
+            slots.append(EnergySlot(start: t, end: t.addingTimeInterval(900), solarToHomeKwh: direct, solarToBatteryKwh: toBattery,
+                                    solarToGridKwh: spare - toBattery, batteryToHomeKwh: fromBattery,
+                                    batteryToGridKwh: h > 17 && h < 18.5 ? 0.5 : 0,
+                                    gridToHomeKwh: need - fromBattery, gridToBatteryKwh: h > 2 && h < 4 ? 0.8 : 0))
+            t = t.addingTimeInterval(900)
+        }
+        return MarketEnergy(key: MarketTime.key(now), slots: slots, error: nil)
+    }
+    #endif
 }
 
 // MARK: - Farben und Texte
@@ -197,6 +281,21 @@ enum MarketStyle {
         return v.formatted(.number.precision(.fractionLength(1)).locale(Format.locale))
     }
 
+    /// Leistung ohne Einheit, eine Nachkommastelle; unter 10 W „0“ statt „0,0“.
+    static func kw1(_ v: Double?) -> String {
+        guard let v, v.isFinite else { return "–" }
+        return abs(v) < 0.05 ? "0" : abs(v).formatted(.number.precision(.fractionLength(1)).locale(Format.locale))
+    }
+
+    static func color(_ p: EnergyParty) -> Color {
+        switch p {
+        case .solar: return Brand.pv
+        case .battery: return Brand.battery
+        case .grid: return Brand.grid
+        case .home: return Brand.home
+        }
+    }
+
     static func pct(_ v: Double?) -> String {
         guard let v, v.isFinite else { return "–" }
         return v.formatted(.percent.precision(.fractionLength(0)).locale(Format.locale))
@@ -217,14 +316,20 @@ func MarketHourAxis(everyHours: Int = 6) -> some AxisContent {
     }
 }
 
-func CtAxis() -> some AxisContent {
+/// `labelWidth`: feste Breite der Beschriftung — zwei Diagramme untereinander
+/// bekommen so dieselbe Zeichenfläche, ihre Zeitachsen liegen genau übereinander.
+/// `magnitude`: Beträge zeigen (unter der Nulllinie liegt eine Menge, kein Minus).
+func CtAxis(labelWidth: CGFloat? = nil, magnitude: Bool = false) -> some AxisContent {
     AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
         AxisGridLine().foregroundStyle(Brand.hairline)
         AxisValueLabel {
             if let v = value.as(Double.self) {
-                Text(v.formatted(.number.precision(.fractionLength(0)).locale(Format.locale)))
+                Text((magnitude ? abs(v) : v).formatted(.number.precision(.fractionLength(0)).locale(Format.locale)))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(Brand.dim)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .frame(width: labelWidth, alignment: .trailing)
             }
         }
     }
@@ -447,9 +552,16 @@ private struct ExchangeCard: View {
     let now: PricePoint?
     /// Hinweis, warum kein Bezugstarif da ist (nil = vorhanden oder noch unklar).
     let tariffState: String?
+    /// Energiemengen von heute; für andere Tage gibt es (noch) keine.
+    let energy: MarketEnergy
+    /// Hinweis, warum keine Energiemengen da sind (nil = vorhanden oder noch unklar).
+    let energyState: String?
     @Binding var selectedKey: String
     @State private var shownKey: String?
+    /// Eine Auswahl für beide Diagramme (Preis und Energie).
     @State private var selection: Date?
+    /// Feste Breite der Achsenbeschriftung: beide Diagramme zeichnen deckungsgleich.
+    @ScaledMetric(relativeTo: .caption2) private var axisWidth: CGFloat = 24
 
     private var day: MarketDay? { days.first { $0.key == shownKey } ?? days.first }
 
@@ -466,6 +578,7 @@ private struct ExchangeCard: View {
                     readout(d, points)
                     chart(d, points).frame(height: 220)
                     legend(points)
+                    energySection(d)
                     stats(d, points)
                 } else {
                     Text("Noch keine Börsenpreise geladen.").font(.footnote).foregroundStyle(Brand.text2)
@@ -580,7 +693,7 @@ private struct ExchangeCard: View {
         .chartXSelection(value: $selection)
         .chartXScale(domain: d.date...MarketTime.dayEnd(d.date))
         .chartXAxis { MarketHourAxis(everyHours: 3) }
-        .chartYAxis { CtAxis() }
+        .chartYAxis { CtAxis(labelWidth: axisWidth) }
         .accessibilityLabel(importSteps.isEmpty ? Text("Börsenpreise im Tagesverlauf") : Text("Einspeisung und Bezug im Tagesverlauf"))
         .accessibilityChartDescriptor(TimeSeriesDescriptor(
             title: String(localized: "Einspeisung und Bezug \(MarketStyle.longDay(d.date))"),
@@ -615,6 +728,145 @@ private struct ExchangeCard: View {
         .font(.caption2)
         .foregroundStyle(Brand.text2)
         .accessibilityIdentifier("tariffLegend")
+    }
+
+    // MARK: Energiemengen im Tagesverlauf
+
+    /// Unter dem Preis, auf derselben Zeitachse: woher der Strom kam und wohin er ging.
+    @ViewBuilder
+    private func energySection(_ d: MarketDay) -> some View {
+        let isToday = d.key == MarketTime.key(Date())
+        let slots = isToday && energy.key == d.key ? energy.slots : []
+        Hairline()
+        HStack(alignment: .firstTextBaseline) {
+            Text("Energie im Tagesverlauf").font(.caption.weight(.bold)).foregroundStyle(Brand.text)
+            Spacer(minLength: 8)
+            Text("kW je Viertelstunde").font(.caption2).foregroundStyle(Brand.dim)
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+        if EnergyDay.hasFlows(slots) {
+            energyReadout(slots)
+            energyChart(d, slots).frame(height: 170)
+            energyLegend(slots)
+        } else if !isToday {
+            Text("Energiemengen werden gemessen, nicht vorhergesagt – für diesen Tag gibt es noch keine.")
+                .font(.caption2).foregroundStyle(Brand.dim)
+                .accessibilityIdentifier("energyState")
+        } else if let energyState {
+            Text(energyState).font(.caption2).foregroundStyle(Brand.dim)
+                .accessibilityIdentifier("energyState")
+        } else {
+            ProgressView().frame(maxWidth: .infinity, minHeight: 60)
+        }
+    }
+
+    /// Slot zur Auswahl; ohne Auswahl der laufende, sonst der letzte gemessene.
+    private func selectedEnergy(_ slots: [EnergySlot]) -> EnergySlot? {
+        if let selection { return slots.first { $0.contains(selection) } }
+        return slots.first { $0.contains(Date()) } ?? slots.last
+    }
+
+    private func energyReadout(_ slots: [EnergySlot]) -> some View {
+        let s = selectedEnergy(slots)
+        let battery = s?.batteryNetKw, grid = s?.gridNetKw
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 6) {
+                energyValue(.solar, String(localized: "Solar"), s.map { $0.kw($0.sourceKwh(.solar)) })
+                energyValue(.home, String(localized: "Haus"), s.map { $0.kw($0.sinkKwh(.home)) })
+                energyValue(.battery, (battery ?? 0) < -0.05 ? String(localized: "Akku entlädt") : ((battery ?? 0) > 0.05 ? String(localized: "Akku lädt") : String(localized: "Akku")), battery)
+                energyValue(.grid, (grid ?? 0) < -0.05 ? String(localized: "Einspeisung") : ((grid ?? 0) > 0.05 ? String(localized: "Bezug") : String(localized: "Netz")), grid)
+            }
+            Text(s.map { MarketStyle.range($0.start, $0.end) } ?? String(localized: "Für diese Zeit gibt es noch keine Messwerte."))
+                .font(.caption2.monospacedDigit()).foregroundStyle(Brand.dim)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("energyReadout")
+    }
+
+    private func energyValue(_ p: EnergyParty, _ label: String, _ kw: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 4) {
+                Circle().fill(MarketStyle.color(p)).frame(width: 7, height: 7)
+                Text(label).font(.caption2).foregroundStyle(Brand.text2)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(MarketStyle.kw1(kw)).font(.system(.subheadline, design: .rounded).weight(.bold)).monospacedDigit().foregroundStyle(Brand.text)
+                Text("kW").font(.caption2).foregroundStyle(Brand.dim)
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: "\(label) \(MarketStyle.kw1(kw)) kW"))
+    }
+
+    private func energyChart(_ d: MarketDay, _ slots: [EnergySlot]) -> some View {
+        let now = Date()
+        let extent = EnergyDay.extentKw(slots)
+        // Etwas Luft, und nie eine Achse ohne Ausschlag.
+        let up = max(0.5, extent.up * 1.08), down = max(0.5, extent.down * 1.08)
+        func series(_ name: String, _ f: (EnergySlot) -> Double) -> TimeSeriesDescriptor.Series {
+            .init(name: name, points: slots.map { ($0.start, f($0)) })
+        }
+        return Chart {
+            ForEach(slots) { s in
+                // Schmale Fuge zwischen den Slots, damit die Stapel lesbar bleiben.
+                let gap = s.end.timeIntervalSince(s.start) * 0.08
+                ForEach(s.bars) { b in
+                    RectangleMark(xStart: .value("Beginn", b.start.addingTimeInterval(gap)), xEnd: .value("Ende", b.end.addingTimeInterval(-gap)),
+                                  yStart: .value("von", b.fromKw), yEnd: .value("kW", b.toKw))
+                        .foregroundStyle(MarketStyle.color(b.party))
+                        .accessibilityHidden(true)
+                }
+            }
+            RuleMark(y: .value("Null", 0.0)).foregroundStyle(Brand.text2.opacity(0.7)).lineStyle(StrokeStyle(lineWidth: 1))
+                .accessibilityHidden(true)
+            if now >= d.date, now < MarketTime.dayEnd(d.date) {
+                RuleMark(x: .value("Jetzt", now)).foregroundStyle(Brand.now).lineStyle(StrokeStyle(lineWidth: 1.5))
+                    .accessibilityHidden(true)
+            }
+            if let selection {
+                RuleMark(x: .value("Auswahl", selection)).foregroundStyle(Brand.text.opacity(0.6)).lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    .accessibilityHidden(true)
+            }
+        }
+        .chartXSelection(value: $selection)
+        .chartXScale(domain: d.date...MarketTime.dayEnd(d.date))
+        .chartYScale(domain: -down...up)
+        .chartXAxis { MarketHourAxis(everyHours: 3) }
+        .chartYAxis { CtAxis(labelWidth: axisWidth, magnitude: true) }
+        .accessibilityLabel(Text("Energie im Tagesverlauf"))
+        .accessibilityChartDescriptor(TimeSeriesDescriptor(
+            title: String(localized: "Energie im Tagesverlauf \(MarketStyle.longDay(d.date))"),
+            yTitle: String(localized: "Kilowatt im Mittel der Viertelstunde"),
+            series: [
+                series(String(localized: "Solar")) { $0.kw($0.sourceKwh(.solar)) },
+                series(String(localized: "Haus")) { $0.kw($0.sinkKwh(.home)) },
+                series(String(localized: "Akku (plus lädt, minus entlädt)")) { $0.batteryNetKw },
+                series(String(localized: "Netz (plus Bezug, minus Einspeisung)")) { $0.gridNetKw },
+            ],
+            format: { "\(Format.number($0, digits: 1)) kW" }))
+        .accessibilityIdentifier("energyChart")
+    }
+
+    private func energyLegend(_ slots: [EnergySlot]) -> some View {
+        let t = EnergyDay.totals(slots)
+        return VStack(alignment: .leading, spacing: 6) {
+            // Die Farben erklärt die Ablesezeile über dem Diagramm (Punkt + Name).
+            Text("Über der Nulllinie: woher der Strom kam. Darunter: wohin er ging.").foregroundStyle(Brand.dim)
+            RowStack {
+                ValueRow(label: "Solar erzeugt", value: Format.energy(t.solarKwh), tint: Brand.pv)
+                ValueRow(label: "Haus verbraucht", value: Format.energy(t.homeKwh), tint: Brand.home)
+                ValueRow(label: "Aus dem Netz bezogen", value: Format.energy(t.importKwh), tint: Brand.grid)
+                ValueRow(label: "Ins Netz eingespeist", value: Format.energy(t.exportKwh), tint: Brand.grid)
+            }
+            .accessibilityIdentifier("energyTotals")
+        }
+        .font(.caption2)
+        .foregroundStyle(Brand.text2)
+        .accessibilityIdentifier("energyLegend")
     }
 
     /// Einstufung des Börsentags: Tagesmittel gegen den üblichen Bereich der letzten vier Wochen.

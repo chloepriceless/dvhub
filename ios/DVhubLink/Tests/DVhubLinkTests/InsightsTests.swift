@@ -146,6 +146,103 @@ final class InsightsTests: XCTestCase {
         XCTAssertNil(HistorySummary.localDate("kein-datum"))
     }
 
+    // MARK: Energiemengen je Viertelstunde
+
+    private func energyDay() throws -> (HistorySummary, Date, Date) {
+        let body: JSONValue = [
+            "kpis": ["pvKwh": 3],
+            "charts": [
+                "dayEnergyLines": [
+                    // Reihenfolge durcheinander, ein doppelter Zeitstempel, ein Slot nach „jetzt“, einer vom Vortag.
+                    ["ts": "2026-11-19T11:15:00.000Z", "solarDirectUseKwh": 0.25, "solarToBatteryKwh": 0.5, "solarToGridKwh": 0.75,
+                     "batteryDirectUseKwh": 0, "batteryToGridKwh": 0, "gridDirectUseKwh": 0, "gridToBatteryKwh": 0, "incomplete": false],
+                    ["ts": "2026-11-19T11:00:00.000Z", "solarDirectUseKwh": 0.1, "solarToBatteryKwh": 0, "solarToGridKwh": 0,
+                     "batteryDirectUseKwh": 0.2, "batteryToGridKwh": 0.3, "gridDirectUseKwh": 0.4, "gridToBatteryKwh": 0.5],
+                    ["ts": "2026-11-19T11:00:00.000Z", "solarDirectUseKwh": 9],
+                    ["ts": "2026-11-19T11:30:00.000Z", "solarDirectUseKwh": -1, "gridDirectUseKwh": .null],
+                    ["ts": "2026-11-19T11:45:00.000Z", "solarDirectUseKwh": 5],
+                    ["ts": "2026-11-18T22:45:00.000Z", "solarDirectUseKwh": 7],
+                    ["label": "ohne Zeit", "solarDirectUseKwh": 1],
+                ],
+            ],
+        ]
+        let s = try XCTUnwrap(HistorySummary.from(body, view: .day, date: "2026-11-19"))
+        let from = try XCTUnwrap(parseISODate("2026-11-18T23:00:00.000Z"))
+        return (s, from, from.addingTimeInterval(86400))
+    }
+
+    func testEnergySlotsKeepOnlyPastSlotsOfTheDayInOrder() throws {
+        let (s, from, to) = try energyDay()
+        let now = try XCTUnwrap(parseISODate("2026-11-19T11:40:00.000Z"))
+        let slots = EnergyDay.slots(s, from: from, to: to, now: now)
+        XCTAssertEqual(slots.map(\.start), ["2026-11-19T11:00:00.000Z", "2026-11-19T11:15:00.000Z", "2026-11-19T11:30:00.000Z"].compactMap { parseISODate($0) })
+        XCTAssertEqual(slots[0].end.timeIntervalSince(slots[0].start), 900)
+        XCTAssertEqual(slots[0].solarToHomeKwh, 0.1, "bei doppeltem Zeitstempel gilt die erste Zeile")
+        XCTAssertEqual(slots[2].solarToHomeKwh, 0, "negative Anteile zählen als null")
+        XCTAssertTrue(slots[2].bars.isEmpty)
+        XCTAssertTrue(EnergyDay.hasFlows(slots))
+        XCTAssertFalse(EnergyDay.hasFlows([slots[2]]))
+        XCTAssertTrue(EnergyDay.slots(s, from: from, to: to, now: from).isEmpty, "vor Tagesbeginn ist nichts vergangen")
+        let week = HistorySummary(view: .week, date: "2026-11-19", kpis: [:], rows: s.rows, dayPrices: [])
+        XCTAssertTrue(EnergyDay.slots(week, from: from, to: to, now: now).isEmpty, "nur die Tagesansicht hat Slots")
+    }
+
+    func testEnergySlotStacksSourcesUpAndSinksDownInKw() throws {
+        let (s, from, to) = try energyDay()
+        let slots = EnergyDay.slots(s, from: from, to: to, now: to)
+        let a = slots[0]
+        // Quellen: Solar 0,1 · Akku 0,5 · Netz 0,9 kWh; Ziele: Haus 0,7 · Akku 0,5 · Netz 0,3 kWh.
+        XCTAssertEqual(a.sourceKwh(.solar), 0.1, accuracy: 1e-9)
+        XCTAssertEqual(a.sourceKwh(.battery), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(a.sourceKwh(.grid), 0.9, accuracy: 1e-9)
+        XCTAssertEqual(a.sinkKwh(.home), 0.7, accuracy: 1e-9)
+        XCTAssertEqual(a.sinkKwh(.battery), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(a.sinkKwh(.grid), 0.3, accuracy: 1e-9)
+        XCTAssertEqual(a.sourceKwh(.home), 0)
+        XCTAssertEqual(a.sinkKwh(.solar), 0)
+        XCTAssertEqual(a.batteryNetKw, 0, accuracy: 1e-9)
+        XCTAssertEqual(a.gridNetKw, 2.4, accuracy: 1e-9, "0,6 kWh Bezug netto in 15 min = 2,4 kW")
+        let bars = a.bars
+        XCTAssertEqual(bars.map(\.party), [.solar, .battery, .grid, .home, .battery, .grid])
+        XCTAssertEqual(bars.map(\.isSource), [true, true, true, false, false, false])
+        let edges = bars.map { [$0.fromKw, $0.toKw] }
+        let want: [[Double]] = [[0, 0.4], [0.4, 2.4], [2.4, 6.0], [0, -2.8], [-2.8, -4.8], [-4.8, -6.0]]
+        for (got, exp) in zip(edges, want) {
+            XCTAssertEqual(got[0], exp[0], accuracy: 1e-9)
+            XCTAssertEqual(got[1], exp[1], accuracy: 1e-9)
+        }
+        XCTAssertEqual(Set(bars.map(\.id)).count, bars.count)
+        // Reiner Solar-Slot: nur, was da ist.
+        XCTAssertEqual(slots[1].bars.map(\.party), [.solar, .home, .battery, .grid])
+        XCTAssertEqual(slots[1].batteryNetKw, 2, accuracy: 1e-9)
+        XCTAssertEqual(slots[1].gridNetKw, -3, accuracy: 1e-9)
+
+        let t = EnergyDay.totals(Array(slots.prefix(2)))
+        XCTAssertEqual(t.solarKwh, 1.6, accuracy: 1e-9)
+        XCTAssertEqual(t.homeKwh, 0.95, accuracy: 1e-9)
+        XCTAssertEqual(t.importKwh, 0.9, accuracy: 1e-9)
+        XCTAssertEqual(t.exportKwh, 1.05, accuracy: 1e-9)
+        XCTAssertEqual(t.batteryChargeKwh, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(t.batteryDischargeKwh, 0.5, accuracy: 1e-9)
+        let e = EnergyDay.extentKw(Array(slots.prefix(2)))
+        XCTAssertEqual(e.up, 6, accuracy: 1e-9)
+        XCTAssertEqual(e.down, 6, accuracy: 1e-9)
+    }
+
+    func testEnergySlotLengthFollowsTheRowSpacing() throws {
+        let body: JSONValue = ["kpis": ["pvKwh": 1], "charts": ["dayEnergyLines": [
+            ["ts": "2026-11-19T08:00:00.000Z", "solarDirectUseKwh": 2],
+            ["ts": "2026-11-19T09:00:00.000Z", "solarDirectUseKwh": 1],
+            ["ts": "2026-11-19T10:00:00.000Z", "solarDirectUseKwh": 1],
+        ]]]
+        let s = try XCTUnwrap(HistorySummary.from(body, view: .day, date: "2026-11-19"))
+        let from = try XCTUnwrap(parseISODate("2026-11-18T23:00:00.000Z"))
+        let slots = EnergyDay.slots(s, from: from, to: from.addingTimeInterval(86400), now: from.addingTimeInterval(86400))
+        XCTAssertEqual(slots.first?.end.timeIntervalSince(slots[0].start), 3600)
+        XCTAssertEqual(try XCTUnwrap(slots.first).kw(2), 2, accuracy: 1e-9, "2 kWh in einer Stunde = 2 kW")
+        XCTAssertTrue(slots[0].contains(slots[0].start) && !slots[0].contains(slots[0].end))
+    }
+
     // MARK: Energiefluss
 
     func testFlowDirectionsFollowDVhubSigns() {

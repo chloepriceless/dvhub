@@ -82,8 +82,10 @@ enum BoxData {
         case failed(String)
     }
 
-    static func history(_ c: SystemController, view: HistoryPeriod, date: Date) async -> HistoryResult {
-        let param = HistorySummary.dateParam(date)
+    /// `day`: fertiger `date`-Parameter (YYYY-MM-DD), wenn der Tag nicht dem
+    /// Kalender des Handys folgt (Markt: deutscher Börsentag).
+    static func history(_ c: SystemController, view: HistoryPeriod, date: Date, day: String? = nil) async -> HistoryResult {
+        let param = day ?? HistorySummary.dateParam(date)
         do {
             let r = try await c.request("GET", "/api/history/summary?view=\(view.rawValue)&date=\(param)&lean=1")
             if HistorySummary.isProRequired(status: r.status, body: r.body) { return .proRequired }
