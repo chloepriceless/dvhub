@@ -96,10 +96,15 @@ export function modbusPacingFromConfig(getCfg) {
 //     Anfrage zugeordnet.
 //   - Bytes, die ankommen, während keine Anfrage offen ist, gehören zu keiner Anfrage: sie werden verworfen (und
 //     starten die Ruhezeit, falls keine läuft).
+//   - Zwischen zwei Anfragen liegen immer mindestens RTU_MIN_GAP_MS (Stille am Bus), auch ohne requestPacing.
 // Eine gültige Ausnahme-Antwort ist eine ganze Antwort: „modbus exception N“ wie über TCP, kein Neuaufbau.
 export const MODBUS_FRAMING_RTU_OVER_TCP = 'rtu-over-tcp';
 const RTU_RECOVERY_MIN_MS = 1000;
 const RTU_RECOVERY_MAX_MS = 60_000;
+// Mindestabstand zwischen zwei RTU-Anfragen ab dem Ende der vorigen (Codex 1e08996c P2). Am Bus braucht ein neuer Rahmen
+// mindestens 3,5 Zeichen Stille (Modbus over Serial Line: 9600 Baud ≈ 4 ms, 1200 Baud ≈ 32 ms); ein Gateway, das Bytes
+// sofort weitergibt, hielte das ohne Abstand nicht ein. Ein größerer requestPacing.minRequestGapMs gewinnt.
+const RTU_MIN_GAP_MS = 50;
 
 export function normalizeModbusFraming(raw) {
   return typeof raw === 'string' && raw.trim().toLowerCase() === MODBUS_FRAMING_RTU_OVER_TCP
@@ -507,20 +512,24 @@ export function createModbusTransport(opts = {}) {
           return;
         }
         const pace = pacingOf(host, port);
+        // E12: Rahmen dieser Anfrage, beim Senden festgelegt; die Antwort wird im selben Rahmen gelesen.
+        const rtu = rtuFor(host, port);
         // E12: Ruhezeit nach einem RTU-Fehler (ohne RTU nie gesetzt). Abgelaufen = gelöscht.
         let quietUntil = rtuQuietUntil.get(this.key) || 0;
         if (quietUntil && quietUntil <= Date.now()) {
           rtuQuietUntil.delete(this.key);
           quietUntil = 0;
         }
-        if (pace || quietUntil) {
+        if (pace || quietUntil || rtu) {
           // E7: nie in einen noch nicht verbundenen Socket schreiben — der 'connect'-Listener aus dem
           // Verbindungsaufbau oben ruft _next erneut, dann zählt die Pause ab connectedAt.
           if (!this.connectedAt) return;
           const lastEnd = lastTransferEndAt.get(this.key);
+          // E12: über RTU mindestens RTU_MIN_GAP_MS Stille am Bus; ohne RTU genau der Abstand aus E7.
+          const gapMs = rtu ? Math.max(RTU_MIN_GAP_MS, pace ? pace.minRequestGapMs : 0) : (pace ? pace.minRequestGapMs : 0);
           const readyAt = Math.max(
             pace ? this.connectedAt + pace.connectDelayMs : 0,
-            pace && lastEnd != null ? lastEnd + pace.minRequestGapMs : 0,
+            lastEnd != null ? lastEnd + gapMs : 0,
             quietUntil
           );
           const wait = readyAt - Date.now();
@@ -550,8 +559,6 @@ export function createModbusTransport(opts = {}) {
           this._resetIdle();
           return;
         }
-        // E12: Rahmen dieser Anfrage, beim Senden festgelegt; die Antwort wird im selben Rahmen gelesen.
-        const rtu = rtuFor(host, port);
         if (rtu) {
           // Unit-ID 0 ist am RS485-Bus ein Broadcast: jedes Gerät führt einen Write aus, keines antwortet. Nie senden.
           if (entry.reqBuf.readUInt8(6) === 0) {

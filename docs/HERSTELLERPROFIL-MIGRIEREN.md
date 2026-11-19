@@ -190,7 +190,9 @@ Unit-ID, Funktionscode und Daten, dahinter die CRC-16/Modbus (Low-Byte zuerst), 
 `requestPacing` nur für die Anlagen-Verbindung `victron.host:victron.port` und dort für Lesen und Schreiben (FC 1–6,
 16) in der Reihenfolge der Warteschlange; `victron.port` ist der Port des Gateways. Jeder andere Wert und eine fehlende
 Angabe bedeuten Modbus TCP wie bisher (Wallboxen, Zähler an anderen Adressen, Register-Scan, zweiter Sungrow-WR und
-zweite GX sprechen immer Modbus TCP). Kombinierbar mit `requestPacing`; viele RS485-Geräte brauchen ohnehin Abstand.
+zweite GX sprechen immer Modbus TCP). Zwischen zwei RTU-Anfragen liegen immer mindestens 50 ms ab dem Ende der vorigen
+(Stille am Bus: Modbus verlangt 3,5 Zeichen, bei 9600 Baud etwa 4 ms); ein größerer `requestPacing.minRequestGapMs`
+gilt stattdessen, und viele RS485-Geräte brauchen ohnehin mehr.
 
 ```json
 "victron": { "transport": "modbus", "port": 4196, "unitId": 85, "framing": "rtu-over-tcp",
@@ -210,8 +212,8 @@ Nach jedem Fehler, jeder Zeitüberschreitung und jedem Verbindungsabbruch mitten
 **Ruhezeit** (Zeitlimit der Anfrage, mindestens 1 s), bevor die nächste Anfrage rausgeht; Bytes, die ohne offene Anfrage
 ankommen, verwirft es. Hintergrund: viele transparente Gateways geben serielle Bytes an jede verbundene Verbindung
 weiter, eine späte Antwort käme sonst auch auf der neuen Verbindung an. Unit-ID 0 (am RS485-Bus ein Broadcast an jedes
-Gerät) schickt DVhub über RTU nie. Not-Halt-Sperre und Lese-Modus wirken unverändert, auch auf Writes, die gerade in der
-Ruhezeit warten.
+Gerät) schickt DVhub über RTU nie (das Schreibtor zählt so einen Write als nicht gesendet). Not-Halt-Sperre und
+Lese-Modus wirken unverändert, auch auf Writes, die gerade in der Ruhezeit warten.
 
 Voraussetzungen am Gateway: **nur DVhub fragt** (keine zweite Verbindung von Home Assistant, evcc oder einem zweiten
 DVhub, kein zweiter Master am RS485-Bus — eine fremde Antwort gleicher Form wäre nicht von der eigenen zu

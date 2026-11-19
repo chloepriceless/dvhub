@@ -238,7 +238,7 @@ test('RTU Lesen FC 3/4/1/2: Unit-ID + PDU + CRC (Low-Byte zuerst), kein MBAP-Kop
     try {
       image(r.sockets);
       for (const [label, req] of requests) r.track(label, r.t.mbRequest(base(req)));
-      await advance(100);
+      await advance(1000);
       results[mode] = r.settled.map((s) => [s.label, s.ok, s.v ?? s.error]);
       if (mode === 'rtu') {
         assert.deepEqual(r.sockets.bytes.map((b) => b.hex), requests.map(([, , hex]) => hex));
@@ -263,7 +263,7 @@ test('RTU Schreiben FC 6/16/5: Rahmen Byte für Byte, Bestätigung wie über Mod
       r.track('w5', r.t.mbWriteCoil(base({ address: 400, value: true })));
       r.track('w5off', r.t.mbWriteCoil(base({ address: 400, value: false })));
       r.track('w6neg', r.t.mbWriteSingle(base({ unitId: 100, address: 2716, value: -500 })));
-      await advance(100);
+      await advance(1000);
       results[mode] = r.settled.map((s) => [s.label, s.ok, s.v ?? s.error]);
       if (mode === 'rtu') {
         assert.deepEqual(r.sockets.bytes.map((b) => b.hex), [
@@ -336,11 +336,12 @@ test('Ausnahme (FC|0x80): „modbus exception N“ wie über TCP, das Schreibtor
     const w = r.track('w', r.t.mbWriteSingle(base({ address: 2716, value: 100 })));
     r.track('x', r.t.mbRequest(base({ fc: 3, address: 30, quantity: 1 })));
     r.track('ok', r.t.mbRequest(base({ fc: 3, address: 31, quantity: 1 })));
-    await advance(100);
+    await advance(1000);
     const err = await w;
     assert.equal(err.message, 'modbus exception 2');
     assert.equal(classifyModbusError(err).delivery, 'rejected', 'Ausnahme 2 = abgelehnt, nichts geschrieben');
-    assert.deepEqual(r.settled.map((s) => `${s.label}@${s.t}:${s.ok ? 'ok' : s.error}`), ['w@0:modbus exception 2', 'x@0:modbus exception 4', 'ok@0:ok']);
+    assert.deepEqual(r.settled.map((s) => `${s.label}@${s.t}:${s.ok ? 'ok' : s.error}`), ['w@0:modbus exception 2', 'x@50:modbus exception 4', 'ok@100:ok'],
+      'Ausnahme ohne Neuaufbau und ohne Ruhezeit, nur der RTU-Mindestabstand');
     assert.deepEqual(r.sockets.events.map((e) => e.ev), ['connect'], 'eine gültige Ausnahme ist eine ganze Antwort: kein Neuaufbau');
   } finally {
     await r.done();
@@ -578,6 +579,40 @@ test('RTU mit E7-Taktung: Lesen und Schreiben in Reihenfolge der Warteschlange, 
   }
 });
 
+// Codex 1e08996c (P2): am RS485-Bus braucht ein neuer Rahmen mindestens 3,5 Zeichen Stille (Modbus over Serial Line;
+// 9600 Baud ≈ 4 ms, 1200 Baud ≈ 32 ms). Ein Gateway, das Bytes sofort weitergibt, hielte das ohne Abstand nicht ein.
+// Über RTU gilt deshalb immer mindestens 50 ms ab dem Ende der vorigen Anfrage; ein größerer E7-Abstand gewinnt.
+test('RTU ohne Taktung: mindestens 50 ms zwischen zwei Anfragen (Modbus-Ruhezeit am Bus); größere E7-Abstände gelten', async () => {
+  for (const [name, pacingFor, expected] of [
+    ['ohne requestPacing', undefined, [0, 50, 100, 150]],
+    ['minRequestGapMs 10', onlyHost({ minRequestGapMs: 10 }), [0, 50, 100, 150]],
+    ['minRequestGapMs 400', onlyHost({ minRequestGapMs: 400 }), [0, 400, 800, 1200]],
+    ['nur connectDelayMs', onlyHost({ connectDelayMs: 100 }), [100, 150, 200, 250]],
+  ]) {
+    const r = rtuRig({ pacingFor });
+    try {
+      r.track('r1', r.t.mbRequest(base({ fc: 3, address: 1, quantity: 1 })));
+      r.track('w1', r.t.mbWriteSingle(base({ address: 2, value: 1 })));
+      r.track('r2', r.t.mbRequest(base({ fc: 4, address: 3, quantity: 1 })));
+      r.track('w2', r.t.mbWriteCoil(base({ address: 4, value: true })));
+      await advance(2000, 10);
+      assert.deepEqual(r.sockets.wire.map((f) => f.t), expected, name);
+      assert.ok(r.settled.every((s) => s.ok), `${name}: ${JSON.stringify(r.settled)}`);
+    } finally {
+      await r.done();
+    }
+  }
+  // Modbus TCP ohne Taktung bleibt ohne Abstand (Draht wie 1c168de4, siehe Vergleich oben).
+  const tcp = rig();
+  try {
+    for (let i = 0; i < 3; i += 1) tcp.track(`r${i}`, tcp.t.mbRequest(base({ fc: 3, address: i, quantity: 1 })));
+    await advance(100, 10);
+    assert.deepEqual(tcp.sockets.wire.map((f) => f.t), [0, 0, 0]);
+  } finally {
+    await tcp.done();
+  }
+});
+
 test('RTU: Fehler-Ruhezeit und E7-Abstand zusammen — es gilt der spätere Zeitpunkt', async () => {
   const r = rtuRig({ pacingFor: onlyHost({ minRequestGapMs: 1500 }) });
   try {
@@ -681,6 +716,23 @@ test('Unit-ID 0 über RTU (Broadcast an jedes Gerät am Bus) geht nie raus; übe
     assert.equal(tcp.settled[0].ok, true, 'Modbus TCP: Unit 0 adressiert das Gateway/Gerät selbst — wie bisher');
   } finally {
     await tcp.done();
+  }
+});
+
+// Codex 1e08996c (P2): der vor dem Draht abgewiesene Unit-0-Write zählt im Schreibtor als nie gesendet — kein
+// „womöglich wirksam“, kein unsicherer Besitz. Echte Senke = echter RTU-Transport.
+test('Unit-ID 0 über RTU im Schreibtor: notSent, nicht womöglich wirksam, kein unsicherer Besitz', async () => {
+  const { rig: gateRig, DEVICE } = await import('./helpers/gate-rig.js');
+  const r = rtuRig();
+  try {
+    const g = gateRig({ sinkWrite: (wireOp) => r.t.mbWriteSingle(base({ unitId: 0, address: 13051, value: wireOp?.value ?? 170 })) });
+    const res = await g.gate.submit(g.op({ value: 170 }));
+    assert.deepEqual([res.delivery, res.possiblyEffective], ['notSent', false], JSON.stringify(res));
+    const owned = g.gate.owned(DEVICE, 'emsCmd');
+    assert.deepEqual(owned?.uncertain ?? [], [], 'kein unsicherer Kandidat für einen nie gesendeten Wert');
+    assert.equal(r.sockets.bytes.length, 0, 'nichts auf dem Draht');
+  } finally {
+    await r.done();
   }
 });
 
