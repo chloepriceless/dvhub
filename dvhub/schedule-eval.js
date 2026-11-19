@@ -2659,7 +2659,11 @@ export function createScheduleEvaluator(ctx) {
       }
       // §14a nach Bedarf: ohne Ziel schreibt DVhub nichts — der GX kann einen
       // älteren Sollwert halten, der Bedarf ist also unbekannt (nicht 0).
-      if (target === 'gridSetpointW' && eff.value == null) state.ctrl.p14aBatteryWantW = null;
+      if (target === 'gridSetpointW' && eff.value == null) {
+        state.ctrl.p14aBatteryWantW = null;
+        // Kein Netz-Sollwert mehr → auch kein „EOS-Halten ausgesetzt"-Hinweis (M8).
+        if (state.ctrl.eosGridShareSuspend) { state.ctrl.eosGridShareSuspend = null; state.ctrl._eosSuspendKey = null; }
+      }
       if (eff.value == null) continue;
 
       // === T-0121/T-0122 EOS closed-loop export: live-PV recompute ============
@@ -2745,7 +2749,9 @@ export function createScheduleEvaluator(ctx) {
           state.ctrl._eosSuspendKey = key;
         }
       } else {
-        if (state.ctrl.eosGridShareSuspend) { state.ctrl.eosGridShareSuspend = null; state.ctrl._eosSuspendKey = null; }
+        // Nur der Netz-Sollwert-Durchlauf hebt den Hinweis auf — der Ladestrom-Durchlauf danach löschte ihn sonst jeden
+        // Takt (Leitstand ohne Hinweis, Log-Zeile alle 5 s; Prod 19.11.).
+        if (target === 'gridSetpointW' && state.ctrl.eosGridShareSuspend) { state.ctrl.eosGridShareSuspend = null; state.ctrl._eosSuspendKey = null; }
         if (m8IsHold) {
           const marginW = eff.rule.evPlanned
             ? Math.max(0, Number(cfg.optimizer?.eosGridHoldEvMarginW ?? 1000))
