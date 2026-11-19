@@ -2,12 +2,15 @@
 // ungültig (cfg.writeSafety.ok === false, C2 vom 16.11.2026), sperrte bis dahin JEDE Schreibklasse — auch die eine
 // Rücknahme beim Not-Halt (`haltNeutralize`) und die manuelle Zwangsfreigabe (`manualForceRelease`, H-7). Neu: genau
 // diese beiden Aktionsklassen dürfen durch — in den Bestandsprüfungen der Pfade (Sungrow submitReg, schedule-eval
-// writeConfigUnsafeReason/deviceWriteGate) UND im Tor (Schreibfreigabe `profileInvalid`, VCL-Vertrag v6 D.1 R-T2).
-// Alles andere (Befehl, Lebenszeichen, Schutz-Begrenzung, bequeme Wiederfreigabe) bleibt gesperrt.
+// writeConfigUnsafeReason) UND im Tor (Schreibfreigabe `profileInvalid`, VCL-Vertrag v6 D.1 R-T2) —, und zwar nur als
+// festes Literal Richtung Grundzustand (2707 = 1, 2708 = 0, WMaxLim_Ena = 0, Sungrow 0xCC/0). Eine Rücknahme auf einen
+// gesicherten Wert (restoreBefore: 2704, 2706, Sequenzschritte) bleibt gesperrt: ihre Kodierung käme aus dem ungültigen
+// Profil (R-T2.3) bzw. bei victron aus abweichenden Code-Vorgaben (Codex a5803519 P1). Alles andere (Befehl,
+// Lebenszeichen, Schutz-Begrenzung, bequeme Wiederfreigabe) bleibt gesperrt.
 //
 // Nur bei einem Herstellerprofil-Fehler (writeSafety.reason `manufacturer_profile_error`): dann ist die config.json
-// gültig — Verbindung (Host/Port/Unit-ID) ist die des Betreibers; die Adressen sind bei victron die Werkskarte des
-// Geräts selbst, bei jedem anderen Hersteller gibt es KEINE (R-T2.1, config-model.js withoutVictronRegisterMap) — dort
+// gültig — Verbindung (Host/Port/Unit-ID) ist die des Betreibers; die Adressen kommen bei victron aus den Code-Vorgaben
+// (für 2707/2708 gleich dem Profil, geprüft unten), bei jedem anderen Hersteller gibt es KEINE (R-T2.1, config-model.js withoutVictronRegisterMap) — dort
 // geht also auch die Rücknahme ins Leere, statt an eine geerbte Victron-Adresse.
 // Gesperrt bleibt die kaputte config.json (`config_broken`) und jeder unbekannte Grund: dann gelten die Vorgaben mit
 // LEEREM Host — Node verbindet einen leeren Host nach localhost, wo DVhubs eigene Direktvermarkter-Schnittstelle
@@ -22,7 +25,7 @@ import path from 'node:path';
 
 import { loadConfigFile } from '../config-model.js';
 import { createSungrowEms, wire } from '../services/inverter/sungrow.js';
-import { createLegacyGate, inverterReleaseState, INVERTER_GATE_DEVICE, SUNGROW_GATE_DEVICES } from '../services/gate/legacy.js';
+import { createLegacyGate, inverterLegacyPolicy, inverterReleaseState, INVERTER_GATE_DEVICE, SUNGROW_GATE_DEVICES } from '../services/gate/legacy.js';
 import { createFeedInLimitArbiter } from '../services/feed-in-limit-arbiter.js';
 import { setEmergencyStop } from '../services/control-commands.js';
 import { HOST, baseState, evaluatorRig, loadProfileConfig, recordingModbus } from './helpers/gate-golden.js';
@@ -76,89 +79,88 @@ describe('Schreibfreigabe aus der Config (inverterReleaseState)', () => {
   });
 });
 
-describe('Victron (Werkskarte, Host des Betreibers): Not-Halt-Rücknahme trotz ungültigem Profil', () => {
-  const victronCfg = () => loadProfileConfig('victron', { victron: { host: HOST } });
+// Victron mit kaputtem oder fehlendem victron.json (echter Ladeweg, Codex a5803519 P1): Die Schreibpunkte kommen dann
+// aus den Code-Vorgaben (createDefaultConfig), NICHT aus dem ausgelieferten Profil — und die weichen ab: 2704 hat dort
+// scale 1 ohne Sentinel-Abbildung statt scale 10 mit 0 → roh 0 und −1 → 32767. Eine Rücknahme auf einen gesicherten
+// Wert (restoreBefore: 2704, 2706, Sequenzschritte) bräuchte die Kodierung des Profils, das gerade ungültig ist
+// (R-T2.3: nicht aus dem jetzt ungültigen Profil) — sie bleibt gesperrt. Durch geht nur eine Rücknahme mit festem
+// Grundzustands-Literal: die Freigabe der Einspeisung 2707 = 1 / 2708 = 0.
+const brokenVictron = (profileText = '{ kaputt') => loadReal({
+  configText: JSON.stringify({ manufacturer: 'victron', victron: { host: HOST } }),
+  profiles: profileText == null ? {} : { victron: profileText },
+});
 
-  it('DV-Sperre: die eine Freigabe im Not-Halt schreibt 2707/2708 — als haltNeutralize über das Tor', async () => {
-    const cfg = victronCfg();
-    const r = victronRig(cfg);
-    await r.ev.applyDvVictronControl(false, { reason: 'negative_price_protection' });
-    assert.deepEqual(r.writes(), ['W6 gx/u100 @2707=0', 'W6 gx/u100 @2708=1'], 'eigene Sperre steht');
-    cfg.writeSafety = PROFILE_ERROR('victron');
+describe('Victron mit ungültigem Profil (echter Ladeweg): nur die Literal-Rücknahme 2707/2708 geht durch', () => {
+  it('Beleg: Rückfall-Karte der Einspeise-Flaggen = ausgeliefertes Profil; 2704 weicht ab (deshalb gesperrt)', () => {
+    const shipped = loadProfileConfig('victron', { victron: { host: HOST } });
+    const pick = (c) => c && { address: c.address, fc: c.fc, writeType: c.writeType, scale: c.scale, offset: c.offset, port: c.port, unitId: c.unitId, host: c.host };
+    for (const cfg of [brokenVictron(), brokenVictron(null), brokenVictron('')]) {
+      assert.deepEqual(cfg.writeSafety, PROFILE_ERROR('victron'));
+      for (const k of ['feedExcessDcPv', 'dontFeedExcessAcPv']) assert.deepEqual(pick(cfg.dvControl[k]), pick(shipped.dvControl[k]), k);
+      assert.notDeepEqual(
+        { scale: cfg.controlWrite.maxDischargeW.scale, map: cfg.controlWrite.maxDischargeW.rawSentinelMap ?? null },
+        { scale: shipped.controlWrite.maxDischargeW.scale, map: shipped.controlWrite.maxDischargeW.rawSentinelMap ?? null },
+        '2704: Rückfall-Kodierung ≠ Profil');
+    }
+  });
+
+  it('DV-Sperre: die eine Freigabe im Not-Halt schreibt 2707 = 1 / 2708 = 0 — als haltNeutralize über das Tor', async () => {
+    const r = victronRig(brokenVictron(), baseState({ ctrl: { _lastDvFeedIn: false } })); // eigene Sperre von vorher
     r.halt();
-    const before = r.writes().length;
     await r.ev.applyDvVictronControl(true, { reason: 'emergency_stop_release' });
-    assert.deepEqual(r.writes().slice(before), ['W6 gx/u100 @2707=1', 'W6 gx/u100 @2708=0'], 'Rücknahme trotz C2');
+    assert.deepEqual(r.writes(), ['W6 gx/u100 @2707=1', 'W6 gx/u100 @2708=0'], 'Rücknahme trotz C2');
     assert.equal(r.state.ctrl._lastDvFeedIn, true);
   });
 
-  it('außerhalb des Not-Halts bleibt bei ungültigem Profil jede Freigabe/Sperre gesperrt (autoRestore, command, protectiveLimit)', async () => {
-    const cfg = victronCfg();
-    const r = victronRig(cfg);
-    await r.ev.applyDvVictronControl(false, { reason: 'negative_price_protection' });
-    cfg.writeSafety = PROFILE_ERROR('victron');
-    const before = r.writes().length;
+  it('außerhalb des Not-Halts bleibt jede Freigabe/Sperre gesperrt (autoRestore, command, protectiveLimit)', async () => {
+    const r = victronRig(brokenVictron(), baseState({ ctrl: { _lastDvFeedIn: false } }));
     await r.ev.applyDvVictronControl(true, { reason: 'price_recovered' });
     await r.ev.applyDvVictronControl(true, { explicit: true, reason: 'api_manual_write' });
     await r.ev.applyControlTarget('feedExcessDcPv', 1, 'api_manual_write');
     await r.ev.applyDvVictronControl(false, { reason: 'dv_forced_off' });
-    assert.deepEqual(r.writes().slice(before), [], 'nichts');
+    assert.deepEqual(r.writes(), [], 'nichts');
     assert.ok(r.events.includes('control_write_blocked_config_unsafe'), 'Alarm wie bisher');
   });
 
-  it('im Not-Halt bei ungültigem Profil: eine neue Sperre bleibt gesperrt (nur die Rücknahme ist frei)', async () => {
-    const cfg = victronCfg();
-    const r = victronRig(cfg);
-    cfg.writeSafety = PROFILE_ERROR('victron');
+  it('im Not-Halt: eine neue Sperre bleibt gesperrt (nur die Rücknahme ist frei)', async () => {
+    const r = victronRig(brokenVictron());
     r.halt();
     await r.ev.applyDvVictronControl(false, { reason: 'negative_price_protection' });
     await r.ev.applyDvVictronControl(false, { reason: 'dv_forced_off' });
     assert.deepEqual(r.writes(), []);
   });
 
-  it('Einspeisegrenze 2706: der Not-Halt-Eintritt nimmt die eigene Grenze zurück (Begrenzer, setEmergencyStop)', async () => {
-    const cfg = victronCfg();
+  it('Einspeisegrenze 2706 (gesicherter Wert, restoreBefore): die Rücknahme im Not-Halt bleibt gesperrt', async () => {
+    const cfg = loadProfileConfig('victron', { victron: { host: HOST } });
     const r = victronRig(cfg);
     const arb = createFeedInLimitArbiter({
       applyLimit: (w) => r.ev.applyDvFeedInLimit(w), pushLog: () => {}, isPaused: () => r.state.ctrl.discretionaryWritesPaused === true,
     });
     await arb.set('dv', 3000);
-    assert.deepEqual(r.writes(), ['W6 gx/u100 @2706=30'], 'Grenze gesetzt, Wert davor gesichert');
-    cfg.writeSafety = PROFILE_ERROR('victron');
+    assert.deepEqual(r.writes(), ['W6 gx/u100 @2706=30'], 'Grenze mit gültigem Profil gesetzt, Wert davor gesichert');
+    // Dieselbe Anlage, das Profil ist jetzt kaputt: die wirksame Config an Ort und Stelle tauschen (getCfg liefert dasselbe Objekt).
+    const broken = brokenVictron();
+    for (const k of Object.keys(cfg)) delete cfg[k];
+    Object.assign(cfg, broken);
     const before = r.writes().length;
     const out = await setEmergencyStop({ state: r.state, pushLog: () => {}, feedInLimit: arb }, { on: true });
-    assert.deepEqual(out.devices.feedInLimit, { ok: true, limitW: null });
-    assert.deepEqual(r.writes().slice(before), ['W6 gx/u100 @2706=65535'], 'Wert vor DVhub (−1 = keine Grenze) zurück');
+    assert.equal(out.devices.feedInLimit?.ok, false, JSON.stringify(out.devices.feedInLimit));
+    assert.deepEqual(r.writes().slice(before), [], 'kein Write mit der Rückfall-Kodierung');
   });
 
-  it('Entladegrenze 2704 (Peak Shaving): die eine Rücknahme im Not-Halt geht durch; Befehle, Ladestrom und Min-SoC nicht (H-8)', async () => {
-    const cfg = victronCfg();
-    const r = victronRig(cfg);
-    cfg.writeSafety = PROFILE_ERROR('victron');
+  it('Entladegrenze 2704 (Peak Shaving, Netzanschluss, Akku-Übergabe): Rücknahme im Not-Halt bleibt gesperrt; H-8', async () => {
+    const r = victronRig(brokenVictron(), baseState());
+    r.state.schedule.lastWrite.maxDischargeW = { value: 5000, source: 'grid_connection_assist', at: Date.now() };
     r.halt();
-    const res = await r.ev.applyControlTarget('maxDischargeW', 0, 'peak_shaving_restore');
-    assert.equal(res.ok, true, JSON.stringify(res));
-    assert.deepEqual(r.writes(), ['W6 gx/u100 @2704=0']);
-    const again = await r.ev.applyControlTarget('maxDischargeW', 0, 'peak_shaving_restore');
-    assert.equal(again.ok, false, 'je Not-Halt nur einmal');
     for (const [target, value, source] of [
+      ['maxDischargeW', 0, 'peak_shaving_restore'], ['maxDischargeW', 3000, 'grid_connection_restore'],
       ['gridSetpointW', -500, 'rule:abend'], ['chargeCurrentA', 20, 'api_manual_write'], ['minSocPct', 30, 'api_manual_write'],
       ['maxDischargeW', 2000, 'api_manual_write'],
     ]) {
-      const blocked = await r.ev.applyControlTarget(target, value, source);
-      assert.equal(blocked.ok, false, `${target} ${source}`);
+      const res = await r.ev.applyControlTarget(target, value, source);
+      assert.equal(res.ok, false, `${target} ${source}`);
     }
-    assert.deepEqual(r.writes(), ['W6 gx/u100 @2704=0'], 'sonst nichts');
-  });
-
-  it('außerhalb des Not-Halts schreibt die Peak-Shaving-Rücknahme bei ungültigem Profil nicht (autoRestore)', async () => {
-    const cfg = victronCfg();
-    const r = victronRig(cfg);
-    cfg.writeSafety = PROFILE_ERROR('victron');
-    const res = await r.ev.applyControlTarget('maxDischargeW', 0, 'peak_shaving_restore');
-    assert.equal(res.ok, false);
-    assert.match(String(res.error), /^config_unsafe_/);
-    assert.deepEqual(r.writes(), []);
+    assert.deepEqual(r.writes(), [], 'kein 2704-Write mit scale 1 (wäre 10-fach) und nichts sonst');
   });
 });
 
@@ -240,6 +242,34 @@ describe('Kaputte config.json (config_broken): weiter KEIN Write, auch keine Rü
       assert.deepEqual([res.outcome, res.detail], ['blocked_gate', 'profile_invalid'], `${action} bleibt gesperrt`);
     }
     assert.equal(sent.length, 2);
+  });
+});
+
+describe('Tor bei profileInvalid: Rücknahme nur als festes Grundzustands-Literal (Codex a5803519 P1, R-T2.3)', () => {
+  it('haltNeutralize/manualForceRelease mit Literal → durch; mit gesichertem Wert (restoreBefore) → gesperrt', async () => {
+    const gate = createLegacyGate({ isHalted: () => true });
+    const sent = [];
+    gate.attachSink(INVERTER_GATE_DEVICE, { kind: 'modbus', legacy: { mbWriteSingle: async (a) => { sent.push(a.address); return {}; } } });
+    gate.setDevicePolicies(INVERTER_GATE_DEVICE, Object.fromEntries(
+      ['feedExcessDcPv', 'dontFeedExcessAcPv', 'maxDischargeW', 'dvFeedInLimitW'].map((p) => [p, inverterLegacyPolicy(p)]),
+    ));
+    gate.setRelease(INVERTER_GATE_DEVICE, inverterReleaseState({ writeSafety: PROFILE_ERROR('victron') }));
+    const op = (point, value, address, action = 'haltNeutralize', extra = {}) => ({
+      device: INVERTER_GATE_DEVICE, point, value, source: 'emergency_stop_release', kind: 'neutralize', action, lease: null,
+      constraints: { set: {}, caps: {}, enforcedBy: [] }, validUntilMs: null, tick: { loop: 'eval', seq: address }, step: 0,
+      legacy: { sink: INVERTER_GATE_DEVICE, fn: 'mbWriteSingle', args: [{ host: HOST, port: 502, unitId: 100, address, value }] }, ...extra,
+    });
+    // Im Not-Halt zugelassener Lauf wie applyDvVictronControl/applyDvFeedInLimit (inHalt = die Regel des Pfads).
+    const run = gate.admitLegacyRun(INVERTER_GATE_DEVICE, { inHalt: 'emergency_stop_release' });
+    const verdict = async (o) => { const res = await gate.submit(o, { run }); return [res.outcome, res.detail ?? null]; };
+    assert.deepEqual(await verdict(op('feedExcessDcPv', 1, 2707)), ['ok', null]);
+    assert.deepEqual(await verdict(op('dontFeedExcessAcPv', 0, 2708)), ['ok', null]);
+    assert.deepEqual(await verdict(op('feedExcessDcPv', 0, 2707)), ['blocked_gate', 'profile_invalid'], 'kein Sperr-Wert unter dem Namen der Rücknahme');
+    assert.deepEqual(await verdict(op('maxDischargeW', 5000, 2704)), ['blocked_gate', 'profile_invalid'], '2704 auf gesicherten Wert');
+    assert.deepEqual(await verdict(op('dvFeedInLimitW', -1, 2706)), ['blocked_gate', 'profile_invalid'], '2706 auf gesicherten Wert');
+    assert.deepEqual(sent, [2707, 2708]);
+    gate.setRelease(INVERTER_GATE_DEVICE, 'open');
+    assert.deepEqual(await verdict(op('maxDischargeW', 5000, 2704)), ['ok', null], 'mit gültigem Profil wie bisher (Legacy: Wert hält der Pfad)');
   });
 });
 

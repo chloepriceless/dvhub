@@ -323,11 +323,15 @@ export function createScheduleEvaluator(ctx) {
   // Nulleinspeisung, Sungrow-Aktuator) — die Anlage bleibt ungeregelt, bis jemand eingreift (gewollt, sicherer).
   // Dazu ein LAUTER Alarm, einmal je Grund (nicht jede ~15-s-Runde fluten); beim Erholen wird der Alarm neu scharf.
   // Ausnahme (Christin 19.11.2026, „denke schon“): die EINE Rücknahme beim Not-Halt (`haltRelease`, Aktionsklasse
-  // haltNeutralize — DV-Freigabe einer eigenen Sperre, Einspeisegrenze 2706 zurück, Deckel abräumen, Entladegrenze
-  // 2704 zurück) darf durch, wenn nur das Herstellerprofil ungültig ist (Torzustand profileInvalid): die Verbindung ist
-  // dann die des Betreibers, Adressen gibt es nur bei victron (Werkskarte des Geräts), sonst keine (R-T2.1). Eine
-  // kaputte config.json sperrt weiter alles (Vorgaben mit leerem Host → localhost; services/gate/legacy.js
-  // inverterReleaseState). Die übrigen Prüfungen des Pfads (Not-Halt-Regel, Geräte-Erkennung, Adresse) gelten weiter.
+  // haltNeutralize) darf durch, wenn nur das Herstellerprofil ungültig ist (Torzustand profileInvalid) UND sie ein
+  // festes Literal Richtung Grundzustand schreibt: die Freigabe einer eigenen Sperre über die Direktregister/MQTT-Flaggen
+  // (feedExcessDcPv = 1, dontFeedExcessAcPv = 0; applyDvVictronControl) und das Abräumen des Deckels (wMaxLimEna = 0;
+  // zeroFeedInTick). Die Verbindung ist dann die des Betreibers; Adressen gibt es nur bei victron (Code-Vorgaben, für
+  // 2707/2708 gleich dem Profil — test/c2-nothalt-release.test.js), sonst keine (R-T2.1). NICHT ausgenommen: Rücknahmen
+  // auf einen gesicherten Wert (2704, 2706, Sequenzschritte) — deren Kodierung käme aus dem ungültigen Profil, bei
+  // victron aus abweichenden Code-Vorgaben (2704 scale 1 statt 10; Codex a5803519 P1). Das Tor prüft dasselbe
+  // (services/gate/index.js checkRelease). Eine kaputte config.json sperrt weiter alles (Vorgaben mit leerem Host →
+  // localhost; services/gate/legacy.js inverterReleaseState). Not-Halt-Regel und Adresse des Pfads gelten weiter.
   function writeConfigUnsafeReason(cfg, source = null, { haltRelease = false } = {}) {
     const ws = cfg?.writeSafety;
     if (!ws || ws.ok !== false) {
@@ -344,10 +348,11 @@ export function createScheduleEvaluator(ctx) {
     return `config_unsafe_${reason}`;
   }
 
-  function deviceWriteGate(cfg, { haltRelease = false } = {}) {
-    // C2 zuerst: ungültige Konfiguration sperrt die Gerätewrites, vor jeder herstellerspezifischen Prüfung — bis auf
-    // die Not-Halt-Rücknahme bei ungültigem Herstellerprofil (writeConfigUnsafeReason); die Erkennung gilt weiter.
-    const unsafe = writeConfigUnsafeReason(cfg, null, { haltRelease });
+  function deviceWriteGate(cfg) {
+    // C2 zuerst: ungültige Konfiguration sperrt ALLE Gerätewrites, vor jeder herstellerspezifischen Prüfung. Auch die
+    // Rücknahmen auf einen gesicherten Wert (Entladegrenze 2704, Sequenzen, 2706) — ihre Kodierung käme aus dem jetzt
+    // ungültigen Profil (Codex a5803519 P1); die Literal-Ausnahme steht nur in den beiden Wegen darunter.
+    const unsafe = writeConfigUnsafeReason(cfg);
     if (unsafe) return unsafe;
     if (cfg?.identify?.requiredForWrites !== true) return null;
     const d = state.victron?.device;
@@ -901,9 +906,10 @@ export function createScheduleEvaluator(ctx) {
   async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false, budgeted = false, budgetHoldExempt = false, gate: seqGate } = {}) {
     const cfg = getCfg();
     if (!seqGate?.run) throw new Error('runDvControlSequence ohne Schreibtor-Lauf (Verdrahtungsfehler)');
-    // Die Aktionsklasse der ganzen Folge bestimmt der Aufrufer: haltNeutralize nur für die Freigabe im Not-Halt
-    // (applyDvVictronControl) bzw. die Rücknahme der Einspeisegrenze im Not-Halt-Durchgang (applyDvFeedInLimit).
-    const gate = deviceWriteGate(cfg, { haltRelease: seqGate.action === 'haltNeutralize' });
+    // C2 ohne Ausnahme, auch für die Rücknahme im Not-Halt: Sequenzschritte und die Einspeisegrenze 2706 schreiben einen
+    // GESICHERTEN Wert (restoreBefore) mit der Kodierung des Profils — das ist gerade ungültig (R-T2.3; bei victron gälten
+    // die abweichenden Code-Vorgaben, Codex a5803519 P1). Nur feste Literale dürfen trotz C2 zurück (writeConfigUnsafeReason).
+    const gate = deviceWriteGate(cfg);
     if (gate) throw new Error(gate);
     // M14b Schreibbudget (nur Einspeise-Sequenzpfad, budgeted=true): ist das
     // Tagesbudget erschöpft, den Zustand HALTEN — nicht weiter schreiben. Ein
@@ -1647,34 +1653,7 @@ export function createScheduleEvaluator(ctx) {
     let releaseForFloorForActuator = false;
     const conf = cfg.controlWrite[target] || cfg.dvControl?.[target];
     if (!conf?.enabled) return { ok: false, error: 'write target not enabled in config' };
-    // Die Rücknahmen, die im Not-Halt je einmal schreiben dürfen (Begründung je Fall unten am T-0099-Tor), schon hier
-    // bestimmen: die C2-Prüfung lässt genau diese eine Rücknahme bei ungültigem Herstellerprofil durch (Christin
-    // 19.11.2026, haltNeutralize — controlTargetAction). Reine Lesezugriffe auf den Zustand, keine Wirkung.
-    // Einzige Ausnahme (Peak Shaving, GitHub #28): DVhub darf eine von IHM
-    // aufgehobene Akku-Sperre wieder setzen — genau 2704 := 0, der sichere
-    // „keine Entladung"-Wert, den der Betreiber vorher selbst gesetzt hatte.
-    // Sonst bliebe der Akku während des Not-Halts auf DVhubs Freigabe stehen.
-    const peakShavingRestore = source === 'peak_shaving_restore'
-      && target === 'maxDischargeW' && Number(value) === 0;
-    // Ebenso der Netzanschluss (Akku zuerst, Nicht-Victron): seine angehobene
-    // Entladegrenze darf er auf den Wert davor SENKEN — nur abwärts, nie auf
-    // „unbegrenzt“, nur unter dem, was gerade steht.
-    // Beleg für „steht höher“: DVhubs letzter eigener Write; nach einem Neustart
-    // (kein Write bekannt) auch eine frische Rücklesung oder der Merker der
-    // Akku-Hilfe mit genau diesem Rückkehrwert (Fable R1 P2-7).
-    const lwDischarge = state.schedule?.lastWrite?.maxDischargeW;
-    const gridConnectionRestore = source === 'grid_connection_restore' && target === 'maxDischargeW'
-      && Number(value) >= 0 && (lwDischarge != null
-        ? Number(lwDischarge.value) > 0 && Number(value) < Number(lwDischarge.value)
-        : dischargeKnownAbove(Number(value)));
-    // Ebenso die Einspeisung aus Akku 2 (multi-gx/floor-handoff.js): sie schreibt
-    // im Not-Halt EINMAL die vor ihrer Sperre gesicherte Entladegrenze zurück —
-    // nur genau diesen, gerade angemeldeten Wert, nie eine neue Sperre.
-    const handoffStopRestore = source === 'multi_gx_handoff_stop' && target === 'maxDischargeW'
-      && floorHandoff.isStopRestore(value);
-    const oneShot = peakShavingRestore || gridConnectionRestore || handoffStopRestore;
-    const oneShotUsed = oneShot && state.ctrl.discretionaryWritesPaused && notHaltOneShotUsed(source);
-    const deviceGate = deviceWriteGate(cfg, { haltRelease: oneShot && !oneShotUsed });
+    const deviceGate = deviceWriteGate(cfg);
     if (deviceGate) return { ok: false, error: deviceGate };
     // SunSpec-deklarierte Punkte haben erst nach dem Geräte-Scan (polling.js)
     // eine Adresse — vorher NIE schreiben (der address-0-Guard darunter würde
@@ -1698,19 +1677,41 @@ export function createScheduleEvaluator(ctx) {
     // state completely untouched. Log once per (target,source) while paused
     // (eval ticks every ~15 s — unthrottled this would flood the ring buffer);
     // the throttle map is cleared on resume.
-    // Die eine Rücknahme je Not-Halt (peakShavingRestore, gridConnectionRestore,
-    // handoffStopRestore — oneShot) ist oben vor der C2-Prüfung bestimmt.
-    // Steht der Rückkehrwert des Netzanschlusses nach einem Neustart im Not-Halt
-    // schon im Gerät (frische Rücklesung gleich), ist die Rücknahme erledigt —
-    // ohne Write, und der Merker darf gehen (Codex d15440d1, P2).
+    // Einzige Ausnahme (Peak Shaving, GitHub #28): DVhub darf eine von IHM
+    // aufgehobene Akku-Sperre wieder setzen — genau 2704 := 0, der sichere
+    // „keine Entladung"-Wert, den der Betreiber vorher selbst gesetzt hatte.
+    // Sonst bliebe der Akku während des Not-Halts auf DVhubs Freigabe stehen.
+    const peakShavingRestore = source === 'peak_shaving_restore'
+      && target === 'maxDischargeW' && Number(value) === 0;
+    // Ebenso der Netzanschluss (Akku zuerst, Nicht-Victron): seine angehobene
+    // Entladegrenze darf er auf den Wert davor SENKEN — nur abwärts, nie auf
+    // „unbegrenzt“, nur unter dem, was gerade steht.
+    // Beleg für „steht höher“: DVhubs letzter eigener Write; nach einem Neustart
+    // (kein Write bekannt) auch eine frische Rücklesung oder der Merker der
+    // Akku-Hilfe mit genau diesem Rückkehrwert (Fable R1 P2-7).
+    const lwDischarge = state.schedule?.lastWrite?.maxDischargeW;
+    const gridConnectionRestore = source === 'grid_connection_restore' && target === 'maxDischargeW'
+      && Number(value) >= 0 && (lwDischarge != null
+        ? Number(lwDischarge.value) > 0 && Number(value) < Number(lwDischarge.value)
+        : dischargeKnownAbove(Number(value)));
+    // Ebenso die Einspeisung aus Akku 2 (multi-gx/floor-handoff.js): sie schreibt
+    // im Not-Halt EINMAL die vor ihrer Sperre gesicherte Entladegrenze zurück —
+    // nur genau diesen, gerade angemeldeten Wert, nie eine neue Sperre.
+    // Steht der Rückkehrwert nach einem Neustart im Not-Halt schon im Gerät
+    // (frische Rücklesung gleich), ist die Rücknahme erledigt — ohne Write, und
+    // der Merker darf gehen (Codex d15440d1, P2).
     if (state.ctrl.discretionaryWritesPaused && source === 'grid_connection_restore' && target === 'maxDischargeW'
       && lwDischarge == null && Number(value) >= 0 && freshDischargeReadback() === Number(value)) {
       return { ok: true, skipped: true, reason: 'already_set' };
     }
+    const handoffStopRestore = source === 'multi_gx_handoff_stop' && target === 'maxDischargeW'
+      && floorHandoff.isStopRestore(value);
     // „Als ob aus“ (Christin 10.11.2026, services/emergency-stop/policy.js):
     // Pflicht-Quellen schreiben nur, solange ihre Klasse im Not-Halt weiterläuft;
     // die Rücknahmen oben gehen je Not-Halt höchstens EINMAL durch — scheitert
     // eine, wird sie nicht wiederholt (kein Retry-Loop am Tor vorbei).
+    const oneShot = peakShavingRestore || gridConnectionRestore || handoffStopRestore;
+    const oneShotUsed = oneShot && state.ctrl.discretionaryWritesPaused && notHaltOneShotUsed(source);
     if (state.ctrl.discretionaryWritesPaused && (oneShotUsed || (!notHaltAllowsControlSource(source) && !oneShot))) {
       const blockKey = `${target}|${source}`;
       if (!state.ctrl._stopBlockLogged) state.ctrl._stopBlockLogged = {};

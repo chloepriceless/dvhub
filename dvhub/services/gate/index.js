@@ -513,13 +513,17 @@ export function createGate(options = {}) {
     return block('blocked_readonly', unknown ? DETAIL.readOnlyStateUnknown : DETAIL.readOnly);
   }
 
-  function checkRelease(op) {
+  function checkRelease(op, pol) {
     const r = rel(op.device);
     if (r.state === 'open') return null;
     if (r.state === 'profileInvalid') {
       // R-T2: gesperrt command, keepalive, protectiveLimit, autoRestore; genau EIN Rücknahme-Durchgang
-      // (`safetyRelease`) je Punkt; Not-Halt-Durchgang und Zwangsfreigabe bleiben möglich.
+      // (`safetyRelease`) je Punkt; Not-Halt-Durchgang und Zwangsfreigabe bleiben möglich (Christin 19.11.2026) —
+      // aber nur als festes Literal Richtung Grundzustand (neutralValues/fixed der Richtlinie). Eine Rücknahme auf
+      // einen gesicherten Wert (`restoreBefore`) bräuchte die Kodierung des jetzt ungültigen Profils (R-T2.3); bei
+      // victron kommt sie dann aus den Code-Vorgaben, die abweichen (2704 scale 1 statt 10, Codex a5803519 P1).
       if (BLOCKED_WHEN_PROFILE_INVALID.has(op.action)) return block('blocked_gate', DETAIL.profileInvalid);
+      if (HALT_EXEMPT.has(op.action) && !isNeutralLiteral(pol, op.value)) return block('blocked_gate', DETAIL.profileInvalid);
       if (op.action === 'safetyRelease' && r.passDone.has(op.point)) return block('blocked_gate', DETAIL.releasePassDone);
       return null;
     }
@@ -652,7 +656,7 @@ export function createGate(options = {}) {
         halt: () => checkHalt(op, pol, adm, run),
         deadline: () => checkDeadline(op),
         readOnly: () => checkReadOnly(op),
-        release: () => checkRelease(op),
+        release: () => checkRelease(op, pol),
         target: () => checkTarget(op, pol),
         lease: () => checkLease(op, pol, adm),
         constraint: () => checkConstraint(op, pol),

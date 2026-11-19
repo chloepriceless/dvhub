@@ -95,10 +95,12 @@ export const INVERTER_GATE_DEVICE = 'inverter';
  * Schreibfreigabe des Geräts `inverter` und der Sungrow-Geräte aus der wirksamen Config (C2, Christin 16.11.2026):
  *   • gültig (kein `writeSafety` bzw. `ok` nicht false) → `open`
  *   • Herstellerprofil kaputt, fehlend oder leer (`reason: manufacturer_profile_error`) → `profileInvalid` (R-T2). Die
- *     config.json ist gültig, Host/Port/Unit-ID sind die des Betreibers; Schreibadressen gibt es nur bei victron (die
- *     Werkskarte des Geräts selbst), bei jedem anderen Hersteller keine (R-T2.1, config-model.js
+ *     config.json ist gültig, Host/Port/Unit-ID sind die des Betreibers; Schreibadressen gibt es nur bei victron (aus
+ *     den Code-Vorgaben, nicht aus dem Profil), bei jedem anderen Hersteller keine (R-T2.1, config-model.js
  *     withoutVictronRegisterMap). Das Tor lässt dann die Not-Halt-Rücknahme (`haltNeutralize`) und die manuelle
- *     Zwangsfreigabe (`manualForceRelease`, H-7) durch — Christin 19.11.2026 („denke schon“) —, alles andere nicht.
+ *     Zwangsfreigabe (`manualForceRelease`, H-7) durch — Christin 19.11.2026 („denke schon“) —, aber nur als festes
+ *     Literal Richtung Grundzustand (index.js checkRelease): eine Rücknahme auf einen gesicherten Wert bräuchte die
+ *     Kodierung des ungültigen Profils (Codex a5803519 P1: die victron-Vorgaben für 2704 weichen ab). Alles andere nicht.
  *   • kaputte config.json (`config_broken`) und jeder andere Grund → `setupIncomplete`: kein Write, auch keine
  *     Rücknahme. Dann gelten die Vorgaben mit LEEREM Host; Node verbindet einen leeren Host nach localhost, wo DVhubs
  *     eigene Direktvermarkter-Schnittstelle lauscht (Modbus-Server 0.0.0.0:502) — eine falsche Adresse.
@@ -113,8 +115,8 @@ export function inverterReleaseState(cfg) {
 
 /**
  * Bestandsprüfung C2 der Pfade (VOR dem Tor): Darf trotz ungültiger Config eine Not-Halt-Rücknahme bzw. manuelle
- * Zwangsfreigabe schreiben? Genau dann, wenn auch das Tor sie durchließe (`profileInvalid`, siehe oben) — Pfad und Tor
- * entscheiden aus derselben Quelle.
+ * Zwangsfreigabe schreiben? Nur bei `profileInvalid` (siehe oben) — Pfad und Tor entscheiden aus derselben Quelle. Die
+ * Pfade fragen das nur für ihre Literal-Rücknahmen (DV-Flaggen, Deckel, Sungrow 0xCC/0); das Tor prüft das Literal.
  */
 export function c2AllowsRelease(cfg) {
   return inverterReleaseState(cfg) === 'profileInvalid';
