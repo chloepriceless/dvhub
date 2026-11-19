@@ -1297,6 +1297,34 @@ test('M8: gridShare gesperrt → EOS-Halten ausgesetzt, Eigenverbrauch statt Hal
   assert.ok(logs.some((l) => l.event === 'eos_grid_hold_suspended'), 'Hinweis protokolliert');
 });
 
+test('M8: mit Ladestrom-Standard bleibt der Hinweis stehen und wird nur einmal protokolliert (Prod 19.11.)', async () => {
+  // Prod 19.11.: der zweite Schleifendurchlauf (chargeCurrentA mit Standardwert) löschte Hinweis und Merker des
+  // Netz-Sollwerts → Leitstand ohne Hinweis, Log-Zeile alle 5 s.
+  const { ctx, state, logs } = holdCtx({ load: 1500, pv: 200 });
+  ctx.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 3.5 }) };
+  state.schedule.config.defaultChargeCurrentA = 550;
+  const ev = createScheduleEvaluator(ctx);
+  for (let i = 0; i < 3; i++) {
+    await ev.evaluateSchedule();
+    assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold_suspended', `Takt ${i + 1}: Halten ausgesetzt`);
+    assert.equal(state.ctrl.eosGridShareSuspend?.kind, 'hold', `Takt ${i + 1}: Leitstand-Hinweis bleibt`);
+  }
+  assert.equal(logs.filter((l) => l.event === 'eos_grid_hold_suspended').length, 1, 'Hinweis nur einmal protokolliert');
+});
+
+test('M8: kein Netz-Sollwert mehr (Regel weg, kein Standard) → Hinweis verschwindet', async () => {
+  const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
+  ctx.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 3.5 }) };
+  state.schedule.config.defaultChargeCurrentA = 550;
+  const ev = createScheduleEvaluator(ctx);
+  await ev.evaluateSchedule();
+  assert.equal(state.ctrl.eosGridShareSuspend?.kind, 'hold');
+  state.schedule.rules = [];
+  state.schedule.config.defaultGridSetpointW = null;
+  await ev.evaluateSchedule();
+  assert.equal(state.ctrl.eosGridShareSuspend, null, 'kein stehengebliebener Hinweis');
+});
+
 test('M8: Sperre gelöst → EOS-Halten greift wieder', async () => {
   const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
   ctx.gridShare = { isLocked: () => false };
