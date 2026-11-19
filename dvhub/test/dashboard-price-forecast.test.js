@@ -145,3 +145,64 @@ test('Zeile unter der Preiskurve nennt die Bezugspreis-Prognose, wenn es sie gib
   assert.doesNotMatch(priceChartMetaText(status, base), /Bezugspreis/);
   assert.doesNotMatch(priceChartMetaText(status, { ...base, importSlots: [{ ts: 1, p50: null, p10: null, p90: null }] }), /Bezugspreis/);
 });
+
+// Codex ff257d67 (P2): Fehlt mitten in der Prognose der Bezugspreis (z. B.
+// fester Tarif ohne Betrag, nur §14a-Fenster), darf die Linie die Lücke nicht
+// überbrücken — sonst zeigt sie einen erfundenen Preis. Prüfung am echten
+// drawPriceChart mit einem Chart-Stub (Datensatz-Konfiguration und Segment-Stil).
+function renderPriceChart(args) {
+  const appPath = fileURLToPath(new URL('../public/app.js', import.meta.url));
+  const source = fs.readFileSync(appPath, 'utf8');
+  const sandbox = {
+    console, Date, Math, Number, JSON, Intl, Set, Map,
+    window: { DVhubCommon: { apiFetch: async () => ({ ok: true, json: async () => ({}) }) }, addEventListener() {}, setInterval() {}, clearInterval() {} },
+    setInterval() {}, clearInterval() {},
+  };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(source, sandbox, { filename: path.basename(appPath) });
+  // Erst nach dem Laden: sonst startet app.js den ganzen Leitstand.
+  const el = () => ({ style: {}, addEventListener() {}, parentElement: null, appendChild() {} });
+  const nodes = { priceChartCanvas: el(), priceChartContainer: el(), tooltip: el() };
+  const body = el();
+  nodes.tooltip.parentElement = body;
+  sandbox.document = { getElementById: (id) => nodes[id] || null, body, documentElement: {}, createElement: () => el() };
+  sandbox.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  let config = null;
+  sandbox.Chart = class { constructor(_c, cfg) { config = cfg; this.data = cfg.data; } destroy() {} getDatasetMeta() { return {}; } update() {} };
+  sandbox.drawPriceChart(...args);
+  return config;
+}
+
+test('Preiskurve: Bezugspreis-Linie überbrückt keine Prognose-Lücke ohne Bezugspreis, schließt aber an die festen Preise an', () => {
+  const now = Date.parse('2026-11-12T09:07:00Z');
+  const real = realRows();
+  const comparisons = real.map((r) => ({ ts: r.ts, importPriceCtKwh: 30 }));
+  const hours = [];
+  for (let t = Date.parse('2026-11-12T23:00:00Z'); t < Date.parse('2026-11-14T23:00:00Z'); t += H) hours.push({ ts: t, p50: 13.55, p10: 10.47, p90: 17.44 });
+  const first = Date.parse('2026-11-12T23:00:00Z');
+  // Fester Tarif ohne Betrag, Modul-3-Fenster 00:00–00:30 und ab 02:00 Ortszeit: dazwischen kein Bezugspreis.
+  const importSlots = [];
+  for (let t = first; t < Date.parse('2026-11-14T23:00:00Z'); t += Q) {
+    const known = t < first + 2 * Q || t >= first + 8 * Q;
+    importSlots.push(known ? { ts: t, p50: 24.6, p10: 24.6, p90: 24.6 } : { ts: t, p50: null, p10: null, p90: null });
+  }
+  const cfg = renderPriceChart([real, now, comparisons, [], null, [], [], null, [], { hours, importSlots }]);
+  const ds = cfg.data.datasets.find((d) => d.label === 'Bezugspreis');
+  assert.ok(ds, 'Bezugspreis-Linie');
+  const f = ds.data.indexOf(24.6); // erste Prognose-Zeile
+  assert.ok(f > 0);
+  assert.equal(ds.data[f - 1], 30);
+  assert.equal(ds.data[f + 2], null);
+  assert.equal(ds.data[f + 8], 24.6);
+  const seg = (p0, p1) => ({ type: 'segment', p0DataIndex: p0, p1DataIndex: p1 });
+  const color = (p0, p1) => ds.segment?.borderColor?.(seg(p0, p1));
+  // Über die Lücke (f+1 → f+8) wird nichts gezeichnet.
+  assert.ok(ds.spanGaps === false || color(f + 1, f + 8) === 'transparent', 'Lücke im Prognosebereich bleibt leer');
+  // Anschluss an die festen Preise und Prognose-Abschnitte: gezeichnet, feiner gestrichelt.
+  assert.notEqual(color(f - 1, f), 'transparent');
+  assert.deepEqual(Array.from(ds.segment.borderDash(seg(f - 1, f))), [3, 4]);
+  assert.deepEqual(Array.from(ds.segment.borderDash(seg(f + 8, f + 9))), [3, 4]);
+  // Feste Preise: Stil der Linie unverändert.
+  assert.equal(ds.segment.borderDash(seg(f - 3, f - 2)), undefined);
+  assert.equal(color(f - 3, f - 2), undefined);
+});

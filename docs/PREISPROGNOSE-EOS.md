@@ -205,7 +205,8 @@ könnte und wie lange ein Lauf dann **auf genau diesem Gerät** etwa dauert.
   feiner gestrichelt. Der Tooltip nennt „Bezug (Prognose)“ in ganzen Cent mit Spanne. Hängt der Bezugspreis nicht von
   der Börse ab (fester Preis, schon bekannter Anbieterpreis), steht der genaue Preis da, ohne Spanne. Die Zeile unter
   der Kurve endet dann mit „Bezugspreis-Prognose nach deinem Tarif“. Ein Band gibt es nur für die Börse; zwei
-  Bänder übereinander wären schlecht lesbar.
+  Bänder übereinander wären schlecht lesbar. Prognose-Slots ohne Bezugspreis bleiben leer; die Linie überbrückt sie
+  nicht.
 - **EOS-Fahrplan:** Unter dem Diagramm stehen Vorausschau und Quelle bzw. die Warnung. Ein Plan, der in
   Prognosepreise reicht, ist als „Preisprognose“ hinterlegt. „Laut EOS-Plan“ nennt den Bereich ebenfalls
   „Preisprognose“.
