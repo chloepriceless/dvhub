@@ -483,15 +483,19 @@ public struct EnergyTotals: Equatable, Sendable {
 }
 
 public enum EnergyDay {
+    /// Die Box bildet die Tages-Historie immer in Viertelstunden
+    /// (history-runtime.js, SLOT_BUCKET_SECONDS). Slots ohne Messwerte fehlen
+    /// in der Antwort — der Abstand der Zeilen sagt also nichts über die Länge.
+    public static let slotSeconds: TimeInterval = 900
+
     /// Slots eines Tages aus der Tages-Historie. Nur Vergangenes (Beginn vor
     /// `now`) und nur der Bereich `from ..< to`; ohne Zeitstempel fällt die
-    /// Zeile weg. Die Slot-Länge folgt dem üblichen Abstand der Zeilen
-    /// (Standard 15 min). Negative oder unlesbare Anteile zählen als null.
+    /// Zeile weg, fehlende Viertelstunden bleiben Lücken. Ein zweiter Akku
+    /// (`second…`-Felder, zusätzlich zu denen des ersten) zählt zum Akku.
+    /// Negative oder unlesbare Anteile zählen als null.
     public static func slots(_ s: HistorySummary, from: Date, to: Date, now: Date = Date()) -> [EnergySlot] {
         guard s.view == .day else { return [] }
         let dated = s.rows.compactMap { r in r.date.map { ($0, r) } }.sorted { $0.0 < $1.0 }
-        let stepMs = PriceSeries.typicalStepMs(dated.map { Int64(($0.0.timeIntervalSince1970 * 1000).rounded()) })
-        let step = stepMs > 0 ? Double(stepMs) / 1000 : 900
         var out: [EnergySlot] = []
         for (d, r) in dated where d >= from && d < to && d < now {
             if let last = out.last, last.start == d { continue }
@@ -499,10 +503,14 @@ public enum EnergyDay {
                 let v = r.values[k] ?? 0
                 return v.isFinite && v > 0 ? v : 0
             }
-            out.append(EnergySlot(start: d, end: d.addingTimeInterval(step),
-                                  solarToHomeKwh: f("solarDirectUseKwh"), solarToBatteryKwh: f("solarToBatteryKwh"), solarToGridKwh: f("solarToGridKwh"),
-                                  batteryToHomeKwh: f("batteryDirectUseKwh"), batteryToGridKwh: f("batteryToGridKwh"),
-                                  gridToHomeKwh: f("gridDirectUseKwh"), gridToBatteryKwh: f("gridToBatteryKwh")))
+            out.append(EnergySlot(start: d, end: d.addingTimeInterval(slotSeconds),
+                                  solarToHomeKwh: f("solarDirectUseKwh"),
+                                  solarToBatteryKwh: f("solarToBatteryKwh") + f("secondSolarToBatteryKwh"),
+                                  solarToGridKwh: f("solarToGridKwh"),
+                                  batteryToHomeKwh: f("batteryDirectUseKwh") + f("secondBatteryDirectUseKwh"),
+                                  batteryToGridKwh: f("batteryToGridKwh") + f("secondBatteryToGridKwh"),
+                                  gridToHomeKwh: f("gridDirectUseKwh"),
+                                  gridToBatteryKwh: f("gridToBatteryKwh") + f("secondGridToBatteryKwh")))
         }
         return out
     }

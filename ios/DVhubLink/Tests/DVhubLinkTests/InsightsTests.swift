@@ -229,18 +229,29 @@ final class InsightsTests: XCTestCase {
         XCTAssertEqual(e.down, 6, accuracy: 1e-9)
     }
 
-    func testEnergySlotLengthFollowsTheRowSpacing() throws {
+    func testEnergySlotsStayQuarterHoursAcrossGapsAndCountTheSecondBattery() throws {
+        // Lückenhafte Historie: Zeilen im Halbstundenabstand bleiben Viertelstunden, dazwischen eine Lücke.
         let body: JSONValue = ["kpis": ["pvKwh": 1], "charts": ["dayEnergyLines": [
-            ["ts": "2026-11-19T08:00:00.000Z", "solarDirectUseKwh": 2],
-            ["ts": "2026-11-19T09:00:00.000Z", "solarDirectUseKwh": 1],
-            ["ts": "2026-11-19T10:00:00.000Z", "solarDirectUseKwh": 1],
+            ["ts": "2026-11-19T08:00:00.000Z", "solarDirectUseKwh": 0.5],
+            ["ts": "2026-11-19T08:30:00.000Z", "solarDirectUseKwh": 0.25, "solarToBatteryKwh": 0.1, "secondSolarToBatteryKwh": 0.2],
+            ["ts": "2026-11-19T09:00:00.000Z", "secondBatteryDirectUseKwh": 0.3, "secondBatteryToGridKwh": 0.1,
+             "secondGridToBatteryKwh": 0.05, "batteryToSecondBatteryKwh": 9, "secondBatteryToBatteryKwh": 9],
         ]]]
         let s = try XCTUnwrap(HistorySummary.from(body, view: .day, date: "2026-11-19"))
         let from = try XCTUnwrap(parseISODate("2026-11-18T23:00:00.000Z"))
         let slots = EnergyDay.slots(s, from: from, to: from.addingTimeInterval(86400), now: from.addingTimeInterval(86400))
-        XCTAssertEqual(slots.first?.end.timeIntervalSince(slots[0].start), 3600)
-        XCTAssertEqual(try XCTUnwrap(slots.first).kw(2), 2, accuracy: 1e-9, "2 kWh in einer Stunde = 2 kW")
+        XCTAssertEqual(slots.map { $0.end.timeIntervalSince($0.start) }, [900, 900, 900])
+        XCTAssertEqual(slots[0].kw(slots[0].sourceKwh(.solar)), 2, accuracy: 1e-9, "0,5 kWh in 15 min = 2 kW, auch wenn die nächste Zeile erst 30 min später kommt")
         XCTAssertTrue(slots[0].contains(slots[0].start) && !slots[0].contains(slots[0].end))
+        XCTAssertFalse(slots.contains { $0.contains(slots[0].end) }, "08:15 fehlt und bleibt eine Lücke")
+        XCTAssertEqual(slots[1].solarToBatteryKwh, 0.3, accuracy: 1e-9, "PV in beide Akkus")
+        XCTAssertEqual(slots[1].sourceKwh(.solar), 0.55, accuracy: 1e-9)
+        // Nur der zweite Akku arbeitet: Der Slot ist nicht leer; Umladen zwischen den Akkus zählt nicht.
+        XCTAssertEqual(slots[2].batteryToHomeKwh, 0.3, accuracy: 1e-9)
+        XCTAssertEqual(slots[2].batteryToGridKwh, 0.1, accuracy: 1e-9)
+        XCTAssertEqual(slots[2].gridToBatteryKwh, 0.05, accuracy: 1e-9)
+        XCTAssertEqual(slots[2].sourceKwh(.battery), 0.4, accuracy: 1e-9)
+        XCTAssertFalse(slots[2].bars.isEmpty)
     }
 
     // MARK: Energiefluss
