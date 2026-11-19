@@ -612,9 +612,20 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       } else {
         for (const x of reasons) uncertainEpisode.reasons.add(x);
       }
+      // Feld Nebeling 19.11.: 575 min ohne Abbuchung, die Sperre fiel nie — und niemand sah, warum. Im Zustand
+      // ablegen (nicht nur im Speicher), damit auch der Web-Prozess neben dem Runtime-Worker es anzeigt.
+      const shown = st.uncertain;
+      if (!shown || shown.reasons?.length !== uncertainEpisode.reasons.size) {
+        st.uncertain = { since: new Date(uncertainEpisode.sinceMs).toISOString(), reasons: [...uncertainEpisode.reasons] };
+        dirty = true;
+      }
       return;
     }
-    if (!uncertainEpisode) return;
+    if (!uncertainEpisode) {
+      // Nach einem Neustart steht die alte Episode noch im Zustand, im Speicher aber keine mehr: weg damit.
+      if (st.uncertain) { st.uncertain = null; dirty = true; }
+      return;
+    }
     if (certainSinceMs == null) certainSinceMs = nowMs;
     if (nowMs - certainSinceMs >= GRID_SHARE_UNCERTAIN_CLEAR_MS) {
       log('grid_share_uncertain_end', {
@@ -624,6 +635,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       });
       uncertainEpisode = null;
       certainSinceMs = null;
+      if (st.uncertain) { st.uncertain = null; dirty = true; }
     }
   }
 
@@ -662,6 +674,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       // Akkukapazität fehlt: keine Abbuchung, keine Kappung (Befund 3).
       capacityMissing: st.capacityMissing === true,
       floorResetAt: st.floorResetAt ?? null, // M10: letzter Boden-Reset (Kachel-Hinweis „Netzanteil verbraucht")
+      // Akkuwerte gerade unsicher (veraltet, Lesefehler, eingefroren): es wird nichts abgebucht, die Sperre kann so
+      // nicht fallen (Feld Nebeling 19.11.). { since, reasons } oder null.
+      uncertain: st.uncertain ?? null,
 
       today: {
         date: st.day?.date ?? null,
