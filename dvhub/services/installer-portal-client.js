@@ -513,6 +513,19 @@ export function buildCompactStatus(ctx, now = Date.now()) {
     || {};
   const v = payload.victron || {};
   const alarms = buildVictronAlarmsPayload(v.alarms, now, ctx.getCfg()?.victron?.alarms?.pollIntervalMs);
+  // Netz-Sollwert und Min-SoC: zuerst die Rückmeldung des Geräts. Sungrow und das DVhub-MQTT-Schema melden
+  // keinen Sollwert zurück (Portal 19.11.: „–“) — dann der Wert, den DVhub zuletzt gesendet hat, mit Quelle.
+  const sent = (k) => {
+    const n = Number(payload.schedule?.lastWrite?.[k]?.value);
+    return payload.schedule?.lastWrite?.[k]?.value != null && Number.isFinite(n) ? n : null;
+  };
+  const withSource = (deviceValue, key) => {
+    if (deviceValue != null) return { value: deviceValue, source: 'device' };
+    const s = sent(key);
+    return s != null ? { value: s, source: 'dvhub' } : { value: null, source: null };
+  };
+  const setpoint = withSource(v.gridSetpointW ?? null, 'gridSetpointW');
+  const minSoc = withSource(v.minSocPct ?? null, 'minSocPct');
   return {
     ts: new Date(now).toISOString(),
     soc: v.soc ?? null,
@@ -522,14 +535,16 @@ export function buildCompactStatus(ctx, now = Date.now()) {
     // und der zweite WR sichtbar machen, damit der Installateur jeden Akku einzeln prüfen kann (ohne LAN-IP).
     sungrowMasterSocPct: v.sungrowMasterSocPct ?? null,
     sungrowSecond: v.sungrowSecond ?? null,
-    gridSetpointW: v.gridSetpointW ?? null,
+    gridSetpointW: setpoint.value,
+    gridSetpointSource: setpoint.source, // 'device' | 'dvhub' (zuletzt gesendet) | null
     // Netzübergabepunkt (gemessen) — getrennt, damit das Portal kein
     // Vorzeichen-Setting kennen muss; ohne gültigen Zähler null.
     gridImportW: payload.meter?.ok === false ? null : (v.gridImportW ?? null),
     gridExportW: payload.meter?.ok === false ? null : (v.gridExportW ?? null),
     // Hausverbrauch (gemessen oder aus der Energiebilanz abgeleitet)
     loadW: v.selfConsumptionW ?? null,
-    minSocPct: v.minSocPct ?? null,
+    minSocPct: minSoc.value,
+    minSocSource: minSoc.source,
     alarmsActive: alarms.active.length,
     alarmsSeverity: alarms.severity || 0,
     alarmsStale: !!alarms.stale,
