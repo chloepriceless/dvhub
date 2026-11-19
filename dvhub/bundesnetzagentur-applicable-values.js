@@ -43,6 +43,9 @@ export const APPLICABLE_VALUE_REFRESH_MS = 7 * 24 * 3600_000;
 // Nach einem Fehlschlag: mit gültigem Stand erst nach 6 h wieder, ohne nach 1 h.
 export const APPLICABLE_VALUE_RETRY_MS = 6 * 3600_000;
 export const APPLICABLE_VALUE_RETRY_EMPTY_MS = 3600_000;
+// Fehlt dem Stand von dvhub.online der Monat einer eingetragenen Anlage, sieht die
+// Box höchstens so oft zusätzlich direkt bei der Bundesnetzagentur nach.
+export const APPLICABLE_VALUE_DIRECT_COMPLETION_MS = 24 * 3600_000;
 // Takt der Prüfung „fällig?“ (billig, ohne Netz, solange nichts fällig ist).
 export const APPLICABLE_VALUE_TICK_MS = 15 * 60_000;
 // Web-Prozess ohne eigenen Abruf: Cache-Datei höchstens alle 30 s neu ansehen.
@@ -233,6 +236,7 @@ function normalizeRefreshState(state, referenceData) {
     lastAttemptOk: typeof state?.lastAttemptOk === 'boolean' ? state.lastAttemptOk : null,
     lastAttemptSource: state?.lastAttemptSource === 'public' || state?.lastAttemptSource === 'dvhub' ? state.lastAttemptSource : null,
     lastSuccessAt: iso(state?.lastSuccessAt) || (state ? null : iso(referenceData?.updatedAt)),
+    lastDirectAt: iso(state?.lastDirectAt),
     lastError: typeof state?.lastError === 'string' ? state.lastError.slice(0, 300) : null
   };
 }
@@ -624,6 +628,7 @@ export function createBundesnetzagenturApplicableValueService({
   refreshIntervalMs = APPLICABLE_VALUE_REFRESH_MS,
   retryIntervalMs = APPLICABLE_VALUE_RETRY_MS,
   retryEmptyIntervalMs = APPLICABLE_VALUE_RETRY_EMPTY_MS,
+  directCompletionIntervalMs = APPLICABLE_VALUE_DIRECT_COMPLETION_MS,
   fetchReferenceData = (options = {}) => fetchBundesnetzagenturApplicableValueReferenceData({
     ...options,
     fetchImpl
@@ -719,7 +724,7 @@ export function createBundesnetzagenturApplicableValueService({
   // Stand (z. B. dvhub.online einen Tag hinter einer neuen Veröffentlichung,
   // die die Box schon direkt hat, oder eine Datei fehlte auf der Archivseite).
   // Sonst wirft es — der Aufrufer behandelt das wie einen Fehlschlag der Quelle.
-  function acceptFetched(fetched, via, attemptAt) {
+  function acceptFetched(fetched, via, attemptAt, baseline = null) {
     const label = via === VIA_CENTRAL ? 'dvhub.online' : 'Bundesnetzagentur';
     const next = normalizeReferenceData({
       ...fetched,
@@ -731,25 +736,33 @@ export function createBundesnetzagenturApplicableValueService({
     const nextMonths = new Set(monthKeys(next));
     if (!nextMonths.size) throw new Error(`${label}: keine Werte`);
     const nextFull = new Set(Object.keys(next.fullFeedApplicableValueTiersByMonth));
-    const lost = monthKeys(referenceData).filter((key) => !nextMonths.has(key))
-      .concat(Object.keys(referenceData.fullFeedApplicableValueTiersByMonth).filter((key) => !nextFull.has(key)))
-      .sort();
+    // baseline: ein in diesem Lauf schon angenommener Stand (dvhub.online), hinter
+    // den der direkt geholte ebenfalls nicht zurückfallen darf.
+    const lost = [referenceData, baseline].filter(Boolean).flatMap((base) => monthKeys(base).filter((key) => !nextMonths.has(key))
+      .concat(Object.keys(base.fullFeedApplicableValueTiersByMonth).filter((key) => !nextFull.has(key))));
+    lost.sort();
     if (lost.length) throw new Error(`${label}: älterer Stand als der gespeicherte, ${lost.length} Monat(e) fehlen (z. B. ${lost[0]})`);
     return next;
   }
 
-  async function runRefresh({ reason = 'manual' } = {}) {
+  async function runRefresh({ reason = 'manual', pvPlants = null } = {}) {
     const source = effectiveSource();
     const attemptAt = nowIso();
     const months = monthKeys(referenceData);
     // Rückfall auf die BNetzA nur, wenn der Stand fehlt, fällig ist oder eine
     // Anlage einen Monat braucht, den er nicht hat — nicht, um nach einem
     // Rückfall alle 6 h zu prüfen, ob dvhub.online wieder da ist.
-    const allowFallback = !months.length || reason === 'new_month'
+    // Wegen eines fehlenden Monats (new_month) höchstens einmal am Tag direkt holen
+    // (Codex 6aac82b2): reicht der direkte Stand nur ein Stück weiter als dvhub.online,
+    // lehnt die Box den kürzeren zentralen Stand alle 6 h ab — ohne diese Grenze lüde
+    // sie dann jedes Mal die Archivseite und alle Dateien neu.
+    const directRecently = sinceMs(refreshState.lastDirectAt, Date.parse(attemptAt)) < directCompletionIntervalMs;
+    const allowFallback = !months.length || (reason === 'new_month' && !directRecently)
       || !(sinceMs(refreshState.lastSuccessAt, Date.parse(attemptAt)) < refreshIntervalMs);
     let next = null;
     let via = null;
     let error = null;
+    let directAt = null;
     if (source === 'dvhub') {
       try {
         next = acceptFetched(await fetchCentralReferenceData({ baseUrl: getCentralBaseUrl() }), VIA_CENTRAL, attemptAt);
@@ -760,16 +773,37 @@ export function createBundesnetzagenturApplicableValueService({
       }
     }
     if (!next && (source === 'public' || allowFallback)) {
+      directAt = attemptAt;
       try {
         next = acceptFetched(await fetchReferenceData({}), VIA_DIRECT, attemptAt);
         via = VIA_DIRECT;
       } catch (directError) {
         error = directError;
       }
+    } else if (next && via === VIA_CENTRAL && plantBeyondCache(pvPlants, monthKeys(next)) && !directRecently) {
+      // Codex 2bd0bf21 (P2): dvhub.online liefert einen gültigen Stand, dem aber der
+      // Monat einer eingetragenen Anlage noch fehlt (Server hinter einer neuen
+      // Veröffentlichung, oder seine Prüfung hält den letzten guten Stand). Der Stand
+      // wurde bisher angenommen und der direkte Weg nie versucht — die Anlage blieb
+      // ohne Wert. Darum höchstens einmal am Tag zusätzlich direkt nachsehen; nur ein
+      // Stand, der weiter reicht, ersetzt den zentralen.
+      directAt = attemptAt;
+      const centralLast = monthKeys(next).at(-1);
+      try {
+        const direct = acceptFetched(await fetchReferenceData({}), VIA_DIRECT, attemptAt, next);
+        const directLast = monthKeys(direct).at(-1);
+        if (directLast > centralLast) {
+          log('applicable_value_central_incomplete', { centralLastMonth: centralLast, directLastMonth: directLast, reason }, 'warn');
+          next = direct;
+          via = VIA_DIRECT;
+        }
+      } catch (directError) {
+        log('applicable_value_direct_completion_failed', { error: scrubError(directError), centralLastMonth: centralLast, reason }, 'warn');
+      }
     }
     if (next) {
       referenceData = next;
-      refreshState = { lastAttemptAt: attemptAt, lastAttemptOk: true, lastAttemptSource: source, lastSuccessAt: attemptAt, lastError: null };
+      refreshState = { lastAttemptAt: attemptAt, lastAttemptOk: true, lastAttemptSource: source, lastSuccessAt: attemptAt, lastDirectAt: directAt || refreshState.lastDirectAt || null, lastError: null };
       persist();
       const keys = monthKeys(referenceData);
       log('applicable_value_refresh_ok', {
@@ -782,7 +816,7 @@ export function createBundesnetzagenturApplicableValueService({
     // lastSuccessAt bleibt: ein abgelehnter oder gescheiterter Abruf verschiebt
     // den Wochenabruf nicht.
     const message = scrubError(error);
-    refreshState = { ...refreshState, lastAttemptAt: attemptAt, lastAttemptOk: false, lastAttemptSource: source, lastError: message };
+    refreshState = { ...refreshState, lastAttemptAt: attemptAt, lastAttemptOk: false, lastAttemptSource: source, lastDirectAt: directAt || refreshState.lastDirectAt || null, lastError: message };
     persist();
     // Mit gültigem Stand rechnet DVhub weiter — nur eine Warnung. Ein Fehler ist
     // es erst, wenn nichts da ist, aber eine PV-Anlage die Werte braucht.
@@ -805,7 +839,7 @@ export function createBundesnetzagenturApplicableValueService({
     if (refreshPromise) return refreshPromise.catch(() => null);
     const reason = dueReason(options);
     if (!reason) return null;
-    return refresh({ reason }).catch(() => null);
+    return refresh({ reason, pvPlants: options.pvPlants }).catch(() => null);
   }
 
   function getApplicableValueSummary({ year, pvPlants = [] } = {}) {
