@@ -74,8 +74,9 @@ Beim nächsten Update, das das Profil erneut ändert, wird sie bei Bedarf neu er
 ## 6. Lese-Schlüssel für neue Hersteller (Profil-Referenz)
 
 Seit der Lese-Engine (November 2026) kann ein Profil Netz, PV, Akku, SoC, Hauslast und Gerätegrenzen auch dann
-lesen, wenn das Gerät sie nicht so ablegt wie Victron. Die Schlüssel stehen in `meter` und in `points.<name>`. Die
-mitgelieferten Profile nutzen sie nicht; sie verhalten sich unverändert. Für ein reines Lese-Profil gehört zusätzlich
+lesen, wenn das Gerät sie nicht so ablegt wie Victron. Die Schlüssel stehen in `meter` und in `points.<name>`, die
+Verbindungs-Schlüssel (Taktung, Kennungsprobe) unter `victron`. Genutzt werden sie von den Nur-Lese-Profilen der neuen
+Hersteller; Victron, Fronius, Sungrow, Deye LV und die MQTT-Profile nutzen sie nicht und verhalten sich unverändert. Für ein reines Lese-Profil gehört zusätzlich
 `"readOnly": true` auf die oberste Ebene (keine Schreibziele, keine Abregelung).
 
 Vorzeichen in DVhub: **Netz + = Bezug**, **Akku + = Laden**. Meldet ein Gerät es andersherum, dreht `sign: -1` den

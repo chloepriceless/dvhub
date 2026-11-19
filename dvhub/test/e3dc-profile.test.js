@@ -19,10 +19,10 @@ const setup = (opts = {}) => setupProfile(ID, { host: HOST, ...opts });
 const load = (opts) => loadConfigFile(setup(opts)).effectiveConfig;
 
 // Schein-S10 auf Unit 1, FC 3: Drahtadressen 40000 ff. (= Dok. 40001 ff.), 32-bit Low-Wort zuerst.
-function s10({ pv = 6420, batt = 2150, house = 1730, grid = -2540, soc = 57 } = {}) {
+function s10({ pv = 6420, batt = 2150, house = 1730, grid = -2540, soc = 57, magic = 0xe3dc } = {}) {
   const dev = createRegisterDevice({ defaultUnitId: 1 });
   const le = { wordOrder: 'le' };
-  dev.set(40000, 0xe3dc);           // Magicbyte (Dok. 40001) — nicht gelesen, nur Kulisse
+  if (magic != null) dev.set(40000, magic); // Magicbyte (Dok. 40001) — Kennungsprobe E10
   dev.set32(40067, pv, le);         // Dok. 40068 PV
   dev.set32(40069, batt, le);       // Dok. 40070 Batterie (+ = Laden)
   dev.set32(40071, house, le);      // Dok. 40072 Haus
@@ -112,8 +112,9 @@ test('Poller: Low-Wort zuerst, Laden positiv, Einspeisung negativ, SoC an Dok. 4
   assert.equal(state.victron.gridImportW, 0);
   assert.deepEqual([state.meter.grid_l1_w, state.meter.grid_l2_w, state.meter.grid_l3_w], [null, null, null]);
 
-  // Genau die Profilregister (FC 3, Unit 1, eigene IP) — kein Victron-Register, keine Wallbox, keine Kennung.
-  assert.deepEqual(readAddresses(dev), [40067, 40069, 40071, 40073, 40082]);
+  // Genau die Profilregister (FC 3, Unit 1, eigene IP) — kein Victron-Register, keine Wallbox; dazu die Kennung (E10).
+  assert.deepEqual(readAddresses(dev), [40000, 40067, 40069, 40071, 40073, 40082]);
+  assert.equal(state.victron.identityProbe.status, 'ok');
   assert.ok(dev.requests.every((r) => r.fc === 3 && r.unitId === 1 && r.host === HOST));
 });
 
@@ -133,6 +134,32 @@ test('Poller: Ausgabe-Konvention gridPositiveMeans=feed_in dreht nur die Ausgabe
   const { state } = await pollProfile(cfg, s10({ grid: -2540 }));
   assert.equal(state.meter.grid_total_w, 2540);
   assert.equal(state.victron.gridExportW, 2540, 'Einspeisung bleibt Einspeisung');
+});
+
+// --- E10: Kennungsprobe 40000 = 0xE3DC ---------------------------------------------------------------------------
+
+test('E10: Profil prüft Draht 40000 (Dok. 40001) = 0xE3DC und blendet sonst alle Werte aus', () => {
+  const raw = shippedProfile(ID);
+  assert.deepEqual(raw.victron.identityProbe.checks.map((c) => [c.fc, c.address, c.equals]), [[3, 40000, [0xe3dc]]]);
+  assert.deepEqual(load().victron.identityProbe.hideOnMismatch, ['meter', 'pvPowerW', 'batteryPowerW', 'soc', 'selfConsumptionW']);
+  assert.equal(raw.identify, undefined, 'kein Schreibtor-Block — die Probe wirkt nur aufs Lesen');
+});
+
+test('E10: SunSpec-Mode statt Simple-Mode („SunS“ an 40000) → keine Werte von fremden Registern, Hinweis', async () => {
+  const dev = s10({ magic: 0x5375 });
+  const { state, logs } = await pollProfile(load(), dev);
+  assert.equal(state.victron.identityProbe.status, 'mismatch');
+  assert.match(state.victron.identityProbe.text, /E3\/DC-Kennung \(Dok\. 40001\): Register 40000 = 21365 \(0x5375\), erwartet 58332 \(0xE3DC\)/);
+  assert.equal(state.meter.ok, false);
+  for (const k of ['pvPowerW', 'batteryPowerW', 'soc', 'selfConsumptionW']) assert.equal(state.victron[k], null, k);
+  assert.deepEqual(readAddresses(dev), [40000], 'nur die Kennung gelesen');
+  assert.ok(logs.some((l) => l.event === 'identity_probe_mismatch'));
+});
+
+test('E10: Kennung nicht lesbar (andere Registerbasis ohne 40000) → Werte ungeprüft, Hinweis', async () => {
+  const { state } = await pollProfile(load(), s10({ magic: null }));
+  assert.equal(state.victron.identityProbe.status, 'unreadable');
+  assert.equal(state.victron.pvPowerW, 6420);
 });
 
 // --- Beta-Gate -------------------------------------------------------------------------------------------------

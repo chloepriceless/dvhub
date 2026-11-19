@@ -31,7 +31,7 @@
     "- H1_G1 über RS485 mit Input-Block 11000 (FC 04): andere Adressen (Netz 11021, Akku 11008, SoC 11036) → eigenes",
     "  Profil, falls das Gerät den Holding-Block 31000 am RS485 nicht beantwortet.",
     "- Gerätegrenzen: max. Lade-/Entladestrom 41007/41008 (0,1 A) stehen nur in foxess_modbus, nicht in der Spec.",
-    "- Modell-/Firmware-Erkennung (30000 ff.): DVhub prüft nicht, welche Karte antwortet (E10 fehlt)."
+    "- Modell-/Firmware-Erkennung (30000 ff.): DVhub prüft nicht, welche Karte antwortet (Kennungsprobe E10 vorhanden, aber kein Register mit belegten Werten)."
   ],
 
   "victron": {

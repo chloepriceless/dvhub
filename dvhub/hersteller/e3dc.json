@@ -25,15 +25,25 @@
     "- 40076 „Leistung aller zusätzlichen Einspeiser“ (z. B. weiterer PV-WR): Vorzeichen in der Community uneinheitlich,",
     "  daher nicht in die PV-Summe genommen. Bei Anlagen mit Zusatz-Einspeiser fehlt dessen Leistung in der PV-Anzeige.",
     "- Gerätegrenzen: Simple-Mode hat keine Lade-/Entladegrenzen (die liegen nur in RSCP).",
-    "- Kennungsprüfung 40000 = 0xE3DC: DVhub prüft nicht, ob wirklich ein E3/DC im Simple-Mode antwortet (E10 fehlt).",
-    "  Ist am Gerät der SunSpec-Mode gewählt, liest dieses Profil fremde Register."
+    "",
+    "Kennungsprobe (E10): DVhub liest vor dem ersten Wert und danach alle 10 min Draht 40000 (Dok. 40001, Magicbyte,",
+    "„immer 0xE3DC“ [SPEC V1.6]). Steht dort etwas anderes — im SunSpec-Mode „SunS“, bei anderer Registerbasis ein",
+    "Nachbarregister —, zeigt DVhub Netz, PV, Akku, SoC und Hauslast nicht an (sie lägen dann auf fremden Registern)",
+    "und nennt den Grund im Leitstand. Nicht lesbar: Werte ungeprüft angezeigt, mit Hinweis."
   ],
 
   "victron": {
     "transport": "modbus",
     "port": 502,
     "unitId": 1,
-    "timeoutMs": 2000
+    "timeoutMs": 2000,
+    "identityProbe": {
+      "_comment": "E10: Dok.-Register 40001 = Draht 40000, Magicbyte „S10 ModBus ID (immer 0xE3DC)“ [SPEC V1.6; .planning/docs/research/2026-11-15-e3dc-modbus-control-spec.md §2.2]. Alle Werte liegen im Simple-Mode-Block und hängen daran.",
+      "checks": [
+        { "label": "E3/DC-Kennung (Dok. 40001)", "fc": 3, "address": 40000, "equals": [58332] }
+      ],
+      "hideOnMismatch": ["meter", "pvPowerW", "batteryPowerW", "soc", "selfConsumptionW"]
+    }
   },
 
   "meter": {

@@ -14,9 +14,12 @@ const ID = 'kostal-plenticore';
 const UNIT = 71;
 const CDAB = { wordOrder: 'le' };
 
-// Rohbild wie ab Werk (Register 0x05 = 0 → Float CDAB). battery: Rohwert 582 (KOSTAL: + = Entladen).
-function device({ meter = -1234.4, pv = 6120.7, battery = -2500, soc = 77, maxCharge = 6000, maxDischarge = 5000 } = {}) {
-  return createRegisterDevice({ defaultUnitId: UNIT })
+// Rohbild wie ab Werk (Register 0x05 = 0 → Float CDAB). battery: Rohwert 582 (KOSTAL: + = Entladen). byteOrder:
+// Register 0x05 (Kennungsprobe E10); null = Register fehlt.
+function device({ meter = -1234.4, pv = 6120.7, battery = -2500, soc = 77, maxCharge = 6000, maxDischarge = 5000, byteOrder = 0 } = {}) {
+  const dev = createRegisterDevice({ defaultUnitId: UNIT });
+  if (byteOrder != null) dev.set(5, byteOrder);
+  return dev
     .setFloat32(252, meter, CDAB)
     .setFloat32(1066, pv, CDAB)
     .set(582, battery)
@@ -111,8 +114,9 @@ test('Poller (Tag): Float CDAB; Einspeisung (252 negativ) bleibt negativ, 582 ne
   assert.equal(state.victron.deviceMaxDischargeW, 5000);
 
   assert.deepEqual(readSet(dev.requests), [
-    `3:${UNIT}:1066x2`, `3:${UNIT}:1076x2`, `3:${UNIT}:1078x2`, `3:${UNIT}:252x2`, `3:${UNIT}:514x1`, `3:${UNIT}:582x1`,
+    `3:${UNIT}:1066x2`, `3:${UNIT}:1076x2`, `3:${UNIT}:1078x2`, `3:${UNIT}:252x2`, `3:${UNIT}:514x1`, `3:${UNIT}:582x1`, `3:${UNIT}:5x1`,
   ]);
+  assert.equal(state.victron.identityProbe.status, 'ok', 'Register 0x05 = 0 → Kennungsprobe bestanden');
   assert.ok(dev.requests.every((r) => r.host === TEST_HOST && r.port === 1502));
   assert.deepEqual(dev.writes, []);
 });
@@ -137,11 +141,35 @@ test('Poller (Nacht, zweiter Takt): Bezug positiv, Entladen negativ, Last folgt'
 
 test('Poller: Gerät in ABCD (Register 0x05 = 1) liefert sichtbar andere Werte — das Profil liest CDAB', async () => {
   const cfg = effective();
-  const dev = device();
+  const dev = device({ byteOrder: null }); // ohne Register 0x05: Probe nicht lesbar, Werte ungeprüft
   dev.setFloat32(252, 500, { wordOrder: 'be' });
   const { state, poller } = createPollerRig(cfg, dev);
   await poller.requestPoll();
+  assert.equal(state.victron.identityProbe.status, 'unreadable');
   assert.notEqual(state.meter.grid_total_w, 500, 'ABCD-Wörter dürfen nicht zufällig als 500 W durchgehen');
+});
+
+// E10: Register 0x05 = 1 (ABCD) → alle Float-Werte wären falsch. DVhub zeigt Netz, PV, die Float-Grenzen und die
+// daraus gerechnete Hauslast nicht an (und liest sie nicht); Akku 582 und SoC 514 (16 bit) bleiben.
+test('E10: Register 0x05 = 1 (ABCD) → Float-Werte leer statt falsch, 16-bit-Werte bleiben, Hinweis nennt den Grund', async () => {
+  const raw = readShippedProfile(ID);
+  assert.deepEqual(raw.victron.identityProbe.checks.map((c) => [c.fc, c.address, c.equals]), [[3, 5, [0]]]);
+  const cfg = effective();
+  assert.deepEqual(cfg.victron.identityProbe.hideOnMismatch,
+    ['meter', 'pvPowerW', 'deviceMaxChargeW', 'deviceMaxDischargeW', 'selfConsumptionW'], 'kommt in der wirksamen Config an');
+  const dev = device({ byteOrder: 1 });
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  const id = state.victron.identityProbe;
+  assert.equal(id.status, 'mismatch');
+  assert.match(id.text, /Byte-Reihenfolge \(Register 0x05, 0 = CDAB\): Register 5 = 1 \(0x0001\), erwartet 0 \(0x0000\)/);
+  assert.equal(state.meter.ok, false);
+  assert.equal(state.meter.grid_total_w, null);
+  for (const k of ['pvPowerW', 'deviceMaxChargeW', 'deviceMaxDischargeW', 'selfConsumptionW']) assert.equal(state.victron[k], null, k);
+  assert.equal(state.victron.batteryPowerW, 2500);
+  assert.equal(state.victron.soc, 77);
+  assert.deepEqual(readSet(dev.requests), [`3:${UNIT}:514x1`, `3:${UNIT}:582x1`, `3:${UNIT}:5x1`], 'keine Float-Register gelesen');
+  assert.deepEqual(dev.writes, []);
 });
 
 test('Poller: Akku meldet keine Grenze (Float-NaN) → Grenze leer, kein Fehler', async () => {
