@@ -6687,7 +6687,9 @@ export function createApiRoutes(ctx) {
         ? (prev.apiKey || '')
         : clip(body.apiKey, 256);
       // body.enabled === undefined → preserve previous; otherwise coerce to bool.
-      next.forecast.solcast.enabled = (body.enabled === undefined) ? !!prev.enabled : !!body.enabled;
+      // 19.11.2026: ein fehlender Wert heißt „an“ (das Fenster hat keinen Schalter) — vorher schrieb
+      // `!!prev.enabled` beim ersten Speichern still false, seit der Schalter wirkt hieße das „Solcast aus“.
+      next.forecast.solcast.enabled = (body.enabled === undefined) ? (prev.enabled !== false) : !!body.enabled;
       next.forecast.solcast.siteId = clip(body.siteId, 64);
       if (apiKey) {
         next.forecast.solcast.apiKey = apiKey;

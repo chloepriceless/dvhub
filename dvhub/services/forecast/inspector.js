@@ -21,6 +21,71 @@
 // damit die Einstellungen zeigen, WAS aktiv ist (price-aware, Marge, Puffer,
 // Wasserfall). Statischer Import ok — reines fs-Lesen, keine DI nötig.
 import { readEosReserveStatus } from '../optimizer/eos-reserve-status.js';
+import { PV_PROVIDERS, PV_PROVIDER_LABELS, planPvProviders } from './pv-provider-setup.js';
+
+/**
+ * Christin 19.11.2026: Stand je PV-Prognosedienst für die Anzeige. Ensemble-Mitglied ist nur, wer im
+ * aktuellen Lauf ein Gewicht hat (ensembleWeights) — nicht jedes Modell mit Zeilen im Fenster (alte
+ * Zeilen früherer Einrichtungen, 'combined').
+ *
+ * status:
+ *   member           im Ensemble (weight = Anteil)
+ *   leaving          noch im Ensemble des letzten Laufs, aber nicht mehr eingerichtet → fällt beim
+ *                    nächsten Lauf heraus (spätestens nach 15 min, pv-forecast.js refreshPvnodeOnly)
+ *   single           einzige Quelle, kein Ensemble (z. B. „Nur Solcast“ oder nur ein Dienst liefert)
+ *   not_configured   eigene Einstellungen fehlen (hint sagt welche)
+ *   not_applicable   eingerichtet, für diese Anlage nicht verwendbar (Forecast.Solar bei Mehrflächen)
+ *   excluded_by_mode eingerichtet, aber die gewählte PV-Prognose-Quelle nimmt ihn nicht
+ *   no_data          eingerichtet und abgerufen, liefert gerade keine Daten
+ *   waiting          eingerichtet, hat Daten, war im letzten Lauf aber nicht dabei
+ */
+export function pvProviderStatus({ plan, ensembleWeights, providers, activeModel }) {
+  const weights = ensembleWeights && typeof ensembleWeights === 'object' ? ensembleWeights : null;
+  const members = weights
+    ? Object.keys(weights).filter((k) => k !== 'combined' && Number.isFinite(Number(weights[k])) && Number(weights[k]) > 0)
+    : [];
+  const out = {};
+  for (const k of PV_PROVIDERS) {
+    const p = plan?.providers?.[k] || null;
+    const inEnsemble = members.includes(k);
+    const hasRows = Array.isArray(providers?.[k]) && providers[k].length > 0;
+    const eligible = p ? p.eligible === true : null;
+    let status;
+    let reason = p ? p.reason : null;
+    let hint = p ? p.hint : null;
+    if (inEnsemble && eligible !== false) {
+      status = 'member'; reason = null; hint = null;
+    } else if (inEnsemble) {
+      status = 'leaving';
+      hint = 'noch im Ensemble des letzten Laufs, fällt beim nächsten Lauf heraus' + (hint ? ' — ' + hint : '');
+    } else if (p && !p.configured) {
+      status = 'not_configured';
+    } else if (p && !p.eligible) {
+      status = 'not_applicable';
+    } else if (p && !p.selected) {
+      status = 'excluded_by_mode';
+    } else if (!weights && activeModel === k && hasRows) {
+      status = 'single'; reason = null; hint = 'einzige Quelle — kein Ensemble';
+    } else if (!hasRows) {
+      status = 'no_data'; reason = 'no_data'; hint = 'liefert gerade keine Daten';
+    } else {
+      status = 'waiting'; reason = 'not_in_last_run'; hint = 'war im letzten Prognose-Lauf nicht dabei';
+    }
+    out[k] = {
+      label: PV_PROVIDER_LABELS[k] || k,
+      status,
+      inEnsemble,
+      weight: inEnsemble ? Number(weights[k]) : null,
+      configured: p ? p.configured : null,
+      eligible,
+      selected: p ? p.selected : null,
+      hasRows,
+      reason,
+      hint,
+    };
+  }
+  return { members, status: out };
+}
 
 export function createInspector(ctx, deps = {}) {
   const pushLog = ctx && typeof ctx.pushLog === 'function' ? ctx.pushLog : () => {};
@@ -186,14 +251,35 @@ export function createInspector(ctx, deps = {}) {
       }
     }
 
+    // Christin 19.11.2026: Einrichtung + Ensemble-Mitgliedschaft je Dienst. Dieselbe Regel wie der
+    // Prognose-Lauf (forecastService.pvProviderPlan); ohne Forecast-Dienst (Tests) aus der Config.
+    let plan = null;
+    try {
+      plan = (forecastService && typeof forecastService.pvProviderPlan === 'function')
+        ? forecastService.pvProviderPlan()
+        : planPvProviders(getCfg() || {}, { pvlibAvailable: !!(state && state.forecast && state.forecast.pythonAvailable) });
+    } catch (e) {
+      pushLog('inspector_pv_provider_plan_error', { error: e && e.message ? e.message : String(e) });
+    }
+    const activeModel = state && state.forecast && state.forecast.pv ? (state.forecast.pv.model || null) : null;
+    const { members, status: providerStatus } = pvProviderStatus({ plan, ensembleWeights, providers, activeModel });
+
     return {
       window: { from, to },
       providers,
       ensembleWeights,
       ensembleActive: !!ensembleWeights,
+      // Neu (19.11.2026), nur ergänzt: wer im aktuellen Ensemble ist, Stand je Dienst, gewählter Modus.
+      ensembleMembers: members,
+      providerStatus,
+      activeModel,
+      pvModel: plan ? plan.requestedModel : null,
+      modelFallback: plan ? plan.fallback : null,
       oldestFetchedAt,
       resolutionMinByProvider,
-      meta: { rowCount: rows.length, modelCount: Object.keys(providers).length },
+      // modelCount zählt weiter alle Modelle mit Zeilen (auch 'combined', alte Zeilen) — für die
+      // Anzeige „N Modelle“ gilt ensembleMemberCount.
+      meta: { rowCount: rows.length, modelCount: Object.keys(providers).length, ensembleMemberCount: members.length },
     };
   }
 

@@ -87,7 +87,9 @@ test('createPvForecast on Tier 1 does NOT call pythonBridge', async () => {
     getCfg: () => ({
       forecast: {
         location: { latitude: 48.15, longitude: 9.48 },
-        pv: { configLevel: 'simple', totalKwp: 10, tiltDeg: 35, azimuthDeg: 180, strings: [], model: 'solcast' }
+        pv: { configLevel: 'simple', totalKwp: 10, tiltDeg: 35, azimuthDeg: 180, strings: [], model: 'solcast' },
+        // 19.11.2026: nur eingerichtete Dienste werden abgerufen (pv-provider-setup.js).
+        solcast: { apiKey: 'test-key', siteId: 'test-site' }
       }
     }),
     pushLog: () => {}
@@ -182,7 +184,8 @@ test('mergePvForecasts combines Solcast + pvlib results (both model)', async () 
     getCfg: () => ({
       forecast: {
         location: { latitude: 48.15, longitude: 9.48 },
-        pv: { configLevel: 'simple', totalKwp: 10, tiltDeg: 35, azimuthDeg: 180, strings: [], model: 'both' }
+        pv: { configLevel: 'simple', totalKwp: 10, tiltDeg: 35, azimuthDeg: 180, strings: [], model: 'both' },
+        solcast: { apiKey: 'test-key', siteId: 'test-site' } // eingerichtet (19.11.2026)
       }
     }),
     pushLog: () => {}
@@ -288,7 +291,9 @@ function makeAutoCtx(state, extra = {}) {
         // model 'auto' so forecast_solar + open_meteo are attempted; pvnode only if configured.
         pv: { configLevel: 'simple', totalKwp: 10, tiltDeg: 35, azimuthDeg: 180, strings: [], model: 'auto' },
         solcast: {} // no apiKey → solcast not fetched
-      }
+      },
+      // VRM eingerichtet (19.11.2026: Token + Portal-ID + Import an, wie epex-fetch es braucht).
+      telemetry: { historyImport: { enabled: true, vrmPortalId: '123456', vrmToken: 'test-token' } }
     }),
     pushLog: () => {},
     bumpForecastVersion: () => {},
