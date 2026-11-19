@@ -28,13 +28,21 @@
 //                      stockende Ladung zählt trotzdem (Gegenprüfung 52a6c756).
 //                      Verworfenes steht in der Tageszeile.
 //   Akku→Haus/Netz     senkt G anteilig: Anteil (G / Akku-Inhalt) × Entladung.
-//   Verluste           anteilig: die Wandlungsverluste stecken in den Flüssen
-//                      (gemessen am Akku), alles Weitere zeigt der Ladestand —
-//                      G kann nie größer sein als der Akku-Inhalt. Weil der
-//                      Victron-Ladestand ganzzahlig ist, gilt als Obergrenze
-//                      (Ladestand + 1 %) × Kapazität — gekappt wird erst, wenn
-//                      der Ladestand 60 s lang darunter liegt (ein Fehlwert
-//                      darf keinen Netzstrom „verschwinden“ lassen).
+//   Verluste           G kann nie größer sein als der Akku-Inhalt über dem
+//                      Boden: nach JEDEM Abgleich G = min(G, Inhalt), der
+//                      Überschuss ist Verlust (M21, Entscheidung Christin
+//                      19.11.2026: „wie im Feld gemessen“). Vorher galt
+//                      (Ladestand + 1 %) × Kapazität, gekappt erst nach 60 s —
+//                      der Rest blieb als Netzstrom stehen und hielt die Sperre
+//                      (Sungrow 0,926 kWh bei 0,77 kWh Inhalt, Nebeling 1,875
+//                      bei 1,0). Gekappt wird nur mit sicherem Ladestand und
+//                      bekannter Kapazität (sonst: siehe unten).
+//                      Gezählt wird an der Gleichstromseite des Akkus (Akku-
+//                      leistung: Victron 842, Sungrow 5213, Fronius Model 160,
+//                      Deye 590), höchstens der Netzbezug: der Wandlungsverlust
+//                      des Wechselrichters beim Laden steckt NICHT in inWh.
+//                      Was der Akku selbst verliert (DC rein > Inhalt), nimmt
+//                      die Kappung am Inhalt heraus.
 //   Unsichere Akkuwerte (gridShareBatteryUncertain: Lesefehler, alter Stempel,
 //                      Einfrier-Wächter bzw. -Verdacht, Kreuzprobe; zweite
 //                      Anlage veraltet) buchen NIE ab: Entladung gilt als 0.
@@ -85,8 +93,6 @@ export const GRID_SHARE_RELEASE_WH = 50;
 export const GRID_SHARE_BUFFER_MAX_W = 100;
 /** DC-PV kommt nur nach dem Wechselrichter ins Netz (vorsichtig 92 %, wie dcExportMode). */
 export const GRID_SHARE_DC_PV_AC_FACTOR = 0.92;
-/** So lange muss der Ladestand unter dem Zählerstand liegen, bevor gekappt wird. */
-export const GRID_SHARE_CAP_CONFIRM_MS = 60_000;
 /** Sicherheitsabstand zum Live-PV-Überschuss, damit die Regelung nicht aus dem Akku nachschiebt. */
 export const GRID_SHARE_EXPORT_MARGIN_W = 100;
 /** Längste Lücke zwischen zwei Messungen, die noch gezählt wird. */
@@ -173,10 +179,11 @@ export function gridShareBatteryUncertain(victron, { nowMs = Date.now(), maxAgeM
  * Ein Zählschritt (rein, ohne Zustand).
  * @param {number} gridWh Netzstrom im Akku vor dem Schritt
  * @param {{dtMs:number, gridToBatteryW?:number, batteryToHomeW?:number, batteryToGridW?:number,
- *          socPct?:number|null, capacityWh?:number|null, extraInWh?:number}} p
- * @returns {{gridWh:number, inWh:number, toHomeWh:number, toGridWh:number, lossWh:number, share:number, storedWh:number|null}}
+ *          socPct?:number|null, capacityWh?:number|null, floorPct?:number, extraInWh?:number}} p
+ *   socPct: nur ein SICHERER Ladestand (der Tracker gibt bei unsicherem null) — ohne ihn keine Kappung am Inhalt.
+ * @returns {{gridWh:number, inWh:number, toHomeWh:number, toGridWh:number, lossWh:number, capLossWh:number, share:number, storedWh:number|null}}
  */
-export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, batteryToGridW, socPct, capacityWh, floorPct = 0, capAllowed = true, extraInWh = 0 } = {}) {
+export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, batteryToGridW, socPct, capacityWh, floorPct = 0, extraInWh = 0 } = {}) {
   const h = Math.max(0, Number(dtMs) || 0) / 3_600_000;
   const soc = finiteOrNull(socPct);
   const cap = finiteOrNull(capacityWh);
@@ -189,10 +196,6 @@ export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, ba
   const floor = Math.max(0, finiteOrNull(floorPct) ?? 0);
   const aboveFloorPct = known ? Math.max(0, Math.min(100, soc) - floor) : null;
   const storedWh = known ? aboveFloorPct / 100 * cap : null;
-  // Obergrenze = nutzbarer Inhalt über dem Boden + 1 % Ladereserve (die SoC-Lesung hinkt beim Laden nach). Das
-  // endgültige Nullsetzen am Boden übernimmt der Boden-Reset im Tracker (nur wenn NICHT geladen wird) — der Deckel
-  // allein darf eine Ladung aus dem Netz am Boden nicht sofort als Verlust verbuchen.
-  const upperWh = known ? Math.min(100 - floor, aboveFloorPct + 1) / 100 * cap : null;
   let g = Math.max(0, Number(gridWh) || 0);
   // Anteil zu Beginn des Schritts. Ohne Ladestand nimmt Entladen nichts weg —
   // der Zähler bleibt dann eher zu hoch als zu niedrig (Sperre im Zweifel an).
@@ -204,11 +207,16 @@ export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, ba
   const toGridWh = Math.min(g - toHomeWh, shareBefore * pos(batteryToGridW) * h);
   g = g - toHomeWh - toGridWh + inWh;
   let lossWh = 0;
-  const overUpper = upperWh != null && g > upperWh;
-  if (overUpper && capAllowed) {
-    lossWh = g - upperWh;
-    g = upperWh;
+  // M21 (Entscheidung Christin 19.11.2026, „wie im Feld gemessen“): nach jedem Abgleich nie mehr Netzstrom als der
+  // Inhalt über dem Boden — sofort, ohne Reserve und ohne Wartezeit. Der Überschuss (Ladeverluste im Akku,
+  // nicht abgebuchte Entladung aus einer unsicheren Phase) ist Verlust. Vorher (Ladestand + 1 %) × Kapazität nach
+  // 60 s — der Rest blieb stehen und hielt die Sperre.
+  let capLossWh = 0;
+  if (storedWh != null && g > storedWh) {
+    capLossWh = g - storedWh;
+    g = storedWh;
   }
+  lossWh += capLossWh;
   // Nie mehr Netzstrom als der ganze Akku fasst — auch ohne Ladestand
   // (Zubuchen aus unsicheren Werten, Gegenprüfung 4cf16a5a, P2).
   if (cap != null && cap > 0 && g > cap) {
@@ -216,7 +224,7 @@ export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, ba
     g = cap;
   }
   const share = !known ? null : (g <= 0 ? 0 : (storedWh > 0 ? Math.min(1, g / storedWh) : 1));
-  return { gridWh: g, inWh, toHomeWh, toGridWh, lossWh, share, storedWh, overUpper };
+  return { gridWh: g, inWh, toHomeWh, toGridWh, lossWh, capLossWh, share, storedWh };
 }
 
 /**
@@ -323,9 +331,6 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
   let dirty = false;
   let lastReadMs = 0;
   let live = { toHomeW: 0, toGridW: 0 };
-  let overSinceMs = null;
-  // M10: seit wann der Akku am/unter dem Boden steht UND nicht geladen wird (Boden-leer-Reset nach Bestätigung).
-  let floorEmptySince = null;
   // Unsicherheits-Episode fürs Log: { sinceMs, reasons:Set }, endet erst nach
   // GRID_SHARE_UNCERTAIN_CLEAR_MS sicherer Werte.
   let uncertainEpisode = null;
@@ -509,36 +514,32 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       st.day.uncertainMs = (st.day.uncertainMs || 0) + dtMs;
       if (dtMs > 0) dirty = true;
     }
-    const capAllowed = overSinceMs != null && nowMs - overSinceMs >= GRID_SHARE_CAP_CONFIRM_MS;
+    // Kappung am Inhalt nur mit sicherem Ladestand: ist er unsicher, geht null hinein (keine Kappung, kein Abbuchen).
     const socUncertain = reasons.some((x) => SOC_UNCERTAIN_REASONS.has(x));
-    const r = stepGridShare(st.gridWh, { dtMs, ...flows, extraInWh: filtered.inWh, socPct: socUncertain ? null : socPct, capacityWh, floorPct, capAllowed });
+    const gridBefore = st.gridWh;
+    const r = stepGridShare(st.gridWh, { dtMs, ...flows, extraInWh: filtered.inWh, socPct: socUncertain ? null : socPct, capacityWh, floorPct });
     if (uncertain) st.day.uncertainInWh = (st.day.uncertainInWh || 0) + r.inWh;
-    // Ladestand liegt unter dem Zählerstand: erst merken, nach 60 s kappen.
-    // Neu warten nur nach einer echten Ladestand-Kappung — der Kapazitätsdeckel
-    // allein darf die Bestätigung nicht ständig zurücksetzen (Gegenprüfung c1bc97e0).
-    if (!r.overUpper || (capAllowed && r.lossWh > 0)) overSinceMs = null;
-    else if (overSinceMs == null) overSinceMs = nowMs;
     st.gridWh = r.gridWh;
     if (r.storedWh != null) { st.storedWh = r.storedWh; st.share = r.share; }
     else if (st.storedWh > 0) st.share = Math.min(1, st.gridWh / st.storedWh);
-    // M10 (Feld 16.11.): steht der Akku am/unter dem wirksamen Entlade-Boden (real %) UND wird nicht geladen, ist der
-    // Netzstrom-Anteil dort gefangen — der Boden sperrt das Entladen, der Anteil kann die Einspeisung nicht mehr
-    // sinnvoll blockieren. Nach Bestätigung (≥ GRID_SHARE_CAP_CONFIRM_MS, kein kurzer Messwert) auf 0 setzen, den Rest
-    // als Verlust buchen, die Sperre fällt (damit auch EOS-„Halten" wieder greift, M8). Nur bei sicheren Akkuwerten.
-    const socKnownNow = !socUncertain && finiteOrNull(socPct) != null && finiteOrNull(capacityWh) != null && Number(capacityWh) > 0;
-    const atFloorEmpty = socKnownNow && Number(socPct) <= (finiteOrNull(floorPct) ?? 0) + 1e-9 && r.inWh <= 0;
-    if (atFloorEmpty) {
-      if (floorEmptySince == null) floorEmptySince = nowMs;
-      else if (nowMs - floorEmptySince >= GRID_SHARE_CAP_CONFIRM_MS && st.gridWh > 0) {
-        r.lossWh += st.gridWh;
-        log('grid_share_floor_reset', { lostKwh: r3(st.gridWh / 1000), socPct: finiteOrNull(socPct), floorPct: finiteOrNull(floorPct), note: 'Akku am Entlade-Boden, nicht am Laden — Netzanteil verbraucht/verloren, Sperre fällt' });
-        st.gridWh = 0;
-        st.share = 0;
+    // M21: spürbare Kappungen (ab GRID_SHARE_RELEASE_WH) als Nachweis ins Log. Am/unter dem Entlade-Boden (Inhalt 0,
+    // M10) heißt es wie bisher Boden-Reset — der Leitstand zeigt dann kurz „Netzanteil verbraucht“ (floorResetAt).
+    if (r.capLossWh >= GRID_SHARE_RELEASE_WH) {
+      const data = {
+        lostKwh: r3(r.capLossWh / 1000),
+        fromKwh: r3(gridBefore / 1000),
+        toKwh: r3(r.gridWh / 1000),
+        storedKwh: r3(r.storedWh / 1000),
+        socPct: finiteOrNull(socPct),
+        floorPct: finiteOrNull(floorPct),
+      };
+      if (r.storedWh <= 0) {
+        log('grid_share_floor_reset', { ...data, note: 'Akku am Entlade-Boden — Netzanteil verbraucht/verloren, Sperre fällt' });
         st.floorResetAt = new Date(nowMs).toISOString();
-        dirty = true;
+      } else {
+        log('grid_share_capped', { ...data, note: 'Netzstrom auf den Akku-Inhalt über dem Boden gekappt (Ladestand), Rest als Verlust' });
       }
-    } else {
-      floorEmptySince = null;
+      dirty = true;
     }
     for (const k of ['inWh', 'toHomeWh', 'toGridWh', 'lossWh']) {
       st.day[k] += r[k];
