@@ -163,6 +163,17 @@ SoC-Boden); erst dieser Wert geht an den Sungrow-Aktuator, der daraus Akku-Leist
 | Not-Halt | einmal Stopp + Modus 0, dann nichts (auch kein Herzschlag) | eigener Betrieb nur; fremdes EMS nie | exakt |
 | E-Auto / Geräte | eigene Stellglieder, Sungrow nicht berührt | ihre Last zieht der Regler im nächsten Takt mit | näherungsweise |
 
+## Zwei Wechselrichter (Master/Slave)
+
+Im Forced mode mit zwei Wechselrichtern teilt DVhub jede Vorgabe auf beide auf (Standard `soc-balance`: beim
+Entladen bekommt der Akku mit dem höheren Ladestand mehr, beim Laden der mit dem niedrigeren). Lade-/Entladebefehle
+gehen an beide (13051/13052), der Modus 13050 nur an den Master.
+
+- **Abregelung (Negativpreis, Direktvermarkter, Test-Knopf):** Beide Wechselrichter laden und entladen weiter nach
+  ihrem Anteil. DVhub regelt die Summe auf den Sollwert, bei Negativpreis auf −40 W. Die Einspeisegrenze
+  (13074/13087/13088/31222) steht nur am Master. Kurze Netzspitzen bei Lastsprüngen sind möglich. Bekannte Lücke:
+  Die PV des Slave folgt der Master-Grenze nicht (eine Drosselung über 13090 ist nicht gebaut).
+
 ## Quellen
 
 - Sungrow „Communication Protocol of Residential Hybrid Inverter“ V1.1.9 (2025-06-20): Tabelle 4 (13050, 13051,
