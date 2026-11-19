@@ -453,6 +453,35 @@ export const SOC_BALANCE_DEADBAND_PCT = 10;
 // nahe leer unterschied sie beim Laden kaum → Feld 9,2/14,4 blieb ≈50/50).
 const SOC_BALANCE_MARGIN_PCT = 5;
 
+// M28 (Christin 19.11., Feldbeleg 12:28): Entlade-Marge im Split. Ein WR, der weniger als diese Marge (Prozentpunkte,
+// ECHTER SoC) über seiner Entladegrenze steht, bekommt KEINEN Entlade-Anteil — sein Anteil geht an den anderen. Im
+// Feld galt der Master mit real 10,6 % bei Grenze 10 % noch als lieferfähig, lieferte aber 0 W (Netz +552 W statt
+// −40 W). Laden bleibt erlaubt (die Marge gilt nur beim Entladen).
+export const SUNGROW_SPLIT_DISCHARGE_MARGIN_PCT = 1;
+// M28 Liefert-nicht-Erkennung (Christin 19.11.): liefert ein WR über STALL_DETECT_MS weniger als STALL_DELIVER_RATIO
+// seines Anteils (nur bei Anteil > STALL_MIN_SHARE_W), gilt er in dieser Richtung als „an der Grenze" — sein Anteil
+// geht an den anderen. Etwa alle STALL_PROBE_MS bekommt er ihn probeweise zurück. Liegen zwei Messungen weiter als
+// STALL_TRACK_MAX_GAP_MS auseinander (Takt stand), beginnt die Messung neu.
+const STALL_MIN_SHARE_W = 200;
+const STALL_DELIVER_RATIO = 0.5;
+const STALL_DETECT_MS = 10000;
+const STALL_PROBE_MS = 60000;
+const STALL_TRACK_MAX_GAP_MS = 15000;
+
+/**
+ * Steht ein WR in DIESER Richtung an seiner SoC-Grenze? Entladen: SoC ≤ Boden, mit Marge > 0 schon SoC < Boden +
+ * Marge (M28). Laden: SoC ≥ Decke. SoC oder Grenze unbekannt → false (nicht sperren). Rein.
+ */
+export function sungrowWrAtLimit({ charge, socPct, floorPct, ceilPct, dischargeMarginPct = 0 } = {}) {
+  const fin = (v) => v != null && v !== '' && Number.isFinite(Number(v));
+  if (!fin(socPct)) return false;
+  const soc = Number(socPct);
+  if (charge) return fin(ceilPct) && soc >= Number(ceilPct);
+  if (!fin(floorPct)) return false;
+  const margin = fin(dischargeMarginPct) ? Math.max(0, Number(dischargeMarginPct)) : 0;
+  return margin > 0 ? soc < Number(floorPct) + margin : soc <= Number(floorPct);
+}
+
 /**
  * Angleich-Gewichte der soc-balance (Aufgabe 6). Grundgewicht = Kapazität (ohne Kapazität die Leistungsgrenze als
  * Proxy); multipliziert mit dem Abstand des WR zur gemeinsamen Angleich-Referenz IN DER RICHTUNG. Entladen: Referenz
@@ -504,31 +533,39 @@ function clampRatioPct(v) {
  * Per-WR-Grenzen ein, der Überlauf geht an den anderen WR, und ein Anteil < minPowerW wird dem anderen WR
  * zugeschlagen (die Summe bleibt die Reglerleistung, ≤ maxPowerW). 'master-only' lässt den Slave in Modus 0
  * (slaveUncommanded=true). Ohne verfügbaren Slave (slaveMax ≤ 0) bekommt der Master alles.
- * @returns {{masterW:number, slaveW:number, slaveUncommanded:boolean}}
+ * M28: dischargeMarginPct (Entlade-Marge über der Grenze) und masterStalled/slaveStalled (liefert seinen Anteil nicht)
+ * nehmen einen WR aus der Aufteilung; masterOut/slaveOut sagen, warum ('soc' | 'stalled' | null).
+ * @returns {{masterW:number, slaveW:number, slaveUncommanded:boolean, masterOut:string|null, slaveOut:string|null}}
  */
 export function splitStrategyShares(strategy, {
   powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
   masterCapacityWh, slaveCapacityWh, floorSocPct = 0, maxSocPct = 100, ratioMasterPct = 50, minPowerW = 50,
   masterFloorPct = floorSocPct, slaveFloorPct = floorSocPct, masterCeilPct = maxSocPct, slaveCeilPct = maxSocPct,
-  socDeadbandPct = SOC_BALANCE_DEADBAND_PCT,
+  socDeadbandPct = SOC_BALANCE_DEADBAND_PCT, dischargeMarginPct = 0, masterStalled = false, slaveStalled = false,
 } = {}) {
-  const fin = (v) => v != null && Number.isFinite(Number(v));
   const p = Math.max(0, Math.round(Number(powerW) || 0));
   let mMax = Math.max(0, Number(masterMax) || 0);
   let sMax = Math.max(0, Number(slaveMax) || 0);
   // Per-WR-SoC-Grenze (Aufgabe 1): ein WR, der seine Grenze in DIESER Richtung erreicht hat — beim Entladen den
   // eigenen Min-SoC (max aus hardFloor und 13059), beim Laden den eigenen Max-SoC (min aus maxSoc und 13058) —
   // bekommt 0 W; sein Anteil geht über splitSungrowPower an den anderen WR (bis zu DESSEN Grenze). SoC unbekannt →
-  // nicht sperren (die System-Grenze im Regler schützt weiter). Symmetrisch für Laden/Entladen.
-  const atLimit = (soc, floor, ceil) => fin(soc) && (charge ? (fin(ceil) && Number(soc) >= Number(ceil)) : (fin(floor) && Number(soc) <= Number(floor)));
-  if (atLimit(masterSoc, masterFloorPct, masterCeilPct)) mMax = 0;
-  if (atLimit(slaveSoc, slaveFloorPct, slaveCeilPct)) sMax = 0;
+  // nicht sperren (die System-Grenze im Regler schützt weiter). Symmetrisch für Laden/Entladen. M28: beim Entladen
+  // zählt schon „weniger als dischargeMarginPct über dem Boden" als an der Grenze.
+  const atLimit = (soc, floor, ceil) => sungrowWrAtLimit({ charge, socPct: soc, floorPct: floor, ceilPct: ceil, dischargeMarginPct });
+  let masterOut = null; let slaveOut = null;
+  if (atLimit(masterSoc, masterFloorPct, masterCeilPct) && mMax > 0) { mMax = 0; masterOut = 'soc'; }
+  if (atLimit(slaveSoc, slaveFloorPct, slaveCeilPct) && sMax > 0) { sMax = 0; slaveOut = 'soc'; }
   const strat = SPLIT_STRATEGIES.includes(String(strategy)) ? String(strategy) : 'soc-balance';
-  if (p <= 0) return { masterW: 0, slaveW: 0, slaveUncommanded: strat === 'master-only' };
+  if (p <= 0) return { masterW: 0, slaveW: 0, slaveUncommanded: strat === 'master-only', masterOut, slaveOut };
   // master-only: Slave bleibt in Modus 0, Master bekommt alles (an seine Grenze geklemmt).
-  if (strat === 'master-only') return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: true };
-  if (sMax <= 0) return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: false }; // Slave offline/an Grenze → alles Master
-  if (mMax <= 0) return { masterW: 0, slaveW: Math.min(p, sMax), slaveUncommanded: false }; // Master an Grenze → alles Slave
+  if (strat === 'master-only') return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: true, masterOut, slaveOut: null };
+  // M28 liefert nicht: ein WR, der seinen Anteil nicht liefert (Erkennung im Aktuator), gibt ihn an den anderen ab —
+  // aber nur, wenn der andere selbst liefert und noch Platz hat. Hängen beide, bringt Umverteilen nichts (normale
+  // Aufteilung); kann der andere nicht, behält der hängende WR seinen Anteil (sonst bekäme keiner etwas).
+  if (masterStalled && !slaveStalled && sMax > 0 && mMax > 0) { mMax = 0; masterOut = 'stalled'; }
+  else if (slaveStalled && !masterStalled && mMax > 0 && sMax > 0) { sMax = 0; slaveOut = 'stalled'; }
+  if (sMax <= 0) return { masterW: Math.min(p, mMax), slaveW: 0, slaveUncommanded: false, masterOut, slaveOut }; // Slave offline/an Grenze → alles Master
+  if (mMax <= 0) return { masterW: 0, slaveW: Math.min(p, sMax), slaveUncommanded: false, masterOut, slaveOut }; // Master an Grenze → alles Slave
   // Gewichte je Strategie; splitSungrowPower verteilt danach und klemmt an die Grenzen (Überlauf an den anderen).
   let mW; let sW;
   if (strat === 'ratio') { mW = clampRatioPct(ratioMasterPct); sW = 100 - mW; }
@@ -544,7 +581,7 @@ export function splitStrategyShares(strategy, {
   const min = Math.max(0, Number(minPowerW) || 0);
   if (masterW > 0 && masterW < min && slaveW + masterW <= sMax) { slaveW += masterW; masterW = 0; }
   else if (slaveW > 0 && slaveW < min && masterW + slaveW <= mMax) { masterW += slaveW; slaveW = 0; }
-  return { masterW, slaveW, slaveUncommanded: false };
+  return { masterW, slaveW, slaveUncommanded: false, masterOut, slaveOut };
 }
 
 /**
@@ -756,6 +793,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     neutralizedAt: null,  // pausedAt des Not-Halts, für den die eine Rücknahme schon lief
     revokedReason: null,  // ein Tor hat den letzten Sollwert abgelehnt
     acceptSeq: 0,         // zählt angenommene Sollwerte (Aufrufzeitpunkt) — eine ältere Ablehnung widerruft keinen neueren
+    deliver: {},          // M28: Liefert-nicht-Erkennung je WR und Richtung ('master:discharge' → { underSince, stalledUntil, episode })
+    splitLast: null,      // M28: zuletzt erfolgreich kommandierte Anteile im Split { direction, masterW, slaveW, at }
     logKeys: {}
   };
   let chain = Promise.resolve();
@@ -1264,6 +1303,55 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (masterSafe) { setOwns(null); st.target = null; }
   }
 
+  // M28 (Christin 19.11., Feldbeleg 12:28): Liefert-nicht-Erkennung je WR und Richtung. Liefert ein WR über
+  // STALL_DETECT_MS weniger als STALL_DELIVER_RATIO seines Anteils (bei Anteil > STALL_MIN_SHARE_W), gilt er als
+  // „an der Grenze": für STALL_PROBE_MS bekommt er in dieser Richtung keinen Anteil, der andere übernimmt
+  // (splitStrategyShares). Danach bekommt er seinen Anteil probeweise zurück; liefert er wieder, ist die Lage aufgehoben,
+  // sonst greift die Erkennung nach STALL_DETECT_MS erneut. Ein Log je Lage (Erkennen + Erholung), nicht je Probe.
+  // Gemessen wird gegen den im VORIGEN Takt kommandierten Anteil (die Messung zeigt dessen Wirkung).
+  const wrLabel = (wr) => (wr === 'master' ? 'Master' : 'Slave');
+  function deliverEntry(wr, direction) {
+    const k = `${wr}:${direction}`;
+    if (!st.deliver[k]) st.deliver[k] = { underSince: 0, stalledUntil: 0, episode: false };
+    return st.deliver[k];
+  }
+  function isStalled(wr, direction, t) { return deliverEntry(wr, direction).stalledUntil > t; }
+  function trackDelivery(t, measured) {
+    const last = st.splitLast;
+    if (!last || t - last.at > STALL_TRACK_MAX_GAP_MS) {
+      for (const e of Object.values(st.deliver)) e.underSince = 0;
+      return;
+    }
+    for (const wr of ['master', 'slave']) {
+      const e = deliverEntry(wr, last.direction);
+      const shareW = Math.max(0, Number(last[`${wr}W`]) || 0);
+      const m = measured[wr];
+      if (!(shareW > STALL_MIN_SHARE_W) || m == null || !Number.isFinite(Number(m))) { e.underSince = 0; continue; }
+      const deliveredW = last.direction === 'charge' ? Math.max(0, Number(m)) : Math.max(0, -Number(m));
+      const dirText = last.direction === 'charge' ? 'Lade' : 'Entlade';
+      if (deliveredW >= STALL_DELIVER_RATIO * shareW) {
+        e.underSince = 0;
+        if (e.episode) {
+          e.episode = false; e.stalledUntil = 0;
+          pushLog('sungrow_ems_share_recovered', { wr, direction: last.direction, shareW, deliveredW: Math.round(deliveredW), text: `Sungrow: ${wrLabel(wr)} liefert seinen ${dirText}-Anteil wieder (${Math.round(deliveredW)} von ${shareW} W).` });
+        }
+        continue;
+      }
+      if (!e.underSince) e.underSince = t;
+      if (t - e.underSince < STALL_DETECT_MS) continue;
+      e.underSince = 0;
+      e.stalledUntil = t + STALL_PROBE_MS;
+      if (!e.episode) {
+        e.episode = true;
+        const other = wr === 'master' ? 'slave' : 'master';
+        pushLog('sungrow_ems_share_stalled', {
+          wr, direction: last.direction, shareW, deliveredW: Math.round(deliveredW), takeover: other, probeAfterS: STALL_PROBE_MS / 1000,
+          text: `Sungrow: ${wrLabel(wr)} liefert seinen ${dirText}-Anteil nicht (${Math.round(deliveredW)} von ${shareW} W) — an der Grenze, der ${wrLabel(other)} übernimmt. Probe etwa alle ${STALL_PROBE_MS / 1000} s.`,
+        });
+      }
+    }
+  }
+
   // Split-Steuerung: die Reglerentscheidung auf beide WR schreiben. Self → Master Self + Slave zurückziehen.
   // Forced → Leistung nach Punkt-2-Grenzen und SoC-Reserve/Headroom aufteilen, Slave zuerst, dann Master;
   // scheitert EINER (Herzschlag, Rücklesen, fremder Modus, …) → BEIDE sicher in Self-consumption.
@@ -1272,6 +1360,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const optMaster = cfg.optimizer || {};
     const si = cfg.sungrow?.secondInverter || {};
     if (decision.mode === 'self') {
+      st.splitLast = null; // M28: keine kommandierten Anteile mehr, die Erkennung ruht
       try {
         if (!emsMatches(st.dev, decision, 0, ctl.modeValue) || gap) {
           const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
@@ -1321,12 +1410,23 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const slaveEmergency = second.emergencyCharge === true;
     const slaveMax = slaveEmergency ? 0 : perWrMax(charge ? si.maxChargeW : si.maxDischargeW, charge ? slaveDev.maxChargeWDevice : slaveDev.maxDischargeWDevice, second.bdcRatedW);
     const strategy = charge ? secondCfg.strategyCharge : secondCfg.strategyDischarge;
-    const { masterW, slaveW, slaveUncommanded } = splitStrategyShares(strategy, {
+    // M28: gemessene Akku-Leistung je WR (+ = Laden) gegen den zuletzt kommandierten Anteil prüfen. Master-Rohwert
+    // (sungrowMasterBatteryW, vom Poller bei aggregateTelemetry) nur frisch; Slave aus der frischen Slave-Telemetrie
+    // (null in Notladung).
+    const direction = charge ? 'charge' : 'discharge';
+    const vic = state.victron || {};
+    const masterBattAt = Number(vic.fieldUpdatedAt?.batteryPowerW) || 0;
+    const masterMeasW = vic.sungrowMasterBatteryW != null && Number.isFinite(Number(vic.sungrowMasterBatteryW))
+      && masterBattAt > 0 && t - masterBattAt <= opts.telemetryMaxAgeMs ? Number(vic.sungrowMasterBatteryW) : null;
+    trackDelivery(t, { master: masterMeasW, slave: second.batteryPowerW });
+    const { masterW, slaveW, slaveUncommanded, masterOut, slaveOut } = splitStrategyShares(strategy, {
       powerW: decision.powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
       masterCapacityWh: optMaster.batteryCapacityWh, slaveCapacityWh: si.batteryCapacityWh,
       floorSocPct: floor, maxSocPct: maxSoc, masterFloorPct, slaveFloorPct, masterCeilPct, slaveCeilPct,
       ratioMasterPct: secondCfg.ratioMasterPct, minPowerW: opts.minPowerW,
       socDeadbandPct: secondCfg.socBalanceDeadbandPct,
+      dischargeMarginPct: SUNGROW_SPLIT_DISCHARGE_MARGIN_PCT,
+      masterStalled: isStalled('master', direction, t), slaveStalled: isStalled('slave', direction, t),
     });
     const mk = (w) => (w >= opts.minPowerW ? { mode: 'forced', command: decision.command, powerW: w, reason: decision.reason } : { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason });
     // M27 (Christin 19.11., ersetzt den Slave-Stopp aus M16): Auch während einer Sperre (Negativpreis, Direktvermarkter,
@@ -1344,11 +1444,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // EIGENEN SoC-Boden/Deckel einhalten — genau wie splitStrategyShares, das mMax bei erreichter Grenze auf 0 klemmt
     // (atLimit). Der Fallback nahm nur die Leistungsgrenze (masterMax) und ließ den Master unter seinem Min-SoC entladen
     // bzw. über seinen Max-SoC laden (Risiko Netz-Nachladung). masterTakeoverW = 0, wenn der Master in DIESER Richtung
-    // an seiner Grenze ist, sonst masterMax.
-    const masterFin = (v) => v != null && Number.isFinite(Number(v));
-    const masterAtLimit = masterFin(masterSoc) && (charge
-      ? (masterFin(masterCeilPct) && Number(masterSoc) >= Number(masterCeilPct))
-      : (masterFin(masterFloorPct) && Number(masterSoc) <= Number(masterFloorPct)));
+    // an seiner Grenze ist (M28: beim Entladen inkl. Marge), sonst masterMax.
+    const masterAtLimit = sungrowWrAtLimit({ charge, socPct: masterSoc, floorPct: masterFloorPct, ceilPct: masterCeilPct, dischargeMarginPct: SUNGROW_SPLIT_DISCHARGE_MARGIN_PCT });
     const masterTakeoverW = masterAtLimit ? 0 : masterMax;
     // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst).
     if (skipSlave) {
@@ -1383,7 +1480,14 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       slaveLimitPct: charge ? slaveCeilPct : slaveFloorPct,
       slaveEmergencyCharge: slaveEmergency,
       slaveFellBack, // Aufgabe 3: Slave-Fehler → Anteil auf den Master verlagert, Master steuert weiter
+      // M28: warum ein WR keinen Anteil bekommt ('soc' = an der SoC-Grenze inkl. Entlade-Marge, 'stalled' = liefert
+      // seinen Anteil nicht) und wer übernimmt (Kachel: „Master an der Grenze, Slave übernimmt").
+      masterOut: masterOut || null, slaveOut: slaveOut || null,
+      takeover: masterOut && effSlaveW > 0 ? 'slave' : (slaveOut && effMasterW > 0 ? 'master' : null),
     };
+    // M28: die jetzt kommandierten Anteile für die Liefert-nicht-Erkennung im nächsten Takt (nach bestätigtem Write
+    // unten gültig; scheitert der Master, verworfen).
+    const commanded = { direction, masterW: effMasterW, slaveW: skipSlave ? 0 : effSlaveW, at: t };
     // Master-Anteil. Scheitert er → beide sicher in Self.
     try {
       const mdev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
@@ -1393,6 +1497,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // Bei gap (Herzschlag-Lücke/Wiederaufnahme) immer voll schreiben.
       if (!gap && emsMatches(mdev, masterDecision, opts.stepW, ctl.modeValue)) {
         st.error = null;
+        st.splitLast = commanded;
         st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
         // Hat der Slave in diesem Takt geschrieben, ist es ein echter Write → protokollieren; sonst stiller Takt.
         if (slaveWrote) pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, strategy, slaveFellBack, side: 'slave', reason: decision.reason, trigger: reason, readback: { mode: mdev.mode, cmd: mdev.cmd, powerW: mdev.powerW } });
@@ -1401,6 +1506,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       }
       const back = await writeDecision(conf, masterDecision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
       st.error = null; st.logKeys = {};
+      st.splitLast = commanded;
       st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
       pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, strategy, slaveFellBack, reason: decision.reason, trigger: reason, readback: { mode: back.mode, cmd: back.cmd, powerW: back.powerW } });
       publish();
@@ -1408,6 +1514,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     } catch (e) {
       // Der MASTER ist nicht sicher steuerbar → beide sicher in Self (Modus 0). Das ist der EINZIGE Weg zu Modus 0 im
       // Split (ein Slave-Fehler fuehrt oben nur auf Master-only, Aufgabe 3).
+      st.splitLast = null; // M28: nichts kommandiert, die Erkennung ruht
       await neutralizeBoth('split_master_failed');
       st.error = e?.message || String(e);
       logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error, register: e?.emsAddress ?? null, value: e?.emsValue ?? null }, 'warn');

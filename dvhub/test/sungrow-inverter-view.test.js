@@ -34,6 +34,24 @@ test('M7b: EMS-Zeile — Bedarf > 0, aber beide WR an der Grenze (Split 0/0) →
   assert.match(vw.master.decision, /an der Grenze 11 %/);
 });
 
+test('M28: Kachel zeigt „Master an der Grenze, Slave übernimmt" (und umgekehrt)', () => {
+  const mk = (takeover) => ({
+    victron: { soc: 12, sungrowMasterSocPct: 0.7, device: { model: 'SH10RT', bdcRatedW: 10000, minSocPctDevice: 10, maxSocPctDevice: 100 } },
+    sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 5.4, batteryPowerW: -1200, pvPowerW: 0, bdcRatedW: 10000, minSocPctDevice: 10, maxSocPctDevice: 100 },
+    sungrowEms: {
+      controlMode: 'forced', owns: true,
+      decision: { mode: 'forced', command: 'discharge', powerW: 1200, split: { masterW: takeover === 'slave' ? 0 : 1200, slaveW: takeover === 'slave' ? 1200 : 0, strategy: 'soc-balance', charge: false, takeover } },
+    },
+  });
+  const vw = V.view(mk('slave'));
+  assert.equal(vw.master.takeover, 'Master an der Grenze, Slave übernimmt');
+  assert.equal(vw.slave.takeover, null);
+  const vw2 = V.view(mk('master'));
+  assert.equal(vw2.slave.takeover, 'Slave an der Grenze, Master übernimmt');
+  assert.equal(vw2.master.takeover, null);
+  assert.equal(V.view(mk(null)).master.takeover, null);
+});
+
 test('N5: Modbus-Gesundheit je WR — Takt, Anfragen/s, Antwortzeit, Fehler 24 h, letzter Fehler', () => {
   const status = {
     victron: { soc: 50, sungrowMasterSocPct: 50, device: { model: 'SH10RT', bdcRatedW: 10000 } },

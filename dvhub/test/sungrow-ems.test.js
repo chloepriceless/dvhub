@@ -400,6 +400,109 @@ test('M27 Forced-Split: Sperre aktiv → ein zuvor stehender Slave-Befehl wird n
   assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Slave folgt dem Split (Entladen), kein 0xCC');
 });
 
+// M28 (MUSS): ein WR, der seinen Anteil nicht liefert, gibt ihn ab — der andere übernimmt. Feldbeleg 12:28:
+// Entladen 1200 W, Master 416 / Slave 784, Master lieferte 0 W, Slave 790 W, Netz +552 W statt −40 W (15 s stabil).
+function m28Telemetry(r, { masterBattW, slaveBattW, gridW, loadW = 1342, pvW = 0 }) {
+  const t = r.now();
+  r.state.meter = { ok: true, updatedAt: t, grid_total_w: gridW };
+  Object.assign(r.state.victron, { sungrowMasterBatteryW: masterBattW, batteryPowerW: masterBattW + slaveBattW, pvPowerW: pvW, selfConsumptionW: loadW });
+  for (const f of ['batteryPowerW', 'pvPowerW', 'selfConsumptionW']) r.state.victron.fieldUpdatedAt[f] = t;
+  Object.assign(r.state.sungrowSecond, { batteryPowerW: slaveBattW, updatedAt: t });
+}
+
+test('M28 liefert nicht: Master liefert ~10 s keine 50 % seines Anteils → Slave übernimmt den vollen Bedarf, Probe nach 60 s', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000; // Takt 1 s wie auf der Feldbox
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 40; // kein Fenster → real = gemeldet
+  // P = −790 + 0,7·(−40 − 552) = −1204 → Entladen 1200 W; soc-balance 30/40 → Master 300, Slave 900.
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+  await r.ems.applySetpoint(-40, 'default');
+  assert.equal(r.masterImage.holding.get(POWER), 300, 'Master-Anteil 300 W');
+  assert.equal(r.slaveImage.holding.get(POWER), 900, 'Slave-Anteil 900 W');
+  // Der Master liefert 0 W (an der Grenze), der Zustand bleibt stehen.
+  let stalledAtTick = null;
+  for (let i = 1; i <= 12; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+    await r.ems.tick();
+    if (stalledAtTick == null && r.state.ctrl.sungrowEms.decision?.split?.masterOut === 'stalled') stalledAtTick = i;
+  }
+  assert.ok(stalledAtTick != null && stalledAtTick >= 10 && stalledAtTick <= 11, `erkannt nach ~10 s (Takt ${stalledAtTick})`);
+  const split = r.state.ctrl.sungrowEms.decision.split;
+  assert.deepEqual([split.masterW, split.slaveW], [0, 1200], 'Slave übernimmt den vollen Bedarf');
+  assert.equal(split.takeover, 'slave');
+  assert.equal(r.slaveImage.holding.get(POWER), 1200);
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE);
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.STOP, 'Master auf Stopp (Modus 2 bleibt)');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+  const stalledLogs = r.logs.filter((l) => l.event === 'sungrow_ems_share_stalled');
+  assert.equal(stalledLogs.length, 1, 'genau ein Log beim Erkennen');
+  assert.deepEqual([stalledLogs[0].data.wr, stalledLogs[0].data.direction, stalledLogs[0].data.takeover], ['master', 'discharge', 'slave']);
+
+  // Probe: bis 60 s nach dem Erkennen bleibt der Master draußen, danach bekommt er seinen Anteil wieder.
+  for (let i = 0; i < 58; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: 0, slaveBattW: -1200, gridW: -40 });
+    await r.ems.tick();
+    assert.equal(r.state.ctrl.sungrowEms.decision.split.masterW, 0, `Master bleibt draußen (Sekunde ${i + 1})`);
+  }
+  let probed = false;
+  for (let i = 0; i < 4 && !probed; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: 0, slaveBattW: -1200, gridW: -40 });
+    await r.ems.tick();
+    probed = r.state.ctrl.sungrowEms.decision.split.masterW > 0;
+  }
+  assert.ok(probed, 'Probe: nach ~60 s bekommt der Master wieder einen Anteil');
+  // Liefert der Master jetzt, ist die Lage aufgehoben (ein Log), kein erneutes Stall-Log.
+  const share = r.state.ctrl.sungrowEms.decision.split.masterW;
+  r.advance(1000);
+  m28Telemetry(r, { masterBattW: -share, slaveBattW: -(1200 - share), gridW: -40 });
+  await r.ems.tick();
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_share_recovered' && l.data.wr === 'master'), 'Erholung geloggt');
+  assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_share_stalled').length, 1, 'kein zweites Stall-Log');
+  assert.equal(r.state.ctrl.sungrowEms.decision.split.takeover, null);
+});
+
+test('M28 liefert nicht: scheitert die Probe, bleibt der Master erneut 60 s draußen (ohne neues Log)', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 40;
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+  await r.ems.applySetpoint(-40, 'default');
+  const outTicks = [];
+  for (let i = 1; i <= 100; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 }); // Master liefert nie
+    await r.ems.tick();
+    outTicks.push(r.state.ctrl.sungrowEms.decision.split.masterOut === 'stalled');
+  }
+  // Erkannt nach ~10 s, 60 s draußen, Probe ~10 s, wieder draußen.
+  const firstOut = outTicks.indexOf(true);
+  const backIn = outTicks.indexOf(false, firstOut);
+  const outAgain = outTicks.indexOf(true, backIn);
+  assert.ok(firstOut >= 9 && firstOut <= 11, `erstes Erkennen ${firstOut}`);
+  assert.ok(backIn - firstOut >= 59 && backIn - firstOut <= 61, `Probe nach ~60 s (${backIn - firstOut})`);
+  assert.ok(outAgain - backIn >= 9 && outAgain - backIn <= 11, `Probe scheitert nach ~10 s (${outAgain - backIn})`);
+  assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_share_stalled').length, 1, 'eine Lage = ein Log');
+});
+
+test('M28 Marge im Split (Feldzahlen): Master real 10,6 % bei Grenze 10 % → kein Entlade-Anteil, Slave liefert alles', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.socFloorBufferPct = 0;
+  Object.assign(r.state.victron.device, { minSocPctDevice: 10, maxSocPctDevice: 100 });
+  Object.assign(r.state.sungrowSecond, { minSocPctDevice: 10, maxSocPctDevice: 100 });
+  r.state.victron.sungrowMasterSocPct = (10.6 - 10) / 0.9; // gemeldet → real 10,6 %
+  r.state.sungrowSecond.socPct = (14.9 - 10) / 0.9;        // gemeldet → real 14,9 %
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+  await r.ems.applySetpoint(-40, 'default');
+  const split = r.state.ctrl.sungrowEms.decision.split;
+  assert.deepEqual([split.masterW, split.slaveW], [0, 1200], `Master 0, Slave voll (war 416/784): ${split.masterW}/${split.slaveW}`);
+  assert.equal(split.masterOut, 'soc');
+  assert.equal(split.takeover, 'slave');
+  assert.equal(r.slaveImage.holding.get(POWER), 1200);
+});
+
 test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf, solange er Forced fährt', async () => {
   const hbPath = path.join(os.tmpdir(), `dvhub-forced-hb-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   try {

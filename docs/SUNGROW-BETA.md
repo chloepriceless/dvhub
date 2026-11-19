@@ -173,6 +173,11 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   ihrem Anteil. DVhub regelt die Summe auf den Sollwert, bei Negativpreis auf −40 W. Die Einspeisegrenze
   (13074/13087/13088/31222) steht nur am Master. Kurze Netzspitzen bei Lastsprüngen sind möglich. Bekannte Lücke:
   Die PV des Slave folgt der Master-Grenze nicht (eine Drosselung über 13090 ist nicht gebaut).
+- **Ein Wechselrichter an der Grenze:** Steht ein Akku weniger als 1 Prozentpunkt (echter SoC) über seiner
+  Entladegrenze, bekommt er keinen Entlade-Anteil; Laden bleibt erlaubt. Liefert ein Wechselrichter etwa 10 s lang
+  weniger als die Hälfte seines Anteils (bei Anteil über 200 W), bekommt der andere den Anteil. Etwa alle 60 s bekommt
+  er ihn probeweise zurück. Die Kachel zeigt „Master an der Grenze, Slave übernimmt“ (bzw. umgekehrt), das Protokoll
+  `sungrow_ems_share_stalled` beim Erkennen und `sungrow_ems_share_recovered`, wenn er wieder liefert.
 
 ## Quellen
 

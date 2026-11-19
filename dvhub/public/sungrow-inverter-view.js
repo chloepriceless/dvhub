@@ -232,6 +232,8 @@
       limitDevice: limitDeviceHint({ chargeDeviceW: dev.maxChargeWDevice, dischargeDeviceW: dev.maxDischargeWDevice, bdcRatedW: dev.bdcRatedW }),
       // Notladung (runningState 16385): der WR lädt eigenmächtig unter seinem Min-SoC aus dem Netz.
       emergencyCharge: v.emergencyCharge === true,
+      // M28: Master an seiner Grenze (SoC inkl. Entlade-Marge oder liefert seinen Anteil nicht), der Slave übernimmt.
+      takeover: sp && sp.takeover === 'slave' ? 'Master an der Grenze, Slave übernimmt' : null,
       split: splitText(ems),
       regulate: regulateText(ems),
       writes: writesText(ems, status && status.dvSeqBudget),
@@ -277,6 +279,8 @@
       emergencyCharge,
       // Aufgabe 3: Slave-Fehler im Split → sein Anteil ging an den Master; Hinweis „Slave-Anteil am Master".
       fellBack: sp ? sp.slaveFellBack === true : false,
+      // M28: Slave an seiner Grenze, der Master übernimmt.
+      takeover: sp && sp.takeover === 'master' ? 'Slave an der Grenze, Master übernimmt' : null,
       regulate: controlled ? regulateText(emsSlave) : DASH,
       writes: controlled ? writesText(emsSlave) : DASH,
       // N5: Modbus-Gesundheit des Slave-Lesepfads (Poller) — auch ohne Steuerung aussagekräftig.
@@ -343,7 +347,7 @@
     // Kopf: Modus auf EIGENER Zeile unter dem Titel (nicht daneben).
     set('sungrowWrMode', `Modus: ${vw.mode}`);
     set('sungrowWrMasterRole', vw.master.role);
-    setBadges('sungrowWrMasterBadges', [vw.master.emergencyCharge ? 'Notladung' : null]);
+    setBadges('sungrowWrMasterBadges', [vw.master.emergencyCharge ? 'Notladung' : null, vw.master.takeover]);
     set('sungrowWrMasterMeta', `${vw.master.model} · ${vw.master.serial} · BDC ${vw.master.bdc}`);
     fillGroup('sungrowWrMaster', vw.master);
     setT('sungrowWrMasterEms', `${vw.master.decision} · Besitz ${vw.master.owns ? 'ja' : 'nein'} · Herzschlag ${vw.master.heartbeat}`);
@@ -354,6 +358,7 @@
     setBadges('sungrowWrSlaveBadges', [
       vw.slave.emergencyCharge ? 'Notladung' : null,
       vw.slave.fellBack ? 'Slave-Anteil am Master' : null,
+      vw.slave.takeover,
     ]);
     // Slave online → Grid füllen; offline → nur die Statuszeile (Nicht erreichbar), Grid aus.
     if (vw.slave.online) { setHidden('sungrowWrSlaveStatus', true); setHidden('sungrowWrSlaveGrid', false); fillGroup('sungrowWrSlave', vw.slave); }

@@ -924,14 +924,17 @@ test('Split: Entladen 3 kW bei SoC 80/20 → Master 2889 (Angleich), Slave 111, 
 test('M1 (Feld 16.11., kritisch): gemeldet 0,8/2,2 % bei Fenster 10–100 → Slave entlädt (nicht beide gesperrt)', async () => {
   // Feld-Bug in b6c19495: der gemeldete SoC (0,8/2,2 %) wurde mit den REALEN Grenzen (Boden 11) verglichen → beide
   // WR < Boden → split 0/0, kein Entladen, obwohl Sungrow real ~10,7/12 % hält und noch Energie freigibt → Notladung.
-  // Fix (M1): vor dem Vergleich in echten SoC umrechnen. Master real 10,72 (≤ Boden 11 → gesperrt), Slave real 11,98
-  // (> 11 → entlädt den vollen System-Anteil 3000 W).
+  // Fix (M1): vor dem Vergleich in echten SoC umrechnen. Puffer 0 → Boden 10 (Gerät). Seit M28 (Entlade-Marge 1
+  // Prozentpunkt, Christin 19.11.) bekommt ein WR unter Boden + 1 keinen Entlade-Anteil: Master real 10,72 (< 11 →
+  // gesperrt), Slave real 11,98 (≥ 11 → entlädt den vollen System-Anteil 3000 W). Ohne Umrechnung lägen beide
+  // gemeldet (0,8/2,2) unter dem Boden → split 0/0 (der alte Bug).
   const r = splitRig({ masterSoc: 0.8, slaveSoc: 2.2, optimizer: { hardFloorSocPct: 0 } });
+  r.cfg.sungrow.socFloorBufferPct = 0;
   r.state.victron.device = { ...r.state.victron.device, minSocPctDevice: 10, maxSocPctDevice: 100 };
   r.state.sungrowSecond = { ...r.state.sungrowSecond, minSocPctDevice: 10, maxSocPctDevice: 100 };
   const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
   assert.equal(res.ok, true);
-  // Slave entlädt (real 11,98 > Boden 11), Master gesperrt (real 10,72 ≤ 11) → Stopp.
+  // Slave entlädt (real 11,98 ≥ Boden 10 + Marge 1), Master gesperrt (real 10,72 < 11) → Stopp.
   assert.equal(r.sImage.holding.get(SPOWER), 3000);
   assert.equal(r.sImage.holding.get(SCMD), EMS_CMD.DISCHARGE);
   assert.equal(r.mImage.holding.get(SCMD), EMS_CMD.STOP, 'Master am Boden → Stopp, nicht Entladen');
@@ -1255,6 +1258,57 @@ test('Aufgabe 1: wirksame Grenzen — Entlade-Boden = max(hardFloor, 13059), Lad
   assert.equal(sungrowChargeCeilPct(100, 95), 95);     // Gerät strenger
   assert.equal(sungrowChargeCeilPct(90, 95), 90);      // Konfig strenger
   assert.equal(sungrowChargeCeilPct(100, null), 100);  // kein Gerätewert → nur Konfig
+});
+
+// --- M28 (MUSS): leerer WR behält seinen Anteil nicht, der andere springt ein --------------------------
+// Feldbeleg 12:28: Entladen 1200 W, Split Master 416 / Slave 784. Master real 10,6 % (Grenze 10 %) lieferte 0 W,
+// Slave lieferte 790 W, Netz +552 W statt −40 W, 15 s stabil. Die Überlauf-Regel griff nur nach SoC (≤ Grenze).
+test('M28 Marge: WR < 1 Prozentpunkt über seiner Entladegrenze → kein Entlade-Anteil, der andere bekommt alles', () => {
+  const field = {
+    powerW: 1200, charge: false, masterMax: 5000, slaveMax: 5000, masterSoc: 10.6, slaveSoc: 14.9,
+    masterCapacityWh: 9600, slaveCapacityWh: 9690, masterFloorPct: 10, slaveFloorPct: 10, minPowerW: 50,
+  };
+  // Ohne Marge (alter Stand): der Master gilt mit 0,6 Punkten über der Grenze als lieferfähig → ≈ 416/784.
+  const old = splitStrategyShares('soc-balance', field);
+  assert.ok(old.masterW > 300, `ohne Marge bekommt der Master noch ${old.masterW} W`);
+  // Mit Marge 1 Prozentpunkt: Master 0, Slave den vollen Bedarf.
+  const s = splitStrategyShares('soc-balance', { ...field, dischargeMarginPct: 1 });
+  assert.deepEqual([s.masterW, s.slaveW], [0, 1200]);
+  assert.equal(s.masterOut, 'soc', 'Grund: SoC-Grenze (inkl. Marge)');
+  // Genau 1 Punkt darüber zählt wieder als lieferfähig.
+  const edge = splitStrategyShares('soc-balance', { ...field, masterSoc: 11, dischargeMarginPct: 1 });
+  assert.ok(edge.masterW > 0, `bei 11 % (genau +1) wieder ein Anteil: ${edge.masterW}`);
+});
+
+test('M28 Marge: Laden bleibt erlaubt — die Marge gilt nur beim Entladen', () => {
+  const s = splitStrategyShares('soc-balance', {
+    powerW: 1200, charge: true, masterMax: 5000, slaveMax: 5000, masterSoc: 10.6, slaveSoc: 14.9,
+    masterCapacityWh: 9600, slaveCapacityWh: 9690, masterFloorPct: 10, slaveFloorPct: 10,
+    masterCeilPct: 100, slaveCeilPct: 100, minPowerW: 50, dischargeMarginPct: 1,
+  });
+  assert.ok(s.masterW > 0 && s.masterW > s.slaveW, `Master (leerer) lädt mehr: ${s.masterW}/${s.slaveW}`);
+  assert.equal(s.masterOut, null);
+});
+
+test('M28 liefert nicht: masterStalled → Slave bekommt den vollen Bedarf; beide hängen → normale Aufteilung', () => {
+  const base = {
+    powerW: 1200, charge: false, masterMax: 5000, slaveMax: 5000, masterSoc: 30, slaveSoc: 40,
+    masterCapacityWh: 10000, slaveCapacityWh: 10000, masterFloorPct: 10, slaveFloorPct: 10, minPowerW: 50,
+  };
+  const s = splitStrategyShares('soc-balance', { ...base, masterStalled: true });
+  assert.deepEqual([s.masterW, s.slaveW], [0, 1200]);
+  assert.equal(s.masterOut, 'stalled');
+  const s2 = splitStrategyShares('soc-balance', { ...base, slaveStalled: true });
+  assert.deepEqual([s2.masterW, s2.slaveW], [1200, 0]);
+  assert.equal(s2.slaveOut, 'stalled');
+  // Beide liefern nicht: umverteilen bringt nichts → normale Aufteilung, keiner ausgeschlossen.
+  const both = splitStrategyShares('soc-balance', { ...base, masterStalled: true, slaveStalled: true });
+  const normal = splitStrategyShares('soc-balance', base);
+  assert.deepEqual([both.masterW, both.slaveW], [normal.masterW, normal.slaveW]);
+  assert.deepEqual([both.masterOut, both.slaveOut], [null, null]);
+  // Der andere kann nicht (an seiner Grenze) → der hängende WR behält seinen Anteil (sonst bekäme keiner etwas).
+  const otherFull = splitStrategyShares('soc-balance', { ...base, masterStalled: true, slaveSoc: 10 });
+  assert.equal(otherFull.masterW, 1200);
 });
 
 // --- Aufgabe 2 (MUSS): Notladung (runningState 0x4001) -----------------------------------------------
