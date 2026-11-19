@@ -204,9 +204,11 @@ könnte und wie lange ein Lauf dann **auf genau diesem Gerät** etwa dauert.
 - **Bezugspreis-Prognose (19.11.2026):** Die Bezugspreis-Linie läuft im Prognosebereich weiter, in derselben Farbe,
   feiner gestrichelt. Der Tooltip nennt „Bezug (Prognose)“ in ganzen Cent mit Spanne. Hängt der Bezugspreis nicht von
   der Börse ab (fester Preis, schon bekannter Anbieterpreis), steht der genaue Preis da, ohne Spanne. Die Zeile unter
-  der Kurve endet dann mit „Bezugspreis-Prognose nach deinem Tarif“. Ein Band gibt es nur für die Börse; zwei
-  Bänder übereinander wären schlecht lesbar. Prognose-Slots ohne Bezugspreis bleiben leer; die Linie überbrückt sie
-  nicht.
+  der Kurve endet dann mit „Bezugspreis-Prognose nach deinem Tarif“. Die Spanne P10–P90 des Bezugs steht als zwei
+  dünne, blassere Linien ohne Füllung darüber und darunter (Christin 19.11.2026: „zweite blasse Linie“). Eine Fläche
+  gibt es nur für die Börse, damit deren Band lesbar bleibt. Bei festem Preis (P10 = P50 = P90) entfallen die
+  Spannen-Linien. Sie haben keinen eigenen Legenden-Eintrag: „Bezugspreis“ blendet Linie und Spanne zusammen aus.
+  Prognose-Slots ohne Bezugspreis bleiben leer; keine der Linien überbrückt sie.
 - **EOS-Fahrplan:** Unter dem Diagramm stehen Vorausschau und Quelle bzw. die Warnung. Ein Plan, der in
   Prognosepreise reicht, ist als „Preisprognose“ hinterlegt. „Laut EOS-Plan“ nennt den Bereich ebenfalls
   „Preisprognose“.

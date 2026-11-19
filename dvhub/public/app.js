@@ -834,6 +834,41 @@ function priceChartImportSeries(data, comparisons) {
 }
 
 /**
+ * Spanne der Bezugspreis-Prognose als zwei Reihen (Christin 19.11.2026: „zweite
+ * blasse Linie“): P10 (lo) und P90 (hi) nur in Prognose-Zeilen mit echter
+ * Spanne. Fällt sie zusammen (fester Preis, bekannter Anbieterpreis) oder fehlt
+ * sie, null — die Linien lägen sonst genau auf P50.
+ */
+function priceChartImportBandSeries(data) {
+  const has = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+  const lo = [];
+  const hi = [];
+  for (const d of Array.isArray(data) ? data : []) {
+    const ok = d?.forecast && has(d.importP50) && has(d.importP10) && has(d.importP90)
+      && Math.abs(Number(d.importP90) - Number(d.importP10)) >= 0.005;
+    lo.push(ok ? Number(d.importP10) : null);
+    hi.push(ok ? Number(d.importP90) : null);
+  }
+  return { lo, hi };
+}
+
+/**
+ * Legenden-Klick der Preiskurve: wie Chart.js (Datensatz ein/aus), dazu alle
+ * Datensätze mit `legendGroup` = Bezeichnung des Eintrags — die Spannen-Linien
+ * des Bezugspreises haben keinen eigenen Eintrag und folgen „Bezugspreis“.
+ */
+function togglePriceChartLegend(chart, datasetIndex) {
+  const sets = chart?.data?.datasets || [];
+  const main = sets[datasetIndex];
+  if (!main) return;
+  const hide = chart.isDatasetVisible(datasetIndex);
+  sets.forEach((ds, k) => {
+    if (k === datasetIndex || (main.label && ds.legendGroup === main.label)) chart.getDatasetMeta(k).hidden = hide;
+  });
+  chart.update();
+}
+
+/**
  * Art eines Abschnitts der Bezugspreis-Linie (Chart.js-Segment-Kontext):
  *   'real'     endet in einer festen Zeile — Stil der Linie wie bisher;
  *   'forecast' endet in einer Prognose-Zeile — feiner gestrichelt;
@@ -1172,6 +1207,32 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
       yAxisID: 'y',
       order: 1
     });
+    // Spanne P10/P90 der Bezugspreis-Prognose: zwei dünne, blassere Linien ohne
+    // Füllung (das Börsen-Band bleibt die einzige Fläche). Keine Überbrückung
+    // von Lücken (spanGaps: false); bei festem Preis gibt es keine Werte, also
+    // keine Linien. Kein eigener Legenden-Eintrag: sie folgen „Bezugspreis“.
+    const importBand = priceChartImportBandSeries(data);
+    if (importBand.hi.some((v) => v !== null)) {
+      const bandColor = hexToRgba(chartImport, 0.28);
+      for (const [label, values] of [['Bezugspreis-Spanne unten', importBand.lo], ['Bezugspreis-Spanne oben', importBand.hi]]) {
+        datasets.push({
+          label,
+          legendGroup: 'Bezugspreis',
+          type: 'line',
+          data: values,
+          borderColor: bandColor,
+          backgroundColor: 'transparent',
+          borderWidth: 1,
+          borderDash: [2, 3],
+          pointRadius: 0,
+          pointHoverRadius: 0,
+          fill: false,
+          spanGaps: false,
+          yAxisID: 'y',
+          order: 1
+        });
+      }
+    }
   }
 
   if (hasSolarFc) {
@@ -1501,9 +1562,11 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
             font: { size: 11 },
             usePointStyle: true,
             padding: 16,
-            // Untere Kante des Prognose-Bands hat keinen eigenen Eintrag.
-            filter: (item) => !!item.text
-          }
+            // Untere Kante des Prognose-Bands hat keinen eigenen Eintrag, die
+            // Spannen-Linien des Bezugspreises (legendGroup) auch nicht.
+            filter: (item, chartData) => !!item.text && !chartData?.datasets?.[item.datasetIndex]?.legendGroup
+          },
+          onClick: (_e, item, legend) => togglePriceChartLegend(legend.chart, item.datasetIndex)
         },
         tooltip: {
           enabled: false,
@@ -1824,7 +1887,9 @@ function drawPriceChart(data, nowTs, comparisons = [], automationSlotTimestamps 
   // Restore legend hidden state from previous chart instance
   if (prevHiddenDatasets.size) {
     priceChartInstance.data.datasets.forEach((ds, i) => {
-      if (prevHiddenDatasets.has(ds.label)) {
+      // Gruppen-Datensätze (Spannen-Linien) folgen ihrem Eintrag — auch wenn
+      // sie beim letzten Zeichnen noch nicht da waren.
+      if (prevHiddenDatasets.has(ds.label) || (ds.legendGroup && prevHiddenDatasets.has(ds.legendGroup))) {
         priceChartInstance.getDatasetMeta(i).hidden = true;
       }
     });
@@ -4839,6 +4904,8 @@ const dashboardApi = {
   collectOptimizerSlotTimestamps,
   buildPriceForecastRows,
   priceChartImportSeries,
+  priceChartImportBandSeries,
+  togglePriceChartLegend,
   priceForecastTooltipLines,
   priceChartMetaText,
   groupScheduleRulesForDashboard,

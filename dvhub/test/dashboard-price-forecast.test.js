@@ -151,7 +151,7 @@ test('Zeile unter der Preiskurve nennt die Bezugspreis-Prognose, wenn es sie gib
 // überbrücken — sonst zeigt sie einen erfundenen Preis. Prüfung am echten
 // drawPriceChart mit einem Chart-Stub (Datensatz-Konfiguration), Abschnitte mit
 // dem gebündelten Chart.js berechnet.
-function renderPriceChart(args) {
+function makeChartSandbox() {
   const appPath = fileURLToPath(new URL('../public/app.js', import.meta.url));
   const source = fs.readFileSync(appPath, 'utf8');
   const sandbox = {
@@ -168,10 +168,23 @@ function renderPriceChart(args) {
   nodes.tooltip.parentElement = body;
   sandbox.document = { getElementById: (id) => nodes[id] || null, body, documentElement: {}, createElement: () => el() };
   sandbox.getComputedStyle = () => ({ getPropertyValue: () => '' });
-  let config = null;
-  sandbox.Chart = class { constructor(_c, cfg) { config = cfg; this.data = cfg.data; } destroy() {} getDatasetMeta() { return {}; } update() {} };
-  sandbox.drawPriceChart(...args);
-  return config;
+  const instances = [];
+  // Chart-Stub mit Sichtbarkeit je Datensatz wie Chart.js (meta.hidden vor dataset.hidden).
+  sandbox.Chart = class {
+    constructor(_c, cfg) { this.config = cfg; this.data = cfg.data; this.options = cfg.options; this.metas = []; instances.push(this); }
+    getDatasetMeta(i) { if (!this.metas[i]) this.metas[i] = {}; return this.metas[i]; }
+    isDatasetVisible(i) { const m = this.getDatasetMeta(i); return typeof m.hidden === 'boolean' ? !m.hidden : !this.data.datasets[i].hidden; }
+    destroy() {}
+    update() {}
+  };
+  return {
+    draw: (args) => { sandbox.drawPriceChart(...args); return instances.at(-1); },
+    sandbox,
+  };
+}
+
+function renderPriceChart(args) {
+  return makeChartSandbox().draw(args).config;
 }
 
 /** Abschnitte einer Linie wie Chart.js 4.4.7 (gebündelt) sie bildet — _computeSegments mit dem Segment-Stil des Datensatzes. */
@@ -237,4 +250,119 @@ test('Preiskurve: Bezugspreis-Linie überbrückt keine Prognose-Lücke ohne Bezu
   assert.deepEqual(pairStyle(f + 8).dash, [3, 4]);
   // Feste Preise: Stil der Linie unverändert.
   assert.deepEqual(pairStyle(f - 3), { color: ds.borderColor, dash: [6, 4] });
+});
+
+// Christin 19.11.2026 (Nachtrag): Spanne des Bezugspreises im Diagramm als
+// zweite blasse Linie — P10 und P90 als dünne Linien ohne Füllung, blasser als
+// P50, keine zweite Fläche; bei festem Preis keine; ein Legenden-Eintrag.
+
+test('Spannen-Reihen des Bezugspreises: nur Prognose-Zeilen mit echter Spanne (fest/ohne Band → keine)', () => {
+  const { priceChartImportBandSeries } = loadDashboardHelpers();
+  const data = [
+    { ts: 1, ct_kwh: 20 },
+    { ts: 2, ct_kwh: null, forecast: true, importP50: 34, importP10: 30.31, importP90: 38.6 },
+    { ts: 3, ct_kwh: null, forecast: true, importP50: 26.9, importP10: 26.9, importP90: 26.9 },
+    { ts: 4, ct_kwh: null, forecast: true, importP50: 31, importP10: null, importP90: null },
+    { ts: 5, ct_kwh: null, forecast: true, importP50: null, importP10: null, importP90: null },
+  ];
+  const band = priceChartImportBandSeries(data);
+  assert.deepEqual(Array.from(band.lo), [null, 30.31, null, null, null]);
+  assert.deepEqual(Array.from(band.hi), [null, 38.6, null, null, null]);
+});
+
+function bandScenario({ fixed = false, gap = false } = {}) {
+  const now = Date.parse('2026-11-12T09:07:00Z');
+  const real = realRows();
+  const comparisons = real.map((r) => ({ ts: r.ts, importPriceCtKwh: 30 }));
+  const o = outlookWithImport();
+  const first = Date.parse('2026-11-12T23:00:00Z');
+  o.importSlots = o.importSlots.map((s) => {
+    if (gap && s.ts >= first + 2 * Q && s.ts < first + 8 * Q) return { ts: s.ts, p50: null, p10: null, p90: null };
+    return fixed ? { ts: s.ts, p50: 26.9, p10: 26.9, p90: 26.9 } : s;
+  });
+  return [real, now, comparisons, [], null, [], [], null, [], o];
+}
+
+const alphaOf = (c) => {
+  const m = /rgba\([^)]*,\s*([\d.]+)\)/.exec(String(c));
+  return m ? Number(m[1]) : 1;
+};
+
+test('Preiskurve: Bezugs-Spanne als zwei dünne, blasse Linien ohne Füllung; Börsen-Band unverändert; keine Überbrückung', () => {
+  const cfg = renderPriceChart(bandScenario({ gap: true }));
+  const sets = cfg.data.datasets;
+  const p50 = sets.find((d) => d.label === 'Bezugspreis');
+  const band = sets.filter((d) => d.legendGroup === 'Bezugspreis');
+  assert.equal(band.length, 2, 'P10- und P90-Linie');
+  const f = p50.data.findIndex((v, i) => i > 0 && v !== 30 && v !== null);
+  const p50ForecastColor = p50.segment.borderColor({ type: 'segment', p0DataIndex: f, p1DataIndex: f + 1, p0: { skip: false }, p1: { skip: false } });
+  for (const ds of band) {
+    assert.equal(ds.type, 'line');
+    assert.ok(!ds.fill, 'keine Füllung');
+    assert.ok(ds.borderWidth < p50.borderWidth, 'dünner als P50');
+    assert.ok(alphaOf(ds.borderColor) < alphaOf(p50ForecastColor), `blasser als P50 (${ds.borderColor} vs. ${p50ForecastColor})`);
+    assert.equal(ds.yAxisID, 'y');
+    // Nur im Prognosebereich, Werte aus der Spanne.
+    assert.ok(ds.data.slice(0, f).every((v) => v === null));
+    assert.ok(ds.data.some((v) => v !== null));
+    // Keine Überbrückung (Chart.js 4.4.7 echt berechnet).
+    const segs = chartJsSegments(ds);
+    for (const sg of segs) {
+      const color = sg.style ? sg.style.borderColor : ds.borderColor;
+      if (color === 'transparent') continue;
+      for (let k = sg.start; k <= sg.end; k += 1) assert.notEqual(ds.data[k], null, `${ds.label}: gezeichnet über Lücke bei ${k}`);
+    }
+  }
+  assert.ok(band.some((d) => d.data.includes(30.31)) && band.some((d) => d.data.includes(38.6)));
+  // Börsen-Band bleibt die einzige Fläche auf der ct-Achse.
+  const filled = sets.filter((d) => d.yAxisID === 'y' && d.fill);
+  assert.deepEqual(Array.from(filled, (d) => d.label), ['Prognose-Spanne']);
+  // Legende: ein Eintrag „Bezugspreis“, keine eigenen Einträge für die Spanne.
+  const filter = cfg.options.plugins.legend.labels.filter;
+  const item = (ds) => ({ text: ds.label, datasetIndex: sets.indexOf(ds) });
+  assert.equal(filter(item(p50), cfg.data), true);
+  for (const ds of band) assert.equal(filter(item(ds), cfg.data), false, ds.label);
+});
+
+test('Preiskurve: fester Tarif (P10 = P50 = P90) zeichnet keine Spannen-Linien', () => {
+  const cfg = renderPriceChart(bandScenario({ fixed: true }));
+  assert.equal(cfg.data.datasets.filter((d) => d.legendGroup === 'Bezugspreis').length, 0);
+  assert.ok(cfg.data.datasets.find((d) => d.label === 'Bezugspreis'));
+});
+
+test('Legende „Bezugspreis“ blendet P50 und beide Spannen-Linien aus und wieder ein; andere Einträge wie bisher', () => {
+  const { draw } = makeChartSandbox();
+  const chart = draw(bandScenario());
+  const sets = chart.data.datasets;
+  const idx = (pred) => sets.findIndex(pred);
+  const p50 = idx((d) => d.label === 'Bezugspreis');
+  const band = sets.map((d, i) => (d.legendGroup === 'Bezugspreis' ? i : -1)).filter((i) => i >= 0);
+  const boerse = idx((d) => d.label === 'Börsenpreis');
+  const click = (i) => chart.options.plugins.legend.onClick({}, { datasetIndex: i, text: sets[i].label }, { chart });
+  click(p50);
+  assert.equal(chart.isDatasetVisible(p50), false);
+  for (const i of band) assert.equal(chart.isDatasetVisible(i), false, sets[i].label);
+  assert.equal(chart.isDatasetVisible(boerse), true);
+  click(p50);
+  for (const i of [p50, ...band]) assert.equal(chart.isDatasetVisible(i), true);
+  click(boerse);
+  assert.equal(chart.isDatasetVisible(boerse), false);
+  assert.equal(chart.isDatasetVisible(p50), true);
+  for (const i of band) assert.equal(chart.isDatasetVisible(i), true);
+});
+
+test('Ausgeblendeter Bezugspreis bleibt nach der 3-s-Aktualisierung aus — auch für Spannen-Linien, die erst jetzt dazukommen', () => {
+  const { draw } = makeChartSandbox();
+  let chart = draw(bandScenario());
+  const p50Of = (c) => c.data.datasets.findIndex((d) => d.label === 'Bezugspreis');
+  chart.options.plugins.legend.onClick({}, { datasetIndex: p50Of(chart), text: 'Bezugspreis' }, { chart });
+  chart = draw(bandScenario());
+  const hiddenNow = (c) => Array.from(c.data.datasets).map((d, i) => (c.isDatasetVisible(i) ? null : (d.legendGroup ? `${d.legendGroup}~` : d.label))).filter(Boolean);
+  assert.deepEqual(hiddenNow(chart), ['Bezugspreis', 'Bezugspreis~', 'Bezugspreis~']);
+  // Erst fester Tarif (keine Spannen-Linien), ausblenden, dann mit Spanne neu zeichnen.
+  const sb2 = makeChartSandbox();
+  let c2 = sb2.draw(bandScenario({ fixed: true }));
+  c2.options.plugins.legend.onClick({}, { datasetIndex: p50Of(c2), text: 'Bezugspreis' }, { chart: c2 });
+  c2 = sb2.draw(bandScenario());
+  assert.deepEqual(hiddenNow(c2), ['Bezugspreis', 'Bezugspreis~', 'Bezugspreis~']);
 });
