@@ -34,6 +34,40 @@ test('M7b: EMS-Zeile — Bedarf > 0, aber beide WR an der Grenze (Split 0/0) →
   assert.match(vw.master.decision, /an der Grenze 11 %/);
 });
 
+test('M28: Kachel zeigt „Master an der Grenze, Slave übernimmt" (und umgekehrt)', () => {
+  const mk = (takeover) => ({
+    victron: { soc: 12, sungrowMasterSocPct: 0.7, device: { model: 'SH10RT', bdcRatedW: 10000, minSocPctDevice: 10, maxSocPctDevice: 100 } },
+    sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 5.4, batteryPowerW: -1200, pvPowerW: 0, bdcRatedW: 10000, minSocPctDevice: 10, maxSocPctDevice: 100 },
+    sungrowEms: {
+      controlMode: 'forced', owns: true,
+      decision: { mode: 'forced', command: 'discharge', powerW: 1200, split: { masterW: takeover === 'slave' ? 0 : 1200, slaveW: takeover === 'slave' ? 1200 : 0, strategy: 'soc-balance', charge: false, takeover } },
+    },
+  });
+  const vw = V.view(mk('slave'));
+  assert.equal(vw.master.takeover, 'Master an der Grenze, Slave übernimmt');
+  assert.equal(vw.slave.takeover, null);
+  const vw2 = V.view(mk('master'));
+  assert.equal(vw2.slave.takeover, 'Slave an der Grenze, Master übernimmt');
+  assert.equal(vw2.master.takeover, null);
+  assert.equal(V.view(mk(null)).master.takeover, null);
+});
+
+test('M28 Grundsatz 0: Kachel zeigt Teil-Lieferung („liefert nur X von Y W") — mit und ohne Übernahme', () => {
+  const st = (split) => ({
+    victron: { soc: 30, sungrowMasterSocPct: 30, device: { model: 'SH10RT', bdcRatedW: 10000 } },
+    sungrowSecond: { online: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', socPct: 34, batteryPowerW: -900, pvPowerW: 0, bdcRatedW: 10000 },
+    sungrowEms: { controlMode: 'forced', owns: true, decision: { mode: 'forced', command: 'discharge', powerW: 1200, split: { strategy: 'soc-balance', charge: false, ...split } } },
+  });
+  // Master liefert 300 von 600 W, der Slave trägt die fehlenden 300 W.
+  const a = V.view(st({ masterW: 600, slaveW: 900, masterBaseW: 600, slaveBaseW: 600, masterLimitW: 300, slaveLimitW: null, transferW: 300, takeover: 'slave', takeoverReason: 'partial' }));
+  assert.equal(a.master.takeover, 'Master liefert nur 300 von 600 W, Slave übernimmt den Rest');
+  assert.equal(a.slave.takeover, null);
+  // Feldbeleg 12:31 nach der Erkennung: Master an der Grenze, Slave bekommt 1120 W, liefert aber nur 600 W.
+  const b = V.view(st({ masterW: 0, slaveW: 1120, masterBaseW: 0, slaveBaseW: 1120, masterLimitW: null, slaveLimitW: 600, transferW: 0, masterOut: 'stalled', takeover: 'slave', takeoverReason: 'stalled' }));
+  assert.equal(b.master.takeover, 'Master an der Grenze, Slave übernimmt');
+  assert.equal(b.slave.takeover, 'Slave liefert nur 600 von 1120 W');
+});
+
 test('N5: Modbus-Gesundheit je WR — Takt, Anfragen/s, Antwortzeit, Fehler 24 h, letzter Fehler', () => {
   const status = {
     victron: { soc: 50, sungrowMasterSocPct: 50, device: { model: 'SH10RT', bdcRatedW: 10000 } },
@@ -400,4 +434,14 @@ test('Codex 04cd3f9f: solange die Freigabe-Anfrage läuft, überschreibt ein Sta
   // Danach gilt wieder der Status dieser Anfrage.
   t.W.render({ ...TILE_BASE, sungrowEms: { release: { pending: true, attempts: 2, requestedAt: 2000 } } }, t.doc);
   assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert, wird wiederholt · Versuch 2');
+});
+
+test('M22: Kachel nennt ECONNREFUSED „abgelehnt" statt „Timeout"', () => {
+  const at = new Date(2026, 10, 19, 12, 31).getTime();
+  const vw = V.view({
+    victron: { soc: 30, sungrowMasterSocPct: 30, device: { model: 'SH10RT', bdcRatedW: 10000 } },
+    sungrowSecond: { online: true, socPct: 20, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 10000, health: { requestsPerSec: 0.6, errors24h: 12, lastError: { kind: 'refused', code: 'ECONNREFUSED', at } } },
+    sungrowEms: { controlMode: 'forced', owns: true, decision: { mode: 'forced', command: 'stop', powerW: 0 } },
+  });
+  assert.match(vw.slave.health, /zuletzt abgelehnt 12:31/);
 });

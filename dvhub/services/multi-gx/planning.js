@@ -236,12 +236,26 @@ export function floorSocPct(ctx) {
   return finite(socRaw) ? Number(socRaw) : null;
 }
 
+/**
+ * Sungrow: aus welchen Geräte-Werten der Entlade-Boden (planningMinSocPct) gerade besteht — die höhere Geräte-Untergrenze
+ * (Master, dazu der Slave nur mit frischer, aggregierter Messung) und der Puffer. Für die Herkunftsangabe der Leitstand-
+ * Kachel (Codex 50deb8d3/4fc6e8da), dieselben Eingänge wie planningMinSocPct. Nicht Sungrow → null.
+ */
+export function planningSocFloorParts(ctx) {
+  const cfg = ctx?.getCfg?.();
+  if (!isSungrow(ctx, cfg)) return null;
+  const dev = ctx?.state?.victron?.device || {};
+  const slaveTel = resolveSecondInverter(cfg).aggregateTelemetry === true ? secondInverterTelemetry(ctx?.state, cfg, {}) : null;
+  const mins = [dev.minSocPctDevice, slaveTel?.minSocPctDevice].filter((v) => finite(v)).map(Number);
+  return { deviceMinSocPct: mins.length ? Math.max(...mins) : null, bufferPct: sungrowSocFloorBufferPct(cfg) };
+}
+
 /** Mindest-SoC fuer die Planung: Untergrenze der Hauptanlage und der zweiten, gewichtet. */
 export function planningMinSocPct(ctx, primaryMinSocPct) {
   const cfg = ctx?.getCfg?.();
   // Zwei Sungrow-WR (Aufgabe 4 + M1, Christin 16.11.): Min-SoC an EOS = der EFFEKTIVE Entlade-Boden, den der Aktuator
   // einhält — max(hartem Boden/Live, 13059 je WR + Puffer), alles real %. KEINE Gewichtung (der Boden schützt den
-  // schwächeren Akku → der HÖHERE Wert, konservativ). Puffer kundeneinstellbar (Default 1). Gleicher Boden wie im
+  // schwächeren Akku → der HÖHERE Wert, konservativ). Puffer kundeneinstellbar (Standard 0 seit M24). Gleicher Boden wie im
   // Aktuator, sonst plant EOS Entladung bis 10 %, die DVhub bei 11 % abbricht (Mismatch).
   if (isSungrow(ctx, cfg)) {
     const dev = ctx?.state?.victron?.device || {};

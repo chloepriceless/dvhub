@@ -1313,6 +1313,98 @@
     }
     return kwh;
   }
+  function fpEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function fpPct(w) {
+    var v = Math.round(Number(w) * 100);
+    return isFinite(v) ? v + ' %' : '';
+  }
+  // Christin 19.11.2026: „nicht eingerichtet → nicht ins Ensemble“. Die Karte zählt als
+  // Ensemble-Mitglieder nur, wer im aktuellen Lauf ein Gewicht hat (providerStatus/ensembleMembers
+  // aus /api/forecast/inspector/pv-providers) — nicht jedes Modell mit Zeilen (vorher „6 Modelle“
+  // inkl. 'combined' und alter Forecast.Solar-Zeilen, obwohl 4 im Ensemble waren). Dienste außerhalb
+  // des Ensembles stehen gedimmt mit Grund da; nicht eingerichtete nur, wenn noch alte Zeilen da sind.
+  // Pure (ohne DOM) → test/leitstand-forecast-providers.test.js.
+  var FP_ACTIVE_STATUS = { member: 1, leaving: 1, single: 1 };
+  var FP_STALE_DATA_STATUS = { not_configured: 1, not_applicable: 1 };
+  function forecastProvidersView(j, nowMs) {
+    var now = Number.isFinite(nowMs) ? nowMs : Date.now();
+    var providers = (j && j.providers) || {};
+    var status = (j && j.providerStatus) || {};
+    var fetched = (j && j.oldestFetchedAt) || {};
+    var weights = (j && j.ensembleWeights) || {};
+    var keys = Object.keys(providers);
+    Object.keys(status).forEach(function (k) {
+      if (keys.indexOf(k) < 0 && status[k] && status[k].status !== 'not_configured') keys.push(k);
+    });
+    var rows = keys.map(function (key) {
+      var slots = providers[key] || [];
+      var st = status[key] || null;
+      var code = st ? st.status : (key === 'combined' ? 'combined' : 'unknown');
+      var peakW = 0;
+      for (var i = 0; i < slots.length; i++) {
+        var w = Number(slots[i] && slots[i].power_w);
+        if (isFinite(w) && w > peakW) peakW = w;
+      }
+      var ageMin = null;
+      if (fetched[key]) {
+        var t = new Date(fetched[key]).getTime();
+        if (isFinite(t)) ageMin = Math.max(0, (now - t) / 60000);
+      }
+      var has = slots.length > 0;
+      // Zeilen nicht eingerichteter / nicht verwendbarer Dienste sind Reste früherer Läufe — keine Werte zeigen.
+      var showValues = has && !FP_STALE_DATA_STATUS[code];
+      var active = code === 'combined' ? (has && !!(j && j.ensembleActive))
+        : code === 'unknown' ? has
+        : !!FP_ACTIVE_STATUS[code];
+      var note = '';
+      if (code === 'member') note = 'im Ensemble' + (st && st.weight != null ? ' · Gewicht ' + fpPct(st.weight) : '');
+      else if (code === 'leaving' || code === 'single') note = (st && st.hint) || '';
+      else if (code === 'not_configured') note = 'nicht eingerichtet' + (st && st.hint ? ' – ' + st.hint : '');
+      else if (st) note = 'nicht im Ensemble' + (st.hint ? ' – ' + st.hint : '');
+      var dot = !active || !has ? 'is-off' : (code === 'leaving' || (ageMin != null && ageMin > 180)) ? 'is-stale' : 'is-live';
+      return {
+        key: key,
+        label: FORECAST_PROVIDER_LABELS[key] || (st && st.label) || key,
+        status: code,
+        active: active,
+        peakKw: peakW / 1000,
+        energyKwh: providerForecastEnergyKwh(slots),
+        age: showValues ? fetched[key] : null,
+        dot: dot,
+        has: has,
+        showValues: showValues,
+        // Kurve im Forecast-Vergleich nur für Dienste, deren Daten noch gelten.
+        showCurve: has && !FP_STALE_DATA_STATUS[code],
+        note: note
+      };
+    });
+    // Aktive zuerst (Ensemble-Zeile vorn), dann nach Tages-Peak.
+    rows.sort(function (a, b) {
+      return (b.active - a.active) || ((b.status === 'combined') - (a.status === 'combined')) || (b.showValues - a.showValues) || (b.peakKw - a.peakKw);
+    });
+    var memberCount = (j && j.meta && Number.isFinite(Number(j.meta.ensembleMemberCount)))
+      ? Number(j.meta.ensembleMemberCount)
+      : Object.keys(weights).filter(function (k) { return k !== 'combined' && Number(weights[k]) > 0; }).length;
+    var ensembleText;
+    if (j && j.ensembleActive) {
+      ensembleText = 'Ensemble: aktiv · ' + memberCount + (memberCount === 1 ? ' Modell' : ' Modelle');
+    } else {
+      var single = rows.filter(function (r) { return r.status === 'single'; })[0];
+      ensembleText = 'Ensemble: inaktiv' + (single ? ' · Quelle: ' + single.label : '');
+    }
+    var fb = j && j.modelFallback;
+    var note = fb
+      ? 'Gewählt ist „Nur ' + (FORECAST_PROVIDER_LABELS[fb.model] || fb.model) + '“, der Dienst ist aber nicht eingerichtet'
+        + (fb.hint ? ' (' + fb.hint + ')' : '') + ' — DVhub rechnet mit den eingerichteten Diensten.'
+      : '';
+    return { rows: rows, ensembleText: ensembleText, ensembleActive: !!(j && j.ensembleActive), memberCount: memberCount, note: note };
+  }
+  if (typeof window !== 'undefined') window.DVhubLeitstand = Object.assign(window.DVhubLeitstand || {}, { forecastProvidersView: forecastProvidersView });
+
   async function renderForecastProviders() {
     var body = document.getElementById('forecastProvidersBody');
     var ensEl = document.getElementById('forecastProvidersEnsemble');
@@ -1328,50 +1420,28 @@
         if (ensEl) { ensEl.textContent = ''; ensEl.classList.remove('is-active'); }
         return;
       }
-      var fetched = j.oldestFetchedAt || {};
-      var rows = Object.keys(j.providers).map(function (key) {
-        var slots = j.providers[key] || [];
-        var peakW = 0;
-        for (var i = 0; i < slots.length; i++) {
-          var w = Number(slots[i] && slots[i].power_w);
-          if (isFinite(w) && w > peakW) peakW = w;
-        }
-        var ageMin = null;
-        if (fetched[key]) {
-          var t = new Date(fetched[key]).getTime();
-          if (isFinite(t)) ageMin = Math.max(0, (Date.now() - t) / 60000);
-        }
-        return {
-          label: FORECAST_PROVIDER_LABELS[key] || key,
-          peakKw: peakW / 1000,
-          energyKwh: providerForecastEnergyKwh(slots),
-          age: fetched[key],
-          stale: ageMin != null && ageMin > 180,
-          has: slots.length > 0
-        };
-      });
-      // Active providers first, then by day-peak descending.
-      rows.sort(function (a, b) { return (b.has - a.has) || (b.peakKw - a.peakKw); });
+      var view = forecastProvidersView(j);
+      var rows = view.rows;
       var headerRow = '<div class="fp-row fp-head">' +
         '<span></span><span class="fp-name">Provider</span>' +
         '<span class="fp-peak">Tages-Peak</span>' +
         '<span class="fp-energy">Energie</span>' +
         '<span class="fp-age">aktualisiert</span></div>';
       body.innerHTML = headerRow + rows.map(function (r) {
-        var dotCls = !r.has ? 'is-off' : r.stale ? 'is-stale' : 'is-live';
-        return '<div class="fp-row">' +
-          '<span class="fp-dot ' + dotCls + '"></span>' +
-          '<span class="fp-name">' + r.label + '</span>' +
-          '<span class="fp-peak">' + (r.has ? r.peakKw.toFixed(1).replace('.', ',') + ' kW' : '—') + '</span>' +
-          '<span class="fp-energy">' + (r.has ? r.energyKwh.toFixed(1).replace('.', ',') + ' kWh' : '—') + '</span>' +
+        return '<div class="fp-row' + (r.active ? '' : ' is-out') + '">' +
+          '<span class="fp-dot ' + r.dot + '"></span>' +
+          '<span class="fp-name">' + fpEsc(r.label) + (r.note ? '<span class="fp-note">' + fpEsc(r.note) + '</span>' : '') + '</span>' +
+          '<span class="fp-peak">' + (r.showValues ? r.peakKw.toFixed(1).replace('.', ',') + ' kW' : '—') + '</span>' +
+          '<span class="fp-energy">' + (r.showValues ? r.energyKwh.toFixed(1).replace('.', ',') + ' kWh' : '—') + '</span>' +
           '<span class="fp-age">' + forecastProviderAgeLabel(r.age) + '</span>' +
           '</div>';
-      }).join('');
+      }).join('') + (view.note ? '<div class="forecast-providers-empty">' + fpEsc(view.note) + '</div>' : '');
       if (ensEl) {
-        var n = (j.meta && j.meta.modelCount) || rows.filter(function (r) { return r.has; }).length;
-        ensEl.textContent = 'Ensemble: ' + (j.ensembleActive ? 'aktiv' : 'inaktiv') + ' · ' + n + ' Modelle';
-        ensEl.classList.toggle('is-active', !!j.ensembleActive);
+        ensEl.textContent = view.ensembleText;
+        ensEl.classList.toggle('is-active', view.ensembleActive);
       }
+      var curveByKey = {};
+      rows.forEach(function (r) { curveByKey[r.key] = r.showCurve; });
 
       // Overlay the provider curves on the Forecast-Vergleich chart (operator
       // request 2026-06-21) — resampled onto the same 15-min grid as the base
@@ -1383,7 +1453,8 @@
           var idx = -1;
           for (var di = 0; di < dss.length; di++) { if (dss[di].dvProvider === ps.key) { idx = di; break; } }
           if (idx < 0) return;
-          var slots = j.providers[ps.key] || [];
+          // Alte Zeilen nicht (mehr) eingerichteter Dienste nicht als Kurve zeigen.
+          var slots = curveByKey[ps.key] === false ? [] : (j.providers[ps.key] || []);
           var pts = slots.map(function (s) {
             return { x: new Date(s.ts_utc).getTime(), y: (Number(s.power_w) || 0) / 1000 };
           }).filter(function (pt) { return isFinite(pt.x); });

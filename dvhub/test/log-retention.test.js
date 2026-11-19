@@ -67,6 +67,20 @@ test('Verdichtet tageweise bis zum 14-Tage-Stichtag', async () => {
   assert.deepEqual(agg.map((c) => c.params[0]), ['2026-03-10', '2026-03-11']);
 });
 
+// Portal 19.11.: „[MQTT] Connected to …“ (Stufe info) lief als Fehler ins Fehlerprotokoll. [MQTT]-Meldungen
+// zählen nur ab Warnung.
+test('[MQTT]-Meldungen zählen nur ab Warnung als Fehler', () => {
+  assert.match(AUDIT_ERROR_SQL, /event_type LIKE '\[MQTT\]%' AND severity IN \('warn', 'error', 'critical'\)/);
+  assert.doesNotMatch(AUDIT_ERROR_SQL, /OR event_type LIKE '\[MQTT\]%'\s*\n?\)/);
+});
+
+// Codex 0752f9c0 P2: Info-[MQTT]-Meldungen fallen aus der Fehler-Regel — sie müssen dann ins Rauschen
+// (Tageszähler), sonst bleiben sie für immer roh liegen.
+test('Info-[MQTT]-Meldungen gehören zum Rauschen (Aufbewahrung)', () => {
+  assert.match(AUDIT_NOISE_SQL, /OR event_type LIKE '\[MQTT\]%'/);
+  assert.match(AUDIT_NOISE_SQL, /AND NOT/);
+});
+
 test('Rauschen und Fehler sind getrennt', () => {
   assert.match(AUDIT_NOISE_SQL, /AND NOT/);
   assert.match(AUDIT_ERROR_SQL, /_error/);

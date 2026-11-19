@@ -5,6 +5,19 @@
 import { effectivePvKwp } from './effective-pv.js';
 
 /**
+ * kWp für die Open-Meteo-Schätzung: forecast.pv.totalKwp, sonst Summe pvPlants, plus PV am zweiten
+ * Sungrow-WR (Punkt 5). Ausgelagert (19.11.2026) für die Einrichtungs-Regel (pv-provider-setup.js).
+ */
+export function openMeteoSolarKwp(cfg) {
+  const pv = cfg?.forecast?.pv || {};
+  let kwp = pv.totalKwp;
+  if (!kwp && Array.isArray(cfg?.userEnergyPricing?.pvPlants)) {
+    kwp = cfg.userEnergyPricing.pvPlants.reduce((sum, p) => sum + (p.kwp || 0), 0);
+  }
+  return effectivePvKwp(cfg, kwp);
+}
+
+/**
  * Create Open-Meteo solar forecast estimator.
  * Converts irradiance data from weather-fetch into PV power estimates.
  *
@@ -56,12 +69,8 @@ export function createOpenMeteoSolar(ctx, { store }) {
     const cfg = getCfg();
     const pv = cfg.forecast?.pv || {};
 
-    // Get kWp from config or pvPlants
-    let kwp = pv.totalKwp;
-    if (!kwp && Array.isArray(cfg.userEnergyPricing?.pvPlants)) {
-      kwp = cfg.userEnergyPricing.pvPlants.reduce((sum, p) => sum + (p.kwp || 0), 0);
-    }
-    kwp = effectivePvKwp(cfg, kwp); // Punkt 5: + PV am zweiten Sungrow-WR (pvKwp)
+    // Get kWp from config or pvPlants (Punkt 5: + PV am zweiten Sungrow-WR)
+    const kwp = openMeteoSolarKwp(cfg);
     if (!kwp) {
       pushLog('open_meteo_solar_skip', { reason: 'no_kwp' });
       return null;

@@ -2954,3 +2954,7 @@ body.dv-modal-open {
 .mobile-link-qr:empty { display: none; }
 .mobile-link-qr svg { display: block; width: 100%; height: auto; }
 .mobile-link-code { font-size: 1.3em; letter-spacing: 0.08em; font-variant-numeric: tabular-nums; }
+
+/* PV-Provider-Inspektor (19.11.2026): Spalte eines Dienstes, der nicht (mehr) eingerichtet ist —
+   die Werte sind Reste eines früheren Laufs und kein Ensemble-Mitglied. */
+.data-table tr td.data-cell--stale { color: var(--text-dim); opacity: .55; }

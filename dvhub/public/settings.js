@@ -4955,19 +4955,66 @@ function renderInspectorSparkline(canvas, points, color, fillColor) {
   });
 }
 
+// Christin 19.11.2026: Zeilen für den Hinweis „Nicht im Ensemble“ im PV-Provider-Inspektor —
+// je Dienst außerhalb des aktuellen Ensembles der Grund (providerStatus vom Server, dieselbe
+// Einrichtungs-Regel wie der Prognose-Lauf). Pure → test/pv-provider-setup.test.js.
+function pvProvidersOutOfEnsembleLines(payload, outOfEnsemble) {
+  var lines = [];
+  var fb = payload && payload.modelFallback;
+  var labelOf = function (k) {
+    var st = payload && payload.providerStatus && payload.providerStatus[k];
+    return (st && st.label) || k;
+  };
+  if (fb) {
+    lines.push('Gewählt ist „Nur ' + labelOf(fb.model) + '“, der Dienst ist aber nicht eingerichtet'
+      + (fb.hint ? ' (' + fb.hint + ')' : '') + ' — DVhub rechnet mit den eingerichteten Diensten.');
+  }
+  var list = (outOfEnsemble || []).map(function (st) {
+    if (st.status === 'not_configured') return st.label + ': nicht eingerichtet' + (st.hint ? ' – ' + st.hint : '');
+    if (st.status === 'single' || st.status === 'leaving') return st.label + ': ' + (st.hint || '');
+    return st.label + ': nicht im Ensemble' + (st.hint ? ' – ' + st.hint : '');
+  });
+  if (list.length) {
+    lines.push('Nicht im Ensemble:');
+    lines = lines.concat(list);
+  }
+  return lines;
+}
+
 function renderPvProvidersInspector(payload) {
   if (!payload || !payload.providers) return;
   var providers = payload.providers || {};
 
   // 1. Per-provider stats: active count + all-zero detection (Phase 18-01i regression flag).
+  // Christin 19.11.2026: „aktiv“ heißt im Ensemble (providerStatus vom Server), nicht „hat Zeilen“ —
+  // alte Zeilen nicht (mehr) eingerichteter Dienste zählten sonst mit.
+  var pvStatus = payload.providerStatus || null;
   var activeProviders = 0;
   var allZeroByProvider = {};
   PV_INSPECTOR_PROVIDER_COLUMNS.concat(['combined']).forEach(function (m) {
     var slots = providers[m] || [];
     var hasNonZero = slots.some(function (s) { return Number(s.power_w) > 0; });
-    if (m !== 'combined' && hasNonZero) activeProviders++;
+    if (!pvStatus && m !== 'combined' && hasNonZero) activeProviders++;
     allZeroByProvider[m] = slots.length > 0 && !hasNonZero;
   });
+  var configuredProviders = 0;
+  var outOfEnsemble = [];
+  if (pvStatus) {
+    activeProviders = (payload.meta && Number.isFinite(Number(payload.meta.ensembleMemberCount)))
+      ? Number(payload.meta.ensembleMemberCount)
+      : (payload.ensembleMembers || []).length;
+    PV_INSPECTOR_PROVIDER_COLUMNS.forEach(function (m) {
+      var st = pvStatus[m];
+      if (!st) return;
+      if (st.configured) configuredProviders++;
+      if (st.status !== 'member') outOfEnsemble.push(st);
+    });
+  }
+  // Spalten von Diensten, deren Zeilen nur noch Reste sind (nicht eingerichtet / nicht verwendbar).
+  function pvColumnStale(m) {
+    var st = pvStatus && pvStatus[m];
+    return !!st && (st.status === 'not_configured' || st.status === 'not_applicable');
+  }
 
   // 2. Union of timestamps across all providers (sorted ascending).
   var tsSet = {};
@@ -4988,6 +5035,7 @@ function renderPvProvidersInspector(payload) {
   // 4. Summary-Karten — Aktive Provider, Ensemble aktiv, Datenalter.
   var oldestAcross = null;
   Object.keys(payload.oldestFetchedAt || {}).forEach(function (m) {
+    if (pvColumnStale(m)) return; // Reste alter Einrichtungen machen die Daten nicht „alt“
     var fa = payload.oldestFetchedAt[m];
     if (!oldestAcross || (fa && fa < oldestAcross)) oldestAcross = fa;
   });
@@ -5010,15 +5058,31 @@ function renderPvProvidersInspector(payload) {
   var summary = document.getElementById('inspector-summary-pv-providers');
   if (summary) {
     summary.innerHTML =
-      '<div class="stat-card"><div class="stat-label">Aktive Provider</div>' +
+      '<div class="stat-card"><div class="stat-label">' + (pvStatus ? 'Im Ensemble' : 'Aktive Provider') + '</div>' +
         '<div class="stat-val">' + activeProviders + '</div>' +
-        '<div class="stat-delta">von ' + PV_INSPECTOR_PROVIDER_COLUMNS.length + '</div></div>' +
+        '<div class="stat-delta">' + (pvStatus
+          ? 'von ' + configuredProviders + ' eingerichtet'
+          : 'von ' + PV_INSPECTOR_PROVIDER_COLUMNS.length) + '</div></div>' +
       '<div class="stat-card"><div class="stat-label">Ensemble aktiv</div>' +
         '<div class="stat-val">' + (payload.ensembleActive ? 'ja' : 'nein') + '</div>' +
         '<div class="stat-delta">' + weightsLine + '</div></div>' +
       '<div class="stat-card"><div class="stat-label">Datenalter</div>' +
         '<div class="stat-val">' + escHtmlForecastInspector(relativeAgeHoursForecastInspector(oldestAcross)) + '</div>' +
         '<div class="stat-delta" title="Auflösung der Originaldaten pro Provider — 60m/30m werden in der Tabelle auf 15m-Slots forward-gefüllt.">' + resolutionLine + '</div></div>';
+  }
+
+  // 4b. Wer nicht im Ensemble ist, und warum (Christin 19.11.2026).
+  var pvBanner = document.querySelector('[data-inspector-banner="pv-providers"]');
+  if (pvBanner) {
+    var lines = pvProvidersOutOfEnsembleLines(payload, outOfEnsemble);
+    if (lines.length) {
+      pvBanner.classList.remove('u-hidden');
+      pvBanner.classList.toggle('warn', !!payload.modelFallback);
+      pvBanner.innerHTML = lines.map(function (l) { return '<div>' + escHtmlForecastInspector(l) + '</div>'; }).join('');
+    } else {
+      pvBanner.classList.add('u-hidden');
+      pvBanner.innerHTML = '';
+    }
   }
 
   // 5. Detail-meta — slot count + window length.
@@ -5039,7 +5103,11 @@ function renderPvProvidersInspector(payload) {
       html += '<td>' + escHtmlForecastInspector(formatBerlinTimeForecastInspector(t)) + '</td>';
       PV_INSPECTOR_PROVIDER_COLUMNS.forEach(function (m) {
         var v = slot[m];
-        if (allZeroByProvider[m]) {
+        if (pvColumnStale(m)) {
+          // Rest eines früheren Laufs: gedimmt, Grund im Tooltip — kein Ensemble-Mitglied.
+          html += '<td class="data-cell--stale" title="' + escHtmlForecastInspector('Nicht im Ensemble: ' + (pvStatus[m].hint || 'nicht eingerichtet')) + '">' +
+            escHtmlForecastInspector(formatPowerForecastInspector(v)) + '</td>';
+        } else if (allZeroByProvider[m]) {
           html += '<td class="data-row--warning" title="Provider lieferte 0 W für 24 h. Siehe Phase 18-01i.">' +
             escHtmlForecastInspector(formatPowerForecastInspector(v)) + '</td>';
         } else {

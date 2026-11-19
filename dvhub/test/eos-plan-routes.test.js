@@ -218,6 +218,32 @@ test('GET /api/eos/plan und /api/price/outlook — Hinweis „Tage im Voraus“ 
   assert.equal(body.horizonHint, null);
 });
 
+// Bezugspreis-Prognose (Christin 19.11.2026): /api/price/outlook rechnet mit der
+// wirksamen Preis-Konfiguration und der Zeitzone wie EOS (optimizer.timezone).
+test('GET /api/price/outlook — Bezugspreis-Prognose je Viertelstunde aus der wirksamen Preis-Konfiguration', async () => {
+  const ctx = mockCtx();
+  Object.assign(ctx.getCfg().epex, { enabled: true, bzn: 'DE-LU', priceSource: 'dvhub' });
+  ctx.getCfg().optimizer.timezone = 'Europe/Berlin';
+  ctx.getCfg().userEnergyPricing = {
+    mode: 'dynamic',
+    dynamicComponents: { energyMarkupCtKwh: 2, gridChargesCtKwh: 10, leviesAndFeesCtKwh: 3, vatPct: 19 },
+  };
+  const now = Date.now();
+  const hour0 = now - (now % 3_600_000);
+  const realEnd = hour0 + 34 * 3_600_000;
+  const hours = Array.from({ length: 60 }, (_, i) => ({ ms: hour0 + i * 3_600_000, p10: 50, p50: 80, p90: 120, leadDays: 1 }));
+  const outlook = { issuedAt: new Date(now).toISOString(), issuedMs: now, biddingZone: 'DE-LU', hours };
+  ctx.priceOutlook = { current: () => ({ status: 'live', reason: null, outlook, issuedAt: outlook.issuedAt, fetchedAt: outlook.issuedAt, unavailableSince: null }) };
+  ctx.state.epex.data = Array.from({ length: 34 * 4 }, (_, i) => ({ ts: hour0 + i * 900_000, ct_kwh: 10 }));
+  const body = JSON.parse((await dispatch(ctx, makeReq('/api/price/outlook', { token: null, ip: LAN_IP }))).body);
+  assert.equal(body.hours[0].ts, realEnd);
+  assert.equal(body.importSlots.length, body.hours.length * 4);
+  assert.equal(body.importSlots[0].ts, realEnd);
+  assert.equal(body.importSlots[1].ts, realEnd + 900_000);
+  // (8 + 15) × 1,19 = 27,37; (5 + 15) × 1,19 = 23,8; (12 + 15) × 1,19 = 32,13
+  assert.deepEqual(body.importSlots[0], { ts: realEnd, p50: 27.37, p10: 23.8, p90: 32.13 });
+});
+
 // E-Auto-Frist (1.0.10): Der Plan reicht bis zur Abfahrt in geschätzte Preise —
 // /api/eos/plan sagt es (control) und kennzeichnet die Zeilen.
 test('GET /api/eos/plan — Steuerzeitraum des Plans und geschätzte Preise je Zeile', async () => {

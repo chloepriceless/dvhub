@@ -355,8 +355,12 @@ test('Option A: Feldtest „Abregelung testen" bleibt unberührt — Lease und E
   const test0 = { active: true, mode: 'negativePrice', minutes: 10, blockCharge: true, until: r.now() + 10 * 60000 };
   r.state.ctrl.curtailmentTest = { ...test0 };
   await r.ems.applySetpoint(-6000, 'rule:abend');
-  r.advance(5000); await r.ems.tick();                    // Feldtest hält den Akku an (0xCC, Modus 2)
-  assert.equal(r.ems._st.decision.reason, 'curtailment_test_hold');
+  r.advance(5000); await r.ems.tick();
+  // M25 (main 19.11.): „Akku nicht laden" sperrt nur das Laden — DVhub fährt Modus 2 weiter, entlädt aber nur fürs
+  // Haus, lädt nie (vorher: Dauer-Stopp curtailment_test_hold). Absicht dieses Tests unverändert: die Freigabe lässt
+  // Lease und Einstellungen des Feldtests in Ruhe.
+  assert.equal(r.dev().mode, EMS_MODE.FORCED);
+  assert.notEqual(r.ems._st.decision.command, 'charge');
   r.fail.set(`M:${MODE}`, 'timeout');
   assert.equal((await r.ems.forceRelease('manual_release')).pending, true);
   r.fail.clear();

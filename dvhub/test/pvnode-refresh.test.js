@@ -26,8 +26,10 @@ function makeCtx(state) {
         location: { latitude: 48.15, longitude: 9.48 },
         pv: { configLevel: 'simple', totalKwp: 10, tiltDeg: 35, azimuthDeg: 180, strings: [], model: 'auto' },
         solcast: {},
-        pvnode: { plan: 'plus' } // 15-min window so the client never throttles the test fetch
-      }
+        // 15-min window so the client never throttles the test fetch; API-Key = eingerichtet (19.11.2026)
+        pvnode: { plan: 'plus', apiKey: 'test-key' }
+      },
+      telemetry: { historyImport: { enabled: true, vrmPortalId: '123456', vrmToken: 'test-token' } }
     }),
     pushLog: () => {},
     bumpForecastVersion: () => {}

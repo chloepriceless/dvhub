@@ -4,6 +4,97 @@
 import { effectivePvKwp } from './effective-pv.js';
 
 /**
+ * Standort für Forecast.Solar: forecast.location, sonst schedule.smallMarketAutomation.location.
+ * Ausgelagert (19.11.2026), damit die Einrichtungs-Regel (pv-provider-setup.js) dieselbe Prüfung nutzt.
+ * @returns {{lat:number|string, lon:number|string}|null}
+ */
+export function forecastSolarLocation(cfg) {
+  const fc = cfg?.forecast || {};
+  const lat = fc.location?.latitude
+    || cfg?.schedule?.smallMarketAutomation?.location?.latitude;
+  const lon = fc.location?.longitude
+    || cfg?.schedule?.smallMarketAutomation?.location?.longitude;
+  if (!lat || !lon) return null;
+  return { lat, lon };
+}
+
+/** kWp für Forecast.Solar: forecast.pv.totalKwp, sonst Summe pvPlants, plus PV am zweiten Sungrow-WR (Punkt 5). */
+export function forecastSolarKwp(cfg) {
+  const pv = cfg?.forecast?.pv || {};
+  let kwp = pv.totalKwp;
+  if (!kwp && Array.isArray(cfg?.userEnergyPricing?.pvPlants)) {
+    kwp = cfg.userEnergyPricing.pvPlants.reduce((sum, p) => sum + (p.kwp || 0), 0);
+  }
+  return effectivePvKwp(cfg, kwp);
+}
+
+/**
+ * Resolve PV system parameters from config (pure).
+ * Falls back to existing pvPlants and location data.
+ * @returns {null | {skip:string, azSpread:number, tiltSpread:number} | {lat, lon, dec, az, kwp}}
+ */
+export function resolveForecastSolarParams(cfg) {
+  const fc = cfg?.forecast || {};
+  const pv = fc.pv || {};
+
+  // Location: forecast.location -> schedule.smallMarketAutomation.location
+  const loc = forecastSolarLocation(cfg);
+  if (!loc) return null;
+  const { lat, lon } = loc;
+
+  // kWp: forecast.pv.totalKwp -> sum of pvPlants, plus PV am zweiten Sungrow-WR (Punkt 5)
+  const kwp = forecastSolarKwp(cfg);
+  if (!kwp) return null;
+
+  // Neigung (dec) und Ausrichtung (dvhubAz) der abgefragten Fläche.
+  // M13 (Feld 16.11.): Im Detail-Modus gibt es keine pv.tiltDeg/azimuthDeg — früher fiel die
+  // Abfrage auf 35°/180° (Süd) zurück, obwohl z. B. String 2 nach NNO zeigt.
+  //
+  // M13b: Die Forecast.Solar-GRATIS-API kennt nur EINE Fläche je Abfrage (Pfad
+  // /estimate/{lat}/{lon}/{dec}/{az}/{kwp}); echte Multi-Flächen gibt es erst im
+  // bezahlten JSON-Tarif. Ein einzelner Ebenen-Abruf für eine real GESPREIZTE
+  // Anlage (z. B. String 1 216° SW, String 2 25° NNO) ist systematisch falsch:
+  // Nimmt man die Geometrie des größten Strings mit der GESAMT-kWp, überschätzt
+  // man den abgewandten String kräftig. Da Forecast.Solar nur ein Ensemble-Member
+  // ist, ist der robuste Weg, es bei einer gespreizten Detail-Anlage GANZ aus dem
+  // Ensemble zu nehmen (kein Fetch, kein Store-Write → effektiv Gewicht 0), statt
+  // eine verzerrte Prognose einzuspeisen. Koplanare Detail-Strings (ein Dach) und
+  // Single-String/Simple/Standard laufen wie bisher weiter.
+  let dec = pv.tiltDeg ?? 35;
+  let dvhubAz = pv.azimuthDeg ?? 180;
+  const strings = (pv.configLevel === 'detailed' && Array.isArray(pv.strings))
+    ? pv.strings.filter(s => Number(s?.kwp) > 0)
+    : [];
+  if (strings.length >= 2) {
+    // Gespreizt? Azimut-Spanne (zyklisch, 0–180°) oder Neigungsspanne prüfen.
+    const azs = strings.map(s => Number(s.azimuthDeg)).filter(Number.isFinite);
+    const tilts = strings.map(s => Number(s.tiltDeg)).filter(Number.isFinite);
+    let azSpread = 0;
+    for (let i = 0; i < azs.length; i++) {
+      for (let j = i + 1; j < azs.length; j++) {
+        const d = Math.abs(azs[i] - azs[j]) % 360;
+        azSpread = Math.max(azSpread, d > 180 ? 360 - d : d);
+      }
+    }
+    const tiltSpread = tilts.length >= 2 ? Math.max(...tilts) - Math.min(...tilts) : 0;
+    if (azSpread > 45 || tiltSpread > 15) {
+      return { skip: 'multi_plane_detailed', azSpread: Math.round(azSpread), tiltSpread };
+    }
+  }
+  if (strings.length > 0) {
+    const largest = strings.reduce((a, b) => (Number(b.kwp) > Number(a.kwp) ? b : a));
+    if (Number.isFinite(Number(largest.tiltDeg))) dec = Number(largest.tiltDeg);
+    if (Number.isFinite(Number(largest.azimuthDeg))) dvhubAz = Number(largest.azimuthDeg);
+  }
+  // Forecast.Solar uses different azimuth convention: -180=N, -90=E, 0=S, 90=W
+  // DVhub uses: 0=N, 90=E, 180=S, 270=W
+  // Conversion: forecastSolarAz = dvhubAz - 180
+  const az = dvhubAz - 180;
+
+  return { lat, lon, dec, az, kwp };
+}
+
+/**
  * Create Forecast.Solar client.
  * @param {object} ctx - DI context { getCfg, pushLog }
  * @param {object} deps - { store }
@@ -16,84 +107,11 @@ export function createForecastSolar(ctx, { store }) {
   const MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 min between fetches (12/hour limit)
 
   /**
-   * Resolve PV system parameters from config.
-   * Falls back to existing pvPlants and location data.
-   */
-  function resolveParams() {
-    const cfg = getCfg();
-    const fc = cfg.forecast || {};
-    const pv = fc.pv || {};
-
-    // Location: forecast.location -> schedule.smallMarketAutomation.location
-    const lat = fc.location?.latitude
-      || cfg.schedule?.smallMarketAutomation?.location?.latitude;
-    const lon = fc.location?.longitude
-      || cfg.schedule?.smallMarketAutomation?.location?.longitude;
-
-    if (!lat || !lon) return null;
-
-    // kWp: forecast.pv.totalKwp -> sum of pvPlants, plus PV am zweiten Sungrow-WR (Punkt 5)
-    let kwp = pv.totalKwp;
-    if (!kwp && Array.isArray(cfg.userEnergyPricing?.pvPlants)) {
-      kwp = cfg.userEnergyPricing.pvPlants.reduce((sum, p) => sum + (p.kwp || 0), 0);
-    }
-    kwp = effectivePvKwp(cfg, kwp);
-    if (!kwp) return null;
-
-    // Neigung (dec) und Ausrichtung (dvhubAz) der abgefragten Fläche.
-    // M13 (Feld 16.11.): Im Detail-Modus gibt es keine pv.tiltDeg/azimuthDeg — früher fiel die
-    // Abfrage auf 35°/180° (Süd) zurück, obwohl z. B. String 2 nach NNO zeigt.
-    //
-    // M13b: Die Forecast.Solar-GRATIS-API kennt nur EINE Fläche je Abfrage (Pfad
-    // /estimate/{lat}/{lon}/{dec}/{az}/{kwp}); echte Multi-Flächen gibt es erst im
-    // bezahlten JSON-Tarif. Ein einzelner Ebenen-Abruf für eine real GESPREIZTE
-    // Anlage (z. B. String 1 216° SW, String 2 25° NNO) ist systematisch falsch:
-    // Nimmt man die Geometrie des größten Strings mit der GESAMT-kWp, überschätzt
-    // man den abgewandten String kräftig. Da Forecast.Solar nur ein Ensemble-Member
-    // ist, ist der robuste Weg, es bei einer gespreizten Detail-Anlage GANZ aus dem
-    // Ensemble zu nehmen (kein Fetch, kein Store-Write → effektiv Gewicht 0), statt
-    // eine verzerrte Prognose einzuspeisen. Koplanare Detail-Strings (ein Dach) und
-    // Single-String/Simple/Standard laufen wie bisher weiter.
-    let dec = pv.tiltDeg ?? 35;
-    let dvhubAz = pv.azimuthDeg ?? 180;
-    const strings = (pv.configLevel === 'detailed' && Array.isArray(pv.strings))
-      ? pv.strings.filter(s => Number(s?.kwp) > 0)
-      : [];
-    if (strings.length >= 2) {
-      // Gespreizt? Azimut-Spanne (zyklisch, 0–180°) oder Neigungsspanne prüfen.
-      const azs = strings.map(s => Number(s.azimuthDeg)).filter(Number.isFinite);
-      const tilts = strings.map(s => Number(s.tiltDeg)).filter(Number.isFinite);
-      let azSpread = 0;
-      for (let i = 0; i < azs.length; i++) {
-        for (let j = i + 1; j < azs.length; j++) {
-          const d = Math.abs(azs[i] - azs[j]) % 360;
-          azSpread = Math.max(azSpread, d > 180 ? 360 - d : d);
-        }
-      }
-      const tiltSpread = tilts.length >= 2 ? Math.max(...tilts) - Math.min(...tilts) : 0;
-      if (azSpread > 45 || tiltSpread > 15) {
-        return { skip: 'multi_plane_detailed', azSpread: Math.round(azSpread), tiltSpread };
-      }
-    }
-    if (strings.length > 0) {
-      const largest = strings.reduce((a, b) => (Number(b.kwp) > Number(a.kwp) ? b : a));
-      if (Number.isFinite(Number(largest.tiltDeg))) dec = Number(largest.tiltDeg);
-      if (Number.isFinite(Number(largest.azimuthDeg))) dvhubAz = Number(largest.azimuthDeg);
-    }
-    // Forecast.Solar uses different azimuth convention: -180=N, -90=E, 0=S, 90=W
-    // DVhub uses: 0=N, 90=E, 180=S, 270=W
-    // Conversion: forecastSolarAz = dvhubAz - 180
-    const az = dvhubAz - 180;
-
-    return { lat, lon, dec, az, kwp };
-  }
-
-  /**
    * Fetch PV forecast from Forecast.Solar API.
    * Returns array of { ts_utc, power_w } for the next ~48h.
    */
   async function fetchForecast() {
-    const params = resolveParams();
+    const params = resolveForecastSolarParams(getCfg());
     if (!params) {
       pushLog('forecast_solar_skip', { reason: 'missing_params' });
       return null;

@@ -60,6 +60,44 @@ test('M9: echter System-SoC groß + gemeldeter klein, Grid-Setpoint aus EMS-Targ
   assert.match(v.maxDischarge, /20 kW/);
 });
 
+test('M24: Minimum-SoC „10 % (Gerät)", wenn der Puffer 0 ist; mit Puffer „(Gerät 10 % + Puffer 1 %)"', () => {
+  const st = (minSocPct, socFloorBufferPct) => ({
+    victron: { soc: 30, device: { minSocPctDevice: 10, maxSocPctDevice: 100 } },
+    sungrowSecond: { online: false },
+    energyBalance: { battery: { socPct: 37, minSocPct } },
+    sungrowEms: { socFloorBufferPct, decision: {} },
+  });
+  assert.equal(D.computeSungrowBatteryView(st(10, 0)).minSoc, '10 % (Gerät)');
+  assert.equal(D.computeSungrowBatteryView(st(11, 1)).minSoc, '11 % (Gerät 10 % + Puffer 1 %)');
+  // Harter Boden höher als Gerät + Puffer → das ist DVhubs Boden, nicht „Gerät + Puffer".
+  assert.equal(D.computeSungrowBatteryView(st(15, 0)).minSoc, '15 % (DVhub-Boden, Gerät 10 %)');
+});
+
+test('Codex 2c6c70d0 P2: höhere Geräte-Untergrenze des Slave zählt mit (wie in der EOS-Planung)', () => {
+  const st = (minSocPct, socFloorBufferPct, slave = { online: true, aggregate: true, minSocPctDevice: 12, maxSocPctDevice: 100, socPct: 20 }) => ({
+    victron: { soc: 30, device: { minSocPctDevice: 10, maxSocPctDevice: 100 } },
+    sungrowSecond: slave,
+    energyBalance: { battery: { socPct: 37, minSocPct } },
+    sungrowEms: { socFloorBufferPct, decision: {} },
+  });
+  assert.equal(D.computeSungrowBatteryView(st(12, 0)).minSoc, '12 % (Gerät)');
+  assert.equal(D.computeSungrowBatteryView(st(13, 1)).minSoc, '13 % (Gerät 12 % + Puffer 1 %)');
+  // Slave nicht erreichbar → zählt nicht (die Planung nimmt ihn dann auch nicht).
+  assert.equal(D.computeSungrowBatteryView(st(10, 0, { online: false })).minSoc, '10 % (Gerät)');
+});
+
+test('Codex 50deb8d3 + 4fc6e8da P2: die Kachel nimmt Geräte-Untergrenze und Puffer aus energyBalance.battery (je Status frisch)', () => {
+  // Slave meldet online + 12 %, seine Messung ist aber zu alt → die Planung lässt ihn weg, der Boden bleibt 10 %.
+  // Der EMS-Status (sungrowEms) kann bei ruhender Steuerung veraltet sein — er zählt hier nicht.
+  const status = {
+    victron: { soc: 30, device: { minSocPctDevice: 10, maxSocPctDevice: 100 } },
+    sungrowSecond: { online: true, aggregate: true, minSocPctDevice: 12, maxSocPctDevice: 100, socPct: 20 },
+    energyBalance: { battery: { socPct: 37, minSocPct: 10, deviceMinSocPct: 10, floorBufferPct: 0 } },
+    sungrowEms: { socFloorBufferPct: 3, decision: {} },
+  };
+  assert.equal(D.computeSungrowBatteryView(status).minSoc, '10 % (Gerät)');
+});
+
 test('M9: Grid-Setpoint fällt auf schedule.active, wenn kein EMS-Target; Slave offline → „Nicht erreichbar"', () => {
   const status = {
     victron: { soc: 50, device: { minSocPctDevice: 10, maxSocPctDevice: 100 } },

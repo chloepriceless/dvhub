@@ -170,7 +170,7 @@ Spalte **Zugang** in den Tabellen:
 | Methode | Pfad | Zugang | Beschreibung |
 |---|---|---|---|
 | GET | `/api/forecast` | LAN·forecast | Kombinierte Prognose: PV, Last, Preis, Sicherheit |
-| GET | `/api/price/outlook` | LAN·forecast | Preisprognose hinter den festen Börsenpreisen (Residuallast-Prognose dvhub.online, nur DE-LU): Stunden mit P10/P50/P90 in ct/kWh, Zustand `live`/`cached`/`unavailable`/`off`, Stand, „nicht verfügbar seit“, EOS-Preisschwanz des letzten Pushs (1.0.11) |
+| GET | `/api/price/outlook` | LAN·forecast | Preisprognose hinter den festen Börsenpreisen (Residuallast-Prognose dvhub.online, nur DE-LU): Stunden mit P10/P50/P90 in ct/kWh, Zustand `live`/`cached`/`unavailable`/`off`, Stand, „nicht verfügbar seit“, EOS-Preisschwanz des letzten Pushs (1.0.11); `importSlots`: Bezugspreis-Prognose je Viertelstunde `{ts, p50, p10, p90}` in ct/kWh brutto, mit dem Tarif wie für EOS gerechnet (`null`, wenn kein Bezugspreis auflösbar) |
 | POST | `/api/forecast/refresh` | Token | Prognose neu rechnen |
 | GET | `/api/forecast/nowcast-track` | LAN·forecast | pvnode-Nowcast vs. Day-Ahead vs. Ist |
 | GET | `/api/forecast/ghi-coverage` | LAN·forecast | Abdeckung gemessener Einstrahlung |
@@ -207,7 +207,7 @@ Spalte **Zugang** in den Tabellen:
 | Methode | Pfad | Zugang | Beschreibung |
 |---|---|---|---|
 | GET | `/api/schedule` | LAN·integrations | Zeitplan, Regeln, aktive Werte |
-| POST | `/api/schedule/rules` | Token | Regeln setzen |
+| POST | `/api/schedule/rules` | Token | Manuelle Regeln setzen: `{ rules, replaceDcFeedRules? }`; automatische Regeln bleiben. DC-Einspeise-Regeln (`feedExcessDcPv`) bleiben stehen, wenn keine mitkommt — mit `replaceDcFeedRules: true` ist `rules` auch für sie die vollständige Liste (leer = löschen) |
 | POST | `/api/schedule/rules/toggle` | Token | Regeln per ID ein-/ausschalten |
 | POST | `/api/schedule/config` | Token | Standardwerte setzen |
 | GET | `/api/schedule/automation/config` | LAN·integrations | Kleine Börsenautomatik lesen |

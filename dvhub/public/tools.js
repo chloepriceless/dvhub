@@ -309,9 +309,18 @@ async function loadSchedule() {
   setText('scheduleMeta', `geladen: ${fmtTs(Date.now())}`);
 }
 
+// M20 (Feld 19.11.2026): der JSON-Editor zeigt ALLE Regeln (loadSchedule) — die
+// Liste ist vollständig, auch für DC-Einspeise-Regeln (feedExcessDcPv). Ohne
+// das Kennzeichen behielt der Server die letzte DC-Regel, wenn man sie hier
+// löschte. Ein ausdrücklicher Eintrag im JSON gewinnt.
+function buildScheduleJsonSavePayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  return { replaceDcFeedRules: true, ...payload };
+}
+
 async function saveSchedule() {
   try {
-    const payload = JSON.parse(document.getElementById('scheduleJson').value || '{}');
+    const payload = buildScheduleJsonSavePayload(JSON.parse(document.getElementById('scheduleJson').value || '{}'));
     const res = await apiFetch('/api/schedule/rules', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -2153,7 +2162,8 @@ if (typeof globalThis !== 'undefined') {
     buildHistoryImportActionState,
     buildHistoryBackfillActionState,
     buildHistoryFullBackfillActionState,
-    formatHistoryImportResult
+    formatHistoryImportResult,
+    buildScheduleJsonSavePayload
   };
   globalThis.DVhubToolsUpdate = { channelRejectNotice };
 }

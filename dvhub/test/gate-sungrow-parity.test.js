@@ -144,6 +144,24 @@ const resume = (r) => setEmergencyStop(r.ctx, { on: false });
 // Rückgaben vergleichbar machen: Zeitstempel kommen aus der festen Uhr; pausedAt aus Date.now() wird geglättet.
 const plain = (v) => JSON.parse(JSON.stringify(v ?? null, (k, x) => (k === 'pausedAt' ? '<t>' : x)));
 
+// Messwerte frisch zum aktuellen Takt setzen (Feld-Nachtrag M25/M27/M28 auf main, 19.11.): Netz, Systemakku, PV, Last
+// und — im Split — Master-/Slave-Akku einzeln.
+function tel(r, { gridW, battW, loadW, pvW = 0, masterBattW = null, slaveBattW = null }) {
+  const t = r.now();
+  r.state.meter = { ok: true, updatedAt: t, grid_total_w: gridW };
+  Object.assign(r.state.victron, { batteryPowerW: battW, pvPowerW: pvW, selfConsumptionW: loadW });
+  if (masterBattW != null) r.state.victron.sungrowMasterBatteryW = masterBattW;
+  for (const f of ['batteryPowerW', 'pvPowerW', 'selfConsumptionW']) r.state.victron.fieldUpdatedAt[f] = t;
+  if (r.state.sungrowSecond) Object.assign(r.state.sungrowSecond, { updatedAt: t, ...(slaveBattW != null ? { batteryPowerW: slaveBattW } : {}) });
+}
+// Test-Knopf „Akku nicht laden" (M25) wie der echte Pfad: Lease läuft, Sperre geschrieben.
+function chargeHoldTest(r) {
+  r.state.ctrl.curtailmentTest = { active: true, mode: 'negativePrice', blockCharge: true, until: r.now() + 600000 };
+  r.state.ctrl.negativePriceActive = true;
+  r.state.ctrl._lastDvFeedIn = false;
+}
+const wireOf = (r, dev, addr) => r.t.log.filter((e) => e.startsWith(`${dev}:${addr}=`)).map((e) => Number(e.split('=')[1]));
+
 // Gewollte Verhaltensänderung (Christin 19.11., Option A): eine gescheiterte manuelle Freigabe bleibt als Absicht
 // stehen und wird wiederholt (test/sungrow-release-retry.test.js); antwortet der WR mit einer Modbus-Ausnahme, hat den
 // Wert aber übernommen, gilt der Schritt als erledigt (M14-Muster). Gegen einen Stand VOR dem 19.11.
@@ -367,6 +385,107 @@ const SCENARIOS = {
     run: async (r) => [await r.ems.applySetpoint(-6000, 'rule:abend'), await r.ems.applySetpoint(-5000, 'rule:abend')],
     // erst der Rücksetz-Stopp 0xCC (Modus 2 bleibt), dann wieder Entladen (Codex 44637c3e P2)
     wire: ['M:13050=204', 'M:13050=187'],
+  },
+
+  // --- Feld-Nachtrag auf main (19.11.2026): jeder neue Sungrow-Write läuft über das Tor (H-1) ----------------------
+  // M27: bei einer Sperre (Negativpreis/DV/Test-Knopf) KEIN Slave-Stopp mehr — beide WR entladen nach soc-balance.
+  m27_block_slave_keeps_share: {
+    rig: { split: true, masterSoc: 50, slaveSoc: 50 },
+    run: async (r) => {
+      r.state.ctrl._lastDvFeedIn = false;
+      tel(r, { gridW: 1000, battW: -500, loadW: 1500 });
+      return [await r.ems.applySetpoint(-40, 'negative_price_protection')];
+    },
+    newSide: (r) => {
+      assert.ok(wireOf(r, 'S', CMD).includes(0xbb), 'Slave entlädt mit (kein 0xCC wegen Sperre)');
+      assert.ok(!wireOf(r, 'S', CMD).includes(0xcc), 'kein Slave-Stopp');
+      assert.ok(r.events.filter((e) => e.target.device === SUNGROW_GATE_DEVICES.slave).every((e) => e.action === 'command' && e.outcome === 'ok'));
+    },
+  },
+  // M25: Test-Knopf „Akku nicht laden" — wäre Laden nötig, stehen beide auf Stopp, Modus 2 bleibt (charge_blocked).
+  m25_charge_blocked_split: {
+    rig: { split: true, masterSoc: 50, slaveSoc: 50 },
+    run: async (r) => {
+      tel(r, { gridW: 0, battW: -1000, loadW: 1000 });
+      const out = [await r.ems.applySetpoint(-40, 'default')];
+      chargeHoldTest(r);
+      r.advance(6000);
+      tel(r, { gridW: -2000, battW: 0, loadW: 1000, pvW: 3000 });
+      out.push(await r.ems.applySetpoint(-40, 'negative_price_protection'));
+      return out;
+    },
+    newSide: (r) => {
+      assert.equal(r.ems.status().decision.reason, 'charge_blocked');
+      assert.ok(!wireOf(r, 'M', CMD).includes(0xaa) && !wireOf(r, 'S', CMD).includes(0xaa), 'kein Laden');
+      assert.ok(!wireOf(r, 'M', MODE).includes(0), 'Modus 2 bleibt');
+    },
+  },
+  // M25 (Codex f0967031/85c8309c): Test-Knopf + Absicherungsfall (Messwerte veraltet) → Slave-Stopp schreiben und
+  // zurücklesen (applyDirectCommand, charge_blocked_hold), erst dann Modus 2 + Stopp am Master halten.
+  m25_charge_hold_confirmed_slave_stop: {
+    rig: { split: true, masterSoc: 50, slaveSoc: 50 },
+    run: async (r) => {
+      tel(r, { gridW: 0, battW: -1000, loadW: 1000 });
+      const out = [await r.ems.applySetpoint(-40, 'default')];
+      chargeHoldTest(r);
+      r.advance(6000);
+      tel(r, { gridW: 1000, battW: -500, loadW: 1500 });
+      out.push(await r.ems.applySetpoint(-40, 'negative_price_protection'));
+      r.advance(30000); // > telemetryMaxAgeMs: Messwerte veraltet → Absicherungsfall
+      out.push(await r.ems.applySetpoint(-40, 'negative_price_protection'));
+      return out;
+    },
+    newSide: (r) => {
+      assert.equal(wireOf(r, 'S', CMD).at(-1), 0xcc, 'Slave-Stopp geschrieben');
+      assert.equal(wireOf(r, 'M', CMD).at(-1), 0xcc, 'Master Stopp');
+      assert.ok(!wireOf(r, 'M', MODE).includes(0), 'Modus 2 bleibt (kein Rückfall in Modus 0)');
+      assert.ok(r.events.some((e) => e.target.device === SUNGROW_GATE_DEVICES.slave && e.point === 'emsCmd' && e.value.eng === 204 && e.outcome === 'ok'),
+        'der Slave-Stopp ging über das Tor');
+    },
+  },
+  // M25: während einer Sperre (DV-Abschaltung) entlädt der Einzel-WR höchstens die Netto-Last, auch bei Export-Vorgabe.
+  m25_discharge_load_only_single: {
+    rig: {},
+    run: async (r) => {
+      r.state.ctrl.forcedOff = true;
+      tel(r, { gridW: 0, battW: -500, loadW: 800 });
+      return [await r.ems.applySetpoint(-6000, 'rule:abend')];
+    },
+    newSide: (r) => {
+      assert.equal(r.ems.status().decision.reason, 'discharge_load_only');
+      assert.ok(wireOf(r, 'M', POWER).every((w) => w <= 800), 'höchstens die Netto-Last');
+    },
+  },
+  // M28: liefert der Master ~10 s nichts von seinem Anteil, übernimmt der Slave (Anteile und Probe über das Tor).
+  m28_master_stalled_slave_takes_over: {
+    rig: { split: true, masterSoc: 30, slaveSoc: 40 },
+    run: async (r) => {
+      r.cfg.sungrow.regulateEveryMs = 1000;
+      tel(r, { gridW: 552, battW: -790, loadW: 1342, masterBattW: 0, slaveBattW: -790 });
+      const out = [await r.ems.applySetpoint(-40, 'default')];
+      for (let i = 0; i < 12; i += 1) {
+        r.advance(1000);
+        tel(r, { gridW: 552, battW: -790, loadW: 1342, masterBattW: 0, slaveBattW: -790 });
+        out.push(await r.ems.tick());
+      }
+      return out;
+    },
+    newSide: (r) => {
+      const split = r.ems.status().decision.split;
+      assert.equal(split.masterOut, 'stalled');
+      assert.equal(split.takeover, 'slave');
+      assert.ok(r.logs.includes('sungrow_ems_share_stalled'));
+    },
+  },
+  // M22: der Master lehnt die Leistung ab (Ausnahme 4) — Abbruch und Modbus-Fehler-Protokoll wie über den alten Weg.
+  m22_master_rejects_power_split: {
+    rig: { split: true, wireOpts: { failWrite: { [`M:${POWER}`]: () => new Error('modbus exception 4') } } },
+    run: async (r) => [await r.ems.applySetpoint(-6000, 'rule:abend')],
+    newSide: (r) => {
+      assert.ok(r.logs.includes('sungrow_ems_split_aborted:warn'));
+      assert.ok(r.logs.includes('sungrow_modbus_error:warn'), 'Modbus-Fehler je WR im Protokoll (M22)');
+      assert.ok(r.events.some((e) => e.outcome === 'error' && e.point === 'emsPower'));
+    },
   },
 };
 

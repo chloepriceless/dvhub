@@ -1533,8 +1533,8 @@ function buildFieldDefinitions() {
       min: 0,
       max: 50,
       step: 1,
-      default: 1,
-      help: 'Abstand, den DVhub beim Entladen über der geräteeigenen SoC-Untergrenze des Wechselrichters hält. Sungrow meldet den Ladestand fensterrelativ (gemeldet 0 % = die eigene Untergrenze, z. B. 10 %). Entlädt DVhub bis genau dorthin, lädt der Wechselrichter von selbst aus dem Netz nach (Notladung). Mit dem Standard 1 % hält DVhub einen Prozentpunkt darüber (effektiver Entlade-Boden = max(harter Boden, Geräte-Untergrenze + Puffer)). 0 = kein Puffer. Gilt für beide Wechselrichter und auch für die EOS-Planung.'
+      default: 0,
+      help: 'Abstand, den DVhub beim Entladen über der geräteeigenen SoC-Untergrenze des Wechselrichters hält (effektiver Entlade-Boden = max(harter Boden, Geräte-Untergrenze + Puffer)). Der Puffer hält nur beim Entladen: Im Stillstand sinkt der Ladestand durch den Eigenverbrauch des Wechselrichters trotzdem bis zur Geräte-Untergrenze. Dort lädt der Wechselrichter von selbst aus dem Netz nach (Notladung). Standard 0 = DVhub entlädt bis zur Geräte-Untergrenze. Gilt für beide Wechselrichter und auch für die EOS-Planung.'
     },
     {
       section: 'victron',
@@ -4666,7 +4666,10 @@ function buildFieldDefinitions() {
       path: 'forecast.solcast.enabled',
       label: 'Solcast aktiv',
       type: 'boolean',
-      help: 'Aktiviert den Solcast-Dienst f\u00fcr PV-Vorhersagen. Erfordert API-Key und Site-ID.'
+      // Ohne gespeicherten Wert gilt Solcast mit API-Key + Site-ID als eingeschaltet
+      // (pv-provider-setup.js) \u2014 die Anzeige zeigt das auch so.
+      default: true,
+      help: 'Nimmt Solcast in die PV-Prognose auf. Wirkt nur mit API-Key und Site-ID (Integrationen \u2192 PV-Forecast-Provider). Aus = Solcast wird nicht abgefragt und z\u00e4hlt nicht im Ensemble.'
     },
     {
       section: 'forecast',
@@ -6670,6 +6673,23 @@ function sanitizeManufacturerId(raw, value, warnings) {
   setPath(raw, 'manufacturer', id);
 }
 
+// Christin 19.11.2026 („nicht eingerichtete PV-Dienste nicht ins Ensemble“): Der Schalter „Solcast aktiv“
+// (forecast.solcast.enabled) wirkt jetzt — die Prognose liest ihn (services/forecast/pv-provider-setup.js).
+// Bis dahin las ihn nie jemand, und das Integrationen-Fenster schrieb seit 21.05.2026 beim Speichern von
+// Key + Site-ID still `enabled: false` (es hat keinen Schalter). Solche Anlagen liefen trotzdem mit Solcast.
+// Damit sie nach dem Update nicht still ohne Solcast dastehen, einmal auf den bisher WIRKSAMEN Stand heben:
+// Key + Site-ID + false → true. Die Marke enabledHonored sorgt dafür, dass ein danach bewusst gesetztes
+// „aus“ nicht erneut umgestellt wird (sie wandert mit jedem Speichern mit). Ohne Key/Site-ID bleibt der
+// Wert, wie er ist — Solcast ist dann ohnehin nicht eingerichtet.
+function migrateSolcastEnabled(raw) {
+  const sc = raw?.forecast?.solcast;
+  if (!isPlainObject(sc) || sc.enabledHonored === true) return;
+  const hasKey = typeof sc.apiKey === 'string' && sc.apiKey.trim() !== '';
+  const hasSite = typeof sc.siteId === 'string' && sc.siteId.trim() !== '';
+  if (hasKey && hasSite && (sc.enabled === false || sc.enabled === 'false')) sc.enabled = true;
+  sc.enabledHonored = true;
+}
+
 function sanitizeRawConfig(rawInput) {
   const raw = isPlainObject(rawInput) ? clone(rawInput) : {};
   const warnings = [];
@@ -6679,6 +6699,7 @@ function sanitizeRawConfig(rawInput) {
   migrateLegacyPriceApiUrl(raw);
   migrateEvWeeklyPlan(raw);
   migratePvTotalKwp(raw);
+  migrateSolcastEnabled(raw);
   // Sweep package 6: shape-level schema checks run FIRST, on the raw parsed
   // config — before the FIELD_DEFINITIONS coercion pass below, which would
   // otherwise silently string-coerce a wrong-typed scalar (e.g. a numeric

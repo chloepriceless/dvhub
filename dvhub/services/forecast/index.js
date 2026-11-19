@@ -23,6 +23,7 @@ import { createVrmForecast } from './vrm-forecast.js';
 import { createOpenMeteoSolar } from './open-meteo-solar.js';
 import { createPvnodeClient } from './pvnode-client.js';
 import { createPvForecast } from './pv-forecast.js';
+import { planPvProviders } from './pv-provider-setup.js';
 import { createLoadForecast } from './load-forecast.js';
 import { createAccuracyTracker } from './accuracy-tracker.js';
 import { createPythonBridge, pythonEnvStatus, readProvisionStatus } from '../python-bridge/index.js';
@@ -531,6 +532,9 @@ export function createForecastService(ctx) {
     // T-CURTAIL: manual trigger + diagnostics for the observed-GHI backfill.
     runGhiBackfill: runOpportunisticGhiBackfill,
     buildForecastResponse,
+    // Christin 19.11.2026: welche PV-Prognosedienste eingerichtet sind und abgerufen werden —
+    // dieselbe Regel wie im Prognose-Lauf, für die Anzeige (inspector.js getPvProviders).
+    pvProviderPlan: () => planPvProviders(getCfg(), { pvlibAvailable: Boolean(pythonBridge) }),
     loadForecast,
     get forecastVersion() { return forecastVersion; }
   };

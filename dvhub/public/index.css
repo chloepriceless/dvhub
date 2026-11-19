@@ -133,23 +133,30 @@
 
 /* ─── Rail cards ─── */
 .rail-card { padding:14px; display:flex; flex-direction:column; gap:6px; }
+/* M19 (Feld 19.11.2026): bei 300 px Kachelbreite schob der einzeilige Titel
+   „Netzanschluss · Bezugsgrenze“ (nowrap, min-width:auto) das Badge „Bereit“ 23 px
+   über den Rand, „Peak Shaving · Bezugsgrenze“ ebenso. Jetzt darf der Titel
+   schrumpfen und umbrechen; das Badge schrumpft nie und bleibt in der Kachel. */
 .rail-card-head {
   display:flex; align-items:center; justify-content:space-between;
+  gap:8px;
   margin-bottom:4px;
 }
 .rail-card-head .ttl {
   font-family:var(--f-mono); font-size:10.5px; letter-spacing:.18em;
   text-transform:uppercase; color:var(--text-2);
   display:inline-flex; align-items:center; gap:8px;
-  white-space:nowrap;
+  min-width:0;
+  white-space:normal;
 }
+.rail-card-head > .chip { flex:0 0 auto; white-space:nowrap; }
 /* Kann-3: Untertitel der Akku-Kachel (z. B. „Master + Slave") — klein, gedämpft, unter dem Kopf. */
 .rail-card-sub {
   font-family:var(--f-mono); font-size:10px; letter-spacing:.14em;
   text-transform:uppercase; color:var(--text-2); opacity:.8;
   margin:-2px 0 6px 14px;
 }
-.rail-card-head .ttl .dot { width:6px; height:6px; border-radius:50%; box-shadow:0 0 6px currentColor; }
+.rail-card-head .ttl .dot { flex:0 0 auto; width:6px; height:6px; border-radius:50%; box-shadow:0 0 6px currentColor; }
 .rail-card-head .dot-pv { background:var(--yellow); color:var(--yellow); }
 .rail-card-head .dot-bat { background:var(--green); color:var(--green); }
 .rail-card-head .dot-dv { background:var(--cyan); color:var(--cyan); }
@@ -1361,6 +1368,11 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .fp-peak { font-size:13px; font-weight:700; color:var(--yellow); }
 .fp-energy { font-size:13px; font-weight:700; color:var(--cyan); }
 .fp-age  { font-size:11px; color:var(--text-dim); min-width:78px; text-align:right; }
+/* Stand je Dienst (19.11.2026): „im Ensemble · Gewicht 31 %“ bzw. warum nicht — zweite Zeile unter dem Namen. */
+.fp-note { display:block; font-size:11px; font-weight:400; color:var(--text-dim); line-height:1.3; margin-top:1px; }
+.fp-row.is-out .fp-name { color:var(--text-dim); }
+.fp-row.is-out .fp-peak,
+.fp-row.is-out .fp-energy { color:var(--text-dim); font-weight:600; }
 /* Spalten-Kopf (Provider · Tages-Peak · Energie · aktualisiert) — klein/dimm/uppercase. */
 .fp-row.fp-head { padding-top:0; padding-bottom:4px; }
 .fp-row.fp-head .fp-name,

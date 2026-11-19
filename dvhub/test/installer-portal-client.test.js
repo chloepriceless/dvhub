@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, buildControlsSummary, SIDECAR_NAME, RELEASE_PENDING_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
+import { createInstallerPortalClient, isAllowedPortalUrl, buildCompactStatus, redactPortalResult, buildControlsSummary, SIDECAR_NAME, RELEASE_PENDING_NAME, buildLicenseInfo, nextReportDay } from '../services/installer-portal-client.js';
 
 function tmpDir(withApplianceId = true) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-ipc-'));
@@ -231,6 +231,50 @@ test('buildCompactStatus extrahiert die Portal-Felder aus dem Runtime-Snapshot',
   assert.equal(s.version, 'v1.0.6');
   assert.equal(s.alarmsActive, 0);   // alarms: null → konfiguriert=false
   assert.equal(s.emergencyStop, false);
+});
+
+// Portal 19.11.: „Netz-Sollwert –“ bei Sungrow und DVhub-MQTT — beide melden keinen Sollwert zurück
+// (victron.gridSetpointW null). Dann den Wert zeigen, den DVhub zuletzt gesendet hat, und die Quelle mitgeben.
+test('buildCompactStatus: ohne Rückmeldung vom Gerät der zuletzt gesendete Netz-Sollwert/Min-SoC (Quelle dvhub)', () => {
+  const dir = tmpDir();
+  const ctx = ctxFor(dir);
+  ctx.getCachedRuntimeStatusPayload = () => ({
+    victron: { soc: 8, gridSetpointW: null, minSocPct: null, alarms: null },
+    schedule: { lastWrite: { gridSetpointW: { value: -40, source: 'default', at: 1 }, minSocPct: { value: 12, at: 1 } } },
+  });
+  const s = buildCompactStatus(ctx, Date.now());
+  assert.equal(s.gridSetpointW, -40);
+  assert.equal(s.gridSetpointSource, 'dvhub');
+  assert.equal(s.minSocPct, 12);
+  assert.equal(s.minSocSource, 'dvhub');
+});
+
+test('buildCompactStatus: Rückmeldung vom Gerät hat Vorrang; ohne beides bleibt es null', () => {
+  const dir = tmpDir();
+  const ctx = ctxFor(dir);
+  ctx.getCachedRuntimeStatusPayload = () => ({
+    victron: { gridSetpointW: 50, minSocPct: 20, alarms: null },
+    schedule: { lastWrite: { gridSetpointW: { value: -40 }, minSocPct: { value: 12 } } },
+  });
+  let s = buildCompactStatus(ctx, Date.now());
+  assert.equal(s.gridSetpointW, 50);
+  assert.equal(s.gridSetpointSource, 'device');
+  assert.equal(s.minSocPct, 20);
+  assert.equal(s.minSocSource, 'device');
+  ctx.getCachedRuntimeStatusPayload = () => ({ victron: { alarms: null }, schedule: { lastWrite: { gridSetpointW: null } } });
+  s = buildCompactStatus(ctx, Date.now());
+  assert.equal(s.gridSetpointW, null);
+  assert.equal(s.gridSetpointSource, null);
+  assert.equal(s.minSocPct, null);
+  assert.equal(s.minSocSource, null);
+});
+
+// Portal 19.11.: Befehls-Ergebnisse (Fern-Support-Status) trugen das UI-Token der Box ins Portal.
+test('redactPortalResult entfernt uiToken (auch verschachtelt), sonst unverändert', () => {
+  const r = redactPortalResult({ ok: true, uiToken: 'a', status: { open: true, uiToken: 'b', list: [{ uiToken: 'c', x: 1 }] } });
+  assert.deepEqual(r, { ok: true, status: { open: true, list: [{ x: 1 }] } });
+  assert.equal(redactPortalResult(null), null);
+  assert.equal(redactPortalResult('text'), 'text');
 });
 
 test('Steuerungen fürs Portal: DV, §51, Einspeisegrenze, §14a, EEBUS', () => {
