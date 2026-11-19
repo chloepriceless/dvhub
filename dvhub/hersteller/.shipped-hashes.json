@@ -3,7 +3,8 @@
   "profiles": {
     "alphaess-smile.json": [
       "7837ca260171f8965d31ccaac164204466931b2bb647e295ce9812a7a8eddfaf",
-      "a047e4be49651badaf12d67e2d26aaed7bdaa031b20aadc8c7382ac2f8583aa3"
+      "a047e4be49651badaf12d67e2d26aaed7bdaa031b20aadc8c7382ac2f8583aa3",
+      "e3446bb7f73a79c3d6ee146b0c62c87254b46c960caac82b08ff493dd3f71ada"
     ],
     "bridge-mqtt.json": [
       "078d400de35611006542e5b39f6266d99ec61a98fc895d93e9b1d88f8a945fdb",
@@ -85,7 +86,8 @@
     ],
     "solis.json": [
       "4fc5c08cce3316601491238ec3a9e1cb60361ec359811c8726729218bce2a879",
-      "c3815b78408100774f29953d59c06ff5004ce290df2ae1441daacec00d6cb2d4"
+      "c3815b78408100774f29953d59c06ff5004ce290df2ae1441daacec00d6cb2d4",
+      "5ededac5927b924f16eb4e8680c5da5a0ca8f52c7285cce4537f9f8de7dc0714"
     ],
     "sungrow.json": [
       "9ce31565d9a361ca42455be224a4d91f48860c05a0a76b48c1ee56e6a425d255",

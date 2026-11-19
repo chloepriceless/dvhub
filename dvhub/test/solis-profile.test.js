@@ -195,3 +195,14 @@ test('E7: 400 ms ab Antwortende zwischen zwei Anfragen, höchstens 50 Register j
     disableFakeClock();
   }
 });
+
+// E12: Seit es RTU-Rahmen gibt, stimmt „transparente RTU-Gateways gehen nicht“ nicht mehr. Das ausgelieferte Profil
+// bleibt Modbus TCP; _doc nennt den Weg für ein Gateway im Durchreiche-Modus, Solarman V5 geht weiter nicht.
+test('E12: _doc nennt den Durchreiche-Modus mit victron.framing, das Profil selbst bleibt Modbus TCP', () => {
+  const raw = shippedProfile(ID);
+  const doc = raw._doc.join('\n');
+  assert.equal(raw.victron.framing, undefined);
+  assert.doesNotMatch(doc, /transparente RTU-Gateways gehen nicht/);
+  assert.match(doc, /"framing": "rtu-over-tcp"/);
+  assert.match(doc, /Solarman-V5 geht nicht/);
+});

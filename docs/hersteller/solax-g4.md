@@ -19,12 +19,16 @@ den Wechselrichter. Die Abregelung bleibt aus, auch wenn „Aktive Anlagensteuer
 
 ## Anschluss
 
-- Der Wechselrichter spricht Modbus RTU (RS485 am COM-Port). DVhub braucht Modbus TCP, dafür gibt es zwei Wege:
+- Der Wechselrichter spricht Modbus RTU (RS485 am COM-Port). Empfohlen sind zwei Wege mit Modbus TCP:
   - **RS485-Ethernet-Gateway** (z. B. Waveshare) im Modus **Modbus TCP**, nicht transparent. Baudrate am Gateway
     wie am Wechselrichter (je Firmware 9600 bis 115200, oft 19200 bei G4), 8N1. Bei X3-Hybrid G4 laut Community
     Pin 4 = A, Pin 5 = B.
   - **PocketWiFi 3.0 ab Firmware V3.004.03**, Port 502. Ältere PocketWiFi/PocketLAN können es nicht; neuere
     Dongle-Firmware sperrt den lokalen Zugang teils wieder.
+- Ein RS485-Gateway im **Durchreiche-Modus** (transparent, „RTU over TCP“) geht seit E12: im Profil
+  (`/etc/dvhub/hersteller/solax-g4.json`) unter `victron` `"framing": "rtu-over-tcp"` und `"port"` = Port des Gateways
+  ergänzen. Dann darf nur DVhub am Gateway fragen (keine zweite Verbindung, kein zweiter Master am Bus). Am Gerät
+  ungeprüft; Einzelheiten in `docs/HERSTELLERPROFIL-MIGRIEREN.md` §6.
 - Unit-ID **1** (Feldberichte nennen auch 15). Anlagenadresse in DVhub = IP des Gateways bzw. des PocketWiFi.
 - Modbus muss am Wechselrichter eingeschaltet sein (Installateur-Menü). Zum Lesen ist das Entsperren über Register
   0x00 nicht nötig; DVhub schreibt es nicht.
@@ -62,7 +66,7 @@ evcc [solax.yaml](https://github.com/evcc-io/evcc/blob/master/templates/definiti
 | Zweiter Akku-Stapel (0x129/0x12D) | zweiter Akku fehlt | eigener Punkt bzw. `combine` |
 | Netz je Phase | Phasenwerte bleiben leer; 0x70–0x75 sind WR-Werte, nicht der Zähler | — |
 | Gerätekennung/Generation | DVhub prüft nicht, ob ein G4 antwortet | Kennungsprobe (E10) |
-| RS485 direkt / transparentes Gateway | geht nicht, nur Modbus TCP | RTU-over-TCP (E12) |
+| RS485 direkt (serielle Schnittstelle am DVhub-Gerät) | geht nicht, nur über ein Gateway | — |
 
 ## Am Gerät prüfen (Feldtest)
 

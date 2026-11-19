@@ -71,7 +71,7 @@ import {
   mergeLoadedScheduleRules
 } from './schedule-runtime.js';
 import { createHistoryImportManager, sleepMs } from './history-import.js';
-import { createModbusTransport, modbusPacingFromConfig } from './transport-modbus.js';
+import { createModbusTransport, modbusPacingFromConfig, modbusFramingFromConfig } from './transport-modbus.js';
 import { createMqttTransport } from './transport-mqtt.js';
 import { discoverSystems as discoverConfiguredSystems } from './system-discovery.js';
 import {
@@ -472,7 +472,10 @@ const transport = cfg.victron?.transport === 'mqtt'
     })
   // E7: Anfrage-Taktung des Herstellerprofils (victron.requestPacing) nur für die Anlagen-Verbindung
   // victron.host:victron.port; ohne Angabe im Profil (alle Stable-Profile) keine Taktung.
-  : createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs, pacingFor: modbusPacingFromConfig(() => cfg) });
+  // E12: ebenso der Rahmen (victron.framing "rtu-over-tcp" = transparentes RS485-Gateway); ohne Angabe Modbus TCP.
+  // NUR dieser Transport: eine zweite Verbindung zum selben transparenten Gateway (Scan, Sungrow-Slave, zweite GX)
+  // bekäme dessen serielle Bytes ebenfalls — deshalb sprechen die anderen Pools immer Modbus TCP.
+  : createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs, pacingFor: modbusPacingFromConfig(() => cfg), framingFor: modbusFramingFromConfig(() => cfg) });
 
 // Separate Modbus-Instanz für Scan-Tool (funktioniert immer über Modbus)
 const scanTransport = createModbusTransport({ connectTimeoutMs: cfg.victron?.modbusConnectTimeoutMs });

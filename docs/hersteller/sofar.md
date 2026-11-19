@@ -17,9 +17,13 @@ HYD 5…20K-3PH, HYD 3…6K-EP, HYD-KTL-3PH/-PRO.
 ## Anschluss
 
 - Am Wechselrichter: RS485, 9600 8N1, Slave-ID 1.
-- DVhub spricht nur Modbus TCP: **RS485-Ethernet-Gateway** (z. B. Waveshare RS485 TO ETH) im Modus **Modbus TCP**,
+- Empfohlen: **RS485-Ethernet-Gateway** (z. B. Waveshare RS485 TO ETH) im Modus **Modbus TCP**,
   Port 502. In DVhub ist die Anlagenadresse die IP des Gateways.
 - Ein Solarman-WLAN-Stick (V5-Protokoll) geht nicht. Laut Community sperrt er teils auch Funktionscodes.
+- Ein RS485-Gateway im **Durchreiche-Modus** (transparent, „RTU over TCP“) geht seit E12: im Profil
+  (`/etc/dvhub/hersteller/sofar.json`) unter `victron` `"framing": "rtu-over-tcp"` und `"port"` = Port des Gateways
+  ergänzen. Dann darf nur DVhub am Gateway fragen (keine zweite Verbindung, kein zweiter Master am Bus). Am Gerät
+  ungeprüft; Einzelheiten in `docs/HERSTELLERPROFIL-MIGRIEREN.md` §6.
 - Lesen mit Funktionscode 3, alle Werte 16 bit.
 
 ## Was gelesen wird
@@ -58,7 +62,7 @@ Hinweise:
 | Akku 2 ff. (0x060D ff.) bzw. Akku gesamt 0x0667/0x0668 | bei mehreren Akku-Eingängen fehlen die weiteren in Leistung und SoC | Gerätetest, dann ggf. 0x0667/0x0668 |
 | Kartenerkennung / Adressmasken | DVhub prüft nicht, ob die Karte „General“ antwortet | Kennungsprobe (E10) |
 | Legacy-Karte (ME3000SP, HYD-ES) | nicht unterstützt | eigenes Profil, ggf. FC 0x42 |
-| Solarman-V5 / transparentes Gateway | geht nicht | Transport (E12) |
+| Solarman-V5 | geht nicht | eigener Transport (Solarman V5) |
 
 ## Am Gerät prüfen (Feldtest)
 
