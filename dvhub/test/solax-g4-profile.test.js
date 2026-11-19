@@ -43,6 +43,16 @@ test('solax-g4.json: Nur-Lese-Profil, Beta, Label und Hilfetext sagen es offen',
   assert.equal(raw.identify, undefined, 'keine Geräteerkennung (E10 fehlt) — nichts vortäuschen');
 });
 
+// E8 gibt es, das Profil schaltet es bewusst NICHT ein: keine Integration nutzt BDCStatus 0x19, und ob 0x19 im
+// Ruhezustand weitere Werte meldet, ist unbelegt — ein unbekannter Wert ließe Akku und Hauslast leer.
+test('E8: Akku ohne Richtungsregister (0x16 vorzeichenbehaftet wie evcc); _doc nennt den Weg über 0x19', () => {
+  const raw = readShippedProfile(ID);
+  assert.equal(raw.points.batteryPowerW.direction, undefined);
+  assert.equal(raw.points.batteryPowerW.signed, true);
+  assert.match(raw._doc.join('\n'), /BDCStatus 0x19.*bewusst nicht/s);
+  assert.doesNotMatch(raw._doc.join('\n'), /nicht aus einem Statusregister/);
+});
+
 test('Laden: gültig, Modbus TCP 502, Unit 1, Zähler als int32-Punkt 0x46 (FC 4, Low-Wort zuerst) ohne fremde Phasen', () => {
   const loaded = loadProfile(ID);
   assert.equal(loaded.valid, true);

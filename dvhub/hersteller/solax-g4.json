@@ -21,9 +21,11 @@
     "Modbus-Verbindung: eine zweite (Home Assistant, evcc) stört DVhub.",
     "",
     "Bewusst NICHT gelesen bzw. nicht abbildbar:",
-    "- Richtungs-Flag BDCStatus 0x19 (0 = Entladen, 1 = Laden): DVhub kann ein Vorzeichen nicht aus einem Statusregister",
-    "  nehmen (E8). Gelesen wird 0x16 als vorzeichenbehafteter Wert (so liest evcc); liefert ein Gerät nur Beträge,",
-    "  zeigt DVhub Entladen als Laden.",
+    "- Richtungs-Flag BDCStatus 0x19 (0 = Entladen, 1 = Laden) [SPEC]: DVhub könnte das Vorzeichen daraus nehmen (E8,",
+    "  direction), das Profil tut es bewusst nicht. Keine Integration nutzt 0x19 (evcc liest 0x16 vorzeichenbehaftet), und",
+    "  ob 0x19 im Ruhezustand weitere Werte meldet, ist unbelegt — ein unbekannter Wert ließe Akku und Hauslast leer.",
+    "  Gelesen wird 0x16 als vorzeichenbehafteter Wert; zeigt ein Gerät Entladen als Laden (nur Beträge), am Punkt",
+    "  batteryPowerW \"direction\": { \"address\": 25, \"values\": { \"0\": -1, \"1\": 1 } } ergänzen und melden.",
     "- PV3 0x124 (3-MPPT-Geräte): auf 2-MPPT-Geräten nicht belegt, ein Lesefehler legte die PV lahm; ließe sich per",
     "  combine nachtragen.",
     "- Zweiter Akku-Stapel (0x129/0x12D), Netz je Phase: nicht gelesen.",
@@ -63,7 +65,7 @@
       "notAvailableRaw": [65535]
     },
     "batteryPowerW": {
-      "_comment": "Akku 1, Input-Register 0x16 = 22 „Batpower_Charge1“ (int16, 1 W) [SPEC], [DECOMP]. UNSICHER (am Gerät prüfen): Vorzeichen; die Spec nennt die Richtung nur über BDCStatus 0x19 (E8 fehlt). Annahme Rohwert + = Laden — evcc liest 0x16 als int16 mit scale −1 bei evcc-Konvention + = Entladen [COMM]; der Name „Charge“ passt dazu. Das ist DVhubs Konvention, daher kein sign. Zeigt DVhub beim Laden einen negativen Wert, gehört sign −1 dazu; zeigt es beim Entladen einen positiven, liefert das Gerät nur Beträge (dann bitte melden). 0x7FFF/0x8000 (±32 767 W) als „kein Wert“ defensiv [ANN].",
+      "_comment": "Akku 1, Input-Register 0x16 = 22 „Batpower_Charge1“ (int16, 1 W) [SPEC], [DECOMP]. UNSICHER (am Gerät prüfen): Vorzeichen; die Spec nennt die Richtung nur über BDCStatus 0x19 (E8 könnte sie nehmen, bewusst aus, siehe _doc). Annahme Rohwert + = Laden — evcc liest 0x16 als int16 mit scale −1 bei evcc-Konvention + = Entladen [COMM]; der Name „Charge“ passt dazu. Das ist DVhubs Konvention, daher kein sign. Zeigt DVhub beim Laden einen negativen Wert, gehört sign −1 dazu; zeigt es beim Entladen einen positiven, liefert das Gerät nur Beträge (dann bitte melden). 0x7FFF/0x8000 (±32 767 W) als „kein Wert“ defensiv [ANN].",
       "enabled": true,
       "fc": 4,
       "address": 22,

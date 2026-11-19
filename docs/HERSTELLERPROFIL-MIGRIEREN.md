@@ -74,8 +74,9 @@ Beim nächsten Update, das das Profil erneut ändert, wird sie bei Bedarf neu er
 ## 6. Lese-Schlüssel für neue Hersteller (Profil-Referenz)
 
 Seit der Lese-Engine (November 2026) kann ein Profil Netz, PV, Akku, SoC, Hauslast und Gerätegrenzen auch dann
-lesen, wenn das Gerät sie nicht so ablegt wie Victron. Die Schlüssel stehen in `meter` und in `points.<name>`. Die
-mitgelieferten Profile nutzen sie nicht; sie verhalten sich unverändert. Für ein reines Lese-Profil gehört zusätzlich
+lesen, wenn das Gerät sie nicht so ablegt wie Victron. Die Schlüssel stehen in `meter` und in `points.<name>`, die
+Verbindungs-Schlüssel (Taktung, Kennungsprobe) unter `victron`. Genutzt werden sie von den Nur-Lese-Profilen der neuen
+Hersteller; Victron, Fronius, Sungrow, Deye LV und die MQTT-Profile nutzen sie nicht und verhalten sich unverändert. Für ein reines Lese-Profil gehört zusätzlich
 `"readOnly": true` auf die oberste Ebene (keine Schreibziele, keine Abregelung).
 
 Vorzeichen in DVhub: **Netz + = Bezug**, **Akku + = Laden**. Meldet ein Gerät es andersherum, dreht `sign: -1` den
@@ -113,6 +114,22 @@ Wert“, ist die Summe unbekannt. Akku = Laden − Entladen:
 ```json
 "batteryPowerW": { "enabled": true, "fc": 3, "unitId": 3, "readType": "uint32",
   "combine": [{ "address": 31393 }, { "address": 31395, "sign": -1 }] }
+```
+
+**`direction` — Vorzeichen aus einem Richtungsregister** (Punkte, `combine`-Einträge, Zähler mit `layout: "point"`).
+Für Geräte, die die Richtung in einem eigenen Statusregister melden (Solis 33135, SolaX 0x19). `values` ordnet jedem
+Rohwert des Richtungsregisters (U16, gleiche Verbindung und gleicher Funktionscode wie der Punkt) `1` oder `-1` zu.
+Wert = **Betrag** des Punkts (nach Skala, Skalenfaktor, Offset) × Faktor der gemeldeten Richtung — richtig, ob das
+Gerät einen Betrag oder schon einen vorzeichenbehafteten Wert liefert. Meldet das Richtungsregister einen Wert, der
+nicht in `values` steht, bleibt der Punkt leer und der Grund steht im Lesefehler (kein gehaltener Altwert, kein
+geratenes Vorzeichen). `sign` daneben ist ein Fehler. Liegen Wert und Richtung höchstens 16 Register auseinander,
+kommen beide aus einer Anfrage; sonst (oder wenn das Gerät den Block abweist bzw. er über `maxRegistersPerRequest`
+liegt) liest DVhub die Richtung vor und nach dem Wert und nimmt nur ein Paar mit gleicher Richtung. Zähler-Phasen
+erben `direction` nicht; feste Zählerwege (3×s16, `int32`, `float32`) lehnen es ab. Akku, 0 = Laden, 1 = Entladen:
+
+```json
+"batteryPowerW": { "enabled": true, "fc": 4, "address": 33149, "quantity": 2, "readType": "int32",
+  "direction": { "address": 33135, "values": { "0": 1, "1": -1 } } }
 ```
 
 **`split` — 32-bit-Wert aus zwei getrennten Registern** (Low- und High-Wort nicht benachbart). Braucht `readType`
@@ -229,6 +246,30 @@ Skalenfaktoren und `sunspec` gibt es im Block nicht:
 ```json
 "meter": { "layout": "point", "fc": 3, "readType": "int32", "combineBlock": true,
   "combine": [{ "address": 30865 }, { "address": 30867, "sign": -1 }] }
+```
+
+**`victron.identityProbe` — Kennungsprobe (E10).** Prüft, ob an der Anlagen-Verbindung das Gerät antwortet, für das
+die Registerkarte gilt (richtiges Gerät, richtige Betriebsart oder Einstellung). Nur Lesen und Anzeigen: Schreibwege
+und Schreibtor sehen das Ergebnis nicht. DVhub liest die Prüfungen vor dem ersten Wert und danach alle `everyMs`
+(Standard 600 000 = 10 min, 60 000…86 400 000), nach „passt nicht“ oder „nicht lesbar“ alle 60 s, nach einer Änderung
+von Adresse oder Block sofort.
+
+| Schlüssel | Bedeutung |
+|---|---|
+| `checks` | 1–8 Prüfungen, jede mit `fc` (3 oder 4), `address`, optional `unitId` (sonst die der Anlage) und `label`, und genau einer Bedingung: `equals` (Liste erlaubter Werte), `range` (`[min, max]`, einschließlich) oder `prefix` (Text am Anfang; `quantity` = Register des Texts, 2 Zeichen je Register). Zahlen: u16, mit `signed` s16, mit `readType` `uint32`/`int32` (+ `wordOrder`) |
+| `hideOnMismatch` | Werte, deren Registerlage oder Kodierung von Gerät oder Einstellung abhängt: Punktnamen und `"meter"`. Passt die Kennung nicht, liest DVhub sie nicht und zeigt sie leer statt falsch (Grund im Lesefehler, beim Zähler `meter.ok=false` ohne Backoff). Fehlt die Liste, gibt es nur den Hinweis |
+| `everyMs` | Abstand der Nachprüfung, solange die Kennung passt |
+
+Ergebnis: `ok` (bestanden), `mismatch` (passt nicht), `unreadable` (nicht lesbar, Werte ungeprüft angezeigt) oder
+`invalid` (Block im Profil fehlerhaft, Werte ungeprüft angezeigt). Es steht im Status (`identityProbe`), jedes
+Ergebnis außer `ok` zusätzlich als Hinweis im Leitstand und einmal je Wechsel im Log (`identity_probe_<status>`).
+Ein nicht lesbarer Nachtest ändert ein festgestelltes `ok` oder `mismatch` nicht. E3/DC im Simple-Mode:
+
+```json
+"victron": { "transport": "modbus", "port": 502, "unitId": 1,
+  "identityProbe": {
+    "checks": [{ "label": "E3/DC-Kennung", "fc": 3, "address": 40000, "equals": [58332] }],
+    "hideOnMismatch": ["meter", "pvPowerW", "batteryPowerW", "soc"] } }
 ```
 
 **Victron-Schlüssel.** `acPvSource`, `acPvSource2` (AC-PV-Register 808–816) und „PV-Anbindung“ (`pvCoupling`)

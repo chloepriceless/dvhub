@@ -48,17 +48,17 @@ Summe 33263 und den Phasen; evcc und Plexlog lesen die Summe dort. Das Profil ni
 Firmware vorhanden ist, und liest die Phasen aus dem neuen Block. Fehlt der Block, bleiben L1–L3 leer und die Summe
 gilt.
 
-**Akku-Vorzeichen (strittig):** Die Herstellerdoku sagt „Vorzeichen mit 33135“ (0 = Laden, 1 = Entladen). evcc liest
-33149 trotzdem als vorzeichenbehafteten Wert (Laden positiv). solis-modbus und Plexlog nehmen das Vorzeichen aus 33135.
-DVhub kann ein Richtungsregister nicht anwenden (E8). Das Profil folgt evcc. Liefert das Gerät nur den Betrag, zeigt
-DVhub das Entladen als Laden.
+**Akku-Vorzeichen aus 33135:** Die Herstellerdoku sagt „Vorzeichen mit 33135“ (0 = Laden, 1 = Entladen). evcc liest
+33149 als vorzeichenbehafteten Wert (Laden positiv), solis-modbus und Plexlog nehmen das Vorzeichen aus 33135. Ob 33149
+ein Betrag ist, bleibt damit strittig. DVhub nimmt deshalb den Betrag von 33149 und das Vorzeichen aus 33135
+(Richtungsregister, E8) — das stimmt in beiden Fällen. Beide Register kommen aus einer Anfrage (33135–33150). Meldet
+33135 etwas anderes als 0 oder 1, bleibt die Akku-Leistung leer, und der Grund steht im Lesefehler.
 
 ## Was fehlt
 
 | Lücke | Folge | Braucht |
 |---|---|---|
-| Vorzeichen aus 33135 | falls 33149 nur der Betrag ist, falsches Akku-Vorzeichen beim Entladen | Richtungsregister (E8) |
-| Modelltyp 33000 | DVhub prüft nicht, ob ein Solis-Hybrid antwortet | Kennungsprobe (E10) |
+| Modelltyp 33000 | DVhub prüft nicht, ob ein Solis-Hybrid antwortet | Werte für 33000 aus einer Quelle; die Kennungsprobe (E10) gibt es, aber keine Quelle nennt sie |
 | Backup-Last 33148 | nicht gelesen | — |
 | Solarman-V5 | geht nicht | eigener Transport (Solarman V5) |
 
@@ -68,9 +68,12 @@ Für den ersten Test zusätzlich `DVHUB_READ_ONLY=1` setzen. Das sperrt jeden Mo
 Profil.
 
 1. **Akku-Vorzeichen (wichtigster Punkt):** Akku laden lassen → DVhub muss die Akku-Leistung **positiv** zeigen. Dann
-   entladen lassen → **negativ**. Bleibt sie beim Entladen positiv, ist 33149 nur der Betrag; bitte melden.
+   entladen lassen → **negativ**. Das Vorzeichen kommt aus 33135; ist es verkehrt herum, meldet das Gerät die
+   Richtung anders als die Herstellerdoku — bitte melden. Bleibt die Akku-Leistung leer mit „Richtungsregister @33135
+   meldet …“, kennt das Gerät einen weiteren Richtungswert (Wert notieren und melden).
    Gegenprobe mit dem Register-Scan der Diagnose-Seite (oder `POST /api/meter/scan`): Host = IP des Gateways,
-   Unit-ID 1, **FC 4**, Start = Ende = 33149, Menge 2; dazu 33135 (Menge 1).
+   Unit-ID 1, **FC 4**, Start = Ende = 33149, Menge 2; dazu 33135 (Menge 1). Notieren, ob 33149 beim Entladen negativ
+   ist (vorzeichenbehaftet) oder positiv (Betrag).
 2. **Netz:** Bezug muss positiv erscheinen. Mit dem Netzzähler vergleichen. Per Scan 33130 und 33263 (je Menge 2)
    lesen und notieren, ob beide gleich sind.
 3. **Phasen:** Erscheinen L1–L3 leer, kennt die Firmware den Block 33250 ff. nicht (Log `meter_phase_read_error`).

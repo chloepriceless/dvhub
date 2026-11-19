@@ -64,11 +64,15 @@ evcc [kostal-plenticore-gen2.yaml](https://github.com/evcc-io/evcc/blob/master/t
 [Schneider Wiser KNX](https://www.productinfo.schneider-electric.com/wiser-knx/0000956364-wiser-knx-aug/English/Wiser_KNX_app_0001139974.xml/$/KOSTALPlenticore-1675FA57)
 (PV aus 1066), Zusammenfassung in `.planning/docs/research/2026-11-15-kostal-modbus-control-spec.md` §1–2, §4.
 
+**Byte-Reihenfolge:** DVhub liest vor dem ersten Wert und danach alle 10 Minuten Register 0x05 (Kennungsprobe). Steht
+es nicht auf 0 (CDAB, Werkseinstellung), wären alle Float-Werte falsch: DVhub zeigt dann Netz, PV, die beiden
+Leistungsgrenzen und die daraus gerechnete Hauslast nicht an und nennt den Grund als Hinweis im Leitstand. Akku-Leistung
+und Ladestand sind 16-bit-Werte und bleiben sichtbar.
+
 ## Was fehlt
 
 | Lücke | Folge | Braucht |
 |---|---|---|
-| Prüfung der Byte-Reihenfolge (Register 0x05 = 0) | Bei ABCD zeigt DVhub unsinnige Float-Werte, ohne einen Fehler zu melden | Kennungsprobe (E10) |
 | Netz je Phase | Phasenwerte bleiben leer; die Spec führt keine Phasenregister auf | — |
 | Gesamt-Hauslast als Register | Last kommt aus der Bilanz | — |
 
@@ -77,8 +81,9 @@ evcc [kostal-plenticore-gen2.yaml](https://github.com/evcc-io/evcc/blob/master/t
 Für den ersten Test zusätzlich `DVHUB_READ_ONLY=1` setzen. Das sperrt jeden Modbus-Write im Prozess, unabhängig vom
 Profil.
 
-1. **Byte-Reihenfolge:** Register 5 per Register-Scan lesen, erwartet `0`. Netz und PV müssen plausibel sein (keine
-   Werte wie 1e-40 oder 1e+30).
+1. **Byte-Reihenfolge:** Die Kennungsprobe liest Register 5 selbst; meldet der Leitstand „Kennungsprobe passt
+   nicht“, steht es auf 1 (ABCD) — in der Wechselrichter-Einstellung auf CDAB (0) zurückstellen. Netz und PV müssen
+   plausibel sein (keine Werte wie 1e-40 oder 1e+30).
 2. **Zählerposition und Netz-Vorzeichen:** Bei Netzbezug muss DVhub Bezug zeigen, bei Einspeisung (mittags, Akku
    voll) Einspeisung. Bleibt das Netz auch beim Einspeisen positiv und folgt dem Hausverbrauch, sitzt der Zähler auf
    Position 1 (Hausverbrauch) — dann bitte melden.
