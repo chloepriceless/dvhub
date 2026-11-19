@@ -482,6 +482,27 @@ test('dvhub.online ohne den Monat, BNetzA scheitert → zentraler Stand bleibt, 
   assert.ok(!events(r).some((e) => e.endsWith(':error')));
 });
 
+test('BNetzA reicht nur teilweise weiter (01/2027, Anlage braucht 02/2027) → Stand bleibt erweitert, direkt trotzdem nur einmal am Tag (Codex 6aac82b2)', async () => {
+  const plants = [...PLANTS, { kwp: 8, commissionedAt: '2027-02-10' }];
+  const r = rig({ plants, direct: async () => directDataWith('2027-01') });
+  await r.service.tick();
+  assert.equal(r.state.directCalls, 1);
+  const lastMonth = () => Object.keys(JSON.parse(fs.readFileSync(r.file, 'utf8')).applicableValueTiersByMonth).sort().at(-1);
+  assert.equal(lastMonth(), '2027-01');
+  // dvhub.online endet weiter bei 12/2026 und wird abgelehnt — aber kein neuer BNetzA-Abruf
+  for (let i = 0; i < 3; i += 1) {
+    r.advance(6 * 3600_000);
+    await r.service.tick();
+  }
+  assert.equal(r.state.directCalls, 1);
+  assert.equal(lastMonth(), '2027-01');
+  assert.ok(!events(r).some((e) => e.endsWith(':error')));
+  // nach einem Tag einmal wieder
+  r.advance(7 * 3600_000);
+  await r.service.tick();
+  assert.equal(r.state.directCalls, 2);
+});
+
 test('dvhub.online deckt alle Anlagen ab → kein zusätzlicher BNetzA-Abruf', async () => {
   const r = rig();
   await r.service.tick();

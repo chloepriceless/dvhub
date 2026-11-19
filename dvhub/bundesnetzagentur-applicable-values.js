@@ -752,7 +752,12 @@ export function createBundesnetzagenturApplicableValueService({
     // Rückfall auf die BNetzA nur, wenn der Stand fehlt, fällig ist oder eine
     // Anlage einen Monat braucht, den er nicht hat — nicht, um nach einem
     // Rückfall alle 6 h zu prüfen, ob dvhub.online wieder da ist.
-    const allowFallback = !months.length || reason === 'new_month'
+    // Wegen eines fehlenden Monats (new_month) höchstens einmal am Tag direkt holen
+    // (Codex 6aac82b2): reicht der direkte Stand nur ein Stück weiter als dvhub.online,
+    // lehnt die Box den kürzeren zentralen Stand alle 6 h ab — ohne diese Grenze lüde
+    // sie dann jedes Mal die Archivseite und alle Dateien neu.
+    const directRecently = sinceMs(refreshState.lastDirectAt, Date.parse(attemptAt)) < directCompletionIntervalMs;
+    const allowFallback = !months.length || (reason === 'new_month' && !directRecently)
       || !(sinceMs(refreshState.lastSuccessAt, Date.parse(attemptAt)) < refreshIntervalMs);
     let next = null;
     let via = null;
@@ -775,8 +780,7 @@ export function createBundesnetzagenturApplicableValueService({
       } catch (directError) {
         error = directError;
       }
-    } else if (next && via === VIA_CENTRAL && plantBeyondCache(pvPlants, monthKeys(next))
-      && !(sinceMs(refreshState.lastDirectAt, Date.parse(attemptAt)) < directCompletionIntervalMs)) {
+    } else if (next && via === VIA_CENTRAL && plantBeyondCache(pvPlants, monthKeys(next)) && !directRecently) {
       // Codex 2bd0bf21 (P2): dvhub.online liefert einen gültigen Stand, dem aber der
       // Monat einer eingetragenen Anlage noch fehlt (Server hinter einer neuen
       // Veröffentlichung, oder seine Prüfung hält den letzten guten Stand). Der Stand
