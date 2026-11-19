@@ -396,7 +396,11 @@ export function createModbusTransport(opts = {}) {
     const total = Number(quantity);
     if (cap && Number.isInteger(total) && total > cap && Number.isInteger(address) && address >= 0 && address + total - 1 <= 0xffff) {
       if (opts?.atomic) {
-        return Promise.reject(new Error(`modbus read: ${total} Register ab ${address} müssen in einer Anfrage gelesen werden, die Verbindung erlaubt höchstens ${cap} (maxRegistersPerRequest)`));
+        // code: die Lese-Engine erkennt daran „Block zu groß, einzeln lesen“ (E8 Richtung vorher/nachher).
+        return Promise.reject(Object.assign(
+          new Error(`modbus read: ${total} Register ab ${address} müssen in einer Anfrage gelesen werden, die Verbindung erlaubt höchstens ${cap} (maxRegistersPerRequest)`),
+          { code: 'MODBUS_ATOMIC_OVER_CAP' },
+        ));
       }
       const parts = [];
       for (let off = 0; off < total; off += cap) {

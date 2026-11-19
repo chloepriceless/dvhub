@@ -236,6 +236,9 @@ export function createPoller(ctx) {
     } catch (e) {
       state.victron.errors[name] = e.message;
       state.victron.updatedAt = Date.now();
+      // E8: das Gerät hat geantwortet, der Wert ist aber nicht deutbar (unbekannte Richtung) — leer statt des
+      // gehaltenen Altwerts, dessen Vorzeichen inzwischen falsch sein kann. Andere Lesefehler halten wie bisher.
+      if (e?.valueUnknown === true) state.victron[name] = null;
       return false;
     }
   }
@@ -724,7 +727,8 @@ export function createPoller(ctx) {
   // die Konvention: Bezug und Einspeisung sind in beiden Konventionen gleich groß.
   const scaledGridW = (x, k, sign) => (Math.round(x * k) * sign) || 0;
   // Phasen (`meter.phases`, je ein Lesepunkt) erben Verbindung, Typ, Skala, Vorzeichen und Skalenfaktor vom Zähler;
-  // Adresse, sunspec, combine und split setzt jede Phase selbst.
+  // Adresse, sunspec, combine und split setzt jede Phase selbst — ebenso ein Richtungsregister (E8, `direction`): die
+  // Richtung der Summe sagt nichts über die einzelne Phase.
   const METER_PHASE_INHERIT = ['fc', 'host', 'port', 'unitId', 'timeoutMs', 'readType', 'wordOrder', 'signed', 'notAvailableRaw', 'scale', 'sign', 'sfAddress'];
   function meterPhaseConf(m, phase) {
     if (!phase || typeof phase !== 'object' || Array.isArray(phase)) return null;
@@ -966,6 +970,10 @@ export function createPoller(ctx) {
         // Codex 56274de8: einen Skalenfaktor (sfAddress/sunspec.sfOffset) liest nur layout "point"; die festen Layouts
         // kennen nur scale/sign. Ohne diese Sperre galt ein SunSpec-Zähler mit SF −1 als gesund mit zehnfachem Wert.
         throw new Error('meter.sfAddress (SunSpec-Skalenfaktor) braucht meter.layout "point"');
+      } else if (cfg.meter?.direction != null) {
+        // E8: das Richtungsregister wertet nur der Lesepunkt-Weg aus — ein fester Layout-Weg läse es nie und gäbe
+        // einen Wert mit ungeprüftem Vorzeichen als gesund aus.
+        throw new Error('meter.direction (Richtungsregister) braucht meter.layout "point"');
       } else if (String(cfg.meter?.readType || '').toLowerCase() === 'float32') {
         // SunSpec-Float-Meter (B-1112, z. B. Fronius Smart Meter Model 203 @
         // Unit-ID 200): 8 Register = 4×Float32 in der Reihenfolge

@@ -115,6 +115,22 @@ Wert“, ist die Summe unbekannt. Akku = Laden − Entladen:
   "combine": [{ "address": 31393 }, { "address": 31395, "sign": -1 }] }
 ```
 
+**`direction` — Vorzeichen aus einem Richtungsregister** (Punkte, `combine`-Einträge, Zähler mit `layout: "point"`).
+Für Geräte, die die Richtung in einem eigenen Statusregister melden (Solis 33135, SolaX 0x19). `values` ordnet jedem
+Rohwert des Richtungsregisters (U16, gleiche Verbindung und gleicher Funktionscode wie der Punkt) `1` oder `-1` zu.
+Wert = **Betrag** des Punkts (nach Skala, Skalenfaktor, Offset) × Faktor der gemeldeten Richtung — richtig, ob das
+Gerät einen Betrag oder schon einen vorzeichenbehafteten Wert liefert. Meldet das Richtungsregister einen Wert, der
+nicht in `values` steht, bleibt der Punkt leer und der Grund steht im Lesefehler (kein gehaltener Altwert, kein
+geratenes Vorzeichen). `sign` daneben ist ein Fehler. Liegen Wert und Richtung höchstens 16 Register auseinander,
+kommen beide aus einer Anfrage; sonst (oder wenn das Gerät den Block abweist bzw. er über `maxRegistersPerRequest`
+liegt) liest DVhub die Richtung vor und nach dem Wert und nimmt nur ein Paar mit gleicher Richtung. Zähler-Phasen
+erben `direction` nicht; feste Zählerwege (3×s16, `int32`, `float32`) lehnen es ab. Akku, 0 = Laden, 1 = Entladen:
+
+```json
+"batteryPowerW": { "enabled": true, "fc": 4, "address": 33149, "quantity": 2, "readType": "int32",
+  "direction": { "address": 33135, "values": { "0": 1, "1": -1 } } }
+```
+
 **`split` — 32-bit-Wert aus zwei getrennten Registern** (Low- und High-Wort nicht benachbart). Braucht `readType`
 `int32` oder `uint32`. DVhub liest High, Low, High und nimmt nur ein Paar, bei dem sich das High-Wort dazwischen
 nicht geändert hat:
