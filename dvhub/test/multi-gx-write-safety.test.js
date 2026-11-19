@@ -87,6 +87,11 @@ test('C2 zweite GX: Schreibfreigabe des Tors folgt der Config (profileInvalid sp
   s.cfg.writeSafety = { ...UNSAFE };
   await tick();
   assert.equal(s.gate.releaseState(MULTI_GX_GATE_DEVICE), 'profileInvalid');
+  // Christin 19.11.2026: dieselbe Abbildung wie Wechselrichter und Sungrow (services/gate/legacy.js
+  // inverterReleaseState) — eine kaputte config.json ist setupIncomplete (das Tor lässt dann auch keine Rücknahme durch).
+  s.cfg.writeSafety = { ok: false, reason: 'config_broken', manufacturer: 'victron' };
+  await tick();
+  assert.equal(s.gate.releaseState(MULTI_GX_GATE_DEVICE), 'setupIncomplete');
   delete s.cfg.writeSafety;
   await tick();
   assert.equal(s.gate.releaseState(MULTI_GX_GATE_DEVICE), 'open');

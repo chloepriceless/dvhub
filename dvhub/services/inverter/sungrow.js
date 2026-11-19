@@ -22,7 +22,7 @@ import { meterImport } from '../import-limit/core.js';
 import { atomicWriteControlState } from '../../control-state-io.js';
 import { ReadOnlyViolation } from '../../read-only-guard.js';
 import { GateBlockedError } from '../gate/index.js';
-import { createLegacyGate, modbusLegacySink, SUNGROW_GATE_DEVICES } from '../gate/legacy.js';
+import { c2AllowsRelease, createLegacyGate, inverterReleaseState, modbusLegacySink, SUNGROW_GATE_DEVICES } from '../gate/legacy.js';
 import { createModbusHealth } from './modbus-health.js';
 
 /** Doku-Adresse → Draht-Adresse. */
@@ -1025,25 +1025,34 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Nur die eine Rücknahme (neutralize) darf im Not-Halt schreiben.
   let gateSeq = 0;
   async function submitReg(conf, address, value, { neutralize = false, claimMode = null, fc = 6, keepalive = false, manualRelease = null } = {}) {
-    // C2 (Christin 16.11.2026): ungültige Konfiguration (kaputtes/fehlendes Herstellerprofil → cfg.writeSafety.ok
-    // === false) sperrt JEDEN Aktuator-Write — auch neutralize. Die wirksame Config trägt dann Default-Register;
-    // ein Write ginge an ein möglicherweise fremdes Gerät. Lauter Alarm einmal je Grund, dann KEIN Write.
-    const ws = getCfg()?.writeSafety;
+    // C2 (Christin 16.11.2026): ungültige Konfiguration (kaputtes/fehlendes Herstellerprofil oder kaputte config.json →
+    // cfg.writeSafety.ok === false) sperrt die Aktuator-Writes. Lauter Alarm einmal je Grund, dann KEIN Write.
+    // Ausnahme (Christin 19.11.2026, „denke schon“): die Not-Halt-Rücknahme (neutralize IM Not-Halt → haltNeutralize)
+    // und die manuelle Zwangsfreigabe (H-7, manualForceRelease) — beide nur die festen Literale 13051 = 0xCC und
+    // 13050 = 0, nie 13058/13059 (H-8). Nur bei einem Herstellerprofil-Fehler (Torzustand profileInvalid): dann ist die
+    // Verbindung die des Betreibers. Eine kaputte config.json (setupIncomplete) sperrt weiter alles — Vorgaben mit
+    // leerem Host, ein Write ginge an localhost. Gesperrt bleiben auch die übrigen neutralize-Writes außerhalb des
+    // Not-Halts (geordnetes Beenden, Split-Abbruch, Herzschlag-Fehler) — sie sind nicht die Not-Halt-Rücknahme.
+    const cfgNow = getCfg();
+    const ws = cfgNow?.writeSafety;
+    const manual = typeof manualRelease === 'string' && manualRelease.length > 0;
     // Schreibfreigabe des Tors aus DERSELBEN Quelle, vor jeder Einreichung neu gesetzt — Tor und Bestandsprüfung
     // können so nicht auseinanderlaufen (R-T2/R-T5). Die Geräte-Erkennung bleibt in dieser Phase beim Aufrufer
     // (deviceGate in step()): als Torzustand `notIdentified` sperrte sie auch die heutigen Rücknahmen, die manuelle
     // Freigabe und jeden Slave-Write (der Slave wird nicht eigens erkannt) — eine Verhaltensänderung.
-    gate.setRelease(gateDevice, ws && ws.ok === false ? 'profileInvalid' : 'open');
+    gate.setRelease(gateDevice, inverterReleaseState(cfgNow));
     if (ws && ws.ok === false) {
-      if (st._writeUnsafeAlarm !== (ws.reason || 'config_invalid')) {
-        st._writeUnsafeAlarm = ws.reason || 'config_invalid';
-        pushLog('sungrow_write_blocked_config_unsafe', { reason: ws.reason || 'config_invalid', manufacturer: ws.manufacturer ?? null }, 'error');
+      const haltPass = neutralize === true && state.ctrl?.discretionaryWritesPaused === true;
+      if (!(c2AllowsRelease(cfgNow) && (manual || haltPass))) {
+        if (st._writeUnsafeAlarm !== (ws.reason || 'config_invalid')) {
+          st._writeUnsafeAlarm = ws.reason || 'config_invalid';
+          pushLog('sungrow_write_blocked_config_unsafe', { reason: ws.reason || 'config_invalid', manufacturer: ws.manufacturer ?? null }, 'error');
+        }
+        const err = new Error(`config_unsafe_${ws.reason || 'config_invalid'}`);
+        err.code = 'config_unsafe';
+        throw err;
       }
-      const err = new Error(`config_unsafe_${ws.reason || 'config_invalid'}`);
-      err.code = 'config_unsafe';
-      throw err;
-    }
-    if (st._writeUnsafeAlarm) st._writeUnsafeAlarm = null;
+    } else if (st._writeUnsafeAlarm) st._writeUnsafeAlarm = null;
     if (state.ctrl?.discretionaryWritesPaused && !neutralize) {
       const err = new Error('emergency_stop_active');
       err.code = 'emergency_stop_active';
@@ -1058,7 +1067,6 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const args = fc === 16
       ? { ...endpoint(conf), address, values: [word] }
       : { ...endpoint(conf), address, value: word };
-    const manual = typeof manualRelease === 'string' && manualRelease.length > 0;
     gateSeq += 1;
     const op = {
       device: gateDevice,

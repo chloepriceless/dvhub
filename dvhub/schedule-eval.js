@@ -35,7 +35,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
 import { createSungrowEms, endpointKeyOf, sungrowEmsConf, resolveSecondInverter } from './services/inverter/sungrow.js';
-import { createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, inverterReleaseState, unwrapLegacyWrite } from './services/gate/legacy.js';
+import { c2AllowsRelease, createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, inverterReleaseState, unwrapLegacyWrite } from './services/gate/legacy.js';
 
 // T-0118 sell-price floor: a gridSetpointW more negative than this counts as a
 // FORCED grid export (arbitrage), eligible for sell-price-floor suppression.
@@ -322,12 +322,23 @@ export function createScheduleEvaluator(ctx) {
   // cfg.writeSafety.ok === false. Dann schreibt KEIN Pfad mehr (Chokepoint, Keepalive/2716, DV-Abregelung,
   // Nulleinspeisung, Sungrow-Aktuator) — die Anlage bleibt ungeregelt, bis jemand eingreift (gewollt, sicherer).
   // Dazu ein LAUTER Alarm, einmal je Grund (nicht jede ~15-s-Runde fluten); beim Erholen wird der Alarm neu scharf.
-  function writeConfigUnsafeReason(cfg, source = null) {
+  // Ausnahme (Christin 19.11.2026, „denke schon“): die EINE Rücknahme beim Not-Halt (`haltRelease`, Aktionsklasse
+  // haltNeutralize) darf durch, wenn nur das Herstellerprofil ungültig ist (Torzustand profileInvalid) UND sie ein
+  // festes Literal Richtung Grundzustand schreibt: die Freigabe einer eigenen Sperre über die Direktregister/MQTT-Flaggen
+  // (feedExcessDcPv = 1, dontFeedExcessAcPv = 0; applyDvVictronControl) und das Abräumen des Deckels (wMaxLimEna = 0;
+  // zeroFeedInTick). Die Verbindung ist dann die des Betreibers; Adressen gibt es nur bei victron (Code-Vorgaben, für
+  // 2707/2708 gleich dem Profil — test/c2-nothalt-release.test.js), sonst keine (R-T2.1). NICHT ausgenommen: Rücknahmen
+  // auf einen gesicherten Wert (2704, 2706, Sequenzschritte) — deren Kodierung käme aus dem ungültigen Profil, bei
+  // victron aus abweichenden Code-Vorgaben (2704 scale 1 statt 10; Codex a5803519 P1). Das Tor prüft dasselbe
+  // (services/gate/index.js checkRelease). Eine kaputte config.json sperrt weiter alles (Vorgaben mit leerem Host →
+  // localhost; services/gate/legacy.js inverterReleaseState). Not-Halt-Regel und Adresse des Pfads gelten weiter.
+  function writeConfigUnsafeReason(cfg, source = null, { haltRelease = false } = {}) {
     const ws = cfg?.writeSafety;
     if (!ws || ws.ok !== false) {
       if (state.ctrl?._writeUnsafeAlarm) state.ctrl._writeUnsafeAlarm = null;
       return null;
     }
+    if (haltRelease === true && state.ctrl?.discretionaryWritesPaused === true && c2AllowsRelease(cfg)) return null;
     const reason = ws.reason || 'config_invalid';
     if (state.ctrl && state.ctrl._writeUnsafeAlarm !== reason) {
       state.ctrl._writeUnsafeAlarm = reason;
@@ -338,7 +349,9 @@ export function createScheduleEvaluator(ctx) {
   }
 
   function deviceWriteGate(cfg) {
-    // C2 zuerst: ungültige Konfiguration sperrt ALLE Gerätewrites, vor jeder herstellerspezifischen Prüfung.
+    // C2 zuerst: ungültige Konfiguration sperrt ALLE Gerätewrites, vor jeder herstellerspezifischen Prüfung. Auch die
+    // Rücknahmen auf einen gesicherten Wert (Entladegrenze 2704, Sequenzen, 2706) — ihre Kodierung käme aus dem jetzt
+    // ungültigen Profil (Codex a5803519 P1); die Literal-Ausnahme steht nur in den beiden Wegen darunter.
     const unsafe = writeConfigUnsafeReason(cfg);
     if (unsafe) return unsafe;
     if (cfg?.identify?.requiredForWrites !== true) return null;
@@ -893,6 +906,9 @@ export function createScheduleEvaluator(ctx) {
   async function runDvControlSequence(steps, { ownOnly = false, requirePersist = false, budgeted = false, budgetHoldExempt = false, gate: seqGate } = {}) {
     const cfg = getCfg();
     if (!seqGate?.run) throw new Error('runDvControlSequence ohne Schreibtor-Lauf (Verdrahtungsfehler)');
+    // C2 ohne Ausnahme, auch für die Rücknahme im Not-Halt: Sequenzschritte und die Einspeisegrenze 2706 schreiben einen
+    // GESICHERTEN Wert (restoreBefore) mit der Kodierung des Profils — das ist gerade ungültig (R-T2.3; bei victron gälten
+    // die abweichenden Code-Vorgaben, Codex a5803519 P1). Nur feste Literale dürfen trotz C2 zurück (writeConfigUnsafeReason).
     const gate = deviceWriteGate(cfg);
     if (gate) throw new Error(gate);
     // M14b Schreibbudget (nur Einspeise-Sequenzpfad, budgeted=true): ist das
@@ -1226,8 +1242,10 @@ export function createScheduleEvaluator(ctx) {
     const cfg = getCfg();
     const dc = cfg.dvControl;
     if (!dc) return;
-    // C2: ungültige Konfiguration → kein Abregel-/Freigabe-Write (eigener Schreibweg, umgeht deviceWriteGate).
-    if (writeConfigUnsafeReason(cfg, reason)) return;
+    // C2: ungültige Konfiguration → kein Abregel-/Freigabe-Write (eigener Schreibweg, umgeht deviceWriteGate) — außer
+    // der einen Freigabe einer eigenen Sperre im Not-Halt (haltNeutralize) bei ungültigem Herstellerprofil.
+    const c2HaltRelease = feedIn === true && reason === 'emergency_stop_release';
+    if (writeConfigUnsafeReason(cfg, reason, { haltRelease: c2HaltRelease })) return;
     // Not-Halt: nur die eine Freigabe (notHaltDvDecision) und Sperren einer
     // weiterlaufenden Pflicht-Klasse; alles andere schreibt nichts.
     if (state.ctrl.discretionaryWritesPaused) {
@@ -3243,8 +3261,11 @@ export function createScheduleEvaluator(ctx) {
       const rvrtConf = cfg.controlWrite?.wMaxLimPctRvrtTms;
       const outConf = cfg.controlWrite?.outWRte;
       const zfi = zfiState();
-      // C2: ungültige Konfiguration → kein Nulleinspeisungs-Write (eigener Schreibweg, umgeht deviceWriteGate).
-      if (writeConfigUnsafeReason(cfg, 'zero_feed_in')) return;
+      // C2: ungültige Konfiguration → kein Nulleinspeisungs-Write (eigener Schreibweg, umgeht deviceWriteGate) — außer
+      // dem einen Abräumen des Deckels im Not-Halt (haltNeutralize, Zweig unten) bei ungültigem Herstellerprofil.
+      const zfiHaltRelease = zfi.capActive === true
+        && !(state.ctrl._lastDvFeedIn === false && notHaltAllowsDvReason(state.ctrl._dvBlockReason));
+      if (writeConfigUnsafeReason(cfg, 'zero_feed_in', { haltRelease: zfiHaltRelease })) return;
       // Profil ohne Feature / Punkte (noch) nicht per SunSpec-Scan aufgelöst →
       // still bleiben. Ein am Gerät stehender Deckel verfällt über RvrtTms.
       if (!zc?.enabled || transport.type !== 'modbus') return;

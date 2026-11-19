@@ -2367,12 +2367,15 @@ export function createApiRoutes(ctx) {
     const cfg = getCfg();
     // Steuerfelder (dvhub_control_*, scheduleActive) über das Tor: ein Urteil je Gerät für die ganze Antwort (R-T3).
     const handOut = pickup.handOut();
+    // Direktvermarkter-Signal aus demselben Urteil: im Not-Halt und Lese-Modus null (Christin 19.11.2026), bei
+    // ungültiger Konfiguration weiter (DVhub kann dann selbst nicht abregeln) — services/gate/pickup.js.
+    const dv = pickup.dvSignal(handOut, () => ctx.controlValue());
 
     // === EXISTING FIELDS — DO NOT MODIFY (backward compat for HA/Loxone consumers) ===
     const base = {
       timestamp: Date.now(),
-      dvControlValue: ctx.controlValue(),
-      forcedOff: state.ctrl.forcedOff,
+      dvControlValue: dv.dvControlValue,
+      forcedOff: dv.forcedOff,
       gridTotalW: state.meter.grid_total_w,
       gridDirection: gridDirection(state.meter.grid_total_w, cfg.gridPositiveMeans).mode,
       gridSetpointW: state.victron.gridSetpointW,
@@ -5298,12 +5301,14 @@ export function createApiRoutes(ctx) {
       ];
       // „Raus — Sollwerte“ zeigt, was wirklich hinausgeht: dieselbe Abholsenke wie Loxone/MQTT (R-T3).
       const out = pickup.handOut();
+      const dv = pickup.dvSignal(out, () => (typeof ctx.controlValue === 'function' ? ctx.controlValue() : null));
       return json(res, 200, buildDataflow({
         cfg, state, transport: ctx.transport,
         controlSnapshot: out.control,
         gridLimit: out.gridLimit,
         channels,
-        dvControlValue: typeof ctx.controlValue === 'function' ? ctx.controlValue() : null,
+        dvControlValue: dv.dvControlValue,
+        dvSignalSuspended: dv.suspended ?? null,
         now: Date.now(),
       }));
     }
