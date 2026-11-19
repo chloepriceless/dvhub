@@ -970,6 +970,43 @@ test('M24: Status nennt den wirksamen Puffer über der Geräte-Untergrenze (Stan
   assert.equal(r.ems.status().socFloorBufferPct, 2);
 });
 
+// M22 (Christin 19.11.): Modbus-Fehler je WR ins Log; split_aborted / Slave-Fallback mit Register (Doku) und Wert.
+function rejectWrite(t, wireAddr, msg = 'modbus exception 4') {
+  const orig = t.mbWriteSingle.bind(t);
+  t.mbWriteSingle = async (a) => { if (a.address === wireAddr) { t.writes.push({ fc: 6, address: a.address, value: a.value, rejected: true }); throw new Error(msg); } return orig(a); };
+}
+
+test('M22: Master lehnt die Leistung ab (exception 4) → sungrow_ems_split_aborted nennt Register 13052 (Doku), Draht 13051 und Wert', async () => {
+  const r = splitRig();
+  rejectWrite(r.masterT, POWER);
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  const ab = r.logs.find((l) => l.event === 'sungrow_ems_split_aborted');
+  assert.ok(ab, 'split_aborted geloggt');
+  assert.equal(ab.data.register, 13052, 'Doku-Register (Leistung)');
+  assert.equal(ab.data.wireAddress, 13051, 'Draht-Adresse');
+  assert.ok(Number(ab.data.value) > 0, `Wert: ${ab.data.value}`);
+  assert.equal(ab.data.kind, 'exception');
+  assert.equal(ab.data.code, 4);
+  // Und der Modbus-Fehler selbst steht je WR im Log.
+  const me = r.logs.find((l) => l.event === 'sungrow_modbus_error' && l.data.wr === 'master');
+  assert.ok(me, 'sungrow_modbus_error (Master) geloggt');
+  assert.deepEqual([me.data.kind, me.data.code, me.data.fc, me.data.register], ['exception', 4, 6, 13052]);
+});
+
+test('M22: Slave lehnt die Leistung ab → Fallback-Log mit Register und Wert, Modbus-Fehler mit wr=slave', async () => {
+  const r = splitRig();
+  rejectWrite(r.slaveT, POWER);
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  const fb = r.logs.find((l) => l.event === 'sungrow_ems_split_slave_fallback');
+  assert.ok(fb, 'Slave-Fallback geloggt');
+  assert.equal(fb.data.register, 13052);
+  assert.equal(fb.data.wireAddress, 13051);
+  assert.ok(Number(fb.data.value) > 0);
+  const me = r.logs.find((l) => l.event === 'sungrow_modbus_error' && l.data.wr === 'slave');
+  assert.ok(me, 'sungrow_modbus_error (Slave) geloggt');
+  assert.equal(me.data.source, 'ems');
+});
+
 test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf, solange er Forced fährt', async () => {
   const hbPath = path.join(os.tmpdir(), `dvhub-forced-hb-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   try {

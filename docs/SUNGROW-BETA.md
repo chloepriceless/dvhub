@@ -163,6 +163,16 @@ SoC-Boden); erst dieser Wert geht an den Sungrow-Aktuator, der daraus Akku-Leist
 | Not-Halt | einmal Stopp + Modus 0, dann nichts (auch kein Herzschlag) | eigener Betrieb nur; fremdes EMS nie | exakt |
 | E-Auto / Geräte | eigene Stellglieder, Sungrow nicht berührt | ihre Last zieht der Regler im nächsten Takt mit | näherungsweise |
 
+## Protokoll: Modbus-Fehler
+
+Jeder Modbus-Fehler wird eine Zeile `sungrow_modbus_error` mit `wr` (master/slave), `source` (poll/ems, beim Master
+beides gemeinsam), `kind` (exception, refused, timeout, reset, unreachable, other), `code` (z. B. 4 oder
+ECONNREFUSED), `fc`, `address` (Draht), `register` (Doku = Draht + 1), Menge/Wert und Meldung — ohne LAN-Adresse.
+Im 60-s-Fenster steht nur der erste Fehler einzeln da, der Rest als `sungrow_modbus_error_summary` („12 Fehler in
+60 s, Master, ECONNREFUSED“). Hält die Störung an, verdoppelt sich das Fenster bis 15 min. Die Kachel zeigt nur
+Zähler und letzten Fehler. `sungrow_ems_split_aborted` und `sungrow_ems_split_slave_fallback` nennen `register`
+(Doku), `wireAddress` und `value` des abgelehnten Writes.
+
 ## Zwei Wechselrichter (Master/Slave)
 
 Im Forced mode mit zwei Wechselrichtern teilt DVhub jede Vorgabe auf beide auf (Standard `soc-balance`: beim

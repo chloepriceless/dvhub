@@ -255,3 +255,13 @@ test('render: Modus 3 blendet die Countdown-Zeile ein', () => {
   assert.equal(els.sungrowWrMasterCountdown.textContent, '28 s');
   assert.equal(els.sungrowWrSlaveCountdownRow.hidden, false);
 });
+
+test('M22: Kachel nennt ECONNREFUSED „abgelehnt" statt „Timeout"', () => {
+  const at = new Date(2026, 10, 19, 12, 31).getTime();
+  const vw = V.view({
+    victron: { soc: 30, sungrowMasterSocPct: 30, device: { model: 'SH10RT', bdcRatedW: 10000 } },
+    sungrowSecond: { online: true, socPct: 20, batteryPowerW: 0, pvPowerW: 0, bdcRatedW: 10000, health: { requestsPerSec: 0.6, errors24h: 12, lastError: { kind: 'refused', code: 'ECONNREFUSED', at } } },
+    sungrowEms: { controlMode: 'forced', owns: true, decision: { mode: 'forced', command: 'stop', powerW: 0 } },
+  });
+  assert.match(vw.slave.health, /zuletzt abgelehnt 12:31/);
+});

@@ -98,7 +98,8 @@ export function createSungrowSecond(ctx, deps = {}) {
   const now = deps.now || Date.now;
   // Modbus-Gesundheit des Slave-WR (N5): zählt die Lese-Anfragen/Fehler dieses Pollers (Feld: ~1 Lesefehler auf
   // 4000 Slave-Anfragen). wrap() zählt transparent; der eigentliche Transport bleibt unverändert.
-  const modbusHealth = createModbusHealth(now);
+  // M22: Lesefehler des Slave als sungrow_modbus_error ins Protokoll (source poll), Häufungen zusammengefasst.
+  const modbusHealth = createModbusHealth(now, { pushLog: (...a) => ctx.pushLog?.(...a), wr: 'slave', source: 'poll' });
   const transport = modbusHealth.wrap(deps.transport);
   let timer = null;
   let running = false;

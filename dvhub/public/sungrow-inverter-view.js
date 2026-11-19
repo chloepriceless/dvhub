@@ -164,9 +164,13 @@
     try { const d = new Date(Number(ms)); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
     catch { return ''; }
   }
+  // M22: Fehlerart wie im Protokoll (ECONNREFUSED ist „abgelehnt", nicht „Timeout").
   function errKindText(kind) {
     if (kind === 'timeout') return 'Timeout';
     if (kind === 'exception') return 'Ausnahme';
+    if (kind === 'refused') return 'abgelehnt';
+    if (kind === 'reset') return 'getrennt';
+    if (kind === 'unreachable') return 'nicht erreichbar';
     return 'Fehler';
   }
   // Modbus-Gesundheit einer Verbindung (N5/M7b): Anfragen/s · Antwortzeit (EIN Median-Wert) · Fehler 24 h · letzter

@@ -20,7 +20,7 @@ import fs from 'node:fs';
 
 import { meterImport } from '../import-limit/core.js';
 import { atomicWriteControlState } from '../../control-state-io.js';
-import { createModbusHealth } from './modbus-health.js';
+import { createModbusHealth, classifyModbusError } from './modbus-health.js';
 
 /** Doku-Adresse → Draht-Adresse. */
 export const wire = (docAddress) => Number(docAddress) - 1;
@@ -784,7 +784,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // den Transport; der Rest des Aktuators nutzt nur noch `transport` (gezählt). snapshot() geht in publish() an die
   // Kachel. Ein von außen übergebener Zähler (Master: ctx.sungrowMasterHealth) wird GETEILT — dann zählen Poll UND
   // EMS in denselben Master-Zähler (M7b). Ohne Übergabe ein eigener (Slave, Tests).
-  const modbusHealthInst = modbusHealth || createModbusHealth(now);
+  // M22: ohne geteilten Zähler loggt diese Instanz ihre Modbus-Fehler selbst (wr = Master/Slave, source = ems).
+  const modbusHealthInst = modbusHealth || createModbusHealth(now, { pushLog, wr: isSlave ? 'slave' : 'master', source: 'ems' });
   const transport = modbusHealthInst.wrap(baseTransport);
   const st = {
     target: null,        // { setpointW, source, at }
@@ -1131,6 +1132,14 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     }
     if (rt != null && rt > 0) return Math.min(REGULATE_MAX_MS, Math.max(REGULATE_MIN_MS, Math.round(rt * 2)));
     return REGULATE_MAX_MS;
+  }
+
+  // M22: Register (Doku), Draht-Adresse, Wert und Fehlerart eines abgelehnten Writes für die Logs (split_aborted,
+  // Slave-Fallback). writeReg hängt emsAddress (Draht) und emsValue an den Fehler; Doku = Draht + 1.
+  function writeErrorInfo(e) {
+    const wireAddress = e?.emsAddress ?? null;
+    const { kind, code } = classifyModbusError(e?.cause?.message || e?.message, e?.code);
+    return { register: wireAddress == null ? null : wireAddress + 1, wireAddress, value: e?.emsValue ?? null, kind, code };
   }
 
   function foreignModeError(mode) {
@@ -1597,7 +1606,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         effMasterW = Math.min(decision.powerW, masterTakeoverW); // Befund 2: Master-SoC-Boden/Deckel einhalten
         masterDecision = mk(effMasterW);
         slaveFellBack = true;
-        logOnce(`${sr.error}`, 'sungrow_ems_split_slave_fallback', { side: 'slave', error: sr.error || null, readError: sr.readError === true, masterW: effMasterW, text: 'Sungrow: Slave-Fehler im Split — Anteil auf den Master verlagert, der Master steuert weiter (kein Modus 0).' }, 'warn');
+        logOnce(`${sr.error}`, 'sungrow_ems_split_slave_fallback', { side: 'slave', error: sr.error || null, readError: sr.readError === true, register: sr.register ?? null, wireAddress: sr.wireAddress ?? null, value: sr.value ?? null, kind: sr.kind ?? null, code: sr.code ?? null, masterW: effMasterW, text: 'Sungrow: Slave-Fehler im Split — Anteil auf den Master verlagert, der Master steuert weiter (kein Modus 0).' }, 'warn');
       }
     }
     // Split-Detail für GUI/Leitstand (Aufgabe 1/2/6): Anteil, wirksame Leistungsgrenze und wirksame SoC-Grenze je
@@ -1670,7 +1679,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       st.splitLast = null; // M28: nichts kommandiert, die Erkennung ruht
       await neutralizeBoth('split_master_failed');
       st.error = e?.message || String(e);
-      logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error, register: e?.emsAddress ?? null, value: e?.emsValue ?? null }, 'warn');
+      logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error, ...writeErrorInfo(e) }, 'warn');
       st.decision = { mode: 'self', reason: 'split_master_failed', at: t };
       publish();
       return { ok: false, readError: e?.code === 'heartbeat_mismatch' || e?.code === 'ems_read_error', error: st.error };
@@ -2275,8 +2284,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         if (e?.code === 'emergency_stop_active') return { ok: false, blocked: true, error: st.error };
         // Reines Lesen der Slave-Register fehlgeschlagen (modbus exception 4 o. Ä.) — es wurde NICHTS geschrieben.
         // Der Aufrufer (stepSplit, Aufgabe 3) faellt dann auf Master-only zurueck statt beide auf Modus 0 zu werfen.
-        if (e?.code === 'ems_read_error') return { ok: false, readError: true, error: st.error };
-        return { ok: false, error: st.error };
+        if (e?.code === 'ems_read_error') return { ok: false, readError: true, error: st.error, ...writeErrorInfo(e) };
+        return { ok: false, error: st.error, ...writeErrorInfo(e) };
       }
     });
   }
