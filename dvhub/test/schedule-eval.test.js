@@ -1358,19 +1358,36 @@ test('M8+M10: leerer Akku → Netzstrom-Sperre fällt → EOS-Halten läuft wied
   }
 });
 
-test('M8: gridShare gesperrt → EOS-Netzladen ebenfalls ausgesetzt (erzeugt den Anteil sonst neu)', async () => {
-  const { ctx, state } = makeCtx({ mutate: ({ state: st, cfg, ctx: c }) => {
-    st.victron.soc = 60; st.victron.selfConsumptionW = 1000; st.victron.pvTotalW = 0;
+// Feld Nebeling 18./19.11.: die Sperre verbietet nur, Netzstrom aus dem Akku ins Netz zu geben — Laden aus dem Netz
+// ist gewollt. Netzladen auszusetzen hielt einen fast leeren Akku leer, die Sperre fiel nie (Stillstand ~11 h).
+function eosChargeCtx(gridKwh = 1.875) {
+  return makeCtx({ mutate: ({ state: st, cfg, ctx: c }) => {
+    st.victron.soc = 6; st.victron.selfConsumptionW = 1000; st.victron.pvTotalW = 0;
     st.victron.fieldUpdatedAt = { ...(st.victron.fieldUpdatedAt || {}), selfConsumptionW: Date.now(), pvTotalW: Date.now() };
     st.schedule.rules = [{ id: 'eos-charge', enabled: true, target: 'gridSetpointW', ...activeWindow(), value: 3000, optimizer: 'eos', source: 'forecast_optimizer', autoManaged: true }];
     cfg.optimizer = { enabled: true, allowGridCharge: true, allowGridDischarge: true };
-    c.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 1.5 }) };
+    c.gridShare = { isLocked: () => true, summary: () => ({ gridKwh }) };
   } });
+}
+
+test('M8: gridShare gesperrt → EOS-Netzladen läuft trotzdem nach Plan (Feld Nebeling 19.11.)', async () => {
+  const { ctx, state, logs } = eosChargeCtx();
   await createScheduleEvaluator(ctx).evaluateSchedule();
   const gp = state.schedule.active.gridSetpointW;
-  assert.equal(gp.source, 'eos_grid_charge_suspended', 'Netzladen ausgesetzt');
-  assert.notEqual(Number(gp.value), 3000, 'nicht der geplante Netzbezug');
-  assert.equal(state.ctrl.eosGridShareSuspend.kind, 'charge');
+  assert.notEqual(gp.source, 'eos_grid_charge_suspended', 'Netzladen nicht ausgesetzt');
+  assert.equal(Number(gp.value), 3000, 'der geplante Netzbezug');
+  assert.ok(!state.ctrl.eosGridShareSuspend, 'kein Aussetz-Hinweis');
+  assert.ok(!logs.some((l) => l.event === 'eos_grid_charge_suspended'), 'kein Aussetz-Log');
+});
+
+test('M8: erst Halten ausgesetzt, dann Netzladen-Regel → Hinweis weg, Netzladen läuft', async () => {
+  const { ctx, state } = eosChargeCtx();
+  const ev = createScheduleEvaluator(ctx);
+  state.ctrl.eosGridShareSuspend = { at: Date.now(), kind: 'hold', gridKwh: 1.875, ruleId: 'eos-hold' };
+  state.ctrl._eosSuspendKey = 'eos_grid_hold_suspended:eos-hold';
+  await ev.evaluateSchedule();
+  assert.equal(Number(state.schedule.active.gridSetpointW.value), 3000);
+  assert.ok(!state.ctrl.eosGridShareSuspend, 'Halte-Hinweis aufgehoben, sobald keine Halte-Regel mehr gilt');
 });
 
 // Entlade-Wächter (Gegenprüfung 415a2f25): der Halte-Zweig meldet sich selbst

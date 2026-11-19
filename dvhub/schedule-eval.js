@@ -2883,26 +2883,26 @@ export function createScheduleEvaluator(ctx) {
       // duerfen dann nicht in den Akku laden. Fehlen Live-Werte oder sind sie
       // alt → 0 (Eigenverbrauch wie ohne Regel).
       // M8 (Feld 16.11., Muss): solange der Netzstrom-Anteil im Akku GESPERRT ist (gridShare.locked:
-      // battery_grid_export_blocked an EOS), EOS-„Halten" NICHT ausführen — und EOS-Netzladen ebenfalls nicht.
+      // battery_grid_export_blocked an EOS), EOS-„Halten" NICHT ausführen.
       // Die Sperre löst sich NUR durch Entladen ins Haus (Netzanteil < releaseKwh). „Halten" verhindert genau das,
       // und das „Entladen" im Plan ist nur das Ende des rollenden Regel-Horizonts (ruleHorizonHours) → die Sperre
       // könnte sich sonst NIE lösen (PV bleibt in teuren Stunden ausgesperrt). Stattdessen Eigenverbrauch
       // (Standard-Sollwert): der Akku deckt die Last, der Netzanteil wird im Haus verbraucht; fällt die Sperre
-      // (< releaseKwh), greift „Halten"/„Netzladen" wieder nach Plan. (Netzladen während der Sperre erzeugte den
-      // Anteil neu — es bleibt daher ebenfalls ausgesetzt, bis die Sperre fällt.)
+      // (< releaseKwh), greift „Halten" wieder nach Plan.
+      // EOS-Netzladen läuft dagegen IMMER nach Plan (Feld Nebeling 18./19.11.): die Sperre verbietet nur, Netzstrom
+      // aus dem Akku ins Netz zu geben — Laden aus dem Netz ist gewollt, der Strom wird danach im Haus verbraucht.
+      // Netzladen auszusetzen hielt einen fast leeren Akku leer, die Sperre fiel nie (~11 h kein Laden).
       const m8ShareLocked = ctx.gridShare?.isLocked?.() === true;
       const m8IsHold = target === 'gridSetpointW' && eff.rule?.optimizer === 'eos' && eff.rule?.closedLoopHold === true;
-      const m8IsGridCharge = target === 'gridSetpointW' && eff.rule?.optimizer === 'eos'
-        && !eff.rule?.closedLoopHold && !eff.rule?.closedLoopExport && Number(eff.value) > 0;
-      if (m8ShareLocked && (m8IsHold || m8IsGridCharge)) {
+      if (m8ShareLocked && m8IsHold) {
         const selfW = Number(cfg.schedule?.defaultGridSetpointW);
         eff.value = Number.isFinite(selfW) ? selfW : 0; // Eigenverbrauch (Netzanteil im Haus verbrauchen)
-        eff.source = m8IsHold ? 'eos_grid_hold_suspended' : 'eos_grid_charge_suspended';
+        eff.source = 'eos_grid_hold_suspended';
         let gridKwh = null; try { gridKwh = ctx.gridShare?.summary?.()?.gridKwh ?? null; } catch { /* best effort */ }
-        state.ctrl.eosGridShareSuspend = { at: Date.now(), kind: m8IsHold ? 'hold' : 'charge', gridKwh, ruleId: eff.rule?.id ?? null };
+        state.ctrl.eosGridShareSuspend = { at: Date.now(), kind: 'hold', gridKwh, ruleId: eff.rule?.id ?? null };
         const key = `${eff.source}:${eff.rule?.id ?? ''}`;
         if (state.ctrl._eosSuspendKey !== key) {
-          pushLog(eff.source, { gridKwh, text: `EOS-${m8IsHold ? 'Halten' : 'Netzladen'} ausgesetzt: Netzstrom im Akku (${gridKwh != null ? gridKwh.toFixed(2) : '?'} kWh) wird zuerst im Haus verbraucht.` });
+          pushLog(eff.source, { gridKwh, text: `EOS-Halten ausgesetzt: Netzstrom im Akku (${gridKwh != null ? gridKwh.toFixed(2) : '?'} kWh) wird zuerst im Haus verbraucht.` });
           state.ctrl._eosSuspendKey = key;
         }
       } else {

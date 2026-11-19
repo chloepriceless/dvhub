@@ -259,6 +259,8 @@ export function createMqttTransport(victronConfig, options = {}) {
     ? Number(mqttCfg.staleMaxAgeMs)
     : Math.max(3 * keepaliveMs, 90000);
   let lastStaleReconnectAt = 0;
+  // DVhub-Schema: wann zuletzt ein Eingang PER MQTT kam (nicht per HTTP-Push) — 0 = noch nie.
+  let lastMqttInputAt = 0;
 
   let client = null;
   let keepaliveTimer = null;
@@ -348,7 +350,11 @@ export function createMqttTransport(victronConfig, options = {}) {
     if (schema === 'dvhub') {
       // Nackte Zahl, JSON-Zahl oder {value}; Unbrauchbares wird ignoriert.
       const v = parseMqttPayload(payload);
-      if (v !== undefined) cache[topic] = { value: v, ts: Date.now() };
+      if (v !== undefined) {
+        cache[topic] = { value: v, ts: Date.now() };
+        // Lebenszeichen des MQTT-Abos — getrennt vom Zwischenspeicher, den auch der HTTP-Push füllt (Codex ac04827a P2).
+        lastMqttInputAt = Date.now();
+      }
       return;
     }
     // MQTT-PAYLOAD-FIX: parseMqttPayload ist derselbe Toleranz-Parser, den der
@@ -707,7 +713,14 @@ export function createMqttTransport(victronConfig, options = {}) {
       const wasStale = !!cache[topic];
       if (client?.connected) {
         requestRead(topic);
-        if (wasStale && typeof client.reconnect === 'function') {
+        // DVhub-Schema (Feld Nebeling 19.11.): kommen andere Eingänge frisch an, steht das Abo — der Lieferant schickt
+        // nur diesen einen Wert nicht. Ohne R/-Nachfordern und mit verworfenen retained Replays bringt Neuverbinden
+        // dann nichts, flutete aber alle ~92 s das Log (mqtt_disconnected/mqtt_connected). Nur neu verbinden, wenn
+        // gar nichts Frisches mehr PER MQTT ankommt — per HTTP gepushte Werte beweisen kein lebendes Abo
+        // (Codex ac04827a P2: gemischte Anlage, MQTT steht still, HTTP frisch).
+        const subscriptionAlive = schema === 'dvhub'
+          && lastMqttInputAt > 0 && Date.now() - lastMqttInputAt <= staleMaxAgeMs;
+        if (wasStale && !subscriptionAlive && typeof client.reconnect === 'function') {
           const now = Date.now();
           if (now - lastStaleReconnectAt > staleMaxAgeMs) {
             lastStaleReconnectAt = now;
