@@ -1255,8 +1255,6 @@ export function createPoller(ctx) {
       pollPoint('deviceMaxDischargeA', cfg.points.deviceMaxDischargeA),
       ...buildDvControlReadbackPolls(cfg).map(([name, conf]) => pollDvControlReadback(name, conf))
     ]);
-    if (unknownPoints.size) state.victron.unknownFields = [...unknownPoints].sort();
-    else if (state.victron.unknownFields) delete state.victron.unknownFields;
 
     const pvDc = Number(state.victron.pvPowerW || 0);
     // Issue #13: PV kann an zwei Positionen haengen (z. B. String-WR am
@@ -1312,6 +1310,7 @@ export function createPoller(ctx) {
             // ohne Stempel gälte der abgeleitete Wert sofort als stale.
             (state.victron.fieldUpdatedAt ??= {}).batteryPowerW = Date.now();
             if (state.victron.errors) delete state.victron.errors.batteryPowerW;
+            unknownPoints.delete('batteryPowerW');
           } else {
             m160Failed('Akku-Modul meldet keinen Wert (SunSpec not implemented)');
           }
@@ -1387,6 +1386,7 @@ export function createPoller(ctx) {
         + Number(state.victron.gridImportW || 0)
         - Number(state.victron.gridExportW || 0);
       state.victron.selfConsumptionW = Number(Math.max(0, derived).toFixed(3));
+      unknownPoints.delete('selfConsumptionW');
     }
 
     // Hauslast aus der Energiebilanz (Profil-opt-in derive = 'energy_balance'):
@@ -1431,6 +1431,7 @@ export function createPoller(ctx) {
       state.victron.selfConsumptionW = Number(Math.max(0, derived).toFixed(3));
       state.victron.selfConsumptionDerived = true;
       if (state.victron.errors) delete state.victron.errors.selfConsumptionW;
+      unknownPoints.delete('selfConsumptionW');
       if (state.victron.fieldUpdatedAt) {
         const nowStamp = Date.now();
         const inputStamps = balanceInputs.map((f) => Number(state.victron.fieldUpdatedAt[f])).filter((t) => t > 0);
@@ -1453,6 +1454,11 @@ export function createPoller(ctx) {
       // pollEveryMs-Pause des Lastpunkts ihn für gemessen und rechnete nach der Erholung nicht neu.
       state.victron.selfConsumptionDerived = false;
     }
+
+    // Bewusst geleerte Werte (E8/E10) für liveSnapshotStale veröffentlichen — NACH den Ableitungen: eine Ableitung, die
+    // den Wert wieder liefert (M160, Hauslast-Rückfall), hebt den Vermerk auf (Codex c52af01f).
+    if (unknownPoints.size) state.victron.unknownFields = [...unknownPoints].sort();
+    else if (state.victron.unknownFields) delete state.victron.unknownFields;
 
     // Zweite GX am selben Anschluss (multi-gx): ihr Akku haengt hinter dem
     // Zaehler der Hauptanlage — sein Laden/Entladen ist kein Hausverbrauch.

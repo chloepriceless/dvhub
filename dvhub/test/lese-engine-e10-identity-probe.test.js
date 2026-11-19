@@ -11,6 +11,7 @@ import {
   normalizeIdentityProbe, runIdentityProbe, decodeRegisterString,
 } from '../services/inverter/identity-probe.js';
 import { buildVictronSnapshot } from '../runtime-state.js';
+import { liveSnapshotStale } from '../telemetry-runtime.js';
 import { createScheduleEvaluator } from '../schedule-eval.js';
 import { createRegisterDevice, createPollerRig } from './helpers/fake-modbus-device.js';
 
@@ -394,4 +395,25 @@ test('E10/Codex e20a456e: ausgeblendete Hauslast bleibt leer, auch mit Lastsiche
   assert.equal(state.victron.identityProbe.status, 'mismatch');
   assert.ok(state.victron.gridImportW > 100, 'Bezug wie im Fall der Lastsicherung');
   assert.equal(state.victron.selfConsumptionW, null, 'früher 2100 aus _sungrowLoadHold');
+});
+
+// --- Codex c52af01f ----------------------------------------------------------------------------------------------
+
+// P2: ein Lastregister mit energy_balance als Rückfall war ausgeblendet; nach der Erholung fällt das Register aus und
+// der Rückfall liefert die Last — dann ist sie kein unbekannter Wert mehr, und die Telemetrie gilt wieder als frisch.
+test('E10/Codex c52af01f: nach der Erholung hebt eine abgeleitete Last den Unbekannt-Vermerk auf', async () => {
+  const cfg = cfgWith({ ...PROBE, hideOnMismatch: ['selfConsumptionW'] });
+  cfg.points.selfConsumptionW = p(40071, { quantity: 2, readType: 'int32', derive: 'energy_balance' }); // fehlt im Gerät
+  const dev = device({ magic: 1 });
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  assert.equal(state.victron.identityProbe.status, 'mismatch');
+  assert.deepEqual(state.victron.unknownFields, ['selfConsumptionW']);
+  dev.set(40000, E3DC);
+  cfg.victron.identityProbe = { ...cfg.victron.identityProbe, everyMs: 60000 }; // neuer Block → sofort neu geprüft
+  await poller.requestPoll();
+  assert.equal(state.victron.identityProbe.status, 'ok');
+  assert.equal(state.victron.selfConsumptionW, 7400, 'Rückfall: PV 5400 + Bezug 1200 − Akku (−800)');
+  assert.equal(state.victron.unknownFields, undefined, 'früher blieb der Vermerk bis zur nächsten Registerlesung');
+  assert.equal(liveSnapshotStale({ ts: new Date().toISOString(), meter: state.meter, victron: state.victron }), false);
 });
