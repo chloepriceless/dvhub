@@ -374,10 +374,14 @@ export function createForecastService(ctx) {
         // the Ist line (past) and the Prognose lines (future) are time-disjoint
         // and the user sees no real overlap.
         try {
-          const historicRows = await store.getLatestPvForecast({
+          // N2 (Feld 19.11.): Der Prognose-Speicher bekommt seinen Pool erst in forecast.start() (ensureSchema,
+          // server.js nach telemetryReady). ctx.telemetryStore steht da schon — eine Anfrage in diesem Fenster
+          // las sonst über den leeren Pool („Cannot read properties of null (reading 'query')"). Bis dahin die
+          // historische Prognose auslassen (pastForecast leer wie im Fehlerfall); die nächste Anfrage liefert sie.
+          const historicRows = store.isReady() ? await store.getLatestPvForecast({
             start: start.toISOString(),
             end: end.toISOString()
-          });
+          }) : null;
           if (Array.isArray(historicRows)) {
             // ONE consistent model for the whole line — no per-timestamp mixing.
             // History: the 2026-05-22 fix ("non-zero rows always win, tie-break
