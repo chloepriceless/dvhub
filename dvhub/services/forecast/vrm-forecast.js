@@ -87,7 +87,11 @@ export function createVrmForecast(ctx, { store } = {}) {
       // continues to populate vrm_forecasts (the source-specific table); this
       // is a fire-and-forget mirror — failure here must not break the read path
       // (consumers still get `slots` back even if the persist fails).
-      if (store && typeof store.writePvForecasts === 'function' && slots.length > 0) {
+      // N2 (Feld 19.11.): vor forecast.start() hat der Speicher noch keinen Pool (ctx.db steht schon) — dann den
+      // Spiegel auslassen statt über den leeren Pool zu schreiben (vrm_forecast_persist_error beim Start). Jede
+      // spätere Lesung (Prognose-Lauf, /api/forecast) spiegelt erneut. Speicher ohne isReady gelten als bereit.
+      const storeReady = typeof store?.isReady !== 'function' || store.isReady();
+      if (store && typeof store.writePvForecasts === 'function' && slots.length > 0 && storeReady) {
         const mirrorRows = slots.map(s => ({
           model: 'vrm',
           ts_utc: s.ts_utc,
