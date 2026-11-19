@@ -167,10 +167,14 @@ export function createDeviceService(ctx, hub) {
        VALUES ($1, now(), $2, $3, $4, $5)`,
       [r.id, r.powerW, r.energyTodayWh, r.online, (r.output != null ? JSON.stringify({ output: r.output }) : null)]
     );
+    // Episode je Speicher-Durchgang (Codex 372cd1db P2): beendet erst ein Durchgang ganz ohne Fehler — sonst
+    // meldete ein gesundes Gerät neben einem dauerhaft scheiternden jede Minute „wieder gut“ und neu „Fehler“.
+    let firstFailure = null;
+    let wrote = 0;
     for (const r of readings) {
       try {
         await insert(r);
-        notePersistOk();
+        wrote += 1;
       } catch (err) {
         let failure = err;
         // Tabelle fehlt (42P01, z. B. Datenbank zurückgesetzt): einmal neu anlegen, dann erneut speichern.
@@ -180,16 +184,18 @@ export function createDeviceService(ctx, hub) {
           if (schema.ok) {
             try {
               await insert(r);
-              notePersistOk();
+              wrote += 1;
               continue;
             } catch (retryErr) {
               failure = retryErr;
             }
           }
         }
-        notePersistFailure(r.id, failure);
+        if (!firstFailure) firstFailure = { id: r.id, err: failure };
       }
     }
+    if (firstFailure) notePersistFailure(firstFailure.id, firstFailure.err);
+    else if (wrote > 0) notePersistOk();
   }
 
   /**

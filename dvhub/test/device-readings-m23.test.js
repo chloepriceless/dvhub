@@ -133,6 +133,35 @@ describe('M23: device_readings fehlt nach dem Update', () => {
     await service.close();
   });
 
+  // Codex 372cd1db P2: ein Gerät scheitert dauerhaft, ein anderes speichert — keine Meldung je Takt, kein falsches
+  // „wieder gut“; das Ende meldet erst ein Durchgang ganz ohne Fehler.
+  it('mehrere Geräte, eines scheitert dauerhaft: eine Warnung, kein falsches Ende; Ende nach fehlerfreiem Durchgang', async () => {
+    const pushLog = makePushLog();
+    let badFails = true;
+    const db = {
+      query(sql, params) {
+        if (sql.includes('INSERT INTO device_readings') && params?.[0] === 'bad' && badFails) {
+          return Promise.reject(Object.assign(new Error('Wert zu lang'), { code: '22001' }));
+        }
+        return Promise.resolve({ rows: [] });
+      },
+    };
+    const devices = [
+      { id: 'good', name: 'G', adapter: 'mqtt-generic', mqtt: { topic: 't/good', powerField: 'power' } },
+      { id: 'bad', name: 'B', adapter: 'mqtt-generic', mqtt: { topic: 't/bad', powerField: 'power' } },
+    ];
+    const service = track(createDeviceService({ getCfg: () => ({ devices }), pushLog, db }, hub));
+    await service.start();
+    for (let i = 0; i < 4; i += 1) await service._persistReadings();
+    assert.equal(pushLog.logs.filter((l) => l.event === 'device_persist_error').length, 1);
+    assert.equal(pushLog.logs.filter((l) => l.event === 'device_persist_recovered').length, 0, 'das kaputte Gerät ist nicht wieder gut');
+    badFails = false;
+    await service._persistReadings();
+    const rec = pushLog.logs.filter((l) => l.event === 'device_persist_recovered');
+    assert.equal(rec.length, 1);
+    assert.equal(rec[0].data.failed, 4, 'vier Durchgänge mit Fehler');
+  });
+
   it('Migration 024 legt device_readings auf jeder Installation an (vor dem Pool, wie alle Migrationen)', () => {
     const file = path.join(__dirname, '..', 'db', 'migrations', '024-device-readings.sql');
     assert.ok(fs.existsSync(file), '024-device-readings.sql fehlt');
