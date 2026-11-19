@@ -113,7 +113,8 @@ exit 0`);
   fake('apt-cache', `
 if [[ "$1" == policy && "$2" == timescaledb-2-* && -f "${repoList}" ]]; then
   line="$(cat "${repoList}")"
-  case "$line" in ${served}) echo "  Candidate: ${pgBuilds ? (pgBuilds.candidate || pgBuilds.versions[0][0]) : '2.31.0~ubuntu26.04'}" ;; *) echo "  Candidate: (none)" ;; esac
+  kand="Installationskandidat"; keine="(keine)"; [[ "$LC_ALL" == C ]] && { kand=Candidate; keine="(none)"; }
+  case "$line" in ${served}) echo "  $kand: ${pgBuilds ? (pgBuilds.candidate || pgBuilds.versions[0][0]) : '2.31.0~ubuntu26.04'}" ;; *) echo "  $kand: $keine" ;; esac
 fi
 ${pgBuilds ? `
 if [[ "$1" == madison ]]; then

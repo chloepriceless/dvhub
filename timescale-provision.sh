@@ -260,7 +260,10 @@ USE_TSL=0
 # `grep -q`. Under `set -o pipefail`, grep -q closes the pipe on first match and
 # apt-cache dies with SIGPIPE (141), which pipefail reports as a failed pipeline
 # → USE_TSL would wrongly stay 0 and the box would fall back to Apache.
-TSL_POLICY="$(apt-cache policy "$TSL_PKG" 2>/dev/null || true)"
+# LC_ALL=C: apt-cache policy antwortet sonst in der Sprache der Box
+# („Installationskandidat:“) — das Muster unten fand dann keinen Kandidaten und
+# die Box fiel auf das Apache-Paket zurueck (Codex 7096c6f1).
+TSL_POLICY="$(LC_ALL=C apt-cache policy "$TSL_PKG" 2>/dev/null || true)"
 if [[ -s "$KEYRING" && -f "$REPO_LIST" && "$TSL_POLICY" =~ Candidate:\ [0-9] ]]; then
   USE_TSL=1
 fi
@@ -299,7 +302,8 @@ ts_pkg_spec() {
   # apt-Kandidat = was apt nach den Regeln der Box (Pins, Prioritaeten) nehmen wuerde.
   # Nie darueber hinausgehen: eine ausdrueckliche Version uebergeht sonst einen Pin
   # des Betreibers (Codex 684697ca). Ohne Kandidat entscheidet apt wie bisher.
-  cand="$(apt-cache policy "$pkg" 2>/dev/null | sed -n 's/^ *Candidate: //p' | head -n1 || true)"
+  # LC_ALL=C: auf einer deutschen Box heisst die Zeile sonst „Installationskandidat:“.
+  cand="$(LC_ALL=C apt-cache policy "$pkg" 2>/dev/null | sed -n 's/^ *Candidate: //p' | head -n1 || true)"
   if [[ -z "$cand" || "$cand" == "(none)" ]]; then printf '%s\n' "$pkg"; return 0; fi
   re="(^|, )${pg_pkg} \\(>= ([^)]+)\\)"
   while IFS= read -r ver; do
