@@ -74,6 +74,13 @@ test('[MQTT]-Meldungen zählen nur ab Warnung als Fehler', () => {
   assert.doesNotMatch(AUDIT_ERROR_SQL, /OR event_type LIKE '\[MQTT\]%'\s*\n?\)/);
 });
 
+// Codex 0752f9c0 P2: Info-[MQTT]-Meldungen fallen aus der Fehler-Regel — sie müssen dann ins Rauschen
+// (Tageszähler), sonst bleiben sie für immer roh liegen.
+test('Info-[MQTT]-Meldungen gehören zum Rauschen (Aufbewahrung)', () => {
+  assert.match(AUDIT_NOISE_SQL, /OR event_type LIKE '\[MQTT\]%'/);
+  assert.match(AUDIT_NOISE_SQL, /AND NOT/);
+});
+
 test('Rauschen und Fehler sind getrennt', () => {
   assert.match(AUDIT_NOISE_SQL, /AND NOT/);
   assert.match(AUDIT_ERROR_SQL, /_error/);

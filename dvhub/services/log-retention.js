@@ -49,12 +49,15 @@ export const AUDIT_ERROR_SQL = `(
   event_type LIKE '%\\_error' OR event_type LIKE '%\\_failed'
   OR (event_type LIKE '[MQTT]%' AND severity IN ('warn', 'error', 'critical'))
 )`;
-// Rauschen ohne Fehler → nach 60 Tagen nur noch Tageszähler.
+// Rauschen ohne Fehler → nach 60 Tagen nur noch Tageszähler. Dazu Info-[MQTT]-Meldungen („Connected to …“), seit
+// sie nicht mehr als Fehler zählen (Codex 0752f9c0) — sonst blieben sie ohne Aufbewahrungsregel roh liegen.
+// Kein SQL-Kommentar im Text: die Bausteine werden in andere Abfragen eingesetzt.
 export const AUDIT_NOISE_SQL = `(
   (event_type IN ('control_write', 'control_keepalive', 'control_discharge_floor',
                   'eos_forecast_bridge', 'eos_config_sync', 'eos_new_plan_detected',
                   'eos_grid_hold', 'optimizer_run')
-   OR event_type LIKE '%\\_ok')
+   OR event_type LIKE '%\\_ok'
+   OR event_type LIKE '[MQTT]%')
   AND NOT ${AUDIT_ERROR_SQL}
 )`;
 export const ERROR_EPISODE_GAP = '15 minutes';

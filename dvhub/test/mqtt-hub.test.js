@@ -85,6 +85,22 @@ describe('createMqttHub', () => {
     assert.equal(received[0].topic, 'test/topic');
   });
 
+  // Codex 0752f9c0 P2: [MQTT]-Meldungen zählen nur ab Warnung als Fehler — ein werfender Handler muss daher
+  // ausdrücklich mit Stufe error geloggt werden, sonst verschwindet er aus dem Fehlerprotokoll.
+  it('werfender Handler wird mit Stufe error geloggt', async () => {
+    const { createMqttHub } = await import('../services/mqtt/index.js');
+    const logs = [];
+    hub = createMqttHub({
+      getCfg: () => ({ mqtt: { brokerUrl: 'mqtt://test:1883', embeddedBroker: { enabled: false, port: 1883 }, topicPrefix: 'dvhub', username: '', password: '' } }),
+      pushLog: (event, data, level) => logs.push({ event, level })
+    });
+    hub.subscribe('x/y', () => { throw new Error('kaputt'); });
+    hub._dispatchMessage('x/y', Buffer.from('1'));
+    const e = logs.find((l) => String(l.event).startsWith('[MQTT] Handler error'));
+    assert.ok(e, 'Handler-Fehler protokolliert');
+    assert.equal(e.level, 'error');
+  });
+
   it('wildcard subscription # matches child topics', async () => {
     const { createMqttHub } = await import('../services/mqtt/index.js');
     hub = createMqttHub({
