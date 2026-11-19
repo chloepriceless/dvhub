@@ -21,24 +21,27 @@ const setup = (opts = {}) => setupProfile(ID, { host: HOST, ...opts });
 const load = (opts) => loadConfigFile(setup(opts)).effectiveConfig;
 
 // Schein-Hybrid auf Unit 1, nur Input-Register (FC 4), 32 bit High-Wort zuerst. `newMeterBlock: false` = ältere
-// Firmware ohne Zählerblock 33250 ff.
+// Firmware ohne Zählerblock 33250 ff. `magnitude: true` = 33149 liefert nur den Betrag (Lesart solis-modbus/Plexlog);
+// `direction` überschreibt 33135; `gaps: true` = Register zwischen 33135 und 33149 fehlen (Block-Lesung scheitert).
+// Sonst ist der Block 33135–33150 lückenlos belegt — Plexlog liest 33000–33299 in 50er-Blöcken [DECOMP].
 function hybrid({
   pv = 7350, meter = 2600, phases = [900, 800, 900], batt = 3100, load: house = 1650, soc = 64,
-  chargeA = 500, dischargeA = 740, newMeterBlock = true,
+  chargeA = 500, dischargeA = 740, newMeterBlock = true, magnitude = false, direction, gaps = false,
 } = {}) {
   const dev = createRegisterDevice({ defaultUnitId: 1 });
   const fc4 = { fc: 4 };
+  if (!gaps) for (let a = 33136; a <= 33148; a += 1) dev.set(a, 0, fc4);
   dev.set(33000, 0x2030, fc4);            // Modelltyp — nicht gelesen, nur Kulisse
   dev.set32(33057, pv, fc4);              // PV gesamt U32
   dev.set32(33130, meter, fc4);           // Zähler S32, + = Export
   dev.set(33132, 1, fc4);                 // Mode-Spiegel — darf nie als Phase gelesen werden
-  dev.set(33135, batt >= 0 ? 0 : 1, fc4); // Richtung 0 laden / 1 entladen
+  dev.set(33135, direction ?? (batt >= 0 ? 0 : 1), fc4); // Richtung 0 laden / 1 entladen
   dev.set(33139, soc, fc4);
   dev.set(33143, chargeA, fc4);           // BMS-Grenze Laden, 0,1 A
   dev.set(33144, dischargeA, fc4);        // BMS-Grenze Entladen, 0,1 A
   dev.set(33147, house, fc4);             // Hauslast U16
   dev.set(33148, 0, fc4);                 // Backup-Last
-  dev.set32(33149, batt, fc4);            // Akku S32 (evcc-Lesart: + = Laden)
+  dev.set32(33149, magnitude ? Math.abs(batt) : batt, fc4); // Akku S32 (evcc-Lesart: + = Laden) bzw. Betrag
   if (newMeterBlock) {
     dev.set32(33257, phases[0], fc4);
     dev.set32(33259, phases[1], fc4);
@@ -58,7 +61,8 @@ test('solis.json: Nur-Lese-Profil, Beta, Label und Hilfetext sagen es offen', ()
   assert.match(raw.label, /nur Anzeige/);
   assert.ok(raw.label.length <= 64, 'Dropdown kürzt Labels auf 64 Zeichen');
   assert.match(raw.help, /nur Anzeige, keine Steuerung, am Gerät ungeprüft/i);
-  assert.match(raw.points.batteryPowerW._comment, /STRITTIG/, 'umstrittenes Akku-Vorzeichen steht am Punkt');
+  assert.match(raw.points.batteryPowerW._comment, /strittig.*direction \(E8\)/is, 'umstrittenes Akku-Vorzeichen und der Weg über 33135 stehen am Punkt');
+  assert.match(raw.help, /Richtungsregister/);
   assert.equal(raw.identify, undefined, 'keine Geräteerkennung (E10 fehlt) — nichts vortäuschen');
 });
 
@@ -126,8 +130,10 @@ test('Poller: Export positiv am Gerät → Einspeisung in DVhub, Phasen aus dem 
   assert.equal(state.victron.deviceMaxChargeA, 50);
   assert.equal(state.victron.deviceMaxDischargeA, 74);
 
-  // Genau die Profilregister, alle FC 4 auf Unit 1 — nie 33132 (Mode-Spiegel) als Phase, nie 33135/33263.
-  assert.deepEqual(readAddresses(dev), [33057, 33130, 33139, 33143, 33144, 33147, 33149, 33257, 33259, 33261]);
+  // Genau die Profilregister, alle FC 4 auf Unit 1 — nie 33132 (Mode-Spiegel) als Phase, nie 33263. Akku und
+  // Richtung (E8) aus EINER Anfrage 33135–33150.
+  assert.deepEqual(readAddresses(dev), [33057, 33130, 33135, 33139, 33143, 33144, 33147, 33257, 33259, 33261]);
+  assert.deepEqual(dev.requests.filter((r) => r.address === 33135).map((r) => r.quantity), [16]);
   assert.ok(dev.requests.every((r) => r.fc === 4 && r.unitId === 1 && r.host === HOST));
 });
 
@@ -149,6 +155,38 @@ test('Poller: ältere Firmware ohne Zählerblock 33250 ff. — Netzsumme aus 331
   assert.equal(state.meter.grid_total_w, -2600);
   assert.deepEqual([state.meter.grid_l1_w, state.meter.grid_l2_w, state.meter.grid_l3_w], [null, null, null]);
   assert.ok(logs.some((l) => l.event === 'meter_phase_read_error'), 'fehlende Phasen werden einmal gemeldet');
+});
+
+// --- E8: Akku-Vorzeichen aus 33135 -----------------------------------------------------------------------------------
+
+test('E8: Profil nimmt das Akku-Vorzeichen aus 33135 (0 = Laden +, 1 = Entladen −) [SPEC]', () => {
+  const raw = shippedProfile(ID);
+  assert.deepEqual(raw.points.batteryPowerW.direction, { address: 33135, values: { 0: 1, 1: -1 } });
+  assert.equal(raw.points.batteryPowerW.sign, undefined, 'kein sign neben direction');
+  assert.deepEqual(load().points.batteryPowerW.direction, { address: 33135, values: { 0: 1, 1: -1 } }, 'kommt in der wirksamen Config an');
+});
+
+test('E8: liefert 33149 nur den Betrag, zeigt DVhub Entladen trotzdem negativ (früher positiv)', async () => {
+  const { state } = await pollProfile(load(), hybrid({ batt: -2800, magnitude: true }));
+  assert.equal(state.victron.batteryPowerW, -2800);
+  assert.equal(state.victron.batteryDischargeW, 2800);
+  const charging = await pollProfile(load(), hybrid({ batt: 1900, magnitude: true }));
+  assert.equal(charging.state.victron.batteryPowerW, 1900);
+});
+
+test('E8: unbekannter Wert in 33135 → Akku leer mit Grund, kein geratenes Vorzeichen; Rest unberührt', async () => {
+  const { state } = await pollProfile(load(), hybrid({ batt: 1200, direction: 2 }));
+  assert.equal(state.victron.batteryPowerW, null);
+  assert.match(state.victron.errors.batteryPowerW, /Richtungsregister @33135 meldet 2/);
+  assert.equal(state.victron.soc, 64);
+  assert.equal(state.victron.selfConsumptionW, 1650);
+  assert.equal(state.meter.ok, true);
+});
+
+test('E8: kennt das Gerät Register zwischen 33135 und 33149 nicht → Richtung vorher/nachher einzeln, gleicher Wert', async () => {
+  const { state } = await pollProfile(load(), hybrid({ batt: -900, gaps: true }));
+  assert.equal(state.victron.batteryPowerW, -900);
+  assert.equal(state.victron.errors.batteryPowerW, undefined);
 });
 
 // --- Beta-Gate -------------------------------------------------------------------------------------------------

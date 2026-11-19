@@ -57,7 +57,7 @@ evcc [solax.yaml](https://github.com/evcc-io/evcc/blob/master/templates/definiti
 
 | Lücke | Folge | Braucht |
 |---|---|---|
-| Richtungs-Flag 0x19 `BDCStatus` (0 = Entladen, 1 = Laden) | DVhub liest 0x16 als vorzeichenbehafteten Wert (wie evcc). Liefert ein Gerät nur Beträge, erscheint Entladen als Laden | Vorzeichen aus Statusregister (E8) |
+| Richtungs-Flag 0x19 `BDCStatus` (0 = Entladen, 1 = Laden) | DVhub liest 0x16 als vorzeichenbehafteten Wert (wie evcc). Liefert ein Gerät nur Beträge, erscheint Entladen als Laden | E8 (`direction`) gibt es; bewusst nicht eingeschaltet, weil keine Integration 0x19 nutzt und unbelegt ist, ob es im Ruhezustand weitere Werte meldet (dann wären Akku und Hauslast leer). Nach dem Gerätetest einschalten |
 | PV3 0x124 (3 MPPT) | PV zu niedrig auf 3-MPPT-Geräten. Ins Profil genommen, legte ein fehlendes Register auf 2-MPPT-Geräten die ganze PV lahm | ginge heute per `combine`, je Gerät nach Test |
 | Zweiter Akku-Stapel (0x129/0x12D) | zweiter Akku fehlt | eigener Punkt bzw. `combine` |
 | Netz je Phase | Phasenwerte bleiben leer; 0x70–0x75 sind WR-Werte, nicht der Zähler | — |
@@ -75,7 +75,9 @@ Profil.
    Zeigt DVhub Einspeisung, bei `meter` die Zeile `"sign": -1` entfernen und melden.
 3. **Akku-Vorzeichen:** Akku sichtbar laden lassen, dann entladen lassen. Laden muss **positiv**, Entladen
    **negativ** erscheinen. Laden negativ: bei `batteryPowerW` `"sign": -1` ergänzen. Beide positiv: das Gerät
-   liefert nur Beträge (E8) — bitte melden.
+   liefert nur Beträge — bei `batteryPowerW` `"direction": { "address": 25, "values": { "0": -1, "1": 1 } }`
+   ergänzen (Vorzeichen aus BDCStatus 0x19) und melden. Vorher 0x19 per Register-Scan beim Laden, Entladen und im
+   Ruhezustand lesen: nur 0 und 1 dürfen vorkommen.
 4. **PV:** Summe mit der App vergleichen. Bei 3 MPPT fehlt PV3.
 5. **Hauslast:** Die abgeleitete Last mit der App vergleichen. Abweichungen um die Wandlerverluste (einige
    Prozent) sind erwartet.
