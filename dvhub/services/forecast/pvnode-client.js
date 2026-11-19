@@ -256,6 +256,8 @@ async function pvnodeFetch(apiKey, { url, method, body = null, timeoutMs = 20000
       });
       if (res.status === 429) throw new AbortError('pvnode_rate_limited');
       if (res.status === 401 || res.status === 403) throw new AbortError(`pvnode_auth_${res.status}`);
+      // M23: übrige 4xx (404 Site unbekannt, 422 Validierung) bleiben beim Wiederholen gleich — nicht wiederholen.
+      if (res.status >= 400 && res.status < 500 && res.status !== 408) throw new AbortError(`pvnode_http_${res.status}`);
       if (!res.ok) throw new Error(`pvnode_http_${res.status}`);
       return res.json();
     },
@@ -298,6 +300,13 @@ export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
   const { getCfg, pushLog } = ctx;
   let lastFetchAt = 0;
   let cachedData = null;
+  // M23 (Feld 19.11.2026): Fehler einmal je Episode melden (bis zum nächsten Erfolg). Bisher stand bei jeder
+  // Aktualisierung erneut ein roter pvnode_error im Systemprotokoll, auch für eine falsche Site-ID.
+  let reportedNotFound = null;   // 'site:<id>' | 'inline'
+  let reportedError = null;      // Fehlermeldung
+  const SITE_NOT_FOUND_HINT = 'pvnode kennt die eingetragene Site-ID nicht (gelöscht, vertippt oder zu einem anderen '
+    + 'Konto) — Einstellungen → Prognose → pvnode: Site-ID prüfen, in der pvnode-Web-App wiederherstellen oder leeren '
+    + '(dann rechnet pvnode mit den PV-Strings aus DVhub)';
 
   function getSiteId(cfg) {
     return String(cfg.forecast?.pvnode?.siteId ?? '').trim();
@@ -366,8 +375,27 @@ export function createPvnodeClient(ctx, { store, pvnodeQuota } = {}) {
       data = await pvnodeFetch(apiKey, req);
       await bumpQuota();
       pushLog('pvnode_ok', { mode: siteId ? 'site' : 'inline' });
+      reportedNotFound = null;
+      reportedError = null;
     } catch (err) {
-      pushLog('pvnode_error', { error: err?.message || String(err) });
+      const message = err?.message || String(err);
+      if (message === 'pvnode_http_404') {
+        // M23: ohne gültigen Schlüssel antwortet pvnode 401/403 — ein 404 heißt Site-ID unbekannt (bzw. Pfad weg).
+        // Eine Einstellungssache der Anlage, kein Programmfehler: Warnung mit Hinweis, einmal je Site-ID.
+        const key = siteId ? `site:${siteId}` : 'inline';
+        if (reportedNotFound !== key) {
+          reportedNotFound = key;
+          pushLog('pvnode_site_not_found', {
+            mode: siteId ? 'site' : 'inline',
+            hint: siteId ? SITE_NOT_FOUND_HINT : 'pvnode-Endpunkt /v2/forecast/inline nicht gefunden (API geändert?)',
+          }, 'warn');
+        }
+        return cachedData;
+      }
+      if (reportedError !== message) {
+        reportedError = message;
+        pushLog('pvnode_error', { error: message });
+      }
       if (err && err.name === 'AbortError') {
         if (err.message === 'pvnode_rate_limited'
             && pvnodeQuota && typeof pvnodeQuota.markExhausted === 'function') {
@@ -478,7 +506,11 @@ export async function probePvnode({ apiKey, siteId, lat, lon, slope = 30, orient
       body: req.body != null ? req.body : undefined,
       signal: AbortSignal.timeout(20_000)
     });
-    if (!res.ok) return { ok: false, error: `pvnode HTTP ${res.status}` };
+    if (!res.ok) {
+      // M23: 404 mit Site-ID heißt „Site-ID unbekannt“ (ohne gültigen Schlüssel käme 401/403).
+      const why = res.status === 404 && sid ? ' — Site-ID bei pvnode nicht gefunden (gelöscht, vertippt oder anderes Konto?)' : '';
+      return { ok: false, error: `pvnode HTTP ${res.status}${why}` };
+    }
     const data = await res.json();
     const rows = extractValues(data);
     const first = rows[0] || null;

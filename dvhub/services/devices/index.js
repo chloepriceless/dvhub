@@ -3,8 +3,11 @@
 // Manages a registry of configured smart plugs with live power readings.
 // Plugin-based adapter system: MQTT Generic and Shelly HTTP adapters.
 //
-// DB schema created inline matching project pattern (forecast-store.js,
-// telemetry-store-pg.js) -- NO separate migration files.
+// DB schema: Migration 024-device-readings.sql legt die Tabelle an (läuft vor dem
+// Datenbank-Pool, auf jeder Installation). Der Dienst legt sie zusätzlich vor dem
+// ersten Speichern an und nach „Relation existiert nicht“ (42P01) neu — M23
+// (Feld 19.11.2026): start() lief oft, bevor der Pool stand; die Tabelle fehlte,
+// der Speicher-Takt lief trotzdem und meldete jede Minute rot.
 //
 // Factory: createDeviceService(ctx, hub) -> { start, close, getDevices }
 // DI context: { getCfg, pushLog, db }
@@ -46,23 +49,54 @@ export function createDeviceService(ctx, hub) {
   const getDb = () => ctx.db || null;
   const adapters = [];
   let persistTimer = null;
+  // M23: Tabelle angelegt? (Pool kann nach start() kommen, die Tabelle kann verschwinden.)
+  let schemaReady = false;
+  // M23: Speicherfehler einmal je Episode melden: { sinceMs, failed }.
+  let persistFailure = null;
 
   /**
    * Create DB schema if database available.
+   * @returns {Promise<{ok:boolean, error?:Error}>}
    */
   async function ensureSchema() {
     const db = getDb();
-    if (!db) return;
+    if (!db) return { ok: false };
     try {
       await db.query(SCHEMA_SQL);
+      schemaReady = true;
+      return { ok: true };
     } catch (err) {
-      pushLog('device_schema_error', { error: err.message });
+      return { ok: false, error: err };
     }
   }
 
+  function notePersistFailure(deviceId, err) {
+    if (!persistFailure) {
+      persistFailure = { sinceMs: Date.now(), failed: 0 };
+      // Geräte-Verlauf (Smart-Plugs) ist kein Steuerweg: Warnung, einmal je Episode — nicht jede Minute rot.
+      pushLog('device_persist_error', {
+        device: deviceId,
+        error: err?.message || String(err),
+        code: err?.code ?? null,
+        note: 'Geräte-Verlauf wird nicht gespeichert; Meldung einmal je Episode, das Ende meldet device_persist_recovered',
+      }, 'warn');
+    }
+    persistFailure.failed += 1;
+  }
+
+  function notePersistOk() {
+    if (!persistFailure) return;
+    pushLog('device_persist_recovered', {
+      failed: persistFailure.failed,
+      minutes: Math.round((Date.now() - persistFailure.sinceMs) / 60_000),
+    });
+    persistFailure = null;
+  }
+
   async function start() {
-    // Step 1: Create DB schema
-    await ensureSchema();
+    // Step 1: Create DB schema (ohne Pool später, vor dem ersten Speichern)
+    const schema = await ensureSchema();
+    if (schema.error) pushLog('device_schema_error', { error: schema.error.message, code: schema.error.code ?? null }, 'warn');
 
     // Step 2: Read device configs
     const devices = getCfg().devices || [];
@@ -87,10 +121,10 @@ export function createDeviceService(ctx, hub) {
       await shellyAdapter.start();
     }
 
-    // Step 4: Start persistence timer
-    if (getDb()) {
-      persistTimer = setInterval(() => persistReadings(), PERSIST_INTERVAL_MS);
-    }
+    // Step 4: Start persistence timer — immer: der Pool kann erst nach start()
+    // kommen (ctx.db ist ein später Getter); ohne Pool kehrt persistReadings sofort
+    // zurück. Vorher entschied ein einmaliger Blick hier, ob je gespeichert wird.
+    persistTimer = setInterval(() => persistReadings(), PERSIST_INTERVAL_MS);
 
     pushLog('device_service_started', { count: devices.length });
   }
@@ -126,16 +160,34 @@ export function createDeviceService(ctx, hub) {
   async function persistReadings() {
     const db = getDb();
     if (!db) return;
+    if (!schemaReady) await ensureSchema();
     const readings = getDevices();
+    const insert = (r) => db.query(
+      `INSERT INTO device_readings (device_id, ts_utc, power_w, energy_today_wh, online, meta_json)
+       VALUES ($1, now(), $2, $3, $4, $5)`,
+      [r.id, r.powerW, r.energyTodayWh, r.online, (r.output != null ? JSON.stringify({ output: r.output }) : null)]
+    );
     for (const r of readings) {
       try {
-        await db.query(
-          `INSERT INTO device_readings (device_id, ts_utc, power_w, energy_today_wh, online, meta_json)
-           VALUES ($1, now(), $2, $3, $4, $5)`,
-          [r.id, r.powerW, r.energyTodayWh, r.online, (r.output != null ? JSON.stringify({ output: r.output }) : null)]
-        );
+        await insert(r);
+        notePersistOk();
       } catch (err) {
-        pushLog('device_persist_error', { device: r.id, error: err.message });
+        let failure = err;
+        // Tabelle fehlt (42P01, z. B. Datenbank zurückgesetzt): einmal neu anlegen, dann erneut speichern.
+        if (err?.code === '42P01') {
+          schemaReady = false;
+          const schema = await ensureSchema();
+          if (schema.ok) {
+            try {
+              await insert(r);
+              notePersistOk();
+              continue;
+            } catch (retryErr) {
+              failure = retryErr;
+            }
+          }
+        }
+        notePersistFailure(r.id, failure);
       }
     }
   }
