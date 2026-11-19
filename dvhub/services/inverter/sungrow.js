@@ -817,6 +817,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     deliver: {},          // M28: Liefert-nicht-Erkennung je WR und Richtung ('master:discharge' → { underSince, stalledUntil, episode })
     limit: {},            // M28 Grundsatz 0: gemessene Lieferfähigkeit je WR und Richtung ('slave:discharge' → { limited, limitW, … })
     splitLast: null,      // M28: zuletzt erfolgreich kommandierte Anteile im Split { direction, masterW, slaveW, at }
+    drivenRegulateMs: null, // N3 (nur Slave): Takt, in dem der Master diesen Slave führt (setDrivenRegulateMs)
     logKeys: {}
   };
   let chain = Promise.resolve();
@@ -941,7 +942,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       deviceFallbackCount60s: (st.fallbackTimes || []).filter((x) => now() - x < 60000).length, // Rückfälle letzte 60 s
       lastHeartbeatAt: st.lastHeartbeatAt || null,
       // Punkt 2: adaptiver Regeltakt + gemessene Antwortzeit + Tages-Schreibzähler je Register (13050 mit Budget).
-      regulateEveryMs: adaptiveRegulateMs(getCfg()),
+      // N3 (Feld 19.11.): Der Slave hat keinen eigenen Regeltakt — tick()/applySetpoint laufen nur am Master, der
+      // Slave wird in jeder Master-Runde mitgeführt (stepSplit → applyDirectCommand). Er meldet darum den Takt, in
+      // dem der Master ihn führt, nicht seinen eigenen Rechenwert (der taktete nichts; Feld: API 5000 ms).
+      regulateEveryMs: isSlave ? st.drivenRegulateMs : adaptiveRegulateMs(getCfg()),
+      regulateFollowsMaster: isSlave,
       // N5/M7b: gewählter Takt (0 = Auto) + Modbus-Gesundheit dieser Verbindung. responseMs = der Median aus der
       // Gesundheit (EINE „Antwort"-Zahl; der Regelzyklus steht separat in regulateEveryMs), kein eingefrorener Wert.
       regulateConfiguredMs: configuredRegulateMs(getCfg()),
@@ -1459,6 +1464,13 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     }
   }
 
+  // N3: den Slave kommandieren und ihm dabei den Takt mitgeben, in dem er geführt wird — den wirksamen Master-Takt
+  // (derselbe Wert wie regulateEveryMs im Master-Status). Ein Aktuator ohne setDrivenRegulateMs (Tests) bleibt unberührt.
+  function commandSlave(decision, ctl) {
+    slaveActuator.setDrivenRegulateMs?.(adaptiveRegulateMs(getCfg()));
+    return slaveActuator.applyDirectCommand(decision, ctl);
+  }
+
   // Split-Steuerung: die Reglerentscheidung auf beide WR schreiben. Self → Master Self + Slave zurückziehen.
   // Forced → Leistung nach Punkt-2-Grenzen und SoC-Reserve/Headroom aufteilen, Slave zuerst, dann Master;
   // scheitert EINER (Herzschlag, Rücklesen, fremder Modus, …) → BEIDE sicher in Self-consumption.
@@ -1591,7 +1603,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // master-only/Notladung: Slave in Modus 0 (Self) halten. Scheitert das nicht hart — der Slave liegt dann ohnehin in Self.
       try { await slaveActuator.neutralize('self'); } catch { /* best effort */ }
     } else {
-      const sr = await slaveActuator.applyDirectCommand(slaveDecision, ctl);
+      const sr = await commandSlave(slaveDecision, ctl);
       if (sr.ok) slaveReadback = sr.readback || null;
       slaveWrote = sr.ok === true && sr.unchanged !== true; // echter Slave-Write (N4: Log/Status nur bei Änderung)
       if (!sr.ok) {
@@ -1804,7 +1816,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         let slaveStopped = true;
         if (slaveActuator && resolveSecondInverter(cfg).enabled) {
           try {
-            const sr = await slaveActuator.applyDirectCommand({ mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' }, ctl);
+            const sr = await commandSlave({ mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_blocked_hold' }, ctl);
             slaveStopped = sr?.ok === true;
           } catch { slaveStopped = false; }
         }
@@ -2301,6 +2313,15 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // test/sungrow-ems.test.js („P5 Schreibklassen-Matrix …"). KEINE weitere Write-Klasse darf im Not-Halt schreiben.
   // ===========================================================================================================
 
+  /**
+   * N3 (nur Slave): der Master meldet hier vor jedem Befehl seinen wirksamen Takt — in genau diesem Takt wird der
+   * Slave geführt. Reine Anzeige (Status regulateEveryMs), kein I/O, steuert nichts. Ungültig → null.
+   */
+  function setDrivenRegulateMs(ms) {
+    const v = Number(ms);
+    st.drivenRegulateMs = Number.isFinite(v) && v > 0 ? Math.round(v) : null;
+  }
+
   /** Slave einmal sicher in Self-consumption (Not-Halt, Split-Abbruch, Rückzug). Schreibt auch im Not-Halt. */
   function neutralize(reason = 'neutralize') {
     return serial(async () => {
@@ -2383,7 +2404,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     });
   }
 
-  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, neutralize, releaseControl, forceRelease, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
+  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, setDrivenRegulateMs, neutralize, releaseControl, forceRelease, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
 }
 
 function describe(d, modeValue = EMS_MODE.FORCED) {

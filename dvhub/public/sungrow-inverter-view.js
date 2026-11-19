@@ -158,6 +158,15 @@
     if (!ems || !num(ems.regulateEveryMs)) return DASH;
     return `Regelzyklus ${Math.round(Number(ems.regulateEveryMs))} ms`;
   }
+  // N3 (Feld 19.11.): Der Slave hat keinen eigenen Regeltakt — DVhub kommandiert ihn in jeder Master-Runde mit
+  // (Regelzyklus = Master-Takt aus sungrowEms). Seine Messwerte (SoC, Akku, PV), mit denen die Aufteilung rechnet,
+  // liest der Begleitdienst aber nur alle tickMs (sungrowSecond.tickMs, 5 s). Beides zählt, darum beides benannt.
+  function slaveRegulateText(masterEms, second) {
+    const parts = [];
+    if (masterEms && num(masterEms.regulateEveryMs)) parts.push(`Regelzyklus ${Math.round(Number(masterEms.regulateEveryMs))} ms (Master-Takt)`);
+    if (second && num(second.tickMs)) parts.push(`Lesetakt ${Math.round(Number(second.tickMs))} ms`);
+    return parts.length ? parts.join(' · ') : DASH;
+  }
   // Uhrzeit HH:MM aus einem Zeitstempel (ms) — für „letzter Fehler".
   function hhmm(ms) {
     if (!num(ms)) return '';
@@ -304,7 +313,7 @@
       fellBack: sp ? sp.slaveFellBack === true : false,
       // M28: Slave an seiner Grenze bzw. liefert nur teilweise, der Master übernimmt (takeoverText).
       takeover: takeoverText('slave', sp),
-      regulate: controlled ? regulateText(emsSlave) : DASH,
+      regulate: controlled ? slaveRegulateText(ems, s) : DASH,
       writes: controlled ? writesText(emsSlave) : DASH,
       // N5: Modbus-Gesundheit des Slave-Lesepfads (Poller) — auch ohne Steuerung aussagekräftig.
       health: healthText(s.health),
