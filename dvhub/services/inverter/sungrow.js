@@ -1389,9 +1389,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       return;
     }
     // Codex 402a3df9 (P2): eine Messung in der GEGENRICHTUNG unterbricht die laufende Messung — sonst zählten Sekunden
-    // aus einem früheren Entlade-Abschnitt nach einer Ladephase weiter und der WR flöge nach 1 s heraus.
-    for (const [k, e] of Object.entries(st.deliver)) if (!k.endsWith(`:${last.direction}`)) e.underSince = 0;
-    for (const [k, L] of Object.entries(st.limit)) if (!k.endsWith(`:${last.direction}`)) L.underSince = 0;
+    // aus einem früheren Entlade-Abschnitt nach einer Ladephase weiter und der WR flöge nach 1 s heraus. Codex e5b5fffe
+    // (P2): auch der Befehl der anderen Richtung gilt als 0 — die Rückkehr ist dann eine Befehlserhöhung mit
+    // Einschwingzeit, und ein Messwert von VOR dem Wiederbeginn (z. B. ein stehender Lade-Messwert) zählt nicht.
+    for (const [k, e] of Object.entries(st.deliver)) if (!k.endsWith(`:${last.direction}`)) { e.underSince = 0; e.cmdW = 0; }
+    for (const [k, L] of Object.entries(st.limit)) if (!k.endsWith(`:${last.direction}`)) { L.underSince = 0; L.cmdW = 0; }
     for (const wr of ['master', 'slave']) {
       const e = deliverEntry(wr, last.direction);
       const shareW = Math.max(0, Number(last[`${wr}W`]) || 0);

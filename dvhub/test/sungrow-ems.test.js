@@ -574,6 +574,61 @@ test('Codex 402a3df9 P2: eine stehende Master-Messung (kein neuer Poll) zählt n
   }
 });
 
+// Codex e5b5fffe (P2): zwei weitere Zeitfehler der Liefert-nicht-Messung.
+async function stallTimeline(r, steps) {
+  const outTicks = [];
+  for (let i = 0; i < steps.length; i += 1) {
+    const s = steps[i];
+    r.advance(1000);
+    m28Telemetry(r, s);
+    if (s.masterStampAt != null) r.state.victron.fieldUpdatedAt.batteryPowerW = s.masterStampAt; // Master-Poll steht
+    await r.ems.tick();
+    if (r.state.ctrl.sungrowEms.decision?.split?.masterOut === 'stalled') outTicks.push(i + 1);
+  }
+  return outTicks;
+}
+
+test('Codex e5b5fffe P2: Befehlserhöhung + volle Lieferung beendet eine laufende Messung (kein Zusammenrechnen zweier Lücken)', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  // Gleicher SoC → je Hälfte. Takt 1–7: Bedarf 1000 W, Master liefert 0 von 500. Takt 8: Bedarf 2000 W (Master 1000).
+  // Takt 9: Master liefert voll. Ab Takt 10 wieder 0 → frühestens ~10 s danach „liefert nicht", nicht in Takt 12.
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: -500, gridW: 674 });
+  await r.ems.applySetpoint(-40, 'default');
+  const steps = [];
+  for (let i = 1; i <= 7; i += 1) steps.push({ masterBattW: 0, slaveBattW: -500, gridW: 674 });
+  steps.push({ masterBattW: 0, slaveBattW: -500, gridW: 2103 });
+  steps.push({ masterBattW: -1000, slaveBattW: -1000, gridW: -40 });
+  for (let i = 10; i <= 19; i += 1) steps.push({ masterBattW: 0, slaveBattW: -1000, gridW: 960 });
+  const out = await stallTimeline(r, steps);
+  assert.ok(!out.some((i) => i <= 19), `nicht vor ~10 s neuer Lücke herausgenommen: ${out.join(',')}`);
+});
+
+test('Codex e5b5fffe P2: Rückkehr in eine Richtung beginnt neu — ein alter Lade-Messwert zählt nicht als Entlade-Lücke', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 40; // → 300/900 bei 1200 W
+  // Akku-System −1200, Netz −40 → P = −1200 (Gleichstand).
+  m28Telemetry(r, { masterBattW: -300, slaveBattW: -900, gridW: -40 });
+  await r.ems.applySetpoint(-40, 'default');
+  const steps = [];
+  for (let i = 1; i <= 2; i += 1) steps.push({ masterBattW: -300, slaveBattW: -900, gridW: -40 });          // Entladen, alles gut
+  const lastDischargePoll = r.now() + 2000;                                                                 // Master-Poll Takt 2
+  const chargeAt = r.now() + 4000;                                                                          // nächster Master-Poll: Takt 4 (Laden)
+  // Takt 3–5: Laden. Der Master-Poll von Takt 3 fällt aus, der von Takt 4 zeigt das Laden und bleibt dann stehen.
+  steps.push({ masterBattW: 500, slaveBattW: 500, gridW: -1000, pvW: 3000, loadW: 1000, masterStampAt: lastDischargePoll });
+  steps.push({ masterBattW: 500, slaveBattW: 500, gridW: -1000, pvW: 3000, loadW: 1000 });
+  steps.push({ masterBattW: 500, slaveBattW: 500, gridW: -1000, pvW: 3000, loadW: 1000, masterStampAt: chargeAt });
+  // Takt 6–7: wieder Entladen mit demselben Master-Anteil (300 W), der Master-Poll steht noch auf dem Lade-Wert.
+  // Akku-System (+500 − 900), Netz +1103 → P = −400 + 0,7·(−1143) = −1200.
+  steps.push({ masterBattW: 500, slaveBattW: -900, gridW: 1103, masterStampAt: chargeAt });
+  steps.push({ masterBattW: 500, slaveBattW: -900, gridW: 1103, masterStampAt: chargeAt });
+  // Ab Takt 8 neue Master-Messungen: 0 W (Akku-System −900, Netz +389 → P = −1200).
+  for (let i = 8; i <= 17; i += 1) steps.push({ masterBattW: 0, slaveBattW: -900, gridW: 389 });
+  const out = await stallTimeline(r, steps);
+  assert.ok(!out.some((i) => i <= 17), `frühestens ~10 s nach dem Wiederbeginn: ${out.join(',')}`);
+});
+
 test('M28 Grundsatz 0 (Feldbeleg 12:28): Master liefert 0 von 417 W → sein Anteil geht nach wenigen Sekunden an den Slave', async () => {
   const r = splitRig();
   r.cfg.sungrow.regulateEveryMs = 1000;
