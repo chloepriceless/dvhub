@@ -3451,9 +3451,12 @@ function collectScheduleRulesFromRowState(rows) {
     // unverändert mit — nur Zeitfenster und Aktiv-Schalter der Zeile gelten auch für
     // sie. Vorher fielen sie hier weg, der Server behielt sie, und eine im Leitstand
     // gelöschte Zeile („abregel-sperre“) blieb stehen.
+    // Den Aktiv-Schalter der Zeile bekommt sie nur, wenn er seit dem Laden umgeschaltet wurde.
+    const keepOwnEnabled = typeof row?.dcFeedEnabledAtLoad === 'boolean' && rowEnabled === row.dcFeedEnabledAtLoad;
     for (const dcRule of Array.isArray(row?.dcFeedRules) ? row.dcFeedRules : []) {
       if (!dcRule || typeof dcRule !== 'object') continue;
-      rules.push({ ...dcRule, target: 'feedExcessDcPv', start, end, enabled: rowEnabled });
+      const enabled = keepOwnEnabled ? dcRule.enabled !== false : rowEnabled;
+      rules.push({ ...dcRule, target: 'feedExcessDcPv', start, end, enabled });
     }
 
     idx++;
@@ -3637,10 +3640,13 @@ function groupScheduleRulesForDashboard(rules) {
       const reserve = Number(rule.chargeReserveW);
       if (Number.isFinite(reserve) && reserve > 0) slot.chargeReserveW = reserve;
     }
-    // M20: DC-Einspeise-Regeln reisen mit ihrer Zeile (collectScheduleRows).
+    // M20: DC-Einspeise-Regeln reisen mit ihrer Zeile (collectScheduleRows). Ohne die
+    // Laufzeit-Markierung _wasActive — die bestimmt nur der Server.
     if (rule.target === 'feedExcessDcPv') {
       if (!Array.isArray(slot.dcFeedRules)) slot.dcFeedRules = [];
-      slot.dcFeedRules.push({ ...rule });
+      const copy = { ...rule };
+      delete copy._wasActive;
+      slot.dcFeedRules.push(copy);
     }
     if (rule.enabled === false) slot.enabled = false;
     if (!slot.ruleId && rule.id) slot.ruleId = rule.id;
@@ -3664,6 +3670,12 @@ function groupScheduleRulesForDashboard(rules) {
     }
   }
 
+  // M20 (Codex c49d6e82 P2): Aktiv-Stand der Zeile beim Laden merken. Eine Zeile ist „aus“, sobald eine ihrer
+  // Regeln aus ist — beim Speichern ohne Umschalten behält jede DC-Regel ihren eigenen Schalter (sonst schaltete
+  // eine ausgeschaltete Netz-Regel im selben Fenster die DC-Regel still aus).
+  for (const slot of timeSlots.values()) {
+    if (Array.isArray(slot.dcFeedRules)) slot.dcFeedEnabledAtLoad = slot.enabled;
+  }
   return coalesceScheduleSlots(Array.from(timeSlots.values()));
 }
 
@@ -4205,6 +4217,7 @@ function openSlotEditor(idx = null) {
       dcExport: dcExportEn.checked,
       // M20: DC-Einspeise-Regeln der Zeile bleiben beim Bearbeiten erhalten.
       dcFeedRules: Array.isArray(slot?.dcFeedRules) ? slot.dcFeedRules : undefined,
+      dcFeedEnabledAtLoad: slot?.dcFeedEnabledAtLoad,
       enabled: slot ? slot.enabled !== false : true,
       ruleId: slot?.ruleId || '',
       ruleIds: slot?.ruleIds,
@@ -4290,6 +4303,7 @@ function collectScheduleRows() {
       stopSocVal: slot.stopSocPct,
       dcExportEnabled: slot.dcExport === true,
       dcFeedRules: Array.isArray(slot.dcFeedRules) ? slot.dcFeedRules : [],
+      dcFeedEnabledAtLoad: slot.dcFeedEnabledAtLoad,
       source: slot.source || '',
       displayTone: slot.displayTone || '',
       autoManaged: slot.autoManaged === true,

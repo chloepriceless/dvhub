@@ -99,6 +99,31 @@ test('M20 Leitstand: Aktiv-Schalter und Zeitfenster der Zeile gelten für ihre D
   assert.equal(dc.id, 'abregel-sperre');
 });
 
+// Codex c49d6e82 P2: teilt eine eingeschaltete DC-Regel ihr Zeitfenster mit einer ausgeschalteten Netz-Regel, zeigt
+// der Leitstand die Zeile als „aus“. Ohne Änderung an der Zeile darf das Speichern die DC-Regel nicht ausschalten
+// (für eine Regel mit Wert 0 hieße das: Einspeise-Sperre still weg). Erst ein Umschalten der Zeile gilt für alle.
+test('M20 Leitstand: gemeinsame Zeile mit ausgeschalteter Netz-Regel schaltet die DC-Regel beim Speichern nicht aus', async () => {
+  const dcOn = { ...DC_RULE, enabled: true, start: '06:00', end: '07:00' };
+  const gridOff = { ...GRID_RULE, enabled: false };
+  const { sandbox, rowsEval, posted } = loadDashboard([gridOff, dcOn]);
+  await sandbox.loadScheduleDash();
+  await sandbox.saveScheduleDash();
+  const [dc] = dcRulesOf(posted()[0]);
+  assert.equal(dc.enabled, true, 'unveränderte Zeile: DC-Regel behält ihren Schalter');
+  // Operator schaltet die Zeile ein → gilt für alle Regeln der Zeile.
+  rowsEval(`scheduleRowsState.find((s) => s.start === '06:00').enabled = true`);
+  await sandbox.saveScheduleDash();
+  const body = posted()[1];
+  assert.equal(dcRulesOf(body)[0].enabled, true);
+  assert.equal(body.rules.find((r) => r.target === 'gridSetpointW').enabled, true);
+  // Zeile mit beiden Regeln an, Operator schaltet sie aus → auch die DC-Regel aus.
+  const second = loadDashboard([GRID_RULE, dcOn]);
+  await second.sandbox.loadScheduleDash();
+  second.rowsEval(`scheduleRowsState.find((s) => s.start === '06:00').enabled = false`);
+  await second.sandbox.saveScheduleDash();
+  assert.equal(dcRulesOf(second.posted()[0])[0].enabled, false);
+});
+
 test('M20 Leitstand: die DC-Zeile sagt, was sie tut (statt „—“)', async () => {
   const { sandbox, rowsEval } = loadDashboard([DC_RULE, { ...DC_RULE, id: 'dc-an', start: '18:00', end: '19:00', value: 1 }]);
   await sandbox.loadScheduleDash();

@@ -23,6 +23,7 @@ import { parseBody, fmtTs, resolveLogLimit, s16, roundCtKwh, gridDirection, MAX_
 import { effectiveBatteryCostCtKwh, mixedCostCtKwh, slotComparison, configuredModule3Windows } from './user-energy-pricing.js';
 import { isSmallMarketAutomationRule, VICTRON_MIN_SOC_FALLBACK_PCT, resolvePlantBattery } from './market-automation-builder.js';
 import { isForecastOptimizerRule } from './services/optimizer/schedule-builder.js';
+import { adoptWasActiveMarkers } from './schedule-runtime.js';
 import { resolveEosProxy } from './services/optimizer/eos-adapter.js';
 import { resolveEosMinSocPct } from './services/optimizer/eos-config-sync.js';
 import { eosPlanFeedInBasis, controlHorizonMode } from './services/optimizer/eos-forecast-bridge.js';
@@ -8791,7 +8792,8 @@ export function createApiRoutes(ctx) {
       // matched daily (no date binding) and lost the closed-loop semantics
       // until the next replan. Keep both automation families server-side.
       const isAutomationRule = (r) => isSmallMarketAutomationRule(r) || isForecastOptimizerRule(r);
-      const incomingManualRules = validRules.filter((r) => !isAutomationRule(r));
+      // _wasActive bestimmt nur der Server: unverändert → behalten, geändert → neu (Codex c49d6e82 P2).
+      const incomingManualRules = adoptWasActiveMarkers(state.schedule.rules, validRules.filter((r) => !isAutomationRule(r)));
       const existingAutomationRules = state.schedule.rules.filter((r) => isAutomationRule(r));
       const existingDcFeedRules = state.schedule.rules.filter((r) => r.target === 'feedExcessDcPv' && !isAutomationRule(r));
       const incomingDcFeedRules = incomingManualRules.filter((r) => r.target === 'feedExcessDcPv');

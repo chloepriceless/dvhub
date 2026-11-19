@@ -33,9 +33,35 @@ export function scheduleMatch(rule, nowMin) {
  * und den ersten danach fällt (Audit 2026-10-14). Eine geänderte Regel gilt
  * als neu.
  */
+// Inhalt einer Regel ohne Laufzeit-Felder (_…) und ohne days/oneTime — „unverändert“ heißt: gleicher Inhalt.
+const ruleContentKey = (r) => JSON.stringify(Object.keys(r).filter((k) => !k.startsWith('_') && k !== 'days' && k !== 'oneTime').sort().map((k) => [k, r[k]]));
+
+/**
+ * POST /api/schedule/rules (M20, Codex c49d6e82 P2): Die Laufzeit-Markierung _wasActive bestimmt nur der Server.
+ * GET /api/schedule liefert sie mit, Leitstand und JSON-Editor geben Regeln zurück — eine verschobene Regel
+ * (10:00 → 11:00 um 10:30) behielte sonst die Markierung und würde beim nächsten Takt abgeschaltet
+ * (autoDisableExpiredScheduleRules). Wie beim Neuladen der Config (mergeLoadedScheduleRules): eine inhaltlich
+ * unveränderte Regel behält die Markierung aus dem laufenden Zustand, eine geänderte gilt als neu.
+ */
+export function adoptWasActiveMarkers(liveRules, incomingRules) {
+  const isPlan = (r) => r?.source === 'forecast_optimizer';
+  const active = (Array.isArray(liveRules) ? liveRules : [])
+    .filter((r) => r && typeof r === 'object' && !isPlan(r) && r._wasActive)
+    .map(ruleContentKey);
+  return (Array.isArray(incomingRules) ? incomingRules : []).map((r) => {
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return r;
+    const clean = { ...r };
+    delete clean._wasActive;
+    const i = active.indexOf(ruleContentKey(clean));
+    if (i < 0) return clean;
+    active.splice(i, 1);
+    return { ...clean, _wasActive: true };
+  });
+}
+
 export function mergeLoadedScheduleRules(liveRules, configRules) {
   const isPlan = (r) => r?.source === 'forecast_optimizer';
-  const content = (r) => JSON.stringify(Object.keys(r).filter((k) => !k.startsWith('_') && k !== 'days' && k !== 'oneTime').sort().map((k) => [k, r[k]]));
+  const content = ruleContentKey;
   const wasActive = (Array.isArray(liveRules) ? liveRules : [])
     .filter((r) => r && typeof r === 'object' && !isPlan(r) && r._wasActive)
     .map(content);

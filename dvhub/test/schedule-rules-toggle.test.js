@@ -235,6 +235,27 @@ describe('M20: DC-Einspeise-Regeln (feedExcessDcPv) lassen sich löschen', () =>
     assert.deepEqual(dc.map((r) => [r.id, r.enabled]), [['abregel-sperre', true]]);
   });
 
+  // Codex c49d6e82 P2: GET /api/schedule liefert die Laufzeit-Markierung _wasActive mit; der Leitstand gibt die
+  // DC-Regel unverändert zurück. Verschoben (10:00 → 11:00 um 10:30) hätte die Markierung die Regel beim nächsten
+  // Takt abgeschaltet (autoDisableExpiredScheduleRules). Vom Client kommen keine _-Felder an; die Markierung
+  // übernimmt der Server nur für eine inhaltlich unveränderte Regel (wie mergeLoadedScheduleRules).
+  it('_wasActive: verschobene Regel verliert die Markierung, unveränderte behält sie (auch ohne Client-Kopie)', async () => {
+    const running = { ...dcRule({ enabled: true }), _wasActive: true };
+    const ctx = mockCtx([running, { ...dcRule({ id: 'dc-2', enabled: true, start: '09:00', end: '17:00' }), _wasActive: true }]);
+    const out = await call(ctx, 'POST', '/api/schedule/rules', {
+      rules: [
+        { ...dcRule({ enabled: true, start: '11:00' }), _wasActive: true },     // verschoben, Markierung vom Client
+        dcRule({ id: 'dc-2', enabled: true, start: '09:00', end: '17:00' }),  // unverändert, ohne Markierung
+      ],
+      replaceDcFeedRules: true,
+    });
+    assert.equal(out.status, 200);
+    const byId = Object.fromEntries(ctx.state.schedule.rules.map((r) => [r.id, r]));
+    assert.equal(byId['abregel-sperre'].start, '11:00');
+    assert.equal('_wasActive' in byId['abregel-sperre'], false, 'verschobene Regel gilt als neu');
+    assert.equal(byId['dc-2']._wasActive, true, 'unveränderte laufende Regel bleibt markiert');
+  });
+
   it('replaceDcFeedRules muss ein Wahrheitswert sein — sonst 400 und nichts geändert', async () => {
     const ctx = mockCtx([dcRule()]);
     const out = await call(ctx, 'POST', '/api/schedule/rules', { rules: [], replaceDcFeedRules: 'ja' });
