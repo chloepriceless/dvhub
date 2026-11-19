@@ -5,11 +5,12 @@
 // Wert = Betrag des fertig dekodierten Werts × Faktor der gemeldeten Richtung — richtig, ob das Gerät einen Betrag oder
 // einen vorzeichenbehafteten Wert liefert. Ein Rohwert, der nicht in `values` steht, macht den Punkt leer (nie geraten).
 // Wert und Richtung gehören zu EINER Probe: nah beieinander ein Block (atomar), sonst Richtung vorher/nachher.
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { readPointValue } from '../services/inverter/point-read.js';
 import { createModbusTransport } from '../transport-modbus.js';
+import { liveSnapshotStale } from '../telemetry-runtime.js';
 import { createRegisterDevice, createPollerRig } from './helpers/fake-modbus-device.js';
 import { installFakeModbusSockets, advance, flush, enableFakeClock, disableFakeClock } from './helpers/fake-modbus-socket.js';
 
@@ -250,4 +251,54 @@ test('E8 + E7: Spanne über maxRegistersPerRequest → kein Lesefehler, sondern 
     sockets.restore();
     disableFakeClock();
   }
+});
+
+// --- Codex e7a80f44 ----------------------------------------------------------------------------------------------
+
+// P2: ein AC-PV-Kanal mit unbekannter Richtung ist ein konfigurierter Kanal ohne gültigen Wert, kein fehlender
+// optionaler Kanal. Die Hauslast aus der Energiebilanz darf nicht mit zu wenig PV frisch weiterlaufen, und der
+// Live-Schnappschuss gilt als veraltet.
+test('E8/Codex e7a80f44: unbekannte Richtung an einem AC-PV-Kanal → keine frische Hauslast mit zu wenig PV', async (t) => {
+  mock.timers.enable({ apis: ['Date'], now: 1_800_000_000_000 });
+  t.after(() => mock.timers.reset());
+  const dev = createRegisterDevice().setWords(900, [0, 0, 0]).set(10, 1000).setWords(20, [500, 0]);
+  const cfg = {
+    meter: METER,
+    points: {
+      pvPowerW: { enabled: true, fc: 3, unitId: 1, address: 10, quantity: 1 },
+      acPvL1W: { enabled: true, fc: 3, unitId: 1, address: 20, quantity: 1, direction: { address: 21, values: { 0: 1, 1: -1 } } },
+      selfConsumptionW: { enabled: false, derive: 'energy_balance' },
+    },
+  };
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  assert.equal(state.victron.selfConsumptionW, 1500, 'DC 1000 + AC 500');
+  const stamp = state.victron.fieldUpdatedAt.selfConsumptionW;
+  dev.set(21, 7);
+  mock.timers.tick(5000);
+  await poller.requestPoll();
+  assert.equal(state.victron.acPvL1W, null);
+  assert.match(state.victron.errors.acPvL1W, /Richtung/);
+  assert.equal(state.victron.selfConsumptionW, 1500, 'früher frisch 1000 W (AC-Kanal fiel still aus der Bilanz)');
+  assert.equal(state.victron.fieldUpdatedAt.selfConsumptionW, stamp, 'kein neuer Frische-Stempel');
+  assert.deepEqual(state.victron.unknownFields, ['acPvL1W']);
+  assert.equal(liveSnapshotStale({ ts: new Date().toISOString(), meter: state.meter, victron: state.victron }), true);
+  dev.set(21, 0);
+  mock.timers.tick(5000);
+  await poller.requestPoll();
+  assert.equal(state.victron.unknownFields, undefined, 'mit bekannter Richtung kein unbekannter Wert mehr');
+  assert.equal(state.victron.fieldUpdatedAt.selfConsumptionW > stamp, true);
+  assert.equal(liveSnapshotStale({ ts: new Date().toISOString(), meter: state.meter, victron: state.victron }), false);
+});
+
+// P2: NaN (etwa eine nicht-numerische Skala) bleibt NaN — die bestehenden Prüfungen machen daraus einen Lesefehler,
+// `|| 0` machte daraus einen gesunden 0-W-Wert.
+test('E8/Codex e7a80f44: nicht-numerische Skala bleibt NaN → Zählerfehler statt 0 W', async () => {
+  const conf = { fc: 4, unitId: 1, address: 70, quantity: 1, scale: 'zehn', direction: { address: 71, values: { 0: 1, 1: -1 } } };
+  const dev = createRegisterDevice().setWords(70, [1800, 1], FC4);
+  assert.ok(Number.isNaN(await readPointValue(conf, read(dev))));
+  const { state, poller } = createPollerRig({ meter: { layout: 'point', ...conf } }, dev);
+  await poller.requestPoll();
+  assert.equal(state.meter.ok, false);
+  assert.match(state.meter.error, /ungültig/);
 });

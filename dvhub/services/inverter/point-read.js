@@ -311,7 +311,10 @@ function applyDirection(value, raw, dir) {
     // valueUnknown: pollPoint leert den Punkt (statt den Altwert zu halten) und nennt den Grund.
     throw Object.assign(new Error(`Richtungsregister @${dir.address} meldet ${raw} — keine bekannte Richtung (bekannt: ${[...dir.factors.keys()].join(', ')}), Wert bleibt leer`), { valueUnknown: true });
   }
-  return (Math.abs(value) * factor) || 0; // || 0: kein −0
+  // −0 wird 0; NaN (etwa nicht-numerische Skala) bleibt NaN, damit die Prüfungen der Aufrufer einen Lesefehler daraus
+  // machen statt eines gesunden 0-W-Werts (Codex e7a80f44).
+  const signed = Math.abs(value) * factor;
+  return signed === 0 ? 0 : signed;
 }
 
 // Block abgewiesen, aber einzeln lesbar: Modbus-Ausnahme 1–3 (Gerät kennt Register dazwischen nicht) oder die

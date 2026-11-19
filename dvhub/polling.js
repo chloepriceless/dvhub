@@ -185,6 +185,12 @@ export function createPoller(ctx) {
   let cycleSfCache = new Map();
   // Bereiche, in denen das Gerät keinen gemeinsamen Wert+SF-Block liefert (lückenhafte Karte) — je Poller gemerkt.
   const sfBlockUnsupported = new Set();
+  // Konfigurierte Punkte, deren Wert gerade unbekannt ist, weil DVhub ihn bewusst geleert hat: unbekannte Richtung (E8)
+  // oder ausgeblendet (E10). Leer sähen sie aus wie ein nie belegter optionaler Kanal (z. B. ein AC-PV-Kanal ohne
+  // MQTT-Topic) — die Hauslast-Bilanz und der Live-Schnappschuss müssen sie aber als Ausfall sehen (Codex e7a80f44).
+  // Bleibt über Takte (pollEveryMs), bis der Punkt wieder einen Wert liefert oder abgeschaltet ist; gespiegelt in
+  // state.victron.unknownFields (nur solange nicht leer).
+  const unknownPoints = new Set();
   // Ergebnis (E6, für die Hauslast-Ableitung): true = in diesem Takt ein Wert gelesen, false = kein Wert in diesem
   // Takt (aus, unaufgelöst, Lesefehler, „nicht verfügbar“), undefined = wegen pollEveryMs nicht abgefragt.
   async function pollPoint(name, conf) {
@@ -199,9 +205,14 @@ export function createPoller(ctx) {
       (v.errors ??= {})[name] = hiddenBy;
       if (v.fieldUpdatedAt) delete v.fieldUpdatedAt[name];
       if (v.fieldSourceAt) delete v.fieldSourceAt[name];
+      unknownPoints.add(name);
+      // Der verworfene Wert zählt nicht als Lesung: nach bestandener Probe sofort neu lesen, nicht erst nach Ablauf
+      // von pollEveryMs (Codex e20a456e).
+      delete lastPointPollAt[name];
       return false;
     }
     if (!conf?.enabled) {
+      unknownPoints.delete(name);
       // Abgeschaltet ohne gehaltenen Wert: ein alter Lesefehler gilt nicht mehr —
       // er machte sonst jede Live-Probe veraltet (telemetry-runtime
       // liveSnapshotStale, Codex 4e636a56). Mit gehaltenem Wert bleibt er, bis ein
@@ -232,6 +243,7 @@ export function createPoller(ctx) {
         state.victron[name] = await readPointValue(conf, (c, o) => transport.mbRequest(c, o), { sfCache: cycleSfCache, sfBlockUnsupported });
       }
       delete state.victron.errors[name];
+      unknownPoints.delete(name);
       const _now = Date.now();
       state.victron.updatedAt = _now;
       // T-0075: per-Feld Timestamp des letzten ERFOLGS (NUR Erfolgs-Zweig).
@@ -253,7 +265,10 @@ export function createPoller(ctx) {
       state.victron.updatedAt = Date.now();
       // E8: das Gerät hat geantwortet, der Wert ist aber nicht deutbar (unbekannte Richtung) — leer statt des
       // gehaltenen Altwerts, dessen Vorzeichen inzwischen falsch sein kann. Andere Lesefehler halten wie bisher.
-      if (e?.valueUnknown === true) state.victron[name] = null;
+      if (e?.valueUnknown === true) {
+        state.victron[name] = null;
+        unknownPoints.add(name);
+      }
       return false;
     }
   }
@@ -1240,6 +1255,8 @@ export function createPoller(ctx) {
       pollPoint('deviceMaxDischargeA', cfg.points.deviceMaxDischargeA),
       ...buildDvControlReadbackPolls(cfg).map(([name, conf]) => pollDvControlReadback(name, conf))
     ]);
+    if (unknownPoints.size) state.victron.unknownFields = [...unknownPoints].sort();
+    else if (state.victron.unknownFields) delete state.victron.unknownFields;
 
     const pvDc = Number(state.victron.pvPowerW || 0);
     // Issue #13: PV kann an zwei Positionen haengen (z. B. String-WR am
@@ -1394,7 +1411,9 @@ export function createPoller(ctx) {
     // als frische Last durchgehen. pvTotalW summiert JEDEN PV-Punkt mit Wert (DC und AC), auch gehaltene Werte nach
     // einem Lesefehler — jeder davon und der Akku müssen fehlerfrei sein. Die Last bekommt den Stempel des ÄLTESTEN
     // Eingangs (Akku per pollEveryMs gedrosselt, Zähler), nicht „jetzt“; so altert sie wie ihre Eingänge.
-    const balanceInputs = [...PV_POINT_FIELDS].filter((f) => state.victron[f] != null)
+    // Ein bewusst geleerter PV-Punkt (unknownPoints: unbekannte Richtung E8, ausgeblendet E10) zählt als Eingang mit
+    // Lesefehler, nicht als fehlender Kanal (Codex e7a80f44) — sonst liefe die Last mit zu wenig PV frisch weiter.
+    const balanceInputs = [...PV_POINT_FIELDS].filter((f) => state.victron[f] != null || unknownPoints.has(f))
       .concat(batteryInBalance ? ['batteryPowerW'] : []);
     if (cfg.points?.selfConsumptionW?.derive === 'energy_balance' && !loadHidden
       && !loadMeasured
@@ -1475,7 +1494,8 @@ export function createPoller(ctx) {
       const maxAge = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
       if (Number.isFinite(loadNow) && loadNow > 0) {
         state.victron._sungrowLoadHold = { w: loadNow, at: Date.now() };
-      } else if (giW > 100 && state.victron._sungrowLoadHold && Date.now() - state.victron._sungrowLoadHold.at <= maxAge) {
+      } else if (giW > 100 && !loadHidden && state.victron._sungrowLoadHold && Date.now() - state.victron._sungrowLoadHold.at <= maxAge) {
+        // E10: eine ausgeblendete Hauslast setzt die Sicherung nicht wieder ein (Codex e20a456e).
         state.victron.selfConsumptionW = state.victron._sungrowLoadHold.w;
       }
     }

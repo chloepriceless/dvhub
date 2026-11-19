@@ -187,6 +187,25 @@ test('E10: abgeleitete Hauslast (energy_balance) in hideOnMismatch → leer, kei
   assert.equal(state.victron.errors.selfConsumptionW, undefined);
 });
 
+// Codex e7a80f44 (zu E8, gilt ebenso hier): ein ausgeblendeter AC-PV-Kanal ist ein konfigurierter Kanal ohne gültigen
+// Wert, kein fehlender optionaler Kanal — die Hauslast rechnet nicht mit zu wenig PV weiter.
+test('E10: ausgeblendeter AC-PV-Kanal → keine Hauslast aus der Bilanz ohne ihn', async () => {
+  const cfg = cfgWith({ ...PROBE, hideOnMismatch: ['acPvL1W'] });
+  cfg.points.acPvL1W = p(600);
+  cfg.points.selfConsumptionW = { enabled: false, derive: 'energy_balance' };
+  const dev = device().set(600, 300);
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  assert.equal(state.victron.selfConsumptionW, 7700, 'PV 5400 + AC 300 + Bezug 1200 − Akku (−800)');
+  dev.set(40000, 1);
+  cfg.victron.identityProbe = { ...cfg.victron.identityProbe, everyMs: 60000 }; // neuer Block → sofort neu geprüft
+  await poller.requestPoll();
+  assert.equal(state.victron.identityProbe.status, 'mismatch');
+  assert.equal(state.victron.acPvL1W, null);
+  assert.equal(state.victron.selfConsumptionW, 7700, 'gehaltener Wert, nicht frisch 7400 ohne den AC-Kanal');
+  assert.deepEqual(state.victron.unknownFields, ['acPvL1W']);
+});
+
 test('E10: nach „passt nicht“ alle 60 s neu; passt die Kennung wieder, sind die Werte sofort da', async (t) => {
   mock.timers.enable({ apis: ['Date'], now: 1_800_000_000_000 });
   t.after(() => mock.timers.reset());
@@ -332,4 +351,47 @@ test('E10: keine Wirkung auf Writes — Evaluator schreibt mit „passt nicht“
   const mismatch = await writesWith({ status: 'mismatch', hidden: ['meter', 'pvPowerW'], text: 'Kennungsprobe passt nicht' });
   assert.ok(plain.writes.length > 0, 'Prüfstand sieht den Write');
   assert.deepEqual(mismatch, plain);
+});
+
+// --- Codex e20a456e ----------------------------------------------------------------------------------------------
+
+// P2: ein ausgeblendeter Punkt mit pollEveryMs darf nach bestandener Probe nicht bis zum Ende seiner Drossel leer
+// bleiben — der verworfene Wert zählt nicht als Lesung.
+test('E10/Codex e20a456e: ausgeblendeter Punkt mit pollEveryMs wird nach bestandener Probe sofort neu gelesen', async (t) => {
+  mock.timers.enable({ apis: ['Date'], now: 1_800_000_000_000 });
+  t.after(() => mock.timers.reset());
+  const cfg = cfgWith();
+  cfg.points.soc = p(40082, { pollEveryMs: 3_600_000 });
+  const dev = device();
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  assert.equal(state.victron.soc, 71);
+  dev.set(40000, 1);
+  mock.timers.tick(600_000);
+  await poller.requestPoll();
+  assert.equal(state.victron.identityProbe.status, 'mismatch');
+  assert.equal(state.victron.soc, null);
+  dev.set(40000, E3DC).set(40082, 72);
+  mock.timers.tick(61_000);
+  await poller.requestPoll();
+  assert.equal(state.victron.identityProbe.status, 'ok');
+  assert.equal(state.victron.soc, 72, 'früher bis zu 49 min leer');
+  assert.equal(state.victron.errors.soc, undefined);
+});
+
+// P2: die Lastsicherung des zweiten Sungrow-WR darf eine ausgeblendete Hauslast nicht wieder einsetzen.
+test('E10/Codex e20a456e: ausgeblendete Hauslast bleibt leer, auch mit Lastsicherung des zweiten Sungrow-WR', async () => {
+  const cfg = cfgWith({ ...PROBE, hideOnMismatch: ['selfConsumptionW'] });
+  cfg.points.selfConsumptionW = p(40071, { quantity: 2, readType: 'int32' });
+  cfg.sungrow = { secondInverter: { host: '192.0.2.99' } };
+  const dev = device().set32(40071, 2100);
+  const { state, poller } = createPollerRig(cfg, dev);
+  await poller.requestPoll();
+  assert.equal(state.victron.selfConsumptionW, 2100);
+  dev.set(40000, 1);
+  cfg.victron.identityProbe = { ...cfg.victron.identityProbe, everyMs: 60000 }; // neuer Block → sofort neu geprüft
+  await poller.requestPoll();
+  assert.equal(state.victron.identityProbe.status, 'mismatch');
+  assert.ok(state.victron.gridImportW > 100, 'Bezug wie im Fall der Lastsicherung');
+  assert.equal(state.victron.selfConsumptionW, null, 'früher 2100 aus _sungrowLoadHold');
 });
