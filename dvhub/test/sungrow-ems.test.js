@@ -427,7 +427,8 @@ test('M28 liefert nicht: Master liefert ~10 s keine 50 % seines Anteils → Slav
     await r.ems.tick();
     if (stalledAtTick == null && r.state.ctrl.sungrowEms.decision?.split?.masterOut === 'stalled') stalledAtTick = i;
   }
-  assert.ok(stalledAtTick != null && stalledAtTick >= 10 && stalledAtTick <= 11, `erkannt nach ~10 s (Takt ${stalledAtTick})`);
+  // ~10 s Messzeit ab der ersten Messung nach dem Einschwingen (1,5 s nach dem Befehl, Codex 402a3df9) → Takt 12.
+  assert.ok(stalledAtTick != null && stalledAtTick >= 10 && stalledAtTick <= 12, `erkannt nach ~10 s (Takt ${stalledAtTick})`);
   const split = r.state.ctrl.sungrowEms.decision.split;
   assert.deepEqual([split.masterW, split.slaveW], [0, 1200], 'Slave übernimmt den vollen Bedarf');
   assert.equal(split.takeover, 'slave');
@@ -454,11 +455,14 @@ test('M28 liefert nicht: Master liefert ~10 s keine 50 % seines Anteils → Slav
     probed = r.state.ctrl.sungrowEms.decision.split.masterW > 0;
   }
   assert.ok(probed, 'Probe: nach ~60 s bekommt der Master wieder einen Anteil');
-  // Liefert der Master jetzt, ist die Lage aufgehoben (ein Log), kein erneutes Stall-Log.
+  // Liefert der Master jetzt, ist die Lage aufgehoben (ein Log), kein erneutes Stall-Log. Beurteilt wird erst eine
+  // Messung ≥ 1,5 s nach dem neuen Befehl (Einschwingen) → zwei Takte.
   const share = r.state.ctrl.sungrowEms.decision.split.masterW;
-  r.advance(1000);
-  m28Telemetry(r, { masterBattW: -share, slaveBattW: -(1200 - share), gridW: -40 });
-  await r.ems.tick();
+  for (let i = 0; i < 2; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: -share, slaveBattW: -(1200 - share), gridW: -40 });
+    await r.ems.tick();
+  }
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_share_recovered' && l.data.wr === 'master'), 'Erholung geloggt');
   assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_share_stalled').length, 1, 'kein zweites Stall-Log');
   assert.equal(r.state.ctrl.sungrowEms.decision.split.takeover, null);
@@ -481,9 +485,10 @@ test('M28 liefert nicht: scheitert die Probe, bleibt der Master erneut 60 s drau
   const firstOut = outTicks.indexOf(true);
   const backIn = outTicks.indexOf(false, firstOut);
   const outAgain = outTicks.indexOf(true, backIn);
-  assert.ok(firstOut >= 9 && firstOut <= 11, `erstes Erkennen ${firstOut}`);
+  // Fristen in Messzeit, erste Messung 1,5 s nach dem (neuen) Befehl (Codex 402a3df9).
+  assert.ok(firstOut >= 9 && firstOut <= 12, `erstes Erkennen ${firstOut}`);
   assert.ok(backIn - firstOut >= 59 && backIn - firstOut <= 61, `Probe nach ~60 s (${backIn - firstOut})`);
-  assert.ok(outAgain - backIn >= 9 && outAgain - backIn <= 11, `Probe scheitert nach ~10 s (${outAgain - backIn})`);
+  assert.ok(outAgain - backIn >= 9 && outAgain - backIn <= 13, `Probe scheitert nach ~10 s (${outAgain - backIn})`);
   assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_share_stalled').length, 1, 'eine Lage = ein Log');
 });
 
@@ -516,6 +521,58 @@ async function g0Ticks(r, n, telemetryFn, onTick = () => {}) {
     onTick(i, r.state.ctrl.sungrowEms.decision.split);
   }
 }
+
+// Codex 402a3df9 (P2): Laden zwischendurch darf die laufende Entlade-Messung nicht „mitzählen" — und eine stehende
+// (alte) Messung darf nicht Takt für Takt als neuer Beleg gelten.
+function followTelemetry(r, { loadW, pvW = 0, masterDischargeCap = Infinity }) {
+  // Jeder WR liefert seinen Befehl; der Master beim Entladen höchstens masterDischargeCap.
+  const act = (img, dischargeCapW) => {
+    const cmd = img.holding.get(CMD); const p = img.holding.get(POWER);
+    return cmd === EMS_CMD.CHARGE ? p : (cmd === EMS_CMD.DISCHARGE ? -Math.min(p, dischargeCapW) : 0);
+  };
+  const m = act(r.masterImage, masterDischargeCap); const s = act(r.slaveImage, Infinity);
+  m28Telemetry(r, { masterBattW: m, slaveBattW: s, gridW: loadW - pvW + m + s, loadW, pvW });
+}
+
+test('Codex 402a3df9 P2: Richtungswechsel setzt die Liefert-nicht-Messung zurück (Entladen → Laden → Entladen)', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 40;
+  followTelemetry(r, { loadW: 1342, masterDischargeCap: 0 });
+  await r.ems.applySetpoint(-40, 'default');
+  const tick = async (opts) => { r.advance(1000); followTelemetry(r, opts); await r.ems.tick(); return r.state.ctrl.sungrowEms.decision.split; };
+  for (let i = 0; i < 5; i += 1) await tick({ loadW: 1342, masterDischargeCap: 0 }); // 5 s: Master liefert beim Entladen nichts
+  for (let i = 0; i < 15; i += 1) {                                                 // 15 s: PV-Überschuss, beide laden wie befohlen
+    const sp = await tick({ loadW: 1000, pvW: 3000, masterDischargeCap: 0 });
+    if (i >= 2) assert.equal(sp.charge, true, 'Laden-Phase');
+  }
+  // Wieder Entladen (Haus 3000 W → Master-Anteil sofort > 200 W), der Master liefert wieder nichts: neu messen, nicht
+  // nach 1 s herausnehmen.
+  let outAt = null;
+  for (let i = 1; i <= 14 && outAt == null; i += 1) {
+    const sp = await tick({ loadW: 3000, masterDischargeCap: 0 });
+    if (sp.charge === false && sp.masterOut === 'stalled') outAt = i;
+  }
+  assert.ok(outAt == null || outAt >= 10, `frühestens nach ~10 s neuer Messung (Takt ${outAt})`);
+});
+
+test('Codex 402a3df9 P2: eine stehende Master-Messung (kein neuer Poll) zählt nicht als Liefert-nicht-Beleg', async () => {
+  const r = splitRig();
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 30; r.state.sungrowSecond.socPct = 40;
+  m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+  const frozenAt = r.now();
+  await r.ems.applySetpoint(-40, 'default');
+  for (let i = 1; i <= 15; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: 0, slaveBattW: -790, gridW: 552 });
+    r.state.victron.fieldUpdatedAt.batteryPowerW = frozenAt; // Master-Akku-Wert kommt nicht neu (noch < 20 s alt)
+    await r.ems.tick();
+    const sp = r.state.ctrl.sungrowEms.decision.split;
+    assert.notEqual(sp?.masterOut, 'stalled', `Takt ${i}: ohne neue Messung kein „liefert nicht"`);
+    assert.equal(sp?.masterLimitW ?? null, null, `Takt ${i}: ohne neue Messung keine Begrenzung`);
+  }
+});
 
 test('M28 Grundsatz 0 (Feldbeleg 12:28): Master liefert 0 von 417 W → sein Anteil geht nach wenigen Sekunden an den Slave', async () => {
   const r = splitRig();
@@ -557,7 +614,7 @@ test('M28 Grundsatz 0 (Feldbeleg 12:31): Master 0 von 389 W, Slave 602 von 731 W
   for (const x of trace.filter((x) => x.out !== 'stalled')) assert.equal(x.tr, 0, `Takt ${x.i}: keine Verschiebung zwischen zwei begrenzten WR`);
   // Liefert-nicht-Erkennung (~10 s): Master raus, der Slave bekommt den ganzen Bedarf (er zieht nach, so weit er kann).
   const firstOut = trace.find((x) => x.out === 'stalled');
-  assert.ok(firstOut && firstOut.i <= 11, `Master raus nach ~10 s (Takt ${firstOut && firstOut.i})`);
+  assert.ok(firstOut && firstOut.i <= 12, `Master raus nach ~10 s Messzeit (Takt ${firstOut && firstOut.i})`);
   const after = trace.filter((x) => x.i > firstOut.i && x.i <= 60);
   assert.ok(after.every((x) => x.m === 0 && x.s === 1120), `danach ruhig: Master 0, Slave 1120 (${JSON.stringify(after.slice(0, 3))})`);
   const sp = r.state.ctrl.sungrowEms.decision.split;

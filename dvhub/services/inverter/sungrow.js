@@ -1386,12 +1386,24 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       for (const L of Object.values(st.limit)) L.underSince = 0;
       return;
     }
+    // Codex 402a3df9 (P2): eine Messung in der GEGENRICHTUNG unterbricht die laufende Messung — sonst zählten Sekunden
+    // aus einem früheren Entlade-Abschnitt nach einer Ladephase weiter und der WR flöge nach 1 s heraus.
+    for (const [k, e] of Object.entries(st.deliver)) if (!k.endsWith(`:${last.direction}`)) e.underSince = 0;
+    for (const [k, L] of Object.entries(st.limit)) if (!k.endsWith(`:${last.direction}`)) L.underSince = 0;
     for (const wr of ['master', 'slave']) {
       const e = deliverEntry(wr, last.direction);
       const shareW = Math.max(0, Number(last[`${wr}W`]) || 0);
       judgeLimit(wr, last.direction, shareW, measured[wr], last.at);
+      // Codex 402a3df9 (P2): nur eine NEUE Messung zählt, gemessen nach dem Einschwingen auf den Befehl, und die Frist
+      // läuft in Messzeit — eine stehende (alte) Messung ist kein neuer Beleg, egal wie viele Takte vergehen.
+      if (shareW > (e.cmdW || 0) + enterTolW(shareW)) e.cmdRaisedAt = last.at;
+      e.cmdW = shareW;
       const m = measured[wr]?.w;
-      if (!(shareW > STALL_MIN_SHARE_W) || m == null || !Number.isFinite(Number(m))) { e.underSince = 0; continue; }
+      const at = Number(measured[wr]?.at) || 0;
+      if (!(shareW > STALL_MIN_SHARE_W) || m == null || !Number.isFinite(Number(m)) || !at) { e.underSince = 0; continue; }
+      if (at === e.lastSampleAt) continue;
+      e.lastSampleAt = at;
+      if (at < (e.cmdRaisedAt || 0) + LIMIT_SETTLE_MS) continue;
       const deliveredW = last.direction === 'charge' ? Math.max(0, Number(m)) : Math.max(0, -Number(m));
       const dirText = last.direction === 'charge' ? 'Lade' : 'Entlade';
       if (deliveredW >= STALL_DELIVER_RATIO * shareW) {
@@ -1402,8 +1414,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         }
         continue;
       }
-      if (!e.underSince) e.underSince = t;
-      if (t - e.underSince < STALL_DETECT_MS) continue;
+      if (!e.underSince) e.underSince = at;
+      if (at - e.underSince < STALL_DETECT_MS) continue;
       e.underSince = 0;
       e.stalledUntil = t + STALL_PROBE_MS;
       e.stallDeliveredW = Math.round(deliveredW); // was er beim Erkennen noch lieferte (Grundsatz 0, stalledOut)
