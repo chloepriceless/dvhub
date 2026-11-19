@@ -4150,7 +4150,7 @@ function buildFieldDefinitions() {
         { value: 'dvhub', label: 'DVhub (dvhub.online)' },
         { value: 'public', label: 'Direkt von der Bundesnetzagentur' }
       ],
-      help: 'Woher DVhub die anzulegenden Werte der Bundesnetzagentur (je Inbetriebnahmemonat und Leistungsstufe) für Marktprämie und Einspeisevergütung holt. DVhub: fertig geprüft von dvhub.online (eine kleine Anfrage pro Woche); ist dvhub.online nicht erreichbar, holt DVhub sie automatisch direkt bei der Bundesnetzagentur. Direkt: ohne dvhub.online, DVhub lädt dann die Archivseite und alle Veröffentlichungen (rund 35 Dateien) selbst. Geholt wird nur, wenn unten eine PV-Anlage mit Leistung und Inbetriebnahme eingetragen ist, danach wöchentlich.'
+      help: 'Woher DVhub die anzulegenden Werte der Bundesnetzagentur (je Inbetriebnahmemonat und Leistungsstufe) für Marktprämie und Einspeisevergütung holt. DVhub: fertig geprüft von dvhub.online (eine kleine Anfrage pro Woche); ist dvhub.online nicht erreichbar, holt DVhub sie automatisch direkt bei der Bundesnetzagentur. Direkt: ohne dvhub.online, DVhub lädt dann die Archivseite und die Veröffentlichungen mit den Werten (heute 7 Dateien) selbst. Geholt wird nur, wenn unten eine PV-Anlage mit Leistung und Inbetriebnahme eingetragen ist, danach wöchentlich.'
     },
     {
       section: 'pricing',

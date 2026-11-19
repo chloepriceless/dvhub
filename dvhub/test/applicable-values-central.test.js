@@ -20,14 +20,16 @@ import {
   extractBundesnetzagenturApplicableValuePublicationLinks,
   fetchBundesnetzagenturApplicableValueReferenceData,
   fetchCentralApplicableValueReferenceData,
+  isEvaluatedPublication,
   parseBundesnetzagenturApplicableValueWorkbook,
+  publicationPeriodEnd,
 } from '../bundesnetzagentur-applicable-values.js';
 import { createDefaultConfig, getConfigDefinition, normalizeConfigInput } from '../config-model.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(here, 'fixtures', 'eeg-applicable-values');
 // Gleicher Wert wie in Hetzner-Docker price-api(-dev)/tests/eeg-applicable-values.test.js.
-const EXPECTED_SHA256 = 'eebb83a922b9eb00d8dfcb1203fdca35063551fde50910045663fc6b14b49610';
+const EXPECTED_SHA256 = '1bfc9326cee946dbc15294949d225635a349837f2c9048516f7d32a732fe5cc4';
 const EXPECTED_CHECKSUM = 'sha256:54f63ec6dc7e2c581833deec5ca79273b28a354641cbfda63feb401900ccd517';
 const expected = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'expected.json'), 'utf8'));
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
@@ -127,6 +129,52 @@ test('Parität: echte BNetzA-Dateien → Erwartungsdatei (gleiche sha256 wie in 
     { applicableValueTiersByMonth: {}, fullFeedApplicableValueTiersByMonth: {} });
 });
 
+// ── Linkfilter: nur Dateien, aus denen der Parser Werte liest ────────────────
+
+const fileNameOf = (url) => decodeURIComponent(new URL(url).pathname.split('/').pop());
+
+test('Linkfilter: von 35 Links auf der echten Archivseite nur die 7 auswertbaren, keine Wind-Dateien', () => {
+  const links = extractBundesnetzagenturApplicableValuePublicationLinks(readFixture('archive.html').toString('utf8'));
+  assert.deepEqual(links.map(fileNameOf), [
+    'VergSaetzeAug26bisDez26.xlsx',
+    'VergSaetzeFeb26bisJul26.xlsx',
+    'VergSaetzeAug25bisJan26.xlsx',
+    'VergSaetzeFebbisJul25.xlsx',
+    'VergSaetzeAug24bisJan25.xlsx',
+    'VergSaetzeFeb_bis_Juli2024.xlsx',
+    'DegressionsVergSaetze1122bis0124.xlsx',
+  ]);
+  assert.ok(links.every((url) => !/Wind/i.test(url)));
+  assert.deepEqual(links, expected.archiveLinks);
+});
+
+test('Linkfilter: Zeitraum-Ende aus dem Dateinamen, Grenze 11/2022; unbekanntes Schema wird geladen', () => {
+  const cases = {
+    'VergSaetzeAug26bisDez26.xlsx': [2026, 12, true],
+    'VergSaetzeFeb_bis_Juli2024.xlsx': [2024, 7, true],
+    'DegressionsVergSaetze1122bis0124.xlsx': [2024, 1, true],
+    // gerundete Teil-/Volleinspeisungs-Zeilen gibt es darin nicht (geprüft 19.11.2026)
+    'DegressionsVergSaetze_08bis1022.xlsx': [2022, 10, false],
+    'DegressionsVergSaetzeAugbisOkt22EEGNovelle.xlsx': [2022, 10, false],
+    'DegressionsVergSaetze_05bis0722.xlsx': [2022, 7, false],
+    'DegressionsVergSaetze_01121bis0122.xlsx': [2022, 1, false],
+    'DegressionsVergSaetze_11-01_21.xlsx': [2021, 1, false],
+    'DegressionsVergSaetze_Feb18-April18.xlsx': [2018, 4, false],
+    'DegressionsVergSaetze_Aug-Okt2017.xlsx': [2017, 10, false],
+  };
+  for (const [name, [year, month, evaluated]] of Object.entries(cases)) {
+    assert.deepEqual(publicationPeriodEnd(name), { year, month }, name);
+    assert.equal(isEvaluatedPublication(name), evaluated, name);
+  }
+  // Wind-Ausschreibungen tragen „VergSaetze“ nur im Pfad, nicht im Dateinamen.
+  assert.equal(isEvaluatedPublication('EE_Foerderung_Wind_10_2018.xlsx'), false);
+  // Neues, unbekanntes Namensschema → lieber laden als einen Monat verlieren.
+  assert.equal(publicationPeriodEnd('VergSaetze_2027_Teil1.xlsx'), null);
+  assert.equal(isEvaluatedPublication('VergSaetze_2027_Teil1.xlsx'), true);
+  assert.equal(isEvaluatedPublication('VergSaetzeFeb27bisJul27.xlsx'), true);
+  assert.equal(isEvaluatedPublication('VergSaetzeFeb27bisJul27.pdf'), false);
+});
+
 // ── Abruf von dvhub.online ───────────────────────────────────────────────────
 
 test('dvhub.online: GET /v1/pv/eeg-applicable-values, Prüfsumme stimmt, Format wie der Cache', async () => {
@@ -138,7 +186,7 @@ test('dvhub.online: GET /v1/pv/eeg-applicable-values, Prüfsumme stimmt, Format 
   assert.equal(data.via, 'dvhub_online');
   assert.equal(data.updatedAt, '2026-11-19T05:40:00.000Z');
   assert.equal(data.checksum, EXPECTED_CHECKSUM);
-  assert.equal(data.publications.length, 3);
+  assert.equal(data.publications.length, 2);
   assert.deepEqual(data.applicableValueTiersByMonth, expected.applicableValueTiersByMonth);
   assert.deepEqual(data.fullFeedApplicableValueTiersByMonth, expected.fullFeedApplicableValueTiersByMonth);
 });

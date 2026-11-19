@@ -1,5 +1,5 @@
 {
-  "comment": "Erwartete Ausgabe des AW-Parsers (DVhub dvhub/bundesnetzagentur-applicable-values.js, Stand 5114f703) für die echten BNetzA-Dateien in diesem Ordner, abgerufen am 19.11.2026. Identisch in DVhub (dvhub/test/fixtures/eeg-applicable-values) und Hetzner-Docker (price-api/tests/fixtures/eeg-applicable-values, price-api-dev/tests/fixtures/eeg-applicable-values). Nicht von Hand ändern.",
+  "comment": "Erwartete Ausgabe des AW-Parsers (DVhub dvhub/bundesnetzagentur-applicable-values.js, Stand feat/anzulegende-werte-zentral mit Linkfilter) für die echten BNetzA-Dateien in diesem Ordner, abgerufen am 19.11.2026. archiveLinks: die auswertbaren Links der echten Archivseite (7 von 35). publicationOrder: die Vorlagen, die der Filter durchlässt, in Seitenreihenfolge; AugbisOkt22EEGNovelle liegt als Gegenprobe bei (wird nicht geladen, liefert nichts). Identisch in DVhub (dvhub/test/fixtures/eeg-applicable-values) und Hetzner-Docker (price-api/tests/fixtures/eeg-applicable-values, price-api-dev/tests/fixtures/eeg-applicable-values). Nicht von Hand ändern.",
   "fixtures": {
     "archive.html": "5d30514334b7bc0e23beb45d307703fedf75417fd89f5dbd3e31ca6843e7df91",
     "VergSaetzeAug26bisDez26.xlsx": "2d8e9dbb948f30c23afdb84958c3252afa572ab3ec8641b4555858249e20c10f",
@@ -8,8 +8,7 @@
   },
   "publicationOrder": [
     "VergSaetzeAug26bisDez26.xlsx",
-    "DegressionsVergSaetze1122bis0124.xlsx",
-    "DegressionsVergSaetzeAugbisOkt22EEGNovelle.xlsx"
+    "DegressionsVergSaetze1122bis0124.xlsx"
   ],
   "archiveLinks": [
     "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/VergSaetzeAug26bisDez26.xlsx?__blob=publicationFile&v=3",
@@ -18,35 +17,7 @@
     "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/VergSaetzeFebbisJul25.xlsx?__blob=publicationFile&v=2",
     "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/VergSaetzeAug24bisJan25.xlsx?__blob=publicationFile&v=3",
     "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/VergSaetzeFeb_bis_Juli2024.xlsx?__blob=publicationFile&v=2",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze1122bis0124.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_08bis1022.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetzeAugbisOkt22EEGNovelle.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_05bis0722.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_02bis0422.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_01121bis0122.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_08-10_21.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_05-07_21.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_02-04_21.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_11-01_21.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_08-10_20.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_05-07_20.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_02-04_20.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_11-01_20.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_08-10_19.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_05-07_19.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_02-04_19.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_11-01_19.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_08-10_18.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_Mai-Juli18.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_Feb18-April18.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_Nov17-Jan18.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_Aug-Okt2017.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze_Mai-Juli2017.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/Archiv_Foerderungen/EE_Foerderung_Wind_10_2018.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/Archiv_Foerderungen/EE_Foerderung_Wind_07_2018.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/Archiv_Foerderungen/EE_Foerderung_Wind_04_2018.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/Archiv_Foerderungen/EE_Foerderung_Wind_08_2017.xlsx?__blob=publicationFile&v=1",
-    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/Archiv_Foerderungen/EE_Foerderung_Wind_05_2017.xlsx?__blob=publicationFile&v=1"
+    "https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/_DL/Archiv/DegressionsVergSaetze1122bis0124.xlsx?__blob=publicationFile&v=1"
   ],
   "applicableValueTiersByMonth": {
     "2023-01": [

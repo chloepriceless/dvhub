@@ -6,7 +6,8 @@
 //   'dvhub'  (Standard) fertig geprüft von dvhub.online
 //            (GET <epex.priceApiUrl>/v1/pv/eeg-applicable-values, Prüfsumme wird
 //            nachgerechnet); scheitert das, direkt bei der BNetzA.
-//   'public' direkt bei der BNetzA: Archivseite + jede verlinkte xlsx (heute 35).
+//   'public' direkt bei der BNetzA: Archivseite + die auswertbaren xlsx (heute 7
+//            von 35 Links; isEvaluatedPublication).
 // Vorher holte jede Box bei JEDEM Start alle Dateien direkt — und zusätzlich bei
 // jedem Historie-Aufruf für ein Jahr ohne Werte (z. B. 2021) noch einmal. Eine
 // Feldbox bekam am 19.11. HTTP 404 für die Archivseite (Drosselung der BNetzA).
@@ -400,6 +401,50 @@ function findSheetXml(entries) {
   return null;
 }
 
+// Nur Dateien laden, aus denen der Parser Werte liest (19.11.2026, belegt mit
+// der echten Archivseite: 7 von 35 Links). Der Dateiname — nicht nur der Pfad
+// „…/Archiv_VergSaetze/…“ — muss „VergSaetze“ enthalten; sonst kamen fünf
+// Wind-Ausschreibungsdateien mit. Und der Zeitraum muss bis mindestens 11/2022
+// reichen: Die gerundeten Teil-/Volleinspeisungs-Zeilen, die der Parser liest,
+// stehen erst ab der Datei für 11/2022–01/2024 drin; ältere Dateien (auch
+// 05–07/2022, 08–10/2022 und „AugbisOkt22EEGNovelle“) liefern nichts.
+// Unbekanntes Namensschema → laden (lieber eine Datei zu viel als ein Monat zu wenig).
+// Auf dem Server (price-api/eeg-applicable-values.js) gleich.
+const FIRST_EVALUATED_PERIOD_END = 2022 * 12 + 11;
+const GERMAN_MONTHS = { jan: 1, feb: 2, mar: 3, mae: 3, apr: 4, mai: 5, jun: 6, jul: 7, aug: 8, sep: 9, okt: 10, nov: 11, dez: 12 };
+
+/**
+ * Ende des Zeitraums aus dem Dateinamen einer Veröffentlichung, z. B.
+ * „VergSaetzeAug26bisDez26“ → 12/2026, „…1122bis0124“ → 01/2024,
+ * „…_08-10_21“ → 10/2021, „…_Feb18-April18“ → 04/2018. null = unbekannt.
+ */
+export function publicationPeriodEnd(fileName) {
+  const base = String(fileName || '').replace(/\.[a-z0-9]+$/i, '');
+  const tail = base.split(/bis|-/i).pop() || '';
+  const digits = tail.match(/^_?(\d{2})_?(\d{2})(?!\d)/);
+  if (digits) {
+    const month = Number(digits[1]);
+    return month >= 1 && month <= 12 ? { year: 2000 + Number(digits[2]), month } : null;
+  }
+  const named = tail.match(/^_?([A-Za-zÄäÖöÜü]+)_?(\d{4}|\d{2})/);
+  if (!named) return null;
+  const month = GERMAN_MONTHS[named[1].toLowerCase().replace('ä', 'a').slice(0, 3)];
+  if (!month) return null;
+  return { year: named[2].length === 4 ? Number(named[2]) : 2000 + Number(named[2]), month };
+}
+
+export function isEvaluatedPublication(fileName) {
+  const name = String(fileName || '');
+  if (!/\.xlsx$/i.test(name) || !/VergSaetze/i.test(name)) return false;
+  const end = publicationPeriodEnd(name);
+  return !end || end.year * 12 + end.month >= FIRST_EVALUATED_PERIOD_END;
+}
+
+function publicationFileName(url) {
+  const last = url.pathname.split('/').pop() || '';
+  try { return decodeURIComponent(last); } catch { return last; }
+}
+
 export function extractBundesnetzagenturApplicableValuePublicationLinks(
   html,
   { baseUrl = BUNDESNETZAGENTUR_BASE_URL } = {}
@@ -409,8 +454,10 @@ export function extractBundesnetzagenturApplicableValuePublicationLinks(
   for (const match of String(html || '').matchAll(/href="([^"]+)"/g)) {
     const href = decodeHtml(match[1]);
     if (!/\.xlsx\b/i.test(href)) continue;
-    if (!/(VergSaetze|DegressionsVergSaetze)/i.test(href)) continue;
-    const absolute = new URL(href, baseUrl).toString();
+    let url;
+    try { url = new URL(href, baseUrl); } catch { continue; }
+    if (!isEvaluatedPublication(publicationFileName(url))) continue;
+    const absolute = url.toString();
     if (seen.has(absolute)) continue;
     seen.add(absolute);
     links.push(absolute);
