@@ -1020,7 +1020,7 @@ Zusätzlich erwartet DVhub ein Herstellerprofil neben der Betriebs-Config:
 | `/etc/dvhub/hersteller/fronius.json`, `deye-lv.json`, `sungrow.json` | weitere native Profile (Sungrow: [Anleitung](docs/SUNGROW-BETA.md)) |
 | `/etc/dvhub/hersteller/deye-hp3.json`, `deye-lp1.json` | Deye HP3 (Hochvolt, 3-phasig) und LP1 (1-phasig) — nur Anzeige, keine Steuerung, am Gerät ungeprüft (Beta, nur Bleeding Edge; [Anleitung](docs/DEYE-NUR-ANZEIGE.md)) |
 | `/etc/dvhub/hersteller/e3dc.json`, `solis.json`, `sofar.json`, `foxess-h1.json`, `huawei-sun2000.json`, `goodwe-et.json`, `kostal-plenticore.json`, `solax-g4.json`, `sma-speedwire.json` | E3/DC, Solis, SOFAR, FoxESS, Huawei, GoodWe, Kostal, SolaX, SMA (Speedwire, höchstens eine Anfrage je 10 s) — nur Anzeige, keine Steuerung, am Gerät ungeprüft (Beta, nur Bleeding Edge; Anleitung je Hersteller in [docs/hersteller/](docs/hersteller/)) |
-| `/etc/dvhub/hersteller/lg-ess-home.json`, `solaredge-storedge.json`, `alphaess-smile.json`, `growatt-sph.json` | LG ESS Home 8/10 (nur Netz und PV), SolarEdge StorEdge, AlphaESS SMILE, Growatt SPH — nur Anzeige, keine Steuerung, am Gerät ungeprüft (Beta, nur Bleeding Edge; Anleitung je Hersteller in [docs/hersteller/](docs/hersteller/)) |
+| `/etc/dvhub/hersteller/lg-ess-home.json`, `solaredge-storedge.json`, `alphaess-smile.json`, `growatt-sph.json` | LG ESS Home 8/10 (Akku aus Referenzimplementierung), SolarEdge StorEdge, AlphaESS SMILE, Growatt SPH — nur Anzeige, keine Steuerung, am Gerät ungeprüft (Beta, nur Bleeding Edge; Anleitung je Hersteller in [docs/hersteller/](docs/hersteller/)) |
 
 Das aktive Profil wählt `manufacturer` in der Config bzw. das Hersteller-Dropdown
 in den Einstellungen; die Auswahlliste entsteht dynamisch aus den `*.json`-Dateien
