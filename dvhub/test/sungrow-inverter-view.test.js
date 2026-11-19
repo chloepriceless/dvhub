@@ -233,3 +233,64 @@ test('Option A (Christin 19.11.): Freigabe-Hinweis — „wird wiederholt" (Mast
     'Freigabe gescheitert, wird wiederholt · Versuch 4');
   assert.equal(V.view({ ...base, sungrowEms: { owns: false, release: { pending: false, attempts: 3 } } }).release, 'Freigabe erledigt');
 });
+
+test('Codex P2: Freigabe-Hinweis gehört zu einer Anfrage — Hinweise einer älteren Anfrage zählen nicht; verworfen/gescheitert sichtbar', () => {
+  const base = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+  // Master: Einmal-Fehlschlag der neuen Anfrage (2000); Slave: „erledigt“ aus einer älteren Anfrage (1000) → nur der Fehlschlag.
+  const vw = V.view({ ...base,
+    sungrowEms: { release: { pending: false, failed: true, requestedAt: 2000, error: 'modbus timeout' } },
+    sungrowEmsSlave: { release: { pending: false, done: true, requestedAt: 1000 } } });
+  assert.equal(vw.release, 'Freigabe gescheitert: modbus timeout');
+  assert.equal(vw.releaseAt, 2000);
+  // Verworfen: ein anderes System steuert (Master bzw. Slave).
+  assert.equal(V.view({ ...base, sungrowEms: { release: { pending: false, abandoned: true, reason: 'foreign_mode', mode: 4, requestedAt: 5 } } }).release,
+    'Freigabe verworfen: ein anderes System steuert den Wechselrichter');
+  assert.equal(V.view({ ...base, sungrowEmsSlave: { release: { pending: false, abandoned: true, reason: 'master_foreign_mode', requestedAt: 5 } } }).release,
+    'Freigabe verworfen (Slave): ein anderes System steuert den Wechselrichter');
+  // Kein Schreibweg (Restpunkt 1): klar „nicht gesendet“.
+  assert.equal(V.view({ ...base, sungrowEms: { release: { pending: false, failed: true, sent: false, error: 'config_unsafe_manufacturer_profile_error', requestedAt: 5 } } }).release,
+    'Nicht gesendet: Herstellerprofil/Konfiguration ungültig — kein Schreibweg');
+  // Eine ausstehende Wiederholung wird immer gezeigt, auch neben einem jüngeren Ergebnis.
+  assert.match(V.view({ ...base,
+    sungrowEms: { release: { pending: false, failed: true, requestedAt: 9, error: 'x' } },
+    sungrowEmsSlave: { release: { pending: true, attempts: 2, requestedAt: 1 } } }).release, /^Freigabe gescheitert, wird wiederholt \(Slave\)/);
+});
+
+test('Codex P2 + Restpunkt 1: Klick-Ergebnis wird von einem älteren Status nicht überschrieben; „nicht gesendet“ klar benannt', async () => {
+  const file = fileURLToPath(new URL('../public/sungrow-inverter-view.js', import.meta.url));
+  const responses = [];
+  const apiFetch = async () => { const r = responses.shift(); return { ok: r.status === 200, status: r.status, json: async () => r.body }; };
+  const sandbox = { window: { confirm: () => true, DVhubCommon: { apiFetch } }, document: undefined };
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: 'sungrow-inverter-view.js' });
+  const W = sandbox.window.DVhubSungrowInverters;
+  const els = {};
+  let onClick = null;
+  const el = (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false, disabled: false,
+    ...(id === 'sungrowWrReleaseBtn' ? { addEventListener: (ev, fn) => { if (ev === 'click') onClick = fn; } } : {}) }));
+  const doc = { getElementById: (id) => el(id) };
+  const base = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+  const oldDone = { ...base, sungrowEms: { release: { pending: false, done: true, requestedAt: 1000 } } };
+  W.render(oldDone, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Freigabe erledigt');
+  assert.equal(typeof onClick, 'function');
+  // Neue Anfrage: Einmal-Fehlschlag (fremder Modus) — danach kommt noch ein verspäteter alter Status.
+  responses.push({ status: 200, body: { ok: false, pending: false, error: 'modbus timeout', requestedAt: 2000 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert: modbus timeout');
+  W.render(oldDone, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert: modbus timeout', 'alter „erledigt“-Hinweis überschreibt den Fehler nicht');
+  // Der Status der neuen Anfrage gilt.
+  W.render({ ...base, sungrowEms: { release: { pending: true, attempts: 2, requestedAt: 2000 } } }, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert, wird wiederholt · Versuch 2');
+  // Restpunkt 1: kein Schreibweg → 409, klar „nicht gesendet“ (nicht „freigegeben“).
+  responses.push({ status: 409, body: { ok: false, sent: false, error: 'config_unsafe_manufacturer_profile_error', requestedAt: 3000 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Nicht gesendet: Herstellerprofil/Konfiguration ungültig — kein Schreibweg');
+  responses.push({ status: 409, body: { ok: false, sent: false, error: 'sungrow_ems_not_configured', requestedAt: 4000 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Nicht gesendet: Sungrow-Steuerung nicht eingerichtet');
+  // Erfolg wie bisher.
+  responses.push({ status: 200, body: { ok: true, pending: false, requestedAt: 5000 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)');
+});

@@ -111,6 +111,14 @@ einer Modbus-Ausnahme, steht der Wert aber, zählt der Schritt als erledigt. Kac
 wird wiederholt“ bzw. „Freigabe erledigt“. Einen Modus, den nicht DVhub gesetzt hat, gibt der Knopf einmal frei,
 wiederholt wird dann nicht.
 
+Vor jeder automatischen Wiederholung liest DVhub den Wechselrichter neu. Hat inzwischen ein anderes System übernommen
+(VPP, fremdes EMS; für den Slave zählt auch der Master, dem er folgt) oder hat der Not-Halt einen fremden Modus erkannt,
+wird die Freigabe verworfen („Freigabe verworfen“, `sungrow_ems_release_abandoned`) und nichts geschrieben, auch im
+Not-Halt nicht. Nicht lesbar → kein Write, zählt als Fehlschlag. Steht der Wechselrichter schon in Modus 0 mit Stopp,
+ist die Freigabe ohne Write erledigt. Der Hinweis in der Kachel gehört zur letzten Anfrage (`requestedAt` in Status und
+API-Antwort). Ohne Schreibweg (Herstellerprofil ungültig, keine Sungrow-Steuerung) antwortet die API mit HTTP 409,
+`ok: false`, `sent: false` und dem Grund — die Kachel zeigt „Nicht gesendet“.
+
 ## Eigenverbrauch und Regelgüte
 
 Im External EMS regelt der Wechselrichter den Eigenverbrauch nicht mehr selbst, und eine Netz-Zielleistung, die er

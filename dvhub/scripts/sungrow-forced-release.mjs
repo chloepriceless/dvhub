@@ -17,13 +17,14 @@ import path from 'node:path';
 
 import { loadConfigFile } from '../config-model.js';
 import { createModbusTransport } from '../transport-modbus.js';
-import { sungrowForcedSafeOff, readForcedMarker, releaseShouldWrite, forcedConnections } from '../services/inverter/sungrow-forced-safeoff.js';
+import { sungrowForcedSafeOff, readForcedMarker, releaseShouldWrite, forcedConnections, unsafeConfigWithMarker } from '../services/inverter/sungrow-forced-safeoff.js';
 import { wire, EMS_MODE, sungrowEmsConf } from '../services/inverter/sungrow.js';
 
 const MODE_ADDR = wire(13050);
 
 const HARD_TIMEOUT_MS = Number(process.env.SUNGROW_RELEASE_TIMEOUT_MS) || 8000;
 const log = (msg, extra) => console.log(`[sungrow-forced-release] ${msg}${extra ? ' ' + JSON.stringify(extra) : ''}`);
+const warn = (msg, extra) => console.error(`[sungrow-forced-release] ${msg}${extra ? ' ' + JSON.stringify(extra) : ''}`);
 
 async function main() {
   const configPath = process.env.DV_APP_CONFIG || path.join(process.cwd(), 'config.json');
@@ -34,10 +35,17 @@ async function main() {
   try { cfg = loadConfigFile(configPath).effectiveConfig; }
   catch (e) { log('Config nicht lesbar — nichts zu tun', { error: e?.message || String(e) }); return; }
 
-  // Nur wenn der Netz-Sollwert überhaupt über den Sungrow-EMS nachgebildet wird.
-  if (!sungrowEmsConf(cfg)) { log('kein Sungrow-EMS-Profil aktiv — nichts zu tun'); return; }
-
   const marker = readForcedMarker(statePath);
+  // Nur wenn der Netz-Sollwert überhaupt über den Sungrow-EMS nachgebildet wird. Restpunkt 1: bei ungültiger
+  // Konfiguration und stehendem Merker ist das kein „nichts zu tun" — DVhubs Modus 2 kann weiterlaufen, hier wird
+  // nichts geschrieben (C2). Laut melden.
+  if (!sungrowEmsConf(cfg)) {
+    const unsafe = unsafeConfigWithMarker(cfg, marker);
+    if (unsafe) { warn('Konfiguration ungültig — Forced-Merker steht, aber kein Schreibweg: NICHTS zurückgenommen. Wechselrichter von Hand prüfen (Modus 0, Befehl 0xCC).', unsafe); return; }
+    log('kein Sungrow-EMS-Profil aktiv — nichts zu tun');
+    return;
+  }
+
   if (!marker.owned) { log('kein Forced-Besitz-Merker — DVhub hat sauber freigegeben oder besaß Modus 2 nie'); return; }
 
   const { master, slave, masterKey } = forcedConnections(cfg);

@@ -286,25 +286,58 @@
 
   // Option A (Christin 19.11.2026): ausstehende/erledigte manuelle Freigabe (Master oder Slave) aus dem EMS-Status.
   // null = nichts zu melden (der Knopf-Status bleibt dann, wie ihn der Klick gesetzt hat).
+  // Codex d6f4b256 P2: jeder Hinweis trägt den Zeitpunkt seiner Anfrage (requestedAt). Es zählt nur die jüngste Anfrage
+  // (eine ausstehende Wiederholung immer) — ein „erledigt" von früher verdeckt keinen neuen Fehlschlag.
   const RELEASE_PENDING_TEXT = 'Freigabe gescheitert, wird wiederholt';
-  function releaseText(s) {
+  // Restpunkt 1: kein Schreibweg → klar „nicht gesendet" mit Grund (statt „freigegeben" oder eines Fehlercodes).
+  function releaseNotSentText(error) {
+    const e = String(error || '');
+    if (e.indexOf('config_unsafe') === 0) return 'Nicht gesendet: Herstellerprofil/Konfiguration ungültig — kein Schreibweg';
+    if (e === 'sungrow_ems_not_configured' || e === 'sungrow_not_active') return 'Nicht gesendet: Sungrow-Steuerung nicht eingerichtet';
+    return 'Nicht gesendet' + (e ? ': ' + e : '');
+  }
+  function releaseProblemText(r, side) {
+    if (r.abandoned === true) {
+      return `Freigabe verworfen${side}: ${r.reason === 'not_owned' ? 'Betrieb nicht mehr von DVhub' : 'ein anderes System steuert den Wechselrichter'}`;
+    }
+    if (r.failed === true) return r.sent === false ? releaseNotSentText(r.error) : `Freigabe gescheitert${side}${r.error ? ': ' + r.error : ''}`;
+    return null;
+  }
+  const reqAtOf = (r) => (r && Number.isFinite(Number(r.requestedAt)) && r.requestedAt !== null ? Number(r.requestedAt) : null);
+  function releaseInfo(s) {
     const rels = [['', s.sungrowEms && s.sungrowEms.release], [' (Slave)', s.sungrowEmsSlave && s.sungrowEmsSlave.release]]
       .filter((x) => x[1]);
     const pending = rels.filter((x) => x[1].pending === true);
     if (pending.length) {
       const n = Math.max(...pending.map((x) => Number(x[1].attempts) || 0));
-      return `${RELEASE_PENDING_TEXT}${pending.length === 1 ? pending[0][0] : ''}${n ? ` · Versuch ${n}` : ''}`;
+      const ats = pending.map((x) => reqAtOf(x[1])).filter((v) => v != null);
+      return {
+        text: `${RELEASE_PENDING_TEXT}${pending.length === 1 ? pending[0][0] : ''}${n ? ` · Versuch ${n}` : ''}`,
+        at: ats.length ? Math.max(...ats) : null,
+      };
     }
-    return rels.length ? 'Freigabe erledigt' : null;
+    const ats = rels.map((x) => reqAtOf(x[1])).filter((v) => v != null);
+    const latest = ats.length ? Math.max(...ats) : null;
+    const current = rels.filter((x) => latest == null || reqAtOf(x[1]) == null || reqAtOf(x[1]) === latest);
+    for (const [side, r] of current) {
+      const t = releaseProblemText(r, side);
+      if (t) return { text: t, at: latest };
+    }
+    return current.length ? { text: 'Freigabe erledigt', at: latest } : null;
   }
+  // Zeitpunkt der zuletzt per Knopf gestellten Anfrage (aus der API-Antwort): ein älterer Status überschreibt ihr
+  // Ergebnis nicht (verspätete Status-Antwort, P2).
+  let lastReleaseRequestAt = null;
 
   function view(status) {
     const s = status || {};
     if (!s.sungrowSecond) return { hidden: true };
     const v = s.victron || {};
+    const rel = releaseInfo(s);
     return {
       hidden: false,
-      release: releaseText(s),
+      release: rel ? rel.text : null,
+      releaseAt: rel ? rel.at : null,
       mode: modeText(s),
       showCountdown: s.sungrowEms ? isExternalActive(s.sungrowEms) : false,
       master: masterRow(s),
@@ -379,7 +412,10 @@
     // Summe einzeilig im Kopfbereich (M5b): echter System-SoC, sonst gemeldeter als Rückfall.
     const sumSoc = vw.sum.socReal !== DASH ? `real ${vw.sum.socReal}` : `${vw.sum.soc} (gemeldet)`;
     set('sungrowWrSum', `Summe: SoC ${sumSoc} · Akku ${vw.sum.battery} · PV ${vw.sum.pv}`);
-    if (vw.release) set('sungrowWrReleaseStatus', vw.release); // Option A: Freigabe wird wiederholt / erledigt
+    // Option A: Freigabe wird wiederholt / erledigt / verworfen / gescheitert — nur, wenn der Hinweis nicht zu einer
+    // älteren Anfrage gehört als der letzte Knopfdruck (P2).
+    const stale = lastReleaseRequestAt != null && vw.releaseAt != null && vw.releaseAt < lastReleaseRequestAt;
+    if (vw.release && !stale) set('sungrowWrReleaseStatus', vw.release);
     wireReleaseButton(d);
   }
 
@@ -400,9 +436,12 @@
         const res = apiFetch ? await apiFetch('/api/sungrow/release', opts) : await fetch('/api/sungrow/release', opts);
         let j = {};
         try { j = await res.json(); } catch { j = {}; }
+        if (j && Number.isFinite(Number(j.requestedAt)) && j.requestedAt !== null) lastReleaseRequestAt = Number(j.requestedAt);
         if (statusEl) {
           statusEl.textContent = j.pending === true ? RELEASE_PENDING_TEXT + (j.error ? ' (' + j.error + ')' : '')
-            : (res.ok && j.ok) ? 'freigegeben (Modus 0)' : ('Fehler' + (j.error ? ': ' + j.error : ''));
+            : (res.ok && j.ok) ? 'freigegeben (Modus 0)'
+              : j.sent === false ? releaseNotSentText(j.error)
+                : ('Freigabe gescheitert' + (j.error ? ': ' + j.error : ''));
         }
       } catch (e) {
         if (statusEl) statusEl.textContent = 'Fehler: ' + (e && e.message ? e.message : 'Netzwerk');

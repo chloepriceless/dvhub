@@ -4293,9 +4293,14 @@ export function createApiRoutes(ctx) {
       let result;
       try { result = await ctx.sungrowEms.forceRelease('manual_release'); }
       catch (e) { pushLog('sungrow_manual_release_error', { error: e?.message || String(e) }, 'warn'); return json(res, 500, { ok: false, error: 'release_failed' }); }
-      pushLog('sungrow_manual_release', { ok: result?.ok === true, pending: result?.pending === true, device: result?.device || null }, actorContext(req));
+      const notSent = result?.sent === false;
+      pushLog('sungrow_manual_release', { ok: result?.ok === true, pending: result?.pending === true, ...(notSent ? { sent: false, error: result?.error || null } : {}), device: result?.device || null }, actorContext(req));
       // Option A (Christin 19.11.2026): pending = Freigabe gescheitert, DVhub wiederholt sie bis zur Bestätigung.
-      return json(res, 200, { ok: result?.ok === true, pending: result?.pending === true, retryAt: result?.retryAt ?? null, device: result?.device || null, error: result?.error || null });
+      // requestedAt bindet die Antwort an diese Anfrage (die Kachel lässt einen älteren Status nicht darüber, P2).
+      const out = { ok: result?.ok === true, pending: result?.pending === true, retryAt: result?.retryAt ?? null, device: result?.device || null, error: result?.error || null, requestedAt: result?.requestedAt ?? null };
+      // Restpunkt 1: kein Schreibweg (Herstellerprofil ungültig, kein Sungrow-EMS) — nichts gesendet. Vorher 200 ok:true.
+      if (notSent) return json(res, 409, { ...out, ok: false, sent: false });
+      return json(res, 200, out);
     }
 
     // POST: ein planbares Gerät anlegen/aktualisieren (Upsert nach id).

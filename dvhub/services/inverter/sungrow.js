@@ -785,8 +785,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     neutralizedAt: null,  // pausedAt des Not-Halts, für den die eine Rücknahme schon lief
     revokedReason: null,  // ein Tor hat den letzten Sollwert abgelehnt
     acceptSeq: 0,         // zählt angenommene Sollwerte (Aufrufzeitpunkt) — eine ältere Ablehnung widerruft keinen neueren
-    release: null,        // ausstehende manuelle Freigabe (Option A): { reason, confirmedBy, since, attempts, nextAt, lastError }
-    releaseDone: null,    // zuletzt nach Wiederholung bestätigte Freigabe { at, attempts, via } (Status-Hinweis „erledigt")
+    release: null,        // ausstehende manuelle Freigabe (Option A): { reason, confirmedBy, requestedAt, since, attempts, nextAt, lastError }
+    // Ergebnis der LETZTEN Freigabe-Anfrage, wenn es etwas zu melden gibt (Codex d6f4b256 P2: an die Anfrage gebunden,
+    // jede neue Anfrage löscht es): { state: 'done' | 'abandoned' | 'failed', requestedAt, at, … }
+    releaseInfo: null,
     logKeys: {}
   };
   let chain = Promise.resolve();
@@ -925,16 +927,26 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       owns: st.owns,
       ownMode: st.ownMode,
       error: st.error,
-      // Option A: nur, wenn eine Freigabe aussteht bzw. nach Wiederholung erledigt ist (sonst fehlt das Feld).
+      // Option A: nur, wenn eine Freigabe aussteht oder die letzte Anfrage etwas zu melden hat (sonst fehlt das Feld).
       ...releaseStatus()
     };
   }
+  // requestedAt bindet jeden Hinweis an seine Anfrage (Codex d6f4b256 P2): die Kachel zeigt nie das Ergebnis einer
+  // älteren Anfrage über dem der jüngsten.
   function releaseStatus() {
-    if (st.release) {
-      return { release: { pending: true, since: st.release.since, attempts: st.release.attempts, retryAt: st.release.nextAt || null, lastError: st.release.lastError, text: 'Freigabe gescheitert, wird wiederholt' } };
+    const r = st.release;
+    if (r) {
+      return { release: { pending: true, requestedAt: r.requestedAt ?? null, since: r.since, attempts: r.attempts, retryAt: r.nextAt || null, lastError: r.lastError, text: 'Freigabe gescheitert, wird wiederholt' } };
     }
-    if (st.releaseDone) return { release: { pending: false, doneAt: st.releaseDone.at, attempts: st.releaseDone.attempts, text: 'Freigabe erledigt' } };
-    return {};
+    const i = st.releaseInfo;
+    if (!i) return {};
+    if (i.state === 'done') {
+      return { release: { pending: false, done: true, requestedAt: i.requestedAt ?? null, doneAt: i.at, attempts: i.attempts, via: i.via, text: 'Freigabe erledigt' } };
+    }
+    if (i.state === 'abandoned') {
+      return { release: { pending: false, abandoned: true, requestedAt: i.requestedAt ?? null, at: i.at, attempts: i.attempts, reason: i.reason, mode: i.mode, text: 'Freigabe verworfen — DVhub überschreibt kein anderes System' } };
+    }
+    return { release: { pending: false, failed: true, requestedAt: i.requestedAt ?? null, at: i.at, ...(i.sent === false ? { sent: false } : {}), error: i.error, text: i.sent === false ? 'Freigabe nicht gesendet — kein Schreibweg' : 'Freigabe gescheitert' } };
   }
 
   // connOverride: zweite (Slave-)Instanz schreibt an eine andere Verbindung als die victron.*-Hauptverbindung;
@@ -1165,6 +1177,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
 
   function foreignModeError(mode) {
     setOwns(null);
+    // Codex d6f4b256 P1: ein fremder Regler steuert — eine ausstehende Freigabe gehört nicht mehr zu DVhubs Betrieb und
+    // wird verworfen (z. B. erkannt von der Not-Halt-/Shutdown-Rücknahme). Sonst schriebe die Wiederholung im nächsten
+    // Takt 0xCC/Modus 0 über das fremde System, auch im Not-Halt.
+    if (st.release) releaseAbandon('foreign_mode', mode);
     const err = new Error('sungrow_foreign_ems_mode');
     err.code = 'foreign_ems_mode';
     err.mode = mode;
@@ -2053,6 +2069,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       const cfg = getCfg();
       const conf = sungrowEmsConf(cfg);
       syncEndpoint(cfg);
+      // Restpunkt 1 (gleiches Muster wie die manuelle Freigabe): DVhub besitzt den Betrieb (Merker), aber die
+      // Konfiguration ist ungültig und es gibt keinen Schreibweg (R-T2.1: ungültiges Profil ohne Schreibadressen) —
+      // dann nicht „nicht im Besitz, ok" melden, sondern ehrlich: nichts gesendet (der Not-Halt meldet es laut).
+      if (!conf && st.owns && cfg?.writeSafety?.ok === false) return { ok: false, skipped: true, sent: false, reason: 'no_write_path', error: noWritePathError(cfg) };
       if (!conf || !st.owns) return { ok: true, skipped: true, reason: 'not_owned' };
       try {
         st.dev = null; // frisch lesen: nur schreiben, was am Gerät wirklich noch abweicht
@@ -2216,8 +2236,19 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   //   • Im Not-Halt läuft nur die Wiederholung (manualForceRelease, H-7). Eine bestätigte Not-Halt-/Shutdown-Rücknahme
   //     erledigt die Freigabe mit (writeDecision self).
   //   • Kein eigener Betrieb (fremdes EMS/VPP oder nichts gesetzt): einmaliger Versuch wie bisher, keine Wiederholung.
+  //   • Codex d6f4b256 P1: jede AUTOMATISCHE Wiederholung prüft vorher Besitz und Gerätezustand frisch; hat ein anderes
+  //     System übernommen, wird die Freigabe verworfen (Log sungrow_ems_release_abandoned + Status), nie überschrieben.
+  //   • Codex d6f4b256 P2: jede Anfrage trägt ihren Zeitpunkt (requestedAt); ihr Ergebnis ersetzt das der vorigen.
+  //   • Restpunkt 1: ohne Schreibweg (Profil ungültig, kein Sungrow-EMS) ehrlich ok:false, sent:false — nichts gesendet.
   const releaseSide = isSlave ? 'slave' : 'master';
   const isModbusException = (e) => /^modbus exception \d+/.test(String(e?.message));
+
+  // Warum es keinen Schreibweg gibt (Restpunkt 1). Gleiche Fehlernamen wie submitReg (C2) bzw. step().
+  function noWritePathError(cfg) {
+    const ws = cfg?.writeSafety;
+    if (ws && ws.ok === false) return `config_unsafe_${ws.reason || 'config_invalid'}`;
+    return 'sungrow_ems_not_configured';
+  }
 
   // Ein Freigabe-Register schreiben. M14 (Feldtest 6a4e10d3, SH10RT-20; wie schedule-eval runDvControlSequence):
   // antwortet der WR mit einer Modbus-Ausnahme, hat den Wert aber übernommen, gilt der Schritt als erledigt —
@@ -2253,47 +2284,93 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
 
   function releasePending() { return st.release != null; }
   function releasePendingAny() { return st.release != null || slaveActuator?.releasePending?.() === true; }
+  // Ist der nächste automatische Versuch fällig (Backoff-Fenster vorbei)?
+  function releaseDue() { return st.release != null && now() >= st.release.nextAt; }
   function releasePendingResult() { return { ok: false, error: 'sungrow_release_pending', releasePending: true }; }
 
-  function releaseFailed(reason, confirmedBy, error) {
+  // requestedAt: ein neuer Knopfdruck übernimmt die ausstehende Freigabe — ihr Hinweis gehört jetzt zu ihm (P2).
+  function releaseFailed(reason, confirmedBy, error, requestedAt = null) {
     const t = now();
-    const r = st.release || { reason, confirmedBy, since: t, attempts: 0, nextAt: 0, lastError: null };
+    const r = st.release || { reason, confirmedBy, requestedAt, since: t, attempts: 0, nextAt: 0, lastError: null };
+    if (requestedAt != null) r.requestedAt = requestedAt;
     r.attempts += 1;
     r.lastError = error || null;
     r.nextAt = releaseBackoffNextAt(r.attempts, t);
     st.release = r;
-    st.releaseDone = null;
+    st.releaseInfo = null;
+  }
+
+  // Automatischer Versuch gescheitert (nichts oder nicht alles angekommen, oder der Zustand war nicht lesbar).
+  function retryFailed(r, error) {
+    releaseFailed(r.reason, r.confirmedBy, error);
+    pushLog('sungrow_ems_release_retry', {
+      side: releaseSide, attempts: st.release.attempts, retryAt: st.release.nextAt || null, error: error || null,
+      text: 'Sungrow-Freigabe gescheitert, wird wiederholt.',
+    }, 'warn');
   }
 
   // Freigabe am Gerät erreicht, nachdem sie ausstand: Hinweis „erledigt" (Log + Status). via = 'release' (eigene
-  // Wiederholung/Knopf) oder der Anlass einer bestätigten Rücknahme (emergency_stop, shutdown, …).
+  // Wiederholung/Knopf), 'device' (der WR stand beim Nachlesen schon im Ziel — kein Write) oder der Anlass einer
+  // bestätigten Rücknahme (emergency_stop, shutdown, …).
   function releaseCompleted(via) {
-    const attempts = st.release.attempts + (via === 'release' ? 1 : 0);
+    const r = st.release;
+    const attempts = r.attempts + (via === 'release' ? 1 : 0);
     st.release = null;
-    st.releaseDone = { at: now(), attempts, via };
+    st.releaseInfo = { state: 'done', requestedAt: r.requestedAt ?? null, at: now(), attempts, via };
     pushLog('sungrow_ems_release_done', {
       side: releaseSide, attempts, via,
       text: `Sungrow-Freigabe erledigt (${isSlave ? 'Slave 0xCC' : 'Master Modus 0 + 0xCC'} bestätigt, ${attempts} Versuch${attempts === 1 ? '' : 'e'}).`,
     });
   }
 
-  function releaseConfirmed(reason) {
-    setOwns(null); st.target = null; st.revokedReason = reason; st.lastMasterWrite = null;
-    if (st.release) releaseCompleted('release');
+  // Codex d6f4b256 P1: die ausstehende Freigabe verwerfen — der Betrieb ist nicht mehr DVhubs (ein anderes System hat
+  // übernommen, bzw. eine Rücknahme hat den fremden Modus erkannt und den Besitz abgegeben). DVhub wiederholt sie nicht
+  // und überschreibt das fremde System nie, auch im Not-Halt nicht. reason: foreign_mode (an diesem WR),
+  // master_foreign_mode (Slave: am Master steuert ein anderes System, der Slave folgt ihm), not_owned (Besitz weg).
+  function releaseAbandon(reason, mode = null) {
+    const r = st.release;
+    if (!r) return;
+    st.release = null;
+    st.releaseInfo = { state: 'abandoned', requestedAt: r.requestedAt ?? null, at: now(), attempts: r.attempts, reason, mode };
+    const where = reason === 'master_foreign_mode' ? 'am Master steuert ein anderes System' : (reason === 'foreign_mode' ? 'ein anderes System steuert' : 'der Betrieb ist nicht mehr DVhubs');
+    pushLog('sungrow_ems_release_abandoned', {
+      side: releaseSide, attempts: r.attempts, reason, mode,
+      text: `Sungrow-Freigabe verworfen (${isSlave ? 'Slave' : 'Master'}): ${where}${mode != null ? ` (Modus ${mode})` : ''} — DVhub überschreibt das nicht und wiederholt nicht.`,
+    }, 'warn');
   }
 
-  // Eigene ausstehende Freigabe einmal versuchen (Backoff-Fenster beachten). Aufrufer serialisiert.
-  async function retryOwnRelease() {
+  function releaseConfirmed(reason, via = 'release') {
+    setOwns(null); st.target = null; st.revokedReason = reason; st.lastMasterWrite = null;
+    if (st.release) releaseCompleted(via);
+  }
+
+  // Eigene ausstehende Freigabe einmal AUTOMATISCH versuchen (Backoff-Fenster beachten). Aufrufer serialisiert.
+  // Codex d6f4b256 P1: vorher Besitz und Gerätezustand frisch prüfen. Der Knopfdruck ist eine Bedienhandlung (M2: auch
+  // gegen einen vermeintlich fremden Modus, einmal); die Wiederholung ist es nicht und überschreibt nie ein anderes System:
+  //   • Besitz abgegeben (eine Rücknahme hat einen fremden Modus erkannt)        → verwerfen;
+  //   • Slave: am Master steuert ein anderes System (der Slave folgt ihm, Feld #5) → verwerfen;
+  //   • Zustand nicht lesbar (dieser WR bzw. für den Slave der Master)             → kein Write, zählt als Fehlschlag;
+  //   • fremder Modus am Gerät (Slave: VPP; Master: isForeignMode wie writeDecision) → Besitz abgeben, verwerfen;
+  //   • Gerät steht schon im Ziel (Master Modus 0 + 0xCC, Slave 0xCC)             → erledigt ohne Write (13050 schonen);
+  //   • sonst dieselbe Freigabe-Abfolge wie beim Knopfdruck.
+  // dev/readError: am Master der eben in retryPendingRelease gelesene Zustand (einmal lesen für Master und Slave).
+  async function retryOwnRelease({ dev: given = undefined, readError = null, masterForeignMode = null } = {}) {
     const r = st.release;
     if (!r || now() < r.nextAt) return;
+    if (!st.owns) { releaseAbandon('not_owned'); return; }
+    if (masterForeignMode != null) { setOwns(null); releaseAbandon('master_foreign_mode', masterForeignMode); return; }
     const conf = sungrowEmsConf(getCfg());
+    let dev = given;
+    let err = readError;
+    if (dev === undefined && err == null) {
+      try { st.dev = null; dev = await readDevice(conf); } catch (e) { err = e?.message || String(e); }
+    }
+    if (err != null) { retryFailed(r, err); return; }
+    if (isSlave ? dev.mode === EMS_MODE.VPP : isForeignMode(dev.mode, dev)) { setOwns(null); releaseAbandon('foreign_mode', dev.mode); return; }
+    if (dev.cmd === EMS_CMD.STOP && (isSlave || dev.mode === EMS_MODE.SELF)) { releaseConfirmed(r.reason, 'device'); return; }
     const out = await releaseAttempt(conf, r.confirmedBy);
     if (out.ok) { releaseConfirmed(r.reason); return; }
-    releaseFailed(r.reason, r.confirmedBy, out.error);
-    pushLog('sungrow_ems_release_retry', {
-      side: releaseSide, attempts: st.release.attempts, retryAt: st.release.nextAt || null, error: out.error || null,
-      text: 'Sungrow-Freigabe gescheitert, wird wiederholt.',
-    }, 'warn');
+    retryFailed(r, out.error);
   }
 
   // Wiederholung aus tick() (Master): im Regeltakt (due/stepEveryMs), Slave zuerst, dann Master. Auch im Not-Halt —
@@ -2305,48 +2382,86 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     syncEndpoint(cfg);
     if (!releasePendingAny()) { publish(); return { ok: true, idle: true }; }
     if (!due(stepEveryMs(resolveSungrowEmsOptions(conf)))) return { ...releasePendingResult(), idle: true };
+    const ownDue = releaseDue();
+    const slaveDue = slaveActuator?.releaseDue?.() === true;
+    if (!ownDue && !slaveDue) { publish(); return { ...releasePendingResult(), idle: true }; } // Backoff-Fenster: nicht einmal lesen
     st.lastStepAt = now();
-    if (slaveActuator?.releasePending?.() === true) { try { await slaveActuator.retryRelease(); } catch { /* bleibt ausstehend */ } }
-    if (st.release) await retryOwnRelease();
+    // Codex d6f4b256 P1: den Master frisch lesen, BEVOR automatisch geschrieben wird. Er entscheidet auch über den Slave:
+    // der folgt dem Master-Modus (Feld #5) — steuert am Master ein anderes System, gehört ihm auch der Slave.
+    let masterDev;
+    let masterErr = null;
+    try { st.dev = null; masterDev = await readDevice(conf); } catch (e) { masterErr = e?.message || String(e); }
+    if (slaveDue) {
+      const masterForeignMode = masterDev && isForeignMode(masterDev.mode, masterDev) ? masterDev.mode : null;
+      try { await slaveActuator.retryRelease({ masterForeignMode, masterReadError: masterErr }); } catch { /* bleibt ausstehend */ }
+    }
+    if (ownDue) await retryOwnRelease({ dev: masterDev, readError: masterErr });
     publish();
     return releasePendingAny() ? releasePendingResult() : { ok: true, released: true };
   }
 
-  // Slave: Wiederholung auf Anstoß des Masters (eigene Serialisierung, eigener Backoff).
-  function retryRelease() {
+  // Slave: Wiederholung auf Anstoß des Masters (eigene Serialisierung, eigener Backoff). masterForeignMode/
+  // masterReadError: was der Master eben an sich gelesen hat (P1).
+  function retryRelease({ masterForeignMode = null, masterReadError = null } = {}) {
     return serial(async () => {
       const cfg = getCfg();
       if (!sungrowEmsConf(cfg) || transport?.type !== 'modbus') return { ok: true, idle: true };
       syncEndpoint(cfg);
-      await retryOwnRelease();
+      await retryOwnRelease({ masterForeignMode, readError: masterReadError != null ? `Master: ${masterReadError}` : null });
       publish();
       return { ok: st.release == null, pending: st.release != null };
     });
   }
 
-  function forceRelease(reason = 'manual_release') {
+  // requestedAt: Zeitpunkt der Anfrage (der Master reicht seinen an den Slave weiter — beide Hinweise gehören zur selben).
+  function forceRelease(reason = 'manual_release', { requestedAt = null } = {}) {
     const confirmedBy = `operator:${reason || 'manual_release'}`;
     return serial(async () => {
+      const reqAt = requestedAt ?? now();
+      // P2: eine neue Anfrage — was zur vorigen gemeldet wurde, gilt nicht mehr; eine ausstehende Freigabe gehört jetzt
+      // zu ihr.
+      st.releaseInfo = null;
+      if (st.release) st.release.requestedAt = reqAt;
       const cfg = getCfg();
       const conf = sungrowEmsConf(cfg);
-      if (!conf || transport?.type !== 'modbus') return { ok: true, skipped: true, reason: 'no_modbus' };
+      if (!conf || transport?.type !== 'modbus') {
+        // Restpunkt 1: kein Schreibweg (Herstellerprofil ungültig → R-T2.1 ohne Schreibadressen; kein Sungrow-EMS-Profil;
+        // kein Modbus). Vorher ok:true — die Kachel zeigte „freigegeben (Modus 0)", obwohl nichts gesendet wurde.
+        const error = noWritePathError(cfg);
+        let slaveOut = null;
+        if (slaveActuator) { try { slaveOut = await slaveActuator.forceRelease(reason, { requestedAt: reqAt }); } catch { /* nichts gesendet */ } }
+        st.releaseInfo = { state: 'failed', requestedAt: reqAt, at: now(), sent: false, error };
+        if (!isSlave) {
+          pushLog('sungrow_ems_manual_release', {
+            reason, ok: false, sent: false, error, slave: slaveOut ? { ok: slaveOut.ok === true, sent: slaveOut.sent !== false } : null,
+            text: `Sungrow-Freigabe NICHT gesendet — kein Schreibweg (${error}).`,
+          }, 'warn');
+        }
+        publish();
+        return { ok: false, sent: false, skipped: true, reason: 'no_write_path', error, requestedAt: reqAt };
+      }
       syncEndpoint(cfg);
       let slaveOut = null;
-      if (slaveActuator) { try { slaveOut = await slaveActuator.forceRelease(reason); } catch (e) { slaveOut = { ok: false, error: e?.message || String(e) }; } }
+      if (slaveActuator) { try { slaveOut = await slaveActuator.forceRelease(reason, { requestedAt: reqAt }); } catch (e) { slaveOut = { ok: false, error: e?.message || String(e) }; } }
       // Wessen Betrieb wird freigegeben? Vor dem ersten Write festhalten (eine halb angekommene Freigabe ändert den
       // Gerätezustand). Merker — oder am Master (M2) der zuletzt gelesene Zustand spiegelt DVhubs letzten bestätigten
       // Write. Nur ein eigener Betrieb wird nach einem Fehlschlag gehalten und wiederholt.
       const ownBefore = st.owns ? st.ownMode
         : ((st.dev && (st.dev.mode === EMS_MODE.FORCED || st.dev.mode === EMS_MODE.EXTERNAL) && ownWroteMode(st.dev.mode, st.dev)) ? st.dev.mode : null);
       const out = await releaseAttempt(conf, confirmedBy); // Knopfdruck: sofort, ohne Backoff-Fenster
+      out.requestedAt = reqAt;
       if (out.ok) {
         releaseConfirmed(reason);
-      } else if (st.release || ownBefore != null) {
-        if (ownBefore != null) setOwns(ownBefore); // eigener Betrieb bleibt eigener (Merker für Watchdog/ExecStopPost)
-        releaseFailed(reason, confirmedBy, out.error);
+      } else if (ownBefore != null) {
+        setOwns(ownBefore); // eigener Betrieb bleibt eigener (Merker für Watchdog/ExecStopPost)
+        releaseFailed(reason, confirmedBy, out.error, reqAt);
       } else {
-        // Kein eigener Betrieb (fremdes EMS/VPP oder nichts gesetzt): einmaliger Versuch wie bisher.
+        // Kein eigener Betrieb (fremdes EMS/VPP oder nichts gesetzt): einmaliger Versuch wie bisher. Eine noch
+        // ausstehende Freigabe ohne Besitz wird nicht weiter automatisch versucht (P1); der Fehlschlag dieser Anfrage
+        // steht im Status (P2).
+        if (st.release) releaseAbandon('not_owned');
         setOwns(null); st.target = null; st.revokedReason = reason; st.lastMasterWrite = null;
+        st.releaseInfo = { state: 'failed', requestedAt: reqAt, at: now(), error: out.error || null };
       }
       // Nur wenn etwas aussteht (sonst bleibt die Rückgabe wie bisher).
       if (st.release != null || slaveOut?.pending === true) out.pending = true;
@@ -2370,7 +2485,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     });
   }
 
-  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, neutralize, releaseControl, forceRelease, releasePending, retryRelease, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
+  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, neutralize, releaseControl, forceRelease, releasePending, releaseDue, retryRelease, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
 }
 
 function describe(d, modeValue = EMS_MODE.FORCED) {

@@ -20,10 +20,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createSungrowEms, wire, EMS_MODE, EMS_CMD } from '../services/inverter/sungrow.js';
+import { createSungrowEms, wire, EMS_MODE, EMS_CMD, sungrowEmsConf, endpointKeyOf } from '../services/inverter/sungrow.js';
 import { createLegacyGate } from '../services/gate/legacy.js';
 import { readForcedMarker } from '../services/inverter/sungrow-forced-safeoff.js';
 import { setEmergencyStop } from '../services/control-commands.js';
+import { loadConfigFile } from '../config-model.js';
 import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
 
 const MODE = wire(13050); const CMD = wire(13051); const POWER = wire(13052); const HB = wire(13080);
@@ -46,6 +47,8 @@ function rig({ split = false, controlMode = 'forced', masterHolding = null } = {
   const m = mockSungrow(mImage);
   const s = sImage ? mockSungrow(sImage) : null;
   const fail = new Map();
+  // Lesefehler der Kontroll-Register 13050–13052 je Gerät (Codex d6f4b256 P1): readFail.set('M', 'modbus timeout').
+  const readFail = new Map();
   const writes = [];
   const pick = (host) => (s && host === SLAVE_HOST ? ['S', s, sImage] : ['M', m, mImage]);
   const writer = (method) => async (c) => {
@@ -58,7 +61,15 @@ function rig({ split = false, controlMode = 'forced', masterHolding = null } = {
     if (mode === 'exc4applied') { img.holding.set(c.address, value & 0xffff); throw new Error('modbus exception 4'); }
     return mock[method](c);
   };
-  const t = { type: 'modbus', mbRequest: (c) => pick(c.host)[1].mbRequest(c), mbWriteSingle: writer('mbWriteSingle'), mbWriteMultiple: writer('mbWriteMultiple') };
+  const t = {
+    type: 'modbus',
+    mbRequest: async (c) => {
+      const [dev, mock] = pick(c.host);
+      if (readFail.has(dev) && Number(c.fc) === 3 && c.address === MODE) throw new Error(readFail.get(dev));
+      return mock.mbRequest(c);
+    },
+    mbWriteSingle: writer('mbWriteSingle'), mbWriteMultiple: writer('mbWriteMultiple'),
+  };
   let clock = 1_000_000;
   const now = () => clock;
   const state = {
@@ -78,15 +89,16 @@ function rig({ split = false, controlMode = 'forced', masterHolding = null } = {
   const pushLog = (event, data, level) => logs.push({ event, data, level });
   const events = [];
   const gate = createLegacyGate({ isHalted: () => state.ctrl?.discretionaryWritesPaused === true, onEvent: (ev) => events.push(ev), now });
+  const sleep = async () => {}; // Lese-Wiederholungen (readDevice) ohne echte Wartezeit
   const slaveEms = split ? createSungrowEms({
-    state, getCfg: () => cfg, transport: t, pushLog, now, statusKey: 'sungrowEmsSlave', isSlave: true, statePath: slavePath, gate,
+    state, getCfg: () => cfg, transport: t, pushLog, now, sleep, statusKey: 'sungrowEmsSlave', isSlave: true, statePath: slavePath, gate,
     connOverride: () => ({ host: SLAVE_HOST, port: 502, unitId: 1, timeoutMs: 1500 }),
   }) : null;
-  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, pushLog, now, slaveActuator: slaveEms, statePath: masterPath, gate });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, pushLog, now, sleep, slaveActuator: slaveEms, statePath: masterPath, gate });
   const ctx = { state, sungrowEms: ems, pushLog, gate };
   const fresh = () => { for (const f of ['batteryPowerW', 'pvPowerW', 'selfConsumptionW']) state.victron.fieldUpdatedAt[f] = clock; state.meter.updatedAt = clock; if (state.sungrowSecond) state.sungrowSecond.updatedAt = clock; };
   return {
-    cfg, state, ems, slaveEms, ctx, logs, events, fail, writes, mImage, sImage, masterPath, slavePath,
+    cfg, state, ems, slaveEms, ctx, logs, events, fail, readFail, writes, mImage, sImage, masterPath, slavePath,
     advance: (ms) => { clock += ms; fresh(); }, now,
     dev: (img = mImage) => ({ mode: img.holding.get(MODE), cmd: img.holding.get(CMD), powerW: img.holding.get(POWER) }),
     wireSince: (n) => writes.slice(n).map((w) => `${w.dev}:${w.address}=${w.value}`),
@@ -396,4 +408,252 @@ test('Option A, echter Evaluator: während die Freigabe aussteht kein Write, Sol
   assert.equal(res.emsFailure, true, 'Aktuator-Fehler: Sollwert bleibt (kein Widerruf)');
   assert.equal(m.writes.length, n, 'kein Write');
   assert.ok(!logs.some((l) => l.event === 'control_write_error'), 'kein control_write_error — die Freigabe meldet selbst');
+});
+
+// --- Codex d6f4b256 P1: vor jeder AUTOMATISCHEN Wiederholung Besitz und Gerätezustand neu prüfen ---------------------
+// Hat inzwischen ein anderer Regler übernommen (VPP, fremdes EMS) oder hat eine Rücknahme (Not-Halt) den fremden Modus
+// erkannt und den Besitz abgegeben, wird die ausstehende Freigabe verworfen (Log + Status) — nie ein fremder Modus
+// überschrieben, auch nicht im Not-Halt. Gilt für Master und Slave (der Slave folgt dem Master-Modus, Feld #5).
+
+const abandonedLogs = (r, side) => r.logs.filter((l) => l.event === 'sungrow_ems_release_abandoned' && (!side || l.data.side === side));
+
+for (const [label, foreign] of [['VPP (Modus 4)', EMS_MODE.VPP], ['fremdes External EMS (Modus 3)', EMS_MODE.EXTERNAL]]) {
+  test(`Codex P1: ${label} übernimmt nach der gescheiterten Freigabe → keine Wiederholung, Freigabe verworfen (Log + Status)`, async () => {
+    const r = rig();
+    await r.ems.applySetpoint(-6000, 'rule:abend');
+    r.fail.set(`M:${CMD}`, 'timeout');
+    assert.equal((await r.ems.forceRelease('manual_release')).pending, true);
+    r.fail.clear();
+    r.mImage.holding.set(MODE, foreign); // ein anderes System übernimmt den Wechselrichter
+    const n = r.writes.length;
+    r.advance(5000); await r.ems.tick();
+    assert.deepEqual(r.wireSince(n), [], 'der fremde Modus wird nicht überschrieben');
+    const rel = r.ems.status().release;
+    assert.equal(rel?.pending, false);
+    assert.equal(rel?.abandoned, true, 'Status: Freigabe verworfen');
+    assert.equal(rel?.reason, 'foreign_mode');
+    assert.equal(rel?.mode, foreign);
+    assert.equal(r.ems._st.owns, false, 'Besitz abgegeben');
+    assert.equal(readForcedMarker(r.masterPath).owned, false, 'Merker weg: Watchdog/ExecStopPost fassen das fremde System nicht an');
+    const a = abandonedLogs(r, 'master');
+    assert.equal(a.length, 1);
+    assert.equal(a[0].level, 'warn');
+    assert.equal(a[0].data.mode, foreign);
+    // Danach weder Wiederholung noch Regel-Write.
+    for (let i = 0; i < 4; i += 1) { r.advance(FIVE_MIN); await r.ems.tick(); }
+    assert.equal((await r.ems.applySetpoint(-4000, 'rule:abend')).error, 'sungrow_foreign_ems_mode');
+    assert.deepEqual(r.wireSince(n), []);
+    assert.equal(r.dev().mode, foreign);
+    assertOnlyEmsRegisters(r);
+  });
+}
+
+test('Codex P1: Not-Halt erkennt den fremden Modus und gibt den Besitz ab → auch im Not-Halt keine Wiederholung', async () => {
+  const r = rig();
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  r.fail.set(`M:${CMD}`, 'timeout');
+  assert.equal((await r.ems.forceRelease('manual_release')).pending, true);
+  r.fail.clear();
+  r.mImage.holding.set(MODE, EMS_MODE.VPP);
+  const n = r.writes.length;
+  const res = await setEmergencyStop(r.ctx, { on: true });
+  assert.equal(res.devices.batteryEms.reason, 'foreign_ems_mode');
+  assert.equal(r.ems._st.owns, false);
+  assert.equal(r.ems.status().release?.abandoned, true, 'Freigabe schon beim Erkennen verworfen');
+  assert.equal(abandonedLogs(r, 'master').length, 1);
+  for (let i = 0; i < 4; i += 1) { r.advance(5000); await r.ems.tick(); }
+  r.advance(FIVE_MIN); await r.ems.tick();
+  assert.deepEqual(r.wireSince(n), [], 'im Not-Halt kein 0xCC/Modus 0 gegen das fremde System');
+  assert.equal(r.dev().mode, EMS_MODE.VPP);
+});
+
+test('Codex P1, Slave: Slave plötzlich im VPP-Modus → Slave-Wiederholung verworfen, nichts an den Slave', async () => {
+  const r = rig({ split: true });
+  await r.ems.applySetpoint(-3000, 'rule:abend');
+  r.fail.set(`S:${CMD}`, 'timeout');
+  const out = await r.ems.forceRelease('manual_release');
+  r.fail.clear();
+  assert.equal(out.ok, true, 'Master bestätigt');
+  assert.equal(out.pending, true, 'Slave steht aus');
+  r.sImage.holding.set(MODE, EMS_MODE.VPP);
+  const n = r.writes.length;
+  r.advance(10000); await r.ems.tick(); // Master freigegeben → ruhiger Profil-Takt (wie im Slave-Test oben)
+  assert.deepEqual(r.wireSince(n), []);
+  assert.equal(r.slaveEms._st.owns, false);
+  assert.equal(r.slaveEms.status().release?.abandoned, true);
+  assert.equal(r.slaveEms.status().release?.reason, 'foreign_mode');
+  assert.equal(abandonedLogs(r, 'slave').length, 1);
+  r.advance(FIVE_MIN); await r.ems.tick();
+  assert.deepEqual(r.wireSince(n), [], 'keine weitere Wiederholung');
+});
+
+test('Codex P1, Slave: am Master steuert inzwischen ein anderes System → auch die Slave-Wiederholung verworfen (Slave folgt dem Master)', async () => {
+  const r = rig({ split: true });
+  await r.ems.applySetpoint(-3000, 'rule:abend');
+  r.fail.set(`S:${CMD}`, 'timeout');
+  assert.equal((await r.ems.forceRelease('manual_release')).pending, true);
+  r.fail.clear();
+  assert.equal(r.dev().mode, EMS_MODE.SELF, 'Master freigegeben');
+  r.mImage.holding.set(MODE, EMS_MODE.VPP);
+  const n = r.writes.length;
+  r.advance(10000); await r.ems.tick();
+  assert.deepEqual(r.wireSince(n), [], 'kein 0xCC an den Slave, während am Master ein VPP steuert');
+  const a = abandonedLogs(r, 'slave');
+  assert.equal(a.length, 1);
+  assert.equal(a[0].data.reason, 'master_foreign_mode');
+  assert.equal(r.slaveEms.status().release?.abandoned, true);
+  assert.equal(r.slaveEms._st.owns, false);
+  r.advance(FIVE_MIN); await r.ems.tick();
+  assert.deepEqual(r.wireSince(n), []);
+});
+
+test('Codex P1: Gerätezustand vor der Wiederholung nicht lesbar → kein automatischer Write, zählt als Fehlschlag', async () => {
+  const r = rig();
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  r.fail.set(`M:${CMD}`, 'timeout');
+  await r.ems.forceRelease('manual_release');
+  r.fail.clear();
+  r.readFail.set('M', 'modbus timeout');
+  const n = r.writes.length;
+  r.advance(5000); await r.ems.tick();
+  assert.deepEqual(r.wireSince(n), [], 'ohne frischen Gerätezustand kein automatischer Write');
+  const rel = r.ems.status().release;
+  assert.equal(rel?.pending, true);
+  assert.equal(rel?.attempts, 2);
+  assert.match(String(rel?.lastError), /lesen fehlgeschlagen/);
+  assert.equal(r.ems._st.owns, true, 'DVhubs Modus bleibt DVhubs');
+  r.readFail.clear();
+  r.advance(5000); await r.ems.tick();
+  assert.deepEqual(r.wireSince(n), REL);
+  assert.equal(r.ems._st.owns, false);
+  assert.equal(r.ems.status().release?.done, true);
+});
+
+test('Wiederholung: steht der WR schon in Modus 0 + 0xCC, ist die Freigabe erledigt — kein erneuter Write (13050 schonen)', async () => {
+  const r = rig();
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  r.fail.set(`M:${MODE}`, 'timeout');
+  await r.ems.forceRelease('manual_release');
+  r.fail.clear();
+  assert.deepEqual(r.dev(), { mode: EMS_MODE.FORCED, cmd: EMS_CMD.STOP, powerW: 3000 });
+  r.mImage.holding.set(MODE, EMS_MODE.SELF); // Antwort verloren, Wert aber angekommen — oder am Gerät zurückgestellt
+  const n = r.writes.length;
+  r.advance(5000); await r.ems.tick();
+  assert.deepEqual(r.wireSince(n), []);
+  assert.equal(r.ems._st.owns, false);
+  assert.equal(readForcedMarker(r.masterPath).owned, false);
+  const done = r.logs.filter((l) => l.event === 'sungrow_ems_release_done').at(-1);
+  assert.equal(done?.data?.via, 'device');
+  assert.equal(r.ems.status().release?.done, true);
+  r.advance(5000); await r.ems.tick();
+  assert.deepEqual(r.wireSince(n), []);
+});
+
+// --- Codex d6f4b256 P2: der Freigabe-Hinweis gehört zu genau einer Anfrage ------------------------------------------
+
+test('Codex P2: eine neue Freigabe-Anfrage löscht den alten „erledigt“-Hinweis; ihr Einmal-Fehlschlag steht im Status', async () => {
+  const r = rig();
+  await r.ems.applySetpoint(-6000, 'rule:abend');
+  r.fail.set(`M:${CMD}`, 'timeout');
+  const first = await r.ems.forceRelease('manual_release');
+  r.fail.clear();
+  assert.equal(typeof first.requestedAt, 'number');
+  r.advance(5000); await r.ems.tick();
+  assert.equal(r.ems.status().release?.done, true);
+  assert.equal(r.ems.status().release?.requestedAt, first.requestedAt);
+  // Später übernimmt ein VPP; die neue Freigabe ist ein Einmal-Versuch (kein eigener Betrieb) und scheitert.
+  r.mImage.holding.set(MODE, EMS_MODE.VPP);
+  r.advance(60_000);
+  r.fail.set(`M:${CMD}`, 'timeout');
+  const second = await r.ems.forceRelease('manual_release');
+  r.fail.clear();
+  assert.equal(second.ok, false);
+  assert.notEqual(second.pending, true);
+  assert.ok(second.requestedAt > first.requestedAt);
+  const rel = r.ems.status().release;
+  assert.notEqual(rel?.done, true, 'kein alter „erledigt“-Hinweis über dem neuen Fehlschlag');
+  assert.equal(rel?.pending, false);
+  assert.equal(rel?.failed, true);
+  assert.equal(rel?.requestedAt, second.requestedAt);
+  assert.match(String(rel?.error), /modbus timeout/);
+  // Die nächste Anfrage klappt beim ersten Versuch → kein Hinweis mehr (auch nicht der alte Fehlschlag).
+  r.advance(60_000);
+  assert.equal((await r.ems.forceRelease('manual_release')).ok, true);
+  assert.equal(r.ems.status().release, undefined);
+});
+
+// --- Restpunkt 1: kein Schreibweg (Herstellerprofil ungültig) → ehrlich ok:false, nichts gesendet ---------------------
+
+// Echter Ladeweg (config-model.js loadConfigFile) mit kaputtem hersteller/sungrow.json: writeSafety.ok=false, und
+// R-T2.1 räumt die Schreibblöcke ab (controlWrite leer) — der Sungrow-EMS hat keine Schreibadressen mehr.
+function loadBrokenProfileConfig() {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-sungrow-broken-'));
+  fs.mkdirSync(path.join(rootDir, 'hersteller'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'hersteller', 'sungrow.json'), '{ "kaputt": ');
+  const configPath = path.join(rootDir, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({ manufacturer: 'sungrow', updateChannel: 'dev', victron: { host: '192.0.2.50' } }));
+  const loaded = loadConfigFile(configPath);
+  assert.ok(loaded.manufacturerProfileError, 'Profil ist ungültig');
+  return loaded.effectiveConfig;
+}
+
+function brokenRig({ merker = false } = {}) {
+  const cfg = loadBrokenProfileConfig();
+  const m = mockSungrow(sungrowImage({ holding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 } }));
+  const writes = [];
+  const t = { type: 'modbus', mbRequest: (c) => m.mbRequest(c),
+    mbWriteSingle: async (c) => { writes.push(c); return m.mbWriteSingle(c); },
+    mbWriteMultiple: async (c) => { writes.push(c); return m.mbWriteMultiple(c); } };
+  const state = { victron: { errors: {}, fieldUpdatedAt: {}, device: null }, meter: {}, ctrl: {} };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-sg-broken-'));
+  const statePath = path.join(dir, 'sungrow_ems_state.json');
+  // Merker wie nach einem Neustart: DVhub besaß Modus 2 an dieser Verbindung, bevor das Profil kaputtging.
+  if (merker) fs.writeFileSync(statePath, JSON.stringify({ ownMode: EMS_MODE.FORCED, endpointKey: endpointKeyOf(cfg.victron), at: 1 }));
+  const logs = [];
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, pushLog: (event, data, level) => logs.push({ event, data, level }), statePath, sleep: async () => {} });
+  return { cfg, state, ems, writes, logs, m, ctx: { state, sungrowEms: ems, pushLog: (event, data, level) => logs.push({ event, data, level }) } };
+}
+
+test('Restpunkt 1: ungültiges Herstellerprofil → manuelle Freigabe meldet ok:false „nichts gesendet“ statt „freigegeben“', async () => {
+  const r = brokenRig();
+  assert.equal(r.cfg.writeSafety?.ok, false);
+  assert.equal(sungrowEmsConf(r.cfg), null, 'R-T2.1: ungültiges Profil hat keine Schreibadressen');
+  const out = await r.ems.forceRelease('manual_release');
+  assert.equal(out.ok, false, JSON.stringify(out));
+  assert.equal(out.sent, false);
+  assert.equal(out.error, 'config_unsafe_manufacturer_profile_error');
+  assert.equal(typeof out.requestedAt, 'number');
+  assert.deepEqual(r.writes, []);
+  const rel = r.ems.status().release;
+  assert.equal(rel?.failed, true);
+  assert.equal(rel?.sent, false);
+  assert.equal(rel?.error, 'config_unsafe_manufacturer_profile_error');
+  const log = r.logs.find((l) => l.event === 'sungrow_ems_manual_release');
+  assert.equal(log?.level, 'warn');
+  assert.equal(log?.data?.sent, false);
+});
+
+test('Restpunkt 1: ohne Sungrow-Steuerung (kein sungrow-ems-Profil) → ok:false sungrow_ems_not_configured, nichts gesendet', async () => {
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import' });
+  cfg.controlWrite = { gridSetpointW: { enabled: true, address: 2700 } }; // Victron-artig, kein emulate
+  const writes = [];
+  const t = { type: 'modbus', mbRequest: async () => [0, 0xcc, 0], mbWriteSingle: async (c) => { writes.push(c); }, mbWriteMultiple: async (c) => { writes.push(c); } };
+  const ems = createSungrowEms({ state: { victron: {}, ctrl: {} }, getCfg: () => cfg, transport: t, sleep: async () => {} });
+  const out = await ems.forceRelease('manual_release');
+  assert.equal(out.ok, false);
+  assert.equal(out.sent, false);
+  assert.equal(out.error, 'sungrow_ems_not_configured');
+  assert.deepEqual(writes, []);
+});
+
+test('Restpunkt 1, gleiches Muster im Not-Halt: Merker steht, aber kein Schreibweg → ok:false statt „nicht im Besitz“', async () => {
+  const r = brokenRig({ merker: true });
+  assert.equal(r.ems._st.owns, true, 'Merker geladen');
+  const res = await setEmergencyStop(r.ctx, { on: true });
+  const ems = res.devices.batteryEms;
+  assert.equal(ems.ok, false, JSON.stringify(ems));
+  assert.equal(ems.sent, false);
+  assert.equal(ems.error, 'config_unsafe_manufacturer_profile_error');
+  assert.ok(r.logs.some((l) => l.event === 'emergency_stop_neutralize_failed' && l.data.target === 'batteryEms'), 'laut gemeldet');
+  assert.deepEqual(r.writes, []);
 });
