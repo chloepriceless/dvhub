@@ -5,7 +5,7 @@
 // writeConfigUnsafeReason) UND im Tor (Schreibfreigabe `profileInvalid`, VCL-Vertrag v6 D.1 R-T2) —, und zwar nur als
 // festes Literal Richtung Grundzustand (2707 = 1, 2708 = 0, WMaxLim_Ena = 0, Sungrow 0xCC/0). Eine Rücknahme auf einen
 // gesicherten Wert (restoreBefore: 2704, 2706, Sequenzschritte) bleibt gesperrt: ihre Kodierung käme aus dem ungültigen
-// Profil (R-T2.3) bzw. bei victron aus abweichenden Code-Vorgaben (Codex a5803519 P1). Alles andere (Befehl,
+// Profil (R-T2.3) bzw. bei victron aus den Code-Vorgaben (wichen bei 2704 ab, Codex a5803519 P1; angeglichen 679625e4). Alles andere (Befehl,
 // Lebenszeichen, Schutz-Begrenzung, bequeme Wiederfreigabe) bleibt gesperrt.
 //
 // Nur bei einem Herstellerprofil-Fehler (writeSafety.reason `manufacturer_profile_error`): dann ist die config.json
@@ -91,16 +91,18 @@ const brokenVictron = (profileText = '{ kaputt') => loadReal({
 });
 
 describe('Victron mit ungültigem Profil (echter Ladeweg): nur die Literal-Rücknahme 2707/2708 geht durch', () => {
-  it('Beleg: Rückfall-Karte der Einspeise-Flaggen = ausgeliefertes Profil; 2704 weicht ab (deshalb gesperrt)', () => {
+  it('Beleg: Rückfall-Karte = ausgeliefertes Profil, auch 2704 (seit 679625e4); Rücknahmen auf 2704 bleiben trotzdem gesperrt (R-T2.3)', () => {
     const shipped = loadProfileConfig('victron', { victron: { host: HOST } });
     const pick = (c) => c && { address: c.address, fc: c.fc, writeType: c.writeType, scale: c.scale, offset: c.offset, port: c.port, unitId: c.unitId, host: c.host };
     for (const cfg of [brokenVictron(), brokenVictron(null), brokenVictron('')]) {
       assert.deepEqual(cfg.writeSafety, PROFILE_ERROR('victron'));
       for (const k of ['feedExcessDcPv', 'dontFeedExcessAcPv']) assert.deepEqual(pick(cfg.dvControl[k]), pick(shipped.dvControl[k]), k);
-      assert.notDeepEqual(
+      // Vorher wich 2704 ab (scale 1 statt 10, Codex a5803519 P1) — behoben in 679625e4 (test/victron-vorgaben-abgleich).
+      // Die Sperre der Rücknahme auf einen gesicherten Wert bleibt: sie gehört zum gültigen Profil (R-T2.3), nicht zur Vorgabe.
+      assert.deepEqual(
         { scale: cfg.controlWrite.maxDischargeW.scale, map: cfg.controlWrite.maxDischargeW.rawSentinelMap ?? null },
         { scale: shipped.controlWrite.maxDischargeW.scale, map: shipped.controlWrite.maxDischargeW.rawSentinelMap ?? null },
-        '2704: Rückfall-Kodierung ≠ Profil');
+        '2704: Rückfall-Kodierung = Profil');
     }
   });
 

@@ -521,7 +521,7 @@ export function createGate(options = {}) {
       // (`safetyRelease`) je Punkt; Not-Halt-Durchgang und Zwangsfreigabe bleiben möglich (Christin 19.11.2026) —
       // aber nur als festes Literal Richtung Grundzustand (neutralValues/fixed der Richtlinie). Eine Rücknahme auf
       // einen gesicherten Wert (`restoreBefore`) bräuchte die Kodierung des jetzt ungültigen Profils (R-T2.3); bei
-      // victron kommt sie dann aus den Code-Vorgaben, die abweichen (2704 scale 1 statt 10, Codex a5803519 P1).
+      // victron kommt sie dann aus den Code-Vorgaben (wichen bei 2704 ab, Codex a5803519 P1; angeglichen 679625e4).
       if (BLOCKED_WHEN_PROFILE_INVALID.has(op.action)) return block('blocked_gate', DETAIL.profileInvalid);
       if (HALT_EXEMPT.has(op.action) && !isNeutralLiteral(pol, op.value)) return block('blocked_gate', DETAIL.profileInvalid);
       if (op.action === 'safetyRelease' && r.passDone.has(op.point)) return block('blocked_gate', DETAIL.releasePassDone);

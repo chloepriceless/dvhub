@@ -329,7 +329,7 @@ export function createScheduleEvaluator(ctx) {
   // zeroFeedInTick). Die Verbindung ist dann die des Betreibers; Adressen gibt es nur bei victron (Code-Vorgaben, für
   // 2707/2708 gleich dem Profil — test/c2-nothalt-release.test.js), sonst keine (R-T2.1). NICHT ausgenommen: Rücknahmen
   // auf einen gesicherten Wert (2704, 2706, Sequenzschritte) — deren Kodierung käme aus dem ungültigen Profil, bei
-  // victron aus abweichenden Code-Vorgaben (2704 scale 1 statt 10; Codex a5803519 P1). Das Tor prüft dasselbe
+  // victron aus den Code-Vorgaben (wichen bei 2704 ab, Codex a5803519 P1; angeglichen 679625e4 — gesperrt bleibt es trotzdem). Das Tor prüft dasselbe
   // (services/gate/index.js checkRelease). Eine kaputte config.json sperrt weiter alles (Vorgaben mit leerem Host →
   // localhost; services/gate/legacy.js inverterReleaseState). Not-Halt-Regel und Adresse des Pfads gelten weiter.
   function writeConfigUnsafeReason(cfg, source = null, { haltRelease = false } = {}) {
@@ -908,7 +908,7 @@ export function createScheduleEvaluator(ctx) {
     if (!seqGate?.run) throw new Error('runDvControlSequence ohne Schreibtor-Lauf (Verdrahtungsfehler)');
     // C2 ohne Ausnahme, auch für die Rücknahme im Not-Halt: Sequenzschritte und die Einspeisegrenze 2706 schreiben einen
     // GESICHERTEN Wert (restoreBefore) mit der Kodierung des Profils — das ist gerade ungültig (R-T2.3; bei victron gälten
-    // die abweichenden Code-Vorgaben, Codex a5803519 P1). Nur feste Literale dürfen trotz C2 zurück (writeConfigUnsafeReason).
+    // die Code-Vorgaben, Codex a5803519 P1). Nur feste Literale dürfen trotz C2 zurück (writeConfigUnsafeReason).
     const gate = deviceWriteGate(cfg);
     if (gate) throw new Error(gate);
     // M14b Schreibbudget (nur Einspeise-Sequenzpfad, budgeted=true): ist das
