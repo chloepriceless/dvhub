@@ -85,7 +85,9 @@ if [[ "$1" == install && " $* " == *" --download-only "* && " $* " != *" timesca
   for p in $(pkgs_of "$@"); do : > "$arch/\${p}_2.31.0_arm64.deb"; done
 fi
 if [[ "$1" == install && " $* " == *" timescaledb-2-postgresql-"* ]]; then
-  ${pgBuilds ? `if [[ " $* " != *" timescaledb-2-postgresql-18=${pgBuilds.ok} "* ]]; then echo "E: Unable to satisfy dependencies. Reached two conflicting assignments:"; exit 100; fi` : ''}
+  ${pgBuilds ? (pgBuilds.ok
+    ? `if [[ " $* " != *" timescaledb-2-postgresql-18=${pgBuilds.ok} "* ]]; then echo "E: Unable to satisfy dependencies. Reached two conflicting assignments:"; exit 100; fi`
+    : `if [[ " $* " == *" timescaledb-2-postgresql-18="* ]]; then echo "E: Version nicht erwartet"; exit 100; fi`) : ''}
   if [[ " $* " == *" --download-only "* ]]; then
     ${downloadFails ? 'exit 100' : ''}
     # apt legt alles ab, was es auflöst — auch Abhängigkeiten (timescaledb-tools).
@@ -111,7 +113,7 @@ exit 0`);
   fake('apt-cache', `
 if [[ "$1" == policy && "$2" == timescaledb-2-* && -f "${repoList}" ]]; then
   line="$(cat "${repoList}")"
-  case "$line" in ${served}) echo "  Candidate: 2.31.0~ubuntu26.04" ;; *) echo "  Candidate: (none)" ;; esac
+  case "$line" in ${served}) echo "  Candidate: ${pgBuilds ? (pgBuilds.candidate || pgBuilds.versions[0][0]) : '2.31.0~ubuntu26.04'}" ;; *) echo "  Candidate: (none)" ;; esac
 fi
 ${pgBuilds ? `
 if [[ "$1" == madison ]]; then
@@ -126,6 +128,7 @@ fi` : ''}`);
   fake('dpkg-query', pgBuilds ? `[[ " $* " == *" postgresql-18 "* ]] && { echo -n "${pgBuilds.pgVersion}"; exit 0; }\nexit 1` : 'exit 1');
   fake('dpkg', `[[ "$1" == -s ]] && grep -qx "$2" "${pkgDb}" && exit 0
 if [[ "$1" == --compare-versions && "$3" == ge ]]; then [[ "$(printf '%s\\n%s\\n' "$2" "$4" | sort -V | tail -n1)" == "$2" ]] && exit 0; exit 1; fi
+if [[ "$1" == --compare-versions && "$3" == le ]]; then [[ "$(printf '%s\\n%s\\n' "$2" "$4" | sort -V | tail -n1)" == "$4" ]] && exit 0; exit 1; fi
 exit 1`);
   fake('psql');
   // su: Katalog/Lade-Proben beantworten. extHave = Version im Katalog vor dem
@@ -414,11 +417,29 @@ test('PostgreSQL 18.6 installiert: nimmt den Bau für 18.6 (…-1806), kein Apac
   } finally { s.cleanup(); }
 });
 
-test('PostgreSQL 18.7 installiert: nimmt den höchsten Bau (…-1807)', () => {
-  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.7-0ubuntu0.26.04.1', ok: '2.32.1~ubuntu26.04-1807', versions: PG_BUILDS } });
+test('PostgreSQL 18.7 installiert: der apt-Kandidat (…-1807) passt → Paketname ohne Version, apt wählt wie immer', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.7-0ubuntu0.26.04.1', ok: '', versions: PG_BUILDS } });
   try {
     s.run();
-    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18=2.32.1~ubuntu26.04-1807 timescaledb-2-postgresql-18=2.32.1~ubuntu26.04-1807']);
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18 timescaledb-2-postgresql-18']);
+  } finally { s.cleanup(); }
+});
+
+// Codex 684697ca: Hat der Betreiber TimescaleDB per apt auf eine geprüfte Version festgelegt (Pin), ist sie der
+// apt-Kandidat. Eine ausdrückliche neuere Version überginge den Pin — darum nie über den Kandidaten hinaus.
+test('Pin des Betreibers auf 2.31.2 (Kandidat …-1807), PostgreSQL 18.6: nimmt 2.31.2-1806, nie 2.32.1', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.6-0ubuntu0.26.04.1', candidate: '2.31.2~ubuntu26.04-1807', ok: '2.31.2~ubuntu26.04-1806', versions: PG_BUILDS } });
+  try {
+    s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18=2.31.2~ubuntu26.04-1806 timescaledb-2-postgresql-18=2.31.2~ubuntu26.04-1806']);
+  } finally { s.cleanup(); }
+});
+
+test('Pin des Betreibers auf 2.31.2-1806, der Kandidat passt → Paketname ohne Version (apt hält den Pin)', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.6-0ubuntu0.26.04.1', candidate: '2.31.2~ubuntu26.04-1806', ok: '', versions: PG_BUILDS } });
+  try {
+    s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18 timescaledb-2-postgresql-18']);
   } finally { s.cleanup(); }
 });
 
