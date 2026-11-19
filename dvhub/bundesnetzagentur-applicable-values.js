@@ -1,15 +1,53 @@
+// EEG „anzulegende Werte“ (AW) der Bundesnetzagentur je Inbetriebnahmemonat
+// und Leistungsstufe (Teil- und Volleinspeisung).
+//
+// Quelle seit 19.11.2026 (Christin), wählbar unter Einstellungen → Strompreise →
+// Marktprämie (referenceData.applicableValueSource):
+//   'dvhub'  (Standard) fertig geprüft von dvhub.online
+//            (GET <epex.priceApiUrl>/v1/pv/eeg-applicable-values, Prüfsumme wird
+//            nachgerechnet); scheitert das, direkt bei der BNetzA.
+//   'public' direkt bei der BNetzA: Archivseite + jede verlinkte xlsx (heute 35).
+// Vorher holte jede Box bei JEDEM Start alle Dateien direkt — und zusätzlich bei
+// jedem Historie-Aufruf für ein Jahr ohne Werte (z. B. 2021) noch einmal. Eine
+// Feldbox bekam am 19.11. HTTP 404 für die Archivseite (Drosselung der BNetzA).
+//
+// Geholt wird nur, wenn eine PV-Anlage mit kWp und Inbetriebnahme eingetragen ist
+// (applicableValuesNeeded — alle Verbraucher rechnen je Anlage), dann wöchentlich
+// ohne Neustart (tick), nach einem Fehlschlag frühestens nach 6 h (ohne Stand: 1 h).
+//
+// Der Parser ist auf dem Server (Hetzner-Docker price-api/eeg-applicable-values.js)
+// bewusst kopiert; beide Seiten prüfen dieselben echten BNetzA-Dateien gegen
+// dieselbe Erwartungsdatei (test/fixtures/eeg-applicable-values/expected.json).
+// Ändert sich der Parser hier, dort nachziehen.
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 // Sweep package 6: shared 2-decimal rounding helper (was a local round2 duplicate).
 // nullOnInvalid:true preserves this file's original "return null on non-finite" behavior.
 // All round2 call sites here operate on non-negative EEG applicable-value rates, so the
 // shared sign-aware helper is behavior-equivalent to the previous plain Math.round body.
 import { round2 as sharedRound2 } from './server-utils.js';
+import { outboundFetch } from './services/outbound-fetch.js';
 const round2 = (value) => sharedRound2(value, { nullOnInvalid: true });
 
 const BUNDESNETZAGENTUR_BASE_URL = 'https://www.bundesnetzagentur.de';
 const BUNDESNETZAGENTUR_ARCHIVE_URL = `${BUNDESNETZAGENTUR_BASE_URL}/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/EEG_Foerderung/Archiv_VergSaetze/start.html`;
+
+export const CENTRAL_APPLICABLE_VALUES_PATH = '/v1/pv/eeg-applicable-values';
+const CENTRAL_TIMEOUT_MS = 20_000;
+const DIRECT_TIMEOUT_MS = 60_000;
+// Wöchentlich: neue Veröffentlichungen (Februar/August) kommen ohne Neustart an.
+export const APPLICABLE_VALUE_REFRESH_MS = 7 * 24 * 3600_000;
+// Nach einem Fehlschlag: mit gültigem Stand erst nach 6 h wieder, ohne nach 1 h.
+export const APPLICABLE_VALUE_RETRY_MS = 6 * 3600_000;
+export const APPLICABLE_VALUE_RETRY_EMPTY_MS = 3600_000;
+// Takt der Prüfung „fällig?“ (billig, ohne Netz, solange nichts fällig ist).
+export const APPLICABLE_VALUE_TICK_MS = 15 * 60_000;
+// Web-Prozess ohne eigenen Abruf: Cache-Datei höchstens alle 30 s neu ansehen.
+const DISK_RELOAD_MS = 30_000;
+const VIA_CENTRAL = 'dvhub_online';
+const VIA_DIRECT = 'bundesnetzagentur';
 
 function decodeHtml(value) {
   return String(value || '')
@@ -157,34 +195,98 @@ function normalizeReferenceData(referenceData) {
     updatedAt: referenceData?.updatedAt || null,
     archiveUrl: referenceData?.archiveUrl || BUNDESNETZAGENTUR_ARCHIVE_URL,
     publications: Array.isArray(referenceData?.publications) ? referenceData.publications.map(String) : [],
+    // Woher die Box den Stand hat (Caches von vor 19.11.2026: immer direkt).
+    via: referenceData?.via === VIA_CENTRAL ? VIA_CENTRAL : VIA_DIRECT,
+    checksum: typeof referenceData?.checksum === 'string' ? referenceData.checksum : null,
     applicableValueTiersByMonth,
     fullFeedApplicableValueTiersByMonth
   };
 }
 
-function readPersistedReferenceData(cachePath) {
-  if (!cachePath || !fs.existsSync(cachePath)) return normalizeReferenceData({});
+// ── Prüfsumme (gleich auf dem Server, price-api/eeg-applicable-values.js) ────
+// sha256 über die kanonische JSON-Form (Schlüssel sortiert, Reihenfolge der
+// Stufen bleibt) der beiden Wertetabellen — unabhängig davon, wie die
+// Datenbank (jsonb) die Schlüssel ordnet.
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function applicableValueChecksum(data) {
+  const body = canonicalJson({
+    applicableValueTiersByMonth: data?.applicableValueTiersByMonth || {},
+    fullFeedApplicableValueTiersByMonth: data?.fullFeedApplicableValueTiersByMonth || {},
+  });
+  return `sha256:${crypto.createHash('sha256').update(body, 'utf8').digest('hex')}`;
+}
+
+// Abrufzustand neben den Werten in derselben Datei (refreshState). Caches von
+// vor 19.11.2026 kennen ihn nicht: dort war updatedAt die Zeit des Abrufs.
+function normalizeRefreshState(state, referenceData) {
+  const iso = (value) => (typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null);
+  return {
+    lastAttemptAt: iso(state?.lastAttemptAt),
+    lastAttemptOk: typeof state?.lastAttemptOk === 'boolean' ? state.lastAttemptOk : null,
+    lastAttemptSource: state?.lastAttemptSource === 'public' || state?.lastAttemptSource === 'dvhub' ? state.lastAttemptSource : null,
+    lastSuccessAt: iso(state?.lastSuccessAt) || (state ? null : iso(referenceData?.updatedAt)),
+    lastError: typeof state?.lastError === 'string' ? state.lastError.slice(0, 300) : null
+  };
+}
+
+function readPersistedState(cachePath) {
+  if (!cachePath || !fs.existsSync(cachePath)) {
+    const referenceData = normalizeReferenceData({});
+    return { referenceData, refreshState: normalizeRefreshState(null, referenceData) };
+  }
   try {
-    return normalizeReferenceData(JSON.parse(fs.readFileSync(cachePath, 'utf8')));
+    const raw = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    const referenceData = normalizeReferenceData(raw);
+    return { referenceData, refreshState: normalizeRefreshState(raw?.refreshState || null, referenceData) };
   } catch {
-    return normalizeReferenceData({});
+    const referenceData = normalizeReferenceData({});
+    return { referenceData, refreshState: normalizeRefreshState(null, referenceData) };
   }
 }
 
-function writePersistedReferenceData(cachePath, referenceData) {
+function writePersistedReferenceData(cachePath, referenceData, refreshState = undefined) {
   if (!cachePath) return;
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
   // Atomic write: temp file + rename prevents a partial/corrupt cache file on a
   // crash mid-write. No chmod — this is non-secret reference data.
   const tmpPath = cachePath + '.tmp';
-  fs.writeFileSync(tmpPath, `${JSON.stringify(referenceData, null, 2)}\n`, 'utf8');
+  const body = refreshState ? { ...referenceData, refreshState } : referenceData;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
   fs.renameSync(tmpPath, cachePath);
 }
 
-function hasYear(referenceData, year) {
-  const numericYear = Number(year);
-  if (!Number.isInteger(numericYear)) return Object.keys(referenceData?.applicableValueTiersByMonth || {}).length > 0;
-  return Object.keys(referenceData?.applicableValueTiersByMonth || {}).some((monthKey) => monthKey.startsWith(`${numericYear}-`));
+function monthKeys(referenceData) {
+  return Object.keys(referenceData?.applicableValueTiersByMonth || {}).sort();
+}
+
+/**
+ * Brauchen wir anzulegende Werte? Jeder Verbraucher rechnet je PV-Anlage
+ * (Historie: gewichteter AW Teil-/Volleinspeisung, EOS: Marktprämie auf das
+ * Einspeisesignal) — ohne Anlage mit kWp und Inbetriebnahme bleibt alles null.
+ * Ein manueller AW (applicableValueOverrideCtKwh) ersetzt nur die
+ * Teileinspeisung; die Volleinspeisung rechnet weiter mit den BNetzA-Werten.
+ */
+export function applicableValuesNeeded(cfg) {
+  const plants = cfg?.userEnergyPricing?.pvPlants;
+  return Array.isArray(plants) && plants.some((plant) => Number(plant?.kwp) > 0
+    && /^\d{4}-\d{2}/.test(String(plant?.commissionedAt || '')));
+}
+
+export function normalizeApplicableValueSource(value) {
+  return value === 'public' ? 'public' : 'dvhub';
+}
+
+// Zugangsdaten in einer eigenen priceApiUrl (https://user:pass@…) nie in Log
+// oder Cache-Datei ablegen; Länge begrenzt.
+function scrubError(error) {
+  return String(error?.message || error || 'kein Abruf möglich').replace(/\/\/[^/\s@]+@/g, '//***@').slice(0, 300);
 }
 
 export function selectApplicableValueCtKwh(referenceData, { commissionedAt, kwp, feedType = 'partial' } = {}) {
@@ -380,6 +482,19 @@ export function parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, s
   return { applicableValueTiersByMonth, fullFeedApplicableValueTiersByMonth };
 }
 
+// Eine xlsx (ZIP) → Monatswerte. Auf dem Server gleichnamig.
+export function parseBundesnetzagenturApplicableValueWorkbook(workbookBuffer) {
+  const entries = readZipEntries(workbookBuffer);
+  const sharedStringsXml = entries.get('xl/sharedStrings.xml')?.toString('utf8') || '';
+  const sheetXml = findSheetXml(entries)?.toString('utf8') || '';
+  return parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, sheetXml });
+}
+
+function withTimeout(options, ms) {
+  const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(ms) : undefined;
+  return signal ? { ...options, signal } : options;
+}
+
 export async function fetchBundesnetzagenturApplicableValueReferenceData({
   archiveUrl = BUNDESNETZAGENTUR_ARCHIVE_URL,
   fetchImpl = globalThis.fetch
@@ -387,9 +502,9 @@ export async function fetchBundesnetzagenturApplicableValueReferenceData({
   if (typeof fetchImpl !== 'function') {
     throw new Error('fetch implementation is required');
   }
-  const archiveResponse = await fetchImpl(archiveUrl, {
+  const archiveResponse = await fetchImpl(archiveUrl, withTimeout({
     headers: { accept: 'text/html,application/xhtml+xml' }
-  });
+  }, DIRECT_TIMEOUT_MS));
   if (!archiveResponse.ok) {
     throw new Error(`Bundesnetzagentur archive request failed: HTTP ${archiveResponse.status} for ${archiveUrl}`);
   }
@@ -398,67 +513,275 @@ export async function fetchBundesnetzagenturApplicableValueReferenceData({
   const applicableValueTiersByMonth = {};
   const fullFeedApplicableValueTiersByMonth = {};
 
+  // Seitenreihenfolge (neueste zuerst); spätere Dateien überschreiben frühere
+  // Monate — der Server führt genauso zusammen.
   for (const publicationUrl of publications) {
-    const publicationResponse = await fetchImpl(publicationUrl);
+    const publicationResponse = await fetchImpl(publicationUrl, withTimeout({}, DIRECT_TIMEOUT_MS));
     if (!publicationResponse.ok) {
       throw new Error(`Bundesnetzagentur publication request failed: HTTP ${publicationResponse.status} for ${publicationUrl}`);
     }
     const workbookBuffer = Buffer.from(await publicationResponse.arrayBuffer());
-    const entries = readZipEntries(workbookBuffer);
-    const sharedStringsXml = entries.get('xl/sharedStrings.xml')?.toString('utf8') || '';
-    const sheetXml = findSheetXml(entries)?.toString('utf8') || '';
-    const parsed = parseBundesnetzagenturApplicableValueSheet({ sharedStringsXml, sheetXml });
+    const parsed = parseBundesnetzagenturApplicableValueWorkbook(workbookBuffer);
     Object.assign(applicableValueTiersByMonth, parsed.applicableValueTiersByMonth);
     Object.assign(fullFeedApplicableValueTiersByMonth, parsed.fullFeedApplicableValueTiersByMonth);
   }
 
-  return normalizeReferenceData({
+  const normalized = normalizeReferenceData({
     source: 'bundesnetzagentur',
     archiveUrl,
     publications,
+    via: VIA_DIRECT,
     applicableValueTiersByMonth,
     fullFeedApplicableValueTiersByMonth
   });
+  return { ...normalized, checksum: applicableValueChecksum(normalized) };
+}
+
+/**
+ * Fertiger Stand von dvhub.online (price-api-dev, 19.11.2026). Die Prüfsumme
+ * wird über die EMPFANGENEN Tabellen nachgerechnet — weicht sie ab oder fehlt
+ * sie, gilt der Stand als kaputt (Aufrufer fällt auf die BNetzA zurück).
+ * updatedAt = zuletzt vom Server bei der BNetzA bestätigt.
+ */
+export async function fetchCentralApplicableValueReferenceData({ baseUrl, fetchImpl = outboundFetch } = {}) {
+  if (!baseUrl) throw new Error('dvhub.online: keine Adresse (epex.priceApiUrl)');
+  const url = `${String(baseUrl).replace(/\/+$/, '')}${CENTRAL_APPLICABLE_VALUES_PATH}`;
+  const response = await fetchImpl(url, withTimeout({ headers: { accept: 'application/json' } }, CENTRAL_TIMEOUT_MS));
+  if (!response.ok) throw new Error(`dvhub.online applicable values request failed: HTTP ${response.status}`);
+  const body = await response.json();
+  if (typeof body?.checksum !== 'string' || !body.checksum) throw new Error('dvhub.online: Prüfsumme fehlt');
+  const computed = applicableValueChecksum(body);
+  if (computed !== body.checksum) throw new Error(`dvhub.online: Prüfsumme stimmt nicht (${computed.slice(0, 19)}… statt ${body.checksum.slice(0, 19)}…)`);
+  const normalized = normalizeReferenceData({ ...body, via: VIA_CENTRAL, checksum: body.checksum });
+  if (!monthKeys(normalized).length) throw new Error('dvhub.online: keine Werte');
+  return normalized;
 }
 
 export function createBundesnetzagenturApplicableValueService({
   cachePath = '',
   fetchImpl = globalThis.fetch,
+  // Abruf von dvhub.online mit Namensprüfung (epex.priceApiUrl kommt aus der Config).
+  centralFetchImpl = outboundFetch,
   nowIso = () => new Date().toISOString(),
+  // Gewählte Quelle (referenceData.applicableValueSource) und Basis-URL (epex.priceApiUrl).
+  // Ohne Basis-URL nur direkt (Tests, ältere Aufrufer).
+  getSource = () => 'dvhub',
+  getCentralBaseUrl = () => null,
+  isNeeded = () => true,
+  // Nur der Laufzeit-Prozess holt (getrennter Betrieb); der Web-Prozess liest die Datei nach.
+  ownsRefresh = true,
+  pushLog = null,
+  refreshIntervalMs = APPLICABLE_VALUE_REFRESH_MS,
+  retryIntervalMs = APPLICABLE_VALUE_RETRY_MS,
+  retryEmptyIntervalMs = APPLICABLE_VALUE_RETRY_EMPTY_MS,
   fetchReferenceData = (options = {}) => fetchBundesnetzagenturApplicableValueReferenceData({
     ...options,
     fetchImpl
+  }),
+  fetchCentralReferenceData = ({ baseUrl }) => fetchCentralApplicableValueReferenceData({
+    baseUrl,
+    fetchImpl: centralFetchImpl
   })
 } = {}) {
-  let referenceData = readPersistedReferenceData(cachePath);
+  let { referenceData, refreshState } = readPersistedState(cachePath);
   let refreshPromise = null;
+  let diskCheckedAtMs = null;
+  let diskMtimeMs = fileMtimeMs();
 
-  async function refresh() {
-    if (refreshPromise) return refreshPromise;
-    refreshPromise = Promise.resolve(fetchReferenceData({}))
-      .then((fetched) => {
-        referenceData = normalizeReferenceData({
-          ...fetched,
-          updatedAt: nowIso()
-        });
-        writePersistedReferenceData(cachePath, referenceData);
-        return referenceData;
-      })
-      .finally(() => {
-        refreshPromise = null;
+  const nowMs = () => Date.parse(nowIso());
+  const log = (event, details, level) => { try { pushLog?.(event, details, level); } catch { /* Log darf nie stören */ } };
+
+  function fileMtimeMs() {
+    try { return cachePath ? fs.statSync(cachePath).mtimeMs : null; } catch { return null; }
+  }
+
+  // Getrennter Betrieb: Der Web-Prozess holt nicht selbst, sondern liest nach,
+  // was der Laufzeit-Prozess geschrieben hat (höchstens alle 30 s ein stat).
+  function reloadFromDiskIfChanged() {
+    if (ownsRefresh || !cachePath) return;
+    const now = nowMs();
+    if (diskCheckedAtMs != null && now - diskCheckedAtMs < DISK_RELOAD_MS) return;
+    diskCheckedAtMs = now;
+    const mtime = fileMtimeMs();
+    if (mtime === diskMtimeMs) return;
+    diskMtimeMs = mtime;
+    ({ referenceData, refreshState } = readPersistedState(cachePath));
+  }
+
+  function effectiveSource() {
+    return normalizeApplicableValueSource(getSource?.()) === 'dvhub' && getCentralBaseUrl?.() ? 'dvhub' : 'public';
+  }
+
+  function persist() {
+    try {
+      writePersistedReferenceData(cachePath, referenceData, refreshState);
+      diskMtimeMs = fileMtimeMs();
+    } catch (error) {
+      log('applicable_value_cache_write_error', { error: error.message }, 'warn');
+    }
+  }
+
+  const sinceMs = (iso, now) => {
+    const t = Date.parse(iso || '');
+    return Number.isFinite(t) ? now - t : Infinity;
+  };
+
+  /**
+   * Ist ein Abruf fällig? null = nein, sonst der Grund. Reihenfolge:
+   * Quelle umgestellt (sofort) → Pause nach Fehlschlag → kein Stand →
+   * wöchentlich → nach Rückfall/Umstieg wieder die gewählte Quelle (alle 6 h) →
+   * eine Anlage mit Inbetriebnahme nach dem letzten bekannten Monat (alle 6 h).
+   */
+  function dueReason({ pvPlants = null } = {}) {
+    if (!ownsRefresh || refreshPromise || !isNeeded()) return null;
+    const now = nowMs();
+    const source = effectiveSource();
+    const months = monthKeys(referenceData);
+    const sinceAttempt = sinceMs(refreshState.lastAttemptAt, now);
+    if (refreshState.lastAttemptSource && refreshState.lastAttemptSource !== source) return 'source_changed';
+    if (refreshState.lastAttemptOk === false && sinceAttempt < (months.length ? retryIntervalMs : retryEmptyIntervalMs)) return null;
+    if (!months.length) return 'empty';
+    if (!(sinceMs(refreshState.lastSuccessAt, now) < refreshIntervalMs)) return 'weekly';
+    if (sinceAttempt < retryIntervalMs) return null;
+    if (referenceData.via !== (source === 'dvhub' ? VIA_CENTRAL : VIA_DIRECT)) return 'preferred_source';
+    const lastMonth = months[months.length - 1];
+    const plantBeyond = (Array.isArray(pvPlants) ? pvPlants : []).some((plant) => {
+      const key = typeof plant?.commissionedAt === 'string' ? plant.commissionedAt.slice(0, 7) : '';
+      return /^\d{4}-\d{2}$/.test(key) && key > lastMonth;
+    });
+    return plantBeyond ? 'new_month' : null;
+  }
+
+  function cacheSummary() {
+    const months = monthKeys(referenceData);
+    return { cacheMonths: months.length, cacheLastMonth: months[months.length - 1] || null, cacheUpdatedAt: referenceData.updatedAt || null, cacheVia: months.length ? referenceData.via : null };
+  }
+
+  async function runRefresh({ reason = 'manual' } = {}) {
+    const source = effectiveSource();
+    const attemptAt = nowIso();
+    const months = monthKeys(referenceData);
+    // Rückfall auf die BNetzA nur, wenn der Stand fehlt oder fällig ist — nicht,
+    // um nach einem Rückfall alle 6 h zu prüfen, ob dvhub.online wieder da ist.
+    const allowFallback = !months.length || !(sinceMs(refreshState.lastSuccessAt, Date.parse(attemptAt)) < refreshIntervalMs);
+    let fetched = null;
+    let via = null;
+    let error = null;
+    if (source === 'dvhub') {
+      try {
+        fetched = await fetchCentralReferenceData({ baseUrl: getCentralBaseUrl() });
+        via = VIA_CENTRAL;
+      } catch (centralError) {
+        error = centralError;
+        if (allowFallback) log('applicable_value_central_fallback', { error: scrubError(centralError), reason }, 'warn');
+      }
+    }
+    if (!fetched && (source === 'public' || allowFallback)) {
+      try {
+        fetched = await fetchReferenceData({});
+        via = VIA_DIRECT;
+      } catch (directError) {
+        error = directError;
+      }
+    }
+    if (fetched) {
+      const next = normalizeReferenceData({
+        ...fetched,
+        via,
+        // Direkt: Zeit des Abrufs. dvhub.online: zuletzt vom Server bestätigt.
+        updatedAt: via === VIA_CENTRAL && fetched.updatedAt ? fetched.updatedAt : attemptAt
       });
+      if (!next.checksum) next.checksum = applicableValueChecksum(next);
+      const nextMonths = new Set(monthKeys(next));
+      const nextFull = new Set(Object.keys(next.fullFeedApplicableValueTiersByMonth));
+      const lost = months.filter((key) => !nextMonths.has(key))
+        .concat(Object.keys(referenceData.fullFeedApplicableValueTiersByMonth).filter((key) => !nextFull.has(key)));
+      if (!nextMonths.size) {
+        error = new Error(`${via}: keine Werte`);
+      } else if (lost.length) {
+        // Älterer Stand als der eigene (z. B. Server einen Tag hinter einer neuen
+        // Veröffentlichung): eigenen behalten, Abruf gilt als erledigt.
+        refreshState = { lastAttemptAt: attemptAt, lastAttemptOk: true, lastAttemptSource: source, lastSuccessAt: attemptAt, lastError: null };
+        persist();
+        log('applicable_value_refresh_rejected', { via, reason, lostMonths: lost.length, firstLostMonth: lost.sort()[0], ...cacheSummary() }, 'warn');
+        return referenceData;
+      } else {
+        referenceData = next;
+        refreshState = { lastAttemptAt: attemptAt, lastAttemptOk: true, lastAttemptSource: source, lastSuccessAt: attemptAt, lastError: null };
+        persist();
+        const keys = monthKeys(referenceData);
+        log('applicable_value_refresh_ok', {
+          via, reason, months: keys.length, firstMonth: keys[0], lastMonth: keys[keys.length - 1],
+          updatedAt: referenceData.updatedAt, checksum: referenceData.checksum
+        }, 'info');
+        return referenceData;
+      }
+    }
+    // Zugangsdaten in einer eigenen priceApiUrl (https://user:pass@…) nie ablegen.
+    const message = scrubError(error);
+    refreshState = { ...refreshState, lastAttemptAt: attemptAt, lastAttemptOk: false, lastAttemptSource: source, lastError: message };
+    persist();
+    // Mit gültigem Stand rechnet DVhub weiter — nur eine Warnung. Ein Fehler ist
+    // es erst, wenn nichts da ist, aber eine PV-Anlage die Werte braucht.
+    if (months.length) log('applicable_value_refresh_stale', { error: message, source, reason, ...cacheSummary() }, 'warn');
+    else log('applicable_value_refresh_error', { error: message, source, reason }, isNeeded() ? 'error' : 'warn');
+    throw error || new Error(message);
+  }
+
+  // Sofort holen (Aufrufer bekommt Fehler); läuft schon einer, auf diesen warten.
+  function refresh(options = {}) {
+    if (refreshPromise) return refreshPromise;
+    refreshPromise = runRefresh(options).finally(() => {
+      refreshPromise = null;
+    });
     return refreshPromise;
   }
 
+  /** Regelmäßiger Takt (und Start): holt nur, wenn fällig. Wirft nie. */
+  async function tick(options = {}) {
+    if (refreshPromise) return refreshPromise.catch(() => null);
+    const reason = dueReason(options);
+    if (!reason) return null;
+    return refresh({ reason }).catch(() => null);
+  }
+
   function getApplicableValueSummary({ year, pvPlants = [] } = {}) {
-    if (!hasYear(referenceData, year) && !refreshPromise) {
-      void refresh().catch(() => {});
-    }
+    reloadFromDiskIfChanged();
+    // Nur bei neuer Inbetriebnahme nach dem letzten bekannten Monat (oder ganz
+    // ohne Stand) nachfragen — gedrosselt wie der Takt. Früher holte jeder
+    // Historie-Aufruf für ein Jahr ohne Werte alle BNetzA-Dateien neu.
+    if (dueReason({ pvPlants })) void tick({ pvPlants });
     return buildApplicableValueSummary(referenceData, { year, pvPlants });
+  }
+
+  /** Für Einstellungen/Status: Quelle, Stand, Monate, letzter Versuch. */
+  function getStatus() {
+    reloadFromDiskIfChanged();
+    const months = monthKeys(referenceData);
+    return {
+      needed: !!isNeeded(),
+      source: normalizeApplicableValueSource(getSource?.()),
+      effectiveSource: effectiveSource(),
+      via: months.length ? referenceData.via : null,
+      updatedAt: months.length ? referenceData.updatedAt || null : null,
+      checksum: months.length ? referenceData.checksum || null : null,
+      months: {
+        first: months[0] || null,
+        last: months[months.length - 1] || null,
+        count: months.length,
+        fullFeedCount: Object.keys(referenceData.fullFeedApplicableValueTiersByMonth).length
+      },
+      lastAttemptAt: refreshState.lastAttemptAt,
+      lastAttemptOk: refreshState.lastAttemptOk,
+      lastSuccessAt: refreshState.lastSuccessAt,
+      lastError: refreshState.lastError
+    };
   }
 
   return {
     refresh,
-    getApplicableValueSummary
+    tick,
+    getApplicableValueSummary,
+    getStatus
   };
 }

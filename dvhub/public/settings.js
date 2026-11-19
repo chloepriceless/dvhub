@@ -807,6 +807,43 @@ if (typeof globalThis !== 'undefined') {
   globalThis.DVhubSettingsVpn = { vpnModbusInfo };
 }
 
+/**
+ * Anzulegende Werte (19.11.2026): Quelle und Stand als Hinweis unter der
+ * Einstellung, z. B. „Anzulegende Werte: dvhub.online, Stand 19.11.2026 ·
+ * Inbetriebnahme 07/2022 bis 12/2026“. Reiner Helper (Text unescaped).
+ * @param {object|null} status  GET /api/config referenceData.applicableValues
+ * @returns {{ text: string, warn: boolean }|null}
+ */
+function applicableValueStatusText(status) {
+  if (!status) return null;
+  const day = (iso) => {
+    const t = Date.parse(iso || '');
+    if (!Number.isFinite(t)) return null;
+    return new Date(t).toLocaleDateString('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', year: 'numeric' });
+  };
+  const month = (key) => (typeof key === 'string' && /^\d{4}-\d{2}$/.test(key) ? `${key.slice(5, 7)}/${key.slice(0, 4)}` : '?');
+  const failedAt = status.lastAttemptOk === false ? day(status.lastAttemptAt) : null;
+  if (!status.months?.count) {
+    if (!status.needed) return { text: 'Anzulegende Werte: DVhub holt sie, sobald unten eine PV-Anlage mit Leistung und Inbetriebnahme eingetragen ist.', warn: false };
+    if (failedAt) return { text: `Anzulegende Werte: noch keine geladen — der letzte Abruf am ${failedAt} ist fehlgeschlagen. DVhub versucht es stündlich erneut; bis dahin fehlen Marktprämie und Einspeisevergütung (oder unten den Wert manuell eintragen).`, warn: true };
+    return { text: 'Anzulegende Werte: werden gerade geladen.', warn: false };
+  }
+  const via = status.via === 'dvhub_online' ? 'dvhub.online' : 'direkt von der Bundesnetzagentur';
+  const parts = [`Anzulegende Werte: ${via}, Stand ${day(status.updatedAt) || '?'} · Inbetriebnahme ${month(status.months.first)} bis ${month(status.months.last)}`];
+  let warn = false;
+  if (status.source === 'dvhub' && status.via !== 'dvhub_online') parts.push('(dvhub.online war beim letzten Abruf nicht erreichbar oder noch nicht gefragt)');
+  if (status.source === 'public' && status.via === 'dvhub_online') parts.push('(Umstellung auf die Bundesnetzagentur folgt in den nächsten Minuten)');
+  if (failedAt) {
+    parts.push(`— letzter Abruf am ${failedAt} fehlgeschlagen, es gelten die gespeicherten Werte`);
+    warn = true;
+  }
+  return { text: parts.join(' '), warn };
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsApplicableValues = { applicableValueStatusText };
+}
+
 function buildMarketPremiumEditorMarkup({ marketValueMode = 'annual', plants = [], validationHtml = '' }) {
   const selectedMode = serializeMarketValueMode(marketValueMode);
   return `
@@ -2376,6 +2413,9 @@ const SMA_LOCATION_DEFAULT = { latitude: 51.1657, longitude: 10.4515 };
 // Vom Server: Hinweis „mit der Preisprognose Tage im Voraus planen“ samt
 // Laufzeit-Schätzung für dieses Gerät (1.0.11, /api/price/outlook horizonHint).
 let eosHorizonHint = null;
+// Quelle und Stand der anzulegenden Werte (GET /api/config referenceData.applicableValues,
+// 19.11.2026) — Hinweis unter „Quelle der anzulegenden Werte“.
+let applicableValueStatus = null;
 // Nach jedem Speichern neu laden (Codex b1afb66c, P3): Steuerzeitraum oder
 // Preisprognose geändert → Hinweis neu oder weg; nur bei Änderung neu zeichnen.
 function loadEosHorizonHint() {
@@ -2388,6 +2428,7 @@ function loadEosHorizonHint() {
 }
 // Info-Hinweis unter einem Feld (kein Warnhinweis): nur Text vom Server.
 function fieldInfoNote(path) {
+  if (path === 'referenceData.applicableValueSource') return applicableValueStatusText(applicableValueStatus);
   if (!eosHorizonHint) return null;
   if (path === 'optimizer.eosControlHorizonMaxHours') return { text: eosHorizonHint.text, warn: eosHorizonHint.slow === true };
   if (path === 'optimizer.eosPredictionHours') {
@@ -3619,6 +3660,7 @@ function loadConfigPayloadState(payload) {
   currentDraftConfig = clone(currentRawConfig);
   currentEffectiveConfig = payload.effectiveConfig || {};
   currentMeta = payload.meta || {};
+  applicableValueStatus = payload.referenceData?.applicableValues || null;
   settingsDiscoveryStates = {};
   pricingPeriodsDraft = clone(currentRawConfig?.userEnergyPricing?.periods || []);
   marketValueModeDraft = getDraftMarketValueMode(currentRawConfig);
