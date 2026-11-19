@@ -49,6 +49,8 @@ test('Lizenz-Bereich: Knöpfe und Bestell-Link dürfen umbrechen (390 px)', () =
 
 test('geänderte Stylesheets tragen einen neuen Cache-Schlüssel', () => {
   const html = read('settings.html');
-  assert.match(html, /\/settings\.css\?v=20261105-[a-z0-9-]+"/);
+  // Format YYYYMMDD-slug (CONTRIBUTING.md) statt festem Datum — sonst wird der Test bei jedem
+  // Anheben rot (19.11.2026: settings.css für den PV-Provider-Inspektor angehoben).
+  assert.match(html, /\/settings\.css\?v=20\d{6}-[a-z0-9-]+"/);
   assert.match(html, /\/settings-redesign\.css\?v=20261105-[a-z0-9-]+"/);
 });

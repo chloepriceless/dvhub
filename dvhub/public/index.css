@@ -1368,6 +1368,11 @@ details[open] > .sma-details-summary::before { transform:rotate(90deg); }
 .fp-peak { font-size:13px; font-weight:700; color:var(--yellow); }
 .fp-energy { font-size:13px; font-weight:700; color:var(--cyan); }
 .fp-age  { font-size:11px; color:var(--text-dim); min-width:78px; text-align:right; }
+/* Stand je Dienst (19.11.2026): „im Ensemble · Gewicht 31 %“ bzw. warum nicht — zweite Zeile unter dem Namen. */
+.fp-note { display:block; font-size:11px; font-weight:400; color:var(--text-dim); line-height:1.3; margin-top:1px; }
+.fp-row.is-out .fp-name { color:var(--text-dim); }
+.fp-row.is-out .fp-peak,
+.fp-row.is-out .fp-energy { color:var(--text-dim); font-weight:600; }
 /* Spalten-Kopf (Provider · Tages-Peak · Energie · aktualisiert) — klein/dimm/uppercase. */
 .fp-row.fp-head { padding-top:0; padding-bottom:4px; }
 .fp-row.fp-head .fp-name,

@@ -187,7 +187,7 @@ export function clampForecastDays(v, fallback = 2) {
 }
 
 /** Resolve geo coordinates (forecast.location preferred, sma-automation fallback). */
-function resolveLocation(cfg) {
+export function resolveLocation(cfg) {
   const fc = cfg.forecast || {};
   const lat = fc.location?.latitude
     ?? cfg.schedule?.smallMarketAutomation?.location?.latitude;
@@ -202,8 +202,9 @@ function resolveLocation(cfg) {
  * Prognose (forecast.pv.strings, level 'detailed' — same rule as pvlib and
  * Open-Meteo), then pvPlants[] geometry, then the single-string legacy fields.
  * Until 2026-10-14 the strings were ignored here (audit finding 2).
+ * Exportiert (19.11.2026) für die Einrichtungs-Regel (pv-provider-setup.js).
  */
-function resolvePlants(cfg) {
+export function resolvePlants(cfg) {
   const fc = cfg.forecast || {};
   const useStrings = fc.pv?.configLevel === 'detailed' && Array.isArray(fc.pv?.strings)
     && fc.pv.strings.some(p => Number(p?.kwp) > 0 && Number.isFinite(Number(p?.tiltDeg)) && Number.isFinite(Number(p?.azimuthDeg)));
