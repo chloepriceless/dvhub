@@ -2081,7 +2081,9 @@ function computeSungrowBatteryView(status) {
   // Codex 2c6c70d0 (P2): der Boden nimmt wie die EOS-Planung die HÖHERE Geräte-Untergrenze beider WR (Slave nur, wenn
   // erreichbar und aggregiert) — die Herkunft „(Gerät …)" muss dieselbe Grenze vergleichen.
   const slaveDevMin = sOnline && sec.aggregate !== false && fin(sec.minSocPctDevice) ? Number(sec.minSocPctDevice) : null;
-  const devMinEff = devMin != null && slaveDevMin != null ? Math.max(devMin, slaveDevMin) : (devMin != null ? devMin : slaveDevMin);
+  // Codex 50deb8d3 (P2): bevorzugt die Server-Angabe (gleiche Frische-Regel wie die Planung); sonst lokal geschätzt.
+  const devMinEff = ems && fin(ems.socFloorDeviceMinPct) ? Number(ems.socFloorDeviceMinPct)
+    : (devMin != null && slaveDevMin != null ? Math.max(devMin, slaveDevMin) : (devMin != null ? devMin : slaveDevMin));
   const mReal = realSoc(vic.sungrowMasterSocPct != null ? vic.sungrowMasterSocPct : vic.soc, dev.minSocPctDevice, dev.maxSocPctDevice);
   const sReal = sOnline ? realSoc(sec.socPct, sec.minSocPctDevice, sec.maxSocPctDevice) : null;
   const mDis = effW(dev.maxDischargeWDevice, dev.bdcRatedW);

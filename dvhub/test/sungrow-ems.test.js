@@ -957,6 +957,15 @@ test('M24: Status nennt den wirksamen Puffer über der Geräte-Untergrenze (Stan
   assert.equal(r.ems.status().socFloorBufferPct, 2);
 });
 
+test('Codex 50deb8d3 P2: Status nennt die Geräte-Untergrenze, die der Entlade-Boden nutzt (Slave nur frisch)', async () => {
+  const r = splitRig();
+  r.state.victron.device.minSocPctDevice = 10;
+  r.state.sungrowSecond.minSocPctDevice = 12;
+  assert.equal(r.ems.status().socFloorDeviceMinPct, 12, 'frischer, aggregierter Slave zählt mit');
+  r.advance(30000); // Slave-Messung älter als 20 s → die Planung lässt ihn weg
+  assert.equal(r.ems.status().socFloorDeviceMinPct, 10, 'veralteter Slave zählt nicht');
+});
+
 test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf, solange er Forced fährt', async () => {
   const hbPath = path.join(os.tmpdir(), `dvhub-forced-hb-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   try {

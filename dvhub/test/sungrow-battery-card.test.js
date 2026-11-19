@@ -86,6 +86,17 @@ test('Codex 2c6c70d0 P2: höhere Geräte-Untergrenze des Slave zählt mit (wie i
   assert.equal(D.computeSungrowBatteryView(st(10, 0, { online: false })).minSoc, '10 % (Gerät)');
 });
 
+test('Codex 50deb8d3 P2: die Kachel nimmt die Geräte-Untergrenze, die der Boden wirklich nutzt (Server-Angabe)', () => {
+  // Slave meldet online + 12 %, seine Messung ist aber zu alt → die Planung lässt ihn weg, der Boden bleibt 10 %.
+  const status = {
+    victron: { soc: 30, device: { minSocPctDevice: 10, maxSocPctDevice: 100 } },
+    sungrowSecond: { online: true, aggregate: true, minSocPctDevice: 12, maxSocPctDevice: 100, socPct: 20 },
+    energyBalance: { battery: { socPct: 37, minSocPct: 10 } },
+    sungrowEms: { socFloorBufferPct: 0, socFloorDeviceMinPct: 10, decision: {} },
+  };
+  assert.equal(D.computeSungrowBatteryView(status).minSoc, '10 % (Gerät)');
+});
+
 test('M9: Grid-Setpoint fällt auf schedule.active, wenn kein EMS-Target; Slave offline → „Nicht erreichbar"', () => {
   const status = {
     victron: { soc: 50, device: { minSocPctDevice: 10, maxSocPctDevice: 100 } },
