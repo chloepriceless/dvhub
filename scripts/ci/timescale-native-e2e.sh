@@ -98,7 +98,42 @@ if [[ "$SCENARIO" == broken ]]; then
     > /etc/apt/sources.list.d/timescaledb.list
   apt-get update -qq >/dev/null
   apt-get remove -y -qq "postgresql-${PG_VER}-timescaledb" >/dev/null
-  apt-get install -y -qq "timescaledb-2-loader-postgresql-${PG_VER}" "timescaledb-2-postgresql-${PG_VER}" >/dev/null
+  # Timescale liefert je Version einen Bau pro PostgreSQL-Minor: …-1806 verlangt
+  # postgresql-18 (>= 18.6), …-1807 (>= 18.7). apt nimmt den hoechsten Bau. Hat die
+  # Distribution erst 18.6, ist der nicht installierbar („Unable to satisfy
+  # dependencies“) und DVhub fiele ohne Not auf das Apache-Paket zurueck (CI rot
+  # 19.11.2026, Ubuntu 26.04 mit 18.6, packagecloud 2.32.1~ubuntu26.04-1807).
+  # Darum, wenn der apt-Kandidat nicht passt, die neueste Version unterhalb waehlen, deren PostgreSQL-Abhaengigkeit die
+  # INSTALLIERTE PostgreSQL-Version erfuellt. Gesucht wird die eigenstaendige
+  # Abhaengigkeit „postgresql-N (>= …)“, nicht das Ende von „…-loader-postgresql-N (>= …)“. Ausgabe: "<paket>=<version>", oder nur
+  # "<paket>" (apt entscheidet wie bisher), wenn sich nichts bestimmen laesst.
+  # Gleiche Funktion wie in timescale-provision.sh.
+  ts_pkg_spec() {
+    local pkg="$1" pg_pkg="postgresql-${PG_VER}" have ver deps need re cand
+    have="$(dpkg-query -W -f='${Version}' "$pg_pkg" 2>/dev/null || true)"
+    if [[ -z "$have" ]]; then printf '%s\n' "$pkg"; return 0; fi
+    # apt-Kandidat = was apt nach den Regeln der Box (Pins, Prioritaeten) nehmen wuerde.
+    # Nie darueber hinausgehen: eine ausdrueckliche Version uebergeht sonst einen Pin
+    # des Betreibers (Codex 684697ca). Ohne Kandidat entscheidet apt wie bisher.
+    # LC_ALL=C: auf einer deutschen Box heisst die Zeile sonst „Installationskandidat:“.
+    cand="$(LC_ALL=C apt-cache policy "$pkg" 2>/dev/null | sed -n 's/^ *Candidate: //p' | head -n1 || true)"
+    if [[ -z "$cand" || "$cand" == "(none)" ]]; then printf '%s\n' "$pkg"; return 0; fi
+    re="(^|, )${pg_pkg} \\(>= ([^)]+)\\)"
+    while IFS= read -r ver; do
+      [[ -n "$ver" ]] || continue
+      dpkg --compare-versions "$ver" le "$cand" || continue
+      deps="$(apt-cache show "${pkg}=${ver}" 2>/dev/null | sed -n 's/^Depends: //p' | head -n1 || true)"
+      need=""
+      if [[ "$deps" =~ $re ]]; then need="${BASH_REMATCH[2]}"; fi
+      if [[ -z "$need" ]] || dpkg --compare-versions "$have" ge "$need"; then
+        # Passt schon der Kandidat, bleibt es beim Paketnamen — apt waehlt wie immer.
+        if [[ "$ver" == "$cand" ]]; then printf '%s\n' "$pkg"; else printf '%s=%s\n' "$pkg" "$ver"; fi
+        return 0
+      fi
+    done < <(apt-cache madison "$pkg" 2>/dev/null | awk -F'|' '{gsub(/[ \t]/,"",$2); if ($2!="") print $2}' | sort -rV | uniq || true)
+    printf '%s\n' "$pkg"
+  }
+  apt-get install -y -qq "$(ts_pkg_spec "timescaledb-2-loader-postgresql-${PG_VER}")" "$(ts_pkg_spec "timescaledb-2-postgresql-${PG_VER}")" >/dev/null
   pg_ctlcluster "$PG_VER" main restart
   if runuser -u postgres -- psql -X -tAq -d dvhub -c 'SELECT 1' >/dev/null 2>&1; then
     bad "Voraussetzung: erste Anweisung müsste an der fehlenden Bibliothek scheitern"
