@@ -1543,11 +1543,14 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // Automatische Rücknahme nur für DVhubs EIGENEN Betrieb (S-49): Merker, oder das Gerät spiegelt DVhubs zuletzt
       // bestätigten Write (M2). Einen noch nicht übernommenen Modus 2 fasst sie nicht an — bis H-9 schützte ihn die
       // Fremderkennung in writeDecision (Codex 2a0f18b5 P1: sonst 0xCC + Modus 0 auf einen fremden Master).
+      // Unberührt bleiben dann auch Besitz und Ziel (Codex 4e3fc521 P2): eine zurückgestellte Übernahme holt der
+      // nächste Takt nach, statt bis zum nächsten Sollwert zu ruhen.
+      let untouched = false;
       if (!st.owns) {
         const dev = await readDevice(conf);
-        if (!ownWroteMode(dev.mode, dev)) masterSafe = true; // nichts von DVhub zurückzunehmen
+        untouched = !ownWroteMode(dev.mode, dev);
       }
-      if (!masterSafe) { await writeDecision(conf, { mode: 'self', reason }, { neutralize: true }); masterSafe = true; }
+      if (!untouched) { await writeDecision(conf, { mode: 'self', reason }, { neutralize: true }); masterSafe = true; }
     } catch { /* best effort — Merker bleibt, Wiederholung nächster Takt */ }
     try { await slaveActuator.neutralize(reason); } catch { /* best effort */ }
     st.revokedReason = reason;
@@ -2595,6 +2598,12 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       if (state.ctrl?.discretionaryWritesPaused) return { ok: false, blocked: true, error: 'emergency_stop_active' };
       if (st.owns) return { ok: true, skipped: true, reason: 'owned' };
       try {
+        // Betriebszustand am Slave selbst lesen (FC4 13000, nur Lesen): ohne Telemetrie des Begleitdiensts ist er
+        // unbekannt. In Notladung (0x4001) ist der Slave nicht steuerbar und wird nie kommandiert (S-36); nicht
+        // lesbar → nicht bestätigt, die Übernahme wartet (Codex 4e3fc521 P2).
+        const rs = await transport.mbRequest({ ...endpoint(conf), fc: 4, address: wire(13000), quantity: 1 });
+        if (!Array.isArray(rs) || rs.length < 1) throw new Error('Betriebszustand 13000: unvollständige Antwort');
+        if (isSungrowEmergencyCharge(rs[0])) { publish(); return { ok: true, skipped: true, reason: 'emergency_charge' }; }
         st.dev = null;
         const dev = await readDevice(conf);
         if (dev.mode === EMS_MODE.VPP) throw foreignModeError(dev.mode);
