@@ -110,11 +110,22 @@ if [[ "$1" == install && " $* " != *" --download-only "* ]]; then
 fi
 if [[ "$1" == remove ]]; then for a in "$@"; do sed -i.bak "/^$a$/d" "${pkgDb}"; done; fi
 exit 0`);
+  // apt-cache policy im Format von apt 2.6 bis 3.2 (im Container geprüft): Versionszeile
+  // "     <version> <Pin-Priorität>", darunter die Quelle; pins = { version: Priorität }.
   fake('apt-cache', `
 if [[ "$1" == policy && "$2" == timescaledb-2-* && -f "${repoList}" ]]; then
   line="$(cat "${repoList}")"
-  kand="Installationskandidat"; keine="(keine)"; [[ "$LC_ALL" == C ]] && { kand=Candidate; keine="(none)"; }
-  case "$line" in ${served}) echo "  $kand: ${pgBuilds ? (pgBuilds.candidate || pgBuilds.versions[0][0]) : '2.31.0~ubuntu26.04'}" ;; *) echo "  $kand: $keine" ;; esac
+  inst="Installiert"; kand="Installationskandidat"; tab="Versionstabelle"; keine="(keine)"
+  [[ "$LC_ALL" == C ]] && { inst=Installed; kand=Candidate; tab="Version table"; keine="(none)"; }
+  case "$line" in
+    ${served})
+      echo "$2:"; echo "  $inst: $keine"
+      echo "  $kand: ${pgBuilds ? (pgBuilds.candidate || pgBuilds.versions[0][0]) : '2.31.0~ubuntu26.04'}"
+      ${pgBuilds ? `echo "  $tab:"
+${pgBuilds.versions.map(([v]) => `      echo "     ${v} ${pgBuilds.pins?.[v] ?? 500}"; echo "        500 https://packagecloud.io/timescale/timescaledb/ubuntu resolute/main arm64 Packages"`).join('\n')}` : ':'}
+      ;;
+    *) echo "  $kand: $keine" ;;
+  esac
 fi
 ${pgBuilds ? `
 if [[ "$1" == madison ]]; then
@@ -451,3 +462,76 @@ test('Kein Bau passt (PostgreSQL 18.5): wie bisher Paketname ohne Version, danac
     assert.deepEqual(installed(s.calls()), ['apt-get install -y postgresql-18-timescaledb']);
   } finally { s.cleanup(); }
 });
+
+// Codex 711c4e3e: Sperrt der Betreiber einen Bau mit Pin-Priority -1, installiert apt ihn trotzdem, sobald man ihn
+// ausdrücklich verlangt (`paket=version`; im Container mit apt 2.6.1, 2.8.3, 3.0.3 und 3.2.0 geprüft). In
+// `apt-cache policy` steht er mit der negativen Priorität in der Versionstabelle — der Rückfall lässt ihn aus.
+const PIN_1806 = { '2.32.1~ubuntu26.04-1806': -1 };
+
+test('Bau 2.32.1-1806 per Pin-Priority -1 gesperrt, PostgreSQL 18.6: nimmt 2.31.2-1806, nie den gesperrten Bau', () => {
+  const s = setup(UBUNTU_2604, { pgBuilds: { pgVersion: '18.6-0ubuntu0.26.04.1', ok: '2.31.2~ubuntu26.04-1806', versions: PG_BUILDS, pins: PIN_1806 } });
+  try {
+    s.run();
+    assert.deepEqual(installed(s.calls()), ['apt-get install -y timescaledb-2-loader-postgresql-18=2.31.2~ubuntu26.04-1806 timescaledb-2-postgresql-18=2.31.2~ubuntu26.04-1806']);
+  } finally { s.cleanup(); }
+});
+
+// Dieselbe Auswahl steht in pkg-maintain.sh (Wartung ohne Aufsicht) und im CI-Lauf. Die Funktion wird aus jeder
+// Kopie herausgelöst und gegen dieselben Attrappen gefahren; weicht eine Kopie ab, wird ihr Test rot.
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const TS_PKG_SPEC_COPIES = ['timescale-provision.sh', 'pkg-maintain.sh', 'scripts/ci/timescale-native-e2e.sh'];
+const PC_SRC = '        500 https://packagecloud.io/timescale/timescaledb/ubuntu resolute/main arm64 Packages';
+
+function tsPkgSpec(file, policy, pgVersion = '18.6-0ubuntu0.26.04.1') {
+  const lines = readFileSync(join(REPO, file), 'utf8').split('\n');
+  const start = lines.findIndex((l) => /^\s*ts_pkg_spec\(\) \{$/.test(l));
+  assert.ok(start >= 0, `${file}: ts_pkg_spec fehlt`);
+  const indent = lines[start].match(/^\s*/)[0];
+  const end = lines.findIndex((l, i) => i > start && l === `${indent}}`);
+  assert.ok(end > start, `${file}: Ende von ts_pkg_spec nicht gefunden`);
+  const fn = lines.slice(start, end + 1).join('\n');
+  const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsspec-'));
+  try {
+    const bin = join(dir, 'bin');
+    execFileSync('mkdir', ['-p', bin]);
+    const fake = (name, body) => { writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`); chmodSync(join(bin, name), 0o755); };
+    writeFileSync(join(dir, 'policy'), policy);
+    fake('apt-cache', `
+case "$1" in
+  policy) cat "${join(dir, 'policy')}" ;;
+  madison)
+${PG_BUILDS.map(([v]) => `    echo " $2 | ${v} | https://packagecloud.io/timescale/timescaledb/ubuntu resolute/main arm64 Packages"`).join('\n')}
+    ;;
+  show)
+    case "$2" in
+${PG_BUILDS.map(([v, pg]) => `      *=${v}) echo "Package: \${2%%=*}"; echo "Version: ${v}"; echo "Depends: postgresql-18 (>= ${pg}), libc6 (>= 2.38)" ;;`).join('\n')}
+    esac ;;
+esac`);
+    fake('dpkg-query', `[[ " $* " == *" postgresql-18 "* ]] && { echo -n "${pgVersion}"; exit 0; }\nexit 1`);
+    fake('dpkg', `[[ "$1" == --compare-versions ]] || exit 1
+hi="$(printf '%s\\n%s\\n' "$2" "$4" | sort -V | tail -n1)"
+case "$3" in ge) [[ "$hi" == "$2" ]] ;; le) [[ "$hi" == "$4" ]] ;; *) exit 1 ;; esac`);
+    return execFileSync('bash', ['-c', `set -euo pipefail\nPG_VER=18\n${fn}\nts_pkg_spec timescaledb-2-postgresql-18`], {
+      env: { PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+const policyOf = ({ installed = '(none)', pins = {}, star = '' } = {}) => [
+  'timescaledb-2-postgresql-18:', `  Installed: ${installed}`, '  Candidate: 2.32.1~ubuntu26.04-1807', '  Version table:',
+  ...PG_BUILDS.flatMap(([v]) => [`${v === star ? ' *** ' : '     '}${v} ${pins[v] ?? 500}`, PC_SRC, ...(v === star ? ['        100 /var/lib/dpkg/status'] : [])]),
+].join('\n');
+
+for (const file of TS_PKG_SPEC_COPIES) {
+  test(`${file}: ts_pkg_spec lässt einen per Pin-Priority -1 gesperrten Bau aus (Codex 711c4e3e)`, () => {
+    assert.equal(tsPkgSpec(file, policyOf()), 'timescaledb-2-postgresql-18=2.32.1~ubuntu26.04-1806');
+    assert.equal(tsPkgSpec(file, policyOf({ pins: PIN_1806 })), 'timescaledb-2-postgresql-18=2.31.2~ubuntu26.04-1806');
+  });
+
+  // Ist der gesperrte Bau schon installiert, ändert ihn auszuwählen nichts; ihn auszulassen hieße, apt ein
+  // Downgrade abzuverlangen, das `apt-get -y` ablehnt — und mit ihm den ganzen Aufruf (Loader, Toolkit).
+  test(`${file}: ts_pkg_spec behält den installierten Bau, auch wenn er gesperrt ist`, () => {
+    const policy = policyOf({ installed: '2.32.1~ubuntu26.04-1806', pins: PIN_1806, star: '2.32.1~ubuntu26.04-1806' });
+    assert.equal(tsPkgSpec(file, policy), 'timescaledb-2-postgresql-18=2.32.1~ubuntu26.04-1806');
+  });
+}

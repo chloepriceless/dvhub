@@ -109,19 +109,28 @@ if [[ "$SCENARIO" == broken ]]; then
   # "<paket>" (apt entscheidet wie bisher), wenn sich nichts bestimmen laesst.
   # Gleiche Funktion wie in timescale-provision.sh.
   ts_pkg_spec() {
-    local pkg="$1" pg_pkg="postgresql-${PG_VER}" have ver deps need re cand
+    local pkg="$1" pg_pkg="postgresql-${PG_VER}" have ver deps need re cand pol neg
     have="$(dpkg-query -W -f='${Version}' "$pg_pkg" 2>/dev/null || true)"
     if [[ -z "$have" ]]; then printf '%s\n' "$pkg"; return 0; fi
     # apt-Kandidat = was apt nach den Regeln der Box (Pins, Prioritaeten) nehmen wuerde.
     # Nie darueber hinausgehen: eine ausdrueckliche Version uebergeht sonst einen Pin
     # des Betreibers (Codex 684697ca). Ohne Kandidat entscheidet apt wie bisher.
     # LC_ALL=C: auf einer deutschen Box heisst die Zeile sonst „Installationskandidat:“.
-    cand="$(LC_ALL=C apt-cache policy "$pkg" 2>/dev/null | sed -n 's/^ *Candidate: //p' | head -n1 || true)"
+    pol="$(LC_ALL=C apt-cache policy "$pkg" 2>/dev/null || true)"
+    cand="$(printf '%s\n' "$pol" | sed -n 's/^ *Candidate: //p' | head -n1 || true)"
     if [[ -z "$cand" || "$cand" == "(none)" ]]; then printf '%s\n' "$pkg"; return 0; fi
+    # Gesperrte Bauten (Pin-Priority < 0) auslassen: apt installiert eine ausdrueckliche
+    # Version auch dann, wenn der Betreiber sie gesperrt hat (apt 2.6 bis 3.2 im Container
+    # geprueft, Codex 711c4e3e). Versionstabelle: "     <version> <prioritaet>"; Quellzeilen
+    # haben mehr Felder oder keine Zahl am Ende. Der installierte Bau (" *** ") zaehlt nicht:
+    # ihn zu waehlen aendert nichts, ihn auszulassen verlangte ein Downgrade. Ist die Tabelle
+    # nicht lesbar, bleibt die Liste leer (Verhalten wie bisher).
+    neg="$(printf '%s\n' "$pol" | awk '/^ *Version table:/ { t = 1; next } t && NF == 2 && $2 ~ /^-[0-9]+$/ { print $1 }' || true)"
     re="(^|, )${pg_pkg} \\(>= ([^)]+)\\)"
     while IFS= read -r ver; do
       [[ -n "$ver" ]] || continue
       dpkg --compare-versions "$ver" le "$cand" || continue
+      if grep -qxF -- "$ver" <<<"$neg"; then continue; fi
       deps="$(apt-cache show "${pkg}=${ver}" 2>/dev/null | sed -n 's/^Depends: //p' | head -n1 || true)"
       need=""
       if [[ "$deps" =~ $re ]]; then need="${BASH_REMATCH[2]}"; fi
