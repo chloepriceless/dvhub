@@ -27,7 +27,47 @@
 //                      Regelvorgänge (Wolke, Laststoß) keine Anlage, eine
 //                      stockende Ladung zählt trotzdem (Gegenprüfung 52a6c756).
 //                      Verworfenes steht in der Tageszeile.
-//   Akku→Haus/Netz     senkt G anteilig: Anteil (G / Akku-Inhalt) × Entladung.
+//   Akku→Haus          senkt G 1:1: Netzstrom zuerst ins Haus (Entscheidung
+//                      Christin 20.11.2026: „Netzstrom zuerst ins Haus“). Bis
+//                      dahin anteilig (G / Inhalt × Entladung) — auf Prod
+//                      gingen in einer Nacht 12,9 kWh aus dem Akku ins Haus, G
+//                      sank nur von 2,29 auf 1,63 kWh, die Sperre stand seit
+//                      05.11. ohne Unterbrechung.
+//   Akku→Netz          nimmt zuerst den Teil des Inhalts, der kein Netzstrom ist
+//                      (PV: Inhalt über dem Boden − G), Netzstrom erst, wenn der
+//                      aufgebraucht ist. Rechnerisch wird so nie Netzstrom
+//                      verkauft, solange PV im Akku steckt; was danach als
+//                      „Akku→Netz aus Netzstrom“ zählt, ist echter Netzstrom-
+//                      Export (Nachweis).
+//                      Inhalt für den PV-Teil: Victron meldet den Ladestand
+//                      ganzzahlig, der Inhalt laut Lesung bleibt über viele
+//                      Messungen gleich. „Lesung − G“ hielte jede schon
+//                      gebuchte Ausfuhr für neuen PV (Codex 885ac894, P2), ein
+//                      nur sinkender PV-Teil übersähe PV-Ladung (Codex
+//                      df71923b, P1: Ausfuhr und Ladung im Wechsel ließen G bis
+//                      0 sinken). Darum führt der Zähler den Inhalt zwischen
+//                      zwei Lesungen mit: plus jede Akkuladung (PV und Netz,
+//                      beide Akkus), minus Akku→Haus und Akku→Netz, begrenzt auf
+//                      den Akku über dem Boden; was die Kappung (M21) aus G
+//                      nimmt, nimmt sie auch aus dem Inhalt (Codex 6cad67cb,
+//                      P2). Eine neue Lesung setzt ihn wieder auf die Messung;
+//                      sie zeigt den Stand NACH dem Schritt, der Inhalt davor
+//                      ist Messung − Laden + Entladung dieses Schritts (Codex
+//                      6cad67cb, P2: sonst zählte das Laden doppelt). Genauer
+//                      als die Lesung geht es nicht: an der Grenze PV/Netzstrom
+//                      entscheidet ihre Rundung (Victron: halber
+//                      Prozentschritt), wie bei der Kappung (M21). Laden zählt
+//                      erst ab dem nächsten Schritt (deckt keine Ausfuhr im
+//                      selben Schritt); Netzladung, die der Filter (siehe oben)
+//                      erst später bestätigt, steht bis dahin im PV-Teil.
+//   Reihenfolge        innerhalb eines Zählschritts: erst Haus, dann Netz.
+//                      Reicht der Inhalt vor dem Schritt für die Entladung im
+//                      Schritt, kommt umgekehrt dasselbe heraus. Nur wenn nicht
+//                      (der mitgeführte Inhalt hinkt hinterher), weicht es ab:
+//                      „erst Haus“ bucht dann mehr Netzstrom ins Haus und
+//                      weniger ins Netz (rechnerisch weniger verkauft).
+//                      Ohne sicheren Ladestand oder ohne Kapazität bucht
+//                      Entladen nichts ab (siehe unten).
 //   Verluste           G kann nie größer sein als der Akku-Inhalt über dem
 //                      Boden: nach JEDEM Abgleich G = min(G, Inhalt), der
 //                      Überschuss ist Verlust (M21, Entscheidung Christin
@@ -177,13 +217,23 @@ export function gridShareBatteryUncertain(victron, { nowMs = Date.now(), maxAgeM
 
 /**
  * Ein Zählschritt (rein, ohne Zustand).
+ * Entladung (Christin 20.11.2026, „Netzstrom zuerst ins Haus“): erst Akku→Haus, das G 1:1 senkt, dann Akku→Netz,
+ * das zuerst den PV-Teil des Inhalts nimmt und erst danach Netzstrom. Ohne sicheren Ladestand oder Kapazität bucht
+ * Entladen nichts ab.
  * @param {number} gridWh Netzstrom im Akku vor dem Schritt
  * @param {{dtMs:number, gridToBatteryW?:number, batteryToHomeW?:number, batteryToGridW?:number,
- *          socPct?:number|null, capacityWh?:number|null, floorPct?:number, extraInWh?:number}} p
- *   socPct: nur ein SICHERER Ladestand (der Tracker gibt bei unsicherem null) — ohne ihn keine Kappung am Inhalt.
- * @returns {{gridWh:number, inWh:number, toHomeWh:number, toGridWh:number, lossWh:number, capLossWh:number, share:number, storedWh:number|null}}
+ *          batteryChargeW?:number, socPct?:number|null, capacityWh?:number|null, floorPct?:number,
+ *          extraInWh?:number, contentCarry?:{storedWh:number, contentWh:number}|null}} p
+ *   socPct: nur ein SICHERER Ladestand (der Tracker gibt bei unsicherem null) — ohne ihn keine Kappung am Inhalt
+ *   und keine Abbuchung.
+ *   batteryChargeW: jede Akkuladung (PV und Netz, beide Akkus) — nur für den mitgeführten Inhalt; G wächst allein
+ *   über gridToBatteryW/extraInWh.
+ *   contentCarry: mitgeführter Inhalt nach dem letzten Schritt und die Lesung (storedWh), zu der er gehört. Gilt nur
+ *   bei unveränderter Lesung; sonst (oder ohne) zählt die Messung.
+ * @returns {{gridWh:number, inWh:number, toHomeWh:number, toGridWh:number, lossWh:number, capLossWh:number, share:number,
+ *            storedWh:number|null, contentWh:number|null}}
  */
-export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, batteryToGridW, socPct, capacityWh, floorPct = 0, extraInWh = 0 } = {}) {
+export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, batteryToGridW, batteryChargeW, socPct, capacityWh, floorPct = 0, extraInWh = 0, contentCarry = null } = {}) {
   const h = Math.max(0, Number(dtMs) || 0) / 3_600_000;
   const soc = finiteOrNull(socPct);
   const cap = finiteOrNull(capacityWh);
@@ -197,14 +247,31 @@ export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, ba
   const aboveFloorPct = known ? Math.max(0, Math.min(100, soc) - floor) : null;
   const storedWh = known ? aboveFloorPct / 100 * cap : null;
   let g = Math.max(0, Number(gridWh) || 0);
-  // Anteil zu Beginn des Schritts. Ohne Ladestand nimmt Entladen nichts weg —
-  // der Zähler bleibt dann eher zu hoch als zu niedrig (Sperre im Zweifel an).
-  const shareBefore = !known ? 0 : (g <= 0 ? 0 : (storedWh > 0 ? Math.min(1, g / storedWh) : 1));
   // extraInWh: Netzladung aus früheren Schritten, die erst jetzt als echte
   // Ladung bestätigt ist (filterGridInflow).
   const inWh = pos(gridToBatteryW) * h + pos(extraInWh);
-  const toHomeWh = Math.min(g, shareBefore * pos(batteryToHomeW) * h);
-  const toGridWh = Math.min(g - toHomeWh, shareBefore * pos(batteryToGridW) * h);
+  // Entladung in diesem Schritt. Ohne sicheren Ladestand oder ohne Kapazität nimmt sie nichts weg — der Zähler bleibt
+  // dann eher zu hoch als zu niedrig (Sperre im Zweifel an).
+  const homeWh = known ? pos(batteryToHomeW) * h : 0;
+  const exportWh = known ? pos(batteryToGridW) * h : 0;
+  // Inhalt über dem Boden vor dem Schritt: bei unveränderter Lesung der mitgeführte (Codex 885ac894 P2 / df71923b
+  // P1, siehe Kopf), sonst aus der Messung zurückgerechnet — die Lesung zeigt den Stand NACH dem Schritt, also minus
+  // Laden, plus Entladung dieses Schritts (sonst zählte beides doppelt, Codex 6cad67cb P2). PV-Teil = Inhalt − G.
+  const chargeWh = known ? pos(batteryChargeW) * h : 0;
+  const maxContentWh = known ? Math.max(0, 100 - floor) / 100 * cap : null;
+  const carried = contentCarry && contentCarry.storedWh === storedWh ? finiteOrNull(contentCarry.contentWh) : null;
+  const contentBeforeWh = known
+    ? Math.max(0, Math.min(maxContentWh, carried ?? storedWh - chargeWh + homeWh + exportWh))
+    : null;
+  const pvBeforeWh = known ? Math.max(0, contentBeforeWh - g) : 0;
+  // 1. Akku→Haus: Netzstrom zuerst ins Haus, 1:1 (Christin 20.11.2026); nur was darüber hinausgeht, kommt aus PV.
+  const toHomeWh = Math.min(g, homeWh);
+  const pvAfterHomeWh = Math.max(0, pvBeforeWh - (homeWh - toHomeWh));
+  // 2. Akku→Netz: zuerst der PV-Teil, Netzstrom erst danach.
+  const exportFromPvWh = Math.min(pvAfterHomeWh, exportWh);
+  const toGridWh = Math.min(g - toHomeWh, exportWh - exportFromPvWh);
+  // Mitgeführter Inhalt nach dem Schritt: plus Laden, minus Entladung (Laden deckt erst ab dem nächsten Schritt).
+  let contentWh = known ? Math.max(0, Math.min(maxContentWh, contentBeforeWh + chargeWh - homeWh - exportWh)) : null;
   g = g - toHomeWh - toGridWh + inWh;
   let lossWh = 0;
   // M21 (Entscheidung Christin 19.11.2026, „wie im Feld gemessen“): nach jedem Abgleich nie mehr Netzstrom als der
@@ -215,6 +282,9 @@ export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, ba
   if (storedWh != null && g > storedWh) {
     capLossWh = g - storedWh;
     g = storedWh;
+    // Was die Kappung aus G nimmt, ist auch nicht mehr im mitgeführten Inhalt — sonst würde es zu PV (Codex 6cad67cb
+    // P2: Netzladung bei unveränderter Lesung, gekappt, danach Ausfuhr als PV gezählt). Der PV-Teil bleibt gleich.
+    if (contentWh != null) contentWh = Math.max(g, contentWh - capLossWh);
   }
   lossWh += capLossWh;
   // Nie mehr Netzstrom als der ganze Akku fasst — auch ohne Ladestand
@@ -224,7 +294,7 @@ export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, ba
     g = cap;
   }
   const share = !known ? null : (g <= 0 ? 0 : (storedWh > 0 ? Math.min(1, g / storedWh) : 1));
-  return { gridWh: g, inWh, toHomeWh, toGridWh, lossWh, capLossWh, share, storedWh };
+  return { gridWh: g, inWh, toHomeWh, toGridWh, lossWh, capLossWh, share, storedWh, contentWh };
 }
 
 /**
@@ -340,6 +410,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
   let inflowFilter = null;
   // Akkukapazität fehlt (grid-share-poll.js): einmal je Prozess und Episode melden.
   let capacityMissingLogged = false;
+  // Mitgeführter Akku-Inhalt zwischen zwei Ladestands-Lesungen und die Lesung, zu der er gehört (stepGridShare
+  // contentCarry, Codex 885ac894 P2 / df71923b P1). Nur im Speicher: nach einem Neustart zählt wieder die Messung.
+  let contentCarry = null;
 
   function fresh() {
     return {
@@ -508,6 +581,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       gridToBatteryW: 0,
       batteryToHomeW: uncertain ? 0 : pos(v.batteryDirectUseW) + pos(v.secondBatteryDirectUseW),
       batteryToGridW: uncertain ? 0 : pos(v.batteryToGridW) + pos(v.secondBatteryToGridW),
+      // Jede Akkuladung (PV und Netz, beide Akkus, ohne Umladen zwischen ihnen — polling.js) nur für den
+      // mitgeführten Inhalt; G wächst allein über die gefilterte Netzladung.
+      batteryChargeW: uncertain ? 0 : pos(v.solarToBatteryW) + pos(v.secondSolarToBatteryW) + pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW),
     };
     trackUncertainty(nowMs, reasons);
     if (uncertain) {
@@ -517,7 +593,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     // Kappung am Inhalt nur mit sicherem Ladestand: ist er unsicher, geht null hinein (keine Kappung, kein Abbuchen).
     const socUncertain = reasons.some((x) => SOC_UNCERTAIN_REASONS.has(x));
     const gridBefore = st.gridWh;
-    const r = stepGridShare(st.gridWh, { dtMs, ...flows, extraInWh: filtered.inWh, socPct: socUncertain ? null : socPct, capacityWh, floorPct });
+    const r = stepGridShare(st.gridWh, { dtMs, ...flows, extraInWh: filtered.inWh, socPct: socUncertain ? null : socPct, capacityWh, floorPct, contentCarry });
+    // Mit unsicheren Akkuwerten (Flüsse als 0 gezählt) lässt sich der Inhalt nicht fortschreiben: dann wieder messen.
+    contentCarry = !uncertain && r.storedWh != null && r.contentWh != null ? { storedWh: r.storedWh, contentWh: r.contentWh } : null;
     if (uncertain) st.day.uncertainInWh = (st.day.uncertainInWh || 0) + r.inWh;
     st.gridWh = r.gridWh;
     if (r.storedWh != null) { st.storedWh = r.storedWh; st.share = r.share; }
@@ -555,9 +633,13 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     if (r.inWh || r.toHomeWh || r.toGridWh || r.lossWh) dirty = true;
     st.updatedAt = new Date(nowMs).toISOString();
 
-    // Live-Leistung aus Netzstrom (für Telemetrie und Leitstand).
-    const shareNow = st.share ?? 0;
-    live = { toHomeW: Math.round(shareNow * flows.batteryToHomeW), toGridW: Math.round(shareNow * flows.batteryToGridW) };
+    // Live-Leistung aus Netzstrom (für Telemetrie und Leitstand): nach derselben Regel wie die Abbuchung — die in
+    // diesem Schritt abgebuchte Energie als mittlere Leistung (Hausentladung ganz, solange Netzstrom drin ist;
+    // Einspeisung erst, wenn kein PV-Teil mehr im Akku ist). Ohne Schrittlänge (erster Messwert) 0.
+    const stepH = dtMs / 3_600_000;
+    live = stepH > 0
+      ? { toHomeW: Math.round(r.toHomeWh / stepH), toGridW: Math.round(r.toGridWh / stepH) }
+      : { toHomeW: 0, toGridW: 0 };
 
     const locked = lockFor(cfg);
     if (locked !== st.locked) {

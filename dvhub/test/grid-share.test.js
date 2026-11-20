@@ -1,9 +1,11 @@
 // test/grid-share.test.js — Netzstrom-Zähler im Akku (Christin 01./02.11.2026).
 //
-// Netz→Akku erhöht den Netzstrom-Anteil, Entladen senkt ihn anteilig (Anteil ×
-// Entladung), Verluste anteilig. Solange der Anteil über der Schwelle liegt,
-// darf der Akku nicht ins Netz entladen — Netzstrom darf rechnerisch nie mit
-// Marktprämie verkauft werden.
+// Netz→Akku erhöht den Netzstrom-Anteil. Akku→Haus senkt ihn 1:1 (Netzstrom
+// zuerst ins Haus, Christin 20.11.2026), Akku→Netz nimmt zuerst den PV-Teil des
+// Inhalts (mehr dazu in grid-share-netzstrom-zuerst.test.js). Mehr Netzstrom als
+// der Inhalt über dem Boden ist Verlust (M21). Solange der Anteil über der
+// Schwelle liegt, darf der Akku nicht ins Netz entladen — Netzstrom darf
+// rechnerisch nie mit Marktprämie verkauft werden.
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
@@ -50,22 +52,23 @@ test('Netz→Akku erhöht den Netzstrom-Anteil', () => {
   assert.equal(r.toGridWh, 0);
 });
 
-test('Entladen ins Haus senkt den Anteil anteilig (Anteil × Entladung)', () => {
-  // 20 kWh im Akku (Ladestand 26 % von 77 kWh = 20,02 kWh), davon 10 kWh Netzstrom.
+test('Entladen ins Haus senkt den Anteil 1:1 (Netzstrom zuerst ins Haus, Christin 20.11.2026)', () => {
+  // 20 kWh im Akku (Ladestand 26 % von 77 kWh = 20,02 kWh), davon 10 kWh Netzstrom. Bis 20.11. anteilig
+  // (10/20,02 × 2 kWh ≈ 1 kWh), jetzt kommen die 2 kWh ganz aus dem Netzstrom.
   const r = stepGridShare(10_000, { dtMs: 3_600_000, batteryToHomeW: 2_000, socPct: 26, capacityWh: 77_000 });
-  const share = 10_000 / (0.26 * 77_000);
-  near(r.toHomeWh, share * 2_000);
-  near(r.gridWh, 10_000 - share * 2_000);
+  near(r.toHomeWh, 2_000);
+  near(r.gridWh, 8_000);
   assert.equal(r.toGridWh, 0);
 });
 
-test('Akku→Netz wird als Netzstrom-Export gezählt (Nachweis)', () => {
-  const r = stepGridShare(5_000, { dtMs: 3_600_000, batteryToGridW: 1_000, socPct: 10, capacityWh: 50_000 });
-  near(r.toGridWh, 1_000);           // Anteil 100 %: 5 kWh Netzstrom bei 5 kWh im Akku
+test('Akku→Netz ohne PV-Teil im Akku wird als Netzstrom-Export gezählt (Nachweis)', () => {
+  // Die Lesung zeigt den Stand nach dem Schritt (8 % = 4 kWh): vorher 5 kWh, alles Netzstrom — kein PV-Teil.
+  const r = stepGridShare(5_000, { dtMs: 3_600_000, batteryToGridW: 1_000, socPct: 8, capacityWh: 50_000 });
+  near(r.toGridWh, 1_000);
   near(r.gridWh, 4_000);
 });
 
-test('Verluste anteilig: der Anteil kann nie größer sein als der Akku-Inhalt (M21: genau der Inhalt, ohne Reserve)', () => {
+test('Verluste: der Anteil kann nie größer sein als der Akku-Inhalt (M21: genau der Inhalt, ohne Reserve)', () => {
   // Akku-Inhalt laut Ladestand nur noch 10 % von 50 kWh. Bis M21 galt Ladestand + 1 % (5,5 kWh, ganzzahliger
   // Victron-SoC); Christin 19.11.2026: „wie im Feld gemessen“ → genau 5 kWh, der Rest ist Verlust.
   const r = stepGridShare(8_000, { dtMs: 1_000, socPct: 10, capacityWh: 50_000 });

@@ -2848,10 +2848,12 @@ async function loadGridShareCard() {
       body.innerHTML = '<table class="history-summary-table"><thead><tr><th>Tag</th><th>Netz→Akku kWh</th><th>Akku→Haus aus Netzstrom kWh</th>'
         + '<th>Akku→Netz aus Netzstrom kWh</th><th>Verlust kWh</th><th>Netzstrom Tagesende kWh</th><th>Sperre min</th><th title="Akkuwerte unsicher (Lesefehler, veraltet, eingefroren): in dieser Zeit wurde nichts abgebucht">Unsicher min</th></tr></thead>'
         + `<tbody>${todayRow}${days.map(row).join('')}</tbody></table>`
-        + '<p class="card-sub">Netz→Akku erhöht den Netzstrom-Anteil, Entladen senkt ihn anteilig (Anteil × Entladung), Verluste anteilig. '
+        + '<p class="card-sub">Netz→Akku erhöht den Netzstrom-Anteil. Entladen ins Haus senkt ihn 1:1 (Netzstrom zuerst ins Haus); '
+        + 'Einspeisung aus dem Akku nimmt zuerst den PV-Anteil und zählt erst als Netzstrom, wenn kein PV mehr im Akku ist. '
+        + 'Mehr Netzstrom als der Akku-Inhalt über der Entlade-Grenze ist Verlust. '
         + 'Es zählt jede Netzladung, gleich wer sie auslöst — wenn innerhalb von 30 s im Mittel mindestens 150 W und mindestens 10 s lang 150 W oder mehr fließen (Regelpendeln und kurze Regelvorgänge nicht). '
         + 'Solange mehr als die Schwelle im Akku ist, speist der Akku nicht ins Netz ein; PV-Einspeisung bleibt. „Akku→Netz aus Netzstrom“ soll 0 sein '
-        + '(Rest: Regelpuffer des Standard-Sollwerts).</p>';
+        + '(Rest: Regelpuffer des Standard-Sollwerts, wenn kein PV mehr im Akku ist).</p>';
     }
     await renderGridShareChart(date, generation);
   } catch (_) {
