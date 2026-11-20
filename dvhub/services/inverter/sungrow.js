@@ -995,14 +995,16 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Master (Codex 2a0f18b5 P2): bevor DVhub einen gefundenen Modus 2 übernimmt, einen Slave, den es nicht führt, auf
   // Stopp setzen und das bestätigen — der Slave folgt dem Master-Modus, sein Befehl ist so unbekannt wie der des
   // Masters. Nicht bestätigt → Übernahme in diesem Takt zurückstellen (Fehler; nächster Takt versucht es neu).
-  // Ein Slave in Notladung wird nie kommandiert (S-36) — der Aufrufer lässt ihn aus.
+  // Ein Slave in Notladung wird nie kommandiert (S-36): dann wartet die Übernahme, bis die Notladung vorbei ist und
+  // der Stopp möglich wird (Codex c5502afe P2 — sonst prüfte danach niemand mehr den alten Slave-Befehl).
   async function stopUnownedSlaveBeforeAdoption() {
     if (isSlave || !slaveActuator || slaveActuator.ownsControl?.() === true) return;
     // Ohne zweiten WR gibt es keinen Slave: der immer angelegte Slave-Aktuator (schedule-eval.js) fiele sonst auf die
-    // Master-Verbindung zurück. Einen Slave in Notladung kommandiert DVhub nie (S-36).
+    // Master-Verbindung zurück.
     if (!resolveSecondInverter(getCfg()).enabled) return;
-    if (isSungrowEmergencyCharge(state.sungrowSecond?.runningState)) return;
-    const ss = await slaveActuator.stopUnowned('master_adopted');
+    const ss = isSungrowEmergencyCharge(state.sungrowSecond?.runningState)
+      ? { ok: false, emergency: true, error: 'slave_emergency_charge' }
+      : await slaveActuator.stopUnowned('master_adopted');
     if (ss?.ok === true) return;
     const err = new Error(`Übernahme des Modus 2 zurückgestellt: Slave nicht auf Stopp bestätigt (${ss?.error || 'unbekannt'})`);
     err.code = ss?.blocked ? 'emergency_stop_active' : 'adopt_slave_unconfirmed';
@@ -1890,7 +1892,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       const adoptMaster = needsAdoption(mdev, masterDecision, ctl.modeValue);
       // Codex 2a0f18b5 P2: führt DVhub den Slave in diesem Takt nicht (master-only, Slave-Fehler), folgt er trotzdem dem
       // Modus 2 des Masters — sein Befehl liefe unter dem übernommenen Modus weiter. Vor der Übernahme einmal auf Stopp.
-      if (adoptMaster && !slaveEmergency) await stopUnownedSlaveBeforeAdoption();
+      // Codex c5502afe P2: ein Slave in Notladung wird nicht kommandiert. Führt ihn die Strategie danach wieder
+      // (nicht master-only), übernimmt ihn DVhub dann per Write — der Master darf jetzt übernommen werden. Bei
+      // master-only führte ihn danach niemand → die Übernahme wartet, bis die Notladung vorbei ist.
+      if (adoptMaster && (!slaveEmergency || slaveUncommanded)) await stopUnownedSlaveBeforeAdoption();
       // Schreibdrossel (N4/Aufgabe 5): Master 13051 nur bei Befehlswechsel, 13052 nur bei Änderung > stepW — und das
       // Log sungrow_ems_split_write NUR bei echtem Write (im Feld lief es jede Sekunde, /api/log reichte ~3 min).
       // Bei gap (Herzschlag-Lücke/Wiederaufnahme) immer voll schreiben.
@@ -2585,7 +2590,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   /**
    * H-9 (nur Slave, Codex 2a0f18b5 P2): vor der Übernahme des Masters einen Slave, den DVhub nicht führt, einmal auf
    * Stopp (0xCC) setzen und zurücklesen. Besitzt DVhub ihn oder steht er schon auf Stopp: kein Write. Kein Besitz
-   * (Stopp ist der Grundzustand), kein Modus-Write, im Not-Halt nichts. ok:false = nicht bestätigt.
+   * (Stopp ist der Grundzustand), kein Modus-Write, im Not-Halt nichts, in Notladung nichts (emergency: true).
+   * ok:false = nicht bestätigt.
    */
   function stopUnowned(reason = 'master_adopted') {
     return serial(async () => {
@@ -2603,7 +2609,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         // lesbar → nicht bestätigt, die Übernahme wartet (Codex 4e3fc521 P2).
         const rs = await transport.mbRequest({ ...endpoint(conf), fc: 4, address: wire(13000), quantity: 1 });
         if (!Array.isArray(rs) || rs.length < 1) throw new Error('Betriebszustand 13000: unvollständige Antwort');
-        if (isSungrowEmergencyCharge(rs[0])) { publish(); return { ok: true, skipped: true, reason: 'emergency_charge' }; }
+        if (isSungrowEmergencyCharge(rs[0])) { publish(); return { ok: false, emergency: true, error: 'slave_emergency_charge' }; }
         st.dev = null;
         const dev = await readDevice(conf);
         if (dev.mode === EMS_MODE.VPP) throw foreignModeError(dev.mode);

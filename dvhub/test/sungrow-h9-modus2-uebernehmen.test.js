@@ -391,7 +391,10 @@ test('H-9 zwei WR, master-only: Slave-Stopp scheitert einmal → Übernahme zur�
 
 // Codex 4e3fc521 P2: ohne Slave-Telemetrie ist sein Betriebszustand unbekannt. Vor dem Stopp liest DVhub ihn am Slave
 // (FC4 13000); in Notladung (0x4001) wird der Slave nie kommandiert, nicht lesbar → Übernahme zurückgestellt.
-test('H-9 zwei WR ohne Slave-Telemetrie: Slave in Notladung wird vor der Master-Übernahme nicht beschrieben (Codex 4e3fc521 P2)', async () => {
+// Codex c5502afe P2: übernähme DVhub den Master, während der Slave in Notladung ist, prüfte danach niemand mehr dessen
+// alten Befehl (master-only bzw. ohne Telemetrie wird der Slave nicht geführt). Darum wartet die Übernahme dann, bis
+// die Notladung vorbei ist, und setzt den Slave erst danach auf Stopp.
+test('H-9 zwei WR ohne Slave-Telemetrie: Slave in Notladung → kein Slave-Write, Übernahme wartet bis nach der Notladung (Codex 4e3fc521/c5502afe P2)', async () => {
   const r = splitRig({
     masterHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 },
     slaveHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.CHARGE, [POWER]: 2000 },
@@ -399,10 +402,34 @@ test('H-9 zwei WR ohne Slave-Telemetrie: Slave in Notladung wird vor der Master-
   });
   delete r.state.sungrowSecond; // Begleitdienst hat (noch) keine Werte → Einzelpfad am Master
   const res = await r.ems.applySetpoint(-6000, 'rule:abend');
-  assert.equal(res.ok, true, JSON.stringify(res));
-  assert.ok(!r.order.some((e) => e.startsWith('S:')), `kein Write an den Slave in Notladung: ${r.order}`);
-  assert.ok(r.order.includes(`M:${CMD}=${EMS_CMD.DISCHARGE}`), `Master übernommen: ${r.order}`);
+  assert.equal(res.ok, false, JSON.stringify(res));
+  assert.deepEqual(r.order, [], 'weder Slave (Notladung) noch Master (Übernahme wartet)');
   assert.ok(r.slaveT.reads.some((x) => x.fc === 4 && x.address === wire(13000)), 'Betriebszustand am Slave gelesen');
+  assert.notEqual(r.ems._st.target, null, 'Ziel bleibt');
+  // Notladung vorbei → nächster Takt: Slave auf Stopp, dann Master übernommen.
+  r.slaveImage.input.set(wire(13000), 0);
+  r.advance(30_000);
+  delete r.state.sungrowSecond;
+  const next = await r.ems.tick();
+  assert.equal(next.ok, true, JSON.stringify(next));
+  assert.equal(r.order[0], `S:${CMD}=${EMS_CMD.STOP}`);
+  assert.ok(r.order.includes(`M:${CMD}=${EMS_CMD.DISCHARGE}`), `Master übernommen: ${r.order}`);
+});
+
+test('H-9 zwei WR mit Telemetrie: Slave in Notladung — master-only wartet, eine führende Strategie übernimmt den Master (Codex c5502afe P2)', async () => {
+  const holding = { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 };
+  const slaveHolding = { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.CHARGE, [POWER]: 2000 };
+  // master-only: der Slave würde auch nach der Notladung nicht geführt → Übernahme wartet.
+  const a = splitRig({ strategy: 'master-only', masterHolding: holding, slaveHolding });
+  a.state.sungrowSecond.runningState = 0x4001;
+  assert.equal((await a.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  assert.deepEqual(a.order, []);
+  // soc-balance: nach der Notladung führt DVhub den Slave ohnehin (und übernimmt ihn dann per Write) → Master jetzt.
+  const b = splitRig({ masterHolding: holding, slaveHolding });
+  b.state.sungrowSecond.runningState = 0x4001;
+  assert.equal((await b.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  assert.ok(!b.order.some((e) => e.startsWith('S:')), `Slave in Notladung unberührt: ${b.order}`);
+  assert.ok(b.order.includes(`M:${CMD}=${EMS_CMD.DISCHARGE}`));
 });
 
 test('H-9 zwei WR ohne Slave-Telemetrie: Betriebszustand des Slave nicht lesbar → keine Übernahme in diesem Takt', async () => {

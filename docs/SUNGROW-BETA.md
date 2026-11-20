@@ -108,7 +108,8 @@ weiter. 13050 bleibt 2; 13058/13059 und 33047/33048 schreibt DVhub nie. Am Slave
 Befehl, bevor DVhub ihn als eigenen führt). Führt DVhub den Slave gerade nicht (Strategie „nur Master“, Slave-Fehler,
 Slave-Werte fehlen), setzt es einen Slave mit fremdem Befehl vor der Übernahme des Masters auf Stopp; ohne Bestätigung
 übernimmt es den Master in diesem Takt nicht (nächster Takt versucht es neu). Ein Slave in Notladung (Betriebszustand
-am Slave gelesen) wird nie kommandiert. Protokoll:
+am Slave gelesen) wird nie kommandiert; führt DVhub ihn danach nicht wieder („nur Master“, keine Slave-Werte), wartet
+die Übernahme bis nach der Notladung. Protokoll:
 `sungrow_ems_forced_adopted`. Im Not-Halt wird nichts
 übernommen; ein übernommener Modus 2 wird beim Not-Halt wie jeder eigene einmal zurückgenommen. Ist der Modus 2
 ungewollt, hilft „Sungrow freigeben“ (auch im Not-Halt). Bei External-Steuerung verlässt DVhub einen gefundenen
