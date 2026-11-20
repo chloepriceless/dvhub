@@ -62,8 +62,9 @@ test('Entladen ins Haus senkt den Anteil 1:1 (Netzstrom zuerst ins Haus, Christi
 });
 
 test('Akku→Netz ohne PV-Teil im Akku wird als Netzstrom-Export gezählt (Nachweis)', () => {
-  const r = stepGridShare(5_000, { dtMs: 3_600_000, batteryToGridW: 1_000, socPct: 10, capacityWh: 50_000 });
-  near(r.toGridWh, 1_000);           // 5 kWh Netzstrom bei 5 kWh im Akku: kein PV-Teil
+  // Die Lesung zeigt den Stand nach dem Schritt (8 % = 4 kWh): vorher 5 kWh, alles Netzstrom — kein PV-Teil.
+  const r = stepGridShare(5_000, { dtMs: 3_600_000, batteryToGridW: 1_000, socPct: 8, capacityWh: 50_000 });
+  near(r.toGridWh, 1_000);
   near(r.gridWh, 4_000);
 });
 
