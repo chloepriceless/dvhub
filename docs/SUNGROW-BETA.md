@@ -100,6 +100,16 @@ Betreiber die Frist, gilt für die Erkennung eines Hängers die im Gerät zuletz
 das merkt sich DVhub in `sungrow_ems_state.json` im Datenordner (übersteht Neustarts). Fremdes Modus 3/4 wird nie
 überschrieben, auch nicht im Not-Halt.
 
+**Gefundener Modus 2 (H-9, Christin 17./20.11.2026):** Modus 2 ist nie fremd. Findet DVhub bei Forced-Steuerung einen
+Modus 2, den es nicht besitzt (anderes System, verlorener Merker), übernimmt es ihn und fährt ihn als eigenen weiter.
+Der Besitz entsteht durch DVhubs ersten Write: der eigene Befehl (13051), bei Laden/Entladen auch die Leistung
+(13052), auch wenn das Gerät schon dasselbe zeigt. Ein unbekannter Gerätewert läuft so nie unter DVhubs Besitz
+weiter. 13050 bleibt 2; 13058/13059 und 33047/33048 schreibt DVhub nie. Am Slave gilt dasselbe (ein Write mit DVhubs
+Befehl, bevor DVhub ihn als eigenen führt). Protokoll: `sungrow_ems_forced_adopted`. Im Not-Halt wird nichts
+übernommen; ein übernommener Modus 2 wird beim Not-Halt wie jeder eigene einmal zurückgenommen. Ist der Modus 2
+ungewollt, hilft „Sungrow freigeben“ (auch im Not-Halt). Bei External-Steuerung verlässt DVhub einen gefundenen
+Modus 2 wie bisher mit bekannten Writes (Rückgabe in Modus 0 bzw. Eintritt in Modus 3).
+
 **Knopf „Sungrow freigeben“** (WR-Kachel, `POST /api/sungrow/release`, auch im Not-Halt): Stopp (0xCC) erst an den
 Slave, dann an den Master, danach Master in Modus 0, zurücklesen. Die Steuerung gibt DVhub erst ab, wenn es Stopp und
 Modus 0 zurückliest. Scheitert das (Zeitüberschreitung, nur halb angekommen), bleibt die Freigabe als Auftrag stehen:

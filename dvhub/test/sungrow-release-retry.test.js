@@ -334,7 +334,7 @@ test('Option A, External EMS: zwischen den Versuchen kein Herzschlag — der WR 
   assertOnlyEmsRegisters(r);
 });
 
-test('Option A: ein fremder Modus 2 (nicht von DVhub) wird nicht wiederholt freigegeben und nicht übernommen', async () => {
+test('Option A: ein fremder Modus 2 (nicht von DVhub) wird nicht wiederholt freigegeben; ein neuer Sollwert übernimmt ihn (H-9)', async () => {
   const r = rig({ masterHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.CHARGE, [POWER]: 1234 } });
   r.fail.set(`M:${CMD}`, 'timeout');
   const out = await r.ems.forceRelease('manual_release');
@@ -345,9 +345,15 @@ test('Option A: ein fremder Modus 2 (nicht von DVhub) wird nicht wiederholt frei
   const n = r.writes.length;
   r.advance(5000); await r.ems.tick();
   r.advance(FIVE_MIN); await r.ems.tick();
-  assert.equal(r.writes.length, n, 'keine Wiederholung gegen ein fremdes EMS');
-  assert.equal((await r.ems.applySetpoint(-4000, 'rule:abend')).error, 'sungrow_foreign_ems_mode');
-  assert.deepEqual(r.dev(), { mode: EMS_MODE.FORCED, cmd: EMS_CMD.CHARGE, powerW: 1234 });
+  assert.equal(r.writes.length, n, 'keine Wiederholung der Freigabe ohne eigenen Betrieb');
+  // H-9 (Christin 17./20.11.2026): der nächste Sollwert übernimmt den Modus 2 mit DVhubs eigenem Befehl — der fremde
+  // Wert (Laden 1234 W) läuft nicht weiter, kein Moduswrite. P = −500 + 0,7 · (−4000) = −3300 → BDC-Grenze 3000 W.
+  const res = await r.ems.applySetpoint(-4000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(r.wireSince(n), [`M:${POWER}=3000`, `M:${CMD}=${EMS_CMD.DISCHARGE}`]);
+  assert.deepEqual(r.dev(), { mode: EMS_MODE.FORCED, cmd: EMS_CMD.DISCHARGE, powerW: 3000 });
+  assert.equal(r.ems._st.owns, true);
+  assertOnlyEmsRegisters(r);
 });
 
 test('Option A: Feldtest „Abregelung testen" bleibt unberührt — Lease und Einstellungen laufen weiter', async () => {

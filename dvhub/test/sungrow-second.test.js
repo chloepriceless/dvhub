@@ -210,7 +210,9 @@ test('M2: Besitz-Merker verloren, Master in DVhubs EIGENEM Modus 2 → NICHT fre
   assert.equal(r.ems._st.owns, true, 'Besitz zurückgenommen');
 });
 
-test('M2: fremder Modus 2 (NICHT DVhubs letzter Write) bleibt fremd → kein Übersteuern', async () => {
+// H-9 (Christin 17.11.2026, bestätigt 20.11.2026) kehrt diesen Fall um: ein Modus 2 ohne DVhub-Besitz wird nicht mehr
+// als fremd stehen gelassen, sondern mit DVhubs eigenem Befehl übernommen (test/sungrow-h9-modus2-uebernehmen.test.js).
+test('M2 → H-9: fremder Modus 2 (NICHT DVhubs letzter Write) wird mit DVhubs eigenem Befehl übernommen', async () => {
   const r = emsRig({ batteryPowerW: -500 });
   // Gerät steht real in Modus 2 mit FREMDEM Befehl (anderes System), DVhub hat nichts geschrieben.
   r.image.holding.set(wire(13050), EMS_MODE.FORCED);
@@ -219,9 +221,11 @@ test('M2: fremder Modus 2 (NICHT DVhubs letzter Write) bleibt fremd → kein Üb
   r.ems._st.dev = null; r.ems._st.lastMasterWrite = null;
   r.ems._st.owns = false; r.ems._st.ownMode = null;
   const res = await r.ems.applySetpoint(-4000, 'rule:abend');
-  // Ohne passenden eigenen Write ist Modus 2 fremd → foreign, DVhub übersteuert NICHT (kein claim).
-  assert.ok(res.ok === false || res.error === 'sungrow_foreign_ems_mode' || res.skipped === true, JSON.stringify(res));
-  assert.notEqual(r.ems._st.owns, true, 'DVhub beansprucht den fremden Modus 2 NICHT');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  // P = −500 + 0,7 · (−4000) = −3300 → Master-BDC 3000 W. Bekannter Write: Leistung und Befehl, kein Moduswrite.
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[POWER, 3000], [CMD, EMS_CMD.DISCHARGE]]);
+  assert.equal(r.ems._st.owns, true, 'Besitz durch DVhubs eigenen Write');
+  assert.equal(r.ems._st.ownMode, EMS_MODE.FORCED);
 });
 
 test('N5: sungrowConfiguredRegulateMs — Master-Takt, Slave getrennt bzw. geerbt, 0 = Auto', () => {
@@ -881,15 +885,16 @@ function slaveEmsRig({ mode = EMS_MODE.FORCED, cmd = EMS_CMD.STOP, power = 0 } =
   return { ems, t, image, state, cfg };
 }
 
-test('M12: Slave im von DVhub geführten Zustand (Modus 2 + 0xCC) → Besitz übernommen, auch ohne Write', async () => {
+// H-9 (Christin 17./20.11.2026) ersetzt M12: der Besitz entsteht durch DVhubs eigenen Write, nicht mehr ohne Write.
+test('M12 → H-9: Slave im von DVhub geführten Zustand (Modus 2 + 0xCC) → Besitz per einem bekannten Write (0xCC)', async () => {
   const r = slaveEmsRig({ mode: EMS_MODE.FORCED, cmd: EMS_CMD.STOP, power: 0 });
   assert.equal(r.ems._st.owns, false, 'vorher Besitz nein');
   const res = await r.ems.applyDirectCommand({ mode: 'forced', command: 'stop', powerW: 0, reason: 'floor' });
   assert.equal(res.ok, true);
-  assert.equal(res.unchanged, true, 'kein Write (schon im Zielzustand)');
+  assert.notEqual(res.unchanged, true);
   assert.equal(r.ems._st.owns, true, 'Besitz übernommen');
   assert.equal(r.ems._st.ownMode, EMS_MODE.FORCED);
-  assert.deepEqual(r.t.writes, [], 'kein Write ausgelöst');
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP]], 'genau ein Write: Befehl Stopp');
 });
 
 test('M12: Slave bei Rückzug (self-Vorgabe) übernimmt NICHT den Besitz', async () => {
