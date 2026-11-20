@@ -424,6 +424,91 @@ test('Takt ohne Historie-Aufruf erkennt eine neue Inbetriebnahme aus der Config 
   assert.equal(r.central.calls.length, 2);
 });
 
+// Codex 2bd0bf21 (P2): dvhub.online liefert einen gültigen Stand, dem der Monat einer
+// eingetragenen Anlage noch fehlt (Server hinter einer neuen Veröffentlichung). Bisher
+// nahm die Box ihn an und fragte nie direkt nach — die Anlage blieb ohne Wert.
+function directDataWith(...months) {
+  const data = directData();
+  for (const month of months) {
+    data.applicableValueTiersByMonth[month] = JSON.parse(JSON.stringify(expected.applicableValueTiersByMonth['2026-12']));
+    data.fullFeedApplicableValueTiersByMonth[month] = JSON.parse(JSON.stringify(expected.fullFeedApplicableValueTiersByMonth['2026-12']));
+  }
+  return data;
+}
+
+test('dvhub.online ohne den Monat der Anlage → zusätzlich direkt nachsehen; reicht die BNetzA weiter, gilt ihr Stand (Codex 2bd0bf21)', async () => {
+  const plants = [...PLANTS, { kwp: 8, commissionedAt: '2027-02-10' }];
+  const r = rig({ plants, direct: async () => directDataWith('2027-01', '2027-02') });
+  await r.service.tick();
+  assert.equal(r.central.calls.length, 1);
+  assert.equal(r.state.directCalls, 1);
+  const saved = JSON.parse(fs.readFileSync(r.file, 'utf8'));
+  assert.ok(saved.applicableValueTiersByMonth['2027-02'], 'Monat der Anlage ist jetzt da');
+  assert.ok(saved.fullFeedApplicableValueTiersByMonth['2027-02']);
+  assert.equal(saved.via, 'bundesnetzagentur');
+  assert.deepEqual(events(r).filter((e) => e.startsWith('applicable_value_central_incomplete')), ['applicable_value_central_incomplete:warn']);
+});
+
+test('dvhub.online ohne den Monat, BNetzA auch nicht → zentraler Stand bleibt; direkt höchstens einmal am Tag (Codex 2bd0bf21)', async () => {
+  const plants = [...PLANTS, { kwp: 8, commissionedAt: '2027-02-10' }];
+  const r = rig({ plants });
+  await r.service.tick();
+  assert.equal(r.state.directCalls, 1);
+  const saved = JSON.parse(fs.readFileSync(r.file, 'utf8'));
+  assert.equal(saved.via, 'dvhub_online');
+  assert.equal(Object.keys(saved.applicableValueTiersByMonth).sort().at(-1), '2026-12');
+  // alle 6 h fragt die Box dvhub.online erneut, die BNetzA aber nicht
+  r.advance(6 * 3600_000);
+  await r.service.tick();
+  r.advance(6 * 3600_000);
+  await r.service.tick();
+  assert.equal(r.central.calls.length, 3);
+  assert.equal(r.state.directCalls, 1);
+  // nach einem Tag einmal wieder
+  r.advance(13 * 3600_000);
+  await r.service.tick();
+  assert.equal(r.central.calls.length, 4);
+  assert.equal(r.state.directCalls, 2);
+});
+
+test('dvhub.online ohne den Monat, BNetzA scheitert → zentraler Stand bleibt, nur Warnung (Codex 2bd0bf21)', async () => {
+  const plants = [...PLANTS, { kwp: 8, commissionedAt: '2027-02-10' }];
+  const r = rig({ plants, direct: async () => { throw new Error('HTTP 404'); } });
+  await r.service.tick();
+  const saved = JSON.parse(fs.readFileSync(r.file, 'utf8'));
+  assert.equal(saved.via, 'dvhub_online');
+  assert.equal(saved.refreshState.lastAttemptOk, true);
+  assert.ok(events(r).includes('applicable_value_direct_completion_failed:warn'));
+  assert.ok(!events(r).some((e) => e.endsWith(':error')));
+});
+
+test('BNetzA reicht nur teilweise weiter (01/2027, Anlage braucht 02/2027) → Stand bleibt erweitert, direkt trotzdem nur einmal am Tag (Codex 6aac82b2)', async () => {
+  const plants = [...PLANTS, { kwp: 8, commissionedAt: '2027-02-10' }];
+  const r = rig({ plants, direct: async () => directDataWith('2027-01') });
+  await r.service.tick();
+  assert.equal(r.state.directCalls, 1);
+  const lastMonth = () => Object.keys(JSON.parse(fs.readFileSync(r.file, 'utf8')).applicableValueTiersByMonth).sort().at(-1);
+  assert.equal(lastMonth(), '2027-01');
+  // dvhub.online endet weiter bei 12/2026 und wird abgelehnt — aber kein neuer BNetzA-Abruf
+  for (let i = 0; i < 3; i += 1) {
+    r.advance(6 * 3600_000);
+    await r.service.tick();
+  }
+  assert.equal(r.state.directCalls, 1);
+  assert.equal(lastMonth(), '2027-01');
+  assert.ok(!events(r).some((e) => e.endsWith(':error')));
+  // nach einem Tag einmal wieder
+  r.advance(7 * 3600_000);
+  await r.service.tick();
+  assert.equal(r.state.directCalls, 2);
+});
+
+test('dvhub.online deckt alle Anlagen ab → kein zusätzlicher BNetzA-Abruf', async () => {
+  const r = rig();
+  await r.service.tick();
+  assert.equal(r.state.directCalls, 0);
+});
+
 // ── Log-Stufen ───────────────────────────────────────────────────────────────
 
 test('Log: Fehlschlag ohne Cache mit PV-Anlage = error; mit gültigem Cache nur warn', async () => {
