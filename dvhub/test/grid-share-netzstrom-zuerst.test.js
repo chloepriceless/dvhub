@@ -107,6 +107,47 @@ test('Akku→Netz: der PV-Teil zählt nur über dem Entlade-Boden (M10)', () => 
   near(r.gridWh, 2_000);
 });
 
+// Codex 885ac894 P2: Victron meldet den Ladestand ganzzahlig — der Inhalt laut Lesung bleibt über viele Messungen
+// gleich. Leitete jeder Schritt den PV-Teil neu aus „Inhalt − G“ ab, erschien jede schon gebuchte Netzstrom-Ausfuhr
+// im nächsten Schritt als PV: von 500 Wh Ausfuhr aus einem reinen Netzstrom-Akku zählten nur ~25 Wh als Netzstrom,
+// der Rest kam beim nächsten Ladestands-Sprung als Verlust (M21) — falscher Nachweis.
+test('ganzzahliger Ladestand: Ausfuhr aus einem reinen Netzstrom-Akku zählt ganz als Netzstrom, nicht als Verlust', () => {
+  const dir = mkDir();
+  try {
+    const t = trackerWith(dir, 5_000);
+    const t0 = Date.parse('2026-11-20T03:00:00Z');
+    // 10 kWh, 50 % → 5 kWh Inhalt, alles Netzstrom. 6 kW ins Netz, alle 5 s, 300 s = 500 Wh.
+    t.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 10_000 });
+    for (let s = 5; s <= 300; s += 5) {
+      t.tick({ nowMs: t0 + s * 1_000, victron: { batteryToGridW: 6_000 }, socPct: Math.round(50 - 5 * s / 300), capacityWh: 10_000 });
+    }
+    const sum = t.summary();
+    near(sum.today.batteryToGridFromGridKwh, 0.5, 0.01);
+    // Verlust höchstens die Rundung der Lesung (halber Prozentschritt = 50 Wh, M21 beim ersten Sprung 50 → 49 %),
+    // nicht mehr die ganze Ausfuhr (vorher ~0,41 kWh).
+    assert.ok(sum.today.lossFromGridKwh <= 0.05, `kein Verlust statt Ausfuhr: ${sum.today.lossFromGridKwh} kWh`);
+    near(sum.gridWh, 4_500, 50);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('stepGridShare: der mitgeführte PV-Teil gilt nur bei unveränderter Lesung', () => {
+  const p = { dtMs: HOUR, batteryToGridW: 1_000, socPct: 50, capacityWh: 10_000 };
+  // Lesung 5 kWh, G 4 kWh, mitgeführter PV-Teil 0 (schon ausgeführt): 1 kWh ins Netz ist Netzstrom.
+  const same = stepGridShare(4_000, { ...p, pvCarry: { storedWh: 5_000, pvWh: 0 } });
+  near(same.toGridWh, 1_000);
+  assert.equal(same.pvWh, 0);
+  // Neue Lesung (anderer Inhalt): PV-Teil wieder aus der Messung, 1 kWh PV → kein Netzstrom.
+  const changed = stepGridShare(4_000, { ...p, pvCarry: { storedWh: 5_100, pvWh: 0 } });
+  assert.equal(changed.toGridWh, 0);
+  near(changed.pvWh, 0);
+  // Nie mehr PV als die Messung hergibt (Inhalt − G), auch wenn mitgeführt mehr stünde.
+  const capped = stepGridShare(4_000, { ...p, pvCarry: { storedWh: 5_000, pvWh: 3_000 } });
+  assert.equal(capped.toGridWh, 0);
+  near(capped.pvWh, 0);
+});
+
 // ── Reihenfolge im Schritt: erst Haus, dann Netz ──────────────────────────────
 
 test('Haus und Netz im selben Schritt: das Haus nimmt den Netzstrom, das Netz den PV-Teil', () => {
