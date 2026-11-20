@@ -65,14 +65,19 @@ test('Befund 3: Kapazität fehlt → keine Ersatzzahl, kein Kappen, kein Abbuche
   } finally { s.cleanup(); }
 });
 
-test('Befund 3: echte Kapazität (40 kWh) → richtig gekappt und anteilig abgebucht', () => {
+test('Befund 3: echte Kapazität (40 kWh) → nicht gekappt, Einspeisung kommt aus dem PV-Teil', () => {
   const s = setup({ capacityWh: 40_000 });
   try {
     chargeThenDischarge(s, Date.now() - 4 * 3600_000);
     const sum = s.ctx.gridShare.summary();
-    // 20 kWh Netzstrom bei 28 kWh Inhalt (70 %): Anteil ≈ 71 %, 6 kWh Entladung
-    // nehmen ~4,3 kWh Netzstrom mit — es bleiben ~15,7 kWh, Sperre an.
-    assert.ok(sum.gridWh > 15_000 && sum.gridWh < 16_500, `anteilig abgebucht: ${sum.gridWh} Wh`);
+    // 20 kWh Netzstrom bei 26 kWh Inhalt über dem Boden (70 %, Boden 5 %):
+    // 6 kWh PV-Teil. Die 6 kWh ins Netz kommen daraus (Akku→Netz nimmt zuerst
+    // PV, Christin 20.11.2026; bis dahin anteilig ~4,6 kWh Netzstrom) — es
+    // bleiben ~20 kWh, Sperre an. Am Ende ist der PV-Teil genau aufgebraucht;
+    // der ganzzahlige Ladestand lässt dabei ein paar Wh Netzstrom durch.
+    // Mit den früheren 8000 Wh Ersatzkapazität wäre auf ~5,7 kWh gekappt worden.
+    assert.ok(sum.gridWh > 19_500 && sum.gridWh <= 20_000, `nichts abgebucht: ${sum.gridWh} Wh`);
+    assert.ok(sum.today.batteryToGridFromGridKwh < 0.01, `kein nennenswerter Netzstrom ins Netz: ${sum.today.batteryToGridFromGridKwh} kWh`);
     assert.equal(sum.locked, true);
     assert.equal(sum.capacityMissing, false);
     assert.equal(s.logs.filter((l) => l.event === 'grid_share_capacity_missing').length, 0);

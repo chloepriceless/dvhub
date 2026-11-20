@@ -1282,59 +1282,50 @@ test('Akku halten: veraltete Hauslast → 0 (Eigenverbrauch), kein blinder Netzb
   assert.equal(Number(state.schedule.active.gridSetpointW.value), 0);
 });
 
-// --- M8 (Feld 16.11.): EOS-„Halten"/„Netzladen" aussetzen, solange der Netzstrom-Anteil im Akku gesperrt ist ---
+// --- Netzstrom-Sperre und EOS-„Halten" (Entscheidung Christin 20.11.2026) ---
+// M8 (Feld 16.11.) setzte EOS-„Halten" aus, solange der Netzstrom-Anteil im Akku gesperrt war: Eigenverbrauch statt
+// Halten, Hinweis im Leitstand. Christin 20.11.2026: „Netzstrom zuerst ins Haus, halten darf auch dann aktiv sein und
+// muss nicht ausgesetzt werden, halten macht ja genau das, deckt den Eigenverbrauch aus dem Netz“. Beim Halten kommt
+// die Last aus dem Netz und aus dem Akku fließt nichts ins Netz; die Sperre (nur Akku→Netz) hat nichts zu verhindern.
+// Die Sperre fällt seitdem über die Zählregel „Netzstrom zuerst ins Haus“ (grid-share.js), nicht über ausgesetztes Halten.
 
-test('M8: gridShare gesperrt → EOS-Halten ausgesetzt, Eigenverbrauch statt Halten, Leitstand-Hinweis', async () => {
+test('Netzstrom-Sperre: EOS-Halten läuft trotzdem nach Plan (eos_grid_hold, Live-Last − PV − Puffer)', async () => {
   const { ctx, state, logs } = holdCtx({ load: 1500, pv: 200 });
   ctx.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 2.19 }) };
   await createScheduleEvaluator(ctx).evaluateSchedule();
   const gp = state.schedule.active.gridSetpointW;
-  assert.equal(gp.source, 'eos_grid_hold_suspended', 'Halten ausgesetzt');
-  assert.notEqual(Number(gp.value), 1000, 'nicht der Halte-Netzbezug (1000)');
-  assert.equal(Number(gp.value), 0, 'Eigenverbrauch (Standard-Sollwert 0)');
-  assert.equal(state.ctrl.eosGridShareSuspend.kind, 'hold');
-  assert.equal(state.ctrl.eosGridShareSuspend.gridKwh, 2.19);
-  assert.ok(logs.some((l) => l.event === 'eos_grid_hold_suspended'), 'Hinweis protokolliert');
+  assert.equal(gp.source, 'eos_grid_hold', 'Halten nicht ausgesetzt');
+  assert.equal(Number(gp.value), 1000, '1500 − 200 − 300: die Last kommt aus dem Netz');
+  assert.equal(state.ctrl.eosGridHold?.valueW, 1000, 'Halte-Signal für den Entlade-Wächter');
+  assert.equal('eosGridShareSuspend' in state.ctrl, false, 'kein Aussetz-Hinweis mehr');
+  assert.ok(!logs.some((l) => l.event === 'eos_grid_hold_suspended'), 'kein Aussetz-Log');
+  assert.equal(findLog(logs, 'grid_share_export_capped').length, 0, 'der positive Halte-Sollwert ist keine Einspeisung');
 });
 
-test('M8: mit Ladestrom-Standard bleibt der Hinweis stehen und wird nur einmal protokolliert (Prod 19.11.)', async () => {
-  // Prod 19.11.: der zweite Schleifendurchlauf (chargeCurrentA mit Standardwert) löschte Hinweis und Merker des
-  // Netz-Sollwerts → Leitstand ohne Hinweis, Log-Zeile alle 5 s.
+test('Netzstrom-Sperre mit Ladestrom-Standard: Halten in jedem Takt, Halte-Log nur einmal', async () => {
+  // Prod 19.11.: der zweite Schleifendurchlauf (chargeCurrentA mit Standardwert) darf das Halten nicht stören.
   const { ctx, state, logs } = holdCtx({ load: 1500, pv: 200 });
   ctx.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 3.5 }) };
   state.schedule.config.defaultChargeCurrentA = 550;
   const ev = createScheduleEvaluator(ctx);
   for (let i = 0; i < 3; i++) {
     await ev.evaluateSchedule();
-    assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold_suspended', `Takt ${i + 1}: Halten ausgesetzt`);
-    assert.equal(state.ctrl.eosGridShareSuspend?.kind, 'hold', `Takt ${i + 1}: Leitstand-Hinweis bleibt`);
+    assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold', `Takt ${i + 1}: Halten läuft`);
+    assert.equal(Number(state.schedule.active.gridSetpointW.value), 1000, `Takt ${i + 1}: Live-Last − PV − Puffer`);
   }
-  assert.equal(logs.filter((l) => l.event === 'eos_grid_hold_suspended').length, 1, 'Hinweis nur einmal protokolliert');
+  assert.equal(logs.filter((l) => l.event === 'eos_grid_hold').length, 1, 'Halte-Log nur einmal');
+  assert.equal(logs.filter((l) => l.event === 'eos_grid_hold_suspended').length, 0, 'kein Aussetz-Log');
 });
 
-test('M8: kein Netz-Sollwert mehr (Regel weg, kein Standard) → Hinweis verschwindet', async () => {
-  const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
-  ctx.gridShare = { isLocked: () => true, summary: () => ({ gridKwh: 3.5 }) };
-  state.schedule.config.defaultChargeCurrentA = 550;
-  const ev = createScheduleEvaluator(ctx);
-  await ev.evaluateSchedule();
-  assert.equal(state.ctrl.eosGridShareSuspend?.kind, 'hold');
-  state.schedule.rules = [];
-  state.schedule.config.defaultGridSetpointW = null;
-  await ev.evaluateSchedule();
-  assert.equal(state.ctrl.eosGridShareSuspend, null, 'kein stehengebliebener Hinweis');
-});
-
-test('M8: Sperre gelöst → EOS-Halten greift wieder', async () => {
+test('Sperre frei → EOS-Halten wie bisher', async () => {
   const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
   ctx.gridShare = { isLocked: () => false };
   await createScheduleEvaluator(ctx).evaluateSchedule();
   assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold');
   assert.equal(Number(state.schedule.active.gridSetpointW.value), 1000);
-  assert.ok(!state.ctrl.eosGridShareSuspend, 'kein Aussetz-Hinweis mehr');
 });
 
-test('M8+M10: leerer Akku → Netzstrom-Sperre fällt → EOS-Halten läuft wieder (gemeinsamer Akzeptanztest)', async () => {
+test('echter Zähler: Halten läuft gesperrt und nach dem Boden-Reset (M10) gleich (gemeinsamer Akzeptanztest)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-m8m10-'));
   try {
     const trackerCfg = { optimizer: { allowGridCharge: true, gridChargeWithoutMispel: true }, schedule: { timezone: 'Europe/Berlin' } };
@@ -1342,17 +1333,20 @@ test('M8+M10: leerer Akku → Netzstrom-Sperre fällt → EOS-Halten läuft wied
     const t0 = Date.now();
     tracker.tick({ nowMs: t0, victron: {}, socPct: 50, capacityWh: 19290, floorPct: 11 });
     tracker.tick({ nowMs: t0 + 60_000, victron: { gridToBatteryW: 12_000, gridImportW: 12_000 }, socPct: 50, capacityWh: 19290, floorPct: 11 });
-    assert.equal(tracker.isLocked(), true, 'erst gesperrt → M8 setzt Halten aus');
+    assert.equal(tracker.isLocked(), true, 'erst gesperrt');
+    const locked = holdCtx({ load: 1500, pv: 200 });
+    locked.ctx.gridShare = tracker;
+    await createScheduleEvaluator(locked.ctx).evaluateSchedule();
+    assert.equal(locked.state.schedule.active.gridSetpointW.source, 'eos_grid_hold', 'gesperrt: Halten läuft');
+    assert.equal(Number(locked.state.schedule.active.gridSetpointW.value), 1000);
     // Akku bis knapp unter den Boden entleeren (real 10,95 %, Boden 11 %), idle → M10 löst die Sperre.
     for (let i = 1; i <= 8; i++) tracker.tick({ nowMs: t0 + 60_000 + i * 10_000, victron: {}, socPct: 10.95, capacityWh: 19290, floorPct: 11 });
     assert.equal(tracker.isLocked(), false, 'M10: Sperre gefallen bei leerem Akku');
-    // schedule-eval mit DIESEM (entsperrten) Tracker: eos_grid_hold NICHT mehr ausgesetzt, „Halten" läuft wieder.
     const { ctx, state } = holdCtx({ load: 1500, pv: 200 });
     ctx.gridShare = tracker;
     await createScheduleEvaluator(ctx).evaluateSchedule();
-    assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold', 'Halten läuft wieder');
+    assert.equal(state.schedule.active.gridSetpointW.source, 'eos_grid_hold', 'frei: Halten läuft');
     assert.equal(Number(state.schedule.active.gridSetpointW.value), 1000);
-    assert.ok(!state.ctrl.eosGridShareSuspend, 'kein Aussetz-Hinweis mehr');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1376,18 +1370,7 @@ test('M8: gridShare gesperrt → EOS-Netzladen läuft trotzdem nach Plan (Feld N
   const gp = state.schedule.active.gridSetpointW;
   assert.notEqual(gp.source, 'eos_grid_charge_suspended', 'Netzladen nicht ausgesetzt');
   assert.equal(Number(gp.value), 3000, 'der geplante Netzbezug');
-  assert.ok(!state.ctrl.eosGridShareSuspend, 'kein Aussetz-Hinweis');
   assert.ok(!logs.some((l) => l.event === 'eos_grid_charge_suspended'), 'kein Aussetz-Log');
-});
-
-test('M8: erst Halten ausgesetzt, dann Netzladen-Regel → Hinweis weg, Netzladen läuft', async () => {
-  const { ctx, state } = eosChargeCtx();
-  const ev = createScheduleEvaluator(ctx);
-  state.ctrl.eosGridShareSuspend = { at: Date.now(), kind: 'hold', gridKwh: 1.875, ruleId: 'eos-hold' };
-  state.ctrl._eosSuspendKey = 'eos_grid_hold_suspended:eos-hold';
-  await ev.evaluateSchedule();
-  assert.equal(Number(state.schedule.active.gridSetpointW.value), 3000);
-  assert.ok(!state.ctrl.eosGridShareSuspend, 'Halte-Hinweis aufgehoben, sobald keine Halte-Regel mehr gilt');
 });
 
 // Entlade-Wächter (Gegenprüfung 415a2f25): der Halte-Zweig meldet sich selbst

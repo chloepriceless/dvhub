@@ -27,7 +27,26 @@
 //                      Regelvorgänge (Wolke, Laststoß) keine Anlage, eine
 //                      stockende Ladung zählt trotzdem (Gegenprüfung 52a6c756).
 //                      Verworfenes steht in der Tageszeile.
-//   Akku→Haus/Netz     senkt G anteilig: Anteil (G / Akku-Inhalt) × Entladung.
+//   Akku→Haus          senkt G 1:1: Netzstrom zuerst ins Haus (Entscheidung
+//                      Christin 20.11.2026: „Netzstrom zuerst ins Haus“). Bis
+//                      dahin anteilig (G / Inhalt × Entladung) — auf Prod
+//                      gingen in einer Nacht 12,9 kWh aus dem Akku ins Haus, G
+//                      sank nur von 2,29 auf 1,63 kWh, die Sperre stand seit
+//                      05.11. ohne Unterbrechung.
+//   Akku→Netz          nimmt zuerst den Teil des Inhalts, der kein Netzstrom ist
+//                      (PV: Inhalt über dem Boden − G), Netzstrom erst, wenn der
+//                      aufgebraucht ist. Rechnerisch wird so nie Netzstrom
+//                      verkauft, solange PV im Akku steckt; was danach als
+//                      „Akku→Netz aus Netzstrom“ zählt, ist echter Netzstrom-
+//                      Export (Nachweis).
+//   Reihenfolge        innerhalb eines Zählschritts: erst Haus, dann Netz. Bei
+//                      stimmigen Werten (Entladung im Schritt höchstens der
+//                      gelesene Inhalt) kommt umgekehrt dasselbe heraus. Nur
+//                      wenn die Ladestands-Lesung hinterherhinkt, weicht es ab:
+//                      „erst Haus“ bucht dann mehr Netzstrom ins Haus und
+//                      weniger ins Netz (rechnerisch weniger verkauft).
+//                      Ohne sicheren Ladestand oder ohne Kapazität bucht
+//                      Entladen nichts ab (siehe unten).
 //   Verluste           G kann nie größer sein als der Akku-Inhalt über dem
 //                      Boden: nach JEDEM Abgleich G = min(G, Inhalt), der
 //                      Überschuss ist Verlust (M21, Entscheidung Christin
@@ -177,10 +196,14 @@ export function gridShareBatteryUncertain(victron, { nowMs = Date.now(), maxAgeM
 
 /**
  * Ein Zählschritt (rein, ohne Zustand).
+ * Entladung (Christin 20.11.2026, „Netzstrom zuerst ins Haus“): erst Akku→Haus, das G 1:1 senkt, dann Akku→Netz,
+ * das zuerst den PV-Teil des Inhalts nimmt und erst danach Netzstrom. Ohne sicheren Ladestand oder Kapazität bucht
+ * Entladen nichts ab.
  * @param {number} gridWh Netzstrom im Akku vor dem Schritt
  * @param {{dtMs:number, gridToBatteryW?:number, batteryToHomeW?:number, batteryToGridW?:number,
  *          socPct?:number|null, capacityWh?:number|null, floorPct?:number, extraInWh?:number}} p
- *   socPct: nur ein SICHERER Ladestand (der Tracker gibt bei unsicherem null) — ohne ihn keine Kappung am Inhalt.
+ *   socPct: nur ein SICHERER Ladestand (der Tracker gibt bei unsicherem null) — ohne ihn keine Kappung am Inhalt
+ *   und keine Abbuchung.
  * @returns {{gridWh:number, inWh:number, toHomeWh:number, toGridWh:number, lossWh:number, capLossWh:number, share:number, storedWh:number|null}}
  */
 export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, batteryToGridW, socPct, capacityWh, floorPct = 0, extraInWh = 0 } = {}) {
@@ -197,14 +220,20 @@ export function stepGridShare(gridWh, { dtMs, gridToBatteryW, batteryToHomeW, ba
   const aboveFloorPct = known ? Math.max(0, Math.min(100, soc) - floor) : null;
   const storedWh = known ? aboveFloorPct / 100 * cap : null;
   let g = Math.max(0, Number(gridWh) || 0);
-  // Anteil zu Beginn des Schritts. Ohne Ladestand nimmt Entladen nichts weg —
-  // der Zähler bleibt dann eher zu hoch als zu niedrig (Sperre im Zweifel an).
-  const shareBefore = !known ? 0 : (g <= 0 ? 0 : (storedWh > 0 ? Math.min(1, g / storedWh) : 1));
   // extraInWh: Netzladung aus früheren Schritten, die erst jetzt als echte
   // Ladung bestätigt ist (filterGridInflow).
   const inWh = pos(gridToBatteryW) * h + pos(extraInWh);
-  const toHomeWh = Math.min(g, shareBefore * pos(batteryToHomeW) * h);
-  const toGridWh = Math.min(g - toHomeWh, shareBefore * pos(batteryToGridW) * h);
+  // Entladung in diesem Schritt. Ohne sicheren Ladestand oder ohne Kapazität nimmt sie nichts weg — der Zähler bleibt
+  // dann eher zu hoch als zu niedrig (Sperre im Zweifel an).
+  const homeWh = known ? pos(batteryToHomeW) * h : 0;
+  const exportWh = known ? pos(batteryToGridW) * h : 0;
+  // 1. Akku→Haus: Netzstrom zuerst ins Haus, 1:1 (Christin 20.11.2026).
+  const toHomeWh = Math.min(g, homeWh);
+  // 2. Akku→Netz: zuerst der PV-Teil des Inhalts (über dem Boden), Netzstrom erst danach. Nach Schritt 1 ist davon
+  // noch Inhalt − max(G, Haus) übrig: das Haus hat zuerst den Netzstrom genommen, nur was darüber hinausging, kam aus
+  // PV. Inhalt = aktuelle Lesung; bei Schritten von Sekunden ist das der Inhalt im Schritt.
+  const pvAfterHomeWh = known ? Math.max(0, storedWh - Math.max(g, homeWh)) : 0;
+  const toGridWh = Math.min(g - toHomeWh, Math.max(0, exportWh - pvAfterHomeWh));
   g = g - toHomeWh - toGridWh + inWh;
   let lossWh = 0;
   // M21 (Entscheidung Christin 19.11.2026, „wie im Feld gemessen“): nach jedem Abgleich nie mehr Netzstrom als der
@@ -555,9 +584,13 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     if (r.inWh || r.toHomeWh || r.toGridWh || r.lossWh) dirty = true;
     st.updatedAt = new Date(nowMs).toISOString();
 
-    // Live-Leistung aus Netzstrom (für Telemetrie und Leitstand).
-    const shareNow = st.share ?? 0;
-    live = { toHomeW: Math.round(shareNow * flows.batteryToHomeW), toGridW: Math.round(shareNow * flows.batteryToGridW) };
+    // Live-Leistung aus Netzstrom (für Telemetrie und Leitstand): nach derselben Regel wie die Abbuchung — die in
+    // diesem Schritt abgebuchte Energie als mittlere Leistung (Hausentladung ganz, solange Netzstrom drin ist;
+    // Einspeisung erst, wenn kein PV-Teil mehr im Akku ist). Ohne Schrittlänge (erster Messwert) 0.
+    const stepH = dtMs / 3_600_000;
+    live = stepH > 0
+      ? { toHomeW: Math.round(r.toHomeWh / stepH), toGridW: Math.round(r.toGridWh / stepH) }
+      : { toHomeW: 0, toGridW: 0 };
 
     const locked = lockFor(cfg);
     if (locked !== st.locked) {
