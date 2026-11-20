@@ -132,20 +132,48 @@ test('ganzzahliger Ladestand: Ausfuhr aus einem reinen Netzstrom-Akku zählt gan
   }
 });
 
-test('stepGridShare: der mitgeführte PV-Teil gilt nur bei unveränderter Lesung', () => {
+// Codex df71923b P1: lud PV den Akku bei gleicher Lesung nach, wuchs der mitgeführte PV-Teil nicht mit — wechselten
+// Ausfuhr und PV-Ladung, ohne dass sich der ganzzahlige Ladestand änderte, sank G bis 0 und die Sperre fiel.
+test('ganzzahliger Ladestand: PV-Ladung füllt den PV-Teil wieder auf — Ausfuhr und Ladung im Wechsel lassen G stehen', () => {
+  const dir = mkDir();
+  try {
+    const t = trackerWith(dir, 3_000);
+    const t0 = Date.parse('2026-11-20T12:00:00Z');
+    // 10 kWh, 50 % → 5 kWh Inhalt: 3 kWh Netzstrom, 2 kWh PV. Je Runde 20 Wh ins Netz, dann 20 Wh PV in den Akku.
+    const p = { socPct: 50, capacityWh: 10_000 };
+    t.tick({ nowMs: t0, victron: {}, ...p });
+    let n = t0;
+    for (let i = 0; i < 250; i += 1) {
+      n += 5_000;
+      t.tick({ nowMs: n, victron: { batteryToGridW: 14_400 }, ...p });
+      n += 5_000;
+      t.tick({ nowMs: n, victron: { solarToBatteryW: 14_400 }, ...p });
+    }
+    const sum = t.summary();
+    near(sum.gridWh, 3_000);
+    assert.equal(sum.today.batteryToGridFromGridKwh, 0, 'die Ausfuhr kam aus PV');
+    assert.equal(t.isLocked(), true, 'Sperre bleibt');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('stepGridShare: der mitgeführte Inhalt gilt nur bei unveränderter Lesung, Laden erhöht ihn', () => {
   const p = { dtMs: HOUR, batteryToGridW: 1_000, socPct: 50, capacityWh: 10_000 };
-  // Lesung 5 kWh, G 4 kWh, mitgeführter PV-Teil 0 (schon ausgeführt): 1 kWh ins Netz ist Netzstrom.
-  const same = stepGridShare(4_000, { ...p, pvCarry: { storedWh: 5_000, pvWh: 0 } });
+  // Lesung 5 kWh, G 4 kWh, mitgeführter Inhalt 4 kWh (PV schon ausgeführt): 1 kWh ins Netz ist Netzstrom.
+  const same = stepGridShare(4_000, { ...p, contentCarry: { storedWh: 5_000, contentWh: 4_000 } });
   near(same.toGridWh, 1_000);
-  assert.equal(same.pvWh, 0);
-  // Neue Lesung (anderer Inhalt): PV-Teil wieder aus der Messung, 1 kWh PV → kein Netzstrom.
-  const changed = stepGridShare(4_000, { ...p, pvCarry: { storedWh: 5_100, pvWh: 0 } });
+  near(same.contentWh, 3_000);
+  // Neue Lesung (anderer Inhalt): Inhalt wieder aus der Messung, 1 kWh PV → kein Netzstrom.
+  const changed = stepGridShare(4_000, { ...p, contentCarry: { storedWh: 5_100, contentWh: 4_000 } });
   assert.equal(changed.toGridWh, 0);
-  near(changed.pvWh, 0);
-  // Nie mehr PV als die Messung hergibt (Inhalt − G), auch wenn mitgeführt mehr stünde.
-  const capped = stepGridShare(4_000, { ...p, pvCarry: { storedWh: 5_000, pvWh: 3_000 } });
-  assert.equal(capped.toGridWh, 0);
-  near(capped.pvWh, 0);
+  near(changed.contentWh, 4_000);
+  // Laden (PV oder Netz) erhöht den mitgeführten Inhalt — erst für den nächsten Schritt.
+  const charged = stepGridShare(4_000, { dtMs: HOUR, batteryChargeW: 500, socPct: 50, capacityWh: 10_000, contentCarry: { storedWh: 5_000, contentWh: 4_000 } });
+  near(charged.contentWh, 4_500);
+  // Nie mehr als der Akku über dem Boden fasst.
+  const full = stepGridShare(0, { dtMs: HOUR, batteryChargeW: 9_000, socPct: 50, capacityWh: 10_000, floorPct: 10, contentCarry: { storedWh: 4_000, contentWh: 4_000 } });
+  near(full.contentWh, 9_000);
 });
 
 // ── Reihenfolge im Schritt: erst Haus, dann Netz ──────────────────────────────
