@@ -105,7 +105,10 @@ Modus 2, den es nicht besitzt (anderes System, verlorener Merker), übernimmt es
 Der Besitz entsteht durch DVhubs ersten Write: der eigene Befehl (13051), bei Laden/Entladen auch die Leistung
 (13052), auch wenn das Gerät schon dasselbe zeigt. Ein unbekannter Gerätewert läuft so nie unter DVhubs Besitz
 weiter. 13050 bleibt 2; 13058/13059 und 33047/33048 schreibt DVhub nie. Am Slave gilt dasselbe (ein Write mit DVhubs
-Befehl, bevor DVhub ihn als eigenen führt). Protokoll: `sungrow_ems_forced_adopted`. Im Not-Halt wird nichts
+Befehl, bevor DVhub ihn als eigenen führt). Führt DVhub den Slave gerade nicht (Strategie „nur Master“, Slave-Fehler,
+Slave-Werte fehlen), setzt es einen Slave mit fremdem Befehl vor der Übernahme des Masters auf Stopp; ohne Bestätigung
+übernimmt es den Master in diesem Takt nicht. Ein Slave in Notladung wird nie kommandiert. Protokoll:
+`sungrow_ems_forced_adopted`. Im Not-Halt wird nichts
 übernommen; ein übernommener Modus 2 wird beim Not-Halt wie jeder eigene einmal zurückgenommen. Ist der Modus 2
 ungewollt, hilft „Sungrow freigeben“ (auch im Not-Halt). Bei External-Steuerung verlässt DVhub einen gefundenen
 Modus 2 wie bisher mit bekannten Writes (Rückgabe in Modus 0 bzw. Eintritt in Modus 3).

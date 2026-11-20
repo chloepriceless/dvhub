@@ -53,13 +53,13 @@ function rig({ holding = {}, controlMode = 'forced', statePath = null, mockOpts 
 }
 
 const SLAVE_HOST = '192.168.68.83';
-function splitRig({ masterHolding = {}, slaveHolding = {} } = {}) {
-  const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge: 'soc-balance', strategyDischarge: 'soc-balance', maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 };
+function splitRig({ masterHolding = {}, slaveHolding = {}, masterMock = {}, slaveMock = {}, strategy = 'soc-balance' } = {}) {
+  const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge: strategy, strategyDischarge: strategy, maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 };
   const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter }, optimizer: { maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 } });
   const masterImage = sungrowImage({ holding: masterHolding });
   const slaveImage = sungrowImage({ holding: slaveHolding });
-  const masterT = mockSungrow(masterImage);
-  const slaveT = mockSungrow(slaveImage);
+  const masterT = mockSungrow(masterImage, masterMock);
+  const slaveT = mockSungrow(slaveImage, slaveMock);
   // Gemeinsames Protokoll in Draht-Reihenfolge (Slave/Master), damit die Reihenfolge prüfbar ist.
   const order = [];
   const tap = (tx, side) => ({
@@ -192,6 +192,22 @@ test('H-9 Master: Merker verloren, Gerät spiegelt DVhubs letzten Write → Besi
   assert.deepEqual(pairs(r.t.writes), [[CMD, EMS_CMD.STOP], [MODE, EMS_MODE.SELF]]);
 });
 
+test('H-9 ein WR wie in der Laufzeit (Slave-Aktuator ohne zweiten WR): Übernahme schreibt nur am Master, nur 13052/13051', async () => {
+  // schedule-eval.js legt den Slave-Aktuator immer an; ohne zweiten WR liefert connOverride null und seine Verbindung
+  // fiele auf den Master zurück. Die Übernahme darf darüber nichts lesen oder schreiben.
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30 } });
+  const image = sungrowImage({ holding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 } });
+  const t = mockSungrow(image);
+  const clock = 1_000_000;
+  const state = { victron: { errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock }, device: sungrowDevice(), batteryPowerW: -500, pvPowerW: 0, selfConsumptionW: 500 }, meter: { ok: true, updatedAt: clock, grid_total_w: 0 }, ctrl: {} };
+  const slaveEms = createSungrowEms({ state, getCfg: () => cfg, transport: t, now: () => clock, statusKey: 'sungrowEmsSlave', isSlave: true, connOverride: () => null, sleep: async () => {} });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, now: () => clock, slaveActuator: slaveEms, sleep: async () => {} });
+  const res = await ems.applySetpoint(-5000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(pairs(t.writes), [[POWER, 4000], [CMD, EMS_CMD.DISCHARGE]]);
+  assert.equal(slaveEms._st.owns, false);
+});
+
 // --- Not-Halt und H-7 --------------------------------------------------------------------------------------------
 
 test('H-9 + Not-Halt: nach der Übernahme nimmt der Not-Halt den Modus 2 einmal zurück, danach nichts; H-7 bleibt möglich', async () => {
@@ -275,6 +291,71 @@ test('H-9 zwei WR: Master und Slave in fremdem Modus 2 → beide per eigenem Wri
   r.state.ctrl.pausedAt = 61;
   assert.equal((await r.ems.emergencyStop()).ok, true);
   assert.deepEqual(r.order, [`S:${CMD}=${EMS_CMD.STOP}`, `M:${CMD}=${EMS_CMD.STOP}`, `M:${MODE}=${EMS_MODE.SELF}`]);
+});
+
+// Codex 2a0f18b5 P1: Not-Halt beginnt im Split während des Lesens vor der Übernahme. Der Fehler darf nicht in die
+// Split-Rücknahme (neutralizeBoth) laufen — sie schrieb 0xCC + Modus 0 auf einen Master, den DVhub nie übernommen hatte.
+for (const [label, side] of [['Master', 'M'], ['Slave', 'S']]) {
+  test(`H-9 zwei WR + Not-Halt beim Lesen am ${label} → kein Write an beide, kein Besitz (Codex 2a0f18b5 P1)`, async () => {
+    const holding = { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 };
+    let r;
+    const halt = { onRead: ({ fc, address }) => { if (fc === 3 && address === MODE) r.state.ctrl.discretionaryWritesPaused = true; } };
+    r = splitRig({ masterHolding: holding, slaveHolding: holding, ...(side === 'M' ? { masterMock: halt } : { slaveMock: halt }) });
+    const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+    assert.equal(res.ok, false);
+    assert.deepEqual(r.order, [], 'nichts geschrieben');
+    assert.notEqual(r.state.ctrl.sungrowEms?.owns, true);
+    assert.notEqual(r.state.ctrl.sungrowEmsSlave?.owns, true);
+    r.state.ctrl.pausedAt = 71;
+    assert.equal((await r.ems.emergencyStop()).reason, 'not_owned');
+    assert.deepEqual(r.order, [], 'auch der Not-Halt-Durchgang schreibt nichts Fremdes');
+  });
+}
+
+test('H-9 zwei WR: Split-Rücknahme nach Master-Fehler schreibt nur auf einen eigenen Master (Codex 2a0f18b5 P1)', async () => {
+  // Master in fremdem Modus 2, Lesen der EMS-Register scheitert dauerhaft → keine Übernahme, also auch keine Rücknahme.
+  const r = splitRig({
+    masterHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 },
+    masterMock: { failReadAt: MODE },
+  });
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.ok, false);
+  assert.ok(!r.order.some((e) => e.startsWith('M:')), `kein Write an den fremden Master: ${r.order}`);
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE);
+});
+
+// Codex 2a0f18b5 P2: Strategie master-only — der Slave bekommt keinen Befehl, folgt aber dem Master-Modus 2. Übernimmt
+// DVhub den Master, darf ein nicht besessener Slave-Befehl nicht darunter weiterlaufen.
+test('H-9 zwei WR, master-only: Slave mit fremdem Befehl wird vor der Master-Übernahme auf Stopp gesetzt (Codex 2a0f18b5 P2)', async () => {
+  const r = splitRig({
+    strategy: 'master-only',
+    masterHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 },
+    slaveHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 2000 },
+  });
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(r.order.slice(0, 1), [`S:${CMD}=${EMS_CMD.STOP}`], 'Slave zuerst auf Stopp');
+  assert.ok(r.order.some((e) => e === `M:${CMD}=${EMS_CMD.DISCHARGE}`), 'danach Master übernommen');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP);
+  for (const t of [r.masterT, r.slaveT]) { assertOnlyAdoptionRegs(t.writes); assertNeverCustomerRegs(t.writes); }
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  // Folgetakte: kein Hin und Her am Slave (er steht auf Stopp, der Master gehört DVhub).
+  r.order.length = 0;
+  for (let i = 0; i < 3; i += 1) { await r.ems.applySetpoint(-6000 - i - 1, 'rule:abend'); }
+  assert.ok(!r.order.some((e) => e.startsWith('S:')), `keine weiteren Slave-Writes: ${r.order}`);
+});
+
+test('H-9 zwei WR, master-only: lässt sich der Slave nicht stoppen, übernimmt DVhub den Master nicht (Codex 2a0f18b5 P2)', async () => {
+  const r = splitRig({
+    strategy: 'master-only',
+    masterHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 },
+    slaveHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 2000 },
+    slaveMock: { failWriteAt: CMD },
+  });
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.ok, false);
+  assert.ok(!r.order.some((e) => e.startsWith('M:')), `kein Master-Write: ${r.order}`);
+  assert.notEqual(r.state.ctrl.sungrowEms.owns, true);
 });
 
 test('H-9 Slave: Zustand passt zu DVhubs Befehl (früher M12: Besitz ohne Write) → jetzt ein bekannter Write', async () => {
