@@ -50,7 +50,7 @@ function rig({
   const masterT = mockSungrow(masterImage, masterMock);
   const slaveT = mockSungrow(slaveImage, slaveMock);
   const order = [];
-  const ctl = { slaveWriteFail: false, slaveFailOnce: null, slaveWriteAttempts: 0 };
+  const ctl = { slaveWriteFail: false, slaveFailOnce: null, slaveWriteAttempts: 0, masterIgnoreModeOnce: false };
   const tap = (tx, side) => ({
     type: 'modbus',
     reads: tx.reads,
@@ -58,6 +58,8 @@ function rig({
     mbRequest: (c) => tx.mbRequest(c),
     mbWriteSingle: async (c) => {
       if (side === 'S') ctl.slaveWriteAttempts += 1;
+      // Master nimmt den Moduswrite einmal an, setzt ihn aber nicht (Rücklesung weicht ab).
+      if (side === 'M' && ctl.masterIgnoreModeOnce && c.address === MODE) { ctl.masterIgnoreModeOnce = false; order.push(`${side}:${c.address}=${c.value}`); return { addr: c.address, value: c.value }; }
       if (side === 'S' && (ctl.slaveWriteFail || (ctl.slaveFailOnce != null && c.address === ctl.slaveFailOnce))) {
         ctl.slaveFailOnce = null;
         throw new Error('modbus timeout'); // nichts angekommen
@@ -491,6 +493,47 @@ test('Schutz: nur Master, Slave auf Stopp bestätigt — Werte fallen weg, Slave
   assert.equal(r.slaveT.reads.length, sReads, 'kein Slave-Zugriff — sein Stopp ist bestätigt');
   assert.deepEqual(slaveWrites(r), []);
   assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'kein Rücktritt');
+});
+
+test('External, Slave von DVhub gefahren, Slave-Werte fallen weg → Slave-Befehl wird zurückgenommen wie im Forced-Pfad (Review 156a3e06 P2)', async () => {
+  const r = rig({ controlMode: 'external', strategy: 'soc-balance' });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, true, 'Slave von DVhub gefahren');
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.DISCHARGE);
+  delete r.state.sungrowSecond;
+  r.order.length = 0;
+  r.advance(5_000);
+  const res = await r.ems.applySetpoint(-6100, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(slaveWrites(r), [`S:${CMD}=${EMS_CMD.STOP}`], `Slave zurückgenommen: ${r.order}`);
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, false);
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL, 'Master steuert weiter');
+  assertSafeRegs(r);
+});
+
+test('Slave unter fremdem EMS (VPP) → Master steuert allein wie bisher, kein Rücktritt und kein Dauerwarten (Review 156a3e06 P3)', async () => {
+  const r = rig({ strategy: 'soc-balance', slaveHolding: { [MODE]: EMS_MODE.VPP, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 2000 } });
+  for (let i = 0; i < 3; i += 1) {
+    if (i > 0) r.advance(11_000);
+    const res = await r.ems.applySetpoint(-6000 - i, 'rule:abend');
+    assert.equal(res.ok, true, `Takt ${i}: ${JSON.stringify(res)}`);
+  }
+  assert.deepEqual(slaveWrites(r), [], 'fremd gesteuerter Slave wird nicht angefasst');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'Master eingetreten und geblieben');
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_slave_unconfirmed_stepback' || l.event === 'sungrow_ems_entry_deferred'));
+});
+
+test('Wiedereintritt scheitert am Master → der spätere gewöhnliche Eintritt meldet keinen Wiedereintritt (Review 156a3e06 P3)', async () => {
+  const r = rig();
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  r.masterImage.holding.set(MODE, EMS_MODE.SELF); // geräteeigener Rückfall
+  r.ctl.masterIgnoreModeOnce = true;              // der Wiedereintritt greift am Gerät nicht
+  r.advance(61_000);
+  assert.equal((await r.ems.applySetpoint(-6100, 'rule:abend')).ok, false, 'Wiedereintritt gescheitert');
+  r.advance(11_000);
+  assert.equal((await r.ems.applySetpoint(-6200, 'rule:abend')).ok, true, 'gewöhnlicher Eintritt');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_reentry'), 'kein veralteter Wiedereintritt gemeldet');
 });
 
 // --- Schutztests: unverändertes Verhalten --------------------------------------------------------------------------

@@ -225,6 +225,8 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   gilt dasselbe, sobald DVhub den Slave nicht mehr führt (Werte weg, Richtung mit „nur Master“, Strategie umgestellt)
   und sein Stopp nicht bestätigt ist: Stopp setzen, sonst tritt der Master in Modus 0 zurück, bis er bestätigt ist (in
   Notladung kein Write und kein Rücktritt). Ein bestätigter Stopp gilt, bis DVhub dem Slave wieder einen Befehl gibt.
+  Fehlen die Slave-Werte, nimmt DVhub einen eigenen Slave-Befehl in beiden Steuerarten zurück. Ein Slave unter fremdem
+  EMS (VPP) bleibt unberührt, der Master steuert allein (`sungrow_ems_slave_foreign`).
   Beim Warten liest DVhub nur im gewöhnlichen Takt. Protokoll: `sungrow_ems_entry_slave_stopped`,
   `sungrow_ems_entry_deferred`, `sungrow_ems_slave_unconfirmed_stepback` (alle 15 min wiederholt, solange es wartet);
   Status `sungrowEms.decision.reason = entry_slave_unconfirmed` mit `since`.

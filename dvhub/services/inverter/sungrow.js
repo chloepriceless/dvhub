@@ -1022,8 +1022,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // neu — nach einem Fehlschlag mit Gerätezugriff frühestens nach dem ruhigen Profil-Takt, Fable P3-2). Ein Slave in
   // Notladung wird nie kommandiert (S-36): dann wartet es, bis die Notladung vorbei ist und der Stopp möglich wird (Codex
   // c5502afe P2); im laufenden Betrieb tritt der Master deshalb nicht zurück. Im Not-Halt kein Eintritt und kein Write.
-  function slaveCheckRetryMs() {
+  function slaveCheckRetryMs(foreign = false) {
     const o = resolveSungrowEmsOptions(sungrowEmsConf(getCfg()) || {});
+    // Fremd gesteuerter Slave: im gewöhnlichen Lesetakt der RW-Register (deviceRecheckMs) neu nachsehen.
+    if (foreign) return Math.max(10000, Number(o.deviceRecheckMs) || 60000);
     return Math.max(5000, Number(o.regulateEveryMs) || 10000);
   }
   async function stopSlaveBeforeTakeover(kind = 'adopt', modeValue = EMS_MODE.FORCED, t = now()) {
@@ -1036,7 +1038,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (!resolveSecondInverter(getCfg()).enabled) return;
     const owned = slaveActuator.ownsControl?.() === true;
     if (running && (owned || slaveActuator.stopConfirmed?.() === true)) return;
-    const throttled = !adopt && st.slaveCheck.failedAt > 0 && t - st.slaveCheck.failedAt < slaveCheckRetryMs();
+    const throttled = !adopt && st.slaveCheck.failedAt > 0 && t - st.slaveCheck.failedAt < slaveCheckRetryMs(st.slaveCheck.foreign === true);
     let ss;
     if (!adopt && state.ctrl?.discretionaryWritesPaused) {
       ss = { ok: false, blocked: true, error: 'emergency_stop_active' };
@@ -1045,7 +1047,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     } else if (!(!adopt && owned) && isSungrowEmergencyCharge(state.sungrowSecond?.runningState)) {
       ss = { ok: false, emergency: true, error: 'slave_emergency_charge' };
     } else if (throttled) {
-      ss = { ok: false, error: st.slaveCheck.error, throttled: true };
+      ss = { ok: false, error: st.slaveCheck.error, throttled: true, foreign: st.slaveCheck.foreign === true };
     } else if (!adopt && owned) {
       const nr = await slaveActuator.neutralize('master_entry');
       ss = slaveActuator.ownsControl?.() === true ? { ok: false, error: nr?.error || nr?.reason || 'slave_not_released' } : { ok: true };
@@ -1055,10 +1057,16 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Drossel nur nach einem Fehlschlag mit Gerätezugriff auf die RW-Register (nicht bei Notladung — 13000 ist ein
     // Eingangsregister — und nicht im Not-Halt).
     if (!adopt && !ss?.throttled) {
-      st.slaveCheck = ss?.ok === true || ss?.emergency === true || ss?.blocked ? { failedAt: 0, error: null } : { failedAt: t, error: ss?.error || 'unbekannt' };
+      st.slaveCheck = ss?.ok === true || ss?.emergency === true || ss?.blocked ? { failedAt: 0, error: null } : { failedAt: t, error: ss?.error || 'unbekannt', foreign: ss?.foreign === true };
     }
     if (ss?.ok === true) return;
     if (running && ss?.emergency === true) return; // Notladung: kein Write, kein Rücktritt; nach der Notladung stoppen
+    // Ein fremdes EMS (VPP) am Slave (Review 156a3e06 P3): DVhub fasst ihn nicht an (S-38), und ein Rücktritt des
+    // Masters brächte ihn nicht zur Ruhe — der Master steuert wie bisher allein („nur Master"), gemeldet einmal je Lage.
+    if (!adopt && ss?.foreign === true) {
+      logOnce(ss.error || 'foreign', 'sungrow_ems_slave_foreign', { error: ss.error || null, text: 'Sungrow: Slave steht unter einem fremden EMS — DVhub fasst ihn nicht an und steuert den Master allein.' }, 'warn');
+      return;
+    }
     const what = adopt ? 'Übernahme des Modus 2 zurückgestellt' : (running ? `Rücktritt aus Modus ${modeValue}` : `Eintritt in Modus ${modeValue} zurückgestellt`);
     const err = new Error(`${what}: Slave nicht auf Stopp bestätigt (${ss?.error || 'unbekannt'})`);
     err.code = ss?.blocked ? 'emergency_stop_active' : (adopt ? 'adopt_slave_unconfirmed' : (running ? 'running_slave_unconfirmed' : 'entry_slave_unconfirmed'));
@@ -2113,6 +2121,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // (Modus 0, Absicherung C), damit er selbst weiterregelt. Modus 0 außerdem bei Not-Halt, Beenden/Ausfall,
   // abgeschalteter Steuerung, fremdem Modus oder Moduswechsel — nie ein Dauerstopp in Modus 2.
   async function stepForced({ conf, ctl, opts, reason, t, targetFresh, maxChargeCap, maxDischargeCap, tel, second }) {
+    // Ein gemerkter Wiedereintritt gilt nur für den Takt, der ihn zählte (Review 156a3e06 P3): scheiterte er, meldet ein
+    // späterer gewöhnlicher Eintritt keinen Wiedereintritt.
+    st.reentryLogPending = null;
     const noGridChargeNow = noGridChargeForce();
     const cfg = getCfg();
     // Entlade-Boden (SoC < Boden): sperrt im Regler nur das Entladen, nicht das Laden aus PV. M1: der Boden ist der
@@ -2506,6 +2517,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       if (slaveActuator && second != null) {
         return await stepSplit({ conf, ctl, decision, gap, second, reason, t, opts });
       }
+      // Slave-Werte fehlen (Review 156a3e06 P2): einen zuvor von DVhub gesetzten Slave-Befehl zurücknehmen wie im
+      // Forced-Pfad (S-41, Review-Befund 1) — sonst liefe er neben dem vollen Master-Anteil weiter. No-op ohne Besitz.
+      if (slaveActuator) { st.slaveNeutralizeTick = t; try { await slaveActuator.neutralize('slave_telemetry_lost'); } catch { /* best effort */ } }
       // Ohne Slave-Werte wird der Slave hier nicht geführt und folgt dem Master-Modus: im eigenen Betrieb (Fable P2-1,
       // auch vor einem „unverändert") und vor dem Eintritt (Christin 21.11.2026) seinen Befehl auf Stopp bestätigen —
       // sonst tritt der Master zurück bzw. bleibt in diesem Takt in Modus 0.
