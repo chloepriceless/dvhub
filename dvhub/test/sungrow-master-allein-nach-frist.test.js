@@ -655,3 +655,20 @@ test('Review 590b056a P3: Wanduhr springt rückwärts (−60 min) → die Nachpr
   assert.deepEqual(slaveWrites(r), [`S:${CMD}=${EMS_CMD.STOP}`], `Nachprüfung im Lesetakt: ${r.order}`);
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_running_slave_stopped'));
 });
+
+test('Review 1b28e47c P3: Alleinbetrieb, Slave kurz unter fremdem EMS → Status ohne „Slave unbestätigt“; danach weiter allein ohne Rücktritt', async () => {
+  const flag = { down: true };
+  const r = rig({ slaveHolding: OLD_CHARGE, slaveMock: unreachable(flag), aloneAfterMin: 1 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  assert.equal((await r.minute()).ok, true, 'allein');
+  flag.down = false;
+  r.slaveImage.holding.set(MODE, EMS_MODE.VPP);
+  assert.equal((await r.minute()).ok, true, 'fremdes EMS: der Master steuert weiter');
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone, undefined, 'kein veraltetes „Slave unbestätigt“ unter fremdem EMS');
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_slave_foreign'));
+  flag.down = true; // VPP weg, Slave wieder nicht erreichbar
+  r.order.length = 0;
+  assert.equal((await r.minute()).ok, true);
+  assert.equal(modeWrites(r, EMS_MODE.SELF), 0, `kein Rücktritt: ${r.order}`);
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone?.reason, 'slave_unconfirmed', 'wieder allein sichtbar');
+});

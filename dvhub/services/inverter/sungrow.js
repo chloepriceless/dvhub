@@ -1133,7 +1133,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // zwei 13050-Writes und neue Wartezeit, obwohl der Slave durchgehend unbestätigt ist). Not-Halt beendet beides.
     if (!adopt && (ss?.emergency === true || ss?.foreign === true)) {
       if (!st.masterAlone.active) endMasterAlone();
-      else st.masterAlone.at = t; // weiter allein — im Status sichtbar (Review 0abbb847 P3)
+      // Notladung: weiter allein, im Status sichtbar (Review 0abbb847 P3). Fremdes EMS: die Lage bleibt (kein Rücktritt
+      // danach), der Status zeigt aber kein „Slave unbestätigt" — der Slave antwortet, gemeldet wird sungrow_ems_slave_foreign
+      // (Review 1b28e47c P3).
+      else if (ss?.emergency === true) st.masterAlone.at = t;
     }
     if (!adopt && ss?.blocked) endMasterAlone();
     if (running && ss?.emergency === true) return; // Notladung: kein Write, kein Rücktritt; nach der Notladung stoppen
