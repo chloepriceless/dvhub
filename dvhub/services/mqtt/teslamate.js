@@ -351,7 +351,8 @@ export function createTeslamateSubscriber(hub, ctx) {
     if (!topic.startsWith(prefix)) return;
 
     const field = topic.slice(prefix.length);
-    const mapping = TOPIC_MAP[field];
+    // Nur eigene Schlüssel (A8): …/constructor, …/toString, …/__proto__ träfen sonst den Prototyp (TypeError bei parse).
+    const mapping = Object.hasOwn(TOPIC_MAP, field) ? TOPIC_MAP[field] : null;
     if (!mapping) return; // Unknown topic -- ignore
 
     const raw = payloadBuffer.toString().trim();

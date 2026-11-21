@@ -93,7 +93,8 @@ export function createMqttCommandSubscriber(hub, ctx) {
     if (evNeedsPro(cmd, payload)) return { ok: false, error: 'pro_required' };
 
     // Numerische Akku-Sollwerte
-    if (cmd in NUMERIC_TARGETS) {
+    // Nur eigene Schlüssel (A8): `in` fände auch constructor/toString/__proto__ über den Prototyp.
+    if (Object.hasOwn(NUMERIC_TARGETS, cmd)) {
       const target = NUMERIC_TARGETS[cmd];
       const value = parseNum(payload);
       if (value === null) return { ok: false, error: 'value_not_finite' };

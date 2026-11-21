@@ -104,7 +104,7 @@ import { createAdminRoutes } from './routes/admin-routes.js';
 import { createNotificationRoutes } from './routes/notification-routes.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
 import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collectChangedPaths, isManufacturerId } from './config-model.js';
-import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
+import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN, pvnodePlanFor } from './services/forecast/pvnode-plans.js';
 import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
 import { isSupportTunnelConsentAction, isSupportTunnelWrite, bodyKeyNames, supportTunnelActionKind, SUPPORT_TUNNEL_KIND_LABELS } from './services/support-tunnel-policy.js';
 import { SETUP_STEP_LABELS as DATENSPENDE_SETUP_STEP_LABELS, SOURCE_GROUPS as DATENSPENDE_SOURCE_GROUPS, redactSecrets as redactDatenspendeSecrets } from './services/datenspende/index.js';
@@ -4756,7 +4756,7 @@ export function createApiRoutes(ctx) {
             // pvnode v2: Nowcast ist keine eigene Option mehr, sondern in den
             // bezahlten Plänen enthalten → aus dem Plan abgeleitet, nicht aus
             // dem (toten) Legacy-Flag forecast.pvnode.nowcastEnabled.
-            nowcastEnabled: !!(PVNODE_PLANS[getCfg().forecast?.pvnode?.plan] || PVNODE_PLANS[DEFAULT_PVNODE_PLAN]).nowcast
+            nowcastEnabled: !!pvnodePlanFor(getCfg().forecast?.pvnode?.plan).nowcast
           }
         },
         // EVCC wallbox (#23, 2026-06-13). Card consumes this via
@@ -6790,7 +6790,7 @@ export function createApiRoutes(ctx) {
         forecastDays: (p.forecastDays != null ? p.forecastDays : ''), // V2 horizon (1..7; '' = default 2)
         // pvnode v2: Nowcast ist im bezahlten Plan enthalten (kein Schalter mehr,
         // Christin 2026-07-18) → plan-abgeleitet; das alte config-Flag ist tot.
-        nowcastEnabled: !!(PVNODE_PLANS[p.plan] || PVNODE_PLANS[DEFAULT_PVNODE_PLAN]).nowcast
+        nowcastEnabled: !!pvnodePlanFor(p.plan).nowcast
       });
     }
 

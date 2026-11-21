@@ -628,7 +628,8 @@ export function createEosRemoteFacade({
       }
       if (req.method === 'PUT' && p.startsWith('/v1/prediction/import/')) {
         const provider = decodeURIComponent(p.slice('/v1/prediction/import/'.length));
-        if (!PROVIDER_COLUMNS[provider]) return send(res, 404, { detail: `Provider '${provider}' not found.` });
+        // Nur eigene Schlüssel (A8): …/import/constructor legte sonst einen Eintrag mit einer Funktion als Spalte an.
+        if (!Object.hasOwn(PROVIDER_COLUMNS, provider)) return send(res, 404, { detail: `Provider '${provider}' not found.` });
         mergePrediction(provider, body);
         return send(res, 200);
       }
