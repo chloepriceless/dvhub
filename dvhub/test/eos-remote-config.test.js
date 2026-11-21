@@ -61,6 +61,18 @@ test('local-native bleibt erhalten, kein Hinweis', () => {
   assert.ok(!r.warnings.includes(EOS_REMOTE_MODE_MIGRATION_WARNING));
 });
 
+// A14 (21.11.2026): Die Einrichtung des nativen Dienstes gibt es seit 1.0.11
+// (eos-provision.sh/post-update.sh mit root-Freigabe, Docker über die
+// Überlagerung). Der Hilfetext darf nicht mehr „ohne Wirkung“ sagen, muss aber
+// sagen, dass die Auswahl ALLEIN nichts umstellt und was zusätzlich nötig ist.
+test('Hilfetext Betriebsart: wirkt mit Freigabe bzw. Docker-Überlagerung, nicht mehr „ohne Wirkung“', () => {
+  const mode = getConfigDefinition().fields.find((f) => f.path === 'optimizer.eosProxy.mode');
+  assert.doesNotMatch(mode.help, /OHNE WIRKUNG|kommt erst mit/i, 'überholter Hinweis');
+  assert.match(mode.help, /\/etc\/dvhub-release\/eos-native-optin/, 'root-Freigabe der nativen Installation');
+  assert.match(mode.help, /compose\.eos-localnative\.yml/, 'Weg im Docker-Stack');
+  assert.match(mode.help, /Python-EOS/, 'Rückfall/Rückweg genannt');
+});
+
 test('resolveEosProxy reicht die Betriebsart durch (local-native/local), remote → local', () => {
   assert.equal(resolveEosProxy({ optimizer: { eosProxy: { mode: 'local-native' } } }).mode, 'local-native');
   assert.equal(resolveEosProxy({ optimizer: { eosProxy: { mode: 'local' } } }).mode, 'local');

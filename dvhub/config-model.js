@@ -2983,13 +2983,14 @@ function buildFieldDefinitions() {
         { value: 'local', label: 'Python-EOS mit Rust-Kern (Standard)' },
         { value: 'local-native', label: 'Reiner Rust-Dienst, ohne Python (1.0.11)' }
       ],
-      help: '„Reiner Rust-Dienst“ soll den mitgelieferten nativen Optimierer (dvhub-optimize) direkt als EOS-Dienst laufen lassen — ohne Python-Laufzeit (spart dann ~170–230 MB RAM), bei gleicher Schnittstelle. NOCH OHNE WIRKUNG: die Einrichtung des nativen Dienstes auf dieser Box kommt erst mit einem der nächsten Updates; bis dahin ändert diese Auswahl nichts am laufenden EOS. Standard: Python-EOS mit Rust-Kern.'
+      help: '„Reiner Rust-Dienst“ lässt den mitgelieferten nativen Optimierer (dvhub-optimize) direkt als EOS-Dienst laufen — ohne Python-Laufzeit (spart ~170–230 MB RAM), mit gleicher Schnittstelle. Er rechnet wie EOS 0.4.0rc3 mit DVhubs Erweiterungen (Schwellen-Spitzenkappung, Wertstufen fürs E-Auto). Die Auswahl allein stellt nichts um: Bei einer normalen Installation braucht es zusätzlich die Freigabe durch root (Datei /etc/dvhub-release/eos-native-optin) und einen DVhub-Neustart; im Docker-Stack schaltet stattdessen die Überlagerung docker/compose.eos-localnative.yml um. Gibt es für diese Box kein passendes Programm oder scheitert die Einrichtung, rechnet weiter Python-EOS. Zurück: hier „Python-EOS mit Rust-Kern“ wählen (bzw. Freigabe-Datei löschen oder die Überlagerung weglassen). Standard: Python-EOS mit Rust-Kern.'
     },
     // Fernbetrieb im DVhub-Rechendienst (optimizer.eosProxy.mode = 'remote' und
     // optimizer.eosProxy.remote.*) gibt es seit 1.0.10 nicht mehr (Christin
     // 11.11.2026): DVhub-EOS rechnet mit dem Rust-Kern überall schnell genug
     // lokal. Gespeicherte Werte migriert migrateEosRemoteMode beim Laden.
-    // Die Betriebsart 'local-native' (reiner Rust-Dienst) kommt mit 1.0.11 dazu.
+    // Die Betriebsart 'local-native' (reiner Rust-Dienst) gibt es seit 1.0.11;
+    // wirksam nur mit root-Freigabe (eos-provision.sh) bzw. Docker-Überlagerung.
 
     {
       section: 'schedule',

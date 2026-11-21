@@ -354,7 +354,8 @@ EOS_ENGINE_RESULT=python EOS_ENGINE_SIG=""
 if [[ "$EOS_CONFIG_FIX_ONLY" != 1 ]] && eos_engine_native_wanted; then
   _eos_bin_sig="$(eos_bin_sig)"
   if [[ -z "$_eos_bin_sig" ]]; then
-    # Kein Binär für diese Arch gepinnt (z. B. armv7l): gar nicht erst nativ
+    # Kein Binär für diese Arch gepinnt (z. B. armv6l Pi 1/Zero, i386, riscv64;
+    # seit 0.2.0 sind x86_64, aarch64 und armv7l gepinnt): gar nicht erst nativ
     # versuchen — kein Fallback-Vermerk, kein Churn. Derselbe „braucht einen Pin"-
     # Test wie in post-update.sh (sonst entscheiden beide verschieden, Codex-P2).
     echo "  EOS: local-native gewünscht, aber kein natives Binär für $(uname -m 2>/dev/null) gepinnt — EOS rechnet in Python" >&2

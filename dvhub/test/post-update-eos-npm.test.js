@@ -222,7 +222,7 @@ test('.gitignore: Laufzeitordner im Repo-Ordner gelten nicht als untracked', () 
 // Deckt Codex-P2 #1 (Fallback-Box darf nicht bei jedem Start neu provisionieren)
 // und die native Schnellweg-Erkennung ab. Arch-agnostisch: alle drei Binär-Pins.
 const SHA = 'a'.repeat(64);
-function eosNativeCase({ mode = 'local-native', optin = true, engineMarker, binExists = true, unitNative = true, binPin = true }) {
+function eosNativeCase({ mode = 'local-native', optin = true, engineMarker, binExists = true, unitNative = true, binPin = true, pinArchs = ['X86_64', 'AARCH64', 'ARMV7L'], unameM = null }) {
   const s = sandbox();
   const inst = join(s.dir, 'opt');
   const data = join(s.dir, 'data');
@@ -231,7 +231,7 @@ function eosNativeCase({ mode = 'local-native', optin = true, engineMarker, binE
   mkdirSync(data);
   writeFileSync(join(inst, 'eos-provision.sh'), '');
   const pins = ['EOS_REPO_URL=https://x/eos.git', 'EOS_PIN=v1'];
-  if (binPin) for (const a of ['X86_64', 'AARCH64', 'ARMV7L']) pins.push(`EOS_NATIVE_BIN_${a}=dvhub-optimize-x`, `EOS_NATIVE_BIN_${a}_SHA256=${SHA}`);
+  if (binPin) for (const a of pinArchs) pins.push(`EOS_NATIVE_BIN_${a}=dvhub-optimize-x`, `EOS_NATIVE_BIN_${a}_SHA256=${SHA}`);
   writeFileSync(join(inst, 'eos-version.env'), pins.join('\n') + '\n');
   writeFileSync(join(data, '.eos-provisioned'), 'https://x/eos.git@v1\n');
   writeFileSync(join(data, '.eos-native'), 'https://x/eos.git@v1 ok akkudoktoreos_native-...whl\n');
@@ -247,6 +247,7 @@ function eosNativeCase({ mode = 'local-native', optin = true, engineMarker, binE
   const optinMarker = join(s.dir, 'optin'); if (optin) writeFileSync(optinMarker, '');
   s.fake('systemctl', '[[ "$1" == is-active ]] && exit 1; exit 0');
   s.fake('systemd-run');
+  if (unameM) s.fake('uname', `[[ "$1" == -m ]] && { echo ${unameM}; exit 0; }; exec /usr/bin/uname "$@"`);
   const r = s.run(`INSTALL_DIR='${inst}'\nDATA_DIR='${data}'\nSERVICE_USER=dvhub\nEOS_UNIT_PATH='${unit}'\nCONFIG_PATH='${cfg}'\nEOS_NATIVE_OPTIN_MARKER='${optinMarker}'\n${EOS_BLOCK}`);
   return { s, r };
 }
@@ -309,5 +310,24 @@ test('local-native gewünscht, aber kein Binär-Pin für diese Arch → Python, 
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, /EOS: OK \(aktuell/);
     assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'kein Pin → kein teurer Neuversuch je Start');
+  } finally { s.cleanup(); }
+});
+
+// A14 (21.11.2026): armv7l hat jetzt einen eigenen Binär-Pin. post-update.sh wählt wie
+// eos-provision.sh nach `uname -m` — ein armv7l-Pin zählt nur auf einer armv7l-Box.
+test('local-native auf armv7l mit armv7l-Pin → Provisionierung angestoßen', () => {
+  const { s, r } = eosNativeCase({ engineMarker: null, pinArchs: ['ARMV7L'], unameM: 'armv7l', unitNative: false });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.ok(s.calls().some((c) => c.startsWith('systemd-run')), 'armv7l-Box mit Pin → nativ einrichten');
+  } finally { s.cleanup(); }
+});
+
+test('nur armv7l gepinnt, Box ist aarch64 → kein nativer Wunsch, Python-Schnellweg', () => {
+  const { s, r } = eosNativeCase({ engineMarker: null, pinArchs: ['ARMV7L'], unameM: 'aarch64', unitNative: false });
+  try {
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /EOS: OK \(aktuell/);
+    assert.ok(!s.calls().some((c) => c.startsWith('systemd-run')), 'fremder Arch-Pin zählt nicht');
   } finally { s.cleanup(); }
 });

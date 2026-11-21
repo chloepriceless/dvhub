@@ -1081,7 +1081,8 @@ if [[ -f "$INSTALL_DIR/eos-provision.sh" && ! -f "$DATA_DIR/.no-eos" ]]; then
   # local-native (1.0.11): läuft dvhub-optimize als EOS-Dienst statt Python-EOS?
   # GEWÜNSCHT nur bei DREIERLEI — Config mode=local-native, Opt-in-Freigabe UND ein
   # Binär-Pin für die Arch dieser Box (ohne Pin gar nicht erst versuchen → kein
-  # Churn auf z. B. armv7l). Der Steuer-Marker .eos-native-engine (eos-provision.sh)
+  # Churn auf z. B. armv6l/riscv64; gepinnt sind x86_64, aarch64, armv7l). Der
+  # Steuer-Marker .eos-native-engine (eos-provision.sh)
   # sagt, was läuft: "native <want> <binsig>" oder "fallback <want> <binsig>"
   # (nativ gewünscht, hier nicht möglich → Python; als erledigt vermerkt, damit kein
   # teurer Neuversuch je Start). Stimmt Motor+Binär mit dem Soll, bleibt alles; sonst
