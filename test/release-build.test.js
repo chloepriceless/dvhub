@@ -437,6 +437,45 @@ function fixtureRepoDev(version = '1.0.10') {
 }
 
 // Falsches gh im PATH: protokolliert und scheitert — kein Test darf GitHub erreichen.
+// Mehr als 30 Commit-Betreffe seit dem vorigen dev-Paket: `git log … | head -30`
+// unter `set -o pipefail` bricht mit SIGPIPE (Exit 141) ab, sobald head nach 30
+// Zeilen schließt (21.11.2026: 127 Betreffe seit 4a8f7810, Veröffentlichung von
+// 47cdb7a5 brach ab). Erwartet: Erfolg, die neuesten 30 Betreffe als Änderungen.
+test('publish-release.sh --dry-run: mehr als 30 Commits seit dem vorigen dev-Paket brechen nicht ab', { timeout: 240000 }, () => {
+  const { dir, git } = fixtureRepoDev('1.0.10');
+  const work = tmp('dvhub-dev-many-');
+  try {
+    const { key } = keypair(work, 'k');
+    const gh = fakeGh(work);
+    const dest = path.join(work, 'pub');
+    const env = { ...process.env, PATH: `${gh.bin}:${process.env.PATH}` };
+    const pubOnce = (outDir) => {
+      const r = build(dir, outDir, ['HEAD', '--key', key]);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      const version = fs.readdirSync(outDir)[0];
+      const p = spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), path.join(outDir, version), '--key', key, '--repo', dir, '--dry-run', '--dest', dest], { encoding: 'utf8', env });
+      return Object.assign(p, { version });
+    };
+    const first = pubOnce(path.join(work, 'o1'));
+    assert.equal(first.status, 0, first.stdout + first.stderr);
+    // Viele Betreffe, damit git log mehr als eine Pipe-Puffer-Ladung schreibt.
+    const lang = 'x'.repeat(400);
+    for (let i = 1; i <= 400; i += 1) git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-q', '-m', `fix: Änderung ${i} ${lang}`);
+    const second = pubOnce(path.join(work, 'o2'));
+    assert.equal(second.status, 0, `Exit ${second.status}: ${second.stdout}${second.stderr}`);
+    const idx = JSON.parse(fs.readFileSync(path.join(dest, 'channels', 'index-dev.json'), 'utf8'));
+    const entry = idx.releases.find((r) => r.version === second.version);
+    assert.ok(entry, `Eintrag ${second.version} im Index`);
+    assert.ok(idx.releases.some((r) => r.version === first.version), 'Vorgänger bleibt im Index');
+    const changes = entry.changes;
+    assert.equal(changes.length, 30, 'höchstens 30 Betreffe');
+    assert.equal(changes[0], `fix: Änderung 400 ${lang}`, 'neuester Betreff zuerst');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
 function fakeGh(work) {
   const bin = path.join(work, 'gh-bin');
   fs.mkdirSync(bin, { recursive: true });
