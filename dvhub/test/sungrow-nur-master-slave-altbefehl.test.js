@@ -299,6 +299,42 @@ test('Slave-Lesefehler genau im Eintrittstakt (führende Strategie) → kein Ein
   assertSafeRegs(r);
 });
 
+test('echter Evaluator: zurückgestellter Eintritt → Sollwert bleibt, kein control_write_error je Auswertung (Review 58b09279)', async () => {
+  const { createScheduleEvaluator } = await import('../schedule-eval.js');
+  const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge: 'master-only', strategyDischarge: 'master-only', maxChargeW: 5000, maxDischargeW: 5000 };
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter }, optimizer: { maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000, allowGridCharge: true } });
+  const masterImage = sungrowImage();
+  // Slave ohne Begleitdienst-Werte, in Notladung (am Slave gelesen), alter Ladebefehl liegt an.
+  const slaveImage = sungrowImage({ holding: OLD_CHARGE, input: { [RUN_STATE]: 0x4001 } });
+  const masterT = mockSungrow(masterImage);
+  const slaveT = mockSungrow(slaveImage);
+  const now = Date.now();
+  const state = {
+    victron: { soc: 60, batteryPowerW: -500, pvPowerW: 0, selfConsumptionW: 500, errors: {}, fieldUpdatedAt: { soc: now, batteryPowerW: now, pvPowerW: now, selfConsumptionW: now }, device: sungrowDevice() },
+    meter: { ok: true, updatedAt: now, grid_total_w: 0 },
+    schedule: { rules: [], active: {}, lastWrite: {}, manualOverride: {}, config: {}, lastEvalAt: 0 },
+    ctrl: {},
+  };
+  const logs = [];
+  const ev = createScheduleEvaluator({ state, getCfg: () => cfg, transport: masterT, sungrowSlaveTransport: slaveT, pushLog: (event, data) => logs.push({ event, data }), telemetrySafeWrite: () => {}, persistConfig: async () => {}, telemetryStore: null, epexNowNext: () => null });
+  // Je Auswertung ein neuer Sollwert (EOS/Regeln ändern ihn laufend) → jedes Mal ein Regeltakt mit zurückgestelltem
+  // Eintritt. Netzladen (freigegeben); ein negativer Sollwert endete schon am EEG-Tor.
+  for (const v of [3000, 3050, 3100]) {
+    const res = await ev.applyControlTarget('gridSetpointW', v, 'api_manual_write');
+    assert.equal(res.ok, false, JSON.stringify(res));
+    assert.equal(res.emsFailure, true, 'Aktuator-Fehler: Sollwert bleibt (kein Widerruf)');
+  }
+  assert.deepEqual([...masterT.writes, ...slaveT.writes], [], 'nichts geschrieben');
+  assert.ok(!logs.some((l) => l.event === 'control_write_error'), 'kein irreführendes control_write_error');
+  assert.equal(logs.filter((l) => l.event === 'sungrow_ems_entry_deferred').length, 1, 'der Aktuator meldet einmal selbst');
+  // Notladung vorbei → Eintritt über denselben Weg: Slave auf Stopp, dann Master.
+  slaveImage.input.set(RUN_STATE, 0);
+  const ok = await ev.applyControlTarget('gridSetpointW', 3200, 'api_manual_write');
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  assert.deepEqual(slaveT.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP]]);
+  assert.equal(masterImage.holding.get(MODE), EMS_MODE.FORCED);
+});
+
 // --- Schutztests: unverändertes Verhalten --------------------------------------------------------------------------
 
 test('Schutz: zwei WR mit Aufteilung (soc-balance) — Eintritt unverändert: Slave-Befehl, dann Master, keine Zusatzprüfung', async () => {
