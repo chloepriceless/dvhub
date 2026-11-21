@@ -110,6 +110,27 @@ export function sungrowSocFloorBufferPct(cfg) {
   return Number.isFinite(v) && v >= 0 ? Math.min(50, v) : SUNGROW_DEFAULT_SOC_FLOOR_BUFFER_PCT;
 }
 
+// Zwei WR, Frist „Master allein" (Christin 21.11.2026, A7 Option b): Ist ein nicht geführter Slave nicht auf Stopp
+// bestätigt (nicht erreichbar, Rücklesung scheitert), wartet der Eintritt des Masters bzw. tritt der Master zurück —
+// höchstens so lange. Danach regelt der Master allein; ein alter Slave-Befehl kann dann mitlaufen. Einstellung
+// cfg.sungrow.secondInverter.slaveUnconfirmedMasterAloneAfterMin in Minuten: Standard 30, 0 = sofort, höchstens 1440.
+// Leer/ungültig/negativ → Standard (leer ist NICHT 0 = sofort).
+export const SUNGROW_DEFAULT_MASTER_ALONE_AFTER_MIN = 30;
+export const SUNGROW_MAX_MASTER_ALONE_AFTER_MIN = 1440;
+export function sungrowMasterAloneAfterMs(cfg) {
+  const raw = cfg?.sungrow?.secondInverter?.slaveUnconfirmedMasterAloneAfterMin;
+  const given = typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '');
+  const v = given ? Number(raw) : NaN;
+  const min = Number.isFinite(v) && v >= 0 ? Math.min(SUNGROW_MAX_MASTER_ALONE_AFTER_MIN, v) : SUNGROW_DEFAULT_MASTER_ALONE_AFTER_MIN;
+  return Math.round(min * 60000);
+}
+// Zustand der Frist (nur am Master): since = erstes „Slave unbestätigt" dieser Episode, lastAt = letztes, slaveKey =
+// Slave-Verbindung, active/aloneSince = der Master regelt allein (seit), at = Takt des letzten „allein", logAt = letzte
+// Warnung, error = letzter Grund.
+function masterAloneIdle() {
+  return { since: 0, lastAt: 0, slaveKey: null, active: false, aloneSince: 0, at: 0, logAt: 0, error: null };
+}
+
 const U16_NA = 0xffff;
 const S16_NA = 0x7fff;
 
@@ -864,6 +885,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     slaveRecheckAt: 0,   // letzte Nachprüfung eines nicht geführten Slave mit bestätigtem Stopp (Fable 2 P3)
     entryDeferred: { since: 0, lastAt: 0, logKey: null, logAt: 0 }, // Wartezustand vor dem Eintritt (P2-2)
     reentryLogPending: null, // Wiedereintritt (B3) erst melden, wenn er wirklich geschrieben ist (P3-3)
+    // Master (A7, Christin 21.11.2026): Frist „Master allein" bei unbestätigtem, nicht geführtem Slave — nur im Speicher.
+    masterAlone: masterAloneIdle(),
     logKeys: {}
   };
   let chain = Promise.resolve();
@@ -1056,15 +1079,18 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // der Master steuert weiter (der zuletzt bekannte Zustand ist Stopp), nächster Versuch nach demselben Takt.
     let recheck = false;
     if (running) {
-      if (owned) return;
+      if (owned) { endMasterAlone(); return; } // DVhubs eigener Befehl — kein „Slave unbestätigt" (A7)
       if (slaveActuator.stopConfirmed?.() === true) {
         const last = Math.max(Number(slaveActuator.stopConfirmedAt?.()) || 0, st.slaveRecheckAt || 0);
-        if (t - last < slaveRecheckMs()) return;
+        if (t - last < slaveRecheckMs()) { endMasterAlone(); return; }
         recheck = true;
         st.slaveRecheckAt = t;
       }
     }
-    const throttled = !adopt && !recheck && st.slaveCheck.failedAt > 0 && t - st.slaveCheck.failedAt < slaveCheckRetryMs();
+    // A7: regelt der Master schon allein, den nicht erreichbaren Slave nur im Lesetakt (deviceRecheckMs) neu versuchen,
+    // nicht im Profiltakt — ein hängender Slave (Zeitüberschreitung mit Wiederholung) bremste sonst den Regeltakt.
+    const retryMs = st.masterAlone.active ? slaveRecheckMs() : slaveCheckRetryMs();
+    const throttled = !adopt && !recheck && st.slaveCheck.failedAt > 0 && t - st.slaveCheck.failedAt < retryMs;
     let ss;
     if (!adopt && state.ctrl?.discretionaryWritesPaused) {
       ss = { ok: false, blocked: true, error: 'emergency_stop_active' };
@@ -1089,7 +1115,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // Lage „fremd gesteuert" endet mit jedem anderen Ergebnis einer echten Prüfung (nicht im Not-Halt).
       if (ss?.foreign !== true && !ss?.blocked) st.slaveForeignNotified = false;
     }
-    if (ss?.ok === true) return;
+    if (ss?.ok === true) { if (!adopt) endMasterAlone(); return; }
+    // Notladung, fremdes EMS, Not-Halt: kein „Slave unbestätigt" im Sinn der Frist (A7) — sie beginnt danach neu.
+    if (!adopt && (ss?.emergency === true || ss?.foreign === true || ss?.blocked)) endMasterAlone();
     if (running && ss?.emergency === true) return; // Notladung: kein Write, kein Rücktritt; nach der Notladung stoppen
     // Ein fremdes EMS (VPP) am Slave (Review 156a3e06 P3): DVhub fasst ihn nicht an (S-38), und ein Rücktritt des
     // Masters brächte ihn nicht zur Ruhe — der Master steuert wie bisher allein („nur Master"), gemeldet einmal je Lage.
@@ -1099,6 +1127,13 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         st.slaveForeignNotified = true;
         pushLog('sungrow_ems_slave_foreign', { error: ss.error || null, text: 'Sungrow: Slave steht unter einem fremden EMS — DVhub fasst ihn nicht an und steuert den Master allein.' }, 'warn');
       }
+      return;
+    }
+    // A7 (Christin 21.11.2026, Option b): Slave unbestätigt (nicht erreichbar, Rücklesung scheitert) — nach der Frist
+    // tritt der Master trotzdem ein bzw. bleibt eingetreten und regelt allein (ein alter Slave-Befehl kann mitlaufen).
+    // Nicht für die H-9-Übernahme, nicht in Notladung (oben: wartet), nicht im Not-Halt.
+    if (!adopt && !ss?.blocked && ss?.emergency !== true && masterAloneDue(t)) {
+      grantMasterAlone(kind, ss, t);
       return;
     }
     const what = adopt ? 'Übernahme des Modus 2 zurückgestellt' : (running ? `Rücktritt aus Modus ${modeValue}` : `Eintritt in Modus ${modeValue} zurückgestellt`);
@@ -1115,6 +1150,50 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // beim ersten Mal, bei geändertem Grund und danach alle 15 min, solange es wartet (Fable P2-2).
   const ENTRY_DEFERRED_LOG_REPEAT_MS = 15 * 60 * 1000;
   const ENTRY_DEFERRED_EPISODE_GAP_MS = 5 * 60 * 1000;
+
+  // Frist „Master allein" (A7, Christin 21.11.2026, Option b). Sie läuft ab dem ersten „Slave unbestätigt" (Eintritt
+  // zurückgestellt bzw. Rücktritt) und gilt als eine Episode, solange das Ergebnis alle paar Minuten wieder „unbestätigt"
+  // ist (Lücke > 5 min, andere Slave-Verbindung → neue Episode). Jedes andere Ergebnis beendet sie: Stopp bestätigt,
+  // Slave von DVhub geführt, Notladung, fremdes EMS, Not-Halt — danach beginnt die Frist neu. Nur im Speicher.
+  function endMasterAlone() {
+    const a = st.masterAlone;
+    if (a.since || a.active) st.masterAlone = masterAloneIdle();
+  }
+  function masterAloneDue(t) {
+    const key = endpointKeyOf(resolveSecondInverter(getCfg()));
+    const a0 = st.masterAlone;
+    if (!a0.since || a0.slaveKey !== key || t - (a0.lastAt || 0) > ENTRY_DEFERRED_EPISODE_GAP_MS) {
+      st.masterAlone = { ...masterAloneIdle(), since: t, slaveKey: key };
+    }
+    const a = st.masterAlone;
+    a.lastAt = t;
+    return t - a.since >= sungrowMasterAloneAfterMs(getCfg());
+  }
+  // Frist abgelaufen: der Master regelt in diesem Takt allein. Warnung beim Wechsel und dann alle 15 min; im Status
+  // als sungrowEms.decision.masterAlone (statusDecision), solange die Entscheidung aus einem solchen Takt stammt.
+  function grantMasterAlone(kind, ss, t) {
+    const a = st.masterAlone;
+    const first = !a.active;
+    if (first) a.aloneSince = t;
+    a.active = true;
+    a.at = t;
+    a.error = ss?.error || 'unbekannt';
+    if (!first && t - a.logAt < ENTRY_DEFERRED_LOG_REPEAT_MS) return;
+    a.logAt = t;
+    const afterMin = Math.round(sungrowMasterAloneAfterMs(getCfg()) / 60000);
+    const waitedMin = Math.round((t - a.since) / 60000);
+    pushLog('sungrow_ems_master_alone_slave_unconfirmed', {
+      error: a.error, kind, since: a.since, aloneSince: a.aloneSince, waitedS: Math.round((t - a.since) / 1000), afterMin,
+      text: `Sungrow: Slave seit ${waitedMin} min nicht auf Stopp bestätigt (nicht erreichbar oder Rücklesung scheitert). ${afterMin > 0 ? `Die Frist von ${afterMin} min ist abgelaufen` : 'Frist 0 (sofort)'} — der Master regelt allein. Ein alter Befehl am Slave kann mitlaufen. DVhub prüft den Slave weiter und stoppt einen solchen Befehl, sobald er antwortet.`,
+    }, 'warn');
+  }
+  function statusDecision() {
+    const d = st.decision;
+    const a = st.masterAlone;
+    if (isSlave || !d || !a.active || a.at !== d.at || d.mode === 'self') return d;
+    return { ...d, masterAlone: { reason: 'slave_unconfirmed', since: a.aloneSince, slaveUnconfirmedSince: a.since, afterMin: Math.round(sungrowMasterAloneAfterMs(getCfg()) / 60000), error: a.error } };
+  }
+
   function entryDeferred(e, t, { stepBack = false } = {}) {
     // Der Wiedereintritts-Zähler (B3, stepForced) zählt den Takt vor dem Write. Ein zurückgestellter Eintritt schreibt
     // 13050 nicht — er darf nicht zählen, sonst sperrte eine längere Wartezeit (Notladung) den Wiedereintritt eine Stunde.
@@ -1125,18 +1204,22 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const w = st.entryDeferred;
     if (!w.since || t - (w.lastAt || 0) > ENTRY_DEFERRED_EPISODE_GAP_MS) { w.since = t; w.logKey = null; w.logAt = 0; }
     w.lastAt = t;
-    st.decision = { mode: 'self', reason: 'entry_slave_unconfirmed', at: t, since: w.since };
+    // A7: wann der Master allein regelt, wenn der Slave unbestätigt bleibt (in Notladung nie → null).
+    const aloneAfterMs = sungrowMasterAloneAfterMs(getCfg());
+    const masterAloneAt = e?.slaveEmergency !== true && st.masterAlone.since ? st.masterAlone.since + aloneAfterMs : null;
+    st.decision = { mode: 'self', reason: 'entry_slave_unconfirmed', at: t, since: w.since, masterAloneAt };
     const event = stepBack ? 'sungrow_ems_slave_unconfirmed_stepback' : 'sungrow_ems_entry_deferred';
     const key = `${event}|${st.error}`;
     if (w.logKey !== key || t - w.logAt >= ENTRY_DEFERRED_LOG_REPEAT_MS) {
       w.logKey = key; w.logAt = t;
+      const aloneMin = Math.round(aloneAfterMs / 60000);
       pushLog(event, {
-        error: st.error, slaveEmergency: e?.slaveEmergency === true, since: w.since, waitingS: Math.round((t - w.since) / 1000),
+        error: st.error, slaveEmergency: e?.slaveEmergency === true, since: w.since, waitingS: Math.round((t - w.since) / 1000), masterAloneAt,
         text: stepBack
-          ? 'Sungrow: Master zurück in Modus 0 — der Slave wird nicht geführt und sein Befehl ist nicht auf Stopp bestätigt. DVhub tritt wieder ein, sobald der Stopp bestätigt ist.'
+          ? `Sungrow: Master zurück in Modus 0 — der Slave wird nicht geführt und sein Befehl ist nicht auf Stopp bestätigt. DVhub tritt wieder ein, sobald der Stopp bestätigt ist, spätestens nach ${aloneMin} min Wartezeit (dann regelt der Master allein).`
           : (e?.slaveEmergency === true
             ? 'Sungrow: Eintritt zurückgestellt — der Slave ist in Notladung und wird danach nicht geführt; sein Befehl würde mit dem Eintritt wieder wirken. Master bleibt in Modus 0, DVhub tritt nach der Notladung ein.'
-            : 'Sungrow: Eintritt zurückgestellt — der Slave ist nicht auf Stopp bestätigt; ein alter Befehl würde mit dem Eintritt wieder wirken. Master bleibt in Modus 0, DVhub versucht es weiter.'),
+            : `Sungrow: Eintritt zurückgestellt — der Slave ist nicht auf Stopp bestätigt; ein alter Befehl würde mit dem Eintritt wieder wirken. Master bleibt in Modus 0, DVhub versucht es weiter. Ohne Bestätigung regelt der Master nach ${aloneMin} min Wartezeit allein.`),
       }, 'warn');
     }
     publish();
@@ -1196,7 +1279,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       socFloorBufferPct: sungrowSocFloorBufferPct(getCfg()),
       target: st.target ? { setpointW: st.target.setpointW, source: st.target.source, at: st.target.at, noGridCharge: st.target.noGridCharge === true } : null,
       device: st.dev ? { ...st.dev } : null,
-      decision: st.decision,
+      decision: statusDecision(),
       owns: st.owns,
       ownMode: st.ownMode,
       error: st.error,
@@ -1254,6 +1337,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     st.dev = null;
     setStopConfirmed(false); // gilt dem alten Gerät
     st.slaveCheck = { failedAt: 0, error: null };
+    st.masterAlone = masterAloneIdle(); // A7: die Frist galt dem alten Gerät
     st.hb = { key: null, supported: null };
     st.release = null; // eine ausstehende Freigabe galt dem alten Gerät
     setOwns(null);
@@ -2025,6 +2109,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       const sr = await commandSlave(slaveDecision, ctl);
       if (sr.ok) slaveReadback = sr.readback || null;
       if (sr.ok) st.slaveForeignNotified = false; // DVhub führt den Slave — eine spätere Fremdsteuerung ist eine neue Lage
+      if (sr.ok) endMasterAlone(); // A7: der Slave antwortet und fährt DVhubs Befehl — die Frist beginnt später neu
       slaveWrote = sr.ok === true && sr.unchanged !== true; // echter Slave-Write (N4: Log/Status nur bei Änderung)
       if (!sr.ok) {
         // Absicherung C6 (Aufgabe 3): EIN Slave-Fehler (z. B. „EMS-Register lesen fehlgeschlagen: modbus exception 4",
@@ -2724,6 +2809,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return serial(async () => {
       const pausedAt = Number(state.ctrl?.pausedAt) || 0;
       st.target = null;
+      // A7: nach dem Not-Halt beginnt die Frist „Master allein" neu (wie nach einem Neustart).
+      st.masterAlone = masterAloneIdle();
       // Not-Halt gilt für BEIDE WR: auch den Slave (Split-Steuerung) einmal zurück in Self-consumption.
       if (slaveActuator) { try { await slaveActuator.neutralize('emergency_stop'); } catch { /* best effort */ } }
       if (st.neutralizedAt === pausedAt) return { ok: true, skipped: true, reason: 'already_done' };

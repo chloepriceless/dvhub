@@ -1681,6 +1681,24 @@ function buildFieldDefinitions() {
       max: 100,
       help: 'Nur für die Strategie „Festes Verhältnis": Anteil der Vorgabe, den der Master übernimmt (Rest der Slave). 50 = je zur Hälfte. Jeder WR hält seine Grenze; der Überlauf geht an den anderen.'
     },
+    // A7 (Christin 21.11.2026, Option b): Frist, nach der der Master allein regelt, obwohl der nicht geführte Slave
+    // nicht auf Stopp bestätigt ist (services/inverter/sungrow.js sungrowMasterAloneAfterMs).
+    {
+      section: 'victron',
+      group: 'sungrowEms',
+      groupLabel: 'Sungrow-Akkusteuerung (Beta)',
+      groupOrder: 15,
+      beta: true,
+      visibleWhenPath: { path: 'manufacturer', equals: 'sungrow' },
+      path: 'sungrow.secondInverter.slaveUnconfirmedMasterAloneAfterMin',
+      label: 'Zweiter WR nicht bestätigt: Master regelt allein nach (min)',
+      type: 'number',
+      default: 30,
+      min: 0,
+      max: 1440,
+      step: 1,
+      help: 'Nur für zwei Wechselrichter. Führt DVhub den Slave gerade nicht selbst (Strategie „Nur Master", Slave-Fehler, keine Slave-Werte), setzt es seinen Befehl vor dem Eintritt des Masters auf Stopp und liest das zurück. Gelingt das nicht (Slave nicht erreichbar, Rücklesung scheitert), bleibt der Master in Modus 0 bzw. tritt zurück — höchstens so viele Minuten. Danach regelt der Master allein weiter; ein alter Befehl am Slave (etwa aus der App) kann dann mitlaufen. DVhub warnt beim Wechsel und alle 15 min, prüft den Slave weiter und stoppt einen solchen Befehl, sobald er antwortet; dann beginnt die Frist neu. In Notladung des Slave und im Not-Halt gilt die Frist nicht (der Master wartet). Standard 30 min, 0 = sofort, höchstens 1440 (1 Tag). Die Frist zählt nur im laufenden Betrieb; nach einem Neustart beginnt sie neu.'
+    },
     {
       section: 'victron',
       group: 'sungrowEms',
