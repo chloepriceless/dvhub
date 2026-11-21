@@ -109,8 +109,16 @@ async function capture() {
   out.split_master_floor = r.t.log;
 
   r = splitRig({ masterSoc: 80, slaveSoc: 20, slaveMock: { failReadAt: wire(13050) } });
-  await r.ems.applySetpoint(-3000, 'rule:abend');               // Slave-Lesefehler → Fallback, Master steuert weiter
+  await r.ems.applySetpoint(-3000, 'rule:abend');               // Slave-Lesefehler im Eintrittstakt → Eintritt wartet
   out.split_slave_fallback = r.t.log;
+
+  // Slave-Lesefehler im laufenden Betrieb (Master schon in Modus 2) → Fallback, Master steuert weiter.
+  const fail = { on: false };
+  r = splitRig({ masterSoc: 80, slaveSoc: 20, slaveMock: { onRead: ({ fc, address }) => { if (fail.on && fc === 3 && address === wire(13050)) throw new Error('modbus exception 4'); } } });
+  await r.ems.applySetpoint(-3000, 'rule:abend');
+  fail.on = true;
+  await r.ems.applySetpoint(-3200, 'rule:abend');
+  out.split_slave_fallback_running = r.t.log;
 
   return out;
 }
@@ -125,7 +133,12 @@ const GOLDEN = {
   // Slave zuerst, dann Master; der Slave schreibt nie 13050 (folgt dem Master-Modus).
   split_discharge_balanced: ['S:13051=111', 'S:13050=187', 'M:13051=2889', 'M:13050=187', 'M:13049=2'],
   split_master_floor: ['S:13051=3000', 'S:13050=187', 'M:13049=2'],
-  split_slave_fallback: ['M:13051=3000', 'M:13050=187', 'M:13049=2'],
+  // Gewollt geändert (Christin 21.11.2026, alter Slave-Befehl beim Eintritt): Slave-Lesefehler genau im Eintrittstakt
+  // aus Modus 0 → der Slave-Befehl ist unbekannt und würde mit 13050 = 2 wieder wirksam → kein Eintritt in diesem Takt,
+  // beide bleiben in Modus 0. Bis bb03fb53: ['M:13051=3000', 'M:13050=187', 'M:13049=2'].
+  split_slave_fallback: [],
+  // Slave-Lesefehler im laufenden Betrieb: Fallback wie bisher (Master übernimmt, kein Modus 0).
+  split_slave_fallback_running: ['S:13051=111', 'S:13050=187', 'M:13051=2889', 'M:13050=187', 'M:13049=2', 'M:13051=3140'],
 };
 
 test('H-1 Golden-Master: Sungrow-EMS-Draht-Befehle unverändert (D.4(2))', async () => {

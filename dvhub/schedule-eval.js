@@ -2233,6 +2233,7 @@ export function createScheduleEvaluator(ctx) {
     let emsFailure = false;
     let emsReadError = false;
     let emsReleasePending = false;
+    let emsDeferred = false;
     try {
       let encoded, words, fc;
       if (conf.emulate != null) {
@@ -2249,6 +2250,11 @@ export function createScheduleEvaluator(ctx) {
           // Option A (19.11.2026): manuelle Sungrow-Freigabe steht aus — nichts geschrieben, der Aktuator meldet
           // selbst (sungrow_ems_release_retry); ebenso kein control_write_error. Der Sollwert bleibt (emsFailure).
           emsReleasePending = r?.releasePending === true;
+          // Eintritt zurückgestellt (Christin 21.11.2026): der Slave ist vor dem Eintritt des Masters nicht auf Stopp
+          // bestätigt — nichts geschrieben, der Aktuator meldet selbst (sungrow_ems_entry_deferred beim ersten Mal, bei neuem Grund und dann alle 15 min).
+          // Das Warten kann lange dauern (Notladung, Slave nicht erreichbar); ebenso kein control_write_error je
+          // Auswertung. Der Sollwert bleibt (emsFailure).
+          emsDeferred = r?.deferred === true;
           throw new Error(r?.error || 'sungrow_ems_failed');
         }
         encoded = { raw: value, scaled: value, writeType: 'sungrow-ems', wordOrder: 'n/a' };
@@ -2342,7 +2348,7 @@ export function createScheduleEvaluator(ctx) {
     } catch (e) {
       // Reiner Sungrow-Kontroll-Lesefehler: schon als sungrow_ems_read_error gemeldet, nichts geschrieben →
       // kein control_write_error (wäre irreführend).
-      if (!emsReadError && !emsReleasePending) {
+      if (!emsReadError && !emsReleasePending && !emsDeferred) {
         pushLog('control_write_error', { target, value, source, error: e.message });
         telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
           eventType: 'control_write_error',

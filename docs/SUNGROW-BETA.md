@@ -214,6 +214,27 @@ Im Forced mode mit zwei Wechselrichtern teilt DVhub jede Vorgabe auf beide auf (
 Entladen bekommt der Akku mit dem höheren Ladestand mehr, beim Laden der mit dem niedrigeren). Lade-/Entladebefehle
 gehen an beide (13051/13052), der Modus 13050 nur an den Master.
 
+- **Eintritt des Masters (Christin 21.11.2026):** Der Slave folgt dem Modus des Masters. In Modus 0 ruht sein Befehl
+  (13051/13052); mit dem Eintritt des Masters in Modus 2 bzw. 3 wirkt er wieder. Führt DVhub den Slave im
+  Eintrittstakt nicht selbst (Strategie „nur Master“, Slave-Fehler, keine Slave-Werte), setzt es ihn vorher auf Stopp
+  (nur 13051 = 0xCC, zurückgelesen; steht er schon auf Stopp, kein Write). Nicht bestätigt → kein Eintritt in diesem
+  Takt, der Master bleibt in Modus 0, der nächste Takt versucht es wieder. Ein Slave in Notladung bekommt keinen
+  Write; führt DVhub ihn danach nicht wieder, wartet der Eintritt bis nach der Notladung. Gilt auch für den
+  Wiedereintritt nach einem geräteeigenen Rückfall und für External EMS. Ein dauerhaft nicht erreichbarer zweiter
+  Wechselrichter hält den Eintritt an, bis er antwortet oder aus der Einstellung entfernt ist. Im laufenden Betrieb
+  gilt dasselbe, sobald DVhub den Slave nicht mehr führt (Werte weg, Richtung mit „nur Master“, Strategie umgestellt)
+  und sein Stopp nicht bestätigt ist: Stopp setzen, sonst tritt der Master in Modus 0 zurück, bis er bestätigt ist (in
+  Notladung kein Write und kein Rücktritt). Ein bestätigter Stopp gilt, bis DVhub dem Slave wieder einen Befehl gibt;
+  ein nicht geführter Slave wird im Lesetakt des Masters (60 s) nachgelesen (13000 + 13050–13052), ein dort gefundener
+  Befehl (z. B. aus der App) gestoppt. Nicht lesbar → der Master steuert weiter. Nach einem Neustart gilt der Slave als
+  unbekannt (der Merker liegt bewusst nur im Speicher).
+  Fehlen die Slave-Werte, nimmt DVhub einen eigenen Slave-Befehl in beiden Steuerarten zurück. Ein Slave unter fremdem
+  EMS (VPP) bleibt unberührt, der Master steuert allein (`sungrow_ems_slave_foreign`).
+  Beim Warten liest DVhub nur im gewöhnlichen Takt. Protokoll: `sungrow_ems_entry_slave_stopped`,
+  `sungrow_ems_running_slave_stopped` (im Betrieb gefunden und gestoppt), `sungrow_ems_entry_deferred`,
+  `sungrow_ems_slave_unconfirmed_stepback` (alle 15 min wiederholt, solange es wartet);
+  Status `sungrowEms.decision.reason = entry_slave_unconfirmed` mit `since`.
+
 - **Abregelung (Negativpreis, Direktvermarkter, Test-Knopf):** Beide Wechselrichter laden und entladen weiter nach
   ihrem Anteil. DVhub regelt die Summe auf den Sollwert, bei Negativpreis auf −40 W. Entladen wird dabei höchstens die
   Hauslast (Last − PV), auch wenn eine Vorgabe einspeisen möchte: unter der Einspeisegrenze lehnt der Master größere
