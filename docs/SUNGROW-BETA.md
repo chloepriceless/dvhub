@@ -214,6 +214,16 @@ Im Forced mode mit zwei Wechselrichtern teilt DVhub jede Vorgabe auf beide auf (
 Entladen bekommt der Akku mit dem höheren Ladestand mehr, beim Laden der mit dem niedrigeren). Lade-/Entladebefehle
 gehen an beide (13051/13052), der Modus 13050 nur an den Master.
 
+- **Eintritt des Masters (Christin 21.11.2026):** Der Slave folgt dem Modus des Masters. In Modus 0 ruht sein Befehl
+  (13051/13052); mit dem Eintritt des Masters in Modus 2 bzw. 3 wirkt er wieder. Führt DVhub den Slave im
+  Eintrittstakt nicht selbst (Strategie „nur Master“, Slave-Fehler, keine Slave-Werte), setzt es ihn vorher auf Stopp
+  (nur 13051 = 0xCC, zurückgelesen; steht er schon auf Stopp, kein Write). Nicht bestätigt → kein Eintritt in diesem
+  Takt, der Master bleibt in Modus 0, der nächste Takt versucht es wieder. Ein Slave in Notladung bekommt keinen
+  Write; führt DVhub ihn danach nicht wieder, wartet der Eintritt bis nach der Notladung. Gilt auch für den
+  Wiedereintritt nach einem geräteeigenen Rückfall und für External EMS. Ein dauerhaft nicht erreichbarer zweiter
+  Wechselrichter hält den Eintritt an, bis er antwortet oder aus der Einstellung entfernt ist. Protokoll:
+  `sungrow_ems_entry_slave_stopped`, `sungrow_ems_entry_deferred`.
+
 - **Abregelung (Negativpreis, Direktvermarkter, Test-Knopf):** Beide Wechselrichter laden und entladen weiter nach
   ihrem Anteil. DVhub regelt die Summe auf den Sollwert, bei Negativpreis auf −40 W. Entladen wird dabei höchstens die
   Hauslast (Last − PV), auch wenn eine Vorgabe einspeisen möchte: unter der Einspeisegrenze lehnt der Master größere

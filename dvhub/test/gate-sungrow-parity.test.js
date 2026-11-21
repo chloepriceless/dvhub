@@ -161,6 +161,8 @@ function chargeHoldTest(r) {
   r.state.ctrl._lastDvFeedIn = false;
 }
 const wireOf = (r, dev, addr) => r.t.log.filter((e) => e.startsWith(`${dev}:${addr}=`)).map((e) => Number(e.split('=')[1]));
+// Schalter für einen Slave-Lesefehler mitten im Ablauf (alte und neue Seite laufen nacheinander; run setzt ihn zurück).
+const slaveReadFail = { on: false };
 
 // Gewollte Verhaltensänderung (Christin 19.11., Option A): eine gescheiterte manuelle Freigabe bleibt als Absicht
 // stehen und wird wiederholt (test/sungrow-release-retry.test.js); antwortet der WR mit einer Modbus-Ausnahme, hat den
@@ -197,10 +199,23 @@ const SCENARIOS = {
     rig: { split: true, masterSoc: 9, slaveSoc: 15 }, run: async (r) => [await r.ems.applySetpoint(-3000, 'rule:abend')],
     wire: ['S:13051=3000', 'S:13050=187', 'M:13049=2'],
   },
+  // Gewollt geändert (Christin 21.11.2026): Slave-Lesefehler im Eintrittstakt → kein Eintritt (alter Slave-Befehl
+  // unbekannt). Im laufenden Betrieb Fallback wie bisher (…_running).
   golden_split_slave_fallback: {
     rig: { split: true, wireOpts: { slave: { failReadAt: wire(13050) } } },
     run: async (r) => [await r.ems.applySetpoint(-3000, 'rule:abend')],
-    wire: ['M:13051=3000', 'M:13050=187', 'M:13049=2'],
+    wire: [],
+  },
+  golden_split_slave_fallback_running: {
+    rig: { split: true, wireOpts: { slave: { onRead: ({ fc, address }) => { if (slaveReadFail.on && fc === 3 && address === MODE) throw new Error('modbus exception 4'); } } } },
+    run: async (r) => {
+      slaveReadFail.on = false;
+      const out = [await r.ems.applySetpoint(-3000, 'rule:abend')];
+      slaveReadFail.on = true;
+      try { out.push(await r.ems.applySetpoint(-3200, 'rule:abend')); } finally { slaveReadFail.on = false; }
+      return out;
+    },
+    wire: ['S:13051=111', 'S:13050=187', 'M:13051=2889', 'M:13050=187', 'M:13049=2', 'M:13051=3140'],
   },
 
   // Nachführen im Takt und Rücknahme bei veraltetem Sollwert
