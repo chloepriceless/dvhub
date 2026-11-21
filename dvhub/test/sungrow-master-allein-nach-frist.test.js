@@ -753,3 +753,25 @@ test('Zusammenspiel Codex-P1 + Frist: External, gefundener Modus 2, Slave nicht 
   assert.equal(aloneLogs(r).length, 1);
   assertSafeRegs(r);
 });
+
+test('Codex 22d327d3 P3: wartende H-9-Übernahme hat einen eigenen Wartezustand mit Zeitpunkt (Split und Einzelpfad), Warnung alle 15 min', async () => {
+  for (const telemetry of [true, false]) {
+    const r = rig({ telemetry, masterHolding: FOUND_MODE2, slaveHolding: OLD_CHARGE, slaveMock: unreachable(), aloneAfterMin: 30 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+    const d = r.state.ctrl.sungrowEms.decision;
+    assert.equal(d.mode, 'adopt_wait', `${telemetry ? 'Split' : 'Einzelpfad'}: ${JSON.stringify(d)}`);
+    assert.equal(d.reason, 'adopt_slave_unconfirmed');
+    assert.equal(d.masterAloneAt, r.t0 + 30 * MIN, 'Zeitpunkt der automatischen Übernahme');
+    assert.equal(d.since, r.t0);
+    const warns = () => r.logs.filter((l) => l.event === 'sungrow_ems_adopt_deferred');
+    assert.equal(warns().length, 1);
+    assert.equal(warns()[0].level, 'warn');
+    assert.match(warns()[0].data.text, /Übernahme/);
+    assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_split_aborted'), 'kein Split-Abbruch');
+    for (let i = 1; i <= 14; i += 1) await r.minute();
+    assert.equal(warns().length, 1, 'binnen 15 min keine zweite Warnung');
+    await r.minute();
+    assert.equal(warns().length, 2, 'nach 15 min erneut');
+    assert.deepEqual(masterWrites(r), [], 'während des Wartens kein Write');
+  }
+});

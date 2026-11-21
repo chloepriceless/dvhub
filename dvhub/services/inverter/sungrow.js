@@ -1223,7 +1223,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return { ...d, masterAlone: { reason: 'slave_unconfirmed', since: a.aloneSinceWall, slaveUnconfirmedSince: a.sinceWall, afterMin: Math.round(sungrowMasterAloneAfterMs(getCfg()) / 60000), error: a.error } };
   }
 
-  function entryDeferred(e, t, { stepBack = false, foundMode = null } = {}) {
+  // adopt (Codex 22d327d3 P3): wartende H-9-Übernahme eines gefundenen Modus 2 — eigener Zustand 'adopt_wait' (der
+  // vorgefundene Befehl des Masters läuft bis zur Übernahme weiter), mit Zeitpunkt masterAloneAt und eigener Warnung.
+  function entryDeferred(e, t, { stepBack = false, foundMode = null, adopt = false } = {}) {
     // Der Wiedereintritts-Zähler (B3, stepForced) zählt den Takt vor dem Write. Ein zurückgestellter Eintritt schreibt
     // 13050 nicht — er darf nicht zählen, sonst sperrte eine längere Wartezeit (Notladung) den Wiedereintritt eine Stunde.
     const re = st.forcedReentryTimes;
@@ -1238,8 +1240,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const aloneAfterMs = sungrowMasterAloneAfterMs(getCfg());
     const a = st.masterAlone;
     const masterAloneAt = e?.slaveEmergency !== true && a.since != null ? t + Math.max(0, aloneAfterMs - (monoNow() - a.since)) : null;
-    st.decision = { mode: 'self', reason: 'entry_slave_unconfirmed', at: t, since: w.since, masterAloneAt };
-    const event = stepBack ? 'sungrow_ems_slave_unconfirmed_stepback' : 'sungrow_ems_entry_deferred';
+    st.decision = adopt
+      ? { mode: 'adopt_wait', reason: 'adopt_slave_unconfirmed', at: t, since: w.since, masterAloneAt }
+      : { mode: 'self', reason: 'entry_slave_unconfirmed', at: t, since: w.since, masterAloneAt };
+    const event = adopt ? 'sungrow_ems_adopt_deferred' : (stepBack ? 'sungrow_ems_slave_unconfirmed_stepback' : 'sungrow_ems_entry_deferred');
     const key = `${event}|${st.error}`;
     if (w.logKey !== key || t - w.logAt >= ENTRY_DEFERRED_LOG_REPEAT_MS) {
       w.logKey = key; w.logAt = t;
@@ -1247,7 +1251,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       pushLog(event, {
         error: st.error, slaveEmergency: e?.slaveEmergency === true, since: w.since, waitingS: Math.round((t - w.since) / 1000), masterAloneAt,
         ...(foundMode != null ? { foundMode } : {}),
-        text: stepBack && foundMode != null
+        text: adopt
+          ? `Sungrow: Übernahme des gefundenen Modus 2 zurückgestellt — der Slave ist nicht auf Stopp bestätigt${e?.slaveEmergency === true ? ' (Notladung)' : ''}. Der vorgefundene Befehl des Masters läuft bis dahin weiter; ${e?.slaveEmergency === true ? 'DVhub übernimmt nach der Notladung.' : `ohne Bestätigung übernimmt DVhub nach ${aloneMin} min Wartezeit mit eigenem Befehl und regelt allein.`}`
+          : stepBack && foundMode != null
           ? `Sungrow: Eintritt zurückgestellt — der Master stand in Modus ${foundMode}; DVhub hat ihn mit bekannten Writes in Modus 0 gesetzt (Befehl Stopp), damit kein unbekannter Befehl weiterläuft. Der Slave ist nicht auf Stopp bestätigt${e?.slaveEmergency === true ? ' (Notladung); DVhub tritt nach der Notladung ein.' : `; DVhub tritt ein, sobald der Stopp bestätigt ist, spätestens nach ${aloneMin} min Wartezeit (dann regelt der Master allein).`}`
           : stepBack
           ? `Sungrow: Master zurück in Modus 0 — der Slave wird nicht geführt und sein Befehl ist nicht auf Stopp bestätigt. DVhub tritt wieder ein, sobald der Stopp bestätigt ist, spätestens nach ${aloneMin} min Wartezeit (dann regelt der Master allein).`
@@ -2274,6 +2280,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       }
       if (e?.code === 'entry_slave_unconfirmed') return await deferEntry(conf, ctl, e, t, masterModeSeen);
       if (e?.code === 'running_slave_unconfirmed') return await stepBackForSlave(conf, ctl, e, t);
+      if (e?.code === 'adopt_slave_unconfirmed') return entryDeferred(e, t, { adopt: true });
       await neutralizeBoth('split_master_failed');
       st.error = e?.message || String(e);
       logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error, ...writeErrorInfo(e) }, 'warn');
@@ -2487,6 +2494,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         return await deferEntry(conf, ctl, e, t, masterModeSeen);
       } else if (e?.code === 'running_slave_unconfirmed') {
         return await stepBackForSlave(conf, ctl, e, t);
+      } else if (e?.code === 'adopt_slave_unconfirmed') {
+        return entryDeferred(e, t, { adopt: true });
       } else if (e?.code === 'ems_read_error') {
         st.dev = null;
         logOnce(st.error, 'sungrow_ems_read_error', { error: st.error, decision }, 'warn');
