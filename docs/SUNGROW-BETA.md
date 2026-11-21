@@ -239,8 +239,8 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   Standard 30 min, 0 = sofort, höchstens 1440): Bleibt der nicht geführte Slave unbestätigt (nicht erreichbar,
   Rücklesung scheitert), tritt der Master nach der Frist trotzdem ein bzw. bleibt eingetreten und regelt allein. Ein
   alter Befehl am Slave kann dann mitlaufen. Die Frist läuft ab dem ersten Warten mit diesem Grund (Eintritt
-  zurückgestellt oder Rücktritt), gemessen mit einer monotonen Uhr (ein Sprung der Systemzeit verkürzt oder verlängert
-  sie nicht). In der Wartephase beginnt sie neu nach mehr als 5 min ohne Prüfung, nach einer Notladung oder einem
+  zurückgestellt oder Rücktritt), gemessen mit einer monotonen Uhr, ebenso Nachprüfung und Wiederholtakt am Slave (ein
+  Sprung der Systemzeit verkürzt oder verlängert sie nicht und setzt die Prüfung nicht aus). In der Wartephase beginnt sie neu nach mehr als 5 min ohne Prüfung, nach einer Notladung oder einem
   fremden EMS am Slave. In Notladung des Slave wartet der Eintritt weiter und schreibt nichts; die Notladung zählt nicht
   zur Frist. Bei fremdem EMS am Slave gilt ohnehin „Master allein“. Regelt der Master einmal allein, bleibt er es,
   solange der Slave unbestätigt ist, auch nach einer Notladung, einem fremden EMS und Prüfpausen (Master-Lesefehler,

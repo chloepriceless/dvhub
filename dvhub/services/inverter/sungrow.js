@@ -882,12 +882,12 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // bestätigt (zurückgelesen). Gelöscht, sobald DVhub einen Befehl schreibt oder die Verbindung wechselt; bis zur
     // ersten Prüfung unbekannt (false).
     stopConfirmed: false,
-    stopConfirmedAt: 0,  // wann der Stopp zuletzt am Gerät bestätigt wurde (Nachprüfung im Betrieb, Fable 2 P3)
+    stopConfirmedAt: 0,  // wann der Stopp zuletzt am Gerät bestätigt wurde (monoNow; Nachprüfung im Betrieb, Fable 2 P3)
     // Master: Prüfung des nicht geführten Slave vor Eintritt/im Betrieb (stopSlaveBeforeTakeover).
     slaveCheck: { failedAt: 0, error: null }, // letzter Fehlschlag mit Gerätezugriff — Drossel (Fable P3-2)
     slaveNeutralizeTick: null, // Takt, in dem der Pfad den besessenen Slave schon zurückzunehmen versuchte (P3-4)
     slaveForeignNotified: false, // Lage „Slave unter fremdem EMS" schon gemeldet (Review 4cf0a9e4 P3)
-    slaveRecheckAt: 0,   // letzte Nachprüfung eines nicht geführten Slave mit bestätigtem Stopp (Fable 2 P3)
+    slaveRecheckAt: 0,   // letzte Nachprüfung eines nicht geführten Slave mit bestätigtem Stopp (monoNow, Fable 2 P3)
     entryDeferred: { since: 0, lastAt: 0, logKey: null, logAt: 0 }, // Wartezustand vor dem Eintritt (P2-2)
     reentryLogPending: null, // Wiedereintritt (B3) erst melden, wenn er wirklich geschrieben ist (P3-3)
     // Master (A7, Christin 21.11.2026): Frist „Master allein" bei unbestätigtem, nicht geführtem Slave — nur im Speicher.
@@ -942,7 +942,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
 
   function setStopConfirmed(v) {
     st.stopConfirmed = v === true;
-    st.stopConfirmedAt = v === true ? now() : 0;
+    // Monotone Zeit (Review 590b056a P3): nur für den Abgleich der Nachprüfung am Master, die ebenfalls monoton rechnet.
+    st.stopConfirmedAt = v === true ? monoNow() : 0;
   }
 
   function setOwns(mode) {
@@ -1078,6 +1079,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (!resolveSecondInverter(getCfg()).enabled) return;
     const owned = slaveActuator.ownsControl?.() === true;
     if (owned) st.slaveForeignNotified = false; // ein fremd gesteuerter Slave ist nie besessen (foreignModeError)
+    // Zeitgeber der Prüfungen (Nachprüfung, Drossel nach Fehlschlag) monoton wie die Frist (Review 590b056a P3): sonst
+    // setzten sie nach einem Rücksprung der Wanduhr aus, während die Frist weiterläuft — „allein" ohne echte Prüfung.
+    const mt = monoNow();
     // Nachprüfung im Betrieb (Fable 2 P3): ein bestätigter Stopp wird im Lesetakt des Masters (deviceRecheckMs) neu am
     // Gerät geprüft — sonst liefe ein später per App gesetzter Befehl unbemerkt neben dem vollen Master-Anteil. Nur
     // lesen (13000 + 13050–13052); steht ein Befehl an, gelten die Stopp-Regeln wie beim Eintritt. Nicht lesbar →
@@ -1090,15 +1094,15 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         // dabei nicht lesbar ist (dann gilt der zuletzt bekannte Zustand Stopp).
         endMasterAlone();
         const last = Math.max(Number(slaveActuator.stopConfirmedAt?.()) || 0, st.slaveRecheckAt || 0);
-        if (t - last < slaveRecheckMs()) return;
+        if (mt - last < slaveRecheckMs()) return;
         recheck = true;
-        st.slaveRecheckAt = t;
+        st.slaveRecheckAt = mt;
       }
     }
     // A7: regelt der Master schon allein, den nicht erreichbaren Slave nur im Lesetakt (deviceRecheckMs) neu versuchen,
     // nicht im Profiltakt — ein hängender Slave (Zeitüberschreitung mit Wiederholung) bremste sonst den Regeltakt.
     const retryMs = st.masterAlone.active ? slaveRecheckMs() : slaveCheckRetryMs();
-    const throttled = !adopt && !recheck && st.slaveCheck.failedAt > 0 && t - st.slaveCheck.failedAt < retryMs;
+    const throttled = !adopt && !recheck && st.slaveCheck.failedAt > 0 && mt - st.slaveCheck.failedAt < retryMs;
     let ss;
     if (!adopt && state.ctrl?.discretionaryWritesPaused) {
       ss = { ok: false, blocked: true, error: 'emergency_stop_active' };
@@ -1119,7 +1123,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Drossel nur nach einem Fehlschlag mit Gerätezugriff auf die RW-Register (nicht bei Notladung — 13000 ist ein
     // Eingangsregister — und nicht im Not-Halt).
     if (!adopt && !ss?.throttled) {
-      st.slaveCheck = ss?.ok === true || ss?.emergency === true || ss?.blocked ? { failedAt: 0, error: null } : { failedAt: t, error: ss?.error || 'unbekannt', foreign: ss?.foreign === true };
+      st.slaveCheck = ss?.ok === true || ss?.emergency === true || ss?.blocked ? { failedAt: 0, error: null } : { failedAt: mt, error: ss?.error || 'unbekannt', foreign: ss?.foreign === true };
       // Lage „fremd gesteuert" endet mit jedem anderen Ergebnis einer echten Prüfung (nicht im Not-Halt).
       if (ss?.foreign !== true && !ss?.blocked) st.slaveForeignNotified = false;
     }
@@ -1127,7 +1131,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Notladung, fremdes EMS: kein „Slave unbestätigt" im Sinn der Frist (A7). In der Wartephase beginnt sie danach neu;
     // regelt der Master schon allein, bleibt er es (Fable P3-1: sonst kostete jedes Ende einer Notladung einen Rücktritt,
     // zwei 13050-Writes und neue Wartezeit, obwohl der Slave durchgehend unbestätigt ist). Not-Halt beendet beides.
-    if (!adopt && (ss?.emergency === true || ss?.foreign === true) && !st.masterAlone.active) endMasterAlone();
+    if (!adopt && (ss?.emergency === true || ss?.foreign === true)) {
+      if (!st.masterAlone.active) endMasterAlone();
+      else st.masterAlone.at = t; // weiter allein — im Status sichtbar (Review 0abbb847 P3)
+    }
     if (!adopt && ss?.blocked) endMasterAlone();
     if (running && ss?.emergency === true) return; // Notladung: kein Write, kein Rücktritt; nach der Notladung stoppen
     // Ein fremdes EMS (VPP) am Slave (Review 156a3e06 P3): DVhub fasst ihn nicht an (S-38), und ein Rücktritt des

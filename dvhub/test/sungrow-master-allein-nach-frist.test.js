@@ -41,7 +41,7 @@ const aloneLogs = (r) => r.logs.filter((l) => l.event === ALONE);
 // Zwei WR wie in der Laufzeit (wie sungrow-nur-master-slave-altbefehl.test.js), dazu die Frist in der Einstellung.
 function rig({
   controlMode = 'forced', strategy = 'master-only', strategyCharge = strategy, strategyDischarge = strategy, telemetry = true,
-  masterHolding = {}, slaveHolding = {}, slaveInput = {}, slaveMock = {}, masterMock = {}, aloneAfterMin, separateMono = false,
+  masterHolding = {}, slaveHolding = {}, slaveInput = {}, slaveMock = {}, masterMock = {}, aloneAfterMin, separateMono = false, clockStart = 1_000_000,
 } = {}) {
   const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge, strategyDischarge, maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 };
   if (aloneAfterMin !== undefined) secondInverter.slaveUnconfirmedMasterAloneAfterMin = aloneAfterMin;
@@ -64,7 +64,7 @@ function rig({
     },
     mbWriteMultiple: async (c) => { order.push(`${side}:${c.address}=[${c.values}]`); return tx.mbWriteMultiple(c); },
   });
-  let clock = 1_000_000;
+  let clock = clockStart;
   const now = () => clock;
   // Monotone Uhr (Fable P3-2): ab Werk dieselbe wie die Wanduhr; separateMono = eigene, die nur advance() bewegt.
   let mono = 5_000;
@@ -80,6 +80,7 @@ function rig({
   const slaveEms = createSungrowEms({
     state, getCfg: () => cfg, transport: tap(slaveT, 'S'), pushLog, now, sleep: async () => {},
     statusKey: 'sungrowEmsSlave', isSlave: true, connOverride: () => ({ host: cfg.sungrow.secondInverter.host, port: 502, unitId: 1, timeoutMs: 1500 }),
+    ...(monoNow ? { monoNow } : {}),
   });
   const ems = createSungrowEms({ state, getCfg: () => cfg, transport: tap(masterT, 'M'), pushLog, now, sleep: async () => {}, slaveActuator: slaveEms, ...(monoNow ? { monoNow } : {}) });
   const jumpWall = (ms) => { clock += ms; }; // nur die Wanduhr springt (NTP, Hand-Einstellung)
@@ -462,6 +463,8 @@ test('P3-1: im Alleinbetrieb kein Rücktritt nach Ende einer Notladung — flack
   for (let i = 0; i < 60; i += 1) {
     r.state.sungrowSecond.runningState = i % 2 === 0 ? 0x4001 : 0;
     assert.equal((await r.minute()).ok, true, `Minute ${i}`);
+    // Review 0abbb847 P3: auch in den Notladungs-Minuten im Status sichtbar.
+    assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone?.reason, 'slave_unconfirmed', `Status Minute ${i}`);
   }
   assert.equal(modeWrites(r, EMS_MODE.SELF), 0, `kein Rücktritt: ${r.order}`);
   assert.equal(modeWrites(r, EMS_MODE.FORCED), 1, 'kein erneuter Eintritt');
@@ -623,4 +626,32 @@ test('P3-2: Frist mit monotoner Uhr — Wanduhr springt rückwärts (−10 min) 
   for (let i = 4; i <= 9; i += 1) assert.equal((await r.minute()).ok, false, `Minute ${i}`);
   assert.equal((await r.minute()).ok, true, 'Minute 10 (Wanduhr: erst 0 min seit dem ersten Warten)');
   assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+});
+
+test('Review 590b056a P3: Wanduhr springt rückwärts (−60 min) → der Slave wird trotzdem weiter geprüft und vor dem Alleinbetrieb gestoppt', async () => {
+  const flag = { down: true };
+  const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(flag), aloneAfterMin: 30, separateMono: true, clockStart: 50_000_000 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  for (let i = 1; i <= 10; i += 1) await r.minute();
+  r.jumpWall(-60 * MIN);
+  await r.minute();
+  flag.down = false; // Minute 12: der Slave antwortet wieder, sein alter Entladebefehl steht noch
+  await r.minute();
+  assert.deepEqual(slaveWrites(r), [`S:${CMD}=${EMS_CMD.STOP}`], `binnen eines Takts geprüft und gestoppt: ${r.order}`);
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP);
+  assert.ok(r.order.includes(`M:${MODE}=${EMS_MODE.FORCED}`), 'danach regulärer Eintritt');
+  assert.equal(aloneLogs(r).length, 0, 'kein Alleinbetrieb');
+});
+
+test('Review 590b056a P3: Wanduhr springt rückwärts (−60 min) → die Nachprüfung eines bestätigten Slave setzt nicht aus', async () => {
+  const r = rig({ slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true); // nur Master, Stopp bestätigt
+  r.jumpWall(-60 * MIN);
+  r.slaveImage.holding.set(CMD, EMS_CMD.DISCHARGE); // App setzt am Slave Entladen
+  r.slaveImage.holding.set(POWER, 2000);
+  r.order.length = 0;
+  await r.minute(); // 60 s monoton seit der Bestätigung → Nachprüfung fällig
+  await r.minute();
+  assert.deepEqual(slaveWrites(r), [`S:${CMD}=${EMS_CMD.STOP}`], `Nachprüfung im Lesetakt: ${r.order}`);
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_running_slave_stopped'));
 });
