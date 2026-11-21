@@ -1038,6 +1038,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Master-Verbindung zurück.
     if (!resolveSecondInverter(getCfg()).enabled) return;
     const owned = slaveActuator.ownsControl?.() === true;
+    if (owned) st.slaveForeignNotified = false; // ein fremd gesteuerter Slave ist nie besessen (foreignModeError)
     if (running && (owned || slaveActuator.stopConfirmed?.() === true)) return;
     const throttled = !adopt && st.slaveCheck.failedAt > 0 && t - st.slaveCheck.failedAt < slaveCheckRetryMs();
     let ss;
@@ -1977,6 +1978,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     } else {
       const sr = await commandSlave(slaveDecision, ctl);
       if (sr.ok) slaveReadback = sr.readback || null;
+      if (sr.ok) st.slaveForeignNotified = false; // DVhub führt den Slave — eine spätere Fremdsteuerung ist eine neue Lage
       slaveWrote = sr.ok === true && sr.unchanged !== true; // echter Slave-Write (N4: Log/Status nur bei Änderung)
       if (!sr.ok) {
         // Absicherung C6 (Aufgabe 3): EIN Slave-Fehler (z. B. „EMS-Register lesen fehlgeschlagen: modbus exception 4",

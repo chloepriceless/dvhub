@@ -547,6 +547,53 @@ test('Slave unter fremdem EMS über längere Zeit: eine Meldung je Lage; endet d
   assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_slave_foreign').length, 2, 'neue Lage, neue Meldung');
 });
 
+test('Fremd-Lage wird nach einer Phase, in der DVhub den Slave führte, neu gemeldet — ohne Eingriff in den Zustand (Review 646fff1d P3)', async () => {
+  const r = rig({ slaveHolding: { [MODE]: EMS_MODE.VPP, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 2000 } });
+  const foreignLogs = () => r.logs.filter((l) => l.event === 'sungrow_ems_slave_foreign').length;
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  assert.equal(foreignLogs(), 1);
+  // Das VPP gibt den Slave frei; DVhub führt ihn per Aufteilung (soc-balance).
+  r.slaveImage.holding.set(MODE, EMS_MODE.FORCED);
+  r.cfg.sungrow.secondInverter.strategyCharge = 'soc-balance';
+  r.cfg.sungrow.secondInverter.strategyDischarge = 'soc-balance';
+  r.advance(11_000);
+  assert.equal((await r.ems.applySetpoint(-6100, 'rule:abend')).ok, true);
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, true, 'Slave geführt');
+  // Kein Sollwert mehr → Rückgabe in Modus 0 (Slave zurückgenommen).
+  r.advance(130_000);
+  await r.ems.tick();
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF);
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, false);
+  // Nächster Abend: „nur Master“, das VPP hat den Slave wieder → neue Lage, neue Meldung.
+  r.cfg.sungrow.secondInverter.strategyCharge = 'master-only';
+  r.cfg.sungrow.secondInverter.strategyDischarge = 'master-only';
+  r.slaveImage.holding.set(MODE, EMS_MODE.VPP);
+  r.advance(11_000);
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  assert.equal(foreignLogs(), 2, 'die neue Fremdsteuerung wird gemeldet');
+});
+
+test('Schutz: von DVhub gefahrener Slave gerät unter fremdes EMS → Besitz abgegeben, der Master bleibt bzw. tritt später allein ein, kein Dauerwarten', async () => {
+  const r = rig({ strategy: 'soc-balance' });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, true);
+  // Ein VPP übernimmt den Slave mitten im Betrieb.
+  r.slaveImage.holding.set(MODE, EMS_MODE.VPP);
+  r.advance(11_000);
+  assert.equal((await r.ems.applySetpoint(-6100, 'rule:abend')).ok, true, 'Master steuert allein weiter');
+  // Kein Sollwert mehr → Master in Modus 0; der fremd gesteuerte Slave bleibt unberührt.
+  r.advance(130_000);
+  await r.ems.tick();
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF);
+  // Neuer Sollwert: der Master tritt allein ein, statt auf die Rücknahme eines fremd gesteuerten Slave zu warten.
+  r.advance(11_000);
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_entry_deferred'));
+  assertSafeRegs(r);
+});
+
 test('Wiedereintritt scheitert am Master → der spätere gewöhnliche Eintritt meldet keinen Wiedereintritt (Review 156a3e06 P3)', async () => {
   const r = rig();
   assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
