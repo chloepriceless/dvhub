@@ -113,7 +113,7 @@
         <!-- M9: je Akku (Master/Slave) echter SoC · nutzbar über der Grenze · Leistung mit Richtung · Anteil. -->
         <div class="rail-row sungrow-bat-wr" id="sungrowBatMasterRow" hidden><span class="l">Master</span><strong class="v" id="sungrowBatMaster">&mdash;</strong></div>
         <div class="rail-row sungrow-bat-wr" id="sungrowBatSlaveRow" hidden><span class="l">Slave</span><strong class="v" id="sungrowBatSlave">&mdash;</strong></div>
-        <div class="rail-row" id="gridShareRow" hidden title="Virtueller Zähler: so viel Netzstrom steckt durch Netzladen im Akku. Entladen senkt ihn anteilig (Anteil × Entladung). Solange er über der Schwelle liegt, gibt der Akku nichts ins Netz ab — kein Netzstrom mit Marktprämie. PV-Einspeisung bleibt."><span class="l">davon Netzstrom</span><strong class="v" id="gridShare">&mdash;</strong></div>
+        <div class="rail-row" id="gridShareRow" hidden title="Virtueller Zähler: so viel Netzstrom steckt durch Netzladen im Akku. Entladen ins Haus senkt ihn 1:1 (Netzstrom zuerst ins Haus), Einspeisung aus dem Akku nimmt zuerst den PV-Anteil. Solange er über der Schwelle liegt, gibt der Akku nichts ins Netz ab — kein Netzstrom mit Marktprämie. PV-Einspeisung bleibt."><span class="l">davon Netzstrom</span><strong class="v" id="gridShare">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Grid Setpoint</span><strong class="v" id="gridSetpoint">&mdash;</strong></div>
         <div class="rail-row rail-row-action" id="minSocRow" role="button" tabindex="0" aria-expanded="false" aria-controls="minSocEditor" data-leit="adv">
           <span class="l">Minimum-SOC <small class="rail-row-hint">Anpassen</small></span>
@@ -740,12 +740,12 @@
 <script src="/pro-modal.js" defer></script>
 <script src="/dvhub-powerflow.js?v=20261006-zaehlen"></script>
 <script src="/second-gx-view.js?v=20261021"></script>
-<script src="/sungrow-inverter-view.js?v=20261119-n3-slave-takt"></script>
+<script src="/sungrow-inverter-view.js?v=20261119-n3-slave-takt-vcl"></script>
 <script src="/eos-plan-summary.js?v=20261105-eos-frist"></script>
 <script src="/peak-shaving-view.js?v=20261026"></script>
 <script src="/license-banner.js?v=20261105-lizenz-umzug"></script>
 <script src="/grid-connection-view.js?v=20261110-eos-schwelle"></script>
-<script src="/app.js?v=20261119-m20-dcregeln3"></script>
+<script src="/app.js?v=20261120-netzstrom-zuerst"></script>
 <script src="/leitstand-charts.js?v=20261119-pv-ensemble"></script>
 <script src="/ev-weekly-editor.js?v=20261119-m19-badge"></script>
 <script src="/ev-once.js?v=20261119-m19-badge"></script>

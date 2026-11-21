@@ -34,7 +34,7 @@ import { requestEosReplanAfterSave } from './services/optimizer/eos-replan-after
 import { runtimeInfo } from './runtime-info.js';
 import { getEegNegativePriceRule } from './eeg-rules.js';
 import { haDiscoveryEntityCount } from './services/mqtt/ha-discovery.js';
-import { buildControlSnapshot, controlSnapshotFlat, buildGridLimitSnapshot, gridLimitSnapshotFlat } from './services/control-snapshot.js';
+import { createPickupSink } from './services/gate/pickup.js';
 import { buildDataflow } from './services/dataflow.js';
 import { applyManualControlWrite, setEmergencyStop, applyEvConfigPatch, controlFailureStatus } from './services/control-commands.js';
 import { validateSchedulableDevice, loadSchedulableDevices, isSchedulableDevice, allowedEndpointsForKind, DEVICE_KINDS, ENDPOINT_TYPES } from './services/devices/schedulable.js';
@@ -103,7 +103,7 @@ import { createConfigRoutes } from './routes/config-routes.js';
 import { createAdminRoutes } from './routes/admin-routes.js';
 import { createNotificationRoutes } from './routes/notification-routes.js';
 import { buildSupportBundle, supportBundleFilename } from './services/support-bundle.js';
-import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collectChangedPaths } from './config-model.js';
+import { createDefaultConfig, resolveActiveUserEnergyPricingForTimestamp, collectChangedPaths, isManufacturerId } from './config-model.js';
 import { PVNODE_PLANS, DEFAULT_PVNODE_PLAN } from './services/forecast/pvnode-plans.js';
 import { normalizeRelayUrl, DEFAULT_RELAY_URL as DEFAULT_MOBILE_RELAY_URL } from './services/mobile-link/agent.js';
 import { isSupportTunnelConsentAction, isSupportTunnelWrite, bodyKeyNames, supportTunnelActionKind, SUPPORT_TUNNEL_KIND_LABELS } from './services/support-tunnel-policy.js';
@@ -849,7 +849,9 @@ export function listManufacturerProfiles(ctx) {
       .filter((f) => !f.startsWith('.') && f.toLowerCase().endsWith('.json'))
       .map((f) => {
         const id = f.replace(/\.json$/i, '');
-        if (!id) return null;
+        // E1: nur IDs, die loadConfigFile auch lädt (a-z, 0-9, - und _) — sonst böte das Feld eine Datei an, die
+        // nach dem Speichern im Zustand „Profil fehlt" endet.
+        if (!isManufacturerId(id)) return null;
         let label = id.charAt(0).toUpperCase() + id.slice(1);
         let beta = false;
         try {
@@ -1025,6 +1027,9 @@ export function createApiRoutes(ctx) {
     configDir: path.dirname(ctx.getConfigPath?.() || '/etc/dvhub/config.json'),
   });
   const { state, getCfg, pushLog, telemetrySafeWrite, licenseService } = ctx;
+  // Abholpuffer hinter dem Schreibtor (VCL-Vertrag v6 D.1 R-T3, services/gate/pickup.js): die Steuerfelder für
+  // Loxone/HA gibt das Tor des Prozesses (ctx.gate) bei jeder Abfrage frei — oder liefert „keine Vorgabe“.
+  const pickup = createPickupSink({ state, getCfg, getGate: () => ctx.gate });
 
   // §51a lifetime extension (T-0004): the since-commissioning price scan is
   // a full-history query — cache it; negative-price slots only accrue every
@@ -2346,31 +2351,9 @@ export function createApiRoutes(ctx) {
   }
 
   async function integrationState() {
-    const cfg = getCfg();
-
-    // === EXISTING FIELDS — DO NOT MODIFY (backward compat for HA/Loxone consumers) ===
-    const base = {
-      timestamp: Date.now(),
-      dvControlValue: ctx.controlValue(),
-      forcedOff: state.ctrl.forcedOff,
-      gridTotalW: state.meter.grid_total_w,
-      gridDirection: gridDirection(state.meter.grid_total_w, cfg.gridPositiveMeans).mode,
-      gridSetpointW: state.victron.gridSetpointW,
-      minSocPct: state.victron.minSocPct,
-      soc: state.victron.soc,
-      batteryPowerW: state.victron.batteryPowerW,
-      pvTotalW: state.victron.pvTotalW,
-      scheduleActive: state.schedule.active,
-      costs: costSummary(),
-      userEnergyPricing: userEnergyPricingSummary()
-    };
-    // 2026-09-14: Steuerbefehle als FLACHE Felder (dvhub_control_*) — Loxone
-    // Virtual HTTP Input parst key=value je Zeile, der scheduleActive-JSON-Blob
-    // oben ist dort unbrauchbar. Gleiche Quelle wie <prefix>/control/* per MQTT.
-    Object.assign(base, controlSnapshotFlat(buildControlSnapshot(state)));
-    Object.assign(base, gridLimitSnapshotFlat(buildGridLimitSnapshot(state)));
-
-    // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
+    // Erst warten, dann zusammenstellen (Codex 36f71297 P1): das Tor urteilt über die Steuerfelder NACH dem letzten
+    // await — sonst ginge ein vor einem Not-Halt gelesener Sollwert noch hinaus, wenn der Not-Halt kommt, während die
+    // Antwort auf die Prognose wartet. Ab hier läuft alles ohne Warten bis zur Rückgabe.
     // Per-section error isolation (Plan 08-07 Task 2): one section failing must
     // NOT 500 the whole integration endpoint. Failures attach to base.dvhub_errors[].
     const sectionErrors = [];
@@ -2381,6 +2364,38 @@ export function createApiRoutes(ctx) {
       sectionErrors.push({ section: 'forecast', error: err?.message ?? String(err) });
       pushLog('integration_state_forecast_error', { error: err?.message ?? String(err) });
     }
+
+    const cfg = getCfg();
+    // Steuerfelder (dvhub_control_*, scheduleActive) über das Tor: ein Urteil je Gerät für die ganze Antwort (R-T3).
+    const handOut = pickup.handOut();
+    // Direktvermarkter-Signal aus demselben Urteil: im Not-Halt und Lese-Modus null (Christin 19.11.2026), bei
+    // ungültiger Konfiguration weiter (DVhub kann dann selbst nicht abregeln) — services/gate/pickup.js.
+    const dv = pickup.dvSignal(handOut, () => ctx.controlValue());
+
+    // === EXISTING FIELDS — DO NOT MODIFY (backward compat for HA/Loxone consumers) ===
+    const base = {
+      timestamp: Date.now(),
+      dvControlValue: dv.dvControlValue,
+      forcedOff: dv.forcedOff,
+      gridTotalW: state.meter.grid_total_w,
+      gridDirection: gridDirection(state.meter.grid_total_w, cfg.gridPositiveMeans).mode,
+      gridSetpointW: state.victron.gridSetpointW,
+      minSocPct: state.victron.minSocPct,
+      soc: state.victron.soc,
+      batteryPowerW: state.victron.batteryPowerW,
+      pvTotalW: state.victron.pvTotalW,
+      scheduleActive: pickup.scheduleActive(handOut),
+      costs: costSummary(),
+      userEnergyPricing: userEnergyPricingSummary()
+    };
+    // 2026-09-14: Steuerbefehle als FLACHE Felder (dvhub_control_*) — Loxone
+    // Virtual HTTP Input parst key=value je Zeile, der scheduleActive-JSON-Blob
+    // oben ist dort unbrauchbar. Gleiche Quelle wie <prefix>/control/* per MQTT.
+    // Bei geschlossenem Tor (Not-Halt, Lese-Modus, ungültige Konfiguration)
+    // „keine Vorgabe“ plus dvhub_control_suspended; Messwerte oben unverändert.
+    Object.assign(base, pickup.flat(handOut));
+
+    // === NEW FIELDS — namespaced under dvhub_* to avoid collision (D-18) ===
     if (forecastResp) {
       // Duration-aware energy calculation (review concern: "summing powerW/1000 ignores slot duration")
       const pvSlots = forecastResp.pv?.slots || [];
@@ -2750,9 +2765,6 @@ export function createApiRoutes(ctx) {
     // M14b: Tagesbudget des dvControl-Einspeise-Sequenzpfads (13074/13087/13088/
     // 31222) — getrennt vom 13050-EMS-Budget. Für die WR-Kachel neben „Writes heute".
     payload.dvSeqBudget = state.ctrl?.dvSeqBudget ?? null;
-    // M8: EOS-„Halten" ausgesetzt, weil der Netzstrom-Anteil im Akku gesperrt ist (erst im Haus
-    // verbrauchen). In-Memory wie sungrowEms (im Runtime-Worker-Betrieb hier null).
-    payload.eosGridShareSuspend = state.ctrl?.eosGridShareSuspend ?? null;
     // Victron device alarms (read-only display). Source is payload.victron.alarms,
     // which the POLLER (possibly a separate runtime-worker process) writes and
     // which reaches here through the runtime IPC snapshot — NOT web-process-local
@@ -2776,6 +2788,12 @@ export function createApiRoutes(ctx) {
     payload.systemWarnings = Array.isArray(state.systemWarnings)
       ? state.systemWarnings.map((w) => ({ id: String(w.id || ''), message: String(w.message || '') }))
       : [];
+    // Kennungsprobe des Herstellerprofils (E10): Ergebnis aus dem POLLER-Snapshot (wie telemetryFreeze), und jedes
+    // Ergebnis außer „bestanden“ als Hinweis in der Leiste — dort steht, was ausgeblendet bzw. ungeprüft ist.
+    payload.identityProbe = payload.victron?.identityProbe || null;
+    if (payload.identityProbe && payload.identityProbe.status !== 'ok' && payload.identityProbe.text) {
+      payload.systemWarnings.push({ id: 'identity_probe', message: String(payload.identityProbe.text) });
+    }
     // T-CROSSCHECK (2026-07-25): Widerspruch der beiden Datenwege — gleiche
     // Snapshot-Quelle wie oben (Poller-Prozess), nicht das Web-state.
     payload.telemetrySourceMismatch = payload.victron?.sourceMismatch || null;
@@ -4289,8 +4307,14 @@ export function createApiRoutes(ctx) {
       let result;
       try { result = await ctx.sungrowEms.forceRelease('manual_release'); }
       catch (e) { pushLog('sungrow_manual_release_error', { error: e?.message || String(e) }, 'warn'); return json(res, 500, { ok: false, error: 'release_failed' }); }
-      pushLog('sungrow_manual_release', { ok: result?.ok === true, device: result?.device || null }, actorContext(req));
-      return json(res, 200, { ok: result?.ok === true, device: result?.device || null, error: result?.error || null });
+      const notSent = result?.sent === false;
+      pushLog('sungrow_manual_release', { ok: result?.ok === true, pending: result?.pending === true, ...(notSent ? { sent: false, error: result?.error || null } : {}), device: result?.device || null }, actorContext(req));
+      // Option A (Christin 19.11.2026): pending = Freigabe gescheitert, DVhub wiederholt sie bis zur Bestätigung.
+      // requestedAt bindet die Antwort an diese Anfrage (die Kachel lässt einen älteren Status nicht darüber, P2).
+      const out = { ok: result?.ok === true, pending: result?.pending === true, retryAt: result?.retryAt ?? null, device: result?.device || null, error: result?.error || null, requestedAt: result?.requestedAt ?? null };
+      // Restpunkt 1: kein Schreibweg (Herstellerprofil ungültig, kein Sungrow-EMS) — nichts gesendet. Vorher 200 ok:true.
+      if (notSent) return json(res, 409, { ...out, ok: false, sent: false });
+      return json(res, 200, out);
     }
 
     // POST: ein planbares Gerät anlegen/aktualisieren (Upsert nach id).
@@ -5292,12 +5316,16 @@ export function createApiRoutes(ctx) {
           redirect: ctx.vpnManager?.getStatus?.()?.modbusRedirect || null,
         },
       ];
+      // „Raus — Sollwerte“ zeigt, was wirklich hinausgeht: dieselbe Abholsenke wie Loxone/MQTT (R-T3).
+      const out = pickup.handOut();
+      const dv = pickup.dvSignal(out, () => (typeof ctx.controlValue === 'function' ? ctx.controlValue() : null));
       return json(res, 200, buildDataflow({
         cfg, state, transport: ctx.transport,
-        controlSnapshot: buildControlSnapshot(state),
-        gridLimit: buildGridLimitSnapshot(state),
+        controlSnapshot: out.control,
+        gridLimit: out.gridLimit,
         channels,
-        dvControlValue: typeof ctx.controlValue === 'function' ? ctx.controlValue() : null,
+        dvControlValue: dv.dvControlValue,
+        dvSignalSuspended: dv.suspended ?? null,
         now: Date.now(),
       }));
     }

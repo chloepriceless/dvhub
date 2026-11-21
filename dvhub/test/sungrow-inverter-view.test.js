@@ -280,6 +280,186 @@ test('render: Modus 3 blendet die Countdown-Zeile ein', () => {
   assert.equal(els.sungrowWrSlaveCountdownRow.hidden, false);
 });
 
+test('Option A (Christin 19.11.): Freigabe-Hinweis — „wird wiederholt" (Master/Slave), danach „erledigt", sonst nichts', () => {
+  const base = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+  assert.equal(V.view({ ...base, sungrowEms: { owns: true } }).release, null, 'ohne Freigabe-Status kein Hinweis');
+  assert.equal(V.view({ ...base, sungrowEms: { owns: true, release: { pending: true, attempts: 2 } } }).release,
+    'Freigabe gescheitert, wird wiederholt · Versuch 2');
+  assert.equal(V.view({ ...base, sungrowEms: { owns: false }, sungrowEmsSlave: { owns: true, release: { pending: true, attempts: 1 } } }).release,
+    'Freigabe gescheitert, wird wiederholt (Slave) · Versuch 1');
+  assert.equal(V.view({ ...base, sungrowEms: { release: { pending: true, attempts: 4 } }, sungrowEmsSlave: { release: { pending: true, attempts: 1 } } }).release,
+    'Freigabe gescheitert, wird wiederholt · Versuch 4');
+  assert.equal(V.view({ ...base, sungrowEms: { owns: false, release: { pending: false, attempts: 3 } } }).release, 'Freigabe erledigt');
+});
+
+test('Codex P2: Freigabe-Hinweis gehört zu einer Anfrage — Hinweise einer älteren Anfrage zählen nicht; verworfen/gescheitert sichtbar', () => {
+  const base = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+  // Master: Einmal-Fehlschlag der neuen Anfrage (2000); Slave: „erledigt“ aus einer älteren Anfrage (1000) → nur der Fehlschlag.
+  const vw = V.view({ ...base,
+    sungrowEms: { release: { pending: false, failed: true, requestedAt: 2000, error: 'modbus timeout' } },
+    sungrowEmsSlave: { release: { pending: false, done: true, requestedAt: 1000 } } });
+  assert.equal(vw.release, 'Freigabe gescheitert: modbus timeout');
+  assert.equal(vw.releaseAt, 2000);
+  // Verworfen: ein anderes System steuert (Master bzw. Slave).
+  assert.equal(V.view({ ...base, sungrowEms: { release: { pending: false, abandoned: true, reason: 'foreign_mode', mode: 4, requestedAt: 5 } } }).release,
+    'Freigabe verworfen: ein anderes System steuert den Wechselrichter');
+  assert.equal(V.view({ ...base, sungrowEmsSlave: { release: { pending: false, abandoned: true, reason: 'master_foreign_mode', requestedAt: 5 } } }).release,
+    'Freigabe verworfen (Slave): ein anderes System steuert den Wechselrichter');
+  // Kein Schreibweg (Restpunkt 1): klar „nicht gesendet“.
+  assert.equal(V.view({ ...base, sungrowEms: { release: { pending: false, failed: true, sent: false, error: 'config_unsafe_manufacturer_profile_error', requestedAt: 5 } } }).release,
+    'Nicht gesendet: Herstellerprofil/Konfiguration ungültig — kein Schreibweg');
+  // Eine ausstehende Wiederholung wird immer gezeigt, auch neben einem jüngeren Ergebnis.
+  assert.match(V.view({ ...base,
+    sungrowEms: { release: { pending: false, failed: true, requestedAt: 9, error: 'x' } },
+    sungrowEmsSlave: { release: { pending: true, attempts: 2, requestedAt: 1 } } }).release, /^Freigabe gescheitert, wird wiederholt \(Slave\)/);
+});
+
+test('Codex P2 + Restpunkt 1: Klick-Ergebnis wird von einem älteren Status nicht überschrieben; „nicht gesendet“ klar benannt', async () => {
+  const file = fileURLToPath(new URL('../public/sungrow-inverter-view.js', import.meta.url));
+  const responses = [];
+  const apiFetch = async () => { const r = responses.shift(); return { ok: r.status === 200, status: r.status, json: async () => r.body }; };
+  const sandbox = { window: { confirm: () => true, DVhubCommon: { apiFetch } }, document: undefined };
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: 'sungrow-inverter-view.js' });
+  const W = sandbox.window.DVhubSungrowInverters;
+  const els = {};
+  let onClick = null;
+  const el = (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false, disabled: false,
+    ...(id === 'sungrowWrReleaseBtn' ? { addEventListener: (ev, fn) => { if (ev === 'click') onClick = fn; } } : {}) }));
+  const doc = { getElementById: (id) => el(id) };
+  const base = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+  const oldDone = { ...base, sungrowEms: { release: { pending: false, done: true, requestedAt: 1000 } } };
+  W.render(oldDone, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Freigabe erledigt');
+  assert.equal(typeof onClick, 'function');
+  // Neue Anfrage: Einmal-Fehlschlag (fremder Modus) — danach kommt noch ein verspäteter alter Status.
+  responses.push({ status: 200, body: { ok: false, pending: false, error: 'modbus timeout', requestedAt: 2000 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert: modbus timeout');
+  W.render(oldDone, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert: modbus timeout', 'alter „erledigt“-Hinweis überschreibt den Fehler nicht');
+  // Der Status der neuen Anfrage gilt.
+  W.render({ ...base, sungrowEms: { release: { pending: true, attempts: 2, requestedAt: 2000 } } }, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert, wird wiederholt · Versuch 2');
+  // Restpunkt 1: kein Schreibweg → 409, klar „nicht gesendet“ (nicht „freigegeben“).
+  responses.push({ status: 409, body: { ok: false, sent: false, error: 'config_unsafe_manufacturer_profile_error', requestedAt: 3000 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Nicht gesendet: Herstellerprofil/Konfiguration ungültig — kein Schreibweg');
+  responses.push({ status: 409, body: { ok: false, sent: false, error: 'sungrow_ems_not_configured', requestedAt: 4000 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Nicht gesendet: Sungrow-Steuerung nicht eingerichtet');
+  // Erfolg wie bisher.
+  responses.push({ status: 200, body: { ok: true, pending: false, requestedAt: 5000 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)');
+});
+
+test('Codex 6f356cb8: ausstehende Freigabe ohne Schreibweg → „Nicht gesendet … (Freigabe steht aus)“ in Status und Klick', async () => {
+  const base = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+  const NOT_SENT = 'Nicht gesendet: Herstellerprofil/Konfiguration ungültig — kein Schreibweg (Freigabe steht aus)';
+  assert.equal(V.view({ ...base, sungrowEms: { release: { pending: true, attempts: 2, sent: false, error: 'config_unsafe_manufacturer_profile_error', requestedAt: 7 } } }).release, NOT_SENT);
+  const file = fileURLToPath(new URL('../public/sungrow-inverter-view.js', import.meta.url));
+  const responses = [];
+  const apiFetch = async () => { const r = responses.shift(); return { ok: r.status === 200, status: r.status, json: async () => r.body }; };
+  const sandbox = { window: { confirm: () => true, DVhubCommon: { apiFetch } }, document: undefined };
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: 'sungrow-inverter-view.js' });
+  const W = sandbox.window.DVhubSungrowInverters;
+  const els = {};
+  let onClick = null;
+  const el = (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false, disabled: false,
+    ...(id === 'sungrowWrReleaseBtn' ? { addEventListener: (ev, fn) => { if (ev === 'click') onClick = fn; } } : {}) }));
+  W.render(base, { getElementById: (id) => el(id) });
+  responses.push({ status: 409, body: { ok: false, pending: true, sent: false, error: 'config_unsafe_manufacturer_profile_error', requestedAt: 9 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, NOT_SENT);
+});
+
+test('Codex 6f356cb8: ein vom Server gemeldeter Hinweis verschwindet, wenn der Status ihn nicht mehr trägt (Erfolg aus einem anderen Tab); das eigene Klick-Ergebnis bleibt', async () => {
+  const file = fileURLToPath(new URL('../public/sungrow-inverter-view.js', import.meta.url));
+  const responses = [];
+  const apiFetch = async () => { const r = responses.shift(); return { ok: r.status === 200, status: r.status, json: async () => r.body }; };
+  const sandbox = { window: { confirm: () => true, DVhubCommon: { apiFetch } }, document: undefined };
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: 'sungrow-inverter-view.js' });
+  const W = sandbox.window.DVhubSungrowInverters;
+  const els = {};
+  let onClick = null;
+  const el = (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false, disabled: false,
+    ...(id === 'sungrowWrReleaseBtn' ? { addEventListener: (ev, fn) => { if (ev === 'click') onClick = fn; } } : {}) }));
+  const doc = { getElementById: (id) => el(id) };
+  const base = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+  // Dieser Tab sieht den Fehlschlag einer Anfrage (vom Server gemeldet).
+  W.render({ ...base, sungrowEms: { release: { pending: false, failed: true, error: 'modbus timeout', requestedAt: 1000 } } }, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert: modbus timeout');
+  // Ein anderer Tab/API-Client gibt erfolgreich frei → der Status trägt keinen Hinweis mehr.
+  W.render(base, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, '', 'veralteter Fehlschlag verschwindet');
+  // Eigener Klick: sein Ergebnis bleibt stehen, auch wenn der Status keinen Hinweis trägt.
+  responses.push({ status: 200, body: { ok: true, pending: false, requestedAt: 2000 } });
+  await onClick();
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)');
+  W.render(base, doc);
+  assert.equal(els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)');
+});
+
+// Kachel mit zurückgehaltener API-Antwort (die Anfrage „läuft", bis der Test sie auflöst oder scheitern lässt).
+function deferredTile() {
+  const file = fileURLToPath(new URL('../public/sungrow-inverter-view.js', import.meta.url));
+  const pending = [];
+  const apiFetch = () => new Promise((resolve, reject) => pending.push({
+    respond: (status, body) => resolve({ ok: status === 200, status, json: async () => body }),
+    fail: (msg) => reject(new Error(msg)),
+  }));
+  const sandbox = { window: { confirm: () => true, DVhubCommon: { apiFetch } }, document: undefined };
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: 'sungrow-inverter-view.js' });
+  const W = sandbox.window.DVhubSungrowInverters;
+  const els = {};
+  let onClick = null;
+  const el = (id) => (els[id] || (els[id] = { id, textContent: '', hidden: false, disabled: false,
+    ...(id === 'sungrowWrReleaseBtn' ? { addEventListener: (ev, fn) => { if (ev === 'click') onClick = fn; } } : {}) }));
+  const doc = { getElementById: (id) => el(id) };
+  return { W, els, doc, pending, click: () => onClick() };
+}
+const TILE_BASE = { victron: { soc: 50, device: { model: 'SH10RT' } }, sungrowSecond: { online: true, socPct: 50 } };
+const OLD_FAILURE = { ...TILE_BASE, sungrowEms: { release: { pending: false, failed: true, error: 'modbus timeout', requestedAt: 1000 } } };
+
+test('Codex 04cd3f9f: Status-Takt während die Freigabe-Anfrage läuft → das Klick-Ergebnis wird danach nicht gelöscht', async () => {
+  const t = deferredTile();
+  t.W.render(OLD_FAILURE, t.doc);
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert: modbus timeout');
+  const click = t.click();                          // Anfrage läuft (Antwort zurückgehalten)
+  t.W.render(OLD_FAILURE, t.doc);                   // Status-Takt mitten in der Anfrage
+  t.pending.shift().respond(200, { ok: true, pending: false, requestedAt: 2000 });
+  await click;
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)');
+  t.W.render(TILE_BASE, t.doc);                     // nächster Status ohne Hinweis
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'freigegeben (Modus 0)', 'das eigene Klick-Ergebnis bleibt');
+  // Gleiches nach einem Netzwerkfehler: die eigene Fehlermeldung bleibt.
+  t.W.render(OLD_FAILURE, t.doc);
+  const click2 = t.click();
+  t.W.render(OLD_FAILURE, t.doc);
+  t.pending.shift().fail('Netzwerk weg');
+  await click2;
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Fehler: Netzwerk weg');
+  t.W.render(TILE_BASE, t.doc);
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Fehler: Netzwerk weg');
+});
+
+test('Codex 04cd3f9f: solange die Freigabe-Anfrage läuft, überschreibt ein Status-Hinweis „läuft…“ nicht', async () => {
+  const t = deferredTile();
+  t.W.render(OLD_FAILURE, t.doc);
+  const click = t.click();
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'läuft…');
+  t.W.render(OLD_FAILURE, t.doc);
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'läuft…');
+  t.W.render(TILE_BASE, t.doc);
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'läuft…');
+  t.pending.shift().respond(200, { ok: false, pending: true, error: 'modbus timeout', requestedAt: 2000 });
+  await click;
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert, wird wiederholt (modbus timeout)');
+  // Danach gilt wieder der Status dieser Anfrage.
+  t.W.render({ ...TILE_BASE, sungrowEms: { release: { pending: true, attempts: 2, requestedAt: 2000 } } }, t.doc);
+  assert.equal(t.els.sungrowWrReleaseStatus.textContent, 'Freigabe gescheitert, wird wiederholt · Versuch 2');
+});
+
 test('M22: Kachel nennt ECONNREFUSED „abgelehnt" statt „Timeout"', () => {
   const at = new Date(2026, 10, 19, 12, 31).getTime();
   const vw = V.view({

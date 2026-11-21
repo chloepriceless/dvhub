@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dvhub.de/schema/gate-1.schema.json",
+  "title": "DVhub-Schreibtor: GateOp, SubmitResult, WriteEvent",
+  "description": "Form der Taille (VCL-Vertrag v6 §0.2, §0.4, Anhang I.1, H-11). Ein Hash-Test in Node (test/gate-schema.test.js) bricht bei jeder Änderung; eine Änderung ist ein Vertragssprung und wird in Rust nachgezogen.",
+  "$comment": "Abweichungen vom Entwurf Anhang I.1: (1) GateOp.validUntilMs darf null sein (keine Frist, wie Rust Option<i64>). (2) GateOp.tick.loop ist die Wertemenge von Rust Loop statt string. (3) GateOp.confirmedBy (H-7: wer die manuelle Zwangsfreigabe bestätigt hat). (4) GateOp.legacy (D.2: vorkodierter Transport-Aufruf, unverändert an die Senke). (5) SubmitResult.opId = loop-seq-device-point-step (Anhang I ohne device; ohne Gerät kollidieren Folge- und Führungsgerät im selben Schritt), bei Wiederholung derselben Grundform mit Zusatz ~n. (6) SubmitResult trägt zusätzlich blockedBy, reason, exceptionCode, trust und die B.5-Zusatzfelder delivered, pickup, possiblyEffective. (7) WriteEvent = dvhub.write/1 plus additive Felder op_id, action, step, lease, delivery (H-6), trust.",
+  "$defs": {
+    "Scalar": {
+      "description": "Ingenieurwert (= Rust EngValue). Text nur bei mehrfeldrigen Punkten als kanonisches Token (B.2).",
+      "type": ["number", "boolean", "string"]
+    },
+    "Delivery": {
+      "description": "Zustellung je Versuch (§0.2): acked = quittiert, rejected = nachgewiesene Nichtwirkung, notSent = nachweislich nicht gesendet, unknown = Wirkung unbestimmt (zählt als angekommen).",
+      "enum": ["acked", "rejected", "notSent", "unknown"]
+    },
+    "Outcome": {
+      "description": "Wie Rust Outcome (dvhub-record/src/write.rs).",
+      "enum": ["ok", "error", "skipped_unchanged", "skipped_not_owned", "blocked_readonly", "blocked_nothalt", "blocked_gate", "shadow_suppressed"]
+    },
+    "Kind": {
+      "enum": ["write", "keepalive", "restore", "sequenceStep", "neutralize", "heartbeat"]
+    },
+    "Action": {
+      "description": "Aktionsklasse (A.5).",
+      "enum": ["command", "keepalive", "protectiveLimit", "autoRestore", "safetyRelease", "haltNeutralize", "manualForceRelease"]
+    },
+    "Trust": {
+      "description": "Vertrauensklasse (D.2): legacy ist eine eigene Klasse, nie guarded.",
+      "enum": ["legacy", "contract"]
+    },
+    "Loop": {
+      "description": "Wie Rust Loop.",
+      "enum": ["poll", "eval", "zfi", "multigx", "ev_bridge", "device_bridge", "eebus", "mypv", "event"]
+    },
+    "PreCheck": {
+      "description": "Welche Prüfung entschieden hat: die acht Vorprüfungen in Reihenfolge (D.1), dazu shape (Form der Operation) und dispatch (keine Senke).",
+      "enum": ["shape", "halt", "deadline", "readOnly", "release", "target", "lease", "constraint", "unchanged", "dispatch"]
+    },
+    "ReleaseState": {
+      "description": "Schreibfreigabe je Gerät (D.1 Vorprüfung 4).",
+      "enum": ["open", "profileInvalid", "setupIncomplete", "notIdentified", "identityMismatch"]
+    },
+    "Tick": {
+      "type": "object",
+      "properties": {
+        "loop": { "$ref": "#/$defs/Loop" },
+        "seq": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["loop", "seq"],
+      "additionalProperties": false
+    },
+    "Lease": {
+      "description": "A.2: Ressource und Epoche (Sperrmarke) der Lease, unter der die Operation läuft.",
+      "type": "object",
+      "properties": {
+        "resource": { "type": "string", "minLength": 1 },
+        "epoch": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["resource", "epoch"],
+      "additionalProperties": false
+    },
+    "Constraints": {
+      "description": "A.1 — effektiver Satz, monoton verschärfend gebildet vom Layer.",
+      "type": "object",
+      "properties": {
+        "noGridCharge": { "type": "boolean" },
+        "noGridExport": { "type": "boolean" },
+        "maxChargeW": { "type": ["number", "null"] },
+        "maxDischargeW": { "type": ["number", "null"] },
+        "socFloorPct": { "type": ["number", "null"] },
+        "socCeilPct": { "type": ["number", "null"] },
+        "gridImportMaxW": { "type": ["number", "null"] },
+        "gridExportMaxW": { "type": ["number", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "ConstraintSet": {
+      "description": "A.1 K3 — Prüfgrundlage, nicht Beschriftung.",
+      "type": "object",
+      "properties": {
+        "set": { "$ref": "#/$defs/Constraints" },
+        "caps": {
+          "type": "object",
+          "properties": {
+            "chargeW": { "type": "number" },
+            "dischargeW": { "type": "number" }
+          },
+          "additionalProperties": false
+        },
+        "enforcedBy": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      },
+      "required": ["set", "caps", "enforcedBy"],
+      "additionalProperties": false
+    },
+    "LegacyCall": {
+      "description": "D.2 Legacy-Modus: der heutige, schon kodierte Transport-Aufruf; das Tor ruft sinks[sink].legacy[fn](...args) unverändert.",
+      "type": "object",
+      "properties": {
+        "sink": { "type": "string", "minLength": 1 },
+        "fn": { "type": "string", "minLength": 1 },
+        "args": { "type": "array" }
+      },
+      "required": ["sink", "fn", "args"],
+      "additionalProperties": false
+    },
+    "GateOp": {
+      "description": "Eine Tor-Operation (Anhang I.1). Schlüsselmenge geschlossen; Schlüssel mit x- oder _ werden ignoriert.",
+      "type": "object",
+      "properties": {
+        "device": { "type": "string", "minLength": 1 },
+        "point": { "type": "string", "minLength": 1 },
+        "value": { "$ref": "#/$defs/Scalar" },
+        "requested": { "$ref": "#/$defs/Scalar" },
+        "source": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "#/$defs/Kind" },
+        "action": { "$ref": "#/$defs/Action" },
+        "lease": { "anyOf": [{ "$ref": "#/$defs/Lease" }, { "type": "null" }] },
+        "constraints": { "$ref": "#/$defs/ConstraintSet" },
+        "validUntilMs": { "type": ["number", "null"] },
+        "tick": { "$ref": "#/$defs/Tick" },
+        "step": { "type": "integer", "minimum": 0 },
+        "ruleId": { "type": "string", "minLength": 1 },
+        "confirmedBy": { "type": "string", "minLength": 1 },
+        "legacy": { "anyOf": [{ "$ref": "#/$defs/LegacyCall" }, { "type": "null" }] }
+      },
+      "required": ["device", "point", "value", "source", "kind", "action", "lease", "constraints", "validUntilMs", "tick", "step"],
+      "patternProperties": { "^(x-|_)": {} },
+      "additionalProperties": false
+    },
+    "SubmitResult": {
+      "description": "Rückkanal des Tors (§0.2, Anhang I.1) plus B.5-Zusatzfelder. delivery null = nicht versucht. result/error sind prozessinterne Referenzen auf Rückgabe bzw. Fehler der Senke (unverändert) und werden nicht serialisiert.",
+      "type": "object",
+      "properties": {
+        "opId": { "type": "string", "minLength": 1 },
+        "outcome": { "$ref": "#/$defs/Outcome" },
+        "delivery": { "anyOf": [{ "$ref": "#/$defs/Delivery" }, { "type": "null" }] },
+        "detail": { "type": "string", "minLength": 1 },
+        "blockedBy": { "$ref": "#/$defs/PreCheck" },
+        "reason": { "type": "string", "minLength": 1 },
+        "exceptionCode": { "type": "integer", "minimum": 1 },
+        "trust": { "$ref": "#/$defs/Trust" },
+        "delivered": { "type": "boolean" },
+        "pickup": { "type": "boolean" },
+        "possiblyEffective": { "type": "boolean" },
+        "result": {},
+        "error": {}
+      },
+      "required": ["opId", "outcome", "delivery", "trust", "delivered", "pickup", "possiblyEffective"],
+      "additionalProperties": false
+    },
+    "WriteEvent": {
+      "description": "dvhub.write/1 (Rust dvhub-record/schema/dvhub.write-1.schema.json) plus additive Felder op_id, action, step, lease, delivery, trust. Phase 1: nur die semantische Ebene.",
+      "type": "object",
+      "properties": {
+        "schema": { "const": "dvhub.write/1" },
+        "impl": { "const": "node" },
+        "mode": { "enum": ["live", "shadow", "replay"] },
+        "ts_ms": { "type": "integer" },
+        "tick": { "$ref": "#/$defs/Tick" },
+        "decision_id": { "type": "string", "minLength": 1 },
+        "op_id": { "type": "string", "minLength": 1 },
+        "layer": { "enum": ["semantic", "wire"] },
+        "target": {
+          "type": "object",
+          "properties": {
+            "kind": { "anyOf": [{ "enum": ["modbus", "mqtt", "http", "ocpp", "eebus", "ws"] }, { "type": "null" }] },
+            "device": { "type": "string", "minLength": 1 }
+          },
+          "required": ["kind", "device"],
+          "additionalProperties": false
+        },
+        "point": { "type": "string", "minLength": 1 },
+        "value": {
+          "type": "object",
+          "properties": {
+            "eng": { "$ref": "#/$defs/Scalar" },
+            "unit": { "type": "string" },
+            "requested": { "$ref": "#/$defs/Scalar" }
+          },
+          "required": ["eng"],
+          "additionalProperties": false
+        },
+        "cause": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string", "minLength": 1 },
+            "gates": { "type": "array", "items": { "type": "string" } },
+            "rule_id": { "type": "string" }
+          },
+          "required": ["source", "gates"],
+          "additionalProperties": false
+        },
+        "kind": { "$ref": "#/$defs/Kind" },
+        "action": { "$ref": "#/$defs/Action" },
+        "step": { "type": "integer", "minimum": 0 },
+        "lease": { "anyOf": [{ "$ref": "#/$defs/Lease" }, { "type": "null" }] },
+        "outcome": { "$ref": "#/$defs/Outcome" },
+        "delivery": { "anyOf": [{ "$ref": "#/$defs/Delivery" }, { "type": "null" }] },
+        "error": { "type": ["string", "null"] },
+        "detail": { "type": "string", "minLength": 1 },
+        "trust": { "$ref": "#/$defs/Trust" },
+        "inputs_ref": { "type": ["string", "null"] },
+        "config_rev": { "type": ["string", "null"] },
+        "state_flags": {
+          "type": "object",
+          "properties": {
+            "not_halt": { "type": "boolean" },
+            "forced_off": { "type": "boolean" },
+            "read_only": { "type": "boolean" },
+            "license_pro": { "type": "boolean" }
+          },
+          "required": ["not_halt", "forced_off", "read_only", "license_pro"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["schema", "impl", "mode", "ts_ms", "tick", "decision_id", "op_id", "layer", "target", "point", "value", "cause", "kind", "action", "step", "lease", "outcome", "delivery", "error", "trust", "inputs_ref", "config_rev", "state_flags"],
+      "additionalProperties": false
+    }
+  }
+}

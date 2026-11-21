@@ -1,0 +1,94 @@
+{
+  "label": "Deye SUN-…LP1 (LV, 1-phasig) — nur Anzeige",
+  "beta": true,
+  "readOnly": true,
+  "help": "Nur Anzeige, keine Steuerung, am Gerät ungeprüft. DVhub liest Netz, PV (MPPT 1–4), Akku-Leistung, SoC und Hauslast über ein RS485-Ethernet-Gateway (Modbus TCP, Slave-ID 1) und schreibt nichts an den Wechselrichter. Die 1-phasige Registerkarte ist nur aus Community-Quellen belegt; Vorzeichen und Netzmesspunkt am Gerät prüfen. Anleitung: docs/DEYE-NUR-ANZEIGE.md.",
+  "_doc": [
+    "Deye-Niedervolt-Hybrid, 1-phasig: SUN-…K-SG01LP1/SG03LP1/SG04LP1/SG05LP1 (Gerätetyp Register 0 = 0x0300).",
+    "Baugleich Sunsynk (1-phasig). NUR LESEN: readOnly erzwingt leere Schreibziele und schaltet die DV-Abregelung ab,",
+    "auch mit dvControl.enabled in der config.json. Beta: nur im Bleeding-Edge-Kanal, an keinem Gerät getestet.",
+    "",
+    "LP1 hat eine ANDERE Registerkarte als LP3/HP3 (150–200 statt 500–730). Quellen (abgerufen 18.11.2026), alle",
+    "Community [COMM]: kellerza/sunsynk src/sunsynk/definitions/single_phase.py und evcc",
+    "templates/definition/meter/deye-storage.yaml (Deye/Sunsynk 1-phasig). Es gibt KEINE Herstellerquelle: Das in der",
+    "Deye-Spec (.planning/docs/research/2026-11-15-deye-modbus-control-spec.md §11) als „RS485_MODBUS RTU Hybrid",
+    "Inverter Protocol (Without Control)“ verlinkte PDF ist ein Ginlong/Solis-Protokoll (Register 33xxx, „Solis",
+    "Inverter“ bei 35000), kein Deye-Dokument.",
+    "",
+    "kellerza schreibt viele Register mit Faktor −1. Das heißt dort „vorzeichenbehaftet lesen“ (sensors.py:",
+    "unpack_value(signed=factor < 0), Wert × |factor|), NICHT „Vorzeichen umdrehen“.",
+    "",
+    "Transport wie Deye LP3: RTU 9600 8N1, Slave 1, FC 03, RS485-Ethernet-Gateway im Modus Modbus TCP.",
+    "",
+    "Bewusst NICHT gelesen (fehlt in der Engine):",
+    "- BMS-Grenzen 314/315 (A, kellerza): kein Lesepunkt für Gerätegrenzen (E13).",
+    "- Gerätetyp-Prüfung Register 0: DVhub prüft nicht, ob wirklich ein LP1 antwortet (E10). An einem LP3/HP3",
+    "  liest dieses Profil fremde Register."
+  ],
+
+  "victron": {
+    "transport": "modbus",
+    "port": 502,
+    "unitId": 1,
+    "timeoutMs": 2000
+  },
+
+  "meter": {
+    "_comment": "Netz, Register 169 „Grid power“ (S16, 1 W; = L1 167 + L2 168) [COMM kellerza; evcc deye-storage „Total grid power“]. Vorzeichen + = Bezug [COMM: evcc liest 169 unverändert bei evcc-Netzkonvention + = Bezug]. UNSICHER: 169 misst laut kellerza am Netzanschluss des WR (Non-essential = 172 − 167). Hängen Verbraucher zwischen externem CT und WR, gehören die nicht dazu; dann wäre 172 „Grid CT power“ (externer CT) der Netzanschlusspunkt — der liefert ohne externen CT aber 0 (derselbe Fehler wie 616–618 bei LP3). Ein Register „folgt Einstellung intern/extern“ wie 622–625 bei LP3/HP3 ist für LP1 nicht belegt. Am Gerät 169 und 172 mit dem Netzzähler vergleichen.",
+    "fc": 3,
+    "address": 169,
+    "quantity": 1,
+    "timeoutMs": 2000
+  },
+
+  "points": {
+    "soc": {
+      "_comment": "SoC, Register 184 (U16, 1 %) [COMM kellerza + evcc].",
+      "enabled": true,
+      "fc": 3,
+      "address": 184,
+      "quantity": 1,
+      "signed": false,
+      "scale": 1,
+      "offset": 0
+    },
+    "batteryPowerW": {
+      "_comment": "Akku, Register 190 „Battery output power“ (S16, 1 W) [COMM kellerza + evcc]. UNSICHER (am Gerät prüfen): Vorzeichen. Annahme + = Entladen — evcc liest 190 unverändert bei evcc-Konvention + = Entladen. DVhub erwartet + = Laden, daher scale -1. Zeigt das Gerät beim Laden einen negativen Wert in DVhub, gehört scale auf 1.",
+      "enabled": true,
+      "fc": 3,
+      "address": 190,
+      "quantity": 1,
+      "signed": true,
+      "scale": -1,
+      "offset": 0
+    },
+    "pvPowerW": {
+      "_comment": "PV = PV1 + PV2 + PV3 + PV4, Register 186–189 (U16, 1 W) [COMM evcc uint16; kellerza signed], summiert. Geräte mit 2 MPPT melden PV3/PV4 = 0.",
+      "enabled": true,
+      "fc": 3,
+      "address": 186,
+      "quantity": 4,
+      "signed": false,
+      "scale": 1,
+      "offset": 0,
+      "sumRegisters": true
+    },
+    "selfConsumptionW": {
+      "_comment": "Hauslast, Register 178 „Load power“ (S16, 1 W; = L1 176 + L2 177) [COMM, nur kellerza].",
+      "enabled": true,
+      "fc": 3,
+      "address": 178,
+      "quantity": 1,
+      "signed": true,
+      "scale": 1,
+      "offset": 0
+    }
+  },
+
+  "controlWrite": {},
+
+  "dvControl": {
+    "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
+    "enabled": false
+  }
+}

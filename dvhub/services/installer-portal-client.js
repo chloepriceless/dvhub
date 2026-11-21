@@ -204,6 +204,22 @@ const MANUFACTURER_LABELS = {
   fronius: 'Fronius GEN24',
   'deye-lv': 'Deye SUN-…SG04LP3 (LV, 3-phasig)',
   sungrow: 'Sungrow SH Hybrid',
+  // Nur-Lese-Profile (Beta, nur Bleeding Edge, 18.11.2026): Anzeige ohne Steuerung, am Gerät ungeprüft.
+  'deye-hp3': 'Deye SUN-…SG01HP3 (HV, 3-phasig) — nur Anzeige',
+  'deye-lp1': 'Deye SUN-…LP1 (LV, 1-phasig) — nur Anzeige',
+  e3dc: 'E3/DC S10 — nur Anzeige',
+  solis: 'Solis Hybrid — nur Anzeige',
+  sofar: 'SOFAR HYD — nur Anzeige',
+  'foxess-h1': 'FoxESS H1/AC1 — nur Anzeige',
+  'huawei-sun2000': 'Huawei SUN2000 + LUNA2000 — nur Anzeige',
+  'goodwe-et': 'GoodWe ET/EH/BT/BH — nur Anzeige',
+  'kostal-plenticore': 'Kostal PLENTICORE / PIKO IQ — nur Anzeige',
+  'solax-g4': 'SolaX X1/X3-Hybrid G4 — nur Anzeige',
+  'lg-ess-home': 'LG ESS Home 8/10 — nur Anzeige',
+  'solaredge-storedge': 'SolarEdge StorEdge — nur Anzeige',
+  'alphaess-smile': 'AlphaESS SMILE — nur Anzeige',
+  'growatt-sph': 'Growatt SPH — nur Anzeige',
+  'sma-speedwire': 'SMA Speedwire (STP Smart Energy, SBS, SB/STP) — nur Anzeige',
 };
 
 // Ausgewählter Provider/Hersteller (menschenlesbar) — nur Auswahl, kein Host.

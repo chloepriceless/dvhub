@@ -102,7 +102,16 @@ const VICTRON_FIELDS = [
   // sie und die Kachel zeigt im Split-Prozess-Betrieb weder Zustand noch den Notladungs-Hinweis.
   'runningState',
   'runningStateText',
-  'emergencyCharge'
+  'emergencyCharge',
+  // Gerätegrenzen aus dem Herstellerprofil (Lese-Engine E13, 18.11.2026): gelesene BMS-/WR-Grenzen für Laden/
+  // Entladen in W bzw. A — nur Anzeige. Whitelisted, sonst verliert der IPC-Snapshot sie im Split-Prozess-Betrieb.
+  'deviceMaxChargeW',
+  'deviceMaxDischargeW',
+  'deviceMaxChargeA',
+  'deviceMaxDischargeA',
+  // Kennungsprobe des Herstellerprofils (Lese-Engine E10, 19.11.2026): {status, text, hidden, checks, checkedAt}.
+  // Whitelisted, sonst sähe /api/status im Split-Prozess-Betrieb weder den Hinweis noch, was ausgeblendet ist.
+  'identityProbe'
 ];
 
 const SCHEDULE_FIELDS = [

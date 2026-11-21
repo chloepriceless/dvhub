@@ -1,0 +1,360 @@
+{
+  "cycle": [
+    {
+      "step": "Start-Freigabe (Cache leer)",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": true,
+      "wire": [
+        "W6 gx/u100 @2707=1",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Sperre (§51)",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=0",
+        "W6 gx/u100 @2708=1"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Sperre gleich",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Sperre DV (forcedOff)",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Freigabe",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": true,
+      "wire": [
+        "W6 gx/u100 @2707=1",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    }
+  ],
+  "control_disabled": [
+    {
+      "step": "Sperre bei dvControl.enabled=false",
+      "dv": "none",
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Freigabe bei dvControl.enabled=false",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": true,
+      "wire": [
+        "W6 gx/u100 @2707=1",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    }
+  ],
+  "partial_nothalt": [
+    {
+      "step": "Sperre, 2708 Zeitüberschreitung",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "err:timeout",
+      "lastFeedIn": null,
+      "partial": true,
+      "wire": [
+        "W6 gx/u100 @2707=0",
+        "W6 gx/u100 @2708=1 !timeout"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write_error"
+      ]
+    },
+    {
+      "step": "Sperre im Not-Halt",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "err:timeout",
+      "lastFeedIn": null,
+      "partial": true,
+      "wire": [],
+      "events": [
+        "dv_write_blocked_nothalt"
+      ]
+    },
+    {
+      "step": "Freigabe im Not-Halt (emergency_stop_release)",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": true,
+      "wire": [
+        "W6 gx/u100 @2707=1",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Freigabe erneut",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": true,
+      "wire": [],
+      "events": []
+    }
+  ],
+  "write_safety": [
+    {
+      "step": "Sperre bei writeSafety.ok=false",
+      "dv": "none",
+      "wire": [],
+      "events": [
+        "control_write_blocked_config_unsafe"
+      ]
+    },
+    {
+      "step": "Freigabe bei writeSafety.ok=false",
+      "dv": "none",
+      "wire": [],
+      "events": []
+    }
+  ],
+  "release_backoff": [
+    {
+      "step": "Sperre",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=0",
+        "W6 gx/u100 @2708=1"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Freigabe Versuch 1",
+      "feedExcessDcPv": "err:timeout",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=1 !timeout",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write_error",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Freigabe Versuch 2",
+      "feedExcessDcPv": "err:timeout",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=1 !timeout",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write_error",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Freigabe Versuch 3",
+      "feedExcessDcPv": "err:timeout",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=1 !timeout",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write_error",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Freigabe Versuch 4",
+      "feedExcessDcPv": "backoff",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Freigabe nach Backoff-Fenster",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": true,
+      "wire": [
+        "W6 gx/u100 @2707=1",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    }
+  ],
+  "release_backoff_explicit": [
+    {
+      "step": "Sperre",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=0",
+        "W6 gx/u100 @2708=1"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Freigabe Versuch 1",
+      "feedExcessDcPv": "err:timeout",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=1 !timeout",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write_error",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Freigabe Versuch 2",
+      "feedExcessDcPv": "err:timeout",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=1 !timeout",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write_error",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Freigabe Versuch 3",
+      "feedExcessDcPv": "err:timeout",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=1 !timeout",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write_error",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Freigabe ausdrücklich im Backoff",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": true,
+      "wire": [
+        "W6 gx/u100 @2707=1",
+        "W6 gx/u100 @2708=0"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    }
+  ],
+  "verify_match": [
+    {
+      "step": "Sperre",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=0",
+        "W6 gx/u100 @2708=1"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Prüfung nach 1 s",
+      "wire": [
+        "R3 gx/u100 @2707 x1",
+        "R3 gx/u100 @2708 x1"
+      ],
+      "events": [
+        "control_write_verified",
+        "control_write_verified"
+      ]
+    }
+  ],
+  "verify_mismatch": [
+    {
+      "step": "Sperre, Gerät verwirft 2708",
+      "feedExcessDcPv": "ok",
+      "dontFeedExcessAcPv": "ok",
+      "lastFeedIn": false,
+      "wire": [
+        "W6 gx/u100 @2707=0",
+        "W6 gx/u100 @2708=1"
+      ],
+      "events": [
+        "dv_victron_write",
+        "dv_victron_write"
+      ]
+    },
+    {
+      "step": "Prüfung nach 1 s",
+      "wire": [
+        "R3 gx/u100 @2707 x1",
+        "R3 gx/u100 @2708 x1"
+      ],
+      "events": [
+        "control_write_verified",
+        "control_write_unconfirmed"
+      ]
+    }
+  ]
+}

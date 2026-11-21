@@ -75,6 +75,22 @@ function codeLabel(kind, code) {
   return { timeout: 'Timeout', reset: 'Verbindung getrennt', unreachable: 'nicht erreichbar', refused: 'ECONNREFUSED' }[kind] || 'Fehler';
 }
 
+// M22: Funktion, Adresse, Menge/Wert einer Anfrage für das Fehler-Protokoll — bewusst OHNE host/port (LAN-Adresse).
+// Gemeinsam für den Transport-Mantel (wrap) und für Writes, die das Schreibtor schon vor dem Draht abweist (Lese-Modus,
+// services/inverter/sungrow.js unwrapGate) — beide Wege melden denselben Fehler gleich (Parität alt ↔ Tor).
+const FC_OF = { mbWriteSingle: 6, mbWriteMultiple: 16 };
+export function modbusRequestInfo(method, arg, errCode = null) {
+  return {
+    errCode,
+    fc: FC_OF[method] ?? (arg?.fc ?? null),
+    address: arg?.address,
+    quantity: method === 'mbRequest' ? (arg?.quantity ?? null) : (method === 'mbWriteMultiple' ? (arg?.values?.length ?? null) : 1),
+    // Codex 7dd3cd43 (P2): auch bei FC 16 den geschriebenen Wert (ein Wort → Zahl, mehrere → Liste).
+    value: method === 'mbWriteSingle' ? (arg?.value ?? null)
+      : (method === 'mbWriteMultiple' && Array.isArray(arg?.values) ? (arg.values.length === 1 ? arg.values[0] : [...arg.values]) : null),
+  };
+}
+
 export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, source = null, wireToDoc = (a) => a + 1 } = {}) {
   let total = 0;
   let reqTimes = [];        // Zeitstempel der letzten Anfragen (für Anfragen/s)
@@ -158,30 +174,24 @@ export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, 
 
   function wrap(transport) {
     if (!transport) return transport;
-    const FC_OF = { mbWriteSingle: 6, mbWriteMultiple: 16 };
-    const call = async (method, arg) => {
+    // Alle Argumente durchreichen (E7: opts.atomic der Lese-Engine als zweites Argument); das Fehler-Protokoll (M22)
+    // nimmt Funktion/Adresse/Menge/Wert aus dem ersten (der Anfrage).
+    const call = async (method, ...args) => {
+      const arg = args[0];
       const start = now();
       try {
-        const r = await transport[method](arg);
+        const r = await transport[method](...args);
         record(true, now() - start);
         return r;
       } catch (e) {
-        // M22: Funktion, Adresse, Menge/Wert für das Fehler-Protokoll — bewusst OHNE host/port (LAN-Adresse).
-        record(false, now() - start, e?.message || String(e), {
-          errCode: e?.code ?? null,
-          fc: FC_OF[method] ?? (arg?.fc ?? null),
-          address: arg?.address,
-          quantity: method === 'mbRequest' ? (arg?.quantity ?? null) : (method === 'mbWriteMultiple' ? (arg?.values?.length ?? null) : 1),
-          // Codex 7dd3cd43 (P2): auch bei FC 16 den geschriebenen Wert (ein Wort → Zahl, mehrere → Liste).
-          value: method === 'mbWriteSingle' ? (arg?.value ?? null)
-            : (method === 'mbWriteMultiple' && Array.isArray(arg?.values) ? (arg.values.length === 1 ? arg.values[0] : [...arg.values]) : null),
-        });
+        record(false, now() - start, e?.message || String(e), modbusRequestInfo(method, arg, e?.code ?? null));
         throw e;
       }
     };
     return {
       get type() { return transport.type; },
-      mbRequest: (arg) => call('mbRequest', arg),
+      // Zweites Argument (opts.atomic der Lese-Engine, E7) unverändert durchreichen.
+      mbRequest: (...args) => call('mbRequest', ...args),
       mbWriteSingle: (arg) => call('mbWriteSingle', arg),
       mbWriteMultiple: (arg) => call('mbWriteMultiple', arg),
     };

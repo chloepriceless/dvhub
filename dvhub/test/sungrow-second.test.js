@@ -210,7 +210,9 @@ test('M2: Besitz-Merker verloren, Master in DVhubs EIGENEM Modus 2 → NICHT fre
   assert.equal(r.ems._st.owns, true, 'Besitz zurückgenommen');
 });
 
-test('M2: fremder Modus 2 (NICHT DVhubs letzter Write) bleibt fremd → kein Übersteuern', async () => {
+// H-9 (Christin 17.11.2026, bestätigt 20.11.2026) kehrt diesen Fall um: ein Modus 2 ohne DVhub-Besitz wird nicht mehr
+// als fremd stehen gelassen, sondern mit DVhubs eigenem Befehl übernommen (test/sungrow-h9-modus2-uebernehmen.test.js).
+test('M2 → H-9: fremder Modus 2 (NICHT DVhubs letzter Write) wird mit DVhubs eigenem Befehl übernommen', async () => {
   const r = emsRig({ batteryPowerW: -500 });
   // Gerät steht real in Modus 2 mit FREMDEM Befehl (anderes System), DVhub hat nichts geschrieben.
   r.image.holding.set(wire(13050), EMS_MODE.FORCED);
@@ -219,9 +221,11 @@ test('M2: fremder Modus 2 (NICHT DVhubs letzter Write) bleibt fremd → kein Üb
   r.ems._st.dev = null; r.ems._st.lastMasterWrite = null;
   r.ems._st.owns = false; r.ems._st.ownMode = null;
   const res = await r.ems.applySetpoint(-4000, 'rule:abend');
-  // Ohne passenden eigenen Write ist Modus 2 fremd → foreign, DVhub übersteuert NICHT (kein claim).
-  assert.ok(res.ok === false || res.error === 'sungrow_foreign_ems_mode' || res.skipped === true, JSON.stringify(res));
-  assert.notEqual(r.ems._st.owns, true, 'DVhub beansprucht den fremden Modus 2 NICHT');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  // P = −500 + 0,7 · (−4000) = −3300 → Master-BDC 3000 W. Bekannter Write: Leistung und Befehl, kein Moduswrite.
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[POWER, 3000], [CMD, EMS_CMD.DISCHARGE]]);
+  assert.equal(r.ems._st.owns, true, 'Besitz durch DVhubs eigenen Write');
+  assert.equal(r.ems._st.ownMode, EMS_MODE.FORCED);
 });
 
 test('N5: sungrowConfiguredRegulateMs — Master-Takt, Slave getrennt bzw. geerbt, 0 = Auto', () => {
@@ -881,15 +885,16 @@ function slaveEmsRig({ mode = EMS_MODE.FORCED, cmd = EMS_CMD.STOP, power = 0 } =
   return { ems, t, image, state, cfg };
 }
 
-test('M12: Slave im von DVhub geführten Zustand (Modus 2 + 0xCC) → Besitz übernommen, auch ohne Write', async () => {
+// H-9 (Christin 17./20.11.2026) ersetzt M12: der Besitz entsteht durch DVhubs eigenen Write, nicht mehr ohne Write.
+test('M12 → H-9: Slave im von DVhub geführten Zustand (Modus 2 + 0xCC) → Besitz per einem bekannten Write (0xCC)', async () => {
   const r = slaveEmsRig({ mode: EMS_MODE.FORCED, cmd: EMS_CMD.STOP, power: 0 });
   assert.equal(r.ems._st.owns, false, 'vorher Besitz nein');
   const res = await r.ems.applyDirectCommand({ mode: 'forced', command: 'stop', powerW: 0, reason: 'floor' });
   assert.equal(res.ok, true);
-  assert.equal(res.unchanged, true, 'kein Write (schon im Zielzustand)');
+  assert.notEqual(res.unchanged, true);
   assert.equal(r.ems._st.owns, true, 'Besitz übernommen');
   assert.equal(r.ems._st.ownMode, EMS_MODE.FORCED);
-  assert.deepEqual(r.t.writes, [], 'kein Write ausgelöst');
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP]], 'genau ein Write: Befehl Stopp');
 });
 
 test('M12: Slave bei Rückzug (self-Vorgabe) übernimmt NICHT den Besitz', async () => {
@@ -960,8 +965,14 @@ test('Split: Slave offline → nur Master (voller Anteil), kein Slave-Write', as
 test('Aufgabe 3 (C6): Slave-Lesefehler (modbus exception 4) → Master steuert weiter, KEIN Modus 0 bei beiden', async () => {
   // Feld 15.11.: ein einmaliges „EMS-Register lesen fehlgeschlagen: modbus exception 4" warf beide WR auf Modus 0
   // (~20 s Ausfall). Jetzt: Slave-Anteil auf den Master, der Master steuert weiter. Slave-EMS-Block (wire 13050).
-  const r = splitRig({ masterSoc: 80, slaveSoc: 20, slaveMock: { failReadAt: wire(13050) } });
-  const res = await r.ems.applySetpoint(r.setpoint, 'rule:abend');
+  // Im laufenden Betrieb (Master schon in Modus 2). Genau im Eintrittstakt aus Modus 0 wartet der Eintritt dagegen,
+  // bis der Slave-Befehl bestätigt ist (Christin 21.11.2026, test/sungrow-nur-master-slave-altbefehl.test.js).
+  const fail = { on: false };
+  const r = splitRig({ masterSoc: 80, slaveSoc: 20, slaveMock: { onRead: ({ fc, address }) => { if (fail.on && fc === 3 && address === wire(13050)) throw new Error('modbus exception 4'); } } });
+  assert.equal((await r.ems.applySetpoint(r.setpoint, 'rule:abend')).ok, true, 'beide WR laufen');
+  assert.equal(r.mImage.holding.get(SMODE), EMS_MODE.FORCED);
+  fail.on = true;
+  const res = await r.ems.applySetpoint(r.setpoint - 1, 'rule:abend');
   assert.equal(res.ok, true, 'Master steuert weiter (ok)');
   assert.equal(res.slaveFellBack, true, 'Slave-Anteil auf den Master verlagert');
   // Master steht in Forced (NICHT Modus 0/Self) und entlädt den vollen System-Anteil.
@@ -1426,14 +1437,23 @@ test('Befund 2: Slave-Fehler im Split entlädt den Master NICHT unter seinen SoC
   const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30, secondInverter }, optimizer: { maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000, hardFloorSocPct: 20 } });
   const masterImage = sungrowImage(); const slaveImage = sungrowImage();
   const masterT = mockSungrow(masterImage);
-  const slaveT = mockSungrow(slaveImage, { failReadAt: wire(13050) }); // Slave-Lesefehler (modbus exc 4)
-  const clock = 1_000_000; const now = () => clock;
+  // Slave-Lesefehler (modbus exc 4) im laufenden Betrieb — genau im Eintrittstakt aus Modus 0 wartet der Eintritt,
+  // bis der Slave-Befehl bestätigt ist (Christin 21.11.2026).
+  const fail = { on: false };
+  const slaveT = mockSungrow(slaveImage, { onRead: ({ fc, address }) => { if (fail.on && fc === 3 && address === wire(13050)) throw new Error('modbus exception 4'); } });
+  let clock = 1_000_000; const now = () => clock;
   const state = { victron: { errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock }, device: sungrowDevice({ bdcRatedW: 10000 }), batteryPowerW: 0, pvPowerW: 0, selfConsumptionW: 3000, soc: 37.5, sungrowMasterSocPct: 15 },
     meter: { ok: true, updatedAt: clock, grid_total_w: 3000 }, ctrl: {},
     sungrowSecond: { online: true, updatedAt: clock, host: SLAVE_HOST, aggregate: true, batteryPowerW: 0, pvPowerW: 0, socPct: 60, bdcRatedW: 10000 } };
   const slaveEms = createSungrowEms({ state, getCfg: () => cfg, transport: slaveT, pushLog: () => {}, now, sleep: async () => {}, statusKey: 'sungrowEmsSlave', isSlave: true, connOverride: () => ({ host: SLAVE_HOST, port: 502, unitId: 1, timeoutMs: 1500 }) });
   const ems = createSungrowEms({ state, getCfg: () => cfg, transport: masterT, pushLog: () => {}, now, sleep: async () => {}, slaveActuator: slaveEms });
-  const res = await ems.applySetpoint(0, 'rule:eigenverbrauch');
+  assert.equal((await ems.applySetpoint(0, 'rule:eigenverbrauch')).ok, true, 'Eintritt: Slave entlädt, Master am Boden auf Stopp');
+  assert.equal(masterImage.holding.get(wire(13050)), 2);
+  fail.on = true;
+  clock += 11_000;
+  for (const f of ['batteryPowerW', 'pvPowerW', 'selfConsumptionW']) state.victron.fieldUpdatedAt[f] = clock;
+  state.meter.updatedAt = clock; state.sungrowSecond.updatedAt = clock;
+  const res = await ems.applySetpoint(-1, 'rule:eigenverbrauch');
   assert.equal(res.ok, true);
   assert.equal(res.slaveFellBack, true, 'Slave-Fehler → Fallback auf Master-only');
   assert.equal(res.masterW, 0, 'Master unter seinem Boden (15% < 20%) → entlädt NICHT, auch im Fallback');

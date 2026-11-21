@@ -20,7 +20,11 @@ import fs from 'node:fs';
 
 import { meterImport } from '../import-limit/core.js';
 import { atomicWriteControlState } from '../../control-state-io.js';
-import { createModbusHealth, classifyModbusError } from './modbus-health.js';
+import { ReadOnlyViolation } from '../../read-only-guard.js';
+import { GateBlockedError } from '../gate/index.js';
+import { c2AllowsRelease, createLegacyGate, inverterReleaseState, modbusLegacySink, SUNGROW_GATE_DEVICES } from '../gate/legacy.js';
+import { createModbusHealth, classifyModbusError, modbusRequestInfo } from './modbus-health.js';
+import { releaseBackoffNextAt } from '../release-backoff.js';
 
 /** Doku-Adresse → Draht-Adresse. */
 export const wire = (docAddress) => Number(docAddress) - 1;
@@ -58,6 +62,10 @@ const EMS_POWER_ADDR = wire(13052);
 // Doku 13080 „External EMS heartbeat“ (U16, 0–1000 s, Standard 20 s): Wert = Frist; ihn innerhalb der Frist
 // erneut schreiben ist der Herzschlag. Bleibt er aus, kehrt der Wechselrichter in Self-consumption zurück.
 export const HEARTBEAT_ADDR = wire(13080);
+
+// Draht-Adresse → Punkt im Schreibtor (VCL-Vertrag v6 C.2 `writes`). Nur diese vier Register schreibt DVhub am
+// Sungrow; für alles andere (u. a. Min-/Max-SoC 13059/13058, H-8) hat das Tor keinen Punkt und sperrt.
+const GATE_POINT = Object.freeze({ [EMS_MODE_ADDR]: 'emsMode', [EMS_CMD_ADDR]: 'emsCmd', [EMS_POWER_ADDR]: 'emsPower', [HEARTBEAT_ADDR]: 'heartbeat' });
 
 /** Betreiber-Einstellung cfg.sungrow: Steuermodus und Herzschlag-Frist (20–300 s, Standard 30 s). */
 export function resolveSungrowControl(cfg) {
@@ -297,24 +305,37 @@ export function decideEmsCommand({
   // Entlade-Boden (SoC < hardFloorSocPct): nur das ENTLADEN sperren. Das Laden aus PV-Überschuss bleibt
   // erlaubt (Sollwert 0 + Einspeisung → p > 0 → Laden bis Netz ≈ 0). Gilt nur im Forced-Pfad.
   const belowFloor = forced && fin(socPct) && fin(floorSocPct) && Number(socPct) < Number(floorSocPct);
+  // Harte Obergrenze für |p| in der gewählten Richtung (I-SafeQuant/VÄ-12): maxCharge bzw. PV-Überschuss bei
+  // Netzlade-Verbot, maxDischarge bzw. Netto-Last bei „keine Einspeisung" oder gesperrter Einspeisung (M25).
+  // Geprüft wird NACH der Quantisierung.
+  let bound = null;
   if (p > 0 && noCharge === true) { p = 0; reason = 'charge_blocked'; } // M25: Laden gesperrt → Stopp
   else if (p > 0) {
-    p = Math.min(p, Number(maxChargeW));
+    bound = Number(maxChargeW);
     if (s <= 0 || noGridCharge === true) {
       const surplus = fin(pvW) && fin(loadW) ? Math.max(0, Number(pvW) - Number(loadW)) : 0;
-      if (p > surplus) { p = surplus; reason = 'charge_pv_only'; }
+      bound = Math.min(bound, surplus);
+      if (Math.min(p, Number(maxChargeW)) > surplus) reason = 'charge_pv_only'; // wie bisher: nach der maxCharge-Klemmung
     }
+    p = Math.min(p, bound);
   } else if (p < 0) {
     if (belowFloor) { p = 0; reason = 'discharge_floor'; } // SoC am Boden → kein Entladen (nur dieser Takt)
     else {
-      p = Math.max(p, -Number(maxDischargeW));
+      bound = Number(maxDischargeW);
       if (s >= 0 || dischargeLoadOnly === true) {
         const netLoad = fin(pvW) && fin(loadW) ? Math.max(0, Number(loadW) - Number(pvW)) : 0;
-        if (-p > netLoad) { p = -netLoad; reason = 'discharge_load_only'; }
+        bound = Math.min(bound, netLoad);
+        if (Math.min(-p, Number(maxDischargeW)) > netLoad) reason = 'discharge_load_only'; // wie bisher: nach der maxDischarge-Klemmung
       }
+      p = Math.max(p, -bound);
     }
   }
-  const powerW = Math.round(Math.abs(p) / 10) * 10;
+  // I-SafeQuant / VÄ-12 (VCL-Vertrag): normal auf das 10-W-Raster runden; reißt der gerundete Wert die harte
+  // Grenze, zur SICHEREN Seite abrunden. Sonst machen 156 W Überschuss 160 W (4 W Netzladen) bzw. 156 W Netto-Last
+  // 160 W Entladen (4 W Akku-Einspeisung) — auch wenn |p| die Grenze vorher nicht überschritt (Fable-Review 18.11.).
+  const q = Math.abs(p) / 10;
+  let powerW = Math.round(q) * 10;
+  if (bound != null && powerW > bound) powerW = Math.floor(q) * 10;
   if (powerW < Math.max(0, Number(minPowerW) || 0)) return { mode: 'forced', command: 'stop', powerW: 0, reason };
   return { mode: 'forced', command: p > 0 ? 'charge' : 'discharge', powerW, reason };
 }
@@ -778,8 +799,12 @@ export function sungrowSecondView(state, cfg) {
  * mit Herzschlag — fällt DVhub aus, kehrt der Wechselrichter selbst in Self-consumption zurück) oder Forced mode
  * (Modus 2, ohne Rückfall). Im Not-Halt: einmal zurück in Self-consumption, wenn DVhub den Modus gesetzt hat
  * (oder gesetzt haben könnte), danach nichts mehr — auch kein Herzschlag.
+ *
+ * Jeder Register-Write geht über das Schreibtor (`gate.submit`, Legacy-Modus, VCL-Vertrag v6 D.1/D.2): die Laufzeit
+ * übergibt das eine Tor des Prozesses (server.js `ctx.gate` → schedule-eval.js), Master und Slave schließen ihren
+ * Transport daran an. Ohne `gate` (Tests, Einzelaufbau) legt der Aktuator ein eigenes mit denselben Richtlinien an.
  */
-export function createSungrowEms({ state, getCfg, transport: baseTransport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false, forcedHeartbeatPath = null, modbusHealth = null }) {
+export function createSungrowEms({ state, getCfg, transport: baseTransport, pushLog = () => {}, now = () => Date.now(), statePath = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), connOverride = null, statusKey = 'sungrowEms', slaveActuator = null, isSlave = false, forcedHeartbeatPath = null, modbusHealth = null, gate: injectedGate = null }) {
   // Modbus-Gesundheit dieser Verbindung (N5/M7b): zählt jede Anfrage/jeden Fehler transparent. wrap() legt sich vor
   // den Transport; der Rest des Aktuators nutzt nur noch `transport` (gezählt). snapshot() geht in publish() an die
   // Kachel. Ein von außen übergebener Zähler (Master: ctx.sungrowMasterHealth) wird GETEILT — dann zählen Poll UND
@@ -787,6 +812,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // M22: ohne geteilten Zähler loggt diese Instanz ihre Modbus-Fehler selbst (wr = Master/Slave, source = ems).
   const modbusHealthInst = modbusHealth || createModbusHealth(now, { pushLog, wr: isSlave ? 'slave' : 'master', source: 'ems' });
   const transport = modbusHealthInst.wrap(baseTransport);
+  // Schreibtor (H-1 Phase 2): die Schreibfunktionen dieses Transports erreicht der Aktuator nur noch über das Tor
+  // (R-T1). Die Not-Halt-Marke des Tors ist dieselbe wie die der Bestandsprüfung in submitReg.
+  const gateDevice = isSlave ? SUNGROW_GATE_DEVICES.slave : SUNGROW_GATE_DEVICES.master;
+  const gate = injectedGate || createLegacyGate({ isHalted: () => state.ctrl?.discretionaryWritesPaused === true });
+  gate.attachSink(gateDevice, modbusLegacySink(transport));
   const st = {
     target: null,        // { setpointW, source, at }
     dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
@@ -814,10 +844,26 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     neutralizedAt: null,  // pausedAt des Not-Halts, für den die eine Rücknahme schon lief
     revokedReason: null,  // ein Tor hat den letzten Sollwert abgelehnt
     acceptSeq: 0,         // zählt angenommene Sollwerte (Aufrufzeitpunkt) — eine ältere Ablehnung widerruft keinen neueren
+    release: null,        // ausstehende manuelle Freigabe (Option A): { reason, confirmedBy, requestedAt, since, attempts, nextAt, lastError }
+    // Ergebnis der LETZTEN Freigabe-Anfrage, wenn es etwas zu melden gibt (Codex d6f4b256 P2: an die Anfrage gebunden,
+    // jede neue Anfrage löscht es): { state: 'done' | 'abandoned' | 'failed', requestedAt, at, … }
+    releaseInfo: null,
     deliver: {},          // M28: Liefert-nicht-Erkennung je WR und Richtung ('master:discharge' → { underSince, stalledUntil, episode })
     limit: {},            // M28 Grundsatz 0: gemessene Lieferfähigkeit je WR und Richtung ('slave:discharge' → { limited, limitW, … })
     splitLast: null,      // M28: zuletzt erfolgreich kommandierte Anteile im Split { direction, masterW, slaveW, at }
     drivenRegulateMs: null, // N3 (nur Slave): Takt, in dem der Master diesen Slave führt (setDrivenRegulateMs)
+    // Slave (Christin 21.11.2026, Fable P2-1): Befehl Stopp seit der letzten eigenen Rücknahme/Prüfung am Gerät
+    // bestätigt (zurückgelesen). Gelöscht, sobald DVhub einen Befehl schreibt oder die Verbindung wechselt; bis zur
+    // ersten Prüfung unbekannt (false).
+    stopConfirmed: false,
+    stopConfirmedAt: 0,  // wann der Stopp zuletzt am Gerät bestätigt wurde (Nachprüfung im Betrieb, Fable 2 P3)
+    // Master: Prüfung des nicht geführten Slave vor Eintritt/im Betrieb (stopSlaveBeforeTakeover).
+    slaveCheck: { failedAt: 0, error: null }, // letzter Fehlschlag mit Gerätezugriff — Drossel (Fable P3-2)
+    slaveNeutralizeTick: null, // Takt, in dem der Pfad den besessenen Slave schon zurückzunehmen versuchte (P3-4)
+    slaveForeignNotified: false, // Lage „Slave unter fremdem EMS" schon gemeldet (Review 4cf0a9e4 P3)
+    slaveRecheckAt: 0,   // letzte Nachprüfung eines nicht geführten Slave mit bestätigtem Stopp (Fable 2 P3)
+    entryDeferred: { since: 0, lastAt: 0, logKey: null, logAt: 0 }, // Wartezustand vor dem Eintritt (P2-2)
+    reentryLogPending: null, // Wiedereintritt (B3) erst melden, wenn er wirklich geschrieben ist (P3-3)
     logKeys: {}
   };
   let chain = Promise.resolve();
@@ -866,6 +912,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     } catch { /* keine/ungültige Datei → frischer Zähler */ }
   }
 
+  function setStopConfirmed(v) {
+    st.stopConfirmed = v === true;
+    st.stopConfirmedAt = v === true ? now() : 0;
+  }
+
   function setOwns(mode) {
     const owns = mode != null;
     if (st.owns === owns && st.ownMode === (owns ? mode : null)) return;
@@ -895,10 +946,15 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   }
 
   // Modus 4 (VPP) ist immer fremd; Modus 3 (External EMS) nur dann nicht, wenn DVhub ihn selbst gesetzt hat
-  // (Merker). Modus 2 (Forced) gilt als fremdes EMS NUR, wenn DVhub gerade im Forced-Modus steuert (dann ist
-  // Modus 2 „seiner" — ein nicht besessener Modus 2 am Master kommt von einem anderen System, B4). Steuert DVhub
-  // per External EMS (Modus 3), ist ein Modus 2 nicht sein erwarteter Modus → die bisherige Bereinigung eines
-  // liegengebliebenen Zwangsbetriebs (zurück in Self-consumption) bleibt.
+  // (Merker) oder das Gerät DVhubs zuletzt bestätigten Write spiegelt (M2).
+  // Modus 2 (Forced) ist NIE fremd — H-9 (Christin 17.11.2026, bestätigt 20.11.2026; VCL-Vertrag v6 Teil H, VÄ-3):
+  // ein gefundener Modus 2 wird übernommen und als eigener weitergefahren, auch ohne Eigentumsbeleg. Das Eigentum
+  // stellt DVhubs erster Write her (needsAdoption → writeDecision adopt: Befehl, bei Laden/Entladen auch die
+  // Leistung, auch wenn das Gerät schon passt), nie ein unbekannter Gerätewert. Bis 8c0f34ea galt ein nicht
+  // besessener Modus 2 bei Forced-Steuerung als fremd (B4) und lief unbeaufsichtigt weiter. Steuert DVhub per
+  // External EMS, verlässt es einen Modus 2 wie bisher mit bekannten Writes (Self: 0xCC + Modus 0; Eintritt:
+  // Leistung, Befehl, Modus 3, Herzschlag). Notausgang für einen ungewollten Modus 2 bleibt die manuelle
+  // Zwangsfreigabe (H-7, forceRelease), auch im Not-Halt.
   // Stimmt der Gerätezustand (Modus 2/3, Befehl, Leistung) mit DVhubs zuletzt am Master BESTÄTIGTEM Write überein?
   // Dann ist der Modus DVhubs EIGENER, auch wenn der Besitz-Merker verloren ging (M2, Feld 16.11.: nach einem
   // Lesefehler löschte DVhub owns, schrieb die Rückgabe aber nicht durch — danach hielt es seinen eigenen Modus 2
@@ -916,15 +972,197 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   const isForeignMode = (mode, dev = null) => {
     if (mode === EMS_MODE.VPP) return true;
     if (mode === EMS_MODE.EXTERNAL) return !(st.owns && st.ownMode === EMS_MODE.EXTERNAL) && !ownWroteMode(EMS_MODE.EXTERNAL, dev);
-    if (mode === EMS_MODE.FORCED) {
-      const controlForced = resolveSungrowControl(getCfg()).modeValue === EMS_MODE.FORCED;
-      if (!controlForced) return false;
-      if (st.owns && st.ownMode === EMS_MODE.FORCED) return false;
-      // Besitz-Merker weg, aber das Gerät zeigt DVhubs zuletzt geschriebenen Modus 2 → EIGENER Modus, NICHT fremd.
-      return !ownWroteMode(EMS_MODE.FORCED, dev);
-    }
-    return false;
+    return false; // Modus 2 (H-9) und Modus 0
   };
+
+  // H-9: Muss DVhub den Betrieb erst per eigenem Write übernehmen, bevor es ihn als eigenen weiterfährt?
+  //   • Master: Forced-Steuerung, DVhub fährt einen Forced-Befehl, das Gerät steht in Modus 2, und DVhub hält keinen
+  //     Forced-Besitz. Das gilt auch, wenn das Gerät DVhubs letzten bestätigten Write spiegelt (M2): ohne Merker sähen
+  //     ihn Not-Halt, Beenden, Außen-Wächter und ExecStopPost nicht.
+  //   • Slave (folgt dem Master-Modus, bekommt nie einen Moduswrite): DVhub fährt einen Befehl und hält keinen Besitz in
+  //     dieser Steuerart. Ersetzt M12 (Besitz OHNE Write, wenn der Zustand im Rahmen der Schreibschwelle passte).
+  // Dann geht DVhubs Befehl voll raus (writeDecision adopt), auch wenn das Gerät schon passt — so läuft nie ein
+  // unbekannter Gerätewert unter DVhubs Besitz weiter. Modus 13050 bleibt 2 (kein zusätzlicher Moduswrite).
+  function needsAdoption(dev, decision, modeValue) {
+    if (!dev || decision?.mode !== 'forced') return false;
+    if (st.owns && st.ownMode === modeValue) return false;
+    if (isSlave) return true;
+    return modeValue === EMS_MODE.FORCED && dev.mode === EMS_MODE.FORCED;
+  }
+  // Was vor der Übernahme am Gerät stand (für die Meldung danach; vor dem Write festhalten, weil writeDecision
+  // lastMasterWrite überschreibt).
+  function adoptionFound(dev) {
+    return { mode: dev.mode, cmd: dev.cmd, powerW: dev.powerW, ownLastWrite: !isSlave && ownWroteMode(EMS_MODE.FORCED, dev) };
+  }
+  // Übernahme melden (warn). Der Slave meldet nur, wenn er etwas fuhr (Befehl ≠ Stopp) — sonst ist es sein
+  // gewöhnlicher Eintritt nach einer Rücknahme.
+  function logAdoption(found, decision) {
+    if (isSlave && found.cmd === EMS_CMD.STOP) return;
+    const side = isSlave ? 'slave' : 'master';
+    const powerW = decision.command === 'stop' ? 0 : decision.powerW;
+    pushLog('sungrow_ems_forced_adopted', {
+      side,
+      found: { mode: found.mode, cmd: found.cmd, powerW: found.powerW },
+      written: { command: decision.command, powerW },
+      ownLastWrite: found.ownLastWrite,
+      text: `Sungrow ${isSlave ? 'Slave' : 'Master'}: ${isSlave ? 'Befehl' : 'Modus 2'} ohne DVhub-Besitz gefunden (Befehl 0x${(found.cmd & 0xffff).toString(16)}, ${found.powerW} W) — DVhub übernimmt (H-9) mit eigenem Befehl: ${describe(decision)}. Ungewollt? „Sungrow freigeben" (auch im Not-Halt).`,
+    }, 'warn');
+  }
+
+  // Master: einen Slave, den DVhub in diesem Takt nicht führt, auf Stopp setzen und das bestätigen. Der Slave folgt dem
+  // Master-Modus (Feld #5, nie ein Modus-Write am Slave); sein Befehl 13051/13052 wirkt, solange der Master im
+  // Steuermodus steht, und ruht in Modus 0.
+  //   kind 'adopt' (H-9, Codex 2a0f18b5 P2): der Master steht schon in einem gefundenen Modus 2 — der Slave-Befehl ist
+  //     so unbekannt wie der des Masters. Ein besessener Slave bleibt hier wie bisher unberührt.
+  //   kind 'entry' (Christin 21.11.2026): der Master tritt aus Modus 0 in den Steuermodus ein (auch der Wiedereintritt
+  //     nach einem geräteeigenen Rückfall). Ein alter Befehl (anderes System, App, früherer Lauf) liefe sonst
+  //     unbeaufsichtigt neben dem vollen Master-Anteil. Vertrag v6: A.8 I-SafePrefix („Eintritt: Leistung und Befehl
+  //     vor dem Modus" — im Verbund auch die des Folgegeräts), VÄ-11 (die Master-Leistung muss für jeden noch möglichen
+  //     Slave-Zustand sicher sein), H-9 (nie einen unbekannten Gerätewert blind fortführen). Nicht besessen →
+  //     stopUnowned (nur 13051 = 0xCC, zurückgelesen); besessen (DVhubs eigener Befehl) → einmal zurücknehmen, aber nicht
+  //     ein zweites Mal im selben Takt, wenn der Pfad es schon versucht hat (Fable P3-4).
+  //   kind 'running' (Fable P2-1): der Master steht in DVhubs Steuermodus, der Slave wird in diesem Takt nicht (mehr)
+  //     geführt (Werte weg, Richtung mit „nur Master", Strategie umgestellt, Slave-Fehler) und ist nicht besessen. Ist
+  //     sein Stopp seit der letzten eigenen Rücknahme/Prüfung nicht bestätigt (etwa nach dem Eintritt bei Notladung mit
+  //     führender Strategie, nach einem Neustart), wird er jetzt gestoppt; ohne Bestätigung tritt der Master zurück
+  //     (Modus 0), bis der Stopp bestätigt ist. Ein besessener Slave bleibt beim Pfad (neutralize, C6: kein Modus 0).
+  // Nicht bestätigt → in diesem Takt nicht übernehmen/eintreten bzw. zurücktreten (Fehler; ein späterer Takt versucht es
+  // neu — nach einem Fehlschlag mit Gerätezugriff frühestens nach dem ruhigen Profil-Takt, Fable P3-2). Ein Slave in
+  // Notladung wird nie kommandiert (S-36): dann wartet es, bis die Notladung vorbei ist und der Stopp möglich wird (Codex
+  // c5502afe P2); im laufenden Betrieb tritt der Master deshalb nicht zurück. Im Not-Halt kein Eintritt und kein Write.
+  // Auch bei einem fremd gesteuerten Slave der ruhige Profil-Takt (Review 4cf0a9e4 P3): endet die Fremdsteuerung, wird
+  // ein stehengebliebener Befehl so binnen eines Takts gestoppt, nicht erst nach deviceRecheckMs.
+  function slaveRecheckMs() {
+    const o = resolveSungrowEmsOptions(sungrowEmsConf(getCfg()) || {});
+    return Math.max(10000, Number(o.deviceRecheckMs) || 60000);
+  }
+  function slaveCheckRetryMs() {
+    const o = resolveSungrowEmsOptions(sungrowEmsConf(getCfg()) || {});
+    return Math.max(5000, Number(o.regulateEveryMs) || 10000);
+  }
+  async function stopSlaveBeforeTakeover(kind = 'adopt', modeValue = EMS_MODE.FORCED, t = now()) {
+    const adopt = kind === 'adopt';
+    const running = kind === 'running';
+    if (isSlave || !slaveActuator) return;
+    if (adopt && slaveActuator.ownsControl?.() === true) return;
+    // Ohne zweiten WR gibt es keinen Slave: der immer angelegte Slave-Aktuator (schedule-eval.js) fiele sonst auf die
+    // Master-Verbindung zurück.
+    if (!resolveSecondInverter(getCfg()).enabled) return;
+    const owned = slaveActuator.ownsControl?.() === true;
+    if (owned) st.slaveForeignNotified = false; // ein fremd gesteuerter Slave ist nie besessen (foreignModeError)
+    // Nachprüfung im Betrieb (Fable 2 P3): ein bestätigter Stopp wird im Lesetakt des Masters (deviceRecheckMs) neu am
+    // Gerät geprüft — sonst liefe ein später per App gesetzter Befehl unbemerkt neben dem vollen Master-Anteil. Nur
+    // lesen (13000 + 13050–13052); steht ein Befehl an, gelten die Stopp-Regeln wie beim Eintritt. Nicht lesbar →
+    // der Master steuert weiter (der zuletzt bekannte Zustand ist Stopp), nächster Versuch nach demselben Takt.
+    let recheck = false;
+    if (running) {
+      if (owned) return;
+      if (slaveActuator.stopConfirmed?.() === true) {
+        const last = Math.max(Number(slaveActuator.stopConfirmedAt?.()) || 0, st.slaveRecheckAt || 0);
+        if (t - last < slaveRecheckMs()) return;
+        recheck = true;
+        st.slaveRecheckAt = t;
+      }
+    }
+    const throttled = !adopt && !recheck && st.slaveCheck.failedAt > 0 && t - st.slaveCheck.failedAt < slaveCheckRetryMs();
+    let ss;
+    if (!adopt && state.ctrl?.discretionaryWritesPaused) {
+      ss = { ok: false, blocked: true, error: 'emergency_stop_active' };
+    } else if (!adopt && owned && st.slaveNeutralizeTick === t) {
+      ss = { ok: false, error: 'slave_not_released' }; // die Rücknahme dieses Takts scheiterte schon (P3-4)
+    } else if (!(!adopt && owned) && isSungrowEmergencyCharge(state.sungrowSecond?.runningState)) {
+      ss = { ok: false, emergency: true, error: 'slave_emergency_charge' };
+    } else if (throttled) {
+      ss = { ok: false, error: st.slaveCheck.error, throttled: true, foreign: st.slaveCheck.foreign === true };
+    } else if (!adopt && owned) {
+      const nr = await slaveActuator.neutralize('master_entry');
+      ss = slaveActuator.ownsControl?.() === true ? { ok: false, error: nr?.error || nr?.reason || 'slave_not_released' } : { ok: true };
+    } else {
+      ss = await slaveActuator.stopUnowned(adopt ? 'master_adopted' : (running ? 'master_running' : 'master_entry'));
+    }
+    // Nachprüfung, Slave nicht lesbar: Zustand unverändert annehmen (zuletzt Stopp), kein Rücktritt.
+    if (recheck && ss?.ok !== true && !ss?.blocked && !ss?.foreign && !ss?.emergency && ss?.stage !== 'write') return;
+    // Drossel nur nach einem Fehlschlag mit Gerätezugriff auf die RW-Register (nicht bei Notladung — 13000 ist ein
+    // Eingangsregister — und nicht im Not-Halt).
+    if (!adopt && !ss?.throttled) {
+      st.slaveCheck = ss?.ok === true || ss?.emergency === true || ss?.blocked ? { failedAt: 0, error: null } : { failedAt: t, error: ss?.error || 'unbekannt', foreign: ss?.foreign === true };
+      // Lage „fremd gesteuert" endet mit jedem anderen Ergebnis einer echten Prüfung (nicht im Not-Halt).
+      if (ss?.foreign !== true && !ss?.blocked) st.slaveForeignNotified = false;
+    }
+    if (ss?.ok === true) return;
+    if (running && ss?.emergency === true) return; // Notladung: kein Write, kein Rücktritt; nach der Notladung stoppen
+    // Ein fremdes EMS (VPP) am Slave (Review 156a3e06 P3): DVhub fasst ihn nicht an (S-38), und ein Rücktritt des
+    // Masters brächte ihn nicht zur Ruhe — der Master steuert wie bisher allein („nur Master"), gemeldet einmal je Lage.
+    if (!adopt && ss?.foreign === true) {
+      // Eigener Merker statt logOnce: st.logKeys leert jeder Master-Write, die Meldung käme sonst bei jeder Prüfung.
+      if (!st.slaveForeignNotified) {
+        st.slaveForeignNotified = true;
+        pushLog('sungrow_ems_slave_foreign', { error: ss.error || null, text: 'Sungrow: Slave steht unter einem fremden EMS — DVhub fasst ihn nicht an und steuert den Master allein.' }, 'warn');
+      }
+      return;
+    }
+    const what = adopt ? 'Übernahme des Modus 2 zurückgestellt' : (running ? `Rücktritt aus Modus ${modeValue}` : `Eintritt in Modus ${modeValue} zurückgestellt`);
+    const err = new Error(`${what}: Slave nicht auf Stopp bestätigt (${ss?.error || 'unbekannt'})`);
+    err.code = ss?.blocked ? 'emergency_stop_active' : (adopt ? 'adopt_slave_unconfirmed' : (running ? 'running_slave_unconfirmed' : 'entry_slave_unconfirmed'));
+    err.slaveEmergency = ss?.emergency === true;
+    throw err;
+  }
+
+  // Warten vor dem Eintritt (stopSlaveBeforeTakeover 'entry', nach einem Rücktritt auch 'running'): am Master steht
+  // Modus 0. Keine Split-Rücknahme, Ziel und Besitz bleiben — ein späterer Takt prüft den Slave neu und tritt dann ein.
+  // Der Gerätezustand des Masters bleibt im gewöhnlichen Lesetakt (deviceRecheckMs), nicht in jedem Takt (Fable P3-2).
+  // Sichtbar im Status (sungrowEms.decision.reason = 'entry_slave_unconfirmed', decision.since, error) und als Warnung
+  // beim ersten Mal, bei geändertem Grund und danach alle 15 min, solange es wartet (Fable P2-2).
+  const ENTRY_DEFERRED_LOG_REPEAT_MS = 15 * 60 * 1000;
+  const ENTRY_DEFERRED_EPISODE_GAP_MS = 5 * 60 * 1000;
+  function entryDeferred(e, t, { stepBack = false } = {}) {
+    // Der Wiedereintritts-Zähler (B3, stepForced) zählt den Takt vor dem Write. Ein zurückgestellter Eintritt schreibt
+    // 13050 nicht — er darf nicht zählen, sonst sperrte eine längere Wartezeit (Notladung) den Wiedereintritt eine Stunde.
+    const re = st.forcedReentryTimes;
+    if (Array.isArray(re) && re.length > 0 && re[re.length - 1] === t) st.forcedReentryTimes = re.slice(0, -1);
+    st.reentryLogPending = null;
+    st.error = e?.message || String(e);
+    const w = st.entryDeferred;
+    if (!w.since || t - (w.lastAt || 0) > ENTRY_DEFERRED_EPISODE_GAP_MS) { w.since = t; w.logKey = null; w.logAt = 0; }
+    w.lastAt = t;
+    st.decision = { mode: 'self', reason: 'entry_slave_unconfirmed', at: t, since: w.since };
+    const event = stepBack ? 'sungrow_ems_slave_unconfirmed_stepback' : 'sungrow_ems_entry_deferred';
+    const key = `${event}|${st.error}`;
+    if (w.logKey !== key || t - w.logAt >= ENTRY_DEFERRED_LOG_REPEAT_MS) {
+      w.logKey = key; w.logAt = t;
+      pushLog(event, {
+        error: st.error, slaveEmergency: e?.slaveEmergency === true, since: w.since, waitingS: Math.round((t - w.since) / 1000),
+        text: stepBack
+          ? 'Sungrow: Master zurück in Modus 0 — der Slave wird nicht geführt und sein Befehl ist nicht auf Stopp bestätigt. DVhub tritt wieder ein, sobald der Stopp bestätigt ist.'
+          : (e?.slaveEmergency === true
+            ? 'Sungrow: Eintritt zurückgestellt — der Slave ist in Notladung und wird danach nicht geführt; sein Befehl würde mit dem Eintritt wieder wirken. Master bleibt in Modus 0, DVhub tritt nach der Notladung ein.'
+            : 'Sungrow: Eintritt zurückgestellt — der Slave ist nicht auf Stopp bestätigt; ein alter Befehl würde mit dem Eintritt wieder wirken. Master bleibt in Modus 0, DVhub versucht es weiter.'),
+      }, 'warn');
+    }
+    publish();
+    return { ok: false, deferred: true, error: st.error };
+  }
+
+  // Rücktritt (Fable P2-1): der Master steht in DVhubs Steuermodus, der nicht geführte Slave lässt sich nicht auf Stopp
+  // bestätigen → Master zurück in Modus 0 (0xCC + Modus 0, bekannte Writes), damit der Slave-Befehl ruht. Ziel bleibt;
+  // danach gilt der Eintritt mit seiner Prüfung. Im Not-Halt schreibt das nicht (submitReg sperrt), der Durchgang nimmt
+  // den eigenen Betrieb zurück.
+  async function stepBackForSlave(conf, ctl, e, t) {
+    st.splitLast = null;
+    st.externalEnteredAt = 0;
+    try {
+      st.dev = null;
+      await writeDecision(conf, { mode: 'self', reason: 'slave_unconfirmed' }, { modeValue: ctl.modeValue });
+    } catch (we) {
+      st.dev = null;
+      if (we?.code === 'emergency_stop_active') { publish(); return { ok: false, blocked: true, error: 'emergency_stop_active' }; }
+      st.error = we?.message || String(we);
+      logOnce(st.error, 'sungrow_ems_error', { error: st.error, decision: { mode: 'self', reason: 'slave_unconfirmed' } }, 'warn');
+      publish();
+      return { ok: false, error: st.error };
+    }
+    return entryDeferred(e, t, { stepBack: true });
+  }
 
   function publish() {
     if (!state.ctrl) return;
@@ -961,8 +1199,35 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       decision: st.decision,
       owns: st.owns,
       ownMode: st.ownMode,
-      error: st.error
+      error: st.error,
+      // Option A: nur, wenn eine Freigabe aussteht oder die letzte Anfrage etwas zu melden hat (sonst fehlt das Feld).
+      ...releaseStatus()
     };
+  }
+  // requestedAt bindet jeden Hinweis an seine Anfrage (Codex d6f4b256 P2): die Kachel zeigt nie das Ergebnis einer
+  // älteren Anfrage über dem der jüngsten.
+  function releaseStatus() {
+    const r = st.release;
+    if (r) {
+      // Codex 6f356cb8: fällt der Schreibweg weg (Profil ungültig, kein Sungrow-EMS), kann der Takt nicht wiederholen —
+      // dann nicht „wird wiederholt" melden, sondern „nicht gesendet" mit Grund; die Freigabe bleibt als Auftrag stehen.
+      const cfg = getCfg();
+      const noPath = !sungrowEmsConf(cfg) || transport?.type !== 'modbus';
+      return { release: {
+        pending: true, requestedAt: r.requestedAt ?? null, since: r.since, attempts: r.attempts, retryAt: r.nextAt || null, lastError: r.lastError,
+        ...(noPath ? { sent: false, error: noWritePathError(cfg) } : {}),
+        text: noPath ? 'Freigabe steht aus, nicht gesendet — kein Schreibweg' : 'Freigabe gescheitert, wird wiederholt',
+      } };
+    }
+    const i = st.releaseInfo;
+    if (!i) return {};
+    if (i.state === 'done') {
+      return { release: { pending: false, done: true, requestedAt: i.requestedAt ?? null, doneAt: i.at, attempts: i.attempts, via: i.via, text: 'Freigabe erledigt' } };
+    }
+    if (i.state === 'abandoned') {
+      return { release: { pending: false, abandoned: true, requestedAt: i.requestedAt ?? null, at: i.at, attempts: i.attempts, reason: i.reason, mode: i.mode, text: 'Freigabe verworfen — DVhub überschreibt kein anderes System' } };
+    }
+    return { release: { pending: false, failed: true, requestedAt: i.requestedAt ?? null, at: i.at, ...(i.sent === false ? { sent: false } : {}), error: i.error, text: i.sent === false ? 'Freigabe nicht gesendet — kein Schreibweg' : 'Freigabe gescheitert' } };
   }
 
   // connOverride: zweite (Slave-)Instanz schreibt an eine andere Verbindung als die victron.*-Hauptverbindung;
@@ -987,7 +1252,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     st.endpointKey = key;
     st.target = null;
     st.dev = null;
+    setStopConfirmed(false); // gilt dem alten Gerät
+    st.slaveCheck = { failedAt: 0, error: null };
     st.hb = { key: null, supported: null };
+    st.release = null; // eine ausstehende Freigabe galt dem alten Gerät
     setOwns(null);
   }
 
@@ -1030,6 +1298,26 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     throw err;
   }
 
+  // Betriebszustand (Doku 13000, FC4, Eingangsregister) lesen — mit derselben Wiederholung wie readDevice (Fable 2 P3).
+  async function readRunningState(conf) {
+    let lastErr = null;
+    for (let attempt = 0; attempt <= EMS_READ_RETRIES; attempt += 1) {
+      try {
+        const rs = await transport.mbRequest({ ...endpoint(conf), fc: 4, address: wire(13000), quantity: 1 });
+        if (!Array.isArray(rs) || rs.length < 1) throw new Error('Betriebszustand 13000: unvollständige Antwort');
+        return Number(rs[0]) & 0xffff;
+      } catch (e) {
+        lastErr = e;
+        const retryable = /modbus exception 4\b|ECONNRESET|modbus timeout|ETIMEDOUT/i.test(String(e?.message));
+        if (attempt < EMS_READ_RETRIES && retryable) { await sleep(250); continue; }
+        break;
+      }
+    }
+    const err = new Error(`Betriebszustand 13000 lesen fehlgeschlagen: ${lastErr?.message || lastErr}`);
+    err.code = 'ems_read_error';
+    throw err;
+  }
+
   // Herzschlag-Register vorhanden? Einmal je Verbindung lesen. Exception 1/2 oder 0xFFFF (Doku: nicht
   // vorhandenes U16) = Firmware zu alt. Andere Lesefehler entscheiden nichts (nächster Takt).
   async function heartbeatSupported(conf) {
@@ -1053,23 +1341,46 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return supported;
   }
 
+  // Ein Register schreiben — über das Schreibtor (VCL-Vertrag v6 D.1/D.2, Legacy-Modus, Pfad 6). Der Draht-Aufruf ist
+  // derselbe wie bisher (Argument-Objekt, FC); das Tor prüft davor seine acht Vorprüfungen. Die Bestandsprüfungen
+  // (C2, Not-Halt) bleiben in dieser Phase VOR dem Tor und entscheiden wie heute; das Tor bekommt die passende
+  // Aktionsklasse, damit es nie anders entscheidet:
+  //   neutralize        → haltNeutralize      (Rücknahme 13051=0xCC / 13050=0; der Not-Halt-Durchgang)
+  //   manualRelease     → manualForceRelease  (Knopf/API, H-7 — mit Bestätigungsmarke; auch im Not-Halt)
+  //   keepalive         → keepalive           (Herzschlag 13080, Leistungs-Lebenszeichen 13052)
+  //   sonst             → command
   // Not-Halt vor JEDEM Write prüfen: ein Takt, der vor dem Eintritt begann, darf danach nichts mehr setzen.
   // Nur die eine Rücknahme (neutralize) darf im Not-Halt schreiben.
-  async function writeReg(conf, address, value, { neutralize = false, claimMode = null, fc = 6 } = {}) {
-    // C2 (Christin 16.11.2026): ungültige Konfiguration (kaputtes/fehlendes Herstellerprofil → cfg.writeSafety.ok
-    // === false) sperrt JEDEN Aktuator-Write — auch neutralize. Die wirksame Config trägt dann Default-Register;
-    // ein Write ginge an ein möglicherweise fremdes Gerät. Lauter Alarm einmal je Grund, dann KEIN Write.
-    const ws = getCfg()?.writeSafety;
+  let gateSeq = 0;
+  async function submitReg(conf, address, value, { neutralize = false, claimMode = null, fc = 6, keepalive = false, manualRelease = null } = {}) {
+    // C2 (Christin 16.11.2026): ungültige Konfiguration (kaputtes/fehlendes Herstellerprofil oder kaputte config.json →
+    // cfg.writeSafety.ok === false) sperrt die Aktuator-Writes. Lauter Alarm einmal je Grund, dann KEIN Write.
+    // Ausnahme (Christin 19.11.2026, „denke schon“): die Not-Halt-Rücknahme (neutralize IM Not-Halt → haltNeutralize)
+    // und die manuelle Zwangsfreigabe (H-7, manualForceRelease) — beide nur die festen Literale 13051 = 0xCC und
+    // 13050 = 0, nie 13058/13059 (H-8). Nur bei einem Herstellerprofil-Fehler (Torzustand profileInvalid): dann ist die
+    // Verbindung die des Betreibers. Eine kaputte config.json (setupIncomplete) sperrt weiter alles — Vorgaben mit
+    // leerem Host, ein Write ginge an localhost. Gesperrt bleiben auch die übrigen neutralize-Writes außerhalb des
+    // Not-Halts (geordnetes Beenden, Split-Abbruch, Herzschlag-Fehler) — sie sind nicht die Not-Halt-Rücknahme.
+    const cfgNow = getCfg();
+    const ws = cfgNow?.writeSafety;
+    const manual = typeof manualRelease === 'string' && manualRelease.length > 0;
+    // Schreibfreigabe des Tors aus DERSELBEN Quelle, vor jeder Einreichung neu gesetzt — Tor und Bestandsprüfung
+    // können so nicht auseinanderlaufen (R-T2/R-T5). Die Geräte-Erkennung bleibt in dieser Phase beim Aufrufer
+    // (deviceGate in step()): als Torzustand `notIdentified` sperrte sie auch die heutigen Rücknahmen, die manuelle
+    // Freigabe und jeden Slave-Write (der Slave wird nicht eigens erkannt) — eine Verhaltensänderung.
+    gate.setRelease(gateDevice, inverterReleaseState(cfgNow));
     if (ws && ws.ok === false) {
-      if (st._writeUnsafeAlarm !== (ws.reason || 'config_invalid')) {
-        st._writeUnsafeAlarm = ws.reason || 'config_invalid';
-        pushLog('sungrow_write_blocked_config_unsafe', { reason: ws.reason || 'config_invalid', manufacturer: ws.manufacturer ?? null }, 'error');
+      const haltPass = neutralize === true && state.ctrl?.discretionaryWritesPaused === true;
+      if (!(c2AllowsRelease(cfgNow) && (manual || haltPass))) {
+        if (st._writeUnsafeAlarm !== (ws.reason || 'config_invalid')) {
+          st._writeUnsafeAlarm = ws.reason || 'config_invalid';
+          pushLog('sungrow_write_blocked_config_unsafe', { reason: ws.reason || 'config_invalid', manufacturer: ws.manufacturer ?? null }, 'error');
+        }
+        const err = new Error(`config_unsafe_${ws.reason || 'config_invalid'}`);
+        err.code = 'config_unsafe';
+        throw err;
       }
-      const err = new Error(`config_unsafe_${ws.reason || 'config_invalid'}`);
-      err.code = 'config_unsafe';
-      throw err;
-    }
-    if (st._writeUnsafeAlarm) st._writeUnsafeAlarm = null;
+    } else if (st._writeUnsafeAlarm) st._writeUnsafeAlarm = null;
     if (state.ctrl?.discretionaryWritesPaused && !neutralize) {
       const err = new Error('emergency_stop_active');
       err.code = 'emergency_stop_active';
@@ -1077,19 +1388,66 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     }
     // Besitz erst, wenn der Write wirklich rausgeht (nach dem Not-Halt-Tor), aber VOR der Bestätigung:
     // geht sie verloren, kann der Befehl trotzdem wirken (Codex 28317bd5).
+    const ownBeforeClaim = st.owns ? st.ownMode : null;
     if (claimMode != null) setOwns(claimMode);
     // FC 16 (Write Multiple) für Register, die FC 06 (Write Single) nicht annehmen (manche Sungrow-Holding-
     // Register, u. a. 13080 am SH10RT-20): dasselbe Register, ein Wort.
+    const word = value & 0xffff;
+    const args = fc === 16
+      ? { ...endpoint(conf), address, values: [word] }
+      : { ...endpoint(conf), address, value: word };
+    gateSeq += 1;
+    const op = {
+      device: gateDevice,
+      point: GATE_POINT[address] ?? `reg${address}`,
+      value: word,
+      source: 'sungrow-ems',
+      kind: manual || neutralize ? 'neutralize' : (address === HEARTBEAT_ADDR ? 'heartbeat' : (keepalive ? 'keepalive' : 'write')),
+      action: manual ? 'manualForceRelease' : (neutralize ? 'haltNeutralize' : (keepalive ? 'keepalive' : 'command')),
+      lease: null,
+      constraints: { set: {}, caps: {}, enforcedBy: [] },
+      validUntilMs: null,
+      tick: { loop: manual ? 'event' : 'eval', seq: gateSeq },
+      step: 0,
+      ...(manual ? { confirmedBy: manualRelease } : {}),
+      legacy: { sink: gateDevice, fn: fc === 16 ? 'mbWriteMultiple' : 'mbWriteSingle', args: [args] },
+    };
     try {
-      if (fc === 16) await transport.mbWriteMultiple({ ...endpoint(conf), address, values: [value & 0xffff] });
-      else await transport.mbWriteSingle({ ...endpoint(conf), address, value: value & 0xffff });
+      unwrapGate(await gate.submit(op), op, fc);
     } catch (e) {
+      // Sicher NICHT gesendet (Lese-Modus — vom Tor oder vom Transport abgewiesen, bevor der Rahmen eingereiht war —
+      // oder eine andere Torsperre): ein Besitz, den erst dieser Write beansprucht hat, gilt nicht. Sonst stünde ein
+      // Merker für einen Betrieb, den DVhub nie gesetzt hat — mit H-9 etwa für den Modus 2 einer Produktivanlage, an
+      // der eine Lese-Instanz mithört; Außen-Wächter und ExecStopPost schrieben darauf. Bei Zeitüberschreitung u. Ä.
+      // bleibt der Besitz (der Befehl kann trotzdem wirken, Codex 28317bd5).
+      if (claimMode != null && ownBeforeClaim !== claimMode && (e instanceof ReadOnlyViolation || e?.code === 'DVHUB_READ_ONLY' || e?.code === 'gate_blocked')) {
+        setOwns(ownBeforeClaim);
+      }
       // Register + Wert an den Fehler hängen (Feld-Wunsch 16.11.): split_aborted/Logs sollen
       // nennen, welches Register den Write abgelehnt hat (z. B. Leistung 13052 vs. Befehl 13051).
       if (e && typeof e === 'object') { if (e.emsAddress == null) e.emsAddress = address; if (e.emsValue == null) e.emsValue = value & 0xffff; }
       throw e;
     }
     countWrite(address); // Tages-Schreibzähler je Register (Punkt 2)
+  }
+
+  // Ergebnis des Tors wie den heutigen Transport-Aufruf behandeln: Rückgabe bzw. derselbe Fehler (gleiche Referenz) —
+  // die Zustellungs-Einordnung des Tors ändert nichts an dem, was der Aktuator sieht. Sperrt das Tor im Lese-Modus,
+  // dann wie transport-modbus.js: gleiche Meldung, gleicher Fehlertyp, ein Fehler in der Modbus-Gesundheit (den Write
+  // zählte bisher der Transport). Jede andere Sperre ist in dieser Phase ein Verdrahtungsfehler: laut als Fehler.
+  function unwrapGate(res, op, fc) {
+    if ('error' in res) throw res.error;
+    if ('result' in res) return res.result;
+    if (res.outcome === 'blocked_readonly') {
+      const msg = `Schreibzugriff im Lese-Modus abgelehnt (Modbus fc=${fc})`;
+      const err = new ReadOnlyViolation(msg);
+      // M22: wie der Transport-Mantel — Fehlerart, Funktion, Register und Wert ins Fehler-Protokoll (Parität alt ↔ Tor).
+      modbusHealthInst.record(false, 0, msg, modbusRequestInfo(op.legacy?.fn, op.legacy?.args?.[0], err.code));
+      throw err;
+    }
+    const err = new GateBlockedError(res, op);
+    err.code = 'gate_blocked';
+    throw err;
   }
 
   // Tages-Schreibzähler je Register, Reset zur lokalen Mitternacht (Verschleißschutz/Transparenz, Punkt 2).
@@ -1149,6 +1507,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
 
   function foreignModeError(mode) {
     setOwns(null);
+    // Codex d6f4b256 P1: ein fremder Regler steuert — eine ausstehende Freigabe gehört nicht mehr zu DVhubs Betrieb und
+    // wird verworfen (z. B. erkannt von der Not-Halt-/Shutdown-Rücknahme). Sonst schriebe die Wiederholung im nächsten
+    // Takt 0xCC/Modus 0 über das fremde System, auch im Not-Halt.
+    if (st.release) releaseAbandon('foreign_mode', mode);
     const err = new Error('sungrow_foreign_ems_mode');
     err.code = 'foreign_ems_mode';
     err.mode = mode;
@@ -1162,8 +1524,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Aufrufer heartbeat_mismatch.
   async function neutralizeHeartbeatFailure(conf, hbRead, heartbeatS) {
     try {
-      await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, { neutralize: true });
-      await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, { neutralize: true });
+      await submitReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, { neutralize: true });
+      await submitReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, { neutralize: true });
       st.dev = null;
       await readDevice(conf);
     } catch { /* best effort — der WR fällt sonst nach seiner (langen) Frist selbst zurück */ }
@@ -1190,7 +1552,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       return Array.isArray(hb) ? (Number(hb[0]) & 0xffff) : NaN;
     };
     const tryFc = async (fc) => {
-      await writeReg(conf, HEARTBEAT_ADDR, heartbeatS, { ...opt, fc });
+      await submitReg(conf, HEARTBEAT_ADDR, heartbeatS, { ...opt, fc, keepalive: true });
       const hbRead = await readHb();
       // Übernommen = der Wechselrichter zählt ab unserem Wert herunter: direkt nach dem Schreiben liegt der
       // Rücklesewert in [Soll−3, Soll] (der Countdown tickt schon). 0/65535 (NA) oder weit darunter = NICHT
@@ -1233,7 +1595,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
    * Moduswechsel selbst und übernimmt unseren Wert erst danach). Der Herzschlag wird nach dem Schreiben zurückgelesen;
    * stimmt er nicht, wird sofort sicher in Self-consumption neutralisiert (heartbeat_mismatch).
    */
-  async function writeDecision(conf, decision, { neutralize = false, modeValue = EMS_MODE.FORCED, heartbeatS = null, forceAll = false, heartbeatAfterMode = true, heartbeatWriteFc = null, acceptDeviceHeartbeatS = 0 } = {}) {
+  // adopt (H-9, needsAdoption): Befehl und — bei Laden/Entladen — Leistung immer schreiben, auch wenn das Gerät sie
+  // schon zeigt; der Besitz entsteht so durch DVhubs eigenen Write. Den Modus schreibt adopt nicht zusätzlich.
+  async function writeDecision(conf, decision, { neutralize = false, modeValue = EMS_MODE.FORCED, heartbeatS = null, forceAll = false, adopt = false, heartbeatAfterMode = true, heartbeatWriteFc = null, acceptDeviceHeartbeatS = 0 } = {}) {
     const dev = st.dev || await readDevice(conf);
     // Ein fremdes EMS/VPP wird nie übersteuert, auch nicht im Not-Halt. Der Slave (isSlave) folgt dem Master-Modus
     // (Feld #5) — ein Modus 2/3 am Slave ist Master-gesteuert, nicht fremd; nur VPP (4) am Slave wäre fremd.
@@ -1241,20 +1605,21 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const writeStartedAt = now(); // Antwortzeit (Schreiben bis bestätigtes Rücklesen) für den adaptiven Takt (Punkt 2)
     if (decision.mode === 'self') {
       const opt = { neutralize };
-      if (dev.cmd !== EMS_CMD.STOP) await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, opt);
+      if (dev.cmd !== EMS_CMD.STOP) await submitReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, opt);
       // Modus 0 nur am Master schreiben — der Slave verwirft 13050 und folgt dem Master (Feld #5).
-      if (!isSlave && dev.mode !== EMS_MODE.SELF) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, opt);
+      if (!isSlave && dev.mode !== EMS_MODE.SELF) await submitReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, opt);
     } else {
       const opt = { neutralize, claimMode: modeValue };
       const cmd = CMD_BY_NAME[decision.command];
-      if (decision.command !== 'stop' && (forceAll || dev.powerW !== decision.powerW)) await writeReg(conf, EMS_POWER_ADDR, decision.powerW, opt);
-      if (forceAll || dev.cmd !== cmd) await writeReg(conf, EMS_CMD_ADDR, cmd, opt);
+      setStopConfirmed(false); // DVhub fährt jetzt einen Befehl — „Stopp bestätigt" gilt erst nach der nächsten Rücknahme
+      if (decision.command !== 'stop' && (forceAll || adopt || dev.powerW !== decision.powerW)) await submitReg(conf, EMS_POWER_ADDR, decision.powerW, opt);
+      if (forceAll || adopt || dev.cmd !== cmd) await submitReg(conf, EMS_CMD_ADDR, cmd, opt);
       // Nur am Master: Modus (13050) und — in External EMS — der Herzschlag. Der Slave bekommt NIE einen
       // Modus-Write (Feld #5: wird verworfen, der Slave folgt dem Master-Modus 2).
       const needHeartbeat = !isSlave && modeValue === EMS_MODE.EXTERNAL && (forceAll || dev.mode !== modeValue);
       const hb = async () => applyHeartbeat(conf, heartbeatS, opt, { writeFc: heartbeatWriteFc, acceptDeviceS: acceptDeviceHeartbeatS });
       if (needHeartbeat && !heartbeatAfterMode) await hb();
-      if (!isSlave && (forceAll || dev.mode !== modeValue)) await writeReg(conf, EMS_MODE_ADDR, modeValue, opt);
+      if (!isSlave && (forceAll || dev.mode !== modeValue)) await submitReg(conf, EMS_MODE_ADDR, modeValue, opt);
       if (needHeartbeat && heartbeatAfterMode) await hb();
     }
     st.dev = null;
@@ -1269,8 +1634,23 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Zuletzt am Master bestätigter Zustand (M2): erkennt den eigenen Modus wieder, falls der Besitz-Merker verloren
     // geht. Auch ein bestätigtes Self (Modus 0) wird gemerkt — danach gilt Modus 2 nicht mehr als „eigener".
     if (!isSlave) st.lastMasterWrite = { mode: back.mode, cmd: back.cmd, powerW: back.powerW, at: now() };
+    // Master: ein bestätigter Befehl im Steuermodus beendet das Warten vor dem Eintritt; ein gezählter Wiedereintritt
+    // (B3) ist jetzt wirklich geschrieben und wird erst jetzt gemeldet (Fable P3-3).
+    if (!isSlave && decision.mode === 'forced') {
+      st.entryDeferred = { since: 0, lastAt: 0, logKey: null, logAt: 0 };
+      if (st.reentryLogPending != null) {
+        logOnce(`reentry-${st.reentryLogPending}`, 'sungrow_ems_reentry', { count1h: st.reentryLogPending }, 'warn');
+        st.reentryLogPending = null;
+      }
+    }
     // Erst ein bestätigtes Self-consumption gibt den Besitz ab.
-    if (decision.mode === 'self') setOwns(null);
+    if (decision.mode === 'self') {
+      setOwns(null);
+      setStopConfirmed(true); // Befehl Stopp zurückgelesen (am Slave: der Grundzustand seines Befehls)
+      // Option A: eine ausstehende manuelle Freigabe ist damit am Gerät erreicht (0xCC + Modus 0 bzw. am Slave 0xCC
+      // bestätigt) — etwa durch die einmalige Not-Halt-Rücknahme oder das Beenden. Nicht noch einmal schreiben.
+      if (st.release) releaseCompleted(decision.reason || 'return');
+    }
     return back;
   }
 
@@ -1345,7 +1725,21 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // liest 13050=0 zurück). Scheitert sie (Lesefehler/Abweichung), Merker UND Ziel behalten — der nächste Takt tritt
     // die Rückgabe erneut an. Sonst hielte DVhub seinen eigenen Modus 2 für fremd (owns weg) und schriebe nie wieder.
     let masterSafe = false;
-    try { st.dev = null; await writeDecision(sungrowEmsConf(getCfg()), { mode: 'self', reason }, { neutralize: true }); masterSafe = true; } catch { /* best effort — Merker bleibt, Wiederholung nächster Takt */ }
+    try {
+      st.dev = null;
+      const conf = sungrowEmsConf(getCfg());
+      // Automatische Rücknahme nur für DVhubs EIGENEN Betrieb (S-49): Merker, oder das Gerät spiegelt DVhubs zuletzt
+      // bestätigten Write (M2). Einen noch nicht übernommenen Modus 2 fasst sie nicht an — bis H-9 schützte ihn die
+      // Fremderkennung in writeDecision (Codex 2a0f18b5 P1: sonst 0xCC + Modus 0 auf einen fremden Master).
+      // Unberührt bleiben dann auch Besitz und Ziel (Codex 4e3fc521 P2): eine zurückgestellte Übernahme holt der
+      // nächste Takt nach, statt bis zum nächsten Sollwert zu ruhen.
+      let untouched = false;
+      if (!st.owns) {
+        const dev = await readDevice(conf);
+        untouched = !ownWroteMode(dev.mode, dev);
+      }
+      if (!untouched) { await writeDecision(conf, { mode: 'self', reason }, { neutralize: true }); masterSafe = true; }
+    } catch { /* best effort — Merker bleibt, Wiederholung nächster Takt */ }
     try { await slaveActuator.neutralize(reason); } catch { /* best effort */ }
     st.revokedReason = reason;
     if (masterSafe) { setOwns(null); st.target = null; }
@@ -1549,16 +1943,31 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // „Liefert nicht" nimmt einen WR nur heraus, wenn der andere selbst nicht begrenzt ist — oder wenn der hängende WR
     // praktisch nichts liefert. Sonst trägt er weiter seinen Ist-Anteil (Grundsatz 0): ihn herauszunehmen kostete genau
     // das, was er noch liefert, wenn der andere den Rest nicht tragen kann.
-    const stalledOut = (wr, other) => isStalled(wr, direction, t)
-      && (!other.limited || (Number(deliverEntry(wr, direction).stallDeliveredW) || 0) < LIMIT_MIN_CMD_W);
-    const { masterW, slaveW, slaveUncommanded, masterOut, slaveOut } = splitStrategyShares(strategy, {
+    const shareArgs = {
       powerW: decision.powerW, charge, masterMax, slaveMax, masterSoc, slaveSoc,
       masterCapacityWh: optMaster.batteryCapacityWh, slaveCapacityWh: si.batteryCapacityWh,
       floorSocPct: floor, maxSocPct: maxSoc, masterFloorPct, slaveFloorPct, masterCeilPct, slaveCeilPct,
       ratioMasterPct: secondCfg.ratioMasterPct, minPowerW: opts.minPowerW,
       socDeadbandPct: secondCfg.socBalanceDeadbandPct,
       dischargeMarginPct: SUNGROW_SPLIT_DISCHARGE_MARGIN_PCT,
-      masterStalled: stalledOut('master', sLim), slaveStalled: stalledOut('slave', mLim),
+    };
+    // Codex 28a9c637 (P2): herausnehmen nur, wenn der andere das, was der hängende WR noch liefert, auch übernehmen kann.
+    // Ein WR an seiner Leistungsgrenze (z. B. Feldeinstellung 2 kW, liefert sie voll) gilt nicht als „begrenzt", hat aber
+    // keinen Spielraum — ohne diese Prüfung kostete die Herausnahme genau die Restlieferung (Netzbezug +1 kW, nachgestellt).
+    // Spielraum = wirksame Grenze (bei eigener Begrenzung limitW + Probe) minus Anteil ohne Herausnahme; 0 an der SoC-Grenze
+    // bzw. Marge, in master-only/Notladung und wenn er selbst „liefert nicht".
+    const roomOf = (lim, maxW, baseW) => Math.max(0, (lim.limited ? Math.min(maxW, lim.limitW + probeW) : maxW) - baseW);
+    const base = splitStrategyShares(strategy, { ...shareArgs, masterStalled: false, slaveStalled: false });
+    const slaveRoomW = base.slaveUncommanded || slaveEmergency || base.slaveOut || isStalled('slave', direction, t) ? 0 : roomOf(sLim, slaveMax, base.slaveW);
+    const masterRoomW = base.masterOut || isStalled('master', direction, t) ? 0 : roomOf(mLim, masterMax, base.masterW);
+    const stalledOut = (wr, other, otherRoomW) => {
+      if (!isStalled(wr, direction, t)) return false;
+      const deliveredW = Number(deliverEntry(wr, direction).stallDeliveredW) || 0;
+      return deliveredW < LIMIT_MIN_CMD_W || (!other.limited && otherRoomW >= deliveredW);
+    };
+    const { masterW, slaveW, slaveUncommanded, masterOut, slaveOut } = splitStrategyShares(strategy, {
+      ...shareArgs,
+      masterStalled: stalledOut('master', sLim, slaveRoomW), slaveStalled: stalledOut('slave', mLim, masterRoomW),
     });
     const mk = (w) => (w >= opts.minPowerW ? { mode: 'forced', command: decision.command, powerW: w, reason: decision.reason } : { mode: 'forced', command: 'stop', powerW: 0, reason: decision.reason });
     // M27 (Christin 19.11., ersetzt den Slave-Stopp aus M16): Auch während einer Sperre (Negativpreis, Direktvermarkter,
@@ -1576,7 +1985,6 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // bleibt — so schiebt DVhub nichts hin und her. Der begrenzte WR behält seinen Befehl (er trägt seinen Ist-Anteil und
     // zeigt so, wenn er wieder mehr kann). Netzbezug bleibt erst, wenn beide nicht mehr können.
     const shortOf = (lim, baseW) => (lim.limited ? Math.max(0, baseW - lim.limitW) : 0);
-    const roomOf = (lim, maxW, baseW) => Math.max(0, (lim.limited ? Math.min(maxW, lim.limitW + probeW) : maxW) - baseW);
     const masterShortW = shortOf(mLim, masterW);
     const slaveShortW = shortOf(sLim, slaveW);
     let masterCmdW = masterW; let slaveCmdW = slaveW; let transferW = 0; let transferTo = null;
@@ -1599,12 +2007,24 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const masterAtLimit = sungrowWrAtLimit({ charge, socPct: masterSoc, floorPct: masterFloorPct, ceilPct: masterCeilPct, dischargeMarginPct: SUNGROW_SPLIT_DISCHARGE_MARGIN_PCT });
     const masterTakeoverW = masterAtLimit ? 0 : masterMax;
     // Slave zuerst (eigener Pfad neutralisiert sich bei Fehler selbst).
+    // Fable P3-3: die Fallback-Meldung erst nach dem Ergebnis des Masters — „der Master steuert weiter" nur, wenn er es
+    // wirklich tut (im zurückgestellten Eintritt oder beim Rücktritt nicht).
+    let fallbackLog = null;
+    const logFallback = (masterRuns) => {
+      if (!fallbackLog) return;
+      logOnce(`${fallbackLog.key}|${masterRuns ? 'run' : 'stop'}`, 'sungrow_ems_split_slave_fallback', masterRuns
+        ? fallbackLog.data
+        : { ...fallbackLog.data, masterW: 0, text: 'Sungrow: Slave-Fehler im Split — der Master steuert in diesem Takt nicht (Eintritt zurückgestellt bzw. zurückgetreten oder Master-Fehler, siehe folgende Meldung).' }, 'warn');
+      fallbackLog = null;
+    };
     if (skipSlave) {
       // master-only/Notladung: Slave in Modus 0 (Self) halten. Scheitert das nicht hart — der Slave liegt dann ohnehin in Self.
+      st.slaveNeutralizeTick = t;
       try { await slaveActuator.neutralize('self'); } catch { /* best effort */ }
     } else {
       const sr = await commandSlave(slaveDecision, ctl);
       if (sr.ok) slaveReadback = sr.readback || null;
+      if (sr.ok) st.slaveForeignNotified = false; // DVhub führt den Slave — eine spätere Fremdsteuerung ist eine neue Lage
       slaveWrote = sr.ok === true && sr.unchanged !== true; // echter Slave-Write (N4: Log/Status nur bei Änderung)
       if (!sr.ok) {
         // Absicherung C6 (Aufgabe 3): EIN Slave-Fehler (z. B. „EMS-Register lesen fehlgeschlagen: modbus exception 4",
@@ -1613,12 +2033,13 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         // den Slave sicher zurueckziehen (0xCC, best effort) und seinen Anteil dem Master geben (bis zu dessen Grenze).
         // Der Master steuert weiter. Modus 0 (beide in Self) nur, wenn der MASTER selbst nicht sicher steuerbar ist
         // (naechster try-Block). Ein fremdes EMS am Slave (sr.foreign) wird ebenfalls nicht angefasst → Master-only.
+        st.slaveNeutralizeTick = t;
         try { await slaveActuator.neutralize('split_slave_failed'); } catch { /* best effort */ }
         effSlaveW = 0;
         effMasterW = Math.min(decision.powerW, masterTakeoverW); // Befund 2: Master-SoC-Boden/Deckel einhalten
         masterDecision = mk(effMasterW);
         slaveFellBack = true;
-        logOnce(`${sr.error}`, 'sungrow_ems_split_slave_fallback', { side: 'slave', error: sr.error || null, readError: sr.readError === true, register: sr.register ?? null, wireAddress: sr.wireAddress ?? null, value: sr.value ?? null, kind: sr.kind ?? null, code: sr.code ?? null, masterW: effMasterW, text: 'Sungrow: Slave-Fehler im Split — Anteil auf den Master verlagert, der Master steuert weiter (kein Modus 0).' }, 'warn');
+        fallbackLog = { key: `${sr.error}`, data: { side: 'slave', error: sr.error || null, readError: sr.readError === true, register: sr.register ?? null, wireAddress: sr.wireAddress ?? null, value: sr.value ?? null, kind: sr.kind ?? null, code: sr.code ?? null, masterW: effMasterW, text: 'Sungrow: Slave-Fehler im Split — Anteil auf den Master verlagert, der Master steuert weiter (kein Modus 0).' } };
       }
     }
     // Split-Detail für GUI/Leitstand (Aufgabe 1/2/6): Anteil, wirksame Leistungsgrenze und wirksame SoC-Grenze je
@@ -1666,19 +2087,42 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     try {
       const mdev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
       if (isForeignMode(mdev.mode, mdev)) throw foreignModeError(mdev.mode);
+      // H-9: Master in Modus 2 ohne Forced-Besitz → mit DVhubs eigenem Anteil übernehmen (voller Write, nie „unverändert").
+      const adoptMaster = needsAdoption(mdev, masterDecision, ctl.modeValue);
+      // Codex 2a0f18b5 P2: führt DVhub den Slave in diesem Takt nicht (master-only, Slave-Fehler), folgt er trotzdem dem
+      // Modus 2 des Masters — sein Befehl liefe unter dem übernommenen Modus weiter. Vor der Übernahme einmal auf Stopp.
+      // Codex c5502afe P2: ein Slave in Notladung wird nicht kommandiert. Führt ihn die Strategie danach wieder
+      // (nicht master-only), übernimmt ihn DVhub dann per Write — der Master darf jetzt übernommen werden. Bei
+      // master-only führte ihn danach niemand → die Übernahme wartet, bis die Notladung vorbei ist.
+      // Eintritt (Christin 21.11.2026): steht der Master nicht im Steuermodus und führt DVhub den Slave in diesem Takt
+      // nicht (master-only, Notladung, Slave-Fehler), würde sein Befehl mit dem Eintritt wieder wirksam → vorher
+      // Stopp bestätigen, sonst kein Eintritt. Ein in diesem Takt kommandierter Slave hat schon DVhubs Befehl.
+      // Fable P2-1: steht der Master schon in DVhubs Steuermodus und führt DVhub den Slave in diesem Takt nicht (mehr),
+      // wird ein nicht besessener Slave ohne bestätigten Stopp jetzt gestoppt — sonst tritt der Master zurück.
+      const slaveNotLed = skipSlave || slaveFellBack;
+      const enterMaster = !adoptMaster && mdev.mode !== ctl.modeValue && slaveNotLed;
+      if ((adoptMaster || enterMaster) && (!slaveEmergency || slaveUncommanded)) {
+        await stopSlaveBeforeTakeover(adoptMaster ? 'adopt' : 'entry', ctl.modeValue, t);
+      } else if (!adoptMaster && slaveNotLed && mdev.mode === ctl.modeValue) {
+        await stopSlaveBeforeTakeover('running', ctl.modeValue, t);
+      }
       // Schreibdrossel (N4/Aufgabe 5): Master 13051 nur bei Befehlswechsel, 13052 nur bei Änderung > stepW — und das
       // Log sungrow_ems_split_write NUR bei echtem Write (im Feld lief es jede Sekunde, /api/log reichte ~3 min).
       // Bei gap (Herzschlag-Lücke/Wiederaufnahme) immer voll schreiben.
-      if (!gap && emsMatches(mdev, masterDecision, opts.stepW, ctl.modeValue)) {
+      if (!gap && !adoptMaster && emsMatches(mdev, masterDecision, opts.stepW, ctl.modeValue)) {
         st.error = null;
         st.splitLast = commandedWith(mdev);
         st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
         // Hat der Slave in diesem Takt geschrieben, ist es ein echter Write → protokollieren; sonst stiller Takt.
         if (slaveWrote) pushLog('sungrow_ems_split_write', { command: decision.command, systemW: decision.powerW, masterW: effMasterW, slaveW: effSlaveW, strategy, slaveFellBack, side: 'slave', reason: decision.reason, trigger: reason, readback: { mode: mdev.mode, cmd: mdev.cmd, powerW: mdev.powerW } });
+        logFallback(true);
         publish();
         return { ok: true, split: true, unchanged: !slaveWrote, decision, masterW: effMasterW, slaveW: effSlaveW, slaveFellBack };
       }
-      const back = await writeDecision(conf, masterDecision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
+      const foundMaster = adoptMaster ? adoptionFound(mdev) : null;
+      const back = await writeDecision(conf, masterDecision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, adopt: adoptMaster, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
+      if (foundMaster) logAdoption(foundMaster, masterDecision);
+      logFallback(true);
       st.error = null; st.logKeys = {};
       st.splitLast = commandedWith(back);
       st.decision = { ...decision, at: t, trigger: reason, split: splitDetail };
@@ -1689,6 +2133,17 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // Der MASTER ist nicht sicher steuerbar → beide sicher in Self (Modus 0). Das ist der EINZIGE Weg zu Modus 0 im
       // Split (ein Slave-Fehler fuehrt oben nur auf Master-only, Aufgabe 3).
       st.splitLast = null; // M28: nichts kommandiert, die Erkennung ruht
+      logFallback(false);
+      // Not-Halt kam während des Takts (Write gesperrt): hier nichts zurücknehmen. Der Not-Halt-Durchgang
+      // (emergencyStop, läuft seriell danach) nimmt DVhubs eigenen Betrieb genau einmal zurück; einen nicht
+      // übernommenen Modus 2 fasst er nicht an (Codex 2a0f18b5 P1, A.6: nur bei Besitz, ein Durchgang).
+      if (e?.code === 'emergency_stop_active') {
+        st.dev = null;
+        publish();
+        return { ok: false, blocked: true, error: 'emergency_stop_active' };
+      }
+      if (e?.code === 'entry_slave_unconfirmed') return entryDeferred(e, t);
+      if (e?.code === 'running_slave_unconfirmed') return await stepBackForSlave(conf, ctl, e, t);
       await neutralizeBoth('split_master_failed');
       st.error = e?.message || String(e);
       logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error, ...writeErrorInfo(e) }, 'warn');
@@ -1721,6 +2176,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // (Modus 0, Absicherung C), damit er selbst weiterregelt. Modus 0 außerdem bei Not-Halt, Beenden/Ausfall,
   // abgeschalteter Steuerung, fremdem Modus oder Moduswechsel — nie ein Dauerstopp in Modus 2.
   async function stepForced({ conf, ctl, opts, reason, t, targetFresh, maxChargeCap, maxDischargeCap, tel, second }) {
+    // Ein gemerkter Wiedereintritt gilt nur für den Takt, der ihn zählte (Review 156a3e06 P3): scheiterte er, meldet ein
+    // späterer gewöhnlicher Eintritt keinen Wiedereintritt.
+    st.reentryLogPending = null;
     const noGridChargeNow = noGridChargeForce();
     const cfg = getCfg();
     // Entlade-Boden (SoC < Boden): sperrt im Regler nur das Entladen, nicht das Laden aus PV. M1: der Boden ist der
@@ -1810,7 +2268,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // zwischendurch die Rücklesung der eigenen Writes nutzen. So fällt ein geräteeigener Rückfall auf Modus 0
       // (WR-Neustart) spätestens nach deviceRecheckMs auf — der Akku steht bis dahin im sicheren Eigenverbrauch.
       const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
-      // Fremder Modus (VPP, oder Modus 2/3 ohne DVhub-Besitz) → nicht übersteuern (B4).
+      // Fremder Modus (VPP, oder Modus 3 ohne DVhub-Besitz) → nicht übersteuern (B4). Modus 2 ohne Besitz übernimmt
+      // DVhub per eigenem Write (H-9, needsAdoption unten bzw. in stepSplit).
       if (isForeignMode(dev.mode, dev)) throw foreignModeError(dev.mode);
       if (holdFallback) {
         let slaveStopped = true;
@@ -1838,7 +2297,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
           publish();
           return { ok: false, error: 'reentry_rate' };
         }
-        logOnce(`reentry-${st.forcedReentryTimes.length}`, 'sungrow_ems_reentry', { count1h: st.forcedReentryTimes.length }, 'warn');
+        // Gemeldet wird der Wiedereintritt erst, wenn er wirklich geschrieben ist (writeDecision) — ein zurückgestellter
+        // Takt ist keiner (Fable P3-3).
+        st.reentryLogPending = st.forcedReentryTimes.length;
       }
       // Lebenszeichen für den Box-Watchdog (C4): DVhub fährt den Forced mode aktiv (Befehl, nicht Rückfall) → die
       // Zeitstempel-Datei auffrischen, auch wenn in diesem Takt nichts geschrieben wird (ausgeregelt).
@@ -1851,7 +2312,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // einen zuvor von DVhub gesetzten Slave-Befehl sicher zurücknehmen (0xCC). Sonst hielte der Slave im Forced
       // mode (ohne geräteeigenen Rückfall) seinen letzten Lade-/Entladebefehl unbeaufsichtigt — die SoC-Grenzen aus
       // stepSplit greifen nicht mehr (Review-Befund 1). neutralize ist ein No-op, wenn der Slave nicht besessen ist.
-      if (slaveActuator) { try { await slaveActuator.neutralize('slave_telemetry_lost'); } catch { /* best effort */ } }
+      if (slaveActuator) { st.slaveNeutralizeTick = t; try { await slaveActuator.neutralize('slave_telemetry_lost'); } catch { /* best effort */ } }
       if (decision.mode === 'self') {
         // Nur Einzel-WR, nicht besitzend: der Zustand passt schon (Gerät steht in Self), nichts schreiben.
         if (emsMatches(dev, decision, 0, ctl.modeValue)) { st.error = null; publish(); return { ok: true, unchanged: true, decision }; }
@@ -1860,11 +2321,21 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         st.error = null; publish();
         return { ok: true, decision };
       }
-      if (emsMatches(dev, decision, opts.stepW, ctl.modeValue)) {
+      // H-9: ein gefundener Modus 2 ohne Forced-Besitz wird mit DVhubs eigenem Befehl übernommen — nie „unverändert".
+      const adopt = needsAdoption(dev, decision, ctl.modeValue);
+      // Der Slave wird hier nicht geführt und folgt dem Master-Modus 2: im eigenen Betrieb (Fable P2-1, auch vor einem
+      // „unverändert"), vor der Übernahme (Codex 2a0f18b5 P2) und vor dem Eintritt aus Modus 0 (Christin 21.11.2026)
+      // seinen Befehl auf Stopp bestätigen.
+      if (!adopt && dev.mode === ctl.modeValue) await stopSlaveBeforeTakeover('running', ctl.modeValue, t);
+      if (!adopt && emsMatches(dev, decision, opts.stepW, ctl.modeValue)) {
         st.error = null; publish();
         return { ok: true, unchanged: true, decision };
       }
-      const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue });
+      if (adopt) await stopSlaveBeforeTakeover('adopt');
+      else if (dev.mode !== ctl.modeValue) await stopSlaveBeforeTakeover('entry', ctl.modeValue, t);
+      const found = adopt ? adoptionFound(dev) : null;
+      const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, adopt });
+      if (found) logAdoption(found, decision);
       st.error = null; st.logKeys = {};
       pushLog('sungrow_ems_write', {
         setpointW: st.target?.setpointW ?? null, source: st.target?.source ?? null, controlMode: ctl.mode,
@@ -1876,10 +2347,14 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     } catch (e) {
       st.error = e?.message || String(e);
       if (e?.code === 'foreign_ems_mode') {
-        logOnce(String(e.mode), 'sungrow_ems_foreign_mode', { mode: e.mode, text: 'Sungrow steht im Forced-/External-EMS-/VPP-Modus eines anderen Systems — DVhub schreibt nichts' }, 'warn');
+        logOnce(String(e.mode), 'sungrow_ems_foreign_mode', { mode: e.mode, text: 'Sungrow steht im External-EMS-/VPP-Modus eines anderen Systems — DVhub schreibt nichts' }, 'warn');
       } else if (e?.code === 'emergency_stop_active') {
         st.dev = null; publish();
         return { ok: false, blocked: true, error: 'emergency_stop_active' };
+      } else if (e?.code === 'entry_slave_unconfirmed') {
+        return entryDeferred(e, t);
+      } else if (e?.code === 'running_slave_unconfirmed') {
+        return await stepBackForSlave(conf, ctl, e, t);
       } else if (e?.code === 'ems_read_error') {
         st.dev = null;
         logOnce(st.error, 'sungrow_ems_read_error', { error: st.error, decision }, 'warn');
@@ -1900,6 +2375,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (!conf || transport?.type !== 'modbus') return { ok: false, error: 'sungrow_ems_not_configured' };
     syncEndpoint(cfg);
     if (state.ctrl?.discretionaryWritesPaused) return { ok: false, blocked: true, error: 'emergency_stop_active' };
+    // Option A: steht eine manuelle Freigabe aus (Master oder Slave), regelt DVhub nicht — kein Befehl, keine
+    // Leistung, kein Herzschlag. Die Wiederholung läuft in tick(); DVhubs Modus bleibt DVhubs (nicht „fremd").
+    if (releasePendingAny()) { publish(); return releasePendingResult(); }
     const gate = deviceGate(cfg);
     if (gate) {
       st.error = gate;
@@ -2069,7 +2547,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         //     beschreibbar ist (nicht deviceManaged) und als Keepalive-Register gewählt (13080/both, Standard 13080).
         const reg = ctl.keepaliveRegister;
         if ((reg === '13080' || reg === 'both') && !st.hb.deviceManaged) {
-          await writeReg(conf, HEARTBEAT_ADDR, ctl.heartbeatTimeoutS, { fc: st.hb.workingFc || 6 });
+          await submitReg(conf, HEARTBEAT_ADDR, ctl.heartbeatTimeoutS, { fc: st.hb.workingFc || 6, keepalive: true });
           st.sentTimeoutS = ctl.heartbeatTimeoutS;
           st.lastHeartbeatAt = now();
         }
@@ -2081,7 +2559,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
           const fallbackMs = st.lastFallbackAfterS > 0 ? st.lastFallbackAfterS * 1000 : ctl.heartbeatTimeoutS * 1000;
           const kaEvery = Math.min(10000, Math.max(3000, Math.floor(fallbackMs / 3)));
           if (t - (st.lastKeepaliveAt || 0) >= kaEvery - TICK_JITTER_MS) {
-            await writeReg(conf, EMS_POWER_ADDR, dev.powerW, { fc: 6 }); // Leistung neu schreiben = Lebenszeichen
+            await submitReg(conf, EMS_POWER_ADDR, dev.powerW, { fc: 6, keepalive: true }); // Leistung neu schreiben = Lebenszeichen
             st.lastKeepaliveAt = now();
             if (st.hb.deviceManaged) st.lastHeartbeatAt = now();
           }
@@ -2094,12 +2572,22 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       if (slaveActuator && second != null) {
         return await stepSplit({ conf, ctl, decision, gap, second, reason, t, opts });
       }
+      // Slave-Werte fehlen (Review 156a3e06 P2): einen zuvor von DVhub gesetzten Slave-Befehl zurücknehmen wie im
+      // Forced-Pfad (S-41, Review-Befund 1) — sonst liefe er neben dem vollen Master-Anteil weiter. No-op ohne Besitz.
+      if (slaveActuator) { st.slaveNeutralizeTick = t; try { await slaveActuator.neutralize('slave_telemetry_lost'); } catch { /* best effort */ } }
+      // Ohne Slave-Werte wird der Slave hier nicht geführt und folgt dem Master-Modus: im eigenen Betrieb (Fable P2-1,
+      // auch vor einem „unverändert") und vor dem Eintritt (Christin 21.11.2026) seinen Befehl auf Stopp bestätigen —
+      // sonst tritt der Master zurück bzw. bleibt in diesem Takt in Modus 0.
+      if (decision.mode === 'forced' && st.owns && st.ownMode === ctl.modeValue && dev.mode === ctl.modeValue) {
+        await stopSlaveBeforeTakeover('running', ctl.modeValue, t);
+      }
       if (!gap && emsMatches(dev, decision, decision.mode === 'forced' ? opts.stepW : 0, ctl.modeValue)) {
         if (decision.mode === 'self') setOwns(null);
         st.error = null;
         publish();
         return { ok: true, unchanged: true, decision };
       }
+      if (decision.mode === 'forced' && dev.mode !== ctl.modeValue) await stopSlaveBeforeTakeover('entry', ctl.modeValue, t);
       const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
       // Ein frischer Write (Modus/Leistung) ist ein Lebenszeichen → Keepalive-Fenster neu; bei External EMS gilt
       // der Eintrittszeitpunkt ab jetzt (für die gemessene Rückfallzeit).
@@ -2122,6 +2610,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         st.dev = null;
         publish();
         return { ok: false, blocked: true, error: 'emergency_stop_active' };
+      } else if (e?.code === 'entry_slave_unconfirmed') {
+        return entryDeferred(e, t);
+      } else if (e?.code === 'running_slave_unconfirmed') {
+        return await stepBackForSlave(conf, ctl, e, t);
       } else if (e?.code === 'ems_read_error') {
         // Reines Lesen der Kontroll-Register fehlgeschlagen — es wurde NICHTS geschrieben. Eigenes Event (warn),
         // kein control_write_error beim Aufrufer (readError-Flag).
@@ -2158,6 +2650,13 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     st.acceptSeq += 1;
     return serial(async () => {
       syncEndpoint(getCfg());
+      // Option A: während eine Freigabe aussteht, nimmt der Aktuator keine Vorgabe an (nichts geschrieben; der
+      // Aufrufer behält den Sollwert wie bei jedem Aktuator-Fehler, emsFailure). Nach der Bestätigung wie bisher.
+      // Not-Halt hat Vorrang in der Rückgabe (wie step()).
+      if (releasePendingAny()) {
+        publish();
+        return state.ctrl?.discretionaryWritesPaused ? { ok: false, blocked: true, error: 'emergency_stop_active' } : releasePendingResult();
+      }
       const changed = !st.target || Number(st.target.setpointW) !== Number(setpointW);
       // noGridCharge trägt das Netzlade-Tor (schedule-eval) mit: dieser positive Sollwert darf nur die Last aus
       // dem Netz decken, nie den Akku laden → der Regler begrenzt das Laden auf den PV-Überschuss.
@@ -2204,6 +2703,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     return serial(async () => {
       const cfg = getCfg();
       const conf = sungrowEmsConf(cfg);
+      // Option A: ausstehende Freigabe wiederholen — im selben Takt wie das Regeln, auch im Not-Halt (H-7). Sonst nichts.
+      if (conf && releasePendingAny()) return await retryPendingRelease();
+      // Codex 6f356cb8: ohne Schreibweg steht die Freigabe weiter aus — Status auffrischen (Master und Slave), damit
+      // Kachel und API „nicht gesendet" statt „wird wiederholt" zeigen.
+      if (!conf && releasePendingAny()) { publish(); slaveActuator?.status?.(); return { ...releasePendingResult(), idle: true }; }
       if (!conf || state.ctrl?.discretionaryWritesPaused) return { ok: true, idle: true };
       const opts = resolveSungrowEmsOptions(conf);
       if (!st.target && !st.owns) return { ok: true, idle: true };
@@ -2227,6 +2731,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       const cfg = getCfg();
       const conf = sungrowEmsConf(cfg);
       syncEndpoint(cfg);
+      // Restpunkt 1 (gleiches Muster wie die manuelle Freigabe): DVhub besitzt den Betrieb (Merker), aber die
+      // Konfiguration ist ungültig und es gibt keinen Schreibweg (R-T2.1: ungültiges Profil ohne Schreibadressen) —
+      // dann nicht „nicht im Besitz, ok" melden, sondern ehrlich: nichts gesendet (der Not-Halt meldet es laut).
+      if (!conf && st.owns && cfg?.writeSafety?.ok === false) return { ok: false, skipped: true, sent: false, reason: 'no_write_path', error: noWritePathError(cfg) };
       if (!conf || !st.owns) return { ok: true, skipped: true, reason: 'not_owned' };
       try {
         st.dev = null; // frisch lesen: nur schreiben, was am Gerät wirklich noch abweicht
@@ -2266,23 +2774,23 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         st.dev = null;
         const dev = await readDevice(conf);
         if (isSlave ? dev.mode === EMS_MODE.VPP : isForeignMode(dev.mode, dev)) throw foreignModeError(dev.mode);
-        if (emsMatches(dev, decision, opts.stepW, control.modeValue, { ignoreMode: isSlave })) {
-          // M12 (Feld 16.11.): steht der Slave schon im von DVhub geführten Zustand (Modus 2 + passender Befehl, z. B.
-          // 0xCC am SoC-Boden — genau der Zustand nach eigener Freigabe / Neustart) und führt DVhub ihn regulär in
-          // forced (decision.mode !== 'self', Gerät NICHT fremd — oben geprüft), dann ist das DVhubs EIGENER Zustand:
-          // Besitz übernehmen, auch ohne Write. Sonst zeigt die Kachel „Besitz nein", obwohl DVhub den Slave führt.
-          // Nur für den Slave; die M2-Fremderkennung am Master bleibt unberührt.
-          if (isSlave && decision.mode !== 'self' && !(st.owns && st.ownMode === control.modeValue)) setOwns(control.modeValue);
+        // H-9 (ersetzt M12, Feld 16.11.): führt DVhub den Slave in einem Befehl, ohne ihn zu besitzen (nach Freigabe,
+        // Rücknahme, Neustart ohne Merker oder ein Befehl eines anderen Systems), stellt erst DVhubs eigener Write den
+        // Besitz her — auch wenn der Zustand schon passt (M12 übernahm ihn hier ohne Write, im Rahmen der Schreibschwelle).
+        const adopt = needsAdoption(dev, decision, control.modeValue);
+        if (!adopt && emsMatches(dev, decision, opts.stepW, control.modeValue, { ignoreMode: isSlave })) {
           st.decision = { ...decision, at: now() };
           st.error = null;
           publish();
           return { ok: true, unchanged: true, decision, readback: dev };
         }
+        const found = adopt ? adoptionFound(dev) : null;
         const back = await writeDecision(conf, decision, {
-          modeValue: control.modeValue, heartbeatS: control.heartbeatTimeoutS, forceAll: false,
+          modeValue: control.modeValue, heartbeatS: control.heartbeatTimeoutS, forceAll: false, adopt,
           heartbeatAfterMode: control.heartbeatAfterMode, heartbeatWriteFc: control.heartbeatWriteFc,
           acceptDeviceHeartbeatS: control.acceptDeviceHeartbeatS,
         });
+        if (found) logAdoption(found, decision);
         st.decision = { ...decision, at: now() };
         st.error = null;
         publish();
@@ -2303,7 +2811,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   }
 
   // === Schreibklassen-Matrix im Not-Halt (C3.2, Christin 16.11.2026) ==========================================
-  // Entscheidung festgehalten: Der Not-Halt sperrt DVhubs EIGENE Regel-Writes (writeReg ohne neutralize wirft
+  // Entscheidung festgehalten: Der Not-Halt sperrt DVhubs EIGENE Regel-Writes (submitReg ohne neutralize wirft
   // emergency_stop_active). AUSDRÜCKLICHE Ausnahme — genau EINE Neutralisierung über den Außen-Pfad:
   //   • releaseControl (geordnetes Beenden, SIGTERM/Update, ExecStopPost des Not-Stop-Skripts) und
   //   • neutralize (Box-Watchdog)
@@ -2320,6 +2828,65 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   function setDrivenRegulateMs(ms) {
     const v = Number(ms);
     st.drivenRegulateMs = Number.isFinite(v) && v > 0 ? Math.round(v) : null;
+  }
+
+  /**
+   * H-9 (nur Slave, Codex 2a0f18b5 P2): vor der Übernahme des Masters — und vor seinem Eintritt aus Modus 0
+   * (reason 'master_entry', Christin 21.11.2026) — einen Slave, den DVhub nicht führt, einmal auf
+   * Stopp (0xCC) setzen und zurücklesen. Besitzt DVhub ihn oder steht er schon auf Stopp: kein Write. Kein Besitz
+   * (Stopp ist der Grundzustand), kein Modus-Write, im Not-Halt nichts, in Notladung nichts (emergency: true).
+   * ok:false = nicht bestätigt.
+   */
+  function stopUnowned(reason = 'master_adopted') {
+    return serial(async () => {
+      const cfg = getCfg();
+      const conf = sungrowEmsConf(cfg);
+      if (!conf || transport?.type !== 'modbus') return { ok: false, error: 'sungrow_ems_not_configured' };
+      // Nur mit eigener Slave-Verbindung — ohne sie zeigte endpoint() auf den Master.
+      if (isSlave && !resolveOverride()?.host) return { ok: true, skipped: true, reason: 'no_second_inverter' };
+      syncEndpoint(cfg);
+      if (state.ctrl?.discretionaryWritesPaused) return { ok: false, blocked: true, error: 'emergency_stop_active' };
+      if (st.owns) return { ok: true, skipped: true, reason: 'owned' };
+      // stage: 'read' bis zum Write — der Aufrufer unterscheidet „nicht lesbar" (Zustand unbekannt) von „fremden
+      // Befehl gefunden, Stopp nicht bestätigt" (Nachprüfung im Betrieb, Fable 2 P3).
+      let stage = 'read';
+      try {
+        // Betriebszustand am Slave selbst lesen (FC4 13000, nur Lesen): ohne Telemetrie des Begleitdiensts ist er
+        // unbekannt. In Notladung (0x4001) ist der Slave nicht steuerbar und wird nie kommandiert (S-36); nicht
+        // lesbar → nicht bestätigt, die Übernahme wartet (Codex 4e3fc521 P2). Mit derselben Wiederholung wie
+        // readDevice (Fable 2 P3): ein einzelner Lesefehler kostet sonst einen Rücktritt (zwei 13050-Writes).
+        const runningState = await readRunningState(conf);
+        if (isSungrowEmergencyCharge(runningState)) { publish(); return { ok: false, emergency: true, error: 'slave_emergency_charge' }; }
+        st.dev = null;
+        const dev = await readDevice(conf);
+        if (dev.mode === EMS_MODE.VPP) throw foreignModeError(dev.mode);
+        if (dev.cmd === EMS_CMD.STOP) { setStopConfirmed(true); publish(); return { ok: true, unchanged: true }; }
+        setStopConfirmed(false); // ein Befehl steht an — bis zur bestätigten Rücknahme gilt der Stopp nicht
+        const found = adoptionFound(dev);
+        stage = 'write';
+        await writeDecision(conf, { mode: 'self', reason }, {});
+        if (reason === 'master_entry' || reason === 'master_running') {
+          // Vor dem Eintritt des Masters (Christin 21.11.2026) bzw. im Betrieb, wenn DVhub den Slave nicht führt
+          // (Fable P2-1, Nachprüfung): der Befehl wirkte bzw. hätte gewirkt, sobald der Master im Steuermodus steht.
+          const entry = reason === 'master_entry';
+          pushLog(entry ? 'sungrow_ems_entry_slave_stopped' : 'sungrow_ems_running_slave_stopped', {
+            side: 'slave', found: { cmd: found.cmd, powerW: found.powerW },
+            text: entry
+              ? `Sungrow Slave: Befehl 0x${(found.cmd & 0xffff).toString(16)} (${found.powerW} W) ohne DVhub-Besitz vor dem Eintritt des Masters auf Stopp gesetzt — er hätte mit dem Eintritt wieder gewirkt.`
+              : `Sungrow Slave: Befehl 0x${(found.cmd & 0xffff).toString(16)} (${found.powerW} W) ohne DVhub-Besitz im Betrieb gefunden (DVhub führt den Slave nicht) und auf Stopp gesetzt — er lief neben dem Master-Anteil.`,
+          }, 'warn');
+        } else {
+          logAdoption(found, { mode: 'forced', command: 'stop', powerW: 0 });
+        }
+        publish();
+        return { ok: true };
+      } catch (e) {
+        st.error = e?.message || String(e);
+        st.dev = null;
+        publish();
+        return { ok: false, error: st.error, stage, ...(e?.code === 'emergency_stop_active' ? { blocked: true } : {}), ...(e?.code === 'foreign_ems_mode' ? { foreign: true } : {}) };
+      }
+    });
   }
 
   /** Slave einmal sicher in Self-consumption (Not-Halt, Split-Abbruch, Rückzug). Schreibt auch im Not-Halt. */
@@ -2379,32 +2946,279 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Manuelle Freigabe per Knopf/API (M2, Feld 16.11.): Master in Modus 0, beide WR 0xCC — UNABHÄNGIG vom
   // Besitz-Merker. Der Merker kann nach einem Neustart/Lesefehler fehlen, während der Master real noch in DVhubs
   // Modus 2 mit fester Leistung steht (Feld: ~10 min, API-Neustart half nicht, nur sungrowForcedSafeOff löste es).
-  // Darum NICHT über writeDecision (das lehnt einen vermeintlich „fremden" Modus 2 ab) — die Register direkt setzen
-  // und zurücklesen. Danach Besitz/Ziel/letzten Write zurücksetzen, damit DVhub nicht sofort wieder eintritt.
-  function forceRelease(reason = 'manual_release') {
+  // Darum NICHT über writeDecision (das lehnte bis H-9 einen vermeintlich „fremden" Modus 2 ab, ein fremdes Modus 3/VPP
+  // weiterhin) — die Register direkt setzen
+  // und zurücklesen. Nach BESTÄTIGTER Freigabe Besitz/Ziel/letzten Write zurücksetzen, damit DVhub nicht sofort wieder
+  // eintritt. Schreibtor: Aktionsklasse manualForceRelease (H-7) — die einzige Not-Halt-Ausnahme, nur die festen
+  // Literale 0xCC/0 Richtung Grundzustand. Bestätigt hat der Bediener am Aufrufer (POST /api/sungrow/release verlangt
+  // confirm: true); die Marke nennt den Anlass. Der Master reicht die Freigabe an den Slave weiter (gleiche Klasse).
+  //
+  // Option A (Christin 19.11.2026, Punkt 7 — „das Verhalten aus dem Feldtest hat Vorrang, Option A ist eigentlich das
+  // natürliche, was man erwarten würde"): Scheitert die Freigabe (Zeitüberschreitung, halb angekommen, nicht
+  // bestätigt), bleibt sie als Absicht stehen und wird wiederholt, bis sie bestätigt ist. Vorher löschte sie Besitz,
+  // Ziel und letzten Write trotzdem — der WR stand weiter in DVhubs Modus 2 mit dem alten Befehl, DVhub hielt ihn für
+  // fremd und schrieb nie wieder; Not-Halt-/Shutdown-Rücknahme, ExecStopPost und Box-Watchdog übersprangen ihn.
+  //   • DVhubs Modus bleibt DVhubs (Besitz-Merker bleibt, auch auf der Platte), solange die Freigabe aussteht.
+  //   • Zwischen zwei Versuchen regelt DVhub nicht (step/applySetpoint: kein Befehl, keine Leistung, kein Herzschlag).
+  //   • Wiederholung = dieselbe Abfolge (Slave 0xCC, Master 0xCC, Master Modus 0, Rücklesen) im vorhandenen Regeltakt
+  //     (tick → due/stepEveryMs) mit dem vorhandenen Freigabe-Backoff aus dem Feldtest (M14, services/release-
+  //     backoff.js: nach 3 Fehlschlägen in Folge alle 5 min, ohne Obergrenze; ein Knopfdruck umgeht das Fenster).
+  //   • M14-Muster: Modbus-Ausnahme, Wert aber übernommen → Schritt erledigt (releaseWrite).
+  //   • Im Not-Halt läuft nur die Wiederholung (manualForceRelease, H-7). Eine bestätigte Not-Halt-/Shutdown-Rücknahme
+  //     erledigt die Freigabe mit (writeDecision self).
+  //   • Kein eigener Betrieb (fremdes EMS/VPP oder nichts gesetzt): einmaliger Versuch wie bisher, keine Wiederholung.
+  //   • Codex d6f4b256 P1: jede AUTOMATISCHE Wiederholung prüft vorher Besitz und Gerätezustand frisch; hat ein anderes
+  //     System übernommen, wird die Freigabe verworfen (Log sungrow_ems_release_abandoned + Status), nie überschrieben.
+  //   • Codex d6f4b256 P2: jede Anfrage trägt ihren Zeitpunkt (requestedAt); ihr Ergebnis ersetzt das der vorigen.
+  //   • Restpunkt 1: ohne Schreibweg (Profil ungültig, kein Sungrow-EMS) ehrlich ok:false, sent:false — nichts gesendet.
+  const releaseSide = isSlave ? 'slave' : 'master';
+  const isModbusException = (e) => /^modbus exception \d+/.test(String(e?.message));
+
+  // Warum es keinen Schreibweg gibt (Restpunkt 1). Gleiche Fehlernamen wie submitReg (C2) bzw. step().
+  function noWritePathError(cfg) {
+    const ws = cfg?.writeSafety;
+    if (ws && ws.ok === false) return `config_unsafe_${ws.reason || 'config_invalid'}`;
+    return 'sungrow_ems_not_configured';
+  }
+
+  // Ein Freigabe-Register schreiben. M14 (Feldtest 6a4e10d3, SH10RT-20; wie schedule-eval runDvControlSequence):
+  // antwortet der WR mit einer Modbus-Ausnahme, hat den Wert aber übernommen, gilt der Schritt als erledigt —
+  // zurücklesen statt ewig wiederholen. Nur bei einer echten Ausnahme (Gerät hat geantwortet); bei Zeitüberschreitung
+  // oder Verbindungsfehler ist der Gerätezustand unbekannt → Fehlschlag.
+  async function releaseWrite(conf, address, value, confirmedBy) {
+    try {
+      await submitReg(conf, address, value, { neutralize: true, manualRelease: confirmedBy });
+    } catch (e) {
+      if (!isModbusException(e)) throw e;
+      let dev;
+      try { dev = await readDevice(conf); } catch { dev = null; }
+      const got = dev ? (address === EMS_MODE_ADDR ? dev.mode : dev.cmd) : null;
+      if (got !== (value & 0xffff)) throw e;
+      pushLog('sungrow_ems_release_already_set', { side: releaseSide, address, value: value & 0xffff, error: e?.message || String(e) }, 'warn');
+    }
+  }
+
+  // Die Freigabe-Abfolge dieses WR (seit M2 unverändert): 0xCC, am Master dann Modus 0, zurücklesen.
+  async function releaseAttempt(conf, confirmedBy) {
+    const out = { ok: false };
+    try {
+      st.dev = null;
+      await releaseWrite(conf, EMS_CMD_ADDR, EMS_CMD.STOP, confirmedBy);
+      if (!isSlave) await releaseWrite(conf, EMS_MODE_ADDR, EMS_MODE.SELF, confirmedBy);
+      const back = await readDevice(conf);
+      out.ok = back.cmd === EMS_CMD.STOP && (isSlave || back.mode === EMS_MODE.SELF);
+      out.device = { mode: back.mode, cmd: back.cmd, powerW: back.powerW };
+      if (!out.ok) out.error = 'release_not_confirmed';
+    } catch (e) { out.error = e?.message || String(e); }
+    return out;
+  }
+
+  function releasePending() { return st.release != null; }
+  function releasePendingAny() { return st.release != null || slaveActuator?.releasePending?.() === true; }
+  // Ist der nächste automatische Versuch fällig (Backoff-Fenster vorbei)?
+  function releaseDue() { return st.release != null && now() >= st.release.nextAt; }
+  function releasePendingResult() { return { ok: false, error: 'sungrow_release_pending', releasePending: true }; }
+
+  // requestedAt: ein neuer Knopfdruck übernimmt die ausstehende Freigabe — ihr Hinweis gehört jetzt zu ihm (P2).
+  function releaseFailed(reason, confirmedBy, error, requestedAt = null) {
+    const t = now();
+    const r = st.release || { reason, confirmedBy, requestedAt, since: t, attempts: 0, nextAt: 0, lastError: null };
+    if (requestedAt != null) r.requestedAt = requestedAt;
+    r.attempts += 1;
+    r.lastError = error || null;
+    r.nextAt = releaseBackoffNextAt(r.attempts, t);
+    st.release = r;
+    st.releaseInfo = null;
+  }
+
+  // Automatischer Versuch gescheitert (nichts oder nicht alles angekommen, oder der Zustand war nicht lesbar).
+  function retryFailed(r, error) {
+    releaseFailed(r.reason, r.confirmedBy, error);
+    pushLog('sungrow_ems_release_retry', {
+      side: releaseSide, attempts: st.release.attempts, retryAt: st.release.nextAt || null, error: error || null,
+      text: 'Sungrow-Freigabe gescheitert, wird wiederholt.',
+    }, 'warn');
+  }
+
+  // Freigabe am Gerät erreicht, nachdem sie ausstand: Hinweis „erledigt" (Log + Status). via = 'release' (eigene
+  // Wiederholung/Knopf), 'device' (der WR stand beim Nachlesen schon im Ziel — kein Write) oder der Anlass einer
+  // bestätigten Rücknahme (emergency_stop, shutdown, …).
+  function releaseCompleted(via) {
+    const r = st.release;
+    const attempts = r.attempts + (via === 'release' ? 1 : 0);
+    st.release = null;
+    st.releaseInfo = { state: 'done', requestedAt: r.requestedAt ?? null, at: now(), attempts, via };
+    pushLog('sungrow_ems_release_done', {
+      side: releaseSide, attempts, via,
+      text: `Sungrow-Freigabe erledigt (${isSlave ? 'Slave 0xCC' : 'Master Modus 0 + 0xCC'} bestätigt, ${attempts} Versuch${attempts === 1 ? '' : 'e'}).`,
+    });
+  }
+
+  // Codex d6f4b256 P1: die ausstehende Freigabe verwerfen — der Betrieb ist nicht mehr DVhubs (ein anderes System hat
+  // übernommen, bzw. eine Rücknahme hat den fremden Modus erkannt und den Besitz abgegeben). DVhub wiederholt sie nicht
+  // und überschreibt das fremde System nie, auch im Not-Halt nicht. reason: foreign_mode (an diesem WR),
+  // master_foreign_mode (Slave: am Master steuert ein anderes System, der Slave folgt ihm), not_owned (Besitz weg).
+  function releaseAbandon(reason, mode = null) {
+    const r = st.release;
+    if (!r) return;
+    st.release = null;
+    st.releaseInfo = { state: 'abandoned', requestedAt: r.requestedAt ?? null, at: now(), attempts: r.attempts, reason, mode };
+    const where = reason === 'master_foreign_mode' ? 'am Master steuert ein anderes System' : (reason === 'foreign_mode' ? 'ein anderes System steuert' : 'der Betrieb ist nicht mehr DVhubs');
+    pushLog('sungrow_ems_release_abandoned', {
+      side: releaseSide, attempts: r.attempts, reason, mode,
+      text: `Sungrow-Freigabe verworfen (${isSlave ? 'Slave' : 'Master'}): ${where}${mode != null ? ` (Modus ${mode})` : ''} — DVhub überschreibt das nicht und wiederholt nicht.`,
+    }, 'warn');
+  }
+
+  function releaseConfirmed(reason, via = 'release') {
+    setOwns(null); st.target = null; st.revokedReason = reason; st.lastMasterWrite = null;
+    if (st.release) releaseCompleted(via);
+  }
+
+  // Eigene ausstehende Freigabe einmal AUTOMATISCH versuchen (Backoff-Fenster beachten). Aufrufer serialisiert.
+  // Codex d6f4b256 P1: vorher Besitz und Gerätezustand frisch prüfen. Der Knopfdruck ist eine Bedienhandlung (M2: auch
+  // gegen einen vermeintlich fremden Modus, einmal); die Wiederholung ist es nicht und überschreibt nie ein anderes System:
+  //   • Besitz abgegeben (eine Rücknahme hat einen fremden Modus erkannt)        → verwerfen;
+  //   • Slave: am Master steuert ein anderes System (der Slave folgt ihm, Feld #5) → verwerfen;
+  //   • Zustand nicht lesbar (dieser WR bzw. für den Slave der Master)             → kein Write, zählt als Fehlschlag;
+  //   • fremder Modus am Gerät (Slave: VPP; Master: isForeignMode wie writeDecision) → Besitz abgeben, verwerfen;
+  //   • Gerät steht schon im Ziel (Master Modus 0 + 0xCC, Slave 0xCC)             → erledigt ohne Write (13050 schonen);
+  //   • sonst dieselbe Freigabe-Abfolge wie beim Knopfdruck.
+  // dev/readError: am Master der eben in retryPendingRelease gelesene Zustand (einmal lesen für Master und Slave).
+  async function retryOwnRelease({ dev: given = undefined, readError = null, masterForeignMode = null } = {}) {
+    const r = st.release;
+    if (!r || now() < r.nextAt) return;
+    if (!st.owns) { releaseAbandon('not_owned'); return; }
+    if (masterForeignMode != null) { setOwns(null); releaseAbandon('master_foreign_mode', masterForeignMode); return; }
+    const conf = sungrowEmsConf(getCfg());
+    let dev = given;
+    let err = readError;
+    if (dev === undefined && err == null) {
+      try { st.dev = null; dev = await readDevice(conf); } catch (e) { err = e?.message || String(e); }
+    }
+    if (err != null) { retryFailed(r, err); return; }
+    if (isSlave ? dev.mode === EMS_MODE.VPP : isForeignMode(dev.mode, dev)) { setOwns(null); releaseAbandon('foreign_mode', dev.mode); return; }
+    if (dev.cmd === EMS_CMD.STOP && (isSlave || dev.mode === EMS_MODE.SELF)) { releaseConfirmed(r.reason, 'device'); return; }
+    const out = await releaseAttempt(conf, r.confirmedBy);
+    if (out.ok) { releaseConfirmed(r.reason); return; }
+    retryFailed(r, out.error);
+  }
+
+  // Wiederholung aus tick() (Master): im Regeltakt (due/stepEveryMs), Slave zuerst, dann Master. Auch im Not-Halt —
+  // es läuft ausschließlich die Freigabe-Abfolge (manualForceRelease, H-7).
+  async function retryPendingRelease() {
+    const cfg = getCfg();
+    const conf = sungrowEmsConf(cfg);
+    if (!conf || transport?.type !== 'modbus') return { ok: true, idle: true };
+    syncEndpoint(cfg);
+    if (!releasePendingAny()) { publish(); return { ok: true, idle: true }; }
+    if (!due(stepEveryMs(resolveSungrowEmsOptions(conf)))) return { ...releasePendingResult(), idle: true };
+    const ownDue = releaseDue();
+    const slaveDue = slaveActuator?.releaseDue?.() === true;
+    if (!ownDue && !slaveDue) { publish(); return { ...releasePendingResult(), idle: true }; } // Backoff-Fenster: nicht einmal lesen
+    st.lastStepAt = now();
+    // Codex d6f4b256 P1: den Master frisch lesen, BEVOR automatisch geschrieben wird. Er entscheidet auch über den Slave:
+    // der folgt dem Master-Modus (Feld #5) — steuert am Master ein anderes System, gehört ihm auch der Slave.
+    let masterDev;
+    let masterErr = null;
+    try { st.dev = null; masterDev = await readDevice(conf); } catch (e) { masterErr = e?.message || String(e); }
+    if (slaveDue) {
+      const masterForeignMode = masterDev && isForeignMode(masterDev.mode, masterDev) ? masterDev.mode : null;
+      try { await slaveActuator.retryRelease({ masterForeignMode, masterReadError: masterErr }); } catch { /* bleibt ausstehend */ }
+    }
+    if (ownDue) await retryOwnRelease({ dev: masterDev, readError: masterErr });
+    publish();
+    return releasePendingAny() ? releasePendingResult() : { ok: true, released: true };
+  }
+
+  // Slave: Wiederholung auf Anstoß des Masters (eigene Serialisierung, eigener Backoff). masterForeignMode/
+  // masterReadError: was der Master eben an sich gelesen hat (P1).
+  function retryRelease({ masterForeignMode = null, masterReadError = null } = {}) {
     return serial(async () => {
       const cfg = getCfg();
-      const conf = sungrowEmsConf(cfg);
-      if (!conf || transport?.type !== 'modbus') return { ok: true, skipped: true, reason: 'no_modbus' };
+      if (!sungrowEmsConf(cfg) || transport?.type !== 'modbus') return { ok: true, idle: true };
       syncEndpoint(cfg);
-      const out = { ok: false };
-      if (slaveActuator) { try { await slaveActuator.forceRelease(reason); } catch { /* best effort */ } }
-      try {
-        st.dev = null;
-        await writeReg(conf, EMS_CMD_ADDR, EMS_CMD.STOP, { neutralize: true });
-        if (!isSlave) await writeReg(conf, EMS_MODE_ADDR, EMS_MODE.SELF, { neutralize: true });
-        const back = await readDevice(conf);
-        out.ok = back.cmd === EMS_CMD.STOP && (isSlave || back.mode === EMS_MODE.SELF);
-        out.device = { mode: back.mode, cmd: back.cmd, powerW: back.powerW };
-      } catch (e) { out.error = e?.message || String(e); }
-      setOwns(null); st.target = null; st.revokedReason = reason; st.lastMasterWrite = null;
-      if (!isSlave) pushLog('sungrow_ems_manual_release', { reason, ok: out.ok, error: out.error || null, text: 'Sungrow manuell freigegeben (Modus 0, beide 0xCC).' }, out.ok ? undefined : 'warn');
+      await retryOwnRelease({ masterForeignMode, readError: masterReadError != null ? `Master: ${masterReadError}` : null });
+      publish();
+      return { ok: st.release == null, pending: st.release != null };
+    });
+  }
+
+  // requestedAt: Zeitpunkt der Anfrage (der Master reicht seinen an den Slave weiter — beide Hinweise gehören zur selben).
+  function forceRelease(reason = 'manual_release', { requestedAt = null } = {}) {
+    const confirmedBy = `operator:${reason || 'manual_release'}`;
+    return serial(async () => {
+      const reqAt = requestedAt ?? now();
+      // P2: eine neue Anfrage — was zur vorigen gemeldet wurde, gilt nicht mehr; eine ausstehende Freigabe gehört jetzt
+      // zu ihr.
+      st.releaseInfo = null;
+      if (st.release) st.release.requestedAt = reqAt;
+      const cfg = getCfg();
+      const conf = sungrowEmsConf(cfg);
+      if (!conf || transport?.type !== 'modbus') {
+        // Restpunkt 1: kein Schreibweg (Herstellerprofil ungültig → R-T2.1 ohne Schreibadressen; kein Sungrow-EMS-Profil;
+        // kein Modbus). Vorher ok:true — die Kachel zeigte „freigegeben (Modus 0)", obwohl nichts gesendet wurde.
+        const error = noWritePathError(cfg);
+        let slaveOut = null;
+        if (slaveActuator) { try { slaveOut = await slaveActuator.forceRelease(reason, { requestedAt: reqAt }); } catch { /* nichts gesendet */ } }
+        st.releaseInfo = { state: 'failed', requestedAt: reqAt, at: now(), sent: false, error };
+        // Steht eine Freigabe aus, bleibt sie als Auftrag stehen (Codex 6f356cb8) — die Antwort sagt beides.
+        const pending = st.release != null || slaveOut?.pending === true;
+        if (!isSlave) {
+          pushLog('sungrow_ems_manual_release', {
+            reason, ok: false, sent: false, pending, error, slave: slaveOut ? { ok: slaveOut.ok === true, sent: slaveOut.sent !== false } : null,
+            text: `Sungrow-Freigabe NICHT gesendet — kein Schreibweg (${error})${pending ? '; die ausstehende Freigabe bleibt stehen' : ''}.`,
+          }, 'warn');
+        }
+        publish();
+        return { ok: false, sent: false, skipped: true, reason: 'no_write_path', error, requestedAt: reqAt, ...(pending ? { pending: true } : {}) };
+      }
+      syncEndpoint(cfg);
+      let slaveOut = null;
+      if (slaveActuator) { try { slaveOut = await slaveActuator.forceRelease(reason, { requestedAt: reqAt }); } catch (e) { slaveOut = { ok: false, error: e?.message || String(e) }; } }
+      // Wessen Betrieb wird freigegeben? Vor dem ersten Write festhalten (eine halb angekommene Freigabe ändert den
+      // Gerätezustand). Merker — oder am Master (M2) der zuletzt gelesene Zustand spiegelt DVhubs letzten bestätigten
+      // Write. Nur ein eigener Betrieb wird nach einem Fehlschlag gehalten und wiederholt.
+      const ownBefore = st.owns ? st.ownMode
+        : ((st.dev && (st.dev.mode === EMS_MODE.FORCED || st.dev.mode === EMS_MODE.EXTERNAL) && ownWroteMode(st.dev.mode, st.dev)) ? st.dev.mode : null);
+      const out = await releaseAttempt(conf, confirmedBy); // Knopfdruck: sofort, ohne Backoff-Fenster
+      out.requestedAt = reqAt;
+      if (out.ok) {
+        releaseConfirmed(reason);
+      } else if (ownBefore != null) {
+        setOwns(ownBefore); // eigener Betrieb bleibt eigener (Merker für Watchdog/ExecStopPost)
+        releaseFailed(reason, confirmedBy, out.error, reqAt);
+      } else {
+        // Kein eigener Betrieb (fremdes EMS/VPP oder nichts gesetzt): einmaliger Versuch wie bisher. Eine noch
+        // ausstehende Freigabe ohne Besitz wird nicht weiter automatisch versucht (P1); der Fehlschlag dieser Anfrage
+        // steht im Status (P2).
+        if (st.release) releaseAbandon('not_owned');
+        setOwns(null); st.target = null; st.revokedReason = reason; st.lastMasterWrite = null;
+        st.releaseInfo = { state: 'failed', requestedAt: reqAt, at: now(), error: out.error || null };
+      }
+      // Nur wenn etwas aussteht (sonst bleibt die Rückgabe wie bisher).
+      if (st.release != null || slaveOut?.pending === true) out.pending = true;
+      if (st.release) { out.attempts = st.release.attempts; out.retryAt = st.release.nextAt || null; }
+      if (!isSlave) {
+        const slaveFailed = slaveOut != null && slaveOut.ok !== true && slaveOut.skipped !== true;
+        const text = out.pending
+          ? 'Sungrow-Freigabe gescheitert, wird wiederholt — DVhub regelt bis zur Bestätigung nicht.'
+          : (out.ok
+            ? (slaveFailed ? 'Sungrow-Master freigegeben (Modus 0), Slave-Freigabe gescheitert.' : 'Sungrow manuell freigegeben (Modus 0, beide 0xCC).')
+            : 'Sungrow-Freigabe gescheitert — kein von DVhub gesetzter Betrieb, keine Wiederholung.');
+        pushLog('sungrow_ems_manual_release', {
+          reason, ok: out.ok, pending: out.pending === true, error: out.error || null,
+          ...(st.release ? { attempts: st.release.attempts, retryAt: st.release.nextAt || null } : {}),
+          slave: slaveOut ? { ok: slaveOut.ok === true, pending: slaveOut.pending === true, error: slaveOut.error || null } : null,
+          text,
+        }, out.ok && !slaveFailed ? undefined : 'warn');
+      }
       publish();
       return out;
     });
   }
 
-  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, setDrivenRegulateMs, neutralize, releaseControl, forceRelease, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
+  return { applySetpoint, revoke, acceptSeq, tick, emergencyStop, applyDirectCommand, setDrivenRegulateMs, neutralize, stopUnowned, ownsControl: () => st.owns === true, stopConfirmed: () => st.stopConfirmed === true, stopConfirmedAt: () => st.stopConfirmedAt || 0, releaseControl, forceRelease, releasePending, releaseDue, retryRelease, status: () => (publish(), state.ctrl?.[statusKey] || null), _st: st };
 }
 
 function describe(d, modeValue = EMS_MODE.FORCED) {

@@ -27,6 +27,13 @@ function ctxWithHistory() {
   return { ctx, calls, maxInFlight: () => maxInFlight };
 }
 const settle = () => new Promise((r) => setTimeout(r, 60));
+// Wartet, bis die erwarteten Aufrufe da sind (höchstens 3 s), statt fest 60 ms: Monat und Jahr laufen nacheinander mit
+// je 5 ms Verzögerung; unter Last (parallele Testläufe) reichten 60 ms nicht und der Test kippte ohne Codefehler.
+async function settleUntil(pred, timeoutMs = 3000) {
+  const end = Date.now() + timeoutMs;
+  while (!pred() && Date.now() < end) await new Promise((r) => setTimeout(r, 10));
+  await settle();
+}
 
 test('start(): kein Rechnen beim Booten', async (t) => {
   const { ctx, calls } = ctxWithHistory();
@@ -43,7 +50,7 @@ test('erster Dashboard-Abruf stößt heute + Monat + Jahr an; Monat und Jahr nac
   t.after(() => svc.close?.());
   await svc.start();
   svc.buildFamilyStatus();
-  await settle();
+  await settleUntil(() => calls.length >= 3);
   assert.deepEqual(calls, ['day', 'month', 'year']);
   assert.equal(maxInFlight(), 1, 'nie zwei Zusammenfassungen gleichzeitig im Speicher');
   // weitere Abrufe im Fenster lösen nicht erneut aus

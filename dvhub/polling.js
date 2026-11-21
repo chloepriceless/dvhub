@@ -7,6 +7,10 @@ import { berlinDateString, gridDirection, u16, s16 } from './server-utils.js';
 import { createSerialTaskRunner, normalizePollIntervalMs } from './runtime-performance.js';
 import { safeInterval } from './services/safe-async.js';
 import { decodeSunspecFloat32, scanSunspecModels, resolveSunspecAddresses } from './services/inverter/sunspec.js';
+// Lesepunkt-Decoder der Herstellerprofile (Lese-Engine E4/E5/E9/E14, 18.11.2026).
+import { decodePointRegs, isLowWordFirst, readPointValue, awaitsSunspec, assertReadableAddress } from './services/inverter/point-read.js';
+// Kennungsprobe der Herstellerprofile (Lese-Engine E10, 19.11.2026) — nur Lesen/Anzeigen, kein Schreibtor.
+import { normalizeIdentityProbe, runIdentityProbe, IDENTITY_PROBE_RETRY_MS } from './services/inverter/identity-probe.js';
 import {
   identifySungrow, decodeSungrowInfoBlock, endpointKeyOf, wire,
   resolveSecondInverter, secondInverterTelemetry, sungrowSecondView, sungrowSystemTelemetry,
@@ -102,15 +106,25 @@ export function createPoller(ctx) {
   // Letzte EM.GetStatus-Antwort des SPiNE-Zählers (enthält die Spannungen).
   let spineEm = null;
 
+  // E7 (18.11.2026): Mindestabstand der Poll-Takte aus dem Herstellerprofil (`victron.requestPacing.minPollIntervalMs`,
+  // z. B. SMA ≥ 10 s). Hebt einen kürzeren Takt aus meterPollMs/pollMs an, senkt nie. Ohne Angabe 0 = wie bisher.
+  const profileMinPollIntervalMs = (cfg) => {
+    const n = Number(cfg?.victron?.requestPacing?.minPollIntervalMs);
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), MAX_BACKOFF_MS) : 0;
+  };
+
   // --- effectivePollIntervalMs ---
-  const effectivePollIntervalMs = () => normalizePollIntervalMs(getCfg().meterPollMs, MIN_POLL_INTERVAL_MS);
+  const effectivePollIntervalMs = () => {
+    const cfg = getCfg();
+    return Math.max(normalizePollIntervalMs(cfg.meterPollMs, MIN_POLL_INTERVAL_MS), profileMinPollIntervalMs(cfg));
+  };
 
   // Plan 09-08 Task 3 — resolve BASE_POLL_MS at every tick so config changes
   // (and test injection of cfg.pollMs) take effect without reboot.
   const getBasePollMs = () => {
     const cfg = getCfg() || {};
     const fromPollMs = Number(cfg.pollMs);
-    if (Number.isFinite(fromPollMs) && fromPollMs > 0) return fromPollMs;
+    if (Number.isFinite(fromPollMs) && fromPollMs > 0) return Math.max(fromPollMs, profileMinPollIntervalMs(cfg));
     return effectivePollIntervalMs();
   };
 
@@ -143,62 +157,11 @@ export function createPoller(ctx) {
     }
   }
 
-  // --- pointFromRegs: convert raw register values to engineering value ---
-  function pointFromRegs(regs, conf) {
-    if (!regs || !regs.length) return null;
-    const scale = Number(conf.scale ?? 1);
-    const offset = Number(conf.offset ?? 0);
-    // SunSpec Float-Modus (B-1112 Fronius/SolarEdge/Kostal): zwei Register =
-    // IEEE-754-Float32. Der Codec liefert null für das SunSpec-NaN-Sentinel
-    // ("not implemented") und ±Inf — null hält die T-0075-Unknown-Semantik
-    // aufrecht (pollPoint stempelt fieldUpdatedAt nur bei echtem Wert nicht,
-    // sondern der Punkt bleibt sichtbar unbelegt statt giftig NaN im State).
-    if (String(conf.readType || '').toLowerCase() === 'float32') {
-      const value = decodeSunspecFloat32(regs, conf.wordOrder);
-      if (value === null) return null;
-      return Number((value * scale + offset).toFixed(3));
-    }
-    // T-0107: 32-bit value across two registers (Victron volatile setpoint
-    // 2716/2717). wordOrder 'be' (default) = high word first (regs[0]); 'le' =
-    // low word first. `* 0x10000` (not <<16) avoids JS 32-bit signed overflow.
-    const readType = String(conf.readType || '').toLowerCase();
-    // notAvailableRaw (Sungrow, T-0422): Rohwerte, mit denen das Gerät „Register
-    // nicht vorhanden/kein Wert“ meldet (U16 0xFFFF, S32 0x7FFFFFFF …) — vorzeichenlos
-    // gegen das rohe Wort bzw. Doppelwort verglichen, VOR Vorzeichen und Skala.
-    // Ergebnis null (unbelegt) statt einer erfundenen Zahl.
-    const notAvailable = Array.isArray(conf.notAvailableRaw) ? conf.notAvailableRaw.map(Number) : [];
-    if (regs.length >= 2 && (readType === 'int32' || readType === 'uint32')) {
-      const le = String(conf.wordOrder || 'be').toLowerCase().startsWith('l');
-      const hi = le ? regs[1] : regs[0];
-      const lo = le ? regs[0] : regs[1];
-      let raw = ((hi & 0xffff) * 0x10000) + (lo & 0xffff);
-      if (notAvailable.includes(raw)) return null;
-      if (readType === 'int32' && raw > 0x7fffffff) raw -= 0x100000000;
-      const v = raw * scale + offset;
-      return Number(v.toFixed(3));
-    }
-    if (notAvailable.length && regs.some((r) => notAvailable.includes(Number(r) & 0xffff))) return null;
-    if (conf.quantity > 1 && conf.sumRegisters) {
-      let sum = 0;
-      for (const r of regs) sum += conf.signed ? s16(r) : r;
-      const v = sum * scale + offset;
-      return Number(v.toFixed(3));
-    }
-    let v = regs[0];
-    if (conf.signed) v = s16(v);
-    // rawSentinels (2026-07-12, reg-2704-Scale-Fix): Sentinel-Rohwerte sind
-    // MODES (Victron 2704: -1 = unbegrenzt, 0 = gesperrt) und werden NICHT
-    // skaliert — sonst würde -1 mit scale 10 als „-10 W" angezeigt.
-    const rawSentinels = Array.isArray(conf.rawSentinels) ? conf.rawSentinels.map(Number) : [];
-    if (rawSentinels.includes(Number(v))) return Number(v);
-    // rawSentinelMap: Rohwert, der für einen Mode-Wert steht (2704: 32767 = -1).
-    if (conf.rawSentinelMap && typeof conf.rawSentinelMap === 'object') {
-      const hit = Object.entries(conf.rawSentinelMap).find(([, raw]) => Number(raw) === Number(v));
-      if (hit) return Number(hit[0]);
-    }
-    v = Number(v) * scale + offset;
-    return Number(v.toFixed(3));
-  }
+  // --- pointFromRegs: Rohregister → Engineering-Wert ---
+  // Seit der Lese-Engine (18.11.2026) in services/inverter/point-read.js (decodePointRegs), bitgleich zum früheren
+  // Code hier (float32/int32/uint32, notAvailableRaw, sumRegisters, rawSentinels); neu nur die wordOrder-Aliase
+  // swap/swapped (E14) und `sign` (E4), die kein ausgeliefertes Profil setzt.
+  const pointFromRegs = decodePointRegs;
 
   // --- pollPoint: read a single Victron data point ---
   // Abgeschaltete PV-Punkte (Gesamtprüfung Release 1.0.9): ihr letzter Wert
@@ -218,8 +181,38 @@ export function createPoller(ctx) {
   }
   // Punkte mit pollEveryMs (z. B. Netzanschluss-Grenze 2714) nur so oft lesen.
   const lastPointPollAt = {};
+  // E5: SunSpec-Skalenfaktoren je Poll-Takt höchstens einmal je Register lesen (pollMeter legt ihn je Takt neu an).
+  let cycleSfCache = new Map();
+  // Bereiche, in denen das Gerät keinen gemeinsamen Wert+SF-Block liefert (lückenhafte Karte) — je Poller gemerkt.
+  const sfBlockUnsupported = new Set();
+  // Konfigurierte Punkte, deren Wert gerade unbekannt ist, weil DVhub ihn bewusst geleert hat: unbekannte Richtung (E8)
+  // oder ausgeblendet (E10). Leer sähen sie aus wie ein nie belegter optionaler Kanal (z. B. ein AC-PV-Kanal ohne
+  // MQTT-Topic) — die Hauslast-Bilanz und der Live-Schnappschuss müssen sie aber als Ausfall sehen (Codex e7a80f44).
+  // Bleibt über Takte (pollEveryMs), bis der Punkt wieder einen Wert liefert oder abgeschaltet ist; gespiegelt in
+  // state.victron.unknownFields (nur solange nicht leer).
+  const unknownPoints = new Set();
+  // Ergebnis (E6, für die Hauslast-Ableitung): true = in diesem Takt ein Wert gelesen, false = kein Wert in diesem
+  // Takt (aus, unaufgelöst, Lesefehler, „nicht verfügbar“), undefined = wegen pollEveryMs nicht abgefragt.
   async function pollPoint(name, conf) {
+    // E10: Kennungsprobe passt nicht und das Profil nennt diesen Wert → leer statt womöglich falsch, und am fremden
+    // Gerät nicht lesen. Gilt für gelesene und abgeleitete Punkte (z. B. Hauslast aus der Energiebilanz, deren
+    // Ableitung unten dann ebenfalls aussetzt). Der Grund steht im Lesefehler, die volle Meldung in
+    // state.victron.identityProbe.
+    const hiddenBy = conf?.enabled || conf?.derive ? identityHiddenReason(name) : null;
+    if (hiddenBy) {
+      const v = state.victron;
+      v[name] = null;
+      (v.errors ??= {})[name] = hiddenBy;
+      if (v.fieldUpdatedAt) delete v.fieldUpdatedAt[name];
+      if (v.fieldSourceAt) delete v.fieldSourceAt[name];
+      unknownPoints.add(name);
+      // Der verworfene Wert zählt nicht als Lesung: nach bestandener Probe sofort neu lesen, nicht erst nach Ablauf
+      // von pollEveryMs (Codex e20a456e).
+      delete lastPointPollAt[name];
+      return false;
+    }
     if (!conf?.enabled) {
+      unknownPoints.delete(name);
       // Abgeschaltet ohne gehaltenen Wert: ein alter Lesefehler gilt nicht mehr —
       // er machte sonst jede Live-Probe veraltet (telemetry-runtime
       // liveSnapshotStale, Codex 4e636a56). Mit gehaltenem Wert bleibt er, bis ein
@@ -227,17 +220,17 @@ export function createPoller(ctx) {
       // räumt dropDisabledPvPoint samt Fehler ab.
       if (state.victron.errors && state.victron[name] == null) delete state.victron.errors[name];
       dropDisabledPvPoint(name, conf);
-      return;
+      return false;
     }
     const every = Number(conf.pollEveryMs);
     if (every > 0) {
       const t = Date.now();
-      if (lastPointPollAt[name] && t - lastPointPollAt[name] < every) return;
+      if (lastPointPollAt[name] && t - lastPointPollAt[name] < every) return undefined;
       lastPointPollAt[name] = t;
     }
     // SunSpec-deklarierte Punkte warten auf den Geräte-Scan (ensureSunspecResolved)
     // — vor der Auflösung wäre die Adresse null (Lesen von Register-Müll).
-    if (conf.sunspec && conf.address == null) return;
+    if (conf.sunspec && conf.address == null) return false;
     try {
       let sourceAt = null;
       if (transport.type === 'mqtt') {
@@ -245,10 +238,12 @@ export function createPoller(ctx) {
         state.victron[name] = result.mqttValue;
         sourceAt = Number(result?.ts);
       } else {
-        const regs = await transport.mbRequest(conf);
-        state.victron[name] = pointFromRegs(regs, conf);
+        // Lese-Engine (18.11.2026): ein Lesepunkt kann mehrere Register lesen (combine E4, split E9, Skalenfaktor
+        // E5). Ohne diese Schlüssel genau ein mbRequest(conf) wie bisher.
+        state.victron[name] = await readPointValue(conf, (c, o) => transport.mbRequest(c, o), { sfCache: cycleSfCache, sfBlockUnsupported });
       }
       delete state.victron.errors[name];
+      unknownPoints.delete(name);
       const _now = Date.now();
       state.victron.updatedAt = _now;
       // T-0075: per-Feld Timestamp des letzten ERFOLGS (NUR Erfolgs-Zweig).
@@ -264,9 +259,17 @@ export function createPoller(ctx) {
       // (multi-gx/floor-handoff.js) nimmt die Empfangszeit, sonst den Poll.
       if (sourceAt > 0) (state.victron.fieldSourceAt ??= {})[name] = sourceAt;
       else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt[name];
+      return state.victron[name] != null;
     } catch (e) {
       state.victron.errors[name] = e.message;
       state.victron.updatedAt = Date.now();
+      // E8: das Gerät hat geantwortet, der Wert ist aber nicht deutbar (unbekannte Richtung) — leer statt des
+      // gehaltenen Altwerts, dessen Vorzeichen inzwischen falsch sein kann. Andere Lesefehler halten wie bisher.
+      if (e?.valueUnknown === true) {
+        state.victron[name] = null;
+        unknownPoints.add(name);
+      }
+      return false;
     }
   }
 
@@ -518,41 +521,178 @@ export function createPoller(ctx) {
   // Erfolg mutiert die EFFEKTIVE Config in-place; Schreibpfad (schedule-eval)
   // sieht dieselbe Referenz. Fehler → Backoff, Punkte bleiben schlafend
   // (pollPoint/applyControlTarget überspringen unaufgelöste sunspec-Punkte).
-  let sunspecRetryAt = 0;
+  // E11 (18.11.2026): gescannt wird je Verbindung (host/port/unitId). Ein SunSpec-LESEpunkt wird auf genau der
+  // Verbindung gescannt, von der er gelesen wird — seine effektive host/port/unitId, Standard victron.*
+  // (applyVictronDefaults). SMA: SunSpec auf Unit 126 neben den eigenen Registern auf Unit 3; LG: Port 6502.
+  // Schreibziele (controlWrite) scannen wie bisher auf victron.* — der Schreibpfad bleibt unverändert. Neuversuch
+  // je Verbindung frühestens nach 60 s; eine Verbindung ohne SunSpec hält die anderen nicht auf.
+  const sunspecRetryAt = new Map();
   // Drossel für m160_battery-Derive-Diagnose (1×/5 min statt jeden Zyklus).
   let m160DeriveLogAt = 0;
-  async function ensureSunspecResolved(cfg) {
-    const blocks = [cfg.points, cfg.controlWrite];
-    const needs = blocks.some((block) => Object.values(block || {})
-      .some((conf) => conf && typeof conf === 'object' && conf.sunspec && conf.address == null));
-    if (!needs) return;
-    const now = Date.now();
-    if (now < sunspecRetryAt) return;
-    sunspecRetryAt = now + 60000;
+  // E5: SunSpec-relativer Skalenfaktor `sunspec.sfOffset` → absolute `sfAddress` im selben Modell (Modellbasis +
+  // sfOffset). Nur Lesepunkte; Schreibziele bleiben unverändert. Ein sfOffset außerhalb des gescannten Modells
+  // (0 ≤ sfOffset < Modelllänge, Codex 2d7097cd: sonst las er z. B. die Endmarke 0xFFFF als SF −1) oder ein
+  // ungültiger wird zum Lesefehler des Punkts, nie zu einem Wert mit falschem Skalenfaktor.
+  function withSunspecScaleFactor(conf, scan) {
+    const sfOffset = conf?.sunspec?.sfOffset;
+    if (conf?.address == null || sfOffset == null) return conf;
+    const { model, instance } = conf.sunspec;
+    const entry = scan?.byId?.get(Number(model))?.[Number(instance) || 0];
+    const inModel = typeof sfOffset === 'number' && Number.isInteger(sfOffset) && entry
+      && sfOffset >= 0 && sfOffset < Number(entry.length);
+    const sfAddress = inModel ? entry.address + sfOffset
+      : `sunspec.sfOffset ${sfOffset} (außerhalb von Modell ${model}, Länge ${entry?.length ?? '?'})`;
+    return { ...conf, sfAddress };
+  }
+  const sunspecEndpointOf = (conf, v) => ({
+    host: conf?.host ?? v.host,
+    port: conf?.port ?? v.port,
+    unitId: conf?.unitId ?? v.unitId,
+    timeoutMs: conf?.timeoutMs ?? v.timeoutMs,
+  });
+  const sunspecEndpointKey = (e) => `${e.host ?? ''}|${e.port ?? ''}|${e.unitId ?? ''}`;
+  // Einträge, die noch auf die Auflösung warten: { holder, key, label, ep, read }.
+  function collectSunspecSlots(cfg) {
     const v = cfg.victron || {};
-    try {
-      const scan = await scanSunspecModels((address, quantity) => transport.mbRequest({
-        fc: 3, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, address, quantity
-      }));
-      const allMissing = [];
-      for (const block of blocks) {
-        if (!block) continue;
-        const { resolved, missing } = resolveSunspecAddresses(block, scan);
-        for (const [name, conf] of Object.entries(resolved)) block[name] = conf;
-        allMissing.push(...missing);
-      }
-      // M160-Modellbasis für den m160_battery-Derive merken: der liest den
-      // Block zur LAUFZEIT inkl. DCW_SF — eine statisch aufgelöste Punkt-
-      // Adresse allein reicht dafür nicht.
-      (state.ctrl ??= {})._sunspecM160 = scan.byId.get(160)?.[0] || null;
-      pushLog('sunspec_scan_ok', {
-        base: scan.base,
-        models: scan.models.map((m) => m.id),
-        missing: allMissing
-      });
-    } catch (e) {
-      pushLog('sunspec_scan_error', { error: e.message }, 'warn');
+    const slots = [];
+    for (const [name, conf] of Object.entries(cfg.points || {})) {
+      if (awaitsSunspec(conf)) slots.push({ holder: cfg.points, key: name, label: name, ep: sunspecEndpointOf(conf, v), read: true });
     }
+    for (const [name, conf] of Object.entries(cfg.controlWrite || {})) {
+      if (awaitsSunspec(conf)) slots.push({ holder: cfg.controlWrite, key: name, label: name, ep: sunspecEndpointOf(null, v), read: false });
+    }
+    // E3c: SunSpec-Zähler (meter.sunspec) und seine Phasen — gescannt auf der Verbindung des Zählers bzw. der Phase.
+    const m = cfg.meter;
+    if (m && typeof m === 'object' && !Array.isArray(m)) {
+      if (awaitsSunspec(m)) slots.push({ holder: cfg, key: 'meter', label: 'meter', ep: sunspecEndpointOf(m, v), read: true });
+      if (Array.isArray(m.phases)) {
+        m.phases.forEach((ph, i) => {
+          if (awaitsSunspec(ph)) {
+            slots.push({ holder: m.phases, key: i, label: `meter.phases.${i}`, ep: sunspecEndpointOf(meterPhaseConf(m, ph), v), read: true });
+          }
+        });
+      }
+    }
+    return slots;
+  }
+  async function ensureSunspecResolved(cfg) {
+    const slots = collectSunspecSlots(cfg);
+    if (!slots.length) return;
+    const v = cfg.victron || {};
+    const victronKey = sunspecEndpointKey(sunspecEndpointOf(null, v));
+    const groups = new Map();
+    for (const slot of slots) {
+      const key = sunspecEndpointKey(slot.ep);
+      if (!groups.has(key)) groups.set(key, { ep: { ...slot.ep }, slots: [] });
+      const group = groups.get(key);
+      group.slots.push(slot);
+      // Timeout der Gruppe = der längste ihrer Einträge (Codex d5b3655d): ein Lesepunkt mit kurzem Timeout darf den
+      // Scan für ein Schreibziel mit dem victron-Timeout an derselben Verbindung nicht scheitern lassen.
+      const t = Number(slot.ep.timeoutMs);
+      if (Number.isFinite(t) && t > 0 && !(Number(group.ep.timeoutMs) >= t)) group.ep.timeoutMs = t;
+    }
+    // m160_battery liest die M160-Modellbasis aus dem Scan auf victron.* (Codex d5b3655d). Läuft eine Scan-Runde,
+    // gehört victron.* dazu, auch wenn dort gerade nichts aufzulösen ist — wie vor E11, als jeder Scan dort lief.
+    if (cfg.points?.batteryPowerW?.derive === 'm160_battery' && !groups.has(victronKey)) {
+      groups.set(victronKey, { ep: sunspecEndpointOf(null, v), slots: [] });
+    }
+    const now = Date.now();
+    for (const [key, group] of groups) {
+      if (now < (sunspecRetryAt.get(key) || 0)) continue;
+      sunspecRetryAt.set(key, now + 60000);
+      const { ep } = group;
+      // Der Standardfall (victron.*) loggt wie bisher; eine abweichende Verbindung nennt Unit und Port.
+      const where = key === victronKey ? {} : { unitId: ep.unitId, port: ep.port };
+      try {
+        const scan = await scanSunspecModels((address, quantity) => transport.mbRequest({
+          fc: 3, host: ep.host, port: ep.port, unitId: ep.unitId, timeoutMs: ep.timeoutMs, address, quantity
+        }));
+        const allMissing = [];
+        for (const slot of group.slots) {
+          const { resolved, missing } = resolveSunspecAddresses({ [slot.label]: slot.holder[slot.key] }, scan);
+          const conf = resolved[slot.label];
+          slot.holder[slot.key] = slot.read ? withSunspecScaleFactor(conf, scan) : conf;
+          allMissing.push(...missing);
+        }
+        // M160-Modellbasis für den m160_battery-Derive merken: der liest den
+        // Block zur LAUFZEIT inkl. DCW_SF auf victron.* — eine statisch aufgelöste
+        // Punkt-Adresse allein reicht dafür nicht.
+        if (key === victronKey) (state.ctrl ??= {})._sunspecM160 = scan.byId.get(160)?.[0] || null;
+        pushLog('sunspec_scan_ok', {
+          ...where,
+          base: scan.base,
+          models: scan.models.map((m) => m.id),
+          missing: allMissing
+        });
+      } catch (e) {
+        pushLog('sunspec_scan_error', { ...where, error: e.message }, 'warn');
+      }
+    }
+  }
+
+  // --- Kennungsprobe (E10, 19.11.2026) ---------------------------------------
+  // Profil `victron.identityProbe` (services/inverter/identity-probe.js): antwortet an der Anlagen-Verbindung das
+  // Gerät, für das die Registerkarte gilt? Läuft vor den Werten eines Takts, sonst nur je everyMs (Standard 10 min)
+  // bzw. nach „passt nicht“/„nicht lesbar“ alle 60 s; nach einem Wechsel von Adresse oder Probe-Block sofort.
+  // Ergebnis in state.victron.identityProbe (Status/Hinweisleiste, IPC-Schnappschuss), ein Log je Statuswechsel.
+  // „passt nicht“ blendet die Werte aus hideOnMismatch aus (identityHiddenReason). Ein nicht lesbarer Nachtest ändert
+  // ein festgestelltes Ergebnis nicht (eine Zeitüberschreitung macht ein fremdes Gerät nicht zum richtigen und
+  // umgekehrt). Nur Lesen: das Schreibtor (schedule-eval deviceWriteGate) sieht diesen Zustand nicht.
+  let identityKey = null;
+  let identityNextAt = 0;
+  async function ensureIdentityProbed(cfg) {
+    try {
+      const raw = cfg?.victron?.identityProbe;
+      if (raw == null || transport.type !== 'modbus') {
+        if (state.victron.identityProbe) delete state.victron.identityProbe;
+        identityKey = null;
+        return;
+      }
+      const v = cfg.victron;
+      const key = JSON.stringify([v.host ?? null, v.port ?? null, v.unitId ?? null, raw]);
+      if (key !== identityKey) {
+        identityKey = key;
+        identityNextAt = 0;
+        delete state.victron.identityProbe;
+      }
+      const now = Date.now();
+      if (now < identityNextAt) return;
+      const prev = state.victron.identityProbe;
+      let result;
+      try {
+        const probe = normalizeIdentityProbe(raw);
+        result = await runIdentityProbe(probe, (req) => transport.mbRequest({
+          host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, ...req,
+        }));
+        identityNextAt = now + (result.status === 'ok' ? probe.everyMs : IDENTITY_PROBE_RETRY_MS);
+      } catch (e) {
+        result = {
+          status: 'invalid', hidden: [], checks: [],
+          text: `Kennungsprobe im Herstellerprofil ungültig: ${e?.message || e} — Werte werden ungeprüft angezeigt.`,
+        };
+        identityNextAt = now + IDENTITY_PROBE_RETRY_MS;
+      }
+      if (result.status === 'unreadable' && (prev?.status === 'ok' || prev?.status === 'mismatch')) {
+        state.victron.identityProbe = { ...prev, recheckError: result.text, recheckFailedAt: now };
+        return;
+      }
+      state.victron.identityProbe = { ...result, checkedAt: now };
+      if (prev?.status !== result.status) {
+        pushLog(`identity_probe_${result.status}`, {
+          text: result.text,
+          hidden: result.hidden,
+          checks: result.checks.map((c) => ({ label: c.label, address: c.address, value: c.value, ok: c.ok, ...(c.error ? { error: c.error } : {}) })),
+        }, result.status === 'ok' ? undefined : 'warn');
+      }
+    } catch (e) {
+      // Die Probe darf den Poll-Takt nie abbrechen.
+      try { pushLog('identity_probe_error', { error: e?.message || String(e) }, 'warn'); } catch { /* nie werfen */ }
+    }
+  }
+  function identityHiddenReason(name) {
+    const p = state.victron?.identityProbe;
+    if (p?.status !== 'mismatch' || !Array.isArray(p.hidden) || !p.hidden.includes(name)) return null;
+    return 'Kennungsprobe passt nicht — Wert ausgeblendet statt womöglich falsch (Hinweis im Status)';
   }
 
   // --- Geräteerkennung (Sungrow, T-0422) -----------------------------------
@@ -670,6 +810,61 @@ export function createPoller(ctx) {
     state.victron.device = { ...state.victron.device, maxChargeWDevice, maxDischargeWDevice, batteryCapacityLimitWh, maxSocPctDevice, minSocPctDevice, limitsAt: now };
   }
 
+  // --- Zähler: Skala/Vorzeichen (E3a) und Zähler als Lesepunkt (E3b) ------
+  // Faktor eines Zähler-Registersatzes: scale × sign (sign < 0: das Gerät meldet Einspeisung positiv). Ohne beide
+  // genau 1 — die Layouts rechnen dann mit ihrem bisherigen Ausdruck (bitgleich für die ausgelieferten Profile).
+  function meterFactor(m, label) {
+    const k = Number(m?.scale ?? 1) * (m?.sign != null && Number(m.sign) < 0 ? -1 : 1);
+    if (!Number.isFinite(k)) throw new Error(`${label}.scale ungültig (${m?.scale})`);
+    return k;
+  }
+  // Rohwert × k → ganze Watt in der Ausgabe-Konvention (gridPositiveMeans). Mit Skala/Vorzeichen erst runden, dann
+  // die Konvention: Bezug und Einspeisung sind in beiden Konventionen gleich groß.
+  const scaledGridW = (x, k, sign) => (Math.round(x * k) * sign) || 0;
+  // Phasen (`meter.phases`, je ein Lesepunkt) erben Verbindung, Typ, Skala, Vorzeichen und Skalenfaktor vom Zähler;
+  // Adresse, sunspec, combine und split setzt jede Phase selbst — ebenso ein Richtungsregister (E8, `direction`): die
+  // Richtung der Summe sagt nichts über die einzelne Phase.
+  const METER_PHASE_INHERIT = ['fc', 'host', 'port', 'unitId', 'timeoutMs', 'readType', 'wordOrder', 'signed', 'notAvailableRaw', 'scale', 'sign', 'sfAddress'];
+  function meterPhaseConf(m, phase) {
+    if (!phase || typeof phase !== 'object' || Array.isArray(phase)) return null;
+    const out = {};
+    for (const k of METER_PHASE_INHERIT) if (m[k] !== undefined) out[k] = m[k];
+    return Object.assign(out, phase);
+  }
+  // layout "point": Summe über denselben Decoder wie points.* (u16/s16/int32/uint32/float32, combine, split,
+  // sfAddress). Phasen fehlen (null) oder stehen einzeln in `phases`. Eine Summe ohne Wert ist ein Lesefehler
+  // (wie float32/int32); eine nicht lesbare Phase bleibt null, die Summe gilt.
+  let meterPhaseErrorLogged = false;
+  async function readMeterPoint(m) {
+    assertReadableAddress(m, 'Zähler');
+    const read = (c, o) => transport.mbRequest(c, o);
+    const ctxRead = { sfCache: cycleSfCache, sfBlockUnsupported };
+    const total = await readPointValue(m, read, ctxRead);
+    if (total == null) throw new Error('Zähler meldet keinen Gesamtwert (Register nicht verfügbar)');
+    // Codex 56274de8: NaN/±∞ (z. B. ungültige meter.scale) ist ein Zählerfehler, nie 0 W „ok“.
+    if (!Number.isFinite(total)) throw new Error('Zählerwert ungültig (meter.scale/sign/offset prüfen)');
+    const phases = [null, null, null];
+    let phaseError = null;
+    const list = Array.isArray(m.phases) ? m.phases.slice(0, 3) : [];
+    for (let i = 0; i < list.length; i += 1) {
+      const pc = meterPhaseConf(m, list[i]);
+      if (!pc || awaitsSunspec(pc)) continue;
+      try {
+        assertReadableAddress(pc, `Zähler-Phase L${i + 1}`);
+        const v = await readPointValue(pc, read, ctxRead);
+        if (v != null && !Number.isFinite(v)) throw new Error('Phasenwert ungültig (scale/sign/offset prüfen)');
+        phases[i] = v;
+      } catch (e) {
+        phaseError ??= `L${i + 1}: ${e?.message || e}`;
+      }
+    }
+    if (phaseError && !meterPhaseErrorLogged) {
+      pushLog('meter_phase_read_error', { error: phaseError, text: 'Zähler-Phase nicht lesbar — Phasenwert bleibt leer, die Summe gilt' }, 'warn');
+    }
+    meterPhaseErrorLogged = !!phaseError;
+    return { total, l1: phases[0], l2: phases[1], l3: phases[2] };
+  }
+
   // --- 32-bit-Zähler (meter.readType 'int32') ------------------------------
   const METER_PRIMARY_RETRY_MS = 3600_000;
   let meterFallbackSince = 0;
@@ -682,7 +877,8 @@ export function createPoller(ctx) {
     return raw;
   }
   async function readInt32Meter(m) {
-    const le = String(m.wordOrder || 'be').toLowerCase().startsWith('l');
+    const le = isLowWordFirst(m.wordOrder);
+    const factor = meterFactor(m, 'meter');
     const notAvailable = Array.isArray(m.notAvailableRaw) ? m.notAvailableRaw.map(Number) : [];
     const fb = m.fallback && typeof m.fallback === 'object' ? m.fallback : null;
     const usePrimary = !fb || !meterFallbackSince || Date.now() - meterFallbackSince >= METER_PRIMARY_RETRY_MS;
@@ -704,7 +900,7 @@ export function createPoller(ctx) {
         if (total != null) {
           if (meterFallbackSince) pushLog('meter_fallback_cleared', { address: m.address });
           meterFallbackSince = 0;
-          return { total, l1: a, l2: b, l3: c, raw: regs, fallback: false };
+          return { total, l1: a, l2: b, l3: c, raw: regs, fallback: false, factor };
         }
         if (!fb) throw new Error('Zähler meldet keinen Gesamtwert (Register nicht verfügbar)');
       }
@@ -720,11 +916,12 @@ export function createPoller(ctx) {
     if (!Array.isArray(fregs) || fregs.length < 2) {
       throw new Error(`modbus short response (${Array.isArray(fregs) ? fregs.length : 0} von 2 Registern)`);
     }
-    const fle = String(fb.wordOrder || m.wordOrder || 'be').toLowerCase().startsWith('l');
+    const fle = isLowWordFirst(fb.wordOrder || m.wordOrder);
     const raw = decodeInt32Words(fregs, fle, notAvailable);
     if (raw == null) throw new Error('Zähler-Ersatzregister meldet keinen Wert');
-    const total = raw * Number(fb.scale ?? 1);
-    return { total, l1: null, l2: null, l3: null, raw: fregs, fallback: true };
+    // Das Ersatzregister ist eine andere Größe mit eigener Umrechnung: fallback.scale/fallback.sign, nicht die des
+    // Blocks (Sungrow 13009 Einspeiseleistung: scale −1).
+    return { total: raw, l1: null, l2: null, l3: null, raw: fregs, fallback: true, factor: meterFactor(fb, 'meter.fallback') };
   }
 
   // Live-Betriebszustand des Masters (Aufgabe 2): der Info-Block (13000) wird nur alle 5 min gelesen — zu langsam,
@@ -743,9 +940,20 @@ export function createPoller(ctx) {
     } catch { /* letzten Wert stehen lassen — nächster Takt */ }
   }
 
+  // Bezug/Einspeisung (immer ≥ 0) aus dem Zählerstand in der Ausgabe-Konvention.
+  function deriveGridFlows(cfg) {
+    const gridW = state.meter.grid_total_w || 0;
+    const posImport = cfg.gridPositiveMeans === 'grid_import';
+    state.victron.gridImportW = Math.max(0, posImport ? gridW : -gridW);
+    state.victron.gridExportW = Math.max(0, posImport ? -gridW : gridW);
+  }
+
   // --- pollMeter: main polling function (meter + all Victron points) ---
   async function pollMeter() {
     const cfg = getCfg();
+    cycleSfCache = new Map();
+    // E10: Kennungsprobe vor dem ersten Wert des Takts (ohne Profilblock ein No-op, keine Anfrage).
+    await ensureIdentityProbed(cfg);
     await ensureSunspecResolved(cfg);
     await ensureDeviceIdentified(cfg);
     await readMasterRunningState(cfg);
@@ -754,7 +962,10 @@ export function createPoller(ctx) {
     // counter on catch. Tracked in seconds (Prometheus convention).
     const __pollStart = process.hrtime.bigint();
     spineEm = null;
+    const meterHiddenBy = identityHiddenReason('meter');
     try {
+      // E10: Zähler ausgeblendet (Kennungsprobe passt nicht) — nicht lesen, Fehlerzweig unten ohne Backoff.
+      if (meterHiddenBy) throw Object.assign(new Error(meterHiddenBy), { identityHidden: true });
       let l1, l2, l3, total;
       if (String(cfg.meter?.readType || '').toLowerCase() === 'spine-http') {
         // SPiNE EnergyLink One als Netzzähler-Quelle: der eingebaute
@@ -835,6 +1046,34 @@ export function createPoller(ctx) {
           consecutiveErrors: 0,
           nextRetryAt: null
         };
+      } else if (awaitsSunspec(cfg.meter)) {
+        // E3c: SunSpec-Zähler vor der Auflösung (Scan ausstehend/fehlgeschlagen, Modell fehlt) — nie mit Adresse null
+        // lesen. Lesefehler-Pfad wie jeder Zählerausfall (meter.ok=false, Backoff); der Scan läuft je 60 s neu.
+        throw new Error('SunSpec-Zähler nicht aufgelöst (Scan ausstehend oder Modell am Gerät nicht gefunden)');
+      } else if (String(cfg.meter?.layout || '').toLowerCase() === 'point') {
+        // E3b: Zähler als Lesepunkt (Huawei 37113, E3/DC 40074, Kostal 0xFC, SolaX 0x46, SMA Bezug − Einspeisung …).
+        const r = await readMeterPoint(cfg.meter);
+        const sign = cfg.gridPositiveMeans === 'grid_import' ? 1 : -1;
+        const ph = (x) => (x == null ? null : scaledGridW(x, 1, sign));
+        l1 = ph(r.l1);
+        l2 = ph(r.l2);
+        l3 = ph(r.l3);
+        total = scaledGridW(r.total, 1, sign);
+        state.meter = {
+          ok: true, updatedAt: Date.now(), raw: [r.total, r.l1, r.l2, r.l3],
+          grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
+          error: null,
+          consecutiveErrors: 0,
+          nextRetryAt: null
+        };
+      } else if (cfg.meter?.sfAddress != null) {
+        // Codex 56274de8: einen Skalenfaktor (sfAddress/sunspec.sfOffset) liest nur layout "point"; die festen Layouts
+        // kennen nur scale/sign. Ohne diese Sperre galt ein SunSpec-Zähler mit SF −1 als gesund mit zehnfachem Wert.
+        throw new Error('meter.sfAddress (SunSpec-Skalenfaktor) braucht meter.layout "point"');
+      } else if (cfg.meter?.direction != null) {
+        // E8: das Richtungsregister wertet nur der Lesepunkt-Weg aus — ein fester Layout-Weg läse es nie und gäbe
+        // einen Wert mit ungeprüftem Vorzeichen als gesund aus.
+        throw new Error('meter.direction (Richtungsregister) braucht meter.layout "point"');
       } else if (String(cfg.meter?.readType || '').toLowerCase() === 'float32') {
         // SunSpec-Float-Meter (B-1112, z. B. Fronius Smart Meter Model 203 @
         // Unit-ID 200): 8 Register = 4×Float32 in der Reihenfolge
@@ -845,20 +1084,24 @@ export function createPoller(ctx) {
         if (!Array.isArray(regs) || regs.length < 8) {
           throw new Error(`modbus short response (${Array.isArray(regs) ? regs.length : 0} von 8 Registern)`);
         }
-        const fTotal = decodeSunspecFloat32([regs[0], regs[1]], cfg.meter.wordOrder);
+        const wo = isLowWordFirst(cfg.meter.wordOrder) ? 'le' : 'be';
+        const fTotal = decodeSunspecFloat32([regs[0], regs[1]], wo);
         if (fTotal === null) throw new Error('sunspec float meter: total power not implemented/NaN');
-        const fL1 = decodeSunspecFloat32([regs[2], regs[3]], cfg.meter.wordOrder) ?? 0;
-        const fL2 = decodeSunspecFloat32([regs[4], regs[5]], cfg.meter.wordOrder) ?? 0;
-        const fL3 = decodeSunspecFloat32([regs[6], regs[7]], cfg.meter.wordOrder) ?? 0;
+        const fL1 = decodeSunspecFloat32([regs[2], regs[3]], wo) ?? 0;
+        const fL2 = decodeSunspecFloat32([regs[4], regs[5]], wo) ?? 0;
+        const fL3 = decodeSunspecFloat32([regs[6], regs[7]], wo) ?? 0;
 
         const posImport = cfg.gridPositiveMeans === 'grid_import';
         const sign = posImport ? 1 : -1;
+        // E3a: meter.scale/meter.sign; ohne beide (k = 1) der bisherige Ausdruck.
+        const k = meterFactor(cfg.meter, 'meter');
         // Auf ganze Watt runden: state.dvRegs[0] = u16(total) unten erwartet
         // Integer-Registersemantik; Sub-Watt-Auflösung trägt keine Information.
-        l1 = Math.round(fL1 * sign);
-        l2 = Math.round(fL2 * sign);
-        l3 = Math.round(fL3 * sign);
-        total = Math.round(fTotal * sign);
+        const f = (x) => (k === 1 ? Math.round(x * sign) : scaledGridW(x, k, sign));
+        l1 = f(fL1);
+        l2 = f(fL2);
+        l3 = f(fL3);
+        total = f(fTotal);
         state.meter = {
           ok: true, updatedAt: Date.now(), raw: [fTotal, fL1, fL2, fL3],
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
@@ -878,11 +1121,14 @@ export function createPoller(ctx) {
         const r = await readInt32Meter(cfg.meter);
         const posImport = cfg.gridPositiveMeans === 'grid_import';
         const sign = posImport ? 1 : -1;
-        const ph = (x) => (x == null ? null : (Math.round(x * sign) || 0));
+        // E3a: r.factor = scale × sign des Blocks bzw. des Ersatzregisters; k = 1 → bisheriger Ausdruck.
+        const k = r.factor;
+        const conv = (x) => (k === 1 ? (Math.round(x * sign) || 0) : scaledGridW(x, k, sign));
+        const ph = (x) => (x == null ? null : conv(x));
         l1 = ph(r.l1);
         l2 = ph(r.l2);
         l3 = ph(r.l3);
-        total = Math.round(r.total * sign) || 0;
+        total = conv(r.total);
         state.meter = {
           ok: true, updatedAt: Date.now(), raw: r.raw,
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
@@ -907,10 +1153,14 @@ export function createPoller(ctx) {
 
         const posImport = cfg.gridPositiveMeans === 'grid_import';
         const sign = posImport ? 1 : -1;
-        l1 = rawL1 * sign;
-        l2 = rawL2 * sign;
-        l3 = rawL3 * sign;
-        total = rawTotal * sign;
+        // E3a: meter.scale/meter.sign (SOFAR 0x0488: 0,01 kW, + = Einspeisung → scale 10, sign −1). Ohne beide
+        // (k = 1) die ganzen Rohwerte wie bisher.
+        const k = meterFactor(cfg.meter, 'meter');
+        const conv = (x) => (k === 1 ? x * sign : scaledGridW(x, k, sign));
+        l1 = conv(rawL1);
+        l2 = conv(rawL2);
+        l3 = conv(rawL3);
+        total = conv(rawTotal);
         state.meter = {
           ok: true, updatedAt: Date.now(), raw: regs,
           grid_l1_w: l1, grid_l2_w: l2, grid_l3_w: l3, grid_total_w: total,
@@ -928,6 +1178,11 @@ export function createPoller(ctx) {
       state.dvRegs[4] = 0;
 
       updateEnergyIntegrals(state.meter.updatedAt, total);
+      // Codex 6ab2b78e: Bezug/Einspeisung zusammen mit dem Zählerstand ableiten. Mit Anfrage-Taktung (E7, SMA ≥ 10 s)
+      // liegen bis zu ~40 s zwischen dieser Lesung und den Punkten; so lange trugen die abgeleiteten Werte den alten
+      // Stand unter dem neuen meter.updatedAt (my-PV prüft die Frische am Zählerstempel). Unten nach den Punkten
+      // derselbe Ausdruck mit demselben Zählerstand — das Ergebnis am Takt-Ende ist unverändert.
+      deriveGridFlows(cfg);
       // Plan 09-06 (D-06): success — record poll duration into the gauge.
       try {
         const durationSec = Number(process.hrtime.bigint() - __pollStart) / 1e9;
@@ -946,25 +1201,37 @@ export function createPoller(ctx) {
       state.meter.ok = false;
       state.meter.error = e.message;
       state.meter.updatedAt = Date.now();
-      // Plan 09-08 Task 3: increment consecutiveErrors here, BEFORE
-      // pollMeterWithBackoff schedules the next tick. The delay formula
-      // (power = max(0, cE - BACKOFF_THRESHOLD); delay = BASE * 1.5^power)
-      // then uses the post-increment value — matches the locked delay table
-      // in the plan's must_haves.truths block.
-      state.meter.consecutiveErrors = (state.meter.consecutiveErrors || 0) + 1;
-      // Plan 09-06 (D-06): error — increment the counter.
-      try {
-        meterPollErrorsTotal.inc();
-        // Phase 09.2 D-04: record a failed Victron poll sample. Latency is
-        // captured from the same __pollStart so error-path timing is honest
-        // (a slow timeout shows up as elevated latency, not zero).
-        ctx.healthTracker?.recordSample('victron', {
-          latencyMs: Number(process.hrtime.bigint() - __pollStart) / 1e6,
-          success: false
-        });
-      } catch { /* metrics must never break the poll cycle */ }
+      if (e?.identityHidden === true || e?.valueUnknown === true) {
+        // E10: kein Verbindungsfehler (die Probe hat eine Antwort bekommen) — kein Backoff, keine Fehlermetrik. Die
+        // Netzwerte leer statt der alten oder womöglich falschen (Leitstand zeigt „-“, Telemetrie schreibt nichts).
+        // E8 (Codex ae3d2ead): ebenso, wenn das Richtungsregister des Zählers (layout "point") einen unbekannten Wert
+        // meldet — das Gerät hat geantwortet, aber das Vorzeichen ist nicht deutbar; der gehaltene Altwert hätte
+        // womöglich das falsche (wie pollPoint für die übrigen Punkte).
+        Object.assign(state.meter, { raw: [], grid_l1_w: null, grid_l2_w: null, grid_l3_w: null, grid_total_w: null, consecutiveErrors: 0 });
+        delete state.meter.source;
+        delete state.meter.sourceAt;
+      } else {
+        // Plan 09-08 Task 3: increment consecutiveErrors here, BEFORE
+        // pollMeterWithBackoff schedules the next tick. The delay formula
+        // (power = max(0, cE - BACKOFF_THRESHOLD); delay = BASE * 1.5^power)
+        // then uses the post-increment value — matches the locked delay table
+        // in the plan's must_haves.truths block.
+        state.meter.consecutiveErrors = (state.meter.consecutiveErrors || 0) + 1;
+        // Plan 09-06 (D-06): error — increment the counter.
+        try {
+          meterPollErrorsTotal.inc();
+          // Phase 09.2 D-04: record a failed Victron poll sample. Latency is
+          // captured from the same __pollStart so error-path timing is honest
+          // (a slow timeout shows up as elevated latency, not zero).
+          ctx.healthTracker?.recordSample('victron', {
+            latencyMs: Number(process.hrtime.bigint() - __pollStart) / 1e6,
+            success: false
+          });
+        } catch { /* metrics must never break the poll cycle */ }
+      }
     }
 
+    let loadPolled;
     await Promise.all([
       pollPoint('soc', cfg.points.soc),
       pollPoint('batteryPowerW', cfg.points.batteryPowerW),
@@ -982,7 +1249,13 @@ export function createPoller(ctx) {
       pollPoint('activeSocLimitPct', cfg.points.activeSocLimitPct),
       pollPoint('maxDischargeW', cfg.points.maxDischargeW),
       pollPoint('acInputLimitA', cfg.points.acInputLimitA),
-      pollPoint('selfConsumptionW', cfg.points.selfConsumptionW),
+      pollPoint('selfConsumptionW', cfg.points.selfConsumptionW).then((r) => { loadPolled = r; }),
+      // E13 (Lese-Engine, 18.11.2026): Gerätegrenzen (BMS/WR, Laden/Entladen in W oder A) — nur lesen und anzeigen,
+      // keine Begrenzung im Steuerpfad. Kein ausgeliefertes Profil setzt sie; ohne Punkt wird nichts gelesen.
+      pollPoint('deviceMaxChargeW', cfg.points.deviceMaxChargeW),
+      pollPoint('deviceMaxDischargeW', cfg.points.deviceMaxDischargeW),
+      pollPoint('deviceMaxChargeA', cfg.points.deviceMaxChargeA),
+      pollPoint('deviceMaxDischargeA', cfg.points.deviceMaxDischargeA),
       ...buildDvControlReadbackPolls(cfg).map(([name, conf]) => pollDvControlReadback(name, conf))
     ]);
 
@@ -996,10 +1269,7 @@ export function createPoller(ctx) {
     state.victron.pvAcW = Number(pvAc.toFixed(3));
     state.victron.pvTotalW = Number((pvDc + pvAc).toFixed(3));
 
-    const gridW = state.meter.grid_total_w || 0;
-    const posImport = cfg.gridPositiveMeans === 'grid_import';
-    state.victron.gridImportW = Math.max(0, posImport ? gridW : -gridW);
-    state.victron.gridExportW = Math.max(0, posImport ? -gridW : gridW);
+    deriveGridFlows(cfg);
 
     // Echte DC-Akku-Leistung via SunSpec Model 160 (Profil-opt-in:
     // points.batteryPowerW.derive = 'm160_battery'; GEN24: MPPT-Eingang 3 =
@@ -1016,7 +1286,8 @@ export function createPoller(ctx) {
     const m160Failed = (msg) => {
       if (Number(state.victron.fieldUpdatedAt?.batteryPowerW) > 0) (state.victron.errors ??= {}).batteryPowerW = `M160: ${msg}`;
     };
-    if (bpConf?.derive === 'm160_battery' && state.ctrl?._sunspecM160 && transport.type !== 'mqtt') {
+    // E10: ein ausgeblendeter Akku (Kennungsprobe passt nicht) wird auch nicht über M160 nachgefüllt.
+    if (bpConf?.derive === 'm160_battery' && state.ctrl?._sunspecM160 && transport.type !== 'mqtt' && !identityHiddenReason('batteryPowerW')) {
       try {
         const m160 = state.ctrl._sunspecM160;
         const chargeModule = Number(bpConf.chargeModule ?? 3);
@@ -1042,6 +1313,7 @@ export function createPoller(ctx) {
             // ohne Stempel gälte der abgeleitete Wert sofort als stale.
             (state.victron.fieldUpdatedAt ??= {}).batteryPowerW = Date.now();
             if (state.victron.errors) delete state.victron.errors.batteryPowerW;
+            unknownPoints.delete('batteryPowerW');
           } else {
             m160Failed('Akku-Modul meldet keinen Wert (SunSpec not implemented)');
           }
@@ -1108,35 +1380,67 @@ export function createPoller(ctx) {
     // Bilanz stimmt dadurch auch bei Laden/Entladen/Netz-Ladung). Kein eigener
     // Register-Punkt nötig; verifiziert am GEN24 Symo 2026-07-18 gegen die
     // Solar API (P_Load 1332,9 W vs. abgeleitet 1332 W).
-    if (cfg.points?.selfConsumptionW?.derive === 'pv_plus_grid'
+    // E10: eine ausgeblendete Hauslast (Kennungsprobe passt nicht) wird auch nicht abgeleitet.
+    const loadHidden = !!identityHiddenReason('selfConsumptionW');
+    if (cfg.points?.selfConsumptionW?.derive === 'pv_plus_grid' && !loadHidden
       && state.meter.ok && state.victron.pvPowerW != null) {
       const inverterAcW = Number(state.victron.pvTotalW || 0);
       const derived = inverterAcW
         + Number(state.victron.gridImportW || 0)
         - Number(state.victron.gridExportW || 0);
       state.victron.selfConsumptionW = Number(Math.max(0, derived).toFixed(3));
+      unknownPoints.delete('selfConsumptionW');
     }
 
-    // Hauslast aus der Energiebilanz (Profil-opt-in derive = 'energy_balance',
-    // DVhub-MQTT-Schema): nur als RÜCKFALL, wenn die Quelle (HA/Loxone) keinen
-    // Verbrauch liefert. Last = PV + Bezug − Einspeisung − Batterie (Laden +).
-    // Gilt, wenn PV, Netz und Batterie am selben AC-Knoten gemessen werden.
-    if (cfg.points?.selfConsumptionW?.derive === 'energy_balance'
-      && (state.victron.selfConsumptionW == null || state.victron.errors?.selfConsumptionW)
+    // Hauslast aus der Energiebilanz (Profil-opt-in derive = 'energy_balance'):
+    // Last = PV + Bezug − Einspeisung − Batterie (Laden +). Gilt, wenn PV, Netz
+    // und Batterie am selben AC-Knoten gemessen werden. Läuft in jedem Takt, in dem
+    // der Lastpunkt KEINEN Messwert geliefert hat — als Rückfall (DVhub-MQTT-Schema:
+    // HA/Loxone liefert keinen Verbrauch; Lastregister mit Lesefehler) und als
+    // Primärableitung bei Profilen ohne Lastregister (`enabled: false`).
+    // E6 (18.11.2026): früher hieß die Bedingung „selfConsumptionW == null“. Auf
+    // Modbus setzt bei abgeschaltetem Lastpunkt niemand den Wert zurück — nach dem
+    // ersten Takt blieb die Last stehen (2500 W statt 800 W). Auf MQTT liefert
+    // readPoint je Takt neu (null ohne Verbrauch), dort lief es schon.
+    // Ohne Akku-Punkt im Profil (PV-Anlage ohne Speicher) zählt der Akku als 0 W;
+    // ein konfigurierter Akku muss dagegen in diesem Takt gültig gelesen sein.
+    const bpForBalance = cfg.points?.batteryPowerW;
+    const batteryInBalance = !!(bpForBalance && (bpForBalance.enabled || bpForBalance.derive));
+    const loadMeasured = loadPolled === undefined
+      // pollEveryMs-Pause: der gehaltene Wert zählt, wenn er gemessen (nicht abgeleitet) und fehlerfrei ist.
+      ? (state.victron.selfConsumptionW != null && !state.victron.errors?.selfConsumptionW && !state.victron.selfConsumptionDerived)
+      : loadPolled === true;
+    // Eingänge der Bilanz (Codex 09829a9f, P2): seit die Ableitung jeden Takt läuft, darf kein veralteter Eingang
+    // als frische Last durchgehen. pvTotalW summiert JEDEN PV-Punkt mit Wert (DC und AC), auch gehaltene Werte nach
+    // einem Lesefehler — jeder davon und der Akku müssen fehlerfrei sein. Die Last bekommt den Stempel des ÄLTESTEN
+    // Eingangs (Akku per pollEveryMs gedrosselt, Zähler), nicht „jetzt“; so altert sie wie ihre Eingänge.
+    // Ein bewusst geleerter PV-Punkt (unknownPoints: unbekannte Richtung E8, ausgeblendet E10) zählt als Eingang mit
+    // Lesefehler, nicht als fehlender Kanal (Codex e7a80f44) — sonst liefe die Last mit zu wenig PV frisch weiter.
+    const balanceInputs = [...PV_POINT_FIELDS].filter((f) => state.victron[f] != null || unknownPoints.has(f))
+      .concat(batteryInBalance ? ['batteryPowerW'] : []);
+    if (cfg.points?.selfConsumptionW?.derive === 'energy_balance' && !loadHidden
+      && !loadMeasured
       // PV muss in DIESEM Durchlauf gültig gelesen sein: pvTotalW ist immer eine
       // Zahl (0 bei fehlender PV) und pollPoint behält bei Fehlern den alten
       // Wert — ohne diese Prüfung würde eine ausgefallene PV als frischer
       // Verbrauch weiterlaufen (Codex-Review 2026-09-29).
-      && state.meter.ok && state.victron.pvPowerW != null && !state.victron.errors?.pvPowerW
-      && state.victron.batteryPowerW != null && !state.victron.errors?.batteryPowerW) {
+      && state.meter.ok && state.victron.pvPowerW != null
+      && (!batteryInBalance || state.victron.batteryPowerW != null)
+      && balanceInputs.every((f) => !state.victron.errors?.[f])) {
       const derived = Number(state.victron.pvTotalW || 0)
         + Number(state.victron.gridImportW || 0)
         - Number(state.victron.gridExportW || 0)
-        - Number(state.victron.batteryPowerW || 0);
+        - (batteryInBalance ? Number(state.victron.batteryPowerW || 0) : 0);
       state.victron.selfConsumptionW = Number(Math.max(0, derived).toFixed(3));
       state.victron.selfConsumptionDerived = true;
       if (state.victron.errors) delete state.victron.errors.selfConsumptionW;
-      if (state.victron.fieldUpdatedAt) state.victron.fieldUpdatedAt.selfConsumptionW = Date.now();
+      unknownPoints.delete('selfConsumptionW');
+      if (state.victron.fieldUpdatedAt) {
+        const nowStamp = Date.now();
+        const inputStamps = balanceInputs.map((f) => Number(state.victron.fieldUpdatedAt[f])).filter((t) => t > 0);
+        const meterAt = Number(state.meter.updatedAt) > 0 ? Number(state.meter.updatedAt) : nowStamp;
+        state.victron.fieldUpdatedAt.selfConsumptionW = Math.min(nowStamp, meterAt, ...inputStamps);
+      }
       // Empfangsalter = das des ältesten Eingangs (MQTT-Cache), sonst keins. Ein
       // alter Eintrag aus der Zeit mit Verbrauchs-Topic darf nicht stehen
       // bleiben, und ein alter Akkuwert macht die Last alt (Gegenprüfung
@@ -1147,9 +1451,17 @@ export function createPoller(ctx) {
         .filter((t) => t > 0);
       if (inputAt.length) (state.victron.fieldSourceAt ??= {}).selfConsumptionW = Math.min(...inputAt);
       else if (state.victron.fieldSourceAt) delete state.victron.fieldSourceAt.selfConsumptionW;
-    } else if (state.victron.selfConsumptionDerived && !state.victron.errors?.selfConsumptionW) {
+    } else if (state.victron.selfConsumptionDerived && loadPolled === true) {
+      // Herkunft (Codex 1bce7fc9): nur ein in diesem Takt GEMESSENER Wert ersetzt die abgeleitete Last. Fällt die
+      // Ableitung aus (Eingang fehlerhaft), bleibt der gehaltene Wert als abgeleitet markiert — sonst hielte eine
+      // pollEveryMs-Pause des Lastpunkts ihn für gemessen und rechnete nach der Erholung nicht neu.
       state.victron.selfConsumptionDerived = false;
     }
+
+    // Bewusst geleerte Werte (E8/E10) für liveSnapshotStale veröffentlichen — NACH den Ableitungen: eine Ableitung, die
+    // den Wert wieder liefert (M160, Hauslast-Rückfall), hebt den Vermerk auf (Codex c52af01f).
+    if (unknownPoints.size) state.victron.unknownFields = [...unknownPoints].sort();
+    else if (state.victron.unknownFields) delete state.victron.unknownFields;
 
     // Zweite GX am selben Anschluss (multi-gx): ihr Akku haengt hinter dem
     // Zaehler der Hauptanlage — sein Laden/Entladen ist kein Hausverbrauch.
@@ -1191,7 +1503,8 @@ export function createPoller(ctx) {
       const maxAge = Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
       if (Number.isFinite(loadNow) && loadNow > 0) {
         state.victron._sungrowLoadHold = { w: loadNow, at: Date.now() };
-      } else if (giW > 100 && state.victron._sungrowLoadHold && Date.now() - state.victron._sungrowLoadHold.at <= maxAge) {
+      } else if (giW > 100 && !loadHidden && state.victron._sungrowLoadHold && Date.now() - state.victron._sungrowLoadHold.at <= maxAge) {
+        // E10: eine ausgeblendete Hauslast setzt die Sicherung nicht wieder ein (Codex e20a456e).
         state.victron.selfConsumptionW = state.victron._sungrowLoadHold.w;
       }
     }

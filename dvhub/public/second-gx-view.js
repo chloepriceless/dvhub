@@ -16,6 +16,7 @@
   function state(m) {
     if (m.online === false || m.reason === 'follower_offline') return ['Nicht erreichbar', 'danger'];
     if (m.reason === 'stop') return ['Not-Halt', 'danger'];
+    if (m.reason === 'config_unsafe') return ['Gesperrt: Konfiguration ungültig', 'danger'];
     if (m.reason === 'no_data') return ['Keine Messwerte', 'warn'];
     if (m.reason === 'export_blocked') return ['Einspeisung gesperrt', 'warn'];
     const w = Number(m.batteryPowerW);

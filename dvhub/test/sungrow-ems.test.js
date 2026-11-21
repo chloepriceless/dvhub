@@ -73,6 +73,27 @@ test('Regler: kein Netzbezug gewünscht → Laden nur aus dem PV-Überschuss', (
     { mode: 'forced', command: 'stop', powerW: 0, reason: 'charge_pv_only' });
 });
 
+test('VÄ-12/I-SafeQuant: kein Netzladen, Überschuss 156 W → 150 W abgerundet (nie 160 = Netzladen)', () => {
+  // Codex Runde 6/7, am Gerät belegt: an einer harten Grenze (PV-Überschuss 656−500=156 W) muss die
+  // 10-W-Quantisierung ABrunden. round() machte 160 → 4 W Netzladen trotz noGridCharge; floor() macht 150.
+  const d = decideEmsCommand({ ...base, noGridCharge: true, setpointW: 4000, gridImportW: 0, batteryW: -500, pvW: 656, loadW: 500 });
+  assert.deepEqual([d.command, d.powerW, d.reason], ['charge', 150, 'charge_pv_only']);
+  // Gegenprobe: ein FREIER Regelwert (keine Grenze geklemmt) rundet weiter normal (nearest), nicht ab.
+  assert.equal(decideEmsCommand({ ...base, setpointW: 4000, gridImportW: 2800, batteryW: 2300, pvW: 0, loadW: 500 }).powerW, 3140);
+});
+
+test('VÄ-12/I-SafeQuant: Regelwert genau an der Grenze rundet nicht darüber (Fable-Review 18.11.)', () => {
+  // p = 100 + 0,7 · 80 = 156 W, PV-Überschuss 656 − 500 = 156 W, Netzladen verboten: NICHT geklemmt (p ≤ Grenze),
+  // aber round() machte 160 W = 4 W Netzladen. Jetzt 150 W.
+  const c = decideEmsCommand({ ...base, forced: true, noGridCharge: true, setpointW: 0, gridImportW: -80, batteryW: 100, pvW: 656, loadW: 500 });
+  assert.deepEqual([c.command, c.powerW], ['charge', 150]);
+  // Spiegelfall Entladen bei „keine Einspeisung" (Sollwert ≥ 0): Netto-Last 656 − 500 = 156 W → 150 W, nicht 160 W.
+  const d = decideEmsCommand({ ...base, forced: true, setpointW: 0, gridImportW: 80, batteryW: -100, pvW: 500, loadW: 656 });
+  assert.deepEqual([d.command, d.powerW], ['discharge', 150]);
+  // Ohne Grenze in Reichweite rundet der Regler weiter normal: 3136 W → 3140 W.
+  assert.equal(decideEmsCommand({ ...base, setpointW: 4000, gridImportW: 2800, batteryW: 2300, pvW: 0, loadW: 500 }).powerW, 3140);
+});
+
 test('Regler: keine Einspeisung gewünscht → Entladen höchstens die Netto-Last', () => {
   // S = +400, Netz −1600, Akku −2000, PV 0, Last 400: P = −2000 + 0,7 · 2000 = −600 → Netto-Last 400 → 400 W
   assert.deepEqual(decideEmsCommand({ ...base, setpointW: 400 + 1, gridImportW: -1600, batteryW: -2000, pvW: 0, loadW: 400 }),
@@ -1219,14 +1240,17 @@ test('Dauer-Forced B3: Wiedereintritt nach Selbst-Rückfall; >6/Stunde → Modus
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_reentry_rate'), 'Warnung zur Wiedereintritt-Rate');
 });
 
-test('Dauer-Forced B1: fremder Modus 2 (DVhub besitzt ihn nicht) wird nicht übersteuert', async () => {
+// H-9 (Christin 17.11.2026, bestätigt 20.11.2026) kehrt B1 um: ein nicht besessener Modus 2 wird nicht mehr als fremd
+// stehen gelassen, sondern mit DVhubs eigenem Befehl übernommen (Details: test/sungrow-h9-modus2-uebernehmen.test.js).
+test('Dauer-Forced B1 → H-9: nicht besessener Modus 2 wird mit DVhubs eigenem Befehl übernommen (kein Moduswrite)', async () => {
   const r = rig({ controlMode: 'forced', over: { holding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 } } });
   const res = await r.ems.applySetpoint(-5000, 'rule:abend');
-  assert.equal(res.ok, false);
-  assert.deepEqual(r.t.writes, [], 'kein Write auf ein fremdes EMS');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[POWER, 4000], [CMD, EMS_CMD.DISCHARGE]]);
   assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED);
-  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_foreign_mode'));
-  assert.equal(r.state.ctrl.sungrowEms.owns, false);
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_foreign_mode'));
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_forced_adopted'));
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
 });
 
 test('Aktuator: gleicher Sollwert im Takt nur nachgeführt, kleine Änderung (< 100 W) ohne Write', async () => {
@@ -2072,4 +2096,23 @@ test('Punkt 2: 13050-Tagesbudget erschöpft → kein neuer Moduswechsel (bleibt 
   assert.ok(!r.t.writes.some((x) => x.address === MODE && x.value === EMS_MODE.EXTERNAL), 'kein Moduswechsel nach External');
   assert.equal(r.state.ctrl.sungrowEms.decision.reason, 'mode_budget');
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_mode_budget'));
+});
+
+test('M28/Codex 28a9c637: Master liefert nur 1 kW, Slave schon an seiner Leistungsgrenze (2 kW) → der Master bleibt drin (sonst +1 kW Netzbezug)', async () => {
+  const r = splitRig({ maxDischargeW: 2000 }); // Slave-Grenze 2 kW (Feldeinstellung), Master 5 kW
+  r.cfg.sungrow.regulateEveryMs = 1000;
+  r.state.victron.sungrowMasterSocPct = 50; r.state.sungrowSecond.socPct = 50;
+  // Haus 6 kW, PV 0: Master liefert 1000 W (BMS-Grenze), Slave 2000 W (seine Grenze), Netz +3000 W.
+  m28Telemetry(r, { masterBattW: -1000, slaveBattW: -2000, gridW: 3000, loadW: 6000 });
+  await r.ems.applySetpoint(-40, 'default');
+  for (let i = 0; i < 20; i += 1) {
+    r.advance(1000);
+    m28Telemetry(r, { masterBattW: -1000, slaveBattW: -2000, gridW: 3000, loadW: 6000 });
+    await r.ems.tick();
+  }
+  const split = r.state.ctrl.sungrowEms.decision.split;
+  assert.notEqual(split.masterOut, 'stalled', 'der Slave kann nichts übernehmen — den Master herauszunehmen kostete seine 1 kW');
+  assert.ok(split.masterW >= 1000, `Master behält mindestens seine Lieferung (${split.masterW} W)`);
+  assert.equal(r.masterImage.holding.get(CMD), EMS_CMD.DISCHARGE, 'Master entlädt weiter');
+  assert.equal(r.slaveImage.holding.get(POWER), 2000, 'Slave an seiner Grenze');
 });

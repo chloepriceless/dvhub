@@ -1,0 +1,413 @@
+{
+  "soc_trigger_cycle": [
+    {
+      "step": "Takt 1 gesperrt, SoC 96 %",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Takt 2 → Deckel an",
+      "cap": true,
+      "pct": 9.5,
+      "wire": [
+        "W6 gx/u1 @40198=10000",
+        "W6 gx/u1 @40244=300",
+        "W6 gx/u1 @40242=950",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": [
+        "zero_feedin_cap_on"
+      ]
+    },
+    {
+      "step": "Takt 3 Export 300 W → Limit runter",
+      "cap": true,
+      "pct": 7.05,
+      "wire": [
+        "W6 gx/u1 @40242=705",
+        "W6 gx/u1 @40246=1",
+        "R3 gx/u1 @40242 x1"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 4 Bezug 400 W → Limit hoch",
+      "cap": true,
+      "pct": 9.5,
+      "wire": [
+        "W6 gx/u1 @40242=950",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 5 Zähler veraltet → Limit gehalten, neu geschrieben",
+      "cap": true,
+      "wire": [
+        "W6 gx/u1 @40242=950",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": []
+    },
+    {
+      "step": "Takt 6 SoC 89 % → Deckel aus",
+      "cap": false,
+      "pct": null,
+      "wire": [
+        "W6 gx/u1 @40198=55536",
+        "W6 gx/u1 @40246=0"
+      ],
+      "events": [
+        "zero_feedin_cap_off"
+      ]
+    }
+  ],
+  "release": [
+    {
+      "step": "Takt 1",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Takt 2 → an",
+      "cap": true,
+      "pct": 9.5,
+      "wire": [
+        "W6 gx/u1 @40198=10000",
+        "W6 gx/u1 @40244=300",
+        "W6 gx/u1 @40242=950",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": [
+        "zero_feedin_cap_on"
+      ]
+    },
+    {
+      "step": "Freigabe → Ena 0",
+      "cap": false,
+      "pct": null,
+      "wire": [
+        "W6 gx/u1 @40246=0"
+      ],
+      "events": [
+        "zero_feedin_cap_off"
+      ]
+    },
+    {
+      "step": "Freigabe, nächster Takt",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    }
+  ],
+  "nothalt": [
+    {
+      "step": "Takt 1",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Takt 2 → an",
+      "cap": true,
+      "pct": 9.5,
+      "wire": [
+        "W6 gx/u1 @40198=10000",
+        "W6 gx/u1 @40244=300",
+        "W6 gx/u1 @40242=950",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": [
+        "zero_feedin_cap_on"
+      ]
+    },
+    {
+      "step": "Not-Halt → einmal Ena 0",
+      "cap": false,
+      "pct": null,
+      "wire": [
+        "W6 gx/u1 @40246=0"
+      ],
+      "events": [
+        "zero_feedin_cap_exit"
+      ]
+    },
+    {
+      "step": "Not-Halt, nächster Takt",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    }
+  ],
+  "export_trigger": [
+    {
+      "step": "Takt 1 SoC 50 %, Export 500 W",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Takt 2 SoC 50 %, Export 500 W",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Takt 3 SoC 50 %, Export 500 W",
+      "cap": true,
+      "pct": 9.5,
+      "wire": [
+        "W6 gx/u1 @40198=10000",
+        "W6 gx/u1 @40244=300",
+        "W6 gx/u1 @40242=950",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": [
+        "zero_feedin_cap_on"
+      ]
+    },
+    {
+      "step": "Takt 4 SoC 50 %, Export 500 W",
+      "cap": true,
+      "pct": 5.65,
+      "wire": [
+        "W6 gx/u1 @40242=565",
+        "W6 gx/u1 @40246=1",
+        "R3 gx/u1 @40242 x1"
+      ],
+      "events": []
+    },
+    {
+      "step": "Export-Deckel, SoC fällt auf 48 %",
+      "cap": true,
+      "pct": 5.65,
+      "wire": [
+        "W6 gx/u1 @40242=565",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": []
+    },
+    {
+      "step": "Export-Deckel, SoC fällt auf 46 %",
+      "cap": true,
+      "pct": 5.65,
+      "wire": [
+        "W6 gx/u1 @40242=565",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": []
+    },
+    {
+      "step": "Export-Deckel, SoC fällt auf 44 %",
+      "cap": false,
+      "pct": null,
+      "wire": [
+        "W6 gx/u1 @40198=55536",
+        "W6 gx/u1 @40246=0"
+      ],
+      "events": [
+        "zero_feedin_cap_off"
+      ]
+    }
+  ],
+  "write_error": [
+    {
+      "step": "Takt 1",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Takt 2 → Enter, WMaxLimPct scheitert",
+      "cap": false,
+      "pct": 9.5,
+      "wire": [
+        "W6 gx/u1 @40198=10000",
+        "W6 gx/u1 @40244=300",
+        "W6 gx/u1 @40242=950 !timeout"
+      ],
+      "events": [
+        "zero_feedin_write_error"
+      ]
+    },
+    {
+      "step": "Takt 3 → Enter erneut",
+      "cap": true,
+      "pct": 9.5,
+      "wire": [
+        "W6 gx/u1 @40198=10000",
+        "W6 gx/u1 @40244=300",
+        "W6 gx/u1 @40242=950",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": [
+        "zero_feedin_cap_on"
+      ]
+    }
+  ],
+  "write_safety": [
+    {
+      "step": "Takt 1",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": [
+        "control_write_blocked_config_unsafe"
+      ]
+    },
+    {
+      "step": "Takt 2",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    }
+  ],
+  "unresolved": [
+    {
+      "step": "Takt 1 unaufgelöst",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Takt 2 unaufgelöst",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    }
+  ],
+  "victron_noop": [
+    {
+      "step": "Victron Takt 1",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Victron Takt 2",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    }
+  ],
+  "feed_in_cap": [
+    {
+      "step": "Export 5000 W < Grenze",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": []
+    },
+    {
+      "step": "Export 7000 W > Grenze → Enter",
+      "cap": true,
+      "pct": 78.2,
+      "wire": [
+        "W6 gx/u1 @40244=300",
+        "W6 gx/u1 @40242=7820",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": [
+        "feed_in_cap_loop_on"
+      ]
+    },
+    {
+      "step": "Export 6200 W → Limit runter",
+      "cap": true,
+      "pct": 74.4,
+      "wire": [
+        "W6 gx/u1 @40242=7440",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": []
+    },
+    {
+      "step": "Export 4000 W → Limit hoch",
+      "cap": true,
+      "pct": 79.86,
+      "wire": [
+        "W6 gx/u1 @40242=7986",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": []
+    },
+    {
+      "step": "Sperre aktiv → eigener Zustand weg, keine Writes",
+      "cap": false,
+      "pct": null,
+      "wire": [],
+      "events": [
+        "feed_in_cap_loop_off"
+      ]
+    },
+    {
+      "step": "wieder frei, Export 7000 W → Enter",
+      "cap": true,
+      "pct": 78.2,
+      "wire": [
+        "W6 gx/u1 @40244=300",
+        "W6 gx/u1 @40242=7820",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": [
+        "feed_in_cap_loop_on"
+      ]
+    },
+    {
+      "step": "Grenze entfällt → Ena 0",
+      "cap": false,
+      "pct": null,
+      "wire": [
+        "W6 gx/u1 @40246=0"
+      ],
+      "events": [
+        "feed_in_cap_loop_off"
+      ]
+    }
+  ],
+  "feed_in_cap_nothalt": [
+    {
+      "step": "Enter",
+      "cap": true,
+      "wire": [
+        "W6 gx/u1 @40244=300",
+        "W6 gx/u1 @40242=7820",
+        "W6 gx/u1 @40246=1"
+      ],
+      "events": [
+        "feed_in_cap_loop_on"
+      ]
+    },
+    {
+      "step": "Not-Halt → einmal Ena 0",
+      "cap": false,
+      "wire": [
+        "W6 gx/u1 @40246=0"
+      ],
+      "events": [
+        "feed_in_cap_loop_off"
+      ]
+    },
+    {
+      "step": "Not-Halt, nächster Takt",
+      "cap": false,
+      "wire": [],
+      "events": []
+    }
+  ]
+}

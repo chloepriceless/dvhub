@@ -321,12 +321,70 @@
     };
   }
 
+  // Option A (Christin 19.11.2026): ausstehende/erledigte manuelle Freigabe (Master oder Slave) aus dem EMS-Status.
+  // null = nichts zu melden (der Knopf-Status bleibt dann, wie ihn der Klick gesetzt hat).
+  // Codex d6f4b256 P2: jeder Hinweis trägt den Zeitpunkt seiner Anfrage (requestedAt). Es zählt nur die jüngste Anfrage
+  // (eine ausstehende Wiederholung immer) — ein „erledigt" von früher verdeckt keinen neuen Fehlschlag.
+  const RELEASE_PENDING_TEXT = 'Freigabe gescheitert, wird wiederholt';
+  // Restpunkt 1: kein Schreibweg → klar „nicht gesendet" mit Grund (statt „freigegeben" oder eines Fehlercodes).
+  function releaseNotSentText(error, pending) {
+    const e = String(error || '');
+    const base = e.indexOf('config_unsafe') === 0 ? 'Nicht gesendet: Herstellerprofil/Konfiguration ungültig — kein Schreibweg'
+      : (e === 'sungrow_ems_not_configured' || e === 'sungrow_not_active') ? 'Nicht gesendet: Sungrow-Steuerung nicht eingerichtet'
+        : 'Nicht gesendet' + (e ? ': ' + e : '');
+    return pending ? base + ' (Freigabe steht aus)' : base;
+  }
+  function releaseProblemText(r, side) {
+    if (r.abandoned === true) {
+      return `Freigabe verworfen${side}: ${r.reason === 'not_owned' ? 'Betrieb nicht mehr von DVhub' : 'ein anderes System steuert den Wechselrichter'}`;
+    }
+    if (r.failed === true) return r.sent === false ? releaseNotSentText(r.error) : `Freigabe gescheitert${side}${r.error ? ': ' + r.error : ''}`;
+    return null;
+  }
+  const reqAtOf = (r) => (r && Number.isFinite(Number(r.requestedAt)) && r.requestedAt !== null ? Number(r.requestedAt) : null);
+  function releaseInfo(s) {
+    const rels = [['', s.sungrowEms && s.sungrowEms.release], [' (Slave)', s.sungrowEmsSlave && s.sungrowEmsSlave.release]]
+      .filter((x) => x[1]);
+    const pending = rels.filter((x) => x[1].pending === true);
+    if (pending.length) {
+      const n = Math.max(...pending.map((x) => Number(x[1].attempts) || 0));
+      const ats = pending.map((x) => reqAtOf(x[1])).filter((v) => v != null);
+      // Codex 6f356cb8: ohne Schreibweg wird nicht wiederholt — „nicht gesendet" mit Grund, der Auftrag steht aus.
+      const blocked = pending.find((x) => x[1].sent === false);
+      return {
+        text: blocked ? releaseNotSentText(blocked[1].error, true)
+          : `${RELEASE_PENDING_TEXT}${pending.length === 1 ? pending[0][0] : ''}${n ? ` · Versuch ${n}` : ''}`,
+        at: ats.length ? Math.max(...ats) : null,
+      };
+    }
+    const ats = rels.map((x) => reqAtOf(x[1])).filter((v) => v != null);
+    const latest = ats.length ? Math.max(...ats) : null;
+    const current = rels.filter((x) => latest == null || reqAtOf(x[1]) == null || reqAtOf(x[1]) === latest);
+    for (const [side, r] of current) {
+      const t = releaseProblemText(r, side);
+      if (t) return { text: t, at: latest };
+    }
+    return current.length ? { text: 'Freigabe erledigt', at: latest } : null;
+  }
+  // Zeitpunkt der zuletzt per Knopf gestellten Anfrage (aus der API-Antwort): ein älterer Status überschreibt ihr
+  // Ergebnis nicht (verspätete Status-Antwort, P2).
+  let lastReleaseRequestAt = null;
+  // Stammt der angezeigte Hinweis aus dem Status (nicht aus dem eigenen Klick)? Dann verschwindet er, sobald der Status
+  // ihn nicht mehr trägt — etwa nach einer erfolgreichen Freigabe aus einem anderen Tab (Codex 6f356cb8).
+  let releaseTextFromStatus = false;
+  // Läuft gerade eine eigene Freigabe-Anfrage? Dann fasst render() die Zeile nicht an (Codex 04cd3f9f): ein Status-Takt
+  // dazwischen kennt die neue Anfrage noch nicht und würde „läuft…" bzw. danach das Klick-Ergebnis verdrängen.
+  let releaseRequestInFlight = false;
+
   function view(status) {
     const s = status || {};
     if (!s.sungrowSecond) return { hidden: true };
     const v = s.victron || {};
+    const rel = releaseInfo(s);
     return {
       hidden: false,
+      release: rel ? rel.text : null,
+      releaseAt: rel ? rel.at : null,
       mode: modeText(s),
       showCountdown: s.sungrowEms ? isExternalActive(s.sungrowEms) : false,
       master: masterRow(s),
@@ -402,6 +460,12 @@
     // Summe einzeilig im Kopfbereich (M5b): echter System-SoC, sonst gemeldeter als Rückfall.
     const sumSoc = vw.sum.socReal !== DASH ? `real ${vw.sum.socReal}` : `${vw.sum.soc} (gemeldet)`;
     set('sungrowWrSum', `Summe: SoC ${sumSoc} · Akku ${vw.sum.battery} · PV ${vw.sum.pv}`);
+    // Option A: Freigabe wird wiederholt / erledigt / verworfen / gescheitert — nur, wenn der Hinweis nicht zu einer
+    // älteren Anfrage gehört als der letzte Knopfdruck (P2).
+    const stale = lastReleaseRequestAt != null && vw.releaseAt != null && vw.releaseAt < lastReleaseRequestAt;
+    if (releaseRequestInFlight) { /* eigene Anfrage läuft — ihr Ergebnis setzt der Klick */ }
+    else if (vw.release && !stale) { set('sungrowWrReleaseStatus', vw.release); releaseTextFromStatus = true; }
+    else if (!vw.release && releaseTextFromStatus) { set('sungrowWrReleaseStatus', ''); releaseTextFromStatus = false; }
     wireReleaseButton(d);
   }
 
@@ -416,16 +480,27 @@
     btn.addEventListener('click', async () => {
       if (typeof window !== 'undefined' && window.confirm && !window.confirm('Sungrow freigeben: Master auf Eigenverbrauch (Modus 0), beide Wechselrichter auf Stopp (0xCC). Fortfahren?')) return;
       btn.disabled = true;
+      releaseRequestInFlight = true; // bis zur Antwort fasst render() die Zeile nicht an
+      releaseTextFromStatus = false; // ab jetzt zeigt die Zeile das Ergebnis dieses Klicks
       if (statusEl) statusEl.textContent = 'läuft…';
       try {
         const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) };
         const res = apiFetch ? await apiFetch('/api/sungrow/release', opts) : await fetch('/api/sungrow/release', opts);
         let j = {};
         try { j = await res.json(); } catch { j = {}; }
-        if (statusEl) statusEl.textContent = (res.ok && j.ok) ? 'freigegeben (Modus 0)' : ('Fehler' + (j.error ? ': ' + j.error : ''));
+        if (j && Number.isFinite(Number(j.requestedAt)) && j.requestedAt !== null) lastReleaseRequestAt = Number(j.requestedAt);
+        if (statusEl) {
+          statusEl.textContent = j.sent === false ? releaseNotSentText(j.error, j.pending === true)
+            : j.pending === true ? RELEASE_PENDING_TEXT + (j.error ? ' (' + j.error + ')' : '')
+              : (res.ok && j.ok) ? 'freigegeben (Modus 0)'
+                : ('Freigabe gescheitert' + (j.error ? ': ' + j.error : ''));
+        }
+        releaseTextFromStatus = false; // die Zeile zeigt das Klick-Ergebnis (Codex 04cd3f9f), nicht einen Status-Hinweis
       } catch (e) {
         if (statusEl) statusEl.textContent = 'Fehler: ' + (e && e.message ? e.message : 'Netzwerk');
+        releaseTextFromStatus = false;
       } finally {
+        releaseRequestInFlight = false;
         btn.disabled = false;
       }
     });

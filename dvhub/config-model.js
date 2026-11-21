@@ -350,17 +350,47 @@ function stripManufacturerManagedFields(raw, warnings) {
   }
 }
 
+// Register-Ziele der DV-Abregelung unter dvControl (die gemanagten dvControl.*-Pfade oben).
+const DV_CONTROL_TARGET_KEYS = MANUFACTURER_MANAGED_PATHS
+  .filter((p) => p.startsWith('dvControl.'))
+  .map((p) => p.slice('dvControl.'.length));
+
+// E1 (S1, 18.11.2026): Hersteller-ID = Dateiname eines Profils in hersteller/ ohne .json — dieselbe Quelle wie das
+// Auswahlfeld (routes-api.js listManufacturerProfiles). Es gibt keine feste Liste mehr: ein vorhandenes Profil lädt
+// als es selbst, eine ID ohne Datei endet in „Profil fehlt" (valid:false, writeSafety gesperrt) — nie still als
+// victron. Das Muster hält Pfadtrenner, Großbuchstaben und Punktdateien (.shipped-hashes.json) draußen.
+const MANUFACTURER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export function isManufacturerId(value) {
+  return typeof value === 'string' && MANUFACTURER_ID_PATTERN.test(value);
+}
+
 function resolveManufacturerProfilePath(configPath, manufacturer) {
   return path.join(path.dirname(configPath), 'hersteller', `${manufacturer}.json`);
 }
 
 function loadManufacturerProfile(profilePath) {
   const text = fs.readFileSync(profilePath, 'utf8');
-  const parsed = text.trim() ? JSON.parse(text) : {};
+  // Eine leere Datei ist kein Profil (abgebrochene Kopie, volle Platte). Früher galt sie als gültiges {}-Profil:
+  // writeSafety blieb aus, und die Victron-Werkskarte blieb am fremden Gerät wirksam.
+  if (!text.trim()) throw new Error('manufacturer profile is empty');
+  const parsed = JSON.parse(text);
   if (!isPlainObject(parsed)) {
     throw new Error('manufacturer profile root must be an object');
   }
   return parsed;
+}
+
+// R-T2.1 (VCL-Vertrag v6) / E2: Profil fehlt, ist kaputt oder leer, und der Hersteller ist NICHT victron → keine
+// Victron-Werkskarte. Lese- und Schreibblöcke leer, keine DV-Ziele, keine Geräteerkennung. Die Betreiberwerte
+// (dvControl.enabled, negativePriceProtection, victron.host …) bleiben stehen.
+function withoutVictronRegisterMap(config) {
+  const next = clone(config);
+  next.meter = {};
+  next.points = {};
+  next.controlWrite = {};
+  if (isPlainObject(next.dvControl)) for (const key of DV_CONTROL_TARGET_KEYS) delete next.dvControl[key];
+  delete next.identify;
+  return next;
 }
 
 function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
@@ -408,9 +438,24 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   }
   effectiveConfig.victron = deepMerge(profileVictron, victronOverride);
 
-  if (isPlainObject(manufacturerProfile?.meter)) effectiveConfig.meter = clone(manufacturerProfile.meter);
-  if (isPlainObject(manufacturerProfile?.points)) effectiveConfig.points = clone(manufacturerProfile.points);
-  if (isPlainObject(manufacturerProfile?.controlWrite)) effectiveConfig.controlWrite = clone(manufacturerProfile.controlWrite);
+  // E2 (S2, 18.11.2026): Die Werkskarte aus createDefaultConfig ist die VICTRON-Karte (meter 820, controlWrite 2716/
+  // 2705/2901/2704/2706, dvControl 2707/2708). Nur das Victron-Profil erbt sie für Blöcke, die es nicht angibt. Für
+  // jedes andere Profil gilt ein fehlender Block als leerer Block — sonst richtete applyVictronDefaults die Victron-
+  // Register auf Host und Unit-ID des fremden Geräts aus. Ausnahme `meter` bei transport=mqtt: dort liest polling.js
+  // das Netz aus dem MQTT-Cache (transport.readGrid), der Block adressiert nichts (bridge-mqtt/dvhub-mqtt haben
+  // keinen und bleiben unverändert).
+  const inheritsVictronMap = (persistedConfig?.manufacturer || 'victron') === 'victron';
+  const profileBlock = (key) => {
+    if (isPlainObject(manufacturerProfile?.[key])) return manufacturerProfile[key];
+    return inheritsVictronMap ? null : {};
+  };
+  const meterBlock = (!isPlainObject(manufacturerProfile?.meter) && effectiveConfig.victron?.transport === 'mqtt')
+    ? null : profileBlock('meter');
+  if (meterBlock) effectiveConfig.meter = clone(meterBlock);
+  const pointsBlock = profileBlock('points');
+  if (pointsBlock) effectiveConfig.points = clone(pointsBlock);
+  const controlWriteBlock = profileBlock('controlWrite');
+  if (controlWriteBlock) effectiveConfig.controlWrite = clone(controlWriteBlock);
   // identify (Sungrow, T-0422): Geräteerkennung und Schreib-Tor gehören zum
   // Profil — ein Profil ohne den Block hat auch keinen (kein Rest aus config.json).
   if (isPlainObject(manufacturerProfile?.identify)) effectiveConfig.identify = clone(manufacturerProfile.identify);
@@ -420,14 +465,28 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   // Werte überschreiben — ein fehlender Schlüssel heißt „Profil-Default gilt",
   // sonst würde ein frisch angelegtes config.json die Abregelung stumm
   // umkonfigurieren. Gleiches Muster wie victron oben (D-27).
-  if (isPlainObject(manufacturerProfile?.dvControl)) {
+  const dvControlBlock = profileBlock('dvControl');
+  if (dvControlBlock) {
     const persistedDv = isPlainObject(persistedConfig?.dvControl) ? persistedConfig.dvControl : {};
     const dvOverride = {};
     if (typeof persistedDv.enabled === 'boolean') dvOverride.enabled = persistedDv.enabled;
     if (isPlainObject(persistedDv.negativePriceProtection)) {
       dvOverride.negativePriceProtection = clone(persistedDv.negativePriceProtection);
     }
-    effectiveConfig.dvControl = deepMerge(clone(manufacturerProfile.dvControl), dvOverride);
+    effectiveConfig.dvControl = deepMerge(clone(dvControlBlock), dvOverride);
+  }
+
+  // Nur-Lese-Profil (`"readOnly": true`, für die neuen Lese-Hersteller): keine Schreibziele und keine
+  // DV-Abregelung, egal was Profil oder config.json sonst sagen. dvControl.enabled aus config.json schaltet hier
+  // nichts ein; negativePriceProtection ist aus, damit DVhub keine Abregelung meldet, die nicht stattfindet.
+  // Sichere Seite (Fable-Review 18.11.2026): jeder gesetzte Wert außer ausdrücklich `false` macht das Profil
+  // zum Nur-Lese-Profil — auch "true", 1 oder "ja". Vorher zählte nur das Boolean true; ein "true" als Text ließ
+  // die eigenen Schreibblöcke des Profils aktiv.
+  const profileReadOnly = manufacturerProfile?.readOnly !== undefined && manufacturerProfile?.readOnly !== null
+    && manufacturerProfile.readOnly !== false;
+  if (profileReadOnly) {
+    effectiveConfig.controlWrite = {};
+    effectiveConfig.dvControl = { enabled: false, negativePriceProtection: { enabled: false } };
   }
 
   return applyVictronDefaults(effectiveConfig);
@@ -2065,9 +2124,11 @@ function buildFieldDefinitions() {
       path: 'manufacturer',
       label: 'Hersteller',
       type: 'select',
-      // Statische Fallback-Liste — die API liefert die echten Optionen dynamisch
-      // aus dem hersteller/-Ordner (routes-api.js configMetaPayload), damit ein
-      // neu abgelegtes Profil ohne Code-Änderung auswählbar ist (D-27).
+      // Statische Fallback-Liste NUR für die Anzeige — die API liefert die echten
+      // Optionen dynamisch aus dem hersteller/-Ordner (routes-api.js
+      // configMetaPayload), damit ein neu abgelegtes Profil ohne Code-Änderung
+      // auswählbar ist (D-27). Geprüft wird gegen den Ordner, nicht gegen diese
+      // Liste (E1: sanitizeManufacturerId + loadConfigFile).
       options: [
         { value: 'victron', label: 'Victron' },
         { value: 'bridge-mqtt', label: 'Universal (MQTT-Bridge)' },
@@ -5319,10 +5380,10 @@ export function createDefaultConfig() {
       // 2903 = 10 %). Nur der Entlade-Wächter liest sie (setpoint-follow-watchdog).
       activeSocLimitPct: { enabled: true, fc: 4, address: 2903, quantity: 1, signed: false, scale: 0.1, offset: 0 },
       // T-0118: live readback of Cerbo reg 2704 (com.victronenergy.settings
-      // /Settings/CGwacs/MaxDischargePower). signed int16 so the -1 "unlimited"
-      // sentinel decodes correctly (0xFFFF -> -1, not 65535). 0 = hold, positive
-      // = AC discharge cap in W. Same register controlWrite.maxDischargeW writes.
-      maxDischargeW: { enabled: true, fc: 4, address: 2704, quantity: 1, signed: true, scale: 1, offset: 0 },
+      // /Settings/CGwacs/MaxDischargePower). Wie hersteller/victron.json: 10-W-Schritte (scale 10), 0 = Entladung
+      // gesperrt und raw 0xFFFF/32767 = unbegrenzt (−1) unskaliert. Same register controlWrite.maxDischargeW writes.
+      // Abgleich mit dem Profil: test/victron-vorgaben-abgleich.test.js (vorher scale 1, Codex a5803519 P1).
+      maxDischargeW: { enabled: true, fc: 4, address: 2704, quantity: 1, signed: true, scale: 10, offset: 0, rawSentinels: [-1, 0], rawSentinelMap: { '-1': 32767 } },
       selfConsumptionW: { enabled: true, fc: 4, address: 817, quantity: 3, signed: false, scale: 1, offset: 0, sumRegisters: true }
     },
     controlWrite: {
@@ -5333,10 +5394,10 @@ export function createDefaultConfig() {
       gridSetpointW: { enabled: true, fc: 16, address: 2716, writeType: 'int32', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
       chargeCurrentA: { enabled: true, fc: 6, address: 2705, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
       minSocPct: { enabled: true, fc: 6, address: 2901, writeType: 'uint16', signed: false, scale: 0.1, offset: 0, wordOrder: 'be' },
-      // Cerbo reg 2704 — AC-side discharge cap (com.victronenergy.settings).
-      // 0 = no discharge (hold), positive int = cap in W, -1 (0xFFFF) = unlimited.
-      // Same register evcc batteryDischargeControl writes; see docs/research/inverter-control-landscape-eu.csv.
-      maxDischargeW: { enabled: true, fc: 6, address: 2704, writeType: 'int16', signed: true, scale: 1, offset: 0, wordOrder: 'be' },
+      // Cerbo reg 2704 — AC-side discharge cap (com.victronenergy.settings). Wie hersteller/victron.json: Register
+      // zählt 10-W-Schritte (scale 10); 0 = Entladung sperren geht unskaliert, −1 = unbegrenzt geht als raw 32767
+      // (Victron verwirft raw −1). Same register evcc batteryDischargeControl writes.
+      maxDischargeW: { enabled: true, fc: 6, address: 2704, writeType: 'int16', signed: true, scale: 10, offset: 0, wordOrder: 'be', rawSentinels: [0], rawSentinelMap: { '-1': 32767 } },
       // Cerbo reg 2706 — /Settings/CGwacs/MaxFeedInPower, Einspeisegrenze, zählt
       // in 100-W-Schritten (Victron-Skala 0.01), -1 = unbegrenzt. Nur für die
       // LUOX-Teilvorgabe des Direktvermarkters (dv-interface-luox.js); der Wert
@@ -5904,6 +5965,25 @@ function applyVictronDefaults(config) {
   for (const [key, item] of Object.entries(next.dvControl || {})) {
     if (key !== 'enabled' && key !== 'negativePriceProtection') apply(item);
   }
+  // E14 (Lese-Engine, 18.11.2026): acPv*-Adressen, acPvSource2 und pvCoupling beschreiben das VICTRON-System
+  // (GX-Registerblöcke 808–816, „PV-Anbindung am Victron-System“). Sie gelten nur für das Victron-Datenmodell:
+  // Profil victron oder ein MQTT-Transport (Venus/DVhub-Schema mit denselben Punktnamen; die Adresse adressiert dort
+  // nichts). Bei jedem anderen Modbus-Profil hätte die Zwangsadresse Register 808 am fremden Gerät gelesen, und
+  // pvCoupling „Nur AC“ schaltete dessen PV-Register ab (Fronius/Sungrow/Deye: PV = 0).
+  const victronPointModel = (next.manufacturer || 'victron') === 'victron' || next.victron?.transport === 'mqtt';
+  if (victronPointModel) applyVictronPointModel(next);
+
+  // Akku-Ausbaustufen (Christin 2026-08-07): die heute gültige Stufe IST die
+  // aktuelle Kapazität. Damit lesen EOS-Sync, Optimizer, Freeze-Watchdog und
+  // Leitstand automatisch den richtigen Wert — es gibt weiterhin genau ein
+  // Feld, das sie abfragen. Die persistierte Config bleibt unangetastet; nur
+  // die EFFEKTIVE bekommt den abgeleiteten Wert (applyVictronDefaults läuft auf
+  // einem clone()). Leere Liste ⇒ der manuelle Wert bleibt stehen.
+  applyBatteryStages(next);
+  return next;
+}
+
+function applyVictronPointModel(next) {
   // Issue #5: AC-PV-Register-Basisadresse nach Verdrahtungsposition (GX unit-id 100).
   // on-output 808-810 (Default) / on-grid(input) 811-813 / on-genset 814-816.
   // Deterministisch aus victron.acPvSource abgeleitet, damit ein Kunde den
@@ -5945,13 +6025,9 @@ function applyVictronDefaults(config) {
   if (coupling === 'ac' && next.points) {
     if (next.points.pvPowerW) next.points.pvPowerW.enabled = false;
   }
+}
 
-  // Akku-Ausbaustufen (Christin 2026-08-07): die heute gültige Stufe IST die
-  // aktuelle Kapazität. Damit lesen EOS-Sync, Optimizer, Freeze-Watchdog und
-  // Leitstand automatisch den richtigen Wert — es gibt weiterhin genau ein
-  // Feld, das sie abfragen. Die persistierte Config bleibt unangetastet; nur
-  // die EFFEKTIVE bekommt den abgeleiteten Wert (applyVictronDefaults läuft auf
-  // einem clone()). Leere Liste ⇒ der manuelle Wert bleibt stehen.
+function applyBatteryStages(next) {
   if (isPlainObject(next.optimizer) && Array.isArray(next.optimizer.batteryStages)
       && next.optimizer.batteryStages.length) {
     const derived = resolveCurrentBatteryCapacityWh(
@@ -5960,8 +6036,6 @@ function applyVictronDefaults(config) {
     );
     if (Number.isFinite(derived) && derived > 0) next.optimizer.batteryCapacityWh = derived;
   }
-
-  return next;
 }
 
 function coerceBoolean(value) {
@@ -6617,6 +6691,23 @@ function migratePvTotalKwp(raw) {
   if (sum > 0 && Math.abs(sum - (Number(pv.totalKwp) || 0)) > 1e-6) pv.totalKwp = Math.round(sum * 100) / 100;
 }
 
+// E1 (S1): `manufacturer` wird NICHT gegen die feste Optionsliste geprüft. Früher setzte der select-Zweig jede
+// unbekannte ID still auf victron zurück — die Victron-Schreibkarte zielte dann auf das fremde Gerät, und die
+// Config galt als gültig. Jetzt bleibt die ID stehen; ob es das Profil gibt, entscheidet loadConfigFile am
+// hersteller/-Ordner (fehlt es: valid:false, writeSafety gesperrt). Nur „leer" heißt Standard victron.
+function sanitizeManufacturerId(raw, value, warnings) {
+  const id = String(value ?? '').trim().toLowerCase();
+  if (!id) {
+    warnings.push('manufacturer: invalid option, field was reset to default');
+    deletePath(raw, 'manufacturer');
+    return;
+  }
+  if (!isManufacturerId(id)) {
+    warnings.push('manufacturer: not a valid profile id (a-z, 0-9, - and _) — no manufacturer profile is loaded, device writes stay blocked');
+  }
+  setPath(raw, 'manufacturer', id);
+}
+
 // Christin 19.11.2026 („nicht eingerichtete PV-Dienste nicht ins Ensemble“): Der Schalter „Solcast aktiv“
 // (forecast.solcast.enabled) wirkt jetzt — die Prognose liest ihn (services/forecast/pv-provider-setup.js).
 // Bis dahin las ihn nie jemand, und das Integrationen-Fenster schrieb seit 21.05.2026 beim Speichern von
@@ -6687,6 +6778,11 @@ function sanitizeRawConfig(rawInput) {
       } else {
         setPath(raw, field.path, num);
       }
+      continue;
+    }
+
+    if (field.path === 'manufacturer') {
+      sanitizeManufacturerId(raw, currentValue, warnings);
       continue;
     }
 
@@ -7164,16 +7260,22 @@ export function loadConfigFile(configPath) {
   scrubStoredPlaceholders(parsed);
   const normalized = normalizeConfigInput(parsed);
   const manufacturer = normalized.persistedConfig.manufacturer || 'victron';
-  const manufacturerProfilePath = resolveManufacturerProfilePath(configPath, manufacturer);
+  // Keine gültige ID (Pfadtrenner o. Ä.): kein Dateizugriff außerhalb von hersteller/, Zustand „Profil fehlt".
+  const manufacturerProfilePath = isManufacturerId(manufacturer)
+    ? resolveManufacturerProfilePath(configPath, manufacturer) : null;
   let effectiveConfig = normalized.effectiveConfig;
 
   try {
+    if (!manufacturerProfilePath) throw new Error('manufacturer is not a valid profile id');
     manufacturerProfile = loadManufacturerProfile(manufacturerProfilePath);
     effectiveConfig = applyManufacturerProfile(normalized.persistedConfig, manufacturerProfile);
   } catch (error) {
     manufacturerProfileError = error.message;
     valid = false;
     if (!parseError) parseError = `manufacturer profile error: ${error.message}`;
+    // R-T2.1: für einen anderen Hersteller bleibt die Victron-Werkskarte nicht stehen (Lese- und Schreibblöcke
+    // leer). Victron selbst behält sie: Lesen geht weiter, Schreiben sperrt writeSafety unten.
+    if (manufacturer !== 'victron') effectiveConfig = withoutVictronRegisterMap(effectiveConfig);
   }
 
   // C2 (Christin 16.11.2026): Bei ungültiger Konfiguration (kaputte config.json ODER kaputtes/fehlendes

@@ -86,6 +86,19 @@ export function releaseShouldWrite({ liveMode, markerOwned }) {
   return { write: true, reason: 'owned_forced' };
 }
 
+/**
+ * Kein Schreibweg (kein Sungrow-EMS in der wirksamen Config), aber nicht „nichts zu tun" (Restpunkt 1, 19.11.2026):
+ * Ist die Konfiguration ungültig (z. B. kaputtes Herstellerprofil → R-T2.1 ohne Schreibadressen) und steht DVhubs
+ * Forced-Merker, kann DVhubs Modus 2 am Wechselrichter weiterlaufen — die Skripte schreiben dann nichts (C2) und
+ * sagen das laut, statt „kein Sungrow-EMS-Profil aktiv — nichts zu tun". null = der gewohnte Fall.
+ * @returns {{reason:string, endpointKey:string|null}|null}
+ */
+export function unsafeConfigWithMarker(cfg, marker) {
+  const ws = cfg?.writeSafety;
+  if (!ws || ws.ok !== false || marker?.owned !== true) return null;
+  return { reason: ws.reason || 'config_invalid', endpointKey: marker.endpointKey ?? null };
+}
+
 /** Master- und Slave-Verbindung aus der DVhub-Config (victron + sungrow.secondInverter). */
 export function forcedConnections(cfg) {
   const v = cfg?.victron || {};

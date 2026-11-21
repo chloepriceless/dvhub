@@ -28,7 +28,7 @@ DVhub schreibt seine Sollwerte über Modbus oder die MQTT-Bridge an die Anlage. 
 | `dvhub/control/source` | Text | Herkunft des Sollwerts: `eos` (EOS-Plan), `optimizer` (interner Prognose-Optimizer), `market_automation` (Kleinmarkt-Automation), `rule` (manuelle Zeitplan-Regel), `override` (manueller Eingriff über die API), `default` (Grundzustand), `runtime` (Laufzeit-Schutz wie Abregelung/SoC-Boden), `none` |
 | `dvhub/control/rule` | Text | Regel-ID, wenn eine Regel den Sollwert bestimmt (z. B. `opt-1789…-3`), sonst `null` |
 | `dvhub/control/updated_at` | ISO-8601 | Zeitpunkt der letzten Sollwert-Änderung (Europe/Berlin-Anlage, UTC-Zeitstempel) |
-| `dvhub/control/paused` | bool | `true`, wenn der Not-Halt aktiv ist — DVhub schreibt dann nichts an die Anlage (seit 1.0.10 auch keine §51-/DV-Abregelung, kein §14a) |
+| `dvhub/control/paused` | bool | `true`, wenn der Not-Halt aktiv ist — DVhub schreibt dann nichts an die Anlage (seit 1.0.10 auch keine §51-/DV-Abregelung, kein §14a) und gibt hier keine Vorgabe heraus (siehe „Im Not-Halt: keine Vorgabe“) |
 | `dvhub/control/state` | JSON | Alle vier Ziele mit `{ value, source, at, origin }` in einem Objekt (`origin`: `active` = aktiver Sollwert, `readback` = Rücklesung der Anlage) |
 
 ### Grenzen des Netzbetreibers (§14a / EEBUS-Steuerbox)
@@ -49,6 +49,24 @@ Begrenzt der Netzbetreiber den Bezug (§14a, über die EEBUS-Steuerbox oder den 
 Auflösung je Ziel: zuerst der zuletzt **gewollte** Wert aus dem Steuerpfad (auch wenn er gerade unverändert gehalten wird), sonst die Rücklesung der Anlage, sonst `null`.
 
 Nicht im Schema: `feedExcessDcPv` und `dontFeedExcessAcPv`. Das sind Victron-Register (OvervoltageFeedIn, PreventFeedback) und ergeben für andere Hersteller keinen Sinn. Wer sie braucht, hat einen Victron-GX und damit Modbus.
+
+### Im Not-Halt: keine Vorgabe
+
+Wer diese Topics abholt und umsetzt, steuert mit. Deshalb gibt DVhub sie in drei Lagen **nicht** heraus — wie bei ausgeschaltetem DVhub („Werte laufen weiter“):
+
+| Lage | Sollwert-Topics (`control/grid_setpoint_w` … `control/state`) | Grenzen-Topics (`control/grid_limit/*`) |
+|---|---|---|
+| Not-Halt aktiv (`control/paused` = `true`) | keine Vorgabe | keine Grenze (§14a ist im Not-Halt ausgesetzt) |
+| Konfiguration ungültig (kaputtes oder fehlendes Herstellerprofil, kaputte `config.json`) | keine Vorgabe | laufen weiter |
+| Lese-Modus (`DVHUB_READ_ONLY=1`) | keine Vorgabe | keine Grenze |
+
+„Keine Vorgabe“ ist dieselbe Nutzlast wie bei einem DVhub ohne jeden Sollwert, auf denselben Topics (keins kommt dazu, keins fällt weg, weiter retained): die vier Sollwerte `null`, `control/source` = `none`, `control/rule` und `control/updated_at` = `null`, in `control/state` je Ziel `{ "value": null, "source": null, "at": null, "origin": null }`; bei den Grenzen `active` = `false`, `source` = `none`, Werte `null`, `production_blocked` = `false`, `shares` = `{}`. `control/paused` und alle Messwert-Topics (`energy/…`, `battery/…` samt `battery/min_soc_pct`, `solar/…`) laufen unverändert weiter. Nach dem Aufheben bzw. mit gültiger Konfiguration kommen die Sollwerte mit dem nächsten Takt wieder.
+
+Den Grund gibt es per MQTT **nicht** als eigenes Topic: ein nur zeitweise gesetztes retained Topic bliebe nach dem Aufheben stehen, ein ständiges wäre im Normalbetrieb neu. Im Not-Halt zeigt ihn `control/paused`; für ungültige Konfiguration und Lese-Modus steht er in `GET /api/integration/loxone` bzw. `/api/integration/home-assistant` (`dvhub_control_suspended`: `not_halt`, `read_only`, `config_unsafe`) und in der Datenfluss-Übersicht. Eine Automation, die einen Akku nachführt, muss bei `null` in den eigenen Grundzustand gehen — die Beispiel-Automation unten tut bei `null` nichts, der Wechselrichter behält dann seinen letzten Wert; wer das nicht will, ergänzt einen Zweig für `null`.
+
+**Direktvermarkter-Signal:** Per MQTT gibt DVhub das Signal des Direktvermarkters nicht heraus. In `GET /api/integration/loxone` bzw. `/api/integration/home-assistant` (`dvControlValue`, `forcedOff`) steht es im Not-Halt und im Lese-Modus auf `null`; bei ungültiger Konfiguration läuft es dort weiter, weil DVhub dann selbst nicht abregeln kann und die Weitergabe der einzige Weg ist, der Abregelung zu folgen ([LOXONE.md](LOXONE.md) A.4).
+
+**Plan-Topics sind kein Steuerbefehl:** `optimizer/plan`, `optimizer/plan/ranges`, `optimizer/plan/current`, `optimizer/plan/next`, `optimizer/plan/next_start` und `optimizer/plan/slot_count` (Abschnitt 3) laufen im Not-Halt, bei ungültiger Konfiguration und im Lese-Modus **unverändert weiter** — mit den Slot-Werten, die der Optimizer geplant hat. Sie tragen nur Information; DVhub führt im Not-Halt nichts davon aus. Eine Automation darf sie deshalb **nicht als Steuerbefehl** benutzen (etwa den Wert von `plan/current` an einen Akku weiterreichen) — wer nachführen will, nimmt die `control/*`-Topics oben, die im Not-Halt „keine Vorgabe“ tragen.
 
 ### Home Assistant
 
@@ -85,6 +103,8 @@ dvhub_control_rule=abend-entladen
 dvhub_control_updated_at=2026-09-14T11:02:10.000Z
 dvhub_control_paused=false
 ```
+
+Im Not-Halt, bei ungültiger Konfiguration und im Lese-Modus stehen dort dieselben „keine Vorgabe“-Werte wie oben (`null`, `none`) und zusätzlich `dvhub_control_suspended=<Grund>`; die Zeile gibt es nur dann. Anleitung für Loxone: [LOXONE.md](LOXONE.md) A.4.
 
 Die bisherigen Felder (`gridSetpointW`, `minSocPct`, `soc`, …) bleiben unverändert; `gridSetpointW` ist dort die Rücklesung der Anlage, `dvhub_control_grid_setpoint_w` der aktive Sollwert.
 
@@ -276,6 +296,8 @@ Kodierung: Zeichenketten werden **roh** gesendet (`eos`, nicht `"eos"`), Zahlen,
 
 Der Plan ist die Liste der vom Optimizer (EOS, interner Optimizer, Kleinmarkt-Automation) erzeugten Zeitplan-Slots, also das, was DVhub ausführen wird: „von … bis … → Befehl". Abgelaufene Slots fallen heraus, der laufende bleibt drin. Retained, alle `publishIntervalMs`.
 
+Die Plan-Topics sind **Information, kein Steuerbefehl**: Sie laufen auch im Not-Halt, bei ungültiger Konfiguration und im Lese-Modus unverändert weiter, obwohl DVhub dann nichts davon ausführt. Eine Automation, die einen Akku nachführt, nimmt die `control/*`-Topics (Abschnitt 1), nicht den Plan.
+
 | Topic | Inhalt |
 |---|---|
 | `dvhub/optimizer/plan` | JSON `{ source, generatedAt, slotMinutes, validFrom, validUntil, slotCount, rangeCount, slots: [...], devices: [] }` |
@@ -327,5 +349,5 @@ Wer die Einzel-Slots braucht (eigene Automation, Node-RED), liest `dvhub/optimiz
 - Der Steuerpfad bleibt DVhubs Verantwortung: Not-Halt, SoC-Boden, Negativpreis-Schutz und Frische-Disziplin greifen vor jedem `…/set`. Was nach außen geht, ist bereits geprüft.
 - Wer `dvhub/control/<ziel>` (ohne `/set`) selbst publiziert, überschreibt nur den Spiegel — DVhub liest ihn nicht zurück.
 - **Befehle an DVhub** gibt es seit 2026-09-26 über `dvhub/cmd/*` (Abschnitt 2b), aber nur bei aktiver Home-Assistant-Auto-Discovery und außerhalb des Lese-Modus. Sie laufen durch dieselben Gates wie die API; der Broker-Zugang ist die Vertrauensgrenze und gehört abgesichert. Die HTTP-API bleibt der zweite, unabhängige Weg.
-- Im Lese-Modus (`DVHUB_READ_ONLY=1`) sendet DVhub keine `…/set`-Befehle und **führt keine `dvhub/cmd/*`-Befehle aus**; die `dvhub/control/<ziel>`-Spiegel werden weiter publiziert.
+- Im Lese-Modus (`DVHUB_READ_ONLY=1`) sendet DVhub keine `…/set`-Befehle und **führt keine `dvhub/cmd/*`-Befehle aus**; die `dvhub/control/<ziel>`-Spiegel werden weiter publiziert, tragen aber „keine Vorgabe“ (Abschnitt 1) — eine mitlesende Zweit-Instanz soll über abholende Geräte nicht mitsteuern.
 - Broker-Zugang: der Hub verbindet mit den Zugangsdaten aus Integrationen → MQTT Hub; für das Eingangs-Profil gelten die Bridge-Einstellungen unter Einstellungen → Verbindung (eigene Verbindung, eigener Broker möglich).

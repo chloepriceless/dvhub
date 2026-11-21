@@ -3977,7 +3977,11 @@
       var out = d.out || {};
       var ctl = out.control || {};
       var cs = document.getElementById('df-control-source');
-      if (cs) cs.textContent = ctl.source ? '(Quelle: ' + ctl.source + (ctl.rule ? ', Regel ' + ctl.rule : '') + (ctl.paused ? ', Not-Halt aktiv' : '') + ')' : '';
+      // R-T3: bei geschlossenem Tor geht „keine Vorgabe“ hinaus — mit Grund.
+      var suspendedText = { not_halt: 'Not-Halt', read_only: 'Lese-Modus', config_unsafe: 'Konfiguration ungültig' };
+      var suspended = !ctl.suspended ? '' : (ctl.suspended === 'not_halt' && ctl.paused ? ' — keine Vorgabe nach außen'
+        : ', keine Vorgabe nach außen: ' + (suspendedText[ctl.suspended] || ctl.suspended));
+      if (cs) cs.textContent = ctl.source ? '(Quelle: ' + ctl.source + (ctl.rule ? ', Regel ' + ctl.rule : '') + (ctl.paused ? ', Not-Halt aktiv' : '') + suspended + ')' : '';
       var tout = document.getElementById('df-out');
       if (tout) {
         var crow = (ctl.rows || []).map(function (r) {
@@ -3985,8 +3989,11 @@
             '</td><td class="num">' + dfSince(r.at) + '</td></tr>';
         });
         var dv = out.dvSignal || {};
+        // Not-Halt/Lese-Modus: das DV-Signal geht nicht hinaus (Christin 19.11.2026) — mit Grund statt „erlaubt“.
+        var dvText = dv.suspended ? 'nicht weitergereicht: ' + (suspendedText[dv.suspended] || dv.suspended)
+          : (dv.forcedOff ? 'Abregelung aktiv' : 'Einspeisung erlaubt');
         crow.push('<tr><td>Direktvermarkter-Signal</td><td class="num">' + (dv.value === null || dv.value === undefined ? '—' : esc(String(dv.value))) +
-          '</td><td>' + (dv.forcedOff ? 'Abregelung aktiv' : 'Einspeisung erlaubt') + '</td><td class="num">—</td></tr>');
+          '</td><td>' + esc(dvText) + '</td><td class="num">—</td></tr>');
         tout.innerHTML = crow.join('');
       }
       var ch = document.getElementById('df-channels');
