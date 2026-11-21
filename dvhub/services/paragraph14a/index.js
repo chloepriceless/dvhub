@@ -66,6 +66,9 @@ const RELAY_CONFIRM_PERSIST_MS = 10 * 60_000;
 export function resolveParagraph14aConfig(cfg) {
   const p = cfg?.paragraph14a || {};
   const relay = p.relay || {};
+  // Nur eigene Schlüssel und nur Texte (A8, Christin 21.11.2026): PRIORITY_PRESETS['toString'] wäre eine Funktion,
+  // ['__proto__'] Object.prototype, ["ev_first"] träfe über die Umwandlung in Text — keine Vorrangliste, später TypeError.
+  const presetKey = typeof p.priorityPreset === 'string' && Object.hasOwn(PRIORITY_PRESETS, p.priorityPreset) ? p.priorityPreset : null;
   const devices = (Array.isArray(p.devices) ? p.devices : [])
     .filter((d) => d && STEUVE_KINDS.includes(d.kind) && Number(d.powerW) > 0)
     .map((d, i) => ({
@@ -82,8 +85,8 @@ export function resolveParagraph14aConfig(cfg) {
     // Zuerst nach aktuellem Bedarf (ab 1.0.10 Standard; ältere Konfigurationen
     // ohne den Schlüssel bekommen ihn damit automatisch).
     demandFirst: p.demandFirst !== false,
-    priority: PRIORITY_PRESETS[p.priorityPreset] || DEFAULT_PRIORITY,
-    priorityPreset: PRIORITY_PRESETS[p.priorityPreset] ? p.priorityPreset : 'heat_first',
+    priority: presetKey ? PRIORITY_PRESETS[presetKey] : DEFAULT_PRIORITY,
+    priorityPreset: presetKey || 'heat_first',
     usePvSurplus: p.usePvSurplus !== false,
     // Hausspeicher deckt zuerst (Akku-Hilfe über ctx.batteryAssist), gekürzt wird nur der Rest.
     batteryAssist: p.batteryAssist !== false,
