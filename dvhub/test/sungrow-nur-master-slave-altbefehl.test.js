@@ -523,6 +523,30 @@ test('Slave unter fremdem EMS (VPP) → Master steuert allein wie bisher, kein R
   assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_slave_unconfirmed_stepback' || l.event === 'sungrow_ems_entry_deferred'));
 });
 
+test('Slave unter fremdem EMS über längere Zeit: eine Meldung je Lage; endet die Fremdsteuerung, wird der alte Befehl im Profiltakt gestoppt (Review 4cf0a9e4 P3)', async () => {
+  const r = rig({ slaveHolding: { [MODE]: EMS_MODE.VPP, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 2000 } });
+  // „nur Master“, 8 Takte à 11 s (> 60 s) mit Sollwertsprüngen > Schreibschwelle → echte Master-Writes je Takt.
+  for (let i = 0; i < 8; i += 1) {
+    if (i > 0) r.advance(11_000);
+    assert.equal((await r.ems.applySetpoint(-6000 + (i % 2) * 2000, 'rule:abend')).ok, true, `Takt ${i}`);
+  }
+  assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_slave_foreign').length, 1, 'eine Meldung je Lage, nicht je Prüfung');
+  assert.deepEqual(slaveWrites(r), []);
+  // Das fremde EMS gibt den Slave frei, sein Entladebefehl bleibt stehen (Slave folgt jetzt DVhubs Modus 2).
+  r.slaveImage.holding.set(MODE, EMS_MODE.FORCED);
+  r.advance(11_000);
+  assert.equal((await r.ems.applySetpoint(-6100, 'rule:abend')).ok, true);
+  assert.deepEqual(slaveWrites(r), [`S:${CMD}=${EMS_CMD.STOP}`], 'binnen eines Profiltakts gestoppt');
+  // Kehrt die Fremdsteuerung zurück, ist das eine neue Lage → wieder eine Meldung.
+  r.slaveImage.holding.set(MODE, EMS_MODE.VPP);
+  r.slaveImage.holding.set(CMD, EMS_CMD.CHARGE);
+  r.ems._st.slaveCheck = { failedAt: 0, error: null };
+  r.slaveEms._st.stopConfirmed = false; // Befehl wieder unbekannt
+  r.advance(11_000);
+  assert.equal((await r.ems.applySetpoint(-5900, 'rule:abend')).ok, true);
+  assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_slave_foreign').length, 2, 'neue Lage, neue Meldung');
+});
+
 test('Wiedereintritt scheitert am Master → der spätere gewöhnliche Eintritt meldet keinen Wiedereintritt (Review 156a3e06 P3)', async () => {
   const r = rig();
   assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);

@@ -859,6 +859,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Master: Prüfung des nicht geführten Slave vor Eintritt/im Betrieb (stopSlaveBeforeTakeover).
     slaveCheck: { failedAt: 0, error: null }, // letzter Fehlschlag mit Gerätezugriff — Drossel (Fable P3-2)
     slaveNeutralizeTick: null, // Takt, in dem der Pfad den besessenen Slave schon zurückzunehmen versuchte (P3-4)
+    slaveForeignNotified: false, // Lage „Slave unter fremdem EMS" schon gemeldet (Review 4cf0a9e4 P3)
     entryDeferred: { since: 0, lastAt: 0, logKey: null, logAt: 0 }, // Wartezustand vor dem Eintritt (P2-2)
     reentryLogPending: null, // Wiedereintritt (B3) erst melden, wenn er wirklich geschrieben ist (P3-3)
     logKeys: {}
@@ -1022,10 +1023,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // neu — nach einem Fehlschlag mit Gerätezugriff frühestens nach dem ruhigen Profil-Takt, Fable P3-2). Ein Slave in
   // Notladung wird nie kommandiert (S-36): dann wartet es, bis die Notladung vorbei ist und der Stopp möglich wird (Codex
   // c5502afe P2); im laufenden Betrieb tritt der Master deshalb nicht zurück. Im Not-Halt kein Eintritt und kein Write.
-  function slaveCheckRetryMs(foreign = false) {
+  // Auch bei einem fremd gesteuerten Slave der ruhige Profil-Takt (Review 4cf0a9e4 P3): endet die Fremdsteuerung, wird
+  // ein stehengebliebener Befehl so binnen eines Takts gestoppt, nicht erst nach deviceRecheckMs.
+  function slaveCheckRetryMs() {
     const o = resolveSungrowEmsOptions(sungrowEmsConf(getCfg()) || {});
-    // Fremd gesteuerter Slave: im gewöhnlichen Lesetakt der RW-Register (deviceRecheckMs) neu nachsehen.
-    if (foreign) return Math.max(10000, Number(o.deviceRecheckMs) || 60000);
     return Math.max(5000, Number(o.regulateEveryMs) || 10000);
   }
   async function stopSlaveBeforeTakeover(kind = 'adopt', modeValue = EMS_MODE.FORCED, t = now()) {
@@ -1038,7 +1039,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (!resolveSecondInverter(getCfg()).enabled) return;
     const owned = slaveActuator.ownsControl?.() === true;
     if (running && (owned || slaveActuator.stopConfirmed?.() === true)) return;
-    const throttled = !adopt && st.slaveCheck.failedAt > 0 && t - st.slaveCheck.failedAt < slaveCheckRetryMs(st.slaveCheck.foreign === true);
+    const throttled = !adopt && st.slaveCheck.failedAt > 0 && t - st.slaveCheck.failedAt < slaveCheckRetryMs();
     let ss;
     if (!adopt && state.ctrl?.discretionaryWritesPaused) {
       ss = { ok: false, blocked: true, error: 'emergency_stop_active' };
@@ -1058,13 +1059,19 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Eingangsregister — und nicht im Not-Halt).
     if (!adopt && !ss?.throttled) {
       st.slaveCheck = ss?.ok === true || ss?.emergency === true || ss?.blocked ? { failedAt: 0, error: null } : { failedAt: t, error: ss?.error || 'unbekannt', foreign: ss?.foreign === true };
+      // Lage „fremd gesteuert" endet mit jedem anderen Ergebnis einer echten Prüfung (nicht im Not-Halt).
+      if (ss?.foreign !== true && !ss?.blocked) st.slaveForeignNotified = false;
     }
     if (ss?.ok === true) return;
     if (running && ss?.emergency === true) return; // Notladung: kein Write, kein Rücktritt; nach der Notladung stoppen
     // Ein fremdes EMS (VPP) am Slave (Review 156a3e06 P3): DVhub fasst ihn nicht an (S-38), und ein Rücktritt des
     // Masters brächte ihn nicht zur Ruhe — der Master steuert wie bisher allein („nur Master"), gemeldet einmal je Lage.
     if (!adopt && ss?.foreign === true) {
-      logOnce(ss.error || 'foreign', 'sungrow_ems_slave_foreign', { error: ss.error || null, text: 'Sungrow: Slave steht unter einem fremden EMS — DVhub fasst ihn nicht an und steuert den Master allein.' }, 'warn');
+      // Eigener Merker statt logOnce: st.logKeys leert jeder Master-Write, die Meldung käme sonst bei jeder Prüfung.
+      if (!st.slaveForeignNotified) {
+        st.slaveForeignNotified = true;
+        pushLog('sungrow_ems_slave_foreign', { error: ss.error || null, text: 'Sungrow: Slave steht unter einem fremden EMS — DVhub fasst ihn nicht an und steuert den Master allein.' }, 'warn');
+      }
       return;
     }
     const what = adopt ? 'Übernahme des Modus 2 zurückgestellt' : (running ? `Rücktritt aus Modus ${modeValue}` : `Eintritt in Modus ${modeValue} zurückgestellt`);
