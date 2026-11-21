@@ -775,3 +775,19 @@ test('Codex 22d327d3 P3: wartende H-9-Übernahme hat einen eigenen Wartezustand 
     assert.deepEqual(masterWrites(r), [], 'während des Wartens kein Write');
   }
 });
+
+test('Codex 0cc625c7 P1: wartende Übernahme, ein fremdes EMS übernimmt den Master (Modus 4), Slave kommt nach 10 s zurück → kein Write an den Master', async () => {
+  for (const telemetry of [false, true]) {
+    const flag = { down: true };
+    const r = rig({ telemetry, masterHolding: FOUND_MODE2, slaveHolding: {}, slaveMock: unreachable(flag), aloneAfterMin: 30 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+    assert.equal(r.state.ctrl.sungrowEms.decision.mode, 'adopt_wait');
+    r.masterImage.holding.set(MODE, EMS_MODE.VPP); // fremdes EMS übernimmt
+    flag.down = false;                             // Slave antwortet wieder (Stopp bestätigt)
+    r.order.length = 0;
+    r.advance(10_000);
+    await r.ems.applySetpoint(-6100, 'rule:abend');
+    assert.deepEqual(masterWrites(r), [], `${telemetry ? 'Split' : 'Einzelpfad'}: kein Write an einen fremd gesteuerten Master: ${r.order}`);
+    assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_foreign_mode'), 'fremder Modus erkannt');
+  }
+});

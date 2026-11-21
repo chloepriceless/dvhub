@@ -2280,7 +2280,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       }
       if (e?.code === 'entry_slave_unconfirmed') return await deferEntry(conf, ctl, e, t, masterModeSeen);
       if (e?.code === 'running_slave_unconfirmed') return await stepBackForSlave(conf, ctl, e, t);
-      if (e?.code === 'adopt_slave_unconfirmed') return entryDeferred(e, t, { adopt: true });
+      // Codex 0cc625c7 P1: den gemerkten Master-Zustand verwerfen (wie bisher im Fehlerzweig) — sonst schrieben der nächste
+      // Takt und writeDecision mit dem alten Modus 2 an einen inzwischen fremd gesteuerten Master.
+      if (e?.code === 'adopt_slave_unconfirmed') { st.dev = null; return entryDeferred(e, t, { adopt: true }); }
       await neutralizeBoth('split_master_failed');
       st.error = e?.message || String(e);
       logOnce(st.error, e?.code === 'foreign_ems_mode' ? 'sungrow_ems_foreign_mode' : 'sungrow_ems_split_aborted', { side: 'master', error: st.error, ...writeErrorInfo(e) }, 'warn');
@@ -2495,6 +2497,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       } else if (e?.code === 'running_slave_unconfirmed') {
         return await stepBackForSlave(conf, ctl, e, t);
       } else if (e?.code === 'adopt_slave_unconfirmed') {
+        st.dev = null; // Codex 0cc625c7 P1: frisch lesen, bevor die Übernahme fortgesetzt wird
         return entryDeferred(e, t, { adopt: true });
       } else if (e?.code === 'ems_read_error') {
         st.dev = null;
