@@ -2251,7 +2251,7 @@ export function createScheduleEvaluator(ctx) {
           // selbst (sungrow_ems_release_retry); ebenso kein control_write_error. Der Sollwert bleibt (emsFailure).
           emsReleasePending = r?.releasePending === true;
           // Eintritt zurückgestellt (Christin 21.11.2026): der Slave ist vor dem Eintritt des Masters nicht auf Stopp
-          // bestätigt — nichts geschrieben, der Aktuator meldet selbst (sungrow_ems_entry_deferred, einmal je Grund).
+          // bestätigt — nichts geschrieben, der Aktuator meldet selbst (sungrow_ems_entry_deferred beim ersten Mal, bei neuem Grund und dann alle 15 min).
           // Das Warten kann lange dauern (Notladung, Slave nicht erreichbar); ebenso kein control_write_error je
           // Auswertung. Der Sollwert bleibt (emsFailure).
           emsDeferred = r?.deferred === true;
