@@ -221,8 +221,13 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   Takt, der Master bleibt in Modus 0, der nächste Takt versucht es wieder. Ein Slave in Notladung bekommt keinen
   Write; führt DVhub ihn danach nicht wieder, wartet der Eintritt bis nach der Notladung. Gilt auch für den
   Wiedereintritt nach einem geräteeigenen Rückfall und für External EMS. Ein dauerhaft nicht erreichbarer zweiter
-  Wechselrichter hält den Eintritt an, bis er antwortet oder aus der Einstellung entfernt ist. Protokoll:
-  `sungrow_ems_entry_slave_stopped`, `sungrow_ems_entry_deferred`.
+  Wechselrichter hält den Eintritt an, bis er antwortet oder aus der Einstellung entfernt ist. Im laufenden Betrieb
+  gilt dasselbe, sobald DVhub den Slave nicht mehr führt (Werte weg, Richtung mit „nur Master“, Strategie umgestellt)
+  und sein Stopp nicht bestätigt ist: Stopp setzen, sonst tritt der Master in Modus 0 zurück, bis er bestätigt ist (in
+  Notladung kein Write und kein Rücktritt). Ein bestätigter Stopp gilt, bis DVhub dem Slave wieder einen Befehl gibt.
+  Beim Warten liest DVhub nur im gewöhnlichen Takt. Protokoll: `sungrow_ems_entry_slave_stopped`,
+  `sungrow_ems_entry_deferred`, `sungrow_ems_slave_unconfirmed_stepback` (alle 15 min wiederholt, solange es wartet);
+  Status `sungrowEms.decision.reason = entry_slave_unconfirmed` mit `since`.
 
 - **Abregelung (Negativpreis, Direktvermarkter, Test-Knopf):** Beide Wechselrichter laden und entladen weiter nach
   ihrem Anteil. DVhub regelt die Summe auf den Sollwert, bei Negativpreis auf −40 W. Entladen wird dabei höchstens die

@@ -40,23 +40,24 @@ const slaveRunStateReads = (r) => r.slaveT.reads.filter((x) => x.fc === 4 && x.a
 
 // Zwei WR wie in der Laufzeit: Master- und Slave-Aktuator mit je eigenem Transport, Slave mit eigener Verbindung.
 function rig({
-  controlMode = 'forced', strategy = 'master-only', telemetry = true,
-  masterHolding = {}, slaveHolding = {}, slaveInput = {}, slaveMock = {},
+  controlMode = 'forced', strategy = 'master-only', strategyCharge = strategy, strategyDischarge = strategy, telemetry = true,
+  allowGridCharge = false, masterHolding = {}, slaveHolding = {}, slaveInput = {}, masterMock = {}, slaveMock = {},
 } = {}) {
-  const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge: strategy, strategyDischarge: strategy, maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 };
-  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode, heartbeatTimeoutS: 30, secondInverter }, optimizer: { maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 } });
+  const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge, strategyDischarge, maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 };
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode, heartbeatTimeoutS: 30, secondInverter }, optimizer: { maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000, ...(allowGridCharge ? { allowGridCharge: true } : {}) } });
   const masterImage = sungrowImage({ holding: masterHolding });
   const slaveImage = sungrowImage({ holding: slaveHolding, input: slaveInput });
-  const masterT = mockSungrow(masterImage);
+  const masterT = mockSungrow(masterImage, masterMock);
   const slaveT = mockSungrow(slaveImage, slaveMock);
   const order = [];
-  const ctl = { slaveWriteFail: false, slaveFailOnce: null };
+  const ctl = { slaveWriteFail: false, slaveFailOnce: null, slaveWriteAttempts: 0 };
   const tap = (tx, side) => ({
     type: 'modbus',
     reads: tx.reads,
     writes: tx.writes,
     mbRequest: (c) => tx.mbRequest(c),
     mbWriteSingle: async (c) => {
+      if (side === 'S') ctl.slaveWriteAttempts += 1;
       if (side === 'S' && (ctl.slaveWriteFail || (ctl.slaveFailOnce != null && c.address === ctl.slaveFailOnce))) {
         ctl.slaveFailOnce = null;
         throw new Error('modbus timeout'); // nichts angekommen
@@ -176,6 +177,7 @@ test('nur Master, Wiedereintritt wartet viele Takte (Slave in Notladung) → zä
   }
   assert.deepEqual(r.order, [], 'während der Notladung weder Slave- noch Master-Write');
   assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_reentry_rate'), 'zurückgestellte Takte lösen keine Stundensperre aus');
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_reentry'), 'kein „Wiedereintritt“ gemeldet, solange er wartet (Fable P3-3)');
   // Notladung vorbei → Wiedereintritt sofort möglich.
   r.state.sungrowSecond.runningState = 0;
   r.advance(61_000);
@@ -183,6 +185,7 @@ test('nur Master, Wiedereintritt wartet viele Takte (Slave in Notladung) → zä
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(r.order[0], `S:${CMD}=${EMS_CMD.STOP}`);
   assert.ok(r.order.includes(`M:${MODE}=${EMS_MODE.FORCED}`), `${r.order}`);
+  assert.equal(r.logs.filter((l) => l.event === 'sungrow_ems_reentry').length, 1, 'der echte Wiedereintritt wird einmal gemeldet');
   assertSafeRegs(r);
 });
 
@@ -262,8 +265,10 @@ test('Slave mit DVhubs eigenem Befehl, Rücknahme scheitert (Werte weg, Slave ni
   r.ctl.slaveWriteFail = true;
   r.order.length = 0;
   r.advance(61_000);
+  r.ctl.slaveWriteAttempts = 0;
   const res = await r.ems.applySetpoint(-6100, 'rule:abend');
   assert.equal(res.ok, false, JSON.stringify(res));
+  assert.equal(r.ctl.slaveWriteAttempts, 1, 'eine Rücknahme je Takt am Slave, kein zweiter Versuch nach dem Fehlschlag (Fable P3-4)');
   assert.deepEqual(masterWrites(r), [], 'Master bleibt in Modus 0 — sonst liefe der alte Slave-Anteil zusätzlich zum ganzen Master-Anteil');
   assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF);
   // Slave wieder beschreibbar → nächster Takt: Slave zurückgenommen, dann Wiedereintritt.
@@ -288,6 +293,10 @@ test('Slave-Lesefehler genau im Eintrittstakt (führende Strategie) → kein Ein
   assert.deepEqual(r.order, [], 'kein Write an beide');
   assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF);
   assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_split_aborted'), 'kein Split-Abbruch, nur zurückgestellt');
+  const fb = r.logs.filter((l) => l.event === 'sungrow_ems_split_slave_fallback');
+  assert.equal(fb.length, 1, 'Slave-Fehler gemeldet');
+  assert.doesNotMatch(fb[0].data.text, /steuert weiter/, 'im zurückgestellten Takt steuert der Master nicht (Fable P3-3)');
+  assert.equal(fb[0].data.masterW, 0);
   fail = false;
   r.advance(30_000);
   const next = await r.ems.tick();
@@ -333,6 +342,155 @@ test('echter Evaluator: zurückgestellter Eintritt → Sollwert bleibt, kein con
   assert.equal(ok.ok, true, JSON.stringify(ok));
   assert.deepEqual(slaveT.writes.map((w) => [w.address, w.value]), [[CMD, EMS_CMD.STOP]]);
   assert.equal(masterImage.holding.get(MODE), EMS_MODE.FORCED);
+});
+
+// --- Fable-Prüfung 21.11.: der Slave wird im Betrieb nicht mehr geführt --------------------------------------------
+// Bei führender Strategie und Slave in Notladung tritt der Master ein, ohne den Slave zu stoppen (H-9-Ausnahme: die
+// Strategie führt ihn danach per Write). Hört DVhub danach auf, ihn zu führen (Werte weg, Richtung mit „nur Master“,
+// Strategie umgestellt), prüfte bis d2b4ca62 niemand mehr seinen alten Befehl.
+
+test('Fable P2-1a: Eintritt bei Notladung (soc-balance), danach fallen die Slave-Werte weg → alter Slave-Befehl wird auf Stopp gesetzt', async () => {
+  const r = rig({ strategy: 'soc-balance', slaveHolding: OLD_CHARGE });
+  r.state.sungrowSecond.runningState = 0x4001;
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  assert.deepEqual(slaveWrites(r), [], 'Slave in Notladung unberührt (H-9-Ausnahme)');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+  // Notladung vorbei, die Werte des Begleitdiensts fallen weg → Einzelpfad am Master.
+  delete r.state.sungrowSecond;
+  r.order.length = 0;
+  for (let i = 0; i < 5; i += 1) { r.advance(11_000); assert.equal((await r.ems.applySetpoint(-6000 - i - 1, 'rule:abend')).ok, true); }
+  assert.deepEqual(slaveWrites(r), [`S:${CMD}=${EMS_CMD.STOP}`], `genau ein Slave-Stopp: ${r.order}`);
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP);
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'der Master steuert weiter');
+  assertSafeRegs(r);
+});
+
+test('Fable P2-1b: Entladen soc-balance, Laden „nur Master“ — Richtungswechsel nach der Notladung → alter Slave-Befehl auf Stopp', async () => {
+  const r = rig({ strategyDischarge: 'soc-balance', strategyCharge: 'master-only', allowGridCharge: true, slaveHolding: OLD_DISCHARGE });
+  r.state.sungrowSecond.runningState = 0x4001;
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true); // Entladen, Slave in Notladung unberührt
+  assert.deepEqual(slaveWrites(r), []);
+  r.state.sungrowSecond.runningState = 0;
+  r.order.length = 0;
+  r.advance(11_000);
+  // Laden: P = −1000 + 0,7 · 6000 = 3200 W → nur Master.
+  const res = await r.ems.applySetpoint(6000, 'rule:netzladen');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.order[0], `S:${CMD}=${EMS_CMD.STOP}`, `${r.order}`);
+  assert.ok(r.order.includes(`M:${CMD}=${EMS_CMD.CHARGE}`), `${r.order}`);
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP, 'der alte Entladebefehl wirkt nicht neben dem Laden');
+  assertSafeRegs(r);
+});
+
+test('Fable P2-1: Strategie im Betrieb auf „nur Master“ umgestellt, Slave noch in Notladung → kein Write, kein Rücktritt; nach der Notladung Stopp', async () => {
+  const r = rig({ strategy: 'soc-balance', slaveHolding: OLD_CHARGE });
+  r.state.sungrowSecond.runningState = 0x4001;
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  r.cfg.sungrow.secondInverter.strategyCharge = 'master-only';
+  r.cfg.sungrow.secondInverter.strategyDischarge = 'master-only';
+  r.order.length = 0;
+  for (let i = 0; i < 3; i += 1) { r.advance(11_000); assert.equal((await r.ems.applySetpoint(-6000 - i - 1, 'rule:abend')).ok, true); }
+  assert.deepEqual(slaveWrites(r), [], 'Slave in Notladung bekommt keinen Write');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'kein Rücktritt wegen der Notladung');
+  r.state.sungrowSecond.runningState = 0;
+  r.advance(11_000);
+  assert.equal((await r.ems.applySetpoint(-6100, 'rule:abend')).ok, true);
+  assert.deepEqual(slaveWrites(r), [`S:${CMD}=${EMS_CMD.STOP}`]);
+  assertSafeRegs(r);
+});
+
+test('Fable P2-1: alter Slave-Befehl lässt sich im Betrieb nicht stoppen → Master tritt zurück (Modus 0), Ziel bleibt; danach Stopp und Eintritt', async () => {
+  const r = rig({ strategy: 'soc-balance', slaveHolding: OLD_CHARGE });
+  r.state.sungrowSecond.runningState = 0x4001;
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  delete r.state.sungrowSecond;  // Notladung vorbei, Werte weg
+  r.ctl.slaveWriteFail = true;   // Slave nimmt keinen Write an
+  r.order.length = 0;
+  r.advance(11_000);
+  const res = await r.ems.applySetpoint(-6100, 'rule:abend');
+  assert.equal(res.ok, false, JSON.stringify(res));
+  assert.deepEqual(masterWrites(r), [`M:${CMD}=${EMS_CMD.STOP}`, `M:${MODE}=${EMS_MODE.SELF}`], 'Master tritt zurück — der Slave-Befehl ruht dann');
+  assert.equal(r.state.ctrl.sungrowEms.owns, false);
+  assert.notEqual(r.ems._st.target, null, 'Ziel bleibt');
+  const back = r.logs.find((l) => l.event === 'sungrow_ems_slave_unconfirmed_stepback');
+  assert.ok(back, 'Meldung zum Rücktritt');
+  assert.equal(back.level, 'warn');
+  r.ctl.slaveWriteFail = false;
+  r.order.length = 0;
+  r.advance(11_000);
+  const next = await r.ems.applySetpoint(-6200, 'rule:abend');
+  assert.equal(next.ok, true, JSON.stringify(next));
+  assert.equal(r.order[0], `S:${CMD}=${EMS_CMD.STOP}`, `${r.order}`);
+  assert.ok(r.order.includes(`M:${MODE}=${EMS_MODE.FORCED}`), `${r.order}`);
+  assertSafeRegs(r);
+});
+
+test('External ohne Slave-Werte: Eintritt in Modus 3 setzt den alten Slave-Befehl vorher auf Stopp (Fable P3-1)', async () => {
+  const r = rig({ controlMode: 'external', telemetry: false, slaveHolding: OLD_DISCHARGE });
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(r.order[0], `S:${CMD}=${EMS_CMD.STOP}`, `zuerst der Slave-Stopp: ${r.order}`);
+  assert.ok(r.order.includes(`M:${MODE}=${EMS_MODE.EXTERNAL}`), `${r.order}`);
+  assert.equal(r.slaveImage.holding.get(CMD), EMS_CMD.STOP);
+  assertSafeRegs(r);
+});
+
+test('Not-Halt beginnt beim Lesen des Masters, Slave in Notladung („nur Master“) → gesperrt, keine Warte-Meldung, kein Write (Fable P3-1)', async () => {
+  let r = null;
+  r = rig({ slaveHolding: OLD_CHARGE, masterMock: { onRead: ({ fc, address }) => { if (fc === 3 && address === MODE) r.state.ctrl.discretionaryWritesPaused = true; } } });
+  r.state.sungrowSecond.runningState = 0x4001;
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.blocked, true, JSON.stringify(res));
+  assert.deepEqual(r.order, []);
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_entry_deferred'), 'Not-Halt, nicht „Eintritt wartet“');
+});
+
+test('Eintritt wartet (Slave nimmt den Stopp nicht an): Master und Slave nicht in jedem Takt neu gelesen (Fable P3-2)', async () => {
+  const r = rig({ slaveHolding: OLD_DISCHARGE });
+  r.ctl.slaveWriteFail = true;
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  const mReads = r.masterT.reads.length; const sReads = r.slaveT.reads.length; const sTries = r.ctl.slaveWriteAttempts;
+  for (let i = 0; i < 5; i += 1) { r.advance(1_000); assert.equal((await r.ems.applySetpoint(-6000 - i - 1, 'rule:abend')).ok, false); }
+  assert.equal(r.masterT.reads.length, mReads, 'Master-Register nicht in jedem Takt neu gelesen');
+  assert.equal(r.slaveT.reads.length, sReads, 'Slave nicht im Sekundentakt gelesen');
+  assert.equal(r.ctl.slaveWriteAttempts, sTries, 'kein neuer Stopp-Versuch im Sekundentakt');
+  r.advance(10_000);
+  assert.equal((await r.ems.applySetpoint(-6100, 'rule:abend')).ok, false);
+  assert.ok(r.slaveT.reads.length > sReads, 'nach dem Lesetakt (10 s) ein neuer Versuch');
+});
+
+test('Eintritt wartet lange (Slave nicht erreichbar) → Warnung alle 15 min wiederholt, Zustand im Status (Fable P2-2)', async () => {
+  const r = rig({ slaveMock: { onRead: ({ fc }) => { if (fc === 4) throw new Error('connect ECONNREFUSED'); } } });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  const warns = () => r.logs.filter((l) => l.event === 'sungrow_ems_entry_deferred');
+  assert.equal(warns().length, 1);
+  const st0 = r.state.ctrl.sungrowEms;
+  const since = st0.decision.since;
+  assert.equal(st0.decision.reason, 'entry_slave_unconfirmed');
+  assert.ok(Number.isFinite(since), 'seit wann gewartet wird');
+  assert.match(st0.error, /Eintritt in Modus 2 zurückgestellt/);
+  for (let i = 1; i <= 14; i += 1) { r.advance(60_000); assert.equal((await r.ems.applySetpoint(-6000 - i, 'rule:abend')).ok, false); }
+  assert.equal(warns().length, 1, 'innerhalb von 15 min keine weitere Warnung');
+  r.advance(60_000);
+  assert.equal((await r.ems.applySetpoint(-6100, 'rule:abend')).ok, false);
+  assert.equal(warns().length, 2, 'nach 15 min erneut gewarnt');
+  assert.ok(warns()[1].data.waitingS >= 900, JSON.stringify(warns()[1].data));
+  assert.equal(r.state.ctrl.sungrowEms.decision.since, since, 'Wartebeginn bleibt');
+});
+
+test('Schutz: nur Master, Slave auf Stopp bestätigt — Werte fallen weg, Slave nicht erreichbar → Master steuert weiter, keine Slave-Zugriffe', async () => {
+  let down = false;
+  const r = rig({ slaveMock: { onRead: () => { if (down) throw new Error('connect ECONNREFUSED'); } } });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+  down = true;
+  delete r.state.sungrowSecond;
+  const sReads = r.slaveT.reads.length;
+  r.order.length = 0;
+  for (let i = 0; i < 3; i += 1) { r.advance(11_000); assert.equal((await r.ems.applySetpoint(-6000 - i - 1, 'rule:abend')).ok, true); }
+  assert.equal(r.slaveT.reads.length, sReads, 'kein Slave-Zugriff — sein Stopp ist bestätigt');
+  assert.deepEqual(slaveWrites(r), []);
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'kein Rücktritt');
 });
 
 // --- Schutztests: unverändertes Verhalten --------------------------------------------------------------------------
