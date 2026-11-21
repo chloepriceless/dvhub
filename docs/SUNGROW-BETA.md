@@ -231,7 +231,8 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   Fehlen die Slave-Werte, nimmt DVhub einen eigenen Slave-Befehl in beiden Steuerarten zurück. Ein Slave unter fremdem
   EMS (VPP) bleibt unberührt, der Master steuert allein (`sungrow_ems_slave_foreign`).
   Beim Warten liest DVhub nur im gewöhnlichen Takt. Protokoll: `sungrow_ems_entry_slave_stopped`,
-  `sungrow_ems_entry_deferred`, `sungrow_ems_slave_unconfirmed_stepback` (alle 15 min wiederholt, solange es wartet);
+  `sungrow_ems_running_slave_stopped` (im Betrieb gefunden und gestoppt), `sungrow_ems_entry_deferred`,
+  `sungrow_ems_slave_unconfirmed_stepback` (alle 15 min wiederholt, solange es wartet);
   Status `sungrowEms.decision.reason = entry_slave_unconfirmed` mit `since`.
 
 - **Abregelung (Negativpreis, Direktvermarkter, Test-Knopf):** Beide Wechselrichter laden und entladen weiter nach
