@@ -220,7 +220,10 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   (nur 13051 = 0xCC, zurückgelesen; steht er schon auf Stopp, kein Write). Nicht bestätigt → kein Eintritt in diesem
   Takt, der Master bleibt in Modus 0, der nächste Takt versucht es wieder. Ein Slave in Notladung bekommt keinen
   Write; führt DVhub ihn danach nicht wieder, wartet der Eintritt bis nach der Notladung. Gilt auch für den
-  Wiedereintritt nach einem geräteeigenen Rückfall und für External EMS. Ein nicht erreichbarer zweiter
+  Wiedereintritt nach einem geräteeigenen Rückfall und für External EMS. Steht der Master bei External-Steuerung schon
+  in einem gefundenen Modus 2, verlässt DVhub ihn vor dem Warten mit bekannten Writes (Befehl Stopp, Modus 0), damit
+  kein unbekannter Befehl ohne Rückfall weiterläuft (Codex-Review 21.11.2026). Sieht DVhub den Slave unter einem
+  fremden EMS, gilt ein früher bestätigter Stopp nicht mehr. Ein nicht erreichbarer zweiter
   Wechselrichter hält den Eintritt höchstens bis zur Frist an (siehe „Master allein nach Frist“). Im laufenden Betrieb
   gilt dasselbe, sobald DVhub den Slave nicht mehr führt (Werte weg, Richtung mit „nur Master“, Strategie umgestellt)
   und sein Stopp nicht bestätigt ist: Stopp setzen, sonst tritt der Master in Modus 0 zurück, bis er bestätigt ist (in

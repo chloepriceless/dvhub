@@ -742,3 +742,14 @@ test('Review 1b28e47c P3: Alleinbetrieb, Slave kurz unter fremdem EMS → Status
   assert.equal(modeWrites(r, EMS_MODE.SELF), 0, `kein Rücktritt: ${r.order}`);
   assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone?.reason, 'slave_unconfirmed', 'wieder allein sichtbar');
 });
+
+test('Zusammenspiel Codex-P1 + Frist: External, gefundener Modus 2, Slave nicht erreichbar → erst Modus 0 (bekannte Writes), nach der Frist allein in Modus 3', async () => {
+  const r = rig({ controlMode: 'external', masterHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.CHARGE, [POWER]: 4000 }, slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 1 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  assert.deepEqual(masterWrites(r), [`M:${CMD}=${EMS_CMD.STOP}`, `M:${MODE}=${EMS_MODE.SELF}`], 'gefundener Modus 2 verlassen');
+  r.order.length = 0;
+  assert.equal((await r.minute()).ok, true, 'nach 1 min allein');
+  assert.ok(r.order.includes(`M:${MODE}=${EMS_MODE.EXTERNAL}`), `${r.order}`);
+  assert.equal(aloneLogs(r).length, 1);
+  assertSafeRegs(r);
+});
