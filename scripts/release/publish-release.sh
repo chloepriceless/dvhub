@@ -148,7 +148,9 @@ else
   PREV_SHA=""
   [[ -f "$PREV" ]] && PREV_SHA="$("$NODE" -e 'const i=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write((i.releases||[])[0]?.git_sha||"")' "$PREV")"
   if [[ -n "$PREV_SHA" ]] && git -C "$REPO" merge-base --is-ancestor "$PREV_SHA" "$SHA" 2>/dev/null; then
-    git -C "$REPO" log --format=%s --no-merges "$PREV_SHA..$SHA" | head -30 > "$WORK/subjects.txt"
+    # -n 30 statt `| head -30`: unter pipefail bricht git log sonst mit SIGPIPE ab (Exit 141),
+    # sobald seit dem vorigen Paket mehr als 30 Betreffe anfallen (21.11.2026).
+    git -C "$REPO" log -n 30 --format=%s --no-merges "$PREV_SHA..$SHA" > "$WORK/subjects.txt"
   else
     git -C "$REPO" log --format=%s --no-merges -10 "$SHA" > "$WORK/subjects.txt"
   fi
