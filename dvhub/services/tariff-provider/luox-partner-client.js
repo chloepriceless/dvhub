@@ -41,7 +41,8 @@ function series(list, valueKey, { startKey = 'start', endKey = 'end' } = {}) {
  * @param {{clientId:string, clientSecret:string, environment?:'prod'|'test', fetchImpl?:Function, now?:Function, timeoutMs?:number}} opts
  */
 export function createLumenazaPartnerClient({ clientId, clientSecret, environment = 'prod', fetchImpl = globalThis.fetch, now = () => Date.now(), timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
-  const base = PARTNER_HOSTS[environment] || PARTNER_HOSTS.prod;
+  // Nur eigene Schlüssel und nur Texte (A8): PARTNER_HOSTS['constructor'] wäre eine Funktion als Adresse.
+  const base = typeof environment === 'string' && Object.hasOwn(PARTNER_HOSTS, environment) ? PARTNER_HOSTS[environment] : PARTNER_HOSTS.prod;
   let cached = null; // { token, expiresAt }
 
   async function call(url, init) {

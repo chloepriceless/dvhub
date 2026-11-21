@@ -32,6 +32,18 @@ export const PVNODE_PLANS = {
 
 export const DEFAULT_PVNODE_PLAN = 'free';
 
+// Plan-Schlüssel: nur Texte (Groß-/Kleinschreibung egal) und nur eigene Schlüssel (A8, Christin 21.11.2026). Vorher
+// traf „constructor“/„__proto__“ den Prototyp — Abfragetakt und Kontingent wurden NaN/undefined.
+function pvnodePlanKey(raw) {
+  const lower = typeof raw === 'string' ? raw.toLowerCase() : '';
+  return Object.hasOwn(PVNODE_PLANS, lower) ? lower : DEFAULT_PVNODE_PLAN;
+}
+
+/** Plan-Eintrag zum gespeicherten Plan-Namen; unbekannt → Free. */
+export function pvnodePlanFor(raw) {
+  return PVNODE_PLANS[pvnodePlanKey(raw)];
+}
+
 /**
  * Resolve the effective pvnode limits from config. The plan preset supplies the
  * defaults; explicit operator overrides (`forecast.pvnode.{fetchIntervalMs,
@@ -43,8 +55,7 @@ export const DEFAULT_PVNODE_PLAN = 'free';
  *            maxForecastDays:number,nowcast:boolean,calibration:boolean}}
  */
 export function resolvePvnodePlan(cfg) {
-  const raw = String(cfg?.forecast?.pvnode?.plan ?? DEFAULT_PVNODE_PLAN).toLowerCase();
-  const key = PVNODE_PLANS[raw] ? raw : DEFAULT_PVNODE_PLAN;
+  const key = pvnodePlanKey(cfg?.forecast?.pvnode?.plan);
   const plan = PVNODE_PLANS[key];
   const ov = cfg?.forecast?.pvnode || {};
 

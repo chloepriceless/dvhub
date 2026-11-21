@@ -153,7 +153,8 @@ describe('Plan 20-06: /api/forecast/providers/pvnode GET/POST', () => {
     assert.ok(m);
     assert.match(m[0], /apiKey:\s*p\.apiKey\s*\?\s*['"]\*\*\*['"]\s*:\s*['"]{2}/);
     // v2: Nowcast ist im bezahlten Plan enthalten — plan-abgeleitet, nie aus dem Legacy-Flag.
-    assert.match(m[0], /nowcastEnabled:\s*!!\(PVNODE_PLANS\[p\.plan\]/);
+    // A8 (21.11.2026): über pvnodePlanFor — nur eigene Plan-Schlüssel (Rohkonfig „constructor“ trifft keinen Prototyp).
+    assert.match(m[0], /nowcastEnabled:\s*!!pvnodePlanFor\(p\.plan\)\.nowcast/);
     assert.ok(!/nowcastEnabled:\s*!!p\.nowcastEnabled/.test(m[0]), 'Legacy-Flag darf die Antwort nicht mehr speisen');
   });
 

@@ -260,7 +260,9 @@ export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, vic
   // unter der harten Grenze — nur für die Akku-Ladung aus dem Netz; die Lasten
   // dürfen bis zum Ziel (Victron ohne Abzug, Fable R1 P1-1).
   const ceilingTargetW = targetW == null ? null : Math.max(0, Math.min(targetW, limitW - BATTERY_TRACK_TOLERANCE_W));
-  const orderKey = ORDER_PRESETS[c.order] ? c.order : GRID_CONNECTION_DEFAULTS.order;
+  // Nur eigene Schlüssel und nur Texte (A8, Rust-Abweichung P5-10): ORDER_PRESETS['toString'] wäre eine Funktion (nicht
+  // iterierbar), ["heater_first"] träfe über die Umwandlung in Text und bliebe als Schlüssel ein Array.
+  const orderKey = typeof c.order === 'string' && Object.hasOwn(ORDER_PRESETS, c.order) ? c.order : GRID_CONNECTION_DEFAULTS.order;
   const batteryPhases = ['three', 'L1', 'L2', 'L3'].includes(c.batteryPhases) ? c.batteryPhases : null;
   const manufacturer = String(cfg?.manufacturer || 'victron');
   const battery = resolveBatteryLever(cfg);
