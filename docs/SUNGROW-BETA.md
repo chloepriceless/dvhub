@@ -249,8 +249,10 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   Master- oder Slave-Verbindung; danach beginnt die Frist neu. Im Not-Halt gibt es keinen Eintritt. Im Alleinbetrieb
   versucht DVhub den Slave im Lesetakt des Masters (60 s) erneut, damit ein hängender Slave den Regeltakt nicht
   bremst. Antwortet er, gelten die Stopp-Regeln wie oben. Die Frist lebt nur im Speicher (nach einem Neustart beginnt
-  sie neu). **Nicht für die H-9-Übernahme:** Steht der Master in einem gefundenen Modus 2 ohne DVhub-Besitz, wartet die
-  Übernahme weiter, bis der Slave auf Stopp bestätigt ist (ob die Frist auch dort gelten soll, ist offen). Protokoll
+  sie neu). **Auch für die H-9-Übernahme (Christin 21.11.2026, A12):** Steht der Master in einem gefundenen Modus 2 ohne
+  DVhub-Besitz und ist der Slave unbestätigt, wartet die Übernahme höchstens bis zur Frist; danach übernimmt DVhub den
+  Master mit eigenem Befehl und regelt allein (Notladung: wartet weiter, Not-Halt: nichts). Ein fremdes EMS am Slave
+  zählt bei der Übernahme als unbestätigt. Protokoll
   `sungrow_ems_master_alone_slave_unconfirmed` (warn) beim Wechsel und alle 15 min; Status
   `sungrowEms.decision.masterAlone` (`reason: slave_unconfirmed`, `since`, `slaveUnconfirmedSince`, `afterMin`,
   `error`).

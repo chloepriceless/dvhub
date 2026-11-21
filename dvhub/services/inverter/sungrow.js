@@ -1073,7 +1073,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const adopt = kind === 'adopt';
     const running = kind === 'running';
     if (isSlave || !slaveActuator) return;
-    if (adopt && slaveActuator.ownsControl?.() === true) return;
+    if (adopt && slaveActuator.ownsControl?.() === true) { endMasterAlone(); return; } // DVhubs eigener Befehl (A7)
     // Ohne zweiten WR gibt es keinen Slave: der immer angelegte Slave-Aktuator (schedule-eval.js) fiele sonst auf die
     // Master-Verbindung zurück.
     if (!resolveSecondInverter(getCfg()).enabled) return;
@@ -1127,18 +1127,20 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // Lage „fremd gesteuert" endet mit jedem anderen Ergebnis einer echten Prüfung (nicht im Not-Halt).
       if (ss?.foreign !== true && !ss?.blocked) st.slaveForeignNotified = false;
     }
-    if (ss?.ok === true) { if (!adopt) endMasterAlone(); return; }
+    if (ss?.ok === true) { endMasterAlone(); return; }
     // Notladung, fremdes EMS: kein „Slave unbestätigt" im Sinn der Frist (A7). In der Wartephase beginnt sie danach neu;
     // regelt der Master schon allein, bleibt er es (Fable P3-1: sonst kostete jedes Ende einer Notladung einen Rücktritt,
     // zwei 13050-Writes und neue Wartezeit, obwohl der Slave durchgehend unbestätigt ist). Not-Halt beendet beides.
-    if (!adopt && (ss?.emergency === true || ss?.foreign === true)) {
+    // H-9-Übernahme (A12): Notladung wie oben; ein fremdes EMS zählt dort weiter als „unbestätigt" (bisher wartete die
+    // Übernahme dann endlos — jetzt bis zur Frist).
+    if (ss?.emergency === true || (!adopt && ss?.foreign === true)) {
       if (!st.masterAlone.active) endMasterAlone();
       // Notladung: weiter allein, im Status sichtbar (Review 0abbb847 P3). Fremdes EMS: die Lage bleibt (kein Rücktritt
       // danach), der Status zeigt aber kein „Slave unbestätigt" — der Slave antwortet, gemeldet wird sungrow_ems_slave_foreign
       // (Review 1b28e47c P3).
       else if (ss?.emergency === true) st.masterAlone.at = t;
     }
-    if (!adopt && ss?.blocked) endMasterAlone();
+    if (ss?.blocked) endMasterAlone();
     if (running && ss?.emergency === true) return; // Notladung: kein Write, kein Rücktritt; nach der Notladung stoppen
     // Ein fremdes EMS (VPP) am Slave (Review 156a3e06 P3): DVhub fasst ihn nicht an (S-38), und ein Rücktritt des
     // Masters brächte ihn nicht zur Ruhe — der Master steuert wie bisher allein („nur Master"), gemeldet einmal je Lage.
@@ -1152,8 +1154,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     }
     // A7 (Christin 21.11.2026, Option b): Slave unbestätigt (nicht erreichbar, Rücklesung scheitert) — nach der Frist
     // tritt der Master trotzdem ein bzw. bleibt eingetreten und regelt allein (ein alter Slave-Befehl kann mitlaufen).
-    // Nicht für die H-9-Übernahme, nicht in Notladung (oben: wartet), nicht im Not-Halt.
-    if (!adopt && !ss?.blocked && ss?.emergency !== true && masterAloneDue(t)) {
+    // A12 (Christin 21.11.2026, a): ebenso die H-9-Übernahme eines gefundenen Modus 2 (DVhubs eigener Befehl am Master).
+    // Nicht in Notladung (oben: wartet), nicht im Not-Halt.
+    if (!ss?.blocked && ss?.emergency !== true && masterAloneDue(t)) {
       grantMasterAlone(kind, ss, t);
       return;
     }
@@ -2444,7 +2447,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         st.error = null; publish();
         return { ok: true, unchanged: true, decision };
       }
-      if (adopt) await stopSlaveBeforeTakeover('adopt');
+      if (adopt) await stopSlaveBeforeTakeover('adopt', ctl.modeValue, t);
       else if (dev.mode !== ctl.modeValue) await stopSlaveBeforeTakeover('entry', ctl.modeValue, t);
       const found = adopt ? adoptionFound(dev) : null;
       const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, adopt });

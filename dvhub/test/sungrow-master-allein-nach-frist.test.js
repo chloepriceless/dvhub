@@ -537,15 +537,85 @@ test('P3-4: Wechsel der Master-Verbindung beginnt die Frist neu', async () => {
   assert.equal((await r.minute()).ok, true, 'Minute 19 = 10 min nach dem Wechsel');
 });
 
-test('P3-4: „allein“ gilt nicht für die H-9-Übernahme — gefundener Modus 2 wartet trotz Frist 0', async () => {
-  const r = rig({ masterHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 }, slaveHolding: OLD_CHARGE, slaveMock: unreachable(), aloneAfterMin: 0 });
-  for (let i = 0; i < 3; i += 1) {
+// A12 (Christin 21.11.2026, a): die Frist gilt auch für die H-9-Übernahme (gefundener Modus 2, Slave unbestätigt).
+const FOUND_MODE2 = { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 };
+const adoptedLogs = (r) => r.logs.filter((l) => l.event === 'sungrow_ems_forced_adopted');
+
+test('A12: H-9-Übernahme mit Frist 0 → der Master wird sofort allein übernommen (eigener Befehl), Warnung und Status', async () => {
+  const r = rig({ masterHolding: FOUND_MODE2, slaveHolding: OLD_CHARGE, slaveMock: unreachable(), aloneAfterMin: 0 });
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(masterWrites(r), [`M:${POWER}=5000`, `M:${CMD}=${EMS_CMD.DISCHARGE}`], 'Übernahme per eigenem Write, kein Moduswechsel');
+  assert.equal(adoptedLogs(r).length, 1);
+  assert.equal(aloneLogs(r).length, 1);
+  assert.equal(aloneLogs(r)[0].data.kind, 'adopt');
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone?.reason, 'slave_unconfirmed');
+  assertSafeRegs(r);
+});
+
+test('A12: H-9-Übernahme wartet bis zur Frist (10 min), danach allein; im Betrieb kein Rücktritt', async () => {
+  const r = rig({ masterHolding: FOUND_MODE2, slaveHolding: OLD_CHARGE, slaveMock: unreachable(), aloneAfterMin: 10 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  for (let i = 1; i <= 9; i += 1) assert.equal((await r.minute()).ok, false, `Minute ${i}: Übernahme wartet`);
+  assert.deepEqual(masterWrites(r), [], 'vor Ablauf keine Übernahme');
+  assert.equal((await r.minute()).ok, true, 'Minute 10: Übernahme allein');
+  assert.equal(adoptedLogs(r).length, 1);
+  assert.equal(aloneLogs(r).length, 1);
+  r.order.length = 0;
+  for (let i = 0; i < 5; i += 1) assert.equal((await r.minute()).ok, true);
+  assert.equal(modeWrites(r, EMS_MODE.SELF), 0, `kein Rücktritt: ${r.order}`);
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+});
+
+test('A12: H-9-Übernahme ohne Slave-Werte (Einzelpfad) mit Frist 0 → allein übernommen', async () => {
+  const r = rig({ telemetry: false, masterHolding: FOUND_MODE2, slaveHolding: OLD_CHARGE, slaveMock: unreachable(), aloneAfterMin: 0 });
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(adoptedLogs(r).length, 1);
+  assert.equal(aloneLogs(r).length, 1);
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone?.reason, 'slave_unconfirmed');
+});
+
+test('A12: H-9-Übernahme bei Slave in Notladung → wartet trotz Frist 0, kein Write', async () => {
+  const r = rig({ masterHolding: FOUND_MODE2, slaveHolding: OLD_CHARGE, aloneAfterMin: 0 });
+  r.state.sungrowSecond.runningState = 0x4001;
+  for (let i = 0; i < 5; i += 1) {
     const res = i === 0 ? await r.ems.applySetpoint(-6000, 'rule:abend') : await r.minute();
-    assert.equal(res.ok, false, `Takt ${i}: ${JSON.stringify(res)}`);
+    assert.equal(res.ok, false, `Takt ${i}`);
   }
-  assert.deepEqual(masterWrites(r), [], 'keine Übernahme ohne bestätigten Slave');
+  assert.deepEqual(r.order, []);
   assert.equal(aloneLogs(r).length, 0);
-  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_forced_adopted'));
+  assert.equal(adoptedLogs(r).length, 0);
+});
+
+test('A12: Not-Halt während der Übernahme-Frist → nichts; danach beginnt die Frist neu', async () => {
+  const r = rig({ masterHolding: FOUND_MODE2, slaveHolding: OLD_CHARGE, slaveMock: unreachable(), aloneAfterMin: 2 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  await r.minute();
+  r.state.ctrl.discretionaryWritesPaused = true;
+  r.state.ctrl.pausedAt = 4713;
+  assert.equal((await r.ems.emergencyStop()).reason, 'not_owned', 'nicht übernommener Modus 2 wird nicht angefasst');
+  for (let i = 0; i < 2; i += 1) { assert.equal((await r.minute()).blocked, true); await r.ems.tick(); }
+  assert.deepEqual(r.order, []);
+  r.state.ctrl.discretionaryWritesPaused = false;
+  assert.equal((await r.minute()).ok, false, 'neue Frist');
+  assert.equal((await r.minute()).ok, false);
+  assert.deepEqual(r.order, []);
+  assert.equal((await r.minute()).ok, true, 'nach 2 min allein übernommen');
+  assert.equal(adoptedLogs(r).length, 1);
+});
+
+test('A12: nach der Übernahme allein — der Slave antwortet wieder → alter Befehl gestoppt, „allein“ endet', async () => {
+  const flag = { down: true };
+  const r = rig({ masterHolding: FOUND_MODE2, slaveHolding: OLD_CHARGE, slaveMock: unreachable(flag), aloneAfterMin: 0 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  flag.down = false;
+  r.order.length = 0;
+  assert.equal((await r.minute()).ok, true);
+  assert.deepEqual(slaveWrites(r), [`S:${CMD}=${EMS_CMD.STOP}`]);
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone, undefined);
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
 });
 
 test('P3-4: „allein“ endet, wenn DVhub den Slave wieder führt — danach gilt eine neue Frist (erst Rücktritt)', async () => {
