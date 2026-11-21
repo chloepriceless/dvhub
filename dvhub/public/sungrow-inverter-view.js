@@ -105,6 +105,7 @@
     const d = ems && ems.decision;
     if (!d) return DASH;
     if (d.mode === 'self') return 'Eigenverbrauch';
+    if (d.mode === 'adopt_wait') return 'Übernahme wartet (Slave unbestätigt)';
     if (d.command === 'stop') return 'Zwangs-Stopp';
     const w = num(d.powerW) ? Math.round(Number(d.powerW)) : null;
     const label = d.command === 'charge' ? 'Laden' : d.command === 'discharge' ? 'Entladen' : 'Zwang';

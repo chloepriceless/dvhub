@@ -223,8 +223,8 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   Wiedereintritt nach einem geräteeigenen Rückfall und für External EMS. Steht der Master bei External-Steuerung schon
   in einem gefundenen Modus 2, verlässt DVhub ihn vor dem Warten mit bekannten Writes (Befehl Stopp, Modus 0), damit
   kein unbekannter Befehl ohne Rückfall weiterläuft (Codex-Review 21.11.2026). Sieht DVhub den Slave unter einem
-  fremden EMS, gilt ein früher bestätigter Stopp nicht mehr. Ein dauerhaft nicht erreichbarer zweiter
-  Wechselrichter hält den Eintritt an, bis er antwortet oder aus der Einstellung entfernt ist. Im laufenden Betrieb
+  fremden EMS, gilt ein früher bestätigter Stopp nicht mehr. Ein nicht erreichbarer zweiter
+  Wechselrichter hält den Eintritt höchstens bis zur Frist an (siehe „Master allein nach Frist“). Im laufenden Betrieb
   gilt dasselbe, sobald DVhub den Slave nicht mehr führt (Werte weg, Richtung mit „nur Master“, Strategie umgestellt)
   und sein Stopp nicht bestätigt ist: Stopp setzen, sonst tritt der Master in Modus 0 zurück, bis er bestätigt ist (in
   Notladung kein Write und kein Rücktritt). Ein bestätigter Stopp gilt, bis DVhub dem Slave wieder einen Befehl gibt;
@@ -236,7 +236,31 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   Beim Warten liest DVhub nur im gewöhnlichen Takt. Protokoll: `sungrow_ems_entry_slave_stopped`,
   `sungrow_ems_running_slave_stopped` (im Betrieb gefunden und gestoppt), `sungrow_ems_entry_deferred`,
   `sungrow_ems_slave_unconfirmed_stepback` (alle 15 min wiederholt, solange es wartet);
-  Status `sungrowEms.decision.reason = entry_slave_unconfirmed` mit `since`.
+  Status `sungrowEms.decision.reason = entry_slave_unconfirmed` mit `since` und `masterAloneAt`.
+
+- **Master allein nach Frist (Christin 21.11.2026)** (`sungrow.secondInverter.slaveUnconfirmedMasterAloneAfterMin`,
+  Standard 30 min, 0 = sofort, höchstens 1440): Bleibt der nicht geführte Slave unbestätigt (nicht erreichbar,
+  Rücklesung scheitert), tritt der Master nach der Frist trotzdem ein bzw. bleibt eingetreten und regelt allein. Ein
+  alter Befehl am Slave kann dann mitlaufen. Die Frist läuft ab dem ersten Warten mit diesem Grund (Eintritt
+  zurückgestellt oder Rücktritt), gemessen mit einer monotonen Uhr, ebenso Nachprüfung und Wiederholtakt am Slave (ein
+  Sprung der Systemzeit verkürzt oder verlängert sie nicht und setzt die Prüfung nicht aus). In der Wartephase beginnt sie neu nach mehr als 5 min ohne Prüfung, nach einer Notladung oder einem
+  fremden EMS am Slave. In Notladung des Slave wartet der Eintritt weiter und schreibt nichts; die Notladung zählt nicht
+  zur Frist. Bei fremdem EMS am Slave gilt ohnehin „Master allein“. Regelt der Master einmal allein, bleibt er es,
+  solange der Slave unbestätigt ist, auch nach einer Notladung, einem fremden EMS und Prüfpausen (Master-Lesefehler,
+  ausstehende Freigabe, Modus 0 ohne Sollwert) — ohne Rücktritt und ohne neue Wartezeit. „Allein“ endet, wenn der Stopp
+  bestätigt ist, DVhub den Slave wieder führt oder er DVhubs eigenen Befehl hält, im Not-Halt und beim Wechsel der
+  Master- oder Slave-Verbindung; danach beginnt die Frist neu. Im Not-Halt gibt es keinen Eintritt. Im Alleinbetrieb
+  versucht DVhub den Slave im Lesetakt des Masters (60 s) erneut, damit ein hängender Slave den Regeltakt nicht
+  bremst. Antwortet er, gelten die Stopp-Regeln wie oben. Die Frist lebt nur im Speicher (nach einem Neustart beginnt
+  sie neu). **Auch für die H-9-Übernahme (Christin 21.11.2026, A12):** Steht der Master in einem gefundenen Modus 2 ohne
+  DVhub-Besitz und ist der Slave unbestätigt, wartet die Übernahme höchstens bis zur Frist; danach übernimmt DVhub den
+  Master mit eigenem Befehl und regelt allein (Notladung: wartet weiter, Not-Halt: nichts). Ein fremdes EMS am Slave
+  zählt bei der Übernahme als unbestätigt. Während sie wartet: `sungrowEms.decision.mode = adopt_wait`, Grund
+  `adopt_slave_unconfirmed`, mit `since` und `masterAloneAt`; Warnung `sungrow_ems_adopt_deferred` beim ersten Mal und
+  alle 15 min. Protokoll
+  `sungrow_ems_master_alone_slave_unconfirmed` (warn) beim Wechsel und alle 15 min; Status
+  `sungrowEms.decision.masterAlone` (`reason: slave_unconfirmed`, `since`, `slaveUnconfirmedSince`, `afterMin`,
+  `error`).
 
 - **Abregelung (Negativpreis, Direktvermarkter, Test-Knopf):** Beide Wechselrichter laden und entladen weiter nach
   ihrem Anteil. DVhub regelt die Summe auf den Sollwert, bei Negativpreis auf −40 W. Entladen wird dabei höchstens die
