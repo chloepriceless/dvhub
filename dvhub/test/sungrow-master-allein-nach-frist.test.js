@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { normalizeConfigInput, getConfigDefinition } from '../config-model.js';
-import { createSungrowEms, EMS_CMD, EMS_MODE, wire, sungrowMasterAloneAfterMs } from '../services/inverter/sungrow.js';
+import { createSungrowEms, EMS_CMD, EMS_MODE, wire, sungrowMasterAloneAfterMs, endpointKeyOf } from '../services/inverter/sungrow.js';
 import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
 
 const MODE = wire(13050);
@@ -41,14 +41,14 @@ const aloneLogs = (r) => r.logs.filter((l) => l.event === ALONE);
 // Zwei WR wie in der Laufzeit (wie sungrow-nur-master-slave-altbefehl.test.js), dazu die Frist in der Einstellung.
 function rig({
   controlMode = 'forced', strategy = 'master-only', strategyCharge = strategy, strategyDischarge = strategy, telemetry = true,
-  masterHolding = {}, slaveHolding = {}, slaveInput = {}, slaveMock = {}, aloneAfterMin,
+  masterHolding = {}, slaveHolding = {}, slaveInput = {}, slaveMock = {}, masterMock = {}, aloneAfterMin, separateMono = false,
 } = {}) {
   const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge, strategyDischarge, maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 };
   if (aloneAfterMin !== undefined) secondInverter.slaveUnconfirmedMasterAloneAfterMin = aloneAfterMin;
   const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode, heartbeatTimeoutS: 30, secondInverter }, optimizer: { maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 } });
   const masterImage = sungrowImage({ holding: masterHolding });
   const slaveImage = sungrowImage({ holding: slaveHolding, input: slaveInput });
-  const masterT = mockSungrow(masterImage);
+  const masterT = mockSungrow(masterImage, masterMock);
   const slaveT = mockSungrow(slaveImage, slaveMock);
   const order = [];
   const ctl = { slaveWriteFail: false };
@@ -66,6 +66,9 @@ function rig({
   });
   let clock = 1_000_000;
   const now = () => clock;
+  // Monotone Uhr (Fable P3-2): ab Werk dieselbe wie die Wanduhr; separateMono = eigene, die nur advance() bewegt.
+  let mono = 5_000;
+  const monoNow = separateMono ? () => mono : undefined;
   const state = {
     victron: { errors: {}, fieldUpdatedAt: { batteryPowerW: clock, pvPowerW: clock, selfConsumptionW: clock }, device: sungrowDevice({ bdcRatedW: 10000 }), batteryPowerW: -1000, pvPowerW: 0, selfConsumptionW: 500, soc: 50, sungrowMasterSocPct: 50 },
     meter: { ok: true, updatedAt: clock, grid_total_w: 0 },
@@ -78,9 +81,11 @@ function rig({
     state, getCfg: () => cfg, transport: tap(slaveT, 'S'), pushLog, now, sleep: async () => {},
     statusKey: 'sungrowEmsSlave', isSlave: true, connOverride: () => ({ host: cfg.sungrow.secondInverter.host, port: 502, unitId: 1, timeoutMs: 1500 }),
   });
-  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: tap(masterT, 'M'), pushLog, now, sleep: async () => {}, slaveActuator: slaveEms });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: tap(masterT, 'M'), pushLog, now, sleep: async () => {}, slaveActuator: slaveEms, ...(monoNow ? { monoNow } : {}) });
+  const jumpWall = (ms) => { clock += ms; }; // nur die Wanduhr springt (NTP, Hand-Einstellung)
   const advance = (ms) => {
     clock += ms;
+    mono += ms;
     for (const f of ['batteryPowerW', 'pvPowerW', 'selfConsumptionW']) state.victron.fieldUpdatedAt[f] = clock;
     state.meter.updatedAt = clock;
     if (state.sungrowSecond) state.sungrowSecond.updatedAt = clock;
@@ -89,7 +94,7 @@ function rig({
   // Je Minute ein neuer Sollwert (EOS/Regeln ändern ihn laufend) — jeder Aufruf ist ein Regeltakt.
   let sp = -6000;
   const minute = async () => { advance(MIN); sp = sp === -6000 ? -6200 : -6000; return r.ems.applySetpoint(sp, 'rule:abend'); };
-  const r = { cfg, state, ems, slaveEms, masterT, slaveT, masterImage, slaveImage, logs, order, ctl, advance, minute, now, t0 };
+  const r = { cfg, state, ems, slaveEms, masterT, slaveT, masterImage, slaveImage, logs, order, ctl, advance, jumpWall, minute, now, t0 };
   return r;
 }
 
@@ -442,4 +447,180 @@ test('Schutz: die Frist lebt nur im Speicher — ein frischer Aktuator beginnt n
   assert.equal(res.ok, false, 'nach dem Neustart beginnt die Frist neu');
   assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// --- Fable-Prüfung 5c39c85d (P3) -------------------------------------------------------------------------------------
+
+const modeWrites = (r, value) => r.order.filter((e) => e === `M:${MODE}=${value}`).length;
+
+test('P3-1: im Alleinbetrieb kein Rücktritt nach Ende einer Notladung — flackernde Notladung kostet keine 13050-Writes', async () => {
+  const r = rig({ slaveHolding: OLD_CHARGE, slaveMock: unreachable(), aloneAfterMin: 1 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  assert.equal((await r.minute()).ok, true, 'allein');
+  assert.equal(modeWrites(r, EMS_MODE.FORCED), 1);
+  // 60 min lang Notladung im Minutentakt an/aus, der Slave bleibt unbestätigt (nicht erreichbar).
+  for (let i = 0; i < 60; i += 1) {
+    r.state.sungrowSecond.runningState = i % 2 === 0 ? 0x4001 : 0;
+    assert.equal((await r.minute()).ok, true, `Minute ${i}`);
+  }
+  assert.equal(modeWrites(r, EMS_MODE.SELF), 0, `kein Rücktritt: ${r.order}`);
+  assert.equal(modeWrites(r, EMS_MODE.FORCED), 1, 'kein erneuter Eintritt');
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_slave_unconfirmed_stepback'));
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone?.reason, 'slave_unconfirmed', 'weiter allein');
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone.slaveUnconfirmedSince, r.t0, 'dieselbe Lage seit dem ersten Warten');
+});
+
+test('P3-1: im Alleinbetrieb kein Rücktritt nach einer Prüfpause > 5 min (Master-Lesefehler)', async () => {
+  const flag = { masterDown: false };
+  const r = rig({ telemetry: false, slaveHolding: OLD_CHARGE, slaveMock: unreachable(), aloneAfterMin: 1,
+    masterMock: { onRead: ({ fc, address }) => { if (flag.masterDown && fc === 3 && address === MODE) throw new Error('modbus exception 4'); } } });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  assert.equal((await r.minute()).ok, true, 'allein');
+  flag.masterDown = true;
+  for (let i = 0; i < 7; i += 1) assert.equal((await r.minute()).ok, false, `Master nicht lesbar, Minute ${i}`);
+  flag.masterDown = false;
+  r.order.length = 0;
+  assert.equal((await r.minute()).ok, true, 'nach der Pause weiter allein');
+  assert.equal(modeWrites(r, EMS_MODE.SELF), 0, `kein Rücktritt: ${r.order}`);
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone?.reason, 'slave_unconfirmed');
+});
+
+test('P3-1: Alleinbetrieb, Master fällt danach in Modus 0 (Ziel abgelaufen) → nächster Eintritt sofort allein, ohne neue Frist', async () => {
+  const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 10 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  for (let i = 1; i <= 10; i += 1) await r.minute();
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, 'nach 10 min allein');
+  r.advance(130_000);
+  await r.ems.tick();
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF, 'ohne Sollwert zurück in Modus 0');
+  r.advance(20 * MIN); // lange Pause ohne Prüfung, der Slave bleibt unbestätigt
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true, 'Eintritt sofort allein');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+});
+
+test('P3-4: Wartephase — Lücke > 5 min ohne Prüfung beginnt die Frist neu', async () => {
+  const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 10 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  for (let i = 1; i <= 8; i += 1) await r.minute();
+  r.advance(6 * MIN); // keine Prüfung (kein Takt)
+  const t1 = r.now() + MIN;
+  assert.equal((await r.minute()).ok, false, 'neue Frist');
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAloneAt, t1 + 10 * MIN);
+  for (let i = 1; i <= 9; i += 1) assert.equal((await r.minute()).ok, false, `neue Frist, Minute ${i}`);
+  assert.deepEqual(r.order, []);
+  assert.equal((await r.minute()).ok, true);
+});
+
+test('P3-4: Wechsel der Slave-Verbindung beginnt die Frist neu', async () => {
+  const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 10 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  for (let i = 1; i <= 8; i += 1) await r.minute();
+  r.cfg.sungrow.secondInverter.host = '192.168.68.99'; // anderer Slave, ebenfalls nicht erreichbar
+  if (r.state.sungrowSecond) r.state.sungrowSecond.host = '192.168.68.99';
+  for (let i = 9; i <= 18; i += 1) assert.equal((await r.minute()).ok, false, `Minute ${i}: neue Frist ab Minute 9`);
+  assert.deepEqual(r.order, []);
+  assert.equal((await r.minute()).ok, true, 'Minute 19 = 10 min nach dem Wechsel');
+});
+
+test('P3-4: Wechsel der Master-Verbindung beginnt die Frist neu', async () => {
+  const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 10 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  for (let i = 1; i <= 8; i += 1) await r.minute();
+  r.cfg.victron.host = '192.0.2.51';
+  r.state.victron.device.endpointKey = endpointKeyOf(r.cfg.victron); // der Poller hat das Gerät neu erkannt
+  for (let i = 9; i <= 18; i += 1) assert.equal((await r.minute()).ok, false, `Minute ${i}: neue Frist ab Minute 9`);
+  assert.deepEqual(r.order, []);
+  assert.equal((await r.minute()).ok, true, 'Minute 19 = 10 min nach dem Wechsel');
+});
+
+test('P3-4: „allein“ gilt nicht für die H-9-Übernahme — gefundener Modus 2 wartet trotz Frist 0', async () => {
+  const r = rig({ masterHolding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 }, slaveHolding: OLD_CHARGE, slaveMock: unreachable(), aloneAfterMin: 0 });
+  for (let i = 0; i < 3; i += 1) {
+    const res = i === 0 ? await r.ems.applySetpoint(-6000, 'rule:abend') : await r.minute();
+    assert.equal(res.ok, false, `Takt ${i}: ${JSON.stringify(res)}`);
+  }
+  assert.deepEqual(masterWrites(r), [], 'keine Übernahme ohne bestätigten Slave');
+  assert.equal(aloneLogs(r).length, 0);
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_forced_adopted'));
+});
+
+test('P3-4: „allein“ endet, wenn DVhub den Slave wieder führt — danach gilt eine neue Frist (erst Rücktritt)', async () => {
+  const flag = { down: true };
+  const r = rig({ slaveHolding: {}, slaveMock: unreachable(flag), aloneAfterMin: 1 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  assert.equal((await r.minute()).ok, true, 'allein');
+  // Slave antwortet, die Strategie führt ihn wieder.
+  flag.down = false;
+  r.cfg.sungrow.secondInverter.strategyCharge = 'soc-balance';
+  r.cfg.sungrow.secondInverter.strategyDischarge = 'soc-balance';
+  assert.equal((await r.minute()).ok, true);
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, true, 'geführt');
+  // Ein fremdes EMS übernimmt den Slave (Besitz ohne Stopp abgegeben), danach ist er nicht mehr erreichbar.
+  r.slaveImage.holding.set(MODE, EMS_MODE.VPP);
+  assert.equal((await r.minute()).ok, true);
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, false);
+  flag.down = true;
+  r.order.length = 0;
+  assert.equal((await r.minute()).ok, false, 'neue Frist');
+  assert.equal(modeWrites(r, EMS_MODE.SELF), 1, `Rücktritt statt „allein“ aus der alten Lage: ${r.order}`);
+});
+
+test('P3-4: „allein“ endet bei besessenem Slave — der nächste Eintritt wartet die Frist neu ab', async () => {
+  const r = rig({ strategy: 'soc-balance', slaveHolding: {}, aloneAfterMin: 1 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, true, 'Slave mit DVhubs Befehl');
+  // Master fällt selbst in Modus 0, die Slave-Werte fehlen, der Slave nimmt keinen Write an.
+  r.masterImage.holding.set(MODE, EMS_MODE.SELF);
+  delete r.state.sungrowSecond;
+  r.ctl.slaveWriteFail = true;
+  r.advance(61_000);
+  assert.equal((await r.ems.applySetpoint(-6100, 'rule:abend')).ok, false, 'Rücknahme scheitert → wartet');
+  assert.equal((await r.minute()).ok, true, 'nach 1 min allein eingetreten');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+  assert.equal(r.state.ctrl.sungrowEmsSlave.owns, true, 'Slave weiter besessen');
+  assert.equal((await r.minute()).ok, true, 'Betrieb: besessener Slave → „allein“ endet');
+  // Master fällt wieder selbst in Modus 0 → neue Frist, nicht sofort allein.
+  r.masterImage.holding.set(MODE, EMS_MODE.SELF);
+  r.order.length = 0;
+  r.advance(61_000);
+  assert.equal((await r.ems.applySetpoint(-6200, 'rule:abend')).ok, false, 'neue Frist');
+  assert.equal(modeWrites(r, EMS_MODE.FORCED), 0, `kein sofortiger Eintritt: ${r.order}`);
+});
+
+test('P3-4: „allein“ endet bei frisch bestätigtem Slave-Stopp — danach gilt eine neue Frist', async () => {
+  const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 1 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  assert.equal((await r.minute()).ok, true, 'allein');
+  // Der Stopp wird auf anderem Weg bestätigt (etwa eine Rücknahme am Slave).
+  r.slaveEms._st.stopConfirmed = true;
+  r.slaveEms._st.stopConfirmedAt = r.now();
+  assert.equal((await r.minute()).ok, true);
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone, undefined, '„allein“ vorbei');
+  // Wieder unbekannt (neuer Befehl), Slave nicht erreichbar → neue Frist: Rücktritt.
+  r.slaveEms._st.stopConfirmed = false;
+  r.order.length = 0;
+  assert.equal((await r.minute()).ok, false);
+  assert.equal(modeWrites(r, EMS_MODE.SELF), 1, `Rücktritt: ${r.order}`);
+});
+
+test('P3-2: Frist mit monotoner Uhr — Wanduhr springt vorwärts (+2 h) → die Frist wird nicht kürzer', async () => {
+  const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 10, separateMono: true });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  for (let i = 1; i <= 3; i += 1) await r.minute();
+  r.jumpWall(2 * 60 * MIN);
+  for (let i = 4; i <= 9; i += 1) assert.equal((await r.minute()).ok, false, `Minute ${i}`);
+  assert.deepEqual(r.order, []);
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAloneAt, r.now() + MIN, 'Anzeige: noch 1 min, in Wanduhrzeit');
+  assert.equal((await r.minute()).ok, true, 'Minute 10');
+});
+
+test('P3-2: Frist mit monotoner Uhr — Wanduhr springt rückwärts (−10 min) → die Frist wird nicht länger', async () => {
+  const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 10, separateMono: true });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  for (let i = 1; i <= 3; i += 1) await r.minute();
+  r.jumpWall(-10 * MIN); // Wanduhr jetzt 7 min vor dem ersten Warten
+  for (let i = 4; i <= 9; i += 1) assert.equal((await r.minute()).ok, false, `Minute ${i}`);
+  assert.equal((await r.minute()).ok, true, 'Minute 10 (Wanduhr: erst 0 min seit dem ersten Warten)');
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
 });
