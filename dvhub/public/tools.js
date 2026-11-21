@@ -503,7 +503,7 @@ async function triggerHistoryBackfill(mode = 'gap') {
 const DV_SIGNAL_TYPES = new Set([
   'ctrl_off', 'ctrl_on', 'ctrl_lease_expired',
   'dv_victron_write', 'dv_victron_write_error',
-  'modbus_fc6', 'modbus_fc16',
+  'modbus_fc6', 'modbus_fc16', 'modbus_write_rejected_nothalt',
   'negative_price_protection_on', 'negative_price_protection_off',
   'control_write', 'sma_plan_applied',
   'schedule_auto_disabled', 'schedule_stop_soc_reached'
@@ -517,6 +517,7 @@ const DV_SIGNAL_LABELS = {
   dv_victron_write_error: 'Victron Write Fehler',
   modbus_fc6: 'Modbus FC6 Write',
   modbus_fc16: 'Modbus FC16 Write',
+  modbus_write_rejected_nothalt: 'Modbus Write abgelehnt (Not-Halt)',
   negative_price_protection_on: 'Negativpreis-Schutz AN',
   negative_price_protection_off: 'Negativpreis-Schutz AUS',
   control_write: 'Setpoint Write',
@@ -528,7 +529,7 @@ const DV_SIGNAL_LABELS = {
 const DV_SIGNAL_FILTER_MAP = {
   all: null,
   ctrl: ['ctrl_off', 'ctrl_on', 'ctrl_lease_expired', 'negative_price_protection_on', 'negative_price_protection_off'],
-  modbus: ['modbus_fc6', 'modbus_fc16', 'control_write'],
+  modbus: ['modbus_fc6', 'modbus_fc16', 'modbus_write_rejected_nothalt', 'control_write'],
   victron: ['dv_victron_write', 'dv_victron_write_error'],
   sma: ['sma_plan_applied', 'schedule_auto_disabled', 'schedule_stop_soc_reached']
 };
