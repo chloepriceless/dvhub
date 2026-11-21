@@ -239,11 +239,18 @@ gehen an beide (13051/13052), der Modus 13050 nur an den Master.
   Standard 30 min, 0 = sofort, höchstens 1440): Bleibt der nicht geführte Slave unbestätigt (nicht erreichbar,
   Rücklesung scheitert), tritt der Master nach der Frist trotzdem ein bzw. bleibt eingetreten und regelt allein. Ein
   alter Befehl am Slave kann dann mitlaufen. Die Frist läuft ab dem ersten Warten mit diesem Grund (Eintritt
-  zurückgestellt oder Rücktritt). In Notladung des Slave wartet der Master weiter und schreibt nichts; die Notladung
-  zählt nicht zur Frist. Bei fremdem EMS am Slave gilt ohnehin „Master allein“. Im Not-Halt gibt es keinen Eintritt;
-  danach beginnt die Frist neu. Im Alleinbetrieb versucht DVhub den Slave im Lesetakt des Masters (60 s) erneut,
-  damit ein hängender Slave den Regeltakt nicht bremst. Antwortet er wieder, gelten die Stopp-Regeln wie oben, und
-  die Frist beginnt neu. Sie lebt nur im Speicher (nach einem Neustart beginnt sie neu). Protokoll
+  zurückgestellt oder Rücktritt), gemessen mit einer monotonen Uhr (ein Sprung der Systemzeit verkürzt oder verlängert
+  sie nicht). In der Wartephase beginnt sie neu nach mehr als 5 min ohne Prüfung, nach einer Notladung oder einem
+  fremden EMS am Slave. In Notladung des Slave wartet der Eintritt weiter und schreibt nichts; die Notladung zählt nicht
+  zur Frist. Bei fremdem EMS am Slave gilt ohnehin „Master allein“. Regelt der Master einmal allein, bleibt er es,
+  solange der Slave unbestätigt ist, auch nach einer Notladung, einem fremden EMS und Prüfpausen (Master-Lesefehler,
+  ausstehende Freigabe, Modus 0 ohne Sollwert) — ohne Rücktritt und ohne neue Wartezeit. „Allein“ endet, wenn der Stopp
+  bestätigt ist, DVhub den Slave wieder führt oder er DVhubs eigenen Befehl hält, im Not-Halt und beim Wechsel der
+  Master- oder Slave-Verbindung; danach beginnt die Frist neu. Im Not-Halt gibt es keinen Eintritt. Im Alleinbetrieb
+  versucht DVhub den Slave im Lesetakt des Masters (60 s) erneut, damit ein hängender Slave den Regeltakt nicht
+  bremst. Antwortet er, gelten die Stopp-Regeln wie oben. Die Frist lebt nur im Speicher (nach einem Neustart beginnt
+  sie neu). **Nicht für die H-9-Übernahme:** Steht der Master in einem gefundenen Modus 2 ohne DVhub-Besitz, wartet die
+  Übernahme weiter, bis der Slave auf Stopp bestätigt ist (ob die Frist auch dort gelten soll, ist offen). Protokoll
   `sungrow_ems_master_alone_slave_unconfirmed` (warn) beim Wechsel und alle 15 min; Status
   `sungrowEms.decision.masterAlone` (`reason: slave_unconfirmed`, `since`, `slaveUnconfirmedSince`, `afterMin`,
   `error`).
