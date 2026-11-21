@@ -1240,14 +1240,17 @@ test('Dauer-Forced B3: Wiedereintritt nach Selbst-Rückfall; >6/Stunde → Modus
   assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_reentry_rate'), 'Warnung zur Wiedereintritt-Rate');
 });
 
-test('Dauer-Forced B1: fremder Modus 2 (DVhub besitzt ihn nicht) wird nicht übersteuert', async () => {
+// H-9 (Christin 17.11.2026, bestätigt 20.11.2026) kehrt B1 um: ein nicht besessener Modus 2 wird nicht mehr als fremd
+// stehen gelassen, sondern mit DVhubs eigenem Befehl übernommen (Details: test/sungrow-h9-modus2-uebernehmen.test.js).
+test('Dauer-Forced B1 → H-9: nicht besessener Modus 2 wird mit DVhubs eigenem Befehl übernommen (kein Moduswrite)', async () => {
   const r = rig({ controlMode: 'forced', over: { holding: { [MODE]: EMS_MODE.FORCED, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 3000 } } });
   const res = await r.ems.applySetpoint(-5000, 'rule:abend');
-  assert.equal(res.ok, false);
-  assert.deepEqual(r.t.writes, [], 'kein Write auf ein fremdes EMS');
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.deepEqual(r.t.writes.map((w) => [w.address, w.value]), [[POWER, 4000], [CMD, EMS_CMD.DISCHARGE]]);
   assert.equal(r.image.holding.get(MODE), EMS_MODE.FORCED);
-  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_foreign_mode'));
-  assert.equal(r.state.ctrl.sungrowEms.owns, false);
+  assert.ok(!r.logs.some((l) => l.event === 'sungrow_ems_foreign_mode'));
+  assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_forced_adopted'));
+  assert.equal(r.state.ctrl.sungrowEms.owns, true);
 });
 
 test('Aktuator: gleicher Sollwert im Takt nur nachgeführt, kleine Änderung (< 100 W) ohne Write', async () => {
