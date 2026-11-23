@@ -101,3 +101,18 @@ for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], 
       });
     });
 }
+
+test('echte TimescaleDB (timescale): pausierter Kompressions-Job → Hinweis „pausiert“ (Codex 949b20f2)',
+  { skip: process.env.DVHUB_TEST_PG_URL ? false : 'DVHUB_TEST_PG_URL nicht gesetzt' }, async () => {
+    await withFreshDb(process.env.DVHUB_TEST_PG_URL, async (pool) => {
+      await seed(pool);
+      const warn = {};
+      const g = createStorageGuard({ getDb: () => pool, setWarning: (id, m) => { warn[id] = m; } });
+      await g.checkCompression();
+      assert.equal(warn[COMPRESSION_WARNING_ID] ?? null, null, 'Regel aus 014 eingeplant');
+      await pool.query(`SELECT alter_job(job_id, scheduled => false) FROM timescaledb_information.jobs
+        WHERE proc_name = 'policy_compression' AND hypertable_name = 'timeseries_samples'`);
+      await g.checkCompression();
+      assert.match(warn[COMPRESSION_WARNING_ID], /nicht eingerichtet oder pausiert/);
+    });
+  });

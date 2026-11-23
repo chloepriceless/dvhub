@@ -59,7 +59,7 @@ const REASON_TEXT = Object.freeze({
   apache: 'TimescaleDB läuft in der Apache-Edition, die keine Kompression kann',
   no_hypertable: 'die Messwert-Tabelle ist nicht für TimescaleDB eingerichtet',
   not_enabled: 'die Kompression ist für die Messwerte ausgeschaltet',
-  no_policy: 'es ist keine automatische Kompression eingerichtet',
+  no_policy: 'die automatische Kompression ist nicht eingerichtet oder pausiert',
   job_failing: 'die automatische Kompression scheitert seit mehreren Tagen',
   compress_failed: 'das Komprimieren ist gescheitert',
   tuning_error: 'die Kompression ließ sich nicht einrichten',
@@ -79,11 +79,11 @@ export async function probeCompression(query) {
   if (edition !== 'timescale') return { timescale: true, edition, usable: false, reason: 'apache' };
   const h = (await query(`SELECT h.compression_enabled AS on,
       (SELECT count(*) FROM timescaledb_information.jobs j
-        WHERE j.proc_name = 'policy_compression' AND j.hypertable_name = 'timeseries_samples') AS policies,
+        WHERE j.proc_name = 'policy_compression' AND j.hypertable_name = 'timeseries_samples' AND j.scheduled) AS policies,
       (SELECT bool_or(s.last_run_status = 'Failed'
                       AND (s.last_successful_finish IS NULL OR s.last_successful_finish < now() - INTERVAL '3 days'))
          FROM timescaledb_information.job_stats s JOIN timescaledb_information.jobs j USING (job_id)
-        WHERE j.proc_name = 'policy_compression' AND j.hypertable_name = 'timeseries_samples') AS failing
+        WHERE j.proc_name = 'policy_compression' AND j.hypertable_name = 'timeseries_samples' AND j.scheduled) AS failing
     FROM timescaledb_information.hypertables h WHERE h.hypertable_name = 'timeseries_samples'`)).rows?.[0];
   if (!h) return { timescale: true, edition, usable: false, reason: 'no_hypertable' };
   if (h.on !== true) return { timescale: true, edition, usable: false, reason: 'not_enabled' };
@@ -256,6 +256,10 @@ export function createStorageGuard({
       const totalMb = primary ? primary.totalMb : null;
       const freePct = primary && Number.isFinite(primary.freePct) ? primary.freePct : NaN;
       const level = storageLevel(freePct);
+      // Genug Platz: die Wache komprimiert nicht selbst, das macht der Job. Ein
+      // früheres Scheitern von compress_chunk gilt dann nicht mehr — sonst bliebe
+      // der rote Hinweis bis zum Neustart stehen (Codex 949b20f2).
+      if ((level === 'ok' || level === 'unbekannt') && compressFail) compressFail = null;
       const out = {
         at: new Date(now()).toISOString(), dir, freePct, freeMb, totalMb, level, dbMb: null, actions: [], compression: null,
         mounts: mounts.map((m) => ({ ...m, level: storageLevel(m.freePct) })),

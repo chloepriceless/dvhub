@@ -5801,11 +5801,13 @@ export function createApiRoutes(ctx) {
     if (url.pathname === '/api/storage/status' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
       // compression: Prüfung der Wache (auch vor dem ersten Lauf); timescaleTuning: Ergebnis beim Start.
+      // Im getrennten Betrieb läuft die Wache im Runtime-Prozess → Stand aus dem Schnappschuss.
+      const rs = ctx.storageGuard ? null : (state.storageRuntime || null);
       return json(res, 200, {
         ok: true,
-        ...(ctx.storageGuard?.status?.() || { level: 'unbekannt' }),
-        compression: ctx.storageGuard?.compressionStatus?.() ?? null,
-        timescaleTuning: state.timescaleTuning ?? null,
+        ...((ctx.storageGuard ? ctx.storageGuard.status?.() : rs?.status) || { level: 'unbekannt' }),
+        compression: (ctx.storageGuard ? ctx.storageGuard.compressionStatus?.() : rs?.compression) ?? null,
+        timescaleTuning: state.timescaleTuning ?? rs?.timescaleTuning ?? null,
       });
     }
 

@@ -32,7 +32,8 @@ import {
 import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-commands.js';
 import {
   buildRuntimeSnapshot,
-  applyRuntimeEosRun
+  applyRuntimeEosRun,
+  applyRuntimeStorage
 } from './runtime-state.js';
 import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker, createRuntimeCommandClient, attachRuntimeCommandServer } from './runtime-worker-protocol.js';
 import { createDirectNotifier, notifyDirectHandler } from './services/notifications/direct-relay.js';
@@ -928,7 +929,16 @@ function buildCurrentRuntimeSnapshot() {
     historyImport: historyImportManager ? historyImportManager.getStatus() : null,
     vpn: state.vpn,
     eosRun: state.optimizer?.eosRun || null,
-    eosPriceTail: state.optimizer?.eosPriceTail || null
+    eosPriceTail: state.optimizer?.eosPriceTail || null,
+    // Nur der Prozess mit der Platz-Wache meldet ihren Stand (Codex 949b20f2).
+    ...(ctx.storageGuard ? {
+      storage: {
+        status: ctx.storageGuard.status?.() || null,
+        compression: ctx.storageGuard.compressionStatus?.() || null,
+        timescaleTuning: state.timescaleTuning || null,
+        warnings: state.systemWarnings,
+      },
+    } : {})
   });
 }
 
@@ -1120,6 +1130,8 @@ function startDedicatedRuntimeWorker() {
       runtimeWorkerSnapshot = message.snapshot;
       // Laufdauer und Steuerzeitraum des EOS-Plans für /api/eos/plan.
       applyRuntimeEosRun(state, message.snapshot);
+      // Platz-Wache: Status und Hinweise für /api/storage/status und /api/status.
+      applyRuntimeStorage(state, message.snapshot);
       runtimeWorkerStatusPayload = message.status || null;
       runtimeWorkerHeartbeatAt = Date.now();
       return;

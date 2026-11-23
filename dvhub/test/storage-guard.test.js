@@ -178,7 +178,7 @@ test('Ohne Kompression bei genug Platz: roter Hinweis trotzdem, nichts gelöscht
     [{ license: 'apache' }, /Apache-Edition/],
     [{ hypertable: false }, /nicht für TimescaleDB eingerichtet/],
     [{ compressionOn: false }, /Kompression ist für die Messwerte ausgeschaltet/],
-    [{ policies: 0 }, /keine automatische Kompression/],
+    [{ policies: 0 }, /automatische Kompression ist nicht eingerichtet oder pausiert/],
     [{ failing: true }, /scheitert seit mehreren Tagen/],
   ]) {
     const db = fakeDb(opts); const warn = {};
@@ -247,4 +247,25 @@ test('Statusdatei der Nachrüstung (nativ) fließt in den Hinweis ein', async ()
     },
   }).check();
   assert.match(warn[COMPRESSION_WARNING_ID], /am 22\.11\.2026 ist gescheitert: kein Paket für forky/);
+});
+
+// Codex 949b20f2 (P2): ein pausierter Job (alter_job scheduled => false) zählt nicht als Regel.
+test('Probe zählt nur eingeplante Kompressions-Jobs', async () => {
+  const db = fakeDb();
+  await createStorageGuard({ getDb: () => db, statfs: stat(60) }).checkCompression();
+  const q = db.calls.find(([s]) => s.includes('timescaledb_information.hypertables'))[0];
+  assert.equal((q.match(/AND j\.scheduled/g) || []).length, 2, 'Regel und Fehler-Prüfung nur für eingeplante Jobs');
+});
+
+// Codex 949b20f2 (P2): nach einem Scheitern bei wenig Platz, dann wieder genug Platz → Hinweis weg.
+test('compress_chunk-Fehler verfällt, sobald wieder genug Platz ist (der Job komprimiert)', async () => {
+  const db = fakeDb({ compressThrows: 'Sperre', oldestDays: 20 });
+  let pct = 15; const warn = {};
+  const g = createStorageGuard({ getDb: () => db, statfs: () => stat(pct)(), setWarning: (id, m) => { warn[id] = m; } });
+  await g.check();
+  assert.match(warn[COMPRESSION_WARNING_ID], /gescheitert/);
+  pct = 60;
+  const r = await g.check();
+  assert.equal(r.level, 'ok');
+  assert.equal(warn[COMPRESSION_WARNING_ID], null);
 });
