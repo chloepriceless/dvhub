@@ -89,8 +89,8 @@ const close = (actual, expected, msg, eps = 0.011) => {
   assert.ok(Math.abs(actual - expected) <= eps, `${msg}: ${actual} statt ${expected}`);
 };
 
-test('Ablage-Version 9 (dynamischer Tarif, ungerundete Flüsse)', () => {
-  assert.equal(SUMMARY_CACHE_VERSION, 9);
+test('Ablage-Version 10 (dynamischer Tarif, §14a im Festpreis-Vergleich)', () => {
+  assert.equal(SUMMARY_CACHE_VERSION, 10);
 });
 
 test('März mit Tarifwechsel am 15. und Sommerzeit: Ø, Börse, Aufschlag, Formel, Grundgebühr, Vergleich', async () => {
@@ -344,4 +344,48 @@ test('API: Zusammenfassung mit ?estimated, /api/history/tariff-scatter mit Klass
   const year = await api.getTariffScatter({ view: 'year', date: '2026-03-01' });
   assert.equal(year.body.points, null);
   assert.equal(year.body.bins.length, 4);
+});
+
+test('T11: §14a-Fenster im Festpreis-Vergleich, „ohne §14a“ für dynamisch und Festpreis; nur wo §14a aktiv war', async () => {
+  const store = makeStore({ fromUtc: '2026-05-31T22:00:00.000Z', toUtc: '2026-06-14T22:00:00.000Z' });
+  const DYN = { energyMarkupCtKwh: 0, gridChargesCtKwh: 10, leviesAndFeesCtKwh: 2, vatPct: 19 };
+  const pricing = {
+    mode: 'dynamic', validFrom: '2026-01-01', fixedGrossImportCtKwh: 30, comparisonFixedCtKwh: 30, dynamicComponents: DYN,
+    usesParagraph14aModule3: true,
+    module3Windows: { window1: { enabled: true, label: 'NT', start: '00:00', end: '06:00', priceCtKwh: 3 } },
+    // Zweite Woche: Zeitraum ohne §14a.
+    periods: [{ id: 'ohne', label: 'ohne §14a', startDate: '2026-06-08', endDate: '2026-06-14', mode: 'dynamic', dynamicComponents: DYN, usesParagraph14aModule3: false }]
+  };
+  const runtime = runtimeFor(store, pricing);
+  const k = (await runtime.getSummary({ view: 'week', date: '2026-06-03' }));
+  const t = k.kpis.tariff;
+  // Unabhängig: Fenster 0–6 Uhr Berlin (Sommer: 22–04 UTC), δ = 3 − 10·1,19 = −8,90 ct.
+  const berlinHour = (ts) => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hour: '2-digit', hourCycle: 'h23' }).format(new Date(ts)));
+  let actual = 0; let fixedWith = 0; let fixedWithout = 0; let actualWithout = 0; let m3Kwh = 0; let m3Slots = 0;
+  for (const s of store.slots) {
+    const d = berlinDate(s.ts);
+    if (d < '2026-06-01' || d > '2026-06-07') continue;
+    const spot = spotDefault(Date.parse(s.ts));
+    const inWindow = berlinHour(s.ts) < 6;
+    const p = inWindow ? Math.round(((spot + 2) * 1.19 + 3) * 100) / 100 : Math.round((spot + 12) * 119) / 100;
+    const delta = inWindow ? 3 - 11.9 : 0;
+    actual += s.importKwh * p; fixedWith += s.importKwh * (30 + delta); fixedWithout += s.importKwh * 30;
+    actualWithout += s.importKwh * (p - delta);
+    if (inWindow) { m3Kwh += s.importKwh; m3Slots += 1; }
+  }
+  close(t.fixedCompare.actualEur, actual / 100, 'bezahlt');
+  close(t.fixedCompare.fixedEur, fixedWith / 100, 'Festpreis mit §14a');
+  close(t.fixedCompare.withoutP14a.fixedEur, fixedWithout / 100, 'Festpreis ohne §14a');
+  close(t.fixedCompare.withoutP14a.actualEur, actualWithout / 100, 'dynamisch ohne §14a');
+  assert.equal(t.p14a.slots, m3Slots);
+  close(t.p14a.importKwh, m3Kwh, 'Bezug im Fenster');
+  close(t.p14a.savedDynamicEur, (m3Kwh * 8.9) / 100, '§14a-Effekt dynamisch');
+  assert.equal(t.fixedCompare.ctKwh, 30);
+  // Die Felder aus feat/arbeitspreis-vergleich rechnen dasselbe.
+  assert.equal(k.kpis.fixedCompareSavingsEur, t.fixedCompare.savingsEur);
+  // Zeitraum ohne §14a: kein Block, Vergleich ohne Abweichung.
+  const off = (await runtime.getSummary({ view: 'week', date: '2026-06-10' })).kpis.tariff;
+  assert.equal(off.p14a, null);
+  assert.equal(off.fixedCompare.withoutP14a, null);
+  assert.equal(off.fixedCompare.ctKwhWithP14a, 30);
 });

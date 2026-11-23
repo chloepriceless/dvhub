@@ -113,7 +113,9 @@ test('describeUserImportTariffForSlot: Tarif, Zeitraum, Modul-3-Fenster, MwSt, G
   const inPeriodWindow = describeUserImportTariffForSlot('2026-03-10T00:15:00.000Z', pricing);
   assert.deepEqual(inPeriodWindow, {
     mode: 'dynamic', tariffKey: 'period:dyn', tariffLabel: 'Tibber', vatPct: 7, baseFeeEurMonth: 6,
-    windowId: 'window1', windowLabel: 'Niedrig', beforeValidFrom: false
+    windowId: 'window1', windowLabel: 'Niedrig', module3Active: true,
+    // T11: Fenster 2 ct − Netzentgelt 10 ct × 1,07 = −8,70 ct.
+    module3DeltaCtKwh: -8.7, beforeValidFrom: false
   });
   const base = describeUserImportTariffForSlot(noonUtc('2026-11-10'), pricing);
   assert.equal(base.tariffKey, 'base');
@@ -161,4 +163,31 @@ test('resolveComparisonBaseFeeForDate: eigenes Feld, sonst Gebühr des Vergleich
   // Eigener Vergleichs-Festpreis ohne eigene Gebühr: kein Zeitraum maßgeblich.
   assert.equal(resolveComparisonBaseFeeForDate('2026-05-01', { periods, comparisonFixedCtKwh: 28 }), null);
   assert.equal(resolveComparisonBaseFeeForDate('2026-05-01', { periods: [] , fixedGrossImportCtKwh: 30 }), null);
+});
+
+test('T11: describeUserImportTariffForSlot liefert die Netzentgelt-Abweichung des §14a-Fensters', () => {
+  const pricing = {
+    mode: 'dynamic', validFrom: '2026-01-01', fixedGrossImportCtKwh: 30,
+    dynamicComponents: { energyMarkupCtKwh: 0, gridChargesCtKwh: 10, leviesAndFeesCtKwh: 2, vatPct: 19 },
+    usesParagraph14aModule3: true,
+    module3Windows: { window1: { enabled: true, label: 'NT', start: '00:00', end: '06:00', priceCtKwh: 3 } },
+    periods: [{ id: 'ohne', startDate: '2026-02-01', endDate: '2026-02-28', mode: 'dynamic', usesParagraph14aModule3: false,
+      dynamicComponents: { energyMarkupCtKwh: 0, gridChargesCtKwh: 10, leviesAndFeesCtKwh: 2, vatPct: 19 } }]
+  };
+  // 01:00 Berlin im Januar = 00:00 UTC: im Fenster, δ = 3 − 10·1,19 = −8,90.
+  const inWindow = describeUserImportTariffForSlot('2026-01-10T00:00:00.000Z', pricing);
+  assert.equal(inWindow.module3Active, true);
+  assert.equal(Math.round(inWindow.module3DeltaCtKwh * 100) / 100, -8.9);
+  const outside = describeUserImportTariffForSlot('2026-01-10T11:00:00.000Z', pricing);
+  assert.equal(outside.module3Active, false);
+  assert.equal(outside.module3DeltaCtKwh, null);
+  // Zeitraum ohne §14a: kein Fenster, keine Abweichung.
+  const period = describeUserImportTariffForSlot('2026-02-10T00:00:00.000Z', pricing);
+  assert.equal(period.module3Active, false);
+  // Vor „gilt ab“ nie.
+  assert.equal(describeUserImportTariffForSlot('2025-12-10T00:00:00.000Z', pricing).module3Active, false);
+  // Anbieter ohne Netzentgelt: Fenster aktiv, Abweichung unbekannt.
+  const provider = describeUserImportTariffForSlot('2026-01-10T00:00:00.000Z', { ...pricing, mode: 'provider', dynamicComponents: { vatPct: 19 } });
+  assert.equal(provider.module3Active, true);
+  assert.equal(provider.module3DeltaCtKwh, null);
 });

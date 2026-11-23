@@ -704,7 +704,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 //                 Monatszeilen in „Alle“) und Standard-Tarif „gilt ab“.
 // 9 (23.11.2026): Tarif-Summen aus ungerundeten Flüssen (Codex 1e1ff5c4) — ein
 //                 Zwischenstand mit Version 8 hätte die gerundeten behalten.
-export const SUMMARY_CACHE_VERSION = 9;
+// 10 (23.11.2026): §14a-Fenster im Festpreis-Vergleich und „ohne §14a“ (T11).
+export const SUMMARY_CACHE_VERSION = 10;
 
 // Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;
@@ -1886,7 +1887,7 @@ export function createHistoryRuntime({
     // Preislogik hängt nur am lokalen Tag (Zeiträume sind tageweise) — je Tag
     // einmal auflösen statt je Viertelstunde.
     const tariffModeByDate = new Map();
-    function tariffCompareForSlot(slot, userImportPriceCtKwh, marketPriceCtKwh) {
+    function tariffCompareForSlot(slot, userImportPriceCtKwh, marketPriceCtKwh, desc = null) {
       const localDate = localDateString(slot.ts);
       let mode = tariffModeByDate.get(localDate);
       if (mode === undefined) {
@@ -1910,7 +1911,9 @@ export function createHistoryRuntime({
         fixedCompareKey: cmp ? cmp.key : null,
         fixedCompareImportKwh: cmp ? importKwh : 0,
         fixedCompareActualCtTotal: cmp ? importKwh * userImportPriceCtKwh : 0,
-        fixedCompareFixedCtTotal: cmp ? importKwh * cmp.ctKwh : 0
+        // T11: im aktiven §14a-Fenster hätte auch der Festpreis-Tarif die
+        // Netzentgelt-Abweichung gehabt (F + δ, gleiche Mengen).
+        fixedCompareFixedCtTotal: cmp ? importKwh * (cmp.ctKwh + (desc?.module3Active && Number.isFinite(desc.module3DeltaCtKwh) ? desc.module3DeltaCtKwh : 0)) : 0
       };
     }
 
@@ -1937,8 +1940,7 @@ export function createHistoryRuntime({
       }
       return info;
     }
-    function tariffFieldsForSlot(slot, userImportPriceCtKwh, tariffCompare) {
-      const desc = describeUserImportTariffForSlot(slot.ts, pricingConfig);
+    function tariffFieldsForSlot(slot, userImportPriceCtKwh, tariffCompare, desc) {
       const day = tariffDayInfo(localDateString(slot.ts), desc);
       let priceSource = desc.mode === 'dynamic' ? 'tariff' : (desc.mode === 'fixed' ? 'fixed' : null);
       if (desc.mode === 'provider') {
@@ -1961,6 +1963,8 @@ export function createHistoryRuntime({
         tariffCompareDay: day.tariffCompareDay,
         tariffCompareFeeEurDay: day.tariffCompareFeeEurDay,
         tariffCompareCtKwh: priced ? day.tariffCompareCtKwh : null,
+        tariffM3Active: desc.module3Active,
+        tariffM3DeltaCtKwh: desc.module3DeltaCtKwh,
         // Ungerundete Flüsse für Gewichte und Eigenverbrauch (Codex 39d05c79);
         // die Slot-Felder rundet enrichSlot auf 2 Stellen.
         tariffFlows: tariffFlowsOf(slot)
@@ -1977,8 +1981,9 @@ export function createHistoryRuntime({
         }, pricingConfig);
         const monthKey = localMonthString(slot.ts);
         const monthlyMarketValueCtKwh = Number(solarMarketValueMonthlyCtKwhByMonth?.[monthKey]);
-        const tariffCompare = tariffCompareForSlot(slot, userImportPriceCtKwh, marketPriceCtKwh);
-        const tariffFields = tariffFieldsForSlot(slot, userImportPriceCtKwh, tariffCompare);
+        const tariffDesc = describeUserImportTariffForSlot(slot.ts, pricingConfig);
+        const tariffCompare = tariffCompareForSlot(slot, userImportPriceCtKwh, marketPriceCtKwh, tariffDesc);
+        const tariffFields = tariffFieldsForSlot(slot, userImportPriceCtKwh, tariffCompare, tariffDesc);
         const shares = proportionalSourceShares(slot);
         const flowValues = {
           solarDirectUseKwh: round2(Number(slot.solarDirectUseKwh || 0)),

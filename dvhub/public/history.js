@@ -2702,6 +2702,27 @@ function renderTariffExtras(summary) {
   }
   setText('historyTariffCompareFee', feeCompare);
 
+  // §14a Modul 3 im Vergleich (T11): nur wenn im Zeitraum ein Fenster aktiv war.
+  const p14a = t.p14a && Number(t.p14a.slots || 0) > 0 ? t.p14a : null;
+  const without = t.fixedCompare?.withoutP14a || null;
+  setHidden('historyTariffP14aRow', !p14a);
+  setHidden('historyTariffP14aWithoutRow', !(p14a && without));
+  setText('historyTariffP14aSaved', p14a
+    ? `dynamisch ${eurOrDash(p14a.savedDynamicEur)} · Festpreis ${eurOrDash(p14a.savedFixedEur)} (${fmtKwh(p14a.importKwh)} im Fenster)`
+    : '-');
+  setText('historyTariffP14aWithout', p14a && without
+    ? `dynamisch ${fmtEur(without.actualEur)} · Festpreis ${fmtEur(without.fixedEur)} → ${tariffSavingsText(without.savingsEur)}`
+    : '-');
+  const p14aHints = [];
+  if (p14a && t.fixedCompare && hasFiniteNumber(t.fixedCompare.ctKwhWithP14a) && hasFiniteNumber(t.fixedCompare.ctKwh)) {
+    p14aHints.push(`Festpreis mit denselben §14a-Fenstern: Ø ${fmtCt(t.fixedCompare.ctKwhWithP14a)} statt ${fmtCt(t.fixedCompare.ctKwh)}.`);
+  }
+  if (t.p14a && Number(t.p14a.unknownSlots || 0) > 0) {
+    p14aHints.push(`${Number(t.p14a.unknownSlots).toLocaleString('de-DE')} Viertelstunden im §14a-Fenster ohne Netzentgelt im Tarif – dort ohne Abweichung gerechnet.`);
+  }
+  setText('historyTariffP14aHint', p14aHints.join(' '));
+  setHidden('historyTariffP14aHint', p14aHints.length === 0);
+
   // Geschätzte Anbieter-Endpreise (T3): mitgezählt, Anteil sichtbar, Schalter.
   const estSlots = Number(t.estimatedSlots || 0);
   setHidden('historyTariffEstimatedRow', estSlots === 0 && !t.excludeEstimated);

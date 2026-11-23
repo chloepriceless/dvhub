@@ -64,7 +64,7 @@ test('Ø-Bezugspreis mengengewichtet, Ø je Viertelstunde, Ø Börse, Aufschlag 
   assert.equal(row.estimatedImportKwh, 2);
   assert.equal(row.estimatedSharePct, 33.33);
   // Festpreis 30 ct auf 6 kWh = 1,80 €, bezahlt 1,00 € → 0,80 € gespart.
-  assert.deepEqual(row.fixedCompare, { slots: 4, importKwh: 6, ctKwh: 30, actualEur: 1, fixedEur: 1.8, savingsEur: 0.8 });
+  assert.deepEqual(row.fixedCompare, { slots: 4, importKwh: 6, ctKwh: 30, ctKwhWithP14a: 30, actualEur: 1, fixedEur: 1.8, savingsEur: 0.8, withoutP14a: null });
 });
 
 test('Schalter „ohne geschätzte Preise“ rechnet Ø und Vergleich ohne sie', () => {
@@ -77,7 +77,7 @@ test('Schalter „ohne geschätzte Preise“ rechnet Ø und Vergleich ohne sie',
   assert.equal(row.avgMarkupCtKwh, 13.5);
   // Anteil der geschätzten bleibt sichtbar.
   assert.equal(row.estimatedSharePct, 33.33);
-  assert.deepEqual(row.fixedCompare, { slots: 3, importKwh: 4, ctKwh: 30, actualEur: 0.5, fixedEur: 1.2, savingsEur: 0.7 });
+  assert.deepEqual(row.fixedCompare, { slots: 3, importKwh: 4, ctKwh: 30, ctKwhWithP14a: 30, actualEur: 0.5, fixedEur: 1.2, savingsEur: 0.7, withoutP14a: null });
 });
 
 test('Grundgebühr tageweise, getrennt vom Ø-Arbeitspreis; Vergleich mit Grundgebühr (T5)', () => {
@@ -343,4 +343,54 @@ test('Summen ohne Grundgebühr (Viertelstunden-Zeilen) melden keine Gebühr', ()
   assert.equal(row.variableCostWithFeeEur, null);
   assert.equal(row.allCostWithFeeEur, null);
   assert.equal(row.avgImportCtKwh, 20);
+});
+
+// ── T11 (Christin 23.11.2026): §14a Modul 3 im Festpreis-Vergleich ──────────
+// Dynamisch, MwSt 19 %, Netzentgelt 10 ct netto = 11,90 ct brutto; NT-Fenster 3 ct brutto
+// → Abweichung δ = 3 − 11,90 = −8,90 ct. Festpreis F = 30 ct.
+//   A (Fenster): Börse 5 → p = (5 + 2)·1,19 + 3 = 11,33 ct, 2 kWh
+//   B (ohne):    Börse 5 → p = (5 + 10 + 2)·1,19 = 20,23 ct, 1 kWh
+function p14aSums() {
+  const sums = createTariffSums({ detail: true });
+  addSlotToTariffSums(sums, dyn({ importKwh: 2, userImportPriceCtKwh: 11.33, marketPriceCtKwh: 5, tariffCompareCtKwh: 30, tariffM3DeltaCtKwh: -8.9, tariffM3Active: true }));
+  addSlotToTariffSums(sums, dyn({ importKwh: 1, userImportPriceCtKwh: 20.23, marketPriceCtKwh: 5, tariffCompareCtKwh: 30 }));
+  return sums;
+}
+
+test('T11: Festpreis-Vergleich rechnet die §14a-Fenster mit (Festpreis + Abweichung, gleiche Mengen)', () => {
+  const row = finalizeTariffRow(p14aSums());
+  // Bezahlt 2·11,33 + 20,23 = 42,89 ct; Festpreis mit §14a 2·(30 − 8,90) + 30 = 72,20 ct.
+  assert.equal(row.fixedCompare.actualEur, 0.43);
+  assert.equal(row.fixedCompare.fixedEur, 0.72);
+  assert.equal(row.fixedCompare.savingsEur, 0.29);
+  assert.equal(row.fixedCompare.ctKwh, 30);
+  assert.equal(row.fixedCompare.ctKwhWithP14a, 24.07);
+  // Ohne §14a: dynamisch 42,89 + 17,80 = 60,69 ct, Festpreis 90 ct → 0,29 € gespart.
+  assert.deepEqual(row.fixedCompare.withoutP14a, { actualEur: 0.61, fixedEur: 0.9, savingsEur: 0.29 });
+  // §14a-Effekt: 2 kWh × 8,90 ct = 17,80 ct, für beide Tarife gleich.
+  assert.deepEqual(row.p14a, {
+    slots: 1, importKwh: 2, unknownSlots: 0,
+    savedDynamicEur: 0.18, savedFixedEur: 0.18,
+    avgImportCtKwhWithout: 20.23
+  });
+  assert.equal(row.avgImportCtKwh, 14.3);
+});
+
+test('T11: ohne aktives §14a-Fenster kein §14a-Block, Vergleich wie bisher', () => {
+  const sums = createTariffSums();
+  addSlotToTariffSums(sums, dyn({ importKwh: 1, userImportPriceCtKwh: 20.23, marketPriceCtKwh: 5, tariffCompareCtKwh: 30 }));
+  const row = finalizeTariffRow(sums);
+  assert.equal(row.p14a, null);
+  assert.equal(row.fixedCompare.withoutP14a, null);
+  assert.equal(row.fixedCompare.fixedEur, 0.3);
+  assert.equal(row.fixedCompare.ctKwhWithP14a, 30);
+});
+
+test('T11: Abweichung unbekannt (kein Netzentgelt hinterlegt) wird gezählt, nicht geraten', () => {
+  const sums = createTariffSums();
+  addSlotToTariffSums(sums, dyn({ importKwh: 1, userImportPriceCtKwh: 18, marketPriceCtKwh: 5, tariffCompareCtKwh: 30, tariffM3Active: true, tariffM3DeltaCtKwh: null }));
+  const row = finalizeTariffRow(sums);
+  assert.equal(row.p14a.unknownSlots, 1);
+  assert.equal(row.p14a.slots, 0);
+  assert.equal(row.fixedCompare.fixedEur, 0.3);
 });

@@ -3261,7 +3261,7 @@ function renderPricingPeriodsEditor() {
     `).join('')}
     <div class="sa-divider-top"></div>
     <div class="config-group-kicker" data-accent="yellow">Vergleich mit Festpreis (Historie)</div>
-    <div class="svc-meta">Die Historie zeigt, was der Netzbezug im dynamischen Tarif mit diesem Festpreis gekostet hätte – mit denselben Mengen, einmal nur Arbeitspreis und einmal mit Grundgebühr. Leer = automatisch: Festpreis (und Grundgebühr) des letzten Festpreis-Zeitraums vor dem dynamischen Tarif, sonst der feste Bruttopreis des Standard-Tarifs.</div>
+    <div class="svc-meta">Die Historie zeigt, was der Netzbezug im dynamischen Tarif mit diesem Festpreis gekostet hätte – mit denselben Mengen, einmal nur Arbeitspreis und einmal mit Grundgebühr. Wo §14a Modul 3 galt, rechnet er dieselben Zeitfenster mit (Festpreis ± Netzentgelt-Abweichung) und zeigt zusätzlich, was beide Tarife ohne §14a gekostet hätten. Leer = automatisch: Festpreis (und Grundgebühr) des letzten Festpreis-Zeitraums vor dem dynamischen Tarif, sonst der feste Bruttopreis des Standard-Tarifs.</div>
     <div class="config-row-grid">
       <div class="config-row">
         <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.comparisonFixedCtKwh', 'Vergleichs-Festpreis (ct/kWh)')}</span>

@@ -7419,14 +7419,25 @@ export function describeUserImportTariffForSlot(ts, pricing = {}, options = {}) 
   const window = cachedModule3Windows(safePricing, effective)
     .find((entry) => slotMinuteMatchesWindow(minuteOfDay, entry)) || null;
   const vat = Number(effective?.dynamicComponents?.vatPct);
+  const vatPct = effective?.dynamicComponents?.vatPct != null && effective.dynamicComponents.vatPct !== '' && Number.isFinite(vat) ? vat : 19;
+  // T11 (Christin 23.11.2026): Netzentgelt-Abweichung des §14a-Modul-3-Fensters
+  // gegen das Standard-Netzentgelt (beide brutto): δ = Fensterpreis −
+  // Netzentgelt × (1 + MwSt). Der Festpreis-Vergleich rechnet F + δ, „ohne
+  // §14a“ p − δ. Ohne hinterlegtes Netzentgelt unbekannt (null), nie geraten.
+  const grid = effective?.dynamicComponents?.gridChargesCtKwh;
+  const module3DeltaCtKwh = window && grid != null && grid !== '' && Number.isFinite(Number(grid))
+    ? Math.round((window.priceCtKwh - Number(grid) * (1 + vatPct / 100)) * 10000) / 10000
+    : null;
   return {
     mode,
     tariffKey: ctx.tariffKey,
     tariffLabel: ctx.tariffLabel,
-    vatPct: effective?.dynamicComponents?.vatPct != null && effective.dynamicComponents.vatPct !== '' && Number.isFinite(vat) ? vat : 19,
+    vatPct,
     baseFeeEurMonth: ctx.baseFeeEurMonth,
     windowId: window ? window.id : null,
     windowLabel: window ? window.label : null,
+    module3Active: Boolean(window),
+    module3DeltaCtKwh,
     beforeValidFrom: ctx.beforeValidFrom
   };
 }

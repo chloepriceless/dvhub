@@ -51,7 +51,14 @@ function createPart() {
     cmpSlots: 0,
     cmpKwh: 0,
     cmpActualCt: 0,
-    cmpFixedCt: 0
+    cmpFixedCt: 0,     // Σ Bezug·(F + δ): Festpreis mit §14a-Fenstern (T11)
+    cmpBaseCt: 0,      // Σ Bezug·F: Festpreis ohne §14a
+    cmpM3DeltaCt: 0,   // Σ Bezug·δ in verglichenen Viertelstunden
+    // §14a Modul 3 (T11): Viertelstunden in einem aktiven Fenster.
+    m3Slots: 0,
+    m3Kwh: 0,
+    m3DeltaCt: 0,      // Σ Bezug·δ (δ < 0 = Fenster günstiger)
+    m3UnknownSlots: 0
   };
 }
 
@@ -249,11 +256,25 @@ export function addSlotToTariffSums(sums, slot) {
       part.houseCt += house * p;
       part.batteryKwh += battery;
       part.batteryCt += battery * p;
+      // T11: §14a-Fenster — Abweichung δ vom Standard-Netzentgelt.
+      const m3Delta = slot.tariffM3Active && finite(slot.tariffM3DeltaCtKwh) ? Number(slot.tariffM3DeltaCtKwh) : 0;
+      if (slot.tariffM3Active) {
+        if (finite(slot.tariffM3DeltaCtKwh)) {
+          part.m3Slots += 1;
+          part.m3Kwh += imp;
+          part.m3DeltaCt += imp * m3Delta;
+        } else {
+          part.m3UnknownSlots += 1;
+        }
+      }
       if (finite(slot.tariffCompareCtKwh)) {
+        const fixedCt = Number(slot.tariffCompareCtKwh);
         part.cmpSlots += 1;
         part.cmpKwh += imp;
         part.cmpActualCt += imp * p;
-        part.cmpFixedCt += imp * Number(slot.tariffCompareCtKwh);
+        part.cmpFixedCt += imp * (fixedCt + m3Delta);
+        part.cmpBaseCt += imp * fixedCt;
+        part.cmpM3DeltaCt += imp * m3Delta;
       }
       if (sums.groups && spotKnown) {
         const key = slot.tariffGroupKey || 'base|std';
@@ -417,18 +438,39 @@ export function finalizeTariffRow(sums, { excludeEstimated = false } = {}) {
   const fee = sums.fee;
   const importCostEur = round2(part.importCt / 100);
   const compared = part.cmpSlots > 0;
+  const hasP14a = part.m3Slots > 0;
   const fixedCompare = compared ? (() => {
+    // T11: der Festpreis-Tarif hätte dieselben §14a-Fenster gehabt (F + δ).
     const actualEur = round2(part.cmpActualCt / 100);
     const fixedEur = round2(part.cmpFixedCt / 100);
+    let withoutP14a = null;
+    if (hasP14a && part.cmpM3DeltaCt !== 0) {
+      const actualWithout = round2((part.cmpActualCt - part.cmpM3DeltaCt) / 100);
+      const fixedWithout = round2(part.cmpBaseCt / 100);
+      withoutP14a = { actualEur: actualWithout, fixedEur: fixedWithout, savingsEur: round2(fixedWithout - actualWithout) };
+    }
     return {
       slots: part.cmpSlots,
       importKwh: round2(part.cmpKwh),
-      ctKwh: ratio(part.cmpFixedCt, part.cmpKwh),
+      ctKwh: ratio(part.cmpBaseCt, part.cmpKwh),
+      ctKwhWithP14a: ratio(part.cmpFixedCt, part.cmpKwh),
       actualEur,
       fixedEur,
-      savingsEur: round2(fixedEur - actualEur)
+      savingsEur: round2(fixedEur - actualEur),
+      withoutP14a
     };
   })() : null;
+  // §14a-Effekt (T11): was die Fenster gegenüber dem Standard-Netzentgelt
+  // gespart haben — dynamisch über alle Fenster-Viertelstunden, beim Festpreis
+  // über die verglichenen (gleiche Mengen).
+  const p14a = part.m3Slots > 0 || part.m3UnknownSlots > 0 ? {
+    slots: part.m3Slots,
+    importKwh: round2(part.m3Kwh),
+    unknownSlots: part.m3UnknownSlots,
+    savedDynamicEur: round2(-part.m3DeltaCt / 100),
+    savedFixedEur: compared ? round2(-part.cmpM3DeltaCt / 100) : null,
+    avgImportCtKwhWithout: ratio(part.importCt - part.m3DeltaCt, part.importKwh)
+  } : null;
   const baseFee = fee ? {
     eur: round2(fee.eur),
     days: fee.days,
@@ -469,6 +511,7 @@ export function finalizeTariffRow(sums, { excludeEstimated = false } = {}) {
     house: { importKwh: round2(part.houseKwh), avgCtKwh: ratio(part.houseCt, part.houseKwh) },
     battery: { importKwh: round2(part.batteryKwh), avgCtKwh: ratio(part.batteryCt, part.batteryKwh) },
     fixedCompare,
+    p14a,
     baseFee,
     variableCostWithFeeEur,
     allImportKwh: round2(sums.allImportKwh),

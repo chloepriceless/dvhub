@@ -887,3 +887,26 @@ test('Codex 63d6a96f: späte Antwort einer verlassenen Abfrage überschreibt die
   await a;
   assert.match(elements.get('historyTariffScatterChart').innerHTML, /Keine Viertelstunden/);
 });
+
+// ── T11: §14a im Festpreis-Vergleich ─────────────────────────────────────────
+test('T11: Vergleich nennt §14a-Fenster und was man ohne §14a bezahlt hätte', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const t = dynTariff({
+    fixedCompare: { slots: 1628, importKwh: 80, ctKwh: 30, ctKwhWithP14a: 26.5, actualEur: 20.4, fixedEur: 21.2, savingsEur: 0.8,
+      withoutP14a: { actualEur: 23.2, fixedEur: 24, savingsEur: 0.8 } },
+    p14a: { slots: 400, importKwh: 31.46, unknownSlots: 0, savedDynamicEur: 2.8, savedFixedEur: 2.8, avgImportCtKwhWithout: 29 }
+  });
+  helpers.renderSummary({ view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
+  assert.equal(elements.get('historyTariffP14aRow').hidden, false);
+  assert.match(elements.get('historyTariffP14aSaved').textContent, /dynamisch 2,80 € · Festpreis 2,80 € \(31,46 kWh im Fenster\)/);
+  assert.match(elements.get('historyTariffP14aWithout').textContent, /dynamisch 23,20 € · Festpreis 24,00 € → 0,80 € gespart/);
+  assert.match(elements.get('historyTariffP14aHint').textContent, /Festpreis mit denselben §14a-Fenstern: Ø 26,50 ct\/kWh statt 30,00 ct\/kWh/);
+});
+
+test('T11: ohne §14a im Zeitraum keine §14a-Zeilen', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({ view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: dynTariff({ p14a: null }) }), rows: [], meta: {} });
+  assert.equal(elements.get('historyTariffP14aRow').hidden, true);
+  assert.equal(elements.get('historyTariffP14aWithoutRow').hidden, true);
+  assert.equal(elements.get('historyTariffP14aHint').hidden, true);
+});
