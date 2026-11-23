@@ -326,6 +326,24 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .dv-section + .dv-section { border-left: 0; border-top: 1px solid var(--hairline); }
 }
 
+/* Arbeitspreis-Karte (1.0.11): drei Abschnitte statt vier; unter 900px wie die
+   DV-Karte einspaltig. Die Monatstabelle lässt auf dem Handy die zwei
+   Nebenspalten weg, damit nichts quer scrollt. */
+.dv-grid.tariff-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) {
+  .dv-grid.tariff-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.tariff-gain { color: var(--green); }
+.tariff-loss { color: var(--orange); }
+.tariff-table .tariff-muted { color: var(--text-dim); }
+.tariff-table td:first-child { white-space: nowrap; }
+@media (max-width: 560px) {
+  .tariff-table .tariff-col-opt { display: none; }
+  .tariff-table table { font-size: 12px; }
+  .tariff-table th,
+  .tariff-table td { padding: 8px 4px; }
+}
+
 /* ══════════════════════════════════════════════════════════════════════
    CHART PANELS — the 4 Chart.js panels (#historyFinancialPanel etc.)
 
@@ -868,3 +886,21 @@ main.page { min-width: 0; max-width: 100%; }
 main.page > * { min-width: 0; max-width: 100%; }
 
 @media (max-width: 760px) { .chart-mode { flex-wrap: wrap; max-width: 100%; } }
+
+/* Dynamischer Tarif (23.11.2026): Hinweise, Schalter „geschätzte Anbieterpreise“,
+   Formel-Liste. Nur Klassen, keine Inline-Styles (CSP). */
+.tariff-note-row { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.tariff-note-row .dv-hint { margin: 0; }
+.tariff-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); cursor: pointer; }
+.tariff-formula-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.5; }
+.tariff-formula-list li + li { margin-top: 8px; }
+.tariff-formula-list .tariff-muted { color: var(--text-dim); }
+
+/* Netzstrom im Akku: Tagesprotokoll + Erklärung ausklappbar (23.11.2026) */
+.history-grid-share-details { margin-top: 10px; }
+.history-grid-share-summary {
+  cursor: pointer; padding: 6px 0;
+  color: var(--text-dim); font-size: 12px; font-weight: 600;
+}
+.history-grid-share-summary:hover { color: var(--text); }
+.history-grid-share-details[open] > .history-grid-share-summary { margin-bottom: 6px; }

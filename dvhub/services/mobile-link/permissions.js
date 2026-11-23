@@ -24,6 +24,7 @@ export const READ_PATHS = new Set([
   '/api/family/tesla-history',
   '/api/telemetry/series',
   '/api/history/summary',
+  '/api/history/tariff-scatter',
   '/api/history/mispel',
   '/api/eeg/extension',
   '/api/integrations/health',
