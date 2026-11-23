@@ -831,9 +831,16 @@ export function createPeakShaving(ctx, deps = {}) {
     eosSyncBusy = true;
     Promise.resolve(ctx.eosConfigSync.sync())
       .then((res) => {
-        if (res && res.ok !== false && !res.errors?.['devices/inverters']) eosSyncedKey = sent;
+        // Quittiert ist, was im Wechselrichter-Abschnitt angekommen ist (oder dort
+        // schon stand) — auch wenn ein anderer Abschnitt scheiterte. Sonst gilt
+        // der alte Stand als unbekannt, damit auch eine Rückkehr zum früheren
+        // Wert neu geschickt wird (Codex 4638c207 P2).
+        const inv = 'devices/inverters';
+        const delivered = res && !res.errors?.[inv]
+          && ((Array.isArray(res.applied) && res.applied.includes(inv)) || (Array.isArray(res.unchanged) && res.unchanged.includes(inv)));
+        eosSyncedKey = delivered ? sent : null;
       })
-      .catch(() => {})
+      .catch(() => { eosSyncedKey = null; })
       .finally(() => { eosSyncBusy = false; });
   }
 

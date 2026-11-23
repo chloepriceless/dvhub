@@ -141,3 +141,13 @@ test('Preise fehlen: Kennzahlen (Spitze, Arbeit, Benutzungsdauer) trotzdem, € 
   assert.equal(y.totalEur, null);
   assert.equal(y.tariffComplete, false);
 });
+
+test('laufendes Jahr, Stufen verschieden: vermiedene € auf Basis der hochgerechneten Jahresarbeit (Codex f2bf3ea5 P2)', () => {
+  // Halbes Jahr 75.000 kWh → hochgerechnet 150.000 kWh. Gemessen 50 kW (T 3.000 h, hoch: 9.261 €),
+  // ohne Akku 70 kW (T 2.142,9 h, niedrig: 10.281,90 €) → vermieden 1.020,90 €.
+  const Y2026 = { startMs: Date.parse('2025-12-31T23:00:00Z'), endMs: Date.parse('2026-12-31T23:00:00Z') };
+  const half = Y2026.startMs + (Y2026.endMs - Y2026.startMs) / 2;
+  const y = computeYearBilling({ months: [{ ym: '2026-01', energyKwh: 75_000, peakW: 50_000, uncappedPeakW: 70_000, batterySlots: 100 }], tariff: T_LEIPZIG, period: Y2026, nowMs: half });
+  assert.equal(y.avoidedEur, 1020.9);
+  assert.equal(y.uncappedTier, 'low');
+});

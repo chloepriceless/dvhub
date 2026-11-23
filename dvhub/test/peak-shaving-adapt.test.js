@@ -152,7 +152,7 @@ test('Codex ac14daee P2: gescheiterter EOS-Abgleich wird nach der Minute wiederh
   let mono = 0;
   const s = createPeakShaving({
     state: { victron: {}, meter: {}, ctrl: {} }, getCfg: () => cfg, telemetryStore: store, pushLog: () => {},
-    eosConfigSync: { sync: async () => { syncs += 1; return ok ? { ok: true, errors: {} } : { ok: false, errors: { probe: 'eos_unreachable' } }; } }
+    eosConfigSync: { sync: async () => { syncs += 1; return ok ? { ok: true, applied: ['devices/inverters'], errors: {} } : { ok: false, applied: [], errors: { probe: 'eos_unreachable' } }; } }
   }, { now: () => NOW, monoNow: () => mono });
   await s.refreshPeaks();
   s.pollTick();
@@ -171,4 +171,25 @@ test('Codex ac14daee P2: gescheiterter EOS-Abgleich wird nach der Minute wiederh
   mono += 61_000; s.pollTick();
   await new Promise((r) => setImmediate(r));
   assert.equal(syncs, 2, 'quittiert → kein weiterer Abgleich');
+});
+
+test('Codex 4638c207 P2: Teil-Abgleich (Wechselrichter angekommen, anderer Abschnitt nicht) quittiert den Wert; Rückkehr wird geschickt', async () => {
+  const cfg = base({ adaptToReachedPeak: false });
+  const sent = [];
+  const store = { getGridImportPeak: async () => ({ slotStart: '2026-03-10T08:00:00.000Z', powerW: 12345 }) };
+  let mono = 0;
+  const s = createPeakShaving({
+    state: { victron: {}, meter: {}, ctrl: {} }, getCfg: () => cfg, telemetryStore: store, pushLog: () => {},
+    eosConfigSync: { sync: async () => { sent.push(s.eosTargetW()); return { ok: false, applied: ['devices/inverters'], errors: { 'devices/batteries': 'boom' } }; } }
+  }, { now: () => NOW, monoNow: () => mono });
+  await s.refreshPeaks();
+  s.pollTick();
+  cfg.peakShaving.adaptToReachedPeak = true;
+  await s.refreshPeaks();
+  mono += 61_000; s.pollTick();
+  await new Promise((r) => setImmediate(r));
+  cfg.peakShaving.adaptToReachedPeak = false;
+  mono += 61_000; s.pollTick();
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(sent, [12000, 9700], 'angepasst geschickt, Rückkehr auf 9 700 W ebenfalls');
 });

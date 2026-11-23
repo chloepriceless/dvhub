@@ -141,11 +141,13 @@ export function computeYearBilling({ months = [], tariff, period, nowMs = Date.n
   let avoidedEur = null;
   let uncapped = null;
   if (c?.totalEur != null && Pu != null && Pu > 0) {
-    // gleiche Arbeit, Spitze ohne Akku-Beitrag; Stufe neu aus deren Benutzungsdauer
-    const tu = E / (Pu / 1000);
-    const basisU = running && elapsedH > 0 ? tu * (yearH / elapsedH) : tu;
-    uncapped = yearCharge({ energyKwh: E, peakW: Pu, tariff, usageHoursForTier: basisU });
-    if (uncapped?.totalEur != null) avoidedEur = Math.max(0, uncapped.totalEur - c.totalEur);
+    // Gleiche Arbeit, Spitze ohne Akku-Beitrag; Stufe je aus der eigenen Benutzungsdauer. Im laufenden Jahr beide
+    // Seiten mit der aufs Jahr hochgerechneten Arbeit — sonst stünde ein voller Jahres-Leistungspreis gegen ein
+    // anteiliges Arbeitsentgelt (Codex f2bf3ea5 P2).
+    const eYear = running && elapsedH > 0 ? E * (yearH / elapsedH) : E;
+    const capped = yearCharge({ energyKwh: eYear, peakW: P, tariff });
+    uncapped = yearCharge({ energyKwh: eYear, peakW: Pu, tariff });
+    if (uncapped?.totalEur != null && capped?.totalEur != null) avoidedEur = Math.max(0, uncapped.totalEur - capped.totalEur);
   }
   const tier = c?.tier ?? null;
   return {

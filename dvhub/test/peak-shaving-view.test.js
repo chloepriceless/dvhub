@@ -147,8 +147,8 @@ test('P4: Leistungsentgelt in der Kachel (Jahresleistungspreis, laufendes Jahr)'
   assert.equal(v.billing.usage, '1.500 h bisher · 3.000 h hochgerechnet (Stufe ab 2.500 h)');
   assert.equal(v.billing.effective, '6,17 ct/kWh');
   assert.equal(v.billing.avoided, '820 € im Jahr (ohne Akku 60,0 kW)');
-  const m = view({ ...base, billing: { model: 'month', tariffComplete: false, year: { lpEurPerKwMonth: 13.67 }, month: { totalEur: 1113.5, peakW: 50000, avoidedEur: 136.7, uncappedPeakW: 60000 } } });
-  assert.equal(m.billing.charge, '1.114 € diesen Monat (50,0 kW × 13,67 €)');
+  const m = view({ ...base, billing: { model: 'month', tariffComplete: false, year: { lpEurPerKwMonth: 13.67 }, month: { totalEur: 1113.5, demandChargeEur: 683.5, peakW: 50000, avoidedEur: 136.7, uncappedPeakW: 60000 } } });
+  assert.equal(m.billing.charge, '684 € diesen Monat (50,0 kW × 13,67 €)', 'nur das Leistungsentgelt (Codex f2bf3ea5 P2)');
   assert.match(m.billing.note, /Preise/);
   assert.equal(view(base).billing, null);
 });

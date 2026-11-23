@@ -105,7 +105,7 @@
     const out = { charge: DASH, usage: DASH, effective: DASH, avoided: DASH, note: '' };
     if (b.model === 'month') {
       const m = b.month || {};
-      out.charge = num(m.totalEur) ? `${eur(m.totalEur)} diesen Monat (${kw(m.peakW)} × ${num(y.lpEurPerKwMonth) ? dec2(y.lpEurPerKwMonth) : DASH} €)` : DASH;
+      out.charge = num(m.demandChargeEur) ? `${eur(m.demandChargeEur)} diesen Monat (${kw(m.peakW)} × ${num(y.lpEurPerKwMonth) ? dec2(y.lpEurPerKwMonth) : DASH} €)` : DASH;
       out.avoided = num(m.avoidedEur) ? `${eur(m.avoidedEur)} diesen Monat (ohne Akku ${kw(m.uncappedPeakW)})` : DASH;
     } else {
       out.charge = num(y.demandChargeEur) ? `${eur(y.demandChargeEur)} im Jahr (${kw(y.peakW)} × ${dec2(y.lpEurPerKwYear)} €)` : DASH;
