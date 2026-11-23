@@ -129,11 +129,19 @@ export async function applyDbTuning(query, { budgetMb, includeMemory = true, sto
     // max_wal_size: erst den Merker schreiben, dann setzen — scheitert der
     // Merker (Platte voll), lieber nicht setzen, als einen Wert zu hinterlassen,
     // den DVhub später nicht mehr als eigenen erkennt (Codex 4f093b23).
+    let prevOwn;
     if (name === 'max_wal_size' && walOwner) {
+      try { prevOwn = walOwner.read?.() ?? null; } catch { prevOwn = null; }
       try { walOwner.write(parseWanted(want) / MB); } catch { skippedOwner = true; continue; }
     }
     // Name ist aus der festen Liste oben, Wert ebenso — kein Nutzertext.
-    await query(`ALTER SYSTEM SET ${name.includes('.') ? `"${name}"` : name} = '${want}'`);
+    try {
+      await query(`ALTER SYSTEM SET ${name.includes('.') ? `"${name}"` : name} = '${want}'`);
+    } catch (e) {
+      // Merker auf den vorigen Stand zurück, sonst passt er nicht mehr zur DB (Codex 3e530edf).
+      if (name === 'max_wal_size' && walOwner) { try { walOwner.write(prevOwn); } catch { /* egal */ } }
+      throw e;
+    }
     changed.push(name);
   }
   // max_wal_size gehört DVhub nur, wenn DVhub ihn selbst gesetzt und sich das
@@ -155,10 +163,11 @@ export async function applyDbTuning(query, { budgetMb, includeMemory = true, sto
         await query('ALTER SYSTEM RESET max_wal_size');
         changed.push('max_wal_size');
         try { walOwner.write?.(null); } catch { /* egal */ }
-      } else if (w && w.source === 'configuration file') {
-        // Unser Eintrag ist nicht mehr da (anderer Wert in auto.conf = Betreiber,
-        // oder er gilt aus postgresql.conf) → Merker erledigt. Bei verdeckendem
-        // Wert (Kommandozeile o. ä.) bleibt der Merker (Codex 4f093b23).
+      } else if (w && ['default', 'environment variable', 'configuration file'].includes(w.source)) {
+        // Unser Eintrag ist nicht mehr da (Standard, anderer Wert in auto.conf =
+        // Betreiber, oder er gilt aus postgresql.conf) → Merker erledigt. Nur ein
+        // höherrangiger Wert (Kommandozeile) kann ihn verdecken — dann bleibt er
+        // (Codex 4f093b23, 3e530edf).
         try { walOwner.write?.(null); } catch { /* egal */ }
       }
     }

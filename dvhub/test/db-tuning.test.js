@@ -278,3 +278,19 @@ test('max_wal_size: Merker nicht schreibbar → nicht setzen; Kommandozeile verd
   await applyDbTuning(masked, { includeMemory: false, storageProfile: PROFILES.gross, walOwner: own });
   assert.equal(v, 256, 'Merker bleibt, solange die Kommandozeile verdeckt');
 });
+
+// Codex 3e530edf: Merker bei SQL-Fehler zurück, bei „default“ löschen.
+test('max_wal_size: ALTER scheitert → voriger Merker; Wert wieder Standard → Merker weg', async () => {
+  let v = 512; const own = { read: () => v, write: (x) => { v = x; } };
+  const failing = async (sql) => {
+    if (sql.startsWith('SELECT name, setting')) return { rows: [{ name: 'max_wal_size', setting: '512', unit: 'MB', source: 'configuration file' }] };
+    if (sql.startsWith('ALTER SYSTEM SET max_wal_size')) throw new Error('No space left on device');
+    return { rows: [] };
+  };
+  await assert.rejects(applyDbTuning(failing, { includeMemory: false, storageProfile: PROFILES.klein, walOwner: own }));
+  assert.equal(v, 512, 'Merker wie vorher');
+  const def = async (sql) => (sql.includes("name = 'max_wal_size'")
+    ? { rows: [{ setting: '1024', unit: 'MB', source: 'default', sourcefile: null }] } : { rows: [] });
+  await applyDbTuning(def, { includeMemory: false, storageProfile: PROFILES.gross, walOwner: own });
+  assert.equal(v, null);
+});

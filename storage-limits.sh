@@ -26,13 +26,21 @@ case "$SP" in
   *)      MAX="" ;;
 esac
 restart_journald() { systemctl restart systemd-journald 2>/dev/null || true; }
+# Früherer Dateiname (nur Entwicklungsstand vor 1.0.13): mit Kennzeile entfernen,
+# ohne Kennzeile (Betreiber) stehen lassen (Codex 3e530edf).
+OLD_DROPIN="$CONF_DIR/dvhub.conf"
+if [[ -f "$OLD_DROPIN" && ! -L "$OLD_DROPIN" ]] && grep -q '^# DVhub: Speicherprofil' "$OLD_DROPIN" 2>/dev/null; then
+  rm -f "$OLD_DROPIN"
+  OLD_REMOVED=1
+fi
 if [[ -z "$MAX" ]]; then
   # Nur unsere eigene Datei entfernen (Kennzeile), nie eine fremde.
   if [[ -f "$DROPIN" ]] && grep -q '^# DVhub: Speicherprofil' "$DROPIN" 2>/dev/null; then
     rm -f "$DROPIN"
-    restart_journald
+    OLD_REMOVED=1
     echo "  journald: DVhub-Grenze entfernt (Speicherprofil ${SP:-groß})"
   fi
+  [[ "${OLD_REMOVED:-0}" -eq 1 ]] && restart_journald
   exit 0
 fi
 WANT="# DVhub: Speicherprofil $SP (storage-limits.sh). Nicht von Hand ändern — wird bei jedem Update überschrieben.
@@ -41,6 +49,7 @@ SystemMaxUse=$MAX
 RuntimeMaxUse=$MAX
 "
 if [[ -f "$DROPIN" ]] && [[ "$(cat "$DROPIN")" == "$(printf '%s' "$WANT")" ]]; then
+  [[ "${OLD_REMOVED:-0}" -eq 1 ]] && restart_journald
   echo "  journald: Grenze $MAX aktuell"
   exit 0
 fi

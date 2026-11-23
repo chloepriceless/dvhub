@@ -79,3 +79,16 @@ test('Verweis auf die Profildatei wird nicht verfolgt', () => {
     assert.equal(s.dropin(), null);
   } finally { s.cleanup(); }
 });
+
+// Codex 3e530edf: frühere eigene Datei dvhub.conf (mit Kennzeile) wird mitgenommen.
+test('frühere eigene dvhub.conf wird entfernt, auch beim Wechsel auf „groß“', () => {
+  const s = setup();
+  try {
+    mkdirSync(s.conf, { recursive: true });
+    writeFileSync(join(s.conf, 'dvhub.conf'), '# DVhub: Speicherprofil klein (storage-limits.sh).\n[Journal]\nSystemMaxUse=200M\n');
+    s.profile('gross');
+    s.run();
+    assert.equal(existsSync(join(s.conf, 'dvhub.conf')), false);
+    assert.deepEqual(s.calls(), ['systemctl restart systemd-journald']);
+  } finally { s.cleanup(); }
+});

@@ -114,7 +114,7 @@ export function createDbBackupScheduler({
     } else st = {};   // ohne Platz-Wache (alte Aufrufer): nur der freie Platz am Ziel zählt
     // Noch keine Messung (kurz nach dem Start, getrennter Betrieb): nicht ohne
     // Prüfung durchwinken (Codex 2739f099).
-    if (!st) return { ok: false, keep: Number(b.retentionCount), sameDisk: false, error: 'Speicher noch nicht gemessen (DVhub startet gerade) — Backup bitte in einigen Minuten erneut starten' };
+    if (!st) return { ok: false, deferred: true, keep: Number(b.retentionCount), sameDisk: false, error: 'Speicher noch nicht gemessen (DVhub startet gerade) — Backup bitte in einigen Minuten erneut starten' };
     let freeMb = NaN;
     try { const s = statfs(dir); freeMb = (Number(s.bavail) * Number(s.bsize)) / MB; } catch { /* unbekannt → nicht blockieren */ }
     let sameDisk = false;
@@ -140,6 +140,7 @@ export function createDbBackupScheduler({
     const outFile = path.join(dir, fileName);
     fs.mkdirSync(dir, { recursive: true }); // surfaces a missing mount as a clear error
     const plan = await planFor(dir, scope, b);
+    if (plan.deferred) return { ok: false, deferred: true, error: plan.error };
     if (!plan.ok) return fail(scope, reason, now, plan.error);
     const res = await dumpToFile({ scope, database: cfg.telemetry.database, outFile, spawnFn });
     if (!res.ok) {
@@ -164,6 +165,7 @@ export function createDbBackupScheduler({
     const tmpFile = path.join(os.tmpdir(), fileName);
     // Der Dump liegt erst lokal (tmp) — passt er dorthin? Begrenzung der Anzahl gilt fürs Netzziel nicht.
     const plan = await planFor(os.tmpdir(), scope, b, { network: true });
+    if (plan.deferred) return { ok: false, deferred: true, error: plan.error };
     if (!plan.ok) return fail(scope, reason, now, plan.error);
     try {
       const dump = await dumpToFile({ scope, database: cfg.telemetry.database, outFile: tmpFile, spawnFn });
@@ -204,10 +206,20 @@ export function createDbBackupScheduler({
     }
   }
 
+  // Geplanter Lauf, der kurz nach dem Start noch keine Messung hatte: am selben
+  // Tag jede Minute erneut, bis gemessen ist (Codex 3e530edf) — sonst fiele er aus.
+  let deferredDay = null;
+  async function runScheduled(day) {
+    const r = await runNow('scheduled');
+    deferredDay = r && r.deferred ? day : null;
+    if (r && r.deferred && pushLog) pushLog('db_backup_deferred', { reason: r.error });
+  }
   function tick() {
     try {
-      const due = backupDueDay(getCfg(), nowFn(), lastRunDay);
-      if (due) { lastRunDay = due; runNow('scheduled'); }
+      const now = nowFn();
+      const due = backupDueDay(getCfg(), now, lastRunDay);
+      if (due) { lastRunDay = due; runScheduled(due).catch(() => {}); return; }
+      if (deferredDay && deferredDay === lastRunDay && !running) runScheduled(deferredDay).catch(() => {});
     } catch (err) {
       if (pushLog) pushLog('db_backup_tick_error', { error: err.message });
     }

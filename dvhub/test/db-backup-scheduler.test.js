@@ -253,3 +253,27 @@ test('Wache noch ohne Messung: Backup verschoben statt ungeprüft', async () => 
     assert.equal(spawned, 0);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Codex 3e530edf: geplanter Lauf ohne Messung wird am selben Tag nachgeholt.
+test('Geplantes Backup kurz nach dem Start: verschoben und nachgeholt, sobald gemessen ist', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-bdef-'));
+  let measured = false; let t = new Date(2026, 10, 24, 3, 0, 5);
+  const dumps = [];
+  try {
+    const sched = createSched({
+      getCfg: () => ({ telemetry: { database: { name: 'dvhub' } }, dbBackup: { enabled: true, destinationDir: dir, retentionCount: 14, time: '03:00', scope: 'energy15m' } }),
+      pushLog: () => {}, nowFn: () => t,
+      spawnFn: (cmd, args) => { dumps.push(args); const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
+        setImmediate(() => { const f = args[args.indexOf('-f') + 1]; if (f) fs.writeFileSync(f, 'x'); c.emit('close', 0); }); return c; },
+      getStorage: async () => (measured ? { dbMb: 1, mounts: [] } : null),
+      statfs: () => ({ bavail: 100000, bsize: 1048576 }),
+    });
+    sched.tick?.() ?? sched._tick?.();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(dumps.length, 0, 'ohne Messung kein Dump');
+    measured = true; t = new Date(2026, 10, 24, 3, 6, 0);
+    sched.tick?.() ?? sched._tick?.();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(dumps.length, 1, 'nachgeholt');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
