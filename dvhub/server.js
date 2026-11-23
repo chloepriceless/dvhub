@@ -43,6 +43,7 @@ import { createHistoryVizAggregator } from './services/history-viz/aggregator.js
 import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
 import { createStorageEfficiencyDaily, loadStorageEfficiency, storageEfficiencyCapability } from './services/inverter-efficiency/storage.js';
+import { createCoverageBackfill } from './services/history-backfill/coverage.js';
 import { createLogRetention } from './services/log-retention.js';
 import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
@@ -2736,6 +2737,18 @@ const telemetryReady = (async () => {
         });
     };
     setTimeout(runInverterEfficiencyDaily, 3 * 60 * 1000).unref();
+    // T14 (Christin 24.11.2026): Abdeckung der eigenen 15-min-Werte für den
+    // Altbestand aus den Rohwerten nachrechnen (services/history-backfill/coverage.js).
+    // Je Lauf höchstens ein Tag (ein UPDATE), alle 2 min, ab 6 min nach dem Start;
+    // wiederaufnehmbar über die Datenbank, danach nur noch ein Kontroll-Scan je Tag.
+    const coverageBackfill = createCoverageBackfill({ getDb: () => ctx.db, pushLog });
+    const runCoverageBackfill = () => {
+      coverageBackfill.runOnce().catch((error) => pushLog('history_coverage_backfill_error', { error: error.message }));
+    };
+    setTimeout(() => {
+      runCoverageBackfill();
+      setInterval(runCoverageBackfill, 2 * 60 * 1000).unref();
+    }, 6 * 60 * 1000).unref();
     // Gestufte Log-Aufbewahrung (services/log-retention.js): 60 Tage voll,
     // dann verdichtet bis 2 Jahre. Nachts um ~03:40 und einmal 15 min nach dem
     // Start; je Lauf höchstens 5 min Arbeit.

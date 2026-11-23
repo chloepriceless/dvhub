@@ -43,6 +43,9 @@
 //   Ältere Slots (vor 1.0.10) tragen keine Abdeckung. Für sie ist unbekannt, ob
 //   sie vollständig sind — sie behalten die bisherige Reihenfolge (VRM vor
 //   lokal), damit sich gespeicherte Historie nicht nachträglich verschiebt.
+//   Seit T14 (Christin 24.11.2026) rechnet services/history-backfill/coverage.js
+//   die Abdeckung dieser Zeilen aus den Rohwerten nach (gleiche Zählung wie
+//   oben); wo die Rohwerte den Slot ganz abdecken, gilt danach der eigene Wert.
 
 export const SLOT_SECONDS = 900;
 export const LOCAL_COVERAGE_MIN_TOLERANCE_SECONDS = 15;
