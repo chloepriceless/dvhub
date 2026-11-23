@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { monoNow, pickMonoNow, createStampAge, markMono, monoOf } from '../services/mono-clock.js';
+import { monoNow, pickMonoNow, createStampAge, markMono, monoAgeOf } from '../services/mono-clock.js';
 
 test('monoNow: steigt nie und ist unabhängig von Date.now', () => {
   const a = monoNow();
@@ -46,11 +46,15 @@ test('createStampAge: neuer Stempel einmal per Wanduhr (nie negativ), danach mon
   assert.equal(sa.receivedMono('x', 1_000_000 - 3000), 50 - 3000);
 });
 
-test('markMono/monoOf: unsichtbar im JSON, nur am selben Objekt', () => {
-  const o = markMono({ a: 1 }, 123);
-  assert.equal(monoOf(o), 123);
+test('markMono/monoAgeOf: Alter mit der Uhr des Erzeugers, unsichtbar im JSON, nur am selben Objekt', () => {
+  let m = 100;
+  const o = markMono({ a: 1 }, () => m);
+  m += 250;
+  assert.equal(monoAgeOf(o), 250);
   assert.equal(JSON.stringify(o), '{"a":1}');
-  assert.equal(monoOf({ a: 1 }), null);
-  assert.equal(monoOf(null), null);
-  assert.equal(markMono(null, 5), null);
+  assert.equal(monoAgeOf({ a: 1 }), null);
+  assert.equal(monoAgeOf(null), null);
+  assert.equal(markMono(null), null);
+  const real = markMono({});
+  assert.ok(monoAgeOf(real) >= 0);
 });

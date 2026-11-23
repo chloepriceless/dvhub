@@ -12,8 +12,8 @@
 //   createStampAge() — Zeitstempel von außen (Poller, Messwerte mit Wanduhr-ts): am Übergabepunkt die Empfangszeit
 //                      monoton merken. Neu gesehener Stempel → Alter einmal aus der Wanduhr (nie negativ), danach
 //                      wächst es monoton weiter, solange derselbe Stempel steht.
-//   markMono()/monoOf() — Erzeuger im selben Prozess heften einem veröffentlichten Objekt seine monotone Zeit an
-//                      (WeakMap, nicht im JSON sichtbar); Verbraucher lesen sie statt des Wanduhr-Stempels.
+//   markMono()/monoAgeOf() — Erzeuger im selben Prozess heften einem veröffentlichten Objekt seine monotone Zeit an
+//                      (WeakMap, nicht im JSON sichtbar); Verbraucher lesen dessen Alter statt des Wanduhr-Stempels.
 //   bootStamp()/readBootClock() — prozessübergreifend (Box-Watchdog): Laufzeit seit Systemstart (Linux /proc/uptime,
 //                      CLOCK_BOOTTIME, läuft auch im Ruhezustand weiter) plus Start-Kennung (boot_id). Ohne /proc
 //                      (macOS, Tests) null bzw. {} — dann gilt der bisherige Wanduhr-Vergleich.
@@ -65,14 +65,21 @@ export function createStampAge({ now = Date.now, monoNow: mono = monoNow } = {})
 }
 
 const monoMarks = new WeakMap();
-/** Erzeuger: dem veröffentlichten Objekt seine monotone Zeit anheften (unsichtbar im JSON). Gibt obj zurück. */
-export function markMono(obj, m = monoNow()) {
-  if (obj && typeof obj === 'object' && Number.isFinite(m)) monoMarks.set(obj, m);
+/**
+ * Erzeuger: dem veröffentlichten Objekt seine monotone Zeit samt Uhr anheften (unsichtbar im JSON). Die Uhr reist mit,
+ * damit ein Verbraucher das Alter mit derselben Uhr misst (eingespielte Test-Uhren eingeschlossen). Gibt obj zurück.
+ */
+export function markMono(obj, clock = monoNow) {
+  if (obj && typeof obj === 'object' && typeof clock === 'function') {
+    const m = clock();
+    if (Number.isFinite(m)) monoMarks.set(obj, { m, clock });
+  }
   return obj;
 }
-/** Verbraucher: angeheftete monotone Zeit des Objekts oder null (fremder Erzeuger, Test-Objekt). */
-export function monoOf(obj) {
-  return obj && typeof obj === 'object' && monoMarks.has(obj) ? monoMarks.get(obj) : null;
+/** Verbraucher: monotones Alter des Objekts in ms seit markMono, oder null (fremder Erzeuger, Test-Objekt). */
+export function monoAgeOf(obj) {
+  const e = obj && typeof obj === 'object' ? monoMarks.get(obj) : undefined;
+  return e ? e.clock() - e.m : null;
 }
 
 const UPTIME_PATH = '/proc/uptime';

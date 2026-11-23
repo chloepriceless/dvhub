@@ -47,6 +47,7 @@
  */
 import { resolveMultiGxOptions } from './index.js';
 import { controlWriteBoundsError } from '../../server-utils.js';
+import { pickMonoNow, createStampAge, monoAgeOf } from '../mono-clock.js';
 
 const FOLLOWER_MAX_AGE_MS = 15000;
 // Ohne neue Einspeise-Anfrage → beenden; Fristen mindestens drei bzw. ein
@@ -80,21 +81,31 @@ export function isHandoffRequest(source, requestedW) {
  * @param {() => object} deps.getCfg
  * @param {object} deps.state       Laufzeit-Zustand (state.victron, state.multiGx, state.ctrl)
  * @param {Function} [deps.pushLog]
- * @param {() => number} [deps.now]
+ * @param {() => number} [deps.now]      Wanduhr (Anzeige `since`, Sicherung `at`)
+ * @param {() => number} [deps.monoNow]  monotone Uhr für alle Abstände (A23 b); ohne: eingespielte now (Tests), sonst monoNow
  * @param {{load: () => any, save: (v: object) => void, clear: () => void}} [deps.store]
  */
-export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Date.now, store = null, transportType = () => 'modbus', batteryNeeded = () => false, readExactMaxDischargeW = null } = {}) {
+export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Date.now, monoNow = null, store = null, transportType = () => 'modbus', batteryNeeded = () => false, readExactMaxDischargeW = null } = {}) {
+  // Zeit (A23 b, Christin 23.11.2026): Frische, Wiederholung, Gnadenfrist und die Reihenfolge „Messwert nach dem
+  // Schreiben“ laufen über die monotone Uhr, damit ein Sprung der Systemzeit (NTP, Hand-Einstellung) sie weder dehnt
+  // noch staucht. Die Wanduhr-Stempel von außen (state.victron.fieldUpdatedAt/fieldSourceAt, state.multiGx.updatedAt,
+  // state.schedule.lastWrite.*.at) werden am Übergabepunkt in eine monotone Empfangszeit umgerechnet (createStampAge;
+  // state.multiGx trägt sie vom Erzeuger, monoAgeOf). `since` und die Sicherung (`at`) bleiben Wanduhr.
+  const mono = pickMonoNow(monoNow, now);
+  const stamps = createStampAge({ now, monoNow: mono });
+  // a liegt nach b (monoton). b null = es gibt nichts, wonach a liegen müsste.
+  const isAfter = (a, b) => a != null && (b == null || a > b);
   let phase = 'off';
   let saved = null;
   let since = 0;
-  let lastRequestAt = 0;
-  let lastZeroAt = 0;
+  let lastRequestMono = null;
+  let lastZeroMono = null;   // null = Sperrversuch sofort fällig
   let lastReason = null;
   let unknownLogged = false;
   let zeroWritten = false;
-  let zeroWrittenAt = 0;
-  let restoreWrittenAt = 0;
-  let lastRestoreAt = 0;
+  let zeroWrittenMono = null;
+  let restoreWrittenMono = null;
+  let lastRestoreMono = null; // null = Rückschreibversuch sofort fällig
   let zeroAttempts = 0;
   let restoreAttempts = 0;
   // Hat DVhub seit dem Sichern 0 zu schreiben versucht? Nur dann gibt es im
@@ -107,10 +118,10 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   // Modbus: eindeutige Ruecklesung der Entladegrenze (Victron 2720, int32 in W;
   // Codex db0b6c2d P1). 2704 zeigt „unbegrenzt“ (−1) als 0 — eine Sperre gilt
   // ueber Modbus erst, wenn 2720 nach DVhubs Schreiben 0 meldet.
-  // exact = { value, at } | null; exactUnsupported = GX kennt 2720 nicht.
+  // exact = { value, mono } | null; exactUnsupported = GX kennt 2720 nicht.
   let exact = null;
   let exactUnsupported = false;
-  let exactWantedAt = 0;
+  let exactWantedMono = null;
 
   try {
     const persisted = store?.load?.();
@@ -134,7 +145,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     // Freigabe der Einspeisung (Codex Runde 3, P2).
     const blocked = phase === 'active'
       ? lockConfirmed(cfg)
-      : phase === 'restoring' && mainMaxDischargeW(cfg) === 0 && sentAt() > restoreWrittenAt;
+      : phase === 'restoring' && mainMaxDischargeW(cfg) === 0 && isAfter(sentMono(), restoreWrittenMono);
     state.multiGxHandoff = { phase, savedMaxDischargeW: saved, since, reason: lastReason, mainDischargeBlocked: blocked };
   }
 
@@ -150,27 +161,40 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   const maxAgeMs = (cfg) => Number(cfg.victron?.telemetryMaxAgeMs ?? 90000);
   const fieldFresh = (name, cfg) => {
     const at = state.victron?.fieldUpdatedAt?.[name];
-    return finite(at) && now() - Number(at) <= maxAgeMs(cfg);
+    return finite(at) && stamps.ageMs(`field:${name}`, Number(at)) <= maxAgeMs(cfg);
   };
   const mainMaxDischargeW = (cfg) => (fieldFresh('maxDischargeW', cfg) && finite(state.victron?.maxDischargeW)
     ? Number(state.victron.maxDischargeW) : null);
   // Wann die GX den gelesenen Wert gesendet hat (MQTT: Nachricht, nicht Poll;
   // Codex 22.10. Runde 2, P1) — Rueckfall auf den Poll-Zeitpunkt.
   const sentAt = () => Number(state.victron?.fieldSourceAt?.maxDischargeW ?? state.victron?.fieldUpdatedAt?.maxDischargeW) || 0;
+  const sentMono = () => stamps.receivedMono('sent', sentAt() || null);
   // Gesperrt = DVhub hat 0 geschrieben UND die GX meldet danach 0 — ein
   // Ruecklesen von vor dem Schreiben zaehlt nicht (MQTT: „ok“ heisst nur
   // veroeffentlicht; Codex 22.10., P1).
   const isMqtt = () => transportType() === 'mqtt';
   // Ein gescheiterter Leseversuch macht auch die alte Lesung ungueltig (Codex d7f58676, P1).
-  const exactFresh = (cfg, after = 0) => exact != null && exact.error !== true && exact.at > after && now() - exact.at <= maxAgeMs(cfg);
+  const exactFresh = (cfg, afterMono = null) => exact != null && exact.error !== true && isAfter(exact.mono, afterMono)
+    && mono() - exact.mono <= maxAgeMs(cfg);
   const lockConfirmed = (cfg) => zeroWritten
     && mainMaxDischargeW(cfg) === 0
-    && sentAt() > zeroWrittenAt
-    && (isMqtt() || (exactFresh(cfg, zeroWrittenAt) && exact.value === 0));
+    && isAfter(sentMono(), zeroWrittenMono)
+    && (isMqtt() || (exactFresh(cfg, zeroWrittenMono) && exact.value === 0));
   // Zuletzt geschriebene Entladegrenze (gleich welche Quelle): ein Messwert von
   // davor zeigt womoeglich noch einen alten Wert (z. B. die Freigabe von Peak
   // Shaving, Codex db0b6c2d P1).
   const lastWriteAt = () => Number(state.schedule?.lastWrite?.maxDischargeW?.at) || 0;
+  const lastWriteMono = () => stamps.receivedMono('lastWrite', lastWriteAt() || null);
+  // Jeden Takt alle Stempel von außen ansehen (maintain/onFloorHold), damit ihre Empfangszeit spätestens einen Takt
+  // nach dem Eintreffen gemerkt ist — nicht erst bei der ersten Anfrage (dann wäre sie nach einem Rücksprung „jetzt“).
+  function observeStamps() {
+    const f = state.victron?.fieldUpdatedAt || {};
+    for (const name of ['soc', 'maxDischargeW']) if (finite(f[name])) stamps.receivedMono(`field:${name}`, Number(f[name]));
+    sentMono();
+    lastWriteMono();
+    const mg = state.multiGx;
+    if (mg && monoAgeOf(mg) == null && finite(mg.updatedAt)) stamps.receivedMono('follower', Number(mg.updatedAt));
+  }
   publish();
 
   // Braucht der Netzanschluss den Akku? Ein Fehler der Abfrage zaehlt als ja —
@@ -190,7 +214,9 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     if (!isMqtt() && exactUnsupported) return 'max_discharge_not_verifiable';
     const mg = state.multiGx || {};
     if (mg.online !== true) return 'follower_offline';
-    if (!finite(mg.updatedAt) || now() - Number(mg.updatedAt) > FOLLOWER_MAX_AGE_MS) return 'follower_stale';
+    if (!finite(mg.updatedAt)) return 'follower_stale';
+    const mgAge = monoAgeOf(mg) ?? stamps.ageMs('follower', Number(mg.updatedAt));
+    if (mgAge > FOLLOWER_MAX_AGE_MS) return 'follower_stale';
     const minSoc = finite(mg.minSocPct) ? Number(mg.minSocPct) : (finite(cfg.multiGx?.minSocPct) ? Number(cfg.multiGx.minSocPct) : 10);
     if (!finite(mg.socPct) || Number(mg.socPct) <= minSoc + 1) return 'follower_empty';
     return null;
@@ -202,6 +228,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
    * Sollwert, der stattdessen durchgehen darf, oder null (= Boden haelt).
    */
   function onFloorHold({ target, requested, original = requested, source }) {
+    observeStamps();
     if (target !== 'gridSetpointW' || !finite(requested) || Number(requested) >= 0) return null;
     if (!isHandoffRequest(source, original)) return null;
     const cfg = getCfg() || {};
@@ -216,7 +243,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       const soc = Number(state.victron?.soc);
       if (!Number.isFinite(soc) || soc <= persistFloor) return null;
     }
-    lastRequestAt = now();
+    lastRequestMono = mono();
     const current = mainMaxDischargeW(cfg);
     if (phase === 'off') {
       // Peak Shaving hat eine Sperre des Betreibers gerade aufgehoben: an der GX
@@ -230,7 +257,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
         return null;
       }
       // Messwert muss nach dem letzten Schreiben der Entladegrenze liegen.
-      if (!(sentAt() > lastWriteAt())) return null;
+      if (!isAfter(sentMono(), lastWriteMono())) return null;
       let base = current;
       if (!isMqtt()) {
         // Ohne eindeutige Ruecklesung (alter GX ohne 2720) kann DVhub die
@@ -242,8 +269,8 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
         // 2704 = 0: erst 2720 sagt, ob gesperrt (0) oder unbegrenzt (−1); der
         // naechste Takt liest es (maintain), bis dahin haelt der Boden.
         if (current === 0) {
-          exactWantedAt = now();
-          if (!exactFresh(cfg, lastWriteAt())) return null;
+          exactWantedMono = mono();
+          if (!exactFresh(cfg, lastWriteMono())) return null;
           base = exact.value < 0 ? -1 : exact.value;
         }
       }
@@ -276,7 +303,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
         saved = null;
         return null;
       }
-      lastZeroAt = 0; zeroAttempts = 0;
+      lastZeroMono = null; zeroAttempts = 0;
       setPhase('arming', 'floor_export_request');
       return null;
     }
@@ -284,8 +311,8 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       // Alte Sperr-Bestaetigung verwerfen: ein laufendes Zurueckschreiben kann
       // Akku 1 schon freigegeben haben, waehrend die GX noch die alte 0 meldet
       // (Codex Runde 3, P1). Also neu sperren und neu bestaetigen.
-      zeroWritten = false; zeroWrittenAt = 0;
-      lastZeroAt = 0; zeroAttempts = 0; restoreWrittenAt = 0; lastRestoreAt = 0; restoreAttempts = 0;
+      zeroWritten = false; zeroWrittenMono = null;
+      lastZeroMono = null; zeroAttempts = 0; restoreWrittenMono = null; lastRestoreMono = null; restoreAttempts = 0;
       setPhase('arming', 'floor_export_request');
       return null;
     }
@@ -315,7 +342,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     try {
       const r = await readExactMaxDischargeW();
       if (r?.unsupported) { exactUnsupported = true; exact = null; return; }
-      if (r && finite(r.value)) exact = { value: Number(r.value), at: now() };
+      if (r && finite(r.value)) exact = { value: Number(r.value), mono: mono() };
     } catch (e) {
       // Lesefehler: alter Wert veraltet von selbst, die Sperre gilt dann nicht.
       if (!exact?.error) pushLog('multi_gx_handoff_read_error', { error: e?.message || String(e) }, 'warn');
@@ -324,26 +351,27 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   }
 
   async function maintain(applyControlTarget) {
+    observeStamps();
     const cfg = getCfg() || {};
     // 2720 nur lesen, solange die Uebergabe laeuft oder gerade angefragt ist.
     if (!exactUnsupported && (phase === 'arming' || phase === 'active'
-        || (phase === 'off' && exactWantedAt > 0 && now() - exactWantedAt <= requestGraceMs(cfg)))) {
+        || (phase === 'off' && exactWantedMono != null && mono() - exactWantedMono <= requestGraceMs(cfg)))) {
       await readExact();
     }
     if (phase === 'arming' || phase === 'active') {
       const why = blocker(cfg);
       if (why) setPhase('restoring', why);
-      else if (now() - lastRequestAt > requestGraceMs(cfg)) setPhase('restoring', 'no_export_request');
+      else if (lastRequestMono == null || mono() - lastRequestMono > requestGraceMs(cfg)) setPhase('restoring', 'no_export_request');
     }
     if (phase === 'arming') {
       const current = mainMaxDischargeW(cfg);
       // Meldet die GX nach dem Schreiben etwas anderes als 0, gilt die Sperre nicht.
-      if (zeroWritten && current != null && current !== 0 && sentAt() > zeroWrittenAt) zeroWritten = false;
+      if (zeroWritten && current != null && current !== 0 && isAfter(sentMono(), zeroWrittenMono)) zeroWritten = false;
       // Modbus: 2720 nach dem Schreiben ungleich 0 (z. B. an der GX auf
       // „unbegrenzt“ gestellt, 2704 zeigt weiter 0) — die Sperre gilt nicht.
-      if (zeroWritten && !isMqtt() && exactFresh(cfg, zeroWrittenAt) && exact.value !== 0) zeroWritten = false;
-      if (!zeroWritten && now() - lastZeroAt >= retryDelayMs(cfg, zeroAttempts)) {
-        lastZeroAt = now();
+      if (zeroWritten && !isMqtt() && exactFresh(cfg, zeroWrittenMono) && exact.value !== 0) zeroWritten = false;
+      if (!zeroWritten && (lastZeroMono == null || mono() - lastZeroMono >= retryDelayMs(cfg, zeroAttempts))) {
+        lastZeroMono = mono();
         zeroAttempts += 1;
         // Der Schreibpfad ueberspringt einen unveraenderten Wert (2704 ohne
         // Nachfuehren) — die gemerkte 0 verwerfen, damit wirklich geschrieben
@@ -351,7 +379,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
         if (state.schedule?.lastWrite) delete state.schedule.lastWrite.maxDischargeW;
         zeroTried = true;
         const res = await applyControlTarget('maxDischargeW', 0, 'multi_gx_handoff');
-        if (res?.ok && !res.skipped) { zeroWritten = true; zeroWrittenAt = now(); }
+        if (res?.ok && !res.skipped) { zeroWritten = true; zeroWrittenMono = mono(); }
       }
     }
     const paused = state.ctrl?.discretionaryWritesPaused === true;
@@ -373,7 +401,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       const restoreAbovePct = Math.min(floorPct + RESTORE_HYSTERESIS_PCT, (floorPct + 100) / 2);
       // Braucht der Netzanschluss den Akku, gilt die Schwelle nicht.
       const aboveFloor = socOk && (Number(soc) > restoreAbovePct || (aboveHardFloor && needsBattery()));
-      const confirmed = restoreWrittenAt > 0 && mainMaxDischargeW(cfg) === saved && sentAt() > restoreWrittenAt;
+      const confirmed = restoreWrittenMono != null && mainMaxDischargeW(cfg) === saved && isAfter(sentMono(), restoreWrittenMono);
       if (paused) {
         // Not-Halt: nur lesen — ausser dem einen Rueckschreibversuch.
         if (confirmed) { finish(); return; }
@@ -396,7 +424,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
           let res;
           try { res = await applyControlTarget('maxDischargeW', saved, 'multi_gx_handoff_stop'); } finally { stopRestoreValue = null; }
           const lw = state.schedule?.lastWrite?.maxDischargeW;
-          if (res?.ok && !res.skipped && lw && Number(lw.value) === saved) restoreWrittenAt = now();
+          if (res?.ok && !res.skipped && lw && Number(lw.value) === saved) restoreWrittenMono = mono();
           pushLog('multi_gx_handoff_stop_restore', { savedMaxDischargeW: saved, ok: res?.ok === true, error: res?.error || null }, res?.ok ? 'info' : 'warn');
         }
         publish(cfg);
@@ -407,14 +435,14 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
         // meldet — sonst bliebe Akku 1 bei verlorenem Befehl gesperrt und die
         // Sicherung waere weg (Codex Runde 2, P2).
         if (confirmed) { finish(); return; }
-        if (now() - lastRestoreAt >= retryDelayMs(cfg, restoreAttempts)) {
-          lastRestoreAt = now();
+        if (lastRestoreMono == null || mono() - lastRestoreMono >= retryDelayMs(cfg, restoreAttempts)) {
+          lastRestoreMono = mono();
           restoreAttempts += 1;
           if (restoreAttempts === 4) pushLog('multi_gx_handoff_restore_unconfirmed', { savedMaxDischargeW: saved, attempts: restoreAttempts }, 'warn');
           if (state.schedule?.lastWrite) delete state.schedule.lastWrite.maxDischargeW;
           const res = await applyControlTarget('maxDischargeW', saved, 'multi_gx_handoff_restore');
           const lw = state.schedule?.lastWrite?.maxDischargeW;
-          if (res?.ok && !res.skipped && lw && Number(lw.value) === saved) restoreWrittenAt = now();
+          if (res?.ok && !res.skipped && lw && Number(lw.value) === saved) restoreWrittenMono = mono();
         }
       }
     }
@@ -428,9 +456,9 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     const restored = saved;
     saved = null;
     zeroWritten = false;
-    zeroWrittenAt = 0;
+    zeroWrittenMono = null;
     zeroTried = false;
-    restoreWrittenAt = 0; lastRestoreAt = 0; restoreAttempts = 0; zeroAttempts = 0;
+    restoreWrittenMono = null; lastRestoreMono = null; restoreAttempts = 0; zeroAttempts = 0;
     setPhase('off', reason);
     if (reason === 'restored') pushLog('multi_gx_handoff_restored', { maxDischargeW: restored });
   }
