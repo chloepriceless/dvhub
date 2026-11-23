@@ -1,0 +1,235 @@
+# DVhub-EOS im local-native-Modus → Docker Hub + GitHub Container Registry
+#
+#   docker.io/bikinibottomcapital/dvhub-eos-localnative:<EOS_NATIVE_BIN_VERSION>
+#   ghcr.io/chloepriceless/dvhub-eos-localnative:<EOS_NATIVE_BIN_VERSION>
+#
+# Rezept docker/eos-localnative (Dockerfile + docker-bake.hcl), Überlagerung
+# docker/compose.eos-localnative.yml. Das Image trägt das eigenständige Binär
+# dvhub-optimize (dvhub-rs, crates/eos-genetic) als EOS v0.4.0rc3-Fassade.
+#
+# Version und Binäre kommen allein aus eos-version.env (EOS_NATIVE_BIN_*):
+#   1. SHA256SUMS des Releases (EOS_NATIVE_BIN_URL) samt .sig gegen
+#      release-keys/allowed_signers prüfen (Namensraum dvhub-release) und die
+#      gepinnten sha256 darin wiederfinden,
+#   2. Binäre holen, sha256 gegen den Pin prüfen (scripts/eos-native-wheels.sh),
+#      das Dockerfile prüft sie beim Bau noch einmal,
+#   3. je Architektur (amd64, arm64 unter QEMU) bauen, starten und
+#      scripts/eos-localnative-smoke.py im Container laufen lassen,
+#   4. erst dann die Multi-Arch-Liste (amd64 + arm64) pushen und nachprüfen.
+#
+# Ein schon veröffentlichter Tag wird NICHT überschrieben (Version in
+# eos-version.env anheben). Liegt er nur in einer Registry, wird er unverändert
+# in die andere kopiert. Ausnahme: workflow_dispatch mit rebuild=true —
+# workflow_dispatch geht nur, wenn diese Datei auf dem Standardzweig liegt.
+#
+# Docker-Hub-Token: Repo-Secret BIKINIBOTTOMCAPITAL (oder DOCKERHUB_TOKEN), wie
+# in container.yml. GHCR über GITHUB_TOKEN (packages: write).
+#
+# SECURITY: nur push (main und der Feature-Zweig) und workflow_dispatch — nie
+# pull_request, Forks bekommen keine Secrets. Keine Secrets in Logs (login-action
+# maskiert; der Token wird nur auf Vorhandensein geprüft).
+
+name: Container (EOS local-native)
+
+on:
+  push:
+    branches:
+      - main
+      - feat/local-native-rc3-eigene
+    paths:
+      - eos-version.env
+      - docker/eos-localnative/**
+      - docker/compose.eos-localnative.yml
+      - scripts/eos-native-wheels.sh
+      - scripts/eos-localnative-smoke.py
+      - .github/workflows/container-eos-localnative.yml
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Vorhandenen Tag neu bauen und überschreiben
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Ein Tag, egal von welchem Zweig: nie zwei Läufe gleichzeitig auf denselben
+# Tag pushen lassen, und einen laufenden Push nicht abbrechen.
+concurrency:
+  group: container-eos-localnative
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: dvhub-eos-localnative (amd64 + arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      HUB_IMAGE: docker.io/bikinibottomcapital/dvhub-eos-localnative
+      GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/dvhub-eos-localnative
+      BINS_DIR: .eos-bins
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      # Form der Pins und Kopplung eos-version.env ↔ Compose ↔ README (ohne npm ci:
+      # der Test braucht nur node:-Module).
+      - name: Pin-Test (dvhub-eos-pin.test.js)
+        working-directory: dvhub
+        run: node --test test/dvhub-eos-pin.test.js
+
+      - name: Docker-Hub-Token vorhanden
+        env:
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
+        run: |
+          test -n "$HUB_TOKEN" || { echo "::error::Docker-Hub-Token fehlt (Secret BIKINIBOTTOMCAPITAL oder DOCKERHUB_TOKEN)"; exit 1; }
+
+      - name: Version aus eos-version.env
+        id: v
+        run: |
+          set -euo pipefail
+          val() { { grep -E "^$1=" eos-version.env || true; } | tail -n 1 | cut -d= -f2- | tr -d '"'"'"'\r'; }
+          version="$(val EOS_NATIVE_BIN_VERSION)"
+          url="$(val EOS_NATIVE_BIN_URL)"
+          [[ "$version" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo "::error::EOS_NATIVE_BIN_VERSION ist kein gültiger Docker-Tag: '$version'"; exit 1; }
+          [[ "$url" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.+-]+$ ]] || { echo "::error::EOS_NATIVE_BIN_URL ist keine GitHub-Release-Adresse: '$url'"; exit 1; }
+          grep -qF "\${EOS_LOCALNATIVE_TAG:-${version}}" docker/compose.eos-localnative.yml \
+            || { echo "::error::docker/compose.eos-localnative.yml nennt nicht den Tag $version"; exit 1; }
+          { echo "version=$version"; echo "url=$url"; } | tee -a "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@v4
+        with:
+          username: bikinibottomcapital
+          password: ${{ secrets.DOCKERHUB_TOKEN || secrets.BIKINIBOTTOMCAPITAL }}
+
+      - name: Ist der Tag schon veröffentlicht?
+        id: plan
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.rebuild }}
+        # Jede Registry einzeln: Gibt es den Tag nur in einer (z. B. GHCR-Push
+        # gescheitert), wird er in die andere KOPIERT, nicht neu gebaut — sonst
+        # stünde hinter derselben Version ein anderes Image (Basis python:3.13-slim
+        # bewegt sich). Neu gebaut wird nur, wenn er in keiner liegt, oder auf
+        # ausdrücklichen Wunsch (rebuild).
+        run: |
+          set -euo pipefail
+          have() { docker buildx imagetools inspect "$1" >/dev/null 2>&1; }
+          hub=false; ghcr=false
+          have "$HUB_IMAGE:$VERSION" && hub=true
+          have "$GHCR_IMAGE:$VERSION" && ghcr=true
+          build=false; copy_from=""; copy_to=""
+          if [ "$REBUILD" = true ]; then
+            build=true
+            echo "::warning::$VERSION wird auf Wunsch (rebuild) neu gebaut und überschrieben (Hub: $hub, GHCR: $ghcr)"
+          elif [ "$hub" = false ] && [ "$ghcr" = false ]; then
+            build=true
+          elif [ "$hub" = true ] && [ "$ghcr" = false ]; then
+            copy_from="$HUB_IMAGE:$VERSION"; copy_to="$GHCR_IMAGE:$VERSION"
+          elif [ "$hub" = false ] && [ "$ghcr" = true ]; then
+            copy_from="$GHCR_IMAGE:$VERSION"; copy_to="$HUB_IMAGE:$VERSION"
+          else
+            echo "::notice::$HUB_IMAGE:$VERSION und $GHCR_IMAGE:$VERSION gibt es schon — nichts zu tun (Version in eos-version.env anheben oder workflow_dispatch mit rebuild)"
+          fi
+          publish=false; { [ "$build" = true ] || [ -n "$copy_from" ]; } && publish=true
+          { echo "build=$build"; echo "copy_from=$copy_from"; echo "copy_to=$copy_to"; echo "publish=$publish"; } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Vorhandenen Tag in die fehlende Registry kopieren
+        if: steps.plan.outputs.copy_from != ''
+        env:
+          FROM: ${{ steps.plan.outputs.copy_from }}
+          TO: ${{ steps.plan.outputs.copy_to }}
+        run: |
+          set -euo pipefail
+          echo "kopiere $FROM → $TO (unverändert, gleicher Digest)"
+          docker buildx imagetools create -t "$TO" "$FROM"
+
+      # Vertrauensanker: Signatur der SHA256SUMS des Releases (ssh-keygen -Y,
+      # Namensraum dvhub-release); die gepinnten Prüfsummen müssen darin stehen.
+      - name: Release-Prüfsummen und Signatur prüfen
+        if: steps.plan.outputs.build == 'true'
+        env:
+          URL: ${{ steps.v.outputs.url }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          sums="dvhub-optimize-${VERSION}.SHA256SUMS"
+          tmp="$(mktemp -d)"
+          curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/$sums" "$URL/$sums"
+          curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/$sums.sig" "$URL/$sums.sig"
+          ssh-keygen -Y verify -f release-keys/allowed_signers -I dvhub-release -n dvhub-release \
+            -s "$tmp/$sums.sig" < "$tmp/$sums"
+          scripts/eos-native-wheels.sh list --prefix EOS_NATIVE_BIN | while read -r arch file sha; do
+            grep -qxE "${sha}  \*?${file}" "$tmp/$sums" || { echo "::error::$arch: $file mit $sha steht nicht in der signierten $sums"; exit 1; }
+            echo "$arch $file in signierter $sums"
+          done
+          rm -rf "$tmp"
+
+      - name: Binäre zum Pin holen und prüfen
+        if: steps.plan.outputs.build == 'true'
+        run: scripts/eos-native-wheels.sh fetch "$BINS_DIR" X86_64 AARCH64 --prefix EOS_NATIVE_BIN
+
+      - uses: docker/setup-qemu-action@v4
+        if: steps.plan.outputs.build == 'true'
+      - uses: docker/setup-buildx-action@v4
+        if: steps.plan.outputs.build == 'true'
+
+      # Je Architektur einzeln laden (--load kann keine Multi-Arch-Liste) und
+      # im laufenden Container prüfen: Fassade alive/native, D/E-Felder da.
+      - name: Bauen und Rauchtest je Architektur
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2046
+          export $(grep -E '^EOS_NATIVE_BIN_[A-Z0-9_]+=' eos-version.env)
+          for arch in amd64 arm64; do
+            echo "::group::$arch"
+            PLATFORMS="linux/$arch" TAGS="dvhub-eos-localnative:ci-$arch" \
+              docker buildx bake -f docker/eos-localnative/docker-bake.hcl --load dvhub-eos-localnative
+            docker run -d --name "ln-$arch" --platform "linux/$arch" \
+              -v "$PWD/scripts/eos-localnative-smoke.py:/smoke.py:ro" "dvhub-eos-localnative:ci-$arch"
+            docker exec "ln-$arch" uname -m
+            ok=0; docker exec "ln-$arch" python /smoke.py || ok=$?
+            docker logs "ln-$arch" 2>&1 | tail -n 20
+            docker rm -f "ln-$arch" >/dev/null
+            [ "$ok" = 0 ] || { echo "::error::Rauchtest $arch rot"; exit 1; }
+            echo "::endgroup::"
+          done
+
+      - name: Multi-Arch veröffentlichen
+        if: steps.plan.outputs.build == 'true'
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2046
+          export $(grep -E '^EOS_NATIVE_BIN_[A-Z0-9_]+=' eos-version.env)
+          PLATFORMS=linux/amd64,linux/arm64 TAGS="$HUB_IMAGE:$VERSION,$GHCR_IMAGE:$VERSION" \
+            docker buildx bake -f docker/eos-localnative/docker-bake.hcl --push dvhub-eos-localnative
+
+      - name: Veröffentlichte Architekturen prüfen
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          for ref in "$HUB_IMAGE:$VERSION" "$GHCR_IMAGE:$VERSION"; do
+            plats="$(docker buildx imagetools inspect --raw "$ref" \
+              | jq -r '.manifests[] | select(.platform.os == "linux") | .platform.architecture' | sort -u | tr '\n' ' ')"
+            echo "$ref: $plats"
+            for a in amd64 arm64; do
+              case " $plats " in *" $a "*) ;; *) echo "::error::$ref ohne $a"; exit 1 ;; esac
+            done
+          done

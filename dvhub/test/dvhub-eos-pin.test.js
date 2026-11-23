@@ -210,3 +210,35 @@ test('EOS-schlank: Grundlage unter dem Docker-Tag, Healthcheck-Modul von DVhub-E
   assert.doesNotMatch(df, /container_healthcheck/, 'Modulname von v0.4.0rc3');
   assert.match(read('.github/workflows/container-dev.yml'), /EOS_IMAGE_TAG=\$\{\{ steps\.eos\.outputs\.image_tag \}\}/);
 });
+
+// --- local-native: das eigenständige Binär dvhub-optimize (A14, Christin 21.11.2026) ------
+// Kern = EOS 0.4.0rc3 + unsere Änderungen (D #1531, E #1532, #1518) + #1423/#1483 + B4
+// (dvhub-rs main a1c4434, Parität gegen die Python-Referenz db8aa0a7). Für ALLE drei
+// Architekturen gepinnt (auch armv7l: 32-Bit-ARM-Kernel, z. B. Pi 2/3); Auswahl nach `uname -m`
+// (eos-provision.sh, post-update.sh). Ein Kern 0.1.x (Stand bis 20.11.) kennt D/E nicht.
+const BIN_ARCH = { X86_64: 'x86_64', AARCH64: 'aarch64', ARMV7L: 'armv7l' };
+
+test('local-native-Binär: je Architektur (auch armv7l) Datei nach Schema + sha256, ein Release', () => {
+  const v = pin.EOS_NATIVE_BIN_VERSION;
+  assert.match(v, /^\d+\.\d+\.\d+-dev\d{10}$/, 'Version <x.y.z>-dev<JJMMTTHHMM>');
+  assert.ok(!/^0\.1\./.test(v), `Kern ${v}: 0.1.x ist der Stand vor P4 (ohne D/E)`);
+  assert.match(pin.EOS_NATIVE_BIN_URL, /^https:\/\/github\.com\/chloepriceless\/EOS\/releases\/download\/[^/\s]+$/);
+  const shas = new Set();
+  for (const [key, arch] of Object.entries(BIN_ARCH)) {
+    assert.equal(pin[`EOS_NATIVE_BIN_${key}`], `dvhub-optimize-${v}-${arch}`, `EOS_NATIVE_BIN_${key}`);
+    assert.match(pin[`EOS_NATIVE_BIN_${key}_SHA256`] || '', /^[0-9a-f]{64}$/, `EOS_NATIVE_BIN_${key}_SHA256`);
+    shas.add(pin[`EOS_NATIVE_BIN_${key}_SHA256`]);
+  }
+  assert.equal(shas.size, 3, 'je Architektur ein eigenes Binär');
+  const listed = spawnSync('bash', [path.join(root, 'scripts', 'eos-native-wheels.sh'), 'list', '--prefix', 'EOS_NATIVE_BIN',
+    path.join(root, 'eos-version.env')], { encoding: 'utf8' });
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.deepEqual(listed.stdout.trim().split('\n').map((l) => l.split(' ')[0]), Object.keys(BIN_ARCH));
+});
+
+test('local-native im Docker-Stack: Überlagerung, .env.example und README nennen denselben Binär-Stand', () => {
+  const v = pin.EOS_NATIVE_BIN_VERSION;
+  assert.ok(read('docker/compose.eos-localnative.yml').includes(`\${EOS_LOCALNATIVE_TAG:-${v}}`), 'compose.eos-localnative.yml Vorgabe-Tag');
+  assert.equal(/^# EOS_LOCALNATIVE_TAG=(\S+)$/m.exec(read('docker/.env.example'))?.[1], v, 'docker/.env.example');
+  assert.ok(read('docker/eos-localnative/README.md').includes(`dvhub-eos-localnative:${v}`), 'README-Bauanleitung');
+});

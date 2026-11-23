@@ -3,8 +3,12 @@
 Fährt den EOS-Dienst mit dem eigenständigen Rust-Binär **`dvhub-optimize serve`**
 statt mit Python-EOS. Das Binär (dvhub-rs, `crates/eos-genetic`) bildet die
 **EOS v0.4.0rc3 HTTP-Schnittstelle** nach und rechnet `POST /v1/optimize`
-synchron. Es ist paritätsbewiesen gegen Python-EOS (P1 40419/40419, P2 32/32
-bitgleich, E2E 6/6). Weil HTTP-gleich, bleibt die DVhub-Seite
+synchron. Seit 0.2.0 rechnet es wie EOS 0.4.0rc3 mit unseren Änderungen
+(Schwellen-Spitzenkappung #1531, E-Auto-Wertstufen #1532, #1518, Backports
+#1423/#1483) und ist dagegen paritätsbewiesen (Python-Referenz db8aa0a7:
+P1 36/36, P2 36/36 bitgleich, P3 114/114, E2E 7/7, auch für das ausgelieferte
+musl-Binär je Architektur). DVhub erkennt D und E am Inhalt von `GET /v1/config`
+und am Plan und schickt sie dann mit. Weil HTTP-gleich, bleibt die DVhub-Seite
 (`services/optimizer/eos-adapter.js`, `eos-run-trigger.js`, `eos-monitor.js`)
 **unverändert** — `resolveEosProxy()` behält bei `mode=local-native` dieselbe
 lokale URL/den Port `:8503`.
@@ -22,6 +26,14 @@ Nutzen: **−170..−230 MB RAM** gegenüber dem Python-EOS-Container.
   `docker/eos-native` die Wheels), nach `uname -m` ausgewählt und seine
   **sha256 gegen `eos-version.env` hart geprüft** (Bau scheitert bei Abweichung).
 - Image: `bikinibottomcapital/dvhub-eos-localnative:<EOS_NATIVE_BIN_VERSION>`.
+- CI: `.github/workflows/container-eos-localnative.yml` (Push auf `main` oder den
+  Feature-Zweig mit Pfadfilter, oder `workflow_dispatch`) prüft die signierte
+  `SHA256SUMS` des Releases gegen `release-keys/allowed_signers`, holt die Binäre
+  mit sha256-Prüfung, startet das Image je Architektur mit
+  `scripts/eos-localnative-smoke.py` (alive/native, D/E-Felder) und pusht erst
+  dann nach Docker Hub und GHCR. Ein vorhandener Tag wird nicht überschrieben
+  (Version anheben oder `workflow_dispatch` mit `rebuild`); liegt er nur in einer
+  Registry, wird er unverändert in die andere kopiert.
 
 ### Bauen (multi-arch)
 
@@ -31,7 +43,7 @@ Aus dem Repo-Wurzelordner:
 BINS_DIR=$(mktemp -d)
 scripts/eos-native-wheels.sh fetch "$BINS_DIR" AARCH64 X86_64 --prefix EOS_NATIVE_BIN
 export $(grep -E '^EOS_NATIVE_BIN_[A-Z0-9_]+=' eos-version.env | xargs)
-BINS_DIR=$BINS_DIR TAGS=bikinibottomcapital/dvhub-eos-localnative:0.1.0-dev2611152231 \
+BINS_DIR=$BINS_DIR TAGS=bikinibottomcapital/dvhub-eos-localnative:0.2.0-dev2611211058 \
   docker buildx bake --allow=fs.read="$BINS_DIR" \
     -f docker/eos-localnative/docker-bake.hcl [--push|--load] dvhub-eos-localnative
 ```

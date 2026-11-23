@@ -30,7 +30,7 @@
 # vorliegen (bake --load) oder aus der Registry ziehbar sein.
 services:
   eos:
-    image: ${EOS_LOCALNATIVE_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos-localnative}:${EOS_LOCALNATIVE_TAG:-0.1.0-dev2611152231}
+    image: ${EOS_LOCALNATIVE_IMAGE:-docker.io/bikinibottomcapital/dvhub-eos-localnative}:${EOS_LOCALNATIVE_TAG:-0.2.0-dev2611211058}
     build: !reset null
     # Derselbe Wächter wie bei Python-EOS (configs: dvhub-eos-watch aus
     # compose.yml, dort gemountet nach /dvhub-eos-watch.py) — nur der

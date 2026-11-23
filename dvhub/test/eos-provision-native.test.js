@@ -416,3 +416,41 @@ test('Rückweg: von nativ zurück auf Python (mode=local) stellt den Python-Dien
     assert.equal(s.engine(), null, 'Motor-Marker beim Rückweg gelöscht');
   } finally { s.cleanup(); }
 });
+
+// A14 (21.11.2026): dvhub-optimize ist jetzt auch für armv7l gepinnt (32-Bit-ARM-
+// Kernel, z. B. Pi 2/3). Die Box wählt nach `uname -m` genau das Binär ihrer Architektur —
+// hier mit drei verschiedenen Binären und einer uname-Attrappe je Architektur.
+for (const [unameM, key] of [['armv7l', 'ARMV7L'], ['aarch64', 'AARCH64'], ['x86_64', 'X86_64']]) {
+  test(`local-native auf ${unameM}: genau das ${key}-Binär wird geholt, geprüft und installiert`, () => {
+    const s = setup({ arch: unameM });
+    try {
+      s.setOptin(true);
+      const bodies = {};
+      let pins = readFileSync(s.pinFile, 'utf8').replace(/^EOS_NATIVE_BIN_(X86_64|AARCH64|ARMV7L)(_SHA256)?=.*\n/gm, '');
+      for (const k of ['X86_64', 'AARCH64', 'ARMV7L']) {
+        const name = `dvhub-optimize-0.1.0-test-${k.toLowerCase()}`;
+        bodies[k] = `#!/usr/bin/env bash\ncase "$1" in version) echo "dvhub-optimize test ${k} (eos-genetic)";; esac\nexit 0\n`;
+        writeFileSync(join(s.rel, name), bodies[k]);
+        chmodSync(join(s.rel, name), 0o755);
+        pins += `EOS_NATIVE_BIN_${k}=${name}\nEOS_NATIVE_BIN_${k}_SHA256=${sha(bodies[k])}\n`;
+      }
+      writeFileSync(s.pinFile, pins);
+      const r = s.run({ EOS_PROXY_MODE: 'local-native', PATH: `${fakeUname(s.dir, unameM)}:${process.env.PATH}` });
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.ok(nativeExec(s.unit()), `native ExecStart erwartet:\n${s.unit()}`);
+      assert.equal(s.nativeBin(), bodies[key], `installiert ist das ${key}-Binär`);
+      assert.match(s.native(), new RegExp(`\\bok native:dvhub-optimize-0\\.1\\.0-test-${key}:${sha(bodies[key]).slice(0, 12)}$`));
+      assert.match(s.engine(), new RegExp(` dvhub-optimize-0\\.1\\.0-test-${key.toLowerCase()}:${sha(bodies[key]).slice(0, 12)}$`));
+    } finally { s.cleanup(); }
+  });
+}
+
+// uname-Attrappe VOR den übrigen Attrappen (setup legt sie in <dir>/bin; PATH der
+// Probe: <dir>/uname-bin:<dir>/bin:…). Nur `-m` wird beantwortet, sonst echtes uname.
+function fakeUname(dir, machine) {
+  const d = join(dir, 'uname-bin');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'uname'), `#!/usr/bin/env bash\nif [[ "$1" == -m ]]; then echo ${machine}; else exec /usr/bin/uname "$@"; fi\n`);
+  chmodSync(join(d, 'uname'), 0o755);
+  return `${d}:${join(dir, 'bin')}`;
+}

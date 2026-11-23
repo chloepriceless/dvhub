@@ -1,0 +1,53 @@
+{
+ "_capture": {
+  "tool": "dvhub-optimize serve 0.2.0-dev2611211058 (aarch64-musl, sha256 da554092fcbc)",
+  "captured": "2026-11-21",
+  "how": "plan.instructions aus dvhub-optimize run (E2E-Fixture dvhub-job-ev-socvalue-limit, Netzbezugsgrenze 8000 W), gekürzt auf 3 Akku- und 1 Auto-Anweisung"
+ },
+ "instructions": [
+  {
+   "id": "battery1@fixture",
+   "execution_time": "2026-11-10T15:30:00+01:00",
+   "abnormal_condition": false,
+   "type": "FRBCInstruction",
+   "actuator_id": "battery1",
+   "operation_mode_id": "NON_EXPORT",
+   "operation_mode_factor": 1.0,
+   "peak_shaving_threshold_w": 8000.0,
+   "resource_id": "battery1"
+  },
+  {
+   "id": "battery1@fixture",
+   "execution_time": "2026-11-10T17:45:00+01:00",
+   "abnormal_condition": false,
+   "type": "FRBCInstruction",
+   "actuator_id": "battery1",
+   "operation_mode_id": "GRID_SUPPORT_EXPORT",
+   "operation_mode_factor": 0.75,
+   "peak_shaving_threshold_w": 8000.0,
+   "resource_id": "battery1"
+  },
+  {
+   "id": "battery1@fixture",
+   "execution_time": "2026-11-10T18:00:00+01:00",
+   "abnormal_condition": false,
+   "type": "FRBCInstruction",
+   "actuator_id": "battery1",
+   "operation_mode_id": "NON_EXPORT",
+   "operation_mode_factor": 1.0,
+   "peak_shaving_threshold_w": 8000.0,
+   "resource_id": "battery1"
+  },
+  {
+   "id": "ev11@fixture",
+   "execution_time": "2026-11-10T15:30:00+01:00",
+   "abnormal_condition": false,
+   "type": "FRBCInstruction",
+   "actuator_id": "ev11",
+   "operation_mode_id": "IDLE",
+   "operation_mode_factor": 1.0,
+   "peak_shaving_threshold_w": null,
+   "resource_id": "ev11"
+  }
+ ]
+}
