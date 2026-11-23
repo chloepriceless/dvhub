@@ -89,8 +89,8 @@ const close = (actual, expected, msg, eps = 0.011) => {
   assert.ok(Math.abs(actual - expected) <= eps, `${msg}: ${actual} statt ${expected}`);
 };
 
-test('Ablage-Version 11 (dynamischer Tarif, §14a im Festpreis-Vergleich)', () => {
-  assert.equal(SUMMARY_CACHE_VERSION, 11);
+test('Ablage-Version 12 (dynamischer Tarif, §14a im Festpreis-Vergleich)', () => {
+  assert.equal(SUMMARY_CACHE_VERSION, 12);
 });
 
 test('März mit Tarifwechsel am 15. und Sommerzeit: Ø, Börse, Aufschlag, Formel, Grundgebühr, Vergleich', async () => {
@@ -388,4 +388,27 @@ test('T11: §14a-Fenster im Festpreis-Vergleich, „ohne §14a“ für dynamisch
   assert.equal(off.p14a, null);
   assert.equal(off.fixedCompare.withoutP14a, null);
   assert.equal(off.fixedCompare.ctKwhWithP14a, 30);
+});
+
+test('T11 (Codex 90e9b9c4): Anbieter-Endpreis fehlt ohne Schätzmodell → Formel mit Fenster, Abweichung bekannt', async (t) => {
+  clearProviderPrices();
+  t.after(() => clearProviderPrices());
+  const store = makeStore({ fromUtc: '2026-05-31T22:00:00.000Z', toUtc: '2026-06-07T22:00:00.000Z' });
+  const pricing = {
+    mode: 'provider', provider: { priceBasis: 'gross_total' }, validFrom: '2026-01-01', fixedGrossImportCtKwh: 30, comparisonFixedCtKwh: 30,
+    dynamicComponents: { energyMarkupCtKwh: 0, gridChargesCtKwh: 10, leviesAndFeesCtKwh: 2, vatPct: 19 },
+    usesParagraph14aModule3: true,
+    module3Windows: { window1: { enabled: true, label: 'NT', start: '00:00', end: '06:00', priceCtKwh: 3 } },
+    periods: []
+  };
+  const summary = await runtimeFor(store, pricing).getSummary({ view: 'week', date: '2026-06-03' });
+  const k = summary.kpis.tariff;
+  // Die Felder aus feat/arbeitspreis-vergleich nehmen dieselbe Abweichung.
+  assert.equal(summary.kpis.fixedCompareSavingsEur, k.fixedCompare.savingsEur);
+  // Alles geschätzt nach der dynamischen Formel mit Fenster: δ = −8,90 ct ist bekannt.
+  assert.equal(k.estimatedSlots, k.pricedSlots);
+  assert.equal(k.p14a.unknownSlots, 0);
+  assert.ok(k.p14a.slots > 0);
+  assert.ok(k.fixedCompare.withoutP14a);
+  close(k.p14a.savedDynamicEur, (k.p14a.importKwh * 8.9) / 100, '§14a-Effekt');
 });

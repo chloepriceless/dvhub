@@ -7431,9 +7431,12 @@ export function describeUserImportTariffForSlot(ts, pricing = {}, options = {}) 
     || (mode === 'provider' && effective?.provider?.priceBasis === 'net_energy');
   const grid = effective?.dynamicComponents?.gridChargesCtKwh;
   const deltaVat = Number(effective?.dynamicComponents?.vatPct || 0);
-  const module3DeltaCtKwh = window && usesGridCharge && grid != null && grid !== '' && Number.isFinite(Number(grid)) && Number.isFinite(deltaVat)
+  // δ nach der dynamischen Formel — gilt auch beim Anbieter-Endpreis, wenn
+  // DVhub mangels Preis und Schätzmodell selbst so rechnet (Codex 90e9b9c4).
+  const module3FormulaDeltaCtKwh = window && grid != null && grid !== '' && Number.isFinite(Number(grid)) && Number.isFinite(deltaVat)
     ? Math.round((window.priceCtKwh - Number(grid) * (1 + deltaVat / 100)) * 10000) / 10000
     : null;
+  const module3DeltaCtKwh = usesGridCharge ? module3FormulaDeltaCtKwh : null;
   return {
     mode,
     tariffKey: ctx.tariffKey,
@@ -7444,6 +7447,7 @@ export function describeUserImportTariffForSlot(ts, pricing = {}, options = {}) 
     windowLabel: window ? window.label : null,
     module3Active: Boolean(window),
     module3DeltaCtKwh,
+    module3FormulaDeltaCtKwh,
     beforeValidFrom: ctx.beforeValidFrom
   };
 }

@@ -115,7 +115,7 @@ test('describeUserImportTariffForSlot: Tarif, Zeitraum, Modul-3-Fenster, MwSt, G
     mode: 'dynamic', tariffKey: 'period:dyn', tariffLabel: 'Tibber', vatPct: 7, baseFeeEurMonth: 6,
     windowId: 'window1', windowLabel: 'Niedrig', module3Active: true,
     // T11: Fenster 2 ct − Netzentgelt 10 ct × 1,07 = −8,70 ct.
-    module3DeltaCtKwh: -8.7, beforeValidFrom: false
+    module3DeltaCtKwh: -8.7, module3FormulaDeltaCtKwh: -8.7, beforeValidFrom: false
   });
   const base = describeUserImportTariffForSlot(noonUtc('2026-11-10'), pricing);
   assert.equal(base.tariffKey, 'base');

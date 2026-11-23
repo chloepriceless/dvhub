@@ -10,7 +10,7 @@ import {
   describeUserImportTariffForSlot
 } from './config-model.js';
 import { providerModeInUse } from './services/tariff-provider/provider-pricing.js';
-import { whenProviderPricesLoaded, providerSlotAt, firstProviderSlotMs } from './services/tariff-provider/price-store.js';
+import { whenProviderPricesLoaded, providerSlotAt, firstProviderSlotMs, getProviderEstimate } from './services/tariff-provider/price-store.js';
 import {
   createTariffSums,
   addSlotToTariffSums,
@@ -706,7 +706,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 //                 Zwischenstand mit Version 8 hätte die gerundeten behalten.
 // 10 (23.11.2026): §14a-Fenster im Festpreis-Vergleich und „ohne §14a“ (T11).
 // 11 (23.11.2026): Abweichung nur, wo DVhub das Netzentgelt einrechnet; MwSt leer = 0 (Codex 3cbbdef3).
-export const SUMMARY_CACHE_VERSION = 11;
+// 12 (23.11.2026): δ auch beim Formel-Rückfall des Anbieter-Endpreises (Codex 90e9b9c4).
+export const SUMMARY_CACHE_VERSION = 12;
 
 // Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;
@@ -1941,12 +1942,24 @@ export function createHistoryRuntime({
       }
       return info;
     }
+    function slotPriceSource(slot, desc, userImportPriceCtKwh) {
+      if (desc.mode === 'dynamic') return 'tariff';
+      if (desc.mode === 'fixed') return 'fixed';
+      return providerSlotAt(slot.ts) ? 'provider' : (Number.isFinite(userImportPriceCtKwh) ? 'estimate' : null);
+    }
+    // §14a-Abweichung, die zum tatsächlichen Rechenweg des Slotpreises passt:
+    // Fehlen Anbieterpreis und Schätzmodell, rechnet DVhub den Anbieter-Endpreis
+    // nach der dynamischen Formel mit Fenster → δ ist bekannt (Codex 90e9b9c4).
+    function slotModule3Delta(slot, desc, userImportPriceCtKwh) {
+      if (desc.mode === 'provider' && desc.module3DeltaCtKwh == null
+        && slotPriceSource(slot, desc, userImportPriceCtKwh) === 'estimate' && !getProviderEstimate()) {
+        return desc.module3FormulaDeltaCtKwh;
+      }
+      return desc.module3DeltaCtKwh;
+    }
     function tariffFieldsForSlot(slot, userImportPriceCtKwh, tariffCompare, desc) {
       const day = tariffDayInfo(localDateString(slot.ts), desc);
-      let priceSource = desc.mode === 'dynamic' ? 'tariff' : (desc.mode === 'fixed' ? 'fixed' : null);
-      if (desc.mode === 'provider') {
-        priceSource = providerSlotAt(slot.ts) ? 'provider' : (Number.isFinite(userImportPriceCtKwh) ? 'estimate' : null);
-      }
+      const priceSource = slotPriceSource(slot, desc, userImportPriceCtKwh);
       const priced = tariffCompare.variableTariff && Number.isFinite(tariffCompare.variablePriceCtKwh);
       return {
         priceSource,
@@ -1983,6 +1996,7 @@ export function createHistoryRuntime({
         const monthKey = localMonthString(slot.ts);
         const monthlyMarketValueCtKwh = Number(solarMarketValueMonthlyCtKwhByMonth?.[monthKey]);
         const tariffDesc = describeUserImportTariffForSlot(slot.ts, pricingConfig);
+        tariffDesc.module3DeltaCtKwh = slotModule3Delta(slot, tariffDesc, userImportPriceCtKwh);
         const tariffCompare = tariffCompareForSlot(slot, userImportPriceCtKwh, marketPriceCtKwh, tariffDesc);
         const tariffFields = tariffFieldsForSlot(slot, userImportPriceCtKwh, tariffCompare, tariffDesc);
         const shares = proportionalSourceShares(slot);
