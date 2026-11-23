@@ -131,8 +131,9 @@ for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], 
         const before = await counts(pool, 31 + 7);
         const g = createStorageGuard({ getDb: () => pool, statfs: () => ({ blocks: 100000, bsize: 1048576, bavail: 90000 }),
           initialProfile: 'winzig', profileIo: { writeFile() {}, rename() {} } });
-        g.chooseProfile('winzig');
-        const r = await g.check();
+        g.chooseProfile('winzig');   // stößt selbst einen Lauf an
+        for (let i = 0; i < 400 && !g.status()?.actions; i++) await new Promise((res) => setTimeout(res, 10));
+        const r = g.status();
         const ret = r.actions.find((a) => a.action === 'retain_raw');
         assert.ok(ret && !ret.error, JSON.stringify(r.actions));
         const after = await counts(pool, 31 + 7);

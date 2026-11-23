@@ -167,3 +167,25 @@ test('Karte „Speicher“: kritisch rot, ohne Kompression benannt, ohne Daten a
   assert.equal(storageCardView({ ok: true, level: 'unbekannt' }).hidden, true);
   assert.match(storageCardView({ ...ST, level: 'ok', daysLeft: null, growthMbPerDay: null }).bannerHtml, /sa-text-ok.*Wachstum wird noch gemessen/);
 });
+
+// Codex 246e360a (P2): ein Fehler beim Übernehmen bleibt sichtbar (die Karte lädt vorher neu).
+test('„Vorschlag übernehmen“ scheitert → Fehler bleibt nach dem Neuladen der Karte stehen', async () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../public/settings.js'), 'utf8');
+  const els = {};
+  const el = (id) => (els[id] ||= { id, innerHTML: '', textContent: '', hidden: true, disabled: false, style: {} });
+  const calls = [];
+  const apiFetch = async (url, opts) => {
+    calls.push([url, opts?.method || 'GET']);
+    if (url === '/api/storage/profile') return { ok: false, status: 503, json: async () => ({ ok: false, error: 'runtime_worker_unavailable' }) };
+    return { ok: true, status: 200, json: async () => ({ ...ST, level: 'ok' }) };
+  };
+  const sandbox = { console, Intl, Date, Promise, globalThis: {},
+    window: { DVhubCommon: { escapeHtml: esc, apiFetch }, addEventListener() {}, setTimeout: (f) => f(), dvConfirm: async () => true } };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(src, sandbox, { filename: 'settings.js' });
+  sandbox.document = { getElementById: el };
+  await sandbox.DVhubSettingsStorage.applyStorageProfileSuggestion();
+  assert.match(els.storageBanner.innerHTML, /Übernehmen fehlgeschlagen: runtime_worker_unavailable/);
+  assert.equal(els.storageGroup.hidden, false, 'Karte geladen');
+  assert.deepEqual(calls[0], ['/api/storage/profile', 'POST']);
+});

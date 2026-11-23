@@ -286,10 +286,22 @@ export function createStorageGuard({
       effective: profileInfo.effective, base: profileInfo.base, mode: profileInfo.state.mode, origin: profileInfo.state.origin,
       suggested: profileInfo.suggested, temporary: profileInfo.temporary, reason: profileInfo.reason,
       sizeProfile: profileInfo.sizeProfile, values: PROFILES[profileInfo.effective],
+      ...(profileInfo.pending ? { pending: true } : {}),
     };
   }
 
-  /** Profilwahl per Klick (S2 a): 'auto' oder ein Profilname. Wirkt beim nächsten Lauf. */
+  // Lauf anfordern: läuft gerade einer, danach sicher noch einmal (Codex 246e360a).
+  let recheck = false;
+  function requestCheck() {
+    if (running) { recheck = true; return; }
+    check().catch(() => {});
+  }
+
+  /**
+   * Profilwahl per Klick (S2 a): 'auto' oder ein Profilname. Gespeichert und
+   * sofort im Status sichtbar; umgesetzt (DB-Regeln, Aufbewahrung) vom nächsten
+   * Lauf, der gleich im Hintergrund startet — nie im Befehlskanal des Workers.
+   */
   function chooseProfileClick(choice) {
     const sizeProfile = profileInfo?.sizeProfile || profileForSize(last?.totalMb);
     const dataDir = getDataDir?.() || null;
@@ -300,6 +312,11 @@ export function createStorageGuard({
     profileState = st;
     writeProfileState(dataDir, { ...st, effective: lastEffective, effectiveAt: null }, profileIo);
     log('storage_profile_chosen', { choice, base: st.base, mode: st.mode }, 'info');
+    // Sofort im Status (und damit im Worker-Schnappschuss) zeigen.
+    const dec = decideProfile({ state: st, sizeProfile, stage: last?.level || 'ok', nowIso: new Date(now()).toISOString() });
+    profileInfo = { ...dec, sizeProfile, pending: dec.effective !== lastEffective };
+    if (last) last = { ...last, profile: profileView() };
+    requestCheck();
     return st;
   }
 
@@ -456,6 +473,7 @@ export function createStorageGuard({
       return last;
     } finally {
       running = false;
+      if (recheck) { recheck = false; setImmediate(() => { check().catch(() => {}); }); }
     }
   }
 

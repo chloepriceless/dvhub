@@ -38,6 +38,11 @@ function fakeDb({ ts = true, oldestDays = 500, aggUntil = '2026-09-30T00:00:00Z'
     },
   };
 }
+// Warten, bis ein im Hintergrund angestoßener Lauf fertig ist.
+async function settled(g) {
+  for (let i = 0; i < 200 && !g.status()?.actions; i++) await new Promise((r) => setTimeout(r, 5));
+  return g.status();
+}
 const stat = (freePct) => () => ({ blocks: 1000, bsize: 1048576 * 3, bavail: Math.round(10 * freePct) });
 
 test('Genug Platz: nichts anfassen, kein Hinweis', async () => {
@@ -313,9 +318,9 @@ test('Profil „winzig“: Rohwerte älter als 30 Tage gehen, nie jünger als de
   const db = fakeDb({ oldestDays: 90, aggUntil: '2026-11-01T00:00:00Z' });
   const g = createStorageGuard({ getDb: () => db, statfs: stat(60), now: () => t, initialProfile: 'winzig',
     profileIo: { writeFile() {}, rename() {} } });
-  // Gespeicherter Stand: fest „winzig“.
+  // Gespeicherter Stand: fest „winzig“ — die Wahl stößt selbst einen Lauf an.
   g.chooseProfile('winzig');
-  const r = await g.check();
+  const r = await settled(g);
   const ret = r.actions.find((a) => a.action === 'retain_raw');
   assert.equal(ret.keepDays, 30);
   assert.equal(ret.before, '2026-10-24T12:00:00.000Z');
@@ -416,4 +421,23 @@ test('DB-Platte nicht messbar: auch keine Aufbewahrung nach gespeichertem Profil
     samplesIo: { readFile: () => { throw new Error('x'); }, writeFile() {}, rename() {} }, profileIo: { writeFile() {}, rename() {} } }).check();
   assert.equal(r.dbUnmeasured, true);
   assert.ok(!db.calls.some(([s]) => /drop_chunks|DELETE/.test(s)), 'nichts gelöscht');
+});
+
+// Codex 246e360a (P2): Wahl während eines laufenden Durchgangs wird danach sicher umgesetzt.
+test('Profilwahl während eines laufenden Laufs: danach noch ein Lauf, Profil umgesetzt', async () => {
+  let release; const gate = new Promise((r) => { release = r; });
+  const db = fakeDb({ oldestDays: 500 });
+  const orig = db.query.bind(db);
+  let hold = true;
+  db.query = async (sql, p) => { if (hold && sql.includes('pg_database_size')) { hold = false; await gate; } return orig(sql, p); };
+  const changes = [];
+  const g = createStorageGuard({ getDb: () => db, statfs: stat(60), onProfileChange: (p) => changes.push(p.name) });
+  const first = g.check();                 // hängt in pg_database_size
+  await new Promise((r) => setTimeout(r, 5));
+  g.chooseProfile('klein');
+  assert.equal(g.profile().base, 'klein', 'sofort im Status');
+  release();
+  await first;
+  for (let i = 0; i < 200 && !changes.length; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(changes, ['klein'], 'nachgeholter Lauf setzt das Profil um');
 });

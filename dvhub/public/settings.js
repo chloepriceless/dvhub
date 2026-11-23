@@ -4473,7 +4473,7 @@ function storageCardView(st) {
 }
 
 if (typeof globalThis !== 'undefined') {
-  globalThis.DVhubSettingsStorage = { storageCardView };
+  globalThis.DVhubSettingsStorage = { storageCardView, applyStorageProfileSuggestion };
 }
 
 async function loadStorageStatus() {
@@ -4507,15 +4507,28 @@ async function applyStorageProfileSuggestion() {
     okLabel: 'Übernehmen'
   }))) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Wird übernommen...'; }
+  let error = null;
   try {
     const r = await apiFetch('/api/storage/profile', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ choice: 'auto' }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+    // Der Stand kommt (im Worker-Betrieb über den Schnappschuss) kurz danach an:
+    // ein paar Mal nachfragen, bis der Vorschlag weg ist (Codex 246e360a).
+    for (let i = 0; i < 8; i++) {
+      const rs = await apiFetch('/api/storage/status').catch(() => null);
+      const st = rs && rs.ok ? await rs.json().catch(() => null) : null;
+      if (st && st.profile && !st.profile.suggested && !st.profile.pending) break;
+      await new Promise((res) => window.setTimeout(res, 1500));
+    }
   } catch (e) {
+    error = e;
+  }
+  await loadStorageStatus();
+  // Fehler NACH dem Neuladen zeigen, sonst überschriebe ihn die Karte (Codex 246e360a).
+  if (error) {
     const banner = document.getElementById('storageBanner');
-    if (banner) banner.innerHTML = `<span class="sa-text-err">Übernehmen fehlgeschlagen: ${escapeHtml(e.message)}</span>`;
-  } finally {
-    await loadStorageStatus();
+    if (banner) banner.innerHTML = `<span class="sa-text-err">Übernehmen fehlgeschlagen: ${escapeHtml(error.message)}</span>`;
+    if (btn) { btn.disabled = false; }
   }
 }
 

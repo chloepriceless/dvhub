@@ -1553,7 +1553,6 @@ ctx.gridShare = createGridShareTracker({
 // der echte onPollComplete kommt erst nach der Datenbank (Befund 7).
 ctx.gridSharePollTick = createGridSharePollTick(ctx);
 // Speicherprofil per Klick (S2 a): die Platz-Wache läuft im Runtime-Prozess.
-// Danach gleich prüfen, damit die Karte den neuen Stand zeigt.
 ctx.chooseStorageProfile = async (choice) => {
   if (!IS_RUNTIME_PROCESS) {
     const r = await runtimeCommandClient.send('storage_profile_choose', { choice });
@@ -1562,9 +1561,10 @@ ctx.chooseStorageProfile = async (choice) => {
   }
   if (!ctx.storageGuard) return { ok: false, error: 'storage_guard_unavailable' };
   try {
+    // Speichern + sofort im Status; Umsetzung läuft im Hintergrund (Codex 246e360a:
+    // nicht den Befehlskanal des Workers blockieren).
     const st = ctx.storageGuard.chooseProfile(choice);
-    const out = await ctx.storageGuard.check();
-    return { ok: true, mode: st.mode, base: st.base, profile: out?.profile || ctx.storageGuard.profile() };
+    return { ok: true, mode: st.mode, base: st.base, profile: ctx.storageGuard.profile(), applying: true };
   } catch (e) {
     return { ok: false, error: e.message };
   }
