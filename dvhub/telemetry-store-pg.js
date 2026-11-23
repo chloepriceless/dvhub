@@ -76,7 +76,7 @@ const slotFlowsFromVrm = (bucket, preferredSourceKinds) => PRIMARY_FLOW_SERIES
 const rawBucketHasVrmFlows = (bucket, bucketSeconds) => PRIMARY_FLOW_SERIES
   .some((seriesKey) => chooseRawEntries(bucket.get(seriesKey), bucketSeconds).some((entry) => entry.scope === VRM_RAW_SCOPE));
 
-const MATERIALIZED_ENERGY_SERIES = new Set([
+export const MATERIALIZED_ENERGY_SERIES = new Set([
   'grid_import_w', 'grid_export_w', 'grid_total_w',
   'pv_total_w', 'pv_ac_w',
   'battery_power_w', 'battery_charge_w', 'battery_discharge_w',
@@ -1811,6 +1811,9 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     listAggregatedEnergySlots,
     listMaterializedEnergySlots,
     historySectionFingerprints,
+    // Nachträgliche Änderung an gespeicherten Viertelstunden ab `ts` (T14-Rückfüllung):
+    // den Prüfwert-Speicher verwerfen wie nach writeSamples.
+    noteHistoryRangeChanged(ts) { noteHistoryWrite([{ ts }]); },
     getHistoryCacheEntries,
     putHistoryCacheEntry,
     // Pre-pivot reference implementation, kept only so the SQL pivot can be

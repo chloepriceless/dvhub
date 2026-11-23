@@ -2739,15 +2739,19 @@ const telemetryReady = (async () => {
     setTimeout(runInverterEfficiencyDaily, 3 * 60 * 1000).unref();
     // T14 (Christin 24.11.2026): Abdeckung der eigenen 15-min-Werte für den
     // Altbestand aus den Rohwerten nachrechnen (services/history-backfill/coverage.js).
-    // Je Lauf höchstens ein Tag (ein UPDATE), alle 2 min, ab 6 min nach dem Start;
-    // wiederaufnehmbar über die Datenbank, danach nur noch ein Kontroll-Scan je Tag.
-    const coverageBackfill = createCoverageBackfill({ getDb: () => ctx.db, pushLog });
+    // Je Lauf höchstens ein Tag (ein UPDATE, auf der A7S ~12 s), alle 5 min, ab 6 min
+    // nach dem Start; wiederaufnehmbar über die Datenbank, danach nur noch ein
+    // Kontroll-Scan je Tag.
+    const coverageBackfill = createCoverageBackfill({
+      getDb: () => ctx.db, pushLog,
+      onDayUpdated: (fromIso) => telemetryStore?.noteHistoryRangeChanged?.(fromIso),
+    });
     const runCoverageBackfill = () => {
       coverageBackfill.runOnce().catch((error) => pushLog('history_coverage_backfill_error', { error: error.message }));
     };
     setTimeout(() => {
       runCoverageBackfill();
-      setInterval(runCoverageBackfill, 2 * 60 * 1000).unref();
+      setInterval(runCoverageBackfill, 5 * 60 * 1000).unref();
     }, 6 * 60 * 1000).unref();
     // Gestufte Log-Aufbewahrung (services/log-retention.js): 60 Tage voll,
     // dann verdichtet bis 2 Jahre. Nachts um ~03:40 und einmal 15 min nach dem
