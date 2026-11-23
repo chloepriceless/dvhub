@@ -895,3 +895,12 @@ main.page > * { min-width: 0; max-width: 100%; }
 .tariff-formula-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.5; }
 .tariff-formula-list li + li { margin-top: 8px; }
 .tariff-formula-list .tariff-muted { color: var(--text-dim); }
+
+/* Netzstrom im Akku: Tagesprotokoll + Erklärung ausklappbar (23.11.2026) */
+.history-grid-share-details { margin-top: 10px; }
+.history-grid-share-summary {
+  cursor: pointer; padding: 6px 0;
+  color: var(--text-dim); font-size: 12px; font-weight: 600;
+}
+.history-grid-share-summary:hover { color: var(--text); }
+.history-grid-share-details[open] > .history-grid-share-summary { margin-bottom: 6px; }

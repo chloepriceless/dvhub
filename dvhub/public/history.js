@@ -3504,6 +3504,19 @@ async function loadMispelOverview(force = false) {
 // Direktvermarktung). Nur sichtbar, wenn Netzladen erlaubt ist oder Netzstrom
 // im Akku steckt bzw. das Protokoll Einträge hat.
 let gridShareGeneration = 0;
+// Protokoll ausklappbar (23.11.2026): Bei einem Wechsel der Ansicht gilt der
+// Standard (Tag offen, Woche/Monat/Jahr zu); innerhalb derselben Ansicht
+// bleibt, was man selbst auf- oder zugeklappt hat (Blättern lädt neu).
+let gridShareDetailsView = null;
+function gridShareDetailsDefaultOpen(view) {
+  return view === 'day';
+}
+function applyGridShareDetailsDefault(view) {
+  const details = byId('historyGridShareDetails');
+  if (!details || gridShareDetailsView === view) return;
+  gridShareDetailsView = view;
+  details.open = gridShareDetailsDefaultOpen(view);
+}
 const GRID_SHARE_KEYS = ['battery_grid_share_wh', 'grid_to_battery_w', 'battery_grid_share_to_home_w', 'battery_grid_share_to_grid_w'];
 function fmtGs(v, digits = 2) {
   return Number.isFinite(Number(v)) ? Number(v).toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits }) : '–';
@@ -3523,6 +3536,7 @@ async function loadGridShareCard() {
       return;
     }
     card.hidden = false;
+    applyGridShareDetailsDefault(byId('historyView')?.value || 'day');
     const sub = byId('historyGridShareSub');
     if (sub) {
       sub.textContent = `Jetzt ${fmtGs(data.gridKwh)} kWh Netzstrom im Akku`
@@ -3764,6 +3778,7 @@ const historyHelpers = {
   tariffFitHtml,
   tariffValidFromText,
   renderTariffScatter,
+  applyGridShareDetailsDefault, // Netzstrom im Akku: Protokoll auf/zu je Ansicht (testbar)
   historyState
 };
 

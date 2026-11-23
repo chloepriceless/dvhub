@@ -520,6 +520,33 @@ test('Protokoll-CSV „Netzstrom im Akku“ wird mit Token geladen, nicht per sc
   assert.match(js, /byId\('historyGridShareCsv'\)[\s\S]{0,200}addEventListener\('click'/);
 });
 
+// Christin 23.11.2026: In Woche/Monat/Jahr war die Karte „Netzstrom im Akku“
+// mit 31 Protokollzeilen und Erklärtext riesig. Das Protokoll ist jetzt
+// ausklappbar: in Woche/Monat/Jahr zu (nur der Verlauf sichtbar), am Tag offen.
+test('Netzstrom im Akku: Protokoll ausklappbar, in Woche/Monat/Jahr zu, am Tag offen', () => {
+  const html = readPublic('history.html');
+  const card = html.slice(html.indexOf('id="historyGridShareCard"'), html.indexOf('id="historyDvCard"'));
+  const detailsAt = card.indexOf('id="historyGridShareDetails"');
+  assert.ok(detailsAt > 0, 'details vorhanden');
+  assert.ok(card.indexOf('id="historyGridShareChart"') < detailsAt, 'Verlauf steht außerhalb, bleibt sichtbar');
+  assert.ok(card.indexOf('id="historyGridShareBody"') > detailsAt, 'Protokoll steht im ausklappbaren Teil');
+  assert.match(card.slice(detailsAt, card.indexOf('id="historyGridShareBody"')), /<summary/);
+
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.applyGridShareDetailsDefault('month');
+  const el = elements.get('historyGridShareDetails');
+  assert.equal(el.open, false, 'Monat: zu');
+  el.open = true; // selbst aufgeklappt
+  helpers.applyGridShareDetailsDefault('month'); // Blättern im Monat
+  assert.equal(el.open, true, 'eigene Wahl bleibt in derselben Ansicht');
+  helpers.applyGridShareDetailsDefault('day');
+  assert.equal(el.open, true, 'Tag: offen');
+  helpers.applyGridShareDetailsDefault('week');
+  assert.equal(el.open, false, 'Woche: zu');
+  helpers.applyGridShareDetailsDefault('year');
+  assert.equal(el.open, false, 'Jahr: zu');
+});
+
 // ── Arbeitspreis-Karte (13.11.2026, Ziel 1.0.11) ──────────────────────────
 // Ø Arbeitspreis und Festpreis-Vergleich; die Zahlen rechnet das Backend je
 // Slot (history-runtime.js), die Karte zeigt sie nur an.

@@ -417,7 +417,12 @@
           <button type="button" class="btn sm" id="historyGridShareCsv">Protokoll (CSV)</button>
         </div>
         <div id="historyGridShareChart" class="history-chart-mount"></div>
-        <div id="historyGridShareBody" class="dv-price-table"></div>
+        <!-- Tagesprotokoll + Erklärung ausklappbar (Christin 23.11.2026): in Woche/Monat/Jahr
+             zu, damit nur der Verlauf zu sehen ist; in der Tagesansicht offen. -->
+        <details id="historyGridShareDetails" class="history-grid-share-details">
+          <summary class="history-grid-share-summary">Tagesprotokoll und Erkl&auml;rung</summary>
+          <div id="historyGridShareBody" class="dv-price-table"></div>
+        </details>
       </section>
 
       <!-- DV-Einspeisevergütung (nur Monat/Jahr) -->
