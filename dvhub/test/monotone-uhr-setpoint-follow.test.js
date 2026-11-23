@@ -91,3 +91,20 @@ test('Wächter: Sprung vorwärts — keine vorzeitige Rücklesung', async () => 
   await new Promise((r) => setImmediate(r));
   assert.equal(reads.length, n1);
 });
+
+// Codex 29b60b7e (P2): die eigene Rücklesung bleibt auf der Wanduhr-Achse der anderen Rücklesungen. Eine neuere Sperre
+// aus Peak Shaving geht der älteren eigenen Lesung „unbegrenzt“ auch nach einem Sprung vorwärts vor (kein Fehlpunkt).
+test('Wächter: Sprung vorwärts — neuere Sperre aus Peak Shaving geht der älteren eigenen Lesung vor', async () => {
+  const transport = { type: 'modbus', async mbRequest(a) { return a.quantity === 2 ? [0xffff, 0xffff] : [0]; } };
+  const cfg = { manufacturer: 'victron', victron: { host: 'gx' }, controlWrite: { maxDischargeW: { enabled: true, address: 2704 } } };
+  const s = setup({ cfg, transport });
+  s.poll(); // auffälliger Punkt, eigene Lesung 2720 = −1 (unbegrenzt)
+  await new Promise((r) => setImmediate(r));
+  const n = s.watchdog._state().window.length;
+  s.c.wall += 29_000; s.c.mono += 29_000;
+  s.state.ctrl = { _peakShaving: { readback: { value: 0, at: s.c.wall, ambiguousZero: false } } }; // Sperre bestätigt
+  s.c.wall += 1000; s.c.mono += 1000;
+  s.c.wall += 30_000; // Sprung vorwärts
+  s.poll();
+  assert.equal(s.watchdog._state().window.length, n, 'Sperre entschuldigt: kein neuer auffälliger Punkt');
+});

@@ -149,15 +149,21 @@ test('Übergabe: Sprung vorwärts — die Gnadenfrist läuft nicht vorzeitig ab,
   assert.equal(w.request(), -3000);
 });
 
-test('Übergabe: Rücksprung nach dem Sperr-Write — frische 0 der GX bestätigt die Sperre trotzdem', async () => {
+// Codex 32af6fd2 (P1): die Reihenfolge „Messwert nach dem Schreiben“ bleibt Wanduhr gegen Wanduhr. Ein Messwert, den
+// die GX VOR dem Sperr-Write gesendet hat und der erst nach einem Rücksprung der Uhr ankommt, bestätigt die Sperre
+// nicht (eine vom Verbraucher geschätzte Empfangszeit hätte ihn als „danach“ gewertet).
+test('Übergabe: Rücksprung — ein vor dem Sperr-Write gesendeter 0-Wert bestätigt die Sperre nicht', async () => {
   const c = clocks();
-  const w = world(c);
+  const w = world(c, { deviceEcho: false });
   w.request(); await w.handoff.maintain(w.apply);
+  const writeWall = c.wall;
   assert.deepEqual(w.applied.map((a) => a.value), [0]);
-  c.jump(-3_600_000); c.tick(5000);
-  w.state.victron.maxDischargeW = 0; w.poll();
-  assert.equal(w.request(), -3000, 'Messwert liegt nach dem Write (Laufzeit), obwohl sein Wanduhr-Stempel davor liegt');
-  assert.equal(w.state.multiGxHandoff.mainDischargeBlocked, true);
+  c.jump(-3_600_000); c.tick(5000); w.poll();
+  w.state.victron.maxDischargeW = 0;
+  w.state.victron.fieldSourceAt = { maxDischargeW: writeWall - 1000 }; // MQTT: von der GX vor dem Write gesendet
+  assert.equal(w.request(), null, 'Boden hält');
+  assert.equal(w.state.multiGxHandoff.phase, 'arming');
+  assert.equal(w.state.multiGxHandoff.mainDischargeBlocked, false);
 });
 
 test('Übergabe: Rücksprung — stehende zweite Anlage gilt nach 15 s Laufzeit als veraltet', async () => {
@@ -179,20 +185,4 @@ test('Übergabe: Rücksprung — stehender Wert der Entladegrenze veraltet nach 
   assert.equal(w.request(), null);
   assert.equal(w.state.multiGxHandoff.phase, 'off');
   assert.ok(w.logs.some(([e, d]) => e === 'multi_gx_handoff_skipped' && d.reason === 'max_discharge_unknown'));
-});
-
-test('Übergabe: Rücksprung — nicht übernommene Sperre wird nach der Wartezeit (Laufzeit) erneut geschrieben', async () => {
-  const c = clocks();
-  const w = world(c, { deviceEcho: false });
-  w.request(); await w.handoff.maintain(w.apply);
-  assert.equal(w.applied.length, 1);
-  // Die GX meldet weiter −1 (Write nicht übernommen). Die Uhr springt 1 h zurück; der nächste Messwert kommt NACH
-  // dem Write (Laufzeit), sein Wanduhr-Stempel liegt aber davor.
-  c.jump(-3_600_000); c.tick(5000); w.poll(); w.request();
-  await w.handoff.maintain(w.apply); // ≠ 0 nach dem Write → Sperre gilt nicht; Wiederholung erst nach 10 s
-  assert.equal(w.applied.length, 1);
-  c.tick(6000); w.poll(); w.request();
-  await w.handoff.maintain(w.apply);
-  assert.deepEqual(w.applied.map((a) => a.value), [0, 0], 'zweiter Sperrversuch nach 11 s Laufzeit');
-  assert.equal(w.state.multiGxHandoff.phase, 'arming');
 });

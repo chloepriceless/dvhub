@@ -510,11 +510,12 @@ export function createSetpointFollowWatchdog(ctx) {
     return typeof t.mbRequest === 'function' && conf.address != null ? conf : null;
   }
 
-  // Eigene Rücklesung für die Prüfung: Alter monoton, als Wanduhr-Zeitpunkt der jetzigen Uhr ausgedrückt (at), damit
-  // knownDischargeCapW (Frische, „neuer als“) wie bisher rechnet, auch wenn die Uhr seit der Lesung gesprungen ist.
-  function capReadNow(nowMs, monoMs) {
+  // Eigene Rücklesung für die Prüfung: nur, solange sie nach der monotonen Uhr höchstens capReadMaxAgeMs alt ist. Sonst
+  // unverändert (at = Wanduhr der Lesung): knownDischargeCapW vergleicht „neuer als“ gegen die Wanduhr-Stempel der
+  // anderen Rücklesungen; nur EINE Seite umzurechnen kehrte die Reihenfolge nach einem Sprung um (Codex 29b60b7e P2).
+  function capReadNow(cfg, monoMs) {
     if (!capRead) return null;
-    return capRead.mono == null ? capRead : { ...capRead, at: nowMs - (monoMs - capRead.mono) };
+    return capRead.mono == null || monoMs - capRead.mono <= capReadMaxAgeMs(cfg) ? capRead : null;
   }
 
   function maybeReadCap(cfg, nowMs, monoMs, opts) {
@@ -628,7 +629,7 @@ export function createSetpointFollowWatchdog(ctx) {
       holdReason: activeDischargeHold(state, nowMs, cfg),
       // Entlade-Sperre (Reg. 2704): Rücklesung, sonst DVhubs eigener letzter
       // Schreibwert, dieser nur befristet.
-      maxDischargeW: knownDischargeCapW(state, cfg, nowMs, capReadNow(nowMs, monoMs))
+      maxDischargeW: knownDischargeCapW(state, cfg, nowMs, capReadNow(cfg, monoMs))
     }, opts);
     try { maybeReadCap(cfg, nowMs, monoMs, opts); } catch { /* Lesen darf den Wächter nie stören */ }
 
