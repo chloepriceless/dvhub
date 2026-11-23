@@ -126,3 +126,14 @@ test('Viertelstunden-Budget (P1): verbraucht/Budget, Restzeit, erlaubte Leistung
   assert.equal(view({ ...base, budget: { mode: 'instant', reason: 'billing_instant' } }).budget, 'Augenblickswert (eingestellt)');
   assert.equal(view(base).budget, '', 'ohne Budget-Daten keine Zeile');
 });
+
+test('P3: gut sichtbarer Hinweis auf den Schalter, wenn die Jahresspitze schon über der Grenze liegt', () => {
+  const { view } = load();
+  const v = view({ ...base, adapt: { on: false, suggest: true, active: false, scope: 'year', reachedPeakW: 12345, effectiveLimitW: 10000 } });
+  assert.match(v.adaptNote, /Jahresspitze 12,3 kW liegt schon über der Grenze 10,0 kW/);
+  assert.match(v.adaptNote, /Grenze an erreichte Jahresspitze anpassen/);
+  assert.equal(v.adaptSuggest, true);
+  const a = view({ ...base, adapt: { on: true, suggest: false, active: true, scope: 'month', reachedPeakW: 11000, effectiveLimitW: 11000 } });
+  assert.equal(a.adaptNote, 'Grenze an die Monatsspitze angepasst: 11,0 kW (eingestellt 10,0 kW) — weitere Kappung darunter spart diesen Monat nichts.');
+  assert.equal(view({ ...base, adapt: { on: false, suggest: false, active: false } }).adaptNote, '');
+});

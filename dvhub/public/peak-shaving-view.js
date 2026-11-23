@@ -87,6 +87,20 @@
     return `Augenblickswert — ${b.reasonText || b.reason || 'unsicher'}`;
   }
 
+  // P3: Hinweis auf den Schalter „Grenze an erreichte Jahresspitze anpassen“.
+  function adaptText(s) {
+    const a = s.adapt;
+    if (!a) return '';
+    const what = a.scope === 'month' ? 'Monatsspitze' : 'Jahresspitze';
+    const period = a.scope === 'month' ? 'diesen Monat' : 'dieses Jahr';
+    if (a.active) return `Grenze an die ${what} angepasst: ${kw(a.effectiveLimitW)} (eingestellt ${kw(s.limitW)}) — weitere Kappung darunter spart ${period} nichts.`;
+    if (a.suggest) {
+      return `${what} ${kw(a.reachedPeakW)} liegt schon über der Grenze ${kw(s.limitW)}: jede weitere Kappung darunter spart ${period} nichts, kostet aber Akku-Einsatz. `
+        + 'Tipp: Schalter „Grenze an erreichte Jahresspitze anpassen“ unter Einstellungen → Peak Shaving.';
+    }
+    return '';
+  }
+
   function view(s) {
     if (!s || s.enabled !== true) return { hidden: true };
     const [label, tone] = state(s);
@@ -110,6 +124,8 @@
       tone,
       detail: detail(s),
       budget: budgetText(s.budget),
+      adaptNote: adaptText(s),
+      adaptSuggest: Boolean(s.adapt && s.adapt.suggest),
       budgetMode: s.budget ? s.budget.mode : null
     };
   }
@@ -135,6 +151,12 @@
     const budgetRow = d.getElementById('peakShavingBudgetRow');
     if (budgetRow) budgetRow.hidden = !v.budget;
     set('peakShavingBudget', v.budget || DASH);
+    const adaptEl = d.getElementById('peakShavingAdapt');
+    if (adaptEl) {
+      adaptEl.hidden = !v.adaptNote;
+      adaptEl.textContent = v.adaptNote || '';
+      adaptEl.classList.toggle('warn', v.adaptSuggest);
+    }
     set('peakShavingDetail', v.peakNote ? `${v.detail} ${v.peakNote}`.trim() : v.detail);
     const chip = d.getElementById('peakShavingChip');
     if (chip) {

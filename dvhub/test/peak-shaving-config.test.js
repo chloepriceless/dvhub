@@ -17,7 +17,7 @@ const dev = (peakShaving, extra = {}) => ({ updateChannel: 'dev', manufacturer: 
 test('Vorgabe: Peak Shaving ist ab Werk aus und ohne Grenze', () => {
   const d = createDefaultConfig();
   assert.deepEqual(d.peakShaving, {
-    enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true
+    enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true, adaptToReachedPeak: false
   });
   const r = resolvePeakShaving(d);
   assert.equal(r.enabled, false);
@@ -86,7 +86,7 @@ test('Einstellungsfelder: eigene Gruppe in „Netz & Recht“, beta, deutsch, mi
   const fields = def.fields.filter((f) => String(f.path || '').startsWith('peakShaving.'));
   const byPath = Object.fromEntries(fields.map((f) => [f.path, f]));
   assert.deepEqual(Object.keys(byPath).sort(), [
-    'peakShaving.billing15min', 'peakShaving.enabled', 'peakShaving.gridImportLimitW', 'peakShaving.marginW',
+    'peakShaving.adaptToReachedPeak', 'peakShaving.billing15min', 'peakShaving.enabled', 'peakShaving.gridImportLimitW', 'peakShaving.marginW',
     'peakShaving.minSocPct', 'peakShaving.releaseHysteresisW'
   ]);
   for (const f of fields) {

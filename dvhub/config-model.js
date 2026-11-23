@@ -1478,6 +1478,18 @@ function buildFieldDefinitions() {
       visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
       help: 'An (Standard) = der Netzbetreiber rechnet den Leistungspreis auf den höchsten Viertelstunden-Mittelwert (so ist es bei RLM üblich). Dann darf der Bezug kurz über der Grenze liegen: DVhub zählt je Viertelstunde (:00/:15/:30/:45) die bezogene Energie mit, rechnet bis zum Ende der Viertelstunde hoch und greift erst ein, wenn der Mittelwert die Grenze minus Abstand reißen würde — dann mit genau der Leistung, die bis zum Ende fehlt. Der Akku wird so seltener gebraucht. Kann der Akku nicht sicher liefern (Ladestand nahe am Boden, Entladeleistung ausgeschöpft oder nicht eingetragen, Messlücken, letzte Minute der Viertelstunde), gilt sofort der Deckel auf den Augenblickswert. Aus = DVhub hält jeden Augenblick unter Grenze minus Abstand (wie bis 1.0.10). Dafür braucht DVhub die Entladeleistung des Akkus oder die Wechselrichter-Nennleistung.'
     },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.adaptToReachedPeak',
+      label: 'Grenze an erreichte Jahresspitze anpassen',
+      type: 'boolean',
+      default: false,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Ab Werk aus. Liegt die in diesem Jahr schon erreichte Spitze (Jahresspitze = höchster Viertelstunden-Mittelwert; bei Monatsleistungspreis die Spitze dieses Monats) über der eingestellten Grenze, richtet sich der Leistungspreis ohnehin nach ihr. An = DVhub regelt dann auf diese erreichte Spitze statt auf die Grenze; mit dem neuen Jahr (bzw. Monat) gilt wieder die Grenze. Das spart Akku-Einsatz und Zyklen, denn jede weitere Kappung unter die erreichte Spitze spart in diesem Zeitraum keinen Euro. Es kostet nichts am Leistungspreis dieses Zeitraums — aber Achtung: DVhubs Spitze stammt aus den eigenen Messwerten; liegt der Zähler des Netzbetreibers tiefer, wäre die Kappung bis zu dessen Wert noch etwas wert gewesen. Aus = DVhub hält die Grenze weiter, auch wenn das in diesem Zeitraum nichts mehr spart. EOS bekommt die angepasste Grenze mit.'
+    },
 
     // Sungrow-Steuermodus (T-0422, Christin 11.11.2026): External EMS mit
     // Herzschlag (Standard) oder Forced mode. Betreiber-einstellbar und deshalb
@@ -5306,7 +5318,7 @@ export function createDefaultConfig() {
     // Netzanschluss (services/grid-connection): ab Werk leer = DVhub begrenzt nicht.
     gridConnection: { limitKw: null, marginW: null, phaseLimitA: null, releaseHysteresisW: 1000, baseLoadW: 1000, order: 'wallbox_first', batteryPhases: '' },
     // Peak Shaving (GitHub #28, services/peak-shaving): ab Werk aus, ohne Grenze.
-    peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true },
+    peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true, adaptToReachedPeak: false },
     multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300, exportHandoffAtFloor: false },
     // Ladestand des E-Autos über evccs Fahrzeug-Treiber (services/vehicle-evcc):
     // aus, bis jemand eine Marke einrichtet; evcc wird erst dann geladen.

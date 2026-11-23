@@ -45,7 +45,10 @@ export const PEAK_SHAVING_DEFAULTS = Object.freeze({
   // Abrechnung nach 15-min-Mittelwert (P1, Christin 24.11.2026): DVhub führt je
   // Viertelstunde ein Energiebudget und greift erst ein, wenn die Hochrechnung
   // es reißen würde. Aus = Deckel auf den Augenblickswert (Verhalten bis 1.0.10).
-  billing15min: true
+  billing15min: true,
+  // Grenze an erreichte Jahresspitze (bei Monatsleistungspreis: Monatsspitze)
+  // anpassen (P3, Christin 24.11.2026). Ab Werk aus.
+  adaptToReachedPeak: false
 });
 
 // Unter 1 kW ist eine Bezugsgrenze kein Gewerbe-Leistungspreis mehr, sondern
@@ -79,6 +82,7 @@ export function resolvePeakShaving(cfg = {}) {
     ? Number(c.minSocPct) : null;
   // Ab Werk an; nur ein ausdrückliches false schaltet auf den Augenblickswert.
   const billing15min = c.billing15min !== false;
+  const adaptToReachedPeak = c.adaptToReachedPeak === true;
   const reason = !flagOn ? 'disabled'
     : !gateOpen ? 'beta_gate_closed'
       : !configured ? 'limit_missing'
@@ -96,6 +100,7 @@ export function resolvePeakShaving(cfg = {}) {
     releaseHysteresisW,
     minSocPct,
     billing15min,
+    adaptToReachedPeak,
     reason
   };
 }
@@ -478,7 +483,7 @@ export function createPeakShaving(ctx, deps = {}) {
       const month = await store.getGridImportPeak(p.month);
       const year = await store.getGridImportPeak(p.year);
       const strip = (x) => (x ? { slotStart: x.slotStart, powerW: x.powerW } : null);
-      peaks = { month: strip(month), year: strip(year), updatedAt: new Date(nowMs).toISOString(), error: null };
+      peaks = { month: strip(month), year: strip(year), periods: p, updatedAt: new Date(nowMs).toISOString(), error: null };
     } catch (e) {
       peaks = { ...peaks, error: e?.message || String(e) };
     } finally {
@@ -497,10 +502,32 @@ export function createPeakShaving(ctx, deps = {}) {
    * (configuredLimitW/configuredTargetW bleiben die Einstellung). Ohne aktives
    * Peak Shaving unverändert.
    */
+  /**
+   * P3: Grenze an die erreichte Spitze des Abrechnungszeitraums anpassen (Jahr,
+   * bei Monatsleistungspreis Monat). Nur mit Schalter, nur mit einer Spitze aus
+   * DEM laufenden Zeitraum (nach dem Jahres-/Monatswechsel gilt bis zum nächsten
+   * Lesen wieder die Einstellung), auf 100 W abgerundet. Liefert die Auflösung
+   * mit angepasster limitW/targetW sowie adaptedFrom/reachedPeakW.
+   */
+  function adapted(c, r, t = now()) {
+    const scope = c?.peakShaving?.tariff?.model === 'month' ? 'month' : 'year';
+    const pk = peaks[scope];
+    const per = peaks.periods?.[scope];
+    const cur = per ? peakPeriods(t, c.schedule?.timezone || 'Europe/Berlin')[scope] : null;
+    const current = Boolean(pk && per && cur && per.start === cur.start && finite(pk.powerW));
+    const reachedPeakW = current ? Math.round(Number(pk.powerW)) : null;
+    const info = { configuredLimitW: r.limitW, configuredTargetW: r.targetW, adaptScope: scope, reachedPeakW, adaptedFrom: null };
+    if (!r.active || !r.adaptToReachedPeak || reachedPeakW == null) return { ...r, ...info };
+    const w = Math.min(MAX_LIMIT_W, Math.floor(reachedPeakW / 100) * 100);
+    if (!(w > r.limitW)) return { ...r, ...info };
+    return { ...r, ...info, limitW: w, targetW: w - r.marginW, adaptedFrom: scope };
+  }
+
   function control(c = cfg(), t = now()) {
-    const r = resolvePeakShaving(c);
-    if (!r.active) return r;
-    const base = { ...r, configuredLimitW: r.limitW, configuredTargetW: r.targetW };
+    const r0 = resolvePeakShaving(c);
+    if (!r0.active) return r0;
+    const r = adapted(c, r0, t);
+    const base = r;
     const { battery } = budgetBattery(c, r, t);
     const meas = meterImport(ctx.state, c, { now: t, maxAgeMs: METER_MAX_AGE_MS });
     const dec = decideBudget(budget, {
@@ -513,6 +540,7 @@ export function createPeakShaving(ctx, deps = {}) {
 
   /** Je Zählerabfrage (polling.js): Netzbezug ins Viertelstunden-Budget. */
   function pollTick() {
+    try { syncEosOnChange(); } catch { /* nur Abgleich */ }
     const c = cfg();
     const r = resolvePeakShaving(c);
     if (!r.active) {
@@ -523,7 +551,7 @@ export function createPeakShaving(ctx, deps = {}) {
     const t = now();
     const meas = meterImport(ctx.state, c, { now: t, maxAgeMs: METER_MAX_AGE_MS });
     observeBudget(budget, {
-      wallMs: t, monoMs: mono(), importW: meas.fresh ? meas.importW : null, limitW: r.limitW,
+      wallMs: t, monoMs: mono(), importW: meas.fresh ? meas.importW : null, limitW: adapted(c, r, t).limitW,
       timeZone: c.schedule?.timezone || 'Europe/Berlin'
     });
     const ctl = control(c, t);
@@ -559,6 +587,18 @@ export function createPeakShaving(ctx, deps = {}) {
       && Number.isFinite(Number(s.victron?.gridImportW));
     const ctlNow = r.active ? control(c, t) : null;
     const b = ctlNow?.budget || null;
+    const ad = adapted(c, r, t);
+    const adapt = {
+      on: r.adaptToReachedPeak,
+      scope: ad.adaptScope,
+      reachedPeakW: ad.reachedPeakW,
+      active: ad.adaptedFrom != null,
+      effectiveLimitW: ad.limitW,
+      effectiveTargetW: ad.targetW,
+      // Hinweis (P3): Spitze schon über der Grenze, Schalter aus → jede weitere
+      // Kappung unter die Spitze spart in diesem Zeitraum nichts.
+      suggest: !r.adaptToReachedPeak && r.limitW != null && ad.reachedPeakW != null && ad.reachedPeakW > r.limitW
+    };
     return {
       enabled: true,
       active: r.active,
@@ -569,6 +609,7 @@ export function createPeakShaving(ctx, deps = {}) {
       targetW: r.targetW,
       marginW: r.marginW,
       billing15min: r.billing15min,
+      adapt,
       // Viertelstunden-Budget (P1): mode 'budget' = Regelziel ist die erlaubte
       // Restleistung, 'instant' = Augenblickswert (reason sagt warum).
       budget: b ? {
@@ -597,7 +638,24 @@ export function createPeakShaving(ctx, deps = {}) {
   /** Regelziel für EOS (P2): eingestellt bzw. angepasst (P3), ohne Budget; null = aus. */
   function eosTargetW(c = cfg()) {
     const r = resolvePeakShaving(c);
-    return r.active ? r.targetW : null;
+    return r.active ? adapted(c, r).targetW : null;
+  }
+
+  // Wirksames EOS-Ziel geändert (Grenze an die Spitze angepasst, neuer
+  // Zeitraum, Peak Shaving ein/aus): EOS neu abgleichen, höchstens jede Minute,
+  // aber nicht vergessen. Der erste Wert nach dem Start löst nichts aus (der
+  // normale Abgleich läuft ohnehin).
+  let eosKey;
+  let eosSyncedKey;
+  let lastEosSyncAt = -Infinity;
+  function syncEosOnChange() {
+    const key = String(eosTargetW());
+    if (eosKey === undefined) { eosKey = key; eosSyncedKey = key; return; }
+    eosKey = key;
+    if (eosKey === eosSyncedKey || mono() - lastEosSyncAt < 60_000) return;
+    lastEosSyncAt = mono();
+    eosSyncedKey = eosKey;
+    Promise.resolve(ctx.eosConfigSync?.sync?.()).catch(() => {});
   }
 
   return { refreshPeaks, summary, start, stop, control, pollTick, eosTargetW, _budget: budget };
