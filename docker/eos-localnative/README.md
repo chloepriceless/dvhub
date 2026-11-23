@@ -32,7 +32,8 @@ Nutzen: **−170..−230 MB RAM** gegenüber dem Python-EOS-Container.
   mit sha256-Prüfung, startet das Image je Architektur mit
   `scripts/eos-localnative-smoke.py` (alive/native, D/E-Felder) und pusht erst
   dann nach Docker Hub und GHCR. Ein vorhandener Tag wird nicht überschrieben
-  (Version anheben oder `workflow_dispatch` mit `rebuild`).
+  (Version anheben oder `workflow_dispatch` mit `rebuild`); liegt er nur in einer
+  Registry, wird er unverändert in die andere kopiert.
 
 ### Bauen (multi-arch)
 

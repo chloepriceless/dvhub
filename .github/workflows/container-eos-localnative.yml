@@ -18,7 +18,8 @@
 #   4. erst dann die Multi-Arch-Liste (amd64 + arm64) pushen und nachprüfen.
 #
 # Ein schon veröffentlichter Tag wird NICHT überschrieben (Version in
-# eos-version.env anheben). Ausnahme: workflow_dispatch mit rebuild=true —
+# eos-version.env anheben). Liegt er nur in einer Registry, wird er unverändert
+# in die andere kopiert. Ausnahme: workflow_dispatch mit rebuild=true —
 # workflow_dispatch geht nur, wenn diese Datei auf dem Standardzweig liegt.
 #
 # Docker-Hub-Token: Repo-Secret BIKINIBOTTOMCAPITAL (oder DOCKERHUB_TOKEN), wie
@@ -118,19 +119,42 @@ jobs:
         env:
           VERSION: ${{ steps.v.outputs.version }}
           REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.rebuild }}
+        # Jede Registry einzeln: Gibt es den Tag nur in einer (z. B. GHCR-Push
+        # gescheitert), wird er in die andere KOPIERT, nicht neu gebaut — sonst
+        # stünde hinter derselben Version ein anderes Image (Basis python:3.13-slim
+        # bewegt sich). Neu gebaut wird nur, wenn er in keiner liegt, oder auf
+        # ausdrücklichen Wunsch (rebuild).
         run: |
           set -euo pipefail
           have() { docker buildx imagetools inspect "$1" >/dev/null 2>&1; }
-          build=true
-          if have "$HUB_IMAGE:$VERSION" && have "$GHCR_IMAGE:$VERSION"; then
-            if [ "$REBUILD" = true ]; then
-              echo "::warning::$VERSION ist veröffentlicht, wird auf Wunsch (rebuild) überschrieben"
-            else
-              build=false
-              echo "::notice::$HUB_IMAGE:$VERSION und $GHCR_IMAGE:$VERSION gibt es schon — nichts zu tun (Version in eos-version.env anheben oder workflow_dispatch mit rebuild)"
-            fi
+          hub=false; ghcr=false
+          have "$HUB_IMAGE:$VERSION" && hub=true
+          have "$GHCR_IMAGE:$VERSION" && ghcr=true
+          build=false; copy_from=""; copy_to=""
+          if [ "$REBUILD" = true ]; then
+            build=true
+            echo "::warning::$VERSION wird auf Wunsch (rebuild) neu gebaut und überschrieben (Hub: $hub, GHCR: $ghcr)"
+          elif [ "$hub" = false ] && [ "$ghcr" = false ]; then
+            build=true
+          elif [ "$hub" = true ] && [ "$ghcr" = false ]; then
+            copy_from="$HUB_IMAGE:$VERSION"; copy_to="$GHCR_IMAGE:$VERSION"
+          elif [ "$hub" = false ] && [ "$ghcr" = true ]; then
+            copy_from="$GHCR_IMAGE:$VERSION"; copy_to="$HUB_IMAGE:$VERSION"
+          else
+            echo "::notice::$HUB_IMAGE:$VERSION und $GHCR_IMAGE:$VERSION gibt es schon — nichts zu tun (Version in eos-version.env anheben oder workflow_dispatch mit rebuild)"
           fi
-          echo "build=$build" | tee -a "$GITHUB_OUTPUT"
+          publish=false; { [ "$build" = true ] || [ -n "$copy_from" ]; } && publish=true
+          { echo "build=$build"; echo "copy_from=$copy_from"; echo "copy_to=$copy_to"; echo "publish=$publish"; } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Vorhandenen Tag in die fehlende Registry kopieren
+        if: steps.plan.outputs.copy_from != ''
+        env:
+          FROM: ${{ steps.plan.outputs.copy_from }}
+          TO: ${{ steps.plan.outputs.copy_to }}
+        run: |
+          set -euo pipefail
+          echo "kopiere $FROM → $TO (unverändert, gleicher Digest)"
+          docker buildx imagetools create -t "$TO" "$FROM"
 
       # Vertrauensanker: Signatur der SHA256SUMS des Releases (ssh-keygen -Y,
       # Namensraum dvhub-release); die gepinnten Prüfsummen müssen darin stehen.
@@ -196,7 +220,7 @@ jobs:
             docker buildx bake -f docker/eos-localnative/docker-bake.hcl --push dvhub-eos-localnative
 
       - name: Veröffentlichte Architekturen prüfen
-        if: steps.plan.outputs.build == 'true'
+        if: steps.plan.outputs.publish == 'true'
         env:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
