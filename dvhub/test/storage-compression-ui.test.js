@@ -189,3 +189,12 @@ test('„Vorschlag übernehmen“ scheitert → Fehler bleibt nach dem Neuladen 
   assert.equal(els.storageGroup.hidden, false, 'Karte geladen');
   assert.deepEqual(calls[0], ['/api/storage/profile', 'POST']);
 });
+
+// Codex 30313bfc: noch nicht umgesetztes Profil bleibt als „wird übernommen“ sichtbar.
+test('Karte „Speicher“: ausstehendes Profil nicht als aktiv zeigen', () => {
+  const { storageCardView } = loadStorage();
+  const v = storageCardView({ ...ST, profile: { ...ST.profile, pending: true, suggested: null } });
+  assert.match(v.profileText, /^Wird übernommen — Speicherprofil/);
+  assert.equal(v.showApply, false);
+  assert.equal(v.pending, true);
+});

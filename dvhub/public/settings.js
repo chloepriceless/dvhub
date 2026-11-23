@@ -4443,7 +4443,9 @@ function storageCardView(st) {
     profileText = `Speicherprofil: ${STORAGE_PROFILE_LABEL[p.effective] || p.effective}${p.reason ? ` — ${p.reason}` : ''}. `
       + `Komprimiert nach ${v.compressAfter || '-'}, 5-s-Rohwerte ${raw}, Schreibpuffer bis ${fmtMb(v.maxWalMb)}.`;
   }
-  const showApply = !!p.suggested;
+  // Noch nicht umgesetzt (Hintergrund-Lauf, Codex 30313bfc): sichtbar machen, nicht als aktiv zeigen.
+  if (p.pending) profileText = `Wird übernommen — ${profileText}`;
+  const showApply = !!p.suggested && !p.pending;
   const applyLabel = showApply ? `Vorschlag übernehmen: ${STORAGE_PROFILE_LABEL[p.suggested] || p.suggested} (passend zur Plattengröße)` : '';
   const c = st.compression || {};
   const d = st.db || {};
@@ -4469,13 +4471,14 @@ function storageCardView(st) {
   if (st.container) {
     hints.push('Docker: Alte Images nach Updates belegen oft mehrere GB. Auf dem Host prüfen mit „docker system df“, aufräumen mit „docker image prune“.');
   }
-  return { hidden: false, bannerHtml, rowsHtml, profileText, showApply, applyLabel, dbText, hints };
+  return { hidden: false, bannerHtml, rowsHtml, profileText, showApply, applyLabel, dbText, hints, pending: !!p.pending };
 }
 
 if (typeof globalThis !== 'undefined') {
   globalThis.DVhubSettingsStorage = { storageCardView, applyStorageProfileSuggestion };
 }
 
+let storagePendingTimer = null;
 async function loadStorageStatus() {
   const group = document.getElementById('storageGroup');
   if (!group) return;
@@ -4495,6 +4498,11 @@ async function loadStorageStatus() {
     if (btn && view.showApply) { btn.disabled = false; btn.textContent = view.applyLabel; }
     document.getElementById('storageDb').innerHTML = view.dbText;
     document.getElementById('storageHints').textContent = view.hints.join(' ');
+    // Profil noch in Arbeit: später erneut laden, bis es umgesetzt ist.
+    if (view.pending) {
+      window.clearTimeout(storagePendingTimer);
+      storagePendingTimer = window.setTimeout(() => { loadStorageStatus().catch(() => {}); }, 10000);
+    }
   } catch {
     group.hidden = true;
   }
