@@ -24,6 +24,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { buildPsqlArgs } from './db-backup.js';
 
 export const SAMPLES_FILE = 'storage-samples.json';
 export const DEFAULT_DB_VOLUME_DIR = '/run/dvhub-dbvol';
@@ -46,21 +47,34 @@ export function mountCandidates({ container = false, dataDir, pgDataDir = null, 
   return out;
 }
 
+// statfs-Kennung von overlayfs (Docker-Wurzel im Container).
+const OVERLAYFS_MAGIC = 0x794c7630;
+
 /**
- * statfs auf den Pfad; ist er nicht lesbar (z. B. PG-Datenverzeichnis 0700
- * postgres), den nächsten Elternordner — derselbe Datenträger, solange der Pfad
- * nicht selbst ein Einhängepunkt ist.
+ * statfs auf den Pfad. Geht das nicht, den nächsten Elternordner — aber nur,
+ * wenn stat() belegt, dass er auf DERSELBEN Platte liegt (gleiches st_dev);
+ * sonst null. Ein Elternordner auf einer anderen Platte darf nie als
+ * Datenbank-Platte gelten (Codex 38d2f56d, P1). statfs/stat brauchen kein
+ * Leserecht auf den Ordner selbst, nur auf die Ordner davor — ein 0700-
+ * Datenverzeichnis von postgres lässt sich direkt messen.
  */
 export function statPath(p, { statfs = (x) => fs.statfsSync(x), stat = (x) => fs.statSync(x) } = {}) {
-  let cur = path.resolve(String(p || '/'));
+  const want = path.resolve(String(p || '/'));
+  let wantDev = null;
+  try { wantDev = String(stat(want).dev); } catch { /* unbekannt */ }
+  let cur = want;
   for (;;) {
     try {
       const s = statfs(cur);
       let dev = null;
       try { dev = String(stat(cur).dev); } catch { /* ohne dev: nach Pfad zusammenfassen */ }
+      if (cur !== want && (wantDev == null || dev !== wantDev)) return null;
       const totalMb = Math.round((Number(s.blocks) * Number(s.bsize)) / MB);
       const freeMb = Math.round((Number(s.bavail) * Number(s.bsize)) / MB);
-      return { measuredPath: cur, dev, totalMb, freeMb, freePct: totalMb > 0 ? Math.round((freeMb / totalMb) * 1000) / 10 : null };
+      return {
+        measuredPath: cur, dev, totalMb, freeMb, freePct: totalMb > 0 ? Math.round((freeMb / totalMb) * 1000) / 10 : null,
+        overlay: Number(s.type) === OVERLAYFS_MAGIC, blocks: Number(s.blocks), bsize: Number(s.bsize),
+      };
     } catch {
       const up = path.dirname(cur);
       if (up === cur) return null;
@@ -86,10 +100,27 @@ export function measureMounts(candidates, deps = {}) {
     byKey.set(key, {
       key, roles: [c.role], paths: [c.path], totalMb: m.totalMb, freeMb: m.freeMb, freePct: m.freePct,
       usedMb: Math.max(0, m.totalMb - m.freeMb), ...(c.assumed && c.role === 'db' ? { dbAssumed: true } : {}),
+      _overlay: m.overlay, _blocks: m.blocks, _bsize: m.bsize,
     });
   }
+  // Docker overlay2: `/` im Container hat eine eigene Geräte-Nummer, liegt aber
+  // auf derselben Platte wie die Volumes (Codex 38d2f56d, P2). overlayfs meldet
+  // die Zahlen der Platte darunter — gleiche Blockzahl und -größe, freier Platz
+  // bis auf 1 % gleich → dieselbe Platte.
+  const groups = [...byKey.values()];
+  for (const o of groups.filter((g) => g._overlay)) {
+    const twin = groups.find((g) => g !== o && !g._merged && !g._overlay && g._blocks === o._blocks && g._bsize === o._bsize
+      && Math.abs(g.freeMb - o.freeMb) <= Math.max(1, g.totalMb * 0.01));
+    if (!twin) continue;
+    for (const r of o.roles) if (!twin.roles.includes(r)) twin.roles.push(r);
+    for (const p of o.paths) if (!twin.paths.includes(p)) twin.paths.push(p);
+    if (o.dbAssumed) twin.dbAssumed = true;
+    o._merged = true;
+  }
   const rank = (mnt) => Math.min(...mnt.roles.map((r) => ROLE_ORDER.indexOf(r)));
-  return [...byKey.values()].sort((a, b) => rank(a) - rank(b));
+  return groups.filter((g) => !g._merged)
+    .map(({ _overlay, _blocks, _bsize, _merged, ...g }) => { void _overlay; void _blocks; void _bsize; void _merged; return g; })
+    .sort((a, b) => rank(a) - rank(b));
 }
 
 /** Datenträger einer Rolle (oder null). */
@@ -105,7 +136,9 @@ export function readPgDataDirectory({ database = {}, spawnFn = spawn, timeoutMs 
   return new Promise((resolve) => {
     let child; let out = ''; let done = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
-    const args = ['-n', '-u', 'postgres', '/usr/bin/psql', '-X', '-tAq', '-d', String(database.name || 'dvhub'), '-c', 'SHOW data_directory'];
+    // Dieselben Verbindungsangaben wie Backup/Restore (Host/Socket, Port, DB) —
+    // sonst fragt es bei mehreren Clustern den falschen (Codex 38d2f56d, P2).
+    const args = ['-n', '-u', 'postgres', '/usr/bin/psql', '-X', ...buildPsqlArgs({ database, sql: 'SHOW data_directory' })];
     try { child = spawnFn('sudo', args, { env: process.env }); } catch { finish(null); return; }
     const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* egal */ } finish(null); }, timeoutMs);
     t.unref?.();

@@ -134,3 +134,39 @@ test('Wache: Systemplatte fast voll, DB-Platte frei → eigener Hinweis', async 
     assert.match(warn.storage_other, /DVhub-Ordner \+ Systemplatte \(\/\) \+ Protokoll-Platte \(\/var\/log\) kritisch: 1\.8 % frei \(600 MB\)/);
   } finally { Object.assign(DISKS['/'], saved); DISKS['/var/lib/postgresql'].freeMb = 300; }
 });
+
+// Codex 38d2f56d (P1): ein Elternordner auf einer ANDEREN Platte darf nicht als DB-Platte gelten.
+test('Pfad nicht messbar, Elternordner auf anderer Platte → nicht als DB-Platte', () => {
+  // /srv/pg ist Einhängepunkt einer eigenen Platte (dev 9), aber nicht erreichbar; / ist dev 1.
+  const statfs = (p) => { if (p.startsWith('/srv/pg')) { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; } return { bsize: 1048576, blocks: 32 * GB, bavail: 20 * GB }; };
+  const stat = (p) => ({ dev: p.startsWith('/srv/pg') ? 9 : 1 });
+  assert.equal(statPath('/srv/pg/17/main', { statfs, stat }), null);
+  const noStat = (p) => { if (p.startsWith('/srv/pg')) throw new Error('EACCES'); return { dev: 1 }; };
+  assert.equal(statPath('/srv/pg/17/main', { statfs, stat: noStat }), null, 'Platte nicht belegbar → null');
+  const mounts = measureMounts(mountCandidates({ dataDir: '/var/lib/dvhub', pgDataDir: '/srv/pg/17/main' }), { statfs, stat });
+  assert.equal(mountFor(mounts, 'db'), null, 'keine falsche DB-Platte');
+});
+
+// Codex 38d2f56d (P2): Docker overlay2 — / hat eigene Geräte-Nummer, liegt aber auf der Platte der Volumes.
+test('Docker: Overlay-Wurzel und Volumes auf derselben Platte zählen einmal', () => {
+  const statfs = (p) => (p === '/'
+    ? { type: 0x794c7630, bsize: 4096, blocks: 30000000, bavail: 1000000 }
+    : { type: 0xef53, bsize: 4096, blocks: 30000000, bavail: 1000100 });
+  const stat = (p) => ({ dev: p === '/' ? 77 : 2049 });
+  const mounts = measureMounts(mountCandidates({ container: true, dataDir: '/var/lib/dvhub', exists: () => true }), { statfs, stat });
+  assert.equal(mounts.length, 1);
+  assert.deepEqual(mounts[0].roles, ['db', 'data', 'system']);
+  assert.ok(!('_overlay' in mounts[0]));
+});
+
+test('SHOW data_directory nutzt Host/Socket und Port der Konfiguration (Codex 38d2f56d)', async () => {
+  let seen = null;
+  const spawnFn = (cmd, args) => {
+    seen = args;
+    const c = new EventEmitter(); c.stdout = new EventEmitter(); c.kill = () => {};
+    setImmediate(() => { c.stdout.emit('data', Buffer.from('/srv/pg/main\n')); c.emit('close', 0); });
+    return c;
+  };
+  assert.equal(await readPgDataDirectory({ database: { host: '/run/pg2', port: 5434, name: 'dvhub' }, spawnFn }), '/srv/pg/main');
+  assert.deepEqual(seen.slice(seen.indexOf('-h'), seen.indexOf('-h') + 4), ['-h', '/run/pg2', '-p', '5434']);
+});
