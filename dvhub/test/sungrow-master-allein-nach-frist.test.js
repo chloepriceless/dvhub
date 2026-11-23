@@ -791,3 +791,71 @@ test('Codex 0cc625c7 P1: wartende Übernahme, ein fremdes EMS übernimmt den Mas
     assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_foreign_mode'), 'fremder Modus erkannt');
   }
 });
+
+// --- A16 (Christin 23.11.2026, a): H-9-Übernahme bei Slave unter fremdem EMS (VPP) → sofort allein ------------------
+// Vorher (6dd6f4e5): ein fremdes EMS am Slave zählte bei der Übernahme als „unbestätigt" — die Übernahme wartete
+// (adopt_wait, sungrow_ems_adopt_deferred) bis zum Ablauf der Frist. Jetzt wie beim gewöhnlichen Eintritt: der Master
+// wird sofort übernommen und regelt allein, der VPP-Slave wird nie geschrieben.
+
+const VPP_SLAVE = { [MODE]: EMS_MODE.VPP, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 2000 };
+const foreignLogs = (r) => r.logs.filter((l) => l.event === 'sungrow_ems_slave_foreign');
+const adoptDeferredLogs = (r) => r.logs.filter((l) => l.event === 'sungrow_ems_adopt_deferred');
+
+test('A16: H-9-Übernahme, Slave unter fremdem EMS (VPP) → Master sofort allein übernommen, kein Warten, Slave nie geschrieben', async () => {
+  for (const telemetry of [true, false]) {
+    const where = telemetry ? 'Split' : 'Einzelpfad';
+    const r = rig({ telemetry, masterHolding: FOUND_MODE2, slaveHolding: VPP_SLAVE }); // Frist Standard 30 min
+    const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+    assert.equal(res.ok, true, `${where}: ${JSON.stringify(res)}`);
+    assert.deepEqual(masterWrites(r), [`M:${POWER}=5000`, `M:${CMD}=${EMS_CMD.DISCHARGE}`], `${where}: Übernahme per eigenem Write, kein Moduswechsel`);
+    assert.deepEqual(slaveWrites(r), [], `${where}: VPP-Slave wird nie geschrieben`);
+    assert.equal(adoptedLogs(r).length, 1, where);
+    assert.equal(adoptDeferredLogs(r).length, 0, `${where}: kein „Übernahme zurückgestellt"`);
+    assert.equal(aloneLogs(r).length, 0, `${where}: keine Frist-Warnung (fremdes EMS, nicht unbestätigt)`);
+    assert.equal(foreignLogs(r).length, 1, `${where}: Meldung „Slave unter fremdem EMS"`);
+    const d = r.state.ctrl.sungrowEms.decision;
+    assert.notEqual(d.mode, 'adopt_wait', `${where}: ${JSON.stringify(d)}`);
+    assert.equal(d.masterAlone, undefined, `${where}: kein „Slave unbestätigt" im Status`);
+    assert.equal(r.state.ctrl.sungrowEms.owns, true);
+    // Weiter allein: kein Rücktritt, Meldung nur einmal je Lage, Slave weiter unberührt.
+    r.order.length = 0;
+    for (let i = 0; i < 5; i += 1) assert.equal((await r.minute()).ok, true, `${where}: Minute ${i + 1}`);
+    assert.equal(modeWrites(r, EMS_MODE.SELF), 0, `${where}: kein Rücktritt: ${r.order}`);
+    assert.deepEqual(slaveWrites(r), [], where);
+    assert.equal(foreignLogs(r).length, 1, `${where}: einmal je Lage`);
+    assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+    assert.equal(r.slaveImage.holding.get(MODE), EMS_MODE.VPP);
+    assertSafeRegs(r);
+  }
+});
+
+test('A16: wartende Übernahme (Slave nicht erreichbar), Slave meldet sich unter VPP → sofort übernommen statt bis zur Frist', async () => {
+  const flag = { down: true };
+  const r = rig({ masterHolding: FOUND_MODE2, slaveHolding: OLD_CHARGE, slaveMock: unreachable(flag), aloneAfterMin: 30 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  assert.equal(r.state.ctrl.sungrowEms.decision.mode, 'adopt_wait');
+  for (let i = 1; i <= 4; i += 1) assert.equal((await r.minute()).ok, false, `Minute ${i}: wartet`);
+  flag.down = false;
+  r.slaveImage.holding.set(MODE, EMS_MODE.VPP); // Minute 5: Slave antwortet, steht unter VPP
+  const res = await r.minute();
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(adoptedLogs(r).length, 1);
+  assert.equal(aloneLogs(r).length, 0, 'keine Frist-Warnung');
+  assert.equal(foreignLogs(r).length, 1);
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone, undefined);
+  assert.notEqual(r.state.ctrl.sungrowEms.decision.mode, 'adopt_wait');
+  assert.deepEqual(slaveWrites(r), []);
+  assertSafeRegs(r);
+});
+
+test('A16: Not-Halt — Übernahme bei VPP-Slave schreibt nichts', async () => {
+  const r = rig({ masterHolding: FOUND_MODE2, slaveHolding: VPP_SLAVE });
+  r.state.ctrl.discretionaryWritesPaused = true;
+  r.state.ctrl.pausedAt = 4713;
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.notEqual(res.ok, true, JSON.stringify(res));
+  await r.ems.tick();
+  await r.minute();
+  assert.deepEqual(r.order, [], 'im Not-Halt kein Write');
+  assert.equal(adoptedLogs(r).length, 0);
+});

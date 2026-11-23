@@ -1124,16 +1124,17 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Eingangsregister — und nicht im Not-Halt).
     if (!adopt && !ss?.throttled) {
       st.slaveCheck = ss?.ok === true || ss?.emergency === true || ss?.blocked ? { failedAt: 0, error: null } : { failedAt: mt, error: ss?.error || 'unbekannt', foreign: ss?.foreign === true };
-      // Lage „fremd gesteuert" endet mit jedem anderen Ergebnis einer echten Prüfung (nicht im Not-Halt).
-      if (ss?.foreign !== true && !ss?.blocked) st.slaveForeignNotified = false;
     }
+    // Lage „fremd gesteuert" endet mit jedem anderen Ergebnis einer echten Prüfung (nicht im Not-Halt), auch bei der
+    // Übernahme (A16: sie meldet die Lage ebenfalls).
+    if (!ss?.throttled && ss?.foreign !== true && !ss?.blocked) st.slaveForeignNotified = false;
     if (ss?.ok === true) { endMasterAlone(); return; }
     // Notladung, fremdes EMS: kein „Slave unbestätigt" im Sinn der Frist (A7). In der Wartephase beginnt sie danach neu;
     // regelt der Master schon allein, bleibt er es (Fable P3-1: sonst kostete jedes Ende einer Notladung einen Rücktritt,
     // zwei 13050-Writes und neue Wartezeit, obwohl der Slave durchgehend unbestätigt ist). Not-Halt beendet beides.
-    // H-9-Übernahme (A12): Notladung wie oben; ein fremdes EMS zählt dort weiter als „unbestätigt" (bisher wartete die
-    // Übernahme dann endlos — jetzt bis zur Frist).
-    if (ss?.emergency === true || (!adopt && ss?.foreign === true)) {
+    // H-9-Übernahme (A12): Notladung wie oben. Fremdes EMS (A16, Christin 23.11.2026, a): wie beim Eintritt — kein
+    // „unbestätigt", der Master wird sofort übernommen und regelt allein (bis 6dd6f4e5 wartete die Übernahme bis zur Frist).
+    if (ss?.emergency === true || ss?.foreign === true) {
       if (!st.masterAlone.active) endMasterAlone();
       // Notladung: weiter allein, im Status sichtbar (Review 0abbb847 P3). Fremdes EMS: die Lage bleibt (kein Rücktritt
       // danach), der Status zeigt aber kein „Slave unbestätigt" — der Slave antwortet, gemeldet wird sungrow_ems_slave_foreign
@@ -1144,7 +1145,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (running && ss?.emergency === true) return; // Notladung: kein Write, kein Rücktritt; nach der Notladung stoppen
     // Ein fremdes EMS (VPP) am Slave (Review 156a3e06 P3): DVhub fasst ihn nicht an (S-38), und ein Rücktritt des
     // Masters brächte ihn nicht zur Ruhe — der Master steuert wie bisher allein („nur Master"), gemeldet einmal je Lage.
-    if (!adopt && ss?.foreign === true) {
+    // Ebenso bei der H-9-Übernahme (A16): sofort übernehmen statt bis zur Frist warten.
+    if (ss?.foreign === true) {
       // Eigener Merker statt logOnce: st.logKeys leert jeder Master-Write, die Meldung käme sonst bei jeder Prüfung.
       if (!st.slaveForeignNotified) {
         st.slaveForeignNotified = true;
