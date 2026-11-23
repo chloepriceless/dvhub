@@ -35,7 +35,7 @@
       "output": {
         "capacityWh": 10000,
         "socPct": 55,
-        "floorPct": 11,
+        "floorPct": 10,
         "capacityMissing": false
       }
     },
@@ -69,7 +69,7 @@
       "output": {
         "capacityWh": 10000,
         "socPct": 17.2,
-        "floorPct": 11,
+        "floorPct": 10,
         "capacityMissing": false
       }
     },
@@ -126,7 +126,7 @@
         "capacityWh": 18000,
         "socPct": 47,
         "capacityMissing": false,
-        "floorPct": 11
+        "floorPct": 10
       }
     },
     {
@@ -182,7 +182,7 @@
         "capacityWh": 18000,
         "socPct": 20.36,
         "capacityMissing": false,
-        "floorPct": 11
+        "floorPct": 10
       }
     },
     {
@@ -238,7 +238,7 @@
         "capacityWh": null,
         "socPct": 47,
         "capacityMissing": true,
-        "floorPct": 11
+        "floorPct": 10
       }
     },
     {
@@ -293,7 +293,7 @@
       "output": {
         "capacityWh": 10000,
         "socPct": 55,
-        "floorPct": 11,
+        "floorPct": 10,
         "capacityMissing": false
       }
     },
@@ -349,7 +349,7 @@
       "output": {
         "capacityWh": 10000,
         "socPct": 55,
-        "floorPct": 11,
+        "floorPct": 10,
         "capacityMissing": false
       }
     },

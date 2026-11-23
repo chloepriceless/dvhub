@@ -33,7 +33,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 5
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_single_primaryMin10",
@@ -63,7 +63,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 10
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_single_primaryMin15",
@@ -123,7 +123,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 5
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_single_leer_primaryMin10",
@@ -153,7 +153,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 10
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_single_leer_primaryMin15",
@@ -235,7 +235,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 5
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_aggregiert_primaryMin10",
@@ -287,7 +287,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 10
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_aggregiert_primaryMin15",
@@ -391,7 +391,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 5
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_aggregiert_feld_9.2_14.4_primaryMin10",
@@ -443,7 +443,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 10
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_aggregiert_feld_9.2_14.4_primaryMin15",
@@ -547,7 +547,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 5
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_aggregiert_ohne_zweitkapazitaet_primaryMin10",
@@ -599,7 +599,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 10
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_aggregiert_ohne_zweitkapazitaet_primaryMin15",
@@ -703,7 +703,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 5
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_slave_offline_primaryMin10",
@@ -755,7 +755,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 10
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_slave_offline_primaryMin15",
@@ -859,7 +859,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 5
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_slave_veraltet_primaryMin10",
@@ -911,7 +911,7 @@
         "now": 1794571200000,
         "primaryMinSocPct": 10
       },
-      "output": 11
+      "output": 10
     },
     {
       "name": "sungrow_slave_veraltet_primaryMin15",
