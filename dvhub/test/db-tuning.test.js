@@ -208,3 +208,27 @@ test('Timescale mit Profil „winzig“: 6-h-Blöcke, Kompression nach 6 h, Lauf
   const g = await tuneTimescale(q, PROFILES.gross);
   assert.deepEqual(g.changed, ['chunk_interval', 'compress_after']);
 });
+
+// Codex 2ef7ff2c (P2): vorübergehend kleinerer Schreibpuffer bleibt nicht für immer.
+test('Zurück auf „groß“: DVhubs max_wal_size aus ALTER SYSTEM wird zurückgesetzt, fremde Werte nie', async () => {
+  const mk = (setting, sourcefile) => {
+    const calls = [];
+    return { calls, async query(sql) {
+      calls.push(sql);
+      if (sql.includes("name = 'max_wal_size'")) return { rows: [{ setting, unit: 'MB', sourcefile }] };
+      return { rows: [] };
+    } };
+  };
+  const ours = mk('512', '/var/lib/postgresql/data/postgresql.auto.conf');
+  const r = await applyDbTuning((q, p) => ours.query(q, p), { includeMemory: false, storageProfile: PROFILES.gross });
+  assert.ok(ours.calls.includes('ALTER SYSTEM RESET max_wal_size'));
+  assert.ok(r.changed.includes('max_wal_size'));
+  for (const [setting, file] of [['2048', '/x/postgresql.auto.conf'], ['512', '/etc/postgresql/17/main/postgresql.conf']]) {
+    const other = mk(setting, file);
+    await applyDbTuning((q, p) => other.query(q, p), { includeMemory: false });
+    assert.ok(!other.calls.includes('ALTER SYSTEM RESET max_wal_size'), `${setting} aus ${file} bleibt`);
+  }
+  const small = mk('512', '/x/postgresql.auto.conf');
+  await applyDbTuning((q, p) => small.query(q, p), { includeMemory: false, storageProfile: PROFILES.mittel });
+  assert.ok(!small.calls.includes('ALTER SYSTEM RESET max_wal_size'), 'bei „mittel“ gewollt');
+});

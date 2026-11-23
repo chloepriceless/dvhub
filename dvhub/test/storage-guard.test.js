@@ -381,3 +381,39 @@ test('DB-Aufteilung für die Karte', async () => {
   const r = await createStorageGuard({ getDb: () => db, statfs: stat(60) }).check();
   assert.deepEqual(r.db, { samplesMb: 2048, compressedChunks: 116, chunks: 120, rawBeforeMb: 41984, rawAfterMb: 1283, tables: { energy_slots_15m: 305 } });
 });
+
+// Codex 2ef7ff2c (P2): Log-Aufbewahrung sieht beim Stufenwechsel schon die NEUE Stufe.
+test('onStageChange: status() liefert bereits die neue Stufe', async () => {
+  const seen = [];
+  const db = fakeDb({ oldestDays: 20 });
+  const g = createStorageGuard({ getDb: () => db, statfs: stat(8), onStageChange: () => seen.push(g.status()?.level) });
+  await g.check();
+  assert.deepEqual(seen, ['wenig']);
+});
+
+// Codex 2ef7ff2c (P2): die vorübergehend härtere Stufe darf die Reserve nicht verschieben (kein Schaukeln).
+test('Stufe schaukelt nicht zwischen zwei Läufen (Reserve nach gespeichertem Profil)', async () => {
+  // 30 000 MiB, 2050 MiB frei, Wachstum 10 MiB/Tag (Beispiel aus der Gegenprüfung).
+  const disk = () => ({ blocks: 30000, bsize: 1048576, bavail: 2050 });
+  const used = 30000 - 2050;
+  const files = { '/d/storage-samples.json': JSON.stringify({ samples: [{ day: '2026-11-16', used: { data: used - 70 } }] }) };
+  const io = { writeFile: (f, d) => { files[f] = d; }, rename: (a, b) => { files[b] = files[a]; delete files[a]; }, readFile: (f) => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; } };
+  const db = fakeDb({ oldestDays: 500 });
+  const g = createStorageGuard({ getDb: () => db, statfs: disk, getDataDir: () => '/d', samplesIo: io, profileIo: io, readFile: io.readFile,
+    now: () => Date.parse('2026-11-23T12:00:00Z') });
+  const levels = [];
+  for (let i = 0; i < 4; i++) levels.push((await g.check()).level);
+  assert.equal(new Set(levels).size, 1, levels.join(' → '));
+});
+
+// Codex 33062ac7 (P1): gespeichertes „winzig“ + nicht messbare DB-Platte → keine Profil-Aufbewahrung.
+test('DB-Platte nicht messbar: auch keine Aufbewahrung nach gespeichertem Profil', async () => {
+  const statfs = (p) => { if (p.startsWith('/srv/pg')) throw new Error('EACCES'); return { bsize: 1048576, blocks: 30000, bavail: 20000 }; };
+  const stat2 = (p) => { if (p.startsWith('/srv/pg')) throw new Error('EACCES'); return { dev: 1 }; };
+  const db = fakeDb({ oldestDays: 90, aggUntil: '2026-11-20T00:00:00Z' });
+  const r = await createStorageGuard({ getDb: () => db, getDataDir: () => '/d', getPgDataDir: async () => '/srv/pg/main', statfs, stat: stat2,
+    initialProfile: 'winzig', readFile: (f) => { if (f.endsWith('storage-profile.json')) return JSON.stringify({ base: 'klein', mode: 'auto', effective: 'winzig' }); throw new Error('x'); },
+    samplesIo: { readFile: () => { throw new Error('x'); }, writeFile() {}, rename() {} }, profileIo: { writeFile() {}, rename() {} } }).check();
+  assert.equal(r.dbUnmeasured, true);
+  assert.ok(!db.calls.some(([s]) => /drop_chunks|DELETE/.test(s)), 'nichts gelöscht');
+});

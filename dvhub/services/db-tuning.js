@@ -79,6 +79,7 @@ export function dbBudgetMb({ env = process.env, totalMemBytes } = {}) {
  * halten weniger Schreibpuffer vor. „groß“ (und ohne Profil) = bisher:
  * max_wal_size bleibt unangetastet (PostgreSQL-Standard 1 GB), min_wal_size 64MB.
  */
+export const MANAGED_MAX_WAL_MB = Object.freeze([512, 256, 128]);
 export function walSettings(storageProfile = null) {
   if (!storageProfile || storageProfile.name === 'gross') return {};
   return { max_wal_size: `${storageProfile.maxWalMb}MB`, min_wal_size: `${storageProfile.minWalMb}MB` };
@@ -113,6 +114,19 @@ export async function applyDbTuning(query, { budgetMb, includeMemory = true, sto
     // Name ist aus der festen Liste oben, Wert ebenso — kein Nutzertext.
     await query(`ALTER SYSTEM SET ${name.includes('.') ? `"${name}"` : name} = '${want}'`);
     changed.push(name);
+  }
+  // Zurück auf „groß“ (oder ohne Profil): eine früher von DVhub gesetzte
+  // max_wal_size aus postgresql.auto.conf wieder entfernen — sonst bliebe ein
+  // vorübergehend kleinerer Schreibpuffer für immer (Codex 2ef7ff2c). Nur unsere
+  // Profilwerte (512/256/128 MB) aus ALTER SYSTEM, nie fremde Einstellungen.
+  if (!('max_wal_size' in settings)) {
+    const w = (await query(
+      "SELECT setting, unit, sourcefile FROM pg_settings WHERE name = 'max_wal_size'")).rows?.[0];
+    const mb = w ? toBytes(w.setting, w.unit) / MB : null;
+    if (w && /postgresql\.auto\.conf$/.test(String(w.sourcefile || '')) && MANAGED_MAX_WAL_MB.includes(mb)) {
+      await query('ALTER SYSTEM RESET max_wal_size');
+      changed.push('max_wal_size');
+    }
   }
   if (changed.length) await query('SELECT pg_reload_conf()');
   const after = await query('SELECT name FROM pg_settings WHERE pending_restart');

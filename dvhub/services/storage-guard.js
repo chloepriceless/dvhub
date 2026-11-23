@@ -347,7 +347,10 @@ export function createStorageGuard({
         const role = mountFor(mounts, 'db') ? 'db' : 'data';
         out.growthMbPerDay = growthMbPerDay(samples, role);
       } catch { /* Wachstum ist Zugabe */ }
-      out.reserveMb = cappedReserveMb(reserveMb({ container, maxWalMb: PROFILES[lastEffective]?.maxWalMb ?? 1024 }), totalMb);
+      // Reserve nach dem GESPEICHERTEN Profil, nicht dem vorübergehend härteren —
+      // sonst schaukelt die Stufe zwischen zwei Läufen hin und her (Codex 2ef7ff2c).
+      const baseName = profileState?.base || profileInfo?.base || lastEffective;
+      out.reserveMb = cappedReserveMb(reserveMb({ container, maxWalMb: PROFILES[baseName]?.maxWalMb ?? 1024 }), totalMb);
       out.daysLeft = reachDays({ freeMb, reserveMb: out.reserveMb, growth: out.growthMbPerDay });
       // Stufe: Reichweite, sonst feste Schwellen; Hysterese gegen die vorige Stufe.
       const level = storageStage({
@@ -393,7 +396,8 @@ export function createStorageGuard({
           }
           // Aufbewahrung der 5-s-Rohwerte nach Profil (S4), höchstens einmal am Tag.
           const eff = PROFILES[lastEffective];
-          if (eff?.rawKeepDays && retentionDay !== day) {
+          // Nicht bei nicht messbarer DB-Platte: dann räumt DVhub in der DB nichts auf (Codex 33062ac7).
+          if (eff?.rawKeepDays && retentionDay !== day && !dbUnmeasured) {
             retentionDay = day;
             try { await profileRetention(db, ts, eff, out); } catch (e) {
               out.actions.push({ action: 'retain_raw', error: String(e?.message || e).slice(0, 200) });
@@ -425,12 +429,16 @@ export function createStorageGuard({
         warn('storage', `Datenbank-Platte nicht messbar (${pgDataDir}): DVhub räumt in der Datenbank nichts auf, bis sie wieder messbar ist.`, 'warn');
       } else if (level === 'ok' || level === 'unbekannt') warn('storage', null);
       else warn('storage', storageWarningText(out), level === 'kritisch' ? 'error' : 'warn');
-      if (level !== (last?.level)) {
+      const prevLevel = last?.level || null;
+      // Neuen Stand veröffentlichen, BEVOR Rückrufe ihn lesen (z. B. die Log-
+      // Aufbewahrung über status().level, Codex 2ef7ff2c).
+      last = out;
+      if (level !== prevLevel) {
         log('storage_level', { level, freePct, freeMb, dbMb: out.dbMb, daysLeft: out.daysLeft }, level === 'ok' ? 'info' : 'warn');
-        try { onStageChange?.(level, last?.level || null, out); } catch { /* egal */ }
+        try { onStageChange?.(level, prevLevel, out); } catch { /* egal */ }
         // S11 a: ab „wenig“, einmal je Wechsel nach oben — Push und Installateur-Portal
         // (…_error läuft über den Fehlerweg des Audit-Logs ans Portal).
-        if ((level === 'wenig' || level === 'kritisch') && stageRank(level) > stageRank(last?.level || 'ok')) {
+        if ((level === 'wenig' || level === 'kritisch') && stageRank(level) > stageRank(prevLevel || 'ok')) {
           const text = storageWarningText(out);
           log('storage_space_error', {
             level, freePct, freeMb, totalMb, daysLeft: out.daysLeft, growthMbPerDay: out.growthMbPerDay,
@@ -442,7 +450,6 @@ export function createStorageGuard({
           })).catch(() => {});
         }
       }
-      last = out;
       return out;
     } catch (e) {
       logGuardError(e);
