@@ -83,6 +83,7 @@ function createSelfUse() {
   return {
     slots: 0, skippedNoPriceSlots: 0, skippedNoFlowSlots: 0,
     loadKwh: 0, loadCt: 0, gridKwh: 0, gridCt: 0,
+    loadMeasuredKwh: 0, loadMeasuredCt: 0,
     pvDirectKwh: 0, pvDirectGainCt: 0,
     chargePvKwh: 0, chargeGridKwh: 0, chargeCostCt: 0, chargeGridCt: 0,
     dischargeHouseKwh: 0, dischargeGridKwh: 0, dischargeValueCt: 0,
@@ -200,6 +201,9 @@ function addSelfUse(selfUse, slot, flows) {
   selfUse.slots += 1;
   selfUse.loadKwh += load;
   selfUse.loadCt += load * p;
+  // T13: gemessene Hauslast (load_power_w) — die Flusssumme enthält die Wandlerverluste.
+  selfUse.loadMeasuredKwh += kwhOf(slot.loadKwh);
+  selfUse.loadMeasuredCt += kwhOf(slot.loadKwh) * p;
   selfUse.gridKwh += gridDirect + gridToBatt;
   selfUse.gridCt += (gridDirect + gridToBatt) * p;
   selfUse.pvDirectKwh += solarDirect;
@@ -548,27 +552,56 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null, storage = null
   if (!selfUse) return null;
   const discharge = selfUse.dischargeHouseKwh + selfUse.dischargeGridKwh;
   const charge = selfUse.chargePvKwh + selfUse.chargeGridKwh;
-  const inCt = discharge > 0 ? selfUse.chargeCostCt / discharge : null;
   const delta = finite(storedDeltaKwh) ? Number(storedDeltaKwh) : null;
+  const netCharge = charge - (delta ?? 0);
   // Ladestand am Rand zum Einstandspreis je GELADENER kWh (Codex 39d05c79):
   // je entladener kWh blähte ein voller Akku am Ende das Ergebnis auf und fiel
   // ohne Entladung ganz weg. Ohne Ladung im Zeitraum ist der Einstand
   // unbekannt; dann neutral zum Nutzwert je entladener kWh.
-  const storedCt = charge > 0
-    ? selfUse.chargeCostCt / charge
-    : (discharge > 0 ? selfUse.dischargeValueCt / discharge : null);
-  const socCorrectionCt = delta != null && storedCt != null ? delta * storedCt : 0;
-  const batteryResultCt = selfUse.dischargeValueCt - selfUse.chargeCostCt + socCorrectionCt;
-  const advantageCt = selfUse.pvDirectGainCt + batteryResultCt;
-  const netCharge = charge - (delta ?? 0);
+  const value = (v) => {
+    const storedCt = charge > 0 ? v.chargeCostCt / charge : (discharge > 0 ? v.dischargeValueCt / discharge : null);
+    const socCorrectionCt = delta != null && storedCt != null ? delta * storedCt : 0;
+    const batteryResultCt = v.dischargeValueCt - v.chargeCostCt + socCorrectionCt;
+    return { ...v, storedCt, socCorrectionCt, batteryResultCt, advantageCt: selfUse.pvDirectGainCt + batteryResultCt };
+  };
+  // Bisher (Flüsse, DC als AC gezählt): Akku-Mengen DC am Akku, Last = Flusssumme.
+  const flows = value({
+    chargeCostCt: selfUse.chargeCostCt, dischargeValueCt: selfUse.dischargeValueCt,
+    chargeGridKwh: selfUse.chargeGridKwh, dischargeHouseKwh: selfUse.dischargeHouseKwh,
+    dischargeGridKwh: selfUse.dischargeGridKwh, loadKwh: selfUse.loadKwh, loadCt: selfUse.loadCt
+  });
+  // T13 = B (Christin 24.11.2026): wo der Speicherweg gemessen ist, bewertet die
+  // Karte den Akku AC-korrekt — Entladung × η Entladen, Netzladung ÷ η Lader
+  // (Tagesjob), Hausverbrauch gemessen. Die Flüsse in der Datenbank bleiben.
+  const t = storageUsable(storage) ? storage.totals : null;
+  const ac = t && (selfUse.loadMeasuredKwh || 0) > 0 ? (() => {
+    const etaD = t.dischargeEta;
+    const etaCh = t.chargerEta ?? 1;
+    const gridCt = selfUse.chargeGridCt || 0;
+    return value({
+      chargeCostCt: selfUse.chargeCostCt - gridCt + gridCt / etaCh,
+      dischargeValueCt: selfUse.dischargeValueCt * etaD,
+      chargeGridKwh: selfUse.chargeGridKwh / etaCh,
+      dischargeHouseKwh: selfUse.dischargeHouseKwh * etaD,
+      dischargeGridKwh: selfUse.dischargeGridKwh * etaD,
+      loadKwh: selfUse.loadMeasuredKwh,
+      loadCt: selfUse.loadMeasuredCt,
+      etaD,
+      etaCh: t.chargerEta ?? null
+    });
+  })() : null;
+  const v = ac || flows;
+  const out = v.dischargeHouseKwh + v.dischargeGridKwh;
   return {
     exportValueBasis: 'spot',
+    // 'ac' = mit Wandlung (T13 B), 'flows' = wie bisher aus den Flüssen.
+    valuation: ac ? 'ac' : 'flows',
     slots: selfUse.slots,
     skippedNoPriceSlots: selfUse.skippedNoPriceSlots,
     skippedNoFlowSlots: selfUse.skippedNoFlowSlots,
-    loadKwh: round2(selfUse.loadKwh),
-    loadCostAtPriceEur: round2(selfUse.loadCt / 100),
-    loadAvgCtKwh: ratio(selfUse.loadCt, selfUse.loadKwh),
+    loadKwh: round2(v.loadKwh),
+    loadCostAtPriceEur: round2(v.loadCt / 100),
+    loadAvgCtKwh: ratio(v.loadCt, v.loadKwh),
     gridImportKwh: round2(selfUse.gridKwh),
     gridCostEur: round2(selfUse.gridCt / 100),
     pvDirectKwh: round2(selfUse.pvDirectKwh),
@@ -576,27 +609,46 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null, storage = null
     pvDirectGainCtKwh: ratio(selfUse.pvDirectGainCt, selfUse.pvDirectKwh),
     battery: {
       chargedPvKwh: round2(selfUse.chargePvKwh),
-      chargedGridKwh: round2(selfUse.chargeGridKwh),
-      dischargedHouseKwh: round2(selfUse.dischargeHouseKwh),
-      dischargedGridKwh: round2(selfUse.dischargeGridKwh),
-      chargeCostEur: round2(selfUse.chargeCostCt / 100),
-      dischargeValueEur: round2(selfUse.dischargeValueCt / 100),
-      inCtKwh: inCt == null ? null : round2(inCt),
-      outCtKwh: ratio(selfUse.dischargeValueCt, discharge),
+      chargedGridKwh: round2(v.chargeGridKwh),
+      dischargedHouseKwh: round2(v.dischargeHouseKwh),
+      dischargedGridKwh: round2(v.dischargeGridKwh),
+      chargeCostEur: round2(v.chargeCostCt / 100),
+      dischargeValueEur: round2(v.dischargeValueCt / 100),
+      inCtKwh: out > 0 ? round2(v.chargeCostCt / out) : null,
+      outCtKwh: ratio(v.dischargeValueCt, out),
       // Akku-Wirkungsgrad (DC): DC am Akku rein → DC raus, Ladestand am Rand abgezogen.
       etaPct: discharge > 0 && netCharge > 0 ? round2((discharge / netCharge) * 100) : null,
       storedDeltaKwh: delta == null ? null : round2(delta),
-      storedValueCtKwh: storedCt == null ? null : round2(storedCt),
-      socCorrectionEur: round2(socCorrectionCt / 100),
-      resultEur: round2(batteryResultCt / 100),
-      system: storage ? finalizeStorageSystem(selfUse, storage, { storedCt }) : null
+      storedValueCtKwh: v.storedCt == null ? null : round2(v.storedCt),
+      socCorrectionEur: round2(v.socCorrectionCt / 100),
+      resultEur: round2(v.batteryResultCt / 100),
+      // Mit Wandlung: welche Wirkungsgrade angewandt wurden (η Lader fehlt → Netzladung unkorrigiert).
+      acBasis: ac ? {
+        dischargeEtaPct: round2(ac.etaD * 100),
+        chargerEtaPct: ac.etaCh == null ? null : round2(ac.etaCh * 100)
+      } : null,
+      system: storage ? finalizeStorageSystem(selfUse, storage, { storedCt: v.storedCt }) : null
     },
     exportKwh: round2(selfUse.exportKwh),
     exportValueEur: round2(selfUse.exportCt / 100),
-    advantageEur: round2(advantageCt / 100),
-    peffCtKwh: ratio(selfUse.loadCt - advantageCt, selfUse.loadKwh),
-    peffWithoutOpportunityCtKwh: ratio(selfUse.gridCt, selfUse.loadKwh)
+    advantageEur: round2(v.advantageCt / 100),
+    peffCtKwh: ratio(v.loadCt - v.advantageCt, v.loadKwh),
+    peffWithoutOpportunityCtKwh: ratio(selfUse.gridCt, v.loadKwh),
+    // Zum Vergleich immer die bisherige Bewertung aus den Flüssen.
+    flowsValuation: {
+      loadKwh: round2(flows.loadKwh),
+      advantageEur: round2(flows.advantageCt / 100),
+      batteryResultEur: round2(flows.batteryResultCt / 100),
+      peffCtKwh: ratio(flows.loadCt - flows.advantageCt, flows.loadKwh),
+      peffWithoutOpportunityCtKwh: ratio(selfUse.gridCt, flows.loadKwh)
+    }
   };
+}
+
+/** Speicherweg gemessen und verwendbar (messbar, ohne Akku 2, Job-Status ok). */
+function storageUsable(storage) {
+  return Boolean(storage && storage.capability?.measurable && !storage.secondBattery
+    && storage.totals && storage.totals.status === 'ok');
 }
 
 // ── Systemwirkungsgrad (AC) und Verluste im Speicherweg (T12) ─────────────

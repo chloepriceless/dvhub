@@ -3054,6 +3054,18 @@ function renderSelfUseCard(summary) {
   setText('historySelfUseSoc', soc);
   setHidden('historySelfUseSoc', !soc);
   renderSelfUseSystem(b.system);
+  // T13 B (Christin 24.11.2026): mit gemessenem Speicherweg bewertet die Karte den
+  // Akku mit Wandlung; zum Vergleich die bisherige Bewertung aus den Flüssen.
+  const f = s.flowsValuation || {};
+  const acb = b.acBasis || {};
+  const valuation = s.valuation === 'ac'
+    ? `Mit Wandlung bewertet: Entladung × ${fmtPct(acb.dischargeEtaPct)}, `
+      + (hasFiniteNumber(acb.chargerEtaPct) ? `Netzladung ÷ ${fmtPct(acb.chargerEtaPct)}` : 'Netzladung ohne Korrektur (zu wenig gemessen)')
+      + `, Hausverbrauch gemessen. Ohne Wandlung (aus den Flüssen) wären es Akku-Ergebnis ${eurOrDash(f.batteryResultEur)}, `
+      + `Vorteil ${eurOrDash(f.advantageEur)}, effektiver Preis ${ctOrDash(f.peffCtKwh)} bei ${fmtKwh(f.loadKwh)}.`
+    : '';
+  setText('historySelfUseValuation', valuation);
+  setHidden('historySelfUseValuation', !valuation);
   setText('historySelfUsePremium', hasFiniteNumber(kpis.marketPremiumEur) ? fmtEur(kpis.marketPremiumEur) : '-');
   const skipped = Number(s.skippedNoFlowSlots || 0) + Number(s.skippedNoPriceSlots || 0);
   const notes = [];

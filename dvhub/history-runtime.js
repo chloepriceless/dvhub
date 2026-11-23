@@ -708,7 +708,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // 11 (23.11.2026): Abweichung nur, wo DVhub das Netzentgelt einrechnet; MwSt leer = 0 (Codex 3cbbdef3).
 // 12 (23.11.2026): δ auch beim Formel-Rückfall des Anbieter-Endpreises (Codex 90e9b9c4).
 // 13 (23.11.2026): Eigenverbrauch mit Σ Netzladung·p (Wandlerverlust Laden in €, T12).
-export const SUMMARY_CACHE_VERSION = 13;
+// 14 (24.11.2026): Eigenverbrauch mit gemessener Hauslast Σ Last·p (AC-Bewertung, T13 B).
+export const SUMMARY_CACHE_VERSION = 14;
 
 // Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;

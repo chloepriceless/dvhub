@@ -420,7 +420,8 @@ function systemSums() {
   const sums = createTariffSums({ detail: true });
   addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 30, marketPriceCtKwh: 10, solarToBatteryKwh: 20, solarDirectUseKwh: 5, loadKwh: 5 });
   addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 25, marketPriceCtKwh: 5, importKwh: 12, gridToBatteryKwh: 10, gridDirectUseKwh: 2, loadKwh: 2 });
-  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 40, marketPriceCtKwh: 20, batteryDirectUseKwh: 24, batteryToGridKwh: 3, loadKwh: 24 });
+  // Gemessene Hauslast 22,08 kWh = 24 kWh DC am Akku × 0,92 (die Flusssumme zählt 24).
+  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 40, marketPriceCtKwh: 20, batteryDirectUseKwh: 24, batteryToGridKwh: 3, loadKwh: 22.08 });
   return sums;
 }
 const victronCap = { measurable: true, verified: true, label: 'Victron', reason: null, note: null };
@@ -441,18 +442,19 @@ test('T12: Systemwirkungsgrad = Laden × Akku (DC) × Entladen, Verluste in kWh 
   assert.equal(sys.chargerEtaPct, 90);
   // 0,96 × 0,924915 × 0,92 = 0,816885 → 81,69 %.
   assert.equal(sys.systemEtaPct, 81.69);
-  // Akku (DC) 30,3 − 1 − 27,1 = 2,2 kWh × 15 ct = 0,33 €.
+  // Einstand mit Wandlung (T13 B): (200 PV + 250 Netz ÷ 0,90) ÷ 30 kWh = 477,78 ÷ 30 = 15,926 ct.
+  // Akku (DC) 30,3 − 1 − 27,1 = 2,2 kWh × 15,926 ct = 0,3504 €.
   assert.equal(sys.losses.dcKwh, 2.2);
-  assert.equal(sys.losses.dcEur, 0.33);
+  assert.equal(sys.losses.dcEur, 0.35);
   // Laden 31,25 − 30 = 1,25 kWh × 25 ct (Netzladung) = 0,3125 €.
   assert.equal(sys.losses.chargeKwh, 1.25);
   assert.equal(sys.losses.chargeEur, 0.31);
-  // Entladen 27 − 24,84 = 2,16 kWh × 15 ct = 0,324 €.
+  // Entladen 27 − 24,84 = 2,16 kWh × 15,926 ct = 0,3440 €.
   assert.equal(sys.losses.dischargeKwh, 2.16);
-  assert.equal(sys.losses.dischargeEur, 0.32);
-  // Gesamt 5,61 kWh, 0,33 + 0,3125 + 0,324 = 0,9665 € (ungerundet summiert).
+  assert.equal(sys.losses.dischargeEur, 0.34);
+  // Gesamt 5,61 kWh, 0,3504 + 0,3125 + 0,3440 = 1,0069 € (ungerundet summiert).
   assert.equal(sys.losses.totalKwh, 5.61);
-  assert.equal(sys.losses.totalEur, 0.97);
+  assert.equal(sys.losses.totalEur, 1.01);
   assert.equal(sys.losses.complete, true, 'ohne Angabe zur Ladestand-Abdeckung gilt sie als ganz');
   // Codex 3be47b54: Ladestand fehlte zeitweise → Summe als unvollständig markiert, nicht hochgerechnet.
   const partial = finalizeSelfUse(systemSums().selfUse, { storage: { capability: victronCap, totals: { ...jobTotals, socComplete: false, socCoveragePct: 60 } } }).battery.system;
@@ -463,12 +465,69 @@ test('T12: Systemwirkungsgrad = Laden × Akku (DC) × Entladen, Verluste in kWh 
   const nearly = finalizeSelfUse(systemSums().selfUse, { storage: { capability: victronCap, totals: { ...jobTotals, socComplete: false, socCoveragePct: 99.73 } } }).battery.system;
   assert.equal(nearly.losses.complete, false);
   assert.deepEqual(sys.energy, { inputKwh: 31.25, chargedKwh: 30.3, dischargedKwh: 27.1, acOutKwh: 24.84, storedDeltaKwh: 1 });
-  assert.deepEqual(sys.prices, { storedCtKwh: 15, chargeCtKwh: 25, chargeBasis: 'grid' });
+  assert.deepEqual(sys.prices, { storedCtKwh: 15.93, chargeCtKwh: 25, chargeBasis: 'grid' });
   assert.deepEqual(sys.basis, { days: 30, firstDay: '2026-11-01', lastDay: '2026-11-30', hours: 690.5 });
   assert.equal(sys.converterLossKwh, 80.25);
   assert.equal(sys.verified, true);
-  // Das Akku-Ergebnis selbst bleibt unverändert (Umbau ist Entscheidung T13).
-  assert.equal(r.battery.resultEur, finalizeSelfUse(systemSums().selfUse, { storedDeltaKwh: 1 }).battery.resultEur);
+});
+
+test('T13 B: Karte bewertet den Akku mit Wandlung — Entladung × η Entladen, Netzladung ÷ η Lader, Last gemessen', () => {
+  const r = finalizeSelfUse(systemSums().selfUse, { storedDeltaKwh: 1, storage: { capability: victronCap, totals: jobTotals } });
+  assert.equal(r.valuation, 'ac');
+  const b = r.battery;
+  // Netzladung AC 10 ÷ 0,9 = 11,11 kWh zu 250 ÷ 0,9 = 277,78 ct; PV 20 kWh × 10 ct = 200 ct → Laden 4,78 €.
+  assert.equal(b.chargedGridKwh, 11.11);
+  assert.equal(b.chargedPvKwh, 20);
+  assert.equal(b.chargeCostEur, 4.78);
+  // Entladen × 0,92: Haus 24 → 22,08, Netz 3 → 2,76; Nutzwert (24·40 + 3·20) × 0,92 = 938,4 ct.
+  assert.equal(b.dischargedHouseKwh, 22.08);
+  assert.equal(b.dischargedGridKwh, 2.76);
+  assert.equal(b.dischargeValueEur, 9.38);
+  // Einstand je geladener kWh 477,78 ÷ 30 = 15,93 ct; Ladestand +1 kWh → 0,16 €.
+  assert.equal(b.storedValueCtKwh, 15.93);
+  assert.equal(b.socCorrectionEur, 0.16);
+  // Ergebnis 938,4 − 477,78 + 15,93 = 476,55 ct.
+  assert.equal(b.resultEur, 4.77);
+  // Je entladener AC-kWh (24,84): 477,78 / 24,84 = 19,23 ct → 938,4 / 24,84 = 37,78 ct.
+  assert.equal(b.inCtKwh, 19.23);
+  assert.equal(b.outCtKwh, 37.78);
+  assert.deepEqual(b.acBasis, { dischargeEtaPct: 92, chargerEtaPct: 90 });
+  // Akku-Wirkungsgrad (DC) bleibt aus den Flüssen: 27 ÷ (30 − 1) = 93,10 %.
+  assert.equal(b.etaPct, 93.1);
+  // Last gemessen 5 + 2 + 22,08 = 29,08 kWh, Σ Last·p = 150 + 50 + 883,2 = 1083,2 ct.
+  assert.equal(r.loadKwh, 29.08);
+  assert.equal(r.loadCostAtPriceEur, 10.83);
+  // Vorteil = PV direkt 5 × (30 − 10) = 100 ct + 476,55 = 576,55 ct.
+  assert.equal(r.advantageEur, 5.77);
+  // p_eff = (1083,2 − 576,55) ÷ 29,08 = 17,42 ct; ohne Opportunität 300 ÷ 29,08 = 10,32 ct.
+  assert.equal(r.peffCtKwh, 17.42);
+  assert.equal(r.peffWithoutOpportunityCtKwh, 10.32);
+  // Vorher (Flüsse, DC als AC): Ergebnis 1020 − 450 + 15 = 585 ct, Vorteil 685 ct, Last 31 kWh,
+  // p_eff (1160 − 685) ÷ 31 = 15,32 ct.
+  assert.deepEqual(r.flowsValuation, { loadKwh: 31, advantageEur: 6.85, batteryResultEur: 5.85, peffCtKwh: 15.32, peffWithoutOpportunityCtKwh: 9.68 });
+});
+
+test('T13 B: ohne gemessenen Speicherweg bleibt die Bewertung aus den Flüssen', () => {
+  const sums = systemSums().selfUse;
+  const plain = finalizeSelfUse(sums, { storedDeltaKwh: 1 });
+  assert.equal(plain.valuation, 'flows');
+  assert.equal(plain.battery.resultEur, 5.85);
+  assert.equal(plain.loadKwh, 31);
+  assert.equal(plain.battery.acBasis, null);
+  for (const storage of [
+    { capability: { measurable: false, reason: 'Fronius' }, totals: null },
+    { capability: victronCap, totals: jobTotals, secondBattery: true },
+    { capability: victronCap, totals: { ...jobTotals, status: 'insufficient_data' } }
+  ]) {
+    const r = finalizeSelfUse(sums, { storedDeltaKwh: 1, storage });
+    assert.equal(r.valuation, 'flows');
+    assert.equal(r.battery.resultEur, 5.85);
+  }
+  // η Lader fehlt (zu wenig AC-Ladung gemessen): Netzladung unkorrigiert, Entladung trotzdem × η.
+  const noCharger = finalizeSelfUse(sums, { storedDeltaKwh: 1, storage: { capability: victronCap, totals: { ...jobTotals, chargerEta: null } } });
+  assert.equal(noCharger.valuation, 'ac');
+  assert.equal(noCharger.battery.chargedGridKwh, 10);
+  assert.deepEqual(noCharger.battery.acBasis, { dischargeEtaPct: 92, chargerEtaPct: null });
 });
 
 test('T12: ohne Netzladung zählt der Laden-Verlust zur Ø Börse des PV-Stroms', () => {
