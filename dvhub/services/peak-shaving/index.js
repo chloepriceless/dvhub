@@ -34,7 +34,7 @@ import { betaGateOpen } from '../../beta-features.js';
 import { localParts, zoneOffsetMs } from '../../tz-fast.js';
 import { capPositiveSetpoint, meterImport } from '../import-limit/core.js';
 import { monoNow as defaultMonoNow } from '../mono-clock.js';
-import { createBudgetState, observeBudget, decideBudget } from './budget.js';
+import { createBudgetState, observeBudget, decideBudget, quarterHourSlot } from './budget.js';
 import { resolveTariff, computeYearBilling } from './billing.js';
 
 export const PEAK_SHAVING_DEFAULTS = Object.freeze({
@@ -528,6 +528,15 @@ export function createPeakShaving(ctx, deps = {}) {
       const p = peakPeriods(nowMs, c.schedule?.timezone || 'Europe/Berlin');
       const month = await store.getGridImportPeak(p.month);
       const year = await store.getGridImportPeak(p.year);
+      // P3: angepasst wird nur an ABGESCHLOSSENE Viertelstunden — die laufende
+      // wächst noch; ein Deckel auf ihren Zwischenstand höbe die Spitze weiter
+      // an (Codex ac14daee P1).
+      const tz = c.schedule?.timezone || 'Europe/Berlin';
+      const openStart = new Date(quarterHourSlot(nowMs, tz).startMs).toISOString();
+      const closedEnd = (per) => (Date.parse(per.end) > Date.parse(openStart) ? openStart : per.end);
+      const adaptOn = resolvePeakShaving(c).adaptToReachedPeak;
+      const adaptMonth = adaptOn ? await store.getGridImportPeak({ start: p.month.start, end: closedEnd(p.month) }) : null;
+      const adaptYear = adaptOn ? await store.getGridImportPeak({ start: p.year.start, end: closedEnd(p.year) }) : null;
       const strip = (x) => (x ? { slotStart: x.slotStart, powerW: x.powerW } : null);
       // P4: Monatswerte des laufenden Jahres fürs Leistungsentgelt (ohne
       // Datenbank-Funktion: keine €-Anzeige, die Spitzen bleiben).
@@ -535,7 +544,11 @@ export function createPeakShaving(ctx, deps = {}) {
       if (typeof store.getPeakBillingMonths === 'function') {
         months = await store.getPeakBillingMonths({ ...p.year, timeZone: c.schedule?.timezone || 'Europe/Berlin' });
       }
-      peaks = { month: strip(month), year: strip(year), periods: p, months, updatedAt: new Date(nowMs).toISOString(), error: null };
+      peaks = {
+        month: strip(month), year: strip(year), periods: p, months,
+        adapt: { month: strip(adaptMonth), year: strip(adaptYear) },
+        updatedAt: new Date(nowMs).toISOString(), error: null
+      };
     } catch (e) {
       peaks = { ...peaks, error: e?.message || String(e) };
     } finally {
@@ -575,7 +588,9 @@ export function createPeakShaving(ctx, deps = {}) {
    */
   function adapted(c, r, t = now()) {
     const scope = c?.peakShaving?.tariff?.model === 'month' ? 'month' : 'year';
-    const pk = peaks[scope];
+    // Mit Schalter nur abgeschlossene Viertelstunden; für den Hinweis (Schalter
+    // aus) reicht die angezeigte Spitze.
+    const pk = r.adaptToReachedPeak ? peaks.adapt?.[scope] : peaks[scope];
     const per = peaks.periods?.[scope];
     const cur = per ? peakPeriods(t, c.schedule?.timezone || 'Europe/Berlin')[scope] : null;
     const current = Boolean(pk && per && cur && per.start === cur.start && finite(pk.powerW));
@@ -705,7 +720,7 @@ export function createPeakShaving(ctx, deps = {}) {
       acting: Boolean((clamp && (clamp.mode === 'target' || clamp.mode === 'net_load')) || lift),
       clamp,
       lift,
-      peaks: { ...peaks }
+      peaks: { month: peaks.month, year: peaks.year, updatedAt: peaks.updatedAt, error: peaks.error }
     };
   }
 
@@ -727,17 +742,27 @@ export function createPeakShaving(ctx, deps = {}) {
   // Zeitraum, Peak Shaving ein/aus): EOS neu abgleichen, höchstens jede Minute,
   // aber nicht vergessen. Der erste Wert nach dem Start löst nichts aus (der
   // normale Abgleich läuft ohnehin).
+  // Erst eine erfolgreiche Übertragung quittiert den Wert; scheitert sie, wird
+  // nach der Minute erneut versucht (Codex ac14daee P2).
   let eosKey;
   let eosSyncedKey;
+  let eosSyncBusy = false;
   let lastEosSyncAt = -Infinity;
   function syncEosOnChange() {
     const key = String(eosTargetW());
     if (eosKey === undefined) { eosKey = key; eosSyncedKey = key; return; }
     eosKey = key;
-    if (eosKey === eosSyncedKey || mono() - lastEosSyncAt < 60_000) return;
+    if (eosKey === eosSyncedKey || eosSyncBusy || mono() - lastEosSyncAt < 60_000) return;
+    if (typeof ctx.eosConfigSync?.sync !== 'function') return;
     lastEosSyncAt = mono();
-    eosSyncedKey = eosKey;
-    Promise.resolve(ctx.eosConfigSync?.sync?.()).catch(() => {});
+    const sent = eosKey;
+    eosSyncBusy = true;
+    Promise.resolve(ctx.eosConfigSync.sync())
+      .then((res) => {
+        if (res && res.ok !== false && !res.errors?.['devices/inverters']) eosSyncedKey = sent;
+      })
+      .catch(() => {})
+      .finally(() => { eosSyncBusy = false; });
   }
 
   return { refreshPeaks, summary, start, stop, control, pollTick, eosTargetW, _budget: budget };

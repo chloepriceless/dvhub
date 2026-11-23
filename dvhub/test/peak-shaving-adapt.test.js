@@ -119,10 +119,56 @@ test('angepasste Grenze ändert sich → EOS wird neu abgeglichen (einmal, höch
   s.pollTick();
   assert.equal(syncs, 0, 'Startwert löst nichts aus');
   cfg.peakShaving.adaptToReachedPeak = true;
+  await s.refreshPeaks();
   mono += 1000;
   s.pollTick();
   assert.equal(syncs, 1);
   mono += 1000;
   s.pollTick();
   assert.equal(syncs, 1, 'unverändert → kein weiterer Abgleich');
+});
+
+test('Codex ac14daee P1: angepasst wird nur an abgeschlossene Viertelstunden (laufende wächst noch)', async () => {
+  const cfg = base({ adaptToReachedPeak: true });
+  const calls = [];
+  const store = {
+    getGridImportPeak: async (r) => {
+      calls.push(r);
+      // offene Viertelstunde 09:00 UTC hat schon 5 kWh = 20 kW; abgeschlossen höchstens 11 kW
+      return Date.parse(r.end) > NOW ? { slotStart: '2026-11-24T09:00:00.000Z', powerW: 20000 } : { slotStart: '2026-11-03T10:15:00.000Z', powerW: 11000 };
+    }
+  };
+  const s = createPeakShaving({ state: { victron: {}, meter: {}, ctrl: {} }, getCfg: () => cfg, telemetryStore: store, pushLog: () => {} }, { now: () => NOW });
+  await s.refreshPeaks();
+  assert.ok(calls.some((r) => r.end === '2026-11-24T09:00:00.000Z'), 'Abfrage bis zum Anfang der laufenden Viertelstunde');
+  assert.equal(s.control().limitW, 11000);
+});
+
+test('Codex ac14daee P2: gescheiterter EOS-Abgleich wird nach der Minute wiederholt', async () => {
+  const cfg = base({ adaptToReachedPeak: false });
+  let syncs = 0;
+  let ok = false;
+  const store = { getGridImportPeak: async () => ({ slotStart: '2026-03-10T08:00:00.000Z', powerW: 12345 }) };
+  let mono = 0;
+  const s = createPeakShaving({
+    state: { victron: {}, meter: {}, ctrl: {} }, getCfg: () => cfg, telemetryStore: store, pushLog: () => {},
+    eosConfigSync: { sync: async () => { syncs += 1; return ok ? { ok: true, errors: {} } : { ok: false, errors: { probe: 'eos_unreachable' } }; } }
+  }, { now: () => NOW, monoNow: () => mono });
+  await s.refreshPeaks();
+  s.pollTick();
+  cfg.peakShaving.adaptToReachedPeak = true;
+  await s.refreshPeaks();
+  mono += 1000; s.pollTick();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(syncs, 1);
+  mono += 30_000; s.pollTick();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(syncs, 1, 'innerhalb der Minute nicht');
+  ok = true;
+  mono += 31_000; s.pollTick();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(syncs, 2, 'nach der Minute erneut');
+  mono += 61_000; s.pollTick();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(syncs, 2, 'quittiert → kein weiterer Abgleich');
 });
