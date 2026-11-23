@@ -308,8 +308,15 @@ function superseded(d, known, lastWrite) {
   if (known.from === 'own_readback') {
     const writeTick = Number.isFinite(Number(d.lastWriteTick)) ? Number(d.lastWriteTick) : -Infinity;
     if (!(Number(known.tick) > writeTick)) return false;
-  } else if (known.at <= (Number(d.lastWriteAt) || 0) + READBACK_GRACE_MS) {
-    return false;
+  } else {
+    // A24 (Codex 243a25d4 P2): Poll-Lesung gegen den eigenen Write monoton, wenn beide eine monotone Zeit haben
+    // (known.mono vom Poller, d.lastWriteAt beim Write gestempelt; gemeinsame Uhr) — sonst Wanduhr wie bisher.
+    // Nach einem Rücksprung zwischen Poll und Write läge die alte Lesung per Wanduhr sonst „danach“.
+    const writeMono = monoStampOf(d, 'lastWriteAt');
+    const notAfter = known.mono != null && writeMono != null
+      ? known.mono <= writeMono + READBACK_GRACE_MS
+      : known.at <= (Number(d.lastWriteAt) || 0) + READBACK_GRACE_MS;
+    if (notAfter) return false;
   }
   // Der Wert VOR unserem Write zählt nur in der ersten eigenen Lesung danach
   // (Gerät hat noch nicht übernommen) — danach ist er eine Änderung von außen

@@ -546,3 +546,22 @@ test('Peak Shaving: Sprung vorwärts — known.at der Rücklesung bleibt der Pol
   assert.equal(known.at, pollWall, 'Wanduhr-Stempel unverändert');
   assert.equal(known.mono, pollMono);
 });
+
+// Codex 243a25d4 (P2): Rücksprung zwischen Poll und eigener Anhebung — die alte Poll-Lesung (Wanduhr vor dem Sprung)
+// gilt nicht als fremde Änderung; eine echte spätere Änderung von außen weiterhin schon.
+test('Peak Shaving: Rücksprung zwischen Poll und Anhebung — alte Lesung ist keine fremde Änderung', async () => {
+  const { dischargeStep } = await import('../services/peak-shaving/index.js');
+  const pollWall = 1_800_000_000_000;
+  const pollMono = monoNow();
+  const d = { phase: 'lifted', liftedW: 2000, prevW: 1000, since: pollWall - H3, lastWriteAt: pollWall - H3 + 1000, lastWriteTick: 7, over: 0, under: 0 };
+  stampMono(d, 'lastWriteAt', { at: pollMono + 1000 }); // Anhebung 1 s Laufzeit nach dem Poll, Wanduhr 3 h zurück
+  const args = (known) => ({ ps: { limitW: 5000, targetW: 4500 }, tel: { importW: 6000, soc: 50, socOk: true }, known, paused: false, capW: 10000, lastWrite: { source: 'peak_shaving_discharge' } });
+  const stale = { value: 1000, from: 'readback', at: pollWall, mono: pollMono, ambiguousZero: false };
+  assert.notEqual(dischargeStep(d, args(stale)).type, 'superseded', 'Poll vor der Anhebung');
+  // Kopie ohne Marke (z. B. nach Neustart aus der Ablage): Wanduhr wie bisher → die alte Lesung läge „danach“.
+  assert.equal(dischargeStep({ ...d }, args(stale)).type, 'superseded', 'ohne monotone Zeit: bisheriges Verhalten');
+  const external = { value: 1000, from: 'readback', at: pollWall + 60_000, mono: pollMono + 60_000, ambiguousZero: false };
+  const d2 = { ...d };
+  stampMono(d2, 'lastWriteAt', { at: pollMono + 1000 });
+  assert.equal(dischargeStep(d2, args(external)).type, 'superseded', 'Lesung 59 s nach der Anhebung mit fremdem Wert');
+});

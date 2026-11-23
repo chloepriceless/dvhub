@@ -2553,11 +2553,13 @@ export function createScheduleEvaluator(ctx) {
     const now = Date.now();
     if (act.type === 'lift') {
       Object.assign(d, { phase: 'lifted', liftedW: act.valueW, prevW: 0, since: now, lastWriteAt: now, lastWriteTick: peakShavingTickNo, over: 0, under: 0, waiting: null });
+      stampMono(d, 'lastWriteAt'); // A24: Reihenfolge Poll-Lesung ↔ eigener Write monoton (superseded)
       pushLog('peak_shaving_discharge_release', {
         liftedW: act.valueW, importW: tel.importW, limitW: ps.limitW, targetW: ps.targetW, soc: tel.soc
       });
     } else {
       Object.assign(d, { prevW: d.liftedW, liftedW: act.valueW, lastWriteAt: now, lastWriteTick: peakShavingTickNo });
+      stampMono(d, 'lastWriteAt');
       pushLog('peak_shaving_discharge_raise', { liftedW: act.valueW, importW: tel.importW, limitW: ps.limitW });
     }
     persistPeakShavingLift(d);
