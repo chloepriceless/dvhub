@@ -26,6 +26,13 @@ Nutzen: **−170..−230 MB RAM** gegenüber dem Python-EOS-Container.
   `docker/eos-native` die Wheels), nach `uname -m` ausgewählt und seine
   **sha256 gegen `eos-version.env` hart geprüft** (Bau scheitert bei Abweichung).
 - Image: `bikinibottomcapital/dvhub-eos-localnative:<EOS_NATIVE_BIN_VERSION>`.
+- CI: `.github/workflows/container-eos-localnative.yml` (Push auf `main` oder den
+  Feature-Zweig mit Pfadfilter, oder `workflow_dispatch`) prüft die signierte
+  `SHA256SUMS` des Releases gegen `release-keys/allowed_signers`, holt die Binäre
+  mit sha256-Prüfung, startet das Image je Architektur mit
+  `scripts/eos-localnative-smoke.py` (alive/native, D/E-Felder) und pusht erst
+  dann nach Docker Hub und GHCR. Ein vorhandener Tag wird nicht überschrieben
+  (Version anheben oder `workflow_dispatch` mit `rebuild`).
 
 ### Bauen (multi-arch)
 
