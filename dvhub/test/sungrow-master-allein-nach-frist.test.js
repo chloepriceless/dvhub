@@ -42,6 +42,7 @@ const aloneLogs = (r) => r.logs.filter((l) => l.event === ALONE);
 function rig({
   controlMode = 'forced', strategy = 'master-only', strategyCharge = strategy, strategyDischarge = strategy, telemetry = true,
   masterHolding = {}, slaveHolding = {}, slaveInput = {}, slaveMock = {}, masterMock = {}, aloneAfterMin, separateMono = false, clockStart = 1_000_000,
+  forcedHeartbeatPath = null,
 } = {}) {
   const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge, strategyDischarge, maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 };
   if (aloneAfterMin !== undefined) secondInverter.slaveUnconfirmedMasterAloneAfterMin = aloneAfterMin;
@@ -82,7 +83,7 @@ function rig({
     statusKey: 'sungrowEmsSlave', isSlave: true, connOverride: () => ({ host: cfg.sungrow.secondInverter.host, port: 502, unitId: 1, timeoutMs: 1500 }),
     ...(monoNow ? { monoNow } : {}),
   });
-  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: tap(masterT, 'M'), pushLog, now, sleep: async () => {}, slaveActuator: slaveEms, ...(monoNow ? { monoNow } : {}) });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: tap(masterT, 'M'), pushLog, now, sleep: async () => {}, slaveActuator: slaveEms, forcedHeartbeatPath, ...(monoNow ? { monoNow } : {}) });
   const jumpWall = (ms) => { clock += ms; }; // nur die Wanduhr springt (NTP, Hand-Einstellung)
   const advance = (ms) => {
     clock += ms;
@@ -898,4 +899,72 @@ test('A17: Wanduhr springt vorwärts (+2 h) → der Master wird nicht vorzeitig 
   assert.equal((await nudge(r)).ok, true);
   assert.equal(masterBlockReads(r), n0, 'Sprung vorwärts löst kein vorzeitiges Lesen aus');
   assert.equal(Object.keys(r.state.ctrl.sungrowEms.device).sort().join(','), 'at,cmd,mode,powerW', 'Status-Feld unverändert');
+});
+
+// --- A21 (Christin 23.11.2026): Regeltakt und Forced-Herzschlagdatei mit monotoner Uhr ------------------------------
+// Vorher (78009c3b): der Takt-Zeitgeber (due: now() - lastStepAt) und die 5-s-Drossel der Lebenszeichen-Datei für den
+// Box-Watchdog rechneten mit der Wanduhr. Nach einem Rücksprung der Uhr um 60 min regelte tick() bei gleichbleibendem
+// Sollwert eine Stunde lang nicht nach (kein Refresh, kein External-Herzschlag) und die Datei blieb alt; nach einem
+// Sprung vorwärts kam der Takt vorzeitig. Jetzt monoton; die Zeit in der Datei (at) bleibt Wanduhr.
+
+const WAYS = [
+  { controlMode: 'forced', telemetry: true, name: 'Forced, zwei WR' },
+  { controlMode: 'forced', telemetry: false, name: 'Forced, Einzelpfad' },
+  { controlMode: 'external', telemetry: true, name: 'External, zwei WR' },
+  { controlMode: 'external', telemetry: false, name: 'External, Einzelpfad' },
+];
+
+test('A21: Wanduhr springt rückwärts (−60 min) → der Regeltakt regelt weiter nach (alle Steuerwege)', async () => {
+  for (const w of WAYS) {
+    const r = rig({ controlMode: w.controlMode, telemetry: w.telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true, w.name);
+    assert.equal(r.state.ctrl.sungrowEms.owns, true, w.name);
+    r.jumpWall(-60 * MIN);
+    r.advance(10_000);
+    const res = await r.ems.tick();
+    assert.notEqual(res.idle, true, `${w.name}: Takt nach 10 s (monoton) fällig: ${JSON.stringify(res)}`);
+    r.advance(10_000);
+    const res2 = await r.ems.applySetpoint(-6000, 'rule:abend'); // gleicher Sollwert → Auffrischen nur, wenn fällig
+    assert.notEqual(res2.refreshed, true, `${w.name}: unveränderter Sollwert regelt nach: ${JSON.stringify(res2)}`);
+  }
+});
+
+test('A21: Wanduhr springt vorwärts (+2 h) → kein vorzeitiger Takt (alle Steuerwege)', async () => {
+  for (const w of WAYS) {
+    const r = rig({ controlMode: w.controlMode, telemetry: w.telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true, w.name);
+    r.jumpWall(2 * 60 * MIN);
+    const res = await r.ems.tick();
+    assert.equal(res.idle, true, `${w.name}: monoton 0 s seit dem letzten Takt → nicht fällig: ${JSON.stringify(res)}`);
+    const res2 = await r.ems.applySetpoint(-6000, 'rule:abend');
+    assert.equal(res2.refreshed, true, `${w.name}: unveränderter Sollwert ohne Takt: ${JSON.stringify(res2)}`);
+  }
+});
+
+test('A21: Forced-Herzschlagdatei — Rücksprung (−60 min) frischt weiter auf, Sprung vorwärts (+2 h) nicht vorzeitig; at bleibt Wanduhr', async () => {
+  for (const telemetry of [true, false]) {
+    const where = telemetry ? 'zwei WR' : 'Einzelpfad';
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-sg-hb-'));
+    const hbPath = path.join(dir, 'sungrow_forced_heartbeat.json');
+    try {
+      const r = rig({ telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000, forcedHeartbeatPath: hbPath });
+      assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true, where);
+      const hbAt = () => JSON.parse(fs.readFileSync(hbPath, 'utf8')).at;
+      assert.equal(hbAt(), r.now(), `${where}: erstes Lebenszeichen in Wanduhrzeit`);
+      // Rücksprung: nach 6 s (monoton) neu geschrieben, mit der aktuellen Wanduhrzeit.
+      r.jumpWall(-60 * MIN);
+      r.advance(6_000);
+      await nudge(r); // Sollwert-Änderung → Takt unabhängig vom Takt-Zeitgeber
+      assert.equal(hbAt(), r.now(), `${where}: nach Rücksprung aufgefrischt`);
+      // Sprung vorwärts: 1 s (monoton) später nicht erneut (Drossel 5 s).
+      const before = hbAt();
+      r.jumpWall(2 * 60 * MIN);
+      r.advance(1_000);
+      await nudge(r);
+      assert.equal(hbAt(), before, `${where}: Sprung vorwärts schreibt nicht vorzeitig`);
+      r.advance(5_000);
+      await nudge(r);
+      assert.equal(hbAt(), r.now(), `${where}: nach 5 s (monoton) wieder aufgefrischt`);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
 });
