@@ -1773,12 +1773,6 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     // (1h/day) still collapse to a 15min window.
     const seen = new Map();
     const rows = [];
-    // Datenstufen: Minuten ohne Rohzeile (Rohwerte gelöscht). Ohne Rückfall
-    // bleibt die Antwort Zeile für Zeile wie bisher.
-    const fill = await tierFallback({
-      keys, rawTimesByKey: timesByKey(result.rows, (r) => r.series_key, (r) => r.ts_utc, (r) => r.resolution_seconds),
-      startMs: tsMsOf(isoTimestamp(start)), endMs: tsMsOf(isoTimestamp(end)), resLimit: resolutionFilterLimit(maxResolution),
-    });
     for (const row of result.rows) {
       const bucketSec = Math.min(Number(row.resolution_seconds) || 900, 900);
       const bucket = `${row.series_key}|${bucketIso(row.ts_utc, bucketSec)}`;
@@ -1793,6 +1787,13 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         });
       }
     }
+    // Datenstufen: Minuten ohne Rohzeile (Rohwerte gelöscht). Belegt ist nur,
+    // was die Entdoppelung übrig lässt (Codex b1b1eb6e). Ohne Rückfall bleibt
+    // die Antwort Zeile für Zeile wie bisher.
+    const fill = await tierFallback({
+      keys, rawTimesByKey: timesByKey(rows, (r) => r.key, (r) => r.ts, (r) => r.resolution),
+      startMs: tsMsOf(isoTimestamp(start)), endMs: tsMsOf(isoTimestamp(end)), resLimit: resolutionFilterLimit(maxResolution),
+    });
     if (!fill.length) return rows;
     for (const f of fill) {
       rows.push({ key: f.key, ts: new Date(f.tsMs), value: Number(tierRowValue(f.row, f.key)), unit: f.row.unit, resolution: f.resolution, tier: f.tier });

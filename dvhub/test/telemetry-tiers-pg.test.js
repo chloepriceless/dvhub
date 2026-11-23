@@ -326,6 +326,15 @@ describe('Datenstufen 1 min / 15 min (PostgreSQL ohne TimescaleDB)', { skip: !UR
     assert.equal(hourly.filter((r) => r.tier).length, 0, 'Stunde mit VRM-Wert bleibt ohne Stufe');
     assert.equal(hourly.filter((r) => new Date(r.ts).getTime() < cut).length, 1);
     await pool.query(`DELETE FROM timeseries_samples WHERE series_key = 'grid_l1_w' AND resolution_seconds = 3600`);
+    // Flach: eine 900-s-Zeile, die die Entdoppelung wegen einer 5-s-Zeile am
+    // selben Zeitpunkt verwirft, belegt nichts (Codex b1b1eb6e)
+    await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num, unit) VALUES
+      ('grid_l1_w', 'live', 'local_poll', 'raw', $1, 5, 66, 'W'),
+      ('grid_l1_w', 'history', 'vrm_import', 'backfilled', $1, 900, 65, 'W')`, [at(BASE)]);
+    const dedup = await store.querySeries({ seriesKeys: ['grid_l1_w'], ...span, maxResolution: 900 });
+    assert.equal(dedup.filter((r) => !r.tier && new Date(r.ts).getTime() < cut).length, 1, 'nur die 5-s-Zeile bleibt');
+    assert.equal(dedup.filter((r) => r.tier).length, 59, 'die übrigen Minuten der Viertelstunde kommen aus der Stufe');
+    await pool.query(`DELETE FROM timeseries_samples WHERE series_key = 'grid_l1_w' AND value_num IN (65, 66)`);
     // Eine einzelne Rohprobe mitten im gelöschten Bereich verdeckt den Rest nicht (Codex e6fed14e)
     await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num, unit)
       VALUES ('grid_l1_w', 'live', 'local_poll', 'raw', $1, 5, 77, 'W')`, [at(BASE + 10 * MIN + 3000)]);
