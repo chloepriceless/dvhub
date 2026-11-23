@@ -25,6 +25,7 @@ import { GateBlockedError } from '../gate/index.js';
 import { c2AllowsRelease, createLegacyGate, inverterReleaseState, modbusLegacySink, SUNGROW_GATE_DEVICES } from '../gate/legacy.js';
 import { createModbusHealth, classifyModbusError, modbusRequestInfo } from './modbus-health.js';
 import { releaseBackoffNextAt } from '../release-backoff.js';
+import { bootStamp } from '../mono-clock.js';
 
 /** Doku-Adresse → Draht-Adresse. */
 export const wire = (docAddress) => Number(docAddress) - 1;
@@ -970,7 +971,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const t = now();
     if (st.lastForcedHeartbeatFileAt && t - st.lastForcedHeartbeatFileAt < 5000) return;
     st.lastForcedHeartbeatFileAt = t;
-    try { atomicWriteControlState(forcedHeartbeatPath, { at: t, endpointKey: st.endpointKey }); }
+    try { atomicWriteControlState(forcedHeartbeatPath, { at: t, endpointKey: st.endpointKey, ...bootStamp() }); } // A23 b: bootMs/bootId für den Watchdog
     catch (e) { logOnce(e?.message || 'x', 'sungrow_ems_heartbeat_file_error', { error: e?.message || String(e) }, 'warn'); }
   }
 
