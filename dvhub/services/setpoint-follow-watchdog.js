@@ -221,10 +221,8 @@ export function isVictronModbus(cfg) {
  */
 export function knownDischargeCapW(state, cfg, nowMs = Date.now(), ownRead = null) {
   const known = knownMaxDischargeW(state, cfg, nowMs);
-  // freshMono (A23 b): der Wächter hat das Alter schon monoton geprüft — dann nicht noch einmal gegen die Wanduhr, die
-  // nach einem Sprung eine frische Lesung verwürfe (Codex 4fd0803c P2). `at` bleibt Wanduhr für die Reihenfolge unten.
   const ownOk = ownRead && !ownRead.error && Number.isFinite(Number(ownRead.value))
-    && (ownRead.freshMono === true || isFresh(ownRead.at, nowMs, capReadMaxAgeMs(cfg)));
+    && isFresh(ownRead.at, nowMs, capReadMaxAgeMs(cfg));
   // Eine NEUERE eindeutige Rücklesung (Poll-Punkt bzw. Peak Shaving) geht der
   // eigenen Lesung vor — die gilt bis zu 90 s, an der GX kann die Sperre
   // inzwischen aufgehoben oder gesetzt sein (Gesamtprüfung Release 1.0.9).
@@ -512,13 +510,12 @@ export function createSetpointFollowWatchdog(ctx) {
     return typeof t.mbRequest === 'function' && conf.address != null ? conf : null;
   }
 
-  // Eigene Rücklesung für die Prüfung: Frische monoton (höchstens capReadMaxAgeMs, dann freshMono), sonst keine. `at`
-  // bleibt die Wanduhr der Lesung: knownDischargeCapW vergleicht „neuer als“ gegen die Wanduhr-Stempel der anderen
-  // Rücklesungen; nur EINE Seite umzurechnen kehrte die Reihenfolge nach einem Sprung um (Codex 29b60b7e P2).
+  // Eigene Rücklesung für die Prüfung: nur, solange sie nach der monotonen Uhr höchstens capReadMaxAgeMs alt ist. Sonst
+  // unverändert (at = Wanduhr der Lesung): knownDischargeCapW vergleicht „neuer als“ gegen die Wanduhr-Stempel der
+  // anderen Rücklesungen; nur EINE Seite umzurechnen kehrte die Reihenfolge nach einem Sprung um (Codex 29b60b7e P2).
   function capReadNow(cfg, monoMs) {
     if (!capRead) return null;
-    if (capRead.mono == null) return capRead;
-    return monoMs - capRead.mono <= capReadMaxAgeMs(cfg) ? { ...capRead, freshMono: true } : null;
+    return capRead.mono == null || monoMs - capRead.mono <= capReadMaxAgeMs(cfg) ? capRead : null;
   }
 
   function maybeReadCap(cfg, nowMs, monoMs, opts) {

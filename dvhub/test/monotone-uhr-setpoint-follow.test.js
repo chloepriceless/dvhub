@@ -108,16 +108,3 @@ test('Wächter: Sprung vorwärts — neuere Sperre aus Peak Shaving geht der äl
   s.poll();
   assert.equal(s.watchdog._state().window.length, n, 'Sperre entschuldigt: kein neuer auffälliger Punkt');
 });
-
-// Codex 4fd0803c (P2): eine monoton frische eigene Lesung der Sperre gilt auch nach einem Sprung über 90 s hinaus.
-test('Wächter: Rücksprung > 90 s — frische eigene Lesung „gesperrt“ entschuldigt weiter', async () => {
-  const transport = { type: 'modbus', async mbRequest(a) { return a.quantity === 2 ? [0, 0] : [0]; } }; // 2720 = 0 W
-  const cfg = { manufacturer: 'victron', victron: { host: 'gx' }, controlWrite: { maxDischargeW: { enabled: true, address: 2704 } } };
-  const s = setup({ cfg, transport });
-  s.poll(); // auffälliger Punkt, eigene Lesung: gesperrt (0 W, eindeutig)
-  await new Promise((r) => setImmediate(r));
-  const n = s.watchdog._state().window.length;
-  s.c.wall -= 3_600_000; s.c.mono += 5000;
-  s.poll();
-  assert.equal(s.watchdog._state().window.length, n, 'Sperre entschuldigt: kein neuer auffälliger Punkt');
-});

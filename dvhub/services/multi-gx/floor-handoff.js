@@ -50,9 +50,6 @@ import { controlWriteBoundsError } from '../../server-utils.js';
 import { pickMonoNow, createStampAge, monoAgeOf } from '../mono-clock.js';
 
 const FOLLOWER_MAX_AGE_MS = 15000;
-// Rücksprung der Systemzeit: so weit darf der Abstand Wanduhr − monotone Uhr zwischen zwei Takten fallen (NTP-Nachführen
-// bleibt weit darunter), bevor die Übergabe die Reihenfolge „Messwert nach dem Schreiben“ nicht mehr glaubt.
-const CLOCK_JUMP_TOL_MS = 1000;
 // Ohne neue Einspeise-Anfrage → beenden; Fristen mindestens drei bzw. ein
 // Auswertungstakt (schedule.evaluateMs bis 30 s, Codex 22.10.): maintain laeuft
 // VOR der Anfrage des laufenden Takts.
@@ -98,10 +95,6 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   // könnte nach einem Rücksprung einen Messwert von VOR dem Schreiben als Bestätigung werten und die Sperre fälschlich
   // bestätigen (Codex 32af6fd2 P1). Mit der Wanduhr bleibt eine Bestätigung nach einem Rücksprung höchstens aus (der
   // Boden hält, sichere Seite). Robust ginge das nur mit monotonen Stempeln beim Erzeuger (Poller, Schreibpfad).
-  // Dafür erkennt die Übergabe einen Rücksprung selbst (Codex 4fd0803c P1): fällt Wanduhr − monotone Uhr zwischen zwei
-  // Takten um mehr als CLOCK_JUMP_TOL_MS, gelten eigene Schreib-Zeitpunkte als verworfen (neu schreiben, neu
-  // bestätigen) und keine Reihenfolge, bis maxAgeMs vergangen ist; ein Messwert mit Stempel in der Zukunft (Rücksprung
-  // nach dem Empfang) bestätigt nie. Ein vor dem Sprung empfangener 0-Wert kann so keine neue Sperre bestätigen.
   // `since` und die Sicherung (`at`) bleiben Wanduhr.
   const mono = pickMonoNow(monoNow, now);
   const stamps = createStampAge({ now, monoNow: mono });
@@ -155,7 +148,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
     // Freigabe der Einspeisung (Codex Runde 3, P2).
     const blocked = phase === 'active'
       ? lockConfirmed(cfg)
-      : phase === 'restoring' && mainMaxDischargeW(cfg) === 0 && sentAt() > restoreWrittenAt && orderingTrusted(cfg);
+      : phase === 'restoring' && mainMaxDischargeW(cfg) === 0 && sentAt() > restoreWrittenAt;
     state.multiGxHandoff = { phase, savedMaxDischargeW: saved, since, reason: lastReason, mainDischargeBlocked: blocked };
   }
 
@@ -185,7 +178,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   // Ein gescheiterter Leseversuch macht auch die alte Lesung ungueltig (Codex d7f58676, P1).
   const exactFresh = (cfg, after = 0) => exact != null && exact.error !== true && exact.at > after
     && mono() - exact.mono <= maxAgeMs(cfg);
-  const lockConfirmed = (cfg) => zeroWritten && orderingTrusted(cfg)
+  const lockConfirmed = (cfg) => zeroWritten
     && mainMaxDischargeW(cfg) === 0
     && sentAt() > zeroWrittenAt
     && (isMqtt() || (exactFresh(cfg, zeroWrittenAt) && exact.value === 0));
@@ -195,27 +188,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
   const lastWriteAt = () => Number(state.schedule?.lastWrite?.maxDischargeW?.at) || 0;
   // Jeden Takt alle Stempel von außen ansehen (maintain/onFloorHold), damit ihre Empfangszeit spätestens einen Takt
   // nach dem Eintreffen gemerkt ist — nicht erst bei der ersten Anfrage (dann wäre sie nach einem Rücksprung „jetzt“).
-  let clockOffset = null;   // zuletzt gesehenes Wanduhr − monoton
-  let jumpMono = null;      // wann (monoton) zuletzt ein Sprung erkannt wurde
-  function observeClock() {
-    const off = now() - mono();
-    // Nur ein Rücksprung kehrt die Reihenfolge um (alter Stempel liegt dann „nach“ einem neuen Write); nach einem
-    // Sprung vorwärts liegen alte Stempel weiter davor.
-    if (clockOffset != null && off - clockOffset < -CLOCK_JUMP_TOL_MS) {
-      jumpMono = mono();
-      zeroWritten = false; zeroWrittenAt = 0;
-      restoreWrittenAt = 0;
-      exact = null;
-      pushLog('multi_gx_handoff_clock_jump', { jumpMs: Math.round(off - clockOffset), phase }, 'warn');
-    }
-    clockOffset = off;
-  }
-  // Reihenfolge „Messwert nach dem Schreiben“ belastbar? Nicht in maxAgeMs nach einem Sprung und nie für einen
-  // Messwert, dessen Sendezeit nach der jetzigen Wanduhr liegt.
-  const orderingTrusted = (cfg) => (jumpMono == null || mono() - jumpMono > maxAgeMs(cfg))
-    && sentAt() <= now() + CLOCK_JUMP_TOL_MS;
   function observeStamps() {
-    observeClock();
     const f = state.victron?.fieldUpdatedAt || {};
     for (const name of ['soc', 'maxDischargeW']) if (finite(f[name])) stamps.receivedMono(`field:${name}`, Number(f[name]));
     const mg = state.multiGx;
@@ -283,7 +256,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
         return null;
       }
       // Messwert muss nach dem letzten Schreiben der Entladegrenze liegen.
-      if (!(sentAt() > lastWriteAt()) || !orderingTrusted(cfg)) return null;
+      if (!(sentAt() > lastWriteAt())) return null;
       let base = current;
       if (!isMqtt()) {
         // Ohne eindeutige Ruecklesung (alter GX ohne 2720) kann DVhub die
@@ -427,7 +400,7 @@ export function createFloorHandoff({ getCfg, state, pushLog = () => {}, now = Da
       const restoreAbovePct = Math.min(floorPct + RESTORE_HYSTERESIS_PCT, (floorPct + 100) / 2);
       // Braucht der Netzanschluss den Akku, gilt die Schwelle nicht.
       const aboveFloor = socOk && (Number(soc) > restoreAbovePct || (aboveHardFloor && needsBattery()));
-      const confirmed = restoreWrittenAt > 0 && mainMaxDischargeW(cfg) === saved && sentAt() > restoreWrittenAt && orderingTrusted(cfg);
+      const confirmed = restoreWrittenAt > 0 && mainMaxDischargeW(cfg) === saved && sentAt() > restoreWrittenAt;
       if (paused) {
         // Not-Halt: nur lesen — ausser dem einen Rueckschreibversuch.
         if (confirmed) { finish(); return; }

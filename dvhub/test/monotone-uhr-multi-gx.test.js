@@ -186,36 +186,3 @@ test('Übergabe: Rücksprung — stehender Wert der Entladegrenze veraltet nach 
   assert.equal(w.state.multiGxHandoff.phase, 'off');
   assert.ok(w.logs.some(([e, d]) => e === 'multi_gx_handoff_skipped' && d.reason === 'max_discharge_unknown'));
 });
-
-// Codex 4fd0803c (P1): ein VOR dem Rücksprung empfangener 0-Wert (Stempel im alten Uhr-Rahmen, also „nach“ dem neuen
-// Write) bestätigt die neue Sperre nicht. Die Übergabe erkennt den Sprung und glaubt die Reihenfolge erst wieder nach
-// maxAgeMs; der alte 0-Wert ist bis dahin veraltet.
-test('Übergabe: 0-Wert vor dem Rücksprung empfangen, Sperre danach geschrieben → keine Bestätigung', async () => {
-  const c = clocks();
-  const w = world(c, { deviceEcho: false });
-  assert.equal(w.request(), null);
-  assert.equal(w.state.multiGxHandoff.phase, 'arming');
-  // MQTT liefert einen zwischengespeicherten 0-Wert (alter Stand der GX), dann springt die Uhr 1 h zurück.
-  c.tick(1000); w.state.victron.maxDischargeW = 0; w.poll(); w.state.victron.fieldSourceAt = { maxDischargeW: c.wall };
-  c.jump(-3_600_000); c.tick(1000);
-  await w.handoff.maintain(w.apply); // schreibt die Sperre (Wanduhr jetzt kleiner als der Stempel des 0-Werts)
-  assert.deepEqual(w.applied.map((a) => a.value), [0]);
-  assert.ok(w.logs.some(([e]) => e === 'multi_gx_handoff_clock_jump'));
-  c.tick(5000);
-  assert.equal(w.request(), null, 'Boden hält');
-  assert.equal(w.state.multiGxHandoff.mainDischargeBlocked, false);
-  // Nach maxAgeMs ohne neuen Messwert: alter 0-Wert veraltet, weiter keine Bestätigung.
-  for (let i = 0; i < 20; i += 1) { c.tick(5000); w.state.multiGx.updatedAt = c.wall; w.request(); await w.handoff.maintain(w.apply); }
-  assert.equal(w.request(), null);
-});
-
-test('Übergabe: nach einem Sprung und maxAgeMs bestätigt ein frischer 0-Wert nach neuem Write wieder', async () => {
-  const c = clocks();
-  const w = world(c);
-  await toActive(c, w);
-  c.jump(-3_600_000); c.tick(1000); w.poll();
-  await w.handoff.maintain(w.apply); // Sprung erkannt: Sperre neu bestätigen
-  assert.equal(w.request(), null, 'nach dem Sprung erst wieder Boden');
-  for (let i = 0; i < 20; i += 1) { c.tick(5000); w.poll(); w.request(); await w.handoff.maintain(w.apply); }
-  assert.equal(w.request(), -3000, 'nach maxAgeMs mit frischem 0-Wert wieder durch');
-});
