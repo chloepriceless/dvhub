@@ -129,6 +129,10 @@ services:
       - dvhub-data:/var/lib/dvhub
       # Tatsächliche Adresse von DVhub für den EOS-Wächter (dvhub-url).
       - dvhub-shared:/run/dvhub-shared
+      # Platte der Datenbank messen (Platz-Wache, Speicher-Konzept S6 b): nur
+      # lesend und nur für statfs. Die Dateien darin gehören postgres (0700),
+      # DVhub liest sie nicht — Zugriff auf die DB hat es ohnehin als Admin.
+      - dvhub-db:/run/dvhub-dbvol:ro
       # Optional: Ziel für das geplante DB-Backup (Einstellungen → DB-Backup →
       # Zielverzeichnis /backups), z. B. ein ins Host-OS gemounteter NAS-Share.
       # - /srv/dvhub-backups:/backups

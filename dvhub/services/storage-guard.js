@@ -26,6 +26,10 @@
 // (storage_compression_failed, läuft über den Fehlerweg des Audit-Logs).
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  mountCandidates, measureMounts, mountFor, readSamples, writeSamples, recordSample,
+  growthMbPerDay, reserveMb, daysLeft as reachDays, DEFAULT_DB_VOLUME_DIR,
+} from './storage-mounts.js';
 
 export const STORAGE_CHECK_INTERVAL_MS = 30 * 60_000;
 export const RAW_KEEP_STEPS_DAYS = Object.freeze([365, 180, 90, 30]);
@@ -120,6 +124,11 @@ function fmtDay(iso) {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : null;
 }
 
+const ROLE_LABEL = { db: 'Datenbank-Platte', data: 'DVhub-Ordner', system: 'Systemplatte (/)', logs: 'Protokoll-Platte (/var/log)' };
+function mountLabel(m) {
+  return m.roles.map((r) => ROLE_LABEL[r] || r).join(' + ');
+}
+
 /** Text des roten Hinweises, verständlich für Kunden. */
 export function compressionWarningText({ reason, detail = null, provision = null, container = false } = {}) {
   let s = `Datenbank ohne Kompression: ${REASON_TEXT[reason] || 'die Messwerte werden nicht komprimiert'}`
@@ -143,6 +152,9 @@ export function compressionWarningText({ reason, detail = null, provision = null
 export function createStorageGuard({
   getDb, getDataDir, pushLog, setWarning, now = () => Date.now(), statfs = (p) => fs.statfsSync(p),
   getTuning = () => null, isContainer = () => false, readFile = fs.readFileSync,
+  // Schritt 2 (Konzept 23.11.): mehrere Datenträger + Wachstum.
+  getPgDataDir = async () => null, stat = (p) => fs.statSync(p), exists = fs.existsSync,
+  dbVolumeDir = DEFAULT_DB_VOLUME_DIR, samplesIo = {},
 } = {}) {
   let last = null;
   let running = false;
@@ -229,16 +241,26 @@ export function createStorageGuard({
     if (running) return last;
     running = true;
     try {
-      const dir = getDataDir?.() || '/';
-      let freePct = NaN; let freeMb = null; let totalMb = null;
-      try {
-        const s = statfs(dir);
-        totalMb = Math.round((s.blocks * s.bsize) / 1048576);
-        freeMb = Math.round((s.bavail * s.bsize) / 1048576);
-        freePct = totalMb > 0 ? Math.round((freeMb / totalMb) * 1000) / 10 : NaN;
-      } catch { /* statfs nicht möglich */ }
+      // Alle betroffenen Datenträger; maßgeblich für Maßnahmen ist die Platte
+      // der Datenbank (nur dort hilft Komprimieren/Löschen).
+      const container = !!isContainer?.();
+      const dataDir = getDataDir?.() || null;
+      let pgDataDir = null;
+      if (!container) { try { pgDataDir = await getPgDataDir?.(); } catch { /* egal */ } }
+      const mounts = measureMounts(
+        mountCandidates({ container, dataDir: dataDir || '/', pgDataDir, dbVolumeDir, exists }),
+        { statfs, stat });
+      const primary = mountFor(mounts, 'db') || mountFor(mounts, 'data') || mounts[0] || null;
+      const dir = primary?.paths?.[0] || dataDir || '/';
+      const freeMb = primary ? primary.freeMb : null;
+      const totalMb = primary ? primary.totalMb : null;
+      const freePct = primary && Number.isFinite(primary.freePct) ? primary.freePct : NaN;
       const level = storageLevel(freePct);
-      const out = { at: new Date(now()).toISOString(), dir, freePct, freeMb, totalMb, level, dbMb: null, actions: [], compression: null };
+      const out = {
+        at: new Date(now()).toISOString(), dir, freePct, freeMb, totalMb, level, dbMb: null, actions: [], compression: null,
+        mounts: mounts.map((m) => ({ ...m, level: storageLevel(m.freePct) })),
+        growthMbPerDay: null, daysLeft: null, reserveMb: reserveMb({ container }),
+      };
       let probe = null;
       try {
         const db = getDb?.();
@@ -284,12 +306,31 @@ export function createStorageGuard({
         logGuardError(e);
       }
       out.compression = compressionView();
+      // Wachstum: ein Messpunkt je Tag (Datei im Datenverzeichnis), Reichweite der DB-Platte.
+      try {
+        const day = new Date(now()).toISOString().slice(0, 10);
+        let samples = readSamples(dataDir, samplesIo.readFile || readFile);
+        if (dataDir && mounts.length && samples[samples.length - 1]?.day !== day) {
+          samples = recordSample(samples, { day, mounts, dbMb: out.dbMb });
+          writeSamples(dataDir, samples, samplesIo);
+        }
+        const role = mountFor(mounts, 'db') ? 'db' : 'data';
+        out.growthMbPerDay = growthMbPerDay(samples, role);
+        out.daysLeft = reachDays({ freeMb, reserveMb: out.reserveMb, growth: out.growthMbPerDay });
+      } catch { /* Wachstum ist Zugabe */ }
+      // Andere Platten (System, DVhub-Ordner, Logs): nur Hinweis, DVhub kann dort nichts freigeben.
+      const others = out.mounts.filter((m) => m !== out.mounts.find((x) => x.key === primary?.key)
+        && (m.level === 'wenig' || m.level === 'kritisch'));
+      warn('storage_other', others.length ? others.map((m) => `${mountLabel(m)} ${m.level}: ${m.freePct} % frei (${m.freeMb} MB)`).join('; ')
+        + '. DVhub kann dort selbst nichts freigeben — Protokolle, alte Docker-Images oder andere Dateien prüfen.' : null,
+        others.some((m) => m.level === 'kritisch') ? 'error' : 'warn');
       // Systemhinweis setzen bzw. wegnehmen — immer, auch wenn oben etwas scheiterte.
       if (level === 'ok' || level === 'unbekannt') warn('storage', null);
       else {
         const dropped = out.actions.find((a) => a.action === 'drop_raw' && !a.error);
         const compresses = !compression.reason || compression.reason === 'no_policy' || compression.reason === 'job_failing';
-        warn('storage', `Speicher ${level}: ${freePct} % frei (${freeMb} MB). `
+        warn('storage', `Speicher ${level}: ${freePct} % frei (${freeMb} MB)`
+          + (Number.isFinite(out.daysLeft) ? `, voll in etwa ${Math.round(out.daysLeft)} Tagen` : '') + '. '
           + (dropped ? `5-s-Rohwerte älter als ${dropped.keepDays} Tage wurden entfernt — 15-min-Werte bleiben. `
             : (compresses ? 'Ältere Messwerte werden früher komprimiert. ' : 'Messwerte werden nicht komprimiert. '))
           + 'Speicher erweitern: USB-Stick oder SD-Karte als Datenspeicher einrichten.', level === 'kritisch' ? 'error' : 'warn');

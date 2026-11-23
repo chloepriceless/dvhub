@@ -46,6 +46,7 @@ import { createLogRetention } from './services/log-retention.js';
 import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
 import { createStorageGuard } from './services/storage-guard.js';
+import { readPgDataDirectory } from './services/storage-mounts.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import {
   APPLICABLE_VALUE_TICK_MS,
@@ -2756,6 +2757,19 @@ const telemetryReady = (async () => {
       setWarning: setSystemWarning,
       getTuning: () => state.timescaleTuning || null,
       isContainer: () => process.env.DVHUB_RUNTIME === 'container',
+      // Nativ: Platte der PostgreSQL-Daten (sudo -u postgres psql, install.sh-Regel), stündlich neu gefragt.
+      getPgDataDir: (() => {
+        let cached = { at: 0, dir: null };
+        return async () => {
+          if (Date.now() - cached.at < 3600_000) return cached.dir;
+          const db = cfg.telemetry?.database || {};
+          // Nur eine lokale Datenbank liegt auf einer Platte dieser Box.
+          const local = !db.host || ['localhost', '127.0.0.1', '::1'].includes(String(db.host)) || String(db.host).startsWith('/');
+          const dir = local ? await readPgDataDirectory({ database: db }) : null;
+          cached = { at: Date.now(), dir };
+          return dir;
+        };
+      })(),
     });
     ctx.storageGuard.start();
     setInterval(runInverterEfficiencyDaily, 60 * 60 * 1000).unref();
