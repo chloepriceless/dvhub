@@ -83,6 +83,10 @@ test('gapIntervals: nur ganze Raster-Eimer ohne Rohzeile, auch hinter einer einz
   // Lücke in der Mitte
   assert.deepEqual(gapIntervals([H0, H0 + 10 * M], H0, H0 + 11 * M, M), [[H0 + M, H0 + 10 * M]]);
   assert.deepEqual(gapIntervals([], H0, H0 + 30_000, M), [], 'kürzer als ein Eimer');
+  // Stunden-Zeile belegt alle vier Viertelstunden (Codex d4f9ddc0)
+  const Q = 15 * M;
+  assert.deepEqual(gapIntervals([[H0, H0 + 4 * Q]], H0, H0 + 8 * Q, Q), [[H0 + 4 * Q, H0 + 8 * Q]]);
+  assert.deepEqual(gapIntervals([[H0 + Q + 1000, H0 + Q + 6000]], H0, H0 + 3 * Q, Q), [[H0, H0 + Q], [H0 + 2 * Q, H0 + 3 * Q]]);
 });
 
 test('readTierFallback: Lücken je Reihe; wo Minutenwerte fehlen, 15-min-Werte', async () => {

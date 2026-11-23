@@ -546,22 +546,31 @@ export function tierReadSql(table, tierSeconds) {
 
 /**
  * Lücken je Reihe auf dem Raster gridMs: alle ganzen Raster-Eimer in
- * [startMs, endMs), in denen keiner der belegten Zeitpunkte liegt.
- * @param {number[]} occupiedMs  Zeitpunkte mit Rohwert (bzw. schon gefüllt)
+ * [startMs, endMs), die keine belegte Spanne berührt. Eine Rohzeile belegt
+ * ihre ganze Dauer (resolution_seconds), eine Stunden-Zeile also vier
+ * Viertelstunden (Codex d4f9ddc0).
+ * @param {Array<number|[number, number]>} occupied  Zeitpunkte (ms) oder Spannen [von, bis)
  * @returns {Array<[number, number]>}
  */
-export function gapIntervals(occupiedMs, startMs, endMs, gridMs) {
+export function gapIntervals(occupied, startMs, endMs, gridMs) {
   const from0 = Math.ceil(startMs / gridMs) * gridMs;
   const until0 = Math.floor(endMs / gridMs) * gridMs;
   if (until0 - from0 < gridMs) return [];
-  const bins = [...new Set((occupiedMs || []).filter(Number.isFinite).map((t) => Math.floor(t / gridMs) * gridMs))]
-    .filter((b) => b + gridMs > from0 && b < until0)
-    .sort((a, b) => a - b);
+  const spans = [];
+  for (const o of occupied || []) {
+    const [a, b] = Array.isArray(o) ? o : [o, o + 1];
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    // auf das Raster erweitern: jeder berührte Eimer gilt als belegt
+    const lo = Math.floor(a / gridMs) * gridMs;
+    const hi = Math.ceil(Math.max(b, a + 1) / gridMs) * gridMs;
+    if (hi > from0 && lo < until0) spans.push([lo, hi]);
+  }
+  spans.sort((x, y) => x[0] - y[0]);
   const out = [];
   let cur = from0;
-  for (const b of bins) {
-    if (b - cur >= gridMs) out.push([cur, b]);
-    cur = Math.max(cur, b + gridMs);
+  for (const [lo, hi] of spans) {
+    if (lo - cur >= gridMs) out.push([cur, lo]);
+    cur = Math.max(cur, hi);
   }
   if (until0 - cur >= gridMs) out.push([cur, until0]);
   return out;
@@ -577,7 +586,7 @@ export function gapIntervals(occupiedMs, startMs, endMs, gridMs) {
  * @param {{query: Function}} db
  * @param {object} o
  * @param {string[]} o.keys
- * @param {Map<string, number[]>} o.rawTimesByKey  key → Zeitpunkte der Rohzeilen im Ergebnis (ms)
+ * @param {Map<string, Array<number|[number, number]>>} o.rawTimesByKey  key → Rohzeilen im Ergebnis als Zeitpunkt oder Spanne [von, bis) in ms
  * @param {number} o.startMs
  * @param {number} o.endMs
  * @param {number|null} o.bucketSec  Ausgabe-Raster (null = Stufe unverändert)
@@ -602,7 +611,7 @@ export async function readTierFallback(db, { keys, rawTimesByKey, startMs, endMs
     for (const row of r.rows || []) {
       const ms = toMs(row.b);
       if (!Number.isFinite(ms) || !wanted.has(row.series_key)) continue;
-      occupied.get(row.series_key).push(ms);   // gefüllt: die gröbere Stufe nicht noch einmal
+      occupied.get(row.series_key).push([ms, ms + rebin * 1000]);   // gefüllt: die gröbere Stufe nicht noch einmal
       out.push({ key: row.series_key, tsMs: ms, row, resolution: rebin, tier: t.name });
     }
   }

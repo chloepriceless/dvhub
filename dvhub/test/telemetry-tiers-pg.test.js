@@ -320,6 +320,12 @@ describe('Datenstufen 1 min / 15 min (PostgreSQL ohne TimescaleDB)', { skip: !UR
     // Randwerte: Startwert aus der Stufe statt erst ab der ersten Rohzeile
     const bound = await store.getSeriesBoundaryValues({ seriesKey: 'battery_grid_share_wh', ...span });
     assert.deepEqual(bound, boundBefore);
+    // Stunden-Zeile (VRM) belegt ihre ganze Stunde: keine Stufen-Zeilen daneben (Codex d4f9ddc0)
+    await store.writeSamples([{ seriesKey: 'grid_l1_w', scope: 'history', source: 'vrm_import', quality: 'backfilled', ts: at(BASE), resolutionSeconds: 3600, value: 90, unit: 'W' }]);
+    const hourly = await store.querySeries({ seriesKeys: ['grid_l1_w'], ...span, maxResolution: 3600, bucketSec: 900 });
+    assert.equal(hourly.filter((r) => r.tier).length, 0, 'Stunde mit VRM-Wert bleibt ohne Stufe');
+    assert.equal(hourly.filter((r) => new Date(r.ts).getTime() < cut).length, 1);
+    await pool.query(`DELETE FROM timeseries_samples WHERE series_key = 'grid_l1_w' AND resolution_seconds = 3600`);
     // Eine einzelne Rohprobe mitten im gelöschten Bereich verdeckt den Rest nicht (Codex e6fed14e)
     await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num, unit)
       VALUES ('grid_l1_w', 'live', 'local_poll', 'raw', $1, 5, 77, 'W')`, [at(BASE + 10 * MIN + 3000)]);
