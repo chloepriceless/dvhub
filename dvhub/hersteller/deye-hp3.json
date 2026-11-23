@@ -95,5 +95,23 @@
   "dvControl": {
     "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
     "enabled": false
+  },
+
+  "peakShavingBuiltin": {
+    "_doc": [
+      "Eingebaute Peak-Shaving-Funktion (P5, Christin 24.11.2026) — UNGETESTET, an keinem Gerät geprüft.",
+      "Reg. 191 „Grid peak shaving Power“ (HV: 10 W je Schritt). Nur Peak-Shaving-Schreibpunkt in diesem Nur-Lese-Profil:",
+      "DVhub schreibt nur mit Peak Shaving + Schalter peakShaving.builtin.enabled, über das Schreibtor, mit Sicherung und",
+      "Rücknahme des Ist-Werts. FC 16. Firmware-Skalenwechsel (1098) und Freigabe am Gerät ungeprüft."
+    ],
+    "status": "ungetestet",
+    "source": ".planning/docs/research/2026-11-15-deye-modbus-control-spec.md §3 (Reg. 191, HV 10 W, [SPEC] Deye Modbus V105)",
+    "limit": {
+      "address": 191,
+      "fc": 16,
+      "writeType": "uint16",
+      "scale": 10,
+      "unit": "W"
+    }
   }
 }

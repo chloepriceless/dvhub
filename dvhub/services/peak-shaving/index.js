@@ -655,7 +655,7 @@ export function createPeakShaving(ctx, deps = {}) {
   const ASSIST_SOURCE = 'peak-shaving';
   let assistHeld = false;
   let assistLogKey = null;
-  function nativeAssist(ctl, t) {
+  function nativeAssist(ctl, t, c = null) {
     const assist = ctx.batteryAssist || ctx.gridConnection?.batteryAssist || null;
     const want = ctl && ctl.active && ctl.lever === 'native' && Number.isFinite(Number(ctl.targetW));
     if (!want || typeof assist?.request !== 'function') {
@@ -665,7 +665,18 @@ export function createPeakShaving(ctx, deps = {}) {
       assistLogKey = null;
       return;
     }
-    const res = assist.request({ source: ASSIST_SOURCE, maxImportW: Math.max(0, Math.round(ctl.targetW)), untilMs: t + 30_000 }) || {};
+    // Ladestand-Schutz wie beim Victron-Hebel (Codex 2be66554 P1): der Wächter
+    // prüft beim Sollwert-Deckel keinen Ladestand und bei der Entladegrenze nur
+    // seine eigenen Böden. Ladestand unbekannt, veraltet, eingefroren oder am
+    // Boden (inkl. peakShaving.minSocPct) → keine Anforderung, eine stehende zurück.
+    const tel = peakShavingTelemetry(ctx.state, c || cfg(), ctl, t);
+    const res = tel.socOk
+      ? (assist.request({ source: ASSIST_SOURCE, maxImportW: Math.max(0, Math.round(ctl.targetW)), untilMs: t + 30_000 }) || {})
+      : { ok: false, reason: tel.socReason || 'soc_unknown' };
+    // Abgelehnt (Not-Halt, Ladestand, …): eine früher angenommene Anforderung
+    // nicht stehen lassen — der Wächter behält sie sonst bis zum Ablauf
+    // (Codex 2be66554 P2).
+    if (res.ok !== true) assist.release?.(ASSIST_SOURCE);
     assistHeld = res.ok === true;
     if (ctx.state) {
       ctx.state.ctrl ??= {};
@@ -701,7 +712,7 @@ export function createPeakShaving(ctx, deps = {}) {
       timeZone: c.schedule?.timezone || 'Europe/Berlin'
     });
     const ctl = control(c, t);
-    nativeAssist(ctl, t);
+    nativeAssist(ctl, t, c);
     const dec = ctl.budget;
     const key = dec ? `${dec.mode}|${dec.reason}` : null;
     if (key !== budgetLogKey) {
@@ -776,6 +787,8 @@ export function createPeakShaving(ctx, deps = {}) {
       lever: r.lever,
       leverText: r.leverText,
       assist: r.lever === 'native' && ctl.assist ? { ...ctl.assist, helpW: nativeHelpW() } : null,
+      // P5: eingebaute Funktion des Wechselrichters (ungetestet) — Zustand des Aktors.
+      builtin: r.lever === 'builtin' || r.lever === 'builtin_off' ? { status: 'ungetestet', ...(ctl.builtin || {}) } : null,
       adapt,
       // Viertelstunden-Budget (P1): mode 'budget' = Regelziel ist die erlaubte
       // Restleistung, 'instant' = Augenblickswert (reason sagt warum).

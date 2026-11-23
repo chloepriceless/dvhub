@@ -110,5 +110,31 @@
   "dvControl": {
     "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
     "enabled": false
+  },
+
+  "peakShavingBuiltin": {
+    "_doc": [
+      "Eingebaute Peak-Shaving-Funktion (P5, Christin 24.11.2026) — UNGETESTET, an keinem Gerät geprüft.",
+      "3307 Import-Limit (kW) und 3310 Reserve-SoC (%) laut [COMM] (MOD/MIN TL-XH, Register 3000+). Ob ein SPH sie kennt",
+      "und in welcher Auflösung (hier 1 kW angenommen — eher zu tief als zu hoch), ist ungeprüft: DVhub liest vorher den",
+      "Ist-Wert; antwortet das Gerät nicht oder mit Exception, schreibt es nichts. Nur Peak-Shaving-Schreibpunkte in diesem",
+      "Nur-Lese-Profil; Reserve nur mit eingetragenem Wert und nie zurück (H-8)."
+    ],
+    "status": "ungetestet",
+    "source": ".planning/docs/research/2026-11-15-growatt-modbus-control-spec.md (CT-/Zähler-abhängige Peak-Shaving-Grenzen, [COMM])",
+    "limit": {
+      "address": 3307,
+      "fc": 6,
+      "writeType": "uint16",
+      "scale": 1000,
+      "unit": "W"
+    },
+    "reserveSoc": {
+      "address": 3310,
+      "fc": 6,
+      "writeType": "uint16",
+      "scale": 1,
+      "unit": "%"
+    }
   }
 }

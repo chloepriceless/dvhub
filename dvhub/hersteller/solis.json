@@ -136,5 +136,21 @@
   "dvControl": {
     "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
     "enabled": false
+  },
+
+  "peakShavingBuiltin": {
+    "_doc": [
+      "Eingebaute Peak-Shaving-Funktion (P5, Christin 24.11.2026) — UNGETESTET, an keinem Gerät geprüft.",
+      "Betriebsart 43110 „Energy Storage Control Switch“: Bit 11 (2048) = Peak Shaving, Lesen-Ändern-Schreiben (übrige Bits",
+      "bleiben). Die Bezugsgrenze selbst stellt man am Gerät ein (Register dafür in der Recherche nicht belegt). Rücknahme =",
+      "gesicherter Wert vor DVhub. Nur dieser Schreibpunkt in diesem Nur-Lese-Profil."
+    ],
+    "status": "ungetestet",
+    "source": ".planning/docs/research/2026-11-15-solis-modbus-control-spec.md §4.1 (Bit 11 = 2048 Peak Shaving, [COMM])",
+    "mode": {
+      "address": 43110,
+      "fc": 6,
+      "setBits": 2048
+    }
   }
 }

@@ -460,6 +460,11 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   // Profil — ein Profil ohne den Block hat auch keinen (kein Rest aus config.json).
   if (isPlainObject(manufacturerProfile?.identify)) effectiveConfig.identify = clone(manufacturerProfile.identify);
   else delete effectiveConfig.identify;
+  // peakShavingBuiltin (P5, Christin 24.11.2026): eingebaute Peak-Shaving-Register des Wechselrichters gehören zum
+  // Profil — auch zu Nur-Lese-Profilen (readOnly leert nur controlWrite/dvControl). Geschrieben werden sie nur mit
+  // Peak Shaving + Schalter peakShaving.builtin.enabled über das Schreibtor (services/peak-shaving/builtin.js).
+  if (isPlainObject(manufacturerProfile?.peakShavingBuiltin)) effectiveConfig.peakShavingBuiltin = clone(manufacturerProfile.peakShavingBuiltin);
+  else delete effectiveConfig.peakShavingBuiltin;
   // dvControl: Register-Verdrahtung kommt aus dem Profil, die beiden
   // Betreiber-Entscheidungen darin gewinnen. Nur AUSDRÜCKLICH persistierte
   // Werte überschreiben — ein fehlender Schlüssel heißt „Profil-Default gilt",
@@ -1489,6 +1494,33 @@ function buildFieldDefinitions() {
       default: false,
       visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
       help: 'Ab Werk aus. Liegt die in diesem Jahr schon erreichte Spitze (Jahresspitze = höchster Viertelstunden-Mittelwert; bei Monatsleistungspreis die Spitze dieses Monats) über der eingestellten Grenze, richtet sich der Leistungspreis ohnehin nach ihr. An = DVhub regelt dann auf diese erreichte Spitze statt auf die Grenze; mit dem neuen Jahr (bzw. Monat) gilt wieder die Grenze. Das spart Akku-Einsatz und Zyklen, denn jede weitere Kappung unter die erreichte Spitze spart in diesem Zeitraum keinen Euro. Es kostet nichts am Leistungspreis dieses Zeitraums — aber Achtung: DVhubs Spitze stammt aus den eigenen Messwerten; liegt der Zähler des Netzbetreibers tiefer, wäre die Kappung bis zu dessen Wert noch etwas wert gewesen. Aus = DVhub hält die Grenze weiter, auch wenn das in diesem Zeitraum nichts mehr spart. EOS bekommt die angepasste Grenze mit.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.builtin.enabled',
+      label: 'Eingebaute Peak-Shaving-Funktion nutzen (ungetestet)',
+      type: 'boolean',
+      default: false,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Nur für Wechselrichter ohne eigenen DVhub-Akku-Hebel, deren Herstellerprofil eine eingebaute Peak-Shaving-Funktion kennt (Deye, GoodWe, Growatt, Solis, Sofar, SolaX). UNGETESTET: die Register stammen aus Herstellerdokumenten und Community-Quellen, an keinem Gerät geprüft. An = DVhub sichert die Ist-Werte, stellt die Bezugsgrenze (Grenze minus Abstand; angepasst, wenn der Jahresspitzen-Schalter wirkt) bzw. die Betriebsart „Peak Shaving“ im Wechselrichter ein und regelt nichts weiter — der Wechselrichter kappt selbst (Augenblickswert, kein Viertelstunden-Budget). Aus bzw. Peak Shaving aus = DVhub schreibt die gesicherten Werte einmal zurück. Diese Register liegen oft im Flash: DVhub schreibt nur bei Änderung, höchstens alle 15 min. Bei Solis/Sofar/SolaX schaltet DVhub nur die Betriebsart; die Grenze selbst wird am Gerät eingestellt. Not-Halt: DVhub fasst die Funktion nicht an.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.builtin.reserveSocPct',
+      empty: 'null',
+      label: 'Reserve-Ladestand der eingebauten Funktion (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      step: 1,
+      visibleWhenPath: { path: 'peakShaving.builtin.enabled', equals: true },
+      help: 'Nur GoodWe (47544) und Growatt (3310): Ladestand, den der Wechselrichter fürs Peak Shaving zurückhält. Leer = DVhub schreibt ihn nicht (Werkseinstellung bzw. Gerätewert gilt). DVhub setzt ihn nie zurück.'
     },
     {
       section: 'system',
@@ -5426,7 +5458,9 @@ export function createDefaultConfig() {
     // Peak Shaving (GitHub #28, services/peak-shaving): ab Werk aus, ohne Grenze.
     peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true, adaptToReachedPeak: false,
       // Leistungsentgelt in € (P4): leer = unbekannt, DVhub rät keine Preise.
-      tariff: { model: 'year', lpLowEurPerKwYear: null, apLowCtPerKwh: null, lpHighEurPerKwYear: null, apHighCtPerKwh: null, lpMonthEurPerKwMonth: null, apMonthCtPerKwh: null } },
+      tariff: { model: 'year', lpLowEurPerKwYear: null, apLowCtPerKwh: null, lpHighEurPerKwYear: null, apHighCtPerKwh: null, lpMonthEurPerKwMonth: null, apMonthCtPerKwh: null },
+      // Eingebaute Peak-Shaving-Funktion des Wechselrichters (P5, ungetestet): ab Werk aus.
+      builtin: { enabled: false, reserveSocPct: null } },
     multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300, exportHandoffAtFloor: false },
     // Ladestand des E-Autos über evccs Fahrzeug-Treiber (services/vehicle-evcc):
     // aus, bis jemand eine Marke einrichtet; evcc wird erst dann geladen.

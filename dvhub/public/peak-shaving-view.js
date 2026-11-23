@@ -59,6 +59,13 @@
         ? `Akku freigegeben: ${kw(s.lift.liftedW)} — Sperre wird gesetzt, sobald 2704 lesbar ist`
         : `Akku freigegeben: ${kw(s.lift.liftedW)}`;
     }
+    if (s.builtin) {
+      const b = s.builtin;
+      if (s.reason === 'builtin_disabled') return 'Eingebaute Peak-Shaving-Funktion vorhanden (ungetestet) — Schalter unter Einstellungen → Peak Shaving.';
+      if (b.error) return `Eingebaute Funktion (ungetestet): ${b.error}`;
+      if (b.active) return `Eingebaute Funktion des Wechselrichters (ungetestet): Bezug höchstens ${kw(b.targetW)}`;
+      return `Eingebaute Funktion (ungetestet): ${b.reason || 'wartet'}`;
+    }
     if (s.assist) {
       if (!s.assist.requested) return `Akku-Hilfe nicht möglich (${s.assist.reason || 'abgelehnt'})`;
       return `${s.leverText || 'Akku zuerst'}: Bezug höchstens ${kw(s.assist.maxImportW)}${num(s.assist.helpW) && Number(s.assist.helpW) > 0 ? `, Akku gibt ${kw(s.assist.helpW)}` : ''}`;

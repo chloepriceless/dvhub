@@ -34,6 +34,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 // Netzanschluss und Peak Shaving: gemeinsamer Kern der Bezugsgrenzen.
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
+import { createBuiltinPeakShaving } from './services/peak-shaving/builtin.js';
 import { createSungrowEms, endpointKeyOf, sungrowEmsConf, resolveSecondInverter } from './services/inverter/sungrow.js';
 import { RELEASE_BACKOFF_AFTER, RELEASE_BACKOFF_MS } from './services/release-backoff.js';
 import { c2AllowsRelease, createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, inverterReleaseState, unwrapLegacyWrite } from './services/gate/legacy.js';
@@ -2432,6 +2433,15 @@ export function createScheduleEvaluator(ctx) {
     return r.active && r.lever !== 'victron' ? { ...r, active: false, reason: 'lever_not_victron' } : r;
   }
 
+  // Eingebaute Peak-Shaving-Funktion des Wechselrichters (P5, ungetestet, nur mit
+  // Schalter): schreibt nur über das Tor, nur die Profilpunkte peakShavingBuiltin.
+  const peakShavingBuiltin = ctx.peakShavingBuiltinActuator || createBuiltinPeakShaving({
+    state, getCfg, transport, gate: writeGate, pushLog,
+    deviceWriteGate: (c) => deviceWriteGate(c),
+    targetW: (c) => (typeof ctx.peakShaving?.eosTargetW === 'function' ? ctx.peakShaving.eosTargetW(c) : resolvePeakShaving(c).targetW),
+    statePath: ctx.peakShavingBuiltinPath || null
+  });
+
   let peakShavingTickNo = 0;
   // Victron: zuerst 2720 (int32, W) — dort ist −1 (unbegrenzt) eindeutig, 2704
   // rundet es auf 0 (wie der Entlade-Wächter). Nur „Register/Funktion
@@ -3113,6 +3123,9 @@ export function createScheduleEvaluator(ctx) {
     } catch (e) {
       pushLog('peak_shaving_error', { error: e?.message || String(e) }, 'warn');
     }
+    // Peak Shaving P5: eingebaute Funktion des Wechselrichters (ohne Schalter bzw.
+    // ohne Profilblock: kein Lesen, kein Write, kein Zustand).
+    await peakShavingBuiltin.tick();
 
     // feedExcessDcPv: schedule-gesteuerte DC-Einspeisung (+ dontFeedExcessAcPv invers)
     if (cfg.dvControl?.enabled) {

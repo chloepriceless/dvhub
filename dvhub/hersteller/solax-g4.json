@@ -123,5 +123,23 @@
   "dvControl": {
     "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
     "enabled": false
+  },
+
+  "peakShavingBuiltin": {
+    "_doc": [
+      "Eingebaute Peak-Shaving-Funktion (P5, Christin 24.11.2026) — UNGETESTET, an keinem Gerät geprüft.",
+      "0x1F (31) SolarChargerUseMode = 4 (PeakShaving, neuere G4/G5/G6-Firmware, [COMM]); Rücklesen 0x8B (139, Input).",
+      "EEPROM — DVhub schreibt nur bei Abweichung, höchstens alle 15 min. G3 hat andere Codes (nicht dieses Profil). Die",
+      "Bezugsgrenze stellt man am Gerät ein. Rücknahme = gesicherter Modus. Nur dieser Schreibpunkt im Nur-Lese-Profil."
+    ],
+    "status": "ungetestet",
+    "source": ".planning/docs/research/2026-11-15-solax-modbus-control-spec.md §2 (0x1F Wert 4, Write 0x10, Readback 0x8B)",
+    "mode": {
+      "address": 31,
+      "fc": 16,
+      "value": 4,
+      "readAddress": 139,
+      "readFc": 4
+    }
   }
 }

@@ -152,3 +152,12 @@ test('P4: Leistungsentgelt in der Kachel (Jahresleistungspreis, laufendes Jahr)'
   assert.match(m.billing.note, /Preise/);
   assert.equal(view(base).billing, null);
 });
+
+test('P5: eingebaute Funktion in der Kachel als „ungetestet“ gekennzeichnet', () => {
+  const { view } = load();
+  const off = view({ ...base, active: false, reason: 'builtin_disabled', builtin: { status: 'ungetestet' } });
+  assert.equal(off.state, 'Eingebaut, aus');
+  assert.match(off.detail, /ungetestet/);
+  const on = view({ ...base, builtin: { status: 'ungetestet', active: true, targetW: 9700 } });
+  assert.equal(on.detail, 'Eingebaute Funktion des Wechselrichters (ungetestet): Bezug höchstens 9,7 kW');
+});
