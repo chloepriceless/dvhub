@@ -785,3 +785,57 @@ function plain(value) { return JSON.parse(JSON.stringify(value)); }
 function close(actual, expected, eps = 0.001) {
   assert.ok(Math.abs(actual - expected) <= eps, `${actual} statt ${expected}`);
 }
+
+// ── Codex 6c0f6c64 ─────────────────────────────────────────────────────────
+test('Codex 6c0f6c64: unbekannte Preise im Eigenverbrauch als „-“, nicht 0 ct', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const t = dynTariff();
+  t.selfUse = { ...t.selfUse, pvDirectGainCtKwh: null, peffCtKwh: null,
+    battery: { ...t.selfUse.battery, inCtKwh: null, outCtKwh: null, etaPct: null, dischargedHouseKwh: 0, dischargedGridKwh: 0 } };
+  helpers.renderSummary({ view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
+  assert.equal(elements.get('historySelfUseBattPrices').textContent, '- → -');
+  assert.equal(elements.get('historySelfUsePvRate').textContent, '-');
+  assert.equal(elements.get('historySelfUsePeff').textContent, '-');
+});
+
+test('Codex 6c0f6c64: negative Börse auch ohne Formel über Börse ≥ 0', () => {
+  const { helpers } = loadHistoryPageHelpers();
+  const html = helpers.tariffFitHtml({ tariffLabel: 'Standard-Tarif', n: 0, fit: null, avgMarkupCtKwh: null,
+    negative: { n: 20, avgMarkupCtKwh: 12.5, fit: null } });
+  assert.match(html, /Negative Börse: 20 Viertelstunden, Ø Aufschlag 12,50 ct\/kWh/);
+  assert.doesNotMatch(html, /Ø Aufschlag 0,00/);
+});
+
+test('Codex 6c0f6c64: fehlende Grundgebühr des dynamischen Tarifs wird als solche benannt', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const t = dynTariff({ fixedCompareWithFee: null, compareFeeMissingDays: 3,
+    baseFee: { eur: 14, days: 31, missingDays: 3, variableEur: 14, variableDays: 17, variableMissingDays: 3 } });
+  helpers.renderSummary({ view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
+  assert.match(elements.get('historyTariffCompareFee').textContent, /Grundgebühr des dynamischen Tarifs fehlt/);
+});
+
+test('Codex 6c0f6c64: Monatskosten mit Grundgebühr auch im Festtarif, unvollständige Gebühr nicht als 0', () => {
+  const { helpers } = loadHistoryPageHelpers();
+  const rows = [
+    { key: '2026-01', variableSlots: 0, allImportCostEur: 20, baseFee: { eur: 15, days: 31, missingDays: 0, variableEur: 0, variableDays: 0, variableMissingDays: 0 } },
+    { key: '2026-02', variableSlots: 2688, importCostEur: 20, baseFee: { eur: 15, days: 28, missingDays: 0, variableEur: 15, variableDays: 28, variableMissingDays: 0 } },
+    { key: '2026-03', variableSlots: 2976, importCostEur: 22, baseFee: { eur: 5, days: 31, missingDays: 20, variableEur: 5, variableDays: 31, variableMissingDays: 20 } }
+  ];
+  const sets = JSON.parse(JSON.stringify(helpers.tariffMonthCostDatasets(rows)));
+  const byLabel = Object.fromEntries(sets.map((d) => [d.label, d.data]));
+  assert.deepEqual(byLabel['Grundgebühr'], [15, 15, null]);
+  assert.deepEqual(byLabel['Arbeitspreis'], [null, 20, 22]);
+  assert.deepEqual(byLabel['Festtarif'], [20, null, null]);
+});
+
+test('Codex 6c0f6c64: Streudiagramm wird bei gleicher Abfrage nicht neu geholt', async () => {
+  const { helpers } = loadHistoryPageHelpers();
+  const calls = [];
+  helpers.setScatterFetch(async (url) => { calls.push(url); return { ok: true, json: async () => ({ points: [], bins: [], fits: [] }) }; });
+  const summary = { view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: dynTariff() }), rows: [], meta: {} };
+  await helpers.loadTariffScatter(summary);
+  await helpers.loadTariffScatter(summary);
+  assert.equal(calls.length, 1);
+  await helpers.loadTariffScatter({ ...summary, date: '2026-04-10' });
+  assert.equal(calls.length, 2);
+});

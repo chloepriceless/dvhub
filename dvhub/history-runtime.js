@@ -702,7 +702,9 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // 7 (13.11.2026): Ø nur aus echt bepreisten Viertelstunden (Codex 7dc5e9e9).
 // 8 (23.11.2026): dynamischer Tarif (Formel, Klassen, Grundgebühr, Eigenverbrauch,
 //                 Monatszeilen in „Alle“) und Standard-Tarif „gilt ab“.
-export const SUMMARY_CACHE_VERSION = 8;
+// 9 (23.11.2026): Tarif-Summen aus ungerundeten Flüssen (Codex 1e1ff5c4) — ein
+//                 Zwischenstand mit Version 8 hätte die gerundeten behalten.
+export const SUMMARY_CACHE_VERSION = 9;
 
 // Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;

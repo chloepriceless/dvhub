@@ -2604,6 +2604,15 @@ function fmtSignedPct(value) {
   return `${n < 0 ? '−' : '+'}${text} %`;
 }
 
+// Nullbare Kennzahlen: unbekannt bleibt „-“ (fmtCt(null) wäre 0,00 ct, Codex 6c0f6c64).
+function ctOrDash(value) {
+  return hasFiniteNumber(value) ? fmtCt(value) : '-';
+}
+
+function eurOrDash(value) {
+  return hasFiniteNumber(value) ? fmtEur(value) : '-';
+}
+
 function fmtSignedCt(value) {
   if (!hasFiniteNumber(value)) return '-';
   const n = Number(value);
@@ -2630,8 +2639,15 @@ function tariffFitLabel(entry) {
 function tariffFitHtml(entry) {
   const fit = entry?.fit;
   const head = `<strong>${escapeHtml(tariffFitLabel(entry))}</strong> <span class="tariff-muted">(${Number(entry.n || 0).toLocaleString('de-DE')} Viertelstunden, Börse ≥ 0)</span>`;
+  // Negative Börse unabhängig von der Formel über Börse ≥ 0 (Codex 6c0f6c64).
+  const negativeHtml = entry.negative
+    ? `<br><span class="tariff-muted">Negative Börse: ${Number(entry.negative.n).toLocaleString('de-DE')} Viertelstunden, Ø Aufschlag ${ctOrDash(entry.negative.avgMarkupCtKwh)}${entry.negative.fit ? `, Faktor ${fmtFactor(entry.negative.fit.gross.slope)}` : ''} (nicht in der Formel).</span>`
+    : '';
   if (!fit) {
-    return `<li>${head}: zu wenige Viertelstunden oder Börse ohne Streuung – keine Formel. Ø Aufschlag ${fmtCt(entry.avgMarkupCtKwh)}.</li>`;
+    const reason = Number(entry.n || 0) > 0
+      ? `: zu wenige Viertelstunden oder Börse ohne Streuung – keine Formel. Ø Aufschlag ${ctOrDash(entry.avgMarkupCtKwh)}.`
+      : ': keine Viertelstunden mit Börse ≥ 0 – keine Formel.';
+    return `<li>${head}${reason}${negativeHtml}</li>`;
   }
   const spread = [];
   if (entry.atP10 && entry.atP90) {
@@ -2640,15 +2656,12 @@ function tariffFitHtml(entry) {
   if (hasFiniteNumber(entry.markupMinCtKwh) && hasFiniteNumber(entry.markupMaxCtKwh)) {
     spread.push(`Aufschlag je Viertelstunde ${fmtCt(entry.markupMinCtKwh)} bis ${fmtCt(entry.markupMaxCtKwh)}`);
   }
-  const negative = entry.negative
-    ? `<br><span class="tariff-muted">Negative Börse: ${Number(entry.negative.n).toLocaleString('de-DE')} Viertelstunden, Ø Aufschlag ${fmtCt(entry.negative.avgMarkupCtKwh)}${entry.negative.fit ? `, Faktor ${fmtFactor(entry.negative.fit.gross.slope)}` : ''} (nicht in der Formel).</span>`
-    : '';
   return `<li>${head}<br>Endpreis ≈ ${fmtCt(fit.gross.interceptCtKwh)} + ${fmtFactor(fit.gross.slope)} × Börse`
     + ` · fester Anteil ${fmtCt(fit.gross.interceptCtKwh)} (netto ${fmtCt(fit.net.interceptCtKwh)})`
     + ` · Faktor ${fmtFactor(fit.gross.slope)} = ${fmtSignedPct(fit.markupPctGross)} auf die Börse (ohne MwSt ${fmtSignedPct(fit.markupPctNet)})`
     + ` · R² ${fmtFactor(fit.r2)}`
     + (spread.length ? `<br><span class="tariff-muted">${spread.join(' · ')}</span>` : '')
-    + negative
+    + negativeHtml
     + '</li>';
 }
 
@@ -2682,7 +2695,10 @@ function renderTariffExtras(summary) {
   if (withFee) {
     feeCompare = `${tariffSavingsText(withFee.savingsEur)} (Festpreis ${fmtEur(withFee.fixedEur)} gegen ${fmtEur(withFee.actualEur)})`;
   } else if (t.fixedCompare && Number(t.compareFeeMissingDays || 0) > 0) {
-    feeCompare = 'Grundgebühr des Festpreis-Tarifs fehlt (Einstellungen → Strompreise)';
+    // Fehlen kann die Gebühr des eigenen Tarifs oder die des Vergleichs (Codex 6c0f6c64).
+    feeCompare = Number(t.baseFee?.variableMissingDays || 0) > 0
+      ? 'Grundgebühr des dynamischen Tarifs fehlt (Einstellungen → Strompreise)'
+      : 'Grundgebühr des Festpreis-Tarifs fehlt (Einstellungen → Strompreise)';
   }
   setText('historyTariffCompareFee', feeCompare);
 
@@ -2737,9 +2753,7 @@ function renderTariffMonthChart(summary) {
     datasets.push({ type: 'bar', label: 'Netzbezug dynamisch', data: rows.map((r) => (isFixed(r) ? null : val(r.importKwh))), backgroundColor: '#67a5ff', yAxisID: 'yLeft', stack: 'a', order: 2 });
     datasets.push({ type: 'bar', label: 'Festtarif', data: rows.map((r) => (isFixed(r) ? val(r.allImportKwh) : null)), backgroundColor: '#9ca3af55', yAxisID: 'yLeft', stack: 'a', order: 2 });
   } else if (mode === 'cost') {
-    datasets.push({ type: 'bar', label: 'Arbeitspreis', data: rows.map((r) => (isFixed(r) ? null : val(r.importCostEur))), backgroundColor: '#67a5ff', yAxisID: 'yLeft', stack: 'a', order: 2 });
-    datasets.push({ type: 'bar', label: 'Grundgebühr', data: rows.map((r) => (isFixed(r) ? null : val(r.baseFee?.variableEur))), backgroundColor: '#f5c451', yAxisID: 'yLeft', stack: 'a', order: 2 });
-    datasets.push({ type: 'bar', label: 'Festtarif', data: rows.map((r) => (isFixed(r) ? val(r.allImportCostEur) : null)), backgroundColor: '#9ca3af55', yAxisID: 'yLeft', stack: 'a', order: 2 });
+    datasets.push(...tariffMonthCostDatasets(rows));
   }
   const line = (label, key, color, dash = []) => ({
     type: 'line', label, data: rows.map((r) => (isFixed(r) ? null : val(typeof key === 'function' ? key(r) : r[key]))),
@@ -2783,8 +2797,10 @@ function renderTariffMonthChart(summary) {
             afterBody: (items) => {
               const row = rows[items?.[0]?.dataIndex];
               if (!row) return '';
-              if (isFixed(row)) return 'Festtarif – kein dynamischer Tarif in diesem Monat';
               const lines = [];
+              const missing = isFixed(row) ? row.baseFee?.missingDays : row.baseFee?.variableMissingDays;
+              if (Number(missing || 0) > 0) lines.push(`Grundgebühr fehlt für ${missing} Tage`);
+              if (isFixed(row)) return ['Festtarif – kein dynamischer Tarif in diesem Monat', ...lines].join('\n');
               if (Number(row.estimatedSlots || 0) > 0) lines.push(`geschätzt: ${fmtPct(row.estimatedSharePct)} des Bezugs`);
               if (row.fixedCompare) lines.push(`Festpreis: ${tariffSavingsText(row.fixedCompare.savingsEur)}`);
               return lines.join('\n');
@@ -2797,6 +2813,25 @@ function renderTariffMonthChart(summary) {
   });
 }
 
+// Kosten je Monat: Arbeitspreis + Grundgebühr, auch im Festtarif (Codex
+// 6c0f6c64). Ist die Gebühr nicht für alle Tage bekannt, bleibt ihr Balken
+// leer (Tooltip sagt es) statt einen Teilbetrag als ganzen Monat zu zeigen.
+function tariffMonthCostDatasets(rows) {
+  const isFixed = (row) => Number(row.variableSlots || 0) === 0;
+  const val = (v) => (hasFiniteNumber(v) ? Number(v) : null);
+  const fee = (row) => {
+    const f = row.baseFee;
+    if (!f) return null;
+    if (isFixed(row)) return f.days > 0 && f.missingDays === 0 ? val(f.eur) : null;
+    return f.variableDays > 0 && f.variableMissingDays === 0 ? val(f.variableEur) : null;
+  };
+  return [
+    { type: 'bar', label: 'Arbeitspreis', data: rows.map((r) => (isFixed(r) ? null : val(r.importCostEur))), backgroundColor: '#67a5ff', yAxisID: 'yLeft', stack: 'a', order: 2 },
+    { type: 'bar', label: 'Festtarif', data: rows.map((r) => (isFixed(r) ? val(r.allImportCostEur) : null)), backgroundColor: '#9ca3af55', yAxisID: 'yLeft', stack: 'a', order: 2 },
+    { type: 'bar', label: 'Grundgebühr', data: rows.map(fee), backgroundColor: '#f5c451', yAxisID: 'yLeft', stack: 'a', order: 2 }
+  ];
+}
+
 function setTariffMonthMode(mode) {
   if (!TARIFF_MONTH_MODES.includes(mode)) return;
   historyState.tariffMonthMode = mode;
@@ -2806,6 +2841,11 @@ function setTariffMonthMode(mode) {
 
 // ── Streudiagramm Endpreis gegen Börse (Woche/Monat/Jahr/Alle) ──────────────
 let tariffScatterGeneration = 0;
+// Letzte Streudaten je Abfrage: Darstellungswechsel (Chart-Modus, Tabelle)
+// zeichnen renderSummary neu, ohne die Daten neu zu holen (Codex 6c0f6c64).
+let tariffScatterCache = { key: null, data: null, pending: null };
+let scatterFetchImpl = null;
+function setScatterFetch(fn) { scatterFetchImpl = typeof fn === 'function' ? fn : null; tariffScatterCache = { key: null, data: null, pending: null }; }
 const SCATTER_FIT_COLORS = ['#ff9f43', '#67a5ff', '#f5c451', '#34d399'];
 
 function tariffScatterDatasets(data) {
@@ -2905,20 +2945,33 @@ async function loadTariffScatter(summary) {
   const view = String(summary?.view || '');
   const visible = TARIFF_CARD_VIEWS.has(view) && Number(summary?.kpis?.tariff?.variableSlots || 0) > 0;
   setHidden('historyTariffScatterWrap', !visible);
-  const generation = ++tariffScatterGeneration;
-  if (!visible || typeof apiFetch !== 'function') return;
+  const scatterFetch = scatterFetchImpl || apiFetch;
+  if (!visible || typeof scatterFetch !== 'function') { ++tariffScatterGeneration; return; }
   const date = String(summary?.date || byId('historyDate')?.value || '');
   const estimated = historyState.tariffEstimated === 'exclude' ? '&estimated=exclude' : '';
+  const url = `${view}|${date}|${estimated}`;   // Cache-Schlüssel der Abfrage
+  if (tariffScatterCache.key === url && tariffScatterCache.data) {
+    ++tariffScatterGeneration;
+    renderTariffScatter(tariffScatterCache.data);
+    return;
+  }
+  if (tariffScatterCache.key === url && tariffScatterCache.pending) return;  // läuft schon
+  const generation = ++tariffScatterGeneration;
+  tariffScatterCache = { key: url, data: null, pending: true };
   try {
-    const response = await apiFetch(`/api/history/tariff-scatter?view=${encodeURIComponent(view)}&date=${encodeURIComponent(date)}${estimated}`);
+    // URL als Literal im Aufruf: tests/endpoint-inventory.mjs liest sie so.
+    const response = await scatterFetch(`/api/history/tariff-scatter?view=${encodeURIComponent(view)}&date=${encodeURIComponent(date)}${estimated}`);
     const payload = await response.json();
+    if (tariffScatterCache.key === url) tariffScatterCache.pending = null;
     if (generation !== tariffScatterGeneration) return;
     if (!response.ok) {
       setText('historyTariffScatterLegend', `Streudiagramm nicht geladen: ${payload?.error || response.status}`);
       return;
     }
+    tariffScatterCache = { key: url, data: payload, pending: null };
     renderTariffScatter(payload);
   } catch (error) {
+    if (tariffScatterCache.key === url) tariffScatterCache.pending = null;
     if (generation !== tariffScatterGeneration) return;
     setText('historyTariffScatterLegend', `Streudiagramm nicht geladen: ${error.message}`);
   }
@@ -2939,18 +2992,18 @@ function renderSelfUseCard(summary) {
   setHidden('historySelfUseCard', !visible);
   if (!visible) return;
   const b = s.battery || {};
-  setText('historySelfUsePeff', fmtCt(s.peffCtKwh));
-  setText('historySelfUsePeffNoOpp', fmtCt(s.peffWithoutOpportunityCtKwh));
-  setText('historySelfUseLoadAvg', fmtCt(s.loadAvgCtKwh));
+  setText('historySelfUsePeff', ctOrDash(s.peffCtKwh));
+  setText('historySelfUsePeffNoOpp', ctOrDash(s.peffWithoutOpportunityCtKwh));
+  setText('historySelfUseLoadAvg', ctOrDash(s.loadAvgCtKwh));
   setText('historySelfUseLoad', fmtKwh(s.loadKwh));
-  setText('historySelfUseAdvantage', fmtEur(s.advantageEur));
-  setText('historySelfUsePvGain', fmtEur(s.pvDirectGainEur));
+  setText('historySelfUseAdvantage', eurOrDash(s.advantageEur));
+  setText('historySelfUsePvGain', eurOrDash(s.pvDirectGainEur));
   setText('historySelfUsePvKwh', fmtKwh(s.pvDirectKwh));
-  setText('historySelfUsePvRate', fmtCt(s.pvDirectGainCtKwh));
-  setText('historySelfUseBattResult', fmtEur(b.resultEur));
+  setText('historySelfUsePvRate', ctOrDash(s.pvDirectGainCtKwh));
+  setText('historySelfUseBattResult', eurOrDash(b.resultEur));
   setText('historySelfUseBattIn', `${fmtKwh(b.chargedPvKwh)} PV · ${fmtKwh(b.chargedGridKwh)} Netz`);
   setText('historySelfUseBattOut', `${fmtKwh(b.dischargedHouseKwh)} Haus · ${fmtKwh(b.dischargedGridKwh)} Netz`);
-  setText('historySelfUseBattPrices', `${fmtCt(b.inCtKwh)} → ${fmtCt(b.outCtKwh)}`);
+  setText('historySelfUseBattPrices', `${ctOrDash(b.inCtKwh)} → ${ctOrDash(b.outCtKwh)}`);
   setText('historySelfUseBattEta', hasFiniteNumber(b.etaPct) ? fmtPct(b.etaPct) : '-');
   const soc = hasFiniteNumber(b.storedDeltaKwh) && Number(b.storedDeltaKwh) !== 0
     ? `Ladestand am Rand ${fmtKwh(b.storedDeltaKwh)} zum Einstandspreis: ${fmtEur(b.socCorrectionEur)} (im Ergebnis).`
@@ -3659,6 +3712,9 @@ const historyHelpers = {
   renderSummary,
   applyHistoryViewGating,   // Pro-Gating: 🔒-Markierung der Premium-Ansichten (testbar)
   tariffScatterDatasets,    // Dynamischer Tarif (23.11.2026): Streudiagramm (testbar)
+  tariffMonthCostDatasets,
+  loadTariffScatter,
+  setScatterFetch,
   tariffFitHtml,
   tariffValidFromText,
   renderTariffScatter,
