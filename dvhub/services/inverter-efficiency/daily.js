@@ -90,7 +90,12 @@ export const EFFICIENCY_SAMPLES_CTE = `p AS (
     coalesce(max(value_num) FILTER (WHERE series_key = 'pv_ac_l1_w'), 0)
       + coalesce(max(value_num) FILTER (WHERE series_key = 'pv_ac_l2_w'), 0)
       + coalesce(max(value_num) FILTER (WHERE series_key = 'pv_ac_l3_w'), 0) AS pac,
-    max(value_num) FILTER (WHERE series_key = 'battery_soc_pct') AS soc
+    max(value_num) FILTER (WHERE series_key = 'battery_soc_pct') AS soc,
+    -- Nur der Speicherweg (storage.js) liest diese beiden: PV gesamt (mit einer
+    -- zweiten AC-PV-Position, die keine eigenen Reihen hat) und veraltete Proben.
+    max(value_num) FILTER (WHERE series_key = 'pv_total_w') AS ptot,
+    -- meta_json ist je nach Installation TEXT oder JSONB (jsonb-Text: "stale": true).
+    bool_or(coalesce(meta_json::text, '') ~ '"stale"\\s*:\\s*true') AS stale
   FROM timeseries_samples
   WHERE scope = 'live'
     AND ts_utc >= ($1::date::timestamp AT TIME ZONE $2::text)

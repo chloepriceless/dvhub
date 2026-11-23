@@ -10,6 +10,8 @@
 // misst dieser Tagesjob aus den ~5-s-Rohwerten, wie daily.js:
 //
 //   AC aus dem Wandler  ac  = Last + Einspeisung − Netzbezug − AC-PV   (+ liefert, − nimmt auf)
+//                       AC-PV = PV gesamt − DC-PV (so zählt auch eine zweite
+//                       AC-PV-Position mit, die keine eigenen Reihen hat)
 //   Akku                bp  (+ Laden, − Entladen), DC am Akku
 //   DC-PV               pdc (MPPT-Ausgang bzw. PV-DC-Eingang des Hybrid-WR)
 //
@@ -24,6 +26,10 @@
 //   η Laden    = Σ Akku geladen ÷ Σ (PV→Akku + AC rein)    — DC-PV zählt 1:1
 //   η Akku DC  = Σ entladen ÷ (Σ geladen − ΔSoC)            — alle Proben, ΔSoC je Tag
 //   η Entladen = Σ AC raus vom Akku ÷ Σ Akku entladen
+// Gezählt werden nur lückenlose Abstände (≤ 90 s) zwischen zwei frischen Proben
+// (veraltete Proben nach einem Lesefehler tragen meta_json.stale); ΔSoC ist die
+// Summe der Ladestand-Änderungen über GENAU diese Abstände (Codex 34516a12) —
+// eine Lücke verschiebt so weder Energie noch Ladestand.
 // Alles aus denselben Rohwerten: die 15-min-Werte der Karte können für ältere
 // Viertelstunden aus dem VRM-Import stammen (energy-source-rule.js), dessen
 // Akku-Mengen nicht DC am Akku sind — das würde den Speicherweg verfälschen.
@@ -48,25 +54,32 @@ const NOT_MEASURABLE_ETA = 0.995;
 const ETA_MIN = 0.5;
 const ETA_MAX = 1.02;
 
+// Reihen des Speicherwegs: die des Wechselrichter-Wirkungsgrads plus PV gesamt.
+export const STORAGE_SERIES_KEYS = Object.freeze([...EFFICIENCY_SERIES_KEYS, 'pv_total_w']);
+
 export const STORAGE_EFFICIENCY_SQL = `
 WITH ${EFFICIENCY_SAMPLES_CTE},
 q AS (
-  SELECT *, lag(t) OVER (ORDER BY t) AS t_prev FROM p
+  SELECT *, lag(t) OVER (ORDER BY t) AS t_prev, lag(soc) OVER (ORDER BY t) AS soc_prev,
+         lag(stale) OVER (ORDER BY t) AS stale_prev
+  FROM p
 ),
 r AS (
   SELECT extract(epoch FROM (t - t_prev)) AS dt,
          greatest(bp, 0) AS ch,
          greatest(-bp, 0) AS dis,
          greatest(pdc, 0) AS pdc,
-         (ld + ge - gi - pac) AS ac
+         (ld + ge - gi - coalesce(ptot - pdc, pac)) AS ac,
+         soc - soc_prev AS soc_d
   FROM q
   WHERE t_prev IS NOT NULL
     AND t > t_prev
     AND t - t_prev <= make_interval(secs => $5::float8)
+    AND NOT coalesce(stale, false) AND NOT coalesce(stale_prev, false)
     AND bp IS NOT NULL AND ld IS NOT NULL AND gi IS NOT NULL AND ge IS NOT NULL
 ),
 s AS (
-  SELECT dt, ch, dis, pdc, ac,
+  SELECT dt, ch, dis, pdc, ac, soc_d,
     CASE WHEN ch >= $4::float8 THEN ch ELSE 0 END AS ch_used,
     CASE WHEN ch >= $4::float8 THEN least(pdc, ch) ELSE 0 END AS pv_to_batt,
     CASE WHEN ch >= $4::float8 THEN ch - least(pdc, ch) ELSE 0 END AS conv_to_batt,
@@ -74,11 +87,6 @@ s AS (
     CASE WHEN dis >= $4::float8 THEN dis ELSE 0 END AS dis_used,
     CASE WHEN dis >= $4::float8 THEN greatest(ac, 0) * dis / (dis + pdc) ELSE 0 END AS ac_out
   FROM r
-),
-soc AS (
-  SELECT (array_agg(soc ORDER BY t) FILTER (WHERE soc IS NOT NULL))[1] AS soc_first_pct,
-         (array_agg(soc ORDER BY t DESC) FILTER (WHERE soc IS NOT NULL))[1] AS soc_last_pct
-  FROM p
 )
 SELECT coalesce(sum(ch_used * dt), 0) / 3600.0 AS charge_dc_wh,
        coalesce(sum(pv_to_batt * dt), 0) / 3600.0 AS pv_to_batt_wh,
@@ -89,16 +97,16 @@ SELECT coalesce(sum(ch_used * dt), 0) / 3600.0 AS charge_dc_wh,
        coalesce(sum(ch * dt), 0) / 3600.0 AS charge_all_wh,
        coalesce(sum(dis * dt), 0) / 3600.0 AS discharge_all_wh,
        coalesce(sum((pdc + dis - ch - ac) * dt), 0) / 3600.0 AS converter_loss_wh,
-       max(soc.soc_first_pct) AS soc_first_pct,
-       max(soc.soc_last_pct) AS soc_last_pct,
+       sum(soc_d) AS soc_delta_pct,
+       count(soc_d)::int AS soc_intervals,
        coalesce(sum(dt), 0) AS seconds,
-       count(dt)::int AS samples
-FROM soc LEFT JOIN s ON true`;
+       count(*)::int AS samples
+FROM s`;
 
 export const UPSERT_STORAGE_SQL = `
 INSERT INTO storage_efficiency_daily (day, charge_dc_wh, pv_to_batt_wh, conv_to_batt_wh, ac_in_wh,
   discharge_dc_wh, ac_out_wh, charge_all_wh, discharge_all_wh, converter_loss_wh,
-  soc_first_pct, soc_last_pct, seconds, samples, computed_at)
+  soc_delta_pct, soc_intervals, seconds, samples, computed_at)
 VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
 ON CONFLICT (day) DO UPDATE SET
   charge_dc_wh = EXCLUDED.charge_dc_wh,
@@ -110,8 +118,8 @@ ON CONFLICT (day) DO UPDATE SET
   charge_all_wh = EXCLUDED.charge_all_wh,
   discharge_all_wh = EXCLUDED.discharge_all_wh,
   converter_loss_wh = EXCLUDED.converter_loss_wh,
-  soc_first_pct = EXCLUDED.soc_first_pct,
-  soc_last_pct = EXCLUDED.soc_last_pct,
+  soc_delta_pct = EXCLUDED.soc_delta_pct,
+  soc_intervals = EXCLUDED.soc_intervals,
   seconds = EXCLUDED.seconds,
   samples = EXCLUDED.samples,
   computed_at = now()`;
@@ -119,7 +127,7 @@ ON CONFLICT (day) DO UPDATE SET
 export const STORAGE_ROWS_SQL = `
 SELECT to_char(day, 'YYYY-MM-DD') AS day, charge_dc_wh, pv_to_batt_wh, conv_to_batt_wh, ac_in_wh,
        discharge_dc_wh, ac_out_wh, charge_all_wh, discharge_all_wh, converter_loss_wh,
-       soc_first_pct, soc_last_pct, seconds, samples
+       soc_delta_pct, soc_intervals, seconds, samples
 FROM storage_efficiency_daily
 WHERE day >= $1::date AND day < $2::date
 ORDER BY day`;
@@ -218,7 +226,7 @@ const numOrNull = (v) => (v != null && v !== '' && Number.isFinite(Number(v)) ? 
 /**
  * Tageszeilen → Summen und Wirkungsgrade des Zeitraums (energiegewichtet).
  * capacityKwhForDay(day) liefert die Nennkapazität des Tages (Akku-Ausbaustufen);
- * ΔSoC = Σ je Tag (letzter − erster Ladestand) × Kapazität.
+ * ΔSoC = Σ je Tag (Ladestand-Änderung über die gezählten Abstände) × Kapazität.
  */
 export function summarizeStorageRows(rows, { capacityKwhForDay = null } = {}) {
   const t = {
@@ -244,11 +252,10 @@ export function summarizeStorageRows(rows, { capacityKwhForDay = null } = {}) {
     if (!(num(r.seconds) > 0) || !r.day) continue;
     const day = String(r.day).slice(0, 10);
     days.push(day);
-    const first = numOrNull(r.soc_first_pct);
-    const last = numOrNull(r.soc_last_pct);
+    const socDelta = numOrNull(r.soc_delta_pct);
     const cap = typeof capacityKwhForDay === 'function' ? numOrNull(capacityKwhForDay(day)) : null;
-    if (first == null || last == null || !(cap > 0)) deltaKnown = false;
-    else deltaKwh += ((last - first) / 100) * cap;
+    if (socDelta == null || !(num(r.soc_intervals) > 0) || !(cap > 0)) deltaKnown = false;
+    else deltaKwh += (socDelta / 100) * cap;
   }
   days.sort();
   const storedDeltaKwh = deltaKnown && days.length ? deltaKwh : null;
@@ -331,7 +338,7 @@ export function createStorageEfficiencyDaily({ getDb, getCfg, pushLog, maxBackfi
 
   async function computeDay(db, day) {
     const res = await db.query(STORAGE_EFFICIENCY_SQL, [
-      day, timeZone(), EFFICIENCY_SERIES_KEYS, STORAGE_MIN_BATTERY_W, STORAGE_MAX_GAP_SECONDS,
+      day, timeZone(), STORAGE_SERIES_KEYS, STORAGE_MIN_BATTERY_W, STORAGE_MAX_GAP_SECONDS,
     ]);
     const r = res.rows?.[0] || {};
     // Auch ein Tag ohne Proben bekommt eine Zeile (0) — daran erkennt der Job
@@ -339,7 +346,7 @@ export function createStorageEfficiencyDaily({ getDb, getCfg, pushLog, maxBackfi
     await db.query(UPSERT_STORAGE_SQL, [
       day, num(r.charge_dc_wh), num(r.pv_to_batt_wh), num(r.conv_to_batt_wh), num(r.ac_in_wh),
       num(r.discharge_dc_wh), num(r.ac_out_wh), num(r.charge_all_wh), num(r.discharge_all_wh),
-      num(r.converter_loss_wh), numOrNull(r.soc_first_pct), numOrNull(r.soc_last_pct), num(r.seconds), num(r.samples),
+      num(r.converter_loss_wh), numOrNull(r.soc_delta_pct), num(r.soc_intervals), num(r.seconds), num(r.samples),
     ]);
   }
 

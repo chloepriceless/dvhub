@@ -11,6 +11,7 @@ import {
   STORAGE_EFFICIENCY_SQL,
   STORAGE_MIN_BATTERY_W,
   STORAGE_MAX_GAP_SECONDS,
+  STORAGE_SERIES_KEYS,
   UPSERT_STORAGE_SQL,
   MISSING_STORAGE_DAYS_SQL,
   createStorageEfficiencyDaily,
@@ -18,7 +19,6 @@ import {
   storageEfficiencyCapability,
   summarizeStorageRows
 } from '../services/inverter-efficiency/storage.js';
-import { EFFICIENCY_SERIES_KEYS } from '../services/inverter-efficiency/daily.js';
 
 const close = (actual, expected, msg, eps = 0.001) => {
   assert.ok(Number.isFinite(Number(actual)), `${msg}: ${actual} ist keine Zahl`);
@@ -77,11 +77,11 @@ test('Zeitraum: Wirkungsgrade energiegewichtet aus Tageszeilen, kein Mittel der 
     // alle Proben 10,2 / 8,9 kWh; Ladestand 50 → 53 %.
     { day: '2026-11-02', charge_dc_wh: 10000, pv_to_batt_wh: 6000, conv_to_batt_wh: 4000, ac_in_wh: 4400,
       discharge_dc_wh: 9000, ac_out_wh: 8280, charge_all_wh: 10200, discharge_all_wh: 8900, converter_loss_wh: 1500,
-      soc_first_pct: 50, soc_last_pct: 53, seconds: 40000, samples: 8000 },
+      soc_delta_pct: 3, soc_intervals: 8000, seconds: 40000, samples: 8000 },
     // Tag 2: 5 kWh nur PV, 6 kWh entladen → 5,4 kWh AC (90 %); Ladestand 40 → 38 %.
     { day: '2026-11-01', charge_dc_wh: 5000, pv_to_batt_wh: 5000, conv_to_batt_wh: 0, ac_in_wh: 0,
       discharge_dc_wh: 6000, ac_out_wh: 5400, charge_all_wh: 5000, discharge_all_wh: 6000, converter_loss_wh: 900,
-      soc_first_pct: 40, soc_last_pct: 38, seconds: 30000, samples: 6000 }
+      soc_delta_pct: -2, soc_intervals: 6000, seconds: 30000, samples: 6000 }
   ], cap10);
   assert.equal(s.status, 'ok');
   // η Laden = 15 000 ÷ (11 000 PV + 4 400 AC) = 0,974026.
@@ -105,7 +105,7 @@ test('Zeitraum: Wirkungsgrade energiegewichtet aus Tageszeilen, kein Mittel der 
 });
 
 const okDay = (over = {}) => ({ day: '2026-11-01', charge_dc_wh: 10000, pv_to_batt_wh: 10000, ac_in_wh: 0, discharge_dc_wh: 10000,
-  ac_out_wh: 9000, charge_all_wh: 10000, discharge_all_wh: 9700, soc_first_pct: 50, soc_last_pct: 50, seconds: 3600, ...over });
+  ac_out_wh: 9000, charge_all_wh: 10000, discharge_all_wh: 9700, soc_delta_pct: 0, soc_intervals: 720, seconds: 3600, ...over });
 
 test('Zeitraum: zu wenig Daten, Ladestand fehlt, abgeleitete Last, unplausibel', () => {
   assert.equal(summarizeStorageRows([]).status, 'insufficient_data');
@@ -115,7 +115,7 @@ test('Zeitraum: zu wenig Daten, Ladestand fehlt, abgeleitete Last, unplausibel',
   assert.equal(few.status, 'insufficient_data');
   assert.equal(few.chargeEta, null);
   // Ohne Ladestand oder ohne Kapazität kein Akku-Anteil — nicht raten.
-  const noSoc = summarizeStorageRows([okDay({ soc_last_pct: null })], cap10);
+  const noSoc = summarizeStorageRows([okDay({ soc_delta_pct: null, soc_intervals: 0 })], cap10);
   assert.equal(noSoc.status, 'insufficient_data');
   assert.match(noSoc.reason, /Ladestand/);
   assert.equal(summarizeStorageRows([okDay()]).status, 'insufficient_data');
@@ -155,17 +155,18 @@ test('Tagesjob: rechnet heute, Vortag einmal, dann fehlende Tage; schreibt jede 
   const db = fakeDb({
     dayRow: { charge_dc_wh: 1266.667, pv_to_batt_wh: 500, conv_to_batt_wh: 766.667, ac_in_wh: 833.333,
       discharge_dc_wh: 500, ac_out_wh: 456.667, charge_all_wh: 1275, discharge_all_wh: 500, converter_loss_wh: 165,
-      soc_first_pct: 50, soc_last_pct: 51.5, seconds: 3000, samples: 600 },
+      soc_delta_pct: 1.5, soc_intervals: 600, seconds: 3000, samples: 600 },
     firstDay: '2026-11-01', missing: ['2026-11-20']
   });
   const job = createStorageEfficiencyDaily({ getDb: () => db, getCfg: () => ({ timeZone: 'Europe/Berlin' }), maxBackfillDays: 5 });
   const res = await job.runOnce({ now: new Date('2026-11-23T10:00:00Z') });
   assert.deepEqual(res.computed, ['2026-11-23', '2026-11-22', '2026-11-20']);
   const dayQuery = db.calls.find((c) => c.sql === STORAGE_EFFICIENCY_SQL);
-  assert.deepEqual(dayQuery.params, ['2026-11-23', 'Europe/Berlin', EFFICIENCY_SERIES_KEYS, STORAGE_MIN_BATTERY_W, STORAGE_MAX_GAP_SECONDS]);
+  assert.deepEqual(dayQuery.params, ['2026-11-23', 'Europe/Berlin', STORAGE_SERIES_KEYS, STORAGE_MIN_BATTERY_W, STORAGE_MAX_GAP_SECONDS]);
+  assert.ok(STORAGE_SERIES_KEYS.includes('pv_total_w'), 'PV gesamt für die zweite AC-PV-Position');
   const upserts = db.calls.filter((c) => c.sql === UPSERT_STORAGE_SQL).map((c) => c.params);
   assert.equal(upserts.length, 3);
-  assert.deepEqual(upserts[0], ['2026-11-23', 1266.667, 500, 766.667, 833.333, 500, 456.667, 1275, 500, 165, 50, 51.5, 3000, 600]);
+  assert.deepEqual(upserts[0], ['2026-11-23', 1266.667, 500, 766.667, 833.333, 500, 456.667, 1275, 500, 165, 1.5, 600, 3000, 600]);
   assert.deepEqual(db.calls.find((c) => c.sql === MISSING_STORAGE_DAYS_SQL).params, ['2026-11-01', '2026-11-22', 5]);
   // Zweiter Lauf am selben Tag: Vortag nicht noch einmal.
   const again = await job.runOnce({ now: new Date('2026-11-23T11:00:00Z') });
@@ -176,7 +177,7 @@ test('Tagesjob: Tag ohne Proben bekommt eine 0-Zeile; nicht messbar oder ohne DB
   const db = fakeDb({ dayRow: {} });
   const job = createStorageEfficiencyDaily({ getDb: () => db, getCfg: () => ({}) });
   await job.computeDay(db, '2026-11-01');
-  assert.deepEqual(db.calls.find((c) => c.sql === UPSERT_STORAGE_SQL).params, ['2026-11-01', 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, 0, 0]);
+  assert.deepEqual(db.calls.find((c) => c.sql === UPSERT_STORAGE_SQL).params, ['2026-11-01', 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0]);
   const fronius = createStorageEfficiencyDaily({ getDb: () => db, getCfg: () => ({ manufacturer: 'fronius' }) });
   assert.deepEqual(await fronius.runOnce(), { skipped: 'not measurable' });
   const noDb = createStorageEfficiencyDaily({ getDb: () => null, getCfg: () => ({}) });
@@ -201,18 +202,21 @@ const URL = process.env.DVHUB_TEST_PG_URL || process.env.DATABASE_URL;
 const skip = URL ? false : 'DVHUB_TEST_PG_URL/DATABASE_URL nicht gesetzt';
 
 // Ein Fenster: Proben alle stepS Sekunden über durationS, gleiche Werte.
-async function seedWindow(client, startIso, series, { durationS = 600, stepS = 5 } = {}) {
+// Werte dürfen Funktionen der Sekunde im Fenster sein (Ladestand-Rampe); stale = meta_json {"stale":true}.
+async function seedWindow(client, startIso, series, { durationS = 600, stepS = 5, stale = false, metaType = 'text' } = {}) {
   const startMs = new Date(startIso).getTime();
   const values = [];
   const params = [];
+  const meta = stale ? JSON.stringify({ stale: true }) : null;
   for (let s = 0; s <= durationS; s += stepS) {
     const ts = new Date(startMs + s * 1000).toISOString();
     for (const [key, value] of Object.entries(series)) {
-      params.push(key, ts, value);
-      values.push(`($${params.length - 2}, 'live', $${params.length - 1}::timestamptz, $${params.length}::double precision)`);
+      params.push(key, ts, typeof value === 'function' ? value(s) : value, meta);
+      const n = params.length;
+      values.push(`($${n - 3}, 'live', $${n - 2}::timestamptz, $${n - 1}::double precision, $${n}::text::${metaType})`);
     }
   }
-  await client.query(`INSERT INTO timeseries_samples (series_key, scope, ts_utc, value_num) VALUES ${values.join(',')}`, params);
+  await client.query(`INSERT INTO timeseries_samples (series_key, scope, ts_utc, value_num, meta_json) VALUES ${values.join(',')}`, params);
 }
 
 const base = { grid_import_w: 0, grid_export_w: 0, pv_dc_w: 0 };
@@ -226,7 +230,8 @@ test('SQL: Laden aus dem Netz, DC-PV, Entladen (auch neben PV), Ruhe und Lücken
     // im 5-s-Takt: die erste Probe hat keinen gültigen Vorgänger (Lücke > 90 s),
     // es zählen 120 Abstände × 5 s = 600 s. Energie je Fenster = W × 600 / 3600 = W / 6.
     // A Netzladen: Akku +4600 W, Last 400, Bezug 5400 → AC in den Wandler 5000 W.
-    await seedWindow(client, '2026-10-20T00:00:00Z', { ...base, battery_power_w: 4600, load_power_w: 400, grid_import_w: 5400, battery_soc_pct: 40 });
+    // Ladestand steigt im Fenster A von 40 auf 47 %.
+    await seedWindow(client, '2026-10-20T00:00:00Z', { ...base, battery_power_w: 4600, load_power_w: 400, grid_import_w: 5400, battery_soc_pct: (sec) => 40 + (7 * sec) / 600 });
     // B DC-PV lädt: PV 5000, Akku +3000, Last 1000, Einspeisung 850 → Wandler gibt 1850 W AC ab.
     await seedWindow(client, '2026-10-20T01:00:00Z', { ...base, battery_power_w: 3000, pv_dc_w: 5000, load_power_w: 1000, grid_export_w: 850 });
     // C Entladen: Akku −2000, Last 1840 → 1840 W AC aus dem Akku.
@@ -239,7 +244,7 @@ test('SQL: Laden aus dem Netz, DC-PV, Entladen (auch neben PV), Ruhe und Lücken
     await seedWindow(client, '2026-10-20T05:00:00Z', { ...base, battery_power_w: 5000, load_power_w: 0, grid_import_w: 5500 }, { stepS: 120 });
     // Am Vortag (Berlin) — gehört nicht zum Tag.
     await seedWindow(client, '2026-10-19T21:00:00Z', { ...base, battery_power_w: -3000, load_power_w: 2700, battery_soc_pct: 90 });
-    const { rows } = await client.query(STORAGE_EFFICIENCY_SQL, ['2026-10-20', 'Europe/Berlin', EFFICIENCY_SERIES_KEYS, STORAGE_MIN_BATTERY_W, STORAGE_MAX_GAP_SECONDS]);
+    const { rows } = await client.query(STORAGE_EFFICIENCY_SQL, ['2026-10-20', 'Europe/Berlin', STORAGE_SERIES_KEYS, STORAGE_MIN_BATTERY_W, STORAGE_MAX_GAP_SECONDS]);
     const r = rows[0];
     close(r.seconds, 3000, 'Sekunden (5 × 600)');
     assert.equal(Number(r.samples), 600);
@@ -254,9 +259,10 @@ test('SQL: Laden aus dem Netz, DC-PV, Entladen (auch neben PV), Ruhe und Lücken
     // Alle Proben, auch unter 100 W: zusätzlich E mit 50 W Laden.
     close(r.charge_all_wh, (4600 + 3000 + 50) / 6, 'geladen (alle Proben)');
     close(r.discharge_all_wh, (2000 + 1000) / 6, 'entladen (alle Proben)');
-    // Erster/letzter Ladestand des Tages (der Vortag mit 90 % zählt nicht).
-    assert.equal(Number(r.soc_first_pct), 40);
-    assert.equal(Number(r.soc_last_pct), 47);
+    // ΔSoC nur über die gezählten Abstände: +7 % in A; der Sprung 47 → 47 über die Lücke
+    // zu E zählt nicht, ebenso wenig der Vortag mit 90 %.
+    close(r.soc_delta_pct, 7, 'ΔSoC', 1e-9);
+    assert.equal(Number(r.soc_intervals), 240);
     // Zehn solche Tage (über der Mindestmenge von 1 kWh je Richtung):
     // η Laden = 7600 ÷ (3000 + 5000) = 0,95; η Entladen = 2740 ÷ 3000 = 0,91333; Lader 4600 ÷ 5000 = 0,92;
     // η Akku DC je Tag = 500 Wh ÷ (1275 Wh − 7 % × 10 kWh = 700 Wh) = 0,86957 (nur Testzahlen).
@@ -271,6 +277,33 @@ test('SQL: Laden aus dem Netz, DC-PV, Entladen (auch neben PV), Ruhe und Lücken
   }
 });
 
+// meta_json ist je nach Installation TEXT (Neuanlage) oder JSONB (Prod-Datenbank).
+for (const metaType of ['text', 'jsonb']) test(`SQL (Codex 34516a12, meta_json ${metaType}): veraltete Proben, zweite AC-PV-Position und Ladestand über Lücken zählen nicht`, { skip }, async () => {
+  const client = new pg.Client({ connectionString: URL });
+  await client.connect();
+  try {
+    await client.query(`CREATE TEMP TABLE timeseries_samples (series_key text, scope text, ts_utc timestamptz, value_num double precision, meta_json ${metaType})`);
+    // Entladen −2000 W, Last 3340 W, AC-PV 1500 W nur als PV gesamt (zweite Position, keine pv_ac_l*-Reihen):
+    // AC aus dem Wandler = 3340 − 1500 = 1840 W. Ladestand 60 → 58 %.
+    await seedWindow(client, '2026-10-20T00:00:00Z', { ...base, battery_power_w: -2000, load_power_w: 3340, pv_total_w: 1500, battery_soc_pct: (sec) => 60 - (2 * sec) / 600 }, { metaType });
+    // Nach einem Lesefehler: gehaltene Werte mit frischem Zeitstempel (stale) — zählen nicht,
+    // auch nicht der erste Abstand danach (Vorgänger veraltet).
+    await seedWindow(client, '2026-10-20T00:10:05Z', { ...base, battery_power_w: -3000, load_power_w: 2700, pv_total_w: 0, battery_soc_pct: 58 }, { durationS: 300, stale: true, metaType });
+    await seedWindow(client, '2026-10-20T00:15:10Z', { ...base, battery_power_w: 0, load_power_w: 300, grid_import_w: 300, pv_total_w: 0, battery_soc_pct: 50 }, { durationS: 5, metaType });
+    // Lücken über 90 s mit Ladestand-Sprüngen.
+    await seedWindow(client, '2026-10-20T02:00:00Z', { ...base, battery_power_w: 0, load_power_w: 300, grid_import_w: 300, battery_soc_pct: (sec) => 30 + sec / 60 }, { durationS: 600, stepS: 120, metaType });
+    const { rows } = await client.query(STORAGE_EFFICIENCY_SQL, ['2026-10-20', 'Europe/Berlin', STORAGE_SERIES_KEYS, STORAGE_MIN_BATTERY_W, STORAGE_MAX_GAP_SECONDS]);
+    const r = rows[0];
+    close(r.discharge_dc_wh, 2000 / 6, 'entladen nur das frische Fenster');
+    close(r.ac_out_wh, 1840 / 6, 'AC raus ohne AC-PV der zweiten Position');
+    // 600 s frisch + der zweite Abstand nach dem Fehler (5 s, beide Proben frisch).
+    close(r.seconds, 605, 'Sekunden');
+    close(r.soc_delta_pct, -2, 'ΔSoC nur im frischen Fenster', 1e-9);
+  } finally {
+    await client.end();
+  }
+});
+
 test('SQL: zweite GX — die gemessene Last der Haupt-GX zählt (wie daily.js)', { skip }, async () => {
   const client = new pg.Client({ connectionString: URL });
   await client.connect();
@@ -278,7 +311,7 @@ test('SQL: zweite GX — die gemessene Last der Haupt-GX zählt (wie daily.js)',
     await client.query('CREATE TEMP TABLE timeseries_samples (series_key text, scope text, ts_utc timestamptz, value_num double precision, meta_json text)');
     // Haupt-Akku −2000 W, Haupt-GX misst 1840 W; load_power_w ist um Akku 2 korrigiert (0).
     await seedWindow(client, '2026-10-20T00:00:00Z', { ...base, battery_power_w: -2000, load_power_w: 0, load_measured_w: 1840, second_battery_charge_w: 2500, second_battery_discharge_w: 0 });
-    const { rows } = await client.query(STORAGE_EFFICIENCY_SQL, ['2026-10-20', 'Europe/Berlin', EFFICIENCY_SERIES_KEYS, STORAGE_MIN_BATTERY_W, STORAGE_MAX_GAP_SECONDS]);
+    const { rows } = await client.query(STORAGE_EFFICIENCY_SQL, ['2026-10-20', 'Europe/Berlin', STORAGE_SERIES_KEYS, STORAGE_MIN_BATTERY_W, STORAGE_MAX_GAP_SECONDS]);
     close(rows[0].ac_out_wh, 1840 / 6, 'AC raus');
     close(rows[0].discharge_dc_wh, 2000 / 6, 'entladen');
   } finally {

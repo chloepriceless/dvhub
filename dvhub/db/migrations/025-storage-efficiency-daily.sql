@@ -17,8 +17,9 @@
 --   charge_all_wh      Akku geladen, alle Proben (für den Akku-Wirkungsgrad DC)
 --   discharge_all_wh   Akku entladen, alle Proben
 --   converter_loss_wh  Wandlerverlust gesamt über alle Proben (mit Leerlauf und PV-Wandlung)
---   soc_first_pct      erster / letzter Ladestand des Tages (ΔSoC ohne die
---   soc_last_pct       VRM-gemischten 15-min-Werte; Kapazität rechnet die History)
+--   soc_delta_pct      Ladestand-Änderung über genau die gezählten Abstände (ΔSoC
+--   soc_intervals      ohne die VRM-gemischten 15-min-Werte; Kapazität rechnet die History)
+-- Gezählt werden nur lückenlose Abstände (≤ 90 s) zwischen frischen Proben.
 --   seconds / samples  Datenbasis
 --   Ein Tag ohne Proben bekommt eine Zeile mit 0 — daran erkennt der Job,
 --   dass er berechnet ist.
@@ -40,8 +41,8 @@ CREATE TABLE IF NOT EXISTS storage_efficiency_daily (
   charge_all_wh DOUBLE PRECISION NOT NULL DEFAULT 0,
   discharge_all_wh DOUBLE PRECISION NOT NULL DEFAULT 0,
   converter_loss_wh DOUBLE PRECISION NOT NULL DEFAULT 0,
-  soc_first_pct DOUBLE PRECISION,
-  soc_last_pct DOUBLE PRECISION,
+  soc_delta_pct DOUBLE PRECISION,
+  soc_intervals INTEGER NOT NULL DEFAULT 0,
   seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
   samples INTEGER NOT NULL DEFAULT 0,
   computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
