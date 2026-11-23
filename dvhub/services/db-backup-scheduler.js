@@ -18,6 +18,38 @@ import { smbUpload, smbListBackups, smbDelete } from './smb-target.js';
 
 const TICK_MS = 60_000;
 
+// Speicher-Konzept Schritt 6 (Christin 23.11.2026): vor einem Dump prüfen, ob
+// er auf die Zielplatte passt (Datenbankgröße + 256 MB Luft), und lokale
+// Backups auf der Platte der Datenbank nach Speicherprofil begrenzen
+// (groß 14, mittel 7, klein 3; winzig: kein volles Backup dorthin — Umfang
+// „15-min“ oder ein Netzziel wählen).
+const BACKUP_SPACE_MARGIN_MB = 256;
+const MB = 1048576;
+
+/**
+ * Pure: passt das Backup, und wie viele dürfen bleiben?
+ * @returns {{ ok: boolean, error?: string, keep: number, sameDisk: boolean }}
+ */
+export function backupSpacePlan({ freeMb, dbMb, sameDisk, profile, scope, retentionCount }) {
+  // Ungültige Anzahl bleibt ungültig: selectBackupsToDelete löscht dann nichts (Schutz).
+  const keepCfg = Number(retentionCount);
+  let keep = keepCfg;
+  const cap = (n) => (Number.isFinite(keepCfg) && keepCfg > 0 ? Math.min(keepCfg, n) : n);
+  if (sameDisk && profile && Number.isFinite(profile.backupKeepMax)) {
+    if (profile.backupKeepMax === 0) {
+      if (scope !== 'energy15m') {
+        return { ok: false, sameDisk, keep: 0, error: `Speicherprofil „${profile.label || profile.name}“: kein volles Backup auf die Platte der Datenbank — Umfang „15-min“ oder ein Netzziel wählen` };
+      }
+      keep = cap(3);
+    } else keep = cap(profile.backupKeepMax);
+  }
+  const need = (scope === 'energy15m' ? 0 : (Number(dbMb) || 0)) + BACKUP_SPACE_MARGIN_MB;
+  if (Number.isFinite(freeMb) && freeMb < need) {
+    return { ok: false, sameDisk, keep, error: `zu wenig Platz am Ziel: ${Math.round(freeMb)} MB frei, das Backup braucht etwa ${Math.round(need)} MB` };
+  }
+  return { ok: true, sameDisk, keep };
+}
+
 /**
  * Pure: is a daily backup due at `now` given the config and the last-run day?
  * Fires once when the local clock reaches HH:MM and we haven't already run today.
@@ -39,7 +71,11 @@ export function backupDueDay(cfg, now, lastRunDay) {
   return null;
 }
 
-export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Date(), spawnFn } = {}) {
+export function createDbBackupScheduler({
+  getCfg, pushLog, nowFn = () => new Date(), spawnFn,
+  // Stand der Platz-Wache (storage-guard status: dbMb, mounts, profile) — optional.
+  getStorage = () => null, statfs = (p) => fs.statfsSync(p), stat = (p) => fs.statSync(p),
+} = {}) {
   let timer = null;
   let lastRunDay = null;
   let running = false;
@@ -70,12 +106,29 @@ export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Dat
     return { ok: false, error: error || 'backup failed' };
   }
 
+  function planFor(dir, scope, b, { network = false } = {}) {
+    const st = (() => { try { return getStorage?.() || null; } catch { return null; } })();
+    let freeMb = NaN;
+    try { const s = statfs(dir); freeMb = (Number(s.bavail) * Number(s.bsize)) / MB; } catch { /* unbekannt → nicht blockieren */ }
+    let sameDisk = false;
+    if (!network) {
+      const dbMount = (st?.mounts || []).find((m) => (m.roles || []).includes('db'));
+      try { sameDisk = !!dbMount && String(stat(dir).dev) === String(dbMount.key); } catch { /* egal */ }
+    }
+    return backupSpacePlan({
+      freeMb, dbMb: st?.dbMb, sameDisk, profile: st?.profile?.values || null, scope,
+      retentionCount: b.retentionCount,
+    });
+  }
+
   // Backup into a local directory (which may itself be an OS-mounted share).
   async function runLocal(cfg, b, scope, fileName, reason, now) {
     const dir = b.destinationDir;
     if (!dir) return { ok: false, error: 'no destinationDir configured' };
     const outFile = path.join(dir, fileName);
     fs.mkdirSync(dir, { recursive: true }); // surfaces a missing mount as a clear error
+    const plan = planFor(dir, scope, b);
+    if (!plan.ok) return fail(scope, reason, now, plan.error);
     const res = await dumpToFile({ scope, database: cfg.telemetry.database, outFile, spawnFn });
     if (!res.ok) {
       try { if (fs.existsSync(outFile)) fs.unlinkSync(outFile); } catch { /* ignore */ }
@@ -83,7 +136,7 @@ export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Dat
     }
     const pruned = [];
     try {
-      const toDelete = selectBackupsToDelete(fs.readdirSync(dir), scope, Number(b.retentionCount));
+      const toDelete = selectBackupsToDelete(fs.readdirSync(dir), scope, plan.keep);
       for (const f of toDelete) { try { fs.unlinkSync(path.join(dir, f)); pruned.push(f); } catch { /* ignore */ } }
     } catch (err) { if (pushLog) pushLog('db_backup_prune_error', { scope, error: err.message }); }
     return ok(scope, reason, now, outFile, pruned);
@@ -97,6 +150,9 @@ export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Dat
     const conn = { host: smb.host, share: smb.share, username: smb.username, password: smb.password, domain: smb.domain };
     const subPath = smb.path || '';
     const tmpFile = path.join(os.tmpdir(), fileName);
+    // Der Dump liegt erst lokal (tmp) — passt er dorthin? Begrenzung der Anzahl gilt fürs Netzziel nicht.
+    const plan = planFor(os.tmpdir(), scope, b, { network: true });
+    if (!plan.ok) return fail(scope, reason, now, plan.error);
     try {
       const dump = await dumpToFile({ scope, database: cfg.telemetry.database, outFile: tmpFile, spawnFn });
       if (!dump.ok) return fail(scope, reason, now, dump.stderr || 'pg_dump failed');

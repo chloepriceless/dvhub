@@ -138,6 +138,20 @@ Start selbst (die alte legt es daneben als Sicherung ab). Zurück auf Vanilla:
 Die Erweiterung in der Datenbank (`ALTER EXTENSION timescaledb UPDATE`) hebt
 DVhub nach einem neuen DB-Image beim Start selbst an (2026-10-15).
 
+**Alte Images und Protokolle (Speicher, 23.11.2026).** Nach `pull` bleiben die
+vorherigen Images liegen (auf Prod zuletzt 13,8 GB). Der Installer entfernt nach
+einem erfolgreichen Update die alten Images dieser Suite, sobald sie keinen
+Namen mehr haben — benannte Tags (z. B. Test-Images) und alles, was noch läuft,
+bleiben. Abschalten: `DVHUB_KEEP_OLD_IMAGES=1` oder eine Datei
+`.keep-old-images` im Installationsordner. Von Hand: `docker system df` zeigt
+den Platz, `docker image prune` räumt unbenannte Images auf. Die
+Container-Protokolle sind in `compose.yml` auf 3 × 10 MB je Container begrenzt
+(`DOCKER_LOG_MAX_SIZE`, `DOCKER_LOG_MAX_FILE` in `.env`). Die Datenbank-Platte
+misst DVhub über das lesend eingehängte Volume `dvhub-db` (`/run/dvhub-dbvol`);
+beides kommt mit dem nächsten Lauf des Installers (eine alte `compose.yml` ohne
+den Mount misst die Platte der Docker-Wurzel). Einstellungen → System → Speicher
+zeigt Platten, Reichweite und Speicherprofil.
+
 ## Bestandsdaten übernehmen (native Installation → Container)
 
 **Einfachster Weg (ab 2026-10-01): voller Export + DB-Backup.** Auf der alten

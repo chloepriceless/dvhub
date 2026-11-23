@@ -1240,6 +1240,10 @@ fi
 if [[ -f "$INSTALL_DIR/pg-write-tuning.sh" ]] && command -v psql >/dev/null 2>&1; then
   DATA_DIR="$DATA_DIR" pu_bounded 30 bash "$INSTALL_DIR/pg-write-tuning.sh" || true
 fi
+# journald nach Speicherprofil begrenzen (S8 a: nur klein/winzig), idempotent.
+if [[ -f "$INSTALL_DIR/storage-limits.sh" ]]; then
+  DATA_DIR="$DATA_DIR" pu_bounded 15 bash "$INSTALL_DIR/storage-limits.sh" || true
+fi
 if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 2>&1; then
   TS_ACTIVE=0
   # `su postgres` (NON-login): a login shell would prepend the postgres user's MOTD

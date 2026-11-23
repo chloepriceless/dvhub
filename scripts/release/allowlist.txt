@@ -52,6 +52,7 @@
 + clock-provision.sh
 + sungrow-provision.sh
 + pg-write-tuning.sh
++ storage-limits.sh
 + pkg-maintain.sh
 + stack-update.sh
 + 20-dv-modbus.sh

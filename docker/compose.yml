@@ -28,12 +28,22 @@
 
 name: dvhub
 
+# Container-Protokolle begrenzen (Speicher-Konzept Schritt 6, 23.11.2026): ohne
+# daemon.json wächst json-file auf fremden Docker-Hosts unbegrenzt. 3 × 10 MB je
+# Container; kleiner über DOCKER_LOG_MAX_SIZE/DOCKER_LOG_MAX_FILE in .env.
+x-logging: &dvhub-logging
+  driver: json-file
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-10m}
+    max-file: "${DOCKER_LOG_MAX_FILE:-3}"
+
 services:
   db:
     # Offizielles Image; schwache Geräte (SPiNE EnergyLink) nehmen das schlanke
     # TIMESCALE_IMAGE=docker.io/bikinibottomcapital/timescaledb-slim (docker/timescaledb-slim).
     image: ${TIMESCALE_IMAGE:-timescale/timescaledb}:${TIMESCALE_TAG:-2.30.2-pg17}
     restart: unless-stopped
+    logging: *dvhub-logging
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD in docker/.env setzen}
@@ -94,6 +104,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *dvhub-logging
     network_mode: host
     depends_on:
       db:
@@ -158,6 +169,7 @@ services:
         BUILD_VERSION: ${EOS_IMAGE_TAG:-${EOS_TAG:-0.3.0.dev2611110839161148-dvhub.2}}
     profiles: [eos]
     restart: unless-stopped
+    logging: *dvhub-logging
     # Host-Netz wie DVhub; EOS lauscht nur auf 127.0.0.1 (nicht im LAN).
     network_mode: host
     # Wächter (configs: dvhub-eos-watch, unten) startet EOS als Kindprozess und

@@ -2713,7 +2713,12 @@ const telemetryReady = (async () => {
   // Created in every process so the routes can reach it, but the timer runs
   // ONLY in the web/monolith process (where the run-now/status routes live) so
   // a future web+runtime-worker split can't double-run the backup.
-  ctx.dbBackupScheduler = createDbBackupScheduler({ getCfg: ctx.getCfg, pushLog: ctx.pushLog });
+  ctx.dbBackupScheduler = createDbBackupScheduler({
+    getCfg: ctx.getCfg, pushLog: ctx.pushLog,
+    // Platzprüfung und Profilgrenze (Speicher-Konzept Schritt 6): Stand der Platz-Wache,
+    // im getrennten Betrieb aus dem Runtime-Schnappschuss.
+    getStorage: () => ctx.storageGuard?.status?.() || state.storageRuntime?.status || null,
+  });
   if (IS_WEB_PROCESS) ctx.dbBackupScheduler.start();
   await refreshTelemetryStatus();
   if (IS_RUNTIME_PROCESS) {

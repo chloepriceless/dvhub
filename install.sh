@@ -1015,6 +1015,8 @@ if command -v psql >/dev/null 2>&1; then
   systemctl enable --now postgresql 2>/dev/null || true
   # Schreibarm (SD-Karte/eMMC): weniger fsync/Checkpoints — pg-write-tuning.sh.
   [[ -f "$INSTALL_DIR/pg-write-tuning.sh" ]] && DATA_DIR="$DATA_DIR" bash "$INSTALL_DIR/pg-write-tuning.sh" || true
+  # journald nach Speicherprofil (S8 a) — bei einer Neuinstallation meist noch ohne Profil, dann beim nächsten Start.
+  [[ -f "$INSTALL_DIR/storage-limits.sh" ]] && DATA_DIR="$DATA_DIR" bash "$INSTALL_DIR/storage-limits.sh" || true
   if ! su postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='dvhub'\"" 2>/dev/null | grep -q 1; then
     su postgres -c "createuser dvhub" 2>/dev/null || true
   fi
