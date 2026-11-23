@@ -4214,6 +4214,43 @@ function buildFieldDefinitions() {
     },
     {
       section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Ab wann der Standard-Tarif gilt.',
+      path: 'userEnergyPricing.validFrom',
+      label: 'Standard-Tarif gilt ab',
+      type: 'text',
+      empty: 'null',
+      help: 'Erster Tag (JJJJ-MM-TT), an dem der dynamische Tarif bzw. der Anbieterpreis des Standard-Tarifs gilt. Davor rechnet DVhub an Tagen ohne eigenen Zeitraum mit dem festen Bruttopreis des Standard-Tarifs, nie rückwirkend mit dem dynamischen Tarif. Leer = automatisch: ab dem ersten gespeicherten Anbieterpreis bzw. ab dem Tag nach dem letzten Festpreis-Zeitraum; ohne solchen Hinweis gilt er für die ganze Historie.'
+    },
+    {
+      section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Grundgebühr des Standard-Tarifs.',
+      path: 'userEnergyPricing.baseFeeEurMonth',
+      label: 'Grundgebühr (€/Monat)',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      empty: 'null',
+      help: 'Feste Grundgebühr je Monat (brutto) des Standard-Tarifs. Die Historie rechnet sie tageweise zu den Energiekosten des Monats; der Ø Arbeitspreis bleibt ohne Grundgebühr. Ein Zeitraum hat eine eigene Grundgebühr. Leer = unbekannt.'
+    },
+    {
+      section: 'pricing',
+      group: 'mode',
+      groupLabel: 'Eigener Strompreis',
+      groupDescription: 'Grundgebühr des Festpreis-Tarifs für den Vergleich in der Historie.',
+      path: 'userEnergyPricing.comparisonFixedBaseFeeEurMonth',
+      label: 'Vergleichs-Grundgebühr (€/Monat)',
+      type: 'number',
+      step: 0.01,
+      min: 0,
+      empty: 'null',
+      help: 'Grundgebühr je Monat (brutto) des Festpreis-Tarifs, mit dem die Historie vergleicht. Leer = die Grundgebühr des Festpreis-Zeitraums, aus dem der Vergleichspreis stammt; sonst kein Vergleich mit Grundgebühr.'
+    },
+    {
+      section: 'pricing',
       group: 'marketPremium',
       groupLabel: 'PV-Anlagen für Marktprämie',
       groupDescription: 'Mehrere PV-Anlagen mit Inbetriebnahme und Leistung für den gewichteten anzulegenden Wert.',
@@ -5504,6 +5541,12 @@ export function createDefaultConfig() {
       // Festpreis für den Vergleich in der Historie (brutto ct/kWh, 1.0.11).
       // null = automatisch: letzter Festpreis-Zeitraum vor dem dynamischen Tarif.
       comparisonFixedCtKwh: null,
+      // Standard-Tarif gilt ab (YYYY-MM-DD, lokaler Tag); null = automatisch
+      // (Historie) bzw. immer. Christin 23.11.2026 (T1).
+      validFrom: null,
+      // Grundgebühren je Monat (brutto €), null = unbekannt (T5).
+      baseFeeEurMonth: null,
+      comparisonFixedBaseFeeEurMonth: null,
       periods: [],
       marketValueMode: 'annual',
       pvPlants: [],
@@ -6296,6 +6339,17 @@ function sanitizeUserEnergyPricingWindows(value, warnings) {
   return out;
 }
 
+// Grundgebühr je Monat (brutto €): leer/ungültig/negativ = null (unbekannt).
+function sanitizeBaseFeeEurMonth(value, path, warnings) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    warnings.push(`${path}: invalid number, field was reset`);
+    return null;
+  }
+  return n;
+}
+
 function sanitizeUserEnergyPricingPeriods(value, warnings) {
   if (!Array.isArray(value)) return [];
 
@@ -6360,6 +6414,10 @@ function sanitizeUserEnergyPricingPeriods(value, warnings) {
         }
       }
 
+      if (entry.baseFeeEurMonth != null && entry.baseFeeEurMonth !== '') {
+        const fee = sanitizeBaseFeeEurMonth(entry.baseFeeEurMonth, `userEnergyPricing.periods.${next.id}.baseFeeEurMonth`, warnings);
+        if (fee != null) next.baseFeeEurMonth = fee;
+      }
       if (entry.usesParagraph14aModule3 != null) next.usesParagraph14aModule3 = coerceBoolean(entry.usesParagraph14aModule3);
       if (entry.module3Windows != null) next.module3Windows = sanitizeUserEnergyPricingWindows(entry.module3Windows, warnings);
       if (entry.costs != null) next.costs = sanitizePricingCosts(
@@ -6496,6 +6554,19 @@ function sanitizeUserEnergyPricing(value, warnings) {
     } else {
       next.comparisonFixedCtKwh = cmp;
     }
+  }
+  // Standard-Tarif gilt ab (T1, Christin 23.11.2026): leer = null.
+  if (next.validFrom == null || next.validFrom === '') {
+    next.validFrom = null;
+  } else if (!isIsoDateOnly(String(next.validFrom))) {
+    warnings.push('userEnergyPricing.validFrom: must use YYYY-MM-DD, field was reset');
+    next.validFrom = null;
+  } else {
+    next.validFrom = String(next.validFrom);
+  }
+  // Grundgebühren (T5): Zahl ≥ 0 oder null.
+  for (const key of ['baseFeeEurMonth', 'comparisonFixedBaseFeeEurMonth']) {
+    next[key] = sanitizeBaseFeeEurMonth(next[key], `userEnergyPricing.${key}`, warnings);
   }
   if (next.usesParagraph14aModule3 != null) next.usesParagraph14aModule3 = coerceBoolean(next.usesParagraph14aModule3);
   next.periods = sanitizeUserEnergyPricingPeriods(next.periods, warnings);
@@ -7134,14 +7205,65 @@ function computeDynamicGrossImportWithModule3CtKwh(marketCtKwh, components = {},
   return roundCtKwh(base * (1 + (Number(components.vatPct || 0) / 100)) + Number(windowGrossCtKwh || 0));
 }
 
+// ── Standard-Tarif „gilt ab“ (T1, Christin 23.11.2026) ──────────────────────
+// Ein Tarif zählt erst ab dem eingestellten Zeitpunkt. Ist der Standard-Tarif
+// dynamisch oder vom Anbieter und liegt der Tag vor userEnergyPricing.validFrom
+// (und in keinem Zeitraum), gilt der feste Bruttopreis des Standard-Tarifs —
+// nie rückwirkend der dynamische Tarif. Ohne Datum gilt er wie bisher immer.
+// Modul-3-Fenster gelten davor nicht: beim dynamischen Tarif ist ihr Preis nur
+// das Netzentgelt, im Festpreis-Modus wäre er der ganze Endpreis.
+function baseTariffStartsAfter(pricing, localDate) {
+  const mode = pricing?.mode;
+  if (mode !== 'dynamic' && mode !== 'provider') return false;
+  const from = pricing?.validFrom;
+  return isIsoDateOnly(from) && Boolean(localDate) && localDate < from;
+}
+
+function buildBeforeValidFromPricing(pricing) {
+  return { ...buildEffectiveUserEnergyPricing(pricing), mode: 'fixed', usesParagraph14aModule3: false, module3Windows: {} };
+}
+
 export function resolveActiveUserEnergyPricingForTimestamp(ts, pricing = {}, options = {}) {
   const timeZone = options.timeZone || BERLIN_TIME_ZONE;
   const localDate = formatLocalDate(ts, timeZone);
   if (!localDate) return null;
   const periods = Array.isArray(pricing?.periods) ? pricing.periods : [];
   const match = periods.find((period) => period?.startDate <= localDate && period?.endDate >= localDate);
-  if (!match) return null;
+  if (!match) return baseTariffStartsAfter(pricing, localDate) ? buildBeforeValidFromPricing(pricing) : null;
   return deepMerge(buildEffectiveUserEnergyPricing(pricing), clone(match));
+}
+
+function addDaysToIsoDate(date, days) {
+  const [y, m, d] = String(date).split('-').map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + days));
+  return next.toISOString().slice(0, 10);
+}
+
+// Ab wann der Standard-Tarif gilt — eingetragen oder aus den Daten abgeleitet
+// (Übergang für Konfigurationen ohne Datum, T1). Abgeleitet wird nur aus
+// eindeutigen Hinweisen; der spätere gewinnt:
+//   fixed_period   Tag nach dem Ende des letzten vergangenen Festpreis-Zeitraums
+//                  (der Vertrag vor dem Wechsel),
+//   provider_data  erster gespeicherter Anbieterpreis (Standard-Tarif „vom
+//                  Stromanbieter“: davor gäbe es nur Schätzungen).
+// Ohne Hinweis: { date: null, source: 'none' } — dann gilt der Tarif wie bisher
+// für die ganze Historie, und die Oberfläche bittet um ein Datum.
+export function resolveBaseTariffValidFrom(pricing = {}, { today = null, firstProviderPriceDate = null } = {}) {
+  const mode = pricing?.mode;
+  if (mode !== 'dynamic' && mode !== 'provider') return { date: null, source: null };
+  if (isIsoDateOnly(pricing?.validFrom)) return { date: pricing.validFrom, source: 'configured' };
+  let best = null;
+  const periods = Array.isArray(pricing?.periods) ? pricing.periods : [];
+  for (const period of periods) {
+    if (period?.mode !== 'fixed' || !isIsoDateOnly(period?.endDate)) continue;
+    if (today && !(period.endDate < today)) continue;
+    const next = addDaysToIsoDate(period.endDate, 1);
+    if (!best || next > best.date) best = { date: next, source: 'fixed_period' };
+  }
+  if (mode === 'provider' && isIsoDateOnly(firstProviderPriceDate)) {
+    if (!best || firstProviderPriceDate > best.date) best = { date: firstProviderPriceDate, source: 'provider_data' };
+  }
+  return best || { date: null, source: 'none' };
 }
 
 // Zwischenspeicher für den Slot-Preis (2026-10-03): die Historie fragt den
@@ -7154,27 +7276,62 @@ const SLOT_PRICING_CACHE = new WeakMap(); // pricing → { base, byPeriod: Map, 
 function slotPricingCache(pricing) {
   let entry = SLOT_PRICING_CACHE.get(pricing);
   if (!entry) {
-    entry = { base: null, byPeriod: new Map(), windows: new WeakMap() };
+    entry = { base: null, before: null, byPeriod: new Map(), windows: new WeakMap() };
     SLOT_PRICING_CACHE.set(pricing, entry);
   }
   return entry;
 }
 
-function cachedEffectivePricingForTimestamp(ts, pricing, timeZone) {
+// Tarif eines lokalen Tages: wirksame Preis-Einstellungen plus woher sie
+// stammen (Zeitraum, Standard-Tarif, Standard-Tarif vor „gilt ab“).
+function cachedTariffContextForTimestamp(ts, pricing, timeZone) {
   const cache = slotPricingCache(pricing);
   const localDate = formatLocalDate(ts, timeZone);
   const periods = Array.isArray(pricing?.periods) ? pricing.periods : [];
   const match = localDate ? periods.find((period) => period?.startDate <= localDate && period?.endDate >= localDate) : null;
   if (!match) {
-    cache.base ||= buildEffectiveUserEnergyPricing(pricing);
+    if (baseTariffStartsAfter(pricing, localDate)) {
+      cache.before ||= {
+        effective: buildBeforeValidFromPricing(pricing),
+        tariffKey: 'base:before',
+        tariffLabel: 'Standard-Tarif vor „gilt ab“',
+        baseFeeEurMonth: null,
+        beforeValidFrom: true
+      };
+      return cache.before;
+    }
+    cache.base ||= {
+      effective: buildEffectiveUserEnergyPricing(pricing),
+      tariffKey: 'base',
+      tariffLabel: 'Standard-Tarif',
+      baseFeeEurMonth: finiteFeeOrNull(pricing?.baseFeeEurMonth),
+      beforeValidFrom: false
+    };
     return cache.base;
   }
-  let merged = cache.byPeriod.get(match);
-  if (!merged) {
-    merged = deepMerge(buildEffectiveUserEnergyPricing(pricing), clone(match));
-    cache.byPeriod.set(match, merged);
+  let ctx = cache.byPeriod.get(match);
+  if (!ctx) {
+    ctx = {
+      effective: deepMerge(buildEffectiveUserEnergyPricing(pricing), clone(match)),
+      tariffKey: `period:${match.id ?? ''}`,
+      tariffLabel: match.label ? String(match.label) : `Zeitraum ${match.startDate}–${match.endDate}`,
+      // Ein Zeitraum ist ein eigener Vertrag: die Grundgebühr wird nicht geerbt.
+      baseFeeEurMonth: finiteFeeOrNull(match.baseFeeEurMonth),
+      beforeValidFrom: false
+    };
+    cache.byPeriod.set(match, ctx);
   }
-  return merged;
+  return ctx;
+}
+
+function cachedEffectivePricingForTimestamp(ts, pricing, timeZone) {
+  return cachedTariffContextForTimestamp(ts, pricing, timeZone).effective;
+}
+
+function finiteFeeOrNull(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 function cachedModule3Windows(pricing, effectivePricing) {
@@ -7233,6 +7390,45 @@ export function resolveComparisonFixedPriceForDate(localDate, pricing = {}) {
   const base = finiteCtOrNull(pricing?.fixedGrossImportCtKwh);
   if (base != null) return { ctKwh: roundCtKwh(base), source: 'base', periodId: null, label: null };
   return null;
+}
+
+// Grundgebühr des Vergleichs-Festpreises (T5): eigenes Feld, sonst die des
+// Festpreis-Zeitraums, aus dem der Vergleichspreis stammt, sonst keine (null).
+export function resolveComparisonBaseFeeForDate(localDate, pricing = {}) {
+  const configured = finiteFeeOrNull(pricing?.comparisonFixedBaseFeeEurMonth);
+  if (configured != null) return { eurMonth: configured, source: 'configured' };
+  const cmp = resolveComparisonFixedPriceForDate(localDate, pricing);
+  if (cmp?.source !== 'period') return null;
+  const period = (Array.isArray(pricing?.periods) ? pricing.periods : [])
+    .find((entry) => String(entry?.id) === cmp.periodId);
+  const fee = finiteFeeOrNull(period?.baseFeeEurMonth);
+  return fee == null ? null : { eurMonth: fee, source: 'period' };
+}
+
+// Beschreibung des Bezugstarifs einer Viertelstunde für die Auswertung des
+// dynamischen Tarifs in der Historie (T2/T10, Christin 23.11.2026): welcher
+// Tarif (Zeitraum oder Standard-Tarif), welches §14a-Modul-3-Fenster, welche
+// MwSt (für den Netto-Faktor der Formel) und welche Grundgebühr.
+export function describeUserImportTariffForSlot(ts, pricing = {}, options = {}) {
+  const timeZone = options.timeZone || BERLIN_TIME_ZONE;
+  const safePricing = pricing && typeof pricing === 'object' ? pricing : {};
+  const ctx = cachedTariffContextForTimestamp(ts, safePricing, timeZone);
+  const effective = ctx.effective;
+  const mode = effective?.mode === 'dynamic' || effective?.mode === 'provider' ? effective.mode : 'fixed';
+  const minuteOfDay = localMinutesOfDay(ts, timeZone);
+  const window = cachedModule3Windows(safePricing, effective)
+    .find((entry) => slotMinuteMatchesWindow(minuteOfDay, entry)) || null;
+  const vat = Number(effective?.dynamicComponents?.vatPct);
+  return {
+    mode,
+    tariffKey: ctx.tariffKey,
+    tariffLabel: ctx.tariffLabel,
+    vatPct: effective?.dynamicComponents?.vatPct != null && effective.dynamicComponents.vatPct !== '' && Number.isFinite(vat) ? vat : 19,
+    baseFeeEurMonth: ctx.baseFeeEurMonth,
+    windowId: window ? window.id : null,
+    windowLabel: window ? window.label : null,
+    beforeValidFrom: ctx.beforeValidFrom
+  };
 }
 
 export function resolveUserImportPriceCtKwhForSlot(row, pricing = {}, options = {}) {

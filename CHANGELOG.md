@@ -12,6 +12,7 @@ verweist hierher.
 
 ### Hinzugefügt
 
+- **Strompreise: „Standard-Tarif gilt ab“ und Grundgebühren.** Ein dynamischer Tarif oder Anbieterpreis im Standard-Tarif zählt erst ab dem eingestellten Tag (`userEnergyPricing.validFrom`, Einstellungen → Strompreise). Davor rechnet DVhub an Tagen ohne eigenen Zeitraum mit dem festen Bruttopreis des Standard-Tarifs, nie rückwirkend mit dem dynamischen Tarif; §14a-Modul-3-Fenster gelten davor nicht. Bei festem Standard-Tarif ändert sich nichts. Neu sind auch die Grundgebühr je Monat für den Standard-Tarif (`baseFeeEurMonth`), je Zeitraum (`periods[].baseFeeEurMonth`, wird nicht vom Standard-Tarif geerbt) und für den Vergleichs-Festpreis (`comparisonFixedBaseFeeEurMonth`; leer = Grundgebühr des Festpreis-Zeitraums, aus dem der Vergleichspreis stammt). Leer heißt unbekannt.
 - **Historie: Ø Arbeitspreis und Vergleich mit einem Festpreis.** Neue Karte „Arbeitspreis“ in Woche, Monat, Jahr und
   Alle: Ø Arbeitspreis des Zeitraums (Bezugskosten ÷ Netzbezug, brutto, nur Arbeitspreis ohne Grundgebühr), beim
   dynamischen Tarif zusätzlich der Ø je Viertelstunde — der Abstand zeigt, was die Lastverschiebung gebracht hat — und
