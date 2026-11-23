@@ -74,6 +74,7 @@ export function statPath(p, { statfs = (x) => fs.statfsSync(x), stat = (x) => fs
       return {
         measuredPath: cur, dev, totalMb, freeMb, freePct: totalMb > 0 ? Math.round((freeMb / totalMb) * 1000) / 10 : null,
         overlay: Number(s.type) === OVERLAYFS_MAGIC, blocks: Number(s.blocks), bsize: Number(s.bsize),
+        bavail: Number(s.bavail), files: Number(s.files), ffree: Number(s.ffree),
       };
     } catch {
       const up = path.dirname(cur);
@@ -100,17 +101,22 @@ export function measureMounts(candidates, deps = {}) {
     byKey.set(key, {
       key, roles: [c.role], paths: [c.path], totalMb: m.totalMb, freeMb: m.freeMb, freePct: m.freePct,
       usedMb: Math.max(0, m.totalMb - m.freeMb), ...(c.assumed && c.role === 'db' ? { dbAssumed: true } : {}),
-      _overlay: m.overlay, _blocks: m.blocks, _bsize: m.bsize,
+      _overlay: m.overlay, _blocks: m.blocks, _bsize: m.bsize, _bavail: m.bavail, _files: m.files, _ffree: m.ffree,
     });
   }
   // Docker overlay2: `/` im Container hat eine eigene Geräte-Nummer, liegt aber
   // auf derselben Platte wie die Volumes (Codex 38d2f56d, P2). overlayfs meldet
-  // die Zahlen der Platte darunter — gleiche Blockzahl und -größe, freier Platz
-  // bis auf 1 % gleich → dieselbe Platte.
+  // die Zahlen der Platte darunter, im selben Augenblick gemessen. Beleg für
+  // dieselbe Platte (Codex bec0a2c7): gleiche Block- und Inode-Zahl, freie Inodes
+  // und freie Blöcke fast gleich (≤ 64 Inodes, ≤ 0,1 %). Zwei verschiedene,
+  // gleich große Platten unterscheiden sich mindestens in den freien Inodes.
   const groups = [...byKey.values()];
+  const same = (a, b) => a._blocks === b._blocks && a._bsize === b._bsize
+    && Number.isFinite(a._files) && a._files > 0 && a._files === b._files
+    && Number.isFinite(a._ffree) && Math.abs(a._ffree - b._ffree) <= 64
+    && Math.abs(a._bavail - b._bavail) <= Math.max(16, a._blocks * 0.001);
   for (const o of groups.filter((g) => g._overlay)) {
-    const twin = groups.find((g) => g !== o && !g._merged && !g._overlay && g._blocks === o._blocks && g._bsize === o._bsize
-      && Math.abs(g.freeMb - o.freeMb) <= Math.max(1, g.totalMb * 0.01));
+    const twin = groups.find((g) => g !== o && !g._merged && !g._overlay && same(g, o));
     if (!twin) continue;
     for (const r of o.roles) if (!twin.roles.includes(r)) twin.roles.push(r);
     for (const p of o.paths) if (!twin.paths.includes(p)) twin.paths.push(p);
@@ -119,7 +125,7 @@ export function measureMounts(candidates, deps = {}) {
   }
   const rank = (mnt) => Math.min(...mnt.roles.map((r) => ROLE_ORDER.indexOf(r)));
   return groups.filter((g) => !g._merged)
-    .map(({ _overlay, _blocks, _bsize, _merged, ...g }) => { void _overlay; void _blocks; void _bsize; void _merged; return g; })
+    .map((g) => Object.fromEntries(Object.entries(g).filter(([k]) => !k.startsWith('_'))))
     .sort((a, b) => rank(a) - rank(b));
 }
 
@@ -136,9 +142,12 @@ export function readPgDataDirectory({ database = {}, spawnFn = spawn, timeoutMs 
   return new Promise((resolve) => {
     let child; let out = ''; let done = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
-    // Dieselben Verbindungsangaben wie Backup/Restore (Host/Socket, Port, DB) —
-    // sonst fragt es bei mehreren Clustern den falschen (Codex 38d2f56d, P2).
-    const args = ['-n', '-u', 'postgres', '/usr/bin/psql', '-X', ...buildPsqlArgs({ database, sql: 'SHOW data_directory' })];
+    // Port und DB aus der Konfiguration (mehrere Cluster, Codex 38d2f56d), aber
+    // immer über den Unix-Socket: als postgres per peer-Anmeldung — über TCP
+    // (localhost/127.0.0.1) bräuchte es ein Passwort (Codex bec0a2c7).
+    const h = String(database.host || '');
+    const host = h.startsWith('/') ? h : '/var/run/postgresql';
+    const args = ['-n', '-u', 'postgres', '/usr/bin/psql', '-X', ...buildPsqlArgs({ database: { ...database, host }, sql: 'SHOW data_directory' })];
     try { child = spawnFn('sudo', args, { env: process.env }); } catch { finish(null); return; }
     const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* egal */ } finish(null); }, timeoutMs);
     t.unref?.();

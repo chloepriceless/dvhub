@@ -150,8 +150,8 @@ test('Pfad nicht messbar, Elternordner auf anderer Platte → nicht als DB-Platt
 // Codex 38d2f56d (P2): Docker overlay2 — / hat eigene Geräte-Nummer, liegt aber auf der Platte der Volumes.
 test('Docker: Overlay-Wurzel und Volumes auf derselben Platte zählen einmal', () => {
   const statfs = (p) => (p === '/'
-    ? { type: 0x794c7630, bsize: 4096, blocks: 30000000, bavail: 1000000 }
-    : { type: 0xef53, bsize: 4096, blocks: 30000000, bavail: 1000100 });
+    ? { type: 0x794c7630, bsize: 4096, blocks: 30000000, bavail: 1000000, files: 1900000, ffree: 1500000 }
+    : { type: 0xef53, bsize: 4096, blocks: 30000000, bavail: 1000004, files: 1900000, ffree: 1500002 });
   const stat = (p) => ({ dev: p === '/' ? 77 : 2049 });
   const mounts = measureMounts(mountCandidates({ container: true, dataDir: '/var/lib/dvhub', exists: () => true }), { statfs, stat });
   assert.equal(mounts.length, 1);
@@ -169,4 +169,42 @@ test('SHOW data_directory nutzt Host/Socket und Port der Konfiguration (Codex 38
   };
   assert.equal(await readPgDataDirectory({ database: { host: '/run/pg2', port: 5434, name: 'dvhub' }, spawnFn }), '/srv/pg/main');
   assert.deepEqual(seen.slice(seen.indexOf('-h'), seen.indexOf('-h') + 4), ['-h', '/run/pg2', '-p', '5434']);
+});
+
+// Codex bec0a2c7 (P2): zwei verschiedene, gleich große Platten nicht zusammenlegen.
+test('Docker: gleich große, aber verschiedene Platten bleiben getrennt', () => {
+  const statfs = (p) => (p === '/'
+    ? { type: 0x794c7630, bsize: 4096, blocks: 30000000, bavail: 2850000, files: 1900000, ffree: 1500000 }
+    : { type: 0xef53, bsize: 4096, blocks: 30000000, bavail: 3120000, files: 1900000, ffree: 1700000 });
+  const stat = (p) => ({ dev: p === '/' ? 77 : 2049 });
+  const mounts = measureMounts(mountCandidates({ container: true, dataDir: '/var/lib/dvhub', exists: () => true }), { statfs, stat });
+  assert.equal(mounts.length, 2);
+});
+
+// Codex bec0a2c7 (P2): localhost/127.0.0.1 über TCP bräuchte ein Passwort → Unix-Socket mit dem Port.
+test('SHOW data_directory: TCP-Loopback geht über den Unix-Socket (peer), Port bleibt', async () => {
+  let seen = null;
+  const spawnFn = (cmd, args) => {
+    seen = args;
+    const c = new EventEmitter(); c.stdout = new EventEmitter(); c.kill = () => {};
+    setImmediate(() => { c.stdout.emit('data', Buffer.from('/var/lib/postgresql/17/main\n')); c.emit('close', 0); });
+    return c;
+  };
+  await readPgDataDirectory({ database: { host: '127.0.0.1', port: 5433, name: 'dvhub' }, spawnFn });
+  assert.deepEqual(seen.slice(seen.indexOf('-h'), seen.indexOf('-h') + 4), ['-h', '/var/run/postgresql', '-p', '5433']);
+});
+
+// Codex bec0a2c7 (P1): DB-Platte bekannt, aber nicht messbar → keine Aufräumaktion nach einer anderen Platte.
+test('Wache: DB-Platte nicht messbar → nichts in der DB aufräumen, eigener Hinweis', async () => {
+  const statfs = (p) => { if (p.startsWith('/srv/pg')) throw new Error('EACCES'); return { bsize: 1048576, blocks: 3000, bavail: 60 }; };
+  const stat = (p) => { if (p.startsWith('/srv/pg')) throw new Error('EACCES'); return { dev: 1 }; };
+  const calls = [];
+  const db = { async query(sql) { calls.push(sql); if (sql.includes('pg_extension')) return { rows: [{}] }; return { rows: [] }; } };
+  const warn = {};
+  const r = await createStorageGuard({ getDb: () => db, getDataDir: () => '/var/lib/dvhub', getPgDataDir: async () => '/srv/pg/17/main',
+    statfs, stat, setWarning: (id, m) => { warn[id] = m; }, samplesIo: { readFile: () => { throw new Error('x'); }, writeFile() {}, rename() {} } }).check();
+  assert.equal(r.dbUnmeasured, true);
+  assert.ok(!calls.some((q) => /compress_chunk|drop_chunks|DELETE/.test(q)), 'kein Aufräumen');
+  assert.match(warn.storage, /Datenbank-Platte nicht messbar/);
+  assert.match(warn.storage_other, /DVhub-Ordner/, 'die volle andere Platte wird trotzdem gemeldet');
 });

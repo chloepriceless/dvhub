@@ -334,3 +334,15 @@ test('Profilwahl per Klick: „auto“ übernimmt den Vorschlag', async () => {
   const r2 = await g.check();
   assert.deepEqual([r2.profile.effective, r2.profile.mode, r2.profile.suggested], ['klein', 'auto', null]);
 });
+
+// Codex 837ea5fd (P2): Platz unbekannt (statfs scheitert) belegt keine Erholung.
+test('compress_chunk-Fehler bleibt, wenn der Platz nicht messbar ist', async () => {
+  const db = fakeDb({ compressThrows: 'Sperre', oldestDays: 20 });
+  let fail = false; const warn = {};
+  const g = createStorageGuard({ getDb: () => db, statfs: () => { if (fail) throw new Error('weg'); return stat(15)(); }, setWarning: (id, m) => { warn[id] = m; } });
+  await g.check();
+  fail = true;
+  const r = await g.check();
+  assert.equal(r.level, 'unbekannt');
+  assert.match(warn[COMPRESSION_WARNING_ID], /gescheitert/);
+});

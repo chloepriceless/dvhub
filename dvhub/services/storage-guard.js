@@ -314,8 +314,12 @@ export function createStorageGuard({
       const mounts = measureMounts(
         mountCandidates({ container, dataDir: dataDir || '/', pgDataDir, dbVolumeDir, exists }),
         { statfs, stat });
-      const primary = mountFor(mounts, 'db') || mountFor(mounts, 'data') || mounts[0] || null;
-      const dir = primary?.paths?.[0] || dataDir || '/';
+      // DB-Platte bekannt (nativ: data_directory), aber nicht messbar: nie eine
+      // andere Platte an ihre Stelle setzen und nichts in der DB aufräumen
+      // (Codex bec0a2c7, P1). Ohne bekanntes Datenverzeichnis wie bisher der DVhub-Ordner.
+      const dbUnmeasured = !container && !!pgDataDir && !mountFor(mounts, 'db');
+      const primary = dbUnmeasured ? null : (mountFor(mounts, 'db') || mountFor(mounts, 'data') || mounts[0] || null);
+      const dir = primary?.paths?.[0] || pgDataDir || dataDir || '/';
       const freeMb = primary ? primary.freeMb : null;
       const totalMb = primary ? primary.totalMb : null;
       const freePct = primary && Number.isFinite(primary.freePct) ? primary.freePct : NaN;
@@ -325,6 +329,7 @@ export function createStorageGuard({
         at: new Date(now()).toISOString(), dir, freePct, freeMb, totalMb, level: 'unbekannt', dbMb: null, actions: [], compression: null,
         mounts: mounts.map((m) => ({ ...m, level: storageStage({ freeMb: m.freeMb, totalMb: m.totalMb }) })),
         growthMbPerDay: null, daysLeft: null, reserveMb: null, profile: null,
+        ...(dbUnmeasured ? { dbUnmeasured: true } : {}),
       };
       if (hasDb) {
         try { out.dbMb = Math.round(Number((await db.query('SELECT pg_database_size(current_database()) AS b')).rows?.[0]?.b) / 1048576); } catch { /* egal */ }
@@ -351,7 +356,8 @@ export function createStorageGuard({
       // Genug Platz: die Wache komprimiert nicht selbst, das macht der Job. Ein
       // früheres Scheitern von compress_chunk gilt dann nicht mehr — sonst bliebe
       // der rote Hinweis bis zum Neustart stehen (Codex 949b20f2).
-      if ((level === 'ok' || level === 'unbekannt') && compressFail) compressFail = null;
+      // Nur bei GEMESSEN genug Platz — „unbekannt“ (statfs ging nicht) belegt nichts (Codex 837ea5fd).
+      if (level === 'ok' && compressFail) compressFail = null;
       let probe = null;
       try {
         if (hasDb) {
@@ -359,7 +365,7 @@ export function createStorageGuard({
           // Ohne Probe (Fehler) wie früher an der Erweiterung festmachen.
           const ts = probe ? probe.timescale
             : (await db.query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")).rows?.length > 0;
-          try { await decide(db, { totalMb, level, dataDir }); } catch (e) { logGuardError(e); }
+          if (!dbUnmeasured) { try { await decide(db, { totalMb, level, dataDir }); } catch (e) { logGuardError(e); } }
           if (level !== 'ok' && level !== 'unbekannt') {
             // Komprimieren nur, wo es geht (Community + eingeschaltet); ein Fehler
             // hält Löschstufe und Hinweis nicht mehr auf (Apache: compress_chunk wirft).
@@ -411,7 +417,9 @@ export function createStorageGuard({
         + '. DVhub kann dort selbst nichts freigeben — Protokolle, alte Docker-Images oder andere Dateien prüfen.' : null,
         others.some((m) => m.level === 'kritisch') ? 'error' : 'warn');
       // Systemhinweis setzen bzw. wegnehmen — immer, auch wenn oben etwas scheiterte.
-      if (level === 'ok' || level === 'unbekannt') warn('storage', null);
+      if (dbUnmeasured) {
+        warn('storage', `Datenbank-Platte nicht messbar (${pgDataDir}): DVhub räumt in der Datenbank nichts auf, bis sie wieder messbar ist.`, 'warn');
+      } else if (level === 'ok' || level === 'unbekannt') warn('storage', null);
       else warn('storage', storageWarningText(out), level === 'kritisch' ? 'error' : 'warn');
       if (level !== (last?.level)) {
         log('storage_level', { level, freePct, freeMb, dbMb: out.dbMb, daysLeft: out.daysLeft }, level === 'ok' ? 'info' : 'warn');
