@@ -115,10 +115,18 @@ test('Zeitraum: zu wenig Daten, Ladestand fehlt, abgeleitete Last, unplausibel',
   assert.equal(few.status, 'insufficient_data');
   assert.equal(few.chargeEta, null);
   // Ohne Ladestand oder ohne Kapazität kein Akku-Anteil — nicht raten.
-  const noSoc = summarizeStorageRows([okDay({ soc_delta_pct: null, soc_intervals: 0 })], cap10);
+  // Ohne Ladestand liefert der Tagesjob auch keine DC-Mengen (Codex 700aef31).
+  const noSoc = summarizeStorageRows([okDay({ soc_delta_pct: null, soc_intervals: 0, charge_all_wh: 0, discharge_all_wh: 0 })], cap10);
   assert.equal(noSoc.status, 'insufficient_data');
   assert.match(noSoc.reason, /Ladestand/);
-  assert.equal(summarizeStorageRows([okDay()]).status, 'insufficient_data');
+  assert.equal(summarizeStorageRows([okDay()]).status, 'insufficient_data', 'ohne Kapazität');
+  // Ein Tag ohne Ladestand neben einem mit: DC-Teil nur aus dem Tag mit Ladestand.
+  const mixed = summarizeStorageRows([
+    okDay(),
+    okDay({ day: '2026-11-02', soc_delta_pct: null, soc_intervals: 0, charge_all_wh: 0, discharge_all_wh: 0 })
+  ], cap10);
+  assert.equal(mixed.status, 'ok');
+  close(mixed.dcEta, 0.97, 'η Akku DC nur Tag 1', 1e-9);
   // Entladen 9 990 von 10 000 Wh (99,9 %): Last aus der Akku-Leistung abgeleitet.
   assert.equal(summarizeStorageRows([okDay({ ac_out_wh: 9990 })], cap10).status, 'not_measurable');
   // Entladen 40 %: Vorzeichen/Bedeutung falsch.
@@ -233,11 +241,11 @@ test('SQL: Laden aus dem Netz, DC-PV, Entladen (auch neben PV), Ruhe und Lücken
     // Ladestand steigt im Fenster A von 40 auf 47 %.
     await seedWindow(client, '2026-10-20T00:00:00Z', { ...base, battery_power_w: 4600, load_power_w: 400, grid_import_w: 5400, battery_soc_pct: (sec) => 40 + (7 * sec) / 600 });
     // B DC-PV lädt: PV 5000, Akku +3000, Last 1000, Einspeisung 850 → Wandler gibt 1850 W AC ab.
-    await seedWindow(client, '2026-10-20T01:00:00Z', { ...base, battery_power_w: 3000, pv_dc_w: 5000, load_power_w: 1000, grid_export_w: 850 });
+    await seedWindow(client, '2026-10-20T01:00:00Z', { ...base, battery_power_w: 3000, pv_dc_w: 5000, load_power_w: 1000, grid_export_w: 850, battery_soc_pct: 47 });
     // C Entladen: Akku −2000, Last 1840 → 1840 W AC aus dem Akku.
-    await seedWindow(client, '2026-10-20T02:00:00Z', { ...base, battery_power_w: -2000, load_power_w: 1840 });
+    await seedWindow(client, '2026-10-20T02:00:00Z', { ...base, battery_power_w: -2000, load_power_w: 1840, battery_soc_pct: 47 });
     // D Entladen neben PV: Akku −1000, PV 1000, Last 1800 → Akku-Anteil 1000/2000 von 1800 = 900 W.
-    await seedWindow(client, '2026-10-20T03:00:00Z', { ...base, battery_power_w: -1000, pv_dc_w: 1000, load_power_w: 1800 });
+    await seedWindow(client, '2026-10-20T03:00:00Z', { ...base, battery_power_w: -1000, pv_dc_w: 1000, load_power_w: 1800, battery_soc_pct: 47 });
     // E Ruhe: Akku +50 W (unter 100 W), Wandler-Leerlauf aus dem Netz (Bezug 430, Last 300).
     await seedWindow(client, '2026-10-20T04:00:00Z', { ...base, battery_power_w: 50, load_power_w: 300, grid_import_w: 430, battery_soc_pct: 47 });
     // F Lücken: alle 120 s (> 90 s) — zählt gar nicht.
@@ -259,10 +267,9 @@ test('SQL: Laden aus dem Netz, DC-PV, Entladen (auch neben PV), Ruhe und Lücken
     // Alle Proben, auch unter 100 W: zusätzlich E mit 50 W Laden.
     close(r.charge_all_wh, (4600 + 3000 + 50) / 6, 'geladen (alle Proben)');
     close(r.discharge_all_wh, (2000 + 1000) / 6, 'entladen (alle Proben)');
-    // ΔSoC nur über die gezählten Abstände: +7 % in A; der Sprung 47 → 47 über die Lücke
-    // zu E zählt nicht, ebenso wenig der Vortag mit 90 %.
+    // ΔSoC nur über die gezählten Abstände: +7 % in A, B–E bleiben bei 47 %; der Vortag mit 90 % zählt nicht.
     close(r.soc_delta_pct, 7, 'ΔSoC', 1e-9);
-    assert.equal(Number(r.soc_intervals), 240);
+    assert.equal(Number(r.soc_intervals), 600);
     // Zehn solche Tage (über der Mindestmenge von 1 kWh je Richtung):
     // η Laden = 7600 ÷ (3000 + 5000) = 0,95; η Entladen = 2740 ÷ 3000 = 0,91333; Lader 4600 ÷ 5000 = 0,92;
     // η Akku DC je Tag = 500 Wh ÷ (1275 Wh − 7 % × 10 kWh = 700 Wh) = 0,86957 (nur Testzahlen).
@@ -292,12 +299,16 @@ for (const metaType of ['text', 'jsonb']) test(`SQL (Codex 34516a12, meta_json $
     await seedWindow(client, '2026-10-20T00:15:10Z', { ...base, battery_power_w: 0, load_power_w: 300, grid_import_w: 300, pv_total_w: 0, battery_soc_pct: 50 }, { durationS: 5, metaType });
     // Lücken über 90 s mit Ladestand-Sprüngen.
     await seedWindow(client, '2026-10-20T02:00:00Z', { ...base, battery_power_w: 0, load_power_w: 300, grid_import_w: 300, battery_soc_pct: (sec) => 30 + sec / 60 }, { durationS: 600, stepS: 120, metaType });
+    // Ladestand fehlt zeitweise (Codex 700aef31): −1000 W, Last 920 W. Zählt für die Wandlung,
+    // nicht für den Akku-Wirkungsgrad (DC), weil ΔSoC dafür fehlt.
+    await seedWindow(client, '2026-10-20T03:00:00Z', { ...base, battery_power_w: -1000, load_power_w: 920, pv_total_w: 0 }, { metaType });
     const { rows } = await client.query(STORAGE_EFFICIENCY_SQL, ['2026-10-20', 'Europe/Berlin', STORAGE_SERIES_KEYS, STORAGE_MIN_BATTERY_W, STORAGE_MAX_GAP_SECONDS]);
     const r = rows[0];
-    close(r.discharge_dc_wh, 2000 / 6, 'entladen nur das frische Fenster');
-    close(r.ac_out_wh, 1840 / 6, 'AC raus ohne AC-PV der zweiten Position');
-    // 600 s frisch + der zweite Abstand nach dem Fehler (5 s, beide Proben frisch).
-    close(r.seconds, 605, 'Sekunden');
+    close(r.discharge_dc_wh, (2000 + 1000) / 6, 'entladen: frisches Fenster + Fenster ohne Ladestand');
+    close(r.ac_out_wh, (1840 + 920) / 6, 'AC raus ohne AC-PV der zweiten Position');
+    close(r.discharge_all_wh, 2000 / 6, 'DC-Teil nur mit Ladestand an beiden Enden');
+    // 600 s frisch + der zweite Abstand nach dem Fehler (5 s) + 600 s ohne Ladestand.
+    close(r.seconds, 1205, 'Sekunden');
     close(r.soc_delta_pct, -2, 'ΔSoC nur im frischen Fenster', 1e-9);
   } finally {
     await client.end();

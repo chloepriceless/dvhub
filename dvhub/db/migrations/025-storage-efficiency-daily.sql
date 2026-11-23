@@ -14,8 +14,8 @@
 --   ac_in_wh           AC-Eingang des Laders dafür
 --   discharge_dc_wh    Akku entladen (DC am Akku)
 --   ac_out_wh          AC-Abgabe des Wandlers aus dem Akku (anteilig neben DC-PV)
---   charge_all_wh      Akku geladen, alle Proben (für den Akku-Wirkungsgrad DC)
---   discharge_all_wh   Akku entladen, alle Proben
+--   charge_all_wh      Akku geladen, alle Abstände mit Ladestand an beiden Enden
+--   discharge_all_wh   Akku entladen, ebenso (für den Akku-Wirkungsgrad DC)
 --   converter_loss_wh  Wandlerverlust gesamt über alle Proben (mit Leerlauf und PV-Wandlung)
 --   soc_delta_pct      Ladestand-Änderung über genau die gezählten Abstände (ΔSoC
 --   soc_intervals      ohne die VRM-gemischten 15-min-Werte; Kapazität rechnet die History)

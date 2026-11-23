@@ -29,7 +29,9 @@
 // Gezählt werden nur lückenlose Abstände (≤ 90 s) zwischen zwei frischen Proben
 // (veraltete Proben nach einem Lesefehler tragen meta_json.stale); ΔSoC ist die
 // Summe der Ladestand-Änderungen über GENAU diese Abstände (Codex 34516a12) —
-// eine Lücke verschiebt so weder Energie noch Ladestand.
+// eine Lücke verschiebt so weder Energie noch Ladestand. Der Akku-Wirkungsgrad
+// (DC) nimmt nur Abstände mit Ladestand an beiden Enden (charge_all/discharge_all,
+// Codex 700aef31): fehlt der Ladestand zeitweise, fehlen Energie und ΔSoC gleich.
 // Alles aus denselben Rohwerten: die 15-min-Werte der Karte können für ältere
 // Viertelstunden aus dem VRM-Import stammen (energy-source-rule.js), dessen
 // Akku-Mengen nicht DC am Akku sind — das würde den Speicherweg verfälschen.
@@ -94,8 +96,8 @@ SELECT coalesce(sum(ch_used * dt), 0) / 3600.0 AS charge_dc_wh,
        coalesce(sum(ac_in * dt), 0) / 3600.0 AS ac_in_wh,
        coalesce(sum(dis_used * dt), 0) / 3600.0 AS discharge_dc_wh,
        coalesce(sum(ac_out * dt), 0) / 3600.0 AS ac_out_wh,
-       coalesce(sum(ch * dt), 0) / 3600.0 AS charge_all_wh,
-       coalesce(sum(dis * dt), 0) / 3600.0 AS discharge_all_wh,
+       coalesce(sum(ch * dt) FILTER (WHERE soc_d IS NOT NULL), 0) / 3600.0 AS charge_all_wh,
+       coalesce(sum(dis * dt) FILTER (WHERE soc_d IS NOT NULL), 0) / 3600.0 AS discharge_all_wh,
        coalesce(sum((pdc + dis - ch - ac) * dt), 0) / 3600.0 AS converter_loss_wh,
        sum(soc_d) AS soc_delta_pct,
        count(soc_d)::int AS soc_intervals,
@@ -252,9 +254,11 @@ export function summarizeStorageRows(rows, { capacityKwhForDay = null } = {}) {
     if (!(num(r.seconds) > 0) || !r.day) continue;
     const day = String(r.day).slice(0, 10);
     days.push(day);
+    // Tage ohne Ladestand tragen zum DC-Teil nichts bei (charge_all/discharge_all = 0).
+    if (!(num(r.soc_intervals) > 0)) continue;
     const socDelta = numOrNull(r.soc_delta_pct);
     const cap = typeof capacityKwhForDay === 'function' ? numOrNull(capacityKwhForDay(day)) : null;
-    if (socDelta == null || !(num(r.soc_intervals) > 0) || !(cap > 0)) deltaKnown = false;
+    if (socDelta == null || !(cap > 0)) deltaKnown = false;
     else deltaKwh += (socDelta / 100) * cap;
   }
   days.sort();
@@ -276,7 +280,7 @@ export function summarizeStorageRows(rows, { capacityKwhForDay = null } = {}) {
     reason = days.length === 0
       ? 'noch keine Messwerte (Tagesjob läuft stündlich)'
       : `zu wenig Lade-/Entlademenge (mindestens je ${STORAGE_MIN_KWH} kWh)`;
-  } else if (storedDeltaKwh == null) {
+  } else if (storedDeltaKwh == null || dcEta == null) {
     status = 'insufficient_data';
     reason = 'Ladestand oder Akku-Kapazität fehlt — ohne sie ist der Akku-Anteil nicht bestimmbar';
   } else if (dischargeEta >= NOT_MEASURABLE_ETA) {
