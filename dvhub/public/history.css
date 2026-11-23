@@ -886,3 +886,12 @@ main.page { min-width: 0; max-width: 100%; }
 main.page > * { min-width: 0; max-width: 100%; }
 
 @media (max-width: 760px) { .chart-mode { flex-wrap: wrap; max-width: 100%; } }
+
+/* Dynamischer Tarif (23.11.2026): Hinweise, Schalter „geschätzte Anbieterpreise“,
+   Formel-Liste. Nur Klassen, keine Inline-Styles (CSP). */
+.tariff-note-row { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.tariff-note-row .dv-hint { margin: 0; }
+.tariff-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); cursor: pointer; }
+.tariff-formula-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.5; }
+.tariff-formula-list li + li { margin-top: 8px; }
+.tariff-formula-list .tariff-muted { color: var(--text-dim); }

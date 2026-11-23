@@ -510,6 +510,9 @@ function serializePricingPeriods(periods = []) {
         vatPct: Number(period.dynamicComponents?.vatPct || 0)
       };
     }
+    // Grundgebühr je Monat (23.11.2026, T5): leer fällt weg (= unbekannt).
+    const fee = period.baseFeeEurMonth;
+    if (fee !== '' && fee != null && Number.isFinite(Number(fee))) next.baseFeeEurMonth = Number(fee);
     // Ohne eigenes Eingabefeld, aber Teil des Zeitraums: unverändert zurückschicken
     // (sonst gingen sie bei jedem Speichern verloren, Audit 2026-10-14).
     for (const key of ['usesParagraph14aModule3', 'module3Windows', 'costs']) {
@@ -1954,6 +1957,10 @@ const HIDDEN_FIELD_PATHS = [
   'userEnergyPricing.fixedGrossImportCtKwh',
   // Vergleichs-Festpreis der Historie (1.0.11): im Preis-Editor unter den Zeiträumen.
   'userEnergyPricing.comparisonFixedCtKwh',
+  // „gilt ab“ und Grundgebühren (23.11.2026): ebenfalls im Preis-Editor.
+  'userEnergyPricing.validFrom',
+  'userEnergyPricing.baseFeeEurMonth',
+  'userEnergyPricing.comparisonFixedBaseFeeEurMonth',
   'userEnergyPricing.dynamicComponents.energyMarkupCtKwh',
   'userEnergyPricing.dynamicComponents.gridChargesCtKwh',
   'userEnergyPricing.dynamicComponents.leviesAndFeesCtKwh',
@@ -3058,6 +3065,28 @@ function renderPricingPeriodsEditor() {
   const stdProviderNote = stdMode !== 'provider' ? '' : `<div class="svc-meta">${providerBasis === 'net_energy'
     ? 'Diese Bestandteile kommen auf den Energiepreis des Anbieters, danach die MwSt.'
     : 'Nur für die Schätzung, solange der Anbieter für einen Zeitraum noch keinen Preis geliefert hat. Nach ein paar Tagen schätzt DVhub aus den echten Anbieterpreisen.'}</div>`;
+  // Grundgebühr (alle Modi) und „gilt ab“ (nur dynamisch/Anbieter) — 23.11.2026, T1/T5.
+  const stdFeeHtml = `
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.baseFeeEurMonth', 'Grundgebühr (€/Monat)')}</span>
+        <input class="config-input sa-w-num" data-std-path="baseFeeEurMonth" type="number" step="0.01" min="0" placeholder="unbekannt" value="${escapeHtml(uep.baseFeeEurMonth ?? '')}" />
+      </div>
+    </div>
+  `;
+  const stdValidFromHtml = stdMode === 'fixed' ? '' : `
+    <div class="config-row-grid">
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.validFrom', 'Standard-Tarif gilt ab')}</span>
+        <input class="config-input sa-w-date" data-std-path="validFrom" data-std-type="text" type="date" value="${escapeHtml(uep.validFrom || '')}" />
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.fixedGrossImportCtKwh', 'Fester Bruttopreis davor (ct/kWh)')}</span>
+        <input class="config-input sa-w-num" data-std-path="fixedGrossImportCtKwh" type="number" step="0.01" value="${escapeHtml(uep.fixedGrossImportCtKwh ?? '')}" />
+      </div>
+    </div>
+    <div class="svc-meta">Ein dynamischer Tarif zählt erst ab diesem Tag. Davor rechnet DVhub an Tagen ohne eigenen Zeitraum mit dem festen Bruttopreis davor, nie rückwirkend dynamisch. Leer = automatisch: ab dem ersten gespeicherten Anbieterpreis bzw. ab dem Tag nach dem letzten Festpreis-Zeitraum (die Historie nennt das Datum).</div>
+  `;
   const stdFieldsHtml = stdMode === 'fixed' ? `
     <div class="config-row-grid">
       <div class="config-row">
@@ -3152,6 +3181,8 @@ function renderPricingPeriodsEditor() {
     </div>
     ${stdProviderNote}
     ${stdFieldsHtml}
+    ${stdValidFromHtml}
+    ${stdFeeHtml}
     ${providerInUse ? tariffProviderBlockHtml(uep) : ''}
     ${m3Html}
     <div class="sa-divider-top"></div>
@@ -3219,16 +3250,26 @@ function renderPricingPeriodsEditor() {
             </div>
           </div>
         `}
+        <div class="config-row-grid">
+          <div class="config-row">
+            <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.baseFeeEurMonth', 'Grundgebühr (€/Monat)')}</span>
+            <input class="config-input sa-w-num" data-period-id="${escapeHtml(period.id)}" data-period-path="baseFeeEurMonth" type="number" step="0.01" min="0" placeholder="unbekannt" value="${escapeHtml(period.baseFeeEurMonth ?? '')}" />
+          </div>
+        </div>
         <div class="sa-pad-tight"><button class="btn btn-danger btn-small" type="button" data-remove-period="${escapeHtml(period.id)}">Entfernen</button></div>
       </div>
     `).join('')}
     <div class="sa-divider-top"></div>
     <div class="config-group-kicker" data-accent="yellow">Vergleich mit Festpreis (Historie)</div>
-    <div class="svc-meta">Die Historie zeigt, was der Netzbezug im dynamischen Tarif mit diesem Festpreis gekostet hätte (nur Arbeitspreis, ohne Grundgebühr). Leer = automatisch: Festpreis des letzten Festpreis-Zeitraums vor dem dynamischen Tarif, sonst der feste Bruttopreis des Standard-Tarifs.</div>
+    <div class="svc-meta">Die Historie zeigt, was der Netzbezug im dynamischen Tarif mit diesem Festpreis gekostet hätte – mit denselben Mengen, einmal nur Arbeitspreis und einmal mit Grundgebühr. Leer = automatisch: Festpreis (und Grundgebühr) des letzten Festpreis-Zeitraums vor dem dynamischen Tarif, sonst der feste Bruttopreis des Standard-Tarifs.</div>
     <div class="config-row-grid">
       <div class="config-row">
         <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.comparisonFixedCtKwh', 'Vergleichs-Festpreis (ct/kWh)')}</span>
         <input class="config-input sa-w-num" data-std-path="comparisonFixedCtKwh" type="number" step="0.01" min="0" placeholder="automatisch" value="${escapeHtml(uep.comparisonFixedCtKwh ?? '')}" />
+      </div>
+      <div class="config-row">
+        <span class="config-row-label">${fieldLabelHtml('userEnergyPricing.comparisonFixedBaseFeeEurMonth', 'Vergleichs-Grundgebühr (€/Monat)')}</span>
+        <input class="config-input sa-w-num" data-std-path="comparisonFixedBaseFeeEurMonth" type="number" step="0.01" min="0" placeholder="automatisch" value="${escapeHtml(uep.comparisonFixedBaseFeeEurMonth ?? '')}" />
       </div>
     </div>
   `;

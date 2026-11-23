@@ -24,7 +24,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/history.css?v=20261113-arbeitspreis" />
+  <link rel="stylesheet" href="/history.css?v=20261123-dyntarif" />
   <link rel="stylesheet" href="/history-viz.css?v=20260701-cachefmt" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
@@ -270,7 +270,7 @@
         <div class="card-head">
           <div>
             <span class="card-title"><span class="dot dot-cyan"></span>Arbeitspreis</span>
-            <p class="card-sub">Nur Arbeitspreis (brutto), ohne Grundgeb&uuml;hr</p>
+            <p class="card-sub">Arbeitspreis brutto; Grundgeb&uuml;hr getrennt</p>
           </div>
         </div>
         <div class="dv-grid tariff-grid">
@@ -298,10 +298,99 @@
             <p id="historyTariffSource" class="dv-hint" hidden></p>
           </div>
         </div>
+        <!-- Dynamischer Tarif (23.11.2026): Börse, Aufschlag, Grundgebühr,
+             geschätzte Anbieterpreise, Formel, Monatsvergleich, Streudiagramm.
+             Zahlen aus kpis.tariff / tariffMonthRows / /api/history/tariff-scatter. -->
+        <div id="historyTariffExtras" class="dv-grid tariff-grid" hidden>
+          <div class="dv-section">
+            <div class="dv-label">Börse und Aufschlag</div>
+            <div class="calc-row-line" title="Börsenpreis, gewichtet mit dem Netzbezug je Viertelstunde."><span>&Oslash; B&ouml;rse (mengengewichtet)</span><strong id="historyTariffSpotAvg">-</strong></div>
+            <div class="calc-row-line" title="Ø Bezugspreis minus Ø Börse, beide mengengewichtet (brutto)."><span>&Oslash; Aufschlag</span><strong id="historyTariffMarkup">-</strong></div>
+            <div class="calc-row-line"><span>Netz f&uuml;rs Haus / in den Akku</span><strong id="historyTariffHouseBatt">-</strong></div>
+          </div>
+          <div class="dv-section">
+            <div class="dv-label">Grundgeb&uuml;hr und Monatskosten</div>
+            <div class="calc-row-line"><span>Grundgeb&uuml;hr im Zeitraum</span><strong id="historyTariffFee">-</strong></div>
+            <div class="calc-row-line" title="Bezug zum Arbeitspreis plus Grundgebühr, alle Tarife."><span>Energiekosten mit Grundgeb&uuml;hr</span><strong id="historyTariffCostWithFee">-</strong></div>
+            <div class="calc-row-line"><span>davon dynamisch mit Grundgeb&uuml;hr</span><strong id="historyTariffDynCostWithFee">-</strong></div>
+            <p class="dv-hint">Der &Oslash; Arbeitspreis oben bleibt ohne Grundgeb&uuml;hr.</p>
+          </div>
+          <div class="dv-section">
+            <div class="dv-label">Vergleich mit Grundgeb&uuml;hr</div>
+            <div class="calc-row-line"><span>Festpreis-Tarif inkl. Grundgeb&uuml;hr</span><strong id="historyTariffCompareFee">-</strong></div>
+            <p class="dv-hint">Gleiche Mengen wie bezogen. Mit Festpreis h&auml;ttest du zu anderen Zeiten verbraucht und nicht aus dem Netz in den Akku geladen.</p>
+          </div>
+        </div>
+        <div id="historyTariffEstimatedRow" class="tariff-note-row" hidden>
+          <p id="historyTariffEstimated" class="dv-hint"></p>
+          <label class="tariff-switch"><input id="historyTariffEstimatedToggle" type="checkbox" checked /> gesch&auml;tzte Anbieterpreise mitz&auml;hlen</label>
+        </div>
+        <p id="historyTariffValidFrom" class="dv-hint tariff-note-row" hidden></p>
+        <div id="historyTariffFormulaWrap" class="dv-price-chart" hidden>
+          <div class="dv-price-chart-head"><div class="dv-label">Formel aus den Daten: Endpreis &asymp; fester Anteil + Faktor &times; B&ouml;rse</div></div>
+          <ul id="historyTariffFormula" class="tariff-formula-list"></ul>
+        </div>
+        <div id="historyTariffMonthWrap" class="dv-price-chart" hidden>
+          <div class="dv-price-chart-head">
+            <div class="dv-label">Monate im Vergleich</div>
+            <div class="chart-mode" role="group" aria-label="Monatsvergleich">
+              <button id="historyTariffMonthQtyBtn" type="button" class="is-active">Menge</button>
+              <button id="historyTariffMonthCostBtn" type="button">Kosten</button>
+              <button id="historyTariffMonthPriceBtn" type="button">&Oslash;-Preis</button>
+            </div>
+          </div>
+          <div id="historyTariffMonthChart" class="history-chart-mount"></div>
+        </div>
+        <div id="historyTariffScatterWrap" class="dv-price-chart" hidden>
+          <div class="dv-price-chart-head"><div class="dv-label">Endpreis gegen B&ouml;rse</div></div>
+          <div id="historyTariffScatterChart" class="history-chart-mount"></div>
+          <p id="historyTariffScatterLegend" class="dv-hint"></p>
+        </div>
         <div id="historyTariffTableWrap" class="dv-price-chart" hidden>
           <div class="dv-price-chart-head"><div id="historyTariffTableLabel" class="dv-label">Monate</div></div>
           <div id="historyTariffTable" class="dv-price-table tariff-table"></div>
         </div>
+      </section>
+
+      <!-- Eigenverbrauch bewertet (23.11.2026, T4/T7): zusätzlich zum Schalter
+           „Marktwert“. Je Viertelstunde: Bezug zum Endpreis des Slots,
+           Einspeisung zur Börse, Marktprämie getrennt. Zahlen aus kpis.tariff.selfUse. -->
+      <section id="historySelfUseCard" class="card chart-panel" hidden>
+        <div class="card-head">
+          <div>
+            <span class="card-title"><span class="dot dot-green"></span>Eigenverbrauch bewertet</span>
+            <p class="card-sub">Bezug zum Endpreis der Viertelstunde, Einspeisung zur B&ouml;rse, Marktpr&auml;mie getrennt</p>
+          </div>
+        </div>
+        <div class="dv-grid tariff-grid">
+          <div class="dv-section">
+            <div class="dv-label">Effektiver Strompreis</div>
+            <div id="historySelfUsePeff" class="dv-value">-</div>
+            <p class="dv-hint">So viel hat jede kWh Hausverbrauch gekostet, einschlie&szlig;lich der entgangenen Einspeisung.</p>
+            <div class="calc-row-line"><span>Hausverbrauch (bewertet)</span><strong id="historySelfUseLoad">-</strong></div>
+            <div class="calc-row-line" title="Nur Netzkosten ÷ Hausverbrauch: PV zählt dann als gratis."><span>ohne entgangene Einspeisung</span><strong id="historySelfUsePeffNoOpp">-</strong></div>
+            <div class="calc-row-line" title="Wenn der ganze Hausverbrauch aus dem Netz gekommen wäre."><span>alles aus dem Netz</span><strong id="historySelfUseLoadAvg">-</strong></div>
+            <div class="calc-row-line"><span>Vorteil Eigenverbrauch</span><strong id="historySelfUseAdvantage">-</strong></div>
+          </div>
+          <div class="dv-section">
+            <div class="dv-label">PV direkt ins Haus</div>
+            <div id="historySelfUsePvGain" class="dv-value">-</div>
+            <div class="calc-row-line"><span>Menge</span><strong id="historySelfUsePvKwh">-</strong></div>
+            <div class="calc-row-line" title="Endpreis minus Börse je kWh, gewichtet."><span>&Oslash; Vorteil je kWh</span><strong id="historySelfUsePvRate">-</strong></div>
+            <div class="calc-row-line"><span>Marktpr&auml;mie (getrennt)</span><strong id="historySelfUsePremium">-</strong></div>
+            <p class="dv-hint">Beim dynamischen Tarif steckt die B&ouml;rse schon im Bezugspreis. Der Vorteil ist dann vor allem Netzentgelt, Umlagen, Steuer und Aufschlag.</p>
+          </div>
+          <div class="dv-section">
+            <div class="dv-label">Akku-Ergebnis</div>
+            <div id="historySelfUseBattResult" class="dv-value">-</div>
+            <div class="calc-row-line"><span>geladen</span><strong id="historySelfUseBattIn">-</strong></div>
+            <div class="calc-row-line"><span>entladen</span><strong id="historySelfUseBattOut">-</strong></div>
+            <div class="calc-row-line" title="Einstandspreis je entladene kWh → Nutzwert je entladene kWh. Die Lade-/Entladeverluste stecken im Einstandspreis."><span>Einstand &rarr; Nutzwert</span><strong id="historySelfUseBattPrices">-</strong></div>
+            <div class="calc-row-line"><span>Wirkungsgrad</span><strong id="historySelfUseBattEta">-</strong></div>
+            <p id="historySelfUseSoc" class="dv-hint" hidden></p>
+          </div>
+        </div>
+        <p id="historySelfUseSkipped" class="dv-hint tariff-note-row" hidden></p>
       </section>
 
       <!-- MiSpeL (2026-10-18): nur sichtbar, wenn unter Einstellungen → Netz eine Option gewählt ist -->
@@ -744,7 +833,7 @@
   <script src="/build-watch.js?v=20261111-t0423"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20261123-arbeitspreis"></script>
+  <script src="/history.js?v=20261123-dyntarif"></script>
   <script src="/history-viz.js?v=20261021-akku2"></script>
 </body>
 </html>

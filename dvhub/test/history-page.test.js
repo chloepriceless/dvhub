@@ -648,3 +648,140 @@ test('Arbeitspreis-Karte: Tarifwechsel-Hinweis hängt an den Viertelstunden, Bez
     rows: [], meta: { unresolved: { slotCount: 2976 } } });
   assert.equal(elements.get('historyTariffDynHint').hidden, true);
 });
+
+// ── Dynamischer Tarif (Christin 23.11.2026) ─────────────────────────────────
+// Werte wie aus history-tariff.js (kpis.tariff); die Seite zeigt sie nur an.
+function dynTariff(extra = {}) {
+  return {
+    excludeEstimated: false, variableSlots: 1628, unpricedSlots: 0, pricedSlots: 1628,
+    estimatedSlots: 96, estimatedImportKwh: 8, estimatedSharePct: 10,
+    importKwh: 80, importCostEur: 20.4, avgImportCtKwh: 25.5, avgSlotCtKwh: 29.25,
+    avgSpotWeightedCtKwh: 6.1, avgMarkupCtKwh: 19.4,
+    house: { importKwh: 60, avgCtKwh: 27 }, battery: { importKwh: 20, avgCtKwh: 21 },
+    fixedCompare: { slots: 1628, importKwh: 80, ctKwh: 30, actualEur: 20.4, fixedEur: 24, savingsEur: 3.6 },
+    baseFee: { eur: 21.52, days: 31, missingDays: 0, variableEur: 17, variableDays: 17, variableMissingDays: 0 },
+    variableCostWithFeeEur: 37.4, allImportKwh: 120, allImportCostEur: 32.4, allCostWithFeeEur: 53.92,
+    fixedCompareWithFee: { days: 17, feeFixedEur: 5.48, feeActualEur: 17, fixedEur: 29.48, actualEur: 37.4, savingsEur: -7.92 },
+    compareFeeMissingDays: 0,
+    validFrom: { date: '2026-03-15', source: 'fixed_period' },
+    fits: [{
+      key: 'base|std', tariffKey: 'base', tariffLabel: 'Standard-Tarif', mode: 'dynamic', windowId: null, windowLabel: null,
+      vatPct: 19, n: 1600, importKwh: 78, avgMarkupCtKwh: 15.4, markupMinCtKwh: 14.28, markupMaxCtKwh: 19.98,
+      fit: { gross: { interceptCtKwh: 14.28, slope: 1.19 }, net: { interceptCtKwh: 12, slope: 1 }, markupPctGross: 19, markupPctNet: 0, r2: 1 },
+      atP10: { spotCtKwh: 1, markupCtKwh: 14.47 }, atP90: { spotCtKwh: 29, markupCtKwh: 19.79 },
+      negative: { n: 28, importKwh: 2, avgMarkupCtKwh: 13.1, markupMinCtKwh: 12, markupMaxCtKwh: 14, fit: null }
+    }],
+    overallFit: null, spotP10CtKwh: 1, spotP90CtKwh: 29,
+    selfUse: {
+      exportValueBasis: 'spot', slots: 2976, skippedNoPriceSlots: 0, skippedNoFlowSlots: 4,
+      loadKwh: 300, loadCostAtPriceEur: 81, loadAvgCtKwh: 27, gridImportKwh: 120, gridCostEur: 32.4,
+      pvDirectKwh: 150, pvDirectGainEur: 30, pvDirectGainCtKwh: 20,
+      battery: { chargedPvKwh: 40, chargedGridKwh: 20, dischargedHouseKwh: 50, dischargedGridKwh: 4, chargeCostEur: 6.2,
+        dischargeValueEur: 14.1, inCtKwh: 11.48, outCtKwh: 26.11, etaPct: 90, storedDeltaKwh: 0, socCorrectionEur: 0, resultEur: 7.9 },
+      exportKwh: 30, exportValueEur: 1.8, advantageEur: 37.9, peffCtKwh: 14.37, peffWithoutOpportunityCtKwh: 10.8
+    },
+    ...extra
+  };
+}
+
+test('Dynamischer Tarif: Börse, Aufschlag, Grundgebühr, Vergleich mit Gebühr, geschätzte Preise, Formel', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({ view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: dynTariff(), marketPremiumEur: 4.2 }), rows: [], meta: {} });
+  assert.equal(elements.get('historyTariffExtras').hidden, false);
+  // kpis.tariff hat Vorrang vor den Feldern aus feat/arbeitspreis-vergleich (Schalter T3).
+  assert.match(elements.get('historyTariffDynAvg').textContent, /25,50 ct\/kWh/);
+  assert.match(elements.get('historyTariffSavings').textContent, /3,60 € gespart/);
+  assert.match(elements.get('historyTariffSpotAvg').textContent, /6,10 ct\/kWh/);
+  assert.match(elements.get('historyTariffMarkup').textContent, /19,40 ct\/kWh/);
+  assert.match(elements.get('historyTariffHouseBatt').textContent, /Haus 27,00 ct\/kWh · Akku 21,00 ct\/kWh/);
+  assert.match(elements.get('historyTariffFee').textContent, /21,52 € \(31 Tage\)/);
+  assert.match(elements.get('historyTariffCostWithFee').textContent, /53,92 €/);
+  assert.match(elements.get('historyTariffDynCostWithFee').textContent, /37,40 €/);
+  assert.match(elements.get('historyTariffCompareFee').textContent, /7,92 € mehr bezahlt \(Festpreis 29,48 € gegen 37,40 €\)/);
+  assert.equal(elements.get('historyTariffEstimatedRow').hidden, false);
+  assert.match(elements.get('historyTariffEstimated').textContent, /96 Viertelstunden mit geschätztem Anbieterpreis \(8,00 kWh, 10,0 % des Bezugs\) – mitgezählt/);
+  assert.equal(elements.get('historyTariffEstimatedToggle').checked, true);
+  assert.match(elements.get('historyTariffValidFrom').textContent, /zählt ab 15\.03\.2026: Tag nach dem letzten Festpreis-Zeitraum/);
+  const formula = elements.get('historyTariffFormula').innerHTML;
+  assert.match(formula, /Endpreis ≈ 14,28 ct\/kWh \+ 1,190 × Börse/);
+  assert.match(formula, /\+19,0 % auf die Börse \(ohne MwSt \+0,0 %\)/);
+  assert.match(formula, /bei Börse 1,00 ct\/kWh: \+14,47 ct\/kWh · bei 29,00 ct\/kWh: \+19,79 ct\/kWh/);
+  assert.match(formula, /Negative Börse: 28 Viertelstunden/);
+  assert.equal(elements.get('historyTariffFormulaWrap').hidden, false);
+  assert.equal(elements.get('historyTariffMonthWrap').hidden, true, 'Monat ohne Monatsvergleich');
+});
+
+test('Dynamischer Tarif: ohne geschätzte gezählt, fehlende Vergleichs-Grundgebühr wird benannt', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({
+    view: 'month', date: '2026-03-10',
+    kpis: tariffKpis({ tariff: dynTariff({ excludeEstimated: true, fixedCompareWithFee: null, compareFeeMissingDays: 17 }) }),
+    rows: [], meta: {}
+  });
+  assert.match(elements.get('historyTariffEstimated').textContent, /– nicht mitgezählt/);
+  assert.equal(elements.get('historyTariffEstimatedToggle').checked, false);
+  assert.match(elements.get('historyTariffCompareFee').textContent, /Grundgebühr des Festpreis-Tarifs fehlt/);
+});
+
+test('Dynamischer Tarif: „gilt ab“-Hinweis je Quelle', () => {
+  const { helpers } = loadHistoryPageHelpers();
+  assert.match(helpers.tariffValidFromText({ date: '2026-11-01', source: 'provider_data' }), /ab 01\.11\.2026: erster gespeicherter Anbieterpreis/);
+  assert.match(helpers.tariffValidFromText({ date: '2026-03-20', source: 'configured' }), /ab 20\.03\.2026 \(Einstellung „gilt ab“\)/);
+  assert.match(helpers.tariffValidFromText({ date: null, source: 'none' }), /ganze Historie/);
+  assert.equal(helpers.tariffValidFromText({ date: null, source: null }), '');
+});
+
+test('Eigenverbrauch bewertet: zusätzlich zum Schalter „Marktwert“, Marktprämie getrennt', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  helpers.renderSummary({ view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: dynTariff(), marketPremiumEur: 4.2 }), rows: [], meta: {} });
+  assert.equal(elements.get('historySelfUseCard').hidden, false);
+  assert.match(elements.get('historySelfUsePeff').textContent, /14,37 ct\/kWh/);
+  assert.match(elements.get('historySelfUsePeffNoOpp').textContent, /10,80 ct\/kWh/);
+  assert.match(elements.get('historySelfUsePvGain').textContent, /30,00 €/);
+  assert.match(elements.get('historySelfUseBattResult').textContent, /7,90 €/);
+  assert.match(elements.get('historySelfUseBattPrices').textContent, /11,48 ct\/kWh → 26,11 ct\/kWh/);
+  assert.match(elements.get('historySelfUseBattEta').textContent, /90,0 %/);
+  assert.match(elements.get('historySelfUsePremium').textContent, /4,20 €/);
+  assert.match(elements.get('historySelfUseSkipped').textContent, /4 Viertelstunden ohne Flussdaten/);
+  // T7: der Schalter „Marktwert“ bleibt.
+  assert.match(readPublic('history.html'), /id="historyMarketToggle"/);
+  // Tag: Karte aus.
+  helpers.renderSummary({ view: 'day', date: '2026-03-10', kpis: tariffKpis({ tariff: dynTariff() }), rows: [], meta: {} });
+  assert.equal(elements.get('historySelfUseCard').hidden, true);
+});
+
+test('Monate im Vergleich: Jahr mit Monatszeilen zeigt den Chart, Festtarif-Monate grau', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const fixedMonth = { key: '2026-02', variableSlots: 0, allImportKwh: 50, allImportCostEur: 15, importKwh: 0 };
+  const dynMonth = { key: '2026-03', ...dynTariff() };
+  helpers.renderSummary({ view: 'year', date: '2026-03-10', kpis: tariffKpis({ tariff: dynTariff() }), rows: [], tariffMonthRows: [fixedMonth, dynMonth], meta: {} });
+  assert.equal(elements.get('historyTariffMonthWrap').hidden, false);
+  assert.match(elements.get('historyTariffMonthChart').innerHTML, /historyTariffMonthChartCanvas/);
+  assert.equal(helpers.historyState.tariffMonthMode, 'qty');
+});
+
+test('Streudiagramm: Punkte (Woche/Monat) oder Klassen mit Spanne (Jahr/Alle), Formel-Linie und y = x', () => {
+  const { helpers } = loadHistoryPageHelpers();
+  const fits = [{ tariffLabel: 'Standard-Tarif', windowLabel: null, fit: { gross: { interceptCtKwh: 14.28, slope: 1.19 } } }];
+  const withPoints = helpers.tariffScatterDatasets({ points: [[0, 14.28, 1, 0], [10, 26.18, 0.1, 0], [-5, 8.33, 0.5, 0], [3, 20, 0.2, 1]], fits });
+  const labels = withPoints.map((d) => d.label);
+  assert.deepEqual(plain(labels), ['Viertelstunden', 'Börse negativ', 'geschätzt', 'Formel Standard-Tarif', 'ohne Aufschlag (Endpreis = Börse)']);
+  // Formel-Linie nur über Börse ≥ 0: von 0 bis zum größten x (10).
+  assert.deepEqual(plain(withPoints[3].data.map((p) => p.x)), [0, 10]);
+  close(withPoints[3].data[1].y, 26.18);
+  const withBins = helpers.tariffScatterDatasets({ points: null, bins: [
+    { avgSpotCt: 3.5, avgCt: 22, minCt: 20, maxCt: 24, n: 2, importKwh: 4 },
+    { avgSpotCt: 12.2, avgCt: 30, minCt: 30, maxCt: 30, n: 1, importKwh: 1 }
+  ], fits: [] });
+  assert.deepEqual(plain(withBins.map((d) => d.label)), ['Ø je 1 ct Börse', 'Spanne je Klasse', 'ohne Aufschlag (Endpreis = Börse)']);
+  // Strich nur bei echter Spanne: (3,5 | 20) bis (3,5 | 24), dann Lücke.
+  assert.deepEqual(plain(withBins[1].data), [{ x: 3.5, y: 20 }, { x: 3.5, y: 24 }, { x: null, y: null }]);
+  assert.deepEqual(plain(helpers.tariffScatterDatasets({ points: [], bins: [] })), []);
+});
+
+// Werte aus dem vm-Kontext haben eigene Prototypen.
+function plain(value) { return JSON.parse(JSON.stringify(value)); }
+
+function close(actual, expected, eps = 0.001) {
+  assert.ok(Math.abs(actual - expected) <= eps, `${actual} statt ${expected}`);
+}
