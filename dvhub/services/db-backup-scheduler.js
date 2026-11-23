@@ -219,7 +219,12 @@ export function createDbBackupScheduler({
       const now = nowFn();
       const due = backupDueDay(getCfg(), now, lastRunDay);
       if (due) { lastRunDay = due; runScheduled(due).catch(() => {}); return; }
-      if (deferredDay && deferredDay === lastRunDay && !running) runScheduled(deferredDay).catch(() => {});
+      if (deferredDay) {
+        // Nur heute und nur, solange der Zeitplan noch eingeschaltet ist (Codex 20cce4b0).
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        if (deferredDay !== today || !getCfg()?.dbBackup?.enabled) deferredDay = null;
+        else if (deferredDay === lastRunDay && !running) runScheduled(deferredDay).catch(() => {});
+      }
     } catch (err) {
       if (pushLog) pushLog('db_backup_tick_error', { error: err.message });
     }

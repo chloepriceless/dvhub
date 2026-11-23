@@ -277,3 +277,27 @@ test('Geplantes Backup kurz nach dem Start: verschoben und nachgeholt, sobald ge
     assert.equal(dumps.length, 1, 'nachgeholt');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Codex 20cce4b0: verschobenes Backup verfällt mit dem Tageswechsel und beim Abschalten.
+test('Verschobenes Backup: nicht am nächsten Tag und nicht nach dem Abschalten', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-bdef2-'));
+  for (const variant of ['nextDay', 'disabled']) {
+    let measured = false; let enabled = true; let t = new Date(2026, 10, 24, 3, 0, 5);
+    const dumps = [];
+    const sched = createSched({
+      getCfg: () => ({ telemetry: { database: { name: 'dvhub' } }, dbBackup: { enabled, destinationDir: dir, retentionCount: 14, time: '03:00', scope: 'energy15m' } }),
+      pushLog: () => {}, nowFn: () => t,
+      spawnFn: (cmd, args) => { dumps.push(args); const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stderr = new EventEmitter(); setImmediate(() => c.emit('close', 0)); return c; },
+      getStorage: async () => (measured ? { dbMb: 1, mounts: [] } : null),
+      statfs: () => ({ bavail: 100000, bsize: 1048576 }),
+    });
+    sched._tick();
+    await new Promise((r) => setTimeout(r, 20));
+    measured = true;
+    if (variant === 'nextDay') t = new Date(2026, 10, 25, 2, 59, 0); else { enabled = false; t = new Date(2026, 10, 24, 3, 10, 0); }
+    sched._tick();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(dumps.length, 0, variant);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});

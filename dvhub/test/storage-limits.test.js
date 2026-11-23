@@ -92,3 +92,16 @@ test('frühere eigene dvhub.conf wird entfernt, auch beim Wechsel auf „groß�
     assert.deepEqual(s.calls(), ['systemctl restart systemd-journald']);
   } finally { s.cleanup(); }
 });
+
+test('alte eigene dvhub.conf weg, neue Datei gehört dem Betreiber → journald trotzdem neu gestartet (Codex 20cce4b0)', () => {
+  const s = setup();
+  try {
+    mkdirSync(s.conf, { recursive: true });
+    writeFileSync(join(s.conf, 'dvhub.conf'), '# DVhub: Speicherprofil klein (storage-limits.sh).\n[Journal]\nSystemMaxUse=200M\n');
+    writeFileSync(join(s.conf, '90-dvhub-speicherprofil.conf'), '[Journal]\nSystemMaxUse=1G\n');
+    s.profile('klein');
+    s.run();
+    assert.equal(existsSync(join(s.conf, 'dvhub.conf')), false);
+    assert.deepEqual(s.calls(), ['systemctl restart systemd-journald']);
+  } finally { s.cleanup(); }
+});

@@ -55,6 +55,7 @@ if [[ -f "$DROPIN" ]] && [[ "$(cat "$DROPIN")" == "$(printf '%s' "$WANT")" ]]; t
 fi
 # Datei ohne unsere Kennzeile (Betreiber) nie überschreiben (Codex 2739f099).
 if [[ -e "$DROPIN" || -L "$DROPIN" ]] && ! grep -q '^# DVhub: Speicherprofil' "$DROPIN" 2>/dev/null; then
+  [[ "${OLD_REMOVED:-0}" -eq 1 ]] && restart_journald
   echo "  journald: $DROPIN ohne DVhub-Kennzeile — bleibt unangetastet" >&2
   exit 0
 fi
