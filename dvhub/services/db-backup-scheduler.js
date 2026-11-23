@@ -34,7 +34,8 @@ export function backupSpacePlan({ freeMb, dbMb, sameDisk, profile, scope, retent
   // Ungültige Anzahl bleibt ungültig: selectBackupsToDelete löscht dann nichts (Schutz).
   const keepCfg = Number(retentionCount);
   let keep = keepCfg;
-  const cap = (n) => (Number.isFinite(keepCfg) && keepCfg > 0 ? Math.min(keepCfg, n) : n);
+  // Ungültige Anzahl bleibt ungültig (nichts löschen), auch mit Profil-Grenze (Codex 2739f099).
+  const cap = (n) => (Number.isFinite(keepCfg) && keepCfg > 0 ? Math.min(keepCfg, n) : keepCfg);
   if (sameDisk && profile && Number.isFinite(profile.backupKeepMax)) {
     if (profile.backupKeepMax === 0) {
       if (scope !== 'energy15m') {
@@ -74,7 +75,7 @@ export function backupDueDay(cfg, now, lastRunDay) {
 export function createDbBackupScheduler({
   getCfg, pushLog, nowFn = () => new Date(), spawnFn,
   // Stand der Platz-Wache (storage-guard status: dbMb, mounts, profile) — optional.
-  getStorage = () => null, statfs = (p) => fs.statfsSync(p), stat = (p) => fs.statSync(p),
+  getStorage = null, statfs = (p) => fs.statfsSync(p), stat = (p) => fs.statSync(p),
 } = {}) {
   let timer = null;
   let lastRunDay = null;
@@ -106,14 +107,25 @@ export function createDbBackupScheduler({
     return { ok: false, error: error || 'backup failed' };
   }
 
-  function planFor(dir, scope, b, { network = false } = {}) {
-    const st = (() => { try { return getStorage?.() || null; } catch { return null; } })();
+  async function planFor(dir, scope, b, { network = false } = {}) {
+    let st;
+    if (typeof getStorage === 'function') {
+      try { st = (await getStorage()) || null; } catch { st = null; }
+    } else st = {};   // ohne Platz-Wache (alte Aufrufer): nur der freie Platz am Ziel zählt
+    // Noch keine Messung (kurz nach dem Start, getrennter Betrieb): nicht ohne
+    // Prüfung durchwinken (Codex 2739f099).
+    if (!st) return { ok: false, keep: Number(b.retentionCount), sameDisk: false, error: 'Speicher noch nicht gemessen (DVhub startet gerade) — Backup bitte in einigen Minuten erneut starten' };
     let freeMb = NaN;
     try { const s = statfs(dir); freeMb = (Number(s.bavail) * Number(s.bsize)) / MB; } catch { /* unbekannt → nicht blockieren */ }
     let sameDisk = false;
     if (!network) {
       const dbMount = (st?.mounts || []).find((m) => (m.roles || []).includes('db'));
-      try { sameDisk = !!dbMount && String(stat(dir).dev) === String(dbMount.key); } catch { /* egal */ }
+      // Alle Geräte-Nummern der DB-Platte (Docker overlay2: Container-Wurzel und
+      // Volume sind dieselbe Platte, Codex 2739f099).
+      try {
+        const dev = String(stat(dir).dev);
+        sameDisk = !!dbMount && (String(dbMount.key) === dev || (dbMount.devs || []).map(String).includes(dev));
+      } catch { /* egal */ }
     }
     return backupSpacePlan({
       freeMb, dbMb: st?.dbMb, sameDisk, profile: st?.profile?.values || null, scope,
@@ -127,7 +139,7 @@ export function createDbBackupScheduler({
     if (!dir) return { ok: false, error: 'no destinationDir configured' };
     const outFile = path.join(dir, fileName);
     fs.mkdirSync(dir, { recursive: true }); // surfaces a missing mount as a clear error
-    const plan = planFor(dir, scope, b);
+    const plan = await planFor(dir, scope, b);
     if (!plan.ok) return fail(scope, reason, now, plan.error);
     const res = await dumpToFile({ scope, database: cfg.telemetry.database, outFile, spawnFn });
     if (!res.ok) {
@@ -151,7 +163,7 @@ export function createDbBackupScheduler({
     const subPath = smb.path || '';
     const tmpFile = path.join(os.tmpdir(), fileName);
     // Der Dump liegt erst lokal (tmp) — passt er dorthin? Begrenzung der Anzahl gilt fürs Netzziel nicht.
-    const plan = planFor(os.tmpdir(), scope, b, { network: true });
+    const plan = await planFor(os.tmpdir(), scope, b, { network: true });
     if (!plan.ok) return fail(scope, reason, now, plan.error);
     try {
       const dump = await dumpToFile({ scope, database: cfg.telemetry.database, outFile: tmpFile, spawnFn });

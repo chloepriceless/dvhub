@@ -259,3 +259,22 @@ test('fileWalOwner: Merker als Datei', () => {
   o.write(null);
   assert.equal(o.read(), null);
 });
+
+// Codex 4f093b23: Merker zuerst; verdeckter Wert behält den Merker.
+test('max_wal_size: Merker nicht schreibbar → nicht setzen; Kommandozeile verdeckt → Merker bleibt', async () => {
+  const calls = [];
+  const q = async (sql) => {
+    calls.push(sql);
+    if (sql.startsWith('SELECT name, setting')) return { rows: [{ name: 'max_wal_size', setting: '1024', unit: 'MB', source: 'default' }] };
+    return { rows: [] };
+  };
+  const broken = { read: () => null, write: () => { throw new Error('Platte voll'); } };
+  const r = await applyDbTuning(q, { includeMemory: false, storageProfile: PROFILES.klein, walOwner: broken });
+  assert.ok(!calls.some((c) => c.startsWith('ALTER SYSTEM SET max_wal_size')), 'ohne Merker nicht setzen');
+  assert.deepEqual(r.skippedOwner, ['max_wal_size']);
+  let v = 256; const own = { read: () => v, write: (x) => { v = x; } };
+  const masked = async (sql) => (sql.includes("name = 'max_wal_size'")
+    ? { rows: [{ setting: '2048', unit: 'MB', source: 'command line', sourcefile: null }] } : { rows: [] });
+  await applyDbTuning(masked, { includeMemory: false, storageProfile: PROFILES.gross, walOwner: own });
+  assert.equal(v, 256, 'Merker bleibt, solange die Kommandozeile verdeckt');
+});

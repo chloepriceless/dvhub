@@ -6,15 +6,16 @@
 # System-Standard (bis 10 % der Platte, höchstens 4 GB). DVhub schreibt das
 # Profil nach ${DATA_DIR}/storage-profile.json; gelesen wird NUR das Feld
 # "effective" und nur ein bekannter Name, kein Verweis (die Datei gehört dem
-# Dienstbenutzer). Eigene Datei: /etc/systemd/journald.conf.d/dvhub.conf —
-# fremde Drop-ins werden nie angefasst. Idempotent; journald wird nur bei einer
+# Dienstbenutzer). Eigene Datei: /etc/systemd/journald.conf.d/
+# 90-dvhub-speicherprofil.conf mit Kennzeile — eine gleichnamige Datei ohne
+# Kennzeile (vom Betreiber) und fremde Drop-ins werden nie angefasst. Idempotent; journald wird nur bei einer
 # Änderung neu gestartet. Aufruf aus install.sh und post-update.sh.
 set -uo pipefail
 # STORAGE_LIMITS_EUID, JOURNALD_CONF_DIR: nur für Tests (test/storage-limits.test.js).
 [[ "${STORAGE_LIMITS_EUID:-$EUID}" -eq 0 ]] || { echo "  Speicher-Grenzen: braucht root — übersprungen" >&2; exit 0; }
 SP_FILE="${DATA_DIR:-/var/lib/dvhub}/storage-profile.json"
 CONF_DIR="${JOURNALD_CONF_DIR:-/etc/systemd/journald.conf.d}"
-DROPIN="$CONF_DIR/dvhub.conf"
+DROPIN="$CONF_DIR/90-dvhub-speicherprofil.conf"
 SP=""
 if [[ -f "$SP_FILE" && ! -L "$SP_FILE" ]]; then
   SP="$(grep -o '"effective"[[:space:]]*:[[:space:]]*"[a-z]*"' "$SP_FILE" 2>/dev/null | head -n1 | sed 's/.*"\([a-z]*\)"$/\1/' || true)"
@@ -41,6 +42,11 @@ RuntimeMaxUse=$MAX
 "
 if [[ -f "$DROPIN" ]] && [[ "$(cat "$DROPIN")" == "$(printf '%s' "$WANT")" ]]; then
   echo "  journald: Grenze $MAX aktuell"
+  exit 0
+fi
+# Datei ohne unsere Kennzeile (Betreiber) nie überschreiben (Codex 2739f099).
+if [[ -e "$DROPIN" || -L "$DROPIN" ]] && ! grep -q '^# DVhub: Speicherprofil' "$DROPIN" 2>/dev/null; then
+  echo "  journald: $DROPIN ohne DVhub-Kennzeile — bleibt unangetastet" >&2
   exit 0
 fi
 mkdir -p "$CONF_DIR"

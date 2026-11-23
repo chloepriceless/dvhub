@@ -208,3 +208,12 @@ test('Wache: DB-Platte nicht messbar → nichts in der DB aufräumen, eigener Hi
   assert.match(warn.storage, /Datenbank-Platte nicht messbar/);
   assert.match(warn.storage_other, /DVhub-Ordner/, 'die volle andere Platte wird trotzdem gemeldet');
 });
+
+test('Zusammengelegte Platte kennt alle Geräte-Nummern (für Backups, Codex 2739f099)', () => {
+  const statfs = (p) => (p === '/'
+    ? { type: 0x794c7630, bsize: 4096, blocks: 30000000, bavail: 1000000, files: 1900000, ffree: 1500000 }
+    : { type: 0xef53, bsize: 4096, blocks: 30000000, bavail: 1000004, files: 1900000, ffree: 1500002 });
+  const stat = (p) => ({ dev: p === '/' ? 77 : 2049 });
+  const [m] = measureMounts(mountCandidates({ container: true, dataDir: '/var/lib/dvhub', exists: () => true }), { statfs, stat });
+  assert.deepEqual(m.devs.sort(), ['2049', '77']);
+});

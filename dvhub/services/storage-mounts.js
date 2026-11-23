@@ -93,13 +93,14 @@ export function measureMounts(candidates, deps = {}) {
     const key = m.dev ?? `path:${m.measuredPath}`;
     const hit = byKey.get(key);
     if (hit) {
+      if (m.dev != null && !hit.devs.includes(m.dev)) hit.devs.push(m.dev);
       if (!hit.roles.includes(c.role)) hit.roles.push(c.role);
       if (!hit.paths.includes(c.path)) hit.paths.push(c.path);
       if (c.assumed && c.role === 'db') hit.dbAssumed = true;
       continue;
     }
     byKey.set(key, {
-      key, roles: [c.role], paths: [c.path], totalMb: m.totalMb, freeMb: m.freeMb, freePct: m.freePct,
+      key, devs: m.dev != null ? [m.dev] : [], roles: [c.role], paths: [c.path], totalMb: m.totalMb, freeMb: m.freeMb, freePct: m.freePct,
       usedMb: Math.max(0, m.totalMb - m.freeMb), ...(c.assumed && c.role === 'db' ? { dbAssumed: true } : {}),
       _overlay: m.overlay, _blocks: m.blocks, _bsize: m.bsize, _bavail: m.bavail, _files: m.files, _ffree: m.ffree,
     });
@@ -120,6 +121,7 @@ export function measureMounts(candidates, deps = {}) {
     if (!twin) continue;
     for (const r of o.roles) if (!twin.roles.includes(r)) twin.roles.push(r);
     for (const p of o.paths) if (!twin.paths.includes(p)) twin.paths.push(p);
+    for (const d of o.devs) if (!twin.devs.includes(d)) twin.devs.push(d);
     if (o.dbAssumed) twin.dbAssumed = true;
     o._merged = true;
   }

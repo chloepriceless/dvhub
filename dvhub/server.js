@@ -2719,7 +2719,10 @@ const telemetryReady = (async () => {
     getCfg: ctx.getCfg, pushLog: ctx.pushLog,
     // Platzprüfung und Profilgrenze (Speicher-Konzept Schritt 6): Stand der Platz-Wache,
     // im getrennten Betrieb aus dem Runtime-Schnappschuss.
-    getStorage: () => ctx.storageGuard?.status?.() || state.storageRuntime?.status || null,
+    // Noch nicht gemessen (erste 5 min nach dem Start): jetzt messen (Codex 2739f099).
+    getStorage: async () => (ctx.storageGuard
+      ? (ctx.storageGuard.status?.() || await ctx.storageGuard.check())
+      : (state.storageRuntime?.status || null)),
   });
   if (IS_WEB_PROCESS) ctx.dbBackupScheduler.start();
   await refreshTelemetryStatus();

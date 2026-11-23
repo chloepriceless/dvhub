@@ -120,22 +120,26 @@ export async function applyDbTuning(query, { budgetMb, includeMemory = true, sto
     [names],
   );
   const cur = new Map((res.rows || []).map((r) => [r.name, r]));
-  const changed = []; const skippedCommandLine = [];
+  const changed = []; const skippedCommandLine = []; let skippedOwner = false;
   for (const [name, want] of Object.entries(settings)) {
     const row = cur.get(name);
     if (!row) continue;                                   // z. B. timescaledb.* ohne Extension
     if (row.source === 'command line') { skippedCommandLine.push(name); continue; }
     if (sameValue(row, want)) continue;
+    // max_wal_size: erst den Merker schreiben, dann setzen — scheitert der
+    // Merker (Platte voll), lieber nicht setzen, als einen Wert zu hinterlassen,
+    // den DVhub später nicht mehr als eigenen erkennt (Codex 4f093b23).
+    if (name === 'max_wal_size' && walOwner) {
+      try { walOwner.write(parseWanted(want) / MB); } catch { skippedOwner = true; continue; }
+    }
     // Name ist aus der festen Liste oben, Wert ebenso — kein Nutzertext.
     await query(`ALTER SYSTEM SET ${name.includes('.') ? `"${name}"` : name} = '${want}'`);
     changed.push(name);
   }
   // max_wal_size gehört DVhub nur, wenn DVhub ihn selbst gesetzt und sich das
-  // gemerkt hat (walOwner, Datei im Datenverzeichnis) — ein gleicher Wert per
-  // ALTER SYSTEM vom Betreiber ist sonst nicht zu unterscheiden (Codex 2b7a081b).
-  if (changed.includes('max_wal_size')) {
-    try { walOwner?.write?.(parseWanted(settings.max_wal_size) / MB); } catch { /* egal */ }
-  }
+  // gemerkt hat (walOwner, Datei im Datenverzeichnis, siehe Schleife oben) — ein
+  // gleicher Wert per ALTER SYSTEM vom Betreiber ist sonst nicht zu
+  // unterscheiden (Codex 2b7a081b).
   // Zurück auf „groß“ (oder ohne Profil): nur den eigenen, gemerkten Wert aus
   // postgresql.auto.conf entfernen — sonst bliebe ein vorübergehend kleinerer
   // Schreibpuffer für immer (Codex 2ef7ff2c). Ohne Merker nie.
@@ -144,18 +148,24 @@ export async function applyDbTuning(query, { budgetMb, includeMemory = true, sto
     try { own = Number(walOwner.read?.()); } catch { /* egal */ }
     if (Number.isFinite(own) && own > 0) {
       const w = (await query(
-        "SELECT setting, unit, sourcefile FROM pg_settings WHERE name = 'max_wal_size'")).rows?.[0];
+        "SELECT setting, unit, source, sourcefile FROM pg_settings WHERE name = 'max_wal_size'")).rows?.[0];
       const mb = w ? toBytes(w.setting, w.unit) / MB : null;
-      if (w && /postgresql\.auto\.conf$/.test(String(w.sourcefile || '')) && mb === own) {
+      const inAuto = /postgresql\.auto\.conf$/.test(String(w?.sourcefile || ''));
+      if (w && inAuto && mb === own) {
         await query('ALTER SYSTEM RESET max_wal_size');
         changed.push('max_wal_size');
+        try { walOwner.write?.(null); } catch { /* egal */ }
+      } else if (w && w.source === 'configuration file') {
+        // Unser Eintrag ist nicht mehr da (anderer Wert in auto.conf = Betreiber,
+        // oder er gilt aus postgresql.conf) → Merker erledigt. Bei verdeckendem
+        // Wert (Kommandozeile o. ä.) bleibt der Merker (Codex 4f093b23).
+        try { walOwner.write?.(null); } catch { /* egal */ }
       }
-      try { walOwner.write?.(null); } catch { /* egal */ }
     }
   }
   if (changed.length) await query('SELECT pg_reload_conf()');
   const after = await query('SELECT name FROM pg_settings WHERE pending_restart');
-  return { profile, changed, skippedCommandLine, pendingRestart: (after.rows || []).map((r) => r.name) };
+  return { profile, changed, skippedCommandLine, ...(skippedOwner ? { skippedOwner: ['max_wal_size'] } : {}), pendingRestart: (after.rows || []).map((r) => r.name) };
 }
 
 // pg_settings liefert z. B. shared_buffers als Anzahl 8-kB-Seiten mit unit '8kB'.

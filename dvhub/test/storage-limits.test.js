@@ -26,7 +26,7 @@ function setup() {
     env: { PATH: `${bin}:${process.env.PATH}`, STORAGE_LIMITS_EUID: '0', DATA_DIR: data, JOURNALD_CONF_DIR: conf }, encoding: 'utf8',
   });
   const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : []);
-  const dropin = () => (existsSync(join(conf, 'dvhub.conf')) ? readFileSync(join(conf, 'dvhub.conf'), 'utf8') : null);
+  const dropin = () => (existsSync(join(conf, '90-dvhub-speicherprofil.conf')) ? readFileSync(join(conf, '90-dvhub-speicherprofil.conf'), 'utf8') : null);
   return { dir, conf, profile, run, calls, dropin, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -56,9 +56,18 @@ test('groß/mittel/ohne Profil: keine Grenze; eigene Datei wird entfernt, fremde
     s.profile('mittel'); s.run();
     assert.equal(s.dropin(), null, 'zurück auf mittel: eigene Grenze weg');
     mkdirSync(s.conf, { recursive: true });
-    writeFileSync(join(s.conf, 'dvhub.conf'), '[Journal]\nSystemMaxUse=1G\n');
+    writeFileSync(join(s.conf, '90-dvhub-speicherprofil.conf'), '[Journal]\nSystemMaxUse=1G\n');
     s.run();
     assert.equal(s.dropin(), '[Journal]\nSystemMaxUse=1G\n', 'fremde Datei bleibt');
+    // Codex 2739f099: auch bei „klein“ keine fremde Datei überschreiben.
+    s.profile('klein');
+    s.run();
+    assert.equal(s.dropin(), '[Journal]\nSystemMaxUse=1G\n', 'fremde Datei bleibt auch bei klein');
+    writeFileSync(join(s.conf, 'dvhub.conf'), '[Journal]\nMaxRetentionSec=1week\n');
+    rmSync(join(s.conf, '90-dvhub-speicherprofil.conf'));
+    s.run();
+    assert.match(s.dropin(), /SystemMaxUse=200M/);
+    assert.equal(readFileSync(join(s.conf, 'dvhub.conf'), 'utf8'), '[Journal]\nMaxRetentionSec=1week\n', 'andere Datei unberührt');
   } finally { s.cleanup(); }
 });
 
