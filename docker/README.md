@@ -400,7 +400,7 @@ Drei Punkte, die eine Umsetzung beachten muss — alle am Datenbestand belegt:
 
 Umgesetzt (23.11.2026): Punkt 1 bis 3 lösen die Datenstufen
 `timeseries_samples_1m` und `timeseries_samples_15m` (eigene Hypertables,
-`services/telemetry-tiers.js`, Migration 030). Sie verdichten jede Reihe mit
+`services/telemetry-tiers.js`, Migration 027). Sie verdichten jede Reihe mit
 Mittel, Min, Max, erstem/letztem Wert und letztem Text. Rohwerte dürfen nur vor
 `aggregatedUntil()` gelöscht werden; das Löschen selbst gehört zur
 Speicher-Wache.

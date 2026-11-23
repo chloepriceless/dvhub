@@ -1,12 +1,12 @@
--- Migration 030: Datenstufen 1 min und 15 min für ALLE aufgenommenen Reihen.
+-- Migration 027: Datenstufen 1 min und 15 min für ALLE aufgenommenen Reihen.
 --
 -- Christin 23.11.2026 (Konzept Speicher-Überwachung, S3 a+c): 5 s → 1 min →
 -- 15 min; 15-min-Werte für jede Reihe, für immer. Befüllt von
 -- services/telemetry-tiers.js (laufend + Rückfüllung in Portionen), gelesen als
 -- Rückfall, wo Rohwerte fehlen (telemetry-store-pg.js).
 --
--- Nummer 030 statt 025: im Parallel-Zweig (Speicher-Wache) können 025 ff.
--- entstehen; zwei Dateien mit derselben Nummer würden still nur eine anwenden.
+-- Nummer 027 (Koordination 23.11.): 025 = Systemwirkungsgrad (T12), 026 =
+-- Speicher-Wache; zwei Dateien mit derselben Nummer würden still nur eine anwenden.
 --
 -- Läuft auf JEDER Box (nicht an cfg.telemetry.database.timescaledb gebunden):
 -- normale Tabellen. Hypertable + Kompression (Community) richtet
@@ -20,7 +20,7 @@
 -- Reversal:
 --   DROP TABLE IF EXISTS timeseries_samples_1m, timeseries_samples_15m,
 --     telemetry_tier_state, telemetry_tier_dirty;
---   DELETE FROM schema_migrations WHERE version = 30;
+--   DELETE FROM schema_migrations WHERE version = 27;
 
 BEGIN;
 
@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS timeseries_samples_1m (
   source      TEXT NOT NULL,
   bucket_ts   TIMESTAMPTZ NOT NULL,
   n           INTEGER NOT NULL,
+  n_num       INTEGER NOT NULL DEFAULT 0,
+  value_sum   DOUBLE PRECISION,
   covered_s   DOUBLE PRECISION,
   res_min     INTEGER NOT NULL,
   value_avg   DOUBLE PRECISION,
@@ -49,6 +51,8 @@ CREATE TABLE IF NOT EXISTS timeseries_samples_15m (
   source      TEXT NOT NULL,
   bucket_ts   TIMESTAMPTZ NOT NULL,
   n           INTEGER NOT NULL,
+  n_num       INTEGER NOT NULL DEFAULT 0,
+  value_sum   DOUBLE PRECISION,
   covered_s   DOUBLE PRECISION,
   res_min     INTEGER NOT NULL,
   value_avg   DOUBLE PRECISION,
@@ -81,7 +85,7 @@ CREATE TABLE IF NOT EXISTS telemetry_tier_dirty (
 );
 
 INSERT INTO schema_migrations (version, description, applied_at)
-VALUES (30, 'Datenstufen 1 min + 15 min für alle Reihen (timeseries_samples_1m/_15m, Zeiger, Nachzügler)', NOW())
+VALUES (27, 'Datenstufen 1 min + 15 min für alle Reihen (timeseries_samples_1m/_15m, Zeiger, Nachzügler)', NOW())
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;

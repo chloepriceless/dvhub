@@ -1,6 +1,6 @@
 // test/telemetry-tiers-pg.test.js — Datenstufen 1 min / 15 min gegen echtes
 // PostgreSQL (ohne TimescaleDB). Christin 23.11.2026: 5 s → 1 min → 15 min für
-// ALLE Reihen (services/telemetry-tiers.js, Migration 030).
+// ALLE Reihen (services/telemetry-tiers.js, Migration 027).
 //
 // Läuft nur mit DVHUB_TEST_PG_URL oder DATABASE_URL (CI: pg-integration), legt
 // je Lauf eine eigene Datenbank an und löscht sie danach.
@@ -98,7 +98,7 @@ describe('Datenstufen 1 min / 15 min (PostgreSQL ohne TimescaleDB)', { skip: !UR
       .map((r) => ({ ...r, bucket_ts: r.bucket_ts.toISOString() }));
   }
 
-  it('Migration 030 ist idempotent und legt Zeiger + Nachzügler-Tabelle an', async () => {
+  it('Migration 027 ist idempotent und legt Zeiger + Nachzügler-Tabelle an', async () => {
     const pool = await freshDb();
     const again = await runPendingMigrations(pool, {});
     assert.deepEqual(again.applied, [], 'zweiter Lauf wendet nichts an');
@@ -106,7 +106,7 @@ describe('Datenstufen 1 min / 15 min (PostgreSQL ohne TimescaleDB)', { skip: !UR
     // Datei ein zweites Mal direkt ausführen (z. B. Wiederholung nach Abbruch): kein Fehler
     const fs = await import('node:fs');
     const path = await import('node:path');
-    const sql = fs.readFileSync(path.join(import.meta.dirname, '..', 'db', 'migrations', '030-telemetry-tiers.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(import.meta.dirname, '..', 'db', 'migrations', '027-telemetry-tiers.sql'), 'utf8');
     await pool.query(sql);
     const st = await one(pool, "SELECT done_until FROM telemetry_tier_state WHERE id = 'tiers'");
     assert.equal(st.done_until, null, 'noch kein Lauf');
@@ -262,7 +262,19 @@ describe('Datenstufen 1 min / 15 min (PostgreSQL ohne TimescaleDB)', { skip: !UR
     const viz = (s) => s.queryBucketedSeries({ seriesKeys: ['grid_l1_w', 'grid_import_w'], ...span, bucketInterval: '15 minutes' });
     const vizBefore = await viz(store);
     const boundBefore = await store.getSeriesBoundaryValues({ seriesKey: 'battery_grid_share_wh', ...span });
+    // Ende mitten in einer Viertelstunde (Codex e6fed14e): nur Rohwerte bis end
+    const vizPart = (st) => st.queryBucketedSeries({ seriesKeys: ['grid_l1_w'], start: at(BASE), end: at(BASE + 7 * MIN), bucketInterval: '15 minutes' });
+    const vizPartBefore = await vizPart(store);
+    // Wechselnde Auflösung (5 s / 15 s): Mittel wie roh ungewichtet (Codex e6fed14e)
+    await store.writeSamples([
+      { seriesKey: 'var_w', scope: 'live', source: 'local_poll', ts: at(BASE), resolutionSeconds: 5, value: 0, unit: 'W' },
+      { seriesKey: 'var_w', scope: 'live', source: 'local_poll', ts: at(BASE + 5000), resolutionSeconds: 15, value: 100, unit: 'W' },
+    ]);
+    const varViz = (st) => st.queryBucketedSeries({ seriesKeys: ['var_w'], ...span, bucketInterval: '15 minutes' });
+    const varBefore = await varViz(store);
+    assert.equal(varBefore[0].value_avg, 50);
     await runAll(tiers(pool));
+    assert.deepEqual(await vizPart(store), vizPartBefore, 'Stufen-Eimer über end hinaus zählen nicht');
     // Mit Rohwerten: alles gleich
     assert.deepEqual(await store.querySeries({ seriesKeys: keys, ...span, maxResolution: 900 }), flatBefore);
     assert.deepEqual(await store.querySeries({ seriesKeys: keys, ...span, maxResolution: 900, bucketSec: 900 }), bucketBefore);
@@ -302,9 +314,19 @@ describe('Datenstufen 1 min / 15 min (PostgreSQL ohne TimescaleDB)', { skip: !UR
     // grid_import_w hat dort VRM-Werte (900 s); die eigenen Werte (Stufe) gehen vor
     const g0 = v.find((r) => r.key === 'grid_import_w' && r.ts === at(BASE));
     assert.equal(g0.value, 1200);
+    const varAfter = await varViz(store);
+    assert.equal(varAfter[0].value_avg, 50, 'ungewichtetes Mittel auch aus der Stufe');
+    assert.ok(Math.abs(varAfter[0].value - varBefore[0].value) < 1e-9, 'Energie gleich');
     // Randwerte: Startwert aus der Stufe statt erst ab der ersten Rohzeile
     const bound = await store.getSeriesBoundaryValues({ seriesKey: 'battery_grid_share_wh', ...span });
     assert.deepEqual(bound, boundBefore);
+    // Eine einzelne Rohprobe mitten im gelöschten Bereich verdeckt den Rest nicht (Codex e6fed14e)
+    await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num, unit)
+      VALUES ('grid_l1_w', 'live', 'local_poll', 'raw', $1, 5, 77, 'W')`, [at(BASE + 10 * MIN + 3000)]);
+    const lone = await store.querySeries({ seriesKeys: ['grid_l1_w'], ...span, maxResolution: 900 });
+    assert.equal(lone.filter((r) => r.tier).length, 59, 'alle Minuten außer der mit Rohprobe');
+    assert.equal(lone.filter((r) => !r.tier && new Date(r.ts).getTime() < cut).length, 1);
+    await pool.query(`DELETE FROM timeseries_samples WHERE series_key = 'grid_l1_w' AND value_num = 77`);
     // Minutenwerte löschen (Profil „winzig“): dann 15-min-Werte
     const p = await pruneOneMinuteTier(pool, { olderThan: at(BASE + 30 * MIN) });
     assert.equal(p.cutoff, at(BASE + 30 * MIN));

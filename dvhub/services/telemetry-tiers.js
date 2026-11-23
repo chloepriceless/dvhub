@@ -17,6 +17,8 @@
 // Je Eimer stehen ALLE Kennzahlen, damit die Stufe für jede Art Reihe stimmt,
 // ohne Liste je Hersteller oder Reihe (universell):
 //   n            Zahl der Proben (Zahl oder Text)
+//   n_num, value_sum  Zahl und Summe der Zahlwerte (ungewichtetes Mittel wie
+//                AVG(value_num) über Rohwerte, für Anzeigen, die das so rechnen)
 //   covered_s    Σ resolution_seconds der Zahl-Proben (Gewicht des Mittels;
 //                ≥ Eimerlänge = Eimer voll abgedeckt)
 //   res_min      feinste Auflösung im Eimer (Abfragen filtern damit wie roh)
@@ -110,7 +112,7 @@ export function tierRowValue(row, seriesKey = row?.series_key) {
 }
 
 // ── Verdichten ──────────────────────────────────────────────────────────────
-const TIER_COLUMNS = 'series_key, scope, source, bucket_ts, n, covered_s, res_min, value_avg, value_min, value_max, value_first, value_last, value_text, unit';
+const TIER_COLUMNS = 'series_key, scope, source, bucket_ts, n, n_num, value_sum, covered_s, res_min, value_avg, value_min, value_max, value_first, value_last, value_text, unit';
 
 /**
  * INSERT … SELECT für eine Stufe über [$1, $2). Mit scopeFilter zusätzlich
@@ -124,6 +126,8 @@ export function tierAggregateSql(table, seconds, { scopeFilter = false } = {}) {
     SELECT series_key, scope, source,
            date_bin(interval '${seconds} seconds', ts_utc, ${ORIGIN}) AS bucket_ts,
            count(*)::int,
+           count(value_num)::int,
+           sum(value_num),
            sum(${res}) FILTER (WHERE value_num IS NOT NULL)::float8,
            min(${res}),
            sum(value_num * ${res}) / NULLIF(sum(${res}) FILTER (WHERE value_num IS NOT NULL), 0),
@@ -139,7 +143,7 @@ export function tierAggregateSql(table, seconds, { scopeFilter = false } = {}) {
        AND (value_num IS NOT NULL OR value_text IS NOT NULL)${scopeFilter ? '\n       AND scope = ANY($3::text[])' : ''}
      GROUP BY 1, 2, 3, 4
     ON CONFLICT (series_key, scope, source, bucket_ts) DO UPDATE SET
-      n = EXCLUDED.n, covered_s = EXCLUDED.covered_s, res_min = EXCLUDED.res_min,
+      n = EXCLUDED.n, n_num = EXCLUDED.n_num, value_sum = EXCLUDED.value_sum, covered_s = EXCLUDED.covered_s, res_min = EXCLUDED.res_min,
       value_avg = EXCLUDED.value_avg, value_min = EXCLUDED.value_min, value_max = EXCLUDED.value_max,
       value_first = EXCLUDED.value_first, value_last = EXCLUDED.value_last,
       value_text = EXCLUDED.value_text, unit = EXCLUDED.unit
@@ -364,11 +368,13 @@ export function createTelemetryTiers({
   let timer = null;
   const log = (e, d, lvl) => { try { pushLog?.(e, d, lvl); } catch { /* egal */ } };
 
-  async function rawLayout(db) {
-    const hyper = await isHypertable(db, 'timeseries_samples');
-    if (hyper) return { scopes: null };
-    const r = await db.query(DISTINCT_SCOPES_SQL);
-    return { scopes: (r.rows || []).map((x) => x.scope) };
+  // Ohne TimescaleDB: scope-Liste für den Index (scope, ts_utc). Sie wird in
+  // JEDER Portion unter der Zustandssperre neu gelesen (Codex e6fed14e): ein
+  // Nachzügler mit neuem scope, der vor der Sperre committet, ist sonst nicht
+  // in der Liste, und seine Nachzügler-Marke würde trotzdem gelöscht.
+  async function scopesNow(client) {
+    const r = await client.query(DISTINCT_SCOPES_SQL);
+    return (r.rows || []).map((x) => x.scope);
   }
 
   /** Nächster Feinwert ab fromMs (für Lücken und den ersten Start). */
@@ -395,7 +401,7 @@ export function createTelemetryTiers({
   }
 
   /** Eine Portion in einer Transaktion. Liefert, was getan wurde, oder null (nichts zu tun / gesperrt). */
-  async function step(db, layout, targetMs) {
+  async function step(db, hypertable, targetMs) {
     const client = typeof db.connect === 'function' ? await db.connect() : db;
     try {
       await client.query('BEGIN');
@@ -403,6 +409,7 @@ export function createTelemetryTiers({
       const st = await client.query(
         'SELECT done_until FROM telemetry_tier_state WHERE id = $1 FOR UPDATE SKIP LOCKED', [TIER_STATE_ID]);
       if (!st.rows?.length) { await client.query('ROLLBACK'); return { busy: true }; }
+      const layout = { scopes: hypertable ? null : await scopesNow(client) };
       let cursor = toMs(st.rows[0].done_until);
       // 1. Nachzügler (Viertelstunden hinter dem Zeiger).
       const dirty = await client.query(
@@ -469,11 +476,11 @@ export function createTelemetryTiers({
         storage = await ensureTierStorage(db);
         if (Object.values(storage.tables).some((t) => t.changed?.length || t.error || t.skipped)) log('telemetry_tiers_storage', storage);
       }
-      const layout = await rawLayout(db);
+      const hypertable = await isHypertable(db, 'timeseries_samples');
       const targetMs = floorQuarterMs(now() - lagMs);
       // Mindestens ein Schritt je Lauf, dann bis das Zeitbudget aufgebraucht ist.
       do {
-        const r = await step(db, layout, targetMs);
+        const r = await step(db, hypertable, targetMs);
         if (!r || r.busy) { out.done = !r; out.busy = !!r?.busy; break; }
         out.portions += 1;
         if (r.dirty) out.dirty += r.dirty;
@@ -512,68 +519,92 @@ export function createTelemetryTiers({
 
 // ── Lesen (Rückfall, wenn Rohwerte fehlen) ──────────────────────────────────
 /**
- * Stufen-Eimer je Reihe für [startMs, until_k) lesen und auf rebinSec
- * zusammenfassen. untilByKey: Map key → ms (exklusiv; Eimer müssen VOR dieser
- * Grenze enden). Liefert Zeilen mit allen Kennzahlen (value_* wie in der Tabelle).
+ * Stufen-Eimer je Reihe für Lücken [from, until) lesen und auf rebinSec
+ * zusammenfassen ($1 keys, $2 froms, $3 untils je Lücke; $4/$5 Gesamtbereich
+ * für Index/Blockauswahl; $6 Ausgaberaster in s; $7 Auflösungsfilter).
  */
 export function tierReadSql(table, tierSeconds) {
   return `
     SELECT t.series_key,
-           date_bin(make_interval(secs => $5), t.bucket_ts, ${ORIGIN}) AS b,
+           date_bin(make_interval(secs => $6), t.bucket_ts, ${ORIGIN}) AS b,
            sum(t.value_avg * t.covered_s) / NULLIF(sum(t.covered_s) FILTER (WHERE t.value_avg IS NOT NULL), 0) AS value_avg,
            min(t.value_min) AS value_min, max(t.value_max) AS value_max,
            (array_agg(t.value_first ORDER BY t.bucket_ts ASC) FILTER (WHERE t.value_first IS NOT NULL))[1] AS value_first,
            (array_agg(t.value_last ORDER BY t.bucket_ts DESC) FILTER (WHERE t.value_last IS NOT NULL))[1] AS value_last,
            (array_agg(t.value_text ORDER BY t.bucket_ts DESC) FILTER (WHERE t.value_text IS NOT NULL))[1] AS value_text,
            (array_agg(t.unit ORDER BY t.bucket_ts DESC) FILTER (WHERE t.unit IS NOT NULL))[1] AS unit,
-           sum(t.n)::int AS n, sum(t.covered_s) AS covered_s, min(t.res_min) AS res_min
-      FROM unnest($1::text[], $2::timestamptz[]) AS r(k, until)
+           sum(t.n)::int AS n, sum(t.n_num)::int AS n_num, sum(t.value_sum) AS value_sum,
+           sum(t.covered_s) AS covered_s, min(t.res_min) AS res_min
+      FROM unnest($1::text[], $2::timestamptz[], $3::timestamptz[]) AS r(k, f, u)
       JOIN ${table} t ON t.series_key = r.k
-     WHERE t.bucket_ts >= $3 AND t.bucket_ts < $4
-       AND t.bucket_ts + interval '${tierSeconds} seconds' <= r.until
-       AND t.res_min <= $6
+     WHERE t.bucket_ts >= $4 AND t.bucket_ts < $5
+       AND t.bucket_ts >= r.f AND t.bucket_ts + interval '${tierSeconds} seconds' <= r.u
+       AND t.res_min <= $7
      GROUP BY 1, 2
      ORDER BY 2, 1`;
 }
 
 /**
- * Rückfall auf die Stufen für Reihen, deren Rohwerte in [startMs, …) fehlen.
+ * Lücken je Reihe auf dem Raster gridMs: alle ganzen Raster-Eimer in
+ * [startMs, endMs), in denen keiner der belegten Zeitpunkte liegt.
+ * @param {number[]} occupiedMs  Zeitpunkte mit Rohwert (bzw. schon gefüllt)
+ * @returns {Array<[number, number]>}
+ */
+export function gapIntervals(occupiedMs, startMs, endMs, gridMs) {
+  const from0 = Math.ceil(startMs / gridMs) * gridMs;
+  const until0 = Math.floor(endMs / gridMs) * gridMs;
+  if (until0 - from0 < gridMs) return [];
+  const bins = [...new Set((occupiedMs || []).filter(Number.isFinite).map((t) => Math.floor(t / gridMs) * gridMs))]
+    .filter((b) => b + gridMs > from0 && b < until0)
+    .sort((a, b) => a - b);
+  const out = [];
+  let cur = from0;
+  for (const b of bins) {
+    if (b - cur >= gridMs) out.push([cur, b]);
+    cur = Math.max(cur, b + gridMs);
+  }
+  if (until0 - cur >= gridMs) out.push([cur, until0]);
+  return out;
+}
+
+/**
+ * Rückfall auf die Stufen je Lücke: Wo im Ausgaberaster kein Rohwert liegt
+ * (Rohwerte gelöscht), kommen die 1-min-Eimer, und wo auch die fehlen
+ * (Minutenwerte gelöscht), die 15-min-Eimer. Ein Raster-Eimer mit Rohwert
+ * bekommt nie etwas aus den Stufen — mit vollständigen Rohwerten bleibt die
+ * Antwort unverändert, auch wenn eine einzelne Rohprobe mitten in einem
+ * gelöschten Zeitraum liegt (Codex e6fed14e).
  * @param {{query: Function}} db
  * @param {object} o
- * @param {Map<string, number>} o.untilByKey  key → erste Rohzeile (ms, exklusiv); fehlt der Rohwert ganz: endMs
+ * @param {string[]} o.keys
+ * @param {Map<string, number[]>} o.rawTimesByKey  key → Zeitpunkte der Rohzeilen im Ergebnis (ms)
  * @param {number} o.startMs
  * @param {number} o.endMs
  * @param {number|null} o.bucketSec  Ausgabe-Raster (null = Stufe unverändert)
  * @param {number} [o.resLimit]  wie die Roh-Abfrage: nur Eimer mit res_min ≤ resLimit
  * @returns {Promise<Array<{key, tsMs, row, resolution, tier}>>}
  */
-export async function readTierFallback(db, { untilByKey, startMs, endMs, bucketSec = null, resLimit = TIER_SOURCE_MAX_RES_S }) {
+export async function readTierFallback(db, { keys, rawTimesByKey, startMs, endMs, bucketSec = null, resLimit = TIER_SOURCE_MAX_RES_S }) {
   const out = [];
-  const use15Only = Number(bucketSec) >= 900;
-  const plan = use15Only ? [TIER_TABLES[1]] : TIER_TABLES;
-  let until = new Map(untilByKey);
+  const plan = Number(bucketSec) >= 900 ? [TIER_TABLES[1]] : TIER_TABLES;
+  const occupied = new Map(keys.map((k) => [k, [...(rawTimesByKey.get(k) || [])]]));
   for (const t of plan) {
     const rebin = Math.max(t.seconds, Number(bucketSec) > 0 ? Number(bucketSec) : t.seconds);
-    const keys = [];
-    const bounds = [];
-    for (const [k, u] of until) {
-      // Ausgabe-Eimer dürfen den ersten Roh-Eimer nicht berühren.
-      const lim = Number(bucketSec) > 0 ? Math.floor(Math.min(u, endMs) / (rebin * 1000)) * rebin * 1000 : Math.min(u, endMs);
-      if (lim - startMs >= t.seconds * 1000) { keys.push(k); bounds.push(iso(lim)); }
+    const ks = []; const fs = []; const us = [];
+    for (const k of keys) {
+      for (const [f, u] of gapIntervals(occupied.get(k), startMs, endMs, rebin * 1000)) {
+        ks.push(k); fs.push(iso(f)); us.push(iso(u));
+      }
     }
-    if (!keys.length) break;
-    const r = await db.query(tierReadSql(t.table, t.seconds), [keys, bounds, iso(startMs), iso(endMs), rebin, resLimit]);
-    const first = new Map();
+    if (!ks.length) break;
+    const r = await db.query(tierReadSql(t.table, t.seconds), [ks, fs, us, iso(startMs), iso(endMs), rebin, resLimit]);
+    const wanted = new Set(ks);
     for (const row of r.rows || []) {
       const ms = toMs(row.b);
-      if (!Number.isFinite(ms) || !untilByKey.has(row.series_key)) continue;
-      if (!first.has(row.series_key)) first.set(row.series_key, ms);
+      if (!Number.isFinite(ms) || !wanted.has(row.series_key)) continue;
+      occupied.get(row.series_key).push(ms);   // gefüllt: die gröbere Stufe nicht noch einmal
       out.push({ key: row.series_key, tsMs: ms, row, resolution: rebin, tier: t.name });
     }
-    // Wo die Minutenwerte schon gelöscht sind: davor die 15-min-Werte.
-    const next = new Map();
-    for (const k of keys) next.set(k, Math.min(until.get(k), first.has(k) ? first.get(k) : Infinity));
-    until = next;
   }
   return out.sort((a, b) => a.tsMs - b.tsMs || String(a.key).localeCompare(String(b.key)));
 }

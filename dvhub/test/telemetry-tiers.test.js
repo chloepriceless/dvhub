@@ -6,8 +6,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  tierValueKind, tierRowValue, markTierDirty, readTierFallback, tierAggregateSql,
-  aggregatedUntil, tierCoverage, TIER_DIRTY_MARK_AGE_MS, TIER_1M_TABLE, TIER_15M_TABLE,
+  tierValueKind, tierRowValue, markTierDirty, readTierFallback, tierAggregateSql, gapIntervals,
+  aggregatedUntil, tierCoverage, createTelemetryTiers, TIER_DIRTY_MARK_AGE_MS, TIER_1M_TABLE, TIER_15M_TABLE,
 } from '../services/telemetry-tiers.js';
 import { createTelemetryStorePg } from '../telemetry-store-pg.js';
 
@@ -70,42 +70,90 @@ test('markTierDirty: fehlt die Tabelle, bleibt die Schreib-Transaktion heil (ROL
   assert.deepEqual(c.calls.map((x) => x.sql.split(' ').slice(0, 2).join(' ')), ['SAVEPOINT dvhub_tier_dirty', 'INSERT INTO', 'ROLLBACK TO']);
 });
 
-test('readTierFallback: Eimer enden vor der ersten Rohzeile; ohne Minutenwerte davor 15-min-Werte', async () => {
+test('gapIntervals: nur ganze Raster-Eimer ohne Rohzeile, auch hinter einer einzelnen Rohprobe', () => {
+  const H0 = Date.parse('2026-11-01T00:00:00Z');
+  const M = 60_000;
+  // Rohprobe bei 00:00:03 mitten in einer gelöschten Stunde: Lücke danach bleibt (Codex e6fed14e)
+  assert.deepEqual(gapIntervals([H0 + 3000], H0, H0 + 60 * M, M), [[H0 + M, H0 + 60 * M]]);
+  // vollständige Rohwerte: keine Lücke
+  const dense = Array.from({ length: 720 }, (_, i) => H0 + i * 5000);
+  assert.deepEqual(gapIntervals(dense, H0, H0 + 60 * M, M), []);
+  // Anfang/Ende nicht auf dem Raster: Randeimer zählen nicht
+  assert.deepEqual(gapIntervals([], H0 + 30_000, H0 + 3 * M + 10_000, M), [[H0 + M, H0 + 3 * M]]);
+  // Lücke in der Mitte
+  assert.deepEqual(gapIntervals([H0, H0 + 10 * M], H0, H0 + 11 * M, M), [[H0 + M, H0 + 10 * M]]);
+  assert.deepEqual(gapIntervals([], H0, H0 + 30_000, M), [], 'kürzer als ein Eimer');
+});
+
+test('readTierFallback: Lücken je Reihe; wo Minutenwerte fehlen, 15-min-Werte', async () => {
   const calls = [];
+  const H0 = Date.parse('2026-11-01T00:00:00Z');
   const db = {
     async query(sql, params) {
       calls.push({ table: /timeseries_samples_1m/.test(sql) ? '1m' : '15m', params });
       if (/timeseries_samples_1m/.test(sql)) {
         // Minutenwerte erst ab 00:30 (davor gelöscht)
-        return { rows: [{ series_key: 'a', b: new Date('2026-11-01T00:30:00Z'), value_avg: 1, unit: 'W' }] };
+        return { rows: Array.from({ length: 30 }, (_, i) => ({ series_key: 'a', b: new Date(H0 + (30 + i) * 60_000), value_avg: 1, unit: 'W' })) };
       }
-      return { rows: [{ series_key: 'a', b: new Date('2026-11-01T00:00:00Z'), value_avg: 2, unit: 'W' },
-        { series_key: 'fremd', b: new Date('2026-11-01T00:00:00Z'), value_avg: 9 }] };
+      return { rows: [{ series_key: 'a', b: new Date(H0), value_avg: 2, unit: 'W' },
+        { series_key: 'fremd', b: new Date(H0), value_avg: 9 }] };
     },
   };
   const out = await readTierFallback(db, {
-    untilByKey: new Map([['a', Date.parse('2026-11-01T01:00:07Z')]]),
-    startMs: Date.parse('2026-11-01T00:00:00Z'), endMs: Date.parse('2026-11-01T02:00:00Z'), bucketSec: 60, resLimit: 61,
+    keys: ['a'], rawTimesByKey: new Map([['a', [H0 + 60 * 60_000 + 7000]]]),
+    startMs: H0, endMs: H0 + 2 * 3600_000, bucketSec: 60, resLimit: 61,
   });
   assert.equal(calls[0].table, '1m');
-  assert.deepEqual(calls[0].params.slice(0, 2), [['a'], ['2026-11-01T01:00:00.000Z']], 'Grenze auf das Ausgaberaster abgerundet');
-  assert.equal(calls[0].params[4], 60);
-  assert.equal(calls[0].params[5], 61, 'gleicher Auflösungsfilter wie roh');
+  assert.deepEqual(calls[0].params.slice(0, 3), [['a', 'a'],
+    ['2026-11-01T00:00:00.000Z', '2026-11-01T01:01:00.000Z'],
+    ['2026-11-01T01:00:00.000Z', '2026-11-01T02:00:00.000Z']], 'Lücke vor und hinter dem Rohwert-Eimer');
+  assert.equal(calls[0].params[5], 60);
+  assert.equal(calls[0].params[6], 61, 'gleicher Auflösungsfilter wie roh');
   assert.equal(calls[1].table, '15m');
-  assert.deepEqual(calls[1].params[1], ['2026-11-01T00:30:00.000Z'], '15-min-Werte nur vor der ersten Minute');
-  assert.equal(calls[1].params[4], 900);
-  assert.deepEqual(out.map((r) => [r.key, r.tier, r.resolution]), [['a', '15m', 900], ['a', '1m', 60]], 'fremde Reihe verworfen');
+  assert.deepEqual(calls[1].params.slice(1, 3).map((x) => x[0]), ['2026-11-01T00:00:00.000Z', '2026-11-01T00:30:00.000Z'], '15-min-Werte nur vor der ersten Minute');
+  assert.equal(calls[1].params[5], 900);
+  assert.equal(out.filter((r) => r.tier === '15m').length, 1, 'fremde Reihe verworfen');
+  assert.equal(out.filter((r) => r.tier === '1m').length, 30);
 });
 
-test('readTierFallback: ab 15-min-Raster nur die 15-min-Stufe; zu kurzer Bereich fragt nicht', async () => {
+test('readTierFallback: ab 15-min-Raster nur die 15-min-Stufe; ohne Lücke keine Abfrage', async () => {
   const calls = [];
+  const H0 = Date.parse('2026-11-01T00:00:00Z');
   const db = { async query(sql, params) { calls.push({ sql, params }); return { rows: [] }; } };
-  await readTierFallback(db, { untilByKey: new Map([['a', Date.parse('2026-11-01T06:00:00Z')]]), startMs: Date.parse('2026-11-01T00:00:00Z'), endMs: Date.parse('2026-11-02T00:00:00Z'), bucketSec: 900 });
+  await readTierFallback(db, { keys: ['a'], rawTimesByKey: new Map([['a', [H0 + 6 * 3600_000]]]), startMs: H0, endMs: H0 + 86400_000, bucketSec: 900 });
   assert.equal(calls.length, 1);
   assert.match(calls[0].sql, /timeseries_samples_15m/);
   calls.length = 0;
-  await readTierFallback(db, { untilByKey: new Map([['a', Date.parse('2026-11-01T00:10:00Z')]]), startMs: Date.parse('2026-11-01T00:00:00Z'), endMs: Date.parse('2026-11-02T00:00:00Z'), bucketSec: 900 });
-  assert.equal(calls.length, 0, 'weniger als ein Eimer vor der Rohzeile');
+  const quarters = Array.from({ length: 96 }, (_, i) => H0 + i * 900_000);
+  await readTierFallback(db, { keys: ['a'], rawTimesByKey: new Map([['a', quarters]]), startMs: H0, endMs: H0 + 86400_000, bucketSec: 900 });
+  assert.equal(calls.length, 0, 'jeder Eimer hat einen Rohwert');
+});
+
+test('Verdichter: scope-Liste wird erst UNTER der Zustandssperre gelesen (Codex e6fed14e)', async () => {
+  const order = [];
+  const client = {
+    async query(sql) {
+      const t = String(sql);
+      if (/FOR UPDATE SKIP LOCKED/.test(t)) { order.push('lock'); return { rows: [{ done_until: new Date('2026-11-20T00:00:00Z') }] }; }
+      if (/WITH RECURSIVE s/.test(t)) { order.push('scopes'); return { rows: [{ scope: 'live' }] }; }
+      if (/telemetry_tier_dirty ORDER BY/.test(t)) return { rows: [] };
+      if (/INSERT INTO timeseries_samples_1m/.test(t)) return { rowCount: 5, rows: [] };
+      return { rows: [], rowCount: 0 };
+    },
+    release() {},
+  };
+  const db = {
+    async connect() { return client; },
+    async query(sql) {
+      if (/pg_extension/.test(sql)) return { rows: [] };          // ohne TimescaleDB
+      if (/timescaledb_information/.test(sql)) throw new Error('keine TimescaleDB');
+      if (/telemetry_tier_state s/.test(sql)) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+  const tiers = createTelemetryTiers({ getDb: () => db, now: () => Date.parse('2026-11-20T03:00:00Z') });
+  await tiers.runOnce({ budget: 0 });
+  assert.deepEqual(order.slice(0, 2), ['lock', 'scopes']);
 });
 
 test('aggregatedUntil: min(Zeiger, ältester Nachzügler); ohne Tabelle null', async () => {

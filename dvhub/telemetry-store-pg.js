@@ -600,47 +600,41 @@ function sampleKey(seriesKey, scope, source, quality, tsIso, resolutionSeconds) 
   return `${seriesKey}\u0000${scope}\u0000${source}\u0000${quality}\u0000${tsIso}\u0000${resolutionSeconds}`;
 }
 
-// Fehlt Migration 030 (Tabellen der Datenstufen), so lange nicht erneut fragen.
+// Fehlt Migration 027 (Tabellen der Datenstufen), so lange nicht erneut fragen.
 const TIERS_MISSING_RETRY_MS = 10 * 60_000;
 
 export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
   let tiersMissingUntil = 0;
 
   /**
-   * Datenstufen als Rückfall (23.11.2026): Für jede Reihe, deren erste Rohzeile
-   * im Ergebnis nach startMs liegt (oder die roh ganz fehlt), die 1-min- bzw.
-   * 15-min-Eimer VOR dieser Rohzeile. Wo Rohwerte da sind, kommt nichts dazu —
-   * Antworten mit Rohwerten bleiben unverändert. Fehler (Tabelle fehlt,
-   * Attrappe) lassen die Roh-Antwort stehen.
+   * Datenstufen als Rückfall (23.11.2026): In jedem Raster-Eimer der Antwort
+   * OHNE Rohzeile (Rohwerte gelöscht) die 1-min- bzw. 15-min-Werte. Eimer mit
+   * Rohzeile bekommen nichts dazu — Antworten mit Rohwerten bleiben
+   * unverändert. Fehler (Tabelle fehlt, Attrappe) lassen die Roh-Antwort stehen.
    * @param {object} o
    * @param {string[]} o.keys
-   * @param {Map<string, number>} o.firstRawMs  key → erste Rohzeile (ms)
+   * @param {Map<string, number[]>} o.rawTimesByKey  key → Zeitpunkte der Rohzeilen (ms)
    * @returns {Promise<Array<{key, tsMs, row, resolution, tier}>>}
    */
-  async function tierFallback({ keys, firstRawMs, startMs, endMs, bucketSec = null, resLimit }) {
+  async function tierFallback({ keys, rawTimesByKey, startMs, endMs, bucketSec = null, resLimit }) {
     if (Date.now() < tiersMissingUntil) return [];
-    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return [];
-    const untilByKey = new Map();
-    for (const k of keys) {
-      const f = firstRawMs.get(k);
-      const u = Number.isFinite(f) ? Math.min(f, endMs) : endMs;
-      if (u - startMs >= 60_000) untilByKey.set(k, u);
-    }
-    if (!untilByKey.size) return [];
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs - startMs < 60_000) return [];
     try {
-      return await readTierFallback(pool, { untilByKey, startMs, endMs, bucketSec, resLimit });
+      return await readTierFallback(pool, { keys, rawTimesByKey, startMs, endMs, bucketSec, resLimit });
     } catch (e) {
       if (e?.code === '42P01') tiersMissingUntil = Date.now() + TIERS_MISSING_RETRY_MS;
       return [];
     }
   }
   const tsMsOf = (v) => (v instanceof Date ? v.getTime() : Date.parse(v));
-  const firstMsByKey = (rows, keyOf, tsOf) => {
+  const timesByKey = (rows, keyOf, tsOf) => {
     const m = new Map();
     for (const r of rows) {
-      const k = keyOf(r);
       const t = tsMsOf(tsOf(r));
-      if (Number.isFinite(t) && (!m.has(k) || t < m.get(k))) m.set(k, t);
+      if (!Number.isFinite(t)) continue;
+      const k = keyOf(r);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(t);
     }
     return m;
   };
@@ -1561,7 +1555,9 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     // vor dem VRM-Import, denn sie sind die verdichteten Rohwerte. Je Eimer
     // gilt roh zuerst; nur wenn die Stufe MEHR Zeit abdeckt (Rohwerte des
     // Eimers teilweise gelöscht, z. B. Tageseimer an der Löschgrenze), gilt
-    // die Stufe. Mit vollständigen Rohwerten ist die Abdeckung gleich → roh,
+    // die Stufe. Nur Stufen-Eimer ganz in [start, end) zählen (Codex
+    // e6fed14e: sonst Werte nach end); das Mittel ist wie roh ungewichtet
+    // (value_sum / n_num). Mit vollständigen Rohwerten ist die Abdeckung gleich → roh,
     // die Antwort bleibt unverändert. Σ(value_avg·covered_s) = Σ(v·res), die
     // Energie bleibt exakt.
     // date_bin statt time_bucket: läuft auch ohne TimescaleDB; Ursprung
@@ -1599,13 +1595,13 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         SELECT series_key,
                ${bucketExpr('bucket_ts')} AS bucket_ts,
                SUM(value_avg * covered_s) AS energy,
-               SUM(value_avg * n) FILTER (WHERE value_avg IS NOT NULL)
-                 / NULLIF(SUM(n) FILTER (WHERE value_avg IS NOT NULL), 0) AS mean_value,
+               SUM(value_sum) / NULLIF(SUM(n_num), 0) AS mean_value,
                MAX(unit) AS unit,
                SUM(covered_s) AS covered
         FROM ${tierTable}
         WHERE series_key IN (${placeholders})
-          AND bucket_ts >= $${keys.length + 1} AND bucket_ts < $${keys.length + 2}
+          AND bucket_ts >= $${keys.length + 1}
+          AND bucket_ts + interval '${tierTable === TIER_1M_TABLE ? 60 : 900} seconds' <= $${keys.length + 2}
         GROUP BY 1, 2
       ),
       own AS (
@@ -1637,7 +1633,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       result = await pool.query(sql(withTier), params);
     } catch (e) {
       if (!withTier || e?.code !== '42P01') throw e;
-      tiersMissingUntil = Date.now() + TIERS_MISSING_RETRY_MS;   // Migration 030 fehlt
+      tiersMissingUntil = Date.now() + TIERS_MISSING_RETRY_MS;   // Migration 027 fehlt
       result = await pool.query(sql(false), params);
     }
     return result.rows.map((row) => ({
@@ -1687,9 +1683,9 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         unit: row.unit,
         resolution: bucketSec,
       }));
-      // Datenstufen: Fenster(-anfang) ohne Rohwerte aus den 1-min-/15-min-Werten.
+      // Datenstufen: Eimer des Fensters ohne Rohwert aus den 1-min-/15-min-Werten.
       const fill = await tierFallback({
-        keys, firstRawMs: firstMsByKey(rows, (r) => r.series_key, (r) => r.bucket_ts),
+        keys, rawTimesByKey: timesByKey(rows, (r) => r.series_key, (r) => r.bucket_ts),
         startMs: from, endMs: to, bucketSec, resLimit: resolutionFilterLimit(bucketSec),
       });
       if (fill.length) {
@@ -1749,9 +1745,9 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       const out = result.rows.map((row) => ({
         key: row.series_key, ts: row.ts_utc, value: Number(row.value_num), unit: row.unit, resolution: row.resolution_seconds,
       }));
-      // Datenstufen: Zeitraum vor der ersten Rohzeile je Reihe (Rohwerte gelöscht).
+      // Datenstufen: Eimer ohne Rohzeile (Rohwerte gelöscht).
       const fill = await tierFallback({
-        keys, firstRawMs: firstMsByKey(result.rows, (r) => r.series_key, (r) => r.ts_utc),
+        keys, rawTimesByKey: timesByKey(result.rows, (r) => r.series_key, (r) => r.ts_utc),
         startMs: tsMsOf(isoTimestamp(start)), endMs: tsMsOf(isoTimestamp(end)), bucketSec, resLimit: resolutionFilterLimit(maxResolution),
       });
       for (const f of fill) {
@@ -1774,10 +1770,10 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     // (1h/day) still collapse to a 15min window.
     const seen = new Map();
     const rows = [];
-    // Datenstufen: Zeitraum vor der ersten Rohzeile je Reihe (Rohwerte gelöscht).
-    // Ohne Rückfall bleibt die Antwort Zeile für Zeile wie bisher.
+    // Datenstufen: Minuten ohne Rohzeile (Rohwerte gelöscht). Ohne Rückfall
+    // bleibt die Antwort Zeile für Zeile wie bisher.
     const fill = await tierFallback({
-      keys, firstRawMs: firstMsByKey(result.rows, (r) => r.series_key, (r) => r.ts_utc),
+      keys, rawTimesByKey: timesByKey(result.rows, (r) => r.series_key, (r) => r.ts_utc),
       startMs: tsMsOf(isoTimestamp(start)), endMs: tsMsOf(isoTimestamp(end)), resLimit: resolutionFilterLimit(maxResolution),
     });
     for (const row of result.rows) {
