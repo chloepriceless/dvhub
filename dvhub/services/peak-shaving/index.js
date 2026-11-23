@@ -394,6 +394,15 @@ export function peakPeriods(nowMs = Date.now(), timeZone = 'Europe/Berlin') {
   };
 }
 
+/**
+ * Regelziel für EOS (P2): aktiv → Grenze − Abstand, sonst null. EOS plant in
+ * Viertelstunden-Energie — das Ziel ist zugleich das Budget-Mittel.
+ */
+export function eosPeakShavingTargetW(cfg) {
+  const r = resolvePeakShaving(cfg);
+  return r.active ? r.targetW : null;
+}
+
 /** Deutsche Kurztexte, warum DVhub gerade auf den Augenblickswert deckelt. */
 export const BUDGET_REASON_TEXT = Object.freeze({
   billing_instant: 'Abrechnung nach Augenblickswert eingestellt',
@@ -585,5 +594,11 @@ export function createPeakShaving(ctx, deps = {}) {
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-  return { refreshPeaks, summary, start, stop, control, pollTick, _budget: budget };
+  /** Regelziel für EOS (P2): eingestellt bzw. angepasst (P3), ohne Budget; null = aus. */
+  function eosTargetW(c = cfg()) {
+    const r = resolvePeakShaving(c);
+    return r.active ? r.targetW : null;
+  }
+
+  return { refreshPeaks, summary, start, stop, control, pollTick, eosTargetW, _budget: budget };
 }

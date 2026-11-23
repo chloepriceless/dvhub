@@ -18,6 +18,17 @@ import { buildEosHomeAppliances } from './eos-devices.js';
 import { getPowerLimits } from '../power-limits.js';
 // Netzanschluss: Ladeleistung aus dem Netz, mit der EOS planen darf (Behelf).
 import { eosGridChargeCapW, eosGridImportLimitW, victronLimitExtra } from '../grid-connection/index.js';
+import { eosPeakShavingTargetW } from '../peak-shaving/index.js';
+
+// Peak Shaving (P2, Christin 24.11.2026): wirksames Regelziel für EOS — vom
+// Dienst (ggf. an die erreichte Spitze angepasst, P3), sonst aus der Config.
+// null = Peak Shaving nicht aktiv → EOS bekommt nur die Netzanschluss-Grenze.
+function peakShavingEosTarget(ctx, cfg) {
+  try {
+    if (typeof ctx?.peakShaving?.eosTargetW === 'function') return ctx.peakShaving.eosTargetW(cfg);
+  } catch { /* Fallback unten */ }
+  return eosPeakShavingTargetW(cfg);
+}
 // Zweite GX am selben Anschluss: Planung sieht beide Akkus als einen.
 import { planningCfg, planningMinSocPct } from '../multi-gx/planning.js';
 import { loadSchedulableDevices } from '../devices/schedulable.js';
@@ -672,7 +683,7 @@ export function createEosConfigSync(ctx) {
       curveSupported: caps.inverterEfficiencyCurve === true,
       gridImportLimitSupported: caps.gridImportLimit === true,
       // Victron-Grenze (Reg. 2714) — EOS bekommt den wirksamen Wert.
-      gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evForCap },
+      gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evForCap, peakShavingTargetW: peakShavingEosTarget(ctx, cfg) },
     });
     const optimization = buildEosOptimization(cfg);
     const geneticSizing = pickGeneticSizing(optimization.interval, cfg?.optimizer?.eosGeneticGenerations);
@@ -955,7 +966,7 @@ export function createEosConfigSync(ctx) {
           curve: curveNow,
           curveSupported: again.inverterEfficiencyCurve === true,
           gridImportLimitSupported: again.gridImportLimit === true,
-          gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evForCap },
+          gridConnectionExtra: { ...victronLimitExtra(state, Date.now(), cfg), evPlanned: evForCap, peakShavingTargetW: peakShavingEosTarget(ctx, cfg) },
         }));
         const res = await eosHttpRequest(baseUrl, 'PUT', '/v1/config/devices/inverters', body);
         if (!res.ok) errors['devices/inverters'] = res.error;

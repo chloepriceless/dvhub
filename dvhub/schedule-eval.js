@@ -253,7 +253,9 @@ export function createScheduleEvaluator(ctx) {
   // 'eos-threshold'). Spät gebunden: ctx.batteryAssist entsteht mit dem Wächter.
   const eosThreshold = createEosThresholdAssist({
     state, getCfg, pushLog,
-    getAssist: () => ctx.batteryAssist || ctx.gridConnection?.batteryAssist || null
+    getAssist: () => ctx.batteryAssist || ctx.gridConnection?.batteryAssist || null,
+    // Peak Shaving deckt die Plan-Schwelle selbst ab (P2) — nur mit dem Dienst.
+    getPeakShavingTargetW: () => (typeof ctx.peakShaving?.eosTargetW === 'function' ? ctx.peakShaving.eosTargetW(getCfg()) : null)
   });
 
   // Sungrow-Hybrid (T-0422, Beta): Netz-Sollwert über den EMS-Modus nachbilden

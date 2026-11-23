@@ -318,7 +318,10 @@ export function resolveGridConnection(cfg = {}, { victronPhaseLimitA = null, vic
  */
 export function eosGridChargeCapW(cfg, extra = {}) {
   const r = resolveGridConnection(cfg, extra);
-  if (!r.active) return null;
+  // Peak Shaving (P2, Christin 24.11.2026): die kleinere Grenze gilt auch für den Behelf.
+  const psW = finite(extra?.peakShavingTargetW) && Number(extra.peakShavingTargetW) > 0 ? Number(extra.peakShavingTargetW) : null;
+  if (!r.active && psW == null) return null;
+  const targetW = smallestLimit([r.active ? r.targetW : null, psW]);
   const opt = cfg?.optimizer || {};
   // Das E-Auto nur abziehen, wenn EOS es gerade wirklich plant (angemeldet,
   // extra.evPlanned aus der Anmelde-Entscheidung des Abgleichs) — ohne
@@ -327,7 +330,7 @@ export function eosGridChargeCapW(cfg, extra = {}) {
   // Ohne Angabe wie bisher nach eosOptimizeEv.
   const evPlanned = extra?.evPlanned === undefined ? opt.eosOptimizeEv === true : extra.evPlanned === true;
   const evW = opt.eosOptimizeEv === true && evPlanned ? Math.max(0, Number(opt.evMaxChargeW) || 5000) : 0;
-  return Math.max(0, r.targetW - r.baseLoadW - evW);
+  return Math.max(0, targetW - r.baseLoadW - evW);
 }
 
 /**
@@ -347,7 +350,12 @@ export const EOS_GRID_IMPORT_OFF_W = 1_000_000_000;
  */
 export function eosGridImportLimitW(cfg, extra = {}) {
   const r = resolveGridConnection(cfg, extra);
-  return r.active ? r.targetW : EOS_GRID_IMPORT_OFF_W;
+  // Peak Shaving (P2, Christin 24.11.2026): ist es aktiv, bekommt EOS die
+  // KLEINERE Grenze aus Netzanschluss und Peak Shaving (extra.peakShavingTargetW,
+  // eos-config-sync.js aus services/peak-shaving). Sonst unverändert.
+  const psW = finite(extra?.peakShavingTargetW) && Number(extra.peakShavingTargetW) > 0 ? Number(extra.peakShavingTargetW) : null;
+  const limit = smallestLimit([r.active ? r.targetW : null, psW]);
+  return limit == null ? EOS_GRID_IMPORT_OFF_W : limit;
 }
 
 // Victron-Anlagen am Netzanschluss: dreiphasig angenommen (die Anlage meldet
@@ -1562,7 +1570,7 @@ export function createGridConnectionGuard(ctx, deps = {}) {
     const ceiling = smallestLimit([grid, ext == null ? null : down(ext)]);
     return ceiling == null ? null : Math.max(0, ceiling);
   }
-  const SOURCE_LABEL = { p14a: '§14a', 'eos-threshold': 'EOS-Schwelle' };
+  const SOURCE_LABEL = { p14a: '§14a', 'eos-threshold': 'EOS-Schwelle', 'peak-shaving': 'Peak Shaving' };
   // Schwellen-Peak-Shaving aus dem EOS-Plan (schedule-eval →
   // services/optimizer/eos-threshold-assist.js, state.ctrl.eosThreshold) für die
   // Kachel: „EOS: Akku deckt über X kW“. Im Not-Halt nichts.
