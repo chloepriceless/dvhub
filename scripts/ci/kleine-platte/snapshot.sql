@@ -12,6 +12,8 @@ DECLARE
   t text;
   extra jsonb := '{}'::jsonb;
   j jsonb;
+  jj jsonb;
+  tc text;
 BEGIN
   out := out || jsonb_build_object(
     'at', now(),
@@ -23,6 +25,10 @@ BEGIN
          count(DISTINCT series_key) AS series
     INTO r FROM timeseries_samples WHERE scope = 'live' AND series_key NOT LIKE 'price%';
   out := out || jsonb_build_object('live_raw_rows', r.n, 'live_raw_oldest_days', round(r.oldest_days::numeric, 2), 'live_series', r.series);
+  -- Geschützter Bereich: die letzten 25 Tage Rohwerte dürfen nie verschwinden (alle Profile ≥ 30 d).
+  SELECT count(*) INTO n FROM timeseries_samples
+   WHERE scope = 'live' AND series_key NOT LIKE 'price%' AND ts_utc > now() - interval '25 days' AND ts_utc <= now() - interval '1 hour';
+  out := out || jsonb_build_object('live_recent_rows', n);
   SELECT count(*) INTO n FROM timeseries_samples WHERE series_key LIKE 'price%' AND ts_utc < now() - interval '1 day';
   out := out || jsonb_build_object('price_rows_past', n);
   SELECT count(*) INTO n FROM timeseries_samples WHERE scope <> 'live' AND series_key NOT LIKE 'price%' AND ts_utc < now() - interval '1 day';
@@ -38,6 +44,19 @@ BEGIN
     BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = t AND column_name = 'series_key') THEN
         EXECUTE format('SELECT jsonb_build_object(''rows'', count(*), ''series'', count(DISTINCT series_key)) FROM %I', t) INTO j;
+        -- Abdeckung des Bereichs, den die Wache entfernen darf (32–44 Tage alt): je Reihe Zahl
+        -- der Zeitfenster; „voll“ = mindestens 90 % der erwarteten Fenster (15 min bzw. 1 min).
+        SELECT c.column_name INTO tc FROM information_schema.columns c
+         WHERE c.table_schema = 'public' AND c.table_name = t AND c.column_name IN ('bucket_ts', 'slot_start_utc', 'ts_utc', 'bucket')
+         ORDER BY array_position(ARRAY['bucket_ts', 'slot_start_utc', 'ts_utc', 'bucket'], c.column_name::text) LIMIT 1;
+        IF tc IS NOT NULL THEN
+          EXECUTE format($q$SELECT jsonb_build_object('old_window_series', count(*), 'old_full_series', count(*) FILTER (WHERE w >= %s))
+                              FROM (SELECT series_key, count(DISTINCT %I) AS w FROM %I
+                                     WHERE %I > now() - interval '44 days' AND %I <= now() - interval '32 days'
+                                     GROUP BY series_key) x$q$,
+                         CASE WHEN t ~ '15m' THEN 12 * 96 * 0.9 ELSE 12 * 1440 * 0.9 END, tc, t, tc, tc) INTO jj;
+          j := j || jj;
+        END IF;
         extra := extra || jsonb_build_object(t, j);
       ELSE
         EXECUTE format('SELECT count(*) FROM %I', t) INTO n;

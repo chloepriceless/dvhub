@@ -10,12 +10,32 @@
 //   KP_SHIM_FIRST_MS     ersetzt einmalige Wartezeiten (setTimeout) ≥ 60 s
 //   KP_SHIM_INTERVAL_MS  ersetzt Takte (setInterval) ≥ 60 s
 //
+//   KP_SHIM_GATE        Datei: solange sie fehlt, laufen Rückrufe aus Dateien nach
+//                       KP_SHIM_GATE_MATCH (Standard storage|speicher) nicht — der Test
+//                       stellt erst den Füllstand ein und gibt die Wache dann frei.
+//                       Die Datenstufen (telemetry-tier) laufen ungebremst.
+//
 // Jede Verkürzung steht einmal als Zeile „[kp-shim] …“ auf stderr (docker logs),
 // damit der Bericht zeigen kann, ob die Wache überhaupt beschleunigt wurde.
+import { existsSync } from 'node:fs';
+
 const FIRST = Number(process.env.KP_SHIM_FIRST_MS || 0);
 const EVERY = Number(process.env.KP_SHIM_INTERVAL_MS || 0);
 const MATCH = new RegExp(`(${process.env.KP_SHIM_MATCH || 'storage|speicher|telemetry-tier'})[^/\\\\]*\\.(m?js|cjs)`, 'i');
 const seen = new Set();
+const GATE = process.env.KP_SHIM_GATE || '';
+const GATE_MATCH = new RegExp(`(${process.env.KP_SHIM_GATE_MATCH || 'storage|speicher'})[^/\\\\]*\\.(m?js|cjs)`, 'i');
+let gateLogged = false;
+function gated(fn, where) {
+  if (!GATE || typeof fn !== 'function' || !GATE_MATCH.test(where)) return fn;
+  return function gatedCallback(...a) {
+    if (!existsSync(GATE)) {
+      if (!gateLogged) { gateLogged = true; process.stderr.write(`[kp-shim] Lauf übersprungen, bis ${GATE} existiert (${where})\n`); }
+      return undefined;
+    }
+    return fn.apply(this, a);
+  };
+}
 
 function callerFile() {
   const lines = String(new Error().stack || '').split('\n').slice(2);
@@ -40,7 +60,7 @@ function wrap(orig, replacement, kind) {
           seen.add(key);
           process.stderr.write(`[kp-shim] ${kind} ${delay} ms -> ${replacement} ms (${where})\n`);
         }
-        return orig.call(this, fn, replacement, ...args);
+        return orig.call(this, gated(fn, where), replacement, ...args);
       }
     }
     return orig.call(this, fn, delay, ...args);

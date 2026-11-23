@@ -99,6 +99,13 @@ vm_put()   { colima ssh -- sudo tee "$1" < "$2" >/dev/null; }   # vm_put <ziel-i
 settle_db() { :; }   # in run_scenario: CHECKPOINT, damit WAL-Reste den Füllstand nicht verschieben
 vm_now_ms() { colima ssh -- date -u +%s%3N | tr -d '\r'; }
 
+# Compose-Argumente stehen je Projekt zeilenweise in einer Datei (Pfade dürfen Leerzeichen haben).
+compose_in() { # compose_in <projekt> <args-datei> <compose-argumente …>
+  local name="$1" file="$2" a=() l; shift 2
+  while IFS= read -r l; do a+=("$l"); done < "$file"
+  docker compose -p "$name" "${a[@]}" "$@"
+}
+
 # ── Aufräumen ───────────────────────────────────────────────────────────────
 CREATED_IMAGES=()      # selbst gebaut oder selbst gezogen
 PROJECTS=()            # Compose-Projekte (Name|Compose-Argumente-Datei)
@@ -113,7 +120,7 @@ cleanup() {
     [[ -z "$p" ]] && continue
     local name="${p%%|*}" args="${p#*|}"
     # shellcheck disable=SC2086
-    docker compose -p "$name" $(cat "$args") down -v --remove-orphans >>"$LOG" 2>&1 && note "Projekt $name entfernt (samt Volumes)"
+    compose_in "$name" "$args" down -v --remove-orphans >>"$LOG" 2>&1 && note "Projekt $name entfernt (samt Volumes)"
   done
   [[ -n "$CAPTURE_NAME" ]] && docker rm -f "$CAPTURE_NAME" >>"$LOG" 2>&1 && note "Container $CAPTURE_NAME entfernt"
   vm >>"$LOG" 2>&1 <<EOF
@@ -220,7 +227,10 @@ truncate -s ${2}G "$VM_IMG_DIR/$1.img"
 mkfs.ext4 -q -F -L "kp-$1" "$VM_IMG_DIR/$1.img"
 mkdir -p "$VM_MNT_DIR/$1"
 mount -o loop "$VM_IMG_DIR/$1.img" "$VM_MNT_DIR/$1"
+mountpoint -q "$VM_MNT_DIR/$1"
 EOF
+  # macOS-bash 3.2: in $( … ) greift set -e nicht verlässlich — Fehler ausdrücklich weitergeben.
+  [[ $? -eq 0 ]] || return 1
   echo "$VM_MNT_DIR/$1"
 }
 statfs_json() { # statfs_json <mount> → {"totalMb":…,"freeMb":…,"freePct":…} wie storage-guard (bavail)
@@ -264,9 +274,9 @@ run_scenario() {
 
   # Platten
   local m_main m_data
-  m_main="$(mkfs_disk "s$id-main" "$gb_main")"
-  if (( gb_data > 0 )); then m_data="$(mkfs_disk "s$id-data" "$gb_data")"; else m_data="$m_main"; fi
-  echo "mkdir -p '$m_main/db' '$m_data/data' '$m_data/config'" | vm >>"$LOG" 2>&1
+  m_main="$(mkfs_disk "s$id-main" "$gb_main")" || die "Platte s$id-main ($gb_main GB) nicht angelegt"
+  if (( gb_data > 0 )); then m_data="$(mkfs_disk "s$id-data" "$gb_data")" || die "Platte s$id-data nicht angelegt"; else m_data="$m_main"; fi
+  echo "mkdir -p '$m_main/db' '$m_data/data' '$m_data/config'" | vm >>"$LOG" 2>&1 || die "Verzeichnisse auf der Testplatte nicht angelegt"
   note "Platte PG-Daten: $m_main $(statfs_json "$m_main")"
   [[ "$m_data" != "$m_main" ]] && note "Platte DVhub-Daten: $m_data $(statfs_json "$m_data")"
 
@@ -304,12 +314,13 @@ KP_DB_DIR=$m_main/db
 KP_DATA_DIR=$m_data/data
 KP_CONFIG_DIR=$m_data/config
 EOF
-  local extra=""
-  [[ "$ts_mode" == plain ]] && extra="-f $KP/compose.plainpg.yml"
-  echo "-f $SRC/docker/compose.yml -f $KP/compose.override.yml $extra --env-file $envf" > "$argsf"
+  {
+    printf '%s\n' -f "$SRC/docker/compose.yml" -f "$KP/compose.override.yml"
+    if [[ "$ts_mode" == plain ]]; then printf '%s\n' -f "$KP/compose.plainpg.yml"; fi
+    printf '%s\n' --env-file "$envf"
+  } > "$argsf"
   PROJECTS+=("$project|$argsf")
-  dc() { # shellcheck disable=SC2046
-    docker compose -p "$project" $(cat "$argsf") "$@"; }
+  dc() { compose_in "$project" "$argsf" "$@"; }
   psql_db() { dc exec -T db psql -X -q -v ON_ERROR_STOP=1 "$@"; }
   status_get() { dc exec -T dvhub wget -qO- -T 10 "http://127.0.0.1:$HTTP_PORT$1" 2>/dev/null || true; }
 
@@ -377,6 +388,9 @@ EOF
   fill_to "$m_main" "$target"
   if [[ "$m_data" != "$m_main" ]]; then fill_to "$m_data" "$(pct_to_mb "$m_data" "$free_data_pct")"; fi
   local fill_at; fill_at="$(vm_now_ms)"
+  # Erst jetzt darf die Wache laufen (timer-shim: KP_SHIM_GATE). Läufe davor sind übersprungen,
+  # damit kein Lauf mitten ins Füllen fällt und vor fill_at Platz schafft (Codex 30c76e1c).
+  echo "touch '$m_data/data/kp-gate-open'" | vm >>"$LOG" 2>&1 || die "Freigabe für die Wache nicht gesetzt"
   statfs_json "$m_main" > "$dir/fs-main-filled.json"
   [[ "$m_data" != "$m_main" ]] && statfs_json "$m_data" > "$dir/fs-data-filled.json"
 
@@ -422,8 +436,10 @@ EOF
 EOF
 
   # Abbauen (Volumes zeigen per Bind auf die Loop-Platte; down -v entfernt nur die Volume-Einträge).
-  dc down -v --remove-orphans >>"$LOG" 2>&1 || true
-  local keep=() p; for p in "${PROJECTS[@]}"; do [[ "$p" != "$project|$argsf" ]] && keep+=("$p"); done; PROJECTS=("${keep[@]:-}")
+  # Nur nach erfolgreichem Abbau austragen und die Platte aushängen — sonst bleibt beides
+  # beim Aufräumen am Ende (Codex 30c76e1c).
+  dc down -v --remove-orphans >>"$LOG" 2>&1 || die "Abbau von $project gescheitert — Aufräumen versucht es erneut"
+  local keep=() p; for p in "${PROJECTS[@]}"; do if [[ "$p" != "$project|$argsf" ]]; then keep+=("$p"); fi; done; PROJECTS=("${keep[@]:-}")
   vm >>"$LOG" 2>&1 <<EOF
 umount "$VM_MNT_DIR/s$id-main" 2>/dev/null; umount "$VM_MNT_DIR/s$id-data" 2>/dev/null
 rm -f "$VM_IMG_DIR/s$id-main.img" "$VM_IMG_DIR/s$id-data.img"; rmdir "$VM_MNT_DIR/s$id-main" "$VM_MNT_DIR/s$id-data" 2>/dev/null; true
@@ -437,5 +453,5 @@ IFS=',' read -r -a LIST <<<"$SCENARIOS"
 for sid in "${LIST[@]}"; do run_scenario "$sid"; done
 
 say "Zusammenfassung"
-"$NODE" "$KP/evaluate.mjs" --summary "$OUT" "$(( $(date +%s) - T_ALL ))" | tee -a "$LOG"
+"$NODE" "$KP/evaluate.mjs" --summary "$OUT" "$(( $(date +%s) - T_ALL ))" "$RUN_ID" "$SCENARIOS" | tee -a "$LOG"
 if "$NODE" -e 'process.exit(require(process.argv[1]).allGreen ? 0 : 1)' "$OUT/summary.json"; then exit 0; else exit 1; fi

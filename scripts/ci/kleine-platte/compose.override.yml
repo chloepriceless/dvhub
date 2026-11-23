@@ -16,6 +16,9 @@ services:
       KP_SHIM_FIRST_MS: "${KP_SHIM_FIRST_MS:-20000}"
       KP_SHIM_INTERVAL_MS: "${KP_SHIM_INTERVAL_MS:-45000}"
       KP_SHIM_MATCH: "${KP_SHIM_MATCH:-storage|speicher|telemetry-tier}"
+      # Läufe der Wache erst, wenn der Test den Füllstand eingestellt hat (Datei im Datenordner).
+      KP_SHIM_GATE: /var/lib/dvhub/kp-gate-open
+      KP_SHIM_GATE_MATCH: "${KP_SHIM_GATE_MATCH:-storage|speicher}"
     volumes:
       - ${KP_SHIM_DIR:?}:/kp-shim:ro
 volumes:

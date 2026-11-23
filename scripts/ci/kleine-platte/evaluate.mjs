@@ -34,10 +34,13 @@ function pick(obj, paths) {
   }
   return null;
 }
+// Profil nach Plattengröße (sizeProfile) zuerst — „effective“ darf bei wenig/kritisch
+// befristet härter sein (Konzept § 6.3), das steht nur im Beleg.
 function profileOf(st) {
-  const p = pick(st, ['profile.effective', 'profile.name', 'profile.id', 'profile.key', 'profile', 'storageProfile', 'profil']);
+  const p = pick(st, ['profile.sizeProfile', 'profile.base', 'profile.effective', 'profile.name', 'profile.id', 'profile.key', 'profile', 'storageProfile', 'profil']);
   if (!p) return null;
-  return { value: typeof p.value === 'object' ? JSON.stringify(p.value) : String(p.value), path: p.path };
+  const eff = st?.profile && typeof st.profile === 'object' ? st.profile.effective : null;
+  return { value: typeof p.value === 'object' ? JSON.stringify(p.value) : String(p.value), path: p.path, effective: eff ?? null };
 }
 function daysLeftOf(st) {
   const p = pick(st, ['daysLeft', 'reach.days', 'reachDays', 'rangeDays', 'reichweiteTage', 'growth.daysLeft', 'forecast.daysLeft']);
@@ -149,11 +152,16 @@ function evaluateScenario(dir) {
   // Profil
   const prof = profileOf(st);
   add('profil', 'neu', prof == null ? 'fehlt' : (new RegExp(`\\b${meta.expectProfile}\\b`, 'i').test(prof.value) ? 'ok' : 'rot'),
-    prof == null ? 'Status nennt kein Profil' : `${prof.path}=${prof.value} (erwartet ${meta.expectProfile})`);
+    prof == null ? 'Status nennt kein Profil' : `${prof.path}=${prof.value} (erwartet ${meta.expectProfile})${prof.effective ? `, wirksam ${prof.effective}` : ''}`);
 
   // Reichweite
   const dl = daysLeftOf(st);
-  if (dl == null) add('reichweite', 'neu', 'fehlt', 'Status nennt keine Reichweite in Tagen');
+  const dlKey = st && typeof st === 'object' && ['daysLeft', 'reachDays', 'rangeDays'].find((k) => Object.hasOwn(st, k));
+  if (dl == null && dlKey) {
+    // Feld da, aber leer: ohne Wachstumswerte (Messpunkt je Tag) keine Reichweite — im
+    // Minuten-Test erwartbar. Kein Fehler, aber sichtbar.
+    add('reichweite', 'info', 'info', `${dlKey}=null (kein Wachstum bekannt; growthMbPerDay=${st.growthMbPerDay ?? 'null'}, reserveMb=${st.reserveMb ?? '–'}) — im Minuten-Test nicht prüfbar`);
+  } else if (dl == null) add('reichweite', 'neu', 'fehlt', 'Status nennt keine Reichweite in Tagen');
   else {
     const d = num(dl.value);
     let okd;
@@ -167,8 +175,13 @@ function evaluateScenario(dir) {
     const dropped = num(after.live_raw_rows) != null && num(before.live_raw_rows) != null && num(after.live_raw_rows) < num(before.live_raw_rows);
     const oldest = num(after.live_raw_oldest_days);
     const keepOk = oldest != null && oldest <= 31.5;
+    // Nicht zu viel: die letzten 25 Tage bleiben vollständig (0,5 % Spiel für das wandernde Fenster).
+    const recentKept = num(after.live_recent_rows) != null && num(before.live_recent_rows) != null
+      && num(after.live_recent_rows) >= num(before.live_recent_rows) * 0.995;
     add('rohwerte-entfernt', 'fehler', dropped && keepOk ? 'ok' : 'rot',
       `5-s-Live-Zeilen ${before.live_raw_rows} → ${after.live_raw_rows}, ältester ${before.live_raw_oldest_days} → ${after.live_raw_oldest_days} Tage (erwartet ≤ ~31)`);
+    add('juengste-rohwerte-bleiben', 'basis', recentKept ? 'ok' : 'rot',
+      `Live-Zeilen der letzten 25 Tage ${before.live_recent_rows} → ${after.live_recent_rows} (dürfen nicht weniger werden)`);
     const fsAfter = readJson(path.join(dir, 'fs-main-after.json'), {});
     add('platz-danach', 'info', 'info', `PG-Platte frei: nach Füllen ${fsMain.freeMb} MB, am Ende ${fsAfter.freeMb} MB`
       + (meta.tsMode === 'plain' ? ' (reines PostgreSQL: DELETE gibt Platz nicht ans Dateisystem zurück)' : ''));
@@ -196,11 +209,15 @@ function evaluateScenario(dir) {
   }
   if (meta.expectLevel !== 'ok') {
     // 15-min für JEDE aufgenommene Reihe (S3 a+c): nach dem Entfernen müssen alle Live-Reihen verdichtet vorliegen.
+    // Gezählt werden nur Reihen, deren 15-min-Werte den entfernbaren Bereich (32–44 Tage alt)
+    // zu ≥ 90 % abdecken — eine einzelne neue Zeile je Reihe reicht nicht (Codex 30c76e1c).
     const live = num(before.live_series);
-    const t15 = tierNames.filter((t) => /15m/.test(t)).map((t) => Number(ta[t]?.series ?? 0));
-    const best = Math.max(num(after.slots15_series) ?? 0, ...t15, 0);
-    add('15min-alle-reihen', 'neu', live != null && best >= live ? 'ok' : (t15.length ? 'rot' : 'fehlt'),
-      `meiste Reihen in einer 15-min-Tabelle: ${best} vs. Live-Reihen ${live} (energy_slots_15m: ${after.slots15_series}; Test legt dort nur 8 an)`);
+    const t15 = tierNames.filter((t) => /15m/.test(t));
+    const full = t15.map((t) => ({ t, n: Number(ta[t]?.old_full_series ?? 0) }));
+    const best = full.reduce((m, x) => (x.n > m.n ? x : m), { t: null, n: 0 });
+    add('15min-alle-reihen', 'neu', live != null && best.n >= live ? 'ok' : (t15.length ? 'rot' : 'fehlt'),
+      t15.length ? `Reihen mit voller 15-min-Abdeckung 32–44 Tage zurück: ${full.map((x) => `${x.t}=${x.n}`).join(', ')} vs. Live-Reihen ${live}`
+        : `keine 15-min-Stufentabelle je Reihe (energy_slots_15m hat ${after.slots15_series} Reihen, davon 8 vom Test)`);
   }
 
   // Push
@@ -248,9 +265,12 @@ function evaluateScenario(dir) {
   return result;
 }
 
-function summary(out, secs) {
+function summary(out, secs, runId, scenarios) {
+  // Nur Ergebnisse DIESES Laufs und der angefragten Szenarien (Codex 30c76e1c: --out wiederverwendet).
+  const want = scenarios ? new Set(String(scenarios).split(',').map((x) => Number(x.trim()))) : null;
   const dirs = fs.readdirSync(out).filter((d) => /^s\d+$/.test(d)).sort();
-  const results = dirs.map((d) => readJson(path.join(out, d, 'result.json'))).filter(Boolean);
+  const results = dirs.map((d) => readJson(path.join(out, d, 'result.json'))).filter(Boolean)
+    .filter((r) => (!runId || r.runId === runId) && (!want || want.has(Number(r.scenario))));
   const allIds = [...new Set(results.flatMap((r) => r.checks.map((c) => c.id)))];
   const s = {
     at: new Date().toISOString(), out, seconds: Number(secs) || null,
@@ -274,5 +294,5 @@ function summary(out, secs) {
   console.log(txt);
 }
 
-if (process.argv[2] === '--summary') summary(process.argv[3], process.argv[4]);
+if (process.argv[2] === '--summary') summary(process.argv[3], process.argv[4], process.argv[5], process.argv[6]);
 else evaluateScenario(process.argv[2]);
