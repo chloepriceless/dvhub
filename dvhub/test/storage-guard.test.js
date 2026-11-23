@@ -32,7 +32,8 @@ function fakeDb({ ts = true, oldestDays = 500, aggUntil = '2026-09-30T00:00:00Z'
         return { rows: [{ n: 3 }] };
       }
       if (sql.includes('drop_chunks') && dropThrows) throw new Error(dropThrows);
-      if (sql.includes('oldest_days')) return { rows: [{ oldest_days: oldestDays, agg_until: aggUntil }] };
+      if (sql.includes('/ 86400 AS d')) return { rows: [{ d: oldestDays }] };
+      if (sql.includes('AS until')) return { rows: [{ until: aggUntil }] };
       return { rows: [], rowCount: 0 };
     },
   };
@@ -56,10 +57,11 @@ test('Knapp: nur früher komprimieren', async () => {
   assert.match(warn.storage, /knapp/);
 });
 
-test('Wenig: eine Stufe Rohwerte weg, nie jünger als die 15-min-Werte', async () => {
+// Seit Schritt 3 (Konzept 23.11.): Notfall-Löschen erst bei „kritisch“, bei „wenig“ greift das härtere Profil.
+test('Kritisch: eine Stufe Rohwerte weg, nie jünger als die 15-min-Werte', async () => {
   const db = fakeDb({ oldestDays: 500, aggUntil: '2025-01-01T00:00:00Z' }); const warn = {};
   const NOW = Date.parse('2026-10-01T12:00:00Z');
-  const r = await createStorageGuard({ getDb: () => db, statfs: stat(8), now: () => NOW, setWarning: (id, m) => { warn[id] = m; } }).check();
+  const r = await createStorageGuard({ getDb: () => db, statfs: stat(3), now: () => NOW, setWarning: (id, m) => { warn[id] = m; } }).check();
   const drop = r.actions.find((a) => a.action === 'drop_raw');
   assert.equal(drop.keepDays, 365);
   assert.equal(drop.before, '2025-01-01T00:00:00.000Z', 'begrenzt durch den letzten verdichteten Slot');
@@ -102,24 +104,24 @@ test('6c: storage_guard_error wird gedrosselt (gleicher Fehler nicht in jedem Zy
 // ── 23.11.2026: Kundenfall 12-GB-Platte, Apache-Edition (S12/S13) ──────────────
 const APACHE_ERR = 'function "compress_chunk" is not supported under the current "apache" license';
 
-test('Apache, wenig Platz: kein compress_chunk-Abbruch — Hinweis steht und eine Stufe Rohwerte geht per drop_chunks', async () => {
+test('Apache, kritisch wenig Platz: kein compress_chunk-Abbruch — Hinweis steht und eine Stufe Rohwerte geht per drop_chunks', async () => {
   // Echte Apache-Box: compress_chunk wirft genau diesen Fehler (im Image timescale/timescaledb:2.30.2-pg17
   // mit timescaledb.license=apache nachgestellt), drop_chunks geht.
   const db = fakeDb({ license: 'apache', compressThrows: APACHE_ERR, oldestDays: 500, aggUntil: '2026-09-30T00:00:00Z' });
   const warn = {}; const sev = {}; const logs = [];
   const NOW = Date.parse('2026-11-23T12:00:00Z');
   const r = await createStorageGuard({
-    getDb: () => db, statfs: stat(8), now: () => NOW,
+    getDb: () => db, statfs: stat(3), now: () => NOW,
     setWarning: (id, m, s) => { warn[id] = m; sev[id] = s; },
     pushLog: (e, d, l) => logs.push({ e, d, l }),
   }).check();
-  assert.equal(r.level, 'wenig');
+  assert.equal(r.level, 'kritisch');
   assert.ok(!db.calls.some(([s]) => /compress_chunk/.test(s)), 'unter Apache nicht komprimieren');
   const drop = r.actions.find((a) => a.action === 'drop_raw');
   assert.ok(drop && !drop.error, `Rohwerte entfernt: ${JSON.stringify(r.actions)}`);
   assert.equal(drop.keepDays, 365);
   assert.ok(db.calls.some(([s]) => /SELECT drop_chunks/.test(s)), 'drop_chunks geht auch unter Apache');
-  assert.match(warn.storage, /Speicher wenig/);
+  assert.match(warn.storage, /Speicher kritisch/);
   assert.match(warn.storage, /älter als 365 Tage/);
   assert.match(warn[COMPRESSION_WARNING_ID], /Datenbank ohne Kompression/);
   assert.match(warn[COMPRESSION_WARNING_ID], /Apache/);
@@ -164,11 +166,11 @@ test('drop_chunks scheitert: Hinweis steht trotzdem, Fehler in den Maßnahmen', 
   const db = fakeDb({ dropThrows: 'Sperre', oldestDays: 500 });
   const warn = {};
   const r = await createStorageGuard({
-    getDb: () => db, statfs: stat(8), now: () => Date.parse('2026-11-23T12:00:00Z'),
+    getDb: () => db, statfs: stat(3), now: () => Date.parse('2026-11-23T12:00:00Z'),
     setWarning: (id, m) => { warn[id] = m; },
   }).check();
   assert.ok(r.actions.find((a) => a.action === 'drop_raw')?.error);
-  assert.match(warn.storage, /Speicher wenig/);
+  assert.match(warn.storage, /Speicher kritisch/);
   assert.ok(db.calls.some(([s]) => s === 'ROLLBACK'));
 });
 
@@ -268,4 +270,67 @@ test('compress_chunk-Fehler verfällt, sobald wieder genug Platz ist (der Job ko
   const r = await g.check();
   assert.equal(r.level, 'ok');
   assert.equal(warn[COMPRESSION_WARNING_ID], null);
+});
+
+// ── Schritt 3: Speicherprofil ────────────────────────────────────────────────
+test('Wenig: kein Notfall-Löschen, Profil vorübergehend eine Stufe härter (S2 a), DB-Regeln umgestellt', async () => {
+  const db = fakeDb({ oldestDays: 500 }); const warn = {}; const changes = [];
+  const r = await createStorageGuard({
+    getDb: () => db, statfs: stat(8), setWarning: (id, m) => { warn[id] = m; },
+    onProfileChange: (p, info) => changes.push([p.name, info.from]),
+  }).check();
+  assert.equal(r.level, 'wenig');
+  assert.ok(!r.actions.some((a) => a.action === 'drop_raw'), 'kein Notfall-Löschen bei „wenig“');
+  assert.equal(r.profile.base, 'gross', 'Bestandsbox (500 Tage Messwerte) bleibt beim bisherigen Verhalten');
+  assert.equal(r.profile.effective, 'mittel');
+  assert.equal(r.profile.temporary, true);
+  assert.deepEqual(changes, [['mittel', 'gross']]);
+  assert.match(warn.storage, /Speicherprofil vorübergehend „mittel“/);
+});
+
+test('Neuinstallation auf kleiner Platte: Profil automatisch, Rohwerte nach Profil (über den verdichteten Stand)', async () => {
+  // 12-GB-Platte, viel frei, Messwerte erst seit 1 Tag → Neuinstallation → „klein“.
+  const big = () => ({ blocks: 12 * 1024, bsize: 1048576, bavail: 10 * 1024 });
+  const files = {};
+  const io = { writeFile: (f, d) => { files[f] = d; }, rename: (a, b) => { files[b] = files[a]; delete files[a]; } };
+  const db = fakeDb({ oldestDays: 1 }); const changes = [];
+  const g = createStorageGuard({
+    getDb: () => db, statfs: big, getDataDir: () => '/d', profileIo: io, samplesIo: { ...io, readFile: () => { throw new Error('x'); } },
+    readFile: (f) => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; },
+    onProfileChange: (p) => changes.push(p.name),
+  });
+  const r = await g.check();
+  assert.equal(r.level, 'ok');
+  assert.deepEqual([r.profile.mode, r.profile.origin, r.profile.effective], ['auto', 'install', 'klein']);
+  assert.deepEqual(changes, ['klein']);
+  const saved = JSON.parse(files['/d/storage-profile.json']);
+  assert.equal(saved.effective, 'klein', 'für pg-write-tuning.sh / storage-limits.sh');
+  assert.ok(!r.actions.some((a) => a.action === 'retain_raw'), 'nichts älter als 365 Tage');
+});
+
+test('Profil „winzig“: Rohwerte älter als 30 Tage gehen, nie jünger als der verdichtete Stand, einmal am Tag', async () => {
+  let t = Date.parse('2026-11-23T12:00:00Z');
+  const db = fakeDb({ oldestDays: 90, aggUntil: '2026-11-01T00:00:00Z' });
+  const g = createStorageGuard({ getDb: () => db, statfs: stat(60), now: () => t, initialProfile: 'winzig',
+    profileIo: { writeFile() {}, rename() {} } });
+  // Gespeicherter Stand: fest „winzig“.
+  g.chooseProfile('winzig');
+  const r = await g.check();
+  const ret = r.actions.find((a) => a.action === 'retain_raw');
+  assert.equal(ret.keepDays, 30);
+  assert.equal(ret.before, '2026-10-24T12:00:00.000Z');
+  t += 30 * 60_000;
+  const r2 = await g.check();
+  assert.ok(!r2.actions.some((a) => a.action === 'retain_raw'), 'höchstens einmal am Tag');
+});
+
+test('Profilwahl per Klick: „auto“ übernimmt den Vorschlag', async () => {
+  const db = fakeDb({ oldestDays: 500 });
+  const big = () => ({ blocks: 12 * 1024, bsize: 1048576, bavail: 10 * 1024 });
+  const g = createStorageGuard({ getDb: () => db, statfs: big });
+  const r1 = await g.check();
+  assert.deepEqual([r1.profile.effective, r1.profile.suggested], ['gross', 'klein']);
+  g.chooseProfile('auto');
+  const r2 = await g.check();
+  assert.deepEqual([r2.profile.effective, r2.profile.mode, r2.profile.suggested], ['klein', 'auto', null]);
 });

@@ -74,11 +74,21 @@ export function dbBudgetMb({ env = process.env, totalMemBytes } = {}) {
   return 0;
 }
 
+/**
+ * WAL-Grenzen nach Speicherprofil (services/storage-profile.js): kleine Platten
+ * halten weniger Schreibpuffer vor. „groß“ (und ohne Profil) = bisher:
+ * max_wal_size bleibt unangetastet (PostgreSQL-Standard 1 GB), min_wal_size 64MB.
+ */
+export function walSettings(storageProfile = null) {
+  if (!storageProfile || storageProfile.name === 'gross') return {};
+  return { max_wal_size: `${storageProfile.maxWalMb}MB`, min_wal_size: `${storageProfile.minWalMb}MB` };
+}
+
 /** Soll-Werte für diese Box. */
-export function desiredSettings({ budgetMb, includeMemory = true } = {}) {
+export function desiredSettings({ budgetMb, includeMemory = true, storageProfile = null } = {}) {
   const prof = includeMemory ? memoryProfile(budgetMb) : null;
   const { name, ...mem } = prof || {};
-  return { profile: name || null, settings: { ...WRITE_SETTINGS, ...(prof ? mem : {}) } };
+  return { profile: name || null, settings: { ...WRITE_SETTINGS, ...(prof ? mem : {}), ...walSettings(storageProfile) } };
 }
 
 /**
@@ -86,8 +96,8 @@ export function desiredSettings({ budgetMb, includeMemory = true } = {}) {
  * nur, was abweicht; nie, was auf der Kommandozeile steht.
  * @returns {{ changed: string[], pendingRestart: string[], skippedCommandLine: string[], profile: string|null }}
  */
-export async function applyDbTuning(query, { budgetMb, includeMemory = true } = {}) {
-  const { profile, settings } = desiredSettings({ budgetMb, includeMemory });
+export async function applyDbTuning(query, { budgetMb, includeMemory = true, storageProfile = null } = {}) {
+  const { profile, settings } = desiredSettings({ budgetMb, includeMemory, storageProfile });
   const names = Object.keys(settings);
   const res = await query(
     'SELECT name, setting, unit, source, context, pending_restart FROM pg_settings WHERE name = ANY($1::text[])',
@@ -171,8 +181,30 @@ ALTER TABLE timeseries_samples SET (
   timescaledb.compress_orderby = 'ts_utc desc'
 )`;
 
-export async function tuneTimescale(query) {
-  const out = { chunkInterval: null, compressAfter: null, changed: [] };
+/** Intervall-Text in Sekunden: „2 days“, „12 hours“, „12:00:00“, „1 day 06:00:00“. */
+export function intervalSeconds(v) {
+  const str = String(v ?? '').trim().toLowerCase();
+  if (!str) return null;
+  let sec = 0; let hit = false;
+  const unit = { second: 1, seconds: 1, minute: 60, minutes: 60, hour: 3600, hours: 3600, day: 86400, days: 86400, week: 604800, weeks: 604800 };
+  for (const m of str.matchAll(/(\d+(?:\.\d+)?)\s*(seconds?|minutes?|hours?|days?|weeks?)\b/g)) { sec += Number(m[1]) * unit[m[2]]; hit = true; }
+  const hms = /(\d+):(\d{2}):(\d{2})/.exec(str);
+  if (hms) { sec += Number(hms[1]) * 3600 + Number(hms[2]) * 60 + Number(hms[3]); hit = true; }
+  return hit ? sec : null;
+}
+
+/**
+ * Blöcke und Kompression nach Speicherprofil (services/storage-profile.js,
+ * Speicher-Konzept 23.11.2026 Schritt 3). Ohne profile gilt „groß“ = das
+ * Verhalten bis 1.0.12: Tagesblöcke, Kompression nach 2 Tagen, Lauf alle 12 h.
+ * Kleinere Profile: kleinere Blöcke, früher und öfter komprimieren (S4:
+ * Kompression immer, auf allen Profilen). Wirkt für neue Blöcke.
+ */
+export async function tuneTimescale(query, profile = null) {
+  const chunkWant = profile?.chunkInterval || SAMPLES_CHUNK_INTERVAL;
+  const afterWant = profile?.compressAfter || SAMPLES_COMPRESS_AFTER;
+  const schedWant = profile?.compressSchedule || null;
+  const out = { chunkInterval: null, compressAfter: null, changed: [], profile: profile?.name || null };
   const ext = await query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'");
   if (!ext.rows?.length) return { ...out, skipped: 'no_timescaledb' };
   const dim = await query(
@@ -180,11 +212,13 @@ export async function tuneTimescale(query) {
       WHERE hypertable_name = 'timeseries_samples' AND dimension_type = 'Time'`);
   const curS = Number(dim.rows?.[0]?.s);
   if (!Number.isFinite(curS)) return { ...out, skipped: 'no_hypertable' };
-  if (curS > 86400) {
-    await query(`SELECT set_chunk_time_interval('timeseries_samples', INTERVAL '${SAMPLES_CHUNK_INTERVAL}')`);
+  const wantS = intervalSeconds(chunkWant);
+  if (curS !== wantS) {
+    // Werte stammen aus der festen Profiltabelle, kein Nutzertext.
+    await query(`SELECT set_chunk_time_interval('timeseries_samples', INTERVAL '${chunkWant}')`);
     out.changed.push('chunk_interval');
   }
-  out.chunkInterval = curS > 86400 ? SAMPLES_CHUNK_INTERVAL : `${curS / 3600} h`;
+  out.chunkInterval = chunkWant;
   // Apache kann keine Kompression — dort kein Fehler, nur nichts zu tun.
   const lic = await query("SELECT current_setting('timescaledb.license', true) AS lic");
   if (lic.rows?.[0]?.lic !== 'timescale') return { ...out, skipped: 'apache' };
@@ -201,16 +235,25 @@ export async function tuneTimescale(query) {
     }
     out.changed.push('compression_enabled');
   }
-  const job = await query(
-    `SELECT config->>'compress_after' AS after FROM timescaledb_information.jobs
-      WHERE proc_name = 'policy_compression' AND hypertable_name = 'timeseries_samples'`);
-  const after = job.rows?.[0]?.after || null;
-  if (after !== SAMPLES_COMPRESS_AFTER) {
+  const JOB_SQL = `SELECT job_id, config->>'compress_after' AS after, extract(epoch FROM schedule_interval)::bigint AS sched
+      FROM timescaledb_information.jobs
+      WHERE proc_name = 'policy_compression' AND hypertable_name = 'timeseries_samples'`;
+  let job = (await query(JOB_SQL)).rows?.[0] || null;
+  const after = job?.after || null;
+  if (intervalSeconds(after) !== intervalSeconds(afterWant)) {
     if (after) await query("SELECT remove_compression_policy('timeseries_samples', if_exists => true)");
-    await query(`SELECT add_compression_policy('timeseries_samples', compress_after => INTERVAL '${SAMPLES_COMPRESS_AFTER}', if_not_exists => true)`);
+    await query(`SELECT add_compression_policy('timeseries_samples', compress_after => INTERVAL '${afterWant}', if_not_exists => true)`);
     out.changed.push('compress_after');
+    job = (await query(JOB_SQL)).rows?.[0] || null;
   }
-  out.compressAfter = SAMPLES_COMPRESS_AFTER;
+  out.compressAfter = afterWant;
+  // Lauf-Intervall des Kompressions-Jobs (nur wenn bekannt und abweichend).
+  const sched = Number(job?.sched);
+  if (schedWant && job?.job_id != null && Number.isFinite(sched) && sched !== intervalSeconds(schedWant)) {
+    await query(`SELECT alter_job(${Number(job.job_id)}, schedule_interval => INTERVAL '${schedWant}')`);
+    out.changed.push('compress_schedule');
+  }
+  if (schedWant) out.compressSchedule = schedWant;
   return out;
 }
 

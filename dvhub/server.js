@@ -48,6 +48,7 @@ import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
 import { createStorageGuard } from './services/storage-guard.js';
 import { readPgDataDirectory } from './services/storage-mounts.js';
+import { startupProfile as storageStartupProfile } from './services/storage-profile.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import {
   APPLICABLE_VALUE_TICK_MS,
@@ -797,7 +798,7 @@ function persistConfig(source = 'config_persist') {
 
 let dbPool = null; // raw pg pool — shared between telemetry store and forecast services
 
-async function tuneDatabase(dbConfig) {
+async function tuneDatabase(dbConfig, storageProfile = null) {
   const adminUser = process.env.DVHUB_DB_ADMIN_USER;
   const adminPassword = process.env.DVHUB_DB_ADMIN_PASSWORD;
   if (!adminUser || !adminPassword || cfg.telemetry?.database?.selfTune === false) {
@@ -807,8 +808,9 @@ async function tuneDatabase(dbConfig) {
   const admin = createPool({ ...dbConfig, user: adminUser, password: adminPassword, name: 'postgres', pool: { min: 0, max: 1 } });
   try {
     const budgetMb = dbBudgetMb({ totalMemBytes: os.totalmem() });
-    const r = await applyDbTuning((q, p) => admin.query(q, p), { budgetMb });
-    state.dbTuning = { applied: true, budgetMb, ...r, at: new Date().toISOString() };
+    // WAL-Grenzen nach Speicherprofil (Speicher-Konzept Schritt 3, S7: im Container per ALTER SYSTEM).
+    const r = await applyDbTuning((q, p) => admin.query(q, p), { budgetMb, storageProfile });
+    state.dbTuning = { applied: true, budgetMb, storageProfile: storageProfile?.name || null, ...r, at: new Date().toISOString() };
     if (r.changed.length || r.pendingRestart.length) pushLog('db_tuning', state.dbTuning);
   } finally {
     await admin.end().catch(() => {});
@@ -869,13 +871,15 @@ async function createTelemetryStoreIfEnabled() {
     // Datenbank selbst einstellen (schreibarm + kleiner Speicher-Footprint,
     // services/db-tuning.js) — wo ein Admin-Zugang da ist (Container/balena).
     // Nativ setzt pg-write-tuning.sh dieselben Werte. Blockiert den Start nie.
-    if (IS_RUNTIME_PROCESS) tuneDatabase(dbConfig).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
+    // Speicherprofil (storage-profile.json, Platz-Wache) gilt schon beim Start.
+    const storageProfile = storageStartupProfile(DATA_DIR || '/var/lib/dvhub');
+    if (IS_RUNTIME_PROCESS) tuneDatabase(dbConfig, storageProfile).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
     // Messwerte: Tagesblöcke, Kompression nach 2 Tagen (als Eigentümer, überall).
     // Ergebnis nicht mehr verschlucken (23.11.2026): „nicht möglich“ oder ein
     // Fehler führen über die Platz-Wache zum roten Hinweis „Datenbank ohne
     // Kompression“ (services/storage-guard.js); /api/storage/status zeigt es.
     if (IS_RUNTIME_PROCESS) {
-      tuneTimescale((q, p) => pool.query(q, p))
+      tuneTimescale((q, p) => pool.query(q, p), storageProfile)
         .then((r) => { state.timescaleTuning = { ...r, at: new Date().toISOString() }; if (r.changed?.length || r.deferred || r.skipped) pushLog('timescale_tuning', r); })
         .catch((e) => {
           state.timescaleTuning = { error: e.message, at: new Date().toISOString() };
@@ -2748,6 +2752,8 @@ const telemetryReady = (async () => {
     // Start; je Lauf höchstens 5 min Arbeit.
     const logRetention = createLogRetention({
       getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
+      // S5 c: bei „wenig“/„kritisch“ gilt „Vollständig“ vorübergehend als Standard.
+      getStorageLevel: () => ctx.storageGuard?.status?.()?.level || null,
       // Fehler, die das Installateur-Portal quittiert hat, dürfen lokal früher weg.
       getErrorAckId: () => ctx.installerPortalClient?.errorAckId?.() ?? null,
     });
@@ -2769,6 +2775,24 @@ const telemetryReady = (async () => {
       setWarning: setSystemWarning,
       getTuning: () => state.timescaleTuning || null,
       isContainer: () => process.env.DVHUB_RUNTIME === 'container',
+      // Speicherprofil (Schritt 3): beim Wechsel Blöcke/Kompression und WAL umstellen.
+      initialProfile: storageStartupProfile(DATA_DIR || '/var/lib/dvhub').name,
+      onProfileChange: async (profile) => {
+        const pool = ctx.db;
+        if (pool && typeof pool.query === 'function') {
+          try {
+            const r = await tuneTimescale((q, p) => pool.query(q, p), profile);
+            state.timescaleTuning = { ...r, at: new Date().toISOString() };
+            pushLog('timescale_tuning', r);
+          } catch (e) {
+            state.timescaleTuning = { error: e.message, at: new Date().toISOString() };
+            pushLog('timescale_tuning_error', { error: e.message }, 'warn');
+          }
+        }
+        await tuneDatabase(cfg.telemetry?.database || {}, profile).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
+      },
+      // „wenig“/„kritisch“: Log-Aufbewahrung sofort laufen lassen (S5 c, „Vollständig“ ruht dann).
+      onStageChange: (level) => { if (level === 'wenig' || level === 'kritisch') runLogRetention(); },
       // Nativ: Platte der PostgreSQL-Daten (sudo -u postgres psql, install.sh-Regel), stündlich neu gefragt.
       getPgDataDir: (() => {
         let cached = { at: 0, dir: null };

@@ -58,11 +58,11 @@ const counts = async (pool, olderThanDays) => (await pool.query(`SELECT
     count(*) FILTER (WHERE scope = 'import') AS import
   FROM timeseries_samples WHERE ts_utc < now() - $1 * INTERVAL '1 day'`, [olderThanDays])).rows[0];
 
-// 8 % frei → Stufe „wenig“.
-const stat8 = () => ({ blocks: 1000, bsize: 1048576 * 3, bavail: 80 });
+// 3 % frei → Stufe „kritisch“ (Notfall-Löschen; seit Schritt 3 erst dort).
+const stat3 = () => ({ blocks: 1000, bsize: 1048576 * 3, bavail: 30 });
 
 for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], ['timescale', process.env.DVHUB_TEST_PG_URL]]) {
-  test(`echte TimescaleDB (${edition}), wenig Platz: Hinweise stehen, alte Live-Rohwerte weg, Preise/Altdaten bleiben`,
+  test(`echte TimescaleDB (${edition}), kritisch wenig Platz: Hinweise stehen, alte Live-Rohwerte weg, Preise/Altdaten bleiben`,
     { skip: url ? false : `DVHUB_TEST_PG_URL${edition === 'apache' ? '_APACHE' : ''} nicht gesetzt` }, async () => {
       await withFreshDb(url, async (pool) => {
         const lic = (await pool.query("SELECT current_setting('timescaledb.license', true) AS l")).rows[0].l;
@@ -72,11 +72,11 @@ for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], 
         assert.ok(Number(before.live) > 100);
         const warn = {}; const logs = [];
         const r = await createStorageGuard({
-          getDb: () => pool, statfs: stat8,
+          getDb: () => pool, statfs: stat3,
           setWarning: (id, m, s) => { warn[id] = { m, s }; },
           pushLog: (e, d) => logs.push({ e, d }),
         }).check();
-        assert.equal(r.level, 'wenig');
+        assert.equal(r.level, 'kritisch');
         const comp = r.actions.find((a) => a.action === 'compress');
         const drop = r.actions.find((a) => a.action === 'drop_raw');
         assert.ok(drop && !drop.error, JSON.stringify(r.actions));
@@ -87,7 +87,7 @@ for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], 
         assert.ok(Number(after.live) < 7, `höchstens der Block über der Grenze bleibt: ${after.live}`);
         assert.equal(after.price, before.price, 'Preise bleiben');
         assert.equal(after.import, before.import, 'Altdaten bleiben');
-        assert.match(warn.storage.m, /Speicher wenig/);
+        assert.match(warn.storage.m, /Speicher kritisch/);
         if (edition === 'apache') {
           assert.equal(comp, undefined, 'kein compress_chunk unter Apache');
           assert.equal(warn[COMPRESSION_WARNING_ID].s, 'error');
@@ -114,5 +114,49 @@ test('echte TimescaleDB (timescale): pausierter Kompressions-Job → Hinweis „
         WHERE proc_name = 'policy_compression' AND hypertable_name = 'timeseries_samples'`);
       await g.checkCompression();
       assert.match(warn[COMPRESSION_WARNING_ID], /nicht eingerichtet oder pausiert/);
+    });
+  });
+
+for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], ['timescale', process.env.DVHUB_TEST_PG_URL]]) {
+  test(`echte TimescaleDB (${edition}): Profil „winzig“ entfernt 5-s-Rohwerte älter als 30 Tage, Preise/Altdaten bleiben`,
+    { skip: url ? false : 'DB-URL nicht gesetzt' }, async () => {
+      await withFreshDb(url, async (pool) => {
+        await seed(pool);
+        const before = await counts(pool, 31 + 7);
+        const g = createStorageGuard({ getDb: () => pool, statfs: () => ({ blocks: 100000, bsize: 1048576, bavail: 90000 }),
+          initialProfile: 'winzig', profileIo: { writeFile() {}, rename() {} } });
+        g.chooseProfile('winzig');
+        const r = await g.check();
+        const ret = r.actions.find((a) => a.action === 'retain_raw');
+        assert.ok(ret && !ret.error, JSON.stringify(r.actions));
+        const after = await counts(pool, 31 + 7);
+        assert.equal(Number(after.live), 0, 'Live-Rohwerte jenseits 30 Tage + Block weg');
+        assert.equal(after.price, before.price);
+        assert.equal(after.import, before.import);
+        // Nie jünger als der verdichtete Stand (energy_slots_15m: vor 2 Tagen).
+        assert.ok(Number((await counts(pool, 3)).live) > 20, 'jüngere Rohwerte bleiben');
+      });
+    });
+}
+
+test('echte TimescaleDB (timescale): tuneTimescale mit Profil „klein“ — 12-h-Blöcke, Kompression nach 12 h, Lauf alle 2 h',
+  { skip: process.env.DVHUB_TEST_PG_URL ? false : 'DVHUB_TEST_PG_URL nicht gesetzt' }, async () => {
+    const { tuneTimescale } = await import('../services/db-tuning.js');
+    const { PROFILES } = await import('../services/storage-profile.js');
+    await withFreshDb(process.env.DVHUB_TEST_PG_URL, async (pool) => {
+      await seed(pool);
+      const q = (s, p) => pool.query(s, p);
+      const r = await tuneTimescale(q, PROFILES.klein);
+      assert.deepEqual(r.changed.sort(), ['chunk_interval', 'compress_after', 'compress_schedule']);
+      const again = await tuneTimescale(q, PROFILES.klein);
+      assert.deepEqual(again.changed, [], 'idempotent');
+      const j = (await pool.query(`SELECT extract(epoch FROM schedule_interval)::bigint AS s, (config->>'compress_after')::interval AS a
+        FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression' AND hypertable_name = 'timeseries_samples'`)).rows[0];
+      assert.equal(Number(j.s), 7200);
+      const d = (await pool.query(`SELECT extract(epoch FROM time_interval)::bigint AS s FROM timescaledb_information.dimensions
+        WHERE hypertable_name = 'timeseries_samples'`)).rows[0];
+      assert.equal(Number(d.s), 43200);
+      const back = await tuneTimescale(q, PROFILES.gross);
+      assert.ok(back.changed.includes('compress_after') && back.changed.includes('chunk_interval'));
     });
   });

@@ -1238,7 +1238,7 @@ fi
 # hochzieht (ALTER EXTENSION UPDATE). NON-FATAL durchgängig.
 # PostgreSQL schreibarm (2026-10-01, SD-Karte): idempotent, nur Reload.
 if [[ -f "$INSTALL_DIR/pg-write-tuning.sh" ]] && command -v psql >/dev/null 2>&1; then
-  pu_bounded 30 bash "$INSTALL_DIR/pg-write-tuning.sh" || true
+  DATA_DIR="$DATA_DIR" pu_bounded 30 bash "$INSTALL_DIR/pg-write-tuning.sh" || true
 fi
 if [[ -f "$INSTALL_DIR/timescale-provision.sh" ]] && command -v psql >/dev/null 2>&1; then
   TS_ACTIVE=0

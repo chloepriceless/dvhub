@@ -166,3 +166,45 @@ test('Timescale: Hypertable gesperrt → aufgeschoben, kein Fehler, keine Regel'
   assert.equal(r.deferred, 'compression_lock_timeout');
   assert.ok(!st.calls.some((c) => c.includes('add_compression_policy')));
 });
+
+// Speicher-Konzept Schritt 3 (Christin 23.11.2026): Profil stellt WAL und Kompression ein.
+import { walSettings, intervalSeconds } from '../services/db-tuning.js';
+import { PROFILES } from '../services/storage-profile.js';
+test('WAL nach Speicherprofil: „groß“ unverändert, kleine Platten weniger Schreibpuffer', () => {
+  assert.deepEqual(walSettings(null), {});
+  assert.deepEqual(walSettings(PROFILES.gross), {});
+  assert.deepEqual(walSettings(PROFILES.klein), { max_wal_size: '256MB', min_wal_size: '64MB' });
+  assert.deepEqual(desiredSettings({ includeMemory: false, storageProfile: PROFILES.winzig }).settings.max_wal_size, '128MB');
+});
+
+test('intervalSeconds versteht TimescaleDB-Schreibweisen', () => {
+  assert.equal(intervalSeconds('2 days'), 172800);
+  assert.equal(intervalSeconds('12:00:00'), 43200);
+  assert.equal(intervalSeconds('1 day 06:00:00'), 108000);
+  assert.equal(intervalSeconds('6 hours'), 21600);
+  assert.equal(intervalSeconds(null), null);
+});
+
+test('Timescale mit Profil „winzig“: 6-h-Blöcke, Kompression nach 6 h, Lauf stündlich', async () => {
+  let interval = 86400; let after = '2 days'; let sched = 43200; const calls = [];
+  const q = async (sql) => {
+    calls.push(sql);
+    if (sql.includes('pg_extension')) return { rows: [{ 1: 1 }] };
+    if (sql.includes('dimensions')) return { rows: [{ s: interval }] };
+    if (sql.includes('set_chunk_time_interval')) { interval = intervalSeconds(/INTERVAL '([^']+)'/.exec(sql)[1]); return { rows: [] }; }
+    if (sql.includes("current_setting('timescaledb.license'")) return { rows: [{ lic: 'timescale' }] };
+    if (sql.includes('compression_enabled')) return { rows: [{ on: true }] };
+    if (sql.includes("config->>'compress_after'")) return { rows: after ? [{ job_id: 1000, after, sched }] : [] };
+    if (sql.includes('remove_compression_policy')) { after = null; return { rows: [] }; }
+    if (sql.includes('add_compression_policy')) { after = /INTERVAL '([^']+)'/.exec(sql)[1]; return { rows: [] }; }
+    if (sql.includes('alter_job')) { sched = intervalSeconds(/INTERVAL '([^']+)'/.exec(sql)[1]); return { rows: [] }; }
+    return { rows: [] };
+  };
+  const r = await tuneTimescale(q, PROFILES.winzig);
+  assert.deepEqual(r.changed, ['chunk_interval', 'compress_after', 'compress_schedule']);
+  assert.deepEqual([interval, after, sched], [21600, '6 hours', 3600]);
+  assert.deepEqual((await tuneTimescale(q, PROFILES.winzig)).changed, []);
+  // Zurück auf „groß“: Lauf-Intervall bleibt unangetastet.
+  const g = await tuneTimescale(q, PROFILES.gross);
+  assert.deepEqual(g.changed, ['chunk_interval', 'compress_after']);
+});

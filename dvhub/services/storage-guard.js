@@ -30,6 +30,11 @@ import {
   mountCandidates, measureMounts, mountFor, readSamples, writeSamples, recordSample,
   growthMbPerDay, reserveMb, daysLeft as reachDays, DEFAULT_DB_VOLUME_DIR,
 } from './storage-mounts.js';
+import {
+  PROFILES, profileForSize, storageStage, decideProfile, chooseProfile, cappedReserveMb,
+  readProfileState, writeProfileState, startupProfile,
+} from './storage-profile.js';
+import { rawCompactedUntil, rawPruneCutoff, oldestLiveRawDays, pruneRawBefore } from './raw-retention.js';
 
 export const STORAGE_CHECK_INTERVAL_MS = 30 * 60_000;
 export const RAW_KEEP_STEPS_DAYS = Object.freeze([365, 180, 90, 30]);
@@ -155,6 +160,9 @@ export function createStorageGuard({
   // Schritt 2 (Konzept 23.11.): mehrere Datenträger + Wachstum.
   getPgDataDir = async () => null, stat = (p) => fs.statSync(p), exists = fs.existsSync,
   dbVolumeDir = DEFAULT_DB_VOLUME_DIR, samplesIo = {},
+  // Schritt 3: Speicherprofil. onProfileChange(profile, info) stellt DB-Regeln um
+  // (server.js: tuneTimescale, WAL); onStageChange(neu, alt, status) für Meldungen.
+  initialProfile = null, onProfileChange = null, onStageChange = null, profileIo = {},
 } = {}) {
   let last = null;
   let running = false;
@@ -237,6 +245,62 @@ export function createStorageGuard({
     return compression;
   }
 
+  // ── Speicherprofil (Schritt 3) ─────────────────────────────────────────────
+  let profileState = null;          // gespeicherter Stand (storage-profile.json)
+  let profileInfo = null;           // letzte Entscheidung
+  let lastEffective = initialProfile || startupProfile(getDataDir?.(), readFile).name;
+  let retentionDay = null;          // Profil-Aufbewahrung höchstens einmal am Tag
+
+  async function decide(db, { totalMb, level, dataDir }) {
+    const sizeProfile = profileForSize(totalMb);
+    const before = profileState || readProfileState(dataDir, readFile);
+    let fresh = false;
+    if (!before) {
+      // Neuinstallation: noch keine bzw. erst seit < 2 Tagen Messwerte (S2 a).
+      const d = await oldestLiveRawDays((q, p) => db.query(q, p));
+      fresh = d == null || d < 2;
+    }
+    const nowIso = new Date(now()).toISOString();
+    const dec = decideProfile({ state: before, sizeProfile, stage: level, fresh, nowIso });
+    const { effective: _e, effectiveAt: _a, ...beforeCore } = before || {};
+    void _e; void _a;
+    const stateChanged = JSON.stringify(dec.state) !== JSON.stringify(beforeCore);
+    profileState = dec.state;
+    profileInfo = { ...dec, sizeProfile };
+    if (stateChanged || dec.effective !== lastEffective || !before) {
+      writeProfileState(dataDir, { ...dec.state, effective: dec.effective, effectiveAt: nowIso }, profileIo);
+    }
+    if (dec.effective !== lastEffective) {
+      log('storage_profile', { from: lastEffective, to: dec.effective, base: dec.base, temporary: dec.temporary, reason: dec.reason }, 'warn');
+      const prevName = lastEffective;
+      lastEffective = dec.effective;
+      try { await onProfileChange?.(PROFILES[dec.effective], { from: prevName, ...profileView() }); } catch (e) { logGuardError(e); }
+    }
+  }
+
+  function profileView() {
+    if (!profileInfo) return { effective: lastEffective, base: null, mode: null, suggested: null, temporary: false, reason: null, sizeProfile: null, values: PROFILES[lastEffective] || null };
+    return {
+      effective: profileInfo.effective, base: profileInfo.base, mode: profileInfo.state.mode, origin: profileInfo.state.origin,
+      suggested: profileInfo.suggested, temporary: profileInfo.temporary, reason: profileInfo.reason,
+      sizeProfile: profileInfo.sizeProfile, values: PROFILES[profileInfo.effective],
+    };
+  }
+
+  /** Profilwahl per Klick (S2 a): 'auto' oder ein Profilname. Wirkt beim nächsten Lauf. */
+  function chooseProfileClick(choice) {
+    const sizeProfile = profileInfo?.sizeProfile || profileForSize(last?.totalMb);
+    const dataDir = getDataDir?.() || null;
+    const base = profileState || readProfileState(dataDir, readFile);
+    const { effective: _e, effectiveAt: _a, ...core } = base || {};
+    void _e; void _a;
+    const st = chooseProfile(base ? core : null, choice, { sizeProfile, nowIso: new Date(now()).toISOString() });
+    profileState = st;
+    writeProfileState(dataDir, { ...st, effective: lastEffective, effectiveAt: null }, profileIo);
+    log('storage_profile_chosen', { choice, base: st.base, mode: st.mode }, 'info');
+    return st;
+  }
+
   async function check() {
     if (running) return last;
     running = true;
@@ -255,26 +319,48 @@ export function createStorageGuard({
       const freeMb = primary ? primary.freeMb : null;
       const totalMb = primary ? primary.totalMb : null;
       const freePct = primary && Number.isFinite(primary.freePct) ? primary.freePct : NaN;
-      const level = storageLevel(freePct);
+      const db = getDb?.();
+      const hasDb = !!(db && typeof db.query === 'function');
+      const out = {
+        at: new Date(now()).toISOString(), dir, freePct, freeMb, totalMb, level: 'unbekannt', dbMb: null, actions: [], compression: null,
+        mounts: mounts.map((m) => ({ ...m, level: storageStage({ freeMb: m.freeMb, totalMb: m.totalMb }) })),
+        growthMbPerDay: null, daysLeft: null, reserveMb: null, profile: null,
+      };
+      if (hasDb) {
+        try { out.dbMb = Math.round(Number((await db.query('SELECT pg_database_size(current_database()) AS b')).rows?.[0]?.b) / 1048576); } catch { /* egal */ }
+      }
+      // Wachstum: ein Messpunkt je Tag (Datei im Datenverzeichnis), Reichweite der DB-Platte.
+      const day = new Date(now()).toISOString().slice(0, 10);
+      try {
+        let samples = readSamples(dataDir, samplesIo.readFile || readFile);
+        if (dataDir && mounts.length && samples[samples.length - 1]?.day !== day) {
+          samples = recordSample(samples, { day, mounts, dbMb: out.dbMb });
+          writeSamples(dataDir, samples, samplesIo);
+        }
+        const role = mountFor(mounts, 'db') ? 'db' : 'data';
+        out.growthMbPerDay = growthMbPerDay(samples, role);
+      } catch { /* Wachstum ist Zugabe */ }
+      out.reserveMb = cappedReserveMb(reserveMb({ container, maxWalMb: PROFILES[lastEffective]?.maxWalMb ?? 1024 }), totalMb);
+      out.daysLeft = reachDays({ freeMb, reserveMb: out.reserveMb, growth: out.growthMbPerDay });
+      // Stufe: Reichweite, sonst feste Schwellen; Hysterese gegen die vorige Stufe.
+      const level = storageStage({
+        freeMb, totalMb, daysLeft: out.daysLeft, reserveMb: out.reserveMb,
+        growthKnown: out.growthMbPerDay != null, prev: last?.level || 'ok',
+      });
+      out.level = level;
       // Genug Platz: die Wache komprimiert nicht selbst, das macht der Job. Ein
       // früheres Scheitern von compress_chunk gilt dann nicht mehr — sonst bliebe
       // der rote Hinweis bis zum Neustart stehen (Codex 949b20f2).
       if ((level === 'ok' || level === 'unbekannt') && compressFail) compressFail = null;
-      const out = {
-        at: new Date(now()).toISOString(), dir, freePct, freeMb, totalMb, level, dbMb: null, actions: [], compression: null,
-        mounts: mounts.map((m) => ({ ...m, level: storageLevel(m.freePct) })),
-        growthMbPerDay: null, daysLeft: null, reserveMb: reserveMb({ container }),
-      };
       let probe = null;
       try {
-        const db = getDb?.();
-        if (db && typeof db.query === 'function') {
-          try { out.dbMb = Math.round(Number((await db.query('SELECT pg_database_size(current_database()) AS b')).rows?.[0]?.b) / 1048576); } catch { /* egal */ }
+        if (hasDb) {
           probe = await evaluateCompression(db);
+          // Ohne Probe (Fehler) wie früher an der Erweiterung festmachen.
+          const ts = probe ? probe.timescale
+            : (await db.query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")).rows?.length > 0;
+          try { await decide(db, { totalMb, level, dataDir }); } catch (e) { logGuardError(e); }
           if (level !== 'ok' && level !== 'unbekannt') {
-            // Ohne Probe (Fehler) wie früher an der Erweiterung festmachen.
-            const ts = probe ? probe.timescale
-              : (await db.query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")).rows?.length > 0;
             // Komprimieren nur, wo es geht (Community + eingeschaltet); ein Fehler
             // hält Löschstufe und Hinweis nicht mehr auf (Apache: compress_chunk wirft).
             if (ts && (probe ? probe.usable : true)) {
@@ -296,13 +382,21 @@ export function createStorageGuard({
                 }
               }
             }
-            if (level === 'wenig' || level === 'kritisch') {
-              try {
-                await dropRaw(db, ts, out, freePct);
-              } catch (e) {
-                out.actions.push({ action: 'drop_raw', error: String(e?.message || e).slice(0, 200) });
-                logGuardError(e);
-              }
+          }
+          // Aufbewahrung der 5-s-Rohwerte nach Profil (S4), höchstens einmal am Tag.
+          const eff = PROFILES[lastEffective];
+          if (eff?.rawKeepDays && retentionDay !== day) {
+            retentionDay = day;
+            try { await profileRetention(db, ts, eff, out); } catch (e) {
+              out.actions.push({ action: 'retain_raw', error: String(e?.message || e).slice(0, 200) });
+              logGuardError(e);
+            }
+          }
+          // Notfall „kritisch“: wie bisher Rohwerte stufenweise (365 → 180 → 90 → 30 Tage).
+          if (level === 'kritisch') {
+            try { await dropRaw(db, ts, out, freePct); } catch (e) {
+              out.actions.push({ action: 'drop_raw', error: String(e?.message || e).slice(0, 200) });
+              logGuardError(e);
             }
           }
         }
@@ -310,36 +404,19 @@ export function createStorageGuard({
         logGuardError(e);
       }
       out.compression = compressionView();
-      // Wachstum: ein Messpunkt je Tag (Datei im Datenverzeichnis), Reichweite der DB-Platte.
-      try {
-        const day = new Date(now()).toISOString().slice(0, 10);
-        let samples = readSamples(dataDir, samplesIo.readFile || readFile);
-        if (dataDir && mounts.length && samples[samples.length - 1]?.day !== day) {
-          samples = recordSample(samples, { day, mounts, dbMb: out.dbMb });
-          writeSamples(dataDir, samples, samplesIo);
-        }
-        const role = mountFor(mounts, 'db') ? 'db' : 'data';
-        out.growthMbPerDay = growthMbPerDay(samples, role);
-        out.daysLeft = reachDays({ freeMb, reserveMb: out.reserveMb, growth: out.growthMbPerDay });
-      } catch { /* Wachstum ist Zugabe */ }
+      out.profile = profileView();
       // Andere Platten (System, DVhub-Ordner, Logs): nur Hinweis, DVhub kann dort nichts freigeben.
-      const others = out.mounts.filter((m) => m !== out.mounts.find((x) => x.key === primary?.key)
-        && (m.level === 'wenig' || m.level === 'kritisch'));
+      const others = out.mounts.filter((m) => m.key !== primary?.key && (m.level === 'wenig' || m.level === 'kritisch'));
       warn('storage_other', others.length ? others.map((m) => `${mountLabel(m)} ${m.level}: ${m.freePct} % frei (${m.freeMb} MB)`).join('; ')
         + '. DVhub kann dort selbst nichts freigeben — Protokolle, alte Docker-Images oder andere Dateien prüfen.' : null,
         others.some((m) => m.level === 'kritisch') ? 'error' : 'warn');
       // Systemhinweis setzen bzw. wegnehmen — immer, auch wenn oben etwas scheiterte.
       if (level === 'ok' || level === 'unbekannt') warn('storage', null);
-      else {
-        const dropped = out.actions.find((a) => a.action === 'drop_raw' && !a.error);
-        const compresses = !compression.reason || compression.reason === 'no_policy' || compression.reason === 'job_failing';
-        warn('storage', `Speicher ${level}: ${freePct} % frei (${freeMb} MB)`
-          + (Number.isFinite(out.daysLeft) ? `, voll in etwa ${Math.round(out.daysLeft)} Tagen` : '') + '. '
-          + (dropped ? `5-s-Rohwerte älter als ${dropped.keepDays} Tage wurden entfernt — 15-min-Werte bleiben. `
-            : (compresses ? 'Ältere Messwerte werden früher komprimiert. ' : 'Messwerte werden nicht komprimiert. '))
-          + 'Speicher erweitern: USB-Stick oder SD-Karte als Datenspeicher einrichten.', level === 'kritisch' ? 'error' : 'warn');
+      else warn('storage', storageWarningText(out), level === 'kritisch' ? 'error' : 'warn');
+      if (level !== (last?.level)) {
+        log('storage_level', { level, freePct, freeMb, dbMb: out.dbMb, daysLeft: out.daysLeft }, level === 'ok' ? 'info' : 'warn');
+        try { onStageChange?.(level, last?.level || null, out); } catch { /* egal */ }
       }
-      if (level !== (last?.level)) log('storage_level', { level, freePct, freeMb, dbMb: out.dbMb }, level === 'ok' ? 'info' : 'warn');
       last = out;
       return out;
     } catch (e) {
@@ -350,49 +427,40 @@ export function createStorageGuard({
     }
   }
 
-  // Eine Aufbewahrungsstufe der 5-s-Live-Rohwerte entfernen (wenig/kritisch).
+  function storageWarningText(out) {
+    const dropped = out.actions.find((a) => a.action === 'drop_raw' && !a.error);
+    const compresses = !compression.reason || compression.reason === 'no_policy' || compression.reason === 'job_failing';
+    const p = out.profile;
+    return `Speicher ${out.level}: ${out.freePct} % frei (${out.freeMb} MB)`
+      + (Number.isFinite(out.daysLeft) ? `, voll in etwa ${Math.round(out.daysLeft)} Tagen` : '') + '. '
+      + (dropped ? `5-s-Rohwerte älter als ${dropped.keepDays} Tage wurden entfernt — 15-min-Werte bleiben. `
+        : (compresses ? 'Ältere Messwerte werden früher komprimiert. ' : 'Messwerte werden nicht komprimiert. '))
+      + (p?.temporary ? `Speicherprofil vorübergehend „${PROFILES[p.effective].label}“. ` : '')
+      + 'Speicher erweitern: USB-Stick oder SD-Karte als Datenspeicher einrichten.';
+  }
+
+  // Profil-Aufbewahrung: 5-s-Live-Rohwerte älter als keepDays, nie jünger als der verdichtete Stand.
+  async function profileRetention(db, ts, prof, out) {
+    const q = (sql, p) => db.query(sql, p);
+    const cutoff = rawPruneCutoff({ keepDays: prof.rawKeepDays, now: now(), compactedUntil: await rawCompactedUntil(q) });
+    if (!cutoff) return;
+    const oldest = await oldestLiveRawDays(q);
+    if (oldest == null || now() - oldest * 86_400_000 >= cutoff.getTime()) return;   // nichts älter
+    const r = await pruneRawBefore(db, { before: cutoff, timescale: ts });
+    out.actions.push({ action: 'retain_raw', keepDays: prof.rawKeepDays, before: r.before, mode: r.mode });
+    log('storage_raw_retention', { profile: prof.name, keepDays: prof.rawKeepDays, before: r.before }, 'info');
+  }
+
+  // Notfall: eine Aufbewahrungsstufe der 5-s-Live-Rohwerte entfernen (kritisch).
   async function dropRaw(db, ts, out, freePct) {
-    // Ältester Rohwert und letzter verdichteter 15-min-Slot.
-    const b = (await db.query(`SELECT
-        extract(epoch FROM now() - (SELECT min(ts_utc) FROM timeseries_samples WHERE scope = 'live')) / 86400 AS oldest_days,
-        (SELECT max(slot_start_utc) FROM energy_slots_15m) AS agg_until`)).rows?.[0] || {};
-    const keep = nextKeepDays(Number(b.oldest_days));
-    if (!keep || !b.agg_until) return;
-    const cutoff = new Date(Math.min(now() - keep * 86_400_000, new Date(b.agg_until).getTime()));
-    if (ts) {
-      // drop_chunks löscht ganze Blöcke mit ALLEN Reihen — darin liegen
-      // aber auch Preise (die History rechnet Erlöse daraus) und
-      // importierte Altdaten. Die werden vorher gesichert und danach
-      // zurückgeschrieben; nur die 5-s-Live-Rohwerte gehen. Eine
-      // Transaktion: ganz oder gar nicht. drop_chunks gibt es auch unter
-      // der Apache-Edition (nur die Aufbewahrungs-Regel ist Community).
-      const client = typeof db.connect === 'function' ? await db.connect() : db;
-      try {
-        await client.query('BEGIN');
-        await client.query(`CREATE TEMP TABLE dvhub_keep_samples ON COMMIT DROP AS
-          SELECT * FROM timeseries_samples
-           WHERE ts_utc < $1 AND (scope <> 'live' OR series_key LIKE 'price%')`, [cutoff.toISOString()]);
-        await client.query("SELECT drop_chunks('timeseries_samples', older_than => $1::timestamptz)", [cutoff.toISOString()]);
-        await client.query(`INSERT INTO timeseries_samples OVERRIDING SYSTEM VALUE SELECT * FROM dvhub_keep_samples
-          ON CONFLICT DO NOTHING`);
-        await client.query('COMMIT');
-      } catch (e) {
-        await client.query('ROLLBACK').catch(() => {});
-        throw e;
-      } finally {
-        if (client !== db) client.release?.();
-      }
-    } else {
-      // ohne TimescaleDB: in Portionen löschen, damit nichts lange sperrt
-      for (let i = 0; i < 200; i++) {
-        const d = await db.query(`DELETE FROM timeseries_samples WHERE ctid IN (
-          SELECT ctid FROM timeseries_samples WHERE scope = 'live' AND series_key NOT LIKE 'price%'
-             AND ts_utc < $1 LIMIT 50000)`, [cutoff.toISOString()]);
-        if (!d.rowCount) break;
-      }
-    }
-    out.actions.push({ action: 'drop_raw', keepDays: keep, before: cutoff.toISOString() });
-    log('storage_raw_dropped', { keepDays: keep, before: cutoff.toISOString(), freePct }, 'warn');
+    const q = (sql, p) => db.query(sql, p);
+    const keep = nextKeepDays(await oldestLiveRawDays(q));
+    if (!keep) return;
+    const cutoff = rawPruneCutoff({ keepDays: keep, now: now(), compactedUntil: await rawCompactedUntil(q) });
+    if (!cutoff) return;
+    const r = await pruneRawBefore(db, { before: cutoff, timescale: ts });
+    out.actions.push({ action: 'drop_raw', keepDays: keep, before: r.before });
+    log('storage_raw_dropped', { keepDays: keep, before: r.before, freePct }, 'warn');
   }
 
   let timer = null;
@@ -408,5 +476,7 @@ export function createStorageGuard({
     checkCompression,
     status: () => last,
     compressionStatus: () => compressionView(),
+    profile: () => profileView(),
+    chooseProfile: chooseProfileClick,
   };
 }
