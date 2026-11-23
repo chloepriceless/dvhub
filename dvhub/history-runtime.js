@@ -1,7 +1,11 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { resolveUserImportPriceCtKwhForSlot } from './config-model.js';
+import {
+  resolveUserImportPriceCtKwhForSlot,
+  resolveUserImportTariffModeForTimestamp,
+  resolveComparisonFixedPriceForDate
+} from './config-model.js';
 import { providerModeInUse } from './services/tariff-provider/provider-pricing.js';
 import { whenProviderPricesLoaded } from './services/tariff-provider/price-store.js';
 import { resolveBatteryCapacityWhForTimestamp, resolveBatteryCapacityWhForDate } from './battery-stages.js';
@@ -85,7 +89,16 @@ const AGGREGATE_SUM_FIELDS = [
   'netEur',
   'premiumEligibleExportKwh',
   'premiumValuedExportKwh',
-  'marketPremiumCtTotal'
+  'marketPremiumCtTotal',
+  // Ø Arbeitspreis und Festpreis-Vergleich (Christin 13.11.2026, Ziel 1.0.11).
+  // Nur Slots mit variablem Tarif (dynamisch oder Anbieterpreis) und bekanntem
+  // Slotpreis. Summen in ct, ungerundet je Slot — gerundet wird erst am Ende,
+  // sonst verschöbe die Cent-Rundung kleiner Viertelstunden-Beträge den Ø.
+  'variableImportKwh',
+  'variableImportCtTotal',
+  'fixedCompareImportKwh',
+  'fixedCompareActualCtTotal',
+  'fixedCompareFixedCtTotal'
 ];
 
 function roundCtKwh(value) {
@@ -401,6 +414,7 @@ function buildRowAccumulator(key, label) {
     userImportPriceWeightKwh: 0,
     marketPriceWeightedCtTotal: 0,
     userImportPriceWeightedCtTotal: 0,
+    ...buildTariffCompareAccumulator(),
     netEur: 0,
     slotCount: 0,
     incompleteSlots: 0,
@@ -410,7 +424,73 @@ function buildRowAccumulator(key, label) {
   };
 }
 
+// Felder für Ø Arbeitspreis und Festpreis-Vergleich (Zeilen und Summe).
+function buildTariffCompareAccumulator() {
+  return {
+    // Slots mit variablem Tarif (mit oder ohne Preis) — 0 heißt: Festtarif.
+    variableTariffSlotCount: 0,
+    variableImportKwh: 0,
+    variableImportCtTotal: 0,
+    variableImportCtKwh: null,
+    // Zeitlicher Ø des variablen Arbeitspreises (jede bepreiste Viertelstunde
+    // zählt gleich, unabhängig vom Bezug).
+    variablePriceCtSum: 0,
+    variablePriceSlotCount: 0,
+    variablePriceAvgCtKwh: null,
+    fixedCompareSlotCount: 0,
+    fixedCompareImportKwh: 0,
+    fixedCompareActualCtTotal: 0,
+    fixedCompareFixedCtTotal: 0,
+    fixedCompareActualEur: null,
+    fixedCompareFixedEur: null,
+    fixedCompareSavingsEur: null,
+    fixedCompareCtKwh: null
+  };
+}
+
+function addTariffCompareFields(target, slot) {
+  if (slot.variableTariff) target.variableTariffSlotCount += 1;
+  if (Number.isFinite(slot.variablePriceCtKwh)) {
+    target.variablePriceCtSum += slot.variablePriceCtKwh;
+    target.variablePriceSlotCount += 1;
+  }
+  if (slot.fixedCompareKey) target.fixedCompareSlotCount += 1;
+}
+
+function finalizeTariffCompare(target) {
+  // Bezugskosten zum Ø Arbeitspreis: derselbe ungerundete Zähler (nur
+  // bepreiste Viertelstunden), erst hier auf Cent gerundet — gridCostEur ist je
+  // Viertelstunde gerundet und weicht bei kleinen Bezügen ab (Codex ec0c105c).
+  if ('userImportPriceWeightedCtTotal' in target) {
+    target.importPricedCostEur = round2(Number(target.userImportPriceWeightedCtTotal || 0) / 100);
+  }
+  const variableKwh = Number(target.variableImportKwh || 0);
+  target.variableImportCtKwh = variableKwh > 0
+    ? round2(Number(target.variableImportCtTotal || 0) / variableKwh)
+    : null;
+  const priceSlots = Number(target.variablePriceSlotCount || 0);
+  target.variablePriceAvgCtKwh = priceSlots > 0
+    ? round2(Number(target.variablePriceCtSum || 0) / priceSlots)
+    : null;
+  target.variablePriceCtSum = round2(Number(target.variablePriceCtSum || 0));
+  // Ohne verglichene Viertelstunde (Festtarif, kein Vergleichspreis, kein
+  // Slotpreis) gibt es keinen Betrag — null, nicht 0 €.
+  const compared = Number(target.fixedCompareSlotCount || 0) > 0;
+  const actualCt = Number(target.fixedCompareActualCtTotal || 0);
+  const fixedCt = Number(target.fixedCompareFixedCtTotal || 0);
+  const compareKwh = Number(target.fixedCompareImportKwh || 0);
+  target.fixedCompareActualEur = compared ? round2(actualCt / 100) : null;
+  target.fixedCompareFixedEur = compared ? round2(fixedCt / 100) : null;
+  // Aus den gerundeten Beträgen, damit „hätte gekostet − bezahlt = gespart“
+  // in der Anzeige auf den Cent aufgeht.
+  target.fixedCompareSavingsEur = compared ? round2(target.fixedCompareFixedEur - target.fixedCompareActualEur) : null;
+  target.fixedCompareCtKwh = compared && compareKwh > 0 ? round2(fixedCt / compareKwh) : null;
+}
+
 function finalizeAggregateSums(target, fields = AGGREGATE_SUM_FIELDS) {
+  // Zuerst, solange die ct-Summen noch ungerundet sind: sonst würde zweimal
+  // gerundet (4,4985 ct → 4,50 ct → 0,05 € statt 0,04 €; Codex 7dc5e9e9).
+  if ('fixedCompareSlotCount' in target) finalizeTariffCompare(target);
   for (const field of fields) {
     if (field in target) target[field] = round2(Number(target[field] || 0));
   }
@@ -527,10 +607,14 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
       row.spotPriceSlotCount += 1;
     }
     const importWeight = Number(slot.importKwh || 0);
-    if (Number.isFinite(Number(slot.userImportPriceCtKwh)) && importWeight > 0) {
+    // Nur echt bepreiste Viertelstunden (Codex ec0c105c): Number(null) ist 0 und
+    // zählte fehlende Preise mit 0 ct; dynamisch ohne Börsenpreis wären es nur
+    // die Zuschläge.
+    if (slot.importPriceKnown && importWeight > 0) {
       row.userImportPriceWeightKwh += importWeight;
       row.userImportPriceWeightedCtTotal += importWeight * Number(slot.userImportPriceCtKwh);
     }
+    addTariffCompareFields(row, slot);
     if (typeof resolveCapacityKwhForTs === 'function') {
       const capKwh = resolveCapacityKwhForTs(slot.ts);
       if (Number.isFinite(capKwh) && capKwh > 0) {
@@ -586,7 +670,9 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // 3 (25.10.2026): Stundenpreise (vor 10/2025) gelten fuer alle vier Viertelstunden.
 // 4 (25.10.2026): VRM-Abschnitte im Zwischenstand (Akku-2-Ladestand-Uebertrag).
 // 5 (05.11.2026): eigene Messwerte zuerst, VRM fuellt auf (energy-source-rule.js).
-export const SUMMARY_CACHE_VERSION = 5;
+// 6 (13.11.2026): Ø Arbeitspreis und Festpreis-Vergleich je Slot (1.0.11).
+// 7 (13.11.2026): Ø nur aus echt bepreisten Viertelstunden (Codex 7dc5e9e9).
+export const SUMMARY_CACHE_VERSION = 7;
 
 // Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;
@@ -1721,6 +1807,58 @@ export function createHistoryRuntime({
       return result;
     }
 
+    // Ø Arbeitspreis und Festpreis-Vergleich je Slot (Christin 13.11.2026,
+    // Ziel 1.0.11). Verglichen wird nur, wo ein variabler Tarif galt (Zeitraum
+    // oder Standard-Tarif „dynamisch“ bzw. „vom Stromanbieter“) — so stimmen
+    // auch Monate mit Tarifwechsel. Ein dynamischer Slot ohne Börsenpreis hat
+    // keinen echten Arbeitspreis (der Rechner setzte 0 ct ein) und bleibt außen
+    // vor. Grundgebühren gehören nicht dazu: nur Arbeitspreis.
+    const comparisonByDate = new Map();
+    const comparisonSourceByKey = new Map();
+    function comparisonForDate(localDate) {
+      if (!comparisonByDate.has(localDate)) {
+        const cmp = resolveComparisonFixedPriceForDate(localDate, pricingConfig);
+        if (cmp) {
+          const key = `${cmp.source}|${cmp.periodId ?? ''}|${cmp.ctKwh}`;
+          if (!comparisonSourceByKey.has(key)) comparisonSourceByKey.set(key, cmp);
+          comparisonByDate.set(localDate, { ...cmp, key });
+        } else {
+          comparisonByDate.set(localDate, null);
+        }
+      }
+      return comparisonByDate.get(localDate);
+    }
+    // Preislogik hängt nur am lokalen Tag (Zeiträume sind tageweise) — je Tag
+    // einmal auflösen statt je Viertelstunde.
+    const tariffModeByDate = new Map();
+    function tariffCompareForSlot(slot, userImportPriceCtKwh, marketPriceCtKwh) {
+      const localDate = localDateString(slot.ts);
+      let mode = tariffModeByDate.get(localDate);
+      if (mode === undefined) {
+        mode = resolveUserImportTariffModeForTimestamp(slot.ts, pricingConfig);
+        tariffModeByDate.set(localDate, mode);
+      }
+      const variableTariff = mode !== 'fixed';
+      // Ein echter Arbeitspreis: eine Zahl (nicht null) und beim dynamischen
+      // Tarif mit Börsenpreis — sonst setzt der Rechner 0 ct Börse ein.
+      const importPriceKnown = Number.isFinite(userImportPriceCtKwh)
+        && (mode !== 'dynamic' || Number.isFinite(marketPriceCtKwh));
+      const priceKnown = variableTariff && importPriceKnown;
+      const cmp = priceKnown ? comparisonForDate(localDate) : null;
+      const importKwh = Math.max(Number(slot.importKwh || 0), 0);
+      return {
+        importPriceKnown,
+        variableTariff,
+        variablePriceCtKwh: priceKnown ? userImportPriceCtKwh : null,
+        variableImportKwh: priceKnown ? importKwh : 0,
+        variableImportCtTotal: priceKnown ? importKwh * userImportPriceCtKwh : 0,
+        fixedCompareKey: cmp ? cmp.key : null,
+        fixedCompareImportKwh: cmp ? importKwh : 0,
+        fixedCompareActualCtTotal: cmp ? importKwh * userImportPriceCtKwh : 0,
+        fixedCompareFixedCtTotal: cmp ? importKwh * cmp.ctKwh : 0
+      };
+    }
+
     // Ein Slot → bewerteter Slot (Kosten, Erlöse, Prämie, §51, DV-Vergleich).
     function enrichSlot(slot, priceIndex, negPriceAffectedByTs) {
         const price = priceFor(priceIndex, slot.ts);
@@ -1731,6 +1869,7 @@ export function createHistoryRuntime({
         }, pricingConfig);
         const monthKey = localMonthString(slot.ts);
         const monthlyMarketValueCtKwh = Number(solarMarketValueMonthlyCtKwhByMonth?.[monthKey]);
+        const tariffCompare = tariffCompareForSlot(slot, userImportPriceCtKwh, marketPriceCtKwh);
         const shares = proportionalSourceShares(slot);
         const flowValues = {
           solarDirectUseKwh: round2(Number(slot.solarDirectUseKwh || 0)),
@@ -1864,6 +2003,7 @@ export function createHistoryRuntime({
           isNegPriceAffected,
           hypFullFeedInCtTotal,
           hypSurplusFeedInCtTotal,
+          ...tariffCompare,
           estimated: Boolean(slot.estimated),
           incomplete: Boolean(slot.incomplete) || missingImportPrice || missingMarketPrice
         };
@@ -1943,6 +2083,36 @@ export function createHistoryRuntime({
       totals.hypSurplusFeedInCtTotal = slot.hypSurplusFeedInCtTotal != null
         ? (totals.hypSurplusFeedInCtTotal || 0) + slot.hypSurplusFeedInCtTotal
         : totals.hypSurplusFeedInCtTotal;
+      // Ø Arbeitspreis über den ganzen Zeitraum (alle Tarife, nur bepreister Bezug).
+      const importWeight = Number(slot.importKwh || 0);
+      if (slot.importPriceKnown && importWeight > 0) {
+        totals.userImportPriceWeightKwh += importWeight;
+        totals.userImportPriceWeightedCtTotal += importWeight * Number(slot.userImportPriceCtKwh);
+      }
+      totals.variableImportKwh += slot.variableImportKwh || 0;
+      totals.variableImportCtTotal += slot.variableImportCtTotal || 0;
+      totals.fixedCompareImportKwh += slot.fixedCompareImportKwh || 0;
+      totals.fixedCompareActualCtTotal += slot.fixedCompareActualCtTotal || 0;
+      totals.fixedCompareFixedCtTotal += slot.fixedCompareFixedCtTotal || 0;
+      addTariffCompareFields(totals, slot);
+      // Welche Vergleichspreise im Zeitraum galten (für den Hinweis in der
+      // Oberfläche). Steht im Zwischenstand der Ablage, damit vorberechnete
+      // Monate ihre Quelle behalten.
+      if (slot.fixedCompareKey) {
+        const known = totals.fixedCompareSources[slot.fixedCompareKey];
+        if (known) {
+          known.importKwh += slot.fixedCompareImportKwh || 0;
+        } else {
+          const cmp = comparisonSourceByKey.get(slot.fixedCompareKey) || {};
+          totals.fixedCompareSources[slot.fixedCompareKey] = {
+            ctKwh: cmp.ctKwh ?? null,
+            source: cmp.source ?? null,
+            periodId: cmp.periodId ?? null,
+            label: cmp.label ?? null,
+            importKwh: slot.fixedCompareImportKwh || 0
+          };
+        }
+      }
       return totals;
     };
     let kpiTotals = {
@@ -2007,7 +2177,12 @@ export function createHistoryRuntime({
       negPriceEligibleExportKwh: 0,
       negPriceAffectedSlots: 0,
       hypFullFeedInCtTotal: evFullCtKwh != null ? 0 : null,
-      hypSurplusFeedInCtTotal: evPartialCtKwh != null ? 0 : null
+      hypSurplusFeedInCtTotal: evPartialCtKwh != null ? 0 : null,
+      userImportPriceWeightKwh: 0,
+      userImportPriceWeightedCtTotal: 0,
+      userImportPriceWeightedCtKwh: null,
+      ...buildTariffCompareAccumulator(),
+      fixedCompareSources: {}
     };
     let missingImportPriceSlots = 0;
     let missingMarketPriceSlots = 0;
@@ -2276,6 +2451,8 @@ export function createHistoryRuntime({
     }
 
     const kpis = finalizeAggregateSums(kpiTotals);
+    kpis.fixedCompareSources = Object.values(kpis.fixedCompareSources || {})
+      .map((entry) => ({ ...entry, importKwh: round2(Number(entry.importKwh || 0)) }));
 
     // §51 EEG (Solarspitzengesetz) Förder-Verlängerung. Jede negativ-bepreiste
     // Viertelstunde, in der die EEG-Vergütung auf 0 gekürzt wird, verlängert den

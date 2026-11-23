@@ -24,7 +24,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/dvhub-app.css" />
   <link rel="stylesheet" href="/pro-modal.css" />
-  <link rel="stylesheet" href="/history.css?v=20261021-akku2" />
+  <link rel="stylesheet" href="/history.css?v=20261113-arbeitspreis" />
   <link rel="stylesheet" href="/history-viz.css?v=20260701-cachefmt" />
   <script src="/theme.js"></script>
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png?v=20260508">
@@ -261,6 +261,47 @@
             </div>
           </div>
         </article>
+      </section>
+
+      <!-- Arbeitspreis (13.11.2026, 1.0.11): Ø Arbeitspreis des Zeitraums und
+           Vergleich mit einem Festpreis. Woche/Monat/Jahr/Alle; Werte je Slot
+           vom Backend (history-runtime.js), nur Arbeitspreis ohne Grundgebühr. -->
+      <section id="historyTariffCard" class="card chart-panel" hidden>
+        <div class="card-head">
+          <div>
+            <span class="card-title"><span class="dot dot-cyan"></span>Arbeitspreis</span>
+            <p class="card-sub">Nur Arbeitspreis (brutto), ohne Grundgeb&uuml;hr</p>
+          </div>
+        </div>
+        <div class="dv-grid tariff-grid">
+          <div class="dv-section">
+            <div class="dv-label">&Oslash; Arbeitspreis</div>
+            <div id="historyTariffAvg" class="dv-value">-</div>
+            <div class="calc-row-line"><span>Netzbezug</span><strong id="historyTariffImportKwh">-</strong></div>
+            <div class="calc-row-line"><span>Bezugskosten</span><strong id="historyTariffImportCost">-</strong></div>
+            <p class="dv-hint">Bezugskosten &divide; Netzbezug</p>
+          </div>
+          <div class="dv-section">
+            <div class="dv-label">Dynamischer Tarif</div>
+            <div id="historyTariffDynAvg" class="dv-value">-</div>
+            <div class="calc-row-line" title="Mittel aller Viertelstunden, egal wie viel bezogen wurde."><span>&Oslash; je Viertelstunde</span><strong id="historyTariffDynTimeAvg">-</strong></div>
+            <div class="calc-row-line" title="Unterschied zwischen dem Ø je Viertelstunde und dem, was je kWh bezahlt wurde."><span>Lastverschiebung</span><strong id="historyTariffShift">-</strong></div>
+            <div class="calc-row-line"><span>Netzbezug dynamisch</span><strong id="historyTariffDynKwh">-</strong></div>
+            <p id="historyTariffDynHint" class="dv-hint" hidden></p>
+          </div>
+          <div class="dv-section">
+            <div class="dv-label">Vergleich mit Festpreis</div>
+            <div id="historyTariffSavings" class="dv-value">-</div>
+            <div class="calc-row-line"><span id="historyTariffFixedLabel">Mit Festpreis</span><strong id="historyTariffFixedCost">-</strong></div>
+            <div class="calc-row-line"><span>Dynamisch bezahlt</span><strong id="historyTariffActualCost">-</strong></div>
+            <p id="historyTariffCompareText" class="dv-hint"></p>
+            <p id="historyTariffSource" class="dv-hint" hidden></p>
+          </div>
+        </div>
+        <div id="historyTariffTableWrap" class="dv-price-chart" hidden>
+          <div class="dv-price-chart-head"><div id="historyTariffTableLabel" class="dv-label">Monate</div></div>
+          <div id="historyTariffTable" class="dv-price-table tariff-table"></div>
+        </div>
       </section>
 
       <!-- MiSpeL (2026-10-18): nur sichtbar, wenn unter Einstellungen → Netz eine Option gewählt ist -->
@@ -703,7 +744,7 @@
   <script src="/build-watch.js?v=20261111-t0423"></script>
   <script src="/dv-modal.js"></script>
   <script src="/pro-modal.js" defer></script>
-  <script src="/history.js?v=20261120-netzstrom-zuerst"></script>
+  <script src="/history.js?v=20261123-arbeitspreis"></script>
   <script src="/history-viz.js?v=20261021-akku2"></script>
 </body>
 </html>

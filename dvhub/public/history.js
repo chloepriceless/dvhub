@@ -2387,6 +2387,168 @@ function slotLabel(count, singular) {
   return `${count} ${singular}${count === 1 ? '' : 's'}`;
 }
 
+// ─── Arbeitspreis-Karte (Christin 13.11.2026, Ziel 1.0.11) ─────────────────
+// „Wie war unser dynamischer Tarif im Durchschnitt beim Arbeitspreis, und was
+// hätte ein Festpreis gebracht?“ Alle Zahlen kommen fertig vom Backend
+// (history-runtime.js rechnet je Slot, nur Slots mit variablem Tarif werden
+// verglichen). Nur Arbeitspreis, Grundgebühren bleiben außen vor.
+const TARIFF_CARD_VIEWS = new Set(['week', 'month', 'year', 'all']);
+const MONTH_SHORT = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+
+function tariffPeriodLabel(row, view) {
+  const key = String(row?.key || row?.label || '');
+  if (view === 'year' && /^\d{4}-\d{2}$/.test(key)) {
+    // Die Jahresansicht zeigt ein Jahr — der Monatsname reicht (schmal fürs Handy).
+    const month = key.slice(5, 7);
+    return MONTH_SHORT[Number(month) - 1] || month;
+  }
+  return key || '-';
+}
+
+function tariffSavingsText(eur) {
+  if (!hasFiniteNumber(eur)) return '-';
+  const value = Number(eur);
+  if (value > 0) return `${fmtEur(value)} gespart`;
+  if (value < 0) return `${fmtEur(Math.abs(value))} mehr bezahlt`;
+  return fmtEur(0);
+}
+
+function tariffSourceText(sources) {
+  const list = Array.isArray(sources) ? sources.filter((s) => hasFiniteNumber(s?.ctKwh)) : [];
+  const origin = (s) => {
+    if (s.source === 'configured') return 'eigener Wert aus den Einstellungen';
+    if (s.source === 'base') return 'aus dem Standard-Tarif';
+    return s.label ? `aus Zeitraum ‚${s.label}‘` : 'aus einem Festpreis-Zeitraum';
+  };
+  if (list.length === 0) return '';
+  if (list.length === 1) return `Vergleich: Festpreis ${fmtCt(list[0].ctKwh)} ${origin(list[0])}.`;
+  return `Vergleich je Zeitraum: ${list.map((s) => `${fmtCt(s.ctKwh)} ${origin(s)}`).join('; ')}.`;
+}
+
+function renderTariffTable(summary) {
+  const view = String(summary?.view || '');
+  const wrap = byId('historyTariffTableWrap');
+  const mount = byId('historyTariffTable');
+  const rows = Array.isArray(summary?.rows) ? summary.rows : [];
+  const show = (view === 'year' || view === 'all') && rows.length > 0;
+  if (wrap) wrap.hidden = !show;
+  if (!show || !mount) return;
+  setText('historyTariffTableLabel', view === 'year' ? 'Monate' : 'Jahre');
+  const kpis = summary?.kpis || {};
+  const ctOrDash = (ct) => (hasFiniteNumber(ct) ? fmtCt(ct) : '–');
+  const savingsCell = (item) => {
+    if (!hasFiniteNumber(item?.fixedCompareSavingsEur)) {
+      return Number(item?.variableTariffSlotCount || 0) > 0 ? '–' : '<span class="tariff-muted">Festtarif</span>';
+    }
+    const value = Number(item.fixedCompareSavingsEur);
+    const cls = value > 0 ? 'tariff-gain' : (value < 0 ? 'tariff-loss' : '');
+    return `<span class="${cls}">${fmtEur(value)}</span>`;
+  };
+  const fixedCell = (item) => (hasFiniteNumber(item?.fixedCompareFixedEur) ? fmtEur(item.fixedCompareFixedEur) : '–');
+  const line = (label, item) => `
+          <td>${escapeHtml(label)}</td>
+          <td class="tariff-col-opt">${fmtKwh(item?.importKwh || 0)}</td>
+          <td>${ctOrDash(item?.userImportPriceWeightedCtKwh)}</td>
+          <td class="tariff-col-opt">${ctOrDash(item?.variablePriceAvgCtKwh)}</td>
+          <td class="tariff-col-opt">${fixedCell(item)}</td>
+          <td>${savingsCell(item)}</td>`;
+  mount.innerHTML = `
+    <table class="history-data-table">
+      <thead>
+        <tr>
+          <th>${view === 'year' ? 'Monat' : 'Jahr'}</th>
+          <th class="tariff-col-opt">Netzbezug</th>
+          <th>Ø Arbeitspreis</th>
+          <th class="tariff-col-opt" title="Mittel aller Viertelstunden im dynamischen Tarif">Ø je ¼ h</th>
+          <th class="tariff-col-opt">Mit Festpreis</th>
+          <th>Ersparnis</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((row) => `<tr>${line(tariffPeriodLabel(row, view), row)}</tr>`).join('')}
+      </tbody>
+      <tfoot>
+        <tr>${line(view === 'year' ? 'Jahr' : 'Gesamt', kpis)}</tr>
+      </tfoot>
+    </table>
+  `;
+}
+
+function renderTariffCard(summary) {
+  const card = byId('historyTariffCard');
+  const view = String(summary?.view || '');
+  const kpis = summary?.kpis;
+  const visible = TARIFF_CARD_VIEWS.has(view) && kpis && typeof kpis === 'object';
+  if (card) card.hidden = !visible;
+  if (!visible) return;
+
+  // 1: Ø Arbeitspreis über den ganzen Zeitraum (alle Tarife).
+  setText('historyTariffAvg', hasFiniteNumber(kpis.userImportPriceWeightedCtKwh) ? fmtCt(kpis.userImportPriceWeightedCtKwh) : '-');
+  // Bezugskosten = Zähler des Ø (nur bepreiste Viertelstunden, ungerundet
+  // summiert); fehlt für einen Teil des Bezugs der Preis, steht das dabei.
+  const importKwh = Number(kpis.importKwh || 0);
+  const pricedKwh = hasFiniteNumber(kpis.userImportPriceWeightKwh) ? Number(kpis.userImportPriceWeightKwh) : importKwh;
+  setText('historyTariffImportKwh', pricedKwh < importKwh - 0.005
+    ? `${fmtKwh(importKwh)} · davon ${fmtKwh(pricedKwh)} mit Preis`
+    : fmtKwh(importKwh));
+  setText('historyTariffImportCost', fmtEur(hasFiniteNumber(kpis.importPricedCostEur) ? kpis.importPricedCostEur : importCostEur(kpis)));
+
+  // 2: dynamischer Tarif — mengengewichtet vs. je Viertelstunde.
+  const hasVariable = Number(kpis.variableTariffSlotCount || 0) > 0;
+  const dynAvg = hasFiniteNumber(kpis.variableImportCtKwh) ? Number(kpis.variableImportCtKwh) : null;
+  const timeAvg = hasFiniteNumber(kpis.variablePriceAvgCtKwh) ? Number(kpis.variablePriceAvgCtKwh) : null;
+  setText('historyTariffDynAvg', hasVariable ? (dynAvg != null ? fmtCt(dynAvg) : '-') : 'Festtarif');
+  setText('historyTariffDynTimeAvg', timeAvg != null ? fmtCt(timeAvg) : '-');
+  let shiftText = '-';
+  if (dynAvg != null && timeAvg != null) {
+    const diff = round2(timeAvg - dynAvg);
+    shiftText = diff > 0 ? `${fmtCt(diff)} günstiger` : (diff < 0 ? `${fmtCt(Math.abs(diff))} teurer` : fmtCt(0));
+  }
+  setText('historyTariffShift', shiftText);
+  setText('historyTariffDynKwh', hasVariable ? fmtKwh(kpis.variableImportKwh || 0) : '-');
+  // Tarifwechsel im Zeitraum: an den Viertelstunden gemessen, nicht an den kWh
+  // (Codex ec0c105c) — fehlende Preise sind kein Festtarif.
+  const slotCount = Number(summary?.meta?.unresolved?.slotCount || 0);
+  const variableSlots = Number(kpis.variableTariffSlotCount || 0);
+  const unpricedSlots = Math.max(0, variableSlots - Number(kpis.variablePriceSlotCount || 0));
+  const dynHints = [];
+  if (hasVariable && slotCount > variableSlots) dynHints.push('Nur die Tage mit dynamischem Tarif; im Zeitraum galt auch ein Festtarif.');
+  if (unpricedSlots > 0) dynHints.push(`${unpricedSlots.toLocaleString('de-DE')} Viertelstunden ohne Preis sind nicht enthalten.`);
+  setText('historyTariffDynHint', dynHints.join(' '));
+  setHidden('historyTariffDynHint', dynHints.length === 0);
+
+  // 3: Vergleich mit Festpreis.
+  const savingsEl = byId('historyTariffSavings');
+  const compared = hasFiniteNumber(kpis.fixedCompareSavingsEur);
+  const savings = compared ? Number(kpis.fixedCompareSavingsEur) : null;
+  let compareText;
+  if (!hasVariable) {
+    compareText = 'Im Zeitraum galt nur ein Festtarif – kein Vergleich.';
+  } else if (!compared && Number(kpis.variablePriceSlotCount || 0) === 0) {
+    compareText = 'Börsenpreise fehlen für den dynamischen Tarif – kein Vergleich möglich („Preise nachladen“).';
+  } else if (!compared) {
+    compareText = 'Kein Vergleichspreis: unter Einstellungen → Strompreise einen Vergleichs-Festpreis eintragen.';
+  } else if (!hasFiniteNumber(kpis.fixedCompareCtKwh)) {
+    compareText = 'Kein Netzbezug im dynamischen Tarif – nichts zu vergleichen.';
+  } else {
+    compareText = `Mit Festpreis ${fmtCt(kpis.fixedCompareCtKwh)} hätte der Netzbezug (${fmtKwh(kpis.fixedCompareImportKwh)}) `
+      + `${fmtEur(kpis.fixedCompareFixedEur)} gekostet → ${tariffSavingsText(savings)}.`;
+  }
+  if (savingsEl) {
+    savingsEl.textContent = hasVariable ? tariffSavingsText(savings) : 'Festtarif';
+    savingsEl.style.color = savings > 0 ? 'var(--green)' : (savings < 0 ? 'var(--orange)' : '');
+  }
+  setText('historyTariffFixedLabel', hasFiniteNumber(kpis.fixedCompareCtKwh) ? `Mit Festpreis ${fmtCt(kpis.fixedCompareCtKwh)}` : 'Mit Festpreis');
+  setText('historyTariffFixedCost', compared ? fmtEur(kpis.fixedCompareFixedEur) : '-');
+  setText('historyTariffActualCost', compared ? fmtEur(kpis.fixedCompareActualEur) : '-');
+  setText('historyTariffCompareText', compareText);
+  const sourceText = hasVariable ? tariffSourceText(kpis.fixedCompareSources) : '';
+  setText('historyTariffSource', sourceText);
+  setHidden('historyTariffSource', !sourceText);
+
+  renderTariffTable(summary);
+}
+
 function renderSummaryStatus(summary) {
   const unresolved = summary?.meta?.unresolved || {};
   const warningCount = Number(unresolved.incompleteSlots || 0);
@@ -2414,6 +2576,7 @@ function renderSummary(summary) {
   historyState.lastSummary = summary;
   historyState.detailsExpanded = false;
   renderKpis(summary);
+  renderTariffCard(summary);
   renderLayout(summary);
   renderCharts(summary);
   renderDetailsSection();
