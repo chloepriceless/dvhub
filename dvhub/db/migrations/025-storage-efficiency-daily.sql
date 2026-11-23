@@ -19,6 +19,7 @@
 --   converter_loss_wh  Wandlerverlust gesamt über alle Proben (mit Leerlauf und PV-Wandlung)
 --   soc_delta_pct      Ladestand-Änderung über genau die gezählten Abstände (ΔSoC
 --   soc_intervals      ohne die VRM-gemischten 15-min-Werte; Kapazität rechnet die History)
+--   soc_seconds        Sekunden davon (Anteil mit Ladestand, zeitgewichtet)
 -- Gezählt werden nur lückenlose Abstände (≤ 90 s) zwischen frischen Proben.
 --   seconds / samples  Datenbasis
 --   Ein Tag ohne Proben bekommt eine Zeile mit 0 — daran erkennt der Job,
@@ -43,6 +44,7 @@ CREATE TABLE IF NOT EXISTS storage_efficiency_daily (
   converter_loss_wh DOUBLE PRECISION NOT NULL DEFAULT 0,
   soc_delta_pct DOUBLE PRECISION,
   soc_intervals INTEGER NOT NULL DEFAULT 0,
+  soc_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
   seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
   samples INTEGER NOT NULL DEFAULT 0,
   computed_at TIMESTAMPTZ NOT NULL DEFAULT now()

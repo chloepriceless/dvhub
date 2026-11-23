@@ -455,10 +455,13 @@ test('T12: Systemwirkungsgrad = Laden × Akku (DC) × Entladen, Verluste in kWh 
   assert.equal(sys.losses.totalEur, 0.97);
   assert.equal(sys.losses.complete, true, 'ohne Angabe zur Ladestand-Abdeckung gilt sie als ganz');
   // Codex 3be47b54: Ladestand fehlte zeitweise → Summe als unvollständig markiert, nicht hochgerechnet.
-  const partial = finalizeSelfUse(systemSums().selfUse, { storage: { capability: victronCap, totals: { ...jobTotals, socCoveragePct: 60 } } }).battery.system;
+  const partial = finalizeSelfUse(systemSums().selfUse, { storage: { capability: victronCap, totals: { ...jobTotals, socComplete: false, socCoveragePct: 60 } } }).battery.system;
   assert.equal(partial.losses.complete, false);
   assert.equal(partial.losses.dcCoveragePct, 60);
   assert.equal(partial.losses.totalKwh, 5.61);
+  // Codex 43827b0a: entscheidend ist „fehlt ein Abstand“, nicht eine Prozent-Schwelle.
+  const nearly = finalizeSelfUse(systemSums().selfUse, { storage: { capability: victronCap, totals: { ...jobTotals, socComplete: false, socCoveragePct: 99.73 } } }).battery.system;
+  assert.equal(nearly.losses.complete, false);
   assert.deepEqual(sys.energy, { inputKwh: 31.25, chargedKwh: 30.3, dischargedKwh: 27.1, acOutKwh: 24.84, storedDeltaKwh: 1 });
   assert.deepEqual(sys.prices, { storedCtKwh: 15, chargeCtKwh: 25, chargeBasis: 'grid' });
   assert.deepEqual(sys.basis, { days: 30, firstDay: '2026-11-01', lastDay: '2026-11-30', hours: 690.5 });

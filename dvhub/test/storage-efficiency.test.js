@@ -127,12 +127,19 @@ test('Zeitraum: zu wenig Daten, Ladestand fehlt, abgeleitete Last, unplausibel',
   ], cap10);
   assert.equal(mixed.status, 'ok');
   close(mixed.dcEta, 0.97, 'η Akku DC nur Tag 1', 1e-9);
-  // okDay hat 720 Abstände mit Ladestand, samples fehlt (0) — mit Proben: 720 von 1440 = 50 %.
+  // Zeitgewichtet (Codex 43827b0a): 720 Abstände à 5 s mit Ladestand (3600 s), 720 à 60 s ohne
+  // (43 200 s) → 3600 ÷ 46 800 = 7,69 % der Messzeit, nicht 50 % der Abstände.
   const half = summarizeStorageRows([
-    okDay({ samples: 720 }),
-    okDay({ day: '2026-11-02', samples: 720, soc_delta_pct: null, soc_intervals: 0, charge_all_wh: 0, discharge_all_wh: 0 })
+    okDay({ samples: 720, soc_seconds: 3600 }),
+    okDay({ day: '2026-11-02', samples: 720, seconds: 43200, soc_delta_pct: null, soc_intervals: 0, soc_seconds: 0, charge_all_wh: 0, discharge_all_wh: 0 })
   ], cap10);
-  assert.equal(half.socCoveragePct, 50);
+  assert.equal(half.socCoveragePct, 7.69);
+  assert.equal(half.socComplete, false);
+  // Exakt statt Schwelle: ein einziger Abstand ohne Ladestand unter 100 000 gilt als unvollständig.
+  const almost = summarizeStorageRows([okDay({ samples: 100000, soc_intervals: 99999, seconds: 500000, soc_seconds: 499995 })], cap10);
+  assert.equal(almost.socComplete, false);
+  assert.equal(almost.socCoveragePct, 100);
+  assert.equal(summarizeStorageRows([okDay({ samples: 720, soc_seconds: 3600 })], cap10).socComplete, true);
   // Entladen 9 990 von 10 000 Wh (99,9 %): Last aus der Akku-Leistung abgeleitet.
   assert.equal(summarizeStorageRows([okDay({ ac_out_wh: 9990 })], cap10).status, 'not_measurable');
   // Entladen 40 %: Vorzeichen/Bedeutung falsch.
@@ -169,7 +176,7 @@ test('Tagesjob: rechnet heute, Vortag einmal, dann fehlende Tage; schreibt jede 
   const db = fakeDb({
     dayRow: { charge_dc_wh: 1266.667, pv_to_batt_wh: 500, conv_to_batt_wh: 766.667, ac_in_wh: 833.333,
       discharge_dc_wh: 500, ac_out_wh: 456.667, charge_all_wh: 1275, discharge_all_wh: 500, converter_loss_wh: 165,
-      soc_delta_pct: 1.5, soc_intervals: 600, seconds: 3000, samples: 600 },
+      soc_delta_pct: 1.5, soc_intervals: 600, soc_seconds: 3000, seconds: 3000, samples: 600 },
     firstDay: '2026-11-01', missing: ['2026-11-20']
   });
   const job = createStorageEfficiencyDaily({ getDb: () => db, getCfg: () => ({ timeZone: 'Europe/Berlin' }), maxBackfillDays: 5 });
@@ -180,7 +187,7 @@ test('Tagesjob: rechnet heute, Vortag einmal, dann fehlende Tage; schreibt jede 
   assert.ok(STORAGE_SERIES_KEYS.includes('pv_total_w'), 'PV gesamt für die zweite AC-PV-Position');
   const upserts = db.calls.filter((c) => c.sql === UPSERT_STORAGE_SQL).map((c) => c.params);
   assert.equal(upserts.length, 3);
-  assert.deepEqual(upserts[0], ['2026-11-23', 1266.667, 500, 766.667, 833.333, 500, 456.667, 1275, 500, 165, 1.5, 600, 3000, 600]);
+  assert.deepEqual(upserts[0], ['2026-11-23', 1266.667, 500, 766.667, 833.333, 500, 456.667, 1275, 500, 165, 1.5, 600, 3000, 3000, 600]);
   assert.deepEqual(db.calls.find((c) => c.sql === MISSING_STORAGE_DAYS_SQL).params, ['2026-11-01', '2026-11-22', 5]);
   // Zweiter Lauf am selben Tag: Vortag nicht noch einmal.
   const again = await job.runOnce({ now: new Date('2026-11-23T11:00:00Z') });
@@ -191,7 +198,7 @@ test('Tagesjob: Tag ohne Proben bekommt eine 0-Zeile; nicht messbar oder ohne DB
   const db = fakeDb({ dayRow: {} });
   const job = createStorageEfficiencyDaily({ getDb: () => db, getCfg: () => ({}) });
   await job.computeDay(db, '2026-11-01');
-  assert.deepEqual(db.calls.find((c) => c.sql === UPSERT_STORAGE_SQL).params, ['2026-11-01', 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0]);
+  assert.deepEqual(db.calls.find((c) => c.sql === UPSERT_STORAGE_SQL).params, ['2026-11-01', 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0]);
   const fronius = createStorageEfficiencyDaily({ getDb: () => db, getCfg: () => ({ manufacturer: 'fronius' }) });
   assert.deepEqual(await fronius.runOnce(), { skipped: 'not measurable' });
   const noDb = createStorageEfficiencyDaily({ getDb: () => null, getCfg: () => ({}) });
@@ -276,6 +283,7 @@ test('SQL: Laden aus dem Netz, DC-PV, Entladen (auch neben PV), Ruhe und Lücken
     // ΔSoC nur über die gezählten Abstände: +7 % in A, B–E bleiben bei 47 %; der Vortag mit 90 % zählt nicht.
     close(r.soc_delta_pct, 7, 'ΔSoC', 1e-9);
     assert.equal(Number(r.soc_intervals), 600);
+    close(r.soc_seconds, 3000, 'Sekunden mit Ladestand');
     // Zehn solche Tage (über der Mindestmenge von 1 kWh je Richtung):
     // η Laden = 7600 ÷ (3000 + 5000) = 0,95; η Entladen = 2740 ÷ 3000 = 0,91333; Lader 4600 ÷ 5000 = 0,92;
     // η Akku DC je Tag = 500 Wh ÷ (1275 Wh − 7 % × 10 kWh = 700 Wh) = 0,86957 (nur Testzahlen).
@@ -315,6 +323,7 @@ for (const metaType of ['text', 'jsonb']) test(`SQL (Codex 34516a12, meta_json $
     close(r.discharge_all_wh, 2000 / 6, 'DC-Teil nur mit Ladestand an beiden Enden');
     // 600 s frisch + der zweite Abstand nach dem Fehler (5 s) + 600 s ohne Ladestand.
     close(r.seconds, 1205, 'Sekunden');
+    close(r.soc_seconds, 605, 'Sekunden mit Ladestand (ohne das Fenster ohne Ladestand)');
     close(r.soc_delta_pct, -2, 'ΔSoC nur im frischen Fenster', 1e-9);
   } finally {
     await client.end();

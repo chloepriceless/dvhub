@@ -101,6 +101,7 @@ SELECT coalesce(sum(ch_used * dt), 0) / 3600.0 AS charge_dc_wh,
        coalesce(sum((pdc + dis - ch - ac) * dt), 0) / 3600.0 AS converter_loss_wh,
        sum(soc_d) AS soc_delta_pct,
        count(soc_d)::int AS soc_intervals,
+       coalesce(sum(dt) FILTER (WHERE soc_d IS NOT NULL), 0) AS soc_seconds,
        coalesce(sum(dt), 0) AS seconds,
        count(*)::int AS samples
 FROM s`;
@@ -108,8 +109,8 @@ FROM s`;
 export const UPSERT_STORAGE_SQL = `
 INSERT INTO storage_efficiency_daily (day, charge_dc_wh, pv_to_batt_wh, conv_to_batt_wh, ac_in_wh,
   discharge_dc_wh, ac_out_wh, charge_all_wh, discharge_all_wh, converter_loss_wh,
-  soc_delta_pct, soc_intervals, seconds, samples, computed_at)
-VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
+  soc_delta_pct, soc_intervals, soc_seconds, seconds, samples, computed_at)
+VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
 ON CONFLICT (day) DO UPDATE SET
   charge_dc_wh = EXCLUDED.charge_dc_wh,
   pv_to_batt_wh = EXCLUDED.pv_to_batt_wh,
@@ -122,6 +123,7 @@ ON CONFLICT (day) DO UPDATE SET
   converter_loss_wh = EXCLUDED.converter_loss_wh,
   soc_delta_pct = EXCLUDED.soc_delta_pct,
   soc_intervals = EXCLUDED.soc_intervals,
+  soc_seconds = EXCLUDED.soc_seconds,
   seconds = EXCLUDED.seconds,
   samples = EXCLUDED.samples,
   computed_at = now()`;
@@ -129,7 +131,7 @@ ON CONFLICT (day) DO UPDATE SET
 export const STORAGE_ROWS_SQL = `
 SELECT to_char(day, 'YYYY-MM-DD') AS day, charge_dc_wh, pv_to_batt_wh, conv_to_batt_wh, ac_in_wh,
        discharge_dc_wh, ac_out_wh, charge_all_wh, discharge_all_wh, converter_loss_wh,
-       soc_delta_pct, soc_intervals, seconds, samples
+       soc_delta_pct, soc_intervals, soc_seconds, seconds, samples
 FROM storage_efficiency_daily
 WHERE day >= $1::date AND day < $2::date
 ORDER BY day`;
@@ -233,7 +235,7 @@ const numOrNull = (v) => (v != null && v !== '' && Number.isFinite(Number(v)) ? 
 export function summarizeStorageRows(rows, { capacityKwhForDay = null } = {}) {
   const t = {
     charge: 0, pvToBatt: 0, convToBatt: 0, acIn: 0, discharge: 0, acOut: 0,
-    chargeAll: 0, dischargeAll: 0, converterLoss: 0, seconds: 0, samples: 0, socIntervals: 0
+    chargeAll: 0, dischargeAll: 0, converterLoss: 0, seconds: 0, samples: 0, socIntervals: 0, socSeconds: 0
   };
   const days = [];
   let deltaKwh = 0;
@@ -252,6 +254,7 @@ export function summarizeStorageRows(rows, { capacityKwhForDay = null } = {}) {
     t.seconds += num(r.seconds);
     t.samples += num(r.samples);
     t.socIntervals += num(r.soc_intervals);
+    t.socSeconds += num(r.soc_seconds);
     if (!(num(r.seconds) > 0) || !r.day) continue;
     const day = String(r.day).slice(0, 10);
     days.push(day);
@@ -307,9 +310,11 @@ export function summarizeStorageRows(rows, { capacityKwhForDay = null } = {}) {
     chargeAllKwh: round(t.chargeAll / 1000),
     dischargeAllKwh: round(t.dischargeAll / 1000),
     storedDeltaKwh: storedDeltaKwh == null ? null : round(storedDeltaKwh),
-    // Anteil der gezählten Abstände mit Ladestand: nur darüber rechnet der DC-Teil
-    // (Codex 3be47b54) — unter 100 % ist der Akku-Verlust nicht der ganze Zeitraum.
-    socCoveragePct: t.samples > 0 ? round((t.socIntervals / t.samples) * 100, 2) : null,
+    // Nur über Abstände mit Ladestand rechnet der DC-Teil (Codex 3be47b54). Vollständig
+    // heißt: kein gezählter Abstand ohne Ladestand (exakt, Codex 43827b0a); der Anteil
+    // ist zeitgewichtet und nur für die Anzeige.
+    socComplete: t.samples > 0 ? t.socIntervals >= t.samples : null,
+    socCoveragePct: t.seconds > 0 ? round((t.socSeconds / t.seconds) * 100, 2) : null,
     converterLossKwh: round(t.converterLoss / 1000),
     // Ungerundet für die Rechnung (history-tariff.js), gerundet für die Anzeige.
     raw: {
@@ -354,7 +359,8 @@ export function createStorageEfficiencyDaily({ getDb, getCfg, pushLog, maxBackfi
     await db.query(UPSERT_STORAGE_SQL, [
       day, num(r.charge_dc_wh), num(r.pv_to_batt_wh), num(r.conv_to_batt_wh), num(r.ac_in_wh),
       num(r.discharge_dc_wh), num(r.ac_out_wh), num(r.charge_all_wh), num(r.discharge_all_wh),
-      num(r.converter_loss_wh), numOrNull(r.soc_delta_pct), num(r.soc_intervals), num(r.seconds), num(r.samples),
+      num(r.converter_loss_wh), numOrNull(r.soc_delta_pct), num(r.soc_intervals), num(r.soc_seconds),
+      num(r.seconds), num(r.samples),
     ]);
   }
 

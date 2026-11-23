@@ -658,7 +658,7 @@ function finalizeStorageSystem(selfUse, storage, { storedCt }) {
   // Akku (DC) nur über Abstände mit Ladestand (Codex 3be47b54): fehlte er zeitweise,
   // deckt die Summe nicht die ganze Messzeit ab — kenntlich machen, nicht hochrechnen.
   const dcCoveragePct = t.socCoveragePct ?? null;
-  const complete = dcCoveragePct == null || dcCoveragePct >= 99.5;
+  const complete = t.socComplete !== false;
   return {
     ...base,
     status: 'ok',
