@@ -291,7 +291,17 @@ test('Eigenverbrauch bewertet: Flüsse je Viertelstunde, Ladestand am Rand (T7)'
   // ΔSoC (50 − 20) % × 10 kWh = 3 kWh, zum Einstandspreis bewertet; Bilanz ohne Korrektur aufgeht.
   assert.equal(k.battery.storedDeltaKwh, 3);
   close(k.advantageEur - k.battery.socCorrectionEur, lhs / 100, 'Bilanz', 0.02);
-  close(k.battery.socCorrectionEur, (3 * k.battery.inCtKwh) / 100, 'Ladestand-Ausgleich', 0.01);
+  close(k.battery.socCorrectionEur, (3 * k.battery.storedValueCtKwh) / 100, 'Ladestand-Ausgleich', 0.01);
+  // Einstand je geladener kWh: PV 0,1 kWh je Viertelstunde zur Börse.
+  close(k.battery.storedValueCtKwh, 15, 'Ø Börse beim Laden (0/10/20/30)', 0.01);
+});
+
+test('Codex 39d05c79: Tagesansicht – Viertelstunden-Zeilen ohne Tagesgebühr, Zeitraum einmal', async () => {
+  const store = makeStore({ fromUtc: '2026-03-19T23:00:00.000Z', toUtc: '2026-03-20T23:00:00.000Z' });
+  const summary = await runtimeFor(store, { ...PRICING, validFrom: '2026-03-01' }).getSummary({ view: 'day', date: '2026-03-20' });
+  assert.equal(summary.rows.length, 96);
+  assert.ok(summary.rows.every((row) => row.tariff.baseFee === null));
+  assert.equal(summary.kpis.tariff.baseFee.eur, 1);
 });
 
 test('Codex ddbea4c0: Ø-Bezugspreis über den Zeitraum aus ungerundeten Summen', async () => {

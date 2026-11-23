@@ -14,6 +14,7 @@ import { whenProviderPricesLoaded, providerSlotAt, firstProviderSlotMs } from '.
 import {
   createTariffSums,
   addSlotToTariffSums,
+  tariffFlowsOf,
   finalizeTariffRow,
   finalizeTariffFits,
   finalizeSelfUse,
@@ -612,7 +613,12 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
       key = localYearString(slot.ts);
       label = key;
     }
-    const row = groups.get(key) || buildRowAccumulator(key, label);
+    let row = groups.get(key);
+    if (!row) {
+      row = buildRowAccumulator(key, label);
+      // Tagesansicht: Zeilen sind Viertelstunden — keine Tagesgebühr je Zeile (Codex 39d05c79).
+      if (view === 'day') row.tariffSums = createTariffSums({ withFee: false });
+    }
     for (const field of AGGREGATE_SUM_FIELDS) {
       if (field === 'solarCompensationEur' || field === 'netEur') continue;
       row[field] += Number(slot[field] || 0);
@@ -1952,7 +1958,10 @@ export function createHistoryRuntime({
         tariffFeeEurDay: day.tariffFeeEurDay,
         tariffCompareDay: day.tariffCompareDay,
         tariffCompareFeeEurDay: day.tariffCompareFeeEurDay,
-        tariffCompareCtKwh: priced ? day.tariffCompareCtKwh : null
+        tariffCompareCtKwh: priced ? day.tariffCompareCtKwh : null,
+        // Ungerundete Flüsse für Gewichte und Eigenverbrauch (Codex 39d05c79);
+        // die Slot-Felder rundet enrichSlot auf 2 Stellen.
+        tariffFlows: tariffFlowsOf(slot)
       };
     }
 

@@ -88,7 +88,7 @@ function createSelfUse() {
  * Streudiagramm und die Eigenverbrauchs-Bewertung (nur für den ganzen
  * Zeitraum, nicht je Zeile).
  */
-export function createTariffSums({ detail = false } = {}) {
+export function createTariffSums({ detail = false, withFee = true } = {}) {
   const sums = {
     variableSlots: 0,
     unpricedSlots: 0,
@@ -96,7 +96,8 @@ export function createTariffSums({ detail = false } = {}) {
     allImportCt: 0,
     real: createPart(),
     est: createPart(),
-    fee: createFee()
+    // Viertelstunden-Zeilen (Tagesansicht) tragen keine Tagesgebühr (Codex 39d05c79).
+    fee: withFee ? createFee() : null
   };
   if (detail) {
     sums.groups = {};
@@ -157,17 +158,28 @@ function addFee(fee, slot) {
   }
 }
 
-function addSelfUse(selfUse, slot) {
+// Flüsse einer Viertelstunde, Akku 1 + 2 zusammen:
+// [PV direkt, Netz direkt, Akku→Haus, PV→Akku, Netz→Akku, Akku→Netz, PV→Netz].
+// history-runtime legt sie UNGERUNDET als slot.tariffFlows an (die Slot-Felder
+// sind dort schon auf 2 Stellen gerundet, Codex 39d05c79); sonst aus den Feldern.
+export function tariffFlowsOf(slot) {
+  if (Array.isArray(slot?.tariffFlows)) return slot.tariffFlows.map(kwhOf);
+  return [
+    kwhOf(slot.solarDirectUseKwh),
+    kwhOf(slot.gridDirectUseKwh),
+    kwhOf(slot.batteryDirectUseKwh) + kwhOf(slot.secondBatteryDirectUseKwh),
+    kwhOf(slot.solarToBatteryKwh) + kwhOf(slot.secondSolarToBatteryKwh),
+    kwhOf(slot.gridToBatteryKwh) + kwhOf(slot.secondGridToBatteryKwh),
+    kwhOf(slot.batteryToGridKwh) + kwhOf(slot.secondBatteryToGridKwh),
+    kwhOf(slot.solarToGridKwh)
+  ];
+}
+
+function addSelfUse(selfUse, slot, flows) {
   const p = Number(slot.userImportPriceCtKwh);
   const s = Number(slot.marketPriceCtKwh);
-  const solarDirect = kwhOf(slot.solarDirectUseKwh);
-  const gridDirect = kwhOf(slot.gridDirectUseKwh);
-  const battDirect = kwhOf(slot.batteryDirectUseKwh) + kwhOf(slot.secondBatteryDirectUseKwh);
+  const [solarDirect, gridDirect, battDirect, solarToBatt, gridToBatt, battToGrid, solarToGrid] = flows;
   const load = solarDirect + gridDirect + battDirect;
-  const solarToBatt = kwhOf(slot.solarToBatteryKwh) + kwhOf(slot.secondSolarToBatteryKwh);
-  const gridToBatt = kwhOf(slot.gridToBatteryKwh) + kwhOf(slot.secondGridToBatteryKwh);
-  const battToGrid = kwhOf(slot.batteryToGridKwh) + kwhOf(slot.secondBatteryToGridKwh);
-  const solarToGrid = kwhOf(slot.solarToGridKwh);
   const anyFlow = load + solarToBatt + gridToBatt + battToGrid + solarToGrid > 0;
   if (!slot.importPriceKnown || !Number.isFinite(p) || !finite(slot.marketPriceCtKwh)) {
     if (anyFlow || kwhOf(slot.loadKwh) > 0) selfUse.skippedNoPriceSlots += 1;
@@ -205,7 +217,8 @@ function addSelfUse(selfUse, slot) {
  * tariffDate/tariffFeeEurDay/tariffCompareDay/tariffCompareFeeEurDay, Flüsse.
  */
 export function addSlotToTariffSums(sums, slot) {
-  addFee(sums.fee, slot);
+  if (sums.fee) addFee(sums.fee, slot);
+  const flows = tariffFlowsOf(slot);
   const p = Number(slot.userImportPriceCtKwh);
   const imp = kwhOf(slot.importKwh);
   if (slot.importPriceKnown && Number.isFinite(p)) {
@@ -230,8 +243,8 @@ export function addSlotToTariffSums(sums, slot) {
         part.spotCt += imp * s;
         part.spotPriceCt += imp * p;
       }
-      const house = kwhOf(slot.gridDirectUseKwh);
-      const battery = kwhOf(slot.gridToBatteryKwh) + kwhOf(slot.secondGridToBatteryKwh);
+      const house = flows[1];
+      const battery = flows[4];
       part.houseKwh += house;
       part.houseCt += house * p;
       part.batteryKwh += battery;
@@ -265,7 +278,7 @@ export function addSlotToTariffSums(sums, slot) {
       }
     }
   }
-  if (sums.selfUse) addSelfUse(sums.selfUse, slot);
+  if (sums.selfUse) addSelfUse(sums.selfUse, slot, flows);
   return sums;
 }
 
@@ -416,23 +429,23 @@ export function finalizeTariffRow(sums, { excludeEstimated = false } = {}) {
       savingsEur: round2(fixedEur - actualEur)
     };
   })() : null;
-  const baseFee = {
+  const baseFee = fee ? {
     eur: round2(fee.eur),
     days: fee.days,
     missingDays: fee.missingDays,
     variableEur: round2(fee.varEur),
     variableDays: fee.varDays,
     variableMissingDays: fee.varMissingDays
-  };
+  } : null;
   // Mit Grundgebühr: nur wenn sie für alle betroffenen Tage bekannt ist.
-  const variableCostWithFeeEur = fee.varDays > 0 && fee.varMissingDays === 0 && part.slots > 0
+  const variableCostWithFeeEur = fee && fee.varDays > 0 && fee.varMissingDays === 0 && part.slots > 0
     ? round2(importCostEur + fee.varEur)
     : null;
-  const allCostWithFeeEur = fee.days > 0 && fee.missingDays === 0
+  const allCostWithFeeEur = fee && fee.days > 0 && fee.missingDays === 0
     ? round2(sums.allImportCt / 100 + fee.eur)
     : null;
   let fixedCompareWithFee = null;
-  if (fixedCompare && fee.cmpDays > 0 && fee.cmpMissingDays === 0) {
+  if (fee && fixedCompare && fee.cmpDays > 0 && fee.cmpMissingDays === 0) {
     const feeFixedEur = round2(fee.cmpFixedEur);
     const feeActualEur = round2(fee.cmpActualEur);
     const fixedEur = round2(fixedCompare.fixedEur + feeFixedEur);
@@ -462,7 +475,7 @@ export function finalizeTariffRow(sums, { excludeEstimated = false } = {}) {
     allImportCostEur: round2(sums.allImportCt / 100),
     allCostWithFeeEur,
     fixedCompareWithFee,
-    compareFeeMissingDays: fee.cmpMissingDays
+    compareFeeMissingDays: fee ? fee.cmpMissingDays : null
   };
 }
 
@@ -482,7 +495,14 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null } = {}) {
   const charge = selfUse.chargePvKwh + selfUse.chargeGridKwh;
   const inCt = discharge > 0 ? selfUse.chargeCostCt / discharge : null;
   const delta = finite(storedDeltaKwh) ? Number(storedDeltaKwh) : null;
-  const socCorrectionCt = delta != null && inCt != null ? delta * inCt : 0;
+  // Ladestand am Rand zum Einstandspreis je GELADENER kWh (Codex 39d05c79):
+  // je entladener kWh blähte ein voller Akku am Ende das Ergebnis auf und fiel
+  // ohne Entladung ganz weg. Ohne Ladung im Zeitraum ist der Einstand
+  // unbekannt; dann neutral zum Nutzwert je entladener kWh.
+  const storedCt = charge > 0
+    ? selfUse.chargeCostCt / charge
+    : (discharge > 0 ? selfUse.dischargeValueCt / discharge : null);
+  const socCorrectionCt = delta != null && storedCt != null ? delta * storedCt : 0;
   const batteryResultCt = selfUse.dischargeValueCt - selfUse.chargeCostCt + socCorrectionCt;
   const advantageCt = selfUse.pvDirectGainCt + batteryResultCt;
   const netCharge = charge - (delta ?? 0);
@@ -510,6 +530,7 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null } = {}) {
       outCtKwh: ratio(selfUse.dischargeValueCt, discharge),
       etaPct: discharge > 0 && netCharge > 0 ? round2((discharge / netCharge) * 100) : null,
       storedDeltaKwh: delta == null ? null : round2(delta),
+      storedValueCtKwh: storedCt == null ? null : round2(storedCt),
       socCorrectionEur: round2(socCorrectionCt / 100),
       resultEur: round2(batteryResultCt / 100)
     },

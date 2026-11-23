@@ -280,8 +280,10 @@ test('Eigenverbrauch: Bilanz PV direkt + Akku = Σ Last·p − Σ Bezug·p + Σ 
 });
 
 test('Eigenverbrauch: Ladestand am Rand zum Einstandspreis, ohne Flüsse/Preis nicht bewertet', () => {
-  // ΔSoC +0,26 kWh × 11,538 ct = 3,0 ct → Ergebnis 35 + 3 = 38 ct; η = 1,3 / (1,5 − 0,26) = 104,84 %.
+  // ΔSoC +0,26 kWh × Einstand je geladener kWh (15 ct / 1,5 kWh = 10 ct) = 2,6 ct → 35 + 2,6 = 37,6 ct ≈ 0,38 €;
+  // η = 1,3 / (1,5 − 0,26) = 104,84 %.
   const r = finalizeSelfUse(selfUseSums().selfUse, { storedDeltaKwh: 0.26 });
+  assert.equal(r.battery.storedValueCtKwh, 10);
   assert.equal(r.battery.socCorrectionEur, 0.03);
   assert.equal(r.battery.resultEur, 0.38);
   assert.equal(r.battery.etaPct, 104.84);
@@ -302,4 +304,43 @@ test('Summen sind JSON-fest (Ablage) und bleiben nach dem Rundlauf gleich', () =
   assert.deepEqual(finalizeTariffFits(copy), finalizeTariffFits(sums));
   const empty = createTariffSums({ detail: true });
   assert.deepEqual(JSON.parse(JSON.stringify(empty)), empty);
+});
+
+// Codex 39d05c79 P2: Ladestand am Rand zum Einstandspreis je GELADENER kWh.
+// Verlustfrei 10 kWh zu 30 ct geladen, 1 kWh zu 30 ct entladen, ΔSoC +9 kWh → Ergebnis 0.
+test('Ladestand-Ausgleich je geladener kWh: kein Scheingewinn, auch ohne Entladung', () => {
+  const sums = createTariffSums({ detail: true });
+  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 30, marketPriceCtKwh: 10, importKwh: 10, gridToBatteryKwh: 10 });
+  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 30, marketPriceCtKwh: 10, importKwh: 0, batteryDirectUseKwh: 1, loadKwh: 1 });
+  const r = finalizeSelfUse(sums.selfUse, { storedDeltaKwh: 9 });
+  assert.equal(r.battery.storedValueCtKwh, 30);
+  assert.equal(r.battery.resultEur, 0);
+  // Ohne Entladung: 5 kWh zu 30 ct geladen, ΔSoC +5 → 0 statt −1,50 €.
+  const only = createTariffSums({ detail: true });
+  addSlotToTariffSums(only, { importPriceKnown: true, userImportPriceCtKwh: 30, marketPriceCtKwh: 10, importKwh: 5, gridToBatteryKwh: 5 });
+  assert.equal(finalizeSelfUse(only.selfUse, { storedDeltaKwh: 5 }).battery.resultEur, 0);
+});
+
+// Codex 39d05c79 P2: Gewichte aus den ungerundeten Flüssen (tariffFlows).
+test('Haus-Ø und Eigenverbrauch rechnen mit ungerundeten Flüssen', () => {
+  const sums = createTariffSums({ detail: true });
+  const slot = (kwh, p) => dyn({ importKwh: kwh, userImportPriceCtKwh: p, marketPriceCtKwh: 5, gridDirectUseKwh: Math.round(kwh * 100) / 100, tariffFlows: [0, kwh, 0, 0, 0, 0, 0] });
+  addSlotToTariffSums(sums, slot(0.014, 20));
+  addSlotToTariffSums(sums, slot(0.006, 40));
+  const row = finalizeTariffRow(sums);
+  // (0,014·20 + 0,006·40) / 0,02 = 26 ct — nicht 30 ct aus 0,01/0,01.
+  assert.equal(row.avgImportCtKwh, 26);
+  assert.equal(row.house.avgCtKwh, 26);
+  assert.equal(finalizeSelfUse(sums.selfUse).peffWithoutOpportunityCtKwh, 26);
+});
+
+// Codex 39d05c79 P2: Viertelstunden-Zeilen (Tagesansicht) ohne Tagesgebühr.
+test('Summen ohne Grundgebühr (Viertelstunden-Zeilen) melden keine Gebühr', () => {
+  const sums = createTariffSums({ withFee: false });
+  addSlotToTariffSums(sums, dyn({ tariffDate: '2026-03-01', tariffFeeEurDay: 1, importKwh: 1, userImportPriceCtKwh: 20, marketPriceCtKwh: 5 }));
+  const row = finalizeTariffRow(sums);
+  assert.equal(row.baseFee, null);
+  assert.equal(row.variableCostWithFeeEur, null);
+  assert.equal(row.allCostWithFeeEur, null);
+  assert.equal(row.avgImportCtKwh, 20);
 });
