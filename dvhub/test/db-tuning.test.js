@@ -209,26 +209,53 @@ test('Timescale mit Profil „winzig“: 6-h-Blöcke, Kompression nach 6 h, Lauf
   assert.deepEqual(g.changed, ['chunk_interval', 'compress_after']);
 });
 
-// Codex 2ef7ff2c (P2): vorübergehend kleinerer Schreibpuffer bleibt nicht für immer.
-test('Zurück auf „groß“: DVhubs max_wal_size aus ALTER SYSTEM wird zurückgesetzt, fremde Werte nie', async () => {
+// Codex 2ef7ff2c / 2b7a081b: vorübergehend kleinerer Schreibpuffer bleibt nicht für immer —
+// zurückgesetzt wird aber nur der Wert, den DVhub selbst gesetzt und sich gemerkt hat.
+test('max_wal_size: DVhub merkt sich den eigenen Wert und setzt nur diesen zurück', async () => {
   const mk = (setting, sourcefile) => {
-    const calls = [];
-    return { calls, async query(sql) {
-      calls.push(sql);
-      if (sql.includes("name = 'max_wal_size'")) return { rows: [{ setting, unit: 'MB', sourcefile }] };
+    const st = { setting, calls: [] };
+    st.query = async (sql) => {
+      st.calls.push(sql);
+      if (sql.startsWith('SELECT name, setting')) return { rows: [{ name: 'max_wal_size', setting: st.setting, unit: 'MB', source: 'configuration file' }] };
+      if (sql.includes("name = 'max_wal_size'")) return { rows: [{ setting: st.setting, unit: 'MB', sourcefile }] };
+      if (sql.startsWith('ALTER SYSTEM SET max_wal_size')) { st.setting = /'(\d+)MB'/.exec(sql)[1]; return { rows: [] }; }
       return { rows: [] };
-    } };
+    };
+    return st;
   };
-  const ours = mk('512', '/var/lib/postgresql/data/postgresql.auto.conf');
-  const r = await applyDbTuning((q, p) => ours.query(q, p), { includeMemory: false, storageProfile: PROFILES.gross });
-  assert.ok(ours.calls.includes('ALTER SYSTEM RESET max_wal_size'));
+  const owner = () => { let v = null; return { read: () => v, write: (x) => { v = x; }, get v() { return v; } }; };
+  const AUTO = '/var/lib/postgresql/data/postgresql.auto.conf';
+  // DVhub setzt 512 (mittel), merkt es sich, und nimmt es bei „groß“ zurück.
+  const db = mk('1024', '/usr/share/postgresql/postgresql.conf.sample'); const own = owner();
+  await applyDbTuning((q, p) => db.query(q, p), { includeMemory: false, storageProfile: PROFILES.mittel, walOwner: own });
+  assert.equal(own.v, 512);
+  const back = mk('512', AUTO);
+  const r = await applyDbTuning((q, p) => back.query(q, p), { includeMemory: false, storageProfile: PROFILES.gross, walOwner: own });
+  assert.ok(back.calls.includes('ALTER SYSTEM RESET max_wal_size'));
   assert.ok(r.changed.includes('max_wal_size'));
-  for (const [setting, file] of [['2048', '/x/postgresql.auto.conf'], ['512', '/etc/postgresql/17/main/postgresql.conf']]) {
-    const other = mk(setting, file);
-    await applyDbTuning((q, p) => other.query(q, p), { includeMemory: false });
-    assert.ok(!other.calls.includes('ALTER SYSTEM RESET max_wal_size'), `${setting} aus ${file} bleibt`);
-  }
-  const small = mk('512', '/x/postgresql.auto.conf');
-  await applyDbTuning((q, p) => small.query(q, p), { includeMemory: false, storageProfile: PROFILES.mittel });
-  assert.ok(!small.calls.includes('ALTER SYSTEM RESET max_wal_size'), 'bei „mittel“ gewollt');
+  assert.equal(own.v, null, 'Merker gelöscht');
+  // Betreiber hat selbst 512 per ALTER SYSTEM gesetzt, DVhub nie → bleibt.
+  const admin = mk('512', AUTO);
+  await applyDbTuning((q, p) => admin.query(q, p), { includeMemory: false, storageProfile: PROFILES.gross, walOwner: owner() });
+  assert.ok(!admin.calls.includes('ALTER SYSTEM RESET max_wal_size'), 'fremder Wert bleibt');
+  // Ohne Merker nie.
+  const none = mk('512', AUTO);
+  await applyDbTuning((q, p) => none.query(q, p), { includeMemory: false });
+  assert.ok(!none.calls.includes('ALTER SYSTEM RESET max_wal_size'));
+  // Betreiber hat danach selbst einen anderen Wert gesetzt → bleibt.
+  const changedByAdmin = mk('2048', AUTO); const o2 = owner(); o2.write(512);
+  await applyDbTuning((q, p) => changedByAdmin.query(q, p), { includeMemory: false, storageProfile: PROFILES.gross, walOwner: o2 });
+  assert.ok(!changedByAdmin.calls.includes('ALTER SYSTEM RESET max_wal_size'));
+});
+
+import { fileWalOwner } from '../services/db-tuning.js';
+test('fileWalOwner: Merker als Datei', () => {
+  const files = {};
+  const fsImpl = { readFileSync: (f) => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; }, writeFileSync: (f, d) => { files[f] = d; }, unlinkSync: (f) => { delete files[f]; } };
+  const o = fileWalOwner('/d', { fsImpl });
+  assert.equal(o.read(), null);
+  o.write(256);
+  assert.equal(o.read(), 256);
+  o.write(null);
+  assert.equal(o.read(), null);
 });

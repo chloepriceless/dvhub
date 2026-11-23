@@ -22,6 +22,8 @@
 // Was auf der Kommandozeile steht (Compose `-c …`), gewinnt in PostgreSQL vor
 // ALTER SYSTEM — das wird nicht angefasst, nur gemeldet.
 
+import fs from 'node:fs';
+
 const MB = 1024 * 1024;
 
 export const WRITE_SETTINGS = Object.freeze({
@@ -79,7 +81,20 @@ export function dbBudgetMb({ env = process.env, totalMemBytes } = {}) {
  * halten weniger Schreibpuffer vor. „groß“ (und ohne Profil) = bisher:
  * max_wal_size bleibt unangetastet (PostgreSQL-Standard 1 GB), min_wal_size 64MB.
  */
-export const MANAGED_MAX_WAL_MB = Object.freeze([512, 256, 128]);
+/** Merker „diesen max_wal_size hat DVhub gesetzt“ als Datei im Datenverzeichnis. */
+export function fileWalOwner(dataDir, { fsImpl = null } = {}) {
+  const f = `${dataDir}/storage-wal-owner.json`;
+  return {
+    read: () => {
+      try { return Number(JSON.parse((fsImpl || fs).readFileSync(f, 'utf8')).maxWalMb) || null; } catch { return null; }
+    },
+    write: (mb) => {
+      const fsx = fsImpl || fs;
+      if (mb == null) { try { fsx.unlinkSync(f); } catch { /* egal */ } return; }
+      fsx.writeFileSync(f, `${JSON.stringify({ maxWalMb: mb })}\n`);
+    },
+  };
+}
 export function walSettings(storageProfile = null) {
   if (!storageProfile || storageProfile.name === 'gross') return {};
   return { max_wal_size: `${storageProfile.maxWalMb}MB`, min_wal_size: `${storageProfile.minWalMb}MB` };
@@ -97,7 +112,7 @@ export function desiredSettings({ budgetMb, includeMemory = true, storageProfile
  * nur, was abweicht; nie, was auf der Kommandozeile steht.
  * @returns {{ changed: string[], pendingRestart: string[], skippedCommandLine: string[], profile: string|null }}
  */
-export async function applyDbTuning(query, { budgetMb, includeMemory = true, storageProfile = null } = {}) {
+export async function applyDbTuning(query, { budgetMb, includeMemory = true, storageProfile = null, walOwner = null } = {}) {
   const { profile, settings } = desiredSettings({ budgetMb, includeMemory, storageProfile });
   const names = Object.keys(settings);
   const res = await query(
@@ -115,17 +130,27 @@ export async function applyDbTuning(query, { budgetMb, includeMemory = true, sto
     await query(`ALTER SYSTEM SET ${name.includes('.') ? `"${name}"` : name} = '${want}'`);
     changed.push(name);
   }
-  // Zurück auf „groß“ (oder ohne Profil): eine früher von DVhub gesetzte
-  // max_wal_size aus postgresql.auto.conf wieder entfernen — sonst bliebe ein
-  // vorübergehend kleinerer Schreibpuffer für immer (Codex 2ef7ff2c). Nur unsere
-  // Profilwerte (512/256/128 MB) aus ALTER SYSTEM, nie fremde Einstellungen.
-  if (!('max_wal_size' in settings)) {
-    const w = (await query(
-      "SELECT setting, unit, sourcefile FROM pg_settings WHERE name = 'max_wal_size'")).rows?.[0];
-    const mb = w ? toBytes(w.setting, w.unit) / MB : null;
-    if (w && /postgresql\.auto\.conf$/.test(String(w.sourcefile || '')) && MANAGED_MAX_WAL_MB.includes(mb)) {
-      await query('ALTER SYSTEM RESET max_wal_size');
-      changed.push('max_wal_size');
+  // max_wal_size gehört DVhub nur, wenn DVhub ihn selbst gesetzt und sich das
+  // gemerkt hat (walOwner, Datei im Datenverzeichnis) — ein gleicher Wert per
+  // ALTER SYSTEM vom Betreiber ist sonst nicht zu unterscheiden (Codex 2b7a081b).
+  if (changed.includes('max_wal_size')) {
+    try { walOwner?.write?.(parseWanted(settings.max_wal_size) / MB); } catch { /* egal */ }
+  }
+  // Zurück auf „groß“ (oder ohne Profil): nur den eigenen, gemerkten Wert aus
+  // postgresql.auto.conf entfernen — sonst bliebe ein vorübergehend kleinerer
+  // Schreibpuffer für immer (Codex 2ef7ff2c). Ohne Merker nie.
+  if (!('max_wal_size' in settings) && walOwner) {
+    let own = null;
+    try { own = Number(walOwner.read?.()); } catch { /* egal */ }
+    if (Number.isFinite(own) && own > 0) {
+      const w = (await query(
+        "SELECT setting, unit, sourcefile FROM pg_settings WHERE name = 'max_wal_size'")).rows?.[0];
+      const mb = w ? toBytes(w.setting, w.unit) / MB : null;
+      if (w && /postgresql\.auto\.conf$/.test(String(w.sourcefile || '')) && mb === own) {
+        await query('ALTER SYSTEM RESET max_wal_size');
+        changed.push('max_wal_size');
+      }
+      try { walOwner.write?.(null); } catch { /* egal */ }
     }
   }
   if (changed.length) await query('SELECT pg_reload_conf()');

@@ -44,7 +44,7 @@ import { createHistoryVizAggregator } from './services/history-viz/aggregator.js
 import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
 import { createLogRetention } from './services/log-retention.js';
-import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/db-tuning.js';
+import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax, fileWalOwner } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
 import { createStorageGuard } from './services/storage-guard.js';
 import { readPgDataDirectory } from './services/storage-mounts.js';
@@ -809,7 +809,9 @@ async function tuneDatabase(dbConfig, storageProfile = null) {
   try {
     const budgetMb = dbBudgetMb({ totalMemBytes: os.totalmem() });
     // WAL-Grenzen nach Speicherprofil (Speicher-Konzept Schritt 3, S7: im Container per ALTER SYSTEM).
-    const r = await applyDbTuning((q, p) => admin.query(q, p), { budgetMb, storageProfile });
+    const r = await applyDbTuning((q, p) => admin.query(q, p), {
+      budgetMb, storageProfile, walOwner: fileWalOwner(DATA_DIR || '/var/lib/dvhub'),
+    });
     state.dbTuning = { applied: true, budgetMb, storageProfile: storageProfile?.name || null, ...r, at: new Date().toISOString() };
     if (r.changed.length || r.pendingRestart.length) pushLog('db_tuning', state.dbTuning);
   } finally {
