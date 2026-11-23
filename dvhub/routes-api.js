@@ -2789,7 +2789,10 @@ export function createApiRoutes(ctx) {
     // Systemhinweise (Einspeisegrenze, unbekannter DV-Befehl, Speicherplatz …):
     // Leitstand zeigt sie als Hinweisleiste (app.js renderSystemWarnings).
     payload.systemWarnings = Array.isArray(state.systemWarnings)
-      ? state.systemWarnings.map((w) => ({ id: String(w.id || ''), message: String(w.message || '') }))
+      ? state.systemWarnings.map((w) => ({
+        id: String(w.id || ''), message: String(w.message || ''),
+        ...(w.severity === 'error' ? { severity: 'error' } : {}),
+      }))
       : [];
     // Kennungsprobe des Herstellerprofils (E10): Ergebnis aus dem POLLER-Snapshot (wie telemetryFreeze), und jedes
     // Ergebnis außer „bestanden“ als Hinweis in der Leiste — dort steht, was ausgeblendet bzw. ungeprüft ist.
@@ -5797,7 +5800,13 @@ export function createApiRoutes(ctx) {
     // Speicherplatz (storage-guard.js): frei/belegt, Stufe, letzte Maßnahmen.
     if (url.pathname === '/api/storage/status' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
-      return json(res, 200, { ok: true, ...(ctx.storageGuard?.status?.() || { level: 'unbekannt' }) });
+      // compression: Prüfung der Wache (auch vor dem ersten Lauf); timescaleTuning: Ergebnis beim Start.
+      return json(res, 200, {
+        ok: true,
+        ...(ctx.storageGuard?.status?.() || { level: 'unbekannt' }),
+        compression: ctx.storageGuard?.compressionStatus?.() ?? null,
+        timescaleTuning: state.timescaleTuning ?? null,
+      });
     }
 
     // Zentraler EOS-Zustand (eos-monitor.js): up/busy/down, PID, Version,

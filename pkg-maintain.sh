@@ -183,6 +183,8 @@ if command -v node >/dev/null 2>&1; then
     // Ein frueherer Fehlschlag gilt als erledigt, sobald die Bibliothek laedt und
     // nichts mehr geparkt ist (sonst stuende er bis zur naechsten Nachruestung).
     if(prev&&prev.result==='failed'&&e.EXT_VERSION&&!e.LOAD_ERROR&&!rescue)prev=null;
+    // Apache-Rueckfall (timescale-provision.sh, S12 a1) gilt als erledigt, sobald Community laeuft.
+    if(prev&&prev.result==='apache'&&e.LICENSE==='timescale')prev=null;
     const o={
       extVersion: e.EXT_VERSION||null,
       binaryVersion: e.BIN_VERSION||null,

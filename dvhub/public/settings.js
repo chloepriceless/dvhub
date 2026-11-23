@@ -4314,12 +4314,73 @@ async function applySystemUpdates() {
   }
 }
 
+/**
+ * Ansicht der Karte „Datenbank-Engine“ (rein, testbar). j = /api/db/timescale/status,
+ * comp = compression aus /api/storage/status (Prüfung der Platz-Wache).
+ * 23.11.2026 (Kundenfall Apache-Box): nie grün „aktuell“, wenn die Messwerte
+ * nicht komprimiert werden — Edition und Kompression ehrlich anzeigen.
+ * @returns {{hidden:boolean, html?:string, showUpgrade?:boolean, upgradeLabel?:string, meta?:string}}
+ */
+function dbEngineCardView(j, comp) {
+  const tsOk = !!(j && j.available && j.extVersion);
+  const checked = !!(comp && comp.checkedAt);
+  const compOff = checked && comp.ok === false;
+  const apache = !!((j && j.edition && j.edition !== 'timescale') || (comp && comp.reason === 'apache'));
+  if (!tsOk && !compOff) return { hidden: true };
+  const growth = 'Die Datenbank wächst dadurch um etwa 110–230 MB pro Tag.';
+  const why = comp && comp.label ? ` (${escapeHtml(comp.label)}${comp.detail ? ': ' + escapeHtml(comp.detail) : ''})` : '';
+  const prov = j && j.provision;
+  const provText = prov && (prov.result === 'apache' || prov.result === 'failed') && prov.error
+    ? ` Letzter Umstellungsversuch auf die Community-Edition${prov.at ? ' (' + fmtTs(prov.at) + ')' : ''}: ${escapeHtml(prov.error)}.` : '';
+  const view = { hidden: false, showUpgrade: false };
+  if (!tsOk) {
+    view.html = `<strong class="sa-text-err">Messwerte werden nicht komprimiert${why}.</strong> ${growth}`;
+  } else {
+    const provisionFailed = prov && prov.result === 'failed';
+    if (j.loadOk === false || provisionFailed) {
+      // 21.10.2026: Bibliothek zur Katalog-Version fehlt bzw. die Nachrüstung ist
+      // gescheitert — nie „aktuell“ zeigen. Repariert wird beim DVhub-Start.
+      const w = j.loadOk === false
+        ? `TimescaleDB ${escapeHtml(j.extVersion)} lädt nicht${j.loadError ? ': ' + escapeHtml(j.loadError) : ''}.`
+        : `Nachrüstung fehlgeschlagen${prov.at ? ' (' + fmtTs(prov.at) + ')' : ''}: ${escapeHtml(prov.error || 'unbekannt')}.`;
+      view.html = `<strong class="sa-text-err">${w}</strong> Ein Neustart von DVhub startet die Reparatur; das Protokoll steht in timescale-provision.log im Datenverzeichnis.`;
+    } else if (apache || compOff) {
+      const ed = apache ? ' (Apache-Edition)' : '';
+      view.html = `<strong class="sa-text-err">TimescaleDB ${escapeHtml(j.extVersion)}${ed} — Messwerte werden nicht komprimiert${why}.</strong> ${growth}`
+        + (apache ? ' DVhub versucht bei jedem Update und Neustart, auf die Community-Edition umzustellen.' : '') + provText;
+      view.showUpgrade = !!(j.updatePending && j.binaryVersion);
+    } else if (j.probeOk === false) {
+      view.html = `<span class="sa-text-warn">TimescaleDB ${escapeHtml(j.extVersion)} — Live-Prüfung nicht möglich${j.probeError ? ' (' + escapeHtml(j.probeError) + ')' : ''}. Angezeigt ist der Stand der letzten Prüfung.</span>`;
+    } else if (j.updatePending && j.binaryVersion) {
+      view.html = `<strong class="sa-text-warn">Update verfügbar: TimescaleDB ${escapeHtml(j.binaryVersion)}</strong> — installiert ist ${escapeHtml(j.extVersion)}.`;
+      view.showUpgrade = true;
+    } else if (!checked) {
+      view.html = `<span class="sa-text-warn">TimescaleDB ${escapeHtml(j.extVersion)} — Kompression noch nicht geprüft.</span>`;
+    } else {
+      view.html = `<span class="sa-text-ok">TimescaleDB ${escapeHtml(j.extVersion)} — aktuell, Kompression an.</span>`;
+    }
+    if (view.showUpgrade) view.upgradeLabel = `Auf ${j.binaryVersion} aktualisieren`;
+  }
+  const parts = [];
+  const edition = (j && j.edition) || (comp && comp.edition) || null;
+  if (edition) parts.push(`Edition: ${escapeHtml(edition)}`);
+  parts.push(`Kompression: ${!checked ? 'unbekannt' : (comp.ok ? 'an' : 'aus')}`);
+  if (j && j.lastChecked) parts.push(`geprüft: ${fmtTs(j.lastChecked)}`);
+  view.meta = parts.join(' · ');
+  return view;
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsDbEngine = { dbEngineCardView };
+}
+
 // --- Datenbank-Engine (TimescaleDB) ---------------------------------------
 // Zeigt die aktive Extension-Version und — wenn die installierte Paketversion
 // neuer ist (updatePending) — einen "aktualisieren"-Button. Die Pakete werden
 // nächtlich automatisch aktuell gehalten (pkg-maintain-Timer); der eigentliche
 // Versions-Bump (kurzer DB-Neustart) bleibt ein bewusster Klick. Die Gruppe
-// bleibt ausgeblendet, wenn TimescaleDB nicht aktiv ist (reiner Postgres/SQLite).
+// bleibt ausgeblendet, wenn TimescaleDB nicht aktiv ist (reiner Postgres/SQLite),
+// außer die Platz-Wache meldet fehlende Kompression (dann rot).
 async function loadDbEngineStatus() {
   const group = document.getElementById('dbEngineGroup');
   const banner = document.getElementById('dbEngineBanner');
@@ -4328,37 +4389,20 @@ async function loadDbEngineStatus() {
   const meta = document.getElementById('dbEngineMeta');
   if (!group) return;
   try {
-    const r = await apiFetch('/api/db/timescale/status');
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j || !j.available || !j.extVersion) { group.hidden = true; return; }
+    const [r, rs] = await Promise.all([
+      apiFetch('/api/db/timescale/status'),
+      apiFetch('/api/storage/status').catch(() => null),
+    ]);
+    const j = r.ok ? await r.json().catch(() => ({})) : {};
+    const st = rs && rs.ok ? await rs.json().catch(() => null) : null;
+    const view = dbEngineCardView(j, st && st.compression);
+    if (view.hidden) { group.hidden = true; return; }
     group.hidden = false;
-    const provisionFailed = j.provision && j.provision.result === 'failed';
-    if (j.loadOk === false || provisionFailed) {
-      // 21.10.2026: Bibliothek zur Katalog-Version fehlt bzw. die Nachrüstung ist
-      // gescheitert — nie „aktuell“ zeigen. Repariert wird beim DVhub-Start.
-      const why = j.loadOk === false
-        ? `TimescaleDB ${escapeHtml(j.extVersion)} lädt nicht${j.loadError ? ': ' + escapeHtml(j.loadError) : ''}.`
-        : `Nachrüstung fehlgeschlagen${j.provision.at ? ' (' + fmtTs(j.provision.at) + ')' : ''}: ${escapeHtml(j.provision.error || 'unbekannt')}.`;
-      banner.innerHTML = `<strong class="sa-text-err">${why}</strong> Ein Neustart von DVhub startet die Reparatur; das Protokoll steht in timescale-provision.log im Datenverzeichnis.`;
-      if (actions) actions.style.display = 'none';
-    } else if (j.probeOk === false) {
-      banner.innerHTML = `<span class="sa-text-warn">TimescaleDB ${escapeHtml(j.extVersion)} — Live-Prüfung nicht möglich${j.probeError ? ' (' + escapeHtml(j.probeError) + ')' : ''}. Angezeigt ist der Stand der letzten Prüfung.</span>`;
-      if (actions) actions.style.display = 'none';
-    } else if (j.updatePending && j.binaryVersion) {
-      banner.innerHTML = `<strong class="sa-text-warn">Update verfügbar: TimescaleDB ${escapeHtml(j.binaryVersion)}</strong> — installiert ist ${escapeHtml(j.extVersion)}.`;
-      // .svc-actions-block hat CSS display:none (0c926128-Lektion) → explizit zeigen.
-      if (actions) actions.style.display = 'flex';
-      if (btn) { btn.disabled = false; btn.textContent = `Auf ${j.binaryVersion} aktualisieren`; }
-    } else {
-      banner.innerHTML = `<span class="sa-text-ok">TimescaleDB ${escapeHtml(j.extVersion)} — aktuell.</span>`;
-      if (actions) actions.style.display = 'none';
-    }
-    if (meta) {
-      const parts = [];
-      if (j.edition) parts.push(`Edition: ${escapeHtml(j.edition)}`);
-      if (j.lastChecked) parts.push(`geprüft: ${fmtTs(j.lastChecked)}`);
-      meta.textContent = parts.join(' · ') || '-';
-    }
+    banner.innerHTML = view.html;
+    // .svc-actions-block hat CSS display:none (0c926128-Lektion) → explizit zeigen.
+    if (actions) actions.style.display = view.showUpgrade ? 'flex' : 'none';
+    if (view.showUpgrade && btn) { btn.disabled = false; btn.textContent = view.upgradeLabel; }
+    if (meta) meta.textContent = view.meta || '-';
   } catch {
     group.hidden = true;
   }

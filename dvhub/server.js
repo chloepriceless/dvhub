@@ -869,10 +869,17 @@ async function createTelemetryStoreIfEnabled() {
     // Nativ setzt pg-write-tuning.sh dieselben Werte. Blockiert den Start nie.
     if (IS_RUNTIME_PROCESS) tuneDatabase(dbConfig).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
     // Messwerte: Tagesblöcke, Kompression nach 2 Tagen (als Eigentümer, überall).
+    // Ergebnis nicht mehr verschlucken (23.11.2026): „nicht möglich“ oder ein
+    // Fehler führen über die Platz-Wache zum roten Hinweis „Datenbank ohne
+    // Kompression“ (services/storage-guard.js); /api/storage/status zeigt es.
     if (IS_RUNTIME_PROCESS) {
       tuneTimescale((q, p) => pool.query(q, p))
-        .then((r) => { state.timescaleTuning = r; if (r.changed?.length || r.deferred) pushLog('timescale_tuning', r); })
-        .catch((e) => pushLog('timescale_tuning_error', { error: e.message }, 'warn'));
+        .then((r) => { state.timescaleTuning = { ...r, at: new Date().toISOString() }; if (r.changed?.length || r.deferred || r.skipped) pushLog('timescale_tuning', r); })
+        .catch((e) => {
+          state.timescaleTuning = { error: e.message, at: new Date().toISOString() };
+          pushLog('timescale_tuning_error', { error: e.message }, 'warn');
+        })
+        .finally(() => { ctx.storageGuard?.checkCompression?.().catch(() => {}); });
     }
     return store;
   } catch (error) {
@@ -1625,10 +1632,12 @@ ctx.feedInLimit = createFeedInLimitArbiter({
 });
 // Feste Einspeisegrenze (60/70 %/eigener Wert/keine — ab Werk nicht angegeben):
 // Quelle 'fixed' im Begrenzer, Regelschleife für SunSpec-Geräte, Überwachung.
-const setSystemWarning = (id, message) => {
+// severity 'error' → roter Hinweis im Leitstand (sonst gelb).
+const setSystemWarning = (id, message, severity) => {
   const i = state.systemWarnings.findIndex((w) => w.id === id);
   if (message == null) { if (i >= 0) state.systemWarnings.splice(i, 1); return; }
-  if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
+  const w = severity === 'error' ? { id, message, severity } : { id, message };
+  if (i >= 0) state.systemWarnings[i] = w; else state.systemWarnings.push(w);
 };
 // T-0099 / Fable R2 P2-7: einen aktiven Not-Halt laden, BEVOR der erste Dienst
 // startet — hier, sobald setSystemWarning steht. Vorher lag das Laden hinter
@@ -2739,15 +2748,14 @@ const telemetryReady = (async () => {
     setInterval(scheduleNightly, 60 * 1000).unref();
     // Platz-Wache (kleine eMMC/SD): früher komprimieren, im Notfall älteste
     // Rohwerte entfernen — 15-min-Werte und die letzten 30 Tage bleiben.
+    // Dazu der rote Hinweis „Datenbank ohne Kompression“ (23.11.2026).
     ctx.storageGuard = createStorageGuard({
       getDb: () => ctx.db,
       getDataDir: () => DATA_DIR || '/var/lib/dvhub',
       pushLog,
-      setWarning: (id, message) => {
-        const i = state.systemWarnings.findIndex((w) => w.id === id);
-        if (message == null) { if (i >= 0) state.systemWarnings.splice(i, 1); return; }
-        if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
-      },
+      setWarning: setSystemWarning,
+      getTuning: () => state.timescaleTuning || null,
+      isContainer: () => process.env.DVHUB_RUNTIME === 'container',
     });
     ctx.storageGuard.start();
     setInterval(runInverterEfficiencyDaily, 60 * 60 * 1000).unref();

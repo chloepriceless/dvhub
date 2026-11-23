@@ -15,10 +15,26 @@
 // (Erlösrechnung der History) und importierte Altdaten bleiben. Jede Stufe erscheint als Systemhinweis
 // mit dem Vorschlag, den Speicher zu erweitern (USB-Stick/SD-Karte).
 
+// 23.11.2026 (Kundenfall 12-GB-Platte, Christin S12/S13): Auf der
+// Apache-Edition warf compress_chunk und brach den ganzen Lauf ab — die Wache
+// löschte nichts und setzte keinen Hinweis, genau die Box ohne Kompression
+// blieb still. Jetzt: Kompression nur versuchen, wo sie eingeschaltet ist, und
+// Fehler einzeln abfangen; Löschstufe und Hinweise laufen immer. Fehlt die
+// Kompression (keine TimescaleDB, Apache, ausgeschaltet, Job scheitert),
+// erscheint unabhängig vom Platz ein eigener roter Hinweis „Datenbank ohne
+// Kompression“ und ein Eintrag fürs Installateur-Portal
+// (storage_compression_failed, läuft über den Fehlerweg des Audit-Logs).
 import fs from 'node:fs';
+import path from 'node:path';
 
 export const STORAGE_CHECK_INTERVAL_MS = 30 * 60_000;
 export const RAW_KEEP_STEPS_DAYS = Object.freeze([365, 180, 90, 30]);
+/** Systemhinweis „Datenbank ohne Kompression“ (rot). */
+export const COMPRESSION_WARNING_ID = 'db_compression';
+// Solange die Kompression fehlt: Portal-Eintrag bei jeder Änderung und sonst einmal am Tag.
+const COMPRESSION_REPORT_EVERY_MS = 24 * 3600_000;
+// Erste Kompressions-Prüfung kurz nach dem Start (nur lesend, ohne Löschen).
+const COMPRESSION_FIRST_CHECK_MS = 60_000;
 
 export function storageLevel(freePct) {
   if (!Number.isFinite(freePct)) return 'unbekannt';
@@ -34,11 +50,180 @@ export function nextKeepDays(oldestRawAgeDays) {
   return null;   // schon bei ≤ 30 Tagen — nichts mehr entfernen
 }
 
-export function createStorageGuard({ getDb, getDataDir, pushLog, setWarning, now = () => Date.now(), statfs = (p) => fs.statfsSync(p) } = {}) {
+const REASON_TEXT = Object.freeze({
+  no_timescaledb: 'TimescaleDB ist nicht installiert',
+  apache: 'TimescaleDB läuft in der Apache-Edition, die keine Kompression kann',
+  no_hypertable: 'die Messwert-Tabelle ist nicht für TimescaleDB eingerichtet',
+  not_enabled: 'die Kompression ist für die Messwerte ausgeschaltet',
+  no_policy: 'es ist keine automatische Kompression eingerichtet',
+  job_failing: 'die automatische Kompression scheitert seit mehreren Tagen',
+  compress_failed: 'das Komprimieren ist gescheitert',
+  tuning_error: 'die Kompression ließ sich nicht einrichten',
+});
+
+/**
+ * Kompression der Messwerte (timeseries_samples) prüfen, nur lesend.
+ * reason null = alles in Ordnung. usable = compress_chunk ist möglich
+ * (Community-Edition, Kompression auf der Hypertable eingeschaltet).
+ * timescale = Erweiterung vorhanden (drop_chunks geht auch unter Apache,
+ * am Image timescale/timescaledb:2.30.2-pg17 mit license=apache geprüft).
+ */
+export async function probeCompression(query) {
+  const ext = (await query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")).rows?.length > 0;
+  if (!ext) return { timescale: false, edition: null, usable: false, reason: 'no_timescaledb' };
+  const edition = (await query("SELECT current_setting('timescaledb.license', true) AS lic")).rows?.[0]?.lic || null;
+  if (edition !== 'timescale') return { timescale: true, edition, usable: false, reason: 'apache' };
+  const h = (await query(`SELECT h.compression_enabled AS on,
+      (SELECT count(*) FROM timescaledb_information.jobs j
+        WHERE j.proc_name = 'policy_compression' AND j.hypertable_name = 'timeseries_samples') AS policies,
+      (SELECT bool_or(s.last_run_status = 'Failed'
+                      AND (s.last_successful_finish IS NULL OR s.last_successful_finish < now() - INTERVAL '3 days'))
+         FROM timescaledb_information.job_stats s JOIN timescaledb_information.jobs j USING (job_id)
+        WHERE j.proc_name = 'policy_compression' AND j.hypertable_name = 'timeseries_samples') AS failing
+    FROM timescaledb_information.hypertables h WHERE h.hypertable_name = 'timeseries_samples'`)).rows?.[0];
+  if (!h) return { timescale: true, edition, usable: false, reason: 'no_hypertable' };
+  if (h.on !== true) return { timescale: true, edition, usable: false, reason: 'not_enabled' };
+  if (!(Number(h.policies) > 0)) return { timescale: true, edition, usable: true, reason: 'no_policy' };
+  if (h.failing === true) return { timescale: true, edition, usable: true, reason: 'job_failing' };
+  return { timescale: true, edition, usable: true, reason: null };
+}
+
+/**
+ * Grund aus dem Ergebnis von tuneTimescale (db-tuning.js). server.js legt es in
+ * state.timescaleTuning ab, einen Fehler als { error }. null = nichts gemeldet.
+ */
+export function tuningCompressionIssue(tuning) {
+  if (!tuning || typeof tuning !== 'object') return null;
+  if (tuning.error) return { reason: 'tuning_error', detail: String(tuning.error).slice(0, 200) };
+  if (tuning.skipped === 'apache') return { reason: 'apache', detail: null };
+  if (tuning.skipped === 'no_timescaledb') return { reason: 'no_timescaledb', detail: null };
+  if (tuning.skipped === 'no_hypertable') return { reason: 'no_hypertable', detail: null };
+  if (tuning.deferred) return { reason: 'not_enabled', detail: 'wird beim nächsten Neustart eingeschaltet' };
+  return null;
+}
+
+/**
+ * Ergebnis der letzten Umstellung auf die Community-Edition aus
+ * timescale-status.json (nativ, timescale-provision.sh → pkg-maintain.sh):
+ * { at, result: 'ok' | 'failed' | 'apache', error }. Ohne Datei null (Docker).
+ */
+export function readProvisionStatus(dataDir, readFile = fs.readFileSync) {
+  if (!dataDir) return null;
+  try {
+    const j = JSON.parse(readFile(path.join(dataDir, 'timescale-status.json'), 'utf8'));
+    return j && typeof j.provision === 'object' && j.provision ? j.provision : null;
+  } catch { return null; }
+}
+
+function fmtDay(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : null;
+}
+
+/** Text des roten Hinweises, verständlich für Kunden. */
+export function compressionWarningText({ reason, detail = null, provision = null, container = false } = {}) {
+  let s = `Datenbank ohne Kompression: ${REASON_TEXT[reason] || 'die Messwerte werden nicht komprimiert'}`
+    + `${detail ? ` (${detail})` : ''}. `
+    + 'Die Datenbank wächst dadurch um etwa 110–230 MB pro Tag statt um wenige MB '
+    + 'und kann eine kleine Festplatte in wenigen Wochen füllen. ';
+  if (!container) {
+    s += 'DVhub versucht bei jedem Update und Neustart automatisch, auf die TimescaleDB-Community-Edition umzustellen. ';
+    if (provision && (provision.result === 'failed' || provision.result === 'apache')) {
+      const day = fmtDay(provision.at);
+      s += `Der letzte Versuch${day ? ` am ${day}` : ''} ist gescheitert`
+        + `${provision.error ? `: ${String(provision.error).slice(0, 200)}` : ''}. `;
+    }
+    s += 'Bleibt dieser Hinweis nach dem nächsten Update stehen, bitte den DVhub-Support kontaktieren.';
+  } else {
+    s += 'Bitte den DVhub-Support kontaktieren.';
+  }
+  return s;
+}
+
+export function createStorageGuard({
+  getDb, getDataDir, pushLog, setWarning, now = () => Date.now(), statfs = (p) => fs.statfsSync(p),
+  getTuning = () => null, isContainer = () => false, readFile = fs.readFileSync,
+} = {}) {
   let last = null;
   let running = false;
   let lastGuardErr = null; // Fehler-Drosselung: gleiche Meldung nicht in jedem Zyklus (TimescaleDB-Apache-Rauschen)
+  let compression = { reason: null, detail: null, reportedAt: 0, edition: null, checkedAt: null };
+  // Letztes compress_chunk gescheitert (bis zum nächsten Erfolg): sonst nähme die
+  // nächste Probe („eingeschaltet“) den Hinweis weg und er käme alle 30 min neu.
+  let compressFail = null;
   const log = (e, d, lvl) => { try { pushLog?.(e, d, lvl); } catch { /* egal */ } };
+  const warn = (id, msg, severity) => { try { setWarning?.(id, msg, severity); } catch { /* egal */ } };
+
+  // Gleicher Fehler nicht in jedem Zyklus: nur bei Änderung oder höchstens einmal je Stunde.
+  function logGuardError(e) {
+    const msg = e?.message || String(e);
+    const n = now();
+    if (msg !== lastGuardErr?.msg || n - (lastGuardErr?.at || 0) > 3600_000) {
+      log('storage_guard_error', { error: msg }, 'warn');
+      lastGuardErr = { msg, at: n };
+    }
+  }
+
+  // Stand für API/Einstellungen; label = kurzer Grund (Karte „Datenbank-Engine“).
+  const compressionView = () => ({
+    ok: !compression.reason, reason: compression.reason, label: compression.reason ? (REASON_TEXT[compression.reason] || null) : null,
+    detail: compression.detail, edition: compression.edition, checkedAt: compression.checkedAt,
+  });
+
+  /** Hinweis + Portal-Eintrag für die Kompression setzen bzw. wegnehmen. */
+  function applyCompressionIssue(issue, edition) {
+    const n = now();
+    if (!issue) {
+      if (compression.reason) log('storage_compression_ok', { edition }, 'info');
+      compression = { reason: null, detail: null, reportedAt: 0, edition, checkedAt: new Date(n).toISOString() };
+      warn(COMPRESSION_WARNING_ID, null);
+      return;
+    }
+    const provision = isContainer?.() ? null : readProvisionStatus(getDataDir?.(), readFile);
+    warn(COMPRESSION_WARNING_ID, compressionWarningText({ ...issue, provision, container: !!isContainer?.() }), 'error');
+    let reportedAt = compression.reportedAt;
+    if (issue.reason !== compression.reason || n - reportedAt > COMPRESSION_REPORT_EVERY_MS) {
+      // …_failed → Fehlerweg ans Installateur-Portal (log-retention.js AUDIT_ERROR_SQL).
+      log('storage_compression_failed', {
+        reason: issue.reason, detail: issue.detail || null, edition,
+        provision: provision ? { result: provision.result || null, at: provision.at || null, error: provision.error || null } : null,
+      }, 'error');
+      reportedAt = n;
+    }
+    compression = { reason: issue.reason, detail: issue.detail || null, reportedAt, edition, checkedAt: new Date(n).toISOString() };
+  }
+
+  /**
+   * Kompression prüfen und den Hinweis danach setzen. Ergebnis der Probe, oder
+   * null, wenn sie nicht möglich war (dann bleibt der bisherige Hinweis; nur
+   * wenn tuneTimescale selbst etwas gemeldet hat, gilt dessen Grund).
+   */
+  async function evaluateCompression(db) {
+    const tuning = tuningCompressionIssue(getTuning?.());
+    let probe;
+    try {
+      probe = await probeCompression((q, p) => db.query(q, p));
+    } catch (e) {
+      logGuardError(e);
+      if (tuning) applyCompressionIssue(tuning, compression.edition);
+      return null;
+    }
+    const issue = probe.reason ? { reason: probe.reason, detail: null }
+      : (compressFail ? { reason: 'compress_failed', detail: compressFail.detail } : null);
+    // Den Fehlertext von tuneTimescale mitgeben, wenn die Probe die Lücke bestätigt.
+    if (issue && tuning?.detail) issue.detail = tuning.detail;
+    applyCompressionIssue(issue, probe.edition);
+    return probe;
+  }
+
+  async function checkCompression() {
+    if (running) return compression;
+    const db = getDb?.();
+    if (!db || typeof db.query !== 'function') return compression;
+    running = true;
+    try { await evaluateCompression(db); } finally { running = false; }
+    return compression;
+  }
 
   async function check() {
     if (running) return last;
@@ -53,97 +238,130 @@ export function createStorageGuard({ getDb, getDataDir, pushLog, setWarning, now
         freePct = totalMb > 0 ? Math.round((freeMb / totalMb) * 1000) / 10 : NaN;
       } catch { /* statfs nicht möglich */ }
       const level = storageLevel(freePct);
-      const out = { at: new Date(now()).toISOString(), dir, freePct, freeMb, totalMb, level, dbMb: null, actions: [] };
-      const db = getDb?.();
-      if (db && typeof db.query === 'function') {
-        try { out.dbMb = Math.round(Number((await db.query('SELECT pg_database_size(current_database()) AS b')).rows?.[0]?.b) / 1048576); } catch { /* egal */ }
-        if (level !== 'ok' && level !== 'unbekannt') {
-          const ts = (await db.query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")).rows?.length > 0;
-          if (ts) {
-            const r = await db.query(`SELECT count(*) AS n FROM (SELECT compress_chunk(c, if_not_compressed => true)
-              FROM show_chunks('timeseries_samples', older_than => INTERVAL '1 day') c) x`);
-            out.actions.push({ action: 'compress', chunks: Number(r.rows?.[0]?.n) || 0 });
-          }
-          if (level === 'wenig' || level === 'kritisch') {
-            // Ältester Rohwert und letzter verdichteter 15-min-Slot.
-            const b = (await db.query(`SELECT
-                extract(epoch FROM now() - (SELECT min(ts_utc) FROM timeseries_samples WHERE scope = 'live')) / 86400 AS oldest_days,
-                (SELECT max(slot_start_utc) FROM energy_slots_15m) AS agg_until`)).rows?.[0] || {};
-            const keep = nextKeepDays(Number(b.oldest_days));
-            if (keep && b.agg_until) {
-              const cutoff = new Date(Math.min(now() - keep * 86_400_000, new Date(b.agg_until).getTime()));
-              if (ts) {
-                // drop_chunks löscht ganze Blöcke mit ALLEN Reihen — darin liegen
-                // aber auch Preise (die History rechnet Erlöse daraus) und
-                // importierte Altdaten. Die werden vorher gesichert und danach
-                // zurückgeschrieben; nur die 5-s-Live-Rohwerte gehen. Eine
-                // Transaktion: ganz oder gar nicht.
-                const client = typeof db.connect === 'function' ? await db.connect() : db;
-                try {
-                  await client.query('BEGIN');
-                  await client.query(`CREATE TEMP TABLE dvhub_keep_samples ON COMMIT DROP AS
-                    SELECT * FROM timeseries_samples
-                     WHERE ts_utc < $1 AND (scope <> 'live' OR series_key LIKE 'price%')`, [cutoff.toISOString()]);
-                  await client.query("SELECT drop_chunks('timeseries_samples', older_than => $1::timestamptz)", [cutoff.toISOString()]);
-                  await client.query(`INSERT INTO timeseries_samples OVERRIDING SYSTEM VALUE SELECT * FROM dvhub_keep_samples
-                    ON CONFLICT DO NOTHING`);
-                  await client.query('COMMIT');
-                } catch (e) {
-                  await client.query('ROLLBACK').catch(() => {});
-                  throw e;
-                } finally {
-                  if (client !== db) client.release?.();
+      const out = { at: new Date(now()).toISOString(), dir, freePct, freeMb, totalMb, level, dbMb: null, actions: [], compression: null };
+      let probe = null;
+      try {
+        const db = getDb?.();
+        if (db && typeof db.query === 'function') {
+          try { out.dbMb = Math.round(Number((await db.query('SELECT pg_database_size(current_database()) AS b')).rows?.[0]?.b) / 1048576); } catch { /* egal */ }
+          probe = await evaluateCompression(db);
+          if (level !== 'ok' && level !== 'unbekannt') {
+            // Ohne Probe (Fehler) wie früher an der Erweiterung festmachen.
+            const ts = probe ? probe.timescale
+              : (await db.query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")).rows?.length > 0;
+            // Komprimieren nur, wo es geht (Community + eingeschaltet); ein Fehler
+            // hält Löschstufe und Hinweis nicht mehr auf (Apache: compress_chunk wirft).
+            if (ts && (probe ? probe.usable : true)) {
+              try {
+                const r = await db.query(`SELECT count(*) AS n FROM (SELECT compress_chunk(c, if_not_compressed => true)
+                  FROM show_chunks('timeseries_samples', older_than => INTERVAL '1 day') c) x`);
+                out.actions.push({ action: 'compress', chunks: Number(r.rows?.[0]?.n) || 0 });
+                if (compressFail) {
+                  compressFail = null;
+                  if (compression.reason === 'compress_failed') applyCompressionIssue(null, probe?.edition ?? null);
                 }
-              } else {
-                // ohne TimescaleDB: in Portionen löschen, damit nichts lange sperrt
-                for (let i = 0; i < 200; i++) {
-                  const d = await db.query(`DELETE FROM timeseries_samples WHERE ctid IN (
-                    SELECT ctid FROM timeseries_samples WHERE scope = 'live' AND series_key NOT LIKE 'price%'
-                       AND ts_utc < $1 LIMIT 50000)`, [cutoff.toISOString()]);
-                  if (!d.rowCount) break;
+              } catch (e) {
+                const msg = String(e?.message || e).slice(0, 200);
+                out.actions.push({ action: 'compress', error: msg });
+                logGuardError(e);
+                compressFail = { detail: msg };
+                if (!compression.reason || compression.reason === 'compress_failed') {
+                  applyCompressionIssue({ reason: 'compress_failed', detail: msg }, probe?.edition ?? null);
                 }
               }
-              out.actions.push({ action: 'drop_raw', keepDays: keep, before: cutoff.toISOString() });
-              log('storage_raw_dropped', { keepDays: keep, before: cutoff.toISOString(), freePct }, 'warn');
+            }
+            if (level === 'wenig' || level === 'kritisch') {
+              try {
+                await dropRaw(db, ts, out, freePct);
+              } catch (e) {
+                out.actions.push({ action: 'drop_raw', error: String(e?.message || e).slice(0, 200) });
+                logGuardError(e);
+              }
             }
           }
         }
+      } catch (e) {
+        logGuardError(e);
       }
-      // Systemhinweis setzen bzw. wegnehmen.
-      if (level === 'ok' || level === 'unbekannt') setWarning?.('storage', null);
+      out.compression = compressionView();
+      // Systemhinweis setzen bzw. wegnehmen — immer, auch wenn oben etwas scheiterte.
+      if (level === 'ok' || level === 'unbekannt') warn('storage', null);
       else {
-        const dropped = out.actions.find((a) => a.action === 'drop_raw');
-        setWarning?.('storage', `Speicher ${level}: ${freePct} % frei (${freeMb} MB). `
-          + (dropped ? `5-s-Rohwerte älter als ${dropped.keepDays} Tage wurden entfernt — 15-min-Werte bleiben. ` : 'Ältere Messwerte werden früher komprimiert. ')
-          + 'Speicher erweitern: USB-Stick oder SD-Karte als Datenspeicher einrichten.');
+        const dropped = out.actions.find((a) => a.action === 'drop_raw' && !a.error);
+        const compresses = !compression.reason || compression.reason === 'no_policy' || compression.reason === 'job_failing';
+        warn('storage', `Speicher ${level}: ${freePct} % frei (${freeMb} MB). `
+          + (dropped ? `5-s-Rohwerte älter als ${dropped.keepDays} Tage wurden entfernt — 15-min-Werte bleiben. `
+            : (compresses ? 'Ältere Messwerte werden früher komprimiert. ' : 'Messwerte werden nicht komprimiert. '))
+          + 'Speicher erweitern: USB-Stick oder SD-Karte als Datenspeicher einrichten.', level === 'kritisch' ? 'error' : 'warn');
       }
       if (level !== (last?.level)) log('storage_level', { level, freePct, freeMb, dbMb: out.dbMb }, level === 'ok' ? 'info' : 'warn');
       last = out;
       return out;
     } catch (e) {
-      // Gleicher Fehler nicht in jedem Zyklus (z. B. TimescaleDB-Apache dauerhaft nicht erreichbar): nur bei
-      // Änderung oder höchstens einmal je Stunde melden.
-      const msg = e?.message || String(e);
-      const n = now();
-      if (msg !== lastGuardErr?.msg || n - (lastGuardErr?.at || 0) > 3600_000) {
-        log('storage_guard_error', { error: msg }, 'warn');
-        lastGuardErr = { msg, at: n };
-      }
+      logGuardError(e);
       return last;
     } finally {
       running = false;
     }
   }
 
+  // Eine Aufbewahrungsstufe der 5-s-Live-Rohwerte entfernen (wenig/kritisch).
+  async function dropRaw(db, ts, out, freePct) {
+    // Ältester Rohwert und letzter verdichteter 15-min-Slot.
+    const b = (await db.query(`SELECT
+        extract(epoch FROM now() - (SELECT min(ts_utc) FROM timeseries_samples WHERE scope = 'live')) / 86400 AS oldest_days,
+        (SELECT max(slot_start_utc) FROM energy_slots_15m) AS agg_until`)).rows?.[0] || {};
+    const keep = nextKeepDays(Number(b.oldest_days));
+    if (!keep || !b.agg_until) return;
+    const cutoff = new Date(Math.min(now() - keep * 86_400_000, new Date(b.agg_until).getTime()));
+    if (ts) {
+      // drop_chunks löscht ganze Blöcke mit ALLEN Reihen — darin liegen
+      // aber auch Preise (die History rechnet Erlöse daraus) und
+      // importierte Altdaten. Die werden vorher gesichert und danach
+      // zurückgeschrieben; nur die 5-s-Live-Rohwerte gehen. Eine
+      // Transaktion: ganz oder gar nicht. drop_chunks gibt es auch unter
+      // der Apache-Edition (nur die Aufbewahrungs-Regel ist Community).
+      const client = typeof db.connect === 'function' ? await db.connect() : db;
+      try {
+        await client.query('BEGIN');
+        await client.query(`CREATE TEMP TABLE dvhub_keep_samples ON COMMIT DROP AS
+          SELECT * FROM timeseries_samples
+           WHERE ts_utc < $1 AND (scope <> 'live' OR series_key LIKE 'price%')`, [cutoff.toISOString()]);
+        await client.query("SELECT drop_chunks('timeseries_samples', older_than => $1::timestamptz)", [cutoff.toISOString()]);
+        await client.query(`INSERT INTO timeseries_samples OVERRIDING SYSTEM VALUE SELECT * FROM dvhub_keep_samples
+          ON CONFLICT DO NOTHING`);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        if (client !== db) client.release?.();
+      }
+    } else {
+      // ohne TimescaleDB: in Portionen löschen, damit nichts lange sperrt
+      for (let i = 0; i < 200; i++) {
+        const d = await db.query(`DELETE FROM timeseries_samples WHERE ctid IN (
+          SELECT ctid FROM timeseries_samples WHERE scope = 'live' AND series_key NOT LIKE 'price%'
+             AND ts_utc < $1 LIMIT 50000)`, [cutoff.toISOString()]);
+        if (!d.rowCount) break;
+      }
+    }
+    out.actions.push({ action: 'drop_raw', keepDays: keep, before: cutoff.toISOString() });
+    log('storage_raw_dropped', { keepDays: keep, before: cutoff.toISOString(), freePct }, 'warn');
+  }
+
   let timer = null;
   return {
     start() {
       if (timer) return;
+      setTimeout(() => { checkCompression().catch(() => {}); }, COMPRESSION_FIRST_CHECK_MS).unref?.();
       setTimeout(() => { check().catch(() => {}); }, 5 * 60_000).unref?.();
       timer = setInterval(() => { check().catch(() => {}); }, STORAGE_CHECK_INTERVAL_MS);
       timer.unref?.();
     },
     check,
+    checkCompression,
     status: () => last,
+    compressionStatus: () => compressionView(),
   };
 }

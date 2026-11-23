@@ -7,7 +7,7 @@
 // Pfade, die packagecloud wirklich anbietet.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -18,7 +18,7 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'timesc
 // Was packagecloud.io/timescale/timescaledb anbietet (Stand 21.10.2026, per curl geprueft).
 const SERVED = ['debian/ bookworm', 'debian/ trixie', 'ubuntu/ noble', 'ubuntu/ resolute'];
 
-function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false, tslPartial = false, apacheReinstallFails = false, offlineAfterDownload = false, staleDeb = false, leftoverApacheDeb = false, pgBuilds = null } = {}) {
+function setup(osRelease, { existingList, transient = false, extHave = '', alterFails = false, apacheInstalled = false, tslInstallFails = false, downloadFails = false, tslPartial = false, apacheReinstallFails = false, offlineAfterDownload = false, staleDeb = false, leftoverApacheDeb = false, pgBuilds = null, extraEnv = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dvhub-tsp-'));
   const bin = join(dir, 'bin');
   execFileSync('mkdir', ['-p', bin]);
@@ -161,12 +161,18 @@ exit 0`);
   fake('systemctl');
   fake('pg_lsclusters', 'echo "18  main    5432 online postgres /var/lib/postgresql/18/main"');
   fake('lsb_release', 'exit 1');
+  const env = () => ({
+      PATH: `${bin}:${process.env.PATH}`, TS_PROVISION_EUID: '0', LANG: 'de_DE.UTF-8',
+      PG_ETC: join(dir, 'postgresql'), TS_DEB_CACHE: join(dir, 'deb-cache'),
+      OS_RELEASE: osFile, REPO_LIST: repoList, KEYRING: keyring,
+      CONFIG_PATH: join(dir, 'config.json'), DATA_DIR: dir, ...extraEnv,
+  });
   const run = () => execFileSync('bash', [SCRIPT], {
     env: {
       PATH: `${bin}:${process.env.PATH}`, TS_PROVISION_EUID: '0', LANG: 'de_DE.UTF-8',
       PG_ETC: join(dir, 'postgresql'), TS_DEB_CACHE: join(dir, 'deb-cache'),
       OS_RELEASE: osFile, REPO_LIST: repoList, KEYRING: keyring,
-      CONFIG_PATH: join(dir, 'config.json'), DATA_DIR: dir,
+      CONFIG_PATH: join(dir, 'config.json'), DATA_DIR: dir, ...extraEnv,
     },
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -175,7 +181,7 @@ exit 0`);
   const sql = () => calls().filter((l) => l.startsWith('su ')).join('\n');
   const pkgs = () => readFileSync(pkgDb, 'utf8').split('\n').filter((l) => l.includes('timescaledb'));
   const runStatus = () => { try { run(); return 0; } catch (e) { return e.status; } };
-  return { run, runStatus, calls, list, keyring, sql, dir, pkgs, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { run, env, runStatus, calls, list, keyring, sql, dir, pkgs, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 const UBUNTU_2604 = 'ID=ubuntu\nID_LIKE=debian\nVERSION_ID="26.04"\nVERSION_CODENAME=resolute\nUBUNTU_CODENAME=resolute\n';
@@ -535,3 +541,53 @@ for (const file of TS_PKG_SPEC_COPIES) {
     assert.equal(tsPkgSpec(file, policy), 'timescaledb-2-postgresql-18=2.32.1~ubuntu26.04-1806');
   });
 }
+
+// S12 a1 (23.11.2026, Kundenfall 12-GB-Platte): Der Apache-Rückfall endete mit
+// write_status ok — still. Jetzt steht er mit Grund in timescale-status.json
+// (provision.result 'apache'); DVhub zeigt daraus den roten Hinweis „Datenbank
+// ohne Kompression“. PKG_MAINTAIN_EUID=0 lässt pkg-maintain.sh (Statusdatei) hier laufen.
+const statusOf = (s) => JSON.parse(readFileSync(join(s.dir, 'timescale-status.json'), 'utf8'));
+
+test('Apache-Rückfall (keine Pakete für die Distribution) steht mit Grund in der Statusdatei', () => {
+  const s = setup(DEBIAN_FORKY, { extraEnv: { PKG_MAINTAIN_EUID: '0' } });
+  try {
+    s.run();
+    const st = statusOf(s);
+    assert.equal(st.edition, 'apache');
+    assert.equal(st.provision.result, 'apache');
+    assert.match(st.provision.error, /Community-Edition nicht installiert: packagecloud hat keine TimescaleDB-Pakete fuer debian forky/);
+  } finally { s.cleanup(); }
+});
+
+test('Apache-Rückfall nach gescheitertem Download: Grund „nicht herunterladbar“, Warnung auf stderr', () => {
+  const s = setup(UBUNTU_2604, { apacheInstalled: true, downloadFails: true, extraEnv: { PKG_MAINTAIN_EUID: '0' } });
+  try {
+    const r = spawnSync('bash', [SCRIPT], { env: s.env(), encoding: 'utf8' });
+    assert.equal(r.status, 0);
+    assert.match(r.stderr, /TimescaleDB laeuft in der Apache-Edition \(Community-Paket nicht herunterladbar\)/);
+    assert.equal(statusOf(s).provision.result, 'apache');
+    assert.match(statusOf(s).provision.error, /Community-Paket nicht herunterladbar/);
+  } finally { s.cleanup(); }
+});
+
+test('Community erfolgreich: provision ok, kein Apache-Vermerk', () => {
+  const s = setup(UBUNTU_2604, { extraEnv: { PKG_MAINTAIN_EUID: '0' } });
+  try {
+    s.run();
+    const st = statusOf(s);
+    assert.equal(st.edition, 'timescale');
+    assert.equal(st.provision.result, 'ok');
+  } finally { s.cleanup(); }
+});
+
+test('pkg-maintain: alter Apache-Vermerk verschwindet, sobald Community läuft', () => {
+  const s = setup(UBUNTU_2604, { extraEnv: { PKG_MAINTAIN_EUID: '0' } });
+  try {
+    s.run();
+    const f = join(s.dir, 'timescale-status.json');
+    writeFileSync(f, JSON.stringify({ ...statusOf(s), provision: { at: '2026-11-20T00:00:00Z', result: 'apache', error: 'alt' } }));
+    const r = spawnSync('bash', [join(dirname(SCRIPT), 'pkg-maintain.sh')], { env: { ...s.env(), PKG_MAINTAIN_STATUS_ONLY: '1' }, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(statusOf(s).provision, null);
+  } finally { s.cleanup(); }
+});

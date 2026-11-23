@@ -216,6 +216,10 @@ fi
 
 echo "  TimescaleDB: provisioniere Community-Edition (PG ${PG_VER}, ${DISTRO} ${CODENAME:-?}) ..."
 
+# Warum die Community-Edition nicht kam (fuer timescale-status.json, S12 a1
+# 23.11.2026: der Apache-Rueckfall endete bisher mit „ok“ und blieb still).
+TSL_WHY=""
+
 # --- 3. Add Timescale's apt repo + GPG key (idempotent) ----------------------
 # Defensive: a minimal box may lack gnupg/curl.
 apt-get install -y gnupg curl ca-certificates >/dev/null 2>&1 || true
@@ -226,6 +230,7 @@ if [[ ! -s "$KEYRING" ]]; then
     echo "  TimescaleDB: Timescale-GPG-Key hinterlegt."
   else
     echo "  WARN: Timescale-GPG-Key nicht abrufbar (Netz?) — versuche Apache-Fallback." >&2
+    TSL_WHY="Timescale-GPG-Schluessel nicht abrufbar (Netz?)"
     rm -f "$KEYRING" 2>/dev/null || true
   fi
 fi
@@ -248,6 +253,7 @@ if [[ "$NEED_APT_UPDATE" -eq 1 ]]; then
   # grep ohne -q: liest alles, kein SIGPIPE unter pipefail (siehe apt-cache).
   if printf '%s\n' "$APT_OUT" | grep -E "^(E|Error): The repository '[^']*packagecloud\.io/timescale/[^']*' does not have a Release file" >/dev/null; then
     echo "  WARN: packagecloud hat keine TimescaleDB-Pakete fuer ${DISTRO} ${CODENAME} — apt-Quelle wieder entfernt." >&2
+    TSL_WHY="packagecloud hat keine TimescaleDB-Pakete fuer ${DISTRO} ${CODENAME}"
     rm -f "$REPO_LIST"
     apt-get update >>"$LOG_FILE" 2>&1 || true
   fi
@@ -266,6 +272,8 @@ USE_TSL=0
 TSL_POLICY="$(LC_ALL=C apt-cache policy "$TSL_PKG" 2>/dev/null || true)"
 if [[ -s "$KEYRING" && -f "$REPO_LIST" && "$TSL_POLICY" =~ Candidate:\ [0-9] ]]; then
   USE_TSL=1
+elif [[ -z "$TSL_WHY" ]]; then
+  TSL_WHY="kein Community-Paket ${TSL_PKG} fuer ${DISTRO} ${CODENAME:-?} verfuegbar"
 fi
 
 # Eigener Download-Ordner (Gegenpruefung 25.10.2026): ein dpkg-Hook wie
@@ -352,6 +360,7 @@ if [[ "$USE_TSL" -eq 1 ]]; then
     echo "  TimescaleDB: Community-Paket ${TSL_PKG} bereits installiert."
   elif ! apt_dl "$TSL_LOADER_SPEC" "$TSL_PKG_SPEC"; then
     echo "  WARN: Community-Paket nicht herunterladbar — Fallback auf Apache-Paket." >&2
+    TSL_WHY="Community-Paket nicht herunterladbar"
     USE_TSL=0
   else
     APACHE_READY=1
@@ -363,6 +372,7 @@ if [[ "$USE_TSL" -eq 1 ]]; then
         PKG_CHANGED=1
       else
         echo "  WARN: Apache-Paket nicht sicherbar — Tausch auf Community verschoben." >&2
+        TSL_WHY="Apache-Paket nicht sicherbar, Tausch auf Community verschoben"
         APACHE_READY=0
         USE_TSL=0
       fi
@@ -373,6 +383,7 @@ if [[ "$USE_TSL" -eq 1 ]]; then
         PKG_CHANGED=1
       else
         echo "  WARN: Community-Paket nicht installierbar — Fallback auf Apache-Paket." >&2
+        TSL_WHY="Community-Paket nicht installierbar"
         USE_TSL=0
         # Halb installierte Community-Pakete (z. B. nur der Loader) teilen sich
         # die .so mit Apache und stuenden der Rueckkehr im Weg.
@@ -403,6 +414,9 @@ if [[ "$USE_TSL" -eq 0 ]]; then
       fail_visible "Paketwechsel Apache→Community gescheitert, ${APACHE_PKG} nicht wieder installierbar — TimescaleDB-Bibliothek fehlt (Preload-Eintrag entfernt, damit PostgreSQL startet)"
     else
       echo "  WARN: ${APACHE_PKG} nicht installierbar (Netz/Repo?) — Box bleibt auf reinem Postgres." >&2
+      # Nicht mehr still (S12 a1): DVhub zeigt „Datenbank ohne Kompression“ mit diesem Grund.
+      log_line "WARN: keine TimescaleDB installierbar (${TSL_WHY:-?}), reines Postgres"
+      write_status failed "TimescaleDB nicht installierbar (${TSL_WHY:-Netz/Repo?}) — reines Postgres, keine Kompression"
       exit 0
     fi
   else
@@ -440,11 +454,12 @@ if [[ -d "$CONF_DIR" ]]; then
   fi
 else
   echo "  WARN: ${CONF_DIR} fehlt — kann shared_preload_libraries nicht setzen." >&2
+  write_status failed "${CONF_DIR} fehlt — TimescaleDB nicht eingerichtet"
   exit 0
 fi
 if [[ "$NEED_RESTART" -eq 1 ]]; then
   echo "  TimescaleDB: Postgres-Neustart (neue Bibliothek/Preload) ..."
-  restart_pg || { echo "  WARN: Postgres-Restart fehlgeschlagen." >&2; exit 0; }
+  restart_pg || { echo "  WARN: Postgres-Restart fehlgeschlagen." >&2; write_status failed "Postgres-Neustart nach der TimescaleDB-Einrichtung fehlgeschlagen"; exit 0; }
 fi
 
 # --- 6. Erweiterung anlegen bzw. auf die installierte Version heben ----------
@@ -563,8 +578,18 @@ EXTVER="$(su postgres -c "psql -X -v ON_ERROR_STOP=1 -tAq -d ${DB_NAME} -c \"SEL
 [[ -n "$EXTVER" ]] || fail_visible "TimescaleDB-Erweiterung fehlt nach der Provisionierung in '${DB_NAME}'"
 LICENSE="$(ext_license)"
 echo "  TimescaleDB: Extension in DB '${DB_NAME}' aktiv (v${EXTVER}, Lizenz ${LICENSE:-?})."
-log_line "OK: v${EXTVER}, Lizenz ${LICENSE:-?}"
-write_status ok ""
+if [[ "$LICENSE" == "timescale" ]]; then
+  log_line "OK: v${EXTVER}, Lizenz ${LICENSE}"
+  write_status ok ""
+else
+  # Apache-Rueckfall laut melden statt „ok“ (S12 a1, 23.11.2026): DVhub liest
+  # provision.result 'apache' aus timescale-status.json und zeigt den Grund im
+  # roten Hinweis „Datenbank ohne Kompression“. Der naechste Start/Update
+  # versucht es erneut (post-update.sh --check sieht nicht „timescale“).
+  echo "  WARN: TimescaleDB laeuft in der Apache-Edition (${TSL_WHY:-Grund unbekannt}) — keine Kompression." >&2
+  log_line "WARN: Apache-Edition v${EXTVER} (${TSL_WHY:-Grund unbekannt})"
+  write_status apache "Community-Edition nicht installiert: ${TSL_WHY:-Grund unbekannt}"
+fi
 
 # --- 7. Flip the config so migration 014 runs on next start ------------------
 flip_config_true
