@@ -407,3 +407,83 @@ test('T11 (Codex 3cbbdef3): „ohne §14a“ auch mit Grundgebühr, gleiche Basi
   // Ohne §14a mit Gebühr: Festpreis 0,90 + 0,50 = 1,40 €, dynamisch 0,61 + 1,00 = 1,61 €.
   assert.deepEqual(row.fixedCompareWithFee.withoutP14a, { actualEur: 1.61, fixedEur: 1.4, savingsEur: -0.21 });
 });
+
+// ── T12: Akku-Wirkungsgrad (DC) + Systemwirkungsgrad (AC), Christin 23.11.2026 ──
+// Karte (Preise): drei Viertelstunden
+//   1: p 30, s 10 · PV → Akku 20 kWh, PV direkt 5 kWh
+//   2: p 25, s 5  · Netz → Akku 10 kWh, Netz direkt 2 kWh
+//   3: p 40, s 20 · Akku → Haus 24 kWh, Akku → Netz 3 kWh
+// Einstand 20·10 + 10·25 = 450 ct ÷ 30 kWh = 15 ct; Netzladung 250 ct ÷ 10 kWh = 25 ct.
+// Tagesjob (Mengen): eingesetzt 31,25 kWh → geladen 30 (≥ 100 W) → entladen 27 → AC 24,84;
+// alle Proben geladen 30,3 / entladen 27,1, ΔSoC +1 kWh, Lader 0,90.
+function systemSums() {
+  const sums = createTariffSums({ detail: true });
+  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 30, marketPriceCtKwh: 10, solarToBatteryKwh: 20, solarDirectUseKwh: 5, loadKwh: 5 });
+  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 25, marketPriceCtKwh: 5, importKwh: 12, gridToBatteryKwh: 10, gridDirectUseKwh: 2, loadKwh: 2 });
+  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 40, marketPriceCtKwh: 20, batteryDirectUseKwh: 24, batteryToGridKwh: 3, loadKwh: 24 });
+  return sums;
+}
+const victronCap = { measurable: true, verified: true, label: 'Victron', reason: null, note: null };
+const jobRaw = { chargeKwh: 30, inputKwh: 31.25, dischargeKwh: 27, acOutKwh: 24.84, chargeAllKwh: 30.3, dischargeAllKwh: 27.1, storedDeltaKwh: 1 };
+const jobTotals = { status: 'ok', reason: null, days: 30, firstDay: '2026-11-01', lastDay: '2026-11-30', hours: 690.5,
+  chargeEta: 30 / 31.25, dischargeEta: 24.84 / 27, dcEta: 27.1 / 29.3, chargerEta: 0.9, converterLossKwh: 80.25, raw: jobRaw };
+
+test('T12: Systemwirkungsgrad = Laden × Akku (DC) × Entladen, Verluste in kWh und € (nachgerechnet)', () => {
+  const r = finalizeSelfUse(systemSums().selfUse, { storedDeltaKwh: 1, storage: { capability: victronCap, totals: jobTotals } });
+  const sys = r.battery.system;
+  // Akku (DC) der Karte wie bisher aus den Flüssen: 27 ÷ (30 − 1) = 93,10 %.
+  assert.equal(r.battery.etaPct, 93.1);
+  assert.equal(sys.status, 'ok');
+  // Speicherweg aus den Rohwerten: Akku DC 27,1 ÷ (30,3 − 1) = 92,49 %.
+  assert.equal(sys.dcEtaPct, 92.49);
+  assert.equal(sys.chargeEtaPct, 96);
+  assert.equal(sys.dischargeEtaPct, 92);
+  assert.equal(sys.chargerEtaPct, 90);
+  // 0,96 × 0,924915 × 0,92 = 0,816885 → 81,69 %.
+  assert.equal(sys.systemEtaPct, 81.69);
+  // Akku (DC) 30,3 − 1 − 27,1 = 2,2 kWh × 15 ct = 0,33 €.
+  assert.equal(sys.losses.dcKwh, 2.2);
+  assert.equal(sys.losses.dcEur, 0.33);
+  // Laden 31,25 − 30 = 1,25 kWh × 25 ct (Netzladung) = 0,3125 €.
+  assert.equal(sys.losses.chargeKwh, 1.25);
+  assert.equal(sys.losses.chargeEur, 0.31);
+  // Entladen 27 − 24,84 = 2,16 kWh × 15 ct = 0,324 €.
+  assert.equal(sys.losses.dischargeKwh, 2.16);
+  assert.equal(sys.losses.dischargeEur, 0.32);
+  // Gesamt 5,61 kWh, 0,33 + 0,3125 + 0,324 = 0,9665 € (ungerundet summiert).
+  assert.equal(sys.losses.totalKwh, 5.61);
+  assert.equal(sys.losses.totalEur, 0.97);
+  assert.deepEqual(sys.energy, { inputKwh: 31.25, chargedKwh: 30.3, dischargedKwh: 27.1, acOutKwh: 24.84, storedDeltaKwh: 1 });
+  assert.deepEqual(sys.prices, { storedCtKwh: 15, chargeCtKwh: 25, chargeBasis: 'grid' });
+  assert.deepEqual(sys.basis, { days: 30, firstDay: '2026-11-01', lastDay: '2026-11-30', hours: 690.5 });
+  assert.equal(sys.converterLossKwh, 80.25);
+  assert.equal(sys.verified, true);
+  // Das Akku-Ergebnis selbst bleibt unverändert (Umbau ist Entscheidung T13).
+  assert.equal(r.battery.resultEur, finalizeSelfUse(systemSums().selfUse, { storedDeltaKwh: 1 }).battery.resultEur);
+});
+
+test('T12: ohne Netzladung zählt der Laden-Verlust zur Ø Börse des PV-Stroms', () => {
+  // selfUseSums: nur PV lädt, PV gesamt 4 kWh zu 10 ct.
+  const r = finalizeSelfUse(selfUseSums().selfUse, { storage: { capability: victronCap, totals: jobTotals } });
+  assert.equal(r.battery.system.prices.chargeBasis, 'pv');
+  assert.equal(r.battery.system.prices.chargeCtKwh, 10);
+  // 1,25 kWh × 10 ct = 0,125 € → 0,13 €.
+  assert.equal(r.battery.system.losses.chargeEur, 0.13);
+});
+
+test('T12: nicht messbar, zweite GX, zu wenig Daten — Grund statt Zahl; ohne Job kein Block', () => {
+  const sums = systemSums().selfUse;
+  const fronius = finalizeSelfUse(sums, { storage: { capability: { measurable: false, label: 'Fronius', reason: 'nicht messbar bei Fronius: …' }, totals: null } });
+  assert.equal(fronius.battery.system.status, 'not_measurable');
+  assert.match(fronius.battery.system.reason, /Fronius/);
+  assert.equal(fronius.battery.system.systemEtaPct, undefined);
+  const second = finalizeSelfUse(sums, { storage: { capability: victronCap, totals: jobTotals, secondBattery: true } });
+  assert.equal(second.battery.system.status, 'not_measurable');
+  assert.match(second.battery.system.reason, /zweiten GX/);
+  const few = finalizeSelfUse(sums, { storage: { capability: victronCap, totals: { ...jobTotals, status: 'insufficient_data', reason: 'zu wenig', chargeEta: null } } });
+  assert.equal(few.battery.system.status, 'insufficient_data');
+  assert.equal(few.battery.system.basis.days, 30);
+  const none = finalizeSelfUse(sums, { storage: { capability: victronCap, totals: null } });
+  assert.equal(none.battery.system.status, 'insufficient_data');
+  assert.equal(finalizeSelfUse(sums).battery.system, null);
+});

@@ -73,8 +73,9 @@ export const MIN_SECONDS_FOR_VALUE = 600;
 
 const DAY_MS = 86_400_000;
 
-export const DAILY_EFFICIENCY_SQL = `
-WITH p AS (
+// Je Poll-Zeitstempel eine Zeile mit allen Reihen eines Kalendertags ($1 Tag,
+// $2 Zeitzone, $3 Reihen). Gemeinsam mit dem Speicherweg (storage.js, T12).
+export const EFFICIENCY_SAMPLES_CTE = `p AS (
   SELECT ts_utc AS t,
     max(value_num) FILTER (WHERE series_key = 'battery_power_w') AS bp,
     coalesce(
@@ -96,7 +97,10 @@ WITH p AS (
     AND ts_utc < (($1::date + 1)::timestamp AT TIME ZONE $2::text)
     AND series_key = ANY($3::text[])
   GROUP BY ts_utc
-),
+)`;
+
+export const DAILY_EFFICIENCY_SQL = `
+WITH ${EFFICIENCY_SAMPLES_CTE},
 q AS (
   SELECT *, lag(bp) OVER (ORDER BY t) AS bp_prev, lag(t) OVER (ORDER BY t) AS t_prev
   FROM p

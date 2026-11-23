@@ -707,7 +707,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // 10 (23.11.2026): §14a-Fenster im Festpreis-Vergleich und „ohne §14a“ (T11).
 // 11 (23.11.2026): Abweichung nur, wo DVhub das Netzentgelt einrechnet; MwSt leer = 0 (Codex 3cbbdef3).
 // 12 (23.11.2026): δ auch beim Formel-Rückfall des Anbieter-Endpreises (Codex 90e9b9c4).
-export const SUMMARY_CACHE_VERSION = 12;
+// 13 (23.11.2026): Eigenverbrauch mit Σ Netzladung·p (Wandlerverlust Laden in €, T12).
+export const SUMMARY_CACHE_VERSION = 13;
 
 // Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;
@@ -1614,7 +1615,12 @@ export function createHistoryRuntime({
   // Kapazität des Akkus der zweiten GX-Anlage in kWh (multi-gx), null = keine.
   getSecondBatteryCapacityKwh = () => null,
   // MiSpeL-Übersicht (2026-10-18): PV-Gesamtleistung aus der Prognose als Rückfall.
-  getForecastConfig = () => ({})
+  getForecastConfig = () => ({}),
+  // T12 (23.11.2026): Speicherweg mit Wandlung für [from, toExclusive) aus dem
+  // Tagesjob services/inverter-efficiency/storage.js → { capability, totals };
+  // capacityKwhForDay(day) = Nennkapazität des Tages für ΔSoC.
+  // null (ohne Datenbank, in Tests) ⇒ kein Systemwirkungsgrad auf der Karte.
+  getStorageEfficiency = null
 }) {
   function batteryNominalCapacityKwh() {
     const cfg = getOptimizerConfig() || {};
@@ -2928,6 +2934,27 @@ export function createHistoryRuntime({
     const finalKpis = periodPremiumApplied.kpis;
     const storedDeltas = [finalKpis.batteryStoredDeltaKwh, finalKpis.secondBatteryStoredDeltaKwh]
       .filter((value) => Number.isFinite(Number(value)) && value != null);
+    // T12: Speicherweg mit Wandlung (Tagesjob). Ein Fehler hier kostet nur den
+    // Systemwirkungsgrad, nie die Karte.
+    let storage = null;
+    if (typeof getStorageEfficiency === 'function' && range?.startDate && range?.endDateExclusive) {
+      try {
+        const optimizerCfg = getOptimizerConfig() || {};
+        const capacityKwhForDay = (day) => {
+          const wh = resolveBatteryCapacityWhForDate(optimizerCfg.batteryStages, day, optimizerCfg.batteryCapacityWh);
+          return Number.isFinite(wh) && wh > 0 ? wh / 1000 : null;
+        };
+        const loaded = await getStorageEfficiency({ from: range.startDate, toExclusive: range.endDateExclusive, capacityKwhForDay });
+        if (loaded) {
+          storage = {
+            ...loaded,
+            secondBattery: Number(finalKpis.secondBatteryChargeKwh || 0) > 0 || Number(finalKpis.secondBatteryDischargeKwh || 0) > 0
+          };
+        }
+      } catch {
+        storage = null;
+      }
+    }
     const tariffFits = finalizeTariffFits(tariffDetailSums, { excludeEstimated });
     finalKpis.tariff = {
       ...finalizeTariffRow(tariffDetailSums, { excludeEstimated }),
@@ -2937,7 +2964,8 @@ export function createHistoryRuntime({
       spotP10CtKwh: tariffFits.spotP10CtKwh,
       spotP90CtKwh: tariffFits.spotP90CtKwh,
       selfUse: finalizeSelfUse(tariffDetailSums.selfUse, {
-        storedDeltaKwh: storedDeltas.length ? storedDeltas.reduce((sum, value) => sum + Number(value), 0) : null
+        storedDeltaKwh: storedDeltas.length ? storedDeltas.reduce((sum, value) => sum + Number(value), 0) : null,
+        storage
       })
     };
     let tariffMonthRows = null;

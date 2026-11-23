@@ -42,6 +42,7 @@ import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtim
 import { createHistoryVizAggregator } from './services/history-viz/aggregator.js';
 import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
+import { createStorageEfficiencyDaily, loadStorageEfficiency, storageEfficiencyCapability } from './services/inverter-efficiency/storage.js';
 import { createLogRetention } from './services/log-retention.js';
 import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
@@ -2648,7 +2649,15 @@ const telemetryReady = (async () => {
     // Akku der zweiten GX-Anlage: Kapazität für die Ladestand-Korrektur des
     // Gesamtverlusts (auch für Zeiträume, in denen sie lief).
     getSecondBatteryCapacityKwh: () => (Number(cfg.multiGx?.batteryCapacityWh) > 0 ? Number(cfg.multiGx.batteryCapacityWh) / 1000 : null),
-    getForecastConfig: () => cfg.forecast || {}
+    getForecastConfig: () => cfg.forecast || {},
+    // T12: Speicherweg mit Wandlung (Systemwirkungsgrad) aus dem Tagesjob unten.
+    // Ohne PostgreSQL (ctx.db) bleibt der Wert weg.
+    getStorageEfficiency: async ({ from, toExclusive, capacityKwhForDay }) => {
+      const capability = storageEfficiencyCapability(cfg);
+      if (!capability.measurable) return { capability, totals: null };
+      const totals = ctx.db ? await loadStorageEfficiency(ctx.db, { from, toExclusive, capacityKwhForDay }) : null;
+      return { capability, totals };
+    }
   }) : null;
   historyApi = createHistoryApiHandlers({
     historyRuntime,
@@ -2711,8 +2720,14 @@ const telemetryReady = (async () => {
     const inverterEfficiencyDaily = createInverterEfficiencyDaily({
       getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
     });
+    // T12: Speicherweg mit Wandlung (Systemwirkungsgrad) im selben Takt, nur
+    // lesend auf den Rohwerten; läuft nur, wo er messbar ist (storage.js).
+    const storageEfficiencyDaily = createStorageEfficiencyDaily({
+      getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
+    });
     const runInverterEfficiencyDaily = () => {
       inverterEfficiencyDaily.runOnce()
+        .then(() => storageEfficiencyDaily.runOnce())
         // Danach die Kurve (180 Tage bis zum letzten 30-Tage-Periodenende) — ändert sich nur
         // alle 30 Tage (curveHash), dann EOS neu. Kosten: 1 Abfrage ~2 ms.
         .then(() => ctx.inverterCurve.refresh())
