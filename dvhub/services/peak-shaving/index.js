@@ -123,6 +123,8 @@ export function peakShavingStatusText(resolved) {
 // Messwerte, auf denen eine Peak-Shaving-Entscheidung beruhen darf. Strenger als
 // T-0075: ein Feld OHNE Erfolgs-Zeitstempel gilt als unbekannt, nicht als frisch.
 const METER_MAX_AGE_MS = 15_000;
+// Akku-Leistung fürs Viertelstunden-Budget: höchstens so alt (Abfrage alle 2–5 s).
+const BATTERY_POWER_MAX_AGE_MS = 30_000;
 const PV_FIELDS = ['pvPowerW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W'];
 
 function fieldAgeMs(state, field, now) {
@@ -187,7 +189,14 @@ export function peakShavingTelemetry(state, cfg, resolved, now = Date.now()) {
     netLoadW: loadKnown ? Math.max(0, loadW - pvW) : null,
     meterFresh,
     importW: meterFresh ? Math.max(0, Number(importRaw)) : null,
-    batteryDischargeW: Math.max(0, Number(v.batteryDischargeW) || 0)
+    batteryDischargeW: Math.max(0, Number(v.batteryDischargeW) || 0),
+    // Akku-Leistung frisch gelesen (fürs Viertelstunden-Budget: eine
+    // hängengebliebene 0 hieße sonst „entlädt nicht“, Codex d7dcce9c P2).
+    batteryFresh: (() => {
+      const age = fieldAgeMs(state, 'batteryPowerW', now);
+      return age !== null && age <= BATTERY_POWER_MAX_AGE_MS && !v.errors?.batteryPowerW
+        && v.freeze?.active !== true && v.batteryPowerW != null && Number.isFinite(Number(v.batteryPowerW));
+    })()
   };
 }
 
@@ -456,6 +465,7 @@ export const BUDGET_REASON_TEXT = Object.freeze({
   soc_near_floor: 'Akku nahe am Mindest-Ladestand',
   discharge_unknown: 'Entladeleistung des Akkus nicht eingetragen',
   discharge_limited: 'Akku entlädt schon nahe seiner Höchstleistung',
+  battery_power_unknown: 'Akku-Leistung nicht frisch gemessen',
   soc_energy: 'Energie im Akku reicht nicht für den Rest der Viertelstunde',
   budget_exceeded: 'Budget der Viertelstunde verbraucht'
 });
@@ -468,18 +478,21 @@ export const BUDGET_REASON_TEXT = Object.freeze({
  * der Akku den Bezug zurückholen kann, und bleibt beim Augenblickswert.
  * Kapazität ebenso (ohne Eintrag entfällt nur die Energie-Prüfung).
  */
-export function budgetBatteryInput(cfg, tel) {
+export function budgetBatteryInput(cfg, tel, { liveLimitW = null } = {}) {
   const pos = (v) => (finite(v) && Math.abs(Number(v)) > 0 ? Math.abs(Number(v)) : null);
   const sp = cfg?.system?.power || {};
   const opt = cfg?.optimizer || {};
-  const caps = [pos(sp.batteryMaxDischargeDcW) ?? pos(opt.maxDischargeW), pos(sp.inverterMaxPowerW) ?? pos(opt.inverterMaxPowerW)]
+  const rated = [pos(sp.batteryMaxDischargeDcW) ?? pos(opt.maxDischargeW), pos(sp.inverterMaxPowerW) ?? pos(opt.inverterMaxPowerW)]
     .filter((w) => w != null);
+  // Eine gerade im Gerät stehende Entladegrenze unter der Nennleistung zählt mit
+  // (Codex d7dcce9c P1) — nur, wenn es überhaupt eine Nennleistung gibt.
+  const caps = rated.length && finite(liveLimitW) && Number(liveLimitW) > 0 ? [...rated, Number(liveLimitW)] : rated;
   return {
     socOk: tel?.socOk === true,
     socReason: tel?.socReason ?? null,
     soc: tel?.soc ?? null,
     floorPct: tel?.floorPct ?? 0,
-    dischargeW: Math.max(0, Number(tel?.batteryDischargeW) || 0),
+    dischargeW: tel?.batteryFresh === true ? Math.max(0, Number(tel?.batteryDischargeW) || 0) : null,
     maxDischargeW: caps.length ? Math.min(...caps) : null,
     capacityWh: pos(sp.batteryCapacityWh) ?? pos(opt.batteryCapacityWh)
   };
@@ -530,9 +543,21 @@ export function createPeakShaving(ctx, deps = {}) {
     }
   }
 
+  // Entladegrenze, die gerade im Gerät steht und Peak Shaving bzw. die
+  // Akku-Hilfe NICHT selbst gesetzt hat (eine eigene Freigabe kann DVhub weiter
+  // anheben; 0 = Sperre hebt Peak Shaving selbst auf; −1 = unbegrenzt).
+  function liveDischargeLimitW(c, t) {
+    const k = knownMaxDischargeW(ctx.state, c, t);
+    if (!k || !Number.isFinite(k.value) || k.value <= 0) return null;
+    if (ctx.state?.ctrl?._peakShaving?.discharge?.phase === 'lifted') return null;
+    const lw = ctx.state?.schedule?.lastWrite?.maxDischargeW;
+    if (lw && /^(peak_shaving|grid_connection)/.test(String(lw.source || '')) && Number(lw.value) === k.value) return null;
+    return k.value;
+  }
+
   function budgetBattery(c, r, t) {
     const tel = peakShavingTelemetry(ctx.state, c, r, t);
-    return { tel, battery: budgetBatteryInput(c, tel) };
+    return { tel, battery: budgetBatteryInput(c, tel, { liveLimitW: liveDischargeLimitW(c, t) }) };
   }
 
   /**

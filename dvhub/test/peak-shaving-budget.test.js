@@ -260,11 +260,30 @@ test('Einspeisung zählt nicht als negativer Bezug', () => {
 // --- Akku-Lage aus der Config ----------------------------------------------------------------
 
 test('budgetBatteryInput: Entladeleistung nur, wenn eingetragen (keine Werks-Vorgabe)', () => {
-  const tel = { socOk: true, socReason: null, soc: 50, floorPct: 5, batteryDischargeW: 1200 };
+  const tel = { socOk: true, socReason: null, soc: 50, floorPct: 5, batteryDischargeW: 1200, batteryFresh: true };
   assert.equal(budgetBatteryInput({}, tel).maxDischargeW, null, 'nur Vorgaben → unbekannt');
   assert.equal(budgetBatteryInput({ system: { power: { batteryMaxDischargeDcW: 8000 } } }, tel).maxDischargeW, 8000);
   assert.equal(budgetBatteryInput({ optimizer: { inverterMaxPowerW: 6000 }, system: { power: { batteryMaxDischargeDcW: 8000 } } }, tel).maxDischargeW, 6000);
   assert.equal(budgetBatteryInput({}, tel).capacityWh, null);
   assert.equal(budgetBatteryInput({ system: { power: { batteryCapacityWh: 20000 } } }, tel).capacityWh, 20000);
   assert.equal(budgetBatteryInput({}, tel).dischargeW, 1200);
+});
+
+test('Akku-Leistung unbekannt → Augenblickswert', () => {
+  assert.equal(midSlot({ battery: { ...BAT, dischargeW: null } }).reason, 'battery_power_unknown');
+});
+
+test('Energie-Prüfung zählt die laufende Entladung mit (Codex d7dcce9c P2)', () => {
+  // 20 kWh, Ladestand 13 % → 13 − 5 − 5 = 3 % = 600 Wh. Bezug 12 kW, Akku entlädt schon 3 kW:
+  // nötig (3 000 + 12 000 − 9 700) × 600 s = 883 Wh > 600 Wh → Augenblickswert. Ohne laufende Entladung 383 Wh → Budget.
+  assert.equal(midSlot({ battery: { ...BAT, soc: 13, capacityWh: 20000, dischargeW: 3000 } }).reason, 'soc_energy');
+  assert.equal(midSlot({ battery: { ...BAT, soc: 13, capacityWh: 20000, dischargeW: 0 } }).mode, 'budget');
+});
+
+test('budgetBatteryInput: Akku-Leistung nicht frisch → dischargeW null; Live-Grenze nur mit Nennleistung', () => {
+  const tel = { socOk: true, soc: 50, floorPct: 5, batteryDischargeW: 0, batteryFresh: false };
+  assert.equal(budgetBatteryInput({}, tel).dischargeW, null);
+  const cfg = { system: { power: { batteryMaxDischargeDcW: 8000 } } };
+  assert.equal(budgetBatteryInput(cfg, { ...tel, batteryFresh: true }, { liveLimitW: 3000 }).maxDischargeW, 3000);
+  assert.equal(budgetBatteryInput({}, { ...tel, batteryFresh: true }, { liveLimitW: 3000 }).maxDischargeW, null, 'ohne Nennleistung bleibt sie unbekannt');
 });

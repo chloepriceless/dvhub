@@ -118,7 +118,11 @@ export function createEosThresholdAssist({ state, getCfg, getAssist, pushLog = (
     // würde das Budget aushebeln (Deckel wieder auf den Augenblickswert).
     let psTargetW;
     try { psTargetW = getPeakShavingTargetW?.() ?? null; } catch { psTargetW = null; }
-    if (Number.isFinite(Number(psTargetW)) && psTargetW !== null && Number(psTargetW) <= thresholdW) {
+    // Ist Peak Shaving aktiv, decken es und der Netzanschluss-Wächter jede
+    // Grenze ab, die EOS kennt (EOS bekommt die kleinere der beiden). Eine
+    // tiefere Plan-Schwelle stammt dann aus einem älteren Plan (Grenze inzwischen
+    // angehoben/angepasst) und gilt nicht mehr.
+    if (Number.isFinite(Number(psTargetW)) && psTargetW !== null) {
       drop(assist);
       publish({ ...base, requested: false, reason: null, coveredBy: 'peak-shaving', peakShavingTargetW: Number(psTargetW) });
       return state.ctrl.eosThreshold;

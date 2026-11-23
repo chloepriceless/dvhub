@@ -891,9 +891,14 @@ export function actorContext(req) {
 // Einstellungen, die in den EOS-Plan eingehen. Reine Anzeige-, Takt- und
 // Diagnosewerte lösen keinen Sofort-Lauf aus.
 // epex.priceOutlook (1.0.11): Preisprognose an/aus ändert Schwanz und Wertgrundlage des E-Autos.
-const EOS_REPLAN_PREFIXES = ['optimizer.', 'userEnergyPricing.', 'wallbox.', 'forecast.pv.', 'forecast.location.', 'paragraph14a.', 'epex.priceOutlook'];
+// peakShaving.: EOS plant mit der kleineren Bezugsgrenze und setzt sie als Schwelle in die Regeln (P2) — nach einer
+// Änderung neu planen, sonst gilt die alte Schwelle weiter (Codex 0d080d53 P2). Nur die Preise sind reine Anzeige.
+const EOS_REPLAN_PREFIXES = ['optimizer.', 'userEnergyPricing.', 'wallbox.', 'forecast.pv.', 'forecast.location.', 'paragraph14a.', 'epex.priceOutlook', 'peakShaving.'];
 const EOS_REPLAN_IGNORE = ['optimizer.eosEmsIntervalSec', 'optimizer.eosGeneticGenerations', 'optimizer.eosFitnessCacheMaxEntries',
-  'optimizer.eosStartAfterPreviousRun', 'optimizer.ruleHorizonHours', 'optimizer.eosProxy.timeoutMs', 'optimizer.eosFallbackSma'];
+  'optimizer.eosStartAfterPreviousRun', 'optimizer.ruleHorizonHours', 'optimizer.eosProxy.timeoutMs', 'optimizer.eosFallbackSma',
+  'peakShaving.tariff.lpLowEurPerKwYear', 'peakShaving.tariff.apLowCtPerKwh', 'peakShaving.tariff.lpHighEurPerKwYear',
+  'peakShaving.tariff.apHighCtPerKwh', 'peakShaving.tariff.lpMonthEurPerKwMonth', 'peakShaving.tariff.apMonthCtPerKwh',
+  'peakShaving.releaseHysteresisW', 'peakShaving.minSocPct'];
 export function configChangeNeedsEosReplan(changedPaths) {
   if (!Array.isArray(changedPaths)) return false;
   return changedPaths.some((p) => typeof p === 'string'

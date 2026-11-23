@@ -14,6 +14,7 @@ import { createEosConfigSync, buildEosInverters } from '../services/optimizer/eo
 import { EOS_GRID_IMPORT_OFF_W, eosGridImportLimitW, eosGridChargeCapW } from '../services/grid-connection/index.js';
 import { eosPeakShavingTargetW } from '../services/peak-shaving/index.js';
 import { createEosThresholdAssist } from '../services/optimizer/eos-threshold-assist.js';
+import { configChangeNeedsEosReplan } from '../routes-api.js';
 
 const KEY = 'max_grid_import_power_w';
 const LICENSED = { allowGridCharge: true, mispel: { mode: 'pauschal' } };
@@ -151,9 +152,24 @@ describe('EOS-Schwellen-Peak-Shaving', () => {
     const info = t.tick(rule);
     assert.equal(requests.length, 0);
     assert.equal(info.coveredBy, 'peak-shaving');
-    // Schwelle strenger als Peak Shaving (z. B. EOS mit anderer Grenze): Anforderung wie bisher
-    t.tick({ ...rule, peakShavingThresholdW: 8000 });
-    assert.equal(requests.length, 1);
+    // Tiefere Schwelle aus einem älteren Plan (Grenze inzwischen angehoben): gilt nicht mehr (Codex 0d080d53 P2)
+    assert.equal(t.tick({ ...rule, peakShavingThresholdW: 8000 }).coveredBy, 'peak-shaving');
+    assert.equal(requests.length, 0);
+  });
+
+  it('Peak Shaving aus: Anforderung wie bisher', () => {
+    const requests = [];
+    const assist = { request: (q) => { requests.push(q); return { ok: true }; }, release: () => ({ ok: true }), status: () => ({ gridTargetW: null }) };
+    const t = createEosThresholdAssist({ state: { ctrl: {} }, getCfg: () => PS_ON, getAssist: () => assist, getPeakShavingTargetW: () => null });
+    t.tick({ id: 'r', source: 'forecast_optimizer', optimizer: 'eos', target: 'gridSetpointW', closedLoopHold: true, peakShavingThresholdW: 8000 });
     assert.equal(requests[0].maxImportW, 8000);
+  });
+
+  it('Änderung an Peak Shaving löst einen Neuplan aus, reine Preis-Eingaben nicht', () => {
+    assert.equal(configChangeNeedsEosReplan(['peakShaving.enabled']), true);
+    assert.equal(configChangeNeedsEosReplan(['peakShaving.gridImportLimitW']), true);
+    assert.equal(configChangeNeedsEosReplan(['peakShaving.adaptToReachedPeak']), true);
+    assert.equal(configChangeNeedsEosReplan(['peakShaving.tariff.model']), true);
+    assert.equal(configChangeNeedsEosReplan(['peakShaving.tariff.lpHighEurPerKwYear']), false);
   });
 });

@@ -36,6 +36,8 @@ function setImport(state, cfg, importW) {
 function rig({ persisted = {}, telemetry = {} } = {}) {
   const cfg = loadVictronConfig({ ...PEAK_ON, ...POWER, optimizer: { allowGridCharge: true, allowGridDischarge: true }, ...persisted });
   const state = makeTelemetryState({ soc: 60, loadW: 15000, ...telemetry });
+  // Akku-Leistung frisch gemessen (das Budget verlangt sie).
+  if (!telemetry.noBatteryStamp) state.victron.fieldUpdatedAt.batteryPowerW = Date.now();
   const clock = clockAtSlotStart();
   const logs = [];
   const ps = createPeakShaving({ state, getCfg: () => cfg, pushLog: (e, p) => logs.push({ event: e, payload: p }) },
@@ -144,4 +146,26 @@ test('Peak Shaving aus: Dienst rechnet nichts, Evaluator unverändert', async ()
   setImport(state, cfg, 15000);
   await evaluator.applyControlTarget('gridSetpointW', 14700, 'rule:hold');
   assert.deepEqual(gridSetpointWrites(transport), [14700]);
+});
+
+test('Akku-Leistung nicht frisch gemessen: Augenblickswert (Codex d7dcce9c P2)', async () => {
+  const { evaluator, transport, advance, state, cfg, ps } = rig({ telemetry: { noBatteryStamp: true } });
+  advance(300_000, 5000);
+  setImport(state, cfg, 15000);
+  assert.equal(ps.control(cfg).budget.reason, 'battery_power_unknown');
+  await evaluator.applyControlTarget('gridSetpointW', 14700, 'rule:hold');
+  assert.deepEqual(gridSetpointWrites(transport), [9700]);
+});
+
+test('Entladegrenze im Gerät unter der Nennleistung zählt mit (Codex d7dcce9c P1)', async () => {
+  // 2704 liest 1 000 W (Fremdwert, nicht von DVhub): Luft 1 000 − 500 Reserve = 500 W < 15 000 − 9 700 → Augenblickswert.
+  const { advance, state, cfg, ps } = rig({ telemetry: { maxDischargeW: 1000, maxDischargeAgeMs: 1000 } });
+  advance(300_000, 5000);
+  setImport(state, cfg, 15000);
+  assert.equal(ps.control(cfg).budget.reason, 'discharge_limited');
+  // 9 000 W Bezug: Ziel höchstens 9 700 + 500 = 10 200 W statt 12 000 W
+  setImport(state, cfg, 9000);
+  const c = ps.control(cfg);
+  assert.equal(c.budget.mode, 'budget');
+  assert.equal(c.targetW, 10200);
 });

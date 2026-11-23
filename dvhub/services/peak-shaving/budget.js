@@ -18,7 +18,7 @@
 //   - Viertelstunde nicht lückenlos gemessen (Lücken > 60 s, Uhrsprung, Neustart mitten in der Viertelstunde),
 //   - Zählerwert jetzt nicht frisch,
 //   - Rest der Viertelstunde kürzer als 60 s (der Akku braucht Sekunden zum Folgen),
-//   - Ladestand unbekannt, eingefroren, am Boden oder weniger als 5 Prozentpunkte darüber,
+//   - Ladestand unbekannt, eingefroren, am Boden oder weniger als 5 Prozentpunkte darüber; Akku-Leistung nicht frisch,
 //   - Entladeleistung unbekannt oder ausgeschöpft — der Akku muss den Bezug JEDERZEIT auf den Augenblickswert
 //     zurückholen können; deshalb darf das Budget den Bezug nie weiter über Grenze − Abstand lassen, als der Akku
 //     noch zusätzlich entladen kann (Rückfall ist damit immer machbar),
@@ -152,6 +152,7 @@ export function decideBudget(st, { enabled, wallMs, limitW, marginW, targetW, im
   if (!(Number(b.soc) >= Number(b.floorPct || 0) + BUDGET_SOC_HEADROOM_PCT)) return instant('soc_near_floor');
   const maxDis = Number(b.maxDischargeW);
   if (!(maxDis > 0)) return instant('discharge_unknown');
+  if (!finite(b.dischargeW)) return instant('battery_power_unknown');
   const reserveW = Math.max(BUDGET_DISCHARGE_RESERVE_MIN_W, (maxDis * BUDGET_DISCHARGE_RESERVE_PCT) / 100);
   const headroomW = maxDis - Math.max(0, Number(b.dischargeW) || 0) - reserveW;
   const nowW = Math.max(0, Number(importW));
@@ -166,7 +167,9 @@ export function decideBudget(st, { enabled, wallMs, limitW, marginW, targetW, im
   const capWh = Number(b.capacityWh);
   if (capWh > 0) {
     const availWh = Math.max(0, ((Number(b.soc) - Number(b.floorPct || 0) - BUDGET_SOC_HEADROOM_PCT) / 100) * capWh);
-    const needWh = Math.max(0, nowW - Math.min(allowedW, targetW)) * remainingS / 3600;
+    // GESAMTE Akku-Abgabe bis zum Ende: was er schon entlädt plus was er zusätzlich übernehmen müsste
+    // (Codex d7dcce9c P2).
+    const needWh = (Math.max(0, Number(b.dischargeW) || 0) + Math.max(0, nowW - Math.min(allowedW, targetW))) * remainingS / 3600;
     if (needWh > availWh) return instant('soc_energy');
   }
   return { ...base, mode: 'budget', reason: null, targetW: allowedW, allowedW, intervening: nowW > allowedW };
