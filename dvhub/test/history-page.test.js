@@ -839,3 +839,51 @@ test('Codex 6c0f6c64: Streudiagramm wird bei gleicher Abfrage nicht neu geholt',
   await helpers.loadTariffScatter({ ...summary, date: '2026-04-10' });
   assert.equal(calls.length, 2);
 });
+
+// ── Codex 63d6a96f ─────────────────────────────────────────────────────────
+function deferredFetch() {
+  const calls = [];
+  const fetchFn = (url) => new Promise((resolve) => {
+    calls.push({ url, resolve: (data) => resolve({ ok: true, json: async () => data }) });
+  });
+  return { calls, fetchFn };
+}
+
+test('Codex 63d6a96f: neu geladene Zusammenfassung holt die Streudaten neu (z. B. nach „Preise nachladen“)', async () => {
+  const { helpers } = loadHistoryPageHelpers();
+  const calls = [];
+  helpers.setScatterFetch(async (url) => { calls.push(url); return { ok: true, json: async () => ({ points: [], bins: [], fits: [] }) }; });
+  const summary = { view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: dynTariff() }), rows: [], meta: {} };
+  await helpers.loadTariffScatter(summary);
+  helpers.invalidateTariffScatter();
+  await helpers.loadTariffScatter(summary);
+  assert.equal(calls.length, 2);
+});
+
+test('Codex 63d6a96f: Monat → Tag → Monat während die Anfrage läuft zeigt die Antwort', async () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const { calls, fetchFn } = deferredFetch();
+  helpers.setScatterFetch(fetchFn);
+  const month = { view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: dynTariff() }), rows: [], meta: {} };
+  const first = helpers.loadTariffScatter(month);
+  await helpers.loadTariffScatter({ ...month, view: 'day' });
+  const again = helpers.loadTariffScatter(month);
+  assert.equal(calls.length, 1, 'läuft schon – keine zweite Anfrage');
+  calls[0].resolve({ points: [[1, 15, 1, 0], [2, 16, 1, 0]], bins: [], fits: [] });
+  await first; await again;
+  assert.match(elements.get('historyTariffScatterChart').innerHTML, /historyTariffScatterChartCanvas/);
+});
+
+test('Codex 63d6a96f: späte Antwort einer verlassenen Abfrage überschreibt die neue nicht', async () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const { calls, fetchFn } = deferredFetch();
+  helpers.setScatterFetch(fetchFn);
+  const march = { view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: dynTariff() }), rows: [], meta: {} };
+  const a = helpers.loadTariffScatter(march);
+  const b = helpers.loadTariffScatter({ ...march, date: '2026-04-10' });
+  calls[1].resolve({ points: [], bins: [], fits: [] });
+  await b;
+  calls[0].resolve({ points: [[1, 15, 1, 0]], bins: [], fits: [] });
+  await a;
+  assert.match(elements.get('historyTariffScatterChart').innerHTML, /Keine Viertelstunden/);
+});

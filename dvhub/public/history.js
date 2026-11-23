@@ -2840,12 +2840,25 @@ function setTariffMonthMode(mode) {
 }
 
 // ── Streudiagramm Endpreis gegen Börse (Woche/Monat/Jahr/Alle) ──────────────
-let tariffScatterGeneration = 0;
-// Letzte Streudaten je Abfrage: Darstellungswechsel (Chart-Modus, Tabelle)
-// zeichnen renderSummary neu, ohne die Daten neu zu holen (Codex 6c0f6c64).
-let tariffScatterCache = { key: null, data: null, pending: null };
+// Streudaten: gemerkt je Abfrage (Darstellungswechsel zeichnen renderSummary
+// neu, ohne neu zu holen, Codex 6c0f6c64). Gezeigt wird nur die Antwort der
+// zuletzt gewünschten Abfrage; eine noch laufende gleiche Anfrage wird
+// übernommen, statt verworfen (Codex 63d6a96f). Eine frisch geladene
+// Zusammenfassung macht den Stand ungültig (Epoche).
+let tariffScatterCache = { key: null, data: null };
+let tariffScatterPending = null;   // { key, epoch }
+let tariffScatterWanted = null;
+let tariffScatterEpoch = 0;
 let scatterFetchImpl = null;
-function setScatterFetch(fn) { scatterFetchImpl = typeof fn === 'function' ? fn : null; tariffScatterCache = { key: null, data: null, pending: null }; }
+function setScatterFetch(fn) {
+  scatterFetchImpl = typeof fn === 'function' ? fn : null;
+  invalidateTariffScatter();
+}
+function invalidateTariffScatter() {
+  tariffScatterEpoch += 1;
+  tariffScatterCache = { key: null, data: null };
+  tariffScatterPending = null;
+}
 const SCATTER_FIT_COLORS = ['#ff9f43', '#67a5ff', '#f5c451', '#34d399'];
 
 function tariffScatterDatasets(data) {
@@ -2946,34 +2959,39 @@ async function loadTariffScatter(summary) {
   const visible = TARIFF_CARD_VIEWS.has(view) && Number(summary?.kpis?.tariff?.variableSlots || 0) > 0;
   setHidden('historyTariffScatterWrap', !visible);
   const scatterFetch = scatterFetchImpl || apiFetch;
-  if (!visible || typeof scatterFetch !== 'function') { ++tariffScatterGeneration; return; }
+  if (!visible || typeof scatterFetch !== 'function') { tariffScatterWanted = null; return; }
   const date = String(summary?.date || byId('historyDate')?.value || '');
   const estimated = historyState.tariffEstimated === 'exclude' ? '&estimated=exclude' : '';
-  const url = `${view}|${date}|${estimated}`;   // Cache-Schlüssel der Abfrage
-  if (tariffScatterCache.key === url && tariffScatterCache.data) {
-    ++tariffScatterGeneration;
+  const key = `${view}|${date}|${estimated}`;   // Cache-Schlüssel der Abfrage
+  tariffScatterWanted = key;
+  if (tariffScatterCache.key === key && tariffScatterCache.data) {
     renderTariffScatter(tariffScatterCache.data);
     return;
   }
-  if (tariffScatterCache.key === url && tariffScatterCache.pending) return;  // läuft schon
-  const generation = ++tariffScatterGeneration;
-  tariffScatterCache = { key: url, data: null, pending: true };
+  // Läuft dieselbe Abfrage schon, zeigt ihre Antwort das Ergebnis.
+  if (tariffScatterPending && tariffScatterPending.key === key && tariffScatterPending.epoch === tariffScatterEpoch) return;
+  const epoch = tariffScatterEpoch;
+  tariffScatterPending = { key, epoch };
+  const settle = () => {
+    if (tariffScatterPending && tariffScatterPending.key === key && tariffScatterPending.epoch === epoch) tariffScatterPending = null;
+  };
   try {
     // URL als Literal im Aufruf: tests/endpoint-inventory.mjs liest sie so.
     const response = await scatterFetch(`/api/history/tariff-scatter?view=${encodeURIComponent(view)}&date=${encodeURIComponent(date)}${estimated}`);
     const payload = await response.json();
-    if (tariffScatterCache.key === url) tariffScatterCache.pending = null;
-    if (generation !== tariffScatterGeneration) return;
+    settle();
+    if (epoch !== tariffScatterEpoch) return;   // inzwischen ungültig, neue Anfrage folgt
     if (!response.ok) {
-      setText('historyTariffScatterLegend', `Streudiagramm nicht geladen: ${payload?.error || response.status}`);
+      if (tariffScatterWanted === key) setText('historyTariffScatterLegend', `Streudiagramm nicht geladen: ${payload?.error || response.status}`);
       return;
     }
-    tariffScatterCache = { key: url, data: payload, pending: null };
-    renderTariffScatter(payload);
+    tariffScatterCache = { key, data: payload };
+    if (tariffScatterWanted === key) renderTariffScatter(payload);
   } catch (error) {
-    if (tariffScatterCache.key === url) tariffScatterCache.pending = null;
-    if (generation !== tariffScatterGeneration) return;
-    setText('historyTariffScatterLegend', `Streudiagramm nicht geladen: ${error.message}`);
+    settle();
+    if (epoch === tariffScatterEpoch && tariffScatterWanted === key) {
+      setText('historyTariffScatterLegend', `Streudiagramm nicht geladen: ${error.message}`);
+    }
   }
 }
 
@@ -3167,6 +3185,8 @@ async function loadHistorySummary() {
       setBanner(`Historie konnte nicht geladen werden: ${payload.error || response.status}`, 'error');
       return;
     }
+    // Frische Zusammenfassung (Navigation, „Preise nachladen“): Streudaten neu holen.
+    invalidateTariffScatter();
     renderSummary(payload);
     loadMispelOverview();
     loadGridShareCard();
@@ -3715,6 +3735,7 @@ const historyHelpers = {
   tariffMonthCostDatasets,
   loadTariffScatter,
   setScatterFetch,
+  invalidateTariffScatter,
   tariffFitHtml,
   tariffValidFromText,
   renderTariffScatter,
