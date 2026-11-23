@@ -53,7 +53,8 @@ function build(mode, sc) {
     : (BASE ? null : directGate());
   const ctx = { getCfg: () => cfg, state, pushLog, onMultiGxAvailability: (v) => avail.push(v), ...(gate ? { gate } : {}) };
   const create = mode === 'old' && BASE ? BASE.createMultiGx : current.createMultiGx;
-  const mgx = create(ctx, { transport });
+  // Feste Uhr (mock Date) misst auch die monotonen Abstände (A23 b); die alte Fassung ignoriert monoNow.
+  const mgx = create(ctx, { transport, monoNow: () => Date.now() });
   const rig = { mode, cfg, state, transport, gate, mgx, logs, avail, events, onWrite: (fn) => { hook.fn = fn; } };
   // Hauptanlage am selben Tor (Pfad 1 + Pfad 8 in einem Protokoll), nur wenn das Szenario sie braucht.
   if (sc.withMain) rig.main = evaluatorRig({ cfg, transport, state, ctx: gate ? { gate } : {} });

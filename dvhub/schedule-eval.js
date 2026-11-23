@@ -2622,11 +2622,12 @@ export function createScheduleEvaluator(ctx) {
     // test.js): ein selbst-ablaufendes Lease macht priceNegative im Regeltakt
     // wahr — GENAU derselbe Ernstfallpfad wie § 51 bei echt negativem Preis
     // (Sollwert-Puffer + feedExcessDcPv-Sperre unten). Läuft das Lease ab
-    // (Date.now() >= until), fällt der Test von selbst weg und gibt frei.
+    // (Date.now() >= until), fällt der Test von selbst weg und gibt frei. Ablauf monoton über den Dienst (A23 b,
+    // isActive); ohne Dienst wie bisher gegen die Wanduhr.
     const curtailTest = state.ctrl.curtailmentTest;
     const negativePriceTest = curtailTest?.active === true
       && curtailTest.mode === 'negativePrice'
-      && Date.now() < curtailTest.until;
+      && (typeof ctx.curtailmentTest?.isActive === 'function' ? ctx.curtailmentTest.isActive() : Date.now() < curtailTest.until);
     const priceNegative = negativePriceTest || (npp?.enabled && priceNow && Number(priceNow.ct_kwh) < 0);
 
     // --- DC Export Mode: dynamischer Grid Setpoint = -(DC-PV - Puffer) ---
@@ -3535,7 +3536,10 @@ export function createScheduleEvaluator(ctx) {
         fic.capActive = false; fic.limitPct = null; fic.below = 0;
         return;
       }
-      const meterFresh = state.meter?.ok === true && (Date.now() - Number(state.meter.updatedAt || 0)) < 15000;
+      // A23 b: Frische des Zählers monoton (Empfangszeit im Einspeisegrenzen-Dienst); ohne Dienst wie bisher.
+      const meterFresh = typeof ctx.feedInCap?.meterFresh === 'function'
+        ? ctx.feedInCap.meterFresh()
+        : state.meter?.ok === true && (Date.now() - Number(state.meter.updatedAt || 0)) < 15000;
       const act = capLoopStep(fic, {
         exportW: state.victron?.gridExportW, importW: state.victron?.gridImportW, limitW,
         refW: getPowerLimits(cfg).limits.inverterMaxPowerW, pvW: state.victron?.pvTotalW, meterFresh

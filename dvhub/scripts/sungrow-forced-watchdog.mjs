@@ -4,7 +4,9 @@
 // Läuft als eigener systemd-Timer (~alle 60 s), UNABHÄNGIG vom DVhub-Prozess — greift also auch, wenn DVhub hängt
 // (nicht abgestürzt, aber reagiert nicht mehr). Prüft am Gerät: Steht der Master in Modus 2 (Forced), besitzt DVhub
 // ihn (Merker) und ist das Lebenszeichen älter als die Frist (Standard 120 s) → DVhub führt den Forced mode nicht
-// mehr nach → beide WR sicher zurück (Master Modus 0, beide 0xCC).
+// mehr nach → beide WR sicher zurück (Master Modus 0, beide 0xCC). Das Alter misst er seit A23 b (Christin 23.11.2026)
+// mit der Laufzeit seit Systemstart (/proc/uptime + boot_id in der Datei), nicht mit der Wanduhr; nach einem Neustart
+// der Maschine gilt ein Lebenszeichen aus dem früheren Start als alt.
 //
 // systemd (Beispiel):
 //   # sungrow-forced-watchdog.service  (Type=oneshot)
@@ -18,7 +20,8 @@ import path from 'node:path';
 import { loadConfigFile } from '../config-model.js';
 import { createModbusTransport } from '../transport-modbus.js';
 import { wire, sungrowEmsConf } from '../services/inverter/sungrow.js';
-import { sungrowForcedSafeOff, readForcedMarker, readForcedHeartbeatAt, watchdogShouldRelease, forcedConnections, unsafeConfigWithMarker } from '../services/inverter/sungrow-forced-safeoff.js';
+import { sungrowForcedSafeOff, readForcedMarker, readForcedHeartbeat, watchdogShouldRelease, forcedConnections, unsafeConfigWithMarker } from '../services/inverter/sungrow-forced-safeoff.js';
+import { readBootClock } from '../services/mono-clock.js';
 
 const MODE_ADDR = wire(13050);
 const HARD_TIMEOUT_MS = Number(process.env.SUNGROW_WATCHDOG_TIMEOUT_MS) || 8000;
@@ -57,8 +60,9 @@ async function main() {
       liveMode = Array.isArray(regs) ? (Number(regs[0]) & 0xffff) : null;
     } catch (e) { log('Modus lesen fehlgeschlagen — nichts tun', { error: e?.message || String(e) }); return; }
 
-    const heartbeatAt = readForcedHeartbeatAt(heartbeatPath);
-    const d = watchdogShouldRelease({ liveMode, markerOwned: marker.owned, heartbeatAt, nowMs: Date.now(), staleMs: STALE_MS });
+    // A23 b: Alter über die Laufzeit seit Systemstart (bootMs/bootId der Datei gegen /proc), sonst Wanduhr wie bisher.
+    const heartbeat = readForcedHeartbeat(heartbeatPath);
+    const d = watchdogShouldRelease({ liveMode, markerOwned: marker.owned, heartbeat, heartbeatAt: heartbeat?.at ?? null, nowMs: Date.now(), boot: readBootClock(), staleMs: STALE_MS });
     if (!d.release) { log('kein Eingriff', { ...d, liveMode }); return; }
 
     log('verwaister Forced mode — Rücknahme', d);

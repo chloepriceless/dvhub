@@ -29,6 +29,7 @@ import { betaGateOpen } from '../../beta-features.js';
 import { gridImportW } from '../optimizer/grid-storage.js';
 import { getPowerLimits } from '../power-limits.js';
 import { createLegacyGate, inverterReleaseState, modbusLegacySink, MULTI_GX_GATE_DEVICE, multiGxLegacyPolicies, unwrapLegacyWrite } from '../gate/legacy.js';
+import { pickMonoNow, createStampAge, markMono } from '../mono-clock.js';
 
 export const MULTI_GX_TICK_MS = 5000;
 // 820–822: Netz L1–L3 des Systems; ohne eigenen Zaehler meldet die GX dort den
@@ -84,6 +85,12 @@ export function createEosResyncOnAvailability({ sync, replan, pushLog = () => {}
 export function createMultiGx(ctx, deps = {}) {
   const transport = deps.transport;
   const now = deps.now || Date.now;
+  // Zeit (A23 b, Christin 23.11.2026): Rampe (dt des Reglers) und Frische des Akkuwerts der Hauptanlage monoton.
+  // state.multiGx.updatedAt bleibt Wanduhr (Anzeige); die monotone Veröffentlichungszeit reist unsichtbar mit
+  // (markMono), Verbraucher (floor-handoff, planning) messen das Alter damit. Der Akku-Stempel der Hauptanlage
+  // (state.victron.fieldUpdatedAt, Wanduhr des Pollers) wird am Übergabepunkt monoton gemerkt (createStampAge).
+  const mono = pickMonoNow(deps.monoNow, deps.now);
+  const stamps = createStampAge({ now, monoNow: mono });
   // Schreibtor (VCL-Vertrag v6 D.1 #8, H-1 Phase 3b, Legacy-Modus): der 2716-Write geht über DAS Tor des Prozesses
   // (server.js ctx.gate) am Gerät gx2 mit dem eigenen Modbus-Pool dieser Anlage als Senke. Ohne ctx.gate (Tests, die
   // den Dienst allein bauen) ein eigenes Tor mit derselben Not-Halt-Marke.
@@ -121,11 +128,11 @@ export function createMultiGx(ctx, deps = {}) {
   }
 
   function publish(extra) {
-    ctx.state.multiGx = {
+    ctx.state.multiGx = markMono({
       enabled: false, online: null, socPct: null, batteryPowerW: null, acInW: null, minSocPct: null,
       setpointW: 0, desiredBatteryW: 0, sharePct: null, totalBatteryW: null, reason: null, errors: readErrors + writeErrors, updatedAt: now(),
       ...extra,
-    };
+    }, mono);
   }
 
   async function read(c, name, fc, scale = 1, signed = false) {
@@ -242,7 +249,7 @@ export function createMultiGx(ctx, deps = {}) {
     if (!finite(v.batteryPowerW) || v.errors?.batteryPowerW) return null;
     if (v.freeze?.active === true || v.sourceMismatch?.active === true) return null;
     const at = v.fieldUpdatedAt?.batteryPowerW;
-    if (finite(at) && now() - Number(at) > PRIMARY_MAX_AGE_MS) return null;
+    if (finite(at) && stamps.ageMs('primaryBattery', Number(at)) > PRIMARY_MAX_AGE_MS) return null;
     return Number(v.batteryPowerW);
   }
 
@@ -327,7 +334,7 @@ export function createMultiGx(ctx, deps = {}) {
     // der Erholung sofort der aufgelaufene Wert raus, an der Rampe vorbei (Codex 8cd2f706 P2).
     const unsafe = configUnsafe(cfg, { alarm: readOk && !stopNow });
     const out = controller.tick({
-      nowMs: now(),
+      nowMs: mono(), // monoton: dt der Rampe/des Filters (A23 b)
       online: online !== false,
       stop: stopNow || unsafe,
       exportBlocked: ctrl.forcedOff === true || ctrl.negativePriceActive === true,

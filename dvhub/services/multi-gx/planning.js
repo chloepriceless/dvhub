@@ -19,6 +19,7 @@
 import { getPowerLimits } from '../power-limits.js';
 import { betaGateOpen } from '../../beta-features.js';
 import { resolveSecondInverter, secondInverterTelemetry, sungrowEffectivePowerW, sungrowRealSocPct, sungrowSocFloor, sungrowSocFloorBufferPct, sungrowSystemSoc } from '../inverter/sungrow.js';
+import { monoAgeOf } from '../mono-clock.js';
 
 const finite = (v) => v != null && v !== '' && Number.isFinite(Number(v));
 
@@ -172,7 +173,10 @@ export function followerBatteryForFlow(ctx, nowMs = Date.now()) {
   const f = follower(ctx, cfg);
   const s = ctx?.state?.multiGx;
   if (!f || !finite(s?.batteryPowerW)) return null;
-  if (finite(s.updatedAt) && nowMs - Number(s.updatedAt) > 20000) return null;
+  // Alter monoton, wenn der Dienst die Veröffentlichung markiert hat (A23 b, markMono in multi-gx/index.js) — dann
+  // zählt nowMs nicht. Sonst (Test-Zustand, fremder Erzeuger) wie bisher gegen updatedAt (Wanduhr).
+  const monoAge = monoAgeOf(s);
+  if (monoAge != null ? monoAge > 20000 : (finite(s.updatedAt) && nowMs - Number(s.updatedAt) > 20000)) return null;
   return { batteryPowerW: Number(s.batteryPowerW), socPct: f.socPct };
 }
 

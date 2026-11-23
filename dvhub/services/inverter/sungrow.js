@@ -25,6 +25,8 @@ import { GateBlockedError } from '../gate/index.js';
 import { c2AllowsRelease, createLegacyGate, inverterReleaseState, modbusLegacySink, SUNGROW_GATE_DEVICES } from '../gate/legacy.js';
 import { createModbusHealth, classifyModbusError, modbusRequestInfo } from './modbus-health.js';
 import { releaseBackoffNextAt } from '../release-backoff.js';
+import { bootStamp } from '../mono-clock.js';
+import { curtailmentTestRunning } from '../curtailment-test.js';
 
 /** Doku-Adresse → Draht-Adresse. */
 export const wire = (docAddress) => Number(docAddress) - 1;
@@ -836,7 +838,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Monotone Uhr für die Frist „Master allein" (A7, Fable P3-2): ein Sprung der Wanduhr (NTP, Hand-Einstellung) darf
   // die Frist weder verkürzen noch verlängern. Laufzeit: performance.now(); mit eingespielter Uhr (Tests) dieselbe.
   const monoNow = monoNowArg || nowArg || (() => performance.now());
-  const modbusHealthInst = modbusHealth || createModbusHealth(now, { pushLog, wr: isSlave ? 'slave' : 'master', source: 'ems' });
+  const modbusHealthInst = modbusHealth || createModbusHealth(now, { pushLog, wr: isSlave ? 'slave' : 'master', source: 'ems', monoNow }); // A23 b: Abstände monoton
   const transport = modbusHealthInst.wrap(baseTransport);
   // Schreibtor (H-1 Phase 2): die Schreibfunktionen dieses Transports erreicht der Aktuator nur noch über das Tor
   // (R-T1). Die Not-Halt-Marke des Tors ist dieselbe wie die der Bestandsprüfung in submitReg.
@@ -985,7 +987,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const last = st.lastForcedHeartbeatFileMono;
     if (last != null && m - last >= 0 && m - last < 5000) return;
     st.lastForcedHeartbeatFileMono = m;
-    try { atomicWriteControlState(forcedHeartbeatPath, { at: t, endpointKey: st.endpointKey }); }
+    try { atomicWriteControlState(forcedHeartbeatPath, { at: t, endpointKey: st.endpointKey, ...bootStamp() }); } // A23 b: bootMs/bootId für den Watchdog
     catch (e) { logOnce(e?.message || 'x', 'sungrow_ems_heartbeat_file_error', { error: e?.message || String(e) }, 'warn'); }
   }
 
@@ -1846,7 +1848,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // bleibt). Selbst-ablaufend über das Lease (now < until) — endet garantiert mit dem Test.
   function curtailmentBatteryHold() {
     const ct = state.ctrl?.curtailmentTest;
-    return !!(ct && ct.active === true && ct.blockCharge === true && now() < ct.until);
+    // Frist monoton wie im Dienst (A23 b, Codex 944bcef1 P2): curtailmentTestRunning, sonst gegen die Wanduhr.
+    return !!(ct && ct.blockCharge === true && curtailmentTestRunning(ct, now()));
   }
 
   // M25 + Codex 4c624dcd (P1): Ist die Einspeisung gerade gesperrt? Dann entlädt DVhub nur fürs Haus (höchstens die

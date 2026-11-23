@@ -17,6 +17,7 @@ import {
   decideEmsCommand, createSungrowEms, emsMatches, resolveSungrowControl, EMS_CMD, EMS_MODE, wire
 } from '../services/inverter/sungrow.js';
 import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
+import { readBootClock } from '../services/mono-clock.js';
 
 const MODE = wire(13050);
 const CMD = wire(13051);
@@ -1060,6 +1061,16 @@ test('Absicherung C4: Master frischt das Lebenszeichen für den Box-Watchdog auf
     await r.ems.applySetpoint(-5000, 'rule:abend'); // Forced-Entladen
     const at1 = JSON.parse(fs.readFileSync(hbPath, 'utf8')).at;
     assert.ok(Number.isFinite(at1), 'Lebenszeichen nach dem ersten Forced-Takt geschrieben');
+    // A23 b: Laufzeit seit Systemstart und Start-Kennung für den Box-Watchdog (Linux); ohne /proc (macOS) fehlen sie.
+    const hb1 = JSON.parse(fs.readFileSync(hbPath, 'utf8'));
+    const boot = readBootClock();
+    if (boot) {
+      assert.equal(hb1.bootId, boot.bootId);
+      assert.ok(Number.isFinite(hb1.bootMs) && hb1.bootMs > 0 && hb1.bootMs <= readBootClock().bootMs, 'bootMs = Laufzeit beim Schreiben');
+    } else {
+      assert.equal('bootMs' in hb1, false);
+      assert.equal('bootId' in hb1, false);
+    }
     // Auch ein ausgeregelter Takt (kein Write ans Gerät) frischt das Lebenszeichen auf (DVhub lebt).
     r.advance(10_000);
     r.telemetry({ gridW: -5000, batteryW: -4000, pvW: 0, loadW: 500 });

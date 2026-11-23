@@ -55,6 +55,7 @@
 // aktive SoC-Grenze wie eine gesetzte Entlade-Sperre.
 
 import { knownMaxDischargeW, decodeMaxDischargeRaw, MAX_DISCHARGE_INT32_ADDR } from './peak-shaving/index.js';
+import { monoNow, createStampAge } from './mono-clock.js';
 
 // So alt darf das Halte-Signal der Auswertung (state.ctrl.eosGridHold) bzw.
 // DVhubs eigener 2704-Schreibwert höchstens sein — mindestens, bei langsamerem
@@ -120,7 +121,7 @@ export function resolveSetpointFollowOptions(cfg = {}) {
 
 export function createSetpointFollowState() {
   return {
-    suspectSince: null, okSince: null, active: false, lastAlarmAt: null, last: null,
+    suspectSince: null, suspectSinceMono: null, okSince: null, active: false, lastAlarmAt: null, last: null,
     // Fenster der beurteilbaren Messpunkte (holdMs) und der letzte Punkt davor
     // als Anker, damit die Abdeckung genau holdMs erreichen kann.
     window: [], anchor: null, recoveredSince: null, share: null, avgImportW: null, avgShortfallW: null
@@ -307,13 +308,13 @@ function isRecoveryPoint(sample, refusing, opts) {
  */
 function windowVerdict(state, now, opts) {
   const pts = state.anchor ? [state.anchor, ...state.window] : state.window;
-  const empty = { covered: false, share: 0, avgImportW: 0, avgShortfallW: 0, failing: false, recovered: false, firstSuspectAt: null };
+  const empty = { covered: false, share: 0, avgImportW: 0, avgShortfallW: 0, failing: false, recovered: false, firstSuspectAt: null, firstSuspectT: null };
   if (!pts.length) return empty;
-  let bad = 0, good = 0, imp = 0, short = 0, firstSuspectAt = null;
+  let bad = 0, good = 0, imp = 0, short = 0, firstSuspectAt = null, firstSuspectT = null;
   for (const p of pts) {
     if (p.refusing) {
       bad += 1;
-      if (firstSuspectAt == null) firstSuspectAt = p.t;
+      if (firstSuspectAt == null) { firstSuspectAt = p.at ?? p.t; firstSuspectT = p.t; }
     }
     if (p.recovering) good += 1;
     imp += p.netImportW;
@@ -347,7 +348,7 @@ function windowVerdict(state, now, opts) {
   // Hälfte der Punkte belegt, dass der Speicher folgt — Mittelwerte allein
   // reichen nicht (Wolken, Grundlast).
   const recovered = covered && share < opts.minSuspectShare / 2 && good / n >= 0.5;
-  return { covered, share, avgImportW, avgShortfallW, failing, recovered, firstSuspectAt };
+  return { covered, share, avgImportW, avgShortfallW, failing, recovered, firstSuspectAt, firstSuspectT };
 }
 
 /**
@@ -355,7 +356,10 @@ function windowVerdict(state, now, opts) {
  * @returns {{ state: object, transition: 'alarm'|'reminder'|'clear'|null }}
  */
 export function evaluateSetpointFollow(state, sample, opts) {
-  const now = numOr(sample?.nowMs, Date.now());
+  // Zeit (A23 b, Christin 23.11.2026): Fenster, Lücke, Verdacht, Erinnerung und Entwarnung rechnen mit sample.monoMs
+  // (monoton); sample.nowMs (Wanduhr) bleibt für „seit“ (Anzeige). Ohne monoMs (Aufrufer mit nur einer Uhr) dieselbe.
+  const wallNow = numOr(sample?.nowMs, Date.now());
+  const now = numOr(sample?.monoMs, wallNow);
   const refusing = isRefusingDischarge(sample, opts);
   let transition = null;
   // refusing === null: Werte fehlen — Zustand unverändert lassen. Ebenso, wenn
@@ -379,14 +383,14 @@ export function evaluateSetpointFollow(state, sample, opts) {
   if (prev && now - prev.t > gapMs) {
     state.window = [];
     state.anchor = null;
-    if (!state.active) state.suspectSince = null;
+    if (!state.active) { state.suspectSince = null; state.suspectSinceMono = null; }
     state.okSince = null;
     state.recoveredSince = null;
   }
   const recovering = isRecoveryPoint(sample, refusing, opts);
   const discharging = recovering && Number(sample.batteryW) <= -opts.idleW;
   state.window.push({
-    t: now, refusing, recovering, discharging,
+    t: now, at: wallNow, refusing, recovering, discharging,
     netImportW: Number(sample.netImportW), setpointW: Number(sample.setpointW)
   });
   // Älteres als holdMs fällt heraus; der jüngste herausgefallene Punkt bleibt Anker.
@@ -414,8 +418,10 @@ export function evaluateSetpointFollow(state, sample, opts) {
   state.avgShortfallW = verdict.avgShortfallW;
 
   if (!state.active) {
-    // „Seit wann“: frühester auffälliger Punkt im Fenster, nicht eine alte Spitze.
+    // „Seit wann“: frühester auffälliger Punkt im Fenster, nicht eine alte Spitze. suspectSince = Wanduhr (Anzeige),
+    // suspectSinceMono = derselbe Punkt monoton (Dauer).
     state.suspectSince = verdict.firstSuspectAt;
+    state.suspectSinceMono = verdict.firstSuspectT;
     if (verdict.failing) {
       state.active = true;
       state.lastAlarmAt = now;
@@ -482,8 +488,13 @@ export function createSetpointFollowWatchdog(ctx) {
   // 01f4558b bis 7b1613f5), höchstens alle 30 s und nur: bei auffälligen Punkten
   // der letzten holdMs, aktivem Alarm, zuletzt gelesener (eindeutiger) Sperre
   // oder wenn eine 2704-0 mit eigenem 0-Write gerade entschuldigt (Gegenprobe).
-  let capRead = null;          // { value, at, error }
-  let capReadStartedAt = 0;
+  let capRead = null;          // { value, at (Wanduhr), mono, error }
+  let capReadStartedAt = null;  // monoton; null = fällig
+  // Zeit (A23 b): tick(nowMs) ohne monoMs → mit eingespielter Uhr (Tests) dieselbe, sonst ctx.monoNow bzw. monoNow.
+  // Messwert-Stempel (state.victron.fieldUpdatedAt, Wanduhr des Pollers) werden am Übergabepunkt monoton gemerkt.
+  const mono = typeof ctx.monoNow === 'function' ? ctx.monoNow : monoNow;
+  const clock = { wall: 0, mono: 0 };
+  const stampAge = createStampAge({ now: () => clock.wall, monoNow: () => clock.mono });
   let capReadPending = false;
   let no2720 = false;           // GX kennt Reg. 2720 nicht → 2704
 
@@ -499,12 +510,20 @@ export function createSetpointFollowWatchdog(ctx) {
     return typeof t.mbRequest === 'function' && conf.address != null ? conf : null;
   }
 
-  function maybeReadCap(cfg, nowMs, opts) {
+  // Eigene Rücklesung für die Prüfung: nur, solange sie nach der monotonen Uhr höchstens capReadMaxAgeMs alt ist. Sonst
+  // unverändert (at = Wanduhr der Lesung): knownDischargeCapW vergleicht „neuer als“ gegen die Wanduhr-Stempel der
+  // anderen Rücklesungen; nur EINE Seite umzurechnen kehrte die Reihenfolge nach einem Sprung um (Codex 29b60b7e P2).
+  function capReadNow(cfg, monoMs) {
+    if (!capRead) return null;
+    return capRead.mono == null || monoMs - capRead.mono <= capReadMaxAgeMs(cfg) ? capRead : null;
+  }
+
+  function maybeReadCap(cfg, nowMs, monoMs, opts) {
     const conf = capReadable(cfg);
-    if (!conf || capReadPending || nowMs - capReadStartedAt < CAP_READ_EVERY_MS) return;
+    if (!conf || capReadPending || (capReadStartedAt != null && monoMs - capReadStartedAt < CAP_READ_EVERY_MS)) return;
     // Nur jüngere auffällige Punkte (≤ holdMs): bei einem langen Entschuldigungs-
     // Zeitraum bleiben alte Punkte im Fenster liegen (Gegenprüfung 7c9e01aa).
-    const recent = (p) => p && p.refusing && nowMs - p.t <= opts.holdMs;
+    const recent = (p) => p && p.refusing && monoMs - p.t <= opts.holdMs;
     const suspicious = wstate.active || wstate.window.some(recent) || recent(wstate.anchor);
     // Weiterlesen, solange eine gelesene Sperre gilt — eine mehrdeutige 0 aus
     // 2704 ohne eigenen 0-Write ist keine (sonst Dauerlesen, 0ff2eb8d).
@@ -514,7 +533,7 @@ export function createSetpointFollowWatchdog(ctx) {
     const crossCheck = victron && !no2720 && ctx.transport.type !== 'mqtt' && reliesOnAmbiguousZero(state, cfg, nowMs);
     if (!suspicious && !capBlock && !crossCheck) return;
     capReadPending = true;
-    capReadStartedAt = nowMs;
+    capReadStartedAt = monoMs;
     const v = cfg.victron || {};
     const target = { host: conf.host || v.host, port: conf.port || v.port, unitId: conf.unitId ?? v.unitId, timeoutMs: conf.timeoutMs || v.timeoutMs };
     Promise.resolve().then(async () => {
@@ -546,10 +565,10 @@ export function createSetpointFollowWatchdog(ctx) {
       return { value: decodeMaxDischargeRaw(raw, conf), ambiguousZero: victron && raw === 0 };
     }).then(({ value, ambiguousZero }) => {
       capRead = value == null || !Number.isFinite(value)
-        ? { value: null, at: nowMs, error: 'Entladegrenze: kein gültiger Wert' }
-        : { value, at: nowMs, error: null, ambiguousZero };
+        ? { value: null, at: nowMs, mono: monoMs, error: 'Entladegrenze: kein gültiger Wert' }
+        : { value, at: nowMs, mono: monoMs, error: null, ambiguousZero };
     }, (e) => {
-      capRead = { value: null, at: nowMs, error: e?.message || String(e) };
+      capRead = { value: null, at: nowMs, mono: monoMs, error: e?.message || String(e) };
     }).finally(() => { capReadPending = false; });
   }
 
@@ -559,8 +578,11 @@ export function createSetpointFollowWatchdog(ctx) {
     } catch { /* noop */ }
   }
 
-  /** Ein Poll-Zyklus. Wirft nie. */
-  function tick(nowMs = Date.now()) {
+  /** Ein Poll-Zyklus. Wirft nie. nowMs = Wanduhr, monoMs = monotone Uhr (A23 b). */
+  function tick(nowArg, monoArg) {
+    const nowMs = nowArg ?? Date.now();
+    const monoMs = monoArg ?? (nowArg != null ? nowArg : mono());
+    clock.wall = nowMs; clock.mono = monoMs;
     const cfg = getCfg() || {};
     const opts = resolveSetpointFollowOptions(cfg);
     // Lückengrenze: bei langsamem Poll-Takt (meterPollMs bis 60 s) liegen die
@@ -585,7 +607,7 @@ export function createSetpointFollowWatchdog(ctx) {
     // Nur frisch gelesene Werte zählen: schlägt ein Read fehl, behält der
     // Live-State den alten Wert — ein alter „Akku steht"-Wert wäre ein Fehlalarm.
     const stamps = v.fieldUpdatedAt || {};
-    const fresh = (name) => Number(stamps[name]) > 0 && (nowMs - Number(stamps[name])) <= opts.maxAgeMs;
+    const fresh = (name) => Number(stamps[name]) > 0 && stampAge.ageMs(name, Number(stamps[name])) <= opts.maxAgeMs;
     const live = (name) => (fresh(name) ? v[name] : null);
 
     const netImportW = (v.gridImportW == null || v.gridExportW == null)
@@ -593,6 +615,7 @@ export function createSetpointFollowWatchdog(ctx) {
       : Number(v.gridImportW) - Number(v.gridExportW);
     const { transition } = evaluateSetpointFollow(wstate, {
       nowMs,
+      monoMs,
       setpointW: live('gridSetpointW'),
       netImportW,
       batteryW: live('batteryPowerW'),
@@ -606,13 +629,13 @@ export function createSetpointFollowWatchdog(ctx) {
       holdReason: activeDischargeHold(state, nowMs, cfg),
       // Entlade-Sperre (Reg. 2704): Rücklesung, sonst DVhubs eigener letzter
       // Schreibwert, dieser nur befristet.
-      maxDischargeW: knownDischargeCapW(state, cfg, nowMs, capRead)
+      maxDischargeW: knownDischargeCapW(state, cfg, nowMs, capReadNow(cfg, monoMs))
     }, opts);
-    try { maybeReadCap(cfg, nowMs, opts); } catch { /* Lesen darf den Wächter nie stören */ }
+    try { maybeReadCap(cfg, nowMs, monoMs, opts); } catch { /* Lesen darf den Wächter nie stören */ }
 
     const last = wstate.last || {};
     const detail = {
-      sinceMs: wstate.suspectSince != null ? nowMs - wstate.suspectSince : 0,
+      sinceMs: wstate.suspectSinceMono != null ? monoMs - wstate.suspectSinceMono : (wstate.suspectSince != null ? nowMs - wstate.suspectSince : 0),
       setpointW: last.setpointW ?? null,
       netImportW: last.netImportW ?? null,
       batteryW: last.batteryW ?? null,

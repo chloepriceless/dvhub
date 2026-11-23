@@ -53,8 +53,43 @@ export function readForcedMarker(statePath) {
 
 /** Lebenszeichen-Zeitstempel (sungrow_forced_heartbeat.json) des Masters lesen. null, wenn keine/ungültige Datei. */
 export function readForcedHeartbeatAt(heartbeatPath) {
-  try { const h = JSON.parse(fs.readFileSync(heartbeatPath, 'utf8')); const at = Number(h?.at); return Number.isFinite(at) ? at : null; }
-  catch { return null; }
+  return readForcedHeartbeat(heartbeatPath)?.at ?? null;
+}
+
+/**
+ * Lebenszeichen-Datei ganz lesen (A23 b, Christin 23.11.2026): `at` = Wanduhr (wie bisher), dazu — seit A23 —
+ * `bootMs` (Laufzeit seit Systemstart, /proc/uptime) und `bootId` (Start-Kennung), mit denen der Watchdog das Alter
+ * unabhängig von der Wanduhr misst. Alte Dateien haben nur `at` → bootMs/bootId null. null, wenn keine/ungültige
+ * Datei; at null, wenn es fehlt.
+ * @returns {{at:number|null, bootMs:number|null, bootId:string|null}|null}
+ */
+export function readForcedHeartbeat(heartbeatPath) {
+  let h;
+  try { h = JSON.parse(fs.readFileSync(heartbeatPath, 'utf8')); } catch { return null; }
+  if (!h || typeof h !== 'object') return null;
+  const at = Number(h.at);
+  const bootMs = typeof h.bootMs === 'number' && Number.isFinite(h.bootMs) && h.bootMs >= 0 ? h.bootMs : null;
+  const bootId = typeof h.bootId === 'string' && h.bootId ? h.bootId : null;
+  return { at: h.at != null && Number.isFinite(at) ? at : null, bootMs, bootId };
+}
+
+/**
+ * Alter des Lebenszeichens (A23 b). Mit Laufzeit und Start-Kennung in der Datei UND am Watchdog: Laufzeit-Differenz
+ * (kein Sprung der Wanduhr verschiebt sie). Andere Start-Kennung → die Datei stammt aus einem früheren Systemstart, das
+ * DVhub, das sie schrieb, lebt nicht mehr → Infinity. Laufzeit kleiner als in der Datei bei gleicher Kennung ist
+ * unmöglich → im Zweifel alt (Infinity; Rücknahme in den Eigenverbrauch ist die sichere Seite). Sonst (alte Datei,
+ * Watchdog ohne /proc) wie bisher die Wanduhr.
+ * @returns {{ageMs:number, clock:'boot'|'previous_boot'|'wall'}}
+ */
+export function forcedHeartbeatAge({ heartbeat = null, heartbeatAt = null, nowMs, boot = null }) {
+  const hb = heartbeat || { at: heartbeatAt, bootMs: null, bootId: null };
+  if (hb.bootMs != null && hb.bootId && boot && Number.isFinite(boot.bootMs) && boot.bootId) {
+    if (boot.bootId !== hb.bootId) return { ageMs: Infinity, clock: 'previous_boot' };
+    const age = boot.bootMs - hb.bootMs;
+    return { ageMs: age >= 0 ? age : Infinity, clock: 'boot' };
+  }
+  const at = hb.at ?? heartbeatAt;
+  return { ageMs: at == null ? Infinity : nowMs - at, clock: 'wall' };
 }
 
 /**
@@ -62,14 +97,17 @@ export function readForcedHeartbeatAt(heartbeatPath) {
  * der Master LIVE in Modus 2 steht, DVhub ihn besitzt (Merker) UND das Lebenszeichen älter als staleMs ist (DVhub
  * hängt oder ist tot — fährt den Forced mode nicht mehr nach). Steht der Master nicht in Modus 2 (sauber
  * freigegeben / Eigenverbrauch), besitzt DVhub ihn nicht (fremdes EMS) oder ist das Lebenszeichen frisch
- * (DVhub lebt): NICHTS tun.
+ * (DVhub lebt): NICHTS tun. Das Alter misst A23 b (Christin 23.11.2026) mit der Laufzeit seit Systemstart statt der
+ * Wanduhr, wenn die Datei sie trägt: Nach einem Rücksprung der Systemzeit hielt der Watchdog ein totes DVhub um die
+ * Sprungweite länger für lebendig, nach einem Sprung vorwärts nahm er ein lebendes zurück.
  */
-export function watchdogShouldRelease({ liveMode, markerOwned, heartbeatAt, nowMs, staleMs = 120000 }) {
+export function watchdogShouldRelease({ liveMode, markerOwned, heartbeatAt = null, heartbeat = null, nowMs, boot = null, staleMs = 120000 }) {
   if (liveMode !== EMS_MODE.FORCED) return { release: false, reason: 'mode_not_forced' };
   if (!markerOwned) return { release: false, reason: 'not_owned' };
-  const ageMs = heartbeatAt == null ? Infinity : nowMs - heartbeatAt;
-  if (ageMs < staleMs) return { release: false, reason: 'heartbeat_fresh', ageMs };
-  return { release: true, reason: 'orphaned_forced', ageMs };
+  // A23 b: Alter monoton über die Laufzeit seit Systemstart, sobald Datei und Watchdog sie kennen (forcedHeartbeatAge).
+  const { ageMs, clock } = forcedHeartbeatAge({ heartbeat, heartbeatAt, nowMs, boot });
+  if (ageMs < staleMs) return { release: false, reason: 'heartbeat_fresh', ageMs, clock };
+  return { release: true, reason: 'orphaned_forced', ageMs, clock };
 }
 
 /**

@@ -33,7 +33,9 @@ function setup({ multiGx = {}, ctrl = {}, victron = {}, transport } = {}) {
   const state = baseState({ victron: { soc: 60, batteryPowerW: -4000, minSocPct: 10, gridSetpointW: 0, ...victron }, ctrl });
   state.victron.fieldUpdatedAt.batteryPowerW = Date.now();
   const events = [];
-  const mgx = createMultiGx({ getCfg: () => cfg, state, pushLog: (e) => events.push(e), onMultiGxAvailability: () => {} }, { transport: tr });
+  // Prüfstand mit fester Uhr (mock Date): sie misst auch die monotonen Abstände (A23 b, dt der Rampe), sonst liefe
+  // dt in Echtzeit (performance.now ist nicht gemockt).
+  const mgx = createMultiGx({ getCfg: () => cfg, state, pushLog: (e) => events.push(e), onMultiGxAvailability: () => {} }, { transport: tr, monoNow: () => Date.now() });
   return { cfg, state, mgx, transport: tr, events };
 }
 

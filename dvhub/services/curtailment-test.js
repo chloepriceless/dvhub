@@ -22,6 +22,34 @@
 // bei Sungrow nur alle paar Sekunden aktualisiert, zu grob). Je WR getrennt
 // (PV, Akku) plus Netz und der Abregel-Zustand (gesichert/geschrieben/
 // verifiziert/wiederhergestellt), damit das Abregel-Verhalten sauber mitläuft.
+//
+// ZEIT (A23 b, Christin 23.11.2026): die Zeitbegrenzung misst eine monotone Uhr. startedAt/until/stoppedAt bleiben
+// Wanduhr (Anzeige, Protokoll, DV-Lease offUntil); ob der Test läuft, wie lange noch und tMs der Abtastung rechnen
+// monoton ab dem Start. So endet der Test nach X min Laufzeit, auch wenn die Systemzeit springt (NTP, Hand-
+// Einstellung). Läuft er so ab, nimmt sample() das eigene DV-Lease mit zurück — das Wanduhr-Lease (offUntil) liefe
+// nach einem Rücksprung sonst um die Sprungweite weiter. Nach einem Sprung vorwärts endet das DV-Lease über
+// expireLeaseIfNeeded früher als der Test (sichere Seite: weniger Abregelung).
+
+import { pickMonoNow } from './mono-clock.js';
+
+// Monotoner Ablauf je Testlauf (am Objekt state.ctrl.curtailmentTest, nicht im JSON), mit der Uhr des Dienstes. Auf
+// Modulebene, damit auch Leser außerhalb des Dienstes (Sungrow-Aktuator: „Akku nicht laden“) dieselbe Frist sehen.
+const runs = new WeakMap();
+
+/**
+ * Restzeit eines Testlaufs in ms (≤ 0 = abgelaufen): monoton, wenn der Dienst den Lauf gestartet hat; sonst (von außen
+ * gesetzt, Tests) gegen die Wanduhr until − nowMs.
+ */
+export function curtailmentTestRemainingMs(t, nowMs = Date.now()) {
+  if (!t) return 0;
+  const r = runs.get(t);
+  return r ? r.untilMono - r.clock() : Number(t.until) - nowMs;
+}
+
+/** Läuft der Testlauf (aktiv und nicht abgelaufen)? Siehe curtailmentTestRemainingMs. */
+export function curtailmentTestRunning(t, nowMs = Date.now()) {
+  return !!(t && t.active === true && curtailmentTestRemainingMs(t, nowMs) > 0);
+}
 
 const MIN_MINUTES = 1;
 const MAX_MINUTES = 60;                       // Sicherheits-Obergrenze je Test
@@ -43,20 +71,33 @@ export function createCurtailmentTest(ctx) {
   const state = ctx.state;
   const pushLog = ctx.pushLog || (() => {});
   const now = ctx.now || (() => Date.now());
+  const mono = pickMonoNow(ctx.monoNow, ctx.now);
 
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
   const current = () => state.ctrl.curtailmentTest || null;
+  const remaining = (t) => curtailmentTestRemainingMs(t, now());
+  const running = (t) => curtailmentTestRunning(t, now());
+
+  // Abgelaufenen Lauf beenden und ein noch eigenes DV-Lease mit zurücknehmen (wie stop()): nur, wenn offUntil noch das
+  // eigene ist — ein echtes DV-Signal hat es verschoben und läuft über sein eigenes Lease ab. true = beendet.
+  function expireIfDue(t) {
+    if (!t || t.active !== true || remaining(t) > 0) return false;
+    finish('expired');
+    if (t.mode === 'dv' && state.ctrl.forcedOff === true && state.ctrl.offUntil === t.until) {
+      ctx.clearForcedOff?.('curtailment_test_expired');
+    }
+    return true;
+  }
 
   /** Test gerade aktiv (und Lease nicht abgelaufen)? */
   function isActive() {
-    const t = current();
-    return !!(t && t.active === true && now() < t.until);
+    return running(current());
   }
 
   /** „Akku nicht laden" aktiv? Von services/inverter/sungrow.js (stepForced) gelesen: sperrt nur das Laden (M25). */
   function batteryHoldActive() {
     const t = current();
-    return !!(t && t.active === true && t.blockCharge === true && now() < t.until);
+    return running(t) && t.blockCharge === true;
   }
 
   function start({ mode, minutes, blockCharge = false, actor = null } = {}) {
@@ -79,7 +120,10 @@ export function createCurtailmentTest(ctx) {
       return { ok: false, status: 409, error: 'dv_control_disabled' };
     }
     const existing = current();
-    if (existing && existing.active === true && now() < existing.until) {
+    // Ein abgelaufener, noch nicht abgetasteter Lauf (sample() kommt jede Sekunde) wird erst sauber beendet, samt
+    // eigenem DV-Lease — sonst überschriebe der neue Lauf ihn und das Lease bliebe stehen (Codex 944bcef1 P2).
+    expireIfDue(existing);
+    if (running(existing)) {
       return { ok: false, status: 409, error: 'curtailment_test_already_running', test: publicView() };
     }
     // Blocker 5 (Codex-Review 16.11.): Läuft bereits eine ECHTE DV-Abschaltung (forcedOff mit
@@ -91,11 +135,13 @@ export function createCurtailmentTest(ctx) {
     }
     const startedAt = now();
     const until = startedAt + mins * 60000;
+    const startedMono = mono();
     state.ctrl.curtailmentTest = {
       active: true, mode: m, minutes: mins, blockCharge: blockCharge === true,
       startedAt, until, samples: [], events: [], stoppedAt: null, stopReason: null,
       actor: actor?.actor_ip || null,
     };
+    runs.set(state.ctrl.curtailmentTest, { startedMono, untilMono: startedMono + mins * 60000, clock: mono });
     // DV-Test: echtes Lease über denselben Pfad wie ein DV-Signal. Der Aufruf
     // sperrt die Einspeisung sofort (applyDvVictronControl(false)) und läuft über
     // den 1-s-Watchdog (expireLeaseIfNeeded) von selbst ab.
@@ -159,14 +205,15 @@ export function createCurtailmentTest(ctx) {
   function sample() {
     const t = current();
     if (!t || t.active !== true) return;
-    if (now() >= t.until) { finish('expired'); return; }
+    if (expireIfDue(t)) return;
     if (t.samples.length >= MAX_SAMPLES) return;
     const v = state.victron || {};
     const second = v.sungrowSecond || state.sungrowSecond || {};
     const act = state.schedule?.active || {};
     const dcFeed = act.feedExcessDcPv ? num(act.feedExcessDcPv.value) : null;
+    const startMono = runs.get(t)?.startedMono;
     t.samples.push({
-      tMs: now() - t.startedAt,
+      tMs: startMono != null ? mono() - startMono : now() - t.startedAt,
       // Netz (System-Zähler am Master) + PV/Akku je WR, genau die Felder, die der
       // Regler selbst liest — nicht die gröbere /api/status-Momentaufnahme.
       gridTotalW: num(state.meter?.grid_total_w),
@@ -188,7 +235,7 @@ export function createCurtailmentTest(ctx) {
   function publicView() {
     const t = current();
     if (!t) return null;
-    const active = t.active === true && now() < t.until;
+    const active = running(t);
     return {
       active,
       mode: t.mode,
@@ -196,7 +243,7 @@ export function createCurtailmentTest(ctx) {
       blockCharge: t.blockCharge === true,
       startedAt: t.startedAt,
       until: t.until,
-      remainingMs: active ? Math.max(0, t.until - now()) : 0,
+      remainingMs: active ? Math.max(0, remaining(t)) : 0,
       stoppedAt: t.stoppedAt,
       stopReason: t.stopReason || null,
       sampleCount: Array.isArray(t.samples) ? t.samples.length : 0,
