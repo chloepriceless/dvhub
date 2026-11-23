@@ -49,6 +49,7 @@ import {
 } from './constants.js';
 import { classifySinkResult, defaultErrorClassifier } from './delivery.js';
 import { createOwnerRegister } from './owner.js';
+import { pickMonoNow } from '../mono-clock.js';
 
 export * from './constants.js';
 export * from './delivery.js';
@@ -207,6 +208,7 @@ function isNeutralLiteral(pol, value) {
  *   checkConstraints?: (op: GateOp, policy: PointPolicy) => { ok: boolean, reason?: string },
  *   onEvent?: (ev: WriteEvent) => void,
  *   now?: () => number,
+ *   monoNow?: () => number,
  *   configRev?: string|null,
  *   licensePro?: boolean,
  *   opIdTicks?: number,
@@ -224,6 +226,12 @@ export function createGate(options = {}) {
     licensePro = false,
     opIdTicks = OPID_TICKS,
   } = options;
+  // Frist (validUntilMs) monoton gemessen (A23 b, Christin 23.11.2026): validUntilMs ist laut Vertrag ein
+  // Wanduhr-Zeitpunkt. submit() rechnet ihn EINMAL beim Einreichen in eine Restzeit um (gegen now()); ab dann zählt
+  // nur die monotone Uhr — auch die Wartezeit in der Warteschlange des Geräts. Ein Sprung der Systemzeit (NTP,
+  // Hand-Einstellung) ließ eine wartende Operation sonst um die Sprungweite länger gelten (Rücksprung) oder sofort
+  // verfallen (Sprung vorwärts). Ereigniszeit (ts_ms) und Besitz-Zeitpunkte bleiben Wanduhr.
+  const monoNow = pickMonoNow(options.monoNow, options.now);
   // Eigene Tabelle (nie das Objekt des Aufrufers verändern); attachSink() ergänzt sie. Ohne Prototyp: auch eine Senke
   // namens `__proto__` ist ein eigener Eintrag und kein Prototyp-Wechsel (Codex 8ad74e08 P3).
   const sinks = Object.create(null);
@@ -484,8 +492,8 @@ export function createGate(options = {}) {
     return null;
   }
 
-  function checkDeadline(op) {
-    if (op.validUntilMs !== null && now() > op.validUntilMs) return block('blocked_gate', DETAIL.expired);
+  function checkDeadline(op, adm) {
+    if (op.validUntilMs !== null && monoNow() > adm.deadlineMono) return block('blocked_gate', DETAIL.expired);
     return null;
   }
 
@@ -654,7 +662,7 @@ export function createGate(options = {}) {
       pol = policyOf(op.device, op.point);
       const checks = {
         halt: () => checkHalt(op, pol, adm, run),
-        deadline: () => checkDeadline(op),
+        deadline: () => checkDeadline(op, adm),
         readOnly: () => checkReadOnly(op),
         release: () => checkRelease(op, pol),
         target: () => checkTarget(op, pol),
@@ -693,10 +701,9 @@ export function createGate(options = {}) {
       if (op.legacy) {
         out = await fn(...op.legacy.args); // unverändert: dieselben Argument-Objekte, keine Zusätze
       } else {
-        const t = now();
         const wireOp = {
           opId, device: op.device, point: op.point, value: op.value, kind: op.kind, action: op.action,
-          step: op.step, lease: op.lease, remainingMs: op.validUntilMs === null ? null : op.validUntilMs - t,
+          step: op.step, lease: op.lease, remainingMs: op.validUntilMs === null ? null : adm.deadlineMono - monoNow(),
         };
         // Sperrmarke für alle Senken (R-L6): eine Senke mit eigener Warteschlange fragt direkt vor dem Draht.
         const ctx = {
@@ -795,9 +802,11 @@ export function createGate(options = {}) {
       };
     }
     const opId = nextOpId(op);
-    // Zulassung: Epoche, Not-Halt-Sperrmarke und Not-Halt jetzt festhalten (R-T5, R-L6).
+    // Zulassung: Epoche, Not-Halt-Sperrmarke und Not-Halt jetzt festhalten (R-T5, R-L6). Frist als monotoner
+    // Zeitpunkt (A23 b): Restzeit nach Wanduhr jetzt, ab hier monoton.
     const { halted } = haltedNow();
-    const adm = { gen: rel(op.device).gen, fence: fenceGen, halted };
+    const deadlineMono = op.validUntilMs === null ? null : monoNow() + (op.validUntilMs - now());
+    const adm = { gen: rel(op.device).gen, fence: fenceGen, halted, deadlineMono };
     if (op.legacy) {
       const r = opts?.run;
       const run = r && issuedRuns.has(r) && r.device === op.device ? r : null;
