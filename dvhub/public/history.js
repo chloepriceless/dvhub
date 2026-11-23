@@ -2710,8 +2710,12 @@ function renderTariffExtras(summary) {
   setText('historyTariffP14aSaved', p14a
     ? `dynamisch ${eurOrDash(p14a.savedDynamicEur)} · Festpreis ${eurOrDash(p14a.savedFixedEur)} (${fmtKwh(p14a.importKwh)} im Fenster)`
     : '-');
-  setText('historyTariffP14aWithout', p14a && without
-    ? `dynamisch ${fmtEur(without.actualEur)} · Festpreis ${fmtEur(without.fixedEur)} → ${tariffSavingsText(without.savingsEur)}`
+  // Gleiche Basis wie die Zeile darüber (Codex 3cbbdef3): mit Grundgebühr,
+  // wenn der Vergleich mit Grundgebühr steht, sonst nur Arbeitspreis.
+  const withoutFee = withFee?.withoutP14a || null;
+  const shown = withoutFee || without;
+  setText('historyTariffP14aWithout', p14a && shown
+    ? `dynamisch ${fmtEur(shown.actualEur)} · Festpreis ${fmtEur(shown.fixedEur)} → ${tariffSavingsText(shown.savingsEur)}${withoutFee ? ' (inkl. Grundgebühr)' : ' (nur Arbeitspreis)'}`
     : '-');
   const p14aHints = [];
   if (p14a && t.fixedCompare && hasFiniteNumber(t.fixedCompare.ctKwhWithP14a) && hasFiniteNumber(t.fixedCompare.ctKwh)) {

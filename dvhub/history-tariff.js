@@ -492,7 +492,14 @@ export function finalizeTariffRow(sums, { excludeEstimated = false } = {}) {
     const feeActualEur = round2(fee.cmpActualEur);
     const fixedEur = round2(fixedCompare.fixedEur + feeFixedEur);
     const actualEur = round2(fixedCompare.actualEur + feeActualEur);
-    fixedCompareWithFee = { days: fee.cmpDays, feeFixedEur, feeActualEur, fixedEur, actualEur, savingsEur: round2(fixedEur - actualEur) };
+    // „Ohne §14a“ auf derselben Basis (mit Grundgebühr), Codex 3cbbdef3.
+    const w = fixedCompare.withoutP14a;
+    const withoutP14a = w ? (() => {
+      const wFixed = round2(w.fixedEur + feeFixedEur);
+      const wActual = round2(w.actualEur + feeActualEur);
+      return { actualEur: wActual, fixedEur: wFixed, savingsEur: round2(wFixed - wActual) };
+    })() : null;
+    fixedCompareWithFee = { days: fee.cmpDays, feeFixedEur, feeActualEur, fixedEur, actualEur, savingsEur: round2(fixedEur - actualEur), withoutP14a };
   }
   return {
     excludeEstimated: Boolean(excludeEstimated),

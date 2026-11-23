@@ -705,7 +705,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // 9 (23.11.2026): Tarif-Summen aus ungerundeten Flüssen (Codex 1e1ff5c4) — ein
 //                 Zwischenstand mit Version 8 hätte die gerundeten behalten.
 // 10 (23.11.2026): §14a-Fenster im Festpreis-Vergleich und „ohne §14a“ (T11).
-export const SUMMARY_CACHE_VERSION = 10;
+// 11 (23.11.2026): Abweichung nur, wo DVhub das Netzentgelt einrechnet; MwSt leer = 0 (Codex 3cbbdef3).
+export const SUMMARY_CACHE_VERSION = 11;
 
 // Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;

@@ -7423,10 +7423,16 @@ export function describeUserImportTariffForSlot(ts, pricing = {}, options = {}) 
   // T11 (Christin 23.11.2026): Netzentgelt-Abweichung des §14a-Modul-3-Fensters
   // gegen das Standard-Netzentgelt (beide brutto): δ = Fensterpreis −
   // Netzentgelt × (1 + MwSt). Der Festpreis-Vergleich rechnet F + δ, „ohne
-  // §14a“ p − δ. Ohne hinterlegtes Netzentgelt unbekannt (null), nie geraten.
+  // §14a“ p − δ. Bekannt nur, wo der Preisrechner das Netzentgelt selbst
+  // einsetzt (dynamisch, Anbieter „nur Energiepreis“) — beim Anbieter-Endpreis
+  // steckt Modul 3 im Preis und das Netzentgelt der Einstellungen ist oft nur
+  // der Standardwert (Codex 3cbbdef3). MwSt wie im Preisrechner: leer = 0 %.
+  const usesGridCharge = mode === 'dynamic'
+    || (mode === 'provider' && effective?.provider?.priceBasis === 'net_energy');
   const grid = effective?.dynamicComponents?.gridChargesCtKwh;
-  const module3DeltaCtKwh = window && grid != null && grid !== '' && Number.isFinite(Number(grid))
-    ? Math.round((window.priceCtKwh - Number(grid) * (1 + vatPct / 100)) * 10000) / 10000
+  const deltaVat = Number(effective?.dynamicComponents?.vatPct || 0);
+  const module3DeltaCtKwh = window && usesGridCharge && grid != null && grid !== '' && Number.isFinite(Number(grid)) && Number.isFinite(deltaVat)
+    ? Math.round((window.priceCtKwh - Number(grid) * (1 + deltaVat / 100)) * 10000) / 10000
     : null;
   return {
     mode,

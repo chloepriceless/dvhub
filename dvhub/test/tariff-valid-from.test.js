@@ -191,3 +191,32 @@ test('T11: describeUserImportTariffForSlot liefert die Netzentgelt-Abweichung de
   assert.equal(provider.module3Active, true);
   assert.equal(provider.module3DeltaCtKwh, null);
 });
+
+// Codex 3cbbdef3: über die echte Normalisierung (Standardwerte greifen).
+test('T11: Anbieter-Endpreis – Abweichung unbekannt, auch wenn Standard-Netzentgelt eingesetzt ist', () => {
+  const { persistedConfig } = normalizeConfigInput({ userEnergyPricing: {
+    mode: 'provider', provider: { priceBasis: 'gross_total' }, validFrom: '2026-01-01', usesParagraph14aModule3: true,
+    module3Windows: { window1: { enabled: true, label: 'NT', start: '00:00', end: '06:00', priceCtKwh: 3 } }
+  } });
+  const d = describeUserImportTariffForSlot('2026-01-10T00:00:00.000Z', persistedConfig.userEnergyPricing);
+  assert.equal(d.module3Active, true);
+  assert.equal(d.module3DeltaCtKwh, null);
+  // Anbieter „nur Energiepreis“: DVhub rechnet das Netzentgelt selbst → bekannt.
+  const net = { ...persistedConfig.userEnergyPricing, provider: { priceBasis: 'net_energy' } };
+  assert.notEqual(describeUserImportTariffForSlot('2026-01-10T00:00:00.000Z', net).module3DeltaCtKwh, null);
+});
+
+test('T11: leere MwSt wie im Preisrechner (0 %), nicht 19 %', () => {
+  const { persistedConfig } = normalizeConfigInput({ userEnergyPricing: {
+    mode: 'fixed', fixedGrossImportCtKwh: 30, usesParagraph14aModule3: true,
+    module3Windows: { window1: { enabled: true, label: 'NT', start: '00:00', end: '06:00', priceCtKwh: 3 } },
+    periods: [{ id: 'd', startDate: '2026-01-01', endDate: '2026-12-31', mode: 'dynamic',
+      dynamicComponents: { energyMarkupCtKwh: 0, gridChargesCtKwh: 10, leviesAndFeesCtKwh: 2, vatPct: '' } }]
+  } });
+  const pricing = persistedConfig.userEnergyPricing;
+  const ts = '2026-01-10T00:00:00.000Z';
+  const d = describeUserImportTariffForSlot(ts, pricing);
+  // Preisrechner: (5 + 2)·1 + 3 = 10 ct mit Fenster, ohne Fenster 17 ct → δ = 3 − 10 = −7.
+  assert.equal(resolveUserImportPriceCtKwhForSlot({ ts, ct_kwh: 5 }, pricing), 10);
+  assert.equal(d.module3DeltaCtKwh, -7);
+});

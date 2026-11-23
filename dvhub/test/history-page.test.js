@@ -899,7 +899,11 @@ test('T11: Vergleich nennt §14a-Fenster und was man ohne §14a bezahlt hätte',
   helpers.renderSummary({ view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
   assert.equal(elements.get('historyTariffP14aRow').hidden, false);
   assert.match(elements.get('historyTariffP14aSaved').textContent, /dynamisch 2,80 € · Festpreis 2,80 € \(31,46 kWh im Fenster\)/);
-  assert.match(elements.get('historyTariffP14aWithout').textContent, /dynamisch 23,20 € · Festpreis 24,00 € → 0,80 € gespart/);
+  assert.match(elements.get('historyTariffP14aWithout').textContent, /dynamisch 23,20 € · Festpreis 24,00 € → 0,80 € gespart \(nur Arbeitspreis\)/);
+  // Steht der Vergleich mit Grundgebühr, dann auch „ohne §14a“ mit Grundgebühr (Codex 3cbbdef3).
+  const withFee = dynTariff({ ...t, fixedCompareWithFee: { ...t.fixedCompareWithFee, withoutP14a: { actualEur: 40.2, fixedEur: 29.48, savingsEur: -10.72 } } });
+  helpers.renderSummary({ view: 'month', date: '2026-03-10', kpis: tariffKpis({ tariff: withFee }), rows: [], meta: {} });
+  assert.match(elements.get('historyTariffP14aWithout').textContent, /dynamisch 40,20 € · Festpreis 29,48 € → 10,72 € mehr bezahlt \(inkl. Grundgebühr\)/);
   assert.match(elements.get('historyTariffP14aHint').textContent, /Festpreis mit denselben §14a-Fenstern: Ø 26,50 ct\/kWh statt 30,00 ct\/kWh/);
 });
 

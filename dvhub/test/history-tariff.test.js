@@ -88,7 +88,7 @@ test('Grundgebühr tageweise, getrennt vom Ø-Arbeitspreis; Vergleich mit Grundg
   assert.equal(row.avgImportCtKwh, 16.67);
   assert.equal(row.variableCostWithFeeEur, 3);
   // Festpreis: 1,80 + 2 × 0,50 = 2,80 €; dynamisch 1,00 + 2,00 = 3,00 € → 0,20 € mehr bezahlt.
-  assert.deepEqual(row.fixedCompareWithFee, { days: 2, feeFixedEur: 1, feeActualEur: 2, fixedEur: 2.8, actualEur: 3, savingsEur: -0.2 });
+  assert.deepEqual(row.fixedCompareWithFee, { days: 2, feeFixedEur: 1, feeActualEur: 2, fixedEur: 2.8, actualEur: 3, savingsEur: -0.2, withoutP14a: null });
 });
 
 test('Grundgebühr fehlt an einem Tag → kein Betrag mit Gebühr (statt zu niedrig)', () => {
@@ -393,4 +393,17 @@ test('T11: Abweichung unbekannt (kein Netzentgelt hinterlegt) wird gezählt, nic
   assert.equal(row.p14a.unknownSlots, 1);
   assert.equal(row.p14a.slots, 0);
   assert.equal(row.fixedCompare.fixedEur, 0.3);
+});
+
+test('T11 (Codex 3cbbdef3): „ohne §14a“ auch mit Grundgebühr, gleiche Basis wie der Vergleich', () => {
+  const sums = createTariffSums();
+  const fee = { tariffDate: '2026-03-01', tariffFeeEurDay: 1, tariffCompareDay: true, tariffCompareFeeEurDay: 0.5 };
+  addSlotToTariffSums(sums, dyn({ ...fee, importKwh: 2, userImportPriceCtKwh: 11.33, marketPriceCtKwh: 5, tariffCompareCtKwh: 30, tariffM3DeltaCtKwh: -8.9, tariffM3Active: true }));
+  addSlotToTariffSums(sums, dyn({ ...fee, importKwh: 1, userImportPriceCtKwh: 20.23, marketPriceCtKwh: 5, tariffCompareCtKwh: 30 }));
+  const row = finalizeTariffRow(sums);
+  // Mit Gebühr: Festpreis 0,72 + 0,50 = 1,22 €, dynamisch 0,43 + 1,00 = 1,43 €.
+  assert.equal(row.fixedCompareWithFee.fixedEur, 1.22);
+  assert.equal(row.fixedCompareWithFee.actualEur, 1.43);
+  // Ohne §14a mit Gebühr: Festpreis 0,90 + 0,50 = 1,40 €, dynamisch 0,61 + 1,00 = 1,61 €.
+  assert.deepEqual(row.fixedCompareWithFee.withoutP14a, { actualEur: 1.61, fixedEur: 1.4, savingsEur: -0.21 });
 });
