@@ -409,19 +409,21 @@ test('T11 (Codex 3cbbdef3): „ohne §14a“ auch mit Grundgebühr, gleiche Basi
 });
 
 // ── T12: Akku-Wirkungsgrad (DC) + Systemwirkungsgrad (AC), Christin 23.11.2026 ──
-// Karte (Preise): drei Viertelstunden
-//   1: p 30, s 10 · PV → Akku 20 kWh, PV direkt 5 kWh
-//   2: p 25, s 5  · Netz → Akku 10 kWh, Netz direkt 2 kWh
-//   3: p 40, s 20 · Akku → Haus 24 kWh, Akku → Netz 3 kWh
+// Karte (Preise), drei Viertelstunden wie polling.js sie liefert (DC am Akku als AC gezählt):
+//   1: p 30, s 10 · PV 25 kWh gemessen: PV → Akku 20, PV direkt 5; Last 5
+//   2: p 25, s 5  · Bezug 13,111 = 10 ÷ 0,9 (Lader) + 2; Fluss: Netz → Akku 10 (DC),
+//                   Netz direkt 3,111 (Ladeverlust steckt hier); Last gemessen 2
+//   3: p 40, s 20 · Akku 27 kWh DC: Akku → Netz 3 (gemessene Einspeisung), Akku → Haus 24;
+//                   Last gemessen 27 × 0,92 − 3 = 21,84
 // Einstand 20·10 + 10·25 = 450 ct ÷ 30 kWh = 15 ct; Netzladung 250 ct ÷ 10 kWh = 25 ct.
 // Tagesjob (Mengen): eingesetzt 31,25 kWh → geladen 30 (≥ 100 W) → entladen 27 → AC 24,84;
 // alle Proben geladen 30,3 / entladen 27,1, ΔSoC +1 kWh, Lader 0,90.
+const IMPORT_2 = 10 / 0.9 + 2;
 function systemSums() {
   const sums = createTariffSums({ detail: true });
-  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 30, marketPriceCtKwh: 10, solarToBatteryKwh: 20, solarDirectUseKwh: 5, loadKwh: 5 });
-  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 25, marketPriceCtKwh: 5, importKwh: 12, gridToBatteryKwh: 10, gridDirectUseKwh: 2, loadKwh: 2 });
-  // Gemessene Hauslast 22,08 kWh = 24 kWh DC am Akku × 0,92 (die Flusssumme zählt 24).
-  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 40, marketPriceCtKwh: 20, batteryDirectUseKwh: 24, batteryToGridKwh: 3, loadKwh: 22.08 });
+  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 30, marketPriceCtKwh: 10, solarToBatteryKwh: 20, solarDirectUseKwh: 5, loadKwh: 5, pvKwh: 25 });
+  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 25, marketPriceCtKwh: 5, importKwh: IMPORT_2, gridToBatteryKwh: 10, gridDirectUseKwh: IMPORT_2 - 10, loadKwh: 2 });
+  addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 40, marketPriceCtKwh: 20, batteryDirectUseKwh: 24, batteryToGridKwh: 3, loadKwh: 21.84 });
   return sums;
 }
 const victronCap = { measurable: true, verified: true, label: 'Victron', reason: null, note: null };
@@ -475,36 +477,61 @@ test('T13 B: Karte bewertet den Akku mit Wandlung — Entladung × η Entladen, 
   const r = finalizeSelfUse(systemSums().selfUse, { storedDeltaKwh: 1, storage: { capability: victronCap, totals: jobTotals } });
   assert.equal(r.valuation, 'ac');
   const b = r.battery;
-  // Netzladung AC 10 ÷ 0,9 = 11,11 kWh zu 250 ÷ 0,9 = 277,78 ct; PV 20 kWh × 10 ct = 200 ct → Laden 4,78 €.
+  // Netzladung AC 10 + 10 × (1/0,9 − 1) = 11,11 kWh; Kosten 450 + 250 × 0,1111 = 477,78 ct.
   assert.equal(b.chargedGridKwh, 11.11);
   assert.equal(b.chargedPvKwh, 20);
   assert.equal(b.chargeCostEur, 4.78);
-  // Entladen × 0,92: Haus 24 → 22,08, Netz 3 → 2,76; Nutzwert (24·40 + 3·20) × 0,92 = 938,4 ct.
-  assert.equal(b.dischargedHouseKwh, 22.08);
-  assert.equal(b.dischargedGridKwh, 2.76);
-  assert.equal(b.dischargeValueEur, 9.38);
+  // Entladeverlust (1 − 0,92) × 27 = 2,16 kWh fehlt nur dem Haus: 24 → 21,84; Akku → Netz bleibt 3 (gemessen).
+  assert.equal(b.dischargedHouseKwh, 21.84);
+  assert.equal(b.dischargedGridKwh, 3);
+  // Nutzwert 24·40 + 3·20 = 1020 − 0,08 × 27 × 40 = 933,6 ct.
+  assert.equal(b.dischargeValueEur, 9.34);
   // Einstand je geladener kWh 477,78 ÷ 30 = 15,93 ct; Ladestand +1 kWh → 0,16 €.
   assert.equal(b.storedValueCtKwh, 15.93);
   assert.equal(b.socCorrectionEur, 0.16);
-  // Ergebnis 938,4 − 477,78 + 15,93 = 476,55 ct.
-  assert.equal(b.resultEur, 4.77);
-  // Je entladener AC-kWh (24,84): 477,78 / 24,84 = 19,23 ct → 938,4 / 24,84 = 37,78 ct.
+  // Ergebnis 933,6 − 477,78 + 15,93 = 471,75 ct.
+  assert.equal(b.resultEur, 4.72);
+  // Je entladener AC-kWh (24,84): 477,78 / 24,84 = 19,23 ct → 933,6 / 24,84 = 37,58 ct.
   assert.equal(b.inCtKwh, 19.23);
-  assert.equal(b.outCtKwh, 37.78);
+  assert.equal(b.outCtKwh, 37.58);
   assert.deepEqual(b.acBasis, { dischargeEtaPct: 92, chargerEtaPct: 90 });
   // Akku-Wirkungsgrad (DC) bleibt aus den Flüssen: 27 ÷ (30 − 1) = 93,10 %.
   assert.equal(b.etaPct, 93.1);
-  // Last gemessen 5 + 2 + 22,08 = 29,08 kWh, Σ Last·p = 150 + 50 + 883,2 = 1083,2 ct.
-  assert.equal(r.loadKwh, 29.08);
-  assert.equal(r.loadCostAtPriceEur, 10.83);
-  // Vorteil = PV direkt 5 × (30 − 10) = 100 ct + 476,55 = 576,55 ct.
-  assert.equal(r.advantageEur, 5.77);
-  // p_eff = (1083,2 − 576,55) ÷ 29,08 = 17,42 ct; ohne Opportunität 300 ÷ 29,08 = 10,32 ct.
-  assert.equal(r.peffCtKwh, 17.42);
-  assert.equal(r.peffWithoutOpportunityCtKwh, 10.32);
-  // Vorher (Flüsse, DC als AC): Ergebnis 1020 − 450 + 15 = 585 ct, Vorteil 685 ct, Last 31 kWh,
-  // p_eff (1160 − 685) ÷ 31 = 15,32 ct.
-  assert.deepEqual(r.flowsValuation, { loadKwh: 31, advantageEur: 6.85, batteryResultEur: 5.85, peffCtKwh: 15.32, peffWithoutOpportunityCtKwh: 9.68 });
+  // Last gemessen 5 + 2 + 21,84 = 28,84 kWh, Σ Last·p = 150 + 50 + 873,6 = 1073,6 ct.
+  assert.equal(r.loadKwh, 28.84);
+  assert.equal(r.loadCostAtPriceEur, 10.74);
+  // Echte Kosten: Netz 13,111 × 25 = 327,78 + PV 25 × 10 = 250 − Akku-Einspeisung 3 × 20 = 60
+  // − Ladestand 15,93 = 501,85 ct → p_eff 501,85 ÷ 28,84 = 17,40 ct; Vorteil 1073,6 − 501,85 = 571,75 ct.
+  assert.equal(r.peffCtKwh, 17.4);
+  assert.equal(r.advantageEur, 5.72);
+  // Hier geht alles auf: PV direkt 100 + Akku 471,75 = Vorteil → kein weiterer Wechselrichter-Verbrauch.
+  assert.equal(r.otherConversionCostEur, 0);
+  // Nur Netzkosten ÷ Last: 327,78 ÷ 28,84 = 11,37 ct.
+  assert.equal(r.peffWithoutOpportunityCtKwh, 11.37);
+  // Vorher (Flüsse, DC als AC): Last 5 + 3,111 + 24 = 32,11, Ergebnis 1020 − 450 + 15 = 585 ct,
+  // Vorteil 685 ct, p_eff (150 + 77,78 + 960 − 685) ÷ 32,11 = 15,66 ct, ohne Opportunität 10,21 ct.
+  assert.deepEqual(r.flowsValuation, { loadKwh: 32.11, advantageEur: 6.85, batteryResultEur: 5.85, peffCtKwh: 15.66, peffWithoutOpportunityCtKwh: 10.21 });
+});
+
+test('T13 B (Codex a7e86f28): VRM-Flüsse nicht noch einmal wandeln, Leerlauf aus dem Netz zählt im Preis', () => {
+  // VRM-Viertelstunde: schon an AC-Werten normiert → bleibt, wie sie ist.
+  const vrm = createTariffSums({ detail: true });
+  addSlotToTariffSums(vrm, { importPriceKnown: true, userImportPriceCtKwh: 40, marketPriceCtKwh: 20, batteryDirectUseKwh: 18, loadKwh: 18, vrmFlows: true });
+  addSlotToTariffSums(vrm, { importPriceKnown: true, userImportPriceCtKwh: 30, marketPriceCtKwh: 10, solarToBatteryKwh: 20, pvKwh: 20, sourceKind: 'vrm_import' });
+  const rv = finalizeSelfUse(vrm.selfUse, { storage: { capability: victronCap, totals: jobTotals } });
+  assert.equal(rv.valuation, 'ac');
+  assert.equal(rv.battery.dischargedHouseKwh, 18);
+  assert.equal(rv.battery.dischargeValueEur, 7.2);
+  // Nur Netz, Wechselrichter-Leerlauf: Bezug 13,111 kWh zu 30 ct, Hauslast 10 kWh, keine PV, kein Akku.
+  // Echte Kosten 393,33 ct ÷ 10 = 39,33 ct — gleich „ohne entgangene Einspeisung“; 3,111 kWh × 30 ct
+  // = 0,93 € Wechselrichter-Verbrauch außerhalb des Akku-Wegs.
+  const idle = createTariffSums({ detail: true });
+  addSlotToTariffSums(idle, { importPriceKnown: true, userImportPriceCtKwh: 30, marketPriceCtKwh: 10, importKwh: IMPORT_2, gridDirectUseKwh: IMPORT_2, loadKwh: 10 });
+  const ri = finalizeSelfUse(idle.selfUse, { storage: { capability: victronCap, totals: jobTotals } });
+  assert.equal(ri.peffCtKwh, 39.33);
+  assert.equal(ri.peffWithoutOpportunityCtKwh, 39.33);
+  assert.equal(ri.advantageEur, -0.93);
+  assert.equal(ri.otherConversionCostEur, 0.93);
 });
 
 test('T13 B: ohne gemessenen Speicherweg bleibt die Bewertung aus den Flüssen', () => {
@@ -512,7 +539,7 @@ test('T13 B: ohne gemessenen Speicherweg bleibt die Bewertung aus den Flüssen',
   const plain = finalizeSelfUse(sums, { storedDeltaKwh: 1 });
   assert.equal(plain.valuation, 'flows');
   assert.equal(plain.battery.resultEur, 5.85);
-  assert.equal(plain.loadKwh, 31);
+  assert.equal(plain.loadKwh, 32.11);
   assert.equal(plain.battery.acBasis, null);
   for (const storage of [
     { capability: { measurable: false, reason: 'Fronius' }, totals: null },
@@ -527,6 +554,7 @@ test('T13 B: ohne gemessenen Speicherweg bleibt die Bewertung aus den Flüssen',
   const noCharger = finalizeSelfUse(sums, { storedDeltaKwh: 1, storage: { capability: victronCap, totals: { ...jobTotals, chargerEta: null } } });
   assert.equal(noCharger.valuation, 'ac');
   assert.equal(noCharger.battery.chargedGridKwh, 10);
+  assert.equal(plain.otherConversionCostEur, null);
   assert.deepEqual(noCharger.battery.acBasis, { dischargeEtaPct: 92, chargerEtaPct: null });
 });
 

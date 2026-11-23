@@ -84,6 +84,10 @@ function createSelfUse() {
     slots: 0, skippedNoPriceSlots: 0, skippedNoFlowSlots: 0,
     loadKwh: 0, loadCt: 0, gridKwh: 0, gridCt: 0,
     loadMeasuredKwh: 0, loadMeasuredCt: 0,
+    // T13 (Codex a7e86f28): nur eigene DC-Flüsse wandeln (VRM ist schon AC-normiert),
+    // Akku→Netz bleibt gemessen; Kosten mit gemessener PV und getrennten Exporten.
+    dischargeLocalKwh: 0, dischargeLocalPCt: 0, chargeGridLocalKwh: 0, chargeGridLocalCt: 0,
+    pvMeasuredCt: 0, solarExportCt: 0, batteryExportCt: 0,
     pvDirectKwh: 0, pvDirectGainCt: 0,
     chargePvKwh: 0, chargeGridKwh: 0, chargeCostCt: 0, chargeGridCt: 0,
     dischargeHouseKwh: 0, dischargeGridKwh: 0, dischargeValueCt: 0,
@@ -204,6 +208,17 @@ function addSelfUse(selfUse, slot, flows) {
   // T13: gemessene Hauslast (load_power_w) — die Flusssumme enthält die Wandlerverluste.
   selfUse.loadMeasuredKwh += kwhOf(slot.loadKwh);
   selfUse.loadMeasuredCt += kwhOf(slot.loadKwh) * p;
+  // Herkunft wie history-runtime (secondBatteryVrmRuns): VRM-Flüsse sind schon AC.
+  const fromVrm = slot.vrmFlows === true || slot.sourceKind === 'vrm_import';
+  if (!fromVrm) {
+    selfUse.dischargeLocalKwh += battDirect + battToGrid;
+    selfUse.dischargeLocalPCt += (battDirect + battToGrid) * p;
+    selfUse.chargeGridLocalKwh += gridToBatt;
+    selfUse.chargeGridLocalCt += gridToBatt * p;
+  }
+  selfUse.pvMeasuredCt += kwhOf(slot.pvKwh) * s;
+  selfUse.solarExportCt += solarToGrid * s;
+  selfUse.batteryExportCt += battToGrid * s;
   selfUse.gridKwh += gridDirect + gridToBatt;
   selfUse.gridCt += (gridDirect + gridToBatt) * p;
   selfUse.pvDirectKwh += solarDirect;
@@ -573,22 +588,35 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null, storage = null
   // T13 = B (Christin 24.11.2026): wo der Speicherweg gemessen ist, bewertet die
   // Karte den Akku AC-korrekt — Entladung × η Entladen, Netzladung ÷ η Lader
   // (Tagesjob), Hausverbrauch gemessen. Die Flüsse in der Datenbank bleiben.
+  // Codex a7e86f28:
+  //  - nur eigene DC-Flüsse wandeln; VRM-Flüsse sind schon an AC-Werten normiert,
+  //  - Akku→Netz ist die gemessene Einspeisung (polling.js): der Entladeverlust
+  //    fehlt allein dem Haus-Anteil (Wert zum Endpreis des Slots),
+  //  - der effektive Preis rechnet mit den echten Kosten (Netz + gemessene PV,
+  //    soweit nicht eingespeist, zur Börse − Akku-Einspeisung − Ladestand am Rand):
+  //    so zählen auch Leerlauf und PV-Wandlung des Wechselrichters mit.
   const t = storageUsable(storage) ? storage.totals : null;
   const ac = t && (selfUse.loadMeasuredKwh || 0) > 0 ? (() => {
     const etaD = t.dischargeEta;
     const etaCh = t.chargerEta ?? 1;
-    const gridCt = selfUse.chargeGridCt || 0;
-    return value({
-      chargeCostCt: selfUse.chargeCostCt - gridCt + gridCt / etaCh,
-      dischargeValueCt: selfUse.dischargeValueCt * etaD,
-      chargeGridKwh: selfUse.chargeGridKwh / etaCh,
-      dischargeHouseKwh: selfUse.dischargeHouseKwh * etaD,
-      dischargeGridKwh: selfUse.dischargeGridKwh * etaD,
+    const lossD = 1 - etaD;
+    const extraCh = 1 / etaCh - 1;
+    const valued = value({
+      chargeCostCt: selfUse.chargeCostCt + (selfUse.chargeGridLocalCt || 0) * extraCh,
+      dischargeValueCt: selfUse.dischargeValueCt - lossD * (selfUse.dischargeLocalPCt || 0),
+      chargeGridKwh: selfUse.chargeGridKwh + (selfUse.chargeGridLocalKwh || 0) * extraCh,
+      dischargeHouseKwh: Math.max(0, selfUse.dischargeHouseKwh - lossD * (selfUse.dischargeLocalKwh || 0)),
+      dischargeGridKwh: selfUse.dischargeGridKwh,
       loadKwh: selfUse.loadMeasuredKwh,
       loadCt: selfUse.loadMeasuredCt,
       etaD,
       etaCh: t.chargerEta ?? null
     });
+    const costCt = selfUse.gridCt + (selfUse.pvMeasuredCt || 0) - (selfUse.solarExportCt || 0)
+      - (selfUse.batteryExportCt || 0) - valued.socCorrectionCt;
+    const componentsCt = valued.advantageCt;
+    // Vorteil = was die Last zum Endpreis gekostet hätte − was sie wirklich kostete.
+    return { ...valued, costCt, advantageCt: valued.loadCt - costCt, otherCt: componentsCt - (valued.loadCt - costCt) };
   })() : null;
   const v = ac || flows;
   const out = v.dischargeHouseKwh + v.dischargeGridKwh;
@@ -632,6 +660,9 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null, storage = null
     exportKwh: round2(selfUse.exportKwh),
     exportValueEur: round2(selfUse.exportCt / 100),
     advantageEur: round2(v.advantageCt / 100),
+    // Mit Wandlung: Wechselrichter-Verbrauch außerhalb des Akku-Wegs (Leerlauf, PV-Wandlung),
+    // den der Vorteil schon abzieht — PV direkt + Akku-Ergebnis − Vorteil.
+    otherConversionCostEur: ac ? round2(ac.otherCt / 100) : null,
     peffCtKwh: ratio(v.loadCt - v.advantageCt, v.loadKwh),
     peffWithoutOpportunityCtKwh: ratio(selfUse.gridCt, v.loadKwh),
     // Zum Vergleich immer die bisherige Bewertung aus den Flüssen.

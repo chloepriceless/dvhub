@@ -3063,6 +3063,9 @@ function renderSelfUseCard(summary) {
       + (hasFiniteNumber(acb.chargerEtaPct) ? `Netzladung ÷ ${fmtPct(acb.chargerEtaPct)}` : 'Netzladung ohne Korrektur (zu wenig gemessen)')
       + `, Hausverbrauch gemessen. Ohne Wandlung (aus den Flüssen) wären es Akku-Ergebnis ${eurOrDash(f.batteryResultEur)}, `
       + `Vorteil ${eurOrDash(f.advantageEur)}, effektiver Preis ${ctOrDash(f.peffCtKwh)} bei ${fmtKwh(f.loadKwh)}.`
+      + (hasFiniteNumber(s.otherConversionCostEur) && Number(s.otherConversionCostEur) !== 0
+        ? ` Wechselrichter außerhalb des Akku-Wegs (Leerlauf, PV-Wandlung): ${fmtEur(s.otherConversionCostEur)}, im Vorteil schon abgezogen.`
+        : '')
     : '';
   setText('historySelfUseValuation', valuation);
   setHidden('historySelfUseValuation', !valuation);

@@ -824,13 +824,13 @@ test('T12: Akku-Wirkungsgrad (DC) benannt, Systemwirkungsgrad (AC) mit Verlusten
 test('T13 B: Karte nennt die Bewertung mit Wandlung und den Vergleich ohne', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
   const t = dynTariff();
-  t.selfUse = { ...t.selfUse, valuation: 'ac',
+  t.selfUse = { ...t.selfUse, valuation: 'ac', otherConversionCostEur: 4.12,
     battery: { ...t.selfUse.battery, acBasis: { dischargeEtaPct: 87.38, chargerEtaPct: 91.4 } },
     flowsValuation: { loadKwh: 1045.68, advantageEur: 148.55, batteryResultEur: 92.05, peffCtKwh: 29.38, peffWithoutOpportunityCtKwh: 18.43 } };
   helpers.renderSummary({ view: 'month', date: '2026-11-23', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
   assert.equal(elements.get('historySelfUseValuation').hidden, false);
   assert.match(elements.get('historySelfUseValuation').textContent,
-    /Mit Wandlung bewertet: Entladung × 87,4 %, Netzladung ÷ 91,4 %, Hausverbrauch gemessen\. Ohne Wandlung \(aus den Flüssen\) wären es Akku-Ergebnis 92,05 €, Vorteil 148,55 €, effektiver Preis 29,38 ct\/kWh bei 1\.045,68 kWh\./);
+    /Mit Wandlung bewertet: Entladung × 87,4 %, Netzladung ÷ 91,4 %, Hausverbrauch gemessen\. Ohne Wandlung \(aus den Flüssen\) wären es Akku-Ergebnis 92,05 €, Vorteil 148,55 €, effektiver Preis 29,38 ct\/kWh bei 1\.045,68 kWh\. Wechselrichter außerhalb des Akku-Wegs \(Leerlauf, PV-Wandlung\): 4,12 €, im Vorteil schon abgezogen\./);
   t.selfUse.valuation = 'flows';
   helpers.renderSummary({ view: 'month', date: '2026-11-23', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
   assert.equal(elements.get('historySelfUseValuation').hidden, true);
