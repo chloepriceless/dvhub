@@ -845,7 +845,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   gate.attachSink(gateDevice, modbusLegacySink(transport));
   const st = {
     target: null,        // { setpointW, source, at }
-    dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at }
+    dev: null,           // letzter gelesener/bestätigter Gerätezustand { mode, cmd, powerW, at } (at = Wanduhr, Anzeige)
+    devMonoAt: 0,        // wann st.dev gelesen wurde (monoNow) — für den Lesetakt deviceRecheckMs (A17)
     owns: false,         // Zwangs-/EMS-Betrieb ist (womöglich) von DVhub — ab dem ersten Write, bis Self bestätigt ist
     ownMode: null,       // welchen Modus DVhub gesetzt hat (2 Forced, 3 External EMS)
     lastMasterWrite: null, // zuletzt am MASTER bestätigter DVhub-Write { mode, cmd, powerW, at } — erkennt den
@@ -1402,6 +1403,14 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Aufrufer faellt dann auf Master-only zurueck, C6). Häufen sich die Resets, steht womöglich ein anderer Modbus-
   // Client auf dem Gerät (WiNet-S erlaubt nur einen) — einmaliger Hinweis.
   const EMS_READ_RETRIES = 2; // Wiederholungen (⇒ bis zu 3 Versuche)
+  // Gemerkter Gerätezustand noch im Lesetakt (deviceRecheckMs)? Monoton gemessen wie die Frist (A17, Christin
+  // 23.11.2026): mit der Wanduhr las DVhub den Master nach einem Rücksprung der Uhr entsprechend länger nicht neu
+  // (WR-Neustart, App-Eingriff blieben unbemerkt), nach einem Vorwärtssprung vorzeitig. st.dev.at bleibt Wanduhr (Status).
+  function devCached(recheckMs) {
+    if (!st.dev) return null;
+    const age = monoNow() - st.devMonoAt;
+    return age >= 0 && age < recheckMs ? st.dev : null;
+  }
   async function readDevice(conf) {
     let lastErr = null;
     for (let attempt = 0; attempt <= EMS_READ_RETRIES; attempt += 1) {
@@ -1409,6 +1418,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         const regs = await transport.mbRequest({ ...endpoint(conf), fc: 3, address: EMS_BLOCK_ADDRESS, quantity: 3 });
         if (!Array.isArray(regs) || regs.length < 3) throw new Error('EMS-Register: unvollständige Antwort');
         st.dev = { mode: Number(regs[0]) & 0xffff, cmd: Number(regs[1]) & 0xffff, powerW: Number(regs[2]) & 0xffff, at: now() };
+        st.devMonoAt = monoNow();
         st.readResetStreak = 0;
         return st.dev;
       } catch (e) {
@@ -2222,7 +2232,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Master-Anteil. Scheitert er → beide sicher in Self.
     let masterModeSeen = null; // Modus am Master in diesem Takt (zurückgestellter Eintritt, Codex P1)
     try {
-      const mdev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
+      const mdev = devCached(opts.deviceRecheckMs) || await readDevice(conf);
       masterModeSeen = mdev.mode;
       if (isForeignMode(mdev.mode, mdev)) throw foreignModeError(mdev.mode);
       // H-9: Master in Modus 2 ohne Forced-Besitz → mit DVhubs eigenem Anteil übernehmen (voller Write, nie „unverändert").
@@ -2409,7 +2419,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // Gerätezustand höchstens alle deviceRecheckMs neu lesen (Note 6: RW-Register nicht im Sekundentakt lesen);
       // zwischendurch die Rücklesung der eigenen Writes nutzen. So fällt ein geräteeigener Rückfall auf Modus 0
       // (WR-Neustart) spätestens nach deviceRecheckMs auf — der Akku steht bis dahin im sicheren Eigenverbrauch.
-      const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs) ? st.dev : await readDevice(conf);
+      const dev = devCached(opts.deviceRecheckMs) || await readDevice(conf);
       masterModeSeen = dev.mode;
       // Fremder Modus (VPP, oder Modus 3 ohne DVhub-Besitz) → nicht übersteuern (B4). Modus 2 ohne Besitz übernimmt
       // DVhub per eigenem Write (H-9, needsAdoption unten bzw. in stepSplit).
@@ -2647,7 +2657,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // so fällt ein Neustart des Wechselrichters oder ein Eingriff über die App auf.
       // Solange DVhub External EMS besitzt, den Gerätezustand in JEDEM Takt frisch lesen — sonst bliebe ein
       // geräteeigener Rückfall (Modus 0) bis deviceRecheckMs unbemerkt (Punkt 3). Sonst wie bisher gecacht.
-      const dev = (st.dev && t - st.dev.at < opts.deviceRecheckMs && !ownsExternal) ? st.dev : await readDevice(conf);
+      const dev = (!ownsExternal && devCached(opts.deviceRecheckMs)) || await readDevice(conf);
       masterModeSeen = dev.mode;
       if (isForeignMode(dev.mode, dev)) throw foreignModeError(dev.mode);
       // (3b) Geräte-Rückfall: DVhub besitzt External EMS, der WR steht aber in Self-consumption → er ist von

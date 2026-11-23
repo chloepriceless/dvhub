@@ -859,3 +859,43 @@ test('A16: Not-Halt — Übernahme bei VPP-Slave schreibt nichts', async () => {
   assert.deepEqual(r.order, [], 'im Not-Halt kein Write');
   assert.equal(adoptedLogs(r).length, 0);
 });
+
+// --- A17 (Christin 23.11.2026): Gerätezustand des Masters mit monotoner Uhr ------------------------------------------
+// Vorher (6dd6f4e5): der Lesetakt des Master-Gerätezustands (deviceRecheckMs, 60 s) rechnete mit der Wanduhr. Nach
+// einem Rücksprung der Uhr (NTP, Hand-Einstellung) um 60 min las DVhub den Master entsprechend länger nicht neu
+// (ein WR-Neustart, ein App-Eingriff blieb unbemerkt). Jetzt monoton wie die Frist.
+
+// Der Sollwert ändert sich je Takt um 1 W: das löst einen Regeltakt aus (unabhängig vom Takt-Zeitgeber), bleibt aber
+// unter der Schreibschwelle (stepW) — gelesen wird also nur, wenn der Lesetakt des Gerätezustands abgelaufen ist.
+let a17Sp = -6000;
+const nudge = (r) => { a17Sp = a17Sp === -6000 ? -6001 : -6000; return r.ems.applySetpoint(a17Sp, 'rule:abend'); };
+const masterBlockReads = (r) => r.masterT.reads.filter((q) => q.fc === 3 && q.address === MODE && q.quantity === 3).length;
+
+test('A17: Wanduhr springt rückwärts (−60 min) → der Master wird trotzdem nach 60 s (monoton) neu gelesen', async () => {
+  for (const telemetry of [true, false]) {
+    const where = telemetry ? 'Split' : 'Einzelpfad';
+    const r = rig({ telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true, where);
+    r.jumpWall(-60 * MIN);
+    const n0 = masterBlockReads(r);
+    r.advance(30_000);
+    assert.equal((await nudge(r)).ok, true, where);
+    assert.equal(masterBlockReads(r), n0, `${where}: vor Ablauf des Lesetakts aus dem Zwischenspeicher`);
+    r.advance(31_000); // 61 s monoton seit dem letzten Lesen, Wanduhr 59 min davor
+    assert.equal((await nudge(r)).ok, true, where);
+    assert.equal(masterBlockReads(r), n0 + 1, `${where}: nach 60 s monoton neu gelesen`);
+  }
+});
+
+test('A17: Wanduhr springt vorwärts (+2 h) → der Master wird nicht vorzeitig neu gelesen; Status-Zeit bleibt Wanduhr', async () => {
+  const r = rig({ slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  const n0 = masterBlockReads(r);
+  const devAt = r.state.ctrl.sungrowEms.device?.at;
+  assert.ok(devAt >= r.t0, `device.at in Wanduhrzeit: ${devAt}`);
+  r.jumpWall(2 * 60 * MIN);
+  r.advance(10_000);
+  assert.equal((await nudge(r)).ok, true);
+  assert.equal(masterBlockReads(r), n0, 'Sprung vorwärts löst kein vorzeitiges Lesen aus');
+  assert.equal(Object.keys(r.state.ctrl.sungrowEms.device).sort().join(','), 'at,cmd,mode,powerW', 'Status-Feld unverändert');
+});
