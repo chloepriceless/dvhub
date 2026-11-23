@@ -837,7 +837,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // Monotone Uhr für die Frist „Master allein" (A7, Fable P3-2): ein Sprung der Wanduhr (NTP, Hand-Einstellung) darf
   // die Frist weder verkürzen noch verlängern. Laufzeit: performance.now(); mit eingespielter Uhr (Tests) dieselbe.
   const monoNow = monoNowArg || nowArg || (() => performance.now());
-  const modbusHealthInst = modbusHealth || createModbusHealth(now, { pushLog, wr: isSlave ? 'slave' : 'master', source: 'ems' });
+  const modbusHealthInst = modbusHealth || createModbusHealth(now, { pushLog, wr: isSlave ? 'slave' : 'master', source: 'ems', monoNow }); // A23 b: Abstände monoton
   const transport = modbusHealthInst.wrap(baseTransport);
   // Schreibtor (H-1 Phase 2): die Schreibfunktionen dieses Transports erreicht der Aktuator nur noch über das Tor
   // (R-T1). Die Not-Halt-Marke des Tors ist dieselbe wie die der Bestandsprüfung in submitReg.

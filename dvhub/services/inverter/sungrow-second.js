@@ -24,6 +24,7 @@
 import { safeInterval } from '../safe-async.js';
 import { wire, runningStateText, resolveSecondInverter, isSungrowEmergencyCharge } from './sungrow.js';
 import { createModbusHealth } from './modbus-health.js';
+import { pickMonoNow } from '../mono-clock.js';
 
 export const SUNGROW_SECOND_TICK_MS = 5000;
 const OFFLINE_AFTER_ERRORS = 3;
@@ -96,10 +97,13 @@ const u16 = (w) => {
 
 export function createSungrowSecond(ctx, deps = {}) {
   const now = deps.now || Date.now;
+  // A23 b (Christin 23.11.2026): Config-Takt und Modbus-Gesundheit monoton; updatedAt bleibt Wanduhr (Anzeige und
+  // Frische-Prüfung der Verbraucher in sungrow.js, die noch Wanduhr rechnen).
+  const monoNow = pickMonoNow(deps.monoNow, deps.now);
   // Modbus-Gesundheit des Slave-WR (N5): zählt die Lese-Anfragen/Fehler dieses Pollers (Feld: ~1 Lesefehler auf
   // 4000 Slave-Anfragen). wrap() zählt transparent; der eigentliche Transport bleibt unverändert.
   // M22: Lesefehler des Slave als sungrow_modbus_error ins Protokoll (source poll), Häufungen zusammengefasst.
-  const modbusHealth = createModbusHealth(now, { pushLog: (...a) => ctx.pushLog?.(...a), wr: 'slave', source: 'poll' });
+  const modbusHealth = createModbusHealth(now, { pushLog: (...a) => ctx.pushLog?.(...a), wr: 'slave', source: 'poll', monoNow });
   const transport = modbusHealth.wrap(deps.transport);
   let timer = null;
   let running = false;
@@ -111,7 +115,7 @@ export function createSungrowSecond(ctx, deps = {}) {
   let limitsBlockOk = true; // FC3 33047+3 blockweise lesbar?
   let socBlockOk = true;    // FC3 13057+4 blockweise lesbar?
   let configCache = null;   // zuletzt gelesene Geräte-/Grenzwerte (langsamer Takt)
-  let configAt = 0;
+  let configAt = null;      // wann zuletzt gelesen (monoton); null = beim nächsten erfolgreichen Takt lesen
 
   function resetForEndpoint(key) {
     if (key === capKey) return;
@@ -119,7 +123,7 @@ export function createSungrowSecond(ctx, deps = {}) {
     limitsBlockOk = true;
     socBlockOk = true;
     configCache = null;
-    configAt = 0;
+    configAt = null;
   }
 
   function publish(extra) {
@@ -235,14 +239,14 @@ export function createSungrowSecond(ctx, deps = {}) {
     }
 
     // Geräte-/Grenzwerte nur im langsamen Takt (und beim ersten erfolgreichen Lesen), danach gecacht weiterreichen.
-    if (readOk && (!configCache || now() - configAt >= SUNGROW_SECOND_CONFIG_EVERY_MS)) {
+    if (readOk && (!configCache || configAt == null || monoNow() - configAt >= SUNGROW_SECOND_CONFIG_EVERY_MS)) {
       configCache = await readConfig(c);
-      configAt = now();
+      configAt = monoNow();
     }
 
     if (errors >= OFFLINE_AFTER_ERRORS) {
       setAvailable(false, c.host, lastError);
-      configAt = 0; // bei Rückkehr frische Grenzwerte lesen
+      configAt = null; // bei Rückkehr frische Grenzwerte lesen
     }
     if (readOk) setAvailable(true, c.host);
 

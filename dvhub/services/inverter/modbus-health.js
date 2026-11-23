@@ -16,6 +16,12 @@
 // `sungrow_modbus_error_summary` („12 Fehler in 60 s, Master, ECONNREFUSED"). Hält die Störung an, verdoppelt sich das
 // Fenster bis 15 min. Die Kachel behält nur Zähler und letzten Fehler.
 
+// Zeit (A23 b, Christin 23.11.2026): alle Abstände (Anfragen/s-Fenster, 24-h-Fehler, Startphase, Antwortzeit,
+// Sammelfenster) misst der Zähler mit der monotonen Uhr (monoNow), damit ein Sprung der Systemzeit sie weder dehnt noch
+// staucht. lastError.at bleibt Wanduhrzeit (Anzeige). Ohne eigene monotone Uhr nimmt er eine eingespielte Uhr (Tests).
+
+import { pickMonoNow } from '../mono-clock.js';
+
 const REQ_WINDOW_MS = 10_000;   // Fenster für „Anfragen/s"
 const DAY_MS = 86_400_000;      // 24 h für die Fehlerzählung
 const MAX_REQ_TIMES = 2048;     // Kappung des Zeitstempel-Puffers (Speicher)
@@ -91,15 +97,16 @@ export function modbusRequestInfo(method, arg, errCode = null) {
   };
 }
 
-export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, source = null, wireToDoc = (a) => a + 1 } = {}) {
+export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, source = null, wireToDoc = (a) => a + 1, monoNow: monoNowArg = null } = {}) {
+  const mono = pickMonoNow(monoNowArg, now);
   let total = 0;
-  let reqTimes = [];        // Zeitstempel der letzten Anfragen (für Anfragen/s)
-  const errTimes = [];      // Zeitstempel der Fehler (für die 24-h-Zählung)
-  let lastError = null;     // { message, kind, at }
+  let reqTimes = [];        // Zeitpunkte der letzten Anfragen (monoton, für Anfragen/s)
+  const errTimes = [];      // Zeitpunkte der Fehler (monoton, für die 24-h-Zählung)
+  let lastError = null;     // { message, kind, at } — at = Wanduhr (Anzeige)
   const respSamples = [];   // Antwortzeiten der letzten RESP_SAMPLES erfolgreichen Anfragen (nach der Startphase)
-  let startedAt = null;     // erster Messpunkt — die ersten STARTUP_MS werden nicht gewertet
+  let startedAt = null;     // erster Messpunkt (monoton) — die ersten STARTUP_MS werden nicht gewertet
   // M22: Sammelfenster für das Fehler-Protokoll.
-  let win = null;           // { start, lenMs, count, logged, kinds, codes }
+  let win = null;           // { start (monoton), lenMs, count, logged, kinds, codes }
   let stormLenMs = 0;       // > 0: die letzte Häufung lief noch — nächstes Fenster so lang
   let lastErrorAt = 0;      // Codex 7dd3cd43: Ruhe zählt ab dem letzten FEHLER, nicht ab dem Fensterende
 
@@ -143,7 +150,7 @@ export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, 
   }
 
   function record(ok, ms, errMsg, info = null) {
-    const t = now();
+    const t = mono();
     closeIfDue(t);
     if (startedAt == null) startedAt = t;
     total += 1;
@@ -162,7 +169,7 @@ export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, 
       while (errTimes.length && errTimes[0] < day) errTimes.shift();
       const { kind, code } = classifyModbusError(errMsg, info?.errCode);
       const message = sanitizeModbusMessage(errMsg).slice(0, 200);
-      lastError = { message, kind, code, at: t };
+      lastError = { message, kind, code, at: now() };
       const address = Number.isFinite(Number(info?.address)) ? Number(info.address) : null;
       reportError({
         wr, source, kind, code, fc: info?.fc ?? null,
@@ -178,13 +185,13 @@ export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, 
     // nimmt Funktion/Adresse/Menge/Wert aus dem ersten (der Anfrage).
     const call = async (method, ...args) => {
       const arg = args[0];
-      const start = now();
+      const start = mono();
       try {
         const r = await transport[method](...args);
-        record(true, now() - start);
+        record(true, mono() - start);
         return r;
       } catch (e) {
-        record(false, now() - start, e?.message || String(e), modbusRequestInfo(method, arg, e?.code ?? null));
+        record(false, mono() - start, e?.message || String(e), modbusRequestInfo(method, arg, e?.code ?? null));
         throw e;
       }
     };
@@ -198,7 +205,7 @@ export function createModbusHealth(now = Date.now, { pushLog = null, wr = null, 
   }
 
   function snapshot() {
-    const t = now();
+    const t = mono();
     closeIfDue(t); // M22: abgelaufenes Sammelfenster auch ohne neue Anfrage zusammenfassen
     const cut = t - REQ_WINDOW_MS;
     const recent = reqTimes.filter((x) => x >= cut);
