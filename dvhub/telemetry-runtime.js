@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { monoStampOf } from './services/mono-clock.js';
 
 function pushSample(rows, seriesKey, value, unit, base = {}) {
   if (value == null) return;
@@ -87,13 +88,21 @@ export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
   if (LIVE_ENERGY_FIELDS.some((field) => unknown.includes(field))) return true;
   const tsMs = Date.parse(ts);
   if (!Number.isFinite(tsMs)) return false;
-  const tooOld = (at) => Number(at) > 0 && tsMs - Number(at) > LIVE_FIELD_MAX_AGE_MS;
+  // A26: ts ist die Zählerzeit (polling.js). Trägt der Zählerstempel seine monotone Marke (A24), zählt der Abstand
+  // zwischen Zähler- und Feldstempel monoton — sonst wie bisher die Wanduhr (nie gemischt).
+  const snapMono = Number(meter?.updatedAt) === tsMs ? monoStampOf(meter, 'updatedAt') : null;
+  const tooOld = (box, key) => {
+    const at = Number(box?.[key]);
+    if (!(at > 0)) return false;
+    const m = snapMono != null ? monoStampOf(box, key) : null;
+    return (m != null ? snapMono - m : tsMs - at) > LIVE_FIELD_MAX_AGE_MS;
+  };
   // MQTT liefert aus dem Cache: fieldUpdatedAt ist dort der Abfrage-Zeitpunkt,
   // die Empfangszeit des Werts steht in fieldSourceAt bzw. meter.sourceAt.
-  if (tooOld(meter?.sourceAt)) return true;
+  if (tooOld(meter, 'sourceAt')) return true;
   const stamps = victron?.fieldUpdatedAt || {};
   const sourceStamps = victron?.fieldSourceAt || {};
-  return LIVE_ENERGY_FIELDS.some((field) => tooOld(stamps[field]) || tooOld(sourceStamps[field]));
+  return LIVE_ENERGY_FIELDS.some((field) => tooOld(stamps, field) || tooOld(sourceStamps, field));
 }
 
 export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, victron = {}, managed = null }) {

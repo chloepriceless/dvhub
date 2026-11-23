@@ -10,6 +10,7 @@
  */
 import { safeInterval } from './services/safe-async.js';
 import { isReadOnlyMode, noteBlockedWrite } from './read-only-guard.js';
+import { monoNow, stampMono } from './services/mono-clock.js';
 import http from 'node:http';
 import https from 'node:https';
 
@@ -116,6 +117,9 @@ export function createEvccIntegration(ctx) {
   let timer = null;
   let lastCharging = false;
   let lastPolledAt = 0;
+  // A26: monotone Zeit der letzten Antwort — getStatus() heftet sie dem Wanduhr-Stempel unsichtbar an (stampMono), damit
+  // Verbraucher (Netzanschluss-Wächter, §14a, Wallbox-Leistung) die Frische monoton prüfen. Nie im JSON, nie gespeichert.
+  let lastPolledMono = null;
   let lastError = null;
   let lastChargePower = 0;
   let lastBatterySoc = null;
@@ -153,6 +157,7 @@ export function createEvccIntegration(ctx) {
       if (myPoll < appliedPoll) return;
       appliedPoll = myPoll;
       lastPolledAt = Date.now();
+      lastPolledMono = monoNow();
       lastError = null;
     } catch (e) {
       lastError = e.message;
@@ -297,7 +302,7 @@ export function createEvccIntegration(ctx) {
     setPhases,
     getStatus() {
       const c = getCfg();
-      return {
+      const status = {
         url: c.url || null,
         charging: lastCharging,
         lastPolledAt,
@@ -307,6 +312,8 @@ export function createEvccIntegration(ctx) {
         fatal: lastFatal.map((f) => ({ ...f })),
         loadpoints: lastLoadpoints.map((lp) => ({ ...lp }))
       };
+      if (lastPolledMono != null) stampMono(status, 'lastPolledAt', { at: lastPolledMono });
+      return status;
     }
   };
 }

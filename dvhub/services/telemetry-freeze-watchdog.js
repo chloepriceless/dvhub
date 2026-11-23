@@ -46,8 +46,9 @@
 // Der Wächter läuft NUR auf Modbus: der MQTT-Transport ist per Design on-change
 // (unveränderte Werte sind dort normal) und hat seine eigene Staleness-Prüfung.
 
-/** Felder, die auf einer lebenden Anlage im Sekundentakt jittern. */
+import { monoNow, stampMono, monoStampOf } from './mono-clock.js';
 
+/** Felder, die auf einer lebenden Anlage im Sekundentakt jittern. */
 export const FREEZE_JITTER_FIELDS = ['grid_total_w', 'batteryPowerW', 'pvTotalW', 'selfConsumptionW'];
 
 export const FREEZE_DEFAULTS = {
@@ -119,11 +120,14 @@ export function resolveFreezeOptions(cfg = {}) {
 
 export function createFreezeState() {
   return {
-    fields: {},          // name → { value, sinceMs, samples }
-    soc: null,           // { value, sinceMs, throughputWh, lastMs }
+    // A26: *Mono = monotone Zeit (Dauern: freezeMs, Durchsatz-dt, Stillstand); *Ms ohne Mono = Systemzeit (Anzeige,
+    // Rückdatieren der Wanduhr-Stempel). Nichts davon wird gespeichert.
+    fields: {},          // name → { value, sinceMs, sinceMono, samples }
+    soc: null,           // { value, sinceMs, sinceMono, throughputWh, lastMono }
     active: false,
     since: null,         // ms — wann der Einfrierer ERKANNT wurde
     anchorMs: null,      // ms — letzter ECHTER Wertwechsel (Rückdatier-Anker)
+    anchorMono: null,    // derselbe Anker monoton
     reasons: [],
     stalledFields: []
   };
@@ -134,7 +138,8 @@ export function createFreezeState() {
  * gibt die Übergangs-Kennung zurück.
  *
  * @param {object} state   Zustand aus createFreezeState()
- * @param {{nowMs:number, values:object}} sample  Nur Felder, deren Read in DIESEM
+ * @param {{nowMs:number, monoMs?:number, values:object}} sample  monoMs = monotone Zeit (fehlt sie, misst nowMs auch die
+ *        Abstände, wie bisher). Nur Felder, deren Read in DIESEM
  *        Zyklus ERFOLGREICH war (ein fehlgeschlagener Read hält den alten Wert im
  *        State — den als „unverändert" zu zählen wäre ein Fehlalarm; dafür greift
  *        die normale T-0075-Frische).
@@ -143,6 +148,7 @@ export function createFreezeState() {
  */
 export function evaluateFreeze(state, sample, opts) {
   const now = numOr(sample?.nowMs, Date.now());
+  const mono = numOr(sample?.monoMs, now);
   const values = sample?.values || {};
 
   // --- Detektor A: identische Jitter-Felder ---------------------------------
@@ -151,12 +157,12 @@ export function evaluateFreeze(state, sample, opts) {
     const v = Number(values[field]);
     if (!Number.isFinite(v)) { delete state.fields[field]; continue; }
     const entry = state.fields[field];
-    if (!entry || entry.value !== v) state.fields[field] = { value: v, sinceMs: now, samples: 1 };
+    if (!entry || entry.value !== v) state.fields[field] = { value: v, sinceMs: now, sinceMono: mono, samples: 1 };
     else entry.samples += 1;
     present.push([field, state.fields[field]]);
   }
   const frozenA = present.length >= opts.minJitterFields
-    && present.every(([, e]) => (now - e.sinceMs) >= opts.freezeMs && e.samples >= opts.minSamples)
+    && present.every(([, e]) => (mono - e.sinceMono) >= opts.freezeMs && e.samples >= opts.minSamples)
     && present.some(([, e]) => Math.abs(e.value) >= opts.minPowerW);
 
   // --- Detektor B: SoC steht trotz gemeldetem Akku-Durchsatz ----------------
@@ -168,15 +174,15 @@ export function evaluateFreeze(state, sample, opts) {
   if (Number.isFinite(socV) && opts.socStepWh > 0 && socInBand) {
     const prevSoc = state.soc;
     if (!prevSoc || prevSoc.value !== socV) {
-      state.soc = { value: socV, sinceMs: now, throughputWh: 0, lastMs: now };
+      state.soc = { value: socV, sinceMs: now, sinceMono: mono, throughputWh: 0, lastMono: mono };
     } else {
       // dt gedeckelt: nach einem Poll-Backoff/Neustart darf keine Riesen-Lücke
       // als Durchsatz verbucht werden.
-      const dtMs = Math.min(Math.max(0, now - prevSoc.lastMs), 60000);
-      prevSoc.lastMs = now;
+      const dtMs = Math.min(Math.max(0, mono - prevSoc.lastMono), 60000);
+      prevSoc.lastMono = mono;
       if (Number.isFinite(batW)) prevSoc.throughputWh += (Math.abs(batW) * dtMs) / HOUR_MS;
     }
-    frozenB = state.soc.throughputWh >= opts.socStepWh && (now - state.soc.sinceMs) >= opts.freezeMs;
+    frozenB = state.soc.throughputWh >= opts.socStepWh && (mono - state.soc.sinceMono) >= opts.freezeMs;
   } else {
     // Kein SoC oder außerhalb des Bandes → Akkumulator verwerfen. Beim Wieder-
     // eintritt ins Band wird frisch gezählt (eine über die Absorptionsphase
@@ -190,9 +196,12 @@ export function evaluateFreeze(state, sample, opts) {
   if (frozenB) reasons.push('soc_no_step');
   const active = reasons.length > 0;
 
-  let anchorMs = null;
-  if (frozenA) anchorMs = Math.min(...present.map(([, e]) => e.sinceMs));
-  if (frozenB) anchorMs = anchorMs == null ? state.soc.sinceMs : Math.min(anchorMs, state.soc.sinceMs);
+  // Anker = ältester Beginn der stehenden Werte (monoton bestimmt; die Systemzeit desselben Eintrags für die Anzeige).
+  let anchor = null;
+  const older = (e) => { if (anchor == null || e.sinceMono < anchor.sinceMono) anchor = e; };
+  if (frozenA) present.forEach(([, e]) => older(e));
+  if (frozenB) older(state.soc);
+  const anchorMs = anchor ? anchor.sinceMs : null;
 
   const transition = active && !state.active ? 'freeze' : (!active && state.active ? 'clear' : null);
   if (transition === 'freeze') state.since = now;
@@ -200,6 +209,7 @@ export function evaluateFreeze(state, sample, opts) {
   state.active = active;
   state.reasons = reasons;
   state.anchorMs = anchorMs;
+  state.anchorMono = anchor ? anchor.sinceMono : null;
   state.stalledFields = frozenA ? present.map(([name]) => name) : (frozenB ? ['soc'] : []);
   return { state, transition };
 }
@@ -214,7 +224,8 @@ export function createFreezeWatchdog(ctx) {
   let fstate = createFreezeState();
   let prevStamps = {};
   let prevMeterAt = 0;
-  let lastReconnectAt = 0;
+  let lastReconnectMono = null;
+  const monoClock = typeof ctx.monoNow === 'function' ? ctx.monoNow : monoNow;
   let reconnectsThisEpisode = 0;
   let lastEnabled = null;
 
@@ -224,7 +235,7 @@ export function createFreezeWatchdog(ctx) {
    * (fieldUpdatedAt) bzw. meter.updatedAt hat sich seit dem letzten Tick bewegt.
    * Die Stempel werden VOR dem eigenen Rückdatieren gelesen (siehe tick()).
    */
-  function buildSample(nowMs, stamps, meterOk, meterAt) {
+  function buildSample(nowMs, monoMs, stamps, meterOk, meterAt) {
     const v = state.victron || {};
     const advanced = (name) => Number(stamps?.[name]) > 0 && Number(stamps[name]) !== Number(prevStamps?.[name] || 0);
     const values = {};
@@ -237,7 +248,7 @@ export function createFreezeWatchdog(ctx) {
     // bleibt draußen (sonst zählte derselbe eingefrorene Messwert doppelt).
     if (advanced('pvPowerW') || advanced('acPvL1W')) values.pvTotalW = v.pvTotalW;
     if (advanced('selfConsumptionW')) values.selfConsumptionW = v.selfConsumptionW;
-    return { nowMs, values };
+    return { nowMs, monoMs, values };
   }
 
   function alarm(reasons, detail) {
@@ -290,11 +301,11 @@ export function createFreezeWatchdog(ctx) {
    * Abbuchung und — nur während der Sperre — Einspeisung über den Puffer von
    * höchstens 100 W hinaus, auch wenn echter PV-Überschuss da ist.
    */
-  function detectOnly(nowMs, opts) {
+  function detectOnly(nowMs, monoMs, opts) {
     const stamps = { ...(state.victron?.fieldUpdatedAt || {}) };
     const meterOk = state.meter?.ok === true;
     const meterAt = Number(state.meter?.updatedAt || 0);
-    const { transition } = evaluateFreeze(fstate, buildSample(nowMs, stamps, meterOk, meterAt), opts);
+    const { transition } = evaluateFreeze(fstate, buildSample(nowMs, monoMs, stamps, meterOk, meterAt), opts);
     prevStamps = stamps;
     if (meterOk && meterAt > 0) prevMeterAt = meterAt;
     if (transition === 'freeze') pushLog('telemetry_freeze_suspected', { reasons: fstate.reasons, fields: fstate.stalledFields }, 'warn');
@@ -308,8 +319,13 @@ export function createFreezeWatchdog(ctx) {
     return null;
   }
 
-  /** Ein Poll-Zyklus. Wirft nie. */
-  function tick(nowMs = Date.now()) {
+  /**
+   * Ein Poll-Zyklus. Wirft nie. monoMs (A26): monotone Zeit; fehlt sie, misst ein übergebenes nowMs (Tests) auch die
+   * Abstände wie bisher, ohne beides die monotone Uhr.
+   */
+  function tick(nowMs, monoMs) {
+    if (!Number.isFinite(Number(monoMs))) monoMs = nowMs != null ? Number(nowMs) : monoClock();
+    if (nowMs == null) nowMs = Date.now();
     const cfg = getCfg() || {};
     const opts = resolveFreezeOptions(cfg);
     // MQTT ist on-change (unveränderte Werte sind dort normal) → Wächter aus.
@@ -326,7 +342,7 @@ export function createFreezeWatchdog(ctx) {
       reconnectsThisEpisode = 0;
     }
     lastEnabled = opts.enabled;
-    if (!opts.enabled) return detectOnly(nowMs, opts);
+    if (!opts.enabled) return detectOnly(nowMs, monoMs, opts);
     if (state.victron) state.victron.freezeSuspect = null;
 
     // Stempel VOR dem eigenen Rückdatieren einfrieren (sonst hielte der Wächter
@@ -335,11 +351,11 @@ export function createFreezeWatchdog(ctx) {
     const meterOk = state.meter?.ok === true;
     const meterAt = Number(state.meter?.updatedAt || 0);
 
-    const { transition } = evaluateFreeze(fstate, buildSample(nowMs, stamps, meterOk, meterAt), opts);
+    const { transition } = evaluateFreeze(fstate, buildSample(nowMs, monoMs, stamps, meterOk, meterAt), opts);
     prevStamps = stamps;
     if (meterOk && meterAt > 0) prevMeterAt = meterAt;
 
-    const stalledForMs = fstate.anchorMs != null ? nowMs - fstate.anchorMs : 0;
+    const stalledForMs = fstate.anchorMono != null ? monoMs - fstate.anchorMono : 0;
     const detail = {
       reasons: fstate.reasons,
       fields: fstate.stalledFields,
@@ -373,18 +389,29 @@ export function createFreezeWatchdog(ctx) {
     // Damit sieht der bestehende T-0075-Entlade-Boden-Schutz das, was wirklich
     // gilt: diese Information ist stalledForMs alt. Selbstheilend — sobald sich
     // wieder etwas bewegt, stempelt pollPoint normal weiter.
+    // A26: „jünger als der Anker“ monoton, wenn der Stempel eine Erzeuger-Marke hat; der zurückdatierte Stempel bekommt
+    // die monotone Zeit des Ankers als Marke — Verbraucher (Entlade-Boden, Netzstrom-Zähler) messen sein Alter damit
+    // auch nach einem Sprung der Systemzeit richtig. Ohne Marke wie bisher (Wanduhr).
     const anchor = fstate.anchorMs;
+    const anchorMono = fstate.anchorMono;
+    const backdate = (fu, key) => {
+      const m = monoStampOf(fu, key, monoClock);
+      const younger = m != null && anchorMono != null ? m > anchorMono : Number(fu[key]) > anchor;
+      if (!younger) return;
+      fu[key] = anchor;
+      if (m != null && anchorMono != null) stampMono(fu, key, { clock: monoClock, at: anchorMono });
+    };
     if (anchor != null && state.victron?.fieldUpdatedAt) {
       const fu = state.victron.fieldUpdatedAt;
       if (fstate.reasons.includes('identical_values')) {
-        for (const key of Object.keys(fu)) if (Number(fu[key]) > anchor) fu[key] = anchor;
+        for (const key of Object.keys(fu)) backdate(fu, key);
         if (state.meter) {
           state.meter.ok = false;
           state.meter.error = `Live-Daten eingefroren: keine Wertänderung seit ${Math.round(stalledForMs / 1000)} s`;
         }
-      } else if (Number(fu.soc) > anchor) {
+      } else {
         // Teil-Einfrierer: nur der SoC ist unglaubwürdig, die Leistungswerte leben.
-        fu.soc = anchor;
+        backdate(fu, 'soc');
       }
     }
 
@@ -394,8 +421,8 @@ export function createFreezeWatchdog(ctx) {
     // räumt er nicht ab. Nach maxReconnects bleibt es beim Alarm.
     if (typeof transport.dropConnections === 'function'
         && reconnectsThisEpisode < opts.maxReconnects
-        && (nowMs - lastReconnectAt) >= opts.reconnectMs) {
-      lastReconnectAt = nowMs;
+        && (lastReconnectMono == null || (monoMs - lastReconnectMono) >= opts.reconnectMs)) {
+      lastReconnectMono = monoMs;
       reconnectsThisEpisode += 1;
       try {
         const dropped = transport.dropConnections();

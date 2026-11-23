@@ -611,9 +611,9 @@ export function createPoller(ctx) {
     if (cfg.points?.batteryPowerW?.derive === 'm160_battery' && !groups.has(victronKey)) {
       groups.set(victronKey, { ep: sunspecEndpointOf(null, v), slots: [] });
     }
-    const now = Date.now();
+    const now = monoNow(); // A26: Wiederholtakt der SunSpec-Suche monoton
     for (const [key, group] of groups) {
-      if (now < (sunspecRetryAt.get(key) || 0)) continue;
+      if (sunspecRetryAt.has(key) && now < sunspecRetryAt.get(key)) continue;
       sunspecRetryAt.set(key, now + 60000);
       const { ep } = group;
       // Der Standardfall (victron.*) loggt wie bisher; eine abweichende Verbindung nennt Unit und Port.
@@ -717,7 +717,7 @@ export function createPoller(ctx) {
   // Schreiben (Sequenzen, EMS) geht erst, wenn das Gerät als Sungrow-Hybrid
   // erkannt ist — ein String-WR (SG) oder ein fremdes Gerät bekommt keinen Write.
   let identifyRetryAt = 0;
-  let identifyInfoAt = 0;
+  let identifyInfoAt = null;
   let bdcRetryAt = 0;
   // Block-Fähigkeit der FC-3-Gerätegrenzen je Verbindung (N3, Feld 15.11.): wirft der WR auf einen Block eine
   // Modbus-Ausnahme (illegale Adresse), dauerhaft auf Einzellesen zurückfallen und das je Verbindung merken.
@@ -734,19 +734,20 @@ export function createPoller(ctx) {
       fc, host: v.host, port: v.port, unitId: v.unitId, timeoutMs: v.timeoutMs, address, quantity
     });
     const now = Date.now();
+    const nowMono = monoNow(); // A26: Wiederholtakte (Kennung, BDC, Info) monoton; identifiedAt/infoAt bleiben Systemzeit
     let dev = state.victron.device;
     if (dev && dev.endpointKey !== endpointKey) {
       delete state.victron.device;
       dev = null;
       identifyRetryAt = 0;
-      identifyInfoAt = 0;
+      identifyInfoAt = null;
       bdcRetryAt = 0;
       blockCaps.limits = true;
       blockCaps.soc = true;
     }
     if (!dev) {
-      if (now < identifyRetryAt) return;
-      identifyRetryAt = now + 60000;
+      if (nowMono < identifyRetryAt) return;
+      identifyRetryAt = nowMono + 60000;
       try {
         const id = await identifySungrow(read);
         dev = { ...id, endpointKey, identifiedAt: now };
@@ -765,8 +766,8 @@ export function createPoller(ctx) {
     }
     // BDC-Nennleistung ist die Obergrenze der Akku-Vorgabe: fehlt sie (Lesefehler bei der
     // Erkennung), alle 60 s nachlesen — bis dahin gibt es keinen Zwangsbetrieb (Codex b8aa8e70).
-    if (dev.supported && dev.bdcRatedW == null && now >= bdcRetryAt) {
-      bdcRetryAt = now + 60000;
+    if (dev.supported && dev.bdcRatedW == null && nowMono >= bdcRetryAt) {
+      bdcRetryAt = nowMono + 60000;
       try {
         const w = Number((await read({ fc: 4, address: wire(5628), quantity: 1 }))?.[0]);
         if (Number.isFinite(w) && w > 0 && w !== 0xffff) {
@@ -776,8 +777,8 @@ export function createPoller(ctx) {
       } catch { /* nächster Versuch in 60 s */ }
     }
     const infoEveryMs = Math.max(30000, Number(cfg.identify.infoEveryMs) || 300000);
-    if (now - identifyInfoAt < infoEveryMs) return;
-    identifyInfoAt = now;
+    if (identifyInfoAt != null && nowMono - identifyInfoAt < infoEveryMs) return;
+    identifyInfoAt = nowMono;
     try {
       const info = decodeSungrowInfoBlock(await read({ fc: 4, address: wire(13000), quantity: 46 }));
       if (info) state.victron.device = { ...state.victron.device, info, infoAt: now };
@@ -1663,10 +1664,17 @@ export function createPoller(ctx) {
       ctx.gridConnection?.pollTick?.();
     } catch (e) { pushLog('grid_connection_error', { error: e?.message || String(e) }, 'warn'); }
 
+    // A26: die Kopie des Zählers behält die monotonen Marken (unsichtbar, nicht im IPC) — liveSnapshotStale misst den
+    // Abstand Zähler ↔ Feldstempel damit.
+    const meterSnap = { ...state.meter };
+    for (const k of ['updatedAt', 'sourceAt']) {
+      const m = monoStampOf(state.meter, k);
+      if (m != null) stampMono(meterSnap, k, { at: m });
+    }
     ctx.onPollComplete?.({
       ts: new Date(state.meter.updatedAt || Date.now()).toISOString(),
       resolutionSeconds: Math.max(1, Math.round(effectivePollIntervalMs() / 1000)),
-      meter: { ...state.meter },
+      meter: meterSnap,
       victron: { ...state.victron }
     });
 

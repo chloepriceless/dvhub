@@ -55,7 +55,7 @@
 // aktive SoC-Grenze wie eine gesetzte Entlade-Sperre.
 
 import { knownMaxDischargeW, decodeMaxDischargeRaw, MAX_DISCHARGE_INT32_ADDR } from './peak-shaving/index.js';
-import { monoNow, createStampAge, monoStampOf, stampAfter } from './mono-clock.js';
+import { monoNow, createStampAge, monoStampOf, monoStampAge, stampAfter } from './mono-clock.js';
 
 // So alt darf das Halte-Signal der Auswertung (state.ctrl.eosGridHold) bzw.
 // DVhubs eigener 2704-Schreibwert höchstens sein — mindestens, bei langsamerem
@@ -171,15 +171,21 @@ function isFresh(at, nowMs, maxAgeMs) {
  * Kein Halten, wenn
  *   • die Hauslast unbekannt war (Sollwert 0 = Eigenverbrauch, der Akku soll entladen),
  *   • Peak Shaving den Halte-Wert gedeckelt hat (der Akku soll den Rest liefern).
+ * A26: mit `clock` (monotone Uhr des Wächters) zählt das Alter der Signale aus ihrer Erzeuger-Marke (schedule-eval
+ * stampMono); ohne Uhr oder Marke Wanduhr wie bisher.
  */
-export function activeDischargeHold(state, nowMs = Date.now(), cfg = {}) {
+export function activeDischargeHold(state, nowMs = Date.now(), cfg = {}, clock = null) {
   const hold = state?.ctrl?.eosGridHold;
   const maxAgeMs = holdSignalMaxAgeMs(cfg);
-  if (!hold || hold.known !== true || !isFresh(hold.at, nowMs, maxAgeMs)) return null;
+  const fresh = (sig) => {
+    const age = clock ? monoStampAge(sig, 'at', clock) : null;
+    return age != null ? age <= maxAgeMs : isFresh(sig.at, nowMs, maxAgeMs);
+  };
+  if (!hold || hold.known !== true || !fresh(hold)) return null;
   // Peak Shaving oder Netzanschluss haben den Halte-Wert gedeckelt: der Akku
   // soll den Rest liefern — kein Halten.
   for (const clamp of [state?.ctrl?._peakShaving?.clamp, state?.ctrl?._gridConnection?.clamp]) {
-    if (clamp && clamp.source === 'eos_grid_hold' && isFresh(clamp.at, nowMs, maxAgeMs)
+    if (clamp && clamp.source === 'eos_grid_hold' && fresh(clamp)
         && Number(clamp.valueW) < Number(clamp.requestedW)) return null;
   }
   return 'eos_grid_hold';
@@ -647,7 +653,7 @@ export function createSetpointFollowWatchdog(ctx) {
       activeSocLimitPct: live('activeSocLimitPct'),
       // Rückfall, wenn die Anlage gar keine Untergrenze meldet (MQTT-Quellen).
       configuredFloorPct: cfg.optimizer?.hardFloorSocPct,
-      holdReason: activeDischargeHold(state, nowMs, cfg),
+      holdReason: activeDischargeHold(state, nowMs, cfg, markClock),
       // Entlade-Sperre (Reg. 2704): Rücklesung, sonst DVhubs eigener letzter
       // Schreibwert, dieser nur befristet.
       maxDischargeW: knownDischargeCapW(state, cfg, nowMs, capReadNow(cfg, monoMs), { monoMs, clock: markClock })

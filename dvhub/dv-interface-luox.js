@@ -15,7 +15,7 @@
 //
 // Input- und Holding-Register sind getrennte Bereiche (Plexlog teilt einen).
 
-import { pickMonoNow, stampMono, monoDeadlinePassed, monoNow as sharedMonoNow } from './services/mono-clock.js';
+import { pickMonoNow, stampMono, monoStampAge, monoDeadlinePassed, monoNow as sharedMonoNow } from './services/mono-clock.js';
 
 /**
  * Ist die Frist state.ctrl[field] (offUntil, dvLimitUntil; Wanduhr-Zeitpunkt) abgelaufen? Monoton, wenn sie beim
@@ -140,13 +140,18 @@ export function createDvLimitController({
   const stampDeadline = (field) => stampMono(state.ctrl, field, { clock: mono, wallNow: now() });
   const luox = () => (state.dvLuox ??= { setpointPct: 100, watchdog: [0, 0], watchdogAt: null });
 
+  // A26: die 15 min ab dem letzten Watchdog-Schreiben laufen monoton (Marke an watchdogAt, unsichtbar); der Zeitpunkt
+  // watchdogAt bleibt Systemzeit. Ohne Marke (Tests ohne Uhr, fremder Erzeuger) wie bisher watchdogAt + 15 min.
   function leaseUntil() {
     const at = Number(luox().watchdogAt);
+    const age = Number.isFinite(at) && at > 0 ? monoStampAge(luox(), 'watchdogAt', mono) : null;
+    if (age != null) return now() + Math.max(0, LUOX_WATCHDOG_MS - age);
     return (Number.isFinite(at) && at > 0 ? at : now()) + LUOX_WATCHDOG_MS;
   }
 
   function watchdogRefresh() {
     luox().watchdogAt = now();
+    stampMono(luox(), 'watchdogAt', { clock: mono });
     const until = leaseUntil();
     if (state.ctrl.forcedOff) { state.ctrl.offUntil = until; stampDeadline('offUntil'); }
     if (state.ctrl.dvLimitPct != null) { state.ctrl.dvLimitUntil = until; stampDeadline('dvLimitUntil'); }

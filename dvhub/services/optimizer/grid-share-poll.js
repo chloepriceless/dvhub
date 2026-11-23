@@ -26,6 +26,7 @@
 import { planningCfg, planningSocPct, planningMinSocPct, secondGxMissing, followerBatteryStale } from '../multi-gx/planning.js';
 import { resolveSecondInverter, secondInverterTelemetry } from '../inverter/sungrow.js';
 import { resolveEosMinSocPct } from './eos-config-sync.js';
+import { monoNow } from '../mono-clock.js';
 
 const finiteOrNullGs = (v) => (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
 
@@ -85,7 +86,11 @@ export function gridShareCapacityInput(ctx, cfg = ctx?.getCfg?.()) {
  * @param {object} ctx { gridShare, getCfg, pushLog, state }
  */
 export function createGridSharePollTick(ctx) {
-  return function gridSharePollTick(victron, nowMs = Date.now()) {
+  // A26: Zeitpunkt (Tageswechsel, Protokoll) aus der Wanduhr, Abstände monoton. Ein übergebenes nowMs (Tests) misst
+  // ohne eigenes monoMs auch die Abstände wie bisher.
+  return function gridSharePollTick(victron, nowMs, monoMs) {
+    if (monoMs == null) monoMs = nowMs != null ? nowMs : monoNow();
+    if (nowMs == null) nowMs = Date.now();
     const tracker = ctx?.gridShare;
     if (!tracker || typeof tracker.tick !== 'function') return null;
     try {
@@ -96,6 +101,7 @@ export function createGridSharePollTick(ctx) {
       // (state.multiGx) — veraltet heißt auch dort: nichts abbuchen.
       const gs = tracker.tick({
         nowMs,
+        monoMs,
         victron,
         socPct: cap.socPct,
         capacityWh: cap.capacityWh,

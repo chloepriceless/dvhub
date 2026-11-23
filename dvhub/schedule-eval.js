@@ -573,7 +573,12 @@ export function createScheduleEvaluator(ctx) {
     const v = state.victron || {};
     const fin = (x) => x != null && Number.isFinite(Number(x));
     const nowMs = Date.now();
-    const sourceStale = (f) => { const at = Number(v.fieldSourceAt?.[f]); return at > 0 && nowMs - at > GRID_SHARE_FIELD_MAX_AGE_MS; };
+    // A26: Empfangsalter aus der monotonen Marke des MQTT-Eingangs (A24); ohne Marke Wanduhr wie bisher.
+    const sourceStale = (f) => {
+      const at = Number(v.fieldSourceAt?.[f]);
+      if (!(at > 0)) return false;
+      return (monoStampAge(v.fieldSourceAt, f) ?? (nowMs - at)) > GRID_SHARE_FIELD_MAX_AGE_MS;
+    };
     const stale = (f) => victronFieldStale(state, f, maxAgeMs, nowMs) || sourceStale(f);
     // Einfrier-Wächter, Einfrier-Verdacht (Wächter aus) oder Kreuzprobe: die
     // Stempel sind frisch, die Werte aber eingefroren bzw. widersprüchlich —
@@ -1322,7 +1327,12 @@ export function createScheduleEvaluator(ctx) {
       const nowMs = Date.now();
       // Backoff-Fenster: nur für eine echt gescheiterte Freigabe, nur im
       // Automatik-Pfad (nicht explicit). Still halten, später erneut versuchen.
-      if (feedIn === true && !explicit && bk.fails >= DV_RELEASE_BACKOFF_AFTER && nowMs < bk.nextAt) {
+      // A26: Wartezeit monoton — die Marke an nextAt trägt die Laufzeit des Fehlschlags (unsichtbar), gewartet wird
+      // DV_RELEASE_BACKOFF_MS ab dort (Grenze wie bisher: ab genau der Frist wieder offen). nextAt bleibt Systemzeit
+      // (retryAt in der Anzeige); ohne Marke (nach Neustart) Wanduhr wie bisher.
+      const sinceFailMs = monoStampAge(bk, 'nextAt');
+      const inBackoff = sinceFailMs != null ? sinceFailMs < DV_RELEASE_BACKOFF_MS : nowMs < bk.nextAt;
+      if (feedIn === true && !explicit && bk.fails >= DV_RELEASE_BACKOFF_AFTER && inBackoff) {
         results.feedExcessDcPv = { ok: false, error: bk.lastError, backoff: true, retryAt: bk.nextAt, fails: bk.fails };
         allOk = false;
       } else {
@@ -1371,6 +1381,7 @@ export function createScheduleEvaluator(ctx) {
             bk.fails += 1;
             bk.lastError = e.message;
             bk.nextAt = bk.fails >= DV_RELEASE_BACKOFF_AFTER ? nowMs + DV_RELEASE_BACKOFF_MS : 0;
+            if (bk.nextAt) stampMono(bk, 'nextAt');
           }
           // Log nennt den konkret scheiternden Punkt, sein Register und den Wert
           // (M14: vorher stand hier nur `feedExcessDcPv`). Aus runDvControlSequence
@@ -1504,11 +1515,15 @@ export function createScheduleEvaluator(ctx) {
     // lastWrite — schnell aufeinanderfolgende Writes (5-s-Recompute) erzeugen
     // so höchstens einen Read pro minIntervalMs statt einen pro Write.
     if (verifyTimers.has(target)) return;
-    const wait = Math.max(vc.delayMs, (v.lastRunAt + vc.minIntervalMs) - Date.now());
+    // A26: Mindestabstand monoton (Marke an lastRunAt, unsichtbar) — nach einem Rücksprung der Systemzeit lag der
+    // nächste Verify sonst um die Sprungweite später. lastRunAt bleibt Systemzeit (Anzeige).
+    const sinceRunMs = Number(v.lastRunAt) > 0 ? (monoStampAge(v, 'lastRunAt') ?? (Date.now() - v.lastRunAt)) : Infinity;
+    const wait = Math.max(vc.delayMs, vc.minIntervalMs - sinceRunMs);
     const timer = setTimeout(() => {
       verifyTimers.delete(target);
       v.pending = false;
       v.lastRunAt = Date.now();
+      stampMono(v, 'lastRunAt');
       runWriteVerify(target, conf).catch((e) => {
         pushLog('control_write_verify_error', { target, error: e?.message || String(e) }, 'warn');
       });
@@ -1796,6 +1811,7 @@ export function createScheduleEvaluator(ctx) {
       }
       if (dvFeedInUnchanged(feedIn)) {
         state.schedule.active[target] = { value, source, at: Date.now(), skipped: true, reason: 'unchanged' };
+        stampMono(state.schedule.active[target], 'at'); // A26: „gilt noch“ (Netzanschluss-Wächter) monoton
         return { ok: true, skipped: true, reason: 'unchanged' };
       }
       const writeType = Array.isArray(cfg.dvControl?.feedExcessDcPv?.sequence?.[feedIn ? '1' : '0']) ? 'sequence' : 'dv_control';
@@ -1817,6 +1833,7 @@ export function createScheduleEvaluator(ctx) {
         stampMono(state.schedule.lastWrite[target], 'at');
       }
       state.schedule.active[target] = { value, source, at: Date.now() };
+      stampMono(state.schedule.active[target], 'at');
       pushLog('control_write', { target, value, source, writeType });
       telemetrySafeWrite(() => ctx.telemetryStore?.writeControlEvent({
         eventType: 'control_write',
@@ -2015,6 +2032,7 @@ export function createScheduleEvaluator(ctx) {
             requestedW: Math.round(Number(value)), valueW: Math.round(Number(res.value)),
             mode: res.mode, reason: res.reason, source, at: Date.now()
           };
+          stampMono(psState.clamp, 'at'); // A26: Frische des Deckel-Signals monoton (Entlade-Wächter, Anzeige)
           const key = `${res.mode}|${source}|${res.reason}`;
           if (psState._clampKey !== key) {
             psState._clampKey = key;
@@ -2052,6 +2070,7 @@ export function createScheduleEvaluator(ctx) {
         const res = capPositiveSetpoint(value, ceilingW);
         if (res.clamped) {
           gcState.clamp = { requestedW: Math.round(requested), valueW: res.value, ceilingW, source, at: Date.now() };
+          stampMono(gcState.clamp, 'at');
           const key = `${source}|${res.value}`;
           if (gcState._clampKey !== key) {
             gcState._clampKey = key;
@@ -2210,13 +2229,15 @@ export function createScheduleEvaluator(ctx) {
     const prev = state.schedule.lastWrite[target];
     let isKeepalive = false;
     if (prev != null && Number(prev.value) === Number(value)) {
-      const sinceLastWriteMs = Date.now() - (Number(prev.at) || 0);
+      // A26: Keepalive-Abstand monoton (Marke des Schreibpfads, A24); ohne Marke (Neustart) Wanduhr wie bisher.
+      const sinceLastWriteMs = monoStampAge(prev, 'at') ?? (Date.now() - (Number(prev.at) || 0));
       if (!(keepaliveMs > 0 && sinceLastWriteMs >= keepaliveMs)) {
         // Unchanged and no keepalive due → HOLD (skip the hardware write).
         state.schedule.active[target] = {
           value, source, at: Date.now(), skipped: true,
           reason: 'unchanged', heldSinceMs: sinceLastWriteMs
         };
+        stampMono(state.schedule.active[target], 'at');
         // Transparency (T-0002): surface a held write once per (target,value)
         // transition so the operator can see "held at X" without log spam.
         if (state.schedule._lastSkipKey?.[target] !== String(value)) {
@@ -2312,6 +2333,7 @@ export function createScheduleEvaluator(ctx) {
       stampMono(state.schedule.lastWrite[target], 'at');
       lastWriteSentMono.set(state.schedule.lastWrite[target], writeSentMono);
       state.schedule.active[target] = { value, source, at: Date.now(), keepalive: isKeepalive };
+      stampMono(state.schedule.active[target], 'at');
       // T-VERIFY: Read-after-Write-Verifikation planen (non-blocking, Flag-gated,
       // keine Keepalives — die re-asserten ohnehin denselben Wert zyklisch).
       // Der Sungrow-Aktuator liest selbst zurück (Register 13050–13052).
@@ -2931,6 +2953,7 @@ export function createScheduleEvaluator(ctx) {
         eff.value = holdW;
         eff.source = 'eos_grid_hold';
         eosGridHoldThisTick = { at: Date.now(), known, valueW: holdW, evPlanned: !!eff.rule.evPlanned, ruleId: eff.rule.id ?? null };
+        stampMono(eosGridHoldThisTick, 'at'); // A26: Halte-Signal-Frische (Entlade-Wächter) monoton, at bleibt Systemzeit
         const key = `${eff.rule.id}:${known}`;
         if (state.ctrl._eosHoldKey !== key) {
           pushLog('eos_grid_hold', { known, loadW: nl.loadW, pvW: nl.pvW, marginW, gridSetpointW: holdW, evPlanned: !!eff.rule.evPlanned });

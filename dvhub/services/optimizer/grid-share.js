@@ -122,6 +122,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { isGridStorageOnly, isGridChargeLicensed } from './grid-storage.js';
+import { monoNow, monoStampAge } from '../mono-clock.js';
 // isGridChargeLicensed nur noch für die Anzeige (summary.gridChargeEnabled) —
 // gezählt wird jede Netzladung.
 
@@ -200,7 +201,7 @@ const finiteOrNull = (v) => (v != null && v !== '' && Number.isFinite(Number(v))
  * ohnehin keinen Fluss bzw. keinen Ladestand (polling.js setzt Wert und Stempel
  * zusammen) — kein Grund.
  */
-export function gridShareBatteryUncertain(victron, { nowMs = Date.now(), maxAgeMs } = {}) {
+export function gridShareBatteryUncertain(victron, { nowMs = Date.now(), maxAgeMs, clock = monoNow } = {}) {
   const v = victron || {};
   const reasons = [];
   if (v.freeze?.active === true || v.freezeSuspect?.active === true) reasons.push('telemetry_frozen');
@@ -209,8 +210,13 @@ export function gridShareBatteryUncertain(victron, { nowMs = Date.now(), maxAgeM
   const max = Number.isFinite(cfgMax) && cfgMax > 0 ? Math.min(cfgMax, GRID_SHARE_FIELD_MAX_AGE_MS) : GRID_SHARE_FIELD_MAX_AGE_MS;
   for (const [field, tag] of BATTERY_FIELDS) {
     if (v.errors?.[field]) reasons.push(`${tag}_error`);
-    const old = (at, limit) => Number(at) > 0 && nowMs - Number(at) > limit;
-    if (old(v.fieldUpdatedAt?.[field], max) || old(v.fieldSourceAt?.[field], GRID_SHARE_FIELD_MAX_AGE_MS)) reasons.push(`${tag}_stale`);
+    // A26: Alter aus der monotonen Marke des Erzeugers (A24, Poller/MQTT-Empfang); ohne Marke Wanduhr wie bisher.
+    const old = (box, limit) => {
+      const at = Number(box?.[field]);
+      if (!(at > 0)) return false;
+      return (monoStampAge(box, field, clock) ?? (nowMs - at)) > limit;
+    };
+    if (old(v.fieldUpdatedAt, max) || old(v.fieldSourceAt, GRID_SHARE_FIELD_MAX_AGE_MS)) reasons.push(`${tag}_stale`);
   }
   return reasons;
 }
@@ -388,23 +394,27 @@ const emptyDay = (date) => ({ date, inWh: 0, toHomeWh: 0, toGridWh: 0, lossWh: 0
  * @param {(locked:boolean, summary:object) => void} [opts.onLockChange]
  * @param {boolean} [opts.readOnly] nur lesen (Web-Prozess neben dem Runtime-Worker)
  * @param {number} [opts.thresholdWh]
+ * @param {() => number} [opts.monoNow] monotone Uhr für Abstände (A26); Zeitpunkte (Tag, Protokoll) bleiben Wanduhr
  */
-export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange, readOnly = false, thresholdWh = GRID_SHARE_LOCK_THRESHOLD_WH } = {}) {
+export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange, readOnly = false, thresholdWh = GRID_SHARE_LOCK_THRESHOLD_WH, monoNow: monoClock = monoNow } = {}) {
   const statePath = dataDir ? path.join(dataDir, GRID_SHARE_STATE_FILE) : null;
   const protocolPath = dataDir ? path.join(dataDir, GRID_SHARE_PROTOCOL_FILE) : null;
   const log = (event, data, level) => { try { pushLog?.(event, data, level); } catch { /* nie werfen */ } };
   const cfgNow = () => { try { return getCfg?.() || {}; } catch { return {}; } };
 
+  // A26 (Christin 24.11.2026): Abstände (Zählschritt dt, Fenster der Netzladung, Speichertakt, Lese-Takt des
+  // Web-Prozesses, Ende einer Unsicherheits-Episode) monoton — ein Sprung der Systemzeit bucht weder 60 s Phantom-
+  // Netzladung noch verschluckt er einen Schritt. Zeitpunkte (Tageswechsel, Protokoll, since/updatedAt) bleiben Wanduhr.
   let st = null;
-  let lastTickMs = null;
-  let lastPersistMs = 0;
+  let lastTickMono = null;
+  let lastPersistMono = null;
   let dirty = false;
-  let lastReadMs = 0;
+  let lastReadMono = null;
   let live = { toHomeW: 0, toGridW: 0 };
-  // Unsicherheits-Episode fürs Log: { sinceMs, reasons:Set }, endet erst nach
-  // GRID_SHARE_UNCERTAIN_CLEAR_MS sicherer Werte.
+  // Unsicherheits-Episode fürs Log: { sinceMs (Wanduhr, Anzeige), sinceMono, reasons:Set }, endet erst nach
+  // GRID_SHARE_UNCERTAIN_CLEAR_MS sicherer Werte (monoton gemessen).
   let uncertainEpisode = null;
-  let certainSinceMs = null;
+  let certainSinceMono = null;
   // Fenster der Netzladung (filterGridInflow) — nur im Speicher: ein Neustart
   // mitten in den ersten Sekunden einer Ladung verliert höchstens diese.
   let inflowFilter = null;
@@ -452,7 +462,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     }
   }
 
-  function persist(nowMs = Date.now()) {
+  function persist(nowMs = Date.now(), mono = monoClock()) {
     if (readOnly || !statePath) return true;
     try {
       const tmp = statePath + '.tmp';
@@ -464,7 +474,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
         fs.closeSync(fd);
       }
       fs.renameSync(tmp, statePath);
-      lastPersistMs = nowMs;
+      lastPersistMono = mono;
       dirty = false;
       return true;
     } catch (e) {
@@ -497,9 +507,9 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     return out;
   }
 
-  function ensureLoaded(nowMs = Date.now()) {
-    if (!st) { st = load(); lastReadMs = nowMs; return; }
-    if (readOnly && nowMs - lastReadMs > READ_ONLY_REFRESH_MS) { st = load(); lastReadMs = nowMs; }
+  function ensureLoaded() {
+    if (!st) { st = load(); lastReadMono = monoClock(); return; }
+    if (readOnly && monoClock() - lastReadMono > READ_ONLY_REFRESH_MS) { st = load(); lastReadMono = monoClock(); }
   }
 
   function lockFor(cfg) {
@@ -538,10 +548,14 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
    * capacityWh ist dann null: keine Kappung am Ladestand, keine Abbuchung
    * (Sperre im Zweifel an); Log und Leitstand melden es (Gesamtprüfung
    * Release 1.0.9, Befund 3).
-   * @param {{nowMs?:number, victron?:object, socPct?:number|null, capacityWh?:number|null, capacityMissing?:boolean, secondBatteryStale?:boolean}} p
+   * monoMs (A26): monotone Zeit des Schritts. Fehlt sie, misst ein übergebenes nowMs (eingespielte Uhr, Tests) auch die
+   * Abstände wie bisher; ohne beides die monotone Uhr des Zählers.
+   * @param {{nowMs?:number, monoMs?:number, victron?:object, socPct?:number|null, capacityWh?:number|null, capacityMissing?:boolean, secondBatteryStale?:boolean}} p
    */
-  function tick({ nowMs = Date.now(), victron = {}, socPct = null, capacityWh = null, floorPct = 0, capacityMissing = false, secondBatteryStale = false } = {}) {
-    ensureLoaded(nowMs);
+  function tick({ nowMs, monoMs, victron = {}, socPct = null, capacityWh = null, floorPct = 0, capacityMissing = false, secondBatteryStale = false } = {}) {
+    if (!Number.isFinite(Number(monoMs))) monoMs = nowMs != null ? Number(nowMs) : monoClock();
+    if (nowMs == null) nowMs = Date.now();
+    ensureLoaded();
     if (readOnly) return summaryLive();
     const cfg = cfgNow();
     trackCapacity(capacityMissing === true);
@@ -552,8 +566,8 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       st.day = emptyDay(today);
       dirty = true;
     }
-    const dtMs = lastTickMs == null ? 0 : Math.min(GRID_SHARE_MAX_STEP_MS, Math.max(0, nowMs - lastTickMs));
-    lastTickMs = nowMs;
+    const dtMs = lastTickMono == null ? 0 : Math.min(GRID_SHARE_MAX_STEP_MS, Math.max(0, monoMs - lastTickMono));
+    lastTickMono = monoMs;
     const v = victron || {};
     // Zufluss: jede tatsächliche Netzladung, höchstens der echte Netzbezug —
     // ohne Rücksicht auf Netzlade- oder MiSpeL-Freigabe (Christin 03.11.2026,
@@ -562,7 +576,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     // Regelrauschen filtert filterGridInflow (Mindestleistung und -dauer) —
     // das war der Grund für die frühere Freigabe-Bedingung (Gegenprüfung f4bcc3ba).
     const filtered = filterGridInflow(inflowFilter, {
-      nowMs, dtMs,
+      nowMs: monoMs, dtMs,
       inflowW: Math.min(pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW), pos(v.gridImportW)),
     });
     inflowFilter = filtered.filter;
@@ -574,7 +588,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
     // (die Aufteilung auf Akku 2 rechnet polling.js aus denselben Werten). Ist
     // der Ladestand unsicher, wird er nicht benutzt (keine Kappung); bei nur
     // unsicherer Akkuleistung kappt der frische Ladestand das Zubuchen.
-    const reasons = gridShareBatteryUncertain(v, { nowMs, maxAgeMs: cfg?.victron?.telemetryMaxAgeMs });
+    const reasons = gridShareBatteryUncertain(v, { nowMs, maxAgeMs: cfg?.victron?.telemetryMaxAgeMs, clock: monoClock });
     if (secondBatteryStale) reasons.push('second_battery_stale');
     const uncertain = reasons.length > 0;
     const flows = {
@@ -585,7 +599,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       // mitgeführten Inhalt; G wächst allein über die gefilterte Netzladung.
       batteryChargeW: uncertain ? 0 : pos(v.solarToBatteryW) + pos(v.secondSolarToBatteryW) + pos(v.gridToBatteryW) + pos(v.secondGridToBatteryW),
     };
-    trackUncertainty(nowMs, reasons);
+    trackUncertainty(nowMs, monoMs, reasons);
     if (uncertain) {
       st.day.uncertainMs = (st.day.uncertainMs || 0) + dtMs;
       if (dtMs > 0) dirty = true;
@@ -654,10 +668,10 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       };
       appendProtocol(entry);
       log('grid_share_lock', { locked, gridKwh: entry.gridKwh, sharePct: entry.sharePct });
-      persist(nowMs);
+      persist(nowMs, monoMs);
       try { onLockChange?.(locked, summary(nowMs)); } catch (e) { log('grid_share_lock_hook_error', { error: e?.message || String(e) }, 'warn'); }
-    } else if (dirty && nowMs - lastPersistMs >= PERSIST_INTERVAL_MS) {
-      persist(nowMs);
+    } else if (dirty && (lastPersistMono == null || monoMs - lastPersistMono >= PERSIST_INTERVAL_MS)) {
+      persist(nowMs, monoMs);
     }
     return summaryLive();
   }
@@ -691,11 +705,11 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
   }
 
   /** Log einmal je Episode: Beginn sofort, Ende nach GRID_SHARE_UNCERTAIN_CLEAR_MS sicherer Werte. */
-  function trackUncertainty(nowMs, reasons) {
+  function trackUncertainty(nowMs, monoMs, reasons) {
     if (reasons.length) {
-      certainSinceMs = null;
+      certainSinceMono = null;
       if (!uncertainEpisode) {
-        uncertainEpisode = { sinceMs: nowMs, reasons: new Set(reasons) };
+        uncertainEpisode = { sinceMs: nowMs, sinceMono: monoMs, reasons: new Set(reasons) };
         log('grid_share_uncertain', { reasons: [...reasons], gridKwh: r3(st.gridWh / 1000), note: 'Akkuwerte unsicher — keine Abbuchung' }, 'warn');
       } else {
         for (const x of reasons) uncertainEpisode.reasons.add(x);
@@ -717,15 +731,15 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
       if (st.uncertain) { st.uncertain = null; dirty = true; }
       return;
     }
-    if (certainSinceMs == null) certainSinceMs = nowMs;
-    if (nowMs - certainSinceMs >= GRID_SHARE_UNCERTAIN_CLEAR_MS) {
+    if (certainSinceMono == null) certainSinceMono = monoMs;
+    if (monoMs - certainSinceMono >= GRID_SHARE_UNCERTAIN_CLEAR_MS) {
       log('grid_share_uncertain_end', {
         reasons: [...uncertainEpisode.reasons],
-        minutes: Math.round((certainSinceMs - uncertainEpisode.sinceMs) / 60_000),
+        minutes: Math.round((certainSinceMono - uncertainEpisode.sinceMono) / 60_000),
         gridKwh: r3(st.gridWh / 1000),
       });
       uncertainEpisode = null;
-      certainSinceMs = null;
+      certainSinceMono = null;
       if (st.uncertain) { st.uncertain = null; dirty = true; }
     }
   }
@@ -747,7 +761,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
   }
 
   function summary(nowMs = Date.now()) {
-    ensureLoaded(nowMs);
+    ensureLoaded();
     const cfg = cfgNow();
     const kwh = (wh) => r3((Number(wh) || 0) / 1000);
     return {
@@ -819,7 +833,7 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
    * Protokollzeile mit dem alten Stand; nur der zählende Prozess darf das.
    */
   function reset({ reason = '', actor = null, nowMs = Date.now() } = {}) {
-    ensureLoaded(nowMs);
+    ensureLoaded();
     if (readOnly) return { ok: false, error: 'read_only_process' };
     const before = st.gridWh;
     const entry = { ts: new Date(nowMs).toISOString(), event: 'reset', gridKwh: r3(before / 1000), reason: String(reason || '').slice(0, 200), actor };
@@ -843,10 +857,10 @@ export function createGridShareTracker({ getCfg, pushLog, dataDir, onLockChange,
   }
 
   /** Nur lesend: Stand sofort neu aus der Datei (nach einem Reset im Runtime-Prozess). */
-  function reload(nowMs = Date.now()) {
+  function reload() {
     if (!readOnly) return;
     st = load();
-    lastReadMs = nowMs;
+    lastReadMono = monoClock();
   }
 
   ensureLoaded();

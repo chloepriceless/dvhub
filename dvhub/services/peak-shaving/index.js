@@ -33,7 +33,7 @@
 import { betaGateOpen } from '../../beta-features.js';
 import { localParts, zoneOffsetMs } from '../../tz-fast.js';
 import { capPositiveSetpoint } from '../import-limit/core.js';
-import { monoNow as sharedMonoNow, monoStampOf } from '../mono-clock.js';
+import { monoNow as sharedMonoNow, monoStampOf, monoStampAge } from '../mono-clock.js';
 
 export const PEAK_SHAVING_DEFAULTS = Object.freeze({
   enabled: false,
@@ -447,7 +447,8 @@ export function createPeakShaving(ctx, deps = {}) {
     const s = ctx.state || {};
     const t = now();
     const ctl = s.ctrl?._peakShaving || {};
-    const clampFresh = ctl.clamp && (t - Number(ctl.clamp.at || 0)) <= CLAMP_FRESH_MS;
+    // A26: Alter des Deckel-Signals monoton (Marke aus schedule-eval), ohne Marke Wanduhr.
+    const clampFresh = ctl.clamp && (monoStampAge(ctl.clamp, 'at') ?? (t - Number(ctl.clamp.at || 0))) <= CLAMP_FRESH_MS;
     const clamp = clampFresh
       ? { requestedW: ctl.clamp.requestedW, valueW: ctl.clamp.valueW, mode: ctl.clamp.mode, reason: ctl.clamp.reason ?? null, source: ctl.clamp.source }
       : null;

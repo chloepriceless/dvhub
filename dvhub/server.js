@@ -90,7 +90,7 @@ import {
 import { atomicWriteControlState, readControlState } from './control-state-io.js';
 import { createModbusServer } from './modbus-server.js';
 import { createDvLimitController, ctrlDeadlinePassed } from './dv-interface-luox.js';
-import { stampMono } from './services/mono-clock.js';
+import { stampMono, monoNow } from './services/mono-clock.js';
 import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
 import { setNotHaltProbe } from './services/emergency-stop/policy.js';
 import { createFeedInCap } from './services/feed-in-cap/index.js';
@@ -2584,6 +2584,7 @@ const telemetryReady = (async () => {
         teslaUpdatedAt: teslamateService.getFieldUpdatedAt(),
         devices: deviceService.getDevices(),
         nowMs: Date.now(),
+        monoNow, // A26: Frische der TeslaMate-Felder monoton (Empfangsmarke)
         freshnessSeconds: sepCfg.freshnessSeconds ?? DEFAULT_FRESHNESS_SECONDS,
         homeGeofence: sepCfg.homeGeofence ?? DEFAULT_HOME_GEOFENCE
       });

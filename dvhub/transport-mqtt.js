@@ -281,9 +281,11 @@ export function createMqttTransport(victronConfig, options = {}) {
   const staleMaxAgeMs = mqttCfg.staleMaxAgeMs != null
     ? Number(mqttCfg.staleMaxAgeMs)
     : Math.max(3 * keepaliveMs, 90000);
-  let lastStaleReconnectAt = 0;
+  // A26: Abstände monoton (Drossel des Neuverbindens, „Abo lebt“) — ein Rücksprung der Systemzeit hielt das Abo sonst
+  // für lebendig bzw. sperrte das Neuverbinden um die Sprungweite.
+  let lastStaleReconnectMono = null;
   // DVhub-Schema: wann zuletzt ein Eingang PER MQTT kam (nicht per HTTP-Push) — 0 = noch nie.
-  let lastMqttInputAt = 0;
+  let lastMqttInputMono = null;
 
   let client = null;
   let keepaliveTimer = null;
@@ -376,7 +378,7 @@ export function createMqttTransport(victronConfig, options = {}) {
       if (v !== undefined) {
         cache[topic] = withMono({ value: v, ts: Date.now() }, 'mono', monoNow());
         // Lebenszeichen des MQTT-Abos — getrennt vom Zwischenspeicher, den auch der HTTP-Push füllt (Codex ac04827a P2).
-        lastMqttInputAt = Date.now();
+        lastMqttInputMono = monoNow();
       }
       return;
     }
@@ -399,7 +401,8 @@ export function createMqttTransport(victronConfig, options = {}) {
   // (N/<portal>/<dienst>/<instanz>/<pfad…>). `null` wird bewusst MIT gespeichert:
   // Venus meldet so „Alarm vom Gerät nicht unterstützt", und der Decoder
   // überspringt null — als 0 gelesen wäre es ein falsches „alles in Ordnung".
-  const alarmCache = { vebus: {}, battery: {}, ts: 0 };
+  // A26: mono = monotone Empfangszeit (nur im Prozess, nicht in der Rückgabe) — die Frische misst monoton.
+  const alarmCache = { vebus: {}, battery: {}, ts: 0, mono: null };
   function rememberAlarmTopic(topic, value) {
     const parts = String(topic).split('/');
     const service = parts[2];
@@ -408,12 +411,14 @@ export function createMqttTransport(victronConfig, options = {}) {
     if (!path) return;
     alarmCache[service][path] = value;
     alarmCache.ts = Date.now();
+    alarmCache.mono = monoNow();
   }
 
   /** Rohwerte für buildActiveAlarmsFromDbus; null wenn nie etwas ankam/zu alt. */
   function getAlarmValues(maxAgeMs = staleMaxAgeMs) {
     if (!alarmCache.ts) return null;
-    if (maxAgeMs > 0 && (Date.now() - alarmCache.ts) > maxAgeMs) return null;
+    const ageMs = alarmCache.mono != null ? monoNow() - alarmCache.mono : Date.now() - alarmCache.ts;
+    if (maxAgeMs > 0 && ageMs > maxAgeMs) return null;
     return { vebus: { ...alarmCache.vebus }, battery: { ...alarmCache.battery }, ts: alarmCache.ts };
   }
 
@@ -438,12 +443,14 @@ export function createMqttTransport(victronConfig, options = {}) {
     // L2/L3 immer null senden, meldet damit nichts ungültig (Codex 186f688f).
     const invalidated = value === null && !!prev && (prev.invalidated === true
       || (prev.value !== null && Number.isFinite(Number(prev.value))));
-    entry[field] = isNumber || !invalidated ? { value, ts: Date.now() } : { value, ts: Date.now(), invalidated: true };
+    // A26: monotone Empfangsmarke wie im Punkt-Cache (A24) — Frische und Ungültig-Frist messen damit.
+    entry[field] = withMono(isNumber || !invalidated ? { value, ts: Date.now() } : { value, ts: Date.now(), invalidated: true }, 'mono', monoNow());
   }
   function readGridVoltage() {
     if (schema !== 'venus') return null;
     const instances = Object.keys(gridAcCache).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
     let invalidatedAt = 0;
+    let invalidatedMono = null;
     for (const instance of instances) {
       const e = gridAcCache[instance];
       const fresh = (k) => (mqttCacheEntryFresh(e[k], staleMaxAgeMs) && Number.isFinite(Number(e[k].value)) ? e[k] : null);
@@ -460,12 +467,18 @@ export function createMqttTransport(victronConfig, options = {}) {
         for (const k of ['l1', 'l2', 'l3']) {
           const x = e[k];
           if (!x || x.value !== null || (anyNumber && x.invalidated !== true)) continue;
-          if (!(staleMaxAgeMs > 0) || Date.now() - x.ts <= staleMaxAgeMs) invalidatedAt = Math.max(invalidatedAt, x.ts);
+          if (!(staleMaxAgeMs > 0) || mqttEntryAgeMs(x) <= staleMaxAgeMs) {
+            if (x.ts >= invalidatedAt) invalidatedMono = monoOf(x);
+            invalidatedAt = Math.max(invalidatedAt, x.ts);
+          }
         }
         continue;
       }
       const f = fresh('frequencyHz');
-      return {
+      const used = phases.concat(f).filter(Boolean);
+      const monos = used.map(monoOf);
+      // A26: monotone Empfangszeit der ältesten verwendeten Größe (nicht aufzählbar), nur wenn jede eine Marke hat.
+      return withMono({
         l1: phases[0] ? Number(phases[0].value) : null,
         l2: phases[1] ? Number(phases[1].value) : null,
         l3: phases[2] ? Number(phases[2].value) : null,
@@ -476,9 +489,9 @@ export function createMqttTransport(victronConfig, options = {}) {
         // Empfangszeit je Phase (Datenspende: jede Phase mit ihrer Messzeit).
         phaseTs: phases.map((p) => (p ? Number(p.ts) || null : null)),
         instance,
-      };
+      }, 'monoTs', monos.every((m) => m != null) ? Math.min(...monos) : null);
     }
-    if (invalidatedAt) return { l1: null, l2: null, l3: null, frequencyHz: null, ts: invalidatedAt, phaseTs: [null, null, null], invalidated: true };
+    if (invalidatedAt) return withMono({ l1: null, l2: null, l3: null, frequencyHz: null, ts: invalidatedAt, phaseTs: [null, null, null], invalidated: true }, 'monoTs', invalidatedMono);
     return null;
   }
 
@@ -744,11 +757,11 @@ export function createMqttTransport(victronConfig, options = {}) {
         // gar nichts Frisches mehr PER MQTT ankommt — per HTTP gepushte Werte beweisen kein lebendes Abo
         // (Codex ac04827a P2: gemischte Anlage, MQTT steht still, HTTP frisch).
         const subscriptionAlive = schema === 'dvhub'
-          && lastMqttInputAt > 0 && Date.now() - lastMqttInputAt <= staleMaxAgeMs;
+          && lastMqttInputMono != null && monoNow() - lastMqttInputMono <= staleMaxAgeMs;
         if (wasStale && !subscriptionAlive && typeof client.reconnect === 'function') {
-          const now = Date.now();
-          if (now - lastStaleReconnectAt > staleMaxAgeMs) {
-            lastStaleReconnectAt = now;
+          const m = monoNow();
+          if (lastStaleReconnectMono == null || m - lastStaleReconnectMono > staleMaxAgeMs) {
+            lastStaleReconnectMono = m;
             try { client.reconnect(); } catch { /* best-effort recovery */ }
           }
         }
