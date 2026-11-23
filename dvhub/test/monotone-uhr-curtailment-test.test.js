@@ -5,7 +5,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createCurtailmentTest } from '../services/curtailment-test.js';
+import { createSungrowEms, wire, EMS_CMD } from '../services/inverter/sungrow.js';
+import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
 import { HOST, fixClock, loadProfileConfig, recordingModbus, baseState, evaluatorRig } from './helpers/gate-golden.js';
+
+const CMD = wire(13051);
 
 function harness() {
   const c = { wall: 1_800_000_000_000, mono: 7000 };
@@ -79,4 +83,39 @@ test('Regeltakt: Negativpreis-Test gilt nach dem Dienst, nicht nach der Wanduhr-
   };
   assert.equal(await run(true), 'negative_price_protection');
   assert.notEqual(await run(false), 'negative_price_protection', 'Dienst: abgelaufen → kein Negativpreis-Pfad, auch wenn until (Wanduhr) noch nicht erreicht ist');
+});
+
+// Codex 944bcef1 (P2): ein abgelaufener DV-Test, der noch nicht abgetastet wurde, gibt beim Start eines neuen Tests
+// sein eigenes DV-Lease frei, statt überschrieben zu werden.
+test('Abregel-Test: Rücksprung — neuer Test nach monotonem Ablauf nimmt das alte DV-Lease zurück', () => {
+  const h = harness();
+  h.ct.start({ mode: 'dv', minutes: 5 });
+  h.c.wall -= 3_600_000; h.c.mono += 5 * 60000 + 500; // abgelaufen, sample() noch nicht gelaufen
+  const r = h.ct.start({ mode: 'negativePrice', minutes: 1 });
+  assert.equal(r.ok, true);
+  assert.deepEqual(h.forced.cleared, ['curtailment_test_expired']);
+  assert.equal(h.state.ctrl.forcedOff, false);
+  assert.ok(h.state.log.some((l) => l.event === 'curtailment_test_finished' && l.reason === 'expired'));
+});
+
+// Codex 944bcef1 (P2): der Sungrow-Aktuator liest „Akku nicht laden“ mit derselben monotonen Frist wie der Dienst.
+test('Sungrow: Sprung vorwärts über until — „Akku nicht laden“ gilt weiter, kein Ladebefehl', async () => {
+  const c = { wall: 1_000_000_000, mono: 1000 };
+  const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30 } });
+  const t = mockSungrow(sungrowImage());
+  const state = { victron: { errors: {}, fieldUpdatedAt: {}, device: sungrowDevice() }, meter: { ok: true, updatedAt: c.wall, grid_total_w: 0 }, ctrl: {} };
+  const telemetry = () => {
+    state.meter = { ok: true, updatedAt: c.wall, grid_total_w: -3000 }; // 3 kW Einspeisung (PV-Überschuss)
+    Object.assign(state.victron, { batteryPowerW: 0, pvPowerW: 4000, selfConsumptionW: 1000 });
+    for (const f of ['batteryPowerW', 'pvPowerW', 'selfConsumptionW']) state.victron.fieldUpdatedAt[f] = c.wall;
+  };
+  telemetry();
+  const ct = createCurtailmentTest({ state, now: () => c.wall, monoNow: () => c.mono, getCfg: () => ({ dvControl: { enabled: true } }), pushLog: () => {} });
+  assert.equal(ct.start({ mode: 'negativePrice', minutes: 10, blockCharge: true }).ok, true);
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, now: () => c.wall, monoNow: () => c.mono });
+  c.wall += 3_600_000; c.mono += 60_000; // Uhr springt über until, 1 min Laufzeit
+  telemetry();
+  assert.equal(ct.batteryHoldActive(), true);
+  await ems.applySetpoint(0, 'rule:test');
+  assert.ok(!t.writes.some((w) => w.address === CMD && w.value === EMS_CMD.CHARGE), `kein Laden: ${JSON.stringify(t.writes)}`);
 });

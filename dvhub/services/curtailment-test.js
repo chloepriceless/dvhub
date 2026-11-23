@@ -32,6 +32,25 @@
 
 import { pickMonoNow } from './mono-clock.js';
 
+// Monotoner Ablauf je Testlauf (am Objekt state.ctrl.curtailmentTest, nicht im JSON), mit der Uhr des Dienstes. Auf
+// Modulebene, damit auch Leser außerhalb des Dienstes (Sungrow-Aktuator: „Akku nicht laden“) dieselbe Frist sehen.
+const runs = new WeakMap();
+
+/**
+ * Restzeit eines Testlaufs in ms (≤ 0 = abgelaufen): monoton, wenn der Dienst den Lauf gestartet hat; sonst (von außen
+ * gesetzt, Tests) gegen die Wanduhr until − nowMs.
+ */
+export function curtailmentTestRemainingMs(t, nowMs = Date.now()) {
+  if (!t) return 0;
+  const r = runs.get(t);
+  return r ? r.untilMono - r.clock() : Number(t.until) - nowMs;
+}
+
+/** Läuft der Testlauf (aktiv und nicht abgelaufen)? Siehe curtailmentTestRemainingMs. */
+export function curtailmentTestRunning(t, nowMs = Date.now()) {
+  return !!(t && t.active === true && curtailmentTestRemainingMs(t, nowMs) > 0);
+}
+
 const MIN_MINUTES = 1;
 const MAX_MINUTES = 60;                       // Sicherheits-Obergrenze je Test
 const MAX_SAMPLES = 60 * (MAX_MINUTES + 2);   // bounded gegen Speicherwuchs
@@ -53,18 +72,22 @@ export function createCurtailmentTest(ctx) {
   const pushLog = ctx.pushLog || (() => {});
   const now = ctx.now || (() => Date.now());
   const mono = pickMonoNow(ctx.monoNow, ctx.now);
-  // Monotoner Start/Ablauf je Testlauf (am Objekt state.ctrl.curtailmentTest, nicht im JSON). Ein Lauf ohne Eintrag
-  // (von außen gesetzt) fällt auf die Wanduhr zurück.
-  const monoOf = new WeakMap();
 
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
   const current = () => state.ctrl.curtailmentTest || null;
-  /** Restzeit des Laufs in ms (≤ 0 = abgelaufen), monoton gemessen. */
-  const remaining = (t) => {
-    const m = monoOf.get(t);
-    return m ? m.untilMono - mono() : Number(t.until) - now();
-  };
-  const running = (t) => !!(t && t.active === true && remaining(t) > 0);
+  const remaining = (t) => curtailmentTestRemainingMs(t, now());
+  const running = (t) => curtailmentTestRunning(t, now());
+
+  // Abgelaufenen Lauf beenden und ein noch eigenes DV-Lease mit zurücknehmen (wie stop()): nur, wenn offUntil noch das
+  // eigene ist — ein echtes DV-Signal hat es verschoben und läuft über sein eigenes Lease ab. true = beendet.
+  function expireIfDue(t) {
+    if (!t || t.active !== true || remaining(t) > 0) return false;
+    finish('expired');
+    if (t.mode === 'dv' && state.ctrl.forcedOff === true && state.ctrl.offUntil === t.until) {
+      ctx.clearForcedOff?.('curtailment_test_expired');
+    }
+    return true;
+  }
 
   /** Test gerade aktiv (und Lease nicht abgelaufen)? */
   function isActive() {
@@ -97,6 +120,9 @@ export function createCurtailmentTest(ctx) {
       return { ok: false, status: 409, error: 'dv_control_disabled' };
     }
     const existing = current();
+    // Ein abgelaufener, noch nicht abgetasteter Lauf (sample() kommt jede Sekunde) wird erst sauber beendet, samt
+    // eigenem DV-Lease — sonst überschriebe der neue Lauf ihn und das Lease bliebe stehen (Codex 944bcef1 P2).
+    expireIfDue(existing);
     if (running(existing)) {
       return { ok: false, status: 409, error: 'curtailment_test_already_running', test: publicView() };
     }
@@ -115,7 +141,7 @@ export function createCurtailmentTest(ctx) {
       startedAt, until, samples: [], events: [], stoppedAt: null, stopReason: null,
       actor: actor?.actor_ip || null,
     };
-    monoOf.set(state.ctrl.curtailmentTest, { startedMono, untilMono: startedMono + mins * 60000 });
+    runs.set(state.ctrl.curtailmentTest, { startedMono, untilMono: startedMono + mins * 60000, clock: mono });
     // DV-Test: echtes Lease über denselben Pfad wie ein DV-Signal. Der Aufruf
     // sperrt die Einspeisung sofort (applyDvVictronControl(false)) und läuft über
     // den 1-s-Watchdog (expireLeaseIfNeeded) von selbst ab.
@@ -179,21 +205,13 @@ export function createCurtailmentTest(ctx) {
   function sample() {
     const t = current();
     if (!t || t.active !== true) return;
-    if (remaining(t) <= 0) {
-      finish('expired');
-      // Eigenes DV-Lease mit zurücknehmen (wie stop()): nur, wenn es noch unseres ist — ein echtes DV-Signal hat
-      // offUntil verschoben und läuft über sein eigenes Lease ab.
-      if (t.mode === 'dv' && state.ctrl.forcedOff === true && state.ctrl.offUntil === t.until) {
-        ctx.clearForcedOff?.('curtailment_test_expired');
-      }
-      return;
-    }
+    if (expireIfDue(t)) return;
     if (t.samples.length >= MAX_SAMPLES) return;
     const v = state.victron || {};
     const second = v.sungrowSecond || state.sungrowSecond || {};
     const act = state.schedule?.active || {};
     const dcFeed = act.feedExcessDcPv ? num(act.feedExcessDcPv.value) : null;
-    const startMono = monoOf.get(t)?.startedMono;
+    const startMono = runs.get(t)?.startedMono;
     t.samples.push({
       tMs: startMono != null ? mono() - startMono : now() - t.startedAt,
       // Netz (System-Zähler am Master) + PV/Akku je WR, genau die Felder, die der

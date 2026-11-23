@@ -26,6 +26,7 @@ import { c2AllowsRelease, createLegacyGate, inverterReleaseState, modbusLegacySi
 import { createModbusHealth, classifyModbusError, modbusRequestInfo } from './modbus-health.js';
 import { releaseBackoffNextAt } from '../release-backoff.js';
 import { bootStamp } from '../mono-clock.js';
+import { curtailmentTestRunning } from '../curtailment-test.js';
 
 /** Doku-Adresse → Draht-Adresse. */
 export const wire = (docAddress) => Number(docAddress) - 1;
@@ -1824,7 +1825,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // bleibt). Selbst-ablaufend über das Lease (now < until) — endet garantiert mit dem Test.
   function curtailmentBatteryHold() {
     const ct = state.ctrl?.curtailmentTest;
-    return !!(ct && ct.active === true && ct.blockCharge === true && now() < ct.until);
+    // Frist monoton wie im Dienst (A23 b, Codex 944bcef1 P2): curtailmentTestRunning, sonst gegen die Wanduhr.
+    return !!(ct && ct.blockCharge === true && curtailmentTestRunning(ct, now()));
   }
 
   // M25 + Codex 4c624dcd (P1): Ist die Einspeisung gerade gesperrt? Dann entlädt DVhub nur fürs Haus (höchstens die
