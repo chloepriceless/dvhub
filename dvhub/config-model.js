@@ -1466,6 +1466,18 @@ function buildFieldDefinitions() {
       visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
       help: 'Unter diesem Ladestand deckt der Akku keine Spitzen mehr ab. Leer = der harte Mindest-Ladestand (Optimierer → harter SoC-Boden) gilt. Der höhere der beiden Werte zählt.'
     },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.billing15min',
+      label: 'Abrechnung nach 15-min-Mittelwert',
+      type: 'boolean',
+      default: true,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'An (Standard) = der Netzbetreiber rechnet den Leistungspreis auf den höchsten Viertelstunden-Mittelwert (so ist es bei RLM üblich). Dann darf der Bezug kurz über der Grenze liegen: DVhub zählt je Viertelstunde (:00/:15/:30/:45) die bezogene Energie mit, rechnet bis zum Ende der Viertelstunde hoch und greift erst ein, wenn der Mittelwert die Grenze minus Abstand reißen würde — dann mit genau der Leistung, die bis zum Ende fehlt. Der Akku wird so seltener gebraucht. Kann der Akku nicht sicher liefern (Ladestand nahe am Boden, Entladeleistung ausgeschöpft oder nicht eingetragen, Messlücken, letzte Minute der Viertelstunde), gilt sofort der Deckel auf den Augenblickswert. Aus = DVhub hält jeden Augenblick unter Grenze minus Abstand (wie bis 1.0.10). Dafür braucht DVhub die Entladeleistung des Akkus oder die Wechselrichter-Nennleistung.'
+    },
 
     // Sungrow-Steuermodus (T-0422, Christin 11.11.2026): External EMS mit
     // Herzschlag (Standard) oder Forced mode. Betreiber-einstellbar und deshalb
@@ -5294,7 +5306,7 @@ export function createDefaultConfig() {
     // Netzanschluss (services/grid-connection): ab Werk leer = DVhub begrenzt nicht.
     gridConnection: { limitKw: null, marginW: null, phaseLimitA: null, releaseHysteresisW: 1000, baseLoadW: 1000, order: 'wallbox_first', batteryPhases: '' },
     // Peak Shaving (GitHub #28, services/peak-shaving): ab Werk aus, ohne Grenze.
-    peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null },
+    peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true },
     multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300, exportHandoffAtFloor: false },
     // Ladestand des E-Autos über evccs Fahrzeug-Treiber (services/vehicle-evcc):
     // aus, bis jemand eine Marke einrichtet; evcc wird erst dann geladen.

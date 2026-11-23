@@ -67,6 +67,26 @@
     return s.message || '';
   }
 
+  const kwh = (wh) => (num(wh)
+    ? `${(Number(wh) / 1000).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kWh`
+    : DASH);
+  const mmss = (sec) => {
+    if (!num(sec)) return DASH;
+    const t = Math.max(0, Math.round(Number(sec)));
+    return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+  };
+
+  // Viertelstunden-Budget (P1): bezogen / Budget dieser Viertelstunde, Restzeit,
+  // erlaubte Leistung bis zum Ende — oder warum gerade der Augenblickswert gilt.
+  function budgetText(b) {
+    if (!b) return '';
+    if (b.mode === 'budget') {
+      return `${kwh(b.usedWh)} von ${kwh(b.budgetWh)} · noch ${mmss(b.remainingS)} · bis zum Ende höchstens ${kw(b.allowedW)}`;
+    }
+    if (b.reason === 'billing_instant') return 'Augenblickswert (eingestellt)';
+    return `Augenblickswert — ${b.reasonText || b.reason || 'unsicher'}`;
+  }
+
   function view(s) {
     if (!s || s.enabled !== true) return { hidden: true };
     const [label, tone] = state(s);
@@ -88,7 +108,9 @@
         : '',
       state: label,
       tone,
-      detail: detail(s)
+      detail: detail(s),
+      budget: budgetText(s.budget),
+      budgetMode: s.budget ? s.budget.mode : null
     };
   }
 
@@ -110,6 +132,9 @@
     set('peakShavingMonth', v.monthPeakAt ? `${v.monthPeak} · ${v.monthPeakAt}` : v.monthPeak, v.monthOverLimit);
     set('peakShavingYear', v.yearPeakAt ? `${v.yearPeak} · ${v.yearPeakAt}` : v.yearPeak, v.yearOverLimit);
     set('peakShavingState', v.state);
+    const budgetRow = d.getElementById('peakShavingBudgetRow');
+    if (budgetRow) budgetRow.hidden = !v.budget;
+    set('peakShavingBudget', v.budget || DASH);
     set('peakShavingDetail', v.peakNote ? `${v.detail} ${v.peakNote}`.trim() : v.detail);
     const chip = d.getElementById('peakShavingChip');
     if (chip) {

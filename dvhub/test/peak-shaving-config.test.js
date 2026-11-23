@@ -17,7 +17,7 @@ const dev = (peakShaving, extra = {}) => ({ updateChannel: 'dev', manufacturer: 
 test('Vorgabe: Peak Shaving ist ab Werk aus und ohne Grenze', () => {
   const d = createDefaultConfig();
   assert.deepEqual(d.peakShaving, {
-    enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null
+    enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true
   });
   const r = resolvePeakShaving(d);
   assert.equal(r.enabled, false);
@@ -86,7 +86,7 @@ test('Einstellungsfelder: eigene Gruppe in „Netz & Recht“, beta, deutsch, mi
   const fields = def.fields.filter((f) => String(f.path || '').startsWith('peakShaving.'));
   const byPath = Object.fromEntries(fields.map((f) => [f.path, f]));
   assert.deepEqual(Object.keys(byPath).sort(), [
-    'peakShaving.enabled', 'peakShaving.gridImportLimitW', 'peakShaving.marginW',
+    'peakShaving.billing15min', 'peakShaving.enabled', 'peakShaving.gridImportLimitW', 'peakShaving.marginW',
     'peakShaving.minSocPct', 'peakShaving.releaseHysteresisW'
   ]);
   for (const f of fields) {
@@ -96,6 +96,8 @@ test('Einstellungsfelder: eigene Gruppe in „Netz & Recht“, beta, deutsch, mi
     assert.ok(typeof f.help === 'string' && f.help.length > 20, f.path);
     if (f.path !== 'peakShaving.enabled') {
       assert.deepEqual(f.visibleWhenPath, { path: 'peakShaving.enabled', equals: true }, f.path);
+    }
+    if (f.path !== 'peakShaving.enabled' && f.type !== 'boolean') {
       assert.equal(f.type, 'number', f.path);
       assert.ok(Number.isFinite(f.min) && Number.isFinite(f.max), `${f.path}: min/max`);
     }

@@ -32,14 +32,20 @@
 
 import { betaGateOpen } from '../../beta-features.js';
 import { localParts, zoneOffsetMs } from '../../tz-fast.js';
-import { capPositiveSetpoint } from '../import-limit/core.js';
+import { capPositiveSetpoint, meterImport } from '../import-limit/core.js';
+import { monoNow as defaultMonoNow } from '../mono-clock.js';
+import { createBudgetState, observeBudget, decideBudget } from './budget.js';
 
 export const PEAK_SHAVING_DEFAULTS = Object.freeze({
   enabled: false,
   gridImportLimitW: null,
   marginW: 300,
   releaseHysteresisW: 500,
-  minSocPct: null
+  minSocPct: null,
+  // Abrechnung nach 15-min-Mittelwert (P1, Christin 24.11.2026): DVhub führt je
+  // Viertelstunde ein Energiebudget und greift erst ein, wenn die Hochrechnung
+  // es reißen würde. Aus = Deckel auf den Augenblickswert (Verhalten bis 1.0.10).
+  billing15min: true
 });
 
 // Unter 1 kW ist eine Bezugsgrenze kein Gewerbe-Leistungspreis mehr, sondern
@@ -71,6 +77,8 @@ export function resolvePeakShaving(cfg = {}) {
   const releaseHysteresisW = Math.max(0, Math.round(hystRaw));
   const minSocPct = finite(c.minSocPct) && Number(c.minSocPct) >= 0 && Number(c.minSocPct) <= 100
     ? Number(c.minSocPct) : null;
+  // Ab Werk an; nur ein ausdrückliches false schaltet auf den Augenblickswert.
+  const billing15min = c.billing15min !== false;
   const reason = !flagOn ? 'disabled'
     : !gateOpen ? 'beta_gate_closed'
       : !configured ? 'limit_missing'
@@ -87,6 +95,7 @@ export function resolvePeakShaving(cfg = {}) {
     targetW: limitW == null ? null : limitW - marginW,
     releaseHysteresisW,
     minSocPct,
+    billing15min,
     reason
   };
 }
@@ -385,6 +394,50 @@ export function peakPeriods(nowMs = Date.now(), timeZone = 'Europe/Berlin') {
   };
 }
 
+/** Deutsche Kurztexte, warum DVhub gerade auf den Augenblickswert deckelt. */
+export const BUDGET_REASON_TEXT = Object.freeze({
+  billing_instant: 'Abrechnung nach Augenblickswert eingestellt',
+  no_data: 'Viertelstunde noch ohne Messwerte',
+  clock_jump: 'Uhrzeit gesprungen',
+  measurements_uncertain: 'Messlücken in dieser Viertelstunde',
+  meter_stale: 'Zählerwert nicht frisch',
+  slot_ending: 'Viertelstunde endet gleich',
+  soc_unknown: 'Ladestand unbekannt',
+  telemetry_frozen: 'Messwerte eingefroren',
+  source_mismatch: 'Messquellen widersprechen sich',
+  soc_floor: 'Akku am Mindest-Ladestand',
+  soc_near_floor: 'Akku nahe am Mindest-Ladestand',
+  discharge_unknown: 'Entladeleistung des Akkus nicht eingetragen',
+  discharge_limited: 'Akku entlädt schon nahe seiner Höchstleistung',
+  soc_energy: 'Energie im Akku reicht nicht für den Rest der Viertelstunde',
+  budget_exceeded: 'Budget der Viertelstunde verbraucht'
+});
+
+/**
+ * Akku-Lage für das Viertelstunden-Budget. Die Entladeleistung zählt nur, wenn
+ * der Betreiber sie eingetragen hat (Akku-Grenzen: „Max. Entladeleistung“ bzw.
+ * „Wechselrichter-Nennleistung“, oder system.power) — nicht die Werks-Vorgaben
+ * und nicht die Vorgabe der Kleinen Börsenautomatik. Sonst weiß DVhub nicht, ob
+ * der Akku den Bezug zurückholen kann, und bleibt beim Augenblickswert.
+ * Kapazität ebenso (ohne Eintrag entfällt nur die Energie-Prüfung).
+ */
+export function budgetBatteryInput(cfg, tel) {
+  const pos = (v) => (finite(v) && Math.abs(Number(v)) > 0 ? Math.abs(Number(v)) : null);
+  const sp = cfg?.system?.power || {};
+  const opt = cfg?.optimizer || {};
+  const caps = [pos(sp.batteryMaxDischargeDcW) ?? pos(opt.maxDischargeW), pos(sp.inverterMaxPowerW) ?? pos(opt.inverterMaxPowerW)]
+    .filter((w) => w != null);
+  return {
+    socOk: tel?.socOk === true,
+    socReason: tel?.socReason ?? null,
+    soc: tel?.soc ?? null,
+    floorPct: tel?.floorPct ?? 0,
+    dischargeW: Math.max(0, Number(tel?.batteryDischargeW) || 0),
+    maxDischargeW: caps.length ? Math.min(...caps) : null,
+    capacityWh: pos(sp.batteryCapacityWh) ?? pos(opt.batteryCapacityWh)
+  };
+}
+
 /**
  * Status-Dienst für Leitstand und /api/status. Läuft im Laufzeit-Prozess
  * (dort liegen Steuerzustand und Datenbank); die Spitzen kommen alle 5 min aus
@@ -392,9 +445,13 @@ export function peakPeriods(nowMs = Date.now(), timeZone = 'Europe/Berlin') {
  */
 export function createPeakShaving(ctx, deps = {}) {
   const now = deps.now || (() => Date.now());
+  const mono = deps.monoNow || (deps.now ? deps.now : defaultMonoNow);
   let peaks = { month: null, year: null, updatedAt: null, error: null };
   let timer = null;
   let busy = false;
+  // Viertelstunden-Budget (P1): je Zählerabfrage fortgeschrieben (pollTick).
+  const budget = createBudgetState();
+  let budgetLogKey = null;
 
   const cfg = () => ctx.getCfg?.() || {};
 
@@ -420,6 +477,62 @@ export function createPeakShaving(ctx, deps = {}) {
     }
   }
 
+  function budgetBattery(c, r, t) {
+    const tel = peakShavingTelemetry(ctx.state, c, r, t);
+    return { tel, battery: budgetBatteryInput(c, tel) };
+  }
+
+  /**
+   * Wirksame Regelwerte für den Steuerpfad: wie resolvePeakShaving, im
+   * Budget-Modus mit limitW = targetW = erlaubte Restleistung der Viertelstunde
+   * (configuredLimitW/configuredTargetW bleiben die Einstellung). Ohne aktives
+   * Peak Shaving unverändert.
+   */
+  function control(c = cfg(), t = now()) {
+    const r = resolvePeakShaving(c);
+    if (!r.active) return r;
+    const base = { ...r, configuredLimitW: r.limitW, configuredTargetW: r.targetW };
+    const { battery } = budgetBattery(c, r, t);
+    const meas = meterImport(ctx.state, c, { now: t, maxAgeMs: METER_MAX_AGE_MS });
+    const dec = decideBudget(budget, {
+      enabled: r.billing15min, wallMs: t, limitW: r.limitW, marginW: r.marginW, targetW: r.targetW,
+      importW: meas.fresh ? meas.importW : null, battery
+    });
+    if (dec.mode === 'budget') return { ...base, limitW: dec.targetW, targetW: dec.targetW, budget: dec };
+    return { ...base, budget: dec };
+  }
+
+  /** Je Zählerabfrage (polling.js): Netzbezug ins Viertelstunden-Budget. */
+  function pollTick() {
+    const c = cfg();
+    const r = resolvePeakShaving(c);
+    if (!r.active) {
+      if (budget.lastMono != null) Object.assign(budget, createBudgetState());
+      budgetLogKey = null;
+      return null;
+    }
+    const t = now();
+    const meas = meterImport(ctx.state, c, { now: t, maxAgeMs: METER_MAX_AGE_MS });
+    observeBudget(budget, {
+      wallMs: t, monoMs: mono(), importW: meas.fresh ? meas.importW : null, limitW: r.limitW,
+      timeZone: c.schedule?.timezone || 'Europe/Berlin'
+    });
+    const ctl = control(c, t);
+    const dec = ctl.budget;
+    const key = dec ? `${dec.mode}|${dec.reason}` : null;
+    if (key !== budgetLogKey) {
+      budgetLogKey = key;
+      if (dec) ctx.pushLog?.('peak_shaving_budget', {
+        mode: dec.mode, reason: dec.reason, targetW: ctl.targetW, limitW: r.limitW, usedWh: dec.usedWh, budgetWh: dec.budgetWh,
+        remainingS: dec.remainingS,
+        text: dec.mode === 'budget'
+          ? 'Peak Shaving: regelt nach Viertelstunden-Budget (15-min-Mittelwert)'
+          : `Peak Shaving: Deckel auf den Augenblickswert (${BUDGET_REASON_TEXT[dec.reason] || dec.reason})`
+      });
+    }
+    return ctl;
+  }
+
   function summary() {
     const c = cfg();
     const r = resolvePeakShaving(c);
@@ -435,6 +548,8 @@ export function createPeakShaving(ctx, deps = {}) {
       ? { liftedW: ctl.discharge.liftedW, since: ctl.discharge.since, waiting: ctl.discharge.waiting || null } : null;
     const meterFresh = s.meter?.ok === true && (t - Number(s.meter.updatedAt || 0)) < METER_MAX_AGE_MS
       && Number.isFinite(Number(s.victron?.gridImportW));
+    const ctlNow = r.active ? control(c, t) : null;
+    const b = ctlNow?.budget || null;
     return {
       enabled: true,
       active: r.active,
@@ -444,6 +559,15 @@ export function createPeakShaving(ctx, deps = {}) {
       limitW: r.limitW,
       targetW: r.targetW,
       marginW: r.marginW,
+      billing15min: r.billing15min,
+      // Viertelstunden-Budget (P1): mode 'budget' = Regelziel ist die erlaubte
+      // Restleistung, 'instant' = Augenblickswert (reason sagt warum).
+      budget: b ? {
+        mode: b.mode, reason: b.reason, reasonText: b.reason ? (BUDGET_REASON_TEXT[b.reason] || b.reason) : null,
+        controlTargetW: ctlNow.targetW, allowedW: b.allowedW, usedWh: b.usedWh, budgetWh: b.budgetWh,
+        remainingS: b.remainingS, gapS: b.gapS, intervening: b.intervening,
+        slotStart: b.slotStartMs != null ? new Date(b.slotStartMs).toISOString() : null
+      } : null,
       timezone: c.schedule?.timezone || 'Europe/Berlin',
       importW: meterFresh ? Math.max(0, Math.round(Number(s.victron.gridImportW))) : null,
       acting: Boolean((clamp && (clamp.mode === 'target' || clamp.mode === 'net_load')) || lift),
@@ -461,5 +585,5 @@ export function createPeakShaving(ctx, deps = {}) {
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-  return { refreshPeaks, summary, start, stop };
+  return { refreshPeaks, summary, start, stop, control, pollTick, _budget: budget };
 }

@@ -115,3 +115,14 @@ test('Freigabe wartet auf Rücklesung: Hinweis im Detail', () => {
   const v = load().view({ ...base, acting: true, lift: { liftedW: 4300, since: Date.now(), waiting: 'readback' } });
   assert.match(v.detail, /sobald 2704 lesbar ist/);
 });
+
+test('Viertelstunden-Budget (P1): verbraucht/Budget, Restzeit, erlaubte Leistung — oder Grund für den Augenblickswert', () => {
+  const { view } = load();
+  const v = view({ ...base, budget: { mode: 'budget', reason: null, usedWh: 417, budgetWh: 2500, remainingS: 600, allowedW: 12000 } });
+  assert.equal(v.budget, '0,4 kWh von 2,5 kWh · noch 10:00 · bis zum Ende höchstens 12,0 kW');
+  assert.equal(v.budgetMode, 'budget');
+  const i = view({ ...base, budget: { mode: 'instant', reason: 'soc_near_floor', reasonText: 'Akku nahe am Mindest-Ladestand' } });
+  assert.equal(i.budget, 'Augenblickswert — Akku nahe am Mindest-Ladestand');
+  assert.equal(view({ ...base, budget: { mode: 'instant', reason: 'billing_instant' } }).budget, 'Augenblickswert (eingestellt)');
+  assert.equal(view(base).budget, '', 'ohne Budget-Daten keine Zeile');
+});

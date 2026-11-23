@@ -1994,7 +1994,7 @@ export function createScheduleEvaluator(ctx) {
       state.ctrl._peakShaving._clampKey = null;
     }
     if (target === 'gridSetpointW' && !isMandatoryControlSource(source)) {
-      const ps = resolvePeakShaving(cfg);
+      const ps = peakShavingControl(cfg);
       if (ps.active) {
         const res = clampGridSetpoint(value, ps, peakShavingTelemetry(state, cfg, ps));
         const psState = (state.ctrl._peakShaving ??= {});
@@ -2011,7 +2011,8 @@ export function createScheduleEvaluator(ctx) {
             psState._clampKey = key;
             pushLog('peak_shaving_clamp', {
               requestedW: Math.round(Number(value)), valueW: Math.round(Number(res.value)),
-              mode: res.mode, reason: res.reason, source, limitW: ps.limitW, targetW: ps.targetW
+              mode: res.mode, reason: res.reason, source, limitW: ps.limitW, targetW: ps.targetW,
+              ...(ps.budget ? { budgetMode: ps.budget.mode } : {})
             });
           }
           value = res.clamped ? Math.round(Number(res.value)) : value;
@@ -2410,6 +2411,19 @@ export function createScheduleEvaluator(ctx) {
     return typeof transport.mbRequest === 'function' && conf?.address != null;
   }
 
+  // Wirksame Peak-Shaving-Werte für die beiden Victron-Hebel: mit dem Dienst
+  // (server.js ctx.peakShaving) samt Viertelstunden-Budget (P1) — dann ist das
+  // Regelziel im Budget-Modus die erlaubte Restleistung der Viertelstunde —,
+  // ohne ihn (Tests, die den Evaluator allein bauen) wie bisher die Einstellung.
+  function peakShavingControl(cfg) {
+    try {
+      if (typeof ctx.peakShaving?.control === 'function') return ctx.peakShaving.control(cfg);
+    } catch (e) {
+      pushLog('peak_shaving_error', { phase: 'control', error: e?.message || String(e) }, 'warn');
+    }
+    return resolvePeakShaving(cfg);
+  }
+
   let peakShavingTickNo = 0;
   // Victron: zuerst 2720 (int32, W) — dort ist −1 (unbegrenzt) eindeutig, 2704
   // rundet es auf 0 (wie der Entlade-Wächter). Nur „Register/Funktion
@@ -2462,7 +2476,7 @@ export function createScheduleEvaluator(ctx) {
       if (idle) Object.assign(idle, { over: 0, quiet: 0, writeIssue: null });
       return;
     }
-    const ps = resolvePeakShaving(cfg);
+    const ps = peakShavingControl(cfg);
     // Aus und nichts aufgehoben → kein Zustand, kein Lesen, kein Write (bitgenau
     // wie vorher; auch nachdem eine Freigabe zurückgenommen ist — 563da829).
     if (!ps.active && state.ctrl._peakShaving?.discharge?.phase !== 'lifted') {
