@@ -2,7 +2,7 @@
   "function": "planningMinSocPct",
   "schema": "dvhub.golden-split/1",
   "generator": "test/golden/generate-split-vectors.mjs",
-  "count": 30,
+  "count": 36,
   "now": 1794571200000,
   "vectors": [
     {
@@ -1300,6 +1300,261 @@
           },
           "system": {
             "power": {}
+          }
+        },
+        "now": 1794571200000,
+        "primaryMinSocPct": 15
+      },
+      "output": 15
+    },
+    {
+      "name": "sungrow_single_puffer1_primaryMin5",
+      "input": {
+        "state": {
+          "victron": {
+            "soc": 50,
+            "sungrowMasterSocPct": 50,
+            "device": {
+              "bdcRatedW": 5000,
+              "maxChargeWDevice": 5000,
+              "maxDischargeWDevice": 5000,
+              "minSocPctDevice": 10,
+              "maxSocPctDevice": 100,
+              "batteryCapacityLimitWh": 10000
+            }
+          }
+        },
+        "cfg": {
+          "manufacturer": "sungrow",
+          "optimizer": {
+            "batteryCapacityWh": 10000,
+            "hardFloorSocPct": 5
+          },
+          "sungrow": {
+            "socFloorBufferPct": 1
+          }
+        },
+        "now": 1794571200000,
+        "primaryMinSocPct": 5
+      },
+      "output": 11
+    },
+    {
+      "name": "sungrow_single_puffer1_primaryMin10",
+      "input": {
+        "state": {
+          "victron": {
+            "soc": 50,
+            "sungrowMasterSocPct": 50,
+            "device": {
+              "bdcRatedW": 5000,
+              "maxChargeWDevice": 5000,
+              "maxDischargeWDevice": 5000,
+              "minSocPctDevice": 10,
+              "maxSocPctDevice": 100,
+              "batteryCapacityLimitWh": 10000
+            }
+          }
+        },
+        "cfg": {
+          "manufacturer": "sungrow",
+          "optimizer": {
+            "batteryCapacityWh": 10000,
+            "hardFloorSocPct": 5
+          },
+          "sungrow": {
+            "socFloorBufferPct": 1
+          }
+        },
+        "now": 1794571200000,
+        "primaryMinSocPct": 10
+      },
+      "output": 11
+    },
+    {
+      "name": "sungrow_single_puffer1_primaryMin15",
+      "input": {
+        "state": {
+          "victron": {
+            "soc": 50,
+            "sungrowMasterSocPct": 50,
+            "device": {
+              "bdcRatedW": 5000,
+              "maxChargeWDevice": 5000,
+              "maxDischargeWDevice": 5000,
+              "minSocPctDevice": 10,
+              "maxSocPctDevice": 100,
+              "batteryCapacityLimitWh": 10000
+            }
+          }
+        },
+        "cfg": {
+          "manufacturer": "sungrow",
+          "optimizer": {
+            "batteryCapacityWh": 10000,
+            "hardFloorSocPct": 5
+          },
+          "sungrow": {
+            "socFloorBufferPct": 1
+          }
+        },
+        "now": 1794571200000,
+        "primaryMinSocPct": 15
+      },
+      "output": 15
+    },
+    {
+      "name": "sungrow_aggregiert_puffer1_primaryMin5",
+      "input": {
+        "state": {
+          "victron": {
+            "soc": 50,
+            "sungrowMasterSocPct": 50,
+            "device": {
+              "bdcRatedW": 5000,
+              "maxChargeWDevice": 5000,
+              "maxDischargeWDevice": 5000,
+              "minSocPctDevice": 10,
+              "maxSocPctDevice": 100,
+              "batteryCapacityLimitWh": 10000
+            }
+          },
+          "sungrowSecond": {
+            "online": true,
+            "updatedAt": 1794571198000,
+            "runningState": 16384,
+            "socPct": 30,
+            "batteryPowerW": -300,
+            "pvPowerW": 1200,
+            "bdcRatedW": 5000,
+            "maxChargeWDevice": 5000,
+            "maxDischargeWDevice": 5000,
+            "minSocPctDevice": 10,
+            "maxSocPctDevice": 100,
+            "batteryCapacityLimitWh": 8000
+          }
+        },
+        "cfg": {
+          "manufacturer": "sungrow",
+          "optimizer": {
+            "batteryCapacityWh": 10000,
+            "hardFloorSocPct": 5
+          },
+          "sungrow": {
+            "secondInverter": {
+              "host": "192.168.68.83",
+              "aggregateTelemetry": true,
+              "batteryCapacityWh": 8000,
+              "maxChargeW": 0,
+              "maxDischargeW": 0
+            },
+            "socFloorBufferPct": 1
+          }
+        },
+        "now": 1794571200000,
+        "primaryMinSocPct": 5
+      },
+      "output": 11
+    },
+    {
+      "name": "sungrow_aggregiert_puffer1_primaryMin10",
+      "input": {
+        "state": {
+          "victron": {
+            "soc": 50,
+            "sungrowMasterSocPct": 50,
+            "device": {
+              "bdcRatedW": 5000,
+              "maxChargeWDevice": 5000,
+              "maxDischargeWDevice": 5000,
+              "minSocPctDevice": 10,
+              "maxSocPctDevice": 100,
+              "batteryCapacityLimitWh": 10000
+            }
+          },
+          "sungrowSecond": {
+            "online": true,
+            "updatedAt": 1794571198000,
+            "runningState": 16384,
+            "socPct": 30,
+            "batteryPowerW": -300,
+            "pvPowerW": 1200,
+            "bdcRatedW": 5000,
+            "maxChargeWDevice": 5000,
+            "maxDischargeWDevice": 5000,
+            "minSocPctDevice": 10,
+            "maxSocPctDevice": 100,
+            "batteryCapacityLimitWh": 8000
+          }
+        },
+        "cfg": {
+          "manufacturer": "sungrow",
+          "optimizer": {
+            "batteryCapacityWh": 10000,
+            "hardFloorSocPct": 5
+          },
+          "sungrow": {
+            "secondInverter": {
+              "host": "192.168.68.83",
+              "aggregateTelemetry": true,
+              "batteryCapacityWh": 8000,
+              "maxChargeW": 0,
+              "maxDischargeW": 0
+            },
+            "socFloorBufferPct": 1
+          }
+        },
+        "now": 1794571200000,
+        "primaryMinSocPct": 10
+      },
+      "output": 11
+    },
+    {
+      "name": "sungrow_aggregiert_puffer1_primaryMin15",
+      "input": {
+        "state": {
+          "victron": {
+            "soc": 50,
+            "sungrowMasterSocPct": 50,
+            "device": {
+              "bdcRatedW": 5000,
+              "maxChargeWDevice": 5000,
+              "maxDischargeWDevice": 5000,
+              "minSocPctDevice": 10,
+              "maxSocPctDevice": 100,
+              "batteryCapacityLimitWh": 10000
+            }
+          },
+          "sungrowSecond": {
+            "online": true,
+            "updatedAt": 1794571198000,
+            "runningState": 16384,
+            "socPct": 30,
+            "batteryPowerW": -300,
+            "pvPowerW": 1200,
+            "bdcRatedW": 5000,
+            "maxChargeWDevice": 5000,
+            "maxDischargeWDevice": 5000,
+            "minSocPctDevice": 10,
+            "maxSocPctDevice": 100,
+            "batteryCapacityLimitWh": 8000
+          }
+        },
+        "cfg": {
+          "manufacturer": "sungrow",
+          "optimizer": {
+            "batteryCapacityWh": 10000,
+            "hardFloorSocPct": 5
+          },
+          "sungrow": {
+            "secondInverter": {
+              "host": "192.168.68.83",
+              "aggregateTelemetry": true,
+              "batteryCapacityWh": 8000,
+              "maxChargeW": 0,
+              "maxDischargeW": 0
+            },
+            "socFloorBufferPct": 1
           }
         },
         "now": 1794571200000,

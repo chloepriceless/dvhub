@@ -66,6 +66,11 @@ Die benannten Feldfälle sind **einzeln und erkennbar** in den Vektoren enthalte
 9,2/14,4 % und 0,8/2,2 % (Angleich, Laden/Entladen), Notladung (`0x4001`), Slave offline, gemeldeter SoC 0 %
 (= real = Gerätemin), Entlade-Boden je Einheit mit dem N1-Feldwert (hart 5, Gerätemin 10, Puffer 1 → 11 %).
 
+Seit dem Neuerzeugen auf main 8e72f61b (24.11.) zusätzlich: M28 in `splitStrategyShares` (Ausgänge `masterOut`/
+`slaveOut` = `'soc' | 'stalled' | null`, Eingänge `dischargeMarginPct`, `masterStalled`, `slaveStalled`; benannte
+`m28_*`-Fälle plus Raster) und ein ausdrücklich eingetragener Puffer `sungrow.socFloorBufferPct = 1` in den
+ctx-Fällen (`*_puffer1`). Ohne Eintrag gilt seit M24 (2c6c70d0) der Standard-Puffer 0 → Boden 10 statt 11 %.
+
 ## Nicht erfasst (gehört in die Schreibspur-Hälfte von S0)
 
 Der Aktuator `createSungrowEms` (`sungrow.js:725-1998`) mit Besitz-Merker, Herzschlag, Schreibreihenfolge und

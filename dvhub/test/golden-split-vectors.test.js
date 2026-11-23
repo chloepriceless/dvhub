@@ -22,7 +22,12 @@ const SCHEMA = 'dvhub.golden-split/1';
 
 // Pflicht-Feldfaelle, die laut Auftrag einzeln und erkennbar dabei sein muessen (Datei → Vektornamen).
 const REQUIRED_FIELD_CASES = {
-  'splitStrategyShares.json': ['feld_9.2_14.4_entladen', 'feld_9.2_14.4_laden', 'feld_0.8_2.2_entladen', 'feld_0.8_2.2_laden', 'slave_offline', 'boden_je_einheit_N1_slave_am_boden', 'master_only_slave_uncommanded', 'ungleiche_boeden_slave_am_boden', 'ungleiche_decken_slave_voll'],
+  'splitStrategyShares.json': ['feld_9.2_14.4_entladen', 'feld_9.2_14.4_laden', 'feld_0.8_2.2_entladen', 'feld_0.8_2.2_laden', 'slave_offline', 'boden_je_einheit_N1_slave_am_boden', 'master_only_slave_uncommanded', 'ungleiche_boeden_slave_am_boden', 'ungleiche_decken_slave_voll',
+    // M28: Übernahme bei „liefert nicht“ und Entlade-Marge (masterOut/slaveOut).
+    'm28_master_haengt_slave_uebernimmt', 'm28_slave_haengt_master_uebernimmt', 'm28_beide_haengen_normale_aufteilung', 'm28_master_haengt_slave_am_boden_behaelt', 'm28_marge_slave_knapp_ueber_boden_raus'],
+  // Eingetragener Puffer 1 (Standard seit M24 = 0): Boden Gerätemin 10 + 1 = 11 %.
+  'planningMinSocPct.json': ['sungrow_single_puffer1_primaryMin5', 'sungrow_aggregiert_puffer1_primaryMin5'],
+  'gridShareCapacityInput.json': ['sungrow_single_puffer1', 'sungrow_aggregiert_puffer1'],
   'socBalanceWeights.json': ['feld_9.2_14.4_entladen', 'feld_9.2_14.4_laden', 'feld_0.8_2.2_entladen', 'feld_0.8_2.2_laden'],
   'sungrowRealSocPct.json': ['gemeldet_0_real_geraetemin', 'gemeldet_100_real_max', 'min_gleich_max_kein_fenster'],
   'sungrowDischargeFloorPct.json': ['N1_hardFloor5_deviceMin10_buffer1'],

@@ -103,6 +103,34 @@ function genSplitStrategyShares() {
       }
     }
   }
+  // M28 (402a3df9/07041019/4a4f0e62): Entlade-Marge über dem Boden (dischargeMarginPct) und „liefert nicht"
+  // (masterStalled/slaveStalled) nehmen einen WR heraus; masterOut/slaveOut sagen warum ('soc' | 'stalled').
+  // Benannte Fälle je Zweig, damit eine Regression in der Übernahme-Regel rot wird.
+  const m28 = { powerW: 4000, charge: false, masterMax: 5000, slaveMax: 5000, masterSoc: 50, slaveSoc: 50, masterCapacityWh: 10000, slaveCapacityWh: 10000, masterFloorPct: 10, slaveFloorPct: 10 };
+  vectors.push(vec(fn, 'm28_master_haengt_slave_uebernimmt', { args: ['soc-balance', { ...m28, masterStalled: true }] }));
+  vectors.push(vec(fn, 'm28_slave_haengt_master_uebernimmt', { args: ['soc-balance', { ...m28, slaveStalled: true }] }));
+  vectors.push(vec(fn, 'm28_beide_haengen_normale_aufteilung', { args: ['soc-balance', { ...m28, masterStalled: true, slaveStalled: true }] }));
+  vectors.push(vec(fn, 'm28_master_haengt_slave_am_boden_behaelt', { args: ['soc-balance', { ...m28, masterStalled: true, slaveSoc: 10 }] }));
+  vectors.push(vec(fn, 'm28_master_only_slave_haengt_ohne_wirkung', { args: ['master-only', { ...m28, slaveStalled: true }] }));
+  vectors.push(vec(fn, 'm28_marge_slave_knapp_ueber_boden_raus', { args: ['soc-balance', { ...m28, slaveSoc: 11, dischargeMarginPct: 2 }] }));
+  vectors.push(vec(fn, 'm28_marge_slave_genau_boden_plus_marge_drin', { args: ['soc-balance', { ...m28, slaveSoc: 12, dischargeMarginPct: 2 }] }));
+  vectors.push(vec(fn, 'm28_marge_gilt_nicht_beim_laden', { args: ['soc-balance', { ...m28, charge: true, slaveSoc: 11, dischargeMarginPct: 2 }] }));
+  // Raster: je Strategie/Richtung alle Hänge-Kombinationen × Marge × SoC-Lage (frei, Master knapp, Slave knapp).
+  const stalledPairs = pairs([[false, false], [true, false], [false, true], [true, true]]);
+  const m28Socs = pairs([[50, 40], [11, 40], [40, 11]]);
+  for (const strat of STRATS) {
+    for (const charge of [false, true]) {
+      let k = 0;
+      for (const [masterStalled, slaveStalled] of stalledPairs) for (const dischargeMarginPct of [0, 2]) for (const [mSoc, sSoc] of m28Socs) {
+        const options = {
+          powerW: 4000, charge, masterMax: 5000, slaveMax: 3000, masterSoc: mSoc, slaveSoc: sSoc,
+          masterCapacityWh: 10000, slaveCapacityWh: 8000, masterFloorPct: 10, slaveFloorPct: 10, masterCeilPct: 95, slaveCeilPct: 95,
+          ratioMasterPct: 60, minPowerW: 50, dischargeMarginPct, masterStalled, slaveStalled,
+        };
+        vectors.push(vec(fn, `m28_${strat}_${charge ? 'c' : 'd'}_${k++}`, { args: [strat, options] }));
+      }
+    }
+  }
   return { function: fn, vectors };
 }
 
@@ -353,6 +381,10 @@ function ctxCases() {
     victron_follower: victronFollower(),
     victron_follower_offline: victronFollower({ online: false }),
     kein_sungrow_kein_follower: { state: { victron: { soc: 60 } }, cfg: { optimizer: { batteryCapacityWh: 8000, hardFloorSocPct: 5 }, system: { power: {} } } },
+    // Ausdrücklich gesetzter Puffer (sungrow.socFloorBufferPct = 1): seit M24 (2c6c70d0) ist der Standard 0, der
+    // eingetragene Wert bleibt aber wirksam → Boden Gerätemin 10 + Puffer 1 = 11 % (N1-Feldwert) bleibt erfasst.
+    sungrow_single_puffer1: (() => { const c = sungrowSingle(); c.cfg.sungrow.socFloorBufferPct = 1; return c; })(),
+    sungrow_aggregiert_puffer1: (() => { const c = sungrowAggregated(); c.cfg.sungrow.socFloorBufferPct = 1; return c; })(),
   };
 }
 
