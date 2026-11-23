@@ -371,7 +371,7 @@ describe('mobile-link Rechte — Stand 14.11.2026', () => {
     assert.deepEqual([...READ_PATHS].sort(), [
       '/api/costs', '/api/devices', '/api/eeg/extension', '/api/eos/plan', '/api/eos/status', '/api/ev',
       '/api/family/status', '/api/family/tesla-history', '/api/family/tile-history', '/api/feed-in-cap/status',
-      '/api/forecast', '/api/history/mispel', '/api/history/summary', '/api/integrations/dataflow',
+      '/api/forecast', '/api/history/mispel', '/api/history/summary', '/api/history/tariff-scatter', '/api/integrations/dataflow',
       '/api/integrations/health', '/api/mobile-link/integrations', '/api/optimizer/status', '/api/schedule',
       '/api/schedule/automation/config', '/api/status', '/api/storage/status', '/api/telemetry/series',
       '/api/victron/devices', '/api/vpn/status',
