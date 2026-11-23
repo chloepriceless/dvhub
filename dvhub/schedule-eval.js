@@ -17,6 +17,9 @@ import { isSmallMarketAutomationRule, SLOT_DURATION_MS } from './market-automati
 // (evalTimeout); safeInterval trägt den 5-s-Zero-Feed-in-Regelkreis (B-1112
 // Stufe 2), damit ein Throw im Tick den Takt nicht stillschweigend beendet.
 import { safeInterval } from './services/safe-async.js';
+// A24 (Christin 23.11.2026): Schreib- und Lesezeitpunkte zusätzlich monoton stempeln (unsichtbar, nie gespeichert) —
+// Reihenfolge „Messwert nach dem Schreiben“ und Frische des Zählers überstehen so einen Sprung der Systemzeit.
+import { monoNow, stampMono, monoStampAge } from './services/mono-clock.js';
 import { encodeSunspecFloat32, decodeSunspecFloat32 } from './services/inverter/sunspec.js';
 import { getPowerLimits } from './services/power-limits.js';
 // Zweite GX am selben Anschluss: EOS-Ziele gelten fuer beide Akkus zusammen.
@@ -1455,6 +1458,7 @@ export function createScheduleEvaluator(ctx) {
           source: reason || 'dv_control', writeType: 'dv_control',
           fc: Number(conf.fc) || 6, address: conf.address, at: Date.now()
         };
+        stampMono(state.schedule.lastWrite[target], 'at');
         maybeScheduleWriteVerify(target, conf, cfg, { isKeepalive: false });
       };
       planDirectVerify('feedExcessDcPv', dc.feedExcessDcPv || {}, feedDcDirectVal, results.feedExcessDcPv?.ok === true && !results.feedExcessDcPv.skipped);
@@ -1487,6 +1491,8 @@ export function createScheduleEvaluator(ctx) {
   // state.schedule._verify ließ jedes JSON.stringify(state) scheitern — u. a.
   // die Benachrichtigungsprüfung (eHive 17./18.10.: ~1 600 Fehler/h).
   const verifyTimers = new Map();   // target → Timeout
+  // A24: Absendezeit (monoton) je lastWrite-Eintrag — nur im Prozess, nie gespeichert.
+  const lastWriteSentMono = new WeakMap();
 
   function maybeScheduleWriteVerify(target, conf, cfg, { isKeepalive }) {
     const vc = resolveControlWriteVerify(cfg);
@@ -1525,7 +1531,9 @@ export function createScheduleEvaluator(ctx) {
     let actual;
     try {
       if (transport.type === 'mqtt') {
-        const res = await transport.readPointSince(target, lw.at);
+        // A24: Reihenfolge monoton ab dem Absenden des Writes (eine Rückmeldung kann schon während des Absendens
+        // eintreffen); ohne gemerkte Sendezeit Wanduhr wie bisher.
+        const res = await transport.readPointSince(target, lw.at, lastWriteSentMono.get(lw) ?? null);
         actual = Number(res.mqttValue);
         match = Number.isFinite(actual) && Math.abs(actual - expected) <= toleranceAbs;
       } else {
@@ -1806,6 +1814,7 @@ export function createScheduleEvaluator(ctx) {
       const verifyOwnsLastWrite = writeType === 'dv_control' && resolveControlWriteVerify(cfg).enabled;
       if (!verifyOwnsLastWrite) {
         state.schedule.lastWrite[target] = { value, source, writeType, at: Date.now() };
+        stampMono(state.schedule.lastWrite[target], 'at');
       }
       state.schedule.active[target] = { value, source, at: Date.now() };
       pushLog('control_write', { target, value, source, writeType });
@@ -2234,6 +2243,7 @@ export function createScheduleEvaluator(ctx) {
     let emsReadError = false;
     let emsReleasePending = false;
     let emsDeferred = false;
+    const writeSentMono = monoNow(); // A24: Absendezeit monoton (Rücklese-Prüfung MQTT, readPointSince)
     try {
       let encoded, words, fc;
       if (conf.emulate != null) {
@@ -2297,6 +2307,10 @@ export function createScheduleEvaluator(ctx) {
         at: Date.now(),
         keepalive: isKeepalive
       };
+      // A24: `at` (Wanduhr) bekommt die monotone Zeit nach dem Write — Reihenfolge „Messwert nach dem Schreiben“
+      // (Übergabe am Entlade-Boden, Entlade-Wächter); die Absendezeit nur für die eigene Rücklese-Prüfung.
+      stampMono(state.schedule.lastWrite[target], 'at');
+      lastWriteSentMono.set(state.schedule.lastWrite[target], writeSentMono);
       state.schedule.active[target] = { value, source, at: Date.now(), keepalive: isKeepalive };
       // T-VERIFY: Read-after-Write-Verifikation planen (non-blocking, Flag-gated,
       // keine Keepalives — die re-asserten ohnehin denselben Wert zyklisch).
@@ -2448,6 +2462,7 @@ export function createScheduleEvaluator(ctx) {
       }
       if (value == null || !Number.isFinite(value)) throw new Error('Entladegrenze: kein gültiger Wert');
       psState.readback = { value, at: Date.now(), tick: peakShavingTickNo, error: null, ambiguousZero };
+      stampMono(psState.readback, 'at');
     } catch (e) {
       psState.readback = { ...(psState.readback || { value: null, at: 0 }), error: e?.message || String(e) };
     }
@@ -2490,7 +2505,9 @@ export function createScheduleEvaluator(ctx) {
     if (d.quiet >= DISCHARGE_RELEASE_TICKS) d.writeIssue = null;
     if (act.type === 'none') return;
     if (act.type === 'superseded') {
-      pushLog('peak_shaving_lift_superseded', { liftedW: d.liftedW, known: knownMaxDischargeW(state, cfg) });
+      // A24: die monotone Zeit (known.mono) gilt nur in diesem Prozess — nicht ins Protokoll.
+      const { mono: _knownMono, ...knownLog } = knownMaxDischargeW(state, cfg) || {};
+      pushLog('peak_shaving_lift_superseded', { liftedW: d.liftedW, known: Object.keys(knownLog).length ? knownLog : null });
       // Steht im Gerät nicht mehr DVhubs Wert, ist der eigene lastWrite kein
       // Abbild des Geräts mehr — sonst übersprünge eine Neu-Freigabe mit
       // demselben Wert als „unverändert“ (Gegenprüfung af3319df, P2).
@@ -3329,8 +3346,11 @@ export function createScheduleEvaluator(ctx) {
       const socAge = victronFieldAgeMs(state, 'soc');
       const socFresh = socAge !== null && socAge <= maxAgeMs;
       const soc = Number(state.victron?.soc);
-      const meterFresh = state.meter?.ok === true
-        && (Date.now() - Number(state.meter.updatedAt || 0)) < 15000;
+      // A24: Alter des Zählerwerts monoton (Stempel des Pollers), ohne Marke wie bisher die Wanduhr. Nach einem
+      // Rücksprung der Systemzeit galt ein stehender Zählerwert sonst um die Sprungweite als frisch und die
+      // Nulleinspeisung regelte mit ihm weiter; nach einem Sprung vorwärts setzte sie bis zum nächsten Wert aus.
+      const meterAgeMs = monoStampAge(state.meter, 'updatedAt') ?? (Date.now() - Number(state.meter?.updatedAt || 0));
+      const meterFresh = state.meter?.ok === true && meterAgeMs < 15000;
       const importW = Math.max(0, Number(state.victron?.gridImportW || 0));
       const exportW = Math.max(0, Number(state.victron?.gridExportW || 0));
       const loadRaw = state.victron?.selfConsumptionW;

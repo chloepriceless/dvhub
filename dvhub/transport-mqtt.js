@@ -9,6 +9,7 @@
 // throw (e.g. broker mid-disconnect) never disables the loop.
 import { safeInterval } from './services/safe-async.js';
 import { isReadOnlyMode, noteBlockedWrite, ReadOnlyViolation } from './read-only-guard.js';
+import { monoNow } from './services/mono-clock.js';
 
 // Fehler-Drosselung: eine dauerhaft nicht erreichbare Broker-Adresse (EHOSTUNREACH) feuert bei jedem
 // Reconnect-Versuch ein 'error' — dieselbe Meldung höchstens einmal je 60 s auf die Konsole.
@@ -27,11 +28,28 @@ function logMqttErrorThrottled(msg) {
 // (polling stamps fieldUpdatedAt on any returned value, so a frozen reading
 // would look fresh). A cache entry is fresh only if it has a non-null value and
 // its timestamp is within maxAgeMs. Pure + exported for testing.
-export function mqttCacheEntryFresh(entry, maxAgeMs, nowMs = Date.now()) {
+// A24 (Christin 23.11.2026): jeder Cache-Eintrag trägt neben ts (Wanduhr) die monotone Empfangszeit `mono`. Ohne
+// ausdrücklich übergebene Wanduhr (nowMs) misst die Frische damit — ein Rücksprung der Systemzeit hielt einen
+// stehenden Wert sonst um die Sprungweite länger für frisch. Mit nowMs (Tests, Anzeige) wie bisher die Wanduhr.
+export function mqttCacheEntryFresh(entry, maxAgeMs, nowMs) {
   if (!entry || entry.value == null) return false;
   const max = Number(maxAgeMs);
   if (!Number.isFinite(max) || max <= 0) return true; // staleness disabled
-  return (nowMs - Number(entry.ts || 0)) <= max;
+  return mqttEntryAgeMs(entry, nowMs) <= max;
+}
+
+const monoOf = (e) => (Number.isFinite(e?.mono) ? e.mono : null);
+// Monotone Werte nur im Prozess: als nicht aufzählbare Eigenschaft — nie im JSON, Protokoll oder Status, und die
+// sichtbare Form der Einträge und Rückgaben bleibt wie bisher.
+function withMono(obj, key, m) {
+  if (obj && Number.isFinite(m)) Object.defineProperty(obj, key, { value: m, enumerable: false, configurable: true, writable: true });
+  return obj;
+}
+
+/** Alter eines Cache-Eintrags: monoton, wenn er eine Empfangsmarke trägt und keine Wanduhr übergeben ist. */
+export function mqttEntryAgeMs(entry, nowMs) {
+  if (nowMs == null && Number.isFinite(entry?.mono)) return monoNow() - entry.mono;
+  return (nowMs ?? Date.now()) - Number(entry?.ts || 0);
 }
 
 // T-MQTT-CONSUMPTION (2026-07-04): der Poller fragt den SUMMEN-Punkt
@@ -46,9 +64,11 @@ export function mqttCacheEntryFresh(entry, maxAgeMs, nowMs = Date.now()) {
 // gesamte Summe stale (T-0080-Frische-Disziplin — sonst würde ein eingefrorenes
 // L2 still unterschlagen und die Summe sähe frisch aus). Pure + exportiert für
 // test/transport-mqtt-staleness.test.js.
-export function sumConsumptionEntries(entries, maxAgeMs, nowMs = Date.now()) {
+export function sumConsumptionEntries(entries, maxAgeMs, nowMs) {
   let sum = 0;
   let ts = 0;
+  let mono = null;
+  let monoAll = true;
   let any = false;
   for (const entry of entries) {
     if (!entry) continue;                                          // Phase nie gesehen → 0
@@ -58,9 +78,12 @@ export function sumConsumptionEntries(entries, maxAgeMs, nowMs = Date.now()) {
     // Phase macht eine alte nicht jung (Gegenprüfung ecc27ea3, P3).
     const at = Number(entry.ts) || 0;
     ts = ts === 0 ? at : Math.min(ts, at);
+    // A24: monoton ebenso, nur wenn jede Phase eine Empfangsmarke hat.
+    if (Number.isFinite(entry.mono)) mono = mono == null ? entry.mono : Math.min(mono, entry.mono);
+    else monoAll = false;
     any = true;
   }
-  return any ? { value: sum, ts } : null;
+  return any ? withMono({ value: sum, ts }, 'mono', monoAll ? mono : null) : null;
 }
 
 // ── Topic-Mapping ────────────────────────────────────────────────────
@@ -321,7 +344,7 @@ export function createMqttTransport(victronConfig, options = {}) {
   const GRID_KEYS = ['meter_l1', 'meter_l2', 'meter_l3'];
   const freshEntry = (key) => {
     const e = READ_TOPICS[key] ? cache[READ_TOPICS[key]] : null;
-    return mqttCacheEntryFresh(e, staleMaxAgeMs) ? { value: Number(e.value), ts: e.ts } : null;
+    return mqttCacheEntryFresh(e, staleMaxAgeMs) ? withMono({ value: Number(e.value), ts: e.ts }, 'mono', monoOf(e)) : null;
   };
   // Hausverbrauch: frischer Gesamtwert hat Vorrang, sonst Phasensumme.
   function consumptionEntry() {
@@ -351,7 +374,7 @@ export function createMqttTransport(victronConfig, options = {}) {
       // Nackte Zahl, JSON-Zahl oder {value}; Unbrauchbares wird ignoriert.
       const v = parseMqttPayload(payload);
       if (v !== undefined) {
-        cache[topic] = { value: v, ts: Date.now() };
+        cache[topic] = withMono({ value: v, ts: Date.now() }, 'mono', monoNow());
         // Lebenszeichen des MQTT-Abos — getrennt vom Zwischenspeicher, den auch der HTTP-Push füllt (Codex ac04827a P2).
         lastMqttInputAt = Date.now();
       }
@@ -364,7 +387,7 @@ export function createMqttTransport(victronConfig, options = {}) {
     // bewusst MIT gespeichert (Alarm-Decoderei: null ≠ 0).
     const v = parseMqttPayload(payload);
     if (v !== undefined) {
-      cache[topic] = { value: v, ts: Date.now() };
+      cache[topic] = withMono({ value: v, ts: Date.now() }, 'mono', monoNow());
       rememberAlarmTopic(topic, v);
       rememberGridAcTopic(topic, v);
     } else {
@@ -621,13 +644,13 @@ export function createMqttTransport(victronConfig, options = {}) {
       const total = freshEntry('meter_total');
       if (total) {
         const ph = GRID_KEYS.map((k) => freshEntry(k));
-        return { total: total.value, l1: ph[0]?.value ?? null, l2: ph[1]?.value ?? null, l3: ph[2]?.value ?? null, ts: total.ts };
+        return withMono({ total: total.value, l1: ph[0]?.value ?? null, l2: ph[1]?.value ?? null, l3: ph[2]?.value ?? null, ts: total.ts }, 'monoTs', monoOf(total));
       }
       const entries = GRID_KEYS.map((k) => cache[READ_TOPICS[k]]);
       const sum = sumConsumptionEntries(entries, staleMaxAgeMs);
       if (!sum) return null;
       const v = entries.map((e) => (e ? Number(e.value) : 0));
-      return { total: sum.value, l1: v[0], l2: v[1], l3: v[2], ts: sum.ts };
+      return withMono({ total: sum.value, l1: v[0], l2: v[1], l3: v[2], ts: sum.ts }, 'monoTs', monoOf(sum));
     },
 
     // HTTP-Push (services/input-push.js): Wert eines logischen Eingangs in den
@@ -638,17 +661,19 @@ export function createMqttTransport(victronConfig, options = {}) {
       const topic = key && READ_TOPICS[key];
       const v = Number(value);
       if (!topic || !Number.isFinite(v)) return false;
-      cache[topic] = { value: v, ts: nowMs };
+      // A24: Empfang jetzt; ein übergebener Zeitpunkt in der Vergangenheit verschiebt die monotone Marke gleich weit
+      // zurück (beim Erzeuger umgerechnet, ohne Sprung dazwischen).
+      cache[topic] = withMono({ value: v, ts: nowMs }, 'mono', monoNow() - Math.max(0, Date.now() - Number(nowMs)));
       return true;
     },
-    inputStatus(nowMs = Date.now()) {
+    inputStatus(nowMs) {
       if (schema !== 'dvhub') return null;
       return Object.fromEntries(Object.entries(DVHUB_INPUT_KEYS).map(([input, key]) => {
         const e = cache[READ_TOPICS[key]];
         return [input, {
           topic: READ_TOPICS[key],
           value: e ? e.value : null,
-          ageMs: e ? nowMs - e.ts : null,
+          ageMs: e ? mqttEntryAgeMs(e, nowMs) : null,
           fresh: mqttCacheEntryFresh(e, staleMaxAgeMs, nowMs),
         }];
       }));
@@ -683,19 +708,19 @@ export function createMqttTransport(victronConfig, options = {}) {
       if (name === 'selfConsumptionW') {
         const summed = consumptionEntry;
         let sum = summed();
-        if (sum) return { mqttValue: sum.value, ts: sum.ts };
+        if (sum) return withMono({ mqttValue: sum.value, ts: sum.ts }, 'monoTs', monoOf(sum));
         for (const k of CONSUMPTION_KEYS) requestRead(READ_TOPICS[k]);
         await new Promise((r) => setTimeout(r, 2000));
         sum = summed();
-        if (sum) return { mqttValue: sum.value, ts: sum.ts };
+        if (sum) return withMono({ mqttValue: sum.value, ts: sum.ts }, 'monoTs', monoOf(sum));
         throw new Error('MQTT-Wert nicht verfügbar oder veraltet für: selfConsumptionW');
       }
       if (name === 'pvPowerW' && schema === 'dvhub') {
         let pv = pvEntry();
-        if (pv) return { mqttValue: pv.value, ts: pv.ts };
+        if (pv) return withMono({ mqttValue: pv.value, ts: pv.ts }, 'monoTs', monoOf(pv));
         await new Promise((r) => setTimeout(r, 2000));
         pv = pvEntry();
-        if (pv) return { mqttValue: pv.value, ts: pv.ts };
+        if (pv) return withMono({ mqttValue: pv.value, ts: pv.ts }, 'monoTs', monoOf(pv));
         throw new Error('MQTT-Wert nicht verfügbar oder veraltet für: pvPowerW');
       }
       const topic = READ_TOPICS[name];
@@ -705,7 +730,7 @@ export function createMqttTransport(victronConfig, options = {}) {
       // through to the re-request path (so a wedged subscription is recovered and
       // the downstream T-0075 floor holds instead of trusting a frozen reading).
       if (mqttCacheEntryFresh(cache[topic], staleMaxAgeMs)) {
-        return { mqttValue: cache[topic].value, ts: cache[topic].ts };
+        return withMono({ mqttValue: cache[topic].value, ts: cache[topic].ts }, 'monoTs', monoOf(cache[topic]));
       }
 
       // Missing OR stale: re-request via R/ and, if a (now-stale) value existed,
@@ -730,7 +755,7 @@ export function createMqttTransport(victronConfig, options = {}) {
       }
       await new Promise((r) => setTimeout(r, 2000));
       if (mqttCacheEntryFresh(cache[topic], staleMaxAgeMs)) {
-        return { mqttValue: cache[topic].value, ts: cache[topic].ts };
+        return withMono({ mqttValue: cache[topic].value, ts: cache[topic].ts }, 'monoTs', monoOf(cache[topic]));
       }
       throw new Error(`MQTT-Wert nicht verfügbar oder veraltet für: ${name}`);
     },
@@ -745,17 +770,22 @@ export function createMqttTransport(victronConfig, options = {}) {
      * der Aufrufer unterscheidet "kein Beweis" von "falscher Wert".
      * Gibt { mqttValue, ts } zurück.
      */
-    async readPointSince(name, sinceTs) {
+    // A24: sinceMono = monotone Zeit des Schreibens (gleiche Uhr wie die Empfangsmarke). Dann zählt die Reihenfolge
+    // monoton — nach einem Rücksprung der Systemzeit läge ein Wert von VOR dem Schreiben sonst „danach“. Ohne sinceMono
+    // oder ohne Marke am Eintrag wie bisher die Wanduhr.
+    async readPointSince(name, sinceTs, sinceMono = null) {
       const topic = READ_TOPICS[name];
       if (!topic) throw new Error(`Kein MQTT-Topic-Mapping für: ${name}`);
       const freshEnough = () => {
         const e = cache[topic];
-        return e && e.value != null && Number(e.ts || 0) >= Number(sinceTs || 0);
+        if (!e || e.value == null) return false;
+        if (Number.isFinite(sinceMono) && monoOf(e) != null) return e.mono >= sinceMono;
+        return Number(e.ts || 0) >= Number(sinceTs || 0);
       };
-      if (freshEnough()) return { mqttValue: cache[topic].value, ts: cache[topic].ts };
+      if (freshEnough()) return withMono({ mqttValue: cache[topic].value, ts: cache[topic].ts }, 'monoTs', monoOf(cache[topic]));
       requestRead(topic);
       await new Promise((r) => setTimeout(r, 2000));
-      if (freshEnough()) return { mqttValue: cache[topic].value, ts: cache[topic].ts };
+      if (freshEnough()) return withMono({ mqttValue: cache[topic].value, ts: cache[topic].ts }, 'monoTs', monoOf(cache[topic]));
       throw new Error(`Kein Nach-Write-Wert empfangen für: ${name}`);
     },
 

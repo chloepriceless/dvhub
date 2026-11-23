@@ -33,6 +33,7 @@
 import { betaGateOpen } from '../../beta-features.js';
 import { localParts, zoneOffsetMs } from '../../tz-fast.js';
 import { capPositiveSetpoint } from '../import-limit/core.js';
+import { monoNow as sharedMonoNow, monoStampOf } from '../mono-clock.js';
 
 export const PEAK_SHAVING_DEFAULTS = Object.freeze({
   enabled: false,
@@ -110,9 +111,13 @@ export function peakShavingStatusText(resolved) {
 const METER_MAX_AGE_MS = 15_000;
 const PV_FIELDS = ['pvPowerW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W'];
 
-function fieldAgeMs(state, field, now) {
-  const at = Number(state?.victron?.fieldUpdatedAt?.[field] ?? 0);
-  return at > 0 ? now - at : null;
+// A24: Alter monoton, wenn der Poller den Stempel monoton markiert hat (gleiche Uhr), sonst Wanduhr wie bisher.
+function fieldAgeMs(state, field, now, clock = sharedMonoNow) {
+  const stamps = state?.victron?.fieldUpdatedAt;
+  const at = Number(stamps?.[field] ?? 0);
+  if (!(at > 0)) return null;
+  const m = monoStampOf(stamps, field, clock);
+  return m != null ? clock() - m : now - at;
 }
 
 /**
@@ -229,15 +234,20 @@ export const MAX_DISCHARGE_INT16_ADDR = 2704;
  * Eine mehrdeutige 0 aus dem Poll-Punkt weicht einer eindeutigen eigenen
  * Rücklesung (2720 bzw. MQTT).
  */
-export function knownMaxDischargeW(state, cfg, now = Date.now()) {
+// A24 (Christin 23.11.2026): jede Quelle trägt neben `at` (Wanduhr) `mono` — die monotone Zeit des Erzeugers
+// (Poller, Rücklesung von Peak Shaving, Schreibpfad) mit der Uhr `clock`, oder null ohne Marke. Verbraucher, die zwei
+// Quellen nach „neuer als“ ordnen (Entlade-Wächter), vergleichen damit; Frische hier ebenso monoton, sonst Wanduhr.
+export function knownMaxDischargeW(state, cfg, now = Date.now(), clock = sharedMonoNow) {
   const v = state?.victron || {};
   const maxAgeMs = Number(cfg?.victron?.telemetryMaxAgeMs ?? 90000);
   const rb = state?.ctrl?._peakShaving?.readback;
+  const rbMono = rb ? monoStampOf(rb, 'at', clock) : null;
+  const rbAge = rbMono != null ? clock() - rbMono : now - Number(rb?.at);
   // Ist der letzte Leseversuch gescheitert, gilt auch der alte Wert nicht mehr.
-  const own = (rb && !rb.error && Number.isFinite(Number(rb.value)) && Number(rb.at) > 0 && now - Number(rb.at) <= maxAgeMs)
-    ? { value: Number(rb.value), from: 'own_readback', at: Number(rb.at), tick: rb.tick ?? null, ambiguousZero: Number(rb.value) === 0 && rb.ambiguousZero === true }
+  const own = (rb && !rb.error && Number.isFinite(Number(rb.value)) && Number(rb.at) > 0 && rbAge <= maxAgeMs)
+    ? { value: Number(rb.value), from: 'own_readback', at: Number(rb.at), mono: rbMono, tick: rb.tick ?? null, ambiguousZero: Number(rb.value) === 0 && rb.ambiguousZero === true }
     : null;
-  const age = fieldAgeMs(state, 'maxDischargeW', now);
+  const age = fieldAgeMs(state, 'maxDischargeW', now, clock);
   if (v.maxDischargeW != null && Number.isFinite(Number(v.maxDischargeW)) && age !== null && age <= maxAgeMs
       && !v.errors?.maxDischargeW) {
     const value = Number(v.maxDischargeW);
@@ -249,12 +259,12 @@ export function knownMaxDischargeW(state, cfg, now = Date.now()) {
       && String(pt.readType || '').toLowerCase() === 'int32' && Number(pt.quantity) >= 2;
     const ambiguousZero = value === 0 && cfg?.victron?.transport !== 'mqtt' && !reads2720AsInt32;
     if (ambiguousZero && own && !own.ambiguousZero) return own;
-    return { value, from: 'readback', at: now - age, ambiguousZero };
+    return { value, from: 'readback', at: now - age, mono: monoStampOf(v.fieldUpdatedAt, 'maxDischargeW', clock), ambiguousZero };
   }
   if (own) return own;
   const lw = state?.schedule?.lastWrite?.maxDischargeW;
   if (lw && lw.value != null && Number.isFinite(Number(lw.value))) {
-    return { value: Number(lw.value), from: 'own_write', at: Number(lw.at) || 0, source: lw.source };
+    return { value: Number(lw.value), from: 'own_write', at: Number(lw.at) || 0, mono: monoStampOf(lw, 'at', clock), source: lw.source };
   }
   return null;
 }

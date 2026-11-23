@@ -15,6 +15,16 @@
 //
 // Input- und Holding-Register sind getrennte Bereiche (Plexlog teilt einen).
 
+import { pickMonoNow, stampMono, monoDeadlinePassed, monoNow as sharedMonoNow } from './services/mono-clock.js';
+
+/**
+ * Ist die Frist state.ctrl[field] (offUntil, dvLimitUntil; Wanduhr-Zeitpunkt) abgelaufen? Monoton, wenn sie beim
+ * Setzen mit stampMono(…, { wallNow }) gestempelt wurde (A24), sonst Wanduhr wie bisher.
+ */
+export function ctrlDeadlinePassed(ctrl, field, nowMs = Date.now(), clock = sharedMonoNow) {
+  return monoDeadlinePassed(ctrl, field, clock) ?? (nowMs > Number(ctrl?.[field] || 0));
+}
+
 export const DV_INTERFACE_PROFILES = Object.freeze(['plexlog', 'luox']);
 export const LUOX_WATCHDOG_MS = 15 * 60 * 1000;
 export const LUOX_HOLDING_SETPOINT = 2;
@@ -121,8 +131,13 @@ export function luoxApplyWrite(luox, addr, values) {
  */
 export function createDvLimitController({
   state, getCfg, setForcedOff, clearForcedOff, applyDvFeedInLimit, pushLog = () => {}, writeControlEvent = () => {},
-  now = () => Date.now(),
+  now: nowArg = null, monoNow: monoNowArg = null,
 }) {
+  const now = nowArg || (() => Date.now());
+  // A24 (Christin 23.11.2026): Fristen (offUntil, dvLimitUntil) bleiben Wanduhr-Zeitpunkte; ihre Restzeit läuft
+  // monoton ab (stampMono mit wallNow, wie das DV-Lease in server.js). Mit eingespielter Uhr (Tests) dieselbe.
+  const mono = pickMonoNow(monoNowArg, nowArg);
+  const stampDeadline = (field) => stampMono(state.ctrl, field, { clock: mono, wallNow: now() });
   const luox = () => (state.dvLuox ??= { setpointPct: 100, watchdog: [0, 0], watchdogAt: null });
 
   function leaseUntil() {
@@ -133,8 +148,8 @@ export function createDvLimitController({
   function watchdogRefresh() {
     luox().watchdogAt = now();
     const until = leaseUntil();
-    if (state.ctrl.forcedOff) state.ctrl.offUntil = until;
-    if (state.ctrl.dvLimitPct != null) state.ctrl.dvLimitUntil = until;
+    if (state.ctrl.forcedOff) { state.ctrl.offUntil = until; stampDeadline('offUntil'); }
+    if (state.ctrl.dvLimitPct != null) { state.ctrl.dvLimitUntil = until; stampDeadline('dvLimitUntil'); }
   }
 
   function releaseLimit() {
@@ -171,6 +186,7 @@ export function createDvLimitController({
     if (state.ctrl.forcedOff) clearForcedOff(reason);
     state.ctrl.dvLimitPct = p;
     state.ctrl.dvLimitUntil = leaseUntil();
+    stampDeadline('dvLimitUntil');
     state.ctrl.lastSignal = reason;
     state.ctrl.updatedAt = now();
     pushLog('ctrl_limit', { pct: p, limitW, reason });
@@ -190,7 +206,7 @@ export function createDvLimitController({
   }
 
   function expireIfNeeded() {
-    if (state.ctrl.dvLimitPct != null && now() > Number(state.ctrl.dvLimitUntil || 0)) {
+    if (state.ctrl.dvLimitPct != null && ctrlDeadlinePassed(state.ctrl, 'dvLimitUntil', now(), mono)) {
       setDvLimitPct(100, 'luox_watchdog_expired');
     }
   }

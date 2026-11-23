@@ -25,7 +25,7 @@ import { GateBlockedError } from '../gate/index.js';
 import { c2AllowsRelease, createLegacyGate, inverterReleaseState, modbusLegacySink, SUNGROW_GATE_DEVICES } from '../gate/legacy.js';
 import { createModbusHealth, classifyModbusError, modbusRequestInfo } from './modbus-health.js';
 import { releaseBackoffNextAt } from '../release-backoff.js';
-import { bootStamp } from '../mono-clock.js';
+import { bootStamp, monoNow as sharedMonoNow, monoStampAge } from '../mono-clock.js';
 import { curtailmentTestRunning } from '../curtailment-test.js';
 
 /** Doku-Adresse → Draht-Adresse. */
@@ -656,13 +656,18 @@ export function splitStrategyShares(strategy, {
  * zweite WR online und der Wert nicht älter als maxAgeMs ist. Netz/Last bleiben immer die Master-Werte
  * (einziger Zähler am Master).
  */
-export function secondInverterTelemetry(state, cfg, { nowMs = Date.now(), maxAgeMs = 20000 } = {}) {
+export function secondInverterTelemetry(state, cfg, { nowMs = Date.now(), maxAgeMs = 20000, monoNow = sharedMonoNow } = {}) {
   const c = resolveSecondInverter(cfg);
   if (!c.aggregateTelemetry) return null;
   const s = state?.sungrowSecond;
   if (!s || s.online !== true) return null;
   const fin = (v) => v != null && Number.isFinite(Number(v));
-  if (!fin(s.updatedAt) || nowMs - Number(s.updatedAt) > maxAgeMs) return null;
+  // A24: Alter monoton, wenn der Begleitdienst den Stempel monoton markiert hat (gleiche Uhr); sonst Wanduhr wie
+  // bisher. Nach einem Rücksprung der Systemzeit galten stehende Slave-Werte sonst um die Sprungweite als frisch und
+  // flossen in Systemsumme, Aufteilung und Planung; nach einem Sprung vorwärts fiel der Slave bis zum nächsten Takt weg.
+  if (!fin(s.updatedAt)) return null;
+  const age = monoStampAge(s, 'updatedAt', monoNow) ?? (nowMs - Number(s.updatedAt));
+  if (age > maxAgeMs) return null;
   // Notladung (Aufgabe 2): der Slave lädt eigenmächtig unter seinem Min-SoC aus dem Netz (runningState 0x4001) und
   // ist NICHT steuerbar. Seine Akku-Ladeleistung darf dem Regler NICHT zugerechnet werden (sonst verschöbe sie die
   // Systemsumme und DVhub regelte den Master in die falsche Richtung) → batteryPowerW hier auf null, der Poller
@@ -837,7 +842,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   const now = nowArg || (() => Date.now());
   // Monotone Uhr für die Frist „Master allein" (A7, Fable P3-2): ein Sprung der Wanduhr (NTP, Hand-Einstellung) darf
   // die Frist weder verkürzen noch verlängern. Laufzeit: performance.now(); mit eingespielter Uhr (Tests) dieselbe.
-  const monoNow = monoNowArg || nowArg || (() => performance.now());
+  // A24: ohne eingespielte Uhr die gemeinsame monotone Uhr (dieselbe Funktion wie beim Poller und beim Begleitdienst),
+  // damit deren monotone Messwert-Stempel hier gelten (Uhr-Identität, mono-clock.js stampMono).
+  const monoNow = monoNowArg || nowArg || sharedMonoNow;
   const modbusHealthInst = modbusHealth || createModbusHealth(now, { pushLog, wr: isSlave ? 'slave' : 'master', source: 'ems', monoNow }); // A23 b: Abstände monoton
   const transport = modbusHealthInst.wrap(baseTransport);
   // Schreibtor (H-1 Phase 2): die Schreibfunktionen dieses Transports erreicht der Aktuator nur noch über das Tor
@@ -2100,8 +2107,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const direction = charge ? 'charge' : 'discharge';
     const vic = state.victron || {};
     const masterBattAt = Number(vic.fieldUpdatedAt?.batteryPowerW) || 0;
+    // A24: Frische monoton (Stempel des Pollers), ohne Marke Wanduhr wie bisher.
+    const masterBattAge = masterBattAt > 0 ? (monoStampAge(vic.fieldUpdatedAt, 'batteryPowerW', monoNow) ?? (t - masterBattAt)) : Infinity;
     const masterMeasW = vic.sungrowMasterBatteryW != null && Number.isFinite(Number(vic.sungrowMasterBatteryW))
-      && masterBattAt > 0 && t - masterBattAt <= opts.telemetryMaxAgeMs ? Number(vic.sungrowMasterBatteryW) : null;
+      && masterBattAt > 0 && masterBattAge <= opts.telemetryMaxAgeMs ? Number(vic.sungrowMasterBatteryW) : null;
     // Messzeitpunkt je WR (Grundsatz 0 beurteilt nur neue Messungen): Master = Poll-Stempel der Akku-Leistung, Slave =
     // Lesetakt des Begleitdienstes (state.sungrowSecond.updatedAt, alle 5 s).
     const slaveSampleAt = Number(state.sungrowSecond?.updatedAt) || 0;
@@ -2586,7 +2595,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // noch einmal selbst dazuzählen (sonst Akku doppelt, Codex). Vom zweiten WR braucht der Regler nur die
     // BDC-Nennleistung für die System-Leistungsgrenze; der Master verteilt die eine EMS-Vorgabe intern.
     const tel = telemetry(cfg, opts);
-    const second = secondInverterTelemetry(state, cfg, { nowMs: t, maxAgeMs: opts.telemetryMaxAgeMs });
+    const second = secondInverterTelemetry(state, cfg, { nowMs: t, maxAgeMs: opts.telemetryMaxAgeMs, monoNow });
     const masterBdc = Number(state.victron.device.bdcRatedW) || null;
     // System-Leistungsgrenze nur anheben, wenn BEIDE BDC-Nennleistungen bekannt sind. Fehlt die des Masters,
     // bleibt die Grenze unbekannt (→ Self-consumption wie ohne zweiten WR), statt mit halbem Wissen zu forcieren.

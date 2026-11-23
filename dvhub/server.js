@@ -89,7 +89,8 @@ import {
 // HTTP-Server zu booten (server-utils.js ist bewusst importfrei).
 import { atomicWriteControlState, readControlState } from './control-state-io.js';
 import { createModbusServer } from './modbus-server.js';
-import { createDvLimitController } from './dv-interface-luox.js';
+import { createDvLimitController, ctrlDeadlinePassed } from './dv-interface-luox.js';
+import { stampMono } from './services/mono-clock.js';
 import { createFeedInLimitArbiter } from './services/feed-in-limit-arbiter.js';
 import { setNotHaltProbe } from './services/emergency-stop/policy.js';
 import { createFeedInCap } from './services/feed-in-cap/index.js';
@@ -1357,8 +1358,17 @@ function pushLog(event, details = {}, levelOrOptions = {}) {
 // fast at boot rather than silently swallowing interval errors.
 configureSafeAsync({ logger: appLogger, pushLog });
 
+// DV-Lease (A24, Christin 23.11.2026): offUntil bleibt der Wanduhr-Zeitpunkt (Status, Protokoll, Installateur-Portal).
+// Beim Setzen merkt sich DVhub die Restzeit monoton (stampMono mit wallNow); ob das Lease abgelaufen ist, misst die
+// monotone Uhr. Nach einem Rücksprung der Systemzeit blieb die Abregelung sonst um die Sprungweite länger stehen, nach
+// einem Sprung vorwärts endete sie vor der Frist des Direktvermarkters. Ohne Marke (z. B. ein Pfad, der offUntil ohne
+// Stempel setzt) wie bisher die Wanduhr.
+function stampLease() {
+  stampMono(state.ctrl, 'offUntil', { wallNow: Date.now() });
+}
+
 function expireLeaseIfNeeded() {
-  if (state.ctrl.forcedOff && Date.now() > state.ctrl.offUntil) {
+  if (state.ctrl.forcedOff && ctrlDeadlinePassed(state.ctrl, 'offUntil')) {
     state.ctrl.forcedOff = false;
     state.ctrl.offUntil = 0;
     state.ctrl.lastSignal = 'lease_expired';
@@ -1380,6 +1390,7 @@ function expireLeaseIfNeeded() {
 function setForcedOff(reason, { until } = {}) {
   state.ctrl.forcedOff = true;
   state.ctrl.offUntil = Number.isFinite(until) ? until : Date.now() + cfg.offLeaseMs;
+  stampLease();
   state.ctrl.lastSignal = reason;
   state.ctrl.updatedAt = Date.now();
   pushLog('ctrl_off', { reason, offUntil: new Date(state.ctrl.offUntil).toISOString() });
