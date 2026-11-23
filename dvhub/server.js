@@ -46,6 +46,7 @@ import { createLogRetention } from './services/log-retention.js';
 import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
 import { createStorageGuard } from './services/storage-guard.js';
+import { createTelemetryTiers } from './services/telemetry-tiers.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import {
   APPLICABLE_VALUE_TICK_MS,
@@ -2737,6 +2738,13 @@ const telemetryReady = (async () => {
       if (hm === '03:40') runLogRetention();
     };
     setInterval(scheduleNightly, 60 * 1000).unref();
+    // Datenstufen 1 min / 15 min für ALLE Reihen (Christin 23.11.2026, S3 a+c;
+    // services/telemetry-tiers.js): alle 5 min verdichten bis „jetzt − 30 min“,
+    // je Lauf höchstens 60 s — die Rückfüllung alter Rohwerte verteilt sich so
+    // über viele Läufe. ctx.telemetryTiers.aggregatedUntil() sagt der
+    // Aufbewahrung, bis wohin Rohwerte gelöscht werden dürfen.
+    ctx.telemetryTiers = createTelemetryTiers({ getDb: () => ctx.db, pushLog });
+    ctx.telemetryTiers.start();
     // Platz-Wache (kleine eMMC/SD): früher komprimieren, im Notfall älteste
     // Rohwerte entfernen — 15-min-Werte und die letzten 30 Tage bleiben.
     ctx.storageGuard = createStorageGuard({

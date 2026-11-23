@@ -1,0 +1,137 @@
+// test/telemetry-tiers.test.js — Datenstufen 1 min / 15 min ohne Datenbank:
+// Wertregel je Reihenart, Nachzügler-Markierung, Rückfall-Grenzen.
+// Die SQL-Seite prüft test/telemetry-tiers-pg.test.js gegen echtes PostgreSQL
+// und test/timescale-docker.test.js gegen TimescaleDB (Community/Apache).
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  tierValueKind, tierRowValue, markTierDirty, readTierFallback, tierAggregateSql,
+  aggregatedUntil, tierCoverage, TIER_DIRTY_MARK_AGE_MS, TIER_1M_TABLE, TIER_15M_TABLE,
+} from '../services/telemetry-tiers.js';
+import { createTelemetryStorePg } from '../telemetry-store-pg.js';
+
+test('Wertregel: Energie-Einheiten und Zustände → letzter Wert, sonst Mittelwert (herstellerunabhängig)', () => {
+  assert.equal(tierValueKind('grid_l1_w', 'W'), 'avg');
+  assert.equal(tierValueKind('battery_soc_pct', '%'), 'avg');
+  assert.equal(tierValueKind('grid_voltage_l1_v', 'V'), 'avg');
+  assert.equal(tierValueKind('battery_grid_share_wh', 'Wh'), 'last');
+  assert.equal(tierValueKind('irgendein_zaehler', 'kWh'), 'last');
+  assert.equal(tierValueKind('vrm_kwh_Pc', 'KWH'), 'last');
+  assert.equal(tierValueKind('ess_mode', ''), 'last');
+  assert.equal(tierValueKind('tesla_charging_state', null), 'last');
+  assert.equal(tierValueKind('tesla_since', null), 'last');
+  // Wert, Rückfall auf den anderen, Textreihe ohne Zahl
+  assert.equal(tierRowValue({ value_avg: 5.5, value_last: 11, unit: 'W' }, 'grid_l1_w'), 5.5);
+  assert.equal(tierRowValue({ value_avg: 1100, value_last: 1179, unit: 'Wh' }, 'battery_grid_share_wh'), 1179);
+  assert.equal(tierRowValue({ value_avg: null, value_last: 3, unit: 'W' }, 'x_w'), 3);
+  assert.equal(tierRowValue({ value_avg: null, value_last: null, value_text: 'zuhause' }, 'tesla_geofence'), null);
+});
+
+test('Verdichtungs-SQL: Feinwerte < 900 s, ohne ungültige, Ersetzen nur mit mindestens so vielen Proben', () => {
+  const sql = tierAggregateSql(TIER_1M_TABLE, 60);
+  assert.match(sql, /resolution_seconds < 900/);
+  assert.match(sql, /quality <> 'invalid'/);
+  assert.match(sql, /date_bin\(interval '60 seconds'/);
+  assert.match(sql, /WHERE EXCLUDED\.n >= t\.n/);
+  assert.doesNotMatch(sql, /scope = ANY/);
+  assert.match(tierAggregateSql(TIER_15M_TABLE, 900, { scopeFilter: true }), /scope = ANY\(\$3::text\[\]\)/);
+});
+
+function recorder({ failInsert = false } = {}) {
+  const calls = [];
+  return {
+    calls,
+    async query(sql, params) {
+      calls.push({ sql: String(sql).trim().split(/\s+/).slice(0, 4).join(' '), params });
+      if (failInsert && /INSERT INTO telemetry_tier_dirty/.test(sql)) { const e = new Error('relation does not exist'); e.code = '42P01'; throw e; }
+      return { rows: [] };
+    },
+  };
+}
+
+test('markTierDirty: nur alte Feinwerte, frische Live-Werte kosten keine Abfrage', async () => {
+  const now = Date.parse('2026-11-23T12:00:00Z');
+  const c = recorder();
+  const fresh = [{ ts: new Date(now - 60_000), resolutionSeconds: 5 }];
+  assert.equal(await markTierDirty(c, fresh, now), 0);
+  assert.equal(c.calls.length, 0, 'Live-Pfad: keine zusätzliche Abfrage');
+  const coarse = [{ ts: new Date(now - 86400_000), resolutionSeconds: 900 }];
+  assert.equal(await markTierDirty(c, coarse, now), 0, 'VRM/Preise (900 s) betreffen die Stufen nicht');
+  assert.equal(c.calls.length, 0);
+  const old = [{ ts: new Date(now - TIER_DIRTY_MARK_AGE_MS - 1000).toISOString(), resolutionSeconds: 5 }];
+  assert.equal(await markTierDirty(c, old, now), 1);
+  assert.deepEqual(c.calls.map((x) => x.sql.split(' ')[0]), ['SAVEPOINT', 'INSERT', 'RELEASE']);
+});
+
+test('markTierDirty: fehlt die Tabelle, bleibt die Schreib-Transaktion heil (ROLLBACK TO SAVEPOINT)', async () => {
+  const c = recorder({ failInsert: true });
+  await markTierDirty(c, [{ ts: '2026-01-01T00:00:00Z', resolutionSeconds: 5 }], Date.parse('2026-11-23T12:00:00Z'));
+  assert.deepEqual(c.calls.map((x) => x.sql.split(' ').slice(0, 2).join(' ')), ['SAVEPOINT dvhub_tier_dirty', 'INSERT INTO', 'ROLLBACK TO']);
+});
+
+test('readTierFallback: Eimer enden vor der ersten Rohzeile; ohne Minutenwerte davor 15-min-Werte', async () => {
+  const calls = [];
+  const db = {
+    async query(sql, params) {
+      calls.push({ table: /timeseries_samples_1m/.test(sql) ? '1m' : '15m', params });
+      if (/timeseries_samples_1m/.test(sql)) {
+        // Minutenwerte erst ab 00:30 (davor gelöscht)
+        return { rows: [{ series_key: 'a', b: new Date('2026-11-01T00:30:00Z'), value_avg: 1, unit: 'W' }] };
+      }
+      return { rows: [{ series_key: 'a', b: new Date('2026-11-01T00:00:00Z'), value_avg: 2, unit: 'W' },
+        { series_key: 'fremd', b: new Date('2026-11-01T00:00:00Z'), value_avg: 9 }] };
+    },
+  };
+  const out = await readTierFallback(db, {
+    untilByKey: new Map([['a', Date.parse('2026-11-01T01:00:07Z')]]),
+    startMs: Date.parse('2026-11-01T00:00:00Z'), endMs: Date.parse('2026-11-01T02:00:00Z'), bucketSec: 60, resLimit: 61,
+  });
+  assert.equal(calls[0].table, '1m');
+  assert.deepEqual(calls[0].params.slice(0, 2), [['a'], ['2026-11-01T01:00:00.000Z']], 'Grenze auf das Ausgaberaster abgerundet');
+  assert.equal(calls[0].params[4], 60);
+  assert.equal(calls[0].params[5], 61, 'gleicher Auflösungsfilter wie roh');
+  assert.equal(calls[1].table, '15m');
+  assert.deepEqual(calls[1].params[1], ['2026-11-01T00:30:00.000Z'], '15-min-Werte nur vor der ersten Minute');
+  assert.equal(calls[1].params[4], 900);
+  assert.deepEqual(out.map((r) => [r.key, r.tier, r.resolution]), [['a', '15m', 900], ['a', '1m', 60]], 'fremde Reihe verworfen');
+});
+
+test('readTierFallback: ab 15-min-Raster nur die 15-min-Stufe; zu kurzer Bereich fragt nicht', async () => {
+  const calls = [];
+  const db = { async query(sql, params) { calls.push({ sql, params }); return { rows: [] }; } };
+  await readTierFallback(db, { untilByKey: new Map([['a', Date.parse('2026-11-01T06:00:00Z')]]), startMs: Date.parse('2026-11-01T00:00:00Z'), endMs: Date.parse('2026-11-02T00:00:00Z'), bucketSec: 900 });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sql, /timeseries_samples_15m/);
+  calls.length = 0;
+  await readTierFallback(db, { untilByKey: new Map([['a', Date.parse('2026-11-01T00:10:00Z')]]), startMs: Date.parse('2026-11-01T00:00:00Z'), endMs: Date.parse('2026-11-02T00:00:00Z'), bucketSec: 900 });
+  assert.equal(calls.length, 0, 'weniger als ein Eimer vor der Rohzeile');
+});
+
+test('aggregatedUntil: min(Zeiger, ältester Nachzügler); ohne Tabelle null', async () => {
+  const db = (row) => ({ async query() { return { rows: row ? [row] : [] }; } });
+  assert.equal(await aggregatedUntil(db({ done_until: new Date('2026-11-23T10:00:00Z'), dirty_from: null, dirty_n: 0 })), '2026-11-23T10:00:00.000Z');
+  assert.equal(await aggregatedUntil(db({ done_until: new Date('2026-11-23T10:00:00Z'), dirty_from: new Date('2026-11-20T08:15:00Z'), dirty_n: 2 })), '2026-11-20T08:15:00.000Z');
+  assert.equal(await aggregatedUntil(db({ done_until: null, dirty_from: null, dirty_n: 0 })), null, 'noch kein Lauf');
+  assert.equal(await aggregatedUntil(db(null)), null);
+  const missing = { async query() { const e = new Error('relation "telemetry_tier_state" does not exist'); e.code = '42P01'; throw e; } };
+  assert.deepEqual(await tierCoverage(missing), { available: false, cursor: null, dirtyFrom: null, dirtyCount: 0, startedFrom: null, until: null, updatedAt: null });
+  await assert.rejects(tierCoverage({ async query() { throw new Error('Verbindung weg'); } }), /Verbindung weg/);
+});
+
+test('Store-Rückfall: fehlt die Stufen-Tabelle, bleibt die Roh-Antwort und es wird 10 min nicht erneut gefragt', async () => {
+  let tierQueries = 0;
+  const pool = {
+    async query(sql) {
+      if (/timeseries_samples_1m|timeseries_samples_15m/.test(sql)) { tierQueries += 1; const e = new Error('fehlt'); e.code = '42P01'; throw e; }
+      return { rows: [{ series_key: 'a', ts_utc: new Date('2026-11-01T06:00:00Z'), resolution_seconds: 5, value_num: 3, unit: 'W' }] };
+    },
+  };
+  const store = createTelemetryStorePg(pool);
+  const q = { seriesKeys: ['a'], start: '2026-11-01T00:00:00Z', end: '2026-11-01T12:00:00Z', maxResolution: 900 };
+  const r1 = await store.querySeries(q);
+  assert.deepEqual(r1.map((r) => r.value), [3]);
+  assert.equal(tierQueries, 1);
+  await store.querySeries(q);
+  assert.equal(tierQueries, 1, 'gemerkt: Tabelle fehlt');
+});

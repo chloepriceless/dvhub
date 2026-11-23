@@ -398,6 +398,13 @@ Drei Punkte, die eine Umsetzung beachten muss — alle am Datenbestand belegt:
    `tesla_geofence` und `tesla_since` führen ausschließlich `value_text`; eine
    Mittelwert-Aggregation lässt sie stillschweigend verschwinden.
 
+Umgesetzt (23.11.2026): Punkt 1 bis 3 lösen die Datenstufen
+`timeseries_samples_1m` und `timeseries_samples_15m` (eigene Hypertables,
+`services/telemetry-tiers.js`, Migration 030). Sie verdichten jede Reihe mit
+Mittel, Min, Max, erstem/letztem Wert und letztem Text. Rohwerte dürfen nur vor
+`aggregatedUntil()` gelöscht werden; das Löschen selbst gehört zur
+Speicher-Wache.
+
 ## Bewusst NICHT enthalten
 
 * **Postgres/TimescaleDB** — eigener Container (`compose.yml`) bzw. externer
