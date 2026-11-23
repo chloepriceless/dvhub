@@ -453,6 +453,12 @@ test('T12: Systemwirkungsgrad = Laden × Akku (DC) × Entladen, Verluste in kWh 
   // Gesamt 5,61 kWh, 0,33 + 0,3125 + 0,324 = 0,9665 € (ungerundet summiert).
   assert.equal(sys.losses.totalKwh, 5.61);
   assert.equal(sys.losses.totalEur, 0.97);
+  assert.equal(sys.losses.complete, true, 'ohne Angabe zur Ladestand-Abdeckung gilt sie als ganz');
+  // Codex 3be47b54: Ladestand fehlte zeitweise → Summe als unvollständig markiert, nicht hochgerechnet.
+  const partial = finalizeSelfUse(systemSums().selfUse, { storage: { capability: victronCap, totals: { ...jobTotals, socCoveragePct: 60 } } }).battery.system;
+  assert.equal(partial.losses.complete, false);
+  assert.equal(partial.losses.dcCoveragePct, 60);
+  assert.equal(partial.losses.totalKwh, 5.61);
   assert.deepEqual(sys.energy, { inputKwh: 31.25, chargedKwh: 30.3, dischargedKwh: 27.1, acOutKwh: 24.84, storedDeltaKwh: 1 });
   assert.deepEqual(sys.prices, { storedCtKwh: 15, chargeCtKwh: 25, chargeBasis: 'grid' });
   assert.deepEqual(sys.basis, { days: 30, firstDay: '2026-11-01', lastDay: '2026-11-30', hours: 690.5 });

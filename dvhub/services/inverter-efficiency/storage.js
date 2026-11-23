@@ -233,7 +233,7 @@ const numOrNull = (v) => (v != null && v !== '' && Number.isFinite(Number(v)) ? 
 export function summarizeStorageRows(rows, { capacityKwhForDay = null } = {}) {
   const t = {
     charge: 0, pvToBatt: 0, convToBatt: 0, acIn: 0, discharge: 0, acOut: 0,
-    chargeAll: 0, dischargeAll: 0, converterLoss: 0, seconds: 0, samples: 0
+    chargeAll: 0, dischargeAll: 0, converterLoss: 0, seconds: 0, samples: 0, socIntervals: 0
   };
   const days = [];
   let deltaKwh = 0;
@@ -251,6 +251,7 @@ export function summarizeStorageRows(rows, { capacityKwhForDay = null } = {}) {
     t.converterLoss += num(r.converter_loss_wh);
     t.seconds += num(r.seconds);
     t.samples += num(r.samples);
+    t.socIntervals += num(r.soc_intervals);
     if (!(num(r.seconds) > 0) || !r.day) continue;
     const day = String(r.day).slice(0, 10);
     days.push(day);
@@ -306,6 +307,9 @@ export function summarizeStorageRows(rows, { capacityKwhForDay = null } = {}) {
     chargeAllKwh: round(t.chargeAll / 1000),
     dischargeAllKwh: round(t.dischargeAll / 1000),
     storedDeltaKwh: storedDeltaKwh == null ? null : round(storedDeltaKwh),
+    // Anteil der gezählten Abstände mit Ladestand: nur darüber rechnet der DC-Teil
+    // (Codex 3be47b54) — unter 100 % ist der Akku-Verlust nicht der ganze Zeitraum.
+    socCoveragePct: t.samples > 0 ? round((t.socIntervals / t.samples) * 100, 2) : null,
     converterLossKwh: round(t.converterLoss / 1000),
     // Ungerundet für die Rechnung (history-tariff.js), gerundet für die Anzeige.
     raw: {

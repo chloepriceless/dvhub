@@ -127,6 +127,12 @@ test('Zeitraum: zu wenig Daten, Ladestand fehlt, abgeleitete Last, unplausibel',
   ], cap10);
   assert.equal(mixed.status, 'ok');
   close(mixed.dcEta, 0.97, 'η Akku DC nur Tag 1', 1e-9);
+  // okDay hat 720 Abstände mit Ladestand, samples fehlt (0) — mit Proben: 720 von 1440 = 50 %.
+  const half = summarizeStorageRows([
+    okDay({ samples: 720 }),
+    okDay({ day: '2026-11-02', samples: 720, soc_delta_pct: null, soc_intervals: 0, charge_all_wh: 0, discharge_all_wh: 0 })
+  ], cap10);
+  assert.equal(half.socCoveragePct, 50);
   // Entladen 9 990 von 10 000 Wh (99,9 %): Last aus der Akku-Leistung abgeleitet.
   assert.equal(summarizeStorageRows([okDay({ ac_out_wh: 9990 })], cap10).status, 'not_measurable');
   // Entladen 40 %: Vorzeichen/Bedeutung falsch.

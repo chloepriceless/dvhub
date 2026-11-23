@@ -655,6 +655,10 @@ function finalizeStorageSystem(selfUse, storage, { storedCt }) {
   const dcEur = eur(dcLoss, stored);
   const chargeEur = eur(chargeLoss, chargeCt);
   const dischargeEur = eur(dischargeLoss, stored);
+  // Akku (DC) nur über Abstände mit Ladestand (Codex 3be47b54): fehlte er zeitweise,
+  // deckt die Summe nicht die ganze Messzeit ab — kenntlich machen, nicht hochrechnen.
+  const dcCoveragePct = t.socCoveragePct ?? null;
+  const complete = dcCoveragePct == null || dcCoveragePct >= 99.5;
   return {
     ...base,
     status: 'ok',
@@ -679,7 +683,9 @@ function finalizeStorageSystem(selfUse, storage, { storedCt }) {
       dischargeKwh: round2(dischargeLoss),
       dischargeEur: eurOut(dischargeEur),
       totalKwh: round2(dcLoss + chargeLoss + dischargeLoss),
-      totalEur: dcEur == null || chargeEur == null || dischargeEur == null ? null : round2(dcEur + chargeEur + dischargeEur)
+      totalEur: dcEur == null || chargeEur == null || dischargeEur == null ? null : round2(dcEur + chargeEur + dischargeEur),
+      complete,
+      dcCoveragePct
     },
     prices: {
       storedCtKwh: stored == null ? null : round2(stored),

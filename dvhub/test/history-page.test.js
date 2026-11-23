@@ -802,6 +802,12 @@ test('T12: Akku-Wirkungsgrad (DC) benannt, Systemwirkungsgrad (AC) mit Verlusten
   assert.match(elements.get('historySelfUseSysBasis').textContent, /Eingesetzt 440,59 kWh, AC aus dem Akku 366,82 kWh, Ladestand -6,52 kWh/);
   assert.match(elements.get('historySelfUseSysConverter').textContent, /76,20 kWh/);
   assert.equal(elements.get('historySelfUseSysNote').hidden, true, 'Victron geprüft → kein Hinweis');
+  assert.doesNotMatch(elements.get('historySelfUseSysLossTotal').textContent, /unvollständig/);
+  // Codex 3be47b54: Ladestand fehlte zeitweise → Summe unvollständig benannt.
+  t.selfUse.battery.system.losses = { ...t.selfUse.battery.system.losses, complete: false, dcCoveragePct: 62.5 };
+  helpers.renderSummary({ view: 'month', date: '2026-11-23', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
+  assert.match(elements.get('historySelfUseSysLossTotal').textContent, /16,97 € \(unvollständig\)/);
+  assert.match(elements.get('historySelfUseSysPrices').textContent, /Akku \(DC\) nur über 62,5 % der Messzeit/);
   // Nicht messbar: Grund statt Zahl.
   t.selfUse.battery.system = { measurable: false, status: 'not_measurable', reason: 'nicht messbar bei Fronius: PV ist AC' };
   helpers.renderSummary({ view: 'month', date: '2026-11-23', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });

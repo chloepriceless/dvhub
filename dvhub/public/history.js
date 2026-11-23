@@ -3087,14 +3087,17 @@ function renderSelfUseSystem(sys) {
   setText('historySelfUseSysDc', pct(sys.dcEtaPct));
   setText('historySelfUseSysDischarge', pct(sys.dischargeEtaPct));
   const l = sys.losses || {};
-  setText('historySelfUseSysLossTotal', selfUseKwhEur(l.totalKwh, l.totalEur));
+  setText('historySelfUseSysLossTotal', `${selfUseKwhEur(l.totalKwh, l.totalEur)}${l.complete === false ? ' (unvollständig)' : ''}`);
   setText('historySelfUseSysLossDc', selfUseKwhEur(l.dcKwh, l.dcEur));
   setText('historySelfUseSysLossCharge', selfUseKwhEur(l.chargeKwh, l.chargeEur));
   setText('historySelfUseSysLossDischarge', selfUseKwhEur(l.dischargeKwh, l.dischargeEur));
   const pr = sys.prices || {};
   const chargeBasis = pr.chargeBasis === 'pv' ? 'zur Ø Börse des PV-Stroms' : 'zum Ø Preis der Netzladung';
   setText('historySelfUseSysPrices', `Bewertet wie oben: Laden-Verlust ${chargeBasis} (${ctOrDash(pr.chargeCtKwh)}), `
-    + `Akku- und Entlade-Verlust zum Einstandspreis je geladener kWh (${ctOrDash(pr.storedCtKwh)}).`);
+    + `Akku- und Entlade-Verlust zum Einstandspreis je geladener kWh (${ctOrDash(pr.storedCtKwh)}).`
+    + (l.complete === false
+      ? ` Akku (DC) nur über ${fmtPct(l.dcCoveragePct)} der Messzeit (Ladestand fehlte zeitweise) – die Summe ist unvollständig.`
+      : ''));
   const basis = sys.basis || {};
   const range = basis.firstDay && basis.lastDay
     ? (basis.firstDay === basis.lastDay ? fmtDateDe(basis.firstDay) : `${fmtDateDe(basis.firstDay)} bis ${fmtDateDe(basis.lastDay)}`)
