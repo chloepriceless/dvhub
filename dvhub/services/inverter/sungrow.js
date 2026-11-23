@@ -854,14 +854,17 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     endpointKey: null,   // Verbindung, für die target/dev/owns gelten
     hb: { key: null, supported: null, workingFc: null, deviceManaged: false }, // Herzschlag-Register: vorhanden? welche Schreibfunktion (FC) nimmt es an?
     hbCfgSig: null,      // Signatur der Herzschlag-Einstellung (eigenes Feld, damit es st.hb-Neuzuweisungen überlebt) — für die lösbare Sperre (1d)
-    lastHeartbeatAt: 0,
-    externalEnteredAt: 0, // wann External EMS (Modus 3) bestätigt wurde — für die gemessene Rückfallzeit (Punkt 3)
-    lastKeepaliveAt: 0,   // letztes Lebenszeichen (Keepalive)
+    // Zeitgeber (A22, Christin 23.11.2026): alle Abstände unten mit der monotonen Uhr (monoNow) gemessen, damit ein
+    // Sprung der Systemzeit sie weder verkürzt noch verlängert. Wanduhr nur für Status/Protokoll (lastHeartbeatAt).
+    lastHeartbeatAt: 0,   // letzter Herzschlag (Wanduhr, nur Status/Protokoll)
+    lastHeartbeatMono: 0, // dasselbe monoton — für die Herzschlag-Lücke
+    externalEnteredAt: 0, // wann External EMS (Modus 3) bestätigt wurde (monoNow) — für die gemessene Rückfallzeit (Punkt 3)
+    lastKeepaliveAt: 0,   // letztes Lebenszeichen (Keepalive, monoNow)
     lastFallbackAfterS: 0, // gemessene Zeit bis der WR von selbst in Self zurückfiel
-    lastFallbackAt: 0,    // Zeitpunkt des letzten geräteeigenen Rückfalls (Neueintritt-Sperre 10 s, 3c)
-    selfBridgeSince: 0,   // seit wann der Sollwert im Band/aus ist, während DVhub External EMS besitzt (Brücke, Punkt 1)
-    fallbackCooldownUntil: 0, // bis hierhin nach >3 Rückfällen/min NICHT wieder eintreten (Mode-Register schonen, 3c)
-    fallbackTimes: [],    // Zeitstempel der letzten geräteeigenen Rückfälle (Ratenbegrenzung Neueintritt)
+    lastFallbackAt: 0,    // Zeitpunkt des letzten geräteeigenen Rückfalls (monoNow; Neueintritt-Sperre 10 s, 3c)
+    selfBridgeSince: 0,   // seit wann der Sollwert im Band/aus ist, während DVhub External EMS besitzt (monoNow; Brücke, Punkt 1)
+    fallbackCooldownUntil: 0, // bis hierhin (monoNow) nach >3 Rückfällen/min NICHT wieder eintreten (Mode-Register schonen, 3c)
+    fallbackTimes: [],    // Zeitpunkte (monoNow) der letzten geräteeigenen Rückfälle (Ratenbegrenzung Neueintritt)
     sentTimeoutS: null,  // zuletzt an den Wechselrichter geschriebene Frist (gilt dort, bis eine neue rausging)
     lastStepAt: null,    // letzter Regeltakt (monoNow, A21); null = der nächste Aufruf ist fällig
     writeDay: { key: null, regs: {} }, // Tages-Schreibzähler je Register (Verschleißschutz, Punkt 2)
@@ -889,7 +892,8 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     slaveNeutralizeTick: null, // Takt, in dem der Pfad den besessenen Slave schon zurückzunehmen versuchte (P3-4)
     slaveForeignNotified: false, // Lage „Slave unter fremdem EMS" schon gemeldet (Review 4cf0a9e4 P3)
     slaveRecheckAt: 0,   // letzte Nachprüfung eines nicht geführten Slave mit bestätigtem Stopp (monoNow, Fable 2 P3)
-    entryDeferred: { since: 0, lastAt: 0, logKey: null, logAt: 0 }, // Wartezustand vor dem Eintritt (P2-2)
+    // Wartezustand vor dem Eintritt (P2-2): since = Wanduhr (Status/Protokoll); sinceMono, lastAt, logAt monoton (A22).
+    entryDeferred: { since: 0, sinceMono: null, lastAt: 0, logKey: null, logAt: 0 },
     reentryLogPending: null, // Wiedereintritt (B3) erst melden, wenn er wirklich geschrieben ist (P3-3)
     // Master (A7, Christin 21.11.2026): Frist „Master allein" bei unbestätigtem, nicht geführtem Slave — nur im Speicher.
     masterAlone: masterAloneIdle(),
@@ -941,6 +945,12 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     } catch { /* keine/ungültige Datei → frischer Zähler */ }
   }
 
+  // Herzschlag geschrieben/übernommen: Wanduhr für Status und Protokoll, monoton für die Lücke (A22).
+  function markHeartbeat() {
+    st.lastHeartbeatAt = now();
+    st.lastHeartbeatMono = monoNow();
+  }
+
   function setStopConfirmed(v) {
     st.stopConfirmed = v === true;
     // Monotone Zeit (Review 590b056a P3): nur für den Abgleich der Nachprüfung am Master, die ebenfalls monoton rechnet.
@@ -952,7 +962,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     if (st.owns === owns && st.ownMode === (owns ? mode : null)) return;
     st.owns = owns;
     st.ownMode = owns ? mode : null;
-    if (!owns) { st.lastHeartbeatAt = 0; st.sentTimeoutS = null; }
+    if (!owns) { st.lastHeartbeatAt = 0; st.lastHeartbeatMono = 0; st.sentTimeoutS = null; }
     if (!statePath) return;
     try {
       if (owns) atomicWriteControlState(statePath, { ownMode: mode, endpointKey: st.endpointKey, at: now() });
@@ -1236,12 +1246,13 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Der Wiedereintritts-Zähler (B3, stepForced) zählt den Takt vor dem Write. Ein zurückgestellter Eintritt schreibt
     // 13050 nicht — er darf nicht zählen, sonst sperrte eine längere Wartezeit (Notladung) den Wiedereintritt eine Stunde.
     const re = st.forcedReentryTimes;
-    if (Array.isArray(re) && re.length > 0 && re[re.length - 1] === t) st.forcedReentryTimes = re.slice(0, -1);
+    if (Array.isArray(re) && re.length > 0 && st.forcedReentryTick === t) { st.forcedReentryTimes = re.slice(0, -1); st.forcedReentryTick = null; }
     st.reentryLogPending = null;
     st.error = e?.message || String(e);
     const w = st.entryDeferred;
-    if (!w.since || t - (w.lastAt || 0) > ENTRY_DEFERRED_EPISODE_GAP_MS) { w.since = t; w.logKey = null; w.logAt = 0; }
-    w.lastAt = t;
+    const wm = monoNow();
+    if (w.sinceMono == null || wm - w.lastAt > ENTRY_DEFERRED_EPISODE_GAP_MS || wm < w.lastAt) { w.since = t; w.sinceMono = wm; w.logKey = null; w.logAt = null; }
+    w.lastAt = wm;
     // A7: wann der Master allein regelt, wenn der Slave unbestätigt bleibt (in Notladung nie → null). Restzeit monoton
     // gemessen, angezeigt in Wanduhrzeit (Fable P3-2).
     const aloneAfterMs = sungrowMasterAloneAfterMs(getCfg());
@@ -1252,11 +1263,11 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       : { mode: 'self', reason: 'entry_slave_unconfirmed', at: t, since: w.since, masterAloneAt };
     const event = adopt ? 'sungrow_ems_adopt_deferred' : (stepBack ? 'sungrow_ems_slave_unconfirmed_stepback' : 'sungrow_ems_entry_deferred');
     const key = `${event}|${st.error}`;
-    if (w.logKey !== key || t - w.logAt >= ENTRY_DEFERRED_LOG_REPEAT_MS) {
-      w.logKey = key; w.logAt = t;
+    if (w.logKey !== key || w.logAt == null || wm - w.logAt >= ENTRY_DEFERRED_LOG_REPEAT_MS) {
+      w.logKey = key; w.logAt = wm;
       const aloneMin = Math.round(aloneAfterMs / 60000);
       pushLog(event, {
-        error: st.error, slaveEmergency: e?.slaveEmergency === true, since: w.since, waitingS: Math.round((t - w.since) / 1000), masterAloneAt,
+        error: st.error, slaveEmergency: e?.slaveEmergency === true, since: w.since, waitingS: Math.round((wm - w.sinceMono) / 1000), masterAloneAt,
         ...(foundMode != null ? { foundMode } : {}),
         text: adopt
           ? `Sungrow: Übernahme des gefundenen Modus 2 zurückgestellt — der Slave ist nicht auf Stopp bestätigt${e?.slaveEmergency === true ? ' (Notladung)' : ''}. Der vorgefundene Befehl des Masters läuft bis dahin weiter; ${e?.slaveEmergency === true ? 'DVhub übernimmt nach der Notladung.' : `ohne Bestätigung übernimmt DVhub nach ${aloneMin} min Wartezeit mit eigenem Befehl und regelt allein.`}`
@@ -1316,7 +1327,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       heartbeatSentS: st.sentTimeoutS ?? null,         // zuletzt wirksame Frist (unser Wert oder Gerätewert)
       keepaliveRegister: ctl.keepaliveRegister,        // Lebenszeichen-Register (13080/13052/both)
       deviceFallbackAfterS: st.lastFallbackAfterS || null, // gemessene Zeit, nach der der WR von selbst zurückfiel
-      deviceFallbackCount60s: (st.fallbackTimes || []).filter((x) => now() - x < 60000).length, // Rückfälle letzte 60 s
+      deviceFallbackCount60s: (st.fallbackTimes || []).filter((x) => monoNow() - x < 60000).length, // Rückfälle letzte 60 s (monoton)
       lastHeartbeatAt: st.lastHeartbeatAt || null,
       // Punkt 2: adaptiver Regeltakt + gemessene Antwortzeit + Tages-Schreibzähler je Register (13050 mit Budget).
       // N3 (Feld 19.11.): Der Slave hat keinen eigenen Regeltakt — tick()/applySetpoint laufen nur am Master, der
@@ -1717,7 +1728,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       if (last.ok) {
         st.hb = { ...st.hb, key: st.endpointKey, supported: true, workingFc: fc, deviceManaged: false };
         st.sentTimeoutS = heartbeatS;
-        st.lastHeartbeatAt = now();
+        markHeartbeat();
         logOnce('hb-fc-' + fc, 'sungrow_ems_heartbeat_fc', { fc, heartbeatS });
         return;
       }
@@ -1728,7 +1739,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // der Rückfall-Schutz greift erst nach dem (längeren) Gerätewert. Am Gerät prüfen.
       st.hb = { ...st.hb, key: st.endpointKey, supported: true, workingFc: null, deviceManaged: true };
       st.sentTimeoutS = devHb;
-      st.lastHeartbeatAt = now();
+      markHeartbeat();
       logOnce('hb-device-' + devHb, 'sungrow_ems_heartbeat_device_managed', {
         deviceS: devHb, acceptS: acceptDeviceS,
         text: 'Sungrow übernimmt keinen geschriebenen Herzschlag — DVhub fährt External EMS mit dem geräteeigenen Wert (' + devHb + ' s). Der Rückfall dauert bei einem Ausfall entsprechend länger. Am Gerät prüfen.'
@@ -1786,7 +1797,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Master: ein bestätigter Befehl im Steuermodus beendet das Warten vor dem Eintritt; ein gezählter Wiedereintritt
     // (B3) ist jetzt wirklich geschrieben und wird erst jetzt gemeldet (Fable P3-3).
     if (!isSlave && decision.mode === 'forced') {
-      st.entryDeferred = { since: 0, lastAt: 0, logKey: null, logAt: 0 };
+      st.entryDeferred = { since: 0, sinceMono: null, lastAt: 0, logKey: null, logAt: 0 };
       if (st.reentryLogPending != null) {
         logOnce(`reentry-${st.reentryLogPending}`, 'sungrow_ems_reentry', { count1h: st.reentryLogPending }, 'warn');
         st.reentryLogPending = null;
@@ -2455,7 +2466,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // neu). Bei zu vielen Wiedereintritten/Stunde das Mode-Register (13050) schonen: nicht mehr eintreten, Modus 0
       // lassen, Warnung — sonst würde DVhub 13050 immer wieder hin- und herschreiben, wenn der WR es nicht hält.
       if (ownsForced && decision.mode === 'forced' && dev.mode === EMS_MODE.SELF) {
-        st.forcedReentryTimes = [...(st.forcedReentryTimes || []), t].filter((x) => t - x < 3600000);
+        const rm = monoNow();
+        st.forcedReentryTimes = [...(st.forcedReentryTimes || []), rm].filter((x) => rm - x < 3600000);
+        st.forcedReentryTick = t; // Takt, der zuletzt gezählt hat (entryDeferred nimmt ihn zurück)
         if (st.forcedReentryTimes.length > FORCED_REENTRY_MAX_PER_HOUR) {
           st.decision = { mode: 'self', reason: 'reentry_rate', at: t };
           logOnce('reentry-rate', 'sungrow_ems_reentry_rate', { count1h: st.forcedReentryTimes.length, text: 'Sungrow fällt wiederholt von selbst aus dem Forced mode in Modus 0 zurück (>6/Stunde) — DVhub tritt vorerst nicht wieder ein (13050-Budget), der Akku bleibt im Eigenverbrauch (Modus 0). Firmware/Verkabelung prüfen.' }, 'warn');
@@ -2564,7 +2577,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       pushLog('sungrow_ems_heartbeat_config_changed', { text: 'Herzschlag-Einstellung geändert — External-EMS-Sperre zurückgesetzt, neuer Versuch.' });
     }
     st.hbCfgSig = hbSig;
-    const targetFresh = st.target && t - st.target.at <= opts.targetMaxAgeMs;
+    const targetFresh = st.target && monoNow() - st.target.monoAt <= opts.targetMaxAgeMs;
     // Zweiter WR (Parallelbetrieb): PV/Akku/Last/SoC sind in state.victron bereits die Systemsumme (der Poller
     // aggregiert sie bei aggregateTelemetry, polling.js), deshalb liest der Regler sie hier UNVERÄNDERT — NICHT
     // noch einmal selbst dazuzählen (sonst Akku doppelt, Codex). Vom zweiten WR braucht der Regler nur die
@@ -2640,9 +2653,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // bleiben. Not-Halt/Widerruf (eigene Pfade, neutralize) und die Herzschlag-Lücke (gap, Wiederaufnahme) sind aus.
       const modeBudgetOut = modeBudgetLeft() <= 0;
       if (ownsExternal && ctl.modeValue === EMS_MODE.EXTERNAL && bridgeableSelf) {
-        if (!st.selfBridgeSince) st.selfBridgeSince = t;
+        if (!st.selfBridgeSince) st.selfBridgeSince = monoNow();
         const holdForBudget = modeBudgetOut; // Budget erschöpft → nicht zurück in Modus 0
-        if (holdForBudget || t - st.selfBridgeSince < SELF_RELEASE_MS) {
+        if (holdForBudget || monoNow() - st.selfBridgeSince < SELF_RELEASE_MS) {
           decision = { mode: 'forced', command: 'stop', powerW: 0, reason: holdForBudget ? 'mode_budget_hold' : 'bridge_idle' };
           st.decision = { ...decision, at: t, trigger: reason };
           if (holdForBudget) logOnce('mode-budget', 'sungrow_ems_mode_budget', { writesToday: MODE_WRITES_PER_DAY - modeBudgetLeft(), text: 'Sungrow: Tagesbudget für Moduswechsel (13050, ≤20) erreicht — DVhub bleibt bis Mitternacht im aktuellen Modus (Akku 0 W statt Eigenverbrauch).' }, 'warn');
@@ -2660,7 +2673,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // Frist, die im Gerät wirklich gilt: die zuletzt geschriebene, bis eine neue rausging (Codex ff728d09).
       const deviceTimeoutS = Math.min(ctl.heartbeatTimeoutS, st.sentTimeoutS ?? ctl.heartbeatTimeoutS);
       const gap = ownsExternal && decision.mode === 'forced'
-        && (!st.lastHeartbeatAt || t - st.lastHeartbeatAt > deviceTimeoutS * 1000);
+        && (!st.lastHeartbeatMono || monoNow() - st.lastHeartbeatMono > deviceTimeoutS * 1000);
       if (gap) {
         st.dev = null;
         logOnce(String(st.lastHeartbeatAt), 'sungrow_ems_heartbeat_gap', { lastHeartbeatAt: st.lastHeartbeatAt || null, timeoutS: ctl.heartbeatTimeoutS }, 'warn');
@@ -2679,15 +2692,16 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // und der WR nicht in jedem Folgetakt erneut als „Rückfall" gewertet — sonst bliebe die Neueintritt-Sperre ewig
       // stehen. Eine Herzschlag-Lücke (gap, Neustart mit externalEnteredAt=0) ist kein Rückfall, sondern Wiederaufnahme.
       if (ownsExternal && decision.mode === 'forced' && dev.mode === EMS_MODE.SELF && st.externalEnteredAt && !gap) {
-        const afterS = Math.round((t - st.externalEnteredAt) / 1000);
+        const fm = monoNow();
+        const afterS = Math.round((fm - st.externalEnteredAt) / 1000);
         if (afterS > 0) st.lastFallbackAfterS = afterS;
-        st.lastFallbackAt = t;
-        st.fallbackTimes = [...(st.fallbackTimes || []), t].filter((x) => t - x < 60000);
+        st.lastFallbackAt = fm;
+        st.fallbackTimes = [...(st.fallbackTimes || []), fm].filter((x) => fm - x < 60000);
         logOnce(String(afterS), 'sungrow_ems_device_fallback', { afterS, side: 'master', count60s: st.fallbackTimes.length }, 'warn');
         st.externalEnteredAt = 0;
         st.lastKeepaliveAt = 0;
         if (st.fallbackTimes.length > 3) {
-          st.fallbackCooldownUntil = t + FALLBACK_COOLDOWN_MS; // Mode-Register nicht weiter thrashen — WR zur Ruhe kommen lassen
+          st.fallbackCooldownUntil = fm + FALLBACK_COOLDOWN_MS; // Mode-Register nicht weiter thrashen — WR zur Ruhe kommen lassen
           st.decision = { mode: 'self', reason: 'device_fallback_rate', at: t };
           logOnce('rate', 'sungrow_ems_device_fallback_rate', { text: 'Sungrow fällt wiederholt selbst aus External EMS zurück (>3/min) — DVhub steuert vorerst nicht; Keepalive-Register (sungrow.keepaliveRegister) oder Firmware prüfen.' }, 'warn');
           publish();
@@ -2696,21 +2710,21 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       }
       // (3c) Abkühlung nach zu vielen Rückfällen: eine Minute lang NICHT wieder eintreten — sonst würde DVhub das
       // Mode-Register (13050) im Sekundentakt hin- und herschreiben. Der WR steht in Self (neutral, sicher).
-      if (ownsExternal && decision.mode === 'forced' && st.fallbackCooldownUntil && t < st.fallbackCooldownUntil) {
+      if (ownsExternal && decision.mode === 'forced' && st.fallbackCooldownUntil && monoNow() < st.fallbackCooldownUntil) {
         st.decision = { mode: 'self', reason: 'device_fallback_rate', at: t };
         publish();
         return { ok: false, error: 'device_fallback_rate' };
       }
       // (3c) Neueintritt-Sperre: nach einem Rückfall frühestens nach 10 s wieder in External EMS eintreten. Bis dahin
       // nichts schreiben (der WR steht ohnehin in Self) — sonst würde DVhub sofort wieder eintreten und erneut abfallen.
-      if (ownsExternal && decision.mode === 'forced' && st.lastFallbackAt && t - st.lastFallbackAt < REENTRY_AFTER_FALLBACK_MS) {
+      if (ownsExternal && decision.mode === 'forced' && st.lastFallbackAt && monoNow() - st.lastFallbackAt < REENTRY_AFTER_FALLBACK_MS) {
         st.decision = { mode: 'self', reason: 'fallback_reentry_wait', at: t };
         publish();
         return { ok: false, error: 'fallback_reentry_wait', wait: true };
       }
       // Lebenszeichen, solange DVhub External EMS fährt und der WR in Modus 3 steht. Zwei getrennte Mechanismen:
       if (ownsExternal && !gap && decision.mode === 'forced' && dev.mode === EMS_MODE.EXTERNAL) {
-        if (!st.externalEnteredAt) st.externalEnteredAt = t;
+        if (!st.externalEnteredAt) st.externalEnteredAt = monoNow();
         // (a) Takt-Herzschlag 13080 (Geräte-Watchdog): in JEDEM Steuertakt erneut schreiben — die Doku verlangt den
         //     Wert innerhalb der Frist, und der Steuertakt (stepEveryMs) ist bereits auf ≤ Frist/3 begrenzt. Nicht
         //     ausgedünnt, damit der Watchdog auch bei kurzer Frist sicher gespeist bleibt. Nur wenn das Register
@@ -2719,7 +2733,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         if ((reg === '13080' || reg === 'both') && !st.hb.deviceManaged) {
           await submitReg(conf, HEARTBEAT_ADDR, ctl.heartbeatTimeoutS, { fc: st.hb.workingFc || 6, keepalive: true });
           st.sentTimeoutS = ctl.heartbeatTimeoutS;
-          st.lastHeartbeatAt = now();
+          markHeartbeat();
         }
         // (b) Punkt 3a — Leistungs-Lebenszeichen 13052: der WR fällt am Gerät ~30 s nach Eintritt von selbst zurück,
         //     auch bei 13080=600. Dagegen die Leistung regelmäßig neu schreiben. Takt = gemessene Rückfallzeit/3,
@@ -2728,10 +2742,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
         if (reg === '13052' || reg === 'both' || st.hb.deviceManaged) {
           const fallbackMs = st.lastFallbackAfterS > 0 ? st.lastFallbackAfterS * 1000 : ctl.heartbeatTimeoutS * 1000;
           const kaEvery = Math.min(10000, Math.max(3000, Math.floor(fallbackMs / 3)));
-          if (t - (st.lastKeepaliveAt || 0) >= kaEvery - TICK_JITTER_MS) {
+          if (!st.lastKeepaliveAt || monoNow() - st.lastKeepaliveAt >= kaEvery - TICK_JITTER_MS || monoNow() < st.lastKeepaliveAt) {
             await submitReg(conf, EMS_POWER_ADDR, dev.powerW, { fc: 6, keepalive: true }); // Leistung neu schreiben = Lebenszeichen
-            st.lastKeepaliveAt = now();
-            if (st.hb.deviceManaged) st.lastHeartbeatAt = now();
+            st.lastKeepaliveAt = monoNow();
+            if (st.hb.deviceManaged) markHeartbeat();
           }
         }
       }
@@ -2761,7 +2775,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       const back = await writeDecision(conf, decision, { modeValue: ctl.modeValue, heartbeatS: ctl.heartbeatTimeoutS, forceAll: gap, heartbeatAfterMode: ctl.heartbeatAfterMode, heartbeatWriteFc: ctl.heartbeatWriteFc, acceptDeviceHeartbeatS: ctl.acceptDeviceHeartbeatS });
       // Ein frischer Write (Modus/Leistung) ist ein Lebenszeichen → Keepalive-Fenster neu; bei External EMS gilt
       // der Eintrittszeitpunkt ab jetzt (für die gemessene Rückfallzeit).
-      if (decision.mode === 'forced') { st.lastKeepaliveAt = now(); if (ctl.modeValue === EMS_MODE.EXTERNAL && !st.externalEnteredAt) st.externalEnteredAt = now(); }
+      if (decision.mode === 'forced') { st.lastKeepaliveAt = monoNow(); if (ctl.modeValue === EMS_MODE.EXTERNAL && !st.externalEnteredAt) st.externalEnteredAt = monoNow(); }
       st.error = null;
       st.logKeys = {};
       pushLog('sungrow_ems_write', {
@@ -2833,7 +2847,9 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       // releaseForFloor: der Entlade-Boden hat wegen UNBEKANNTEM/veraltetem SoC gehalten (schedule-eval) — ein
       // Absicherungsfall. Im Forced mode nicht blind weiterregeln, sondern an den WR zurückgeben (Modus 0,
       // Absicherung C); der WR deckt die Last/lädt PV mit seinem eigenen SoC-Wissen.
-      st.target = { setpointW: Number(setpointW), source, at: now(), noGridCharge: noGridCharge === true, releaseForFloor: releaseForFloor === true };
+      // at = Empfangszeit in Wanduhr (Status), monoAt = dieselbe monoton (Alter des Sollwerts, A22). Der Sollwert
+      // kommt ohne eigenen Zeitstempel (schedule-eval → applySetpoint) — maßgeblich ist die Empfangszeit hier.
+      st.target = { setpointW: Number(setpointW), source, at: now(), monoAt: monoNow(), noGridCharge: noGridCharge === true, releaseForFloor: releaseForFloor === true };
       st.revokedReason = null;
       const cfg = getCfg();
       const opts = resolveSungrowEmsOptions(sungrowEmsConf(cfg) || {});

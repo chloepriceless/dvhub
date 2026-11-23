@@ -968,3 +968,170 @@ test('A21: Forced-Herzschlagdatei — Rücksprung (−60 min) frischt weiter auf
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
 });
+
+// --- A22 (Christin 23.11.2026, a): übrige Zeitgeber des Sungrow-Aktuators mit monotoner Uhr -------------------------
+// Vorher (3fff8d6b): Alter des Sollwerts, Herzschlag-Lücke, Überbrückung Akku 0 W, gemessene Rückfallzeit,
+// Wiedereintritts-Sperre/-Rate (External 10 s und >3/min, Forced >6/h), Leistungs-Lebenszeichen 13052 und die
+// Wartephase vor dem Eintritt rechneten mit der Wanduhr. Ein Sprung der Systemzeit verlängerte oder verkürzte sie um
+// die Sprungweite. Jetzt monoton; Status, Protokoll und Anzeige bleiben Wanduhr.
+
+const evts = (r, event) => r.logs.filter((l) => l.event === event);
+const decisionOf = (r) => r.state.ctrl.sungrowEms.decision;
+// Takte mit gleichbleibendem Sollwert (Auffrischen) über eine Dauer, je `stepMs` einer.
+async function hold(r, ms, sp = -6000, stepMs = 10_000) {
+  for (let done = 0; done < ms; done += stepMs) { r.advance(Math.min(stepMs, ms - done)); await r.ems.applySetpoint(sp, 'rule:abend'); await r.ems.tick(); }
+}
+
+test('A22 Sollwert-Alter: Rücksprung (−60 min) → der Sollwert verfällt trotzdem nach 120 s (monoton)', async () => {
+  for (const telemetry of [true, false]) {
+    const r = rig({ telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+    r.jumpWall(-60 * MIN);
+    for (let i = 0; i < 13; i += 1) { r.advance(10_000); await r.ems.tick(); } // 130 s ohne neuen Sollwert
+    assert.equal(decisionOf(r).mode, 'self', `${telemetry ? 'zwei WR' : 'Einzelpfad'}: ${JSON.stringify(decisionOf(r))}`);
+    assert.equal(decisionOf(r).reason, 'target_expired');
+    assert.equal(r.state.ctrl.sungrowEms.target.at, r.t0, 'Status: Empfangszeit in Wanduhrzeit');
+  }
+});
+
+test('A22 Sollwert-Alter: Sprung vorwärts (+2 h) → der Sollwert verfällt nicht vorzeitig', async () => {
+  for (const telemetry of [true, false]) {
+    const r = rig({ telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+    r.jumpWall(2 * 60 * MIN);
+    r.advance(10_000);
+    await r.ems.tick();
+    assert.equal(decisionOf(r).mode, 'forced', `${telemetry ? 'zwei WR' : 'Einzelpfad'}: ${JSON.stringify(decisionOf(r))}`);
+  }
+});
+
+test('A22 Herzschlag-Lücke (External): Sprung vorwärts (+2 h) meldet keine Lücke; Rücksprung (−60 min) erkennt eine echte', async () => {
+  const r = rig({ controlMode: 'external', slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL);
+  await hold(r, 20_000);
+  r.jumpWall(2 * 60 * MIN);
+  r.advance(5_000);
+  await r.ems.tick();
+  assert.equal(evts(r, 'sungrow_ems_heartbeat_gap').length, 0, 'Sprung vorwärts ist keine Lücke');
+  // Echte Lücke: 40 s kein Takt (Frist 30 s), dabei springt die Uhr zurück.
+  r.jumpWall(-3 * 60 * MIN);
+  r.advance(40_000);
+  await r.ems.tick();
+  assert.equal(evts(r, 'sungrow_ems_heartbeat_gap').length, 1, 'Lücke trotz Rücksprung erkannt');
+  assert.equal(evts(r, 'sungrow_ems_heartbeat_gap')[0].data.lastHeartbeatAt > 0, true, 'Protokoll nennt die Wanduhrzeit');
+});
+
+test('A22 Überbrückung Akku 0 W (External): Rücksprung (−60 min) → nach 15 min (monoton) zurück in Modus 0; Sprung vorwärts nicht vorzeitig', async () => {
+  for (const jump of [-60 * MIN, 2 * 60 * MIN]) {
+    const r = rig({ controlMode: 'external', slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+    await hold(r, 10_000);
+    await hold(r, 10_000, 0); // Sollwert im Band → Überbrückung beginnt
+    assert.equal(decisionOf(r).reason, 'bridge_idle', JSON.stringify(decisionOf(r)));
+    r.jumpWall(jump);
+    if (jump > 0) {
+      await hold(r, 10_000, 0);
+      assert.equal(decisionOf(r).reason, 'bridge_idle', `Sprung vorwärts: weiter überbrückt (${JSON.stringify(decisionOf(r))})`);
+      assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL);
+    } else {
+      await hold(r, 15 * MIN, 0);
+      assert.equal(decisionOf(r).mode, 'self', `Rücksprung: nach 15 min zurück (${JSON.stringify(decisionOf(r))})`);
+      assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF);
+    }
+  }
+});
+
+test('A22 Rückfallzeit und Wiedereintritts-Sperre (External): Uhrsprünge verfälschen weder die gemessene Zeit noch die 10-s-Sperre', async () => {
+  let refAfterS = null;
+  for (const jump of [0, -60 * MIN, 2 * 60 * MIN]) {
+    const r = rig({ controlMode: 'external', slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+    await hold(r, 20_000, -6000, 5_000);
+    r.jumpWall(jump);
+    r.masterImage.holding.set(MODE, EMS_MODE.SELF); // der WR fällt von selbst zurück
+    r.advance(5_000);
+    await r.ems.tick();
+    const fb = evts(r, 'sungrow_ems_device_fallback');
+    assert.equal(fb.length, 1, `${jump}: Rückfall erkannt`);
+    if (jump === 0) { refAfterS = fb[0].data.afterS; assert.ok(refAfterS > 0 && refAfterS <= 25, `Referenz ${refAfterS}`); }
+    assert.equal(fb[0].data.afterS, refAfterS, `${jump}: gemessene Rückfallzeit wie ohne Sprung (${fb[0].data.afterS})`);
+    // Sperre 10 s: nach 5 s noch warten, nach 11 s wieder eintreten.
+    r.advance(5_000);
+    assert.equal((await r.ems.tick()).error, 'fallback_reentry_wait', `${jump}: Sperre läuft noch`);
+    r.advance(6_000);
+    await r.ems.tick();
+    assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL, `${jump}: nach 11 s wieder eingetreten`);
+  }
+});
+
+test('A22 Rückfall-Rate (External, >3/min): Rücksprung (−60 min) → die Abkühlung endet nach 60 s (monoton)', async () => {
+  const r = rig({ controlMode: 'external', telemetry: false, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  let last;
+  for (let i = 0; i < 4; i += 1) {
+    r.masterImage.holding.set(MODE, EMS_MODE.SELF); // der WR fällt von selbst zurück
+    r.advance(5_000);
+    last = await r.ems.tick();                      // Rückfall erkannt
+    if (i < 3) { r.advance(10_000); await r.ems.tick(); assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL, `Wiedereintritt ${i + 1}`); }
+  }
+  assert.equal(last.error, 'device_fallback_rate', JSON.stringify(last));
+  assert.equal(r.state.ctrl.sungrowEms.deviceFallbackCount60s, 4);
+  r.jumpWall(-60 * MIN);
+  for (let i = 0; i < 7; i += 1) { r.advance(10_000); await r.ems.applySetpoint(-6000, 'rule:abend'); await r.ems.tick(); }
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL, `nach der Abkühlung wieder eingetreten (${JSON.stringify(decisionOf(r))})`);
+  assert.equal(r.state.ctrl.sungrowEms.deviceFallbackCount60s, 0, 'Status-Zähler der letzten 60 s monoton');
+});
+
+test('A22 Leistungs-Lebenszeichen 13052 (External): Rücksprung (−60 min) → weiter alle ≤10 s geschrieben', async () => {
+  const r = rig({ controlMode: 'external', slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+  r.cfg.sungrow.keepaliveRegister = '13052';
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  await hold(r, 15_000, -6000, 5_000);
+  r.jumpWall(-60 * MIN);
+  r.order.length = 0;
+  await hold(r, 30_000, -6000, 5_000);
+  assert.ok(r.order.filter((e) => e.startsWith(`M:${POWER}=`)).length >= 3, `Lebenszeichen 13052 weiter geschrieben: ${r.order}`);
+});
+
+test('A22 Wiedereintritts-Rate (Forced, >6/h): Rücksprung (−60 min) → nach einer Stunde (monoton) zählen alte Rückfälle nicht mehr', async () => {
+  for (const jump of [-60 * MIN, 2 * 60 * MIN]) {
+    const r = rig({ telemetry: false, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+    const fallBack = async () => { r.masterImage.holding.set(MODE, EMS_MODE.SELF); r.advance(61_000); await r.ems.applySetpoint(-6000, 'rule:abend'); return r.ems.tick(); };
+    for (let i = 0; i < 6; i += 1) await fallBack();
+    assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, '6 Wiedereintritte erlaubt');
+    r.jumpWall(jump);
+    if (jump < 0) {
+      for (let i = 0; i < 6; i += 1) { r.advance(10 * MIN); await r.ems.applySetpoint(-6000, 'rule:abend'); }
+      await fallBack();
+      assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, `Rücksprung: nach 1 h wieder erlaubt (${JSON.stringify(decisionOf(r))})`);
+    } else {
+      await fallBack();
+      assert.equal(decisionOf(r).reason, 'reentry_rate', `Sprung vorwärts: der 7. binnen einer Stunde bleibt gesperrt (${JSON.stringify(decisionOf(r))})`);
+    }
+  }
+});
+
+test('A22 Wartephase vor dem Eintritt: Rücksprung (−60 min) → Warnung weiter alle 15 min; Sprung vorwärts (+2 h) beginnt keine neue Lage', async () => {
+  const warns = (r) => evts(r, 'sungrow_ems_entry_deferred');
+  {
+    const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 120, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+    assert.equal(warns(r).length, 1);
+    r.jumpWall(-60 * MIN);
+    for (let i = 0; i < 15; i += 1) await r.minute();
+    assert.equal(warns(r).length, 2, 'nach 15 min (monoton) erneut gewarnt');
+    assert.equal(decisionOf(r).since, r.t0, 'Status: seit dem ersten Warten, Wanduhr');
+    assert.equal(warns(r)[1].data.waitingS, 15 * 60, 'Wartezeit monoton');
+  }
+  {
+    const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 120, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+    await r.minute();
+    r.jumpWall(2 * 60 * MIN);
+    await r.minute();
+    assert.equal(warns(r).length, 1, 'Sprung vorwärts: dieselbe Lage, keine neue Warnung');
+    assert.equal(decisionOf(r).since, r.t0, 'seit bleibt das erste Warten');
+  }
+});
