@@ -93,10 +93,16 @@ for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], 
           assert.equal(warn[COMPRESSION_WARNING_ID].s, 'error');
           assert.match(warn[COMPRESSION_WARNING_ID].m, /Datenbank ohne Kompression: TimescaleDB läuft in der Apache-Edition/);
           assert.ok(logs.some((l) => l.e === 'storage_compression_failed'));
+          assert.ok(Number.isFinite(r.db.samplesMb), 'hypertable_size geht auch unter Apache');
+          assert.equal(r.db.chunks, null);
         } else {
           assert.ok(comp && !comp.error && comp.chunks > 0, JSON.stringify(comp));
           assert.equal(warn[COMPRESSION_WARNING_ID]?.m ?? null, null, 'Community mit Kompression: kein Hinweis');
           assert.equal(r.compression.ok, true);
+          // Karte „Speicher“: Aufteilung aus echten TimescaleDB-Funktionen.
+          assert.ok(Number.isFinite(r.db.samplesMb), JSON.stringify(r.db));
+          assert.ok(r.db.chunks > 0 && r.db.compressedChunks > 0, JSON.stringify(r.db));
+          assert.ok('energy_slots_15m' in r.db.tables);
         }
       });
     });

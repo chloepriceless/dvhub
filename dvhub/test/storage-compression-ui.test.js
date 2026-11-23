@@ -121,3 +121,49 @@ test('Leitstand: nur gelbe Hinweise bleiben gelb', () => {
   renderSystemWarnings([{ id: 'storage', message: 'Speicher knapp' }], doc);
   assert.equal(doc.byId.systemWarningsBanner.className, 'victron-alarm-banner warn');
 });
+
+// ── Karte „Speicher“ (Speicher-Konzept Schritt 4) ────────────────────────────
+const ST = {
+  ok: true, level: 'wenig', freeMb: 900, totalMb: 12288, freePct: 7.3, daysLeft: 41.2, growthMbPerDay: 21.5, dbMb: 4100,
+  mounts: [{ roles: ['db'], totalMb: 12288, freeMb: 900, freePct: 7.3, level: 'wenig' }, { roles: ['data', 'system', 'logs'], totalMb: 32768, freeMb: 20000, freePct: 61, level: 'ok' }],
+  profile: { effective: 'mittel', base: 'gross', mode: 'fixed', suggested: 'klein', temporary: true, reason: 'Speicher wenig: eine Stufe härter als „groß“, solange der Platz knapp ist', values: { compressAfter: '1 day', rawKeepDays: null, maxWalMb: 512 } },
+  compression: { ok: true, edition: 'timescale', checkedAt: '2026-11-23T20:00:00Z' },
+  db: { samplesMb: 1928, compressedChunks: 116, chunks: 120, rawBeforeMb: 41984, rawAfterMb: 1283, tables: { energy_slots_15m: 305, control_events: 804, audit_log: 357, optimizer_run_series: 495 } },
+  logMode: 'full', container: true,
+};
+function loadStorage() {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '../public/settings.js'), 'utf8');
+  const sandbox = { console, Intl, Date, globalThis: {}, window: { DVhubCommon: { escapeHtml: esc }, addEventListener() {}, setTimeout() {} } };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(src, sandbox, { filename: 'settings.js' });
+  return sandbox.DVhubSettingsStorage;
+}
+
+test('Karte „Speicher“: Stufe, Reichweite, Platten, Profil mit Vorschlag, DB-Aufteilung, Hinweise', () => {
+  const { storageCardView } = loadStorage();
+  const v = storageCardView(ST);
+  assert.equal(v.hidden, false);
+  assert.match(v.bannerHtml, /sa-text-warn.*Speicher wenig: 900 MB frei von 12,0 GB, voll in etwa 41 Tagen \(wächst 22 MB pro Tag\)/);
+  assert.match(v.rowsHtml, /<td>Datenbank<\/td><td>12,0 GB<\/td>/);
+  assert.match(v.rowsHtml, /DVhub-Ordner, System \(\/\), Protokolle/);
+  assert.match(v.profileText, /Speicherprofil: mittel — Speicher wenig/);
+  assert.match(v.profileText, /5-s-Rohwerte für immer, Schreibpuffer bis 512 MB/);
+  assert.equal(v.showApply, true);
+  assert.match(v.applyLabel, /Vorschlag übernehmen: klein/);
+  assert.match(v.dbText, /Kompression: an \(timescale\)/);
+  assert.match(v.dbText, /Messwerte 1,9 GB \(116 von 120 Blöcken komprimiert, 41,0 GB → 1,3 GB\)/);
+  assert.match(v.dbText, /Protokolle 1,1 GB/);
+  assert.match(v.hints.join(' '), /„Vollständig“ kostet etwa 15–20 MB pro Tag zusätzlich; Reichweite heute etwa 41 Tage/);
+  assert.match(v.hints.join(' '), /docker image prune/);
+});
+
+test('Karte „Speicher“: kritisch rot, ohne Kompression benannt, ohne Daten ausgeblendet', () => {
+  const { storageCardView } = loadStorage();
+  const v = storageCardView({ ...ST, level: 'kritisch', compression: { ok: false, label: 'TimescaleDB läuft in der Apache-Edition, die keine Kompression kann', checkedAt: 'x' }, profile: {}, logMode: 'standard', container: false });
+  assert.match(v.bannerHtml, /sa-text-err.*Speicher kritisch/);
+  assert.match(v.dbText, /Kompression: aus — TimescaleDB läuft in der Apache-Edition/);
+  assert.equal(v.showApply, false);
+  assert.deepEqual([...v.hints], []);
+  assert.equal(storageCardView({ ok: true, level: 'unbekannt' }).hidden, true);
+  assert.match(storageCardView({ ...ST, level: 'ok', daysLeft: null, growthMbPerDay: null }).bannerHtml, /sa-text-ok.*Wachstum wird noch gemessen/);
+});

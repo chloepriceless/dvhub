@@ -4408,6 +4408,117 @@ async function loadDbEngineStatus() {
   }
 }
 
+// --- Speicher (Speicher-Konzept 23.11.2026, Schritt 4) ----------------------
+const STORAGE_ROLE_LABEL = { db: 'Datenbank', data: 'DVhub-Ordner', system: 'System (/)', logs: 'Protokolle (/var/log)' };
+const STORAGE_PROFILE_LABEL = { gross: 'groß', mittel: 'mittel', klein: 'klein', winzig: 'winzig' };
+const fmtMb = (mb) => (mb == null || !Number.isFinite(Number(mb)) ? '-' : Number(mb) >= 1024 ? `${(Number(mb) / 1024).toFixed(1).replace('.', ',')} GB` : `${Math.round(Number(mb))} MB`);
+
+/**
+ * Ansicht der Karte „Speicher“ (rein, testbar) aus /api/storage/status.
+ * @returns {{hidden:boolean, bannerHtml?:string, rowsHtml?:string, profileText?:string, showApply?:boolean, applyLabel?:string, dbText?:string, hints?:string[]}}
+ */
+function storageCardView(st) {
+  if (!st || !st.ok || !Array.isArray(st.mounts) || !st.mounts.length) return { hidden: true };
+  const lvl = st.level || 'unbekannt';
+  const days = st.daysLeft != null && Number.isFinite(Number(st.daysLeft)) ? Math.round(Number(st.daysLeft)) : null;
+  const reach = days != null ? `voll in etwa ${days} Tagen` + (Number(st.growthMbPerDay) > 0 ? ` (wächst ${fmtMb(st.growthMbPerDay)} pro Tag)` : '')
+    : (st.growthMbPerDay === 0 ? 'wächst gerade nicht' : 'Wachstum wird noch gemessen (ab 2 Tagen)');
+  const free = `${fmtMb(st.freeMb)} frei von ${fmtMb(st.totalMb)}`;
+  let bannerHtml;
+  if (st.dbUnmeasured) bannerHtml = '<span class="sa-text-warn">Die Platte der Datenbank ist nicht messbar — DVhub räumt in der Datenbank nichts auf.</span>';
+  else if (lvl === 'kritisch') bannerHtml = `<strong class="sa-text-err">Speicher kritisch: ${free}, ${reach}.</strong> Alte 5-s-Rohwerte werden stufenweise entfernt; die 15-min-Werte bleiben.`;
+  else if (lvl === 'wenig' || lvl === 'knapp') bannerHtml = `<strong class="sa-text-warn">Speicher ${lvl}: ${free}, ${reach}.</strong>`;
+  else if (lvl === 'ok') bannerHtml = `<span class="sa-text-ok">Speicher ok: ${free}, ${reach}.</span>`;
+  else bannerHtml = '<span class="sa-text-warn">Speicher nicht messbar.</span>';
+  const rowsHtml = st.mounts.map((m) => {
+    const roles = (m.roles || []).map((r) => STORAGE_ROLE_LABEL[r] || r).join(', ') + (m.dbAssumed ? ' (angenommen)' : '');
+    const cls = m.level === 'kritisch' ? 'sa-text-err' : (m.level === 'wenig' || m.level === 'knapp') ? 'sa-text-warn' : 'sa-text-ok';
+    return `<tr><td>${escapeHtml(roles)}</td><td>${fmtMb(m.totalMb)}</td><td>${fmtMb(m.freeMb)} (${escapeHtml(String(m.freePct ?? '-'))} %)</td><td class="${cls}">${escapeHtml(m.level || '-')}</td></tr>`;
+  }).join('');
+  const p = st.profile || {};
+  const v = p.values || {};
+  let profileText = '-';
+  if (p.effective) {
+    const raw = v.rawKeepDays ? `${v.rawKeepDays} Tage` : 'für immer';
+    profileText = `Speicherprofil: ${STORAGE_PROFILE_LABEL[p.effective] || p.effective}${p.reason ? ` — ${p.reason}` : ''}. `
+      + `Komprimiert nach ${v.compressAfter || '-'}, 5-s-Rohwerte ${raw}, Schreibpuffer bis ${fmtMb(v.maxWalMb)}.`;
+  }
+  const showApply = !!p.suggested;
+  const applyLabel = showApply ? `Vorschlag übernehmen: ${STORAGE_PROFILE_LABEL[p.suggested] || p.suggested} (passend zur Plattengröße)` : '';
+  const c = st.compression || {};
+  const d = st.db || {};
+  const parts = [];
+  if (Number.isFinite(Number(st.dbMb))) parts.push(`Datenbank ${fmtMb(st.dbMb)}`);
+  if (Number.isFinite(Number(d.samplesMb))) {
+    parts.push(`Messwerte ${fmtMb(d.samplesMb)}` + (d.chunks ? ` (${d.compressedChunks} von ${d.chunks} Blöcken komprimiert${Number(d.rawBeforeMb) > 0 ? `, ${fmtMb(d.rawBeforeMb)} → ${fmtMb(d.rawAfterMb)}` : ''})` : ''));
+  }
+  const t = d.tables || {};
+  if (Number.isFinite(Number(t.energy_slots_15m))) parts.push(`15-min-Werte ${fmtMb(t.energy_slots_15m)}`);
+  const logs = (Number(t.control_events) || 0) + (Number(t.audit_log) || 0);
+  if (logs) parts.push(`Protokolle ${fmtMb(logs)}`);
+  const opt = (Number(t.optimizer_run_series) || 0) + (Number(t.optimizer_runs) || 0);
+  if (opt) parts.push(`Optimierer-Läufe ${fmtMb(opt)}`);
+  const comp = !c.checkedAt ? 'Kompression: noch nicht geprüft' : c.ok ? `Kompression: an${c.edition ? ` (${escapeHtml(c.edition)})` : ''}` : `Kompression: aus — ${escapeHtml(c.label || c.reason || 'unbekannt')}`;
+  const dbText = [comp, ...parts].join(' · ');
+  const hints = [];
+  if (st.logMode === 'full') {
+    hints.push('Datenvorhaltung „Vollständig“ kostet etwa 15–20 MB pro Tag zusätzlich'
+      + (days != null ? `; Reichweite heute etwa ${days} Tage` : '')
+      + '. Bei „wenig“ Speicher gilt automatisch Standard, bis wieder Platz ist.');
+  }
+  if (st.container) {
+    hints.push('Docker: Alte Images nach Updates belegen oft mehrere GB. Auf dem Host prüfen mit „docker system df“, aufräumen mit „docker image prune“.');
+  }
+  return { hidden: false, bannerHtml, rowsHtml, profileText, showApply, applyLabel, dbText, hints };
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsStorage = { storageCardView };
+}
+
+async function loadStorageStatus() {
+  const group = document.getElementById('storageGroup');
+  if (!group) return;
+  try {
+    const r = await apiFetch('/api/storage/status');
+    const st = r.ok ? await r.json().catch(() => null) : null;
+    const view = storageCardView(st);
+    if (view.hidden) { group.hidden = true; return; }
+    group.hidden = false;
+    document.getElementById('storageBanner').innerHTML = view.bannerHtml;
+    document.getElementById('storageMounts').innerHTML = view.rowsHtml;
+    document.getElementById('storageProfile').textContent = view.profileText;
+    const actions = document.getElementById('storageProfileActions');
+    const btn = document.getElementById('storageProfileApplyBtn');
+    // .svc-actions-block hat CSS display:none → explizit zeigen.
+    if (actions) actions.style.display = view.showApply ? 'flex' : 'none';
+    if (btn && view.showApply) { btn.disabled = false; btn.textContent = view.applyLabel; }
+    document.getElementById('storageDb').innerHTML = view.dbText;
+    document.getElementById('storageHints').textContent = view.hints.join(' ');
+  } catch {
+    group.hidden = true;
+  }
+}
+
+async function applyStorageProfileSuggestion() {
+  const btn = document.getElementById('storageProfileApplyBtn');
+  if (!(await window.dvConfirm('DVhub stellt das Speicherprofil passend zur Plattengröße ein. Bei kleineren Profilen werden Messwerte früher komprimiert und alte 5-s-Rohwerte nach der Aufbewahrung des Profils entfernt; die 15-min-Werte bleiben.', {
+    title: 'Speicherprofil übernehmen?',
+    okLabel: 'Übernehmen'
+  }))) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Wird übernommen...'; }
+  try {
+    const r = await apiFetch('/api/storage/profile', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ choice: 'auto' }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+  } catch (e) {
+    const banner = document.getElementById('storageBanner');
+    if (banner) banner.innerHTML = `<span class="sa-text-err">Übernehmen fehlgeschlagen: ${escapeHtml(e.message)}</span>`;
+  } finally {
+    await loadStorageStatus();
+  }
+}
+
 async function upgradeTimescale() {
   const banner = document.getElementById('dbEngineBanner');
   const btn = document.getElementById('dbEngineUpgradeBtn');
@@ -4843,6 +4954,8 @@ function initSettingsPage() {
   });
   loadSystemInfo();
   loadDbEngineStatus();
+  loadStorageStatus();
+  document.getElementById('storageProfileApplyBtn')?.addEventListener('click', applyStorageProfileSuggestion);
 
   document.getElementById('importConfigBtn')?.addEventListener('click', () => {
     document.getElementById('importConfigFile')?.click();

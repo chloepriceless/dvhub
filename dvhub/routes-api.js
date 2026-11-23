@@ -5808,7 +5808,27 @@ export function createApiRoutes(ctx) {
         ...((ctx.storageGuard ? ctx.storageGuard.status?.() : rs?.status) || { level: 'unbekannt' }),
         compression: (ctx.storageGuard ? ctx.storageGuard.compressionStatus?.() : rs?.compression) ?? null,
         timescaleTuning: state.timescaleTuning ?? rs?.timescaleTuning ?? null,
+        // Für die Karte „Speicher“: Docker-Hinweis (S9 a) und „Vollständig“-Hinweis (S5 a).
+        container: process.env.DVHUB_RUNTIME === 'container',
+        logMode: getCfg()?.telemetry?.logRetention?.mode === 'full' ? 'full' : 'standard',
       });
+    }
+
+    // Speicherprofil per Klick (Einstellungen → Speicher, S2 a): 'auto' = nach
+    // Plattengröße, sonst fest gross/mittel/klein/winzig. Läuft im Runtime-Prozess.
+    if (url.pathname === '/api/storage/profile' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const choice = String(body?.choice || '');
+      if (!['auto', 'gross', 'mittel', 'klein', 'winzig'].includes(choice)) {
+        return json(res, 400, { ok: false, error: 'choice must be auto, gross, mittel, klein or winzig' });
+      }
+      if (typeof ctx.chooseStorageProfile !== 'function') return json(res, 503, { ok: false, error: 'storage guard not available' });
+      const r = await ctx.chooseStorageProfile(choice);
+      pushLog('storage_profile_request', { choice, ok: !!r.ok, error: r.error || null }, actorContext(req));
+      if (r.error === 'runtime_worker_unavailable' || r.error === 'storage_guard_unavailable') return json(res, 503, r);
+      return json(res, r.ok ? 200 : 409, r);
     }
 
     // Zentraler EOS-Zustand (eos-monitor.js): up/busy/down, PID, Version,

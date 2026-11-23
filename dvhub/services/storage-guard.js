@@ -31,7 +31,7 @@ import {
   growthMbPerDay, reserveMb, daysLeft as reachDays, DEFAULT_DB_VOLUME_DIR,
 } from './storage-mounts.js';
 import {
-  PROFILES, profileForSize, storageStage, decideProfile, chooseProfile, cappedReserveMb,
+  PROFILES, profileForSize, storageStage, stageRank, decideProfile, chooseProfile, cappedReserveMb,
   readProfileState, writeProfileState, startupProfile,
 } from './storage-profile.js';
 import { rawCompactedUntil, rawPruneCutoff, oldestLiveRawDays, pruneRawBefore } from './raw-retention.js';
@@ -163,6 +163,8 @@ export function createStorageGuard({
   // Schritt 3: Speicherprofil. onProfileChange(profile, info) stellt DB-Regeln um
   // (server.js: tuneTimescale, WAL); onStageChange(neu, alt, status) für Meldungen.
   initialProfile = null, onProfileChange = null, onStageChange = null, profileIo = {},
+  // Schritt 4 (S11 a): Push ab „wenig“ (server.js: ctx.notifyDirect).
+  notify = null,
 } = {}) {
   let last = null;
   let running = false;
@@ -411,6 +413,8 @@ export function createStorageGuard({
       }
       out.compression = compressionView();
       out.profile = profileView();
+      // Aufteilung der Datenbank für die Karte „Speicher“ (lesend, Fehler egal).
+      if (hasDb && !dbUnmeasured) { try { out.db = await dbBreakdown((q, p) => db.query(q, p), probe); } catch { /* egal */ } }
       // Andere Platten (System, DVhub-Ordner, Logs): nur Hinweis, DVhub kann dort nichts freigeben.
       const others = out.mounts.filter((m) => m.key !== primary?.key && (m.level === 'wenig' || m.level === 'kritisch'));
       warn('storage_other', others.length ? others.map((m) => `${mountLabel(m)} ${m.level}: ${m.freePct} % frei (${m.freeMb} MB)`).join('; ')
@@ -424,6 +428,19 @@ export function createStorageGuard({
       if (level !== (last?.level)) {
         log('storage_level', { level, freePct, freeMb, dbMb: out.dbMb, daysLeft: out.daysLeft }, level === 'ok' ? 'info' : 'warn');
         try { onStageChange?.(level, last?.level || null, out); } catch { /* egal */ }
+        // S11 a: ab „wenig“, einmal je Wechsel nach oben — Push und Installateur-Portal
+        // (…_error läuft über den Fehlerweg des Audit-Logs ans Portal).
+        if ((level === 'wenig' || level === 'kritisch') && stageRank(level) > stageRank(last?.level || 'ok')) {
+          const text = storageWarningText(out);
+          log('storage_space_error', {
+            level, freePct, freeMb, totalMb, daysLeft: out.daysLeft, growthMbPerDay: out.growthMbPerDay,
+            profile: out.profile?.effective || null, compression: out.compression?.ok ?? null,
+          }, level === 'kritisch' ? 'error' : 'warn');
+          Promise.resolve(notify?.({
+            event: 'storage_level', level: level === 'kritisch' ? 'critical' : 'warning',
+            title: `DVhub: Speicher ${level}`, body: text,
+          })).catch(() => {});
+        }
       }
       last = out;
       return out;
@@ -445,6 +462,36 @@ export function createStorageGuard({
         : (compresses ? 'Ältere Messwerte werden früher komprimiert. ' : 'Messwerte werden nicht komprimiert. '))
       + (p?.temporary ? `Speicherprofil vorübergehend „${PROFILES[p.effective].label}“. ` : '')
       + 'Speicher erweitern: USB-Stick oder SD-Karte als Datenspeicher einrichten.';
+  }
+
+  // Größen für die Karte „Speicher“ in MB: Messwerte (roh/komprimiert), 15-min,
+  // Protokolle, Optimierer-Läufe, Rest.
+  async function dbBreakdown(q, probe) {
+    const mb = (b) => (Number.isFinite(Number(b)) ? Math.round(Number(b) / 1048576) : null);
+    const out = { samplesMb: null, compressedChunks: null, chunks: null, rawBeforeMb: null, rawAfterMb: null, tables: {} };
+    try {
+      const r = await q(probe?.timescale && probe.reason !== 'no_hypertable'
+        ? "SELECT hypertable_size('timeseries_samples') AS b"
+        : "SELECT pg_total_relation_size('timeseries_samples') AS b");
+      out.samplesMb = mb(r.rows?.[0]?.b);
+    } catch { /* egal */ }
+    if (probe?.timescale && probe.edition === 'timescale' && probe.reason !== 'no_hypertable' && probe.reason !== 'not_enabled') {
+      try {
+        const r = (await q(`SELECT count(*) FILTER (WHERE compression_status = 'Compressed') AS c, count(*) AS n,
+            sum(before_compression_total_bytes) AS b, sum(after_compression_total_bytes) AS a
+          FROM chunk_compression_stats('timeseries_samples')`)).rows?.[0] || {};
+        out.compressedChunks = Number(r.c) || 0; out.chunks = Number(r.n) || 0;
+        out.rawBeforeMb = mb(r.b); out.rawAfterMb = mb(r.a);
+      } catch { /* egal */ }
+    }
+    try {
+      const r = await q(`SELECT c.relname AS t, pg_total_relation_size(c.oid) AS b FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+          AND c.relname IN ('energy_slots_15m', 'control_events', 'audit_log', 'optimizer_run_series', 'optimizer_runs')`);
+      for (const row of r.rows || []) out.tables[row.t] = mb(row.b);
+    } catch { /* egal */ }
+    return out;
   }
 
   // Profil-Aufbewahrung: 5-s-Live-Rohwerte älter als keepDays, nie jünger als der verdichtete Stand.

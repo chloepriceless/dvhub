@@ -38,3 +38,10 @@ test('Web-Prozess übernimmt die Hinweise (ersetzt nur die Speicher-Hinweise)', 
   assert.deepEqual(state.systemWarnings.map((w) => w.id), ['tls'], 'Schnappschuss ohne Feld ändert nichts');
   assert.deepEqual([...STORAGE_WARNING_IDS], ['storage', 'storage_other', 'db_compression']);
 });
+
+import { validateRuntimeCommand } from '../runtime-commands.js';
+test('Worker-Befehl storage_profile_choose: nur bekannte Wahl', () => {
+  assert.equal(validateRuntimeCommand({ type: 'storage_profile_choose', payload: { choice: 'auto' } }).ok, true);
+  assert.equal(validateRuntimeCommand({ type: 'storage_profile_choose', payload: { choice: 'winzig' } }).ok, true);
+  assert.equal(validateRuntimeCommand({ type: 'storage_profile_choose', payload: { choice: 'rm -rf' } }).ok, false);
+});

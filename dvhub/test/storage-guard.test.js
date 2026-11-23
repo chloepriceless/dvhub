@@ -346,3 +346,38 @@ test('compress_chunk-Fehler bleibt, wenn der Platz nicht messbar ist', async () 
   assert.equal(r.level, 'unbekannt');
   assert.match(warn[COMPRESSION_WARNING_ID], /gescheitert/);
 });
+
+// ── Schritt 4: Meldungen ab „wenig“ (S11 a) ──────────────────────────────────
+test('Push und Portal-Eintrag einmal je Wechsel nach oben ab „wenig“', async () => {
+  let pct = 15; const sent = []; const logs = [];
+  const db = fakeDb({ oldestDays: 20 });
+  const g = createStorageGuard({ getDb: () => db, statfs: () => stat(pct)(), notify: (m) => sent.push(m), pushLog: (e, d, l) => logs.push({ e, l }) });
+  await g.check();                       // knapp
+  assert.equal(sent.length, 0, 'knapp: kein Push');
+  pct = 8; await g.check();              // wenig
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].level, 'warning');
+  assert.match(sent[0].title, /Speicher wenig/);
+  assert.match(sent[0].body, /Speicher wenig: 8 % frei/);
+  await g.check();                       // bleibt wenig
+  assert.equal(sent.length, 1, 'nicht wiederholt');
+  pct = 3; await g.check();              // kritisch
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].level, 'critical');
+  const portal = logs.filter((x) => x.e === 'storage_space_error');
+  assert.equal(portal.length, 2, '…_error → Fehlerweg ans Installateur-Portal');
+  assert.equal(portal[1].l, 'error');
+});
+
+test('DB-Aufteilung für die Karte', async () => {
+  const db = fakeDb();
+  const orig = db.query.bind(db);
+  db.query = async (sql, p) => {
+    if (sql.includes('hypertable_size')) return { rows: [{ b: 2 * 1048576 * 1024 }] };
+    if (sql.includes('chunk_compression_stats')) return { rows: [{ c: 116, n: 120, b: 41 * 1048576 * 1024, a: 1283 * 1048576 }] };
+    if (sql.includes('pg_total_relation_size(c.oid)')) return { rows: [{ t: 'energy_slots_15m', b: 305 * 1048576 }] };
+    return orig(sql, p);
+  };
+  const r = await createStorageGuard({ getDb: () => db, statfs: stat(60) }).check();
+  assert.deepEqual(r.db, { samplesMb: 2048, compressedChunks: 116, chunks: 120, rawBeforeMb: 41984, rawAfterMb: 1283, tables: { energy_slots_15m: 305 } });
+});

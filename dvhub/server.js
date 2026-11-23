@@ -1550,6 +1550,23 @@ ctx.gridShare = createGridShareTracker({
 // Ein Zählschritt je Abfrage, aufgerufen von polling.js vor onPollComplete —
 // der echte onPollComplete kommt erst nach der Datenbank (Befund 7).
 ctx.gridSharePollTick = createGridSharePollTick(ctx);
+// Speicherprofil per Klick (S2 a): die Platz-Wache läuft im Runtime-Prozess.
+// Danach gleich prüfen, damit die Karte den neuen Stand zeigt.
+ctx.chooseStorageProfile = async (choice) => {
+  if (!IS_RUNTIME_PROCESS) {
+    const r = await runtimeCommandClient.send('storage_profile_choose', { choice });
+    if (!r.ok) return { ok: false, error: r.error || 'runtime_command_failed' };
+    return r.result && typeof r.result === 'object' ? r.result : { ok: false, error: 'runtime_command_failed' };
+  }
+  if (!ctx.storageGuard) return { ok: false, error: 'storage_guard_unavailable' };
+  try {
+    const st = ctx.storageGuard.chooseProfile(choice);
+    const out = await ctx.storageGuard.check();
+    return { ok: true, mode: st.mode, base: st.base, profile: out?.profile || ctx.storageGuard.profile() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+};
 ctx.resetGridShare = async ({ reason = '', actor = null } = {}) => {
   if (IS_RUNTIME_PROCESS) return ctx.gridShare.reset({ reason, actor });
   const r = await runtimeCommandClient.send('grid_share_reset', { reason, actor });
@@ -1568,6 +1585,8 @@ if (PROCESS_ROLE === 'runtime-worker' && typeof process.send === 'function') {
       grid_share_reset: (p) => ctx.gridShare.reset({ reason: p.reason || '', actor: p.actor ?? null }),
       // Direktmeldungen aus dem Web-Prozess (Support-Tunnel, Fern-Support).
       notify_direct: notifyDirectHandler(() => ctx.notificationService),
+      // Speicherprofil per Klick (Einstellungen → Speicher).
+      storage_profile_choose: (p) => ctx.chooseStorageProfile(p.choice),
     },
   });
 }
@@ -2791,6 +2810,8 @@ const telemetryReady = (async () => {
         }
         await tuneDatabase(cfg.telemetry?.database || {}, profile).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
       },
+      // S11 a: Push ab „wenig“ (Portal über storage_space_error im Audit-Log).
+      notify: (msg) => ctx.notifyDirect(msg),
       // „wenig“/„kritisch“: Log-Aufbewahrung sofort laufen lassen (S5 c, „Vollständig“ ruht dann).
       onStageChange: (level) => { if (level === 'wenig' || level === 'kritisch') runLogRetention(); },
       // Nativ: Platte der PostgreSQL-Daten (sudo -u postgres psql, install.sh-Regel), stündlich neu gefragt.
