@@ -42,6 +42,7 @@ const aloneLogs = (r) => r.logs.filter((l) => l.event === ALONE);
 function rig({
   controlMode = 'forced', strategy = 'master-only', strategyCharge = strategy, strategyDischarge = strategy, telemetry = true,
   masterHolding = {}, slaveHolding = {}, slaveInput = {}, slaveMock = {}, masterMock = {}, aloneAfterMin, separateMono = false, clockStart = 1_000_000,
+  forcedHeartbeatPath = null,
 } = {}) {
   const secondInverter = { host: SLAVE_HOST, aggregateTelemetry: true, strategyCharge, strategyDischarge, maxChargeW: 5000, maxDischargeW: 5000, batteryCapacityWh: 10000 };
   if (aloneAfterMin !== undefined) secondInverter.slaveUnconfirmedMasterAloneAfterMin = aloneAfterMin;
@@ -82,7 +83,7 @@ function rig({
     statusKey: 'sungrowEmsSlave', isSlave: true, connOverride: () => ({ host: cfg.sungrow.secondInverter.host, port: 502, unitId: 1, timeoutMs: 1500 }),
     ...(monoNow ? { monoNow } : {}),
   });
-  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: tap(masterT, 'M'), pushLog, now, sleep: async () => {}, slaveActuator: slaveEms, ...(monoNow ? { monoNow } : {}) });
+  const ems = createSungrowEms({ state, getCfg: () => cfg, transport: tap(masterT, 'M'), pushLog, now, sleep: async () => {}, slaveActuator: slaveEms, forcedHeartbeatPath, ...(monoNow ? { monoNow } : {}) });
   const jumpWall = (ms) => { clock += ms; }; // nur die Wanduhr springt (NTP, Hand-Einstellung)
   const advance = (ms) => {
     clock += ms;
@@ -789,5 +790,348 @@ test('Codex 0cc625c7 P1: wartende Übernahme, ein fremdes EMS übernimmt den Mas
     await r.ems.applySetpoint(-6100, 'rule:abend');
     assert.deepEqual(masterWrites(r), [], `${telemetry ? 'Split' : 'Einzelpfad'}: kein Write an einen fremd gesteuerten Master: ${r.order}`);
     assert.ok(r.logs.some((l) => l.event === 'sungrow_ems_foreign_mode'), 'fremder Modus erkannt');
+  }
+});
+
+// --- A16 (Christin 23.11.2026, a): H-9-Übernahme bei Slave unter fremdem EMS (VPP) → sofort allein ------------------
+// Vorher (6dd6f4e5): ein fremdes EMS am Slave zählte bei der Übernahme als „unbestätigt" — die Übernahme wartete
+// (adopt_wait, sungrow_ems_adopt_deferred) bis zum Ablauf der Frist. Jetzt wie beim gewöhnlichen Eintritt: der Master
+// wird sofort übernommen und regelt allein, der VPP-Slave wird nie geschrieben.
+
+const VPP_SLAVE = { [MODE]: EMS_MODE.VPP, [CMD]: EMS_CMD.DISCHARGE, [POWER]: 2000 };
+const foreignLogs = (r) => r.logs.filter((l) => l.event === 'sungrow_ems_slave_foreign');
+const adoptDeferredLogs = (r) => r.logs.filter((l) => l.event === 'sungrow_ems_adopt_deferred');
+
+test('A16: H-9-Übernahme, Slave unter fremdem EMS (VPP) → Master sofort allein übernommen, kein Warten, Slave nie geschrieben', async () => {
+  for (const telemetry of [true, false]) {
+    const where = telemetry ? 'Split' : 'Einzelpfad';
+    const r = rig({ telemetry, masterHolding: FOUND_MODE2, slaveHolding: VPP_SLAVE }); // Frist Standard 30 min
+    const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+    assert.equal(res.ok, true, `${where}: ${JSON.stringify(res)}`);
+    assert.deepEqual(masterWrites(r), [`M:${POWER}=5000`, `M:${CMD}=${EMS_CMD.DISCHARGE}`], `${where}: Übernahme per eigenem Write, kein Moduswechsel`);
+    assert.deepEqual(slaveWrites(r), [], `${where}: VPP-Slave wird nie geschrieben`);
+    assert.equal(adoptedLogs(r).length, 1, where);
+    assert.equal(adoptDeferredLogs(r).length, 0, `${where}: kein „Übernahme zurückgestellt"`);
+    assert.equal(aloneLogs(r).length, 0, `${where}: keine Frist-Warnung (fremdes EMS, nicht unbestätigt)`);
+    assert.equal(foreignLogs(r).length, 1, `${where}: Meldung „Slave unter fremdem EMS"`);
+    const d = r.state.ctrl.sungrowEms.decision;
+    assert.notEqual(d.mode, 'adopt_wait', `${where}: ${JSON.stringify(d)}`);
+    assert.equal(d.masterAlone, undefined, `${where}: kein „Slave unbestätigt" im Status`);
+    assert.equal(r.state.ctrl.sungrowEms.owns, true);
+    // Weiter allein: kein Rücktritt, Meldung nur einmal je Lage, Slave weiter unberührt.
+    r.order.length = 0;
+    for (let i = 0; i < 5; i += 1) assert.equal((await r.minute()).ok, true, `${where}: Minute ${i + 1}`);
+    assert.equal(modeWrites(r, EMS_MODE.SELF), 0, `${where}: kein Rücktritt: ${r.order}`);
+    assert.deepEqual(slaveWrites(r), [], where);
+    assert.equal(foreignLogs(r).length, 1, `${where}: einmal je Lage`);
+    assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED);
+    assert.equal(r.slaveImage.holding.get(MODE), EMS_MODE.VPP);
+    assertSafeRegs(r);
+  }
+});
+
+test('A16: wartende Übernahme (Slave nicht erreichbar), Slave meldet sich unter VPP → sofort übernommen statt bis zur Frist', async () => {
+  const flag = { down: true };
+  const r = rig({ masterHolding: FOUND_MODE2, slaveHolding: OLD_CHARGE, slaveMock: unreachable(flag), aloneAfterMin: 30 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+  assert.equal(r.state.ctrl.sungrowEms.decision.mode, 'adopt_wait');
+  for (let i = 1; i <= 4; i += 1) assert.equal((await r.minute()).ok, false, `Minute ${i}: wartet`);
+  flag.down = false;
+  r.slaveImage.holding.set(MODE, EMS_MODE.VPP); // Minute 5: Slave antwortet, steht unter VPP
+  const res = await r.minute();
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(adoptedLogs(r).length, 1);
+  assert.equal(aloneLogs(r).length, 0, 'keine Frist-Warnung');
+  assert.equal(foreignLogs(r).length, 1);
+  assert.equal(r.state.ctrl.sungrowEms.decision.masterAlone, undefined);
+  assert.notEqual(r.state.ctrl.sungrowEms.decision.mode, 'adopt_wait');
+  assert.deepEqual(slaveWrites(r), []);
+  assertSafeRegs(r);
+});
+
+test('A16: Not-Halt — Übernahme bei VPP-Slave schreibt nichts', async () => {
+  const r = rig({ masterHolding: FOUND_MODE2, slaveHolding: VPP_SLAVE });
+  r.state.ctrl.discretionaryWritesPaused = true;
+  r.state.ctrl.pausedAt = 4713;
+  const res = await r.ems.applySetpoint(-6000, 'rule:abend');
+  assert.notEqual(res.ok, true, JSON.stringify(res));
+  await r.ems.tick();
+  await r.minute();
+  assert.deepEqual(r.order, [], 'im Not-Halt kein Write');
+  assert.equal(adoptedLogs(r).length, 0);
+});
+
+// --- A17 (Christin 23.11.2026): Gerätezustand des Masters mit monotoner Uhr ------------------------------------------
+// Vorher (6dd6f4e5): der Lesetakt des Master-Gerätezustands (deviceRecheckMs, 60 s) rechnete mit der Wanduhr. Nach
+// einem Rücksprung der Uhr (NTP, Hand-Einstellung) um 60 min las DVhub den Master entsprechend länger nicht neu
+// (ein WR-Neustart, ein App-Eingriff blieb unbemerkt). Jetzt monoton wie die Frist.
+
+// Der Sollwert ändert sich je Takt um 1 W: das löst einen Regeltakt aus (unabhängig vom Takt-Zeitgeber), bleibt aber
+// unter der Schreibschwelle (stepW) — gelesen wird also nur, wenn der Lesetakt des Gerätezustands abgelaufen ist.
+let a17Sp = -6000;
+const nudge = (r) => { a17Sp = a17Sp === -6000 ? -6001 : -6000; return r.ems.applySetpoint(a17Sp, 'rule:abend'); };
+const masterBlockReads = (r) => r.masterT.reads.filter((q) => q.fc === 3 && q.address === MODE && q.quantity === 3).length;
+
+test('A17: Wanduhr springt rückwärts (−60 min) → der Master wird trotzdem nach 60 s (monoton) neu gelesen', async () => {
+  for (const telemetry of [true, false]) {
+    const where = telemetry ? 'Split' : 'Einzelpfad';
+    const r = rig({ telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true, where);
+    r.jumpWall(-60 * MIN);
+    const n0 = masterBlockReads(r);
+    r.advance(30_000);
+    assert.equal((await nudge(r)).ok, true, where);
+    assert.equal(masterBlockReads(r), n0, `${where}: vor Ablauf des Lesetakts aus dem Zwischenspeicher`);
+    r.advance(31_000); // 61 s monoton seit dem letzten Lesen, Wanduhr 59 min davor
+    assert.equal((await nudge(r)).ok, true, where);
+    assert.equal(masterBlockReads(r), n0 + 1, `${where}: nach 60 s monoton neu gelesen`);
+  }
+});
+
+test('A17: Wanduhr springt vorwärts (+2 h) → der Master wird nicht vorzeitig neu gelesen; Status-Zeit bleibt Wanduhr', async () => {
+  const r = rig({ slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  const n0 = masterBlockReads(r);
+  const devAt = r.state.ctrl.sungrowEms.device?.at;
+  assert.ok(devAt >= r.t0, `device.at in Wanduhrzeit: ${devAt}`);
+  r.jumpWall(2 * 60 * MIN);
+  r.advance(10_000);
+  assert.equal((await nudge(r)).ok, true);
+  assert.equal(masterBlockReads(r), n0, 'Sprung vorwärts löst kein vorzeitiges Lesen aus');
+  assert.equal(Object.keys(r.state.ctrl.sungrowEms.device).sort().join(','), 'at,cmd,mode,powerW', 'Status-Feld unverändert');
+});
+
+// --- A21 (Christin 23.11.2026): Regeltakt und Forced-Herzschlagdatei mit monotoner Uhr ------------------------------
+// Vorher (78009c3b): der Takt-Zeitgeber (due: now() - lastStepAt) und die 5-s-Drossel der Lebenszeichen-Datei für den
+// Box-Watchdog rechneten mit der Wanduhr. Nach einem Rücksprung der Uhr um 60 min regelte tick() bei gleichbleibendem
+// Sollwert eine Stunde lang nicht nach (kein Refresh, kein External-Herzschlag) und die Datei blieb alt; nach einem
+// Sprung vorwärts kam der Takt vorzeitig. Jetzt monoton; die Zeit in der Datei (at) bleibt Wanduhr.
+
+const WAYS = [
+  { controlMode: 'forced', telemetry: true, name: 'Forced, zwei WR' },
+  { controlMode: 'forced', telemetry: false, name: 'Forced, Einzelpfad' },
+  { controlMode: 'external', telemetry: true, name: 'External, zwei WR' },
+  { controlMode: 'external', telemetry: false, name: 'External, Einzelpfad' },
+];
+
+test('A21: Wanduhr springt rückwärts (−60 min) → der Regeltakt regelt weiter nach (alle Steuerwege)', async () => {
+  for (const w of WAYS) {
+    const r = rig({ controlMode: w.controlMode, telemetry: w.telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true, w.name);
+    assert.equal(r.state.ctrl.sungrowEms.owns, true, w.name);
+    r.jumpWall(-60 * MIN);
+    r.advance(10_000);
+    const res = await r.ems.tick();
+    assert.notEqual(res.idle, true, `${w.name}: Takt nach 10 s (monoton) fällig: ${JSON.stringify(res)}`);
+    r.advance(10_000);
+    const res2 = await r.ems.applySetpoint(-6000, 'rule:abend'); // gleicher Sollwert → Auffrischen nur, wenn fällig
+    assert.notEqual(res2.refreshed, true, `${w.name}: unveränderter Sollwert regelt nach: ${JSON.stringify(res2)}`);
+  }
+});
+
+test('A21: Wanduhr springt vorwärts (+2 h) → kein vorzeitiger Takt (alle Steuerwege)', async () => {
+  for (const w of WAYS) {
+    const r = rig({ controlMode: w.controlMode, telemetry: w.telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true, w.name);
+    r.jumpWall(2 * 60 * MIN);
+    const res = await r.ems.tick();
+    assert.equal(res.idle, true, `${w.name}: monoton 0 s seit dem letzten Takt → nicht fällig: ${JSON.stringify(res)}`);
+    const res2 = await r.ems.applySetpoint(-6000, 'rule:abend');
+    assert.equal(res2.refreshed, true, `${w.name}: unveränderter Sollwert ohne Takt: ${JSON.stringify(res2)}`);
+  }
+});
+
+test('A21: Forced-Herzschlagdatei — Rücksprung (−60 min) frischt weiter auf, Sprung vorwärts (+2 h) nicht vorzeitig; at bleibt Wanduhr', async () => {
+  for (const telemetry of [true, false]) {
+    const where = telemetry ? 'zwei WR' : 'Einzelpfad';
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-sg-hb-'));
+    const hbPath = path.join(dir, 'sungrow_forced_heartbeat.json');
+    try {
+      const r = rig({ telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000, forcedHeartbeatPath: hbPath });
+      assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true, where);
+      const hbAt = () => JSON.parse(fs.readFileSync(hbPath, 'utf8')).at;
+      assert.equal(hbAt(), r.now(), `${where}: erstes Lebenszeichen in Wanduhrzeit`);
+      // Rücksprung: nach 6 s (monoton) neu geschrieben, mit der aktuellen Wanduhrzeit.
+      r.jumpWall(-60 * MIN);
+      r.advance(6_000);
+      await nudge(r); // Sollwert-Änderung → Takt unabhängig vom Takt-Zeitgeber
+      assert.equal(hbAt(), r.now(), `${where}: nach Rücksprung aufgefrischt`);
+      // Sprung vorwärts: 1 s (monoton) später nicht erneut (Drossel 5 s).
+      const before = hbAt();
+      r.jumpWall(2 * 60 * MIN);
+      r.advance(1_000);
+      await nudge(r);
+      assert.equal(hbAt(), before, `${where}: Sprung vorwärts schreibt nicht vorzeitig`);
+      r.advance(5_000);
+      await nudge(r);
+      assert.equal(hbAt(), r.now(), `${where}: nach 5 s (monoton) wieder aufgefrischt`);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+// --- A22 (Christin 23.11.2026, a): übrige Zeitgeber des Sungrow-Aktuators mit monotoner Uhr -------------------------
+// Vorher (3fff8d6b): Alter des Sollwerts, Herzschlag-Lücke, Überbrückung Akku 0 W, gemessene Rückfallzeit,
+// Wiedereintritts-Sperre/-Rate (External 10 s und >3/min, Forced >6/h), Leistungs-Lebenszeichen 13052 und die
+// Wartephase vor dem Eintritt rechneten mit der Wanduhr. Ein Sprung der Systemzeit verlängerte oder verkürzte sie um
+// die Sprungweite. Jetzt monoton; Status, Protokoll und Anzeige bleiben Wanduhr.
+
+const evts = (r, event) => r.logs.filter((l) => l.event === event);
+const decisionOf = (r) => r.state.ctrl.sungrowEms.decision;
+// Takte mit gleichbleibendem Sollwert (Auffrischen) über eine Dauer, je `stepMs` einer.
+async function hold(r, ms, sp = -6000, stepMs = 10_000) {
+  for (let done = 0; done < ms; done += stepMs) { r.advance(Math.min(stepMs, ms - done)); await r.ems.applySetpoint(sp, 'rule:abend'); await r.ems.tick(); }
+}
+
+test('A22 Sollwert-Alter: Rücksprung (−60 min) → der Sollwert verfällt trotzdem nach 120 s (monoton)', async () => {
+  for (const telemetry of [true, false]) {
+    const r = rig({ telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+    r.jumpWall(-60 * MIN);
+    for (let i = 0; i < 13; i += 1) { r.advance(10_000); await r.ems.tick(); } // 130 s ohne neuen Sollwert
+    assert.equal(decisionOf(r).mode, 'self', `${telemetry ? 'zwei WR' : 'Einzelpfad'}: ${JSON.stringify(decisionOf(r))}`);
+    assert.equal(decisionOf(r).reason, 'target_expired');
+    assert.equal(r.state.ctrl.sungrowEms.target.at, r.t0, 'Status: Empfangszeit in Wanduhrzeit');
+  }
+});
+
+test('A22 Sollwert-Alter: Sprung vorwärts (+2 h) → der Sollwert verfällt nicht vorzeitig', async () => {
+  for (const telemetry of [true, false]) {
+    const r = rig({ telemetry, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+    r.jumpWall(2 * 60 * MIN);
+    r.advance(10_000);
+    await r.ems.tick();
+    assert.equal(decisionOf(r).mode, 'forced', `${telemetry ? 'zwei WR' : 'Einzelpfad'}: ${JSON.stringify(decisionOf(r))}`);
+  }
+});
+
+test('A22 Herzschlag-Lücke (External): Sprung vorwärts (+2 h) meldet keine Lücke; Rücksprung (−60 min) erkennt eine echte', async () => {
+  const r = rig({ controlMode: 'external', slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL);
+  await hold(r, 20_000);
+  r.jumpWall(2 * 60 * MIN);
+  r.advance(5_000);
+  await r.ems.tick();
+  assert.equal(evts(r, 'sungrow_ems_heartbeat_gap').length, 0, 'Sprung vorwärts ist keine Lücke');
+  // Echte Lücke: 40 s kein Takt (Frist 30 s), dabei springt die Uhr zurück.
+  r.jumpWall(-3 * 60 * MIN);
+  r.advance(40_000);
+  await r.ems.tick();
+  assert.equal(evts(r, 'sungrow_ems_heartbeat_gap').length, 1, 'Lücke trotz Rücksprung erkannt');
+  assert.equal(evts(r, 'sungrow_ems_heartbeat_gap')[0].data.lastHeartbeatAt > 0, true, 'Protokoll nennt die Wanduhrzeit');
+});
+
+test('A22 Überbrückung Akku 0 W (External): Rücksprung (−60 min) → nach 15 min (monoton) zurück in Modus 0; Sprung vorwärts nicht vorzeitig', async () => {
+  for (const jump of [-60 * MIN, 2 * 60 * MIN]) {
+    const r = rig({ controlMode: 'external', slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+    await hold(r, 10_000);
+    await hold(r, 10_000, 0); // Sollwert im Band → Überbrückung beginnt
+    assert.equal(decisionOf(r).reason, 'bridge_idle', JSON.stringify(decisionOf(r)));
+    r.jumpWall(jump);
+    if (jump > 0) {
+      await hold(r, 10_000, 0);
+      assert.equal(decisionOf(r).reason, 'bridge_idle', `Sprung vorwärts: weiter überbrückt (${JSON.stringify(decisionOf(r))})`);
+      assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL);
+    } else {
+      await hold(r, 15 * MIN, 0);
+      assert.equal(decisionOf(r).mode, 'self', `Rücksprung: nach 15 min zurück (${JSON.stringify(decisionOf(r))})`);
+      assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.SELF);
+    }
+  }
+});
+
+test('A22 Rückfallzeit und Wiedereintritts-Sperre (External): Uhrsprünge verfälschen weder die gemessene Zeit noch die 10-s-Sperre', async () => {
+  let refAfterS = null;
+  for (const jump of [0, -60 * MIN, 2 * 60 * MIN]) {
+    const r = rig({ controlMode: 'external', slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+    await hold(r, 20_000, -6000, 5_000);
+    r.jumpWall(jump);
+    r.masterImage.holding.set(MODE, EMS_MODE.SELF); // der WR fällt von selbst zurück
+    r.advance(5_000);
+    await r.ems.tick();
+    const fb = evts(r, 'sungrow_ems_device_fallback');
+    assert.equal(fb.length, 1, `${jump}: Rückfall erkannt`);
+    if (jump === 0) { refAfterS = fb[0].data.afterS; assert.ok(refAfterS > 0 && refAfterS <= 25, `Referenz ${refAfterS}`); }
+    assert.equal(fb[0].data.afterS, refAfterS, `${jump}: gemessene Rückfallzeit wie ohne Sprung (${fb[0].data.afterS})`);
+    // Sperre 10 s: nach 5 s noch warten, nach 11 s wieder eintreten.
+    r.advance(5_000);
+    assert.equal((await r.ems.tick()).error, 'fallback_reentry_wait', `${jump}: Sperre läuft noch`);
+    r.advance(6_000);
+    await r.ems.tick();
+    assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL, `${jump}: nach 11 s wieder eingetreten`);
+  }
+});
+
+test('A22 Rückfall-Rate (External, >3/min): Rücksprung (−60 min) → die Abkühlung endet nach 60 s (monoton)', async () => {
+  const r = rig({ controlMode: 'external', telemetry: false, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  let last;
+  for (let i = 0; i < 4; i += 1) {
+    r.masterImage.holding.set(MODE, EMS_MODE.SELF); // der WR fällt von selbst zurück
+    r.advance(5_000);
+    last = await r.ems.tick();                      // Rückfall erkannt
+    if (i < 3) { r.advance(10_000); await r.ems.tick(); assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL, `Wiedereintritt ${i + 1}`); }
+  }
+  assert.equal(last.error, 'device_fallback_rate', JSON.stringify(last));
+  assert.equal(r.state.ctrl.sungrowEms.deviceFallbackCount60s, 4);
+  r.jumpWall(-60 * MIN);
+  for (let i = 0; i < 7; i += 1) { r.advance(10_000); await r.ems.applySetpoint(-6000, 'rule:abend'); await r.ems.tick(); }
+  assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.EXTERNAL, `nach der Abkühlung wieder eingetreten (${JSON.stringify(decisionOf(r))})`);
+  assert.equal(r.state.ctrl.sungrowEms.deviceFallbackCount60s, 0, 'Status-Zähler der letzten 60 s monoton');
+});
+
+test('A22 Leistungs-Lebenszeichen 13052 (External): Rücksprung (−60 min) → weiter alle ≤10 s geschrieben', async () => {
+  const r = rig({ controlMode: 'external', slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+  r.cfg.sungrow.keepaliveRegister = '13052';
+  assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+  await hold(r, 15_000, -6000, 5_000);
+  r.jumpWall(-60 * MIN);
+  r.order.length = 0;
+  await hold(r, 30_000, -6000, 5_000);
+  assert.ok(r.order.filter((e) => e.startsWith(`M:${POWER}=`)).length >= 3, `Lebenszeichen 13052 weiter geschrieben: ${r.order}`);
+});
+
+test('A22 Wiedereintritts-Rate (Forced, >6/h): Rücksprung (−60 min) → nach einer Stunde (monoton) zählen alte Rückfälle nicht mehr', async () => {
+  for (const jump of [-60 * MIN, 2 * 60 * MIN]) {
+    const r = rig({ telemetry: false, slaveHolding: {}, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, true);
+    const fallBack = async () => { r.masterImage.holding.set(MODE, EMS_MODE.SELF); r.advance(61_000); await r.ems.applySetpoint(-6000, 'rule:abend'); return r.ems.tick(); };
+    for (let i = 0; i < 6; i += 1) await fallBack();
+    assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, '6 Wiedereintritte erlaubt');
+    r.jumpWall(jump);
+    if (jump < 0) {
+      for (let i = 0; i < 6; i += 1) { r.advance(10 * MIN); await r.ems.applySetpoint(-6000, 'rule:abend'); }
+      await fallBack();
+      assert.equal(r.masterImage.holding.get(MODE), EMS_MODE.FORCED, `Rücksprung: nach 1 h wieder erlaubt (${JSON.stringify(decisionOf(r))})`);
+    } else {
+      await fallBack();
+      assert.equal(decisionOf(r).reason, 'reentry_rate', `Sprung vorwärts: der 7. binnen einer Stunde bleibt gesperrt (${JSON.stringify(decisionOf(r))})`);
+    }
+  }
+});
+
+test('A22 Wartephase vor dem Eintritt: Rücksprung (−60 min) → Warnung weiter alle 15 min; Sprung vorwärts (+2 h) beginnt keine neue Lage', async () => {
+  const warns = (r) => evts(r, 'sungrow_ems_entry_deferred');
+  {
+    const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 120, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+    assert.equal(warns(r).length, 1);
+    r.jumpWall(-60 * MIN);
+    for (let i = 0; i < 15; i += 1) await r.minute();
+    assert.equal(warns(r).length, 2, 'nach 15 min (monoton) erneut gewarnt');
+    assert.equal(decisionOf(r).since, r.t0, 'Status: seit dem ersten Warten, Wanduhr');
+    assert.equal(warns(r)[1].data.waitingS, 15 * 60, 'Wartezeit monoton');
+  }
+  {
+    const r = rig({ slaveHolding: OLD_DISCHARGE, slaveMock: unreachable(), aloneAfterMin: 120, separateMono: true, clockStart: 50_000_000 });
+    assert.equal((await r.ems.applySetpoint(-6000, 'rule:abend')).ok, false);
+    await r.minute();
+    r.jumpWall(2 * 60 * MIN);
+    await r.minute();
+    assert.equal(warns(r).length, 1, 'Sprung vorwärts: dieselbe Lage, keine neue Warnung');
+    assert.equal(decisionOf(r).since, r.t0, 'seit bleibt das erste Warten');
   }
 });
