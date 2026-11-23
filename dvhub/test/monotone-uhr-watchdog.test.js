@@ -9,7 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { watchdogShouldRelease, readForcedHeartbeat, readForcedHeartbeatAt } from '../services/inverter/sungrow-forced-safeoff.js';
-import { EMS_MODE } from '../services/inverter/sungrow.js';
+import { EMS_MODE, createSungrowEms } from '../services/inverter/sungrow.js';
+import { loadSungrowConfig, sungrowImage, mockSungrow, sungrowDevice } from './helpers/sungrow-fixture.js';
 import { readBootClock, bootStamp } from '../services/mono-clock.js';
 
 const T0 = Date.UTC(2026, 10, 23, 12, 0, 0);
@@ -89,4 +90,33 @@ test('readBootClock: /proc/uptime in ms und boot_id; ohne Dateien null', () => {
   assert.equal(readBootClock({ fsImpl, uptimePath: '/u', bootIdPath: '/fehlt' }), null);
   assert.deepEqual(bootStamp(() => null), {});
   assert.deepEqual(bootStamp(() => ({ bootMs: 1, bootId: 'q' })), { bootMs: 1, bootId: 'q' });
+});
+
+// Codex be1efbb9 (P2): die Drossel der Lebenszeichen-Datei muss monoton sein (wie A21 auf fix/sungrow-a16-a17),
+// sonst schreibt DVhub nach einem Rücksprung der Uhr keine Datei mehr, und der Watchdog (jetzt monoton) nähme ein
+// lebendes DVhub nach 120 s zurück.
+test('Lebenszeichen-Datei: nach einem Rücksprung der Wanduhr schreibt DVhub weiter (Drossel monoton)', async () => {
+  const hbPath = path.join(os.tmpdir(), `dvhub-forced-hb-mono-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  try {
+    const cfg = loadSungrowConfig({ gridPositiveMeans: 'grid_import', sungrow: { controlMode: 'forced', heartbeatTimeoutS: 30 } });
+    const t = mockSungrow(sungrowImage());
+    const c = { wall: 1_000_000_000, mono: 1000 };
+    const state = { victron: { errors: {}, fieldUpdatedAt: {}, device: sungrowDevice() }, meter: { ok: true, updatedAt: c.wall, grid_total_w: 0 }, ctrl: {} };
+    const telemetry = () => {
+      state.meter = { ok: true, updatedAt: c.wall, grid_total_w: -5000 };
+      Object.assign(state.victron, { batteryPowerW: -4000, pvPowerW: 0, selfConsumptionW: 500 });
+      for (const f of ['batteryPowerW', 'pvPowerW', 'selfConsumptionW']) state.victron.fieldUpdatedAt[f] = c.wall;
+    };
+    telemetry();
+    const ems = createSungrowEms({ state, getCfg: () => cfg, transport: t, now: () => c.wall, monoNow: () => c.mono, forcedHeartbeatPath: hbPath });
+    await ems.applySetpoint(-5000, 'rule:abend');
+    const at1 = JSON.parse(fs.readFileSync(hbPath, 'utf8')).at;
+    assert.equal(at1, c.wall);
+    c.wall -= 3_600_000; c.mono += 10_000;
+    telemetry();
+    // Gleichbleibender Sollwert: nur der Regeltakt (tick) frischt auf — auch er muss monoton fällig werden (A21).
+    await ems.tick();
+    const at2 = JSON.parse(fs.readFileSync(hbPath, 'utf8')).at;
+    assert.equal(at2, c.wall, 'Datei nach 10 s Laufzeit neu geschrieben (at = neue Wanduhr)');
+  } finally { try { fs.rmSync(hbPath, { force: true }); } catch { /* ignore */ } }
 });

@@ -863,7 +863,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     fallbackCooldownUntil: 0, // bis hierhin nach >3 Rückfällen/min NICHT wieder eintreten (Mode-Register schonen, 3c)
     fallbackTimes: [],    // Zeitstempel der letzten geräteeigenen Rückfälle (Ratenbegrenzung Neueintritt)
     sentTimeoutS: null,  // zuletzt an den Wechselrichter geschriebene Frist (gilt dort, bis eine neue rausging)
-    lastStepAt: 0,
+    lastStepAt: null,    // letzter Regeltakt (monoNow, A21); null = der nächste Aufruf ist fällig
     writeDay: { key: null, regs: {} }, // Tages-Schreibzähler je Register (Verschleißschutz, Punkt 2)
     responseMs: null,    // gleitender Mittelwert der Schreib-/Rücklese-Antwortzeit (adaptiver Takt, Punkt 2)
     decision: null,
@@ -966,11 +966,15 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // aktiv fährt, wird diese Datei regelmäßig aufgefrischt. Der Watchdog (systemd-Timer) nimmt den Forced mode
   // zurück, wenn der Master in Modus 2 steht, aber die Datei älter als seine Frist ist (DVhub hängt). Gedrosselt
   // auf ≥ 5 s (Datei-I/O nicht in jedem 1-s-Takt). Nur der Master schreibt sie (der Slave folgt).
+  // Drossel monoton (A21, Christin 23.11.2026): mit der Wanduhr blieb die Datei nach einem Rücksprung der Uhr um die
+  // Sprungweite alt (der Watchdog hielte DVhub für hängend); in der Datei steht weiter die Wanduhrzeit.
   function touchForcedHeartbeat() {
     if (!forcedHeartbeatPath || isSlave) return;
     const t = now();
-    if (st.lastForcedHeartbeatFileAt && t - st.lastForcedHeartbeatFileAt < 5000) return;
-    st.lastForcedHeartbeatFileAt = t;
+    const m = monoNow();
+    const last = st.lastForcedHeartbeatFileMono;
+    if (last != null && m - last >= 0 && m - last < 5000) return;
+    st.lastForcedHeartbeatFileMono = m;
     try { atomicWriteControlState(forcedHeartbeatPath, { at: t, endpointKey: st.endpointKey, ...bootStamp() }); } // A23 b: bootMs/bootId für den Watchdog
     catch (e) { logOnce(e?.message || 'x', 'sungrow_ems_heartbeat_file_error', { error: e?.message || String(e) }, 'warn'); }
   }
@@ -1845,12 +1849,20 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // nicht erst nach Ablauf des alten (langen) Takts (der Slave übernahm sofort, der Master erst ~10 s später).
     // Darum den internen Takt-Zeitgeber einmal zurücksetzen, damit der nächste Aufruf-Takt sofort nachregelt.
     const taktCfg = configuredRegulateMs(cfg);
-    if (st.lastTaktCfg !== undefined && taktCfg !== st.lastTaktCfg) st.lastStepAt = 0;
+    if (st.lastTaktCfg !== undefined && taktCfg !== st.lastTaktCfg) st.lastStepAt = null;
     st.lastTaktCfg = taktCfg;
     if (!(st.owns && (st.ownMode === EMS_MODE.EXTERNAL || st.ownMode === EMS_MODE.FORCED))) return opts.regulateEveryMs;
     return adaptiveRegulateMs(cfg);
   }
-  const due = (everyMs) => now() - st.lastStepAt >= everyMs - TICK_JITTER_MS;
+  // Takt-Zeitgeber monoton (A21, Christin 23.11.2026): mit der Wanduhr regelte tick() nach einem Rücksprung der Uhr bei
+  // gleichbleibendem Sollwert um die Sprungweite nicht nach (kein Auffrischen, kein External-Herzschlag), nach einem
+  // Sprung vorwärts vorzeitig. Ein negativer Abstand (nur mit eingespielter Uhr denkbar) gilt als fällig.
+  const markStep = () => { st.lastStepAt = monoNow(); };
+  const due = (everyMs) => {
+    if (st.lastStepAt == null) return true;
+    const d = monoNow() - st.lastStepAt;
+    return d < 0 || d >= everyMs - TICK_JITTER_MS;
+  };
 
   // Beide WR sicher in Self-consumption (Split-Abbruch): Master neutralisieren (writeDecision self), Slave über
   // seinen eigenen Pfad, Besitz abgeben, Ziel verwerfen. Best effort — Self ist immer die sichere Seite.
@@ -2532,7 +2544,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const opts = resolveSungrowEmsOptions(conf);
     const ctl = resolveSungrowControl(cfg);
     const t = now();
-    st.lastStepAt = t;
+    markStep();
     // (1d) Sperre ohne Neustart lösen: ändert der Betreiber die Herzschlag-Frist oder die Schreibfunktion (FC),
     // die External-EMS-Sperre und die gemerkte FC zurücksetzen — der nächste Takt probiert es neu.
     const hbSig = `${ctl.heartbeatTimeoutS}:${ctl.heartbeatWriteFc ?? 'auto'}:${ctl.acceptDeviceHeartbeatS}`;
@@ -2914,7 +2926,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       if (state.ctrl?.discretionaryWritesPaused) return { ok: false, blocked: true, error: 'emergency_stop_active' };
       const control = ctl || resolveSungrowControl(cfg);
       const opts = resolveSungrowEmsOptions(conf);
-      st.lastStepAt = now();
+      markStep();
       try {
         // Schreibdrossel je WR (N4/Aufgabe 5, Feld 15.11.: der Slave schrieb per forceAll JEDEN Takt 13051+13052):
         // erst lesen, dann NUR schreiben, wenn der Befehl wechselt ODER die Leistung > stepW abweicht. Der Slave
@@ -3268,7 +3280,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const ownDue = releaseDue();
     const slaveDue = slaveActuator?.releaseDue?.() === true;
     if (!ownDue && !slaveDue) { publish(); return { ...releasePendingResult(), idle: true }; } // Backoff-Fenster: nicht einmal lesen
-    st.lastStepAt = now();
+    markStep();
     // Codex d6f4b256 P1: den Master frisch lesen, BEVOR automatisch geschrieben wird. Er entscheidet auch über den Slave:
     // der folgt dem Master-Modus (Feld #5) — steuert am Master ein anderes System, gehört ihm auch der Slave.
     let masterDev;
