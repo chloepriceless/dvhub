@@ -259,7 +259,10 @@ export function knownMaxDischargeW(state, cfg, now = Date.now(), clock = sharedM
       && String(pt.readType || '').toLowerCase() === 'int32' && Number(pt.quantity) >= 2;
     const ambiguousZero = value === 0 && cfg?.victron?.transport !== 'mqtt' && !reads2720AsInt32;
     if (ambiguousZero && own && !own.ambiguousZero) return own;
-    return { value, from: 'readback', at: now - age, mono: monoStampOf(v.fieldUpdatedAt, 'maxDischargeW', clock), ambiguousZero };
+    // `at` bleibt der Wanduhr-Stempel des Pollers (superseded() vergleicht ihn mit dem Wanduhr-Write lastWriteAt);
+    // aus dem monotonen Alter zurückgerechnet läge eine alte Lesung nach einem Sprung vorwärts „nach“ dem eigenen
+    // Write (Codex 3018ff4d P2). Die monotone Reihenfolge trägt `mono`.
+    return { value, from: 'readback', at: Number(v.fieldUpdatedAt.maxDischargeW), mono: monoStampOf(v.fieldUpdatedAt, 'maxDischargeW', clock), ambiguousZero };
   }
   if (own) return own;
   const lw = state?.schedule?.lastWrite?.maxDischargeW;

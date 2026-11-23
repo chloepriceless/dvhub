@@ -530,3 +530,19 @@ test('Nulleinspeisung: Rücksprung (−3 h) — ein 20 s alter Zählerwert gilt 
   assert.equal(r.state.ctrl._zfi.capActive, false);
   assert.deepEqual(r.pct(), []);
 });
+
+// Codex 3018ff4d (P2): Peak Shaving vergleicht known.at mit seinem Wanduhr-Write. known.at bleibt darum der
+// Wanduhr-Stempel des Pollers — aus dem monotonen Alter zurückgerechnet läge eine alte Lesung nach einem Sprung
+// vorwärts „nach“ dem Write und gälte als fremde Änderung (Wiederherstellung verloren).
+test('Peak Shaving: Sprung vorwärts — known.at der Rücklesung bleibt der Poll-Stempel, monoton daneben', async () => {
+  const { knownMaxDischargeW } = await import('../services/peak-shaving/index.js');
+  const c = clocks();
+  const state = { victron: { maxDischargeW: 1000, fieldUpdatedAt: { maxDischargeW: c.wall }, errors: {} }, ctrl: {}, schedule: { lastWrite: {} } };
+  stampMono(state.victron.fieldUpdatedAt, 'maxDischargeW', { clock: c.monoNow });
+  const pollWall = c.wall; const pollMono = c.mono;
+  c.tick(5000); c.jump(H3);
+  const known = knownMaxDischargeW(state, { victron: { telemetryMaxAgeMs: 90000 } }, c.wall, c.monoNow);
+  assert.equal(known.from, 'readback');
+  assert.equal(known.at, pollWall, 'Wanduhr-Stempel unverändert');
+  assert.equal(known.mono, pollMono);
+});
