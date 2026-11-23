@@ -54,6 +54,13 @@ export function providerSlotsBetween(startMs, endMs) {
   return out.sort((a, b) => a.ts - b.ts);
 }
 
+/** Beginn (ms) des frühesten gespeicherten Anbieterpreises, sonst null (Standard-Tarif „gilt ab“, T1). */
+export function firstProviderSlotMs() {
+  let first = null;
+  for (const ts of slots.keys()) if (first == null || ts < first) first = ts;
+  return first;
+}
+
 export function providerSlotCount() {
   return slots.size;
 }

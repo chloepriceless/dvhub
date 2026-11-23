@@ -1610,6 +1610,8 @@ export function createApiRoutes(ctx) {
     '/api/schedule',
     '/api/history/import/status',
     '/api/history/summary',
+    // Streudiagramm dynamischer Tarif (23.11.2026) — gleiche Haltung wie summary.
+    '/api/history/tariff-scatter',
     // MiSpeL-Übersicht der Historie (2026-10-18) — gleiche Haltung wie summary.
     '/api/history/mispel',
     // Netzstrom im Akku (grid-share.js, 02.11.2026): Zählerstand + Nachweis-Protokoll, nur lesend.
@@ -1705,6 +1707,7 @@ export function createApiRoutes(ctx) {
     ['/api/family/tile-history', 'dashboard'], ['/api/family/tesla-history', 'dashboard'],
     // history — telemetry/history reads + exports + DB backup
     ['/api/history/import/status', 'history'], ['/api/history/summary', 'history'],
+    ['/api/history/tariff-scatter', 'history'],
     ['/api/history/mispel', 'history'],
     ['/api/battery/grid-share', 'history'], ['/api/battery/grid-share/protocol.csv', 'history'],
     ['/api/eeg/extension', 'history'],
@@ -8520,9 +8523,28 @@ export function createApiRoutes(ctx) {
       const result = await historyQueue.run({ key: url.pathname + url.search, req, res }, () => ctx.historyApi.getSummary({
         view: url.searchParams.get('view'),
         date: url.searchParams.get('date'),
-        slots: url.searchParams.get('slots')
+        slots: url.searchParams.get('slots'),
+        estimated: url.searchParams.get('estimated')
       }));
       if (result === HEAVY_SKIPPED) return;   // Browser hat schon weitergeklickt
+      return json(res, result.status, result.body);
+    }
+
+    // Streudiagramm Endpreis gegen Börse (dynamischer Tarif, 23.11.2026).
+    // Gleiche Haltung wie /api/history/summary: Woche/Monat/Jahr/Alle sind Pro,
+    // gleiche Warteschlange (rechnet über getSummary und die Ablage).
+    if (url.pathname === '/api/history/tariff-scatter' && req.method === 'GET') {
+      // Ohne view rechnet der Handler den Monat — auch das ist Pro.
+      if (!requirePro(req, res, 'history-multiperiod')) return;
+      if (!ctx.historyApi || typeof ctx.historyApi.getTariffScatter !== 'function') {
+        return json(res, 503, { ok: false, error: 'internal telemetry store disabled' });
+      }
+      const result = await historyQueue.run({ key: url.pathname + url.search, req, res }, () => ctx.historyApi.getTariffScatter({
+        view: url.searchParams.get('view'),
+        date: url.searchParams.get('date'),
+        estimated: url.searchParams.get('estimated')
+      }));
+      if (result === HEAVY_SKIPPED) return;
       return json(res, result.status, result.body);
     }
 

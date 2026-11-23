@@ -2103,6 +2103,8 @@ test('history summary API validates views and delegates to the runtime', async (
     view: 'month',
     date: '2026-03-09',
     includeSlots: false,
+    // T3 (23.11.2026): geschätzte Anbieterpreise zählen standardmäßig mit.
+    estimated: 'include',
     solarMarketValues: {
       monthlyCtKwhByMonth: { '2026-03': 4.5 },
       annualCtKwhByYear: {}
@@ -2112,6 +2114,7 @@ test('history summary API validates views and delegates to the runtime', async (
     view: 'week',
     date: '2026-03-09',
     includeSlots: false,
+    estimated: 'include',
     solarMarketValues: {
       monthlyCtKwhByMonth: { '2026-03': 4.5 },
       annualCtKwhByYear: {}
