@@ -1402,7 +1402,7 @@ function buildFieldDefinitions() {
       section: 'system',
       group: 'peakShaving',
       groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
-      groupDescription: 'Für Gewerbeanschlüsse mit Leistungsmessung (RLM): Der Leistungspreis richtet sich nach der höchsten Viertelstunden-Bezugsleistung im Jahr. DVhub lädt dann nie mehr aus dem Netz, als die Grenze zulässt, und lässt den Akku Spitzen abdecken, wenn er sonst gehalten oder gesperrt wäre. Not-Halt, §14a, Netzlade-Verbot und Mindest-Ladestand haben immer Vorrang. Wirkt bisher nur bei Victron.',
+      groupDescription: 'Für Gewerbeanschlüsse mit Leistungsmessung (RLM): Der Leistungspreis richtet sich nach der höchsten Viertelstunden-Bezugsleistung im Jahr. DVhub lädt dann nie mehr aus dem Netz, als die Grenze zulässt, und lässt den Akku Spitzen abdecken, wenn er sonst gehalten oder gesperrt wäre. Not-Halt, §14a, Netzlade-Verbot und Mindest-Ladestand haben immer Vorrang. Wirkt bei Victron (Netz-Sollwert und Entladegrenze), bei Profilen mit schreibbarem Netz-Sollwert oder Entladegrenze (z. B. Sungrow, MQTT-Bridge, DVhub-MQTT) über „Akku zuerst“ des Netzanschluss-Wächters und — ungetestet, mit eigenem Schalter — über die eingebaute Peak-Shaving-Funktion des Wechselrichters, wo das Herstellerprofil sie kennt.',
       beta: true,
       path: 'peakShaving.enabled',
       label: 'Bezugsgrenze einhalten',

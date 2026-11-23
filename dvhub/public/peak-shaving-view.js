@@ -41,6 +41,7 @@
 
   function state(s) {
     if (s.reason === 'manufacturer_unsupported') return ['Nur Anzeige', 'info'];
+    if (s.reason === 'builtin_disabled') return ['Eingebaut, aus', 'info'];
     if (s.reason === 'limit_missing') return ['Grenze fehlt', 'warn'];
     if (s.active !== true) return [DASH, ''];
     if (s.acting) return ['Greift', 'warn'];
@@ -57,6 +58,10 @@
       return s.lift.waiting === 'readback'
         ? `Akku freigegeben: ${kw(s.lift.liftedW)} — Sperre wird gesetzt, sobald 2704 lesbar ist`
         : `Akku freigegeben: ${kw(s.lift.liftedW)}`;
+    }
+    if (s.assist) {
+      if (!s.assist.requested) return `Akku-Hilfe nicht möglich (${s.assist.reason || 'abgelehnt'})`;
+      return `${s.leverText || 'Akku zuerst'}: Bezug höchstens ${kw(s.assist.maxImportW)}${num(s.assist.helpW) && Number(s.assist.helpW) > 0 ? `, Akku gibt ${kw(s.assist.helpW)}` : ''}`;
     }
     const why = s.clamp && REASON_TEXT[s.clamp.reason];
     if (s.clamp && (s.clamp.mode === 'target' || s.clamp.mode === 'net_load')) {

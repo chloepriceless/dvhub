@@ -2417,13 +2417,19 @@ export function createScheduleEvaluator(ctx) {
   // (server.js ctx.peakShaving) samt Viertelstunden-Budget (P1) — dann ist das
   // Regelziel im Budget-Modus die erlaubte Restleistung der Viertelstunde —,
   // ohne ihn (Tests, die den Evaluator allein bauen) wie bisher die Einstellung.
+  // Nur der Victron-Hebel regelt hier; Profile mit eigenem Netz-Sollwert bzw.
+  // Entladegrenze (Sungrow, MQTT) gehen über die Akku-Hilfe des
+  // Netzanschluss-Wächters, eingebaute Funktionen über services/peak-shaving/
+  // builtin.js (P5) — für diese Hebel sind beide Victron-Wege aus.
   function peakShavingControl(cfg) {
+    let r;
     try {
-      if (typeof ctx.peakShaving?.control === 'function') return ctx.peakShaving.control(cfg);
+      if (typeof ctx.peakShaving?.control === 'function') r = ctx.peakShaving.control(cfg);
     } catch (e) {
       pushLog('peak_shaving_error', { phase: 'control', error: e?.message || String(e) }, 'warn');
     }
-    return resolvePeakShaving(cfg);
+    r ??= resolvePeakShaving(cfg);
+    return r.active && r.lever !== 'victron' ? { ...r, active: false, reason: 'lever_not_victron' } : r;
   }
 
   let peakShavingTickNo = 0;

@@ -34,6 +34,7 @@ import { betaGateOpen } from '../../beta-features.js';
 import { localParts, zoneOffsetMs } from '../../tz-fast.js';
 import { capPositiveSetpoint, meterImport } from '../import-limit/core.js';
 import { monoNow as defaultMonoNow } from '../mono-clock.js';
+import { resolveBatteryLever } from '../grid-connection/index.js';
 import { createBudgetState, observeBudget, decideBudget, quarterHourSlot } from './budget.js';
 import { resolveTariff, computeYearBilling } from './billing.js';
 
@@ -73,7 +74,21 @@ export function resolvePeakShaving(cfg = {}) {
   const configured = finite(c.gridImportLimitW) && rawLimit >= MIN_LIMIT_W && rawLimit <= MAX_LIMIT_W;
   const limitW = configured ? Math.round(rawLimit) : null;
   const manufacturer = String(cfg?.manufacturer || 'victron');
-  const supported = manufacturer === 'victron';
+  // Hebel (P5, Christin 24.11.2026) — nach dem, was das Profil kann, nicht nach
+  // dem Herstellernamen (wie der Netzanschluss, resolveBatteryLever):
+  //   victron  Sollwert-Deckel + Entlade-Freigabe im Steuerpfad (schedule-eval)
+  //   native   Netz-Sollwert und/oder Entladegrenze schreibbar (Sungrow-EMS,
+  //            MQTT-Bridge, DVhub-MQTT …) → Akku-Hilfe des Netzanschluss-Wächters
+  //            (ctx.batteryAssist, Quelle 'peak-shaving')
+  //   builtin  eingebaute Peak-Shaving-Funktion des Wechselrichters
+  //            (Profilblock peakShavingBuiltin, ungetestet, nur mit Schalter)
+  //   none     nichts davon → nur Anzeige
+  const batteryLever = resolveBatteryLever(cfg);
+  const builtinAvailable = builtinSpecValid(cfg?.peakShavingBuiltin);
+  const lever = batteryLever.kind !== 'none' ? batteryLever.kind
+    : builtinAvailable ? (c.builtin?.enabled === true ? 'builtin' : 'builtin_off')
+      : 'none';
+  const supported = lever === 'victron' || lever === 'native' || lever === 'builtin';
   const marginRaw = finite(c.marginW) ? Number(c.marginW) : PEAK_SHAVING_DEFAULTS.marginW;
   const marginW = limitW == null ? Math.max(0, Math.round(marginRaw))
     : Math.min(Math.round(limitW / 2), Math.max(0, Math.round(marginRaw)));
@@ -87,7 +102,7 @@ export function resolvePeakShaving(cfg = {}) {
   const reason = !flagOn ? 'disabled'
     : !gateOpen ? 'beta_gate_closed'
       : !configured ? 'limit_missing'
-        : !supported ? 'manufacturer_unsupported'
+        : !supported ? (lever === 'builtin_off' ? 'builtin_disabled' : 'manufacturer_unsupported')
           : null;
   return {
     enabled,
@@ -95,6 +110,9 @@ export function resolvePeakShaving(cfg = {}) {
     supported,
     active: reason === null,
     manufacturer,
+    lever,
+    leverText: lever === 'builtin' || lever === 'builtin_off' ? 'eingebaute Peak-Shaving-Funktion des Wechselrichters (ungetestet)' : batteryLever.text,
+    builtinAvailable,
     limitW,
     marginW,
     targetW: limitW == null ? null : limitW - marginW,
@@ -110,8 +128,20 @@ const STATUS_TEXT = {
   disabled: 'Peak Shaving ist aus.',
   beta_gate_closed: 'Peak Shaving ist eine Beta-Funktion und wirkt nur im Bleeding-Edge-Kanal.',
   limit_missing: 'Keine gültige Bezugsgrenze eingetragen (mindestens 1000 W) — DVhub regelt nicht.',
-  manufacturer_unsupported: 'Peak Shaving regelt bisher nur Victron-Anlagen. Bei diesem Hersteller zeigt DVhub die Spitzen nur an.'
+  manufacturer_unsupported: 'Peak Shaving braucht einen steuerbaren Akku: Victron, ein Profil mit schreibbarem Netz-Sollwert oder Entladegrenze (z. B. Sungrow, MQTT-Bridge) oder eine eingebaute Peak-Shaving-Funktion des Wechselrichters. Bei diesem Hersteller zeigt DVhub die Spitzen nur an.',
+  builtin_disabled: 'Der Wechselrichter hat eine eingebaute Peak-Shaving-Funktion (im Profil hinterlegt, ungetestet). DVhub nutzt sie erst, wenn „Eingebaute Peak-Shaving-Funktion nutzen“ eingeschaltet ist — bis dahin nur Anzeige.'
 };
+
+/**
+ * Profilblock peakShavingBuiltin (P5): mindestens ein Schreibpunkt `limit` oder
+ * `mode` mit ganzzahliger Adresse. Genauer geprüft wird beim Schreiben
+ * (services/peak-shaving/builtin.js).
+ */
+export function builtinSpecValid(spec) {
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return false;
+  const ok = (p) => p && typeof p === 'object' && Number.isInteger(Number(p.address)) && Number(p.address) >= 0 && Number(p.address) <= 0xffff;
+  return ok(spec.limit) || ok(spec.mode);
+}
 
 /** Kurzer deutscher Statustext zum Ergebnis von resolvePeakShaving(). */
 export function peakShavingStatusText(resolved) {
@@ -617,6 +647,42 @@ export function createPeakShaving(ctx, deps = {}) {
     return { ...base, budget: dec };
   }
 
+  // P5: Profile mit eigenem Netz-Sollwert bzw. Entladegrenze (Sungrow-EMS,
+  // MQTT-Bridge, DVhub-MQTT): Akku-Hilfe beim Netzanschluss-Wächter anfordern —
+  // höchster Netzbezug = Regelziel (im Budget-Modus die erlaubte Restleistung).
+  // Gilt 30 s und wird je Zählerabfrage erneuert; fällt der Dienst aus, läuft
+  // sie ab. Not-Halt: der Wächter nimmt keine an (und gibt eine stehende frei).
+  const ASSIST_SOURCE = 'peak-shaving';
+  let assistHeld = false;
+  let assistLogKey = null;
+  function nativeAssist(ctl, t) {
+    const assist = ctx.batteryAssist || ctx.gridConnection?.batteryAssist || null;
+    const want = ctl && ctl.active && ctl.lever === 'native' && Number.isFinite(Number(ctl.targetW));
+    if (!want || typeof assist?.request !== 'function') {
+      if (assistHeld) assist?.release?.(ASSIST_SOURCE);
+      assistHeld = false;
+      if (ctx.state?.ctrl?._peakShaving?.assist) ctx.state.ctrl._peakShaving.assist = null;
+      assistLogKey = null;
+      return;
+    }
+    const res = assist.request({ source: ASSIST_SOURCE, maxImportW: Math.max(0, Math.round(ctl.targetW)), untilMs: t + 30_000 }) || {};
+    assistHeld = res.ok === true;
+    if (ctx.state) {
+      ctx.state.ctrl ??= {};
+      (ctx.state.ctrl._peakShaving ??= {}).assist = {
+        requested: assistHeld, maxImportW: Math.round(ctl.targetW), reason: assistHeld ? null : (res.reason || 'rejected'), at: t
+      };
+    }
+    const key = `${assistHeld}|${res.reason || ''}`;
+    if (key !== assistLogKey) {
+      assistLogKey = key;
+      ctx.pushLog?.('peak_shaving_assist', {
+        requested: assistHeld, maxImportW: Math.round(ctl.targetW), reason: res.reason || null, lever: ctl.leverText,
+        text: assistHeld ? `Peak Shaving: Akku-Hilfe angefordert (${ctl.leverText})` : `Peak Shaving: Akku-Hilfe nicht möglich (${res.reason || 'abgelehnt'})`
+      }, assistHeld ? 'info' : 'warn');
+    }
+  }
+
   /** Je Zählerabfrage (polling.js): Netzbezug ins Viertelstunden-Budget. */
   function pollTick() {
     try { syncEosOnChange(); } catch { /* nur Abgleich */ }
@@ -625,6 +691,7 @@ export function createPeakShaving(ctx, deps = {}) {
     if (!r.active) {
       if (budget.lastMono != null) Object.assign(budget, createBudgetState());
       budgetLogKey = null;
+      nativeAssist(null, now());
       return null;
     }
     const t = now();
@@ -634,6 +701,7 @@ export function createPeakShaving(ctx, deps = {}) {
       timeZone: c.schedule?.timezone || 'Europe/Berlin'
     });
     const ctl = control(c, t);
+    nativeAssist(ctl, t);
     const dec = ctl.budget;
     const key = dec ? `${dec.mode}|${dec.reason}` : null;
     if (key !== budgetLogKey) {
@@ -705,6 +773,9 @@ export function createPeakShaving(ctx, deps = {}) {
       targetW: r.targetW,
       marginW: r.marginW,
       billing15min: r.billing15min,
+      lever: r.lever,
+      leverText: r.leverText,
+      assist: r.lever === 'native' && ctl.assist ? { ...ctl.assist, helpW: nativeHelpW() } : null,
       adapt,
       // Viertelstunden-Budget (P1): mode 'budget' = Regelziel ist die erlaubte
       // Restleistung, 'instant' = Augenblickswert (reason sagt warum).
@@ -717,7 +788,8 @@ export function createPeakShaving(ctx, deps = {}) {
       billing: billingSummary(c, t),
       timezone: c.schedule?.timezone || 'Europe/Berlin',
       importW: meterFresh ? Math.max(0, Math.round(Number(s.victron.gridImportW))) : null,
-      acting: Boolean((clamp && (clamp.mode === 'target' || clamp.mode === 'net_load')) || lift),
+      acting: Boolean((clamp && (clamp.mode === 'target' || clamp.mode === 'net_load')) || lift
+        || (r.lever === 'native' && ctl.assist?.requested && nativeHelpW() > 0 && meterFresh && Number(s.victron.gridImportW) >= Number(ctlNow?.targetW) - 500)),
       clamp,
       lift,
       peaks: { month: peaks.month, year: peaks.year, updatedAt: peaks.updatedAt, error: peaks.error }
@@ -765,5 +837,17 @@ export function createPeakShaving(ctx, deps = {}) {
       .finally(() => { eosSyncBusy = false; });
   }
 
-  return { refreshPeaks, summary, start, stop, control, pollTick, eosTargetW, _budget: budget };
+  function nativeHelpW() {
+    try {
+      const st = (ctx.batteryAssist || ctx.gridConnection?.batteryAssist)?.status?.(ASSIST_SOURCE);
+      return Math.max(0, Number(st?.helpW) || 0);
+    } catch { return 0; }
+  }
+
+  function stopAll() {
+    stop();
+    nativeAssist(null, now());
+  }
+
+  return { refreshPeaks, summary, start, stop: stopAll, control, pollTick, eosTargetW, _budget: budget };
 }
