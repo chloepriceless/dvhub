@@ -3535,7 +3535,10 @@ export function createScheduleEvaluator(ctx) {
         fic.capActive = false; fic.limitPct = null; fic.below = 0;
         return;
       }
-      const meterFresh = state.meter?.ok === true && (Date.now() - Number(state.meter.updatedAt || 0)) < 15000;
+      // A23 b: Frische des Zählers monoton (Empfangszeit im Einspeisegrenzen-Dienst); ohne Dienst wie bisher.
+      const meterFresh = typeof ctx.feedInCap?.meterFresh === 'function'
+        ? ctx.feedInCap.meterFresh()
+        : state.meter?.ok === true && (Date.now() - Number(state.meter.updatedAt || 0)) < 15000;
       const act = capLoopStep(fic, {
         exportW: state.victron?.gridExportW, importW: state.victron?.gridImportW, limitW,
         refW: getPowerLimits(cfg).limits.inverterMaxPowerW, pvW: state.victron?.pvTotalW, meterFresh

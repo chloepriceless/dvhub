@@ -27,6 +27,14 @@
 //
 // Überwachung (alle Wege): gemessene Einspeisung länger als 60 s über Grenze +
 // Toleranz → Meldung und Warnung, bis sie 30 s wieder darunter liegt.
+//
+// Zeit (A23 b, Christin 23.11.2026): die 60/30 s, der 10-min-Rücklesetakt und die
+// 15-s-Frische des Zählers laufen über die monotone Uhr. state.meter.updatedAt
+// ist ein Wanduhr-Stempel des Pollers: am Übergabepunkt merkt sich der Dienst die
+// Empfangszeit monoton (createStampAge). Episoden-Zeiten und readback.at bleiben
+// Wanduhr (Anzeige, Protokoll).
+
+import { pickMonoNow, createStampAge } from '../mono-clock.js';
 
 export const FEED_IN_CAP_MODES = Object.freeze(['', 'none', 'pct60', 'pct70', 'pct', 'watts']);
 export const FEED_IN_CAP_TICK_MS = 5000;
@@ -117,16 +125,19 @@ export function capLoopStep(st, { exportW, importW, limitW, refW, pvW, meterFres
   return { write: true, limitPct: st.limitPct, ena: 1 };
 }
 
-/** Überwachung: Einspeisung gegen Grenze, Toleranz 2 % (mind. 100 W). */
-export function createExceedMonitor({ now = () => Date.now() } = {}) {
-  let overSince = null;
-  let underSince = null;
+/** Überwachung: Einspeisung gegen Grenze, Toleranz 2 % (mind. 100 W). Dauern monoton, start/end Wanduhr. */
+export function createExceedMonitor({ now: nowArg = null, monoNow: monoNowArg = null } = {}) {
+  const now = nowArg || (() => Date.now());
+  const mono = pickMonoNow(monoNowArg, nowArg);
+  let overSince = null;  // { at (Wanduhr), mono, maxW }
+  let underSince = null; // monoton
   let open = null; // laufende gemeldete Überschreitung
   let episodes = 0;
   let lastEpisode = null;
 
   function observe({ exportW, limitW }) {
     const t = now();
+    const m = mono();
     if (!isNum(limitW)) {
       overSince = null; underSince = null;
       // Grenze aufgehoben während einer Überschreitung → Episode beenden.
@@ -141,10 +152,10 @@ export function createExceedMonitor({ now = () => Date.now() } = {}) {
     const exp = Math.max(0, Number(exportW) || 0);
     if (exp > limitW + tol) {
       underSince = null;
-      if (overSince == null) overSince = { at: t, maxW: exp };
+      if (overSince == null) overSince = { at: t, mono: m, maxW: exp };
       overSince.maxW = Math.max(overSince.maxW, exp);
       if (open) { open.maxW = Math.max(open.maxW, exp); return {}; }
-      if (t - overSince.at >= EXCEED_AFTER_MS) {
+      if (m - overSince.mono >= EXCEED_AFTER_MS) {
         open = { start: overSince.at, maxW: overSince.maxW, limitW, lastW: exp };
         episodes += 1;
         return { event: 'exceeded', episode: { ...open } };
@@ -154,8 +165,8 @@ export function createExceedMonitor({ now = () => Date.now() } = {}) {
     overSince = null;
     if (!open) return {};
     if (exp > limitW) { underSince = null; return {}; }
-    if (underSince == null) underSince = t;
-    if (t - underSince >= RECOVER_AFTER_MS) {
+    if (underSince == null) underSince = m;
+    if (m - underSince >= RECOVER_AFTER_MS) {
       lastEpisode = { ...open, end: t };
       open = null;
       underSince = null;
@@ -179,9 +190,11 @@ const WARN_UNSET = 'Einspeisegrenze nicht angegeben: Bitte unter Einstellungen �
  */
 export function createFeedInCap(ctx, deps = {}) {
   const now = deps.now || (() => Date.now());
+  const mono = pickMonoNow(deps.monoNow, deps.now);
   const setWarning = deps.setWarning || (() => {});
-  const monitor = createExceedMonitor({ now });
-  let lastReadbackAt = 0;
+  const monitor = createExceedMonitor({ now, monoNow: mono });
+  const stampAge = createStampAge({ now, monoNow: mono });
+  let lastReadbackAt = null; // monoton; null = fällig
   let timer = null;
   let busy = false;
   let last = { resolved: null, path: null, readback: null };
@@ -199,8 +212,9 @@ export function createFeedInCap(ctx, deps = {}) {
 
   async function readbackNative(limitW) {
     const t = now();
-    if (t - lastReadbackAt < READBACK_MS) return;
-    lastReadbackAt = t;
+    const m = mono();
+    if (lastReadbackAt != null && m - lastReadbackAt < READBACK_MS) return;
+    lastReadbackAt = m;
     const point = cfg().controlWrite?.dvFeedInLimitW;
     const transport = deps.getTransport?.();
     if (!point || typeof transport?.mbRequest !== 'function') return;
@@ -240,10 +254,10 @@ export function createFeedInCap(ctx, deps = {}) {
 
       // Überwachung gegen die wirksame Grenze (DV/Steuerbox dürfen tiefer liegen).
       const s = ctx.state || {};
-      const meterFresh = s.meter?.ok === true && now() - Number(s.meter.updatedAt || 0) < METER_MAX_AGE_MS;
+      const fresh = meterFresh();
       const eff = path === 'native' && ctx.feedInLimit?.effective ? ctx.feedInLimit.effective() : r.limitW;
       const limitW = eff != null && r.limitW != null ? Math.min(eff, r.limitW) : (r.limitW ?? null);
-      if (meterFresh || limitW == null) {
+      if (fresh || limitW == null) {
         const res = monitor.observe({ exportW: s.victron?.gridExportW, limitW });
         if (res.event === 'exceeded') {
           ctx.pushLog?.('feed_in_cap_exceeded', res.episode, 'warn');
@@ -257,6 +271,15 @@ export function createFeedInCap(ctx, deps = {}) {
     } finally {
       busy = false;
     }
+  }
+
+  /**
+   * Zählerwert frisch (< 15 s)? Alter monoton ab dem Empfang des Stempels (state.meter.updatedAt, Wanduhr des
+   * Pollers). Auch für die Regelschleife in schedule-eval.js (capLoopStep).
+   */
+  function meterFresh() {
+    const s = ctx.state || {};
+    return s.meter?.ok === true && stampAge.ageMs('meter', Number(s.meter.updatedAt || 0)) < METER_MAX_AGE_MS;
   }
 
   /** Grenze für die Regelschleife (nur Weg „loop“), sonst null. */
@@ -287,5 +310,5 @@ export function createFeedInCap(ctx, deps = {}) {
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-  return { tick, status, limitForLoop, start, stop };
+  return { tick, status, limitForLoop, meterFresh, start, stop };
 }

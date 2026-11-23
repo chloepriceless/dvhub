@@ -39,7 +39,7 @@ test('createStampAge: neuer Stempel einmal per Wanduhr (nie negativ), danach mon
   assert.equal(sa.ageMs('y', wall + 10_000), 0);
   // Ungültig → Infinity, receivedMono null.
   assert.equal(sa.ageMs('z', null), Infinity);
-  assert.equal(sa.ageMs('z', 0), Infinity);
+  assert.equal(sa.ageMs('z', 0), wall, 'Stempel 0 = Epoche (wie Date.now() - 0)');
   assert.equal(sa.ageMs('z', 'abc'), Infinity);
   assert.equal(sa.receivedMono('z', undefined), null);
   // Schlüssel getrennt.

@@ -49,7 +49,7 @@ export function createStampAge({ now = Date.now, monoNow: mono = monoNow } = {})
   function receivedMono(key, stamp) {
     if (stamp == null || stamp === '') return null;
     const s = Number(stamp);
-    if (!Number.isFinite(s) || s <= 0) return null;
+    if (!Number.isFinite(s)) return null;
     let e = seen.get(key);
     if (!e || e.stamp !== s) {
       e = { stamp: s, mono: mono() - Math.max(0, now() - s) };
