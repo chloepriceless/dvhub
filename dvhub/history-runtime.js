@@ -3187,10 +3187,25 @@ export function createHistoryApiHandlers({
       if (!estimated) {
         return { status: 400, body: { ok: false, error: 'estimated must be include or exclude' } };
       }
+      let summary = await historyRuntime.getSummary({ view, date, solarMarketValues, includeSlots, estimated });
+      // Schlanke Antwort (?lean=1, Handy-App): Kennzahlen, Diagramm-Reihen und
+      // Perioden-Zeilen, aber nicht dieselben Viertelstunden noch einmal als
+      // slots/series/rows. Ein Tag wog sonst über 550 KB und stieß an die
+      // Rahmengrenze der Handy-Verbindung (rund 750 KiB JSON).
+      const lean = query.lean === true || query.lean === '1' || query.lean === 'true';
+      if (lean) {
+        // Kopie — das Ergebnis der Laufzeit kann aus einem Zwischenspeicher stammen.
+        summary = {
+          ...summary,
+          slots: [],
+          series: { financial: [], energy: [], prices: [] },
+          rows: view === 'day' ? [] : summary.rows
+        };
+      }
       return {
         status: 200,
         body: {
-          ...await historyRuntime.getSummary({ view, date, solarMarketValues, includeSlots, estimated }),
+          ...summary,
           app: appVersion
         }
       };

@@ -129,7 +129,7 @@ Spalte **Zugang** in den Tabellen:
 
 | Methode | Pfad | Zugang | Beschreibung |
 |---|---|---|---|
-| GET | `/api/history/summary` | LAN·history, *Pro* für Woche/Monat/Jahr | Zusammenfassung (`?view=day&date=YYYY-MM-DD`). 15-min-Daten (`slots`, `series`) nur in der Tagesansicht; für Woche/Monat mit `&slots=1` |
+| GET | `/api/history/summary` | LAN·history, *Pro* für Woche/Monat/Jahr | Zusammenfassung (`?view=day&date=YYYY-MM-DD`). 15-min-Daten (`slots`, `series`) nur in der Tagesansicht; für Woche/Monat mit `&slots=1`. `&lean=1` (Handy-App): ohne `slots`/`series`, in der Tagesansicht auch ohne `rows` – Kennzahlen und `charts` bleiben |
 | GET | `/api/history/mispel` | LAN·history | MiSpeL-Übersicht eines Jahres (`?year=YYYY`): Pauschaloption je (Rumpf-)Jahr (P1–P15 aus den Messwerten), bei Abgrenzungsoption zusätzlich Formelsatz A1 je Monat. Leer, solange keine Option gewählt ist |
 | GET | `/api/history/export` | Token, *Pro* für Mehrperioden | Aggregierter Export |
 | GET | `/api/history/viz/<karte>` | LAN·history, *Pro* für Mehrperioden | Analyse-Karten: `sankey`, `heatmap`, `ledger`, `day-profile`, `stack`, `autarky-calendar`, `ring`, `duration`, `pheat`, `neg-price`, `spaghetti`, `cycles`, `top10`, `cal-year`, `scatter`, `inverter-efficiency` (`?view=&date=&granularity=`) |
@@ -210,8 +210,8 @@ Spalte **Zugang** in den Tabellen:
 | POST | `/api/schedule/rules` | Token | Manuelle Regeln setzen: `{ rules, replaceDcFeedRules? }`; automatische Regeln bleiben. DC-Einspeise-Regeln (`feedExcessDcPv`) bleiben stehen, wenn keine mitkommt — mit `replaceDcFeedRules: true` ist `rules` auch für sie die vollständige Liste (leer = löschen) |
 | POST | `/api/schedule/rules/toggle` | Token | Regeln per ID ein-/ausschalten |
 | POST | `/api/schedule/config` | Token | Standardwerte setzen |
-| GET | `/api/schedule/automation/config` | LAN·integrations | Kleine Börsenautomatik lesen |
-| POST | `/api/schedule/automation/config` | Token | Kleine Börsenautomatik setzen |
+| GET | `/api/schedule/automation/config` | LAN·integrations | Kleine Börsenautomatik lesen. Für die Handy-App (Kennung `x-dvhub-client: mobile-link`) nur benannte Felder (`enabled`, `searchWindowStart`, `searchWindowEnd`, `targetSlotCount`, `maxDischargeW`, `minSocPct`) – ohne Standort und Stufen; `maxDischargeW` ist der wirksame Wert, `maxDischargeFromPlant: true`, wenn „Meine Anlage“ ihn vorgibt |
+| POST | `/api/schedule/automation/config` | Token | Kleine Börsenautomatik setzen. Von der Handy-App nur dieselben benannten Felder, geprüft; anderes → 400 `field_not_allowed:<Feld>`; `maxDischargeW` bei Vorgabe aus „Meine Anlage“ → 409 `managed_by_plant` |
 | POST | `/api/schedule/automation/replan` | Token | Sofort neu planen |
 | POST | `/api/control/write` | Token | Manueller Sollwert: `{ target, value, persist?, clear? }`, `target` ∈ `gridSetpointW`, `chargeCurrentA`, `minSocPct`, `maxDischargeW`, `feedExcessDcPv`; `clear: true` hebt den Override auf |
 | POST | `/api/control/stop` | Token | **Not-Halt** „als ob DVhub aus ist“: DVhubs eigene Vorgaben einmal zurücknehmen, danach keine Schreibvorgänge mehr — auch nicht §51, Direktvermarkter-Abregelung, §14a, SoC-Boden-Schutz (seit 1.0.10); den Netz-Sollwert schreibt er nicht (Antwort `neutralize.reason: "setpoint_unchanged"`); `/api/status.emergencyStop.suspended` nennt alles Ausgesetzte |
@@ -391,6 +391,7 @@ Siehe [EEBUS.md](EEBUS.md).
 | GET | `/api/battery/grid-share/protocol.csv` | LAN·`history` | Protokoll (Sperrwechsel, Tageszeilen, Zurücksetzen) als CSV |
 | POST | `/api/battery/grid-share/reset` | Token | Zähler auf 0 (`{ "reason": "…" }`), nur mit Header `x-confirm-legal-gate: true`; wird protokolliert. Im getrennten Betrieb führt der Runtime-Worker aus: 503 = Worker startet noch, 504 = keine Antwort oder Worker beendet (Ergebnis unbekannt, Stand neu laden) |
 | GET | `/api/mobile-link/status` | LAN·`integrations` | Handy-App: Zustand, gekoppelte Geräte, liefert `uiToken` |
+| GET | `/api/mobile-link/integrations` | Token | Handy-App: Übersicht der Integrationen wie `/api/integrations/status`, aber per Positivliste neu aufgebaut — nur Wahrheitswerte, Zähler, Modell und Firmware; keine Adressen im Heimnetz, Benutzernamen, Kennungen, Fehlertexte |
 | POST | `/api/mobile-link/settings` | Token+Nonce | Handy-App ein/aus, Relay, Name (Ausschalten geht ohne Nonce) |
 | POST | `/api/mobile-link/pair/start`, `/pair/approve` | Token+Nonce | Kopplung per QR-Code starten bzw. bestätigen |
 | POST | `/api/mobile-link/pair/cancel`, `/devices/remove` | Token | Kopplung abbrechen bzw. Gerät entkoppeln |

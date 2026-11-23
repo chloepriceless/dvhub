@@ -5,6 +5,19 @@
 // passiert, entscheidet allein diese Liste: „Anzeigen“ = ausgewählte lesende
 // Endpunkte, „Steuern“ zusätzlich wenige Schalt-Endpunkte. Konfiguration,
 // Admin, Sicherungen, Exporte und Kopplungen bleiben dem Browser vorbehalten.
+//
+// 14.11.2026 (von Christin freigegeben): Zeitplan anlegen und ändern
+// (/api/schedule/rules, /api/schedule/config), Börsenautomatik lesen und
+// einstellen (/api/schedule/automation/config) — nur mit „Steuern“. Dazu die
+// Integrationen in einer eigenen Sicht ohne Adressen und Zugangsdaten
+// (/api/mobile-link/integrations). /api/integrations/status selbst bleibt zu:
+// Es nennt Adressen im Heimnetz, Benutzernamen und Kennungen.
+//
+// 14.11.2026 abends (von Christin freigegeben): „Sofort laden“ und „Laden
+// stoppen“ fürs E-Auto — /api/ev/override, POST zum Starten und DELETE zum
+// Beenden, beides nur mit „Steuern“. DELETE gibt es ausschließlich für diesen
+// einen Pfad (DELETE_PATHS); jede andere Anfrage mit DELETE bleibt 405.
+// /api/ev/preview bleibt zu (die App braucht es nicht).
 
 export const PERMS = Object.freeze(['read', 'control']);
 
@@ -15,6 +28,7 @@ export const READ_PATHS = new Set([
   '/api/ev',
   '/api/forecast',
   '/api/schedule',
+  '/api/schedule/automation/config',
   '/api/eos/plan',
   '/api/eos/status',
   '/api/storage/status',
@@ -29,6 +43,7 @@ export const READ_PATHS = new Set([
   '/api/eeg/extension',
   '/api/integrations/health',
   '/api/integrations/dataflow',
+  '/api/mobile-link/integrations',
   '/api/victron/devices',
   '/api/devices',
   '/api/vpn/status',
@@ -41,8 +56,18 @@ export const CONTROL_PATHS = new Set([
   '/api/control/resume',
   '/api/control/write',
   '/api/ev',
+  '/api/ev/override',
+  '/api/schedule/rules',
   '/api/schedule/rules/toggle',
+  '/api/schedule/config',
+  '/api/schedule/automation/config',
   '/api/schedule/automation/replan',
+]);
+
+// Löschen (DELETE) — eine eigene, kurze Liste: Ein Pfad, der POST erlaubt,
+// erlaubt damit noch lange kein DELETE.
+export const DELETE_PATHS = new Set([
+  '/api/ev/override',
 ]);
 
 export function normalizePerms(list) {
@@ -71,6 +96,12 @@ export function checkRequest(perms, method, rawPath) {
   }
   if (m === 'POST') {
     if (!CONTROL_PATHS.has(p)) return { ok: false, status: 403, error: 'forbidden' };
+    if (!perms.includes('control')) return { ok: false, status: 403, error: 'control_not_allowed' };
+    return { ok: true, path: p, search: u.search };
+  }
+  if (m === 'DELETE') {
+    // Unbekannter Pfad: 405 wie bisher für jedes DELETE — es verrät nichts über die Routen der Box.
+    if (!DELETE_PATHS.has(p)) return { ok: false, status: 405, error: 'method_not_allowed' };
     if (!perms.includes('control')) return { ok: false, status: 403, error: 'control_not_allowed' };
     return { ok: true, path: p, search: u.search };
   }

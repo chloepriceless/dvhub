@@ -68,6 +68,8 @@ import { resolveEvArrival } from './services/optimizer/ev-arrival.js';
 import { createOpenEvseAdapter, createGoeAdapter, createWattpilotAdapter } from './services/wallbox/adapters.js';
 import { WALLBOX_TYPES } from './services/wallbox/types.js';
 import { loadCatalog as loadEvccVehicleCatalog, maskVehicleSettings, mergeVehicleSettings, validateVehicleSettings } from './services/vehicle-evcc/index.js';
+import { mobileIntegrationsView } from './services/mobile-link/integrations-view.js';
+import { mobileAutomationConfigView, parseMobileAutomationPatch } from './services/mobile-link/automation-view.js';
 import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost } from './services/pv-strings/index.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
@@ -4632,7 +4634,13 @@ export function createApiRoutes(ctx) {
     }
 
     // GET /api/integrations/status — integration status overview (D-08)
-    if (url.pathname === '/api/integrations/status' && req.method === 'GET') {
+    // GET /api/mobile-link/integrations — dieselbe Übersicht für die Handy-App,
+    // aber neu aufgebaut per Positivliste (services/mobile-link/integrations-view.js):
+    // ohne Adressen im Heimnetz, Benutzernamen, Kennungen und Fehlertexte. Nur
+    // dieser Weg ist für die App freigegeben (permissions.js), nie /status selbst.
+    const mobileIntegrations = url.pathname === '/api/mobile-link/integrations' && req.method === 'GET';
+    // (Die Bedingung beginnt bewusst mit dem /status-Vergleich: Daran finden die Quelltext-Tests den Block.)
+    if (url.pathname === '/api/integrations/status' && req.method === 'GET' || mobileIntegrations) {
       const mqttCfg = getCfg().mqtt || {};
       const payload = {
         timestamp: Date.now(),
@@ -4856,6 +4864,7 @@ export function createApiRoutes(ctx) {
           };
         })()
       };
+      if (mobileIntegrations) return json(res, 200, mobileIntegrationsView(payload));
       return json(res, 200, payload);
     }
 
@@ -8524,7 +8533,8 @@ export function createApiRoutes(ctx) {
         view: url.searchParams.get('view'),
         date: url.searchParams.get('date'),
         slots: url.searchParams.get('slots'),
-        estimated: url.searchParams.get('estimated')
+        estimated: url.searchParams.get('estimated'),
+        lean: url.searchParams.get('lean')
       }));
       if (result === HEAVY_SKIPPED) return;   // Browser hat schon weitergeklickt
       return json(res, result.status, result.body);
@@ -8933,6 +8943,20 @@ export function createApiRoutes(ctx) {
 
     // --- Schedule Automation Config GET ---
     if (url.pathname === '/api/schedule/automation/config' && req.method === 'GET') {
+      const globalMinSocPct = Number.isFinite(Number(state?.victron?.minSocPct)) && state?.victron?.minSocPct != null
+        ? Number(state.victron.minSocPct) : VICTRON_MIN_SOC_FALLBACK_PCT;
+      // Handy-App (Kennung setzt der Agent, mobile-link/agent.js): nur benannte
+      // Felder — die Config trägt sonst auch den Standort der Anlage
+      // (location.latitude/longitude). Die Kennung gibt nur WENIGER heraus,
+      // sie zu fälschen bringt also nichts.
+      if (req.headers['x-dvhub-client'] === 'mobile-link') {
+        return json(res, 200, {
+          ok: true,
+          config: mobileAutomationConfigView(getCfg().schedule?.smallMarketAutomation, resolvePlantBattery(getCfg())),
+          optimizerEnabled: getCfg().optimizer?.enabled === true,
+          globalMinSocPct
+        });
+      }
       // optimizerEnabled / globalMinSocPct: die Karte im Leitstand erklärt damit,
       // ob die Automatik überhaupt gebraucht wird und wohin die Reserve sinkt.
       return json(res, 200, {
@@ -8952,6 +8976,20 @@ export function createApiRoutes(ctx) {
       if (body === null) return;
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         return json(res, 400, { ok: false, error: 'invalid body' });
+      }
+      // Handy-App: nur die Felder, die sie auch zeigt, und nur geprüfte Werte —
+      // nie location, stages oder engine (automation-view.js). Die Antwort
+      // trägt dieselbe schmale Sicht.
+      if (req.headers['x-dvhub-client'] === 'mobile-link') {
+        const parsed = parseMobileAutomationPatch(body, resolvePlantBattery(getCfg()));
+        if (!parsed.ok) return json(res, parsed.status || 400, { ok: false, error: parsed.error });
+        const current = JSON.parse(JSON.stringify(ctx.getRawCfg() || {}));
+        current.schedule = current.schedule || {};
+        current.schedule.smallMarketAutomation = { ...current.schedule.smallMarketAutomation, ...parsed.patch };
+        ctx.saveAndApplyConfig(current);
+        pushLog('sma_config_updated', { keys: Object.keys(parsed.patch) }, actorContext(req));
+        ctx.regenerateSmallMarketAutomationRules().catch(e => pushLog('sma_regen_error', { error: e.message }));
+        return json(res, 200, { ok: true, config: mobileAutomationConfigView(getCfg().schedule?.smallMarketAutomation, resolvePlantBattery(getCfg())) });
       }
       const allowedKeys = new Set([
         'enabled', 'searchWindowStart', 'searchWindowEnd', 'targetSlotCount',

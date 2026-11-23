@@ -2762,3 +2762,43 @@ test('Ablage der Jahr/Alle-Staende: Version 5 seit der Quellenwahl je Viertelstu
   const { SUMMARY_CACHE_VERSION } = await import('../history-runtime.js');
   assert.ok(SUMMARY_CACHE_VERSION >= 5);
 });
+
+test('history summary API: lean=1 drops the duplicated quarter-hour copies but keeps KPIs, charts and period rows', async () => {
+  const full = {
+    view: 'day',
+    kpis: { pvKwh: 3 },
+    charts: { dayEnergyLines: [{ ts: 't', pvKwh: 1 }] },
+    rows: [{ key: 'slot' }],
+    slots: [{ ts: 't' }],
+    series: { financial: [{ ts: 't' }], energy: [{ ts: 't' }], prices: [{ ts: 't' }] },
+    meta: {}
+  };
+  const handlers = createHistoryApiHandlers({
+    historyRuntime: {
+      // Dasselbe Objekt wie aus einem Zwischenspeicher: darf nicht verändert werden.
+      getSummary({ view }) { return view === 'day' ? full : { ...full, view, rows: [{ key: '2026-03-09' }], slots: [] }; }
+    },
+    telemetryEnabled: true,
+    appVersion: { version: 'test' }
+  });
+
+  const lean = await handlers.getSummary({ view: 'day', date: '2026-03-09', lean: '1' });
+  assert.equal(lean.status, 200);
+  assert.deepEqual(lean.body.kpis, { pvKwh: 3 });
+  assert.equal(lean.body.charts.dayEnergyLines.length, 1);
+  assert.deepEqual(lean.body.rows, []);
+  assert.deepEqual(lean.body.slots, []);
+  assert.deepEqual(lean.body.series, { financial: [], energy: [], prices: [] });
+  assert.equal(full.slots.length, 1, 'Quelle bleibt unverändert');
+  assert.equal(full.rows.length, 1);
+
+  // Woche/Monat/Jahr: die Perioden-Zeilen bleiben.
+  const month = await handlers.getSummary({ view: 'month', date: '2026-03-09', lean: 'true' });
+  assert.deepEqual(month.body.rows, [{ key: '2026-03-09' }]);
+
+  // Ohne lean bleibt alles wie bisher.
+  const normal = await handlers.getSummary({ view: 'day', date: '2026-03-09' });
+  assert.equal(normal.body.slots.length, 1);
+  assert.equal(normal.body.rows.length, 1);
+  assert.equal(normal.body.series.energy.length, 1);
+});
