@@ -199,6 +199,13 @@
         <div class="rail-row" title="Höchster Viertelstunden-Mittelwert des Netzbezugs im laufenden Kalenderjahr — danach richtet sich der Leistungspreis (RLM)."><span class="l">Spitze Jahr (15 min)</span><strong class="v" id="peakShavingYear">&mdash;</strong></div>
         <div class="rail-row" id="peakShavingBudgetRow" hidden title="Abrechnung nach 15-min-Mittelwert: bezogene Energie in dieser Viertelstunde gegen das Budget (Grenze × 15 min). DVhub greift erst ein, wenn die Hochrechnung das Budget reißen würde. Kann der Akku nicht sicher liefern, gilt der Deckel auf den Augenblickswert."><span class="l">Viertelstunde</span><strong class="v" id="peakShavingBudget">&mdash;</strong></div>
         <div class="rail-row" data-leit="adv"><span class="l">Eingriff</span><strong class="v" id="peakShavingDetail">&mdash;</strong></div>
+        <div id="peakShavingBilling" hidden>
+          <div class="rail-row" title="Leistungspreis × höchste Viertelstunden-Spitze (Jahresleistungspreis) bzw. × Monatsspitze (Monatsleistungspreis), netto, aus den eingetragenen Preisen."><span class="l">Leistungsentgelt</span><strong class="v" id="peakShavingCharge">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Benutzungsdauer = Jahresarbeit ÷ Jahresspitze. Ab 2.500 h gilt die Stufe mit hohem Leistungs- und niedrigem Arbeitspreis. Im laufenden Jahr aufs ganze Jahr hochgerechnet."><span class="l">Benutzungsdauer</span><strong class="v" id="peakShavingUsage">&mdash;</strong></div>
+          <div class="rail-row" data-leit="adv" title="Arbeitspreis + Leistungspreis ÷ Benutzungsdauer (netto)."><span class="l">Netzentgelt effektiv</span><strong class="v" id="peakShavingEffective">&mdash;</strong></div>
+          <div class="rail-row" title="Gegenüber der Spitze ohne Akku-Beitrag (je Viertelstunde Bezug + Akku-Entladung) bei gleicher Arbeit — eine Obergrenze: entladen hätte der Akku auch ohne Peak Shaving."><span class="l">Vermieden</span><strong class="v" id="peakShavingAvoided">&mdash;</strong></div>
+          <p class="card-sub" id="peakShavingBillingNote"></p>
+        </div>
         <p class="card-sub" id="peakShavingAdapt" hidden></p>
       </div>
       <div class="card rail-card" data-accent="dv" data-leit="adv">

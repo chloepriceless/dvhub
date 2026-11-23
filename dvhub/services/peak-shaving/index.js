@@ -35,6 +35,7 @@ import { localParts, zoneOffsetMs } from '../../tz-fast.js';
 import { capPositiveSetpoint, meterImport } from '../import-limit/core.js';
 import { monoNow as defaultMonoNow } from '../mono-clock.js';
 import { createBudgetState, observeBudget, decideBudget } from './budget.js';
+import { resolveTariff, computeYearBilling } from './billing.js';
 
 export const PEAK_SHAVING_DEFAULTS = Object.freeze({
   enabled: false,
@@ -408,6 +409,38 @@ export function eosPeakShavingTargetW(cfg) {
   return r.active ? r.targetW : null;
 }
 
+/**
+ * Leistungsentgelt für die Historie (P4, GET /api/history/peak-billing): Jahr
+ * bzw. Monat des Datums `date` (YYYY-MM-DD, Ortszeit). Gerechnet wird immer
+ * über das ganze Kalenderjahr (Stufe nach Benutzungsdauer); die Monatsansicht
+ * zeigt dazu die Zeile des Monats. enabled=false: Peak Shaving ist aus (die
+ * Historie blendet die Karte dann aus).
+ */
+export async function peakBillingReport(store, cfg, { view = 'year', date = null, nowMs = Date.now() } = {}) {
+  const r = resolvePeakShaving(cfg);
+  if (!r.enabled) return { status: 200, body: { ok: true, enabled: false } };
+  if (typeof store?.getPeakBillingMonths !== 'function') return { status: 503, body: { ok: false, error: 'internal telemetry store disabled' } };
+  const tz = cfg?.schedule?.timezone || 'Europe/Berlin';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || ''));
+  const at = m ? localMidnightUtcMs(Number(m[1]), Number(m[2]), Number(m[3]), tz) + 12 * 3_600_000 : nowMs;
+  if (!Number.isFinite(at)) return { status: 400, body: { ok: false, error: 'invalid date' } };
+  const p = peakPeriods(at, tz);
+  const months = await store.getPeakBillingMonths({ ...p.year, timeZone: tz });
+  const tariff = resolveTariff(cfg);
+  const year = computeYearBilling({ months, tariff, period: { startMs: Date.parse(p.year.start), endMs: Date.parse(p.year.end) }, nowMs });
+  const lp = localParts(at, tz);
+  const ym = `${lp.year}-${String(lp.month).padStart(2, '0')}`;
+  return {
+    status: 200,
+    body: {
+      ok: true, enabled: true, view: view === 'month' ? 'month' : 'year', year: lp.year, ym,
+      limitW: r.limitW, model: tariff.model, tariffComplete: tariff.complete, tariffMissing: tariff.missing,
+      billing: year,
+      month: view === 'month' ? (year.months.find((x) => x.ym === ym) || { ym, energyKwh: 0, peakW: null }) : null
+    }
+  };
+}
+
 /** Deutsche Kurztexte, warum DVhub gerade auf den Augenblickswert deckelt. */
 export const BUDGET_REASON_TEXT = Object.freeze({
   billing_instant: 'Abrechnung nach Augenblickswert eingestellt',
@@ -483,7 +516,13 @@ export function createPeakShaving(ctx, deps = {}) {
       const month = await store.getGridImportPeak(p.month);
       const year = await store.getGridImportPeak(p.year);
       const strip = (x) => (x ? { slotStart: x.slotStart, powerW: x.powerW } : null);
-      peaks = { month: strip(month), year: strip(year), periods: p, updatedAt: new Date(nowMs).toISOString(), error: null };
+      // P4: Monatswerte des laufenden Jahres fürs Leistungsentgelt (ohne
+      // Datenbank-Funktion: keine €-Anzeige, die Spitzen bleiben).
+      let months = null;
+      if (typeof store.getPeakBillingMonths === 'function') {
+        months = await store.getPeakBillingMonths({ ...p.year, timeZone: c.schedule?.timezone || 'Europe/Berlin' });
+      }
+      peaks = { month: strip(month), year: strip(year), periods: p, months, updatedAt: new Date(nowMs).toISOString(), error: null };
     } catch (e) {
       peaks = { ...peaks, error: e?.message || String(e) };
     } finally {
@@ -570,6 +609,23 @@ export function createPeakShaving(ctx, deps = {}) {
     return ctl;
   }
 
+  // P4: Leistungsentgelt des laufenden Jahres (bzw. Monats beim
+  // Monatsleistungspreis) für die Leitstand-Kachel.
+  function billingSummary(c, t) {
+    const per = peaks.periods?.year;
+    if (!Array.isArray(peaks.months) || !per) return null;
+    const cur = peakPeriods(t, c.schedule?.timezone || 'Europe/Berlin').year;
+    if (cur.start !== per.start) return null;
+    const tariff = resolveTariff(c);
+    const y = computeYearBilling({ months: peaks.months, tariff, period: { startMs: Date.parse(per.start), endMs: Date.parse(per.end) }, nowMs: t });
+    const ym = peaks.periods?.month?.start ? localParts(Date.parse(peaks.periods.month.start), c.schedule?.timezone || 'Europe/Berlin') : null;
+    const ymKey = ym ? `${ym.year}-${String(ym.month).padStart(2, '0')}` : null;
+    const month = ymKey ? (y.months || []).find((m) => m.ym === ymKey) || null : null;
+    const year = { ...y };
+    delete year.months;
+    return { year, month, tariffComplete: tariff.complete, tariffMissing: tariff.missing, model: tariff.model };
+  }
+
   function summary() {
     const c = cfg();
     const r = resolvePeakShaving(c);
@@ -618,6 +674,7 @@ export function createPeakShaving(ctx, deps = {}) {
         remainingS: b.remainingS, gapS: b.gapS, intervening: b.intervening,
         slotStart: b.slotStartMs != null ? new Date(b.slotStartMs).toISOString() : null
       } : null,
+      billing: billingSummary(c, t),
       timezone: c.schedule?.timezone || 'Europe/Berlin',
       importW: meterFresh ? Math.max(0, Math.round(Number(s.victron.gridImportW))) : null,
       acting: Boolean((clamp && (clamp.mode === 'target' || clamp.mode === 'net_load')) || lift),

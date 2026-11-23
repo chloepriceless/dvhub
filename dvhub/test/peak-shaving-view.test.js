@@ -137,3 +137,18 @@ test('P3: gut sichtbarer Hinweis auf den Schalter, wenn die Jahresspitze schon �
   assert.equal(a.adaptNote, 'Grenze an die Monatsspitze angepasst: 11,0 kW (eingestellt 10,0 kW) — weitere Kappung darunter spart diesen Monat nichts.');
   assert.equal(view({ ...base, adapt: { on: false, suggest: false, active: false } }).adaptNote, '');
 });
+
+test('P4: Leistungsentgelt in der Kachel (Jahresleistungspreis, laufendes Jahr)', () => {
+  const { view } = load();
+  const v = view({ ...base, billing: { model: 'year', tariffComplete: true, year: {
+    running: true, peakW: 50000, lpEurPerKwYear: 82.02, demandChargeEur: 4101, usageHours: 1500, usageHoursProjected: 3000,
+    tier: 'high', effectiveCtPerKwh: 6.17, avoidedEur: 820.2, uncappedPeakW: 60000 }, month: null } });
+  assert.equal(v.billing.charge, '4.101 € im Jahr (50,0 kW × 82,02 €)');
+  assert.equal(v.billing.usage, '1.500 h bisher · 3.000 h hochgerechnet (Stufe ab 2.500 h)');
+  assert.equal(v.billing.effective, '6,17 ct/kWh');
+  assert.equal(v.billing.avoided, '820 € im Jahr (ohne Akku 60,0 kW)');
+  const m = view({ ...base, billing: { model: 'month', tariffComplete: false, year: { lpEurPerKwMonth: 13.67 }, month: { totalEur: 1113.5, peakW: 50000, avoidedEur: 136.7, uncappedPeakW: 60000 } } });
+  assert.equal(m.billing.charge, '1.114 € diesen Monat (50,0 kW × 13,67 €)');
+  assert.match(m.billing.note, /Preise/);
+  assert.equal(view(base).billing, null);
+});

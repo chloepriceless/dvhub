@@ -17,7 +17,8 @@ const dev = (peakShaving, extra = {}) => ({ updateChannel: 'dev', manufacturer: 
 test('Vorgabe: Peak Shaving ist ab Werk aus und ohne Grenze', () => {
   const d = createDefaultConfig();
   assert.deepEqual(d.peakShaving, {
-    enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true, adaptToReachedPeak: false
+    enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true, adaptToReachedPeak: false,
+    tariff: { model: 'year', lpLowEurPerKwYear: null, apLowCtPerKwh: null, lpHighEurPerKwYear: null, apHighCtPerKwh: null, lpMonthEurPerKwMonth: null, apMonthCtPerKwh: null }
   });
   const r = resolvePeakShaving(d);
   assert.equal(r.enabled, false);
@@ -87,17 +88,20 @@ test('Einstellungsfelder: eigene Gruppe in „Netz & Recht“, beta, deutsch, mi
   const byPath = Object.fromEntries(fields.map((f) => [f.path, f]));
   assert.deepEqual(Object.keys(byPath).sort(), [
     'peakShaving.adaptToReachedPeak', 'peakShaving.billing15min', 'peakShaving.enabled', 'peakShaving.gridImportLimitW', 'peakShaving.marginW',
-    'peakShaving.minSocPct', 'peakShaving.releaseHysteresisW'
+    'peakShaving.minSocPct', 'peakShaving.releaseHysteresisW',
+    'peakShaving.tariff.apHighCtPerKwh', 'peakShaving.tariff.apLowCtPerKwh', 'peakShaving.tariff.apMonthCtPerKwh',
+    'peakShaving.tariff.lpHighEurPerKwYear', 'peakShaving.tariff.lpLowEurPerKwYear', 'peakShaving.tariff.lpMonthEurPerKwMonth',
+    'peakShaving.tariff.model'
   ]);
   for (const f of fields) {
     assert.equal(f.beta, true, f.path);
     assert.equal(f.group, 'peakShaving', f.path);
     assert.ok(typeof f.label === 'string' && f.label.length > 3, f.path);
     assert.ok(typeof f.help === 'string' && f.help.length > 20, f.path);
-    if (f.path !== 'peakShaving.enabled') {
+    if (f.path !== 'peakShaving.enabled' && !/MonthEurPerKwMonth|apMonthCtPerKwh/.test(f.path)) {
       assert.deepEqual(f.visibleWhenPath, { path: 'peakShaving.enabled', equals: true }, f.path);
     }
-    if (f.path !== 'peakShaving.enabled' && f.type !== 'boolean') {
+    if (f.path !== 'peakShaving.enabled' && f.type !== 'boolean' && f.type !== 'select') {
       assert.equal(f.type, 'number', f.path);
       assert.ok(Number.isFinite(f.min) && Number.isFinite(f.max), `${f.path}: min/max`);
     }

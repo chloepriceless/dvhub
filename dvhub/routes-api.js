@@ -133,6 +133,7 @@ import Cursor from 'pg-cursor';
 // (b) buffering full result sets and shipping CSV/JSON instead — both worse.
 import parquet from '@dsnp/parquetjs';
 import { notHaltSuspendedLabels } from './services/emergency-stop/policy.js';
+import { peakBillingReport } from './services/peak-shaving/index.js';
 import { buildPriceOutlookPayload, publicPriceTail, outlookContiguousEndMs, realPriceCoverage, MIN_REAL_AHEAD_MS } from './services/optimizer/price-outlook.js';
 
 // Plan 09.2-08 (D-13/D-24 revised): single module-scope schema instance for the
@@ -8544,6 +8545,25 @@ export function createApiRoutes(ctx) {
         date: url.searchParams.get('date'),
         estimated: url.searchParams.get('estimated')
       }));
+      if (result === HEAVY_SKIPPED) return;
+      return json(res, result.status, result.body);
+    }
+
+    // Peak Shaving P4 (Christin 24.11.2026): Leistungsentgelt in € für Monat
+    // bzw. Jahr der Historie (services/peak-shaving peakBillingReport). Monat
+    // und Jahr sind Pro wie /api/history/summary.
+    if (url.pathname === '/api/history/peak-billing' && req.method === 'GET') {
+      if (!requirePro(req, res, 'history-multiperiod')) return;
+      const result = await historyQueue.run({ key: url.pathname + url.search, req, res }, async () => {
+        try {
+          return await peakBillingReport(ctx.telemetryStore, getCfg() || {}, {
+            view: url.searchParams.get('view'),
+            date: url.searchParams.get('date')
+          });
+        } catch {
+          return { status: 500, body: { ok: false, error: 'peak billing query failed' } };
+        }
+      });
       if (result === HEAVY_SKIPPED) return;
       return json(res, result.status, result.body);
     }

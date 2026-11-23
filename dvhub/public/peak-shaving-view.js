@@ -87,6 +87,34 @@
     return `Augenblickswert — ${b.reasonText || b.reason || 'unsicher'}`;
   }
 
+  const eur = (v) => (num(v)
+    ? `${Number(v).toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} €`
+    : DASH);
+  const dec2 = (v) => Number(v).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const hours = (h) => (num(h) ? `${Math.round(Number(h)).toLocaleString('de-DE')} h` : DASH);
+
+  // P4: Leistungsentgelt in € (laufendes Jahr bzw. Monat beim Monatsleistungspreis).
+  function billingView(b) {
+    if (!b || !b.year) return null;
+    const y = b.year;
+    const out = { charge: DASH, usage: DASH, effective: DASH, avoided: DASH, note: '' };
+    if (b.model === 'month') {
+      const m = b.month || {};
+      out.charge = num(m.totalEur) ? `${eur(m.totalEur)} diesen Monat (${kw(m.peakW)} × ${num(y.lpEurPerKwMonth) ? dec2(y.lpEurPerKwMonth) : DASH} €)` : DASH;
+      out.avoided = num(m.avoidedEur) ? `${eur(m.avoidedEur)} diesen Monat (ohne Akku ${kw(m.uncappedPeakW)})` : DASH;
+    } else {
+      out.charge = num(y.demandChargeEur) ? `${eur(y.demandChargeEur)} im Jahr (${kw(y.peakW)} × ${dec2(y.lpEurPerKwYear)} €)` : DASH;
+      out.avoided = num(y.avoidedEur) ? `${eur(y.avoidedEur)} im Jahr (ohne Akku ${kw(y.uncappedPeakW)})` : DASH;
+    }
+    const tier = y.tier === 'high' ? 'ab 2.500 h' : y.tier === 'low' ? 'unter 2.500 h' : '';
+    out.usage = num(y.usageHours)
+      ? (y.running ? `${hours(y.usageHours)} bisher · ${hours(y.usageHoursProjected)} hochgerechnet` : hours(y.usageHours)) + (tier && b.model !== 'month' ? ` (Stufe ${tier})` : '')
+      : DASH;
+    out.effective = num(y.effectiveCtPerKwh) ? `${dec2(y.effectiveCtPerKwh)} ct/kWh` : DASH;
+    if (b.tariffComplete === false) out.note = 'Für € fehlen die Netzentgelt-Preise: Einstellungen → Peak Shaving (Preisblatt des Netzbetreibers).';
+    return out;
+  }
+
   // P3: Hinweis auf den Schalter „Grenze an erreichte Jahresspitze anpassen“.
   function adaptText(s) {
     const a = s.adapt;
@@ -125,6 +153,7 @@
       detail: detail(s),
       budget: budgetText(s.budget),
       adaptNote: adaptText(s),
+      billing: billingView(s.billing),
       adaptSuggest: Boolean(s.adapt && s.adapt.suggest),
       budgetMode: s.budget ? s.budget.mode : null
     };
@@ -151,6 +180,15 @@
     const budgetRow = d.getElementById('peakShavingBudgetRow');
     if (budgetRow) budgetRow.hidden = !v.budget;
     set('peakShavingBudget', v.budget || DASH);
+    const bill = d.getElementById('peakShavingBilling');
+    if (bill) bill.hidden = !v.billing;
+    if (v.billing) {
+      set('peakShavingCharge', v.billing.charge);
+      set('peakShavingUsage', v.billing.usage);
+      set('peakShavingEffective', v.billing.effective);
+      set('peakShavingAvoided', v.billing.avoided);
+      set('peakShavingBillingNote', v.billing.note);
+    }
     const adaptEl = d.getElementById('peakShavingAdapt');
     if (adaptEl) {
       adaptEl.hidden = !v.adaptNote;

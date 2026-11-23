@@ -150,6 +150,46 @@ export const GRID_IMPORT_PEAK_SQL = `
       LIMIT 1
     `;
 
+// Peak Shaving P4 (Christin 24.11.2026): Monatswerte für das Leistungsentgelt.
+// Je Viertelstunde zählt wie bei der Spitze die größere Quelle (eigener
+// Messwert oder VRM-Import). Je Monat (Ortszeit $3): Arbeit (kWh), Spitze
+// (kWh je Viertelstunde → × 4 000 = W) samt Zeitpunkt, Spitze OHNE Akku-Beitrag
+// (Bezug + Akku-Entladung derselben Viertelstunde) und wie viele
+// Viertelstunden Akku-Werte haben (0 = nicht ermittelbar).
+export const PEAK_BILLING_MONTHS_SQL = `
+      WITH g AS (
+        SELECT slot_start_utc, MAX(value_num) AS imp
+        FROM energy_slots_15m
+        WHERE series_key = 'grid_import_w'
+          AND source_kind IN ('local_live', 'vrm_import')
+          AND slot_start_utc >= $1 AND slot_start_utc < $2
+          AND value_num IS NOT NULL
+        GROUP BY slot_start_utc
+      ), b AS (
+        SELECT slot_start_utc, MAX(value_num) AS dis
+        FROM energy_slots_15m
+        WHERE series_key = 'battery_discharge_w'
+          AND source_kind IN ('local_live', 'vrm_import')
+          AND slot_start_utc >= $1 AND slot_start_utc < $2
+          AND value_num IS NOT NULL
+        GROUP BY slot_start_utc
+      ), j AS (
+        SELECT g.slot_start_utc, g.imp, b.dis,
+               to_char(g.slot_start_utc AT TIME ZONE $3, 'YYYY-MM') AS ym
+        FROM g LEFT JOIN b USING (slot_start_utc)
+      )
+      SELECT ym,
+             SUM(imp) AS energy_kwh,
+             MAX(imp) AS peak_kwh,
+             (ARRAY_AGG(slot_start_utc ORDER BY imp DESC, slot_start_utc ASC))[1] AS peak_slot,
+             MAX(imp + COALESCE(dis, 0)) FILTER (WHERE dis IS NOT NULL) AS uncapped_kwh,
+             COUNT(*) AS slots,
+             COUNT(dis) AS battery_slots
+      FROM j
+      GROUP BY ym
+      ORDER BY ym
+    `;
+
 // Gemessener PV-Peak für die Under-Report-Erkennung (getRecentPvPeakW): je
 // 5-Minuten-Fenster das 75-%-Perzentil, davon das Tagesmaximum, davon das
 // Perzentil $2 über $1 Tage. Statt des Rohwerts (Support-Fall 2026-10-15,
@@ -1972,6 +2012,22 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
      * Peak Shaving: höchste Viertelstunden-Bezugsleistung in [start, end).
      * @returns {Promise<{slotStart: string, powerW: number, energyKwh: number}|null>}
      */
+    /**
+     * Peak Shaving P4: Monatswerte (Arbeit, Spitze, Spitze ohne Akku) in [start, end), Monate in Ortszeit.
+     * @returns {Promise<Array<{ym:string, energyKwh:number, peakW:number, peakSlot:string|null, uncappedPeakW:number|null, slots:number, batterySlots:number}>>}
+     */
+    async getPeakBillingMonths({ start, end, timeZone = 'Europe/Berlin' } = {}) {
+      const result = await pool.query(PEAK_BILLING_MONTHS_SQL, [isoTimestamp(start), isoTimestamp(end), String(timeZone || 'Europe/Berlin')]);
+      return (result.rows || []).map((r) => ({
+        ym: String(r.ym),
+        energyKwh: Number(r.energy_kwh) || 0,
+        peakW: Math.round(Number(r.peak_kwh) * 4000),
+        peakSlot: r.peak_slot ? new Date(r.peak_slot).toISOString() : null,
+        uncappedPeakW: r.uncapped_kwh == null ? null : Math.round(Number(r.uncapped_kwh) * 4000),
+        slots: Number(r.slots) || 0,
+        batterySlots: Number(r.battery_slots) || 0
+      }));
+    },
     async getGridImportPeak({ start, end } = {}) {
       const result = await pool.query(GRID_IMPORT_PEAK_SQL, [isoTimestamp(start), isoTimestamp(end)]);
       const row = result.rows?.[0];
