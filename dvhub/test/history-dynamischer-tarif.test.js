@@ -89,8 +89,8 @@ const close = (actual, expected, msg, eps = 0.011) => {
   assert.ok(Math.abs(actual - expected) <= eps, `${msg}: ${actual} statt ${expected}`);
 };
 
-test('Ablage-Version 14 (dynamischer Tarif, §14a, Netzladung·p T12, gemessene Last T13)', () => {
-  assert.equal(SUMMARY_CACHE_VERSION, 14);
+test('Ablage-Version 15 (dynamischer Tarif, §14a, Netzladung·p T12, gemessene Last und Akku-Herkunft T13)', () => {
+  assert.equal(SUMMARY_CACHE_VERSION, 15);
 });
 
 test('März mit Tarifwechsel am 15. und Sommerzeit: Ø, Börse, Aufschlag, Formel, Grundgebühr, Vergleich', async () => {

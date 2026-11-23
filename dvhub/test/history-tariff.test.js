@@ -534,6 +534,37 @@ test('T13 B (Codex a7e86f28): VRM-Flüsse nicht noch einmal wandeln, Leerlauf au
   assert.equal(ri.otherConversionCostEur, 0.93);
 });
 
+test('T13 B (Codex 013298c7): Einspeisung über der AC-Abgabe des Akkus, Akku-Herkunft je Fluss', () => {
+  const eta90 = { capability: victronCap, totals: { ...jobTotals, dischargeEta: 0.9 } };
+  const one = (slot) => {
+    const sums = createTariffSums({ detail: true });
+    addSlotToTariffSums(sums, { importPriceKnown: true, ...slot });
+    return finalizeSelfUse(sums.selfUse, { storage: eta90 }).battery;
+  };
+  // PV und Akku speisen gleichzeitig ein: Fluss Akku→Netz 10 = ganze DC-Entladung, Haus 0. Mit η 0,9
+  // gibt der Akku nur 9 kWh AC ab → 9 kWh zur Börse 1 ct = 9 ct; die übrige Einspeisung war PV.
+  // Vorher (alle Verluste zum Endpreis 30 ct abgezogen): 10 − 0,1 × 10 × 30 = −20 ct.
+  const pvAndBattery = one({ userImportPriceCtKwh: 30, marketPriceCtKwh: 1, batteryToGridKwh: 10, solarToGridKwh: 5, pvKwh: 5, exportKwh: 15, loadKwh: 0.001 });
+  assert.equal(pvAndBattery.dischargedHouseKwh, 0);
+  assert.equal(pvAndBattery.dischargedGridKwh, 9);
+  assert.equal(pvAndBattery.dischargeValueEur, 0.09);
+  // Ohne PV: 10 kWh DC, gemessene Einspeisung 9, Rest Haus 1. AC-Abgabe 9 = Einspeisung → Haus 0,
+  // Wert 9 × 20 ct = 180 ct (nicht 8,1 kWh Einspeisung und 0,9 kWh Haus).
+  const exportOnly = one({ userImportPriceCtKwh: 30, marketPriceCtKwh: 20, batteryToGridKwh: 9, batteryDirectUseKwh: 1, exportKwh: 9, loadKwh: 0.001 });
+  assert.equal(exportOnly.dischargedHouseKwh, 0);
+  assert.equal(exportOnly.dischargedGridKwh, 9);
+  assert.equal(exportOnly.dischargeValueEur, 1.8);
+  // Nur der Netzbezug kam aus VRM (Slot vrmFlows), die Akku-Flüsse sind eigene → gewandelt:
+  // 1 kWh DC × 0,9 = 0,9 kWh, 27 ct (nicht 1 kWh, 30 ct).
+  const mixed = one({ userImportPriceCtKwh: 30, marketPriceCtKwh: 10, batteryDirectUseKwh: 1, loadKwh: 0.9, vrmFlows: true, batteryFlowsVrm: false });
+  assert.equal(mixed.dischargedHouseKwh, 0.9);
+  assert.equal(mixed.dischargeValueEur, 0.27);
+  // Akku-Flüsse selbst aus VRM → schon AC, bleiben.
+  const vrmBattery = one({ userImportPriceCtKwh: 30, marketPriceCtKwh: 10, batteryDirectUseKwh: 1, loadKwh: 1, batteryFlowsVrm: true });
+  assert.equal(vrmBattery.dischargedHouseKwh, 1);
+  assert.equal(vrmBattery.dischargeValueEur, 0.3);
+});
+
 test('T13 B: ohne gemessenen Speicherweg bleibt die Bewertung aus den Flüssen', () => {
   const sums = systemSums().selfUse;
   const plain = finalizeSelfUse(sums, { storedDeltaKwh: 1 });

@@ -86,8 +86,11 @@ function createSelfUse() {
     loadMeasuredKwh: 0, loadMeasuredCt: 0,
     // T13 (Codex a7e86f28): nur eigene DC-Flüsse wandeln (VRM ist schon AC-normiert),
     // Akku→Netz bleibt gemessen; Kosten mit gemessener PV und getrennten Exporten.
-    dischargeLocalKwh: 0, dischargeLocalPCt: 0, chargeGridLocalKwh: 0, chargeGridLocalCt: 0,
+    chargeGridLocalKwh: 0, chargeGridLocalCt: 0,
     pvMeasuredCt: 0, solarExportCt: 0, batteryExportCt: 0,
+    // Eigene Entladung je Anteil Akku→Netz an der DC-Entladung (1-%-Klassen, Codex 013298c7):
+    // ob der Entladeverlust dem Haus oder der Einspeisung fehlt, hängt an η Entladen.
+    dischargeBins: {},
     pvDirectKwh: 0, pvDirectGainCt: 0,
     chargePvKwh: 0, chargeGridKwh: 0, chargeCostCt: 0, chargeGridCt: 0,
     dischargeHouseKwh: 0, dischargeGridKwh: 0, dischargeValueCt: 0,
@@ -208,13 +211,26 @@ function addSelfUse(selfUse, slot, flows) {
   // T13: gemessene Hauslast (load_power_w) — die Flusssumme enthält die Wandlerverluste.
   selfUse.loadMeasuredKwh += kwhOf(slot.loadKwh);
   selfUse.loadMeasuredCt += kwhOf(slot.loadKwh) * p;
-  // Herkunft wie history-runtime (secondBatteryVrmRuns): VRM-Flüsse sind schon AC.
-  const fromVrm = slot.vrmFlows === true || slot.sourceKind === 'vrm_import';
+  // Herkunft der Akku-Flüsse (Codex 013298c7): VRM-Akkumengen sind schon AC.
+  // slot.batteryFlowsVrm kommt aus der Quellwahl je Reihe; ohne das Feld (ältere
+  // Pfade) wie history-runtime nach dem Slot (vrmFlows / sourceKind).
+  const fromVrm = typeof slot.batteryFlowsVrm === 'boolean'
+    ? slot.batteryFlowsVrm
+    : (slot.vrmFlows === true || slot.sourceKind === 'vrm_import');
   if (!fromVrm) {
-    selfUse.dischargeLocalKwh += battDirect + battToGrid;
-    selfUse.dischargeLocalPCt += (battDirect + battToGrid) * p;
     selfUse.chargeGridLocalKwh += gridToBatt;
     selfUse.chargeGridLocalCt += gridToBatt * p;
+    const dc = battDirect + battToGrid;
+    if (dc > 0) {
+      const k = Math.min(100, Math.max(0, Math.floor((battToGrid / dc) * 100 + 1e-9)));
+      const bins = selfUse.dischargeBins || (selfUse.dischargeBins = {});
+      const bin = bins[k] || (bins[k] = { dc: 0, btg: 0, valueCt: 0, dcPCt: 0, dcSCt: 0 });
+      bin.dc += dc;
+      bin.btg += battToGrid;
+      bin.valueCt += battDirect * p + battToGrid * s;
+      bin.dcPCt += dc * p;
+      bin.dcSCt += dc * s;
+    }
   }
   selfUse.pvMeasuredCt += kwhOf(slot.pvKwh) * s;
   selfUse.solarExportCt += solarToGrid * s;
@@ -591,7 +607,8 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null, storage = null
   // Codex a7e86f28:
   //  - nur eigene DC-Flüsse wandeln; VRM-Flüsse sind schon an AC-Werten normiert,
   //  - Akku→Netz ist die gemessene Einspeisung (polling.js): der Entladeverlust
-  //    fehlt allein dem Haus-Anteil (Wert zum Endpreis des Slots),
+  //    fehlt dem Haus-Anteil (Endpreis), wo die Einspeisung die AC-Abgabe des
+  //    Akkus übersteigt, der Einspeisung (Börse) — Codex 013298c7,
   //  - der effektive Preis rechnet mit den echten Kosten (Netz + gemessene PV,
   //    soweit nicht eingespeist, zur Börse − Akku-Einspeisung − Ladestand am Rand):
   //    so zählen auch Leerlauf und PV-Wandlung des Wechselrichters mit.
@@ -601,12 +618,32 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null, storage = null
     const etaCh = t.chargerEta ?? 1;
     const lossD = 1 - etaD;
     const extraCh = 1 / etaCh - 1;
+    // Entladeverlust je Klasse (Anteil q = Akku→Netz ÷ DC-Entladung, Klassenmitte):
+    //   q ≤ η: der Akku liefert genug AC für die gemessene Einspeisung — der Verlust
+    //          fehlt dem Haus-Anteil (zum Endpreis p);
+    //   q > η: die Einspeisung ist größer als die AC-Abgabe des Akkus — das Haus
+    //          bekommt nichts, der Akku speist η·DC ein (zur Börse), den Rest der
+    //          Einspeisung lieferte die PV. Die Gesamteinspeisung bleibt gemessen.
+    let houseKwh = selfUse.dischargeHouseKwh;
+    let gridKwh = selfUse.dischargeGridKwh;
+    let dischargeValueCt = selfUse.dischargeValueCt;
+    for (const [k, b] of Object.entries(selfUse.dischargeBins || {})) {
+      const q = Math.min(1, (Number(k) + 0.5) / 100);
+      if (q <= etaD) {
+        houseKwh -= lossD * b.dc;
+        dischargeValueCt -= lossD * b.dcPCt;
+      } else {
+        houseKwh -= b.dc - b.btg;
+        gridKwh -= b.btg - etaD * b.dc;
+        dischargeValueCt += etaD * b.dcSCt - b.valueCt;
+      }
+    }
     const valued = value({
       chargeCostCt: selfUse.chargeCostCt + (selfUse.chargeGridLocalCt || 0) * extraCh,
-      dischargeValueCt: selfUse.dischargeValueCt - lossD * (selfUse.dischargeLocalPCt || 0),
+      dischargeValueCt,
       chargeGridKwh: selfUse.chargeGridKwh + (selfUse.chargeGridLocalKwh || 0) * extraCh,
-      dischargeHouseKwh: Math.max(0, selfUse.dischargeHouseKwh - lossD * (selfUse.dischargeLocalKwh || 0)),
-      dischargeGridKwh: selfUse.dischargeGridKwh,
+      dischargeHouseKwh: Math.max(0, houseKwh),
+      dischargeGridKwh: Math.max(0, gridKwh),
       loadKwh: selfUse.loadMeasuredKwh,
       loadCt: selfUse.loadMeasuredCt,
       etaD,

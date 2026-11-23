@@ -71,6 +71,14 @@ export const PRIMARY_FLOW_SERIES = Object.freeze([
   'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w'
 ]);
 
+// Akku-Flüsse eines Slots (T13, Codex 013298c7): kommt eine davon aus dem
+// VRM-Import, sind die Akku-Mengen des Slots schon AC-normiert — die Historie
+// wandelt sie dann nicht noch einmal (slot.batteryFlowsVrm).
+export const BATTERY_FLOW_SERIES = Object.freeze([
+  'battery_charge_w', 'battery_discharge_w', 'battery_direct_use_w', 'battery_to_grid_w',
+  'solar_to_battery_w', 'grid_to_battery_w'
+]);
+
 /** Sekunden, die eine Live-Probe zur Abdeckung ihres Slots beiträgt (veraltet: 0). */
 export function localSampleCreditSeconds(resolutionSeconds, slotSeconds = SLOT_SECONDS, { stale = false } = {}) {
   if (stale) return 0;

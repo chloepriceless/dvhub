@@ -709,7 +709,8 @@ function createRowsAccumulator(view, resolveCapacityKwhForTs = null) {
 // 12 (23.11.2026): δ auch beim Formel-Rückfall des Anbieter-Endpreises (Codex 90e9b9c4).
 // 13 (23.11.2026): Eigenverbrauch mit Σ Netzladung·p (Wandlerverlust Laden in €, T12).
 // 14 (24.11.2026): Eigenverbrauch mit gemessener Hauslast Σ Last·p (AC-Bewertung, T13 B).
-export const SUMMARY_CACHE_VERSION = 14;
+// 15 (24.11.2026): Akku-Herkunft je Fluss, Entlade-Klassen, gemessene PV/Exporte (Codex a7e86f28/013298c7).
+export const SUMMARY_CACHE_VERSION = 15;
 
 // Hoechstens so viele VRM-Abschnitte einzeln auswerten (eine Abfrage je lokalem Abschnitt).
 const MAX_SECOND_BATTERY_VRM_RUNS = 48;
