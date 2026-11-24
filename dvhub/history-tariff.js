@@ -618,7 +618,8 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null, storage = null
     const etaCh = t.chargerEta ?? 1;
     const lossD = 1 - etaD;
     const extraCh = 1 / etaCh - 1;
-    // Entladeverlust je Klasse (Anteil q = Akku→Netz ÷ DC-Entladung, Klassenmitte):
+    // Entladeverlust je Klasse (Anteil q = Akku→Netz ÷ DC-Entladung der Klasse,
+    // aus den echten Mengen, nicht der Klassenmitte — Codex 97d4003f):
     //   q ≤ η: der Akku liefert genug AC für die gemessene Einspeisung — der Verlust
     //          fehlt dem Haus-Anteil (zum Endpreis p);
     //   q > η: die Einspeisung ist größer als die AC-Abgabe des Akkus — das Haus
@@ -627,8 +628,9 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null, storage = null
     let houseKwh = selfUse.dischargeHouseKwh;
     let gridKwh = selfUse.dischargeGridKwh;
     let dischargeValueCt = selfUse.dischargeValueCt;
-    for (const [k, b] of Object.entries(selfUse.dischargeBins || {})) {
-      const q = Math.min(1, (Number(k) + 0.5) / 100);
+    for (const b of Object.values(selfUse.dischargeBins || {})) {
+      if (!(b.dc > 0)) continue;
+      const q = b.btg / b.dc;
       if (q <= etaD) {
         houseKwh -= lossD * b.dc;
         dischargeValueCt -= lossD * b.dcPCt;

@@ -565,6 +565,20 @@ test('T13 B (Codex 013298c7): Einspeisung über der AC-Abgabe des Akkus, Akku-He
   assert.equal(vrmBattery.dischargeValueEur, 0.3);
 });
 
+test('T13 B (Codex 97d4003f): η innerhalb einer 1-%-Klasse — echte Mengen statt Klassenmitte', () => {
+  // 100 Viertelstunden je 1 kWh DC, davon 0,9 kWh gemessene Einspeisung, η Entladen 0,904.
+  // AC-Abgabe 0,904 ≥ 0,9 → Einspeisung bleibt 90 kWh, Haus 100 × (0,1 − 0,096) = 0,4 kWh.
+  // Wert: 90 × 10 ct + (10 − 9,6) × 30 ct = 900 + 12 = 912 ct.
+  const sums = createTariffSums({ detail: true });
+  for (let i = 0; i < 100; i += 1) {
+    addSlotToTariffSums(sums, { importPriceKnown: true, userImportPriceCtKwh: 30, marketPriceCtKwh: 10, batteryToGridKwh: 0.9, batteryDirectUseKwh: 0.1, exportKwh: 0.9, loadKwh: 0.004 });
+  }
+  const b = finalizeSelfUse(sums.selfUse, { storage: { capability: victronCap, totals: { ...jobTotals, dischargeEta: 0.904 } } }).battery;
+  assert.equal(b.dischargedGridKwh, 90);
+  assert.equal(b.dischargedHouseKwh, 0.4);
+  assert.equal(b.dischargeValueEur, 9.12);
+});
+
 test('T13 B: ohne gemessenen Speicherweg bleibt die Bewertung aus den Flüssen', () => {
   const sums = systemSums().selfUse;
   const plain = finalizeSelfUse(sums, { storedDeltaKwh: 1 });
