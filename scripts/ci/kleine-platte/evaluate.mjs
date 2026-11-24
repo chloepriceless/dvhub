@@ -174,12 +174,19 @@ function evaluateScenario(dir) {
   if (meta.expectLevel !== 'ok') {
     const dropped = num(after.live_raw_rows) != null && num(before.live_raw_rows) != null && num(after.live_raw_rows) < num(before.live_raw_rows);
     const oldest = num(after.live_raw_oldest_days);
-    const keepOk = oldest != null && oldest <= 31.5;
+    // Ziel der Wache (V2 a, 24.11.): nur so weit löschen, bis die Platte wieder über der Schwelle „wenig“
+    // liegt — nicht zwingend bis 30 Tage. OK also bei ≤ ~31 Tagen ODER wenn am Ende genug frei ist
+    // (Stufe nicht mehr „kritisch“, mindestens 300 MB frei) und überhaupt älteres gelöscht wurde.
+    const fsEnd = readJson(path.join(dir, 'fs-main-after.json'), {});
+    const endLevel = String(st?.level || '');
+    const roomOk = num(fsEnd.freeMb) != null && num(fsEnd.freeMb) >= 300 && endLevel !== 'kritisch' && endLevel !== ''
+      && oldest != null && num(before.live_raw_oldest_days) != null && oldest < num(before.live_raw_oldest_days) - 0.5;
+    const keepOk = (oldest != null && oldest <= 31.5) || roomOk;
     // Nicht zu viel: die letzten 25 Tage bleiben vollständig (0,5 % Spiel für das wandernde Fenster).
     const recentKept = num(after.live_recent_rows) != null && num(before.live_recent_rows) != null
       && num(after.live_recent_rows) >= num(before.live_recent_rows) * 0.995;
     add('rohwerte-entfernt', 'fehler', dropped && keepOk ? 'ok' : 'rot',
-      `5-s-Live-Zeilen ${before.live_raw_rows} → ${after.live_raw_rows}, ältester ${before.live_raw_oldest_days} → ${after.live_raw_oldest_days} Tage (erwartet ≤ ~31)`);
+      `5-s-Live-Zeilen ${before.live_raw_rows} → ${after.live_raw_rows}, ältester ${before.live_raw_oldest_days} → ${after.live_raw_oldest_days} Tage (erwartet ≤ ~31 oder Platte wieder über „wenig“: Ende ${endLevel || '–'}, ${fsEnd.freeMb ?? '–'} MB frei)`);
     add('juengste-rohwerte-bleiben', 'basis', recentKept ? 'ok' : 'rot',
       `Live-Zeilen der letzten 25 Tage ${before.live_recent_rows} → ${after.live_recent_rows} (dürfen nicht weniger werden)`);
     const fsAfter = readJson(path.join(dir, 'fs-main-after.json'), {});
