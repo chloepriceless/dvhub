@@ -70,6 +70,46 @@ test('Abregel-Test: Ablauf nimmt ein fremdes DV-Lease nicht zurück', () => {
   assert.equal(h.state.ctrl.forcedOff, true);
 });
 
+// Codex 22e6b278 P1: ein Lebenszeichen des DV (Watchdog-Schreiben → dvLimit.watchdogRefresh) verschiebt nur offUntil,
+// ohne neuen Befehl. Die Sperre gehört weiter dem Test; Stop und Ablauf nehmen sie zurück.
+test('Abregel-Test: DV-Watchdog während des Tests — Stop hebt die Sperre trotzdem auf', () => {
+  const h = harness();
+  h.ct.start({ mode: 'dv', minutes: 5 });
+  h.c.mono += 60000; h.c.wall += 60000;
+  h.state.ctrl.offUntil = h.c.wall + 15 * 60000; // watchdogRefresh: nur die Frist, lastSignal bleibt
+  h.ct.stop();
+  assert.deepEqual(h.forced.cleared, ['curtailment_test_stopped']);
+  assert.equal(h.state.ctrl.forcedOff, false);
+});
+
+test('Abregel-Test: DV-Watchdog während des Tests — Ablauf hebt die Sperre trotzdem auf', () => {
+  const h = harness();
+  h.ct.start({ mode: 'dv', minutes: 1 });
+  for (let i = 0; i < 3; i++) { // Watchdog alle 30 s
+    h.c.mono += 30000; h.c.wall += 30000;
+    h.state.ctrl.offUntil = h.c.wall + 15 * 60000;
+    h.ct.sample();
+  }
+  assert.deepEqual(h.forced.cleared, ['curtailment_test_expired']);
+  assert.equal(h.state.ctrl.forcedOff, false);
+});
+
+// Codex 22e6b278 P2: läuft eine echte DV-Sperre (monoton gestempelt wie server.js stampLease) und springt die
+// Systemzeit vorwärts über offUntil, darf der DV-Test sie nicht überschreiben.
+test('Abregel-Test: echte DV-Sperre nach Sprung vorwärts — Start abgelehnt', async () => {
+  const { stampMono } = await import('../services/mono-clock.js');
+  const h = harness();
+  h.state.ctrl.forcedOff = true;
+  h.state.ctrl.offUntil = Date.now() + 15 * 60000;
+  h.state.ctrl.lastSignal = 'plexlog_holding0_0';
+  stampMono(h.state.ctrl, 'offUntil', { wallNow: Date.now() }); // wie stampLease (gemeinsame monotone Uhr)
+  h.c.wall = Date.now() + 3_600_000; // Systemzeit 1 h vorwärts
+  const r = h.ct.start({ mode: 'dv', minutes: 5 });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'real_dv_restriction_active');
+  assert.deepEqual(h.forced.calls, []);
+});
+
 // Regeltakt (schedule-eval): ob der Negativpreis-Test läuft, sagt der Dienst (monoton), nicht Date.now() < until.
 test('Regeltakt: Negativpreis-Test gilt nach dem Dienst, nicht nach der Wanduhr-Frist', async (t) => {
   fixClock(t);

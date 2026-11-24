@@ -30,7 +30,7 @@
 // nach einem Rücksprung sonst um die Sprungweite weiter. Nach einem Sprung vorwärts endet das DV-Lease über
 // expireLeaseIfNeeded früher als der Test (sichere Seite: weniger Abregelung).
 
-import { pickMonoNow } from './mono-clock.js';
+import { pickMonoNow, monoDeadlinePassed } from './mono-clock.js';
 
 // Monotoner Ablauf je Testlauf (am Objekt state.ctrl.curtailmentTest, nicht im JSON), mit der Uhr des Dienstes. Auf
 // Modulebene, damit auch Leser außerhalb des Dienstes (Sungrow-Aktuator: „Akku nicht laden“) dieselbe Frist sehen.
@@ -78,12 +78,22 @@ export function createCurtailmentTest(ctx) {
   const remaining = (t) => curtailmentTestRemainingMs(t, now());
   const running = (t) => curtailmentTestRunning(t, now());
 
-  // Abgelaufenen Lauf beenden und ein noch eigenes DV-Lease mit zurücknehmen (wie stop()): nur, wenn offUntil noch das
-  // eigene ist — ein echtes DV-Signal hat es verschoben und läuft über sein eigenes Lease ab. true = beendet.
+  // Ist die laufende DV-Sperre noch die des Tests? Ein echtes DV-Signal setzt sie neu (setForcedOff mit eigenem Grund →
+  // lastSignal ändert sich, offUntil auch) und läuft über sein eigenes Lease ab. Ein reines Lebenszeichen des DV
+  // (Watchdog, dvLimit.watchdogRefresh) verschiebt nur offUntil, lastSignal bleibt 'curtailment_test' — die Sperre
+  // gehört dann weiter dem Test (Codex 22e6b278 P1: sonst hielten fortlaufende Watchdog-Schreibvorgänge die Anlage
+  // nach Test-Ende abgeregelt). offUntil === until bleibt als Merkmal für Aufrufer ohne lastSignal.
+  function ownsDvLease(t) {
+    if (t?.mode !== 'dv' || state.ctrl.forcedOff !== true) return false;
+    return state.ctrl.offUntil === t.until || state.ctrl.lastSignal === 'curtailment_test';
+  }
+
+  // Abgelaufenen Lauf beenden und ein noch eigenes DV-Lease mit zurücknehmen (wie stop()): nur, wenn die Sperre noch
+  // die eigene ist (ownsDvLease). true = beendet.
   function expireIfDue(t) {
     if (!t || t.active !== true || remaining(t) > 0) return false;
     finish('expired');
-    if (t.mode === 'dv' && state.ctrl.forcedOff === true && state.ctrl.offUntil === t.until) {
+    if (ownsDvLease(t)) {
       ctx.clearForcedOff?.('curtailment_test_expired');
     }
     return true;
@@ -130,7 +140,10 @@ export function createCurtailmentTest(ctx) {
     // fremder Quelle, nicht unser Test), den DV-Test NICHT starten — sonst überschriebe
     // setForcedOff deren offUntil mit der kürzeren Test-Frist und stop() gäbe die echte Sperre
     // frei. Der Ernstfall hat Vorrang.
-    if (m === 'dv' && state.ctrl.forcedOff === true && now() < (Number(state.ctrl.offUntil) || 0) && state.ctrl.lastSignal !== 'curtailment_test') {
+    // Frist wie im Ablauf-Pfad (server.js expireLeaseIfNeeded → ctrlDeadlinePassed): monoton, wenn offUntil gestempelt
+    // ist, sonst Wanduhr (Codex 22e6b278 P2: nach einem Sprung vorwärts galt eine laufende DV-Sperre sonst als vorbei).
+    const dvLeaseRunning = !(monoDeadlinePassed(state.ctrl, 'offUntil') ?? (now() > (Number(state.ctrl.offUntil) || 0)));
+    if (m === 'dv' && state.ctrl.forcedOff === true && dvLeaseRunning && state.ctrl.lastSignal !== 'curtailment_test') {
       return { ok: false, status: 409, error: 'real_dv_restriction_active', test: publicView() };
     }
     const startedAt = now();
@@ -163,12 +176,12 @@ export function createCurtailmentTest(ctx) {
       return { ok: true, status: 200, alreadyStopped: true, test: publicView() };
     }
     const mode = t.mode;
-    const leaseUntil = t.until;
+    const ownLease = ownsDvLease(t);
     finish(reason);
     // DV-Lease aktiv aufheben, aber NUR, wenn es noch unseres ist (kam während
     // des Tests ein echtes DV-Signal, hat es offUntil verschoben — dann nicht
     // anfassen, der Ernstfall hat Vorrang und läuft über sein eigenes Lease ab).
-    if (mode === 'dv' && state.ctrl.forcedOff === true && state.ctrl.offUntil === leaseUntil) {
+    if (ownLease) {
       ctx.clearForcedOff?.('curtailment_test_stopped');
     }
     pushLog('curtailment_test_stopped', { mode, reason }, actor || undefined);

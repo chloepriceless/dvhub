@@ -100,6 +100,12 @@ verweist hierher.
     Stunden zurück, die Frist war schon abgelaufen, und erst die Wiederholung nach 4 min griff. Im Nachspielen der
     echten Schreibfolge seit März wären so in 101 von 115 Abregelungen rund 4 min eingespeist worden (zusammen
     6,75 h); jetzt in keiner, wie bisher in main.
+- **Abregel-Test (Direktvermarkter): Watchdog des DV hält die Sperre nicht mehr über das Test-Ende.** Schrieb der
+  Direktvermarkter während eines DV-Tests nur sein Lebenszeichen (Watchdog), verschob das die Frist der Sperre; Stop
+  und Ablauf des Tests erkannten sie dann nicht mehr als eigene, und die Anlage blieb abgeregelt, solange der Watchdog
+  weiterlief. Jetzt zählt die Sperre weiter als die des Tests, bis ein echter DV-Befehl kommt. Außerdem prüft der Start
+  eines DV-Tests eine laufende echte DV-Sperre mit derselben monotonen Frist wie ihr Ablauf, damit er sie nach einem
+  Sprung der Systemzeit nicht überschreibt.
   - **Leseregister (FC4)** folgen der echten Belegung: `0–1` Einspeisung, `3–4` Referenz-/Anlagenleistung, `7`
     Produktion, ab `10` Spiegel der Holding-Register (vorher die nur abgeschaute LUOX-PDF-Tabelle).
   - Die Einstellungs-Hilfe weist jetzt aus, dass reale Plexlog-Logger das **plexlog**-Profil brauchen; das
