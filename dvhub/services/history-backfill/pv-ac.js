@@ -85,12 +85,16 @@ WHERE abs(e.ptot_kwh - coalesce(t.value_num, 0)) <= greatest(0.005, 0.02 * abs(c
     OR (nullif(t.meta_json::text, '')::jsonb ->> 'coverageBackfill') IS NOT NULL)
 ON CONFLICT (slot_start_utc, series_key, source_kind) DO NOTHING`;
 
-export function createPvAcBackfill({ getDb, pushLog, onDayUpdated = null, now = () => Date.now() } = {}) {
+// upstreamDone: ist die Abdeckungs-Nachrechnung (coverage.js) fertig? Offen sind hier nur Tage, die sie schon
+// abgedeckt hat — solange sie läuft, gilt der AC-PV-Nachtrag nicht als fertig, und ein leerer Scan pausiert nicht
+// 24 h (Codex Integration 24.11.).
+export function createPvAcBackfill({ getDb, pushLog, onDayUpdated = null, now = () => Date.now(), upstreamDone = () => true } = {}) {
   let running = false;
   let queue = null;
   let firstDay = null;
   let doneAt = null;
-  let passDone = false;   // ein ganzer Durchgang ist gelaufen (Platz-Wache wartet darauf)
+  let passDone = false;   // ein ganzer Durchgang nach fertiger Vorstufe ist gelaufen (Platz-Wache wartet darauf)
+  let scanAfterUpstream = false;   // der aktuelle Scan begann mit fertiger Vorstufe
   let pauseUntil = 0;
   const processed = new Set();
   const log = (event, data) => { if (typeof pushLog === 'function') pushLog(event, data); };
@@ -116,9 +120,14 @@ export function createPvAcBackfill({ getDb, pushLog, onDayUpdated = null, now = 
         // Nur abgeschlossene Tage: vor gestern (UTC).
         const limit = new Date(Math.floor(now() / DAY_MS) * DAY_MS - DAY_MS).toISOString();
         const open = await db.query(PV_AC_OPEN_DAYS_SQL, [`${firstDay}T00:00:00.000Z`, limit]);
+        let upstream = true;
+        try { upstream = upstreamDone() !== false; } catch { upstream = true; }
+        scanAfterUpstream = upstream;
         queue = (open.rows || []).map((r) => String(r.day).slice(0, 10)).filter((day) => !processed.has(day));
         if (queue.length === 0) {
+          if (!upstream) return { waiting: 'coverage' };
           doneAt = now();
+          passDone = true;
           log('history_pv_ac_backfill_done', {});
           return { done: true };
         }
@@ -129,7 +138,7 @@ export function createPvAcBackfill({ getDb, pushLog, onDayUpdated = null, now = 
       const to = new Date(Date.parse(from) + DAY_MS).toISOString();
       const res = await db.query(PV_AC_INSERT_SQL, [from, to]);
       processed.add(day);   // erst nach Erfolg (Codex eea3b53a)
-      if (queue.length === 0) passDone = true;
+      if (queue.length === 0 && scanAfterUpstream) passDone = true;
       const inserted = Number(res.rowCount) || 0;
       pauseUntil = now() + (now() - startedAt) * COVERAGE_PAUSE_FACTOR;
       if (inserted > 0 && typeof onDayUpdated === 'function') {

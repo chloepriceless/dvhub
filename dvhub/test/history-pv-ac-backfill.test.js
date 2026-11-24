@@ -138,3 +138,18 @@ for (const metaType of ['jsonb', 'text']) {
     }
   });
 }
+
+// Codex Integration 24.11. (P2): offen sind nur Tage, die die Abdeckung schon fertig hat. Solange sie läuft, ist der
+// AC-PV-Nachtrag nicht fertig (für die Platz-Wache) und ein leerer Scan pausiert nicht 24 h.
+test('pvAc isDone: erst mit fertiger Abdeckung und einem Durchgang danach; vorher kein Tages-Pausieren', async () => {
+  const t = Date.parse('2026-11-24T10:00:00Z');
+  let upstream = false;
+  const db = fakeDb({ openDays: [[], ['2026-11-18'], []] });
+  const job = createPvAcBackfill({ getDb: () => db, now: () => t, upstreamDone: () => upstream });
+  const r1 = await job.runOnce();
+  assert.equal(r1.done, undefined, JSON.stringify(r1));
+  assert.equal(job.isDone(), false, 'Abdeckung läuft noch');
+  upstream = true;
+  assert.equal((await job.runOnce()).day, '2026-11-18', 'nicht 24 h pausiert, neuer Scan');
+  assert.equal(job.isDone(), true, 'Durchgang nach fertiger Abdeckung');
+});

@@ -2833,6 +2833,7 @@ const telemetryReady = (async () => {
     // nachtragen (services/history-backfill/pv-ac.js), gleicher Takt, versetzt.
     const pvAcBackfill = createPvAcBackfill({
       getDb: () => ctx.db, pushLog,
+      upstreamDone: () => coverageBackfill.isDone(),
       onDayUpdated: (fromIso) => telemetryStore?.noteHistoryRangeChanged?.(fromIso),
     });
     const runPvAcBackfill = () => {
