@@ -206,8 +206,9 @@ function cutoffs(nowMs, detailDays, aggregateDays) {
  * @param {() => (number|null)} [deps.getErrorAckId]  höchste audit_log.id, die das
  *   Installateur-Portal quittiert hat (null = kein Portal / nichts quittiert)
  */
-export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () => null, now = () => Date.now() } = {}) {
+export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () => null, now = () => Date.now(), getStorageLevel = () => null } = {}) {
   let running = false;
+  let fullSuspended = false;
   const log = (e, d) => { try { pushLog?.(e, d); } catch { /* egal */ } };
 
   async function runOnce() {
@@ -216,8 +217,15 @@ export function createLogRetention({ getDb, getCfg, pushLog, getErrorAckId = () 
     if (!db || typeof db.query !== 'function') return { skipped: 'no database' };
     const cfg = getCfg?.() || {};
     const r = cfg.telemetry?.logRetention || {};
-    // Unsere eigenen Geräte: alles behalten (Einstellungen → Datenbank).
-    if (r.mode === 'full') return { skipped: 'full' };
+    // Unsere eigenen Geräte: alles behalten (Einstellungen → Datenbank). Speicher-
+    // Konzept S5 c (23.11.2026): bei „wenig“/„kritisch“ ruht „Vollständig“ und es
+    // gilt Standard, bis wieder genug Platz ist — die Einstellung bleibt stehen.
+    if (r.mode === 'full') {
+      const lvl = getStorageLevel?.();
+      if (lvl !== 'wenig' && lvl !== 'kritisch') { fullSuspended = false; return { skipped: 'full' }; }
+      if (!fullSuspended) log('log_retention_full_suspended', { storageLevel: lvl });
+      fullSuspended = true;
+    }
     const detailDays = Number(r.detailDays) > 0 ? Number(r.detailDays) : LOG_DETAIL_DAYS;
     const errorDetailDays = Math.max(detailDays, Number(r.errorDetailDays) > 0 ? Number(r.errorDetailDays) : LOG_ERROR_DETAIL_DAYS);
     const aggregateDays = Math.max(detailDays, Number(r.aggregateDays) > 0 ? Number(r.aggregateDays) : LOG_AGGREGATE_DAYS);

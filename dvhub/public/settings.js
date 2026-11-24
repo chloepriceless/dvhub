@@ -4314,12 +4314,73 @@ async function applySystemUpdates() {
   }
 }
 
+/**
+ * Ansicht der Karte „Datenbank-Engine“ (rein, testbar). j = /api/db/timescale/status,
+ * comp = compression aus /api/storage/status (Prüfung der Platz-Wache).
+ * 23.11.2026 (Kundenfall Apache-Box): nie grün „aktuell“, wenn die Messwerte
+ * nicht komprimiert werden — Edition und Kompression ehrlich anzeigen.
+ * @returns {{hidden:boolean, html?:string, showUpgrade?:boolean, upgradeLabel?:string, meta?:string}}
+ */
+function dbEngineCardView(j, comp) {
+  const tsOk = !!(j && j.available && j.extVersion);
+  const checked = !!(comp && comp.checkedAt);
+  const compOff = checked && comp.ok === false;
+  const apache = !!((j && j.edition && j.edition !== 'timescale') || (comp && comp.reason === 'apache'));
+  if (!tsOk && !compOff) return { hidden: true };
+  const growth = 'Die Datenbank wächst dadurch um etwa 110–230 MB pro Tag.';
+  const why = comp && comp.label ? ` (${escapeHtml(comp.label)}${comp.detail ? ': ' + escapeHtml(comp.detail) : ''})` : '';
+  const prov = j && j.provision;
+  const provText = prov && (prov.result === 'apache' || prov.result === 'failed') && prov.error
+    ? ` Letzter Umstellungsversuch auf die Community-Edition${prov.at ? ' (' + fmtTs(prov.at) + ')' : ''}: ${escapeHtml(prov.error)}.` : '';
+  const view = { hidden: false, showUpgrade: false };
+  if (!tsOk) {
+    view.html = `<strong class="sa-text-err">Messwerte werden nicht komprimiert${why}.</strong> ${growth}`;
+  } else {
+    const provisionFailed = prov && prov.result === 'failed';
+    if (j.loadOk === false || provisionFailed) {
+      // 21.10.2026: Bibliothek zur Katalog-Version fehlt bzw. die Nachrüstung ist
+      // gescheitert — nie „aktuell“ zeigen. Repariert wird beim DVhub-Start.
+      const w = j.loadOk === false
+        ? `TimescaleDB ${escapeHtml(j.extVersion)} lädt nicht${j.loadError ? ': ' + escapeHtml(j.loadError) : ''}.`
+        : `Nachrüstung fehlgeschlagen${prov.at ? ' (' + fmtTs(prov.at) + ')' : ''}: ${escapeHtml(prov.error || 'unbekannt')}.`;
+      view.html = `<strong class="sa-text-err">${w}</strong> Ein Neustart von DVhub startet die Reparatur; das Protokoll steht in timescale-provision.log im Datenverzeichnis.`;
+    } else if (apache || compOff) {
+      const ed = apache ? ' (Apache-Edition)' : '';
+      view.html = `<strong class="sa-text-err">TimescaleDB ${escapeHtml(j.extVersion)}${ed} — Messwerte werden nicht komprimiert${why}.</strong> ${growth}`
+        + (apache ? ' DVhub versucht bei jedem Update und Neustart, auf die Community-Edition umzustellen.' : '') + provText;
+      view.showUpgrade = !!(j.updatePending && j.binaryVersion);
+    } else if (j.probeOk === false) {
+      view.html = `<span class="sa-text-warn">TimescaleDB ${escapeHtml(j.extVersion)} — Live-Prüfung nicht möglich${j.probeError ? ' (' + escapeHtml(j.probeError) + ')' : ''}. Angezeigt ist der Stand der letzten Prüfung.</span>`;
+    } else if (j.updatePending && j.binaryVersion) {
+      view.html = `<strong class="sa-text-warn">Update verfügbar: TimescaleDB ${escapeHtml(j.binaryVersion)}</strong> — installiert ist ${escapeHtml(j.extVersion)}.`;
+      view.showUpgrade = true;
+    } else if (!checked) {
+      view.html = `<span class="sa-text-warn">TimescaleDB ${escapeHtml(j.extVersion)} — Kompression noch nicht geprüft.</span>`;
+    } else {
+      view.html = `<span class="sa-text-ok">TimescaleDB ${escapeHtml(j.extVersion)} — aktuell, Kompression an.</span>`;
+    }
+    if (view.showUpgrade) view.upgradeLabel = `Auf ${j.binaryVersion} aktualisieren`;
+  }
+  const parts = [];
+  const edition = (j && j.edition) || (comp && comp.edition) || null;
+  if (edition) parts.push(`Edition: ${escapeHtml(edition)}`);
+  parts.push(`Kompression: ${!checked ? 'unbekannt' : (comp.ok ? 'an' : 'aus')}`);
+  if (j && j.lastChecked) parts.push(`geprüft: ${fmtTs(j.lastChecked)}`);
+  view.meta = parts.join(' · ');
+  return view;
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsDbEngine = { dbEngineCardView };
+}
+
 // --- Datenbank-Engine (TimescaleDB) ---------------------------------------
 // Zeigt die aktive Extension-Version und — wenn die installierte Paketversion
 // neuer ist (updatePending) — einen "aktualisieren"-Button. Die Pakete werden
 // nächtlich automatisch aktuell gehalten (pkg-maintain-Timer); der eigentliche
 // Versions-Bump (kurzer DB-Neustart) bleibt ein bewusster Klick. Die Gruppe
-// bleibt ausgeblendet, wenn TimescaleDB nicht aktiv ist (reiner Postgres/SQLite).
+// bleibt ausgeblendet, wenn TimescaleDB nicht aktiv ist (reiner Postgres/SQLite),
+// außer die Platz-Wache meldet fehlende Kompression (dann rot).
 async function loadDbEngineStatus() {
   const group = document.getElementById('dbEngineGroup');
   const banner = document.getElementById('dbEngineBanner');
@@ -4328,39 +4389,157 @@ async function loadDbEngineStatus() {
   const meta = document.getElementById('dbEngineMeta');
   if (!group) return;
   try {
-    const r = await apiFetch('/api/db/timescale/status');
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j || !j.available || !j.extVersion) { group.hidden = true; return; }
+    const [r, rs] = await Promise.all([
+      apiFetch('/api/db/timescale/status'),
+      apiFetch('/api/storage/status').catch(() => null),
+    ]);
+    const j = r.ok ? await r.json().catch(() => ({})) : {};
+    const st = rs && rs.ok ? await rs.json().catch(() => null) : null;
+    const view = dbEngineCardView(j, st && st.compression);
+    if (view.hidden) { group.hidden = true; return; }
     group.hidden = false;
-    const provisionFailed = j.provision && j.provision.result === 'failed';
-    if (j.loadOk === false || provisionFailed) {
-      // 21.10.2026: Bibliothek zur Katalog-Version fehlt bzw. die Nachrüstung ist
-      // gescheitert — nie „aktuell“ zeigen. Repariert wird beim DVhub-Start.
-      const why = j.loadOk === false
-        ? `TimescaleDB ${escapeHtml(j.extVersion)} lädt nicht${j.loadError ? ': ' + escapeHtml(j.loadError) : ''}.`
-        : `Nachrüstung fehlgeschlagen${j.provision.at ? ' (' + fmtTs(j.provision.at) + ')' : ''}: ${escapeHtml(j.provision.error || 'unbekannt')}.`;
-      banner.innerHTML = `<strong class="sa-text-err">${why}</strong> Ein Neustart von DVhub startet die Reparatur; das Protokoll steht in timescale-provision.log im Datenverzeichnis.`;
-      if (actions) actions.style.display = 'none';
-    } else if (j.probeOk === false) {
-      banner.innerHTML = `<span class="sa-text-warn">TimescaleDB ${escapeHtml(j.extVersion)} — Live-Prüfung nicht möglich${j.probeError ? ' (' + escapeHtml(j.probeError) + ')' : ''}. Angezeigt ist der Stand der letzten Prüfung.</span>`;
-      if (actions) actions.style.display = 'none';
-    } else if (j.updatePending && j.binaryVersion) {
-      banner.innerHTML = `<strong class="sa-text-warn">Update verfügbar: TimescaleDB ${escapeHtml(j.binaryVersion)}</strong> — installiert ist ${escapeHtml(j.extVersion)}.`;
-      // .svc-actions-block hat CSS display:none (0c926128-Lektion) → explizit zeigen.
-      if (actions) actions.style.display = 'flex';
-      if (btn) { btn.disabled = false; btn.textContent = `Auf ${j.binaryVersion} aktualisieren`; }
-    } else {
-      banner.innerHTML = `<span class="sa-text-ok">TimescaleDB ${escapeHtml(j.extVersion)} — aktuell.</span>`;
-      if (actions) actions.style.display = 'none';
-    }
-    if (meta) {
-      const parts = [];
-      if (j.edition) parts.push(`Edition: ${escapeHtml(j.edition)}`);
-      if (j.lastChecked) parts.push(`geprüft: ${fmtTs(j.lastChecked)}`);
-      meta.textContent = parts.join(' · ') || '-';
+    banner.innerHTML = view.html;
+    // .svc-actions-block hat CSS display:none (0c926128-Lektion) → explizit zeigen.
+    if (actions) actions.style.display = view.showUpgrade ? 'flex' : 'none';
+    if (view.showUpgrade && btn) { btn.disabled = false; btn.textContent = view.upgradeLabel; }
+    if (meta) meta.textContent = view.meta || '-';
+  } catch {
+    group.hidden = true;
+  }
+}
+
+// --- Speicher (Speicher-Konzept 23.11.2026, Schritt 4) ----------------------
+const STORAGE_ROLE_LABEL = { db: 'Datenbank', data: 'DVhub-Ordner', system: 'System (/)', logs: 'Protokolle (/var/log)' };
+const STORAGE_PROFILE_LABEL = { gross: 'groß', mittel: 'mittel', klein: 'klein', winzig: 'winzig' };
+const fmtMb = (mb) => (mb == null || !Number.isFinite(Number(mb)) ? '-' : Number(mb) >= 1024 ? `${(Number(mb) / 1024).toFixed(1).replace('.', ',')} GB` : `${Math.round(Number(mb))} MB`);
+
+/**
+ * Ansicht der Karte „Speicher“ (rein, testbar) aus /api/storage/status.
+ * @returns {{hidden:boolean, bannerHtml?:string, rowsHtml?:string, profileText?:string, showApply?:boolean, applyLabel?:string, dbText?:string, hints?:string[]}}
+ */
+function storageCardView(st) {
+  if (!st || !st.ok || !Array.isArray(st.mounts) || !st.mounts.length) return { hidden: true };
+  const lvl = st.level || 'unbekannt';
+  const days = st.daysLeft != null && Number.isFinite(Number(st.daysLeft)) ? Math.round(Number(st.daysLeft)) : null;
+  const reach = days != null ? `voll in etwa ${days} Tagen` + (Number(st.growthMbPerDay) > 0 ? ` (wächst ${fmtMb(st.growthMbPerDay)} pro Tag)` : '')
+    : (st.growthMbPerDay === 0 ? 'wächst gerade nicht' : 'Wachstum wird noch gemessen (ab 2 Tagen)');
+  const free = `${fmtMb(st.freeMb)} frei von ${fmtMb(st.totalMb)}`;
+  let bannerHtml;
+  if (st.dbUnmeasured) bannerHtml = '<span class="sa-text-warn">Die Platte der Datenbank ist nicht messbar — DVhub räumt in der Datenbank nichts auf.</span>';
+  else if (lvl === 'kritisch') bannerHtml = `<strong class="sa-text-err">Speicher kritisch: ${free}, ${reach}.</strong> Alte 5-s-Rohwerte werden stufenweise entfernt; die 15-min-Werte bleiben.`;
+  else if (lvl === 'wenig' || lvl === 'knapp') bannerHtml = `<strong class="sa-text-warn">Speicher ${lvl}: ${free}, ${reach}.</strong>`;
+  else if (lvl === 'ok') bannerHtml = `<span class="sa-text-ok">Speicher ok: ${free}, ${reach}.</span>`;
+  else bannerHtml = '<span class="sa-text-warn">Speicher nicht messbar.</span>';
+  const rowsHtml = st.mounts.map((m) => {
+    const roles = (m.roles || []).map((r) => STORAGE_ROLE_LABEL[r] || r).join(', ') + (m.dbAssumed ? ' (angenommen)' : '');
+    const cls = m.level === 'kritisch' ? 'sa-text-err' : (m.level === 'wenig' || m.level === 'knapp') ? 'sa-text-warn' : 'sa-text-ok';
+    return `<tr><td>${escapeHtml(roles)}</td><td>${fmtMb(m.totalMb)}</td><td>${fmtMb(m.freeMb)} (${escapeHtml(String(m.freePct ?? '-'))} %)</td><td class="${cls}">${escapeHtml(m.level || '-')}</td></tr>`;
+  }).join('');
+  const p = st.profile || {};
+  const v = p.values || {};
+  let profileText = '-';
+  if (p.effective) {
+    const raw = v.rawKeepDays ? `${v.rawKeepDays} Tage` : 'für immer';
+    const m1 = v.tier1mKeepDays ? `${v.tier1mKeepDays} Tage` : 'für immer';
+    profileText = `Speicherprofil: ${STORAGE_PROFILE_LABEL[p.effective] || p.effective}${p.reason ? ` — ${p.reason}` : ''}. `
+      + `Komprimiert nach ${v.compressAfter || '-'}, 5-s-Rohwerte ${raw}, 1-min-Werte ${m1}, 15-min-Werte für immer, Schreibpuffer bis ${fmtMb(v.maxWalMb)}.`;
+  }
+  // Noch nicht umgesetzt (Hintergrund-Lauf, Codex 30313bfc): sichtbar machen, nicht als aktiv zeigen.
+  if (p.pending) profileText = `Wird übernommen — ${profileText}`;
+  const showApply = !!p.suggested && !p.pending;
+  const applyLabel = showApply ? `Vorschlag übernehmen: ${STORAGE_PROFILE_LABEL[p.suggested] || p.suggested} (passend zur Plattengröße)` : '';
+  const c = st.compression || {};
+  const d = st.db || {};
+  const parts = [];
+  if (Number.isFinite(Number(st.dbMb))) parts.push(`Datenbank ${fmtMb(st.dbMb)}`);
+  if (Number.isFinite(Number(d.samplesMb))) {
+    parts.push(`Messwerte ${fmtMb(d.samplesMb)}` + (d.chunks ? ` (${d.compressedChunks} von ${d.chunks} Blöcken komprimiert${Number(d.rawBeforeMb) > 0 ? `, ${fmtMb(d.rawBeforeMb)} → ${fmtMb(d.rawAfterMb)}` : ''})` : ''));
+  }
+  const t = d.tables || {};
+  if (Number.isFinite(Number(t.timeseries_samples_1m))) parts.push(`1-min-Werte ${fmtMb(t.timeseries_samples_1m)}`);
+  const q15 = (Number(t.timeseries_samples_15m) || 0) + (Number(t.energy_slots_15m) || 0);
+  if (t.timeseries_samples_15m != null || t.energy_slots_15m != null) parts.push(`15-min-Werte ${fmtMb(q15)}`);
+  const logs = (Number(t.control_events) || 0) + (Number(t.audit_log) || 0);
+  if (logs) parts.push(`Protokolle ${fmtMb(logs)}`);
+  const opt = (Number(t.optimizer_run_series) || 0) + (Number(t.optimizer_runs) || 0);
+  if (opt) parts.push(`Optimierer-Läufe ${fmtMb(opt)}`);
+  const comp = !c.checkedAt ? 'Kompression: noch nicht geprüft' : c.ok ? `Kompression: an${c.edition ? ` (${escapeHtml(c.edition)})` : ''}` : `Kompression: aus — ${escapeHtml(c.label || c.reason || 'unbekannt')}`;
+  const dbText = [comp, ...parts].join(' · ');
+  const hints = [];
+  if (st.logMode === 'full') {
+    hints.push('Datenvorhaltung „Vollständig“ kostet etwa 15–20 MB pro Tag zusätzlich'
+      + (days != null ? `; Reichweite heute etwa ${days} Tage` : '')
+      + '. Bei „wenig“ Speicher gilt automatisch Standard, bis wieder Platz ist.');
+  }
+  if (st.container) {
+    hints.push('Docker: Alte Images nach Updates belegen oft mehrere GB. Auf dem Host prüfen mit „docker system df“, aufräumen mit „docker image prune“.');
+  }
+  return { hidden: false, bannerHtml, rowsHtml, profileText, showApply, applyLabel, dbText, hints, pending: !!p.pending };
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.DVhubSettingsStorage = { storageCardView, applyStorageProfileSuggestion };
+}
+
+let storagePendingTimer = null;
+async function loadStorageStatus() {
+  const group = document.getElementById('storageGroup');
+  if (!group) return;
+  try {
+    const r = await apiFetch('/api/storage/status');
+    const st = r.ok ? await r.json().catch(() => null) : null;
+    const view = storageCardView(st);
+    if (view.hidden) { group.hidden = true; return; }
+    group.hidden = false;
+    document.getElementById('storageBanner').innerHTML = view.bannerHtml;
+    document.getElementById('storageMounts').innerHTML = view.rowsHtml;
+    document.getElementById('storageProfile').textContent = view.profileText;
+    const actions = document.getElementById('storageProfileActions');
+    const btn = document.getElementById('storageProfileApplyBtn');
+    // .svc-actions-block hat CSS display:none → explizit zeigen.
+    if (actions) actions.style.display = view.showApply ? 'flex' : 'none';
+    if (btn && view.showApply) { btn.disabled = false; btn.textContent = view.applyLabel; }
+    document.getElementById('storageDb').innerHTML = view.dbText;
+    document.getElementById('storageHints').textContent = view.hints.join(' ');
+    // Profil noch in Arbeit: später erneut laden, bis es umgesetzt ist.
+    if (view.pending) {
+      window.clearTimeout(storagePendingTimer);
+      storagePendingTimer = window.setTimeout(() => { loadStorageStatus().catch(() => {}); }, 10000);
     }
   } catch {
     group.hidden = true;
+  }
+}
+
+async function applyStorageProfileSuggestion() {
+  const btn = document.getElementById('storageProfileApplyBtn');
+  if (!(await window.dvConfirm('DVhub stellt das Speicherprofil passend zur Plattengröße ein. Bei kleineren Profilen werden Messwerte früher komprimiert und alte 5-s-Rohwerte nach der Aufbewahrung des Profils entfernt; die 15-min-Werte bleiben.', {
+    title: 'Speicherprofil übernehmen?',
+    okLabel: 'Übernehmen'
+  }))) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Wird übernommen...'; }
+  let error = null;
+  try {
+    const r = await apiFetch('/api/storage/profile', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ choice: 'auto' }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+    // Der Stand kommt (im Worker-Betrieb über den Schnappschuss) kurz danach an:
+    // ein paar Mal nachfragen, bis der Vorschlag weg ist (Codex 246e360a).
+    for (let i = 0; i < 8; i++) {
+      const rs = await apiFetch('/api/storage/status').catch(() => null);
+      const st = rs && rs.ok ? await rs.json().catch(() => null) : null;
+      if (st && st.profile && !st.profile.suggested && !st.profile.pending) break;
+      await new Promise((res) => window.setTimeout(res, 1500));
+    }
+  } catch (e) {
+    error = e;
+  }
+  await loadStorageStatus();
+  // Fehler NACH dem Neuladen zeigen, sonst überschriebe ihn die Karte (Codex 246e360a).
+  if (error) {
+    const banner = document.getElementById('storageBanner');
+    if (banner) banner.innerHTML = `<span class="sa-text-err">Übernehmen fehlgeschlagen: ${escapeHtml(error.message)}</span>`;
+    if (btn) { btn.disabled = false; }
   }
 }
 
@@ -4799,6 +4978,8 @@ function initSettingsPage() {
   });
   loadSystemInfo();
   loadDbEngineStatus();
+  loadStorageStatus();
+  document.getElementById('storageProfileApplyBtn')?.addEventListener('click', applyStorageProfileSuggestion);
 
   document.getElementById('importConfigBtn')?.addEventListener('click', () => {
     document.getElementById('importConfigFile')?.click();

@@ -179,3 +179,125 @@ test('getStatus reflects config + last run', async () => {
   assert.equal(s.destinationDir, dir);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// Speicher-Konzept Schritt 6 (Christin 23.11.2026): Platzprüfung und Profilgrenze.
+import { backupSpacePlan, createDbBackupScheduler as createSched } from '../services/db-backup-scheduler.js';
+import { PROFILES as SP } from '../services/storage-profile.js';
+test('backupSpacePlan: passt es, wie viele bleiben', () => {
+  assert.deepEqual(backupSpacePlan({ freeMb: 10000, dbMb: 4000, sameDisk: false, profile: SP.klein, scope: 'full', retentionCount: 14 }), { ok: true, sameDisk: false, keep: 14 });
+  assert.equal(backupSpacePlan({ freeMb: 10000, dbMb: 4000, sameDisk: true, profile: SP.klein, scope: 'full', retentionCount: 14 }).keep, 3);
+  assert.equal(backupSpacePlan({ freeMb: 10000, dbMb: 4000, sameDisk: true, profile: SP.gross, scope: 'full', retentionCount: 5 }).keep, 5);
+  const w = backupSpacePlan({ freeMb: 10000, dbMb: 400, sameDisk: true, profile: SP.winzig, scope: 'full', retentionCount: 14 });
+  assert.equal(w.ok, false);
+  assert.match(w.error, /winzig.*kein volles Backup.*15-min/);
+  assert.equal(backupSpacePlan({ freeMb: 10000, dbMb: 400, sameDisk: true, profile: SP.winzig, scope: 'energy15m', retentionCount: 14 }).keep, 3);
+  const full = backupSpacePlan({ freeMb: 3000, dbMb: 4000, sameDisk: false, profile: null, scope: 'full', retentionCount: 14 });
+  assert.equal(full.ok, false);
+  assert.match(full.error, /zu wenig Platz am Ziel: 3000 MB frei, das Backup braucht etwa 4256 MB/);
+  assert.ok(Number.isNaN(backupSpacePlan({ freeMb: NaN, dbMb: 1, sameDisk: false, scope: 'full', retentionCount: undefined }).keep), 'ungültige Anzahl → nichts löschen');
+});
+
+test('Zu wenig Platz: kein pg_dump, Fehler sichtbar', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-bsp-'));
+  let spawned = 0; const logs = [];
+  try {
+    const sched = createSched({
+      getCfg: () => ({ telemetry: { database: { name: 'dvhub' } }, dbBackup: { enabled: true, destinationDir: dir, retentionCount: 14 } }),
+      pushLog: (e, d) => logs.push([e, d]), spawnFn: () => { spawned++; throw new Error('nicht aufrufen'); },
+      getStorage: () => ({ dbMb: 5000, mounts: [], profile: null }),
+      statfs: () => ({ bavail: 1000, bsize: 1048576 }),
+    });
+    const r = await sched.runNow('manual');
+    assert.equal(r.ok, false);
+    assert.equal(spawned, 0);
+    assert.match(logs.find(([e]) => e === 'db_backup_scheduled_failed')[1].error, /zu wenig Platz/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Codex 2739f099: ungültige Anzahl bleibt ungültig, Overlay zählt als DB-Platte, ohne Messung kein Durchwinken.
+test('Profil-Grenze: ungültige Anzahl → weiter nichts löschen', () => {
+  for (const rc of [undefined, 0, 'x']) {
+    const p = backupSpacePlan({ freeMb: 10000, dbMb: 1, sameDisk: true, profile: SP.klein, scope: 'full', retentionCount: rc });
+    assert.ok(!(Number(p.keep) > 0), `retentionCount ${rc}`);
+  }
+});
+
+test('Docker overlay2: Ziel im Container-Dateisystem zählt als DB-Platte (alle Geräte-Nummern)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-bov-'));
+  const logs = [];
+  try {
+    const sched = createSched({
+      getCfg: () => ({ telemetry: { database: { name: 'dvhub' } }, dbBackup: { enabled: true, destinationDir: dir, retentionCount: 14, scope: 'full' } }),
+      pushLog: (e, d) => logs.push([e, d]), spawnFn: () => { throw new Error('nicht aufrufen'); },
+      getStorage: () => ({ dbMb: 10, mounts: [{ key: '2049', devs: ['2049', '160'], roles: ['db', 'data', 'system'] }], profile: { values: SP.winzig } }),
+      statfs: () => ({ bavail: 100000, bsize: 1048576 }), stat: () => ({ dev: 160 }),
+    });
+    const r = await sched.runNow('manual');
+    assert.equal(r.ok, false);
+    assert.match(logs.find(([e]) => e === 'db_backup_scheduled_failed')[1].error, /winzig.*kein volles Backup/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Wache noch ohne Messung: Backup verschoben statt ungeprüft', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-bnm-'));
+  let spawned = 0;
+  try {
+    const sched = createSched({
+      getCfg: () => ({ telemetry: { database: { name: 'dvhub' } }, dbBackup: { enabled: true, destinationDir: dir, retentionCount: 14 } }),
+      pushLog: () => {}, spawnFn: () => { spawned++; throw new Error('nicht aufrufen'); },
+      getStorage: async () => null,
+    });
+    const r = await sched.runNow('manual');
+    assert.equal(r.ok, false);
+    assert.match(r.error, /noch nicht gemessen/);
+    assert.equal(spawned, 0);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Codex 3e530edf: geplanter Lauf ohne Messung wird am selben Tag nachgeholt.
+test('Geplantes Backup kurz nach dem Start: verschoben und nachgeholt, sobald gemessen ist', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-bdef-'));
+  let measured = false; let t = new Date(2026, 10, 24, 3, 0, 5);
+  const dumps = [];
+  try {
+    const sched = createSched({
+      getCfg: () => ({ telemetry: { database: { name: 'dvhub' } }, dbBackup: { enabled: true, destinationDir: dir, retentionCount: 14, time: '03:00', scope: 'energy15m' } }),
+      pushLog: () => {}, nowFn: () => t,
+      spawnFn: (cmd, args) => { dumps.push(args); const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
+        setImmediate(() => { const f = args[args.indexOf('-f') + 1]; if (f) fs.writeFileSync(f, 'x'); c.emit('close', 0); }); return c; },
+      getStorage: async () => (measured ? { dbMb: 1, mounts: [] } : null),
+      statfs: () => ({ bavail: 100000, bsize: 1048576 }),
+    });
+    sched.tick?.() ?? sched._tick?.();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(dumps.length, 0, 'ohne Messung kein Dump');
+    measured = true; t = new Date(2026, 10, 24, 3, 6, 0);
+    sched.tick?.() ?? sched._tick?.();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(dumps.length, 1, 'nachgeholt');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Codex 20cce4b0: verschobenes Backup verfällt mit dem Tageswechsel und beim Abschalten.
+test('Verschobenes Backup: nicht am nächsten Tag und nicht nach dem Abschalten', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-bdef2-'));
+  for (const variant of ['nextDay', 'disabled']) {
+    let measured = false; let enabled = true; let t = new Date(2026, 10, 24, 3, 0, 5);
+    const dumps = [];
+    const sched = createSched({
+      getCfg: () => ({ telemetry: { database: { name: 'dvhub' } }, dbBackup: { enabled, destinationDir: dir, retentionCount: 14, time: '03:00', scope: 'energy15m' } }),
+      pushLog: () => {}, nowFn: () => t,
+      spawnFn: (cmd, args) => { dumps.push(args); const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stderr = new EventEmitter(); setImmediate(() => c.emit('close', 0)); return c; },
+      getStorage: async () => (measured ? { dbMb: 1, mounts: [] } : null),
+      statfs: () => ({ bavail: 100000, bsize: 1048576 }),
+    });
+    sched._tick();
+    await new Promise((r) => setTimeout(r, 20));
+    measured = true;
+    if (variant === 'nextDay') t = new Date(2026, 10, 25, 2, 59, 0); else { enabled = false; t = new Date(2026, 10, 24, 3, 10, 0); }
+    sched._tick();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(dumps.length, 0, variant);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});

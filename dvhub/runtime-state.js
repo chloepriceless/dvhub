@@ -294,6 +294,35 @@ function buildEosPriceTailSnapshot(tail = null) {
   return pickFields(tail, EOS_PRICE_TAIL_FIELDS);
 }
 
+// Platz-Wache (services/storage-guard.js) läuft im Runtime-Prozess; Status,
+// Kompression, tuneTimescale-Ergebnis und ihre Systemhinweise braucht der
+// Web-Prozess für /api/storage/status und /api/status (Codex 949b20f2).
+export const STORAGE_WARNING_IDS = Object.freeze(['storage', 'storage_other', 'db_compression']);
+
+function buildStorageSnapshot(storage = null) {
+  if (!storage || typeof storage !== 'object') return null;
+  const warnings = Array.isArray(storage.warnings)
+    ? storage.warnings.filter((w) => w && STORAGE_WARNING_IDS.includes(w.id))
+      .map((w) => ({ id: w.id, message: String(w.message || ''), ...(w.severity === 'error' ? { severity: 'error' } : {}) }))
+    : [];
+  return {
+    status: storage.status && typeof storage.status === 'object' ? storage.status : null,
+    compression: storage.compression && typeof storage.compression === 'object' ? storage.compression : null,
+    timescaleTuning: storage.timescaleTuning && typeof storage.timescaleTuning === 'object' ? storage.timescaleTuning : null,
+    warnings,
+  };
+}
+
+/** Web-Prozess: Stand der Platz-Wache und ihre Hinweise übernehmen. */
+export function applyRuntimeStorage(state, snapshot) {
+  if (!state || !snapshot || typeof snapshot !== 'object' || !('storage' in snapshot)) return;
+  const st = snapshot.storage;
+  state.storageRuntime = st || null;
+  if (!Array.isArray(state.systemWarnings)) state.systemWarnings = [];
+  const keep = state.systemWarnings.filter((w) => !STORAGE_WARNING_IDS.includes(w?.id));
+  state.systemWarnings.splice(0, state.systemWarnings.length, ...keep, ...((st && st.warnings) || []));
+}
+
 function buildEosRunSnapshot(eosRun = null) {
   if (!eosRun || typeof eosRun !== 'object') return null;
   return pickFields(eosRun, EOS_RUN_FIELDS);
@@ -323,7 +352,8 @@ export function buildRuntimeSnapshot({
   historyImport = null,
   vpn = null,
   eosRun = null,
-  eosPriceTail = undefined
+  eosPriceTail = undefined,
+  storage = undefined
 } = {}) {
   return {
     capturedAt: normalizeIso(now),
@@ -334,7 +364,8 @@ export function buildRuntimeSnapshot({
     historyImport: buildHistoryImportSnapshot(historyImport),
     vpn: buildVpnSnapshot(vpn),
     eosRun: buildEosRunSnapshot(eosRun),
-    ...(eosPriceTail === undefined ? {} : { eosPriceTail: buildEosPriceTailSnapshot(eosPriceTail) })
+    ...(eosPriceTail === undefined ? {} : { eosPriceTail: buildEosPriceTailSnapshot(eosPriceTail) }),
+    ...(storage === undefined ? {} : { storage: buildStorageSnapshot(storage) })
   };
 }
 

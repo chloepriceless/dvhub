@@ -5,22 +5,24 @@
 -- dropped chunks older than 45 days entirely, losing the raw resolution
 -- forever.
 --
--- Disk-math (prod 2026-05-14):
---   - timeseries_samples hypertable: 1460 MB for ~49 days (21.97M rows,
---     57 distinct series).
---   - Compressed chunks measure ~50 KB / week (24,000:1 ratio — TimescaleDB
---     columnar compression on repetitive numeric series).
---   - Current uncompressed week-chunk: ~1186 MB; after compression (≥7 days
---     old per migration 014's compression policy): ~50 KB.
---   - Disk: 54 GB total, 29 GB free (45% used).
--- → Keeping data forever at this compression ratio costs ~MB / year.
---   Retention removal carries effectively zero disk risk on this prod box.
+-- Disk-math — BERICHTIGT 23.11.2026 (die Zahlen vom 14.05. waren um den
+-- Faktor ~1000 zu optimistisch, „~50 KB / Woche, 24.000:1“ stimmte nie):
+--   - Prod-Messung 23.11.2026 (Radxa A7S, 48 Live-Reihen, ~553.000 Zeilen/Tag):
+--     roh ~220 MB pro Tag, komprimiert ~7,5 MB pro Tag (Verhältnis ~29:1).
+--   - „Für immer“ kostet damit auch komprimiert ~2,7 GB pro Jahr, nur für die
+--     Messwerte. OHNE Kompression (Apache-Edition, reines Postgres) wächst die
+--     Datenbank um ~110–230 MB pro Tag — eine kleine Platte ist in Wochen voll.
+--   - Absicherung: services/storage-guard.js (Platz-Wache, roter Hinweis
+--     „Datenbank ohne Kompression“), Konzept
+--     .planning/konzept/2026-11-23-speicher-ueberwachung.md.
+-- (Nur Kommentar geändert: der Runner führt Migrationen über die Versionsnummer
+-- in schema_migrations, ohne Prüfsumme — angewendete Boxen laufen sie nicht neu.)
 --
 -- Strategy:
 --   - REMOVE the 45-day retention policy. Chunks live indefinitely.
 --   - KEEP the compression policy from migration 014 untouched (compress
 --     chunks older than 7 days). That's the mechanism that makes
---     long retention practically free.
+--     long retention affordable (~29:1, see the corrected numbers above).
 --
 -- Defense-in-depth (separate code change, not in this migration):
 --   - services/forecast/forecast-store.js#runSmartRetention previously

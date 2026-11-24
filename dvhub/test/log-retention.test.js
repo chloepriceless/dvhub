@@ -152,3 +152,21 @@ test('Laufreihen: je Tag bleibt ein Plan (Day-Ahead vom Vortag), nicht der letzt
   assert.ok(!db.calls.some((c) => /row_number\(\) OVER/.test(c.sql)), 'kein „letzter Lauf je Tag“ mehr');
   assert.ok(db.calls.some((c) => /count\(DISTINCT optimizer_run_id\) > 1/.test(c.sql)), 'sucht Tage mit mehreren Läufen');
 });
+
+// Speicher-Konzept S5 c (Christin 23.11.2026): „Vollständig“ ruht bei wenig Platz.
+test('„Vollständig“: bei Speicher „wenig“/„kritisch“ läuft die Standard-Aufbewahrung, sonst nicht', async () => {
+  const full = () => ({ timeZone: 'Europe/Berlin', telemetry: { logRetention: { mode: 'full' } } });
+  const logs = [];
+  let lvl = 'ok';
+  const db = fakeDb();
+  const lr = createLogRetention({ getDb: () => db, getCfg: full, now: () => NOW, getStorageLevel: () => lvl, pushLog: (e) => logs.push(e) });
+  assert.equal((await lr.runOnce()).skipped, 'full');
+  lvl = 'wenig';
+  const r = await lr.runOnce();
+  assert.notEqual(r.skipped, 'full', 'Standard greift');
+  assert.ok(db.calls.length > 0);
+  await lr.runOnce();
+  assert.equal(logs.filter((e) => e === 'log_retention_full_suspended').length, 1, 'einmal gemeldet');
+  lvl = 'knapp';
+  assert.equal((await lr.runOnce()).skipped, 'full', 'danach wieder vollständig');
+});

@@ -252,6 +252,24 @@
               <p class="svc-meta" id="dbEngineMeta">-</p>
             </div>
 
+            <!-- Speicher (Speicher-Konzept 23.11.2026): Platten, Reichweite, Profil, Kompression -->
+            <div class="config-group" data-accent="cyan" id="storageGroup" hidden>
+              <div class="config-group-kicker">Speicher</div>
+              <div id="storageBanner" class="config-banner info">Speicher wird gepr&uuml;ft...</div>
+              <div class="data-table-scroll" tabindex="0">
+                <table class="data-table dv-log-table">
+                  <thead><tr><th scope="col">Platte</th><th scope="col">Gr&ouml;&szlig;e</th><th scope="col">frei</th><th scope="col">Stufe</th></tr></thead>
+                  <tbody id="storageMounts"><tr><td colspan="4">-</td></tr></tbody>
+                </table>
+              </div>
+              <p class="svc-meta" id="storageProfile">-</p>
+              <div id="storageProfileActions" class="svc-actions-block">
+                <button id="storageProfileApplyBtn" class="btn btn-primary btn-small" type="button">Vorschlag &uuml;bernehmen</button>
+              </div>
+              <p class="svc-meta" id="storageDb">-</p>
+              <p class="svc-meta" id="storageHints"></p>
+            </div>
+
             <!-- Dienst -->
             <div class="config-group" data-accent="green">
               <div class="config-group-kicker">Dienst</div>

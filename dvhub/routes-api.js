@@ -2791,7 +2791,10 @@ export function createApiRoutes(ctx) {
     // Systemhinweise (Einspeisegrenze, unbekannter DV-Befehl, Speicherplatz …):
     // Leitstand zeigt sie als Hinweisleiste (app.js renderSystemWarnings).
     payload.systemWarnings = Array.isArray(state.systemWarnings)
-      ? state.systemWarnings.map((w) => ({ id: String(w.id || ''), message: String(w.message || '') }))
+      ? state.systemWarnings.map((w) => ({
+        id: String(w.id || ''), message: String(w.message || ''),
+        ...(w.severity === 'error' ? { severity: 'error' } : {}),
+      }))
       : [];
     // Kennungsprobe des Herstellerprofils (E10): Ergebnis aus dem POLLER-Snapshot (wie telemetryFreeze), und jedes
     // Ergebnis außer „bestanden“ als Hinweis in der Leiste — dort steht, was ausgeblendet bzw. ungeprüft ist.
@@ -5806,7 +5809,35 @@ export function createApiRoutes(ctx) {
     // Speicherplatz (storage-guard.js): frei/belegt, Stufe, letzte Maßnahmen.
     if (url.pathname === '/api/storage/status' && req.method === 'GET') {
       if (!checkAuth(req, res)) return;
-      return json(res, 200, { ok: true, ...(ctx.storageGuard?.status?.() || { level: 'unbekannt' }) });
+      // compression: Prüfung der Wache (auch vor dem ersten Lauf); timescaleTuning: Ergebnis beim Start.
+      // Im getrennten Betrieb läuft die Wache im Runtime-Prozess → Stand aus dem Schnappschuss.
+      const rs = ctx.storageGuard ? null : (state.storageRuntime || null);
+      return json(res, 200, {
+        ok: true,
+        ...((ctx.storageGuard ? ctx.storageGuard.status?.() : rs?.status) || { level: 'unbekannt' }),
+        compression: (ctx.storageGuard ? ctx.storageGuard.compressionStatus?.() : rs?.compression) ?? null,
+        timescaleTuning: state.timescaleTuning ?? rs?.timescaleTuning ?? null,
+        // Für die Karte „Speicher“: Docker-Hinweis (S9 a) und „Vollständig“-Hinweis (S5 a).
+        container: process.env.DVHUB_RUNTIME === 'container',
+        logMode: getCfg()?.telemetry?.logRetention?.mode === 'full' ? 'full' : 'standard',
+      });
+    }
+
+    // Speicherprofil per Klick (Einstellungen → Speicher, S2 a): 'auto' = nach
+    // Plattengröße, sonst fest gross/mittel/klein/winzig. Läuft im Runtime-Prozess.
+    if (url.pathname === '/api/storage/profile' && req.method === 'POST') {
+      if (!checkAuth(req, res)) return;
+      const body = await readJsonBody(req, res);
+      if (body === null) return;
+      const choice = String(body?.choice || '');
+      if (!['auto', 'gross', 'mittel', 'klein', 'winzig'].includes(choice)) {
+        return json(res, 400, { ok: false, error: 'choice must be auto, gross, mittel, klein or winzig' });
+      }
+      if (typeof ctx.chooseStorageProfile !== 'function') return json(res, 503, { ok: false, error: 'storage guard not available' });
+      const r = await ctx.chooseStorageProfile(choice);
+      pushLog('storage_profile_request', { choice, ok: !!r.ok, error: r.error || null }, actorContext(req));
+      if (r.error === 'runtime_worker_unavailable' || r.error === 'storage_guard_unavailable') return json(res, 503, r);
+      return json(res, r.ok ? 200 : 409, r);
     }
 
     // Zentraler EOS-Zustand (eos-monitor.js): up/busy/down, PID, Version,

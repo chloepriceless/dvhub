@@ -166,3 +166,131 @@ test('Timescale: Hypertable gesperrt → aufgeschoben, kein Fehler, keine Regel'
   assert.equal(r.deferred, 'compression_lock_timeout');
   assert.ok(!st.calls.some((c) => c.includes('add_compression_policy')));
 });
+
+// Speicher-Konzept Schritt 3 (Christin 23.11.2026): Profil stellt WAL und Kompression ein.
+import { walSettings, intervalSeconds } from '../services/db-tuning.js';
+import { PROFILES } from '../services/storage-profile.js';
+test('WAL nach Speicherprofil: „groß“ unverändert, kleine Platten weniger Schreibpuffer', () => {
+  assert.deepEqual(walSettings(null), {});
+  assert.deepEqual(walSettings(PROFILES.gross), {});
+  assert.deepEqual(walSettings(PROFILES.klein), { max_wal_size: '256MB', min_wal_size: '64MB' });
+  assert.deepEqual(desiredSettings({ includeMemory: false, storageProfile: PROFILES.winzig }).settings.max_wal_size, '128MB');
+});
+
+test('intervalSeconds versteht TimescaleDB-Schreibweisen', () => {
+  assert.equal(intervalSeconds('2 days'), 172800);
+  assert.equal(intervalSeconds('12:00:00'), 43200);
+  assert.equal(intervalSeconds('1 day 06:00:00'), 108000);
+  assert.equal(intervalSeconds('6 hours'), 21600);
+  assert.equal(intervalSeconds(null), null);
+});
+
+test('Timescale mit Profil „winzig“: 6-h-Blöcke, Kompression nach 6 h, Lauf stündlich', async () => {
+  let interval = 86400; let after = '2 days'; let sched = 43200; const calls = [];
+  const q = async (sql) => {
+    calls.push(sql);
+    if (sql.includes('pg_extension')) return { rows: [{ 1: 1 }] };
+    if (sql.includes('dimensions')) return { rows: [{ s: interval }] };
+    if (sql.includes('set_chunk_time_interval')) { interval = intervalSeconds(/INTERVAL '([^']+)'/.exec(sql)[1]); return { rows: [] }; }
+    if (sql.includes("current_setting('timescaledb.license'")) return { rows: [{ lic: 'timescale' }] };
+    if (sql.includes('compression_enabled')) return { rows: [{ on: true }] };
+    if (sql.includes("config->>'compress_after'")) return { rows: after ? [{ job_id: 1000, after, sched }] : [] };
+    if (sql.includes('remove_compression_policy')) { after = null; return { rows: [] }; }
+    if (sql.includes('add_compression_policy')) { after = /INTERVAL '([^']+)'/.exec(sql)[1]; return { rows: [] }; }
+    if (sql.includes('alter_job')) { sched = intervalSeconds(/INTERVAL '([^']+)'/.exec(sql)[1]); return { rows: [] }; }
+    return { rows: [] };
+  };
+  const r = await tuneTimescale(q, PROFILES.winzig);
+  assert.deepEqual(r.changed, ['chunk_interval', 'compress_after', 'compress_schedule']);
+  assert.deepEqual([interval, after, sched], [21600, '6 hours', 3600]);
+  assert.deepEqual((await tuneTimescale(q, PROFILES.winzig)).changed, []);
+  // Zurück auf „groß“: Lauf-Intervall bleibt unangetastet.
+  const g = await tuneTimescale(q, PROFILES.gross);
+  assert.deepEqual(g.changed, ['chunk_interval', 'compress_after']);
+});
+
+// Codex 2ef7ff2c / 2b7a081b: vorübergehend kleinerer Schreibpuffer bleibt nicht für immer —
+// zurückgesetzt wird aber nur der Wert, den DVhub selbst gesetzt und sich gemerkt hat.
+test('max_wal_size: DVhub merkt sich den eigenen Wert und setzt nur diesen zurück', async () => {
+  const mk = (setting, sourcefile) => {
+    const st = { setting, calls: [] };
+    st.query = async (sql) => {
+      st.calls.push(sql);
+      if (sql.startsWith('SELECT name, setting')) return { rows: [{ name: 'max_wal_size', setting: st.setting, unit: 'MB', source: 'configuration file' }] };
+      if (sql.includes("name = 'max_wal_size'")) return { rows: [{ setting: st.setting, unit: 'MB', sourcefile }] };
+      if (sql.startsWith('ALTER SYSTEM SET max_wal_size')) { st.setting = /'(\d+)MB'/.exec(sql)[1]; return { rows: [] }; }
+      return { rows: [] };
+    };
+    return st;
+  };
+  const owner = () => { let v = null; return { read: () => v, write: (x) => { v = x; }, get v() { return v; } }; };
+  const AUTO = '/var/lib/postgresql/data/postgresql.auto.conf';
+  // DVhub setzt 512 (mittel), merkt es sich, und nimmt es bei „groß“ zurück.
+  const db = mk('1024', '/usr/share/postgresql/postgresql.conf.sample'); const own = owner();
+  await applyDbTuning((q, p) => db.query(q, p), { includeMemory: false, storageProfile: PROFILES.mittel, walOwner: own });
+  assert.equal(own.v, 512);
+  const back = mk('512', AUTO);
+  const r = await applyDbTuning((q, p) => back.query(q, p), { includeMemory: false, storageProfile: PROFILES.gross, walOwner: own });
+  assert.ok(back.calls.includes('ALTER SYSTEM RESET max_wal_size'));
+  assert.ok(r.changed.includes('max_wal_size'));
+  assert.equal(own.v, null, 'Merker gelöscht');
+  // Betreiber hat selbst 512 per ALTER SYSTEM gesetzt, DVhub nie → bleibt.
+  const admin = mk('512', AUTO);
+  await applyDbTuning((q, p) => admin.query(q, p), { includeMemory: false, storageProfile: PROFILES.gross, walOwner: owner() });
+  assert.ok(!admin.calls.includes('ALTER SYSTEM RESET max_wal_size'), 'fremder Wert bleibt');
+  // Ohne Merker nie.
+  const none = mk('512', AUTO);
+  await applyDbTuning((q, p) => none.query(q, p), { includeMemory: false });
+  assert.ok(!none.calls.includes('ALTER SYSTEM RESET max_wal_size'));
+  // Betreiber hat danach selbst einen anderen Wert gesetzt → bleibt.
+  const changedByAdmin = mk('2048', AUTO); const o2 = owner(); o2.write(512);
+  await applyDbTuning((q, p) => changedByAdmin.query(q, p), { includeMemory: false, storageProfile: PROFILES.gross, walOwner: o2 });
+  assert.ok(!changedByAdmin.calls.includes('ALTER SYSTEM RESET max_wal_size'));
+});
+
+import { fileWalOwner } from '../services/db-tuning.js';
+test('fileWalOwner: Merker als Datei', () => {
+  const files = {};
+  const fsImpl = { readFileSync: (f) => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; }, writeFileSync: (f, d) => { files[f] = d; }, unlinkSync: (f) => { delete files[f]; } };
+  const o = fileWalOwner('/d', { fsImpl });
+  assert.equal(o.read(), null);
+  o.write(256);
+  assert.equal(o.read(), 256);
+  o.write(null);
+  assert.equal(o.read(), null);
+});
+
+// Codex 4f093b23: Merker zuerst; verdeckter Wert behält den Merker.
+test('max_wal_size: Merker nicht schreibbar → nicht setzen; Kommandozeile verdeckt → Merker bleibt', async () => {
+  const calls = [];
+  const q = async (sql) => {
+    calls.push(sql);
+    if (sql.startsWith('SELECT name, setting')) return { rows: [{ name: 'max_wal_size', setting: '1024', unit: 'MB', source: 'default' }] };
+    return { rows: [] };
+  };
+  const broken = { read: () => null, write: () => { throw new Error('Platte voll'); } };
+  const r = await applyDbTuning(q, { includeMemory: false, storageProfile: PROFILES.klein, walOwner: broken });
+  assert.ok(!calls.some((c) => c.startsWith('ALTER SYSTEM SET max_wal_size')), 'ohne Merker nicht setzen');
+  assert.deepEqual(r.skippedOwner, ['max_wal_size']);
+  let v = 256; const own = { read: () => v, write: (x) => { v = x; } };
+  const masked = async (sql) => (sql.includes("name = 'max_wal_size'")
+    ? { rows: [{ setting: '2048', unit: 'MB', source: 'command line', sourcefile: null }] } : { rows: [] });
+  await applyDbTuning(masked, { includeMemory: false, storageProfile: PROFILES.gross, walOwner: own });
+  assert.equal(v, 256, 'Merker bleibt, solange die Kommandozeile verdeckt');
+});
+
+// Codex 3e530edf: Merker bei SQL-Fehler zurück, bei „default“ löschen.
+test('max_wal_size: ALTER scheitert → voriger Merker; Wert wieder Standard → Merker weg', async () => {
+  let v = 512; const own = { read: () => v, write: (x) => { v = x; } };
+  const failing = async (sql) => {
+    if (sql.startsWith('SELECT name, setting')) return { rows: [{ name: 'max_wal_size', setting: '512', unit: 'MB', source: 'configuration file' }] };
+    if (sql.startsWith('ALTER SYSTEM SET max_wal_size')) throw new Error('No space left on device');
+    return { rows: [] };
+  };
+  await assert.rejects(applyDbTuning(failing, { includeMemory: false, storageProfile: PROFILES.klein, walOwner: own }));
+  assert.equal(v, 512, 'Merker wie vorher');
+  const def = async (sql) => (sql.includes("name = 'max_wal_size'")
+    ? { rows: [{ setting: '1024', unit: 'MB', source: 'default', sourcefile: null }] } : { rows: [] });
+  await applyDbTuning(def, { includeMemory: false, storageProfile: PROFILES.gross, walOwner: own });
+  assert.equal(v, null);
+});

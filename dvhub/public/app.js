@@ -2420,21 +2420,24 @@ function renderVictronAlarms(va) {
 // Systemhinweise (2026-10-20). Quelle: /api/status.systemWarnings — z. B.
 // „Einspeisegrenze nicht angegeben“, unbekannter Befehl des Direktvermarkters,
 // Speicherplatz. Gelb wie Victron-Warnungen, nur Hinweis (keine Aktion).
-function renderSystemWarnings(list) {
+// severity 'error' (z. B. „Datenbank ohne Kompression“, 23.11.2026): rot und zuerst.
+function renderSystemWarnings(list, doc = document) {
   const id = 'systemWarningsBanner';
-  const existing = document.getElementById(id);
+  const existing = doc.getElementById(id);
   const items = Array.isArray(list) ? list.filter((w) => w && w.message) : [];
   if (!items.length) { if (existing) existing.remove(); return; }
   let banner = existing;
   if (!banner) {
-    banner = document.createElement('div');
+    banner = doc.createElement('div');
     banner.id = id;
-    banner.className = 'victron-alarm-banner warn';
-    document.body.prepend(banner);
+    doc.body.prepend(banner);
   }
-  banner.replaceChildren(...items.map((w) => {
-    const line = document.createElement('div');
-    line.textContent = '⚠️ ' + w.message;
+  const hasError = items.some((w) => w.severity === 'error');
+  banner.className = hasError ? 'victron-alarm-banner alarm' : 'victron-alarm-banner warn';
+  const sorted = [...items.filter((w) => w.severity === 'error'), ...items.filter((w) => w.severity !== 'error')];
+  banner.replaceChildren(...sorted.map((w) => {
+    const line = doc.createElement('div');
+    line.textContent = (w.severity === 'error' ? '\u{1F534} ' : '⚠️ ') + w.message;
     return line;
   }));
 }
@@ -4962,6 +4965,7 @@ const dashboardApi = {
   normalizeChartSelectionIndices,
   resolveMinSocPendingState,
   resolveDvControlIndicators,
+  renderSystemWarnings,
   submitMinSocUpdate
 };
 

@@ -32,7 +32,8 @@ import {
 import { createRuntimeCommandRequest, validateRuntimeCommand } from './runtime-commands.js';
 import {
   buildRuntimeSnapshot,
-  applyRuntimeEosRun
+  applyRuntimeEosRun,
+  applyRuntimeStorage
 } from './runtime-state.js';
 import { RUNTIME_MESSAGE_TYPES, startRuntimeWorker, createRuntimeCommandClient, attachRuntimeCommandServer } from './runtime-worker-protocol.js';
 import { createDirectNotifier, notifyDirectHandler } from './services/notifications/direct-relay.js';
@@ -46,9 +47,12 @@ import { createStorageEfficiencyDaily, loadStorageEfficiency, storageEfficiencyC
 import { createCoverageBackfill } from './services/history-backfill/coverage.js';
 import { createPvAcBackfill } from './services/history-backfill/pv-ac.js';
 import { createLogRetention } from './services/log-retention.js';
-import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/db-tuning.js';
+import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax, fileWalOwner } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
 import { createStorageGuard } from './services/storage-guard.js';
+import { readPgDataDirectory } from './services/storage-mounts.js';
+import { startupProfile as storageStartupProfile } from './services/storage-profile.js';
+import { createTelemetryTiers } from './services/telemetry-tiers.js';
 import { createEnergyChartsMarketValueService } from './energy-charts-market-values.js';
 import {
   APPLICABLE_VALUE_TICK_MS,
@@ -799,7 +803,7 @@ function persistConfig(source = 'config_persist') {
 
 let dbPool = null; // raw pg pool — shared between telemetry store and forecast services
 
-async function tuneDatabase(dbConfig) {
+async function tuneDatabase(dbConfig, storageProfile = null) {
   const adminUser = process.env.DVHUB_DB_ADMIN_USER;
   const adminPassword = process.env.DVHUB_DB_ADMIN_PASSWORD;
   if (!adminUser || !adminPassword || cfg.telemetry?.database?.selfTune === false) {
@@ -809,8 +813,11 @@ async function tuneDatabase(dbConfig) {
   const admin = createPool({ ...dbConfig, user: adminUser, password: adminPassword, name: 'postgres', pool: { min: 0, max: 1 } });
   try {
     const budgetMb = dbBudgetMb({ totalMemBytes: os.totalmem() });
-    const r = await applyDbTuning((q, p) => admin.query(q, p), { budgetMb });
-    state.dbTuning = { applied: true, budgetMb, ...r, at: new Date().toISOString() };
+    // WAL-Grenzen nach Speicherprofil (Speicher-Konzept Schritt 3, S7: im Container per ALTER SYSTEM).
+    const r = await applyDbTuning((q, p) => admin.query(q, p), {
+      budgetMb, storageProfile, walOwner: fileWalOwner(DATA_DIR || '/var/lib/dvhub'),
+    });
+    state.dbTuning = { applied: true, budgetMb, storageProfile: storageProfile?.name || null, ...r, at: new Date().toISOString() };
     if (r.changed.length || r.pendingRestart.length) pushLog('db_tuning', state.dbTuning);
   } finally {
     await admin.end().catch(() => {});
@@ -871,12 +878,21 @@ async function createTelemetryStoreIfEnabled() {
     // Datenbank selbst einstellen (schreibarm + kleiner Speicher-Footprint,
     // services/db-tuning.js) — wo ein Admin-Zugang da ist (Container/balena).
     // Nativ setzt pg-write-tuning.sh dieselben Werte. Blockiert den Start nie.
-    if (IS_RUNTIME_PROCESS) tuneDatabase(dbConfig).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
+    // Speicherprofil (storage-profile.json, Platz-Wache) gilt schon beim Start.
+    const storageProfile = storageStartupProfile(DATA_DIR || '/var/lib/dvhub');
+    if (IS_RUNTIME_PROCESS) tuneDatabase(dbConfig, storageProfile).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
     // Messwerte: Tagesblöcke, Kompression nach 2 Tagen (als Eigentümer, überall).
+    // Ergebnis nicht mehr verschlucken (23.11.2026): „nicht möglich“ oder ein
+    // Fehler führen über die Platz-Wache zum roten Hinweis „Datenbank ohne
+    // Kompression“ (services/storage-guard.js); /api/storage/status zeigt es.
     if (IS_RUNTIME_PROCESS) {
-      tuneTimescale((q, p) => pool.query(q, p))
-        .then((r) => { state.timescaleTuning = r; if (r.changed?.length || r.deferred) pushLog('timescale_tuning', r); })
-        .catch((e) => pushLog('timescale_tuning_error', { error: e.message }, 'warn'));
+      tuneTimescale((q, p) => pool.query(q, p), storageProfile)
+        .then((r) => { state.timescaleTuning = { ...r, at: new Date().toISOString() }; if (r.changed?.length || r.deferred || r.skipped) pushLog('timescale_tuning', r); })
+        .catch((e) => {
+          state.timescaleTuning = { error: e.message, at: new Date().toISOString() };
+          pushLog('timescale_tuning_error', { error: e.message }, 'warn');
+        })
+        .finally(() => { ctx.storageGuard?.checkCompression?.().catch(() => {}); });
     }
     return store;
   } catch (error) {
@@ -924,7 +940,16 @@ function buildCurrentRuntimeSnapshot() {
     historyImport: historyImportManager ? historyImportManager.getStatus() : null,
     vpn: state.vpn,
     eosRun: state.optimizer?.eosRun || null,
-    eosPriceTail: state.optimizer?.eosPriceTail || null
+    eosPriceTail: state.optimizer?.eosPriceTail || null,
+    // Nur der Prozess mit der Platz-Wache meldet ihren Stand (Codex 949b20f2).
+    ...(ctx.storageGuard ? {
+      storage: {
+        status: ctx.storageGuard.status?.() || null,
+        compression: ctx.storageGuard.compressionStatus?.() || null,
+        timescaleTuning: state.timescaleTuning || null,
+        warnings: state.systemWarnings,
+      },
+    } : {})
   });
 }
 
@@ -1116,6 +1141,8 @@ function startDedicatedRuntimeWorker() {
       runtimeWorkerSnapshot = message.snapshot;
       // Laufdauer und Steuerzeitraum des EOS-Plans für /api/eos/plan.
       applyRuntimeEosRun(state, message.snapshot);
+      // Platz-Wache: Status und Hinweise für /api/storage/status und /api/status.
+      applyRuntimeStorage(state, message.snapshot);
       runtimeWorkerStatusPayload = message.status || null;
       runtimeWorkerHeartbeatAt = Date.now();
       return;
@@ -1540,6 +1567,23 @@ ctx.gridShare = createGridShareTracker({
 // Ein Zählschritt je Abfrage, aufgerufen von polling.js vor onPollComplete —
 // der echte onPollComplete kommt erst nach der Datenbank (Befund 7).
 ctx.gridSharePollTick = createGridSharePollTick(ctx);
+// Speicherprofil per Klick (S2 a): die Platz-Wache läuft im Runtime-Prozess.
+ctx.chooseStorageProfile = async (choice) => {
+  if (!IS_RUNTIME_PROCESS) {
+    const r = await runtimeCommandClient.send('storage_profile_choose', { choice });
+    if (!r.ok) return { ok: false, error: r.error || 'runtime_command_failed' };
+    return r.result && typeof r.result === 'object' ? r.result : { ok: false, error: 'runtime_command_failed' };
+  }
+  if (!ctx.storageGuard) return { ok: false, error: 'storage_guard_unavailable' };
+  try {
+    // Speichern + sofort im Status; Umsetzung läuft im Hintergrund (Codex 246e360a:
+    // nicht den Befehlskanal des Workers blockieren).
+    const st = ctx.storageGuard.chooseProfile(choice);
+    return { ok: true, mode: st.mode, base: st.base, profile: ctx.storageGuard.profile(), applying: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+};
 ctx.resetGridShare = async ({ reason = '', actor = null } = {}) => {
   if (IS_RUNTIME_PROCESS) return ctx.gridShare.reset({ reason, actor });
   const r = await runtimeCommandClient.send('grid_share_reset', { reason, actor });
@@ -1558,6 +1602,8 @@ if (PROCESS_ROLE === 'runtime-worker' && typeof process.send === 'function') {
       grid_share_reset: (p) => ctx.gridShare.reset({ reason: p.reason || '', actor: p.actor ?? null }),
       // Direktmeldungen aus dem Web-Prozess (Support-Tunnel, Fern-Support).
       notify_direct: notifyDirectHandler(() => ctx.notificationService),
+      // Speicherprofil per Klick (Einstellungen → Speicher).
+      storage_profile_choose: (p) => ctx.chooseStorageProfile(p.choice),
     },
   });
 }
@@ -1639,10 +1685,12 @@ ctx.feedInLimit = createFeedInLimitArbiter({
 });
 // Feste Einspeisegrenze (60/70 %/eigener Wert/keine — ab Werk nicht angegeben):
 // Quelle 'fixed' im Begrenzer, Regelschleife für SunSpec-Geräte, Überwachung.
-const setSystemWarning = (id, message) => {
+// severity 'error' → roter Hinweis im Leitstand (sonst gelb).
+const setSystemWarning = (id, message, severity) => {
   const i = state.systemWarnings.findIndex((w) => w.id === id);
   if (message == null) { if (i >= 0) state.systemWarnings.splice(i, 1); return; }
-  if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
+  const w = severity === 'error' ? { id, message, severity } : { id, message };
+  if (i >= 0) state.systemWarnings[i] = w; else state.systemWarnings.push(w);
 };
 // T-0099 / Fable R2 P2-7: einen aktiven Not-Halt laden, BEVOR der erste Dienst
 // startet — hier, sobald setSystemWarning steht. Vorher lag das Laden hinter
@@ -2691,7 +2739,15 @@ const telemetryReady = (async () => {
   // Created in every process so the routes can reach it, but the timer runs
   // ONLY in the web/monolith process (where the run-now/status routes live) so
   // a future web+runtime-worker split can't double-run the backup.
-  ctx.dbBackupScheduler = createDbBackupScheduler({ getCfg: ctx.getCfg, pushLog: ctx.pushLog });
+  ctx.dbBackupScheduler = createDbBackupScheduler({
+    getCfg: ctx.getCfg, pushLog: ctx.pushLog,
+    // Platzprüfung und Profilgrenze (Speicher-Konzept Schritt 6): Stand der Platz-Wache,
+    // im getrennten Betrieb aus dem Runtime-Schnappschuss.
+    // Noch nicht gemessen (erste 5 min nach dem Start): jetzt messen (Codex 2739f099).
+    getStorage: async () => (ctx.storageGuard
+      ? (ctx.storageGuard.status?.() || await ctx.storageGuard.check())
+      : (state.storageRuntime?.status || null)),
+  });
   if (IS_WEB_PROCESS) ctx.dbBackupScheduler.start();
   await refreshTelemetryStatus();
   if (IS_RUNTIME_PROCESS) {
@@ -2784,6 +2840,8 @@ const telemetryReady = (async () => {
     // Start; je Lauf höchstens 5 min Arbeit.
     const logRetention = createLogRetention({
       getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
+      // S5 c: bei „wenig“/„kritisch“ gilt „Vollständig“ vorübergehend als Standard.
+      getStorageLevel: () => ctx.storageGuard?.status?.()?.level || null,
       // Fehler, die das Installateur-Portal quittiert hat, dürfen lokal früher weg.
       getErrorAckId: () => ctx.installerPortalClient?.errorAckId?.() ?? null,
     });
@@ -2795,17 +2853,63 @@ const telemetryReady = (async () => {
       if (hm === '03:40') runLogRetention();
     };
     setInterval(scheduleNightly, 60 * 1000).unref();
+    // Datenstufen 1 min / 15 min für ALLE Reihen (Christin 23.11.2026, S3 a+c;
+    // services/telemetry-tiers.js): alle 5 min verdichten bis „jetzt − 30 min“,
+    // je Lauf höchstens 60 s — die Rückfüllung alter Rohwerte verteilt sich so
+    // über viele Läufe. ctx.telemetryTiers.aggregatedUntil() sagt der
+    // Aufbewahrung, bis wohin Rohwerte gelöscht werden dürfen.
+    ctx.telemetryTiers = createTelemetryTiers({
+      getDb: () => ctx.db, pushLog,
+      // Bei „kritisch“ ruht die Rückfüllung (sie schriebe den letzten Platz voll);
+      // den nächsten zu löschenden Zeitraum verdichtet die Platz-Wache selbst.
+      isPaused: () => ctx.storageGuard?.status?.()?.level === 'kritisch' || !!ctx.storageGuard?.isCritical?.(),
+    });
+    ctx.telemetryTiers.start();
     // Platz-Wache (kleine eMMC/SD): früher komprimieren, im Notfall älteste
     // Rohwerte entfernen — 15-min-Werte und die letzten 30 Tage bleiben.
+    // Dazu der rote Hinweis „Datenbank ohne Kompression“ (23.11.2026).
     ctx.storageGuard = createStorageGuard({
       getDb: () => ctx.db,
       getDataDir: () => DATA_DIR || '/var/lib/dvhub',
       pushLog,
-      setWarning: (id, message) => {
-        const i = state.systemWarnings.findIndex((w) => w.id === id);
-        if (message == null) { if (i >= 0) state.systemWarnings.splice(i, 1); return; }
-        if (i >= 0) state.systemWarnings[i] = { id, message }; else state.systemWarnings.push({ id, message });
+      setWarning: setSystemWarning,
+      getTuning: () => state.timescaleTuning || null,
+      isContainer: () => process.env.DVHUB_RUNTIME === 'container',
+      // Speicherprofil (Schritt 3): beim Wechsel Blöcke/Kompression und WAL umstellen.
+      initialProfile: storageStartupProfile(DATA_DIR || '/var/lib/dvhub').name,
+      onProfileChange: async (profile) => {
+        const pool = ctx.db;
+        if (pool && typeof pool.query === 'function') {
+          try {
+            const r = await tuneTimescale((q, p) => pool.query(q, p), profile);
+            state.timescaleTuning = { ...r, at: new Date().toISOString() };
+            pushLog('timescale_tuning', r);
+          } catch (e) {
+            state.timescaleTuning = { error: e.message, at: new Date().toISOString() };
+            pushLog('timescale_tuning_error', { error: e.message }, 'warn');
+          }
+        }
+        await tuneDatabase(cfg.telemetry?.database || {}, profile).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
       },
+      // Notfall-Pfad: ältesten Zeitraum erst verdichten, dann löschen (E2E kleine Platte S4).
+      aggregateRange: (fromMs, toMs) => ctx.telemetryTiers.aggregateRange(fromMs, toMs),
+      // S11 a: Push ab „wenig“ (Portal über storage_space_error im Audit-Log).
+      notify: (msg) => ctx.notifyDirect(msg),
+      // „wenig“/„kritisch“: Log-Aufbewahrung sofort laufen lassen (S5 c, „Vollständig“ ruht dann).
+      onStageChange: (level) => { if (level === 'wenig' || level === 'kritisch') runLogRetention(); },
+      // Nativ: Platte der PostgreSQL-Daten (sudo -u postgres psql, install.sh-Regel), stündlich neu gefragt.
+      getPgDataDir: (() => {
+        let cached = { at: 0, dir: null };
+        return async () => {
+          if (Date.now() - cached.at < 3600_000) return cached.dir;
+          const db = cfg.telemetry?.database || {};
+          // Nur eine lokale Datenbank liegt auf einer Platte dieser Box.
+          const local = !db.host || ['localhost', '127.0.0.1', '::1'].includes(String(db.host)) || String(db.host).startsWith('/');
+          const dir = local ? await readPgDataDirectory({ database: db }) : null;
+          cached = { at: Date.now(), dir };
+          return dir;
+        };
+      })(),
     });
     ctx.storageGuard.start();
     setInterval(runInverterEfficiencyDaily, 60 * 60 * 1000).unref();

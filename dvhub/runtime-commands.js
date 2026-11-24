@@ -3,6 +3,7 @@ let nextRequestId = 1;
 const CONTROL_TARGETS = new Set(['gridSetpointW', 'chargeCurrentA', 'minSocPct', 'feedExcessDcPv', 'maxDischargeW']);
 const HISTORY_BACKFILL_MODES = new Set(['gap', 'full']);
 const NOTIFY_LEVELS = new Set(['debug', 'info', 'warning', 'warn', 'error', 'critical']);
+export const STORAGE_PROFILE_CHOICES = new Set(['auto', 'gross', 'mittel', 'klein', 'winzig']);
 
 function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -79,6 +80,15 @@ export function validateRuntimeCommand(command) {
     }
     if (payload.level != null && !NOTIFY_LEVELS.has(String(payload.level))) {
       return { ok: false, error: 'notify_direct level unknown' };
+    }
+    return { ok: true, error: null };
+  }
+
+  // Speicherprofil per Klick (Einstellungen → Speicher): die Platz-Wache läuft
+  // im Runtime-Prozess (Speicher-Konzept Schritt 4, S2 a).
+  if (type === 'storage_profile_choose') {
+    if (!STORAGE_PROFILE_CHOICES.has(String(payload.choice || ''))) {
+      return { ok: false, error: 'storage_profile_choose choice must be auto, gross, mittel, klein or winzig' };
     }
     return { ok: true, error: null };
   }

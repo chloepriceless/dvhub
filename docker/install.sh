@@ -9,6 +9,10 @@
 #   --no-eos         ohne EOS-Optimierer (kleine Boxen)
 #   --port <port>    Webport von DVhub (Standard: 8080)
 #
+# Nach einem erfolgreichen Update entfernt der Installer die alten, nicht mehr
+# benannten Images dieser Suite (DVHUB_KEEP_OLD_IMAGES=1 oder eine Datei
+# .keep-old-images im Ordner schaltet das ab).
+#
 # Idempotent: ein zweiter Lauf im selben Ordner behält .env (Passwörter!) und
 # die Daten; er holt compose.yml neu und aktualisiert die Images.
 set -eu
@@ -25,7 +29,7 @@ while [ $# -gt 0 ]; do
     --tag) TAG="$2"; shift 2 ;;
     --no-eos) NO_EOS=1; shift ;;
     --port) PORT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,15p' "$0" 2>/dev/null || true; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0" 2>/dev/null || true; exit 0 ;;
     *) echo "Unbekannte Option: $1" >&2; exit 2 ;;
   esac
 done
@@ -126,6 +130,11 @@ fi
 [ -n "$PORT" ] && setenv DVHUB_HTTP_PORT "$PORT"
 [ "$NO_EOS" = 1 ] && setenv COMPOSE_PROFILES ""
 
+# Images der laufenden Suite vor dem Update merken: nach einem erfolgreichen
+# Update werden sie entfernt, wenn sie keinen Namen mehr haben (S9 b,
+# Speicher-Konzept 23.11.2026 — auf Prod lagen 13,8 GB alte Images).
+OLD_IMAGES="$(docker compose images -q 2>/dev/null | sort -u || true)"
+
 say "Lade Images (DVhub, TimescaleDB$( [ "$NO_EOS" = 1 ] || echo ', EOS'))"
 docker compose pull
 say "Starte"
@@ -141,6 +150,20 @@ while [ $i -lt 60 ]; do
   i=$((i + 1)); sleep 3
 done
 [ "${st:-}" = healthy ] || die "DVhub ist nicht gesund geworden — Logs: docker compose -f $(pwd)/compose.yml logs dvhub"
+
+# Alte Images der Suite aufräumen — nur wenn DVhub gesund läuft (sonst bleibt
+# der Rückweg), nur die vorher von dieser Suite benutzten, nur ohne Namen
+# (ein Tag wie :test-4 bleibt) und nie eines, das noch läuft (kein -f).
+# Abschalten: DVHUB_KEEP_OLD_IMAGES=1 oder Datei .keep-old-images im Ordner.
+if [ "${DVHUB_KEEP_OLD_IMAGES:-0}" != 1 ] && [ ! -e .keep-old-images ] && [ -n "$OLD_IMAGES" ]; then
+  NOW_IMAGES="$(docker compose images -q 2>/dev/null | sort -u || true)"
+  for img in $OLD_IMAGES; do
+    case " $(echo $NOW_IMAGES) " in *" $img "*) continue ;; esac
+    tags="$(docker image inspect -f '{{len .RepoTags}}' "$img" 2>/dev/null || echo x)"
+    [ "$tags" = 0 ] || continue
+    if docker image rm "$img" >/dev/null 2>&1; then say "Altes Image entfernt: $img"; fi
+  done
+fi
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 say "Fertig. DVhub läuft: http://${IP:-<host>}:${HTTP_PORT:-8080}"

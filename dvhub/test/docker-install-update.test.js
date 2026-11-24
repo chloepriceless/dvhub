@@ -117,3 +117,54 @@ describe('docker/install.sh als Update', () => {
     } finally { fs.rmSync(r.dir, { recursive: true, force: true }); }
   });
 });
+
+// Speicher-Konzept S9 b (Christin 23.11.2026): alte, unbenannte Images der Suite nach dem Update entfernen.
+function imageRig({ keep = false, healthy = true } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dvhub-dimg-'));
+  const bin = path.join(dir, 'bin'); const inst = path.join(dir, 'inst');
+  fs.mkdirSync(bin); fs.mkdirSync(inst);
+  fs.writeFileSync(path.join(inst, '.env'), 'DB_ADMIN_PASSWORD=a\nDVHUB_DB_PASSWORD=b\n');
+  if (keep) fs.writeFileSync(path.join(inst, '.keep-old-images'), '');
+  const log = path.join(dir, 'docker.log'); const pulled = path.join(dir, 'pulled');
+  // vor dem Pull laufen alt1 (jetzt ohne Namen), alt2 (behält einen Tag) und db1 (bleibt in Gebrauch).
+  fs.writeFileSync(path.join(bin, 'docker'), `#!/usr/bin/env bash
+echo "docker $*" >> ${log}
+case "$*" in
+  "compose version --short") echo "2.29.1" ;;
+  "compose pull") : > ${pulled} ;;
+  "compose images -q") if [[ -f ${pulled} ]]; then printf 'neu1\\ndb1\\n'; else printf 'alt1\\nalt2\\ndb1\\n'; fi ;;
+  "compose ps -q dvhub") echo "cid1" ;;
+  "image inspect -f {{len .RepoTags}} alt1") echo 0 ;;
+  "image inspect -f {{len .RepoTags}} alt2") echo 1 ;;
+  "inspect --format {{.State.Health.Status}} cid1") echo ${healthy ? 'healthy' : 'starting'} ;;
+esac
+exit 0
+`);
+  fs.chmodSync(path.join(bin, 'docker'), 0o755);
+  const run = (env = {}) => spawnSync('bash', [path.join(REPO, 'docker', 'install.sh'), '--dir', inst], {
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, DVHUB_REPO_RAW: `file://${REPO}`, ...env }, encoding: 'utf8', timeout: 20_000,
+  });
+  const removed = () => fs.readFileSync(log, 'utf8').split('\n').filter((l) => l.startsWith('docker image rm')).map((l) => l.split(' ').pop());
+  return { dir, run, removed };
+}
+
+describe('docker/install.sh: alte Images aufräumen (S9 b)', () => {
+  it('nach gesundem Update: nur das alte, unbenannte Image der Suite', () => {
+    const r = imageRig();
+    try {
+      const out = r.run();
+      assert.equal(out.status, 0, out.stderr + out.stdout);
+      assert.deepEqual(r.removed(), ['alt1'], 'alt2 hat noch einen Namen, db1 läuft noch');
+      assert.match(out.stdout, /Altes Image entfernt: alt1/);
+    } finally { fs.rmSync(r.dir, { recursive: true, force: true }); }
+  });
+  it('abschaltbar (Datei oder Umgebungsvariable)', () => {
+    for (const [opts, env] of [[{ keep: true }, {}], [{}, { DVHUB_KEEP_OLD_IMAGES: '1' }]]) {
+      const r = imageRig(opts);
+      try {
+        assert.equal(r.run(env).status, 0);
+        assert.deepEqual(r.removed(), []);
+      } finally { fs.rmSync(r.dir, { recursive: true, force: true }); }
+    }
+  });
+});

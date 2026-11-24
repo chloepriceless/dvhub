@@ -18,6 +18,39 @@ import { smbUpload, smbListBackups, smbDelete } from './smb-target.js';
 
 const TICK_MS = 60_000;
 
+// Speicher-Konzept Schritt 6 (Christin 23.11.2026): vor einem Dump prüfen, ob
+// er auf die Zielplatte passt (Datenbankgröße + 256 MB Luft), und lokale
+// Backups auf der Platte der Datenbank nach Speicherprofil begrenzen
+// (groß 14, mittel 7, klein 3; winzig: kein volles Backup dorthin — Umfang
+// „15-min“ oder ein Netzziel wählen).
+const BACKUP_SPACE_MARGIN_MB = 256;
+const MB = 1048576;
+
+/**
+ * Pure: passt das Backup, und wie viele dürfen bleiben?
+ * @returns {{ ok: boolean, error?: string, keep: number, sameDisk: boolean }}
+ */
+export function backupSpacePlan({ freeMb, dbMb, sameDisk, profile, scope, retentionCount }) {
+  // Ungültige Anzahl bleibt ungültig: selectBackupsToDelete löscht dann nichts (Schutz).
+  const keepCfg = Number(retentionCount);
+  let keep = keepCfg;
+  // Ungültige Anzahl bleibt ungültig (nichts löschen), auch mit Profil-Grenze (Codex 2739f099).
+  const cap = (n) => (Number.isFinite(keepCfg) && keepCfg > 0 ? Math.min(keepCfg, n) : keepCfg);
+  if (sameDisk && profile && Number.isFinite(profile.backupKeepMax)) {
+    if (profile.backupKeepMax === 0) {
+      if (scope !== 'energy15m') {
+        return { ok: false, sameDisk, keep: 0, error: `Speicherprofil „${profile.label || profile.name}“: kein volles Backup auf die Platte der Datenbank — Umfang „15-min“ oder ein Netzziel wählen` };
+      }
+      keep = cap(3);
+    } else keep = cap(profile.backupKeepMax);
+  }
+  const need = (scope === 'energy15m' ? 0 : (Number(dbMb) || 0)) + BACKUP_SPACE_MARGIN_MB;
+  if (Number.isFinite(freeMb) && freeMb < need) {
+    return { ok: false, sameDisk, keep, error: `zu wenig Platz am Ziel: ${Math.round(freeMb)} MB frei, das Backup braucht etwa ${Math.round(need)} MB` };
+  }
+  return { ok: true, sameDisk, keep };
+}
+
 /**
  * Pure: is a daily backup due at `now` given the config and the last-run day?
  * Fires once when the local clock reaches HH:MM and we haven't already run today.
@@ -39,7 +72,11 @@ export function backupDueDay(cfg, now, lastRunDay) {
   return null;
 }
 
-export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Date(), spawnFn } = {}) {
+export function createDbBackupScheduler({
+  getCfg, pushLog, nowFn = () => new Date(), spawnFn,
+  // Stand der Platz-Wache (storage-guard status: dbMb, mounts, profile) — optional.
+  getStorage = null, statfs = (p) => fs.statfsSync(p), stat = (p) => fs.statSync(p),
+} = {}) {
   let timer = null;
   let lastRunDay = null;
   let running = false;
@@ -70,12 +107,41 @@ export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Dat
     return { ok: false, error: error || 'backup failed' };
   }
 
+  async function planFor(dir, scope, b, { network = false } = {}) {
+    let st;
+    if (typeof getStorage === 'function') {
+      try { st = (await getStorage()) || null; } catch { st = null; }
+    } else st = {};   // ohne Platz-Wache (alte Aufrufer): nur der freie Platz am Ziel zählt
+    // Noch keine Messung (kurz nach dem Start, getrennter Betrieb): nicht ohne
+    // Prüfung durchwinken (Codex 2739f099).
+    if (!st) return { ok: false, deferred: true, keep: Number(b.retentionCount), sameDisk: false, error: 'Speicher noch nicht gemessen (DVhub startet gerade) — Backup bitte in einigen Minuten erneut starten' };
+    let freeMb = NaN;
+    try { const s = statfs(dir); freeMb = (Number(s.bavail) * Number(s.bsize)) / MB; } catch { /* unbekannt → nicht blockieren */ }
+    let sameDisk = false;
+    if (!network) {
+      const dbMount = (st?.mounts || []).find((m) => (m.roles || []).includes('db'));
+      // Alle Geräte-Nummern der DB-Platte (Docker overlay2: Container-Wurzel und
+      // Volume sind dieselbe Platte, Codex 2739f099).
+      try {
+        const dev = String(stat(dir).dev);
+        sameDisk = !!dbMount && (String(dbMount.key) === dev || (dbMount.devs || []).map(String).includes(dev));
+      } catch { /* egal */ }
+    }
+    return backupSpacePlan({
+      freeMb, dbMb: st?.dbMb, sameDisk, profile: st?.profile?.values || null, scope,
+      retentionCount: b.retentionCount,
+    });
+  }
+
   // Backup into a local directory (which may itself be an OS-mounted share).
   async function runLocal(cfg, b, scope, fileName, reason, now) {
     const dir = b.destinationDir;
     if (!dir) return { ok: false, error: 'no destinationDir configured' };
     const outFile = path.join(dir, fileName);
     fs.mkdirSync(dir, { recursive: true }); // surfaces a missing mount as a clear error
+    const plan = await planFor(dir, scope, b);
+    if (plan.deferred) return { ok: false, deferred: true, error: plan.error };
+    if (!plan.ok) return fail(scope, reason, now, plan.error);
     const res = await dumpToFile({ scope, database: cfg.telemetry.database, outFile, spawnFn });
     if (!res.ok) {
       try { if (fs.existsSync(outFile)) fs.unlinkSync(outFile); } catch { /* ignore */ }
@@ -83,7 +149,7 @@ export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Dat
     }
     const pruned = [];
     try {
-      const toDelete = selectBackupsToDelete(fs.readdirSync(dir), scope, Number(b.retentionCount));
+      const toDelete = selectBackupsToDelete(fs.readdirSync(dir), scope, plan.keep);
       for (const f of toDelete) { try { fs.unlinkSync(path.join(dir, f)); pruned.push(f); } catch { /* ignore */ } }
     } catch (err) { if (pushLog) pushLog('db_backup_prune_error', { scope, error: err.message }); }
     return ok(scope, reason, now, outFile, pruned);
@@ -97,6 +163,10 @@ export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Dat
     const conn = { host: smb.host, share: smb.share, username: smb.username, password: smb.password, domain: smb.domain };
     const subPath = smb.path || '';
     const tmpFile = path.join(os.tmpdir(), fileName);
+    // Der Dump liegt erst lokal (tmp) — passt er dorthin? Begrenzung der Anzahl gilt fürs Netzziel nicht.
+    const plan = await planFor(os.tmpdir(), scope, b, { network: true });
+    if (plan.deferred) return { ok: false, deferred: true, error: plan.error };
+    if (!plan.ok) return fail(scope, reason, now, plan.error);
     try {
       const dump = await dumpToFile({ scope, database: cfg.telemetry.database, outFile: tmpFile, spawnFn });
       if (!dump.ok) return fail(scope, reason, now, dump.stderr || 'pg_dump failed');
@@ -136,10 +206,25 @@ export function createDbBackupScheduler({ getCfg, pushLog, nowFn = () => new Dat
     }
   }
 
+  // Geplanter Lauf, der kurz nach dem Start noch keine Messung hatte: am selben
+  // Tag jede Minute erneut, bis gemessen ist (Codex 3e530edf) — sonst fiele er aus.
+  let deferredDay = null;
+  async function runScheduled(day) {
+    const r = await runNow('scheduled');
+    deferredDay = r && r.deferred ? day : null;
+    if (r && r.deferred && pushLog) pushLog('db_backup_deferred', { reason: r.error });
+  }
   function tick() {
     try {
-      const due = backupDueDay(getCfg(), nowFn(), lastRunDay);
-      if (due) { lastRunDay = due; runNow('scheduled'); }
+      const now = nowFn();
+      const due = backupDueDay(getCfg(), now, lastRunDay);
+      if (due) { lastRunDay = due; runScheduled(due).catch(() => {}); return; }
+      if (deferredDay) {
+        // Nur heute und nur, solange der Zeitplan noch eingeschaltet ist (Codex 20cce4b0).
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        if (deferredDay !== today || !getCfg()?.dbBackup?.enabled) deferredDay = null;
+        else if (deferredDay === lastRunDay && !running) runScheduled(deferredDay).catch(() => {});
+      }
     } catch (err) {
       if (pushLog) pushLog('db_backup_tick_error', { error: err.message });
     }

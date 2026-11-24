@@ -35,6 +35,23 @@ CONF_DIR="$(find "${PG_ETC:-/etc/postgresql}" -mindepth 3 -maxdepth 3 -type d -n
 DROPIN="$CONF_DIR/dvhub-writes.conf"
 MEM_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
 BUDGET_MB=$(( MEM_KB / 1024 / 4 ))
+# Speicherprofil (Speicher-Konzept 23.11.2026, S7 a): DVhub schreibt es nach
+# ${DATA_DIR}/storage-profile.json. Gelesen wird NUR das Feld "effective" und nur
+# ein bekannter Name; kein Verweis (die Datei gehört dem Dienstbenutzer).
+# Kleine Platten halten weniger Schreibpuffer (pg_wal) vor. „groß“ bzw. ohne
+# Datei: wie bisher (max_wal_size bleibt beim PostgreSQL-Standard 1 GB).
+SP_FILE="${DATA_DIR:-/var/lib/dvhub}/storage-profile.json"
+SP=""
+if [[ -f "$SP_FILE" && ! -L "$SP_FILE" ]]; then
+  SP="$(grep -o '"effective"[[:space:]]*:[[:space:]]*"[a-z]*"' "$SP_FILE" 2>/dev/null | head -n1 | sed 's/.*"\([a-z]*\)"$/\1/' || true)"
+fi
+MAXWAL=""; MINWAL=64MB
+case "$SP" in
+  mittel) MAXWAL=512MB ;;
+  klein)  MAXWAL=256MB ;;
+  winzig) MAXWAL=128MB; MINWAL=32MB ;;
+  *)      SP="" ;;
+esac
 if (( BUDGET_MB > 0 && BUDGET_MB < 192 )); then
   PROFILE="winzig"; SB=32MB; WM=1MB; ECS=64MB; MC=15; MWP=6; AVW=1; TSW=2
 else
@@ -46,7 +63,7 @@ synchronous_commit = off
 wal_writer_delay = 1s
 checkpoint_timeout = 15min
 wal_compression = on
-min_wal_size = 64MB
+min_wal_size = $MINWAL
 shared_buffers = $SB
 work_mem = $WM
 maintenance_work_mem = 16MB
@@ -57,6 +74,10 @@ autovacuum_max_workers = $AVW
 max_parallel_workers_per_gather = 0
 max_parallel_maintenance_workers = 0
 "
+if [[ -n "$MAXWAL" ]]; then
+  WANT="${WANT}max_wal_size = $MAXWAL
+"
+fi
 # timescaledb.* ist ohne geladene Extension ein unbekannter Schlüssel — dann
 # weglassen. Die Entscheidung fällt VOR dem Vergleich (Review 25.10.2026): früher
 # wurde die Zeile erst nach dem Schreiben entfernt, die Datei glich nie dem Soll,
@@ -83,5 +104,5 @@ if [[ "$old_restart" != "$new_restart" ]]; then
   echo "  PostgreSQL: Profil $PROFILE gesetzt, neu gestartet ($DROPIN)"
 else
   systemctl reload postgresql 2>/dev/null || systemctl reload 'postgresql@*' 2>/dev/null || true
-  echo "  PostgreSQL: Profil $PROFILE gesetzt ($DROPIN)"
+  echo "  PostgreSQL: Profil $PROFILE${SP:+, Speicherprofil $SP} gesetzt ($DROPIN)"
 fi
