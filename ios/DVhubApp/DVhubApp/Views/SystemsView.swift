@@ -22,8 +22,8 @@ struct SystemsView: View {
                                 Spacer()
                                 if sys.id == model.selectedId { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
                             }
-                            Text(sys.canControl ? "Anzeigen und steuern" : "Nur anzeigen").font(.footnote).foregroundStyle(.secondary)
-                            Text(routeText(sys) + " · Kennung " + String(sys.boxId.prefix(6))).font(.caption).foregroundStyle(.secondary)
+                            Text(sys.canControl ? String(localized: "Anzeigen und steuern") : String(localized: "Nur anzeigen")).font(.footnote).foregroundStyle(.secondary)
+                            Text("\(routeText(sys)) · Kennung \(String(sys.boxId.prefix(6)))").font(.caption).foregroundStyle(.secondary)
                             if let c = model.controllers[sys.id], sys.id == model.selectedId { ConnectionBadge(controller: c) }
                         }
                     }
@@ -40,6 +40,7 @@ struct SystemsView: View {
             }
         }
         .navigationTitle("Anlagen")
+        .auroraList()
         .confirmationDialog("Anlage von diesem Gerät entfernen?", isPresented: Binding(get: { removeId != nil }, set: { if !$0 { removeId = nil } }), titleVisibility: .visible) {
             Button("Entfernen", role: .destructive) { if let id = removeId { model.remove(id) }; removeId = nil }
         }
@@ -47,8 +48,8 @@ struct SystemsView: View {
 
     private func routeText(_ s: LinkCredentials) -> String {
         var parts: [String] = []
-        if !s.lan.isEmpty { parts.append("Heimnetz") }
-        if s.relay != nil { parts.append("Relay") }
-        return "Wege: " + (parts.isEmpty ? "keine" : parts.joined(separator: ", "))
+        if !s.lan.isEmpty { parts.append(String(localized: "Heimnetz")) }
+        if s.relay != nil { parts.append(String(localized: "Relay")) }
+        return parts.isEmpty ? String(localized: "Wege: keine") : String(localized: "Wege: \(parts.formatted(.list(type: .and, width: .narrow).locale(Format.locale)))")
     }
 }

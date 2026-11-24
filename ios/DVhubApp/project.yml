@@ -2,9 +2,14 @@ name: DVhubApp
 options:
   bundleIdPrefix: de.dvhub
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "18.0"
   createIntermediateGroups: true
   developmentLanguage: de
+settings:
+  base:
+    # Texte: String-Kataloge (Shared/Localizable.xcstrings, …), Ausgangssprache Deutsch.
+    SWIFT_EMIT_LOC_STRINGS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
 configFiles:
   Debug: Config/App.xcconfig
   Release: Config/App.xcconfig
@@ -17,8 +22,10 @@ targets:
     platform: iOS
     sources:
       - DVhubApp
+      - Shared
     dependencies:
       - package: DVhubLink
+      - target: DVhubWidgets
     info:
       path: DVhubApp/Info.plist
       properties:
@@ -26,13 +33,18 @@ targets:
         CFBundleDevelopmentRegion: de
         CFBundleLocalizations:
           - de
+          - en
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        # Alle vier Ausrichtungen: Bedingung dafür, dass das System die Szene frei
+        # in der Größe ändert (TN3192) — auf dem iPhone Duo füllt die App sonst
+        # das Innendisplay nicht, sondern wird als iPhone-Fläche skaliert.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         UISupportedInterfaceOrientations~ipad:
@@ -43,6 +55,15 @@ targets:
         NSCameraUsageDescription: Die Kamera liest den Kopplungs-QR-Code aus der DVhub-Oberfläche.
         NSLocalNetworkUsageDescription: DVhub verbindet sich im Heimnetz direkt mit deiner Anlage.
         NSFaceIDUsageDescription: Face ID bestätigt Schaltbefehle an deine Anlage.
+        DVhubAppGroup: $(DVHUB_APP_GROUP)
+        DVhubKeychainGroup: $(DVHUB_KEYCHAIN_GROUP)
+        # Live-Aktivität „Not-Halt aktiv“ (ActivityKit, ohne Push).
+        NSSupportsLiveActivities: true
+        # Hintergrundabruf (BGAppRefreshTask): hält Widgets und Live-Aktivität aktuell.
+        UIBackgroundModes:
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - $(DVHUB_BUNDLE_ID).refresh
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         CFBundleURLTypes:
@@ -54,11 +75,47 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(DVHUB_BUNDLE_ID)
         PRODUCT_NAME: DVhub
         CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: $(DVHUB_APP_ENTITLEMENTS)
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
+  DVhubWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - DVhubWidgets
+      - Shared
+    dependencies:
+      - package: DVhubLink
+    info:
+      path: DVhubWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: DVhub
+        CFBundleDevelopmentRegion: de
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        DVhubAppGroup: $(DVHUB_APP_GROUP)
+        DVhubKeychainGroup: $(DVHUB_KEYCHAIN_GROUP)
+        CFBundleLocalizations:
+          - de
+          - en
+        # Selbstabruf des Widgets im Heimnetz (ws:// zur Box, auch über Hostnamen).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DVHUB_BUNDLE_ID).widgets
+        PRODUCT_NAME: DVhubWidgets
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: $(DVHUB_WIDGET_ENTITLEMENTS)
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        SKIP_INSTALL: YES
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
   DVhubAppUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -82,5 +139,8 @@ schemes:
       config: Debug
     test:
       config: Debug
+      # Die Oberflächentests suchen deutsche Beschriftungen.
+      language: de
+      region: DE
       targets:
         - DVhubAppUITests

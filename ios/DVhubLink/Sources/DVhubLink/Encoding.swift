@@ -26,24 +26,24 @@ public enum LinkError: Error, Equatable, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .badBase64URL: return "Ungültige Kodierung"
-        case .badLength: return "Falsche Länge"
-        case .badPublicKey: return "Ungültiger Schlüssel"
-        case .badEphemeral: return "Ungültiger Sitzungsschlüssel"
-        case .decryptFailed: return "Entschlüsselung fehlgeschlagen"
-        case .fieldTooLong: return "Feld zu lang"
-        case .handshake(let s): return "Handshake: \(s)"
-        case .boxSignatureInvalid: return "Die Box hat sich nicht korrekt ausgewiesen"
-        case .notAPairingCode: return "Kein DVhub-Kopplungscode"
-        case .versionUnsupported: return "Protokollversion wird nicht unterstützt"
-        case .closed(let code, let reason): return reason.isEmpty ? "Verbindung geschlossen (\(code))" : "Verbindung geschlossen: \(reason) (\(code))"
-        case .timeout: return "Zeitüberschreitung"
-        case .protocolError(let s): return "Protokollfehler: \(s)"
-        case .relay(let s): return "Relay: \(s)"
-        case .noRoute: return "Kein Weg zur Anlage"
-        case .boxOffline: return "Anlage nicht verbunden"
-        case .pairingDenied: return "Kopplung abgelehnt"
-        case .keychain(let s): return "Schlüsselbund-Fehler \(s)"
+        case .badBase64URL: return L("Ungültige Kodierung")
+        case .badLength: return L("Falsche Länge")
+        case .badPublicKey: return L("Ungültiger Schlüssel")
+        case .badEphemeral: return L("Ungültiger Sitzungsschlüssel")
+        case .decryptFailed: return L("Entschlüsselung fehlgeschlagen")
+        case .fieldTooLong: return L("Feld zu lang")
+        case .handshake(let s): return L("Handshake: \(s)")
+        case .boxSignatureInvalid: return L("Die Box hat sich nicht korrekt ausgewiesen")
+        case .notAPairingCode: return L("Kein DVhub-Kopplungscode")
+        case .versionUnsupported: return L("Protokollversion wird nicht unterstützt")
+        case .closed(let code, let reason): return reason.isEmpty ? L("Verbindung geschlossen (\(String(code)))") : L("Verbindung geschlossen: \(reason) (\(String(code)))")
+        case .timeout: return L("Zeitüberschreitung")
+        case .protocolError(let s): return L("Protokollfehler: \(s)")
+        case .relay(let s): return L("Relay: \(s)")
+        case .noRoute: return L("Kein Weg zur Anlage")
+        case .boxOffline: return L("Anlage nicht verbunden")
+        case .pairingDenied: return L("Kopplung abgelehnt")
+        case .keychain(let s): return L("Schlüsselbund-Fehler \(String(s))")
         }
     }
 }
@@ -107,3 +107,10 @@ public func sha256(_ data: Data) -> Data { Data(SHA256.hash(data: data)) }
 extension Data {
     var hex: String { map { String(format: "%02x", $0) }.joined() }
 }
+
+/// Bündel, aus dem `L` liest. Nur Tests stellen es um, damit der geprüfte
+/// Wortlaut nicht von der Sprache des Rechners abhängt.
+nonisolated(unsafe) var catalogBundle: Bundle = .module
+
+/// Text aus dem String-Katalog dieses Pakets (Ausgangssprache Deutsch).
+func L(_ key: String.LocalizationValue) -> String { String(localized: key, bundle: catalogBundle) }

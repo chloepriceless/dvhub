@@ -34,6 +34,21 @@ final class SystemController {
     var perms: [String] { credentials.perms }
 
     var onCredentialsChanged: ((LinkCredentials) -> Void)?
+    /// Neuer Stand (live oder Briefkasten) — für die Widgets.
+    var onStatus: ((LiveStatus, Date) -> Void)?
+
+    // Zusatzdaten für Detailansichten und Verlaufslinien. Sie leben hier und
+    // nicht in den Ansichten: Auf-/Zuklappen baut nur die Oberfläche neu.
+    /// Voller Status (/api/status) für Detailwerte: Phasen, Flüsse, Zähler.
+    private(set) var detail: StatusDetail?
+    private(set) var detailAt: Date?
+    /// Rohantwort von /api/status — Ansichten lesen daraus nur benannte Felder.
+    private(set) var statusRaw: JSONValue?
+    private var detailLoading = false
+    /// Heutiger Verlauf (5-Minuten-Mittel) für die Linien in den Karten.
+    private(set) var today: [SeriesPoint] = []
+    private(set) var todayAt: Date?
+    private var todayLoading = false
 
     private var connection: DeviceConnection?
     private var loop: Task<Void, Never>?
@@ -105,7 +120,7 @@ final class SystemController {
         while !Task.isCancelled {
             state = .connecting
             var conn: DeviceConnection?
-            var lastError = "Keine Verbindung"
+            var lastError = String(localized: "Keine Verbindung")
             do {
                 let s = try signer()
                 if let up = pendingUpgrade {
@@ -183,6 +198,7 @@ final class SystemController {
                 if let s = LiveStatus.from(status) {
                     live = s
                     liveAt = parseISODate(ts) ?? Date()
+                    onStatus?(s, liveAt ?? Date())
                 }
             case .boxOffline:
                 state = .boxOffline(kind)
@@ -239,6 +255,7 @@ final class SystemController {
         // Jeden geänderten Stand speichern — auch einen reinen `latest` ohne
         // Ereignisse, damit er einen Neustart ohne Verbindung übersteht (Codex R4).
         let saved = changed ? saveMailboxState() : true
+        if changed, !preferLive, let s = mailboxStatus, let at = mailboxAt { onStatus?(s, at) }
         // Erst quittieren, wenn übernommen und gespeichert ist.
         guard !ack.isEmpty, saved else { return }
         try? await conn.ackMailbox(ack)
@@ -249,4 +266,38 @@ final class SystemController {
         guard let connection, isOnline else { throw LinkError.boxOffline }
         return try await connection.request(method, path, body: body)
     }
+
+    // MARK: Zusatzdaten
+
+    /// Vollen Status holen, wenn der letzte älter als `maxAge` Sekunden ist.
+    func refreshDetail(maxAge: TimeInterval = 4) async {
+        guard isOnline, !detailLoading else { return }
+        if let detailAt, Date().timeIntervalSince(detailAt) < maxAge { return }
+        detailLoading = true
+        defer { detailLoading = false }
+        guard let r = try? await request("GET", "/api/status"), r.status == 200,
+              let d = StatusDetail.from(status: r.body) else { return }
+        detail = d
+        statusRaw = r.body
+        detailAt = Date()
+    }
+
+    /// Heutigen Verlauf holen (höchstens alle `maxAge` Sekunden).
+    func refreshToday(maxAge: TimeInterval = 600) async {
+        guard isOnline, !todayLoading else { return }
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: Date())
+        // Über Mitternacht: alte Linien nicht als „heute“ stehen lassen.
+        if let todayAt, !cal.isDate(todayAt, inSameDayAs: Date()) { today = []; self.todayAt = nil }
+        if let todayAt, Date().timeIntervalSince(todayAt) < maxAge { return }
+        todayLoading = true
+        defer { todayLoading = false }
+        let end = cal.date(byAdding: .day, value: 1, to: start) ?? start
+        if case .success(let pts) = await BoxData.series(self, keys: BoxData.dayKeys, start: start, end: end) {
+            today = pts
+            todayAt = Date()
+        }
+    }
+
+    func todayValues(_ key: String) -> [SeriesPoint] { today.filter { $0.key == key } }
 }

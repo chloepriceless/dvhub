@@ -1,7 +1,20 @@
 // App.xcconfig — hier die eigene Bundle-ID eintragen (kostenloses Apple-Konto:
 // muss weltweit eindeutig sein, z. B. de.<deinname>.dvhub).
 DVHUB_BUNDLE_ID = de.dvhub.app
-MARKETING_VERSION = 0.1.0
-CURRENT_PROJECT_VERSION = 1
+MARKETING_VERSION = 0.3.0
+CURRENT_PROJECT_VERSION = 3
 // Team leer lassen; in Xcode unter Signing & Capabilities das „Personal Team“ wählen.
 DEVELOPMENT_TEAM =
+
+// App-Gruppe für die Widgets: folgt der Bundle-ID. App und Widget-Erweiterung
+// teilen sich darüber den letzten Live-Stand (Shared/WidgetSnapshot.swift).
+DVHUB_APP_GROUP = group.$(DVHUB_BUNDLE_ID)
+// Geteilte Schlüsselbund-Gruppe (Keychain Access Group): Darin liegen die
+// Zugangsdaten zur Anlage, damit auch die Widget-Erweiterung selbst abrufen
+// kann. Folgt ebenfalls der Bundle-ID; das Team-Präfix setzt Xcode beim Signieren.
+DVHUB_KEYCHAIN_GROUP = $(AppIdentifierPrefix)$(DVHUB_BUNDLE_ID).shared
+// Lehnt die Signatur App-Gruppe oder Schlüsselbund-Gruppe ab, beim Bauen leeren:
+//   xcodebuild … DVHUB_APP_ENTITLEMENTS= DVHUB_WIDGET_ENTITLEMENTS= DVHUB_APP_GROUP= DVHUB_KEYCHAIN_GROUP=
+// Die App läuft dann normal weiter, die Widgets zeigen einen Hinweis statt Werten.
+DVHUB_APP_ENTITLEMENTS = Config/DVhubApp.entitlements
+DVHUB_WIDGET_ENTITLEMENTS = Config/DVhubWidgets.entitlements
