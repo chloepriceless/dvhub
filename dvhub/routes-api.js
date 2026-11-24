@@ -70,7 +70,7 @@ import { WALLBOX_TYPES } from './services/wallbox/types.js';
 import { loadCatalog as loadEvccVehicleCatalog, maskVehicleSettings, mergeVehicleSettings, validateVehicleSettings } from './services/vehicle-evcc/index.js';
 import { mobileIntegrationsView } from './services/mobile-link/integrations-view.js';
 import { mobileAutomationConfigView, parseMobileAutomationPatch } from './services/mobile-link/automation-view.js';
-import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost } from './services/pv-strings/index.js';
+import { resolvePvStringSources, resolvePvStringGroups, buildPvnodeCsv, normalizeFroniusHost, buildMpptPvnodeCsv, isMpptModule } from './services/pv-strings/index.js';
 
 // Redigierte Sicht auf config.mqtt für die Integrationsseite (2026-09-14):
 // alles, was der Verbindung-/Einstellungen-Tab anzeigen darf. Passwort nie —
@@ -2012,7 +2012,14 @@ export function createApiRoutes(ctx) {
   // released for the same reason (Christin 2026-10-13): customers never see or
   // store the token (onboarding generates it), so no button in the LAN UI may
   // depend on it. Restore keeps its explicit confirmation in the UI.
-  const BEARER_REQUIRED_ENDPOINTS = new Set();
+  // T-MPPT-TELEMETRY: Der pvnode-Export je MPPT liefert die Erzeugungsreihe
+  // eines einzelnen Strings als Trainings-/Kalibrierdaten fuer einen EXTERNEN
+  // Dienst (pvnode). Das ist ein programmgesteuerter Datenabzug (kein LAN-
+  // Browser-Knopf) — deshalb Bearer-pflichtig aus jeder Quelle, auch im LAN
+  // (wie /api/history/raw/export.csv), statt des blossen LAN-Freibriefs.
+  const BEARER_REQUIRED_ENDPOINTS = new Set([
+    '/api/pv-strings/mppt-export.csv',
+  ]);
 
   // Im Container sinnlos bzw. gefährlich (git/apt/systemd/Host) → 409 mit Hinweis.
   const CONTAINER_REFUSED_ENDPOINTS = new Set([
@@ -4938,6 +4945,24 @@ export function createApiRoutes(ctx) {
         if (cleaned.length !== body.groups.length) return json(res, 400, { ok: false, error: 'invalid group (id a-z0-9_-, not a string id, >= 2 existing members)' });
         ps.groups = cleaned;
       }
+      // T-MPPT-TELEMETRY: Anzeige-Metadaten je MPPT-Modulnummer (Beschriftung,
+      // kWp). Nur bekannte Modulnummern 1..999; Labels auf 80 Zeichen gekappt.
+      if ('mppt' in body) {
+        const m = (body.mppt && typeof body.mppt === 'object') ? body.mppt : {};
+        const labels = {};
+        const kwp = {};
+        for (const [k, v] of Object.entries(m.labels && typeof m.labels === 'object' ? m.labels : {})) {
+          if (!isMpptModule(Number(k))) continue;
+          const label = String(v == null ? '' : v).trim().slice(0, 80);
+          if (label) labels[Number(k)] = label;
+        }
+        for (const [k, v] of Object.entries(m.kwp && typeof m.kwp === 'object' ? m.kwp : {})) {
+          if (!isMpptModule(Number(k))) continue;
+          const val = Number(v);
+          if (Number.isFinite(val) && val > 0) kwp[Number(k)] = val;
+        }
+        ps.mppt = { labels, kwp };
+      }
       next.pvStrings = ps;
       try { ctx.saveAndApplyConfig(next); } catch { return json(res, 500, { ok: false, error: 'save failed' }); }
       pushLog('pv_strings_config_saved', { enabled: ps.enabled === true, sources: (ps.sources || []).length, groups: (ps.groups || []).length }, actorContext(req));
@@ -4969,6 +4994,56 @@ export function createApiRoutes(ctx) {
         res.writeHead(200, {
           'content-type': 'text/csv; charset=utf-8',
           'content-disposition': `attachment; filename="pvnode-${r.source.id}.csv"`,
+          'cache-control': 'no-store'
+        });
+        res.end(csv);
+        return;
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+
+    // --- T-MPPT-TELEMETRY: SunSpec-M160-Per-MPPT-Strings (Leitstand + pvnode) ---
+    // Uebersicht je MPPT-String aus energy_slots_15m (Abdeckung, Tagesertraege),
+    // ergaenzt um die aktuell vom Poller gelesenen Module (state.victron.mppt =
+    // Live-Leistung je String). Nur Tracking/Anzeige → checkAuth (LAN-ok).
+    if (url.pathname === '/api/pv-strings/mppt' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
+      try {
+        const live = Array.isArray(state?.victron?.mppt) ? state.victron.mppt : [];
+        const activeModules = live.map((m) => Number(m?.n)).filter((n) => isMpptModule(n));
+        const liveByN = new Map(live.map((m) => [Number(m?.n), m]));
+        const overview = await ctx.pvStrings.mpptOverview(activeModules);
+        const sources = overview.map((s) => {
+          const lv = liveByN.get(s.n);
+          return { ...s, liveW: lv && Number.isFinite(Number(lv.w)) ? Number(lv.w) : null,
+            liveV: lv && lv.v != null ? Number(lv.v) : null };
+        });
+        return json(res, 200, { ok: true, enabled: activeModules.length > 0, sources });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
+    // pvnode-Export EINER MPPT-Reihe (Erzeugung in W je 15-min-Slot). Bearer-
+    // pflichtig (BEARER_REQUIRED_ENDPOINTS) — externer Datenabzug.
+    if (url.pathname === '/api/pv-strings/mppt-export.csv' && req.method === 'GET') {
+      if (!checkAuth(req, res)) return;
+      if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
+      const n = Number(url.searchParams.get('n'));
+      if (!isMpptModule(n)) return json(res, 400, { ok: false, error: 'n: MPPT-Modulnummer 1..999' });
+      const startRaw = parseIsoOrNull(url.searchParams.get('start'));
+      const endRaw = parseIsoOrNull(url.searchParams.get('end'));
+      if (startRaw === false || endRaw === false) return json(res, 400, { ok: false, error: 'invalid_timestamp' });
+      const end = endRaw || new Date().toISOString();
+      const start = startRaw || new Date(Date.parse(end) - 730 * 86400000).toISOString();
+      try {
+        const r = await ctx.pvStrings.readMpptSeries(n, { start, end });
+        if (!r) return json(res, 400, { ok: false, error: 'n: MPPT-Modulnummer 1..999' });
+        const csv = buildMpptPvnodeCsv(r.rows, { timeZone: getCfg().schedule?.timezone || 'Europe/Berlin' });
+        res.writeHead(200, {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="pvnode-mppt-${n}.csv"`,
           'cache-control': 'no-store'
         });
         res.end(csv);

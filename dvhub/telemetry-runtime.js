@@ -144,6 +144,21 @@ export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, v
   // pvAcKwh aus der Reihe pv_ac_w, die bisher nur der VRM-Import schrieb
   // (24.11.2026). Nur mit AC-PV-Punkten — ohne sie keine Zeile.
   pushSample(rows, 'pv_ac_w', acPvTotalW(victron), 'W', base);
+  // T-MPPT-TELEMETRY: je SunSpec-M160-PV-String eine eigene Leistungsreihe
+  // pv_mppt_<n>_w (polling.js setzt victron.mppt aus dem M160-Block). Wie
+  // pv_total_w werden diese Reihen in energy_slots_15m verdichtet (15-min, kWh)
+  // — die materialisierten Zielreihen erkennt der Store am pv_mppt_-Präfix.
+  // Optionale Zusatzreihen DCV/DCA/DCWH je String nur, wenn das Gerät sie liefert.
+  if (Array.isArray(victron.mppt)) {
+    for (const s of victron.mppt) {
+      const n = Number(s?.n);
+      if (!Number.isInteger(n) || n < 1) continue;
+      pushSample(rows, `pv_mppt_${n}_w`, s.w, 'W', base);
+      pushSample(rows, `pv_mppt_${n}_v`, s.v, 'V', base);
+      pushSample(rows, `pv_mppt_${n}_a`, s.a, 'A', base);
+      pushSample(rows, `pv_mppt_${n}_wh`, s.wh, 'Wh', base);
+    }
+  }
   pushSample(rows, 'load_power_w', victron.selfConsumptionW, 'W', base);
   // Von der Haupt-GX gemessene Last, nur solange polling.js sie um Akku 2 der
   // zweiten Anlage korrigiert (sonst gleich load_power_w, Feld fehlt). Der

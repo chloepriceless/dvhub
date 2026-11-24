@@ -6048,7 +6048,13 @@ export function createDefaultConfig() {
       enabled: false,
       sources: [],
       groups: [],
-      backfillDays: 730
+      backfillDays: 730,
+      // T-MPPT-TELEMETRY: Per-MPPT/String-Logging der SunSpec-WR-Familie (Fronius
+      // GEN24, Kostal, SolarEdge, SMA) ueber Model 160. Das LOGGEN selbst steuert
+      // das Herstellerprofil (points.mppt, z. B. hersteller/fronius.json) — hier
+      // liegen nur Anzeige-Metadaten je Modulnummer (Beschriftung, kWp) fuer den
+      // Leitstand und die pvnode-CSV. labels/kwp sind nach Modulnummer verschluesselt.
+      mppt: { labels: {}, kwp: {} }
     },
     // Plan 08-04 Task 2 Step 5: Host-header + CORS + trust-proxy allowlists.
     // Defaults stay permissive for LAN-first installs (empty arrays = no check);
