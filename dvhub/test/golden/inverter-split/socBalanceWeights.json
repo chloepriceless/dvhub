@@ -1,0 +1,1428 @@
+{
+  "function": "socBalanceWeights",
+  "schema": "dvhub.golden-split/1",
+  "generator": "test/golden/generate-split-vectors.mjs",
+  "count": 71,
+  "vectors": [
+    {
+      "name": "feld_9.2_14.4_entladen",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 9.2,
+            "slaveSoc": 14.4,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 102000.00000000001
+      }
+    },
+    {
+      "name": "feld_9.2_14.4_laden",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 9.2,
+            "slaveSoc": 14.4,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 102000,
+        "sW": 49999.999999999985
+      }
+    },
+    {
+      "name": "feld_0.8_2.2_entladen",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 0.8,
+            "slaveSoc": 2.2,
+            "masterCapacityWh": 9600,
+            "slaveCapacityWh": 9600
+          }
+        ]
+      },
+      "output": {
+        "mW": 48000,
+        "sW": 61440
+      }
+    },
+    {
+      "name": "feld_0.8_2.2_laden",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 0.8,
+            "slaveSoc": 2.2,
+            "masterCapacityWh": 9600,
+            "slaveCapacityWh": 9600
+          }
+        ]
+      },
+      "output": {
+        "mW": 61440,
+        "sW": 48000
+      }
+    },
+    {
+      "name": "soc_unbekannt_parallel_nach_kapazitaet",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": 30,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 8000
+      }
+    },
+    {
+      "name": "gleicher_soc_kapazitaetsproportional",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 40,
+            "slaveSoc": 40,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 40000
+      }
+    },
+    {
+      "name": "ohne_kapazitaet_leistung_als_proxy",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 6000,
+            "slaveMax": 3000,
+            "masterSoc": 60,
+            "slaveSoc": 20,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 270000,
+        "sW": 15000
+      }
+    },
+    {
+      "name": "raster_d_0",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 10,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 40000
+      }
+    },
+    {
+      "name": "raster_d_1",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 10,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 40000,
+        "sW": 50000
+      }
+    },
+    {
+      "name": "raster_d_2",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 10,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 25000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_d_3",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 10,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_d_4",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 50,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 360000
+      }
+    },
+    {
+      "name": "raster_d_5",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 50,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 40000,
+        "sW": 450000
+      }
+    },
+    {
+      "name": "raster_d_6",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 50,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 25000,
+        "sW": 225000
+      }
+    },
+    {
+      "name": "raster_d_7",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 50,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 225000
+      }
+    },
+    {
+      "name": "raster_d_8",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 50,
+            "slaveSoc": 10,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 450000,
+        "sW": 40000
+      }
+    },
+    {
+      "name": "raster_d_9",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 50,
+            "slaveSoc": 10,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 360000,
+        "sW": 50000
+      }
+    },
+    {
+      "name": "raster_d_10",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 50,
+            "slaveSoc": 10,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 225000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_d_11",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 50,
+            "slaveSoc": 10,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 450000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_d_12",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 95,
+            "slaveSoc": 20,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 800000,
+        "sW": 40000
+      }
+    },
+    {
+      "name": "raster_d_13",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 95,
+            "slaveSoc": 20,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 640000,
+        "sW": 50000
+      }
+    },
+    {
+      "name": "raster_d_14",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 95,
+            "slaveSoc": 20,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 400000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_d_15",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 95,
+            "slaveSoc": 20,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 800000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_d_16",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 0,
+            "slaveSoc": 100,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 840000
+      }
+    },
+    {
+      "name": "raster_d_17",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 0,
+            "slaveSoc": 100,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 40000,
+        "sW": 1050000
+      }
+    },
+    {
+      "name": "raster_d_18",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 0,
+            "slaveSoc": 100,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 25000,
+        "sW": 525000
+      }
+    },
+    {
+      "name": "raster_d_19",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 0,
+            "slaveSoc": 100,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 525000
+      }
+    },
+    {
+      "name": "raster_d_20",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": 40,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 8000
+      }
+    },
+    {
+      "name": "raster_d_21",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": 40,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 8000,
+        "sW": 10000
+      }
+    },
+    {
+      "name": "raster_d_22",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": 40,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 5000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_d_23",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": 40,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_d_24",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 40,
+            "slaveSoc": null,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 8000
+      }
+    },
+    {
+      "name": "raster_d_25",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 40,
+            "slaveSoc": null,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 8000,
+        "sW": 10000
+      }
+    },
+    {
+      "name": "raster_d_26",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 40,
+            "slaveSoc": null,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 5000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_d_27",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 40,
+            "slaveSoc": null,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_d_28",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": null,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 8000
+      }
+    },
+    {
+      "name": "raster_d_29",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": null,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 8000,
+        "sW": 10000
+      }
+    },
+    {
+      "name": "raster_d_30",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": null,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 5000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_d_31",
+      "input": {
+        "args": [
+          {
+            "charge": false,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": null,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_c_32",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 10,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 40000
+      }
+    },
+    {
+      "name": "raster_c_33",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 10,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 40000,
+        "sW": 50000
+      }
+    },
+    {
+      "name": "raster_c_34",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 10,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 25000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_c_35",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 10,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_c_36",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 50,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 450000,
+        "sW": 40000
+      }
+    },
+    {
+      "name": "raster_c_37",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 50,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 360000,
+        "sW": 50000
+      }
+    },
+    {
+      "name": "raster_c_38",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 50,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 225000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_c_39",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 10,
+            "slaveSoc": 50,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 450000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_c_40",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 50,
+            "slaveSoc": 10,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 360000
+      }
+    },
+    {
+      "name": "raster_c_41",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 50,
+            "slaveSoc": 10,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 40000,
+        "sW": 450000
+      }
+    },
+    {
+      "name": "raster_c_42",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 50,
+            "slaveSoc": 10,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 25000,
+        "sW": 225000
+      }
+    },
+    {
+      "name": "raster_c_43",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 50,
+            "slaveSoc": 10,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 225000
+      }
+    },
+    {
+      "name": "raster_c_44",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 95,
+            "slaveSoc": 20,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 640000
+      }
+    },
+    {
+      "name": "raster_c_45",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 95,
+            "slaveSoc": 20,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 40000,
+        "sW": 800000
+      }
+    },
+    {
+      "name": "raster_c_46",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 95,
+            "slaveSoc": 20,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 25000,
+        "sW": 400000
+      }
+    },
+    {
+      "name": "raster_c_47",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 95,
+            "slaveSoc": 20,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 50000,
+        "sW": 400000
+      }
+    },
+    {
+      "name": "raster_c_48",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 0,
+            "slaveSoc": 100,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 1050000,
+        "sW": 40000
+      }
+    },
+    {
+      "name": "raster_c_49",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 0,
+            "slaveSoc": 100,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 840000,
+        "sW": 50000
+      }
+    },
+    {
+      "name": "raster_c_50",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 0,
+            "slaveSoc": 100,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 525000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_c_51",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 0,
+            "slaveSoc": 100,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 1050000,
+        "sW": 25000
+      }
+    },
+    {
+      "name": "raster_c_52",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": 40,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 8000
+      }
+    },
+    {
+      "name": "raster_c_53",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": 40,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 8000,
+        "sW": 10000
+      }
+    },
+    {
+      "name": "raster_c_54",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": 40,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 5000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_c_55",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": 40,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_c_56",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 40,
+            "slaveSoc": null,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 8000
+      }
+    },
+    {
+      "name": "raster_c_57",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 40,
+            "slaveSoc": null,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 8000,
+        "sW": 10000
+      }
+    },
+    {
+      "name": "raster_c_58",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 40,
+            "slaveSoc": null,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 5000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_c_59",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": 40,
+            "slaveSoc": null,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_c_60",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": null,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 8000
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 8000
+      }
+    },
+    {
+      "name": "raster_c_61",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": null,
+            "masterCapacityWh": 8000,
+            "slaveCapacityWh": 10000
+          }
+        ]
+      },
+      "output": {
+        "mW": 8000,
+        "sW": 10000
+      }
+    },
+    {
+      "name": "raster_c_62",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": null,
+            "masterCapacityWh": 0,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 5000,
+        "sW": 5000
+      }
+    },
+    {
+      "name": "raster_c_63",
+      "input": {
+        "args": [
+          {
+            "charge": true,
+            "masterMax": 5000,
+            "slaveMax": 5000,
+            "masterSoc": null,
+            "slaveSoc": null,
+            "masterCapacityWh": 10000,
+            "slaveCapacityWh": 0
+          }
+        ]
+      },
+      "output": {
+        "mW": 10000,
+        "sW": 5000
+      }
+    }
+  ]
+}

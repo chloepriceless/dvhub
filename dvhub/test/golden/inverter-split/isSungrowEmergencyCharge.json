@@ -1,0 +1,125 @@
+{
+  "function": "isSungrowEmergencyCharge",
+  "schema": "dvhub.golden-split/1",
+  "generator": "test/golden/generate-split-vectors.mjs",
+  "count": 13,
+  "vectors": [
+    {
+      "name": "notladung_0x4001",
+      "input": {
+        "args": [
+          16385
+        ]
+      },
+      "output": true
+    },
+    {
+      "name": "externes_ems_0x4000",
+      "input": {
+        "args": [
+          16384
+        ]
+      },
+      "output": false
+    },
+    {
+      "name": "betrieb_netz_0x0000",
+      "input": {
+        "args": [
+          0
+        ]
+      },
+      "output": false
+    },
+    {
+      "name": "stopp_0x8000",
+      "input": {
+        "args": [
+          32768
+        ]
+      },
+      "output": false
+    },
+    {
+      "name": "null_eingang",
+      "input": {
+        "args": [
+          null
+        ]
+      },
+      "output": false
+    },
+    {
+      "name": "raster_0x40",
+      "input": {
+        "args": [
+          64
+        ]
+      },
+      "output": false
+    },
+    {
+      "name": "raster_0x400",
+      "input": {
+        "args": [
+          1024
+        ]
+      },
+      "output": false
+    },
+    {
+      "name": "raster_0x800",
+      "input": {
+        "args": [
+          2048
+        ]
+      },
+      "output": false
+    },
+    {
+      "name": "raster_0x1000",
+      "input": {
+        "args": [
+          4096
+        ]
+      },
+      "output": false
+    },
+    {
+      "name": "raster_0x4001",
+      "input": {
+        "args": [
+          16385
+        ]
+      },
+      "output": true
+    },
+    {
+      "name": "raster_0x5500",
+      "input": {
+        "args": [
+          21760
+        ]
+      },
+      "output": false
+    },
+    {
+      "name": "raster_0x9100",
+      "input": {
+        "args": [
+          37120
+        ]
+      },
+      "output": false
+    },
+    {
+      "name": "raster_0xffff",
+      "input": {
+        "args": [
+          65535
+        ]
+      },
+      "output": false
+    }
+  ]
+}
