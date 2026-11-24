@@ -9,10 +9,11 @@ Ende verschlüsselt: im Heimnetz direkt zur Box, unterwegs über das Relay
 (`relay.dvhub.de` oder ein selbst gehostetes). Das Protokoll steht in
 [`docs/HANDY-APP-PROTOKOLL.md`](../docs/HANDY-APP-PROTOKOLL.md). Öffentliche
 Daten (Preise, Prognose, Nachrichten) holt die App direkt bei `dvhub.online`.
+Ohne eigene Anlage zeigt die **Demo** alles an einer Beispielanlage (siehe unten).
 
 | Ordner | Inhalt |
 |---|---|
-| `DVhubLink/` | Swift-Paket: Kryptografie, QR-Code, Kopplung, Verbindung, Schlüsselbund |
+| `DVhubLink/` | Swift-Paket: Kryptografie, QR-Code, Kopplung, Verbindung, Schlüsselbund; `Demo/` = die Beispielanlage |
 | `DVhubApp/` | Die App und die Widget-Erweiterung `DVhubWidgets` (Xcode-Projekt aus `project.yml` per XcodeGen); `Shared/` gehört beiden |
 | `tools/` | String-Kataloge abgleichen und prüfen |
 | `interop/harness.mjs` | Echte DVhub-Gegenstelle (Relay + Box-Agent mit Beispielwerten) für Tests |
@@ -83,6 +84,43 @@ nie und ist nur bei entsperrtem Gerät nutzbar. Im Simulator, der keine
 Secure Enclave hat, liegt ein Software-Schlüssel im Schlüsselbund
 (`ThisDeviceOnly`). Schaltbefehle bestätigt man mit Touch ID (iPhone Duo),
 Face ID oder dem Gerätecode.
+
+## Demo
+
+Für alle, die die App ohne DVhub-Box ansehen wollen: Auf dem Startbildschirm steht neben dem Koppeln
+**„Demo ansehen“** (ebenso unter Mehr → Anlagen und überall, wo sonst nur „Anlage koppeln“ stünde). Die Demo ist
+eine eigene Anlage in der Anlagenliste – eine Beispielanlage mit Victron, 20 kWp Photovoltaik, 20 kWh Akku, Wallbox
+und dynamischem Tarif. Jeder Bereich der App zeigt Inhalt, und alles lässt sich bedienen: Not-Halt, Zeitplan-Regeln,
+Grundwerte, Börsenautomatik, E-Auto-Planung, Wochenplan, „Sofort laden“. Dabei ändert sich nur der Zustand der Demo.
+
+**Nie verwechselbar.** Solange die Demo gewählt ist, trägt jede Seite oben das Band „DEMO · Beispielanlage · nichts
+wird geschaltet“ (es bleibt beim Rollen stehen), die Verbindungsanzeige sagt „Demo läuft – im Gerät, ohne Netz“, die
+Anlage heißt „Demo-Anlage“ und steht in der Anlagenliste unter „Demo“ mit der Marke DEMO. Widgets schreiben „Demo“
+statt „Stand“, Kurzbefehle antworten mit „Demo-Anlage: …“. **Beenden** geht jederzeit: über das Band, unter „Mehr“
+und unter Mehr → Anlagen. Wer eine eigene Anlage koppelt, beendet die Demo damit.
+
+**Kein Netz.** Die Demo rechnet im Gerät. Solange sie gewählt ist, ruht jede Verbindung zu einer gekoppelten Anlage,
+und auch Börsenpreise, Prognose und Nachrichten kommen als Beispieldaten aus dem Gerät (als „Beispiel“
+gekennzeichnet) – die Demo läuft offline. Abrufe für Widgets, Kurzbefehle und Kontrollzentrum rechnen dann ebenfalls
+die Demo; `LinkAccess.selected()` gibt keine Zugangsdaten heraus, auch nicht ersatzweise die einer gekoppelten Anlage.
+Die Bestätigung mit Touch ID, Face ID oder Gerätecode entfällt in der Demo – dort wird nichts geschaltet.
+
+**Aufbau.** Keine `if demo`-Zweige in den Ansichten, sondern eine zweite Umsetzung derselben Schnittstellen:
+
+| Schnittstelle | echte Anlage | Demo |
+|---|---|---|
+| `PlantConnection` (Paket) – Ereignisse, Live-Werte, Anfragen | `DeviceConnection` (Heimnetz, Relay) | `DemoConnection` → `DemoBox` |
+| `PlantDialer` (`SystemController.swift`) – wie die Verbindung entsteht | `LinkDialer` | `DemoDialer` |
+| `OnlineSource` (`Online/OnlineService.swift`) – Preise, Prognose, Nachrichten | `LiveOnline` (dvhub.online) | `DemoOnline` → `DemoMarket` |
+
+Die Beispielanlage liegt im Paket (`DVhubLink/Sources/DVhubLink/Demo/`), damit `swift test` sie prüft:
+`DemoWorld` (Sonne, Wetter, Verbrauch und Börsenpreise als reine Funktionen der Zeit), `DemoPlant` (Lauf eines Tages
+in Viertelstunden samt den Vorgaben, die ein Optimierer fände; dazu der bediente Zustand) und `DemoPlant+API`
+(Antworten auf dieselben Pfade und in derselben Form wie die Box – Vorbild `interop/harness.mjs`). Derselbe Zeitpunkt
+ergibt überall dieselben Werte: Leitstand, Historie, Fahrplan, Markt und Widgets passen zusammen, und ein vergangener
+Tag ändert sich nicht mehr. Die Anlage lebt in der Zeitzone des Geräts (Tag und Nacht passen zur Uhr), die Jahreszeit
+ist die echte; ab zwei Tagen vor dem Start der Demo ist das Wetter freundlich, damit es etwas zu sehen gibt. Der
+bediente Zustand liegt in den Einstellungen der App-Gruppe (`Shared/DemoStore.swift`), nichts davon im Schlüsselbund.
 
 ## Bedienung
 
@@ -422,6 +460,14 @@ Nur im Debug-Build gibt es Startargumente für Simulator-Tests und Bildschirmfot
 Detailansicht, `-DVHUB_HISTORY week|month|year` und `-DVHUB_MARKET_DAY <n>`
 wählen Zeitraum bzw. Tag, `-DVHUB_DUO closed|closed-landscape|open` zeigt die
 Flächen des iPhone Duo, `-navPlacement side|bottom` erzwingt die Leistenlage.
+`-DVHUB_DEMO on|off` startet bzw. beendet die Demo, `-DVHUB_DEMO_SHIFT <Stunden>` verstellt
+ihre Uhr (nachts den Mittag der Beispielanlage fotografieren).
+
+Ohne Gegenstelle laufen die Tests der Demo: `DVhubAppTests/DemoModeTests` (im Prozess der App: Demo als eigener
+Eintrag, Bedienen ohne Bestätigung am Gerät, kein Weg zu einer gekoppelten Anlage, Quellenwechsel von Markt und
+Nachrichten) und `DVhubAppUITests/DemoTests` (Demo starten, jeder Bereich zeigt Inhalt, Regel anlegen, Sofort laden,
+Not-Halt, Neustart, Demo beenden). Im Paket prüfen `DemoPlantTests`, `DemoMarketTests` und `DemoConnectionTests`
+die Beispielanlage selbst – auch, dass sie kein Netz anfasst.
 
 `ControlPagesTests` prüft die Bedien-Seiten in der Pose, in der der Simulator steht: Leitstand (Anordnung wie
 im Web-Leitstand, Momentanwerte nur im Energiefluss), Markt (Einspeisung und Bezug in einem Diagramm, aktueller

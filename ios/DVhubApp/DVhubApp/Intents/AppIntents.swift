@@ -7,6 +7,9 @@
 // Schalten: nur der Not-Halt (in DVhub freigegeben). Er verlangt das entsperrte
 // iPhone (`authenticationPolicy`) und eine ausdrückliche Bestätigung
 // (`requestConfirmation`). Weitere Schaltpfade gibt es hier nicht.
+//
+// Ist die Demo gewählt, antworten die Kurzbefehle mit den Werten der
+// Beispielanlage und sagen das dazu; der Not-Halt schaltet dann nur die Demo.
 
 import AppIntents
 import Foundation
@@ -49,6 +52,13 @@ struct IntentReading {
     var current: Bool { Date().timeIntervalSince(snapshot.at) < 120 }
     var time: String { Format.dateTime(snapshot.at) }
 
+    /// Antwort für Siri bzw. die Kurzbefehle-App. Werte der Beispielanlage sind als solche benannt.
+    func say(_ text: String) -> IntentDialog { Self.say(text, demo: snapshot.isDemo) }
+
+    static func say(_ text: String, demo: Bool) -> IntentDialog {
+        demo ? "\(String(localized: "Demo-Anlage: \(text)", comment: "Antwort eines Kurzbefehls mit Werten der Beispielanlage"))" : "\(text)"
+    }
+
     static func load() async throws -> IntentReading {
         LinkAccess.configure()
         switch await SnapshotRefresher.refresh(timeout: 8) {
@@ -78,17 +88,17 @@ struct BatteryLevelIntent: AppIntent {
         guard let soc = r.snapshot.soc else { throw IntentFailure.noValue }
         let level = Format.percent(soc)
         let w = r.snapshot.batteryW ?? 0
-        let dialog: IntentDialog
+        let text: String
         if !r.current {
-            dialog = "Der Akku war \(r.time) zu \(level) geladen."
+            text = String(localized: "Der Akku war \(r.time) zu \(level) geladen.")
         } else if w >= 20 {
-            dialog = "Der Akku ist zu \(level) geladen und lädt mit \(Format.power(w))."
+            text = String(localized: "Der Akku ist zu \(level) geladen und lädt mit \(Format.power(w)).")
         } else if w <= -20 {
-            dialog = "Der Akku ist zu \(level) geladen und entlädt mit \(Format.power(w))."
+            text = String(localized: "Der Akku ist zu \(level) geladen und entlädt mit \(Format.power(w)).")
         } else {
-            dialog = "Der Akku ist zu \(level) geladen."
+            text = String(localized: "Der Akku ist zu \(level) geladen.")
         }
-        return .result(value: soc, dialog: dialog)
+        return .result(value: soc, dialog: r.say(text))
     }
 }
 
@@ -99,8 +109,8 @@ struct ProductionIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<Double> {
         let r = try await IntentReading.load()
         guard let pv = r.snapshot.pvW else { throw IntentFailure.noValue }
-        let dialog: IntentDialog = r.current ? "Die Anlage erzeugt gerade \(Format.power(pv))." : "Die Anlage erzeugte \(r.time) \(Format.power(pv))."
-        return .result(value: pv, dialog: dialog)
+        let text = r.current ? String(localized: "Die Anlage erzeugt gerade \(Format.power(pv)).") : String(localized: "Die Anlage erzeugte \(r.time) \(Format.power(pv)).")
+        return .result(value: pv, dialog: r.say(text))
     }
 }
 
@@ -114,15 +124,15 @@ struct GridIntent: AppIntent {
         let s = r.snapshot
         guard s.gridImportW != nil || s.gridExportW != nil else { throw IntentFailure.noValue }
         let imp = s.gridImportW ?? 0, exp = s.gridExportW ?? 0
-        let dialog: IntentDialog
+        let text: String
         if max(imp, exp) < 20 {
-            dialog = r.current ? "Am Netz ist es gerade ausgeglichen." : "Am Netz war es \(r.time) ausgeglichen."
+            text = r.current ? String(localized: "Am Netz ist es gerade ausgeglichen.") : String(localized: "Am Netz war es \(r.time) ausgeglichen.")
         } else if exp > imp {
-            dialog = r.current ? "Du speist gerade \(Format.power(exp)) ein." : "\(r.time) wurden \(Format.power(exp)) eingespeist."
+            text = r.current ? String(localized: "Du speist gerade \(Format.power(exp)) ein.") : String(localized: "\(r.time) wurden \(Format.power(exp)) eingespeist.")
         } else {
-            dialog = r.current ? "Du beziehst gerade \(Format.power(imp)) aus dem Netz." : "\(r.time) wurden \(Format.power(imp)) aus dem Netz bezogen."
+            text = r.current ? String(localized: "Du beziehst gerade \(Format.power(imp)) aus dem Netz.") : String(localized: "\(r.time) wurden \(Format.power(imp)) aus dem Netz bezogen.")
         }
-        return .result(value: imp - exp, dialog: dialog)
+        return .result(value: imp - exp, dialog: r.say(text))
     }
 }
 
@@ -133,8 +143,8 @@ struct ConsumptionIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<Double> {
         let r = try await IntentReading.load()
         guard let load = r.snapshot.loadW else { throw IntentFailure.noValue }
-        let dialog: IntentDialog = r.current ? "Das Haus verbraucht gerade \(Format.power(load))." : "Das Haus verbrauchte \(r.time) \(Format.power(load))."
-        return .result(value: load, dialog: dialog)
+        let text = r.current ? String(localized: "Das Haus verbraucht gerade \(Format.power(load)).") : String(localized: "Das Haus verbrauchte \(r.time) \(Format.power(load)).")
+        return .result(value: load, dialog: r.say(text))
     }
 }
 
@@ -150,13 +160,13 @@ struct TodayEarningsIntent: AppIntent {
         guard let net = r.snapshot.todayNetEur else { throw IntentFailure.noValue }
         guard SnapshotDay.of(r.snapshot.at, now: Date()) == .today else { throw IntentFailure.noData }
         let amount = Format.euro(abs(net))
-        let dialog: IntentDialog
+        let text: String
         if net >= 0 {
-            dialog = r.current ? "Heute hat die Anlage bisher \(amount) verdient." : "Bis \(r.time) hat die Anlage \(amount) verdient."
+            text = r.current ? String(localized: "Heute hat die Anlage bisher \(amount) verdient.") : String(localized: "Bis \(r.time) hat die Anlage \(amount) verdient.")
         } else {
-            dialog = r.current ? "Heute hat die Anlage bisher \(amount) gekostet." : "Bis \(r.time) hat die Anlage \(amount) gekostet."
+            text = r.current ? String(localized: "Heute hat die Anlage bisher \(amount) gekostet.") : String(localized: "Bis \(r.time) hat die Anlage \(amount) gekostet.")
         }
-        return .result(value: net, dialog: dialog)
+        return .result(value: net, dialog: r.say(text))
     }
 }
 
@@ -177,10 +187,10 @@ struct PlantOverviewIntent: AppIntent {
             grid = String(localized: "Bezug \(Format.power(imp))")
         }
         let stop = s.emergencyStop == true ? String(localized: " Der Not-Halt ist aktiv.") : ""
-        let dialog: IntentDialog = r.current
-            ? "Akku \(Format.percent(s.soc)), Erzeugung \(Format.power(s.pvW)), Verbrauch \(Format.power(s.loadW)), \(grid).\(stop)"
-            : "Stand \(r.time): Akku \(Format.percent(s.soc)), Erzeugung \(Format.power(s.pvW)), Verbrauch \(Format.power(s.loadW)), \(grid).\(stop)"
-        return .result(dialog: dialog)
+        let text = r.current
+            ? String(localized: "Akku \(Format.percent(s.soc)), Erzeugung \(Format.power(s.pvW)), Verbrauch \(Format.power(s.loadW)), \(grid).\(stop)")
+            : String(localized: "Stand \(r.time): Akku \(Format.percent(s.soc)), Erzeugung \(Format.power(s.pvW)), Verbrauch \(Format.power(s.loadW)), \(grid).\(stop)")
+        return .result(dialog: r.say(text))
     }
 }
 
@@ -191,9 +201,13 @@ struct PlantOverviewIntent: AppIntent {
 enum EmergencyStopAction {
     static func run(stop: Bool) async throws -> ControlOutcome {
         LinkAccess.configure()
+        // Demo gewählt: nur die Beispielanlage schalten — keine Verbindung, zu keiner Anlage.
+        if DemoStore.isSelected { return await runDemo(stop: stop) }
         let access: (credentials: LinkCredentials, signer: LinkSigner)
         do {
             access = try LinkAccess.selected()
+        } catch LinkAccess.Failure.demo {
+            return await runDemo(stop: stop)
         } catch LinkAccess.Failure.noSystem {
             throw IntentFailure.noSystem
         } catch LinkAccess.Failure.locked {
@@ -224,6 +238,18 @@ enum EmergencyStopAction {
         }
         return outcome
     }
+
+    /// Not-Halt der Demo-Anlage: ändert ihren Zustand im Gerät und führt Widgets und Live-Aktivität nach.
+    private static func runDemo(stop: Bool) async -> ControlOutcome {
+        let outcome = ControlOutcome.from(await DemoStore.emergencyStop(stop))
+        if let snapshot = DemoStore.snapshot() {
+            SharedStore.write(snapshot)
+            WidgetCenter.shared.reloadAllTimelines()
+            ControlCenter.shared.reloadControls(ofKind: SharedStore.controlKindStop)
+            await LiveActivityManager.sync(snapshot)
+        }
+        return outcome
+    }
 }
 
 /// „Not-Halt auslösen“ für Kurzbefehle und Siri. `LiveActivityIntent`: läuft
@@ -237,14 +263,16 @@ struct TriggerEmergencyStopIntent: LiveActivityIntent {
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        let demo = DemoStore.isSelected
         try await requestConfirmation(
             actionName: .custom(acceptLabel: "Not-Halt auslösen", acceptAlternatives: [], denyLabel: "Abbrechen", denyAlternatives: [], destructive: true),
-            dialog: "Not-Halt auslösen? DVhub hört auf, Sollwerte an die Anlage zu schreiben.")
+            dialog: demo ? "Not-Halt der Demo-Anlage auslösen? Geschaltet wird nichts – es ändert sich nur die Demo."
+                         : "Not-Halt auslösen? DVhub hört auf, Sollwerte an die Anlage zu schreiben.")
         let outcome = try await EmergencyStopAction.run(stop: true)
         // Hat die Anlage nicht geschaltet, ist das ein Fehler — sonst liefe ein
         // Kurzbefehl nach „Not-Halt auslösen“ weiter, als wäre er aktiv.
         guard outcome.applied else { throw IntentFailure.message(outcome.message) }
-        return .result(dialog: outcome == .done ? "Der Not-Halt ist aktiv." : "\(outcome.message)")
+        return .result(dialog: IntentReading.say(outcome == .done ? String(localized: "Der Not-Halt ist aktiv.") : outcome.message, demo: demo))
     }
 }
 
@@ -256,12 +284,13 @@ struct ReleaseEmergencyStopIntent: LiveActivityIntent {
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        let demo = DemoStore.isSelected
         try await requestConfirmation(
             actionName: .custom(acceptLabel: "Not-Halt aufheben", acceptAlternatives: [], denyLabel: "Abbrechen", denyAlternatives: [], destructive: false),
-            dialog: "Not-Halt aufheben? DVhub regelt die Anlage dann wieder.")
+            dialog: demo ? "Not-Halt der Demo-Anlage aufheben?" : "Not-Halt aufheben? DVhub regelt die Anlage dann wieder.")
         let outcome = try await EmergencyStopAction.run(stop: false)
         guard outcome.applied else { throw IntentFailure.message(outcome.message) }
-        return .result(dialog: outcome == .done ? "Der Not-Halt ist aufgehoben. DVhub regelt wieder." : "\(outcome.message)")
+        return .result(dialog: IntentReading.say(outcome == .done ? String(localized: "Der Not-Halt ist aufgehoben. DVhub regelt wieder.") : outcome.message, demo: demo))
     }
 }
 

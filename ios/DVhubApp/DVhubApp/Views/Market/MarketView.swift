@@ -61,9 +61,15 @@ struct MarketView: View {
             } else if let err = market.outlookError, market.outlook == nil {
                 NoticeBanner(text: "Prognose nicht verfügbar: \(err)", icon: "wifi.slash")
             }
-            Text("Börsenpreise (Day-Ahead DE-LU) und Prognose: dvhub.online\(market.pricesAt.map { " · Stand \(Format.dateTime($0))" } ?? ""). Einspeisung zum Börsenpreis, wie DVhub die Erlöse rechnet – ohne Marktprämie. Bezug: dein Tarif aus DVhub mit Netzentgelten, Abgaben und Steuern. Prognose ohne Gewähr.")
-                .font(.caption2)
-                .foregroundStyle(Brand.dim)
+            if market.isSample {
+                Text("Preise und Prognose der Demo sind Beispielwerte, keine Börsendaten. Einspeisung zum Börsenpreis, wie DVhub die Erlöse rechnet – ohne Marktprämie. Bezug: der Tarif der Beispielanlage mit Netzentgelten, Abgaben und Steuern.")
+                    .font(.caption2)
+                    .foregroundStyle(Brand.dim)
+            } else {
+                Text("Börsenpreise (Day-Ahead DE-LU) und Prognose: dvhub.online\(market.pricesAt.map { " · Stand \(Format.dateTime($0))" } ?? ""). Einspeisung zum Börsenpreis, wie DVhub die Erlöse rechnet – ohne Marktprämie. Bezug: dein Tarif aus DVhub mit Netzentgelten, Abgaben und Steuern. Prognose ohne Gewähr.")
+                    .font(.caption2)
+                    .foregroundStyle(Brand.dim)
+            }
         }
         .navigationTitle("Markt")
         .screenActions(.market, [
@@ -139,13 +145,6 @@ struct MarketView: View {
 
     /// Energiemengen von heute (deutscher Börsentag) aus der Tages-Historie der Box.
     private func loadEnergy() async {
-        #if DEBUG
-        // Nur für Bildschirmfotos: -DVHUB_MARKET_ENERGY_DEMO 1 zeichnet einen Beispieltag.
-        if UserDefaults.standard.bool(forKey: "DVHUB_MARKET_ENERGY_DEMO") {
-            energyBySystem[systemKey] = MarketEnergy.demo()
-            return
-        }
-        #endif
         guard let controller, controller.isOnline else { return }
         let system = controller.credentials.id
         let key = MarketTime.key(Date())
@@ -179,31 +178,6 @@ struct MarketEnergy: Equatable {
     var key: String?
     var slots: [EnergySlot] = []
     var error: String?
-
-    #if DEBUG
-    /// Beispieltag bis „jetzt“: Sonne mittags, Akku lädt daraus und trägt den Abend, nachts Netz.
-    static func demo(now: Date = Date()) -> MarketEnergy {
-        let from = MarketTime.startOfDay(now)
-        var slots: [EnergySlot] = []
-        var t = from
-        while t < now {
-            let h = t.timeIntervalSince(from) / 3600
-            let sun = max(0, 2.2 * sin((h - 7.5) / 9 * .pi)) * (h > 7.5 && h < 16.5 ? 1 : 0)
-            let home = 0.12 + 0.1 * abs(sin(h * 1.7)) + (h > 17 ? 0.15 : 0)
-            let direct = min(sun, home)
-            let spare = sun - direct
-            let toBattery = h < 13 ? min(spare, 0.6) : 0
-            let need = home - direct
-            let fromBattery = h > 15.5 ? min(need, 0.2) : 0
-            slots.append(EnergySlot(start: t, end: t.addingTimeInterval(900), solarToHomeKwh: direct, solarToBatteryKwh: toBattery,
-                                    solarToGridKwh: spare - toBattery, batteryToHomeKwh: fromBattery,
-                                    batteryToGridKwh: h > 17 && h < 18.5 ? 0.5 : 0,
-                                    gridToHomeKwh: need - fromBattery, gridToBatteryKwh: h > 2 && h < 4 ? 0.8 : 0))
-            t = t.addingTimeInterval(900)
-        }
-        return MarketEnergy(key: MarketTime.key(now), slots: slots, error: nil)
-    }
-    #endif
 }
 
 // MARK: - Farben und Texte

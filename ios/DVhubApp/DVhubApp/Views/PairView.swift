@@ -30,6 +30,8 @@ struct PairView: View {
                     }
                     .padding(.vertical, 6)
                 }
+                // Ohne Anlage: die App erst einmal mit der Beispielanlage ansehen.
+                SwiftUI.Section { DemoInvite() }
             }
 
             SwiftUI.Section("QR-Code") {

@@ -55,7 +55,9 @@ struct NewsView: View {
                     Button { Task { await news.loadMore() } } label: { Label("Ältere Meldungen laden", systemImage: "arrow.down.circle") }
                         .font(.footnote.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 8)
                 }
-                Text("Quelle: DVhub-Nachrichten (dvhub.online). Die Artikel gehören den genannten Redaktionen.")
+                Text(news.isSample
+                     ? "Beispielmeldungen der Demo – keine echten Nachrichten. Ohne Demo stehen hier die Energie-Meldungen von dvhub.online."
+                     : "Quelle: DVhub-Nachrichten (dvhub.online). Die Artikel gehören den genannten Redaktionen.")
                     .font(.caption2).foregroundStyle(Brand.dim)
             }
         }
@@ -125,8 +127,19 @@ private struct NewsImage: View {
         // sonst den Inhalt über den Rand).
         LinearGradient(colors: [Brand.bg2, Brand.blue.opacity(0.35), Brand.violet.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing)
             .overlay {
-                // Platzhalter: Aurora mit dem Anfangsbuchstaben der Quelle (Grafik in fester Größe, kein Lesetext).
-                Text(String(item.source.prefix(1))).font(.system(size: 34, weight: .bold, design: .rounded)).foregroundStyle(Brand.text.opacity(0.25))
+                if let symbol = item.symbolName {
+                    // Meldung mit Systemsymbol statt Bild (Beispielmeldungen der Demo) — nichts wird geladen.
+                    GeometryReader { g in
+                        Image(systemName: symbol)
+                            .font(.system(size: min(g.size.width, g.size.height) * 0.42, weight: .semibold))
+                            .foregroundStyle(Brand.auroraLinear)
+                            .shadow(color: Brand.cyan.opacity(0.35), radius: 12)
+                            .frame(width: g.size.width, height: g.size.height)
+                    }
+                } else {
+                    // Platzhalter: Aurora mit dem Anfangsbuchstaben der Quelle (Grafik in fester Größe, kein Lesetext).
+                    Text(String(item.source.prefix(1))).font(.system(size: 34, weight: .bold, design: .rounded)).foregroundStyle(Brand.text.opacity(0.25))
+                }
             }
             .overlay {
                 if let url = item.imageURL {
@@ -220,6 +233,7 @@ private struct NewsRow: View {
 private struct ArticleView: View {
     let item: NewsItem
     let inSheet: Bool
+    @Environment(NewsStore.self) private var news
     @Environment(\.dismiss) private var dismiss
     @State private var showArticle = false
 
@@ -245,9 +259,13 @@ private struct ArticleView: View {
                     Text(item.excerpt).font(.body).foregroundStyle(Brand.text2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if news.isSample {
+                    NoticeBanner(text: "Beispielmeldung der Demo. Die echten Meldungen stehen auf dvhub.online – und hier, sobald die Demo beendet ist.",
+                                 icon: "sparkles", tint: Brand.violet)
+                }
                 if let url = item.linkURL {
                     Button { showArticle = true } label: {
-                        Label("Ganzen Artikel lesen", systemImage: "safari")
+                        Label(news.isSample ? "Nachrichten auf dvhub.online" : "Ganzen Artikel lesen", systemImage: "safari")
                             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 14)
                             .foregroundStyle(Color(hex: 0x030610))
                             .background(LinearGradient(colors: [Color(hex: 0xffd421), Color(hex: 0xffab08)], startPoint: .top, endPoint: .bottom),
@@ -267,7 +285,7 @@ private struct ArticleView: View {
             if inSheet {
                 ToolbarItem(placement: .cancellationAction) { Button { dismiss() } label: { Label("Schließen", systemImage: "xmark") } }
             }
-            if let url = item.linkURL {
+            if let url = item.linkURL, !news.isSample {
                 ToolbarItem(placement: .topBarTrailing) { ShareLink(item: url) { Label("Teilen", systemImage: "square.and.arrow.up") } }
             }
         }

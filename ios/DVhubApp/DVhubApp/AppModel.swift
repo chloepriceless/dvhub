@@ -1,4 +1,10 @@
-// AppModel.swift — gespeicherte Anlagen, Auswahl, Kopplung.
+// AppModel.swift — gespeicherte Anlagen, Auswahl, Kopplung — und die Demo.
+//
+// Die Demo ist ein eigener Eintrag der Anlagenliste (`entries`), neben den
+// gekoppelten Anlagen (`systems`, im Schlüsselbund). Ihr Controller verbindet
+// sich über den `DemoDialer` mit der eingebauten Beispielanlage. Verbunden ist
+// immer nur die gewählte Anlage: Solange die Demo gewählt ist, ruht jede
+// Verbindung zu einer echten.
 
 import Foundation
 import Observation
@@ -17,7 +23,13 @@ final class AppModel {
         case failed(String)
     }
 
+    /// Gekoppelte Anlagen (im Schlüsselbund).
     private(set) var systems: [LinkCredentials] = []
+    /// Die Demo-Anlage steht in der Anlagenliste (bleibt über Neustarts erhalten).
+    private(set) var demoActive = DemoStore.isActive
+    /// Alles, was in der Anlagenliste steht: die gekoppelten Anlagen und — als
+    /// eigener, gekennzeichneter Eintrag — die Demo.
+    var entries: [LinkCredentials] { systems + (demoActive ? [DemoStore.credentials] : []) }
     /// Gewählte Anlage — bleibt über Neustarts erhalten.
     var selectedId: String? {
         didSet {
@@ -101,17 +113,23 @@ final class AppModel {
             storageError = String(localized: "Gespeicherte Anlagen konnten nicht gelesen werden (Gerät gesperrt?). Neuer Versuch beim nächsten Öffnen.")
         }
         loaded = true
-        for s in systems where controllers[s.id] == nil { attach(s) }
+        for s in entries where controllers[s.id] == nil { attach(s) }
         let remembered = SharedStore.selectedSystemId ?? UserDefaults.standard.string(forKey: Self.selectedKey)
-        if selectedId == nil || !systems.contains(where: { $0.id == selectedId }) {
-            selectedId = systems.contains(where: { $0.id == remembered }) ? remembered : systems.first?.id
+        if selectedId == nil || !entries.contains(where: { $0.id == selectedId }) {
+            // Sind die gekoppelten Anlagen gerade nicht lesbar, nicht ersatzweise die Demo wählen:
+            // Die gemerkte Auswahl bliebe sonst überschrieben, wenn das Lesen später klappt.
+            let fallback = loadFailed ? nil : entries.first?.id
+            let next = entries.contains(where: { $0.id == remembered }) ? remembered : fallback
+            if next != selectedId { selectedId = next }
         }
     }
 
     var selected: SystemController? { selectedId.flatMap { controllers[$0] } }
+    /// Die Demo ist die gewählte Anlage.
+    var selectedIsDemo: Bool { demoActive && selectedId == DemoPlant.boxId }
 
     private func attach(_ creds: LinkCredentials) {
-        let c = SystemController(credentials: creds)
+        let c = SystemController(credentials: creds, dialer: creds.isDemo ? DemoDialer(box: DemoStore.box) : LinkDialer())
         c.onCredentialsChanged = { [weak self] updated in self?.store(updated) }
         c.onStatus = { [weak self, weak c] status, at in
             guard let self, let c, c.credentials.id == self.selectedId else { return }
@@ -121,6 +139,8 @@ final class AppModel {
     }
 
     private func store(_ creds: LinkCredentials) {
+        // Die Demo hat keine Zugangsdaten — in den Schlüsselbund kommt von ihr nichts.
+        guard !creds.isDemo else { return }
         if let i = systems.firstIndex(where: { $0.id == creds.id }) { systems[i] = creds } else { systems.append(creds) }
         persist()
     }
@@ -158,6 +178,34 @@ final class AppModel {
         guard id != selectedId else { return }
         selected?.stop()
         selectedId = id
+        widgets.reset()
+        selected?.start()
+    }
+
+    // MARK: Demo
+
+    /// „Demo ansehen“: Die Beispielanlage kommt in die Anlagenliste und wird
+    /// gewählt. Eine Verbindung nach außen entsteht dabei nicht.
+    func startDemo() {
+        DemoStore.start()
+        demoActive = true
+        if controllers[DemoPlant.boxId] == nil { attach(DemoStore.credentials) }
+        select(DemoPlant.boxId)
+    }
+
+    /// „Demo beenden“: Die Beispielanlage verschwindet samt allem, was darin
+    /// geändert wurde. War sie gewählt, gilt wieder die erste gekoppelte Anlage.
+    func endDemo() {
+        guard demoActive else { return }
+        let id = DemoPlant.boxId
+        let wasSelected = selectedId == id
+        controllers[id]?.stop()
+        controllers[id] = nil
+        SystemController.forgetMailbox(id)
+        demoActive = false
+        DemoStore.end()
+        guard wasSelected else { return }
+        selectedId = systems.first?.id
         widgets.reset()
         selected?.start()
     }
@@ -241,9 +289,14 @@ final class AppModel {
                 if let ref = old.keyRef, ref != created.keyRef { KeyStore.deleteKey(ref) }
             }
             attach(creds)
+            let fromDemo = selectedIsDemo
             selected?.stop()
             selectedId = creds.id
+            // Stand der Demo nicht als Stand der neuen Anlage in den Widgets stehen lassen.
+            if fromDemo { widgets.reset() }
             selected?.start()
+            // Mit der eigenen Anlage ist die Demo erledigt (unter „Anlagen“ lässt sie sich wieder starten).
+            endDemo()
             pairState = .done(creds.boxName)
         } catch {
             KeyStore.deleteKey(created.keyRef)
@@ -260,6 +313,7 @@ final class AppModel {
     /// Nur auf dem Handy entfernen. Die Kopplung in DVhub bleibt bestehen, bis
     /// sie dort unter „Handy-App“ entfernt wird.
     func remove(_ id: String) {
+        if id == DemoPlant.boxId { endDemo(); return }
         guard !loadFailed else { return }
         controllers[id]?.stop()
         controllers[id] = nil

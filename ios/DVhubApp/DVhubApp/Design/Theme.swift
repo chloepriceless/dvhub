@@ -273,6 +273,7 @@ struct AuroraPage<Content: View>: View {
     @State private var width: CGFloat = 0
     @State private var fold = FoldInsets()
     @Environment(Chrome.self) private var chrome
+    @Environment(AppModel.self) private var model
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// Breite, nach der die Ansichten umbrechen. In den Bedienungshilfen-Größen
@@ -311,6 +312,8 @@ struct AuroraPage<Content: View>: View {
             // Nur einrücken, wenn danach zwei Spalten bleiben (große Schrift braucht mehr Breite).
             Color.clear.onChange(of: FoldInsets(g, minContent: Layout.twoColumns * (typeSize.isAccessibilitySize ? Layout.accessibilityFactor : 1)), initial: true) { _, f in fold = f }
         })
+        // Demo gewählt: Jede Seite trägt oben das Band „DEMO“ — es bleibt beim Rollen stehen.
+        .safeAreaInset(edge: .top, spacing: 0) { if model.selectedIsDemo { DemoStrip() } }
         .scrollContentBackground(.hidden)
         .background(AuroraBackground())
         .toolbarBackground(.ultraThinMaterial, for: .navigationBar)

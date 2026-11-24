@@ -1,4 +1,5 @@
-// SystemsView.swift — gekoppelte Anlagen verwalten.
+// SystemsView.swift — gekoppelte Anlagen verwalten; dazu die Demo als eigener,
+// gekennzeichneter Eintrag (starten, wählen, beenden).
 
 import SwiftUI
 import DVhubLink
@@ -7,6 +8,7 @@ struct SystemsView: View {
     @Environment(AppModel.self) private var model
     @Binding var showPairing: Bool
     @State private var removeId: String?
+    @State private var endingDemo = false
 
     var body: some View {
         List {
@@ -32,9 +34,40 @@ struct SystemsView: View {
                         Button("Entfernen", role: .destructive) { removeId = sys.id }
                     }
                 }
+                if model.systems.isEmpty {
+                    Text("Noch keine Anlage gekoppelt.").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            if model.demoActive {
+                SwiftUI.Section {
+                    Button { model.select(DemoPlant.boxId) } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(DemoStore.name).font(.headline)
+                                DemoTag()
+                                Spacer()
+                                if model.selectedIsDemo { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
+                            }
+                            Text("Beispielanlage mit Beispielwerten").font(.footnote).foregroundStyle(.secondary)
+                            Text("Kein Weg nach außen · nichts wird geschaltet").font(.caption).foregroundStyle(.secondary)
+                            if let c = model.controllers[DemoPlant.boxId], model.selectedIsDemo { ConnectionBadge(controller: c) }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions {
+                        Button("Demo beenden", role: .destructive) { endingDemo = true }
+                    }
+                    .accessibilityIdentifier("systems.demo")
+                    Button(role: .destructive) { endingDemo = true } label: { Label("Demo beenden", systemImage: "xmark.circle.fill") }
+                        .accessibilityIdentifier("demoEnd")
+                        .demoEndDialog($endingDemo)
+                } header: {
+                    Text("Demo")
+                }
             }
             SwiftUI.Section {
                 Button { showPairing = true } label: { Label("Anlage koppeln", systemImage: "qrcode.viewfinder") }
+                if !model.demoActive { DemoStartButton(compact: true) }
             } footer: {
                 Text("Entfernen löscht die Zugangsdaten nur auf diesem Gerät. In DVhub unter Einstellungen → „Handy-App“ die Kopplung ebenfalls entfernen.")
             }
