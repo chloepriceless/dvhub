@@ -54,6 +54,13 @@ test('EEBUS: Sprung vorwärts (+3 h) im Failsafe — die Failsafe-Dauer (2 h) en
   m.evaluate();
   assert.equal(m.effective().state, 'failsafe', 'nach 1 min Laufzeit noch im Failsafe');
   assert.equal(m.effective().limitW, 4200);
+  // Codex 6c0c5a6a P1: das Ende für die Geräte-Grenzen folgt der Restzeit (Systemzeit jetzt + Rest), nicht dem alten
+  // Wanduhr-Zeitpunkt — sonst bekämen die Geräte nach dem Sprung nur noch die Mindestdauer.
+  const rest = 7200 * 1000 - 60_000;
+  assert.ok(Math.abs(m.effective().until - (c.wall + rest)) <= 1000, `until = jetzt + Restzeit: ${m.effective().until - c.wall}`);
+  const u = m.effective().until;
+  c.tick(5000);
+  assert.equal(m.effective().until, u, 'ohne weiteren Sprung stabil');
 });
 
 test('EEBUS: Rücksprung (−3 h) im Failsafe — er endet nach 2 h Laufzeit, nicht 3 h später', () => {

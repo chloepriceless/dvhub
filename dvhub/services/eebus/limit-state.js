@@ -46,6 +46,16 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
   // wie bisher mit der Systemzeit und rechnet die Restzeit danach monoton weiter. Nichts Monotones wird gespeichert.
   const mono = pickMonoNow(monoNowArg, nowArg);
   const m = { initAt: null, lastHeartbeatAt: null, lastWriteAt: null, failsafeSince: null };
+  // Ende des Failsafe als Systemzeit für die Abnehmer (Geräte-Grenzen rechnen daraus ihre Dauer, eebus/index.js):
+  // aus der monotonen Restzeit abgeleitet (Codex 6c0c5a6a P1), aber stabil gehalten — neu nur, wenn es um mehr als
+  // 1 s abweicht (Uhrsprung), damit Gleichheitsvergleiche der Abnehmer ohne Sprung nicht im ms-Takt umschlagen.
+  let failsafeUntilWall = null;
+  function failsafeUntil() {
+    if (m.failsafeSince == null) return s.failsafeSince + s.failsafeDurationS * 1000;
+    const derived = now() + (s.failsafeDurationS * 1000 - (mono() - m.failsafeSince));
+    if (failsafeUntilWall == null || Math.abs(derived - failsafeUntilWall) > 1000) failsafeUntilWall = Math.round(derived);
+    return failsafeUntilWall;
+  }
   const s = {
     kind,
     state: 'disabled',
@@ -69,8 +79,8 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
     if (s.state === next) return false;
     s.state = next;
     s.since = now();
-    if (next === 'failsafe') { s.failsafeSince = now(); m.failsafeSince = mono(); }
-    if (next !== 'failsafe') { s.failsafeSince = null; m.failsafeSince = null; }
+    if (next === 'failsafe') { s.failsafeSince = now(); m.failsafeSince = mono(); failsafeUntilWall = s.failsafeSince + s.failsafeDurationS * 1000; }
+    if (next !== 'failsafe') { s.failsafeSince = null; m.failsafeSince = null; failsafeUntilWall = null; }
     return true;
   }
 
@@ -202,7 +212,7 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
           state: s.state,
           limitW: s.failsafeW,
           reason: `${kind}_failsafe`,
-          until: s.failsafeSince + s.failsafeDurationS * 1000,
+          until: failsafeUntil(),
         };
       default:
         return { state: s.state, limitW: null, reason: s.state, until: null };
@@ -247,6 +257,7 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
       s.failsafeSince = since;
       // Restzeit aus dem früheren Prozess (Systemzeit, einmalig) — ab hier läuft sie monoton ab.
       m.failsafeSince = mono() - Math.max(0, now() - since);
+      failsafeUntilWall = since + s.failsafeDurationS * 1000;
     }
   }
 
