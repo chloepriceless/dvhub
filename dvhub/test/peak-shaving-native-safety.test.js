@@ -91,17 +91,21 @@ test('Codex 65c52509: Sungrow — Geräte-Minimum zählt als Boden (Fenster 30�
   assert.equal(state.ctrl._peakShaving.assist.reason, 'soc_floor');
 });
 
-test('Codex 57c5dc10: zwei Sungrow-WR — jeder gegen seinen eigenen Boden; einer mit Luft reicht', () => {
-  // Master echt 65 % bei Boden 70 % (Geräte-Minimum 70): am Boden. Slave echt 20 % bei Boden 10 %: hat Luft.
-  const cfg = { ...CFG, manufacturer: 'sungrow', victron: { transport: 'modbus' }, peakShaving: { ...CFG.peakShaving, minSocPct: null },
+test('Codex d6916ada: zwei Sungrow-WR — es zählt der WR mit dem kleinsten Abstand zu seinem Boden (inkl. minSocPct)', () => {
+  // Master echt 60 % (Boden 10 %), Slave echt 28 % — peakShaving.minSocPct 40 gilt für jeden entladenen Akku → keine Anforderung.
+  const cfg = { ...CFG, manufacturer: 'sungrow', victron: { transport: 'modbus' }, peakShaving: { ...CFG.peakShaving, minSocPct: 40 },
     sungrow: { secondInverter: { host: '192.0.2.20', aggregateTelemetry: true } },
     controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } } };
-  const state = makeState({ soc: 65 });
-  state.victron.device = { minSocPctDevice: 70, maxSocPctDevice: 100 };
-  state.victron.sungrowMasterSocPct = 0;   // relativ 0 % = echt 70 % = Geräte-Minimum
-  state.sungrowSecond = { online: true, updatedAt: Date.now(), socPct: 20, minSocPctDevice: 10, maxSocPctDevice: 100 };
-  // Slave: relativ 20 % → echt 10 + 0,2 × 90 = 28 % > Boden 10 % (+ Puffer)
+  const state = makeState({ soc: 60 });
+  state.victron.device = { minSocPctDevice: 10, maxSocPctDevice: 100 };
+  state.victron.sungrowMasterSocPct = 55.6;   // echt 10 + 0,556 × 90 ≈ 60 %
+  state.sungrowSecond = { online: true, updatedAt: Date.now(), socPct: 20, minSocPctDevice: 10, maxSocPctDevice: 100 };   // echt 28 %
   const assist = fakeAssist();
   createPeakShaving({ state, getCfg: () => cfg, pushLog: () => {}, batteryAssist: assist }).pollTick();
-  assert.equal(assist.live.has('peak-shaving'), true, JSON.stringify(state.ctrl._peakShaving?.assist));
+  assert.equal(assist.live.has('peak-shaving'), false);
+  // beide über ihrem Boden → Anforderung
+  state.sungrowSecond.socPct = 60;   // echt 64 %
+  const assist2 = fakeAssist();
+  createPeakShaving({ state, getCfg: () => cfg, pushLog: () => {}, batteryAssist: assist2 }).pollTick();
+  assert.equal(assist2.live.has('peak-shaving'), true);
 });

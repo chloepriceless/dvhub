@@ -605,8 +605,13 @@ export function createPeakShaving(ctx, deps = {}) {
   // echte Ladestand gegen den Boden aus hartem Boden und Geräte-Minimum + Puffer
   // (wie der Sungrow-Aktor, sungrowDischargeFloorPct) — JE Wechselrichter gegen
   // seinen eigenen Boden. Mit zweitem WR (aggregateTelemetry) zählt der WR mit
-  // dem größeren Abstand zu seinem Boden: der Split entlädt beide (Codex 57c5dc10
-  // P2). Frische/Fehler bleiben die des gemeldeten Felds (Codex e5a25ac1/65c52509).
+  // dem KLEINSTEN Abstand zu seinem Boden (inkl. peakShaving.minSocPct): der
+  // Sungrow-Split prüft den Peak-Shaving-Boden nicht je WR, und die Kapazität im
+  // Budget ist die des Systems — mit dem kleinsten Abstand ist beides eine
+  // sichere Untergrenze (Codex d6916ada P1/P2). Hat nur ein WR Luft, bleibt es
+  // beim heutigen Verhalten (Christin: im Zweifel Augenblickswert/kein Eingriff;
+  // offene Entscheidung zu Codex 57c5dc10). Frische/Fehler bleiben die des
+  // gemeldeten Felds (Codex e5a25ac1/65c52509).
   function sungrowSocView(c) {
     if (String(c?.manufacturer || '') !== 'sungrow') return null;
     const st = ctx.state || {};
@@ -620,7 +625,9 @@ export function createPeakShaving(ctx, deps = {}) {
     const add = (reported, devMin, devMax) => {
       const real = sungrowRealSocPct(reported, devMin, devMax);
       if (real == null || !Number.isFinite(Number(real))) return;
-      cands.push({ soc: Number(real), floor: sungrowDischargeFloorPct(hard, devMin, buf) });
+      const psMin = Number(c?.peakShaving?.minSocPct);
+      const floor = Math.max(sungrowDischargeFloorPct(hard, devMin, buf), Number.isFinite(psMin) && c?.peakShaving?.minSocPct != null && c.peakShaving.minSocPct !== '' ? psMin : 0);
+      cands.push({ soc: Number(real), floor });
     };
     add(masterReported, dev.minSocPctDevice, dev.maxSocPctDevice);
     try {
@@ -630,7 +637,7 @@ export function createPeakShaving(ctx, deps = {}) {
       }
     } catch { /* ohne zweiten WR */ }
     if (!cands.length) return null;
-    return cands.reduce((a, b) => (b.soc - b.floor > a.soc - a.floor ? b : a));
+    return cands.reduce((a, b) => (b.soc - b.floor < a.soc - a.floor ? b : a));
   }
   function realSocState(c) {
     const view = sungrowSocView(c);
