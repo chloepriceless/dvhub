@@ -231,7 +231,7 @@ enum EmergencyStopAction {
 struct TriggerEmergencyStopIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Not-Halt auslösen"
     static let description = IntentDescription(
-        "DVhub hört auf, Sollwerte an die Anlage zu schreiben. Fragt vorher nach und verlangt das entsperrte iPhone.",
+        "DVhub hört auf, Sollwerte an die Anlage zu schreiben. Fragt vorher nach und verlangt ein entsperrtes Gerät.",
         categoryName: "Steuern")
     /// Nur mit entsperrtem iPhone — nicht über eine entsperrte Uhr, nicht vom Sperrbildschirm.
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
@@ -251,7 +251,7 @@ struct TriggerEmergencyStopIntent: LiveActivityIntent {
 struct ReleaseEmergencyStopIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Not-Halt aufheben"
     static let description = IntentDescription(
-        "DVhub regelt die Anlage wieder. Fragt vorher nach und verlangt das entsperrte iPhone.",
+        "DVhub regelt die Anlage wieder. Fragt vorher nach und verlangt ein entsperrtes Gerät.",
         categoryName: "Steuern")
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
 

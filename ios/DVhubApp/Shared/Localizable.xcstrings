@@ -1980,12 +1980,12 @@
         }
       }
     },
-    "DVhub hört auf, Sollwerte an die Anlage zu schreiben. Fragt vorher nach und verlangt das entsperrte iPhone." : {
+    "DVhub hört auf, Sollwerte an die Anlage zu schreiben. Fragt vorher nach und verlangt ein entsperrtes Gerät." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "DVhub stops writing setpoints to the system. Asks first and requires the unlocked iPhone."
+            "value" : "DVhub stops writing setpoints to the system. Asks first and requires an unlocked device."
           }
         }
       }
@@ -2020,12 +2020,12 @@
         }
       }
     },
-    "DVhub regelt die Anlage wieder. Fragt vorher nach und verlangt das entsperrte iPhone." : {
+    "DVhub regelt die Anlage wieder. Fragt vorher nach und verlangt ein entsperrtes Gerät." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "DVhub controls the system again. Asks first and requires the unlocked iPhone."
+            "value" : "DVhub controls the system again. Asks first and requires an unlocked device."
           }
         }
       }
