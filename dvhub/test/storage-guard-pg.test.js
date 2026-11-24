@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
-import { ensurePgSchema } from '../telemetry-store-pg.js';
+import { ensurePgSchema, runPendingMigrations } from '../telemetry-store-pg.js';
 import { ensureTierStorage } from '../services/telemetry-tiers.js';
 import { createStorageGuard, COMPRESSION_WARNING_ID } from '../services/storage-guard.js';
 
@@ -296,7 +296,8 @@ test('echte TimescaleDB (timescale): Löschen bei fast voller Platte ohne Temp-T
     });
   });
 
-// Codex ee43127e (P1): EIN 15-min-Wert reicht nicht — jede Viertelstunde mit Rohwerten muss abgedeckt sein.
+// Codex ee43127e (P1): EIN 15-min-Wert reicht nicht — jede Viertelstunde mit Rohwerten muss abgedeckt sein
+// (Energie-Slot derselben Reihe; je Reihe siehe den Test darunter).
 test('reines PostgreSQL: has15mFor verlangt die ganze Einheit',
   { skip: process.env.DVHUB_TEST_PG_URL_PLAIN ? false : 'DVHUB_TEST_PG_URL_PLAIN nicht gesetzt' }, async () => {
     const { has15mFor } = await import('../services/raw-retention.js');
@@ -309,10 +310,44 @@ test('reines PostgreSQL: has15mFor verlangt die ganze Einheit',
       const q = (s, p) => pool.query(s, p);
       // nur die erste Stunde hat 15-min-Werte
       await pool.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num)
-        SELECT to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 'grid_import_wh', 'live', 'raw', 1 FROM generate_series(0, 3) g`, [day]);
+        SELECT to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 'grid_total_w', 'live', 'raw', 1 FROM generate_series(0, 3) g`, [day]);
       assert.equal(await has15mFor(q, day, day + 86_400_000), false, 'nur 1 h abgedeckt');
       await pool.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num)
-        SELECT to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 'grid_import_wh', 'live', 'raw', 1 FROM generate_series(4, 95) g`, [day]);
+        SELECT to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 'grid_total_w', 'live', 'raw', 1 FROM generate_series(4, 95) g`, [day]);
       assert.equal(await has15mFor(q, day, day + 86_400_000), true, 'ganzer Tag');
+    });
+  });
+
+// Codex Integration 24.11. (P1): Ersatz zählt JE REIHE — ein Energie-Slot einer anderen Reihe deckt Spannungen,
+// Phasen usw. nicht ab (aufgerüstete Box: energy_slots_15m voll, Datenstufen noch nicht nachgefüllt).
+test('reines PostgreSQL: has15mFor verlangt 15-min-Werte je Reihe, nicht irgendeine Zeile der Viertelstunde',
+  { skip: process.env.DVHUB_TEST_PG_URL_PLAIN ? false : 'DVHUB_TEST_PG_URL_PLAIN nicht gesetzt' }, async () => {
+    const { has15mFor } = await import('../services/raw-retention.js');
+    await withFreshDb(process.env.DVHUB_TEST_PG_URL_PLAIN, async (pool) => {
+      await ensurePgSchema(pool);
+      await runPendingMigrations(pool, {});
+      const day = Date.parse('2026-10-10T00:00:00Z');
+      const q = (s, p) => pool.query(s, p);
+      // Zwei Reihen mit Rohwerten: eine Energie-Reihe und eine Spannung (ohne Energie-Slot).
+      await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+        SELECT k, 'live', 'local_poll', 'raw', to_timestamp($1::double precision / 1000) + g * INTERVAL '5 minutes', 5, g
+          FROM generate_series(0, 287) g, unnest(ARRAY['grid_import_w', 'grid_voltage_l1_v']) k`, [day]);
+      // Ungültige Proben verdichten die Stufen nie — sie dürfen das Löschen nicht für immer sperren.
+      await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+        VALUES ('grid_voltage_l2_v', 'live', 'local_poll', 'invalid', to_timestamp($1::double precision / 1000), 5, 1)`, [day]);
+      // Energie-Slots für den ganzen Tag, aber nur für die Energie-Reihe.
+      await pool.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num)
+        SELECT to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 'grid_import_w', 'local_live', 'raw', 1
+          FROM generate_series(0, 95) g`, [day]);
+      assert.equal(await has15mFor(q, day, day + 86_400_000), false, 'Spannung ohne Ersatz → nicht löschen');
+      // Stufen-Werte für die Spannung, aber nur für einen anderen scope/source → zählt nicht.
+      await pool.query(`INSERT INTO timeseries_samples_15m (series_key, scope, source, bucket_ts, n, n_num, res_min)
+        SELECT 'grid_voltage_l1_v', 'live', 'vrm', to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 1, 1, 5
+          FROM generate_series(0, 95) g`, [day]);
+      assert.equal(await has15mFor(q, day, day + 86_400_000), false, 'fremde Quelle ist kein Ersatz');
+      await pool.query(`INSERT INTO timeseries_samples_15m (series_key, scope, source, bucket_ts, n, n_num, res_min)
+        SELECT 'grid_voltage_l1_v', 'live', 'local_poll', to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 1, 1, 5
+          FROM generate_series(0, 95) g`, [day]);
+      assert.equal(await has15mFor(q, day, day + 86_400_000), true, 'jede Reihe hat ihren Ersatz');
     });
   });

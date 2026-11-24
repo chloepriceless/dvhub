@@ -24,7 +24,7 @@
 // Aufrufer: storage-guard.js (Profil-Aufbewahrung je Lauf und Notfall-Stufen
 // bei „kritisch“).
 
-import { aggregatedUntil } from './telemetry-tiers.js';
+import { aggregatedUntil, TIER_SOURCE_MAX_RES_S } from './telemetry-tiers.js';
 
 export async function rawCompactedUntil(query) {
   const v = await aggregatedUntil({ query });
@@ -73,19 +73,30 @@ export async function oldestRawUnit(query, { timescale }) {
 
 /**
  * Stehen für JEDE Viertelstunde in [fromMs, toMs), in der es 5-s-Live-Rohwerte
- * gibt, 15-min-Werte da (energy_slots_15m oder Stufe timeseries_samples_15m)?
- * Eine einzelne Zeile reicht nicht (Codex ee43127e). Fehlt die Stufen-Tabelle,
- * zählt nur energy_slots_15m.
+ * gibt, 15-min-Werte da — und zwar JE REIHE (series_key, scope, source)? Ersatz
+ * ist die Stufe timeseries_samples_15m derselben Reihe oder, für die
+ * Energie-Reihen, ein Slot in energy_slots_15m mit demselben series_key. Eine
+ * einzelne Zeile reicht nicht (Codex ee43127e), eine Zeile einer ANDEREN Reihe
+ * auch nicht (Codex Integration 24.11., P1): auf einer aufgerüsteten Box steht
+ * energy_slots_15m schon für jede Viertelstunde, die Stufen sind aber noch nicht
+ * nachgefüllt — Spannungen, Phasen usw. wären sonst ohne Ersatz weg.
+ * Gezählt werden nur Rohwerte, die die Stufen auch verdichten (feiner als
+ * 15 min, nicht „invalid“, mit Wert) — sonst sperrte eine ungültige Probe das
+ * Löschen für immer. Fehlt die Stufen-Tabelle, zählt nur energy_slots_15m.
  */
 export async function has15mFor(query, fromMs, toMs) {
   const p = [new Date(fromMs).toISOString(), new Date(toMs).toISOString()];
-  const raw = `SELECT DISTINCT date_bin('15 minutes', ts_utc, TIMESTAMPTZ '2000-01-01') AS q FROM timeseries_samples
-      WHERE scope = 'live' AND series_key NOT LIKE 'price%' AND ts_utc >= $1 AND ts_utc < $2`;
+  const raw = `SELECT DISTINCT date_bin('15 minutes', ts_utc, TIMESTAMPTZ '2000-01-01') AS q, series_key, scope, source
+      FROM timeseries_samples
+      WHERE scope = 'live' AND series_key NOT LIKE 'price%' AND ts_utc >= $1 AND ts_utc < $2
+        AND resolution_seconds < ${TIER_SOURCE_MAX_RES_S} AND quality <> 'invalid'
+        AND (value_num IS NOT NULL OR value_text IS NOT NULL)`;
+  const energy = `EXISTS (SELECT 1 FROM energy_slots_15m e WHERE e.slot_start_utc = r.q AND e.series_key = r.series_key)`;
   const withTier = `SELECT count(*) AS missing FROM (${raw}) r
-      WHERE NOT EXISTS (SELECT 1 FROM energy_slots_15m e WHERE e.slot_start_utc = r.q)
-        AND NOT EXISTS (SELECT 1 FROM timeseries_samples_15m t WHERE t.bucket_ts = r.q)`;
-  const energyOnly = `SELECT count(*) AS missing FROM (${raw}) r
-      WHERE NOT EXISTS (SELECT 1 FROM energy_slots_15m e WHERE e.slot_start_utc = r.q)`;
+      WHERE NOT ${energy}
+        AND NOT EXISTS (SELECT 1 FROM timeseries_samples_15m t
+          WHERE t.series_key = r.series_key AND t.scope = r.scope AND t.source = r.source AND t.bucket_ts = r.q)`;
+  const energyOnly = `SELECT count(*) AS missing FROM (${raw}) r WHERE NOT ${energy}`;
   let r;
   try { r = await query(withTier, p); } catch (e) {
     if (e?.code !== '42P01') throw e;
