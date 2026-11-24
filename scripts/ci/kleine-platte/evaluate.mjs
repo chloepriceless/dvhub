@@ -237,6 +237,9 @@ function evaluateScenario(dir) {
   // Szenario 5: richtige Platte gemessen, beide gewarnt
   if (meta.separateData) {
     const mounts = mountsOf(st);
+    // Stufen je Platte wie bei „stufe“ beim ERSTEN Lauf nach dem Füllen — danach darf die Wache (und seit 24.11.
+    // die Kompression der Datenstufen) Platz schaffen, am Ende ist die PG-Platte dann womöglich schon wieder „ok“.
+    const tickMounts = mountsOf(firstTick).length ? mountsOf(firstTick) : mounts;
     const pgTotal = readJson(path.join(dir, 'fs-main-filled.json'), {}).totalMb;
     const dataTotal = fsData?.totalMb;
     const near = (a, b) => a != null && b != null && Math.abs(a - b) / b < 0.05;
@@ -246,10 +249,12 @@ function evaluateScenario(dir) {
       `Messstellen: ${mounts.map((m) => `${m.dir || m.path || (m.roles || []).join('+') || m.role || '?'}=${m.totalMb} MB (${m.level ?? '–'})`).join(', ') || '–'}; PG-Platte ${pgTotal} MB, DVhub-Daten ${dataTotal} MB`);
     // Stufe je Platte: eigenes Feld, sonst aus freePct mit den alten Prozent-Schwellen (nur zur Einordnung).
     const lv = (m) => m?.level ?? (m?.freePct == null ? null : (m.freePct < 5 ? 'kritisch' : m.freePct < 10 ? 'wenig' : m.freePct < 20 ? 'knapp' : 'ok'));
+    const pgTick = tickMounts.find((m) => near(num(m.totalMb), pgTotal)) || pgMount;
+    const dataTick = tickMounts.find((m) => near(num(m.totalMb), dataTotal)) || dataMount;
     const both = pgMount && dataMount && pgMount !== dataMount;
     const warnBoth = storageWarn.length >= 2 || storageWarn.some((w) => /daten(bank)?/i.test(w.message) && /(dvhub-daten|datenverzeichnis|beide|\/var\/lib\/dvhub)/i.test(w.message));
-    add('warnt-fuer-beide', 'neu', both && levelRank(lv(pgMount)) > 0 && levelRank(lv(dataMount)) > 0 && warnBoth ? 'ok' : (mounts.length > 1 ? 'rot' : 'fehlt'),
-      both ? `PG ${lv(pgMount)}, DVhub-Daten ${lv(dataMount)}; Speicher-Hinweise: ${storageWarn.length}` : 'nicht beide Platten getrennt im Status');
+    add('warnt-fuer-beide', 'neu', both && levelRank(lv(pgTick)) > 0 && levelRank(lv(dataTick)) > 0 && warnBoth ? 'ok' : (mounts.length > 1 ? 'rot' : 'fehlt'),
+      both ? `erster Lauf nach Füllen: PG ${lv(pgTick)}, DVhub-Daten ${lv(dataTick)} (am Ende PG ${lv(pgMount)}, DVhub-Daten ${lv(dataMount)}); Speicher-Hinweise: ${storageWarn.length}` : 'nicht beide Platten getrennt im Status');
   }
 
   const bad = checks.filter((c) => c.status === 'rot' || c.status === 'fehlt');
