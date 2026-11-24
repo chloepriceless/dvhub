@@ -135,6 +135,7 @@ import Cursor from 'pg-cursor';
 // (b) buffering full result sets and shipping CSV/JSON instead — both worse.
 import parquet from '@dsnp/parquetjs';
 import { notHaltSuspendedLabels } from './services/emergency-stop/policy.js';
+import { peakBillingReport } from './services/peak-shaving/index.js';
 import { buildPriceOutlookPayload, publicPriceTail, outlookContiguousEndMs, realPriceCoverage, MIN_REAL_AHEAD_MS } from './services/optimizer/price-outlook.js';
 
 // Plan 09.2-08 (D-13/D-24 revised): single module-scope schema instance for the
@@ -892,9 +893,14 @@ export function actorContext(req) {
 // Einstellungen, die in den EOS-Plan eingehen. Reine Anzeige-, Takt- und
 // Diagnosewerte lösen keinen Sofort-Lauf aus.
 // epex.priceOutlook (1.0.11): Preisprognose an/aus ändert Schwanz und Wertgrundlage des E-Autos.
-const EOS_REPLAN_PREFIXES = ['optimizer.', 'userEnergyPricing.', 'wallbox.', 'forecast.pv.', 'forecast.location.', 'paragraph14a.', 'epex.priceOutlook'];
+// peakShaving.: EOS plant mit der kleineren Bezugsgrenze und setzt sie als Schwelle in die Regeln (P2) — nach einer
+// Änderung neu planen, sonst gilt die alte Schwelle weiter (Codex 0d080d53 P2). Nur die Preise sind reine Anzeige.
+const EOS_REPLAN_PREFIXES = ['optimizer.', 'userEnergyPricing.', 'wallbox.', 'forecast.pv.', 'forecast.location.', 'paragraph14a.', 'epex.priceOutlook', 'peakShaving.'];
 const EOS_REPLAN_IGNORE = ['optimizer.eosEmsIntervalSec', 'optimizer.eosGeneticGenerations', 'optimizer.eosFitnessCacheMaxEntries',
-  'optimizer.eosStartAfterPreviousRun', 'optimizer.ruleHorizonHours', 'optimizer.eosProxy.timeoutMs', 'optimizer.eosFallbackSma'];
+  'optimizer.eosStartAfterPreviousRun', 'optimizer.ruleHorizonHours', 'optimizer.eosProxy.timeoutMs', 'optimizer.eosFallbackSma',
+  'peakShaving.tariff.lpLowEurPerKwYear', 'peakShaving.tariff.apLowCtPerKwh', 'peakShaving.tariff.lpHighEurPerKwYear',
+  'peakShaving.tariff.apHighCtPerKwh', 'peakShaving.tariff.lpMonthEurPerKwMonth', 'peakShaving.tariff.apMonthCtPerKwh',
+  'peakShaving.releaseHysteresisW', 'peakShaving.minSocPct'];
 export function configChangeNeedsEosReplan(changedPaths) {
   if (!Array.isArray(changedPaths)) return false;
   return changedPaths.some((p) => typeof p === 'string'
@@ -8585,6 +8591,25 @@ export function createApiRoutes(ctx) {
         date: url.searchParams.get('date'),
         estimated: url.searchParams.get('estimated')
       }));
+      if (result === HEAVY_SKIPPED) return;
+      return json(res, result.status, result.body);
+    }
+
+    // Peak Shaving P4 (Christin 24.11.2026): Leistungsentgelt in € für Monat
+    // bzw. Jahr der Historie (services/peak-shaving peakBillingReport). Monat
+    // und Jahr sind Pro wie /api/history/summary.
+    if (url.pathname === '/api/history/peak-billing' && req.method === 'GET') {
+      if (!requirePro(req, res, 'history-multiperiod')) return;
+      const result = await historyQueue.run({ key: url.pathname + url.search, req, res }, async () => {
+        try {
+          return await peakBillingReport(ctx.telemetryStore, getCfg() || {}, {
+            view: url.searchParams.get('view'),
+            date: url.searchParams.get('date')
+          });
+        } catch {
+          return { status: 500, body: { ok: false, error: 'peak billing query failed' } };
+        }
+      });
       if (result === HEAVY_SKIPPED) return;
       return json(res, result.status, result.body);
     }

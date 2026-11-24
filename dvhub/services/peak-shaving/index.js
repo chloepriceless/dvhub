@@ -32,15 +32,27 @@
 
 import { betaGateOpen } from '../../beta-features.js';
 import { localParts, zoneOffsetMs } from '../../tz-fast.js';
-import { capPositiveSetpoint } from '../import-limit/core.js';
-import { monoNow as sharedMonoNow, monoStampOf, monoStampAge } from '../mono-clock.js';
+import { capPositiveSetpoint, meterImport } from '../import-limit/core.js';
+// A24 (Erzeuger-Stempel monoton) und P1 (Viertelstunden-Budget) teilen dieselbe monotone Uhr.
+import { monoNow as sharedMonoNow, monoNow as defaultMonoNow, monoStampOf, monoStampAge } from '../mono-clock.js';
+import { resolveBatteryLever } from '../grid-connection/index.js';
+import { sungrowDischargeFloorPct, sungrowSocFloorBufferPct, sungrowRealSocPct, resolveSecondInverter, secondInverterTelemetry } from '../inverter/sungrow.js';
+import { createBudgetState, observeBudget, decideBudget, quarterHourSlot } from './budget.js';
+import { resolveTariff, computeYearBilling } from './billing.js';
 
 export const PEAK_SHAVING_DEFAULTS = Object.freeze({
   enabled: false,
   gridImportLimitW: null,
   marginW: 300,
   releaseHysteresisW: 500,
-  minSocPct: null
+  minSocPct: null,
+  // Abrechnung nach 15-min-Mittelwert (P1, Christin 24.11.2026): DVhub führt je
+  // Viertelstunde ein Energiebudget und greift erst ein, wenn die Hochrechnung
+  // es reißen würde. Aus = Deckel auf den Augenblickswert (Verhalten bis 1.0.10).
+  billing15min: true,
+  // Grenze an erreichte Jahresspitze (bei Monatsleistungspreis: Monatsspitze)
+  // anpassen (P3, Christin 24.11.2026). Ab Werk aus.
+  adaptToReachedPeak: false
 });
 
 // Unter 1 kW ist eine Bezugsgrenze kein Gewerbe-Leistungspreis mehr, sondern
@@ -64,7 +76,21 @@ export function resolvePeakShaving(cfg = {}) {
   const configured = finite(c.gridImportLimitW) && rawLimit >= MIN_LIMIT_W && rawLimit <= MAX_LIMIT_W;
   const limitW = configured ? Math.round(rawLimit) : null;
   const manufacturer = String(cfg?.manufacturer || 'victron');
-  const supported = manufacturer === 'victron';
+  // Hebel (P5, Christin 24.11.2026) — nach dem, was das Profil kann, nicht nach
+  // dem Herstellernamen (wie der Netzanschluss, resolveBatteryLever):
+  //   victron  Sollwert-Deckel + Entlade-Freigabe im Steuerpfad (schedule-eval)
+  //   native   Netz-Sollwert und/oder Entladegrenze schreibbar (Sungrow-EMS,
+  //            MQTT-Bridge, DVhub-MQTT …) → Akku-Hilfe des Netzanschluss-Wächters
+  //            (ctx.batteryAssist, Quelle 'peak-shaving')
+  //   builtin  eingebaute Peak-Shaving-Funktion des Wechselrichters
+  //            (Profilblock peakShavingBuiltin, ungetestet, nur mit Schalter)
+  //   none     nichts davon → nur Anzeige
+  const batteryLever = resolveBatteryLever(cfg);
+  const builtinAvailable = builtinSpecValid(cfg?.peakShavingBuiltin);
+  const lever = batteryLever.kind !== 'none' ? batteryLever.kind
+    : builtinAvailable ? (c.builtin?.enabled === true ? 'builtin' : 'builtin_off')
+      : 'none';
+  const supported = lever === 'victron' || lever === 'native' || lever === 'builtin';
   const marginRaw = finite(c.marginW) ? Number(c.marginW) : PEAK_SHAVING_DEFAULTS.marginW;
   const marginW = limitW == null ? Math.max(0, Math.round(marginRaw))
     : Math.min(Math.round(limitW / 2), Math.max(0, Math.round(marginRaw)));
@@ -72,10 +98,13 @@ export function resolvePeakShaving(cfg = {}) {
   const releaseHysteresisW = Math.max(0, Math.round(hystRaw));
   const minSocPct = finite(c.minSocPct) && Number(c.minSocPct) >= 0 && Number(c.minSocPct) <= 100
     ? Number(c.minSocPct) : null;
+  // Ab Werk an; nur ein ausdrückliches false schaltet auf den Augenblickswert.
+  const billing15min = c.billing15min !== false;
+  const adaptToReachedPeak = c.adaptToReachedPeak === true;
   const reason = !flagOn ? 'disabled'
     : !gateOpen ? 'beta_gate_closed'
       : !configured ? 'limit_missing'
-        : !supported ? 'manufacturer_unsupported'
+        : !supported ? (lever === 'builtin_off' ? 'builtin_disabled' : 'manufacturer_unsupported')
           : null;
   return {
     enabled,
@@ -83,11 +112,16 @@ export function resolvePeakShaving(cfg = {}) {
     supported,
     active: reason === null,
     manufacturer,
+    lever,
+    leverText: lever === 'builtin' || lever === 'builtin_off' ? 'eingebaute Peak-Shaving-Funktion des Wechselrichters (ungetestet)' : batteryLever.text,
+    builtinAvailable,
     limitW,
     marginW,
     targetW: limitW == null ? null : limitW - marginW,
     releaseHysteresisW,
     minSocPct,
+    billing15min,
+    adaptToReachedPeak,
     reason
   };
 }
@@ -96,8 +130,20 @@ const STATUS_TEXT = {
   disabled: 'Peak Shaving ist aus.',
   beta_gate_closed: 'Peak Shaving ist eine Beta-Funktion und wirkt nur im Bleeding-Edge-Kanal.',
   limit_missing: 'Keine gültige Bezugsgrenze eingetragen (mindestens 1000 W) — DVhub regelt nicht.',
-  manufacturer_unsupported: 'Peak Shaving regelt bisher nur Victron-Anlagen. Bei diesem Hersteller zeigt DVhub die Spitzen nur an.'
+  manufacturer_unsupported: 'Peak Shaving braucht einen steuerbaren Akku: Victron, ein Profil mit schreibbarem Netz-Sollwert oder Entladegrenze (z. B. Sungrow, MQTT-Bridge) oder eine eingebaute Peak-Shaving-Funktion des Wechselrichters. Bei diesem Hersteller zeigt DVhub die Spitzen nur an.',
+  builtin_disabled: 'Der Wechselrichter hat eine eingebaute Peak-Shaving-Funktion (im Profil hinterlegt, ungetestet). DVhub nutzt sie erst, wenn „Eingebaute Peak-Shaving-Funktion nutzen“ eingeschaltet ist — bis dahin nur Anzeige.'
 };
+
+/**
+ * Profilblock peakShavingBuiltin (P5): mindestens ein Schreibpunkt `limit` oder
+ * `mode` mit ganzzahliger Adresse. Genauer geprüft wird beim Schreiben
+ * (services/peak-shaving/builtin.js).
+ */
+export function builtinSpecValid(spec) {
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return false;
+  const ok = (p) => p && typeof p === 'object' && Number.isInteger(Number(p.address)) && Number(p.address) >= 0 && Number(p.address) <= 0xffff;
+  return ok(spec.limit) || ok(spec.mode);
+}
 
 /** Kurzer deutscher Statustext zum Ergebnis von resolvePeakShaving(). */
 export function peakShavingStatusText(resolved) {
@@ -109,6 +155,8 @@ export function peakShavingStatusText(resolved) {
 // Messwerte, auf denen eine Peak-Shaving-Entscheidung beruhen darf. Strenger als
 // T-0075: ein Feld OHNE Erfolgs-Zeitstempel gilt als unbekannt, nicht als frisch.
 const METER_MAX_AGE_MS = 15_000;
+// Akku-Leistung fürs Viertelstunden-Budget: höchstens so alt (Abfrage alle 2–5 s).
+const BATTERY_POWER_MAX_AGE_MS = 30_000;
 const PV_FIELDS = ['pvPowerW', 'acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W'];
 
 // A24: Alter monoton, wenn der Poller den Stempel monoton markiert hat (gleiche Uhr), sonst Wanduhr wie bisher.
@@ -133,7 +181,9 @@ export function peakShavingTelemetry(state, cfg, resolved, now = Date.now()) {
     const age = fieldAgeMs(state, field, now);
     return age !== null && age <= maxAgeMs && !v.errors?.[field];
   };
-  const floorPct = Math.max(Number(cfg?.optimizer?.hardFloorSocPct ?? 5) || 0, Number(resolved?.minSocPct ?? 0) || 0);
+  // extraFloorPct: herstellerabhängiger Boden (Sungrow: Geräte-Minimum + Puffer, als echter SoC).
+  const floorPct = Math.max(Number(cfg?.optimizer?.hardFloorSocPct ?? 5) || 0, Number(resolved?.minSocPct ?? 0) || 0,
+    Number(resolved?.extraFloorPct ?? 0) || 0);
   const socRaw = v.soc;
   const soc = Number(socRaw);
   const socKnown = socRaw != null && socRaw !== '' && Number.isFinite(soc) && fresh('soc');
@@ -177,7 +227,14 @@ export function peakShavingTelemetry(state, cfg, resolved, now = Date.now()) {
     netLoadW: loadKnown ? Math.max(0, loadW - pvW) : null,
     meterFresh,
     importW: meterFresh ? Math.max(0, Number(importRaw)) : null,
-    batteryDischargeW: Math.max(0, Number(v.batteryDischargeW) || 0)
+    batteryDischargeW: Math.max(0, Number(v.batteryDischargeW) || 0),
+    // Akku-Leistung frisch gelesen (fürs Viertelstunden-Budget: eine
+    // hängengebliebene 0 hieße sonst „entlädt nicht“, Codex d7dcce9c P2).
+    batteryFresh: (() => {
+      const age = fieldAgeMs(state, 'batteryPowerW', now);
+      return age !== null && age <= BATTERY_POWER_MAX_AGE_MS && !v.errors?.batteryPowerW
+        && v.freeze?.active !== true && v.batteryPowerW != null && Number.isFinite(Number(v.batteryPowerW));
+    })()
   };
 }
 
@@ -406,15 +463,108 @@ export function peakPeriods(nowMs = Date.now(), timeZone = 'Europe/Berlin') {
 }
 
 /**
+ * Regelziel für EOS (P2): aktiv → Grenze − Abstand, sonst null. EOS plant in
+ * Viertelstunden-Energie — das Ziel ist zugleich das Budget-Mittel.
+ */
+export function eosPeakShavingTargetW(cfg) {
+  const r = resolvePeakShaving(cfg);
+  return r.active ? r.targetW : null;
+}
+
+/**
+ * Leistungsentgelt für die Historie (P4, GET /api/history/peak-billing): Jahr
+ * bzw. Monat des Datums `date` (YYYY-MM-DD, Ortszeit). Gerechnet wird immer
+ * über das ganze Kalenderjahr (Stufe nach Benutzungsdauer); die Monatsansicht
+ * zeigt dazu die Zeile des Monats. enabled=false: Peak Shaving ist aus (die
+ * Historie blendet die Karte dann aus).
+ */
+export async function peakBillingReport(store, cfg, { view = 'year', date = null, nowMs = Date.now() } = {}) {
+  const r = resolvePeakShaving(cfg);
+  if (!r.enabled) return { status: 200, body: { ok: true, enabled: false } };
+  if (typeof store?.getPeakBillingMonths !== 'function') return { status: 503, body: { ok: false, error: 'internal telemetry store disabled' } };
+  const tz = cfg?.schedule?.timezone || 'Europe/Berlin';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || ''));
+  const at = m ? localMidnightUtcMs(Number(m[1]), Number(m[2]), Number(m[3]), tz) + 12 * 3_600_000 : nowMs;
+  if (!Number.isFinite(at)) return { status: 400, body: { ok: false, error: 'invalid date' } };
+  const p = peakPeriods(at, tz);
+  const months = await store.getPeakBillingMonths({ ...p.year, timeZone: tz });
+  const tariff = resolveTariff(cfg);
+  const year = computeYearBilling({ months, tariff, period: { startMs: Date.parse(p.year.start), endMs: Date.parse(p.year.end) }, nowMs });
+  const lp = localParts(at, tz);
+  const ym = `${lp.year}-${String(lp.month).padStart(2, '0')}`;
+  return {
+    status: 200,
+    body: {
+      ok: true, enabled: true, view: view === 'month' ? 'month' : 'year', year: lp.year, ym,
+      limitW: r.limitW, model: tariff.model, tariffComplete: tariff.complete, tariffMissing: tariff.missing,
+      billing: year,
+      month: view === 'month' ? (year.months.find((x) => x.ym === ym) || { ym, energyKwh: 0, peakW: null }) : null
+    }
+  };
+}
+
+/** Deutsche Kurztexte, warum DVhub gerade auf den Augenblickswert deckelt. */
+export const BUDGET_REASON_TEXT = Object.freeze({
+  billing_instant: 'Abrechnung nach Augenblickswert eingestellt',
+  no_data: 'Viertelstunde noch ohne Messwerte',
+  clock_jump: 'Uhrzeit gesprungen',
+  measurements_uncertain: 'Messlücken in dieser Viertelstunde',
+  meter_stale: 'Zählerwert nicht frisch',
+  slot_ending: 'Viertelstunde endet gleich',
+  soc_unknown: 'Ladestand unbekannt',
+  telemetry_frozen: 'Messwerte eingefroren',
+  source_mismatch: 'Messquellen widersprechen sich',
+  soc_floor: 'Akku am Mindest-Ladestand',
+  soc_near_floor: 'Akku nahe am Mindest-Ladestand',
+  discharge_unknown: 'Entladeleistung des Akkus nicht eingetragen',
+  discharge_limited: 'Akku entlädt schon nahe seiner Höchstleistung',
+  battery_power_unknown: 'Akku-Leistung nicht frisch gemessen',
+  soc_energy: 'Energie im Akku reicht nicht für den Rest der Viertelstunde',
+  budget_exceeded: 'Budget der Viertelstunde verbraucht'
+});
+
+/**
+ * Akku-Lage für das Viertelstunden-Budget. Die Entladeleistung zählt nur, wenn
+ * der Betreiber sie eingetragen hat (Akku-Grenzen: „Max. Entladeleistung“ bzw.
+ * „Wechselrichter-Nennleistung“, oder system.power) — nicht die Werks-Vorgaben
+ * und nicht die Vorgabe der Kleinen Börsenautomatik. Sonst weiß DVhub nicht, ob
+ * der Akku den Bezug zurückholen kann, und bleibt beim Augenblickswert.
+ * Kapazität ebenso (ohne Eintrag entfällt nur die Energie-Prüfung).
+ */
+export function budgetBatteryInput(cfg, tel, { liveLimitW = null } = {}) {
+  const pos = (v) => (finite(v) && Math.abs(Number(v)) > 0 ? Math.abs(Number(v)) : null);
+  const sp = cfg?.system?.power || {};
+  const opt = cfg?.optimizer || {};
+  const rated = [pos(sp.batteryMaxDischargeDcW) ?? pos(opt.maxDischargeW), pos(sp.inverterMaxPowerW) ?? pos(opt.inverterMaxPowerW)]
+    .filter((w) => w != null);
+  // Eine gerade im Gerät stehende Entladegrenze unter der Nennleistung zählt mit
+  // (Codex d7dcce9c P1) — nur, wenn es überhaupt eine Nennleistung gibt.
+  const caps = rated.length && finite(liveLimitW) && Number(liveLimitW) > 0 ? [...rated, Number(liveLimitW)] : rated;
+  return {
+    socOk: tel?.socOk === true,
+    socReason: tel?.socReason ?? null,
+    soc: tel?.soc ?? null,
+    floorPct: tel?.floorPct ?? 0,
+    dischargeW: tel?.batteryFresh === true ? Math.max(0, Number(tel?.batteryDischargeW) || 0) : null,
+    maxDischargeW: caps.length ? Math.min(...caps) : null,
+    capacityWh: pos(sp.batteryCapacityWh) ?? pos(opt.batteryCapacityWh)
+  };
+}
+
+/**
  * Status-Dienst für Leitstand und /api/status. Läuft im Laufzeit-Prozess
  * (dort liegen Steuerzustand und Datenbank); die Spitzen kommen alle 5 min aus
  * energy_slots_15m. Ausgeschaltet: kein Status, keine Abfrage.
  */
 export function createPeakShaving(ctx, deps = {}) {
   const now = deps.now || (() => Date.now());
+  const mono = deps.monoNow || (deps.now ? deps.now : defaultMonoNow);
   let peaks = { month: null, year: null, updatedAt: null, error: null };
   let timer = null;
   let busy = false;
+  // Viertelstunden-Budget (P1): je Zählerabfrage fortgeschrieben (pollTick).
+  const budget = createBudgetState();
+  let budgetLogKey = null;
 
   const cfg = () => ctx.getCfg?.() || {};
 
@@ -431,13 +581,240 @@ export function createPeakShaving(ctx, deps = {}) {
       const p = peakPeriods(nowMs, c.schedule?.timezone || 'Europe/Berlin');
       const month = await store.getGridImportPeak(p.month);
       const year = await store.getGridImportPeak(p.year);
+      // P3: angepasst wird nur an ABGESCHLOSSENE Viertelstunden — die laufende
+      // wächst noch; ein Deckel auf ihren Zwischenstand höbe die Spitze weiter
+      // an (Codex ac14daee P1).
+      const tz = c.schedule?.timezone || 'Europe/Berlin';
+      const openStart = new Date(quarterHourSlot(nowMs, tz).startMs).toISOString();
+      const closedEnd = (per) => (Date.parse(per.end) > Date.parse(openStart) ? openStart : per.end);
+      const adaptOn = resolvePeakShaving(c).adaptToReachedPeak;
+      const adaptMonth = adaptOn ? await store.getGridImportPeak({ start: p.month.start, end: closedEnd(p.month) }) : null;
+      const adaptYear = adaptOn ? await store.getGridImportPeak({ start: p.year.start, end: closedEnd(p.year) }) : null;
       const strip = (x) => (x ? { slotStart: x.slotStart, powerW: x.powerW } : null);
-      peaks = { month: strip(month), year: strip(year), updatedAt: new Date(nowMs).toISOString(), error: null };
+      // P4: Monatswerte des laufenden Jahres fürs Leistungsentgelt (ohne
+      // Datenbank-Funktion: keine €-Anzeige, die Spitzen bleiben).
+      let months = null;
+      if (typeof store.getPeakBillingMonths === 'function') {
+        months = await store.getPeakBillingMonths({ ...p.year, timeZone: c.schedule?.timezone || 'Europe/Berlin' });
+      }
+      peaks = {
+        month: strip(month), year: strip(year), periods: p, months,
+        adapt: { month: strip(adaptMonth), year: strip(adaptYear) },
+        updatedAt: new Date(nowMs).toISOString(), error: null
+      };
     } catch (e) {
       peaks = { ...peaks, error: e?.message || String(e) };
     } finally {
       busy = false;
     }
+  }
+
+  // Entladegrenze, die gerade im Gerät steht und Peak Shaving bzw. die
+  // Akku-Hilfe NICHT selbst gesetzt hat (eine eigene Freigabe kann DVhub weiter
+  // anheben; 0 = Sperre hebt Peak Shaving selbst auf; −1 = unbegrenzt).
+  function liveDischargeLimitW(c, t) {
+    const k = knownMaxDischargeW(ctx.state, c, t);
+    if (!k || !Number.isFinite(k.value) || k.value <= 0) return null;
+    if (ctx.state?.ctrl?._peakShaving?.discharge?.phase === 'lifted') return null;
+    const lw = ctx.state?.schedule?.lastWrite?.maxDischargeW;
+    if (lw && /^(peak_shaving|grid_connection)/.test(String(lw.source || '')) && Number(lw.value) === k.value) return null;
+    return k.value;
+  }
+
+  // Sungrow meldet den Ladestand relativ zum Geräte-Fenster: verglichen wird der
+  // echte Ladestand gegen den Boden aus hartem Boden und Geräte-Minimum + Puffer
+  // (wie der Sungrow-Aktor, sungrowDischargeFloorPct) — JE Wechselrichter gegen
+  // seinen eigenen Boden. Mit zweitem WR (aggregateTelemetry) zählt der WR mit
+  // dem KLEINSTEN Abstand zu seinem Boden (inkl. peakShaving.minSocPct): der
+  // Sungrow-Split prüft den Peak-Shaving-Boden nicht je WR, und die Kapazität im
+  // Budget ist die des Systems — mit dem kleinsten Abstand ist beides eine
+  // sichere Untergrenze (Codex d6916ada P1/P2). Hat nur ein WR Luft, bleibt es
+  // beim heutigen Verhalten (Christin: im Zweifel Augenblickswert/kein Eingriff;
+  // offene Entscheidung zu Codex 57c5dc10). Frische/Fehler bleiben die des
+  // gemeldeten Felds (Codex e5a25ac1/65c52509).
+  function sungrowSocView(c) {
+    if (String(c?.manufacturer || '') !== 'sungrow') return null;
+    const st = ctx.state || {};
+    const v = st.victron || {};
+    const hard = Number(c?.optimizer?.hardFloorSocPct ?? 5);
+    let buf;
+    try { buf = sungrowSocFloorBufferPct(c); } catch { buf = 0; }
+    const dev = v.device || {};
+    const masterReported = finite(v.sungrowMasterSocPct) ? Number(v.sungrowMasterSocPct) : v.soc;
+    const cands = [];
+    const add = (reported, devMin, devMax) => {
+      const real = sungrowRealSocPct(reported, devMin, devMax);
+      if (real == null || !Number.isFinite(Number(real))) return;
+      const psMin = Number(c?.peakShaving?.minSocPct);
+      const floor = Math.max(sungrowDischargeFloorPct(hard, devMin, buf), Number.isFinite(psMin) && c?.peakShaving?.minSocPct != null && c.peakShaving.minSocPct !== '' ? psMin : 0);
+      cands.push({ soc: Number(real), floor });
+    };
+    add(masterReported, dev.minSocPctDevice, dev.maxSocPctDevice);
+    try {
+      if (resolveSecondInverter(c).aggregateTelemetry === true) {
+        const t2 = secondInverterTelemetry(st, c, {});
+        if (t2) add(t2.socPct, t2.minSocPctDevice, t2.maxSocPctDevice);
+      }
+    } catch { /* ohne zweiten WR */ }
+    if (!cands.length) return null;
+    return cands.reduce((a, b) => (b.soc - b.floor < a.soc - a.floor ? b : a));
+  }
+  function realSocState(c) {
+    const view = sungrowSocView(c);
+    const st = ctx.state || {};
+    if (!view) return st;
+    return { ...st, victron: { ...st.victron, soc: view.soc } };
+  }
+  function withDeviceFloor(c, r) {
+    const view = sungrowSocView(c);
+    return view ? { ...r, extraFloorPct: view.floor } : r;
+  }
+
+  function budgetBattery(c, r, t) {
+    const tel = peakShavingTelemetry(realSocState(c), c, withDeviceFloor(c, r), t);
+    return { tel, battery: budgetBatteryInput(c, tel, { liveLimitW: liveDischargeLimitW(c, t) }) };
+  }
+
+  /**
+   * Wirksame Regelwerte für den Steuerpfad: wie resolvePeakShaving, im
+   * Budget-Modus mit limitW = targetW = erlaubte Restleistung der Viertelstunde
+   * (configuredLimitW/configuredTargetW bleiben die Einstellung). Ohne aktives
+   * Peak Shaving unverändert.
+   */
+  /**
+   * P3: Grenze an die erreichte Spitze des Abrechnungszeitraums anpassen (Jahr,
+   * bei Monatsleistungspreis Monat). Nur mit Schalter, nur mit einer Spitze aus
+   * DEM laufenden Zeitraum (nach dem Jahres-/Monatswechsel gilt bis zum nächsten
+   * Lesen wieder die Einstellung), auf 100 W abgerundet. Liefert die Auflösung
+   * mit angepasster limitW/targetW sowie adaptedFrom/reachedPeakW.
+   */
+  function adapted(c, r, t = now()) {
+    const scope = c?.peakShaving?.tariff?.model === 'month' ? 'month' : 'year';
+    // Mit Schalter nur abgeschlossene Viertelstunden; für den Hinweis (Schalter
+    // aus) reicht die angezeigte Spitze.
+    const pk = r.adaptToReachedPeak ? peaks.adapt?.[scope] : peaks[scope];
+    const per = peaks.periods?.[scope];
+    const cur = per ? peakPeriods(t, c.schedule?.timezone || 'Europe/Berlin')[scope] : null;
+    const current = Boolean(pk && per && cur && per.start === cur.start && finite(pk.powerW));
+    const reachedPeakW = current ? Math.round(Number(pk.powerW)) : null;
+    const info = { configuredLimitW: r.limitW, configuredTargetW: r.targetW, adaptScope: scope, reachedPeakW, adaptedFrom: null };
+    if (!r.active || !r.adaptToReachedPeak || reachedPeakW == null) return { ...r, ...info };
+    const w = Math.min(MAX_LIMIT_W, Math.floor(reachedPeakW / 100) * 100);
+    if (!(w > r.limitW)) return { ...r, ...info };
+    return { ...r, ...info, limitW: w, targetW: w - r.marginW, adaptedFrom: scope };
+  }
+
+  function control(c = cfg(), t = now()) {
+    const r0 = resolvePeakShaving(c);
+    if (!r0.active) return r0;
+    const r = adapted(c, r0, t);
+    const base = r;
+    const { battery } = budgetBattery(c, r, t);
+    const meas = meterImport(ctx.state, c, { now: t, maxAgeMs: METER_MAX_AGE_MS });
+    const dec = decideBudget(budget, {
+      enabled: r.billing15min, wallMs: t, limitW: r.limitW, marginW: r.marginW, targetW: r.targetW,
+      importW: meas.fresh ? meas.importW : null, battery
+    });
+    if (dec.mode === 'budget') return { ...base, limitW: dec.targetW, targetW: dec.targetW, budget: dec };
+    return { ...base, budget: dec };
+  }
+
+  // P5: Profile mit eigenem Netz-Sollwert bzw. Entladegrenze (Sungrow-EMS,
+  // MQTT-Bridge, DVhub-MQTT): Akku-Hilfe beim Netzanschluss-Wächter anfordern —
+  // höchster Netzbezug = Regelziel (im Budget-Modus die erlaubte Restleistung).
+  // Gilt 30 s und wird je Zählerabfrage erneuert; fällt der Dienst aus, läuft
+  // sie ab. Not-Halt: der Wächter nimmt keine an (und gibt eine stehende frei).
+  const ASSIST_SOURCE = 'peak-shaving';
+  let assistHeld = false;
+  let assistLogKey = null;
+  function nativeAssist(ctl, t, c = null) {
+    const assist = ctx.batteryAssist || ctx.gridConnection?.batteryAssist || null;
+    const want = ctl && ctl.active && ctl.lever === 'native' && Number.isFinite(Number(ctl.targetW));
+    if (!want || typeof assist?.request !== 'function') {
+      if (assistHeld) assist?.release?.(ASSIST_SOURCE);
+      assistHeld = false;
+      if (ctx.state?.ctrl?._peakShaving?.assist) ctx.state.ctrl._peakShaving.assist = null;
+      assistLogKey = null;
+      return;
+    }
+    // Ladestand-Schutz wie beim Victron-Hebel (Codex 2be66554 P1): der Wächter
+    // prüft beim Sollwert-Deckel keinen Ladestand und bei der Entladegrenze nur
+    // seine eigenen Böden. Ladestand unbekannt, veraltet, eingefroren oder am
+    // Boden (inkl. peakShaving.minSocPct) → keine Anforderung, eine stehende zurück.
+    const tel = peakShavingTelemetry(realSocState(c || cfg()), c || cfg(), withDeviceFloor(c || cfg(), ctl), t);
+    const res = tel.socOk
+      ? (assist.request({ source: ASSIST_SOURCE, maxImportW: Math.max(0, Math.round(ctl.targetW)), untilMs: t + 30_000 }) || {})
+      : { ok: false, reason: tel.socReason || 'soc_unknown' };
+    // Abgelehnt (Not-Halt, Ladestand, …): eine früher angenommene Anforderung
+    // nicht stehen lassen — der Wächter behält sie sonst bis zum Ablauf
+    // (Codex 2be66554 P2).
+    if (res.ok !== true) assist.release?.(ASSIST_SOURCE);
+    assistHeld = res.ok === true;
+    if (ctx.state) {
+      ctx.state.ctrl ??= {};
+      (ctx.state.ctrl._peakShaving ??= {}).assist = {
+        requested: assistHeld, maxImportW: Math.round(ctl.targetW), reason: assistHeld ? null : (res.reason || 'rejected'), at: t
+      };
+    }
+    const key = `${assistHeld}|${res.reason || ''}`;
+    if (key !== assistLogKey) {
+      assistLogKey = key;
+      ctx.pushLog?.('peak_shaving_assist', {
+        requested: assistHeld, maxImportW: Math.round(ctl.targetW), reason: res.reason || null, lever: ctl.leverText,
+        text: assistHeld ? `Peak Shaving: Akku-Hilfe angefordert (${ctl.leverText})` : `Peak Shaving: Akku-Hilfe nicht möglich (${res.reason || 'abgelehnt'})`
+      }, assistHeld ? 'info' : 'warn');
+    }
+  }
+
+  /** Je Zählerabfrage (polling.js): Netzbezug ins Viertelstunden-Budget. */
+  function pollTick() {
+    try { syncEosOnChange(); } catch { /* nur Abgleich */ }
+    const c = cfg();
+    const r = resolvePeakShaving(c);
+    if (!r.active) {
+      if (budget.lastMono != null) Object.assign(budget, createBudgetState());
+      budgetLogKey = null;
+      nativeAssist(null, now());
+      return null;
+    }
+    const t = now();
+    const meas = meterImport(ctx.state, c, { now: t, maxAgeMs: METER_MAX_AGE_MS });
+    observeBudget(budget, {
+      wallMs: t, monoMs: mono(), importW: meas.fresh ? meas.importW : null, limitW: adapted(c, r, t).limitW,
+      timeZone: c.schedule?.timezone || 'Europe/Berlin'
+    });
+    const ctl = control(c, t);
+    nativeAssist(ctl, t, c);
+    const dec = ctl.budget;
+    const key = dec ? `${dec.mode}|${dec.reason}` : null;
+    if (key !== budgetLogKey) {
+      budgetLogKey = key;
+      if (dec) ctx.pushLog?.('peak_shaving_budget', {
+        mode: dec.mode, reason: dec.reason, targetW: ctl.targetW, limitW: r.limitW, usedWh: dec.usedWh, budgetWh: dec.budgetWh,
+        remainingS: dec.remainingS,
+        text: dec.mode === 'budget'
+          ? 'Peak Shaving: regelt nach Viertelstunden-Budget (15-min-Mittelwert)'
+          : `Peak Shaving: Deckel auf den Augenblickswert (${BUDGET_REASON_TEXT[dec.reason] || dec.reason})`
+      });
+    }
+    return ctl;
+  }
+
+  // P4: Leistungsentgelt des laufenden Jahres (bzw. Monats beim
+  // Monatsleistungspreis) für die Leitstand-Kachel.
+  function billingSummary(c, t) {
+    const per = peaks.periods?.year;
+    if (!Array.isArray(peaks.months) || !per) return null;
+    const cur = peakPeriods(t, c.schedule?.timezone || 'Europe/Berlin').year;
+    if (cur.start !== per.start) return null;
+    const tariff = resolveTariff(c);
+    const y = computeYearBilling({ months: peaks.months, tariff, period: { startMs: Date.parse(per.start), endMs: Date.parse(per.end) }, nowMs: t });
+    const ym = peaks.periods?.month?.start ? localParts(Date.parse(peaks.periods.month.start), c.schedule?.timezone || 'Europe/Berlin') : null;
+    const ymKey = ym ? `${ym.year}-${String(ym.month).padStart(2, '0')}` : null;
+    const month = ymKey ? (y.months || []).find((m) => m.ym === ymKey) || null : null;
+    const year = { ...y };
+    delete year.months;
+    return { year, month, tariffComplete: tariff.complete, tariffMissing: tariff.missing, model: tariff.model };
   }
 
   function summary() {
@@ -456,6 +833,20 @@ export function createPeakShaving(ctx, deps = {}) {
       ? { liftedW: ctl.discharge.liftedW, since: ctl.discharge.since, waiting: ctl.discharge.waiting || null } : null;
     const meterFresh = s.meter?.ok === true && (t - Number(s.meter.updatedAt || 0)) < METER_MAX_AGE_MS
       && Number.isFinite(Number(s.victron?.gridImportW));
+    const ctlNow = r.active ? control(c, t) : null;
+    const b = ctlNow?.budget || null;
+    const ad = adapted(c, r, t);
+    const adapt = {
+      on: r.adaptToReachedPeak,
+      scope: ad.adaptScope,
+      reachedPeakW: ad.reachedPeakW,
+      active: ad.adaptedFrom != null,
+      effectiveLimitW: ad.limitW,
+      effectiveTargetW: ad.targetW,
+      // Hinweis (P3): Spitze schon über der Grenze, Schalter aus → jede weitere
+      // Kappung unter die Spitze spart in diesem Zeitraum nichts.
+      suggest: !r.adaptToReachedPeak && r.limitW != null && ad.reachedPeakW != null && ad.reachedPeakW > r.limitW
+    };
     return {
       enabled: true,
       active: r.active,
@@ -465,12 +856,29 @@ export function createPeakShaving(ctx, deps = {}) {
       limitW: r.limitW,
       targetW: r.targetW,
       marginW: r.marginW,
+      billing15min: r.billing15min,
+      lever: r.lever,
+      leverText: r.leverText,
+      assist: r.lever === 'native' && ctl.assist ? { ...ctl.assist, helpW: nativeHelpW() } : null,
+      // P5: eingebaute Funktion des Wechselrichters (ungetestet) — Zustand des Aktors.
+      builtin: r.lever === 'builtin' || r.lever === 'builtin_off' ? { status: 'ungetestet', ...(ctl.builtin || {}) } : null,
+      adapt,
+      // Viertelstunden-Budget (P1): mode 'budget' = Regelziel ist die erlaubte
+      // Restleistung, 'instant' = Augenblickswert (reason sagt warum).
+      budget: b ? {
+        mode: b.mode, reason: b.reason, reasonText: b.reason ? (BUDGET_REASON_TEXT[b.reason] || b.reason) : null,
+        controlTargetW: ctlNow.targetW, allowedW: b.allowedW, usedWh: b.usedWh, budgetWh: b.budgetWh,
+        remainingS: b.remainingS, gapS: b.gapS, intervening: b.intervening,
+        slotStart: b.slotStartMs != null ? new Date(b.slotStartMs).toISOString() : null
+      } : null,
+      billing: billingSummary(c, t),
       timezone: c.schedule?.timezone || 'Europe/Berlin',
       importW: meterFresh ? Math.max(0, Math.round(Number(s.victron.gridImportW))) : null,
-      acting: Boolean((clamp && (clamp.mode === 'target' || clamp.mode === 'net_load')) || lift),
+      acting: Boolean((clamp && (clamp.mode === 'target' || clamp.mode === 'net_load')) || lift
+        || (r.lever === 'native' && ctl.assist?.requested && nativeHelpW() > 0 && meterFresh && Number(s.victron.gridImportW) >= Number(ctlNow?.targetW) - 500)),
       clamp,
       lift,
-      peaks: { ...peaks }
+      peaks: { month: peaks.month, year: peaks.year, updatedAt: peaks.updatedAt, error: peaks.error }
     };
   }
 
@@ -482,5 +890,57 @@ export function createPeakShaving(ctx, deps = {}) {
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-  return { refreshPeaks, summary, start, stop };
+  /** Regelziel für EOS (P2): eingestellt bzw. angepasst (P3), ohne Budget; null = aus. */
+  function eosTargetW(c = cfg()) {
+    const r = resolvePeakShaving(c);
+    return r.active ? adapted(c, r).targetW : null;
+  }
+
+  // Wirksames EOS-Ziel geändert (Grenze an die Spitze angepasst, neuer
+  // Zeitraum, Peak Shaving ein/aus): EOS neu abgleichen, höchstens jede Minute,
+  // aber nicht vergessen. Der erste Wert nach dem Start löst nichts aus (der
+  // normale Abgleich läuft ohnehin).
+  // Erst eine erfolgreiche Übertragung quittiert den Wert; scheitert sie, wird
+  // nach der Minute erneut versucht (Codex ac14daee P2).
+  let eosKey;
+  let eosSyncedKey;
+  let eosSyncBusy = false;
+  let lastEosSyncAt = -Infinity;
+  function syncEosOnChange() {
+    const key = String(eosTargetW());
+    if (eosKey === undefined) { eosKey = key; eosSyncedKey = key; return; }
+    eosKey = key;
+    if (eosKey === eosSyncedKey || eosSyncBusy || mono() - lastEosSyncAt < 60_000) return;
+    if (typeof ctx.eosConfigSync?.sync !== 'function') return;
+    lastEosSyncAt = mono();
+    const sent = eosKey;
+    eosSyncBusy = true;
+    Promise.resolve(ctx.eosConfigSync.sync())
+      .then((res) => {
+        // Quittiert ist, was im Wechselrichter-Abschnitt angekommen ist (oder dort
+        // schon stand) — auch wenn ein anderer Abschnitt scheiterte. Sonst gilt
+        // der alte Stand als unbekannt, damit auch eine Rückkehr zum früheren
+        // Wert neu geschickt wird (Codex 4638c207 P2).
+        const inv = 'devices/inverters';
+        const delivered = res && !res.errors?.[inv]
+          && ((Array.isArray(res.applied) && res.applied.includes(inv)) || (Array.isArray(res.unchanged) && res.unchanged.includes(inv)));
+        eosSyncedKey = delivered ? sent : null;
+      })
+      .catch(() => { eosSyncedKey = null; })
+      .finally(() => { eosSyncBusy = false; });
+  }
+
+  function nativeHelpW() {
+    try {
+      const st = (ctx.batteryAssist || ctx.gridConnection?.batteryAssist)?.status?.(ASSIST_SOURCE);
+      return Math.max(0, Number(st?.helpW) || 0);
+    } catch { return 0; }
+  }
+
+  function stopAll() {
+    stop();
+    nativeAssist(null, now());
+  }
+
+  return { refreshPeaks, summary, start, stop: stopAll, control, pollTick, eosTargetW, _budget: budget };
 }

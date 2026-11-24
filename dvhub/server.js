@@ -1250,6 +1250,8 @@ const SUNGROW_FORCED_HEARTBEAT_PATH = path.join(DATA_DIR || __dirname, 'sungrow_
 // 2704) steht gespeichert im GX — der Merker sorgt dafür, dass ein neuer
 // Prozess sie zurückschreibt statt sie zu vergessen.
 const PEAK_SHAVING_LIFT_PATH = path.join(DATA_DIR || __dirname, 'peak_shaving_lift.json');
+// Ist-Werte der eingebauten Peak-Shaving-Funktion vor DVhub (P5, services/peak-shaving/builtin.js).
+const PEAK_SHAVING_BUILTIN_PATH = path.join(DATA_DIR || __dirname, 'peak_shaving_builtin_saved.json');
 // Netzanschluss „Akku zuerst“ (Nicht-Victron): angehobene Entladegrenze, damit
 // ein Neustart den Wert davor zurückschreibt (services/grid-connection).
 const GRID_CONNECTION_ASSIST_PATH = path.join(DATA_DIR || __dirname, 'grid_connection_assist.json');
@@ -1482,6 +1484,8 @@ const ctx = {
   sungrowSlaveEmsStatePath: SUNGROW_SLAVE_EMS_STATE_PATH,
   sungrowForcedHeartbeatPath: IS_RUNTIME_PROCESS ? SUNGROW_FORCED_HEARTBEAT_PATH : null,
   peakShavingLiftPath: PEAK_SHAVING_LIFT_PATH,
+  // Nur der Laufzeit-Prozess schreibt — nur er sichert die Ist-Werte.
+  peakShavingBuiltinPath: IS_RUNTIME_PROCESS ? PEAK_SHAVING_BUILTIN_PATH : null,
   // Nur der Laufzeit-Prozess regelt — nur er liest und schreibt den Merker.
   gridConnectionAssistPath: IS_RUNTIME_PROCESS ? GRID_CONNECTION_ASSIST_PATH : null,
   floorHandoffStore,

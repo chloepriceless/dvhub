@@ -37,6 +37,7 @@ import { gridShareExportCapW, GRID_SHARE_FIELD_MAX_AGE_MS } from './services/opt
 // Netzanschluss und Peak Shaving: gemeinsamer Kern der Bezugsgrenzen.
 import { capPositiveSetpoint } from './services/import-limit/core.js';
 import { createEosThresholdAssist } from './services/optimizer/eos-threshold-assist.js';
+import { createBuiltinPeakShaving } from './services/peak-shaving/builtin.js';
 import { createSungrowEms, endpointKeyOf, sungrowEmsConf, resolveSecondInverter } from './services/inverter/sungrow.js';
 import { RELEASE_BACKOFF_AFTER, RELEASE_BACKOFF_MS } from './services/release-backoff.js';
 import { c2AllowsRelease, createLegacyGate, INVERTER_GATE_DEVICE, inverterLegacyPolicy, inverterLegacySink, inverterReleaseState, unwrapLegacyWrite } from './services/gate/legacy.js';
@@ -256,7 +257,9 @@ export function createScheduleEvaluator(ctx) {
   // 'eos-threshold'). Spät gebunden: ctx.batteryAssist entsteht mit dem Wächter.
   const eosThreshold = createEosThresholdAssist({
     state, getCfg, pushLog,
-    getAssist: () => ctx.batteryAssist || ctx.gridConnection?.batteryAssist || null
+    getAssist: () => ctx.batteryAssist || ctx.gridConnection?.batteryAssist || null,
+    // Peak Shaving deckt die Plan-Schwelle selbst ab (P2) — nur mit dem Dienst.
+    getPeakShavingTargetW: () => (typeof ctx.peakShaving?.eosTargetW === 'function' ? ctx.peakShaving.eosTargetW(getCfg()) : null)
   });
 
   // Sungrow-Hybrid (T-0422, Beta): Netz-Sollwert über den EMS-Modus nachbilden
@@ -2020,7 +2023,7 @@ export function createScheduleEvaluator(ctx) {
       state.ctrl._peakShaving._clampKey = null;
     }
     if (target === 'gridSetpointW' && !isMandatoryControlSource(source)) {
-      const ps = resolvePeakShaving(cfg);
+      const ps = peakShavingControl(cfg);
       if (ps.active) {
         const res = clampGridSetpoint(value, ps, peakShavingTelemetry(state, cfg, ps));
         const psState = (state.ctrl._peakShaving ??= {});
@@ -2038,7 +2041,8 @@ export function createScheduleEvaluator(ctx) {
             psState._clampKey = key;
             pushLog('peak_shaving_clamp', {
               requestedW: Math.round(Number(value)), valueW: Math.round(Number(res.value)),
-              mode: res.mode, reason: res.reason, source, limitW: ps.limitW, targetW: ps.targetW
+              mode: res.mode, reason: res.reason, source, limitW: ps.limitW, targetW: ps.targetW,
+              ...(ps.budget ? { budgetMode: ps.budget.mode } : {})
             });
           }
           value = res.clamped ? Math.round(Number(res.value)) : value;
@@ -2446,6 +2450,34 @@ export function createScheduleEvaluator(ctx) {
     return typeof transport.mbRequest === 'function' && conf?.address != null;
   }
 
+  // Wirksame Peak-Shaving-Werte für die beiden Victron-Hebel: mit dem Dienst
+  // (server.js ctx.peakShaving) samt Viertelstunden-Budget (P1) — dann ist das
+  // Regelziel im Budget-Modus die erlaubte Restleistung der Viertelstunde —,
+  // ohne ihn (Tests, die den Evaluator allein bauen) wie bisher die Einstellung.
+  // Nur der Victron-Hebel regelt hier; Profile mit eigenem Netz-Sollwert bzw.
+  // Entladegrenze (Sungrow, MQTT) gehen über die Akku-Hilfe des
+  // Netzanschluss-Wächters, eingebaute Funktionen über services/peak-shaving/
+  // builtin.js (P5) — für diese Hebel sind beide Victron-Wege aus.
+  function peakShavingControl(cfg) {
+    let r;
+    try {
+      if (typeof ctx.peakShaving?.control === 'function') r = ctx.peakShaving.control(cfg);
+    } catch (e) {
+      pushLog('peak_shaving_error', { phase: 'control', error: e?.message || String(e) }, 'warn');
+    }
+    r ??= resolvePeakShaving(cfg);
+    return r.active && r.lever !== 'victron' ? { ...r, active: false, reason: 'lever_not_victron' } : r;
+  }
+
+  // Eingebaute Peak-Shaving-Funktion des Wechselrichters (P5, ungetestet, nur mit
+  // Schalter): schreibt nur über das Tor, nur die Profilpunkte peakShavingBuiltin.
+  const peakShavingBuiltin = ctx.peakShavingBuiltinActuator || createBuiltinPeakShaving({
+    state, getCfg, transport, gate: writeGate, pushLog,
+    deviceWriteGate: (c) => deviceWriteGate(c),
+    targetW: (c) => (typeof ctx.peakShaving?.eosTargetW === 'function' ? ctx.peakShaving.eosTargetW(c) : resolvePeakShaving(c).targetW),
+    statePath: ctx.peakShavingBuiltinPath || null
+  });
+
   let peakShavingTickNo = 0;
   // Victron: zuerst 2720 (int32, W) — dort ist −1 (unbegrenzt) eindeutig, 2704
   // rundet es auf 0 (wie der Entlade-Wächter). Nur „Register/Funktion
@@ -2499,7 +2531,7 @@ export function createScheduleEvaluator(ctx) {
       if (idle) Object.assign(idle, { over: 0, quiet: 0, writeIssue: null });
       return;
     }
-    const ps = resolvePeakShaving(cfg);
+    const ps = peakShavingControl(cfg);
     // Aus und nichts aufgehoben → kein Zustand, kein Lesen, kein Write (bitgenau
     // wie vorher; auch nachdem eine Freigabe zurückgenommen ist — 563da829).
     if (!ps.active && state.ctrl._peakShaving?.discharge?.phase !== 'lifted') {
@@ -3133,6 +3165,9 @@ export function createScheduleEvaluator(ctx) {
     } catch (e) {
       pushLog('peak_shaving_error', { error: e?.message || String(e) }, 'warn');
     }
+    // Peak Shaving P5: eingebaute Funktion des Wechselrichters (ohne Schalter bzw.
+    // ohne Profilblock: kein Lesen, kein Write, kein Zustand).
+    await peakShavingBuiltin.tick();
 
     // feedExcessDcPv: schedule-gesteuerte DC-Einspeisung (+ dontFeedExcessAcPv invers)
     if (cfg.dvControl?.enabled) {

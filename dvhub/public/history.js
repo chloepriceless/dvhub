@@ -3286,6 +3286,7 @@ async function loadHistorySummary() {
     renderSummary(payload);
     loadMispelOverview();
     loadGridShareCard();
+    loadPeakBillingCard();
   } catch (error) {
     if (error?.name === 'AbortError' || isStale()) return;
     setBanner(`Historie konnte nicht geladen werden: ${error.message}`, 'error');
@@ -3592,6 +3593,68 @@ const GRID_SHARE_KEYS = ['battery_grid_share_wh', 'grid_to_battery_w', 'battery_
 function fmtGs(v, digits = 2) {
   return Number.isFinite(Number(v)) ? Number(v).toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits }) : '–';
 }
+// ── Peak Shaving P4: Leistungsentgelt (RLM) in Monat und Jahr ───────────────
+let peakBillingGeneration = 0;
+const psEur = (v) => (Number.isFinite(Number(v)) && v !== null ? `${Number(v).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €` : '–');
+const psKw = (w) => (Number.isFinite(Number(w)) && w !== null ? `${(Number(w) / 1000).toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kW` : '–');
+const psNum = (v, d = 0) => (Number.isFinite(Number(v)) && v !== null ? Number(v).toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d }) : '–');
+
+function peakBillingHtml(data) {
+  const b = data.billing || {};
+  const monthModel = data.model === 'month';
+  const tier = b.tier === 'high' ? 'ab 2.500 h' : b.tier === 'low' ? 'unter 2.500 h' : '–';
+  const rows = [];
+  const row = (l, v, t = '') => rows.push(`<tr${t ? ` title="${escapeHtml(t)}"` : ''}><td>${escapeHtml(l)}</td><td>${escapeHtml(v)}</td></tr>`);
+  if (data.view === 'month' && data.month) {
+    const m = data.month;
+    row('Spitze im Monat (15 min)', psKw(m.peakW));
+    row('Netzbezug im Monat', `${psNum(m.energyKwh)} kWh`);
+    if (monthModel) {
+      row('Leistungsentgelt Monat', psEur(m.demandChargeEur));
+      row('Arbeitsentgelt Monat', psEur(m.energyChargeEur));
+      row('Netzentgelt Monat', psEur(m.totalEur));
+      row('Vermieden (Monat)', psEur(m.avoidedEur), 'Gegenüber der Monatsspitze ohne Akku-Beitrag (Bezug + Akku-Entladung je Viertelstunde).');
+    } else {
+      row('Arbeitsentgelt Monat', psEur(m.energyChargeEur), 'In der Stufe des Jahres. Der Leistungspreis fällt einmal im Jahr auf die Jahresspitze an.');
+      row('Spitze ohne Akku (Monat)', psKw(m.uncappedPeakW));
+    }
+    rows.push('<tr><td colspan="2"><strong>Jahr</strong></td></tr>');
+  }
+  row('Spitze im Jahr (15 min)', psKw(b.peakW));
+  row('Netzbezug im Jahr', `${psNum(b.energyKwh)} kWh${b.running ? ' (bisher)' : ''}`);
+  row('Benutzungsdauer', b.running ? `${psNum(b.usageHours)} h bisher · ${psNum(b.usageHoursProjected)} h hochgerechnet` : `${psNum(b.usageHours)} h`, 'Jahresarbeit ÷ Jahresspitze.');
+  if (!monthModel) row('Stufe', tier);
+  row('Leistungsentgelt', psEur(b.demandChargeEur));
+  row(b.running ? 'Arbeitsentgelt bisher' : 'Arbeitsentgelt', psEur(b.energyChargeEur));
+  row(b.running ? 'Netzentgelt bisher' : 'Netzentgelt', psEur(b.totalEur));
+  row('Netzentgelt effektiv', Number.isFinite(Number(b.effectiveCtPerKwh)) && b.effectiveCtPerKwh !== null ? `${psNum(b.effectiveCtPerKwh, 2)} ct/kWh` : '–', 'Arbeitspreis + Leistungspreis ÷ Benutzungsdauer.');
+  row('Spitze ohne Akku-Beitrag', psKw(b.uncappedPeakW), 'Höchste Viertelstunde aus Bezug + Akku-Entladung.');
+  row('Vermieden gegenüber ungekappter Spitze', psEur(b.avoidedEur), 'Gleiche Arbeit, Spitze ohne Akku-Beitrag (Stufe neu gerechnet). Obergrenze: entladen hätte der Akku auch ohne Peak Shaving.');
+  const note = data.tariffComplete ? '' : '<p class="card-sub">Für € fehlen die Netzentgelt-Preise: Einstellungen → Peak Shaving (Preisblatt des Netzbetreibers).</p>';
+  return `<table class="history-summary-table"><tbody>${rows.join('')}</tbody></table>${note}`
+    + '<p class="card-sub">Aus DVhubs Viertelstunden-Werten; maßgeblich für die Rechnung ist der Zähler des Netzbetreibers.</p>';
+}
+
+async function loadPeakBillingCard() {
+  const card = byId('historyPeakBillingCard');
+  if (!card) return;
+  const view = byId('historyView')?.value || 'day';
+  const generation = ++peakBillingGeneration;
+  if (view !== 'month' && view !== 'year') { card.hidden = true; return; }
+  const date = byId('historyDate')?.value || currentDateValue();
+  try {
+    const r = await apiFetch(`/api/history/peak-billing?view=${encodeURIComponent(view)}&date=${encodeURIComponent(date)}`);
+    const data = r.ok ? await r.json() : null;
+    if (generation !== peakBillingGeneration) return;
+    if (!data?.ok || !data.enabled) { card.hidden = true; return; }
+    card.hidden = false;
+    const body = byId('historyPeakBillingBody');
+    if (body) body.innerHTML = peakBillingHtml(data);
+  } catch (_) {
+    if (generation === peakBillingGeneration) card.hidden = true;
+  }
+}
+
 async function loadGridShareCard() {
   const card = byId('historyGridShareCard');
   if (!card) return;

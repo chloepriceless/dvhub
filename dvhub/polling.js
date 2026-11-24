@@ -1657,6 +1657,12 @@ export function createPoller(ctx) {
     try {
       gridVoltage.onPoll(cfg, spineEm ? { spine: spineEm, spineAt: state.meter.updatedAt } : {});
     } catch (e) { pushLog('grid_voltage_error', { error: e?.message || String(e) }, 'warn'); }
+    // Peak Shaving (services/peak-shaving, P1): je Zählerabfrage den Netzbezug ins
+    // Viertelstunden-Budget (15-min-Mittelwert). Vor dem Netzanschluss-Takt, damit
+    // eine Akku-Hilfe-Anforderung schon im selben Takt gilt. Ausgeschaltet: nichts.
+    try {
+      ctx.peakShaving?.pollTick?.();
+    } catch (e) { pushLog('peak_shaving_error', { phase: 'poll', error: e?.message || String(e) }, 'warn'); }
     // Netzanschluss (services/grid-connection): je Zählerabfrage ein Regeltakt —
     // die Grenze des Hausanschlusses wird im Poll-Takt gesichert, nicht erst im
     // 5–15-s-Auswertungstakt. Läuft auch bei gestörtem Zähler (Fail-safe).

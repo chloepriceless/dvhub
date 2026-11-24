@@ -189,7 +189,7 @@ test('Dienst: anderer Hersteller → Status „nur Anzeige“, Spitzen trotzdem'
   assert.equal(s.active, false);
   assert.equal(s.supported, false);
   assert.equal(s.reason, 'manufacturer_unsupported');
-  assert.match(s.message, /nur Victron/);
+  assert.match(s.message, /Spitzen nur an/);
   assert.equal(s.peaks.month.powerW, 12000);
 });
 

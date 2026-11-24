@@ -125,5 +125,21 @@
   "dvControl": {
     "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
     "enabled": false
+  },
+
+  "peakShavingBuiltin": {
+    "_doc": [
+      "Eingebaute Peak-Shaving-Funktion (P5, Christin 24.11.2026) — UNGETESTET, an keinem Gerät geprüft.",
+      "0x1110 (4368) Energy_Storage_Mode_Control = 4 (Peak Shaving). Die Bezugsgrenze stellt man am Gerät ein. Rücknahme =",
+      "gesicherter Modus vor DVhub (meist 0, Self-use). Bei Legacy-Modellen ggf. zusätzlich am LCD (ungeprüft). Nur dieser",
+      "Schreibpunkt in diesem Nur-Lese-Profil."
+    ],
+    "status": "ungetestet",
+    "source": ".planning/docs/research/2026-11-15-sofar-modbus-control-spec.md §5 (0x1110 Wert 4, Herstellerdokument)",
+    "mode": {
+      "address": 4368,
+      "fc": 6,
+      "value": 4
+    }
   }
 }

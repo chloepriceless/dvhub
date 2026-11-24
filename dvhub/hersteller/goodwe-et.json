@@ -99,5 +99,32 @@
   "dvControl": {
     "_comment": "Keine Abregel-Ziele. readOnly schaltet die Abregelung ohnehin ab; der leere Block bleibt als zweite Sicherung.",
     "enabled": false
+  },
+
+  "peakShavingBuiltin": {
+    "_doc": [
+      "Eingebaute Peak-Shaving-Funktion (P5, Christin 24.11.2026) — UNGETESTET, an keinem Gerät geprüft.",
+      "47542–47543 „Peak Shaving Power Limit“ (U32, 1 W, Flash) und 47544 „Peak Shaving SOC“ (Reserve, 1 %, Flash).",
+      "Nur Peak-Shaving-Schreibpunkte in diesem Nur-Lese-Profil: DVhub schreibt nur mit Peak Shaving + Schalter",
+      "peakShaving.builtin.enabled, über das Schreibtor, Grenze mit Sicherung/Rücknahme, Reserve nur mit eingetragenem",
+      "Wert und nie zurück (H-8). Ob zusätzlich die Betriebsart (47511) auf Peak Shaving stehen muss, ist ungeprüft."
+    ],
+    "status": "ungetestet",
+    "source": ".planning/docs/research/2026-11-15-goodwe-modbus-control-spec.md (Getrennte Lade-/Entlade-Grenzen, [SPEC] GoodWe EMS-Protokoll)",
+    "limit": {
+      "address": 47542,
+      "fc": 16,
+      "writeType": "uint32",
+      "wordOrder": "be",
+      "scale": 1,
+      "unit": "W"
+    },
+    "reserveSoc": {
+      "address": 47544,
+      "fc": 6,
+      "writeType": "uint16",
+      "scale": 1,
+      "unit": "%"
+    }
   }
 }

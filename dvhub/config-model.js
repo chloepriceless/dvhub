@@ -460,6 +460,11 @@ function applyManufacturerProfile(persistedConfig, manufacturerProfile) {
   // Profil — ein Profil ohne den Block hat auch keinen (kein Rest aus config.json).
   if (isPlainObject(manufacturerProfile?.identify)) effectiveConfig.identify = clone(manufacturerProfile.identify);
   else delete effectiveConfig.identify;
+  // peakShavingBuiltin (P5, Christin 24.11.2026): eingebaute Peak-Shaving-Register des Wechselrichters gehören zum
+  // Profil — auch zu Nur-Lese-Profilen (readOnly leert nur controlWrite/dvControl). Geschrieben werden sie nur mit
+  // Peak Shaving + Schalter peakShaving.builtin.enabled über das Schreibtor (services/peak-shaving/builtin.js).
+  if (isPlainObject(manufacturerProfile?.peakShavingBuiltin)) effectiveConfig.peakShavingBuiltin = clone(manufacturerProfile.peakShavingBuiltin);
+  else delete effectiveConfig.peakShavingBuiltin;
   // dvControl: Register-Verdrahtung kommt aus dem Profil, die beiden
   // Betreiber-Entscheidungen darin gewinnen. Nur AUSDRÜCKLICH persistierte
   // Werte überschreiben — ein fehlender Schlüssel heißt „Profil-Default gilt",
@@ -1402,7 +1407,7 @@ function buildFieldDefinitions() {
       section: 'system',
       group: 'peakShaving',
       groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
-      groupDescription: 'Für Gewerbeanschlüsse mit Leistungsmessung (RLM): Der Leistungspreis richtet sich nach der höchsten Viertelstunden-Bezugsleistung im Jahr. DVhub lädt dann nie mehr aus dem Netz, als die Grenze zulässt, und lässt den Akku Spitzen abdecken, wenn er sonst gehalten oder gesperrt wäre. Not-Halt, §14a, Netzlade-Verbot und Mindest-Ladestand haben immer Vorrang. Wirkt bisher nur bei Victron.',
+      groupDescription: 'Für Gewerbeanschlüsse mit Leistungsmessung (RLM): Der Leistungspreis richtet sich nach der höchsten Viertelstunden-Bezugsleistung im Jahr. DVhub lädt dann nie mehr aus dem Netz, als die Grenze zulässt, und lässt den Akku Spitzen abdecken, wenn er sonst gehalten oder gesperrt wäre. Not-Halt, §14a, Netzlade-Verbot und Mindest-Ladestand haben immer Vorrang. Wirkt bei Victron (Netz-Sollwert und Entladegrenze), bei Profilen mit schreibbarem Netz-Sollwert oder Entladegrenze (z. B. Sungrow, MQTT-Bridge, DVhub-MQTT) über „Akku zuerst“ des Netzanschluss-Wächters und — ungetestet, mit eigenem Schalter — über die eingebaute Peak-Shaving-Funktion des Wechselrichters, wo das Herstellerprofil sie kennt.',
       beta: true,
       path: 'peakShaving.enabled',
       label: 'Bezugsgrenze einhalten',
@@ -1465,6 +1470,163 @@ function buildFieldDefinitions() {
       max: 100,
       visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
       help: 'Unter diesem Ladestand deckt der Akku keine Spitzen mehr ab. Leer = der harte Mindest-Ladestand (Optimierer → harter SoC-Boden) gilt. Der höhere der beiden Werte zählt.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.billing15min',
+      label: 'Abrechnung nach 15-min-Mittelwert',
+      type: 'boolean',
+      default: true,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'An (Standard) = der Netzbetreiber rechnet den Leistungspreis auf den höchsten Viertelstunden-Mittelwert (so ist es bei RLM üblich). Dann darf der Bezug kurz über der Grenze liegen: DVhub zählt je Viertelstunde (:00/:15/:30/:45) die bezogene Energie mit, rechnet bis zum Ende der Viertelstunde hoch und greift erst ein, wenn der Mittelwert die Grenze minus Abstand reißen würde — dann mit genau der Leistung, die bis zum Ende fehlt. Der Akku wird so seltener gebraucht. Kann der Akku nicht sicher liefern (Ladestand nahe am Boden, Entladeleistung ausgeschöpft oder nicht eingetragen, Messlücken, letzte Minute der Viertelstunde), gilt sofort der Deckel auf den Augenblickswert. Aus = DVhub hält jeden Augenblick unter Grenze minus Abstand (wie bis 1.0.10). Dafür braucht DVhub die Entladeleistung des Akkus oder die Wechselrichter-Nennleistung.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.adaptToReachedPeak',
+      label: 'Grenze an erreichte Jahresspitze anpassen',
+      type: 'boolean',
+      default: false,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Ab Werk aus. Liegt die in diesem Jahr schon erreichte Spitze (Jahresspitze = höchster Viertelstunden-Mittelwert; bei Monatsleistungspreis die Spitze dieses Monats) über der eingestellten Grenze, richtet sich der Leistungspreis ohnehin nach ihr. An = DVhub regelt dann auf diese erreichte Spitze statt auf die Grenze; mit dem neuen Jahr (bzw. Monat) gilt wieder die Grenze. Das spart Akku-Einsatz und Zyklen, denn jede weitere Kappung unter die erreichte Spitze spart in diesem Zeitraum keinen Euro. Es kostet nichts am Leistungspreis dieses Zeitraums — aber Achtung: DVhubs Spitze stammt aus den eigenen Messwerten; liegt der Zähler des Netzbetreibers tiefer, wäre die Kappung bis zu dessen Wert noch etwas wert gewesen. Aus = DVhub hält die Grenze weiter, auch wenn das in diesem Zeitraum nichts mehr spart. EOS bekommt die angepasste Grenze mit.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.builtin.enabled',
+      label: 'Eingebaute Peak-Shaving-Funktion nutzen (ungetestet)',
+      type: 'boolean',
+      default: false,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Nur für Wechselrichter ohne eigenen DVhub-Akku-Hebel, deren Herstellerprofil eine eingebaute Peak-Shaving-Funktion kennt (Deye, GoodWe, Growatt, Solis, Sofar, SolaX). UNGETESTET: die Register stammen aus Herstellerdokumenten und Community-Quellen, an keinem Gerät geprüft. An = DVhub sichert die Ist-Werte, stellt die Bezugsgrenze (Grenze minus Abstand; angepasst, wenn der Jahresspitzen-Schalter wirkt) bzw. die Betriebsart „Peak Shaving“ im Wechselrichter ein und regelt nichts weiter — der Wechselrichter kappt selbst (Augenblickswert, kein Viertelstunden-Budget). Aus bzw. Peak Shaving aus = DVhub schreibt die gesicherten Werte einmal zurück. Diese Register liegen oft im Flash: DVhub schreibt nur bei Änderung, höchstens alle 15 min. Bei Solis/Sofar/SolaX schaltet DVhub nur die Betriebsart; die Grenze selbst wird am Gerät eingestellt. Not-Halt: DVhub fasst die Funktion nicht an.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.builtin.reserveSocPct',
+      empty: 'null',
+      label: 'Reserve-Ladestand der eingebauten Funktion (%)',
+      type: 'number',
+      min: 0,
+      max: 100,
+      step: 1,
+      visibleWhenPath: { path: 'peakShaving.builtin.enabled', equals: true },
+      help: 'Nur GoodWe (47544) und Growatt (3310): Ladestand, den der Wechselrichter fürs Peak Shaving zurückhält. Leer = DVhub schreibt ihn nicht (Werkseinstellung bzw. Gerätewert gilt). DVhub setzt ihn nie zurück.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.model',
+      label: 'Abrechnung des Leistungspreises',
+      type: 'select',
+      default: 'year',
+      options: [
+        { value: 'year', label: 'Jahresleistungspreis (Jahresspitze, Stufe nach 2.500 h)' },
+        { value: 'month', label: 'Monatsleistungspreis (Monatsspitze, StromNEV § 19 Abs. 1)' }
+      ],
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Steht im Preisblatt bzw. Vertrag des Netzbetreibers. Jahresleistungspreis (üblich): Leistungspreis × höchste Viertelstunden-Spitze im Jahr, Stufe nach der Benutzungsdauer (Jahresarbeit ÷ Jahresspitze) unter bzw. ab 2.500 h. Monatsleistungspreis: je Monat Leistungspreis × Monatsspitze. Danach richten sich die €-Anzeige in Leitstand und Historie und der Schalter „Grenze an erreichte Jahresspitze anpassen“ (dann Monatsspitze).'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.lpLowEurPerKwYear',
+      empty: 'null',
+      label: 'Leistungspreis unter 2.500 h (€/kW·a)',
+      type: 'number',
+      min: 0,
+      max: 10000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Netto aus dem Preisblatt des Netzbetreibers, Stufe Benutzungsdauer unter 2.500 h (z. B. Netz Leipzig 2026 Niederspannung: 19,17). Leer = unbekannt, dann zeigt DVhub keine € an.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.apLowCtPerKwh',
+      empty: 'null',
+      label: 'Arbeitspreis unter 2.500 h (ct/kWh)',
+      type: 'number',
+      min: 0,
+      max: 1000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Netto, Stufe unter 2.500 h (z. B. Netz Leipzig 2026 NS: 5,96).'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.lpHighEurPerKwYear',
+      empty: 'null',
+      label: 'Leistungspreis ab 2.500 h (€/kW·a)',
+      type: 'number',
+      min: 0,
+      max: 10000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Netto, Stufe ab 2.500 h (z. B. Netz Leipzig 2026 NS: 82,02). Eine gekappte kW ist in dieser Stufe so viel wert.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.apHighCtPerKwh',
+      empty: 'null',
+      label: 'Arbeitspreis ab 2.500 h (ct/kWh)',
+      type: 'number',
+      min: 0,
+      max: 1000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.enabled', equals: true },
+      help: 'Netto, Stufe ab 2.500 h (z. B. Netz Leipzig 2026 NS: 3,44).'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.lpMonthEurPerKwMonth',
+      empty: 'null',
+      label: 'Monatsleistungspreis (€/kW·Monat)',
+      type: 'number',
+      min: 0,
+      max: 10000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.tariff.model', equals: 'month' },
+      help: 'Nur bei Monatsleistungspreis: netto je kW Monatsspitze (z. B. Netz Leipzig 2026 NS: 13,67). DVhub leitet ihn nicht ab.'
+    },
+    {
+      section: 'system',
+      group: 'peakShaving',
+      groupLabel: 'Peak Shaving – Bezugsgrenze (Beta)',
+      beta: true,
+      path: 'peakShaving.tariff.apMonthCtPerKwh',
+      empty: 'null',
+      label: 'Arbeitspreis beim Monatsleistungspreis (ct/kWh)',
+      type: 'number',
+      min: 0,
+      max: 1000,
+      step: 0.01,
+      visibleWhenPath: { path: 'peakShaving.tariff.model', equals: 'month' },
+      help: 'Nur bei Monatsleistungspreis: netto (z. B. Netz Leipzig 2026 NS: 3,44).'
     },
 
     // Sungrow-Steuermodus (T-0422, Christin 11.11.2026): External EMS mit
@@ -5294,7 +5456,11 @@ export function createDefaultConfig() {
     // Netzanschluss (services/grid-connection): ab Werk leer = DVhub begrenzt nicht.
     gridConnection: { limitKw: null, marginW: null, phaseLimitA: null, releaseHysteresisW: 1000, baseLoadW: 1000, order: 'wallbox_first', batteryPhases: '' },
     // Peak Shaving (GitHub #28, services/peak-shaving): ab Werk aus, ohne Grenze.
-    peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null },
+    peakShaving: { enabled: false, gridImportLimitW: null, marginW: 300, releaseHysteresisW: 500, minSocPct: null, billing15min: true, adaptToReachedPeak: false,
+      // Leistungsentgelt in € (P4): leer = unbekannt, DVhub rät keine Preise.
+      tariff: { model: 'year', lpLowEurPerKwYear: null, apLowCtPerKwh: null, lpHighEurPerKwYear: null, apHighCtPerKwh: null, lpMonthEurPerKwMonth: null, apMonthCtPerKwh: null },
+      // Eingebaute Peak-Shaving-Funktion des Wechselrichters (P5, ungetestet): ab Werk aus.
+      builtin: { enabled: false, reserveSocPct: null } },
     multiGx: { enabled: false, host: '', port: 502, unitId: 100, batteryCapacityWh: 0, maxChargeW: 0, maxDischargeW: 0, minSocPct: 10, rampWPerS: 200, deadbandW: 300, exportHandoffAtFloor: false },
     // Ladestand des E-Autos über evccs Fahrzeug-Treiber (services/vehicle-evcc):
     // aus, bis jemand eine Marke einrichtet; evcc wird erst dann geladen.
