@@ -95,7 +95,9 @@ export function computeYearBilling({ months = [], tariff, period, nowMs = Date.n
   const peakRow = rows.reduce((best, m) => (nonNeg(m.peakW) != null && (!best || Number(m.peakW) > Number(best.peakW)) ? m : best), null);
   const P = peakRow ? Number(peakRow.peakW) : null;
   const withBattery = rows.filter((m) => nonNeg(m.uncappedPeakW) != null && Number(m.batterySlots || 0) > 0);
-  const Pu = withBattery.length ? Math.max(...withBattery.map((m) => Number(m.uncappedPeakW))) : null;
+  // Gibt es überhaupt Akku-Werte, ist die gemessene Jahresspitze die Untergrenze — auch wenn sie in einem Monat ohne
+  // Akku-Werte lag (wie innerhalb eines Monats, PEAK_BILLING_MONTHS_SQL; Codex Integration 24.11.).
+  const Pu = withBattery.length ? Math.max(P ?? 0, ...withBattery.map((m) => Number(m.uncappedPeakW))) : null;
   const running = nowMs >= period.startMs && nowMs < period.endMs;
   const yearH = hoursBetween(period.startMs, period.endMs);
   const elapsedH = running ? hoursBetween(period.startMs, nowMs) : yearH;

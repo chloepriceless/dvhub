@@ -93,6 +93,19 @@ test('Jahr (abgeschlossen): vermiedene € gegenüber der Spitze ohne Akku-Beitr
   assert.equal(y.months[0].energyChargeEur, 2580);
 });
 
+// Codex Integration 24.11. (P2): liegt die gemessene Jahresspitze in einem Monat ohne Akku-Werte, ist sie die
+// Untergrenze der Spitze ohne Akku (wie innerhalb eines Monats).
+test('Jahresspitze ohne Akku nie unter der gemessenen Jahresspitze', () => {
+  const AFTER_Y = Date.parse('2026-03-01T00:00:00Z');
+  const y = computeYearBilling({ months: [
+    { ym: '2025-01', energyKwh: 75_000, peakW: 80_000, uncappedPeakW: null, batterySlots: 0 },
+    { ym: '2025-02', energyKwh: 75_000, peakW: 45_000, uncappedPeakW: 50_000, batterySlots: 2000 }
+  ], tariff: T_LEIPZIG, period: Y2025, nowMs: AFTER_Y });
+  assert.equal(y.peakW, 80000);
+  assert.equal(y.uncappedPeakW, 80000);
+  assert.equal(y.avoidedEur, 0);
+});
+
 test('ohne Akku-Messwerte keine vermiedenen € (nicht ermittelbar)', () => {
   const y = computeYearBilling({ months: [{ ym: '2025-01', energyKwh: 150_000, peakW: 50_000, uncappedPeakW: 60_000, batterySlots: 0 }], tariff: T_LEIPZIG, period: Y2025, nowMs: AFTER });
   assert.equal(y.uncappedPeakW, null);
