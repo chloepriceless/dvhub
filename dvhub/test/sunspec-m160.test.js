@@ -66,12 +66,24 @@ test('parseM160Modules liest DCW/DCV/DCA je Modul am spec-Offset +11', () => {
 test('parseM160Modules: not-implemented-Sentinels → null statt Müll', () => {
   const regs = buildM160({
     sfs: { dca: 0, dcv: 0, dcw: 0, dcwh: 0 },
-    modules: [{ id: 1, dca: 0xffff, dcv: 0xffff, dcw: 0x8000, dcwh: 0 }]
+    modules: [{ id: 1, dca: 0xffff, dcv: 0xffff, dcw: 0xffff, dcwh: 0 }]
   });
   const parsed = parseM160Modules(regs);
-  assert.equal(parsed.modules[0].dcw, null); // int16 0x8000
+  assert.equal(parsed.modules[0].dcw, null); // uint16 0xFFFF (DCW ist laut Model 160 uint16)
   assert.equal(parsed.modules[0].dcv, null); // uint16 0xFFFF
   assert.equal(parsed.modules[0].dca, null);
+});
+
+// Codex Integration 24.11. (P2): DCW ist in Model 160 uint16 — große Strings (Rohwert > 32767) bleiben positiv,
+// 0x8000 ist ein gültiger Wert, nur 0xFFFF heißt „nicht implementiert“.
+test('parseM160Modules: DCW als uint16 — 40000 mit SF −1 sind 4000 W, 0x8000 ist ein Wert', () => {
+  const regs = buildM160({
+    sfs: { dca: 0, dcv: 0, dcw: -1, dcwh: 0 },
+    modules: [{ id: 1, dcw: 40000 }, { id: 2, dcw: 0x8000 }]
+  });
+  const parsed = parseM160Modules(regs);
+  assert.equal(parsed.modules[0].dcw, 4000);
+  assert.equal(parsed.modules[1].dcw, 3276.8);
 });
 
 test('parseM160Modules: unbekannter DCW_SF (0x8000) → dcw null', () => {
@@ -142,7 +154,7 @@ test('m160PvStrings: Akku-Module ausgeschlossen, nur PV-Strings mit gültigem DC
 test('m160PvStrings: Modul mit not-implemented-DCW erzeugt keine Reihe', () => {
   const regs = buildM160({
     sfs: { dca: 0, dcv: 0, dcw: 0, dcwh: 0 },
-    modules: [{ id: 1, dcw: 2000 }, { id: 2, dcw: 0x8000 }]
+    modules: [{ id: 1, dcw: 2000 }, { id: 2, dcw: 0xffff }]
   });
   const parsed = parseM160Modules(regs);
   const strings = m160PvStrings(parsed, []);

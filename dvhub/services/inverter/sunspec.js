@@ -150,7 +150,7 @@ function m160Scale(raw, sf) {
  * Reine Funktion (kein I/O): `regs` ist der bereits gelesene Datenbereich ab
  * model.address (NICHT inkl. des 2-Register-Headers). Fehlt Register-Material
  * für ein Modul, wird es ausgelassen statt mit Müll gefüllt. `not-implemented`-
- * Sentinels (int16 0x8000, uint16 0xFFFF) und ein unbekannter Skalenfaktor
+ * Sentinels (int16 0x8000 bei Skalenfaktoren, uint16 0xFFFF bei DCA/DCV/DCW/ID) und ein unbekannter Skalenfaktor
  * ergeben `null` für das betroffene Feld — nie einen falschen Zahlenwert.
  *
  * @param {number[]} regs - Model-160-Datenregister ab model.address
@@ -179,10 +179,6 @@ export function parseM160Modules(regs, opts = {}) {
   const n = nRaw === M160_NOT_IMPL_U16 ? 0 : Math.min(nRaw, maxModules);
   out.n = n;
 
-  const i16OrNull = (v) => {
-    const r = m160Int16(v);
-    return r === M160_NOT_IMPL_I16 ? null : r;
-  };
   const u16OrNull = (v) => {
     const r = m160Uint16(v);
     return r === M160_NOT_IMPL_U16 ? null : r;
@@ -196,7 +192,8 @@ export function parseM160Modules(regs, opts = {}) {
     out.modules.push({
       module: m,
       id: u16OrNull(regs[base + M160_MOD_ID]),
-      dcw: m160Scale(i16OrNull(regs[base + M160_MOD_DCW]), dcwSf),
+      // DCW ist laut SunSpec Model 160 uint16 (Sentinel 0xFFFF), wie DCA/DCV (Codex Integration 24.11.).
+      dcw: m160Scale(u16OrNull(regs[base + M160_MOD_DCW]), dcwSf),
       dcv: m160Scale(u16OrNull(regs[base + M160_MOD_DCV]), dcvSf),
       dca: m160Scale(u16OrNull(regs[base + M160_MOD_DCA]), dcaSf),
       dcwh: hasWh ? m160Scale(m160Acc32(regs[base + M160_MOD_DCWH], regs[base + M160_MOD_DCWH + 1]), dcwhSf) : null

@@ -467,7 +467,8 @@ test('M160-Derive: Ausfall nach gültigem Wert setzt errors.batteryPowerW, Erfol
   await poller.requestPoll();
   assert.equal(state.victron.batteryPowerW, -500);
   assert.equal(state.victron.errors.batteryPowerW, undefined);
-  for (const [k, v] of buildGen24ImageWithM160({ chargeDcw: 0x8000, dischargeDcw: 500 })) image.set(k, v);
+  // „nicht implementiert“: DCW ist uint16 → 0xFFFF (Codex Integration 24.11.).
+  for (const [k, v] of buildGen24ImageWithM160({ chargeDcw: 0xffff, dischargeDcw: 500 })) image.set(k, v);
   await poller.requestPoll();
   assert.ok(state.victron.errors.batteryPowerW, 'Ausfall der Ableitung ist ein Lesefehler');
   for (const [k, v] of buildGen24ImageWithM160({ chargeDcw: 0, dischargeDcw: 400 })) image.set(k, v);
