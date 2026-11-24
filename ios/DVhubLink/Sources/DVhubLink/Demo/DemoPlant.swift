@@ -535,17 +535,25 @@ public struct DemoPlant: Sendable {
     /// wird dort neu angesetzt, `checkpointOverride`).
     func overrideCharged(_ o: State.Override, until now: Date) -> Double {
         guard o.kind == "charge", !state.emergencyStop else { return o.chargedPct }
-        let end = min(now, o.until ?? now)
-        var pct = o.chargedPct
-        var t = o.accountedAt
-        while t < end {
-            let step = min(300, end.timeIntervalSince(t))
-            let mid = t.addingTimeInterval(step / 2)
-            let day = world.day(containing: mid)
-            if !world.evAway(day, hour: day.hour(of: mid)) { pct += o.powerW / 1000 * step / 3600 / DemoWorld.evBatteryKwh * 100 }
-            t = t.addingTimeInterval(step)
+        let hours = pluggedSeconds(from: o.accountedAt, to: min(now, o.until ?? now)) / 3600
+        return o.chargedPct + o.powerW / 1000 * hours / DemoWorld.evBatteryKwh * 100
+    }
+
+    /// Zeit zwischen `a` und `b`, in der das Auto an der Wallbox steht: alles außer den Fahrten
+    /// (Werktag 07:00–08:30), auf die Sekunde an Abfahrt und Rückkehr geteilt — so wächst das
+    /// Geladene nur und hängt nicht davon ab, wann gefragt wird.
+    func pluggedSeconds(from a: Date, to b: Date) -> TimeInterval {
+        guard b > a else { return 0 }
+        var total = b.timeIntervalSince(a)
+        var day = world.day(containing: a)
+        while day.start < b {
+            if day.isWorkday {
+                let from = max(a, day.date(atHour: DemoWorld.evAwayFrom)), to = min(b, day.date(atHour: DemoWorld.evAwayUntil))
+                if to > from { total -= to.timeIntervalSince(from) }
+            }
+            day = world.day(after: day)
         }
-        return pct
+        return max(0, total)
     }
 
     /// Stand des „Sofort laden“ festhalten, bevor sich ändert, ob es wirkt (Not-Halt).
@@ -807,5 +815,27 @@ final class RunCache: @unchecked Sendable {
         if runs.count > 800 { runs.removeAll(keepingCapacity: true) }
         runs[run.day.number] = run
         ends[run.day.number] = run.endSoc
+    }
+}
+
+extension DemoPlant.State {
+    private struct Start: Decodable { let startedAt: Date }
+
+    /// Gespeicherten Zustand lesen — auch einen, den ein älterer Stand der App geschrieben hat:
+    /// Felder, die es damals noch nicht gab, bekommen den Wert einer frischen Demo; was bedient
+    /// wurde, bleibt. nil nur, wenn die Daten gar kein Zustand der Demo sind.
+    public static func restore(_ data: Data) -> DemoPlant.State? {
+        if let state = try? JSONDecoder().decode(Self.self, from: data) { return state }
+        guard var stored = (try? JSONValue.decode(data))?.object, let start = try? JSONDecoder().decode(Start.self, from: data),
+              let fresh = (try? JSONEncoder().encode(DemoPlant.State(startedAt: start.startedAt))).flatMap({ try? JSONValue.decode($0) })?.object
+        else { return nil }
+        for (key, value) in fresh where stored[key] == nil { stored[key] = value }
+        if var override = stored["evOverride"]?.object {
+            if override["chargedPct"] == nil { override["chargedPct"] = 0 }
+            if override["accountedAt"] == nil { override["accountedAt"] = override["startedAt"] ?? .null }
+            stored["evOverride"] = .object(override)
+        }
+        guard let merged = try? JSONValue.object(stored).encoded() else { return nil }
+        return try? JSONDecoder().decode(Self.self, from: merged)
     }
 }

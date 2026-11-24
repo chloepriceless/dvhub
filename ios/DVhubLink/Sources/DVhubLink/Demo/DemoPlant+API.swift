@@ -718,8 +718,6 @@ extension DemoPlant {
             guard minutes <= 48 * 60 else { return Self.bad("until must be within 48 h") }
             until = now.addingTimeInterval(minutes * 60)
         }
-        // Eine laufende Vorgabe endet hier; was sie geladen hat, bleibt im Auto.
-        finishOverride(at: now)
         let o: State.Override
         if body["kind"]?.string == "stop" {
             o = State.Override(kind: "stop", powerW: 0, requestedW: 0, startedAt: now, until: until)
@@ -727,6 +725,9 @@ extension DemoPlant {
             guard let p = body["powerW"]?.number, p > 0 else { return Self.bad("powerW must be > 0") }
             o = State.Override(kind: "charge", powerW: min(11_000, max(4140, p)).rounded(), requestedW: p.rounded(), startedAt: now, until: until)
         }
+        // Erst jetzt, da die neue Vorgabe gültig ist, endet eine laufende (eine abgelehnte Anfrage
+        // ändert nichts); was sie geladen hat, bleibt im Auto.
+        finishOverride(at: now)
         update { $0.evOverride = o }
         // Im Not-Halt steuert DVhub die Wallbox nicht: gespeichert, wirkt aber erst nach dem Aufheben.
         let result: JSONValue = state.emergencyStop ? ["ok": false, "skipped": "paused"] : ["ok": true]

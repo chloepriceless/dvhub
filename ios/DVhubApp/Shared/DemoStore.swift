@@ -27,9 +27,9 @@ enum DemoStore {
     /// Die Demo ist die gewählte Anlage.
     static var isSelected: Bool { SharedStore.selectedSystemId == DemoPlant.boxId && isActive }
 
+    /// Gespeicherter Zustand — auch einer, den ein älterer Stand der App geschrieben hat (State.restore).
     static func loadState() -> DemoPlant.State? {
-        guard let data = SharedStore.defaults.data(forKey: stateKey) else { return nil }
-        return try? JSONDecoder().decode(DemoPlant.State.self, from: data)
+        SharedStore.defaults.data(forKey: stateKey).flatMap(DemoPlant.State.restore)
     }
 
     static func save(_ state: DemoPlant.State) {

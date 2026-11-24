@@ -72,11 +72,18 @@ public struct DemoWorld: Sendable, Equatable {
             return (elapsed + Double(zone.secondsFromGMT(for: date) - offsetAtStart)) / 3600
         }
 
-        /// Zeitpunkt zu einer Uhrzeit dieses Tages (Stunden seit Mitternacht).
+        /// Zeitpunkt zu einer Uhrzeit dieses Tages (Stunden seit Mitternacht). An Tagen mit
+        /// Zeitumstellung: Eine Uhrzeit, die es zweimal gibt (Herbst), meint das erste Mal; eine,
+        /// die es nicht gibt (Lücke im Frühjahr), den ersten Augenblick danach.
         public func date(atHour hour: Double) -> Date {
             let plain = start.addingTimeInterval(hour * 3600)
             guard end.timeIntervalSince(start) != 86_400 else { return plain }
-            return plain.addingTimeInterval(-Double(zone.secondsFromGMT(for: plain) - offsetAtStart))
+            // Vor der Umstellung stimmt der Abstand vom Tagesbeginn.
+            if abs(self.hour(of: plain) - hour) < 1e-6 { return plain }
+            // Danach ist er um den Sprung versetzt.
+            let shifted = plain.addingTimeInterval(-Double(zone.secondsFromGMT(for: plain) - offsetAtStart))
+            if abs(self.hour(of: shifted) - hour) < 1e-6 { return shifted }
+            return zone.nextDaylightSavingTimeTransition(after: start) ?? shifted
         }
 
         /// „HH:MM“ nach der Uhr der Anlage (Tagesende → 00:00).

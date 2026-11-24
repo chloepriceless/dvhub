@@ -664,6 +664,84 @@ final class DemoPlantTests: XCTestCase {
         XCTAssertEqual(p.run(today).slots[0].socStart, p.run(p.world.day(after: today, by: -1)).endSoc, accuracy: 1e-9)
     }
 
+    // MARK: Gegenprüfung bb3d00cc
+
+    func testOlderSavedStateKeepsItsEdits() throws {
+        var p = plant()
+        _ = post(&p, "/api/control/stop", [:])
+        _ = post(&p, "/api/ev/override", try XCTUnwrap(EVEdit.stopCharging(durationMin: nil)))
+        _ = post(&p, "/api/schedule/config", ["defaultGridSetpointW": -120])
+        // So hat ein früherer Stand gespeichert: ohne die Felder, die später dazukamen.
+        var old = try XCTUnwrap(JSONValue.decode(JSONEncoder().encode(p.state)).object)
+        old["evExtraPct"] = nil
+        var override = try XCTUnwrap(old["evOverride"]?.object)
+        override["chargedPct"] = nil
+        override["accountedAt"] = nil
+        old["evOverride"] = .object(override)
+        XCTAssertThrowsError(try JSONDecoder().decode(DemoPlant.State.self, from: try JSONValue.object(old).encoded()), "ohne Hilfe unlesbar")
+        // Vergleichswert: derselbe Zustand, einmal gespeichert und gelesen (ganze Zahlen kommen als solche zurück).
+        let saved = try JSONDecoder().decode(DemoPlant.State.self, from: try JSONEncoder().encode(p.state))
+        let restored = try XCTUnwrap(DemoPlant.State.restore(try JSONValue.object(old).encoded()))
+        XCTAssertEqual(restored, saved, "was bedient wurde, bleibt; Fehlendes bekommt den Wert einer frischen Demo")
+        XCTAssertEqual(restored.emergencyStop, true)
+        XCTAssertEqual(restored.defaultGridSetpointW, -120)
+        XCTAssertEqual(restored.evOverride?.kind, "stop")
+        XCTAssertEqual(restored.evOverride?.accountedAt, restored.evOverride?.startedAt)
+        XCTAssertEqual(restored.evExtraPct, 0)
+        // Der heutige Stand liest sich unverändert, Unlesbares gar nicht.
+        XCTAssertEqual(DemoPlant.State.restore(try JSONEncoder().encode(p.state)), saved)
+        XCTAssertNil(DemoPlant.State.restore(Data("kaputt".utf8)))
+        XCTAssertNil(DemoPlant.State.restore(Data("{}".utf8)))
+    }
+
+    func testRejectedOverrideLeavesTheRunningOneAlone() throws {
+        var p = plant()
+        let now = demoDate(2026, 11, 24, 15, 0)
+        _ = post(&p, "/api/ev/override", try XCTUnwrap(EVEdit.stopCharging(durationMin: nil)), now: now)
+        let before = p.state
+        XCTAssertEqual(post(&p, "/api/ev/override", ["kind": "charge", "powerW": 0], now: now.addingTimeInterval(60)).status, 400)
+        XCTAssertEqual(post(&p, "/api/ev/override", ["kind": "charge", "powerW": 7000, "durationMin": 0], now: now.addingTimeInterval(60)).status, 400)
+        XCTAssertEqual(p.state, before, "eine abgelehnte Anfrage ändert nichts")
+        XCTAssertEqual(EVState.from(get(&p, "/api/ev", now: now.addingTimeInterval(120)))?.override?.stop, true)
+    }
+
+    func testTimesInTheDaylightSavingGapMoveForward() throws {
+        var p = plant(startedAt: demoDate(2026, 3, 27, 10))
+        // 29.03.2026: 02:30 gibt es nicht — es gilt der erste Augenblick danach (03:00).
+        let spring = p.world.day(containing: demoDate(2026, 3, 29, 12))
+        XCTAssertEqual(spring.date(atHour: 2.5), demoDate(2026, 3, 29, 3, 0))
+        XCTAssertEqual(spring.date(atHour: 1.5), demoDate(2026, 3, 29, 1, 30))
+        XCTAssertEqual(spring.date(atHour: 3.25), demoDate(2026, 3, 29, 3, 15))
+        let saturday = demoDate(2026, 3, 28, 20, 0)
+        let week = try XCTUnwrap(EVState.from(get(&p, "/api/ev", now: saturday))).week
+        _ = post(&p, "/api/ev", try EVEdit.weekPlan(week, change: .add(.init(day: 7, departure: "02:30"))).get(), now: saturday)
+        XCTAssertEqual(EVState.from(get(&p, "/api/ev", now: saturday))?.nextDeparture, demoDate(2026, 3, 29, 3, 0))
+        XCTAssertEqual(EVState.from(get(&p, "/api/ev", now: demoDate(2026, 3, 29, 1, 45)))?.nextDeparture, demoDate(2026, 3, 29, 3, 0), "nicht übersprungen")
+        // 25.10.2026: 02:30 gibt es zweimal — es gilt das erste Mal; danach stimmt die Uhr wieder.
+        let autumn = p.world.day(containing: demoDate(2026, 10, 25, 12))
+        XCTAssertEqual(autumn.date(atHour: 2.5), autumn.start.addingTimeInterval(2.5 * 3600))
+        XCTAssertEqual(autumn.date(atHour: 7), demoDate(2026, 10, 25, 7, 0))
+        XCTAssertEqual(autumn.hour(of: autumn.date(atHour: 7)), 7, accuracy: 1e-9)
+    }
+
+    func testChargedEnergyNeverShrinksWhenAskedLater() throws {
+        var p = plant()
+        // Mittwoch 06:58: zwei Minuten laden, dann fährt das Auto (07:00–08:30).
+        let begin = demoDate(2026, 11, 25, 6, 58)
+        _ = post(&p, "/api/ev/override", try XCTUnwrap(EVEdit.chargeNow(powerW: 11_000, durationMin: nil)), now: begin)
+        let o = try XCTUnwrap(p.state.evOverride)
+        let twoMinutes = 11.0 * (2.0 / 60) / 60 * 100
+        XCTAssertEqual(p.overrideCharged(o, until: demoDate(2026, 11, 25, 7, 0)), twoMinutes, accuracy: 1e-6)
+        var last = 0.0
+        for minutes in stride(from: 0, through: 120, by: 1) {
+            let charged = p.overrideCharged(o, until: begin.addingTimeInterval(Double(minutes) * 60))
+            XCTAssertGreaterThanOrEqual(charged, last - 1e-9, "nach \(minutes) min")
+            last = charged
+        }
+        XCTAssertEqual(p.overrideCharged(o, until: demoDate(2026, 11, 25, 7, 2)), twoMinutes, accuracy: 1e-6, "unterwegs kommt nichts dazu – und nichts weg")
+        XCTAssertEqual(p.overrideCharged(o, until: demoDate(2026, 11, 25, 8, 32)), 2 * twoMinutes, accuracy: 1e-6, "ab 08:30 lädt es weiter")
+    }
+
     func testUnknownRequestsAreRejected() {
         var p = plant()
         XCTAssertEqual(p.respond("GET", "/api/irgendwas").status, 404)

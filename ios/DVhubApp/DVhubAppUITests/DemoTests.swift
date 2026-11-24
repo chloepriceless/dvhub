@@ -42,9 +42,15 @@ final class DemoTests: XCTestCase {
         from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.1)
     }
 
+    /// Bis zum Element rollen — und so weit, dass es frei über dem unteren Rand steht (am Rand
+    /// gilt es schon als antippbar, ein Tipp landet dort aber unter der Leiste bzw. außerhalb).
     private func reveal(_ el: XCUIElement, tries: Int = 10) {
         var n = 0
-        while !(el.exists && el.isHittable), n < tries { scrollDown(); n += 1 }
+        while n < tries {
+            if el.exists, el.isHittable, el.frame.maxY < app.windows.firstMatch.frame.maxY - 110 { return }
+            scrollDown()
+            n += 1
+        }
     }
 
     /// Bereich öffnen: Reiter antippen, auf breiter Fläche die Seitenleiste; sonst neu starten (die Demo bleibt über Neustarts).
