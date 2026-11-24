@@ -161,7 +161,7 @@ for (const metaType of ['jsonb', 'text']) {
         source_kind text, quality text, value_num double precision, unit text, meta_json ${metaType},
         created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now() - interval '30 days')`);
       const at = (hm) => `2026-11-01T${hm}:00.000Z`;
-      const [A, B, C, D, E, F, G, H, I] = ['00:00', '00:15', '00:30', '00:45', '01:00', '01:15', '01:30', '01:45', '02:00'].map(at);
+      const [A, B, C, D, E, F, G, H, I, J, K] = ['00:00', '00:15', '00:30', '00:45', '01:00', '01:15', '01:30', '01:45', '02:00', '02:15', '02:30'].map(at);
       // Stimmig: Bezug 0,5, Last 0,72, Entladen 0,25 → Verlust 0,03 kWh (Grenze 0,06 + 15 % × 0,25).
       const ok = { local: { grid_import_w: 0.5, load_power_w: 0.72, battery_discharge_w: 0.25 }, vrm: { grid_import_w: 0.5, load_power_w: 0.72, battery_discharge_w: 0.2 } };
       for (const slot of [A, B, D, E, G]) await insertSlot(client, slot, ok);
@@ -174,6 +174,13 @@ for (const metaType of ['jsonb', 'text']) {
       // I: Nacht, Bezug/PV 0, Last passt — aber der Akkuwert hing (0,75 kWh Entladung bei 0,2 kWh Last):
       // Bilanz 0 − 0,2 + 0,75 = 0,55 kWh Verlust → nicht schlüssig.
       await insertSlot(client, I, { local: { grid_import_w: 0, load_power_w: 0.2, battery_discharge_w: 0.75 }, vrm: { grid_import_w: 0, load_power_w: 0.2, battery_discharge_w: 0.2 } });
+      // J (Codex b7eefc4a): zweite GX lädt 0,4 kWh — lokale Last um Akku 2 gekürzt (0,32), VRM
+      // zeigt die Last der Haupt-GX (0,72); Bilanz 0,5 − 0,32 + 0,25 − 0,4 = 0,03 kWh → bestätigt.
+      await insertSlot(client, J, { local: { ...ok.local, load_power_w: 0.32, second_battery_charge_w: 0.4, second_battery_discharge_w: 0 }, vrm: ok.vrm });
+      // K (Codex b7eefc4a): Tag, Akku ruht, DC-PV 2,5 kWh → Haus 1,0 + Einspeisung 1,4 (96 %);
+      // Verlust 0,1 kWh ≤ 0,06 + 15 % × 2,5 → bestätigt.
+      const pvDay = { pv_total_w: 2.5, grid_import_w: 0, grid_export_w: 1.4, load_power_w: 1.0, battery_discharge_w: 0 };
+      await insertSlot(client, K, { local: pvDay, vrm: { pv_total_w: 2.5, grid_export_w: 1.4, load_power_w: 1.0 } });
       // E hat schon eine Abdeckung (seit 1.0.10) — bleibt, wie sie ist.
       await client.query(`UPDATE energy_slots_15m SET meta_json = '{"coverageS":777,"samples":3,"maxResS":5}'
         WHERE slot_start_utc = $1 AND source_kind = 'local_live'`, [E]);
@@ -184,15 +191,15 @@ for (const metaType of ['jsonb', 'text']) {
       // E/F: alle 5 s, jede 10. Probe veraltet (gekennzeichnet).
       await seedRaw(client, { startIso: E, endIso: G, series: SERIES, staleEvery: 10, metaType });
       // G–I: alle 5 s; in G ein Neustart 01:37:00–01:38:00 (60 s ohne Probe).
-      await seedRaw(client, { startIso: G, endIso: '2026-11-01T02:15:00.000Z', series: SERIES, skip: ['2026-11-01T01:37:00.000Z', '2026-11-01T01:38:00.000Z'], metaType });
+      await seedRaw(client, { startIso: G, endIso: '2026-11-01T02:45:00.000Z', series: SERIES, skip: ['2026-11-01T01:37:00.000Z', '2026-11-01T01:38:00.000Z'], metaType });
       // VRM-Rohwerte zählen nicht. Anderer Tag: nicht in diesem Lauf.
       await seedRaw(client, { startIso: A, endIso: B, stepS: 300, res: 300, scope: 'history', source: 'vrm_import', series: SERIES, metaType });
       await client.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, meta_json)
         VALUES ('2026-11-02T00:00:00Z', 'battery_discharge_w', 'local_live', 'raw_derived', 0.01, NULL)`);
 
       const res = await client.query(coverageUpdateSql(metaType), COVERAGE_UPDATE_PARAMS('2026-11-01T00:00:00.000Z', '2026-11-02T00:00:00.000Z'));
-      // A, B, C, D, G, H, I je 3 Reihen + F 1 Reihe; nicht E, nicht VRM, nicht der Folgetag.
-      assert.equal(res.rowCount, 22);
+      // A, B, C, D, G, H, I je 3 Reihen + F 1 + J 5 + K 5; nicht E, nicht VRM, nicht der Folgetag.
+      assert.equal(res.rowCount, 32);
       const meta = async (slot, series = 'battery_discharge_w', kind = 'local_live') => JSON.parse((await slotRow(client, slot, kind, series))?.meta_json || 'null');
       // A: 180 Abstände à 5 s = 900 s, bestätigt.
       assert.deepEqual(await meta(A), { coverageS: 900, samples: 180, maxResS: 5, coverageBackfill: 'raw' });
@@ -212,6 +219,8 @@ for (const metaType of ['jsonb', 'text']) {
       assert.deepEqual(await meta(G), { coverageS: 840, samples: 168, maxResS: 65, coverageBackfill: 'raw' });
       assert.deepEqual(await meta(H), { coverageBackfill: 'unverified' });
       assert.deepEqual(await meta(I), { coverageBackfill: 'vrm-mismatch' });
+      assert.equal((await meta(J)).coverageBackfill, 'raw');
+      assert.equal((await meta(K)).coverageBackfill, 'raw');
       assert.equal(await meta(A, 'battery_discharge_w', 'vrm_import'), null);
       assert.equal(await meta('2026-11-02T00:00:00.000Z'), null);
       // updated_at neu → die vorberechnete Jahres-Historie rechnet den Monat neu.

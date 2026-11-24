@@ -20,13 +20,13 @@
 // und die Lücke steht in maxResS (über 90 s: nie vollständig).
 // Dazu eine Bestätigung je Slot (Codex 31a46774), sonst bleibt VRM vorn (Regel B
 // vom 05.11. bleibt):
-//   1. Netzbezug, Einspeisung, PV und Hausverbrauch passen zum VRM-Import
+//   1. Netzbezug, Einspeisung, PV und Hausverbrauch (der Haupt-GX) passen zum VRM-Import
 //      (|Δ| ≤ max(0,02 kWh, 5 %); Prod 06.–22.11.2026: ~98 % der vollständigen
 //      Slots), mindestens ein echtes Vergleichspaar, eines davon ≥ 0,05 kWh
 //      (nachts zählt der Hausverbrauch) — fehlt VRM, ist nichts bestätigt;
 //   2. die eigene Energiebilanz des Slots ist schlüssig: PV + Bezug − Einspeisung
-//      − Last − Laden + Entladen (= Wandlerverlust) liegt in
-//      [−0,02 kWh; 0,06 kWh + 15 % des Akku-Durchsatzes] (Prod: 99,4 % der
+//      − Last − Laden + Entladen (beide Akkus; = Wandlerverlust) liegt in
+//      [−0,02 kWh; 0,06 kWh + 15 % von Akku-Durchsatz + PV] (Prod: 99,9 % der
 //      vollständigen Slots). Ein gehaltener Akkuwert sprengt die Bilanz; die
 //      VRM-Akkumengen selbst taugen nicht zum Vergleich (AC-seitig, je Slot verrauscht).
 // Ergebnis im Vermerk coverageBackfill: 'raw' (bestätigt, mit Abdeckung),
@@ -52,7 +52,8 @@ export const COVERAGE_AGREE_ABS_KWH = 0.02;
 export const COVERAGE_AGREE_REL = 0.05;
 // Mindestens ein Vergleichspaar so groß — sonst sagt „passt“ nichts.
 export const COVERAGE_INFORMATIVE_KWH = 0.05;
-// Energiebilanz je Slot (Wandlerverlust), Prod 06.–22.11.2026: 99,4 % darin.
+// Energiebilanz je Slot (Wandlerverlust), Spielraum relativ zu Akku-Durchsatz + PV;
+// Prod 06.–22.11.2026: 99,9 % der vollständigen Slots darin.
 export const COVERAGE_BALANCE_MIN_KWH = -0.02;
 export const COVERAGE_BALANCE_MAX_KWH = 0.06;
 export const COVERAGE_BALANCE_MAX_REL = 0.15;
@@ -118,39 +119,49 @@ cov AS (
   WHERE ts_utc >= $1::timestamptz
   GROUP BY 1, 2
 ),
+bal AS (
+  SELECT slot_start_utc AS slot,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'pv_total_w'), 0) AS pv,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'grid_import_w'), 0) AS gi,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'grid_export_w'), 0) AS ge,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'load_power_w'), 0) AS ld,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'battery_charge_w'), 0) AS ch,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'battery_discharge_w'), 0) AS dis,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'second_battery_charge_w'), 0) AS ch2,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'second_battery_discharge_w'), 0) AS dis2
+  FROM energy_slots_15m
+  WHERE source_kind = 'local_live'
+    AND slot_start_utc >= $1::timestamptz AND slot_start_utc < $2::timestamptz
+  GROUP BY 1
+),
 pairs AS (
+  -- Hausverbrauch: polling.js zieht Akku 2 (zweite GX) von der Last ab, der VRM-Import
+  -- der Haupt-GX nicht — verglichen wird die gemessene Last der Haupt-GX
+  -- (wie EFFICIENCY_SAMPLES_CTE: Last + Akku-2-Laden − Akku-2-Entladen).
   SELECT l.slot_start_utc AS slot,
          count(*)::int AS n,
-         bool_and(abs(l.value_num - r.value_num) <= greatest($3::float8, $4::float8 * greatest(abs(l.value_num), abs(r.value_num)))) AS within,
-         max(greatest(abs(l.value_num), abs(r.value_num))) AS biggest
+         bool_and(abs(lv.v - r.value_num) <= greatest($3::float8, $4::float8 * greatest(abs(lv.v), abs(r.value_num)))) AS within,
+         max(greatest(abs(lv.v), abs(r.value_num))) AS biggest
   FROM energy_slots_15m l
   JOIN energy_slots_15m r
     ON r.slot_start_utc = l.slot_start_utc AND r.series_key = l.series_key AND r.source_kind = 'vrm_import'
+  JOIN bal b ON b.slot = l.slot_start_utc
+  CROSS JOIN LATERAL (SELECT CASE WHEN l.series_key = 'load_power_w'
+                                  THEN l.value_num + b.ch2 - b.dis2 ELSE l.value_num END AS v) lv
   WHERE l.source_kind = 'local_live'
     AND l.slot_start_utc >= $1::timestamptz AND l.slot_start_utc < $2::timestamptz
     AND l.series_key = ANY($5::text[])
     AND l.value_num IS NOT NULL AND r.value_num IS NOT NULL
   GROUP BY 1
 ),
-bal AS (
-  SELECT slot_start_utc AS slot,
-         coalesce(max(value_num) FILTER (WHERE series_key = 'pv_total_w'), 0)
-           + coalesce(max(value_num) FILTER (WHERE series_key = 'grid_import_w'), 0)
-           - coalesce(max(value_num) FILTER (WHERE series_key = 'grid_export_w'), 0)
-           - coalesce(max(value_num) FILTER (WHERE series_key = 'load_power_w'), 0)
-           - coalesce(max(value_num) FILTER (WHERE series_key = 'battery_charge_w'), 0)
-           + coalesce(max(value_num) FILTER (WHERE series_key = 'battery_discharge_w'), 0) AS loss,
-         coalesce(max(value_num) FILTER (WHERE series_key = 'battery_charge_w'), 0)
-           + coalesce(max(value_num) FILTER (WHERE series_key = 'battery_discharge_w'), 0) AS thr
-  FROM energy_slots_15m
-  WHERE source_kind = 'local_live'
-    AND slot_start_utc >= $1::timestamptz AND slot_start_utc < $2::timestamptz
-  GROUP BY 1
-),
 chk AS (
+  -- Bilanz (Wandlerverlust) mit beiden Akkus; Spielraum wächst mit Akku-Durchsatz
+  -- und PV (DC-PV wird gewandelt) — Codex b7eefc4a; Prod: 99,9 % der vollständigen Slots.
   SELECT p.slot,
          p.within AND p.biggest >= $7::float8
-           AND b.loss >= $8::float8 AND b.loss <= $9::float8 + $10::float8 * b.thr AS agrees
+           AND (b.pv + b.gi - b.ge - b.ld - b.ch + b.dis - b.ch2 + b.dis2) >= $8::float8
+           AND (b.pv + b.gi - b.ge - b.ld - b.ch + b.dis - b.ch2 + b.dis2)
+               <= $9::float8 + $10::float8 * (b.ch + b.dis + b.ch2 + b.dis2 + b.pv) AS agrees
   FROM pairs p JOIN bal b ON b.slot = p.slot
 ),
 x AS (
