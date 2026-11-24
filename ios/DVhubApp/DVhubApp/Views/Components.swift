@@ -24,6 +24,7 @@ struct ConnectionBadge: View {
 
     private var color: Color {
         switch controller.state {
+        case .online(.demo): return Brand.violet
         case .online: return Brand.green
         case .connecting, .idle: return Brand.yellow
         case .boxOffline: return Brand.orange
@@ -35,6 +36,7 @@ struct ConnectionBadge: View {
         switch controller.state {
         case .idle: return String(localized: "Getrennt")
         case .connecting: return String(localized: "Verbinde …")
+        case .online(.demo): return String(localized: "Demo läuft – im Gerät, ohne Netz")
         case .online(let k): return k == .lan ? String(localized: "Verbunden im Heimnetz") : String(localized: "Verbunden über Relay")
         case .boxOffline(let k): return k == .lan ? String(localized: "Anlage antwortet nicht (Heimnetz)") : String(localized: "Anlage nicht mit dem Relay verbunden")
         case .offline(let e): return String(localized: "Keine Verbindung – \(e)")

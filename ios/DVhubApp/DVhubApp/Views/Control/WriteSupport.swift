@@ -4,6 +4,8 @@
 // Jede Änderung an der Anlage bestätigt man wie den Not-Halt mit Touch ID
 // (iPhone Duo), Face ID oder dem Gerätecode. Die Box prüft das Recht „Steuern“
 // selbst und trägt die Änderung mit der Kennung des Handys ins Protokoll ein.
+// In der Demo entfällt die Bestätigung (`SystemController.authorize`): Dort
+// ändert sich nur der Zustand der Beispielanlage im Gerät.
 
 import SwiftUI
 import DVhubLink
@@ -19,7 +21,7 @@ extension SystemController {
     func confirmed(_ reason: String, _ work: () async throws -> WriteFeedback) async -> WriteFeedback {
         guard canControl else { return WriteFeedback(ok: false, text: WriteOutcome.notAllowed.message) }
         guard isOnline else { return WriteFeedback(ok: false, text: String(localized: "Ändern geht nur, wenn die Anlage verbunden ist.")) }
-        if case .failure(let e) = await DeviceAuth.confirm(String(localized: "\(reason) an \(credentials.boxName)", comment: "Grund für Touch ID: z. B. Zeitplan ändern an Meine Anlage")) {
+        if case .failure(let e) = await authorize(reason) {
             return WriteFeedback(ok: false, text: String(localized: "Nicht bestätigt: \(e.localizedDescription)"))
         }
         do {

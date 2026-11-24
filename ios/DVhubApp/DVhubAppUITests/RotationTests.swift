@@ -23,6 +23,7 @@ final class RotationTests: XCTestCase {
             app.launchArguments += ["-DVHUB_PAIR", qr]
         }
         XCUIDevice.shared.orientation = .portrait
+        app.launchArguments += Demo.off
         app.launch()
 
         let state = app.descendants(matching: .any)["connectionState"].firstMatch

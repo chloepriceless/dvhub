@@ -19,6 +19,7 @@ final class ControlPagesTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += ["-AppleLanguages", "(de)", "-AppleLocale", "de_DE", "-navPlacement", "auto", "-DVHUB_TAB", area]
         if let qr = ProcessInfo.processInfo.environment["DVHUB_QR"], !qr.isEmpty { app.launchArguments += ["-DVHUB_PAIR", qr] }
+        app.launchArguments += Demo.off
         app.launch()
         return app
     }

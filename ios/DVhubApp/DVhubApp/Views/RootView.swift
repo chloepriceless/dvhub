@@ -476,7 +476,9 @@ struct RootView: View {
     }
 
     private var newsStack: some View {
-        NavigationStack { NewsView() }
+        // Mit der Quelle (Demo gewählt bzw. verlassen) beginnt der Leser neu: Ein Filter auf eine Quelle
+        // der Beispielmeldungen blendete sonst alle echten aus, eine geöffnete Beispielmeldung bliebe stehen.
+        NavigationStack { NewsView().id(news.epoch) }
     }
 
     @ViewBuilder
@@ -485,7 +487,7 @@ struct RootView: View {
             DashboardView(controller: c, open: { dashboardPath = [$0] }, openMarket: { tab = .market })
                 .id(c.credentials.boxId)
                 .toolbar {
-                    if model.systems.count > 1 {
+                    if model.entries.count > 1 {
                         ToolbarItem(placement: .topBarLeading) { systemMenu }
                     }
                 }
@@ -496,9 +498,10 @@ struct RootView: View {
 
     private var systemMenu: some View {
         Menu {
-            ForEach(model.systems) { sys in
+            ForEach(model.entries) { sys in
                 Button { model.select(sys.id) } label: {
-                    Label(sys.boxName, systemImage: sys.id == model.selectedId ? "checkmark" : "house")
+                    Label(sys.isDemo ? String(localized: "\(sys.boxName) (Demo)") : sys.boxName,
+                          systemImage: sys.id == model.selectedId ? "checkmark" : (sys.isDemo ? "sparkles" : "house"))
                 }
             }
         } label: {
@@ -514,6 +517,8 @@ struct RootView: View {
                                text: String(localized: "Markt und Nachrichten gehen ohne Anlage. Für \(title) koppelst du DVhub per QR-Code."))
                     Button { showPairing = true } label: { Label("Anlage koppeln", systemImage: "qrcode.viewfinder") }
                         .buttonStyle(.borderedProminent)
+                    // Ohne Anlage: die App mit der Beispielanlage ansehen.
+                    DemoStartButton(compact: true)
                 }
             }
         }
@@ -547,7 +552,10 @@ struct RootView: View {
     /// Bereich nach Namen öffnen: Reiter (`market`), Bereich unter „Mehr“
     /// (`control`) oder Detailansicht des Leitstands (`money`).
     private func open(_ name: String) {
-        if let known = AppTab(rawValue: name) {
+        if name == "pair" {
+            // „Eigene Anlage koppeln“ (aus der Demo heraus).
+            showPairing = true
+        } else if let known = AppTab(rawValue: name) {
             tab = known
             if known == .dashboard { dashboardPath = [] }
         } else if name == "overview" {
@@ -563,11 +571,19 @@ struct RootView: View {
 
     #if DEBUG
     /// Nur für Simulator-Tests und Bildschirmfotos:
+    ///   -DVHUB_DEMO on|off        Demo starten bzw. beenden
+    ///   -DVHUB_DEMO_SHIFT <h>     Uhr der Demo um so viele Stunden verstellen (Shared/DemoStore.swift)
     ///   -DVHUB_PAIR '<QR-Text>'   beim Start koppeln
     ///   -DVHUB_TAB  dashboard|market|history|news|more|plan|ev|integrations|system|control|systems
     ///   -DVHUB_OPEN pv|battery|grid|home|money|state
     private func applyDebugArguments() {
         let d = UserDefaults.standard
+        // -DVHUB_DEMO on|off: Demo starten bzw. beenden (Bildschirmfotos, sauberer Anfang für Tests).
+        switch d.string(forKey: "DVHUB_DEMO") {
+        case "on": if !model.selectedIsDemo { model.startDemo() }
+        case "off": model.endDemo()
+        default: break
+        }
         if let t = d.string(forKey: "DVHUB_TAB") { open(t) }
         if let o = d.string(forKey: "DVHUB_OPEN"), DetailKind(rawValue: o) != nil { open(o) }
         if let qr = d.string(forKey: "DVHUB_PAIR"), !qr.isEmpty, model.pendingPairLink == nil,

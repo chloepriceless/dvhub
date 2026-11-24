@@ -58,8 +58,8 @@ private struct Stand: View {
     let snapshot: WidgetSnapshot
     let now: Date
     var body: some View {
-        // Mit Datum, sobald der Stand nicht von heute ist.
-        Text("Stand \(snapshot.standText(now))")
+        // Mit Datum, sobald der Stand nicht von heute ist. Werte der Beispielanlage sind als Demo gekennzeichnet.
+        Text(snapshot.isDemo ? "Demo · \(snapshot.standText(now))" : "Stand \(snapshot.standText(now))")
             .font(.caption2.weight(.medium).monospacedDigit()).foregroundStyle(Brand.dim)
             .lineLimit(1).minimumScaleFactor(0.7)
     }
@@ -219,19 +219,24 @@ struct StatusWidgetContent: View {
 
     private func circular(_ s: WidgetSnapshot) -> some View {
         Gauge(value: max(0, min(100, s.soc ?? 0)), in: 0...100) {
-            Image(systemName: "bolt.fill")
+            // Werte der Beispielanlage: „DEMO“ statt des Blitzes — auch im kleinsten Widget sichtbar.
+            if s.isDemo {
+                Text(verbatim: "DEMO").font(.system(size: 8, weight: .heavy)).minimumScaleFactor(0.6)
+            } else {
+                Image(systemName: "bolt.fill")
+            }
         } currentValueLabel: {
             Text("\(Int((s.soc ?? 0).rounded()))")
         }
         .gaugeStyle(.accessoryCircular)
-        .accessibilityLabel("Akku \(Format.percent(s.soc))")
+        .accessibilityLabel(s.isDemo ? "Demo: Akku \(Format.percent(s.soc))" : "Akku \(Format.percent(s.soc))")
     }
 
     private func rectangular(_ s: WidgetSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
                 Image(systemName: "bolt.fill")
-                Text("DVhub").fontWeight(.bold)
+                Text(s.isDemo ? "DVhub Demo" : "DVhub").fontWeight(.bold)
                 Spacer()
                 Text(s.isToday(now) ? Format.time(s.at) : s.dayWord(now)).font(.caption2.monospacedDigit())
             }
@@ -242,12 +247,17 @@ struct StatusWidgetContent: View {
         .accessibilityElement(children: .combine)
     }
 
+    @ViewBuilder
     private func inline(_ s: WidgetSnapshot) -> some View {
         // Nach Mitternacht ist die Tagessumme von gestern — dann stattdessen sagen, von wann der Stand ist.
         // Einzeilig über der Uhr: nur Akku und Erzeugung. Geldwerte stehen dort
         // bewusst nicht — die Zeile ist auch bei gesperrtem Gerät lesbar.
-        Label(s.isToday(now) ? "\(Format.percent(s.soc)) · PV \(Format.power(s.pvW))" : "\(Format.percent(s.soc)) · \(s.dayWord(now))",
-              systemImage: "bolt.fill")
+        if s.isDemo {
+            Label("Demo · \(Format.percent(s.soc)) · PV \(Format.power(s.pvW))", systemImage: "bolt.fill")
+        } else {
+            Label(s.isToday(now) ? "\(Format.percent(s.soc)) · PV \(Format.power(s.pvW))" : "\(Format.percent(s.soc)) · \(s.dayWord(now))",
+                  systemImage: "bolt.fill")
+        }
     }
 }
 
@@ -299,7 +309,7 @@ struct MoneyWidgetContent: View {
 
     private func rectangular(_ s: WidgetSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Label(s.netTitle(now), systemImage: "eurosign.circle.fill").font(.caption.weight(.bold))
+            Label(s.isDemo ? "Demo · \(s.netTitle(now))" : s.netTitle(now), systemImage: "eurosign.circle.fill").font(.caption.weight(.bold))
             Text(Format.euro(abs(s.todayNetEur ?? 0))).font(.system(.title3, design: .rounded).weight(.bold)).monospacedDigit()
                 .privacySensitive()
             Text("Erlös \(Format.euro(s.todayRevenueEur)) · Kosten \(Format.euro(s.todayCostEur))").font(.caption2.monospacedDigit())

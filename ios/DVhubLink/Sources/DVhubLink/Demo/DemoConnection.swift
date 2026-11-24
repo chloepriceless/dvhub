@@ -28,21 +28,35 @@ public actor DemoBox {
 
     public var state: DemoPlant.State { plant.state }
 
+    /// Führt `work` an der Anlage aus und meldet einen geänderten Zustand zum Speichern.
+    private func with<T>(_ work: (inout DemoPlant, Date) -> T) -> T {
+        let before = plant.state
+        let result = work(&plant, clock())
+        if plant.state != before { onChange?(plant.state) }
+        return result
+    }
+
     /// Anfrage wie an die Box (`GET /api/status`, `POST /api/ev` …).
     public func request(_ method: String, _ path: String, body: JSONValue? = nil) -> LinkResponse {
-        let before = plant.state
-        let response = plant.respond(method, path, body: body, now: clock())
-        if plant.state != before { onChange?(plant.state) }
-        return response
+        with { plant, now in plant.respond(method, path, body: body, now: now) }
     }
 
-    /// Kompakt-Status jetzt (Live-Wert).
+    /// Kompakt-Status jetzt (Live-Wert). Vorher erledigt sich, was die Zeit erledigt
+    /// (abgelaufenes „Sofort laden“, Regel am Stopp-Stand) — auch ohne Anfrage der App.
     public func status() -> (status: JSONValue, at: Date) {
-        let now = clock()
-        return (plant.compactStatus(at: now), now)
+        with { plant, now in
+            plant.settle(at: now)
+            return (plant.compactStatus(at: now), now)
+        }
     }
 
-    public func live() -> DemoPlant.Live { plant.live(at: clock()) }
+    public func live() -> DemoPlant.Live {
+        with { plant, now in
+            plant.settle(at: now)
+            return plant.live(at: now)
+        }
+    }
+
     public func mailbox() -> [MailboxItem] { plant.mailbox() }
 }
 

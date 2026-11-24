@@ -16,6 +16,13 @@ enum Shots {
     }
 }
 
+enum Demo {
+    /// Startargument der Tests an einer gekoppelten Anlage: eine Demo, die auf dem Simulator noch
+    /// läuft, vorher beenden. Sie zählte sonst als gewählte Anlage — die Tests liefen dann an der
+    /// Beispielanlage statt an der Gegenstelle (und warteten vergeblich auf „Verbunden“).
+    static let off = ["-DVHUB_DEMO", "off"]
+}
+
 /// Seitenleiste der breiten Fläche (iPhone Duo aufgeklappt, iPad).
 struct Sidebar {
     let app: XCUIApplication

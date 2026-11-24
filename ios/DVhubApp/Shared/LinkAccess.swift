@@ -24,6 +24,9 @@ enum LinkAccess {
         case notShared
         /// Der Geräteschlüssel lässt sich in diesem Programm nicht verwenden.
         case keyUnavailable
+        /// Die Demo ist gewählt: Es gibt keine Zugangsdaten — und zu einer
+        /// gekoppelten Anlage wird dann nicht gegriffen.
+        case demo
     }
 
     /// Läuft dieses Programm als Erweiterung (Widgets, Kontrollzentrum)?
@@ -48,9 +51,12 @@ enum LinkAccess {
         }
     }()
 
-    /// Zugangsdaten und Geräteschlüssel der gewählten Anlage.
+    /// Zugangsdaten und Geräteschlüssel der gewählten Anlage. Ist die Demo
+    /// gewählt, gibt es keine — auch nicht ersatzweise die einer gekoppelten
+    /// Anlage: Wer die Demo ansieht, erreicht nie eine echte.
     static func selected() throws -> (credentials: LinkCredentials, signer: LinkSigner) {
         configure()
+        if DemoStore.isSelected { throw Failure.demo }
         let systems: [LinkCredentials]
         do {
             systems = try KeyStore.loadSystems()
@@ -92,6 +98,7 @@ extension WidgetSnapshot {
 }
 
 /// Holt einen frischen Stand der gewählten Anlage und legt ihn für Widgets ab.
+/// Ist die Demo gewählt, rechnet er den Stand der Beispielanlage — ohne Netz.
 enum SnapshotRefresher {
     enum Outcome: Equatable {
         case fresh(WidgetSnapshot)
@@ -119,12 +126,25 @@ enum SnapshotRefresher {
         return now.timeIntervalSince(snapshot.at) > maxAge
     }
 
+    /// Stand der Demo-Anlage jetzt, für die Widgets abgelegt.
+    private static func demo() -> Outcome {
+        guard let snap = DemoStore.snapshot() else { return .unchanged(nil, reason: .noSystem) }
+        SharedStore.write(snap)
+        return .fresh(snap)
+    }
+
+    /// Stände, die ein Widget im Voraus zeichnen kann: nur in der Demo (dort
+    /// steht der Verlauf fest), für eine gekoppelte Anlage keine.
+    static func ahead() -> [WidgetSnapshot] { DemoStore.isSelected ? DemoStore.ahead() : [] }
+
     fileprivate static func fetch(timeout: TimeInterval) async -> Outcome {
+        if DemoStore.isSelected { return demo() }
         let access: (credentials: LinkCredentials, signer: LinkSigner)
         do {
             access = try LinkAccess.selected()
         } catch let f as LinkAccess.Failure {
             switch f {
+            case .demo: return demo()
             case .noSystem: return .unchanged(nil, reason: .noSystem)
             case .locked: return .unchanged(SharedStore.read(), reason: .locked)
             case .notShared: return .unchanged(SharedStore.read(), reason: .notShared)

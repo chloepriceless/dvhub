@@ -520,6 +520,233 @@ final class DemoPlantTests: XCTestCase {
         XCTAssertEqual(saturday.charging, false)
     }
 
+    // MARK: Gegenprüfung 664f3a2c — Bedienen wirkt, Zeiten stimmen, Tage schließen aneinander an
+
+    func testChangedDefaultSetpointMovesTheFlow() {
+        var p = plant()
+        let now = demoDate(2026, 11, 24, 16, 30)
+        XCTAssertEqual(p.live(at: now).gridImportW, 0, accuracy: 1, "ab Werk: Eigenverbrauch, der Akku deckt das Haus")
+        XCTAssertEqual(WriteOutcome.from(post(&p, "/api/schedule/config", ["defaultGridSetpointW": 3000], now: now)), .done)
+        let l = p.live(at: now)
+        XCTAssertEqual(l.gridSetpointW, 3000)
+        XCTAssertEqual(l.setpointSource, "default")
+        XCTAssertEqual(l.gridImportW - l.gridExportW, 3000, accuracy: 5, "DVhub regelt auf den neuen Grundwert")
+        XCTAssertGreaterThan(l.batteryW, 1000, "der Akku lädt dabei aus dem Netz")
+        // Im Not-Halt schreibt DVhub nichts: wieder schlichter Eigenverbrauch.
+        _ = post(&p, "/api/control/stop", [:], now: now)
+        XCTAssertEqual(p.live(at: now).gridImportW, 0, accuracy: 1)
+    }
+
+    func testChargeCurrentLimitsHowFastTheBatteryCharges() throws {
+        var p = plant()
+        // 11:15: Die Sonne lädt den Akku kräftig, der Börsenpreis ist positiv.
+        let now = demoDate(2026, 11, 24, 11, 15)
+        let free = p.live(at: now)
+        XCTAssertGreaterThan(free.batteryW, 3000)
+        // Regel von Hand: 20 A ≈ 1 kW.
+        let draft = ScheduleEdit.Draft(target: "chargeCurrentA", start: "10:00", end: "12:00", value: 20)
+        _ = post(&p, "/api/schedule/rules", try ScheduleEdit.payload(schedule: get(&p, "/api/schedule", now: now), change: .add(draft)).get(), now: now)
+        let limited = p.live(at: now)
+        XCTAssertEqual(limited.batteryW, 20 * 52, accuracy: 2)
+        XCTAssertEqual(limited.gridExportW, free.gridExportW + free.batteryW - limited.batteryW, accuracy: 2, "der Rest geht ins Netz")
+        XCTAssertEqual(get(&p, "/api/schedule", now: now)["active"]?["chargeCurrentA"]?["value"]?.number, 20)
+        // Außerhalb der Regel gilt der Grundwert — auf null gestellt, lädt der Akku gar nicht.
+        let later = demoDate(2026, 11, 24, 12, 30)
+        XCTAssertGreaterThan(p.live(at: later).batteryW, 1000)
+        _ = post(&p, "/api/schedule/config", ["defaultChargeCurrentA": 0], now: later)
+        XCTAssertLessThanOrEqual(p.live(at: later).batteryW, 0.5)
+    }
+
+    func testStopSocRuleStaysOffOnceTheBatteryFellBelow() throws {
+        var p = plant()
+        let morning = demoDate(2026, 11, 24, 9, 5)
+        let draft = ScheduleEdit.Draft(target: "gridSetpointW", start: "09:00", end: "17:00", value: -2000, stopSocPct: 50)
+        let add = try ScheduleEdit.payload(schedule: get(&p, "/api/schedule", now: demoDate(2026, 11, 24, 8, 0)), change: .add(draft), newId: { "app-stopp" }).get()
+        _ = post(&p, "/api/schedule/rules", add, now: demoDate(2026, 11, 24, 8, 0))
+        XCTAssertLessThan(p.live(at: morning).soc, 50)
+        // Um 09:05 liegt der Akku unter dem Stopp-Stand: Die Regel schaltet sich ab …
+        var rule = try XCTUnwrap(ScheduleEdit.rules(from: get(&p, "/api/schedule", now: morning)).first { $0.ruleId == "app-stopp" })
+        XCTAssertFalse(rule.enabled)
+        XCTAssertEqual(p.live(at: morning).setpointSource, "default")
+        // … und bleibt aus, auch wenn er am Nachmittag wieder voll ist.
+        let afternoon = demoDate(2026, 11, 24, 15, 30)
+        XCTAssertGreaterThan(p.live(at: afternoon).soc, 50)
+        rule = try XCTUnwrap(ScheduleEdit.rules(from: get(&p, "/api/schedule", now: afternoon)).first { $0.ruleId == "app-stopp" })
+        XCTAssertFalse(rule.enabled)
+        XCTAssertEqual(p.live(at: afternoon).setpointSource, "default")
+        // Über dem Stopp-Stand angelegt, gilt eine solche Regel.
+        var q = plant()
+        _ = post(&q, "/api/schedule/rules", add, now: afternoon)
+        XCTAssertEqual(q.live(at: afternoon).setpointSource, "manual")
+        XCTAssertEqual(ScheduleEdit.rules(from: get(&q, "/api/schedule", now: afternoon)).first { $0.ruleId == "app-stopp" }?.enabled, true)
+    }
+
+    func testChargeNowCountsOnlyTimeItReallyCharged() throws {
+        // Im Not-Halt gespeichert: Es lädt nichts — auch nicht rückwirkend nach dem Aufheben.
+        var p = plant()
+        let three = demoDate(2026, 11, 24, 15, 0), four = demoDate(2026, 11, 24, 16, 0)
+        _ = post(&p, "/api/control/stop", [:], now: three)
+        _ = post(&p, "/api/ev/override", try XCTUnwrap(EVEdit.chargeNow(powerW: 11_000, durationMin: nil)), now: three)
+        XCTAssertEqual(p.vehicle(at: four).socPct, 80, accuracy: 0.01)
+        _ = post(&p, "/api/control/resume", [:], now: four)
+        XCTAssertEqual(p.vehicle(at: four).socPct, 80, accuracy: 0.01, "kein Sprung beim Aufheben")
+        XCTAssertEqual(p.vehicle(at: four.addingTimeInterval(1800)).socPct, 80 + 11.0 * 0.5 / 60 * 100, accuracy: 0.05, "ab jetzt lädt es")
+
+        // Unterwegs (Werktag 07:00–08:30) lädt es nicht.
+        var q = plant()
+        let early = demoDate(2026, 11, 25, 6, 30)
+        _ = post(&q, "/api/ev/override", try XCTUnwrap(EVEdit.chargeNow(powerW: 11_000, durationMin: nil)), now: early)
+        let halfHour = 11.0 * 0.5 / 60 * 100
+        XCTAssertEqual(q.vehicle(at: demoDate(2026, 11, 25, 7, 0)).socPct, 80 + halfHour, accuracy: 0.05)
+        let back = q.vehicle(at: demoDate(2026, 11, 25, 8, 30))
+        XCTAssertEqual(back.socPct, 80 - DemoWorld.evTripPct + halfHour, accuracy: 0.05, "die Fahrt kostet, geladen wurde unterwegs nichts")
+        // Beendet: Was geladen ist, bleibt im Auto — bis zur nächsten Fahrt.
+        let nine = demoDate(2026, 11, 25, 9, 0)
+        let before = q.vehicle(at: nine).socPct
+        XCTAssertEqual(OverrideOutcome.from(q.respond("DELETE", "/api/ev/override", now: nine), action: .end), .done(.end, powerW: nil))
+        XCTAssertEqual(q.vehicle(at: nine.addingTimeInterval(60)).socPct, before, accuracy: 0.01, "kein Rücksprung beim Beenden")
+        XCTAssertFalse(q.vehicle(at: nine.addingTimeInterval(60)).charging)
+        XCTAssertEqual(q.vehicle(at: demoDate(2026, 11, 26, 8, 30)).socPct, 80 - DemoWorld.evTripPct, accuracy: 0.01, "nach der nächsten Fahrt gilt wieder der Plan")
+        // Voll ist voll.
+        var r = plant()
+        _ = post(&r, "/api/ev/override", try XCTUnwrap(EVEdit.chargeNow(powerW: 11_000, durationMin: nil)), now: three)
+        let full = r.vehicle(at: three.addingTimeInterval(4 * 3600))
+        XCTAssertEqual(full.socPct, 100)
+        XCTAssertFalse(full.charging)
+    }
+
+    func testTimesFollowTheWallClockOnDaylightSavingDays() throws {
+        // Sonntag, 29.03.2026: Um 02:00 springt die Uhr in Berlin auf 03:00 — der Tag hat 23 Stunden.
+        var p = plant(startedAt: demoDate(2026, 3, 27, 10))
+        let sunday = p.world.day(containing: demoDate(2026, 3, 29, 12))
+        XCTAssertEqual(sunday.slotCount, 92)
+        XCTAssertEqual(p.run(sunday).slots.count, 92)
+        XCTAssertEqual(sunday.hour(of: demoDate(2026, 3, 29, 18, 30)), 18.5, accuracy: 1e-9)
+        XCTAssertEqual(sunday.date(atHour: 7), demoDate(2026, 3, 29, 7, 0))
+        XCTAssertEqual(sunday.clock(of: demoDate(2026, 3, 29, 18, 30)), "18:30")
+        // Abfahrt am Sonntag um 07:00 ist 07:00 an der Wand.
+        let saturday = demoDate(2026, 3, 28, 20, 0)
+        let week = try XCTUnwrap(EVState.from(get(&p, "/api/ev", now: saturday))).week
+        _ = post(&p, "/api/ev", try EVEdit.weekPlan(week, change: .add(.init(day: 7, departure: "07:00"))).get(), now: saturday)
+        XCTAssertEqual(EVState.from(get(&p, "/api/ev", now: saturday))?.nextDeparture, demoDate(2026, 3, 29, 7, 0))
+        // Eine Regel 18:00–19:00 gilt von 18:00 bis 19:00 an der Wand.
+        let draft = ScheduleEdit.Draft(target: "gridSetpointW", start: "18:00", end: "19:00", value: -2000)
+        _ = post(&p, "/api/schedule/rules", try ScheduleEdit.payload(schedule: get(&p, "/api/schedule", now: saturday), change: .add(draft)).get(), now: saturday)
+        XCTAssertEqual(p.live(at: demoDate(2026, 3, 29, 18, 30)).setpointSource, "manual")
+        XCTAssertNotEqual(p.live(at: demoDate(2026, 3, 29, 17, 30)).setpointSource, "manual")
+        XCTAssertNotEqual(p.live(at: demoDate(2026, 3, 29, 19, 30)).setpointSource, "manual")
+        // Die Sonne steht mittags am höchsten, nicht eine Stunde daneben.
+        let pv = p.run(sunday).slots
+        let peak = try XCTUnwrap(pv.max { $0.pvKw + $0.curtailedKwh * 4 < $1.pvKw + $1.curtailedKwh * 4 })
+        XCTAssert((12.0...14.5).contains(sunday.hour(of: peak.start)), "Spitze um \(sunday.clock(of: peak.start))")
+        // Herbst: 25 Stunden.
+        XCTAssertEqual(p.run(containing: demoDate(2026, 10, 25, 12)).slots.count, 100)
+        // Vorgaben des Plans tragen die Uhrzeit an der Wand.
+        for rule in p.run(sunday).rules {
+            XCTAssertEqual(rule.start, sunday.clock(of: sunday.start.addingTimeInterval(Double(rule.firstSlot) * 900)))
+        }
+    }
+
+    func testDaysConnectWithoutAJumpInTheBattery() {
+        let p = plant()
+        var day = p.world.day(containing: demoDate(2025, 8, 20))
+        for _ in 0..<120 {
+            let next = p.world.day(after: day)
+            XCTAssertEqual(p.run(next).slots[0].socStart, p.run(day).endSoc, accuracy: 1e-9, "Sprung über Mitternacht am \(next.start)")
+            day = next
+        }
+        // Gleich, in welcher Reihenfolge gerechnet wird: Ein einzelner Tag allein ergibt dasselbe.
+        let alone = plant()
+        let target = alone.world.day(containing: demoDate(2025, 9, 27))
+        XCTAssertEqual(alone.run(target), p.run(target))
+        // Auch heute schließt an gestern an, und der Fahrplan läuft über Mitternacht ohne Sprung.
+        let today = p.world.day(containing: start)
+        XCTAssertEqual(p.run(today).slots[0].socStart, p.run(p.world.day(after: today, by: -1)).endSoc, accuracy: 1e-9)
+    }
+
+    // MARK: Gegenprüfung bb3d00cc
+
+    func testOlderSavedStateKeepsItsEdits() throws {
+        var p = plant()
+        _ = post(&p, "/api/control/stop", [:])
+        _ = post(&p, "/api/ev/override", try XCTUnwrap(EVEdit.stopCharging(durationMin: nil)))
+        _ = post(&p, "/api/schedule/config", ["defaultGridSetpointW": -120])
+        // „Weiter laden, wenn es günstig ist“ ausgeschaltet: Der Wert fehlt dann im gespeicherten Zustand.
+        _ = post(&p, "/api/ev", try XCTUnwrap(EVEdit.maxSoc(nil)))
+        XCTAssertNil(p.state.evMaxSocPct)
+        // So hat ein früherer Stand gespeichert: ohne die Felder, die später dazukamen.
+        var old = try XCTUnwrap(JSONValue.decode(JSONEncoder().encode(p.state)).object)
+        old["evExtraPct"] = nil
+        var override = try XCTUnwrap(old["evOverride"]?.object)
+        override["chargedPct"] = nil
+        override["accountedAt"] = nil
+        old["evOverride"] = .object(override)
+        XCTAssertThrowsError(try JSONDecoder().decode(DemoPlant.State.self, from: try JSONValue.object(old).encoded()), "ohne Hilfe unlesbar")
+        // Vergleichswert: derselbe Zustand, einmal gespeichert und gelesen (ganze Zahlen kommen als solche zurück).
+        let saved = try JSONDecoder().decode(DemoPlant.State.self, from: try JSONEncoder().encode(p.state))
+        let restored = try XCTUnwrap(DemoPlant.State.restore(try JSONValue.object(old).encoded()))
+        XCTAssertEqual(restored, saved, "was bedient wurde, bleibt; Fehlendes bekommt den Wert einer frischen Demo")
+        XCTAssertEqual(restored.emergencyStop, true)
+        XCTAssertEqual(restored.defaultGridSetpointW, -120)
+        XCTAssertEqual(restored.evOverride?.kind, "stop")
+        XCTAssertEqual(restored.evOverride?.accountedAt, restored.evOverride?.startedAt)
+        XCTAssertEqual(restored.evExtraPct, 0)
+        XCTAssertNil(restored.evMaxSocPct, "Ausgeschaltetes bleibt aus — ein fehlender Wert ist kein neues Feld")
+        XCTAssertNil(restored.evOnce)
+        // Der heutige Stand liest sich unverändert, Unlesbares gar nicht.
+        XCTAssertEqual(DemoPlant.State.restore(try JSONEncoder().encode(p.state)), saved)
+        XCTAssertNil(DemoPlant.State.restore(Data("kaputt".utf8)))
+        XCTAssertNil(DemoPlant.State.restore(Data("{}".utf8)))
+    }
+
+    func testRejectedOverrideLeavesTheRunningOneAlone() throws {
+        var p = plant()
+        let now = demoDate(2026, 11, 24, 15, 0)
+        _ = post(&p, "/api/ev/override", try XCTUnwrap(EVEdit.stopCharging(durationMin: nil)), now: now)
+        let before = p.state
+        XCTAssertEqual(post(&p, "/api/ev/override", ["kind": "charge", "powerW": 0], now: now.addingTimeInterval(60)).status, 400)
+        XCTAssertEqual(post(&p, "/api/ev/override", ["kind": "charge", "powerW": 7000, "durationMin": 0], now: now.addingTimeInterval(60)).status, 400)
+        XCTAssertEqual(p.state, before, "eine abgelehnte Anfrage ändert nichts")
+        XCTAssertEqual(EVState.from(get(&p, "/api/ev", now: now.addingTimeInterval(120)))?.override?.stop, true)
+    }
+
+    func testTimesInTheDaylightSavingGapMoveForward() throws {
+        var p = plant(startedAt: demoDate(2026, 3, 27, 10))
+        // 29.03.2026: 02:30 gibt es nicht — es gilt der erste Augenblick danach (03:00).
+        let spring = p.world.day(containing: demoDate(2026, 3, 29, 12))
+        XCTAssertEqual(spring.date(atHour: 2.5), demoDate(2026, 3, 29, 3, 0))
+        XCTAssertEqual(spring.date(atHour: 1.5), demoDate(2026, 3, 29, 1, 30))
+        XCTAssertEqual(spring.date(atHour: 3.25), demoDate(2026, 3, 29, 3, 15))
+        let saturday = demoDate(2026, 3, 28, 20, 0)
+        let week = try XCTUnwrap(EVState.from(get(&p, "/api/ev", now: saturday))).week
+        _ = post(&p, "/api/ev", try EVEdit.weekPlan(week, change: .add(.init(day: 7, departure: "02:30"))).get(), now: saturday)
+        XCTAssertEqual(EVState.from(get(&p, "/api/ev", now: saturday))?.nextDeparture, demoDate(2026, 3, 29, 3, 0))
+        XCTAssertEqual(EVState.from(get(&p, "/api/ev", now: demoDate(2026, 3, 29, 1, 45)))?.nextDeparture, demoDate(2026, 3, 29, 3, 0), "nicht übersprungen")
+        // 25.10.2026: 02:30 gibt es zweimal — es gilt das erste Mal; danach stimmt die Uhr wieder.
+        let autumn = p.world.day(containing: demoDate(2026, 10, 25, 12))
+        XCTAssertEqual(autumn.date(atHour: 2.5), autumn.start.addingTimeInterval(2.5 * 3600))
+        XCTAssertEqual(autumn.date(atHour: 7), demoDate(2026, 10, 25, 7, 0))
+        XCTAssertEqual(autumn.hour(of: autumn.date(atHour: 7)), 7, accuracy: 1e-9)
+    }
+
+    func testChargedEnergyNeverShrinksWhenAskedLater() throws {
+        var p = plant()
+        // Mittwoch 06:58: zwei Minuten laden, dann fährt das Auto (07:00–08:30).
+        let begin = demoDate(2026, 11, 25, 6, 58)
+        _ = post(&p, "/api/ev/override", try XCTUnwrap(EVEdit.chargeNow(powerW: 11_000, durationMin: nil)), now: begin)
+        let o = try XCTUnwrap(p.state.evOverride)
+        let twoMinutes = 11.0 * (2.0 / 60) / 60 * 100
+        XCTAssertEqual(p.overrideCharged(o, until: demoDate(2026, 11, 25, 7, 0)), twoMinutes, accuracy: 1e-6)
+        var last = 0.0
+        for minutes in stride(from: 0, through: 120, by: 1) {
+            let charged = p.overrideCharged(o, until: begin.addingTimeInterval(Double(minutes) * 60))
+            XCTAssertGreaterThanOrEqual(charged, last - 1e-9, "nach \(minutes) min")
+            last = charged
+        }
+        XCTAssertEqual(p.overrideCharged(o, until: demoDate(2026, 11, 25, 7, 2)), twoMinutes, accuracy: 1e-6, "unterwegs kommt nichts dazu – und nichts weg")
+        XCTAssertEqual(p.overrideCharged(o, until: demoDate(2026, 11, 25, 8, 32)), 2 * twoMinutes, accuracy: 1e-6, "ab 08:30 lädt es weiter")
+    }
+
     func testUnknownRequestsAreRejected() {
         var p = plant()
         XCTAssertEqual(p.respond("GET", "/api/irgendwas").status, 404)

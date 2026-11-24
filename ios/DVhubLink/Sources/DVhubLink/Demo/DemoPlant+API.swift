@@ -48,9 +48,9 @@ extension DemoPlant {
 
     // MARK: Einstieg
 
-    /// Antwort auf eine Anfrage der App. Abgelaufenes („Sofort laden“ mit Dauer, ein verstrichenes Einmal-Ziel) fällt vorher weg.
+    /// Antwort auf eine Anfrage der App. Vorher erledigt sich, was die Zeit erledigt (`settle`).
     public mutating func respond(_ method: String, _ path: String, body: JSONValue? = nil, now: Date = Date()) -> LinkResponse {
-        expire(at: now)
+        settle(at: now)
         let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
         let route = String(parts.first ?? "")
         let q = Self.query(parts.count > 1 ? String(parts[1]) : "")
@@ -81,14 +81,9 @@ extension DemoPlant {
         case ("POST", "/api/schedule/automation/replan"): return replan(now: now)
         case ("POST", "/api/ev"): return patchEV(body ?? .null, now: now)
         case ("POST", "/api/ev/override"): return setOverride(body ?? .null, now: now)
-        case ("DELETE", "/api/ev/override"): return clearOverride()
+        case ("DELETE", "/api/ev/override"): return clearOverride(now: now)
         default: return Self.bad("not_found", status: 404)
         }
-    }
-
-    mutating func expire(at now: Date) {
-        if let until = state.evOverride?.until, until <= now { update { $0.evOverride = nil } }
-        if let once = state.evOnce, once <= now { update { $0.evOnce = nil; $0.evOnceMinSocPct = nil } }
     }
 
     // MARK: Kompakt-Status (live)
@@ -515,8 +510,10 @@ extension DemoPlant {
         let from = Self.minutes(state.automationWindowStart) ?? 14 * 60, to = Self.minutes(state.automationWindowEnd) ?? 9 * 60
         let today = world.day(containing: now)
         let horizon = now.addingTimeInterval(24 * 3600)
-        let candidates = runs(from: today, count: 2).flatMap(\.slots).filter { s in
-            s.start >= now && s.start < horizon && Self.inWindow(s.index * 15, start: from, end: to)
+        let candidates = runs(from: today, count: 2).flatMap { run in
+            run.slots.filter { s in
+                s.start >= now && s.start < horizon && Self.inWindow(Int(run.day.hour(of: s.start) * 60 + 1e-6), start: from, end: to)
+            }
         }
         let best = candidates.sorted { $0.spotCt > $1.spotCt }.prefix(4).sorted { $0.start < $1.start }
         // Aufeinanderfolgende Viertelstunden zu einer Regel zusammenfassen.
@@ -526,8 +523,8 @@ extension DemoPlant {
         }
         let rules: [JSONValue] = groups.enumerated().compactMap { i, g in
             guard let a = g.first, let b = g.last else { return nil }
-            return ["id": .string("sma-\(i + 1)"), "enabled": true, "target": "gridSetpointW", "start": .string(Self.clock(slot: a.index)),
-                    "end": .string(Self.clock(slot: b.index + 1)), "value": Self.num(-abs(state.automationMaxDischargeW)),
+            return ["id": .string("sma-\(i + 1)"), "enabled": true, "target": "gridSetpointW", "start": .string(world.clock(a.start)),
+                    "end": .string(world.clock(b.end)), "value": Self.num(-abs(state.automationMaxDischargeW)),
                     "stopSocPct": Self.num(state.automationMinSocPct), "source": "small_market_automation"]
         }
         let soc = live(at: now).soc
@@ -541,6 +538,8 @@ extension DemoPlant {
 
     mutating func emergencyStop(_ stop: Bool, now: Date) -> LinkResponse {
         if state.emergencyStop != stop {
+            // Bis hierher zählt „Sofort laden“ nach dem alten Zustand, ab jetzt nach dem neuen.
+            checkpointOverride(at: now)
             update {
                 $0.emergencyStop = stop
                 $0.emergencyStopSince = stop ? now : nil
@@ -561,14 +560,15 @@ extension DemoPlant {
                 "until": o.until.map { .string(Self.iso($0)) } ?? .null, "seenConnected": true, "minPowerW": 4140, "maxPowerW": 11_000]
     }
 
-    /// Nächste Abfahrt aus dem Wochenplan (Zeile = Abfahrtstag, 1 = Montag).
+    /// Nächste Abfahrt aus dem Wochenplan (Zeile = Abfahrtstag, 1 = Montag) — zur Uhrzeit an der Wand,
+    /// auch an Tagen mit Zeitumstellung.
     func nextWeekly(after now: Date) -> (at: Date, minSocPct: Double?)? {
         var best: (at: Date, minSocPct: Double?)?
         var day = world.day(containing: now)
         for _ in 0..<8 {
             for row in state.evWeek where row["day"]?.int == Int64(day.weekday) {
                 guard let m = Self.minutes(row["departure"]?.string) else { continue }
-                let at = day.start.addingTimeInterval(Double(m) * 60)
+                let at = day.date(atHour: Double(m) / 60)
                 if at > now, best.map({ at < $0.at }) ?? true { best = (at, row["minSocPct"]?.number) }
             }
             if best != nil { break }
@@ -725,16 +725,19 @@ extension DemoPlant {
             guard let p = body["powerW"]?.number, p > 0 else { return Self.bad("powerW must be > 0") }
             o = State.Override(kind: "charge", powerW: min(11_000, max(4140, p)).rounded(), requestedW: p.rounded(), startedAt: now, until: until)
         }
+        // Erst jetzt, da die neue Vorgabe gültig ist, endet eine laufende (eine abgelehnte Anfrage
+        // ändert nichts); was sie geladen hat, bleibt im Auto.
+        finishOverride(at: now)
         update { $0.evOverride = o }
         // Im Not-Halt steuert DVhub die Wallbox nicht: gespeichert, wirkt aber erst nach dem Aufheben.
         let result: JSONValue = state.emergencyStop ? ["ok": false, "skipped": "paused"] : ["ok": true]
         return Self.ok(["ok": true, "override": overrideJSON(at: now), "result": result])
     }
 
-    mutating func clearOverride() -> LinkResponse {
+    mutating func clearOverride(now: Date) -> LinkResponse {
         // Wie die Box: Im Not-Halt bleibt „Laden stoppen“ stehen.
         if state.emergencyStop, state.evOverride?.kind == "stop" { return Self.bad("emergency_stop_active", status: 409) }
-        update { $0.evOverride = nil }
+        finishOverride(at: now)
         let result: JSONValue = state.emergencyStop ? ["ok": false, "skipped": "paused"] : ["ok": true]
         return Self.ok(["ok": true, "override": .null, "result": result, "error": .null])
     }

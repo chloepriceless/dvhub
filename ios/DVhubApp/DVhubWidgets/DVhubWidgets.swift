@@ -45,8 +45,11 @@ struct StatusProvider: TimelineProvider {
             // Tagessummen nicht mehr „heute“ — das darf nicht vom Neuladen abhängen.
             let now = entry(snapshot)
             var entries = [now]
+            // Demo: Der Verlauf steht fest — die nächsten Stände gleich mitgeben (jeder mit seinen eigenen Tagessummen).
+            let ahead = context.isPreview ? [] : SnapshotRefresher.ahead()
+            entries += ahead.map { StatusEntry(date: $0.at, snapshot: $0, groupAvailable: now.groupAvailable) }
             let cal = Calendar.current
-            if let midnight = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now.date)) {
+            if ahead.isEmpty, let midnight = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now.date)) {
                 entries.append(StatusEntry(date: midnight, snapshot: now.snapshot, groupAvailable: now.groupAvailable))
             }
             completion(Timeline(entries: entries, policy: .after(Date().addingTimeInterval(Self.reloadAfter))))

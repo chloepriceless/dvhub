@@ -40,6 +40,17 @@
       </MacroExpansion>
       <Testables>
          <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "0D85F7C3E6BA6A6FE660136D"
+               BuildableName = "DVhubAppTests.xctest"
+               BlueprintName = "DVhubAppTests"
+               ReferencedContainer = "container:DVhubApp.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"

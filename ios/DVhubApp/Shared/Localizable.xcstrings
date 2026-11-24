@@ -103,6 +103,16 @@
         }
       }
     },
+    "%@ (Demo)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ (demo)"
+          }
+        }
+      }
+    },
     "%@ / %@ ct" : {
       "localizations" : {
         "de" : {
@@ -166,7 +176,7 @@
       }
     },
     "%@ an %@" : {
-      "comment" : "Grund für Touch ID: z. B. Not-Halt auslösen an Meine Anlage\nGrund für Touch ID: z. B. Zeitplan ändern an Meine Anlage",
+      "comment" : "Grund für Touch ID: z. B. Zeitplan ändern an Meine Anlage",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -248,6 +258,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ · %@"
+          }
+        }
+      }
+    },
+    "%@ · Demo aktiv" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · demo active"
           }
         }
       }
@@ -654,6 +674,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "**Your system** – end-to-end encrypted, directly on your home network, via the relay when you are away. The relay only sees encrypted data."
+          }
+        }
+      }
+    },
+    "**Demo** – die Beispielanlage rechnet im Gerät. Solange sie gewählt ist, verbindet sich die App mit keiner Anlage und holt auch Preise und Meldungen nicht aus dem Netz." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "**Demo** – the sample system is computed on the device. While it is selected, the app connects to no system and does not fetch prices or news from the network either."
           }
         }
       }
@@ -1212,6 +1242,16 @@
         }
       }
     },
+    "Alle Werte stammen von einer Beispielanlage und entstehen im Gerät – auch Preise und Meldungen. Du kannst alles bedienen: Es ändert sich nur die Demo, keine Anlage wird erreicht. „Demo beenden“ entfernt sie samt deinen Änderungen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All values come from a sample system and are computed on the device – prices and news included. You can operate everything: only the demo changes, no system is reached. “End Demo” removes it along with your changes."
+          }
+        }
+      }
+    },
     "Am Netz ist es gerade ausgeglichen." : {
       "localizations" : {
         "en" : {
@@ -1612,6 +1652,56 @@
         }
       }
     },
+    "Beispielanlage mit Beispielwerten" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sample system with sample values"
+          }
+        }
+      }
+    },
+    "Beispielanlage mit Beispielwerten. Alles lässt sich bedienen – geschaltet wird nichts." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sample system with sample values. Everything can be operated – nothing is switched."
+          }
+        }
+      }
+    },
+    "Beispielanlage · nichts wird geschaltet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sample system · nothing is switched"
+          }
+        }
+      }
+    },
+    "Beispielmeldung der Demo. Die echten Meldungen stehen auf dvhub.online – und hier, sobald die Demo beendet ist." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sample story of the demo. The real news is on dvhub.online – and here once the demo has ended."
+          }
+        }
+      }
+    },
+    "Beispielmeldungen der Demo – keine echten Nachrichten. Ohne Demo stehen hier die Energie-Meldungen von dvhub.online." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sample stories of the demo – not real news. Without the demo, the energy news from dvhub.online appears here."
+          }
+        }
+      }
+    },
     "Benachrichtigungen" : {
       "localizations" : {
         "en" : {
@@ -1970,6 +2060,16 @@
         }
       }
     },
+    "DVhub Demo" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DVhub Demo"
+          }
+        }
+      }
+    },
     "DVhub hört auf, Sollwerte an die Anlage zu schreiben." : {
       "localizations" : {
         "en" : {
@@ -2232,6 +2332,133 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Duration"
+          }
+        }
+      }
+    },
+    "Demo" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo"
+          }
+        }
+      }
+    },
+    "Demo ansehen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Try the Demo"
+          }
+        }
+      }
+    },
+    "Demo beenden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End Demo"
+          }
+        }
+      }
+    },
+    "Demo beenden?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the demo?"
+          }
+        }
+      }
+    },
+    "Demo läuft – im Gerät, ohne Netz" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo running – on device, offline"
+          }
+        }
+      }
+    },
+    "Demo · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo · %@"
+          }
+        }
+      }
+    },
+    "Demo · %@ · PV %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Demo · %1$@ · PV %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo · %@ · PV %@"
+          }
+        }
+      }
+    },
+    "Demo – im Gerät, ohne Netz" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo – on device, offline"
+          }
+        }
+      }
+    },
+    "Demo-Anlage" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo System"
+          }
+        }
+      }
+    },
+    "Demo-Anlage: %@" : {
+      "comment" : "Antwort eines Kurzbefehls mit Werten der Beispielanlage",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo system: %@"
+          }
+        }
+      }
+    },
+    "Demo: Akku %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo: battery %@"
+          }
+        }
+      }
+    },
+    "Demo: Beispielanlage, nichts wird geschaltet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Demo: sample system, nothing is switched"
           }
         }
       }
@@ -2530,12 +2757,32 @@
         }
       }
     },
+    "Die Beispielanlage verschwindet aus der App – mit allem, was du darin geändert hast. Unter „Anlagen“ lässt sie sich jederzeit wieder starten." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The sample system disappears from the app – along with everything you changed in it. You can start it again at any time under “Systems”."
+          }
+        }
+      }
+    },
     "Die Dauer passt nicht." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "The duration is not valid."
+          }
+        }
+      }
+    },
+    "Die Demo zeigt DVhub mit einer Beispielanlage: 20 kWp Photovoltaik, 20 kWh Akku, Wallbox und dynamischer Tarif. Alles lässt sich ausprobieren – geschaltet wird nichts." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The demo shows DVhub with a sample system: 20 kWp of solar, a 20 kWh battery, a wallbox and a dynamic tariff. You can try everything – nothing is switched."
           }
         }
       }
@@ -2826,6 +3073,16 @@
         }
       }
     },
+    "Du siehst die Demo" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You Are Viewing the Demo"
+          }
+        }
+      }
+    },
     "Du speist gerade %@ ein." : {
       "localizations" : {
         "en" : {
@@ -2962,6 +3219,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ESS mode"
+          }
+        }
+      }
+    },
+    "Eigene Anlage koppeln" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pair Your Own System"
           }
         }
       }
@@ -3362,6 +3629,16 @@
         }
       }
     },
+    "Erklärt die Demo und bietet an, sie zu beenden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Explains the demo and offers to end it"
+          }
+        }
+      }
+    },
     "Erlös %@" : {
       "localizations" : {
         "en" : {
@@ -3424,6 +3701,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Revenue and costs"
+          }
+        }
+      }
+    },
+    "Erst einmal ansehen?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Just want a look first?"
           }
         }
       }
@@ -4376,6 +4663,16 @@
         }
       }
     },
+    "In der Demo ändert sich nur die Beispielanlage. An einer gekoppelten Anlage bestätigst du jede Schaltung mit %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In the demo only the sample system changes. On a paired system you confirm every switching action with %@."
+          }
+        }
+      }
+    },
     "Ins Netz eingespeist" : {
       "localizations" : {
         "en" : {
@@ -4392,6 +4689,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Integrations"
+          }
+        }
+      }
+    },
+    "Inzwischen ist eine andere Anlage gewählt. Es wurde nichts geschaltet – bitte noch einmal." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A different system has been selected in the meantime. Nothing was switched – please try again."
           }
         }
       }
@@ -4489,6 +4796,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No EOS plan available."
+          }
+        }
+      }
+    },
+    "Kein Weg nach außen · nichts wird geschaltet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No connection to the outside · nothing is switched"
           }
         }
       }
@@ -5253,6 +5570,16 @@
         }
       }
     },
+    "Nachrichten auf dvhub.online" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "News on dvhub.online"
+          }
+        }
+      }
+    },
     "Nachrichten im Browser" : {
       "localizations" : {
         "en" : {
@@ -5569,6 +5896,16 @@
         }
       }
     },
+    "Noch keine Anlage gekoppelt." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No system paired yet."
+          }
+        }
+      }
+    },
     "Noch keine Börsenpreise geladen." : {
       "localizations" : {
         "en" : {
@@ -5675,6 +6012,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Trigger emergency stop? DVhub will stop writing setpoints to the system."
+          }
+        }
+      }
+    },
+    "Not-Halt der Demo-Anlage aufheben?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Release the emergency stop of the demo system?"
+          }
+        }
+      }
+    },
+    "Not-Halt der Demo-Anlage auslösen? Geschaltet wird nichts – es ändert sich nur die Demo." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trigger the emergency stop of the demo system? Nothing is switched – only the demo changes."
           }
         }
       }
@@ -5925,6 +6282,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Prices"
+          }
+        }
+      }
+    },
+    "Preise und Prognose der Demo sind Beispielwerte, keine Börsendaten. Einspeisung zum Börsenpreis, wie DVhub die Erlöse rechnet – ohne Marktprämie. Bezug: der Tarif der Beispielanlage mit Netzentgelten, Abgaben und Steuern." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prices and forecast in the demo are sample values, not exchange data. Feed-in at the exchange price, the way DVhub calculates revenue – without market premium. Import: the sample system’s tariff including grid charges, levies and taxes."
           }
         }
       }
@@ -7425,6 +7792,16 @@
         }
       }
     },
+    "Weiter ansehen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Exploring"
+          }
+        }
+      }
+    },
     "Weiter laden, wenn es günstig ist" : {
       "localizations" : {
         "en" : {
@@ -7681,6 +8058,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Shows revenue and costs in detail"
+          }
+        }
+      }
+    },
+    "Zeigt die App mit einer Beispielanlage. Geschaltet wird nichts." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows the app with a sample system. Nothing is switched."
           }
         }
       }

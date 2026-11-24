@@ -424,6 +424,7 @@ struct DetailView: View {
 
     private var connectionText: String {
         switch controller.state {
+        case .online(.demo): return String(localized: "Demo – im Gerät, ohne Netz")
         case .online(let k): return k == .lan ? String(localized: "Heimnetz, direkt") : String(localized: "Relay, Ende zu Ende verschlüsselt")
         case .connecting: return String(localized: "verbindet …")
         case .boxOffline: return String(localized: "Anlage nicht erreichbar")

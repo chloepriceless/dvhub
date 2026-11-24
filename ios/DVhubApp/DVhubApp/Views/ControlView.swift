@@ -81,7 +81,11 @@ struct ControlView: View {
                 if busy { ProgressView() }
                 if let result { Text(result).font(.footnote) }
             } footer: {
-                Text("Jede Schaltung bestätigst du mit \(DeviceAuth.methodName). Sie steht mit dem Namen dieses Geräts im DVhub-Protokoll.")
+                if controller.isDemo {
+                    Text("In der Demo ändert sich nur die Beispielanlage. An einer gekoppelten Anlage bestätigst du jede Schaltung mit \(DeviceAuth.methodName).")
+                } else {
+                    Text("Jede Schaltung bestätigst du mit \(DeviceAuth.methodName). Sie steht mit dem Namen dieses Geräts im DVhub-Protokoll.")
+                }
             }
             if !controller.isOnline {
                 SwiftUI.Section { Text("Schalten geht nur, wenn die Anlage verbunden ist.").foregroundStyle(.secondary) }
@@ -125,7 +129,7 @@ struct ControlView: View {
 
     private func send(_ path: String, _ reason: String) async {
         result = nil
-        if case .failure(let e) = await DeviceAuth.confirm(String(localized: "\(reason) an \(controller.credentials.boxName)", comment: "Grund für Touch ID: z. B. Not-Halt auslösen an Meine Anlage")) {
+        if case .failure(let e) = await controller.authorize(reason) {
             result = String(localized: "Nicht bestätigt: \(e.localizedDescription)")
             failures += 1
             return

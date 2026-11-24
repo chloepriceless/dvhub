@@ -24,9 +24,11 @@ public struct DemoPlant: Sendable {
     /// Einspeisegrenze: 60 % der Anlagenleistung.
     public static let feedInLimitW = 12_000.0
     static let batteryMaxKw = 9.0
+    /// Spannung des Akkus (48-V-System): rechnet den Ladestrom in Leistung um.
+    static let batteryVolts = 52.0
     static let chargeEfficiency = 0.96
     static let dischargeEfficiency = 0.96
-    /// Ladestand, mit dem die Einschwing-Tage vor einem Lauf beginnen.
+    /// Ladestand, mit dem die Kette der Tagesläufe beginnt.
     static let warmupSoc = 35.0
 
     public internal(set) var state: State
@@ -55,7 +57,23 @@ public struct DemoPlant: Sendable {
             public var requestedW: Double
             public var startedAt: Date
             public var until: Date?
+            /// Was „Sofort laden“ bis `accountedAt` wirklich geladen hat (% des Auto-Akkus).
+            /// Zeit im Not-Halt und unterwegs zählt nicht.
+            public var chargedPct = 0.0
+            public var accountedAt: Date
+
+            public init(kind: String, powerW: Double, requestedW: Double, startedAt: Date, until: Date?) {
+                self.kind = kind
+                self.powerW = powerW
+                self.requestedW = requestedW
+                self.startedAt = startedAt
+                self.until = until
+                self.accountedAt = startedAt
+            }
         }
+
+        /// Sollwert am Netzpunkt ab Werk: Eigenverbrauch (der Akku gleicht aus, das Netz bleibt nahe null).
+        public static let factoryGridSetpointW = -50.0
 
         public var startedAt: Date
         public var emergencyStop = false
@@ -63,8 +81,9 @@ public struct DemoPlant: Sendable {
         // Zeitplan
         public var manualRules: [JSONValue]
         public var disabledPlanRules: [String] = []
-        public var defaultGridSetpointW = -50.0
-        public var defaultChargeCurrentA = 70.0
+        public var defaultGridSetpointW = State.factoryGridSetpointW
+        /// Ab Werk so viel, wie der Akku annimmt (175 A ≈ 9 kW).
+        public var defaultChargeCurrentA = 175.0
         public var defaultFeedExcessDcPv = 1.0
         // Börsenautomatik
         public var automationEnabled = false
@@ -84,6 +103,9 @@ public struct DemoPlant: Sendable {
         public var evOnceMinSocPct: Double?
         public var evWeek: [JSONValue]
         public var evOverride: Override?
+        /// Was ein beendetes „Sofort laden“ über den Plan hinaus geladen hat — gilt bis zur nächsten Fahrt.
+        public var evExtraPct = 0.0
+        public var evExtraUntil: Date?
         /// Meldungen (Briefkasten): Alarme und Not-Halt, wie die Box sie hinterlegt.
         public var events: [Event]
 
@@ -92,7 +114,7 @@ public struct DemoPlant: Sendable {
             self.startedAt = startedAt
             manualRules = [[
                 "id": "demo-nachtruhe", "enabled": true, "target": "chargeCurrentA",
-                "start": "22:00", "end": "06:00", "value": 35, "source": "manual",
+                "start": "22:00", "end": "06:00", "value": 60, "source": "manual",
             ]]
             evWeek = (1...7).map { day in
                 day <= 5
@@ -143,10 +165,12 @@ public struct DemoPlant: Sendable {
 
     /// Verteilt Erzeugung und Verbrauch für `hours` Stunden. `exportBlocked`:
     /// Negativpreis-Schutz — es wird nichts eingespeist, der Rest abgeregelt.
-    static func split(pv: Double, load: Double, soc: Double, mode: Mode, exportBlocked: Bool, hours: Double) -> Flow {
+    /// `chargeLimitKw`: höchste Ladeleistung aus dem geltenden Ladestrom.
+    static func split(pv: Double, load: Double, soc: Double, mode: Mode, exportBlocked: Bool, hours: Double,
+                      chargeLimitKw: Double = batteryMaxKw) -> Flow {
         let room = max(0, (100 - soc) / 100 * batteryKwh / chargeEfficiency / hours)
         let avail = max(0, (soc - minSocPct) / 100 * batteryKwh * dischargeEfficiency / hours)
-        let maxCharge = min(batteryMaxKw, room), maxDischarge = min(batteryMaxKw, avail)
+        let maxCharge = min(batteryMaxKw, max(0, chargeLimitKw), room), maxDischarge = min(batteryMaxKw, avail)
         var f = Flow()
         f.solarToHome = min(pv, load)
         let surplus = pv - f.solarToHome, deficit = load - f.solarToHome
@@ -227,8 +251,9 @@ public struct DemoPlant: Sendable {
         public let slotCount: Int
         /// Sollwert am Netzpunkt in W: + beziehen, − einspeisen.
         public let gridSetpointW: Double
-        public var start: String { DemoPlant.clock(slot: firstSlot) }
-        public var end: String { DemoPlant.clock(slot: firstSlot + slotCount) }
+        /// Beginn und Ende als „HH:MM“ nach der Uhr der Anlage.
+        public let start: String
+        public let end: String
     }
 
     public struct DayRun: Sendable, Equatable {
@@ -236,11 +261,6 @@ public struct DemoPlant: Sendable {
         public let slots: [Slot]
         public let rules: [PlanRule]
         public var endSoc: Double { slots.last?.socEnd ?? DemoPlant.warmupSoc }
-    }
-
-    /// „HH:MM“ einer Viertelstunde des Tages (96 → 00:00).
-    static func clock(slot: Int) -> String {
-        String(format: "%02d:%02d", (slot / 4) % 24, (slot % 4) * 15)
     }
 
     /// Lauf eines Tages vom Ladestand `startSoc` aus — mit den Vorgaben, die ein
@@ -251,17 +271,23 @@ public struct DemoPlant: Sendable {
     func run(_ day: DemoWorld.Day, startSoc: Double) -> DayRun {
         let previous = world.day(after: day, by: -1)
         let n = day.slotCount
-        var pv: [Double] = [], house: [Double] = [], ev: [Double] = [], spot: [Double] = []
-        pv.reserveCapacity(n); house.reserveCapacity(n); ev.reserveCapacity(n); spot.reserveCapacity(n)
+        var pv: [Double] = [], house: [Double] = [], ev: [Double] = [], spot: [Double] = [], hours: [Double] = []
+        pv.reserveCapacity(n); house.reserveCapacity(n); ev.reserveCapacity(n); spot.reserveCapacity(n); hours.reserveCapacity(n)
         for i in 0..<n {
-            let h = (Double(i) + 0.5) / 4
+            // Uhrzeit nach der Wand: An Tagen mit Zeitumstellung springt sie mit.
+            let begin = day.start.addingTimeInterval(Double(i) * 900)
+            let h = day.hour(of: begin.addingTimeInterval(450))
+            hours.append(day.hour(of: begin))
             pv.append(world.pvKw(day, hour: h))
             house.append(world.houseKw(day, hour: h))
             ev.append(world.evPlanKw(day, hour: h, previous: previous))
             spot.append(world.spotCt(day, hour: h))
         }
+        /// Erste Viertelstunde, die zur Uhrzeit `hour` oder danach beginnt.
+        func index(_ hour: Double) -> Int { hours.firstIndex { $0 >= hour - 1e-6 } ?? n }
+        func clock(_ i: Int) -> String { day.clock(of: day.start.addingTimeInterval(Double(i) * 900)) }
         /// In der Nacht lädt das Auto aus dem Netz, nicht aus dem Hausakku.
-        func evFromGrid(_ i: Int) -> Double { i < 24 ? ev[i] : 0 }
+        func evFromGrid(_ i: Int) -> Double { hours[i] < 6 ? ev[i] : 0 }
         func flow(_ i: Int, soc: Double, mode: Mode) -> Flow {
             var f = Self.split(pv: pv[i], load: house[i] + ev[i] - evFromGrid(i), soc: soc, mode: mode, exportBlocked: spot[i] < 0, hours: 0.25)
             f.gridToHome += evFromGrid(i)
@@ -273,7 +299,7 @@ public struct DemoPlant: Sendable {
 
         // 1. Wird der Akku vor dem Morgen leer? Dann bis 04:30 zum Nachtpreis nachladen,
         //    was das Haus danach bis 08:00 sonst aus dem Netz zöge.
-        let nightEnd = min(n, 18), morningEnd = min(n, 32)
+        let nightEnd = index(4.5), morningEnd = index(8)
         var soc = startSoc
         var importAfter = 0.0
         for i in 0..<morningEnd {
@@ -287,7 +313,8 @@ public struct DemoPlant: Sendable {
             let count = min(8, max(1, Int((need / (kw * 0.25)).rounded(.up))))
             let first = max(0, nightEnd - count)
             for i in first..<nightEnd { modes[i] = .gridCharge(kw) }
-            rules.append(PlanRule(id: "opt-\(day.number)-0", firstSlot: first, slotCount: nightEnd - first, gridSetpointW: kw * 1000))
+            rules.append(PlanRule(id: "opt-\(day.number)-0", firstSlot: first, slotCount: nightEnd - first, gridSetpointW: kw * 1000,
+                                  start: clock(first), end: clock(nightEnd)))
         }
 
         // 2. Den Akku dann laden, wenn die Einspeisung am wenigsten bringt (mittags, bei negativen
@@ -325,7 +352,7 @@ public struct DemoPlant: Sendable {
                               exportBlocked: spot[i] < 0, flow: f))
             soc = next
         }
-        let eveningStart = min(n, 70)
+        let eveningStart = index(17.5)
         for i in 0..<eveningStart { step(i) }
 
         // 4. Reicht der Akku über die Nacht hinaus? Dann den Überschuss im teuersten
@@ -340,7 +367,7 @@ public struct DemoPlant: Sendable {
             }
             let usable = max(0, (soc - Self.minSocPct) / 100 * Self.batteryKwh * Self.dischargeEfficiency)
             let spare = usable - need - 1.5
-            let last = min(n, 86)
+            let last = index(21.5)
             if spare > 2, last > eveningStart {
                 let kw = 5.0
                 let count = min(last - eveningStart, min(8, max(1, Int((min(spare, 8) / (kw * 0.25)).rounded(.down)))))
@@ -351,7 +378,8 @@ public struct DemoPlant: Sendable {
                 }
                 if bestSum > 0 {
                     for i in best..<(best + count) { modes[i] = .feedIn(kw) }
-                    rules.append(PlanRule(id: "opt-\(day.number)-1", firstSlot: best, slotCount: count, gridSetpointW: -kw * 1000))
+                    rules.append(PlanRule(id: "opt-\(day.number)-1", firstSlot: best, slotCount: count, gridSetpointW: -kw * 1000,
+                                          start: clock(best), end: clock(best + count)))
                 }
             }
             for i in eveningStart..<n { step(i) }
@@ -359,28 +387,46 @@ public struct DemoPlant: Sendable {
         return DayRun(day: day, slots: slots, rules: rules)
     }
 
-    /// Lauf eines Tages mit eingeschwungenem Akku: zwei Tage Vorlauf, dann der
-    /// Tag selbst. Jeden Morgen ist der Akku leer oder jeden Mittag voll — danach
-    /// hängt nichts mehr vom Anfang ab. Darum ergibt derselbe Tag überall dieselben
-    /// Werte, gleich in welcher Ansicht und in welchem Programm er gerechnet wird.
-    public func run(_ day: DemoWorld.Day) -> DayRun {
-        if let hit = cache.get(day.number) { return hit }
+    /// Ladestand am Beginn eines Tages: der, mit dem der Vortag endete. Die Läufe
+    /// hängen vom ersten Tag der Kette an (`DemoWorld.origin`) lückenlos
+    /// aneinander — kein Sprung über Mitternacht, in keiner Ansicht. Die Kette
+    /// hängt nur von der Zeit ab: Derselbe Tag ergibt überall dieselben Werte,
+    /// gleich in welcher Reihenfolge und in welchem Programm er gerechnet wird.
+    func startSoc(_ day: DemoWorld.Day) -> Double {
+        guard day.number > world.origin else { return Self.warmupSoc }
+        if let soc = cache.end(day.number - 1) { return soc }
+        // Zum letzten schon gerechneten Tag davor zurückgehen, sonst zum Anfang der Kette.
+        var from = day.number - 1
+        while from > world.origin, cache.end(from) == nil { from -= 1 }
         var soc = Self.warmupSoc
-        soc = run(world.day(after: day, by: -2), startSoc: soc).endSoc
-        soc = run(world.day(after: day, by: -1), startSoc: soc).endSoc
-        let r = run(day, startSoc: soc)
-        cache.set(day.number, r)
+        var next = world.day(after: day, by: from - day.number)
+        if let known = cache.end(from) {
+            soc = known
+            next = world.day(after: next)
+        }
+        while next.number < day.number {
+            let r = run(next, startSoc: soc)
+            cache.set(r)
+            soc = r.endSoc
+            next = world.day(after: next)
+        }
+        return soc
+    }
+
+    /// Lauf eines Tages — schließt an den Vortag an (`startSoc`).
+    public func run(_ day: DemoWorld.Day) -> DayRun {
+        if let hit = cache.run(day.number) { return hit }
+        let r = run(day, startSoc: startSoc(day))
+        cache.set(r)
         return r
     }
 
     public func run(containing date: Date) -> DayRun { run(world.day(containing: date)) }
 
-    /// Läufe ab `first` für `count` Tage mit durchlaufendem Ladestand (Fahrplan über Mitternacht).
+    /// Läufe ab `first` für `count` Tage (Fahrplan über Mitternacht).
     func runs(from first: DemoWorld.Day, count: Int) -> [DayRun] {
         var out = [run(first)]
-        while out.count < count, let last = out.last {
-            out.append(run(world.day(after: last.day), startSoc: last.endSoc))
-        }
+        while out.count < count, let last = out.last { out.append(run(world.day(after: last.day))) }
         return out
     }
 
@@ -483,27 +529,88 @@ public struct DemoPlant: Sendable {
         return o
     }
 
+    /// Was „Sofort laden“ bis `now` wirklich geladen hat (% des Auto-Akkus):
+    /// Nur wirksame Zeit zählt — nicht im Not-Halt und nicht, solange das Auto
+    /// unterwegs ist. Der Not-Halt gilt seit `accountedAt` (bei jedem Wechsel
+    /// wird dort neu angesetzt, `checkpointOverride`).
+    func overrideCharged(_ o: State.Override, until now: Date) -> Double {
+        guard o.kind == "charge", !state.emergencyStop else { return o.chargedPct }
+        let hours = pluggedSeconds(from: o.accountedAt, to: min(now, o.until ?? now)) / 3600
+        return o.chargedPct + o.powerW / 1000 * hours / DemoWorld.evBatteryKwh * 100
+    }
+
+    /// Zeit zwischen `a` und `b`, in der das Auto an der Wallbox steht: alles außer den Fahrten
+    /// (Werktag 07:00–08:30), auf die Sekunde an Abfahrt und Rückkehr geteilt — so wächst das
+    /// Geladene nur und hängt nicht davon ab, wann gefragt wird.
+    func pluggedSeconds(from a: Date, to b: Date) -> TimeInterval {
+        guard b > a else { return 0 }
+        var total = b.timeIntervalSince(a)
+        var day = world.day(containing: a)
+        while day.start < b {
+            if day.isWorkday {
+                let from = max(a, day.date(atHour: DemoWorld.evAwayFrom)), to = min(b, day.date(atHour: DemoWorld.evAwayUntil))
+                if to > from { total -= to.timeIntervalSince(from) }
+            }
+            day = world.day(after: day)
+        }
+        return max(0, total)
+    }
+
+    /// Stand des „Sofort laden“ festhalten, bevor sich ändert, ob es wirkt (Not-Halt).
+    mutating func checkpointOverride(at now: Date) {
+        guard var o = state.evOverride else { return }
+        o.chargedPct = overrideCharged(o, until: now)
+        o.accountedAt = max(o.accountedAt, min(now, o.until ?? now))
+        state.evOverride = o
+    }
+
+    /// „Sofort laden“ endet: Was es geladen hat, bleibt im Auto — bis zur nächsten Fahrt.
+    mutating func finishOverride(at now: Date) {
+        guard let o = state.evOverride else { return }
+        let end = min(now, o.until ?? now)
+        let charged = overrideCharged(o, until: end)
+        state.evOverride = nil
+        guard o.kind == "charge", charged > 0 else { return }
+        state.evExtraPct = min(100, extraPct(at: end) + charged)
+        state.evExtraUntil = nextTrip(after: end)
+    }
+
+    /// Über den Plan hinaus Geladenes, solange es gilt.
+    func extraPct(at now: Date) -> Double {
+        guard let until = state.evExtraUntil, now < until else { return 0 }
+        return state.evExtraPct
+    }
+
+    /// Beginn der nächsten Fahrt (Werktag, 07:00).
+    func nextTrip(after now: Date) -> Date {
+        var day = world.day(containing: now)
+        for _ in 0..<8 {
+            let start = day.date(atHour: DemoWorld.evAwayFrom)
+            if day.isWorkday, start > now { return start }
+            day = world.day(after: day)
+        }
+        return now.addingTimeInterval(86_400)
+    }
+
     public func vehicle(at now: Date) -> Vehicle {
         let day = world.day(containing: now), previous = world.day(after: day, by: -1)
         let hour = day.hour(of: now)
         let away = world.evAway(day, hour: hour)
-        let base = world.evSocPct(day, hour: hour, previous: previous, target: state.evMinSocPct)
         let plan = world.evPlanKw(day, hour: hour, previous: previous)
-        var v = Vehicle(socPct: base, plugged: !away, charging: plan > 0 && !away, chargePowerW: away ? 0 : plan * 1000,
-                        planEnergyKwh: max(0, state.evMinSocPct - base) / 100 * DemoWorld.evBatteryKwh)
-        // Im Not-Halt steuert DVhub die Wallbox nicht: „Sofort laden“ und „Laden stoppen“ wirken erst nach dem Aufheben.
-        guard let o = override(at: now), !away, !state.emergencyStop else { return v }
-        if o.kind == "stop" {
-            v.charging = false
-            v.chargePowerW = 0
-        } else {
-            let hours = max(0, now.timeIntervalSince(o.startedAt)) / 3600
-            v.socPct = min(100, base + o.powerW / 1000 * hours / DemoWorld.evBatteryKwh * 100)
-            v.charging = v.socPct < 100
-            v.chargePowerW = v.charging ? o.powerW : 0
-            v.planEnergyKwh = max(0, state.evMinSocPct - v.socPct) / 100 * DemoWorld.evBatteryKwh
+        var soc = world.evSocPct(day, hour: hour, previous: previous, target: state.evMinSocPct) + extraPct(at: now)
+        var charging = plan > 0 && !away, power = away ? 0 : plan * 1000
+        if let o = override(at: now) {
+            soc += overrideCharged(o, until: now)
+            // Im Not-Halt steuert DVhub die Wallbox nicht: Die Vorgabe wirkt erst nach dem Aufheben.
+            if !away, !state.emergencyStop {
+                charging = o.kind == "charge" && soc < 100
+                power = charging ? o.powerW : 0
+            }
         }
-        return v
+        soc = min(100, soc)
+        if soc >= 100 { charging = false; power = 0 }
+        return Vehicle(socPct: soc, plugged: !away, charging: charging, chargePowerW: power,
+                       planEnergyKwh: max(0, state.evMinSocPct - soc) / 100 * DemoWorld.evBatteryKwh)
     }
 
     /// Minuten seit Mitternacht aus „HH:MM“.
@@ -520,8 +627,7 @@ public struct DemoPlant: Sendable {
 
     /// Regel von Hand oder aus der Börsenautomatik, die jetzt für `target` gilt.
     func activeRule(_ target: String, at now: Date, soc: Double) -> (value: Double, source: String)? {
-        let day = world.day(containing: now)
-        let minute = Int(day.hour(of: now) * 60)
+        let minute = world.minuteOfDay(now)
         for (rules, fallback) in [(state.manualRules, "manual"), (state.automationRules, "small_market_automation")] {
             for r in rules where r["enabled"]?.bool != false && r["target"]?.string == target {
                 guard let a = Self.minutes(r["start"]?.string), let b = Self.minutes(r["end"]?.string), let v = r["value"]?.number,
@@ -532,6 +638,54 @@ public struct DemoPlant: Sendable {
             }
         }
         return nil
+    }
+
+    /// Höchste Ladeleistung des Akkus jetzt (kW): aus dem geltenden Ladestrom — Regel oder Grundwert.
+    func chargeLimitKw(at now: Date, soc: Double) -> Double {
+        let amps = (state.emergencyStop ? nil : activeRule("chargeCurrentA", at: now, soc: soc)?.value) ?? state.defaultChargeCurrentA
+        return max(0, amps) * Self.batteryVolts / 1000
+    }
+
+    /// Ladestand des Akkus jetzt.
+    func soc(at now: Date) -> Double {
+        let run = self.run(containing: now)
+        guard let slot = run.slots.last(where: { $0.start <= now }) ?? run.slots.first else { return Self.warmupSoc }
+        let share = max(0, min(1, now.timeIntervalSince(slot.start) / slot.end.timeIntervalSince(slot.start)))
+        return slot.socStart + (slot.socEnd - slot.socStart) * share
+    }
+
+    /// Was die Zeit erledigt, bevor eine Anfrage beantwortet oder ein Live-Wert gemeldet wird:
+    ///   • „Sofort laden“ mit Dauer läuft ab (das Geladene bleibt im Auto), ein verstrichenes Einmal-Ziel fällt weg,
+    ///   • eine Netz-Regel mit Stopp-Stand schaltet sich ab, sobald der Akku darunter liegt — und bleibt aus,
+    ///     auch wenn er wieder steigt (wie auf der Box: autoDisableStopSocScheduleRules).
+    public mutating func settle(at now: Date) {
+        if let until = state.evOverride?.until, until <= now { finishOverride(at: now) }
+        if let once = state.evOnce, once <= now {
+            state.evOnce = nil
+            state.evOnceMinSocPct = nil
+        }
+        if let until = state.evExtraUntil, until <= now {
+            state.evExtraPct = 0
+            state.evExtraUntil = nil
+        }
+        guard !state.emergencyStop else { return }
+        let minute = world.minuteOfDay(now)
+        var level: Double?
+        func latch(_ rules: [JSONValue]) -> [JSONValue] {
+            rules.map { r in
+                guard r["enabled"]?.bool != false, r["target"]?.string == "gridSetpointW", let stop = r["stopSocPct"]?.number,
+                      let a = Self.minutes(r["start"]?.string), let b = Self.minutes(r["end"]?.string), Self.inWindow(minute, start: a, end: b),
+                      var o = r.object else { return r }
+                let now = level ?? soc(at: now)
+                level = now
+                guard now < stop else { return r }
+                o["enabled"] = false
+                return .object(o)
+            }
+        }
+        let manual = latch(state.manualRules), auto = latch(state.automationRules)
+        if manual != state.manualRules { state.manualRules = manual }
+        if auto != state.automationRules { state.automationRules = auto }
     }
 
     public func live(at now: Date) -> Live {
@@ -574,14 +728,21 @@ public struct DemoPlant: Sendable {
             }
         }
         let blocked = slot.spotCt < 0 && !stopped
-        var f = Self.split(pv: pv, load: house + ev - evFromGrid, soc: out.soc, mode: mode, exportBlocked: blocked, hours: 1.0 / 60)
+        // Geltender Ladestrom (Regel oder Grundwert) begrenzt, wie schnell der Akku lädt.
+        let chargeLimit = chargeLimitKw(at: now, soc: out.soc)
+        var f = Self.split(pv: pv, load: house + ev - evFromGrid, soc: out.soc, mode: mode, exportBlocked: blocked, hours: 1.0 / 60,
+                           chargeLimitKw: chargeLimit)
         f.gridToHome += evFromGrid
 
-        // Regel von Hand (oder Börsenautomatik): DVhub regelt auf diesen Sollwert am Netzpunkt.
         if !stopped, let rule = activeRule("gridSetpointW", at: now, soc: out.soc) {
+            // Regel von Hand (oder Börsenautomatik): DVhub regelt auf diesen Sollwert am Netzpunkt.
             out.gridSetpointW = rule.value
             out.setpointSource = rule.source
-            f = Self.hold(gridKw: rule.value / 1000, pv: pv, load: house + ev, soc: out.soc, exportBlocked: blocked)
+            f = Self.hold(gridKw: rule.value / 1000, pv: pv, load: house + ev, soc: out.soc, exportBlocked: blocked, chargeLimitKw: chargeLimit)
+        } else if !stopped, out.setpointSource == "default", abs(state.defaultGridSetpointW - State.factoryGridSetpointW) > 0.5 {
+            // Geänderter Grundwert: Ohne Regel regelt DVhub auf ihn (ab Werk: Eigenverbrauch).
+            f = Self.hold(gridKw: state.defaultGridSetpointW / 1000, pv: pv, load: house + ev, soc: out.soc, exportBlocked: blocked,
+                          chargeLimitKw: chargeLimit)
         }
 
         out.pvW = (pv - f.curtailed) * 1000
@@ -598,11 +759,11 @@ public struct DemoPlant: Sendable {
     }
 
     /// Auf einen Sollwert am Netzpunkt regeln (kW: + beziehen, − einspeisen): Der Akku gleicht aus, soweit er kann.
-    static func hold(gridKw: Double, pv: Double, load: Double, soc: Double, exportBlocked: Bool) -> Flow {
+    static func hold(gridKw: Double, pv: Double, load: Double, soc: Double, exportBlocked: Bool, chargeLimitKw: Double = batteryMaxKw) -> Flow {
         let canCharge = soc < 99.9, canDischarge = soc > minSocPct + 0.1
         let target = exportBlocked ? max(0, gridKw) : gridKw
         var battery = pv - load + target
-        battery = max(canDischarge ? -batteryMaxKw : 0, min(canCharge ? batteryMaxKw : 0, battery))
+        battery = max(canDischarge ? -batteryMaxKw : 0, min(canCharge ? min(batteryMaxKw, max(0, chargeLimitKw)) : 0, battery))
         var f = Flow()
         f.solarToHome = min(pv, load)
         let surplus = pv - f.solarToHome, deficit = load - f.solarToHome
@@ -631,20 +792,51 @@ public struct DemoPlant: Sendable {
     }
 }
 
-/// Fertige Läufe je Tagesnummer. Die Läufe hängen nur von der Zeit ab, nie vom
-/// bedienten Zustand — sie gelten für jede Kopie der Anlage.
+/// Fertige Läufe je Tagesnummer, dazu der Ladestand am Ende jedes Tages (die
+/// Kette). Beides hängt nur von der Zeit ab, nie vom bedienten Zustand — es
+/// gilt für jede Kopie der Anlage.
 final class RunCache: @unchecked Sendable {
     private let lock = NSLock()
     private var runs: [Int: DemoPlant.DayRun] = [:]
+    private var ends: [Int: Double] = [:]
 
-    func get(_ day: Int) -> DemoPlant.DayRun? {
+    func run(_ day: Int) -> DemoPlant.DayRun? {
         lock.lock(); defer { lock.unlock() }
         return runs[day]
     }
 
-    func set(_ day: Int, _ run: DemoPlant.DayRun) {
+    func end(_ day: Int) -> Double? {
+        lock.lock(); defer { lock.unlock() }
+        return ends[day]
+    }
+
+    func set(_ run: DemoPlant.DayRun) {
         lock.lock(); defer { lock.unlock() }
         if runs.count > 800 { runs.removeAll(keepingCapacity: true) }
-        runs[day] = run
+        runs[run.day.number] = run
+        ends[run.day.number] = run.endSoc
+    }
+}
+
+extension DemoPlant.State {
+    /// Felder, die nach dem ersten gespeicherten Stand dazukamen — mit dem Wert, den sie in einem
+    /// Zustand von damals haben. Nur diese werden ergänzt: Ein fehlender Wert eines Feldes, das
+    /// leer sein darf (Höchststand „wenn günstig“ aus, kein Einmal-Ziel), bleibt leer.
+    private static let addedLater: [String: JSONValue] = ["evExtraPct": 0]
+
+    /// Gespeicherten Zustand lesen — auch einen, den ein älterer Stand der App geschrieben hat
+    /// (`addedLater`). Was bedient wurde, bleibt. nil nur, wenn die Daten kein Zustand der Demo sind.
+    public static func restore(_ data: Data) -> DemoPlant.State? {
+        if let state = try? JSONDecoder().decode(Self.self, from: data) { return state }
+        guard var stored = (try? JSONValue.decode(data))?.object else { return nil }
+        for (key, value) in addedLater where stored[key] == nil { stored[key] = value }
+        if var override = stored["evOverride"]?.object {
+            // „Sofort laden“ von damals: noch nichts verbucht, gezählt wird ab seinem Beginn.
+            if override["chargedPct"] == nil { override["chargedPct"] = 0 }
+            if override["accountedAt"] == nil { override["accountedAt"] = override["startedAt"] ?? .null }
+            stored["evOverride"] = .object(override)
+        }
+        guard let merged = try? JSONValue.object(stored).encoded() else { return nil }
+        return try? JSONDecoder().decode(Self.self, from: merged)
     }
 }

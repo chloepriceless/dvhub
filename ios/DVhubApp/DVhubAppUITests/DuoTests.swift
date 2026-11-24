@@ -23,6 +23,7 @@ final class DuoTests: XCTestCase {
         app.launchArguments += ["-AppleLanguages", "(de)", "-AppleLocale", "de_DE", "-navPlacement", "auto"]
         if let qr = ProcessInfo.processInfo.environment["DVHUB_QR"], !qr.isEmpty { app.launchArguments += ["-DVHUB_PAIR", qr] }
         XCUIDevice.shared.orientation = .portrait
+        app.launchArguments += Demo.off
         app.launch()
         let state = app.descendants(matching: .any)["connectionState"].firstMatch
         guard state.waitForExistence(timeout: 40) else { throw XCTSkip("Keine gekoppelte Anlage") }

@@ -63,7 +63,10 @@ private struct SystemHeaderRow: View {
         if let c = model.selected {
             SwiftUI.Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(c.credentials.boxName).font(.title3.weight(.bold)).foregroundStyle(Brand.text)
+                    HStack(spacing: 8) {
+                        Text(c.credentials.boxName).font(.title3.weight(.bold)).foregroundStyle(Brand.text)
+                        if c.isDemo { DemoTag() }
+                    }
                     ConnectionBadge(controller: c)
                 }
                 .listRowBackground(Color.clear)
@@ -80,6 +83,8 @@ struct MoreView: View {
     var body: some View {
         List {
             SystemHeaderRow()
+            // Demo gewählt: hier jederzeit beenden oder die eigene Anlage koppeln.
+            if model.selectedIsDemo { DemoSection() }
             SwiftUI.Section("Anlage") {
                 ForEach(MoreRoute.visible(MoreRoute.plantRoutes, model: model)) { row($0) }
             }
@@ -101,7 +106,9 @@ struct MoreView: View {
         case .integrations: return String(localized: "Zustand und Einrichtung")
         case .system: return String(localized: "Einstellungen ansehen")
         case .control: return String(localized: "Not-Halt")
-        case .systems: return String(localized: "\(model.systems.count) gekoppelt")
+        case .systems:
+            let paired = String(localized: "\(model.systems.count) gekoppelt")
+            return model.demoActive ? String(localized: "\(paired) · Demo aktiv") : paired
         case .appearance: return String(localized: "Farben, Navigation, Widgets, Live-Aktivität")
         case .about: return String(localized: "Version, Datenschutz")
         }
@@ -133,6 +140,7 @@ struct SidebarView: View {
     var body: some View {
         List(selection: $selection) {
             SystemHeaderRow()
+            if model.selectedIsDemo { DemoSection() }
             SwiftUI.Section {
                 ForEach(AppTab.allCases.filter { $0 != .more }) { t in
                     Label(t.title, systemImage: t.icon)
@@ -318,6 +326,7 @@ struct AboutView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Eyebrow(text: "Womit die App spricht", icon: "lock.shield", tint: Brand.green)
                     Text("**Deine Anlage** – Ende zu Ende verschlüsselt, im Heimnetz direkt, unterwegs über das Relay. Das Relay sieht nur verschlüsselte Daten.")
+                    Text("**Demo** – die Beispielanlage rechnet im Gerät. Solange sie gewählt ist, verbindet sich die App mit keiner Anlage und holt auch Preise und Meldungen nicht aus dem Netz.")
                     Text("**dvhub.online** – Börsenpreise, Residuallast-Frühwarnung und Nachrichten. Öffentliche Daten; es gehen keine Anlagendaten, keine Kennung und keine Cookies mit.")
                     Text("**Redaktionen** – Vorschaubilder und Artikel der Nachrichten kommen direkt von den genannten Seiten.")
                 }

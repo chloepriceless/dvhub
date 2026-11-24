@@ -116,6 +116,25 @@ targets:
         SWIFT_VERSION: "5.0"
         SKIP_INSTALL: YES
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  # Tests im Prozess der App: Demo-Modus (AppModel, Sperre des echten Wegs, Quellenwechsel).
+  DVhubAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - DVhubAppTests
+    dependencies:
+      - target: DVhubApp
+      - package: DVhubLink
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DVHUB_BUNDLE_ID).tests
+        # Die App heißt als Produkt „DVhub“ (nicht wie das Ziel).
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/DVhub.app/DVhub
+        BUNDLE_LOADER: $(TEST_HOST)
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
   DVhubAppUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -143,4 +162,5 @@ schemes:
       language: de
       region: DE
       targets:
+        - DVhubAppTests
         - DVhubAppUITests

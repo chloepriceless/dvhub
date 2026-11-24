@@ -18,6 +18,12 @@ struct DVhubApp: App {
                 .environment(news)
                 .preferredColorScheme((Appearance(rawValue: appearance) ?? .dark).scheme)
                 .onOpenURL { model.handle(url: $0) }
+                // Demo gewählt bzw. verlassen: Markt und Nachrichten wechseln ihre Quelle
+                // (Beispieldaten aus dem Gerät statt dvhub.online — und zurück).
+                .onChange(of: model.selectedIsDemo, initial: true) { _, _ in
+                    market.use(DemoStore.onlineSource)
+                    news.use(DemoStore.onlineSource)
+                }
         }
         // Hintergrundabruf (BGAppRefreshTask): hält Widgets und Live-Aktivität aktuell.
         .backgroundTask(.appRefresh(BackgroundRefresh.taskId)) {
