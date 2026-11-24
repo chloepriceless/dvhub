@@ -400,8 +400,9 @@ Worker kann damit nicht unbeaufsichtigt veröffentlichen. Darum signiert er dev 
   Brücke der erste main-Stand mit dem neuen Code ist. Die Assets in `dev-bridge` nie löschen.
 - **Rückweg:** Worker anhalten (`state/sign-paused` oder `launchctl bootout …`). Neue Boxen nehmen in dev weiter auch
   Pakete mit dem Release-Schlüssel an (alte Namensräume); im Notfall ein solches Paket wie die Brücke veröffentlichen
-  (`publish-release.sh <build> --bridge --force-bridge`, setzt auch `index-dev.json` neu). dev-Schlüssel entziehen:
-  Zeile aus `allowed_signers` entfernen und ein Paket mit dem Release-Schlüssel ausliefern; stable ist nie betroffen.
+  (`publish-release.sh <build> --bridge --release-key-only --force-bridge`: Paket, `index-dev.json` und
+  `index-dev-v2.json` mit dem Release-Schlüssel, v2 im alten Namensraum — geht auch ohne den dev-Schlüssel).
+  dev-Schlüssel entziehen: Zeile aus `allowed_signers` entfernen und so ein Paket ausliefern; stable ist nie betroffen.
 
 ## Offene Entscheidungen
 

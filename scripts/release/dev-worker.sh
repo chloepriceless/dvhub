@@ -58,6 +58,10 @@ DW_KEEP_BUILDS="${DVHUB_DW_KEEP_BUILDS:-2}"
 DW_MAX_FAILS="${DVHUB_DW_MAX_FAILS:-3}"                # Bau-/Veröffentlichungs-Versuche je Commit
 DW_LOG_MAX_BYTES="${DVHUB_DW_LOG_MAX_BYTES:-524288}"
 DW_PYTHON="${DVHUB_DW_PYTHON:-python3}"
+# Werkzeuge (build-/publish-release.sh): Vorgabe der Worker-Klon auf dem Stand
+# von origin/main — auch für Trockenläufe älterer Commits (Codex f9e2e163).
+# DVHUB_DW_TOOLS: anderes Checkout mit scripts/release (z. B. vor dem Merge).
+DW_TOOLS="${DVHUB_DW_TOOLS:-}"
 
 REPO="$DW_HOME/repo"
 STATE="$DW_HOME/state"
@@ -237,7 +241,10 @@ fi
 
 mkdir -p "$DW_HOME" "$STATE" "$OUT" "$RUNS" "$(dirname "$DW_LOG")" || exit 1
 chmod 700 "$DW_HOME" 2>/dev/null || true
-rm -rf "$DW_HOME/key"   # Kopie des Release-.pub aus der 1Password-Zeit (bis 24.11.2026), nicht mehr gebraucht
+# Kopie des Release-.pub aus der 1Password-Zeit (bis 24.11.2026) — nur genau
+# diese Dateien, nie einen dort abgelegten Schlüssel (Codex f9e2e163).
+rm -f "$DW_HOME/key/release_agent" "$DW_HOME/key/release_agent.pub" 2>/dev/null
+rmdir "$DW_HOME/key" 2>/dev/null || true
 rotate_log
 
 # ---------------------------------------------------------------- Sperre
@@ -396,7 +403,8 @@ remote_status() {  # $1 = SHA
     const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
     const idx = read(idxF);
     const short = sha.slice(0, 8);
-    const names = new Set([...(read(devF).assets || []), ...(read(bridgeF).assets || [])].map((a) => a.name));
+    const byTag = { dev: new Set((read(devF).assets || []).map((a) => a.name)), "dev-bridge": new Set((read(bridgeF).assets || []).map((a) => a.name)) };
+    const names = new Set([...byTag.dev, ...byTag["dev-bridge"]]);
     const re = new RegExp(`^dvhub-(.+\\.${short})-([a-z0-9]+)\\.tar\\.gz$`);
     let version = "";
     for (const n of names) { const m = n.match(re); if (m) version = m[1]; }
@@ -404,7 +412,12 @@ remote_status() {  # $1 = SHA
     if (listed) version = listed.version;
     const inIndex = listed && idxOk === "1";
     if (!version) { console.log("no"); process.exit(0); }
-    const complete = archs.split(",").every((a) => names.has(`dvhub-${version}-${a}.tar.gz`) && names.has(`dvhub-${version}-${a}.tar.gz.sig`));
+    // Steht der Stand im Index, zählt das Release, auf das seine URLs zeigen
+    // (so lädt die Box) — nicht irgendeines (Codex f9e2e163).
+    const at = (url) => { const m = /^\.\.\/([^/]+)\/([^/]+)$/.exec(url || ""); return !!m && !!byTag[m[1]] && byTag[m[1]].has(m[2]); };
+    const complete = listed
+      ? archs.split(",").every((a) => at(listed.artifacts?.[a]?.url) && at(listed.artifacts?.[a]?.sig))
+      : archs.split(",").every((a) => names.has(`dvhub-${version}-${a}.tar.gz`) && names.has(`dvhub-${version}-${a}.tar.gz.sig`));
     console.log(`${complete && inIndex ? "yes" : "partial"} ${version}`);
   ' "$tmp/dev.json" "$tmp/bridge.json" "$tmp/index.json" "$sha" "$DW_ARCHS" "$idx_ok"
   rc=$?
@@ -520,7 +533,9 @@ main() {
   fi
   state_clear restore-pending
 
-  checkout "$sha" || { log "Checkout $short im Worker-Klon fehlgeschlagen"; return 1; }
+  # Klon auf origin/main (Werkzeuge, ci-check.py); gebaut wird $sha per git archive.
+  checkout refs/remotes/origin/main || { log "Checkout origin/main im Worker-Klon fehlgeschlagen"; return 1; }
+  local tools="${DW_TOOLS:-$REPO}"
 
   local ci_out
   ci_out="$(cd "$REPO" && run_to 120 "$DW_PYTHON" scripts/ci-check.py "$sha" 2>&1)"; rc=$?
@@ -551,7 +566,7 @@ main() {
   if [[ -z "${DOCKER_HOST:-}" && -S "$HOME/.colima/default/docker.sock" ]]; then
     export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
   fi
-  run_to "$DW_BUILD_TIMEOUT" bash "$REPO/scripts/release/build-release.sh" "$sha" \
+  run_to "$DW_BUILD_TIMEOUT" bash "$tools/scripts/release/build-release.sh" "$sha" --repo "$REPO" \
       --arch "$DW_ARCHS" --out "$OUT" --sig-scope dev --key "$KEY" </dev/null >>"$runlog" 2>&1
   rc=$?
   if [[ "$rc" -ne 0 ]]; then
@@ -576,7 +591,7 @@ main() {
       printf '{"format":1,"channel":"dev","latest":null,"releases":[]}\n' > "$pubdest/channels/index-dev-v2.json"
       log "Trockenlauf: index-dev-v2.json gibt es noch nicht — leerer Platzhalter als Vorgänger"
     fi
-    run_to "$DW_PUBLISH_TIMEOUT" bash "$REPO/scripts/release/publish-release.sh" "$build" \
+    run_to "$DW_PUBLISH_TIMEOUT" bash "$tools/scripts/release/publish-release.sh" "$build" --repo "$REPO" \
         --sig-scope dev --key "$KEY" --dry-run --dest "$pubdest" </dev/null >>"$runlog" 2>&1
     rc=$?
     if [[ "$rc" -eq 0 ]]; then log "Trockenlauf ok: $version gebaut und signiert, publish-release --dry-run → $pubdest"
@@ -600,7 +615,7 @@ main() {
   local tok; tok="$(gh_token)"
   [[ -n "$tok" ]] || { count_fail "$sha" "kein GitHub-Token aus git credential fill"; return 1; }
   log "main $short: veröffentliche $version"
-  GH_TOKEN="$tok" run_to "$DW_PUBLISH_TIMEOUT" bash "$REPO/scripts/release/publish-release.sh" "$build" \
+  GH_TOKEN="$tok" run_to "$DW_PUBLISH_TIMEOUT" bash "$tools/scripts/release/publish-release.sh" "$build" --repo "$REPO" \
       --sig-scope dev --key "$KEY" </dev/null >>"$runlog" 2>&1
   rc=$?
   tok=""

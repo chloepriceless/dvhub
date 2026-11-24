@@ -4,7 +4,7 @@
 # (docs/release-pakete.md).
 #
 #   scripts/release/publish-release.sh <build-dir> [--key PFAD]
-#       [--sig-scope release|dev] [--bridge [--dev-key PFAD] [--force-bridge]]
+#       [--sig-scope release|dev] [--bridge [--dev-key PFAD | --release-key-only] [--force-bridge]]
 #       [--gh-repo owner/name] [--repo DIR] [--keep-dev N]
 #       [--dry-run --dest DIR]
 #
@@ -20,6 +20,10 @@
 #                         channels/index-dev.json auf genau dieses Paket (danach
 #                         eingefroren: kein anderer Weg schreibt sie mehr) und nimmt
 #                         es in index-dev-v2.json auf (mit --dev-key signiert).
+#   dev --bridge --release-key-only --force-bridge
+#                         Notweg ohne dev-Schlüssel (entzogen/verloren): auch
+#                         index-dev-v2.json mit dem Release-Schlüssel im alten
+#                         Namensraum dvhub-release-index (die Box nimmt ihn für dev an).
 #
 # Struktur (wie https://github.com/<repo>/releases/download/…):
 #   <tag>/dvhub-<v>-<arch>.tar.gz(.sig, .manifest.json)    stable: Tag vX.Y.Z
@@ -41,6 +45,7 @@ DEV_KEY="${DVHUB_RELEASE_DEV_KEY:-$HOME/.config/dvhub-release/dev_ed25519}"
 SCOPE="${DVHUB_RELEASE_SIG_SCOPE:-release}"
 BRIDGE=0
 FORCE_BRIDGE=0
+RELEASE_KEY_ONLY=0
 GH_REPO="chloepriceless/dvhub"
 REPO="$(cd "$HERE/../.." && pwd)"
 KEEP_DEV=3
@@ -55,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --sig-scope) SCOPE="${2:-}"; shift 2 ;;
     --bridge) BRIDGE=1; shift ;;
     --force-bridge) FORCE_BRIDGE=1; shift ;;
+    --release-key-only) RELEASE_KEY_ONLY=1; shift ;;
     --gh-repo) GH_REPO="${2:-}"; shift 2 ;;
     --repo) REPO="${2:-}"; shift 2 ;;
     --keep-dev) KEEP_DEV="${2:-}"; shift 2 ;;
@@ -85,7 +91,7 @@ NS_PKG=dvhub-release
 INDEXES=()
 if [[ "$CHANNEL" == stable ]]; then
   [[ -n "$TAG" ]] || die "stable ohne Tag"
-  [[ "$SCOPE" == release && "$BRIDGE" -eq 0 ]] || die "stable nur mit dem Release-Schlüssel (kein --sig-scope dev, kein --bridge)"
+  [[ "$SCOPE" == release && "$BRIDGE" -eq 0 && "$RELEASE_KEY_ONLY" -eq 0 ]] || die "stable nur mit dem Release-Schlüssel (kein --sig-scope dev, kein --bridge)"
   RTAG="$TAG"
   INDEXES=("index-stable.json|$KEY|dvhub-release-index|live")
 else
@@ -101,19 +107,23 @@ else
   fi
   if [[ "$BRIDGE" -eq 1 ]]; then
     [[ "$SCOPE" == release ]] || die "--bridge signiert das Paket mit dem Release-Schlüssel (ohne --sig-scope dev)"
-    [[ -f "$DEV_KEY" ]] || die "dev-Schlüssel $DEV_KEY fehlt (--dev-key) — er signiert index-dev-v2.json"
+    [[ "$RELEASE_KEY_ONLY" -eq 1 || -f "$DEV_KEY" ]] || die "dev-Schlüssel $DEV_KEY fehlt (--dev-key) — er signiert index-dev-v2.json (Notweg: --release-key-only)"
     # Das Brücken-Paket muss den Prüfcode für den dev-Schlüssel mitbringen,
     # sonst hingen alte Boxen nach der Brücke fest.
     # (Inhalt erst in Variablen: grep -q an einer Pipe bricht unter pipefail ab.)
     helper_src="$(git -C "$REPO" show "$SHA:dvhub-release.cjs" 2>/dev/null || true)"
     [[ "$helper_src" == *index-dev-v2.json* && "$helper_src" == *dvhub-release-index-dev* ]] \
       || die "Commit ${SHA:0:12} bringt den neuen Prüfcode (index-dev-v2.json) nicht mit — taugt nicht als Brücke"
-    trust_src="$(git -C "$REPO" show "$SHA:release-keys/allowed_signers" 2>/dev/null || true)"
-    dev_pub="$(awk 'NR==1{print $2}' "$DEV_KEY.pub" 2>/dev/null || true)"
-    [[ -n "$dev_pub" ]] && printf '%s\n' "$trust_src" | grep -v '^#' | grep -F "$dev_pub" | grep -F 'namespaces="dvhub-release-dev,dvhub-release-index-dev"' >/dev/null \
-      || die "release-keys/allowed_signers in ${SHA:0:12} enthält den dev-Schlüssel ($DEV_KEY.pub) nicht mit den dev-Namensräumen"
     RTAG="dev-bridge"
-    INDEXES=("index-dev.json|$KEY|dvhub-release-index|fresh" "index-dev-v2.json|$DEV_KEY|dvhub-release-index-dev|live")
+    if [[ "$RELEASE_KEY_ONLY" -eq 1 ]]; then
+      INDEXES=("index-dev.json|$KEY|dvhub-release-index|fresh" "index-dev-v2.json|$KEY|dvhub-release-index|live")
+    else
+      trust_src="$(git -C "$REPO" show "$SHA:release-keys/allowed_signers" 2>/dev/null || true)"
+      dev_pub="$(awk 'NR==1{print $2}' "$DEV_KEY.pub" 2>/dev/null || true)"
+      [[ -n "$dev_pub" ]] && printf '%s\n' "$trust_src" | grep -v '^#' | grep -F "$dev_pub" | grep -F 'namespaces="dvhub-release-dev,dvhub-release-index-dev"' >/dev/null \
+        || die "release-keys/allowed_signers in ${SHA:0:12} enthält den dev-Schlüssel ($DEV_KEY.pub) nicht mit den dev-Namensräumen"
+      INDEXES=("index-dev.json|$KEY|dvhub-release-index|fresh" "index-dev-v2.json|$DEV_KEY|dvhub-release-index-dev|live")
+    fi
   elif [[ "$SCOPE" == dev ]]; then
     NS_PKG=dvhub-release-dev
     RTAG="dev"
@@ -213,11 +223,14 @@ fetch_prev() {  # <name> <ziel> — legt <ziel> an, wenn es einen Vorgänger gib
   return 0
 }
 
+# index-dev-v2.json gilt auch als vorhanden, wenn nach einer unterbrochenen
+# Umstellung nur der Zwischenstand .new liegt — fetch_prev holt ihn (Codex ac5e49a1).
+v2_exists() { asset_id index-dev-v2.json >/dev/null || asset_id index-dev-v2.json.new >/dev/null; }
 # Brücke nur einmal: steht index-dev-v2.json schon, ist der Übergang erledigt —
 # eine zweite Brücke würde die eingefrorene index-dev.json umsetzen.
 if [[ "$BRIDGE" -eq 1 && "$FORCE_BRIDGE" -ne 1 ]]; then
   if { [[ "$DRY" -eq 1 && -f "$DEST/channels/index-dev-v2.json" ]]; } \
-      || { [[ "$DRY" -ne 1 && "$CHANNELS_OK" -eq 1 ]] && asset_id index-dev-v2.json >/dev/null; }; then
+      || { [[ "$DRY" -ne 1 && "$CHANNELS_OK" -eq 1 ]] && v2_exists; }; then
     die "index-dev-v2.json gibt es schon — die Brücke ist erledigt (erneut nur mit --force-bridge)"
   fi
 fi
@@ -225,7 +238,7 @@ fi
 # zu alten Boxen, und die eingefrorene index-dev.json bekäme nie die Brücke.
 if [[ "$CHANNEL" == dev && "$BRIDGE" -eq 0 ]]; then
   if { [[ "$DRY" -eq 1 && ! -f "$DEST/channels/index-dev-v2.json" ]]; } \
-      || { [[ "$DRY" -ne 1 ]] && ! { [[ "$CHANNELS_OK" -eq 1 ]] && asset_id index-dev-v2.json >/dev/null; }; }; then
+      || { [[ "$DRY" -ne 1 ]] && ! { [[ "$CHANNELS_OK" -eq 1 ]] && v2_exists; }; }; then
     die "index-dev-v2.json fehlt — erst das Brücken-Paket veröffentlichen (--bridge mit dem Release-Schlüssel, docs/release-pakete.md)"
   fi
 fi

@@ -104,7 +104,13 @@ async function setup(t) {
     } else if (req.url === '/repos/chloepriceless/dvhub/releases/tags/dev-bridge' && remote.bridgeShas.size) {
       res.end(JSON.stringify({ assets: assetsOf([...remote.bridgeShas]) }));
     } else if (req.url === '/chloepriceless/dvhub/releases/download/channels/index-dev-v2.json' && remote.bridge) {
-      res.end(JSON.stringify({ channel: 'dev', releases: shas.map((s) => ({ version: verOf(s), git_sha: s })) }));
+      // URLs wie publish-release (index-entry): ../<Release>/<Datei>; indexTag erzwingt ein (falsches) Release.
+      const art = (s) => Object.fromEntries(['arm64', 'armhf', 'amd64'].map((a) => {
+        const tag = remote.indexTag || (remote.bridgeShas.has(s) ? 'dev-bridge' : 'dev');
+        const f = `dvhub-${verOf(s)}-${a}.tar.gz`;
+        return [a, { url: `../${tag}/${f}`, sig: `../${tag}/${f}.sig` }];
+      }));
+      res.end(JSON.stringify({ channel: 'dev', releases: shas.map((s) => ({ version: verOf(s), git_sha: s, artifacts: art(s) })) }));
     } else if (req.url === '/chloepriceless/dvhub/releases/download/channels/index-dev-v2.json.sig' && remote.bridge && remote.indexSig) {
       res.statusCode = remote.sigStatus;
       res.end('sig');
@@ -181,7 +187,7 @@ test('grün → bauen, veröffentlichen, Zustand; zweiter Lauf tut nichts', { sk
   const calls = w.calls();
   assert.equal(calls.length, 2, calls.join('\n'));
   assert.equal(calls[0], `build ${w.sha} scope=dev key=devkey agent=nein`);
-  assert.match(calls[1], /^publish .*1\.0\.12-dev\.20261124000000\.[0-9a-f]{8} --sig-scope dev --key .*devkey token=ja agent=nein$/);
+  assert.match(calls[1], /^publish .*1\.0\.12-dev\.20261124000000\.[0-9a-f]{8} --repo .*\/repo --sig-scope dev --key .*devkey token=ja agent=nein$/);
   assert.doesNotMatch(calls[1], /--dry-run/);
   assert.match(w.state('published'), new RegExp(`^${w.sha} .* worker$`, 'm'));
   assert.match(w.notes().join('\n'), /veröffentlicht/);
@@ -422,4 +428,14 @@ test('Signatur des Index gerade nicht abrufbar (5xx) → später, kein Neubau', 
   assert.equal((await w.run()).code, 1);
   assert.deepEqual(w.calls(), []);
   assert.match(w.log(), /Signatur des Kanal-Index nicht abrufbar/);
+});
+
+test('Index zeigt auf ein Release ohne die Dateien → nicht „veröffentlicht“ (Box lädt über die Index-URLs)', { skip }, async (t) => {
+  const w = await setup(t);
+  w.remote.extra.add(w.sha);
+  w.remote.bridgeShas.add(w.sha);   // Dateien nur in dev-bridge …
+  w.remote.indexTag = 'dev';        // … der Index zeigt aber auf dev
+  await w.run();
+  assert.match(w.log(), /nur teilweise am Release dev/);
+  assert.equal(w.calls().filter((c) => c.startsWith('build')).length, 1);
 });
