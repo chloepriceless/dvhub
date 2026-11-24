@@ -349,5 +349,10 @@ test('reines PostgreSQL: has15mFor verlangt 15-min-Werte je Reihe, nicht irgende
         SELECT 'grid_voltage_l1_v', 'live', 'local_poll', to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 1, 1, 5
           FROM generate_series(0, 95) g`, [day]);
       assert.equal(await has15mFor(q, day, day + 86_400_000), true, 'jede Reihe hat ihren Ersatz');
+      // Grobe Live-Probe (≥ 900 s) verdichten die Stufen nicht, pruneRawBefore löscht sie aber mit — ohne eigenen
+      // Ersatz sperrt sie das Löschen (Codex f66da2c5 P1).
+      await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+        VALUES ('grid_voltage_l3_v', 'live', 'local_poll', 'raw', to_timestamp($1::double precision / 1000) + INTERVAL '1 hour', 900, 230)`, [day]);
+      assert.equal(await has15mFor(q, day, day + 86_400_000), false, 'grobe Probe ohne Ersatz → nicht löschen');
     });
   });

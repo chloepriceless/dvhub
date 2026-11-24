@@ -24,7 +24,7 @@
 // Aufrufer: storage-guard.js (Profil-Aufbewahrung je Lauf und Notfall-Stufen
 // bei „kritisch“).
 
-import { aggregatedUntil, TIER_SOURCE_MAX_RES_S } from './telemetry-tiers.js';
+import { aggregatedUntil } from './telemetry-tiers.js';
 
 export async function rawCompactedUntil(query) {
   const v = await aggregatedUntil({ query });
@@ -80,17 +80,18 @@ export async function oldestRawUnit(query, { timescale }) {
  * auch nicht (Codex Integration 24.11., P1): auf einer aufgerüsteten Box steht
  * energy_slots_15m schon für jede Viertelstunde, die Stufen sind aber noch nicht
  * nachgefüllt — Spannungen, Phasen usw. wären sonst ohne Ersatz weg.
- * Gezählt werden nur Rohwerte, die die Stufen auch verdichten (feiner als
- * 15 min, nicht „invalid“, mit Wert) — sonst sperrte eine ungültige Probe das
- * Löschen für immer. Fehlt die Stufen-Tabelle, zählt nur energy_slots_15m.
+ * Ungültige Proben („invalid“) und Proben ohne Wert zählen nicht — sie
+ * verdichten die Stufen nie und sperrten das Löschen sonst für immer. Grobe
+ * Live-Proben (≥ 15 min) zählen mit: die Stufen verdichten sie nicht,
+ * pruneRawBefore löscht sie aber mit — ohne eigenen Energie-Slot sperren sie
+ * (Codex f66da2c5). Fehlt die Stufen-Tabelle, zählt nur energy_slots_15m.
  */
 export async function has15mFor(query, fromMs, toMs) {
   const p = [new Date(fromMs).toISOString(), new Date(toMs).toISOString()];
   const raw = `SELECT DISTINCT date_bin('15 minutes', ts_utc, TIMESTAMPTZ '2000-01-01') AS q, series_key, scope, source
       FROM timeseries_samples
       WHERE scope = 'live' AND series_key NOT LIKE 'price%' AND ts_utc >= $1 AND ts_utc < $2
-        AND resolution_seconds < ${TIER_SOURCE_MAX_RES_S} AND quality <> 'invalid'
-        AND (value_num IS NOT NULL OR value_text IS NOT NULL)`;
+        AND quality <> 'invalid' AND (value_num IS NOT NULL OR value_text IS NOT NULL)`;
   const energy = `EXISTS (SELECT 1 FROM energy_slots_15m e WHERE e.slot_start_utc = r.q AND e.series_key = r.series_key)`;
   const withTier = `SELECT count(*) AS missing FROM (${raw}) r
       WHERE NOT ${energy}
