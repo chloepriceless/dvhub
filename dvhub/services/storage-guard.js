@@ -190,6 +190,9 @@ export function createStorageGuard({
   notify = null,
   // Notfall-Pfad: einen Zeitraum synchron in 1 min + 15 min verdichten (telemetry-tiers.js).
   aggregateRange = null,
+  // Nachrechnungen, die alte Rohwerte lesen (Abdeckung T14, AC-PV, Speicherweg): die Profil-Aufbewahrung wartet,
+  // bis sie fertig sind (Codex Integration 24.11.). Notfall-Pfade („kritisch“) warten nicht.
+  rawConsumersReady = () => true,
 } = {}) {
   let last = null;
   let running = false;
@@ -277,6 +280,7 @@ export function createStorageGuard({
   let profileInfo = null;           // letzte Entscheidung
   let lastEffective = initialProfile || startupProfile(getDataDir?.(), readFile).name;
   let retentionDay = null;          // Profil-Aufbewahrung höchstens einmal am Tag
+  let rawRetentionDay = null;       // dasselbe für die Rohwerte (wartet ggf. auf die Nachrechnungen)
   let retuneAt = -Infinity;         // letzter Neuversuch der Kompressions-Einrichtung
   let knownPgDataDir = null;        // nativ: PG-Datenverzeichnis (für isCritical vor dem ersten Lauf)
 
@@ -511,25 +515,31 @@ export function createStorageGuard({
           // 1-min-Stufe (D1 a): klein 365, winzig 180 Tage, ohne Kompression 90; 15-min für immer.
           const tier1mKeep = noCompression() ? NO_COMPRESSION_TIER1M_KEEP_DAYS : (eff?.tier1mKeepDays ?? null);
           // Nicht bei nicht messbarer DB-Platte: dann räumt DVhub in der DB nichts auf (Codex 33062ac7).
-          if ((eff?.rawKeepDays || tier1mKeep) && retentionDay !== day && !dbUnmeasured) {
-            retentionDay = day;
-            if (eff?.rawKeepDays) {
+          if (eff?.rawKeepDays && rawRetentionDay !== day && !dbUnmeasured) {
+            let ready = true;
+            try { ready = rawConsumersReady() !== false; } catch { ready = true; }
+            if (!ready) {
+              // Nicht für heute abhaken: beim nächsten Lauf erneut, sobald die Nachrechnungen fertig sind.
+              out.actions.push({ action: 'retain_raw', deferred: 'raw_backfills' });
+            } else {
+              rawRetentionDay = day;
               try { await profileRetention(db, ts, eff, out); } catch (e) {
                 out.actions.push({ action: 'retain_raw', error: String(e?.message || e).slice(0, 200) });
                 logGuardError(e);
               }
             }
-            if (tier1mKeep) {
-              try {
-                const r = await pruneOneMinuteTier(db, { olderThan: new Date(now() - tier1mKeep * 86_400_000).toISOString() });
-                if (r.cutoff && (r.droppedChunks || r.deletedRows)) {
-                  out.actions.push({ action: 'retain_1m', keepDays: tier1mKeep, before: r.cutoff, droppedChunks: r.droppedChunks, deletedRows: r.deletedRows });
-                  log('storage_tier1m_retention', { keepDays: tier1mKeep, before: r.cutoff }, 'info');
-                }
-              } catch (e) {
-                out.actions.push({ action: 'retain_1m', error: String(e?.message || e).slice(0, 200) });
-                logGuardError(e);
+          }
+          if (tier1mKeep && retentionDay !== day && !dbUnmeasured) {
+            retentionDay = day;
+            try {
+              const r = await pruneOneMinuteTier(db, { olderThan: new Date(now() - tier1mKeep * 86_400_000).toISOString() });
+              if (r.cutoff && (r.droppedChunks || r.deletedRows)) {
+                out.actions.push({ action: 'retain_1m', keepDays: tier1mKeep, before: r.cutoff, droppedChunks: r.droppedChunks, deletedRows: r.deletedRows });
+                log('storage_tier1m_retention', { keepDays: tier1mKeep, before: r.cutoff }, 'info');
               }
+            } catch (e) {
+              out.actions.push({ action: 'retain_1m', error: String(e?.message || e).slice(0, 200) });
+              logGuardError(e);
             }
           }
           // Notfall „kritisch“: wie bisher Rohwerte stufenweise (365 → 180 → 90 → 30 Tage).

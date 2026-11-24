@@ -260,3 +260,23 @@ for (const metaType of ['jsonb', 'text']) {
     }
   });
 }
+
+// Codex Integration 24.11.: die Platz-Wache wartet mit der Profil-Aufbewahrung, bis die Nachrechnung durch ist.
+test('isDone: erst nach dem Kontroll-Scan ohne offene Tage bzw. nach einem ganzen Durchgang', async () => {
+  const { createCoverageBackfill } = await import('../services/history-backfill/coverage.js');
+  let open = [{ day: '2026-10-01' }];
+  const db = { async query(sql) {
+    if (/data_type/.test(sql)) return { rows: [{ data_type: 'text' }] };
+    if (/UPDATE/.test(sql)) return { rowCount: 3 };
+    return { rows: open };
+  } };
+  let t = 0;
+  const b = createCoverageBackfill({ getDb: () => db, now: () => (t += 1000) });
+  assert.equal(b.isDone(), false);
+  await b.runOnce();
+  assert.equal(b.isDone(), true, 'ganzer Durchgang (ein offener Tag) gelaufen');
+  open = [];
+  const b2 = createCoverageBackfill({ getDb: () => db, now: () => (t += 1000) });
+  await b2.runOnce();
+  assert.equal(b2.isDone(), true, 'nichts offen');
+});

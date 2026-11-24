@@ -346,6 +346,7 @@ export function createStorageEfficiencyDaily({ getDb, getCfg, pushLog, maxBackfi
   let running = false;
   let firstRawDay = null;
   let finalizedDay = null;
+  let backfillDone = false;   // keine älteren Tage mehr offen (Platz-Wache wartet darauf)
   const timeZone = () => getCfg?.()?.timeZone || 'Europe/Berlin';
   const log = (event, data) => { if (typeof pushLog === 'function') pushLog(event, data); };
 
@@ -370,7 +371,7 @@ export function createStorageEfficiencyDaily({ getDb, getCfg, pushLog, maxBackfi
     if (running) return { skipped: 'already running' };
     const db = getDb?.();
     if (!db || typeof db.query !== 'function') return { skipped: 'no database' };
-    if (!storageEfficiencyCapability(getCfg?.() || {}).measurable) return { skipped: 'not measurable' };
+    if (!storageEfficiencyCapability(getCfg?.() || {}).measurable) { backfillDone = true; return { skipped: 'not measurable' }; }
     running = true;
     const computed = [];
     try {
@@ -394,6 +395,10 @@ export function createStorageEfficiencyDaily({ getDb, getCfg, pushLog, maxBackfi
           await computeDay(db, row.day);
           computed.push(row.day);
         }
+        // Weniger als ein voller Schub offen → nach diesem Lauf ist alles nachgeholt.
+        if ((missing.rows || []).length < maxBackfillDays) backfillDone = true;
+      } else {
+        backfillDone = true;
       }
       log('storage_efficiency_daily', { days: computed.length, newest: computed[0], oldest: computed[computed.length - 1] });
       return { computed };
@@ -405,5 +410,5 @@ export function createStorageEfficiencyDaily({ getDb, getCfg, pushLog, maxBackfi
     }
   }
 
-  return { runOnce, computeDay };
+  return { runOnce, computeDay, isBackfillDone: () => backfillDone };
 }

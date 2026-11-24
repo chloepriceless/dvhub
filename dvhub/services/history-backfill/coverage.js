@@ -223,6 +223,7 @@ export function createCoverageBackfill({ getDb, pushLog, onDayUpdated = null, no
   let queue = null;          // offene Tage, neueste zuerst
   let metaType = null;
   let doneAt = null;         // letzter Kontroll-Scan ohne offene Tage
+  let passDone = false;      // ein ganzer Durchgang über die offenen Tage ist gelaufen (Platz-Wache wartet darauf)
   let pauseUntil = 0;        // frühester nächster Tag (Laufzeit × COVERAGE_PAUSE_FACTOR)
   const log = (event, data) => { if (typeof pushLog === 'function') pushLog(event, data); };
 
@@ -255,6 +256,7 @@ export function createCoverageBackfill({ getDb, pushLog, onDayUpdated = null, no
       const to = new Date(Date.parse(from) + DAY_MS).toISOString();
       const res = await db.query(coverageUpdateSql(metaType), COVERAGE_UPDATE_PARAMS(from, to));
       const updated = Number(res.rowCount) || 0;
+      if (queue.length === 0) passDone = true;
       pauseUntil = now() + (now() - startedAt) * COVERAGE_PAUSE_FACTOR;
       // Prüfwert-Speicher der Historie verwerfen (sonst bis zu 6 h alte Quellwahl).
       if (updated > 0 && typeof onDayUpdated === 'function') {
@@ -272,5 +274,7 @@ export function createCoverageBackfill({ getDb, pushLog, onDayUpdated = null, no
     }
   }
 
-  return { runOnce };
+  // Fertig für die Platz-Wache: nichts mehr offen, oder ein ganzer Durchgang gelaufen (Tage, die offen bleiben —
+  // z. B. ohne passenden VRM-Vergleich —, sperren die Aufbewahrung nicht für immer).
+  return { runOnce, isDone: () => doneAt != null || passDone };
 }

@@ -2900,6 +2900,9 @@ const telemetryReady = (async () => {
       },
       // Notfall-Pfad: ältesten Zeitraum erst verdichten, dann löschen (E2E kleine Platte S4).
       aggregateRange: (fromMs, toMs) => ctx.telemetryTiers.aggregateRange(fromMs, toMs),
+      // Profil-Aufbewahrung erst, wenn die Nachrechnungen aus Rohwerten durch sind (T14-Abdeckung, AC-PV,
+      // Speicherweg) — sonst wären ihre Eingaben weg, bevor sie liefen (Codex Integration 24.11.).
+      rawConsumersReady: () => coverageBackfill.isDone() && pvAcBackfill.isDone() && storageEfficiencyDaily.isBackfillDone(),
       // S11 a: Push ab „wenig“ (Portal über storage_space_error im Audit-Log).
       notify: (msg) => ctx.notifyDirect(msg),
       // „wenig“/„kritisch“: Log-Aufbewahrung sofort laufen lassen (S5 c, „Vollständig“ ruht dann).

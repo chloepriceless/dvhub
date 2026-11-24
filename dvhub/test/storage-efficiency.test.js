@@ -344,3 +344,22 @@ test('SQL: zweite GX — die gemessene Last der Haupt-GX zählt (wie daily.js)',
     await client.end();
   }
 });
+
+// Codex Integration 24.11.: Platz-Wache wartet auf die Nachrechnung älterer Tage.
+test('isBackfillDone: erst wenn weniger als ein voller Schub älterer Tage offen war', async () => {
+  const { createStorageEfficiencyDaily } = await import('../services/inverter-efficiency/storage.js');
+  let missing = Array.from({ length: 31 }, (_, i) => ({ day: `2026-09-${String(i % 28 + 1).padStart(2, '0')}` }));
+  const db = { async query(sql) {
+    if (/first_day/.test(sql)) return { rows: [{ first_day: '2026-01-01' }] };
+    if (sql.includes('FROM generate_series($1::date')) return { rows: missing };
+    return { rows: [{}] };
+  } };
+  const cfg = { manufacturer: 'victron' };
+  const job = createStorageEfficiencyDaily({ getDb: () => db, getCfg: () => cfg, maxBackfillDays: 31 });
+  assert.equal(job.isBackfillDone(), false);
+  await job.runOnce({ now: new Date('2026-11-24T12:00:00Z') });
+  assert.equal(job.isBackfillDone(), false, 'voller Schub → es kann noch mehr offen sein');
+  missing = missing.slice(0, 3);
+  await job.runOnce({ now: new Date('2026-11-24T13:00:00Z') });
+  assert.equal(job.isBackfillDone(), true);
+});

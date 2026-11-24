@@ -341,6 +341,25 @@ test('Profil „winzig“: Rohwerte älter als 30 Tage gehen, nie jünger als de
   assert.ok(!r2.actions.some((a) => a.action === 'retain_raw'), 'höchstens einmal am Tag');
 });
 
+// Codex Integration 24.11. (P2): Abdeckungs-, AC-PV- und Speicherweg-Nachrechnung lesen Rohwerte. Die
+// Profil-Aufbewahrung wartet, bis sie fertig sind — sonst wären ihre Eingaben weg, bevor sie liefen.
+test('Profil-Aufbewahrung wartet auf die Nachrechnungen aus Rohwerten, danach wie gewohnt', async () => {
+  let t = Date.parse('2026-11-23T12:00:00Z');
+  let ready = false;
+  const db = fakeDb({ oldestDays: 90, aggUntil: '2026-11-01T00:00:00Z' });
+  const g = createStorageGuard({ getDb: () => db, statfs: stat(60), now: () => t, initialProfile: 'winzig',
+    profileIo: { writeFile() {}, rename() {} }, rawConsumersReady: () => ready });
+  g.chooseProfile('winzig');
+  const r = await settled(g);
+  assert.ok(!r.actions.some((a) => a.action === 'retain_raw' && a.before), 'nichts gelöscht');
+  assert.ok(r.actions.some((a) => a.action === 'retain_raw' && a.deferred === 'raw_backfills'), JSON.stringify(r.actions));
+  ready = true; t += 30 * 60_000;
+  const r2 = await g.check();
+  const ret = r2.actions.find((a) => a.action === 'retain_raw' && a.before);
+  assert.ok(ret, 'am selben Tag nachgeholt, sobald fertig');
+  assert.equal(ret.keepDays, 30);
+});
+
 test('Profilwahl per Klick: „auto“ übernimmt den Vorschlag', async () => {
   const db = fakeDb({ oldestDays: 500 });
   const big = () => ({ blocks: 12 * 1024, bsize: 1048576, bavail: 10 * 1024 });

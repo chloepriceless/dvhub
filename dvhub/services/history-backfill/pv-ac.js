@@ -90,6 +90,7 @@ export function createPvAcBackfill({ getDb, pushLog, onDayUpdated = null, now = 
   let queue = null;
   let firstDay = null;
   let doneAt = null;
+  let passDone = false;   // ein ganzer Durchgang ist gelaufen (Platz-Wache wartet darauf)
   let pauseUntil = 0;
   const processed = new Set();
   const log = (event, data) => { if (typeof pushLog === 'function') pushLog(event, data); };
@@ -128,6 +129,7 @@ export function createPvAcBackfill({ getDb, pushLog, onDayUpdated = null, now = 
       const to = new Date(Date.parse(from) + DAY_MS).toISOString();
       const res = await db.query(PV_AC_INSERT_SQL, [from, to]);
       processed.add(day);   // erst nach Erfolg (Codex eea3b53a)
+      if (queue.length === 0) passDone = true;
       const inserted = Number(res.rowCount) || 0;
       pauseUntil = now() + (now() - startedAt) * COVERAGE_PAUSE_FACTOR;
       if (inserted > 0 && typeof onDayUpdated === 'function') {
@@ -144,5 +146,5 @@ export function createPvAcBackfill({ getDb, pushLog, onDayUpdated = null, now = 
     }
   }
 
-  return { runOnce };
+  return { runOnce, isDone: () => doneAt != null || passDone };
 }
