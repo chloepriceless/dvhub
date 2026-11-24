@@ -436,6 +436,14 @@ function fixtureRepoDev(version = '1.0.10') {
   return f;
 }
 
+// dev seit dem dev-Schlüssel (24.11.2026): publish-release schreibt index-dev-v2.json
+// und verlangt, dass es ihn schon gibt (Brücke erledigt). Für Trockenläufe ohne
+// Brücke: leerer Platzhalter als Vorgänger — so wie der dev-Worker es macht.
+function seedV2(dest) {
+  fs.mkdirSync(path.join(dest, 'channels'), { recursive: true });
+  fs.writeFileSync(path.join(dest, 'channels', 'index-dev-v2.json'), '{"format":1,"channel":"dev","latest":null,"releases":[]}\n');
+}
+
 // Falsches gh im PATH: protokolliert und scheitert — kein Test darf GitHub erreichen.
 // Mehr als 30 Commit-Betreffe seit dem vorigen dev-Paket: `git log … | head -30`
 // unter `set -o pipefail` bricht mit SIGPIPE (Exit 141) ab, sobald head nach 30
@@ -448,12 +456,13 @@ test('publish-release.sh --dry-run: mehr als 30 Commits seit dem vorigen dev-Pak
     const { key } = keypair(work, 'k');
     const gh = fakeGh(work);
     const dest = path.join(work, 'pub');
+    seedV2(dest);
     const env = { ...process.env, PATH: `${gh.bin}:${process.env.PATH}` };
     const pubOnce = (outDir) => {
-      const r = build(dir, outDir, ['HEAD', '--key', key]);
+      const r = build(dir, outDir, ['HEAD', '--sig-scope', 'dev', '--key', key]);
       assert.equal(r.status, 0, r.stdout + r.stderr);
       const version = fs.readdirSync(outDir)[0];
-      const p = spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), path.join(outDir, version), '--key', key, '--repo', dir, '--dry-run', '--dest', dest], { encoding: 'utf8', env });
+      const p = spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), path.join(outDir, version), '--sig-scope', 'dev', '--key', key, '--repo', dir, '--dry-run', '--dest', dest], { encoding: 'utf8', env });
       return Object.assign(p, { version });
     };
     const first = pubOnce(path.join(work, 'o1'));
@@ -463,7 +472,7 @@ test('publish-release.sh --dry-run: mehr als 30 Commits seit dem vorigen dev-Pak
     for (let i = 1; i <= 400; i += 1) git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-q', '-m', `fix: Änderung ${i} ${lang}`);
     const second = pubOnce(path.join(work, 'o2'));
     assert.equal(second.status, 0, `Exit ${second.status}: ${second.stdout}${second.stderr}`);
-    const idx = JSON.parse(fs.readFileSync(path.join(dest, 'channels', 'index-dev.json'), 'utf8'));
+    const idx = JSON.parse(fs.readFileSync(path.join(dest, 'channels', 'index-dev-v2.json'), 'utf8'));
     const entry = idx.releases.find((r) => r.version === second.version);
     assert.ok(entry, `Eintrag ${second.version} im Index`);
     assert.ok(idx.releases.some((r) => r.version === first.version), 'Vorgänger bleibt im Index');
@@ -484,7 +493,7 @@ function fakeGh(work) {
   return { bin, log };
 }
 
-test('dev-Paket: build-release.sh HEAD + publish-release.sh --dry-run → signierter index-dev.json, Box nimmt ihn an', { timeout: 180000 }, async () => {
+test('dev-Paket: build-release.sh HEAD + publish-release.sh --dry-run (dev-Schlüssel) → signierter index-dev-v2.json, Box nimmt ihn an', { timeout: 180000 }, async () => {
   const { createRequire } = await import('node:module');
   const H = createRequire(import.meta.url)(path.join(repoRoot, 'dvhub-release.cjs'));
   const { dir, git } = fixtureRepoDev('1.0.10');
@@ -492,7 +501,7 @@ test('dev-Paket: build-release.sh HEAD + publish-release.sh --dry-run → signie
   try {
     const sha = git('rev-parse', 'HEAD');
     const { key, pub } = keypair(work, 'k');
-    const r = build(dir, path.join(work, 'o'), ['HEAD', '--key', key]);
+    const r = build(dir, path.join(work, 'o'), ['HEAD', '--sig-scope', 'dev', '--key', key]);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     const rel = JSON.parse(fs.readFileSync(path.join(work, 'o', fs.readdirSync(path.join(work, 'o'))[0], 'release.json'), 'utf8'));
     assert.equal(rel.channel, 'dev');
@@ -503,22 +512,33 @@ test('dev-Paket: build-release.sh HEAD + publish-release.sh --dry-run → signie
     const gh = fakeGh(work);
     const dest = path.join(work, 'pub');
     const env = { ...process.env, PATH: `${gh.bin}:${process.env.PATH}` };
-    const p = spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), path.join(work, 'o', rel.version), '--key', key, '--repo', dir, '--dry-run', '--dest', dest], { encoding: 'utf8', env });
+    const pubArgs = [path.join(repoRoot, 'scripts/release/publish-release.sh'), path.join(work, 'o', rel.version), '--key', key, '--repo', dir, '--dry-run', '--dest', dest];
+    // Ohne --sig-scope dev: index-dev.json ist eingefroren → verweigert; ohne Brücke (kein index-dev-v2.json) ebenso.
+    let p = spawnSync('bash', pubArgs, { encoding: 'utf8', env });
+    assert.notEqual(p.status, 0); assert.match(p.stderr, /eingefroren/);
+    p = spawnSync('bash', [...pubArgs, '--sig-scope', 'dev'], { encoding: 'utf8', env });
+    assert.notEqual(p.status, 0); assert.match(p.stderr, /Brücken-Paket/);
+    seedV2(dest);
+    p = spawnSync('bash', [...pubArgs, '--sig-scope', 'dev'], { encoding: 'utf8', env });
     assert.equal(p.status, 0, p.stdout + p.stderr);
     assert.ok(!fs.existsSync(gh.log), 'Dry-Run ruft gh nicht auf');
     assert.ok(fs.existsSync(path.join(dest, 'dev', `dvhub-${rel.version}-arm64.tar.gz`)), 'Paket am Vorab-Release dev');
-    const idxFile = path.join(dest, 'channels', 'index-dev.json');
+    assert.ok(!fs.existsSync(path.join(dest, 'channels', 'index-dev.json')), 'alte index-dev.json bleibt unangetastet');
+    const idxFile = path.join(dest, 'channels', 'index-dev-v2.json');
     const idx = JSON.parse(fs.readFileSync(idxFile, 'utf8'));
     assert.equal(idx.channel, 'dev');
     assert.equal(idx.latest, rel.version);
     assert.equal(idx.releases[0].artifacts.arm64.url, `../dev/dvhub-${rel.version}-arm64.tar.gz`);
     assert.deepEqual(idx.releases[0].changes, ['feat: etwas Neues', 'init']);
     H.validateIndex(idx, 'dev');   // Prüfung der Box
-    fs.writeFileSync(path.join(work, 'allowed'), `dvhub-release namespaces="dvhub-release,dvhub-release-index" ${pub}\n`);
-    const v = spawnSync('ssh-keygen', ['-Y', 'verify', '-f', path.join(work, 'allowed'), '-I', 'dvhub-release', '-n', 'dvhub-release-index', '-s', `${idxFile}.sig`], { input: fs.readFileSync(idxFile) });
-    assert.equal(v.status, 0, `Index-Signatur (Namensraum dvhub-release-index): ${v.stderr}`);
-    const wrongNs = spawnSync('ssh-keygen', ['-Y', 'verify', '-f', path.join(work, 'allowed'), '-I', 'dvhub-release', '-n', 'dvhub-release', '-s', `${idxFile}.sig`], { input: fs.readFileSync(idxFile) });
-    assert.notEqual(wrongNs.status, 0, 'Index nicht im Paket-Namensraum signiert');
+    // Vertrauenszeile wie für den dev-Schlüssel in release-keys/allowed_signers.
+    fs.writeFileSync(path.join(work, 'allowed'), `dvhub-release namespaces="dvhub-release-dev,dvhub-release-index-dev" ${pub}\n`);
+    const verify = (ns, file) => spawnSync('ssh-keygen', ['-Y', 'verify', '-f', path.join(work, 'allowed'), '-I', 'dvhub-release', '-n', ns, '-s', `${file}.sig`], { input: fs.readFileSync(file) });
+    assert.equal(verify('dvhub-release-index-dev', idxFile).status, 0, 'Index-Signatur (Namensraum dvhub-release-index-dev)');
+    for (const ns of ['dvhub-release-index', 'dvhub-release', 'dvhub-release-dev']) assert.notEqual(verify(ns, idxFile).status, 0, `Index nicht gültig für ${ns}`);
+    const pkg = path.join(dest, 'dev', `dvhub-${rel.version}-arm64.tar.gz`);
+    assert.equal(verify('dvhub-release-dev', pkg).status, 0, 'Paket im Namensraum dvhub-release-dev');
+    assert.notEqual(verify('dvhub-release', pkg).status, 0, 'Paket nicht als stable-Paket gültig');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(work, { recursive: true, force: true });
@@ -530,12 +550,12 @@ test('publish-release.sh dev: nur Commits, die auf origin/main liegen (nichts Un
   const work = tmp('dvhub-dev-guard-');
   try {
     const { key } = keypair(work, 'k');
-    const r = build(dir, path.join(work, 'o'), ['HEAD', '--key', key]);
+    const r = build(dir, path.join(work, 'o'), ['HEAD', '--sig-scope', 'dev', '--key', key]);
     assert.equal(r.status, 0, r.stdout + r.stderr);
     const out = path.join(work, 'o', fs.readdirSync(path.join(work, 'o'))[0]);
     const gh = fakeGh(work);
     const env = { ...process.env, PATH: `${gh.bin}:${process.env.PATH}` };
-    const pub = (extra) => spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), out, '--key', key, '--repo', dir, '--gh-repo', 'nobody/nothing', ...extra], { encoding: 'utf8', env });
+    const pub = (extra) => spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), out, '--sig-scope', 'dev', '--key', key, '--repo', dir, '--gh-repo', 'nobody/nothing', ...extra], { encoding: 'utf8', env });
     // Kein origin/main: ablehnen, bevor gh irgendetwas tut.
     const p1 = pub([]);
     assert.notEqual(p1.status, 0, p1.stdout + p1.stderr);
@@ -554,6 +574,7 @@ test('publish-release.sh dev: nur Commits, die auf origin/main liegen (nichts Un
     assert.ok(fs.existsSync(gh.log), 'erst jetzt gh');
     // Dry-Run auf einem ungepushten Stand: nur ein Hinweis.
     git('update-ref', '-d', 'refs/remotes/origin/main');
+    seedV2(path.join(work, 'dest'));
     const p4 = pub(['--dry-run', '--dest', path.join(work, 'dest')]);
     assert.equal(p4.status, 0, p4.stderr);
     assert.match(p4.stderr, /origin\/main/);
@@ -723,6 +744,14 @@ test('publish-release.sh (P3-6): bisheriger Index bleibt drin, Zwischennamen + U
     assert.equal(fs.readFileSync(`${idxFile}.sig`, 'utf8'), liveSig, 'lebende Signatur = alte, passend zum Index');
     // Codex 11f469a2: das alte Paar bleibt dauerhaft neben dem Build liegen (Hand-Reparatur, falls auch das Hochladen scheitert).
     assert.equal(fs.readFileSync(path.join(out, 'channels-restore', 'index-stable.json'), 'utf8'), live);
+    // Codex 3aa7d678: bestätigt wiederhergestellt → Marke, damit der dev-Worker nicht dauerhaft anhält.
+    assert.ok(fs.existsSync(path.join(out, 'channels-restore', 'bestaetigt')));
+    // Codex 6d0643fe: ein neuer Versuch, dessen Wiederherstellung scheitert, darf die alte Marke nicht erben.
+    fs.rmSync(path.join(gh.store, 'patch-failed'), { force: true });
+    const again = run({ FAKE_GH_PATCH_FAIL: 'index-stable.json', FAKE_GH_UPLOAD_FAIL: 'index-stable.json' });
+    assert.notEqual(again.status, 0);
+    assert.ok(!fs.existsSync(path.join(out, 'channels-restore', 'bestaetigt')), 'keine alte Marke bei unbestätigter Wiederherstellung');
+    assert.ok(fs.existsSync(path.join(out, 'channels-restore', 'index-stable.json')), 'Paar bleibt für die Hand-Reparatur');
 
     // (5) Lebender Index fehlt (Abbruch zwischen Sichern und Umstellen): Vorgänger aus ….new, nicht „erster Index“.
     const ch = path.join(gh.store, 'rel', 'channels');
@@ -757,6 +786,126 @@ test('publish-release.sh (P3-6): ohne Kanal-Release (404) erster Index ohne Vorg
     const idx = JSON.parse(fs.readFileSync(gh.file('channels', 'index-stable.json'), 'utf8'));
     assert.deepEqual(idx.releases.map((x) => x.version), ['1.2.3']);
     assert.ok(fs.existsSync(gh.file('v1.2.3', 'dvhub-1.2.3-arm64.tar.gz')));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+// dev-Schlüssel (24.11.2026): nur für dev-Stände; Tags (stable) brechen ab.
+test('build-release --sig-scope dev: Tag-Ref (stable) wird abgelehnt', () => {
+  const dir = tmp('dvhub-scope-');
+  try {
+    const run = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+    run('init', '-q');
+    fs.mkdirSync(path.join(dir, 'dvhub'));
+    fs.writeFileSync(path.join(dir, 'dvhub/package.json'), JSON.stringify({ name: 'dvhub', version: '1.0.0' }));
+    run('add', '-A'); run('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'x'); run('tag', 'v1.0.0');
+    const key = path.join(dir, 'k');
+    assert.equal(spawnSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', key]).status, 0);
+    const r = spawnSync('bash', [BUILD, 'v1.0.0', '--repo', dir, '--out', path.join(dir, 'out'), '--sig-scope', 'dev', '--key', key, '--no-eebus'], { encoding: 'utf8' });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /nur für dev-Stände/);
+    const bad = spawnSync('bash', [BUILD, 'HEAD', '--repo', dir, '--sig-scope', 'stable'], { encoding: 'utf8' });
+    assert.notEqual(bad.status, 0);
+    assert.match(bad.stderr, /--sig-scope release oder dev/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// dev-Schlüssel + Brücke gegen das nachgebaute GitHub (nicht nur Dry-Run):
+// Brücke friert index-dev.json ein (v2 zuerst umgestellt), dev-Schlüssel
+// schreibt nur index-dev-v2.json, ein unterbrochenes Umstellen (nur .new da)
+// blockiert nicht (Codex ac5e49a1), und der Notweg ohne dev-Schlüssel
+// (--release-key-only) signiert v2 mit dem Release-Schlüssel.
+test('publish-release.sh dev: Brücke, dev-Schlüssel, Zwischenstand, Notweg — gegen nachgebautes GitHub', { timeout: 300000 }, () => {
+  const { dir } = fixtureRepo();
+  const work = tmp('dvhub-pub-bridge-');
+  try {
+    const rel = keypair(work, 'rel');
+    const dev = keypair(work, 'dev');
+    const w = (p, c) => { fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true }); fs.writeFileSync(path.join(dir, p), c); };
+    let n = 0;
+    const commit = (msg) => {
+      n += 1;
+      const env = { ...process.env, GIT_AUTHOR_DATE: `2026-11-0${n}T10:00:00Z`, GIT_COMMITTER_DATE: `2026-11-0${n}T10:00:00Z` };
+      for (const a of [['add', '-A'], ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', msg], ['update-ref', 'refs/remotes/origin/main', 'HEAD']]) {
+        const r = spawnSync('git', a, { cwd: dir, encoding: 'utf8', env });
+        assert.equal(r.status, 0, r.stderr);
+      }
+    };
+    w('dvhub/package.json', JSON.stringify({ name: 'dvhub', version: '1.3.0', type: 'module', engines: { node: '>=22.0.0' } }));
+    w('dvhub/package-lock.json', JSON.stringify({ name: 'dvhub', version: '1.3.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'dvhub', version: '1.3.0' } } }));
+    w('dvhub-release.cjs', fs.readFileSync(path.join(repoRoot, 'dvhub-release.cjs'), 'utf8'));
+    w('release-keys/allowed_signers', `dvhub-release namespaces="dvhub-release,dvhub-release-index" ${rel.pub}\ndvhub-release namespaces="dvhub-release-dev,dvhub-release-index-dev" ${dev.pub}\n`);
+    commit('feat: Brücke');
+
+    const gh = statefulGh(work);
+    const oldIdx = path.join(work, 'old-index.json');
+    fs.writeFileSync(oldIdx, JSON.stringify({ format: 1, channel: 'dev', latest: '1.2.0-dev.20261001000000.aaaaaaaa', releases: [{ version: '1.2.0-dev.20261001000000.aaaaaaaa', git_sha: 'a'.repeat(40), artifacts: {} }] }));
+    gh.seed('channels', 'index-dev.json', oldIdx);
+    gh.seed('channels', 'index-dev.json.sig', oldIdx);
+    const env = { ...process.env, PATH: `${gh.bin}:${process.env.PATH}` };
+    const out = (name) => path.join(work, name);
+    const buildAt = (name, ...extra) => {
+      const r = build(dir, out(name), ['HEAD', ...extra]);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      return path.join(out(name), fs.readdirSync(out(name))[0]);
+    };
+    const publish = (b, ...extra) => spawnSync('bash', [path.join(repoRoot, 'scripts/release/publish-release.sh'), b, '--repo', dir, '--gh-repo', 'o/r', ...extra], { encoding: 'utf8', env });
+    const chan = (name) => gh.file('channels', name);
+    const verify = (file, ns, pub) => {
+      fs.writeFileSync(path.join(work, 'allowed'), `dvhub-release namespaces="${ns}" ${pub}\n`);
+      return spawnSync('ssh-keygen', ['-Y', 'verify', '-f', path.join(work, 'allowed'), '-I', 'dvhub-release', '-n', ns, '-s', `${file}.sig`], { input: fs.readFileSync(file) }).status === 0;
+    };
+
+    // Vor der Brücke: dev-Schlüssel verweigert.
+    const early = buildAt('o0', '--sig-scope', 'dev', '--key', dev.key);
+    let p = publish(early, '--sig-scope', 'dev', '--key', dev.key);
+    assert.notEqual(p.status, 0); assert.match(p.stderr, /erst das Brücken-Paket/);
+
+    // Brücke.
+    const bridge = buildAt('o1', '--key', rel.key);
+    p = publish(bridge, '--bridge', '--key', rel.key, '--dev-key', dev.key);
+    assert.equal(p.status, 0, p.stdout + p.stderr);
+    const bridgeV = path.basename(bridge);
+    assert.ok(fs.existsSync(gh.file('dev-bridge', `dvhub-${bridgeV}-arm64.tar.gz`)));
+    assert.deepEqual(JSON.parse(fs.readFileSync(chan('index-dev.json'), 'utf8')).releases.map((x) => x.version), [bridgeV]);
+    assert.ok(verify(chan('index-dev.json'), 'dvhub-release-index', rel.pub), 'eingefrorene index-dev.json: Release-Schlüssel');
+    assert.ok(verify(chan('index-dev-v2.json'), 'dvhub-release-index-dev', dev.pub), 'index-dev-v2.json: dev-Schlüssel');
+    const renames = [...fs.readFileSync(gh.log, 'utf8').matchAll(/-X PATCH \S+ -f name=(\S+)/g)].map((m) => m[1]);
+    assert.deepEqual(renames, ['index-dev-v2.json.sig', 'index-dev-v2.json', 'index-dev.json.sig', 'index-dev.json'], 'v2 zuerst, die alte Datei zuletzt');
+    const frozen = fs.readFileSync(chan('index-dev.json'));
+
+    // Nächster Stand mit dem dev-Schlüssel.
+    w('dvhub/server.js', 'console.log("zwei")\n'); commit('feat: zwei');
+    const two = buildAt('o2', '--sig-scope', 'dev', '--key', dev.key);
+    p = publish(two, '--sig-scope', 'dev', '--key', dev.key);
+    assert.equal(p.status, 0, p.stdout + p.stderr);
+    assert.ok(fs.readFileSync(chan('index-dev.json')).equals(frozen), 'index-dev.json eingefroren');
+    assert.deepEqual(JSON.parse(fs.readFileSync(chan('index-dev-v2.json'), 'utf8')).releases.map((x) => x.version), [path.basename(two), bridgeV]);
+    p = publish(bridge, '--bridge', '--key', rel.key, '--dev-key', dev.key);
+    assert.notEqual(p.status, 0, 'zweite Brücke verweigert'); assert.match(p.stderr, /Brücke ist erledigt/);
+
+    // Unterbrochenes Umstellen: nur der Zwischenstand index-dev-v2.json.new liegt.
+    const ids = JSON.parse(fs.readFileSync(path.join(gh.store, 'ids.json'), 'utf8'));
+    for (const v of Object.values(ids.assets)) {
+      if (v.tag === 'channels' && v.name === 'index-dev-v2.json') { fs.renameSync(chan(v.name), chan(`${v.name}.new`)); v.name = `${v.name}.new`; }
+    }
+    fs.writeFileSync(path.join(gh.store, 'ids.json'), JSON.stringify(ids));
+    w('dvhub/server.js', 'console.log("drei")\n'); commit('feat: drei');
+    const three = buildAt('o3', '--sig-scope', 'dev', '--key', dev.key);
+    p = publish(three, '--sig-scope', 'dev', '--key', dev.key);
+    assert.equal(p.status, 0, p.stdout + p.stderr);
+    assert.match(p.stderr, /Vorgänger aus index-dev-v2\.json\.new/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(chan('index-dev-v2.json'), 'utf8')).releases.map((x) => x.version).slice(0, 2), [path.basename(three), path.basename(two)]);
+
+    // Notweg ohne dev-Schlüssel.
+    w('dvhub/server.js', 'console.log("vier")\n'); commit('fix: Notfall');
+    const four = buildAt('o4', '--key', rel.key);
+    p = publish(four, '--bridge', '--release-key-only', '--force-bridge', '--key', rel.key, '--dev-key', path.join(work, 'gibt-es-nicht'));
+    assert.equal(p.status, 0, p.stdout + p.stderr);
+    assert.ok(verify(chan('index-dev-v2.json'), 'dvhub-release-index', rel.pub), 'v2 im Notweg mit dem Release-Schlüssel');
+    assert.equal(JSON.parse(fs.readFileSync(chan('index-dev-v2.json'), 'utf8')).latest, path.basename(four));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(work, { recursive: true, force: true });

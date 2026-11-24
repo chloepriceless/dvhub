@@ -13,4 +13,13 @@
 #
 # Solange hier kein Schlüssel steht, lehnt jede Box jedes Paket ab und die
 # Umstellung von git auf Pakete startet nicht.
+#
+# dev-Schlüssel (24.11.2026, nur auf dem Mac, signiert der dev-Worker ohne
+# 1Password): NUR die Namensräume dvhub-release-dev (Pakete) und
+# dvhub-release-index-dev (index-dev-v2.json). ssh-keygen lehnt ihn für
+# dvhub-release/dvhub-release-index ab, und stable prüft nur diese — er kann
+# weder ein stable-Paket noch einen stable-Index noch die eingefrorene
+# index-dev.json gültig signieren (dvhub-release.cjs packageNamespaces/
+# indexNamespaces). Der Release-Schlüssel (erste Zeile) gilt weiter für beide.
 dvhub-release namespaces="dvhub-release,dvhub-release-index" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGTN1RenLe3V58zyOq+B7KvrXeFksdIpG82u5U5CV7j6 dvhub-release-2026
+dvhub-release namespaces="dvhub-release-dev,dvhub-release-index-dev" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE2tzdsTgws6+Ofqy3eiZ8LK/5XiA4mVnAUXrCGKCZXo dvhub-dev-ci

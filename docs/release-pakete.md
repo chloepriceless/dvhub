@@ -363,6 +363,46 @@ Funde außerhalb der Pakete:
    `main` über dem letzten Release stehen (nach 1.0.9: 1.0.10), sonst sortiert das dev-Paket vor dem Release.
    `publish-release.sh` nimmt nur Commits an, die auf `origin/main` liegen. Zurückziehen: `index-dev.json` am
    Vorab-Release `channels` löschen — Boxen auf dev prüfen und installieren dann wieder stable (mit Hinweis).
+6. **Lokaler Worker statt Handarbeit (seit 24.11.2026)** — `scripts/release/dev-worker.sh` läuft per launchd
+   (`zone.bikini.dvhub-dev-worker`, alle 10 min) in einem eigenen Klon unter
+   `~/Library/Application Support/dvhub-dev-worker/` und macht Schritt 5 selbst, mit dem **dev-Schlüssel** (unten):
+   origin/main holen → Übergang erledigt? → schon in `index-dev-v2.json` (Signatur gültig) und am Release `dev`/
+   `dev-bridge`? → CI grün (`scripts/ci-check.py`)? → Signier-Probe → `build-release.sh --sig-scope dev` →
+   `publish-release.sh --sig-scope dev`. CI rot, fehlender Übergang und Fehler meldet er einmal als macOS-Mitteilung;
+   Protokoll `~/Library/Logs/dvhub-dev-worker.log`, Bau-Protokolle unter `runs/`. Einrichten:
+   `scripts/release/dev-worker.sh --install`; Trockenlauf: `… --dry-run [--sha REF]`; anhalten: Datei
+   `state/sign-paused` anlegen; stoppen: `launchctl bootout gui/$(id -u)/zone.bikini.dvhub-dev-worker`.
+
+### dev-Schlüssel und Brücke (24.11.2026)
+
+Der Release-Schlüssel liegt im 1Password-SSH-Agenten, und 1Password fragt bei jeder Signatur aus launchd nach — ein
+Worker kann damit nicht unbeaufsichtigt veröffentlichen. Darum signiert er dev mit einem **eigenen dev-Schlüssel**
+(`~/.config/dvhub-release/dev_ed25519`, Datei 0600 ohne Passphrase, nur auf dem Mac, nicht in 1Password/GitHub/Repo).
+
+- **Nur dev:** In `release-keys/allowed_signers` steht er nur mit `namespaces="dvhub-release-dev,dvhub-release-index-dev"`.
+  Die Box prüft stable ausschließlich mit `dvhub-release`/`dvhub-release-index`; dev zuerst mit den dev-Namensräumen,
+  dann mit den alten (die nur der Release-Schlüssel hat) — `dvhub-release.cjs` `packageNamespaces`/`indexNamespaces`.
+  ssh-keygen lehnt den dev-Schlüssel für die alten Namensräume ab, auch wenn ein Angreifer sie beim Signieren wählt.
+  Dazu prüft die Box weiter `channel` im Paket-Manifest. Ergebnis: kein stable-Paket, kein stable-Index und keine
+  eingefrorene `index-dev.json` lässt sich mit dem dev-Schlüssel gültig signieren (`test/release-helper.test.js`).
+- **Neuer dev-Index:** neue Boxen lesen dev aus `channels/index-dev-v2.json` (dev-Schlüssel, `dvhub-release-index-dev`).
+  `index-stable.json` und alles an stable bleibt unverändert.
+- **Zwei-Sprung-Übergang** (Boxen mit älterem Prüfcode lesen nur `index-dev.json` und prüfen nur die alten
+  Namensräume): `scripts/release/bridge-release.sh` veröffentlicht EINMAL das Brücken-Paket — den ersten main-Stand mit
+  diesem Prüfcode und dem dev-Schlüssel in `allowed_signers` — mit dem Release-Schlüssel im Release `dev-bridge`, setzt
+  `index-dev.json` auf genau dieses Paket und nimmt es in `index-dev-v2.json` auf. Danach schreibt nichts mehr
+  `index-dev.json` (`publish-release.sh` verweigert dev ohne `--sig-scope dev`, eine zweite Brücke nur mit
+  `--force-bridge`; der Worker kennt die Datei nicht). Eine alte Box — egal wie lange sie nicht geprüft hat — findet
+  dort nur die Brücke, installiert sie (Signatur wie bisher), übernimmt mit ihr die neue `allowed_signers` und den
+  neuen Helfer (`post-update.sh` installiert ihn) und folgt ab dann `index-dev-v2.json`. Kein Zurückstufen: eine Box
+  auf einem neueren dev-Stand bekommt die Brücke weder angeboten noch installiert (`actionCheck`/`jobInstall`
+  vergleichen die Version im selben Kanal); neuere Stände mit altem Prüfcode als die Brücke gibt es nicht, weil die
+  Brücke der erste main-Stand mit dem neuen Code ist. Die Assets in `dev-bridge` nie löschen.
+- **Rückweg:** Worker anhalten (`state/sign-paused` oder `launchctl bootout …`). Neue Boxen nehmen in dev weiter auch
+  Pakete mit dem Release-Schlüssel an (alte Namensräume); im Notfall ein solches Paket wie die Brücke veröffentlichen
+  (`publish-release.sh <build> --bridge --release-key-only --force-bridge`: Paket, `index-dev.json` und
+  `index-dev-v2.json` mit dem Release-Schlüssel, v2 im alten Namensraum — geht auch ohne den dev-Schlüssel).
+  dev-Schlüssel entziehen: Zeile aus `allowed_signers` entfernen und so ein Paket ausliefern; stable ist nie betroffen.
 
 ## Offene Entscheidungen
 

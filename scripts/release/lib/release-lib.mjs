@@ -26,6 +26,9 @@ export const ARCHES = ['arm64', 'armhf', 'amd64'];
 export const GO_ARCH = { arm64: { goarch: 'arm64' }, armhf: { goarch: 'arm', goarm: '7' }, amd64: { goarch: 'amd64' } };
 export const SIG_NAMESPACE_PACKAGE = 'dvhub-release';
 export const SIG_NAMESPACE_INDEX = 'dvhub-release-index';
+// dev-Schlüssel (24.11.2026): eigene Namensräume, siehe release-keys/allowed_signers.
+export const SIG_NAMESPACE_PACKAGE_DEV = 'dvhub-release-dev';
+export const SIG_NAMESPACE_INDEX_DEV = 'dvhub-release-index-dev';
 export const SIG_PRINCIPAL = 'dvhub-release';
 
 // ── Allowlist ───────────────────────────────────────────────────────────────
