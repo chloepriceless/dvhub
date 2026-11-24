@@ -73,6 +73,8 @@ async function withServer(profile, fn, { notHalt = true, forcedOff = false } = {
     setForcedOff: (r) => { events.push(['setForcedOff', r]); state.ctrl.forcedOff = true; },
     clearForcedOff: (r) => { events.push(['clearForcedOff', r]); state.ctrl.forcedOff = false; },
     setDvLimitPct: (p, r) => events.push(['setDvLimitPct', p, r]),
+    // Plexlog Holding 0 = Watt-Sollwert (0 = aus), wie dv-interface-luox.js setDvLimitW
+    setDvLimitW: (w, r) => { events.push(['setDvLimitW', w, r]); state.ctrl.forcedOff = w === 0; },
     luoxWatchdogRefresh: () => events.push(['watchdog']),
   };
   const server = createModbusServer(ctx);
@@ -164,12 +166,14 @@ test('DV-Server: nach dem Not-Halt gilt wieder das normale Schreiben', async () 
     assert.equal(ack.readUInt8(7), 16, 'normale FC16-Quittung');
     assert.equal(ack.readUInt16BE(8), 0);
     assert.equal(ack.readUInt16BE(10), 2);
-    assert.deepEqual(events, [['setForcedOff', 'fc16_addr0_0000']]);
+    assert.deepEqual(events, [['setDvLimitW', 0, 'plexlog_holding0_0']]);
     assert.equal(state.ctrl.forcedOff, true);
 
+    // Holding 3 ist der Watchdog (Lebenszeichen), kein Schalten.
     const ack6 = await request(port, writeSinglePdu(3, 0));
     assert.equal(ack6.readUInt8(7), 6, 'normale FC6-Quittung (Echo)');
-    assert.deepEqual(events.at(-1), ['clearForcedOff', 'fc16_addr3_0000']);
+    assert.deepEqual(events.at(-1), ['watchdog']);
+    assert.equal(state.ctrl.forcedOff, true);
   });
   await withServer('luox', async ({ port, events, state }) => {
     assertException04(await request(port, writeSinglePdu(2, 40)), 6, 'im Not-Halt');
