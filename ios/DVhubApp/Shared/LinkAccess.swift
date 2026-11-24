@@ -82,6 +82,8 @@ enum LinkAccess {
     /// Nicht lesbar (gesperrt) zählt als „nicht mehr“: lieber den Stand verwerfen als einer anderen Anlage zeigen.
     static func isSelected(_ id: String) -> Bool {
         configure()
+        // Inzwischen die Demo gewählt: keine gekoppelte Anlage ist mehr „die gewählte“ (wie selected()).
+        if DemoStore.isSelected { return false }
         guard let systems = try? KeyStore.loadSystems() else { return false }
         let wanted = SharedStore.selectedSystemId
         return (systems.first(where: { $0.id == wanted }) ?? systems.first)?.id == id
