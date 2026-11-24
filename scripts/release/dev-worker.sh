@@ -6,26 +6,37 @@
 # auf (zone.bikini.dvhub-dev-worker). Je Lauf:
 #
 #   fetch origin/main (eigener Klon, nie der Arbeits-Checkout ~/Projects/DVhub)
-#   → schon veröffentlicht? (Zustandsdatei + Assets am Release dev + Kanal-Index)
-#   → CI grün? (scripts/ci-check.py) → 1Password-Agent signiert? (Probe mit Zeitlimit)
-#   → build-release.sh → publish-release.sh → Zustand schreiben, Mitteilung.
+#   → Übergang erledigt? (dev-Schlüssel in release-keys/allowed_signers von main,
+#     channels/index-dev-v2.json vorhanden — sonst nichts, siehe docs/release-pakete.md)
+#   → schon veröffentlicht? (Zustandsdatei + Assets am Release dev/dev-bridge +
+#     signierter Eintrag in index-dev-v2.json)
+#   → CI grün? (scripts/ci-check.py) → Signier-Probe mit dem dev-Schlüssel
+#   → build-release.sh --sig-scope dev → publish-release.sh --sig-scope dev
+#   → Zustand schreiben, Mitteilung.
 #
-# Nur main von chloepriceless/dvhub, nur Kanal dev — nie stable, nie Tags.
+# Signiert wird NUR mit dem dev-Schlüssel (~/.config/dvhub-release/dev_ed25519,
+# eine Datei, kein Agent, kein 1Password): Namensräume dvhub-release-dev und
+# dvhub-release-index-dev, die Boxen nur für dev annehmen. Nur main von
+# chloepriceless/dvhub, nur Kanal dev — nie stable, nie Tags, nie die
+# eingefrorene index-dev.json.
 #
 #   dev-worker.sh                    ein Lauf (so ruft launchd es auf)
 #   dev-worker.sh --dry-run [--sha REF]
 #                                    echter Bau samt Signatur, publish-release nur
 #                                    --dry-run; kein Zustand, keine Veröffentlichung.
 #                                    REF muss auf origin/main liegen (Standard: origin/main).
-#   dev-worker.sh --probe-sign       nur prüfen, ob der 1Password-Agent ohne Rückfrage signiert
+#   dev-worker.sh --probe-sign       nur prüfen, ob der dev-Schlüssel signiert
 #   dev-worker.sh --install          sich nach $DW_HOME/bin kopieren, Plist schreiben, laden
 #   dev-worker.sh --print-plist      Plist auf stdout
 #
 # Stoppen: launchctl bootout gui/$(id -u)/zone.bikini.dvhub-dev-worker
 #
 # Rückgabe: 0 = Lauf ordentlich beendet (auch „nichts zu tun“, „CI läuft“,
-# „läuft schon“), 1 = Fehler (Bau, Veröffentlichung, Freigabe fehlt …), 2 = Aufruf.
+# „läuft schon“, „Übergang fehlt“), 1 = Fehler (Bau, Veröffentlichung, Schlüssel …), 2 = Aufruf.
 set -uo pipefail
+# Kein Agent: der dev-Schlüssel ist eine Datei; so kann auch kein Werkzeug
+# darunter versehentlich 1Password fragen.
+unset SSH_AUTH_SOCK
 
 LABEL="zone.bikini.dvhub-dev-worker"
 GH_REPO="chloepriceless/dvhub"
@@ -36,10 +47,9 @@ DW_LOG="${DVHUB_DW_LOG:-$HOME/Library/Logs/dvhub-dev-worker.log}"
 DW_ORIGIN="${DVHUB_DW_ORIGIN:-$CANON_ORIGIN}"
 DW_API="${DVHUB_DW_API:-https://api.github.com}"
 DW_DOWNLOAD="${DVHUB_DW_DOWNLOAD:-https://github.com}"
-DW_SOCK="${DVHUB_DW_SSH_AUTH_SOCK:-$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock}"
-DW_PUB_SRC="${DVHUB_DW_PUBKEY:-$HOME/.config/dvhub-release/release_ed25519.pub}"
+DW_KEY="${DVHUB_DW_KEY:-$HOME/.config/dvhub-release/dev_ed25519}"
 DW_ARCHS="${DVHUB_DW_ARCHS:-arm64,armhf,amd64}"
-DW_AGENT_TIMEOUT="${DVHUB_DW_AGENT_TIMEOUT:-90}"       # s: 1Password-Freigabe
+DW_AGENT_TIMEOUT="${DVHUB_DW_AGENT_TIMEOUT:-60}"       # s: Signier-Probe
 DW_BUILD_TIMEOUT="${DVHUB_DW_BUILD_TIMEOUT:-5400}"     # s: build-release (3 Architekturen)
 DW_PUBLISH_TIMEOUT="${DVHUB_DW_PUBLISH_TIMEOUT:-2700}" # s: publish-release
 DW_NET_TIMEOUT="${DVHUB_DW_NET_TIMEOUT:-600}"          # s: clone/fetch
@@ -51,11 +61,10 @@ DW_PYTHON="${DVHUB_DW_PYTHON:-python3}"
 
 REPO="$DW_HOME/repo"
 STATE="$DW_HOME/state"
-KEYDIR="$DW_HOME/key"
 OUT="$DW_HOME/out"
 RUNS="$DW_HOME/runs"
 LOCK="$DW_HOME/lock"
-KEY="$KEYDIR/release_agent"   # Kopie des ÖFFENTLICHEN Schlüssels (0600): signiert nur über den Agenten
+KEY="$DW_KEY"
 
 MODE=run
 DRY_REF=""
@@ -159,7 +168,7 @@ xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>
 # geplante Lauf dieselben Ordner/Schlüssel nutzt (Codex 1ab4b3f4).
 plist_env() {
   local v
-  for v in DVHUB_DW_HOME DVHUB_DW_LOG DVHUB_DW_SSH_AUTH_SOCK DVHUB_DW_PUBKEY DVHUB_DW_ARCHS DVHUB_DW_AGENT_TIMEOUT \
+  for v in DVHUB_DW_HOME DVHUB_DW_LOG DVHUB_DW_KEY DVHUB_DW_ARCHS DVHUB_DW_AGENT_TIMEOUT \
            DVHUB_DW_BUILD_TIMEOUT DVHUB_DW_PUBLISH_TIMEOUT DVHUB_DW_KEEP_BUILDS DVHUB_DW_MAX_FAILS; do
     [[ -n "${!v:-}" ]] || continue
     printf '\t\t<key>%s</key>\n\t\t<string>%s</string>\n' "$v" "$(xml_escape "${!v}")"
@@ -226,8 +235,9 @@ if [[ "$MODE" == install ]]; then
   exit 0
 fi
 
-mkdir -p "$DW_HOME" "$STATE" "$KEYDIR" "$OUT" "$RUNS" "$(dirname "$DW_LOG")" || exit 1
-chmod 700 "$DW_HOME" "$KEYDIR" 2>/dev/null || true
+mkdir -p "$DW_HOME" "$STATE" "$OUT" "$RUNS" "$(dirname "$DW_LOG")" || exit 1
+chmod 700 "$DW_HOME" 2>/dev/null || true
+rm -rf "$DW_HOME/key"   # Kopie des Release-.pub aus der 1Password-Zeit (bis 24.11.2026), nicht mehr gebraucht
 rotate_log
 
 # ---------------------------------------------------------------- Sperre
@@ -268,26 +278,21 @@ acquire_lock() {
   return 0
 }
 
-# ---------------------------------------------------------------- Agent-Probe
-prepare_key() {
-  [[ -f "$DW_PUB_SRC" ]] || { log "öffentlicher Release-Schlüssel $DW_PUB_SRC fehlt"; return 1; }
-  if ! cmp -s "$DW_PUB_SRC" "$KEY.pub" 2>/dev/null; then
-    install -m 0600 "$DW_PUB_SRC" "$KEY.new" && mv -f "$KEY.new" "$KEY" || return 1
-    install -m 0600 "$DW_PUB_SRC" "$KEY.pub.new" && mv -f "$KEY.pub.new" "$KEY.pub" || return 1
-  fi
-  chmod 600 "$KEY" "$KEY.pub"
+# ---------------------------------------------------------------- Signier-Probe
+key_ok() {
+  local perm
+  [[ -f "$KEY" && -f "$KEY.pub" ]] || { log "dev-Schlüssel $KEY (+ .pub) fehlt"; return 1; }
+  if perm="$(stat -c '%a' "$KEY" 2>/dev/null)"; then :; else perm="$(stat -f '%Lp' "$KEY")"; fi
+  [[ "$perm" == 600 || "$perm" == 400 ]] || { log "dev-Schlüssel $KEY muss 0600 sein (ist $perm)"; return 1; }
 }
-# Signiert eine Wegwerf-Datei über den Agenten (eigener Namensraum, nie als
-# Paket-Signatur verwendbar) und prüft die Signatur. Rückgabe 0 ok, 124 Zeitlimit
-# (1Password wartet auf Freigabe/Entsperren), sonst Fehler.
+# Signiert eine Wegwerf-Datei mit dem dev-Schlüssel (eigener Namensraum, nie als
+# Paket-Signatur verwendbar) und prüft die Signatur. 0 ok, 124 Zeitlimit, sonst Fehler.
 probe_sign() {
   local tmp rc
-  [[ -S "$DW_SOCK" ]] || { log "1Password-SSH-Agent-Socket fehlt ($DW_SOCK) — läuft 1Password?"; return 2; }
-  prepare_key || return 2
+  key_ok || return 2
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/dvhub-dw-probe.XXXXXX")" || return 2
   printf 'dvhub-dev-worker probe %s\n' "$(date +%s)" > "$tmp/probe"
-  SSH_AUTH_SOCK="$DW_SOCK" run_to "$DW_AGENT_TIMEOUT" ssh-keygen -Y sign -q -f "$KEY" -n dvhub-dev-worker-probe "$tmp/probe" \
-    </dev/null >"$tmp/err" 2>&1
+  run_to "$DW_AGENT_TIMEOUT" ssh-keygen -Y sign -q -f "$KEY" -n dvhub-dev-worker-probe "$tmp/probe" </dev/null >"$tmp/err" 2>&1
   rc=$?
   if [[ "$rc" -eq 0 ]]; then
     printf 'probe namespaces="dvhub-dev-worker-probe" %s\n' "$(awk 'NR==1{print $1" "$2}' "$KEY.pub")" > "$tmp/allowed"
@@ -298,16 +303,16 @@ probe_sign() {
   rm -rf "$tmp"
   return "$rc"
 }
-agent_ok() {
+sign_ok() {
   local rc
   probe_sign; rc=$?
   case "$rc" in
-    0) [[ -n "$(state_get agent-blocked)" ]] && log "1Password-Agent signiert wieder"
-       state_clear agent-blocked; return 0 ;;
-    124) log "Freigabe in 1Password nötig: Signieren nicht binnen ${DW_AGENT_TIMEOUT}s (1Password gesperrt oder wartet auf Bestätigung) — nächster Versuch beim nächsten Lauf"
-         notify_once agent-blocked timeout "Freigabe in 1Password nötig (Signieren wartet) — nächster Versuch in 10 min" ;;
-    *) log "Signieren über den 1Password-Agenten fehlgeschlagen (rc $rc) — nächster Versuch beim nächsten Lauf"
-       notify_once agent-blocked "rc$rc" "Signieren über 1Password fehlgeschlagen (rc $rc)" ;;
+    0) [[ -n "$(state_get sign-blocked)" ]] && log "dev-Schlüssel signiert wieder"
+       state_clear sign-blocked; return 0 ;;
+    124) log "Signieren hängt: nicht binnen ${DW_AGENT_TIMEOUT}s (Schlüssel mit Passphrase?) — nächster Versuch beim nächsten Lauf"
+         notify_once sign-blocked timeout "Signieren mit dem dev-Schlüssel hängt — nächster Versuch in 10 min" ;;
+    *) log "Signieren mit dem dev-Schlüssel fehlgeschlagen (rc $rc) — nächster Versuch beim nächsten Lauf"
+       notify_once sign-blocked "rc$rc" "Signieren mit dem dev-Schlüssel fehlgeschlagen (rc $rc)" ;;
   esac
   return 1
 }
@@ -315,10 +320,7 @@ agent_ok() {
 if [[ "$MODE" == probe ]]; then
   acquire_lock || exit 0
   if [[ -n "$(gh_token)" ]]; then log "GitHub-Token aus git credential: vorhanden"; else log "GitHub-Token aus git credential: FEHLT"; fi
-  t0=$(date +%s)
-  # Ob 1Password dabei eine Freigabe-Rückfrage gezeigt hat, sieht der Worker nicht
-  # (24.11.2026: jede Signatur aus launchd brauchte einen Klick) — nur die Dauer.
-  if agent_ok; then log "Signier-Probe: ok nach $(( $(date +%s) - t0 ))s (eine 1Password-Rückfrage ist von hier nicht erkennbar)"; exit 0; fi
+  if sign_ok; then log "Signier-Probe: ok (dev-Schlüssel $KEY, ohne Agent)"; exit 0; fi
   exit 1
 fi
 
@@ -341,39 +343,53 @@ checkout() {  # $1 = SHA; nur im eigenen Klon
   git -C "$REPO" checkout -q --detach -f "$1" && git -C "$REPO" clean -qfdx
 }
 
-# ---------------------------------------------------------------- Veröffentlicht?
-# Ausgabe: "yes <version>", "partial <version>" (Assets ohne gültigen Index-
-# Eintrag oder unvollständig) oder "no"; Rückgabe 1, wenn GitHub nicht abfragbar ist.
-# Der Index zählt nur mit passender Signatur — so wie die Box ihn prüft
-# (dvhub-release.cjs fetchIndex); nach einer unterbrochenen Umstellung kann
-# index-dev.json ohne oder mit fremder .sig dastehen (Codex 1ab4b3f4).
-remote_status() {  # $1 = SHA
-  local sha="$1" tmp rc idx_ok=0
-  prepare_key || return 1
-  tmp="$(mktemp -d "${TMPDIR:-/tmp}/dvhub-dw-gh.XXXXXX")" || return 1
-  if ! api_get "/repos/$GH_REPO/releases/tags/dev" "$tmp/dev.json" 2>"$tmp/err"; then
-    if grep -q ' 404' "$tmp/err"; then echo '{"assets":[]}' > "$tmp/dev.json"
-    else log "GitHub-API nicht abfragbar ($(tr '\n' ' ' < "$tmp/err" | cut -c1-160))"; rm -rf "$tmp"; return 1; fi
+# ---------------------------------------------------------------- Übergang / veröffentlicht?
+# Vertrauensdatei, wie sie die Boxen mit main bekommen.
+main_trust() { git -C "$REPO" show refs/remotes/origin/main:release-keys/allowed_signers 2>/dev/null; }
+# Steht der dev-Schlüssel mit (genau) den dev-Namensräumen in main? Sonst nähmen
+# Boxen seine Pakete nicht an.
+dev_key_trusted() {
+  local pub; pub="$(awk 'NR==1{print $2}' "$KEY.pub" 2>/dev/null)"
+  [[ -n "$pub" ]] || return 1
+  main_trust | grep -v '^#' | grep -F "$pub" | grep -F 'namespaces="dvhub-release-dev,dvhub-release-index-dev"' >/dev/null
+}
+gh_release_json() {  # <tag> <ziel>; fehlt das Release (404) → leere Liste
+  local err; err="$(mktemp "${TMPDIR:-/tmp}/dvhub-dw-err.XXXXXX")"
+  if ! api_get "/repos/$GH_REPO/releases/tags/$1" "$2" 2>"$err"; then
+    if grep -q ' 404' "$err"; then echo '{"assets":[]}' > "$2"
+    else log "GitHub-API nicht abfragbar ($(tr '\n' ' ' < "$err" | cut -c1-160))"; rm -f "$err"; return 1; fi
   fi
+  rm -f "$err"
+}
+# Ausgabe: "nobridge" (index-dev-v2.json gibt es noch nicht — Übergang fehlt),
+# "yes <version>", "partial <version>" (Assets ohne gültigen Index-Eintrag oder
+# unvollständig) oder "no"; Rückgabe 1, wenn GitHub nicht abfragbar ist.
+# Der Index zählt nur mit passender Signatur, geprüft gegen die Vertrauensdatei
+# aus main mit den Namensräumen der Box (dvhub-release.cjs indexNamespaces('dev')).
+remote_status() {  # $1 = SHA
+  local sha="$1" tmp rc idx_ok=0 ns
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/dvhub-dw-gh.XXXXXX")" || return 1
+  gh_release_json dev "$tmp/dev.json" && gh_release_json dev-bridge "$tmp/bridge.json" || { rm -rf "$tmp"; return 1; }
   if ! curl -fsSL --max-time 60 -H 'User-Agent: dvhub-dev-worker' -o "$tmp/index.json" \
-      "$DW_DOWNLOAD/$GH_REPO/releases/download/channels/index-dev.json" 2>"$tmp/err"; then
-    if grep -q ' 404' "$tmp/err"; then echo '{"releases":[]}' > "$tmp/index.json"
-    else log "Kanal-Index nicht abrufbar ($(tr '\n' ' ' < "$tmp/err" | cut -c1-160))"; rm -rf "$tmp"; return 1; fi
+      "$DW_DOWNLOAD/$GH_REPO/releases/download/channels/index-dev-v2.json" 2>"$tmp/err"; then
+    if grep -q ' 404' "$tmp/err"; then echo nobridge; rm -rf "$tmp"; return 0; fi
+    log "Kanal-Index nicht abrufbar ($(tr '\n' ' ' < "$tmp/err" | cut -c1-160))"; rm -rf "$tmp"; return 1
   fi
   if curl -fsSL --max-time 60 -H 'User-Agent: dvhub-dev-worker' -o "$tmp/index.json.sig" \
-      "$DW_DOWNLOAD/$GH_REPO/releases/download/channels/index-dev.json.sig" 2>/dev/null; then
-    # Nur Prüfen mit dem öffentlichen Schlüssel — kein Agent, keine 1Password-Rückfrage.
-    printf 'dvhub-release namespaces="dvhub-release-index" %s\n' "$(awk 'NR==1{print $1" "$2}' "$KEY.pub")" > "$tmp/allowed"
-    ssh-keygen -Y verify -f "$tmp/allowed" -I dvhub-release -n dvhub-release-index -s "$tmp/index.json.sig" \
-      < "$tmp/index.json" >/dev/null 2>&1 && idx_ok=1
+      "$DW_DOWNLOAD/$GH_REPO/releases/download/channels/index-dev-v2.json.sig" 2>/dev/null \
+      && main_trust > "$tmp/allowed"; then
+    for ns in dvhub-release-index-dev dvhub-release-index; do
+      ssh-keygen -Y verify -f "$tmp/allowed" -I dvhub-release -n "$ns" -s "$tmp/index.json.sig" \
+        < "$tmp/index.json" >/dev/null 2>&1 && { idx_ok=1; break; }
+    done
   fi
   node -e '
     const fs = require("fs");
-    const [devF, idxF, sha, archs, idxOk] = process.argv.slice(1);
-    const dev = JSON.parse(fs.readFileSync(devF, "utf8"));
-    const idx = JSON.parse(fs.readFileSync(idxF, "utf8"));
+    const [devF, bridgeF, idxF, sha, archs, idxOk] = process.argv.slice(1);
+    const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
+    const idx = read(idxF);
     const short = sha.slice(0, 8);
-    const names = new Set((dev.assets || []).map((a) => a.name));
+    const names = new Set([...(read(devF).assets || []), ...(read(bridgeF).assets || [])].map((a) => a.name));
     const re = new RegExp(`^dvhub-(.+\\.${short})-([a-z0-9]+)\\.tar\\.gz$`);
     let version = "";
     for (const n of names) { const m = n.match(re); if (m) version = m[1]; }
@@ -383,7 +399,7 @@ remote_status() {  # $1 = SHA
     if (!version) { console.log("no"); process.exit(0); }
     const complete = archs.split(",").every((a) => names.has(`dvhub-${version}-${a}.tar.gz`) && names.has(`dvhub-${version}-${a}.tar.gz.sig`));
     console.log(`${complete && inIndex ? "yes" : "partial"} ${version}`);
-  ' "$tmp/dev.json" "$tmp/index.json" "$sha" "$DW_ARCHS" "$idx_ok"
+  ' "$tmp/dev.json" "$tmp/bridge.json" "$tmp/index.json" "$sha" "$DW_ARCHS" "$idx_ok"
   rc=$?
   rm -rf "$tmp"
   return "$rc"
@@ -439,8 +455,27 @@ main() {
   fi
   short="${sha:0:8}"
 
+  key_ok || { notify_once key-missing "$KEY" "dev-Schlüssel fehlt oder hat falsche Rechte — siehe Log"; return 1; }
+  state_clear key-missing
   status="$(remote_status "$sha")" || return 1
   version="${status#* }"
+  # Übergang (docs/release-pakete.md, „dev-Schlüssel“): erst wenn main den
+  # dev-Schlüssel kennt UND die Brücke veröffentlicht ist (index-dev-v2.json
+  # steht), veröffentlicht der Worker. Sonst fände kein Paket zu Boxen mit
+  # älterem Prüfcode. Trockenläufe gehen trotzdem.
+  local transition=""
+  dev_key_trusted || transition="release-keys/allowed_signers von main enthält den dev-Schlüssel ($KEY.pub) nicht"
+  [[ -z "$transition" && "$status" == nobridge ]] && transition="index-dev-v2.json fehlt — das Brücken-Paket (Release-Schlüssel) ist noch nicht veröffentlicht"
+  if [[ -n "$transition" ]]; then
+    if [[ "$MODE" != dry ]]; then
+      log "main $short: Übergang zum dev-Schlüssel fehlt: $transition — nichts zu tun"
+      notify_once transition-pending "$transition" "dev-Paket wartet auf den Übergang (Brücke) — siehe Log"
+      return 0
+    fi
+    log "Übergang fehlt ($transition) — Trockenlauf baut trotzdem"
+  else
+    state_clear transition-pending
+  fi
   if [[ "$status" == yes* ]]; then
     if ! grep -q "^$sha " "$STATE/published" 2>/dev/null; then
       [[ "$MODE" != dry ]] && printf '%s %s %s extern\n' "$sha" "$version" "$(date -u +%FT%TZ)" >> "$STATE/published"
@@ -487,26 +522,26 @@ main() {
     *) log "main $short: CI-Abfrage nicht möglich (rc $rc: $(printf '%s' "$ci_out" | head -1)) — später"; return 0 ;;
   esac
 
-  # Signieren pausiert (Datei $STATE/sign-paused): kein Signierversuch, also auch
-  # keine 1Password-Rückfrage alle 10 Minuten. Christin 24.11.2026: 1Password
-  # fragt bei jeder Signatur aus launchd nach. Wieder an: rm "$STATE/sign-paused".
+  # Angehalten (Datei $STATE/sign-paused): kein Bau, keine Veröffentlichung.
+  # Christin 24.11.2026: bis der Übergang zum dev-Schlüssel steht. Wieder an:
+  # rm "$STATE/sign-paused".
   if [[ -f "$STATE/sign-paused" ]]; then
     log "main $short: CI grün, Signieren pausiert ($STATE/sign-paused: $(head -1 "$STATE/sign-paused")) — kein dev-Paket"
     notify_once sign-paused-note "$sha" "main $short ist grün — dev-Paket wartet (Signieren pausiert)"
     return 0
   fi
-  agent_ok || return 1
+  sign_ok || return 1
 
   runlog="$RUNS/$(date +%Y%m%d-%H%M%S)-$short.log"
   log "main $short: CI grün — baue dev-Paket ($DW_ARCHS), Protokoll $runlog"
   if [[ -z "${DOCKER_HOST:-}" && -S "$HOME/.colima/default/docker.sock" ]]; then
     export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
   fi
-  SSH_AUTH_SOCK="$DW_SOCK" run_to "$DW_BUILD_TIMEOUT" bash "$REPO/scripts/release/build-release.sh" "$sha" \
-      --arch "$DW_ARCHS" --out "$OUT" --key "$KEY" </dev/null >>"$runlog" 2>&1
+  run_to "$DW_BUILD_TIMEOUT" bash "$REPO/scripts/release/build-release.sh" "$sha" \
+      --arch "$DW_ARCHS" --out "$OUT" --sig-scope dev --key "$KEY" </dev/null >>"$runlog" 2>&1
   rc=$?
   if [[ "$rc" -ne 0 ]]; then
-    [[ "$rc" -eq 124 ]] && log "Bau nach ${DW_BUILD_TIMEOUT}s abgebrochen (Zeitlimit; wartet ssh-keygen auf 1Password?)"
+    [[ "$rc" -eq 124 ]] && log "Bau nach ${DW_BUILD_TIMEOUT}s abgebrochen (Zeitlimit)"
     if [[ "$MODE" == dry ]]; then log "Bau fehlgeschlagen (rc $rc) — $runlog"; return 1; fi
     count_fail "$sha" "Bau von $short fehlgeschlagen (rc $rc, $runlog)"
     return 1
@@ -519,8 +554,16 @@ main() {
   if [[ "$MODE" == dry ]]; then
     pubdest="$DW_HOME/dry/$version"
     rm -rf "$pubdest"
-    SSH_AUTH_SOCK="$DW_SOCK" run_to "$DW_PUBLISH_TIMEOUT" bash "$REPO/scripts/release/publish-release.sh" "$build" \
-        --key "$KEY" --dry-run --dest "$pubdest" </dev/null >>"$runlog" 2>&1
+    mkdir -p "$pubdest/channels"
+    # Lebenden index-dev-v2.json als Vorgänger in den Trockenlauf legen; vor der
+    # Brücke gibt es ihn nicht — dann ein leerer Platzhalter (nur hier).
+    if ! curl -fsSL --max-time 60 -H 'User-Agent: dvhub-dev-worker' -o "$pubdest/channels/index-dev-v2.json" \
+        "$DW_DOWNLOAD/$GH_REPO/releases/download/channels/index-dev-v2.json" 2>/dev/null; then
+      printf '{"format":1,"channel":"dev","latest":null,"releases":[]}\n' > "$pubdest/channels/index-dev-v2.json"
+      log "Trockenlauf: index-dev-v2.json gibt es noch nicht — leerer Platzhalter als Vorgänger"
+    fi
+    run_to "$DW_PUBLISH_TIMEOUT" bash "$REPO/scripts/release/publish-release.sh" "$build" \
+        --sig-scope dev --key "$KEY" --dry-run --dest "$pubdest" </dev/null >>"$runlog" 2>&1
     rc=$?
     if [[ "$rc" -eq 0 ]]; then log "Trockenlauf ok: $version gebaut und signiert, publish-release --dry-run → $pubdest"
     else log "Trockenlauf: publish-release --dry-run fehlgeschlagen (rc $rc) — $runlog"; fi
@@ -543,8 +586,8 @@ main() {
   local tok; tok="$(gh_token)"
   [[ -n "$tok" ]] || { count_fail "$sha" "kein GitHub-Token aus git credential fill"; return 1; }
   log "main $short: veröffentliche $version"
-  GH_TOKEN="$tok" SSH_AUTH_SOCK="$DW_SOCK" run_to "$DW_PUBLISH_TIMEOUT" bash "$REPO/scripts/release/publish-release.sh" "$build" \
-      --key "$KEY" </dev/null >>"$runlog" 2>&1
+  GH_TOKEN="$tok" run_to "$DW_PUBLISH_TIMEOUT" bash "$REPO/scripts/release/publish-release.sh" "$build" \
+      --sig-scope dev --key "$KEY" </dev/null >>"$runlog" 2>&1
   rc=$?
   tok=""
   if [[ "$rc" -ne 0 ]]; then
@@ -558,7 +601,7 @@ main() {
   fi
   printf '%s %s %s worker\n' "$sha" "$version" "$(date -u +%FT%TZ)" >> "$STATE/published"
   state_clear "fails-$sha"
-  log "main $short: $version veröffentlicht (Release dev + channels/index-dev.json)"
+  log "main $short: $version veröffentlicht (Release dev + channels/index-dev-v2.json)"
   notify "$version veröffentlicht (Bleeding Edge)"
   prune_builds
   return 0

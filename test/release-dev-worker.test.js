@@ -1,13 +1,13 @@
 // test/release-dev-worker.test.js — lokaler dev-Paket-Worker (scripts/release/dev-worker.sh).
 // Christin 24.11.2026: der Mac baut nach jedem grünen main-Push selbst das
-// dev-Paket. Geprüft wird die Steuerlogik auf einem Wegwerf-Repo mit
+// dev-Paket, signiert mit dem eigenen dev-Schlüssel (Datei, kein 1Password).
+// Geprüft wird die Steuerlogik auf einem Wegwerf-Repo mit
 // Stellvertretern für ci-check.py, build-release.sh, publish-release.sh,
 // ssh-keygen und osascript; GitHub (API + Kanal-Index) ist ein lokaler HTTP-Server.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
-import net from 'node:net';
 import http from 'node:http';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -25,16 +25,16 @@ function sh(cmd, args, opts = {}) {
 
 const BUILD_STUB = `#!/usr/bin/env bash
 set -euo pipefail
-sha="$1"; shift; out=""; key=""
-while [[ $# -gt 0 ]]; do case "$1" in --out) out="$2"; shift 2;; --key) key="$2"; shift 2;; *) shift;; esac; done
-echo "build $sha key=$(basename "$key") sock=\${SSH_AUTH_SOCK:+ja}" >> "$FAKE_CALLS"
+sha="$1"; shift; out=""; key=""; scope=release
+while [[ $# -gt 0 ]]; do case "$1" in --out) out="$2"; shift 2;; --key) key="$2"; shift 2;; --sig-scope) scope="$2"; shift 2;; *) shift;; esac; done
+echo "build $sha scope=$scope key=$(basename "$key") agent=\${SSH_AUTH_SOCK:-nein}" >> "$FAKE_CALLS"
 [[ "\${FAKE_BUILD_FAIL:-}" == 1 ]] && exit 1
 d="$out/1.0.12-dev.20261124000000.\${sha:0:8}"; mkdir -p "$d"
 printf '{"version":"%s","channel":"dev","git_sha":"%s"}\\n' "$(basename "$d")" "$sha" > "$d/release.json"
 `;
 const PUBLISH_STUB = `#!/usr/bin/env bash
 set -euo pipefail
-echo "publish $* token=\${GH_TOKEN:+ja}" >> "$FAKE_CALLS"
+echo "publish $* token=\${GH_TOKEN:+ja} agent=\${SSH_AUTH_SOCK:-nein}" >> "$FAKE_CALLS"
 build="$1"; dest=""; dry=0
 while [[ $# -gt 0 ]]; do case "$1" in --dry-run) dry=1; shift;; --dest) dest="$2"; shift 2;; *) shift;; esac; done
 if [[ $dry == 1 ]]; then mkdir -p "$dest"; else sed -n 's/.*"git_sha":"\\([0-9a-f]*\\)".*/\\1/p' "$build/release.json" >> "$FAKE_PUBLISHED"; fi
@@ -45,7 +45,7 @@ sys.exit(int(os.environ.get("FAKE_CI_RC", "0")))
 `;
 const SSHKEYGEN_STUB = `#!/usr/bin/env bash
 mode="\${FAKE_SIGN:-ok}"
-if [[ "$1" == -Y && "$2" == verify ]]; then exit 0; fi
+if [[ "$1" == -Y && "$2" == verify ]]; then [[ "\${FAKE_VERIFY:-ok}" == ok ]]; exit; fi
 case "$mode" in
   hang) exec sleep 60 ;;
   hang-child) sleep 60 & echo $! > "$FAKE_CHILDPID"; wait; exit 0 ;;
@@ -65,6 +65,14 @@ async function setup(t) {
   fs.writeFileSync(path.join(origin, 'scripts/ci-check.py'), CI_STUB);
   fs.writeFileSync(path.join(origin, 'scripts/release/build-release.sh'), BUILD_STUB);
   fs.writeFileSync(path.join(origin, 'scripts/release/publish-release.sh'), PUBLISH_STUB);
+  // dev-Schlüssel (Stellvertreter-Dateien; signiert wird vom ssh-keygen-Stellvertreter).
+  const key = path.join(root, 'devkey');
+  fs.writeFileSync(key, 'privat\n', { mode: 0o600 });
+  fs.writeFileSync(`${key}.pub`, 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDevDevDevDev dvhub-dev-ci\n');
+  fs.mkdirSync(path.join(origin, 'release-keys'));
+  fs.writeFileSync(path.join(origin, 'release-keys/allowed_signers'),
+    '# Kommentar\ndvhub-release namespaces="dvhub-release,dvhub-release-index" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRelease rel\n'
+    + 'dvhub-release namespaces="dvhub-release-dev,dvhub-release-index-dev" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDevDevDevDev dvhub-dev-ci\n');
   const g = (...a) => sh('git', ['-C', origin, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a]);
   g('init', '-q', '-b', 'main');
   g('add', '.'); g('commit', '-qm', 'eins');
@@ -77,31 +85,27 @@ async function setup(t) {
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'ssh-keygen'), SSHKEYGEN_STUB, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'osascript'), OSASCRIPT_STUB, { mode: 0o755 });
-  const pub = path.join(root, 'release.pub');
-  fs.writeFileSync(pub, 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestTestTest test\n');
-
-  // Agent-Socket (nur Existenz wird geprüft; ssh-keygen ist ein Stellvertreter).
-  const sock = path.join(root, 's');
-  const sockServer = net.createServer(() => {}).listen(sock);
-  t.after(() => sockServer.close());
 
   const files = { calls: path.join(root, 'calls'), notify: path.join(root, 'notify'), published: path.join(root, 'published') };
   // Schon veröffentlichte SHAs (von Hand), zusätzlich zu dem, was publish-Stub einträgt.
-  const remote = { extra: new Set(), auth: [], indexSig: true };
+  // bridge: index-dev-v2.json steht (Übergang erledigt); bridgeShas liegen im Release dev-bridge.
+  const remote = { extra: new Set(), auth: [], indexSig: true, bridge: true, bridgeShas: new Set() };
   const publishedShas = () => new Set([...remote.extra,
     ...(fs.existsSync(files.published) ? fs.readFileSync(files.published, 'utf8').split('\n').filter(Boolean) : [])]);
   const verOf = (s) => `1.0.12-dev.20261124000000.${s.slice(0, 8)}`;
   const server = http.createServer((req, res) => {
     remote.auth.push(req.headers.authorization || '');
     const shas = [...publishedShas()];
+    const assetsOf = (list) => list.flatMap((s) => ['arm64', 'armhf', 'amd64'].flatMap((a) =>
+      [`dvhub-${verOf(s)}-${a}.tar.gz`, `dvhub-${verOf(s)}-${a}.tar.gz.sig`, `dvhub-${verOf(s)}-${a}.manifest.json`]))
+      .map((name, id) => ({ id, name }));
     if (req.url === '/repos/chloepriceless/dvhub/releases/tags/dev') {
-      const assets = shas.flatMap((s) => ['arm64', 'armhf', 'amd64'].flatMap((a) =>
-        [`dvhub-${verOf(s)}-${a}.tar.gz`, `dvhub-${verOf(s)}-${a}.tar.gz.sig`, `dvhub-${verOf(s)}-${a}.manifest.json`]))
-        .map((name, id) => ({ id, name }));
-      res.end(JSON.stringify({ assets }));
-    } else if (req.url === '/chloepriceless/dvhub/releases/download/channels/index-dev.json') {
+      res.end(JSON.stringify({ assets: assetsOf(shas.filter((x) => !remote.bridgeShas.has(x))) }));
+    } else if (req.url === '/repos/chloepriceless/dvhub/releases/tags/dev-bridge' && remote.bridgeShas.size) {
+      res.end(JSON.stringify({ assets: assetsOf([...remote.bridgeShas]) }));
+    } else if (req.url === '/chloepriceless/dvhub/releases/download/channels/index-dev-v2.json' && remote.bridge) {
       res.end(JSON.stringify({ channel: 'dev', releases: shas.map((s) => ({ version: verOf(s), git_sha: s })) }));
-    } else if (req.url === '/chloepriceless/dvhub/releases/download/channels/index-dev.json.sig' && remote.indexSig) {
+    } else if (req.url === '/chloepriceless/dvhub/releases/download/channels/index-dev-v2.json.sig' && remote.bridge && remote.indexSig) {
       res.end('sig');
     } else { res.statusCode = 404; res.end('{}'); }
   });
@@ -117,7 +121,8 @@ async function setup(t) {
     PATH: `${bin}:${process.env.PATH}`,
     HOME: home, TMPDIR: root, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0',
     DVHUB_DW_HOME: dwHome, DVHUB_DW_LOG: log, DVHUB_DW_ORIGIN: origin, DVHUB_DW_API: base, DVHUB_DW_DOWNLOAD: base,
-    DVHUB_DW_SSH_AUTH_SOCK: sock, DVHUB_DW_PUBKEY: pub, DVHUB_DW_TEST: '1', DVHUB_DW_FAKE_TOKEN: 'test-token',
+    DVHUB_DW_KEY: key, DVHUB_DW_TEST: '1', DVHUB_DW_FAKE_TOKEN: 'test-token',
+    SSH_AUTH_SOCK: path.join(root, 'kein-agent'), // muss der Worker entfernen
     DVHUB_DW_AGENT_TIMEOUT: '2',
     FAKE_CALLS: files.calls, FAKE_NOTIFY: files.notify, FAKE_PUBLISHED: files.published,
   };
@@ -130,7 +135,7 @@ async function setup(t) {
   });
   const read = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '');
   return {
-    root, sha, oldSha, dwHome, remote, run, env, log_: log,
+    root, sha, oldSha, dwHome, remote, run, env, key, origin,
     calls: () => read(files.calls).split('\n').filter(Boolean),
     notes: () => read(files.notify).split('\n').filter(Boolean),
     log: () => read(log),
@@ -174,13 +179,11 @@ test('grün → bauen, veröffentlichen, Zustand; zweiter Lauf tut nichts', { sk
   assert.equal(r.code, 0, r.err + w.log());
   const calls = w.calls();
   assert.equal(calls.length, 2, calls.join('\n'));
-  assert.equal(calls[0], `build ${w.sha} key=release_agent sock=ja`);
-  assert.match(calls[1], /^publish .*1\.0\.12-dev\.20261124000000\.[0-9a-f]{8} --key .*release_agent token=ja$/);
+  assert.equal(calls[0], `build ${w.sha} scope=dev key=devkey agent=nein`);
+  assert.match(calls[1], /^publish .*1\.0\.12-dev\.20261124000000\.[0-9a-f]{8} --sig-scope dev --key .*devkey token=ja agent=nein$/);
   assert.doesNotMatch(calls[1], /--dry-run/);
   assert.match(w.state('published'), new RegExp(`^${w.sha} .* worker$`, 'm'));
   assert.match(w.notes().join('\n'), /veröffentlicht/);
-  const key = path.join(w.dwHome, 'key/release_agent');
-  assert.equal(fs.statSync(key).mode & 0o777, 0o600);
   const r2 = await w.run();
   assert.equal(r2.code, 0);
   assert.equal(w.calls().length, 2, 'kein zweiter Bau');
@@ -189,7 +192,7 @@ test('grün → bauen, veröffentlichen, Zustand; zweiter Lauf tut nichts', { sk
   assert.ok(fs.existsSync(path.join(w.dwHome, 'repo/.git')));
 });
 
-test('1Password wartet auf Freigabe → Zeitlimit, kein Bau, einmal melden, kein Hängen', { skip }, async (t) => {
+test('Signieren hängt → Zeitlimit, kein Bau, einmal melden, kein Hängen', { skip }, async (t) => {
   const w = await setup(t);
   for (let i = 0; i < 2; i++) {
     const r = await w.run({ FAKE_SIGN: 'hang', DVHUB_DW_AGENT_TIMEOUT: '1' });
@@ -197,22 +200,22 @@ test('1Password wartet auf Freigabe → Zeitlimit, kein Bau, einmal melden, kein
     assert.ok(r.ms < 20000, `Lauf dauerte ${r.ms} ms`);
   }
   assert.deepEqual(w.calls(), []);
-  assert.equal((w.log().match(/Freigabe in 1Password nötig/g) || []).length, 2);
+  assert.equal((w.log().match(/Signieren hängt/g) || []).length, 2);
   assert.equal(w.notes().length, 1);
-  assert.match(w.notes()[0], /Freigabe in 1Password nötig/);
+  assert.match(w.notes()[0], /hängt/);
   // Danach signiert der Agent wieder → Bau läuft, Sperr-Meldung zurückgesetzt.
   const r = await w.run();
   assert.equal(r.code, 0, w.log());
   assert.equal(w.calls().length, 2);
-  assert.match(w.log(), /1Password-Agent signiert wieder/);
+  assert.match(w.log(), /dev-Schlüssel signiert wieder/);
 });
 
-test('Agent verweigert → Fehler gemeldet, kein Bau', { skip }, async (t) => {
+test('Signieren scheitert → Fehler gemeldet, kein Bau', { skip }, async (t) => {
   const w = await setup(t);
   const r = await w.run({ FAKE_SIGN: 'fail' });
   assert.equal(r.code, 1);
   assert.deepEqual(w.calls(), []);
-  assert.match(w.log(), /Signieren über den 1Password-Agenten fehlgeschlagen/);
+  assert.match(w.log(), /Signieren mit dem dev-Schlüssel fehlgeschlagen/);
 });
 
 test('Sperre: zweiter Lauf bricht ab; verwaiste Sperre wird übernommen', { skip }, async (t) => {
@@ -259,9 +262,9 @@ test('--dry-run --sha: baut älteren main-Commit, publish nur --dry-run, kein Zu
   const r = await w.run({}, ['--dry-run', '--sha', w.oldSha]);
   assert.equal(r.code, 0, r.err + w.log());
   const calls = w.calls();
-  assert.equal(calls[0], `build ${w.oldSha} key=release_agent sock=ja`);
-  assert.match(calls[1], /--dry-run --dest .*dry\/1\.0\.12-dev/);
-  assert.match(calls[1], /token=$/, 'Trockenlauf bekommt kein Token');
+  assert.equal(calls[0], `build ${w.oldSha} scope=dev key=devkey agent=nein`);
+  assert.match(calls[1], /--sig-scope dev --key \S+ --dry-run --dest .*dry\/1\.0\.12-dev/);
+  assert.match(calls[1], /token= agent=nein$/, 'Trockenlauf bekommt kein Token');
   assert.equal(w.state('published'), '');
   assert.match(w.log(), /Trockenlauf ok/);
   // Fremder Commit (nicht auf origin/main) wird abgelehnt.
@@ -282,7 +285,7 @@ test('Plist: alle 10 min, nicht beim Laden, Node 22 im PATH', { skip }, () => {
   }
 });
 
-test('Signieren pausiert → kein Signierversuch (keine 1Password-Rückfrage), kein Bau', { skip }, async (t) => {
+test('Worker angehalten (sign-paused) → kein Signierversuch, kein Bau', { skip }, async (t) => {
   const w = await setup(t);
   fs.mkdirSync(path.join(w.dwHome, 'state'), { recursive: true });
   fs.writeFileSync(path.join(w.dwHome, 'state/sign-paused'), 'Test\n');
@@ -291,7 +294,7 @@ test('Signieren pausiert → kein Signierversuch (keine 1Password-Rückfrage), k
     assert.equal(r.code, 0, w.log());
   }
   assert.deepEqual(w.calls(), []);
-  assert.doesNotMatch(w.log(), /Freigabe in 1Password|Signier-Probe|Signieren über/);
+  assert.doesNotMatch(w.log(), /Signieren hängt|Signier-Probe|Signieren mit dem/);
   assert.equal((w.log().match(/Signieren pausiert/g) || []).length, 2);
   assert.equal(w.notes().length, 1);
   fs.rmSync(path.join(w.dwHome, 'state/sign-paused'));
@@ -327,7 +330,7 @@ test('Zeitlimit beendet die ganze Prozessgruppe (auch Enkel)', { skip }, async (
   const childPid = path.join(w.root, 'childpid');
   const r = await w.run({ FAKE_SIGN: 'hang-child', DVHUB_DW_AGENT_TIMEOUT: '1', FAKE_CHILDPID: childPid });
   assert.equal(r.code, 1);
-  assert.match(w.log(), /Freigabe in 1Password nötig/);
+  assert.match(w.log(), /Signieren hängt/);
   const pid = Number(fs.readFileSync(childPid, 'utf8'));
   await new Promise((res) => setTimeout(res, 300));
   assert.throws(() => process.kill(pid, 0), /ESRCH/, 'Enkel-Prozess läuft noch');
@@ -355,4 +358,48 @@ test('Aufruf: --sha ohne Wert bricht ab; Installation übernimmt Einstellungen i
   assert.match(plist, /<key>DVHUB_DW_HOME<\/key>\s*<string>[^<]*w &amp; h<\/string>/);
   assert.match(plist, /<string>[^<]*w &amp; h\/bin\/dev-worker\.sh<\/string>/);
   assert.ok(fs.statSync(path.join(root, 'w & h/bin/dev-worker.sh')).mode & 0o100);
+});
+
+test('Übergang fehlt (kein index-dev-v2.json) → kein Bau, einmal melden; Trockenlauf baut trotzdem', { skip }, async (t) => {
+  const w = await setup(t);
+  w.remote.bridge = false;
+  for (let i = 0; i < 2; i++) assert.equal((await w.run()).code, 0, w.log());
+  assert.deepEqual(w.calls(), []);
+  assert.equal((w.log().match(/Übergang zum dev-Schlüssel fehlt: index-dev-v2\.json fehlt/g) || []).length, 2);
+  assert.equal(w.notes().length, 1);
+  const r = await w.run({}, ['--dry-run']);
+  assert.equal(r.code, 0, w.log());
+  assert.match(w.log(), /Trockenlauf baut trotzdem/);
+  assert.equal(w.calls().length, 2);
+  assert.match(w.calls()[1], /--dry-run/);
+  assert.match(w.log(), /leerer Platzhalter/);
+});
+
+test('dev-Schlüssel nicht in allowed_signers von main → kein Bau', { skip }, async (t) => {
+  const w = await setup(t);
+  // main ohne dev-Zeile (bzw. mit falschen Namensräumen)
+  fs.writeFileSync(path.join(w.origin, 'release-keys/allowed_signers'),
+    'dvhub-release namespaces="dvhub-release,dvhub-release-index" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDevDevDevDev dvhub-dev-ci\n');
+  sh('git', ['-C', w.origin, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qam', 'ohne dev']);
+  assert.equal((await w.run()).code, 0, w.log());
+  assert.deepEqual(w.calls(), []);
+  assert.match(w.log(), /enthält den dev-Schlüssel .* nicht/);
+});
+
+test('dev-Schlüssel mit falschen Rechten → kein Bau, gemeldet', { skip }, async (t) => {
+  const w = await setup(t);
+  fs.chmodSync(w.key, 0o644);
+  assert.equal((await w.run()).code, 1);
+  assert.deepEqual(w.calls(), []);
+  assert.match(w.log(), /muss 0600 sein \(ist 644\)/);
+  assert.equal(w.notes().length, 1);
+});
+
+test('Brücken-Paket des aktuellen main liegt im Release dev-bridge → schon veröffentlicht', { skip }, async (t) => {
+  const w = await setup(t);
+  w.remote.extra.add(w.sha);
+  w.remote.bridgeShas.add(w.sha);
+  assert.equal((await w.run()).code, 0, w.log());
+  assert.deepEqual(w.calls(), []);
+  assert.match(w.log(), /schon veröffentlicht/);
 });
