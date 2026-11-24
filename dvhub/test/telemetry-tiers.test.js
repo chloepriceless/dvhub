@@ -258,3 +258,15 @@ test('pruneOneMinuteTier ohne TimescaleDB: VACUUM (ANALYZE) nach dem Löschen, o
     assert.equal(calls.includes('VACUUM (ANALYZE) timeseries_samples_1m'), n > 0, `n=${n}`);
   }
 });
+
+// E2E „kleine Platte“ S4: bei „kritisch“ ruht die Rückfüllung (sie schriebe den letzten Platz voll).
+test('Rückfüllung ruht, solange isPaused() gilt', async () => {
+  let paused = true; let queries = 0;
+  const db = { async connect() { return db; }, release() {}, async query() { queries += 1; return { rows: [] }; } };
+  const tiers = createTelemetryTiers({ getDb: () => db, isPaused: () => paused, now: () => Date.parse('2026-11-24T03:00:00Z') });
+  await tiers.runOnce({ budget: 0 });
+  assert.equal(queries, 0);
+  paused = false;
+  await tiers.runOnce({ budget: 0 });
+  assert.ok(queries > 0);
+});

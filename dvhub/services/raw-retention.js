@@ -44,13 +44,89 @@ export async function oldestLiveRawDays(query) {
   return Number.isFinite(d) ? d : null;
 }
 
-export async function pruneRawBefore(db, { before, timescale }) {
+/** Ältester 5-s-Live-Rohwert (ohne Preise) als ms, oder null. */
+export async function oldestLiveRawMs(query) {
+  const r = await query(`SELECT min(ts_utc) AS t FROM timeseries_samples WHERE scope = 'live' AND series_key NOT LIKE 'price%'`);
+  const v = r.rows?.[0]?.t;
+  return v ? new Date(v).getTime() : null;
+}
+
+/**
+ * Nächste Einheit für den Notfall-Pfad: mit TimescaleDB der älteste Block (nur
+ * ganze Blöcke lassen sich ohne Umbau löschen — auch alte 7-Tage-Blöcke), sonst
+ * der älteste UTC-Tag. { fromMs, toMs } oder null.
+ */
+export async function oldestRawUnit(query, { timescale }) {
+  const oldest = await oldestLiveRawMs(query);
+  if (oldest == null) return null;
+  if (timescale) {
+    try {
+      const r = await query(`SELECT range_start, range_end FROM timescaledb_information.chunks
+        WHERE hypertable_name = 'timeseries_samples' AND range_end > $1 ORDER BY range_start LIMIT 1`, [new Date(oldest).toISOString()]);
+      const c = r.rows?.[0];
+      if (c?.range_start && c?.range_end) return { fromMs: new Date(c.range_start).getTime(), toMs: new Date(c.range_end).getTime() };
+    } catch { /* dann tageweise */ }
+  }
+  const day = Math.floor(oldest / 86_400_000) * 86_400_000;
+  return { fromMs: day, toMs: day + 86_400_000 };
+}
+
+/** Gibt es 15-min-Werte für [fromMs, toMs)? (energy_slots_15m oder Stufe timeseries_samples_15m) */
+export async function has15mFor(query, fromMs, toMs) {
+  const p = [new Date(fromMs).toISOString(), new Date(toMs).toISOString()];
+  for (const sql of [
+    'SELECT 1 FROM timeseries_samples_15m WHERE bucket_ts >= $1 AND bucket_ts < $2 LIMIT 1',
+    'SELECT 1 FROM energy_slots_15m WHERE slot_start_utc >= $1 AND slot_start_utc < $2 LIMIT 1',
+  ]) {
+    try { if ((await query(sql, p)).rows?.length) return true; } catch { /* Tabelle fehlt */ }
+  }
+  return false;
+}
+
+// Höchstens so viele zu rettende Zeilen im Speicher (Preise/Importe eines Blocks).
+const KEEP_IN_MEMORY_MAX = 200_000;
+
+export async function pruneRawBefore(db, { before, timescale, lowSpace = false }) {
   const iso = new Date(before).toISOString();
+  if (timescale && lowSpace) {
+    // Platte (fast) voll (E2E kleine Platte S4): schon die Zwischenkopie in eine
+    // Temp-Tabelle scheitert („could not extend file“ — Katalog). Darum: zu
+    // rettende Zeilen in den Speicher lesen, Block löschen (gibt Platz frei),
+    // dann zurückschreiben. Nicht in EINER Transaktion — der Platz kommt erst
+    // mit dem COMMIT des drop_chunks frei. Scheitert das Zurückschreiben, steht
+    // es laut im Protokoll (Rückgabe restoreError).
+    const kept = (await db.query(`SELECT * FROM timeseries_samples WHERE ts_utc < $1
+      AND (scope <> 'live' OR series_key LIKE 'price%') LIMIT ${KEEP_IN_MEMORY_MAX + 1}`, [iso])).rows || [];
+    if (kept.length <= KEEP_IN_MEMORY_MAX) {
+      await db.query("SELECT drop_chunks('timeseries_samples', older_than => $1::timestamptz)", [iso]);
+      let restoreError = null;
+      if (kept.length) {
+        try {
+          const cols = Object.keys(kept[0]);
+          for (let i = 0; i < kept.length; i += 1000) {
+            const part = kept.slice(i, i + 1000);
+            const values = part.map((_, r) => `(${cols.map((__, c) => `$${r * cols.length + c + 1}`).join(',')})`).join(',');
+            await db.query(`INSERT INTO timeseries_samples (${cols.map((c) => `"${c}"`).join(',')}) OVERRIDING SYSTEM VALUE VALUES ${values}
+              ON CONFLICT DO NOTHING`, part.flatMap((row) => cols.map((c) => row[c])));
+          }
+        } catch (e) { restoreError = String(e?.message || e).slice(0, 200); }
+      }
+      return { mode: 'drop_chunks_low_space', before: iso, kept: kept.length, ...(restoreError ? { restoreError } : {}) };
+    }
+  }
   if (timescale) {
     // drop_chunks löscht ganze Blöcke mit ALLEN Reihen — darin liegen aber auch
     // Preise (die History rechnet Erlöse daraus) und importierte Altdaten. Die
     // werden vorher gesichert und danach zurückgeschrieben; nur die 5-s-Live-
     // Rohwerte gehen. Eine Transaktion: ganz oder gar nicht.
+    // Nichts zu retten (keine Preise/Altdaten davor): ohne Zwischenkopie — auf
+    // einer vollen Platte kann schon die Kopie scheitern (E2E kleine Platte S4).
+    const keep = await db.query(`SELECT 1 FROM timeseries_samples WHERE ts_utc < $1
+      AND (scope <> 'live' OR series_key LIKE 'price%') LIMIT 1`, [iso]);
+    if (!keep.rows?.length) {
+      await db.query("SELECT drop_chunks('timeseries_samples', older_than => $1::timestamptz)", [iso]);
+      return { mode: 'drop_chunks', before: iso };
+    }
     const client = typeof db.connect === 'function' ? await db.connect() : db;
     try {
       await client.query('BEGIN');

@@ -235,3 +235,63 @@ test('reines PostgreSQL: Hinweis „ohne Kompression“, Löschen gibt den Platz
       assert.ok(after <= sizeBefore, `wiederverwendet: ${sizeBefore} → ${after}`);
     });
   });
+
+// E2E „kleine Platte“ S4 (24.11.): Community, Stufen noch nicht rückgefüllt (aggregatedUntil null), Platte kritisch.
+test('echte TimescaleDB (timescale) S4: ohne Stufen-Stand ältesten Tag verdichten, dann löschen — bis 30 Tage',
+  { skip: process.env.DVHUB_TEST_PG_URL ? false : 'DVHUB_TEST_PG_URL nicht gesetzt' }, async () => {
+    const { tuneTimescale } = await import('../services/db-tuning.js');
+    const { createTelemetryTiers } = await import('../services/telemetry-tiers.js');
+    await withFreshDb(process.env.DVHUB_TEST_PG_URL, async (pool) => {
+      await ensurePgSchema(pool);
+      await pool.query(SQL014);
+      await tuneTimescale((q, p) => pool.query(q, p));   // Tagesblöcke
+      await pool.query(SQL027);
+      await ensureTierStorage(pool);
+      const now = Date.now();
+      // 45 Tage Rohwerte, alle 5 min, zwei Reihen; dazu Preise.
+      await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+        SELECT k, 'live', 'test', 'raw', to_timestamp($1::double precision / 1000) - g * INTERVAL '5 minutes', 5, g
+          FROM generate_series(1, 45 * 288) g, (VALUES ('grid_total_w'), ('battery_soc_pct')) v(k)`, [now]);
+      await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+        SELECT 'price_eur_mwh', 'live', 'epex', 'raw', to_timestamp($1::double precision / 1000) - g * INTERVAL '1 hour', 3600, g
+          FROM generate_series(1, 45 * 24) g`, [now]);
+      const tierState = (await pool.query("SELECT done_until FROM telemetry_tier_state WHERE id = 'tiers'")).rows[0];
+      assert.equal(tierState.done_until, null, 'Stufen noch nicht rückgefüllt');
+      const tiers = createTelemetryTiers({ getDb: () => pool });
+      let freed = 0;
+      const wrapped = { query: async (q, p) => { const r = await pool.query(q, p); if (/^\s*SELECT (count\(\*\)::int AS n FROM )?drop_chunks\('timeseries_samples'/.test(q)) freed += 31; return r; },
+        connect: () => pool.connect() };
+      const r = await createStorageGuard({ getDb: () => wrapped, now: () => now,
+        statfs: () => ({ blocks: 4096, bsize: 1048576, bavail: 93 + freed }),
+        aggregateRange: (a, b) => tiers.aggregateRange(a, b) }).check();
+      const em = r.actions.filter((a) => a.action === 'emergency_raw' && a.day);
+      assert.ok(em.length >= 14, JSON.stringify(r.actions));
+      assert.ok(em.every((a) => a.aggregated && !a.error), JSON.stringify(em));
+      const oldestLive = (await pool.query("SELECT min(ts_utc) AS t FROM timeseries_samples WHERE scope = 'live' AND series_key NOT LIKE 'price%'")).rows[0].t;
+      assert.ok(Date.parse(oldestLive) >= now - 31 * 86_400_000, `ältester Rohwert ${oldestLive}`);
+      // Die gelöschten Tage stehen als 1-min- und 15-min-Werte da, Preise bleiben roh.
+      const cut = Date.parse(oldestLive);
+      const m1 = Number((await pool.query('SELECT count(*) AS n FROM timeseries_samples_1m WHERE bucket_ts < $1', [new Date(cut).toISOString()])).rows[0].n);
+      const m15 = Number((await pool.query('SELECT count(*) AS n FROM timeseries_samples_15m WHERE bucket_ts < $1', [new Date(cut).toISOString()])).rows[0].n);
+      assert.ok(m1 > 1000 && m15 > 100, `1 min ${m1}, 15 min ${m15}`);
+      const prices = Number((await pool.query("SELECT count(*) AS n FROM timeseries_samples WHERE series_key = 'price_eur_mwh'")).rows[0].n);
+      assert.equal(prices, 45 * 24, 'Preise bleiben');
+    });
+  });
+
+test('echte TimescaleDB (timescale): Löschen bei fast voller Platte ohne Temp-Tabelle, Preise/Altdaten bleiben',
+  { skip: process.env.DVHUB_TEST_PG_URL ? false : 'DVHUB_TEST_PG_URL nicht gesetzt' }, async () => {
+    const { pruneRawBefore } = await import('../services/raw-retention.js');
+    await withFreshDb(process.env.DVHUB_TEST_PG_URL, async (pool) => {
+      await seed(pool);
+      const before = await counts(pool, 400);
+      const r = await pruneRawBefore(pool, { before: new Date(Date.now() - 400 * DAY), timescale: true, lowSpace: true });
+      assert.equal(r.mode, 'drop_chunks_low_space');
+      assert.ok(!r.restoreError, r.restoreError);
+      const after = await counts(pool, 400 + 7);
+      assert.equal(Number(after.live), 0);
+      const kept = await counts(pool, 400);
+      assert.equal(kept.price, before.price, 'Preise zurückgeschrieben');
+      assert.equal(kept.import, before.import, 'Altdaten zurückgeschrieben');
+    });
+  });

@@ -15,7 +15,7 @@ test('Stufen und Aufbewahrungsschritte', () => {
 
 // Attrappe einer Community-Box (Standard) bzw. — per Option — Apache, ohne Kompression usw.
 function fakeDb({ ts = true, oldestDays = 500, aggUntil = '2026-09-30T00:00:00Z', license = 'timescale', hypertable = true,
-  compressionOn = true, policies = 1, failing = null, compressThrows = null, dropThrows = null } = {}) {
+  compressionOn = true, policies = 1, failing = null, compressThrows = null, dropThrows = null, keepRows = true } = {}) {
   const calls = [];
   return {
     calls,
@@ -27,11 +27,14 @@ function fakeDb({ ts = true, oldestDays = 500, aggUntil = '2026-09-30T00:00:00Z'
       if (sql.includes('timescaledb_information.hypertables')) {
         return { rows: hypertable ? [{ on: compressionOn, policies: String(policies), failing }] : [] };
       }
+      if (sql.includes('NOT is_compressed AND range_end')) return { rows: [{ c: 'a' }, { c: 'b' }, { c: 'c' }] };
       if (sql.includes('compress_chunk')) {
         if (compressThrows) throw new Error(compressThrows);
-        return { rows: [{ n: 3 }] };
+        return { rows: [{}] };
       }
       if (sql.includes('drop_chunks') && dropThrows) throw new Error(dropThrows);
+      // pruneRawBefore: gibt es Preise/Altdaten vor der Grenze? (Standard: ja → Zwischenkopie)
+      if (sql.includes("(scope <> 'live' OR series_key LIKE 'price%') LIMIT 1")) return { rows: keepRows ? [{}] : [] };
       if (sql.includes('/ 86400 AS d')) return { rows: [{ d: oldestDays }] };
       // Datenstufen (telemetry-tiers.js): bis aggUntil sind 1-min- und 15-min-Werte vollständig.
       if (sql.includes('FROM telemetry_tier_state s')) {
@@ -540,4 +543,150 @@ test('Kompression ausgeschaltet: Einrichtung höchstens stündlich neu, Profil b
   assert.equal(r.compression.ok, true);
   assert.equal(r.profile.effective, 'gross');
   assert.ok(!db.calls.some(([s]) => /drop_chunks|DELETE/.test(s)));
+});
+
+// ── E2E „kleine Platte“ S4 (24.11.): Stufen noch nicht rückgefüllt (aggregatedUntil null), Platte kritisch ──
+function s4Db({ aggregateFails = false, has15m = false, days = 45 } = {}) {
+  const NOW = Date.parse('2026-11-24T12:00:00Z');
+  const state = { oldest: Math.floor((NOW - days * 86_400_000) / 86_400_000) * 86_400_000, calls: [] };
+  const db = {
+    calls: state.calls,
+    async query(sql, p) {
+      const s = sql.replace(/\s+/g, ' ').trim();
+      state.calls.push([s, p]);
+      if (s.includes('pg_database_size')) return { rows: [{ b: 1400 * 1048576 }] };
+      if (s.includes('pg_extension')) return { rows: [{}] };
+      if (s.includes("current_setting('timescaledb.license'")) return { rows: [{ lic: 'timescale' }] };
+      if (s.includes('timescaledb_information.hypertables')) return { rows: [{ on: true, policies: '1', failing: null }] };
+      if (s.includes('NOT c.is_compressed')) return { rows: [{ b: 40 * 1048576 }] };
+      if (s.includes('FROM telemetry_tier_state s')) return { rows: [{ done_until: null, dirty_from: null, dirty_n: 0 }] };
+      if (s.startsWith('SELECT min(ts_utc) AS t')) return { rows: [{ t: new Date(state.oldest) }] };
+      if (s.includes('/ 86400 AS d')) return { rows: [{ d: (NOW - state.oldest) / 86_400_000 }] };
+      if (s.includes('FROM timescaledb_information.chunks') && s.includes('range_start')) {
+        return { rows: [{ range_start: new Date(state.oldest), range_end: new Date(state.oldest + 86_400_000) }] };
+      }
+      if (s.includes('FROM timeseries_samples_15m') || s.includes('FROM energy_slots_15m')) return { rows: has15m ? [{}] : [] };
+      if (s.includes("(scope <> 'live' OR series_key LIKE 'price%') LIMIT 1")) return { rows: [] };
+      if (s.startsWith('SELECT drop_chunks')) { state.oldest += 86_400_000; state.freed = (state.freed || 0) + 31; return { rows: [] }; }
+      if (s.includes('compress_chunk')) throw new Error('could not extend file: No space left on device');
+      return { rows: [], rowCount: 0 };
+    },
+  };
+  const aggregated = [];
+  const aggregateRange = async (a, b) => { if (aggregateFails) throw new Error('aggregate: No space left on device'); aggregated.push([a, b]); return 1440; };
+  // 4-GB-Platte, 93 MB frei; jeder gelöschte Tag gibt ~31 MB frei.
+  const statfs = () => ({ blocks: 4096, bsize: 1048576, bavail: 93 + (state.freed || 0) });
+  return { db, state, aggregated, aggregateRange, statfs, NOW };
+}
+
+test('S4: kritisch ohne Stufen-Stand → ältesten Tag erst verdichten, dann löschen; Komprimieren erst mit Platz', async () => {
+  const s = s4Db();
+  const warn = {};
+  const r = await createStorageGuard({ getDb: () => s.db, statfs: s.statfs, now: () => s.NOW, aggregateRange: s.aggregateRange,
+    setWarning: (id, m) => { warn[id] = m; } }).check();
+  assert.equal(r.level, 'kritisch');
+  const em = r.actions.filter((a) => a.action === 'emergency_raw' && a.day);
+  assert.ok(em.length > 0, JSON.stringify(r.actions));
+  assert.ok(em.every((a) => a.aggregated), 'jeder Tag vorher verdichtet');
+  assert.equal(s.aggregated.length, em.length);
+  // Reihenfolge: verdichten vor löschen, je Tag.
+  assert.equal(s.aggregated[0][0], Date.parse('2026-10-10T00:00:00Z'));
+  // Bis zur 30-Tage-Grenze (die letzten 30 Tage bleiben, wie bisher): 15 Tage à 31 MB → 558 MB frei, raus aus „kritisch“.
+  assert.equal(em.length, 15);
+  assert.equal(93 + s.state.freed, 558);
+  assert.ok(r.actions.some((a) => a.stopped === 'keep_30_days'));
+  assert.ok(s.state.oldest >= s.NOW - 31 * 86_400_000 && s.state.oldest <= s.NOW - 30 * 86_400_000 + 86_400_000);
+  assert.match(warn.storage, /Notfall: älteste Rohwerte entfernt.*vorher zu 1-min- und 15-min-Werten verdichtet/);
+  // Komprimieren lief danach, und nur mit Platz (hier scheitert es in der Attrappe — das darf nichts aufhalten).
+  const iDrop = s.db.calls.findIndex(([q]) => q.startsWith('SELECT drop_chunks'));
+  const iComp = s.db.calls.findIndex(([q]) => q.includes('compress_chunk'));
+  assert.ok(iComp === -1 || iComp > iDrop, 'nie vor dem Löschen komprimieren');
+});
+
+test('S4: Verdichten scheitert (Platte voll) — ohne 15-min-Werte nichts löschen, mit 15-min-Werten laut löschen', async () => {
+  const blocked = s4Db({ aggregateFails: true, has15m: false });
+  const logs = [];
+  const r1 = await createStorageGuard({ getDb: () => blocked.db, statfs: blocked.statfs, now: () => blocked.NOW,
+    aggregateRange: blocked.aggregateRange, pushLog: (e) => logs.push(e) }).check();
+  assert.ok(r1.actions.some((a) => a.stopped === 'no_15m'));
+  assert.ok(!blocked.db.calls.some(([q]) => q.startsWith('SELECT drop_chunks')), 'ohne 15-min nichts weg');
+  assert.ok(logs.includes('storage_emergency_blocked_error'));
+  const loud = s4Db({ aggregateFails: true, has15m: true });
+  const logs2 = []; const guardErrors = []; const warn = {};
+  const r2 = await createStorageGuard({ getDb: () => loud.db, statfs: loud.statfs, now: () => loud.NOW,
+    aggregateRange: loud.aggregateRange, pushLog: (e, d) => { logs2.push(e); if (e === 'storage_guard_error') guardErrors.push(d.error); },
+    setWarning: (id, m) => { warn[id] = m; } }).check();
+  assert.ok(r2.actions.some((a) => a.action === 'emergency_raw' && a.day && a.aggregated === false));
+  assert.ok(logs2.includes('storage_raw_without_1m_error'), 'laut: …_error ans Portal');
+  assert.ok(logs2.includes('storage_emergency_aggregate_skipped'));
+  assert.ok(!guardErrors.some((m) => /aggregate/.test(m)), 'vorgesehener Rückfall, kein Fehler der Wache');
+  assert.match(warn.storage, /auch die 1-min-Werte verloren, nur die 15-min-Werte blieben/);
+});
+
+test('S4: Komprimieren nur mit Platz für 2 Blöcke', async () => {
+  // knapp (nicht kritisch), 40-MB-Block, nur 60 MB frei → kein compress_chunk.
+  const s = s4Db();
+  const statfs = () => ({ blocks: 400, bsize: 1048576, bavail: 60 });
+  const r = await createStorageGuard({ getDb: () => s.db, statfs, now: () => s.NOW, aggregateRange: s.aggregateRange }).check();
+  assert.ok(r.actions.some((a) => a.action === 'compress' && a.skipped === 'no_space') || !s.db.calls.some(([q]) => q.includes('compress_chunk')));
+  assert.ok(!s.db.calls.some(([q]) => q.includes('compress_chunk')), JSON.stringify(r.actions));
+});
+
+test('S4: Ziel erreicht → nicht weiter löschen als nötig', async () => {
+  const s = s4Db({ days: 60 });
+  await createStorageGuard({ getDb: () => s.db, statfs: s.statfs, now: () => s.NOW, aggregateRange: s.aggregateRange }).check();
+  // Ziel: max(„wenig“ 512 MB × 1,25, 2 × 40 MB) = 640 MB → 18 Tage (93 + 18 × 31 = 651).
+  assert.equal(s.aggregated.length, 18);
+  assert.equal(93 + s.state.freed, 651);
+});
+
+// E2E S4, 2. Lauf: Platte schon voll — keine Temp-Tabelle; Rückfüllung pausiert vor dem ersten Lauf der Wache.
+test('S4: fast volle Platte — Preise im Speicher retten, Block löschen, zurückschreiben (keine Temp-Tabelle)', async () => {
+  const s = s4Db({ has15m: true });   // 15-min-Werte (energy_slots_15m) da: erster Tag darf ohne 1-min weg
+  const orig = s.db.query.bind(s.db);
+  s.db.query = async (sql, p) => {
+    const q = sql.replace(/\s+/g, ' ').trim();
+    if (q.startsWith('SELECT * FROM timeseries_samples WHERE ts_utc < $1')) {
+      s.db.calls.push([q, p]);
+      return { rows: [{ id: 1, series_key: 'price_eur_mwh', scope: 'live', ts_utc: '2026-10-10T01:00:00Z', value_num: 90 }] };
+    }
+    return orig(sql, p);
+  };
+  // 0 MB frei; jeder gelöschte Tag gibt 31 MB frei.
+  const r = await createStorageGuard({ getDb: () => s.db, statfs: () => ({ blocks: 4096, bsize: 1048576, bavail: 0 + (s.state.freed || 0) }),
+    now: () => s.NOW, aggregateRange: async () => { if (!(s.state.freed > 0)) throw new Error('No space left on device'); } }).check();
+  const calls = s.db.calls.map(([q]) => q);
+  assert.ok(!calls.some((q) => q.startsWith('CREATE TEMP TABLE')), 'keine Temp-Tabelle auf voller Platte');
+  const iSel = calls.findIndex((q) => q.startsWith('SELECT * FROM timeseries_samples WHERE ts_utc < $1'));
+  const iDrop = calls.findIndex((q) => q.startsWith('SELECT drop_chunks'));
+  const iIns = calls.findIndex((q) => q.startsWith('INSERT INTO timeseries_samples ("id"'));
+  assert.ok(iSel >= 0 && iSel < iDrop && iDrop < iIns, 'retten → löschen → zurückschreiben');
+  const first = r.actions.find((a) => a.action === 'emergency_raw' && a.day);
+  assert.equal(first.mode, 'drop_chunks_low_space');
+  assert.equal(first.aggregated, false, 'erster Tag: kein Platz zum Verdichten → laut ohne 1-min');
+  const later = r.actions.filter((a) => a.action === 'emergency_raw' && a.day).slice(1);
+  assert.ok(later.length > 0 && later.every((a) => a.aggregated), 'danach mit Platz wieder verdichtet');
+});
+
+test('isCritical: Sofort-Messung ohne Datenbank, auch vor dem ersten Lauf', () => {
+  const g = createStorageGuard({ statfs: () => ({ blocks: 4096, bsize: 1048576, bavail: 93 }), getDataDir: () => '/' });
+  assert.equal(g.status(), null);
+  assert.equal(g.isCritical(), true);
+  const ok = createStorageGuard({ statfs: () => ({ blocks: 4096, bsize: 1048576, bavail: 2000 }), getDataDir: () => '/' });
+  assert.equal(ok.isCritical(), false);
+});
+
+// E2E S4, 2. Lauf: Kompressions-Job war schneller — „already compressed“ ist kein Fehler.
+test('Komprimieren Block für Block: „already compressed“ wird übersprungen, kein roter Hinweis', async () => {
+  const db = fakeDb({ oldestDays: 20 });
+  const orig = db.query.bind(db);
+  db.query = async (sql, p) => {
+    if (sql.includes('compress_chunk') && p?.[0] === 'b') { db.calls.push([sql, p]); throw new Error('chunk "_hyper_1_53_chunk" is already compressed'); }
+    return orig(sql, p);
+  };
+  const warn = {}; const logs = [];
+  const r = await createStorageGuard({ getDb: () => db, statfs: stat(15), setWarning: (id, m) => { warn[id] = m; }, pushLog: (e) => logs.push(e) }).check();
+  assert.deepEqual(r.actions.find((a) => a.action === 'compress'), { action: 'compress', chunks: 2 });
+  assert.equal(warn[COMPRESSION_WARNING_ID], null);
+  assert.ok(!logs.includes('storage_guard_error'));
 });

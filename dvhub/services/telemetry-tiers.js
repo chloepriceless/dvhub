@@ -366,6 +366,10 @@ const DISTINCT_SCOPES_SQL = `
 export function createTelemetryTiers({
   getDb, pushLog, now = () => Date.now(),
   portionMs = TIER_PORTION_MS, lagMs = TIER_LAG_MS, budgetMs = TIER_RUN_BUDGET_MS,
+  // Platz-Wache „kritisch“ (E2E kleine Platte S4, 24.11.): Rückfüllung ruht, sie
+  // würde den letzten Platz in die Stufen-Tabellen schreiben. Den nächsten zu
+  // löschenden Tag verdichtet die Wache selbst (aggregateRange).
+  isPaused = () => false,
 } = {}) {
   let running = false;
   let last = null;
@@ -472,6 +476,7 @@ export function createTelemetryTiers({
    */
   async function runOnce({ budget = budgetMs } = {}) {
     if (running) return last;
+    try { if (isPaused?.()) return last; } catch { /* egal */ }
     running = true;
     const startedAt = now();
     const out = { at: iso(startedAt), portions: 0, dirty: 0, rows: 0, from: null, to: null, done: false };
@@ -512,8 +517,29 @@ export function createTelemetryTiers({
     }
   }
 
+  /**
+   * Einen Zeitraum synchron in 1 min UND 15 min verdichten (alle Reihen), ohne
+   * den Zeiger zu bewegen — für den Notfall-Pfad der Platz-Wache: erst diesen
+   * Tag verdichten, dann seine Rohwerte löschen. Ersetzt vorhandene Eimer nur
+   * mit mindestens so vielen Proben (wie der normale Lauf).
+   * @returns {Promise<number>} Zahl der 1-min-Eimer
+   */
+  async function aggregateRange(fromMs, toMs) {
+    const db = getDb?.();
+    if (!db || typeof db.query !== 'function') throw new Error('keine Datenbank');
+    const a = floorQuarterMs(fromMs); const b = floorQuarterMs(toMs);
+    if (!(b > a)) return 0;
+    const hypertable = await isHypertable(db, 'timeseries_samples');
+    return inTransaction(db, async (client) => {
+      await client.query(`SET LOCAL statement_timeout = '${STATEMENT_TIMEOUT}'`);
+      const layout = { scopes: hypertable ? null : await scopesNow(client) };
+      return aggregateWindow(client, a, b, layout);
+    });
+  }
+
   return {
     runOnce,
+    aggregateRange,
     status: () => ({ last, storage }),
     aggregatedUntil: () => { const db = getDb?.(); return db ? aggregatedUntil(db) : Promise.resolve(null); },
     coverage: () => { const db = getDb?.(); return db ? tierCoverage(db) : Promise.resolve(null); },

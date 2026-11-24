@@ -2800,7 +2800,12 @@ const telemetryReady = (async () => {
     // je Lauf höchstens 60 s — die Rückfüllung alter Rohwerte verteilt sich so
     // über viele Läufe. ctx.telemetryTiers.aggregatedUntil() sagt der
     // Aufbewahrung, bis wohin Rohwerte gelöscht werden dürfen.
-    ctx.telemetryTiers = createTelemetryTiers({ getDb: () => ctx.db, pushLog });
+    ctx.telemetryTiers = createTelemetryTiers({
+      getDb: () => ctx.db, pushLog,
+      // Bei „kritisch“ ruht die Rückfüllung (sie schriebe den letzten Platz voll);
+      // den nächsten zu löschenden Zeitraum verdichtet die Platz-Wache selbst.
+      isPaused: () => ctx.storageGuard?.status?.()?.level === 'kritisch' || !!ctx.storageGuard?.isCritical?.(),
+    });
     ctx.telemetryTiers.start();
     // Platz-Wache (kleine eMMC/SD): früher komprimieren, im Notfall älteste
     // Rohwerte entfernen — 15-min-Werte und die letzten 30 Tage bleiben.
@@ -2828,6 +2833,8 @@ const telemetryReady = (async () => {
         }
         await tuneDatabase(cfg.telemetry?.database || {}, profile).catch((e) => pushLog('db_tuning_error', { error: e.message }, 'warn'));
       },
+      // Notfall-Pfad: ältesten Zeitraum erst verdichten, dann löschen (E2E kleine Platte S4).
+      aggregateRange: (fromMs, toMs) => ctx.telemetryTiers.aggregateRange(fromMs, toMs),
       // S11 a: Push ab „wenig“ (Portal über storage_space_error im Audit-Log).
       notify: (msg) => ctx.notifyDirect(msg),
       // „wenig“/„kritisch“: Log-Aufbewahrung sofort laufen lassen (S5 c, „Vollständig“ ruht dann).

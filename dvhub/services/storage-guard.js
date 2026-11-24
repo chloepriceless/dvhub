@@ -27,15 +27,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  mountCandidates, measureMounts, mountFor, readSamples, writeSamples, recordSample,
+  mountCandidates, measureMounts, mountFor, readSamples, writeSamples, recordSample, statPath,
   growthMbPerDay, reserveMb, daysLeft as reachDays, DEFAULT_DB_VOLUME_DIR,
 } from './storage-mounts.js';
 import {
-  PROFILES, profileForSize, profileRank, storageStage, stageRank, decideProfile, chooseProfile, cappedReserveMb,
+  PROFILES, profileForSize, profileRank, storageStage, stageRank, decideProfile, chooseProfile, cappedReserveMb, fallbackThresholds,
   NO_COMPRESSION_MIN_PROFILE, NO_COMPRESSION_TIER1M_KEEP_DAYS,
   readProfileState, writeProfileState, startupProfile,
 } from './storage-profile.js';
-import { rawCompactedUntil, rawPruneCutoff, oldestLiveRawDays, pruneRawBefore } from './raw-retention.js';
+import { rawCompactedUntil, rawPruneCutoff, oldestLiveRawDays, pruneRawBefore, oldestRawUnit, has15mFor } from './raw-retention.js';
 import { pruneOneMinuteTier } from './telemetry-tiers.js';
 
 export const STORAGE_CHECK_INTERVAL_MS = 30 * 60_000;
@@ -47,6 +47,21 @@ const COMPRESSION_REPORT_EVERY_MS = 24 * 3600_000;
 // Erste Kompressions-Prüfung kurz nach dem Start (nur lesend, ohne Löschen).
 const COMPRESSION_FIRST_CHECK_MS = 60_000;
 const RETUNE_EVERY_MS = 3600_000;
+// Notfall-Pfad: höchstens so lange je Lauf, so viele Einheiten, die letzten 30 Tage bleiben.
+const EMERGENCY_BUDGET_MS = 4 * 60_000;
+const EMERGENCY_MAX_UNITS = 400;
+const EMERGENCY_KEEP_DAYS = 30;
+// Darunter gilt die Platte als „fast voll“: Löschen ohne Zwischenkopie in eine Temp-Tabelle.
+const EMERGENCY_LOW_SPACE_MB = 64;
+
+/** Größter unkomprimierter Block der Messwerte in MB (0, wenn nicht ermittelbar). */
+export async function largestUncompressedChunkMb(query) {
+  try {
+    const r = await query(`SELECT coalesce(max(pg_total_relation_size(format('%I.%I', c.chunk_schema, c.chunk_name)::regclass)), 0) AS b
+      FROM timescaledb_information.chunks c WHERE c.hypertable_name = 'timeseries_samples' AND NOT c.is_compressed`);
+    return Math.round(Number(r.rows?.[0]?.b || 0) / 1048576);
+  } catch { return 0; }
+}
 
 export function storageLevel(freePct) {
   if (!Number.isFinite(freePct)) return 'unbekannt';
@@ -173,6 +188,8 @@ export function createStorageGuard({
   initialProfile = null, onProfileChange = null, onStageChange = null, profileIo = {},
   // Schritt 4 (S11 a): Push ab „wenig“ (server.js: ctx.notifyDirect).
   notify = null,
+  // Notfall-Pfad: einen Zeitraum synchron in 1 min + 15 min verdichten (telemetry-tiers.js).
+  aggregateRange = null,
 } = {}) {
   let last = null;
   let running = false;
@@ -433,14 +450,46 @@ export function createStorageGuard({
               }
             } catch (e) { logGuardError(e); }
           }
+          // Größter unkomprimierter Block: so viel Platz braucht ein Komprimieren
+          // vorübergehend (E2E kleine Platte S4: compress_chunk auf voller Platte).
+          const bigChunkMb = (ts && probe?.usable) ? await largestUncompressedChunkMb((q, p) => db.query(q, p)) : 0;
+          out.largestUncompressedMb = bigChunkMb;
+          // NOTFALL ZUERST (E2E S4, 24.11.): bei „kritisch“ — und bei „wenig“, wenn
+          // nicht einmal Platz für 2 Blöcke ist — älteste Rohwerte einheitweise
+          // verdichten (1 min + 15 min) und löschen, bis die Platte wieder Luft hat.
+          if (!dbUnmeasured && primary && (level === 'kritisch' || (level === 'wenig' && freeMb < 2 * bigChunkMb))) {
+            try { await emergencyFree(db, ts, out, { primary, totalMb, bigChunkMb }); } catch (e) {
+              out.actions.push({ action: 'emergency_raw', error: String(e?.message || e).slice(0, 200) });
+              logGuardError(e);
+            }
+          }
           if (level !== 'ok' && level !== 'unbekannt') {
-            // Komprimieren nur, wo es geht (Community + eingeschaltet); ein Fehler
-            // hält Löschstufe und Hinweis nicht mehr auf (Apache: compress_chunk wirft).
-            if (ts && (probe ? probe.usable : true)) {
+            // Komprimieren nur, wo es geht (Community + eingeschaltet), und nur mit
+            // Platz für den größten Block; ein Fehler hält nichts mehr auf.
+            const freeNow = statPath(primary?.paths?.[0] || '/', { statfs, stat })?.freeMb ?? freeMb;
+            if (ts && (probe ? probe.usable : true) && bigChunkMb > 0 && freeNow < 2 * bigChunkMb) {
+              out.actions.push({ action: 'compress', skipped: 'no_space', freeMb: freeNow, needMb: 2 * bigChunkMb });
+            } else if (ts && (probe ? probe.usable : true)) {
               try {
-                const r = await db.query(`SELECT count(*) AS n FROM (SELECT compress_chunk(c, if_not_compressed => true)
-                  FROM show_chunks('timeseries_samples', older_than => INTERVAL '1 day') c) x`);
-                out.actions.push({ action: 'compress', chunks: Number(r.rows?.[0]?.n) || 0 });
+                // Block für Block (E2E S4: der Kompressions-Job von TimescaleDB lief
+                // parallel → „already compressed“ trotz if_not_compressed brach alles
+                // ab). Schon komprimiert = erledigt; vor jedem Block Platz prüfen.
+                const list = (await db.query(`SELECT format('%I.%I', chunk_schema, chunk_name) AS c
+                  FROM timescaledb_information.chunks WHERE hypertable_name = 'timeseries_samples'
+                    AND NOT is_compressed AND range_end < now() - INTERVAL '1 day' ORDER BY range_start`)).rows || [];
+                let n = 0;
+                for (const row of list) {
+                  const f = statPath(primary?.paths?.[0] || '/', { statfs, stat })?.freeMb;
+                  if (bigChunkMb > 0 && Number.isFinite(f) && f < 2 * bigChunkMb) { out.actions.push({ action: 'compress', skipped: 'no_space', freeMb: f, needMb: 2 * bigChunkMb }); break; }
+                  try {
+                    await db.query('SELECT compress_chunk($1::regclass, if_not_compressed => true)', [row.c]);
+                    n += 1;
+                  } catch (e) {
+                    if (/already compressed/i.test(String(e?.message || ''))) continue;
+                    throw e;
+                  }
+                }
+                out.actions.push({ action: 'compress', chunks: n });
                 if (compressFail) {
                   compressFail = null;
                   if (compression.reason === 'compress_failed') applyCompressionIssue(null, probe?.edition ?? null);
@@ -507,6 +556,8 @@ export function createStorageGuard({
         warn('storage', `Datenbank-Platte nicht messbar (${pgDataDir}): DVhub räumt in der Datenbank nichts auf, bis sie wieder messbar ist.`, 'warn');
       } else if (level === 'ok' || level === 'unbekannt') warn('storage', null);
       else warn('storage', storageWarningText(out), level === 'kritisch' ? 'error' : 'warn');
+      // Notfall noch nicht fertig (Zeitbudget): in einer Minute weiter.
+      if (out.emergencyPending) setTimeout(() => requestCheck(), 60_000).unref?.();
       const prevLevel = last?.level || null;
       // Neuen Stand veröffentlichen, BEVOR Rückrufe ihn lesen (z. B. die Log-
       // Aufbewahrung über status().level, Codex 2ef7ff2c).
@@ -547,6 +598,11 @@ export function createStorageGuard({
       + (dropped ? `5-s-Rohwerte älter als ${dropped.keepDays} Tage wurden entfernt — 15-min-Werte bleiben. `
         : (compresses ? 'Ältere Messwerte werden früher komprimiert. ' : 'Messwerte werden nicht komprimiert. '))
       + (p?.temporary ? `Speicherprofil vorübergehend „${PROFILES[p.effective].label}“. ` : '')
+      + (out.actions.some((a) => a.action === 'emergency_raw' && a.day && !a.error)
+        ? `Notfall: älteste Rohwerte entfernt (${out.actions.filter((a) => a.action === 'emergency_raw' && a.day).map((a) => a.day).join(', ')})`
+          + (out.actions.some((a) => a.action === 'emergency_raw' && a.day && !a.aggregated)
+            ? ' — dabei gingen auch die 1-min-Werte verloren, nur die 15-min-Werte blieben. ' : ', vorher zu 1-min- und 15-min-Werten verdichtet. ')
+        : '')
       // Ohne TimescaleDB (E2E „kleine Platte“ 24.11.): gelöschter Platz bleibt in der Datenbank.
       + (out.actions.some((a) => a.mode === 'delete' && !a.error)
         ? 'Ohne TimescaleDB nutzt die Datenbank den frei gewordenen Platz nur für neue Messwerte; an die Festplatte zurück gibt ihn erst eine Wartung (VACUUM FULL, sperrt die Datenbank kurz) — dafür bitte den Support kontaktieren. ' : '')
@@ -604,6 +660,55 @@ export function createStorageGuard({
     log('storage_raw_retention', { profile: prof.name, keepDays: prof.rawKeepDays, before: r.before }, 'info');
   }
 
+  /**
+   * Notfall-Pfad (E2E kleine Platte S4, Christin 24.11.): älteste Rohwerte
+   * einheitweise (TimescaleDB: ältester Block, sonst ältester UTC-Tag) erst
+   * synchron in 1 min + 15 min verdichten, dann löschen — bis die Platte
+   * wieder über „wenig“ liegt (Rückfall-Schwellen ×1,25, mindestens 2 Blöcke
+   * frei), höchstens EMERGENCY_BUDGET_MS lang. Die letzten 30 Tage bleiben.
+   * Scheitert das Verdichten (Platte zu voll): Rohwerte trotzdem löschen, aber
+   * nur, wenn 15-min-Werte für die Einheit da sind — mit lautem Hinweis.
+   */
+  async function emergencyFree(db, ts, out, { primary, totalMb, bigChunkMb }) {
+    const q = (sql, p) => db.query(sql, p);
+    const deadline = now() + EMERGENCY_BUDGET_MS;
+    const floorMs = now() - EMERGENCY_KEEP_DAYS * 86_400_000;
+    const fb = fallbackThresholds(totalMb);
+    const targetMb = Math.max(fb.wenig * 1.25, 2 * (bigChunkMb || 0));
+    for (let i = 0; i < EMERGENCY_MAX_UNITS; i++) {
+      const free = statPath(primary.paths[0], { statfs, stat })?.freeMb;
+      if (!Number.isFinite(free) || free >= targetMb) break;
+      if (now() >= deadline) { out.emergencyPending = true; break; }
+      const unit = await oldestRawUnit(q, { timescale: ts });
+      if (!unit || unit.toMs > floorMs) { out.actions.push({ action: 'emergency_raw', stopped: 'keep_30_days' }); break; }
+      const day = new Date(unit.fromMs).toISOString().slice(0, 10);
+      let aggregated = false;
+      if (typeof aggregateRange === 'function') {
+        // Scheitert das Verdichten (kein Platz), ist das der vorgesehene Rückfall,
+        // kein Fehler der Wache (E2E S4): eigenes Ereignis, der laute Hinweis folgt.
+        try { await aggregateRange(unit.fromMs, unit.toMs); aggregated = true; } catch (e) {
+          log('storage_emergency_aggregate_skipped', { day, error: String(e?.message || e).slice(0, 200) }, 'warn');
+        }
+      }
+      if (!aggregated && !(await has15mFor(q, unit.fromMs, unit.toMs))) {
+        out.actions.push({ action: 'emergency_raw', stopped: 'no_15m', day });
+        log('storage_emergency_blocked_error', { day, reason: 'weder verdichtbar noch 15-min-Werte vorhanden' }, 'error');
+        break;
+      }
+      // Fast voll: ohne Temp-Tabelle löschen (die bräuchte selbst Platz).
+      const r = await pruneRawBefore(db, { before: new Date(unit.toMs), timescale: ts, lowSpace: free < EMERGENCY_LOW_SPACE_MB });
+      out.actions.push({ action: 'emergency_raw', day, until: new Date(unit.toMs).toISOString(), aggregated, mode: r.mode,
+        ...(r.restoreError ? { restoreError: r.restoreError } : {}) });
+      if (r.restoreError) log('storage_keep_restore_error', { day, kept: r.kept, error: r.restoreError }, 'error');
+      if (!aggregated) {
+        // Laut: 5-s- und 1-min-Werte dieses Zeitraums sind weg, nur 15-min-Werte bleiben.
+        log('storage_raw_without_1m_error', { day, until: new Date(unit.toMs).toISOString() }, 'error');
+      } else {
+        log('storage_emergency_raw', { day, until: new Date(unit.toMs).toISOString() }, 'warn');
+      }
+    }
+  }
+
   // Notfall: eine Aufbewahrungsstufe der 5-s-Live-Rohwerte entfernen (kritisch).
   async function dropRaw(db, ts, out, freePct) {
     const q = (sql, p) => db.query(sql, p);
@@ -630,6 +735,20 @@ export function createStorageGuard({
     status: () => last,
     compressionStatus: () => compressionView(),
     profile: () => profileView(),
+    /**
+     * Sofort-Messung ohne Datenbank (statfs, feste Schwellen): ist die Platte der
+     * Datenbank kritisch voll? Für die Rückfüllung der Datenstufen — sie ruht dann,
+     * auch bevor die Wache das erste Mal gelaufen ist (E2E kleine Platte S4).
+     */
+    isCritical() {
+      try {
+        const container = !!isContainer?.();
+        const path = last?.mounts?.find((m) => m.roles.includes('db'))?.paths?.[0]
+          || (container ? (exists(dbVolumeDir) ? dbVolumeDir : '/') : (getDataDir?.() || '/'));
+        const m = statPath(path, { statfs, stat });
+        return !!m && storageStage({ freeMb: m.freeMb, totalMb: m.totalMb }) === 'kritisch';
+      } catch { return false; }
+    },
     chooseProfile: chooseProfileClick,
   };
 }
