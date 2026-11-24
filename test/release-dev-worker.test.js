@@ -48,6 +48,7 @@ mode="\${FAKE_SIGN:-ok}"
 if [[ "$1" == -Y && "$2" == verify ]]; then exit 0; fi
 case "$mode" in
   hang) exec sleep 60 ;;
+  hang-child) sleep 60 & echo $! > "$FAKE_CHILDPID"; wait; exit 0 ;;
   fail) echo "agent refused operation" >&2; exit 1 ;;
 esac
 file="\${@: -1}"; echo sig > "$file.sig"
@@ -86,7 +87,7 @@ async function setup(t) {
 
   const files = { calls: path.join(root, 'calls'), notify: path.join(root, 'notify'), published: path.join(root, 'published') };
   // Schon veröffentlichte SHAs (von Hand), zusätzlich zu dem, was publish-Stub einträgt.
-  const remote = { extra: new Set(), auth: [] };
+  const remote = { extra: new Set(), auth: [], indexSig: true };
   const publishedShas = () => new Set([...remote.extra,
     ...(fs.existsSync(files.published) ? fs.readFileSync(files.published, 'utf8').split('\n').filter(Boolean) : [])]);
   const verOf = (s) => `1.0.12-dev.20261124000000.${s.slice(0, 8)}`;
@@ -100,6 +101,8 @@ async function setup(t) {
       res.end(JSON.stringify({ assets }));
     } else if (req.url === '/chloepriceless/dvhub/releases/download/channels/index-dev.json') {
       res.end(JSON.stringify({ channel: 'dev', releases: shas.map((s) => ({ version: verOf(s), git_sha: s })) }));
+    } else if (req.url === '/chloepriceless/dvhub/releases/download/channels/index-dev.json.sig' && remote.indexSig) {
+      res.end('sig');
     } else { res.statusCode = 404; res.end('{}'); }
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -127,7 +130,7 @@ async function setup(t) {
   });
   const read = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '');
   return {
-    root, sha, oldSha, dwHome, remote, run, env,
+    root, sha, oldSha, dwHome, remote, run, env, log_: log,
     calls: () => read(files.calls).split('\n').filter(Boolean),
     notes: () => read(files.notify).split('\n').filter(Boolean),
     log: () => read(log),
@@ -295,4 +298,61 @@ test('Signieren pausiert → kein Signierversuch (keine 1Password-Rückfrage), k
   const r = await w.run();
   assert.equal(r.code, 0, w.log());
   assert.equal(w.calls().length, 2, 'nach dem Entfernen läuft der Bau');
+});
+
+test('Index ohne gültige Signatur zählt nicht als veröffentlicht → neu veröffentlichen', { skip }, async (t) => {
+  const w = await setup(t);
+  w.remote.extra.add(w.sha);
+  w.remote.indexSig = false;
+  const r = await w.run();
+  assert.equal(r.code, 1, w.log()); // Gegenprobe nach publish scheitert ebenfalls (Signatur fehlt weiter)
+  assert.match(w.log(), /nur teilweise am Release dev/);
+  assert.equal(w.calls().filter((c) => c.startsWith('publish')).length, 1);
+});
+
+test('Wiederherstellungs-Paar von publish-release → nichts bauen, nie wegräumen', { skip }, async (t) => {
+  const w = await setup(t);
+  const keep = path.join(w.dwHome, 'out/1.0.12-dev.20261124000000.aaaaaaaa/channels-restore');
+  fs.mkdirSync(keep, { recursive: true });
+  fs.writeFileSync(path.join(keep, 'index-dev.json'), '{}');
+  for (let i = 0; i < 2; i++) assert.equal((await w.run()).code, 1);
+  assert.deepEqual(w.calls(), []);
+  assert.match(w.log(), /Wiederherstellungs-Paar liegt in/);
+  assert.equal(w.notes().length, 1);
+  assert.ok(fs.existsSync(keep));
+});
+
+test('Zeitlimit beendet die ganze Prozessgruppe (auch Enkel)', { skip }, async (t) => {
+  const w = await setup(t);
+  const childPid = path.join(w.root, 'childpid');
+  const r = await w.run({ FAKE_SIGN: 'hang-child', DVHUB_DW_AGENT_TIMEOUT: '1', FAKE_CHILDPID: childPid });
+  assert.equal(r.code, 1);
+  assert.match(w.log(), /Freigabe in 1Password nötig/);
+  const pid = Number(fs.readFileSync(childPid, 'utf8'));
+  await new Promise((res) => setTimeout(res, 300));
+  assert.throws(() => process.kill(pid, 0), /ESRCH/, 'Enkel-Prozess läuft noch');
+});
+
+test('Sperre mit kaputtem Eintrag wird übernommen statt alles zu blockieren', { skip }, async (t) => {
+  const w = await setup(t);
+  fs.mkdirSync(path.join(w.dwHome, 'lock'), { recursive: true });
+  fs.writeFileSync(path.join(w.dwHome, 'lock/pid'), '');
+  const r = await w.run();
+  assert.equal(r.code, 0, w.log());
+  assert.match(w.log(), /verwaiste Sperre \(PID \?\) übernommen/);
+  assert.equal(w.calls().length, 2);
+});
+
+test('Aufruf: --sha ohne Wert bricht ab; Installation übernimmt Einstellungen in die Plist', { skip }, (t) => {
+  const r = spawnSync('bash', [WORKER, '--dry-run', '--sha'], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(r.status, 2, r.stderr);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dw-i-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: root, DVHUB_DW_HOME: path.join(root, 'w & h'), DVHUB_DW_NO_LAUNCHCTL: '1',
+    DVHUB_DW_LAUNCHAGENTS: path.join(root, 'la'), DVHUB_DW_LOG: path.join(root, 'l.log') };
+  sh('bash', [WORKER, '--install'], { env });
+  const plist = fs.readFileSync(path.join(root, 'la/zone.bikini.dvhub-dev-worker.plist'), 'utf8');
+  assert.match(plist, /<key>DVHUB_DW_HOME<\/key>\s*<string>[^<]*w &amp; h<\/string>/);
+  assert.match(plist, /<string>[^<]*w &amp; h\/bin\/dev-worker\.sh<\/string>/);
+  assert.ok(fs.statSync(path.join(root, 'w & h/bin/dev-worker.sh')).mode & 0o100);
 });

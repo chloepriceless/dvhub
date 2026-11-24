@@ -64,7 +64,8 @@ usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) MODE=dry; shift ;;
-    --sha) DRY_REF="${2:-}"; shift 2 ;;
+    --sha) [[ $# -ge 2 && -n "$2" ]] || { echo "dev-worker: --sha braucht einen Wert" >&2; exit 2; }
+           DRY_REF="$2"; shift 2 ;;
     --probe-sign) MODE=probe; shift ;;
     --install) MODE=install; shift ;;
     --print-plist) MODE=plist; shift ;;
@@ -98,17 +99,31 @@ notify() {  # $1 = Text; macOS-Mitteilung, nie fatal
   osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title (item 2 of argv)' -e 'end run' \
     "$1" "DVhub dev-Paket" >/dev/null 2>&1 || true
 }
-# Befehl mit Zeitlimit; Rückgabe 124 bei Ablauf (wie timeout(1)).
+# Befehl mit Zeitlimit; Rückgabe 124 bei Ablauf (wie timeout(1)). Der Befehl
+# läuft in eigener Prozessgruppe; bei Ablauf — oder wenn der Worker selbst ein
+# TERM/INT/HUP bekommt (launchctl bootout) — wird die GANZE Gruppe beendet
+# (TERM, nach 10 s KILL), damit kein ssh-keygen/docker/gh weiterläuft, während
+# schon der nächste Lauf die Sperre hat (Codex 1ab4b3f4). perl gibt es auf
+# macOS und Linux; timeout(1) beendet je nach Variante nur das Kind.
 run_to() {
-  local secs="$1"; shift
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$secs" "$@"
-  elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$secs" "$@"
-  else
-    perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@"
-    local rc=$?; [[ "$rc" -eq 142 ]] && return 124; return "$rc"
-  fi
+  perl -e '
+    use strict; use POSIX ();
+    my $secs = shift @ARGV;
+    my $pid = fork; defined $pid or exit 126;
+    if ($pid == 0) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV; exit 127; }
+    my $timedout = 0; my $stage = 0;
+    my $grp = sub { kill $_[0], -$pid; };
+    $SIG{ALRM} = sub { $timedout = 1; if ($stage++ == 0) { $grp->("TERM"); alarm 10; } else { $grp->("KILL"); } };
+    for my $sig (qw(TERM INT HUP)) { $SIG{$sig} = sub { $grp->("TERM"); sleep 2; $grp->("KILL"); POSIX::_exit(143); }; }
+    alarm $secs;
+    my $st;
+    while (1) { my $r = waitpid($pid, 0); if ($r == $pid) { $st = $?; last; } last if $r == -1 && !$!{EINTR}; }
+    alarm 0;
+    $grp->("KILL");   # übrig gebliebene Enkel der Gruppe
+    exit 124 if $timedout;
+    exit 1 unless defined $st;
+    exit(($st & 127) ? 128 + ($st & 127) : $st >> 8);
+  ' "$@"
 }
 state_get() { cat "$STATE/$1" 2>/dev/null || true; }
 state_set() { [[ "$MODE" == dry ]] && return 0; printf '%s\n' "$2" > "$STATE/$1.tmp" && mv -f "$STATE/$1.tmp" "$STATE/$1"; }
@@ -139,6 +154,17 @@ api_get() {  # $1 = Pfad, $2 = Zieldatei
 }
 
 # ---------------------------------------------------------------- Plist / Installation
+xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+# Beim Installieren gesetzte Einstellungen wandern in die Plist, damit der
+# geplante Lauf dieselben Ordner/Schlüssel nutzt (Codex 1ab4b3f4).
+plist_env() {
+  local v
+  for v in DVHUB_DW_HOME DVHUB_DW_LOG DVHUB_DW_SSH_AUTH_SOCK DVHUB_DW_PUBKEY DVHUB_DW_ARCHS DVHUB_DW_AGENT_TIMEOUT \
+           DVHUB_DW_BUILD_TIMEOUT DVHUB_DW_PUBLISH_TIMEOUT DVHUB_DW_KEEP_BUILDS DVHUB_DW_MAX_FAILS; do
+    [[ -n "${!v:-}" ]] || continue
+    printf '\t\t<key>%s</key>\n\t\t<string>%s</string>\n' "$v" "$(xml_escape "${!v}")"
+  done
+}
 print_plist() {
   local self="$DW_HOME/bin/dev-worker.sh"
   cat <<EOF
@@ -151,7 +177,7 @@ print_plist() {
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>$self</string>
+		<string>$(xml_escape "$self")</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
@@ -161,6 +187,7 @@ print_plist() {
 		<string>unix://$HOME/.colima/default/docker.sock</string>
 		<key>LANG</key>
 		<string>de_DE.UTF-8</string>
+$(plist_env)
 	</dict>
 	<key>StartInterval</key>
 	<integer>600</integer>
@@ -183,14 +210,17 @@ EOF
 if [[ "$MODE" == plist ]]; then print_plist; exit 0; fi
 if [[ "$MODE" == install ]]; then
   plist="${DVHUB_DW_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}/$LABEL.plist"
-  mkdir -p "$DW_HOME/bin" "$(dirname "$plist")" "$(dirname "$DW_LOG")"
+  idie() { echo "dev-worker --install: $*" >&2; exit 1; }
+  mkdir -p "$DW_HOME/bin" "$(dirname "$plist")" "$(dirname "$DW_LOG")" || idie "Ordner nicht anlegbar"
   # Kopie statt Verweis ins Repo: ein Checkout darf das laufende Skript nicht überschreiben.
-  install -m 0755 "$0" "$DW_HOME/bin/dev-worker.sh.new" && mv -f "$DW_HOME/bin/dev-worker.sh.new" "$DW_HOME/bin/dev-worker.sh"
-  print_plist > "$plist.new" && mv -f "$plist.new" "$plist"
-  command -v plutil >/dev/null 2>&1 && plutil -lint "$plist"
+  install -m 0755 "$0" "$DW_HOME/bin/dev-worker.sh.new" && mv -f "$DW_HOME/bin/dev-worker.sh.new" "$DW_HOME/bin/dev-worker.sh" \
+    || idie "Skript nicht kopierbar"
+  print_plist > "$plist.new" || idie "Plist nicht schreibbar"
+  if command -v plutil >/dev/null 2>&1; then plutil -lint "$plist.new" >/dev/null || idie "Plist ungültig"; fi
+  mv -f "$plist.new" "$plist" || idie "Plist nicht schreibbar"
   if [[ -z "${DVHUB_DW_NO_LAUNCHCTL:-}" ]]; then
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "$plist"
+    launchctl bootstrap "gui/$(id -u)" "$plist" || idie "launchctl bootstrap fehlgeschlagen — Worker ist NICHT geladen"
   fi
   echo "installiert: $DW_HOME/bin/dev-worker.sh, $plist"
   exit 0
@@ -205,13 +235,20 @@ rotate_log
 # wiederverwendete PIDs). Kein pgrep -f (trifft die eigene Kommandozeile).
 proc_start() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//'; }   # LC_ALL: gleiches Format in Terminal und launchd
 acquire_lock() {
-  local tries=0 pid started age
+  local tries=0 pid started ts age
   while ! mkdir "$LOCK" 2>/dev/null; do
     tries=$((tries + 1))
+    [[ "$tries" -le 6 ]] || { log "Sperre $LOCK nicht zu übernehmen — Abbruch"; return 1; }
     pid="$(sed -n 1p "$LOCK/pid" 2>/dev/null)"
     started="$(sed -n 2p "$LOCK/pid" 2>/dev/null)"
-    age=$(( $(date +%s) - $(sed -n 3p "$LOCK/pid" 2>/dev/null || echo 0) ))
-    if [[ -z "$pid" && "$tries" -lt 3 ]]; then sleep 1; continue; fi  # Vorlauf schreibt gerade
+    ts="$(sed -n 3p "$LOCK/pid" 2>/dev/null)"
+    # Unvollständiger Eintrag: der Vorlauf schreibt vielleicht gerade — kurz
+    # warten; bleibt er unvollständig, ist die Sperre verwaist (Codex 1ab4b3f4).
+    if ! [[ "$pid" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ ]]; then
+      if [[ "$tries" -lt 3 ]]; then sleep 1; continue; fi
+      pid=""; ts=0
+    fi
+    age=$(( $(date +%s) - ts ))
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && [[ "$(proc_start "$pid")" == "$started" ]]; then
       if [[ "$age" -gt "$DW_LOCK_MAX_AGE" ]]; then
         log "Vorlauf PID $pid hält die Sperre seit $((age / 60)) min (Zeitlimit $((DW_LOCK_MAX_AGE / 60)) min) — hängt? Bitte prüfen; Abbruch"
@@ -221,7 +258,6 @@ acquire_lock() {
       fi
       return 1
     fi
-    [[ "$tries" -ge 3 ]] && { log "Sperre $LOCK nicht zu übernehmen — Abbruch"; return 1; }
     log "verwaiste Sperre (PID ${pid:-?}) übernommen"
     rm -rf "$LOCK"
   done
@@ -306,10 +342,14 @@ checkout() {  # $1 = SHA; nur im eigenen Klon
 }
 
 # ---------------------------------------------------------------- Veröffentlicht?
-# Ausgabe: "yes <version>", "partial <version>" (Assets ohne Index-Eintrag oder
-# unvollständig) oder "no"; Rückgabe 1, wenn GitHub nicht abfragbar ist.
+# Ausgabe: "yes <version>", "partial <version>" (Assets ohne gültigen Index-
+# Eintrag oder unvollständig) oder "no"; Rückgabe 1, wenn GitHub nicht abfragbar ist.
+# Der Index zählt nur mit passender Signatur — so wie die Box ihn prüft
+# (dvhub-release.cjs fetchIndex); nach einer unterbrochenen Umstellung kann
+# index-dev.json ohne oder mit fremder .sig dastehen (Codex 1ab4b3f4).
 remote_status() {  # $1 = SHA
-  local sha="$1" tmp rc
+  local sha="$1" tmp rc idx_ok=0
+  prepare_key || return 1
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/dvhub-dw-gh.XXXXXX")" || return 1
   if ! api_get "/repos/$GH_REPO/releases/tags/dev" "$tmp/dev.json" 2>"$tmp/err"; then
     if grep -q ' 404' "$tmp/err"; then echo '{"assets":[]}' > "$tmp/dev.json"
@@ -320,9 +360,16 @@ remote_status() {  # $1 = SHA
     if grep -q ' 404' "$tmp/err"; then echo '{"releases":[]}' > "$tmp/index.json"
     else log "Kanal-Index nicht abrufbar ($(tr '\n' ' ' < "$tmp/err" | cut -c1-160))"; rm -rf "$tmp"; return 1; fi
   fi
+  if curl -fsSL --max-time 60 -H 'User-Agent: dvhub-dev-worker' -o "$tmp/index.json.sig" \
+      "$DW_DOWNLOAD/$GH_REPO/releases/download/channels/index-dev.json.sig" 2>/dev/null; then
+    # Nur Prüfen mit dem öffentlichen Schlüssel — kein Agent, keine 1Password-Rückfrage.
+    printf 'dvhub-release namespaces="dvhub-release-index" %s\n' "$(awk 'NR==1{print $1" "$2}' "$KEY.pub")" > "$tmp/allowed"
+    ssh-keygen -Y verify -f "$tmp/allowed" -I dvhub-release -n dvhub-release-index -s "$tmp/index.json.sig" \
+      < "$tmp/index.json" >/dev/null 2>&1 && idx_ok=1
+  fi
   node -e '
     const fs = require("fs");
-    const [devF, idxF, sha, archs] = process.argv.slice(1);
+    const [devF, idxF, sha, archs, idxOk] = process.argv.slice(1);
     const dev = JSON.parse(fs.readFileSync(devF, "utf8"));
     const idx = JSON.parse(fs.readFileSync(idxF, "utf8"));
     const short = sha.slice(0, 8);
@@ -330,12 +377,13 @@ remote_status() {  # $1 = SHA
     const re = new RegExp(`^dvhub-(.+\\.${short})-([a-z0-9]+)\\.tar\\.gz$`);
     let version = "";
     for (const n of names) { const m = n.match(re); if (m) version = m[1]; }
-    const inIndex = (idx.releases || []).find((r) => r.git_sha === sha);
-    if (inIndex) version = inIndex.version;
+    const listed = (idx.releases || []).find((r) => r.git_sha === sha);
+    if (listed) version = listed.version;
+    const inIndex = listed && idxOk === "1";
     if (!version) { console.log("no"); process.exit(0); }
     const complete = archs.split(",").every((a) => names.has(`dvhub-${version}-${a}.tar.gz`) && names.has(`dvhub-${version}-${a}.tar.gz.sig`));
     console.log(`${complete && inIndex ? "yes" : "partial"} ${version}`);
-  ' "$tmp/dev.json" "$tmp/index.json" "$sha" "$DW_ARCHS"
+  ' "$tmp/dev.json" "$tmp/index.json" "$sha" "$DW_ARCHS" "$idx_ok"
   rc=$?
   rm -rf "$tmp"
   return "$rc"
@@ -347,6 +395,7 @@ prune_builds() {  # nur eigene Build-Ordner unter $OUT, die neuesten $DW_KEEP_BU
   # shellcheck disable=SC2045
   for d in $(ls -1t "$OUT" 2>/dev/null); do
     [[ -d "$OUT/$d" && "$d" == *-dev.* ]] || continue   # nur dev-Build-Ordner des Workers
+    [[ -e "$OUT/$d/channels-restore" ]] && continue       # Wiederherstellungs-Paar von publish-release: nie löschen
     n=$((n + 1))
     [[ "$n" -le "$DW_KEEP_BUILDS" ]] && continue
     rm -rf "${OUT:?}/$d"
@@ -411,6 +460,19 @@ main() {
     log "main $short: nach $(fail_count "$sha") Fehlversuchen aufgegeben — wartet auf neuen main-Commit"
     return 0
   fi
+
+  # publish-release legt nach gescheitertem Umstellen UND Wiederherstellen das alte
+  # Index-Paar unter <build>/channels-restore ab. build-release löscht beim Neubau
+  # derselben Version den ganzen Ordner — darum dann nichts automatisch, bis das
+  # Paar von Hand zurück am Release ist und der Ordner entfernt (Codex 1ab4b3f4).
+  local restore
+  restore="$(ls -1d "$OUT"/*/channels-restore 2>/dev/null | head -1)"
+  if [[ -n "$restore" ]]; then
+    log "Wiederherstellungs-Paar liegt in $restore (publish-release konnte den Kanal-Index nicht umstellen) — erst von Hand hochladen (siehe Bau-Protokoll), dann den Ordner entfernen; bis dahin baut der Worker nichts"
+    notify_once restore-pending "$restore" "Kanal-Index braucht Handarbeit — Worker angehalten (siehe Log)"
+    return 1
+  fi
+  state_clear restore-pending
 
   checkout "$sha" || { log "Checkout $short im Worker-Klon fehlgeschlagen"; return 1; }
 
