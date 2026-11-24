@@ -723,3 +723,14 @@ test('Reichweite kritisch, Platz absolut genug: Notfall-Pfad tut nichts, alte St
   assert.ok(!r.actions.some((a) => a.action === 'emergency_raw' && a.day), 'Notfall nicht nötig');
   assert.ok(r.actions.some((a) => a.action === 'drop_raw'), JSON.stringify(r.actions));
 });
+
+// Codex 8c32d1ce: Platz kommt zwischen Messung und Löschen von außen zurück → nicht nach altem „kritisch“ löschen.
+test('Platz extern zurück (Kompressions-Job): alte Stufe löscht nicht', async () => {
+  const s = s4Db({ days: 400, tierUntil: new Date(Date.parse('2026-11-22T00:00:00Z')) });
+  let calls = 0;
+  const statfs = () => { calls += 1; return { blocks: 4096, bsize: 1048576, bavail: calls <= 3 ? 93 : 2000 }; };
+  const r = await createStorageGuard({ getDb: () => s.db, statfs, now: () => s.NOW, aggregateRange: s.aggregateRange }).check();
+  assert.equal(r.level, 'kritisch');
+  assert.ok(!r.actions.some((a) => a.action === 'drop_raw'), JSON.stringify(r.actions));
+  assert.ok(!r.actions.some((a) => a.action === 'emergency_raw' && a.day), 'auch der Notfall-Pfad nicht');
+});

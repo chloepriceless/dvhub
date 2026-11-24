@@ -535,7 +535,14 @@ export function createStorageGuard({
           // Notfall „kritisch“: wie bisher Rohwerte stufenweise (365 → 180 → 90 → 30 Tage).
           // Nicht, wenn der Notfall-Pfad die Platte schon frei bekommen hat — sonst
           // löschte die alte Stufe (365 → 180 …) noch viel mehr (Codex ee43127e).
-          if (level === 'kritisch' && !out.emergencyRecovered) {
+          // Und nur, wenn es mit FRISCHER Messung (Platz und Reichweite) noch kritisch
+          // ist — ein Kompressions-Job kann inzwischen Platz frei gemacht haben (Codex 8c32d1ce).
+          const freeNow = statPath(primary?.paths?.[0] || '/', { statfs, stat })?.freeMb ?? freeMb;
+          const stillCritical = storageStage({
+            freeMb: freeNow, totalMb, reserveMb: out.reserveMb, growthKnown: out.growthMbPerDay != null,
+            daysLeft: reachDays({ freeMb: freeNow, reserveMb: out.reserveMb, growth: out.growthMbPerDay }),
+          }) === 'kritisch';
+          if (level === 'kritisch' && !out.emergencyRecovered && stillCritical) {
             try { await dropRaw(db, ts, out, freePct); } catch (e) {
               out.actions.push({ action: 'drop_raw', error: String(e?.message || e).slice(0, 200) });
               logGuardError(e);
