@@ -83,7 +83,7 @@ export function meterImport(state, cfg, { now = Date.now(), maxAgeMs, clock = mo
   const monoSrc = srcAt > 0 ? monoStampAge(m, 'sourceAt', clock) : null;
   const monoAge = at > 0 && monoPolled != null && (srcAt > 0 ? monoSrc != null : true)
     ? Math.max(monoPolled, srcAt > 0 ? monoSrc : -Infinity) : null;
-  const ageMs = at > 0 ? (monoAge ?? (now - at)) : null;
+  const ageMs = at > 0 ? Math.round(monoAge ?? (now - at)) : null;
   const sign = cfg?.gridPositiveMeans === 'grid_import' ? 1 : -1;
   const total = m.grid_total_w;
   const reason = m.ok !== true ? 'meter_error'

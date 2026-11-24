@@ -26,7 +26,7 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const ageMs = (at, now, box = null, key = null) => {
   if (num(at) === null) return null;
   const mono = box && key != null && Number(box[key]) === at ? monoStampAge(box, key) : null;
-  return Math.max(0, mono ?? (now - at));
+  return Math.max(0, Math.round(mono ?? (now - at))); // ganze ms wie bisher (monotone Zeit ist gebrochen)
 };
 
 function describeSource(cfg, transport) {

@@ -355,7 +355,7 @@ export function createFreezeWatchdog(ctx) {
     prevStamps = stamps;
     if (meterOk && meterAt > 0) prevMeterAt = meterAt;
 
-    const stalledForMs = fstate.anchorMono != null ? monoMs - fstate.anchorMono : 0;
+    const stalledForMs = fstate.anchorMono != null ? Math.round(monoMs - fstate.anchorMono) : 0;
     const detail = {
       reasons: fstate.reasons,
       fields: fstate.stalledFields,

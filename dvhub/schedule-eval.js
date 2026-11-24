@@ -2230,7 +2230,7 @@ export function createScheduleEvaluator(ctx) {
     let isKeepalive = false;
     if (prev != null && Number(prev.value) === Number(value)) {
       // A26: Keepalive-Abstand monoton (Marke des Schreibpfads, A24); ohne Marke (Neustart) Wanduhr wie bisher.
-      const sinceLastWriteMs = monoStampAge(prev, 'at') ?? (Date.now() - (Number(prev.at) || 0));
+      const sinceLastWriteMs = Math.round(monoStampAge(prev, 'at') ?? (Date.now() - (Number(prev.at) || 0)));
       if (!(keepaliveMs > 0 && sinceLastWriteMs >= keepaliveMs)) {
         // Unchanged and no keepalive due → HOLD (skip the hardware write).
         state.schedule.active[target] = {

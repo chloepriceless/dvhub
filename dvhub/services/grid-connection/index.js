@@ -416,7 +416,7 @@ export function victronLimitExtra(state, now = Date.now(), cfg = null) {
     victronPhaseLimitA,
     victronReadError: error,
     // Wie alt der gültige Wert ist (für die Meldung im Leitstand).
-    victronLimitAgeMs: victronPhaseLimitA != null ? ageMs : null,
+    victronLimitAgeMs: victronPhaseLimitA != null ? Math.round(ageMs) : null,
     // Gelesener Wert unter 6 A (kein plausibler Anschluss): gilt nicht, wird
     // aber gemeldet statt still verworfen (Fable R1 P3-5).
     victronIgnoredA: fresh && !error && a > 0 && a < 6 ? a : null,

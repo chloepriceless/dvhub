@@ -105,7 +105,7 @@ export function compareSources(mqttValues, modbusValues, state, opts, nowMs = Da
     const entry = mem.fields[f.key] || (mem.fields[f.key] = { since: nowMs, sinceMono: monoMs, worst: 0 });
     entry.worst = Math.max(entry.worst, diff);
     entry.mqtt = a; entry.modbus = b;
-    const seitMs = monoMs - (entry.sinceMono ?? entry.since);
+    const seitMs = Math.round(monoMs - (entry.sinceMono ?? entry.since));
     if (seitMs >= opts.sustainMs) {
       mismatches.push({
         key: f.key, label: f.label, unit: f.unit,
