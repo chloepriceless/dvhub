@@ -131,6 +131,8 @@ enum SnapshotRefresher {
     /// Stand der Demo-Anlage jetzt, für die Widgets abgelegt.
     private static func demo() -> Outcome {
         guard let snap = DemoStore.snapshot() else { return .unchanged(nil, reason: .noSystem) }
+        // Während der Rechnung Demo beendet oder eine Anlage gewählt: nicht zurückschreiben (Codex 0b8206a9).
+        guard DemoStore.isSelected else { return .unchanged(SharedStore.read(), reason: .superseded) }
         SharedStore.write(snap)
         return .fresh(snap)
     }
