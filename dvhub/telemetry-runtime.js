@@ -96,6 +96,15 @@ export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
   return LIVE_ENERGY_FIELDS.some((field) => tooOld(stamps[field]) || tooOld(sourceStamps[field]));
 }
 
+const AC_PV_FIELDS = ['acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W'];
+
+/** Summe der AC-PV-Phasen beider Positionen; null, wenn kein AC-PV-Punkt einen Wert hat. */
+export function acPvTotalW(victron = {}) {
+  const present = AC_PV_FIELDS.filter((field) => victron[field] != null && Number.isFinite(Number(victron[field])));
+  if (!present.length) return null;
+  return Number(present.reduce((sum, field) => sum + Number(victron[field]), 0).toFixed(3));
+}
+
 export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, victron = {}, managed = null }) {
   const rows = [];
   const base = {
@@ -122,6 +131,10 @@ export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, v
   pushSample(rows, 'pv_ac_l2_w', victron.acPvL2W, 'W', base);
   pushSample(rows, 'pv_ac_l3_w', victron.acPvL3W, 'W', base);
   pushSample(rows, 'pv_total_w', victron.pvTotalW, 'W', base);
+  // AC-PV gesamt (beide Positionen, wie pvAcW in polling.js). Die History liest
+  // pvAcKwh aus der Reihe pv_ac_w, die bisher nur der VRM-Import schrieb
+  // (24.11.2026). Nur mit AC-PV-Punkten — ohne sie keine Zeile.
+  pushSample(rows, 'pv_ac_w', acPvTotalW(victron), 'W', base);
   pushSample(rows, 'load_power_w', victron.selfConsumptionW, 'W', base);
   // Von der Haupt-GX gemessene Last, nur solange polling.js sie um Akku 2 der
   // zweiten Anlage korrigiert (sonst gleich load_power_w, Feld fehlt). Der

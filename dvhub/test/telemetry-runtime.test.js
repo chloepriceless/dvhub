@@ -68,6 +68,18 @@ test('buildLiveTelemetrySamples maps meter and victron state to named series', (
   assert.equal(map.get('solar_direct_use_w'), 700);
   assert.equal(map.get('grid_to_battery_w'), 100);
   assert.equal(map.get('battery_to_grid_w'), 50);
+  // pvAcKwh der History liest pv_ac_w (24.11.2026): AC-PV gesamt 100 + 200 + 300.
+  assert.equal(map.get('pv_ac_w'), 600);
+});
+
+test('pv_ac_w: beide AC-PV-Positionen, ohne AC-PV-Punkte keine Zeile', () => {
+  const at = { ts: '2026-11-24T12:00:00.000Z', resolutionSeconds: 5 };
+  const withSecond = buildLiveTelemetrySamples({ ...at, victron: { acPvL1W: 100, acPvL2W: null, acPv2L1W: 250, acPv2L3W: 50 } });
+  assert.equal(withSecond.find((r) => r.seriesKey === 'pv_ac_w').value, 400);
+  const dcOnly = buildLiveTelemetrySamples({ ...at, victron: { pvPowerW: 3000, pvTotalW: 3000 } });
+  assert.equal(dcOnly.some((r) => r.seriesKey === 'pv_ac_w'), false);
+  // AC-PV vorhanden, aber nachts 0 W → Zeile mit 0.
+  assert.equal(buildLiveTelemetrySamples({ ...at, victron: { acPvL1W: 0 } }).find((r) => r.seriesKey === 'pv_ac_w').value, 0);
 });
 
 test('buildLiveTelemetrySamples writes load_power_w_ex_managed alongside the untouched raw series', () => {

@@ -44,6 +44,7 @@ import { createInverterEfficiencyDaily } from './services/inverter-efficiency/da
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
 import { createStorageEfficiencyDaily, loadStorageEfficiency, storageEfficiencyCapability } from './services/inverter-efficiency/storage.js';
 import { createCoverageBackfill } from './services/history-backfill/coverage.js';
+import { createPvAcBackfill } from './services/history-backfill/pv-ac.js';
 import { createLogRetention } from './services/log-retention.js';
 import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
@@ -2753,6 +2754,19 @@ const telemetryReady = (async () => {
       runCoverageBackfill();
       setInterval(runCoverageBackfill, 5 * 60 * 1000).unref();
     }, 6 * 60 * 1000).unref();
+    // AC-PV (pv_ac_w) der eigenen Viertelstunden vor dem 24.11.2026 aus den Rohwerten
+    // nachtragen (services/history-backfill/pv-ac.js), gleicher Takt, versetzt.
+    const pvAcBackfill = createPvAcBackfill({
+      getDb: () => ctx.db, pushLog,
+      onDayUpdated: (fromIso) => telemetryStore?.noteHistoryRangeChanged?.(fromIso),
+    });
+    const runPvAcBackfill = () => {
+      pvAcBackfill.runOnce().catch((error) => pushLog('history_pv_ac_backfill_error', { error: error.message }));
+    };
+    setTimeout(() => {
+      runPvAcBackfill();
+      setInterval(runPvAcBackfill, 5 * 60 * 1000).unref();
+    }, 8 * 60 * 1000).unref();
     // Gestufte Log-Aufbewahrung (services/log-retention.js): 60 Tage voll,
     // dann verdichtet bis 2 Jahre. Nachts um ~03:40 und einmal 15 min nach dem
     // Start; je Lauf höchstens 5 min Arbeit.
