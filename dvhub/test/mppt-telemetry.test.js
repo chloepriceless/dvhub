@@ -51,6 +51,18 @@ describe('MPPT-Reihen verdichten wie pv_total_w', () => {
 
 // ── Live-Samples aus state.victron.mppt ────────────────────────────────────
 describe('buildLiveTelemetrySamples: Per-MPPT-Reihen', () => {
+  // Codex Integration 24.11. (P2): nach einem M160-Lesefehler behält polling.js die alten MPPT-Werte für die
+  // Anzeige — als neue Messung dürfen sie nicht zählen (sonst wüchse die String-Energie weiter).
+  test('gehaltene MPPT-Werte nach Lesefehler oder ohne frische Lesung werden nicht geloggt', () => {
+    const ts = '2026-03-09T12:00:00.000Z';
+    const mppt = [{ n: 1, w: 3500, v: null, a: null, wh: null }];
+    const keys = (victron) => buildLiveTelemetrySamples({ ts, resolutionSeconds: 5, meter: {}, victron })
+      .map((r) => r.seriesKey).filter((k) => k.startsWith('pv_mppt_'));
+    assert.deepEqual(keys({ mppt, errors: { mppt: 'M160: timeout' } }), [], 'Lesefehler');
+    assert.deepEqual(keys({ mppt, fieldUpdatedAt: { mppt: Date.parse(ts) - 120_000 } }), [], 'letzte Lesung älter als 90 s');
+    assert.deepEqual(keys({ mppt, fieldUpdatedAt: { mppt: Date.parse(ts) - 2_000 } }), ['pv_mppt_1_w'], 'frisch');
+  });
+
   test('je String eine _w-Reihe; _v/_a/_wh nur bei vorhandenem Wert', () => {
     const rows = buildLiveTelemetrySamples({
       ts: '2026-03-09T12:00:00.000Z',

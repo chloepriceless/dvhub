@@ -1383,11 +1383,14 @@ export function createPoller(ctx) {
           }));
           (state.victron.fieldUpdatedAt ??= {}).mppt = Date.now();
           stampMono(state.victron.fieldUpdatedAt, 'mppt'); // A24: Erzeuger stempelt monoton
+          if (state.victron.errors) delete state.victron.errors.mppt;
         }
       } catch (e) {
         // Lesefehler: Akku-Wert bleibt stehen (wie pollPoint), MPPT-Reihen
         // behalten ihren letzten Stand bis zum nächsten erfolgreichen Zyklus.
         if (wantBattery) m160Failed(e?.message || String(e));
+        // MPPT: Anzeige behält den letzten Stand, die Telemetrie loggt ihn nicht als neue Messung (errors.mppt).
+        if (wantMppt) (state.victron.errors ??= {}).mppt = `M160: ${e?.message || String(e)}`;
         if (Date.now() - m160DeriveLogAt > 300000) {
           m160DeriveLogAt = Date.now();
           pushLog('m160_read_error', { error: e?.message || String(e) });

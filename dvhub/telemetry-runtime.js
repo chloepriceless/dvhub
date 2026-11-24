@@ -105,6 +105,16 @@ export function liveSnapshotStale({ ts, meter = {}, victron = {} } = {}) {
   return LIVE_ENERGY_FIELDS.some((field) => tooOld(stamps, field) || tooOld(sourceStamps, field));
 }
 
+/** Letzte erfolgreiche MPPT-Lesung (fieldUpdatedAt.mppt) älter als 90 s vor ts? Monoton wie liveSnapshotStale. */
+function mpptReadingTooOld(ts, meter = {}, victron = {}) {
+  const at = Number(victron?.fieldUpdatedAt?.mppt);
+  const tsMs = Date.parse(ts);
+  if (!(at > 0) || !Number.isFinite(tsMs)) return false;
+  const snapMono = Number(meter?.updatedAt) === tsMs ? monoStampOf(meter, 'updatedAt') : null;
+  const m = snapMono != null ? monoStampOf(victron.fieldUpdatedAt, 'mppt') : null;
+  return (m != null ? snapMono - m : tsMs - at) > LIVE_FIELD_MAX_AGE_MS;
+}
+
 const AC_PV_FIELDS = ['acPvL1W', 'acPvL2W', 'acPvL3W', 'acPv2L1W', 'acPv2L2W', 'acPv2L3W'];
 
 /** Summe der AC-PV-Phasen beider Positionen; null, wenn kein AC-PV-Punkt einen Wert hat. */
@@ -149,7 +159,9 @@ export function buildLiveTelemetrySamples({ ts, resolutionSeconds, meter = {}, v
   // pv_total_w werden diese Reihen in energy_slots_15m verdichtet (15-min, kWh)
   // — die materialisierten Zielreihen erkennt der Store am pv_mppt_-Präfix.
   // Optionale Zusatzreihen DCV/DCA/DCWH je String nur, wenn das Gerät sie liefert.
-  if (Array.isArray(victron.mppt)) {
+  // Nach einem M160-Lesefehler behält polling.js die alten Werte für die Anzeige (errors.mppt) — als neue Messung
+  // zählen sie nicht, ebenso wenig ohne frische Lesung (> 90 s, wie die Energiefelder) (Codex Integration 24.11., P2).
+  if (Array.isArray(victron.mppt) && !victron.errors?.mppt && !mpptReadingTooOld(ts, meter, victron)) {
     for (const s of victron.mppt) {
       const n = Number(s?.n);
       if (!Number.isInteger(n) || n < 1) continue;
