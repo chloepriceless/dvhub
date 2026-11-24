@@ -172,7 +172,7 @@ xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>
 # geplante Lauf dieselben Ordner/Schlüssel nutzt (Codex 1ab4b3f4).
 plist_env() {
   local v
-  for v in DVHUB_DW_HOME DVHUB_DW_LOG DVHUB_DW_KEY DVHUB_DW_ARCHS DVHUB_DW_AGENT_TIMEOUT \
+  for v in DVHUB_DW_HOME DVHUB_DW_LOG DVHUB_DW_KEY DVHUB_DW_TOOLS DVHUB_DW_ARCHS DVHUB_DW_AGENT_TIMEOUT \
            DVHUB_DW_BUILD_TIMEOUT DVHUB_DW_PUBLISH_TIMEOUT DVHUB_DW_KEEP_BUILDS DVHUB_DW_MAX_FAILS; do
     [[ -n "${!v:-}" ]] || continue
     printf '\t\t<key>%s</key>\n\t\t<string>%s</string>\n' "$v" "$(xml_escape "${!v}")"

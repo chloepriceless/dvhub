@@ -369,11 +369,12 @@ test('Aufruf: --sha ohne Wert bricht ab; Installation übernimmt Einstellungen i
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dw-i-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { ...process.env, HOME: root, DVHUB_DW_HOME: path.join(root, 'w & h'), DVHUB_DW_NO_LAUNCHCTL: '1',
-    DVHUB_DW_LAUNCHAGENTS: path.join(root, 'la'), DVHUB_DW_LOG: path.join(root, 'l.log') };
+    DVHUB_DW_LAUNCHAGENTS: path.join(root, 'la'), DVHUB_DW_LOG: path.join(root, 'l.log'), DVHUB_DW_TOOLS: path.join(root, 'tools') };
   sh('bash', [WORKER, '--install'], { env });
   const plist = fs.readFileSync(path.join(root, 'la/zone.bikini.dvhub-dev-worker.plist'), 'utf8');
   assert.match(plist, /<key>DVHUB_DW_HOME<\/key>\s*<string>[^<]*w &amp; h<\/string>/);
   assert.match(plist, /<string>[^<]*w &amp; h\/bin\/dev-worker\.sh<\/string>/);
+  assert.match(plist, /<key>DVHUB_DW_TOOLS<\/key>\s*<string>[^<]*\/tools<\/string>/);
   assert.ok(fs.statSync(path.join(root, 'w & h/bin/dev-worker.sh')).mode & 0o100);
 });
 
