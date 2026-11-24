@@ -119,10 +119,12 @@ export function createPvAcBackfill({ getDb, pushLog, onDayUpdated = null, now = 
       if (!queue || queue.length === 0) {
         // Nur abgeschlossene Tage: vor gestern (UTC).
         const limit = new Date(Math.floor(now() / DAY_MS) * DAY_MS - DAY_MS).toISOString();
-        const open = await db.query(PV_AC_OPEN_DAYS_SQL, [`${firstDay}T00:00:00.000Z`, limit]);
+        // Vorstufe VOR der Abfrage festhalten: wird sie während des Scans fertig, fehlt ihm womöglich der zuletzt
+        // abgedeckte Tag — dann zählt erst der nächste Scan (Codex 1436c2fa).
         let upstream = true;
         try { upstream = upstreamDone() !== false; } catch { upstream = true; }
         scanAfterUpstream = upstream;
+        const open = await db.query(PV_AC_OPEN_DAYS_SQL, [`${firstDay}T00:00:00.000Z`, limit]);
         queue = (open.rows || []).map((r) => String(r.day).slice(0, 10)).filter((day) => !processed.has(day));
         if (queue.length === 0) {
           if (!upstream) return { waiting: 'coverage' };

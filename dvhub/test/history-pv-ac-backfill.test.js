@@ -153,3 +153,21 @@ test('pvAc isDone: erst mit fertiger Abdeckung und einem Durchgang danach; vorhe
   assert.equal((await job.runOnce()).day, '2026-11-18', 'nicht 24 h pausiert, neuer Scan');
   assert.equal(job.isDone(), true, 'Durchgang nach fertiger Abdeckung');
 });
+
+// Codex 1436c2fa (P2): wird die Abdeckung WÄHREND des Scans fertig, darf dieser Scan nicht als „nach der Abdeckung“
+// zählen (seine Momentaufnahme kann den zuletzt abgedeckten Tag noch nicht enthalten).
+test('pvAc isDone: Vorstufen-Zustand gilt vom Beginn des Scans', async () => {
+  const t = Date.parse('2026-11-24T10:00:00Z');
+  let upstream = false;
+  const base = fakeDb({ openDays: [[], []] });
+  const db = { calls: base.calls, async query(sql, p) {
+    const r = await base.query(sql, p);
+    if (sql === PV_AC_OPEN_DAYS_SQL) upstream = true;   // Abdeckung wird während der Abfrage fertig
+    return r;
+  } };
+  const job = createPvAcBackfill({ getDb: () => db, now: () => t, upstreamDone: () => upstream });
+  await job.runOnce();
+  assert.equal(job.isDone(), false, 'Scan begann vor dem Ende der Abdeckung');
+  await job.runOnce();
+  assert.equal(job.isDone(), true, 'nächster Scan beginnt nach dem Ende');
+});
