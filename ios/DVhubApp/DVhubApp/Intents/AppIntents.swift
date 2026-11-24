@@ -215,9 +215,12 @@ enum EmergencyStopAction {
             throw IntentFailure.message(userMessage(for: error))
         }
         let outcome = ControlOutcome.from(result.response)
-        if let after = result.after {
+        // Nur, wenn die Anlage noch die gewählte ist: Während des Wartens kann der Nutzer gewechselt oder sie entfernt
+        // haben — sonst zeigten Widgets und Kontrollzentrum ihren Stand, und der Abgleich der Live-Aktivität beendete
+        // die der neuen Anlage (Codex Integration 24.11.). Ein älterer Stand überschreibt keinen jüngeren.
+        if let after = result.after, LinkAccess.isSelected(creds.id) {
             let snapshot = WidgetSnapshot(after.status, at: after.at, boxName: after.boxName ?? creds.boxName, boxId: creds.id)
-            SharedStore.write(snapshot)
+            SharedStore.write(snapshot, onlyIfNewer: true)
             WidgetCenter.shared.reloadAllTimelines()
             ControlCenter.shared.reloadControls(ofKind: SharedStore.controlKindStop)
             await LiveActivityManager.sync(snapshot)

@@ -77,7 +77,9 @@ enum LiveActivityManager {
                 }
             }
         case false?:
-            for a in everyMine { await a.end(nil, dismissalPolicy: .immediate) }
+            // Ein älterer Stand beendet keine Aktivität mit neuerem Stand — etwa ein alter Briefkasten-Stand nach
+            // einer Zeitüberschreitung, während der Not-Halt noch gilt (Codex Integration 24.11.).
+            for a in everyMine where snapshot.at >= a.content.state.updatedAt { await a.end(nil, dismissalPolicy: .immediate) }
         case nil:
             break
         }
