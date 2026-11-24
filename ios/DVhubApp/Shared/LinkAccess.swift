@@ -70,6 +70,16 @@ enum LinkAccess {
             throw Failure.keyUnavailable
         }
     }
+
+    /// Ist `id` noch die gewählte Anlage (wie `selected()`, ohne Geräteschlüssel)? Während eines Abrufs kann die
+    /// Auswahl gewechselt oder die Anlage entfernt werden — dann gehört dessen Ergebnis nicht mehr zur gewählten.
+    /// Nicht lesbar (gesperrt) zählt als „nicht mehr“: lieber den Stand verwerfen als einer anderen Anlage zeigen.
+    static func isSelected(_ id: String) -> Bool {
+        configure()
+        guard let systems = try? KeyStore.loadSystems() else { return false }
+        let wanted = SharedStore.selectedSystemId
+        return (systems.first(where: { $0.id == wanted }) ?? systems.first)?.id == id
+    }
 }
 
 extension WidgetSnapshot {
@@ -91,6 +101,8 @@ enum SnapshotRefresher {
 
     enum Reason: Equatable {
         case noSystem, locked, notShared, keyUnavailable, unreachable, timeout
+        /// Während des Abrufs wurde eine andere Anlage gewählt oder die abgefragte entfernt; ihr Ergebnis gilt nicht.
+        case superseded
     }
 
     /// Ein Abruf mit Gesamtfrist. Schreibt den Stand in die App-Gruppe (nur,
@@ -145,6 +157,9 @@ enum SnapshotRefresher {
             }
         }
         guard let result else { return .unchanged(SharedStore.read(), reason: .unreachable) }
+        // Auswahl inzwischen gewechselt oder Anlage entfernt: Ergebnis verwerfen, sonst zeigten Widgets und der
+        // Not-Halt-Knopf den Stand der alten Anlage, während Aktionen die neue treffen (Codex Integration 24.11., P2).
+        guard LinkAccess.isSelected(creds.id) else { return .unchanged(SharedStore.read(), reason: .superseded) }
         let snap = WidgetSnapshot(result.status, at: result.at, boxName: result.boxName ?? creds.boxName, boxId: creds.id)
         SharedStore.write(snap, onlyIfNewer: true)
         return .fresh(SharedStore.read().flatMap { $0.boxId == snap.boxId ? $0 : nil } ?? snap)
