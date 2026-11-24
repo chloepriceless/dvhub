@@ -368,7 +368,8 @@ restore() {  # $1 = Index-Name, $2 = gescheiterter Schritt
   local keep="$BUILD/channels-restore"
   # Marke eines früheren, bestätigten Versuchs zuerst weg — sie gilt nur für
   # genau diesen Versuch (Codex 6d0643fe).
-  rm -f "$keep/bestaetigt"
+  # Scheitert das Entfernen, nur warnen — das Wiederherstellen am Release geht vor (Codex e278d442).
+  rm -f "$keep/bestaetigt" 2>/dev/null || echo "publish-release: Warnung: alte Marke $keep/bestaetigt nicht entfernbar" >&2
   mkdir -p "$keep" && cp "$RESTORE/$IDX" "$RESTORE/$SIG" "$keep/" \
     || echo "publish-release: Warnung: Kopie des alten Paars nach $keep gescheitert" >&2
   gh release upload channels -R "$GH_REPO" --clobber "$RESTORE/$SIG" "$RESTORE/$IDX" \
