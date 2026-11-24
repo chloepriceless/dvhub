@@ -46,6 +46,19 @@ test('pvAc: ab dem ersten Rohdaten-Tag, nur abgeschlossene Tage, jeder Tag einma
   assert.deepEqual(await none.runOnce(), { done: true });
 });
 
+test('pvAc (Codex eea3b53a): ein fehlgeschlagener Tag wird beim nächsten Lauf wiederholt', async () => {
+  const t = Date.parse('2026-11-24T10:00:00Z');
+  const db = fakeDb({ openDays: [['2026-11-20'], ['2026-11-20'], []] });
+  let fail = true;
+  const flaky = { calls: db.calls, async query(sql, params) {
+    if (sql === PV_AC_INSERT_SQL && fail) { fail = false; throw new Error('timeout'); }
+    return db.query(sql, params);
+  } };
+  const job = createPvAcBackfill({ getDb: () => flaky, now: () => t });
+  assert.equal((await job.runOnce()).error, 'timeout');
+  assert.deepEqual(await job.runOnce(), { day: '2026-11-20', inserted: 96, remaining: 0 });
+});
+
 const URL = process.env.DVHUB_TEST_PG_URL || process.env.DATABASE_URL;
 const skip = URL ? false : 'DVHUB_TEST_PG_URL/DATABASE_URL nicht gesetzt';
 
@@ -82,13 +95,19 @@ for (const metaType of ['jsonb', 'text']) {
       // D: hat schon eine eigene pv_ac_w-Zeile. E: kein eigener pv_total_w-Slot.
       await raw(D, { pv_total_w: 2000, pv_dc_w: 0 });
       await raw(E, { pv_total_w: 2000, pv_dc_w: 0 });
+      // P (Codex eea3b53a): Rohwerte nur noch zur Hälfte da (Platz-Wache) — PV gesamt aus den
+      // Proben 0,375 statt gespeichert 0,75 kWh → nicht eintragen.
+      const P = at('11:15');
+      await raw(P, { pv_total_w: 3000, pv_dc_w: 1000 });
+      await client.query(`DELETE FROM timeseries_samples WHERE ts_utc >= $1::timestamptz + interval '450 seconds' AND ts_utc < $1::timestamptz + interval '900 seconds'`, [P]);
       // VRM-Rohwerte zählen nicht.
       await client.query(`INSERT INTO timeseries_samples (series_key, scope, source, ts_utc, resolution_seconds, value_num)
         VALUES ('pv_total_w', 'history', 'vrm_import', $1, 900, 99999)`, [A]);
       const meta = JSON.stringify({ coverageS: 900, samples: 180, maxResS: 5 });
-      for (const slot of [A, B, C, D]) {
+      // Gespeicherte PV gesamt je Slot = Rohwerte × 900 s (A 0,75, B 0,3, C 0,2, D 0,5, P 0,75 kWh).
+      for (const [slot, kwh] of [[A, 0.75], [B, 0.3], [C, 0.2], [D, 0.5], [at('11:15'), 0.75]]) {
         await client.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, meta_json)
-          VALUES ($1, 'pv_total_w', 'local_live', 'raw_derived', 0.75, $2::text::${metaType})`, [slot, meta]);
+          VALUES ($1, 'pv_total_w', 'local_live', 'raw_derived', $3, $2::text::${metaType})`, [slot, meta, kwh]);
       }
       await client.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, meta_json)
         VALUES ($1, 'pv_ac_w', 'local_live', 'raw_derived', 0.123, NULL), ($2, 'pv_ac_w', 'vrm_import', 'backfilled', 0.4, NULL)`, [D, A]);
@@ -96,7 +115,7 @@ for (const metaType of ['jsonb', 'text']) {
       const open = await client.query(PV_AC_OPEN_DAYS_SQL, ['2026-11-01T00:00:00Z', '2026-11-02T00:00:00Z']);
       assert.deepEqual(open.rows.map((r) => r.day), ['2026-11-01']);
       const res = await client.query(PV_AC_INSERT_SQL, ['2026-11-01T00:00:00.000Z', '2026-11-02T00:00:00.000Z']);
-      assert.equal(res.rowCount, 3, 'A, B, C — nicht D (schon da), nicht E (kein eigener PV-Slot)');
+      assert.equal(res.rowCount, 3, 'A, B, C — nicht D (schon da), nicht E (kein eigener PV-Slot), nicht P (Rohwerte unvollständig)');
       const { rows } = await client.query(`SELECT slot_start_utc, value_num, meta_json::text AS meta FROM energy_slots_15m
         WHERE series_key = 'pv_ac_w' AND source_kind = 'local_live' ORDER BY slot_start_utc`);
       const bySlot = new Map(rows.map((r) => [new Date(r.slot_start_utc).toISOString(), r]));
@@ -106,9 +125,14 @@ for (const metaType of ['jsonb', 'text']) {
       assert.equal(bySlot.get(D).value_num, 0.123);
       assert.equal(bySlot.has(E), false);
       assert.deepEqual(JSON.parse(bySlot.get(A).meta), { coverageS: 900, samples: 180, maxResS: 5 });
-      // Idempotent, und der Tag ist danach nicht mehr offen.
+      assert.equal(bySlot.has(at('11:15')), false);
+      // Idempotent. P bleibt offen (nichts zu raten) — darum merkt sich der Job bearbeitete Tage.
       assert.equal((await client.query(PV_AC_INSERT_SQL, ['2026-11-01T00:00:00.000Z', '2026-11-02T00:00:00.000Z'])).rowCount, 0);
-      assert.equal((await client.query(PV_AC_OPEN_DAYS_SQL, ['2026-11-01T00:00:00Z', '2026-11-02T00:00:00Z'])).rows.length, 0);
+      // Codex eea3b53a: solange coverage.js den Tag nicht abgeschlossen hat, ist er nicht offen.
+      await client.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, meta_json)
+        VALUES ('2026-11-05T10:00:00Z', 'pv_total_w', 'local_live', 'raw_derived', 0.5, NULL)`);
+      const open2 = await client.query(PV_AC_OPEN_DAYS_SQL, ['2026-11-01T00:00:00Z', '2026-11-06T00:00:00Z']);
+      assert.deepEqual(open2.rows.map((r) => r.day), ['2026-11-01']);
     } finally {
       await client.end();
     }

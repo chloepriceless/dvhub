@@ -15,9 +15,16 @@
 // Portionsweise wie coverage.js: je Lauf ein UTC-Tag (ein INSERT), nur Tage ab
 // den ersten eigenen Rohwerten und nur abgeschlossene (vor gestern, damit nichts
 // mit dem Live-Pfad kollidiert), Pause = zehnfache Laufzeit. Idempotent: ON
-// CONFLICT DO NOTHING, nur Slots ohne eigene pv_ac_w-Zeile. Slots ohne Rohwerte
-// bleiben offen (nichts zu raten); damit der Job sie nicht endlos wiederholt,
-// merkt er sich die bearbeiteten Tage bis zum nächsten Neustart.
+// CONFLICT DO NOTHING, nur Slots ohne eigene pv_ac_w-Zeile.
+// Codex eea3b53a:
+//   - erst wenn coverage.js den Tag abgeschlossen hat (jede eigene pv_total_w-
+//     Zeile hat Abdeckung oder Vermerk) — sonst würde ein leerer Vermerk kopiert;
+//   - nur Slots, deren Rohwerte noch vollständig da sind: PV gesamt aus den Proben
+//     nachgerechnet muss zum gespeicherten Slot-Wert passen (±2 %, mind. 0,005 kWh);
+//     die Platz-Wache löscht alte Rohwerte, die Viertelstunden bleiben;
+//   - ein Tag gilt erst nach erfolgreichem INSERT als bearbeitet.
+// Slots ohne passende Rohwerte bleiben offen (nichts zu raten); damit der Job sie
+// nicht endlos wiederholt, merkt er sich die bearbeiteten Tage bis zum Neustart.
 
 import { COVERAGE_PAUSE_FACTOR, COVERAGE_RESCAN_MS } from './coverage.js';
 
@@ -28,16 +35,24 @@ SELECT to_char(min(ts_utc) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS first_day
 FROM timeseries_samples
 WHERE series_key = 'pv_total_w' AND scope = 'live' AND source = 'local_poll'`;
 
-// $1 erster Rohdaten-Tag, $2 Grenze (exklusiv).
+// $1 erster Rohdaten-Tag, $2 Grenze (exklusiv). Offen = ein eigener pv_total_w-Slot
+// ohne eigene pv_ac_w-Zeile; abgeschlossen = alle pv_total_w-Zeilen des Tages mit
+// Abdeckung oder Vermerk (coverage.js ist durch).
 export const PV_AC_OPEN_DAYS_SQL = `
-SELECT DISTINCT to_char(date_trunc('day', t.slot_start_utc AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day
-FROM energy_slots_15m t
-WHERE t.source_kind = 'local_live' AND t.series_key = 'pv_total_w'
-  AND t.slot_start_utc >= $1::timestamptz AND t.slot_start_utc < $2::timestamptz
-  AND NOT EXISTS (
-    SELECT 1 FROM energy_slots_15m a
-    WHERE a.slot_start_utc = t.slot_start_utc AND a.series_key = 'pv_ac_w' AND a.source_kind = 'local_live')
-ORDER BY 1 DESC`;
+SELECT day FROM (
+  SELECT to_char(date_trunc('day', t.slot_start_utc AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
+         bool_and((m.j ->> 'coverageS') IS NOT NULL OR (m.j ->> 'coverageBackfill') IS NOT NULL) AS finalized,
+         bool_or(NOT EXISTS (
+           SELECT 1 FROM energy_slots_15m a
+           WHERE a.slot_start_utc = t.slot_start_utc AND a.series_key = 'pv_ac_w' AND a.source_kind = 'local_live')) AS open
+  FROM energy_slots_15m t
+  CROSS JOIN LATERAL (SELECT nullif(t.meta_json::text, '')::jsonb AS j) m
+  WHERE t.source_kind = 'local_live' AND t.series_key = 'pv_total_w'
+    AND t.slot_start_utc >= $1::timestamptz AND t.slot_start_utc < $2::timestamptz
+  GROUP BY 1
+) d
+WHERE finalized AND open
+ORDER BY day DESC`;
 
 // $1/$2 UTC-Tag [von, bis).
 export const PV_AC_INSERT_SQL = `
@@ -54,7 +69,8 @@ WITH s AS (
 ),
 e AS (
   SELECT to_timestamp(floor(extract(epoch FROM ts_utc) / 900) * 900) AS slot,
-         sum(greatest(ptot - pdc, 0) * least(res, 900)) / 3600000.0 AS kwh
+         sum(greatest(ptot - pdc, 0) * least(res, 900)) / 3600000.0 AS kwh,
+         sum(ptot * least(res, 900)) / 3600000.0 AS ptot_kwh
   FROM s
   WHERE ptot IS NOT NULL AND res > 0
   GROUP BY 1
@@ -64,6 +80,9 @@ SELECT e.slot, 'pv_ac_w', 'local_live', 'raw_derived', e.kwh, 'kWh', t.meta_json
 FROM e
 JOIN energy_slots_15m t
   ON t.slot_start_utc = e.slot AND t.series_key = 'pv_total_w' AND t.source_kind = 'local_live'
+WHERE abs(e.ptot_kwh - coalesce(t.value_num, 0)) <= greatest(0.005, 0.02 * abs(coalesce(t.value_num, 0)))
+  AND ((nullif(t.meta_json::text, '')::jsonb ->> 'coverageS') IS NOT NULL
+    OR (nullif(t.meta_json::text, '')::jsonb ->> 'coverageBackfill') IS NOT NULL)
 ON CONFLICT (slot_start_utc, series_key, source_kind) DO NOTHING`;
 
 export function createPvAcBackfill({ getDb, pushLog, onDayUpdated = null, now = () => Date.now() } = {}) {
@@ -105,10 +124,10 @@ export function createPvAcBackfill({ getDb, pushLog, onDayUpdated = null, now = 
         doneAt = null;
       }
       const day = queue.shift();
-      processed.add(day);
       const from = `${day}T00:00:00.000Z`;
       const to = new Date(Date.parse(from) + DAY_MS).toISOString();
       const res = await db.query(PV_AC_INSERT_SQL, [from, to]);
+      processed.add(day);   // erst nach Erfolg (Codex eea3b53a)
       const inserted = Number(res.rowCount) || 0;
       pauseUntil = now() + (now() - startedAt) * COVERAGE_PAUSE_FACTOR;
       if (inserted > 0 && typeof onDayUpdated === 'function') {
