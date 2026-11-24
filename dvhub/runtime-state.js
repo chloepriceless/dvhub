@@ -111,7 +111,9 @@ const VICTRON_FIELDS = [
   'deviceMaxDischargeA',
   // Kennungsprobe des Herstellerprofils (Lese-Engine E10, 19.11.2026): {status, text, hidden, checks, checkedAt}.
   // Whitelisted, sonst sähe /api/status im Split-Prozess-Betrieb weder den Hinweis noch, was ausgeblendet ist.
-  'identityProbe'
+  'identityProbe',
+  // SunSpec-M160 je MPPT/String (Live-Leistung je String, klein): /api/pv-strings/mppt im getrennten Betrieb.
+  'mppt'
 ];
 
 const SCHEDULE_FIELDS = [

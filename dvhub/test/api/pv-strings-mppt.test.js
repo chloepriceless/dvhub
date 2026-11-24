@@ -6,6 +6,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApiRoutes } from '../../routes-api.js';
+import { buildVictronSnapshot } from '../../runtime-state.js';
 
 const REMOTE_IP = '203.0.113.5'; // TEST-NET-3
 const LAN_IP = '192.168.1.66';   // RFC1918
@@ -89,6 +90,22 @@ describe('T-MPPT-TELEMETRY endpoint auth', () => {
     assert.equal(data.ok, true);
     assert.equal(data.sources[0].n, 1);
     assert.equal(data.sources[0].liveW, 3000);
+  });
+
+  // Codex Integration 24.11. (P2): im getrennten Betrieb (DVHUB_ENABLE_RUNTIME_WORKER=1) liest der Poller im
+  // Runtime-Prozess; die Web-Seite kennt die Live-Werte nur aus dem Status-Schnappschuss.
+  it('getrennter Betrieb: Live-Werte je String kommen aus dem Runtime-Schnappschuss', async () => {
+    const ctx = mockCtx();
+    delete ctx.state.victron.mppt;
+    const worker = buildVictronSnapshot({ soc: 50, mppt: [{ n: 1, w: 2500, v: 410 }] });
+    assert.deepEqual(worker.mppt, [{ n: 1, w: 2500, v: 410 }], 'Schnappschuss trägt mppt');
+    ctx.getCachedRuntimeStatusPayload = () => ({ victron: worker });
+    const res = await dispatch(ctx, makeReq('/api/pv-strings/mppt', { token: null, ip: LAN_IP }));
+    assert.equal(res._cap.status, 200, res._cap.body);
+    const data = JSON.parse(res._cap.body);
+    assert.equal(data.enabled, true);
+    assert.equal(data.sources[0].liveW, 2500);
+    assert.equal(data.sources[0].liveV, 410);
   });
 
   it('pvnode-Export verlangt Bearer AUCH im LAN (ohne Token → 401)', async () => {

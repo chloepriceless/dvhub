@@ -5011,7 +5011,11 @@ export function createApiRoutes(ctx) {
       if (!checkAuth(req, res)) return;
       if (!ctx.pvStrings) return json(res, 503, { ok: false, error: 'pv strings not available' });
       try {
-        const live = Array.isArray(state?.victron?.mppt) ? state.victron.mppt : [];
+        // Getrennter Betrieb (Runtime-Worker): der Poller läuft im Runtime-Prozess, die Live-Werte stehen im
+        // Status-Schnappschuss (runtime-state.js VICTRON_FIELDS) — sonst wie bisher state.victron.
+        const workerMppt = ctx.getCachedRuntimeStatusPayload?.()?.victron?.mppt;
+        const liveSrc = Array.isArray(workerMppt) ? workerMppt : state?.victron?.mppt;
+        const live = Array.isArray(liveSrc) ? liveSrc : [];
         const activeModules = live.map((m) => Number(m?.n)).filter((n) => isMpptModule(n));
         const liveByN = new Map(live.map((m) => [Number(m?.n), m]));
         const overview = await ctx.pvStrings.mpptOverview(activeModules);
