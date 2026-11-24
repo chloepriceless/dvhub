@@ -46,6 +46,9 @@ const ENTRY_KEYS = new Set([
   'readType', 'writeType', 'wordOrder', 'notAvailableRaw', 'rawSentinels', 'rawSentinelMap', 'sumRegisters',
   'sunspec', 'derive', 'chargeModule', 'dischargeModule', 'pollEveryMs', 'emulate', 'keepaliveMs', 'verify',
   'sungrowEms', 'sequence', 'fallback',
+  // SunSpec-M160 je MPPT/String (feat/wr-sunspec-familie, nur Lesen): welche Module keine PV-Strings sind, und ob
+  // DCV/DCA/DCWH je String mitgeloggt werden.
+  'excludeModules', 'logExtras',
 ]);
 const VICTRON_KEYS = new Set([
   'transport', 'host', 'port', 'unitId', 'timeoutMs', 'acPvSource', 'acPvSource2', 'telemetryMaxAgeMs',
