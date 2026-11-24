@@ -90,3 +90,18 @@ test('Codex 65c52509: Sungrow — Geräte-Minimum zählt als Boden (Fenster 30�
   assert.equal(assist.live.has('peak-shaving'), false);
   assert.equal(state.ctrl._peakShaving.assist.reason, 'soc_floor');
 });
+
+test('Codex 57c5dc10: zwei Sungrow-WR — jeder gegen seinen eigenen Boden; einer mit Luft reicht', () => {
+  // Master echt 65 % bei Boden 70 % (Geräte-Minimum 70): am Boden. Slave echt 20 % bei Boden 10 %: hat Luft.
+  const cfg = { ...CFG, manufacturer: 'sungrow', victron: { transport: 'modbus' }, peakShaving: { ...CFG.peakShaving, minSocPct: null },
+    sungrow: { secondInverter: { host: '192.0.2.20', aggregateTelemetry: true } },
+    controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } } };
+  const state = makeState({ soc: 65 });
+  state.victron.device = { minSocPctDevice: 70, maxSocPctDevice: 100 };
+  state.victron.sungrowMasterSocPct = 0;   // relativ 0 % = echt 70 % = Geräte-Minimum
+  state.sungrowSecond = { online: true, updatedAt: Date.now(), socPct: 20, minSocPctDevice: 10, maxSocPctDevice: 100 };
+  // Slave: relativ 20 % → echt 10 + 0,2 × 90 = 28 % > Boden 10 % (+ Puffer)
+  const assist = fakeAssist();
+  createPeakShaving({ state, getCfg: () => cfg, pushLog: () => {}, batteryAssist: assist }).pollTick();
+  assert.equal(assist.live.has('peak-shaving'), true, JSON.stringify(state.ctrl._peakShaving?.assist));
+});

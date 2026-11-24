@@ -35,8 +35,7 @@ import { localParts, zoneOffsetMs } from '../../tz-fast.js';
 import { capPositiveSetpoint, meterImport } from '../import-limit/core.js';
 import { monoNow as defaultMonoNow } from '../mono-clock.js';
 import { resolveBatteryLever } from '../grid-connection/index.js';
-import { floorSocPct } from '../multi-gx/planning.js';
-import { sungrowDischargeFloorPct, sungrowSocFloorBufferPct } from '../inverter/sungrow.js';
+import { sungrowDischargeFloorPct, sungrowSocFloorBufferPct, sungrowRealSocPct, resolveSecondInverter, secondInverterTelemetry } from '../inverter/sungrow.js';
 import { createBudgetState, observeBudget, decideBudget, quarterHourSlot } from './budget.js';
 import { resolveTariff, computeYearBilling } from './billing.js';
 
@@ -602,29 +601,46 @@ export function createPeakShaving(ctx, deps = {}) {
     return k.value;
   }
 
-  // Sungrow meldet den Ladestand relativ zum Geräte-Fenster: Böden vergleichen
-  // gegen den echten Ladestand (wie T-0075, multi-gx/planning floorSocPct);
-  // Frische/Fehler bleiben die des gemeldeten Felds (Codex e5a25ac1 P2).
-  function realSocState(c) {
+  // Sungrow meldet den Ladestand relativ zum Geräte-Fenster: verglichen wird der
+  // echte Ladestand gegen den Boden aus hartem Boden und Geräte-Minimum + Puffer
+  // (wie der Sungrow-Aktor, sungrowDischargeFloorPct) — JE Wechselrichter gegen
+  // seinen eigenen Boden. Mit zweitem WR (aggregateTelemetry) zählt der WR mit
+  // dem größeren Abstand zu seinem Boden: der Split entlädt beide (Codex 57c5dc10
+  // P2). Frische/Fehler bleiben die des gemeldeten Felds (Codex e5a25ac1/65c52509).
+  function sungrowSocView(c) {
+    if (String(c?.manufacturer || '') !== 'sungrow') return null;
     const st = ctx.state || {};
-    if (String(c?.manufacturer || '') !== 'sungrow') return st;
-    let real;
-    try { real = floorSocPct({ getCfg: () => c, state: st }); } catch { real = null; }
-    if (real == null || !Number.isFinite(Number(real)) || Number(real) === Number(st.victron?.soc)) return st;
-    return { ...st, victron: { ...st.victron, soc: Number(real) } };
-  }
-
-  // Sungrow: Boden = max(harter Boden, Geräte-Minimum + Puffer) wie der Sungrow-Aktor
-  // (sungrowDischargeFloorPct) — sonst zählte das Budget Energie unter dem
-  // Geräte-Minimum als nutzbar (Codex 65c52509 P1).
-  function withDeviceFloor(c, r) {
-    if (String(c?.manufacturer || '') !== 'sungrow') return r;
-    const dev = ctx.state?.victron?.device || {};
-    let extra;
+    const v = st.victron || {};
+    const hard = Number(c?.optimizer?.hardFloorSocPct ?? 5);
+    let buf;
+    try { buf = sungrowSocFloorBufferPct(c); } catch { buf = 0; }
+    const dev = v.device || {};
+    const masterReported = finite(v.sungrowMasterSocPct) ? Number(v.sungrowMasterSocPct) : v.soc;
+    const cands = [];
+    const add = (reported, devMin, devMax) => {
+      const real = sungrowRealSocPct(reported, devMin, devMax);
+      if (real == null || !Number.isFinite(Number(real))) return;
+      cands.push({ soc: Number(real), floor: sungrowDischargeFloorPct(hard, devMin, buf) });
+    };
+    add(masterReported, dev.minSocPctDevice, dev.maxSocPctDevice);
     try {
-      extra = sungrowDischargeFloorPct(Number(c?.optimizer?.hardFloorSocPct ?? 5), dev.minSocPctDevice, sungrowSocFloorBufferPct(c));
-    } catch { extra = null; }
-    return Number.isFinite(Number(extra)) ? { ...r, extraFloorPct: Number(extra) } : r;
+      if (resolveSecondInverter(c).aggregateTelemetry === true) {
+        const t2 = secondInverterTelemetry(st, c, {});
+        if (t2) add(t2.socPct, t2.minSocPctDevice, t2.maxSocPctDevice);
+      }
+    } catch { /* ohne zweiten WR */ }
+    if (!cands.length) return null;
+    return cands.reduce((a, b) => (b.soc - b.floor > a.soc - a.floor ? b : a));
+  }
+  function realSocState(c) {
+    const view = sungrowSocView(c);
+    const st = ctx.state || {};
+    if (!view) return st;
+    return { ...st, victron: { ...st.victron, soc: view.soc } };
+  }
+  function withDeviceFloor(c, r) {
+    const view = sungrowSocView(c);
+    return view ? { ...r, extraFloorPct: view.floor } : r;
   }
 
   function budgetBattery(c, r, t) {
