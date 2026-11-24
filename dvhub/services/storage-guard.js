@@ -678,9 +678,12 @@ export function createStorageGuard({
     const floorMs = now() - EMERGENCY_KEEP_DAYS * 86_400_000;
     const fb = fallbackThresholds(totalMb);
     const targetMb = Math.max(fb.wenig * 1.25, 2 * (bigChunkMb || 0));
+    let removed = 0;
     for (let i = 0; i < EMERGENCY_MAX_UNITS; i++) {
       const free = statPath(primary.paths[0], { statfs, stat })?.freeMb;
-      if (Number.isFinite(free) && free >= targetMb) { out.emergencyRecovered = true; break; }
+      // „Erholt“ nur, wenn DIESER Pfad gelöscht hat — eine Reichweiten-„kritisch“-
+      // Stufe mit genug freiem Platz braucht weiter die alte Stufe (Codex 43ba132e).
+      if (Number.isFinite(free) && free >= targetMb) { if (removed > 0) out.emergencyRecovered = true; break; }
       if (!Number.isFinite(free)) break;
       if (now() >= deadline) { out.emergencyPending = true; break; }
       const unit = await oldestRawUnit(q, { timescale: ts });
@@ -701,6 +704,7 @@ export function createStorageGuard({
       }
       // Fast voll: ohne Temp-Tabelle löschen (die bräuchte selbst Platz).
       const r = await pruneRawBefore(db, { before: new Date(unit.toMs), timescale: ts, lowSpace: free < EMERGENCY_LOW_SPACE_MB });
+      removed += 1;
       out.actions.push({ action: 'emergency_raw', day, until: new Date(unit.toMs).toISOString(), aggregated, mode: r.mode,
         ...(r.restoreError ? { restoreError: r.restoreError } : {}) });
       if (r.restoreError) log('storage_keep_restore_error', { day, kept: r.kept, error: r.restoreError }, 'error');

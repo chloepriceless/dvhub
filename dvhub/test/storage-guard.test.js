@@ -710,3 +710,16 @@ test('isCritical: nativ misst schon vor dem ersten Lauf die PG-Platte (Codex ee4
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(g.isCritical(), true, 'danach: PG-Platte');
 });
+
+// Codex 43ba132e: „kritisch“ nach Reichweite bei genug freiem Platz → alte Stufe läuft weiter.
+test('Reichweite kritisch, Platz absolut genug: Notfall-Pfad tut nichts, alte Stufe greift weiter', async () => {
+  const s = s4Db({ days: 400, tierUntil: new Date(Date.parse('2026-11-22T00:00:00Z')) });
+  const files = { '/d/storage-samples.json': JSON.stringify({ samples: [{ day: '2026-11-17', used: { data: 32768 - 6000 - 2800 } }] }) };
+  const io = { writeFile: (f, d) => { files[f] = d; }, rename: (a, b) => { files[b] = files[a]; delete files[a]; }, readFile: (f) => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; } };
+  // 32 GiB, 6000 MiB frei, +400 MiB/Tag → ~10 Tage Reichweite → kritisch
+  const r = await createStorageGuard({ getDb: () => s.db, statfs: () => ({ blocks: 32768, bsize: 1048576, bavail: 6000 }), now: () => s.NOW,
+    aggregateRange: s.aggregateRange, getDataDir: () => '/d', samplesIo: io, profileIo: io, readFile: io.readFile }).check();
+  assert.equal(r.level, 'kritisch');
+  assert.ok(!r.actions.some((a) => a.action === 'emergency_raw' && a.day), 'Notfall nicht nötig');
+  assert.ok(r.actions.some((a) => a.action === 'drop_raw'), JSON.stringify(r.actions));
+});
