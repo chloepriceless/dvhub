@@ -138,11 +138,12 @@ final class DemoModeTests: XCTestCase {
         XCTAssertLessThan(abs(snap.at.timeIntervalSince(DemoStore.now)), 5)
 
         // Der Not-Halt-Kurzbefehl schaltet nur die Demo.
-        let outcome = try await EmergencyStopAction.run(stop: true)
+        XCTAssertEqual(EmergencyStopAction.Target.current, .demo)
+        let outcome = try await EmergencyStopAction.run(stop: true, confirmed: .demo)
         XCTAssertEqual(outcome, .done)
         XCTAssertEqual(DemoStore.loadState()?.emergencyStop, true)
         XCTAssertEqual(DemoStore.snapshot()?.emergencyStop, true)
-        _ = try await EmergencyStopAction.run(stop: false)
+        _ = try await EmergencyStopAction.run(stop: false, confirmed: .demo)
         XCTAssertEqual(DemoStore.loadState()?.emergencyStop, false)
 
         // Vorausgezeichnete Stände für die Widgets: acht Viertelstunden, alle als Demo gekennzeichnet.
@@ -158,6 +159,42 @@ final class DemoModeTests: XCTestCase {
         if model.systems.isEmpty {
             XCTAssertThrowsError(try LinkAccess.selected()) { XCTAssertEqual($0 as? LinkAccess.Failure, .noSystem) }
         }
+        model.deactivate()
+    }
+
+    /// Gegenprüfung adb63bc9 (P1): Zwischen Rückfrage und Ausführung kann sich die Auswahl ändern
+    /// (eine Kopplung wird fertig, die Demo endet). Geschaltet wird nur das Ziel aus der Rückfrage.
+    func testEmergencyStopActsOnlyOnTheConfirmedTarget() async throws {
+        let model = AppModel()
+        model.activate()
+
+        // „Nur die Demo“ bestätigt, dann endet die Demo: Es schaltet nichts — und sie lebt nicht wieder auf.
+        model.startDemo()
+        let demo = EmergencyStopAction.Target.current
+        XCTAssertEqual(demo, .demo)
+        model.endDemo()
+        do {
+            _ = try await EmergencyStopAction.run(stop: true, confirmed: demo)
+            XCTFail("die Demo gibt es nicht mehr — es darf nichts geschaltet werden")
+        } catch IntentFailure.targetChanged {} catch { XCTFail("unerwartet: \(error)") }
+        XCTAssertFalse(DemoStore.isActive, "der Kurzbefehl legt die Demo nicht neu an")
+        XCTAssertNil(DemoStore.existingBox)
+
+        // Eine Anlage bestätigt, dann wird die Demo gewählt: Die Demo wird nicht geschaltet (und keine Anlage erreicht).
+        let plant = EmergencyStopAction.Target.current
+        XCTAssertEqual(plant, .plant(model.selectedId))
+        model.startDemo()
+        do {
+            _ = try await EmergencyStopAction.run(stop: true, confirmed: plant)
+            XCTFail("inzwischen ist die Demo gewählt — es darf nichts geschaltet werden")
+        } catch IntentFailure.targetChanged {} catch { XCTFail("unerwartet: \(error)") }
+        XCTAssertEqual(DemoStore.loadState()?.emergencyStop, false)
+        // Eine andere Anlage als die bestätigte gilt ebenso als geändert.
+        model.endDemo()
+        do {
+            _ = try await EmergencyStopAction.run(stop: true, confirmed: .plant("eine-andere-anlage"))
+            XCTFail("andere Anlage als bestätigt")
+        } catch IntentFailure.targetChanged {} catch { XCTFail("unerwartet: \(error)") }
         model.deactivate()
     }
 
@@ -201,9 +238,16 @@ final class DemoModeTests: XCTestCase {
         let isSample = false
         let price: Double
         let delay: Duration
+        var newsSeenKey: String { "test.news.lastSeen.\(id)" }
+        /// Zeitpunkt der einen Meldung dieser Quelle.
+        var newsAt = Date(timeIntervalSince1970: 1_800_000_000)
 
         func get(_ path: String, query: [URLQueryItem]) async throws -> JSONValue {
             try await Task.sleep(for: delay)
+            if path == "api/news" {
+                return ["items": [["title": .string("Meldung \(id)"), "excerpt": "", "link": .string("https://example.org/\(id)"),
+                                   "source_name": .string("Quelle \(id)"), "published_at": .string(ISO.string(newsAt))]], "total": 1]
+            }
             guard path == "api/prices" else { throw Online.Failure.status(404) }
             let start = MarketTime.startOfDay(Date())
             let rows: [JSONValue] = (0..<96).map { i in
@@ -227,5 +271,34 @@ final class DemoModeTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(500))
         XCTAssertEqual(market.prices.first?.ctKwh, 50, "die späte Antwort der alten Quelle überschreibt nichts")
         XCTAssertFalse(market.loading)
+    }
+
+    /// Gegenprüfung adb63bc9: Beispielmeldungen der Demo dürfen das Lesezeichen der echten Nachrichten
+    /// nicht verschieben, und der Leser beginnt mit der Quelle neu.
+    func testNewsKeepOneReadCursorPerSource() async {
+        var live = StubOnline(id: "echt", price: 1, delay: .zero)
+        live.newsAt = Date(timeIntervalSince1970: 1_800_000_000)
+        var demo = StubOnline(id: "beispiel", price: 1, delay: .zero)
+        demo.newsAt = Date(timeIntervalSince1970: 1_900_000_000)   // jünger als jede echte Meldung
+        for key in [live.newsSeenKey, demo.newsSeenKey] { UserDefaults.standard.removeObject(forKey: key) }
+        defer { for key in [live.newsSeenKey, demo.newsSeenKey] { UserDefaults.standard.removeObject(forKey: key) } }
+
+        let news = NewsStore(source: live)
+        await news.refresh(force: true)
+        XCTAssertEqual(news.lastSeen, live.newsAt, "beim ersten Laden gilt alles als gesehen")
+        let epoch = news.epoch
+
+        news.use(demo)
+        XCTAssertNil(news.lastSeen, "die Demo beginnt mit eigenem Lesezeichen")
+        XCTAssertEqual(news.epoch, epoch + 1, "der Leser beginnt neu (Filter, geöffnete Meldung)")
+        await eventually("die Beispielmeldungen laden") { news.items.first?.source == "Quelle beispiel" }
+        news.markSeen()
+        XCTAssertEqual(news.lastSeen, demo.newsAt)
+
+        news.use(live)
+        XCTAssertEqual(news.lastSeen, live.newsAt, "das Lesezeichen der echten Nachrichten steht, wo es war")
+        XCTAssertEqual(UserDefaults.standard.object(forKey: live.newsSeenKey) as? Date, live.newsAt)
+        await eventually("die echten Meldungen laden") { news.items.first?.source == "Quelle echt" }
+        XCTAssertEqual(news.unseenCount, 0)
     }
 }

@@ -18,7 +18,8 @@ struct NewsView: View {
     private var wide: Bool { hSize == .regular }
 
     private var items: [NewsItem] {
-        guard let source else { return news.items }
+        // Ein Filter auf eine Quelle, die es in der Liste nicht (mehr) gibt, blendet nichts aus.
+        guard let source, sources.contains(source) else { return news.items }
         return news.items.filter { $0.source == source }
     }
 

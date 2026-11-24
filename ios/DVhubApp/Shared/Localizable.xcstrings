@@ -4693,6 +4693,16 @@
         }
       }
     },
+    "Inzwischen ist eine andere Anlage gewählt. Es wurde nichts geschaltet – bitte noch einmal." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A different system has been selected in the meantime. Nothing was switched – please try again."
+          }
+        }
+      }
+    },
     "Jahr" : {
       "localizations" : {
         "en" : {

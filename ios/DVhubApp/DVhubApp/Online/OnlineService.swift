@@ -19,6 +19,8 @@ protocol OnlineSource: Sendable {
     var caches: Bool { get }
     /// Beispieldaten statt echter Meldungen und Preise.
     var isSample: Bool { get }
+    /// Wo das Lesezeichen der Nachrichten liegt („bis hierhin gesehen“) — je Quelle ein eigenes.
+    var newsSeenKey: String { get }
     func get(_ path: String, query: [URLQueryItem]) async throws -> JSONValue
 }
 
@@ -27,6 +29,7 @@ struct LiveOnline: OnlineSource {
     let id = "live"
     let caches = true
     let isSample = false
+    let newsSeenKey = "news.lastSeen"
     func get(_ path: String, query: [URLQueryItem]) async throws -> JSONValue { try await Online.get(path, query: query) }
 }
 
@@ -35,6 +38,7 @@ struct DemoOnline: OnlineSource {
     let id = "demo"
     let caches = false
     let isSample = true
+    let newsSeenKey = DemoStore.newsSeenKey
     let market: DemoMarket
 
     func get(_ path: String, query: [URLQueryItem]) async throws -> JSONValue {
@@ -230,17 +234,19 @@ final class NewsStore {
     private(set) var error: String?
     private(set) var loadedAt: Date?
     /// Zeitpunkt der neuesten Meldung, die schon gesehen wurde (für den Punkt am Reiter).
-    private(set) var lastSeen: Date? = UserDefaults.standard.object(forKey: "news.lastSeen") as? Date
+    /// Je Quelle ein eigenes Lesezeichen: Beispielmeldungen der Demo zählen nicht als gelesene echte.
+    private(set) var lastSeen: Date?
     static let pageSize = 30
     private var source: any OnlineSource
-    /// Wechselt mit der Quelle (siehe MarketStore).
-    private var epoch = 0
+    /// Wechselt mit der Quelle (siehe MarketStore). Der Leser beginnt mit ihr neu (Filter, geöffnete Meldung).
+    private(set) var epoch = 0
 
     /// Die Meldungen sind Beispiele der Demo, keine echten.
     var isSample: Bool { source.isSample }
 
     init(source: any OnlineSource = DemoStore.onlineSource) {
         self.source = source
+        lastSeen = UserDefaults.standard.object(forKey: source.newsSeenKey) as? Date
         restoreCache()
     }
 
@@ -256,6 +262,7 @@ final class NewsStore {
         epoch += 1
         items = []; total = 0; loadedAt = nil; error = nil
         loading = false
+        lastSeen = UserDefaults.standard.object(forKey: next.newsSeenKey) as? Date
         restoreCache()
         Task { await refresh(force: true) }
     }
@@ -269,7 +276,7 @@ final class NewsStore {
     func markSeen() {
         guard let newest = items.compactMap(\.publishedAt).max(), newest != lastSeen else { return }
         lastSeen = newest
-        UserDefaults.standard.set(newest, forKey: "news.lastSeen")
+        UserDefaults.standard.set(newest, forKey: source.newsSeenKey)
     }
 
     func refresh(force: Bool = false) async {

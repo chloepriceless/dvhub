@@ -219,7 +219,12 @@ struct StatusWidgetContent: View {
 
     private func circular(_ s: WidgetSnapshot) -> some View {
         Gauge(value: max(0, min(100, s.soc ?? 0)), in: 0...100) {
-            Image(systemName: "bolt.fill")
+            // Werte der Beispielanlage: „DEMO“ statt des Blitzes — auch im kleinsten Widget sichtbar.
+            if s.isDemo {
+                Text(verbatim: "DEMO").font(.system(size: 8, weight: .heavy)).minimumScaleFactor(0.6)
+            } else {
+                Image(systemName: "bolt.fill")
+            }
         } currentValueLabel: {
             Text("\(Int((s.soc ?? 0).rounded()))")
         }

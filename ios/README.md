@@ -103,7 +103,10 @@ und unter Mehr → Anlagen. Wer eine eigene Anlage koppelt, beendet die Demo dam
 und auch Börsenpreise, Prognose und Nachrichten kommen als Beispieldaten aus dem Gerät (als „Beispiel“
 gekennzeichnet) – die Demo läuft offline. Abrufe für Widgets, Kurzbefehle und Kontrollzentrum rechnen dann ebenfalls
 die Demo; `LinkAccess.selected()` gibt keine Zugangsdaten heraus, auch nicht ersatzweise die einer gekoppelten Anlage.
+Der Not-Halt-Kurzbefehl schaltet genau das Ziel, das in seiner Rückfrage stand (`EmergencyStopAction.Target`): Wird
+zwischen Rückfrage und Ausführung eine andere Anlage gewählt oder die Demo beendet, schaltet nichts.
 Die Bestätigung mit Touch ID, Face ID oder Gerätecode entfällt in der Demo – dort wird nichts geschaltet.
+Beispielmeldungen haben ein eigenes Lesezeichen; das der echten Nachrichten bleibt, wo es war.
 
 **Aufbau.** Keine `if demo`-Zweige in den Ansichten, sondern eine zweite Umsetzung derselben Schnittstellen:
 
@@ -119,8 +122,11 @@ in Viertelstunden samt den Vorgaben, die ein Optimierer fände; dazu der bedient
 (Antworten auf dieselben Pfade und in derselben Form wie die Box – Vorbild `interop/harness.mjs`). Derselbe Zeitpunkt
 ergibt überall dieselben Werte: Leitstand, Historie, Fahrplan, Markt und Widgets passen zusammen, und ein vergangener
 Tag ändert sich nicht mehr. Die Anlage lebt in der Zeitzone des Geräts (Tag und Nacht passen zur Uhr), die Jahreszeit
-ist die echte; ab zwei Tagen vor dem Start der Demo ist das Wetter freundlich, damit es etwas zu sehen gibt. Der
-bediente Zustand liegt in den Einstellungen der App-Gruppe (`Shared/DemoStore.swift`), nichts davon im Schlüsselbund.
+ist die echte; ab zwei Tagen vor dem Start der Demo ist das Wetter freundlich, damit es etwas zu sehen gibt. Die
+Tagesläufe hängen lückenlos aneinander (jeder Tag beginnt mit dem Ladestand, mit dem der Vortag endete). Was man
+bedient, wirkt von jetzt an auf den Fluss: Regeln und Grundwert am Netzpunkt, Ladestrom, Stopp-Stand, Sofort laden,
+Not-Halt – vergangene Tage ändern sich dadurch nicht. Der bediente Zustand liegt in den Einstellungen der App-Gruppe
+(`Shared/DemoStore.swift`), nichts davon im Schlüsselbund.
 
 ## Bedienung
 

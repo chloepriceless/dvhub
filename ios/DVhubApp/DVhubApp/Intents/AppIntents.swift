@@ -26,6 +26,8 @@ enum IntentFailure: Error, CustomLocalizedStringResourceConvertible {
     case noValue
     case notAllowed
     case unreachable
+    /// Zwischen Rückfrage und Ausführung wurde eine andere Anlage gewählt (oder die Demo beendet).
+    case targetChanged
     case message(String)
 
     var localizedStringResource: LocalizedStringResource {
@@ -36,6 +38,7 @@ enum IntentFailure: Error, CustomLocalizedStringResourceConvertible {
         case .noValue: return "Diesen Wert liefert die Anlage gerade nicht."
         case .notAllowed: return "Dieses Gerät darf nicht steuern. In DVhub unter „Handy-App“ freigeben."
         case .unreachable: return "Die Anlage ist gerade nicht erreichbar."
+        case .targetChanged: return "Inzwischen ist eine andere Anlage gewählt. Es wurde nichts geschaltet – bitte noch einmal."
         case .message(let text): return "\(text)"
         }
     }
@@ -199,15 +202,27 @@ struct PlantOverviewIntent: AppIntent {
 /// Führt den Not-Halt aus bzw. hebt ihn auf — ein einzelner Abruf, ohne die
 /// Oberfläche. Schreibt den neuen Stand für Widgets und Live-Aktivität.
 enum EmergencyStopAction {
-    static func run(stop: Bool) async throws -> ControlOutcome {
+    /// Wen die Rückfrage genannt hat: die Demo oder eine gekoppelte Anlage (Kennung; nil = noch keine gewählt).
+    enum Target: Equatable {
+        case demo
+        case plant(String?)
+
+        static var current: Target { DemoStore.isSelected ? .demo : .plant(SharedStore.selectedSystemId) }
+    }
+
+    /// Schaltet genau das Ziel, das in der Rückfrage stand. Wurde inzwischen etwas anderes gewählt
+    /// (eine Kopplung wurde fertig, die Demo beendet), schaltet nichts: Wer „nur die Demo“ bestätigt
+    /// hat, erreicht nie eine Anlage — und umgekehrt.
+    static func run(stop: Bool, confirmed target: Target) async throws -> ControlOutcome {
         LinkAccess.configure()
-        // Demo gewählt: nur die Beispielanlage schalten — keine Verbindung, zu keiner Anlage.
-        if DemoStore.isSelected { return await runDemo(stop: stop) }
+        guard Target.current == target else { throw IntentFailure.targetChanged }
+        // Demo bestätigt: nur die Beispielanlage schalten — keine Verbindung, zu keiner Anlage.
+        if target == .demo { return try await runDemo(stop: stop) }
         let access: (credentials: LinkCredentials, signer: LinkSigner)
         do {
             access = try LinkAccess.selected()
         } catch LinkAccess.Failure.demo {
-            return await runDemo(stop: stop)
+            throw IntentFailure.targetChanged
         } catch LinkAccess.Failure.noSystem {
             throw IntentFailure.noSystem
         } catch LinkAccess.Failure.locked {
@@ -215,6 +230,8 @@ enum EmergencyStopAction {
         } catch {
             throw IntentFailure.noData
         }
+        // Genau die Anlage aus der Rückfrage — nicht eine, die inzwischen an ihre Stelle getreten ist.
+        if case .plant(let id?) = target, access.credentials.id != id { throw IntentFailure.targetChanged }
         // Die Box prüft das Recht selbst (und hat das letzte Wort); hier nur die schnelle Absage.
         guard access.credentials.canControl else { throw IntentFailure.notAllowed }
         let signer = SendableSigner(access.signer)
@@ -240,9 +257,12 @@ enum EmergencyStopAction {
     }
 
     /// Not-Halt der Demo-Anlage: ändert ihren Zustand im Gerät und führt Widgets und Live-Aktivität nach.
-    private static func runDemo(stop: Bool) async -> ControlOutcome {
-        let outcome = ControlOutcome.from(await DemoStore.emergencyStop(stop))
-        if let snapshot = DemoStore.snapshot() {
+    private static func runDemo(stop: Bool) async throws -> ControlOutcome {
+        // Die Demo wird hierfür nicht neu angelegt: Gibt es sie nicht mehr, schaltet nichts.
+        guard let response = await DemoStore.emergencyStop(stop) else { throw IntentFailure.targetChanged }
+        let outcome = ControlOutcome.from(response)
+        // Stand nur ablegen, solange die Demo noch gewählt ist — sonst gehört der Platz der anderen Anlage.
+        if DemoStore.isSelected, let snapshot = DemoStore.snapshot() {
             SharedStore.write(snapshot)
             WidgetCenter.shared.reloadAllTimelines()
             ControlCenter.shared.reloadControls(ofKind: SharedStore.controlKindStop)
@@ -263,12 +283,14 @@ struct TriggerEmergencyStopIntent: LiveActivityIntent {
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let demo = DemoStore.isSelected
+        // Das Ziel steht fest, bevor gefragt wird — ausgeführt wird nur an genau diesem.
+        let target = EmergencyStopAction.Target.current
+        let demo = target == .demo
         try await requestConfirmation(
             actionName: .custom(acceptLabel: "Not-Halt auslösen", acceptAlternatives: [], denyLabel: "Abbrechen", denyAlternatives: [], destructive: true),
             dialog: demo ? "Not-Halt der Demo-Anlage auslösen? Geschaltet wird nichts – es ändert sich nur die Demo."
                          : "Not-Halt auslösen? DVhub hört auf, Sollwerte an die Anlage zu schreiben.")
-        let outcome = try await EmergencyStopAction.run(stop: true)
+        let outcome = try await EmergencyStopAction.run(stop: true, confirmed: target)
         // Hat die Anlage nicht geschaltet, ist das ein Fehler — sonst liefe ein
         // Kurzbefehl nach „Not-Halt auslösen“ weiter, als wäre er aktiv.
         guard outcome.applied else { throw IntentFailure.message(outcome.message) }
@@ -284,11 +306,12 @@ struct ReleaseEmergencyStopIntent: LiveActivityIntent {
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let demo = DemoStore.isSelected
+        let target = EmergencyStopAction.Target.current
+        let demo = target == .demo
         try await requestConfirmation(
             actionName: .custom(acceptLabel: "Not-Halt aufheben", acceptAlternatives: [], denyLabel: "Abbrechen", denyAlternatives: [], destructive: false),
             dialog: demo ? "Not-Halt der Demo-Anlage aufheben?" : "Not-Halt aufheben? DVhub regelt die Anlage dann wieder.")
-        let outcome = try await EmergencyStopAction.run(stop: false)
+        let outcome = try await EmergencyStopAction.run(stop: false, confirmed: target)
         guard outcome.applied else { throw IntentFailure.message(outcome.message) }
         return .result(dialog: IntentReading.say(outcome == .done ? String(localized: "Der Not-Halt ist aufgehoben. DVhub regelt wieder.") : outcome.message, demo: demo))
     }

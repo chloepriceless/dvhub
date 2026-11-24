@@ -476,7 +476,9 @@ struct RootView: View {
     }
 
     private var newsStack: some View {
-        NavigationStack { NewsView() }
+        // Mit der Quelle (Demo gewählt bzw. verlassen) beginnt der Leser neu: Ein Filter auf eine Quelle
+        // der Beispielmeldungen blendete sonst alle echten aus, eine geöffnete Beispielmeldung bliebe stehen.
+        NavigationStack { NewsView().id(news.epoch) }
     }
 
     @ViewBuilder
