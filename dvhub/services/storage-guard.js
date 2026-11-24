@@ -46,6 +46,7 @@ export const COMPRESSION_WARNING_ID = 'db_compression';
 const COMPRESSION_REPORT_EVERY_MS = 24 * 3600_000;
 // Erste Kompressions-Prüfung kurz nach dem Start (nur lesend, ohne Löschen).
 const COMPRESSION_FIRST_CHECK_MS = 60_000;
+const RETUNE_EVERY_MS = 3600_000;
 
 export function storageLevel(freePct) {
   if (!Number.isFinite(freePct)) return 'unbekannt';
@@ -259,6 +260,7 @@ export function createStorageGuard({
   let profileInfo = null;           // letzte Entscheidung
   let lastEffective = initialProfile || startupProfile(getDataDir?.(), readFile).name;
   let retentionDay = null;          // Profil-Aufbewahrung höchstens einmal am Tag
+  let retuneAt = -Infinity;         // letzter Neuversuch der Kompressions-Einrichtung
 
   // E3 b (Christin 24.11.2026): ohne Kompression gilt mindestens „winzig“ —
   // nur für die Wirkung, das gespeicherte Profil bleibt (kommt die Kompression
@@ -407,6 +409,16 @@ export function createStorageGuard({
       try {
         if (hasDb) {
           probe = await evaluateCompression(db);
+          // Kompression nur ausgeschaltet (z. B. Sperre beim Start, compression_lock_timeout):
+          // Einrichtung höchstens stündlich erneut anstoßen — ohne Profilwechsel und
+          // ohne Folgen für die Aufbewahrung (Codex 5ea1b282).
+          if (compression.reason === 'not_enabled' && onProfileChange && now() - retuneAt >= RETUNE_EVERY_MS) {
+            retuneAt = now();
+            try {
+              await onProfileChange(PROFILES[lastEffective], { from: lastEffective, retune: true, ...profileView() });
+              probe = (await evaluateCompression(db)) || probe;
+            } catch (e) { logGuardError(e); }
+          }
           // Ohne Probe (Fehler) wie früher an der Erweiterung festmachen.
           const ts = probe ? probe.timescale
             : (await db.query("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'")).rows?.length > 0;
@@ -535,6 +547,9 @@ export function createStorageGuard({
       + (dropped ? `5-s-Rohwerte älter als ${dropped.keepDays} Tage wurden entfernt — 15-min-Werte bleiben. `
         : (compresses ? 'Ältere Messwerte werden früher komprimiert. ' : 'Messwerte werden nicht komprimiert. '))
       + (p?.temporary ? `Speicherprofil vorübergehend „${PROFILES[p.effective].label}“. ` : '')
+      // Ohne TimescaleDB (E2E „kleine Platte“ 24.11.): gelöschter Platz bleibt in der Datenbank.
+      + (out.actions.some((a) => a.mode === 'delete' && !a.error)
+        ? 'Ohne TimescaleDB nutzt die Datenbank den frei gewordenen Platz nur für neue Messwerte; an die Festplatte zurück gibt ihn erst eine Wartung (VACUUM FULL, sperrt die Datenbank kurz) — dafür bitte den Support kontaktieren. ' : '')
       + 'Speicher erweitern: USB-Stick oder SD-Karte als Datenspeicher einrichten.';
   }
 
@@ -585,7 +600,7 @@ export function createStorageGuard({
     const oldest = await oldestLiveRawDays(q);
     if (oldest == null || now() - oldest * 86_400_000 >= cutoff.getTime()) return;   // nichts älter
     const r = await pruneRawBefore(db, { before: cutoff, timescale: ts });
-    out.actions.push({ action: 'retain_raw', keepDays: prof.rawKeepDays, before: r.before, mode: r.mode });
+    out.actions.push({ action: 'retain_raw', keepDays: prof.rawKeepDays, before: r.before, mode: r.mode, ...(r.mode === 'delete' ? { rows: r.rows, vacuumed: r.vacuumed } : {}) });
     log('storage_raw_retention', { profile: prof.name, keepDays: prof.rawKeepDays, before: r.before }, 'info');
   }
 
@@ -597,7 +612,7 @@ export function createStorageGuard({
     const cutoff = rawPruneCutoff({ keepDays: keep, now: now(), compactedUntil: await rawCompactedUntil(q) });
     if (!cutoff) return;
     const r = await pruneRawBefore(db, { before: cutoff, timescale: ts });
-    out.actions.push({ action: 'drop_raw', keepDays: keep, before: r.before });
+    out.actions.push({ action: 'drop_raw', keepDays: keep, before: r.before, mode: r.mode, ...(r.mode === 'delete' ? { rows: r.rows, vacuumed: r.vacuumed } : {}) });
     log('storage_raw_dropped', { keepDays: keep, before: r.before, freePct }, 'warn');
   }
 

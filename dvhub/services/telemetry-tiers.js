@@ -335,6 +335,8 @@ export async function pruneOneMinuteTier(db, { olderThan, batchRows = 20_000, ma
     deleted += d.rowCount || 0;
     if (!d.rowCount) break;
   }
+  // Platz der gelöschten Zeilen wieder nutzbar machen (E2E „kleine Platte“ 24.11.).
+  if (deleted > 0) { try { await db.query(`VACUUM (ANALYZE) ${TIER_1M_TABLE}`); } catch { /* egal */ } }
   return { cutoff, droppedChunks: 0, deletedRows: deleted };
 }
 

@@ -494,3 +494,50 @@ test('Nach dem Profilwechsel neu prüfen: Kompression wieder da → kein Lösche
   assert.ok(!r.actions.some((a) => /retain/.test(a.action)), JSON.stringify(r.actions));
   assert.ok(!db.calls.some(([s]) => /drop_chunks|DELETE/.test(s)));
 });
+
+// E2E „kleine Platte“ S3 (24.11.): reines PostgreSQL — nach portionsweisem DELETE ein VACUUM, plus Hinweis.
+test('Ohne TimescaleDB: nach dem Löschen VACUUM (ANALYZE), Hinweis auf VACUUM FULL, roter Kompressions-Hinweis', async () => {
+  let deletes = 0;
+  const db = fakeDb({ ts: false, oldestDays: 100 });
+  const orig = db.query.bind(db);
+  db.query = async (sql, p) => {
+    if (sql.includes('DELETE FROM timeseries_samples')) { db.calls.push([sql.replace(/\s+/g, ' ').trim(), p]); deletes += 1; return { rowCount: deletes === 1 ? 50000 : 0, rows: [] }; }
+    return orig(sql, p);
+  };
+  const warn = {};
+  const r = await createStorageGuard({ getDb: () => db, statfs: stat(3), now: () => Date.parse('2026-10-01T00:00:00Z'), setWarning: (id, m) => { warn[id] = m; } }).check();
+  const calls = db.calls.map(([s]) => s);
+  const iDel = calls.findIndex((s) => s.startsWith('DELETE FROM timeseries_samples'));
+  const iVac = calls.indexOf('VACUUM (ANALYZE) timeseries_samples');
+  assert.ok(iDel >= 0 && iVac > iDel, 'VACUUM nach dem Löschen');
+  assert.ok(!calls.some((s) => /VACUUM FULL/.test(s)), 'nie automatisch VACUUM FULL');
+  assert.ok(r.actions.some((a) => a.mode === 'delete' && a.vacuumed === true), JSON.stringify(r.actions));
+  assert.match(warn.storage, /VACUUM FULL/);
+  assert.match(warn[COMPRESSION_WARNING_ID], /TimescaleDB ist nicht installiert/);
+});
+
+test('Ohne gelöschte Zeilen kein VACUUM', async () => {
+  const db = fakeDb({ ts: false, oldestDays: 100 });
+  await createStorageGuard({ getDb: () => db, statfs: stat(3), now: () => Date.parse('2026-10-01T00:00:00Z') }).check();
+  assert.ok(!db.calls.some(([s]) => /VACUUM/.test(s)));
+});
+
+// Codex 5ea1b282: „ausgeschaltet“ → Einrichtung stündlich neu anstoßen, ohne Profilwechsel.
+test('Kompression ausgeschaltet: Einrichtung höchstens stündlich neu, Profil bleibt, nichts gelöscht', async () => {
+  let t = Date.parse('2026-11-24T00:00:00Z'); let on = false; const calls = [];
+  const db = fakeDb({ oldestDays: 500, aggUntil: '2026-11-20T00:00:00Z' });
+  const orig = db.query.bind(db);
+  db.query = async (sql, p) => (sql.includes('timescaledb_information.hypertables')
+    ? { rows: [{ on, policies: '1', failing: null }] } : orig(sql, p));
+  const g = createStorageGuard({ getDb: () => db, statfs: stat(60), now: () => t,
+    onProfileChange: (p, info) => { calls.push([p.name, !!info.retune]); } });
+  await g.check();
+  assert.deepEqual(calls, [['gross', true]]);
+  t += 30 * 60_000; await g.check();
+  assert.equal(calls.length, 1, 'nicht alle 30 min');
+  on = true; t += 31 * 60_000;
+  const r = await g.check();
+  assert.equal(r.compression.ok, true);
+  assert.equal(r.profile.effective, 'gross');
+  assert.ok(!db.calls.some(([s]) => /drop_chunks|DELETE/.test(s)));
+});

@@ -78,5 +78,13 @@ export async function pruneRawBefore(db, { before, timescale }) {
     if (!d.rowCount) break;
     rows += d.rowCount;
   }
-  return { mode: 'delete', before: iso, rows };
+  // E2E „kleine Platte“ (24.11.): ohne VACUUM blieb der Platz gelöschter Zeilen
+  // belegt und die DB wuchs weiter (957 → 1038 MB). VACUUM macht ihn für neue
+  // Zeilen wieder nutzbar (keine Sperre gegen Schreiben). Ans Dateisystem geht er
+  // nur mit VACUUM FULL zurück — das sperrt die Tabelle, darum nie automatisch.
+  let vacuumed = false;
+  if (rows > 0) {
+    try { await db.query('VACUUM (ANALYZE) timeseries_samples'); vacuumed = true; } catch { /* z. B. in einer Transaktion */ }
+  }
+  return { mode: 'delete', before: iso, rows, vacuumed };
 }

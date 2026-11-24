@@ -200,3 +200,38 @@ for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], 
       });
     });
 }
+
+// E2E „kleine Platte“ S3 (24.11.): reines PostgreSQL (DVHUB_TEST_PG_URL_PLAIN, ohne TimescaleDB).
+test('reines PostgreSQL: Hinweis „ohne Kompression“, Löschen gibt den Platz innerhalb der DB frei (VACUUM)',
+  { skip: process.env.DVHUB_TEST_PG_URL_PLAIN ? false : 'DVHUB_TEST_PG_URL_PLAIN nicht gesetzt' }, async () => {
+    await withFreshDb(process.env.DVHUB_TEST_PG_URL_PLAIN, async (pool) => {
+      await ensurePgSchema(pool);
+      await pool.query(SQL027);
+      const now = Date.now();
+      await pool.query("UPDATE telemetry_tier_state SET done_until = to_timestamp($1::double precision / 1000) WHERE id = 'tiers'", [now - 2 * DAY]);
+      // ~100 000 alte Live-Rohwerte (älter als 365 Tage) + junge.
+      await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+        SELECT 'grid_total_w', 'live', 'test', 'raw', to_timestamp($1::double precision / 1000) - (400 * INTERVAL '1 day') - g * INTERVAL '5 seconds', 5, g
+          FROM generate_series(1, 100000) g`, [now]);
+      // Junge Zeilen dahinter (wie im Betrieb) — sonst schneidet VACUUM die leere Tabelle einfach ab.
+      await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+        SELECT 'grid_total_w', 'live', 'test', 'raw', to_timestamp($1::double precision / 1000) - (3 * INTERVAL '1 day') - g * INTERVAL '5 seconds', 5, g
+          FROM generate_series(1, 20000) g`, [now]);
+      const sizeBefore = Number((await pool.query("SELECT pg_relation_size('timeseries_samples') AS b")).rows[0].b);
+      const warn = {};
+      const r = await createStorageGuard({ getDb: () => pool, statfs: () => ({ blocks: 1000, bsize: 1048576 * 3, bavail: 30 }),
+        setWarning: (id, m) => { warn[id] = m; } }).check();
+      assert.equal(r.compression.ok, false);
+      assert.equal(r.compression.reason, 'no_timescaledb');
+      assert.match(warn[COMPRESSION_WARNING_ID], /TimescaleDB ist nicht installiert/);
+      const del = r.actions.find((a) => a.mode === 'delete' && !a.error);
+      assert.ok(del && del.rows > 0 && del.vacuumed, JSON.stringify(r.actions));
+      const st = (await pool.query("SELECT last_vacuum FROM pg_stat_user_tables WHERE relname = 'timeseries_samples'")).rows[0];
+      assert.ok(st.last_vacuum, 'VACUUM gelaufen');
+      // Neue Zeilen nutzen den frei gewordenen Platz: die Tabelle wächst nicht über den Stand vor dem Löschen.
+      await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+        SELECT 'grid_total_w', 'live', 'test', 'raw', now() - g * INTERVAL '5 seconds', 5, g FROM generate_series(1, 50000) g`);
+      const after = Number((await pool.query("SELECT pg_relation_size('timeseries_samples') AS b")).rows[0].b);
+      assert.ok(after <= sizeBefore, `wiederverwendet: ${sizeBefore} → ${after}`);
+    });
+  });

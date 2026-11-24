@@ -240,3 +240,21 @@ test('getSeriesBoundaryValues: spätere Stufen-Werte nach dem letzten Rohwert ge
   assert.equal(seen.length, 1, 'nur das Ende aus den Stufen');
   assert.ok(Date.parse(seen[0][1]) > Date.parse('2026-11-01T12:00:00Z'), 'nach dem letzten Rohwert gesucht');
 });
+
+// E2E „kleine Platte“ (24.11.): ohne Hypertable nach dem DELETE ein VACUUM (Platz wieder nutzbar).
+import { pruneOneMinuteTier as prune1m } from '../services/telemetry-tiers.js';
+test('pruneOneMinuteTier ohne TimescaleDB: VACUUM (ANALYZE) nach dem Löschen, ohne Löschen keins', async () => {
+  for (const n of [5000, 0]) {
+    const calls = []; let left = n;
+    const db = { async query(sql) {
+      calls.push(sql.replace(/\s+/g, ' ').trim());
+      if (/telemetry_tier_state s/.test(sql)) return { rows: [{ done_until: new Date('2026-11-24T00:00:00Z'), dirty_from: null, dirty_n: 0 }] };
+      if (/timescaledb_information/.test(sql)) throw new Error('keine TimescaleDB');
+      if (/^DELETE FROM timeseries_samples_1m/.test(sql.trim())) { const k = left; left = 0; return { rowCount: k }; }
+      return { rows: [] };
+    } };
+    const r = await prune1m(db, { olderThan: '2026-06-01T00:00:00Z' });
+    assert.equal(r.deletedRows, n);
+    assert.equal(calls.includes('VACUUM (ANALYZE) timeseries_samples_1m'), n > 0, `n=${n}`);
+  }
+});
