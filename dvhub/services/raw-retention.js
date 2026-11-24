@@ -71,16 +71,27 @@ export async function oldestRawUnit(query, { timescale }) {
   return { fromMs: day, toMs: day + 86_400_000 };
 }
 
-/** Gibt es 15-min-Werte für [fromMs, toMs)? (energy_slots_15m oder Stufe timeseries_samples_15m) */
+/**
+ * Stehen für JEDE Viertelstunde in [fromMs, toMs), in der es 5-s-Live-Rohwerte
+ * gibt, 15-min-Werte da (energy_slots_15m oder Stufe timeseries_samples_15m)?
+ * Eine einzelne Zeile reicht nicht (Codex ee43127e). Fehlt die Stufen-Tabelle,
+ * zählt nur energy_slots_15m.
+ */
 export async function has15mFor(query, fromMs, toMs) {
   const p = [new Date(fromMs).toISOString(), new Date(toMs).toISOString()];
-  for (const sql of [
-    'SELECT 1 FROM timeseries_samples_15m WHERE bucket_ts >= $1 AND bucket_ts < $2 LIMIT 1',
-    'SELECT 1 FROM energy_slots_15m WHERE slot_start_utc >= $1 AND slot_start_utc < $2 LIMIT 1',
-  ]) {
-    try { if ((await query(sql, p)).rows?.length) return true; } catch { /* Tabelle fehlt */ }
+  const raw = `SELECT DISTINCT date_bin('15 minutes', ts_utc, TIMESTAMPTZ '2000-01-01') AS q FROM timeseries_samples
+      WHERE scope = 'live' AND series_key NOT LIKE 'price%' AND ts_utc >= $1 AND ts_utc < $2`;
+  const withTier = `SELECT count(*) AS missing FROM (${raw}) r
+      WHERE NOT EXISTS (SELECT 1 FROM energy_slots_15m e WHERE e.slot_start_utc = r.q)
+        AND NOT EXISTS (SELECT 1 FROM timeseries_samples_15m t WHERE t.bucket_ts = r.q)`;
+  const energyOnly = `SELECT count(*) AS missing FROM (${raw}) r
+      WHERE NOT EXISTS (SELECT 1 FROM energy_slots_15m e WHERE e.slot_start_utc = r.q)`;
+  let r;
+  try { r = await query(withTier, p); } catch (e) {
+    if (e?.code !== '42P01') throw e;
+    r = await query(energyOnly, p);
   }
-  return false;
+  return Number(r.rows?.[0]?.missing) === 0;
 }
 
 // Höchstens so viele zu rettende Zeilen im Speicher (Preise/Importe eines Blocks).

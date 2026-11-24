@@ -270,3 +270,24 @@ test('Rückfüllung ruht, solange isPaused() gilt', async () => {
   await tiers.runOnce({ budget: 0 });
   assert.ok(queries > 0);
 });
+
+// Codex ee43127e (P2): Notfall-Verdichten richtet erst die Stufen-Speicher ein.
+test('aggregateRange richtet vorher Hypertable/Kompression ein (auch bei pausierter Rückfüllung)', async () => {
+  const calls = [];
+  const client = { async query(sql) { calls.push(sql); return { rows: [], rowCount: 0 }; }, release() {} };
+  const db = {
+    async connect() { return client; },
+    async query(sql) {
+      calls.push(sql);
+      if (/pg_extension/.test(sql)) return { rows: [{}] };
+      if (/timescaledb\.license/.test(sql)) return { rows: [{ lic: 'timescale' }] };
+      if (/timescaledb_information\.hypertables WHERE hypertable_name = \$1/.test(sql)) return { rows: [] };
+      return { rows: [], rowCount: 0 };
+    },
+  };
+  const tiers = createTelemetryTiers({ getDb: () => db, isPaused: () => true });
+  await tiers.aggregateRange(Date.parse('2026-10-10T00:00:00Z'), Date.parse('2026-10-11T00:00:00Z'));
+  const iCreate = calls.findIndex((s) => /create_hypertable/.test(s));
+  const iAgg = calls.findIndex((s) => /INSERT INTO timeseries_samples_1m/.test(s));
+  assert.ok(iCreate >= 0 && iAgg > iCreate, 'erst einrichten, dann verdichten');
+});

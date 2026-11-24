@@ -278,6 +278,7 @@ export function createStorageGuard({
   let lastEffective = initialProfile || startupProfile(getDataDir?.(), readFile).name;
   let retentionDay = null;          // Profil-Aufbewahrung höchstens einmal am Tag
   let retuneAt = -Infinity;         // letzter Neuversuch der Kompressions-Einrichtung
+  let knownPgDataDir = null;        // nativ: PG-Datenverzeichnis (für isCritical vor dem ersten Lauf)
 
   // E3 b (Christin 24.11.2026): ohne Kompression gilt mindestens „winzig“ —
   // nur für die Wirkung, das gespeicherte Profil bleibt (kommt die Kompression
@@ -371,7 +372,7 @@ export function createStorageGuard({
       const container = !!isContainer?.();
       const dataDir = getDataDir?.() || null;
       let pgDataDir = null;
-      if (!container) { try { pgDataDir = await getPgDataDir?.(); } catch { /* egal */ } }
+      if (!container) { try { pgDataDir = await getPgDataDir?.(); if (pgDataDir) knownPgDataDir = pgDataDir; } catch { /* egal */ } }
       const mounts = measureMounts(
         mountCandidates({ container, dataDir: dataDir || '/', pgDataDir, dbVolumeDir, exists }),
         { statfs, stat });
@@ -532,7 +533,9 @@ export function createStorageGuard({
             }
           }
           // Notfall „kritisch“: wie bisher Rohwerte stufenweise (365 → 180 → 90 → 30 Tage).
-          if (level === 'kritisch') {
+          // Nicht, wenn der Notfall-Pfad die Platte schon frei bekommen hat — sonst
+          // löschte die alte Stufe (365 → 180 …) noch viel mehr (Codex ee43127e).
+          if (level === 'kritisch' && !out.emergencyRecovered) {
             try { await dropRaw(db, ts, out, freePct); } catch (e) {
               out.actions.push({ action: 'drop_raw', error: String(e?.message || e).slice(0, 200) });
               logGuardError(e);
@@ -677,7 +680,8 @@ export function createStorageGuard({
     const targetMb = Math.max(fb.wenig * 1.25, 2 * (bigChunkMb || 0));
     for (let i = 0; i < EMERGENCY_MAX_UNITS; i++) {
       const free = statPath(primary.paths[0], { statfs, stat })?.freeMb;
-      if (!Number.isFinite(free) || free >= targetMb) break;
+      if (Number.isFinite(free) && free >= targetMb) { out.emergencyRecovered = true; break; }
+      if (!Number.isFinite(free)) break;
       if (now() >= deadline) { out.emergencyPending = true; break; }
       const unit = await oldestRawUnit(q, { timescale: ts });
       if (!unit || unit.toMs > floorMs) { out.actions.push({ action: 'emergency_raw', stopped: 'keep_30_days' }); break; }
@@ -725,6 +729,9 @@ export function createStorageGuard({
   return {
     start() {
       if (timer) return;
+      // Nativ: PG-Datenverzeichnis gleich ermitteln, damit isCritical() schon vor
+      // dem ersten Lauf die richtige Platte misst (Codex ee43127e).
+      if (!isContainer?.()) Promise.resolve().then(() => getPgDataDir?.()).then((p) => { if (p) knownPgDataDir = p; }).catch(() => {});
       setTimeout(() => { checkCompression().catch(() => {}); }, COMPRESSION_FIRST_CHECK_MS).unref?.();
       setTimeout(() => { check().catch(() => {}); }, 5 * 60_000).unref?.();
       timer = setInterval(() => { check().catch(() => {}); }, STORAGE_CHECK_INTERVAL_MS);
@@ -744,7 +751,7 @@ export function createStorageGuard({
       try {
         const container = !!isContainer?.();
         const path = last?.mounts?.find((m) => m.roles.includes('db'))?.paths?.[0]
-          || (container ? (exists(dbVolumeDir) ? dbVolumeDir : '/') : (getDataDir?.() || '/'));
+          || (container ? (exists(dbVolumeDir) ? dbVolumeDir : '/') : (knownPgDataDir || getDataDir?.() || '/'));
         const m = statPath(path, { statfs, stat });
         return !!m && storageStage({ freeMb: m.freeMb, totalMb: m.totalMb }) === 'kritisch';
       } catch { return false; }

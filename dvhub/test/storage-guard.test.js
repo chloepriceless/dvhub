@@ -546,7 +546,7 @@ test('Kompression ausgeschaltet: Einrichtung höchstens stündlich neu, Profil b
 });
 
 // ── E2E „kleine Platte“ S4 (24.11.): Stufen noch nicht rückgefüllt (aggregatedUntil null), Platte kritisch ──
-function s4Db({ aggregateFails = false, has15m = false, days = 45 } = {}) {
+function s4Db({ aggregateFails = false, has15m = false, days = 45, tierUntil = null } = {}) {
   const NOW = Date.parse('2026-11-24T12:00:00Z');
   const state = { oldest: Math.floor((NOW - days * 86_400_000) / 86_400_000) * 86_400_000, calls: [] };
   const db = {
@@ -559,13 +559,14 @@ function s4Db({ aggregateFails = false, has15m = false, days = 45 } = {}) {
       if (s.includes("current_setting('timescaledb.license'")) return { rows: [{ lic: 'timescale' }] };
       if (s.includes('timescaledb_information.hypertables')) return { rows: [{ on: true, policies: '1', failing: null }] };
       if (s.includes('NOT c.is_compressed')) return { rows: [{ b: 40 * 1048576 }] };
-      if (s.includes('FROM telemetry_tier_state s')) return { rows: [{ done_until: null, dirty_from: null, dirty_n: 0 }] };
+      if (s.includes('FROM telemetry_tier_state s')) return { rows: [{ done_until: tierUntil, dirty_from: null, dirty_n: 0 }] };
       if (s.startsWith('SELECT min(ts_utc) AS t')) return { rows: [{ t: new Date(state.oldest) }] };
       if (s.includes('/ 86400 AS d')) return { rows: [{ d: (NOW - state.oldest) / 86_400_000 }] };
       if (s.includes('FROM timescaledb_information.chunks') && s.includes('range_start')) {
         return { rows: [{ range_start: new Date(state.oldest), range_end: new Date(state.oldest + 86_400_000) }] };
       }
-      if (s.includes('FROM timeseries_samples_15m') || s.includes('FROM energy_slots_15m')) return { rows: has15m ? [{}] : [] };
+      // has15mFor: fehlende Viertelstunden (0 = vollständig abgedeckt)
+      if (s.includes('AS missing')) return { rows: [{ missing: has15m ? 0 : 5 }] };
       if (s.includes("(scope <> 'live' OR series_key LIKE 'price%') LIMIT 1")) return { rows: [] };
       if (s.startsWith('SELECT drop_chunks')) { state.oldest += 86_400_000; state.freed = (state.freed || 0) + 31; return { rows: [] }; }
       if (s.includes('compress_chunk')) throw new Error('could not extend file: No space left on device');
@@ -689,4 +690,23 @@ test('Komprimieren Block für Block: „already compressed“ wird übersprungen
   assert.deepEqual(r.actions.find((a) => a.action === 'compress'), { action: 'compress', chunks: 2 });
   assert.equal(warn[COMPRESSION_WARNING_ID], null);
   assert.ok(!logs.includes('storage_guard_error'));
+});
+
+// Codex ee43127e (P1): nach erfolgreichem Notfall keine zusätzliche Stufe 365 → 180 …
+test('S4: Notfall hat Platz geschaffen → alte Notfall-Stufe löscht nicht noch mehr', async () => {
+  // Stufen vollständig bis vor 2 Tagen — die alte Stufe (400 Tage → 365) hätte sonst noch einmal gelöscht.
+  const s = s4Db({ days: 400, tierUntil: new Date(Date.parse('2026-11-22T00:00:00Z')) });
+  const r = await createStorageGuard({ getDb: () => s.db, statfs: s.statfs, now: () => s.NOW, aggregateRange: s.aggregateRange }).check();
+  assert.ok(r.actions.some((a) => a.action === 'emergency_raw' && a.day));
+  assert.ok(!r.actions.some((a) => a.action === 'drop_raw'), JSON.stringify(r.actions.map((a) => a.action)));
+  assert.equal(s.aggregated.length, 18, 'nur so viel wie nötig');
+});
+
+test('isCritical: nativ misst schon vor dem ersten Lauf die PG-Platte (Codex ee43127e)', async () => {
+  const statfs = (p) => (p.startsWith('/srv/pg') ? { blocks: 4096, bsize: 1048576, bavail: 50 } : { blocks: 4096, bsize: 1048576, bavail: 3000 });
+  const g = createStorageGuard({ statfs, stat: () => ({ dev: 1 }), getDataDir: () => '/var/lib/dvhub', getPgDataDir: async () => '/srv/pg/main' });
+  assert.equal(g.isCritical(), false, 'vor der Ermittlung: DVhub-Ordner');
+  g.start();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(g.isCritical(), true, 'danach: PG-Platte');
 });

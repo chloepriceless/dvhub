@@ -295,3 +295,24 @@ test('echte TimescaleDB (timescale): Löschen bei fast voller Platte ohne Temp-T
       assert.equal(kept.import, before.import, 'Altdaten zurückgeschrieben');
     });
   });
+
+// Codex ee43127e (P1): EIN 15-min-Wert reicht nicht — jede Viertelstunde mit Rohwerten muss abgedeckt sein.
+test('reines PostgreSQL: has15mFor verlangt die ganze Einheit',
+  { skip: process.env.DVHUB_TEST_PG_URL_PLAIN ? false : 'DVHUB_TEST_PG_URL_PLAIN nicht gesetzt' }, async () => {
+    const { has15mFor } = await import('../services/raw-retention.js');
+    await withFreshDb(process.env.DVHUB_TEST_PG_URL_PLAIN, async (pool) => {
+      await ensurePgSchema(pool);
+      const day = Date.parse('2026-10-10T00:00:00Z');
+      await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+        SELECT 'grid_total_w', 'live', 'test', 'raw', to_timestamp($1::double precision / 1000) + g * INTERVAL '5 minutes', 5, g
+          FROM generate_series(0, 287) g`, [day]);
+      const q = (s, p) => pool.query(s, p);
+      // nur die erste Stunde hat 15-min-Werte
+      await pool.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num)
+        SELECT to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 'grid_import_wh', 'live', 'raw', 1 FROM generate_series(0, 3) g`, [day]);
+      assert.equal(await has15mFor(q, day, day + 86_400_000), false, 'nur 1 h abgedeckt');
+      await pool.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num)
+        SELECT to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 'grid_import_wh', 'live', 'raw', 1 FROM generate_series(4, 95) g`, [day]);
+      assert.equal(await has15mFor(q, day, day + 86_400_000), true, 'ganzer Tag');
+    });
+  });

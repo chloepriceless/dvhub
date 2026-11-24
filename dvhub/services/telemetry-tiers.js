@@ -529,6 +529,11 @@ export function createTelemetryTiers({
     if (!db || typeof db.query !== 'function') throw new Error('keine Datenbank');
     const a = floorQuarterMs(fromMs); const b = floorQuarterMs(toMs);
     if (!(b > a)) return 0;
+    // Erst Hypertable/Kompression einrichten — sonst wüchsen die Tabellen als
+    // normale Tabellen und blieben später so (Codex ee43127e).
+    if (!storage) {
+      try { storage = await ensureTierStorage(db); storageAt = now(); } catch { /* weiter, Verdichten geht auch so */ }
+    }
     const hypertable = await isHypertable(db, 'timeseries_samples');
     return inTransaction(db, async (client) => {
       await client.query(`SET LOCAL statement_timeout = '${STATEMENT_TIMEOUT}'`);
