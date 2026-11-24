@@ -68,6 +68,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$WORKTREE" && -n "$REF" ]] && { echo "--worktree und --ref schließen sich aus" >&2; exit 2; }
+# Die Wache entfernt Rohwerte in Stufen bis 30 Tage; das Prüffenster der Stufen liegt
+# zwischen 32 Tagen und dem Beginn der Historie — darunter ist nichts zu prüfen (Codex bec0888a).
+[[ "$DAYS" =~ ^[0-9]+$ ]] && (( DAYS >= 36 )) || { echo "--days muss ≥ 36 sein (Rohwerte älter als 30 Tage + Prüffenster)" >&2; exit 2; }
+[[ "$STEP" =~ ^[0-9]+$ ]] && (( STEP >= 5 && STEP <= 900 )) || { echo "--step muss 5…900 s sein" >&2; exit 2; }
 
 export DOCKER_HOST="${DOCKER_HOST:-unix://$HOME/.colima/default/docker.sock}"
 NODE="node"; [[ -x /opt/homebrew/opt/node@22/bin/node ]] && NODE=/opt/homebrew/opt/node@22/bin/node
@@ -359,7 +363,7 @@ EOF
   ok=0
   for i in $(seq 1 60); do [[ -n "$(status_get /api/storage/status)" ]] && { ok=1; break; }; sleep 2; done
   (( ok )) || die "DVhub nach Neustart nicht erreichbar (s$id)"
-  snapshot() { psql_db -U postgres -d dvhub -f - < "$KP/snapshot.sql" 2>>"$LOG" | grep '^{' | tail -1; }
+  snapshot() { psql_db -U postgres -d dvhub -v days="$DAYS" -f - < "$KP/snapshot.sql" 2>>"$LOG" | grep '^{' | tail -1; }
   settle_db() { psql_db -U postgres -d dvhub -c 'CHECKPOINT' >>"$LOG" 2>&1 || true; psql_db -U postgres -d dvhub -c 'CHECKPOINT' >>"$LOG" 2>&1 || true; }
   snapshot > "$dir/snap-before.json"
   note "Daten: $(( $(date +%s) - t_ins )) s · $("$NODE" -e 'const s=require(process.argv[1]);console.log(`${s.live_raw_rows} Live-Zeilen, ${s.live_series} Reihen, ältester ${s.live_raw_oldest_days} d, DB ${Math.round(s.db_bytes/1048576)} MB`)' "$dir/snap-before.json")"

@@ -4,6 +4,12 @@
 \set ON_ERROR_STOP on
 \pset format unaligned
 \pset tuples_only on
+-- Tage synthetischer Historie (psql -v days=N, Standard 45): daraus das Prüffenster der Stufen.
+\if :{?days}
+\else
+\set days 45
+\endif
+SELECT set_config('kp.days', :'days', false) \gset kp_
 CREATE OR REPLACE FUNCTION pg_temp.kp_snapshot() RETURNS jsonb LANGUAGE plpgsql AS $f$
 DECLARE
   out jsonb := '{}'::jsonb;
@@ -13,6 +19,7 @@ DECLARE
   extra jsonb := '{}'::jsonb;
   j jsonb;
   jj jsonb;
+  wd int := greatest(current_setting('kp.days')::int - 1 - 32, 1);
   tc text;
 BEGIN
   out := out || jsonb_build_object(
@@ -44,17 +51,17 @@ BEGIN
     BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = t AND column_name = 'series_key') THEN
         EXECUTE format('SELECT jsonb_build_object(''rows'', count(*), ''series'', count(DISTINCT series_key)) FROM %I', t) INTO j;
-        -- Abdeckung des Bereichs, den die Wache entfernen darf (32–44 Tage alt): je Reihe Zahl
-        -- der Zeitfenster; „voll“ = mindestens 90 % der erwarteten Fenster (15 min bzw. 1 min).
+        -- Abdeckung des Bereichs, den die Wache entfernen darf (32 Tage bis Beginn der Historie
+        -- minus 1 Tag): je Reihe Zahl der Zeitfenster; „voll“ = ≥ 90 % der erwarteten Fenster.
         SELECT c.column_name INTO tc FROM information_schema.columns c
          WHERE c.table_schema = 'public' AND c.table_name = t AND c.column_name IN ('bucket_ts', 'slot_start_utc', 'ts_utc', 'bucket')
          ORDER BY array_position(ARRAY['bucket_ts', 'slot_start_utc', 'ts_utc', 'bucket'], c.column_name::text) LIMIT 1;
         IF tc IS NOT NULL THEN
-          EXECUTE format($q$SELECT jsonb_build_object('old_window_series', count(*), 'old_full_series', count(*) FILTER (WHERE w >= %s))
+          EXECUTE format($q$SELECT jsonb_build_object('old_window_days', %s, 'old_window_series', count(*), 'old_full_series', count(*) FILTER (WHERE w >= %s))
                               FROM (SELECT series_key, count(DISTINCT %I) AS w FROM %I
-                                     WHERE %I > now() - interval '44 days' AND %I <= now() - interval '32 days'
+                                     WHERE %I > now() - make_interval(days => %s) AND %I <= now() - interval '32 days'
                                      GROUP BY series_key) x$q$,
-                         CASE WHEN t ~ '15m' THEN 12 * 96 * 0.9 ELSE 12 * 1440 * 0.9 END, tc, t, tc, tc) INTO jj;
+                         wd, CASE WHEN t ~ '15m' THEN wd * 96 * 0.9 ELSE wd * 1440 * 0.9 END, tc, t, tc, wd + 32, tc) INTO jj;
           j := j || jj;
         END IF;
         extra := extra || jsonb_build_object(t, j);
