@@ -47,7 +47,8 @@ const int = (v) => (Number.isInteger(Number(v)) ? Number(v) : null);
 export function encodeLimit(spec, watts) {
   const scale = Number(spec.scale) > 0 ? Number(spec.scale) : 1;
   const max = spec.writeType === 'uint32' ? 0xffffffff : 0xffff;
-  const raw = Math.max(0, Math.min(Number(spec.max ?? max), max, Math.round(Number(watts) / scale)));
+  // Abrunden: die eingestellte Grenze des Geräts darf das Ziel nie überschreiten (Codex e5a25ac1 P2).
+  const raw = Math.max(0, Math.min(Number(spec.max ?? max), max, Math.floor(Number(watts) / scale + 1e-9)));
   if (spec.writeType === 'uint32') {
     const hi = Math.floor(raw / 0x10000) & 0xffff;
     const lo = raw & 0xffff;
@@ -90,9 +91,9 @@ export function createBuiltinPeakShaving({
   state, getCfg, transport, gate, pushLog = () => {}, deviceWriteGate = () => null, targetW = null,
   statePath = null, monoNow = defaultMonoNow
 }) {
-  let saved = null;      // { limitRaw, modeRaw, at } — Ist-Werte vor DVhub
-  let last = { limit: null, mode: null, reserve: null };   // zuletzt geschriebene Rohwerte
-  let lastAt = { limit: -Infinity, mode: -Infinity, reserve: -Infinity };
+  let saved = null;      // { limitRaw, modeRaw, at, identity, lastWriteWall } — Ist-Werte vor DVhub
+  let last = { limit: null, mode: null, reserve: null };   // zuletzt geschriebene bzw. bestätigte Rohwerte
+  const lastAt = { limit: -Infinity, mode: -Infinity, reserve: -Infinity };
   let logKey = null;
   let runSeq = 0;
   let busy = false;
@@ -100,15 +101,41 @@ export function createBuiltinPeakShaving({
   if (statePath) {
     try {
       const s = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-      if (s && typeof s === 'object') saved = { limitRaw: int(s.limitRaw), modeRaw: int(s.modeRaw), at: Number(s.at) || null };
+      if (s && typeof s === 'object') {
+        saved = { limitRaw: int(s.limitRaw), modeRaw: int(s.modeRaw), at: Number(s.at) || null, identity: s.identity || null, lastWriteWall: s.lastWriteWall || {} };
+        // Schreibabstand über Neustarts: letzte Writes (Wanduhr) in die monotone Uhr übertragen (Codex e5a25ac1 P2).
+        for (const k of Object.keys(lastAt)) {
+          const w = Number(saved.lastWriteWall?.[k]);
+          if (w > 0) lastAt[k] = monoNow() - Math.max(0, Date.now() - w);
+        }
+      }
     } catch { /* keine Sicherung */ }
   }
+  // true = Sicherung liegt auf der Platte (bzw. es gibt keinen Pfad, Tests). Ohne gesicherte Ist-Werte schreibt DVhub
+  // nichts — ein Neustart verlöre sonst die Rücknahme (Codex e5a25ac1 P1).
   function persist() {
-    if (!statePath) return;
+    if (!statePath) return true;
     try {
       if (saved) atomicWriteControlState(statePath, saved);
       else fs.rmSync(statePath, { force: true });
-    } catch (e) { pushLog('peak_shaving_builtin_persist_error', { error: e?.message || String(e) }, 'warn'); }
+      return true;
+    } catch (e) {
+      pushLog('peak_shaving_builtin_persist_error', { error: e?.message || String(e) }, 'warn');
+      return false;
+    }
+  }
+  // Wem die Sicherung gehört: Hersteller, Verbindung, Adressen (Codex e5a25ac1 P1).
+  function identityOf(cfg) {
+    const sp = cfg?.peakShavingBuiltin || {};
+    const v = cfg?.victron || {};
+    return [cfg?.manufacturer || '', v.host || '', v.port ?? '', v.unitId ?? '', sp.limit?.address ?? '', sp.mode?.address ?? ''].join('|');
+  }
+  function noteWrite(k, t) {
+    lastAt[k] = t;
+    if (saved) {
+      saved.lastWriteWall = { ...(saved.lastWriteWall || {}), [k]: Date.now() };
+      persist();
+    }
   }
   function log(key, event, data, level = 'info') {
     if (key === logKey) return;
@@ -160,6 +187,18 @@ export function createBuiltinPeakShaving({
   async function restoreSaved(cfg, spec) {
     // Nur zurück, was DVhub selbst gesetzt hat; Reserve-SoC nie (H-8).
     // Eine Sicherung gibt es nur, wenn DVhub danach schreiben wollte — auch nach einem Neustart zurück.
+    // Nie auf ein anderes Gerät bzw. Profil (Adresse, Hersteller geändert): dann laut melden statt fremde Werte zu
+    // schreiben (Codex e5a25ac1 P1).
+    if (saved.identity && saved.identity !== identityOf(cfg)) {
+      pushLog('peak_shaving_builtin_restore_skipped', {
+        saved: saved.identity, now: identityOf(cfg), limitRaw: saved.limitRaw, modeRaw: saved.modeRaw,
+        text: 'Peak Shaving: Rücknahme der eingebauten Funktion NICHT geschrieben — Gerät oder Profil hat sich geändert. Bitte am ursprünglichen Wechselrichter von Hand zurückstellen (Werte im Protokoll).'
+      }, 'warn');
+      saved = null;
+      last = { limit: null, mode: null, reserve: null };
+      persist();
+      return;
+    }
     if (spec?.limit && saved.limitRaw != null) await write(cfg, 'psLimit', spec.limit, saved.limitRaw, { restore: true });
     if (spec?.mode && saved.modeRaw != null) await write(cfg, 'psMode', spec.mode, saved.modeRaw, { restore: true });
     pushLog('peak_shaving_builtin_restored', { limitRaw: saved.limitRaw, modeRaw: saved.modeRaw, text: 'Peak Shaving: eingebaute Funktion des Wechselrichters zurückgenommen (Wert vor DVhub).' });
@@ -191,31 +230,50 @@ export function createBuiltinPeakShaving({
     }
     const t = monoNow();
     // Ist-Werte sichern (einmal), sonst kein Write.
+    let justRead = null;
     if (!saved) {
-      const s = { limitRaw: null, modeRaw: null, at: Date.now() };
+      const s = { limitRaw: null, modeRaw: null, at: Date.now(), identity: identityOf(cfg), lastWriteWall: {} };
       if (spec.limit) s.limitRaw = await read(cfg, spec.limit);
       if (spec.mode) s.modeRaw = await read(cfg, spec.mode);
       saved = s;
-      persist();
+      if (!persist()) {
+        saved = null;   // nächster Takt versucht es erneut; bis dahin kein Write
+        publish({ active: false, reason: 'snapshot_not_saved', status: 'ungetestet' });
+        return;
+      }
+      justRead = { limit: s.limitRaw, mode: s.modeRaw };
       pushLog('peak_shaving_builtin_saved', { ...s, text: 'Peak Shaving: Ist-Werte der eingebauten Funktion gesichert (für die Rücknahme).' });
+    } else if (saved.identity && saved.identity !== identityOf(cfg)) {
+      // Gerät/Profil gewechselt, während die Funktion an war: alte Sicherung gehört einem anderen Gerät.
+      await restoreSaved(cfg, spec);
+      return;
     }
     const target = Number(typeof targetW === 'function' ? targetW(cfg) : r.targetW);
-    const info = { active: true, status: 'ungetestet', targetW: target, wrote: [] };
+    const scale = Number(spec.limit?.scale) > 0 ? Number(spec.limit.scale) : 1;
+    const info = { active: true, status: 'ungetestet', requestedW: Number.isFinite(target) ? target : null, targetW: null, pending: false, wrote: [] };
     if (spec.limit && Number.isFinite(target)) {
-      const scale = Number(spec.limit.scale) > 0 ? Number(spec.limit.scale) : 1;
       const desired = encodeLimit(spec.limit, target).raw;
+      // Erster Abgleich in diesem Prozess: steht der Wert schon im Gerät, kein Flash-Write (Codex e5a25ac1 P2).
+      if (last.limit == null && desired !== last.limit) {
+        const cur = justRead ? justRead.limit : await read(cfg, spec.limit);
+        if (cur === desired) last.limit = desired;
+      }
       const changedW = last.limit == null ? Infinity : Math.abs(desired - last.limit) * scale;
       if (desired !== last.limit && changedW >= BUILTIN_LIMIT_STEP_W && t - lastAt.limit >= BUILTIN_MIN_WRITE_INTERVAL_MS) {
         await write(cfg, 'psLimit', spec.limit, desired);
-        last.limit = desired; lastAt.limit = t; info.wrote.push('limit');
+        last.limit = desired; noteWrite('limit', t); info.wrote.push('limit');
         pushLog('peak_shaving_builtin_limit', { address: spec.limit.address, raw: desired, targetW: target, text: `Peak Shaving: eingebaute Bezugsgrenze des Wechselrichters auf ${(target / 1000).toFixed(1).replace('.', ',')} kW gesetzt (ungetestet).` });
       }
     }
     if (spec.mode) {
       const desired = desiredMode(spec.mode, saved.modeRaw);
+      if (desired != null && last.mode == null) {
+        const cur = justRead ? justRead.mode : await read(cfg, spec.mode);
+        if (cur === desired) last.mode = desired;
+      }
       if (desired != null && desired !== last.mode && t - lastAt.mode >= BUILTIN_MIN_WRITE_INTERVAL_MS) {
         await write(cfg, 'psMode', spec.mode, desired);
-        last.mode = desired; lastAt.mode = t; info.wrote.push('mode');
+        last.mode = desired; noteWrite('mode', t); info.wrote.push('mode');
         pushLog('peak_shaving_builtin_mode', { address: spec.mode.address, raw: desired, text: 'Peak Shaving: Betriebsart des Wechselrichters auf „Peak Shaving“ gestellt (ungetestet).' });
       }
     }
@@ -225,9 +283,16 @@ export function createBuiltinPeakShaving({
       const desired = Math.round(reservePct / (Number(spec.reserveSoc.scale) > 0 ? Number(spec.reserveSoc.scale) : 1));
       if (desired !== last.reserve && t - lastAt.reserve >= BUILTIN_MIN_WRITE_INTERVAL_MS) {
         await write(cfg, 'psReserveSoc', spec.reserveSoc, desired);
-        last.reserve = desired; lastAt.reserve = t; info.wrote.push('reserveSoc');
+        last.reserve = desired; noteWrite('reserve', t); info.wrote.push('reserveSoc');
       }
     }
+    // Angezeigt wird, was im Gerät steht: die gesetzte Grenze (null bei reinen Betriebsart-Profilen, deren Grenze
+    // am Gerät eingestellt wird), ein noch wartender neuer Wert als pending (Codex e5a25ac1 P2).
+    if (spec.limit && last.limit != null) {
+      info.targetW = last.limit * scale;
+      info.pending = Number.isFinite(target) && encodeLimit(spec.limit, target).raw !== last.limit;
+    }
+    info.modeSet = spec.mode ? last.mode != null : null;
     publish(info);
     logKey = null;
   }

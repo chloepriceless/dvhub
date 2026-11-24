@@ -35,6 +35,7 @@ import { localParts, zoneOffsetMs } from '../../tz-fast.js';
 import { capPositiveSetpoint, meterImport } from '../import-limit/core.js';
 import { monoNow as defaultMonoNow } from '../mono-clock.js';
 import { resolveBatteryLever } from '../grid-connection/index.js';
+import { floorSocPct } from '../multi-gx/planning.js';
 import { createBudgetState, observeBudget, decideBudget, quarterHourSlot } from './budget.js';
 import { resolveTariff, computeYearBilling } from './billing.js';
 
@@ -598,8 +599,20 @@ export function createPeakShaving(ctx, deps = {}) {
     return k.value;
   }
 
+  // Sungrow meldet den Ladestand relativ zum Geräte-Fenster: Böden vergleichen
+  // gegen den echten Ladestand (wie T-0075, multi-gx/planning floorSocPct);
+  // Frische/Fehler bleiben die des gemeldeten Felds (Codex e5a25ac1 P2).
+  function realSocState(c) {
+    const st = ctx.state || {};
+    if (String(c?.manufacturer || '') !== 'sungrow') return st;
+    let real;
+    try { real = floorSocPct({ getCfg: () => c, state: st }); } catch { real = null; }
+    if (real == null || !Number.isFinite(Number(real)) || Number(real) === Number(st.victron?.soc)) return st;
+    return { ...st, victron: { ...st.victron, soc: Number(real) } };
+  }
+
   function budgetBattery(c, r, t) {
-    const tel = peakShavingTelemetry(ctx.state, c, r, t);
+    const tel = peakShavingTelemetry(realSocState(c), c, r, t);
     return { tel, battery: budgetBatteryInput(c, tel, { liveLimitW: liveDischargeLimitW(c, t) }) };
   }
 
@@ -669,7 +682,7 @@ export function createPeakShaving(ctx, deps = {}) {
     // prüft beim Sollwert-Deckel keinen Ladestand und bei der Entladegrenze nur
     // seine eigenen Böden. Ladestand unbekannt, veraltet, eingefroren oder am
     // Boden (inkl. peakShaving.minSocPct) → keine Anforderung, eine stehende zurück.
-    const tel = peakShavingTelemetry(ctx.state, c || cfg(), ctl, t);
+    const tel = peakShavingTelemetry(realSocState(c || cfg()), c || cfg(), ctl, t);
     const res = tel.socOk
       ? (assist.request({ source: ASSIST_SOURCE, maxImportW: Math.max(0, Math.round(ctl.targetW)), untilMs: t + 30_000 }) || {})
       : { ok: false, reason: tel.socReason || 'soc_unknown' };

@@ -66,3 +66,15 @@ test('Not-Halt lehnt die Erneuerung ab → die alte Anforderung wird freigegeben
   ps.pollTick();
   assert.equal(assist.live.has('peak-shaving'), false);
 });
+
+test('Codex e5a25ac1: Sungrow — Boden gegen den echten Ladestand (Fenster 10–100 %: gemeldet 35 % = 41,5 %)', () => {
+  const now = Date.now();
+  const cfg = { ...CFG, manufacturer: 'sungrow', victron: { transport: 'modbus' },
+    controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } } };
+  const state = makeState({ soc: 35 });
+  state.victron.device = { minSocPctDevice: 10, maxSocPctDevice: 100 };
+  state.victron.fieldUpdatedAt.soc = now;
+  const assist = fakeAssist();
+  createPeakShaving({ state, getCfg: () => cfg, pushLog: () => {}, batteryAssist: assist }).pollTick();
+  assert.equal(assist.live.has('peak-shaving'), true, JSON.stringify(state.ctrl._peakShaving?.assist));
+});

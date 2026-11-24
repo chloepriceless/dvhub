@@ -63,7 +63,9 @@
       const b = s.builtin;
       if (s.reason === 'builtin_disabled') return 'Eingebaute Peak-Shaving-Funktion vorhanden (ungetestet) — Schalter unter Einstellungen → Peak Shaving.';
       if (b.error) return `Eingebaute Funktion (ungetestet): ${b.error}`;
-      if (b.active) return `Eingebaute Funktion des Wechselrichters (ungetestet): Bezug höchstens ${kw(b.targetW)}`;
+      if (b.active && num(b.targetW)) return `Eingebaute Funktion des Wechselrichters (ungetestet): Bezug höchstens ${kw(b.targetW)}${b.pending ? ` (neuer Wert ${kw(b.requestedW)} folgt, Flash-Schutz)` : ''}`;
+      if (b.active && b.modeSet) return 'Eingebaute Funktion des Wechselrichters (ungetestet): Betriebsart Peak Shaving — Grenze am Gerät eingestellt';
+      if (b.active) return 'Eingebaute Funktion des Wechselrichters (ungetestet): wird eingestellt';
       return `Eingebaute Funktion (ungetestet): ${b.reason || 'wartet'}`;
     }
     if (s.assist) {

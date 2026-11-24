@@ -223,3 +223,58 @@ test('Gerät nicht freigegeben (Bestandsprüfung C2/identify): nichts', async ()
   assert.deepEqual(transport.reads, []);
   assert.deepEqual(transport.writes, []);
 });
+
+test('Codex e5a25ac1: Grenze abgerundet (Growatt 1-kW-Schritte: 10 500 W → 10, nie 11)', () => {
+  assert.equal(encodeLimit({ scale: 1000 }, 10500).raw, 10);
+  assert.equal(encodeLimit({ scale: 10 }, 9705).raw, 970);
+});
+
+test('Codex e5a25ac1: Sicherung gehört zum Gerät — nach Adresswechsel keine Rücknahme auf das neue Gerät', async () => {
+  const { act, transport, cfg, logs } = rig('deye-lv', PS({ enabled: true }), { 191: 4200 });
+  await act.tick();
+  assert.equal(transport.writes.length, 1);
+  cfg.victron = { ...cfg.victron, host: '192.0.2.99' };
+  cfg.peakShaving.enabled = false;
+  await act.tick();
+  assert.equal(transport.writes.length, 1, 'kein Write auf das andere Gerät');
+  assert.ok(logs.some((l) => l.e === 'peak_shaving_builtin_restore_skipped'));
+});
+
+test('Codex e5a25ac1: Sicherung nicht speicherbar → kein Write', async () => {
+  const { cfg } = loadProfileConfig('deye-lv', PS({ enabled: true }));
+  const transport = registerTransport({ 191: 4200 });
+  const act = createBuiltinPeakShaving({
+    state: { ctrl: {} }, getCfg: () => cfg, transport, gate: createLegacyGate({ isHalted: () => false, isReadOnly: () => false }),
+    statePath: '/nonexistent-dir-dvhub-test/x/ps.json'
+  });
+  await act.tick();
+  assert.deepEqual(transport.writes, []);
+});
+
+test('Codex e5a25ac1: Wert steht schon im Gerät → kein Flash-Write; Neustart hält den 15-min-Abstand', async () => {
+  const already = rig('deye-lv', PS({ enabled: true }), { 191: 9700 });
+  await already.act.tick();
+  assert.deepEqual(already.transport.writes, []);
+  const first = rig('deye-lv', PS({ enabled: true }), { 191: 4200 });
+  await first.act.tick();
+  assert.equal(first.transport.writes.length, 1);
+  first.cfg.peakShaving.gridImportLimitW = 12000;
+  const gate = createLegacyGate({ isHalted: () => false, isReadOnly: () => false });
+  const act2 = createBuiltinPeakShaving({ state: { ctrl: {} }, getCfg: () => first.cfg, transport: first.transport, gate, statePath: path.join(first.rootDir, 'ps-builtin.json') });
+  await act2.tick();
+  assert.equal(first.transport.writes.length, 1, 'neuer Prozess schreibt nicht innerhalb von 15 min nach dem letzten Write');
+});
+
+test('Codex e5a25ac1: Status zeigt die gesetzte Grenze, ein gedrosselter neuer Wert ist pending', async () => {
+  const { act, cfg, state } = rig('deye-lv', PS({ enabled: true }), { 191: 4200 });
+  await act.tick();
+  cfg.peakShaving.gridImportLimitW = 5000;
+  await act.tick();
+  assert.equal(state.ctrl._peakShaving.builtin.targetW, 9700);
+  assert.equal(state.ctrl._peakShaving.builtin.pending, true);
+  assert.equal(state.ctrl._peakShaving.builtin.requestedW, 4700);
+  const m = rig('sofar', PS({ enabled: true }), { 4368: 0 });
+  await m.act.tick();
+  assert.equal(m.state.ctrl._peakShaving.builtin.targetW, null, 'reine Betriebsart: keine Watt-Grenze behaupten');
+  assert.equal(m.state.ctrl._peakShaving.builtin.modeSet, true);
+});
