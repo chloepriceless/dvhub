@@ -70,8 +70,8 @@ export const RELEASE_HELPER = '/usr/local/libexec/dvhub-release';
 const RELEASE_VERSION = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 // Bleeding Edge für Paket-Boxen (Christin, 05.11.2026; 1.0.9 ließ nur stable
 // zu): erlaubt, sobald ein signierter dev-Index erreichbar ist
-// (channels/index-dev.json + .sig, Namensraum dvhub-release-index — der Helfer
-// lädt und prüft beides bei `check dev`). Gibt es keinen, lehnt der
+// (seit dem dev-Schlüssel channels/index-dev-v2.json + .sig, Namensraum
+// dvhub-release-index-dev — der Helfer lädt und prüft beides bei `check dev`). Gibt es keinen, lehnt der
 // Kanalwechsel mit dieser Meldung ab, und eine Box mit dev in der Config
 // (Altbestand, Import) prüft und installiert wie in 1.0.9 stable.
 export const PACKAGE_DEV_NOTICE = 'Für Paket-Installationen ist derzeit kein Bleeding-Edge-Paket veröffentlicht. Die Box bleibt auf Stabil.';
@@ -209,7 +209,7 @@ export function createAdminRoutes(deps) {
   };
 
   // ── Kanal einer Paket-Box ──
-  // Ist ein signierter dev-Index erreichbar? Der Helfer lädt index-dev.json
+  // Ist ein signierter dev-Index erreichbar? Der Helfer lädt index-dev-v2.json
   // samt .sig und prüft Signatur und Inhalt; ohne verwertbare Version gilt er
   // als nicht veröffentlicht. target: 'latest' oder eine gezielte Version —
   // für die muss es ein Paket dieser Architektur geben (Codex 19fd8ea5, P2).
