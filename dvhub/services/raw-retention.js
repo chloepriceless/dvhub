@@ -7,9 +7,9 @@
 //   rawCompactedUntil(query) → Date | null
 //     Bis wohin sind die Rohwerte verdichtet? Rohwerte JÜNGER als dieser
 //     Zeitpunkt werden nie entfernt. null = nichts verdichtet → nichts löschen.
-//     Heute: letzter Slot in energy_slots_15m (wie die Platz-Wache bis 1.0.12).
-//     Der Zweig feat/speicher-stufen-1min ersetzt NUR diese Funktion (1-min-
-//     und 15-min-Stand für ALLE aufgenommenen Reihen, das Minimum davon).
+//     Seit 24.11.2026: aggregatedUntil() der Datenstufen (telemetry-tiers.js) —
+//     bis dahin stehen 1-min- UND 15-min-Werte für ALLE Reihen vollständig.
+//     Vorher war es der letzte Slot in energy_slots_15m (nur Energie-Reihen).
 //
 //   rawPruneCutoff({ keepDays, now, compactedUntil }) → Date | null
 //     min(jetzt − keepDays, compactedUntil); null, wenn nichts weg darf.
@@ -24,9 +24,10 @@
 // Aufrufer: storage-guard.js (Profil-Aufbewahrung je Lauf und Notfall-Stufen
 // bei „kritisch“).
 
+import { aggregatedUntil } from './telemetry-tiers.js';
+
 export async function rawCompactedUntil(query) {
-  const r = await query('SELECT max(slot_start_utc) AS until FROM energy_slots_15m');
-  const v = r.rows?.[0]?.until;
+  const v = await aggregatedUntil({ query });
   return v ? new Date(v) : null;
 }
 

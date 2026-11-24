@@ -31,10 +31,12 @@ import {
   growthMbPerDay, reserveMb, daysLeft as reachDays, DEFAULT_DB_VOLUME_DIR,
 } from './storage-mounts.js';
 import {
-  PROFILES, profileForSize, storageStage, stageRank, decideProfile, chooseProfile, cappedReserveMb,
+  PROFILES, profileForSize, profileRank, storageStage, stageRank, decideProfile, chooseProfile, cappedReserveMb,
+  NO_COMPRESSION_MIN_PROFILE, NO_COMPRESSION_TIER1M_KEEP_DAYS,
   readProfileState, writeProfileState, startupProfile,
 } from './storage-profile.js';
 import { rawCompactedUntil, rawPruneCutoff, oldestLiveRawDays, pruneRawBefore } from './raw-retention.js';
+import { pruneOneMinuteTier } from './telemetry-tiers.js';
 
 export const STORAGE_CHECK_INTERVAL_MS = 30 * 60_000;
 export const RAW_KEEP_STEPS_DAYS = Object.freeze([365, 180, 90, 30]);
@@ -58,6 +60,10 @@ export function nextKeepDays(oldestRawAgeDays) {
   for (const d of RAW_KEEP_STEPS_DAYS) if (oldestRawAgeDays > d) return d;
   return null;   // schon bei ≤ 30 Tagen — nichts mehr entfernen
 }
+
+// Gründe, bei denen gar nicht komprimiert werden KANN (E3 b). Nicht dabei:
+// keine/pausierte Regel, scheiternder Job, gescheitertes compress_chunk.
+export const NO_COMPRESSION_REASONS = new Set(['no_timescaledb', 'apache', 'no_hypertable', 'not_enabled']);
 
 const REASON_TEXT = Object.freeze({
   no_timescaledb: 'TimescaleDB ist nicht installiert',
@@ -253,6 +259,18 @@ export function createStorageGuard({
   let lastEffective = initialProfile || startupProfile(getDataDir?.(), readFile).name;
   let retentionDay = null;          // Profil-Aufbewahrung höchstens einmal am Tag
 
+  // E3 b (Christin 24.11.2026): ohne Kompression gilt mindestens „winzig“ —
+  // nur für die Wirkung, das gespeicherte Profil bleibt (kommt die Kompression
+  // zurück, gilt es wieder).
+  const noCompression = () => NO_COMPRESSION_REASONS.has(compression.reason);
+  function withCompressionFloor(dec) {
+    if (!noCompression() || profileRank(dec.effective) >= profileRank(NO_COMPRESSION_MIN_PROFILE)) return dec;
+    return {
+      ...dec, effective: NO_COMPRESSION_MIN_PROFILE, temporary: true,
+      reason: `Datenbank ohne Kompression: mindestens „${PROFILES[NO_COMPRESSION_MIN_PROFILE].label}“, solange nicht komprimiert wird`,
+    };
+  }
+
   async function decide(db, { totalMb, level, dataDir }) {
     const sizeProfile = profileForSize(totalMb);
     const before = profileState || readProfileState(dataDir, readFile);
@@ -263,7 +281,7 @@ export function createStorageGuard({
       fresh = d == null || d < 2;
     }
     const nowIso = new Date(now()).toISOString();
-    const dec = decideProfile({ state: before, sizeProfile, stage: level, fresh, nowIso });
+    const dec = withCompressionFloor(decideProfile({ state: before, sizeProfile, stage: level, fresh, nowIso }));
     const { effective: _e, effectiveAt: _a, ...beforeCore } = before || {};
     void _e; void _a;
     const stateChanged = JSON.stringify(dec.state) !== JSON.stringify(beforeCore);
@@ -285,7 +303,9 @@ export function createStorageGuard({
     return {
       effective: profileInfo.effective, base: profileInfo.base, mode: profileInfo.state.mode, origin: profileInfo.state.origin,
       suggested: profileInfo.suggested, temporary: profileInfo.temporary, reason: profileInfo.reason,
-      sizeProfile: profileInfo.sizeProfile, values: PROFILES[profileInfo.effective],
+      sizeProfile: profileInfo.sizeProfile,
+      // Werte, die wirklich gelten (ohne Kompression: 1-min nur 90 Tage, E3 b/D1 a).
+      values: { ...PROFILES[profileInfo.effective], ...(noCompression() ? { tier1mKeepDays: NO_COMPRESSION_TIER1M_KEEP_DAYS } : {}) },
       ...(profileInfo.pending ? { pending: true } : {}),
     };
   }
@@ -313,7 +333,7 @@ export function createStorageGuard({
     writeProfileState(dataDir, { ...st, effective: lastEffective, effectiveAt: null }, profileIo);
     log('storage_profile_chosen', { choice, base: st.base, mode: st.mode }, 'info');
     // Sofort im Status (und damit im Worker-Schnappschuss) zeigen.
-    const dec = decideProfile({ state: st, sizeProfile, stage: last?.level || 'ok', nowIso: new Date(now()).toISOString() });
+    const dec = withCompressionFloor(decideProfile({ state: st, sizeProfile, stage: last?.level || 'ok', nowIso: new Date(now()).toISOString() }));
     profileInfo = { ...dec, sizeProfile, pending: dec.effective !== lastEffective };
     if (last) last = { ...last, profile: profileView() };
     requestCheck();
@@ -413,12 +433,28 @@ export function createStorageGuard({
           }
           // Aufbewahrung der 5-s-Rohwerte nach Profil (S4), höchstens einmal am Tag.
           const eff = PROFILES[lastEffective];
+          // 1-min-Stufe (D1 a): klein 365, winzig 180 Tage, ohne Kompression 90; 15-min für immer.
+          const tier1mKeep = noCompression() ? NO_COMPRESSION_TIER1M_KEEP_DAYS : (eff?.tier1mKeepDays ?? null);
           // Nicht bei nicht messbarer DB-Platte: dann räumt DVhub in der DB nichts auf (Codex 33062ac7).
-          if (eff?.rawKeepDays && retentionDay !== day && !dbUnmeasured) {
+          if ((eff?.rawKeepDays || tier1mKeep) && retentionDay !== day && !dbUnmeasured) {
             retentionDay = day;
-            try { await profileRetention(db, ts, eff, out); } catch (e) {
-              out.actions.push({ action: 'retain_raw', error: String(e?.message || e).slice(0, 200) });
-              logGuardError(e);
+            if (eff?.rawKeepDays) {
+              try { await profileRetention(db, ts, eff, out); } catch (e) {
+                out.actions.push({ action: 'retain_raw', error: String(e?.message || e).slice(0, 200) });
+                logGuardError(e);
+              }
+            }
+            if (tier1mKeep) {
+              try {
+                const r = await pruneOneMinuteTier(db, { olderThan: new Date(now() - tier1mKeep * 86_400_000).toISOString() });
+                if (r.cutoff && (r.droppedChunks || r.deletedRows)) {
+                  out.actions.push({ action: 'retain_1m', keepDays: tier1mKeep, before: r.cutoff, droppedChunks: r.droppedChunks, deletedRows: r.deletedRows });
+                  log('storage_tier1m_retention', { keepDays: tier1mKeep, before: r.cutoff }, 'info');
+                }
+              } catch (e) {
+                out.actions.push({ action: 'retain_1m', error: String(e?.message || e).slice(0, 200) });
+                logGuardError(e);
+              }
             }
           }
           // Notfall „kritisch“: wie bisher Rohwerte stufenweise (365 → 180 → 90 → 30 Tage).
@@ -516,6 +552,15 @@ export function createStorageGuard({
           AND c.relname IN ('energy_slots_15m', 'control_events', 'audit_log', 'optimizer_run_series', 'optimizer_runs')`);
       for (const row of r.rows || []) out.tables[row.t] = mb(row.b);
     } catch { /* egal */ }
+    // Datenstufen (telemetry-tiers.js): mit TimescaleDB Hypertables → hypertable_size.
+    for (const t of ['timeseries_samples_1m', 'timeseries_samples_15m']) {
+      try {
+        const r = await q(probe?.timescale
+          ? `SELECT COALESCE(hypertable_size('${t}'), pg_total_relation_size('${t}')) AS b`
+          : `SELECT pg_total_relation_size('${t}') AS b`);
+        out.tables[t] = mb(r.rows?.[0]?.b);
+      } catch { /* Tabelle fehlt (Migration 027 noch nicht gelaufen) */ }
+    }
     return out;
   }
 

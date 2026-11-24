@@ -4440,8 +4440,9 @@ function storageCardView(st) {
   let profileText = '-';
   if (p.effective) {
     const raw = v.rawKeepDays ? `${v.rawKeepDays} Tage` : 'für immer';
+    const m1 = v.tier1mKeepDays ? `${v.tier1mKeepDays} Tage` : 'für immer';
     profileText = `Speicherprofil: ${STORAGE_PROFILE_LABEL[p.effective] || p.effective}${p.reason ? ` — ${p.reason}` : ''}. `
-      + `Komprimiert nach ${v.compressAfter || '-'}, 5-s-Rohwerte ${raw}, Schreibpuffer bis ${fmtMb(v.maxWalMb)}.`;
+      + `Komprimiert nach ${v.compressAfter || '-'}, 5-s-Rohwerte ${raw}, 1-min-Werte ${m1}, 15-min-Werte für immer, Schreibpuffer bis ${fmtMb(v.maxWalMb)}.`;
   }
   // Noch nicht umgesetzt (Hintergrund-Lauf, Codex 30313bfc): sichtbar machen, nicht als aktiv zeigen.
   if (p.pending) profileText = `Wird übernommen — ${profileText}`;
@@ -4455,7 +4456,9 @@ function storageCardView(st) {
     parts.push(`Messwerte ${fmtMb(d.samplesMb)}` + (d.chunks ? ` (${d.compressedChunks} von ${d.chunks} Blöcken komprimiert${Number(d.rawBeforeMb) > 0 ? `, ${fmtMb(d.rawBeforeMb)} → ${fmtMb(d.rawAfterMb)}` : ''})` : ''));
   }
   const t = d.tables || {};
-  if (Number.isFinite(Number(t.energy_slots_15m))) parts.push(`15-min-Werte ${fmtMb(t.energy_slots_15m)}`);
+  if (Number.isFinite(Number(t.timeseries_samples_1m))) parts.push(`1-min-Werte ${fmtMb(t.timeseries_samples_1m)}`);
+  const q15 = (Number(t.timeseries_samples_15m) || 0) + (Number(t.energy_slots_15m) || 0);
+  if (t.timeseries_samples_15m != null || t.energy_slots_15m != null) parts.push(`15-min-Werte ${fmtMb(q15)}`);
   const logs = (Number(t.control_events) || 0) + (Number(t.audit_log) || 0);
   if (logs) parts.push(`Protokolle ${fmtMb(logs)}`);
   const opt = (Number(t.optimizer_run_series) || 0) + (Number(t.optimizer_runs) || 0);

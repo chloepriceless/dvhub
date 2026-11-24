@@ -17,10 +17,12 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 import { ensurePgSchema } from '../telemetry-store-pg.js';
+import { ensureTierStorage } from '../services/telemetry-tiers.js';
 import { createStorageGuard, COMPRESSION_WARNING_ID } from '../services/storage-guard.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SQL014 = fs.readFileSync(path.join(HERE, '..', 'db', 'migrations', '014-timescaledb.sql'), 'utf8');
+const SQL027 = fs.readFileSync(path.join(HERE, '..', 'db', 'migrations', '027-telemetry-tiers.sql'), 'utf8');
 const DAY = 86_400_000;
 
 async function withFreshDb(url, fn) {
@@ -48,8 +50,15 @@ async function seed(pool) {
     SELECT k, s, 'test', 'raw', to_timestamp($1::double precision / 1000) - g * INTERVAL '1 day', 5, g
       FROM generate_series(0, 500) g,
            (VALUES ('pv_total_w', 'live'), ('price_eur_mwh', 'live'), ('pv_total_w', 'import')) v(k, s)`, [now]);
-  await pool.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num)
-    VALUES (to_timestamp($1::double precision / 1000), 'pv_total_w', 'live', 'raw', 1)`, [now - 2 * DAY]);
+  // Datenstufen (Migration 027): bis vor 2 Tagen sind 1-min- und 15-min-Werte vollständig.
+  await pool.query(SQL027);
+  await ensureTierStorage(pool);
+  await pool.query("UPDATE telemetry_tier_state SET done_until = to_timestamp($1::double precision / 1000), started_from = to_timestamp($2::double precision / 1000) WHERE id = 'tiers'",
+    [Math.floor((now - 2 * DAY) / 900_000) * 900_000, now - 501 * DAY]);
+  // 1-min-Werte: einer je Tag über 500 Tage.
+  await pool.query(`INSERT INTO timeseries_samples_1m (series_key, scope, source, bucket_ts, n, res_min, value_avg)
+    SELECT 'pv_total_w', 'live', 'test', date_trunc('minute', to_timestamp($1::double precision / 1000) - g * INTERVAL '1 day'), 12, 5, g
+      FROM generate_series(3, 500) g`, [now]);
 }
 
 const counts = async (pool, olderThanDays) => (await pool.query(`SELECT
@@ -94,6 +103,7 @@ for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], 
           assert.match(warn[COMPRESSION_WARNING_ID].m, /Datenbank ohne Kompression: TimescaleDB läuft in der Apache-Edition/);
           assert.ok(logs.some((l) => l.e === 'storage_compression_failed'));
           assert.ok(Number.isFinite(r.db.samplesMb), 'hypertable_size geht auch unter Apache');
+          assert.ok(Number.isFinite(r.db.tables.timeseries_samples_1m), JSON.stringify(r.db.tables));
           assert.equal(r.db.chunks, null);
         } else {
           assert.ok(comp && !comp.error && comp.chunks > 0, JSON.stringify(comp));
@@ -103,6 +113,7 @@ for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], 
           assert.ok(Number.isFinite(r.db.samplesMb), JSON.stringify(r.db));
           assert.ok(r.db.chunks > 0 && r.db.compressedChunks > 0, JSON.stringify(r.db));
           assert.ok('energy_slots_15m' in r.db.tables);
+          assert.ok(Number.isFinite(r.db.tables.timeseries_samples_1m) && Number.isFinite(r.db.tables.timeseries_samples_15m), JSON.stringify(r.db.tables));
         }
       });
     });
@@ -140,7 +151,7 @@ for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], 
         assert.equal(Number(after.live), 0, 'Live-Rohwerte jenseits 30 Tage + Block weg');
         assert.equal(after.price, before.price);
         assert.equal(after.import, before.import);
-        // Nie jünger als der verdichtete Stand (energy_slots_15m: vor 2 Tagen).
+        // Nie jünger als der verdichtete Stand (Datenstufen: vor 2 Tagen).
         assert.ok(Number((await counts(pool, 3)).live) > 20, 'jüngere Rohwerte bleiben');
       });
     });
@@ -167,3 +178,25 @@ test('echte TimescaleDB (timescale): tuneTimescale mit Profil „klein“ — 12
       assert.ok(back.changed.includes('compress_after') && back.changed.includes('chunk_interval'));
     });
   });
+
+for (const [edition, url] of [['apache', process.env.DVHUB_TEST_PG_URL_APACHE], ['timescale', process.env.DVHUB_TEST_PG_URL]]) {
+  test(`echte TimescaleDB (${edition}): 1-min-Stufe nach Profil gekürzt (D1 a, E3 b)`,
+    { skip: url ? false : 'DB-URL nicht gesetzt' }, async () => {
+      await withFreshDb(url, async (pool) => {
+        await seed(pool);
+        const g = createStorageGuard({ getDb: () => pool, statfs: () => ({ blocks: 100000, bsize: 1048576, bavail: 90000 }),
+          initialProfile: 'klein', profileIo: { writeFile() {}, rename() {} } });
+        g.chooseProfile('klein');
+        for (let i = 0; i < 400 && !g.status()?.actions; i++) await new Promise((res) => setTimeout(res, 10));
+        const r = g.status();
+        const keep = edition === 'apache' ? 90 : 365;   // Apache: ohne Kompression → 90 Tage (E3 b)
+        assert.equal(r.profile.effective, edition === 'apache' ? 'winzig' : 'klein');
+        const old = Number((await pool.query(
+          `SELECT count(*) AS n FROM timeseries_samples_1m WHERE bucket_ts < now() - ($1 + 2) * INTERVAL '1 day'`, [keep])).rows[0].n);
+        assert.equal(old, 0, `1-min-Werte älter als ${keep} Tage (+ Block) weg: ${JSON.stringify(r.actions)}`);
+        const kept = Number((await pool.query(
+          `SELECT count(*) AS n FROM timeseries_samples_1m WHERE bucket_ts > now() - ($1 - 2) * INTERVAL '1 day'`, [keep])).rows[0].n);
+        assert.ok(kept > keep - 10, 'jüngere 1-min-Werte bleiben');
+      });
+    });
+}

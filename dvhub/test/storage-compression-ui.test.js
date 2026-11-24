@@ -147,7 +147,7 @@ test('Karte „Speicher“: Stufe, Reichweite, Platten, Profil mit Vorschlag, DB
   assert.match(v.rowsHtml, /<td>Datenbank<\/td><td>12,0 GB<\/td>/);
   assert.match(v.rowsHtml, /DVhub-Ordner, System \(\/\), Protokolle/);
   assert.match(v.profileText, /Speicherprofil: mittel — Speicher wenig/);
-  assert.match(v.profileText, /5-s-Rohwerte für immer, Schreibpuffer bis 512 MB/);
+  assert.match(v.profileText, /5-s-Rohwerte für immer, 1-min-Werte für immer, 15-min-Werte für immer, Schreibpuffer bis 512 MB/);
   assert.equal(v.showApply, true);
   assert.match(v.applyLabel, /Vorschlag übernehmen: klein/);
   assert.match(v.dbText, /Kompression: an \(timescale\)/);
@@ -197,4 +197,13 @@ test('Karte „Speicher“: ausstehendes Profil nicht als aktiv zeigen', () => {
   assert.match(v.profileText, /^Wird übernommen — Speicherprofil/);
   assert.equal(v.showApply, false);
   assert.equal(v.pending, true);
+});
+
+test('Karte „Speicher“: 1-min-Aufbewahrung und Stufen-Tabellen (Datenstufen 24.11.)', () => {
+  const { storageCardView } = loadStorage();
+  const v = storageCardView({ ...ST, profile: { ...ST.profile, values: { compressAfter: '6 hours', rawKeepDays: 30, tier1mKeepDays: 90, maxWalMb: 128 } },
+    db: { ...ST.db, tables: { ...ST.db.tables, timeseries_samples_1m: 120, timeseries_samples_15m: 15 } } });
+  assert.match(v.profileText, /5-s-Rohwerte 30 Tage, 1-min-Werte 90 Tage, 15-min-Werte für immer/);
+  assert.match(v.dbText, /1-min-Werte 120 MB/);
+  assert.match(v.dbText, /15-min-Werte 320 MB/);
 });

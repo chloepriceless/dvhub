@@ -33,7 +33,10 @@ function fakeDb({ ts = true, oldestDays = 500, aggUntil = '2026-09-30T00:00:00Z'
       }
       if (sql.includes('drop_chunks') && dropThrows) throw new Error(dropThrows);
       if (sql.includes('/ 86400 AS d')) return { rows: [{ d: oldestDays }] };
-      if (sql.includes('AS until')) return { rows: [{ until: aggUntil }] };
+      // Datenstufen (telemetry-tiers.js): bis aggUntil sind 1-min- und 15-min-Werte vollständig.
+      if (sql.includes('FROM telemetry_tier_state s')) {
+        return { rows: aggUntil ? [{ done_until: aggUntil, started_from: '2024-01-01T00:00:00Z', updated_at: null, dirty_from: null, dirty_n: 0 }] : [] };
+      }
       return { rows: [], rowCount: 0 };
     },
   };
@@ -194,7 +197,13 @@ test('Ohne Kompression bei genug Platz: roter Hinweis trotzdem, nichts gelöscht
     assert.match(warn[COMPRESSION_WARNING_ID] || '', re, JSON.stringify(opts));
     assert.match(warn[COMPRESSION_WARNING_ID], /110–230 MB pro Tag/);
     assert.equal(warn.storage, null);
-    assert.ok(!db.calls.some(([s]) => /compress_chunk|drop_chunks|DELETE/.test(s)));
+    assert.ok(!db.calls.some(([s]) => /compress_chunk/.test(s)));
+    assert.ok(!r.actions.some((a) => a.action === 'drop_raw'), 'kein Notfall-Löschen');
+    // E3 b (Christin 24.11.): kann gar nicht komprimiert werden → mindestens „winzig“
+    // (Rohwerte 30 Tage, 1-min 90 Tage); sonst bleibt das Profil.
+    const cannot = !(opts.policies === 0 || opts.failing);
+    assert.equal(r.profile.effective, cannot ? 'winzig' : 'gross', JSON.stringify(opts));
+    if (!cannot) assert.ok(!db.calls.some(([s]) => /drop_chunks|DELETE/.test(s)));
   }
 });
 
@@ -378,13 +387,15 @@ test('DB-Aufteilung für die Karte', async () => {
   const db = fakeDb();
   const orig = db.query.bind(db);
   db.query = async (sql, p) => {
+    if (sql.includes('timeseries_samples_1m')) return { rows: [{ b: 100 * 1048576 }] };
+    if (sql.includes('timeseries_samples_15m')) return { rows: [{ b: 10 * 1048576 }] };
     if (sql.includes('hypertable_size')) return { rows: [{ b: 2 * 1048576 * 1024 }] };
     if (sql.includes('chunk_compression_stats')) return { rows: [{ c: 116, n: 120, b: 41 * 1048576 * 1024, a: 1283 * 1048576 }] };
     if (sql.includes('pg_total_relation_size(c.oid)')) return { rows: [{ t: 'energy_slots_15m', b: 305 * 1048576 }] };
     return orig(sql, p);
   };
   const r = await createStorageGuard({ getDb: () => db, statfs: stat(60) }).check();
-  assert.deepEqual(r.db, { samplesMb: 2048, compressedChunks: 116, chunks: 120, rawBeforeMb: 41984, rawAfterMb: 1283, tables: { energy_slots_15m: 305 } });
+  assert.deepEqual(r.db, { samplesMb: 2048, compressedChunks: 116, chunks: 120, rawBeforeMb: 41984, rawAfterMb: 1283, tables: { energy_slots_15m: 305, timeseries_samples_1m: 100, timeseries_samples_15m: 10 } });
 });
 
 // Codex 2ef7ff2c (P2): Log-Aufbewahrung sieht beim Stufenwechsel schon die NEUE Stufe.
@@ -440,4 +451,31 @@ test('Profilwahl während eines laufenden Laufs: danach noch ein Lauf, Profil um
   await first;
   for (let i = 0; i < 200 && !changes.length; i++) await new Promise((r) => setTimeout(r, 5));
   assert.deepEqual(changes, ['klein'], 'nachgeholter Lauf setzt das Profil um');
+});
+
+// ── Folgeauftrag 24.11.: Datenstufen, 1-min-Aufbewahrung (D1 a), E3 b ──────────
+test('Rohwerte nur bis aggregatedUntil; ohne Stufen-Stand nichts (auch im Notfall)', async () => {
+  const none = fakeDb({ oldestDays: 500, aggUntil: null });
+  const r = await createStorageGuard({ getDb: () => none, statfs: stat(3) }).check();
+  assert.equal(r.level, 'kritisch');
+  assert.ok(!none.calls.some(([s]) => /drop_chunks|DELETE/.test(s)), 'null = nichts löschen');
+  const db = fakeDb({ oldestDays: 500, aggUntil: '2025-02-01T00:00:00Z' });
+  const r2 = await createStorageGuard({ getDb: () => db, statfs: stat(3), now: () => Date.parse('2026-11-24T00:00:00Z') }).check();
+  assert.equal(r2.actions.find((a) => a.action === 'drop_raw').before, '2025-02-01T00:00:00.000Z', 'nie jünger als die Stufen');
+  assert.ok(!db.calls.some(([s]) => s.includes('FROM energy_slots_15m')), 'nicht mehr nach energy_slots_15m');
+});
+
+test('1-min-Stufe je Profil: groß nie, klein 365, winzig 180, ohne Kompression 90 Tage', async () => {
+  const NOW = Date.parse('2026-11-24T12:00:00Z');
+  for (const [profile, opts, keep] of [['gross', {}, null], ['klein', {}, 365], ['winzig', {}, 180], ['gross', { license: 'apache' }, 90]]) {
+    const db = fakeDb({ oldestDays: 20, aggUntil: '2026-11-24T00:00:00Z', ...opts });
+    const g = createStorageGuard({ getDb: () => db, statfs: stat(60), now: () => NOW, initialProfile: profile, profileIo: { writeFile() {}, rename() {} } });
+    g.chooseProfile(profile);
+    const r = await settled(g);
+    const q = db.calls.find(([s]) => s.includes('drop_chunks(\'timeseries_samples_1m\'') || s.includes('DELETE FROM timeseries_samples_1m'));
+    if (keep == null) { assert.equal(q, undefined, profile); continue; }
+    assert.ok(q, `${profile}/${JSON.stringify(opts)}: 1-min gekürzt`);
+    assert.equal(new Date(q[1][0]).toISOString(), new Date(Math.floor((NOW - keep * 86_400_000) / 900_000) * 900_000).toISOString());
+    void r;
+  }
 });

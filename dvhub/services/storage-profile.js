@@ -24,23 +24,28 @@ import path from 'node:path';
 export const PROFILE_ORDER = Object.freeze(['gross', 'mittel', 'klein', 'winzig']);
 export const STAGE_ORDER = Object.freeze(['ok', 'knapp', 'wenig', 'kritisch']);
 
+// Christin 24.11.2026 (E3 b, D1 a): ohne Kompression gilt mindestens „winzig“,
+// die 1-min-Werte bleiben dann nur 90 Tage (15-min-Werte immer für immer).
+export const NO_COMPRESSION_MIN_PROFILE = 'winzig';
+export const NO_COMPRESSION_TIER1M_KEEP_DAYS = 90;
+
 export const PROFILES = Object.freeze({
   gross: Object.freeze({
     // compressSchedule null: Lauf-Intervall von TimescaleDB unangetastet (Verhalten bis 1.0.12).
     name: 'gross', label: 'groß', chunkInterval: '1 day', compressAfter: '2 days', compressSchedule: null,
-    rawKeepDays: null, maxWalMb: 1024, minWalMb: 64, backupKeepMax: 14, journaldMaxMb: null,
+    rawKeepDays: null, tier1mKeepDays: null, maxWalMb: 1024, minWalMb: 64, backupKeepMax: 14, journaldMaxMb: null,
   }),
   mittel: Object.freeze({
     name: 'mittel', label: 'mittel', chunkInterval: '1 day', compressAfter: '1 day', compressSchedule: '6 hours',
-    rawKeepDays: null, maxWalMb: 512, minWalMb: 64, backupKeepMax: 7, journaldMaxMb: null,
+    rawKeepDays: null, tier1mKeepDays: null, maxWalMb: 512, minWalMb: 64, backupKeepMax: 7, journaldMaxMb: null,
   }),
   klein: Object.freeze({
     name: 'klein', label: 'klein', chunkInterval: '12 hours', compressAfter: '12 hours', compressSchedule: '2 hours',
-    rawKeepDays: 365, maxWalMb: 256, minWalMb: 64, backupKeepMax: 3, journaldMaxMb: 200,
+    rawKeepDays: 365, tier1mKeepDays: 365, maxWalMb: 256, minWalMb: 64, backupKeepMax: 3, journaldMaxMb: 200,
   }),
   winzig: Object.freeze({
     name: 'winzig', label: 'winzig', chunkInterval: '6 hours', compressAfter: '6 hours', compressSchedule: '1 hour',
-    rawKeepDays: 30, maxWalMb: 128, minWalMb: 32, backupKeepMax: 0, journaldMaxMb: 100,
+    rawKeepDays: 30, tier1mKeepDays: 180, maxWalMb: 128, minWalMb: 32, backupKeepMax: 0, journaldMaxMb: 100,
   }),
 });
 
