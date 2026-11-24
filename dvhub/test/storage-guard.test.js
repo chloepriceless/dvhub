@@ -34,7 +34,7 @@ function fakeDb({ ts = true, oldestDays = 500, aggUntil = '2026-09-30T00:00:00Z'
       }
       if (sql.includes('drop_chunks') && dropThrows) throw new Error(dropThrows);
       // pruneRawBefore: gibt es Preise/Altdaten vor der Grenze? (Standard: ja → Zwischenkopie)
-      if (sql.includes("(scope <> 'live' OR series_key LIKE 'price%') LIMIT 1")) return { rows: keepRows ? [{}] : [] };
+      if (sql.includes("(scope <> 'live' OR series_key LIKE 'price%' OR resolution_seconds >= 900) LIMIT 1")) return { rows: keepRows ? [{}] : [] };
       if (sql.includes('/ 86400 AS d')) return { rows: [{ d: oldestDays }] };
       // Datenstufen (telemetry-tiers.js): bis aggUntil sind 1-min- und 15-min-Werte vollständig.
       if (sql.includes('FROM telemetry_tier_state s')) {
@@ -80,7 +80,7 @@ test('Kritisch: eine Stufe Rohwerte weg, nie jünger als die 15-min-Werte', asyn
   const seq = db.calls.map(([q]) => q.split(' ').slice(0, 3).join(' '));
   const b = seq.indexOf('BEGIN');
   assert.ok(seq[b + 1].startsWith('CREATE TEMP TABLE'), 'Preise/Altdaten zuerst sichern');
-  assert.match(db.calls[b + 1][0], /scope <> 'live' OR series_key LIKE 'price%'/);
+  assert.match(db.calls[b + 1][0], /scope <> 'live' OR series_key LIKE 'price%' OR resolution_seconds >= 900/);
   assert.ok(seq[b + 2].startsWith('SELECT drop_chunks'));
   assert.ok(seq[b + 3].startsWith('INSERT INTO timeseries_samples'));
   assert.equal(seq[b + 4], 'COMMIT');
@@ -567,7 +567,7 @@ function s4Db({ aggregateFails = false, has15m = false, days = 45, tierUntil = n
       }
       // has15mFor: fehlende Viertelstunden (0 = vollständig abgedeckt)
       if (s.includes('AS missing')) return { rows: [{ missing: has15m ? 0 : 5 }] };
-      if (s.includes("(scope <> 'live' OR series_key LIKE 'price%') LIMIT 1")) return { rows: [] };
+      if (s.includes("(scope <> 'live' OR series_key LIKE 'price%' OR resolution_seconds >= 900) LIMIT 1")) return { rows: [] };
       if (s.startsWith('SELECT drop_chunks')) { state.oldest += 86_400_000; state.freed = (state.freed || 0) + 31; return { rows: [] }; }
       if (s.includes('compress_chunk')) throw new Error('could not extend file: No space left on device');
       return { rows: [], rowCount: 0 };

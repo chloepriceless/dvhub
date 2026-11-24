@@ -349,10 +349,53 @@ test('reines PostgreSQL: has15mFor verlangt 15-min-Werte je Reihe, nicht irgende
         SELECT 'grid_voltage_l1_v', 'live', 'local_poll', to_timestamp($1::double precision / 1000) + g * INTERVAL '15 minutes', 1, 1, 5
           FROM generate_series(0, 95) g`, [day]);
       assert.equal(await has15mFor(q, day, day + 86_400_000), true, 'jede Reihe hat ihren Ersatz');
-      // Grobe Live-Probe (≥ 900 s) verdichten die Stufen nicht, pruneRawBefore löscht sie aber mit — ohne eigenen
-      // Ersatz sperrt sie das Löschen (Codex f66da2c5 P1).
+      // Grobe Live-Probe (≥ 900 s): die Stufen verdichten sie nicht, pruneRawBefore behält sie (Codex f66da2c5 P1,
+      // Codex Integration 24.11.) — sie braucht keinen Ersatz und sperrt das Löschen nicht.
       await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
         VALUES ('grid_voltage_l3_v', 'live', 'local_poll', 'raw', to_timestamp($1::double precision / 1000) + INTERVAL '1 hour', 900, 230)`, [day]);
-      assert.equal(await has15mFor(q, day, day + 86_400_000), false, 'grobe Probe ohne Ersatz → nicht löschen');
+      assert.equal(await has15mFor(q, day, day + 86_400_000), true, 'grobe Probe bleibt ohnehin erhalten');
+    });
+  });
+
+// Codex Integration 24.11. (P2): grobe Live-Proben (≥ 900 s, z. B. nach einer langen Abfragepause) verdichten die
+// Stufen nicht — keine Aufbewahrung darf sie löschen (wie Preise und Altdaten), und sie zählen nicht als „ältester
+// Rohwert“ (sonst liefe der Notfall-Pfad an ihnen ins Leere).
+async function seedCoarse(pool) {
+  await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+    SELECT 'battery_soc_pct', 'live', 'local_poll', 'raw', now() - g * INTERVAL '1 day' - INTERVAL '3 hours', 1800, 50
+      FROM generate_series(450, 460) g`);
+}
+const coarseLeft = async (pool) => Number((await pool.query(
+  "SELECT count(*) AS n FROM timeseries_samples WHERE series_key = 'battery_soc_pct' AND resolution_seconds >= 900")).rows[0].n);
+
+for (const lowSpace of [false, true]) {
+  test(`echte TimescaleDB (timescale): pruneRawBefore behält grobe Live-Proben (lowSpace=${lowSpace})`,
+    { skip: process.env.DVHUB_TEST_PG_URL ? false : 'DVHUB_TEST_PG_URL nicht gesetzt' }, async () => {
+      const { pruneRawBefore, oldestLiveRawMs } = await import('../services/raw-retention.js');
+      await withFreshDb(process.env.DVHUB_TEST_PG_URL, async (pool) => {
+        await seed(pool);
+        await seedCoarse(pool);
+        await pruneRawBefore(pool, { before: new Date(Date.now() - 400 * DAY), timescale: true, lowSpace });
+        assert.equal(await coarseLeft(pool), 11, 'grobe Proben bleiben');
+        assert.equal(Number((await counts(pool, 400 + 7)).live), 0, 'feine Rohwerte weg');
+        const oldest = await oldestLiveRawMs((q, p) => pool.query(q, p));
+        assert.ok(oldest >= Date.now() - 408 * DAY, 'ältester Rohwert ohne grobe Proben (Block um die Grenze bleibt)');
+      });
+    });
+}
+
+test('reines PostgreSQL: pruneRawBefore behält grobe Live-Proben',
+  { skip: process.env.DVHUB_TEST_PG_URL_PLAIN ? false : 'DVHUB_TEST_PG_URL_PLAIN nicht gesetzt' }, async () => {
+    const { pruneRawBefore, oldestLiveRawDays } = await import('../services/raw-retention.js');
+    await withFreshDb(process.env.DVHUB_TEST_PG_URL_PLAIN, async (pool) => {
+      await ensurePgSchema(pool);
+      await pool.query(`INSERT INTO timeseries_samples (series_key, scope, source, quality, ts_utc, resolution_seconds, value_num)
+        SELECT 'pv_total_w', 'live', 'test', 'raw', now() - g * INTERVAL '1 day', 5, g FROM generate_series(0, 500) g`);
+      await seedCoarse(pool);
+      const r = await pruneRawBefore(pool, { before: new Date(Date.now() - 400 * DAY), timescale: false });
+      assert.equal(r.mode, 'delete');
+      assert.equal(await coarseLeft(pool), 11, 'grobe Proben bleiben');
+      const d = await oldestLiveRawDays((q, p) => pool.query(q, p));
+      assert.ok(d < 401, `ältester Rohwert ${d} Tage — ohne grobe Proben`);
     });
   });

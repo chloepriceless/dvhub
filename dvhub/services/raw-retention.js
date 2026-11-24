@@ -24,7 +24,13 @@
 // Aufrufer: storage-guard.js (Profil-Aufbewahrung je Lauf und Notfall-Stufen
 // bei „kritisch“).
 
-import { aggregatedUntil } from './telemetry-tiers.js';
+import { aggregatedUntil, TIER_SOURCE_MAX_RES_S } from './telemetry-tiers.js';
+
+// Was keine Aufbewahrung löscht: Preise, Nicht-Live-Reihen (Importe, Altdaten) und grobe Live-Proben (≥ 15 min,
+// z. B. nach einer langen Abfragepause) — die Stufen verdichten sie nicht, ohne sie wären sie ersatzlos weg
+// (Codex Integration 24.11.). Sie sind selten und klein.
+const KEEP_ROWS_SQL = `(scope <> 'live' OR series_key LIKE 'price%' OR resolution_seconds >= ${TIER_SOURCE_MAX_RES_S})`;
+const FINE_LIVE_SQL = `scope = 'live' AND series_key NOT LIKE 'price%' AND resolution_seconds < ${TIER_SOURCE_MAX_RES_S}`;
 
 export async function rawCompactedUntil(query) {
   const v = await aggregatedUntil({ query });
@@ -39,14 +45,14 @@ export function rawPruneCutoff({ keepDays, now = Date.now(), compactedUntil }) {
 
 /** Alter des ältesten 5-s-Live-Rohwerts in Tagen (oder null). */
 export async function oldestLiveRawDays(query) {
-  const r = await query(`SELECT extract(epoch FROM now() - (SELECT min(ts_utc) FROM timeseries_samples WHERE scope = 'live')) / 86400 AS d`);
+  const r = await query(`SELECT extract(epoch FROM now() - (SELECT min(ts_utc) FROM timeseries_samples WHERE ${FINE_LIVE_SQL})) / 86400 AS d`);
   const d = Number(r.rows?.[0]?.d);
   return Number.isFinite(d) ? d : null;
 }
 
 /** Ältester 5-s-Live-Rohwert (ohne Preise) als ms, oder null. */
 export async function oldestLiveRawMs(query) {
-  const r = await query(`SELECT min(ts_utc) AS t FROM timeseries_samples WHERE scope = 'live' AND series_key NOT LIKE 'price%'`);
+  const r = await query(`SELECT min(ts_utc) AS t FROM timeseries_samples WHERE ${FINE_LIVE_SQL}`);
   const v = r.rows?.[0]?.t;
   return v ? new Date(v).getTime() : null;
 }
@@ -82,15 +88,14 @@ export async function oldestRawUnit(query, { timescale }) {
  * nachgefüllt — Spannungen, Phasen usw. wären sonst ohne Ersatz weg.
  * Ungültige Proben („invalid“) und Proben ohne Wert zählen nicht — sie
  * verdichten die Stufen nie und sperrten das Löschen sonst für immer. Grobe
- * Live-Proben (≥ 15 min) zählen mit: die Stufen verdichten sie nicht,
- * pruneRawBefore löscht sie aber mit — ohne eigenen Energie-Slot sperren sie
- * (Codex f66da2c5). Fehlt die Stufen-Tabelle, zählt nur energy_slots_15m.
+ * Live-Proben (≥ 15 min) zählen nicht: pruneRawBefore behält sie (KEEP_ROWS_SQL).
+ * Fehlt die Stufen-Tabelle, zählt nur energy_slots_15m.
  */
 export async function has15mFor(query, fromMs, toMs) {
   const p = [new Date(fromMs).toISOString(), new Date(toMs).toISOString()];
   const raw = `SELECT DISTINCT date_bin('15 minutes', ts_utc, TIMESTAMPTZ '2000-01-01') AS q, series_key, scope, source
       FROM timeseries_samples
-      WHERE scope = 'live' AND series_key NOT LIKE 'price%' AND ts_utc >= $1 AND ts_utc < $2
+      WHERE ${FINE_LIVE_SQL} AND ts_utc >= $1 AND ts_utc < $2
         AND quality <> 'invalid' AND (value_num IS NOT NULL OR value_text IS NOT NULL)`;
   const energy = `EXISTS (SELECT 1 FROM energy_slots_15m e WHERE e.slot_start_utc = r.q AND e.series_key = r.series_key)`;
   const withTier = `SELECT count(*) AS missing FROM (${raw}) r
@@ -119,7 +124,7 @@ export async function pruneRawBefore(db, { before, timescale, lowSpace = false }
     // mit dem COMMIT des drop_chunks frei. Scheitert das Zurückschreiben, steht
     // es laut im Protokoll (Rückgabe restoreError).
     const kept = (await db.query(`SELECT * FROM timeseries_samples WHERE ts_utc < $1
-      AND (scope <> 'live' OR series_key LIKE 'price%') LIMIT ${KEEP_IN_MEMORY_MAX + 1}`, [iso])).rows || [];
+      AND ${KEEP_ROWS_SQL} LIMIT ${KEEP_IN_MEMORY_MAX + 1}`, [iso])).rows || [];
     if (kept.length <= KEEP_IN_MEMORY_MAX) {
       await db.query("SELECT drop_chunks('timeseries_samples', older_than => $1::timestamptz)", [iso]);
       let restoreError = null;
@@ -145,7 +150,7 @@ export async function pruneRawBefore(db, { before, timescale, lowSpace = false }
     // Nichts zu retten (keine Preise/Altdaten davor): ohne Zwischenkopie — auf
     // einer vollen Platte kann schon die Kopie scheitern (E2E kleine Platte S4).
     const keep = await db.query(`SELECT 1 FROM timeseries_samples WHERE ts_utc < $1
-      AND (scope <> 'live' OR series_key LIKE 'price%') LIMIT 1`, [iso]);
+      AND ${KEEP_ROWS_SQL} LIMIT 1`, [iso]);
     if (!keep.rows?.length) {
       await db.query("SELECT drop_chunks('timeseries_samples', older_than => $1::timestamptz)", [iso]);
       return { mode: 'drop_chunks', before: iso };
@@ -155,7 +160,7 @@ export async function pruneRawBefore(db, { before, timescale, lowSpace = false }
       await client.query('BEGIN');
       await client.query(`CREATE TEMP TABLE dvhub_keep_samples ON COMMIT DROP AS
         SELECT * FROM timeseries_samples
-         WHERE ts_utc < $1 AND (scope <> 'live' OR series_key LIKE 'price%')`, [iso]);
+         WHERE ts_utc < $1 AND ${KEEP_ROWS_SQL}`, [iso]);
       await client.query("SELECT drop_chunks('timeseries_samples', older_than => $1::timestamptz)", [iso]);
       await client.query(`INSERT INTO timeseries_samples OVERRIDING SYSTEM VALUE SELECT * FROM dvhub_keep_samples
         ON CONFLICT DO NOTHING`);
@@ -172,7 +177,7 @@ export async function pruneRawBefore(db, { before, timescale, lowSpace = false }
   let rows = 0;
   for (let i = 0; i < 200; i++) {
     const d = await db.query(`DELETE FROM timeseries_samples WHERE ctid IN (
-      SELECT ctid FROM timeseries_samples WHERE scope = 'live' AND series_key NOT LIKE 'price%'
+      SELECT ctid FROM timeseries_samples WHERE ${FINE_LIVE_SQL}
          AND ts_utc < $1 LIMIT 50000)`, [iso]);
     if (!d.rowCount) break;
     rows += d.rowCount;
