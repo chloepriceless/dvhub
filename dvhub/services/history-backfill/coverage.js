@@ -13,17 +13,24 @@
 //   - keine Kennzeichnung veralteter Proben (meta.stale): nach einem Lesefehler
 //     schrieb DVhub die gehaltenen Werte mit frischem Zeitstempel weiter;
 //   - resolution_seconds je Probe einzeln gerundet (5,3-s-Takt → 5 s).
-// Darum rechnet der Job die Abdeckung aus den ZEITSTEMPELN (Abstand zur vorigen
-// Probe derselben Reihe, ≤ 90 s zählt, länger = Lücke und nie vollständig, wie
-// maxResS im Live-Pfad) und verlangt eine unabhängige Bestätigung: die eigenen
-// Werte des Slots für Netzbezug, Einspeisung und PV müssen zum VRM-Import passen
-// (|Δ| ≤ max(0,02 kWh, 5 %); auf Prod-Daten mit bekannter Abdeckung passen so
-// ~98 % der vollständigen Slots, 06.–22.11.2026). Gehaltene Werte nach einem
-// Ausfall weichen davon ab; der verbleibende Fehler ist durch die Toleranz
-// begrenzt. Nur dann wird {coverageS, samples, maxResS} geschrieben und der
-// eigene Wert kann gewinnen. Sonst bleibt VRM vorn (Regel B vom 05.11. bleibt):
-//   coverageBackfill 'vrm-mismatch'  — passt nicht zum VRM-Import
-//   coverageBackfill 'unverified'    — keine Vergleichsreihe im Slot
+// Darum rechnet der Job die Abdeckung aus den ZEITSTEMPELN: ein Abstand zur
+// vorigen Probe derselben Reihe zählt ganz, wenn er höchstens die gespeicherte
+// Auflösung + 1,5 s ist (Rundung, Takt-Schwankung); länger (Neustart, Hänger)
+// zählt nur die gespeicherte Auflösung — wie der Live-Pfad nach einem Neustart —
+// und die Lücke steht in maxResS (über 90 s: nie vollständig).
+// Dazu eine Bestätigung je Slot (Codex 31a46774), sonst bleibt VRM vorn (Regel B
+// vom 05.11. bleibt):
+//   1. Netzbezug, Einspeisung, PV und Hausverbrauch passen zum VRM-Import
+//      (|Δ| ≤ max(0,02 kWh, 5 %); Prod 06.–22.11.2026: ~98 % der vollständigen
+//      Slots), mindestens ein echtes Vergleichspaar, eines davon ≥ 0,05 kWh
+//      (nachts zählt der Hausverbrauch) — fehlt VRM, ist nichts bestätigt;
+//   2. die eigene Energiebilanz des Slots ist schlüssig: PV + Bezug − Einspeisung
+//      − Last − Laden + Entladen (= Wandlerverlust) liegt in
+//      [−0,02 kWh; 0,06 kWh + 15 % des Akku-Durchsatzes] (Prod: 99,4 % der
+//      vollständigen Slots). Ein gehaltener Akkuwert sprengt die Bilanz; die
+//      VRM-Akkumengen selbst taugen nicht zum Vergleich (AC-seitig, je Slot verrauscht).
+// Ergebnis im Vermerk coverageBackfill: 'raw' (bestätigt, mit Abdeckung),
+// 'vrm-mismatch' (verglichen, passt nicht), 'unverified' (nichts zu vergleichen).
 //
 // Portionsweise und wiederaufnehmbar: je Lauf höchstens ein UTC-Tag, eine
 // Anfrage (ein UPDATE). Offene Tage liest der Job einmal (und nach dem letzten
@@ -40,12 +47,23 @@ const DAY_MS = 86_400_000;
 
 // Vergleich mit dem VRM-Import je Slot (Prod 06.–22.11.2026: ~98 % der
 // vollständigen Slots innerhalb).
-export const COVERAGE_CHECK_SERIES = Object.freeze(['grid_import_w', 'grid_export_w', 'pv_total_w']);
+export const COVERAGE_CHECK_SERIES = Object.freeze(['grid_import_w', 'grid_export_w', 'pv_total_w', 'load_power_w']);
 export const COVERAGE_AGREE_ABS_KWH = 0.02;
 export const COVERAGE_AGREE_REL = 0.05;
+// Mindestens ein Vergleichspaar so groß — sonst sagt „passt“ nichts.
+export const COVERAGE_INFORMATIVE_KWH = 0.05;
+// Energiebilanz je Slot (Wandlerverlust), Prod 06.–22.11.2026: 99,4 % darin.
+export const COVERAGE_BALANCE_MIN_KWH = -0.02;
+export const COVERAGE_BALANCE_MAX_KWH = 0.06;
+export const COVERAGE_BALANCE_MAX_REL = 0.15;
+// Abstand bis Auflösung + so viel zählt ganz (Rundung, Takt-Schwankung).
+export const COVERAGE_SPACING_SLACK_S = 1.5;
 
 // Nach dem letzten offenen Tag erst so spät wieder nach offenen Tagen suchen.
 export const COVERAGE_RESCAN_MS = 24 * 3_600_000;
+// Kleine Boards schonen: nach einem Tag mindestens das Zehnfache seiner Laufzeit
+// Pause (A7S: ein Tag 12–30 s → höchstens ~10 % Datenbank-Last).
+export const COVERAGE_PAUSE_FACTOR = 10;
 
 export const OPEN_DAYS_SQL = `
 SELECT DISTINCT to_char(date_trunc('day', slot_start_utc AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day
@@ -62,8 +80,9 @@ ORDER BY (table_schema = current_schema()) DESC
 LIMIT 1`;
 
 /**
- * UPDATE für einen UTC-Tag [$1, $2). $3 Toleranz kWh, $4 Toleranz relativ,
- * $5 Vergleichsreihen, $6 Rohreihen. metaType 'jsonb' oder 'text' (Spalte je Installation).
+ * UPDATE für einen UTC-Tag [$1, $2). $3/$4 Toleranz kWh/relativ, $5 Vergleichsreihen,
+ * $6 Rohreihen, $7 Mindestgröße eines Vergleichs, $8–$10 Bilanzgrenzen.
+ * metaType 'jsonb' oder 'text' (Spalte je Installation).
  */
 export function coverageUpdateSql(metaType = 'jsonb') {
   const merged = `coalesce(nullif(e.meta_json::text, ''), '{}')::jsonb
@@ -78,6 +97,7 @@ export function coverageUpdateSql(metaType = 'jsonb') {
 WITH raw AS (
   SELECT series_key, ts_utc,
          coalesce(meta_json::text, '') ~ '"stale"\\s*:\\s*true' AS stale,
+         resolution_seconds::float8 AS res,
          extract(epoch FROM ts_utc - lag(ts_utc) OVER (PARTITION BY series_key ORDER BY ts_utc))::float8 AS dt
   FROM timeseries_samples
   WHERE scope = 'live' AND source = 'local_poll'
@@ -87,24 +107,51 @@ WITH raw AS (
 cov AS (
   SELECT to_timestamp(floor(extract(epoch FROM ts_utc) / ${SLOT_SECONDS}) * ${SLOT_SECONDS}) AS slot,
          series_key,
-         sum(CASE WHEN stale OR dt IS NULL OR dt <= 0 OR dt > ${gap} THEN 0 ELSE dt END)::float8 AS cov,
+         sum(CASE
+               WHEN stale OR dt IS NULL OR dt <= 0 THEN 0
+               WHEN dt <= coalesce(res, 0) + ${COVERAGE_SPACING_SLACK_S} AND dt <= ${gap} THEN dt
+               ELSE least(greatest(coalesce(res, 0), 0), dt, ${gap})
+             END)::float8 AS cov,
          count(*)::int AS n,
          coalesce(max(dt), 0)::float8 AS maxres
   FROM raw
   WHERE ts_utc >= $1::timestamptz
   GROUP BY 1, 2
 ),
-chk AS (
+pairs AS (
   SELECT l.slot_start_utc AS slot,
-         bool_and(r.value_num IS NULL
-           OR abs(l.value_num - r.value_num) <= greatest($3::float8, $4::float8 * greatest(abs(l.value_num), abs(r.value_num)))) AS agrees
+         count(*)::int AS n,
+         bool_and(abs(l.value_num - r.value_num) <= greatest($3::float8, $4::float8 * greatest(abs(l.value_num), abs(r.value_num)))) AS within,
+         max(greatest(abs(l.value_num), abs(r.value_num))) AS biggest
   FROM energy_slots_15m l
-  LEFT JOIN energy_slots_15m r
+  JOIN energy_slots_15m r
     ON r.slot_start_utc = l.slot_start_utc AND r.series_key = l.series_key AND r.source_kind = 'vrm_import'
   WHERE l.source_kind = 'local_live'
     AND l.slot_start_utc >= $1::timestamptz AND l.slot_start_utc < $2::timestamptz
     AND l.series_key = ANY($5::text[])
+    AND l.value_num IS NOT NULL AND r.value_num IS NOT NULL
   GROUP BY 1
+),
+bal AS (
+  SELECT slot_start_utc AS slot,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'pv_total_w'), 0)
+           + coalesce(max(value_num) FILTER (WHERE series_key = 'grid_import_w'), 0)
+           - coalesce(max(value_num) FILTER (WHERE series_key = 'grid_export_w'), 0)
+           - coalesce(max(value_num) FILTER (WHERE series_key = 'load_power_w'), 0)
+           - coalesce(max(value_num) FILTER (WHERE series_key = 'battery_charge_w'), 0)
+           + coalesce(max(value_num) FILTER (WHERE series_key = 'battery_discharge_w'), 0) AS loss,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'battery_charge_w'), 0)
+           + coalesce(max(value_num) FILTER (WHERE series_key = 'battery_discharge_w'), 0) AS thr
+  FROM energy_slots_15m
+  WHERE source_kind = 'local_live'
+    AND slot_start_utc >= $1::timestamptz AND slot_start_utc < $2::timestamptz
+  GROUP BY 1
+),
+chk AS (
+  SELECT p.slot,
+         p.within AND p.biggest >= $7::float8
+           AND b.loss >= $8::float8 AND b.loss <= $9::float8 + $10::float8 * b.thr AS agrees
+  FROM pairs p JOIN bal b ON b.slot = p.slot
 ),
 x AS (
   SELECT e2.id, coalesce(c.cov, 0) AS cov, coalesce(c.n, 0) AS n, coalesce(c.maxres, 0) AS maxres,
@@ -125,13 +172,17 @@ WHERE e.id = x.id`;
 
 // Nur Reihen, die als Viertelstunde gespeichert werden (sonst liest der Job alle Rohreihen).
 export const COVERAGE_RAW_SERIES = Object.freeze([...MATERIALIZED_ENERGY_SERIES]);
-export const COVERAGE_UPDATE_PARAMS = (from, to) => [from, to, COVERAGE_AGREE_ABS_KWH, COVERAGE_AGREE_REL, COVERAGE_CHECK_SERIES, COVERAGE_RAW_SERIES];
+export const COVERAGE_UPDATE_PARAMS = (from, to) => [
+  from, to, COVERAGE_AGREE_ABS_KWH, COVERAGE_AGREE_REL, COVERAGE_CHECK_SERIES, COVERAGE_RAW_SERIES,
+  COVERAGE_INFORMATIVE_KWH, COVERAGE_BALANCE_MIN_KWH, COVERAGE_BALANCE_MAX_KWH, COVERAGE_BALANCE_MAX_REL
+];
 
 export function createCoverageBackfill({ getDb, pushLog, onDayUpdated = null, now = () => Date.now() } = {}) {
   let running = false;
   let queue = null;          // offene Tage, neueste zuerst
   let metaType = null;
   let doneAt = null;         // letzter Kontroll-Scan ohne offene Tage
+  let pauseUntil = 0;        // frühester nächster Tag (Laufzeit × COVERAGE_PAUSE_FACTOR)
   const log = (event, data) => { if (typeof pushLog === 'function') pushLog(event, data); };
 
   /** Ein Lauf = höchstens ein Tag. */
@@ -140,7 +191,9 @@ export function createCoverageBackfill({ getDb, pushLog, onDayUpdated = null, no
     const db = getDb?.();
     if (!db || typeof db.query !== 'function') return { skipped: 'no database' };
     if (doneAt != null && now() - doneAt < COVERAGE_RESCAN_MS) return { skipped: 'done' };
+    if (now() < pauseUntil) return { skipped: 'pause' };
     running = true;
+    const startedAt = now();
     try {
       if (!metaType) {
         const t = await db.query(META_TYPE_SQL);
@@ -161,6 +214,7 @@ export function createCoverageBackfill({ getDb, pushLog, onDayUpdated = null, no
       const to = new Date(Date.parse(from) + DAY_MS).toISOString();
       const res = await db.query(coverageUpdateSql(metaType), COVERAGE_UPDATE_PARAMS(from, to));
       const updated = Number(res.rowCount) || 0;
+      pauseUntil = now() + (now() - startedAt) * COVERAGE_PAUSE_FACTOR;
       // Prüfwert-Speicher der Historie verwerfen (sonst bis zu 6 h alte Quellwahl).
       if (updated > 0 && typeof onDayUpdated === 'function') {
         try { onDayUpdated(from); } catch { /* nur Zwischenspeicher */ }
