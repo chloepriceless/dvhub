@@ -457,6 +457,17 @@ public struct NewsItem: Hashable, Sendable, Identifiable, Codable {
     public var linkURL: URL? { Self.webURL(link) }
     public var imageURL: URL? { image.flatMap(Self.httpsURL) }
 
+    /// Systemsymbol statt eines Bildes („symbol:<Name>“) — so bebildert die Demo
+    /// ihre Beispielmeldungen, ohne etwas aus dem Netz zu laden. Nur Namen aus
+    /// Buchstaben, Ziffern und Punkten.
+    public var symbolName: String? {
+        guard let image, image.hasPrefix(Self.symbolPrefix) else { return nil }
+        let name = String(image.dropFirst(Self.symbolPrefix.count))
+        return !name.isEmpty && name.count <= 60 && name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == ".") }) ? name : nil
+    }
+
+    public static let symbolPrefix = "symbol:"
+
     static func httpsURL(_ s: String) -> URL? {
         guard let u = URL(string: s.trimmingCharacters(in: .whitespacesAndNewlines)), u.scheme?.lowercased() == "https", u.host?.isEmpty == false else { return nil }
         return u

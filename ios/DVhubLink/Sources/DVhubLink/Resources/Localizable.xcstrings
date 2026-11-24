@@ -21,6 +21,16 @@
         }
       }
     },
+    "Abendspitze: Wann sich Einspeisen aus dem Akku lohnt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Evening peak: when feeding in from the battery pays off"
+          }
+        }
+      }
+    },
     "Abgebrochen." : {
       "localizations" : {
         "en" : {
@@ -31,12 +41,72 @@
         }
       }
     },
+    "Akku (Laden +)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Battery (charging +)"
+          }
+        }
+      }
+    },
+    "Akku aus dem Netz laden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge battery from the grid"
+          }
+        }
+      }
+    },
+    "Akku ins Netz entladen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Discharge battery to the grid"
+          }
+        }
+      }
+    },
+    "Akku, Erzeugung, Netz und Tagesergebnis stehen als Widget bereit – in der Demo mit den Werten der Beispielanlage." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Battery, production, grid and the day’s result are available as widgets – in the demo with the sample system’s values."
+          }
+        }
+      }
+    },
     "Alles wieder normal" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Everything back to normal"
+          }
+        }
+      }
+    },
+    "Am frühen Abend ist Strom an der Börse am teuersten. Der Fahrplan zeigt, wie viel Akku dafür frei ist – und was für die Nacht bleiben muss." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Electricity is most expensive on the exchange in the early evening. The plan shows how much battery is free for that – and what has to stay for the night."
+          }
+        }
+      }
+    },
+    "An sonnigen Tagen fällt der Day-Ahead-Preis um die Mittagszeit unter null. Die Demo-Anlage lädt dann den Akku und setzt die Einspeisung aus – zu sehen im Markt und im Leitstand." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On sunny days the day-ahead price drops below zero around midday. The demo system then charges the battery and pauses feed-in – visible under Market and on the Dashboard."
           }
         }
       }
@@ -57,6 +127,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sign-in rejected. Please pair again."
+          }
+        }
+      }
+    },
+    "Balken zeigen, was die Einspeisung bringt, die Linie, was der Bezug kostet. Der Abstand ist die Spanne, mit der ein Akku arbeiten kann." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bars show what feed-in earns, the line what import costs. The gap is the spread a battery can work with."
           }
         }
       }
@@ -97,6 +177,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Start and end must not be the same."
+          }
+        }
+      }
+    },
+    "Beispiel · Markt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Example · Market"
+          }
+        }
+      }
+    },
+    "Beispiel · Praxis" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Example · Practice"
+          }
+        }
+      }
+    },
+    "Beispiel · Technik" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Example · Tech"
           }
         }
       }
@@ -341,6 +451,56 @@
         }
       }
     },
+    "Dynamischer Tarif: Einspeisung und Bezug in einem Bild" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dynamic tariff: feed-in and import in one chart"
+          }
+        }
+      }
+    },
+    "E-Auto" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Electric car"
+          }
+        }
+      }
+    },
+    "E-Auto laden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Charge electric car"
+          }
+        }
+      }
+    },
+    "E-Auto: Mindest-Ladestand zur Abfahrt, der Rest wenn es günstig ist" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Electric car: minimum charge by departure, the rest when it is cheap"
+          }
+        }
+      }
+    },
+    "Einspeisung aussetzen (negativer Preis)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pause feed-in (negative price)"
+          }
+        }
+      }
+    },
     "Entschlüsselung fehlgeschlagen" : {
       "localizations" : {
         "en" : {
@@ -451,12 +611,42 @@
         }
       }
     },
+    "Hausverbrauch" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "House consumption"
+          }
+        }
+      }
+    },
+    "Heizstab Warmwasser" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hot water heating element"
+          }
+        }
+      }
+    },
     "Heute" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Today"
+          }
+        }
+      }
+    },
+    "Historie lesen: Autarkie, Eigenverbrauch und das Ergebnis des Tages" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading the history: self-sufficiency, self-consumption and the day’s result"
           }
         }
       }
@@ -521,6 +711,16 @@
         }
       }
     },
+    "Ladestand" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "State of charge"
+          }
+        }
+      }
+    },
     "Lädt jetzt mit %@ kW." : {
       "localizations" : {
         "en" : {
@@ -541,6 +741,46 @@
         }
       }
     },
+    "Mindest-Ladestand" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minimum state of charge"
+          }
+        }
+      }
+    },
+    "Mit Wochenplan und Einmal-Ziel plant DVhub das Laden um Preise und Sonne herum. „Sofort laden“ geht jederzeit und ist im Energiefluss sofort zu sehen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "With the weekly plan and a one-time target, DVhub plans charging around prices and sun. “Charge now” works at any time and shows up in the energy flow right away."
+          }
+        }
+      }
+    },
+    "Netz" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grid"
+          }
+        }
+      }
+    },
+    "Netz-Sollwert" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grid setpoint"
+          }
+        }
+      }
+    },
     "Not-Halt aktiv" : {
       "localizations" : {
         "en" : {
@@ -551,12 +791,32 @@
         }
       }
     },
+    "Not-Halt in zwei Schritten: So bleibt die Anlage in der Hand" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emergency stop in two steps: staying in control of the system"
+          }
+        }
+      }
+    },
     "Not-Halt ist aktiv, aber der Wechselrichter konnte nicht auf 0 W gesetzt werden%@. Der letzte Sollwert kann noch wirken — bitte an der Anlage prüfen." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Emergency stop is active, but the inverter could not be set to 0 W%@. The last setpoint may still be in effect — please check at the system."
+          }
+        }
+      }
+    },
+    "PV gesamt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PV total"
           }
         }
       }
@@ -591,6 +851,16 @@
         }
       }
     },
+    "Residuallast: Was die Ampel der nächsten Tage sagt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Residual load: what the traffic light says about the coming days"
+          }
+        }
+      }
+    },
     "Schlüsselbund-Fehler %@" : {
       "localizations" : {
         "en" : {
@@ -607,6 +877,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Charge now is running."
+          }
+        }
+      }
+    },
+    "Sonniger Mittag drückt den Börsenpreis ins Minus" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sunny midday pushes the exchange price below zero"
+          }
+        }
+      }
+    },
+    "Tag, Woche, Monat und Jahr zeigen, woher der Strom kam, wohin der Solarstrom ging und was die Anlage verdient oder gekostet hat." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Day, week, month and year show where the electricity came from, where the solar power went and what the system earned or cost."
           }
         }
       }
@@ -661,6 +951,16 @@
         }
       }
     },
+    "Unter Mehr → Steuern hält DVhub alle eigenen Vorgaben an. In der Demo lässt sich das gefahrlos ausprobieren: Geschaltet wird nichts." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Under More → Control, DVhub halts all of its own setpoints. In the demo you can try this safely: nothing is switched."
+          }
+        }
+      }
+    },
     "Unter der gespeicherten Adresse antwortet eine andere Anlage." : {
       "localizations" : {
         "en" : {
@@ -707,6 +1007,56 @@
         }
       }
     },
+    "Vorzeichen: + = Bezug" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign: + = import"
+          }
+        }
+      }
+    },
+    "Wallbox" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wallbox"
+          }
+        }
+      }
+    },
+    "Wenig Wind und wenig Sonne machen Strom teuer. Die Tageskarten im Markt zeigen, wo das Tagesmittel im üblichen Bereich der letzten vier Wochen liegt." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Little wind and little sun make electricity expensive. The day cards under Market show where the daily mean sits within the usual range of the past four weeks."
+          }
+        }
+      }
+    },
+    "Widgets und Sperrbildschirm: Akkustand auf einen Blick" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Widgets and Lock Screen: battery level at a glance"
+          }
+        }
+      }
+    },
+    "Wärmepumpe" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Heat pump"
+          }
+        }
+      }
+    },
     "Zeitüberschreitung" : {
       "localizations" : {
         "en" : {
@@ -737,6 +1087,26 @@
         }
       }
     },
+    "berechnet aus der Energiebilanz" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "calculated from the energy balance"
+          }
+        }
+      }
+    },
+    "bereit" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ready"
+          }
+        }
+      }
+    },
     "günstig" : {
       "localizations" : {
         "en" : {
@@ -747,12 +1117,32 @@
         }
       }
     },
+    "kein Fahrzeug" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no vehicle"
+          }
+        }
+      }
+    },
     "keine Antwort" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "no response"
+          }
+        }
+      }
+    },
+    "lädt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "charging"
           }
         }
       }

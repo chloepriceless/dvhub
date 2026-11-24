@@ -18,7 +18,7 @@ mkdir -p "$TMP/pkg" "$TMP/app" "$TMP/wid" "$TMP/obj"
 # Paket: Modul für die App-Übersetzung und Texte des Pakets.
 printf 'import Foundation\nextension Bundle { static var module: Bundle { .main } }\n' > "$TMP/BundleModule.swift"
 (cd "$TMP/obj" && xcrun swiftc "${FLAGS[@]}" -emit-localized-strings-path "$TMP/pkg" -parse-as-library -module-name DVhubLink \
-  -emit-module -emit-module-path "$TMP/DVhubLink.swiftmodule" -c "$OLDPWD"/DVhubLink/Sources/DVhubLink/*.swift "$TMP/BundleModule.swift")
+  -emit-module -emit-module-path "$TMP/DVhubLink.swiftmodule" -c $(find "$OLDPWD/DVhubLink/Sources/DVhubLink" -name '*.swift') "$TMP/BundleModule.swift")
 rm -f "$TMP/pkg/BundleModule.stringsdata"
 
 # App und Widget-Erweiterung (Shared/ gehört beiden).
