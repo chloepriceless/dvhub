@@ -274,8 +274,18 @@ public struct HistorySummary: Equatable, Sendable {
     public let rows: [HistoryRow]
     /// Tagesansicht: Preise je Viertelstunde (Börse, eigener Bezug).
     public let dayPrices: [HistoryRow]
+    /// Zeitraum der Antwort (`range.start`/`range.end` der Box, Tag der Box in ihrer Zeitzone — 23 bis 25 Stunden).
+    public var rangeStart: Date? = nil
+    public var rangeEnd: Date? = nil
 
     public func kpi(_ k: String) -> Double? { kpis[k] }
+
+    /// Grenzen eines Tagesdiagramms, wie die Box den Tag rechnet (Codex Integration 24.11.): nicht 86 400 s ab
+    /// Mitternacht des Telefons — Sommer-/Winterzeit-Tage und ein Telefon in anderer Zeitzone lägen sonst daneben.
+    public var dayDomain: ClosedRange<Date>? {
+        guard let a = rangeStart, let b = rangeEnd, b > a else { return nil }
+        return a...b
+    }
 
     /// Bezugskosten wie in der Web-Historie: gridCostEur, sonst importCostEur.
     public var importCostEur: Double { kpis["gridCostEur"] ?? kpis["importCostEur"] ?? 0 }
@@ -318,7 +328,9 @@ public struct HistorySummary: Equatable, Sendable {
                 return HistoryRow(key: key, label: r["label"]?.string ?? key, date: localDate(key), values: numbers(o))
             }
         }
-        return HistorySummary(view: view, date: date, kpis: kpis, rows: rows, dayPrices: prices)
+        return HistorySummary(view: view, date: date, kpis: kpis, rows: rows, dayPrices: prices,
+                              rangeStart: parseISODate(v["range"]?["start"]?.string),
+                              rangeEnd: parseISODate(v["range"]?["end"]?.string))
     }
 
     static func slotRow(_ r: JSONValue) -> HistoryRow? {

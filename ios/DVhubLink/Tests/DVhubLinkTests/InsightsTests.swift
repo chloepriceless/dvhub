@@ -119,6 +119,23 @@ final class InsightsTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(s.selfUsePct), 50, accuracy: 1e-9)
     }
 
+    /// Codex Integration 24.11.: Der Tag der Box (Europe/Berlin) kann 23 oder 25 Stunden haben und muss nicht der Tag
+    /// des Telefons sein — die Diagramme nehmen die Grenzen aus `range` der Antwort.
+    func testHistoryDayRangeFromResponseCoversTwentyFiveHourDay() throws {
+        let body: JSONValue = [
+            "kpis": ["pvKwh": 1],
+            "range": ["startDate": "2026-10-25", "endDateExclusive": "2026-10-26",
+                      "start": "2026-10-24T22:00:00.000Z", "end": "2026-10-25T23:00:00.000Z"],
+            "charts": ["dayEnergyLines": []],
+        ]
+        let s = try XCTUnwrap(HistorySummary.from(body, view: .day, date: "2026-10-25"))
+        let d = try XCTUnwrap(s.dayDomain)
+        XCTAssertEqual(d.lowerBound, parseISODate("2026-10-24T22:00:00.000Z"))
+        XCTAssertEqual(d.upperBound.timeIntervalSince(d.lowerBound), 25 * 3600)
+        let none = try XCTUnwrap(HistorySummary.from(["kpis": ["pvKwh": 1]], view: .day, date: "2026-10-25"))
+        XCTAssertNil(none.dayDomain, "ohne range: die App rechnet selbst")
+    }
+
     func testHistoryPeriodRowsUseLocalDates() throws {
         let body: JSONValue = [
             "kpis": ["pvKwh": 300, "importCostEur": 12.5, "exportRevenueEur": 20],

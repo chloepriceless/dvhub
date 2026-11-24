@@ -205,8 +205,10 @@ struct HistoryView: View {
             message = m
         }
         if want.period == .day {
-            let start = Calendar.current.startOfDay(for: date)
-            let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start
+            // Tag wie die Box ihn rechnet (range der Antwort), sonst der Kalendertag des Telefons (Codex Integration 24.11.).
+            let fallbackStart = Calendar.current.startOfDay(for: date)
+            let start = summary?.dayDomain?.lowerBound ?? fallbackStart
+            let end = summary?.dayDomain?.upperBound ?? (Calendar.current.date(byAdding: .day, value: 1, to: fallbackStart) ?? fallbackStart)
             if case .success(let pts) = await BoxData.series(controller, keys: [BoxData.socKey], start: start, end: end), want == key {
                 soc = pts
             } else if want == key {
@@ -272,17 +274,17 @@ struct HistoryView: View {
         let prices = priceLines(s)
         if wide {
             HStack(alignment: .top, spacing: 14) {
-                SlotChartCard(title: String(localized: "Leistung"), unit: "kW", tint: Brand.pv, lines: power, day: date)
+                SlotChartCard(title: String(localized: "Leistung"), unit: "kW", tint: Brand.pv, lines: power, day: date, domain: s.dayDomain)
                 SlotChartCard(title: String(localized: "Ladestand"), unit: "%", tint: Brand.battery, range: 0...100,
-                              lines: [.init(name: "SoC", color: Brand.battery, points: soc.map { ($0.date, $0.value) }, area: true)], day: date)
+                              lines: [.init(name: "SoC", color: Brand.battery, points: soc.map { ($0.date, $0.value) }, area: true)], day: date, domain: s.dayDomain)
             }
         } else {
-            SlotChartCard(title: String(localized: "Leistung"), unit: "kW", tint: Brand.pv, lines: power, day: date)
+            SlotChartCard(title: String(localized: "Leistung"), unit: "kW", tint: Brand.pv, lines: power, day: date, domain: s.dayDomain)
             SlotChartCard(title: String(localized: "Ladestand"), unit: "%", tint: Brand.battery, range: 0...100,
-                          lines: [.init(name: "SoC", color: Brand.battery, points: soc.map { ($0.date, $0.value) }, area: true)], day: date)
+                          lines: [.init(name: "SoC", color: Brand.battery, points: soc.map { ($0.date, $0.value) }, area: true)], day: date, domain: s.dayDomain)
         }
         if !prices.isEmpty {
-            SlotChartCard(title: String(localized: "Preise"), unit: "ct/kWh", tint: Brand.blue, lines: prices, day: date, step: true)
+            SlotChartCard(title: String(localized: "Preise"), unit: "ct/kWh", tint: Brand.blue, lines: prices, day: date, step: true, domain: s.dayDomain)
         }
         if s.rows.contains(where: { $0.values["netEur"] != nil }) { NetCurveCard(rows: s.rows) }
     }
@@ -524,6 +526,8 @@ struct SlotChartCard: View {
     let lines: [Line]
     let day: Date
     var step = false
+    /// Zeitachse des Tages aus der Antwort der Box (`HistorySummary.dayDomain`); nil: Kalendertag des Telefons.
+    var domain: ClosedRange<Date>? = nil
     @State private var selection: Date?
 
     var body: some View {
@@ -581,7 +585,8 @@ struct SlotChartCard: View {
             }
         }
         .chartXSelection(value: $selection)
-        .chartXScale(domain: start...start.addingTimeInterval(86400))
+        // 23/25-Stunden-Tage: Ende ist der nächste Kalendertag, nicht start + 86 400 s.
+        .chartXScale(domain: domain ?? start...(Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86400)))
         .modifier(YDomain(range: range))
         .chartXAxis { DayHourAxis() }
         .chartYAxis { PlainYAxis() }
