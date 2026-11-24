@@ -356,8 +356,14 @@ export function createStorageGuard({
     const { effective: _e, effectiveAt: _a, ...core } = base || {};
     void _e; void _a;
     const st = chooseProfile(base ? core : null, choice, { sizeProfile, nowIso: new Date(now()).toISOString() });
+    // Erst speichern, dann übernehmen: lässt sich die Wahl nicht sichern (Platte voll/schreibgeschützt), käme nach
+    // einem Neustart still das alte Profil samt Löschregel zurück (Codex Integration 24.11.). Ohne Datenverzeichnis
+    // (Tests) wie bisher nur im Speicher.
+    if (dataDir && !writeProfileState(dataDir, { ...st, effective: lastEffective, effectiveAt: null }, profileIo)) {
+      log('storage_profile_save_error', { choice }, 'error');
+      throw new Error('Speicherprofil nicht gespeichert (Datenverzeichnis nicht beschreibbar)');
+    }
     profileState = st;
-    writeProfileState(dataDir, { ...st, effective: lastEffective, effectiveAt: null }, profileIo);
     log('storage_profile_chosen', { choice, base: st.base, mode: st.mode }, 'info');
     // Sofort im Status (und damit im Worker-Schnappschuss) zeigen.
     const dec = withCompressionFloor(decideProfile({ state: st, sizeProfile, stage: last?.level || 'ok', nowIso: new Date(now()).toISOString() }));

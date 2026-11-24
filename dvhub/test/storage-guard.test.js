@@ -753,3 +753,15 @@ test('Platz extern zurück (Kompressions-Job): alte Stufe löscht nicht', async 
   assert.ok(!r.actions.some((a) => a.action === 'drop_raw'), JSON.stringify(r.actions));
   assert.ok(!r.actions.some((a) => a.action === 'emergency_raw' && a.day), 'auch der Notfall-Pfad nicht');
 });
+
+// Codex Integration 24.11. (P2): lässt sich die Profilwahl nicht speichern (Platte voll/schreibgeschützt), darf sie
+// nicht als übernommen gelten — nach einem Neustart käme sonst still das alte Profil (samt Löschregel) zurück.
+test('Profilwahl: Speichern scheitert → Fehler, Wahl nicht übernommen', async () => {
+  const db = fakeDb({ oldestDays: 500 });
+  const g = createStorageGuard({ getDb: () => db, statfs: stat(60), getDataDir: () => '/d', initialProfile: 'winzig',
+    profileIo: { writeFile() { throw new Error('ENOSPC'); }, rename() {} } });
+  await g.check();
+  const before = g.profile();
+  assert.throws(() => g.chooseProfile('gross'), /nicht gespeichert|profile_not_saved/);
+  assert.deepEqual(g.profile(), before, 'Profil unverändert');
+});
