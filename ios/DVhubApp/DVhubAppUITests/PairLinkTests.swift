@@ -13,6 +13,7 @@ final class PairLinkTests: XCTestCase {
         let app = XCUIApplication()
         // Die Tests suchen deutsche Beschriftungen — unabhängig von der Sprache des Simulators.
         app.launchArguments += ["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"]
+        app.launchArguments += Demo.off
         app.launch()
         app.open(url)
 

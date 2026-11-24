@@ -819,18 +819,19 @@ final class RunCache: @unchecked Sendable {
 }
 
 extension DemoPlant.State {
-    private struct Start: Decodable { let startedAt: Date }
+    /// Felder, die nach dem ersten gespeicherten Stand dazukamen — mit dem Wert, den sie in einem
+    /// Zustand von damals haben. Nur diese werden ergänzt: Ein fehlender Wert eines Feldes, das
+    /// leer sein darf (Höchststand „wenn günstig“ aus, kein Einmal-Ziel), bleibt leer.
+    private static let addedLater: [String: JSONValue] = ["evExtraPct": 0]
 
-    /// Gespeicherten Zustand lesen — auch einen, den ein älterer Stand der App geschrieben hat:
-    /// Felder, die es damals noch nicht gab, bekommen den Wert einer frischen Demo; was bedient
-    /// wurde, bleibt. nil nur, wenn die Daten gar kein Zustand der Demo sind.
+    /// Gespeicherten Zustand lesen — auch einen, den ein älterer Stand der App geschrieben hat
+    /// (`addedLater`). Was bedient wurde, bleibt. nil nur, wenn die Daten kein Zustand der Demo sind.
     public static func restore(_ data: Data) -> DemoPlant.State? {
         if let state = try? JSONDecoder().decode(Self.self, from: data) { return state }
-        guard var stored = (try? JSONValue.decode(data))?.object, let start = try? JSONDecoder().decode(Start.self, from: data),
-              let fresh = (try? JSONEncoder().encode(DemoPlant.State(startedAt: start.startedAt))).flatMap({ try? JSONValue.decode($0) })?.object
-        else { return nil }
-        for (key, value) in fresh where stored[key] == nil { stored[key] = value }
+        guard var stored = (try? JSONValue.decode(data))?.object else { return nil }
+        for (key, value) in addedLater where stored[key] == nil { stored[key] = value }
         if var override = stored["evOverride"]?.object {
+            // „Sofort laden“ von damals: noch nichts verbucht, gezählt wird ab seinem Beginn.
             if override["chargedPct"] == nil { override["chargedPct"] = 0 }
             if override["accountedAt"] == nil { override["accountedAt"] = override["startedAt"] ?? .null }
             stored["evOverride"] = .object(override)

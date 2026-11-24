@@ -13,6 +13,7 @@ final class NavigationTests: XCTestCase {
         if let qr = ProcessInfo.processInfo.environment["DVHUB_QR"], !qr.isEmpty { app.launchArguments += ["-DVHUB_PAIR", qr] }
         app.launchArguments += args
         XCUIDevice.shared.orientation = .portrait
+        app.launchArguments += Demo.off
         app.launch()
         let state = app.descendants(matching: .any)["connectionState"].firstMatch
         guard state.waitForExistence(timeout: 20) else { throw XCTSkip("Keine gekoppelte Anlage") }

@@ -671,6 +671,9 @@ final class DemoPlantTests: XCTestCase {
         _ = post(&p, "/api/control/stop", [:])
         _ = post(&p, "/api/ev/override", try XCTUnwrap(EVEdit.stopCharging(durationMin: nil)))
         _ = post(&p, "/api/schedule/config", ["defaultGridSetpointW": -120])
+        // „Weiter laden, wenn es günstig ist“ ausgeschaltet: Der Wert fehlt dann im gespeicherten Zustand.
+        _ = post(&p, "/api/ev", try XCTUnwrap(EVEdit.maxSoc(nil)))
+        XCTAssertNil(p.state.evMaxSocPct)
         // So hat ein früherer Stand gespeichert: ohne die Felder, die später dazukamen.
         var old = try XCTUnwrap(JSONValue.decode(JSONEncoder().encode(p.state)).object)
         old["evExtraPct"] = nil
@@ -688,6 +691,8 @@ final class DemoPlantTests: XCTestCase {
         XCTAssertEqual(restored.evOverride?.kind, "stop")
         XCTAssertEqual(restored.evOverride?.accountedAt, restored.evOverride?.startedAt)
         XCTAssertEqual(restored.evExtraPct, 0)
+        XCTAssertNil(restored.evMaxSocPct, "Ausgeschaltetes bleibt aus — ein fehlender Wert ist kein neues Feld")
+        XCTAssertNil(restored.evOnce)
         // Der heutige Stand liest sich unverändert, Unlesbares gar nicht.
         XCTAssertEqual(DemoPlant.State.restore(try JSONEncoder().encode(p.state)), saved)
         XCTAssertNil(DemoPlant.State.restore(Data("kaputt".utf8)))

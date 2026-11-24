@@ -13,6 +13,7 @@ final class ControlTests: XCTestCase {
         // Die Tests suchen deutsche Beschriftungen — unabhängig von der Sprache des Simulators.
         app.launchArguments += ["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"]
         app.launchArguments += ["-DVHUB_TAB", "control"]
+        app.launchArguments += Demo.off
         app.launch()
         let stop = app.buttons["Not-Halt auslösen"].firstMatch
         guard stop.waitForExistence(timeout: 30) else { throw XCTSkip("Keine gekoppelte Anlage mit Recht „Steuern“") }

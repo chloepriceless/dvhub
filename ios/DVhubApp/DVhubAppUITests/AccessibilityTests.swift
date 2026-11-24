@@ -18,6 +18,7 @@ final class AccessibilityTests: XCTestCase {
                                 "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"]
         if let qr = ProcessInfo.processInfo.environment["DVHUB_QR"], !qr.isEmpty { app.launchArguments += ["-DVHUB_PAIR", qr] }
         XCUIDevice.shared.orientation = .portrait
+        app.launchArguments += Demo.off
         app.launch()
         let state = app.descendants(matching: .any)["connectionState"].firstMatch
         guard state.waitForExistence(timeout: 30) else { throw XCTSkip("Keine gekoppelte Anlage") }
