@@ -216,7 +216,10 @@ export const PEAK_BILLING_MONTHS_SQL = `
              SUM(imp) AS energy_kwh,
              MAX(imp) AS peak_kwh,
              (ARRAY_AGG(slot_start_utc ORDER BY imp DESC, slot_start_utc ASC))[1] AS peak_slot,
-             MAX(imp + COALESCE(dis, 0)) FILTER (WHERE dis IS NOT NULL) AS uncapped_kwh,
+             -- Fehlender Akku-Wert zählt als 0 (Untergrenze): sonst läge die Spitze „ohne Akku“ unter der gemessenen,
+             -- wenn gerade die Spitzen-Viertelstunde keinen Akku-Wert hat (Codex Integration 24.11.). Ganz ohne
+             -- Akku-Werte bleibt sie unbekannt.
+             CASE WHEN COUNT(dis) > 0 THEN MAX(imp + COALESCE(dis, 0)) END AS uncapped_kwh,
              COUNT(*) AS slots,
              COUNT(dis) AS battery_slots
       FROM j

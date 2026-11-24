@@ -58,6 +58,20 @@ describe('getPeakBillingMonths gegen echtes PostgreSQL', { skip: !DATABASE_URL }
   });
   after(async () => { await client?.query('DROP SCHEMA IF EXISTS ps_billing_test CASCADE'); await client?.end(); });
 
+  // Codex Integration 24.11. (P2): fehlt der Akku-Wert in der Spitzen-Viertelstunde, darf die Spitze „ohne Akku“
+  // nicht unter der gemessenen Spitze liegen (fehlender Akku-Wert zählt als 0 = Untergrenze).
+  test('Spitze ohne Akku nie kleiner als die gemessene Spitze, auch ohne Akku-Wert in der Spitzen-Viertelstunde', async () => {
+    await client.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, unit)
+      VALUES ('2027-03-10T10:00:00Z', 'grid_import_w', 'local_live', 'raw_derived', 2.5, 'kWh'),
+             ('2027-03-10T11:00:00Z', 'grid_import_w', 'local_live', 'raw_derived', 1, 'kWh'),
+             ('2027-03-10T11:00:00Z', 'battery_discharge_w', 'local_live', 'raw_derived', 0.25, 'kWh')`);
+    const store = createTelemetryStorePg({ query: (t, p) => client.query(t, p), connect: async () => client });
+    const rows = await store.getPeakBillingMonths({ start: '2027-02-28T23:00:00Z', end: '2027-03-31T22:00:00Z', timeZone: 'Europe/Berlin' });
+    assert.equal(rows[0].peakW, 10000);
+    assert.equal(rows[0].uncappedPeakW, 10000, 'nicht 5 000 W aus der Viertelstunde mit Akku-Wert');
+    assert.equal(rows[0].batterySlots, 1);
+  });
+
   test('Monate in Ortszeit, größere Quelle je Viertelstunde, Spitze ohne Akku', async () => {
     const store = createTelemetryStorePg({ query: (t, p) => client.query(t, p), connect: async () => client });
     const rows = await store.getPeakBillingMonths({ start: '2025-12-31T23:00:00Z', end: '2026-12-31T23:00:00Z', timeZone: 'Europe/Berlin' });
