@@ -278,3 +278,21 @@ test('Codex e5a25ac1: Status zeigt die gesetzte Grenze, ein gedrosselter neuer W
   assert.equal(m.state.ctrl._peakShaving.builtin.targetW, null, 'reine Betriebsart: keine Watt-Grenze behaupten');
   assert.equal(m.state.ctrl._peakShaving.builtin.modeSet, true);
 });
+
+test('Codex 65c52509: Neustart in der Sperrzeit zeigt die gelesene Grenze und pending; kleine Änderung ist belowStep', async () => {
+  const first = rig('deye-lv', PS({ enabled: true }), { 191: 4200 });
+  await first.act.tick();
+  first.cfg.peakShaving.gridImportLimitW = 5000;
+  const state2 = { ctrl: {} };
+  const act2 = createBuiltinPeakShaving({ state: state2, getCfg: () => first.cfg, transport: first.transport,
+    gate: createLegacyGate({ isHalted: () => false, isReadOnly: () => false }), statePath: path.join(first.rootDir, 'ps-builtin.json') });
+  await act2.tick();
+  assert.equal(state2.ctrl._peakShaving.builtin.targetW, 9700);
+  assert.equal(state2.ctrl._peakShaving.builtin.pending, true);
+  const small = rig('deye-lv', PS({ enabled: true }), { 191: 4200 });
+  await small.act.tick();
+  small.cfg.peakShaving.gridImportLimitW = 10200;
+  await small.act.tick();
+  assert.equal(small.state.ctrl._peakShaving.builtin.pending, false);
+  assert.equal(small.state.ctrl._peakShaving.builtin.belowStep, true);
+});

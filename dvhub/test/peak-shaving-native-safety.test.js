@@ -78,3 +78,15 @@ test('Codex e5a25ac1: Sungrow — Boden gegen den echten Ladestand (Fenster 10�
   createPeakShaving({ state, getCfg: () => cfg, pushLog: () => {}, batteryAssist: assist }).pollTick();
   assert.equal(assist.live.has('peak-shaving'), true, JSON.stringify(state.ctrl._peakShaving?.assist));
 });
+
+test('Codex 65c52509: Sungrow — Geräte-Minimum zählt als Boden (Fenster 30–100 %, gemeldet 0 % = echt 30 %)', () => {
+  // Echter Ladestand 30 % liegt auf dem Geräte-Minimum (über dem harten Boden 5 %) → keine Anforderung.
+  const cfg = { ...CFG, manufacturer: 'sungrow', victron: { transport: 'modbus' }, peakShaving: { ...CFG.peakShaving, minSocPct: null },
+    controlWrite: { gridSetpointW: { enabled: true, emulate: 'sungrow-ems' } } };
+  const state = makeState({ soc: 0 });
+  state.victron.device = { minSocPctDevice: 30, maxSocPctDevice: 100 };
+  const assist = fakeAssist();
+  createPeakShaving({ state, getCfg: () => cfg, pushLog: () => {}, batteryAssist: assist }).pollTick();
+  assert.equal(assist.live.has('peak-shaving'), false);
+  assert.equal(state.ctrl._peakShaving.assist.reason, 'soc_floor');
+});

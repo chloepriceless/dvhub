@@ -36,6 +36,7 @@ import { capPositiveSetpoint, meterImport } from '../import-limit/core.js';
 import { monoNow as defaultMonoNow } from '../mono-clock.js';
 import { resolveBatteryLever } from '../grid-connection/index.js';
 import { floorSocPct } from '../multi-gx/planning.js';
+import { sungrowDischargeFloorPct, sungrowSocFloorBufferPct } from '../inverter/sungrow.js';
 import { createBudgetState, observeBudget, decideBudget, quarterHourSlot } from './budget.js';
 import { resolveTariff, computeYearBilling } from './billing.js';
 
@@ -176,7 +177,9 @@ export function peakShavingTelemetry(state, cfg, resolved, now = Date.now()) {
     const age = fieldAgeMs(state, field, now);
     return age !== null && age <= maxAgeMs && !v.errors?.[field];
   };
-  const floorPct = Math.max(Number(cfg?.optimizer?.hardFloorSocPct ?? 5) || 0, Number(resolved?.minSocPct ?? 0) || 0);
+  // extraFloorPct: herstellerabhängiger Boden (Sungrow: Geräte-Minimum + Puffer, als echter SoC).
+  const floorPct = Math.max(Number(cfg?.optimizer?.hardFloorSocPct ?? 5) || 0, Number(resolved?.minSocPct ?? 0) || 0,
+    Number(resolved?.extraFloorPct ?? 0) || 0);
   const socRaw = v.soc;
   const soc = Number(socRaw);
   const socKnown = socRaw != null && socRaw !== '' && Number.isFinite(soc) && fresh('soc');
@@ -611,8 +614,21 @@ export function createPeakShaving(ctx, deps = {}) {
     return { ...st, victron: { ...st.victron, soc: Number(real) } };
   }
 
+  // Sungrow: Boden = max(harter Boden, Geräte-Minimum + Puffer) wie der Sungrow-Aktor
+  // (sungrowDischargeFloorPct) — sonst zählte das Budget Energie unter dem
+  // Geräte-Minimum als nutzbar (Codex 65c52509 P1).
+  function withDeviceFloor(c, r) {
+    if (String(c?.manufacturer || '') !== 'sungrow') return r;
+    const dev = ctx.state?.victron?.device || {};
+    let extra;
+    try {
+      extra = sungrowDischargeFloorPct(Number(c?.optimizer?.hardFloorSocPct ?? 5), dev.minSocPctDevice, sungrowSocFloorBufferPct(c));
+    } catch { extra = null; }
+    return Number.isFinite(Number(extra)) ? { ...r, extraFloorPct: Number(extra) } : r;
+  }
+
   function budgetBattery(c, r, t) {
-    const tel = peakShavingTelemetry(realSocState(c), c, r, t);
+    const tel = peakShavingTelemetry(realSocState(c), c, withDeviceFloor(c, r), t);
     return { tel, battery: budgetBatteryInput(c, tel, { liveLimitW: liveDischargeLimitW(c, t) }) };
   }
 
@@ -682,7 +698,7 @@ export function createPeakShaving(ctx, deps = {}) {
     // prüft beim Sollwert-Deckel keinen Ladestand und bei der Entladegrenze nur
     // seine eigenen Böden. Ladestand unbekannt, veraltet, eingefroren oder am
     // Boden (inkl. peakShaving.minSocPct) → keine Anforderung, eine stehende zurück.
-    const tel = peakShavingTelemetry(realSocState(c || cfg()), c || cfg(), ctl, t);
+    const tel = peakShavingTelemetry(realSocState(c || cfg()), c || cfg(), withDeviceFloor(c || cfg(), ctl), t);
     const res = tel.socOk
       ? (assist.request({ source: ASSIST_SOURCE, maxImportW: Math.max(0, Math.round(ctl.targetW)), untilMs: t + 30_000 }) || {})
       : { ok: false, reason: tel.socReason || 'soc_unknown' };

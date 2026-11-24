@@ -93,6 +93,7 @@ export function createBuiltinPeakShaving({
 }) {
   let saved = null;      // { limitRaw, modeRaw, at, identity, lastWriteWall } — Ist-Werte vor DVhub
   let last = { limit: null, mode: null, reserve: null };   // zuletzt geschriebene bzw. bestätigte Rohwerte
+  let observedLimit = null;   // im Gerät gelesene Grenze (roh), auch wenn sie (noch) nicht dem Ziel entspricht
   const lastAt = { limit: -Infinity, mode: -Infinity, reserve: -Infinity };
   let logKey = null;
   let runSeq = 0;
@@ -204,6 +205,7 @@ export function createBuiltinPeakShaving({
     pushLog('peak_shaving_builtin_restored', { limitRaw: saved.limitRaw, modeRaw: saved.modeRaw, text: 'Peak Shaving: eingebaute Funktion des Wechselrichters zurückgenommen (Wert vor DVhub).' });
     saved = null;
     last = { limit: null, mode: null, reserve: null };
+    observedLimit = null;
     persist();
   }
 
@@ -256,6 +258,7 @@ export function createBuiltinPeakShaving({
       // Erster Abgleich in diesem Prozess: steht der Wert schon im Gerät, kein Flash-Write (Codex e5a25ac1 P2).
       if (last.limit == null && desired !== last.limit) {
         const cur = justRead ? justRead.limit : await read(cfg, spec.limit);
+        observedLimit = cur;
         if (cur === desired) last.limit = desired;
       }
       const changedW = last.limit == null ? Infinity : Math.abs(desired - last.limit) * scale;
@@ -288,9 +291,16 @@ export function createBuiltinPeakShaving({
     }
     // Angezeigt wird, was im Gerät steht: die gesetzte Grenze (null bei reinen Betriebsart-Profilen, deren Grenze
     // am Gerät eingestellt wird), ein noch wartender neuer Wert als pending (Codex e5a25ac1 P2).
-    if (spec.limit && last.limit != null) {
-      info.targetW = last.limit * scale;
-      info.pending = Number.isFinite(target) && encodeLimit(spec.limit, target).raw !== last.limit;
+    // Gerätewert: zuletzt geschrieben bzw. bestätigt, sonst die gelesene Grenze (Neustart in der Sperrzeit,
+    // Codex 65c52509 P2). pending nur für einen Wert, der wirklich noch geschrieben wird (≥ 500 W Unterschied);
+    // kleinere Änderungen sind belowStep (Codex 65c52509 P3).
+    const shown = last.limit ?? observedLimit;
+    if (spec.limit && shown != null) {
+      info.targetW = shown * scale;
+      const want = Number.isFinite(target) ? encodeLimit(spec.limit, target).raw : shown;
+      const diffW = Math.abs(want - shown) * scale;
+      info.pending = want !== shown && (last.limit == null || diffW >= BUILTIN_LIMIT_STEP_W);
+      info.belowStep = want !== shown && !info.pending;
     }
     info.modeSet = spec.mode ? last.mode != null : null;
     publish(info);
