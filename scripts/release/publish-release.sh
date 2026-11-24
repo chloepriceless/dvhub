@@ -292,8 +292,8 @@ if [[ "$DRY" -eq 1 ]]; then
   echo "[dry-run] gh release upload $RTAG -R $GH_REPO --clobber ${ASSETS[*]##*/}"
   for v in "${STALE[@]+"${STALE[@]}"}"; do echo "[dry-run] gh release delete-asset dev dvhub-$v-<arch>.* -R $GH_REPO -y"; done
   echo "[dry-run] gh release view channels -R $GH_REPO || gh release create channels -R $GH_REPO --prerelease --title 'Kanal-Index'"
-  for spec in "${INDEXES[@]}"; do
-    IFS='|' read -r name _ <<< "$spec"
+  for (( i = ${#INDEXES[@]} - 1; i >= 0; i-- )); do   # gleiche Reihenfolge wie unten (Brücke: v2 zuerst)
+    IFS='|' read -r name _ <<< "${INDEXES[$i]}"
     echo "[dry-run] gh release upload channels -R $GH_REPO --clobber $name.sig.new $name.new"
     echo "[dry-run] umbenennen (gh api PATCH …/releases/assets/<id>): $name.sig.new → .sig, dann $name.new → $name"
   done
@@ -360,6 +360,9 @@ restore() {  # $1 = Index-Name, $2 = gescheiterter Schritt
   if fetch_channels \
       && [[ "$(asset_size "$IDX" || true)" == "$(wc -c < "$RESTORE/$IDX" | tr -d ' ')" ]] \
       && [[ "$(asset_size "$SIG" || true)" == "$(wc -c < "$RESTORE/$SIG" | tr -d ' ')" ]]; then
+    # Bestätigt wiederhergestellt: die Kopie bleibt (Codex 11f469a2), bekommt aber
+    # die Marke „bestaetigt“ — nur ohne sie hält der dev-Worker an (Codex 3aa7d678).
+    date -u +%FT%TZ > "$keep/bestaetigt" 2>/dev/null || true
     die "Umstellen gescheitert ($2) — alter Index samt Signatur wiederhergestellt; erneut ausführen"
   fi
   die "Umstellen gescheitert ($2); Wiederherstellen nicht bestätigt — am Release channels von Hand prüfen ($IDX, $SIG)"

@@ -744,6 +744,8 @@ test('publish-release.sh (P3-6): bisheriger Index bleibt drin, Zwischennamen + U
     assert.equal(fs.readFileSync(`${idxFile}.sig`, 'utf8'), liveSig, 'lebende Signatur = alte, passend zum Index');
     // Codex 11f469a2: das alte Paar bleibt dauerhaft neben dem Build liegen (Hand-Reparatur, falls auch das Hochladen scheitert).
     assert.equal(fs.readFileSync(path.join(out, 'channels-restore', 'index-stable.json'), 'utf8'), live);
+    // Codex 3aa7d678: bestätigt wiederhergestellt → Marke, damit der dev-Worker nicht dauerhaft anhält.
+    assert.ok(fs.existsSync(path.join(out, 'channels-restore', 'bestaetigt')));
 
     // (5) Lebender Index fehlt (Abbruch zwischen Sichern und Umstellen): Vorgänger aus ….new, nicht „erster Index“.
     const ch = path.join(gh.store, 'rel', 'channels');

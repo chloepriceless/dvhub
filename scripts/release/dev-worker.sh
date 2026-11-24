@@ -375,9 +375,16 @@ remote_status() {  # $1 = SHA
     if grep -q ' 404' "$tmp/err"; then echo nobridge; rm -rf "$tmp"; return 0; fi
     log "Kanal-Index nicht abrufbar ($(tr '\n' ' ' < "$tmp/err" | cut -c1-160))"; rm -rf "$tmp"; return 1
   fi
+  # Signatur: 404 heißt „fehlt“ (→ unvollständig, neu veröffentlichen); jeder
+  # andere Fehler (Netz, 5xx) heißt „gerade nicht prüfbar“ → später (Codex 3aa7d678).
+  local sig_ok=0
   if curl -fsSL --max-time 60 -H 'User-Agent: dvhub-dev-worker' -o "$tmp/index.json.sig" \
-      "$DW_DOWNLOAD/$GH_REPO/releases/download/channels/index-dev-v2.json.sig" 2>/dev/null \
-      && main_trust > "$tmp/allowed"; then
+      "$DW_DOWNLOAD/$GH_REPO/releases/download/channels/index-dev-v2.json.sig" 2>"$tmp/err"; then
+    sig_ok=1
+  elif ! grep -q ' 404' "$tmp/err"; then
+    log "Signatur des Kanal-Index nicht abrufbar ($(tr '\n' ' ' < "$tmp/err" | cut -c1-160))"; rm -rf "$tmp"; return 1
+  fi
+  if [[ "$sig_ok" -eq 1 ]] && main_trust > "$tmp/allowed"; then
     for ns in dvhub-release-index-dev dvhub-release-index; do
       ssh-keygen -Y verify -f "$tmp/allowed" -I dvhub-release -n "$ns" -s "$tmp/index.json.sig" \
         < "$tmp/index.json" >/dev/null 2>&1 && { idx_ok=1; break; }
@@ -411,7 +418,7 @@ prune_builds() {  # nur eigene Build-Ordner unter $OUT, die neuesten $DW_KEEP_BU
   # shellcheck disable=SC2045
   for d in $(ls -1t "$OUT" 2>/dev/null); do
     [[ -d "$OUT/$d" && "$d" == *-dev.* ]] || continue   # nur dev-Build-Ordner des Workers
-    [[ -e "$OUT/$d/channels-restore" ]] && continue       # Wiederherstellungs-Paar von publish-release: nie löschen
+    [[ -e "$OUT/$d/channels-restore" && ! -f "$OUT/$d/channels-restore/bestaetigt" ]] && continue   # offenes Wiederherstellungs-Paar: nie löschen
     n=$((n + 1))
     [[ "$n" -le "$DW_KEEP_BUILDS" ]] && continue
     rm -rf "${OUT:?}/$d"
@@ -485,7 +492,7 @@ main() {
     fi
     [[ "$MODE" == dry ]] || return 0
     log "Trockenlauf baut trotzdem"
-  elif grep -q "^$sha " "$STATE/published" 2>/dev/null; then
+  elif [[ "$status" != nobridge ]] && grep -q "^$sha " "$STATE/published" 2>/dev/null; then
     log "main $short: laut Zustand veröffentlicht, am Release dev aber ${status%% *} — baue und veröffentliche erneut"
   elif [[ "$status" == partial* ]]; then
     log "main $short: $version nur teilweise am Release dev (Assets/Index unvollständig) — veröffentliche erneut"
@@ -500,8 +507,12 @@ main() {
   # Index-Paar unter <build>/channels-restore ab. build-release löscht beim Neubau
   # derselben Version den ganzen Ordner — darum dann nichts automatisch, bis das
   # Paar von Hand zurück am Release ist und der Ordner entfernt (Codex 1ab4b3f4).
-  local restore
-  restore="$(ls -1d "$OUT"/*/channels-restore 2>/dev/null | head -1)"
+  # Mit der Marke „bestaetigt“ hat publish-release das alte Paar selbst
+  # zurückgebracht — dann geht es weiter (Codex 3aa7d678).
+  local restore="" d
+  for d in "$OUT"/*/channels-restore; do
+    [[ -d "$d" && ! -f "$d/bestaetigt" ]] && { restore="$d"; break; }
+  done
   if [[ -n "$restore" ]]; then
     log "Wiederherstellungs-Paar liegt in $restore (publish-release konnte den Kanal-Index nicht umstellen) — erst von Hand hochladen (siehe Bau-Protokoll), dann den Ordner entfernen; bis dahin baut der Worker nichts"
     notify_once restore-pending "$restore" "Kanal-Index braucht Handarbeit — Worker angehalten (siehe Log)"
@@ -525,7 +536,10 @@ main() {
   # Angehalten (Datei $STATE/sign-paused): kein Bau, keine Veröffentlichung.
   # Christin 24.11.2026: bis der Übergang zum dev-Schlüssel steht. Wieder an:
   # rm "$STATE/sign-paused".
-  if [[ -f "$STATE/sign-paused" ]]; then
+  # Trockenläufe signieren nur mit dem dev-Schlüssel und veröffentlichen nichts — sie laufen trotzdem.
+  if [[ -f "$STATE/sign-paused" && "$MODE" == dry ]]; then
+    log "Worker angehalten ($STATE/sign-paused) — Trockenlauf läuft trotzdem"
+  elif [[ -f "$STATE/sign-paused" ]]; then
     log "main $short: CI grün, Signieren pausiert ($STATE/sign-paused: $(head -1 "$STATE/sign-paused")) — kein dev-Paket"
     notify_once sign-paused-note "$sha" "main $short ist grün — dev-Paket wartet (Signieren pausiert)"
     return 0

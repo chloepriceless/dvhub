@@ -89,7 +89,7 @@ async function setup(t) {
   const files = { calls: path.join(root, 'calls'), notify: path.join(root, 'notify'), published: path.join(root, 'published') };
   // Schon veröffentlichte SHAs (von Hand), zusätzlich zu dem, was publish-Stub einträgt.
   // bridge: index-dev-v2.json steht (Übergang erledigt); bridgeShas liegen im Release dev-bridge.
-  const remote = { extra: new Set(), auth: [], indexSig: true, bridge: true, bridgeShas: new Set() };
+  const remote = { extra: new Set(), auth: [], indexSig: true, sigStatus: 200, bridge: true, bridgeShas: new Set() };
   const publishedShas = () => new Set([...remote.extra,
     ...(fs.existsSync(files.published) ? fs.readFileSync(files.published, 'utf8').split('\n').filter(Boolean) : [])]);
   const verOf = (s) => `1.0.12-dev.20261124000000.${s.slice(0, 8)}`;
@@ -106,6 +106,7 @@ async function setup(t) {
     } else if (req.url === '/chloepriceless/dvhub/releases/download/channels/index-dev-v2.json' && remote.bridge) {
       res.end(JSON.stringify({ channel: 'dev', releases: shas.map((s) => ({ version: verOf(s), git_sha: s })) }));
     } else if (req.url === '/chloepriceless/dvhub/releases/download/channels/index-dev-v2.json.sig' && remote.bridge && remote.indexSig) {
+      res.statusCode = remote.sigStatus;
       res.end('sig');
     } else { res.statusCode = 404; res.end('{}'); }
   });
@@ -297,10 +298,16 @@ test('Worker angehalten (sign-paused) → kein Signierversuch, kein Bau', { skip
   assert.doesNotMatch(w.log(), /Signieren hängt|Signier-Probe|Signieren mit dem/);
   assert.equal((w.log().match(/Signieren pausiert/g) || []).length, 2);
   assert.equal(w.notes().length, 1);
+  // Trockenlauf läuft trotz Pause (dev-Schlüssel, nichts veröffentlicht).
+  const d = await w.run({}, ['--dry-run']);
+  assert.equal(d.code, 0, w.log());
+  assert.match(w.log(), /Trockenlauf läuft trotzdem/);
+  assert.equal(w.calls().length, 2);
+  assert.match(w.calls()[1], /--dry-run/);
   fs.rmSync(path.join(w.dwHome, 'state/sign-paused'));
   const r = await w.run();
   assert.equal(r.code, 0, w.log());
-  assert.equal(w.calls().length, 2, 'nach dem Entfernen läuft der Bau');
+  assert.equal(w.calls().length, 4, 'nach dem Entfernen läuft der Bau');
 });
 
 test('Index ohne gültige Signatur zählt nicht als veröffentlicht → neu veröffentlichen', { skip }, async (t) => {
@@ -323,6 +330,10 @@ test('Wiederherstellungs-Paar von publish-release → nichts bauen, nie wegräum
   assert.match(w.log(), /Wiederherstellungs-Paar liegt in/);
   assert.equal(w.notes().length, 1);
   assert.ok(fs.existsSync(keep));
+  // Von publish-release bestätigt wiederhergestellt → es geht weiter.
+  fs.writeFileSync(path.join(keep, 'bestaetigt'), 'x');
+  assert.equal((await w.run()).code, 0, w.log());
+  assert.equal(w.calls().length, 2);
 });
 
 test('Zeitlimit beendet die ganze Prozessgruppe (auch Enkel)', { skip }, async (t) => {
@@ -402,4 +413,13 @@ test('Brücken-Paket des aktuellen main liegt im Release dev-bridge → schon ve
   assert.equal((await w.run()).code, 0, w.log());
   assert.deepEqual(w.calls(), []);
   assert.match(w.log(), /schon veröffentlicht/);
+});
+
+test('Signatur des Index gerade nicht abrufbar (5xx) → später, kein Neubau', { skip }, async (t) => {
+  const w = await setup(t);
+  w.remote.extra.add(w.sha);
+  w.remote.sigStatus = 503;
+  assert.equal((await w.run()).code, 1);
+  assert.deepEqual(w.calls(), []);
+  assert.match(w.log(), /Signatur des Kanal-Index nicht abrufbar/);
 });
