@@ -175,8 +175,15 @@ for (const metaType of ['jsonb', 'text']) {
       // Bilanz 0 − 0,2 + 0,75 = 0,55 kWh Verlust → nicht schlüssig.
       await insertSlot(client, I, { local: { grid_import_w: 0, load_power_w: 0.2, battery_discharge_w: 0.75 }, vrm: { grid_import_w: 0, load_power_w: 0.2, battery_discharge_w: 0.2 } });
       // J (Codex b7eefc4a): zweite GX lädt 0,4 kWh — lokale Last um Akku 2 gekürzt (0,32), VRM
-      // zeigt die Last der Haupt-GX (0,72); Bilanz 0,5 − 0,32 + 0,25 − 0,4 = 0,03 kWh → bestätigt.
+      // zeigt die Last der Haupt-GX (0,72); 0,32 + 0,4 = 0,72, Bilanz 0,5 − 0,72 + 0,25 = 0,03 → bestätigt.
       await insertSlot(client, J, { local: { ...ok.local, load_power_w: 0.32, second_battery_charge_w: 0.4, second_battery_discharge_w: 0 }, vrm: ok.vrm });
+      // L (Codex 2cd5234d): Kappung bei 0 — gespeichert 1,04 + 0,16 − 0,14 = 1,06 ≠ 1,00 gemessen;
+      // load_measured_w der Haupt-GX (4000 W × 900 s = 1,0 kWh) passt zu VRM 1,00.
+      const L = at('02:45');
+      await insertSlot(client, L, {
+        local: { grid_import_w: 0.75, load_power_w: 1.04, battery_discharge_w: 0.28, second_battery_charge_w: 0.16, second_battery_discharge_w: 0.14 },
+        vrm: { grid_import_w: 0.75, load_power_w: 1.0 }
+      });
       // K (Codex b7eefc4a): Tag, Akku ruht, DC-PV 2,5 kWh → Haus 1,0 + Einspeisung 1,4 (96 %);
       // Verlust 0,1 kWh ≤ 0,06 + 15 % × 2,5 → bestätigt.
       const pvDay = { pv_total_w: 2.5, grid_import_w: 0, grid_export_w: 1.4, load_power_w: 1.0, battery_discharge_w: 0 };
@@ -191,15 +198,24 @@ for (const metaType of ['jsonb', 'text']) {
       // E/F: alle 5 s, jede 10. Probe veraltet (gekennzeichnet).
       await seedRaw(client, { startIso: E, endIso: G, series: SERIES, staleEvery: 10, metaType });
       // G–I: alle 5 s; in G ein Neustart 01:37:00–01:38:00 (60 s ohne Probe).
-      await seedRaw(client, { startIso: G, endIso: '2026-11-01T02:45:00.000Z', series: SERIES, skip: ['2026-11-01T01:37:00.000Z', '2026-11-01T01:38:00.000Z'], metaType });
+      await seedRaw(client, { startIso: G, endIso: '2026-11-01T03:00:00.000Z', series: SERIES, skip: ['2026-11-01T01:37:00.000Z', '2026-11-01T01:38:00.000Z'], metaType });
+      // L: gemessene Last der Haupt-GX in den Rohwerten (alle 5 s 4000 W über den Slot).
+      {
+        const values = []; const params = [];
+        for (let i = 0; i < 180; i += 1) {
+          params.push(new Date(Date.parse(L) + i * 5000).toISOString());
+          values.push(`('load_measured_w', 'live', 'local_poll', $${params.length}::timestamptz, 5, 4000)`);
+        }
+        await client.query(`INSERT INTO timeseries_samples (series_key, scope, source, ts_utc, resolution_seconds, value_num) VALUES ${values.join(',')}`, params);
+      }
       // VRM-Rohwerte zählen nicht. Anderer Tag: nicht in diesem Lauf.
       await seedRaw(client, { startIso: A, endIso: B, stepS: 300, res: 300, scope: 'history', source: 'vrm_import', series: SERIES, metaType });
       await client.query(`INSERT INTO energy_slots_15m (slot_start_utc, series_key, source_kind, quality, value_num, meta_json)
         VALUES ('2026-11-02T00:00:00Z', 'battery_discharge_w', 'local_live', 'raw_derived', 0.01, NULL)`);
 
       const res = await client.query(coverageUpdateSql(metaType), COVERAGE_UPDATE_PARAMS('2026-11-01T00:00:00.000Z', '2026-11-02T00:00:00.000Z'));
-      // A, B, C, D, G, H, I je 3 Reihen + F 1 + J 5 + K 5; nicht E, nicht VRM, nicht der Folgetag.
-      assert.equal(res.rowCount, 32);
+      // A, B, C, D, G, H, I je 3 Reihen + F 1 + J 5 + K 5 + L 5; nicht E, nicht VRM, nicht der Folgetag.
+      assert.equal(res.rowCount, 37);
       const meta = async (slot, series = 'battery_discharge_w', kind = 'local_live') => JSON.parse((await slotRow(client, slot, kind, series))?.meta_json || 'null');
       // A: 180 Abstände à 5 s = 900 s, bestätigt.
       assert.deepEqual(await meta(A), { coverageS: 900, samples: 180, maxResS: 5, coverageBackfill: 'raw' });
@@ -221,6 +237,7 @@ for (const metaType of ['jsonb', 'text']) {
       assert.deepEqual(await meta(I), { coverageBackfill: 'vrm-mismatch' });
       assert.equal((await meta(J)).coverageBackfill, 'raw');
       assert.equal((await meta(K)).coverageBackfill, 'raw');
+      assert.equal((await meta(L)).coverageBackfill, 'raw');
       assert.equal(await meta(A, 'battery_discharge_w', 'vrm_import'), null);
       assert.equal(await meta('2026-11-02T00:00:00.000Z'), null);
       // updated_at neu → die vorberechnete Jahres-Historie rechnet den Monat neu.

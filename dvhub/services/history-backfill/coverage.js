@@ -25,7 +25,7 @@
 //      Slots), mindestens ein echtes Vergleichspaar, eines davon ≥ 0,05 kWh
 //      (nachts zählt der Hausverbrauch) — fehlt VRM, ist nichts bestätigt;
 //   2. die eigene Energiebilanz des Slots ist schlüssig: PV + Bezug − Einspeisung
-//      − Last − Laden + Entladen (beide Akkus; = Wandlerverlust) liegt in
+//      − Last der Haupt-GX − Laden + Entladen (= Wandlerverlust) liegt in
 //      [−0,02 kWh; 0,06 kWh + 15 % von Akku-Durchsatz + PV] (Prod: 99,9 % der
 //      vollständigen Slots). Ein gehaltener Akkuwert sprengt die Bilanz; die
 //      VRM-Akkumengen selbst taugen nicht zum Vergleich (AC-seitig, je Slot verrauscht).
@@ -119,6 +119,31 @@ cov AS (
   WHERE ts_utc >= $1::timestamptz
   GROUP BY 1, 2
 ),
+lraw AS (
+  -- Gemessene Last der Haupt-GX (load_measured_w, seit 25.10.2026 nur mit zweiter
+  -- GX geschrieben): polling.js kappt Last − Akku 2 bei 0, das lässt sich aus den
+  -- Viertelstunden nicht zurückrechnen (Codex 2cd5234d). Je Probe die gemessene,
+  -- sonst Last + Akku-2-Laden − Akku-2-Entladen (wie EFFICIENCY_SAMPLES_CTE).
+  SELECT ts_utc,
+         max(value_num) FILTER (WHERE series_key = 'load_measured_w') AS lm,
+         max(value_num) FILTER (WHERE series_key = 'load_power_w') AS lp,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'second_battery_charge_w'), 0) AS c2,
+         coalesce(max(value_num) FILTER (WHERE series_key = 'second_battery_discharge_w'), 0) AS d2,
+         max(resolution_seconds) FILTER (WHERE series_key IN ('load_measured_w', 'load_power_w')) AS res
+  FROM timeseries_samples
+  WHERE scope = 'live' AND source = 'local_poll'
+    AND ts_utc >= $1::timestamptz AND ts_utc < $2::timestamptz
+    AND series_key IN ('load_measured_w', 'load_power_w', 'second_battery_charge_w', 'second_battery_discharge_w')
+  GROUP BY ts_utc
+),
+lmain AS (
+  SELECT to_timestamp(floor(extract(epoch FROM ts_utc) / ${SLOT_SECONDS}) * ${SLOT_SECONDS}) AS slot,
+         sum(coalesce(lm, lp + c2 - d2) * least(res, ${SLOT_SECONDS})) / 3600000.0 AS kwh
+  FROM lraw
+  WHERE res > 0 AND coalesce(lm, lp) IS NOT NULL
+  GROUP BY 1
+  HAVING count(lm) > 0
+),
 bal AS (
   SELECT slot_start_utc AS slot,
          coalesce(max(value_num) FILTER (WHERE series_key = 'pv_total_w'), 0) AS pv,
@@ -134,6 +159,11 @@ bal AS (
     AND slot_start_utc >= $1::timestamptz AND slot_start_utc < $2::timestamptz
   GROUP BY 1
 ),
+bal2 AS (
+  -- Last der Haupt-GX: aus load_measured_w, sonst aus dem Slot zurückgerechnet.
+  SELECT b.*, coalesce(m.kwh, b.ld + b.ch2 - b.dis2) AS ldm
+  FROM bal b LEFT JOIN lmain m ON m.slot = b.slot
+),
 pairs AS (
   -- Hausverbrauch: polling.js zieht Akku 2 (zweite GX) von der Last ab, der VRM-Import
   -- der Haupt-GX nicht — verglichen wird die gemessene Last der Haupt-GX
@@ -145,9 +175,8 @@ pairs AS (
   FROM energy_slots_15m l
   JOIN energy_slots_15m r
     ON r.slot_start_utc = l.slot_start_utc AND r.series_key = l.series_key AND r.source_kind = 'vrm_import'
-  JOIN bal b ON b.slot = l.slot_start_utc
-  CROSS JOIN LATERAL (SELECT CASE WHEN l.series_key = 'load_power_w'
-                                  THEN l.value_num + b.ch2 - b.dis2 ELSE l.value_num END AS v) lv
+  JOIN bal2 b ON b.slot = l.slot_start_utc
+  CROSS JOIN LATERAL (SELECT CASE WHEN l.series_key = 'load_power_w' THEN b.ldm ELSE l.value_num END AS v) lv
   WHERE l.source_kind = 'local_live'
     AND l.slot_start_utc >= $1::timestamptz AND l.slot_start_utc < $2::timestamptz
     AND l.series_key = ANY($5::text[])
@@ -155,14 +184,15 @@ pairs AS (
   GROUP BY 1
 ),
 chk AS (
-  -- Bilanz (Wandlerverlust) mit beiden Akkus; Spielraum wächst mit Akku-Durchsatz
-  -- und PV (DC-PV wird gewandelt) — Codex b7eefc4a; Prod: 99,9 % der vollständigen Slots.
+  -- Bilanz (Wandlerverlust der Haupt-GX); Spielraum wächst mit Akku-Durchsatz und PV
+  -- (DC-PV wird gewandelt) — Codex b7eefc4a; Prod: 99,9 % der vollständigen Slots.
+  -- Mit der Last der Haupt-GX (sie enthält Akku 2 schon, dessen AC-Seite).
   SELECT p.slot,
          p.within AND p.biggest >= $7::float8
-           AND (b.pv + b.gi - b.ge - b.ld - b.ch + b.dis - b.ch2 + b.dis2) >= $8::float8
-           AND (b.pv + b.gi - b.ge - b.ld - b.ch + b.dis - b.ch2 + b.dis2)
-               <= $9::float8 + $10::float8 * (b.ch + b.dis + b.ch2 + b.dis2 + b.pv) AS agrees
-  FROM pairs p JOIN bal b ON b.slot = p.slot
+           AND (b.pv + b.gi - b.ge - b.ldm - b.ch + b.dis) >= $8::float8
+           AND (b.pv + b.gi - b.ge - b.ldm - b.ch + b.dis)
+               <= $9::float8 + $10::float8 * (b.ch + b.dis + b.pv) AS agrees
+  FROM pairs p JOIN bal2 b ON b.slot = p.slot
 ),
 x AS (
   SELECT e2.id, coalesce(c.cov, 0) AS cov, coalesce(c.n, 0) AS n, coalesce(c.maxres, 0) AS maxres,
