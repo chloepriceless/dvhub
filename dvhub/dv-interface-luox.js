@@ -153,9 +153,16 @@ export function luoxApplyWrite(luox, addr, values) {
  *         und danach zurückgeschrieben). Fehlt der Steuerpunkt oder die
  *         Referenzleistung, oder schlägt das Schreiben fehl, wird sicherheits-
  *         halber ganz abgeregelt — weniger einspeisen erfüllt die Vorgabe immer.
- * Die Vorgabe gilt, solange das Watchdog-Register mindestens alle 15 min neu
- * beschrieben wird (statt der festen Plexlog-Lease offLeaseMs); ohne Watchdog-
- * Schreibvorgang zählt die Frist ab dem Setzen der Vorgabe.
+ * Die Vorgabe gilt 15 min ab dem letzten Lebenszeichen des Direktvermarkters
+ * (statt der festen Plexlog-Lease offLeaseMs). Lebenszeichen ist jedes
+ * Schreiben auf das Watchdog-Register UND jedes Setzen einer Vorgabe (LUOX
+ * Holding 2, Plexlog Holding 0): eine eben gesetzte Vorgabe gilt immer ab
+ * JETZT 15 min, egal wie alt das letzte Watchdog-Schreiben ist.
+ * Replay der Prod-Schreibfolge (24.11.2026): der DV schreibt beim Abregeln
+ * Holding 0 [0,0] und 10 ms später Holding 3 [1]. Lief die Frist ab dem
+ * letzten Watchdog (Stunden alt, vom letzten „Ein“), war sie beim ersten „Aus“
+ * schon abgelaufen; der Watchdog-Frame ließ sie verfallen, erst die
+ * Wiederholung nach 4 min griff (101 von 115 Abregelungen).
  */
 export function createDvLimitController({
   state, getCfg, setForcedOff, clearForcedOff, applyDvFeedInLimit, pushLog = () => {}, writeControlEvent = () => {},
@@ -168,8 +175,9 @@ export function createDvLimitController({
   const stampDeadline = (field) => stampMono(state.ctrl, field, { clock: mono, wallNow: now() });
   const luox = () => (state.dvLuox ??= { setpointPct: 100, watchdog: [0, 0], watchdogAt: null });
 
-  // A26: die 15 min ab dem letzten Watchdog-Schreiben laufen monoton (Marke an watchdogAt, unsichtbar); der Zeitpunkt
-  // watchdogAt bleibt Systemzeit. Ohne Marke (Tests ohne Uhr, fremder Erzeuger) wie bisher watchdogAt + 15 min.
+  // A26: die 15 min ab dem letzten Lebenszeichen (Watchdog oder Vorgabe, markAlive) laufen monoton (Marke an
+  // watchdogAt, unsichtbar); der Zeitpunkt watchdogAt bleibt Systemzeit. Ohne Marke (Tests ohne Uhr, fremder
+  // Erzeuger) wie bisher watchdogAt + 15 min.
   function leaseUntil() {
     const at = Number(luox().watchdogAt);
     const age = Number.isFinite(at) && at > 0 ? monoStampAge(luox(), 'watchdogAt', mono) : null;
@@ -177,9 +185,14 @@ export function createDvLimitController({
     return (Number.isFinite(at) && at > 0 ? at : now()) + LUOX_WATCHDOG_MS;
   }
 
-  function watchdogRefresh() {
+  // Lebenszeichen des DV merken (Zeitpunkt Systemzeit, Restzeit monoton).
+  function markAlive() {
     luox().watchdogAt = now();
     stampMono(luox(), 'watchdogAt', { clock: mono });
+  }
+
+  function watchdogRefresh() {
+    markAlive();
     const until = leaseUntil();
     if (state.ctrl.forcedOff) { state.ctrl.offUntil = until; stampDeadline('offUntil'); }
     if (state.ctrl.dvLimitPct != null) { state.ctrl.dvLimitUntil = until; stampDeadline('dvLimitUntil'); }
@@ -242,7 +255,9 @@ export function createDvLimitController({
     return { mode: 'limit', limitW, done };
   }
 
+  // LUOX Holding 2: Vorgabe in Prozent. Das Setzen ist ein Lebenszeichen (Frist ab jetzt).
   function setDvLimitPct(pct, reason) {
+    markAlive();
     const p = Math.max(0, Math.min(100, Math.round(Number(pct))));
     if (p >= 100) return applyFull(reason);
     if (p <= 0) return applyOff(reason);
@@ -264,7 +279,10 @@ export function createDvLimitController({
   //   dazwischen        = Grenze in Watt                         → Teilvorgabe
   // Ohne Referenzleistung ist die Teilvorgabe nicht sauber einzuordnen →
   // sicherheitshalber ganz abregeln (wie bei fehlendem Steuerpunkt).
+  // Jedes Schreiben auf Holding 0 ist ein Lebenszeichen: die Vorgabe gilt ab
+  // jetzt 15 min, auch wenn der DV Holding 3 gar nicht oder erst danach schreibt.
   function setDvLimitW(watts, reason) {
+    markAlive();
     if (Number(watts) === -1) return applyFull(reason);
     const w = Math.round(Number(watts) || 0);
     if (w <= 0) return applyOff(reason);
@@ -281,7 +299,8 @@ export function createDvLimitController({
 
   function expireIfNeeded() {
     if (state.ctrl.dvLimitPct != null && ctrlDeadlinePassed(state.ctrl, 'dvLimitUntil', now(), mono)) {
-      setDvLimitPct(100, 'luox_watchdog_expired');
+      // Ablauf ist kein Lebenszeichen: direkt freigeben, ohne markAlive.
+      applyFull('luox_watchdog_expired');
     }
   }
 

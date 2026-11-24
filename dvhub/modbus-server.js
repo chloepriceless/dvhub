@@ -87,6 +87,10 @@ export function createModbusServer(ctx) {
   //     frei, dazwischen = Einspeise-/Wirkleistungsgrenze in Watt.
   //   Holding 3 (Int16) = Watchdog (miwatchdog, „SETWachtdog"): jedes Schreiben
   //     ist ein Lebenszeichen und frischt die Lease auf — KEIN Aus-Befehl.
+  //   Auch jedes Schreiben auf Holding 0 ist ein Lebenszeichen: die Vorgabe gilt
+  //     ab jetzt 15 min (setDvLimitW), egal wie alt das letzte Holding-3-Schreiben
+  //     ist. Der echte DV schreibt [0,0] auf 0 und 10 ms später 1 auf 3 — der
+  //     Ablauf-Check vor dem zweiten Frame darf die frische Vorgabe nicht kippen.
   // Die Werte stehen schon in dvRegs (setReg); wir lesen den aktuellen Int32
   // aus Register 0/1, damit auch Teilschreibvorgänge (nur Lo- oder Hi-Wort)
   // greifen — genau wie der Logger den Holding-Puffer neu auswertet.

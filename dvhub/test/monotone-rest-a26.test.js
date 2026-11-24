@@ -518,7 +518,7 @@ test('MQTT-Alarme: Rücksprung (−3 h) — stehende Alarmwerte veralten nach ma
 
 // --- LUOX-Watchdog (dv-interface-luox.js) -------------------------------------------------------------------------
 
-test('LUOX: Rücksprung nach dem Watchdog — volle Abregelung endet 15 min nach dem Watchdog (Laufzeit), nicht 3 h später', () => {
+test('LUOX: Rücksprung nach dem Watchdog — volle Abregelung endet 15 min nach dem letzten Lebenszeichen (Laufzeit), nicht 3 h später', () => {
   const c = clocks();
   const state = { ctrl: { forcedOff: false, offUntil: 0 } };
   const dv = createDvLimitController({
@@ -529,9 +529,13 @@ test('LUOX: Rücksprung nach dem Watchdog — volle Abregelung endet 15 min nach
   });
   dv.watchdogRefresh();
   c.jump(-H3); c.tick(60_000);
+  // Das Setzen der Vorgabe ist selbst ein Lebenszeichen (Lease ab jetzt, Replay 24.11.2026).
   dv.setDvLimitPct(0, 'luox');
-  c.tick(LUOX_WATCHDOG_MS - 60_000 + 1000);
-  assert.equal(monoDeadlinePassed(state.ctrl, 'offUntil', c.monoNow), true, '15 min nach dem Watchdog abgelaufen');
+  c.jump(-H3); // auch ein Rücksprung nach der Vorgabe verlängert sie nicht
+  c.tick(LUOX_WATCHDOG_MS - 1000);
+  assert.equal(monoDeadlinePassed(state.ctrl, 'offUntil', c.monoNow), false, 'knapp 15 min nach der Vorgabe noch gültig');
+  c.tick(2000);
+  assert.equal(monoDeadlinePassed(state.ctrl, 'offUntil', c.monoNow), true, '15 min nach der Vorgabe abgelaufen');
 });
 
 // --- Halte-/Deckel-Signale (setpoint-follow-watchdog activeDischargeHold) -------------------------------------------

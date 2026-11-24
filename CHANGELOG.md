@@ -93,6 +93,13 @@ verweist hierher.
     eingespeist.
   - **Holding-Register 3** ist der Watchdog: jedes Schreiben ist ein Lebenszeichen und frischt die Lease auf — kein
     Aus-Befehl mehr. Bleibt das Auffrischen aus, geht die Vorgabe (wie beim Gerät) zurück auf 100 %.
+  - **Lease ab dem Befehl, Holding 0 zählt als Lebenszeichen.** Eine gesetzte Vorgabe (Plexlog Holding 0, LUOX
+    Holding 2) gilt ab jetzt 15 min, egal wie alt das letzte Watchdog-Schreiben ist; jedes Schreiben auf Holding 0
+    oder 3 frischt sie auf. Vorher zählte die Frist ab dem letzten Watchdog: Der Direktvermarkter schreibt beim
+    Abregeln Holding 0 `[0,0]` und 10 ms später Holding 3 `[1]`. Beim ersten „Aus“ lag das letzte Watchdog-Schreiben
+    Stunden zurück, die Frist war schon abgelaufen, und erst die Wiederholung nach 4 min griff. Im Nachspielen der
+    echten Schreibfolge seit März wären so in 101 von 115 Abregelungen rund 4 min eingespeist worden (zusammen
+    6,75 h); jetzt in keiner, wie bisher in main.
   - **Leseregister (FC4)** folgen der echten Belegung: `0–1` Einspeisung, `3–4` Referenz-/Anlagenleistung, `7`
     Produktion, ab `10` Spiegel der Holding-Register (vorher die nur abgeschaute LUOX-PDF-Tabelle).
   - Die Einstellungs-Hilfe weist jetzt aus, dass reale Plexlog-Logger das **plexlog**-Profil brauchen; das
