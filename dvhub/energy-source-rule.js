@@ -43,6 +43,9 @@
 //   Ältere Slots (vor 1.0.10) tragen keine Abdeckung. Für sie ist unbekannt, ob
 //   sie vollständig sind — sie behalten die bisherige Reihenfolge (VRM vor
 //   lokal), damit sich gespeicherte Historie nicht nachträglich verschiebt.
+//   Seit T14 (Christin 24.11.2026) rechnet services/history-backfill/coverage.js
+//   die Abdeckung dieser Zeilen aus den Rohwerten nach (gleiche Zählung wie
+//   oben); wo die Rohwerte den Slot ganz abdecken, gilt danach der eigene Wert.
 
 export const SLOT_SECONDS = 900;
 export const LOCAL_COVERAGE_MIN_TOLERANCE_SECONDS = 15;
@@ -66,6 +69,14 @@ export const PRIMARY_FLOW_SERIES = Object.freeze([
   'battery_power_w', 'battery_charge_w', 'battery_discharge_w',
   'solar_direct_use_w', 'solar_to_battery_w', 'solar_to_grid_w',
   'grid_direct_use_w', 'grid_to_battery_w', 'battery_direct_use_w', 'battery_to_grid_w'
+]);
+
+// Akku-Flüsse eines Slots (T13, Codex 013298c7): kommt eine davon aus dem
+// VRM-Import, sind die Akku-Mengen des Slots schon AC-normiert — die Historie
+// wandelt sie dann nicht noch einmal (slot.batteryFlowsVrm).
+export const BATTERY_FLOW_SERIES = Object.freeze([
+  'battery_charge_w', 'battery_discharge_w', 'battery_direct_use_w', 'battery_to_grid_w',
+  'solar_to_battery_w', 'grid_to_battery_w'
 ]);
 
 /** Sekunden, die eine Live-Probe zur Abdeckung ihres Slots beiträgt (veraltet: 0). */

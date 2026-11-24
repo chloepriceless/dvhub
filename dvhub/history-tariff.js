@@ -83,8 +83,16 @@ function createSelfUse() {
   return {
     slots: 0, skippedNoPriceSlots: 0, skippedNoFlowSlots: 0,
     loadKwh: 0, loadCt: 0, gridKwh: 0, gridCt: 0,
+    loadMeasuredKwh: 0, loadMeasuredCt: 0,
+    // T13 (Codex a7e86f28): nur eigene DC-Flüsse wandeln (VRM ist schon AC-normiert),
+    // Akku→Netz bleibt gemessen; Kosten mit gemessener PV und getrennten Exporten.
+    chargeGridLocalKwh: 0, chargeGridLocalCt: 0,
+    pvMeasuredCt: 0, solarExportCt: 0, batteryExportCt: 0,
+    // Eigene Entladung je Anteil Akku→Netz an der DC-Entladung (1-%-Klassen, Codex 013298c7):
+    // ob der Entladeverlust dem Haus oder der Einspeisung fehlt, hängt an η Entladen.
+    dischargeBins: {},
     pvDirectKwh: 0, pvDirectGainCt: 0,
-    chargePvKwh: 0, chargeGridKwh: 0, chargeCostCt: 0,
+    chargePvKwh: 0, chargeGridKwh: 0, chargeCostCt: 0, chargeGridCt: 0,
     dischargeHouseKwh: 0, dischargeGridKwh: 0, dischargeValueCt: 0,
     exportKwh: 0, exportCt: 0, pvKwh: 0, pvCt: 0
   };
@@ -200,6 +208,33 @@ function addSelfUse(selfUse, slot, flows) {
   selfUse.slots += 1;
   selfUse.loadKwh += load;
   selfUse.loadCt += load * p;
+  // T13: gemessene Hauslast (load_power_w) — die Flusssumme enthält die Wandlerverluste.
+  selfUse.loadMeasuredKwh += kwhOf(slot.loadKwh);
+  selfUse.loadMeasuredCt += kwhOf(slot.loadKwh) * p;
+  // Herkunft der Akku-Flüsse (Codex 013298c7): VRM-Akkumengen sind schon AC.
+  // slot.batteryFlowsVrm kommt aus der Quellwahl je Reihe; ohne das Feld (ältere
+  // Pfade) wie history-runtime nach dem Slot (vrmFlows / sourceKind).
+  const fromVrm = typeof slot.batteryFlowsVrm === 'boolean'
+    ? slot.batteryFlowsVrm
+    : (slot.vrmFlows === true || slot.sourceKind === 'vrm_import');
+  if (!fromVrm) {
+    selfUse.chargeGridLocalKwh += gridToBatt;
+    selfUse.chargeGridLocalCt += gridToBatt * p;
+    const dc = battDirect + battToGrid;
+    if (dc > 0) {
+      const k = Math.min(100, Math.max(0, Math.floor((battToGrid / dc) * 100 + 1e-9)));
+      const bins = selfUse.dischargeBins || (selfUse.dischargeBins = {});
+      const bin = bins[k] || (bins[k] = { dc: 0, btg: 0, valueCt: 0, dcPCt: 0, dcSCt: 0 });
+      bin.dc += dc;
+      bin.btg += battToGrid;
+      bin.valueCt += battDirect * p + battToGrid * s;
+      bin.dcPCt += dc * p;
+      bin.dcSCt += dc * s;
+    }
+  }
+  selfUse.pvMeasuredCt += kwhOf(slot.pvKwh) * s;
+  selfUse.solarExportCt += solarToGrid * s;
+  selfUse.batteryExportCt += battToGrid * s;
   selfUse.gridKwh += gridDirect + gridToBatt;
   selfUse.gridCt += (gridDirect + gridToBatt) * p;
   selfUse.pvDirectKwh += solarDirect;
@@ -207,6 +242,7 @@ function addSelfUse(selfUse, slot, flows) {
   selfUse.chargePvKwh += solarToBatt;
   selfUse.chargeGridKwh += gridToBatt;
   selfUse.chargeCostCt += solarToBatt * s + gridToBatt * p;
+  selfUse.chargeGridCt += gridToBatt * p;
   selfUse.dischargeHouseKwh += battDirect;
   selfUse.dischargeGridKwh += battToGrid;
   selfUse.dischargeValueCt += battDirect * p + battToGrid * s;
@@ -538,32 +574,101 @@ export function finalizeTariffRow(sums, { excludeEstimated = false } = {}) {
  *               + ΔSoC × Einstandspreis (Ladestand am Rand, kein Scheingewinn)
  *   p_eff       (Σ Last·p − Vorteil) ÷ Σ Last
  * Die Verluste stecken in den Mengen (rein 1 kWh, raus η kWh).
+ *
+ * storage (T12): Speicherweg mit Wandlung aus dem Tagesjob
+ * services/inverter-efficiency/storage.js — { capability, totals, secondBattery }.
+ * Fehlt er (ohne Datenbank), entfällt battery.system.
  */
-export function finalizeSelfUse(selfUse, { storedDeltaKwh = null } = {}) {
+export function finalizeSelfUse(selfUse, { storedDeltaKwh = null, storage = null } = {}) {
   if (!selfUse) return null;
   const discharge = selfUse.dischargeHouseKwh + selfUse.dischargeGridKwh;
   const charge = selfUse.chargePvKwh + selfUse.chargeGridKwh;
-  const inCt = discharge > 0 ? selfUse.chargeCostCt / discharge : null;
   const delta = finite(storedDeltaKwh) ? Number(storedDeltaKwh) : null;
+  const netCharge = charge - (delta ?? 0);
   // Ladestand am Rand zum Einstandspreis je GELADENER kWh (Codex 39d05c79):
   // je entladener kWh blähte ein voller Akku am Ende das Ergebnis auf und fiel
   // ohne Entladung ganz weg. Ohne Ladung im Zeitraum ist der Einstand
   // unbekannt; dann neutral zum Nutzwert je entladener kWh.
-  const storedCt = charge > 0
-    ? selfUse.chargeCostCt / charge
-    : (discharge > 0 ? selfUse.dischargeValueCt / discharge : null);
-  const socCorrectionCt = delta != null && storedCt != null ? delta * storedCt : 0;
-  const batteryResultCt = selfUse.dischargeValueCt - selfUse.chargeCostCt + socCorrectionCt;
-  const advantageCt = selfUse.pvDirectGainCt + batteryResultCt;
-  const netCharge = charge - (delta ?? 0);
+  const value = (v) => {
+    const storedCt = charge > 0 ? v.chargeCostCt / charge : (discharge > 0 ? v.dischargeValueCt / discharge : null);
+    const socCorrectionCt = delta != null && storedCt != null ? delta * storedCt : 0;
+    const batteryResultCt = v.dischargeValueCt - v.chargeCostCt + socCorrectionCt;
+    return { ...v, storedCt, socCorrectionCt, batteryResultCt, advantageCt: selfUse.pvDirectGainCt + batteryResultCt };
+  };
+  // Bisher (Flüsse, DC als AC gezählt): Akku-Mengen DC am Akku, Last = Flusssumme.
+  const flows = value({
+    chargeCostCt: selfUse.chargeCostCt, dischargeValueCt: selfUse.dischargeValueCt,
+    chargeGridKwh: selfUse.chargeGridKwh, dischargeHouseKwh: selfUse.dischargeHouseKwh,
+    dischargeGridKwh: selfUse.dischargeGridKwh, loadKwh: selfUse.loadKwh, loadCt: selfUse.loadCt
+  });
+  // T13 = B (Christin 24.11.2026): wo der Speicherweg gemessen ist, bewertet die
+  // Karte den Akku AC-korrekt — Entladung × η Entladen, Netzladung ÷ η Lader
+  // (Tagesjob), Hausverbrauch gemessen. Die Flüsse in der Datenbank bleiben.
+  // Codex a7e86f28:
+  //  - nur eigene DC-Flüsse wandeln; VRM-Flüsse sind schon an AC-Werten normiert,
+  //  - Akku→Netz ist die gemessene Einspeisung (polling.js): der Entladeverlust
+  //    fehlt dem Haus-Anteil (Endpreis), wo die Einspeisung die AC-Abgabe des
+  //    Akkus übersteigt, der Einspeisung (Börse) — Codex 013298c7,
+  //  - der effektive Preis rechnet mit den echten Kosten (Netz + gemessene PV,
+  //    soweit nicht eingespeist, zur Börse − Akku-Einspeisung − Ladestand am Rand):
+  //    so zählen auch Leerlauf und PV-Wandlung des Wechselrichters mit.
+  const t = storageUsable(storage) ? storage.totals : null;
+  const ac = t && (selfUse.loadMeasuredKwh || 0) > 0 ? (() => {
+    const etaD = t.dischargeEta;
+    const etaCh = t.chargerEta ?? 1;
+    const lossD = 1 - etaD;
+    const extraCh = 1 / etaCh - 1;
+    // Entladeverlust je Klasse (Anteil q = Akku→Netz ÷ DC-Entladung der Klasse,
+    // aus den echten Mengen, nicht der Klassenmitte — Codex 97d4003f):
+    //   q ≤ η: der Akku liefert genug AC für die gemessene Einspeisung — der Verlust
+    //          fehlt dem Haus-Anteil (zum Endpreis p);
+    //   q > η: die Einspeisung ist größer als die AC-Abgabe des Akkus — das Haus
+    //          bekommt nichts, der Akku speist η·DC ein (zur Börse), den Rest der
+    //          Einspeisung lieferte die PV. Die Gesamteinspeisung bleibt gemessen.
+    let houseKwh = selfUse.dischargeHouseKwh;
+    let gridKwh = selfUse.dischargeGridKwh;
+    let dischargeValueCt = selfUse.dischargeValueCt;
+    for (const b of Object.values(selfUse.dischargeBins || {})) {
+      if (!(b.dc > 0)) continue;
+      const q = b.btg / b.dc;
+      if (q <= etaD) {
+        houseKwh -= lossD * b.dc;
+        dischargeValueCt -= lossD * b.dcPCt;
+      } else {
+        houseKwh -= b.dc - b.btg;
+        gridKwh -= b.btg - etaD * b.dc;
+        dischargeValueCt += etaD * b.dcSCt - b.valueCt;
+      }
+    }
+    const valued = value({
+      chargeCostCt: selfUse.chargeCostCt + (selfUse.chargeGridLocalCt || 0) * extraCh,
+      dischargeValueCt,
+      chargeGridKwh: selfUse.chargeGridKwh + (selfUse.chargeGridLocalKwh || 0) * extraCh,
+      dischargeHouseKwh: Math.max(0, houseKwh),
+      dischargeGridKwh: Math.max(0, gridKwh),
+      loadKwh: selfUse.loadMeasuredKwh,
+      loadCt: selfUse.loadMeasuredCt,
+      etaD,
+      etaCh: t.chargerEta ?? null
+    });
+    const costCt = selfUse.gridCt + (selfUse.pvMeasuredCt || 0) - (selfUse.solarExportCt || 0)
+      - (selfUse.batteryExportCt || 0) - valued.socCorrectionCt;
+    const componentsCt = valued.advantageCt;
+    // Vorteil = was die Last zum Endpreis gekostet hätte − was sie wirklich kostete.
+    return { ...valued, costCt, advantageCt: valued.loadCt - costCt, otherCt: componentsCt - (valued.loadCt - costCt) };
+  })() : null;
+  const v = ac || flows;
+  const out = v.dischargeHouseKwh + v.dischargeGridKwh;
   return {
     exportValueBasis: 'spot',
+    // 'ac' = mit Wandlung (T13 B), 'flows' = wie bisher aus den Flüssen.
+    valuation: ac ? 'ac' : 'flows',
     slots: selfUse.slots,
     skippedNoPriceSlots: selfUse.skippedNoPriceSlots,
     skippedNoFlowSlots: selfUse.skippedNoFlowSlots,
-    loadKwh: round2(selfUse.loadKwh),
-    loadCostAtPriceEur: round2(selfUse.loadCt / 100),
-    loadAvgCtKwh: ratio(selfUse.loadCt, selfUse.loadKwh),
+    loadKwh: round2(v.loadKwh),
+    loadCostAtPriceEur: round2(v.loadCt / 100),
+    loadAvgCtKwh: ratio(v.loadCt, v.loadKwh),
     gridImportKwh: round2(selfUse.gridKwh),
     gridCostEur: round2(selfUse.gridCt / 100),
     pvDirectKwh: round2(selfUse.pvDirectKwh),
@@ -571,24 +676,146 @@ export function finalizeSelfUse(selfUse, { storedDeltaKwh = null } = {}) {
     pvDirectGainCtKwh: ratio(selfUse.pvDirectGainCt, selfUse.pvDirectKwh),
     battery: {
       chargedPvKwh: round2(selfUse.chargePvKwh),
-      chargedGridKwh: round2(selfUse.chargeGridKwh),
-      dischargedHouseKwh: round2(selfUse.dischargeHouseKwh),
-      dischargedGridKwh: round2(selfUse.dischargeGridKwh),
-      chargeCostEur: round2(selfUse.chargeCostCt / 100),
-      dischargeValueEur: round2(selfUse.dischargeValueCt / 100),
-      inCtKwh: inCt == null ? null : round2(inCt),
-      outCtKwh: ratio(selfUse.dischargeValueCt, discharge),
+      chargedGridKwh: round2(v.chargeGridKwh),
+      dischargedHouseKwh: round2(v.dischargeHouseKwh),
+      dischargedGridKwh: round2(v.dischargeGridKwh),
+      chargeCostEur: round2(v.chargeCostCt / 100),
+      dischargeValueEur: round2(v.dischargeValueCt / 100),
+      inCtKwh: out > 0 ? round2(v.chargeCostCt / out) : null,
+      outCtKwh: ratio(v.dischargeValueCt, out),
+      // Akku-Wirkungsgrad (DC): DC am Akku rein → DC raus, Ladestand am Rand abgezogen.
       etaPct: discharge > 0 && netCharge > 0 ? round2((discharge / netCharge) * 100) : null,
       storedDeltaKwh: delta == null ? null : round2(delta),
-      storedValueCtKwh: storedCt == null ? null : round2(storedCt),
-      socCorrectionEur: round2(socCorrectionCt / 100),
-      resultEur: round2(batteryResultCt / 100)
+      storedValueCtKwh: v.storedCt == null ? null : round2(v.storedCt),
+      socCorrectionEur: round2(v.socCorrectionCt / 100),
+      resultEur: round2(v.batteryResultCt / 100),
+      // Mit Wandlung: welche Wirkungsgrade angewandt wurden (η Lader fehlt → Netzladung unkorrigiert).
+      acBasis: ac ? {
+        dischargeEtaPct: round2(ac.etaD * 100),
+        chargerEtaPct: ac.etaCh == null ? null : round2(ac.etaCh * 100)
+      } : null,
+      system: storage ? finalizeStorageSystem(selfUse, storage, { storedCt: v.storedCt }) : null
     },
     exportKwh: round2(selfUse.exportKwh),
     exportValueEur: round2(selfUse.exportCt / 100),
-    advantageEur: round2(advantageCt / 100),
-    peffCtKwh: ratio(selfUse.loadCt - advantageCt, selfUse.loadKwh),
-    peffWithoutOpportunityCtKwh: ratio(selfUse.gridCt, selfUse.loadKwh)
+    advantageEur: round2(v.advantageCt / 100),
+    // Mit Wandlung: Wechselrichter-Verbrauch außerhalb des Akku-Wegs (Leerlauf, PV-Wandlung),
+    // den der Vorteil schon abzieht — PV direkt + Akku-Ergebnis − Vorteil.
+    otherConversionCostEur: ac ? round2(ac.otherCt / 100) : null,
+    peffCtKwh: ratio(v.loadCt - v.advantageCt, v.loadKwh),
+    peffWithoutOpportunityCtKwh: ratio(selfUse.gridCt, v.loadKwh),
+    // Zum Vergleich immer die bisherige Bewertung aus den Flüssen.
+    flowsValuation: {
+      loadKwh: round2(flows.loadKwh),
+      advantageEur: round2(flows.advantageCt / 100),
+      batteryResultEur: round2(flows.batteryResultCt / 100),
+      peffCtKwh: ratio(flows.loadCt - flows.advantageCt, flows.loadKwh),
+      peffWithoutOpportunityCtKwh: ratio(selfUse.gridCt, flows.loadKwh)
+    }
+  };
+}
+
+/** Speicherweg gemessen und verwendbar (messbar, ohne Akku 2, Job-Status ok). */
+function storageUsable(storage) {
+  return Boolean(storage && storage.capability?.measurable && !storage.secondBattery
+    && storage.totals && storage.totals.status === 'ok');
+}
+
+// ── Systemwirkungsgrad (AC) und Verluste im Speicherweg (T12) ─────────────
+
+/**
+ * Speicherweg mit Wandlung, Christin 23.11.2026 (T12). Alle Mengen aus dem
+ * Tagesjob services/inverter-efficiency/storage.js (dieselben Rohwerte):
+ *   η Laden     Akku geladen (DC) ÷ eingesetzte Energie;
+ *               eingesetzt = AC am Lader (Netz/AC-PV) + DC-PV direkt (1:1, ungewandelt)
+ *   η Akku DC   Akku entladen ÷ (geladen − ΔSoC), DC am Akku
+ *   η Entladen  AC aus dem Akku ÷ Akku entladen (DC)
+ *   η System    η Laden × η Akku DC × η Entladen
+ *               = nutzbare AC-Energie ÷ eingesetzte Energie (Rest im Akku abgezogen)
+ * Verluste in kWh (gemessen):
+ *   Akku (DC)          geladen − ΔSoC − entladen
+ *   Wandler Laden      eingesetzt − geladen
+ *   Wandler Entladen   entladen − AC aus dem Akku
+ * In € mit den Preisen der Karte: Laden-Verlust zum Ø Bezugspreis der
+ * Netzladung (ohne Netzladung: Ø Börse der PV — AC-PV), die anderen beiden zum
+ * Einstandspreis je geladener kWh (wie der Ladestand am Rand).
+ * Die DC-Werte der Karte selbst (battery.etaPct) bleiben wie bisher aus den
+ * 15-min-Flüssen — die können für ältere Zeiträume VRM-Werte enthalten.
+ */
+function finalizeStorageSystem(selfUse, storage, { storedCt }) {
+  const cap = storage.capability || {};
+  const base = {
+    measurable: Boolean(cap.measurable),
+    verified: Boolean(cap.verified),
+    label: cap.label ?? null,
+    note: cap.note ?? null,
+    reason: cap.reason ?? null,
+    status: null,
+    basis: null
+  };
+  if (!cap.measurable) return { ...base, status: 'not_measurable' };
+  if (storage.secondBattery) {
+    return {
+      ...base, measurable: false, status: 'not_measurable',
+      reason: 'nicht messbar mit Akku der zweiten GX-Anlage: deren Wechselrichter misst DVhub nicht'
+    };
+  }
+  const t = storage.totals;
+  if (!t) return { ...base, status: 'insufficient_data', reason: 'noch keine Messwerte (Tagesjob läuft stündlich)' };
+  const basis = { days: t.days, firstDay: t.firstDay, lastDay: t.lastDay, hours: t.hours };
+  if (t.status !== 'ok') return { ...base, status: t.status, reason: t.reason, basis };
+  const raw = t.raw;
+  const dcLoss = raw.chargeAllKwh - raw.storedDeltaKwh - raw.dischargeAllKwh;
+  const chargeLoss = raw.inputKwh - raw.chargeKwh;
+  const dischargeLoss = raw.dischargeKwh - raw.acOutKwh;
+  const chargeCt = selfUse.chargeGridKwh > 0
+    ? (selfUse.chargeGridCt || 0) / selfUse.chargeGridKwh
+    : (selfUse.pvKwh > 0 ? selfUse.pvCt / selfUse.pvKwh : null);
+  const stored = storedCt ?? null;
+  const eur = (kwh, ct) => (ct == null ? null : (kwh * ct) / 100);
+  const eurOut = (value) => (value == null ? null : round2(value));
+  const dcEur = eur(dcLoss, stored);
+  const chargeEur = eur(chargeLoss, chargeCt);
+  const dischargeEur = eur(dischargeLoss, stored);
+  // Akku (DC) nur über Abstände mit Ladestand (Codex 3be47b54): fehlte er zeitweise,
+  // deckt die Summe nicht die ganze Messzeit ab — kenntlich machen, nicht hochrechnen.
+  const dcCoveragePct = t.socCoveragePct ?? null;
+  const complete = t.socComplete !== false;
+  return {
+    ...base,
+    status: 'ok',
+    basis,
+    dcEtaPct: round2(t.dcEta * 100),
+    chargeEtaPct: round2(t.chargeEta * 100),
+    dischargeEtaPct: round2(t.dischargeEta * 100),
+    chargerEtaPct: t.chargerEta == null ? null : round2(t.chargerEta * 100),
+    systemEtaPct: round2(t.chargeEta * t.dcEta * t.dischargeEta * 100),
+    energy: {
+      inputKwh: round2(raw.inputKwh),
+      chargedKwh: round2(raw.chargeAllKwh),
+      dischargedKwh: round2(raw.dischargeAllKwh),
+      acOutKwh: round2(raw.acOutKwh),
+      storedDeltaKwh: round2(raw.storedDeltaKwh)
+    },
+    losses: {
+      dcKwh: round2(dcLoss),
+      dcEur: eurOut(dcEur),
+      chargeKwh: round2(chargeLoss),
+      chargeEur: eurOut(chargeEur),
+      dischargeKwh: round2(dischargeLoss),
+      dischargeEur: eurOut(dischargeEur),
+      totalKwh: round2(dcLoss + chargeLoss + dischargeLoss),
+      totalEur: dcEur == null || chargeEur == null || dischargeEur == null ? null : round2(dcEur + chargeEur + dischargeEur),
+      complete,
+      dcCoveragePct
+    },
+    prices: {
+      storedCtKwh: stored == null ? null : round2(stored),
+      chargeCtKwh: chargeCt == null ? null : round2(chargeCt),
+      chargeBasis: selfUse.chargeGridKwh > 0 ? 'grid' : 'pv'
+    },
+    // Wechselrichter gesamt laut Tagesjob (mit Leerlauf und PV-Wandlung), nur Messzeit.
+    converterLossKwh: t.converterLossKwh
   };
 }
 

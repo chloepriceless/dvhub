@@ -6,7 +6,7 @@ import { round2 } from './server-utils.js';
 import { resolutionFilterLimit } from './runtime-performance.js';
 import { expandHourlyPriceRows, hourlyPriceExpansionCteSql, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
 // Historie: eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, „B“).
-import { chooseRawEntries, localCoverageCompleteSql, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
+import { chooseRawEntries, localCoverageCompleteSql, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, BATTERY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
 
 // Plan 08-01 Task 3: resolve dvhub/db/migrations/ relative to this module file
 // so the runner works regardless of where node is invoked from (systemd CWD,
@@ -69,14 +69,14 @@ const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => {
 const preferredSourceKindOf = (bySource, preferredSourceKinds) => (
   pickSlotSourceRow(bySource, preferredSourceKinds)?.source_kind ?? null
 );
-const slotFlowsFromVrm = (bucket, preferredSourceKinds) => PRIMARY_FLOW_SERIES
+const slotFlowsFromVrm = (bucket, preferredSourceKinds, series = PRIMARY_FLOW_SERIES) => series
   .some((seriesKey) => preferredSourceKindOf(bucket.get(seriesKey), preferredSourceKinds) === 'vrm_import');
 // Rohdaten-Ausweichpfad: VRM-Import landet mit scope 'history' in timeseries_samples.
 // Je Reihe gilt die gewaehlte Quelle (chooseRawEntries), nie ein Mittel aus beiden.
-const rawBucketHasVrmFlows = (bucket, bucketSeconds) => PRIMARY_FLOW_SERIES
+const rawBucketHasVrmFlows = (bucket, bucketSeconds, series = PRIMARY_FLOW_SERIES) => series
   .some((seriesKey) => chooseRawEntries(bucket.get(seriesKey), bucketSeconds).some((entry) => entry.scope === VRM_RAW_SCOPE));
 
-const MATERIALIZED_ENERGY_SERIES = new Set([
+export const MATERIALIZED_ENERGY_SERIES = new Set([
   'grid_import_w', 'grid_export_w', 'grid_total_w',
   'pv_total_w', 'pv_ac_w',
   'battery_power_w', 'battery_charge_w', 'battery_discharge_w',
@@ -1004,6 +1004,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'), batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
           ...secondBatteryKwhFields(energyForSeries, rawBucketHasVrmFlows(bucket, bucketSeconds)),
+          batteryFlowsVrm: rawBucketHasVrmFlows(bucket, bucketSeconds, BATTERY_FLOW_SERIES),
           estimated: estimatedSeriesKeys.length > 0, incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length, incompleteSeriesCount: incompleteSeriesKeys.length,
           estimatedSeriesKeys, incompleteSeriesKeys
@@ -1204,7 +1205,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       preferredSourceKinds,
       MATERIALIZED_SLOT_FIELDS.map(([, seriesKey]) => seriesKey),
       MATERIALIZED_TRACKED_SERIES,
-      PRIMARY_FLOW_SERIES
+      PRIMARY_FLOW_SERIES,
+      BATTERY_FLOW_SERIES
     ];
 
     const valueColumns = MATERIALIZED_SLOT_FIELDS
@@ -1242,6 +1244,8 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
         -- Akku 2 (21.10.2026): kommt eine Hauptreihe ($7) aus dem VRM-Import,
         -- gelten die lokalen Akku-2-Reihen des Slots nicht (siehe PRIMARY_FLOW_SERIES).
         COALESCE(bool_or(rn = 1 AND source_kind = 'vrm_import' AND series_key = ANY($7::text[])), false) AS vrm_selected,
+        -- Akku-Flüsse ($8) aus dem VRM-Import: schon AC-normiert (T13, Codex 013298c7).
+        COALESCE(bool_or(rn = 1 AND source_kind = 'vrm_import' AND series_key = ANY($8::text[])), false) AS battery_vrm,
         array_agg(series_key) FILTER (
           WHERE rn = 1 AND (meta_json::jsonb ->> 'estimated') = 'true'
         ) AS estimated_keys,
@@ -1281,6 +1285,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
       for (const [field, seriesKey] of MATERIALIZED_SLOT_FIELDS) {
         slot[field] = Number(row[seriesKey] || 0);
       }
+      slot.batteryFlowsVrm = row.battery_vrm === true;
       if (row.vrm_selected === true) {
         for (const [field] of SECOND_BATTERY_SLOT_FIELDS) slot[field] = 0;
         slot.vrmFlows = true;
@@ -1354,6 +1359,7 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
           gridToBatteryKwh: energyForSeries('grid_to_battery_w'), batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
           ...secondBatteryKwhFields(energyForSeries, slotFlowsFromVrm(bucket, preferredSourceKinds)),
+          batteryFlowsVrm: slotFlowsFromVrm(bucket, preferredSourceKinds, BATTERY_FLOW_SERIES),
           sourceKind: overallSourceKind, sourceKinds: [...availableSourceKinds].sort(),
           estimated: estimatedSeriesKeys.length > 0, incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length, incompleteSeriesCount: incompleteSeriesKeys.length,
@@ -1811,6 +1817,9 @@ export function createTelemetryStorePg(pool, { rawRetentionDays = 45 } = {}) {
     listAggregatedEnergySlots,
     listMaterializedEnergySlots,
     historySectionFingerprints,
+    // Nachträgliche Änderung an gespeicherten Viertelstunden ab `ts` (T14-Rückfüllung):
+    // den Prüfwert-Speicher verwerfen wie nach writeSamples.
+    noteHistoryRangeChanged(ts) { noteHistoryWrite([{ ts }]); },
     getHistoryCacheEntries,
     putHistoryCacheEntry,
     // Pre-pivot reference implementation, kept only so the SQL pivot can be

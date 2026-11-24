@@ -777,6 +777,65 @@ test('Eigenverbrauch bewertet: zusätzlich zum Schalter „Marktwert“, Marktpr
   assert.equal(elements.get('historySelfUseCard').hidden, true);
 });
 
+test('T12: Akku-Wirkungsgrad (DC) benannt, Systemwirkungsgrad (AC) mit Verlusten in kWh und €', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  assert.match(readPublic('history.html'), /Akku-Wirkungsgrad \(DC\)/);
+  const t = dynTariff();
+  t.selfUse = { ...t.selfUse, battery: { ...t.selfUse.battery, system: {
+    measurable: true, verified: true, label: 'Victron', note: null, reason: null, status: 'ok',
+    basis: { days: 23, firstDay: '2026-11-01', lastDay: '2026-11-23', hours: 548.2 },
+    dcEtaPct: 93.43, chargeEtaPct: 98.1, dischargeEtaPct: 90.6, chargerEtaPct: 92.4, systemEtaPct: 83.04,
+    losses: { dcKwh: 28.7, dcEur: 6.24, chargeKwh: 8.3, chargeEur: 2.4, dischargeKwh: 38.3, dischargeEur: 8.33, totalKwh: 75.3, totalEur: 16.97 },
+    energy: { inputKwh: 440.59, chargedKwh: 423.21, dischargedKwh: 420.5, acOutKwh: 366.82, storedDeltaKwh: -6.52 },
+    prices: { storedCtKwh: 21.76, chargeCtKwh: 28.9, chargeBasis: 'grid' }, converterLossKwh: 76.2 } } };
+  helpers.renderSummary({ view: 'month', date: '2026-11-23', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
+  assert.equal(elements.get('historySelfUseSystem').hidden, false);
+  assert.equal(elements.get('historySelfUseSysUnavailable').hidden, true);
+  assert.match(elements.get('historySelfUseSysEta').textContent, /83,0 %/);
+  assert.match(elements.get('historySelfUseSysCharge').textContent, /98,1 % \(Lader 92,4 %\)/);
+  assert.match(elements.get('historySelfUseSysDc').textContent, /93,4 %/);
+  assert.match(elements.get('historySelfUseSysDischarge').textContent, /90,6 %/);
+  assert.match(elements.get('historySelfUseSysLossTotal').textContent, /75,30 kWh · 16,97 €/);
+  assert.match(elements.get('historySelfUseSysLossCharge').textContent, /8,30 kWh · 2,40 €/);
+  assert.match(elements.get('historySelfUseSysPrices').textContent, /Ø Preis der Netzladung \(28,90 ct\/kWh\).*Einstandspreis je geladener kWh \(21,76 ct\/kWh\)/);
+  assert.match(elements.get('historySelfUseSysBasis').textContent, /23 Tage \(01\.11\.2026 bis 23\.11\.2026\)/);
+  assert.match(elements.get('historySelfUseSysBasis').textContent, /Eingesetzt 440,59 kWh, AC aus dem Akku 366,82 kWh, Ladestand -6,52 kWh/);
+  assert.match(elements.get('historySelfUseSysConverter').textContent, /76,20 kWh/);
+  assert.equal(elements.get('historySelfUseSysNote').hidden, true, 'Victron geprüft → kein Hinweis');
+  assert.equal(elements.get('historySelfUseValuation').hidden, true, 'ohne valuation = ac kein Hinweis');
+  assert.doesNotMatch(elements.get('historySelfUseSysLossTotal').textContent, /unvollständig/);
+  // Codex 3be47b54: Ladestand fehlte zeitweise → Summe unvollständig benannt.
+  t.selfUse.battery.system.losses = { ...t.selfUse.battery.system.losses, complete: false, dcCoveragePct: 62.5 };
+  helpers.renderSummary({ view: 'month', date: '2026-11-23', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
+  assert.match(elements.get('historySelfUseSysLossTotal').textContent, /16,97 € \(unvollständig\)/);
+  assert.match(elements.get('historySelfUseSysPrices').textContent, /Akku \(DC\) nur über 62,5 % der Messzeit/);
+  // Nicht messbar: Grund statt Zahl.
+  t.selfUse.battery.system = { measurable: false, status: 'not_measurable', reason: 'nicht messbar bei Fronius: PV ist AC' };
+  helpers.renderSummary({ view: 'month', date: '2026-11-23', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
+  assert.equal(elements.get('historySelfUseSystem').hidden, true);
+  assert.equal(elements.get('historySelfUseSysUnavailable').hidden, false);
+  assert.match(elements.get('historySelfUseSysUnavailable').textContent, /Systemwirkungsgrad \(AC\): nicht messbar bei Fronius/);
+  // Ohne Tagesjob (kein system-Feld): gar nichts.
+  helpers.renderSummary({ view: 'month', date: '2026-11-23', kpis: tariffKpis({ tariff: dynTariff() }), rows: [], meta: {} });
+  assert.equal(elements.get('historySelfUseSystem').hidden, true);
+  assert.equal(elements.get('historySelfUseSysUnavailable').hidden, true);
+});
+
+test('T13 B: Karte nennt die Bewertung mit Wandlung und den Vergleich ohne', () => {
+  const { helpers, elements } = loadHistoryPageHelpers();
+  const t = dynTariff();
+  t.selfUse = { ...t.selfUse, valuation: 'ac', otherConversionCostEur: 4.12,
+    battery: { ...t.selfUse.battery, acBasis: { dischargeEtaPct: 87.38, chargerEtaPct: 91.4 } },
+    flowsValuation: { loadKwh: 1045.68, advantageEur: 148.55, batteryResultEur: 92.05, peffCtKwh: 29.38, peffWithoutOpportunityCtKwh: 18.43 } };
+  helpers.renderSummary({ view: 'month', date: '2026-11-23', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
+  assert.equal(elements.get('historySelfUseValuation').hidden, false);
+  assert.match(elements.get('historySelfUseValuation').textContent,
+    /Mit Wandlung bewertet: Entladung × 87,4 %, Netzladung ÷ 91,4 %, Hausverbrauch gemessen\. Ohne Wandlung \(aus den Flüssen\) wären es Akku-Ergebnis 92,05 €, Vorteil 148,55 €, effektiver Preis 29,38 ct\/kWh bei 1\.045,68 kWh\. Wechselrichter außerhalb des Akku-Wegs \(Leerlauf, PV-Wandlung\): 4,12 €, im Vorteil schon abgezogen\./);
+  t.selfUse.valuation = 'flows';
+  helpers.renderSummary({ view: 'month', date: '2026-11-23', kpis: tariffKpis({ tariff: t }), rows: [], meta: {} });
+  assert.equal(elements.get('historySelfUseValuation').hidden, true);
+});
+
 test('Monate im Vergleich: Jahr mit Monatszeilen zeigt den Chart, Festtarif-Monate grau', () => {
   const { helpers, elements } = loadHistoryPageHelpers();
   const fixedMonth = { key: '2026-02', variableSlots: 0, allImportKwh: 50, allImportCostEur: 15, importKwh: 0 };

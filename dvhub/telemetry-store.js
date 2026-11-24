@@ -6,7 +6,7 @@ import { round2 } from './server-utils.js';
 import { resolutionFilterLimit } from './runtime-performance.js';
 import { expandHourlyPriceRows, PRICE_COVERAGE_PAD_MS, sampleEnergyBySlot, vrmNextSampleStartLookup } from './telemetry-runtime.js';
 // Historie: eigene Messwerte zuerst, VRM füllt auf (Christin 05.11.2026, „B“).
-import { chooseRawEntries, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
+import { chooseRawEntries, localSampleCreditSeconds, pickSlotSourceRow, PRIMARY_FLOW_SERIES, BATTERY_FLOW_SERIES, VRM_RAW_SCOPE } from './energy-source-rule.js';
 
 function isoTimestamp(input = new Date()) {
   if (input instanceof Date) return input.toISOString();
@@ -63,11 +63,11 @@ const secondBatteryKwhFields = (energyForSeries, dropLocal = false) => {
 const preferredSourceKindOf = (bySource, preferredSourceKinds) => (
   pickSlotSourceRow(bySource, preferredSourceKinds)?.source_kind ?? null
 );
-const slotFlowsFromVrm = (bucket, preferredSourceKinds) => PRIMARY_FLOW_SERIES
+const slotFlowsFromVrm = (bucket, preferredSourceKinds, series = PRIMARY_FLOW_SERIES) => series
   .some((seriesKey) => preferredSourceKindOf(bucket.get(seriesKey), preferredSourceKinds) === 'vrm_import');
 // Rohdaten-Ausweichpfad: VRM-Import landet mit scope 'history' in timeseries_samples.
 // Je Reihe gilt die gewaehlte Quelle (chooseRawEntries), nie ein Mittel aus beiden.
-const rawBucketHasVrmFlows = (bucket, bucketSeconds) => PRIMARY_FLOW_SERIES
+const rawBucketHasVrmFlows = (bucket, bucketSeconds, series = PRIMARY_FLOW_SERIES) => series
   .some((seriesKey) => chooseRawEntries(bucket.get(seriesKey), bucketSeconds).some((entry) => entry.scope === VRM_RAW_SCOPE));
 
 const MATERIALIZED_ENERGY_SERIES = new Set([
@@ -768,6 +768,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
           ...secondBatteryKwhFields(energyForSeries, rawBucketHasVrmFlows(bucket, bucketSeconds)),
+          batteryFlowsVrm: rawBucketHasVrmFlows(bucket, bucketSeconds, BATTERY_FLOW_SERIES),
           estimated: estimatedSeriesKeys.length > 0,
           incomplete: incompleteSeriesKeys.length > 0,
           estimatedSeriesCount: estimatedSeriesKeys.length,
@@ -914,6 +915,7 @@ export function createTelemetryStore({ dbPath, rawRetentionDays = 45, rollupInte
           batteryDirectUseKwh: energyForSeries('battery_direct_use_w'),
           batteryToGridKwh: energyForSeries('battery_to_grid_w'),
           ...secondBatteryKwhFields(energyForSeries, slotFlowsFromVrm(bucket, preferredSourceKinds)),
+          batteryFlowsVrm: slotFlowsFromVrm(bucket, preferredSourceKinds, BATTERY_FLOW_SERIES),
           sourceKind: overallSourceKind,
           sourceKinds: [...availableSourceKinds].sort(),
           estimated: estimatedSeriesKeys.length > 0,

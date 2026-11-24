@@ -389,10 +389,38 @@
             <div class="calc-row-line"><span>geladen</span><strong id="historySelfUseBattIn">-</strong></div>
             <div class="calc-row-line"><span>entladen</span><strong id="historySelfUseBattOut">-</strong></div>
             <div class="calc-row-line" title="Einstandspreis je entladene kWh → Nutzwert je entladene kWh. Die Lade-/Entladeverluste stecken im Einstandspreis."><span>Einstand &rarr; Nutzwert</span><strong id="historySelfUseBattPrices">-</strong></div>
-            <div class="calc-row-line"><span>Wirkungsgrad</span><strong id="historySelfUseBattEta">-</strong></div>
+            <div class="calc-row-line" title="DC am Akku rein → DC am Akku raus: entladen ÷ (geladen − Ladestand-Änderung). Ohne die Wandlung im Wechselrichter."><span>Akku-Wirkungsgrad (DC)</span><strong id="historySelfUseBattEta">-</strong></div>
             <p id="historySelfUseSoc" class="dv-hint" hidden></p>
           </div>
         </div>
+        <p id="historySelfUseValuation" class="dv-hint tariff-note-row" hidden></p>
+        <!-- Speicherweg mit Wandlung (T12, Christin 23.11.2026): Systemwirkungsgrad (AC)
+             und Verluste aus kpis.tariff.selfUse.battery.system (Tagesjob storage.js). -->
+        <div id="historySelfUseSystem" class="dv-grid tariff-grid tariff-system" hidden>
+          <div class="dv-section">
+            <div class="dv-label">Systemwirkungsgrad (AC)</div>
+            <div id="historySelfUseSysEta" class="dv-value">-</div>
+            <p class="dv-hint">Nutzbare AC-Energie aus dem Akku &divide; eingesetzte Energie f&uuml;rs Laden (Netz und AC-PV am Wechselrichter, DC-PV direkt). Mit diesem Wert rechnen die Verluste.</p>
+            <div class="calc-row-line" title="Akku geladen (DC) ÷ eingesetzte Energie: AC am Lader plus DC-PV, die ohne Wandlung in den Akku geht."><span>Laden mit Wandlung</span><strong id="historySelfUseSysCharge">-</strong></div>
+            <div class="calc-row-line" title="DC am Akku rein → raus wie oben, aber aus den Rohwerten derselben Messzeit. Kann vom Wert oben abweichen: der rechnet mit den Viertelstunden, und die können für ältere Zeiträume VRM-Werte enthalten."><span>&times; Akku (DC)</span><strong id="historySelfUseSysDc">-</strong></div>
+            <div class="calc-row-line" title="AC aus dem Akku ÷ Akku entladen (DC). Entlädt der Akku neben DC-PV, zählt sein Anteil."><span>&times; Entladen mit Wandlung</span><strong id="historySelfUseSysDischarge">-</strong></div>
+          </div>
+          <div class="dv-section">
+            <div class="dv-label">Verluste im Speicherweg</div>
+            <div id="historySelfUseSysLossTotal" class="dv-value">-</div>
+            <div class="calc-row-line"><span>Akku (DC)</span><strong id="historySelfUseSysLossDc">-</strong></div>
+            <div class="calc-row-line"><span>Wandler beim Laden</span><strong id="historySelfUseSysLossCharge">-</strong></div>
+            <div class="calc-row-line"><span>Wandler beim Entladen</span><strong id="historySelfUseSysLossDischarge">-</strong></div>
+            <p id="historySelfUseSysPrices" class="dv-hint"></p>
+          </div>
+          <div class="dv-section">
+            <div class="dv-label">Messgrundlage</div>
+            <p id="historySelfUseSysBasis" class="dv-hint"></p>
+            <p id="historySelfUseSysConverter" class="dv-hint" hidden></p>
+            <p id="historySelfUseSysNote" class="dv-hint" hidden></p>
+          </div>
+        </div>
+        <p id="historySelfUseSysUnavailable" class="dv-hint tariff-note-row" hidden></p>
         <p id="historySelfUseSkipped" class="dv-hint tariff-note-row" hidden></p>
       </section>
 

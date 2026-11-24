@@ -3053,6 +3053,22 @@ function renderSelfUseCard(summary) {
     : '';
   setText('historySelfUseSoc', soc);
   setHidden('historySelfUseSoc', !soc);
+  renderSelfUseSystem(b.system);
+  // T13 B (Christin 24.11.2026): mit gemessenem Speicherweg bewertet die Karte den
+  // Akku mit Wandlung; zum Vergleich die bisherige Bewertung aus den Flüssen.
+  const f = s.flowsValuation || {};
+  const acb = b.acBasis || {};
+  const valuation = s.valuation === 'ac'
+    ? `Mit Wandlung bewertet: Entladung × ${fmtPct(acb.dischargeEtaPct)}, `
+      + (hasFiniteNumber(acb.chargerEtaPct) ? `Netzladung ÷ ${fmtPct(acb.chargerEtaPct)}` : 'Netzladung ohne Korrektur (zu wenig gemessen)')
+      + `, Hausverbrauch gemessen. Ohne Wandlung (aus den Flüssen) wären es Akku-Ergebnis ${eurOrDash(f.batteryResultEur)}, `
+      + `Vorteil ${eurOrDash(f.advantageEur)}, effektiver Preis ${ctOrDash(f.peffCtKwh)} bei ${fmtKwh(f.loadKwh)}.`
+      + (hasFiniteNumber(s.otherConversionCostEur) && Number(s.otherConversionCostEur) !== 0
+        ? ` Wechselrichter außerhalb des Akku-Wegs (Leerlauf, PV-Wandlung): ${fmtEur(s.otherConversionCostEur)}, im Vorteil schon abgezogen.`
+        : '')
+    : '';
+  setText('historySelfUseValuation', valuation);
+  setHidden('historySelfUseValuation', !valuation);
   setText('historySelfUsePremium', hasFiniteNumber(kpis.marketPremiumEur) ? fmtEur(kpis.marketPremiumEur) : '-');
   const skipped = Number(s.skippedNoFlowSlots || 0) + Number(s.skippedNoPriceSlots || 0);
   const notes = [];
@@ -3060,6 +3076,61 @@ function renderSelfUseCard(summary) {
   if (Number(s.skippedNoPriceSlots || 0) > 0) notes.push(`${Number(s.skippedNoPriceSlots).toLocaleString('de-DE')} ohne Preis`);
   setText('historySelfUseSkipped', skipped > 0 ? `Nicht bewertet: ${notes.join(', ')}.` : '');
   setHidden('historySelfUseSkipped', skipped === 0);
+}
+
+// Speicherweg mit Wandlung (T12, Christin 23.11.2026): Systemwirkungsgrad (AC)
+// = Laden × Akku (DC) × Entladen, Verluste in kWh und €. Nicht messbar → Grund,
+// nie ein geratener Wert.
+function selfUseKwhEur(kwh, eur) {
+  return hasFiniteNumber(eur) ? `${fmtKwh(kwh)} · ${fmtEur(eur)}` : fmtKwh(kwh);
+}
+
+function renderSelfUseSystem(sys) {
+  const ok = Boolean(sys && sys.status === 'ok');
+  setHidden('historySelfUseSystem', !ok);
+  const unavailable = sys && !ok
+    ? `Systemwirkungsgrad (AC): ${sys.reason || 'nicht verfügbar'}.`
+    : '';
+  setText('historySelfUseSysUnavailable', unavailable);
+  setHidden('historySelfUseSysUnavailable', !unavailable);
+  if (!ok) return;
+  const pct = (value) => (hasFiniteNumber(value) ? fmtPct(value) : '-');
+  setText('historySelfUseSysEta', pct(sys.systemEtaPct));
+  setText('historySelfUseSysCharge', hasFiniteNumber(sys.chargerEtaPct)
+    ? `${pct(sys.chargeEtaPct)} (Lader ${pct(sys.chargerEtaPct)})`
+    : pct(sys.chargeEtaPct));
+  setText('historySelfUseSysDc', pct(sys.dcEtaPct));
+  setText('historySelfUseSysDischarge', pct(sys.dischargeEtaPct));
+  const l = sys.losses || {};
+  setText('historySelfUseSysLossTotal', `${selfUseKwhEur(l.totalKwh, l.totalEur)}${l.complete === false ? ' (unvollständig)' : ''}`);
+  setText('historySelfUseSysLossDc', selfUseKwhEur(l.dcKwh, l.dcEur));
+  setText('historySelfUseSysLossCharge', selfUseKwhEur(l.chargeKwh, l.chargeEur));
+  setText('historySelfUseSysLossDischarge', selfUseKwhEur(l.dischargeKwh, l.dischargeEur));
+  const pr = sys.prices || {};
+  const chargeBasis = pr.chargeBasis === 'pv' ? 'zur Ø Börse des PV-Stroms' : 'zum Ø Preis der Netzladung';
+  setText('historySelfUseSysPrices', `Bewertet wie oben: Laden-Verlust ${chargeBasis} (${ctOrDash(pr.chargeCtKwh)}), `
+    + `Akku- und Entlade-Verlust zum Einstandspreis je geladener kWh (${ctOrDash(pr.storedCtKwh)}).`
+    + (l.complete === false
+      ? ` Akku (DC) nur über ${fmtPct(l.dcCoveragePct)} der Messzeit (Ladestand fehlte zeitweise) – die Summe ist unvollständig.`
+      : ''));
+  const basis = sys.basis || {};
+  const range = basis.firstDay && basis.lastDay
+    ? (basis.firstDay === basis.lastDay ? fmtDateDe(basis.firstDay) : `${fmtDateDe(basis.firstDay)} bis ${fmtDateDe(basis.lastDay)}`)
+    : '-';
+  const e = sys.energy || {};
+  const flow = hasFiniteNumber(e.inputKwh)
+    ? ` Eingesetzt ${fmtKwh(e.inputKwh)}, AC aus dem Akku ${fmtKwh(e.acOutKwh)}, Ladestand ${fmtKwh(e.storedDeltaKwh)}.`
+    : '';
+  setText('historySelfUseSysBasis', `Gemessen aus den Rohwerten: ${Number(basis.days || 0).toLocaleString('de-DE')} Tage (${range}), `
+    + `${hasFiniteNumber(basis.hours) ? fmtHours(basis.hours) : '-'} Messzeit. Laden/Entladen erst ab 100 W.${flow}`);
+  const converter = hasFiniteNumber(sys.converterLossKwh)
+    ? `Wechselrichter insgesamt in der Messzeit (mit Leerlauf und PV-Wandlung): ${fmtKwh(sys.converterLossKwh)}.`
+    : '';
+  setText('historySelfUseSysConverter', converter);
+  setHidden('historySelfUseSysConverter', !converter);
+  const note = sys.note || (sys.verified ? '' : `${sys.label || 'Dieses Profil'}: am Gerät noch nicht gegengeprüft.`);
+  setText('historySelfUseSysNote', note);
+  setHidden('historySelfUseSysNote', !note);
 }
 
 historyState.tariffEstimated = readStoredChoice(TARIFF_ESTIMATED_KEY, ['include', 'exclude'], 'include');

@@ -330,6 +330,9 @@ html, body { max-width: 100%; overflow-x: hidden; }
    DV-Karte einspaltig. Die Monatstabelle lässt auf dem Handy die zwei
    Nebenspalten weg, damit nichts quer scrollt. */
 .dv-grid.tariff-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* Speicherweg mit Wandlung (T12): zweite Zeile der Eigenverbrauchs-Karte. */
+.dv-grid.tariff-system { margin-top: 12px; border-top: 1px solid var(--hairline); }
+.dv-grid.tariff-system[hidden] { display: none; }
 @media (max-width: 900px) {
   .dv-grid.tariff-grid { grid-template-columns: minmax(0, 1fr); }
 }

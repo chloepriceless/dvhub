@@ -89,8 +89,8 @@ const close = (actual, expected, msg, eps = 0.011) => {
   assert.ok(Math.abs(actual - expected) <= eps, `${msg}: ${actual} statt ${expected}`);
 };
 
-test('Ablage-Version 12 (dynamischer Tarif, §14a im Festpreis-Vergleich)', () => {
-  assert.equal(SUMMARY_CACHE_VERSION, 12);
+test('Ablage-Version 15 (dynamischer Tarif, §14a, Netzladung·p T12, gemessene Last und Akku-Herkunft T13)', () => {
+  assert.equal(SUMMARY_CACHE_VERSION, 15);
 });
 
 test('März mit Tarifwechsel am 15. und Sommerzeit: Ø, Börse, Aufschlag, Formel, Grundgebühr, Vergleich', async () => {
@@ -294,6 +294,47 @@ test('Eigenverbrauch bewertet: Flüsse je Viertelstunde, Ladestand am Rand (T7)'
   close(k.battery.socCorrectionEur, (3 * k.battery.storedValueCtKwh) / 100, 'Ladestand-Ausgleich', 0.01);
   // Einstand je geladener kWh: PV 0,1 kWh je Viertelstunde zur Börse.
   close(k.battery.storedValueCtKwh, 15, 'Ø Börse beim Laden (0/10/20/30)', 0.01);
+});
+
+test('T12: Systemwirkungsgrad aus dem Tagesjob für genau den Zeitraum; Fehler kostet nur ihn', async () => {
+  const store = makeStore({
+    fromUtc: '2026-05-31T22:00:00.000Z', toUtc: '2026-06-07T22:00:00.000Z', flows: true,
+    soc: { startValue: 20, endValue: 50 }
+  });
+  const pricing = { mode: 'dynamic', validFrom: '2026-01-01', dynamicComponents: DYN19, periods: [] };
+  const asked = [];
+  const runtime = runtimeFor(store, pricing, '2026-11-23', {
+    getOptimizerConfig: () => ({ batteryCapacityWh: 10000, batteryStages: [] }),
+    getStorageEfficiency: async (args) => {
+      asked.push(args);
+      return {
+        capability: { measurable: true, verified: true, label: 'Victron', reason: null, note: null },
+        totals: { status: 'ok', reason: null, days: 7, firstDay: '2026-06-01', lastDay: '2026-06-07', hours: 168,
+          chargeEta: 0.95, dischargeEta: 0.9, dcEta: 0.97, chargerEta: 0.92, converterLossKwh: 12,
+          raw: { chargeKwh: 19, inputKwh: 20, dischargeKwh: 10, acOutKwh: 9, chargeAllKwh: 19.2, dischargeAllKwh: 10.1, storedDeltaKwh: 8.8 } }
+      };
+    }
+  });
+  const b = (await runtime.getSummary({ view: 'week', date: '2026-06-03' })).kpis.tariff.selfUse.battery;
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].from, '2026-06-01');
+  assert.equal(asked[0].toExclusive, '2026-06-08');
+  // Kapazität je Tag aus der Optimierer-Einstellung (10 kWh) für ΔSoC.
+  assert.equal(asked[0].capacityKwhForDay('2026-06-03'), 10);
+  assert.equal(b.system.status, 'ok');
+  // 0,95 × 0,97 × 0,90 = 0,82935.
+  assert.equal(b.system.systemEtaPct, 82.94);
+  // Verluste aus den Job-Mengen: DC 19,2 − 8,8 − 10,1 = 0,3; Laden 20 − 19 = 1; Entladen 10 − 9 = 1.
+  assert.deepEqual([b.system.losses.dcKwh, b.system.losses.chargeKwh, b.system.losses.dischargeKwh], [0.3, 1, 1]);
+  // Einstandspreis wie die Karte.
+  assert.equal(b.system.prices.storedCtKwh, b.storedValueCtKwh);
+  const broken = runtimeFor(store, pricing, '2026-11-23', {
+    getOptimizerConfig: () => ({ batteryCapacityWh: 10000 }),
+    getStorageEfficiency: async () => { throw new Error('db weg'); }
+  });
+  const b2 = (await broken.getSummary({ view: 'week', date: '2026-06-03' })).kpis.tariff.selfUse.battery;
+  assert.equal(b2.system, null);
+  assert.equal(b2.etaPct, b.etaPct);
 });
 
 test('Codex 39d05c79: Tagesansicht – Viertelstunden-Zeilen ohne Tagesgebühr, Zeitraum einmal', async () => {

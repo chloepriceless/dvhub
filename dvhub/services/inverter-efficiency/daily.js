@@ -22,7 +22,9 @@
 //
 // Filter wie bei der Kalibrierung vom 2026-09-27: nur Entladung > 300 W,
 // stabile Samples (Akku ±5 % zum Vorgänger, Abstand < 12 s), SoC 7–98 %,
-// PV-Anteil am DC < 10 %, plausibles η 0,4–1,02.
+// PV-Anteil am DC < 10 %, plausibles η 0,4–1,02; ohne veraltete Proben (meta.stale)
+// und mit AC-PV = PV gesamt − DC-PV (zweite AC-PV-Position, 24.11.2026). Schon
+// berechnete Tage bleiben, wie sie sind; neu gerechnet werden heute und gestern.
 
 import { getPowerLimits } from '../power-limits.js';
 
@@ -39,6 +41,8 @@ export const EFFICIENCY_SERIES_KEYS = Object.freeze([
   'second_battery_charge_w',
   'second_battery_discharge_w',
   'load_measured_w',
+  // PV gesamt: AC-PV = PV gesamt − DC-PV (beide AC-PV-Positionen, 24.11.2026).
+  'pv_total_w',
 ]);
 
 // Lastbereiche relativ zur Nennleistung, damit dieselbe Definition auf jeder
@@ -73,8 +77,9 @@ export const MIN_SECONDS_FOR_VALUE = 600;
 
 const DAY_MS = 86_400_000;
 
-export const DAILY_EFFICIENCY_SQL = `
-WITH p AS (
+// Je Poll-Zeitstempel eine Zeile mit allen Reihen eines Kalendertags ($1 Tag,
+// $2 Zeitzone, $3 Reihen). Gemeinsam mit dem Speicherweg (storage.js, T12).
+export const EFFICIENCY_SAMPLES_CTE = `p AS (
   SELECT ts_utc AS t,
     max(value_num) FILTER (WHERE series_key = 'battery_power_w') AS bp,
     coalesce(
@@ -89,20 +94,32 @@ WITH p AS (
     coalesce(max(value_num) FILTER (WHERE series_key = 'pv_ac_l1_w'), 0)
       + coalesce(max(value_num) FILTER (WHERE series_key = 'pv_ac_l2_w'), 0)
       + coalesce(max(value_num) FILTER (WHERE series_key = 'pv_ac_l3_w'), 0) AS pac,
-    max(value_num) FILTER (WHERE series_key = 'battery_soc_pct') AS soc
+    max(value_num) FILTER (WHERE series_key = 'battery_soc_pct') AS soc,
+    -- PV gesamt (mit einer zweiten AC-PV-Position, die keine eigenen Reihen hat)
+    -- und veraltete Proben (Lesefehler) — für Wechselrichter und Speicherweg.
+    max(value_num) FILTER (WHERE series_key = 'pv_total_w') AS ptot,
+    -- meta_json ist je nach Installation TEXT oder JSONB (jsonb-Text: "stale": true).
+    bool_or(coalesce(meta_json::text, '') ~ '"stale"\\s*:\\s*true') AS stale
   FROM timeseries_samples
   WHERE scope = 'live'
     AND ts_utc >= ($1::date::timestamp AT TIME ZONE $2::text)
     AND ts_utc < (($1::date + 1)::timestamp AT TIME ZONE $2::text)
     AND series_key = ANY($3::text[])
   GROUP BY ts_utc
-),
+)`;
+
+export const DAILY_EFFICIENCY_SQL = `
+WITH ${EFFICIENCY_SAMPLES_CTE},
 q AS (
-  SELECT *, lag(bp) OVER (ORDER BY t) AS bp_prev, lag(t) OVER (ORDER BY t) AS t_prev
+  SELECT *, lag(bp) OVER (ORDER BY t) AS bp_prev, lag(t) OVER (ORDER BY t) AS t_prev,
+         lag(stale) OVER (ORDER BY t) AS stale_prev,
+         -- AC-PV = PV gesamt − DC-PV: zählt auch eine zweite AC-PV-Position mit, die
+         -- keine eigenen Reihen hat (24.11.2026); ohne PV gesamt wie bisher pv_ac_l1..l3.
+         coalesce(ptot - pdc, pac) AS pac_all
   FROM p
 ),
 r AS (
-  SELECT (ld + ge - gi - pac) AS ac,
+  SELECT (ld + ge - gi - pac_all) AS ac,
          (-bp + pdc) AS dc,
          extract(epoch FROM (t - t_prev)) AS dt
   FROM q
@@ -112,7 +129,9 @@ r AS (
     AND t - t_prev < interval '12 seconds'
     AND abs(bp - bp_prev) < 0.05 * abs(bp)
     AND soc BETWEEN 7 AND 98
-    AND (pac + pdc) < 0.10 * (-bp)
+    AND (pac_all + pdc) < 0.10 * (-bp)
+    -- veraltete Proben (Lesefehler, gehaltene Werte) und der Abstand danach zählen nicht
+    AND NOT coalesce(stale, false) AND NOT coalesce(stale_prev, false)
 ),
 b AS (
   SELECT width_bucket(ac / $4::float8, $5::float8[]) - 1 AS bin,

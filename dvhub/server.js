@@ -42,6 +42,9 @@ import { createHistoryApiHandlers, createHistoryRuntime } from './history-runtim
 import { createHistoryVizAggregator } from './services/history-viz/aggregator.js';
 import { createInverterEfficiencyDaily } from './services/inverter-efficiency/daily.js';
 import { createInverterCurveCalibrator } from './services/inverter-efficiency/calibrator.js';
+import { createStorageEfficiencyDaily, loadStorageEfficiency, storageEfficiencyCapability } from './services/inverter-efficiency/storage.js';
+import { createCoverageBackfill } from './services/history-backfill/coverage.js';
+import { createPvAcBackfill } from './services/history-backfill/pv-ac.js';
 import { createLogRetention } from './services/log-retention.js';
 import { applyDbTuning, dbBudgetMb, tuneTimescale, dbPoolMax } from './services/db-tuning.js';
 import { createMemoryWatch, trackRequest } from './services/memory-watch.js';
@@ -2660,7 +2663,15 @@ const telemetryReady = (async () => {
     // Akku der zweiten GX-Anlage: Kapazität für die Ladestand-Korrektur des
     // Gesamtverlusts (auch für Zeiträume, in denen sie lief).
     getSecondBatteryCapacityKwh: () => (Number(cfg.multiGx?.batteryCapacityWh) > 0 ? Number(cfg.multiGx.batteryCapacityWh) / 1000 : null),
-    getForecastConfig: () => cfg.forecast || {}
+    getForecastConfig: () => cfg.forecast || {},
+    // T12: Speicherweg mit Wandlung (Systemwirkungsgrad) aus dem Tagesjob unten.
+    // Ohne PostgreSQL (ctx.db) bleibt der Wert weg.
+    getStorageEfficiency: async ({ from, toExclusive, capacityKwhForDay }) => {
+      const capability = storageEfficiencyCapability(cfg);
+      if (!capability.measurable) return { capability, totals: null };
+      const totals = ctx.db ? await loadStorageEfficiency(ctx.db, { from, toExclusive, capacityKwhForDay }) : null;
+      return { capability, totals };
+    }
   }) : null;
   historyApi = createHistoryApiHandlers({
     historyRuntime,
@@ -2723,8 +2734,14 @@ const telemetryReady = (async () => {
     const inverterEfficiencyDaily = createInverterEfficiencyDaily({
       getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
     });
+    // T12: Speicherweg mit Wandlung (Systemwirkungsgrad) im selben Takt, nur
+    // lesend auf den Rohwerten; läuft nur, wo er messbar ist (storage.js).
+    const storageEfficiencyDaily = createStorageEfficiencyDaily({
+      getDb: () => ctx.db, getCfg: ctx.getCfg, pushLog,
+    });
     const runInverterEfficiencyDaily = () => {
       inverterEfficiencyDaily.runOnce()
+        .then(() => storageEfficiencyDaily.runOnce())
         // Danach die Kurve (180 Tage bis zum letzten 30-Tage-Periodenende) — ändert sich nur
         // alle 30 Tage (curveHash), dann EOS neu. Kosten: 1 Abfrage ~2 ms.
         .then(() => ctx.inverterCurve.refresh())
@@ -2733,6 +2750,35 @@ const telemetryReady = (async () => {
         });
     };
     setTimeout(runInverterEfficiencyDaily, 3 * 60 * 1000).unref();
+    // T14 (Christin 24.11.2026): Abdeckung der eigenen 15-min-Werte für den
+    // Altbestand aus den Rohwerten nachrechnen (services/history-backfill/coverage.js).
+    // Je Lauf höchstens ein Tag (ein UPDATE, auf der A7S ~12 s), alle 5 min, ab 6 min
+    // nach dem Start; wiederaufnehmbar über die Datenbank, danach nur noch ein
+    // Kontroll-Scan je Tag.
+    const coverageBackfill = createCoverageBackfill({
+      getDb: () => ctx.db, pushLog,
+      onDayUpdated: (fromIso) => telemetryStore?.noteHistoryRangeChanged?.(fromIso),
+    });
+    const runCoverageBackfill = () => {
+      coverageBackfill.runOnce().catch((error) => pushLog('history_coverage_backfill_error', { error: error.message }));
+    };
+    setTimeout(() => {
+      runCoverageBackfill();
+      setInterval(runCoverageBackfill, 5 * 60 * 1000).unref();
+    }, 6 * 60 * 1000).unref();
+    // AC-PV (pv_ac_w) der eigenen Viertelstunden vor dem 24.11.2026 aus den Rohwerten
+    // nachtragen (services/history-backfill/pv-ac.js), gleicher Takt, versetzt.
+    const pvAcBackfill = createPvAcBackfill({
+      getDb: () => ctx.db, pushLog,
+      onDayUpdated: (fromIso) => telemetryStore?.noteHistoryRangeChanged?.(fromIso),
+    });
+    const runPvAcBackfill = () => {
+      pvAcBackfill.runOnce().catch((error) => pushLog('history_pv_ac_backfill_error', { error: error.message }));
+    };
+    setTimeout(() => {
+      runPvAcBackfill();
+      setInterval(runPvAcBackfill, 5 * 60 * 1000).unref();
+    }, 8 * 60 * 1000).unref();
     // Gestufte Log-Aufbewahrung (services/log-retention.js): 60 Tage voll,
     // dann verdichtet bis 2 Jahre. Nachts um ~03:40 und einmal 15 min nach dem
     // Start; je Lauf höchstens 5 min Arbeit.
