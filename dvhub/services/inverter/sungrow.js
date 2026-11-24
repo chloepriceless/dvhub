@@ -25,7 +25,7 @@ import { GateBlockedError } from '../gate/index.js';
 import { c2AllowsRelease, createLegacyGate, inverterReleaseState, modbusLegacySink, SUNGROW_GATE_DEVICES } from '../gate/legacy.js';
 import { createModbusHealth, classifyModbusError, modbusRequestInfo } from './modbus-health.js';
 import { releaseBackoffNextAt } from '../release-backoff.js';
-import { bootStamp, monoNow as sharedMonoNow, monoStampAge } from '../mono-clock.js';
+import { bootStamp, monoNow as sharedMonoNow, monoStampAge, monoStampOf } from '../mono-clock.js';
 import { curtailmentTestRunning } from '../curtailment-test.js';
 
 /** Doku-Adresse → Draht-Adresse. */
@@ -889,7 +889,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     releaseInfo: null,
     deliver: {},          // M28: Liefert-nicht-Erkennung je WR und Richtung ('master:discharge' → { underSince, stalledUntil, episode })
     limit: {},            // M28 Grundsatz 0: gemessene Lieferfähigkeit je WR und Richtung ('slave:discharge' → { limited, limitW, … })
-    splitLast: null,      // M28: zuletzt erfolgreich kommandierte Anteile im Split { direction, masterW, slaveW, at }
+    splitLast: null,      // M28: zuletzt erfolgreich kommandierte Anteile im Split { direction, masterW, slaveW, at, mono }
     drivenRegulateMs: null, // N3 (nur Slave): Takt, in dem der Master diesen Slave führt (setDrivenRegulateMs)
     // Slave (Christin 21.11.2026, Fable P2-1): Befehl Stopp seit der letzten eigenen Rücknahme/Prüfung am Gerät
     // bestätigt (zurückgelesen). Gelöscht, sobald DVhub einen Befehl schreibt oder die Verbindung wechselt; bis zur
@@ -1929,13 +1929,20 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   // (splitStrategyShares). Danach bekommt er seinen Anteil probeweise zurück; liefert er wieder, ist die Lage aufgehoben,
   // sonst greift die Erkennung nach STALL_DETECT_MS erneut. Ein Log je Lage (Erkennen + Erholung), nicht je Probe.
   // Gemessen wird gegen den im VORIGEN Takt kommandierten Anteil (die Messung zeigt dessen Wirkung).
+  // A27 (Christin 24.11.2026): alle Zeiten hier sind monoton — Takt (tMono), Befehlszeit (splitLast.mono), Messzeit (mono
+  // der Messung: Erzeuger-Marke des Pollers bzw. Begleitdienstes, A24). Einschwingzeit, STALL_DETECT_MS, LIMIT_CONFIRM_MS,
+  // Probe- und Verfallsfristen überstehen so einen Sprung der Systemzeit. Die Wanduhr-Messzeit (at) dient nur noch als
+  // Kennung „neue Messung“ (Gleichheit, kein Abstand). Nichts davon wird gespeichert oder angezeigt.
   const wrLabel = (wr) => (wr === 'master' ? 'Master' : 'Slave');
   function deliverEntry(wr, direction) {
     const k = `${wr}:${direction}`;
-    if (!st.deliver[k]) st.deliver[k] = { underSince: 0, stalledUntil: 0, episode: false };
+    if (!st.deliver[k]) st.deliver[k] = { underSince: null, stalledUntil: null, episode: false };
     return st.deliver[k];
   }
-  function isStalled(wr, direction, t) { return deliverEntry(wr, direction).stalledUntil > t; }
+  function isStalled(wr, direction, tMono) {
+    const until = deliverEntry(wr, direction).stalledUntil;
+    return until != null && until > tMono;
+  }
 
   // M28 Grundsatz 0: gemessene Lieferfähigkeit je WR und Richtung (siehe LIMIT_*). Beurteilt wird nur eine NEUE Messung
   // (Zeitstempel), und erst LIMIT_SETTLE_MS nach einer Befehlserhöhung — sonst hielte DVhub die alte, 5 s alte
@@ -1944,86 +1951,88 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
   const exitTolW = (cmdW) => Math.max(LIMIT_EXIT_MIN_W, LIMIT_EXIT_RATIO * cmdW);
   function limitEntry(wr, direction) {
     const k = `${wr}:${direction}`;
-    if (!st.limit[k]) st.limit[k] = { limited: false, limitW: null, underSince: 0, cmdW: 0, cmdRaisedAt: 0, lastSampleAt: 0, judgedAt: 0 };
+    if (!st.limit[k]) st.limit[k] = { limited: false, limitW: null, underSince: null, cmdW: 0, cmdRaisedAt: null, lastSampleAt: 0, judgedAt: null };
     return st.limit[k];
   }
-  function judgeLimit(wr, direction, cmdW, sample, commandedAt, probeW = LIMIT_PROBE_W) {
+  function judgeLimit(wr, direction, cmdW, sample, commandedMono, probeW = LIMIT_PROBE_W) {
     const L = limitEntry(wr, direction);
     // Codex 07041019 (P2): eine deutliche Befehlserhöhung beginnt die Bestätigung neu — eine Lücke kurz davor darf beim
     // normalen Hochfahren keine Grenze bestätigen.
-    if (cmdW > L.cmdW + enterTolW(cmdW)) { L.cmdRaisedAt = commandedAt; L.underSince = 0; }
+    if (cmdW > L.cmdW + enterTolW(cmdW)) { L.cmdRaisedAt = commandedMono; L.underSince = null; }
     L.cmdW = cmdW;
     const at = Number(sample?.at) || 0;
+    const mAt = sample?.mono;
     const w = sample?.w;
-    if (!at || at === L.lastSampleAt || w == null || !Number.isFinite(Number(w))) return;
+    if (!at || at === L.lastSampleAt || mAt == null || w == null || !Number.isFinite(Number(w))) return;
     L.lastSampleAt = at;
-    if (at < L.cmdRaisedAt + LIMIT_SETTLE_MS) return;
-    if (!(cmdW >= LIMIT_MIN_CMD_W)) { L.underSince = 0; return; }
-    L.judgedAt = at;
+    if (L.cmdRaisedAt != null && mAt < L.cmdRaisedAt + LIMIT_SETTLE_MS) return;
+    if (!(cmdW >= LIMIT_MIN_CMD_W)) { L.underSince = null; return; }
+    L.judgedAt = mAt;
     const delivered = direction === 'charge' ? Math.max(0, Number(w)) : Math.max(0, -Number(w));
     const deficit = cmdW - delivered;
     const rounded = Math.round(delivered / 10) * 10;
     if (L.limited) {
       const prev = Number(L.limitW) || 0;
       // Liefert wieder, was befohlen ist — und verlangt war klar mehr als die alte Grenze → Begrenzung aufgehoben.
-      if (deficit <= exitTolW(cmdW) && cmdW >= prev + probeW / 2) { L.limited = false; L.limitW = null; L.underSince = 0; return; }
+      if (deficit <= exitTolW(cmdW) && cmdW >= prev + probeW / 2) { L.limited = false; L.limitW = null; L.underSince = null; return; }
       // Echte Lücke → die Messung ist die Lieferfähigkeit; sonst (liefert den Befehl) nur nach oben nachführen.
       L.limitW = deficit > exitTolW(cmdW) ? rounded : Math.max(prev, rounded);
       return;
     }
     if (deficit > enterTolW(cmdW)) {
-      if (!L.underSince) L.underSince = at;
-      if (at - L.underSince >= LIMIT_CONFIRM_MS) { L.limited = true; L.limitW = rounded; L.underSince = 0; }
-    } else L.underSince = 0;
+      if (L.underSince == null) L.underSince = mAt;
+      if (mAt - L.underSince >= LIMIT_CONFIRM_MS) { L.limited = true; L.limitW = rounded; L.underSince = null; }
+    } else L.underSince = null;
   }
-  function limitInfo(wr, direction, t) {
+  function limitInfo(wr, direction, tMono) {
     const L = st.limit[`${wr}:${direction}`];
     if (!L || !L.limited) return { limited: false, limitW: null };
-    if (t - L.judgedAt > LIMIT_STALE_MS) { L.limited = false; L.limitW = null; return { limited: false, limitW: null }; }
+    if (L.judgedAt == null || tMono - L.judgedAt > LIMIT_STALE_MS) { L.limited = false; L.limitW = null; return { limited: false, limitW: null }; }
     return { limited: true, limitW: Math.max(0, Number(L.limitW) || 0) };
   }
 
-  function trackDelivery(t, measured, probeW = LIMIT_PROBE_W) {
+  function trackDelivery(tMono, measured, probeW = LIMIT_PROBE_W) {
     const last = st.splitLast;
-    if (!last || t - last.at > STALL_TRACK_MAX_GAP_MS) {
-      for (const e of Object.values(st.deliver)) e.underSince = 0;
-      for (const L of Object.values(st.limit)) L.underSince = 0;
+    if (!last || last.mono == null || tMono - last.mono > STALL_TRACK_MAX_GAP_MS) {
+      for (const e of Object.values(st.deliver)) e.underSince = null;
+      for (const L of Object.values(st.limit)) L.underSince = null;
       return;
     }
     // Codex 402a3df9 (P2): eine Messung in der GEGENRICHTUNG unterbricht die laufende Messung — sonst zählten Sekunden
     // aus einem früheren Entlade-Abschnitt nach einer Ladephase weiter und der WR flöge nach 1 s heraus. Codex e5b5fffe
     // (P2): auch der Befehl der anderen Richtung gilt als 0 — die Rückkehr ist dann eine Befehlserhöhung mit
     // Einschwingzeit, und ein Messwert von VOR dem Wiederbeginn (z. B. ein stehender Lade-Messwert) zählt nicht.
-    for (const [k, e] of Object.entries(st.deliver)) if (!k.endsWith(`:${last.direction}`)) { e.underSince = 0; e.cmdW = 0; }
-    for (const [k, L] of Object.entries(st.limit)) if (!k.endsWith(`:${last.direction}`)) { L.underSince = 0; L.cmdW = 0; }
+    for (const [k, e] of Object.entries(st.deliver)) if (!k.endsWith(`:${last.direction}`)) { e.underSince = null; e.cmdW = 0; }
+    for (const [k, L] of Object.entries(st.limit)) if (!k.endsWith(`:${last.direction}`)) { L.underSince = null; L.cmdW = 0; }
     for (const wr of ['master', 'slave']) {
       const e = deliverEntry(wr, last.direction);
       const shareW = Math.max(0, Number(last[`${wr}W`]) || 0);
-      judgeLimit(wr, last.direction, shareW, measured[wr], last.at, probeW);
+      judgeLimit(wr, last.direction, shareW, measured[wr], last.mono, probeW);
       // Codex 402a3df9 (P2): nur eine NEUE Messung zählt, gemessen nach dem Einschwingen auf den Befehl, und die Frist
       // läuft in Messzeit — eine stehende (alte) Messung ist kein neuer Beleg, egal wie viele Takte vergehen.
-      if (shareW > (e.cmdW || 0) + enterTolW(shareW)) { e.cmdRaisedAt = last.at; e.underSince = 0; }
+      if (shareW > (e.cmdW || 0) + enterTolW(shareW)) { e.cmdRaisedAt = last.mono; e.underSince = null; }
       e.cmdW = shareW;
       const m = measured[wr]?.w;
       const at = Number(measured[wr]?.at) || 0;
-      if (!(shareW > STALL_MIN_SHARE_W) || m == null || !Number.isFinite(Number(m)) || !at) { e.underSince = 0; continue; }
+      const mAt = measured[wr]?.mono;
+      if (!(shareW > STALL_MIN_SHARE_W) || m == null || !Number.isFinite(Number(m)) || !at || mAt == null) { e.underSince = null; continue; }
       if (at === e.lastSampleAt) continue;
       e.lastSampleAt = at;
-      if (at < (e.cmdRaisedAt || 0) + LIMIT_SETTLE_MS) continue;
+      if (e.cmdRaisedAt != null && mAt < e.cmdRaisedAt + LIMIT_SETTLE_MS) continue;
       const deliveredW = last.direction === 'charge' ? Math.max(0, Number(m)) : Math.max(0, -Number(m));
       const dirText = last.direction === 'charge' ? 'Lade' : 'Entlade';
       if (deliveredW >= STALL_DELIVER_RATIO * shareW) {
-        e.underSince = 0;
+        e.underSince = null;
         if (e.episode) {
-          e.episode = false; e.stalledUntil = 0;
+          e.episode = false; e.stalledUntil = null;
           pushLog('sungrow_ems_share_recovered', { wr, direction: last.direction, shareW, deliveredW: Math.round(deliveredW), text: `Sungrow: ${wrLabel(wr)} liefert seinen ${dirText}-Anteil wieder (${Math.round(deliveredW)} von ${shareW} W).` });
         }
         continue;
       }
-      if (!e.underSince) e.underSince = at;
-      if (at - e.underSince < STALL_DETECT_MS) continue;
-      e.underSince = 0;
-      e.stalledUntil = t + STALL_PROBE_MS;
+      if (e.underSince == null) e.underSince = mAt;
+      if (mAt - e.underSince < STALL_DETECT_MS) continue;
+      e.underSince = null;
+      e.stalledUntil = tMono + STALL_PROBE_MS;
       e.stallDeliveredW = Math.round(deliveredW); // was er beim Erkennen noch lieferte (Grundsatz 0, stalledOut)
       if (!e.episode) {
         e.episode = true;
@@ -2114,12 +2123,22 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // Messzeitpunkt je WR (Grundsatz 0 beurteilt nur neue Messungen): Master = Poll-Stempel der Akku-Leistung, Slave =
     // Lesetakt des Begleitdienstes (state.sungrowSecond.updatedAt, alle 5 s).
     const slaveSampleAt = Number(state.sungrowSecond?.updatedAt) || 0;
+    // A27: Messzeit monoton — die Marke des Erzeugers (Poller bzw. Begleitdienst, A24, gleiche Uhr). Ohne Marke (fremder
+    // Erzeuger, Stempel überschrieben) geschätzt: jetzt minus Wanduhr-Alter, nie in der Zukunft.
+    const tMono = monoNow();
+    const sampleMono = (box, key, wallAt) => {
+      if (!(wallAt > 0)) return null;
+      return monoStampOf(box, key, monoNow) ?? (tMono - Math.max(0, t - wallAt));
+    };
     // Codex 07041019 (P2): die Probe über der gemessenen Grenze muss größer sein als die Schreibschwelle (stepW), sonst
     // geht sie nie ans Gerät.
     const probeW = Math.max(LIMIT_PROBE_W, (Number(opts.stepW) || 0) + 10);
-    trackDelivery(t, { master: { w: masterMeasW, at: masterMeasW == null ? 0 : masterBattAt }, slave: { w: second.batteryPowerW, at: slaveSampleAt } }, probeW);
-    const mLim = limitInfo('master', direction, t);
-    const sLim = limitInfo('slave', direction, t);
+    trackDelivery(tMono, {
+      master: { w: masterMeasW, at: masterMeasW == null ? 0 : masterBattAt, mono: masterMeasW == null ? null : sampleMono(vic.fieldUpdatedAt, 'batteryPowerW', masterBattAt) },
+      slave: { w: second.batteryPowerW, at: slaveSampleAt, mono: sampleMono(state.sungrowSecond, 'updatedAt', slaveSampleAt) },
+    }, probeW);
+    const mLim = limitInfo('master', direction, tMono);
+    const sLim = limitInfo('slave', direction, tMono);
     // „Liefert nicht" nimmt einen WR nur heraus, wenn der andere selbst nicht begrenzt ist — oder wenn der hängende WR
     // praktisch nichts liefert. Sonst trägt er weiter seinen Ist-Anteil (Grundsatz 0): ihn herauszunehmen kostete genau
     // das, was er noch liefert, wenn der andere den Rest nicht tragen kann.
@@ -2138,10 +2157,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     // bzw. Marge, in master-only/Notladung und wenn er selbst „liefert nicht".
     const roomOf = (lim, maxW, baseW) => Math.max(0, (lim.limited ? Math.min(maxW, lim.limitW + probeW) : maxW) - baseW);
     const base = splitStrategyShares(strategy, { ...shareArgs, masterStalled: false, slaveStalled: false });
-    const slaveRoomW = base.slaveUncommanded || slaveEmergency || base.slaveOut || isStalled('slave', direction, t) ? 0 : roomOf(sLim, slaveMax, base.slaveW);
-    const masterRoomW = base.masterOut || isStalled('master', direction, t) ? 0 : roomOf(mLim, masterMax, base.masterW);
+    const slaveRoomW = base.slaveUncommanded || slaveEmergency || base.slaveOut || isStalled('slave', direction, tMono) ? 0 : roomOf(sLim, slaveMax, base.slaveW);
+    const masterRoomW = base.masterOut || isStalled('master', direction, tMono) ? 0 : roomOf(mLim, masterMax, base.masterW);
     const stalledOut = (wr, other, otherRoomW) => {
-      if (!isStalled(wr, direction, t)) return false;
+      if (!isStalled(wr, direction, tMono)) return false;
       const deliveredW = Number(deliverEntry(wr, direction).stallDeliveredW) || 0;
       return deliveredW < LIMIT_MIN_CMD_W || (!other.limited && otherRoomW >= deliveredW);
     };
@@ -2168,10 +2187,10 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
     const masterShortW = shortOf(mLim, masterW);
     const slaveShortW = shortOf(sLim, slaveW);
     let masterCmdW = masterW; let slaveCmdW = slaveW; let transferW = 0; let transferTo = null;
-    if (masterShortW > 0 && slaveShortW === 0 && !skipSlave && !slaveOut && !isStalled('slave', direction, t)) {
+    if (masterShortW > 0 && slaveShortW === 0 && !skipSlave && !slaveOut && !isStalled('slave', direction, tMono)) {
       transferW = Math.min(masterShortW, roomOf(sLim, slaveMax, slaveW));
       if (transferW > 0) { slaveCmdW = slaveW + transferW; transferTo = 'slave'; }
-    } else if (slaveShortW > 0 && masterShortW === 0 && !masterOut && !isStalled('master', direction, t)) {
+    } else if (slaveShortW > 0 && masterShortW === 0 && !masterOut && !isStalled('master', direction, tMono)) {
       transferW = Math.min(slaveShortW, roomOf(mLim, masterMax, masterW));
       if (transferW > 0) { masterCmdW = masterW + transferW; transferTo = 'master'; }
     }
@@ -2263,6 +2282,7 @@ export function createSungrowEms({ state, getCfg, transport: baseTransport, push
       masterW: devShareW(masterDev, effMasterW),
       slaveW: skipSlave || slaveFellBack ? 0 : devShareW(slaveReadback, effSlaveW),
       at: t,
+      mono: tMono, // A27: Befehlszeit monoton (Einschwingzeit, Taktlücke)
     });
     // Master-Anteil. Scheitert er → beide sicher in Self.
     let masterModeSeen = null; // Modus am Master in diesem Takt (zurückgestellter Eintritt, Codex P1)
