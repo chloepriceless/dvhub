@@ -10,6 +10,7 @@
 export const CHARGER_STATUS_INTERVAL_MS = 15_000;
 export const CHARGER_STATUS_MAX_AGE_MS = 90_000;
 import { DIRECT_WALLBOX_TYPES } from './types.js';
+import { pickMonoNow, stampMono, monoStampOf, monoStampAge } from '../mono-clock.js';
 
 export const DIRECT_CHARGERS = DIRECT_WALLBOX_TYPES;
 
@@ -19,7 +20,11 @@ export const DIRECT_CHARGERS = DIRECT_WALLBOX_TYPES;
  * @param {(type:string)=>object|null} deps.getAdapter  Adapter mit status() (services/wallbox/adapters.js)
  * @param {()=>number} [deps.now]
  */
-export function createChargerStatusPoller({ getCfg, getAdapter, now = () => Date.now() }) {
+export function createChargerStatusPoller({ getCfg, getAdapter, now: nowArg = null, monoNow: monoNowArg = null }) {
+  const now = nowArg || (() => Date.now());
+  // A28 (Christin/Koordinator 24.11.2026): Frische (90 s) monoton — der Status trägt an `at` eine unsichtbare monotone
+  // Marke (stampMono); `at` bleibt Systemzeit. Eine eingespielte Uhr (Tests) misst wie bisher mit.
+  const mono = pickMonoNow(monoNowArg, nowArg);
   let timer = null;
   let running = false;
   let last = null; // { type, ok, connected, charging, powerW, currentA, vehicleSocPct, at, error }
@@ -31,6 +36,9 @@ export function createChargerStatusPoller({ getCfg, getAdapter, now = () => Date
     const adapter = getAdapter(type);
     if (!adapter || adapter.isConfigured?.() === false) { last = null; return null; }
     running = true;
+    const prevMono = last ? monoStampOf(last, 'at', mono) : null;
+    // Fehler behalten den alten Zustand samt alter Messzeit — auch deren monotone Marke.
+    const keepMark = () => { if (prevMono != null && last) stampMono(last, 'at', { clock: mono, at: prevMono }); };
     try {
       const st = await adapter.status();
       last = st?.ok
@@ -54,8 +62,10 @@ export function createChargerStatusPoller({ getCfg, getAdapter, now = () => Date
         }
         // Fehler: alten Zustand behalten (mit altem Zeitstempel → veraltet nach 90 s)
         : { ...(last || { type, ok: false }), type, error: st?.error || 'no_status', errorAt: now() };
+      if (st?.ok) stampMono(last, 'at', { clock: mono }); else keepMark();
     } catch (e) {
       last = { ...(last || { type, ok: false }), type, error: String(e?.message || e).slice(0, 120), errorAt: now() };
+      keepMark();
     } finally {
       running = false;
     }
@@ -75,7 +85,7 @@ export function createChargerStatusPoller({ getCfg, getAdapter, now = () => Date
     fresh() {
       if (!last || !last.ok || !Number.isFinite(last.at)) return null;
       if (last.type !== getCfg()?.wallbox?.type) return null;
-      return now() - last.at <= CHARGER_STATUS_MAX_AGE_MS ? last : null;
+      return (monoStampAge(last, 'at', mono) ?? (now() - last.at)) <= CHARGER_STATUS_MAX_AGE_MS ? last : null;
     },
     raw: () => last,
   };

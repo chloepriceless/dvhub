@@ -255,10 +255,10 @@ export function createEebusService(ctx, deps = {}) {
 
   function makeMachine(kind, c) {
     return kind === 'lpc'
-      ? createLimitStateMachine({ kind, failsafeW: c.grid.failsafeConsumptionW || autoFailsafeConsumptionW(), failsafeDurationS: c.grid.failsafeConsumptionDurationS, now })
+      ? createLimitStateMachine({ kind, failsafeW: c.grid.failsafeConsumptionW || autoFailsafeConsumptionW(), failsafeDurationS: c.grid.failsafeConsumptionDurationS, now: deps.now, monoNow: deps.monoNow })
       // 0 = keine Vorgabe → Nennleistung: ein Abbruch zur Steuerbox darf die
       // PV nicht für Stunden auf null setzen, solange sie selbst nichts schreibt.
-      : createLimitStateMachine({ kind, failsafeW: c.grid.failsafeProductionW || c.grid.productionNominalMaxW || defaultProductionNominal(), failsafeDurationS: c.grid.failsafeProductionDurationS, now });
+      : createLimitStateMachine({ kind, failsafeW: c.grid.failsafeProductionW || c.grid.productionNominalMaxW || defaultProductionNominal(), failsafeDurationS: c.grid.failsafeProductionDurationS, now: deps.now, monoNow: deps.monoNow });
   }
   let machines = { lpc: makeMachine('lpc', cfgNow()), lpp: makeMachine('lpp', cfgNow()) };
 

@@ -22,6 +22,8 @@
 // wird persistiert (toJSON / restore), denn Failsafe-Werte und ein laufender
 // Failsafe müssen einen Neustart überdauern.
 
+import { pickMonoNow } from '../mono-clock.js';
+
 export const LP_STATES = Object.freeze([
   'disabled', 'init', 'unlimited_controlled', 'limited', 'failsafe', 'unlimited_autonomous',
 ]);
@@ -34,8 +36,16 @@ export const HEARTBEAT_TIMEOUT_MS = 120_000;
  * @param {number} opts.failsafeW            Vorgabe bis die Steuerbox eigene Werte schreibt
  * @param {number} opts.failsafeDurationS    dito (EEBUS: 2–24 h)
  * @param {() => number} [opts.now]
+ * @param {() => number} [opts.monoNow]  monotone Uhr für Abstände (A28); ohne Angabe misst eine eingespielte now-Uhr mit
  */
-export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, now = () => Date.now() }) {
+export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, now: nowArg = null, monoNow: monoNowArg = null }) {
+  const now = nowArg || (() => Date.now());
+  // A28 (24.11.2026): im laufenden Prozess messen Failsafe-Dauer, Heartbeat-Frist (120 s), Init-Frist und die
+  // Reihenfolge „neue Grenze nach Failsafe-Beginn“ monoton. Die Zeitpunkte (since, failsafeSince, lastHeartbeatAt,
+  // lastWriteAt) bleiben Systemzeit für Anzeige und Ablage; das Wiederherstellen nach einem Neustart (restore) prüft
+  // wie bisher mit der Systemzeit und rechnet die Restzeit danach monoton weiter. Nichts Monotones wird gespeichert.
+  const mono = pickMonoNow(monoNowArg, nowArg);
+  const m = { initAt: null, lastHeartbeatAt: null, lastWriteAt: null, failsafeSince: null };
   const s = {
     kind,
     state: 'disabled',
@@ -59,8 +69,8 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
     if (s.state === next) return false;
     s.state = next;
     s.since = now();
-    if (next === 'failsafe') s.failsafeSince = now();
-    if (next !== 'failsafe') s.failsafeSince = null;
+    if (next === 'failsafe') { s.failsafeSince = now(); m.failsafeSince = mono(); }
+    if (next !== 'failsafe') { s.failsafeSince = null; m.failsafeSince = null; }
     return true;
   }
 
@@ -77,6 +87,7 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
     if (!enabled) return go('disabled');
     if (s.state !== 'disabled') return false;
     s.initAt = now();
+    m.initAt = mono();
     return go('init');
   }
 
@@ -91,9 +102,11 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
       until: Number.isFinite(d) && d > 0 ? t + d * 1000 : null,
     };
     s.lastWriteAt = t;
+    m.lastWriteAt = mono();
     // Ein Schreibvorgang beweist eine lebende Verbindung.
     s.heartbeatOk = true;
     s.lastHeartbeatAt = t;
+    m.lastHeartbeatAt = m.lastWriteAt;
     if (s.state === 'disabled') return false;
     return go(controlledState());
   }
@@ -125,7 +138,7 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
   /** Heartbeat-Zustand laut Brücke (openeebus prüft die Frist). */
   function onHeartbeat(ok) {
     s.heartbeatOk = ok === true;
-    if (s.heartbeatOk) s.lastHeartbeatAt = now();
+    if (s.heartbeatOk) { s.lastHeartbeatAt = now(); m.lastHeartbeatAt = mono(); }
     return evaluate();
   }
 
@@ -133,30 +146,32 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
   // sofort als „kein Heartbeat“; EEBUS verlangt den Failsafe erst nach 120 s
   // ohne Heartbeat — ein Neustart der Steuerbox oder ein kurzer Netzaussetzer
   // darf die Anlage nicht für mindestens 2 h in den Failsafe schicken.
-  function heartbeatLost(t) {
+  function heartbeatLost(tm) {
     if (s.heartbeatOk) return false;
-    return s.lastHeartbeatAt == null || t - s.lastHeartbeatAt >= HEARTBEAT_TIMEOUT_MS;
+    return m.lastHeartbeatAt == null || tm - m.lastHeartbeatAt >= HEARTBEAT_TIMEOUT_MS;
   }
 
   /** Zeitabhängige Übergänge; regelmäßig aufrufen. Liefert true bei Zustandswechsel. */
   function evaluate() {
     const t = now();
-    if (s.heartbeatOk) s.lastHeartbeatAt = t;
+    const tm = mono();
+    if (s.heartbeatOk) { s.lastHeartbeatAt = t; m.lastHeartbeatAt = tm; }
     switch (s.state) {
       case 'disabled':
         return false;
       case 'init':
         if (s.heartbeatOk) return go(controlledState());
-        if (t - s.initAt >= HEARTBEAT_TIMEOUT_MS) return go('failsafe');
+        if (m.initAt != null && tm - m.initAt >= HEARTBEAT_TIMEOUT_MS) return go('failsafe');
         return false;
       case 'limited':
       case 'unlimited_controlled':
-        if (heartbeatLost(t)) return go('failsafe');
+        if (heartbeatLost(tm)) return go('failsafe');
         return go(controlledState());
       case 'failsafe': {
-        // Eine neue Grenze der wieder verbundenen Steuerbox beendet den Failsafe.
-        if (s.heartbeatOk && s.lastWriteAt != null && s.lastWriteAt > s.failsafeSince) return go(controlledState());
-        if (t - s.failsafeSince < s.failsafeDurationS * 1000) return false;
+        // Eine neue Grenze der wieder verbundenen Steuerbox beendet den Failsafe (Reihenfolge monoton; eine Grenze aus
+        // einem früheren Prozess hat keine monotone Zeit und beendet ihn nie).
+        if (s.heartbeatOk && m.lastWriteAt != null && m.failsafeSince != null && m.lastWriteAt > m.failsafeSince) return go(controlledState());
+        if (m.failsafeSince != null && tm - m.failsafeSince < s.failsafeDurationS * 1000) return false;
         return go(s.heartbeatOk ? controlledState() : 'unlimited_autonomous');
       }
       case 'unlimited_autonomous':
@@ -230,6 +245,8 @@ export function createLimitStateMachine({ kind, failsafeW, failsafeDurationS, no
       s.state = 'failsafe';
       s.since = since;
       s.failsafeSince = since;
+      // Restzeit aus dem früheren Prozess (Systemzeit, einmalig) — ab hier läuft sie monoton ab.
+      m.failsafeSince = mono() - Math.max(0, now() - since);
     }
   }
 
