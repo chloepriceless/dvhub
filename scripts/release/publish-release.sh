@@ -366,6 +366,9 @@ restore() {  # $1 = Index-Name, $2 = gescheiterter Schritt
   # Dauerhafte Kopie außerhalb von $WORK (der EXIT-Trap löscht $WORK): scheitert
   # auch das Hochladen, bleibt das alte Paar für die Hand-Reparatur (Codex 11f469a2).
   local keep="$BUILD/channels-restore"
+  # Marke eines früheren, bestätigten Versuchs zuerst weg — sie gilt nur für
+  # genau diesen Versuch (Codex 6d0643fe).
+  rm -f "$keep/bestaetigt"
   mkdir -p "$keep" && cp "$RESTORE/$IDX" "$RESTORE/$SIG" "$keep/" \
     || echo "publish-release: Warnung: Kopie des alten Paars nach $keep gescheitert" >&2
   gh release upload channels -R "$GH_REPO" --clobber "$RESTORE/$SIG" "$RESTORE/$IDX" \

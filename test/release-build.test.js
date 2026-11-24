@@ -746,6 +746,12 @@ test('publish-release.sh (P3-6): bisheriger Index bleibt drin, Zwischennamen + U
     assert.equal(fs.readFileSync(path.join(out, 'channels-restore', 'index-stable.json'), 'utf8'), live);
     // Codex 3aa7d678: bestätigt wiederhergestellt → Marke, damit der dev-Worker nicht dauerhaft anhält.
     assert.ok(fs.existsSync(path.join(out, 'channels-restore', 'bestaetigt')));
+    // Codex 6d0643fe: ein neuer Versuch, dessen Wiederherstellung scheitert, darf die alte Marke nicht erben.
+    fs.rmSync(path.join(gh.store, 'patch-failed'), { force: true });
+    const again = run({ FAKE_GH_PATCH_FAIL: 'index-stable.json', FAKE_GH_UPLOAD_FAIL: 'index-stable.json' });
+    assert.notEqual(again.status, 0);
+    assert.ok(!fs.existsSync(path.join(out, 'channels-restore', 'bestaetigt')), 'keine alte Marke bei unbestätigter Wiederherstellung');
+    assert.ok(fs.existsSync(path.join(out, 'channels-restore', 'index-stable.json')), 'Paar bleibt für die Hand-Reparatur');
 
     // (5) Lebender Index fehlt (Abbruch zwischen Sichern und Umstellen): Vorgänger aus ….new, nicht „erster Index“.
     const ch = path.join(gh.store, 'rel', 'channels');
